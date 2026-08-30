@@ -1,0 +1,39 @@
+# Authenticated Windows 2000 SP4 kernel/HAL export baselines.
+#
+# The PE import descriptor always names NTOSKRNL.EXE or HAL.DLL, but Setup
+# selects one of several source binaries for those loaded modules. The import
+# gate must resolve against every source image an in-scope target can run:
+# NTKRNLMP for the Phase 2d SMP VM, and the ACPI HALs for real hardware, not
+# only the Standard-PC/MPS images used by the current VMs.
+#
+# Source: D:\isos\win2ksp4-retail.ISO, I386\, measured.
+#
+# **Eight** HAL images, not seven. HALBORG.DLL was missed on the first pass
+# because it is the one kernel HAL the media ships *uncompressed*, so it does
+# not match the HAL*.DL_ pattern the others were enumerated by - the same
+# enumeration gap this manifest exists to close. It is a real kernel HAL
+# (export section "HAL.dll", 98 names including HalInitSystem and
+# KeGetCurrentIrql, FileDescription "Hardware Abstraction Layer DLL") for the
+# SGI Visual Workstation 320/540, a machine no target of this project will ever
+# be. It is listed anyway, because a completeness claim that rests on an argued
+# exception is the thing that just went wrong. If a future required symbol ever
+# turns out to be missing from halborg.dll alone, delete this row and say so
+# here - narrowing the claim deliberately is fine; discovering it by accident is
+# not.
+#
+# Format:
+#   PACKED OUTPUT PROVIDER VERSION LENGTH SHA256
+#
+# PACKED names ending in "_" are cabinet-compressed and expanded with
+# expand.exe; a name that does not is copied verbatim off the media.
+
+NTOSKRNL.EX_ ntoskrnl.exe ntoskrnl.exe 5.00.2195.6717 1719056 80A8CCF2AA9DFB05408AC35D97FDB227C29F81CB329417EB1C43451F33B6271E
+NTKRNLMP.EX_ ntkrnlmp.exe ntoskrnl.exe 5.00.2195.6717 1694976 4B7DFD1C2AD3213EEAB5D70EDAB865D0A9A4D60344AA15CE3D70C04EAB2DD16F
+HAL.DL_ hal.dll hal.dll 5.00.2195.6655 95456 7C040E3792DBBBCCAB173E845DA9A86BB8E753F2DE07F007EFBA625A18BE0D1A
+HALAACPI.DL_ halaacpi.dll hal.dll 5.00.2195.6691 82176 7E8653957708367E0AE3DC6B915AB334A8DA28F3D9FF451B53D9E59081306D7B
+HALACPI.DL_ halacpi.dll hal.dll 5.00.2195.6691 66848 3CD165F3DB9E5037CF33B059B7116E4E8A2E5B9F7C73CBE31C5FF809B1867538
+HALAPIC.DL_ halapic.dll hal.dll 5.00.2195.6691 92224 48EA42C382CAD8C4A8E5ED887F8280A902875AADE1FD317F6B76E9E075381C27
+HALBORG.DLL halborg.dll hal.dll 5.00.2195.6655 148960 213B3D97696203788328A0E0374E7978D4BCAC6ED02ED309C113177E7318B524
+HALMACPI.DL_ halmacpi.dll hal.dll 5.00.2195.6691 83040 869542CAF5780041F2F14D621C335D016155819D191440ACC028BFE51EDA8CA5
+HALMPS.DL_ halmps.dll hal.dll 5.00.2195.6691 93696 1A5D0AD6FC56A029980A634A6B3B275CE07AFC0FD7816F517BF6258F6A0CA817
+HALSP.DL_ halsp.dll hal.dll 5.00.2195.6655 69088 553C2F6F9833AAF565A81BEA0E70F7381D5DBB9EAE71C7E32B9F0B11E27840D9

@@ -1,0 +1,101 @@
+name: Hardware report - it worked, or it did not
+description: Tell the project what happened on your machine, working or not
+title: "[Hardware] "
+labels: ["hardware-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **A machine that works is worth reporting too.** This driver has been
+        instrumented mostly in virtual machines; what it has least of is real
+        controllers. A one-line "this laptop, this controller, everything came up"
+        is genuinely useful, and so is the opposite.
+
+        If something is broken and you want it *fixed*, file a **Bug report**
+        instead - it asks for what a fix needs. This form is for the record.
+
+  - type: dropdown
+    id: outcome
+    attributes:
+      label: What happened overall
+      options:
+        - Works - devices enumerate and run
+        - Partly works - some devices or ports do not
+        - Driver loads but nothing enumerates
+        - Driver does not load / yellow mark on the controller
+        - The machine crashes or hangs
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 98 SE
+        - Windows 2000 SP4
+        - Windows 2000, earlier than SP4
+        - Windows XP, 32-bit
+        - Other / not sure
+    validations:
+      required: true
+
+  - type: input
+    id: machine
+    attributes:
+      label: Machine make and model
+      placeholder: "ThinkPad E460 / HP EliteDesk 800 G2 / self-built, ASRock B650M"
+    validations:
+      required: true
+
+  - type: input
+    id: driver-version
+    attributes:
+      label: Driver version
+      placeholder: "1.0.0.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: qualifier
+    attributes:
+      label: XHCIQUAL report
+      description: |
+        The single most useful thing you can attach, and it is read-only. From
+        **real DOS**, not a DOS box inside Windows:
+
+            XHCIQUAL --probe-only --no-page --log PROBE.LOG
+
+        Attach PROBE.LOG or paste it here. It identifies the controller, its
+        capabilities, its interrupt pin and its ports - which is most of what makes
+        one machine's result transferable to another.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: devices
+    attributes:
+      label: What you plugged in, and what it did
+      description: |
+        Devices and speeds, hubs and how deep, anything that behaved oddly. Worth
+        naming: keyboards and mice (Low Speed), flash drives (High Speed), USB
+        Ethernet adapters, audio devices, and any hub between them and the machine.
+    validations:
+      required: false
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or photos
+      description: Drag images in here - the Device Manager tree is the most useful single shot. A phone photo of the screen is fine.
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: BIOS settings you had to change (xHCI mode, legacy USB, SATA mode), how the system was installed, anything you would want to know before trying this machine yourself.
+    validations:
+      required: false

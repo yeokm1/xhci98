@@ -1,0 +1,385 @@
+﻿AbortsBeforeStopped	aborts before the endpoint stopped
+AbortsDuringCompletion	aborts racing a completion
+AbortsFromCompletionList	aborts taken off the completion list
+AbortsUnmatched	aborts unmatched
+BusMasterClearRetries	bus master clear retries
+BusMasterCleared	bus master cleared
+CheckCallbacks	check callbacks
+CommandAbortWaits	command abort waits
+CommandAbortsNotWritten	command aborts not written
+OpAgeRecoveries	command ages recovered by the poll
+CommandResetRequests	command reset requests
+CommandsFatal	command reset requests from a fatal completion code
+CommandRingDiverged	command ring diverged
+CommandRingStops	command ring stops
+CommandStaleCallbacks	command stale callbacks
+CommandTimerFailures	command timer failures
+CommandTimeoutArrivals	command watchdog callbacks that arrived
+CommandTrbPA	command: abandoned outstanding TRB
+CommandTrbPA	command: timed out, aborting TRB
+CommandsAbandoned	commands abandoned
+CommandsAborted	commands aborted
+CommandAgeAborts	commands aborted by the poll's own ladder
+CommandsAfterFailure	commands after failure
+CommandsCompleted	commands completed
+CommandsIssued	commands issued
+CommandAgeResets	commands outstanding past every watchdog
+CommandOwnerLost	commands the engine gave up on
+CommandsTimedOut	commands timed out
+CommandsUnmatched	commands unmatched
+CommandsBadCompletion	commands with a bad completion code
+CommandsReservedBitsSet	commands with reserved bits set
+CompletionsHeldBySubmit	completions held by a submit
+CompletionsHeldByPass	completions held for the next pass
+ResetControllerCalls	controller resets requested of usbport
+DeferredReentries	deferred-work re-entries declined
+PlacementFailuresTotal	dequeue placement failures
+DescRepliesOrphaned	descriptor actions with no device
+DescConfigsCommitted	descriptor configs committed
+DescConfigsInactive	descriptor configs for an inactive configuration
+DescConfigsMalformed	descriptor configs malformed
+DescConfigsPartial	descriptor configs partial
+DescConfigsSuperseded	descriptor configs superseded
+DescInterfacesSelected	descriptor interface selections
+DescInterfacesDropped	descriptor interface selections dropped
+DescIsoBadInterval	descriptor iso bInterval out of range
+DescIsoEntriesDropped	descriptor iso declarations dropped
+DescIsoBadDescriptor	descriptor iso declarations that did not parse
+DescIsoEntries	descriptor iso endpoint declarations
+DescRepliesFolded	descriptor replies folded
+DescRepliesUnmapped	descriptor replies with no mapping
+DescSelectionsOffAddress	descriptor selections off address
+CommandFailures	device command failures
+CommandsStaleTenancy	device commands whose tenancy was re-enumerated
+DevicesAbandoned	devices abandoned without evidence
+DevicesAddressed	devices addressed
+DevicesDisownedOut	devices disowned by a port disable
+DevicesInvalidated	devices invalidated by a resume
+DevicesReopened	devices reopened
+DevicesTornDown	devices torn down
+DevicesDisabledOut	devices torn down by a port disable
+DmaFailClosedDeferred	DMA fail-closed deferred (in-place recovery)
+DmaFailClosedUnavailable	DMA fail-closed unavailable
+DmaFailClosed	DMA failures closed
+DpcCount	dpc count
+DpcsAfterFailure	DPCs after failure
+DrainBoundHits	drain bound hits
+DrainBoundEmptyHits	drain bound hits with the ring already empty
+EnablesWithEventsPending	enables with events pending
+EndpointConfigureFailures	endpoint configure failures
+EndpointContextRestores	endpoint context restores
+EndpointContextsDroppedByReset	endpoint contexts dropped by a re-enumeration
+EndpointDataToggleResets	endpoint data toggle resets
+EndpointDequeueFailures	endpoint dequeue failures
+EndpointDequeueRearms	endpoint dequeue re-arms
+EndpointDequeueSets	endpoint dequeue sets
+EndpointHalts	endpoint halts
+EndpointIntervalsFloored	endpoint intervals floored
+EndpointInvalidates	endpoint invalidates
+OpensAccepted	endpoint opens accepted
+OpenRefusalsMalformed	endpoint opens refused - malformed call
+OpenRefusalsBuffer	endpoint opens refused - unusable buffer
+OpensTotal	endpoint opens seen
+EndpointPlacementFailures	endpoint placement failures
+EndpointQuiesceFailures	endpoint quiescence failures
+EndpointQuiesceLost	endpoint quiescence lost
+EndpointQuiesceUnavailable	endpoint quiescence unavailable
+EndpointReconfigures	endpoint reconfigures
+EndpointRefusalsNoDevice	endpoint refusals - no device
+EndpointRefusalsNotReady	endpoint refusals - not ready
+EndpointRefusalsParams	endpoint refusals - params
+EndpointRefusalsPool	endpoint refusals - ring pool
+EndpointRefusalsType	endpoint refusals - type
+EndpointRemovesHeld	endpoint removes held
+RemovesWithWork	endpoint removes with work queued
+EndpointRetriesAsked	endpoint re-offers asked for
+EndpointResetFailures	endpoint reset failures
+EndpointResets	endpoint resets
+EndpointResetsNotHalted	endpoint resets on a ring not halted
+EndpointRestarts	endpoint restarts
+EndpointRestartsByPoll	endpoint restarts by the poll
+EndpointSpeedMismatches	endpoint speed mismatches
+EndpointStatusOtherRequests	endpoint status other requests
+EndpointStatusQueries	endpoint status queries
+EndpointStatusRunRequests	endpoint status RUN requests
+EndpointStopFailures	endpoint stop failures
+EndpointStoppedEvents	endpoint stopped events
+EndpointStops	endpoint stops
+EndpointsConfigured	endpoints configured
+EndpointsOpened	endpoints opened
+EndpointsNoBandwidth	endpoints refused - no bandwidth
+EndpointsNoResources	endpoints refused - no resources
+EndpointsReleased	endpoints released
+EndpointsReopened	endpoints reopened
+EndpointsRevivedByResume	endpoints revived by a resume
+Mps0Corrections	EP0 max packet size corrections
+Mps0CorrectionsStale	EP0 max packet size corrections refused as stale
+OpenRefusals	EP0 opens refused
+OpenRefusalsNoClaim	EP0 opens refused - no route
+EventDataEventsTotal	Event Data events
+LastHostControllerCode	event: HOST CONTROLLER EVENT, completion code
+EventsUnknown	events - unknown type
+EventsVendor	events - vendor defined
+EventsTotal	events consumed
+UnmatchedEventsTotal	events matching no outstanding transfer
+FatalStatusDetected	fatal controller status
+ForeignEventsTotal	foreign transfer events
+FrameReadFailures	frame number read failures
+FrameStalls	frame number stalls
+FrameResyncSkew	frame resync skew
+FrameSamples	frame samples
+FrameSampleStale	frame samples stale at a claim
+PollClockMs	health poll clock ms
+PollClockStalls	health poll clock stalls
+HealthPolls	health polls
+HealthPollsDead	health polls - controller dead
+HostControllerEventResets	host controller event resets
+HubRootPortsFromGraph	hub root ports resolved from the graph
+IncompatibleDeviceTeardowns	incompatible devices, slot disabled
+InitStatus	init status
+InitStep	init step
+RecoveryCompletions	in-place recoveries completed
+RecoveryFailures	in-place recoveries refused
+RecoveryAttempts	in-place recovery attempts
+RecoveryStaleCallbacks	in-place recovery callbacks with nothing to do
+RecoveryFailuresConsecutive	in-place recovery consecutive refusals
+RecoveryLastStatus	in-place recovery, refusing init status
+RecoveryLastStep	in-place recovery, refusing init step
+IntermediateEventsTotal	intermediate Success events
+InterruptDisables	interrupt disables
+InterruptFlushes	interrupt flushes
+InterruptMaskFailures	interrupt mask failures
+InterruptMaskDegraded	interrupt masks over a degraded window
+InterruptNextSofRequests	interrupt next-SOF requests
+InterruptUnmaskFailures	interrupt unmask failures
+InterruptRearmFailures	interrupter re-arm failures
+IsoCadenceMismatches	iso cadence mismatches - assumed interval
+IsoCadenceMismatchesDerived	iso cadence mismatches - derived interval
+IsoEventsUnattributed	iso events unattributed
+IsoGroupsAwaitingTailTotal	iso groups awaiting a tail event
+DescIntervalsAssumed	iso intervals assumed
+DescIntervalsUnresolved	iso intervals declared but unresolved
+DescIntervalsDerived	iso intervals derived
+DescIntervalsAgreed	iso intervals derived and unchanged
+DescIntervalsRefused	iso intervals refused
+DescIntervalsStaleAfterSelect	iso intervals resolved after the endpoint opened
+IsoMissedServiceTotal	iso missed service errors
+IsoPacketErrorsTotal	iso packet errors
+IsoPacketsAnsweredTotal	iso packets answered
+IsoPacketsSubmitted	iso packets submitted
+IsoRefusalsMalformed	iso refusals - malformed
+IsoRefusalsTooLarge	iso refusals - too large
+IsoDoorbellsSuppressed	iso restart doorbells suppressed
+IsoRingOverruns	iso ring overruns
+IsoRingUnderruns	iso ring underruns
+IsoSubmits	iso submits
+IsoSubmitsWrongType	iso submits on the wrong endpoint type
+IsoSubmitsWithFrameId	iso submits with a Frame ID
+IsoTrbErrorRecoveries	iso TRB error recoveries
+IsoTrbErrorsUnarmable	iso TRB errors unarmable
+InterruptsClaimed	isr claimed
+InterruptCount	isr count
+IsrImanLiteralAcks	ISR IMAN acknowledges made from a literal
+LengthOverrunsTotal	length overruns
+Log.BytesDropped	log bytes dropped by the wrap
+Log.FlushBytes	log bytes handed to the sink
+Log.DebugViewBytes	log DebugView bytes
+Log.DebugViewEmits	log DebugView emits
+Log.DebugViewEnabled	log DebugView sink enabled
+Log.SwitchStatusDebugView	log DebugView switch status
+Log.Enabled	log enabled
+LogErrorsOverBudget	log error records over budget
+Log.FlushFailures	log flush failures
+Log.Flushes	log flushes
+Log.FlushesRefusedIrql	log flushes refused - above PASSIVE_LEVEL
+Log.FlushesRefusedState	log flushes refused - off or empty
+Log.Appends	log records appended
+Log.Suppressed	log records suppressed
+Log.Truncated	log records truncated
+Log.SwitchRead	log switch read
+Log.Verbosity	log verbosity applied
+Log.VerbosityRead	log verbosity read
+Log.VerbosityRefused	log verbosity refused
+Log.SwitchStatusVerbosity	log verbosity switch status
+MaskEscalations	mask escalations
+Layout.MaxSlotsEn	MaxSlotsEn
+EnumResetsSuppressed	mid-enumeration port resets re-arming nothing
+MidTdDeferAccountingBroken	mid-TD deferral accounting broken
+MidTdDeferralsTailedSpuriousTotal	mid-TD deferrals ended by a Success-code tail
+MidTdDeferralsTailedTotal	mid-TD deferrals ended by their promised tail
+MidTdDeferralsLostTotal	mid-TD deferrals lost - teardown, abort or refusal
+MidTdDeferPending	mid-TD deferrals still armed
+MidTdRefusedRetiresUnarmable	mid-TD refusals on an already-failed endpoint
+MidTdRefusedRetires	mid-TD retires the ring refused
+MidTdShortTailsTotal	mid-TD retires whose tail event arrived
+MidTdSettlePasses	mid-TD settle passes
+MidTdDeferralsTotal	mid-TD short deferrals armed
+MidTdVerdictVoided	mid-TD tail conformance verdict voided
+MidTdTailsCensoredTotal	mid-TD tail observations censored
+MidTdTailsDroppedTotal	mid-TD tail records evicted unanswered
+MidTdSettles	mid-TD transfers settled by them
+NoOpWitnessFired	No Op self-test witnesses
+OpenRefusalsNoRecord	open refusals - no record
+OrphanedGroupsTotal	orphaned TD groups
+PortEventChanges	port event changes
+PortEventsMapped	port events mapped
+PortEventsUnmapped	port events unmapped
+PortPowerFailures	port power failures
+PortTeardownFailures	port teardown failures
+PortTeardownSkipped	port teardowns skipped - not running
+PortTeardownSkippedSuspended	port teardowns skipped - suspended
+PortsPowered	ports powered at start
+PortsUnpowered	ports unpowered at start
+PortsUnpoweredAtStop	ports unpowered at stop
+ProbeSgMapped	probe bounce-mapped transfers
+ProbeClassSetups	probe class setups (any recipient)
+ProbeEpEvents[XHCI_PROBE_EVENT_CLOSE]	probe CloseEndpoint calls
+ProbeEpShape	probe endpoint shape
+ProbeEpShapeFirings	probe endpoint shape firings
+ProbeEpWithTt	probe endpoints with a TT
+ProbeEpEvents[XHCI_PROBE_EVENT_GET_STATE]	probe GetEndpointState calls
+ProbeHubClassSetups	probe hub-class setups
+ProbeSgElementsMax	probe max SG elements
+ProbeEpEvents[XHCI_PROBE_EVENT_OPEN]	probe OpenEndpoint calls
+ProbeEpEvents[XHCI_PROBE_EVENT_REOPEN]	probe ReopenEndpoint calls
+ProbeSetups.Overflows	probe setup keys dropped
+ProbeSgDumps	probe SG dumps
+ProbeSgHighDwords	probe SG elements above 4 GB
+ProbeSgLengthGaps	probe SG length gaps
+ProbeSgDisordered	probe SG lists out of SgOffset order
+ProbeSgGapped	probe SG lists that do not tile
+ProbeSgShapeFirings	probe SG shape firings
+ProbeSplitTransfers	probe split transfers
+ProbeTtPairs.Count	probe topology pairs
+ProbeTtPairs.Dropped	probe topology pairs dropped
+ProbeSgShape	probe transfer shape
+ProbeTransfers	probe transfers
+ProbeTtObservations	probe TT observations
+RearmEscalations	re-arm escalations
+DevicesStalledOut	records failed - no progress
+InitStep	recover: reinitialization refused at step
+ResidualIgnoredTotal	residuals ignored
+ResidualRejectsTotal	residuals rejected
+RestoreFatalCode	restore: last fatal - completion code carried
+RestoreFatalKind	restore: last fatal - XHCI_RESTORE_FATAL_*
+RestoreEventsFatal	restore: refused - a fatal event was waiting
+RestoreEventsDiscarded	restore: stale events dropped
+RestoreFailures	restore-state failures
+ResumeFailures	resume failures
+ResumeReinits	resume reinitialisations
+RhChangesCleared	RH changes cleared
+RhChirps	RH chirps
+RhFirstDecodes	RH first decodes
+RhHubStatusQueries	RH hub status queries
+RhInvalidPort	RH invalid port index
+RhIrqGateCloses	RH irq gate closes
+RhIrqGateOpens	RH irq gate opens
+RhOperationsPreempted	RH operations preempted
+RhAgeRetires	RH operations retired by age
+RhOperationsRetired	RH operations retired by the quiesce
+RhPortPowerPending	RH port power pending
+RhPortPowerStuck	RH port power stuck
+RhPortStatusQueries	RH port status queries
+RhPortsBusy	RH ports busy
+RhPortsDisabled	RH ports disabled
+RhPortsDriventoU0	RH ports driven out of U3
+RhPortsPowered	RH ports powered
+RhPortsReset	RH ports reset
+RhPortsResumed	RH ports resumed
+RhPortsSuspended	RH ports suspended
+RhPortsUnpowered	RH ports unpowered
+RhPreemptsUnconfirmed	RH preempts not confirmed
+RhRefusals	RH refusals
+RhResetTimeouts	RH reset timeouts
+RhResetsCompleted	RH resets completed
+RhResetsUnconfirmed	RH resets not confirmed
+RhResumeRetries	RH resume retries
+RhResumesAbandoned	RH resumes abandoned
+RhResumesCompleted	RH resumes completed
+RhStaleTimers	RH stale timers
+RhTimerFailures	RH timer failures
+RhU3PassSkippedAfterRestore	RH U3 passes skipped after a restore
+RingPool.PeakInUse	ring pool peak in use
+RingPool.AcquireFailuresEmpty	ring pool refusals - empty
+RingPool.AcquireFailuresFairness	ring pool refusals - fairness
+RingPool.AcquireFailuresCap	ring pool refusals - per-device cap
+RootHubInvalidates	root hub invalidates
+RootHubInvalidatesGated	root hub invalidates gated
+RootHubInvalidatesOwed	root hub invalidates owed
+HcInfo.ScratchpadCount	scratchpad buffers
+SetAddressIntercepts	SET_ADDRESS interceptions
+ShortPacketsTotal	short packets
+MidTdShortRetiresTotal	short packets retired mid-TD
+ShortSuccessesTotal	short transfers reported as Success
+SlotStatesUnreadable	slot states unreadable
+SlotsDisabled	slots disabled
+SlotsEnabled	slots enabled
+SlotsResetToDefault	slots reset to Default
+SaveAttempts	state save attempts
+SaveFailures	state save failures
+SaveRestoreTimeouts	state save/restore timeouts
+SavesDeclinedCommandBusy	state saves declined - command ring busy
+SavesDeclinedNoFsc	state saves declined - no FSC
+StoppedRefusedTotal	stopped codes refused by the transfer layer
+StoppedLengthsLatched	stopped-event lengths latched
+SubmitUnderflows	submit brackets closed with none open
+SuspendFailures	suspend failures
+SuspendCount	suspends
+QueueCompletedTotal	TDs completed
+QueueSubmittedTotal	TDs submitted
+TeardownCount	teardowns
+TeardownsWithoutStop	teardowns without a stop
+BehindHubAddressed	topology: behind-hub devices addressed
+BehindHubGone	topology: behind-hub devices gone
+BehindHubOpens	topology: behind-hub opens
+BehindHubNoRecord	topology: behind-hub refused - no record
+BehindHubNoSpeed	topology: behind-hub refused - speed unnameable
+BehindHubTooDeep	topology: behind-hub refused - too deep
+Topology.ClaimsUnusable	topology: claims consumed unusable
+Topology.MaxTier	topology: deepest tier
+Topology.Disconnects	topology: disconnects seen
+Topology.Descriptors	topology: hub descriptors folded
+Topology.DescriptorsBad	topology: hub descriptors malformed
+Topology.DescriptorsNoPorts	topology: hub descriptors with no ports
+HubMarkCommands	topology: hub marking commands
+HubMarkFailures	topology: hub marking failures
+HubMarksLostToAddress	topology: hub markings lost to a re-address
+Topology.ResetsUnknownHub	topology: hub port resets on an unknown hub
+Topology.ResetsOverwritten	topology: hub port resets overwritten
+Topology.Resets	topology: hub port resets seen
+HubSlotsMarked	topology: hub slots marked
+Topology.Promotions	topology: hubs identified
+Topology.ResetsSuppressed	topology: hub-tier resets re-arming nothing
+Topology.AltSettings	topology: multi-TT alternate settings
+Topology.Dropped	topology: nodes dropped
+Topology.Migrations	topology: nodes migrated to a new address
+Topology.Prunes	topology: nodes pruned
+Topology.Claims	topology: parents claimed
+Topology.ClaimsTooDeep	topology: parents past five tiers
+Topology.ClaimsUnarmed	topology: parents unclaimed
+Topology.PendingDropped	topology: pending parents dropped by a root reset
+Topology.PortStatuses	topology: port statuses folded
+Topology.PortStatusesWide	topology: port statuses past the connect window
+Topology.PowerSweeps	topology: port-power sweeps seen
+Topology.MigrationsStale	topology: stale nodes pruned at a re-address
+Topology.Reconnects	topology: swaps only the change word saw
+TtPairsAgreed	topology: TT pairs agreeing with usbport
+TtPairsDisagreed	topology: TT pairs disagreeing with usbport
+TtProgrammed	topology: TT pairs programmed
+TtUnresolved	topology: TT pairs unresolved
+QueueErrorsTotal	transfer error events
+TransferEventsForeign	transfer events for no open endpoint
+QueueRecoveriesTotal	transfer recoveries
+TransfersAborted	transfers aborted
+TransfersCancelled	transfers cancelled
+TransfersCompleted	transfers completed
+TransfersFailedGone	transfers failed - endpoint gone
+TransfersNoOpped	transfers No-Opped by a cancellation
+TransfersOnHaltedEndpoint	transfers on a halted endpoint
+TransfersRefusedRingFull	transfers refused - ring full
+TransfersRefused	transfers refused for retry
+TransfersSubmitted	transfers submitted
+SweptTransfersTotal	transfers swept without an event
+SumFailuresTotal	TRB length sum failures
+BadCodesTotal	unassigned completion codes
+UnmaskEscalations	unmask escalations

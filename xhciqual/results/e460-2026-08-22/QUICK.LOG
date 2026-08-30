@@ -1,0 +1,12 @@
+XHCIQUAL 0.0.0.2 - quick scan (read-only)
+Found 1 USB host controller(s).
+
+xHCI 8086:9D2F 00:14.0  LOOKS QUALIFIED
+
+Probe safety: PASS - no PCI configuration writes.
+Verdict: LOOKS QUALIFIED, subject to the active tests (C2/C3/C4), which this
+  read-only pass cannot observe.
+Next: XHCIQUAL xhci --poll-only --no-wait --log XPOLL.LOG
+Then: XHCIQUAL --full --log ALLDEV.LOG
+Done.
+Report copied to quick.log.

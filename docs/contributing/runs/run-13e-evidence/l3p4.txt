@@ -1,0 +1,13 @@
+xhcisnap: opening \\.\HCD0
+
+route probe - IOCTL 0x00220438 on this controller:
+  PassThru, our GUID                 status  0 (success)
+    the miniport ANSWERED - the channel is live, take the dump
+  unknown request code 15            status  2 (invalid request code)
+    as derived: the dispatcher's request table has 8 entries and 15 is not one
+      of them
+  RequestBufferLength disagreeing    status  4 (invalid header parameter)
+    as derived: the header's own length must equal the IOCTL's input length
+      exactly
+  a 0x20-byte buffer                 status  7 (buffer too small)
+    as derived: PassThru's floor is 0x28 - a 0x10 header plus a 0x18 body

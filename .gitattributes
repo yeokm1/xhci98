@@ -1,0 +1,59 @@
+# DOS batch files must reach the working tree with CRLF endings on every
+# platform and git config: MS-DOS 7.1 (Windows 98) COMMAND.COM - the field
+# target and the CI's boot DOS - can fail to find goto labels in LF-only
+# batch files, silently breaking the :logerr safety paths.
+*.BAT eol=crlf
+# ...and the lowercase spelling, because gitattributes patterns are CASE
+# SENSITIVE on every platform (repo audit D6). Every batch file in the tree is
+# `.BAT` today, so this pattern currently matches nothing - which is the point:
+# the first `.bat` somebody adds would otherwise be checked out LF-only, with
+# exactly the goto-label failure the rule above exists to prevent, and nothing
+# would say so.
+*.bat eol=crlf
+
+# The same hazard, one layer up, and it was open for a long time: cmd.exe's
+# label scanner has the same LF sensitivity, and scripts/build-driver.cmd,
+# scripts/make-usbport-lib.cmd and test/run-host-tests.cmd all depend on
+# goto/call labels for their failure paths. They are stored LF and were getting
+# their working-tree CRLF only from core.autocrlf=true, so a clone with
+# autocrlf=false or input silently lost it.
+*.cmd eol=crlf
+
+# The INF is parsed by Win98's 16-bit setup engine, which wants ANSI/CRLF.
+# scripts/inf-gate/check-inf.ps1 already fails FILE-EOL on a bare LF, so this
+# is belt and braces - but the gate catches it at build time and this catches
+# it at checkout, which is the cheaper of the two places to find out.
+*.inf eol=crlf
+
+# src/sources is the DDK's build.exe input and is read by the same 16-bit-era
+# tooling lineage. No measured failure, pinned for consistency with the rest of
+# what the DDK build consumes.
+sources eol=crlf
+
+# src/xhci98.rc is compiled by the DDK's rc.exe, the same 16-bit-era tooling
+# lineage as `sources` above, and every other file in src/ is CRLF. No measured
+# failure - rc.exe accepted an LF-only file - so this is consistency rather than
+# a hazard, pinned before the two conventions can diverge inside one directory.
+*.rc eol=crlf
+
+# The published text of a release - the readmes, the licence, the qualifier's
+# notice and its linker map - is read on the target machine, in Windows 98's
+# Notepad or DOS EDIT, and neither of those renders a lone LF as a line break:
+# the whole file shows as one line. These were stored LF with no rule until the
+# release-script review, and were reaching the working tree as CRLF only because this
+# host's core.autocrlf is `true` - so a clone with `false` or `input` would
+# have checked out a release directory, and assembled an upload asset from it,
+# carrying LF-only text. Exactly the hazard the *.cmd rule above records
+# fixing, one directory over. `xhci98.inf` in each flavour
+# directory is already covered by *.inf, and the .sys/.EXE are detected as
+# binary.
+releases/**/*.txt eol=crlf
+releases/**/*.TXT eol=crlf
+releases/**/*.MAP eol=crlf
+releases/**/LICENSE eol=crlf
+
+# And the root LICENSE, because make-release.ps1 copies *this* file into every
+# release directory: it is the source of the pinned copy above, so a pin on
+# only the copy would leave the next release to be cut from an LF-only
+# original. make-release.ps1 checks it as well, at the point of the copy.
+LICENSE eol=crlf

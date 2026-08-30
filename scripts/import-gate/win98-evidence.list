@@ -1,0 +1,68 @@
+# Authenticated Win98 evidence sources for the import gate.
+#
+# Nothing on the build host can prove a symbol resolves on Win98: the NT-style
+# export tables are built at init by ntkern.vxd, not read from a file, so the
+# authoritative check is the load itself on the 2a VM (roadmap Phase 3 task 8).
+# These are the two host-side sources that give *positive* evidence:
+#
+#   [precedent]  Drivers that already resolve their imports on Win98. If one of
+#                them imports MODULE!SYMBOL, that exact pair resolved for it, on
+#                Win98, from that exact module.
+#   [nametable]  ntkern.vxd itself, scanned for the NUL-delimited export name
+#                strings it builds those tables from. A hit is evidence; a miss
+#                is **no information** - KeGetCurrentIrql is absent from it yet
+#                Win98's own NTMAP.SYS imports that pair (the allow row's
+#                precedent).
+#
+# Every row carries the file's identity, and the gate verifies it before using
+# the file. Two reasons, both learned here (docs\contributing\lessons.md, the import-gate entry):
+#
+#   - This list is explicit rather than a wildcard over tools\, so that a stray
+#     file cannot become evidence about Windows 98 - but naming a path only
+#     controls *which* file is read, not *what* that file is. A substituted or
+#     newer build would silently produce evidence lines this project never
+#     verified, and those lines end up quoted in the phase records.
+#   - The Win2000 half of this gate learned the same lesson one commit earlier:
+#     a hash recorded in prose does nothing unless something compares it.
+#
+# Missing files are skipped - tools\ is git-ignored, so a fresh clone has none,
+# and absence contributes no evidence rather than being wrong. A file that *is*
+# present and does not match its row is a gate failure, exactly as for the
+# Win2000 baselines.
+#
+# Format, per row:  RELATIVE\PATH VERSION LENGTH SHA256 note to end of line
+# VERSION "-" means the file has no version resource (ntkern.vxd).
+# check-imports.ps1 prints which files it actually scanned.
+
+[precedent]
+
+# --- Windows 98 SE's own WDM drivers, from the SE CD (BASE5.CAB) --------
+# 4.10.2222. These are the USB 1.1 stack Win98 SE ships and loads on any
+# machine with a UHCI/OHCI controller, so their import set is the platform's
+# own statement about what ntkern resolves. Sizes agree with the media's
+# layout.inf ("usbd.sys=5,,18912", "usbhub.sys=5,,35680").
+tools\win98se-extracted\usbd.sys     4.10.2222      18912 0118DB141D3FD7A51C72AB71D575939794FE5985CAF76D7570A352C00AF6F56A Win98 SE - the USB 1.1 stack's core, loads on every 98 SE machine with UHCI/OHCI
+tools\win98se-extracted\usbhub.sys   4.10.2222      35680 E898B75F2449EB9E5BBCB3FADF7387C9819F1C7D2C6D49BAD83D8236F46AFC31 Win98 SE - the USB 1.1 hub driver
+
+# --- The NUSB 3.3 package installed on the 2a VM ------------------------
+# USBPORT.SYS and USBEHCI.SYS matter most: they are the exact modules this
+# miniport plugs into and the structural template it copies, back-ported from
+# Windows 2000 to Win98 by the same package this project installs. If a symbol
+# resolves for them it resolves for xhci98.sys. The first two hashes also
+# appear in docs\usb-xhci-info\usbport-miniport-interface.md "Target ABI record" and were
+# re-checked against it.
+tools\nusb-extracted\USBPORT.SYS     5.00.2195.5652 135920 EEC79B5A4CCE9C40A7D2484AA48F0FBEE7745FC447093D840BBD51A28C3F9B55 NUSB - the port driver this miniport registers with, on the 2a VM
+tools\nusb-extracted\USBEHCI.SYS     5.00.2195.6882  19792 E25024B003328562F89D45D96A40E3750418331358B17882EB793D5857507750 NUSB - the known-good miniport this driver is modelled on
+tools\nusb-extracted\USBHUB20.SYS    5.00.2195.6891  50032 FE9DE344ED8718671CCE2CF719C9123C64D4D8376A5F7EB335F83BBF5B82E0D5 NUSB - the USB 2.0 hub driver above usbport
+tools\nusb-extracted\NTMAP.SYS       4.10.2227        8816 3E94CB12EC6C590D352753A20F8F98EC1E3DFDB2091D2455A9BC72E03F6E943B Microsoft 4.10.2227 - a Win98-era WDM driver from the same package
+tools\nusb-extracted\USBNTMAP.SYS    4.90.3000        7136 D1595CDBFDC22925C4E47D1720F117FE6C9BEDA36417BA41A1FD7398878CC6E4 NUSB - the 9x/NT storage mapper
+tools\nusb-extracted\USBSTOR.SYS     4.90.3000.1     21040 B92A6A1582287867D4950495C0A746F0F5D8831BC311061423F8645073E42D8C NUSB - USB mass storage class driver
+tools\nusb-extracted\USBAUTH.SYS     4.90.3000.1      6608 12B09E67A5A9A8A883AB40B91C59BE294F2DDC5940B9780C056176DF04A463D1 NUSB
+tools\nusb-extracted\USBU2A.SYS      1.42             5183 1C5656DCF3DBBCA97236FC0239537A34AE5A6CA1597F29CADC9C38537B2A7B78 NUSB
+
+[nametable]
+
+# Extracted from WIN98_54.CAB on the Win98 SE CD, the cab named by the media's
+# own layout.inf ("ntkern.vxd=54,,195238"). No version resource, so identity
+# rests on length and hash alone.
+tools\win98se-extracted\ntkern.vxd   -              195238 FC635EE394F3BDE5823C6B900E5CA4739A3F326B8FA611BEB9122A0FC54E672E Win98 SE - builds the NT-style export tables at init; positive evidence only

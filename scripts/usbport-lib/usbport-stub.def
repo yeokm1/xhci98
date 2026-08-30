@@ -1,0 +1,21 @@
+; Import-library definition for USBPORT.SYS.
+;
+; Plain (undecorated) export names: link resolves each to the _Name@N
+; stdcall symbol in usbport-stub.obj and exports it undecorated, matching
+; the real USBPORT.SYS export table.
+;
+; The shipping binaries export three names at ordinals 1-3 - DllUnload,
+; USBPORT_GetHciMn, USBPORT_RegisterUSBPortDriver - identically on all three
+; lineages (NUSB 5.00.2195.5652, Win2000 SP4 5.00.2195.6681, XP SP3
+; 5.1.2600.5512). DllUnload is not part of the miniport contract and no
+; shipping miniport imports it, so it is deliberately omitted here: the
+; import gate (roadmap Phase 3 task 5) allowlists only what this file names.
+;
+; make-usbport-lib.cmd checks this list exactly against the tracked
+; usbport-imports.expected manifest before every build. When a reference
+; binary is supplied, its export table must contain both exact names too.
+
+LIBRARY USBPORT.SYS
+EXPORTS
+    USBPORT_GetHciMn
+    USBPORT_RegisterUSBPortDriver

@@ -1,0 +1,15 @@
+
+1 xhci98 driver key(s) under HKLM\System\CurrentControlSet\Services\Class\USB:
+  0000     was 1               -> 2   NTMPDriver = xhci98.sys
+
+level 2 = counters + note ring
+  ladder: 0 off, 1 counters, 2 +note ring, 3 +PORTSC, 4 +everything
+
+1 key(s) set. RESTART THE MACHINE, or disable and re-enable the controller in
+Device Manager: the driver reads this once per start and nothing re-reads it
+while it is running.
+Then reproduce and run:  XHCISNAP -o C:\NAME
+Afterwards:              XHCISNAP -disable
+  While the channel is on, anyone using this machine can read this driver's
+  diagnostic state through it. Windows' USB port driver owns that door and
+  opens it to anyone, so this value IS the lock.

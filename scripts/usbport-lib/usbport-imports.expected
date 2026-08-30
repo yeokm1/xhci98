@@ -1,0 +1,18 @@
+# Exact USBPORT.SYS exports imported by xhci98.sys.
+#
+# These names were verified against NUSB 5.00.2195.5652, Windows 2000 SP4
+# 5.00.2195.6681, and Windows XP SP3 5.1.2600.5512. The generator compares
+# this list with usbport-stub.def on every run, and additionally against a
+# reference usbport.sys's dumpbin export table whenever one is available.
+#
+# THIS FILE IS THE SINGLE SOURCE for the USBPORT.SYS half of the driver's
+# import surface. The post-link import gate (roadmap Phase 3 task 5) must
+# *read* it for its USBPORT.SYS module row rather than restate the names -
+# a third hand-maintained copy is how the three lists silently diverge.
+# Adding a name here means the driver may import it; it does not by itself
+# make anything import it.
+#
+# One name per line; # comments and blank lines ignored; matching is exact
+# and case-sensitive.
+USBPORT_GetHciMn
+USBPORT_RegisterUSBPortDriver

@@ -1,0 +1,1384 @@
+﻿# Development Roadmap
+
+This roadmap is the project-status index: the phase sequence, what each phase
+was for and what it delivered, the basis on which each closed, the task and
+batch ids that other documents, scripts and source comments cite, and the two
+acts that sit outside the phases (the upload and the hand-run acceptance).
+It is meant to orient a contributor. The detail lives in the other documents:
+
+- Build, VMs, install, packaging and the bench rig:
+  [`build-and-test.md`](build-and-test.md).
+- Component boundaries and data flows: [`architecture.md`](architecture.md).
+- Rules a code change must preserve:
+  [`implementation-invariants.md`](implementation-invariants.md).
+- Numbered design records: [`design/`](design/README.md).
+- Measured behaviour, traps and refuted hypotheses: [`lessons.md`](lessons.md);
+  the per-run evidence in the run sheets [`run-11v.md`](runs/run-11v.md) and
+  [`run-13e.md`](runs/run-13e.md).
+- What a user is told (what the driver does, does not, and its known limitations):
+  [`../using/release-notes.md`](../using/release-notes.md).
+
+Targets. Windows 98 SE and Windows 2000 SP4 are both first-class. One
+`xhci98.sys` binary must install and work on either, and from Phase 3 onward a
+phase's checkpoint is not met until it has been observed on both. Every
+Windows 2000 observation in this repository is a virtual-machine observation:
+Windows 2000 Setup bugchecks during installation on both physical machines the
+project has, no cause was investigated, no bugcheck code was captured, and no
+further candidate is available. `AGENTS.md` says what "observed on both"
+therefore means, and the release notes state it under "What this is".
+
+Integration model. `xhci98.sys` is a `usbport.sys` miniport ("Option A"). It
+plugs in beneath Microsoft's port driver the way `usbehci.sys` does and reuses
+the Win2000-derived USB 2.0 stack that ships in NUSB. The port driver owns the
+root hub PDO, `IOCTL_INTERNAL_USB`, URB parsing and enumeration; the miniport
+owns only the xHCI hardware. "Option B", a monolithic HCD that re-implements
+the port driver's role, was the documented fallback and was never needed. USB
+3.0 SuperSpeed is out of scope. The rationale is in
+`docs/usb-xhci-info/win98-wdm.md` ("USB Stack Architecture and the Integration
+Decision") and `architecture.md`.
+
+Current status: Phases 0-16 are closed. `1.0.0.0` is cut, and it is the only
+release this repository carries; Phase 15 moved the tree from revision 1.2 of
+the xHCI specification to revision 1.2c, the only revision Intel now serves,
+without a code change; Phase 16, the fully automated run on freshly installed
+guests of both targets, closed on 2026-08-30 on its second run, a clean
+Windows 2000 reading and a Windows 98 reading with one row against, the USB
+Audio replug, published as a limitation. Two acts sit outside the task list
+and are the project owner's to take: uploading the asset, and then running
+the release acceptance test by hand on a fresh VM and on a physical machine.
+The section this roadmap ends on is the reminder for the second.
+
+---
+
+## Batching Convention
+
+A phase splits by scope and has one checkpoint. A batch splits by where the
+work can be confirmed and has no checkpoint of its own. A VM boot or a bench
+trip is the expensive unit, and most tasks do not need one, so from Phase 6
+onward a phase whose tasks are confirmed in more than one place groups them
+into batches. Phases 6, 7a, 7b, 8, 9, 11 and 13 are of this shape; Phases 0-5,
+10, 12, 14, 15 and 16 have plain per-phase task numbers.
+
+Task ids are `<batch>.<n>` in a batched phase (`6-B.4` is the fourth task of
+batch `6-B`) and plain `<phase>.<n>` otherwise (`12.3`, `14.1`). Phases 0-5
+keep their original plain numbers, so "Phase 4 task 7" is still an exact
+citation. A phase with exactly one batch uses plain ids, since a single batch's
+letter would only repeat the phase name.
+
+| Suffix | Meaning |
+|---|---|
+| `-0` | Static. Reading the shipping binaries or the specification and producing documentation, not driver code. First, because everything after it is written against what it finds. |
+| `-A`, `-B`, ... | Host. Driver code confirmed by `test\run-host-tests.cmd` and the import gate. Ordered by dependency; each is one review and commit unit. |
+| `-V` | VM. The clauses no host test can observe. |
+| `-M` | Bare metal. No live batch carries it. The last was Phase 7b's `7b-M`, whose two clauses were carried into Phase 13's machine-named batches. |
+| `-E`, `-H` | A machine, named by its initial; Phase 13's alone. `13-E` is the E460 bench; `13-H` the modern Windows host. |
+| `-R`, `-L` | A subject; also Phase 13's. `13-R` is the Finding 3 repair; `13-L` the Windows 98 log channel. Each ran on the development host and then the E460. |
+
+A task inserted between two existing ones takes a fractional id (`13-R.3.5`,
+`14.0`) and nothing is renumbered: task ids are cited from `docs/`, `src/`,
+`test/`, `scripts/` and evidence logs, and a published `readme.txt` is never
+edited in place. A `.5` id means "between these two" and is not a sub-task. A
+sub-task is `<task>.<n>`: `7b-A.1.2` is sub-task 2 of task `7b-A.1`, and
+`14.1.1` to `14.1.11` are the clauses of task `14.1`. No tracked file cites a
+pre-renumbering id; task 14.1.9 checks that.
+
+Three rules the batching exists to enforce:
+
+1. Derive before you write. A callback body written against an assumed IRQL
+   cost a rewrite (Phase 4 task 7). A `-0` batch is cheap; the rewrite it
+   prevents is not. A checkpoint that cannot be observed to pass is the signal
+   to stop and re-derive, not to push forward.
+2. A batch is a review unit. Most defects were found by reviewing one coherent
+   slice; a batch that mixes subsystems dilutes that.
+3. Spend a boot on what only a boot can show. Where a phase's instrumentation
+   clause and its checkpoint can ride the same binary, they are one `-V` batch.
+
+Two batches carried stop rules and were gates in batch clothing: `7b-V0` and
+`9-0` could each have ended their phase in a recorded Option A limitation.
+Neither did.
+
+---
+
+## Phase sequence
+
+Phase 0 is an optional, independent DOS qualifier for real machines. Phase 1
+is the host build check. Phase 2 stands up the QEMU estate (2a Win98 SE, 2b
+Win2000 SP4, 2c the WHPX-capable QEMU binary, 2d a multiprocessor Win2000 VM).
+Phase 3 is the go/no-go gate for the miniport architecture. Phases 4-9 build
+the driver up one capability at a time (controller init, root hub, enumeration,
+HID, hubs, bulk, isochronous). Phase 10 is the automated device matrix, Phase 11
+the stress and packaging pass, Phase 12 the machine-free decisions, Phase 13 the
+bare-metal validation and Phase 14 the `1.0.0.0` release. Phase 15, added
+after the cut, moves the tree to revision 1.2c of the xHCI specification, and
+Phase 16 is the unattended post-release run on freshly installed guests. Phase
+14 waited on Phase 13's bench batches reporting. Accepting the published release, from the download on a
+freshly installed VM and on a physical machine, is not a phase and has no
+task: it is a hand-run procedure the project owner takes after the upload,
+and the end of this file says so.
+
+---
+
+## Phase 0 - Hardware Qualification (optional, independent)
+
+Goal: a standalone DOS tool, `xhciqual/XHCIQUAL.EXE`, that proves a candidate
+machine's xHCI can support the driver before any driver effort is spent on it -
+BIOS handoff, reset, bus-master DMA, legacy-8259 INTx delivery, port connect and
+reset - with no OS installed, and records the hardware facts the quirk tables
+need.
+
+Status: closed. Checkpoint: on a candidate machine the tool reports PASS for
+reset, DMA round-trip and interrupt delivery, handoff PASS or WARN, and prints
+the USB2 topology and context size; Interrupt Pin 0 is an unconditional failure
+because neither target has an MSI path. Met on both fleet machines (ThinkPad
+E460, ThinkPad P14s Gen 1) with a `QUALIFIED` verdict, `xhciqual/results/`.
+Never run on AMD xHCI, on Intel 7/8-series (`XUSB2PR` mux) silicon, or on an
+OHCI CPU-ISR path, and no machine remains that could; the v0.10 C7 (Intel port
+routing) branches have executed only under the host tests.
+
+Rationale: the silent-death risks - handoff, DMA, INTx in PIC mode - are
+hardware and firmware properties. Real-mode DOS with direct PCI, IVT and MMIO
+access isolates them from `usbport.sys` and from either driver model. The
+verdict qualifies a controller, not an OS install, and does not replace
+Phase 13.
+
+What shipped:
+
+- `xhciqual/` (Open Watcom, DOS/32A stub): tests C1-C8, EHCI and OHCI in the
+  same binary, `--probe-only`, `--poll-only`, `--irq-selftest`, `--no-page`,
+  `--set-intel-ports`, `--log`; a DPMI-locked ISR; the PCI power-management
+  block, subsystem ids and sticky status bits; dead-MMIO causes.
+- The QEMU regression matrix, the Windows 98 batch runner and the host unit
+  tests for `mmiodiag.c`.
+- Bare-metal records with an `lspci -vv` cross-check, and the connector-to-port
+  maps of both fleet machines.
+
+Tasks: 1 discovery; 2 capability introspection; 3 BIOS-to-OS handoff;
+4 halt and reset; 5 DMA round-trip; 6 interrupt delivery; 7 port connect and
+reset; 8 report.
+
+Records: `design/01-hardware-qualification-tool.md`; `xhciqual/README.md`;
+`xhciqual/hardware-testing.md`; the `README.md` of each run under `xhciqual/results/`;
+`build-and-test.md` "Available Test Hardware".
+
+## Phase 1 - Development Environment
+
+Goal: the Windows 11 host compiles a WDM driver with MSVC 6.0 and the Windows
+2000 DDK.
+
+Status: closed. `scripts\local\verify-ddk-toaster.cmd` built the DDK's
+toaster sample without errors; re-verified after the toolchain moved into the
+repository (`scripts\build-driver.cmd both` passes with neither `DDKROOT` nor
+`MSVC6` set).
+
+Rationale: both targets need a Win2000-DDK-built WDM miniport, and `cl.exe`
+12.00.8804 is the compiler the DDK expects. Toolchains used in place under
+`tools/` mean a clone builds anywhere; QEMU is the only host prerequisite.
+
+What shipped: `scripts\setup-all.ps1`, `setup-msvc6.ps1`, `setup-w2kddk.ps1`,
+`install-w2kddk-cabs.ps1`; `tools\MSVC600` and `tools\ntddk` found by relative
+path with `DDKROOT`/`MSVC6` overrides.
+
+Tasks: 1 toolchain inventory; 2 MSVC 6.0; 3 DDK; 4 verification build.
+
+Records: `build-and-test.md` "Automated Phase 1 Host Setup", "Win2K DDK
+Installation Notes", "Setting Up the Build Environment", "Building".
+
+## Phase 2a - Win98 SE Test Environment
+
+Goal: a Windows 98 SE VM in QEMU with `qemu-xhci`, PS/2 input, the NUSB 3.3
+`usbport.sys` stack, a file-transfer path, and the xHCI device unclaimed - the
+primary iteration environment.
+
+Status: closed. All clauses observed; baseline snapshot `phase2a-usbd-ok`
+on `vm\win98.img`.
+
+Rationale: the integration risk - a back-ported `usbport.sys` accepting a
+third-party miniport - lives here. NUSB 3.3 rather than 3.6 because 3.6
+replaces more core files with WinMe-derived ones.
+
+What shipped: `scripts\setup-qemu.ps1` and the `qemu-win98-*` launchers; the
+`setup /p j` install recipe; the VVFAT transfer drive; the `usbd.sys` baseline
+fix (`usbhub20.sys` imports it and NUSB does not ship it); the finding that
+NUSB places the stack unconditionally, so no EHCI is needed.
+
+Tasks: 1 QEMU and launchers; 2 install; 3 PS/2; 4 NUSB; 5 transfer path;
+6 `usbd.sys`; 7 the unclaimed xHCI.
+
+Records: `build-and-test.md` "Option B: QEMU", "Getting files into the guest",
+"VM snapshots - iterate without fear", "Installing the usbport USB 2.0 Stack
+(NUSB) - Win98 SE only", "Carrying a per-target `usbd.sys`";
+`docs/usb-xhci-info/usbport-miniport-interface.md` "Target ABI record";
+`lessons.md`.
+
+## Phase 2b - Windows 2000 SP4 Target Environment
+
+Goal: a Windows 2000 SP4 VM with `qemu-xhci` and the native `usbport.sys` -
+the second first-class target and the NUSB differential.
+
+Status: closed. All clauses observed; snapshot `phase2b-clean` on
+`vm\win2k.img`.
+
+Rationale: every phase from 3 must be observed on both targets. The native
+`usbport.sys` (5.00.2195.6681) and NUSB's (5.00.2195.5652) are different builds
+that share exports and the registration version gate, so one binary serves
+both.
+
+What shipped: `scripts\setup-qemu-win2k.ps1` and launchers; the Standard-PC
+HAL configuration (`-machine pc,acpi=off -cpu pentium3,-apic`) that gets Setup
+past its hang; the mandatory `USBD.SYS` preparation boot (without it
+`usbhub20.sys` bugchecks about a file that is present); the ABI record of both
+`usbport.sys` builds.
+
+Tasks: 1 VM and install; 2 SP4 and `USBD.SYS` prep; 3 version comparison;
+4 transfer path; 5 the unclaimed xHCI.
+
+Records: `build-and-test.md` "Windows 2000 SP4 Target VM (second first-class
+target; also the differential)", "Run Driver Verifier here (there is no Win98
+equivalent)", "Recovering from a driver that crashes at boot";
+`docs/usb-xhci-info/usbport-miniport-abi.md` "1. Exports and the registration
+call"; `lessons.md`.
+
+## Phase 2c - QEMU x86_64/WHPX Migration
+
+Goal: move every harness and VM from the TCG-only `qemu-system-i386.exe` to the
+WHPX-capable `qemu-system-x86_64.exe`, re-verify each under TCG with only the
+binary changed, enable the host hypervisor, and trial WHPX per component.
+
+Status: closed. The qualifier matrix passes on the x86_64 binary; 2a and 2b
+re-verified with snapshots intact; every WHPX trial recorded. WHPX proved
+optional for the qualifier and incompatible with both target VMs, so every
+launcher stays on TCG. Prerequisite for Phase 2d, not for Phase 3.
+
+Rationale: WHPX is compiled only into the x86_64 binary, and Phase 2d's
+multiprocessor HAL needs the APIC that TCG storms on this host. One variable at
+a time.
+
+What shipped: the x86_64 binary in every setup script and harness, resolved by
+`Get-Command` with a fallback; the host hypervisor platform enabled; the
+per-component WHPX outcomes in `lessons.md`.
+
+Tasks: 1 enable WHPX; 2 confirm the binary; 3 scripts; 4-6 re-verify the
+qualifier, 2a and 2b; 7-9 WHPX trials of each; 10 record.
+
+Records: `build-and-test.md` "Windows 2000 SMP Stress VM (Phase 2d)" steps 1-2
+and its contrast table, "Option B: QEMU"; `lessons.md` (the migration and
+WHPX-trial entries).
+
+## Phase 2d - Windows 2000 SMP Stress Environment
+
+Goal: a third VM - Windows 2000 SP4 with the multiprocessor HAL on two vCPUs
+under `-accel whpx,kernel-irqchip=off` - the only environment able to expose
+cross-CPU ISR/DPC races. Not a target; a rig.
+
+Status: closed. Boots on the multiprocessor HAL with distinct host threads
+per vCPU, the native USB stack loaded, the xHCI unclaimed, snapshot
+`phase2d-clean`. The BLOCKED alternative was not needed. WHPX behaves
+differently on every host tried, so `-accel whpx` is probed per host before it
+goes in a launcher.
+
+Rationale: on a uniprocessor kernel `KeAcquireSpinLock` only raises IRQL, so a
+missing lock between submit and `InterruptDpc` is invisible on 2a and 2b. Real
+Windows 2000 deployments are multiprocessor. The value is the second CPU, not
+throughput.
+
+What shipped: `scripts/setup-qemu-win2k-smp.ps1` (accelerator ladder,
+`-AcpiOff`, `-Smp`), the `qemu-win2k-smp-*` launchers,
+`scripts\check-smp-parallelism.ps1`, `scripts\test-qemu-launchers.ps1`; the
+finding that the vector-0xD1 storm is absent on this configuration.
+
+Tasks: 1 tooling; 2 install with the accelerator rungs; 3 `USBD.SYS` prep;
+4 boot; 5 verify the SMP kernel; 6 the 2b checks and usbport version;
+7 snapshot; 8 record.
+
+Records: `build-and-test.md` "Windows 2000 SMP Stress VM (Phase 2d)";
+`docs/usb-xhci-info/usbport-miniport-abi.md` "7. Locking, IRQL, and threading
+summary"; `failure-diagnosis.md` "The four differential axes";
+`design/05-locking-model.md`; `lessons.md`.
+
+## Phase 3 - Miniport Registration Spike (go/no-go gate)
+
+Goal: prove Option A. A stub `xhci98.sys` registers with the shipping
+`usbport.sys` on both targets, receives its lifecycle callbacks, and a fixed
+common-buffer layout is feasible for every controller-owned object that must
+survive usbport's endpoint close and reopen. The spike performs no MMIO, so an
+ABI failure can never be confused with a bad init sequence.
+
+Status: closed; Option A is the architecture. Checkpoint observed on
+Win98+NUSB (task 8) and native Win2000 SP4 (task 9) with a byte-identical
+binary: the controller bound with no yellow bang, registration and the first
+lifecycle callback sequence proven without canary or stack corruption. Two
+sub-clauses (disable/re-enable, rollback) could not be observed on Win98 -
+disabling any USB controller there bugchecks at `0028:C00312EE`, Microsoft's
+own `usbehci.sys` included - and were closed on Win2000.
+
+Rationale: `MiniPortResourcesSize` is committed in `DriverEntry` before any
+register can be read, and usbport frees endpoint buffers mid-enumeration, so a
+fixed layout was the make-or-break question; the registration packet is a
+private ABI with no import library, so it had to be read off the binaries.
+
+What shipped:
+
+- The registration ABI confirmed on three lineages (NUSB, SP4, XP SP3): a
+  316-byte packet at `Version 200`; `USBPORT_GetHciMn` returns `0x57324B30` on
+  both primary targets.
+- The fixed common-buffer model (`design/04-controller-common-buffer.md`): 32 slots, 64 scratchpad buffers,
+  one worst-case block; usbport's DMA adapter confirmed 32-bit, cached and
+  page-aligned.
+- `scripts/make-usbport-lib.cmd` and `scripts/usbport-lib/` (one import
+  library for all three lineages); `src/xhci_dispatch.c` `DriverEntry` with
+  every callback slot filled and reserved-field canaries.
+- The post-link import gate (`scripts/import-gate/`) and
+  `scripts\build-driver.cmd` as the one build entry point.
+- `src/xhci98.inf` with both install paths and the per-target `usbd.sys`
+  carriage; the INF gate (`scripts/inf-gate/`); the packager
+  (`scripts/package/`).
+- The port-`0xE9` debug console in the QEMU launchers.
+- The static proof that usbport builds page-granular SG lists through its
+  32-bit adapter and stores the high DWORD unmasked.
+
+Tasks: 1 derive and confirm the packet; 2 the DMA-memory model; 3 the import
+library; 4 `DriverEntry` and the stubs; 5 the import gate; 6 the INF; 7 the
+per-target `usbd.sys`; 8 the Win98 spike; 9 the Win2000 spike; 10 what the
+spike can and cannot prove about transfer mapping.
+
+Records: `docs/usb-xhci-info/usbport-miniport-interface.md` ("Target ABI
+record", the two observed callback sequences, "6. Validation procedure");
+`docs/usb-xhci-info/usbport-miniport-abi.md` sections 1, 3, 5, 9;
+`design/04-controller-common-buffer.md`; `build-and-test.md` "Post-link
+import-compatibility gate", "INF-Based Installation", "Carrying a per-target
+`usbd.sys`", "QEMU Debug Console (port 0xE9)"; `docs/usb-xhci-info/win98-wdm.md`
+"Go/no-go validation gate", "Imports are a silent load-time gate";
+`lessons.md`.
+
+## Phase 4 - Controller Initialization
+
+Goal: the xHCI hardware fully initialised inside usbport's `StartController`;
+the ISR/DPC path through usbport-owned interrupt plumbing; port topology
+classified; the complete controller lifecycle (stop, suspend, resume, check,
+reset) and the asynchronous command engine in place before any slot code
+depends on them.
+
+Status: closed. Checkpoint observed on 2a, 2b (under Driver Verifier) and
+the 2d SMP VM: start, disable/enable, stop and restart with no crash or stale
+MMIO access, the No-Op command completing with the expected TRB pointer, Port
+Status Change events on plug and unplug. `ResumeController` has never run on
+Windows 2000 (no QEMU configuration delivers a sleep state; published as a
+limitation by Phase 13). Task 10 - the `XUSB2PR` run on Intel 7/8-series
+silicon - was withdrawn when the only such machine left the project;
+`XUSB2PR` is published as untested ground.
+
+Rationale: `StartController` plays the role `IRP_MN_START_DEVICE` would in a
+monolithic driver, and each of the specification's ordering rules (INTx before
+any MMIO, low-DWORD-first 64-bit writes, the CNR embargo, EHB/IP semantics, PP
+after R/S) was read from the PDF rather than from memory. The host suite
+(`design/03-host-unit-tests.md`) came first so that each VM boot spends the expensive resource on
+a question only a VM can answer.
+
+What shipped:
+
+- `src/xhci_ring.c`, `xhci_caps.c`, `xhci_port.c` (pure core), `xhci_pci.c`,
+  `xhci_init.c`, `xhci_evt.c`, `xhci_cmd.c`, `xhci_hw.h`.
+- The init sequence: a write-nothing preflight (INTx gate first), BIOS handoff,
+  halt and reset, full capability re-derivation after reset, the port map
+  built twice and compared, DCBAA/rings/ERST, bounded R/S, explicit power-off
+  of USB 3.x ports, the No-Op self-test; `InitStep`/`InitStatus` readable from
+  a release build.
+- ISR and DPC (EINT before IP, a bounded drain, the unconditional final ERDP
+  write with EHB), `EnableInterrupts`/`DisableInterrupts`/`FlushInterrupts`,
+  the re-arm with read-back and escalation.
+- The command engine: one outstanding, generation-tagged, a watchdog, the
+  recovery ladder (abort, Command Ring Stopped adoption, controller reset);
+  the driver-image controller lock.
+- The lifecycle: ordered teardown, a quiesce that proves DMA stopped,
+  `CheckController` fault detection, fail-closed on an unprovable teardown.
+- `design/05-locking-model.md`; the host suite grew to 4,806 checks; the
+  deploy gates made mechanical in `build-driver.cmd` and `make-package.ps1`.
+
+Tasks: 1 pure-core harness and first ring/caps/port code; 2 the start
+sequence; 3 the extended-capability walk and port map; 4 ISR and DPC;
+5 R/S, port power and the minimal quiesce; 6 the interrupt-state callbacks;
+7 the asynchronous command engine and No-Op self-test; 8 the complete
+lifecycle; 9 lock scope and lock order; 10 the `XUSB2PR` bare-metal run
+(withdrawn).
+
+Records: `design/03-host-unit-tests.md`; `design/05-locking-model.md`;
+`implementation-invariants.md` (Command Ring, Locking, Interrupt Delivery and
+Ordering, Event Ring Draining, MMIO Sanity, DMA Teardown, PORTSC Writes,
+Starting and Stopping, Suspend and Resume); `docs/usb-xhci-info/xhci-programming.md`
+("Initialization Sequence", "Port Topology Classification", "Command Ring
+Discipline, Timeout, and Abort", "Event Ring Operation", "Firmware Handoff",
+"`XUSB2PR`"); `docs/usb-xhci-info/usbport-miniport-abi.md` section 4
+(controller lifecycle) and 7; `architecture.md` "IRQ and DPC Model";
+`failure-diagnosis.md` "Phase 4 - controller initialized but dead";
+`build-and-test.md` "Run Driver Verifier here", "QEMU xHCI trace events";
+`lessons.md`.
+
+## Phase 5 - Root Hub
+
+Goal: usbport creates the root hub PDO and `usbhub20.sys` loads on it; the
+miniport implements the whole root-hub callback family - status, power,
+enable, suspend/resume, change clears, the IRQ gate, chirp, asynchronous reset
+and resume - presenting only USB 2.0-class ports.
+
+Status: closed. Checkpoint observed on 2a and 2b: "USB Root Hub" under the
+controller with no yellow bang, the port count equal to the managed USB2
+ports, asynchronous reset completed by PRC, both plug and unplug edges, change
+bits latched and cleared through the matching callbacks, FS and HS devices
+enumerating to a devnode. The first run was not met - any Full-Speed device
+bugchecked both targets - and task 7 fixed it. Two clauses moved rather than
+carried: the Low-Speed leg (no QEMU model declares LS; its behavioural half
+was later observed on the E460, batch 13-E) and `ResumeController` on Windows
+2000 (published as a limitation by Phase 13).
+
+Rationale: under Option A usbport owns the PDO and hub descriptor; the
+miniport's job is accurate, non-blocking port state. The Full-Speed bugcheck
+was a usbport defect - `USBPORT_GetTt` walks an empty TT list because the
+packet declares `USB_MINIPORT_FLAGS_USB2` - and the remedy chosen, reporting
+every connected root port as High Speed while keeping the flag, preserves High
+Speed on Windows 98 (dropping the flag would bind Win98's USB 1.1
+`usbhub.sys`). The cost is that a device's true `bInterval` is irrecoverable
+through usbport; the driver schedules more often than asked, never less.
+
+What shipped: `src/xhci_rh.c` (the callback family, the PORTSC event path,
+asynchronous port operations and their timer) and the pure port shadow and map
+in `src/xhci_port.c`; named PORTSC operation builders with golden vectors;
+asynchronous reset and USB 2.0 resume with opposite completion rules (a reset
+timer is a deadline, a resume timer is a floor); the `UsbPortInvalidateRootHub`
+announcement decided under the lock and called after it; the `RH_IRQ` gate
+that suppresses without losing; the High-Speed report with the `RhSpeedsSeen`
+sticky set as the surviving decode evidence; the root-hub disassembly record.
+
+Tasks: 1 the callback family and the static pass on both binaries; 2 the
+logical-port map and per-port shadow; 3 PORTSC operation builders; 4 asynchronous
+reset and resume; 5 status-change announcement; 6 power and lifecycle
+interactions; 7 the Full-Speed root-port bugcheck.
+
+Records: `docs/usb-xhci-info/usbport-miniport-abi.md` (the root-hub block of
+section 4, "8. Enumeration flow facts the miniport must survive" and its
+transaction-translator subsection); `implementation-invariants.md` ("Port
+Speed Decoding", "PORTSC Writes", "Root Hub Reporting");
+`design/05-locking-model.md` "Port state and reset generations";
+`design/02-hub-topology-route-string.md` open question 6;
+`docs/usb-xhci-info/xhci-programming.md` "Port Management (PORTSC)";
+`lessons.md`; `failure-diagnosis.md` "Phases 5/6 - root hub up, enumeration
+fails".
+
+## Phase 6 - Device Enumeration
+
+Goal: a directly attached device gets a USB address through this miniport and
+reaches Device Manager with its correct VID/PID - usbport runs the enumeration
+state machine, the miniport does the xHCI steps (slot, EP0 context,
+SET_ADDRESS interception, MPS0 correction, teardown, save/restore).
+
+Status: closed. Checkpoint observed on 2a and 2b with one binary: a
+directly attached FS and HS device enumerates to its VID/PID; multi-element-safe
+control TD construction, exact completion matching, SET_ADDRESS interception,
+EP0 close/reopen without slot loss and Short Packet handling all proven in the
+logs. Not observed here: the Low-Speed leg (to bare metal), the multi-element
+SG clause (Phase 6 traffic never maps a second element; measured in Phase 8)
+and a disconnect mid-transfer (QEMU completes control transfers instantly;
+the mid-command-chain half unwound cleanly).
+
+Rationale: batch 6-0 read both shipping `usbport.sys` builds first because
+three of the six ABI assumptions the plan rested on were wrong
+(`CloseEndpoint` and `GetEndpointState` are never called; the post-open wait is
+an uncapped loop, so a frozen `Get32BitFrameNumber` hangs the enumerating
+thread). Pure core first (6-A), the slot layer as one batch (6-B), then one VM
+trip (6-V) that also carried Phase 7b's topology probe.
+
+What shipped: `src/xhci_xfer.c` (control TD groups published with one store,
+the pending-transfer queue, event-to-transfer matching, the completion-code
+mapping restricted to the Win2000 DDK's vocabulary, the "any measured length
+wins" rule); `src/xhci_ctx.c` (context encoders, both strides, all speeds);
+`src/xhci_slot.c` (the slot table and address map, the asynchronous EP0 chain,
+SET_ADDRESS interception, the MPS0 Evaluate Context, three teardown triggers
+including port disable - a device usbhub abandons is a device gone - and the
+deferred completion drain); CSS/CRS with the reinitialise fallback in
+`src/xhci_init.c`; `src/xhci_probe.c`, the runtime transfer-contract probe of
+task 6-V.1; `QueryEndpointRequirements` asking for no per-endpoint buffer.
+
+Tasks: batch 6-0 (static: the reopen sequence, poll deadline, transfer
+parameter lifetime, the empty SG list, CSS/CRS in QEMU); batch 6-A - 6-A.1
+control TD construction, 6-A.2 pending TDs and completion matching, 6-A.3
+completion behaviour; batch 6-B - 6-B.1 endpoint callbacks and the frame
+counter, 6-B.2 the EP0-open machine, 6-B.3 SET_ADDRESS interception,
+6-B.4 the MPS0 correction, 6-B.5 disconnect at every state, 6-B.6 save and
+restore state; batch 6-V - 6-V.1 the runtime probe and the checkpoint.
+
+Records: `docs/usb-xhci-info/usbport-miniport-abi.md` sections 4, 5, 8;
+`docs/usb-xhci-info/usbport-miniport-interface.md` "What Phase 3 can and cannot
+prove about transfer mapping", "The probe that discharges it";
+`docs/usb-xhci-info/xhci-data-structures.md` (save/restore, control transfers,
+completion codes, contexts); `docs/usb-xhci-info/xhci-programming.md`
+("Completion Status Mapping", "Spurious success"); `implementation-invariants.md`
+("Transfer Buffers", "Control Transfers", "Device Addressing", "DMA Teardown");
+`design/04-controller-common-buffer.md` sections 3.4 and 3.6; `design/05-locking-model.md` section 7; `architecture.md`
+"Data Flow: Device Enumeration"; `lessons.md`.
+
+## Phase 7a - Interrupt Transfers and Direct HID
+
+Goal: the existing HID stacks on both targets drive directly attached USB
+keyboards and mice through one `xhci98.sys` - non-default endpoint contexts,
+Configure Endpoint, interrupt transfers and the quiescence family (stop, abort,
+reset-pipe).
+
+Status: closed. Checkpoint observed on 2a, 2b (under Driver Verifier) and
+2d with one binary: keystrokes and pointer movement through each OS's own HID
+drivers, ten unplug/replug cycles per guest, abort and reset survived,
+concurrent traffic on the SMP VM. Two clauses are unobservable in QEMU and are
+recorded as such: an alternate-interface change (no QEMU HID has a second
+setting) and reset-pipe after a STALL (nothing stalls on demand). The 2a fatal
+`0E` carried from Phase 6 reproduced on every HID unplug here, was explained
+(a completion delivered inside `SubmitTransfer`, which usbport writes after)
+and closed with the `SubmitDepth` bracket.
+
+Rationale: batch 7a-0 read `AbortTransfer`'s post-return lifetime from both
+binaries first, because "immediately reclaimable" decides whether the
+cancellation machine may hold any usbport pointer across a command chain (it
+may not). Hub topology is a separate phase so an unresolved Route
+String contract cannot obscure direct-endpoint correctness.
+
+What shipped: Configure Endpoint for non-default endpoints (completion codes
+7/8/35 treated as scheduling refusals, answered `USBD_STATUS_NO_BANDWIDTH`);
+interrupt transfers through the Phase 6 TD builder; non-EP0 rings from the
+32-ring pool in the controller block; the quiescence machine (`XHCI_EP_QUIESCE`:
+REMOVE, PAUSED, abort that copies nothing usbport owns, No-Op rewriting of
+leftover TRBs, Drop+Add for alternate settings, `PendingParams` until a command
+succeeds); reset-pipe through `GetEndpointStatus`/`SetEndpointStatus`; the
+`SubmitDepth` bracket; ~45 endpoint counters and the monitor-side counter
+reader.
+
+Tasks: batch 7a-0 (static: `AbortTransfer` lifetime and Phase 7b's field
+half); batch 7a-A - 7a-A.1 endpoint contexts and Configure Endpoint,
+7a-A.2 interrupt transfers; batch 7a-B - 7a-B.1 the endpoint-state machine,
+7a-B.2 cancellation, 7a-B.3 reset-pipe; batch 7a-V - 7a-V.1 the direct HID
+lifecycle and the checkpoint.
+
+Records: `docs/usb-xhci-info/usbport-miniport-abi.md` (Endpoints and Transfers
+in section 4; "Periodic scheduling: what `Period` actually carries");
+`docs/usb-xhci-info/usbport-miniport-interface.md` "3. Callback families";
+`docs/usb-xhci-info/xhci-data-structures.md` ("Which command may set which Slot
+Context field", "Which Slot State each command requires"); `design/04-controller-common-buffer.md`
+(the shared pool, resolved); `design/05-locking-model.md` "Endpoint records and
+the quiescence machine", "10. Open against the SMP checkpoint";
+`implementation-invariants.md` "Doorbells"; `build-and-test.md` "`sendkey` and
+`mouse_move`", "A replug onto an idle-suspended controller is invisible",
+"Reading counters out of a live guest"; `lessons.md`.
+
+## Phase 7b - External Hub Topology
+
+Goal: settle the usbport-to-xHCI topology contract - usbport exposes only the
+transaction-translator pair (`HubAddr`, `PortNumber`), never the route - and
+support devices behind USB 2.0 hubs: Route Strings, hub Slot Context marking,
+TT fields, hub churn, without weakening the direct path.
+
+Status: closed, with three clauses deferred to Phase 13 by decision. Observed
+on both VMs with one binary: Route Strings one and two tiers deep, the full
+churn list, the five-tier ceiling refused at `route 0x11111`, the phantom-TT
+negative control `TtPairsDisagreed = 10`, all under Driver Verifier on 2b, with
+QEMU's own `usb_xhci_slot_address` trace as the oracle.
+
+On the E460 under Windows 98 (batch 7b-M): HS, FS and LS devices on root ports,
+three hubs as one daisy-chained tree, a mouse and a Low-Speed keyboard working
+behind a real High-Speed hub, so split transactions ran.
+
+Not observed here: any `TT`/`MTT`/`TTT` number on real translators, multi-TT
+behaviour, and the Windows 2000 half on metal, all Phase 13's. The stop rule
+(if snooping cannot reconstruct the path on both builds, ship a limitation) was
+answered affirmatively on both builds; no Option A hub limitation is owed.
+
+Rationale: the first batch was a measurement, not code - task 6-V.1's probe
+let the feasibility gate run on the Phase 7a binary against a QEMU `usb-hub`.
+It confirmed the hub's own EP0 traffic carries usable SETUP bytes on both
+stacks, and found the behind-hub refusal was unbounded (a dead Win98 guest),
+which became task 7b-A.0 before any topology code. QEMU's `usb-hub` is USB 1.1
+and `usb-host` passthrough of a hub was measured shut, so anything needing a
+real transaction translator went to metal.
+
+What shipped: `src/xhci_topo.c` - the pure-core hub graph learned by snooping
+`GET_DESCRIPTOR(Hub)`, `SET_FEATURE(PORT_RESET)` and `GET_STATUS(port)`
+replies at placement time; one address-0 claim per root-port reset and a
+progress detector that fails a record refusing with nothing placed; hub Slot
+Context marking (Hub, Number of Ports, TTT, MTT) by an A0-only Configure
+Endpoint; behind-hub slots with Route String, root port, inverted-PSI speed
+lookup and the TT triple from the graph, too-deep routes refused; the
+`OpensTotal` identity and the TT pair table as release-build measurements;
+`scripts/hub-characterise.ps1`.
+
+Tasks: batch 7b-V0 - 7b-V0.1 the feasibility gate; batch 7b-A -
+7b-A.0 bound the behind-hub refusal, 7b-A.1 the snooping graph (sub-tasks
+7b-A.1.0 open accounting, 7b-A.1.1 the pre-SET_ADDRESS reset, 7b-A.1.2 the TT
+pair table), 7b-A.2 hub Slot Context marking, 7b-A.3 behind-hub slots; batch
+7b-V - 7b-V.1 hub churn, 7b-V.2 the five-tier ceiling and the phantom-TT
+control; batch 7b-M - 7b-M.1 single-TT versus multi-TT numbers, 7b-M.2 the
+hub replacement (both carried to Phase 13).
+
+Records: `design/02-hub-topology-route-string.md` (the whole record, with the
+7b-V0 box, the step boxes and the verdict); `docs/usb-xhci-info/usbport-miniport-abi.md`
+"The transaction-translator lookup, and why `USB_MINIPORT_FLAGS_USB2` must
+be set"; `docs/usb-xhci-info/xhci-data-structures.md` ("Route String tier
+order", the Slot Context MTT/TTT rows); `docs/usb-xhci-info/xhci-programming.md`
+"Downstream Hub Addressing"; `implementation-invariants.md` "Hub Paths";
+`build-and-test.md` "QEMU coverage limits", "Bootstrapping xHCI-only machines
+(no EHCI)", "Getting a trace off a bare-metal machine", "The bench rig";
+`design/06-device-matrix-verdict.md` section 3.2; `docs/issues/01-windows-98-log-capture.md`;
+`lessons.md`.
+
+## Phase 8 - Bulk, Mass Storage, and Ethernet
+
+Goal: a USB flash drive is accessible and a USB Ethernet adapter passes
+sustained traffic on both targets, with the Normal-TRB engine scaled to bulk
+load and its failure recovery systematically exercised.
+
+Status: closed. Checkpoint observed on 2a and 2b (and 2d for the SMP unplug
+clause): checksums match across transfers larger than one ring, sustained
+bidirectional Ethernet, unplug during a read and a write completes or cancels
+every transfer exactly once, and `probe max SG elements` finally reads above 1.
+One clause is accepted as the vehicle's and named rather than ticked: after a
+mid-write unplug, a re-attach on a different root port wedges Win98+NUSB,
+reproduced with Microsoft's `usbehci.sys` on the same guest. Carried forward:
+suspend/resume (to Phase 13), the Windows 2000 driver-date question (task
+12.4), Low Speed (to bare metal).
+
+Rationale: bulk is the first traffic that gives usbport's mapper something to
+split and the first that fills rings, so wrap and boundary arithmetic is proven
+by host vectors (8-A) and everything device-bound by VM runs (8-V). Driver
+identity was pulled forward from Phase 11 because every screenshot and bug
+report until then carried a placeholder name.
+
+What shipped: bulk endpoint open and submit; the backpressure latch that
+re-offers a ring-full refusal (measured unreachable by any device class the
+project can present - Bulk-Only Transport is strictly serial - and kept as
+defensive); a ten-code failure-recovery matrix; the withheld second Short
+Packet Event departure, found on a passed-through ASIX AX88772A (QEMU's xHC
+emits one event where the specification mandates two); driver identity - the
+devnode name `USB 2.0 eXtensible Host Controller (xhci98)`, `src/xhci98.rc`,
+the `DriverVer`/`FILEVERSION` cross-check in the INF gate; the "regenerate, do
+not adjust" rule for the counter-offset table.
+
+Tasks: batch 8-A - 8-A.1 the bulk engine, 8-A.2 failure recovery,
+8-A.3 active-unplug teardown with mixed traffic, 8-A.4 driver identity; batch
+8-V - the multi-element SG clause, 8-V.1 mass storage, 8-V.2 USB Ethernet.
+
+Records: `docs/usb-xhci-info/xhci-data-structures.md` "The withheld second
+Short Packet Event"; `implementation-invariants.md`
+("Completion Matching", "Ring Full and Backpressure"); `build-and-test.md`
+("Versioning the driver", "QEMU monitor - hot-plug USB devices without
+rebooting", "Target Class Devices"); `docs/issues/README.md` (the multi-TRB
+short packet); `docs/using/release-notes.md` "Known limitations";
+`lessons.md`.
+
+## Phase 9 - Isochronous ABI and USB Audio
+
+Goal: prove the isochronous `SubmitIsoTransfer` ABI from the shipping
+`usbport.sys` binaries and use it for USB Audio on both targets, or publish an
+explicit Option A limitation. A guessed parameter layout was not an acceptable
+third outcome.
+
+Status: closed. The gate passed statically (one contract, nothing to
+discriminate) and dynamically (250,330 packets on 2b with no malformed
+refusal). Playback met on Windows 2000 under Driver Verifier with three
+oracles. Named rather than met on Windows 98 in the VM: Win98 SE's own
+`USBAUDIO.VXD` divides by zero after one URB, reproduced through a UHCI control
+with this driver idle - later shown to be a vehicle artefact when a physical
+UAC 1.0 device played clean on the E460 (batch 13-E). Recording not applicable
+(the emulated device has no input). Deferred to Phase 13 with measured reasons:
+a physical audio device, audio behind a High-Speed hub, a device declaring
+`bInterval > 1`.
+
+Rationale: ReactOS's isochronous path is a stub; the parameter block existed
+only in the binaries. Task 9-0.2 (the mid-TD short-packet retire, the only
+known correctness defect leaving Phase 8) was placed ahead of the engine because
+it touches the hardware-established receive path.
+
+What shipped: the ABI (`SubmitIsoTransfer`'s fifth argument is a `'Isoc'`
+block of `0x48 + 0x38*n` bytes; `UsbPortCompleteIsoTransfer` at packet slot
+`0x100`); the settle rule for mid-TD short packets (retire deferred to a drain
+pass that observed the ring empty); the isochronous engine (N packets = N TDs,
+IOC per TD, SIA unless CFC, the frame axis made congruent to MFINDEX, a declared
+cap of 62 single-fragment packets per request); the configuration-descriptor
+snoop (`src/xhci_desc.c`) that derives an isochronous endpoint's `bInterval`,
+which usbport cannot supply; the `InterruptNextSOF` contract (a stub is legal);
+the passthrough rung published shut for IAD-grouped multi-interface functions
+on a Windows host - every USB Audio device.
+
+Tasks: batch 9-0 - 9-0.1 the ABI gate, 9-0.2 the mid-TD retire; batch
+9-A - 9-A.1 the isochronous engine, 9-A.2 the descriptor snoop, 9-A.3
+`InterruptNextSOF`; batch 9-V - 9-V.1 USB Audio validation, 9-V.2 the
+passthrough rung.
+
+Records: `docs/usb-xhci-info/usbport-miniport-abi.md` ("Isochronous transfers",
+"`InterruptNextSOF`", "Periodic scheduling"); `docs/usb-xhci-info/xhci-data-structures.md`
+("Isochronous scheduling", "The withheld second Short Packet Event");
+`docs/usb-xhci-info/xhci-programming.md` "Never set BEI";
+`implementation-invariants.md` "Completion Matching"; `build-and-test.md` "USB
+Audio in QEMU: what the vehicle can and cannot show"; `design/06-device-matrix-verdict.md` section 7;
+`docs/using/release-notes.md` "Known limitations" (the USB Audio entry); `test-equipment.md`; `lessons.md`.
+
+## Phase 10 - Automated VM Device Matrix
+
+Goal: an unattended harness that boots each target VM, walks every USB device
+model QEMU can present, and produces a diffable, machine-readable pass/fail
+report per device per target - so "does the driver still handle the device
+population" can be re-run after any change.
+
+Status: closed. One command runs the whole matrix unattended on both
+targets (17 rows each, no `ERROR`); `NODRIVER` and `inert` are explicit
+outcomes; the harness reproduces Phase 7a's HID result, Phase 5 task 7's
+speed-mismatch untruth and batch 7b-V's churn `TtPairsDisagreed +10`, and fails
+on the broken `matrix.broken.psd1` fixture; it runs on a second host. No
+row-level `INERT` instance exists in this population - every row inherits the
+live `Always` block. The
+`usb-bot`/`usb-uas` `+0` carried out of this phase was later settled as a QEMU
+`auto_attach = 0` artefact, not the driver (batch 11-V).
+
+Rationale: placed before Phases 11 and 13 because they are its heaviest
+consumers. Assembly rather than invention - the monitor scripts, counter readers
+and QEMU's `-trace usb_xhci_*` oracle already existed; the missing piece was
+the matrix and the verdict. The committed harness depends on nothing in the
+git-ignored `scripts/local/`.
+
+What shipped: `scripts/vm-matrix/` - `run-matrix.ps1`, `probe-devices.ps1`,
+`gen-offsets.ps1` (the counter-offset table derived from the driver's own
+sources, checked against the running driver every boot), `prepare-image.ps1`,
+`selftest.ps1`, `matrix.psd1`, `matrix.broken.psd1`, `lib/`; the verdict model
+(five outcomes, four expectation kinds, the `endpoints opened` discriminator,
+the nine-term open identity); the trap guards (stale offsets, liveness by
+`info irq`, a leftover guest on the monitor port, a short counter read voids
+the run).
+
+Tasks: 10.1 enumerate the device population; 10.2 design the verdict;
+10.3 build the runner; 10.4 validate against known answers; 10.5 make it
+re-runnable by someone else.
+
+Records: `design/06-device-matrix-verdict.md`; `scripts/vm-matrix/README.md`;
+`build-and-test.md` "The automated VM device matrix (Phase 10)", "Reading
+counters out of a live guest"; `lessons.md`; `run-11v.md` Stage E.
+
+## Phase 11 - Power, Packaging, and Stress
+
+Goal: prove on both target VMs, the SMP VM and Driver Verifier that the driver
+survives sustained mixed load, 20-cycle device churn per class, the reachable
+power lifecycle and package install/upgrade/uninstall/reinstall - and that what
+the end user receives is usable: a one-screen qualifier default, release notes,
+and a diagnostic log that needs no kernel debugger.
+
+Status: closed. Checkpoint met on the rule "every reachable clause passes on
+both targets, every unreachable clause is recorded with its reason and none is
+reported as passed", across stages A-H of `run-11v.md`.
+
+Ten clauses were never observable in this vehicle and are published, not
+ticked: Win98 disable/re-enable (bugchecks through every door),
+`ResumeController` on Windows 2000, restart after controller invalidation,
+recovery after a controller fails, the scratchpad-limit refusal, rollback after
+a failed start (no *Roll Back Driver* before XP; task 12.3), Low Speed,
+single-/multi-TT hub trees, isochronous on Win98, and the qualifier's
+one-screen budget on a real console.
+
+One obligation survived: the INF engine's delivery of the log registry values
+on a fresh install (task 11-V.9), which task 14.1.2 later closed by publishing
+it as a limitation rather than by measuring it.
+
+Rationale: Phases 5-10 each exercised one class at a time and never the
+package, the lifecycle under traffic, or two controllers. Two user-facing
+deliverables were pulled forward because the bench trip needed them: a log
+channel that works without a debugger, and a qualifier whose default is safe.
+Batch order followed what needs the operator at the machine - host work first
+(11-A, 11-B), the run last (11-V).
+
+What shipped:
+
+- the global-state audit (the release image has exactly three writable
+  process-globals);
+- the `UsbPortGetMiniportRegistryKeyValue` ABI read out of four binaries;
+- the bounded in-memory log ring (`src/xhci_log.c`) flushed only from
+  `StopController` at PASSIVE_LEVEL, with the `XhciLogDebugView` sink, the one
+  `DbgPrint`-outside-`#if DBG` exception in `AGENTS.md` (the file sink built
+  here was retired by task 13-L.2);
+- the INF gate's `VAL-*` rules and `-EmitFootprint` with the tracked
+  `expected-footprint.txt`;
+- `make-11v-media.ps1`;
+- the Windows 98 idle hot-plug defect fixed by one INF line
+  (`DisableSelectiveSuspend = 1`; a halted xHC cannot raise a port-change
+  interrupt, unlike EHCI);
+- the `XHCIQUAL` no-argument quick scan;
+- `docs/using/release-notes.md` and `run-11v.md` themselves;
+- the stress results (four-class load, 20 cycles per class per target, slot
+  exhaustion at 32+1, two controllers bound on both targets);
+- the package results (fresh, uninstall, reinstall pass on both; Windows 2000
+  refuses to upgrade itself; Windows 98 upgrade delivers the binary and
+  bugchecks before the registry phase).
+
+Tasks: batch 11-A (host: the global-state audit, the registry ABI, the log
+ring, the quick-scan default); batch 11-B - 11-B.1 create the release
+notes, 11-B.2 write the run sheet, 11-B.3 the media and the footprint; batch
+11-V - 11-V.1 lifecycle with traffic, 11-V.2 two controllers and slot
+exhaustion, 11-V.3 the package on clean snapshots, 11-V.4 the backwards-
+compatibility subset, 11-V.5 the stability matrix, 11-V.6 the idle hot-plug
+defect, 11-V.7 the optional log's outcome, 11-V.8 the qualifier default,
+11-V.9 the log producer set and the ring.
+
+Records: `run-11v.md` (stages A-H); `design/05-locking-model.md` "11.
+Process-global storage"; `docs/usb-xhci-info/usbport-miniport-abi.md` "6. usbport
+service functions"; `design/08-build-flavours-and-the-log-channel.md`;
+`docs/issues/01-windows-98-log-capture.md`; `build-and-test.md` "INF-Based
+Installation", "Getting a trace off a bare-metal machine";
+`docs/using/release-notes.md` ("The log, and how to send one", "Known
+limitations");
+`xhciqual/README.md`; `lessons.md`.
+
+## Phase 12 - Host- and Guest-Side Decisions
+
+Goal: take the decisions the project was carrying that need no machine, each
+of the shape "build the artifact, or publish the gap", so that nothing
+decidable on the host or in a 2a/2b guest stays parked behind bare-metal work
+that may never happen.
+
+Status: closed. Every task closed on one of its two named outcomes, none
+reported as blocked by Phase 13, and the two obligations the phase carried in
+the release notes are cleared. A decision deferred out of this phase is a
+limitation, not a pending item, and is published.
+
+Rationale: the bare-metal phase's checkpoint was chained to a Windows 2000
+install on real hardware that may never be achievable, and decisions needing
+nothing but a decision were being reported as blocked by a prerequisite they
+never had. Keeping them open as decisions paid off both ways: 12.3's run found a failure mode nobody predicted,
+and 12.4's closed off a suspected defect that would otherwise have shipped a
+useless INF change.
+
+What shipped:
+
+- 12.1 - publish: the `FSC = 0` suspend path is the standby entry in the release notes' "Known limitations";
+  `HCCPARAMS2` added to the qualifier's capability dump (a fleet reading of
+  `FSC = 0` was later taken on the E460); the `EndpointQuiesceFailures`
+  counter.
+- 12.2 - publish: the `DbgPrint` exception is not widened - a shipping Windows
+  98 install has no PASSIVE moment between `StartController` and shutdown for
+  a second emit site to fire in; the serial sink withdrawn; Windows 98 metal
+  has no push channel (the read channel came later, batch 13-L).
+- 12.3 - build: the failed-start artifact (`-DXHCI_FAIL_START_CONTROLLER`,
+  `make-package.ps1 -FailStartArtifact`), run on both guests: cleanup is
+  correct on both, and Windows 98 does not survive a failed
+  `StartController` (the failed-start entry in the release notes).
+- 12.4 - build: the unpadded-`DriverVer` experiment package, run on 2b: the
+  unpadded date records no date either, so padding is not why Windows 2000
+  shows no driver date; "unsigned" remains by elimination (the Windows 2000 upgrade entry in the release notes).
+- 12.5 - the control run: 150 fast hub attach/detach pairs wedge Windows 98
+  only when `xhci98.sys` carries them (122 clean pairs on UHCI against 12 on
+  xHCI in the same boot) - the rapid plug/unplug entry in the release notes, this driver's; nobody owns the mechanism hunt.
+
+Tasks: 12.1 the `FSC = 0` suspend path; 12.2 a Windows 98 bare-metal trace
+channel, or the statement that there is none; 12.3 the failed-start rollback
+artifact; 12.4 why Windows 2000 records no driver date; 12.5 the hub-churn
+wedge control.
+
+Records: `docs/using/release-notes.md` ("DebugView", "Known limitations"); `build-and-test.md` ("Staging a driver that starts
+and fails (task 12.3)", "Staging the unpadded-date experiment package (task
+12.4)", "Getting a trace off a bare-metal machine");
+`implementation-invariants.md` "Suspend and Resume"; `design/01-hardware-qualification-tool.md` row B9;
+`design/08-build-flavours-and-the-log-channel.md` section 1; `docs/issues/01-windows-98-log-capture.md`;
+`docs/issues/README.md` (the hub-churn wedge); `lessons.md` (task 12.5);
+`run-11v.md` Stages B and H.
+
+## Phase 13 - Final Bare-Metal Validation
+
+Goal: discharge every clause earlier phases deferred for want of a real
+machine or a piece of equipment, rather than for want of code, in one place;
+and repair the one defect the bench trip itself found (a root port going
+permanently deaf until a cold boot) on the machine and with the instrument
+that found it.
+
+Status: closed on the published-limitation branch, not on the main clause.
+Every task is ticked. Batches 13-H, 13-E, 13-R and 13-L reported. The Windows
+2000 batch (`13-T`) never could and was removed, its clauses published as
+limitations: Windows 2000 SP4 Setup bugchecks during installation on both fleet
+machines, no cause was investigated and no bugcheck code captured, no further
+candidate exists, and so Windows 2000 has never run on real hardware in this
+project.
+
+Closed on that branch: the transaction-translator `MTT`/`TTT` numbers, the
+Windows 2000 audio and isochronous-counter clauses, the Low-Speed trace half
+and `ResumeController` on Windows 2000, the qualifier on a real
+multi-controller console, and `XUSB2PR` against the driver. Also closed on the
+limitation branch, by equipment: a Full-Speed hub behind a multi-TT hub (no USB
+1.1 hub is held or reliably purchasable; decided before the trip, no purchase).
+
+Number-bearing Windows 98 clauses are published as not taken, never as not
+possible: a read route exists through the PassThru instrument.
+
+Three items are open and gate nothing: why the `0.0.0.4` debug flavour failed
+to load on the E460 (the import or the port; two binaries built, boots not
+taken); whether the bulk-dump profile survives DebugView on Windows 98 metal
+(the discriminating boot was dropped, so it is evidence in neither direction);
+and the multi-controller console reading, unreachable on this fleet rather than
+as such.
+
+Do not read this status as "validated on both targets". The phase's closing
+rules: a clause deferred into this phase and then deferred again out of it is a
+limitation, not a pending item, and is published; and an equipment clause does
+not close by being carried to a later phase, because a purchase decision
+belongs before booking, not at the bench.
+
+Rationale: batching by machine (the modern host, then one E460 trip) made each
+batch one visit's worth of work and stopped tasks straddling bench trips. The
+phase's rule that nothing here is new implementation work was broken once, for
+batch 13-R, because the repair had to be validated with the same machine and
+instrument before the trip's context was gone. Batch 13-L joined from Phase
+14's task 14.0 because its first clause was a bench reading (does the
+diagnostic build load on the E460?) rather than a design. Nothing was ever
+allowed to be reported as blocked by the Windows 2000 batch, which was
+sequenced last for that reason.
+
+What shipped:
+
+- The equipment record (`test-equipment.md`): twelve devices and six hub
+  units characterised in the rig, the three buy-or-publish decisions taken with
+  no purchase, rig positions D and T labelled on the E460,
+  `scripts\hub-characterise.ps1` extended.
+- `usbhub98.sys` (Finding D): the Windows 98 composite-device gap was one
+  missing file - `usbhub.sys`, which Setup never copies on an xHCI-only
+  machine - now carried on the Win98 path only under `COPYFLG_NO_OVERWRITE`
+  with the same provenance and gate treatment as `usbd98.sys`.
+- Bench results on real xHCI silicon under Windows 98 SE (E460): multi-TT
+  and single-TT hub behaviour with five children identical either side of the
+  one-variable hub swap; USB Audio plays clean at a root port and behind a
+  multi-TT hub (the published Windows 98 audio limitation was a QEMU artefact
+  and was corrected); the UAC 2.0 device with `bInterval` 3/4 does not bind, so
+  Interval > 0 remains unexercised everywhere; the first bulk-IN class traffic
+  (ASIX Ethernet) and the first data-verified round trip through a real
+  USB-to-SATA bridge on this driver; `FSC = 0` read on the E460.
+- The Finding 3 repair and the `0.0.0.5` cut (batch 13-R): recovery in
+  place for the `ControllerFailed` latch (`design/07-controller-recovery-in-place.md`); the command-age
+  detector abort rung; every poll-counted threshold re-expressed in
+  milliseconds on the `PollClockMs` axis after the E460's poll period measured
+  36-80 ms rather than the assumed 500 ms; the qualifier's untested-routing
+  caveat moved out of its verdict line; the upload asset renamed
+  `xhci98-<version>.zip`.
+- The three-flavour build and the log channel, `0.0.0.6` (batch 13-L):
+  `release`, `debug` and `qemu` with the safe configuration as the default and
+  the emulator-only one opt-in and never published (`design/08-build-flavours-and-the-log-channel.md`); the PassThru
+  read channel in every flavour behind `XhciLogVerbosity` (default 0); the
+  ring-0 file sink retired; `XHCISNAP`, the host tool that switches the channel
+  on and reads the driver's log ring off the machine; the `debug` flavour
+  confirmed to load on the E460, and a shipping binary carrying the driver's
+  own log off a Windows 98 machine for the first time.
+
+Tasks:
+
+- Batch 13-H (the characterisation bench): 13-H.1 characterise every hub and
+  device, 13-H.2 fix the plug plan and prove the equipment fits it.
+- Batch 13-E (the E460 trip): 13-E.1 the composite-device gap (closed on a
+  fix), 13-E.2 multi-TT hub behaviour (the behavioural half), 13-E.3 Phase 9's
+  deferred audio clauses on Windows 98, 13-E.4 the trip's own record and the
+  free re-observations.
+- Batch 13-R (the Finding 3 repair): 13-R.1 make the `ControllerFailed` latch
+  non-terminal, 13-R.2 the command-age abort rung, 13-R.3 read the repair off
+  the E460, 13-R.3.5 thresholds in time rather than polls, 13-R.4 remove the
+  snapshot instrument before the cut, 13-R.4.5 the qualifier caveat, 13-R.5 cut
+  `0.0.0.5`.
+- Batch 13-L (the Windows 98 log channel): 13-L.0 why the dead ends are dead
+  (`design/08-build-flavours-and-the-log-channel.md`), 13-L.1 the three-flavour
+  split, 13-L.2 the log channel and its registry values, 13-L.3 install and
+  read both shipping binaries on the E460, 13-L.4 cut `0.0.0.6`, 13-L.5 the
+  seam between `design/08-build-flavours-and-the-log-channel.md` and the
+  instrument document, 13-L.6 the `XHCISNAP` console at 80x25.
+
+Records:
+
+- `run-13e.md` (the E460 run sheet: the finding-status table, the stages,
+  Findings 1-Y and Stage L3)
+- `test-equipment.md` (the characterisation record and the Phase 13 equipment
+  requirements)
+- `build-and-test.md` ("Available Test Hardware", "The bench rig", "Getting a
+  trace off a bare-metal machine", "Bootstrapping xHCI-only machines (no
+  EHCI)")
+- `design/07-controller-recovery-in-place.md`;
+  `design/08-build-flavours-and-the-log-channel.md`;
+  `passthru-snapshot-instrument.md`
+- `docs/issues/01-windows-98-log-capture.md`,
+  `02-bare-metal-wedge-and-portsc-watchdog.md` and
+  `03-usbhub-sys-composite-devices.md`
+- `docs/using/release-notes.md` ("The log, and how to send one", "DebugView"). The two limitations this batch
+  wrote, the dead root port and the debug build that would not load, were
+  removed at the `1.0.0.0` cut: both were fixed before the release, so neither
+  is a limitation of it. What they measured is in `run-13e.md` and in the two
+  design records below.
+- `run-13e-evidence/README.md`;
+  `xhciqual/results/e460-2026-08-22/`
+
+## Phase 14 - The `1.0.0.0` Release
+
+Goal: close the project's first final release on what Phase 13 found. Publish
+what a Windows 98 user can send back when something goes wrong, write down how
+a new release is accepted on a new machine, clean the repository so that it
+says what is true at the end of the work, then cut `1.0.0.0`.
+
+Status: closed on the cut. Tasks 14.0-14.2 are done, 14.1's eleven clauses
+included, every clause taken on this host. A task 14.3, an unattended run on
+fresh guests, was added after the cut and never started; it is now Phase 16's task 16.1,
+moved unchanged with its design record. Other files still name the old id as
+the task's history, and nothing resolves it by that id.
+
+Uploading the asset is not a task anywhere: it is one act, the project
+owner's, taken when they choose (`legal-provenance.md` section 5 carries the
+status note). Installing what was cut is the acceptance run's, not this
+phase's: the install worth taking is a stranger's, from the published asset,
+on a fresh guest of each target, and taking it here too would have measured
+the same install twice, the second time from the tree that built it.
+
+Rationale: the first two tasks are about the reader, a user with a broken
+machine and a tester with a fresh one, which is what changes at `1.0.0.0`. A
+pre-release is met by the person who built it; a final release by people this
+project will never watch. The tasks are ordered: 14.0 writes the wording 14.1
+verifies and 14.2 ships; 14.0.5 creates a document 14.1's index and path
+checks then read; 14.2 is strictly after 14.1, because a `1.0.0.0` whose notes
+still carry an open obligation has made a claim Phase 13 spent its length
+refusing to make. The `0.0.0.5` and `0.0.0.6` cuts were vehicles that carried
+a repair to a bench, not this phase's releases.
+
+What shipped:
+
+- Batch 13-L's answer to the Windows 98 log question, said the same way in
+  the release notes, the `readme.txt` template and the bug-report template: a
+  channel exists in every flavour, the same on both targets, read with
+  `XHCISNAP`; a `0.0.0.6` build under DebugView on Windows 98 hardware is not
+  tested, and not tested is not cleared.
+- `docs/using/release-acceptance-test.md`: nine steps with expected readings,
+  equipment named by property, the version named in one place, handable to
+  someone who has never seen this repository.
+- The cleanup (14.1): this file reduced to a status index; the release notes
+  carry no open obligation; every cited path resolves (five exceptions, each
+  explained where cited); every tracked document reachable from
+  `docs/README.md` or `AGENTS.md`; nothing third-party tracked, and Oney's WDM
+  book given a tracked record in `docs/references/README.md`; the licensing
+  texts read against the download and corrected in three places; the two
+  history documents deleted with their review-method rules moved to
+  `lessons.md`; 1,854 of 2,071 dates removed from tracked prose; every task
+  id in the tree resolving to this file; the version and date in one place,
+  `src\xhci_version.h`, with the INF gate cross-checking `DriverVer` (261 to
+  279 self-tests); the retired-instrument `.BIN`/`.PSC` dumps dropped from
+  `runs/run-13e-evidence/`.
+- `1.0.0.0`: `1,0,0,0` / `08/29/2026` in the header, both tools rebuilt,
+  `releases/history.md` rewritten to a single entry, every `0.x` directory
+  removed (none was ever given to anyone) with their path citations replaced
+  by version, size and hash, the readme template's "beta software" passages
+  rewritten, and `releases/1.0.0.0/` plus `out\xhci98-1.0.0.0.zip` written by
+  `make-release.ps1`. The claim the number makes, stated in `history.md` and
+  the release notes: validated behaviourally on real hardware on Windows 98,
+  with no running trace or crash capture on that target; Windows 2000 on
+  metal unreachable; "final" means the driver does what this repository says
+  and the limitations are published, not that nothing is left. Four
+  limitations recording something fixed before the release were removed; the
+  live residue of one (a suspend during in-place recovery on a multiprocessor
+  machine) is no longer listed there.
+
+Tasks:
+
+- [x] 14.0 publish the Windows 98 log answer where a user will meet it.
+- [x] 14.0.5 write the release acceptance test.
+- [x] 14.1 repository cleanup: 14.1.1 this roadmap as a status index; 14.1.2
+  no open obligation in the release notes (task 11-V.9 published as a
+  limitation); 14.1.3 every cited path resolves; 14.1.4 every tracked
+  document reachable from the indexes; 14.1.5 nothing third-party tracked;
+  14.1.6 the licensing texts true against the download; 14.1.7 the history
+  documents deleted; 14.1.8 no dates in tracked prose; 14.1.9 every task id
+  resolves; 14.1.10 the version in one place; 14.1.11 the bench evidence
+  pruned.
+- [x] 14.2 cut `1.0.0.0` with `make-release.ps1`, never by hand: bump the
+  version, write the `history.md` entry first, re-read the readme template
+  against the release notes, remove every `0.x`, state the claim.
+Records: `releases/README.md` (the written-once rule, the upload set);
+`releases/history.md`; `docs/using/release-notes.md`; `build-and-test.md`
+"Versioning the driver"; `release-acceptance-test.md`;
+`.github/ISSUE_TEMPLATE/bug_report.yml`; `legal-provenance.md` sections 2 and 5;
+`docs/references/README.md`; `lessons.md` (the review-method rules);
+`runs/run-13e-evidence/README.md`.
+
+## Phase 15 - Specification Revision 1.2c
+
+Goal: move the repository from revision 1.2 of the xHCI specification to
+revision 1.2c, the only revision Intel now serves, without changing what the
+driver does, and prove that by rebuilding and testing it.
+
+Status: closed on 2026-08-29, the day it opened. The unattended post-release
+run it carried for that day as task 15.5 is Phase 16, unchanged, so that this
+phase closes on its own subject and the run is not held open by a
+specification move it has nothing to do with. 15.1 to 15.4 done on 2026-08-29. `build-driver.cmd all`, both gates
+and the host tests passed. The matrix run was not made, and the owner closed
+15.4 without it on this evidence: the rebuilt `release` and `debug`
+`xhci98.sys` are the same size as the `1.0.0.0` files and differ from them
+only at the PE `TimeDateStamp` and `CheckSum`, the three debug-directory
+timestamps and the timestamp inside the debug record; every byte of every
+section is identical, so the matrix would have measured the binary the
+release already carries. The run is still owed before any tree that changes
+code is measured, and it is blocked today: both guest images (`vm/win98.img`, `vm/win2k.img`, rewritten on
+2026-08-27) no longer carry a `qemu`-flavour driver that prints the identity
+line the harness waits for (the Win98 guest boots to its desktop and says
+nothing on the debug console; the Win2000 guest raises the leftover "Video
+Controller" wizard `prepare-image.ps1` describes, and says nothing either).
+The fix is the operator-driven prep pass in `scripts/vm-matrix/README.md`
+(`make-package.ps1 -Flavor qemu`, then `prepare-image.ps1` against each
+image), which writes to the images and needs someone at the guest GUI, so it
+is not done here. One other host-side finding on the way: the monitor ports
+in the sample config (55591-55593) now sit inside a Windows excluded TCP
+range on this host, so QEMU failed to bind and the harness saw only a refused
+connection; the per-host config moved to 56591-56593 and the sample says why.
+
+What the tasks found. 15.2's sweep counted 1,286 `p.N` matches rather than
+the 1,274 of the first reading (the difference is citations sharing a line);
+1,219 moved, 56 are Oney's, 7 are the references README's own examples and 4
+are this phase's own 1.2c citations. 22 were a page off against 1.2 and were
+corrected. The method and the count re-verified are in
+`docs/references/README.md`, "How the citations were moved from 1.2 to
+1.2c". 15.3's outcome is "comments and documents only": `XHCI_CONFIG_RSVDP_MASK`
+keeps SOC, `XHCI_PORTSC_RSVDZ_MASK` keeps bit 2, both with the reason written
+at the definition; the extended-capability walk's `default: break` steps
+over ID 18; CErr stays 3 for interrupt and 0 for isochronous, which is what
+1.2c's 4.8.2.5 says outright; and nothing in `src/`, `test/` or `docs/`
+cites the two deleted 4.14.2 sentences. No code changed, so no release is
+re-cut.
+
+Why a phase: every `p.N` in this tree, 1,274 citations of the specification
+across 42 files, was verified against revision 1.2 (645 pages). Revision
+1.2c (600 pages, October 2025) repaginates the whole document, and Intel
+publishes no version-pinned link to 1.2, so a reader who follows the
+recorded URL gets a document on which none of those page numbers land.
+`docs/references/README.md` already says what to do when that happens:
+re-verify systematically, record the new revision and hash, say which
+citations were re-verified. This phase is that work, plus the check that the
+errata revisions changed nothing the driver rests on.
+
+What 1.2c changes, from its revision history (p.21), Appendix I.6 and I.7
+(p.599-600) and a word-level comparison of the two text dumps. Revision 1.2b
+added the USB3 Tunneling Support extended capability (Table 7-2, ID 18) and
+PORTSC bit 2, Tunneled Mode (TM, RO; RsvdZ in 1.2). Revision 1.2c added
+eUSB2V2 and Double Isochronous IN Bandwidth (HCCPARAMS2 bits 11 DIC and 12
+E2V2C, both RO; a USB2 PORTLI definition; PORTPMSC bit 27 ECM; section
+4.3.9; the eUSB2 Isochronous Endpoint Companion Descriptor rules in 4.8.2,
+4.14.2 and 6.2.3), the Camera Sideband capability (7.12), and CONFIG bit 10,
+Software Offload Capable (SOC, RW; RsvdP in 1.2). Section 4.8.2.4 "Isoch or
+Interrupt Endpoints" is split into 4.8.2.4 Isoch and 4.8.2.5 Interrupt;
+5.4.11's PORTEXSC subsections become 5.4.12; Appendix H moves from p.638 to
+p.593 and Appendix I is renumbered (I.4.14 Interrupter Mapping is now I.5).
+Two passages this tree's documents lean on were reworded: the Slot Context
+Speed field (Table 6-4) no longer reads "deprecated in this version of the
+specification and shall be Reserved" but "not applicable to USB3 Gen X", and
+4.14.2 dropped the sentence "High-speed endpoints shall allocate at most 80%
+of a microframe for periodic transfers" together with the "64B, 1KB, 3KB,
+3KB, 3KB, and 48KB" Max ESIT Payload list, deferring both to the bus
+specifications. Everything else the comparison found is reflow, footnote
+movement, cross-reference repair, and two sentences 1.2c duplicated in
+editing (the "legacy USB devices ... Default state" note in 4.3.4 and the
+"TRB Error code" note in 4.6). None of the new features is reachable from a
+USB 2.0 root port on this driver: eUSB2 is a chip-to-chip interface, and
+tunneling is USB4.
+
+Expected outcome for the driver: no behaviour changes. The driver reads only
+FSC from HCCPARAMS2; never touches PORTPMSC, PORTLI, PORTHLPMC or PORTEXSC;
+writes CONFIG and USBCMD through `xhciWriteRsvdP` and `xhciWriteUsbCmdFrom`,
+which preserve reserved bits, so the new SOC bit is carried rather than
+cleared; writes PORTSC bit 2 as zero, harmless against a read-only bit, though
+the comment calling it RsvdZ is now wrong; and walks the extended
+capabilities by matching the ID it wants, so an unknown ID 18 is stepped
+over. Task 15.3 confirms or refutes that expectation. A refutation is not
+fixed silently inside the task: it is named, fixed, and the existing
+`1.0.0.0` release is re-cut with the change (the owner's decision; nothing
+has been uploaded, so there is no second version to number).
+
+Tasks:
+
+- [x] 15.1 adopt 1.2c as the reference document. Add its row to
+  `docs/references/README.md`: `xHCI__Rev1.2c.pdf` as Intel names the
+  download, revision 1.2c, 600 pages, SHA-256
+  `0b06318005c3e0c8b896f2a002c2a3c78426b5fdacac4ad1cc02ffec15835190`, the URL
+  already recorded. Keep the 1.2 row as the artifact the citations were made
+  against until 15.2 moves them, then say so in its row. Rewrite the "expect a
+  hash mismatch" passage, which describes the situation this phase ends. Fix
+  the extraction recipe for 1.2c's page headers: the printed page number is
+  the first token only on even pages, and odd pages carry it after `Document
+  Number: 868295, Revision: 1.2c`, so `printed_of` must accept either.
+  Re-derive the section-anchor list (4.2, 4.5.4.1, 4.6.1.1, 4.9.4, 5.4.2) on
+  1.2c pages. Then every statement of the revision in the tree: `AGENTS.md`
+  Quick Reference, `README.md` "citations verified against v1.2",
+  `docs/usb-xhci-info/xhci-data-structures.md`'s header ("645-page", "v1.2"),
+  `docs/usb-xhci-info/xhci-programming.md`'s first line, `xhciqual/qual.h`,
+  and the dump filename the recipe writes. `legal-provenance.md` lists the
+  paths the 1.2 PDF once occupied and stays as it is; the new file was never
+  tracked.
+- [x] 15.2 migrate the page citations. Every `p.N` and `p.N-M` citation of
+  the specification (`git ls-files '*.c' '*.h' '*.md' | xargs grep -n
+  '\bp\.[0-9]'`, minus the Oney book's) moves to the page 1.2c prints. The
+  method that resolved 1,268 of 1,274 on the first reading, to be re-run
+  rather than copied: map each distinct cited page to 1.2c by
+  five-word shingle overlap between the two text dumps (a 1.2 page lands on
+  one 1.2c page or straddles two, 1.2c holding more text per page); then, per
+  citation, take the quoted phrase within four lines above it and keep the
+  candidate page that prints it, fall back to the section or table number on
+  the same line, and only then to the map's top candidate. What that leaves
+  is read by a person: the citations whose map was weak with no phrase or
+  anchor to settle them, those with no candidate at all, and the lines in the
+  three files that cite both the specification and Oney (`win98-wdm.md`,
+  `build-and-test.md`, `implementation-invariants.md`), where the book's
+  pages must not move. `docs/references/README.md` is the record of the
+  counts at each step. Check each quoted phrase against its 1.2 page first: a
+  citation that was already a page off is corrected, not carried across.
+  Record the method and the count re-verified in
+  `docs/references/README.md`, and finish with the sweep over the whole tree,
+  not a file list. Check that the sweep also rewrites the `p.593` cluster
+  (Appendix H.1.6, FSC) that `src/`, `test/`, `xhciqual/` and three
+  documents share.
+- [x] 15.3 read the tree against what changed. `xhci-data-structures.md`:
+  the HCCPARAMS2 row (bits 11 and 12 now defined, still unused), the CONFIG
+  row (SOC `10`, RsvdP `31:11`), the PORTSC bit 2 row (TM, RO, USB3 ports
+  only, RsvdZ on USB2 ports), the Slot Context Speed note at Table 6-4, and
+  Table 7-2's ID 18. `src/xhci.h`: `XHCI_CONFIG_RSVDP_MASK` (`0xFFFFFC00`)
+  still covers bit 10 and so preserves SOC; keep it and write down why. The
+  `XHCI_PORTSC_RSVDZ_MASK` comment ("no defined field") is corrected, and
+  whether the mask keeps bit 2 is decided there with the reason written
+  down. Confirm that nothing in `src/`, `test/` or `docs/` rests on the two
+  deleted 4.14.2 sentences (a first grep for "80%" and the ESIT list finds
+  nothing), that the 4.8.2.4/4.8.2.5 split changes no CErr choice (interrupt
+  3, isochronous 0), and that the extended-capability walk steps over ID 18.
+  The outcome is either "comments and documents only" or a named behavioural
+  change, and the second amends the existing release (15.4).
+- [x] 15.4 rebuild and test. `scripts\build-driver.cmd` for every flavour,
+  `test\run-host-tests.cmd`, the import gate and the INF gate; then the
+  `scripts\vm-matrix` run on both targets, with the "observed on both" rule
+  read as `AGENTS.md` defines it. The expected reading is a driver that
+  behaves as `1.0.0.0` did. If 15.3 changed no code, no release is cut and
+  the tree's claim is only that its citations are now 1.2c's; if it did,
+  `make-release.ps1` re-cuts `1.0.0.0` with the change named in its
+  `history.md` entry. The version does not move: the release has never been
+  uploaded, so amending it leaves nobody holding a different file under the
+  same name.
+
+Checkpoint: 1.2c is the only revision the tree cites, every `p.N` lands on
+the page a 1.2c copy prints, `docs/references/README.md` records the
+revision, the hash and the count re-verified, and the driver built from the
+tree passes the host tests, both gates and the device matrix on both targets.
+The matrix clause was met on the byte-identity evidence above, by the owner's
+decision, and not by a run.
+
+Records: `docs/references/README.md`;
+`docs/usb-xhci-info/xhci-data-structures.md`; `releases/history.md` (only if
+15.4 cuts a release; it did not).
+
+## Phase 16 - The Unattended Post-Release Run
+
+Goal: one command drives a freshly installed Windows 98 SE guest and a
+freshly installed Windows 2000 SP4 guest from boot to teardown with nobody at
+the keyboard, plugging and unplugging every device this QEMU build can
+present, and writes a diffable record and a verdict per target.
+
+Status: closed on 2026-08-30, on the reading rather than on a clean verdict,
+the way Phase 13 closed. The second run's Windows 2000 report is `PASS` with
+nothing against; its Windows 98 report is `FAIL` on the `usb-audio` replug's
+Insert Disk prompt, reproduced in both runs, which the owner published as a
+limitation in `docs/using/release-notes.md` rather than answer from the
+harness (the run may not attach the installation CD or click a prompt) or
+pin as non-counting. The other row that counted against Windows 98,
+`usb-uas/fs`, is `NODRIVER` on both legs and carries its `ExpectNoDriver`
+entry, written after the runner had loaded the matrix; no third run was made
+to move the number. The two reports are committed as
+`runs/run-16-post-release/`; the screenshots and traces stay under `out/`.
+The task was added after the `1.0.0.0` cut as task 14.3, moved
+to Phase 15 as task 15.5 when that phase opened, and moved here the same day
+so that it has a phase of its own; its design record and the owner's
+decisions in it are unchanged by either move. The harness was built on
+2026-08-29 (`-PostRelease` on the runner, `-Clone` and `-Stamp` on the
+preparation script, `lib/fresh.ps1`, the two fresh targets, the guestless
+self-test), and on 2026-08-30 the manual rung was taken on both fresh images
+against the re-cut `1.0.0.0` and the run was made twice. The first run found
+three harness defects and no driver defect (the `null` chardev that never
+attaches `usb-serial` and `usb-braille`, the bare `usb-uas` adapter the prep
+pass could not teach, and two `ExpectNoDriver` guesses that were wrong in the
+good direction); with those fixed the second run read `PASS` on the fresh
+Windows 2000 guest with nothing against, and `FAIL` on the fresh Windows 98
+guest with two rows against, one of them an entry written after the runner
+had loaded the matrix and the other the `usb-audio` replug's Insert Disk
+prompt, reproduced identically in both runs. Design record 09 sections 11
+and 12 record what was built, what each run read, and the causes.
+
+Why a phase: Phase 10's matrix measures a change to the driver on guests
+carried along since Phase 2, so whatever those images learned they learned
+before the release existed, and an install onto them is an upgrade. What a
+release needs measured is the install path, the first bind, and the plug and
+unplug on an operating system with no history, and nobody re-runs that by hand
+more than once per release. It is also not the acceptance run this file ends
+on: that is taken by a person, from the download, and a script following the
+document is not that reading. `design/09-post-release-unattended-run.md`
+section 1 draws the three apart.
+
+What the task must not re-argue, because the owner settled it: both targets
+single-processor, so Phase 2d's SMP guest is out; one manual rung, the driver
+install inside the guest against a base image cloned from the pre-driver
+snapshots (`post-nusb`, `phase2b-clean`) and stamped with the version it
+carries; the `qemu` flavour, never published, is the binary, and the `release`
+binary is read on a physical machine by hand; `XHCIQUAL` and `XHCISNAP` are
+out of scope; the replug leg is judged from counters alone; the storage row
+enumerates and does not round-trip a file; the composite row runs on Windows
+98 pinned to the release notes' USB Audio reading; TCG, with no time budget
+until one run has been measured. Design record 09 section 7 is the table.
+
+Tasks:
+
+- [x] 16.1 one command drives a freshly installed Windows 98 SE
+  guest and Windows 2000 SP4 guest from boot to teardown with nobody at the
+  keyboard, plugging and unplugging devices and writing a diffable record and
+  a verdict per target. Done 2026-08-30, twice; the second run's reports are
+  in `runs/run-16-post-release/`. The design and the owner's decisions it must not
+  re-argue (single-processor targets, a one-time manual driver install, the
+  `qemu` flavour allowed, `XHCIQUAL` and `XHCISNAP` out of scope) are in
+  `design/09-post-release-unattended-run.md`. It is not the acceptance run
+  this file ends on and closes none of it.
+
+Checkpoint: `run-matrix.ps1 -PostRelease` has run to completion on a stamped
+fresh image of each target, with nobody at the keyboard after the command
+was given, and each target has its report with a header and a verdict under
+`out/post-release/<DriverVer>/`. The "observed on both" rule is read as
+`AGENTS.md` defines it: the Windows 2000 reading is a virtual-machine
+reading, and so, here, is the Windows 98 one. A run on the `qemu` flavour is
+a driver reading taken after a release and is not reported as acceptance of
+it.
+
+Records: `design/09-post-release-unattended-run.md` (the design and, in its
+last two sections, what was built and what the runs found);
+`runs/run-16-post-release/` (the second run's report per target);
+`scripts/vm-matrix/README.md` (the commands, and notes 14 and 15 for what the
+first run corrected).
+
+## Post-Release - Run the Acceptance Test by Hand
+
+This is not a phase, has no task id, and nothing in this repository closes
+it. It is the reminder the roadmap ends on.
+
+Once `out\xhci98-1.0.0.0.zip` is uploaded, run
+[`release-acceptance-test.md`](../using/release-acceptance-test.md) end to end,
+by hand, twice: on a freshly installed VM of the target, and on a physical
+machine. Take the release from the published download, not this tree, and
+follow the document the download ships. Neither run substitutes for the
+other: a fresh VM is the only cheap, repeatable clean install carrying nothing
+this project put there, but cannot test the BIOS handoff, a real interrupt pin
+or an uncharacterised controller; a physical machine tests those and cannot be
+reinstalled on a whim. `scripts/vm-matrix/` is how a guest is built; the run
+itself uses only what the download provides.
+
+No machine model is named: whatever machine is to hand, on whichever target it
+boots, is the subject, and step 1 records what it was (on Windows 98, whether
+NUSB is installed). Record the reading, not the verdict; what a VM cannot
+reach is recorded as not reached, never as a pass. Do not improvise around the
+document: where it is ambiguous, wrong, or assumes something the machine
+lacks, that is the finding.
+
+Nothing is reported back into this repository. What comes back is a defect
+against the driver, as an issue, and a defect against the procedure, as an
+edit to `release-acceptance-test.md`. A driver defect found this way is
+fixed and the existing release re-cut with the fix; it is not a reason to
+withdraw the release, and it does not open a new version number. The one
+thing a failure changes immediately is what `docs/using/release-notes.md`
+claims.
+
+Records: `docs/using/release-acceptance-test.md`; `releases/README.md`;
+`build-and-test.md` ("Available Test Hardware", "The bench rig",
+"Bootstrapping xHCI-only machines"); `test-equipment.md`;
+`scripts/vm-matrix/README.md`; `docs/using/release-notes.md`.

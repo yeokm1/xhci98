@@ -1,0 +1,82 @@
+XHCIQUAL 0.9 (build Jul 25 2026 20:29:27) - Win98/Win2000 USB qualification
+Mode: FULL (active bring-up tests)
+Families: xHCI
+Found 1 selected USB host controller(s).
+
+Running active tests on xHCI 8086:9D2F...
+  C1 handoff: PASS  BIOS released in <= 10 ms
+  C2 reset:   PASS  HCRST+CNR in 1 ms
+  C3 DMA:     PASS  No-Op completion in 1 ms
+  C4 IRQ:     PASS  one-shot ISR fired on IRQ 11 (level per ELCR) (ISR count 1)
+  C6: port 3 connect (PORTSC=000206E1), resetting...
+  C6: port 3 reset ok in 2 ms, High-Speed (480 Mb/s)
+  C6: port 7 connect (PORTSC=000206E1), resetting...
+  C6: port 7 reset ok in 2 ms, High-Speed (480 Mb/s)
+  C6: port 8 connect (PORTSC=000206E1), resetting...
+  C6: port 8 reset ok in 2 ms, Full-Speed (12 Mb/s)
+  C6 ports:   PASS  3 connect(s), 3 reset(s) ok, 6 port event(s)
+  C8: port 3 slot 1 addr 1: 0781:5408 "U3 Titanium"
+  C8: port 7 slot 2 addr 2: 5986:0708 "Integrated Camera"
+  C8: port 8 slot 3 addr 3: 138A:0011 Vendor-specific
+
+==== Controller 00:14.0 - 8086:9D2F rev 21 ====
+  quirks: Intel Sunrise Point-LP (100-series)
+    - PME wake latch bug (matters on Win2000 power transitions)
+  PCI: cmd=0006 (MSE=1 BME=1 INTxDis=0)  pin=INTA#  line=IRQ 11
+  PCI subsys: 17AA:5048
+  PCI caps: PM=1 MSI=1(en=0) MSI-X=0 PCIe=0
+  PCI PM: v2  state=D0  D1=0 D2=0  PME_En=0 PME_Status=0
+    PME_Support: D3hot, D3cold
+    NoSoftRst=1 - keeps state across D3hot->D0
+    flags: DSI=0 PMEClk=0  Aux=375mA
+    raw: PMC=C1C2 PMCSR=0008
+  BAR0: E1220000 64-bit (raw lo=E1220004 hi=00000000)
+  HCIVERSION 1.00  CAPLENGTH 128  ContextSize 32  AC64=1  PPC=0
+  MaxSlots 64  MaxIntrs 8  MaxPorts 18  Scratchpad 34  PAGESIZE 00000001
+  USBLEGSUP: present
+  Protocol USB 2.0: ports 1-12, slot type 0, PSIC 3
+  Protocol USB 3.0: ports 13-18, slot type 0, PSIC 3
+  Port map:
+    port  1: USB2-only (managed)
+    port  2: USB2-only (managed)
+    port  3: USB2-only (managed)
+    port  4: USB2-only (managed)
+    port  5: USB2-only (managed)
+    port  6: USB2-only (managed)
+    port  7: USB2 companion (managed)
+    port  8: USB2 companion (managed)
+    port  9: USB2 companion (managed)
+    port 10: USB2 companion (managed)
+    port 11: USB2 companion (managed)
+    port 12: USB2 companion (managed)
+    port 13: USB3 companion (unmanaged)
+    port 14: USB3 companion (unmanaged)
+    port 15: USB3 companion (unmanaged)
+    port 16: USB3 companion (unmanaged)
+    port 17: USB3 companion (unmanaged)
+    port 18: USB3 companion (unmanaged)
+  --- Tier C results ---
+  C1 handoff:  PASS  BIOS released in <= 10 ms
+  C2 reset:    PASS  HCRST+CNR in 1 ms
+  C3 DMA:      PASS  No-Op completion in 1 ms
+  C4 IRQ:      PASS  one-shot ISR fired on IRQ 11 (level per ELCR) (ISR count 1)
+  C6 ports:    PASS  3 connect(s), 3 reset(s) ok, 6 port event(s)
+  C8 devices:  PASS  3 of 3 device(s) identified (informational)
+    port  3: 0781:5408 rev 0.10  USB 2.00  High-Speed (480 Mb/s)  addr 1  MPS0 64
+             class 00/00/00 (per-interface)  1 iface(s), first 08/06/50 (Mass Storage)
+             "SanDisk Corporation" "U3 Titanium"
+    port  7: 5986:0708 rev 48.04  USB 2.00  High-Speed (480 Mb/s)  addr 2  MPS0 64
+             class EF/02/01 (Miscellaneous)  2 iface(s), first 0E/01/00 (Video)
+             "SunplusIT Inc" "Integrated Camera"
+    port  8: 138A:0011 rev 0.78  USB 1.10  Full-Speed (12 Mb/s)  addr 3  MPS0 8
+             class FF/11/FF (Vendor-specific)  1 iface(s), first FF/00/00 (Vendor-specific)
+  FACT id=8086:9D2F rev=21 bar=E1220000 irq=11 pin=1 hciver=0100 csz=32 ac64=1 ppc=0 slots=64 intrs=8 ports=18 scratch=34 usb2ports=12 legsup=1
+  DEV port=3 speed=3 vid=0781 pid=5408 class=00.00.00 iface=08.06.50 mps0=64
+  DEV port=7 speed=3 vid=5986 pid=0708 class=EF.02.01 iface=0E.01.00 mps0=64
+  DEV port=8 speed=1 vid=138A pid=0011 class=FF.11.FF iface=FF.00.00 mps0=8
+
+---- Verdict for 8086:9D2F ----
+  ==> CONTROLLER QUALIFIED for cross-target driver development
+      Win2000 APIC-HAL routing remains untested by DOS C4.
+
+Done. Report copied to XDEV.LOG.

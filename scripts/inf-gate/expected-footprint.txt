@@ -1,0 +1,110 @@
+# scripts\inf-gate\check-inf.ps1 -EmitFootprint
+# What ONE INSTALL of this INF claims to place, derived from the INF's
+# own sections. Roadmap tasks 11-B.3 and 11-V.3.
+# src\xhci98.inf
+#
+# path|<os>|<kind>|<install section>
+# file|<os>|<copyfiles section>|<dirid>|<subdir>|<destination>|<media source>|<temp name>|<flags>|<verdict>
+# reg|<os>|<addreg section>|<root>|<subkey>|<value>|<flags>|<data>|<verdict>
+# service|<os>|<service name>|<service install section>|<AddService flags>|<verdict>
+# servicevalue|<os>|<service name>|<service install section>|<directive>|<value>
+# unmodelled|<os>|<section>|<directive>
+#
+# Verdicts. Each is derived from the flags field, and the derivation is
+# deliberately narrow - COPYFLG_*, FLG_ADDREG_* and SPSVCINST_* values
+# and their own descriptions are from C:\NTDDK\inc\SETUPAPI.H:
+#   remove - the flags say this install wrote UNCONDITIONALLY, so what
+#            is there now is what it put there.
+#   keep   - the flags make the write conditional on what the target
+#            already held, so this install may not have written it at
+#            all. COPYFLG_NO_OVERWRITE (0x10) skips an existing file and
+#            COPYFLG_REPLACEONLY (0x400) requires one; FLG_ADDREG_NOCLOBBER
+#            (0x02) and FLG_ADDREG_OVERWRITEONLY (0x20) are those same two
+#            conditions on the registry side. Removing usbd.sys, which is
+#            copied 0x10, would take a file this install never placed and
+#            leave usbhub20.sys unable to load.
+#   review - the INF alone cannot say. A version-conditional copy
+#            (COPYFLG_NO_VERSION_DIALOG 0x20, COPYFLG_OVERWRITE_OLDER_ONLY
+#            0x40); FLG_ADDREG_APPEND (0x08), which may leave
+#            pre-existing REG_MULTI_SZ elements in place;
+#            FLG_ADDREG_KEYONLY (0x10), which creates the key and ignores
+#            the value the row names; any SPSVCINST_NOCLOBBER_* bit, which
+#            makes a service-key value conditional the same way; an
+#            AddService carrying a DelService-only bit
+#            (DELETEEVENTLOGENTRY 0x04, STOPSERVICE 0x200); an AddService
+#            whose install section is missing; or an unparseable or
+#            unrecognised flags field.
+#
+# **Two things are emitted and are NOT part of any verdict, for the same
+# reason**: SPSVCINST_ASSOCSERVICE (0x02), which marks the service as the
+# device's function driver, and a registry root other than HKR, which is
+# a key that outlives the device's own. Both bear on what an UNINSTALL
+# does, which this derivation does not model and which nothing in this
+# repository establishes. Drafts made each of them a 'review' - the
+# service one, then the registry one a review round later - and each time
+# that answered a different question inside a column defined as
+# ownership. An unconditional write puts the value there whatever its
+# root or its association. What happens to it at uninstall is a
+# measurement; docs\contributing\runs\run-11v.md stage B4 takes it.
+#   none   - the row places nothing. FLG_ADDREG_DELVAL (0x04) deletes.
+#
+# COPYFLG_NOVERSIONCHECK (0x04) is deliberately NOT conditional: its own
+# description is 'ignore versions and overwrite target', so the copy
+# happens and the row is 'remove'. What it does not tell you is whether
+# it overwrote something - which is the limit stated below, and this is
+# the flag that makes that limit worth stating.
+#
+# **The limit of 'remove', stated rather than left implied**: it means
+# this install wrote the file or value that is there now. It does NOT mean
+# nothing was there before - a plain unflagged CopyFiles can replace an
+# existing file, and an INF cannot say whether it did. That question is
+# answered by the run, not by this derivation.
+#
+# The three verdicts sit on ONE axis - did this install's write happen -
+# and 'keep' is where the flags make that conditional on the target's
+# prior state. They deliberately do not answer a second question,
+# 'what does uninstall do to it', which depends on the key's lifetime and
+# on the service association and which this file models nowhere. Two
+# drafts mixed the second axis into the first; the review rounds that
+# caught them are why the distinction is spelled out here.
+#
+# NOT in here, because it is measured rather than claimed: what each
+# setup engine leaves behind of its own accord (Win98's registered
+# xhci98.tmp, Windows 2000's oemN.inf copy). Those live beside the run
+# that observes them, in docs\contributing\runs\run-11v.md.
+#
+# An 'unmodelled' row is this emitter saying a directive was added that
+# it does not translate - a loud gap rather than a silently short list.
+# Include= and Needs= appear as unmodelled rows because this emitter does
+# not follow them; an INF that grows one has a footprint reaching past
+# what is derived here.
+path|Windows 98|device install|Xhci.Dev
+file|Windows 98|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
+file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbd.sys|usbd98.sys||16|keep
+file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbhub.sys|usbhub98.sys||16|keep
+reg|Windows 98|Xhci.AddReg|HKR||DevLoader||*NTKERN|remove
+reg|Windows 98|Xhci.AddReg|HKR||NTMPDriver||xhci98.sys|remove
+reg|Windows 98|Xhci.AddReg|HKR||XhciLogVerbosity|0x00010001|0|remove
+reg|Windows 98|Xhci.AddReg|HKR||XhciLogDebugView|0x00010001|0|remove
+reg|Windows 98|Xhci.AddReg.Global|HKLM|System\CurrentControlSet\Services\USB|DisableSelectiveSuspend|0x00010001|1|remove
+path|Windows 2000|device install|Xhci.Dev.NTx86
+file|Windows 2000|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
+file|Windows 2000|Xhci.CopyW2K|10|System32\Drivers|usbd.sys|usbd2k.sys||16|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010001|0|remove
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010001|0|remove
+service|Windows 2000|xhci98|Xhci.AddService|0x00000002|remove
+servicevalue|Windows 2000|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
+servicevalue|Windows 2000|xhci98|Xhci.AddService|ServiceType|1
+servicevalue|Windows 2000|xhci98|Xhci.AddService|StartType|3
+servicevalue|Windows 2000|xhci98|Xhci.AddService|ErrorControl|1
+servicevalue|Windows 2000|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
+servicevalue|Windows 2000|xhci98|Xhci.AddService|LoadOrderGroup|Base
+path|Windows 98|right-click Install|DefaultInstall
+file|Windows 98|Inf.CopyFiles|17||xhci98.inf|xhci98.inf||0|remove
+file|Windows 98|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
+file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbd.sys|usbd98.sys||16|keep
+file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbhub.sys|usbhub98.sys||16|keep
+reg|Windows 98|Xhci.AddReg.Global|HKLM|System\CurrentControlSet\Services\USB|DisableSelectiveSuspend|0x00010001|1|remove
+path|Windows 2000|right-click Install|DefaultInstall.NTx86
+file|Windows 2000|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
+file|Windows 2000|Xhci.CopyW2K|10|System32\Drivers|usbd.sys|usbd2k.sys||16|keep

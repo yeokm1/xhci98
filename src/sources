@@ -1,0 +1,236 @@
+#
+# sources - Windows 2000 DDK build description for xhci98.sys.
+#
+# Build from a DDK environment prompt (scripts\local\ddk-debug.cmd), then
+# `cd src && build`. Debug output: src\objchk\i386\xhci98.sys; release
+# output: src\objfre\i386\xhci98.sys.
+#
+# Prerequisite: usbport.lib must exist in this directory. It is a generated
+# import library, not a checked-in one (*.lib is git-ignored) - run
+# scripts\make-usbport-lib.cmd after a fresh clone.
+#
+
+TARGETNAME=xhci98
+TARGETTYPE=DRIVER
+TARGETPATH=obj
+
+INCLUDES=$(BASEDIR)\inc;$(BASEDIR)\inc\ddk
+
+#
+# xhci_mem.c, xhci_ring.c, xhci_caps.c, xhci_port.c, xhci_ctx.c and xhci_xfer.c
+# are the pure hardware-logic core: no DDK dependency, no MMIO, so
+# test\run-host-tests.cmd compiles the same files on the build host
+# (docs\contributing\design\03-host-unit-tests.md). Keep it that way - a file that needs
+# ntddk.h to compile does not belong in that list.
+#
+# xhci_ctx.c is the Phase 6 Slot/Endpoint/Input Control Context encoder. It
+# writes into caller-supplied common-buffer memory exactly as xhci_ring.c does,
+# which is what keeps the golden vectors for every speed and both context
+# strides a host test rather than a VM run.
+#
+# xhci_xfer.c is the Phase 6 control-transfer engine, and it is the first pure
+# file that also includes xhci_usbport.h - the miniport ABI declarations, which
+# are themselves DDK-free (test\test_packet.c compiles them here). It speaks the
+# transfer ABI; it still touches no register and calls no usbport service.
+#
+# xhci_desc.c is task 9-A.2's configuration-descriptor snoop, on exactly the
+# terms below: it is fed reply bytes the caller has already copied out of a
+# mapped transfer buffer, keeps no pointer usbport owns, and decides nothing -
+# the isochronous `bInterval` it recovers is converted into an Endpoint Context
+# Interval by xhci_ctx.c and applied by the endpoint open.
+#
+# xhci_topo.c is the Phase 7b hub topology graph on the same terms: it reads
+# snooped hub-class setup packets and reply bytes the *caller* has already
+# copied out, mutates only the XHCI_TOPOLOGY it is handed, and never
+# dereferences a pointer usbport owns. The caller holds the controller lock
+# across every call; nothing in this file takes one.
+#
+# xhci_pci.c is the other side of that split and the only file that touches
+# BAR0 or PCI config space; xhci_init.c is the controller start-up sequence
+# written against it, xhci_evt.c is the interrupt path (ISR body and event-
+# ring drain), xhci_cmd.c is the asynchronous command engine - the one file
+# that holds the miniport's own interior spin lock - xhci_rh.c is the root-hub
+# callback family, which reads and writes PORTSC under that lock, and
+# xhci_slot.c is the Phase 6 device layer: slots, EP0, and the command chain
+# that addresses a device. None of the six belongs in the pure list above.
+#
+# xhci_log.c is task 11-V.7's optional log ring, and it is pure on the same
+# terms: a bounded byte ring in the miniport extension with its wrap accounting
+# and its flush *decision*, and no file I/O of any kind. The things that need
+# the DDK - the two registry switches, the IRQL measurement that refuses a flush
+# above PASSIVE_LEVEL, and the DbgPrint emission - are in xhci_dispatch.c.
+# (This comment also named ZwCreateFile/ZwWriteFile/ZwClose until task 13-L.2
+# retired the ring-0 file sink; all three imports left the binary with it, so
+# the driver now performs no file I/O anywhere.) Unlike xhci_dbg.c
+# this one is compiled into the **release** build too, deliberately: shipping
+# the debug binary as the diagnostic build would reproduce the
+# DbgPrint-from-DPC bugcheck the task exists to route around (roadmap task
+# 12.2).
+#
+# xhci_dbg.c is the QEMU-flavour trace channel; every function in it compiles
+# away without XHCI_DBG_LIVE, which this file defines for chk_qemu and for
+# nothing else, so neither published binary carries any of its imports. (This
+# comment said "debug-build" until the post-Phase 13 review rounds corrected
+# it, from before the split below.)
+#
+# xhci98.rc is task 8-A.4's file version resource. It is listed in SOURCES like
+# any other input - the DDK's build engine runs rc.exe on a .rc entry - and it
+# adds **no import**, because a resource is data in its own .rsrc section rather
+# than code. It also does not disturb LINKER_FLAGS below, which merges .rdata
+# and says nothing about .rsrc. Both claims are re-checked by the post-link
+# import gate rather than trusted: build with scripts\build-driver.cmd.
+#
+# xhci_probe.c is task 6-V.1's transfer-contract probe. It is instrumentation
+# rather than behaviour - nothing in the driver branches on anything it
+# produces - but it is *not* in the pure list and must not be moved there: it
+# takes the controller lock, so it depends on xhci_hw.h. Its classification
+# compiles into the release build too, deliberately: the counters are the
+# only reading of the contract a release binary can give.
+#
+SOURCES=xhci_mem.c    \
+        xhci_ring.c   \
+        xhci_caps.c   \
+        xhci_port.c   \
+        xhci_ctx.c    \
+        xhci_xfer.c   \
+        xhci_topo.c   \
+        xhci_desc.c   \
+        xhci_log.c    \
+        xhci_dbg.c    \
+        xhci_pci.c    \
+        xhci_init.c   \
+        xhci_evt.c    \
+        xhci_cmd.c    \
+        xhci_rh.c     \
+        xhci_slot.c   \
+        xhci_probe.c  \
+        xhci_dispatch.c \
+        xhci98.rc
+
+#
+# USBPORT_RegisterUSBPortDriver and USBPORT_GetHciMn are private exports of
+# usbport.sys and the Win2K DDK ships no import library for them. This one is
+# generated from __stdcall stubs, not from `lib /def:` - see
+# docs\contributing\build-and-test.md "Build Files" for why that distinction matters.
+#
+TARGETLIBS=.\usbport.lib
+
+#
+# Diagnostic-only escape hatch, empty in every normal build. Set it in the
+# environment before building to pass extra -D flags through, e.g.
+#   set XHCI_EXTRA_DEFINES=-DXHCI_PROBE_RESOURCES_SIZE=4096
+#   set XHCI_EXTRA_DEFINES=-DXHCI_FAIL_START_CONTROLLER
+# Nothing in the tree sets it.
+#
+# The second one is roadmap task 12.3's failed-start artifact: the init sequence
+# refuses its last step, so the driver installs, loads, and then fails inside
+# StartController - which is the one recovery route neither target has ever
+# exercised. It is the only diagnostic build that may be *packaged*, and only
+# through make-package.ps1 -FailStartArtifact, which requires the second marker
+# xhci_dispatch.c emits for it. The rule below is unchanged and is what makes
+# that exception safe to have: every diagnostic build still carries the
+# do-not-deploy marker as well.
+#
+# Any nonempty value also defines XHCI_DIAGNOSTIC_BUILD, which is what embeds
+# the marker make-package.ps1 refuses to package. That generalisation is repo
+# audit's finding 4: the marker used to hang off XHCI_PROBE_RESOURCES_
+# SIZE alone, so a binary built with any *other* extra define was warned about
+# at build time and then accepted by the packager - a warning is not a gate, and
+# the one artifact that must never ship was the one relying on it. It is set
+# here rather than in build-driver.cmd so it also holds for a bare `build` from
+# a DDK prompt, which is the invocation that gets no warning at all.
+#
+#
+# Task 12.3's artifact must be the whole of XHCI_EXTRA_DEFINES, not part of it.
+# Review round 2 finding 4: every build carrying XHCI_FAIL_START_CONTROLLER
+# emits XHCI98_FAILSTART_ARTIFACT_TASK_12_3, and make-package.ps1
+# -FailStartArtifact keys its one exception to the do-not-deploy rule on that
+# string - so `-DXHCI_FAIL_START_CONTROLLER -DANYTHING_ELSE` is staged as the
+# artifact while behaving like neither artifact. xhci_dispatch.c can only
+# refuse the one other define this tree names, because C cannot ask what else
+# was defined; the exact test belongs here, where the value is a string.
+#
+# It is in this file rather than in build-driver.cmd for the same reason
+# XHCI_DIAGNOSTIC_BUILD is: a bare `build` from a DDK prompt reads `sources`
+# and never sees the wrapper's gates. The findstr runs at parse time and its
+# exit code is 0 when the substring is present.
+#
+!IF "$(XHCI_EXTRA_DEFINES)" != ""
+!IF [echo $(XHCI_EXTRA_DEFINES)| findstr /c:"XHCI_FAIL_START_CONTROLLER" >nul]==0
+!IF "$(XHCI_EXTRA_DEFINES)" != "-DXHCI_FAIL_START_CONTROLLER"
+!ERROR XHCI_EXTRA_DEFINES names XHCI_FAIL_START_CONTROLLER alongside something else. Task 12.3's failed-start artifact must be built alone - set XHCI_EXTRA_DEFINES to exactly -DXHCI_FAIL_START_CONTROLLER - because any build carrying that define is staged as the artifact by make-package.ps1 -FailStartArtifact.
+!ENDIF
+!ENDIF
+C_DEFINES=$(C_DEFINES) $(XHCI_EXTRA_DEFINES) -DXHCI_DIAGNOSTIC_BUILD
+!ELSE
+C_DEFINES=$(C_DEFINES)
+!ENDIF
+
+#
+# ------------------------------------------------------------------
+# The three build flavours (roadmap task 13-L.1)
+# ------------------------------------------------------------------
+#
+# BUILD_ALT_DIR is the DDK's own flavour discriminator: build.exe concatenates
+# it onto `obj` to make the output tree, and setenv.bat sets it to fre or chk.
+# scripts\build-driver.cmd overrides it to chk_qemu for the third flavour -
+# debug and qemu are BOTH checked builds, so without a distinct tree they
+# overwrite each other's objects in src\objchk\i386. Verified against this
+# DDK's build.exe: the value may be at most 10 characters, the
+# obj tree becomes src\objchk_qemu\i386 and the log becomes buildchk_qemu.log,
+# and the lib paths still resolve because setenv.bat expands them eagerly.
+#
+#   release  BUILD_ALT_DIR=fre       free     ships, default
+#   debug    BUILD_ALT_DIR=chk       checked  ships, the diagnostic download
+#   qemu     BUILD_ALT_DIR=chk_qemu  checked  never published
+#
+# The flavour is decided here rather than by a variable of this project's own,
+# so that a bare `build` from a DDK prompt cannot produce a binary whose defines
+# and whose obj tree disagree - the same reason XHCI_DIAGNOSTIC_BUILD is set in
+# this file and not in the wrapper.
+#
+# TWO defines make the qemu flavour, and they are two because the hazards they
+# carry are two (src/xhci_dbg.h has the long form):
+#
+#   XHCI_DBG_LIVE  the live per-line trace itself. A *runtime* hazard: that
+#                  profile, from DPC and ISR contexts at real interrupt rates,
+#                  is what bugchecks Windows 98 on metal across three device
+#                  classes. Without it src/xhci_dbg.c compiles away entirely.
+#   XHCI_DBG_E9    the port-0xE9 mirror inside it. A *load-time* hazard: it
+#                  needs HAL.dll!WRITE_PORT_UCHAR, the sole import delta
+#                  between 0.0.0.4's two published binaries, of which the debug
+#                  one gives the E460 a Code 2 and loads nothing at all. WHY
+#                  that build failed is NOT established - defect 2b,
+#                  docs/contributing/runs/run-13e.md P6.
+#
+# **Both are POSITIVE and opt-IN, and that polarity is the repair rather than a
+# tidy-up** (design record 08 section 5.1): the safe configuration is the
+# default and the emulator convenience is the thing asked for by name. The
+# shipping `debug` flavour carries neither, which is what its defining
+# requirement - that it LOADS AND RUNS on real Windows 98 and Windows 2000
+# metal - actually costs. What `debug` is for is the log ring, which is
+# recorded from any IRQL and handed over in one bulk dump from the PASSIVE
+# flush: recording is not emission.
+#
+# They reach the compiler WITHOUT XHCI_EXTRA_DEFINES, which is what makes the
+# qemu flavour packageable-in-principle rather than marked undeployable;
+# make-package.ps1 refuses to publish it by flavour instead.
+#
+# XHCI_FLAVOUR_* is the in-image flavour marker. VS_FF_DEBUG cannot separate
+# debug from qemu - both are checked builds - and a user sending a capture has
+# to be able to say which binary produced it.
+#
+!IF "$(BUILD_ALT_DIR)" == "chk_qemu"
+C_DEFINES=$(C_DEFINES) -DXHCI_DBG_LIVE -DXHCI_DBG_E9 -DXHCI_FLAVOUR_QEMU
+!ELSEIF "$(BUILD_ALT_DIR)" == "chk"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_DEBUG
+!ELSEIF "$(BUILD_ALT_DIR)" == "fre"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_RELEASE
+!ELSE
+!ERROR BUILD_ALT_DIR is "$(BUILD_ALT_DIR)" and this tree knows exactly three flavours - fre (release), chk (debug) and chk_qemu (qemu). setenv.bat sets the first two; scripts\build-driver.cmd sets the third. A build with any other value would carry no flavour marker and no decision about the port-0xE9 mirror, so it is refused here rather than shipped as an unidentifiable binary.
+!ENDIF
+
+#
+# Matches the shipping NUSB/SP4 miniports: no separate .rdata section.
+#
+LINKER_FLAGS=-merge:.rdata=.text

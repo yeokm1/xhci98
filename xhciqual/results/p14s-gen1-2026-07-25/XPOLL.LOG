@@ -1,0 +1,70 @@
+XHCIQUAL 0.9 (build Jul 25 2026 20:29:27) - Win98/Win2000 USB qualification
+Mode: POLL-ONLY (active bring-up, no ISR)
+Families: xHCI
+Found 1 selected USB host controller(s).
+
+Running poll-only tests on xHCI 8086:02ED...
+  C1 handoff: PASS  BIOS released in <= 10 ms
+  C2 reset:   PASS  HCRST+CNR in 1 ms
+  C3 DMA:     PASS  No-Op completion in 1 ms
+  C4 IRQ:     SKIP  poll-only run: no ISR installed; CPU/PIC delivery not tested
+  C6: port 6 connect (PORTSC=000206E1), resetting...
+  C6: port 6 reset ok in 2 ms, Full-Speed (12 Mb/s)
+  C6: port 8 connect (PORTSC=000206E1), resetting...
+  C6: port 8 reset ok in 2 ms, High-Speed (480 Mb/s)
+  C6: port 9 connect (PORTSC=000206E1), resetting...
+  C6: port 9 reset ok in 2 ms, Full-Speed (12 Mb/s)
+  C6: port 10 connect (PORTSC=000206E1), resetting...
+  C6: port 10 reset ok in 2 ms, Full-Speed (12 Mb/s)
+  C6 ports:   PASS  4 connect(s), 4 reset(s) ok, 8 port event(s)
+
+==== Controller 00:14.0 - 8086:02ED rev 00 ====
+  quirks: none known for this VID/DID
+  PCI: cmd=0006 (MSE=1 BME=1 INTxDis=0)  pin=INTA#  line=IRQ 11
+  PCI subsys: 17AA:22B1
+  PCI caps: PM=1 MSI=1(en=0) MSI-X=0 PCIe=0
+  PCI PM: v2  state=D0  D1=0 D2=0  PME_En=0 PME_Status=0
+    PME_Support: D3hot, D3cold
+    NoSoftRst=1 - keeps state across D3hot->D0
+    flags: DSI=0 PMEClk=0  Aux=375mA
+    raw: PMC=C1C2 PMCSR=0008
+  BAR0: E33A0000 64-bit (raw lo=E33A0004 hi=00000000)
+  HCIVERSION 1.10  CAPLENGTH 128  ContextSize 32  AC64=1  PPC=0
+  MaxSlots 64  MaxIntrs 8  MaxPorts 18  Scratchpad 34  PAGESIZE 00000001
+  USBLEGSUP: present
+  Protocol USB 2.0: ports 1-12, slot type 0, PSIC 3
+  Protocol USB 3.1: ports 13-18, slot type 0, PSIC 8
+  Port map:
+    port  1: USB2-only (managed)
+    port  2: USB2-only (managed)
+    port  3: USB2-only (managed)
+    port  4: USB2-only (managed)
+    port  5: USB2-only (managed)
+    port  6: USB2-only (managed)
+    port  7: USB2 companion (managed)
+    port  8: USB2 companion (managed)
+    port  9: USB2 companion (managed)
+    port 10: USB2 companion (managed)
+    port 11: USB2 companion (managed)
+    port 12: USB2 companion (managed)
+    port 13: USB3 companion (unmanaged)
+    port 14: USB3 companion (unmanaged)
+    port 15: USB3 companion (unmanaged)
+    port 16: USB3 companion (unmanaged)
+    port 17: USB3 companion (unmanaged)
+    port 18: USB3 companion (unmanaged)
+  --- Tier C results ---
+  C1 handoff:  PASS  BIOS released in <= 10 ms
+  C2 reset:    PASS  HCRST+CNR in 1 ms
+  C3 DMA:      PASS  No-Op completion in 1 ms
+  C4 IRQ:      SKIP  poll-only run: no ISR installed; CPU/PIC delivery not tested (ISR count 0)
+  C6 ports:    PASS  4 connect(s), 4 reset(s) ok, 8 port event(s)
+  C8 devices:  SKIP  not run (informational)
+  FACT id=8086:02ED rev=00 bar=E33A0000 irq=11 pin=1 hciver=0110 csz=32 ac64=1 ppc=0 slots=64 intrs=8 ports=18 scratch=34 usb2ports=12 legsup=1
+
+---- Verdict for 8086:02ED ----
+  Poll-only run: no interrupt handler was installed.
+  ==> PROVISIONAL - C2/C3/C6 port reset completed with no ISR and no DOS/32A fault.
+      C4 interrupt delivery NOT tested; re-run without --poll-only to earn a verdict.
+
+Done. Report copied to XPOLL.LOG.

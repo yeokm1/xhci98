@@ -1,0 +1,306 @@
+# xhci98.sys import allowlist - module/symbol pairs this driver may import.
+#
+# An unresolved import stops the driver before DriverEntry on both targets,
+# with no call-site diagnostic (docs\usb-xhci-info\win98-wdm.md "Imports are a silent
+# load-time gate"). This file is the committed decision about which pairs are
+# allowed to appear in the linked binary; scripts\import-gate\check-imports.ps1
+# enforces it after every link and rejects anything else.
+#
+# Pairs, not names. The PE import descriptor names the providing module, so
+# NTOSKRNL.EXE!DbgPrint and HAL.DLL!DbgPrint are different imports and only one
+# of them resolves. Module names are matched case-insensitively (the loader
+# does too - the linker records "ntoskrnl.exe" and "HAL.dll" in this build but
+# "NTOSKRNL.EXE" and "HAL.DLL" in the shipping NUSB miniport); symbol names are
+# matched exactly and case-sensitively.
+#
+# USBPORT.SYS rows are deliberately absent. They are read from
+# scripts\usbport-lib\usbport-imports.expected, which the .def and the import
+# library are already generated from; a second hand-maintained copy of the same
+# two names is how the lists silently diverge (roadmap Phase 3 task 5).
+#
+# Format, one entry per line, whitespace separated:
+#
+#   MODULE!SYMBOL   FLAVORS   REQUIREMENT   evidence notes to end of line
+#
+#   FLAVORS      release | debug | qemu | all - which build flavor may import it
+#   REQUIREMENT  required                     - the gate fails if it is missing
+#                optional                     - may be absent (build-flag
+#                                               dependent)
+#
+# **"both" is retired and check-imports.ps1 refuses it** (task 13-L.1). It was
+# this column's word for "every flavor" while there were two, and there are now
+# three - release, debug and qemu - so a row written about two builds must not
+# be silently read as covering three. The word is "all". A qemu row is the
+# strongest statement this file can make about a published binary: qemu is
+# never published, so "qemu required" means "and no shipping build may have it".
+#
+# Evidence tags in the last column, strongest first. check-imports.ps1
+# re-derives all three when the extracted target files are present and prints
+# which ones ran, so a row's claim is never taken on trust:
+#
+#   w2k-export         The symbol is in the export table of every Windows 2000
+#                      SP4 kernel and HAL image on the media - not just the pair
+#                      the 2b VM happens to run. Authoritative for Win2000:
+#                      that is exactly what its loader resolves against.
+#   win98-precedent    A binary that ships as part of Win98 SE or of the NUSB
+#                      package installed on the 2a VM imports the same pair.
+#                      Strong but indirect: it says the pair resolved for that
+#                      driver on this platform, not that ours will load.
+#   ntkern-name        The symbol name appears as a NUL-delimited string in
+#                      Win98 SE's ntkern.vxd, which builds the NT-style export
+#                      tables at init. Positive evidence only: the absence of a
+#                      name there means nothing (Win98 SE's own usbd.sys
+#                      imports names that are not in it - see below).
+#
+# The authoritative Win98 check is the load itself, on the 2a VM (roadmap
+# Phase 3 task 8). Nothing host-side can replace it: on Win98 the NT-style
+# export tables are built at run time by ntkern.vxd rather than read from a
+# file, so there is no export table on disk to resolve against.
+#
+# No baseline file identities are recorded here. Each evidence source has one
+# tracked manifest that both names the files and authenticates them, so there is
+# no prose copy to drift out of date - a hash nobody compares is decoration:
+#
+#   scripts\import-gate\win2k-baselines.expected  both SP4 kernel images and all
+#     eight HAL images on the media, including the SMP kernel, the ACPI HALs,
+#     and the one uncompressed image a HAL*.DL_ pattern misses.
+#   scripts\import-gate\win98-evidence.list       the [precedent] binaries
+#     (Win98 SE's own USB 1.1 stack and the NUSB set installed on the 2a VM) and
+#     the [nametable] file, ntkern.vxd.
+#
+# Both are verified by version, length, and SHA-256 before the gate reads a
+# single export name or reports a single evidence tag.
+
+[imports]
+
+# --- MMIO and register-settle waits (src\xhci_pci.c) ---------------------
+# Phase 4 task 2 is where this driver first touches BAR0, so these are the
+# first imports the release build has ever carried beyond the two usbport exports.
+# All three are the exact module/symbol pairs NUSB's own USBEHCI.SYS imports on
+# Win98 - including the surprise that READ/WRITE_REGISTER_ULONG come from
+# NTOSKRNL.EXE and not from HAL.DLL, which is the whole reason this file
+# records pairs rather than names. On x86 the Win2K DDK declares all three as
+# real imports (wdm.h's NTHALAPI block); they are macros only on Alpha/IA64.
+ntoskrnl.exe!READ_REGISTER_ULONG     all  required  w2k-export; win98-precedent USBEHCI.SYS (NTOSKRNL.EXE!READ_REGISTER_ULONG, hint C7)
+ntoskrnl.exe!WRITE_REGISTER_ULONG    all  required  w2k-export; win98-precedent USBEHCI.SYS (NTOSKRNL.EXE!WRITE_REGISTER_ULONG, hint F4)
+# The busy-wait half of XhciWaitForBits. Callable at any IRQL and never used as
+# a timer (docs\contributing\implementation-invariants.md, "Wait Primitives").
+HAL.dll!KeStallExecutionProcessor    all  required  w2k-export; win98-precedent USBEHCI.SYS (HAL.DLL!KeStallExecutionProcessor, hint 5)
+
+# --- The miniport's interior lock (src\xhci_cmd.c) -----------------------
+# Phase 4 task 7. The command engine is reached from three contexts that no
+# single usbport lock covers - a submit under MiniportSpinLock, the completion
+# under MiniportInterruptsSpinLock, and an uncancellable async timeout under
+# neither (docs\usb-xhci-info\usbport-miniport-abi.md section 7) - so the miniport needs its
+# own. The ISR is deliberately not one of them, which is what keeps this an
+# ordinary DISPATCH-level spin lock rather than an interrupt spin lock (whose
+# XP-era Ke* entry points are on the deny list below).
+#
+# These are the exact pairs the Win2K DDK's x86 declarations produce:
+# KeInitializeSpinLock is NTKERNELAPI, and KeAcquireSpinLock/KeReleaseSpinLock
+# are macros over the FASTCALL Kf* entry points that _DECL_HAL_KE_IMPORT puts
+# in HAL.DLL. Win98 SE's *own* usbhub.sys and usbd.sys import all three, from
+# those same modules, which is the strongest Win98 evidence this project has.
+#
+# The shipping usbehci.sys imports none of them - it keeps no state that two
+# usbport locks can reach at once. This driver's command engine does, so this is
+# the one place where being a strict subset of that miniport's import profile
+# had to be given up, deliberately and with the reason recorded.
+ntoskrnl.exe!KeInitializeSpinLock     all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeSpinLock, hint 77); ntkern-name
+# The command engine's start epoch. Shared across every controller this driver
+# serves, and PnP can start two of them concurrently - nothing in the miniport
+# ABI serializes StartController across controllers - so a plain ++ could hand
+# the same token to both, which is the one thing that counter must never do.
+ntoskrnl.exe!InterlockedIncrement     all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!InterlockedIncrement, hint 28); ntkern-name
+HAL.dll!KfAcquireSpinLock             all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (HAL.DLL!KfAcquireSpinLock, hint 6); ntkern-name. KeAcquireSpinLock(a,b) is the DDK's x86 macro for this.
+HAL.dll!KfReleaseSpinLock             all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (HAL.DLL!KfReleaseSpinLock, hint 9); ntkern-name. KeReleaseSpinLock(a,b) is the DDK's x86 macro for this.
+
+# --- The log ring's IRQL guard (src\xhci_dispatch.c) ---------------------
+# **Task 11-V.7's three file-sink imports - ZwCreateFile, ZwWriteFile and
+# ZwClose - and the block that justified them were REMOVED here by task 13-L.2
+#, with the sink itself.** The reason is evidential and it is not
+# a load-time one: those two names rest on `ntkern-name` alone and DO resolve on
+# the E460, since the release build loads there. What retired them is that the
+# file sink has never written a byte on any real machine, on either target -
+# task 11-V.7 ran on the 2a and 2b guests, so both halves of its record are
+# virtual-machine readings, and Windows 2000 has never run on real hardware in
+# this project at all. A channel measured working only in an emulator, force
+# declined on the one target that has metal, and unknown in both directions
+# there, is not what 1.0.0.0 publishes. The log file did not go away with it: it
+# moved to ring 3, where XHCISNAP writes it and names it from the command line.
+#
+# **The `ntkern-name` tier is NOT retired by their departure** and neither are
+# defect 2b's two boots. The WRITE_PORT_UCHAR block below used to cite these two
+# rows as its reason for caring about the tier; that consequence goes and the
+# question does not - the tier is unreliable rather than wrong, and it is what
+# every future Windows 98 import is judged on.
+#
+# One finding worth keeping out of that block: ZwSetInformationFile is one of
+# the Zw* names *missing* from ntkern.vxd's table, which is why the retired
+# append used FILE_APPEND_DATA plus a FILE_WRITE_TO_END_OF_FILE offset rather
+# than a seek. Anyone reaching for file I/O in this driver again starts there.
+# Promoted from debug-only by task 11-V.7: the flush measures its own IRQL and
+# refuses above PASSIVE_LEVEL rather than resting on a static claim about which
+# lifecycle callbacks are passive - a claim whose derivation was started and not
+# finished (src\xhci_log.c). It outlives the file sink that motivated it: the
+# flush now hands the ring to DbgPrint, and DbgPrint from DPC and ISR contexts
+# is the other thing this project has measured bugchecking Windows 98 metal, so
+# the guard is if anything more load-bearing than it was.
+HAL.dll!KeGetCurrentIrql         all  required  w2k-export; win98-precedent NTMAP.SYS 4.10.2227 (HAL.DLL!KeGetCurrentIrql, hint 3). NOT in ntkern.vxd's name strings - that source has false negatives, see the header.
+# Promoted from debug-only by task 11-V.9's `XhciLogDebugView` sink, and the
+# promotion is the whole of that value's cost. **What the release build gains
+# is one bulk dump of the ring from the PASSIVE flush, not the debug build's
+# per-line mirroring** - it is exactly that per-line profile, from DPC and ISR
+# contexts at real interrupt rates, that bugchecks Windows 98 on metal
+# (0028:C208D79D and 0028:C207B26D, roadmap task 12.2), which is why the sink is
+# reachable only from the flush and why live mirroring stays a build
+# distinction rather than something a registry value can turn on.
+#
+# The Windows 98 evidence is its own and is not inherited from the debug build's
+# row below: DbgPrint was measured reaching DebugView inside the 2a VM on
+# in batch 7b, cross-checked against the 0xE9 sink. That the bulk dump is *safe*
+# on Windows 98 **metal** is not established and is not claimed here - task 12.2
+# owns the decision about a channel, and Phase 13 owns the observation if that
+# decision asks for one.
+ntoskrnl.exe!DbgPrint            all  required  w2k-export; ntkern-name; runtime-observed reaching DebugView in the 2a VM (cross-checked against the port-0xE9 sink)
+
+# --- The qemu flavour's trace channel (src\xhci_dbg.c) -----------------
+# Through Phase 4 task 5 the release profile was a strict *subset* of the
+# shipping NUSB usbehci.sys's (which also imports NTOSKRNL.EXE!KeQuerySystemTime);
+# task 7's spin lock ended that, for the reason recorded in its block above. The
+# rule that replaces it is the same one in weaker form: every pair here must
+# carry Win98 evidence of its own, because every addition is a new way for the
+# load to fail silently on Win98.
+#
+# DbgPrint used to be a debug-only row here and is now required in every flavor
+# by task 11-V.9's DebugView sink - see its block above.
+#
+# **And since task 13-L.1 that is the ONLY reason any published binary imports
+# it**, because the live per-line trace this block is about is now the `qemu`
+# flavour's alone. `src/xhci_dbg.c` compiles away without `XHCI_DBG_LIVE`, which
+# only `qemu` defines. The reason is the same measurement in both directions:
+# per-line DbgPrint from DPC and ISR contexts at real interrupt rates is what
+# bugchecks Windows 98 on metal across three device classes, and `debug` is the
+# flavour a user with a problem is told to install. So `debug` and `release`
+# emit identically - one bulk dump from the PASSIVE flush - and what separates
+# them is smaller than "checked versus free" sounds: **both compile /Oxs**, and
+# this driver has no runtime asserts at all. `debug` adds /Oy- (frame
+# pointers), VS_FF_DEBUG in the version resource, the snapshot header's DEBUG
+# bit and the XHCI98_FLAVOUR_* marker - and nothing else. The measured compiler
+# delta is -DDBG=1, -DFPO=0 against -DFPO=1, the flavour define, and /Oy- against
+# /Oy; compare src/buildchk.log and src/buildfre.log, which print the line. (This comment said "the DDK's own asserts and optimisation"
+# until the post-Phase 13 review rounds; both halves of that were wrong and the same sentence had
+# already been written wrongly three times elsewhere. Check it against
+# src/sources and src/buildchk.log, never against a comment.) (The first cut of
+# the split gated only the port-0xE9 half and left this one behind; a Codex
+# review of commit `efa86a3` caught it.)
+#
+# "Prints", not "mirrors into the log ring" - the two channels are DISJOINT and
+# an earlier wording here said otherwise. XhciDbgEmit (src\xhci_dbg.c) writes
+# port 0xE9 and DbgPrint and touches no ring; the ring is filled only by the
+# explicit XhciLogNote producers, identically in every flavor. So the qemu build
+# has a live per-event trace AS WELL AS the ring, not a copy of one inside the
+# other - which is why an XHCI_DBG_* site is not evidence in a stored log.
+# KeGetCurrentIrql used to be a debug-only row here, dropped by XHCI_DBG_NO_IRQL
+# without touching a call site. It is now required in every flavor by task
+# 11-V.7's flush guard - see its block above - so that escape hatch no longer
+# removes the import, only the IRQL field of a trace line.
+#
+# --- The QEMU port-0xE9 mirror, and why this row is the enforcement ------
+#
+# **THIS ROW IS TASK 13-L.1's REPAIR.** It was `debug optional` and is now
+# `qemu required`, and that single change is what turns a recorded defect into
+# an enforced one: qemu is never published, so a published binary carrying this
+# import now FAILS THE GATE rather than merely being noted in this file. The
+# `required` half matters as much as the flavor - it is what catches a qemu
+# build that quietly lost the mirror and would then have answered defect 2b's
+# question about a binary that never had the import in the first place.
+#
+# **MEASURED AND THIS IS THE DEFECT THE ROW NOW PREVENTS.**
+# The published debug flavour of 0.0.0.4 does not load on the ThinkPad E460
+# (Win98 SE, NUSB 3.3): the controller devnode takes a yellow bang and Code 2,
+# with no crash and nothing loaded. This pair is the **sole** import difference
+# between the two 0.0.0.4 binaries - verified by DUMPBIN /IMPORTS on both - and
+# a rebuild without this pair loads clean and drives real devices on that
+# machine. The control was taken and it is the one that can be taken after the
+# fact: restoring the previous binary cleared the bang, which implicates the
+# BUILD rather than something already on the machine. It does not implicate the
+# import, and that rebuild was not otherwise identical either - it was a
+# diagnostic build, so it carried the do-not-deploy marker as well. (That rebuild was `XHCI_EXTRA_DEFINES=-DXHCI_DBG_NO_E9`,
+# which is also why it could not be shipped: any nonempty XHCI_EXTRA_DEFINES
+# marks the image undeployable. The negative is retired - the mirror is now the
+# opt-IN `XHCI_DBG_E9` that only the qemu flavor defines - so the binary that
+# loads is the ordinary debug flavor and needs no escape hatch at all.)
+#
+# **Why is not established, and the two readings have different consequences:**
+# either the import does not resolve there - which would make `ntkern-name`
+# insufficient rather than merely incomplete, since the name IS in the SE CD's
+# ntkern.vxd and that machine was installed from that CD - or port 0xE9 is
+# decoded by something on that chipset and the write faults during early init,
+# which would refute src\xhci_dbg.c's comment that "on real hardware nothing
+# decodes that port and the byte is discarded". A clean Code 2 rather than a
+# bugcheck favours the first and does not settle it.
+#
+# The tier is unreliable, not wrong, and this row does not retire it. That used
+# to be said by pointing at ZwCreateFile and ZwWriteFile, which rested on
+# `ntkern-name` alone and DO resolve on that machine since the release build
+# loads there. **Task 13-L.2 removed those two rows with the file sink**, so
+# that particular illustration is gone - and the question is not: `ntkern-name`
+# is still the evidence tier every future Windows 98 import is judged on, and
+# defect 2b's two boots are still owed.
+#
+# **The discriminating binaries are BUILT** and the question is
+# now waiting on two boots rather than on any work. -DXHCI_DBG_E9_NOEXEC keeps
+# this import - behind a file-scope volatile gate nothing ever sets - and never
+# executes the write; its import table is IDENTICAL to the published debug
+# flavour's, 18 symbols, verified with DUMPBIN, so the only runtime difference
+# is whether the write happens. Code 2 from that binary settles it as the
+# import; a clean load points at the port, pending one control boot for
+# XHCI_DIAGNOSTIC_BUILD. Procedure, hashes and decision tree:
+# docs\contributing\runs\run-13e.md, "P6. Build the two binaries that settle
+# defect 2b".
+#
+# **Do not "fix" this by dropping the pair**, and do not move it back to `debug`
+# to make some build convenient. The mirror is this project's primary instrument
+# in QEMU, where port 0xE9 is the whole point of it, and the qemu flavour exists
+# so that instrument can keep it while no published binary does. "What to publish
+# for bare metal" owned no task when this block was first written; it is now task
+# 13-L.1 and this row is its enforcement. Evidence:
+# docs\contributing\runs\run-13e.md, "Session record - the DebugView ban, measured", finding A, and
+# docs\contributing\design\08-build-flavours-and-the-log-channel.md.
+HAL.dll!WRITE_PORT_UCHAR        qemu    required  w2k-export; ntkern-name; MEASURED NOT LOADING on E460 Win98 SE metal - see the block above. The qemu flavour is never published, so this row is what keeps the import out of every binary a user can install.
+
+[deny]
+
+# Symbols that must never appear in the binary, whatever module claims to
+# provide them and whoever calls them. A denied name is reported with its
+# reason instead of the generic "not in the allowlist", because each of these
+# has a specific, already-diagnosed cause. Matched by symbol name alone.
+
+ExAllocatePoolWithTag       The local Win2K DDK defines POOL_TAGGING and rewrites ExAllocatePool(a,b) into this. Undefine the macro in src\xhci_compat.h after the DDK includes and call the real two-argument ExAllocatePool. Under Option A the miniport should need no private pool at all - fixed metadata belongs in the usbport-allocated extensions (docs\contributing\design\04-controller-common-buffer.md).
+ExFreePoolWithTag           Same DDK macro family as ExAllocatePoolWithTag; use ExFreePool.
+MmGetSystemRoutineAddress   Missing on Win98 (Oney p.438). There is no runtime symbol resolution on that target - every import decision is static and made here.
+KeNumberProcessors          Not exported on Win98 (Oney p.441). Win98 is uniprocessor by construction; per-CPU code belongs behind a Win2000-only build, not a runtime check.
+IoAllocateWorkItem          Not exported on Win98 (Oney p.375). Use usbport's UsbPortRequestAsyncCallback with miniport-owned synchronization.
+IoQueueWorkItem             Not exported on Win98 (Oney p.375).
+IoFreeWorkItem              Not exported on Win98 (Oney p.375).
+IoAcquireRemoveLock         The IO_REMOVE_LOCK family is missing on Win98 SE (Oney p.191). Keep an outstanding-I/O count instead.
+IoReleaseRemoveLock         IO_REMOVE_LOCK family - missing on Win98 SE (Oney p.191).
+IoReleaseRemoveLockAndWait  IO_REMOVE_LOCK family - missing on Win98 SE (Oney p.191).
+MmMapLockedPagesSpecifyCache  Missing on Win98; MmGetSystemAddressForMdlSafe expands to it (Oney p.225). Option B only.
+PsGetVersion                Missing on Win98 (Oney p.437). Use IoIsWdmVersionAvailable.
+KeReadStateEvent            Missing on Win98 (Oney p.95).
+IoReportTargetDeviceChangeAsynchronous  Not exported on Win98 - a load-blocking import, not a runtime failure (Oney p.191).
+PoRegisterDeviceNotify      Not implemented on Win98 (Oney p.254).
+PoCancelDeviceNotify        Not implemented on Win98 (Oney p.254).
+PoRegisterSystemState       Not implemented on Win98 (Oney p.254).
+PoSetSystemState            Not implemented on Win98 (Oney p.254).
+PoUnregisterSystemState     Not implemented on Win98 (Oney p.254).
+HalTranslateBusAddress      Only partially available on Win98 (Oney p.441). Use the translated resources PnP already supplies; under Option A usbport hands the miniport its resources.
+KeAcquireInterruptSpinLock  Windows XP and later - blocks the load on Win2000 (docs\usb-xhci-info\win98-wdm.md). Under Option A usbport owns the interrupt object.
+KeReleaseInterruptSpinLock  Windows XP and later - blocks the load on Win2000.
+IoForwardIrpSynchronously   Windows XP and later - blocks the load on Win2000. Use IoCallDriver plus a completion routine that signals a KEVENT.
+IoSetCompletionRoutineEx    Windows XP and later - blocks the load on Win2000.
+IoCsqInitialize             Cancel-safe queues arrived with the XP DDK and are not in the Win2K DDK's libraries.
+IoCsqInsertIrp              Cancel-safe queue family - not in the Win2K DDK.
+IoCsqRemoveNextIrp          Cancel-safe queue family - not in the Win2K DDK.

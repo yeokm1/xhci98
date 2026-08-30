@@ -1,0 +1,33 @@
+xhcisnap: opening \\.\HCD0
+
+extension:
+  c:\p13a3.BIN: 90600 bytes in 2 window(s) (region is 90600)
+  ExtensionBytes = 90600  (the key the host-side offset table must match)
+  build flags    = 00000002  release diagnostic
+
+PORTSC:
+  c:\p13a3.PSC: 72 bytes in 1 window(s) (region is 72)
+
+  port  PORTSC    PP CCS PED  PR PLS spd | CSC PEC WRC OCC PRC PLC CEC
+     1  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+     2  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+     3  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+     4  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+     5  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+     6  00000603   1   1   1   0   0   1 |  0   0   0   0   0   0   0
+     7  00000E03   1   1   1   0   0   3 |  0   0   0   0   0   0   0
+     8  00000603   1   1   1   0   0   1 |  0   0   0   0   0   0   0
+     9  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+    10  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+    11  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+    12  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+    13  00000080   0   0   0   0   4   0 |  0   0   0   0   0   0   0
+    14  00000080   0   0   0   0   4   0 |  0   0   0   0   0   0   0
+    15  00000080   0   0   0   0   4   0 |  0   0   0   0   0   0   0
+    16  00000080   0   0   0   0   4   0 |  0   0   0   0   0   0   0
+    17  00000080   0   0   0   0   4   0 |  0   0   0   0   0   0   0
+    18  00000080   0   0   0   0   4   0 |  0   0   0   0   0   0   0
+
+  *** PP is clear on 6 of 18 ports.
+
+coherence: tear detector 5252, unchanged across every window - the dump is coherent

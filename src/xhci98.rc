@@ -1,0 +1,108 @@
+/*
+ * xhci98.rc - the file version resource (task 8-A.4).
+ *
+ * Why this file exists: until it did, `xhci98.sys` had an empty Version tab in
+ * file properties on both targets, so a binary recovered from a user's machine
+ * could not be identified at all - not its build, not its origin, not even that
+ * it was this project's. That is the same class of gap as the placeholder
+ * `DriverVer`: it costs nothing to carry and there is no way to add it after the
+ * fact to a binary someone is already running.
+ *
+ * **The field set is the one the shipping miniport carries**, read out of NUSB's
+ * own `USBEHCI.SYS` rather than chosen:
+ *
+ *   CompanyName      "Microsoft Corporation"
+ *   FileDescription  "EHCI eUSB Miniport Driver"
+ *   FileVersion      "5.00.2195.6882"
+ *   InternalName     "USBEHCI.sys"
+ *   LegalCopyright   "Copyright (C) Microsoft Corp. 1981-1999"
+ *   OriginalFilename "USBEHCI.sys"
+ *   ProductName      "Microsoft(R) Windows (R) 2000 Operating System"
+ *   ProductVersion   "5.00.2195.6882"
+ *   Language         English (United States)
+ *
+ * so the eight strings below are that list with this project's values, and the
+ * block header is `040904B0` - US English, Unicode code page - which is what
+ * that binary uses and what every DDK sample of the era uses.
+ *
+ * **A resource adds no import.** It is data in its own `.rsrc` section, not
+ * code, so the post-link import gate's allowlist is unaffected -
+ * `scripts\build-driver.cmd` re-runs it anyway rather than trusting that
+ * sentence. It also does not disturb `LINKER_FLAGS=-merge:.rdata=.text`, which
+ * merges `.rdata` and says nothing about `.rsrc`.
+ *
+ * **Whether Windows 98's file-properties dialog renders an NT-style VERSIONINFO
+ * out of a `.sys` is an observation this file cannot make**, and it is not
+ * assumed: the resource is built to the NT convention because that is what the
+ * DDK's `rc.exe` produces and what Windows 2000 certainly reads. If Win98 shows
+ * nothing, the resource is still what identifies the binary everywhere else -
+ * including on the build host, which is where a bug report's attachment is
+ * actually inspected. Batch 8-V's fresh-install pass records what each target
+ * shows.
+ *
+ * FILEVERSION, PRODUCTVERSION, the two version strings below and the
+ * `DriverVer` in `src\xhci98.inf` are five statements of one fact. **Four of
+ * them are no longer written here**: they come from `src\xhci_version.h`, which
+ * is the one place the version is edited (roadmap task 14.1.10). The INF is the
+ * fifth and cannot include anything, so `scripts\inf-gate\check-inf.ps1` reads
+ * the header as the authority and checks the INF against it;
+ * `scripts\package\make-package.ps1` checks the **built binary's** own version
+ * against the INF staged beside it, which is the copy a source-side gate cannot
+ * see and the only one an installed machine actually reads. See
+ * docs\contributing\build-and-test.md, "Versioning the driver".
+ */
+
+#include <windows.h>
+#include "xhci_version.h"
+
+/*
+ * **Every version here was a literal until task 14.1.10, and the reason it
+ * stopped being one is worth keeping**, because the first draft's macro was
+ * wrong in a way this one is not. That draft factored only the *string* form
+ * into a `#define`: FILEVERSION takes four comma-separated integers and cannot
+ * be given a string, so the macro tied the two strings to each other and left
+ * them free to drift from the numbers. Worse, it made the INF gate's
+ * cross-check **vacuous** - the gate searched this file for the version text,
+ * and the `#define` line satisfied that search whatever the VALUE entries said.
+ *
+ * `xhci_version.h` carries **both** forms, so nothing here is left free to
+ * drift, and the gate no longer searches this file for a number: it reads the
+ * header, and it **refuses a version literal appearing here at all**. A gate
+ * that can be satisfied by the definition it is checking against is not a gate,
+ * which is the whole of what the first draft got wrong.
+ */
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     XHCI_VER_CSV
+PRODUCTVERSION  XHCI_VER_CSV
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+#if DBG
+FILEFLAGS       VS_FF_DEBUG
+#else
+FILEFLAGS       0
+#endif
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_DRV
+FILESUBTYPE     VFT2_DRV_SYSTEM
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "Yeo Kheng Meng\0"
+            VALUE "FileDescription",  "xHCI USB 2.0 Host Controller Miniport Driver (xhci98)\0"
+            VALUE "FileVersion",      XHCI_VER_STR "\0"
+            VALUE "InternalName",     "xhci98.sys\0"
+            /* Transcribed from the repository's own LICENSE rather than
+             * written here: it is GPL-2.0-only, Copyright (c) 2026 Yeo
+             * Kheng Meng. */
+            VALUE "LegalCopyright",   "Copyright (c) 2026 Yeo Kheng Meng. GNU GPL v2.\0"
+            VALUE "OriginalFilename", "xhci98.sys\0"
+            VALUE "ProductName",      "xhci98 - USB 2.0 over xHCI for Windows 98 SE and Windows 2000\0"
+            VALUE "ProductVersion",   XHCI_VER_STR "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

@@ -1,0 +1,322 @@
+﻿# post-release run
+# driver:    1.0.0.0 qemu, 156784 B, sha256 2024bdd751dbf202
+# image:     vm\fresh-2a.img, stamp base-1.0.0.0-qemu, from win98.img post-nusb
+# qemu:      11.0.0 (v11.0.0-12122-ga4bb4b10c9), accel tcg
+# offsets:   SIZEOF 90924, 383 counters
+# started:   2026-08-30 13:54:02, elapsed 0:57:08
+# verdict:   2a-fresh FAIL, 17 rows, 4 NODRIVER expected, 3 not reached
+#
+# Outcomes: PASS FAIL NODRIVER INERT ERROR EXCLUDED - see docs/contributing/design/06-device-matrix-verdict.md
+# A '-> X' in the outcome column marks the expectation that did not hold.
+# A row name ending in '/replug' is the same device attached a second time - design record 09 section 5.
+#
+TARGET ROW                          OUTCOME   EXPECTATION                                                    READING
+2a-fresh usb-kbd/hs                   PASS      advance devices addressed                                      +1
+2a-fresh usb-kbd/hs                   PASS      advance slots enabled                                          +1
+2a-fresh usb-kbd/hs                   PASS      zero fatal controller status                                   0
+2a-fresh usb-kbd/hs                   PASS      zero transfer events for no open endpoint                      0
+2a-fresh usb-kbd/hs                   PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-kbd/hs                   PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-kbd/hs                   PASS      zero interrupt mask failures                                   0
+2a-fresh usb-kbd/hs                   PASS      zero commands the engine gave up on                            0
+2a-fresh usb-kbd/hs                   PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+2a-fresh usb-kbd/hs                   PASS      advance endpoints opened >= 1                                  +1
+2a-fresh usb-kbd/hs                   PASS      zero endpoint speed mismatches                                 0
+2a-fresh usb-kbd/hs/replug            PASS      advance devices addressed                                      +1
+2a-fresh usb-kbd/hs/replug            PASS      advance slots enabled                                          +1
+2a-fresh usb-kbd/hs/replug            PASS      zero fatal controller status                                   0
+2a-fresh usb-kbd/hs/replug            PASS      zero transfer events for no open endpoint                      0
+2a-fresh usb-kbd/hs/replug            PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-kbd/hs/replug            PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-kbd/hs/replug            PASS      zero interrupt mask failures                                   0
+2a-fresh usb-kbd/hs/replug            PASS      zero commands the engine gave up on                            0
+2a-fresh usb-kbd/hs/replug            PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+2a-fresh usb-kbd/hs/replug            PASS      advance endpoints opened >= 1                                  +1
+2a-fresh usb-kbd/hs/replug            PASS      zero endpoint speed mismatches                                 0
+2a-fresh usb-kbd/fs                   PASS      advance devices addressed                                      +1
+2a-fresh usb-kbd/fs                   PASS      advance slots enabled                                          +1
+2a-fresh usb-kbd/fs                   PASS      zero fatal controller status                                   0
+2a-fresh usb-kbd/fs                   PASS      zero transfer events for no open endpoint                      0
+2a-fresh usb-kbd/fs                   PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-kbd/fs                   PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-kbd/fs                   PASS      zero interrupt mask failures                                   0
+2a-fresh usb-kbd/fs                   PASS      zero commands the engine gave up on                            0
+2a-fresh usb-kbd/fs                   PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+2a-fresh usb-kbd/fs                   PASS      advance endpoints opened >= 1                                  +1
+2a-fresh usb-kbd/fs                   PASS      advance endpoint speed mismatches                              +1
+2a-fresh usb-kbd/fs/replug            PASS      advance devices addressed                                      +1
+2a-fresh usb-kbd/fs/replug            PASS      advance slots enabled                                          +1
+2a-fresh usb-kbd/fs/replug            PASS      zero fatal controller status                                   0
+2a-fresh usb-kbd/fs/replug            PASS      zero transfer events for no open endpoint                      0
+2a-fresh usb-kbd/fs/replug            PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-kbd/fs/replug            PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-kbd/fs/replug            PASS      zero interrupt mask failures                                   0
+2a-fresh usb-kbd/fs/replug            PASS      zero commands the engine gave up on                            0
+2a-fresh usb-kbd/fs/replug            PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+2a-fresh usb-kbd/fs/replug            PASS      advance endpoints opened >= 1                                  +1
+2a-fresh usb-kbd/fs/replug            PASS      advance endpoint speed mismatches                              +1
+2a-fresh usb-mouse/hs                 PASS      advance devices addressed                                      +1
+2a-fresh usb-mouse/hs                 PASS      advance slots enabled                                          +1
+2a-fresh usb-mouse/hs                 PASS      zero fatal controller status                                   0
+2a-fresh usb-mouse/hs                 PASS      zero transfer events for no open endpoint                      0
+2a-fresh usb-mouse/hs                 PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-mouse/hs                 PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-mouse/hs                 PASS      zero interrupt mask failures                                   0
+2a-fresh usb-mouse/hs                 PASS      zero commands the engine gave up on                            0
+2a-fresh usb-mouse/hs                 PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+2a-fresh usb-mouse/hs                 PASS      advance endpoints opened >= 1                                  +1
+2a-fresh usb-mouse/hs/replug          PASS      advance devices addressed                                      +1
+2a-fresh usb-mouse/hs/replug          PASS      advance slots enabled                                          +1
+2a-fresh usb-mouse/hs/replug          PASS      zero fatal controller status                                   0
+2a-fresh usb-mouse/hs/replug          PASS      zero transfer events for no open endpoint                      0
+2a-fresh usb-mouse/hs/replug          PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-mouse/hs/replug          PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-mouse/hs/replug          PASS      zero interrupt mask failures                                   0
+2a-fresh usb-mouse/hs/replug          PASS      zero commands the engine gave up on                            0
+2a-fresh usb-mouse/hs/replug          PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+2a-fresh usb-mouse/hs/replug          PASS      advance endpoints opened >= 1                                  +1
+2a-fresh usb-mouse/fs                 PASS      advance devices addressed                                      +1
+2a-fresh usb-mouse/fs                 PASS      advance slots enabled                                          +1
+2a-fresh usb-mouse/fs                 PASS      zero fatal controller status                                   0
+2a-fresh usb-mouse/fs                 PASS      zero transfer events for no open endpoint                      0
+2a-fresh usb-mouse/fs                 PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-mouse/fs                 PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-mouse/fs                 PASS      zero interrupt mask failures                                   0
+2a-fresh usb-mouse/fs                 PASS      zero commands the engine gave up on                            0
+2a-fresh usb-mouse/fs                 PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+2a-fresh usb-mouse/fs                 PASS      advance endpoints opened >= 1                                  +1
+2a-fresh usb-mouse/fs                 PASS      advance endpoint speed mismatches                              +1
+2a-fresh usb-mouse/fs/replug          PASS      advance devices addressed                                      +1
+2a-fresh usb-mouse/fs/replug          PASS      advance slots enabled                                          +1
+2a-fresh usb-mouse/fs/replug          PASS      zero fatal controller status                                   0
+2a-fresh usb-mouse/fs/replug          PASS      zero transfer events for no open endpoint                      0
+2a-fresh usb-mouse/fs/replug          PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-mouse/fs/replug          PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-mouse/fs/replug          PASS      zero interrupt mask failures                                   0
+2a-fresh usb-mouse/fs/replug          PASS      zero commands the engine gave up on                            0
+2a-fresh usb-mouse/fs/replug          PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+2a-fresh usb-mouse/fs/replug          PASS      advance endpoints opened >= 1                                  +1
+2a-fresh usb-mouse/fs/replug          PASS      advance endpoint speed mismatches                              +1
+2a-fresh usb-tablet/hs                EXCLUDED  (not run on this target)                                       installing this driver hangs QEMU on Windows 98 - 3 of 4 main-loop hangs measured; unresolved, and it is the vehicle rather than the miniport (the row reaches NODRIVER, so enumeration works)
+2a-fresh usb-wacom-tablet/fs          EXCLUDED  (not run on this target)                                       excluded with usb-tablet/hs - the same absolute-pointer install path, never taught to the image for that reason
+2a-fresh usb-storage/hs               PASS      advance devices addressed                                      +1
+2a-fresh usb-storage/hs               PASS      advance slots enabled                                          +1
+2a-fresh usb-storage/hs               PASS      zero fatal controller status                                   0
+2a-fresh usb-storage/hs               PASS      zero transfer events for no open endpoint                      0
+2a-fresh usb-storage/hs               PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-storage/hs               PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-storage/hs               PASS      zero interrupt mask failures                                   0
+2a-fresh usb-storage/hs               PASS      zero commands the engine gave up on                            0
+2a-fresh usb-storage/hs               PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 4 == 4
+2a-fresh usb-storage/hs               PASS      advance endpoints opened >= 2                                  +2
+2a-fresh usb-storage/hs               PASS      identity transfers submitted == transfers completed + transfers cancelled 50 == 50
+2a-fresh usb-storage/hs/replug        PASS      advance devices addressed                                      +1
+2a-fresh usb-storage/hs/replug        PASS      advance slots enabled                                          +1
+2a-fresh usb-storage/hs/replug        PASS      zero fatal controller status                                   0
+2a-fresh usb-storage/hs/replug        PASS      zero transfer events for no open endpoint                      0
+2a-fresh usb-storage/hs/replug        PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-storage/hs/replug        PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-storage/hs/replug        PASS      zero interrupt mask failures                                   0
+2a-fresh usb-storage/hs/replug        PASS      zero commands the engine gave up on                            0
+2a-fresh usb-storage/hs/replug        PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 4 == 4
+2a-fresh usb-storage/hs/replug        PASS      advance endpoints opened >= 2                                  +2
+2a-fresh usb-storage/hs/replug        PASS      identity transfers submitted == transfers completed + transfers cancelled 50 == 50
+2a-fresh usb-bot/fs                   PASS      advance devices addressed                                      +1
+2a-fresh usb-bot/fs                   PASS      advance slots enabled                                          +1
+2a-fresh usb-bot/fs                   PASS      zero fatal controller status                                   0
+2a-fresh usb-bot/fs                   PASS      zero transfer events for no open endpoint                      0
+2a-fresh usb-bot/fs                   PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-bot/fs                   PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-bot/fs                   PASS      zero interrupt mask failures                                   0
+2a-fresh usb-bot/fs                   PASS      zero commands the engine gave up on                            0
+2a-fresh usb-bot/fs                   PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 4 == 4
+2a-fresh usb-bot/fs                   PASS      advance endpoints opened >= 1                                  +2
+2a-fresh usb-bot/fs/replug            PASS      advance devices addressed                                      +1
+2a-fresh usb-bot/fs/replug            PASS      advance slots enabled                                          +1
+2a-fresh usb-bot/fs/replug            PASS      zero fatal controller status                                   0
+2a-fresh usb-bot/fs/replug            PASS      zero transfer events for no open endpoint                      0
+2a-fresh usb-bot/fs/replug            PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-bot/fs/replug            PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-bot/fs/replug            PASS      zero interrupt mask failures                                   0
+2a-fresh usb-bot/fs/replug            PASS      zero commands the engine gave up on                            0
+2a-fresh usb-bot/fs/replug            PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 4 == 4
+2a-fresh usb-bot/fs/replug            PASS      advance endpoints opened >= 1                                  +2
+2a-fresh usb-uas/fs                   NODRIVER  advance devices addressed                                      +1
+2a-fresh usb-uas/fs                   NODRIVER  advance slots enabled                                          +1
+2a-fresh usb-uas/fs                   NODRIVER  zero fatal controller status                                   0
+2a-fresh usb-uas/fs                   NODRIVER  zero transfer events for no open endpoint                      0
+2a-fresh usb-uas/fs                   NODRIVER  zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-uas/fs                   NODRIVER  zero endpoint opens refused - malformed call                   0
+2a-fresh usb-uas/fs                   NODRIVER  zero interrupt mask failures                                   0
+2a-fresh usb-uas/fs                   NODRIVER  zero commands the engine gave up on                            0
+2a-fresh usb-uas/fs                   NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+2a-fresh usb-uas/fs                   -> NODRIVER advance endpoints opened >= 1                                  +0
+2a-fresh usb-uas/fs/replug            NODRIVER  advance devices addressed                                      +1
+2a-fresh usb-uas/fs/replug            NODRIVER  advance slots enabled                                          +1
+2a-fresh usb-uas/fs/replug            NODRIVER  zero fatal controller status                                   0
+2a-fresh usb-uas/fs/replug            NODRIVER  zero transfer events for no open endpoint                      0
+2a-fresh usb-uas/fs/replug            NODRIVER  zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-uas/fs/replug            NODRIVER  zero endpoint opens refused - malformed call                   0
+2a-fresh usb-uas/fs/replug            NODRIVER  zero interrupt mask failures                                   0
+2a-fresh usb-uas/fs/replug            NODRIVER  zero commands the engine gave up on                            0
+2a-fresh usb-uas/fs/replug            NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+2a-fresh usb-uas/fs/replug            -> NODRIVER advance endpoints opened >= 1                                  +0
+2a-fresh usb-uas/fs                   NODRIVER  (NO ExpectNoDriver entry for this target)                      a class this matrix said the OS would claim was not claimed; counts against the verdict
+2a-fresh usb-hub/fs                   PASS      advance devices addressed                                      +1
+2a-fresh usb-hub/fs                   PASS      advance slots enabled                                          +1
+2a-fresh usb-hub/fs                   PASS      zero fatal controller status                                   0
+2a-fresh usb-hub/fs                   PASS      zero transfer events for no open endpoint                      0
+2a-fresh usb-hub/fs                   PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-hub/fs                   PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-hub/fs                   PASS      zero interrupt mask failures                                   0
+2a-fresh usb-hub/fs                   PASS      zero commands the engine gave up on                            0
+2a-fresh usb-hub/fs                   PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+2a-fresh usb-hub/fs                   PASS      advance endpoints opened >= 1                                  +1
+2a-fresh usb-hub/fs                   PASS      advance topology: hub descriptors folded                       +1
+2a-fresh usb-hub/fs                   PASS      advance topology: hub slots marked                             +1
+2a-fresh usb-hub/fs                   PASS      zero topology: hub descriptors malformed                       0
+2a-fresh usb-hub/fs                   PASS      zero topology: nodes dropped                                   0
+2a-fresh usb-hub/fs                   PASS      zero topology: behind-hub refused - no record                  0
+2a-fresh usb-hub/fs/replug            PASS      advance devices addressed                                      +1
+2a-fresh usb-hub/fs/replug            PASS      advance slots enabled                                          +1
+2a-fresh usb-hub/fs/replug            PASS      zero fatal controller status                                   0
+2a-fresh usb-hub/fs/replug            PASS      zero transfer events for no open endpoint                      0
+2a-fresh usb-hub/fs/replug            PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-hub/fs/replug            PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-hub/fs/replug            PASS      zero interrupt mask failures                                   0
+2a-fresh usb-hub/fs/replug            PASS      zero commands the engine gave up on                            0
+2a-fresh usb-hub/fs/replug            PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+2a-fresh usb-hub/fs/replug            PASS      advance endpoints opened >= 1                                  +1
+2a-fresh usb-hub/fs/replug            PASS      advance topology: hub descriptors folded                       +1
+2a-fresh usb-hub/fs/replug            PASS      advance topology: hub slots marked                             +1
+2a-fresh usb-hub/fs/replug            PASS      zero topology: hub descriptors malformed                       0
+2a-fresh usb-hub/fs/replug            PASS      zero topology: nodes dropped                                   0
+2a-fresh usb-hub/fs/replug            PASS      zero topology: behind-hub refused - no record                  0
+2a-fresh usb-hub/churn                EXCLUDED  (not run on this target)                                       behind-hub device instances are not taught to this image; each raises a modal wizard that blocks the bind - prep them at their hub ports first
+2a-fresh usb-net/fs                   NODRIVER  advance devices addressed                                      +1
+2a-fresh usb-net/fs                   NODRIVER  advance slots enabled                                          +1
+2a-fresh usb-net/fs                   NODRIVER  zero fatal controller status                                   0
+2a-fresh usb-net/fs                   NODRIVER  zero transfer events for no open endpoint                      0
+2a-fresh usb-net/fs                   NODRIVER  zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-net/fs                   NODRIVER  zero endpoint opens refused - malformed call                   0
+2a-fresh usb-net/fs                   NODRIVER  zero interrupt mask failures                                   0
+2a-fresh usb-net/fs                   NODRIVER  zero commands the engine gave up on                            0
+2a-fresh usb-net/fs                   NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+2a-fresh usb-net/fs                   -> NODRIVER advance endpoints opened >= 1                                  +0
+2a-fresh usb-net/fs/replug            NODRIVER  advance devices addressed                                      +1
+2a-fresh usb-net/fs/replug            NODRIVER  advance slots enabled                                          +1
+2a-fresh usb-net/fs/replug            NODRIVER  zero fatal controller status                                   0
+2a-fresh usb-net/fs/replug            NODRIVER  zero transfer events for no open endpoint                      0
+2a-fresh usb-net/fs/replug            NODRIVER  zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-net/fs/replug            NODRIVER  zero endpoint opens refused - malformed call                   0
+2a-fresh usb-net/fs/replug            NODRIVER  zero interrupt mask failures                                   0
+2a-fresh usb-net/fs/replug            NODRIVER  zero commands the engine gave up on                            0
+2a-fresh usb-net/fs/replug            NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+2a-fresh usb-net/fs/replug            -> NODRIVER advance endpoints opened >= 1                                  +0
+2a-fresh usb-net/fs                   NODRIVER  (no class driver expected on this target)                      measured NODRIVER on the carried-along 2a image; neither Windows 98 SE nor NUSB 3.3 ships a driver for a CDC/RNDIS Ethernet function
+2a-fresh usb-serial/fs                NODRIVER  advance devices addressed                                      +1
+2a-fresh usb-serial/fs                NODRIVER  advance slots enabled                                          +1
+2a-fresh usb-serial/fs                NODRIVER  zero fatal controller status                                   0
+2a-fresh usb-serial/fs                NODRIVER  zero transfer events for no open endpoint                      0
+2a-fresh usb-serial/fs                NODRIVER  zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-serial/fs                NODRIVER  zero endpoint opens refused - malformed call                   0
+2a-fresh usb-serial/fs                NODRIVER  zero interrupt mask failures                                   0
+2a-fresh usb-serial/fs                NODRIVER  zero commands the engine gave up on                            0
+2a-fresh usb-serial/fs                NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+2a-fresh usb-serial/fs                -> NODRIVER advance endpoints opened >= 1                                  +0
+2a-fresh usb-serial/fs/replug         NODRIVER  advance devices addressed                                      +1
+2a-fresh usb-serial/fs/replug         NODRIVER  advance slots enabled                                          +1
+2a-fresh usb-serial/fs/replug         NODRIVER  zero fatal controller status                                   0
+2a-fresh usb-serial/fs/replug         NODRIVER  zero transfer events for no open endpoint                      0
+2a-fresh usb-serial/fs/replug         NODRIVER  zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-serial/fs/replug         NODRIVER  zero endpoint opens refused - malformed call                   0
+2a-fresh usb-serial/fs/replug         NODRIVER  zero interrupt mask failures                                   0
+2a-fresh usb-serial/fs/replug         NODRIVER  zero commands the engine gave up on                            0
+2a-fresh usb-serial/fs/replug         NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+2a-fresh usb-serial/fs/replug         -> NODRIVER advance endpoints opened >= 1                                  +0
+2a-fresh usb-serial/fs                NODRIVER  (no class driver expected on this target)                      no class driver for a vendor-class serial adapter on Windows 98 SE or in NUSB 3.3
+2a-fresh usb-braille/fs               NODRIVER  advance devices addressed                                      +1
+2a-fresh usb-braille/fs               NODRIVER  advance slots enabled                                          +1
+2a-fresh usb-braille/fs               NODRIVER  zero fatal controller status                                   0
+2a-fresh usb-braille/fs               NODRIVER  zero transfer events for no open endpoint                      0
+2a-fresh usb-braille/fs               NODRIVER  zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-braille/fs               NODRIVER  zero endpoint opens refused - malformed call                   0
+2a-fresh usb-braille/fs               NODRIVER  zero interrupt mask failures                                   0
+2a-fresh usb-braille/fs               NODRIVER  zero commands the engine gave up on                            0
+2a-fresh usb-braille/fs               NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+2a-fresh usb-braille/fs               -> NODRIVER advance endpoints opened >= 1                                  +0
+2a-fresh usb-braille/fs/replug        NODRIVER  advance devices addressed                                      +1
+2a-fresh usb-braille/fs/replug        NODRIVER  advance slots enabled                                          +1
+2a-fresh usb-braille/fs/replug        NODRIVER  zero fatal controller status                                   0
+2a-fresh usb-braille/fs/replug        NODRIVER  zero transfer events for no open endpoint                      0
+2a-fresh usb-braille/fs/replug        NODRIVER  zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-braille/fs/replug        NODRIVER  zero endpoint opens refused - malformed call                   0
+2a-fresh usb-braille/fs/replug        NODRIVER  zero interrupt mask failures                                   0
+2a-fresh usb-braille/fs/replug        NODRIVER  zero commands the engine gave up on                            0
+2a-fresh usb-braille/fs/replug        NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+2a-fresh usb-braille/fs/replug        -> NODRIVER advance endpoints opened >= 1                                  +0
+2a-fresh usb-braille/fs               NODRIVER  (no class driver expected on this target)                      no driver for a Baum braille display on Windows 98 SE or in NUSB 3.3
+2a-fresh usb-ccid/fs                  NODRIVER  advance devices addressed                                      +1
+2a-fresh usb-ccid/fs                  NODRIVER  advance slots enabled                                          +1
+2a-fresh usb-ccid/fs                  NODRIVER  zero fatal controller status                                   0
+2a-fresh usb-ccid/fs                  NODRIVER  zero transfer events for no open endpoint                      0
+2a-fresh usb-ccid/fs                  NODRIVER  zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-ccid/fs                  NODRIVER  zero endpoint opens refused - malformed call                   0
+2a-fresh usb-ccid/fs                  NODRIVER  zero interrupt mask failures                                   0
+2a-fresh usb-ccid/fs                  NODRIVER  zero commands the engine gave up on                            0
+2a-fresh usb-ccid/fs                  NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+2a-fresh usb-ccid/fs                  -> NODRIVER advance endpoints opened >= 1                                  +0
+2a-fresh usb-ccid/fs/replug           NODRIVER  advance devices addressed                                      +1
+2a-fresh usb-ccid/fs/replug           NODRIVER  advance slots enabled                                          +1
+2a-fresh usb-ccid/fs/replug           NODRIVER  zero fatal controller status                                   0
+2a-fresh usb-ccid/fs/replug           NODRIVER  zero transfer events for no open endpoint                      0
+2a-fresh usb-ccid/fs/replug           NODRIVER  zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-ccid/fs/replug           NODRIVER  zero endpoint opens refused - malformed call                   0
+2a-fresh usb-ccid/fs/replug           NODRIVER  zero interrupt mask failures                                   0
+2a-fresh usb-ccid/fs/replug           NODRIVER  zero commands the engine gave up on                            0
+2a-fresh usb-ccid/fs/replug           NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+2a-fresh usb-ccid/fs/replug           -> NODRIVER advance endpoints opened >= 1                                  +0
+2a-fresh usb-ccid/fs                  NODRIVER  (no class driver expected on this target)                      measured NODRIVER on the carried-along 2a image; Windows 98 SE has no CCID class driver
+2a-fresh u2f-emulated/fs              PASS      advance devices addressed                                      +1
+2a-fresh u2f-emulated/fs              PASS      advance slots enabled                                          +1
+2a-fresh u2f-emulated/fs              PASS      zero fatal controller status                                   0
+2a-fresh u2f-emulated/fs              PASS      zero transfer events for no open endpoint                      0
+2a-fresh u2f-emulated/fs              PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh u2f-emulated/fs              PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh u2f-emulated/fs              PASS      zero interrupt mask failures                                   0
+2a-fresh u2f-emulated/fs              PASS      zero commands the engine gave up on                            0
+2a-fresh u2f-emulated/fs              PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 4 == 4
+2a-fresh u2f-emulated/fs              PASS      advance endpoints opened >= 1                                  +2
+2a-fresh u2f-emulated/fs/replug       PASS      advance devices addressed                                      +1
+2a-fresh u2f-emulated/fs/replug       PASS      advance slots enabled                                          +1
+2a-fresh u2f-emulated/fs/replug       PASS      zero fatal controller status                                   0
+2a-fresh u2f-emulated/fs/replug       PASS      zero transfer events for no open endpoint                      0
+2a-fresh u2f-emulated/fs/replug       PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh u2f-emulated/fs/replug       PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh u2f-emulated/fs/replug       PASS      zero interrupt mask failures                                   0
+2a-fresh u2f-emulated/fs/replug       PASS      zero commands the engine gave up on                            0
+2a-fresh u2f-emulated/fs/replug       PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 4 == 4
+2a-fresh u2f-emulated/fs/replug       PASS      advance endpoints opened >= 1                                  +2
+2a-fresh usb-audio/fs                 PASS      advance devices addressed                                      +1
+2a-fresh usb-audio/fs                 PASS      advance slots enabled                                          +1
+2a-fresh usb-audio/fs                 PASS      zero fatal controller status                                   0
+2a-fresh usb-audio/fs                 PASS      zero transfer events for no open endpoint                      0
+2a-fresh usb-audio/fs                 PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-audio/fs                 PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-audio/fs                 PASS      zero interrupt mask failures                                   0
+2a-fresh usb-audio/fs                 PASS      zero commands the engine gave up on                            0
+2a-fresh usb-audio/fs                 PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+2a-fresh usb-audio/fs                 PASS      advance endpoints opened >= 1                                  +1
+2a-fresh usb-audio/fs                 PASS      inert iso packets answered because Windows 98 SE USBAUDIO.VXD faults after one URB - exonerated in batch 9-V through a UHCI control 0  (Windows 98 SE USBAUDIO.VXD faults after one URB - exonerated in batch 9-V through a UHCI control)
+2a-fresh usb-audio/fs/replug          -> FAIL   advance devices addressed                                      +0
+2a-fresh usb-audio/fs/replug          -> FAIL   advance slots enabled                                          +0
+2a-fresh usb-audio/fs/replug          FAIL      zero fatal controller status                                   0
+2a-fresh usb-audio/fs/replug          FAIL      zero transfer events for no open endpoint                      0
+2a-fresh usb-audio/fs/replug          FAIL      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-audio/fs/replug          FAIL      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-audio/fs/replug          FAIL      zero interrupt mask failures                                   0
+2a-fresh usb-audio/fs/replug          FAIL      zero commands the engine gave up on                            0
+2a-fresh usb-audio/fs/replug          FAIL      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 0 == 0
+2a-fresh usb-audio/fs/replug          -> FAIL   advance endpoints opened >= 1                                  +0
+2a-fresh usb-audio/fs/replug          FAIL      inert iso packets answered because Windows 98 SE USBAUDIO.VXD faults after one URB - exonerated in batch 9-V through a UHCI control 0  (Windows 98 SE USBAUDIO.VXD faults after one URB - exonerated in batch 9-V through a UHCI control)
+2a-fresh usb-audio/fs                 FAIL      (both legs)                                                    an expectation did not hold on the replug

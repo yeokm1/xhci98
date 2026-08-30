@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Known limitations, and what has been tested where
+    url: https://github.com/yeokm1/xhci98/blob/main/docs/using/release-notes.md
+    about: Read this first. Several known problems are in the USB stack this driver plugs into rather than in the driver, and each entry says whether it was measured on real hardware or in a virtual machine.
+  - name: Install guide and registry settings
+    url: https://github.com/yeokm1/xhci98/releases
+    about: Each release carries a standalone readme.txt - install per target, diagnosis, the XHCISNAP report tool, and every registry value the driver reads.

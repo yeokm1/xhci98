@@ -1,0 +1,205 @@
+# Prerequisites
+*.d
+
+# Object files
+*.o
+*.ko
+*.obj
+*.elf
+
+# Linker output
+*.ilk
+*.map
+*.exp
+*.sys
+*.sym
+*.err
+*.log
+# The DDK's build.exe appends BUILD_ALT_DIR to TARGETPATH, so `obj` in
+# src\sources becomes objfre (release), objchk (debug) or objchk_qemu (the
+# qemu flavour, task 13-L.1) - none of which matches obj/. The third name is
+# what keeps the two *checked* builds from overwriting each other's objects;
+# see scripts\build-driver.cmd :buildflavor.
+obj/
+objchk/
+objchk_qemu/
+objfre/
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Libraries
+*.lib
+*.a
+*.la
+*.lo
+
+# Shared objects (inc. Windows DLLs)
+*.dll
+*.so
+*.so.*
+*.dylib
+
+# Executables
+*.exe
+*.out
+*.app
+*.i*86
+*.x86_64
+*.hex
+
+# Debug files
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Kernel Module Compile Results
+*.mod*
+*.cmd
+# ...but this project's build/test scripts are .cmd files. Without these
+# negations they are silently ignored (the tracked ones had to be git add -f).
+!xhciqual/build.cmd
+!xhcisnap/build.cmd
+!xhciqual/test/*.cmd
+!scripts/**/*.cmd
+!test/*.cmd
+.tmp_versions/
+modules.order
+Module.symvers
+Mkfile.old
+dkms.conf
+
+# debug information files
+*.dwo
+
+# Local toolchain archives (keep only the boot-image URL template tracked)
+tools/*
+!tools/w98se.url.example
+
+# Phase 1 local VM/setup outputs
+vm/
+scripts/local/
+
+# Staged install media (scripts\package\make-package.ps1). Generated from the
+# built driver, the tracked INF, and the git-ignored per-target usbd.sys
+# sources under tools\ - reproducible, and half of it not ours.
+#
+# make-release.ps1 also assembles the GitHub release asset here as
+# out\upload-<version>\ and .zip. That tree deliberately contains every
+# Microsoft file scripts\package\usbd-sources.expected names - the two usbd.sys
+# builds and usbhub98.sys since batch 13-E - so it must stay ignored: publishing
+# them as a
+# release asset is a decision (docs\contributing\legal-provenance.md section 5),
+# committing them is not, and a git blob cannot be withdrawn the way an asset
+# can.
+out/
+
+# Published releases (scripts\package\make-release.ps1) ARE tracked, binaries
+# included - that is the whole difference between releases\ and out\ above. The
+# global *.sys rule near the top would otherwise swallow them silently, so undo
+# it for this directory only. Only the two files this project owns can ever land
+# here: usbd98.sys, usbd2k.sys and usbhub98.sys are Microsoft's and are excluded
+# by the script, not by this rule - see releases\README.md.
+#
+# The *.exe and *.map pair is the DOS qualifier staged into each release. Its
+# MAP is what turns a fault address on a photographed DOS screen back into a
+# source location, and it only matches the EXE built with it - which is exactly
+# the argument the qualification-run rule below already makes for evidence, so
+# the two travel together here too.
+!releases/**/*.sys
+!releases/**/*.exe
+!releases/**/*.map
+
+# make-release.ps1's two working directories, which exist only while a release
+# is being cut: `.staging-<version>` is the tree under construction, and
+# `.replaced-<version>` is the previous release held aside so a failed publish
+# can put it back. A run that is interrupted between the two renames leaves one
+# behind, and the danger is specific - `.replaced-*` holds a COMPLETE former
+# release, binaries included, so without these rules the un-negated `*.sys` line
+# above would not save it and a `git add -A` would commit a second, differently
+# named copy of a published version.
+#
+# The script treats the two differently, and deliberately: a leftover
+# `.staging-*` is scratch and is cleared, while a leftover `.replaced-*` makes
+# it REFUSE to run - that one may be the only copy of a published version on
+# the machine, so which copy is authoritative is not a script's decision.
+releases/.staging-*/
+releases/.replaced-*/
+
+# Per-run scratch from scripts\package\test-package.ps1. It has to live inside
+# the repository because manifest SOURCE paths are repo-relative and may not
+# escape it, and it is GUID-named so concurrent runs cannot share state. The
+# test removes only what it created, so a normal or failing run leaves nothing
+# behind - but an interrupted one would otherwise leave the tree looking dirty.
+scripts/package/.testsrc-*/
+
+# Local mirror of upstream reference sources (keep only its README tracked)
+external/*
+!external/README.md
+
+# Third-party specification documents. Each is fetched by whoever needs it from
+# the official URL recorded in docs/references/README.md, which also carries the
+# version and SHA-256 to check the download against. They are not this
+# project's to redistribute: the Intel xHCI specification reserves all rights
+# and grants no licence in the document itself, and the USB-IF backwards-
+# compatibility test document is licensed "FOR INTERNAL USE ONLY". Ignore the
+# whole directory rather than a *.pdf pattern - AGENTS.md sends every
+# third-party document here, and the next one may not be a PDF. Keep only the
+# README tracked - see docs/contributing/legal-provenance.md.
+docs/references/*
+!docs/references/README.md
+
+# Phase 0 qualification tool: build outputs fall under the global
+# patterns above; keep its scripts tracked despite *.cmd
+!xhciqual/build.cmd
+!xhciqual/test/run-qemu-test.cmd
+xhciqual/test/hdd/
+xhciqual/test/win98hdd/
+xhciqual/test/usb.img
+xhciqual/*.lst
+
+# xhcisnap's own dumps: raw extension images and PORTSC arrays taken off a
+# target. Evidence, not source - they belong in vm/ or an attached report.
+xhcisnap/*.BIN
+xhcisnap/*.PSC
+xhcisnap/*.bin
+xhcisnap/*.psc
+xhciqual/test/*.bin
+xhciqual/test/*.ppm
+
+# temp/ is scratch, and only scratch. The operator's bench dumps land there by
+# hand, one set per boot, and are copied off to a tracked evidence directory if
+# a document ends up citing them - `docs/contributing/runs/run-13e-evidence/` is
+# the 13-E sessions'. Nothing in temp/ is tracked; a dump still sitting here is
+# one no document depends on.
+#
+# Ignore the *contents* rather than the directory, for the reason spelled out at
+# `.claude/*` below: git does not descend into an ignored directory, so a
+# negation could not be added afterwards. That is not hypothetical here - seven
+# dumps were tracked in temp/ until batch 13-R precisely because documents cited
+# them.
+temp/*
+
+# Archived bare-metal qualification runs are evidence, not build output:
+# keep them despite the global *.log rule (case-insensitive on Windows).
+# The linker MAP archived beside them is what turns a photographed DOS/32A
+# fault EIP back into a symbol, so it is evidence too - keep it despite *.map.
+!xhciqual/results/**/*.LOG
+!xhciqual/results/**/*.MAP
+
+# macOS / OneDrive cruft
+.DS_Store
+
+# Repo-local Claude state and working notes are not part of the codebase
+# (`memory/` moved here from ~/.claude/projects/.../memory; see
+# CLAUDE.md). Ignore the contents rather than the directory itself: git does
+# not descend into an ignored directory, so `.claude/` would make the
+# settings.json negation below impossible to add later.
+.claude/*
+!.claude/settings.json
+
+# Phase 10: the per-host device-matrix config (copy of config.sample.psd1 beside
+# it). Lives with the harness, not at the repo root; the loaders look only here.
+scripts/vm-matrix/matrix.config.psd1

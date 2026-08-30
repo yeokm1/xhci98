@@ -1,0 +1,472 @@
+; xhci98.inf - xHCI USB host controller miniport
+;
+; One file, two setup engines, one xhci98.sys. Windows 98 SE's 16-bit engine
+; reads only the undecorated sections and loads the driver through
+; *NTKERN/NTMPDriver; Windows 2000 SP4 prefers the .NTx86-decorated sections
+; and loads it through a kernel service. Both install sections point at the
+; same CopyFiles section so the file list cannot drift between targets.
+;
+; usbport.sys gets no service and no registry entry on either target: it loads
+; because xhci98.sys imports USBPORT_RegisterUSBPortDriver from it, and the
+; loader resolves that at image load. On Win98 NUSB 3.3 has already placed it
+; in SYSTEM32\DRIVERS; on Win2000 SP4 it is native. Neither is copied here.
+;
+; usbd.sys IS copied, and is the one file whose content differs per target.
+; usbhub20.sys imports USBD.SYS on both targets, and nothing on an xHCI-only
+; machine ever places it: Microsoft's usb.inf copies it only from the USB 1.1
+; sections and NUSB does not ship it at all. Each target therefore gets its own
+; OS's build, carried on the media under a distinct name (usbd98.sys /
+; usbd2k.sys) and selected by the install section that runs, so neither engine
+; can reach the other's file. See docs\contributing\build-and-test.md, "Carrying a
+; per-target usbd.sys", and docs\contributing\lessons.md, "usbhub20.sys bugchecks Win2000".
+;
+; Both halves are transcribed from the shipping reference that installs the
+; equivalent EHCI miniport on that target, not written from memory:
+;   9x half - NUSB 3.3 USB2.INF, sections [EHCI] / [EHCI.AddReg]
+;   NT half - Windows 2000 SP4 I386\USB.IN_, sections [EHCI.NT] /
+;             [EHCI.NT.Services] / [EHCI.AddService]
+; See docs\contributing\build-and-test.md, "The INF must carry both install paths" and
+; "Win98 INF-parser traps". scripts\inf-gate\check-inf.ps1 enforces the rules
+; this file is built to satisfy.
+
+[Version]
+Signature="$CHICAGO$"
+Class=USB
+ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
+Provider=%Provider%
+; **DriverVer is not cosmetic on Windows 2000**: the setup engine
+; ranks candidate drivers by date-then-version, so a package whose version does
+; not exceed the installed one is declined as not-better and an upgrade over an
+; older build cannot pass. Microsoft's own reference says the same
+; thing out loud - SP4's [EHCI.NT] carries "DriverVer=2/15/2003,5.1.2600.1" with
+; the comment "Date and Ver should be > any preSP4 QFE".
+;
+; The scheme:
+; **one four-part version per released package, bumped in the last field, with
+; the date set to the release date and never moving backwards.** It is a package
+; version, not a build counter - the deploy loop overwrites the .sys in place and
+; never re-runs the INF, so a per-build number would churn for no observer.
+; docs\contributing\build-and-test.md, "Versioning the driver", has the procedure.
+;
+; **The major version says whether the package is a final release.** Everything
+; before 1.0.0.0 was a 0.x pre-release: cut, published under releases\ and
+; installed on real machines exactly like any other, and carrying no claim of
+; being finished. What is cut and published is the line below and the newest
+; entry in releases\history.md; this comment deliberately names no version,
+; because it once named one for two cuts after that stopped being true (pre-cut
+; audit, finding C2).
+;
+; It must equal src\xhci_version.h, which is the one place the version and the
+; release date are edited. An INF is a data file setup reads and cannot include
+; a header, so this literal is checked against that one instead:
+; scripts\inf-gate\check-inf.ps1 reads the header as the authority and refuses
+; both halves disagreeing. That gate reads *sources*, so it cannot see the one
+; copy an installed machine actually reads - the version compiled into the .sys.
+; That is scripts\package\make-package.ps1's check, against the binary it
+; stages.
+DriverVer=08/30/2026,1.0.0.0
+
+; **`Provider` and the manufacturer are two different fields and this INF used
+; to fill both from one string.** They mean different things: `[Version]`'s
+; Provider is who supplied the *driver* (Driver tab, "Driver Provider"), and the
+; key below is the manufacturer of the *device* as this driver reports it
+; (General tab, "Manufacturer", stored as `Mfg`). Since the identity split the first is
+; a person and the second is the project, which is the honest split - this
+; driver binds by class code, so the silicon is Intel's or AMD's or Renesas's
+; and naming anyone here as its maker would be false whatever string is chosen.
+;
+; It also un-confounds a measurement: `docs/contributing/build-and-test.md`
+; recorded `Provider=` as feeding *both* fields, which could not be told apart
+; while one string filled both slots. A fresh install now separates them.
+[Manufacturer]
+%Mfg%=XhciModels
+
+; PCI\CC_0C0330 is the xHCI class-code compatible ID - the exact analog of the
+; PCI\CC_0C0320 catch-all both reference INFs use for EHCI. Nothing else on
+; either target claims it - measured, the device sits unclaimed at Code 28 on
+; Windows 98 and Code 1 on Windows 2000 - so a compatible-ID match needs no
+; vendor-specific entry to outrank.
+[XhciModels]
+%XhciDesc%=Xhci.Dev,PCI\CC_0C0330
+
+[SourceDisksNames]
+1=%DiskName%,xhci98.sys,,
+
+; usbd98.sys and usbd2k.sys are the two OS builds of the same usbd.sys, kept
+; apart on the media by name. The names are the media's, not the target's: both
+; are copied to SYSTEM32\DRIVERS as usbd.sys.
+[SourceDisksFiles]
+xhci98.sys=1
+xhci98.inf=1
+usbd98.sys=1
+usbd2k.sys=1
+usbhub98.sys=1
+
+; Dirid 10 + System32\Drivers, never dirid 12: 12 resolves to
+; \Windows\System\Iosubsys on Win98 and would install the driver to the wrong
+; directory with no error. %12% appears once below, in ServiceBinary, inside a
+; section Win98 never reads.
+[DestinationDirs]
+DefaultDestDir=10
+Xhci.CopyFiles=10,System32\Drivers
+Xhci.CopyW98=10,System32\Drivers
+Xhci.CopyW2K=10,System32\Drivers
+Inf.CopyFiles=17
+
+; ------------------------------------------------------------------
+; Windows 98 SE (undecorated - Win98 ignores decorated section names)
+; ------------------------------------------------------------------
+
+[Xhci.Dev]
+AddReg=Xhci.AddReg,Xhci.AddReg.Global
+CopyFiles=Xhci.CopyFiles,Xhci.CopyW98
+
+; The device's whole 9x registry footprint. NUSB's EHCI install adds a third,
+; cosmetic EnumPropPages value; this file deliberately omits it, and its
+; Win2000 EnumPropPages32/Controller counterparts, because the property-page
+; DLLs (sysclass.dll, usbui.dll) are placed by USB installs that never ran on
+; an xHCI-only machine - the same absent-dependency shape as the missing
+; usbd.sys. They affect no binding and no load.
+[Xhci.AddReg]
+HKR,,DevLoader,,*NTKERN
+HKR,,NTMPDriver,,xhci98.sys
+HKR,,XhciLogVerbosity,0x00010001,0
+HKR,,XhciLogDebugView,0x00010001,0
+
+; This value lives in its own section because TWO install paths must deliver
+; it - see the block below for why one is not enough.
+[Xhci.AddReg.Global]
+HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1
+
+; ------------------------------------------------------------------
+; DisableSelectiveSuspend - the only value here that is NOT ours
+; ------------------------------------------------------------------
+;
+; **It is written from two sections on purpose, and that is a measurement
+; rather than belt-and-braces.** [Xhci.Dev] delivers it on a device install;
+; [DefaultInstall] delivers it on a right-click Install, which touches no
+; device. The second route exists because on Windows 98 **every**
+; update-over-an-existing-install bugchecks the machine at 0028:C00312EE -
+; stopping the running driver IS that fault - so an upgrade can abort before its
+; registry phase, and a value carried only by the device install would then
+; never arrive on any machine that already had this driver. Measured:
+; after an upgrade that crashed, the new binary was
+; running and the new INF was cached, and Services\USB did not exist.
+;
+; **Windows 98 only, and deliberately not on the NT path.** Without this, a
+; device attached after the bus goes quiet is detected by nothing until the user
+; presses Refresh in Device Manager. NUSB's
+; usbport.sys idle-suspends the controller within about half a second of the
+; last transfer, and a halted xHC cannot report a port change: the spec gates
+; Port Status Change Event generation on HCHalted = '0' (p.322) and says EINT
+; and PCD generate no interrupt (p.399), so unlike EHCI - which re-arms
+; USBINTR.PCD across its halt - there is no interrupt this driver could leave
+; enabled. The fix is therefore to stop the suspend happening, not to wake from
+; it.
+;
+; usbport reads this itself, with RtlQueryRegistryValues(RelativeTo = Services,
+; L"usb", ...) alongside UsbBIOSx and DisableCcDetect - read out of NUSB's
+; USBPORT.SYS at VA 0x11DBE, the table entry naming L"DisableSelectiveSuspend"
+; at 0x11E15. **Measured on the 2a VM**: without it, one
+; SuspendController inside seconds and a hot-plug is invisible; with it,
+; SuspendController never fires at all, USBCMD reads 0x00000005 (R/S set) and a
+; hot-plugged keyboard enumerates on its own - SlotsEnabled 1, DevicesAddressed
+; 1, wizard raised with no Refresh.
+;
+; **Three honest consequences, none of them hidden**:
+;
+;  1. It is a **global** value under Services\USB, not a per-device one, so it
+;     changes behaviour for every controller that usbport drives on the machine,
+;     Microsoft's EHCI included. On the deployment population - xHCI-only
+;     machines where this driver is the entire USB stack - that is precisely the
+;     intent. It is stated in docs\using\release-notes.md rather than left for a user
+;     to discover.
+;  2. The controller therefore **never idles**, which costs a little power. That
+;     is the trade this target wants, and it is the same trade Microsoft's own
+;     HcDisableSelectiveSuspend exists to let an administrator make.
+;  3. **It outlives the devnode**, because it is outside the devnode's key - so
+;     removing the device does not take it with it, and this package cannot know
+;     whether something else wanted it. The derived footprint
+;     (scripts\inf-gate\expected-footprint.txt) reads `remove` for this row and
+;     that is correct: that column answers "what did this install write", which
+;     is unconditional here. **What uninstall actually leaves behind is a
+;     measurement, not a derivation** - docs\contributing\runs\run-11v.md stage B4 takes it, and
+;     docs\using\release-notes.md states the answer.
+;
+; **The NT path deliberately omits it**: Windows 2000's native usbport never
+; idle-suspends this controller - measured on that target - so writing it there
+; would change behaviour for no benefit. A value that differs between the two
+; paths is normally the failure shape the INF gate exists to catch, which is why
+; this one carries its reason here and a gate rule of its own.
+
+; ------------------------------------------------------------------
+; The two log values, on both install paths
+; ------------------------------------------------------------------
+;
+; **Task 13-L.2 made these DWORDs and retired XhciLogFile**, which was a
+; REG_SZ whose path was its own enable. The file sink went with it, and so did
+; the driver's three Zw* imports - not because they were dangerous but because
+; that sink was never observed to write a byte outside a virtual machine, on
+; either target. The log file did not disappear: XHCISNAP writes it from ring 3
+; now, and names it from the command line.
+;
+;   XhciLogVerbosity  the 0-4 ladder, and the WHOLE switch:
+;                       0  off outright - the PassThru read channel answers
+;                          exactly MP_STATUS_NOT_SUPPORTED and nothing can be
+;                          read off the machine.  The default.
+;                       1  the channel engaged, counter block only; ring off
+;                       2  + the note ring - this is the log channel
+;                       3  + the PORTSC table in XHCISNAP's companion text
+;                       4  + kernel-address records in the note ring, which
+;                          the companion text then prints; the bench level.
+;                          The raw dump (.BIN extension, .PSC PORTSC) is
+;                          whole at every level from 1 up; only the ring's
+;                          content and the companion text are gated.
+;                     The channel is present in EVERY build flavour; what the
+;                     flavour decides is how much there is to read.
+;   XhciLogDebugView  an EMISSION switch and nothing else: it hands the ring to
+;                     DbgPrint at the PASSIVE flush.
+;
+; **There were three values until the snapshot-value merge**, the third being
+; XhciLogSnapshot, which consented to the read channel. It was a pure consent
+; bit - the channel serves everything or nothing, so it carried no width - and
+; consent nests inside depth, so it became rung 0 of the ladder above. A machine
+; installed from an older INF still carries the value; the driver no longer
+; reads it, which costs a start nothing.
+;
+; **Both default to 0**, and that is a polarity decision rather than
+; caution: the safe configuration is the default and the convenience is the
+; thing asked for by name. An absent value is 0 too, and is not an error -
+; a machine whose INF never ran and a machine whose owner set nothing behave
+; identically, and the driver starts normally on both.
+;
+; The driver reads both through usbport's own
+; UsbPortGetMiniportRegistryKeyValue service with BOOL = TRUE, which is
+; IoOpenDeviceRegistryKey's PLUGPLAY_REGKEY_DRIVER - the **software (driver)
+; key**, which is what a plain AddReg under an install section writes and which
+; is where the shipping usbehci.sys reads its own parameter from. Derived from
+; both shipping usbport builds and both shipping usbehci builds; see
+; docs\usb-xhci-info\usbport-miniport-abi.md section 6. There is no Set
+; counterpart at any offset in any build, so nothing here is ever written back
+; by the driver - XHCISNAP sets these from user mode.
+;
+; Both are written on BOTH paths, and that is the point rather than
+; symmetry: a value present on only one install path is exactly the failure
+; shape the INF gate exists to catch, and scripts\inf-gate\check-inf.ps1 checks
+; the 9x and the NT section separately for each of them.
+;
+; 0x00010001 is FLG_ADDREG_TYPE_DWORD. It is not an NT-only spelling - NUSB's
+; own USBSTOR.INF writes "HKR,,DriverFlags,0x00010001,0x00000002" from an
+; undecorated section, i.e. through Win98's 16-bit engine. **Every one of these
+; is now a DWORD**, which retires the one line that was FLG_ADDREG_TYPE_SZ and
+; with it an unmeasured question: how Win98's 16-bit engine writes an empty
+; REG_SZ was never established, and the driver was written so that it did not
+; have to be. It no longer arises.
+;
+; **An out-of-range XhciLogVerbosity is refused, not clamped**: the driver falls
+; back to 0 and records that it did, so a dump never reports a tier nobody asked
+; for. A 7 typed here does not become level 4 - and since 0 is now off outright,
+; a refusal SHUTS the channel rather than opening it at some other rung, which
+; is the right direction for a refusal to fail in.
+;
+; **Turning it on is not a registry edit any more**, which is the whole point
+; of the change: XHCISNAP sets it from a DOS box, finds the per-machine
+; software key itself, and the published sequence is enable, restart, reproduce,
+; XHCISNAP -o C:\NAME. A ready-made .reg cannot ship because that key is
+; per machine, and a Device Manager property page is not an option either -
+; its 9x half would have to be a 16-bit DLL with no programmatic install path
+; (docs\contributing\build-and-test.md, "No programmatic install path on Win98").
+;
+; **The enable step is also the access control, and that is stated rather than
+; hoped.** This driver cannot tighten the door it answers through: usbport owns
+; the device object, hardcodes \DosDevices\HCD<n>, completes IRP_MJ_CREATE with
+; no work, and the IOCTL is FILE_ANY_ACCESS. So while the channel is enabled,
+; any local user who can open that name can read this driver's diagnostic state
+; - counters, ring notes, PORTSC, and kernel addresses (the raw window carries
+; the whole miniport extension at any level from 1 up; only XHCISNAP's
+; plain-text companion withholds them below level 4); no user data and no
+; other process's memory. Writing this value needs Administrators on
+; Windows 2000 and nothing at all on Windows 98, which has no user boundary.
+; Run XHCISNAP -disable after sending a capture.
+;
+; **The cost of the defaults is real and is paid deliberately.** The ring costs
+; 16 KB of the miniport extension whatever this says; what the default saves is
+; the append sites' cost at real interrupt rates on Windows 98 metal, which is
+; UNMEASURED - and rung 1 is what that argument buys, since it engages the
+; channel without turning the append sites on. An end user who has not asked for
+; a log has no channel open at all.
+
+[Xhci.AddReg.NT]
+HKR,,XhciLogVerbosity,0x00010001,0
+HKR,,XhciLogDebugView,0x00010001,0
+
+; ------------------------------------------------------------------
+; Windows 2000 SP4 (.NTx86 - most specific match wins on NT)
+; ------------------------------------------------------------------
+
+[Xhci.Dev.NTx86]
+AddReg=Xhci.AddReg.NT
+CopyFiles=Xhci.CopyFiles,Xhci.CopyW2K
+
+[Xhci.Dev.NTx86.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+[Xhci.AddService]
+DisplayName=%XhciSvcDesc%
+ServiceType=1                       ; SERVICE_KERNEL_DRIVER
+StartType=3                         ; SERVICE_DEMAND_START
+ErrorControl=1                      ; SERVICE_ERROR_NORMAL
+ServiceBinary=%12%\xhci98.sys
+LoadOrderGroup=Base
+
+; ------------------------------------------------------------------
+; Shared file lists
+; ------------------------------------------------------------------
+
+; The third field is the temporary name. Reinstalling over a loaded
+; xhci98.sys is the normal case in the deploy loop; without it Win98 has no
+; way to replace the file and can leave the previous binary in place.
+;
+; MEASURED (first fresh install on 2a): Win98 does the
+; copy-through correctly - the loaded binary really is the new one - but it
+; **leaves xhci98.tmp in System32\Drivers afterwards and lists it in the
+; device's own Driver File Details**, beside xhci98.sys, NTKERN.vxd and
+; USBD.SYS.
+;
+; NARROWED: those are two independent facts,
+; and only the first is about the disk. A fresh install onto a pristine image -
+; nothing for the destination to be in use *by* - still **lists** xhci98.tmp in
+; Driver File Details while `dir /a ...\xhci98.*` answers `1 file(s)`,
+; XHCI98.SYS alone. So the list is derived from this CopyFiles entry's third
+; field rather than from the filesystem, and it is evidence of neither presence
+; nor absence. The residue itself is an *upgrade* artifact
+; (docs\contributing\runs\run-11v.md). That is cosmetic and a small disk leak
+; rather than a load problem, and it is NOT a reason to drop the third field:
+; without it the replace fails outright, which is the worse defect.
+; Do not read the .tmp in that list as the driver having loaded
+; the wrong file - confirm which binary is live from the trace's
+; `DriverEntry (built ...)` line, as always.
+[Xhci.CopyFiles]
+xhci98.sys,,xhci98.tmp
+
+; ------------------------------------------------------------------
+; The one file that differs per target: usbd.sys
+; ------------------------------------------------------------------
+;
+; Field order is Destination,Source,Temporary,Flags (Oney p.386): the second
+; field is "the name of the file as it exists on the distribution media if
+; that name is different from the Destination name", which is what keeps the
+; two builds apart. The media carries usbd98.sys and usbd2k.sys; each section
+; names exactly one of them, and each section is reachable from exactly one
+; install path - so there is no ordering, version comparison, or engine
+; behaviour that could let Win98's build land on Win2000 or the reverse. Only
+; the section that runs can name a source file at all.
+;
+; Flag 16 = COPYFLG_NO_OVERWRITE, "do not copy if file exists on target"
+; (C:\NTDDK\inc\SETUPAPI.H). Presence is the entire requirement - usbhub20.sys
+; needs the import to resolve - so an existing usbd.sys is left strictly alone
+; whatever its version. That is deliberately stronger than the version-based
+; flags: 4 (COPYFLG_NOVERSIONCHECK) would overwrite a newer post-SP4 or
+; hotfix build, and 32 (COPYFLG_NO_VERSION_DIALOG) still replaces an older
+; one for no benefit. The reference INFs use decimal in this field
+; (NUSB _NUSB.INF: "usbstor.sys,,,4"), so this does too.
+;
+; If a future engine were found to ignore the flag, the Win98 path would still
+; be safe by construction: usbd98.sys is bit-for-bit the file Win98 SE's own
+; media ships, so an unwanted overwrite there rewrites the file with itself.
+;
+; ------------------------------------------------------------------
+; usbhub.sys - WINDOWS 98 ONLY, and the asymmetry is the point
+; ------------------------------------------------------------------
+;
+; Added by batch 13-E, which found it missing on real hardware.
+; usbhub.sys is Windows 98's COMPOSITE PARENT driver: USB.INF binds a
+; multi-interface device to it, and without it every composite device on the
+; machine stops at `USB Composite Device` with **Code 2** - "the NTKERN.VXD
+; device loader(s) for this device could not load the device driver", which is
+; matched-but-unloadable rather than Code 1's unmatched.
+;
+; It is the same absent-dependency shape as usbd.sys and it has the same cause.
+; Windows 98 ships USB.INF on every install but copies the USB driver *files*
+; only when setup detects a USB controller, and an xHCI-only machine looks
+; empty to Win98 setup. So the INF is present, the devnode gets named, and the
+; file is not there. Measured on the ThinkPad E460 by batch 13-E: absent, every
+; composite device dead including a plain two-interface HID keyboard that would
+; not type; the file copied in by hand, and the same machine drives them all.
+; The control was a ThinkPad X61 - same Windows 98 SE, same NUSB 3.3, no xHCI -
+; where the file is present because setup found its UHCI controller.
+;
+; **This one is NOT delivered to Windows 2000, and that is deliberate rather
+; than an omission.** On Win2000 `usbhub.sys` is the name of the OS's own USB
+; 1.1 hub driver, and its composite parent is a different file entirely
+; (usbccgp.sys). Delivering Win98 SE's 4.10.2222 build toward that target would
+; be wrong even with flag 16 protecting it. Win2000 also does not need the
+; help: setup copies %SystemRoot%\Driver Cache\i386\driver.cab
+; unconditionally, whatever hardware it found, and PnP pulls in-box drivers
+; from it with no media prompt - a mechanism Windows 98 has no guaranteed
+; equivalent of. That reasoning is **structural and unverified**: every
+; Windows 2000 vehicle in this project has an EHCI, so the xHCI-only case
+; cannot be observed on that target - and no bare-metal Windows 2000 vehicle
+; exists in this project either, so it is published as a limitation. See
+; docs/contributing/roadmap.md, Phase 13's checkpoint.
+;
+; scripts\inf-gate\check-inf.ps1 enforces the asymmetry in BOTH directions -
+; the Win98 path must deliver it and the Win2000 path must not - so this cannot
+; be "fixed" later by someone making the two paths look symmetrical.
+
+[Xhci.CopyW98]
+usbd.sys,usbd98.sys,,16
+usbhub.sys,usbhub98.sys,,16
+
+[Xhci.CopyW2K]
+usbd.sys,usbd2k.sys,,16
+
+[Inf.CopyFiles]
+xhci98.inf
+
+; ------------------------------------------------------------------
+; Right-click Install - pre-stages the files with no device present
+; ------------------------------------------------------------------
+
+[DefaultInstall]
+CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98
+AddReg=Xhci.AddReg.Global
+
+; Win2000's setup engine keeps its own copy of an OEM INF as oemN.inf; copying
+; this one into %17% as well would leave two INFs claiming PCI\CC_0C0330.
+[DefaultInstall.NTx86]
+CopyFiles=Xhci.CopyFiles,Xhci.CopyW2K
+
+; ASCII only, and that is a parser requirement rather than a style
+; note: [Strings] is read by **both** engines and this file is ANSI/CRLF for
+; Win98's 16-bit one, so a curly quote or an en dash here is the class of change
+; that makes that engine report nothing at all
+; (docs\contributing\build-and-test.md, "Win98 INF-parser traps").
+;
+; %XhciDesc% is what Device Manager shows, what the "Have Disk" list shows during
+; the documented install, and what a user reads back in a bug report - on the
+; a machine that also has EHCI it appears beside Microsoft's own entries. That
+; marker is
+; therefore load-bearing and is not to be dropped for tidiness; the rest is the
+; eXtensible-host-controller form the hardware actually has a name for.
+;
+; "USB 2.0" leads the string deliberately, and is the second load-bearing part.
+; An xHCI controller is what a user associates with USB 3.0, and this driver
+; drives one - but it manages only the USB 2.0 protocol ports and leaves the
+; SuperSpeed ones unpowered by design (AGENTS.md, "Port Strategy"). A name that
+; says only "eXtensible Host Controller" invites the reading that SuperSpeed
+; devices will run at SuperSpeed, which is the one expectation this project
+; cannot meet and has no way to explain in a Device Manager row. Keep it first,
+; where it survives a truncated column.
+;
+; **Changing these strings is not observable on an existing devnode.** Both
+; engines cache DriverDesc in the device's software key at install time, so an
+; already-installed machine keeps the old string across a reboot, and the deploy
+; loop's in-place .sys overwrite does not exercise this file at all. The
+; observation is a fresh install, or an uninstall-and-reinstall, on each target.
+[Strings]
+Provider="Yeo Kheng Meng"
+Mfg="xHCI98 Project"
+DiskName="xhci98 xHCI Miniport Disk"
+XhciDesc="USB 2.0 eXtensible Host Controller (xhci98)"
+XhciSvcDesc="xHCI USB 2.0 Host Controller Miniport (xhci98)"

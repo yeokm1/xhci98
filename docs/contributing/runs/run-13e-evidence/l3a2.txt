@@ -1,0 +1,231 @@
+xhcisnap: opening \\.\HCD0
+
+extension:
+  c:\l3a2.BIN: 90272 bytes in 2 window(s) (region is 90272)
+
+PORTSC:
+  c:\l3a2.PSC: 72 bytes in 1 window(s) (region is 72)
+
+  *** cannot create c:\l3a2.TXT - the report will be on screen only, and on real
+      silicon it will scroll off. Name somewhere writable with -o.
+
+xhci98 snapshot - the part a maintainer can read without an offset table
+  tool               xhcisnap 0.0.0.5, built Aug 27 2026 19:26:55
+  schema             3, 88-byte header
+  build flavour      release
+  build flags        00000000  free
+  ExtensionBytes     90272   (the key the .BIN must be decoded against)
+  ports              18
+  tear detector      17245
+
+  registry values, as the driver read them at its last start:
+    XhciLogVerbosity   read, value 2
+    XhciLogDebugView   read
+
+  verbosity tier     read 2, APPLIED 2
+
+  note ring          3729 of 16384 bytes used
+                     head 3729, at +73884 in the extension
+
+note ring, oldest record first (3729 bytes):
+----------------------------------------------------------------
+log.verbosity=00000002
+log.verbosity.read=00000002
+log.verbosity.refused=00000000
+log.debugview=00000000
+gate.intx.pin=00000001
+gate.busmaster.command=00000006
+hc.version=00000100
+hc.maxslots=00000040
+hc.maxports=00000012
+hc.maxintrs=00000008
+hc.scratchpad=00000022
+hc.contextsize=00000020
+hc.pci=9D2F8086
+handoff.cap=0000846C
+map.groups=00000002
+map.ports=00000012
+map.managed=0000000C
+map.usb2only=00000006
+map.usb2companion=00000006
+map.usb3=00000006
+map.port=00000101
+map.port=00000201
+map.port=00000301
+map.port=00000401
+map.port=00000501
+map.port=00000601
+map.port=00000702
+map.port=00000802
+map.port=00000902
+map.port=00000A02
+map.port=00000B02
+map.port=00000C02
+hc.pagesize=00000001
+port.connect=00000602
+port.connect=00000702
+port.connect=00000802
+port.reset.begin=00000006
+port.reset.done=00000602
+slot.enabled=00000106
+port.reset.begin=00000006
+port.reset.done=00000602
+slot.addressed=00010102
+slot.route=00000000
+slot.parenthub=00000000
+port.reset.begin=00000007
+port.reset.done=00000703
+slot.enabled=00000207
+port.reset.begin=00000007
+port.reset.done=00000703
+slot.addressed=00020203
+slot.route=00000000
+slot.parenthub=00000000
+port.reset.begin=00000008
+port.reset.done=00000802
+slot.enabled=00000308
+port.reset.begin=00000008
+port.reset.done=00000802
+slot.addressed=00030302
+slot.route=00000000
+slot.parenthub=00000000
+port.connect=00000302
+port.reset.begin=00000003
+port.reset.done=00000303
+slot.enabled=00000403
+port.reset.begin=00000003
+port.reset.done=00000303
+slot.addressed=00040403
+slot.route=00000000
+slot.parenthub=00000000
+ep.open=00040302
+ep.open.rate=00000200
+ep.open=00040202
+ep.open.rate=00000200
+port.disconnect=00000300
+slot.disabled=00000004
+port.connect=00000301
+port.reset.begin=00000003
+port.reset.done=00000301
+slot.enabled=00000503
+port.reset.begin=00000003
+port.reset.done=00000301
+slot.addressed=00050401
+slot.route=00000000
+slot.parenthub=00000000
+ep.open=00050303
+ep.open.rate=00200004
+port.connect=00000102
+port.reset.begin=00000001
+port.reset.done=00000103
+slot.enabled=00000601
+port.reset.begin=00000001
+port.reset.done=00000103
+slot.addressed=00060503
+slot.route=00000000
+slot.parenthub=00000000
+ep.open=00060303
+ep.open.rate=00200001
+slot.enabled=00000700
+slot.addressed=00070603
+slot.route=01000005
+slot.parenthub=00000505
+ep.open=00070302
+ep.open.rate=00000200
+ep.open=00070402
+ep.open.rate=00000200
+xfer.error=00070306
+ep.halted=00000003
+ep.recovery=00030801
+port.disconnect=00000300
+ep.recovery=00030713
+slot.disabled=00000005
+port.connect=00000302
+port.reset.begin=00000003
+port.reset.done=00000303
+slot.enabled=00000803
+port.reset.begin=00000003
+port.reset.done=00000303
+slot.addressed=00080403
+slot.route=00000000
+slot.parenthub=00000000
+ep.open=00080302
+ep.open.rate=00000200
+ep.open=00080202
+ep.open.rate=00000200
+port.disconnect=00000100
+slot.disabled=00000007
+ep.recovery=00030713
+slot.disabled=00000006
+port.disconnect=00000300
+slot.disabled=00000008
+port.connect=00000301
+port.reset.begin=00000003
+port.reset.done=00000301
+slot.enabled=00000903
+port.reset.begin=00000003
+port.reset.done=00000301
+slot.addressed=00090401
+slot.route=00000000
+slot.parenthub=00000000
+ep.open=00090303
+ep.open.rate=00200004
+port.disconnect=00000300
+ep.recovery=00030713
+slot.disabled=00000009
+port.connect=00000302
+port.reset.begin=00000003
+port.reset.done=00000303
+slot.enabled=00000A03
+port.reset.begin=00000003
+port.reset.done=00000303
+slot.addressed=000A0403
+slot.route=00000000
+slot.parenthub=00000000
+ep.open=000A0302
+ep.open.rate=00000200
+ep.open=000A0202
+ep.open.rate=00000200
+port.disconnect=00000300
+slot.disabled=0000000A
+
+----------------------------------------------------------------
+
+  port  PORTSC    PP CCS PED  PR PLS spd | CSC PEC WRC OCC PRC PLC CEC
+     1  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+     2  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+     3  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+     4  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+     5  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+     6  00000603   1   1   1   0   0   1 |  0   0   0   0   0   0   0
+     7  00000E03   1   1   1   0   0   3 |  0   0   0   0   0   0   0
+     8  00000603   1   1   1   0   0   1 |  0   0   0   0   0   0   0
+     9  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+    10  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+    11  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+    12  000002A0   1   0   0   0   5   0 |  0   0   0   0   0   0   0
+    13  00000080   0   0   0   0   4   0 |  0   0   0   0   0   0   0
+    14  00000080   0   0   0   0   4   0 |  0   0   0   0   0   0   0
+    15  00000080   0   0   0   0   4   0 |  0   0   0   0   0   0   0
+    16  00000080   0   0   0   0   4   0 |  0   0   0   0   0   0   0
+    17  00000080   0   0   0   0   4   0 |  0   0   0   0   0   0   0
+    18  00000080   0   0   0   0   4   0 |  0   0   0   0   0   0   0
+
+  (PP is clear on 6 of 18 ports. On a controller with SuperSpeed ports that
+   is EXPECTED: this driver manages USB 2.0 protocol ports only and leaves the
+   SuperSpeed ones unpowered by design. It is not a fault on its own.)
+  (3 of 18 ports report a device connected.)
+
+PORTSC table: on screen only - it goes into this file at verbosity 3 and above.
+
+coherence: tear detector 17245, unchanged across every window. Nothing this
+driver counts moved while the dump was taken, which is strong evidence the dump
+is coherent - it is not a proof, because there is no counter behind every
+field.
+
+--- summary ------------------------------------------------
+  tool       xhcisnap 0.0.0.5, built Aug 27 2026 19:26:55
+  driver     release, extension 90272 bytes, schema 3
+  verbosity  read 2, APPLIED 2
+  note ring  3729 of 16384 bytes
+  coherence  no tearing

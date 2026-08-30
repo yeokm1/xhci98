@@ -1,0 +1,31 @@
+
+xhci98 snapshot - the part a maintainer can read without an offset table
+  tool               xhcisnap 0.0.0.5, built Aug 27 2026 19:26:55
+  schema             3, 88-byte header
+  build flavour      release
+  build flags        00000000  free
+  ExtensionBytes     90272   (the key the .BIN must be decoded against)
+  ports              18
+  tear detector      3097
+
+  registry values, as the driver read them at its last start:
+    XhciLogVerbosity   read, value 1
+    XhciLogDebugView   read
+
+  verbosity tier     read 1, APPLIED 1
+    This level records nothing into the note ring, ON PURPOSE - the counters
+    are the whole report here. To capture the ring, run  XHCISNAP -verbosity 2,
+    restart, reproduce, and dump again.
+
+  note ring          0 of 16384 bytes used
+                     head 0, at +73884 in the extension
+
+note ring: not printed - the driver was at verbosity 1, which records
+  nothing into it. That is a real report, not a failure; -verbosity 2 fills it.
+
+PORTSC table: on screen only - it goes into this file at verbosity 3 and above.
+
+coherence: tear detector 3097, unchanged across every window. Nothing this
+driver counts moved while the dump was taken, which is strong evidence the dump
+is coherent - it is not a proof, because there is no counter behind every
+field.

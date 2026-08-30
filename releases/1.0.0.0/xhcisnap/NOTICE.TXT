@@ -1,0 +1,24 @@
+==============================================================================
+                          x h c i 9 8   1.0.0.0
+                    THIRD-PARTY NOTICES FOR XHCISNAP.EXE
+==============================================================================
+
+XHCISNAP.EXE is built from this project's own C source, which is under the GNU
+GPL v2 - see the LICENSE file in the directory above.
+
+It is not only this project's code. It is compiled with Microsoft Visual C++
+6.0 and linked against that compiler's STATIC C runtime - the build passes no
+/MD - so those runtime modules are bound into this executable rather than
+loaded from a DLL when it runs. That is deliberate: it is what makes the tool a
+single file that works on a Windows 98 SE machine with nothing installed on it,
+which is the machine it exists for. You can see it for yourself in the import
+table, which names only KERNEL32.dll and ADVAPI32.dll and no C runtime DLL.
+
+Those runtime modules are Microsoft's. They are not covered by the GPL grant
+above, and they keep whatever terms accompany Visual C++ 6.0. What this file
+records is the linkage; the project's full provenance record is
+docs\contributing\legal-provenance.md, section 2a. Nothing in this file is a
+statement that the arrangement is or is not sufficient.
+
+No DOS extender and no Open Watcom code is in this executable; the NOTICE.TXT
+beside XHCIQUAL.EXE covers a different program and does not apply here.

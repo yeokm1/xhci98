@@ -1,0 +1,87 @@
+XHCIQUAL 0.9 (build Jul 25 2026 20:29:27) - Win98/Win2000 USB qualification
+Mode: FULL (active bring-up tests)
+Families: xHCI
+Found 1 selected USB host controller(s).
+
+Running active tests on xHCI 8086:02ED...
+  C1 handoff: PASS  BIOS released in <= 10 ms
+  C2 reset:   PASS  HCRST+CNR in 1 ms
+  C3 DMA:     PASS  No-Op completion in 1 ms
+  C4 IRQ:     PASS  one-shot ISR fired on IRQ 11 (level per ELCR) (ISR count 1)
+  C6: port 6 connect (PORTSC=000206E1), resetting...
+  C6: port 6 reset ok in 2 ms, Full-Speed (12 Mb/s)
+  C6: port 8 connect (PORTSC=000206E1), resetting...
+  C6: port 8 reset ok in 2 ms, High-Speed (480 Mb/s)
+  C6: port 9 connect (PORTSC=000206E1), resetting...
+  C6: port 9 reset ok in 2 ms, Full-Speed (12 Mb/s)
+  C6: port 10 connect (PORTSC=000206E1), resetting...
+  C6: port 10 reset ok in 2 ms, Full-Speed (12 Mb/s)
+  C6 ports:   PASS  4 connect(s), 4 reset(s) ok, 8 port event(s)
+  C8: port 6 slot 1 addr 1: 04F3:2D4A "Touchscreen"
+  C8: port 8 slot 2 addr 2: 04F2:B6D9 "Integrated Camera"
+  C8: port 9 slot 3 addr 3: 06CB:00BD Vendor-specific
+  C8: port 10 slot 4 addr 4: 8087:0026 Wireless
+
+==== Controller 00:14.0 - 8086:02ED rev 00 ====
+  quirks: none known for this VID/DID
+  PCI: cmd=0006 (MSE=1 BME=1 INTxDis=0)  pin=INTA#  line=IRQ 11
+  PCI subsys: 17AA:22B1
+  PCI caps: PM=1 MSI=1(en=0) MSI-X=0 PCIe=0
+  PCI PM: v2  state=D0  D1=0 D2=0  PME_En=0 PME_Status=0
+    PME_Support: D3hot, D3cold
+    NoSoftRst=1 - keeps state across D3hot->D0
+    flags: DSI=0 PMEClk=0  Aux=375mA
+    raw: PMC=C1C2 PMCSR=0008
+  BAR0: E33A0000 64-bit (raw lo=E33A0004 hi=00000000)
+  HCIVERSION 1.10  CAPLENGTH 128  ContextSize 32  AC64=1  PPC=0
+  MaxSlots 64  MaxIntrs 8  MaxPorts 18  Scratchpad 34  PAGESIZE 00000001
+  USBLEGSUP: present
+  Protocol USB 2.0: ports 1-12, slot type 0, PSIC 3
+  Protocol USB 3.1: ports 13-18, slot type 0, PSIC 8
+  Port map:
+    port  1: USB2-only (managed)
+    port  2: USB2-only (managed)
+    port  3: USB2-only (managed)
+    port  4: USB2-only (managed)
+    port  5: USB2-only (managed)
+    port  6: USB2-only (managed)
+    port  7: USB2 companion (managed)
+    port  8: USB2 companion (managed)
+    port  9: USB2 companion (managed)
+    port 10: USB2 companion (managed)
+    port 11: USB2 companion (managed)
+    port 12: USB2 companion (managed)
+    port 13: USB3 companion (unmanaged)
+    port 14: USB3 companion (unmanaged)
+    port 15: USB3 companion (unmanaged)
+    port 16: USB3 companion (unmanaged)
+    port 17: USB3 companion (unmanaged)
+    port 18: USB3 companion (unmanaged)
+  --- Tier C results ---
+  C1 handoff:  PASS  BIOS released in <= 10 ms
+  C2 reset:    PASS  HCRST+CNR in 1 ms
+  C3 DMA:      PASS  No-Op completion in 1 ms
+  C4 IRQ:      PASS  one-shot ISR fired on IRQ 11 (level per ELCR) (ISR count 1)
+  C6 ports:    PASS  4 connect(s), 4 reset(s) ok, 8 port event(s)
+  C8 devices:  PASS  4 of 4 device(s) identified (informational)
+    port  6: 04F3:2D4A rev 57.11  USB 2.00  Full-Speed (12 Mb/s)  addr 1  MPS0 8
+             class 00/00/00 (per-interface)  1 iface(s), first 03/00/00 (HID)
+             "ELAN" "Touchscreen"
+    port  8: 04F2:B6D9 rev 27.11  USB 2.01  High-Speed (480 Mb/s)  addr 2  MPS0 64
+             class EF/02/01 (Miscellaneous)  2 iface(s), first 0E/01/00 (Video)
+             "Chicony Electronics Co.,Ltd." "Integrated Camera"
+    port  9: 06CB:00BD rev 0.00  USB 2.00  Full-Speed (12 Mb/s)  addr 3  MPS0 8
+             class FF/10/FF (Vendor-specific)  1 iface(s), first FF/00/00 (Vendor-specific)
+    port 10: 8087:0026 rev 0.02  USB 2.01  Full-Speed (12 Mb/s)  addr 4  MPS0 64
+             class E0/01/01 (Wireless)  8 iface(s), first E0/01/01 (Wireless)
+  FACT id=8086:02ED rev=00 bar=E33A0000 irq=11 pin=1 hciver=0110 csz=32 ac64=1 ppc=0 slots=64 intrs=8 ports=18 scratch=34 usb2ports=12 legsup=1
+  DEV port=6 speed=1 vid=04F3 pid=2D4A class=00.00.00 iface=03.00.00 mps0=8
+  DEV port=8 speed=3 vid=04F2 pid=B6D9 class=EF.02.01 iface=0E.01.00 mps0=64
+  DEV port=9 speed=1 vid=06CB pid=00BD class=FF.10.FF iface=FF.00.00 mps0=8
+  DEV port=10 speed=1 vid=8087 pid=0026 class=E0.01.01 iface=E0.01.01 mps0=64
+
+---- Verdict for 8086:02ED ----
+  ==> CONTROLLER QUALIFIED for cross-target driver development
+      Win2000 APIC-HAL routing remains untested by DOS C4.
+
+Done. Report copied to XEMPTY.LOG.

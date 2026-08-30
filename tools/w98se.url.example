@@ -1,0 +1,20 @@
+# Win98SE / MS-DOS 7.1 boot-image download source (TEMPLATE).
+#
+# Copy this file to "w98se.url" in this same folder and put your download URL
+# on a line below. When tools\w98se.img is missing, the QEMU harnesses
+# (xhciqual\test\run-qemu-matrix.ps1 and run-win98-batch.ps1) fetch the image
+# from that URL. This repo hardcodes NO source - the image is proprietary and
+# you choose where to get it from.
+#
+# Equivalent alternatives to this file:
+#   - pass -BootImageUrl <url> to a harness, or
+#   - set $env:XHCIQUAL_WIN98_URL
+# Optional integrity check: set $env:XHCIQUAL_WIN98_SHA256 to the expected hash.
+#
+# The URL must point to an AUTOMATION-READY image: a bare Win98SE / MS-DOS 7.1
+# boot floppy that boots straight to a DOS prompt (no boot menu, no DATE/TIME
+# prompt). See xhciqual\README.md ("The Win98 boot image") for how to build one
+# from a stock Win98 boot floppy with mtools.
+#
+# The first non-comment, non-blank line is used as the URL. Uncomment and edit:
+# https://example.com/path/to/your/w98se.img
