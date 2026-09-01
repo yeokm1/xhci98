@@ -47,9 +47,11 @@ you would be the first.
   SE does not check; Windows 2000 SP4 shows an unsigned-driver warning during
   install and then installs it.
 - On Windows 98 it is not standalone. Windows 98 has no `usbport.sys` of its
-  own. **NUSB 3.3 must be installed first**; it is what places `usbport.sys`
+  own. **NUSB must be installed first**; it is what places `usbport.sys`
   and `usbhub20.sys`. Without it the driver will not load, with no useful
-  diagnostic.
+  diagnostic. NUSB 3.3 is the version this project tests against. NUSB 3.6
+  carries the same USB 2.0 stack byte for byte and has been observed working
+  with this driver (HID and mass storage, in a virtual machine only).
 - It does not write to your disk. The driver creates no file. Its log is read
   out of the running driver by `XHCISNAP.EXE` when you ask for a report; see
   "The log, and how to send one".
@@ -59,7 +61,7 @@ you would be the first.
 | | |
 |---|---|
 | Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4. 32-bit Windows XP is accommodated where the cost is small, but nothing about it has been run. |
-| USB stack | Windows 98: NUSB 3.3, installed before this driver. Windows 2000: SP4's native stack, or the standalone USB 2.0 update KB319973. **Do not install NUSB on Windows 2000.** |
+| USB stack | Windows 98: NUSB 3.3, installed before this driver (NUSB 3.6 ships the identical USB 2.0 stack and has been observed working, in a virtual machine only). Windows 2000: SP4's native stack, or the standalone USB 2.0 update KB319973. **Do not install NUSB on Windows 2000.** |
 | Controller | An xHCI controller presenting PCI class code `0C0330`, with at least one USB 2.0 protocol port, a BAR0 mapped below 4 GB, and a legacy interrupt pin. Neither target has an MSI path, so a controller reporting `Interrupt Pin = 0` cannot be driven at all. |
 
 Run the qualifier before installing anything; it answers all three of the

@@ -2,6 +2,10 @@
 
 This project xHCI98 is a WDM generic USB host controller driver for xHCI host controllers targeting Windows 98 SE and Windows 2000 SP4. Although xHCI Controllers offer USB 3.0, this driver runs USB 2.0 on the controller only.
 
+This driver developed based on Intel's xHCI specification and tested only on Intel machines so far. No guarantees have been made on xHCI implementations from other vendors.
+
+This project is from a solo human with AI-assistance only so bugs are not unexpected. Feel free to report them if you encounter any issues.
+
 <img src="images/xhci98-usb-devices.jpg" width="800">
 
 This is my 2020 ThinkPad P14s Gen 1 (Comet Lake xHCI, no EHCI) on Windows 98 SE. Connected devices are 7-port hub, USB Ethernet, USB Audio, a USB-to-SATA bridge, two flash drives and a mouse all using the xHCI controller.
@@ -48,7 +52,7 @@ XHCIQUAL demo video: https://www.youtube.com/watch?v=Tv6blmBS6Do
 
 ### Install
 
-1. Put the unzipped package somewhere the machine can read: a floppy, a CD, a shared folder. `release\` is the one to install; `debug\` is the same driver built for troubleshooting, and a maintainer may ask you for it.
+1. Put the unzipped package somewhere the machine can read: a floppy, a CD, a shared folder. `release\` is the one to install. `debug\` is the same driver built for troubleshooting, and a maintainer may ask you for it.
 2. In Device Manager, find the unrecognised xHCI controller. It sits unclaimed with a yellow mark, usually under "Other devices".
 3. Windows 98 SE: Properties -> Driver -> Update Driver -> Specify a location, point it at the `release\` directory, and reboot when asked. If the Add New Hardware Wizard finds the controller for you first, give it `release\` too. Windows 2000 SP4: Properties -> Driver -> Update Driver -> Have Disk, and point it at the `release\` directory.
 4. It installs as "USB 2.0 eXtensible Host Controller (xhci98)" with a "USB Root Hub" underneath it, and neither should carry a warning mark.
@@ -59,7 +63,7 @@ XHCIQUAL demo video: https://www.youtube.com/watch?v=Tv6blmBS6Do
 
 ## What is tested, and what is not
 
-Windows 98 SE is validated on real hardware. Windows 2000 SP4 has only ever run in QEMU virtual machines. Read [What is tested, and what is not](#what-is-tested-and-what-is-not) before deciding what to trust.
+Windows 98 SE is validated on real hardware. Windows 2000 SP4 has only ever run in QEMU virtual machines.
 
 | Machine | Controller |
 |---|---|
@@ -70,8 +74,8 @@ Windows 98 SE is validated on real hardware. Windows 2000 SP4 has only ever run 
 |---|---|
 | Windows 98 SE | Validated on real hardware and in VMs. HID, mass storage, USB Ethernet and USB Audio have all run on real xHCI silicon, at a root port and behind hubs. |
 | Windows 2000 SP4 | Virtual machines only, including an SMP guest and Driver Verifier. It has never run on real hardware, and this project has no machine that can try. |
-| 32-bit Windows XP | Nothing has been run. The INF accommodates it and the miniport registration is statically compatible; that is all that is established. |
-| Intel 7/8-series (`XUSB2PR` mux), AMD | Never run on either. Everything said about the `XUSB2PR` port mux comes from Intel's datasheet and Linux, not silicon; the driver does not touch it. |
+| 32-bit Windows XP | Nothing has been run. The INF accommodates it and the miniport registration is statically compatible. That is all that is established. |
+| Intel 7/8-series (`XUSB2PR` mux), AMD | Never run on either. Everything said about the `XUSB2PR` port mux comes from Intel's datasheet and Linux, not silicon. The driver does not touch it. |
 | Resume from standby (Windows 2000) | Never executed anywhere. No available VM offers a resumable power transition, and there is no Windows 2000 machine. |
 | Low Speed, USB Audio, hub topologies | Work on Windows 98 hardware in the configurations tried. Not covered: an audio device with `bInterval > 1`, a USB 1.1 hub under a multi-TT hub, and the Windows 2000 side on silicon. |
 
@@ -80,16 +84,16 @@ The devices checked so far, all on the E460 under Windows 98 SE. Each is charact
 | Device | VID:PID | Speed | Result |
 |---|---|---|---|
 | Terminus 7-port hub, multi-TT | `1A40:0201` | High | The hub every "behind a hub" result below was taken on. |
-| Terminus 4-port hub, single-TT | `1A40:0101` | High | Characterised; the swap partner for the hub above. |
-| Genesys 7-port hub (two cascaded chips), single-TT | `05E3:0608` | High | Characterised; a second-tier hub position. |
+| Terminus 4-port hub, single-TT | `1A40:0101` | High | Characterised. The swap partner for the hub above. |
+| Genesys 7-port hub (two cascaded chips), single-TT | `05E3:0608` | High | Characterised. A second-tier hub position. |
 | Logitech USB Optical Mouse | `046D:C077` | Low | Works at a root port and behind the multi-TT hub. |
-| Microsoft Wired Keyboard 600 (composite, two HID interfaces) | `045E:0750` | Low | Types, once Windows 98's own `usbhub.sys` is present; that file now ships in the release as `usbhub98.sys`. |
+| Microsoft Wired Keyboard 600 (composite, two HID interfaces) | `045E:0750` | Low | Types, once Windows 98's own `usbhub.sys` is present. That file now ships in the release as `usbhub98.sys`. |
 | SanDisk U3 Titanium flash drive | `0781:5408` | High | Works at a root port and behind the hub. |
-| MSSU10-128GSR and SanDisk 3.2Gen1 USB 3.0 flash drives | `090C:2320`, `0781:55AB` | High (SuperSpeed falls back) | Enumerate at High-Speed on the USB 2.0 port; a file round trip passed. |
+| MSSU10-128GSR and SanDisk 3.2Gen1 USB 3.0 flash drives | `090C:2320`, `0781:55AB` | High (SuperSpeed falls back) | Enumerate at High-Speed on the USB 2.0 port. A file round trip passed. |
 | StoreJet Transcend USB-to-SATA bridge (ASMedia) | `174C:5106` | High (SuperSpeed falls back) | A drive letter, and a file written and read back with matching contents. The first real bridge chip this driver has done verified I/O through. |
-| ASIX AX88772A USB Ethernet | `0B95:7720` | High | DHCP lease and traffic on Windows 98 hardware; also validated on Windows 2000 in a VM. Wedges the machine in three fast replug cycles (the defect below). |
+| ASIX AX88772A USB Ethernet | `0B95:7720` | High | DHCP lease and traffic on Windows 98 hardware. Also validated on Windows 2000 in a VM. Wedges the machine in three fast replug cycles (the defect below). |
 | Sound Blaster Play! 2 (UAC 1.0 composite) | `041E:323D` | Full | Plays clean at a root port and behind the multi-TT hub. |
-| Sound Blaster Play! 3, C-Media USB Audio Device (UAC 1.0) | `041E:324D`, `0D8C:0014` | Full | Enumerate and are named by the wizard; they found the Full-Speed `bMaxPacketSize0` bug, now fixed. |
+| Sound Blaster Play! 3, C-Media USB Audio Device (UAC 1.0) | `041E:324D`, `0D8C:0014` | Full | Enumerate and are named by the wizard. Found the Full-Speed `bMaxPacketSize0` bug. |
 | Sound Blaster X4 (UAC 2.0, `bInterval` 3 and 4) | `041E:3278` | High | Enumerates but does not bind on Windows 98 (one HID devnode at Code 10, no composite parent), so its `bInterval > 1` endpoints were never exercised. |
 
 One known defect plugging and unplugging a device repeatedly and quickly. Windows 98 At a rate of roughly twice a second sustained, Windows 98 can freeze after about dozen iterations, where Microsoft's own USB driver on the same machine handled ten times as many. No fix has been been attempted so far.
@@ -118,7 +122,7 @@ The driver is C (C89/C90, no C++ or CRT), built and verified on Windows 11 x64. 
    powershell -ExecutionPolicy Bypass -File scripts\install-w2kddk-cabs.ps1 # -> tools\ntddk
    ```
 
-3. Build the driver. `both` (the default) builds release and debug; `all` adds the emulator-only flavour.
+3. Build the driver. `both` (the default) builds release and debug. `all` adds the emulator-only flavour.
 
    ```
    scripts\build-driver.cmd both
@@ -130,7 +134,7 @@ The driver is C (C89/C90, no C++ or CRT), built and verified on Windows 11 x64. 
    | `debug` | `src\objchk\i386\xhci98.sys` - the diagnostic build, also shipped |
    | `qemu` | `src\objchk_qemu\i386\xhci98.sys` - emulator-only, never published |
 
-4. Build the two tools that ship beside the driver. `xhciqual\build.cmd` produces `XHCIQUAL.EXE`, the DOS qualifier, and needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM` (or wherever `WATCOM` points); that is the only tool installed normally on the host, and the driver never uses it. `xhcisnap\build.cmd` produces `XHCISNAP.EXE`, the snapshot reader, with the in-repo MSVC 6.0.
+4. Build the two tools that ship beside the driver. `xhciqual\build.cmd` produces `XHCIQUAL.EXE`, the DOS qualifier, and needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM` (or wherever `WATCOM` points). That is the only tool installed normally on the host, and the driver never uses it. `xhcisnap\build.cmd` produces `XHCISNAP.EXE`, the snapshot reader, with the in-repo MSVC 6.0.
 
 5. Make install media. A `.sys` on its own is not install media, because the INF carries a per-target `usbd.sys` that has to travel with it. For a Windows 98 SE target, first download NUSB 3.3 (`nusb33e.exe`) from [philscomputerlab.com](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) to `tools\nusb33e.exe`.
 
@@ -141,7 +145,7 @@ The driver is C (C89/C90, no C++ or CRT), built and verified on Windows 11 x64. 
 
 6. Test in QEMU with the `qemu-xhci` device: a Win98 SE guest, a Win2000 SP4 guest, and an SMP Win2000 guest for race detection. The Windows 2000 guest needs SP4 (or the standalone USB 2.0 update KB319973) and no NUSB.
 
-The version lives in [src/xhci_version.h](src/xhci_version.h); the INF's `DriverVer` is a literal that the build's INF gate checks against it. See [docs/contributing/build-and-test.md](docs/contributing/build-and-test.md) for the VM setup, versioning, packaging and the rest of the procedure.
+The version lives in [src/xhci_version.h](src/xhci_version.h). The INF's `DriverVer` is a literal that the build's INF gate checks against it. See [docs/contributing/build-and-test.md](docs/contributing/build-and-test.md) for the VM setup, versioning, packaging and the rest of the procedure.
 
 ## Repository Layout
 
@@ -212,7 +216,7 @@ Kheng Meng directed the work, ran the hardware validation on real machines and r
 - [Linux xhci-pci.c](https://github.com/torvalds/linux/blob/master/drivers/usb/host/xhci-pci.c) - controller quirk table
 - [Haiku XHCI driver](https://github.com/haiku/haiku/blob/master/src/add-ons/kernel/busses/usb/xhci.cpp) and [FreeBSD xhci.c](https://github.com/freebsd/freebsd-src/blob/main/sys/dev/usb/controller/xhci.c) - second opinions on hardware details
 
-Neither PDF is tracked here. Fetch your own copies into the git-ignored `docs/references/`; [docs/references/README.md](docs/references/README.md) records the versions and SHA-256 sums. Mirrors of the source references can be fetched into `external/`; see [external/README.md](external/README.md).
+Neither PDF is tracked here. Fetch your own copies into the git-ignored `docs/references/`. [docs/references/README.md](docs/references/README.md) records the versions and SHA-256 sums. Mirrors of the source references can be fetched into `external/`. See [external/README.md](external/README.md).
 
 ## Licensing and provenance
 

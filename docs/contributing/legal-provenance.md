@@ -302,6 +302,16 @@ individually inventoried below: both `usbehci.sys` builds (the periodic
 (import and load-gate work), and a function driver, `ax88772.sys` (a Phase 8
 behaviour question).
 
+One more package has been read at the file level only: `nusb36e.exe` (NUSB
+3.6, public download, kept git-ignored in `tools/` beside the 3.3 package).
+Method static throughout: its files were extracted, hashed and
+version-stamped, and its INFs read, to establish that its USB 2.0 stack is
+byte-identical to 3.3's; nothing in it was disassembled.
+`docs/usb-xhci-info/usbport-miniport-interface.md` section 5 records the
+comparison. The one runtime observation involving it (a 2026-09-01 VM pass)
+was taken through this project's own driver counters, not from the package's
+binaries.
+
 Where those copies came from, since "read as installed" is not the whole
 story: NUSB's binaries from the publicly-distributed `nusb33e.exe` package;
 Windows 98 SE binaries from the installed guest; and the Windows 2000 SP4 and

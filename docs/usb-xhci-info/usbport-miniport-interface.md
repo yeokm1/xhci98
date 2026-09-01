@@ -286,6 +286,22 @@ narrower than it first appears: 3.3 ships MS Win98 SE QFE builds of
 `user.exe`/`user32.dll`/`systray.exe` (not the WinMe-derived set 3.6 is
 criticized for, and no `sysdm.cpl`), but it is not core-file-clean either.
 
+The 3.6 package was compared file for file on 2026-09-01 (`nusb36e.exe`,
+992768 bytes, SHA256
+`42b13ce440cc6528600a7b085226050d855c50199ecde6cbd6f31cbf83a69621`, extracted
+the same way). Its `USBPORT.SYS`, `USBEHCI.SYS` and `USBHUB20.SYS` hash equal
+to the 3.3 package's, so every miniport-visible fact in the table below holds
+under 3.6 unchanged. The differences sit above the miniport: 3.6 adds a WinMe
+USB 1.1 stack (`OPENHCI.SYS`/`UHCD.SYS`/`USBD.SYS` 4.90.3000.1, `USBHUB.SYS`
+4.90.3002.1), an XP SP3 `USBCCGP.SYS` 5.1.2600.5585 (KB945436, a composite
+generic parent), `USB.INF` (OHCI/UHCI bindings only; nothing in the package
+matches `CC_0C0330`), and the WinMe `SYSDM.CPL`. Its `_NUSB.INF` copies all of
+those unconditionally, so on a 3.6 machine the driver package's no-overwrite
+`usbd.sys`/`usbhub.sys` copies are pre-empted by the WinMe pair. One VM pass
+(2026-09-01, a 2a-fresh clone) ran HID and mass storage cleanly in that
+configuration; 3.3 remains the version the project installs and tests
+against.
+
 The project installs NUSB 3.3 in full anyway. It is the environment end users
 will run, the replacements are MS SE hotfix builds, and a pre-install VM
 snapshot covers rollback (`docs/contributing/build-and-test.md`).

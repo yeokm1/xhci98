@@ -46,7 +46,7 @@ body:
     id: build
     attributes:
       label: Which build is installed
-      description: RELEASE unless a maintainer asked you for the other one. If you are not sure, the Version tab of xhci98.sys shows a "debug" flag on the debug build. Either build answers XHCISNAP, so you do not need to change builds to send a report.
+      description: RELEASE unless a maintainer asked you for the other one. If you are not sure, the Version tab of xhci98.sys shows a "debug" flag on the debug build.
       options:
         - release
         - debug
@@ -79,6 +79,7 @@ body:
       description: This driver is only the controller layer; it needs the USB 2.0 stack already installed.
       options:
         - "Windows 98: NUSB 3.3 installed"
+        - "Windows 98: NUSB 3.6 installed"
         - "Windows 98: NUSB, some other version"
         - "Windows 98: no NUSB / not sure"
         - "Windows 2000: SP4's own stack"
@@ -123,43 +124,16 @@ body:
       description: |
         Boot **real DOS** (not a DOS box inside Windows) and run:
 
-            XHCIQUAL --probe-only --no-page --log PROBE.LOG
+            XHCIQUAL --probe-only --log probe.log
 
-        That is read-only - it takes ownership of nothing and writes no PCI
-        configuration register. Attach PROBE.LOG, or paste it here.
-      render: text
-    validations:
-      required: false
+        That step is read-only - it takes ownership of nothing and writes no
+        PCI configuration register. If it does not crash the machine, continue
+        with the full run:
 
-  - type: textarea
-    id: driver-log
-    attributes:
-      label: XHCISNAP report
-      description: |
-        The download carries XHCISNAP.EXE, in the XHCISNAP\
-        directory. It works the same on **both** Windows 98 and Windows 2000, and
-        it is what a report should carry - four steps, and none of them is
-        REGEDIT:
+            XHCIQUAL --log full.log
 
-            1.  XHCISNAP -verbosity 2
-            2.  restart the machine
-            3.  make the problem happen again
-            4.  XHCISNAP -o C:\MYDUMP
-
-        Then attach C:\MYDUMP.TXT, or paste it here. Attach C:\MYDUMP.BIN too if
-        you are asked for it. Run XHCISNAP -disable once you have sent it: while
-        the channel is on, anyone using the machine can read the driver's
-        diagnostic state through it.
-
-        It answers nothing about a crash - a machine that has blue-screened is
-        not running for anything to read. In that case the photo above is the
-        report, and this field stays empty.
-
-        **Step 1 is not optional.** The driver answers nothing until it is asked
-        to and reads that setting only when it starts, so a dump taken without
-        step 1 and the restart comes back correct and empty. The XHCISNAP\
-        readme.txt in the download explains the levels; level 2 is the one to
-        send.
+        Attach probe.log and full.log (whichever you got) to this report, or
+        paste them here.
       render: text
     validations:
       required: false

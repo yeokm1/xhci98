@@ -2708,6 +2708,18 @@ archives) so Phase 2a does not depend on a live download.
    plus `sysdm.cpl`, which makes System Properties wrongly report "Windows
    ME".
 
+   NUSB 3.6 does work with this driver, though. Checked 2026-09-01: the 3.6
+   package's `USBPORT.SYS`, `USBEHCI.SYS` and `USBHUB20.SYS` are byte-identical
+   to 3.3's (hashes match the ABI record), its INFs claim no `CC_0C0330`
+   device, and a 2a-fresh clone taken through uninstall-3.3, install-3.6 and a
+   reboot ran HID and mass storage cleanly, including formatting and file I/O
+   on a hot-plugged disk. What 3.6 changes is the layer above the miniport: it
+   places WinMe `usbd.sys` 4.90.3000.1 and `usbhub.sys` 4.90.3002.1 and an XP
+   `usbccgp.sys` (KB945436), which pre-empt this package's no-overwrite
+   `usbd98.sys`/`usbhub98.sys` copies. A VM observation only; project guests
+   stay on 3.3. (`docs/usb-xhci-info/usbport-miniport-interface.md` section 5
+   has the file comparison.)
+
    The full install is used because it is the environment end users of
    `xhci98.sys` will run, and a pre-install VM snapshot makes it reversible.
    (A USB-stack-only alternative, right-click-Install on just `USB2.INF`, was
