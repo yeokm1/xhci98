@@ -1479,7 +1479,7 @@ open.
 
 Tasks:
 
-- [ ] 18.1 Install a Windows ME guest by hand from the CD
+- [x] 18.1 Install a Windows ME guest by hand from the CD
   (`scripts\local\qemu-winme-install.cmd`), then a USB 2.0 stack. The
   Windows ME CD does not carry one: its `layout.inf` names the USB 1.1 stack
   only (`uhcd.sys`, `openhci.sys`, `usbd.sys`, `usbhub.sys`) and no
@@ -1489,10 +1489,37 @@ Tasks:
   2026-09-02 that Windows ME is observed under SweetLow's stack only, NUSB
   being a Windows 98 SE package, so the Microsoft `USB2.INF` NUSB carries is
   not tried on Windows ME.
-- [ ] 18.2 Install the driver through the INF (`prepare-image.ps1 -Target 2e
+  Done 2026-09-02: `vm\winme.img`, Windows ME OEM installed from the CD's
+  `\WIN9X\SETUP.EXE /p j` (ACPI HAL; Device Manager shows the PCI bus and the
+  controller), snapshot `winme-clean-install`. Two vehicle facts on the way,
+  both in `build-and-test.md`: the Windows ME CD's own `FORMAT C:` spun at
+  0 percent with nothing written, and the format was taken from the Windows
+  98 SE CD's boot floppy with the ME CD as a second CD-ROM instead; and every
+  guest-initiated restart wedged at the logo exactly as `lessons.md` records
+  for Windows 98 (LINT0 masked after the warm reset), so every restart was
+  a Start-menu shutdown and a cold launch. Observed first on the stock
+  stack, for the record: the package installs with no CD prompt and the
+  controller shows **Code 2** ("The NTKERN.VXD device loader(s) for this
+  device could not load the device driver") with the debug console at 0
+  bytes, `usbport.sys` being absent (snapshot
+  `winme-stock-stack-driver-attempt`). Then, from `winme-clean-install`,
+  SweetLow's `USB2.INF` right-click installed from the transfer drive with
+  no CD prompt.
+- [x] 18.2 Install the driver through the INF (`prepare-image.ps1 -Target 2e
   -Boot -Xfer -XferPackage`) and record the load: `DriverEntry`,
   `USBPORT_GetHciMn`, `StartController`, the root-hub callbacks, and which
   files the copy phase asked the CD for.
+  Observed 2026-09-02 on the SweetLow-stack guest: the copy phase asked for
+  no CD (the OEM Setup had put the CABs on the hard disk, so the engine had
+  `usbd.sys` and `usbhub.sys` locally; not read back with a `dir`); after a
+  cold start `out\phase10\prep-2e-debugcon.log` shows `DriverEntry`,
+  `USBPORT_GetHciMn=10000001`, `USBPORT_RegisterUSBPortDriver status=0`,
+  `StartController` with the QEMU controller's capabilities (8 USB2-only
+  ports, all managed), and the root-hub family (`RH_GetRootHubData`,
+  `RH_GetStatus`, `RH_GetPortStatus`, `RH_GetHubStatus`,
+  `RH_SetFeaturePortPower`, `RH_SetFeaturePortReset`, the change clears,
+  `RH_EnableIrq`/`RH_DisableIrq`); `-Status` read devices addressed 1,
+  slots enabled 1, endpoints opened 1: the keep-alive mouse bound.
 - [ ] 18.3 HID, mass storage and one composite device by hand, with the
   counters read the way the prep script reads them.
 - [ ] 18.4 Decide the tier and state it: `AGENTS.md` (purpose and the target
