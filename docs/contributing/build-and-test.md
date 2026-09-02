@@ -3636,8 +3636,12 @@ guest running SweetLow's stack, reverted to no driver and no `usbd.sys` or
 `usbhub.sys`, the Device Manager install from a package built this way
 raised "Insert Disk" naming the Windows 98 Second Edition CD-ROM, not the
 xhci98 disk; after the copy and a relaunch the root-hub callbacks followed
-`StartController` and the keep-alive mouse was bound. The NUSB-stack and
-Windows 2000 legs are recorded in the roadmap as they are taken.
+`StartController` and the keep-alive mouse was bound. The same evening, on a
+fresh clone of `win98.img @ post-nusb` (NUSB 3.3's stack) with the real
+1.0.0.1 package: the same CD prompt, the same load and root hub, and a
+hot-plugged two-interface `usb-audio` bound as "USB Composite Device" with
+"USB Audio Device" beneath it, no Code 2, so `usbhub.sys` arrived by the same
+route. The Windows 2000 leg is recorded in the roadmap when taken.
 
 What if the target already has the file? Leave it alone: flag `16`.
 `COPYFLG_NO_OVERWRITE` is "do not copy if file exists on target"

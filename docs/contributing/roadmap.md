@@ -1381,7 +1381,9 @@ this way raised the engine's own `Insert Disk` prompt naming the Windows 98
 Second Edition CD-ROM, not the xhci98 disk; after the copy and a relaunch the
 driver registered, `StartController` ran, the root-hub callbacks followed and
 the keep-alive mouse was addressed and bound, with the controller and the
-USB 2.0 Root Hub clean in Device Manager. The other two legs are still owed.
+USB 2.0 Root Hub clean in Device Manager. The NUSB-stack leg read the same
+later that evening, with the composite device bound as well (17.1b). The
+Windows 2000 leg is still owed.
 
 Why a phase: it changes the install procedure a user follows, the packaging
 scripts and gates, the provenance record, and every user-facing statement
@@ -1400,10 +1402,17 @@ Tasks:
   - [x] 17.1a Windows 98, SweetLow's stack, no driver, no `usbd.sys`, no
     `usbhub.sys`, CABs absent so the CD is asked for. Observed 2026-09-02, as
     above.
-  - [ ] 17.1b Windows 98, NUSB 3.3's stack (`win98.img @ post-nusb` cloned to
+  - [x] 17.1b Windows 98, NUSB 3.3's stack (`win98.img @ post-nusb` cloned to
     a new image), the same install, then one two-interface device attached
     once: "USB Composite Device" with the function beneath, not Code 2, which
-    is the `usbhub.sys` half of the route.
+    is the `usbhub.sys` half of the route. Observed 2026-09-02 on
+    `vm\layout-2a.img` with the real 1.0.0.1 qemu package on the transfer
+    drive: the install asked for the Windows 98 SE CD; after the relaunch
+    the 1.0.0.1 build loaded under NUSB's usbport (`USBPORT_GetHciMn=
+    57324B30`), `StartController` and the root-hub callbacks followed, the
+    keep-alive mouse was addressed and bound, and a hot-plugged `usb-audio`
+    appeared as "USB Composite Device" under Universal Serial Bus
+    controllers with "USB Audio Device" under Sound, all clean.
   - [ ] 17.1c Windows 2000 SP4 (`win2k.img @ phase2b-clean` cloned to a new
     image), Have Disk from the same package: no prompt, `usbd.sys`
     5.00.2195.6658 in `WINNT\SYSTEM32\DRIVERS`, the root hub up.

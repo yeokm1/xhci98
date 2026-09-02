@@ -39,20 +39,14 @@ this file says where each task stands and what the next session does first.
 
 ## What the next session does first
 
-1. **Task 17.1b, the NUSB leg.** `vm\layout-2a.img` is a clone of
-   `win98.img @ post-nusb` (NUSB 3.3, no driver, no `usbd.sys`, no
-   `usbhub.sys`), config entry `2a-layout` in the host's
-   `matrix.config.psd1` (Monitor 56597, so the prep monitor is 56697,
-   `pc,smm=off`). Boot it with
-   `prepare-image.ps1 -Target 2a-layout -Boot -Xfer`: since commit 00ae686
-   `out\pkg-qemu` is the real 1.0.0.1 qemu package (two files), so the
-   install is from `D:\` (the transfer drive's root), not from a
-   subdirectory. Expect the Insert Disk prompt for the Windows 98 CD; answer
-   it with `E:\WIN98` if it asks where to copy from. Shut down, relaunch,
-   check the root hub, then `-Attach audio` once (never twice:
-   `USBAUDIO.VXD` faults on a second arrival) and expect "USB Composite
-   Device" with the audio function beneath it, not Code 2. That is the
-   `usbhub.sys` half of the route.
+1. **Task 17.1b, the NUSB leg: done** later the same evening on
+   `vm\layout-2a.img` (config entry `2a-layout`, monitor 56597 + 100) with
+   the real 1.0.0.1 package from `out\pkg-qemu` on `D:\`: CD prompt,
+   1.0.0.1 build loaded under NUSB's usbport, root hub up, and the hot-plugged
+   `usb-audio` bound as "USB Composite Device" + "USB Audio Device". A first
+   attempt was contaminated by the old package (the guest was booted before
+   `out\pkg-qemu` had been rebuilt, and the driver installed from it); the
+   image was re-cloned with `-Clone -FreshCopy` and the leg redone.
 2. **Task 17.1c, the Windows 2000 leg.** `vm\layout-2b.img` is a clone of
    `win2k.img @ phase2b-clean`, config entry `2b-layout` (Monitor 56598).
    `prepare-image.ps1 -Target 2b-layout -Boot -Xfer`, Have Disk from `D:\`,
