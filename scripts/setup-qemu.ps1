@@ -13,6 +13,7 @@ param(
     [string]$VmDir = "",
     [string]$LocalScriptDir = "",
     [string]$Win98Iso = "",
+    [string]$WinMeIso = "",
     [string]$DiskSize = "4G",
     [string]$QemuBinDir = "",
     [string]$XhciDevice = "qemu-xhci",
@@ -81,6 +82,7 @@ Write-Step "Creating local directories"
 Ensure-Directory $VmDir
 Ensure-Directory $LocalScriptDir
 $diskImage = Join-Path $VmDir "win98.img"
+$winMeImage = Join-Path $VmDir "winme.img"
 $transferImage = Join-Path $VmDir "transfer.img"
 $usbDataImage = Join-Path $VmDir "usbdata.img"
 $xferDir = Join-Path $VmDir "xfer98"
@@ -101,6 +103,21 @@ if ($CreateDisk) {
         }
     } else {
         Write-Ok "Disk image already exists: $diskImage"
+    }
+
+    # The Windows ME image, only when that CD was named: an unasked-for image
+    # is one more file to explain. docs\contributing\build-and-test.md,
+    # "Windows ME target VM".
+    if (-not [string]::IsNullOrWhiteSpace($WinMeIso)) {
+        if (-not (Test-Path -LiteralPath $winMeImage)) {
+            if ($null -eq $qemuImg) {
+                Write-Warn "Skipping $winMeImage because qemu-img.exe is not available."
+            } else {
+                & $qemuImg create -f qcow2 $winMeImage $DiskSize | Out-Host
+            }
+        } else {
+            Write-Ok "Disk image already exists: $winMeImage"
+        }
     }
 
     if (-not (Test-Path -LiteralPath $transferImage)) {
@@ -164,6 +181,47 @@ Write-AsciiFile $installCmd @(
     "  -boot once=d ^",
     "  -action reboot=reset -no-shutdown ^",
     "  -monitor tcp:127.0.0.1:$MonitorPort,server=on,wait=off"
+)
+
+# The Windows ME install launcher: the Windows 98 one with that OS's CD and
+# image. Same setup engine, same /p j rule; the CD keeps setup under \WIN9X.
+# Written whether or not -WinMeIso was given, like the Windows 98 one, so the
+# placeholder can be edited by hand. Nothing about it has been exercised yet
+# (docs\contributing\build-and-test.md, "Windows ME target VM").
+$winMeInstallCmd = Join-Path $LocalScriptDir "qemu-winme-install.cmd"
+Write-AsciiFile $winMeInstallCmd @(
+    "@echo off",
+    "rem Windows ME install: the qemu-win98-install.cmd recipe with the Windows ME",
+    "rem CD and image. Same 16-bit setup engine, so the same rule: install with",
+    "rem the ACPI HAL or PCI never enumerates under QEMU. At the CD boot menu pick",
+    "rem ""Start computer with CD-ROM support"", then at the A:\ prompt: fdisk",
+    "rem (create+activate primary), reboot, format c:, then run",
+    "rem   D:\WIN9X\SETUP.EXE /p j    (setup is under \WIN9X on this CD, not \WIN98).",
+    "rem This launcher has not been exercised yet; see docs\contributing\build-and-test.md,",
+    "rem ""Windows ME target VM"".",
+    "set ""WINME_ISO=$WinMeIso""",
+    "if ""%WINME_ISO%""=="""" (",
+    "  echo Edit this file or set -WinMeIso when running setup-qemu.ps1.",
+    "  exit /b 1",
+    ")",
+    "if not exist ""%WINME_ISO%"" (",
+    "  echo Missing ISO: %WINME_ISO%",
+    "  exit /b 1",
+    ")",
+    "if not exist ""$winMeImage"" (",
+    "  echo Missing image: $winMeImage - run setup-qemu.ps1 -WinMeIso ... -CreateDisk",
+    "  exit /b 1",
+    ")",
+    """$qemuSystemCommand"" ^",
+    "  -machine pc ^",
+    "  -cpu pentium3 ^",
+    "  -m 256 ^",
+    "  -drive file=""$winMeImage"",format=qcow2,if=ide ^",
+    "  -device $XhciDevice,id=xhci ^",
+    "  -cdrom ""%WINME_ISO%"" ^",
+    "  -boot once=d ^",
+    "  -action reboot=reset -no-shutdown ^",
+    "  -monitor tcp:127.0.0.1:$($MonitorPort + 3),server=on,wait=off"
 )
 
 $runCmd = Join-Path $LocalScriptDir "qemu-win98-run.cmd"
@@ -250,6 +308,7 @@ Write-AsciiFile $netStorageTestCmd @(
 )
 
 Write-Ok "Wrote $installCmd"
+Write-Ok "Wrote $winMeInstallCmd"
 Write-Ok "Wrote $runCmd"
 Write-Ok "Wrote $usbTestCmd"
 Write-Ok "Wrote $netStorageTestCmd"

@@ -194,5 +194,30 @@
             Like     = '2b'
             CloneFrom = @{ Image = 'win2k.img'; Snapshot = 'phase2b-clean' }
         }
+        # THE WINDOWS ME TARGET (docs\contributing\build-and-test.md, "Windows
+        # ME target VM"). Installed by hand from a Windows ME CD into a new
+        # image, so it has no CloneFrom, and `PrepareOnly` keeps it out of both
+        # runs: prepare-image.ps1 drives it and nothing else boots it until it
+        # has been observed and given rows of its own. `Like = '2a'` makes the
+        # prep script treat it as the Windows 98 family (same setup engine,
+        # same SYSTEM32\DRIVERS, same wizard route), and `Cd` names its own CD
+        # image, which the Windows 98 CD cannot stand in for: the Windows ME
+        # CD keeps its CABs in \WIN9X. First driver install:
+        #   prepare-image.ps1 -Target 2e -Boot -Xfer -XferPackage
+        @{
+            Id       = '2e'
+            Name     = 'Windows ME'
+            Image    = 'winme.img'
+            Format   = 'qcow2'
+            Machine  = 'pc'
+            Cpu      = 'pentium3'
+            Memory   = 256
+            Accel    = ''
+            Monitor  = 55597
+            BootSeconds = 240
+            Like     = '2a'
+            PrepareOnly = $true
+            Cd       = 'D:\isos\winme.iso'
+        }
     )
 }

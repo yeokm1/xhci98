@@ -1257,6 +1257,74 @@ native SP4 stack, plus real spinlock contention. Win2000 Verifier still has no
 Deadlock Detection; the SMP stress run and static lock-order review remain
 separate, required checks.
 
+### Windows ME target VM (`2e`)
+
+Windows ME support was asked for by the project owner on 2026-09-02, after
+the SweetLow-stack work, and this is where it stands: nothing has run on
+Windows ME yet. No Windows ME guest exists, the driver has not been loaded
+there, and no document in this repository may say the driver supports it
+until a guest has been observed. What follows is what was established
+statically from the owner's Windows ME OEM CD image on 2026-09-02 (the
+`win9x\` directory's `PRECOPY1.CAB`, read with 7-Zip; nothing executed) and
+the recipe for the observation.
+
+Why it is expected to be close. Windows ME is the same 16-bit setup engine
+and the same VxD-hosted WDM model as Windows 98 SE, one WDM revision newer
+(1.05 against 1.0; `docs/usb-xhci-info/win98-wdm.md`), so the undecorated
+half of `src/xhci98.inf` is the half it reads. Nothing suggests Windows ME
+dropped an export Windows 98 SE had, but the import gate holds no Windows
+ME evidence, so the load itself is the first thing to observe. Both USB 2.0
+stacks the driver runs under on Windows 98 say they cover it: Microsoft's own
+`USB2.INF` that NUSB ships and SweetLow's edit of it both carry
+`; For Windows 98SE and Windows ME`. NUSB 3.3's own installer is written for
+Windows 98 SE, and whether it installs on Windows ME at all is not known
+here; SweetLow's `usb20_win9x.zip` is the natural first stack to try.
+
+What the CD says (static, file level):
+
+- Its `USB.INF` binds `PCI\CC_0C0300`, `PCI\CC_0C0310` and vendor-qualified
+  `CC_0C03` entries only, so `PCI\CC_0C0330` is unclaimed there exactly as it
+  is on the other two targets.
+- `layout.inf` places `usbd.sys` (22,928 bytes) and `usbhub.sys` (41,904
+  bytes) on disk 2, `BASE2.CAB`, with `usbccgp.sys` beside them; `ntkern.vxd`
+  is on disk 20. Its own `USB.INF` and `HIDDEV.INF` carry
+  `LayoutFile=Layout.inf, Layout1.inf, Layout2.inf`, so the route release
+  1.0.0.1 takes on Windows 98 (`LayoutFile=layout.inf` in `src/xhci98.inf`,
+  the OS supplying `usbd.sys` and `usbhub.sys` from its own source) is the
+  route that OS's own INFs use.
+- `USB\COMPOSITE` binds to `Composite.Dev`, whose `AddReg` is
+  `CommonClassParent.AddReg`: Windows ME's composite parent is `usbccgp.sys`,
+  not `usbhub.sys`. The `usbhub.sys` copy the Windows 98 install path makes
+  is therefore expected to be inert there, as it is under SweetLow's stack,
+  and harmless (flag 16 never replaces a file).
+
+The recipe, none of it run yet:
+
+1. Create the image and install the OS by hand. `scripts\setup-qemu.ps1
+   -WinMeIso <path> -CreateDisk` creates `vm\winme.img` and writes
+   `scripts\local\qemu-winme-install.cmd`, the Windows 98 install launcher
+   with the Windows ME CD and `\WIN9X` paths; the `/p j` (ACPI HAL) rule is
+   the same. Install the OS from the CD, then the USB 2.0 stack of choice.
+2. Add the `2e` target to your `matrix.config.psd1` from `config.sample.psd1`,
+   with `Cd` pointing at the Windows ME CD image.
+3. `powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2e -Boot
+   -Xfer -XferPackage`, then install the driver from the transfer drive as
+   for Windows 98. The prep script treats `2e` as the Windows 98 family
+   (`Like = '2a'`), attaches the target's own CD, and stages the whole qemu
+   package because of `-XferPackage`; `PrepareOnly = $true` keeps the target
+   out of both matrix runs until it has rows of its own.
+4. What to read: `DriverEntry`, `USBPORT_GetHciMn`, `StartController` and the
+   `RH_*` callbacks in `out\phase10\prep-2e-debugcon.log`, then `-Status`
+   with the keep-alive pointer bound (`endpoints opened` 1), then HID and
+   storage by hand. Whether the copy phase asks for the Windows ME CD for
+   `usbd.sys` and `usbhub.sys` is the first reading to take.
+
+Until that has been observed, Windows ME is not a target of any tier. What
+it becomes afterwards (a third first-class target with the full checkpoint
+tax `AGENTS.md` describes, or a supported-in-VM target stated the way
+Windows 2000's status is stated) is the owner's decision, recorded in
+`handoff.md` as open.
+
 ### Windows 2000 SMP Stress VM (Phase 2d)
 
 A third VM, separate from the 2b differential VM: Windows 2000 SP4 with two

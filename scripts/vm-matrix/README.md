@@ -200,6 +200,16 @@ recorded in `docs/contributing/lessons.md`; on that QEMU every Windows 98
 prep boot with the keep-alive pointer attached parks in the BIOS unless SMM
 is off.
 
+A fourth target, `2e`, is a Windows ME guest and is prepare-only. It is
+neither a Phase 10 image nor a clone: it is installed by hand from a Windows
+ME CD into `vm\winme.img`, its config entry carries `PrepareOnly = $true` so
+that neither run boots it, `Like = '2a'` so that `prepare-image.ps1` treats
+it as the Windows 98 family, and `Cd` naming its own CD image. The first
+driver install is `-Boot -Xfer -XferPackage`, which stages the whole qemu
+package the way a fresh target gets it. `docs/contributing/build-and-test.md`,
+"Windows ME target VM", is the recipe and records what is and is not known
+about that target: as of 2026-09-02, nothing has run on it.
+
 What this run is not: acceptance of the published release (that is
 `docs/using/release-acceptance-test.md`, by hand, from the download), a
 reading of the `release` binary, the qualifier, the log channel, Device

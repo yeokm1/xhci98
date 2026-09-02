@@ -313,6 +313,14 @@ comparison. The one runtime observation involving it (a 2026-09-01 VM pass)
 was taken through this project's own driver counters, not from the package's
 binaries.
 
+The Windows ME OEM CD image on the project owner's machine was read at the
+file level on 2026-09-02, for the Windows ME target question: `layout.inf`,
+`layout1.inf`, `layout2.inf`, `usb.inf` and `hiddev.inf` were extracted from
+its `win9x\PRECOPY1.CAB` with 7-Zip and read as text. Nothing was executed
+and nothing was disassembled, and no file from it is kept in this tree or
+under `tools/`. The facts are in `docs/contributing/build-and-test.md`,
+"Windows ME target VM".
+
 A further package has been read, statically and at run time, on 2026-09-02:
 SweetLow's USB 2.0 stack for Windows 98, `usb20_win9x.zip`, from the download
 link its author gave the project owner
