@@ -1400,7 +1400,7 @@ Tasks:
 - [x] 17.0 Record the decision in `legal-provenance.md` section 5 before any
   script changes, and point at it from `AGENTS.md`'s provenance bullet. Done
   2026-09-02 (`2256779`).
-- [ ] 17.1 Prove the mechanism in the VMs before changing the tree, with the
+- [x] 17.1 Prove the mechanism in the VMs before changing the tree, with the
   test package `vm\LAYOUT` (the `1.0.0.0` qemu binary and the INF with the
   four directive edits):
   - [x] 17.1a Windows 98, SweetLow's stack, no driver, no `usbd.sys`, no
@@ -1429,7 +1429,7 @@ Tasks:
     prompts the copy phase showed, and the file's version on disk, were not
     read back: the owner drove the install and reported none, and the root
     hub coming up is what proves `usbd.sys` arrived.
-- [ ] 17.2 The change, each check green before the next: the INF's four
+- [x] 17.2 The change, each check green before the next: the INF's four
   directive edits and its comments, `DriverVer` and `src/xhci_version.h` at
   `1.0.0.1`; the INF gate's `TGT-*` and `W98-*` families replaced by rules
   for the new shape (LayoutFile present, `usbd.sys` on both paths and
