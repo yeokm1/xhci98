@@ -76,9 +76,10 @@ needs no guest is done; what remains is the guest:
    `\WIN9X` on that CD. Then a USB 2.0 stack, which the CD does not carry
    (its `layout.inf` names `uhcd.sys`, `openhci.sys`, `usbd.sys` and
    `usbhub.sys` and no `usbport.sys`, `usbehci.sys` or `usbhub20.sys`):
-   Microsoft's own package is the `USB2.INF` and three drivers NUSB ships
-   ("For Windows 98SE and Windows ME"), installed by right-clicking that
-   INF from `tools\nusb-extracted`; SweetLow's is the other candidate.
+   SweetLow's stack, and only that one, by the owner's decision of
+   2026-09-02 (NUSB is a Windows 98 SE package). Right-click Install on
+   `SWEETLOW\USB2.INF` from the transfer drive (`-XferAdd vm\SWEETLOW`),
+   reboot.
 2. Add the `2e` entry from `config.sample.psd1` to the host config with `Cd`
    pointing at the Windows ME ISO, then `prepare-image.ps1 -Target 2e -Boot
    -Xfer -XferPackage` and the driver install from `D:\`. What to read is

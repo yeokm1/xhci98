@@ -1279,11 +1279,11 @@ CD carries none (its `layout.inf` names the USB 1.1 stack only, `uhcd.sys`,
 `openhci.sys`, `usbd.sys` and `usbhub.sys`, and no `usbport.sys`,
 `usbehci.sys` or `usbhub20.sys`). Both stacks the driver runs under on
 Windows 98 say they cover it: Microsoft's own `USB2.INF` that NUSB ships and
-SweetLow's edit of it both carry `; For Windows 98SE and Windows ME`. NUSB
-3.3's installer (`_NUSB.INF`) is written for Windows 98 SE, but the stack
-inside it is Microsoft's Windows 98 SE / ME package and installs by
-right-clicking its `USB2.INF`; SweetLow's `usb20_win9x.zip` is the other
-candidate.
+SweetLow's edit of it both carry `; For Windows 98SE and Windows ME`. The
+owner decided on 2026-09-02 that Windows ME runs SweetLow's stack only
+(`usb20_win9x.zip`, unpacked in `tools\sweetlow-extracted` and staged as
+`vm\SWEETLOW`): NUSB is a Windows 98 SE package, and the Microsoft
+`USB2.INF` it carries is not tried on Windows ME.
 
 What the CD says (static, file level):
 
@@ -1309,7 +1309,10 @@ The recipe, none of it run yet:
    -WinMeIso <path> -CreateDisk` creates `vm\winme.img` and writes
    `scripts\local\qemu-winme-install.cmd`, the Windows 98 install launcher
    with the Windows ME CD and `\WIN9X` paths; the `/p j` (ACPI HAL) rule is
-   the same. Install the OS from the CD, then the USB 2.0 stack of choice.
+   the same. Install the OS from the CD, then SweetLow's USB 2.0 stack
+   (right-click Install on `SWEETLOW\USB2.INF` from the transfer drive,
+   `prepare-image.ps1 -Target 2e -Boot -Xfer -XferAdd vm\SWEETLOW`, and
+   reboot).
 2. Add the `2e` target to your `matrix.config.psd1` from `config.sample.psd1`,
    with `Cd` pointing at the Windows ME CD image.
 3. `powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2e -Boot

@@ -1483,10 +1483,12 @@ Tasks:
   (`scripts\local\qemu-winme-install.cmd`), then a USB 2.0 stack. The
   Windows ME CD does not carry one: its `layout.inf` names the USB 1.1 stack
   only (`uhcd.sys`, `openhci.sys`, `usbd.sys`, `usbhub.sys`) and no
-  `usbport.sys`, `usbehci.sys` or `usbhub20.sys`. Microsoft's own USB 2.0
-  package for Windows 98 SE and ME is the `USB2.INF` and three drivers NUSB
-  ships ("For Windows 98SE and Windows ME"), installed by right-clicking
-  that INF; SweetLow's `usb20_win9x.zip` is the other candidate.
+  `usbport.sys`, `usbehci.sys` or `usbhub20.sys`. The stack is SweetLow's
+  (`vm\SWEETLOW`, the same files the `2a-sweetlow` guest runs), installed by
+  right-clicking its `USB2.INF` from the transfer drive: the owner decided on
+  2026-09-02 that Windows ME is observed under SweetLow's stack only, NUSB
+  being a Windows 98 SE package, so the Microsoft `USB2.INF` NUSB carries is
+  not tried on Windows ME.
 - [ ] 18.2 Install the driver through the INF (`prepare-image.ps1 -Target 2e
   -Boot -Xfer -XferPackage`) and record the load: `DriverEntry`,
   `USBPORT_GetHciMn`, `StartController`, the root-hub callbacks, and which
