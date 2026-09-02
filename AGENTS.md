@@ -328,7 +328,10 @@ rules that bind day-to-day work, and none of them is optional.
   machines. None is tracked; `legal-provenance.md` section 5 records the
   decision. **Do not extend the exception to a fourth file** without the same
   decision recorded there, and do not write "this project redistributes
-  nothing" anywhere.
+  nothing" anywhere. Decided 2026-09-02: the exception is withdrawn before
+  any upload, and release 1.0.0.1 has the OS supply both files instead
+  (`handoff.md`; `legal-provenance.md` section 5). Until that change lands,
+  this rule still binds anyone touching the packaging.
 - A fact may be tracked; the artifact it came from may not. Write facts in a
   form re-derivable without the artifact: the address, the instruction, the
   exact command, the page number and a short verbatim phrase. A claim a fresh

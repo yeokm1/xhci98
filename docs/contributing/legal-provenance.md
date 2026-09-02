@@ -520,6 +520,26 @@ all three files by SHA-256 in the assembled tree, deriving the list from
 `scripts/package/usbd-sources.expected` rather than naming them, so the bytes
 that would go up are gated the same way the install media has always been.
 
+On 2026-09-02 the project owner decided that this exception will not be
+used. Release 1.0.0.1 changes `src/xhci98.inf` so that the Windows setup
+engine copies `usbd.sys` and `usbhub.sys` from the operating system's own
+install source (`LayoutFile=layout.inf` in the INF's `[Version]` section:
+the CABs on the hard disk or the Windows 98 CD, and Windows 2000's own
+`driver.cab`), and the release download will then carry the driver's own
+files only. The plan is `handoff.md` at the repository root; the
+measurements that made it possible are in
+`docs/contributing/build-and-test.md`, "The SweetLow stack".
+
+Until that change lands, `scripts/package/make-release.ps1` still assembles
+the three files into an asset under `out/`, and no asset of any version has
+been uploaded. The first upload is intended to be 1.0.0.1, so the exception
+will never have carried anything. When the scripts change, this subsection,
+the three-file wording in `AGENTS.md` ("Third-Party Material and
+Provenance"), `releases/README.md` and
+`scripts/package/usbd-sources.expected` are rewritten in that same commit.
+Section 4's "Where those copies came from" paragraph stays: the files are
+still read statically for the ABI work.
+
 This note can look stale and is not. A version directory exists under
 `releases/`, `README.md` links a releases page, and this repository's prose
 calls a cut asset "published". None of the three is a distribution: a cut
