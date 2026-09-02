@@ -40,7 +40,7 @@ The driver needs a USB 2.0 stack (`usbport.sys` + `usbhub20.sys`) on the machine
 
 On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand**: the package carries no Microsoft file, so the install has Windows copy its own `usbd.sys` and `usbhub.sys` from the CD ("Insert Disk"), unless the Windows CABs are on the hard disk (`C:\WINDOWS\OPTIONS\CABS`, as on OEM and QuickInstall installs). A machine that ever had a USB 1.1 controller already has both files. Windows 2000 asks for nothing.
 
-- Optional but recommended: boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from the `XHCIQUAL\` folder. A controller reporting no legacy interrupt pin cannot be driven on either system and there is no software workaround, so find out before you install anything.
+Optional but recommended: boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from the `XHCIQUAL\` folder. A controller reporting no legacy interrupt pin cannot be driven on either system and there is no software workaround, so find out before you install anything.
 
 <img src="images/xhci98-xhciqual-basic.jpg" width="800">
 
