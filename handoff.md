@@ -164,7 +164,24 @@ the newest keyboard, so never hot-plug a `usb-kbd` before typing.
    "after uninstall" list (which names `usbd.sys` as left behind), and the
    sentence that a "cannot find usbd.sys" prompt wants the Windows CD, not
    the driver disk.
-7. `releases/history.md`: the 1.0.0.1 entry, stating that the driver code is
+7. The user-facing statement, in every place a user reads before
+   installing: `README.md` (the installation steps and the requirements
+   list), the generated readme.txt in `make-release.ps1` (sections 4 and 5,
+   and the "after uninstall" list), `docs/using/release-notes.md`
+   (Requirements, and a known-limitations entry), and
+   `docs/using/release-acceptance-test.md` (the install step). It says:
+   the package no longer carries `usbd.sys` or `usbhub.sys`; on an
+   xHCI-only Windows 98 machine the driver install copies them from the
+   Windows source, so **have the Windows 98 SE installation CD at hand**,
+   since Windows asks for it unless the CABs are on the hard disk
+   (`C:\WINDOWS\OPTIONS\CABS`, as on OEM and QuickInstall installs); answer
+   the "Insert Disk" prompt with the CD's `WIN98` folder; a machine that
+   ever had a USB 1.1 controller already has both files and is not asked;
+   Windows 2000 takes `usbd.sys` from its driver cache and asks for nothing.
+   The symptom of skipping it is also stated: the USB 2.0 Root Hub at Code 2
+   on Windows 98, the `0xc0000034` bugcheck naming usbhub20.sys on Windows
+   2000, both of which read as a driver fault and are not one.
+8. `releases/history.md`: the 1.0.0.1 entry, stating that the driver code is
    unchanged and only the install procedure moved. The `1.0.0.0` directory
    is never edited.
 
