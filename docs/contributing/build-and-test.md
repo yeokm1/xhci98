@@ -2753,9 +2753,18 @@ archives) so Phase 2a does not depend on a live download.
    in a DOS box shows the swap. The target runs with `Machine = 'pc,smm=off'`
    for the QEMU reason in the lessons entry next to that one. Still VM only,
    no matrix run; 3.3 remains the tested configuration and what the
-   acceptance test installs. Not measured yet: whether this stack idle-suspends
-   the controller without `DisableSelectiveSuspend` (its binary carries the
-   same value-name table, so the INF keeps writing it).
+   acceptance test installs. `DisableSelectiveSuspend` is still needed under
+   it, measured the same day with no keep-alive pointer attached: with the
+   value present, no `SuspendController` in four idle minutes and a
+   hot-plugged keyboard was addressed at once; with the value deleted
+   (`regedit /s` of a `"DisableSelectiveSuspend"=-` file, a clean shutdown,
+   a relaunch), `SuspendController` fired once shortly after start and a
+   keyboard hot-plugged afterwards was never seen (QEMU lists it at the port
+   with address 0, the driver's addressed count stays 0). The same behaviour
+   as NUSB's build, so the INF's global value stays. One QEMU trap on that
+   run: `sendkey` input follows the most recently added keyboard, so a USB
+   keyboard hot-plugged onto a suspended controller silently swallows every
+   keystroke until `device_del` removes it.
 
    The full install is used because it is the environment end users of
    `xhci98.sys` will run, and a pre-install VM snapshot makes it reversible.

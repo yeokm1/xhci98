@@ -171,7 +171,10 @@ HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1
 ; SuspendController inside seconds and a hot-plug is invisible; with it,
 ; SuspendController never fires at all, USBCMD reads 0x00000005 (R/S set) and a
 ; hot-plugged keyboard enumerates on its own - SlotsEnabled 1, DevicesAddressed
-; 1, wizard raised with no Refresh.
+; 1, wizard raised with no Refresh. **Measured again 2026-09-02 under
+; SweetLow's XP-lineage usbport (Windows 98 QuickInstall's stack)**: the same
+; two outcomes, so the value is needed for both Windows 98 lineages
+; (docs\contributing\build-and-test.md, "The SweetLow stack").
 ;
 ; **Three honest consequences, none of them hidden**:
 ;

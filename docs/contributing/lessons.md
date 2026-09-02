@@ -63,9 +63,14 @@ Inferred: the fault is in the 5.00.2195 usbport's own PnP stop handling on
 9x, since the two lineages differ there and nothing else in the sequence
 changed. Unknown: what exactly the 2195 build does after `RH_DisableIrq`;
 whether the fix is in the XP sources or in SweetLow's rebuild; bare-metal
-behaviour; the full device matrix under this stack; and whether the stack
-idle-suspends without `DisableSelectiveSuspend` (its binary carries the same
-Services\USB value-name table as NUSB's, so the INF keeps writing it).
+behaviour; and the full device matrix under this stack. Measured the same
+day: the stack idle-suspends without `DisableSelectiveSuspend` exactly as
+NUSB's does. Two boots with no keep-alive pointer: value present, no
+`SuspendController` in four idle minutes and a hot-plugged keyboard
+addressed at once; value deleted, `SuspendController` once shortly after
+start and a keyboard hot-plugged afterwards never seen (QEMU shows it at the
+port with address 0, the driver's addressed count stays 0). The INF's global
+value stays, for both lineages.
 
 Rule: a limitation attributed to "the Windows 98 USB stack" names a lineage,
 not an operating system, and the release notes now say which. When a
