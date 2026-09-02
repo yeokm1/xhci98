@@ -1,4 +1,4 @@
-# Handoff: release 1.0.0.1 (Phase 17 closed, Phase 18 open)
+# Handoff: release 1.0.0.1 (Phases 17 and 18 closed; upload owed)
 
 Rewritten 2026-09-02 on branch `1.0.0.1`, late in the session that executed
 the previous plan. The roadmap's Phase 17 and Phase 18 are the authority;
@@ -76,9 +76,12 @@ is decided (supported in VM, like Windows 2000; every document it names is
 edited) and 18.5 is therefore not applicable; the `1.0.0.1` history entry
 carries the Windows ME line (18.6's first half). The cut was made the same
 night (`1cad620`): `releases/1.0.0.1/` and `out\xhci98-1.0.0.1.zip`, every
-gate green. What remains of 18.7 is the acceptance test per target from
-that asset: Windows 98 with the CABs absent (the CD prompt) and present,
-Windows 2000, and Windows ME under SweetLow's stack. The plan as it was written,
+gate green. The install route was then checked from
+that asset on all three targets the same night (roadmap 18.7 has the
+readings) and the owner closed Phase 18. What remains is outside the
+roadmap: upload `out\xhci98-1.0.0.1.zip` as the GitHub release, then the
+post-release reminder, the nine-step acceptance test by hand from the
+published download. The plan as it was written,
 items 1 and 2 done, follows:
 
 1. Install Windows ME by hand: `scripts\setup-qemu.ps1 -WinMeIso

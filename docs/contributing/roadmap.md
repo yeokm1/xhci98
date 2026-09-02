@@ -1462,10 +1462,12 @@ every document that names the targets, and `1.0.0.1` cut carrying Phase 17's
 install change together with whatever Windows ME support that observation
 justifies.
 
-Status: written down 2026-09-02 at the owner's request, who decided the
-same day that Windows ME support is part of `1.0.0.1`, so the cut waits for
-it; not started on the Windows ME side. What
-needs no guest is done: the harness knows a prepare-only `2e` target
+Status: closed on 2026-09-02, the day it opened, by the owner: the
+Windows ME guest observed (18.1 to 18.3), the tier decided and stated
+(18.4), `1.0.0.1` cut (18.7) and its install route checked from the asset
+on all three targets. Written down that morning at the owner's request, who
+decided the same day that Windows ME support is part of `1.0.0.1`. What
+needed no guest was done first: the harness knows a prepare-only `2e` target
 (`scripts/vm-matrix/config.sample.psd1`, `prepare-image.ps1 -XferPackage`,
 `setup-qemu.ps1 -WinMeIso`), and `build-and-test.md`, "Windows ME target
 VM", records what the Windows ME OEM CD's own INFs say (its `USB.INF` leaves
@@ -1554,7 +1556,7 @@ Tasks:
   Done 2026-09-02: the Windows ME line is in the entry (under 18.4), and
   the cut is the same day the three dates already carried, so none moved;
   `make-release.ps1` checked that they agree.
-- [ ] 18.7 Cut `1.0.0.1` with `make-release.ps1` on the full flavour set,
+- [x] 18.7 Cut `1.0.0.1` with `make-release.ps1` on the full flavour set,
   every gate green, and run the release acceptance test on each target with
   the new procedure: Windows 98 once with the CABs absent so the CD prompt is
   exercised and once with them present; Windows 2000 once; Windows ME per
@@ -1562,7 +1564,23 @@ Tasks:
   The cut: done 2026-09-02 (`1cad620`), `releases/1.0.0.1/` and
   `out\xhci98-1.0.0.1.zip` (245,029 B), every gate green, the asset holding
   the two files per flavour, the two tools with their readmes and NOTICEs,
-  `LICENSE` and `readme.txt`, nothing else. The acceptance runs are owed.
+  `LICENSE` and `readme.txt`, nothing else. The published `xhci98.sys` is
+  byte-identical to `1.0.0.0`'s outside the link timestamps, the checksum
+  and the version resource (22 bytes in the release build, 21 in the debug
+  build), so what the release changes is the install route, and that is
+  what was run from the asset the same night, the owner at the console:
+  Windows 98 SE (a fresh `post-nusb` clone, NUSB's stack, no CABs): the
+  install from `R1001\RELEASE` asked for `usbd.sys` with the Windows 98 SE
+  CD prompt, and the cold boot after it raised the HID wizard for the
+  keep-alive mouse with the controller and "USB 2.0 Root Hub" clean;
+  Windows 2000 SP4 (a fresh `phase2b-clean` clone): no prompt, root hub and
+  HID mouse working; Windows ME (`winme-clean-install`, SweetLow's stack
+  installed first): the controller, "USB 2.0 Root Hub" and Human Interface
+  Devices clean on the cold boot after the install. The Windows 98 run with
+  the CABs present was not made: no image carries them, and 17.1b/17.1c and
+  the Windows ME leg cover the no-prompt path. The nine-step acceptance test
+  itself was not run here; it is the standing post-release reminder below,
+  taken from the published download.
 
 Checkpoint: a Windows ME guest boots the driver, the root hub comes up, a HID
 device and a mass-storage device work, and the tier is stated; and the asset
@@ -1578,7 +1596,7 @@ Records: `build-and-test.md` ("Windows ME target VM");
 This is not a phase, has no task id, and nothing in this repository closes
 it. It is the reminder the roadmap ends on.
 
-Once `out\xhci98-1.0.0.0.zip` is uploaded, run
+Once `out\xhci98-1.0.0.1.zip` is uploaded, run
 [`release-acceptance-test.md`](../using/release-acceptance-test.md) end to end,
 by hand, twice: on a freshly installed VM of the target, and on a physical
 machine. Take the release from the published download, not this tree, and
