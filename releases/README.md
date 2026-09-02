@@ -100,9 +100,8 @@ releases/
                          linked into it
 ```
 
-The upload set adds `usbd98.sys`, `usbd2k.sys` and `usbhub98.sys` to each of
-`release\` and `debug\` and changes nothing else; see "What actually gets
-uploaded" below.
+The upload set is this tree zipped, and since 1.0.0.1 adds nothing to it;
+see "What actually gets uploaded" below.
 
 That is the schema a release cut today has: the generated readme sends the
 reader to a licence, so the directory has to carry one, and the two tools are
@@ -126,81 +125,56 @@ neither rendered nor associated with anything and markdown syntax is just
 noise. Plain text, 78 columns, CRLF, pure ASCII. This file and `history.md`
 stay markdown: they are read here, in the repository.
 
-## These directories are not complete install media - the upload set is
+## These directories are complete install media, since 1.0.0.1
 
-`src\xhci98.inf` names five files in `[SourceDisksFiles]`, and only two of
-them are this project's own work:
+`src\xhci98.inf` names two files in `[SourceDisksFiles]`, and both are this
+project's own work: `xhci98.sys` and `xhci98.inf`. A version directory
+carries exactly those two per flavour, and so does the release download.
 
-| File | In `releases\<version>\` | In the GitHub release download | Why |
-|---|---|---|---|
-| `xhci98.sys` | yes | yes | this project's, GPL-2.0-only |
-| `xhci98.inf` | yes | yes | this project's, GPL-2.0-only |
-| `usbd98.sys` | no | yes | Windows 98 SE's own `usbd.sys` |
-| `usbd2k.sys` | no | yes | Windows 2000 SP4's own `usbd.sys` |
-| `usbhub98.sys` | no | yes | Windows 98 SE's own `usbhub.sys`; the Windows 98 install path only |
+Two files the driver depends on are not on the media, because they are the
+operating system's own: `usbd.sys` (`usbhub20.sys` imports it on both
+targets) and, on Windows 98, `usbhub.sys` (that system's composite parent).
+Nothing on an xHCI-only machine ever placed them, so the INF names
+`LayoutFile=layout.inf` and the Windows setup engine copies each from the
+OS's own install source, the CABs on the hard disk or the Windows 98 CD, and
+Windows 2000's `driver.cab`, never overwriting a file already there. On an
+xHCI-only Windows 98 machine the install therefore asks for the Windows 98
+SE CD; the generated `readme.txt` says so in its section 3.
 
-The last two columns differ by design. The last three files are Microsoft
-binaries, and `AGENTS.md` forbids tracking a third-party binary, so a version
-directory in this repository carries the driver and its INF and stops there.
-A user downloading a release needs all five, so the release download carries
-them and the repository does not. A release asset can be withdrawn; a git blob
-cannot be without rewriting history, so the asset was chosen over a tracked
-file. `docs/contributing/legal-provenance.md` section 5 records the
-decision.
-
-Note the tense: that describes the asset `make-release.ps1` assembles. No
-release has been uploaded yet, so it is a decided channel rather than one that
-has carried anything; section 5 of `legal-provenance.md` carries the status
-note. `usbhub98.sys` joined the two `usbd.sys` builds on the same grounds and
-by the same mechanism (task 13-E.1's remedy): composite devices do not bind on
-Windows 98 without it, and an xHCI-only machine never gets one from setup.
-
-Installing from a version directory in this repository as it stands will fail
-on a machine that has no `usbd.sys`, and it fails in a way that reads as a
-fault in this driver: `usbhub20.sys` imports `USBD.SYS` on both targets,
-nothing on an xHCI-only machine ever places it, and the missing import fails
-the root hub with `0xc0000034` naming `usbhub20.sys`. A downloaded release does
-not have this problem. From a clone, complete the media first:
+That is a change. From `0.0.0.4` to `1.0.0.0` the download carried three
+Microsoft files the tracked tree did not, `usbd98.sys`, `usbd2k.sys` and
+`usbhub98.sys` (the two `usbd.sys` builds and Windows 98 SE's `usbhub.sys`,
+renamed so that each install path reached only its own), by a decision
+`docs/contributing/legal-provenance.md` section 5 records and, since
+2026-09-02, records as withdrawn before any upload. The INF gate now refuses
+an INF or a package that names a Microsoft file (`OS-MEDIA`, `PKG-MSFILE`),
+so the download cannot drift back.
 
 ```
-powershell -ExecutionPolicy Bypass -File scripts\package\extract-usbd-sources.ps1 -Win98Iso <w98se.iso> -Win2KIso <win2ksp4.iso>
 powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor release
 ```
 
-That stages the per-target Microsoft builds from your own Windows install
-media (the two ISO arguments; without them the script has nothing to stage
-and says so) into `tools\`, checks each against
-`scripts\package\usbd-sources.expected` by SHA-256, and assembles the real
-package under `out\pkg-release\`: the driver, its INF, the two `usbd.sys`
-builds and Windows 98's composite parent `usbhub.sys`.
+assembles the same two files under `out\pkg-release\` with every gate run
+against them; installing from a version directory here is the same thing.
 
 ### What actually gets uploaded
 
 `make-release.ps1` produces two things, and only one of them is committed:
 
 - `releases\<version>\`: tracked, two files per flavour, what you see here.
-- `out\upload-<version>\` and `out\xhci98-<version>.zip`: git-ignored, the same
-  tree plus every Microsoft file `scripts\package\usbd-sources.expected` names
-  (`usbd98.sys`, `usbd2k.sys` and `usbhub98.sys`) in each flavour directory.
-  The zip is the GitHub release asset. It is the one of the two named after
-  the project because it is what a stranger downloads and has to recognise
-  afterwards; the directory is a workspace inside `out\`. The archive carries
-  no top-level directory, so its name is all the download says about itself
-  until it is unpacked.
+- `out\upload-<version>\` and `out\xhci98-<version>.zip`: git-ignored, the
+  same tree. The zip is the GitHub release asset. It is the one of the two
+  named after the project because it is what a stranger downloads and has to
+  recognise afterwards; the directory is a workspace inside `out\`. The
+  archive carries no top-level directory, so its name is all the download
+  says about itself until it is unpacked.
 
-Those three Microsoft files are copied out of the `out\pkg-<flavor>\`
-directories `make-package.ps1` had already authenticated, and are then
-re-checked by SHA-256 in the assembled upload tree, because the bytes that
-matter are the ones that go up, and a swap between `usbd98.sys` and
-`usbd2k.sys` is invisible after install (both are called `usbd.sys` on the
-target). Do not hand-assemble the asset; that check is the only thing standing
-between a swapped pair and a user whose root hub fails for the reason this
-mechanism exists to prevent.
-
-Each flavour directory in the upload set is therefore complete install media
-in its own right, the same shape as `out\pkg-<flavor>\`. All three files
-appear in both `release\` and `debug\`, because Windows resolves
-`[SourceDisksFiles]` relative to the INF and each directory has its own.
+The assembly gates each flavour directory as the install media it is
+(`check-inf.ps1 -PackageDir`: every file the INF names present, and no
+Microsoft file beside them), refuses a file the INF does not name, and
+writes the archive's entry names with forward slashes so that `unzip` on a
+Linux or macOS host unpacks it into directories. Do not hand-assemble the
+asset.
 
 ## release or debug
 

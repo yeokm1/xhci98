@@ -37,10 +37,22 @@ against a FRESH target - one whose config entry carries `CloneFrom` and
 pre-driver snapshot out of a Phase 10 image into a new file, and -Stamp takes
 the `base-<DriverVer>-qemu` snapshot the run checks before it boots anything.
 Between them the pass is the same as above: -Boot -Xfer (which on a fresh
-target stages the WHOLE qemu package, INF and usbd.sys included, because the
-guest has never had this driver), install by hand from the transfer drive,
+target stages the WHOLE qemu package, INF included, because the guest has
+never had this driver; the INF has the OS supply usbd.sys and usbhub.sys, so
+a Windows 98 prep boot needs the CD attached, which is what Win98Cd is for),
+install by hand from the transfer drive,
 -Attach each class, shut down.  docs\contributing\design\09-post-release-unattended-run.md
 section 8 is the procedure.
+
+THE WINDOWS ME TARGET (`2e` in config.sample.psd1) is neither a Phase 10
+image nor a fresh clone: it is installed by hand from a Windows ME CD into a
+new image, so it has no CloneFrom and -Clone/-Stamp do not apply. Its config
+entry says `Like = '2a'` (same setup engine, same SYSTEM32\DRIVERS, same
+wizard route as Windows 98), `PrepareOnly = $true` (no run boots it), and
+names its own CD in `Cd`. The first driver install is -Boot -Xfer
+-XferPackage, which stages the whole qemu package the way a fresh target gets
+it. docs\contributing\build-and-test.md, "Windows ME target VM", is the
+recipe.
 
 .EXAMPLE
 powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a -Boot
@@ -50,6 +62,8 @@ powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a -Shot
 powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-fresh -Clone
 powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-fresh -Boot -Xfer
 powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-fresh -Boot -Xfer -WorkDir C:\work
+powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-sweetlow -Boot -Xfer -XferAdd vm\SWEETLOW
+powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2e -Boot -Xfer -XferPackage
 powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-fresh -CopyBack
 powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-fresh -Stamp
 #>
@@ -81,6 +95,18 @@ param(
     # default: see the comment on $xferDir - it is the prime suspect for the
     # main-loop hangs, and a prep pass does not otherwise need it.
     [switch]$Xfer,
+    # Stage the WHOLE qemu package even though the target is not a fresh
+    # (CloneFrom) one. A guest installed by hand from an OS CD - the Windows
+    # ME target - has never seen the driver either, and its first install has
+    # to go through the INF the way a user's machine does.
+    [switch]$XferPackage,
+    # A directory whose contents are copied onto the transfer drive AFTER the
+    # package is staged, as a subdirectory named after it. For material the
+    # guest needs beside the driver and that the package must never carry -
+    # the first use is SweetLow's USB 2.0 stack under test (tools\sweetlow-
+    # extracted, issue #1), which a fresh 2a guest installs by right-clicking
+    # its USB2.INF. Third-party files stay out of out\pkg-qemu this way.
+    [string]$XferAdd = "",
     # Pin the device to a specific ROOT port - see the comment at the attach.
     [int]$AtPort = 0,
     # Comma-separated device names to attach AT BOOT, before the driver starts.
@@ -479,10 +505,11 @@ if ($Boot) {
         # image already has the driver installed and only needs the binary
         # replaced; a fresh one has never seen it, so the install goes through
         # the INF - which is the path a user's machine takes - and the INF
-        # delivers the per-target usbd.sys the base image was chosen not to
-        # carry.  The package directory is copied as make-package.ps1 laid it
+        # has the OS supply the usbd.sys the base image was chosen not to
+        # carry, which is why the CD is attached below (Win98Cd).  The
+        # package directory is copied as make-package.ps1 laid it
         # out, and the guest is pointed at the directory, never at a file.
-        if ($isFresh) {
+        if ($isFresh -or $XferPackage) {
             $pkgDir = Join-Path $repo "out\pkg-qemu"
             if (-not (Test-Path -LiteralPath (Join-Path $pkgDir "xhci98.inf"))) {
                 throw ("no qemu package at {0} (xhci98.inf missing). Build it with: scripts\build-driver.cmd qemu, then scripts\package\make-package.ps1 -Flavor qemu." -f $pkgDir)
@@ -506,7 +533,22 @@ if ($Boot) {
             $staged = $null
             Write-Warning ("no qemu build at {0} - build it with: scripts\build-driver.cmd qemu, then scripts\package\make-package.ps1 -Flavor qemu. Any XHCI98.SYS left on the transfer drive by an earlier run has been removed, so the drive carries no driver." -f $qemuSys)
         }
+        # The extra directory rides in a subdirectory so it can never shadow a
+        # package file, and the 8.3 name is what the guest will see it as.
+        if ($XferAdd -ne "") {
+            $addSrc = Resolve-RepoPath $XferAdd
+            if (-not (Test-Path -LiteralPath $addSrc)) { throw ("-XferAdd directory not found: {0}" -f $addSrc) }
+            $addName = (Split-Path -Leaf $addSrc)
+            if ($addName -notmatch '^[A-Za-z0-9_]{1,8}$') { throw ("-XferAdd directory name '{0}' is not a plain 8.3 name; Windows 98 reads the transfer drive as FAT" -f $addName) }
+            $addDst = Join-Path $xferDir $addName
+            if (Test-Path -LiteralPath $addDst) { Remove-Item -LiteralPath $addDst -Recurse -Force }
+            New-Item -ItemType Directory -Path $addDst -Force | Out-Null
+            Copy-Item -Path (Join-Path $addSrc "*") -Destination $addDst -Recurse -Force
+            Write-Host ("transfer drive also carries {0}\ from {1}:" -f $addName, $addSrc)
+            foreach ($f in (Get-ChildItem -LiteralPath $addDst -File)) { Write-Host ("  {0,-16} {1,9:N0} B" -f $f.Name, $f.Length) }
+        }
     }
+    if ($XferAdd -ne "" -and -not $Xfer) { throw "-XferAdd needs -Xfer; there is no transfer drive to add to otherwise" }
 
     $args = @(
         "-name", ("xhci98 image prep - " + $Target),
@@ -566,6 +608,10 @@ if ($Boot) {
     $cd = ""
     if ($isWin98) {
         $candidates = @()
+        # A target may name its own CD (`Cd` in its config entry): the Windows
+        # ME target's, which the Windows 98 CD cannot stand in for. The
+        # config-wide Win98Cd is the fallback for the Windows 98 family.
+        if ($tgt.ContainsKey('Cd') -and $tgt.Cd -ne '') { $candidates += (Resolve-RepoPath $tgt.Cd) }
         if ($cfg.ContainsKey('Win98Cd') -and $cfg.Win98Cd -ne '') { $candidates += (Resolve-RepoPath $cfg.Win98Cd) }
         # The in-repo path only.  `D:\isos\w98se.iso` used to sit here as a
         # second fallback, which is one host's layout committed as a default:
@@ -578,9 +624,9 @@ if ($Boot) {
         }
         if ($cd -ne "") {
             $args += @("-cdrom", $cd)
-            Write-Host ("Windows 98 SE CD attached: {0}  (its CABs are in \WIN98)" -f $cd)
+            Write-Host ("Windows CD attached: {0}  (Windows 98 SE keeps its CABs in \WIN98, Windows ME in \WIN9X)" -f $cd)
         } else {
-            Write-Host "NOTE: no Windows 98 SE CD image found. Set Win98Cd in the config."
+            Write-Host "NOTE: no Windows CD image found. Set Win98Cd in the config, or Cd on the target."
             Write-Host "      Without it a driver-install wizard can stall on a missing file:"
             Write-Host "      C:\WINDOWS\OPTIONS\CABS on this image does not carry all of them."
             Write-Host "      You can also insert one into a RUNNING guest from the monitor:"
@@ -607,14 +653,14 @@ if ($Boot) {
     Write-Host ("monitor : {0}" -f $port)
     Write-Host ("debugcon: {0}" -f $dbg)
     Write-Host ("pid     : {0}" -f $proc.Id)
-    if ($null -ne $staged -and $isFresh) {
+    if ($null -ne $staged -and ($isFresh -or $XferPackage)) {
         Write-Host ""
         Write-Host "transfer drive carries the qemu PACKAGE. In the guest, install it the way"
         Write-Host "readme.txt section 4 says for this target - point the wizard at the"
         Write-Host "transfer drive's root DIRECTORY, never at a loose file:"
         if ($isWin98) {
             Write-Host "  Device Manager -> the unclaimed xHCI controller -> Properties -> Driver ->"
-            Write-Host "  Update Driver -> Specify a location -> <xfer>:\   (the Windows 98 CD is attached)"
+            Write-Host "  Update Driver -> Specify a location -> <xfer>:\   (the Windows CD is attached)"
             Write-Host "  then RESTART the guest when asked, and confirm with -Status after the restart."
         } else {
             Write-Host "  Device Manager -> the controller -> Properties -> Driver -> Update Driver ->"

@@ -514,6 +514,11 @@ $msg = ""; try { Select-RunTargets -Targets $allTargets -PostRelease $true -Requ
 Assert "a Phase 10 target named to the post-release run is refused" $true ($msg -match "Phase 10's images")
 $msg = ""; try { Select-RunTargets -Targets $allTargets -PostRelease $false -Requested @('2c') | Out-Null } catch { $msg = $_.Exception.Message }
 Assert "an unknown target names the pool"               $true ($msg -match 'matched no target' -and $msg -match '2a, 2b')
+$prepE = @{ Id = '2e'; Like = '2a'; Image = 'winme.img'; PrepareOnly = $true }
+Assert "a PrepareOnly target boots in neither run (ordinary)"     "2a,2b"    ((@(Select-RunTargets -Targets ($allTargets + $prepE) -PostRelease $false) | ForEach-Object { $_.Id }) -join ",")
+Assert "a PrepareOnly target boots in neither run (post-release)" "2a-fresh" ((@(Select-RunTargets -Targets ($allTargets + $prepE) -PostRelease $true) | ForEach-Object { $_.Id }) -join ",")
+$msg = ""; try { Select-RunTargets -Targets ($allTargets + $prepE) -PostRelease $false -Requested @('2e') | Out-Null } catch { $msg = $_.Exception.Message }
+Assert "a PrepareOnly target named with -Target is refused"       $true     ($msg -match 'PrepareOnly' -and $msg -match 'prepare-image')
 $msg = ""; try { Select-RunTargets -Targets @($plainA, $plainB) -PostRelease $true | Out-Null } catch { $msg = $_.Exception.Message }
 Assert "a config with no fresh target says how to add one" $true ($msg -match 'no fresh \(CloneFrom\) targets' -and $msg -match 'config.sample.psd1')
 

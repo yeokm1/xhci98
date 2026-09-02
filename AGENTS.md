@@ -33,10 +33,22 @@ VM, the SMP stress environment, the device matrix), not by metal. Do not write
 bare-metal Windows 98 result as covering Windows 2000.
 `docs/using/release-notes.md` states it under "What this is".
 
+Windows ME is a third target of that same standing, supported in virtual
+machines, since the owner's decision of 2026-09-02: one QEMU guest, under
+SweetLow's USB 2.0 stack only (its stock USB stack has no `usbport.sys`, so
+on a stock machine the driver installs and shows Code 2), the driver
+registered and started, and a HID mouse, a mass-storage device and a
+composite audio device bound. It carries no checkpoint tax: no phase waits
+on a Windows ME observation and "observed on both" does not include it. It
+has never run on real hardware. `docs/contributing/build-and-test.md`,
+"Windows ME target VM", is the record.
+
 Neither OS has xHCI support. Windows 98 shipped with UHCI/OHCI (USB 1.1) and
-got EHCI (USB 2.0) only through later back-ports, the Win2000-derived stack in
-NUSB; Windows 2000 got that same stack natively in SP4. This driver fills the
-gap for both.
+got EHCI (USB 2.0) only through later back-ports: the Win2000-derived stack in
+NUSB, which is what the project tests against, and SweetLow's XP-derived
+rebuild of the same stack that Windows 98 QuickInstall bundles, which the
+driver has also been observed running under; Windows 2000 got the Win2000
+stack natively in SP4. This driver fills the gap for both.
 
 ---
 
@@ -46,8 +58,9 @@ gap for both.
 |---|---|
 | Primary targets | Windows 98 SE (4.10.2222) and Windows 2000 SP4 - one binary, both required |
 | Secondary targets | 32-bit Windows XP (best-effort) - one binary, accommodate it where the change is small and low-risk, but do not compromise either primary target or add checkpoint waits for it. Its registration packet is statically compatible, but runtime support remains unvalidated; see `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" |
+| Supported in VM | Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax. Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM" |
 | USB scope | USB 2.0 (HS/FS/LS) only; HID, mass storage, USB Ethernet, and USB Audio validation targets. USB 3.0 SuperSpeed is out of scope (see `docs/usb-xhci-info/xhci-programming.md`, "What SuperSpeed Support Would Require") |
-| Integration model | `usbport.sys` miniport (Option A) - reuse the Win2000-derived USB 2.0 stack shipped in NUSB; do not re-implement the USB stack |
+| Integration model | `usbport.sys` miniport (Option A) - reuse the USB 2.0 stack already on the target (NUSB's Win2000-derived build, SP4's native one, or SweetLow's XP-derived rebuild on Windows 98); do not re-implement the USB stack |
 | Compiler | MSVC 6.0, run in place from `tools/MSVC600` (unpacked from `tools/MSVC600.zip`) |
 | DDK | Windows 2000 DDK, unpacked into `tools/ntddk` (from `tools/WIN2KDDK.EXE`). Both toolchains live in the repo and install nothing machine-wide; every script finds them relative to itself, and `DDKROOT`/`MSVC6` override |
 | Language | C (C89/C90 compatible with MSVC 6.0) |
@@ -109,11 +122,11 @@ LICENSE         The license text and its scope note.
 
 Everything above is tracked except `tools/`, `external/`, the PDFs in
 `docs/references/`, `vm/`, `out/` and `scripts/local/`: third-party material,
-generated output, or host-specific tooling. Three files under `tools/` do go
-into the release download, though never into git; "Third-Party Material and
-Provenance" below names them. Nothing has been uploaded yet: the repository is
-private and no GitHub release exists, so that is a decided channel rather than
-a used one. A clone therefore has every procedure but not every input; see
+generated output, or host-specific tooling. Nothing under `tools/` goes into
+the release download since 1.0.0.1; "Third-Party Material and Provenance"
+below has the record. Nothing has been uploaded yet: the repository is
+private and no GitHub release exists. A clone therefore has every procedure
+but not every input; see
 `docs/contributing/build-and-test.md` for what has to be fetched or rebuilt.
 
 ### Where to start
@@ -133,7 +146,9 @@ evidence is not rediscovered or contradicted.
 
 `xhci98.sys` is a `usbport.sys` miniport (Option A), not a standalone HCD. It
 plugs in below Microsoft's `usbport.sys` in the same way `usbehci.sys` and
-`usbuhci.sys` do, reusing the Win2000-derived USB 2.0 stack that ships in NUSB.
+`usbuhci.sys` do, reusing the USB 2.0 stack already on the target: on Windows
+98 the Win2000-derived one NUSB ships (or SweetLow's XP-derived rebuild), on
+Windows 2000 SP4's own.
 
 ```
   [usbhub.sys]  <- OS hub driver (REUSED, unchanged)
@@ -272,16 +287,21 @@ registration failure. `build-driver.cmd` runs the INF gate on every build for
 that reason, including the Win98-parser traps its engine reports as nothing
 at all.
 
-The media also carries a per-target `usbd.sys` (`usbd98.sys`/`usbd2k.sys`),
-each reachable only from its own install path and never overwriting an
-existing file. Do not "simplify" that to one file: the wrong build loads
-rather than failing, so the split is checked by hash and by the INF gate's
-`TGT-*` rules. Build install media with `scripts\package\make-package.ps1`,
-never by hand-copying the `.sys` and `.inf`.
+The media carries no Microsoft file. `usbd.sys` (both targets) and
+`usbhub.sys` (Windows 98 only) are the OS's own, and nothing on an xHCI-only
+machine ever placed them, so the INF has the setup engine copy them from the
+OS's own install source through `LayoutFile=layout.inf`, never overwriting a
+file already there; on an xHCI-only Windows 98 machine that means the
+Windows 98 CD may be asked for. Do not put either file back on the media
+under any name: the INF gate's `OS-*` and `PKG-MSFILE` rules refuse it, and
+`legal-provenance.md` section 5 records why. Build install media with
+`scripts\package\make-package.ps1`, never by hand-copying the `.sys` and
+`.inf`.
 
 See `docs/contributing/build-and-test.md` for environment setup, QEMU
-configuration, the install procedure, the two model INFs, and "Carrying a
-per-target `usbd.sys`"; `docs/usb-xhci-info/win98-wdm.md` for the WDM API
+configuration, the install procedure, the two model INFs, and "The files the
+OS supplies: `usbd.sys` and `usbhub.sys`"; `docs/usb-xhci-info/win98-wdm.md`
+for the WDM API
 compatibility table and the "MSVC 6.0 / C89 Language Pitfalls" list.
 
 ---
@@ -318,13 +338,15 @@ rules that bind day-to-day work, and none of them is optional.
   the repository records where to fetch them: filename, version, SHA-256,
   URL, stated licence limit (`docs/references/README.md` is the pattern).
   Public availability of a document is not permission to rehost it.
-- The one distribution exception: the GitHub release download carries three
-  Microsoft files (`usbd98.sys`, `usbd2k.sys`, `usbhub98.sys`), the target
-  OSes' own binaries that make a download a complete install set on xHCI-only
-  machines. None is tracked; `legal-provenance.md` section 5 records the
-  decision. **Do not extend the exception to a fourth file** without the same
-  decision recorded there, and do not write "this project redistributes
-  nothing" anywhere.
+- The release download carries no Microsoft file. From 0.0.0.4 to 1.0.0.0
+  the assembled asset carried three (`usbd98.sys`, `usbd2k.sys`,
+  `usbhub98.sys`), by a decision `legal-provenance.md` section 5 records, and
+  that was withdrawn on 2026-09-02 before any upload: release 1.0.0.1 has the
+  OS supply both files through the INF's `LayoutFile`. **Do not put a
+  Microsoft file back onto the media, under any name, without a decision
+  recorded there**, and do not write "this project redistributes nothing"
+  anywhere: the two tool executables carry statically linked runtimes
+  (section 2a).
 - A fact may be tracked; the artifact it came from may not. Write facts in a
   form re-derivable without the artifact: the address, the instruction, the
   exact command, the page number and a short verbatim phrase. A claim a fresh

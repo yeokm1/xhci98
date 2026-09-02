@@ -1,7 +1,7 @@
 # xhci98 - Release Notes
 
-This file describes package version `1.0.0.0`
-(`DriverVer=08/30/2026,1.0.0.0`), the first release. Where this file and
+This file describes package version `1.0.0.1`
+(`DriverVer=09/02/2026,1.0.0.1`), the second release. Where this file and
 `docs/contributing/roadmap.md`, `docs/contributing/build-and-test.md` or
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
@@ -10,9 +10,10 @@ copy to fix.
 
 ## What this is
 
-`xhci98.sys` is a USB host controller driver that gives Windows 98 SE and
-Windows 2000 SP4 working USB on machines whose only USB controller is xHCI. One
-binary serves both, and the INF carries both install paths.
+`xhci98.sys` is a USB host controller driver that gives Windows 98 SE,
+Windows 2000 SP4 and Windows ME working USB on machines whose only USB
+controller is xHCI. One binary serves all three, and the INF carries both
+install paths (Windows ME reads the Windows 98 one).
 
 It is a miniport for `usbport.sys`, not a whole USB stack. It plugs in
 underneath Microsoft's USB port driver the same way the in-box `usbehci.sys`
@@ -30,7 +31,11 @@ virtual machines only: Windows 2000 Setup bugchecks on both physical machines
 this project has tried it on, so the driver has never run on Windows 2000 on
 real silicon. If you have Windows 2000 SP4 running on an xHCI machine, the
 driver is meant to work there and the install path is written for you, but
-you would be the first.
+you would be the first. Windows ME stands where Windows 2000 does: supported
+in virtual machines only, observed once (2026-09-02) under SweetLow's USB 2.0
+stack, the only stack it is supported with, with the driver loading and a
+HID mouse, a mass-storage device and a composite audio device binding. It
+has never run on real hardware either.
 
 ## What this is not
 
@@ -51,7 +56,12 @@ you would be the first.
   and `usbhub20.sys`. Without it the driver will not load, with no useful
   diagnostic. NUSB 3.3 is the version this project tests against. NUSB 3.6
   carries the same USB 2.0 stack byte for byte and has been observed working
-  with this driver (HID and mass storage, in a virtual machine only).
+  with this driver (HID and mass storage, in a virtual machine only). A third
+  option is SweetLow's USB 2.0 stack, the one Windows 98 QuickInstall 1.0.1
+  and later bundle: it is built from the newer Windows XP lineage of the same
+  port driver, and with it the disable, uninstall and upgrade crash listed
+  under "Known limitations" does not occur. HID and mass storage have been
+  run on it; it is not the tested configuration.
 - It does not write to your disk. The driver creates no file. Its log is read
   out of the running driver by `XHCISNAP.EXE` when you ask for a report; see
   "The log, and how to send one".
@@ -60,9 +70,10 @@ you would be the first.
 
 | | |
 |---|---|
-| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4. 32-bit Windows XP is accommodated where the cost is small, but nothing about it has been run. |
-| USB stack | Windows 98: NUSB 3.3, installed before this driver (NUSB 3.6 ships the identical USB 2.0 stack and has been observed working, in a virtual machine only). Windows 2000: SP4's native stack, or the standalone USB 2.0 update KB319973. **Do not install NUSB on Windows 2000.** |
+| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000) in virtual machines only, see "What this is". 32-bit Windows XP is accommodated where the cost is small, but nothing about it has been run. |
+| USB stack | Windows 98: NUSB 3.3, installed before this driver (NUSB 3.6 ships the identical USB 2.0 stack and has been observed working, in a virtual machine only; so has the SweetLow stack that Windows 98 QuickInstall 1.0.1 and later bundle, which also removes the first known limitation below; see the README's installation steps). Windows ME: SweetLow's stack only; its own USB stack has no `usbport.sys`, and on it the driver installs and shows Code 2. Do not install NUSB on Windows ME, it is a Windows 98 SE package. Windows 2000: SP4's native stack, or the standalone USB 2.0 update KB319973. **Do not install NUSB on Windows 2000.** |
 | Controller | An xHCI controller presenting PCI class code `0C0330`, with at least one USB 2.0 protocol port, a BAR0 mapped below 4 GB, and a legacy interrupt pin. Neither target has an MSI path, so a controller reporting `Interrupt Pin = 0` cannot be driven at all. |
+| Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk (`C:\WINDOWS\OPTIONS\CABS`). The install copies Windows' own `usbd.sys` and `usbhub.sys` from it. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the hard disk; the virtual machine tried asked for nothing. Windows 2000: nothing; `usbd.sys` comes from the driver cache every install has. |
 
 Run the qualifier before installing anything; it answers all three of the
 controller conditions in a single read-only pass.
@@ -96,24 +107,37 @@ and how to read each result.
 
 ## Installing
 
-The package is a directory holding five files: `xhci98.inf`, `xhci98.sys`,
-`usbd98.sys`, `usbd2k.sys` and `usbhub98.sys`.
+The package is a directory holding two files, `xhci98.inf` and
+`xhci98.sys`, and no Microsoft file.
 
-- Windows 98 SE: install NUSB 3.3 first. Then Device Manager -> the
-  unrecognised xHCI device -> *Update Driver* -> *Specify a location* -> the
-  package directory.
+- Windows 98 SE: install NUSB 3.3e or the newer SweetLow stack first, your
+  choice (README, installation steps). Then Device
+  Manager -> the unrecognised xHCI device -> *Update Driver* -> *Specify a
+  location* -> the package directory.
 - Windows 2000 SP4: Device Manager -> the unrecognised xHCI device ->
   *Update Driver* -> *Have Disk* -> the package directory.
+- Windows ME: SweetLow's stack first, and only that one (NUSB is a Windows
+  98 SE package): [usb20_win9x.zip](http://sweetlow.orgfree.com/download/usb20_win9x.zip)
+  from SweetLow's site, unzipped; right-click the `USB2.INF` at its root,
+  *Install*, reboot. Then the Windows 98 SE route above.
 
-**Do not hand-copy `xhci98.sys` and `xhci98.inf` and skip the rest.** The two
-`usbd.sys` builds on the media are Windows 98 SE's and Windows 2000 SP4's,
-carried under distinct names so each install path reaches only its own.
-`usbhub20.sys` imports `USBD.SYS` on both targets, and nothing on an xHCI-only
-machine ever places it, so a missing or wrong one fails the root hub with an
-error naming `usbhub20.sys`. `usbhub98.sys` is Windows 98 SE's own
-`usbhub.sys`, without which multi-interface (composite) devices do not bind;
-it is delivered on the Windows 98 path only. All three are copied with "do not
-overwrite", so a file already on the machine is left as it is.
+Two files the driver depends on are not in the package because they are
+Windows' own: `usbd.sys`, which `usbhub20.sys` imports on both targets, and
+on Windows 98 `usbhub.sys`, the driver for composite devices. Windows places
+its USB files only when Setup finds a USB controller it recognises, and an
+xHCI-only machine has none of them, so the INF asks Windows to copy each
+from its own installation source, and only if it is absent; a machine that
+ever had a USB 1.1 controller keeps its own files and is asked for nothing.
+
+On an xHCI-only Windows 98 machine that means an "Insert Disk" prompt naming
+the Windows 98 Second Edition CD-ROM during the copy, unless the Windows
+CABs are on the hard disk (OEM and Windows 98 QuickInstall installs). Insert
+the CD and click OK; if it then asks where to copy from, give it the CD's
+`WIN98` folder. Windows 2000 takes `usbd.sys` from its driver cache and asks
+for nothing. If the prompt is cancelled the driver still installs, but the
+USB 2.0 Root Hub sits at Code 2 (Windows 2000: a `0xc0000034` error naming
+`usbhub20.sys`); that reads as a fault in this driver and is not one. Put
+the CD in and install the driver again.
 
 `docs/contributing/build-and-test.md` has the full procedure, the recovery
 rungs, and the bootstrap path for a machine that has no working USB until this
@@ -192,6 +216,10 @@ because a user meets them through this driver.
   then use *Remove*. After an upgrade, right-click `xhci98.inf` -> *Install*
   to deliver the registry values the crashed phase did not. Windows 2000
   disables, re-enables, uninstalls and upgrades the same binary cleanly.
+  The crash belongs to NUSB's `usbport.sys`, the Windows 2000 build: with
+  SweetLow's XP-lineage build of the same stack (bundled in Windows 98
+  QuickInstall 1.0.1 and later) the same Windows 98 system disables,
+  re-enables, removes and reinstalls this driver without crashing.
 - Windows 2000: installing a newer package over an older one is refused
   ("A suitable driver for this device is already installed") because the
   setup engine records no driver date for this unsigned package. Delete the
@@ -233,6 +261,13 @@ because a user meets them through this driver.
   behind a High-Speed hub. Both readings are that system's audio stack, not
   this driver, which addressed the device and opened its endpoints each time
   Windows asked.
+- Windows 98 on an xHCI-only machine: the driver install asks for the
+  Windows 98 SE CD (an "Insert Disk" prompt naming the Windows 98 Second
+  Edition CD-ROM) unless the Windows CABs are on the hard disk. That is
+  Windows fetching its own `usbd.sys` and `usbhub.sys`, which the package
+  does not carry; see "Installing". Cancelling the prompt leaves the USB 2.0
+  Root Hub at Code 2 until the driver is installed again with the CD at
+  hand. Measured on 2026-09-02 in a virtual machine with no CABs on disk.
 
 ## Licensing
 
@@ -240,16 +275,10 @@ This driver's own source is under the GNU General Public License, version 2
 (`GPL-2.0-only`); see `LICENSE`. The full third-party material and provenance
 record is `docs/contributing/legal-provenance.md`.
 
-`xhci98.sys` and `xhci98.inf` are this project's own work. The other three
-files the INF names are Microsoft's, copied unmodified and renamed so each
-install path reaches exactly the one meant for it:
-
-| File on the media | What it is |
-|---|---|
-| `usbd98.sys` | Windows 98 SE's own `usbd.sys` |
-| `usbd2k.sys` | Windows 2000 SP4's own `usbd.sys` |
-| `usbhub98.sys` | Windows 98 SE's own `usbhub.sys` |
-
-None of the three is tracked in the project's source repository; from a clone
-they are staged from your own Windows install media by a script. See
-`docs/contributing/legal-provenance.md` section 5.
+`xhci98.sys` and `xhci98.inf` are this project's own work, and they are the
+whole package. The `usbd.sys` and `usbhub.sys` the install needs are
+Windows' own and are copied by Windows from your own installation source;
+nothing in the download is Microsoft's. (Release `1.0.0.0` carried the two
+`usbd.sys` builds and Windows 98 SE's `usbhub.sys` under other names; that
+was withdrawn before any upload. `docs/contributing/legal-provenance.md`
+section 5 has the record.)

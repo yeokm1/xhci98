@@ -33,6 +33,7 @@ body:
       label: Operating system
       options:
         - Windows 98 SE
+        - Windows ME
         - Windows 2000 SP4
         - Windows 2000, earlier than SP4
         - Windows XP, 32-bit

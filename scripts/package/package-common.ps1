@@ -1,131 +1,13 @@
 Set-StrictMode -Version 2.0
 
-# Shared reader for scripts\package\usbd-sources.expected - the manifest that
-# says which OS build belongs under which media name in the install package.
-#
-# Three tools read it and none of them may disagree: extract-usbd-sources.ps1
-# (what to stage), make-package.ps1 (what to copy under which name), and
-# check-inf.ps1 -PackageDir (what a staged package must contain). The file
-# identity check itself is the import gate's - see the dot-source below.
-
-. (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "evidence-common.ps1")
-
-$script:PackageTargets = @("win98", "win2000")
-
-function Get-UsbdSourceManifestPath {
-    return (Join-Path $PSScriptRoot "usbd-sources.expected")
-}
-
-function Read-UsbdSourceManifest {
-    param(
-        [string]$Path,
-        [string]$RepoRoot
-    )
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        throw "per-target source manifest not found: $Path"
-    }
-
-    $rows = @()
-    $mediaSeen = @{}
-    $targetSeen = @{}
-    $hashSeen = @{}
-    $lineNo = 0
-
-    foreach ($raw in Get-Content -LiteralPath $Path) {
-        $lineNo++
-        $line = $raw.Trim()
-        if ($line -eq "" -or $line.StartsWith("#")) {
-            continue
-        }
-
-        $fields = $line -split "\s+", 7
-        if ($fields.Count -lt 6) {
-            throw "$Path line ${lineNo}: expected 'MEDIA-NAME TARGET SOURCE VERSION LENGTH SHA256 [note]'"
-        }
-
-        $media = $fields[0]
-        if ([System.IO.Path]::GetFileName($media) -cne $media) {
-            throw "$Path line ${lineNo}: MEDIA-NAME must be a bare file name"
-        }
-        # The media name lands in [SourceDisksFiles] and is read by Win98's
-        # parser, which reports a non-8.3 name as a missing file.
-        if ($media -notmatch '^[^.\\/:*?"<>|]{1,8}(\.[^.\\/:*?"<>|]{1,3})?$') {
-            throw "$Path line ${lineNo}: MEDIA-NAME '$media' is not an 8.3 name"
-        }
-
-        $target = $fields[1].ToLower()
-        if ($target -notin $script:PackageTargets) {
-            throw "$Path line ${lineNo}: TARGET must be one of $($script:PackageTargets -join ', ')"
-        }
-
-        $source = $fields[2]
-        if ([System.IO.Path]::IsPathRooted($source) -or $source -match "\.\.") {
-            throw "$Path line ${lineNo}: SOURCE must be relative to the repository root and must not escape it"
-        }
-
-        $length = Assert-ManifestIdentityFields -Path $Path -LineNo $lineNo `
-            -Version $fields[3] -Length $fields[4] -Sha256 $fields[5]
-
-        $mediaKey = $media.ToLower()
-        if ($mediaSeen.ContainsKey($mediaKey)) {
-            throw "$Path line ${lineNo}: duplicate MEDIA-NAME '$media'"
-        }
-        $mediaSeen[$mediaKey] = $true
-
-        # A target may name MORE THAN ONE source file, and did not until
-        # by batch 13-E. This manifest was written when usbd.sys was the only
-        # per-target file, so "one row per target" and "one row per destination"
-        # were the same sentence; batch 13-E added Windows 98's composite parent
-        # usbhub.sys and they stopped being. What the rule protected - two rows
-        # claiming the same destination on the same target, which would make the
-        # staged source ambiguous - is caught downstream and better: media names
-        # are unique here (above), and scripts\inf-gate\check-inf.ps1's TGT-DUP
-        # and W98-DUP fail an install path that names a file more than once.
-        # The at-least-one rule below is the half worth keeping and is untouched.
-        $targetSeen[$target] = $true
-
-        # Two media names carrying one binary is a manifest error rather than a
-        # staging surprise. **Across targets** it makes the whole split
-        # pointless and silently reintroduces the single-file failure the split
-        # exists to prevent; **within one target** - possible since batch 13-E,
-        # when a target stopped being limited to one row - it is a row that was
-        # copy-pasted and half-edited, which stages the same file under two
-        # names and delivers the wrong one to a destination that will load it.
-        # The message names both readings, because it used to name only the
-        # first and the second is now the likelier mistake.
-        $hashKey = $fields[5].ToUpper()
-        if ($hashSeen.ContainsKey($hashKey)) {
-            throw "$Path line ${lineNo}: '$media' has the same SHA256 as '$($hashSeen[$hashKey])'. Two media names may not carry one build - across targets that defeats the per-target split, and within one target it is a half-edited copy of the other row."
-        }
-        $hashSeen[$hashKey] = $media
-
-        $note = ""
-        if ($fields.Count -eq 7) {
-            $note = $fields[6]
-        }
-
-        $rows += [pscustomobject]@{
-            Media    = $media
-            Target   = $target
-            Relative = $source
-            Path     = (Join-Path $RepoRoot $source)
-            Label    = "$media (from $source)"
-            Version  = $fields[3]
-            Length   = $length
-            Sha256   = $hashKey
-            Note     = $note
-        }
-    }
-
-    foreach ($t in $script:PackageTargets) {
-        if (-not $targetSeen.ContainsKey($t)) {
-            throw "$Path names no source file for target '$t'; both first-class targets need one"
-        }
-    }
-
-    return $rows
-}
+# Shared pieces of the two packaging scripts: the media-layout reader that
+# keeps make-package.ps1 and make-release.ps1 on check-inf.ps1's own parse of
+# [SourceDisksFiles], the binary-versus-INF version comparison, and the
+# flavour-marker reader. Until release 1.0.0.1 this file also read
+# usbd-sources.expected, the manifest of the Microsoft files the media then
+# carried; the media carries none now (the OS supplies usbd.sys and
+# usbhub.sys through the INF's LayoutFile), so there is nothing to
+# authenticate and the reader is gone with the manifest.
 
 function Read-MediaLayout {
     # Reads what check-inf.ps1 -EmitMediaLayout wrote: the place each
@@ -163,43 +45,6 @@ function Read-MediaLayout {
         throw "$Path names no media files; the INF's [SourceDisksFiles] is empty or was not parsed"
     }
     return $layout
-}
-
-function Get-UsbdSourceValidationErrors {
-    # Checks the staged *source* files (under tools\), before packaging.
-    param(
-        [object[]]$Rows,
-        [switch]$SkipMissing
-    )
-    return Get-FileIdentityErrors -Rows $Rows -SkipMissing:$SkipMissing
-}
-
-function Get-PackagedFileValidationErrors {
-    # Checks a staged *package* directory: each media name must be present and
-    # be the build its manifest row names. This is the check that catches a
-    # swap - the one failure the split cannot detect on the target, because
-    # both files are called usbd.sys once installed.
-    param(
-        [object[]]$Rows,
-        [string]$PackageDir,
-        [hashtable]$MediaPaths
-    )
-    return Get-FileIdentityErrors -Rows @(
-        $Rows | ForEach-Object {
-            $path = Join-Path $PackageDir $_.Media
-            $mediaKey = $_.Media.ToLowerInvariant()
-            if ($null -ne $MediaPaths -and $MediaPaths.ContainsKey($mediaKey)) {
-                $path = $MediaPaths[$mediaKey]
-            }
-            [pscustomobject]@{
-                Path    = $path
-                Label   = "$($_.Media) (the $($_.Target) build)"
-                Version = $_.Version
-                Length  = $_.Length
-                Sha256  = $_.Sha256
-            }
-        }
-    )
 }
 
 # ------------------------------------------------------------------

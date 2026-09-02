@@ -1,0 +1,74 @@
+==============================================================================
+                          x h c i 9 8   1.0.0.1
+                    THIRD-PARTY NOTICES FOR XHCIQUAL.EXE
+==============================================================================
+
+XHCIQUAL.EXE is built from this project's own C and assembly sources, which
+are under the GNU GPL v2 - see the LICENSE file in the directory above.
+
+It is linked as a DOS/32 Advanced DOS Extender (LE-style) executable. That
+means the extender itself is embedded in the EXE as its stub, so the tool is a
+single standalone file with no separate extender to carry. The Open Watcom C
+runtime is statically linked in as well. Neither is this project's code, and
+each carries its own terms. Below, the DOS/32 Advanced DOS Extender licence is
+reproduced in full; for the Open Watcom runtime, what is recorded is the
+linkage, the copyright lines its linker writes, and the name of its licence.
+
+
+------------------------------------------------------------------------------
+ DOS/32 Advanced DOS Extender
+------------------------------------------------------------------------------
+
+This product uses DOS/32 Advanced DOS Extender technology.
+
+DOS/32 Advanced DOS Extender Software License
+
+Copyright (C) 1996-2006 by Narech K. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+this list of conditions and the following disclaimer in the documentation
+and/or other materials provided with the distribution.
+
+3. The end-user documentation included with the redistribution, if any, must
+include the following acknowledgment:
+
+"This product uses DOS/32 Advanced DOS Extender technology."
+
+Alternately, this acknowledgment may appear in the software itself, if and
+wherever such third-party acknowledgments normally appear.
+
+4. Products derived from this software may not be called "DOS/32A" or
+"DOS/32 Advanced".
+
+THIS SOFTWARE AND DOCUMENTATION IS PROVIDED "AS IS" AND ANY EXPRESSED OR
+IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO
+EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY DIRECT,
+INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+------------------------------------------------------------------------------
+ Open Watcom C runtime
+------------------------------------------------------------------------------
+
+XHCIQUAL.EXE statically links modules from the Open Watcom C runtime library
+(clib3r.lib); XHCIQUAL.MAP beside this file names them individually. The
+Open Watcom linker records its own copyright at the head of that map:
+
+  Copyright (c) 2002-2026 The Open Watcom Contributors. All Rights Reserved.
+  Portions Copyright (c) 1985-2002 Sybase, Inc. All Rights Reserved.
+
+Open Watcom is distributed under the Sybase Open Watcom Public License. What
+this file records is the linkage and the copyright above; the project's full
+provenance record is docs\contributing\legal-provenance.md, section 2a.

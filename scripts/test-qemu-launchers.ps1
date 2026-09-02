@@ -177,6 +177,37 @@ try {
                 "the Win2000 SMP $leaf launcher does not carry 2 vCPUs with the local APIC present."
         }
     }
+
+    # The Windows ME install launcher (build-and-test.md, "Windows ME target
+    # VM"): without -Win98Iso it boots the Windows ME CD alone; with it, the
+    # Windows 98 SE CD's floppy boots for the format (the Windows ME CD's own
+    # FORMAT never writes a sector under QEMU) and the Windows ME CD rides
+    # second, where SETUP is E:\WIN9X\SETUP.EXE.
+    $meLaunchers = Join-Path $work "launchers-winme"
+    New-Item -ItemType Directory -Path $meLaunchers | Out-Null
+    & (Join-Path $PSScriptRoot "setup-qemu.ps1") -VmDir $vm -LocalScriptDir $meLaunchers `
+        -QemuBinDir $bin -WinMeIso "C:\isos\winme.iso" | Out-Null
+    $mePath = Join-Path $meLaunchers "qemu-winme-install.cmd"
+    Assert-True (Test-Path -LiteralPath $mePath) "the Windows ME install launcher was not generated."
+    $meText = [System.IO.File]::ReadAllText($mePath)
+    Assert-True ($meText.Contains('-cdrom "%WINME_ISO%" ^') -and -not $meText.Contains("index=3")) `
+        "the Windows ME launcher without -Win98Iso does not boot the Windows ME CD alone."
+    Assert-True ($meText.Contains('set "WINME_ISO=C:\isos\winme.iso"')) `
+        "the Windows ME launcher does not carry the ISO it was given."
+    & (Join-Path $PSScriptRoot "setup-qemu.ps1") -VmDir $vm -LocalScriptDir $meLaunchers `
+        -QemuBinDir $bin -WinMeIso "C:\isos\winme.iso" -Win98Iso "C:\isos\win98.iso" | Out-Null
+    $meText = [System.IO.File]::ReadAllText($mePath)
+    Assert-True ($meText.Contains('-drive file="%WIN98_ISO%",media=cdrom,index=2 ^') -and
+        $meText.Contains('-drive file="%WINME_ISO%",media=cdrom,index=3 ^') -and
+        -not $meText.Contains('-cdrom "%WINME_ISO%"')) `
+        "the Windows ME launcher with -Win98Iso does not boot the Windows 98 SE CD with the Windows ME CD second."
+    Assert-True ($meText.Contains("-boot once=d ^") -and $meText.Contains('E:\WIN9X\SETUP.EXE /p j')) `
+        "the Windows ME two-CD launcher does not boot the first CD once, or names the wrong SETUP path."
+    Assert-True ($meText.Contains('set "WIN98_ISO=C:\isos\win98.iso"') -and $meText.Contains('if not exist "%WIN98_ISO%"')) `
+        "the Windows ME two-CD launcher does not check the Windows 98 SE ISO it depends on."
+    Assert-True ($meText.Contains("-machine pc ^") -and $meText.Contains("-cpu pentium3 ^") -and
+        $meText.Contains("-action reboot=reset -no-shutdown ^")) `
+        "the Windows ME launcher lost the machine, CPU or reboot flags the Windows 98 recipe fixes."
 } finally {
     if (Test-Path -LiteralPath $work) {
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue

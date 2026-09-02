@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting. This is a hobby driver for two operating systems
+        Thanks for reporting. This is a hobby driver for operating systems
         that left support two decades ago, so bugs are expected - what makes a
         report useful is being able to tell your machine apart from everybody
         else's.
@@ -26,6 +26,7 @@ body:
       label: Operating system
       options:
         - Windows 98 SE
+        - Windows ME
         - Windows 2000 SP4
         - Windows 2000, earlier than SP4
         - Windows XP, 32-bit
@@ -81,6 +82,7 @@ body:
         - "Windows 98: NUSB 3.3 installed"
         - "Windows 98: NUSB 3.6 installed"
         - "Windows 98: NUSB, some other version"
+        - "Windows 98: SweetLow's USB 2.0 stack (Windows 98 QuickInstall 1.0.1 or later)"
         - "Windows 98: no NUSB / not sure"
         - "Windows 2000: SP4's own stack"
         - "Windows 2000: the standalone KB319973 update"

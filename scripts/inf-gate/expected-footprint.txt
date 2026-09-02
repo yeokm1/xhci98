@@ -77,11 +77,12 @@
 # it does not translate - a loud gap rather than a silently short list.
 # Include= and Needs= appear as unmodelled rows because this emitter does
 # not follow them; an INF that grows one has a footprint reaching past
-# what is derived here.
+# what is derived here. So does an engine-implied sub-section other than
+# .Services (.HW, .CoInstallers, .Interfaces, .LogConfigOverride).
 path|Windows 98|device install|Xhci.Dev
 file|Windows 98|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
-file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbd.sys|usbd98.sys||16|keep
-file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbhub.sys|usbhub98.sys||16|keep
+file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
+file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbhub.sys|usbhub.sys||16|keep
 reg|Windows 98|Xhci.AddReg|HKR||DevLoader||*NTKERN|remove
 reg|Windows 98|Xhci.AddReg|HKR||NTMPDriver||xhci98.sys|remove
 reg|Windows 98|Xhci.AddReg|HKR||XhciLogVerbosity|0x00010001|0|remove
@@ -89,7 +90,7 @@ reg|Windows 98|Xhci.AddReg|HKR||XhciLogDebugView|0x00010001|0|remove
 reg|Windows 98|Xhci.AddReg.Global|HKLM|System\CurrentControlSet\Services\USB|DisableSelectiveSuspend|0x00010001|1|remove
 path|Windows 2000|device install|Xhci.Dev.NTx86
 file|Windows 2000|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
-file|Windows 2000|Xhci.CopyW2K|10|System32\Drivers|usbd.sys|usbd2k.sys||16|keep
+file|Windows 2000|Xhci.CopyW2K|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010001|0|remove
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010001|0|remove
 service|Windows 2000|xhci98|Xhci.AddService|0x00000002|remove
@@ -102,9 +103,9 @@ servicevalue|Windows 2000|xhci98|Xhci.AddService|LoadOrderGroup|Base
 path|Windows 98|right-click Install|DefaultInstall
 file|Windows 98|Inf.CopyFiles|17||xhci98.inf|xhci98.inf||0|remove
 file|Windows 98|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
-file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbd.sys|usbd98.sys||16|keep
-file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbhub.sys|usbhub98.sys||16|keep
+file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
+file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbhub.sys|usbhub.sys||16|keep
 reg|Windows 98|Xhci.AddReg.Global|HKLM|System\CurrentControlSet\Services\USB|DisableSelectiveSuspend|0x00010001|1|remove
 path|Windows 2000|right-click Install|DefaultInstall.NTx86
 file|Windows 2000|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
-file|Windows 2000|Xhci.CopyW2K|10|System32\Drivers|usbd.sys|usbd2k.sys||16|keep
+file|Windows 2000|Xhci.CopyW2K|10|System32\Drivers|usbd.sys|usbd.sys||16|keep

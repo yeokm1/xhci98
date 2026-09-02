@@ -302,6 +302,29 @@ those unconditionally, so on a 3.6 machine the driver package's no-overwrite
 configuration; 3.3 remains the version the project installs and tests
 against.
 
+A third Windows 98 stack exists and has been examined: SweetLow's (LordOfMice
+on GitHub, the author of the 2007 Windows 2000 backport NUSB carries) XP
+SP2-sourced rebuild. It was raised in issue #1 as the stack free of the
+controller-teardown crash. The package is his `usb20_win9x.zip`
+(`http://sweetlow.orgfree.com/download/usb20_win9x.zip`, 229,139 bytes,
+SHA-256 `B9C06F08...`, kept as `tools/usb20_win9x.zip`): `USBPORT.SYS`,
+`USBEHCI.SYS`, `USBHUB20.SYS` and `USBCCGP.SYS`, all version 5.1.2600.2180
+with the resource string "built by: WinDDK" (his notes: XP post-SP1 sources
+for three of them, 2003 sources for usbehci), plus `USBDSTUB.SYS` 1.00.000
+("Stubs for undecorated USBD.SYS functions", CompanyName SweetLow; his notes
+call it a USBD.SYS helper for the XP SP3 QFE usbccgp on 98/SE, and his INF
+does not install it), his own edit of Microsoft's 2003 `USB2.INF` (no SiS
+entry, no `usbd.sys` copy line), Full and Lite INF variants (usbccgp bound
+to `USB\COMPOSITE` or `USB\COMPOSITE2`), NOWMI and VIA hub variants, an XP
+SP3 QFE usbccgp, and two `.reg` files. Windows 98 QuickInstall's base driver
+library (`https://github.com/oerg866/win98-driver-lib-base`,
+`[MBD]_sweetlow_usb2.0`) ships the same five binaries byte for byte with
+Microsoft's original INF plus a `usbd.sys` copy line QuickInstall added.
+Files, hashes and `dumpbin` listings are in `tools/sweetlow-extracted/`
+(git-ignored; its README has the fetch record). The record below has the miniport-visible
+facts; the VM observations are in `docs/contributing/build-and-test.md`, "The
+SweetLow stack", and `docs/contributing/lessons.md`.
+
 The project installs NUSB 3.3 in full anyway. It is the environment end users
 will run, the replacements are MS SE hotfix builds, and a pre-install VM
 snapshot covers rollback (`docs/contributing/build-and-test.md`).
@@ -333,6 +356,33 @@ first fact needed to judge whether such accommodations are feasible.
 | Confirmed common-buffer / DMA path | Confirmed (`tools/nusb-extracted/usbport-commonbuffer-disasm.txt`). `USBPORT_StartDevice` fills a 40-byte `DEVICE_DESCRIPTION` with `Dma32BitAddresses = 1`, `DmaWidth = Width32Bits`, `Master`/`ScatterGather = 1`, `InterfaceType = PCIBus`, `MaximumLength = MAXULONG`, and never writes `Dma64BitAddresses`. `USBPORT_AllocateCommonBuffer` (VA `0002E300`) allocates `ROUND_TO_PAGES(MiniPortResourcesSize + 0x30)` with `CacheEnabled = TRUE`, publishes `StartVA`/`StartPA` both masked to page alignment, derives `StartPA` from `LogicalAddress.LowPart` only, and zeroes the block before `StartController`. `MiniPortFlags` bit `0x100` (`NO_DMA`) would skip the adapter and zero `MiniPortResourcesSize`. | Confirmed identical (`tools/win2ksp4-extracted/usbport-commonbuffer-disasm.txt`; `USBPORT_AllocateCommonBuffer` @ VA `0002EBDA`). The two routines are instruction-for-instruction the same apart from FDO-extension field offsets, so one fixed layout serves both targets. | Not read: non-gating, and the 2195.x pair already settles both primary targets. |
 | Confirmed transfer SG-mapping path | Confirmed (`tools/nusb-extracted/usbport-sglist-disasm.txt`). `USBPORT_MapTransfer` @ VA `0001856A` is the `AllocateAdapterChannel` execution routine and builds every SG element through `FdoExt->DmaAdapter (+0x510) -> DmaOperations (+0x04) -> MapTransfer (ops+0x20)`. Elements are page-granular (`0x1000 - (PA.LowPart & 0xFFF)`, clamped), 24 bytes, from list offset 0x10. The returned `HighPart` is stored unmasked; it is zero because the adapter is 32-bit and because usbport advances only the LowPart without carry. | Confirmed identical (`tools/win2ksp4-extracted/usbport-sglist-disasm.txt`; `USBPORT_MapTransfer` @ VA `00018980`). 540 instructions each, differing in exactly three private structure offsets (adapter ptr `+0x510`/`+0x518`, FDO list head `+0x1C8`/`+0x1CC`, SG list at `Transfer+0x98`/`+0xC0`). | Not read: non-gating. |
 | `usbport.def` / `usbport.lib` prepared? | Yes, and reproducible: generation lives in tracked sources (`scripts/usbport-lib/`) driven by `scripts/make-usbport-lib.cmd`, which writes `src/usbport.lib` for `TARGETLIBS`. Still the stdcall stub-DLL method, not plain `lib /def:`; see `docs/contributing/build-and-test.md` "Build Files". The tracked manifest records the two exact imports verified against the package binary, so a fresh checkout needs no ignored reference binary; supplying one adds an independent exact-name export check. Package = installed (verbatim `CopyFiles`); the package binary re-hashed to the SHA256 in the row above. | Same lib serves this target: export names and ordinals are identical (row above, re-dumped), and the lib's content derives from the stubs, not from the reference binary. `make-usbport-lib.cmd tools\win2ksp4-extracted\USBPORT.SYS` performs the optional binary check and produces the same symbol set. | Same lib would serve XP too: identical export names and ordinals. Non-gating; no XP build is attempted. |
+
+#### The SweetLow rebuild (Windows 98, XP lineage)
+
+A fourth `usbport.sys` the driver has now run under, kept in its own table
+because it is a Windows 98 stack of the XP lineage and so fits neither
+column above. Method per row: static means read from the `dumpbin` listings in
+`tools/sweetlow-extracted/`; runtime means observed through this driver's own
+trace in the `2a-sweetlow` guest on 2026-09-02.
+
+| Item | SweetLow rebuild |
+|---|---|
+| Stack package | `usb20_win9x.zip` from SweetLow's own site (see the paragraph above); the same binaries are in `oerg866/win98-driver-lib-base` `[MBD]_sweetlow_usb2.0` at commit `5ef7f88e`, which is where they were first fetched on 2026-09-02; files in `tools/sweetlow-extracted/` with the README recording URLs and hashes |
+| `usbport.sys` version | `5.1.2600.2180 built by: WinDDK`, CompanyName "Windows (R) 2000 DDK provider", "USB 1.1 & 2.0 Port Driver": XP SP2's source level rebuilt with the DDK, not Microsoft's shipping binary (XP SP2's own is 143,872 bytes) |
+| `usbport.sys` size / SHA256 | 134,912 bytes; `8A3C9F1B568CB25CF5DD9AF3AF9E5C3400DE24BD087CAA3E4E3345588F5CFB56` |
+| Companions | `USBEHCI.SYS` 20,224 B `7BE8F4AD...`, `USBHUB20.SYS` 50,560 B `01A83E76...`, `USBCCGP.SYS` 27,776 B `683061AF...`, all 5.1.2600.2180 WinDDK builds; `USBDSTUB.SYS` 5,376 B `DCF7E861...`; `USB2.INF` 4,470 B `305F6133...` (full hashes in the README) |
+| `dumpbin /exports` | `tools/sweetlow-extracted/usbport-exports.txt`: the same 3 exports at the same ordinals (`DllUnload` 1, `USBPORT_GetHciMn` 2, `USBPORT_RegisterUSBPortDriver` 3). Static |
+| `usbport.sys` imports | `NTOSKRNL.EXE` only (`usbport-imports.txt`); no `USBD.SYS` import, so nothing in the port driver itself needs the stub. `usbhub20.sys` imports `ntoskrnl.exe`, `WMILIB.SYS` and `USBD.SYS` (`_USBD_CreateConfigurationRequestEx@8` and friends, decorated); `USBDSTUB.SYS` imports the same three decorated `USBD.SYS` names plus PnP/power entry points and exports nothing. Static |
+| `usbehci.sys` imports | `usbehci-imports.txt`: `NTOSKRNL.EXE` (KeQuerySystemTime, READ_REGISTER_ULONG, WRITE_REGISTER_ULONG), `HAL.DLL` (KeStallExecutionProcessor), `USBPORT.SYS` (both exports); the NUSB 9x profile exactly, not the wider XP SP3 one. Static |
+| Miniport version constant | `usbport-registration-disasm.txt`, `USBPORT_RegisterUSBPortDriver` @ VA `00027632`: `cmp eax,64h` / `jae` (below 100 returns `0xC0000001`), then `cmp eax,0C8h` selecting the packet length. The same two immediates, no exact-match constant. Static; runtime corroborated by `USBPORT_RegisterUSBPortDriver status=00000000` with `Version = 200` |
+| `USBPORT_GetHciMn` | VA `000271E6`: `mov eax,10000001h; ret`. The XP lineage's value, as `src/xhci_usbport.h` already accepts. Both: the trace reads `USBPORT_GetHciMn=10000001` |
+| Registration packet size | `mov ecx,12Ch`, `add ecx,10h` when `Version >= 0C8h`, then `rep movs`: 300 / 316 bytes. Both: `packet size=0000013C` in the trace |
+| Wrapper layout | Allocates 0x150 with `push 150h` (pool tag `usbp`), zeroes 0x54 dwords, stores `Version` at `+0x10`, copies the packet to `+0x14`: the Win2000 SP4 / XP form, not NUSB's `+0x10` form. Static |
+| Service pointers written before the copy | The 16 slots 0xE4..0x120, and nothing else in the packet (`mov dword ptr [esi+E4h]` .. `[esi+120h]` in the listing). Static |
+| Registry value names present | `DisableSelectiveSuspend`, `UsbBIOSx`, `DisableCcDetect` in one UTF-16 cluster with `usb` (offsets 0xD0A..0xD56), the same Services\USB query table shape NUSB's build has at 0x1D52..0x1D9E; `HcDisableSelectiveSuspend` separately; no `EnIdleEndpointSupport` (the XP SP3 binary has it, this SP2-level build does not). Both: with the value deleted the stack idle-suspended the controller shortly after start and a later hot-plug was invisible; with it present neither happened (`docs/contributing/build-and-test.md`, "The SweetLow stack") |
+| What it needs beside it | `usbd.sys`: required, `usbhub20.sys` imports it by name and the root hub is Code 2 without it (runtime, 2026-09-02); `USBDSTUB.SYS` is not a substitute and his INF does not install it. `usbhub.sys`: not required, composites are parented by his `usbccgp.sys` via the Full INF's `USB\COMPOSITE` binding (runtime, a two-interface `usb-audio`), and it still is when `usbhub.sys` is present, so the package's copy is inert under his stack. `docs/contributing/build-and-test.md`, "The SweetLow stack" |
+| Common buffer, SG mapping | Not read. The driver's runtime behaviour under it (below) is the only evidence, and it is consistent with the 32-bit page-granular path both 2195.x builds have |
+| Runtime, `2a-sweetlow` guest, 2026-09-02 | Registration, `StartController` and the No Op self-test clean; boot-attached HS mouse bound; hot-plugged HS `usb-storage` addressed (SET_ADDRESS interception), bulk pair opened, mounted as a removable disk; then Device Manager disable, re-enable, Remove and Refresh-plus-reinstall each completed: `DisableInterrupts`, `StopController(TRUE)`, eight ports unpowered, halted at `USBSTS=1`, `StartController` on the same extension after re-enable, a fresh `DriverEntry` after reinstall. QEMU only, `pc,smm=off` (see lessons), no matrix run, no bare metal |
 
 - MS `usbport.sys` exports two symbols relevant here:
   `USBPORT_RegisterUSBPortDriver` and `USBPORT_GetHciMn`. Confirmed by

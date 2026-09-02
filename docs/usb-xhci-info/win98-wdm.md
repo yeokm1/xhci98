@@ -397,7 +397,13 @@ does not rule XP out of Option A. Its `USBPORT_GetHciMn` value is
 known values in the optional sanity probe is the kind of small, isolated
 accommodation this policy permits. None of this proves callback call
 contracts, lifecycle behavior, or end-to-end compatibility, so XP remains
-best-effort and unvalidated.
+best-effort and unvalidated. One related observation exists since 2026-09-02:
+SweetLow's Windows 98 rebuild of XP SP2's `usbport.sys` (5.1.2600.2180,
+returning `0x10000001`) registers this driver, runs HID and mass storage, and
+completes the controller stop on Windows 98
+(`docs/usb-xhci-info/usbport-miniport-interface.md` section 5, "The SweetLow
+rebuild"). That is XP-lineage code, but on Windows 98's kernel, in a VM; it
+says nothing about Windows XP itself.
 
 Why it is not promoted to a checkpointed target: cost, not a technical
 obstacle. "Target" in this project means every checkpoint is observed on it,

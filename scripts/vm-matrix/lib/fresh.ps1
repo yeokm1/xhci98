@@ -183,6 +183,14 @@ function Test-FreshTarget {
     return ($Target.ContainsKey('CloneFrom') -and $null -ne $Target.CloneFrom)
 }
 
+# `PrepareOnly = $true` on a target: prepare-image.ps1 drives it and neither
+# run boots it.  The Windows ME target is the first, installed by hand and
+# not yet given rows of its own.
+function Test-PrepareOnlyTarget {
+    param([Parameter(Mandatory = $true)]$Target)
+    return ($Target.ContainsKey('PrepareOnly') -and [bool]$Target.PrepareOnly)
+}
+
 # `ExpectNoDriver = @{ '<target>' = '<reason>' }` on a row: this operating
 # system, freshly installed, is known to carry no class driver for the model.
 # Design record 09 section 4.2.  The outcome word does not change - the row is
@@ -312,7 +320,10 @@ function Select-RunTargets {
         [bool]$PostRelease = $false,
         [string[]]$Requested = @()
     )
-    $pool = @($Targets | Where-Object { (Test-FreshTarget -Target $_) -eq $PostRelease })
+    # A PrepareOnly target is in neither pool; naming it with -Target is
+    # refused below rather than read as "the other kind of run".
+    $prepareOnly = @($Targets | Where-Object { Test-PrepareOnlyTarget -Target $_ })
+    $pool = @($Targets | Where-Object { -not (Test-PrepareOnlyTarget -Target $_) -and (Test-FreshTarget -Target $_) -eq $PostRelease })
     $poolWord = if ($PostRelease) { "fresh (CloneFrom) targets" } else { "Phase 10 targets" }
     if ($pool.Count -eq 0) {
         throw ("this config has no {0}. {1}" -f $poolWord, $(if ($PostRelease) {
@@ -321,6 +332,11 @@ function Select-RunTargets {
     }
     $Requested = @($Requested | Where-Object { $null -ne $_ -and $_ -ne "" })
     if ($Requested.Count -eq 0) { return $pool }
+    $prepOnlyNamed = @($prepareOnly | Where-Object { $Requested -contains $_.Id })
+    if ($prepOnlyNamed.Count -gt 0) {
+        throw ("-Target '{0}' names a PrepareOnly target, which no run boots; drive it with prepare-image.ps1." -f `
+            (($prepOnlyNamed | ForEach-Object { $_.Id }) -join ","))
+    }
     $chosen = @($pool | Where-Object { $Requested -contains $_.Id })
     $wrongKind = @($Targets | Where-Object { $Requested -contains $_.Id -and $pool -notcontains $_ })
     if ($wrongKind.Count -gt 0) {

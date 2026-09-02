@@ -11,15 +11,15 @@ mutation reproduces a real documented failure mode rather than a syntax error:
 a $Windows NT$ signature, a dirid-12 destination, a missing .NTx86 section, a
 service pointing at a file the install never copies, and so on.
 
-The per-target usbd.sys rules (TGT-*, PKG-*) get the same treatment, and they
-need it most: every way of breaking that split - one media file shared by both
-paths, one CopyFiles section shared by both, a missing source name, a lost
-NO_OVERWRITE flag, a swapped pair on the media - installs a file called
-usbd.sys either way and shows up only as usbhub20.sys failing to load.
+The OS-supplied-file rules (OS-*, PKG-*) get the same treatment, and they
+need it most: every way of unwiring the LayoutFile route - the directive gone,
+a media-name field, a lost NO_OVERWRITE flag, a path that stops copying
+usbd.sys, a Microsoft file back on the media - is silent on the target and
+shows up only as the root hub failing to load.
 
 Everything happens on copies under the host temporary directory. The package
-tests use stand-in files and a stand-in manifest, so nothing here needs the
-git-ignored tools\ staging: no build, no VM, and no Microsoft binaries.
+tests use stand-in files, so nothing here needs the git-ignored tools\
+staging: no build, no VM, and no Microsoft binaries.
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\inf-gate\test-inf-checks.ps1
@@ -49,11 +49,9 @@ function Assert-True {
 }
 
 function Invoke-Gate {
-    param([string]$Path, [string]$PackageDir = "", [string]$SourceManifest = "",
-          [string[]]$Extra = @())
+    param([string]$Path, [string]$PackageDir = "", [string[]]$Extra = @())
     $psArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate, "-InfPath", $Path)
     if ($PackageDir -ne "") { $psArgs += @("-PackageDir", $PackageDir) }
-    if ($SourceManifest -ne "") { $psArgs += @("-SourceManifest", $SourceManifest) }
     if ($Extra.Count -gt 0) { $psArgs += $Extra }
     # ErrorActionPreference relaxed across the call, as
     # `scripts\import-gate\check-imports.ps1` relaxes it for dumpbin (repo audit
@@ -397,10 +395,10 @@ try {
         param($t) $t.Replace("xhci98.sys=1`r`n", "")
     }
     Assert-RuleFires "source-parent-subdir" "BOTH-SOURCE" {
-        param($t) $t.Replace("usbd98.sys=1", "usbd98.sys=1,..")
+        param($t) $t.Replace("xhci98.inf=1", "xhci98.inf=1,..")
     }
     Assert-RuleFires "source-rooted-subdir" "BOTH-SOURCE" {
-        param($t) $t.Replace("usbd98.sys=1", "usbd98.sys=1,C:\usbfiles")
+        param($t) $t.Replace("xhci98.inf=1", "xhci98.inf=1,C:\usbfiles")
     }
     Assert-RuleFires "no-sourcedisksnames" "BOTH-SOURCE" {
         param($t) $t -replace '(?ms)^\[SourceDisksNames\]\r\n.*?\r\n\r\n', ''
@@ -538,152 +536,79 @@ try {
         param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles", "[Xhci.Dev]`r`nCopyFiles=Xhci.CopyFiles")
     }
 
-    # ---- the per-target usbd.sys (roadmap Phase 3 task 7) ------------------
+    # ---- the files the OS supplies (Phase 17, release 1.0.0.1) --------------
     #
-    # Every mutation here is a way the two builds could be interchanged. None
-    # of them produces a visible symptom on the target: the machine ends up
-    # with a file called usbd.sys either way, and the wrong one shows up only
-    # as usbhub20.sys failing to load with a 0xc0000034 that names usbhub20.sys
-    # rather than usbd.sys (docs\contributing\lessons.md, "usbhub20.sys bugchecks Win2000").
-    Write-Step "the per-target usbd.sys"
-    Assert-RuleFires "tgt-no-usbd" "TGT-MISSING" {
-        param($t)
-        $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98",
-                   "[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles").
-           Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW2K",
-                   "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles")
+    # Since 1.0.0.1 the media carries no Microsoft file: usbd.sys and usbhub.sys
+    # are copied from the OS's own install source through LayoutFile. Every way
+    # of unwiring that is silent on the target - a root hub at Code 2 on Windows
+    # 98, a 0xc0000034 naming usbhub20.sys on Windows 2000 - so each rule is
+    # watched firing here, in both directions where the asymmetry has two.
+    Write-Step "the files the OS supplies"
+    Assert-RuleFires "os-no-layoutfile" "OS-LAYOUT" {
+        param($t) $t.Replace("LayoutFile=layout.inf`r`n", "")
     }
-    # One target loses it - the asymmetric case, which is worse than losing it
-    # on both because one target keeps working and hides the packaging bug.
-    Assert-RuleFires "tgt-nt-only-usbd" "TGT-MISSING" {
-        param($t)
-        $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW2K",
-                   "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles")
+    Assert-RuleFires "os-wrong-layoutfile" "OS-LAYOUT" {
+        param($t) $t.Replace("LayoutFile=layout.inf", "LayoutFile=usb.inf")
     }
-    # Both paths naming one media file: whichever build is staged, one target
-    # gets the other's usbd.sys. This is the single-file INF this task exists
-    # to prevent.
-    Assert-RuleFires "tgt-samesrc" "TGT-SAMESRC" {
-        param($t) $t.Replace("usbd.sys,usbd2k.sys,,16", "usbd.sys,usbd98.sys,,16")
+    # A Microsoft file back on the media, under its own name and under the
+    # 1.0.0.0 media name: the exception legal-provenance section 5 withdrew.
+    Assert-RuleFires "os-media-usbd" "OS-MEDIA" {
+        param($t) $t.Replace("xhci98.inf=1`r`n", "xhci98.inf=1`r`nusbd.sys=1`r`n")
     }
-    Assert-RuleFires "tgt-sharedsec" "TGT-SHAREDSEC" {
-        param($t)
-        $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW2K",
-                   "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98")
+    Assert-RuleFires "os-media-retired-name" "OS-MEDIA" {
+        param($t) $t.Replace("xhci98.inf=1`r`n", "xhci98.inf=1`r`nusbd98.sys=1`r`n")
     }
-    # No source-name field: the media can then only carry one build at all.
-    Assert-RuleFires "tgt-medianame" "TGT-MEDIANAME" {
-        param($t) $t.Replace("usbd.sys,usbd98.sys,,16", "usbd.sys,,,16")
+    # A path that stops asking for usbd.sys, on each target and on each route.
+    Assert-RuleFires "os-no-usbd-w98" "OS-MISSING" {
+        param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16`r`n", "[Xhci.CopyW98]`r`n")
     }
-    Assert-RuleFires "tgt-dup" "TGT-DUP" {
-        param($t) $t.Replace("usbd.sys,usbd98.sys,,16", "usbd.sys,usbd98.sys,,16`r`nusbd.sys,usbd2k.sys,,16")
+    Assert-RuleFires "os-no-usbd-nt" "OS-MISSING" {
+        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW2K",
+                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles")
     }
-    Assert-RuleFires "tgt-no-flag" "TGT-FLAGS" {
-        param($t) $t.Replace("usbd.sys,usbd2k.sys,,16", "usbd.sys,usbd2k.sys")
+    Assert-RuleFires "os-default-no-usbd" "OS-MISSING" {
+        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW2K",
+                             "[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles")
     }
-    # 16|4: NO_OVERWRITE plus NOVERSIONCHECK, which overwrites the target
-    # regardless of version - including a newer post-SP4 usbd.sys.
-    Assert-RuleFires "tgt-noversioncheck" "TGT-FLAGS" {
-        param($t) $t.Replace("usbd.sys,usbd2k.sys,,16", "usbd.sys,usbd2k.sys,,20")
+    # The Windows 98 composite parent gone: the bug batch 13-E found on real
+    # hardware, every composite device at Code 2 with nothing saying why.
+    Assert-RuleFires "os-no-usbhub-w98" "OS-MISSING" {
+        param($t) $t.Replace("usbd.sys,,,16`r`nusbhub.sys,,,16", "usbd.sys,,,16")
     }
-    # The two source names swapped between the paths. Structurally perfect -
-    # two paths, two sections, two distinct media files, correct flags - and
-    # it installs Win98 SE's usbd.sys on Windows 2000. Only the source
-    # manifest's TARGET column can tell the difference.
-    Assert-RuleFires "tgt-swapped-names" "TGT-TARGET" {
-        param($t)
-        $t.Replace("usbd.sys,usbd98.sys,,16", "usbd.sys,usbdTMP.sys,,16").
-           Replace("usbd.sys,usbd2k.sys,,16", "usbd.sys,usbd98.sys,,16").
-           Replace("usbd.sys,usbdTMP.sys,,16", "usbd.sys,usbd2k.sys,,16")
+    # The opposite direction, the more dangerous one: someone making the two
+    # paths look symmetrical. On Windows 2000 that name is the OS's own USB 1.1
+    # hub driver.
+    Assert-RuleFires "os-usbhub-on-nt" "OS-ONWIN2K" {
+        param($t) $t.Replace("[Xhci.CopyW2K]`r`nusbd.sys,,,16", "[Xhci.CopyW2K]`r`nusbd.sys,,,16`r`nusbhub.sys,,,16")
     }
-    # A media name no manifest row claims: the packager would never stage it,
-    # so the install looks for a file the package cannot contain.
-    Assert-RuleFires "tgt-unknown-media" "TGT-TARGET" {
-        param($t) $t.Replace("usbd2k.sys=1", "usbdnt.sys=1").Replace("usbd.sys,usbd2k.sys,,16", "usbd.sys,usbdnt.sys,,16")
-    }
-    Assert-RuleFires "tgt-dest" "TGT-DEST" {
-        param($t) $t.Replace("Xhci.CopyW98=10,System32\Drivers", "Xhci.CopyW98=11")
-    }
-    # Right-click Install goes through DefaultInstall, so the split has to hold
-    # there too or a pre-stage lays down the other target's build.
-    Assert-RuleFires "tgt-default-swap" "TGT-DEFAULT" {
-        param($t) $t.Replace("CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98",
-                             "CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW2K")
-    }
-    # No NT half at all: setupapi falls back to the undecorated section, and a
-    # right-click Install on Windows 2000 stages the Win98 files. The per-path
-    # rules skip a missing section, so this is its own refusal.
-    Assert-RuleFires "no-defaultinstall-nt" "TGT-DEFAULT" {
-        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW2K`r`n", "")
-    }
-    # A -SourceManifest the caller typed and that does not exist is a mistake,
-    # not a host with nothing staged, so the gate refuses rather than warns.
-    $noManifest = Join-Path $script:work "no-such-manifest.expected"
-    $r = Invoke-Gate -Path $prodInf -SourceManifest $noManifest
-    Assert-True ($r.ExitCode -ne 0) "missing-manifest : an explicit -SourceManifest that does not exist was accepted (exit 0)."
-    Assert-True ($r.Output -match [regex]::Escape("FAIL [TGT-TARGET]")) ("missing-manifest : expected TGT-TARGET to fail. Output was:`n" + $r.Output)
-
-    # ---- the Win98-only usbhub.sys (batch 13-E, task 13-E.1) ---------------
-    #
-    # Added by the pre-cut audit (finding B6): the seven W98-* rules
-    # below were traced and are sound, and **not one of them had ever been
-    # watched fire**. A lint nobody has watched fail is not a gate - that is
-    # this file's own opening sentence, and the W98 family had been shipped
-    # without it while every TGT-* sibling had one.
-    #
-    # The asymmetry is what makes them worth the cases. usbd.sys goes to BOTH
-    # targets under different names, so a mistake there is symmetric and the
-    # TGT-* rules can be stated as "both, and differently". usbhub.sys goes to
-    # ONE target on purpose, so its rules must fire in two opposite directions
-    # and the likelier future mistake is somebody tidying the asymmetry away.
-    Write-Step "the Win98-only usbhub.sys"
-
-    # The bug batch 13-E found on real hardware: every composite device stops at
-    # `USB Composite Device`, Code 2, and nothing on the machine says why.
-    Assert-RuleFires "w98-no-hub" "W98-MISSING" {
-        param($t) $t.Replace("`r`nusbhub.sys,usbhub98.sys,,16", "").
-                     Replace("`r`nusbhub98.sys=1", "")
-    }
-    # The opposite direction, and the more dangerous one: somebody making the
-    # two install paths look symmetrical. On Windows 2000 that name belongs to
-    # the OS's own USB 1.1 hub driver.
-    Assert-RuleFires "w98-hub-on-nt" "W98-ONWIN2K" {
-        param($t) $t.Replace("[Xhci.CopyW2K]`r`nusbd.sys,usbd2k.sys,,16",
-                             "[Xhci.CopyW2K]`r`nusbd.sys,usbd2k.sys,,16`r`nusbhub.sys,usbhub98.sys,,16")
-    }
-    # The same two directions over the right-click Install pair.
-    Assert-RuleFires "w98-no-hub-default" "W98-MISSING" {
-        param($t) $t.Replace("[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98",
-                             "[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles")
-    }
-    Assert-RuleFires "w98-hub-on-nt-default" "W98-ONWIN2K" {
+    Assert-RuleFires "os-default-usbhub-on-nt" "OS-ONWIN2K" {
         param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW2K",
                              "[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW2K,Xhci.CopyW98")
     }
-    Assert-RuleFires "w98-hub-dup" "W98-DUP" {
-        param($t) $t.Replace("usbhub.sys,usbhub98.sys,,16",
-                             "usbhub.sys,usbhub98.sys,,16`r`nusbhub.sys,usbhub98.sys,,16")
+    # No NT half at all: setupapi falls back to the undecorated section, and a
+    # right-click Install on Windows 2000 runs the Windows 98 file list.
+    Assert-RuleFires "no-defaultinstall-nt" "OS-DEFAULT" {
+        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW2K`r`n", "")
     }
-    # No source-name field: the media would have to carry the file under the
-    # target's own name, which is the confusion the distinct media name exists
-    # to prevent.
-    Assert-RuleFires "w98-hub-medianame" "W98-MEDIANAME" {
-        param($t) $t.Replace("usbhub.sys,usbhub98.sys,,16", "usbhub.sys,,,16")
+    Assert-RuleFires "os-dup" "OS-DUP" {
+        param($t) $t.Replace("[Xhci.CopyW2K]`r`nusbd.sys,,,16", "[Xhci.CopyW2K]`r`nusbd.sys,,,16`r`nusbd.sys,,,16")
     }
-    # Without COPYFLG_NO_OVERWRITE a machine whose native USB stack was
-    # installed loses its own usbhub.sys to Windows 98 SE's 4.10.2222 build.
-    Assert-RuleFires "w98-hub-no-flag" "W98-FLAGS" {
-        param($t) $t.Replace("usbhub.sys,usbhub98.sys,,16", "usbhub.sys,usbhub98.sys")
+    # A media-name field sends the engine back to this disk for the file, which
+    # is the 1.0.0.0 shape.
+    Assert-RuleFires "os-srcname" "OS-SRCNAME" {
+        param($t) $t.Replace("[Xhci.CopyW2K]`r`nusbd.sys,,,16", "[Xhci.CopyW2K]`r`nusbd.sys,usbd2k.sys,,16")
     }
-    # A media name the manifest records as the WIN2000 build. Structurally
-    # perfect and it installs the wrong OS's file; only the manifest's TARGET
-    # column can tell.
-    Assert-RuleFires "w98-hub-wrong-target" "W98-TARGET" {
-        param($t) $t.Replace("usbhub.sys,usbhub98.sys,,16", "usbhub.sys,usbd2k.sys,,16")
+    Assert-RuleFires "os-no-flag" "OS-FLAGS" {
+        param($t) $t.Replace("[Xhci.CopyW2K]`r`nusbd.sys,,,16", "[Xhci.CopyW2K]`r`nusbd.sys")
     }
-    # Windows 98 loads its composite parent from System32\Drivers. Dirid 11 is
-    # \Windows\System, where nothing looks for it - and the copy succeeds.
-    Assert-RuleFires "w98-hub-dest" "W98-DEST" {
+    # 16|4: NO_OVERWRITE plus NOVERSIONCHECK, which overwrites the target
+    # regardless of version - including a newer serviced usbd.sys.
+    Assert-RuleFires "os-noversioncheck" "OS-FLAGS" {
+        param($t) $t.Replace("[Xhci.CopyW2K]`r`nusbd.sys,,,16", "[Xhci.CopyW2K]`r`nusbd.sys,,,20")
+    }
+    # Dirid 11 is \Windows\System, where nothing looks for it - and the copy
+    # succeeds.
+    Assert-RuleFires "os-dest" "OS-DEST" {
         param($t) $t.Replace("Xhci.CopyW98=10,System32\Drivers", "Xhci.CopyW98=11")
     }
 
@@ -744,7 +669,7 @@ try {
     # which is also why the gate fails the mutation, so the emit must happen
     # before the verdict for this to be observable at all.
     $noFlagInf = New-MutatedInf -Name "fp-no-overwrite" -Mutate {
-        param($t) $t.Replace("usbd.sys,usbd98.sys,,16", "usbd.sys,usbd98.sys,,0")
+        param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16", "[Xhci.CopyW98]`r`nusbd.sys,,,0")
     }
     # A CopyFiles section reachable from more than one install path appears
     # once per path - Xhci.CopyW98 is named by [Xhci.Dev] and by
@@ -768,7 +693,7 @@ try {
 
     # An unparseable flags field is not silently a zero.
     $badFlagInf = New-MutatedInf -Name "fp-bad-flags" -Mutate {
-        param($t) $t.Replace("usbd.sys,usbd98.sys,,16", "usbd.sys,usbd98.sys,,sixteen")
+        param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16", "[Xhci.CopyW98]`r`nusbd.sys,,,sixteen")
     }
     $fp = Get-Footprint -Path $badFlagInf
     Assert-RowVerdict -Rows $fp -Prefix "file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbd.sys|" -Verdict "review" `
@@ -787,7 +712,7 @@ try {
         @{ Flags = "65536"; Verdict = "review"; Why = "a flag bit this emitter has not been taught is reported, not ignored" }
     )) {
         $inf2 = New-MutatedInf -Name ("fp-copyflag-" + $case.Flags) -Mutate {
-            param($t) $t.Replace("usbd.sys,usbd98.sys,,16", ("usbd.sys,usbd98.sys,," + $case.Flags))
+            param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16", ("[Xhci.CopyW98]`r`nusbd.sys,,," + $case.Flags))
         }.GetNewClosure()
         $fp = Get-Footprint -Path $inf2
         Assert-RowVerdict -Rows $fp -Prefix "file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbd.sys|" -Verdict $case.Verdict `
@@ -904,7 +829,7 @@ try {
     # is reported, and $ErrorActionPreference = "Stop" would otherwise turn the
     # cast into an abort with no file written at all.
     $hugeFlagInf = New-MutatedInf -Name "fp-huge-flags" -Mutate {
-        param($t) $t.Replace("usbd.sys,usbd98.sys,,16", "usbd.sys,usbd98.sys,,4294967296")
+        param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16", "[Xhci.CopyW98]`r`nusbd.sys,,,4294967296")
     }
     $fp = Get-Footprint -Path $hugeFlagInf
     Assert-True ($null -ne $fp) "an out-of-range copy-flags field aborted the emit instead of producing a row."
@@ -958,99 +883,52 @@ try {
     Assert-True ($r.ExitCode -ne 0) "an empty -PackageDir was accepted."
     Assert-True ($r.Output -match [regex]::Escape("[PKG-LAYOUT]")) ("expected PKG-LAYOUT to fire on an empty package. Output:`n" + $r.Output)
 
-    # The package tests use stand-in files and a matching stand-in manifest, so
-    # they run on a host with no install media staged under tools\ - the
-    # gitignored directory a fresh clone does not have. What is being tested is
-    # the gate's arithmetic, not the real binaries' contents.
-    $w98Bytes = [System.Text.Encoding]::ASCII.GetBytes("stand-in for Windows 98 SE usbd.sys 4.10.2222")
-    $w2kBytes = [System.Text.Encoding]::ASCII.GetBytes("stand-in for Windows 2000 SP4 USBD.SYS 5.00.2195.6658")
-    # Windows 98's composite parent, carried since batch 13-E. Win98-only, so
-    # there is deliberately no Windows 2000 counterpart to pair it with.
-    $hubBytes = [System.Text.Encoding]::ASCII.GetBytes("stand-in for Windows 98 SE usbhub.sys 4.10.2222")
-
+    # Since 1.0.0.1 a package is this project's two files and nothing else, so
+    # the package cases are presence and the absence of any Microsoft file. The
+    # stand-ins are text files: what is being tested is the gate's arithmetic,
+    # not any binary's contents.
     function New-StandInPackage {
-        param([string]$Name, [byte[]]$For98, [byte[]]$For2K, [byte[]]$ForHub)
+        param([string]$Name, [string[]]$Extra = @())
         $dir = Join-Path $script:work $Name
         New-Item -ItemType Directory -Path $dir | Out-Null
         Copy-Item -LiteralPath $prodInf -Destination (Join-Path $dir "xhci98.inf")
         Set-Content -LiteralPath (Join-Path $dir "xhci98.sys") -Value "not a real driver" -Encoding ASCII
-        if ($null -ne $For98) { [System.IO.File]::WriteAllBytes((Join-Path $dir "usbd98.sys"), $For98) }
-        if ($null -ne $For2K) { [System.IO.File]::WriteAllBytes((Join-Path $dir "usbd2k.sys"), $For2K) }
-        # Defaults to the composite parent stand-in so that only tests which
-        # care about it have to mention it; a caller omitting it on purpose
-        # passes an empty array, which is how the pkg-nohub PKG-LAYOUT case
-        # below is made.
-        if ($null -eq $ForHub) { $ForHub = $hubBytes }
-        if ($ForHub.Length -gt 0) { [System.IO.File]::WriteAllBytes((Join-Path $dir "usbhub98.sys"), $ForHub) }
+        foreach ($e in $Extra) {
+            Set-Content -LiteralPath (Join-Path $dir $e) -Value "stand-in $e" -Encoding ASCII
+        }
         return $dir
     }
 
-    function Get-StandInSha {
-        param([byte[]]$Bytes)
-        $sha = [System.Security.Cryptography.SHA256]::Create()
-        try { return (($sha.ComputeHash($Bytes) | ForEach-Object { $_.ToString("X2") }) -join "") }
-        finally { $sha.Dispose() }
-    }
-
-    # VERSION "-" is the manifest's "no version resource" marker; the stand-ins
-    # have none.
-    $standInManifest = Join-Path $script:work "stand-in-sources.expected"
-    Set-Content -LiteralPath $standInManifest -Encoding ASCII -Value @(
-        "# stand-in manifest for scripts\inf-gate\test-inf-checks.ps1",
-        ("usbd98.sys win98   tools\win98se-extracted\usbd.sys  - {0} {1} stand-in" -f $w98Bytes.Length, (Get-StandInSha $w98Bytes)),
-        ("usbd2k.sys win2000 tools\win2ksp4-extracted\USBD.SYS - {0} {1} stand-in" -f $w2kBytes.Length, (Get-StandInSha $w2kBytes)),
-        ("usbhub98.sys win98 tools\win98se-extracted\usbhub.sys - {0} {1} stand-in" -f $hubBytes.Length, (Get-StandInSha $hubBytes))
-    )
-
-    $goodPkg = New-StandInPackage -Name "pkg-good" -For98 $w98Bytes -For2K $w2kBytes
-    $r = Invoke-Gate -Path $prodInf -PackageDir $goodPkg -SourceManifest $standInManifest
+    $goodPkg = New-StandInPackage -Name "pkg-good"
+    $r = Invoke-Gate -Path $prodInf -PackageDir $goodPkg
     Assert-True ($r.ExitCode -eq 0) ("a complete -PackageDir was rejected:`n" + $r.Output)
 
-    # The failure the whole mechanism exists to catch, and the only one that no
-    # amount of INF structure can: the right names, the wrong contents.
-    $swappedPkg = New-StandInPackage -Name "pkg-swapped" -For98 $w2kBytes -For2K $w98Bytes
-    $r = Invoke-Gate -Path $prodInf -PackageDir $swappedPkg -SourceManifest $standInManifest
-    Assert-True ($r.ExitCode -ne 0) "a package with the two usbd.sys builds swapped was accepted."
-    Assert-True ($r.Output -match [regex]::Escape("[PKG-IDENTITY]")) ("expected PKG-IDENTITY to fire on a swapped package. Output:`n" + $r.Output)
+    $partialPkg = Join-Path $script:work "pkg-partial"
+    New-Item -ItemType Directory -Path $partialPkg | Out-Null
+    Copy-Item -LiteralPath $prodInf -Destination (Join-Path $partialPkg "xhci98.inf")
+    $r = Invoke-Gate -Path $prodInf -PackageDir $partialPkg
+    Assert-True ($r.ExitCode -ne 0) "a package missing xhci98.sys was accepted."
+    Assert-True ($r.Output -match [regex]::Escape("[PKG-LAYOUT]")) ("expected PKG-LAYOUT to fire on a package missing xhci98.sys. Output:`n" + $r.Output)
 
-    # [SourceDisksFiles] may place a media file in a subdirectory. Authenticate
-    # the exact path Setup consumes, not a same-named root file that happens to
-    # contain the expected build.
-    $subdirInf = New-MutatedInf -Name "pkg-subdir" -Mutate {
-        param($t) $t.Replace("usbd98.sys=1", "usbd98.sys=1,usbfiles")
+    # A Microsoft file back in the package: under the 1.0.0.0 media name, under
+    # its own name, and in a subdirectory. Each is the exception
+    # legal-provenance section 5 withdrew, arriving by drift.
+    foreach ($case in @(
+        @{ Name = "pkg-usbd98";  Extra = @("usbd98.sys") },
+        @{ Name = "pkg-usbd";    Extra = @("usbd.sys") },
+        @{ Name = "pkg-usbhub";  Extra = @("usbhub.sys") }
+    )) {
+        $pkg = New-StandInPackage -Name $case.Name -Extra $case.Extra
+        $r = Invoke-Gate -Path $prodInf -PackageDir $pkg
+        Assert-True ($r.ExitCode -ne 0) ("a package holding " + ($case.Extra -join ", ") + " was accepted.")
+        Assert-True ($r.Output -match [regex]::Escape("[PKG-MSFILE]")) ("expected PKG-MSFILE to fire on " + $case.Name + ". Output:`n" + $r.Output)
     }
-    $subdirPkg = New-StandInPackage -Name "pkg-subdir" -For98 $w98Bytes -For2K $w2kBytes
-    $subdir = Join-Path $subdirPkg "usbfiles"
-    New-Item -ItemType Directory -Path $subdir | Out-Null
-    [System.IO.File]::WriteAllBytes((Join-Path $subdir "usbd98.sys"), $w2kBytes)
-    $r = Invoke-Gate -Path $subdirInf -PackageDir $subdirPkg -SourceManifest $standInManifest
-    Assert-True ($r.ExitCode -ne 0) "a package whose authenticated root file masked a substituted [SourceDisksFiles] subdirectory file was accepted."
-    Assert-True ($r.Output -match [regex]::Escape("[PKG-IDENTITY]")) ("expected PKG-IDENTITY to authenticate the [SourceDisksFiles] subdirectory path. Output:`n" + $r.Output)
-
-    $partialPkg = New-StandInPackage -Name "pkg-partial" -For98 $w98Bytes -For2K $null
-    $r = Invoke-Gate -Path $prodInf -PackageDir $partialPkg -SourceManifest $standInManifest
-    Assert-True ($r.ExitCode -ne 0) "a package missing the Win2000 usbd.sys was accepted."
-    Assert-True ($r.Output -match [regex]::Escape("[PKG-LAYOUT]")) ("expected PKG-LAYOUT to fire on a package missing usbd2k.sys. Output:`n" + $r.Output)
-
-    # The same absence for the composite parent, and until the pre-cut audit the
-    # -ForHub parameter above described a caller that did not exist: nothing
-    # ever dropped usbhub98.sys, so the one file batch 13-E's fix delivers was
-    # the one file no layout case checked for (pre-cut audit, finding B6).
-    $noHubPkg = New-StandInPackage -Name "pkg-nohub" -For98 $w98Bytes -For2K $w2kBytes -ForHub @()
-    $r = Invoke-Gate -Path $prodInf -PackageDir $noHubPkg -SourceManifest $standInManifest
-    Assert-True ($r.ExitCode -ne 0) "a package missing the Win98 usbhub.sys was accepted."
-    Assert-True ($r.Output -match [regex]::Escape("[PKG-LAYOUT]")) ("expected PKG-LAYOUT to fire on a package missing usbhub98.sys. Output:`n" + $r.Output)
-
-    # A manifest that names two identical builds defeats the split silently,
-    # so the reader rejects it rather than the packager discovering it later.
-    $sameManifest = Join-Path $script:work "same-build-sources.expected"
-    Set-Content -LiteralPath $sameManifest -Encoding ASCII -Value @(
-        ("usbd98.sys win98   tools\win98se-extracted\usbd.sys  - {0} {1} stand-in" -f $w98Bytes.Length, (Get-StandInSha $w98Bytes)),
-        ("usbd2k.sys win2000 tools\win2ksp4-extracted\USBD.SYS - {0} {1} stand-in" -f $w98Bytes.Length, (Get-StandInSha $w98Bytes))
-    )
-    $r = Invoke-Gate -Path $prodInf -PackageDir $goodPkg -SourceManifest $sameManifest
-    Assert-True ($r.ExitCode -ne 0) "a manifest giving both targets the same build was accepted."
-    Assert-True ($r.Output -match [regex]::Escape("[PKG-IDENTITY]")) ("expected PKG-IDENTITY to reject a same-build manifest. Output:`n" + $r.Output)
+    $subPkg = New-StandInPackage -Name "pkg-subdir-msfile"
+    New-Item -ItemType Directory -Path (Join-Path $subPkg "usbfiles") | Out-Null
+    Set-Content -LiteralPath (Join-Path $subPkg "usbfiles\usbd2k.sys") -Value "stand-in" -Encoding ASCII
+    $r = Invoke-Gate -Path $prodInf -PackageDir $subPkg
+    Assert-True ($r.ExitCode -ne 0) "a package holding usbfiles\usbd2k.sys was accepted."
+    Assert-True ($r.Output -match [regex]::Escape("[PKG-MSFILE]")) ("expected PKG-MSFILE to fire on a subdirectory copy. Output:`n" + $r.Output)
 
 } finally {
     if (Test-Path -LiteralPath $script:work) {

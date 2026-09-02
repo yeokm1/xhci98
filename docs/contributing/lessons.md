@@ -24,6 +24,181 @@ Do not turn a hypothesis into a settled hardware quirk. Move confirmed design
 rules into the appropriate normative document while keeping the debugging
 history here.
 
+## The Windows 98 teardown bugcheck belongs to the Windows 2000-lineage usbport, and an XP-lineage rebuild of the same stack survives every door it dies at
+
+Environment: the `2a-sweetlow` guest (`vm\sweetlow-2a.img`, a clone of the
+stamped `fresh-2a.img`, driver 1.0.0.0 qemu flavour already installed), QEMU
+11.0.92 with `-machine pc,smm=off` (next entry), 2026-09-02, the project
+owner at the console and the trace read from the host. The stack swap was
+done inside the guest: NUSB 3.3's own uninstall string
+(`RUNDLL32.EXE C:\WINDOWS\SYSTEM\ADVPACK.DLL,LaunchINFSection C:\WINDOWS\INF\_USB2UN.INF,UNINSTALL`,
+which deletes `USBPORT.SYS`, `USBEHCI.SYS`, `USBHUB20.SYS` and `USB2.INF` and
+nothing else), then SweetLow's stack from the transfer drive with
+`rundll32 setupapi,InstallHinfSection DefaultInstall 132 D:\SWEETLOW\USB2.INF`,
+then a relaunch of QEMU (this guest halts on a reboot instead of restarting).
+Issue #1 had claimed the crash was a fault of the Windows 2000 usbport and
+that an XP-sourced build was free of it.
+
+Observed. On the relaunch the driver registered against the new port driver
+(`USBPORT_GetHciMn=10000001`, packet 0x13C, status 0), the No Op self-test
+passed, the boot-attached High-Speed mouse bound, and a hot-plugged High-Speed
+`usb-storage` enumerated (SET_ADDRESS intercepted, bulk pair opened) and
+mounted as `F:`. Then, from Device Manager: disable, re-enable, Remove, and
+Refresh with a reinstall from the transfer drive. The trace for the disable is
+`RH_ClearFeaturePortEnable` on both occupied ports with their devices
+disowned, `DisableInterrupts`, `StopController(TRUE)`, eight ports unpowered,
+`quiesce: halted, USBSTS=00000001`. The re-enable is a `StartController` on
+the same extension with no `DriverEntry`, so Windows 98 kept the image
+loaded. The Remove is the same stop; the reinstall is a fresh `DriverEntry`
+and a start on a new extension with both devices re-bound. No bugcheck at any
+step. Under NUSB's usbport the same guest, and Microsoft's own `usbehci.sys`
+on the same guest, die at `0028:C00312EE` after `RH_DisableIrq` on the first
+of those steps (task 8, the release notes' first limitation).
+
+Proven: the crash is not a property of Windows 98 and not of this driver's
+teardown; it follows the port driver. The driver's Windows 98 stop path, which
+until now had only ever executed on Windows 2000, runs on Windows 98 under
+this stack and leaves the controller halted with its ports unpowered.
+Inferred: the fault is in the 5.00.2195 usbport's own PnP stop handling on
+9x, since the two lineages differ there and nothing else in the sequence
+changed. Unknown: what exactly the 2195 build does after `RH_DisableIrq`;
+whether the fix is in the XP sources or in SweetLow's rebuild; bare-metal
+behaviour; and the full device matrix under this stack. Measured the same
+day: the stack idle-suspends without `DisableSelectiveSuspend` exactly as
+NUSB's does. Two boots with no keep-alive pointer: value present, no
+`SuspendController` in four idle minutes and a hot-plugged keyboard
+addressed at once; value deleted, `SuspendController` once shortly after
+start and a keyboard hot-plugged afterwards never seen (QEMU shows it at the
+port with address 0, the driver's addressed count stays 0). The INF's global
+value stays, for both lineages.
+
+Also measured the same day, from a `post-nusb` clone with the stack swapped
+and the driver installed from an INF stripped of its `usbd` and `usbhub`
+lines: without `usbd.sys` the driver registers and starts but the USB 2.0
+Root Hub sits at Code 2 and no root-hub callback ever arrives (his
+`usbhub20.sys` imports `USBD.SYS` by name; `USBDSTUB.SYS` does not stand in,
+and his INF does not install it); a hand copy of `usbd98.sys` to
+`usbd.sys` and a reboot brings the hub and the mouse up. Without
+`usbhub.sys` a two-interface `usb-audio` enumerates and is parented as
+"Composite Device" by his `usbccgp.sys`, which his Full INF binds to
+`USB\COMPOSITE`; on NUSB that device is Code 2 without `usbhub.sys`. With
+`usbhub.sys` present as well (driver installed from the full package) his
+usbccgp still won the composite, his INF being the newer of the two
+claiming `USB\COMPOSITE`. So the package's `usbd98.sys` copy is needed
+under both lineages and its `usbhub98.sys` copy only under NUSB's, and
+inert under his. The audio device is the only two-interface class-0 device
+QEMU offers, and Windows 98's `USBAUDIO.VXD` still faults at `+00002ED4`
+once it streams (a boot-time arrival with a stored assignment does so at
+once), so it is plugged once per guest and read before it plays.
+`docs/contributing/build-and-test.md`, "The SweetLow stack", has the run.
+
+Rule: a limitation attributed to "the Windows 98 USB stack" names a lineage,
+not an operating system, and the release notes now say which. When a
+third-party component is the suspect, the cheapest discriminating test is a
+second implementation of the same interface, and the miniport ABI made that
+a two-hour swap here.
+
+Affected: `docs/using/release-notes.md` (the first known limitation and the
+Requirements row), `README.md`, `docs/contributing/build-and-test.md` ("The
+SweetLow stack"), `docs/usb-xhci-info/usbport-miniport-interface.md` section
+5 (the fourth-lineage table), `docs/contributing/legal-provenance.md` section
+4, `.github/ISSUE_TEMPLATE/bug_report.yml`, `scripts/vm-matrix/` (the
+`2a-sweetlow` target and `-XferAdd`).
+
+## QEMU 11.1.0-rc2 parks a Windows 98 boot in SeaBIOS's SMM handler when a USB mouse is attached to the xHCI at launch
+
+Environment: the host's `C:\Program Files\qemu` QEMU, "11.0.92
+(v11.1.0-rc2-12128-gc65ddfcd01)", installed 2026-08-03; the first
+`prepare-image.ps1 -Boot` of the `2a-sweetlow` guest, 2026-09-02. Every
+matrix log from the evening of 2026-08-11 through the 2026-08-30 post-release
+runs records QEMU 11.0.0, which the harness's resolver had found as a scoop
+package that is no longer installed, so this was the first prep boot on the
+newer binary.
+
+Observed: a black 720x400 frame, the debug console at 0 bytes after minutes,
+the QEMU process burning CPU, and `info registers` showing `SMM=1`, `CS=a000`,
+`CR0=00000010` and an EIP that never moves (`0x130`, `0x1cd`, `0xbd4a` across
+runs). `system_reset` reproduces it inside four seconds. With SeaBIOS's own
+log (`-debugcon file:... -global isa-debugcon.iobase=0x402`) the last lines
+are "Booting from 0000:7c00" and "set VGA mode 13", IO.SYS's logo, before the
+"pnp call arg1=5" a good boot prints next. The wizard the black screen was
+first read as, and the "OneDrive touched the image" hang the harness warns
+about, were both wrong: the monitor answered throughout.
+
+Bisected with `-snapshot` boots of the same image, so nothing was written:
+the disk alone boots to ring 3 in thirty seconds with `pc` or `pc,smm=off`;
+plus `qemu-xhci` alone, boots; plus `qemu-xhci` and a `usb-mouse` attached at
+launch, at either port count, wedges; the same with `smm=off`, boots; the
+vvfat transfer drive with or without a subdirectory, the chardevs, the
+debug console and the boot flags, all innocent; disk-less guests never wedge,
+because nothing reaches the path. Proven: the trigger needs a boot-attached
+USB HID device on the xHCI and a Windows 98 boot, and SMM off avoids it.
+Inferred, not verified: SeaBIOS polls a boot-attached USB HID from 16-bit
+context through its SMI-based 32-bit call path, and this QEMU's SMM handling
+under TCG breaks under it. Unknown: whether 11.1.0 final has it, and whether
+`smm=off` changes anything Windows 98 sees beyond the BIOS enabling ACPI
+itself (the guest booted, bound devices and shut down normally with it).
+
+Rule: `prepare-image.ps1 -Boot` attaches the keep-alive pointer before the
+guest starts on every Windows 98 target, so every 2a prep boot on this QEMU
+wedges the same way. A black frame with an empty debug console and `SMM=1` in
+`info registers` is this, not the image and not the driver. The `2a-sweetlow`
+target carries `Machine = 'pc,smm=off'`; the other targets keep `pc` until
+they are re-run on this QEMU, or QEMU 11.0.0 is put back. Record the QEMU
+version in every run header, as the matrix already does; it is what made the
+change visible.
+
+Affected: `scripts/vm-matrix/matrix.config.psd1` (the `2a-sweetlow` entry's
+comment), `scripts/vm-matrix/prepare-image.ps1`.
+
+## Windows ME on QEMU: the ME CD's own FORMAT never writes a sector, and its Setup restarts wedge like Windows 98's
+
+Environment: Phase 18, 2026-09-02, scoop QEMU 11.0.0, `-machine pc -cpu
+pentium3 -m 256`, the Windows ME OEM Full CD (El Torito, `[BOOT]\Boot-1.44M.img`),
+a fresh 4 GB qcow2 (`vm\winme.img`).
+
+Observed, three things:
+
+1. Booting the ME CD, its menu defaults straight into Setup without `/p j`
+   (F3 exits). After `fdisk` and a relaunch, `D:\WIN9X\FORMAT C:` printed
+   "Formatting 4,094.66M / 0 percent completed" and stayed there: `info
+   blockstats` showed `ide0-hd0 wr_operations=0` and six reads for the whole
+   run, `info registers` a real-mode CPU with IF clear looping in
+   `CS=3bd4` whose entire segment read back as zeros through `xp`, and the
+   stack filling with one repeated far pointer (`3bd4:e99b`), the stack
+   pointer falling by about 0x3a0 every half second. The program's image
+   in memory was gone and the CPU was executing what was left. The cause
+   was not chased. Windows 98 SE's `format c:` from the Windows 98 SE CD's
+   boot floppy, with the ME ISO attached as the second CD-ROM, formatted
+   the same partition in about thirty seconds, and `E:\WIN9X\SETUP.EXE /p
+   j` from that DOS installed Windows ME normally.
+2. Windows ME OEM Setup's copy phase reads the CD once (about 167 MB) and
+   then works from the hard disk in 512-byte BIOS operations at about 1
+   MB/s, so the file-copy bar sits at 10 to 25 percent for many minutes with
+   the disk busy; it is not stuck. The later INF installs (SweetLow's
+   `USB2.INF`, the driver package) asked for no CD, consistent with the CABs
+   being on the disk.
+3. Every restart the guest initiated, Setup's own included, wedged at the
+   Windows ME logo: the "guest reboot after a driver install wedges at the
+   splash" of the Windows 98 lesson above, with its mechanism now read:
+   after the warm reset the local APIC's LINT0 is masked (`info lapic`:
+   `LVT0 0x00010000`, `SPIV ... APIC disabled`), the 8259 holds IRQ0
+   pending and unmasked (`pic0 irr=11 imr=b8`), and IO.SYS spins on the BIOS
+   tick word at `0040:006C` (`cmp %es:0x46c,%dx / je`). A cold launch shows
+   `LVT0 0x00000700 ExtINT` and boots through.
+
+Reusable rules:
+
+- Format a Windows ME target's disk from the Windows 98 SE CD's boot
+  floppy, with the ME CD as the second CD-ROM; `setup-qemu.ps1 -WinMeIso
+  ... -Win98Iso ...` writes the launcher that way. Do not wait on the ME
+  CD's FORMAT.
+- A Win9x copy-phase bar is judged by `info blockstats`, not by the
+  percentage: a hard disk with rising `wr_operations` is progressing.
+- On these guests a restart is a Start-menu shutdown and a relaunch. When a
+  guest sits at the logo, `info lapic` with `LVT0` masked and `info pic`
+  with `irr` bit 0 set is the signature; kill QEMU and cold-start.
+
 ## Task 14.1.7 - the review-method rules earned across the audit rounds, salvaged out of the cross-phase review record
 
 These rules were carried in a consolidated cross-phase review record under
@@ -5782,6 +5957,12 @@ so `DriverEntry` had not run, and the CPU was in real mode (`CR0=0x10`,
 BIOS tick at `40:6C` to advance. `info irq` showed IRQ0 still being
 delivered (81091 -> 81190 over 4 s) while the tick word never changed.
 Killing QEMU and cold-starting boots straight through, every time.
+Mechanism, found 2026-09-02 on the Windows ME guest, which wedges the same
+way: after the guest-initiated warm reset `info lapic` shows the local
+APIC's LINT0 masked (`LVT0 0x00010000`), so the 8259's IRQ0, pending and
+unmasked there (`info pic`: `pic0 irr=11 imr=b8`), never reaches the CPU;
+a cold launch shows `LVT0 0x00000700 ExtINT`. See "Windows ME on QEMU"
+below the QEMU 11.1.0-rc2 entry.
 
 ### Reusable rules
 
@@ -5887,7 +6068,10 @@ compare it against after installation.
   version/length/SHA-256, and is read by the stager, the packager, and the
   INF gate, including a `TGT-TARGET` rule that catches the two source names
   being swapped between the sections, which is structurally perfect and
-  installs the wrong OS's driver.
+  installs the wrong OS's driver. (Release 1.0.0.1 retired that mechanism:
+  the OS supplies the file through the INF's `LayoutFile`, so there is no
+  per-target binary on the media to authenticate. The rule stands for the
+  next time one destination name means two binaries.)
 - "It would fail loudly" is a claim to test, not an assumption to rest a
   gate on. Here it was false, and the cost of finding out at task 8 would
   have been a misattributed no-go on the architecture gate.
