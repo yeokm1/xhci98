@@ -183,22 +183,59 @@ Write-AsciiFile $installCmd @(
     "  -monitor tcp:127.0.0.1:$MonitorPort,server=on,wait=off"
 )
 
-# The Windows ME install launcher: the Windows 98 one with that OS's CD and
-# image. Same setup engine, same /p j rule; the CD keeps setup under \WIN9X.
-# Written whether or not -WinMeIso was given, like the Windows 98 one, so the
-# placeholder can be edited by hand. Nothing about it has been exercised yet
-# (docs\contributing\build-and-test.md, "Windows ME target VM").
+# The Windows ME install launcher. Same 16-bit setup engine as Windows 98,
+# same /p j rule; setup is under \WIN9X on that CD. Exercised 2026-09-02
+# (docs\contributing\build-and-test.md, "Windows ME target VM"): the Windows
+# ME CD's own boot floppy FORMAT never writes a sector under QEMU
+# (docs\contributing\lessons.md, "Windows ME on QEMU"), so when -Win98Iso is
+# given as well the launcher boots the Windows 98 SE CD's floppy for
+# fdisk/format and carries the Windows ME CD as the second CD-ROM (E:) for
+# SETUP. Without -Win98Iso it boots the Windows ME CD alone, which only
+# installs onto an already-formatted disk. Written whether or not -WinMeIso
+# was given, like the Windows 98 one, so the placeholder can be edited by hand.
 $winMeInstallCmd = Join-Path $LocalScriptDir "qemu-winme-install.cmd"
-Write-AsciiFile $winMeInstallCmd @(
+$winMeBootsWin98 = -not [string]::IsNullOrWhiteSpace($Win98Iso)
+if ($winMeBootsWin98) {
+    $winMeRecipe = @(
+        "rem Boots the Windows 98 SE CD's floppy (its FORMAT works; the Windows ME CD's",
+        "rem FORMAT never writes a sector under QEMU) with the Windows ME CD as the",
+        "rem second CD-ROM. At the Windows 98 CD menu: 2 (Boot from CD-ROM), then",
+        "rem ""Start computer with CD-ROM support"" (F3 twice out of Windows 98 Setup if",
+        "rem it auto-starts); D: is the Windows 98 CD, E: the Windows ME CD. Then: fdisk",
+        "rem (create+activate primary), reboot, format c:, then",
+        "rem   E:\WIN9X\SETUP.EXE /p j"
+    )
+    $winMeIsoChecks = @(
+        "set ""WIN98_ISO=$Win98Iso""",
+        "if not exist ""%WIN98_ISO%"" (",
+        "  echo Missing ISO: %WIN98_ISO%",
+        "  exit /b 1",
+        ")"
+    )
+    $winMeCdLines = @(
+        "  -drive file=""%WIN98_ISO%"",media=cdrom,index=2 ^",
+        "  -drive file=""%WINME_ISO%"",media=cdrom,index=3 ^"
+    )
+} else {
+    $winMeRecipe = @(
+        "rem Boots the Windows ME CD alone. Its menu defaults into Setup without /p j",
+        "rem (F3 exits), and its FORMAT never writes a sector under QEMU, so format the",
+        "rem disk from a Windows 98 SE boot first (setup-qemu.ps1 -Win98Iso regenerates",
+        "rem this launcher to boot that CD with this one second). Then:",
+        "rem   D:\WIN9X\SETUP.EXE /p j    (setup is under \WIN9X on this CD, not \WIN98)."
+    )
+    $winMeIsoChecks = @()
+    $winMeCdLines = @("  -cdrom ""%WINME_ISO%"" ^")
+}
+Write-AsciiFile $winMeInstallCmd (@(
     "@echo off",
     "rem Windows ME install: the qemu-win98-install.cmd recipe with the Windows ME",
     "rem CD and image. Same 16-bit setup engine, so the same rule: install with",
-    "rem the ACPI HAL or PCI never enumerates under QEMU. At the CD boot menu pick",
-    "rem ""Start computer with CD-ROM support"", then at the A:\ prompt: fdisk",
-    "rem (create+activate primary), reboot, format c:, then run",
-    "rem   D:\WIN9X\SETUP.EXE /p j    (setup is under \WIN9X on this CD, not \WIN98).",
-    "rem This launcher has not been exercised yet; see docs\contributing\build-and-test.md,",
-    "rem ""Windows ME target VM"".",
+    "rem the ACPI HAL or PCI never enumerates under QEMU. Every restart the guest",
+    "rem itself starts wedges at the Windows ME logo (docs\contributing\lessons.md,",
+    "rem ""Windows ME on QEMU""): shut down from the Start menu and relaunch instead."
+) + $winMeRecipe + @(
+    "rem docs\contributing\build-and-test.md, ""Windows ME target VM"", is the recipe.",
     "set ""WINME_ISO=$WinMeIso""",
     "if ""%WINME_ISO%""=="""" (",
     "  echo Edit this file or set -WinMeIso when running setup-qemu.ps1.",
@@ -207,7 +244,8 @@ Write-AsciiFile $winMeInstallCmd @(
     "if not exist ""%WINME_ISO%"" (",
     "  echo Missing ISO: %WINME_ISO%",
     "  exit /b 1",
-    ")",
+    ")"
+) + $winMeIsoChecks + @(
     "if not exist ""$winMeImage"" (",
     "  echo Missing image: $winMeImage - run setup-qemu.ps1 -WinMeIso ... -CreateDisk",
     "  exit /b 1",
@@ -217,12 +255,12 @@ Write-AsciiFile $winMeInstallCmd @(
     "  -cpu pentium3 ^",
     "  -m 256 ^",
     "  -drive file=""$winMeImage"",format=qcow2,if=ide ^",
-    "  -device $XhciDevice,id=xhci ^",
-    "  -cdrom ""%WINME_ISO%"" ^",
+    "  -device $XhciDevice,id=xhci ^"
+) + $winMeCdLines + @(
     "  -boot once=d ^",
     "  -action reboot=reset -no-shutdown ^",
     "  -monitor tcp:127.0.0.1:$($MonitorPort + 3),server=on,wait=off"
-)
+))
 
 $runCmd = Join-Path $LocalScriptDir "qemu-win98-run.cmd"
 Write-AsciiFile $runCmd @(
