@@ -32,7 +32,9 @@ Every USB 3.x connector (USB4/Thunderbolt included) also carries the USB 2.0 wir
 
 ## Installation Steps
 
-- Windows 98 SE: **install [NUSB 3.3](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) first**. It provides the `usbport.sys` + `usbhub20.sys` stack this driver depends on. NUSB 3.6 carries the same stack. A system installed with [Windows 98 QuickInstall](https://github.com/oerg866/win98-quickinstall) 1.0.1 or later already has SweetLow's newer build of that stack instead, and this driver works on it too, with the bonus that disabling or removing the driver does not crash Windows 98 there. Both alternatives are observed in a virtual machine only; NUSB 3.3 is what this project tests against.
+- Windows 98 SE needs a USB 2.0 stack (`usbport.sys` + `usbhub20.sys`) before this driver. Two options:
+  - **NUSB 3.3**, the configuration this project tests against: install [NUSB 3.3](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) first. NUSB 3.6 carries the same stack and also works.
+  - **SweetLow's stack**, the newer Windows XP lineage of the same port driver, under which disabling, removing and upgrading this driver do not crash Windows 98. A system installed with [Windows 98 QuickInstall](https://github.com/oerg866/win98-quickinstall) 1.0.1 or later already has it; install this driver as below and nothing more is needed. On any other Windows 98 SE, fetch the `[MBD]_sweetlow_usb2.0` folder from [win98-driver-lib-base](https://github.com/oerg866/win98-driver-lib-base), right-click its `USB2.INF`, choose *Install*, and reboot. If NUSB is already installed, first remove its USB 2.0 stack through Add/Remove Programs ("Remove Unofficial Universal USB 2.0 Stack"), then install SweetLow's before rebooting.
 - Windows 2000 SP4: that stack is already there natively (or through the standalone USB 2.0 update KB319973). **Do not install NUSB on Windows 2000.**
 - Optional but recommended: boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from the `XHCIQUAL\` folder. A controller reporting no legacy interrupt pin cannot be driven on either system and there is no software workaround, so find out before you install anything.
 
@@ -59,7 +61,7 @@ XHCIQUAL demo video: https://www.youtube.com/watch?v=Tv6blmBS6Do
 
 <img src="images/xhci98-driver-info.jpg" width="800">
 
-**On Windows 98, do not disable, remove or upgrade this driver in Device Manager before reading the release `readme.txt`.** Each of those blue-screens that system. The fault is in the Windows 98 USB stack's own controller teardown, not this driver (Microsoft's own USB drivers do the same thing on the same machine), and the readme has the way round it.
+**On Windows 98 with NUSB, do not disable, remove or upgrade this driver in Device Manager before reading the release `readme.txt`.** Each of those blue-screens that system. The fault is in NUSB's `usbport.sys`, the Windows 2000 build of the USB 2.0 stack, not this driver. Microsoft's own USB drivers do the same thing on the same machine. The same driver on the same machine survives all three under SweetLow's build of that stack (see the installation steps). The readme has the way round it for NUSB systems.
 
 ## What is tested, and what is not
 

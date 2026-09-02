@@ -27,8 +27,10 @@ and so is a verdict with no reading beside it.
 
 Two things the test never does on Windows 98, and both bite before the step
 that says so. Do not disable, remove or upgrade the driver in Device Manager:
-each of the three blue-screens that system at `0028:C00312EE`, and 7.1 is where
-that is recorded. Do not cycle one device rapidly in and out of a port: that
+under NUSB's stack, which is what this test installs, each of the three
+blue-screens that system at `0028:C00312EE`, and 7.1 is where that is
+recorded (under SweetLow's stack they complete; the release notes say so, and
+this test does not cover that stack). Do not cycle one device rapidly in and out of a port: that
 can freeze the machine and it is this driver's own defect (release notes,
 "Known limitations").
 
@@ -311,7 +313,7 @@ Windows 98 SE
 
 | # | Do | Expected reading |
 |---|---|---|
-| 7.1 | Do not disable, remove or upgrade this driver in Device Manager. Disabling the USB Root Hub is fine | Nothing to see: the clause is a prohibition, and what the record says is that it was respected. Each of the three blue-screens the machine at `0028:C00312EE` |
+| 7.1 | Do not disable, remove or upgrade this driver in Device Manager. Disabling the USB Root Hub is fine | Nothing to see: the clause is a prohibition, and what the record says is that it was respected. Each of the three blue-screens the machine at `0028:C00312EE` under NUSB's stack, the one this test installs |
 | 7.2 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | Present, value 1 |
 | 7.3 | Plug in one composite device, something that is more than one thing at once | It enumerates and its functions load, rather than `USB Composite Device` with `Code 2` and nothing above it |
 

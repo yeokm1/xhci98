@@ -314,11 +314,14 @@ was taken through this project's own driver counters, not from the package's
 binaries.
 
 A further package has been read, statically and at run time, on 2026-09-02:
-SweetLow's USB 2.0 stack for Windows 98 as shipped in Windows 98
-QuickInstall's driver library (`oerg866/win98-driver-lib-base`, directory
-`[MBD]_sweetlow_usb2.0`, commit `5ef7f88e`, a public GitHub repository; kept
-git-ignored in `tools/sweetlow-extracted/` with a README recording URL,
-commit, sizes, versions and SHA-256s). Its `USBPORT.SYS` is a 5.1.2600.2180
+SweetLow's USB 2.0 stack for Windows 98, `usb20_win9x.zip`, from the download
+link its author gave the project owner
+(`http://sweetlow.orgfree.com/download/usb20_win9x.zip`; the zip is kept
+git-ignored in `tools/` and its extraction in `tools/sweetlow-extracted/`
+with a README recording URL, sizes, versions and SHA-256s). The same five
+binaries had been fetched earlier that day from Windows 98 QuickInstall's
+driver library (`oerg866/win98-driver-lib-base`, `[MBD]_sweetlow_usb2.0`,
+commit `5ef7f88e`, a public GitHub repository) and hash identical. Its `USBPORT.SYS` is a 5.1.2600.2180
 build carrying the resource string "built by: WinDDK", so the file is a
 rebuild from XP SP2-level sources rather than a Microsoft-shipped binary; how
 those sources were obtained is not recorded here, and this project has not

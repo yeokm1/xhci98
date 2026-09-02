@@ -304,18 +304,24 @@ against.
 
 A third Windows 98 stack exists and has been examined: SweetLow's (LordOfMice
 on GitHub, the author of the 2007 Windows 2000 backport NUSB carries) XP
-SP2-sourced rebuild, shipped in Windows 98 QuickInstall's base driver library
-(`https://github.com/oerg866/win98-driver-lib-base`, directory
-`[MBD]_sweetlow_usb2.0`, commit `5ef7f88e`, 2026-03-03; promoted to that
-library in QuickInstall v1.0.0, 2026-02-15). It was raised in issue #1 as the
-stack free of the controller-teardown crash. The package is `USBPORT.SYS`,
+SP2-sourced rebuild. It was raised in issue #1 as the stack free of the
+controller-teardown crash. The package is his `usb20_win9x.zip`
+(`http://sweetlow.orgfree.com/download/usb20_win9x.zip`, 229,139 bytes,
+SHA-256 `B9C06F08...`, kept as `tools/usb20_win9x.zip`): `USBPORT.SYS`,
 `USBEHCI.SYS`, `USBHUB20.SYS` and `USBCCGP.SYS`, all version 5.1.2600.2180
-with the resource string "built by: WinDDK", plus `USBDSTUB.SYS` 1.00.000
-("Stubs for undecorated USBD.SYS functions", CompanyName SweetLow, a small PnP
-driver importing three `USBD.SYS` entry points that nothing in the package
-references) and Microsoft's 2003 `USB2.INF`, the same file NUSB carries. Files,
-hashes and `dumpbin` listings are in `tools/sweetlow-extracted/` (git-ignored;
-its README has the fetch record). The record below has the miniport-visible
+with the resource string "built by: WinDDK" (his notes: XP post-SP1 sources
+for three of them, 2003 sources for usbehci), plus `USBDSTUB.SYS` 1.00.000
+("Stubs for undecorated USBD.SYS functions", CompanyName SweetLow; his notes
+call it a USBD.SYS helper for the XP SP3 QFE usbccgp on 98/SE, and his INF
+does not install it), his own edit of Microsoft's 2003 `USB2.INF` (no SiS
+entry, no `usbd.sys` copy line), Full and Lite INF variants (usbccgp bound
+to `USB\COMPOSITE` or `USB\COMPOSITE2`), NOWMI and VIA hub variants, an XP
+SP3 QFE usbccgp, and two `.reg` files. Windows 98 QuickInstall's base driver
+library (`https://github.com/oerg866/win98-driver-lib-base`,
+`[MBD]_sweetlow_usb2.0`) ships the same five binaries byte for byte with
+Microsoft's original INF plus a `usbd.sys` copy line QuickInstall added.
+Files, hashes and `dumpbin` listings are in `tools/sweetlow-extracted/`
+(git-ignored; its README has the fetch record). The record below has the miniport-visible
 facts; the VM observations are in `docs/contributing/build-and-test.md`, "The
 SweetLow stack", and `docs/contributing/lessons.md`.
 
@@ -361,7 +367,7 @@ trace in the `2a-sweetlow` guest on 2026-09-02.
 
 | Item | SweetLow rebuild |
 |---|---|
-| Stack package | `[MBD]_sweetlow_usb2.0` in `oerg866/win98-driver-lib-base` at commit `5ef7f88e` (fetched 2026-09-02); files in `tools/sweetlow-extracted/` with the README recording URL, commit and hashes |
+| Stack package | `usb20_win9x.zip` from SweetLow's own site (see the paragraph above); the same binaries are in `oerg866/win98-driver-lib-base` `[MBD]_sweetlow_usb2.0` at commit `5ef7f88e`, which is where they were first fetched on 2026-09-02; files in `tools/sweetlow-extracted/` with the README recording URLs and hashes |
 | `usbport.sys` version | `5.1.2600.2180 built by: WinDDK`, CompanyName "Windows (R) 2000 DDK provider", "USB 1.1 & 2.0 Port Driver": XP SP2's source level rebuilt with the DDK, not Microsoft's shipping binary (XP SP2's own is 143,872 bytes) |
 | `usbport.sys` size / SHA256 | 134,912 bytes; `8A3C9F1B568CB25CF5DD9AF3AF9E5C3400DE24BD087CAA3E4E3345588F5CFB56` |
 | Companions | `USBEHCI.SYS` 20,224 B `7BE8F4AD...`, `USBHUB20.SYS` 50,560 B `01A83E76...`, `USBCCGP.SYS` 27,776 B `683061AF...`, all 5.1.2600.2180 WinDDK builds; `USBDSTUB.SYS` 5,376 B `DCF7E861...`; `USB2.INF` 4,470 B `305F6133...` (full hashes in the README) |
@@ -374,6 +380,7 @@ trace in the `2a-sweetlow` guest on 2026-09-02.
 | Wrapper layout | Allocates 0x150 with `push 150h` (pool tag `usbp`), zeroes 0x54 dwords, stores `Version` at `+0x10`, copies the packet to `+0x14`: the Win2000 SP4 / XP form, not NUSB's `+0x10` form. Static |
 | Service pointers written before the copy | The 16 slots 0xE4..0x120, and nothing else in the packet (`mov dword ptr [esi+E4h]` .. `[esi+120h]` in the listing). Static |
 | Registry value names present | `DisableSelectiveSuspend`, `UsbBIOSx`, `DisableCcDetect` in one UTF-16 cluster with `usb` (offsets 0xD0A..0xD56), the same Services\USB query table shape NUSB's build has at 0x1D52..0x1D9E; `HcDisableSelectiveSuspend` separately; no `EnIdleEndpointSupport` (the XP SP3 binary has it, this SP2-level build does not). Both: with the value deleted the stack idle-suspended the controller shortly after start and a later hot-plug was invisible; with it present neither happened (`docs/contributing/build-and-test.md`, "The SweetLow stack") |
+| What it needs beside it | `usbd.sys`: required, `usbhub20.sys` imports it by name and the root hub is Code 2 without it (runtime, 2026-09-02); `USBDSTUB.SYS` is not a substitute and his INF does not install it. `usbhub.sys`: not required, composites are parented by his `usbccgp.sys` via the Full INF's `USB\COMPOSITE` binding (runtime, a two-interface `usb-audio`), and it still is when `usbhub.sys` is present, so the package's copy is inert under his stack. `docs/contributing/build-and-test.md`, "The SweetLow stack" |
 | Common buffer, SG mapping | Not read. The driver's runtime behaviour under it (below) is the only evidence, and it is consistent with the 32-bit page-granular path both 2195.x builds have |
 | Runtime, `2a-sweetlow` guest, 2026-09-02 | Registration, `StartController` and the No Op self-test clean; boot-attached HS mouse bound; hot-plugged HS `usb-storage` addressed (SET_ADDRESS interception), bulk pair opened, mounted as a removable disk; then Device Manager disable, re-enable, Remove and Refresh-plus-reinstall each completed: `DisableInterrupts`, `StopController(TRUE)`, eight ports unpowered, halted at `USBSTS=1`, `StartController` on the same extension after re-enable, a fresh `DriverEntry` after reinstall. QEMU only, `pc,smm=off` (see lessons), no matrix run, no bare metal |
 

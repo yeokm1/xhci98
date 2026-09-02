@@ -72,6 +72,26 @@ start and a keyboard hot-plugged afterwards never seen (QEMU shows it at the
 port with address 0, the driver's addressed count stays 0). The INF's global
 value stays, for both lineages.
 
+Also measured the same day, from a `post-nusb` clone with the stack swapped
+and the driver installed from an INF stripped of its `usbd` and `usbhub`
+lines: without `usbd.sys` the driver registers and starts but the USB 2.0
+Root Hub sits at Code 2 and no root-hub callback ever arrives (his
+`usbhub20.sys` imports `USBD.SYS` by name; `USBDSTUB.SYS` does not stand in,
+and his INF does not install it); a hand copy of `usbd98.sys` to
+`usbd.sys` and a reboot brings the hub and the mouse up. Without
+`usbhub.sys` a two-interface `usb-audio` enumerates and is parented as
+"Composite Device" by his `usbccgp.sys`, which his Full INF binds to
+`USB\COMPOSITE`; on NUSB that device is Code 2 without `usbhub.sys`. With
+`usbhub.sys` present as well (driver installed from the full package) his
+usbccgp still won the composite, his INF being the newer of the two
+claiming `USB\COMPOSITE`. So the package's `usbd98.sys` copy is needed
+under both lineages and its `usbhub98.sys` copy only under NUSB's, and
+inert under his. The audio device is the only two-interface class-0 device
+QEMU offers, and Windows 98's `USBAUDIO.VXD` still faults at `+00002ED4`
+once it streams (a boot-time arrival with a stored assignment does so at
+once), so it is plugged once per guest and read before it plays.
+`docs/contributing/build-and-test.md`, "The SweetLow stack", has the run.
+
 Rule: a limitation attributed to "the Windows 98 USB stack" names a lineage,
 not an operating system, and the release notes now say which. When a
 third-party component is the suspect, the cheapest discriminating test is a

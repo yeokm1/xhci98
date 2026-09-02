@@ -2133,9 +2133,26 @@ Put the whole unzipped package somewhere the machine can read - a floppy, a
 CD, a shared folder - then:
 
   WINDOWS 98 SE
-      Install NUSB 3.3 first. Then open Device Manager and find the
-      unrecognised xHCI controller: it sits unclaimed with a yellow mark,
-      usually under "Other devices". Then
+      A USB 2.0 stack (usbport.sys + usbhub20.sys) has to be there first.
+      Two options:
+
+        NUSB 3.3 - the configuration this driver is tested against. Install
+        it first. NUSB 3.6 carries the same stack and also works.
+
+        SWEETLOW'S STACK - the newer Windows XP lineage of the same port
+        driver, under which disabling, removing and upgrading this driver
+        do NOT crash Windows 98 (section 5). A system installed with
+        Windows 98 QuickInstall 1.0.1 or later already has it. On any other
+        Windows 98 SE, fetch the [MBD]_sweetlow_usb2.0 folder from
+        https://github.com/oerg866/win98-driver-lib-base, right-click its
+        USB2.INF, choose Install, and reboot. If NUSB is already installed,
+        first remove its USB 2.0 stack through Add/Remove Programs ("Remove
+        Unofficial Universal USB 2.0 Stack"), then install SweetLow's before
+        rebooting.
+
+      Then open Device Manager and find the unrecognised xHCI controller:
+      it sits unclaimed with a yellow mark, usually under "Other devices".
+      Then
           Properties -> Driver -> Update Driver -> Specify a location
       and point it at the RELEASE\ directory. Reboot when asked.
 
@@ -2150,11 +2167,12 @@ CD, a shared folder - then:
 It installs as "USB 2.0 eXtensible Host Controller (xhci98)", with a "USB
 Root Hub" underneath it. Neither should carry a warning mark.
 
->> ON WINDOWS 98, READ SECTION 5 BEFORE YOU EVER DISABLE, REMOVE OR UPGRADE <<
-   THIS DRIVER IN DEVICE MANAGER. Each of those blue-screens that system, and
-   there is a way round it. It is not this driver - Microsoft's own USB
-   drivers do the same on the same machine - but it is easier to know before
-   than after.
+>> ON WINDOWS 98 WITH NUSB, READ SECTION 5 BEFORE YOU EVER DISABLE, REMOVE <<
+   OR UPGRADE THIS DRIVER IN DEVICE MANAGER. Each of those blue-screens that
+   system, and there is a way round it. It is not this driver - Microsoft's
+   own USB drivers do the same on the same machine, and under SweetLow's
+   stack the same driver survives all three - but it is easier to know
+   before than after.
 
 
 ==============================================================================
@@ -2179,19 +2197,21 @@ Two things are specific to this driver and worth knowing in advance:
     USB controller in the machine, and uninstalling does NOT remove it. See
     section 9.
 
-  WINDOWS 98: STOPPING A RUNNING USB CONTROLLER CRASHES THE MACHINE
-  .................................................................
+  WINDOWS 98 WITH NUSB: STOPPING A RUNNING USB CONTROLLER CRASHES THE MACHINE
+  ..........................................................................
 
   DISABLING OR REMOVING ANY USB HOST CONTROLLER IN DEVICE MANAGER BLUE-SCREENS
-  WINDOWS 98 - the fatal-exception screen, "A fatal exception 0E ... at
-  0028:C00312EE", which on that system means a reboot and whatever was
-  unsaved.
+  WINDOWS 98 WHEN NUSB'S USB 2.0 STACK IS INSTALLED - the fatal-exception
+  screen, "A fatal exception 0E ... at 0028:C00312EE", which on that system
+  means a reboot and whatever was unsaved.
 
   THIS IS NOT THIS DRIVER - it happens identically with Microsoft's own
-  usbehci.sys on the same machine, and it is the Windows 98 USB stack's own
-  controller teardown rather than anything this package installs. Disabling
-  the USB ROOT HUB is fine, and Windows 2000 disables, re-enables,
-  uninstalls and upgrades cleanly.
+  usbehci.sys on the same machine. The fault is in NUSB's usbport.sys, the
+  Windows 2000 build of the USB 2.0 stack: under SweetLow's build of that
+  stack (section 4) the same driver on the same machine disables,
+  re-enables, removes and upgrades without crashing, and so does Windows
+  2000. Disabling the USB ROOT HUB is fine on either stack. Everything
+  below this line applies to NUSB systems.
 
   Everything that stops the running driver reaches that same crash, which on
   Windows 98 means all three of these:

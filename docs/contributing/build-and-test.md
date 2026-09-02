@@ -2723,11 +2723,13 @@ archives) so Phase 2a does not depend on a live download.
    The SweetLow stack. A third Windows 98 stack, examined 2026-09-02 after
    issue #1: SweetLow's XP-lineage rebuild (`USBPORT.SYS` 5.1.2600.2180
    "built by: WinDDK", with `USBEHCI.SYS`, `USBHUB20.SYS`, `USBCCGP.SYS`,
-   `USBDSTUB.SYS` and Microsoft's `USB2.INF`), shipped in Windows 98
-   QuickInstall's base driver library
-   (`https://github.com/oerg866/win98-driver-lib-base`, directory
-   `[MBD]_sweetlow_usb2.0`). Fetch it into `tools/sweetlow-extracted/`
-   (git-ignored; the README there records the commit and hashes). It
+   `USBDSTUB.SYS` and his edit of Microsoft's `USB2.INF`), from his
+   `usb20_win9x.zip` (`http://sweetlow.orgfree.com/download/usb20_win9x.zip`;
+   Windows 98 QuickInstall's driver library,
+   `https://github.com/oerg866/win98-driver-lib-base` directory
+   `[MBD]_sweetlow_usb2.0`, ships the same binaries). Keep the zip in
+   `tools/` and its extraction in `tools/sweetlow-extracted/` (git-ignored;
+   the README there records URLs and hashes). It
    registers this driver (GetHciMn `0x10000001`, which the probe already
    accepts), runs HID and mass storage, and, unlike both 5.00.2195 builds,
    survives disable, re-enable, Remove and reinstall on Windows 98 (the
@@ -2738,10 +2740,15 @@ archives) so Phase 2a does not depend on a live download.
 
    ```powershell
    powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-sweetlow -Clone
-   # vm\SWEETLOW\ = the six package files plus a Windows 98 SE usbd.sys (out\pkg-qemu\usbd98.sys renamed),
-   # because USB2.INF copies usbd.sys and the package carries none
+   # vm\SWEETLOW\ = the zip's contents (his USB2.INF copies no usbd.sys, so nothing else is needed there)
    powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-sweetlow -Boot -Xfer -XferAdd vm\SWEETLOW
    ```
+
+   The first pass cloned the stamped `fresh-2a.img` (driver already
+   installed) and swapped only the stack; the second cloned
+   `win98.img @ post-nusb` (no driver, no `usbd.sys`) and installed the
+   driver afterwards, which is the order a user takes. Set the target's
+   `CloneFrom` accordingly; `config.sample.psd1` carries the first.
 
    In the guest, from Start, Run: NUSB's own uninstall string,
    `RUNDLL32.EXE C:\WINDOWS\SYSTEM\ADVPACK.DLL,LaunchINFSection C:\WINDOWS\INF\_USB2UN.INF,UNINSTALL`
@@ -2765,6 +2772,40 @@ archives) so Phase 2a does not depend on a live download.
    run: `sendkey` input follows the most recently added keyboard, so a USB
    keyboard hot-plugged onto a suspended controller silently swallows every
    keystroke until `device_del` removes it.
+
+   What the stack needs beside it, measured 2026-09-02 on a guest cloned
+   from `win98.img @ post-nusb` (NUSB 3.3's core files, no driver, no
+   `usbd.sys`, no `usbhub.sys`), with NUSB's USB 2.0 stack removed and
+   SweetLow's `usb20_win9x.zip` (his own `USB2.INF`, the Full variant)
+   installed, then this driver installed from a package whose INF had every
+   `usbd` and `usbhub` line removed. `usbd.sys` is required: the driver
+   registered and started, but the USB 2.0 Root Hub sat at Code 2 ("The
+   NTKERN.VXD device loader(s) for this device could not load the device
+   driver") with no root-hub callback in the trace, because his
+   `usbhub20.sys` imports `USBD.SYS` by name like NUSB's; copying the
+   package's `usbd98.sys` to `SYSTEM32\DRIVERS\usbd.sys` by hand and
+   rebooting brought the root hub and the mouse up. `USBDSTUB.SYS` is not a
+   substitute (his notes call it a helper for the XP SP3 QFE usbccgp, and
+   nothing in his INF installs it). `usbhub.sys` is not required: a
+   hot-plugged two-interface `usb-audio` enumerated, installed from the CD,
+   and appeared as "Composite Device" under Universal Serial Bus
+   controllers with "USB Audio Device" beneath, i.e. parented by his
+   `usbccgp.sys` through the INF's `USB\COMPOSITE` binding (the Lite INF
+   binds `USB\COMPOSITE2` only and was not tried). Under NUSB the same
+   device stops at "USB Composite Device", Code 2, without `usbhub.sys`.
+   And the package's `usbhub98.sys` copy does not get in his way: from the
+   `sweetlow-stack-nodriver` snapshot, the driver installed from the full
+   package (so `usbd.sys` and `usbhub.sys` both placed), then the audio
+   device plugged once, Windows still chose "Composite Device" (his
+   usbccgp, whose INF is the newer of the two claiming `USB\COMPOSITE`)
+   rather than USB.INF's "USB Composite Device" on `usbhub.sys`. So the
+   package as shipped is right for both lineages: `usbd.sys` needed by
+   both, `usbhub.sys` needed by NUSB's and inert under his. One trap on
+   the way: Windows 98's `USBAUDIO.VXD` faults (exception 00 at
+   `+00002ED4`, the Phase 9 finding) once the audio device streams, which
+   a boot-time arrival with a stored assignment does at once; only a first
+   arrival lives long enough to read the tree, so the device is plugged once
+   per guest and never cycled.
 
    The full install is used because it is the environment end users of
    `xhci98.sys` will run, and a pre-install VM snapshot makes it reversible.
