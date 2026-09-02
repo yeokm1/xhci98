@@ -6014,7 +6014,10 @@ compare it against after installation.
   version/length/SHA-256, and is read by the stager, the packager, and the
   INF gate, including a `TGT-TARGET` rule that catches the two source names
   being swapped between the sections, which is structurally perfect and
-  installs the wrong OS's driver.
+  installs the wrong OS's driver. (Release 1.0.0.1 retired that mechanism:
+  the OS supplies the file through the INF's `LayoutFile`, so there is no
+  per-target binary on the media to authenticate. The rule stands for the
+  next time one destination name means two binaries.)
 - "It would fail loudly" is a claim to test, not an assumption to rest a
   gate on. Here it was false, and the cost of finding out at task 8 would
   have been a misattributed no-go on the architecture gate.

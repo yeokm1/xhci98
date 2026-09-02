@@ -217,7 +217,7 @@ suspected:
 - Composite is present only as multi-interface models such as `usb-audio`, and
   on Windows 98 that particular unit is confounded: the release notes' USB Audio entry
   records a failure inside Windows 98's own `USBAUDIO.VXD` seen so far only
-  with QEMU's emulated device. The `usbhub98.sys` clause that issue 3
+  with QEMU's emulated device. The composite-parent clause that issue 3
   (`docs/issues/03-usbhub-sys-composite-devices.md`) exists for has its real
   reading on metal.
 - Full and High Speed HID, storage and hubs are the models that carry weight.

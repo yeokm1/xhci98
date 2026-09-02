@@ -111,11 +111,11 @@ LICENSE         The license text and its scope note.
 
 Everything above is tracked except `tools/`, `external/`, the PDFs in
 `docs/references/`, `vm/`, `out/` and `scripts/local/`: third-party material,
-generated output, or host-specific tooling. Three files under `tools/` do go
-into the release download, though never into git; "Third-Party Material and
-Provenance" below names them. Nothing has been uploaded yet: the repository is
-private and no GitHub release exists, so that is a decided channel rather than
-a used one. A clone therefore has every procedure but not every input; see
+generated output, or host-specific tooling. Nothing under `tools/` goes into
+the release download since 1.0.0.1; "Third-Party Material and Provenance"
+below has the record. Nothing has been uploaded yet: the repository is
+private and no GitHub release exists. A clone therefore has every procedure
+but not every input; see
 `docs/contributing/build-and-test.md` for what has to be fetched or rebuilt.
 
 ### Where to start
@@ -276,16 +276,21 @@ registration failure. `build-driver.cmd` runs the INF gate on every build for
 that reason, including the Win98-parser traps its engine reports as nothing
 at all.
 
-The media also carries a per-target `usbd.sys` (`usbd98.sys`/`usbd2k.sys`),
-each reachable only from its own install path and never overwriting an
-existing file. Do not "simplify" that to one file: the wrong build loads
-rather than failing, so the split is checked by hash and by the INF gate's
-`TGT-*` rules. Build install media with `scripts\package\make-package.ps1`,
-never by hand-copying the `.sys` and `.inf`.
+The media carries no Microsoft file. `usbd.sys` (both targets) and
+`usbhub.sys` (Windows 98 only) are the OS's own, and nothing on an xHCI-only
+machine ever placed them, so the INF has the setup engine copy them from the
+OS's own install source through `LayoutFile=layout.inf`, never overwriting a
+file already there; on an xHCI-only Windows 98 machine that means the
+Windows 98 CD may be asked for. Do not put either file back on the media
+under any name: the INF gate's `OS-*` and `PKG-MSFILE` rules refuse it, and
+`legal-provenance.md` section 5 records why. Build install media with
+`scripts\package\make-package.ps1`, never by hand-copying the `.sys` and
+`.inf`.
 
 See `docs/contributing/build-and-test.md` for environment setup, QEMU
-configuration, the install procedure, the two model INFs, and "Carrying a
-per-target `usbd.sys`"; `docs/usb-xhci-info/win98-wdm.md` for the WDM API
+configuration, the install procedure, the two model INFs, and "The files the
+OS supplies: `usbd.sys` and `usbhub.sys`"; `docs/usb-xhci-info/win98-wdm.md`
+for the WDM API
 compatibility table and the "MSVC 6.0 / C89 Language Pitfalls" list.
 
 ---
@@ -322,16 +327,15 @@ rules that bind day-to-day work, and none of them is optional.
   the repository records where to fetch them: filename, version, SHA-256,
   URL, stated licence limit (`docs/references/README.md` is the pattern).
   Public availability of a document is not permission to rehost it.
-- The one distribution exception: the GitHub release download carries three
-  Microsoft files (`usbd98.sys`, `usbd2k.sys`, `usbhub98.sys`), the target
-  OSes' own binaries that make a download a complete install set on xHCI-only
-  machines. None is tracked; `legal-provenance.md` section 5 records the
-  decision. **Do not extend the exception to a fourth file** without the same
-  decision recorded there, and do not write "this project redistributes
-  nothing" anywhere. Decided 2026-09-02: the exception is withdrawn before
-  any upload, and release 1.0.0.1 has the OS supply both files instead
-  (`handoff.md`; `legal-provenance.md` section 5). Until that change lands,
-  this rule still binds anyone touching the packaging.
+- The release download carries no Microsoft file. From 0.0.0.4 to 1.0.0.0
+  the assembled asset carried three (`usbd98.sys`, `usbd2k.sys`,
+  `usbhub98.sys`), by a decision `legal-provenance.md` section 5 records, and
+  that was withdrawn on 2026-09-02 before any upload: release 1.0.0.1 has the
+  OS supply both files through the INF's `LayoutFile`. **Do not put a
+  Microsoft file back onto the media, under any name, without a decision
+  recorded there**, and do not write "this project redistributes nothing"
+  anywhere: the two tool executables carry statically linked runtimes
+  (section 2a).
 - A fact may be tracked; the artifact it came from may not. Write facts in a
   form re-derivable without the artifact: the address, the instruction, the
   exact command, the page number and a short verbatim phrase. A claim a fresh

@@ -37,16 +37,22 @@ the port driver's role, was the documented fallback and was never needed. USB
 `docs/usb-xhci-info/win98-wdm.md` ("USB Stack Architecture and the Integration
 Decision") and `architecture.md`.
 
-Current status: Phases 0-16 are closed. `1.0.0.0` is cut, and it is the only
-release this repository carries; Phase 15 moved the tree from revision 1.2 of
-the xHCI specification to revision 1.2c, the only revision Intel now serves,
-without a code change; Phase 16, the fully automated run on freshly installed
-guests of both targets, closed on 2026-08-30 on its second run, a clean
-Windows 2000 reading and a Windows 98 reading with one row against, the USB
-Audio replug, published as a limitation. Two acts sit outside the task list
-and are the project owner's to take: uploading the asset, and then running
-the release acceptance test by hand on a fresh VM and on a physical machine.
-The section this roadmap ends on is the reminder for the second.
+Current status: Phases 0-16 are closed and Phase 17 is open. `1.0.0.0` is
+cut, and it is the only release this repository carries; Phase 15 moved the
+tree from revision 1.2 of the xHCI specification to revision 1.2c, the only
+revision Intel now serves, without a code change; Phase 16, the fully
+automated run on freshly installed guests of both targets, closed on
+2026-08-30 on its second run, a clean Windows 2000 reading and a Windows 98
+reading with one row against, the USB Audio replug, published as a
+limitation. Phase 17, opened 2026-09-02, has the operating system supply
+`usbd.sys` and `usbhub.sys` from its own install source, so the package stops
+carrying any Microsoft file; no driver code changes. Phase 18 is release
+`1.0.0.1`, which ships that change together with Windows ME support; its
+Windows ME side is written down and not started. Two acts sit
+outside the task list and are the project owner's to take: uploading the
+asset, and then running the release acceptance test by hand on a fresh VM
+and on a physical machine. The section this roadmap ends on is the reminder
+for the second.
 
 ---
 
@@ -57,7 +63,7 @@ work can be confirmed and has no checkpoint of its own. A VM boot or a bench
 trip is the expensive unit, and most tasks do not need one, so from Phase 6
 onward a phase whose tasks are confirmed in more than one place groups them
 into batches. Phases 6, 7a, 7b, 8, 9, 11 and 13 are of this shape; Phases 0-5,
-10, 12, 14, 15 and 16 have plain per-phase task numbers.
+10, 12, 14, 15, 16, 17 and 18 have plain per-phase task numbers.
 
 Task ids are `<batch>.<n>` in a batched phase (`6-B.4` is the fourth task of
 batch `6-B`) and plain `<phase>.<n>` otherwise (`12.3`, `14.1`). Phases 0-5
@@ -1346,6 +1352,148 @@ last two sections, what was built and what the runs found);
 `runs/run-16-post-release/` (the second run's report per target);
 `scripts/vm-matrix/README.md` (the commands, and notes 14 and 15 for what the
 first run corrected).
+
+## Phase 17 - The OS Supplies `usbd.sys` and `usbhub.sys`
+
+Goal: the release download carries the driver's own files, the tools and the
+readme, and nothing of Microsoft's. `src/xhci98.inf` asks the Windows setup
+engine, through `LayoutFile=layout.inf`, to copy `usbd.sys` (both targets)
+and `usbhub.sys` (Windows 98 only) from the operating system's own install
+source, with `COPYFLG_NO_OVERWRITE` so a file already on the machine is never
+touched. The driver code is unchanged; `xhci98.sys` is rebuilt only because
+its version resource must match the INF's `DriverVer`.
+
+Status: open, since 2026-09-02. The decision is the owner's, taken that day
+after the SweetLow-stack work measured what each stack needs
+(`build-and-test.md`, "The SweetLow stack"): `usbd.sys` is required under
+every USB 2.0 stack on both targets because `usbhub20.sys` imports it by
+name, `usbhub.sys` is required under NUSB's stack and inert under SweetLow's,
+and both are the OS's own files, so the OS's own install source is where
+they come from. Release `1.0.0.0` carried them on the media under per-target
+names; that exception (`legal-provenance.md` section 5) is withdrawn before
+any upload, so it will never have carried anything. `handoff.md` at the
+repository root is the working plan.
+
+What has been observed (2026-09-02, QEMU, the owner at the console): on the
+Windows 98 guest running SweetLow's stack, reverted to no driver and no
+`usbd.sys` or `usbhub.sys`, the Device Manager install from a package built
+this way raised the engine's own `Insert Disk` prompt naming the Windows 98
+Second Edition CD-ROM, not the xhci98 disk; after the copy and a relaunch the
+driver registered, `StartController` ran, the root-hub callbacks followed and
+the keep-alive mouse was addressed and bound, with the controller and the
+USB 2.0 Root Hub clean in Device Manager. The other two legs are still owed.
+
+Why a phase: it changes the install procedure a user follows, the packaging
+scripts and gates, the provenance record, and every user-facing statement
+about what the download holds, and it is what release `1.0.0.1` (Phase 18)
+ships. It changes no driver behaviour, which is why its checkpoint is an
+install reading rather than a device reading.
+
+Tasks:
+
+- [x] 17.0 Record the decision in `legal-provenance.md` section 5 before any
+  script changes, and point at it from `AGENTS.md`'s provenance bullet. Done
+  2026-09-02 (`2256779`).
+- [ ] 17.1 Prove the mechanism in the VMs before changing the tree, with the
+  test package `vm\LAYOUT` (the `1.0.0.0` qemu binary and the INF with the
+  four directive edits):
+  - [x] 17.1a Windows 98, SweetLow's stack, no driver, no `usbd.sys`, no
+    `usbhub.sys`, CABs absent so the CD is asked for. Observed 2026-09-02, as
+    above.
+  - [ ] 17.1b Windows 98, NUSB 3.3's stack (`win98.img @ post-nusb` cloned to
+    a new image), the same install, then one two-interface device attached
+    once: "USB Composite Device" with the function beneath, not Code 2, which
+    is the `usbhub.sys` half of the route.
+  - [ ] 17.1c Windows 2000 SP4 (`win2k.img @ phase2b-clean` cloned to a new
+    image), Have Disk from the same package: no prompt, `usbd.sys`
+    5.00.2195.6658 in `WINNT\SYSTEM32\DRIVERS`, the root hub up.
+- [ ] 17.2 The change, each check green before the next: the INF's four
+  directive edits and its comments, `DriverVer` and `src/xhci_version.h` at
+  `1.0.0.1`; the INF gate's `TGT-*` and `W98-*` families replaced by rules
+  for the new shape (LayoutFile present, `usbd.sys` on both paths and
+  `usbhub.sys` on the Windows 98 path only, flag 16, `10,System32\Drivers`,
+  neither file in `[SourceDisksFiles]`, no Microsoft file in the package),
+  each with a self-test that watches it fire, and `expected-footprint.txt`
+  regenerated; `make-package.ps1`, `make-release.ps1`, `test-package.ps1`
+  and the source manifest stop staging and hashing the three files; the
+  prep script's transfer-drive comment corrected; the documents
+  (`legal-provenance.md` section 5 in the past tense, `releases/README.md`,
+  `AGENTS.md`, `build-and-test.md`, `README.md`, the release notes, the
+  acceptance test, the generated `readme.txt`) and the user-facing statement
+  that the Windows 98 SE CD may be asked for; the `1.0.0.1` entry in
+  `releases/history.md`.
+Checkpoint: the package `make-package.ps1` assembles holds `xhci98.sys` and
+`xhci98.inf` and no other file; the INF gate and its self-tests are green on
+the new shape; and the install with the OS supplying the two files has been
+observed on Windows 98 under both USB 2.0 stacks and on Windows 2000, in the
+VMs, with the root hub up afterwards. "Observed on both" is read as
+`AGENTS.md` defines it. The cut itself is Phase 18's.
+
+Records: `handoff.md`; `legal-provenance.md` section 5;
+`build-and-test.md` ("The files the OS supplies: `usbd.sys` and
+`usbhub.sys`", "The SweetLow stack"); `releases/history.md`.
+
+## Phase 18 - Release `1.0.0.1`: Windows ME, and the Cut
+
+Goal: the driver observed on a Windows ME guest with its standing stated in
+every document that names the targets, and `1.0.0.1` cut carrying Phase 17's
+install change together with whatever Windows ME support that observation
+justifies.
+
+Status: written down 2026-09-02 at the owner's request, who decided the
+same day that Windows ME support is part of `1.0.0.1`, so the cut waits for
+it; not started on the Windows ME side. What
+needs no guest is done: the harness knows a prepare-only `2e` target
+(`scripts/vm-matrix/config.sample.psd1`, `prepare-image.ps1 -XferPackage`,
+`setup-qemu.ps1 -WinMeIso`), and `build-and-test.md`, "Windows ME target
+VM", records what the Windows ME OEM CD's own INFs say (its `USB.INF` leaves
+`PCI\CC_0C0330` unclaimed and uses `LayoutFile` itself; `usbd.sys` and
+`usbhub.sys` are in `BASE2.CAB`; its composite parent is `usbccgp.sys`) and
+the recipe. Nothing has run on Windows ME, and no document claims support
+until it has. Whether Windows ME becomes a third first-class target, with
+the checkpoint tax `AGENTS.md` describes, or a supported-in-VM target stated
+the way Windows 2000's status is stated, is the owner's decision and is
+open.
+
+Tasks:
+
+- [ ] 18.1 Install a Windows ME guest by hand from the CD
+  (`scripts\local\qemu-winme-install.cmd`), then a USB 2.0 stack. The
+  Windows ME CD does not carry one: its `layout.inf` names the USB 1.1 stack
+  only (`uhcd.sys`, `openhci.sys`, `usbd.sys`, `usbhub.sys`) and no
+  `usbport.sys`, `usbehci.sys` or `usbhub20.sys`. Microsoft's own USB 2.0
+  package for Windows 98 SE and ME is the `USB2.INF` and three drivers NUSB
+  ships ("For Windows 98SE and Windows ME"), installed by right-clicking
+  that INF; SweetLow's `usb20_win9x.zip` is the other candidate.
+- [ ] 18.2 Install the driver through the INF (`prepare-image.ps1 -Target 2e
+  -Boot -Xfer -XferPackage`) and record the load: `DriverEntry`,
+  `USBPORT_GetHciMn`, `StartController`, the root-hub callbacks, and which
+  files the copy phase asked the CD for.
+- [ ] 18.3 HID, mass storage and one composite device by hand, with the
+  counters read the way the prep script reads them.
+- [ ] 18.4 Decide the tier and state it: `AGENTS.md` (purpose and the target
+  table), `README.md`, the release notes' requirements, the bug-report form's
+  operating-system list, and the INF's header comment. Until then none of
+  them names Windows ME as supported.
+- [ ] 18.5 If first-class: matrix rows and a fresh target for the
+  post-release run, and the acceptance test's per-target steps.
+- [ ] 18.6 The `1.0.0.1` entry in `releases/history.md` gains the Windows
+  ME line the tier decision justifies, and `DriverVer`, `src/xhci_version.h`
+  and that entry's date all move to the day of the cut.
+- [ ] 18.7 Cut `1.0.0.1` with `make-release.ps1` on the full flavour set,
+  every gate green, and run the release acceptance test on each target with
+  the new procedure: Windows 98 once with the CABs absent so the CD prompt is
+  exercised and once with them present; Windows 2000 once; Windows ME per
+  18.4's tier.
+
+Checkpoint: a Windows ME guest boots the driver, the root hub comes up, a HID
+device and a mass-storage device work, and the tier is stated; and the asset
+`make-release.ps1` assembles for `1.0.0.1` holds `xhci98.sys`, `xhci98.inf`,
+the two tools and the readmes and no other file, with the acceptance test run
+on each target as above.
+
+Records: `build-and-test.md` ("Windows ME target VM");
+`scripts/vm-matrix/README.md`; `releases/history.md`; `handoff.md`.
 
 ## Post-Release - Run the Acceptance Test by Hand
 

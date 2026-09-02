@@ -36,6 +36,7 @@ Every USB 3.x connector (USB4/Thunderbolt included) also carries the USB 2.0 wir
   - **NUSB 3.3**, the configuration this project tests against: install [NUSB 3.3](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) first. NUSB 3.6 carries the same stack and also works.
   - **SweetLow's stack**, the newer Windows XP lineage of the same port driver, under which disabling, removing and upgrading this driver do not crash Windows 98. A system installed with [Windows 98 QuickInstall](https://github.com/oerg866/win98-quickinstall) 1.0.1 or later already has it; install this driver as below and nothing more is needed. On any other Windows 98 SE, fetch the `[MBD]_sweetlow_usb2.0` folder from [win98-driver-lib-base](https://github.com/oerg866/win98-driver-lib-base), right-click its `USB2.INF`, choose *Install*, and reboot. If NUSB is already installed, first remove its USB 2.0 stack through Add/Remove Programs ("Remove Unofficial Universal USB 2.0 Stack"), then install SweetLow's before rebooting.
 - Windows 2000 SP4: that stack is already there natively (or through the standalone USB 2.0 update KB319973). **Do not install NUSB on Windows 2000.**
+- Windows 98 SE on an xHCI-only machine: **have the Windows 98 SE installation CD at hand.** The package carries no Microsoft file; during the install Windows copies its own `usbd.sys` and `usbhub.sys` from the CD (an "Insert Disk" prompt naming the Windows 98 Second Edition CD-ROM), unless the Windows CABs are on the hard disk (`C:\WINDOWS\OPTIONS\CABS`, as on OEM and QuickInstall installs). A machine that ever had a USB 1.1 controller already has both files and is not asked. Windows 2000 takes `usbd.sys` from its driver cache and asks for nothing.
 - Optional but recommended: boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from the `XHCIQUAL\` folder. A controller reporting no legacy interrupt pin cannot be driven on either system and there is no software workaround, so find out before you install anything.
 
 <img src="images/xhci98-xhciqual-basic.jpg" width="800">
@@ -56,7 +57,7 @@ XHCIQUAL demo video: https://www.youtube.com/watch?v=Tv6blmBS6Do
 
 1. Put the unzipped package somewhere the machine can read: a floppy, a CD, a shared folder. `release\` is the one to install. `debug\` is the same driver built for troubleshooting, and a maintainer may ask you for it.
 2. In Device Manager, find the unrecognised xHCI controller. It sits unclaimed with a yellow mark, usually under "Other devices".
-3. Windows 98 SE: Properties -> Driver -> Update Driver -> Specify a location, point it at the `release\` directory, and reboot when asked. If the Add New Hardware Wizard finds the controller for you first, give it `release\` too. Windows 2000 SP4: Properties -> Driver -> Update Driver -> Have Disk, and point it at the `release\` directory.
+3. Windows 98 SE: Properties -> Driver -> Update Driver -> Specify a location, point it at the `release\` directory, answer the "Insert Disk" prompt for the Windows 98 SE CD if it appears (that is Windows fetching its own `usbd.sys` and `usbhub.sys`; if it then asks where to copy from, give it the CD's `WIN98` folder), and reboot when asked. If the Add New Hardware Wizard finds the controller for you first, give it `release\` too. Windows 2000 SP4: Properties -> Driver -> Update Driver -> Have Disk, and point it at the `release\` directory; nothing else is asked for.
 4. It installs as "USB 2.0 eXtensible Host Controller (xhci98)" with a "USB Root Hub" underneath it, and neither should carry a warning mark.
 
 <img src="images/xhci98-driver-info.jpg" width="800">
@@ -89,7 +90,7 @@ The devices checked so far, all on the E460 under Windows 98 SE. Each is charact
 | Terminus 4-port hub, single-TT | `1A40:0101` | High | Characterised. The swap partner for the hub above. |
 | Genesys 7-port hub (two cascaded chips), single-TT | `05E3:0608` | High | Characterised. A second-tier hub position. |
 | Logitech USB Optical Mouse | `046D:C077` | Low | Works at a root port and behind the multi-TT hub. |
-| Microsoft Wired Keyboard 600 (composite, two HID interfaces) | `045E:0750` | Low | Types, once Windows 98's own `usbhub.sys` is present. That file now ships in the release as `usbhub98.sys`. |
+| Microsoft Wired Keyboard 600 (composite, two HID interfaces) | `045E:0750` | Low | Types, once Windows 98's own `usbhub.sys` is present; since 1.0.0.1 the install has Windows copy it from the Windows 98 CD or CABs. |
 | SanDisk U3 Titanium flash drive | `0781:5408` | High | Works at a root port and behind the hub. |
 | MSSU10-128GSR and SanDisk 3.2Gen1 USB 3.0 flash drives | `090C:2320`, `0781:55AB` | High (SuperSpeed falls back) | Enumerate at High-Speed on the USB 2.0 port. A file round trip passed. |
 | StoreJet Transcend USB-to-SATA bridge (ASMedia) | `174C:5106` | High (SuperSpeed falls back) | A drive letter, and a file written and read back with matching contents. The first real bridge chip this driver has done verified I/O through. |
@@ -138,7 +139,7 @@ The driver is C (C89/C90, no C++ or CRT), built and verified on Windows 11 x64. 
 
 4. Build the two tools that ship beside the driver. `xhciqual\build.cmd` produces `XHCIQUAL.EXE`, the DOS qualifier, and needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM` (or wherever `WATCOM` points). That is the only tool installed normally on the host, and the driver never uses it. `xhcisnap\build.cmd` produces `XHCISNAP.EXE`, the snapshot reader, with the in-repo MSVC 6.0.
 
-5. Make install media. A `.sys` on its own is not install media, because the INF carries a per-target `usbd.sys` that has to travel with it. For a Windows 98 SE target, first download NUSB 3.3 (`nusb33e.exe`) from [philscomputerlab.com](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) to `tools\nusb33e.exe`.
+5. Make install media. A `.sys` on its own is not install media; the INF travels with it, and since 1.0.0.1 nothing else does, because the INF has Windows supply its own `usbd.sys` and `usbhub.sys`. For a Windows 98 SE target, first download NUSB 3.3 (`nusb33e.exe`) from [philscomputerlab.com](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) to `tools\nusb33e.exe`.
 
    | Script | Output |
    |---|---|
@@ -224,6 +225,6 @@ Neither PDF is tracked here. Fetch your own copies into the git-ignored `docs/re
 
 This project's own source is licensed under the GNU General Public License, version 2 ([LICENSE](LICENSE)), `GPL-2.0-only`. The repository tracks no third-party binary on its own, although the two tool executables it tracks under `releases/` carry statically linked third-party runtimes: `xhci98.sys` links no third-party object, runtime or extender, while `XHCIQUAL.EXE` embeds the Open Watcom runtime and the DOS/32A extender and `XHCISNAP.EXE` the MSVC 6.0 runtime and each ships with a `NOTICE.TXT` recording it (the `LICENSE` scope note states their terms).
 
-The release download also carries three unmodified Microsoft files, Windows 98 SE's and Windows 2000 SP4's `usbd.sys` and Windows 98 SE's `usbhub.sys`, because Windows setup places them only when it recognises a USB controller and an xHCI-only machine looks empty to it. Each is installed with `COPYFLG_NO_OVERWRITE`, so a machine that already has the file keeps its own. 
+The release download carries no Microsoft file. The `usbd.sys` and `usbhub.sys` the install needs are Windows' own, and Windows copies them from its own installation source during the install, never overwriting a file already there; the assembled asset carried them from 0.0.0.4 to 1.0.0.0, before any upload, and [docs/contributing/legal-provenance.md](docs/contributing/legal-provenance.md) section 5 records that. 
 
 The full inventory, provenance methods and redistribution boundaries are in [docs/contributing/legal-provenance.md](docs/contributing/legal-provenance.md), which states facts, not legal conclusions.

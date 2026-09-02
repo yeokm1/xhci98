@@ -267,3 +267,15 @@ E1.0/E2/E5, the P4 hash record, session 2 Finding D);
 `scripts/inf-gate/check-inf.ps1`; `scripts/package/usbd-sources.expected`;
 `docs/contributing/legal-provenance.md` section 5; `releases/history.md`
 `0.0.0.4`.
+
+### 2026-09-02: the carry is retired, the diagnosis stands
+
+Release 1.0.0.1 stops carrying the file. `src/xhci98.inf` names
+`LayoutFile=layout.inf` and the Windows setup engine copies `usbhub.sys` (and
+`usbd.sys`) from the operating system's own install source, the CABs on the
+hard disk or the Windows 98 CD, still with `COPYFLG_NO_OVERWRITE` and still
+on the Windows 98 path only. The gate rules became the `OS-*` family
+(`OS-MISSING` / `OS-ONWIN2K` keep the two directions above) and
+`scripts/package/usbd-sources.expected` is gone. `legal-provenance.md`
+section 5 and `build-and-test.md`, "The files the OS supplies", have the
+record; nothing above about the cause or the symptom changes.

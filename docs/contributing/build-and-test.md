@@ -108,7 +108,7 @@ Setup scripts:
 | `scripts\setup-qemu-win2k-smp.ps1` | The Phase 2d SMP stress VM (`vm\win2k-smp.img`, monitor 55557). Defaults to the checkpoint-proven `whpx,kernel-irqchip=off` rung; `-Accel`/`-AcpiOff`/`-Smp`/`-MemoryMb` select another Phase 2d task-2 rung so each is a regenerated launcher, not a hand-edited copy |
 | `scripts\check-smp-parallelism.ps1` | Host-side Phase 2d checkpoint check against the running 2d VM: a complete one-to-one vCPU/`thread_id` mapping from `info cpus`, plus a process affinity mask allowing 2+ logical processors. Guest-side "MP kernel landed" checks do not distinguish those host conditions; this script does. Run-time, so not part of `build-driver.cmd`; `-SelfTest` needs no VM |
 | `scripts\setup-all.ps1` | Runs MSVC, DDK, and both Phase 2a/2b QEMU setups; use `-RunInstallers` for MSVC/DDK and `-InstallQemu` for QEMU. Pass `-Win2KIso` or the Win2000 half is skipped with a warning |
-| `scripts\package\extract-usbd-sources.ps1` | Stages each target's own `usbd.sys` (and Win98 SE's `usbhub.sys`, an import-gate precedent binary) from that OS's install media into the git-ignored `tools\`, then authenticates them; see "Carrying a per-target `usbd.sys`" |
+| `scripts\package\extract-usbd-sources.ps1` | Stages reference copies of each target's own `usbd.sys` (and Win98 SE's `usbhub.sys`, an import-gate precedent binary) from that OS's install media into the git-ignored `tools\`, then authenticates them. Packaged by nothing since 1.0.0.1; see "The files the OS supplies" |
 | `scripts\package\make-package.ps1` | Assembles the install media both targets are installed from (`out\pkg-<flavor>\`), staging against the layout `check-inf.ps1 -EmitMediaLayout` derives, and gates it |
 | `scripts\package\test-package.ps1` | The packager's regression tests; stand-ins only, run by `build-driver.cmd` |
 | `scripts\import-gate\test-flavour-rules.ps1` | Regression tests for the import allowlist's three-flavour `FLAVORS` grammar, on synthetic allowlists, including the row that keeps `HAL.dll!WRITE_PORT_UCHAR` out of every published binary. Run by `build-driver.cmd` |
@@ -1273,12 +1273,17 @@ and the same VxD-hosted WDM model as Windows 98 SE, one WDM revision newer
 (1.05 against 1.0; `docs/usb-xhci-info/win98-wdm.md`), so the undecorated
 half of `src/xhci98.inf` is the half it reads. Nothing suggests Windows ME
 dropped an export Windows 98 SE had, but the import gate holds no Windows
-ME evidence, so the load itself is the first thing to observe. Both USB 2.0
-stacks the driver runs under on Windows 98 say they cover it: Microsoft's own
-`USB2.INF` that NUSB ships and SweetLow's edit of it both carry
-`; For Windows 98SE and Windows ME`. NUSB 3.3's own installer is written for
-Windows 98 SE, and whether it installs on Windows ME at all is not known
-here; SweetLow's `usb20_win9x.zip` is the natural first stack to try.
+ME evidence, so the load itself is the first thing to observe. A USB 2.0
+stack has to be installed on Windows ME as on Windows 98 SE: the Windows ME
+CD carries none (its `layout.inf` names the USB 1.1 stack only, `uhcd.sys`,
+`openhci.sys`, `usbd.sys` and `usbhub.sys`, and no `usbport.sys`,
+`usbehci.sys` or `usbhub20.sys`). Both stacks the driver runs under on
+Windows 98 say they cover it: Microsoft's own `USB2.INF` that NUSB ships and
+SweetLow's edit of it both carry `; For Windows 98SE and Windows ME`. NUSB
+3.3's installer (`_NUSB.INF`) is written for Windows 98 SE, but the stack
+inside it is Microsoft's Windows 98 SE / ME package and installs by
+right-clicking its `USB2.INF`; SweetLow's `usb20_win9x.zip` is the other
+candidate.
 
 What the CD says (static, file level):
 
@@ -2134,7 +2139,7 @@ archive's complete driver list is `USBPORT.SYS`, `USBHUB20.SYS`, `USBEHCI.SYS`,
 `USBSTOR.SYS`, `USBAUTH.SYS`, `USBNTMAP.SYS`, `USBU2A.SYS`, `NTMAP.SYS` and the
 1394 set (`1394BUS.SYS`, `OHCI1394.SYS`, `SBP2PORT.SYS`). There is no composite
 generic-parent driver, and no `usbd.sys` either (so `xhci98.inf`
-carries a per-target build of that one).
+has the OS supply that one through `LayoutFile`).
 
 Measured on the E460: a multi-interface HID device came up as `USB Composite
 Device` with Code 2 ("the NTKERN.VXD device loader(s) for this device could not
@@ -2149,8 +2154,9 @@ Single-interface HID devices bind and work normally, including behind hubs.
 The remedy was not a Windows 2000 file. Windows 98 SE's own `usbhub.sys` is
 that OS's composite parent, and Windows 98 places it only when Setup detects a
 USB controller it recognises, so an xHCI-only machine never receives it and
-the devnode reads `Code 2`: matched, and the file was not there. The package
-now carries it on the Windows 98 path, the same way it carries `usbd98.sys`.
+the devnode reads `Code 2`: matched, and the file was not there. The install
+now has Windows supply it on the Windows 98 path, the way it gets `usbd.sys`
+(release 1.0.0.1; the 1.0.0.0 media carried both under other names).
 
 Task 13-E.1 closed on that remedy without an SE CD install ever being run;
 `run-13e.md`'s "Finding 1 - RESOLVED" has the reading, including the reverse
@@ -2783,8 +2789,9 @@ archives) so Phase 2a does not depend on a live download.
    reboot ran HID and mass storage cleanly, including formatting and file I/O
    on a hot-plugged disk. What 3.6 changes is the layer above the miniport: it
    places WinMe `usbd.sys` 4.90.3000.1 and `usbhub.sys` 4.90.3002.1 and an XP
-   `usbccgp.sys` (KB945436), which pre-empt this package's no-overwrite
-   `usbd98.sys`/`usbhub98.sys` copies. A VM observation only; project guests
+   `usbccgp.sys` (KB945436), which pre-empt the no-overwrite copies of
+   `usbd.sys` and `usbhub.sys` the install would otherwise make. A VM
+   observation only; project guests
    stay on 3.3. (`docs/usb-xhci-info/usbport-miniport-interface.md` section 5
    has the file comparison.)
 
@@ -3528,7 +3535,7 @@ memory. Shape:
 
 | | Section | Contents |
 |---|---|---|
-| Both | `[Version]` | `$CHICAGO$`, `Class=USB` + the existing USB ClassGUID, `DriverVer` per "Versioning the driver" above (the number moves, so read it out of `src/xhci98.inf` rather than from this row) |
+| Both | `[Version]` | `$CHICAGO$`, `Class=USB` + the existing USB ClassGUID, `LayoutFile=layout.inf` ("The files the OS supplies" below), `DriverVer` per "Versioning the driver" above (the number moves, so read it out of `src/xhci98.inf` rather than from this row) |
 | Both | `[XhciModels]` | `%XhciDesc%=Xhci.Dev,PCI\CC_0C0330`, one class-code entry, the analog of the references' `PCI\CC_0C0320` |
 | Win98 | `[Xhci.Dev]` | `AddReg=Xhci.AddReg`, `CopyFiles=Xhci.CopyFiles,Xhci.CopyW98` |
 | Win98 | `[Xhci.AddReg]` | `HKR,,DevLoader,,*NTKERN` + `HKR,,NTMPDriver,,xhci98.sys` |
@@ -3536,8 +3543,8 @@ memory. Shape:
 | Win2000 | `[Xhci.Dev.NTx86.Services]` | `AddService=xhci98,0x00000002,Xhci.AddService` |
 | Win2000 | `[Xhci.AddService]` | `ServiceBinary=%12%\xhci98.sys`, type 1, start 3, error 1, `LoadOrderGroup=Base` |
 | Shared | `[Xhci.CopyFiles]` | `xhci98.sys,,xhci98.tmp` -> `10, System32\Drivers` |
-| Win98 | `[Xhci.CopyW98]` | `usbd.sys,usbd98.sys,,16` and `usbhub.sys,usbhub98.sys,,16` -> `10, System32\Drivers`. The second is Windows 98's composite parent, Win98-only and added by batch 13-E; on Windows 2000 that name is the OS's own hub driver. |
-| Win2000 | `[Xhci.CopyW2K]` | `usbd.sys,usbd2k.sys,,16` -> `10, System32\Drivers` |
+| Win98 | `[Xhci.CopyW98]` | `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, both fetched from the OS's own install source through `LayoutFile` (neither is in `[SourceDisksFiles]`). The second is Windows 98's composite parent, Win98-only; on Windows 2000 that name is the OS's own hub driver. |
+| Win2000 | `[Xhci.CopyW2K]` | `usbd.sys,,,16` -> `10, System32\Drivers`, from `driver.cab` through `LayoutFile` |
 | Both | `[DefaultInstall]` / `[DefaultInstall.NTx86]` | right-click pre-stage; the 9x one also copies the INF to `%17%` |
 
 Four decisions in it depart from the references, each for a reason that would
@@ -3566,12 +3573,12 @@ otherwise cost a debug cycle:
   it can leave the previous binary in place, which reads as a code change that
   did nothing.
 
-#### Carrying a per-target `usbd.sys`
+#### The files the OS supplies: `usbd.sys` and `usbhub.sys`
 
 `usbhub20.sys` imports `USBD.SYS` on both targets and nothing on an xHCI-only
-machine ever places that file, so `xhci98.inf` carries it. The full diagnosis,
-a boot-time `c000026c` / `0xc0000034` that names `usbhub20.sys` rather than
-the file actually missing, is in `docs/contributing/lessons.md`,
+machine ever places that file, so the install has to see to it. The full
+diagnosis, a boot-time `c000026c` / `0xc0000034` that names `usbhub20.sys`
+rather than the file actually missing, is in `docs/contributing/lessons.md`,
 "`usbhub20.sys` bugchecks Win2000". Re-confirmed with `dumpbin`:
 
 - both `usbhub20.sys` builds (NUSB `5.00.2195.6891`, SP4 `5.00.2195.6681`)
@@ -3580,123 +3587,125 @@ the file actually missing, is in `docs/contributing/lessons.md`,
   `USBD_GetPdoRegistryParameter`, `_USBD_ParseConfigurationDescriptorEx@28`,
   `_USBD_CreateConfigurationRequestEx@8`, `USBD_CalculateUsbBandwidth`;
 - `usbd.sys` is a leaf on both targets, importing only `ntoskrnl.exe` and
-  `HAL.dll`, so carrying it closes the chain rather than opening a new one.
+  `HAL.dll`, so supplying it closes the chain rather than opening a new one.
 
-The complication is that `usbd.sys` is one destination name and two different
-binaries: Win98 SE's `4.10.2222` (18,912 bytes) and Windows 2000 SP4's
-`5.00.2195.6658` (20,688 bytes). One package holds both.
+`usbhub.sys` is the same story on Windows 98 only: it is that OS's composite
+parent, absent for the same reason, and without it every multi-interface
+device stops at "USB Composite Device", Code 2 (issue 03; batch 13-E measured
+it on the E460). Under SweetLow's stack the parent is his `usbccgp.sys` and
+the file is inert; on Windows 2000 the name belongs to the OS's own USB 1.1
+hub driver, placed from `driver.cab` by every install, and the composite
+parent is `usbccgp.sys`, so the Windows 2000 path must not ask for it.
 
-The media keeps them apart by name; the install section chooses. The
-`CopyFiles` source-name field is the mechanism, "the name of the file as it
-exists on the distribution media if that name is different from the
-Destination name" (Oney p.387; `docs/references/README.md` records the
-edition and the page offset that citation was re-checked against):
+Both are the operating system's own files, so since release 1.0.0.1 the INF
+takes them from the operating system's own install source rather than
+carrying them:
 
 ```ini
-[Xhci.Dev]                                 ; Win98 reads this
-CopyFiles=Xhci.CopyFiles,Xhci.CopyW98
-[Xhci.Dev.NTx86]                           ; Win2000 prefers this
-CopyFiles=Xhci.CopyFiles,Xhci.CopyW2K
+[Version]
+LayoutFile=layout.inf
 
-[Xhci.CopyW98]
-usbd.sys,usbd98.sys,,16
-[Xhci.CopyW2K]
-usbd.sys,usbd2k.sys,,16
+[SourceDisksFiles]
+xhci98.sys=1
+xhci98.inf=1
+
+[Xhci.CopyW98]                             ; Win98 reads this
+usbd.sys,,,16
+usbhub.sys,,,16
+[Xhci.CopyW2K]                             ; Win2000 prefers this
+usbd.sys,,,16
 ```
 
-Selection is therefore structural, not conditional: an engine that cannot
-read a section cannot reach the file that section names. Win98 ignores
-decorated section names outright, so it can only ever name `usbd98.sys`;
-Win2000 prefers the most specific match, so it names `usbd2k.sys`. There is no
-ordering, version comparison, or engine behaviour that can produce the other
-outcome. `[DefaultInstall]` and `[DefaultInstall.NTx86]` carry the same split,
-because right-click Install pre-stages through those.
+The mechanism is `LayoutFile`. A `CopyFiles` entry whose file the INF's own
+`[SourceDisksFiles]` does not name is resolved through the OS's `layout.inf`
+(`C:\WINDOWS\INF\LAYOUT.INF` records `usbd.sys=5`, i.e. `BASE5.CAB`;
+`%SystemRoot%\inf\layout.inf` on Windows 2000), and the engine fetches it
+from the Windows source path: `C:\WINDOWS\OPTIONS\CABS` when the CABs are on
+disk (OEM installs, Windows 98 QuickInstall), otherwise an "Insert Disk"
+prompt naming the Windows 98 Second Edition CD-ROM; on Windows 2000,
+`Driver Cache\i386\driver.cab`, which every install has, so no prompt. This
+is how the OS's own INFs get their files (Windows ME's `USB.INF` spells it
+`LayoutFile=Layout.inf, Layout1.inf, Layout2.inf`), and it is what the HID
+wizard does on the 2a guests when it takes `hidusb.sys` from `E:\WIN98`.
+Each target therefore gets its own OS's build by construction, and the split
+the 1.0.0.0 media kept by name (`usbd98.sys` / `usbd2k.sys`, hashed against
+a manifest) no longer exists.
 
-What if the target already has `usbd.sys`? Leave it alone: flag `16`.
+Observed on 2026-09-02 (roadmap Phase 17, task 17.1): on the Windows 98
+guest running SweetLow's stack, reverted to no driver and no `usbd.sys` or
+`usbhub.sys`, the Device Manager install from a package built this way
+raised "Insert Disk" naming the Windows 98 Second Edition CD-ROM, not the
+xhci98 disk; after the copy and a relaunch the root-hub callbacks followed
+`StartController` and the keep-alive mouse was bound. The NUSB-stack and
+Windows 2000 legs are recorded in the roadmap as they are taken.
+
+What if the target already has the file? Leave it alone: flag `16`.
 `COPYFLG_NO_OVERWRITE` is "do not copy if file exists on target"
-(`C:\NTDDK\inc\SETUPAPI.H`, the local DDK's own header). Presence is the entire
-requirement: an existing `usbd.sys` is by definition that OS's own build or a
-newer serviced one, and both builds export all four symbols `usbhub20.sys`
-needs. The alternatives all lose something:
+(`C:\NTDDK\inc\SETUPAPI.H`, the local DDK's own header). Presence is the
+entire requirement: an existing `usbd.sys` is by definition that OS's own
+build or a newer serviced one, and both builds export all four symbols
+`usbhub20.sys` needs. A machine that ever had a USB 1.1 controller already
+has both files and is asked for nothing. The alternatives all lose
+something:
 
 | Flag | Behaviour | Why not |
 |---|---|---|
-| none | engine-defined version arbitration | The two setup engines do not arbitrate alike, the exact per-target divergence this file exists to remove |
+| none | engine-defined version arbitration | The two setup engines do not arbitrate alike, and the file is the OS's own already |
 | `4` `COPYFLG_NOVERSIONCHECK` | overwrite regardless of version | Downgrades a post-SP4 hotfix `usbd.sys` that `usbhub.sys` and every USB client also bind to |
-| `32` `COPYFLG_NO_VERSION_DIALOG` | do not copy if target is newer | Still replaces an equal-or-older file for no benefit |
+| `32` `COPYFLG_NO_VERSION_DIALOG` | do not copy if target is newer | Still replaces an equal-or-older file for no benefit, and asks for the CD to do it |
 | `64` `COPYFLG_OVERWRITE_OLDER_ONLY` | same, by version equality | Same objection |
 | `16` `COPYFLG_NO_OVERWRITE` | skip if present | Chosen |
 
-A second, independent safety net covers the Win98 half if some engine were
-found to ignore the flag: `usbd98.sys` is bit-for-bit the file Win98 SE's own
-media ships, so an unwanted overwrite there rewrites the file with itself.
+The gate enforces the wiring, because every way of breaking it is silent:
+`scripts/inf-gate/check-inf.ps1`'s `OS-*` family (`OS-LAYOUT`, `OS-MEDIA`,
+`OS-MISSING`, `OS-ONWIN2K`, `OS-DUP`, `OS-SRCNAME`, `OS-FLAGS`, `OS-DEST`,
+`OS-DEFAULT`) requires `LayoutFile=layout.inf`, no Microsoft file in
+`[SourceDisksFiles]` under its own or a 1.0.0.0 media name, `usbd.sys` on
+both device-install paths and both right-click paths, `usbhub.sys` on the
+Windows 98 ones and not the Windows 2000 ones, each under its own name with
+flag 16 and no overwrite flag to `10, System32\Drivers`; `PKG-MSFILE`
+refuses a staged package holding one. `test-inf-checks.ps1` watches each
+fire.
 
-A swapped pair would not fail loudly, so it is hashed. Both
-builds export the four needed symbols, and SP4's `usbd.sys` needs only one
-kernel import Win98 SE's does not (`ExQueueWorkItem`), which does resolve on
-Win98: `ntkern.vxd`'s name table contains it and six NUSB/Win98 precedent
-binaries import it. So the wrong build would load and misbehave rather than
-refuse.
-
-The package is therefore authenticated rather than trusted:
-`scripts/package/usbd-sources.expected` records each build's version, length
-and SHA-256 against a target name, and three things read that one file:
-`extract-usbd-sources.ps1` (what to stage), `make-package.ps1` (what to copy
-under which media name), and `check-inf.ps1 -PackageDir` (what a finished
-package must contain). It also lets the gate check the direction of the
-mapping, which no amount of INF structure can: swapping `usbd98.sys` and
-`usbd2k.sys` between the two sections is structurally perfect and installs the
-wrong OS's driver (rule `TGT-TARGET`).
-
-The package. One flat, 8.3-clean directory serves both targets:
+The package. One flat, 8.3-clean directory serves both targets, and it is
+this project's two files:
 
 ```
-xhci98.inf   xhci98.sys   usbd98.sys   usbd2k.sys   usbhub98.sys
+xhci98.inf   xhci98.sys
 ```
 
 ```
-powershell -ExecutionPolicy Bypass -File scripts\package\extract-usbd-sources.ps1 -Win98Iso <w98se.iso> -Win2KIso <win2ksp4.iso>
 powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor debug
 ```
 
-The first stages both OS builds from their own install media, named by the
-two ISO arguments (without them it has nothing to stage, and it exits
-non-zero when nothing is staged already), into the
-git-ignored `tools\` (Win98 SE's from the cab the media's own `layout.inf`
-names, Win2000's by expanding `I386\USBD.SY_`) and authenticates them; the
-second assembles `out\pkg-<flavor>\` and runs the INF gate against the finished
-directory, so a package is never less gated than the binary in it.
-
-None of the
-three Microsoft files (`usbd98.sys`, `usbd2k.sys`, and `usbhub98.sys` on the
-Windows 98 path only) is tracked by this repository; `tools\` and `out\` are
-both git-ignored. All three go into the GitHub release download, which is a
-different act through a different channel; no release has been uploaded yet,
-the repository being private so far, so this is a decided channel rather than
-a completed upload. `docs/contributing/legal-provenance.md` section 5 is the
-record, and `releases\README.md` describes the upload set `make-release.ps1`
-assembles.
+It assembles `out\pkg-<flavor>\` and runs the INF gate against the finished
+directory, so a package is never less gated than the binary in it. A copy
+taken from `releases\<version>\<flavor>\` is the same two files. The
+reference copies of the two `usbd.sys` builds and Windows 98 SE's
+`usbhub.sys` are still staged under the git-ignored `tools\` by
+`scripts\package\extract-usbd-sources.ps1`, for the import gate's Windows 98
+evidence and the Windows 2000 VM setup, and are packaged by nothing.
 
 Where each file goes is not the packager's decision. `[SourceDisksFiles]`
-may place a source file in a subdirectory, and a package staged at one path but
-authenticated at another verifies nothing, the same shape as the per-target
-bug above. So `make-package.ps1` asks `check-inf.ps1 -EmitMediaLayout` for the
-layout that script's own parse produces and stages against it, rather than
-parsing `[SourceDisksFiles]` a second time. Two parsers would be free to
-disagree; one cannot. That call also gates the INF before anything is copied,
-which is the right order, since there is nothing to gain from staging a
-package around an INF that will be rejected, and it is why `-SkipPackageGate`
-skips only the post-staging check.
+may place a source file in a subdirectory, and a package staged at one path
+but gated at another verifies nothing. So `make-package.ps1` asks
+`check-inf.ps1 -EmitMediaLayout` for the layout that script's own parse
+produces and stages against it, rather than parsing `[SourceDisksFiles]` a
+second time. Two parsers would be free to disagree; one cannot. That call
+also gates the INF before anything is copied, which is the right order,
+since there is nothing to gain from staging a package around an INF that
+will be rejected, and it is why `-SkipPackageGate` skips only the
+post-staging check.
 
 The binary gates run here too, not only in the build wrapper. Before
 anything is staged, `make-package.ps1` runs `test\run-host-tests.cmd` and
 `check-imports.ps1` against the `.sys` it is about to package. That is
 intended duplication: `scripts\build-driver.cmd` already runs both, but a
 binary can reach `src\obj*\i386\` without it (`scripts\local\ddk-debug.cmd`
-gives an interactive DDK prompt), and this is the step that produces media a VM
-is installed from. Roadmap Phase 4 task 1 requires both gates before every
-deploy; running them where the media is assembled makes "gated" a property of
-the package rather than of how it happened to be built.
+gives an interactive DDK prompt), and this is the step that produces media a
+VM is installed from. Roadmap Phase 4 task 1 requires both gates before
+every deploy; running them where the media is assembled makes "gated" a
+property of the package rather than of how it happened to be built.
 
 `-SkipBinaryGates`
 exists for the packager's own self-tests, which stage text stand-ins; never
@@ -3704,13 +3713,12 @@ pass it for media a VM will see. `-NoTargetEvidence` passes through to the
 import gate on a host with no extracted target binaries staged.
 
 `scripts\package\test-package.ps1` holds that to account with stand-in files
-and a stand-in manifest (no build, no staged media, no VM; the suite prints
-its check count when it passes): a
-`[SourceDisksFiles]` subdirectory is staged into and not also flattened, an
-entry with no source is refused by name, an INF the gate rejects leaves no
-output directory behind, a source that does not match its manifest row is
-refused by hash, a stand-in driver is refused when the binary gates are left
-on, and a relative `-OutDir` resolves against the caller's location.
+(no build, no staged media, no VM; the suite prints its check count when it
+passes): a `[SourceDisksFiles]` subdirectory is staged into and not also
+flattened, an entry with no source is refused by name, an INF the gate
+rejects leaves no output directory behind, a stand-in driver is refused when
+the binary gates are left on, and a relative `-OutDir` resolves against the
+caller's location.
 
 That last
 one is not hypothetical: `[Path]::GetFullPath` resolves against the process
@@ -3719,9 +3727,8 @@ directory, which `Set-Location` does not update, so before the fix a bare
 somewhere the caller never named. `scripts\build-driver.cmd` runs this suite
 alongside the other self-tests.
 
-`scripts\build-driver.cmd` does not package: it would fail on a host with no
-install media staged, and the binary gates have nothing to say about
-`usbd.sys`. It prints the packaging command on success instead.
+`scripts\build-driver.cmd` does not package; it prints the packaging
+command on success instead.
 
 One residual, recorded rather than solved: `usbhub20.sys` also imports
 `WMILIB.SYS`, which is not on the Win98 SE CD (`layout.inf` has no row for
@@ -3731,7 +3738,7 @@ working Win98 SE package, so SE resolves it some other way; the `ntkern.vxd`
 name-table scan is silent on it, which is no information (that scan has known
 false negatives). This is a risk confined to the original Win98 retail
 release, which this project does not target, and there is no file on the SE
-media for the INF to carry even if it were.
+media for the INF to ask for even if it were.
 
 The keys were not confirmed against a live installed EHCI device when the INF
 was authored. Neither VM has an EHCI controller (Phase 2a established none is

@@ -12,6 +12,32 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 1.0.0.1 - 2026-09-02
+
+The driver is unchanged. This release changes how it is installed: the
+package no longer carries any Microsoft file, and the two Windows files the
+driver depends on come from Windows itself.
+
+### What changed
+
+- `1.0.0.0` shipped `usbd98.sys`, `usbd2k.sys` and `usbhub98.sys` beside the
+  driver: Windows 98 SE's and Windows 2000 SP4's own `usbd.sys` and Windows
+  98 SE's own `usbhub.sys`, because Windows only places its USB files when
+  Setup finds a USB controller it recognises and an xHCI-only machine has
+  none of them. The INF now asks Windows to copy those files from its own
+  installation source instead (the `LayoutFile` directive Windows' own INFs
+  use), still without overwriting a file that is already there. The download
+  is this project's two files per flavour, the tools and the readmes.
+- What you see: on an xHCI-only Windows 98 SE machine the install asks for
+  the Windows 98 Second Edition CD-ROM ("Insert Disk") unless the Windows
+  CABs are on the hard disk, as on OEM and Windows 98 QuickInstall installs.
+  Have the CD at hand; `readme.txt` section 3 says what is being fetched and
+  what happens if the prompt is cancelled. A machine that ever had a USB 1.1
+  controller already has the files and is not asked. Windows 2000 asks for
+  nothing.
+- `xhci98.sys` is rebuilt only so that its version resource matches; no
+  driver code changed between `1.0.0.0` and this release.
+
 ## 1.0.0.0 - 2026-08-30
 
 Re-cut on 2026-08-30 under the same number, before anything had been

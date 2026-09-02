@@ -65,7 +65,7 @@ A clause whose device is absent is a SKIP with a reason, which is a result.
 | 5.3 | A hub, plus a device to put behind it | Any hub. Record whether it is self- or bus-powered and, if the tester can read it, its TT class: `bDeviceProtocol` 1 = single-TT, 2 = multi-TT, 0 = a Full-Speed USB 1.1 hub |
 | 5.4, optional | A USB Ethernet adapter | With a driver for the target OS. Without one it enumerates and does nothing, which tests the stack above this driver rather than this driver. It is the cheapest sustained bulk-IN load a tester is likely to have |
 | 5.5, optional | A USB Audio device | With a driver for the target OS. On Windows 98, read the USB Audio entry in the release notes' "Known limitations" before running this: one physical UAC 1.0 device has played clean on real hardware, and what QEMU's emulated device shows there (a CD prompt on a second arrival, and on an older guest a fault inside that system's own `USBAUDIO.VXD`) is that stack and not this driver. Keep the installation CD to hand |
-| 7.3 | A composite device | One physical unit that is more than one thing at once: a headset with buttons, a keyboard with media keys. Windows 98 only; this is the clause the package's `usbhub98.sys` exists for |
+| 7.3 | A composite device | One physical unit that is more than one thing at once: a headset with buttons, a keyboard with media keys. Windows 98 only; this is the clause Windows 98's own `usbhub.sys`, which the install has Windows copy from its CD or CABs, exists for |
 | Step 8 | Nothing extra | The log channel is `XHCISNAP.EXE` out of this release, one setting it writes for you, and a restart of the machine |
 
 ### Suggested devices
@@ -143,12 +143,12 @@ Do: unzip the release asset and look at what came out.
 diagnosis and is for a machine that has already gone wrong. It carries no
 per-line trace either; that lives only in the never-published `qemu` flavour.
 
-If a flavour directory holds only `xhci98.inf` and `xhci98.sys` (2.3): this is
-a copy taken from the source repository, not the download. Either fetch the
-release asset, or complete it per `readme.txt` section 3, "Completing a copy
-taken from the repository". Do not install it as it stands. The missing files
-are the ones nothing on an xHCI-only machine ever placed, and their absence
-surfaces at step 4 as a fault that looks like this driver's.
+A flavour directory holds exactly `xhci98.inf` and `xhci98.sys` (2.3), since
+1.0.0.1: the download carries no Microsoft file, and a copy taken from the
+source repository is the same two files. What the install needs beyond them,
+`usbd.sys` and on Windows 98 `usbhub.sys`, Windows supplies from its own
+installation source at step 4, so on an xHCI-only Windows 98 machine have
+the Windows 98 SE CD at hand for that step (`readme.txt` section 3).
 
 If one directory nests another copy of the version inside itself (2.4): stop,
 and report the asset rather than the driver. That is a packaging defect and it
@@ -158,9 +158,9 @@ complete install set.
 
 Observed: the layout and the assertion that protects it are
 `scripts/package/make-release.ps1`, `New-UploadSet`; the nesting defect and its
-fix are recorded in that function's own comments, and the reason the asset
-carries the three Microsoft files that the tracked tree does not is
-`docs/contributing/legal-provenance.md` section 5.
+fix are recorded in that function's own comments, and
+`docs/contributing/legal-provenance.md` section 5 records why the asset
+carries no Microsoft file.
 
 ### Step 3. The DOS pass
 
@@ -206,8 +206,8 @@ at a loose `xhci98.sys`; nothing about a copied file says which flavour it is.
 
 | # | Target | Do | Expected reading |
 |---|---|---|---|
-| 4.1 | Windows 98 SE | NUSB 3.3 first, then Device Manager, the unclaimed xHCI controller, Properties -> Driver -> Update Driver -> Specify a location -> `RELEASE\` | The install completes without asking for a file it cannot find |
-| 4.2 | Windows 2000 SP4 | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE\` | The same |
+| 4.1 | Windows 98 SE | NUSB 3.3 first, then Device Manager, the unclaimed xHCI controller, Properties -> Driver -> Update Driver -> Specify a location -> `RELEASE\` | On an xHCI-only machine the copy phase asks for the Windows 98 Second Edition CD-ROM ("Insert Disk"); give it the CD, or its `WIN98` folder if asked where to copy from, and the install completes. A machine that already has `usbd.sys` and `usbhub.sys` is not asked. It never asks for a file from the driver's own disk. Record which it was |
+| 4.2 | Windows 2000 SP4 | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE\` | Completes with no prompt; `usbd.sys` comes from the driver cache |
 | 4.3 | Both | Look at Device Manager when the install is done | The two nodes below, and neither carries a warning mark |
 | 4.4 | Windows 98 SE | Look for the two cosmetic readings and note them | `xhci98.tmp` left in `System32\Drivers` and listed in Driver File Details (cosmetic; the loaded binary is the real one), and the Driver tab showing a date but no version (release notes, "Known limitations"). Neither is a failure and neither should be reported as one |
 
@@ -221,9 +221,10 @@ USB 2.0 eXtensible Host Controller (xhci98)
 The controller string is the INF's, as written; the root hub is the system's
 own.
 
-If the root hub fails with `0xc0000034` naming `usbhub20.sys`: the per-target
-`usbd.sys` is missing. That is step 2's failure arriving late; the package
-carries that file and a repository copy does not.
+If the root hub fails with `0xc0000034` naming `usbhub20.sys` (Windows 2000)
+or sits at Code 2 (Windows 98): `usbd.sys` is missing, which on Windows 98
+means the Insert Disk prompt of 4.1 was cancelled or answered with the wrong
+disk. Put the CD in and install the driver again.
 
 If the controller reports `Code 10` (Windows 2000): the driver loaded and then
 failed while bringing the controller up. Record it together with the whole of
@@ -327,12 +328,13 @@ noticed by nothing until Refresh, which is what step 5 would have shown.
 (Measured on the Windows 98 virtual machine; release notes, "Known limitations";
 `src/xhci98.inf`'s `[Xhci.AddReg.Global]` and the comment block below it.)
 
-7.3 is what the package's `usbhub98.sys` is for: Windows 98 Setup places its
-composite parent only when it finds a USB controller it recognises, so an
-xHCI-only machine never got one. (Established by remedy on the E460, roadmap
-task 13-E.1 and `run-13e.md` Finding D, and cross-checked on a non-xHCI machine
-running the same OS and the same NUSB. The release carries the file, so it has
-no limitation for it.)
+7.3 is what Windows 98's own `usbhub.sys` is for, which the install at step 4
+has Windows copy from its CD or CABs: Windows 98 Setup places its composite
+parent only when it finds a USB controller it recognises, so an xHCI-only
+machine never got one. (Established by remedy on the E460, roadmap task
+13-E.1 and `run-13e.md` Finding D, and cross-checked on a non-xHCI machine
+running the same OS and the same NUSB. Under SweetLow's stack the parent is
+his `usbccgp.sys` and the file is not needed.)
 
 Windows 2000 SP4
 

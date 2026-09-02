@@ -73,7 +73,7 @@ identification.
 | Oney, *Programming the Microsoft Windows Driver Model* (2nd ed., 2003) | No, and it never was; it is in no commit and in no directory of this repository | Nowhere in this tree; a purchased book on the reader's own shelf | The one third-party document cited by printed page that is not kept in `docs/references/`. Edition, page count, SHA-256 of the copy the citations were read from, and the page-index offset are in `docs/references/README.md`. There is no fetch URL to record, because there is no download |
 | ReactOS / Linux / FreeBSD / Haiku source mirrors | No | `external/` (git-ignored) | Fetch procedure and pinned commits in `external/README.md` |
 | `usbport.sys`, `usbhub20.sys`, NUSB 3.3, MSVC 6.0, the Win2000 DDK | No | `tools/` (git-ignored) | Supplied by the user's own install media or download |
-| The two `usbd.sys` builds and `usbhub98.sys` | Not tracked, but published | `tools/` (git-ignored) in this repository; inside the GitHub release download | The one decided exception. Tracking and publishing are different acts and this row is the only place they diverge; see section 5 |
+| The two `usbd.sys` builds and Windows 98 SE's `usbhub.sys` | No | `tools/` (git-ignored) | Reference copies, staged from the user's own install media for the import gate's Windows 98 evidence and the Windows 2000 VM setup. The assembled release download carried them from 0.0.0.4 to 1.0.0.0 and carries them no longer; see section 5 |
 | Disassembly extracts taken from those binaries | No | `tools/*-extracted/` (git-ignored) | Convenience copies only; see section 4 |
 | Staged install media | No | `out/` (git-ignored) | Generated; the upload set for a release is assembled here |
 
@@ -84,12 +84,12 @@ reached from the other side: a document this project never held in the tree
 still gets its identity written down, because the alternative is a `p.N`
 citation a reader cannot resolve. `out/`, `vm/` and `scripts/local/` are
 ignored because they are generated or host-specific; `out/` additionally
-because the release upload set is assembled there and contains the three files
-section 5 covers.
+because the release upload set is assembled there.
 
 "Not tracked" is a statement about this repository. It is not a statement
-that a file is never distributed, and that distinction matters for three
-files, `usbd98.sys`, `usbd2k.sys` and `usbhub98.sys`; see section 5.
+that a file is never distributed, and the distinction mattered for three
+files, `usbd98.sys`, `usbd2k.sys` and `usbhub98.sys`, while the assembled
+asset carried them; see section 5.
 
 The rule this implies for future work: a fact may be tracked; the source
 document or binary it was read out of may not. Where a fact would be
@@ -424,8 +424,8 @@ and this repository is still private (see the status note at the end of this
 section). So "the release download carries X" throughout means that the asset
 `make-release.ps1` assembles carries X and that asset is what will be
 uploaded, not that anyone has downloaded anything. The same reading applies to
-`releases/README.md` and to `scripts/package/usbd-sources.expected`, which
-describe the same asset in the same tense. A cut writes files in this working
+`releases/README.md`, which describes the same asset in the same tense. A cut
+writes files in this working
 tree; a publish uploads one of them. This project has cut a release and
 uploaded nothing.
 
@@ -443,56 +443,54 @@ misread, prefer "cut" and "uploaded", which have only one sense each.
 install (Windows 98 SE) or from Service Pack 4 (Windows 2000), and are never
 tracked. The toolchain archives (MSVC 6.0, the Windows 2000 DDK) and the NUSB
 package are downloaded by the user from the links in `README.md` and live
-under the git-ignored `tools/`. The two `usbd.sys` builds are staged there too,
-from the user's own Windows install media, by
-`scripts/package/extract-usbd-sources.ps1`;
-`scripts/package/usbd-sources.expected` records hashes and metadata, never
-content. `releases/<version>/`, the tracked half of packaging, carries
-`xhci98.sys` and `xhci98.inf` and stops there.
+under the git-ignored `tools/`. The two `usbd.sys` builds and Windows 98 SE's
+`usbhub.sys` are staged there too, from the user's own Windows install media,
+by `scripts/package/extract-usbd-sources.ps1`, as reference copies;
+`scripts/import-gate/win98-evidence.list` records the Windows 98 pair's
+identity, never content. `releases/<version>/`, the tracked half of
+packaging, carries `xhci98.sys` and `xhci98.inf` and stops there, and since
+1.0.0.1 so does the release download.
 
 The overlap audit swept the full added-file history and found no Microsoft or
-NUSB binary in it. That is still true, and keeping it true is the reason the
-exception below is a release asset and not a tracked file: a release asset can
-be withdrawn, and a git blob cannot be withdrawn without rewriting history.
+NUSB binary in it. That is still true. The exception below was made a release
+asset rather than a tracked file for the same reason (an asset can be
+withdrawn, and a git blob cannot be without rewriting history), and it was
+withdrawn before it carried anything.
 
-### The GitHub release download carries three of them
+### The GitHub release download carried three of them, until 1.0.0.1
 
-Decided by the maintainer for the two `usbd.sys` builds, and extended to
-`usbhub98.sys` on the same grounds and by the same mechanism. The release
-download for each version includes `usbd98.sys`, `usbd2k.sys` and
-`usbhub98.sys` alongside the driver, so that what a user downloads is a
-complete install set. What is being distributed:
+Decided by the maintainer for the two `usbd.sys` builds, extended to
+`usbhub98.sys` on the same grounds and by the same mechanism, and withdrawn
+on 2026-09-02 before any release had been uploaded. From release 0.0.0.4 to
+1.0.0.0 the asset `make-release.ps1` assembled carried `usbd98.sys`,
+`usbd2k.sys` and `usbhub98.sys` alongside the driver, so that what a user
+downloaded would be a complete install set. What was being distributed:
 
-- Each `usbd` file is the target OS's own `usbd.sys`, byte-for-byte as
+- Each `usbd` file was the target OS's own `usbd.sys`, byte-for-byte as
   Microsoft shipped it: Windows 98 SE 4.10.2222 from `BASE5.CAB`, and Windows
-  2000 SP4 5.00.2195.6658 expanded from `I386\USBD.SY_`. Neither is modified,
-  patched, or recompiled. The exact version, length and SHA-256 of each are in
-  `scripts/package/usbd-sources.expected`.
-- They are renamed on the media only, to `usbd98.sys` and `usbd2k.sys`,
-  because both install as `usbd.sys` and each install path must be able to
+  2000 SP4 5.00.2195.6658 expanded from `I386\USBD.SY_`. Neither was
+  modified, patched, or recompiled. The exact version, length and SHA-256 of
+  the Windows 98 file are in `scripts/import-gate/win98-evidence.list`, and
+  of the Windows 2000 file in `scripts/package/extract-usbd-sources.ps1`,
+  which still stages both as reference copies.
+- They were renamed on the media only, to `usbd98.sys` and `usbd2k.sys`,
+  because both install as `usbd.sys` and each install path had to be able to
   reach exactly one of them.
-- `src/xhci98.inf` copies whichever one its install path names with
-  `COPYFLG_NO_OVERWRITE`, so a machine that already has a `usbd.sys` keeps its
-  own and the shipped file is never placed.
-- `usbhub98.sys` is Windows 98 SE's own `usbhub.sys`, 4.10.2222, 35,680
+- `src/xhci98.inf` copied whichever one its install path named with
+  `COPYFLG_NO_OVERWRITE`, so a machine that already had a `usbd.sys` kept its
+  own and the shipped file was never placed.
+- `usbhub98.sys` was Windows 98 SE's own `usbhub.sys`, 4.10.2222, 35,680
   bytes, byte-for-byte as Microsoft shipped it on the SE CD and taken from the
-  same cab read that yields `usbd98.sys`. It is renamed on the media for the
-  same reason (it installs as `usbhub.sys`) and copied with the same
-  `COPYFLG_NO_OVERWRITE`, so a machine whose native USB stack is present keeps
-  its own file. It is delivered on the Windows 98 path only: on Windows 2000
-  that filename belongs to the OS's own USB 1.1 hub driver, so shipping
-  Windows 98 SE's build toward that target would be wrong on its own terms as
-  well as unnecessary. `scripts/inf-gate/check-inf.ps1` enforces that in both
-  directions.
+  same cab read that yielded `usbd98.sys`, renamed on the media for the same
+  reason and copied with the same flag, on the Windows 98 path only: on
+  Windows 2000 that filename belongs to the OS's own USB 1.1 hub driver.
 
 Why the `usbd.sys` builds. `usbhub20.sys` imports `USBD.SYS` on both targets,
 and on an xHCI-only machine, the entire population this driver exists for,
 nothing ever placed one. Without it the root hub fails with `0xc0000034`
-naming `usbhub20.sys`, which reads as a fault in this driver and is not one
-(`docs/contributing/lessons.md`, "`usbhub20.sys` bugchecks Win2000"). The
-alternative asks every user to extract a file from their own install media
-before the driver will work, and to diagnose that error themselves when they
-do not.
+naming `usbhub20.sys` on Windows 2000, and sits at Code 2 on Windows 98,
+which reads as a fault in this driver and is not one
+(`docs/contributing/lessons.md`, "`usbhub20.sys` bugchecks Win2000").
 
 Why the third file. `usbhub.sys` is Windows 98's composite parent driver, and
 its absence has the same cause as `usbd.sys`'s: Windows 98 ships `USB.INF` on
@@ -500,53 +498,43 @@ every install but copies the USB driver files only when setup detects a USB
 controller, and an xHCI-only machine looks empty to Win98 setup. So the INF
 matches a multi-interface device, Windows names a `USB Composite Device`
 devnode, and the file it needs is not on disk: `Code 2`, matched and
-unloadable.
-
-Batch 13-E measured this on real hardware. Every composite device on the
-ThinkPad E460 was dead, including a two-interface HID keyboard that would not
-type, and the same machine drives them all once the file is present. The
-control was a ThinkPad X61 running the same Windows 98 SE and the same NUSB 3.3
-with no xHCI, where the file is present because setup found its UHCI
-controller.
-
-Without this file the driver works and a large class of ordinary USB devices
-does not, on the entire population the driver exists for.
+unloadable. Batch 13-E measured this on real hardware: every composite device
+on the ThinkPad E460 was dead, including a two-interface HID keyboard that
+would not type, and the same machine drove them all once the file was
+present. The control was a ThinkPad X61 running the same Windows 98 SE and
+the same NUSB 3.3 with no xHCI, where the file is present because setup found
+its UHCI controller.
 
 What is documented about permission: nothing. No permission to redistribute
-these files is documented anywhere in this repository, and none is claimed
-here. That both products are long out of support, and that the files are
-unmodified copies placed only where the OS itself would have placed them, are
-facts about the situation and not permissions. Do not read them as an argument
-that this is allowed.
+these files is documented anywhere in this repository, and none was claimed
+here. That both products are long out of support, and that the files were
+unmodified copies placed only where the OS itself would have placed them,
+are facts about the situation and not permissions. Do not read them as an
+argument that this was allowed.
 
-Status: not yet done, re-confirmed by the project owner. This repository is
-private and no GitHub release has been published, so nothing described in this
-subsection has been distributed to anyone. It is a recorded decision that
-takes effect at the first published release. `scripts/package/make-release.ps1`
-assembles the upload set under the git-ignored `out/`, and re-authenticates
-all three files by SHA-256 in the assembled tree, deriving the list from
-`scripts/package/usbd-sources.expected` rather than naming them, so the bytes
-that would go up are gated the same way the install media has always been.
+What replaced it. Release 1.0.0.1 changes `src/xhci98.inf` so that the
+Windows setup engine copies `usbd.sys` and `usbhub.sys` from the operating
+system's own install source: `LayoutFile=layout.inf` in the INF's
+`[Version]` section resolves a `CopyFiles` entry the INF's own
+`[SourceDisksFiles]` does not name through the OS's `layout.inf`, and the
+engine fetches the file from the Windows source path (the CABs on the hard
+disk or the Windows 98 CD, and Windows 2000's own `driver.cab`), with the
+same `COPYFLG_NO_OVERWRITE`. The release download carries this project's own
+files, the two tools and the readmes, and no Microsoft file; the INF gate
+refuses an INF or a package that names one (`OS-MEDIA`, `PKG-MSFILE`);
+`scripts/package/usbd-sources.expected` and the three-file wording in
+`releases/README.md` and `AGENTS.md` went in the same change. The reference
+copies under `tools/` stay, read by the import gate and the Windows 2000 VM
+setup and packaged by nothing, and section 4's "Where those copies came
+from" paragraph still describes them. The measurements that made the change
+possible are in `docs/contributing/build-and-test.md`, "The SweetLow stack"
+and "The files the OS supplies"; roadmap Phase 17 has the tasks.
 
-On 2026-09-02 the project owner decided that this exception will not be
-used. Release 1.0.0.1 changes `src/xhci98.inf` so that the Windows setup
-engine copies `usbd.sys` and `usbhub.sys` from the operating system's own
-install source (`LayoutFile=layout.inf` in the INF's `[Version]` section:
-the CABs on the hard disk or the Windows 98 CD, and Windows 2000's own
-`driver.cab`), and the release download will then carry the driver's own
-files only. The plan is `handoff.md` at the repository root; the
-measurements that made it possible are in
-`docs/contributing/build-and-test.md`, "The SweetLow stack".
-
-Until that change lands, `scripts/package/make-release.ps1` still assembles
-the three files into an asset under `out/`, and no asset of any version has
-been uploaded. The first upload is intended to be 1.0.0.1, so the exception
-will never have carried anything. When the scripts change, this subsection,
-the three-file wording in `AGENTS.md` ("Third-Party Material and
-Provenance"), `releases/README.md` and
-`scripts/package/usbd-sources.expected` are rewritten in that same commit.
-Section 4's "Where those copies came from" paragraph stays: the files are
-still read statically for the ABI work.
+Status: the exception was never used. No asset of any version was uploaded
+while it stood; this repository was private throughout, and the first upload
+is intended to be 1.0.0.1, which carries nothing under it. "The release
+download carries three of them" was true of the assembled asset from 0.0.0.4
+to 1.0.0.0 and of no download anyone made.
 
 This note can look stale and is not. A version directory exists under
 `releases/`, `README.md` links a releases page, and this repository's prose
@@ -555,10 +543,10 @@ writes `releases/<version>/` and `out/xhci98-<version>.zip` in this working
 tree, a publish uploads that zip to a GitHub release, and this project has
 done the first and never the second. "Published" in that usage names which
 asset filename was in use at a cut, and `README.md`'s link is written for the
-repository as it will be. The roadmap carries no clause for
-the upload at all, deliberately: Phase 14 closed on the cut, and the upload is
-one act of the project owner's rather than work this repository can do or
-close. When it happens, this note is the sentence that moves.
+repository as it will be. The roadmap carries no clause for the upload at
+all, deliberately: Phase 14 closed on the cut, and the upload is one act of
+the project owner's rather than work this repository can do or close. When
+it happens, this note is the sentence that moves.
 
 ---
 

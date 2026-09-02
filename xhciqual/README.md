@@ -246,7 +246,7 @@ and the second is the one that decides it:
 
 - The install media is a Windows setup-engine payload. Every file on it is
   named by `[SourceDisksFiles]`, copied by an install section and
-  hash-checked against `scripts\package\usbd-sources.expected`. A DOS
+  gated by `scripts\inf-gate\check-inf.ps1`. A DOS
   executable that no INF section references would be the only file on that
   media the engine never touches, and the packaging gate's coverage rules
   would have to be taught to ignore it.
