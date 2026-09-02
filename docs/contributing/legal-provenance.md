@@ -295,7 +295,8 @@ actually used:
 
 Which binaries. The miniport ABI work reads NUSB 3.3's `USBPORT.SYS`
 5.00.2195.5652 (Windows 98 SE), Windows 2000 SP4's `USBPORT.SYS`
-5.00.2195.6681, and in a few places Windows XP SP3's `usbport.sys`. Other
+5.00.2195.6681, in a few places Windows XP SP3's `usbport.sys`, and since
+2026-09-02 the SweetLow 5.1.2600.2180 rebuild for Windows 98 (below). Other
 shipping binaries have been read statically for narrower questions and are not
 individually inventoried below: both `usbehci.sys` builds (the periodic
 `Period` derivation, abi §5), `usbhub20.sys` and the two `usbd.sys` builds
@@ -311,6 +312,25 @@ byte-identical to 3.3's; nothing in it was disassembled.
 comparison. The one runtime observation involving it (a 2026-09-01 VM pass)
 was taken through this project's own driver counters, not from the package's
 binaries.
+
+A further package has been read, statically and at run time, on 2026-09-02:
+SweetLow's USB 2.0 stack for Windows 98 as shipped in Windows 98
+QuickInstall's driver library (`oerg866/win98-driver-lib-base`, directory
+`[MBD]_sweetlow_usb2.0`, commit `5ef7f88e`, a public GitHub repository; kept
+git-ignored in `tools/sweetlow-extracted/` with a README recording URL,
+commit, sizes, versions and SHA-256s). Its `USBPORT.SYS` is a 5.1.2600.2180
+build carrying the resource string "built by: WinDDK", so the file is a
+rebuild from XP SP2-level sources rather than a Microsoft-shipped binary; how
+those sources were obtained is not recorded here, and this project has not
+asked. Method: `dumpbin /exports`, `/imports` and `/disasm` over the port
+driver, the miniport and the hub driver as fetched, with the two exported
+routines' bodies extracted to `usbport-registration-disasm.txt`; a UTF-16
+string scan for registry value names; and one VM session in which this
+driver's own trace recorded the registration values and the controller
+lifecycle. Nothing was patched. `docs/usb-xhci-info/usbport-miniport-interface.md`
+section 5 holds the record. The package is not tracked and not carried in the
+release download; the three-file exception in section 5 is unchanged, and the
+stack is referred to by its upstream repository only.
 
 Where those copies came from, since "read as installed" is not the whole
 story: NUSB's binaries from the publicly-distributed `nusb33e.exe` package;
@@ -340,6 +360,8 @@ the roadmap's per-task boxes hold the rest, each with its own method stated.
 |---|---|---|
 | `USBPORT_GetHciMn` present at ordinal 2, `USBPORT_RegisterUSBPortDriver` at 3, plus an undocumented `DllUnload` at 1; `usbehci.sys` imports only the first two | static (`dumpbin /exports`) | abi §1 |
 | `USBPORT_REGISTRATION_PACKET` layout identical across all three builds (Phase 3 task 1) | static | abi §3 |
+| The SweetLow WinDDK rebuild (5.1.2600.2180, Windows 98) has the same three exports and ordinals, the same `>= 100` / `>= 200` gate, the 300/316-byte copy, the 0x150 wrapper with `Version` at +0x10 and the packet at +0x14, writes the same 16 service pointers, and returns `0x10000001` from `USBPORT_GetHciMn` | both: read from `tools/sweetlow-extracted/usbport-registration-disasm.txt`, then `USBPORT_GetHciMn=10000001` and `packet size=0000013C` in this driver's trace on the `2a-sweetlow` guest | interface doc section 5, "The SweetLow rebuild" |
+| Under that build, Windows 98 completes the controller stop (`DisableInterrupts`, `StopController(TRUE)`) on disable, Remove and reinstall, where both 5.00.2195 builds on Windows 98 bugcheck at `0028:C00312EE` after `RH_DisableIrq` | runtime (this driver's trace, QEMU only) | `docs/contributing/lessons.md`, "The Windows 98 teardown bugcheck belongs to the Windows 2000-lineage usbport" |
 | The `USBPORT_MINIPORT_INTERFACE` wrapper differs per build: packet at +0x14 (Win2000/XP) vs +0x10 (NUSB), because NUSB's wrapper has no `Version` field, so an interface offset is not a packet offset | static | abi §3, and the `FlushInterrupts` box in §4 |
 | Registration version gating: `TakePortControl` additionally gated on interface `Version >= 200` in the Win2000/XP builds | static | abi §4 |
 | `UsbPortBugCheck` is `KeBugCheckEx(0xD2, 0, 0, 0, 0)`; all four parameters hard zero; the extension argument is pushed and never read | static | abi §5 |

@@ -81,6 +81,7 @@ body:
         - "Windows 98: NUSB 3.3 installed"
         - "Windows 98: NUSB 3.6 installed"
         - "Windows 98: NUSB, some other version"
+        - "Windows 98: SweetLow's USB 2.0 stack (Windows 98 QuickInstall 1.0.1 or later)"
         - "Windows 98: no NUSB / not sure"
         - "Windows 2000: SP4's own stack"
         - "Windows 2000: the standalone KB319973 update"

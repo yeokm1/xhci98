@@ -34,9 +34,11 @@ bare-metal Windows 98 result as covering Windows 2000.
 `docs/using/release-notes.md` states it under "What this is".
 
 Neither OS has xHCI support. Windows 98 shipped with UHCI/OHCI (USB 1.1) and
-got EHCI (USB 2.0) only through later back-ports, the Win2000-derived stack in
-NUSB; Windows 2000 got that same stack natively in SP4. This driver fills the
-gap for both.
+got EHCI (USB 2.0) only through later back-ports: the Win2000-derived stack in
+NUSB, which is what the project tests against, and SweetLow's XP-derived
+rebuild of the same stack that Windows 98 QuickInstall bundles, which the
+driver has also been observed running under; Windows 2000 got the Win2000
+stack natively in SP4. This driver fills the gap for both.
 
 ---
 
@@ -47,7 +49,7 @@ gap for both.
 | Primary targets | Windows 98 SE (4.10.2222) and Windows 2000 SP4 - one binary, both required |
 | Secondary targets | 32-bit Windows XP (best-effort) - one binary, accommodate it where the change is small and low-risk, but do not compromise either primary target or add checkpoint waits for it. Its registration packet is statically compatible, but runtime support remains unvalidated; see `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" |
 | USB scope | USB 2.0 (HS/FS/LS) only; HID, mass storage, USB Ethernet, and USB Audio validation targets. USB 3.0 SuperSpeed is out of scope (see `docs/usb-xhci-info/xhci-programming.md`, "What SuperSpeed Support Would Require") |
-| Integration model | `usbport.sys` miniport (Option A) - reuse the Win2000-derived USB 2.0 stack shipped in NUSB; do not re-implement the USB stack |
+| Integration model | `usbport.sys` miniport (Option A) - reuse the USB 2.0 stack already on the target (NUSB's Win2000-derived build, SP4's native one, or SweetLow's XP-derived rebuild on Windows 98); do not re-implement the USB stack |
 | Compiler | MSVC 6.0, run in place from `tools/MSVC600` (unpacked from `tools/MSVC600.zip`) |
 | DDK | Windows 2000 DDK, unpacked into `tools/ntddk` (from `tools/WIN2KDDK.EXE`). Both toolchains live in the repo and install nothing machine-wide; every script finds them relative to itself, and `DDKROOT`/`MSVC6` override |
 | Language | C (C89/C90 compatible with MSVC 6.0) |
@@ -133,7 +135,9 @@ evidence is not rediscovered or contradicted.
 
 `xhci98.sys` is a `usbport.sys` miniport (Option A), not a standalone HCD. It
 plugs in below Microsoft's `usbport.sys` in the same way `usbehci.sys` and
-`usbuhci.sys` do, reusing the Win2000-derived USB 2.0 stack that ships in NUSB.
+`usbuhci.sys` do, reusing the USB 2.0 stack already on the target: on Windows
+98 the Win2000-derived one NUSB ships (or SweetLow's XP-derived rebuild), on
+Windows 2000 SP4's own.
 
 ```
   [usbhub.sys]  <- OS hub driver (REUSED, unchanged)

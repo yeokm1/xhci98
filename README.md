@@ -2,7 +2,7 @@
 
 This project xHCI98 is a WDM generic USB host controller driver for xHCI host controllers targeting Windows 98 SE and Windows 2000 SP4. Although xHCI Controllers offer USB 3.0, this driver runs USB 2.0 on the controller only.
 
-This driver developed based on Intel's xHCI specification and tested only on Intel machines so far. No guarantees have been made on xHCI implementations from other vendors.
+This driver is developed based on Intel's xHCI specification and tested only on Intel machines so far. No guarantees have been made on xHCI implementations from other vendors.
 
 This project is from a solo human with AI-assistance only so bugs are not unexpected. Feel free to report them if you encounter any issues.
 
@@ -30,9 +30,9 @@ SuperSpeed would mean rewriting the entire USB HCD (Host Controller Driver) for 
 
 Every USB 3.x connector (USB4/Thunderbolt included) also carries the USB 2.0 wires and xHCI exposes them as a separate logical port per connector. This driver manages those USB 2.0 ports and leaves the USB 3.x ones unpowered so a SuperSpeed-capable device falls back on the USB 2.0 port and runs at High-Speed.
 
-### Installation Steps
+## Installation Steps
 
-- Windows 98 SE: **install [NUSB 3.3](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) first**. It provides the `usbport.sys` + `usbhub20.sys` stack this driver depends on.
+- Windows 98 SE: **install [NUSB 3.3](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) first**. It provides the `usbport.sys` + `usbhub20.sys` stack this driver depends on. NUSB 3.6 carries the same stack. A system installed with [Windows 98 QuickInstall](https://github.com/oerg866/win98-quickinstall) 1.0.1 or later already has SweetLow's newer build of that stack instead, and this driver works on it too, with the bonus that disabling or removing the driver does not crash Windows 98 there. Both alternatives are observed in a virtual machine only; NUSB 3.3 is what this project tests against.
 - Windows 2000 SP4: that stack is already there natively (or through the standalone USB 2.0 update KB319973). **Do not install NUSB on Windows 2000.**
 - Optional but recommended: boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from the `XHCIQUAL\` folder. A controller reporting no legacy interrupt pin cannot be driven on either system and there is no software workaround, so find out before you install anything.
 

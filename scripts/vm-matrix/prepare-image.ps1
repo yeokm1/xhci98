@@ -50,6 +50,7 @@ powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a -Shot
 powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-fresh -Clone
 powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-fresh -Boot -Xfer
 powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-fresh -Boot -Xfer -WorkDir C:\work
+powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-sweetlow -Boot -Xfer -XferAdd vm\SWEETLOW
 powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-fresh -CopyBack
 powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-fresh -Stamp
 #>
@@ -81,6 +82,13 @@ param(
     # default: see the comment on $xferDir - it is the prime suspect for the
     # main-loop hangs, and a prep pass does not otherwise need it.
     [switch]$Xfer,
+    # A directory whose contents are copied onto the transfer drive AFTER the
+    # package is staged, as a subdirectory named after it. For material the
+    # guest needs beside the driver and that the package must never carry -
+    # the first use is SweetLow's USB 2.0 stack under test (tools\sweetlow-
+    # extracted, issue #1), which a fresh 2a guest installs by right-clicking
+    # its USB2.INF. Third-party files stay out of out\pkg-qemu this way.
+    [string]$XferAdd = "",
     # Pin the device to a specific ROOT port - see the comment at the attach.
     [int]$AtPort = 0,
     # Comma-separated device names to attach AT BOOT, before the driver starts.
@@ -506,7 +514,22 @@ if ($Boot) {
             $staged = $null
             Write-Warning ("no qemu build at {0} - build it with: scripts\build-driver.cmd qemu, then scripts\package\make-package.ps1 -Flavor qemu. Any XHCI98.SYS left on the transfer drive by an earlier run has been removed, so the drive carries no driver." -f $qemuSys)
         }
+        # The extra directory rides in a subdirectory so it can never shadow a
+        # package file, and the 8.3 name is what the guest will see it as.
+        if ($XferAdd -ne "") {
+            $addSrc = Resolve-RepoPath $XferAdd
+            if (-not (Test-Path -LiteralPath $addSrc)) { throw ("-XferAdd directory not found: {0}" -f $addSrc) }
+            $addName = (Split-Path -Leaf $addSrc)
+            if ($addName -notmatch '^[A-Za-z0-9_]{1,8}$') { throw ("-XferAdd directory name '{0}' is not a plain 8.3 name; Windows 98 reads the transfer drive as FAT" -f $addName) }
+            $addDst = Join-Path $xferDir $addName
+            if (Test-Path -LiteralPath $addDst) { Remove-Item -LiteralPath $addDst -Recurse -Force }
+            New-Item -ItemType Directory -Path $addDst -Force | Out-Null
+            Copy-Item -Path (Join-Path $addSrc "*") -Destination $addDst -Recurse -Force
+            Write-Host ("transfer drive also carries {0}\ from {1}:" -f $addName, $addSrc)
+            foreach ($f in (Get-ChildItem -LiteralPath $addDst -File)) { Write-Host ("  {0,-16} {1,9:N0} B" -f $f.Name, $f.Length) }
+        }
     }
+    if ($XferAdd -ne "" -and -not $Xfer) { throw "-XferAdd needs -Xfer; there is no transfer drive to add to otherwise" }
 
     $args = @(
         "-name", ("xhci98 image prep - " + $Target),

@@ -2720,6 +2720,43 @@ archives) so Phase 2a does not depend on a live download.
    stay on 3.3. (`docs/usb-xhci-info/usbport-miniport-interface.md` section 5
    has the file comparison.)
 
+   The SweetLow stack. A third Windows 98 stack, examined 2026-09-02 after
+   issue #1: SweetLow's XP-lineage rebuild (`USBPORT.SYS` 5.1.2600.2180
+   "built by: WinDDK", with `USBEHCI.SYS`, `USBHUB20.SYS`, `USBCCGP.SYS`,
+   `USBDSTUB.SYS` and Microsoft's `USB2.INF`), shipped in Windows 98
+   QuickInstall's base driver library
+   (`https://github.com/oerg866/win98-driver-lib-base`, directory
+   `[MBD]_sweetlow_usb2.0`). Fetch it into `tools/sweetlow-extracted/`
+   (git-ignored; the README there records the commit and hashes). It
+   registers this driver (GetHciMn `0x10000001`, which the probe already
+   accepts), runs HID and mass storage, and, unlike both 5.00.2195 builds,
+   survives disable, re-enable, Remove and reinstall on Windows 98 (the
+   lessons entry "The Windows 98 teardown bugcheck belongs to the Windows
+   2000-lineage usbport"). The guest for it is the `2a-sweetlow` matrix
+   target, cloned from the stamped `fresh-2a.img` so the driver is already
+   installed, and prepared like this:
+
+   ```powershell
+   powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-sweetlow -Clone
+   # vm\SWEETLOW\ = the six package files plus a Windows 98 SE usbd.sys (out\pkg-qemu\usbd98.sys renamed),
+   # because USB2.INF copies usbd.sys and the package carries none
+   powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-sweetlow -Boot -Xfer -XferAdd vm\SWEETLOW
+   ```
+
+   In the guest, from Start, Run: NUSB's own uninstall string,
+   `RUNDLL32.EXE C:\WINDOWS\SYSTEM\ADVPACK.DLL,LaunchINFSection C:\WINDOWS\INF\_USB2UN.INF,UNINSTALL`
+   (it deletes the three stack files and `USB2.INF`, nothing else, and shows
+   no dialog); then
+   `rundll32 setupapi,InstallHinfSection DefaultInstall 132 D:\SWEETLOW\USB2.INF`
+   (`D:` is the transfer drive; no dialog either); then shut down and relaunch
+   `-Boot`, because this guest halts on a reboot. `dir C:\WINDOWS\SYSTEM32\DRIVERS\USB*.SYS`
+   in a DOS box shows the swap. The target runs with `Machine = 'pc,smm=off'`
+   for the QEMU reason in the lessons entry next to that one. Still VM only,
+   no matrix run; 3.3 remains the tested configuration and what the
+   acceptance test installs. Not measured yet: whether this stack idle-suspends
+   the controller without `DisableSelectiveSuspend` (its binary carries the
+   same value-name table, so the INF keeps writing it).
+
    The full install is used because it is the environment end users of
    `xhci98.sys` will run, and a pre-install VM snapshot makes it reversible.
    (A USB-stack-only alternative, right-click-Install on just `USB2.INF`, was

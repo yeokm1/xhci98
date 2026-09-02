@@ -24,6 +24,108 @@ Do not turn a hypothesis into a settled hardware quirk. Move confirmed design
 rules into the appropriate normative document while keeping the debugging
 history here.
 
+## The Windows 98 teardown bugcheck belongs to the Windows 2000-lineage usbport, and an XP-lineage rebuild of the same stack survives every door it dies at
+
+Environment: the `2a-sweetlow` guest (`vm\sweetlow-2a.img`, a clone of the
+stamped `fresh-2a.img`, driver 1.0.0.0 qemu flavour already installed), QEMU
+11.0.92 with `-machine pc,smm=off` (next entry), 2026-09-02, the project
+owner at the console and the trace read from the host. The stack swap was
+done inside the guest: NUSB 3.3's own uninstall string
+(`RUNDLL32.EXE C:\WINDOWS\SYSTEM\ADVPACK.DLL,LaunchINFSection C:\WINDOWS\INF\_USB2UN.INF,UNINSTALL`,
+which deletes `USBPORT.SYS`, `USBEHCI.SYS`, `USBHUB20.SYS` and `USB2.INF` and
+nothing else), then SweetLow's stack from the transfer drive with
+`rundll32 setupapi,InstallHinfSection DefaultInstall 132 D:\SWEETLOW\USB2.INF`,
+then a relaunch of QEMU (this guest halts on a reboot instead of restarting).
+Issue #1 had claimed the crash was a fault of the Windows 2000 usbport and
+that an XP-sourced build was free of it.
+
+Observed. On the relaunch the driver registered against the new port driver
+(`USBPORT_GetHciMn=10000001`, packet 0x13C, status 0), the No Op self-test
+passed, the boot-attached High-Speed mouse bound, and a hot-plugged High-Speed
+`usb-storage` enumerated (SET_ADDRESS intercepted, bulk pair opened) and
+mounted as `F:`. Then, from Device Manager: disable, re-enable, Remove, and
+Refresh with a reinstall from the transfer drive. The trace for the disable is
+`RH_ClearFeaturePortEnable` on both occupied ports with their devices
+disowned, `DisableInterrupts`, `StopController(TRUE)`, eight ports unpowered,
+`quiesce: halted, USBSTS=00000001`. The re-enable is a `StartController` on
+the same extension with no `DriverEntry`, so Windows 98 kept the image
+loaded. The Remove is the same stop; the reinstall is a fresh `DriverEntry`
+and a start on a new extension with both devices re-bound. No bugcheck at any
+step. Under NUSB's usbport the same guest, and Microsoft's own `usbehci.sys`
+on the same guest, die at `0028:C00312EE` after `RH_DisableIrq` on the first
+of those steps (task 8, the release notes' first limitation).
+
+Proven: the crash is not a property of Windows 98 and not of this driver's
+teardown; it follows the port driver. The driver's Windows 98 stop path, which
+until now had only ever executed on Windows 2000, runs on Windows 98 under
+this stack and leaves the controller halted with its ports unpowered.
+Inferred: the fault is in the 5.00.2195 usbport's own PnP stop handling on
+9x, since the two lineages differ there and nothing else in the sequence
+changed. Unknown: what exactly the 2195 build does after `RH_DisableIrq`;
+whether the fix is in the XP sources or in SweetLow's rebuild; bare-metal
+behaviour; the full device matrix under this stack; and whether the stack
+idle-suspends without `DisableSelectiveSuspend` (its binary carries the same
+Services\USB value-name table as NUSB's, so the INF keeps writing it).
+
+Rule: a limitation attributed to "the Windows 98 USB stack" names a lineage,
+not an operating system, and the release notes now say which. When a
+third-party component is the suspect, the cheapest discriminating test is a
+second implementation of the same interface, and the miniport ABI made that
+a two-hour swap here.
+
+Affected: `docs/using/release-notes.md` (the first known limitation and the
+Requirements row), `README.md`, `docs/contributing/build-and-test.md` ("The
+SweetLow stack"), `docs/usb-xhci-info/usbport-miniport-interface.md` section
+5 (the fourth-lineage table), `docs/contributing/legal-provenance.md` section
+4, `.github/ISSUE_TEMPLATE/bug_report.yml`, `scripts/vm-matrix/` (the
+`2a-sweetlow` target and `-XferAdd`).
+
+## QEMU 11.1.0-rc2 parks a Windows 98 boot in SeaBIOS's SMM handler when a USB mouse is attached to the xHCI at launch
+
+Environment: the host's `C:\Program Files\qemu` QEMU, "11.0.92
+(v11.1.0-rc2-12128-gc65ddfcd01)", installed 2026-08-03; the first
+`prepare-image.ps1 -Boot` of the `2a-sweetlow` guest, 2026-09-02. Every
+matrix log from the evening of 2026-08-11 through the 2026-08-30 post-release
+runs records QEMU 11.0.0, which the harness's resolver had found as a scoop
+package that is no longer installed, so this was the first prep boot on the
+newer binary.
+
+Observed: a black 720x400 frame, the debug console at 0 bytes after minutes,
+the QEMU process burning CPU, and `info registers` showing `SMM=1`, `CS=a000`,
+`CR0=00000010` and an EIP that never moves (`0x130`, `0x1cd`, `0xbd4a` across
+runs). `system_reset` reproduces it inside four seconds. With SeaBIOS's own
+log (`-debugcon file:... -global isa-debugcon.iobase=0x402`) the last lines
+are "Booting from 0000:7c00" and "set VGA mode 13", IO.SYS's logo, before the
+"pnp call arg1=5" a good boot prints next. The wizard the black screen was
+first read as, and the "OneDrive touched the image" hang the harness warns
+about, were both wrong: the monitor answered throughout.
+
+Bisected with `-snapshot` boots of the same image, so nothing was written:
+the disk alone boots to ring 3 in thirty seconds with `pc` or `pc,smm=off`;
+plus `qemu-xhci` alone, boots; plus `qemu-xhci` and a `usb-mouse` attached at
+launch, at either port count, wedges; the same with `smm=off`, boots; the
+vvfat transfer drive with or without a subdirectory, the chardevs, the
+debug console and the boot flags, all innocent; disk-less guests never wedge,
+because nothing reaches the path. Proven: the trigger needs a boot-attached
+USB HID device on the xHCI and a Windows 98 boot, and SMM off avoids it.
+Inferred, not verified: SeaBIOS polls a boot-attached USB HID from 16-bit
+context through its SMI-based 32-bit call path, and this QEMU's SMM handling
+under TCG breaks under it. Unknown: whether 11.1.0 final has it, and whether
+`smm=off` changes anything Windows 98 sees beyond the BIOS enabling ACPI
+itself (the guest booted, bound devices and shut down normally with it).
+
+Rule: `prepare-image.ps1 -Boot` attaches the keep-alive pointer before the
+guest starts on every Windows 98 target, so every 2a prep boot on this QEMU
+wedges the same way. A black frame with an empty debug console and `SMM=1` in
+`info registers` is this, not the image and not the driver. The `2a-sweetlow`
+target carries `Machine = 'pc,smm=off'`; the other targets keep `pc` until
+they are re-run on this QEMU, or QEMU 11.0.0 is put back. Record the QEMU
+version in every run header, as the matrix already does; it is what made the
+change visible.
+
+Affected: `scripts/vm-matrix/matrix.config.psd1` (the `2a-sweetlow` entry's
+comment), `scripts/vm-matrix/prepare-image.ps1`.
+
 ## Task 14.1.7 - the review-method rules earned across the audit rounds, salvaged out of the cross-phase review record
 
 These rules were carried in a consolidated cross-phase review record under

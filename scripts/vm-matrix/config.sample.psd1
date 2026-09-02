@@ -157,6 +157,29 @@
             Like     = '2a'
             CloneFrom = @{ Image = 'win98.img'; Snapshot = 'post-nusb' }
         }
+        # A Windows 98 guest on SweetLow's XP-lineage USB 2.0 stack instead
+        # of NUSB's (docs\contributing\build-and-test.md, "The SweetLow
+        # stack"). Cloned from the STAMPED fresh-2a image, so the driver is
+        # already installed and the only in-guest change is the stack swap.
+        # Never stamped and never a matrix target; prepare-image.ps1 only.
+        # `smm=off`: on QEMU 11.1.0-rc2 a Windows 98 image booting with the
+        # keep-alive pointer attached to qemu-xhci parks in SeaBIOS's SMM
+        # handler before Windows runs (docs\contributing\lessons.md); the
+        # other targets keep 'pc' until they are re-run on that QEMU.
+        @{
+            Id       = '2a-sweetlow'
+            Name     = 'Windows 98 SE, SweetLow USB 2.0 stack'
+            Image    = 'sweetlow-2a.img'
+            Format   = 'qcow2'
+            Machine  = 'pc,smm=off'
+            Cpu      = 'pentium3'
+            Memory   = 256
+            Accel    = ''
+            Monitor  = 55596
+            BootSeconds = 240
+            Like     = '2a'
+            CloneFrom = @{ Image = 'fresh-2a.img'; Snapshot = 'base-1.0.0.0-qemu' }
+        }
         @{
             Id       = '2b-fresh'
             Name     = 'Windows 2000 SP4, fresh install'

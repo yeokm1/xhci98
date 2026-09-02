@@ -187,6 +187,19 @@ never written on an image that has not been seen to carry the driver.
 Anything persisted after the stamp fails the newest-snapshot check; re-stamp
 after any further preparation.
 
+A third fresh-style target, `2a-sweetlow`, is a Windows 98 guest running
+SweetLow's XP-lineage USB 2.0 stack instead of NUSB's. It clones the stamped
+`fresh-2a.img` (driver already installed), is never stamped and never a
+matrix target, and is driven with `prepare-image.ps1` only. `-Boot -Xfer
+-XferAdd <dir>` puts the named directory on the transfer drive as a
+subdirectory beside the package (8.3 name required); the stack swap itself is
+done inside the guest. The full recipe is in
+`docs/contributing/build-and-test.md`, "The SweetLow stack". Its config entry
+carries `Machine = 'pc,smm=off'` because of a QEMU 11.1-rc2 boot wedge
+recorded in `docs/contributing/lessons.md`; on that QEMU every Windows 98
+prep boot with the keep-alive pointer attached parks in the BIOS unless SMM
+is off.
+
 What this run is not: acceptance of the published release (that is
 `docs/using/release-acceptance-test.md`, by hand, from the download), a
 reading of the `release` binary, the qualifier, the log channel, Device
