@@ -1,4 +1,4 @@
-# Handoff: release 1.0.0.1 (Phase 17 observed, Phase 18 open)
+# Handoff: release 1.0.0.1 (Phase 17 closed, Phase 18 open)
 
 Rewritten 2026-09-02 on branch `1.0.0.1`, late in the session that executed
 the previous plan. The roadmap's Phase 17 and Phase 18 are the authority;

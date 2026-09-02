@@ -37,16 +37,16 @@ the port driver's role, was the documented fallback and was never needed. USB
 `docs/usb-xhci-info/win98-wdm.md` ("USB Stack Architecture and the Integration
 Decision") and `architecture.md`.
 
-Current status: Phases 0-16 are closed and Phase 17 is open. `1.0.0.0` is
+Current status: Phases 0-17 are closed and Phase 18 is open. `1.0.0.0` is
 cut, and it is the only release this repository carries; Phase 15 moved the
 tree from revision 1.2 of the xHCI specification to revision 1.2c, the only
 revision Intel now serves, without a code change; Phase 16, the fully
 automated run on freshly installed guests of both targets, closed on
 2026-08-30 on its second run, a clean Windows 2000 reading and a Windows 98
 reading with one row against, the USB Audio replug, published as a
-limitation. Phase 17, opened 2026-09-02, has the operating system supply
-`usbd.sys` and `usbhub.sys` from its own install source, so the package stops
-carrying any Microsoft file; no driver code changes. Phase 18 is release
+limitation. Phase 17, opened and closed on 2026-09-02, has the operating
+system supply `usbd.sys` and `usbhub.sys` from its own install source, so the
+package stops carrying any Microsoft file; no driver code changes. Phase 18 is release
 `1.0.0.1`, which ships that change together with Windows ME support; its
 Windows ME side is written down and not started. Two acts sit
 outside the task list and are the project owner's to take: uploading the
@@ -1363,9 +1363,10 @@ source, with `COPYFLG_NO_OVERWRITE` so a file already on the machine is never
 touched. The driver code is unchanged; `xhci98.sys` is rebuilt only because
 its version resource must match the INF's `DriverVer`.
 
-Status: open, since 2026-09-02; every task is done or observed as of that
-evening, and what keeps it open is the cut, which is Phase 18's. The
-decision is the owner's, taken that day
+Status: closed on 2026-09-02, the day it opened, by the owner on the
+checkpoint: every task done or observed that evening, the package staged
+under the new shape on all three flavours, and the cut deferred to Phase
+18. The decision is the owner's, taken that day
 after the SweetLow-stack work measured what each stack needs
 (`build-and-test.md`, "The SweetLow stack"): `usbd.sys` is required under
 every USB 2.0 stack on both targets because `usbhub20.sys` imports it by
