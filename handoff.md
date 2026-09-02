@@ -64,6 +64,34 @@ media names go, since each OS supplies its own build by construction.
 way from `out\pkg-qemu`: the qemu-flavour `xhci98.sys` and the edited INF,
 comments untouched.
 
+## Step 0: record the decision in legal-provenance first
+
+`docs/contributing/legal-provenance.md` section 6 says to update that file in
+the same change that creates the need, and the need is this decision, not
+the scripts that follow it. Section 5 currently states as the plan that the
+first upload carries the three files. Add, facts only, under its "Status"
+paragraph:
+
+- On 2026-09-02 the owner decided the three-file exception will not be used.
+  Release 1.0.0.1 changes the INF so that the Windows setup engine copies
+  `usbd.sys` and `usbhub.sys` from the OS's own install source, and the
+  release download will then carry the driver's files only. Point at
+  `handoff.md` for the plan and at build-and-test, "The SweetLow stack", for
+  the measurements that made it possible.
+- Until that change lands, `make-release.ps1` still assembles the three files
+  into an asset under `out/`, and no asset of any version has been uploaded.
+  The first upload is intended to be 1.0.0.1, so the exception will never
+  have carried anything.
+- When the scripts change (step 2), this subsection, the three-file wording
+  in `AGENTS.md` ("Third-Party Material and Provenance"), `releases/README.md`
+  and `usbd-sources.expected` are rewritten in that same commit. Section 4's
+  "Where those copies came from" paragraph stays: the files are still read
+  statically for the ABI work.
+
+In `AGENTS.md`, add only a one-line pointer to the decision next to the "do
+not extend the exception to a fourth file" bullet; the rule itself still
+binds anyone touching the packaging until step 2.
+
 ## Step 1: prove the mechanism in the VM
 
 1. `qemu-img snapshot -a sweetlow-stack-nodriver vm\sweetlow-2a.img`, then
@@ -124,10 +152,12 @@ the newest keyboard, so never hot-plug a `usb-kbd` before typing.
 5. `scripts/vm-matrix/prepare-image.ps1`: the fresh-target `-Xfer` comment
    says the package carries `usbd.sys`; correct it, and note that a Windows
    98 prep boot needs the CD attached (`Win98Cd`).
-6. Documents. `docs/contributing/legal-provenance.md` section 5: the
-   three-file exception closes; record that the decision changed and why,
-   facts not verdicts. `releases/README.md`, `AGENTS.md` ("The INF and
-   install media", the provenance bullet), `docs/contributing/build-and-test.md`
+6. Documents. `docs/contributing/legal-provenance.md` section 5: rewrite
+   the "The GitHub release download carries three of them" subsection in
+   the past tense, as a decision made and then withdrawn before any upload,
+   keeping the facts about what the files were and why they were wanted;
+   step 0's note becomes part of it. `releases/README.md`, `AGENTS.md` ("The
+   INF and install media", the provenance bullet), `docs/contributing/build-and-test.md`
    ("Carrying a per-target usbd.sys"), `README.md`,
    `docs/using/release-notes.md`, `docs/using/release-acceptance-test.md`,
    and the generated readme.txt in `make-release.ps1`: install steps, the
