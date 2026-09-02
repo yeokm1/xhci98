@@ -1363,7 +1363,9 @@ source, with `COPYFLG_NO_OVERWRITE` so a file already on the machine is never
 touched. The driver code is unchanged; `xhci98.sys` is rebuilt only because
 its version resource must match the INF's `DriverVer`.
 
-Status: open, since 2026-09-02. The decision is the owner's, taken that day
+Status: open, since 2026-09-02; every task is done or observed as of that
+evening, and what keeps it open is the cut, which is Phase 18's. The
+decision is the owner's, taken that day
 after the SweetLow-stack work measured what each stack needs
 (`build-and-test.md`, "The SweetLow stack"): `usbd.sys` is required under
 every USB 2.0 stack on both targets because `usbhub20.sys` imports it by
@@ -1382,8 +1384,9 @@ Second Edition CD-ROM, not the xhci98 disk; after the copy and a relaunch the
 driver registered, `StartController` ran, the root-hub callbacks followed and
 the keep-alive mouse was addressed and bound, with the controller and the
 USB 2.0 Root Hub clean in Device Manager. The NUSB-stack leg read the same
-later that evening, with the composite device bound as well (17.1b). The
-Windows 2000 leg is still owed.
+later that evening, with the composite device bound as well (17.1b), and
+the Windows 2000 leg loaded and bound the same way (17.1c). All of 17.1 is
+observed.
 
 Why a phase: it changes the install procedure a user follows, the packaging
 scripts and gates, the provenance record, and every user-facing statement
@@ -1413,9 +1416,18 @@ Tasks:
     keep-alive mouse was addressed and bound, and a hot-plugged `usb-audio`
     appeared as "USB Composite Device" under Universal Serial Bus
     controllers with "USB Audio Device" under Sound, all clean.
-  - [ ] 17.1c Windows 2000 SP4 (`win2k.img @ phase2b-clean` cloned to a new
+  - [x] 17.1c Windows 2000 SP4 (`win2k.img @ phase2b-clean` cloned to a new
     image), Have Disk from the same package: no prompt, `usbd.sys`
-    5.00.2195.6658 in `WINNT\SYSTEM32\DRIVERS`, the root hub up.
+    5.00.2195.6658 in `WINNT\SYSTEM32\DRIVERS`, the root hub up. Observed
+    2026-09-02 on `vm\layout-2b.img` with the real 1.0.0.1 package: the
+    driver installed and started without a reboot, the debug console showed
+    the 1.0.0.1 build under SP4's usbport (`USBPORT_GetHciMn=57324B30`),
+    `StartController` and the root-hub callbacks, the keep-alive mouse was
+    bound (endpoints opened 1), and Device Manager showed the controller,
+    "USB 2.0 Root Hub" and a USB Human Interface Device clean. Which
+    prompts the copy phase showed, and the file's version on disk, were not
+    read back: the owner drove the install and reported none, and the root
+    hub coming up is what proves `usbd.sys` arrived.
 - [ ] 17.2 The change, each check green before the next: the INF's four
   directive edits and its comments, `DriverVer` and `src/xhci_version.h` at
   `1.0.0.1`; the INF gate's `TGT-*` and `W98-*` families replaced by rules

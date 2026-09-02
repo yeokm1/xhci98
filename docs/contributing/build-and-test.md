@@ -3641,7 +3641,11 @@ fresh clone of `win98.img @ post-nusb` (NUSB 3.3's stack) with the real
 1.0.0.1 package: the same CD prompt, the same load and root hub, and a
 hot-plugged two-interface `usb-audio` bound as "USB Composite Device" with
 "USB Audio Device" beneath it, no Code 2, so `usbhub.sys` arrived by the same
-route. The Windows 2000 leg is recorded in the roadmap when taken.
+route. And on a fresh clone of `win2k.img @ phase2b-clean` with the same
+package, Have Disk installed and started the driver without a reboot, the
+root-hub callbacks followed and the mouse was bound; the owner drove the
+install and reported no disk prompt, and the file's version on disk was not
+read back. Roadmap Phase 17, task 17.1, has the three readings.
 
 What if the target already has the file? Leave it alone: flag `16`.
 `COPYFLG_NO_OVERWRITE` is "do not copy if file exists on target"

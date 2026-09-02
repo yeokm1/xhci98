@@ -1,4 +1,4 @@
-# Handoff: release 1.0.0.1 (Phase 17 done on the host, Phase 18 open)
+# Handoff: release 1.0.0.1 (Phase 17 observed, Phase 18 open)
 
 Rewritten 2026-09-02 on branch `1.0.0.1`, late in the session that executed
 the previous plan. The roadmap's Phase 17 and Phase 18 are the authority;
@@ -47,23 +47,14 @@ this file says where each task stands and what the next session does first.
    attempt was contaminated by the old package (the guest was booted before
    `out\pkg-qemu` had been rebuilt, and the driver installed from it); the
    image was re-cloned with `-Clone -FreshCopy` and the leg redone.
-2. **Task 17.1c, the Windows 2000 leg.** `vm\layout-2b.img` is a clone of
-   `win2k.img @ phase2b-clean`, config entry `2b-layout` (Monitor 56598).
-   `prepare-image.ps1 -Target 2b-layout -Boot -Xfer`, Have Disk from `D:\`,
-   expect no prompt (the unsigned-driver warning aside), `usbd.sys`
-   5.00.2195.6658 in `WINNT\SYSTEM32\DRIVERS`, the root hub up. If Windows
-   2000 does ask for its CD instead of taking the file from
-   `Driver Cache\i386\driver.cab`, that is a finding to record, not a
-   failure of the route; if it asks for the xhci98 disk, the route did not
-   take on that engine and the Windows 2000 path needs another answer.
-3. Transcribe both readings into roadmap Phase 17 (tick 17.1b and 17.1c),
-   `build-and-test.md` ("The files the OS supplies", the observation
-   paragraph) and the release notes' limitation entry if Windows 2000
-   behaves differently from what they say. Then delete `vm\layout-2a.img`,
-   `vm\layout-2b.img` and the two temporary config entries (the standing
-   `vm\` practice).
-4. `vm\LAYOUT` and `vm\NOUSBD` are the hand-made test packages from the
-   morning; both are superseded by `out\pkg-qemu` and can go.
+2. **Task 17.1c, the Windows 2000 leg: done** the same evening on
+   `vm\layout-2b.img`: Have Disk from `D:\` installed and started the driver
+   without a reboot, root hub up, mouse bound; no disk prompt was reported
+   by the owner, and the file's on-disk version was not read back.
+3. Both readings are in roadmap Phase 17 and `build-and-test.md`. The two
+   temporary images, their config entries, `vm\LAYOUT` and `vm\NOUSBD` were
+   deleted afterwards (the standing `vm\` practice), so Phase 17 is fully
+   observed and the next session starts on Phase 18.
 
 The guests share one transfer drive (`vm\xfer-p10`), so they run one at a
 time. The owner drives the guest GUI; the host side is the scripts above,
