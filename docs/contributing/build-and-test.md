@@ -1308,10 +1308,12 @@ What the CD says (static, file level):
 The recipe, as run on 2026-09-02 (deviations under "What the run showed"):
 
 1. Create the image and install the OS by hand. `scripts\setup-qemu.ps1
-   -WinMeIso <path> -CreateDisk` creates `vm\winme.img` and writes
-   `scripts\local\qemu-winme-install.cmd`, the Windows 98 install launcher
-   with the Windows ME CD and `\WIN9X` paths; the `/p j` (ACPI HAL) rule is
-   the same. Install the OS from the CD, then SweetLow's USB 2.0 stack
+   -WinMeIso <path> -Win98Iso <path> -CreateDisk` creates `vm\winme.img` and
+   writes `scripts\local\qemu-winme-install.cmd`, which boots the Windows 98
+   SE CD's floppy for `fdisk` and `format c:` (the Windows ME CD's own FORMAT
+   never writes a sector under QEMU; see "What the run showed") with the
+   Windows ME CD as the second CD-ROM, `E:`, for `E:\WIN9X\SETUP.EXE /p j`;
+   the `/p j` (ACPI HAL) rule is the same as Windows 98's. Install the OS from the CD, then SweetLow's USB 2.0 stack
    (right-click Install on `SWEETLOW\USB2.INF` from the transfer drive,
    `prepare-image.ps1 -Target 2e -Boot -Xfer -XferAdd vm\SWEETLOW`, and
    reboot).
