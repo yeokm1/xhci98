@@ -1,210 +1,123 @@
-# Handoff: release 1.0.0.1, the OS supplies usbd.sys and usbhub.sys
+# Handoff: release 1.0.0.1 (Phase 17 done on the host, Phase 18 open)
 
-Written 2026-09-02 on branch `1.0.0.1`, after the SweetLow stack work
-(commits 90dba24 to fba7b7e). The owner has decided the next step: the
-package stops carrying any Microsoft file, the INF asks the Windows setup
-engine to copy `usbd.sys` and `usbhub.sys` from the OS install source, and
-that goes out as release 1.0.0.1. The release changes the install procedure
-only. No driver code changes; `xhci98.sys` is rebuilt solely because its
-version resource must match the INF's DriverVer.
+Rewritten 2026-09-02 on branch `1.0.0.1`, late in the session that executed
+the previous plan. The roadmap's Phase 17 and Phase 18 are the authority;
+this file says where each task stands and what the next session does first.
 
-## Why
+## What was done today (commits 2256779 to 00ae686)
 
-The release download carries three Microsoft files today: `usbd98.sys`,
-`usbd2k.sys` and `usbhub98.sys`, the target OS's own `usbd.sys` and Windows
-98's `usbhub.sys` under media names, copied by `src/xhci98.inf` with
-`COPYFLG_NO_OVERWRITE`. They exist because an xHCI-only machine never had a
-USB controller Windows setup recognised, so setup never placed them, and
-without `usbd.sys` the USB 2.0 root hub cannot load on either target.
+- Step 0 (task 17.0): `legal-provenance.md` section 5 records the decision;
+  `AGENTS.md` points at it.
+- Task 17.1a, observed with the owner at the console: on `vm\sweetlow-2a.img`
+  reverted to `sweetlow-stack-nodriver` (SweetLow's stack, no driver, no
+  `usbd.sys`, no `usbhub.sys`, no CABs on disk) the Device Manager install
+  from `vm\LAYOUT` raised **Insert Disk: "Please insert the disk labeled
+  'Windows 98 Second Edition CD-ROM'"**, not a prompt for the xhci98 disk.
+  After the copy, a shutdown and a relaunch (`prepare-image.ps1 -Target
+  2a-sweetlow -Boot -Xfer -XferAdd vm\LAYOUT`), the debugcon showed
+  `USBPORT_GetHciMn=10000001`, `StartController`, `RH_GetRootHubData`,
+  `RH_GetPortStatus` and the rest of the root-hub family, `-Status` read
+  devices addressed 1 (the keep-alive mouse; its HID wizard then ran from
+  the CD), and Device Manager showed the controller and "USB 2.0 Root Hub"
+  clean. The `dir` of `SYSTEM32\DRIVERS\USB*.SYS` was not read back; the
+  root hub coming up is the proof that `usbd.sys` arrived.
+- Task 17.2, all of it, on the host: the INF (four directive edits, comments
+  rewritten, `DriverVer=09/02/2026,1.0.0.1`), `src/xhci_version.h`, the INF
+  gate's `OS-*` family and `PKG-MSFILE` with self-tests (278 checks),
+  `expected-footprint.txt`, the packaging scripts without the manifest
+  (`test-package.ps1` 153 checks), `usbd-sources.expected` deleted,
+  `extract-usbd-sources.ps1` reduced to staging reference copies, and every
+  document the plan listed. `scripts\build-driver.cmd all`: BUILD + GATES
+  PASSED (debug release qemu).
+- Windows ME (Phase 18's subject): harness support (`2e` prepare-only
+  target, `-XferPackage`, `setup-qemu.ps1 -WinMeIso`), the static facts from
+  the owner's Windows ME OEM CD in `build-and-test.md`, "Windows ME target
+  VM", and the provenance note. Nothing has run on Windows ME.
+- The roadmap: Phase 17 (the mechanism), Phase 18 (release 1.0.0.1 with
+  Windows ME and the cut), per the owner's instruction that Windows ME
+  support is part of 1.0.0.1.
 
-Measured today on QEMU with SweetLow's stack (build-and-test, "The SweetLow
-stack"; lessons, "The Windows 98 teardown bugcheck belongs to the Windows
-2000-lineage usbport"):
+## What the next session does first
 
-- `usbd.sys` is required under both Windows 98 stacks. Without it the driver
-  registers and starts, but the USB 2.0 Root Hub sits at Code 2 with no
-  root-hub callback, because `usbhub20.sys` imports `USBD.SYS` by name.
-  SweetLow's `USBDSTUB.SYS` is not a substitute and his INF does not install
-  it.
-- `usbhub.sys` is required under NUSB (composite devices are Code 2 without
-  it; issue 03) and not under SweetLow's stack, whose usbccgp parents them
-  even when `usbhub.sys` is present. Supplying it costs nothing extra.
-- Windows 2000 is in the same position for `usbd.sys` (lessons,
-  "usbhub20.sys bugchecks Win2000").
+1. **Task 17.1b, the NUSB leg.** `vm\layout-2a.img` is a clone of
+   `win98.img @ post-nusb` (NUSB 3.3, no driver, no `usbd.sys`, no
+   `usbhub.sys`), config entry `2a-layout` in the host's
+   `matrix.config.psd1` (Monitor 56597, so the prep monitor is 56697,
+   `pc,smm=off`). Boot it with
+   `prepare-image.ps1 -Target 2a-layout -Boot -Xfer`: since commit 00ae686
+   `out\pkg-qemu` is the real 1.0.0.1 qemu package (two files), so the
+   install is from `D:\` (the transfer drive's root), not from a
+   subdirectory. Expect the Insert Disk prompt for the Windows 98 CD; answer
+   it with `E:\WIN98` if it asks where to copy from. Shut down, relaunch,
+   check the root hub, then `-Attach audio` once (never twice:
+   `USBAUDIO.VXD` faults on a second arrival) and expect "USB Composite
+   Device" with the audio function beneath it, not Code 2. That is the
+   `usbhub.sys` half of the route.
+2. **Task 17.1c, the Windows 2000 leg.** `vm\layout-2b.img` is a clone of
+   `win2k.img @ phase2b-clean`, config entry `2b-layout` (Monitor 56598).
+   `prepare-image.ps1 -Target 2b-layout -Boot -Xfer`, Have Disk from `D:\`,
+   expect no prompt (the unsigned-driver warning aside), `usbd.sys`
+   5.00.2195.6658 in `WINNT\SYSTEM32\DRIVERS`, the root hub up. If Windows
+   2000 does ask for its CD instead of taking the file from
+   `Driver Cache\i386\driver.cab`, that is a finding to record, not a
+   failure of the route; if it asks for the xhci98 disk, the route did not
+   take on that engine and the Windows 2000 path needs another answer.
+3. Transcribe both readings into roadmap Phase 17 (tick 17.1b and 17.1c),
+   `build-and-test.md` ("The files the OS supplies", the observation
+   paragraph) and the release notes' limitation entry if Windows 2000
+   behaves differently from what they say. Then delete `vm\layout-2a.img`,
+   `vm\layout-2b.img` and the two temporary config entries (the standing
+   `vm\` practice).
+4. `vm\LAYOUT` and `vm\NOUSBD` are the hand-made test packages from the
+   morning; both are superseded by `out\pkg-qemu` and can go.
 
-The files are the OS's own, so the OS's own install source is the right
-place to take them from, and the three-file exception in legal-provenance
-section 5 then closes.
+The guests share one transfer drive (`vm\xfer-p10`), so they run one at a
+time. The owner drives the guest GUI; the host side is the scripts above,
+`prepare-image.ps1 -Status`, and `out\phase10\prep-<target>-debugcon.log`.
+`scratchpad\guest.ps1` from this session (monitor sendkey, typed text,
+screenshots to PNG) is not in the repository; the monitor echoes every
+keystroke with escape codes, and the prep monitor port is the config's plus
+100.
 
-## The mechanism
+## Phase 18: Windows ME, then the cut
 
-`LayoutFile=layout.inf` in `[Version]`. A CopyFiles entry whose file the
-INF's own `[SourceDisksFiles]` does not name is resolved through the OS's
-`layout.inf` (`C:\WINDOWS\INF\LAYOUT.INF` records `usbd.sys=5`, i.e.
-`BASE5.CAB`; `%SystemRoot%\inf\layout.inf` on Windows 2000) and fetched from
-the Windows source path: `C:\WINDOWS\OPTIONS\CABS` when the CABs are on disk
-(OEM installs, Windows 98 QuickInstall), otherwise an "Insert Disk" prompt
-for the Windows 98 CD; on Windows 2000, `Driver Cache\i386\driver.cab`,
-which every install has, so no prompt. This is how Windows' own INFs work,
-and it is what happened today when the HID wizard took `hidusb.sys` from
-`E:\WIN98`. The driver's own file stays on disk 1 as now.
+The owner decided that Windows ME support ships in 1.0.0.1. Everything that
+needs no guest is done; what remains is the guest:
 
-The INF edits, and nothing else in the directives:
+1. Install Windows ME by hand: `scripts\setup-qemu.ps1 -WinMeIso
+   'D:\isos\Windows Me OEM Full.iso' -CreateDisk` writes
+   `scripts\local\qemu-winme-install.cmd` and creates `vm\winme.img`. The
+   ACPI HAL rule is the Windows 98 one (`setup /p j`); setup is under
+   `\WIN9X` on that CD. Then a USB 2.0 stack, which the CD does not carry
+   (its `layout.inf` names `uhcd.sys`, `openhci.sys`, `usbd.sys` and
+   `usbhub.sys` and no `usbport.sys`, `usbehci.sys` or `usbhub20.sys`):
+   Microsoft's own package is the `USB2.INF` and three drivers NUSB ships
+   ("For Windows 98SE and Windows ME"), installed by right-clicking that
+   INF from `tools\nusb-extracted`; SweetLow's is the other candidate.
+2. Add the `2e` entry from `config.sample.psd1` to the host config with `Cd`
+   pointing at the Windows ME ISO, then `prepare-image.ps1 -Target 2e -Boot
+   -Xfer -XferPackage` and the driver install from `D:\`. What to read is
+   in `build-and-test.md`, "Windows ME target VM": the load, the root-hub
+   callbacks, which files the copy phase asked the CD for (the CD's
+   `layout.inf` puts `usbd.sys` and `usbhub.sys` in `BASE2.CAB`), then HID
+   and storage.
+3. The tier decision is the owner's (first-class with the checkpoint tax, or
+   supported-in-VM stated like Windows 2000), and it decides which documents
+   name Windows ME: `AGENTS.md`, `README.md`, the release notes, the
+   bug-report form, the INF header comment, and the `1.0.0.1` history entry.
+   Nothing names it as supported until the observation exists.
+4. Then task 18.7: `make-release.ps1` on the full flavour set and the
+   acceptance test per target. **The date moves on the day of the cut**:
+   `src/xhci_version.h`, the INF's `DriverVer` and the `## 1.0.0.1 - date`
+   heading in `releases/history.md` all say 2026-09-02 today and must agree
+   with each other and with the cut day, or `make-release.ps1` refuses.
 
-- `[Version]`: `LayoutFile=layout.inf` after `Provider=`.
-- `[SourceDisksFiles]`: remove `usbd98.sys=1`, `usbd2k.sys=1`,
-  `usbhub98.sys=1`.
-- `[Xhci.CopyW98]`: `usbd.sys,,,16` and `usbhub.sys,,,16`.
-- `[Xhci.CopyW2K]`: `usbd.sys,,,16`.
+## Open beside this
 
-Flag 16 stays, so an existing file is never touched, and the per-target
-media names go, since each OS supplies its own build by construction.
-
-`vm\LAYOUT\` (git-ignored) already holds a test package made exactly this
-way from `out\pkg-qemu`: the qemu-flavour `xhci98.sys` and the edited INF,
-comments untouched.
-
-## Step 0: record the decision in legal-provenance first
-
-`docs/contributing/legal-provenance.md` section 6 says to update that file in
-the same change that creates the need, and the need is this decision, not
-the scripts that follow it. Section 5 currently states as the plan that the
-first upload carries the three files. Add, facts only, under its "Status"
-paragraph:
-
-- On 2026-09-02 the owner decided the three-file exception will not be used.
-  Release 1.0.0.1 changes the INF so that the Windows setup engine copies
-  `usbd.sys` and `usbhub.sys` from the OS's own install source, and the
-  release download will then carry the driver's files only. Point at
-  `handoff.md` for the plan and at build-and-test, "The SweetLow stack", for
-  the measurements that made it possible.
-- Until that change lands, `make-release.ps1` still assembles the three files
-  into an asset under `out/`, and no asset of any version has been uploaded.
-  The first upload is intended to be 1.0.0.1, so the exception will never
-  have carried anything.
-- When the scripts change (step 2), this subsection, the three-file wording
-  in `AGENTS.md` ("Third-Party Material and Provenance"), `releases/README.md`
-  and `usbd-sources.expected` are rewritten in that same commit. Section 4's
-  "Where those copies came from" paragraph stays: the files are still read
-  statically for the ABI work.
-
-In `AGENTS.md`, add only a one-line pointer to the decision next to the "do
-not extend the exception to a fourth file" bullet; the rule itself still
-binds anyone touching the packaging until step 2.
-
-## Step 1: prove the mechanism in the VM
-
-1. `qemu-img snapshot -a sweetlow-stack-nodriver vm\sweetlow-2a.img`, then
-   `powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-sweetlow -Boot -Xfer -XferAdd vm\LAYOUT`.
-   That snapshot is SweetLow's stack with no driver, no `usbd.sys`, no
-   `usbhub.sys`; the host config's `Win98Cd` points at the real ISO, so the
-   CD is at E:. The target runs `pc,smm=off` (lessons, QEMU 11.1-rc2).
-2. In the guest: Device Manager, the unclaimed xHCI, Update Driver, Specify
-   a location, `D:\LAYOUT`. Watch the copy phase:
-   - no prompt: both files came from `C:\WINDOWS\OPTIONS\CABS`;
-   - "Insert Disk" naming `usbd.sys` or `usbhub.sys`: resolved through
-     layout.inf, wants the CD; answer `E:\WIN98`;
-   - a prompt for `usbd.sys` from the xhci98 disk: the route did not take.
-3. Shut down from the Start menu, quit QEMU, relaunch with the same
-   command. `dir C:\WINDOWS\SYSTEM32\DRIVERS\USB*.SYS` in a DOS box (expect
-   `usbd.sys` 18,912 and `usbhub.sys` 35,680), `-Status` (endpoints opened 1
-   on the keep-alive mouse), and root-hub callbacks after `StartController`
-   in `out\phase10\prep-2a-sweetlow-debugcon.log`.
-4. The same from `win98.img @ post-nusb` (NUSB's stack): point the target's
-   `CloneFrom` there, `-Clone -FreshCopy`, install from `D:\LAYOUT`. This is
-   the path that also needs `usbhub.sys`, so plug a two-interface device once
-   (`-Attach audio`, once only; Windows 98's `USBAUDIO.VXD` faults on a
-   second arrival) and expect "USB Composite Device" with the audio function
-   beneath, not Code 2.
-5. Windows 2000: the 2b guest with the driver removed, install from the same
-   package, expect no prompt and `usbd.sys` 5.00.2195.6658 in
-   `WINNT\SYSTEM32\DRIVERS`.
-
-Two harness facts: the guest halts on a reboot, so every "restart" is a
-shutdown plus a relaunch from the host; and QEMU's keyboard input follows
-the newest keyboard, so never hot-plug a `usb-kbd` before typing.
-
-## Step 2: the change, in order, each check green before the next
-
-1. `src/xhci98.inf`: the four edits above. Rewrite the header paragraph on
-   `usbd.sys`, the "The one file that differs per target" block and the
-   `usbhub.sys` block to say what the INF now does: the OS supplies both,
-   flag 16 keeps an existing file, Windows 2000 gets `usbd.sys` only. Bump
-   `DriverVer` to the release date and `1.0.0.1`.
-2. `src/xhci_version.h`: `1,0,0,1`, `"1.0.0.1"`, the release date. This is
-   the only reason the binary is rebuilt; the version must match the INF or
-   `make-package.ps1` refuses the stage. Procedure: build-and-test,
-   "Versioning the driver".
-3. `scripts/inf-gate/check-inf.ps1` and `test-inf-checks.ps1`: the `TGT-*`
-   family (`TGT-MISSING`, `TGT-DUP`, `TGT-MEDIANAME`, `TGT-FLAGS`,
-   `TGT-TARGET`, `TGT-DEST`, `TGT-SAMESRC`, `TGT-SHAREDSEC`, `TGT-DEFAULT`)
-   and `W98-MEDIANAME` police the per-target copies and fail the new INF.
-   Replace them with rules for the new shape: `LayoutFile=layout.inf`
-   present; each install path copies `usbd.sys` with flag 16 to
-   `10,System32\Drivers`; the Windows 98 path also copies `usbhub.sys` and
-   the Windows 2000 path does not; no `SourceDisksFiles` entry names either;
-   the package manifest lists no Microsoft file. Update
-   `scripts/inf-gate/expected-footprint.txt`.
-4. `scripts/package/make-package.ps1`, `make-release.ps1`,
-   `usbd-sources.expected`, `extract-usbd-sources.ps1`: stop staging and
-   hashing the three files; the release assembles `xhci98.sys`,
-   `xhci98.inf`, the tools and the readme only.
-5. `scripts/vm-matrix/prepare-image.ps1`: the fresh-target `-Xfer` comment
-   says the package carries `usbd.sys`; correct it, and note that a Windows
-   98 prep boot needs the CD attached (`Win98Cd`).
-6. Documents. `docs/contributing/legal-provenance.md` section 5: rewrite
-   the "The GitHub release download carries three of them" subsection in
-   the past tense, as a decision made and then withdrawn before any upload,
-   keeping the facts about what the files were and why they were wanted;
-   step 0's note becomes part of it. `releases/README.md`, `AGENTS.md` ("The
-   INF and install media", the provenance bullet), `docs/contributing/build-and-test.md`
-   ("Carrying a per-target usbd.sys"), `README.md`,
-   `docs/using/release-notes.md`, `docs/using/release-acceptance-test.md`,
-   and the generated readme.txt in `make-release.ps1`: install steps, the
-   "after uninstall" list (which names `usbd.sys` as left behind), and the
-   sentence that a "cannot find usbd.sys" prompt wants the Windows CD, not
-   the driver disk.
-7. The user-facing statement, in every place a user reads before
-   installing: `README.md` (the installation steps and the requirements
-   list), the generated readme.txt in `make-release.ps1` (sections 4 and 5,
-   and the "after uninstall" list), `docs/using/release-notes.md`
-   (Requirements, and a known-limitations entry), and
-   `docs/using/release-acceptance-test.md` (the install step). It says:
-   the package no longer carries `usbd.sys` or `usbhub.sys`; on an
-   xHCI-only Windows 98 machine the driver install copies them from the
-   Windows source, so **have the Windows 98 SE installation CD at hand**,
-   since Windows asks for it unless the CABs are on the hard disk
-   (`C:\WINDOWS\OPTIONS\CABS`, as on OEM and QuickInstall installs); answer
-   the "Insert Disk" prompt with the CD's `WIN98` folder; a machine that
-   ever had a USB 1.1 controller already has both files and is not asked;
-   Windows 2000 takes `usbd.sys` from its driver cache and asks for nothing.
-   The symptom of skipping it is also stated: the USB 2.0 Root Hub at Code 2
-   on Windows 98, the `0xc0000034` bugcheck naming usbhub20.sys on Windows
-   2000, both of which read as a driver fault and are not one.
-8. `releases/history.md`: the 1.0.0.1 entry, stating that the driver code is
-   unchanged and only the install procedure moved. The `1.0.0.0` directory
-   is never edited.
-
-## Step 3: cut 1.0.0.1
-
-`scripts\package\make-release.ps1` per build-and-test, on the full flavour
-set, with the INF gate, the import gate and the package self-checks green.
-Then the release acceptance test on both targets with the new procedure:
-Windows 98 must be run once on a guest with no `usbd.sys` and no
-`usbhub.sys` and the CABs absent, so that the CD prompt is exercised, and
-once with the CABs present.
-
-## What the user sees afterwards
-
-A Windows 98 user without the CABs on disk is asked for the Windows 98 CD
-during the driver install, on an xHCI-only machine only; a machine that ever
-had a USB 1.1 controller already has both files and flag 16 leaves them
-alone. Windows 2000 users see nothing new.
-
-## Also open, not part of this release
-
-- The other Windows 98 matrix targets still run `-machine pc` and will hit
-  the QEMU 11.1-rc2 SMM wedge on this host until they carry `smm=off` or
-  QEMU 11.0.0 is back.
-- A full device-matrix run on the SweetLow guest, and bare metal, have not
-  been done.
+- The QEMU on this host is scoop's 11.0.0 again (`C:\Users\yeokm1\scoop\apps\qemu`);
+  the 11.1-rc2 SMM wedge entry in `lessons.md` applies to that other build.
+- The other Windows 98 matrix targets still run `-machine pc`; harmless on
+  11.0.0.
+- A full device-matrix run on the SweetLow guest, and bare metal on either
+  target with the new install procedure, have not been done.
+- `README.md` is LF-only; git warns it will become CRLF on the next touch.
