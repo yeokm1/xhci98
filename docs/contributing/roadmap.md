@@ -1106,168 +1106,55 @@ Goal: move the repository from revision 1.2 of the xHCI specification to
 revision 1.2c, the only revision Intel now serves, without changing what the
 driver does, and prove that by rebuilding and testing it.
 
-Status: closed on 2026-08-29, the day it opened. The unattended post-release
-run it carried for that day as task 15.5 is Phase 16, unchanged, so that this
-phase closes on its own subject and the run is not held open by a
-specification move it has nothing to do with. 15.1 to 15.4 done on 2026-08-29. `build-driver.cmd all`, both gates
-and the host tests passed. The matrix run was not made, and the owner closed
-15.4 without it on this evidence: the rebuilt `release` and `debug`
-`xhci98.sys` are the same size as the `1.0.0.0` files and differ from them
-only at the PE `TimeDateStamp` and `CheckSum`, the three debug-directory
-timestamps and the timestamp inside the debug record; every byte of every
-section is identical, so the matrix would have measured the binary the
-release already carries. The run is still owed before any tree that changes
-code is measured, and it is blocked today: both guest images (`vm/win98.img`, `vm/win2k.img`, rewritten on
-2026-08-27) no longer carry a `qemu`-flavour driver that prints the identity
-line the harness waits for (the Win98 guest boots to its desktop and says
-nothing on the debug console; the Win2000 guest raises the leftover "Video
-Controller" wizard `prepare-image.ps1` describes, and says nothing either).
-The fix is the operator-driven prep pass in `scripts/vm-matrix/README.md`
-(`make-package.ps1 -Flavor qemu`, then `prepare-image.ps1` against each
-image), which writes to the images and needs someone at the guest GUI, so it
-is not done here. One other host-side finding on the way: the monitor ports
-in the sample config (55591-55593) now sit inside a Windows excluded TCP
-range on this host, so QEMU failed to bind and the harness saw only a refused
-connection; the per-host config moved to 56591-56593 and the sample says why.
+Status: closed on 2026-08-29, the day it opened. No code changed, so no
+release was re-cut. The matrix clause of the checkpoint was met by the
+owner's decision on byte identity rather than by a run: the rebuilt
+`release` and `debug` `xhci98.sys` differ from the `1.0.0.0` files only at
+the PE timestamps and checksum, every section byte-identical. The unattended
+post-release run that opened here as task 15.5 became Phase 16.
 
-What the tasks found. 15.2's sweep counted 1,286 `p.N` matches rather than
-the 1,274 of the first reading (the difference is citations sharing a line);
-1,219 moved, 56 are Oney's, 7 are the references README's own examples and 4
-are this phase's own 1.2c citations. 22 were a page off against 1.2 and were
-corrected. The method and the count re-verified are in
-`docs/references/README.md`, "How the citations were moved from 1.2 to
-1.2c". 15.3's outcome is "comments and documents only": `XHCI_CONFIG_RSVDP_MASK`
-keeps SOC, `XHCI_PORTSC_RSVDZ_MASK` keeps bit 2, both with the reason written
-at the definition; the extended-capability walk's `default: break` steps
-over ID 18; CErr stays 3 for interrupt and 0 for isochronous, which is what
-1.2c's 4.8.2.5 says outright; and nothing in `src/`, `test/` or `docs/`
-cites the two deleted 4.14.2 sentences. No code changed, so no release is
-re-cut.
-
-Why a phase: every `p.N` in this tree, 1,274 citations of the specification
-across 42 files, was verified against revision 1.2 (645 pages). Revision
-1.2c (600 pages, October 2025) repaginates the whole document, and Intel
-publishes no version-pinned link to 1.2, so a reader who follows the
-recorded URL gets a document on which none of those page numbers land.
-`docs/references/README.md` already says what to do when that happens:
-re-verify systematically, record the new revision and hash, say which
-citations were re-verified. This phase is that work, plus the check that the
-errata revisions changed nothing the driver rests on.
-
-What 1.2c changes, from its revision history (p.21), Appendix I.6 and I.7
-(p.599-600) and a word-level comparison of the two text dumps. Revision 1.2b
-added the USB3 Tunneling Support extended capability (Table 7-2, ID 18) and
-PORTSC bit 2, Tunneled Mode (TM, RO; RsvdZ in 1.2). Revision 1.2c added
-eUSB2V2 and Double Isochronous IN Bandwidth (HCCPARAMS2 bits 11 DIC and 12
-E2V2C, both RO; a USB2 PORTLI definition; PORTPMSC bit 27 ECM; section
-4.3.9; the eUSB2 Isochronous Endpoint Companion Descriptor rules in 4.8.2,
-4.14.2 and 6.2.3), the Camera Sideband capability (7.12), and CONFIG bit 10,
-Software Offload Capable (SOC, RW; RsvdP in 1.2). Section 4.8.2.4 "Isoch or
-Interrupt Endpoints" is split into 4.8.2.4 Isoch and 4.8.2.5 Interrupt;
-5.4.11's PORTEXSC subsections become 5.4.12; Appendix H moves from p.638 to
-p.593 and Appendix I is renumbered (I.4.14 Interrupter Mapping is now I.5).
-Two passages this tree's documents lean on were reworded: the Slot Context
-Speed field (Table 6-4) no longer reads "deprecated in this version of the
-specification and shall be Reserved" but "not applicable to USB3 Gen X", and
-4.14.2 dropped the sentence "High-speed endpoints shall allocate at most 80%
-of a microframe for periodic transfers" together with the "64B, 1KB, 3KB,
-3KB, 3KB, and 48KB" Max ESIT Payload list, deferring both to the bus
-specifications. Everything else the comparison found is reflow, footnote
-movement, cross-reference repair, and two sentences 1.2c duplicated in
-editing (the "legacy USB devices ... Default state" note in 4.3.4 and the
-"TRB Error code" note in 4.6). None of the new features is reachable from a
-USB 2.0 root port on this driver: eUSB2 is a chip-to-chip interface, and
-tunneling is USB4.
-
-Expected outcome for the driver: no behaviour changes. The driver reads only
-FSC from HCCPARAMS2; never touches PORTPMSC, PORTLI, PORTHLPMC or PORTEXSC;
-writes CONFIG and USBCMD through `xhciWriteRsvdP` and `xhciWriteUsbCmdFrom`,
-which preserve reserved bits, so the new SOC bit is carried rather than
-cleared; writes PORTSC bit 2 as zero, harmless against a read-only bit, though
-the comment calling it RsvdZ is now wrong; and walks the extended
-capabilities by matching the ID it wants, so an unknown ID 18 is stepped
-over. Task 15.3 confirms or refutes that expectation. A refutation is not
-fixed silently inside the task: it is named, fixed, and the existing
-`1.0.0.0` release is re-cut with the change (the owner's decision; nothing
-has been uploaded, so there is no second version to number).
+Why a phase: every `p.N` in this tree was verified against revision 1.2 (645
+pages). Revision 1.2c (600 pages, October 2025) repaginates the whole
+document and Intel publishes no version-pinned link to 1.2, so a reader who
+follows the recorded URL lands none of those page numbers. 1.2b added the
+USB3 Tunneling extended capability (ID 18) and PORTSC bit 2 (TM); 1.2c added
+eUSB2 (HCCPARAMS2 bits 11 and 12, PORTPMSC bit 27, the eUSB2 isochronous
+companion rules), the Camera Sideband capability and CONFIG bit 10 (SOC),
+split 4.8.2.4 into 4.8.2.4 Isoch and 4.8.2.5 Interrupt, renumbered 5.4.11's
+PORTEXSC subsections to 5.4.12 and Appendix I, and dropped 4.14.2's "80% of
+a microframe" sentence and its Max ESIT Payload list. None of the new
+features is reachable from a USB 2.0 root port on this driver.
 
 Tasks:
 
-- [x] 15.1 adopt 1.2c as the reference document. Add its row to
-  `docs/references/README.md`: `xHCI__Rev1.2c.pdf` as Intel names the
-  download, revision 1.2c, 600 pages, SHA-256
-  `0b06318005c3e0c8b896f2a002c2a3c78426b5fdacac4ad1cc02ffec15835190`, the URL
-  already recorded. Keep the 1.2 row as the artifact the citations were made
-  against until 15.2 moves them, then say so in its row. Rewrite the "expect a
-  hash mismatch" passage, which describes the situation this phase ends. Fix
-  the extraction recipe for 1.2c's page headers: the printed page number is
-  the first token only on even pages, and odd pages carry it after `Document
-  Number: 868295, Revision: 1.2c`, so `printed_of` must accept either.
-  Re-derive the section-anchor list (4.2, 4.5.4.1, 4.6.1.1, 4.9.4, 5.4.2) on
-  1.2c pages. Then every statement of the revision in the tree: `AGENTS.md`
-  Quick Reference, `README.md` "citations verified against v1.2",
-  `docs/usb-xhci-info/xhci-data-structures.md`'s header ("645-page", "v1.2"),
-  `docs/usb-xhci-info/xhci-programming.md`'s first line, `xhciqual/qual.h`,
-  and the dump filename the recipe writes. `legal-provenance.md` lists the
-  paths the 1.2 PDF once occupied and stays as it is; the new file was never
-  tracked.
-- [x] 15.2 migrate the page citations. Every `p.N` and `p.N-M` citation of
-  the specification (`git ls-files '*.c' '*.h' '*.md' | xargs grep -n
-  '\bp\.[0-9]'`, minus the Oney book's) moves to the page 1.2c prints. The
-  method that resolved 1,268 of 1,274 on the first reading, to be re-run
-  rather than copied: map each distinct cited page to 1.2c by
-  five-word shingle overlap between the two text dumps (a 1.2 page lands on
-  one 1.2c page or straddles two, 1.2c holding more text per page); then, per
-  citation, take the quoted phrase within four lines above it and keep the
-  candidate page that prints it, fall back to the section or table number on
-  the same line, and only then to the map's top candidate. What that leaves
-  is read by a person: the citations whose map was weak with no phrase or
-  anchor to settle them, those with no candidate at all, and the lines in the
-  three files that cite both the specification and Oney (`win98-wdm.md`,
-  `build-and-test.md`, `implementation-invariants.md`), where the book's
-  pages must not move. `docs/references/README.md` is the record of the
-  counts at each step. Check each quoted phrase against its 1.2 page first: a
-  citation that was already a page off is corrected, not carried across.
-  Record the method and the count re-verified in
-  `docs/references/README.md`, and finish with the sweep over the whole tree,
-  not a file list. Check that the sweep also rewrites the `p.593` cluster
-  (Appendix H.1.6, FSC) that `src/`, `test/`, `xhciqual/` and three
-  documents share.
-- [x] 15.3 read the tree against what changed. `xhci-data-structures.md`:
-  the HCCPARAMS2 row (bits 11 and 12 now defined, still unused), the CONFIG
-  row (SOC `10`, RsvdP `31:11`), the PORTSC bit 2 row (TM, RO, USB3 ports
-  only, RsvdZ on USB2 ports), the Slot Context Speed note at Table 6-4, and
-  Table 7-2's ID 18. `src/xhci.h`: `XHCI_CONFIG_RSVDP_MASK` (`0xFFFFFC00`)
-  still covers bit 10 and so preserves SOC; keep it and write down why. The
-  `XHCI_PORTSC_RSVDZ_MASK` comment ("no defined field") is corrected, and
-  whether the mask keeps bit 2 is decided there with the reason written
-  down. Confirm that nothing in `src/`, `test/` or `docs/` rests on the two
-  deleted 4.14.2 sentences (a first grep for "80%" and the ESIT list finds
-  nothing), that the 4.8.2.4/4.8.2.5 split changes no CErr choice (interrupt
-  3, isochronous 0), and that the extended-capability walk steps over ID 18.
-  The outcome is either "comments and documents only" or a named behavioural
-  change, and the second amends the existing release (15.4).
-- [x] 15.4 rebuild and test. `scripts\build-driver.cmd` for every flavour,
-  `test\run-host-tests.cmd`, the import gate and the INF gate; then the
-  `scripts\vm-matrix` run on both targets, with the "observed on both" rule
-  read as `AGENTS.md` defines it. The expected reading is a driver that
-  behaves as `1.0.0.0` did. If 15.3 changed no code, no release is cut and
-  the tree's claim is only that its citations are now 1.2c's; if it did,
-  `make-release.ps1` re-cuts `1.0.0.0` with the change named in its
-  `history.md` entry. The version does not move: the release has never been
-  uploaded, so amending it leaves nobody holding a different file under the
-  same name.
+- [x] 15.1 adopt 1.2c as the reference document: its row in
+  `docs/references/README.md` (`xHCI__Rev1.2c.pdf`, 600 pages, SHA-256
+  `0b06318005c3e0c8b896f2a002c2a3c78426b5fdacac4ad1cc02ffec15835190`), the
+  extraction recipe fixed for 1.2c's odd-page headers, the section anchors
+  re-derived, and every statement of the revision in the tree moved.
+- [x] 15.2 migrate the page citations by shingle overlap between the two text
+  dumps, settled per citation by the quoted phrase or section number, the
+  rest read by a person: 1,286 matches, 1,219 moved, 22 corrected that were
+  already a page off against 1.2, Oney's 56 untouched. The method and the
+  counts are in `docs/references/README.md`, "How the citations were moved
+  from 1.2 to 1.2c".
+- [x] 15.3 read the tree against what changed. Outcome: comments and documents
+  only. `XHCI_CONFIG_RSVDP_MASK` keeps SOC and `XHCI_PORTSC_RSVDZ_MASK` keeps
+  bit 2, each with the reason at its definition; the extended-capability walk
+  steps over ID 18; CErr stays 3 for interrupt and 0 for isochronous, which
+  1.2c's 4.8.2.5 says outright; nothing cites the two deleted 4.14.2
+  sentences.
+- [x] 15.4 rebuild and test: `build-driver.cmd all`, the host tests and both
+  gates green; the matrix clause met on byte identity, as above.
 
 Checkpoint: 1.2c is the only revision the tree cites, every `p.N` lands on
 the page a 1.2c copy prints, `docs/references/README.md` records the
 revision, the hash and the count re-verified, and the driver built from the
 tree passes the host tests, both gates and the device matrix on both targets.
-The matrix clause was met on the byte-identity evidence above, by the owner's
-decision, and not by a run.
 
 Records: `docs/references/README.md`;
-`docs/usb-xhci-info/xhci-data-structures.md`; `releases/history.md` (only if
-15.4 cuts a release; it did not).
+`docs/usb-xhci-info/xhci-data-structures.md` (the HCCPARAMS2, CONFIG, PORTSC
+and Table 7-2 rows).
 
 ## Phase 16 - The Unattended Post-Release Run
 
@@ -1277,81 +1164,45 @@ the keyboard, plugging and unplugging every device this QEMU build can
 present, and writes a diffable record and a verdict per target.
 
 Status: closed on 2026-08-30, on the reading rather than on a clean verdict,
-the way Phase 13 closed. The second run's Windows 2000 report is `PASS` with
-nothing against; its Windows 98 report is `FAIL` on the `usb-audio` replug's
-Insert Disk prompt, reproduced in both runs, which the owner published as a
-limitation in `docs/using/release-notes.md` rather than answer from the
-harness (the run may not attach the installation CD or click a prompt) or
-pin as non-counting. The other row that counted against Windows 98,
-`usb-uas/fs`, is `NODRIVER` on both legs and carries its `ExpectNoDriver`
-entry, written after the runner had loaded the matrix; no third run was made
-to move the number. The two reports are committed as
-`runs/run-16-post-release/`; the screenshots and traces stay under `out/`.
-The task was added after the `1.0.0.0` cut as task 14.3, moved
-to Phase 15 as task 15.5 when that phase opened, and moved here the same day
-so that it has a phase of its own; its design record and the owner's
-decisions in it are unchanged by either move. The harness was built on
-2026-08-29 (`-PostRelease` on the runner, `-Clone` and `-Stamp` on the
-preparation script, `lib/fresh.ps1`, the two fresh targets, the guestless
-self-test), and on 2026-08-30 the manual rung was taken on both fresh images
-against the re-cut `1.0.0.0` and the run was made twice. The first run found
-three harness defects and no driver defect (the `null` chardev that never
-attaches `usb-serial` and `usb-braille`, the bare `usb-uas` adapter the prep
-pass could not teach, and two `ExpectNoDriver` guesses that were wrong in the
-good direction); with those fixed the second run read `PASS` on the fresh
+the way Phase 13 closed. The harness was built on 2026-08-29 and the run made
+twice on 2026-08-30 against the re-cut `1.0.0.0`. The first run found three
+harness defects and no driver defect; the second read `PASS` on the fresh
 Windows 2000 guest with nothing against, and `FAIL` on the fresh Windows 98
-guest with two rows against, one of them an entry written after the runner
-had loaded the matrix and the other the `usb-audio` replug's Insert Disk
-prompt, reproduced identically in both runs. Design record 09 sections 11
-and 12 record what was built, what each run read, and the causes.
+guest on two rows: `usb-uas/fs`, `NODRIVER` on both legs with its
+`ExpectNoDriver` entry written after the runner had loaded the matrix, and
+the `usb-audio` replug's Insert Disk prompt, reproduced in both runs, which
+the owner published as a limitation in `docs/using/release-notes.md` rather
+than answer from the harness or pin as non-counting.
 
 Why a phase: Phase 10's matrix measures a change to the driver on guests
-carried along since Phase 2, so whatever those images learned they learned
-before the release existed, and an install onto them is an upgrade. What a
+carried along since Phase 2, so an install onto them is an upgrade. What a
 release needs measured is the install path, the first bind, and the plug and
-unplug on an operating system with no history, and nobody re-runs that by hand
-more than once per release. It is also not the acceptance run this file ends
-on: that is taken by a person, from the download, and a script following the
-document is not that reading. `design/09-post-release-unattended-run.md`
-section 1 draws the three apart.
-
-What the task must not re-argue, because the owner settled it: both targets
-single-processor, so Phase 2d's SMP guest is out; one manual rung, the driver
-install inside the guest against a base image cloned from the pre-driver
-snapshots (`post-nusb`, `phase2b-clean`) and stamped with the version it
-carries; the `qemu` flavour, never published, is the binary, and the `release`
-binary is read on a physical machine by hand; `XHCIQUAL` and `XHCISNAP` are
-out of scope; the replug leg is judged from counters alone; the storage row
-enumerates and does not round-trip a file; the composite row runs on Windows
-98 pinned to the release notes' USB Audio reading; TCG, with no time budget
-until one run has been measured. Design record 09 section 7 is the table.
+unplug on an operating system with no history, and nobody re-runs that by
+hand more than once per release. It is not the acceptance run this file ends
+on, which a person takes from the download. Design record 09 draws the three
+apart and holds the owner's decisions the task may not re-argue
+(single-processor targets, one manual driver install on an image cloned from
+the pre-driver snapshot and stamped, the `qemu` flavour as the binary, the
+tools out of scope, TCG).
 
 Tasks:
 
-- [x] 16.1 one command drives a freshly installed Windows 98 SE
-  guest and Windows 2000 SP4 guest from boot to teardown with nobody at the
-  keyboard, plugging and unplugging devices and writing a diffable record and
-  a verdict per target. Done 2026-08-30, twice; the second run's reports are
-  in `runs/run-16-post-release/`. The design and the owner's decisions it must not
-  re-argue (single-processor targets, a one-time manual driver install, the
-  `qemu` flavour allowed, `XHCIQUAL` and `XHCISNAP` out of scope) are in
-  `design/09-post-release-unattended-run.md`. It is not the acceptance run
-  this file ends on and closes none of it.
+- [x] 16.1 `run-matrix.ps1 -PostRelease` on a stamped fresh image of each
+  target (`-Clone` and `-Stamp` on `prepare-image.ps1`, `lib/fresh.ps1`, the
+  two fresh targets, the guestless self-test). Done 2026-08-30, twice; the
+  second run's reports are in `runs/run-16-post-release/`.
 
 Checkpoint: `run-matrix.ps1 -PostRelease` has run to completion on a stamped
-fresh image of each target, with nobody at the keyboard after the command
-was given, and each target has its report with a header and a verdict under
-`out/post-release/<DriverVer>/`. The "observed on both" rule is read as
-`AGENTS.md` defines it: the Windows 2000 reading is a virtual-machine
-reading, and so, here, is the Windows 98 one. A run on the `qemu` flavour is
-a driver reading taken after a release and is not reported as acceptance of
-it.
+fresh image of each target with nobody at the keyboard after the command was
+given, and each target has its report with a header and a verdict under
+`out/post-release/<DriverVer>/`. Both readings are virtual-machine readings,
+and a run on the `qemu` flavour is a driver reading taken after a release,
+not acceptance of it.
 
-Records: `design/09-post-release-unattended-run.md` (the design and, in its
-last two sections, what was built and what the runs found);
-`runs/run-16-post-release/` (the second run's report per target);
-`scripts/vm-matrix/README.md` (the commands, and notes 14 and 15 for what the
-first run corrected).
+Records: `design/09-post-release-unattended-run.md` (the design, and in its
+last two sections what was built and what the runs found);
+`runs/run-16-post-release/`; `scripts/vm-matrix/README.md` (the commands,
+and notes 14 and 15 for what the first run corrected).
 
 ## Phase 17 - The OS Supplies `usbd.sys` and `usbhub.sys`
 
@@ -1363,233 +1214,130 @@ source, with `COPYFLG_NO_OVERWRITE` so a file already on the machine is never
 touched. The driver code is unchanged; `xhci98.sys` is rebuilt only because
 its version resource must match the INF's `DriverVer`.
 
-Status: closed on 2026-09-02, the day it opened, by the owner on the
-checkpoint: every task done or observed that evening, the package staged
-under the new shape on all three flavours, and the cut deferred to Phase
-18. The decision is the owner's, taken that day
-after the SweetLow-stack work measured what each stack needs
-(`build-and-test.md`, "The SweetLow stack"): `usbd.sys` is required under
-every USB 2.0 stack on both targets because `usbhub20.sys` imports it by
-name, `usbhub.sys` is required under NUSB's stack and inert under SweetLow's,
-and both are the OS's own files, so the OS's own install source is where
-they come from. Release `1.0.0.0` carried them on the media under per-target
-names; that exception (`legal-provenance.md` section 5) is withdrawn before
-any upload, so it will never have carried anything. `handoff.md` at the
-repository root is the working plan.
-
-What has been observed (2026-09-02, QEMU, the owner at the console): on the
-Windows 98 guest running SweetLow's stack, reverted to no driver and no
-`usbd.sys` or `usbhub.sys`, the Device Manager install from a package built
-this way raised the engine's own `Insert Disk` prompt naming the Windows 98
-Second Edition CD-ROM, not the xhci98 disk; after the copy and a relaunch the
-driver registered, `StartController` ran, the root-hub callbacks followed and
-the keep-alive mouse was addressed and bound, with the controller and the
-USB 2.0 Root Hub clean in Device Manager. The NUSB-stack leg read the same
-later that evening, with the composite device bound as well (17.1b), and
-the Windows 2000 leg loaded and bound the same way (17.1c). All of 17.1 is
-observed.
+Status: closed on 2026-09-02, the day it opened, every task done or observed
+that evening and the cut deferred to Phase 18. The decision is the owner's,
+taken after the SweetLow-stack work measured what each stack needs:
+`usbd.sys` is required under every USB 2.0 stack on both targets because
+`usbhub20.sys` imports it by name, `usbhub.sys` is required under NUSB's
+stack and inert under SweetLow's, and both are the OS's own files. Release
+`1.0.0.0` carried them on the media under per-target names; that exception
+(`legal-provenance.md` section 5) was withdrawn before any upload.
 
 Why a phase: it changes the install procedure a user follows, the packaging
 scripts and gates, the provenance record, and every user-facing statement
-about what the download holds, and it is what release `1.0.0.1` (Phase 18)
-ships. It changes no driver behaviour, which is why its checkpoint is an
-install reading rather than a device reading.
+about what the download holds. It changes no driver behaviour, which is why
+its checkpoint is an install reading rather than a device reading.
 
 Tasks:
 
-- [x] 17.0 Record the decision in `legal-provenance.md` section 5 before any
-  script changes, and point at it from `AGENTS.md`'s provenance bullet. Done
-  2026-09-02 (`2256779`).
-- [x] 17.1 Prove the mechanism in the VMs before changing the tree, with the
-  test package `vm\LAYOUT` (the `1.0.0.0` qemu binary and the INF with the
-  four directive edits):
-  - [x] 17.1a Windows 98, SweetLow's stack, no driver, no `usbd.sys`, no
-    `usbhub.sys`, CABs absent so the CD is asked for. Observed 2026-09-02, as
-    above.
-  - [x] 17.1b Windows 98, NUSB 3.3's stack (`win98.img @ post-nusb` cloned to
-    a new image), the same install, then one two-interface device attached
-    once: "USB Composite Device" with the function beneath, not Code 2, which
-    is the `usbhub.sys` half of the route. Observed 2026-09-02 on
-    `vm\layout-2a.img` with the real 1.0.0.1 qemu package on the transfer
-    drive: the install asked for the Windows 98 SE CD; after the relaunch
-    the 1.0.0.1 build loaded under NUSB's usbport (`USBPORT_GetHciMn=
-    57324B30`), `StartController` and the root-hub callbacks followed, the
-    keep-alive mouse was addressed and bound, and a hot-plugged `usb-audio`
-    appeared as "USB Composite Device" under Universal Serial Bus
-    controllers with "USB Audio Device" under Sound, all clean.
-  - [x] 17.1c Windows 2000 SP4 (`win2k.img @ phase2b-clean` cloned to a new
-    image), Have Disk from the same package: no prompt, `usbd.sys`
-    5.00.2195.6658 in `WINNT\SYSTEM32\DRIVERS`, the root hub up. Observed
-    2026-09-02 on `vm\layout-2b.img` with the real 1.0.0.1 package: the
-    driver installed and started without a reboot, the debug console showed
-    the 1.0.0.1 build under SP4's usbport (`USBPORT_GetHciMn=57324B30`),
-    `StartController` and the root-hub callbacks, the keep-alive mouse was
-    bound (endpoints opened 1), and Device Manager showed the controller,
-    "USB 2.0 Root Hub" and a USB Human Interface Device clean. Which
-    prompts the copy phase showed, and the file's version on disk, were not
-    read back: the owner drove the install and reported none, and the root
-    hub coming up is what proves `usbd.sys` arrived.
-- [x] 17.2 The change, each check green before the next: the INF's four
-  directive edits and its comments, `DriverVer` and `src/xhci_version.h` at
-  `1.0.0.1`; the INF gate's `TGT-*` and `W98-*` families replaced by rules
-  for the new shape (LayoutFile present, `usbd.sys` on both paths and
-  `usbhub.sys` on the Windows 98 path only, flag 16, `10,System32\Drivers`,
-  neither file in `[SourceDisksFiles]`, no Microsoft file in the package),
-  each with a self-test that watches it fire, and `expected-footprint.txt`
-  regenerated; `make-package.ps1`, `make-release.ps1`, `test-package.ps1`
-  and the source manifest stop staging and hashing the three files; the
-  prep script's transfer-drive comment corrected; the documents
-  (`legal-provenance.md` section 5 in the past tense, `releases/README.md`,
-  `AGENTS.md`, `build-and-test.md`, `README.md`, the release notes, the
-  acceptance test, the generated `readme.txt`) and the user-facing statement
-  that the Windows 98 SE CD may be asked for; the `1.0.0.1` entry in
-  `releases/history.md`.
+- [x] 17.0 record the decision in `legal-provenance.md` section 5 before any
+  script change, pointed at from `AGENTS.md`. Done 2026-09-02 (`2256779`).
+- [x] 17.1 prove the mechanism in the VMs, the owner at the console, all on
+  2026-09-02: (a) Windows 98 under SweetLow's stack with no driver, no
+  `usbd.sys`, no `usbhub.sys` and no CABs: the install raised the engine's
+  own `Insert Disk` prompt naming the Windows 98 Second Edition CD-ROM, and
+  after a relaunch the driver registered, `StartController` ran and the
+  keep-alive mouse bound; (b) Windows 98 under NUSB 3.3's stack (a fresh
+  `post-nusb` clone): the same prompt, the 1.0.0.1 build under NUSB's
+  usbport (`USBPORT_GetHciMn=57324B30`), the mouse bound, and a hot-plugged
+  `usb-audio` as "USB Composite Device" with "USB Audio Device" beneath, the
+  `usbhub.sys` half of the route; (c) Windows 2000 SP4 (a fresh
+  `phase2b-clean` clone), Have Disk: no prompt, started without a reboot,
+  root hub and HID mouse bound.
+- [x] 17.2 the change: the INF's four directive edits, `DriverVer` and
+  `src/xhci_version.h` at `1.0.0.1`; the INF gate's `TGT-*` and `W98-*`
+  families replaced by the `OS-*` rules and `PKG-MSFILE` with self-tests;
+  `make-package.ps1`, `make-release.ps1` and `test-package.ps1` without the
+  Microsoft files and the source manifest; every document the change
+  touches, including the statement that the Windows 98 SE CD may be asked
+  for; the `1.0.0.1` entry in `releases/history.md`.
+
 Checkpoint: the package `make-package.ps1` assembles holds `xhci98.sys` and
 `xhci98.inf` and no other file; the INF gate and its self-tests are green on
 the new shape; and the install with the OS supplying the two files has been
 observed on Windows 98 under both USB 2.0 stacks and on Windows 2000, in the
-VMs, with the root hub up afterwards. "Observed on both" is read as
-`AGENTS.md` defines it. The cut itself is Phase 18's.
+VMs, with the root hub up afterwards.
 
-Records: `handoff.md`; `legal-provenance.md` section 5;
-`build-and-test.md` ("The files the OS supplies: `usbd.sys` and
-`usbhub.sys`", "The SweetLow stack"); `releases/history.md`.
+Records: `legal-provenance.md` section 5; `build-and-test.md` ("The files
+the OS supplies: `usbd.sys` and `usbhub.sys`", "The SweetLow stack");
+`releases/history.md`.
 
 ## Phase 18 - Release `1.0.0.1`: Windows ME, and the Cut
 
 Goal: the driver observed on a Windows ME guest with its standing stated in
 every document that names the targets, and `1.0.0.1` cut carrying Phase 17's
-install change together with whatever Windows ME support that observation
+install change together with the Windows ME support that observation
 justifies.
 
-Status: closed on 2026-09-02, the day it opened, by the owner: the
-Windows ME guest observed (18.1 to 18.3), the tier decided and stated
-(18.4), `1.0.0.1` cut (18.7) and its install route checked from the asset
-on all three targets. Written down that morning at the owner's request, who
-decided the same day that Windows ME support is part of `1.0.0.1`. What
-needed no guest was done first: the harness knows a prepare-only `2e` target
-(`scripts/vm-matrix/config.sample.psd1`, `prepare-image.ps1 -XferPackage`,
-`setup-qemu.ps1 -WinMeIso`), and `build-and-test.md`, "Windows ME target
-VM", records what the Windows ME OEM CD's own INFs say (its `USB.INF` leaves
-`PCI\CC_0C0330` unclaimed and uses `LayoutFile` itself; `usbd.sys` and
-`usbhub.sys` are in `BASE2.CAB`; its composite parent is `usbccgp.sys`) and
-the recipe. Nothing has run on Windows ME, and no document claims support
-until it has. Whether Windows ME becomes a third first-class target, with
-the checkpoint tax `AGENTS.md` describes, or a supported-in-VM target stated
-the way Windows 2000's status is stated, is the owner's decision and is
-open.
+Status: closed on 2026-09-02, the day it opened, by the owner, who decided
+that morning that Windows ME support is part of `1.0.0.1`. The guest was
+installed and observed under SweetLow's stack only (the owner's decision:
+NUSB is a Windows 98 SE package), the tier decided as supported in virtual
+machines, stated the way Windows 2000's status is, and `1.0.0.1` cut and
+its install route checked from the asset on all three targets. Nothing has
+run on Windows ME on real hardware.
+
+Why a phase: Windows ME is the same 16-bit setup engine and VxD-hosted WDM
+model as Windows 98 SE, so the INF's undecorated half is the half it reads,
+but its CD carries no USB 2.0 stack and the import gate held no Windows ME
+evidence, so the load itself was the first thing to observe, and what the
+observation justifies decides how every document names the targets.
 
 Tasks:
 
-- [x] 18.1 Install a Windows ME guest by hand from the CD
-  (`scripts\local\qemu-winme-install.cmd`), then a USB 2.0 stack. The
-  Windows ME CD does not carry one: its `layout.inf` names the USB 1.1 stack
-  only (`uhcd.sys`, `openhci.sys`, `usbd.sys`, `usbhub.sys`) and no
-  `usbport.sys`, `usbehci.sys` or `usbhub20.sys`. The stack is SweetLow's
-  (`vm\SWEETLOW`, the same files the `2a-sweetlow` guest runs), installed by
-  right-clicking its `USB2.INF` from the transfer drive: the owner decided on
-  2026-09-02 that Windows ME is observed under SweetLow's stack only, NUSB
-  being a Windows 98 SE package, so the Microsoft `USB2.INF` NUSB carries is
-  not tried on Windows ME.
-  Done 2026-09-02: `vm\winme.img`, Windows ME OEM installed from the CD's
-  `\WIN9X\SETUP.EXE /p j` (ACPI HAL; Device Manager shows the PCI bus and the
-  controller), snapshot `winme-clean-install`. Two vehicle facts on the way,
-  both in `build-and-test.md`: the Windows ME CD's own `FORMAT C:` spun at
-  0 percent with nothing written, and the format was taken from the Windows
-  98 SE CD's boot floppy with the ME CD as a second CD-ROM instead; and every
-  guest-initiated restart wedged at the logo exactly as `lessons.md` records
-  for Windows 98 (LINT0 masked after the warm reset), so every restart was
-  a Start-menu shutdown and a cold launch. Observed first on the stock
-  stack, for the record: the package installs with no CD prompt and the
-  controller shows **Code 2** ("The NTKERN.VXD device loader(s) for this
-  device could not load the device driver") with the debug console at 0
-  bytes, `usbport.sys` being absent (snapshot
-  `winme-stock-stack-driver-attempt`). Then, from `winme-clean-install`,
-  SweetLow's `USB2.INF` right-click installed from the transfer drive with
-  no CD prompt.
-- [x] 18.2 Install the driver through the INF (`prepare-image.ps1 -Target 2e
-  -Boot -Xfer -XferPackage`) and record the load: `DriverEntry`,
-  `USBPORT_GetHciMn`, `StartController`, the root-hub callbacks, and which
-  files the copy phase asked the CD for.
-  Observed 2026-09-02 on the SweetLow-stack guest: the copy phase asked for
-  no CD (the OEM Setup had put the CABs on the hard disk, so the engine had
-  `usbd.sys` and `usbhub.sys` locally; not read back with a `dir`); after a
-  cold start `out\phase10\prep-2e-debugcon.log` shows `DriverEntry`,
+- [x] 18.1 install a Windows ME guest by hand (`vm\winme.img`, snapshot
+  `winme-clean-install`), then SweetLow's stack from the transfer drive.
+  Done 2026-09-02. Two vehicle facts, recorded in `build-and-test.md` and
+  `lessons.md`: the Windows ME CD's own `FORMAT C:` never writes a sector
+  under QEMU, so the format is taken from the Windows 98 SE CD's boot floppy
+  with the ME CD as the second CD-ROM (`setup-qemu.ps1 -WinMeIso -Win98Iso`
+  writes that launcher); and every guest-initiated restart wedges at the
+  logo as Windows 98's does, LINT0 masked after the warm reset, so every
+  restart is a shutdown and a cold launch. Observed first on the stock
+  stack: the package installs and the controller shows Code 2 with
+  `DriverEntry` never run, `usbport.sys` being absent.
+- [x] 18.2 the driver through the INF (`prepare-image.ps1 -Target 2e -Boot
+  -Xfer -XferPackage`): no CD asked for (the OEM Setup leaves the CABs on
+  the hard disk), and after a cold start `DriverEntry`,
   `USBPORT_GetHciMn=10000001`, `USBPORT_RegisterUSBPortDriver status=0`,
-  `StartController` with the QEMU controller's capabilities (8 USB2-only
-  ports, all managed), and the root-hub family (`RH_GetRootHubData`,
-  `RH_GetStatus`, `RH_GetPortStatus`, `RH_GetHubStatus`,
-  `RH_SetFeaturePortPower`, `RH_SetFeaturePortReset`, the change clears,
-  `RH_EnableIrq`/`RH_DisableIrq`); `-Status` read devices addressed 1,
-  slots enabled 1, endpoints opened 1: the keep-alive mouse bound.
-- [x] 18.3 HID, mass storage and one composite device by hand, with the
-  counters read the way the prep script reads them.
-  Observed 2026-09-02 on the same boot as 18.2: the keep-alive mouse bound
-  at boot (`endpoints opened` 1, "Human Interface Devices" in Device
-  Manager); `-Attach storage` bound with no wizard (`devices addressed` 2,
-  `endpoints opened` 3, "USB Mass Storage Device" and "Storage device");
-  a hot-plugged `usb-audio` ran the Add New Hardware Wizard from the
-  Windows ME CD and bound (`devices addressed` 3, `endpoint opens seen` 9)
-  as "Composite Device" under Universal Serial Bus controllers, Windows
-  ME's own `usbccgp` parent, with "USB Audio Device" under Sound, video
-  and game controllers; the controller and "USB 2.0 Root Hub" clean. No
-  refusal counter moved. `endpoints opened` stays 3 because the isochronous
-  endpoint is opened only when a stream starts.
-- [x] 18.4 Decide the tier and state it: `AGENTS.md` (purpose and the target
-  table), `README.md`, the release notes' requirements, the bug-report form's
-  operating-system list, and the INF's header comment. Until then none of
-  them names Windows ME as supported.
-  Decided 2026-09-02 by the owner: supported in virtual machines, stated
-  the way Windows 2000's status is stated, under SweetLow's stack only, with
-  no checkpoint tax. Stated the same day in `AGENTS.md` (purpose and the
-  Quick Reference table), `README.md`, the release notes ("What this is",
-  "Requirements", "Installing"), both issue forms, the INF header comment,
-  the generated `readme.txt` (sections 1 to 4) and the acceptance test
-  (rows 4.5, 7.7 and 7.8).
-- [x] 18.5 If first-class: matrix rows and a fresh target for the
-  post-release run, and the acceptance test's per-target steps.
-  Not applicable: 18.4 chose supported-in-VM, so no matrix rows and no
-  fresh target; the acceptance test gained the Windows ME rows under 18.4.
-- [x] 18.6 The `1.0.0.1` entry in `releases/history.md` gains the Windows
-  ME line the tier decision justifies, and `DriverVer`, `src/xhci_version.h`
-  and that entry's date all move to the day of the cut.
-  Done 2026-09-02: the Windows ME line is in the entry (under 18.4), and
-  the cut is the same day the three dates already carried, so none moved;
-  `make-release.ps1` checked that they agree.
-- [x] 18.7 Cut `1.0.0.1` with `make-release.ps1` on the full flavour set,
-  every gate green, and run the release acceptance test on each target with
-  the new procedure: Windows 98 once with the CABs absent so the CD prompt is
-  exercised and once with them present; Windows 2000 once; Windows ME per
-  18.4's tier.
-  The cut: done 2026-09-02 (`1cad620`), `releases/1.0.0.1/` and
-  `out\xhci98-1.0.0.1.zip` (245,029 B), every gate green, the asset holding
-  the two files per flavour, the two tools with their readmes and NOTICEs,
-  `LICENSE` and `readme.txt`, nothing else. The published `xhci98.sys` is
-  byte-identical to `1.0.0.0`'s outside the link timestamps, the checksum
-  and the version resource (22 bytes in the release build, 21 in the debug
-  build), so what the release changes is the install route, and that is
-  what was run from the asset the same night, the owner at the console:
-  Windows 98 SE (a fresh `post-nusb` clone, NUSB's stack, no CABs): the
-  install from `R1001\RELEASE` asked for `usbd.sys` with the Windows 98 SE
-  CD prompt, and the cold boot after it raised the HID wizard for the
-  keep-alive mouse with the controller and "USB 2.0 Root Hub" clean;
-  Windows 2000 SP4 (a fresh `phase2b-clean` clone): no prompt, root hub and
-  HID mouse working; Windows ME (`winme-clean-install`, SweetLow's stack
-  installed first): the controller, "USB 2.0 Root Hub" and Human Interface
-  Devices clean on the cold boot after the install. The Windows 98 run with
-  the CABs present was not made: no image carries them, and 17.1b/17.1c and
-  the Windows ME leg cover the no-prompt path. The nine-step acceptance test
-  itself was not run here; it is the standing post-release reminder below,
-  taken from the published download.
+  `StartController`, the `RH_*` family, and the keep-alive mouse bound.
+- [x] 18.3 HID, mass storage and one composite device: the mouse at boot,
+  `-Attach storage` bound with no wizard, a hot-plugged `usb-audio` bound as
+  "Composite Device" (Windows ME's own `usbccgp` parent) with "USB Audio
+  Device" under Sound; no refusal counter moved.
+- [x] 18.4 the tier, decided by the owner: supported in virtual machines,
+  under SweetLow's stack only, no checkpoint tax; stated in `AGENTS.md`,
+  `README.md`, the release notes, both issue forms, the INF header comment,
+  the generated `readme.txt` and the acceptance test (rows 4.5, 7.7, 7.8).
+- [x] 18.5 first-class only: not applicable.
+- [x] 18.6 the `1.0.0.1` history entry carries the Windows ME line; the cut
+  fell on the date the three fields already carried, so none moved.
+- [x] 18.7 cut `1.0.0.1` with `make-release.ps1`, every gate green
+  (`1cad620`, re-cut `1a286ca` for readme wording before any upload):
+  `releases/1.0.0.1/` and `out\xhci98-1.0.0.1.zip` (245,067 B), the two
+  files per flavour, the two tools with their readmes and NOTICEs, `LICENSE`
+  and `readme.txt`, nothing else. The published `xhci98.sys` differs from
+  `1.0.0.0`'s only in timestamps, checksum and version resource (22 bytes),
+  so the release changes the install route, and that was run from the asset
+  the same night, the owner at the console: Windows 98 SE (a fresh
+  `post-nusb` clone, no CABs) asked for `usbd.sys` with the CD prompt and
+  came up with the root hub clean and the mouse enumerated; Windows 2000
+  SP4 (a fresh `phase2b-clean` clone) asked for nothing, root hub and mouse
+  working; Windows ME (`winme-clean-install`, SweetLow's stack first) asked
+  for nothing, controller, root hub and HID clean. The Windows 98 run with
+  the CABs present was not made (no image carries them), and the nine-step
+  acceptance test is the post-release reminder below, taken from the
+  published download.
 
 Checkpoint: a Windows ME guest boots the driver, the root hub comes up, a HID
 device and a mass-storage device work, and the tier is stated; and the asset
 `make-release.ps1` assembles for `1.0.0.1` holds `xhci98.sys`, `xhci98.inf`,
-the two tools and the readmes and no other file, with the acceptance test run
-on each target as above.
+the two tools and the readmes and no other file, with the install route
+checked on each target from that asset.
 
-Records: `build-and-test.md` ("Windows ME target VM");
-`scripts/vm-matrix/README.md`; `releases/history.md`; `handoff.md`.
+Records: `build-and-test.md` ("Windows ME target VM"); `lessons.md`
+("Windows ME on QEMU"); `scripts/vm-matrix/README.md`; `releases/history.md`;
+`handoff.md`.
 
 ## Post-Release - Run the Acceptance Test by Hand
 
