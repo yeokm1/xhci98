@@ -9,24 +9,18 @@ and `xhci98.inf` - which is why it is a separate step from `make-package.ps1`
 rather than an option on it: the rest are Microsoft's. See `releases\README.md`
 for that split and what it costs an installer.
 
-**The upload set is the other output, and it is not the tracked one.** The
-GitHub release download carries the Microsoft files
-`scripts\package\usbd-sources.expected` names as well - `usbd98.sys`,
-`usbd2k.sys`, and, since batch 13-E, `usbhub98.sys` - so that a download is
-complete install media on the xHCI-only machines this driver exists for. See
-`docs\contributing\legal-provenance.md` section 5 for what that channel carries.
-This script therefore also assembles
-`out\upload-<version>\` and `out\xhci98-<version>.zip` under the git-ignored
-`out\`: the published tree, plus those files in each flavour directory. The
-directory is a workspace and the zip is the GitHub release asset, which is why
-only the second is named after the project.
-
-That is done here rather than by hand for one reason. A swap between
-`usbd98.sys` and `usbd2k.sys` installs the wrong OS's driver, and is invisible
-afterwards because both are called `usbd.sys` on the target - so the assembled
-upload tree is re-authenticated against `scripts\package\usbd-sources.expected`
-by SHA-256. `make-package.ps1` already checked the same files; this checks the
-copies that actually go up, which are now what most users will install from.
+**The upload set is the other output, and it is not the tracked one.** It
+is the published tree, zipped: `out\upload-<version>\` and
+`out\xhci98-<version>.zip` under the git-ignored `out\`, the directory a
+workspace and the zip the GitHub release asset, which is why only the second
+is named after the project. Since release 1.0.0.1 it carries no Microsoft
+file: the INF has the operating system supply `usbd.sys` and `usbhub.sys`
+from its own install source (`docs\contributing\legal-provenance.md` section
+5 records the decision and what it withdrew). It is still assembled here
+rather than by hand, because the layout is checked - every flavour directory
+is gated as the install media it is, nothing the INF does not name goes up -
+and because the archive's entry names have to be ones a non-Windows unzip
+can read.
 
 A release also carries **`xhciqual\`**, the DOS qualification tool, and a
 plain-text `readme.txt` at each level. The tool is deliberately *not* on the
@@ -160,8 +154,7 @@ For re-cutting a tracked directory when the point is the tracked directory.
 
 .PARAMETER UploadDir
 Where the upload set is assembled. Defaults to `out\` in the repository, which
-is git-ignored - and must stay somewhere git-ignored, because the Microsoft
-files it adds are the ones `releases\` exists to keep out of the repository.
+is git-ignored; the asset is generated output and stays out of the tree.
 
 .PARAMETER UploadSetOnly
 Assemble the upload set from what is already on disk - the tracked
@@ -183,19 +176,11 @@ first cut's asset was malformed and there was no way to rebuild it in place.
 What the build-side gates are replaced by is one check: the `xhci98.sys` and
 `xhci98.inf` in each `pkg-<flavour>\` directory must be byte-identical to the
 published ones. A package that matches the release by hash is the package that
-release was cut from, so the Microsoft files taken from it are the ones
-that were gated with it. A package that does not match is refused, because
-stapling one release's usbd files onto another's driver is exactly what nothing
-downstream can detect.
+release was cut from; one that does not is some other build, and is refused.
 
 .PARAMETER PackageRoot
 Where the gated `pkg-<flavour>\` directories are. Defaults to `out\` in the
 repository, which is where `make-package.ps1` writes them.
-
-.PARAMETER ManifestPath
-The per-target source manifest the assembled upload set is authenticated
-against. Defaults to `scripts\package\usbd-sources.expected`. Overridden by
-`test-package.ps1`, which drives the assembly with stand-in files.
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1
@@ -221,7 +206,6 @@ param(
     [switch]$SkipUploadSet,
     [switch]$UploadSetOnly,
     [string]$PackageRoot = "",
-    [string]$ManifestPath = "",
     [switch]$Force,
     [switch]$NoTargetEvidence
 )
@@ -270,7 +254,6 @@ if ($SnapToolDir -eq "") { $SnapToolDir = Join-Path $repo "xhcisnap" }
 $versionHeader = Join-Path $repo "src\xhci_version.h"
 if ($PackageRoot -eq "") { $PackageRoot = Join-Path $repo "out" }
 if ($UploadDir -eq "") { $UploadDir = Join-Path $repo "out" }
-if ($ManifestPath -eq "") { $ManifestPath = Get-UsbdSourceManifestPath }
 
 function Resolve-DirectoryArgument {
     # **A directory parameter is made absolute here, and relative means the
@@ -349,8 +332,8 @@ $UploadDir   = Resolve-DirectoryArgument $UploadDir
 # called on the media matters: a long name is not what a DOS prompt will show.
 $qualtoolFiles = @{ "xhciqual.exe" = "XHCIQUAL.EXE"; "xhciqual.map" = "XHCIQUAL.MAP" }
 
-# The two files a release directory may contain. Anything else in
-# [SourceDisksFiles] is per-target Microsoft material - see releases\README.md.
+# The two files a release directory may contain, and since 1.0.0.1 the only
+# two [SourceDisksFiles] names - see releases\README.md.
 $publishable = @("xhci98.inf", "xhci98.sys")
 
 # A flavour's published directory is its own name - see the .DESCRIPTION note
@@ -576,7 +559,7 @@ function Get-DeclaredMediaLayout {
     # rule make-package.ps1 follows, and the same call: two parsers would be
     # free to disagree, and the only way they can disagree is a file staged at
     # one path and authenticated at another.
-    param([string]$InfPath, [string]$ManifestPath, [string]$Label)
+    param([string]$InfPath, [string]$Label)
 
     $gate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-inf.ps1"
     $layoutFile = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-uploadlayout-" + [System.IO.Path]::GetRandomFileName())
@@ -591,7 +574,7 @@ function Get-DeclaredMediaLayout {
         $ErrorActionPreference = "Continue"
         try {
             $out = & powershell.exe @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate,
-                                      "-InfPath", $InfPath, "-SourceManifest", $ManifestPath,
+                                      "-InfPath", $InfPath,
                                       "-EmitMediaLayout", $layoutFile) 2>&1 | Out-String
         } finally {
             $ErrorActionPreference = $savedEap
@@ -749,8 +732,8 @@ stages every file the INF declares and gates the result.
 }
 
 function New-UploadSet {
-    # Assembles out\upload-<version>\ and out\xhci98-<version>.zip: the published tree, plus
-    # the per-target Microsoft files in each flavour directory.
+    # Assembles out\upload-<version>\ and out\xhci98-<version>.zip: the
+    # published tree, each flavour directory gated as the install media it is.
     #
     # Its own function because there are two ways in - the tail of an ordinary
     # cut, and -UploadSetOnly, which reaches it with a published tree it did not
@@ -764,7 +747,6 @@ function New-UploadSet {
         [hashtable]$PkgDirs,
         [string]$UploadDir,
         [string]$Repo,
-        [string]$ManifestPath,
         [string[]]$Publishable
     )
 
@@ -805,7 +787,6 @@ function New-UploadSet {
     # is shaped the way it is.
     Copy-Item -LiteralPath $PublishedRoot -Destination $uploadRoot -Recurse -Force
 
-    $rows = @(Read-UsbdSourceManifest -Path $ManifestPath -RepoRoot $Repo)
     $publishableKeys = @($Publishable | ForEach-Object { $_.ToLowerInvariant() })
     $gate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-inf.ps1"
 
@@ -853,27 +834,16 @@ flavour with -Flavor, or leave -Flavor at its default.
     # this project's own two files, which is a rule about what to *exclude* and
     # therefore silently includes anything nobody thought about: a stray
     # `notes.txt`, a `setup.exe`, a second binary left in `out\pkg-release\` by
-    # hand. `check-inf.ps1 -PackageDir` would not object - it checks that every
-    # declared file is present, not that nothing else is - so the file would
-    # have gone up in the release asset (review round 2, finding 1).
-    #
-    # That is not a tidiness question. This download is the **one** channel
-    # through which this project distributes material that is not its own, it
-    # is deliberately exactly the files `usbd-sources.expected` names - three
-    # since batch 13-E, two before it - and `legal-provenance.md` section 5
-    # says so. A FOURTH file riding along would make that statement false
-    # without anyone choosing it, which is what this refusal is for; the count
-    # moved once, by a decision recorded in section 5, and not by drift.
-    # (This comment said "exactly two files" until the snapshot-value merge,
-    # three cuts after
-    # task 13-E.1's remedy made it three.) So the rule is inverted: the media set is
-    # declared by the INF, and a package holding anything else is refused
-    # rather than quietly trimmed - if a file is in there, someone put it
-    # there, and which of the two answers they wanted is not a script's to
-    # guess.
+    # hand (review round 2, finding 1). So the rule is inverted: the media set
+    # is declared by the INF, and a package holding anything else is refused
+    # rather than quietly trimmed. Since 1.0.0.1 that set is this project's two
+    # files and nothing else - the Microsoft files the 1.0.0.0 media carried
+    # come from the OS now - and check-inf.ps1 refuses an INF or a package that
+    # names one, so the refusal below is what keeps a fourth file from riding
+    # along without anyone choosing it.
     $mediaLayout = Get-DeclaredMediaLayout `
         -InfPath (Join-Path $PublishedRoot (Join-Path $Flavors[0] $infName)) `
-        -ManifestPath $ManifestPath -Label "the published $infName"
+        -Label "the published $infName"
 
     # Source name -> where the INF puts it, lower-cased on both sides, split
     # into the files this assembly adds and the two a release directory already
@@ -959,8 +929,7 @@ flavour with -Flavor, or leave -Flavor at its default.
         $ErrorActionPreference = "Continue"
         try {
             $gateOut = & powershell.exe @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate,
-                                          "-InfPath", $flavorInf, "-PackageDir", $uploadFlavorDir,
-                                          "-SourceManifest", $ManifestPath) 2>&1 | Out-String
+                                          "-InfPath", $flavorInf, "-PackageDir", $uploadFlavorDir) 2>&1 | Out-String
         } finally {
             $ErrorActionPreference = $savedEap
         }
@@ -968,33 +937,15 @@ flavour with -Flavor, or leave -Flavor at its default.
             throw @"
 the assembled upload set's $f\ directory failed scripts\inf-gate\check-inf.ps1.
 Do not upload it. That gate reads the INF shipping in that directory and checks
-every file it names is present, in the place it names, and is the build the
-manifest says - so a failure here means the download is not install media,
-whatever the directory listing looks like.
+every file it names is present, in the place it names, and that no Microsoft
+file is beside them - so a failure here means the download is not the install
+media it claims to be, whatever the directory listing looks like.
 
 $gateOut
 "@
         }
 
-        # And the per-target files re-checked at the paths this loop
-        # actually wrote them to. The gate above checks the paths the INF
-        # declares; this checks the paths the copy produced. They can only
-        # disagree if a file was written somewhere other than where it is read
-        # from, which is the one failure the per-target split cannot survive.
-        $errors = @(Get-PackagedFileValidationErrors -Rows $rows `
-                        -PackageDir $uploadFlavorDir -MediaPaths $mediaPaths)
-        if ($errors.Count -gt 0) {
-            throw @"
-the assembled upload set's $f\ directory does not match '$ManifestPath':
-  - $($errors -join "`n  - ")
-Do not upload it. On the target both builds are called usbd.sys, so a swapped or
-wrong-version file is undetectable until usbhub20.sys fails to load - which
-reads as a fault in this driver.
-"@
-        }
-
-        $names = @($rows | ForEach-Object { $_.Media }) -join ", "
-        Write-Ok ("{0}\ is complete install media, by its own INF ({1} verified by SHA-256)" -f $f, $names)
+        Write-Ok ("{0}\ is complete install media, by its own INF" -f $f)
     }
 
     if (Test-Path -LiteralPath $uploadZip) {
@@ -1118,8 +1069,8 @@ To cut one, run this script without it.
             if (-not (Test-Path -LiteralPath $pkgDir)) {
                 throw @"
 no gated package at '$pkgDir'.
-The per-target Microsoft files come from the package make-package.ps1
-gated, and there is none for the $f flavour on this machine. Build it with
+The upload set is assembled from the package make-package.ps1 gated, and there
+is none for the $f flavour on this machine. Build it with
 scripts\package\make-package.ps1 -Flavor $f - which does not touch
 '$finalRoot' - and run this again.
 "@
@@ -1127,12 +1078,8 @@ scripts\package\make-package.ps1 -Flavor $f - which does not touch
 
             # **This is the check that stands in for every gate this mode
             # skips.** Both files in a gated package that hash the same as the
-            # published ones came out of the run that published them, so the
-            # Microsoft files beside them are the ones that were
-            # authenticated with that release. A package that does not match is
-            # some other build, and stapling its usbd files to this release's
-            # driver is the one mistake nothing downstream can see: on the
-            # target both are called usbd.sys.
+            # published ones came out of the run that published them. A
+            # package that does not match is some other build.
             foreach ($name in $publishable) {
                 $pub = Join-Path $pubDir $name
                 $pkg = Join-Path $pkgDir $name
@@ -1146,10 +1093,9 @@ scripts\package\make-package.ps1 -Flavor $f - which does not touch
 '$pkg' is not the file published as '$pub':
   published $pubHash
   package   $pkgHash
-So this package is not the one $Version was cut from, and the usbd builds in it
-were never gated against this release. Rebuild the package from the sources
-$Version was built from, or cut a new version - do not assemble an upload set
-around a driver the release does not contain.
+So this package is not the one $Version was cut from. Rebuild the package from
+the sources $Version was built from, or cut a new version - do not assemble an
+upload set around a driver the release does not contain.
 "@
                 }
             }
@@ -1159,7 +1105,7 @@ around a driver the release does not contain.
 
         $set = New-UploadSet -PublishedRoot $finalRoot -Version $Version -Flavors $Flavor `
                              -PkgDirs $pkgDirs -UploadDir $UploadDir -Repo $repo `
-                             -ManifestPath $ManifestPath -Publishable $publishable
+                             -Publishable $publishable
 
         Write-Step "Done"
         Write-Host "Upload:     $($set.Zip)"
@@ -1302,8 +1248,7 @@ readme.txt prints it beside the history entry, so the two cannot disagree.
     # above: there is no value in building two flavours around a release that
     # will be rejected, and both builds run the full host suite.
     $publishableKeys = @($publishable | ForEach-Object { $_.ToLowerInvariant() })
-    $declaredLayout = Get-DeclaredMediaLayout -InfPath $infPath -ManifestPath $ManifestPath `
-                                              -Label "src\xhci98.inf"
+    $declaredLayout = Get-DeclaredMediaLayout -InfPath $infPath -Label "src\xhci98.inf"
     Assert-PublishableAtMediaRoot -Layout $declaredLayout -PublishableKeys $publishableKeys `
                                   -InfName "xhci98.inf" -Label "src\xhci98.inf"
     Write-Ok "src\xhci98.inf puts xhci98.sys and xhci98.inf at the media root, where a release directory carries them"
@@ -1693,69 +1638,6 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         if ($_ -match '^##\s') { "#" + $_ } else { $_ }
     })
 
-    # **The files a download carries and a repository copy does not.**
-    # Section 3 tells the reader to look in each flavour directory and check
-    # that every file the INF names is there; the directory listing below
-    # named only this project's own two until a review, so the two statements
-    # in one document disagreed about what the download holds. Read from the
-    # manifest rather than written out, so the names and versions here cannot
-    # drift from what is actually staged beside them.
-    $usbdRows = @(Read-UsbdSourceManifest -Path $ManifestPath -RepoRoot $repo)
-    $targetOsName = @{ "win98" = "Windows 98 SE"; "win2000" = "Windows 2000 SP4" }
-
-    # **Every count and every file list in this readme is derived from that
-    # manifest, and none of them is written out** - the pre-cut audit
-    # (findings B1 and B2) found four hard-coded "four"s and a "two" left behind
-    # by the row batch 13-E added, one of which told a user that media missing
-    # usbhub98.sys was complete. A count in prose beside a list that grows is a
-    # statement that will be wrong exactly once and then stay wrong.
-    $countWord = @("zero", "one", "two", "three", "four", "five", "six",
-                   "seven", "eight", "nine", "ten")
-    $extraCount = $usbdRows.Count
-    $mediaCount = $extraCount + 2      # xhci98.inf and xhci98.sys
-    if ($mediaCount -ge $countWord.Count) {
-        throw "readme: $mediaCount media files is past the spelled-out range; extend `$countWord"
-    }
-    $extraNames = @($usbdRows | ForEach-Object { $_.Media })
-
-    # **Step 3 tells the reader to look in the flavour directory, so every file
-    # it names has to actually be there.** `[SourceDisksFiles]` may put a media
-    # file in a subdirectory, and the packager and the upload assembly both
-    # honour that deliberately - `Assert-PublishableAtMediaRoot` already holds
-    # this project's own two files to the root for the same reason, and the
-    # Microsoft ones had no equivalent. Moving one into a supported subdirectory
-    # would pass every gate and generate a completeness check that sends the user
-    # to the wrong place. Refused here rather than described, because "look in
-    # release\, except this one" is not an instruction worth generating.
-    $misplacedExtras = @($extraNames | Where-Object {
-        $k = $_.ToLowerInvariant()
-        $declaredLayout.ContainsKey($k) -and
-        $declaredLayout[$k] -ne [System.IO.Path]::GetFileName($declaredLayout[$k])
-    })
-    if ($misplacedExtras.Count -gt 0) {
-        throw ("readme.txt step 3 names files it says are in the flavour directory, but src\xhci98.inf's [SourceDisksFiles] puts these in a subdirectory:`n  - " +
-               (@($misplacedExtras | ForEach-Object { "$_ -> $($declaredLayout[$_.ToLowerInvariant()])" }) -join "`n  - ") +
-               "`nEither keep them at the media root or teach the readme template to describe the layout.")
-    }
-    if ($extraCount -eq 1) {
-        $extraList = $extraNames[0]
-    } else {
-        $extraList = ($extraNames[0..($extraCount - 2)] -join ", ") +
-                     " and " + $extraNames[$extraCount - 1]
-    }
-    $mediaList = (@("xhci98.inf", "xhci98.sys") + $extraNames) -join "   "
-    $mediaWidth = ($extraNames | Measure-Object -Property Length -Maximum).Maximum
-
-    # The destination name each row installs as, upper-cased for prose. Derived
-    # from the row's own source file rather than assumed: the media name is
-    # deliberately different (usbhub98.sys installs as usbhub.sys), and the loop
-    # below printed every row as "...'s own USBD.SYS" until this was added,
-    # after a development package had already shipped it wrong.
-    foreach ($row in $usbdRows) {
-        $row | Add-Member -NotePropertyName DisplayName -NotePropertyValue `
-            ([System.IO.Path]::GetFileName($row.Relative).ToUpper())
-    }
-
     $contents = @()
     foreach ($f in @("release", "debug")) {
         if (-not $staged.ContainsKey($f)) { continue }
@@ -1778,15 +1660,6 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += ("      xhci98.sys   {0:N0} bytes" -f $s.Length)
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.Sha256)
-        $contents += ""
-        $contents += ("  ...and beside them, the other {0} files step 3 names, which" -f $countWord[$extraCount])
-        $contents += "  the download carries and a copy from the repository does not:"
-        $contents += ""
-        foreach ($row in $usbdRows) {
-            $os = $targetOsName[$row.Target]
-            if ($null -eq $os) { $os = $row.Target }
-            $contents += ("      {0}   {1}'s own {2}, {3}" -f $row.Media.PadRight($mediaWidth), $os, $row.DisplayName, $row.Version)
-        }
         $contents += ""
     }
     if ($null -ne $qualtoolStaged) {
@@ -2046,73 +1919,53 @@ modern interrupt mechanism (MSI) that such a controller would require.
 
 
 ==============================================================================
- 3. CHECK THE MEDIA IS COMPLETE
+ 3. THE TWO FILES WINDOWS SUPPLIES
 ==============================================================================
 
-xhci98.inf names {MEDIACOUNTUC} files. Look in the same directory as this readme, in
-release\ and in debug\, and check all {MEDIACOUNT} are there:
+xhci98.inf names two files of its own, xhci98.inf and xhci98.sys, and they
+are in release\ and in debug\. Nothing else is in the package, and there is
+nothing to complete: a copy taken from the project's source repository is
+the same two files.
 
-      {MEDIALIST}
-
-IF ALL {MEDIACOUNTUC} ARE PRESENT, skip to step 4. Nothing to do. That is what the
-download from the project's releases page contains.
-
-IF ONLY xhci98.inf AND xhci98.sys ARE THERE, you have a copy taken from the
-project's SOURCE REPOSITORY, which does not carry the other {EXTRACOUNT}. Read on.
-
-WHAT THE OTHER FILES ARE
-........................
-
-usbd98.sys and usbd2k.sys are Windows 98 SE's and Windows 2000 SP4's own
-USBD.SYS - Microsoft's files, unmodified, renamed so that each install path
-can reach only its own. usbhub98.sys is Windows 98 SE's own USBHUB.SYS, the
-same way. None of them is this project's work.
-
-They are here for one reason, and it is the reason this driver exists at all:
-WINDOWS ONLY INSTALLS ITS USB FILES WHEN SETUP FINDS A USB CONTROLLER IT
-RECOGNISES, and on an xHCI-only machine it never does. The files Windows would
-have placed are simply absent, and what is missing shows up as a fault in this
-driver rather than as a missing file.
+Two files the driver depends on are NOT in the package, because they are
+Windows' own, unmodified, and this download redistributes nothing of
+Microsoft's:
 
   usbd.sys     usbhub20.sys imports it on both systems. Without it the USB
-               ROOT HUB fails with error 0xc0000034 naming usbhub20.sys.
+               ROOT HUB fails: Code 2 on Windows 98, error 0xc0000034
+               naming usbhub20.sys on Windows 2000.
 
-  usbhub.sys   Windows 98's driver for devices that are more than one thing at
-               once - a sound card with a volume knob, a headset with buttons,
-               a keyboard with media keys. Without it every such device stops
-               at USB Composite Device with Code 2 and does nothing at all.
-               WINDOWS 98 ONLY: Windows 2000 has its own equivalent and gets
-               it from its own driver cache, so nothing is added there.
+  usbhub.sys   Windows 98's driver for devices that are more than one thing
+               at once - a sound card with a volume knob, a headset with
+               buttons, a keyboard with media keys. Without it every such
+               device stops at USB Composite Device with Code 2 and does
+               nothing at all. WINDOWS 98 ONLY, and only with NUSB's stack;
+               SweetLow's brings its own composite driver.
 
-If your machine already has any of these files, it keeps the one it has. All
-{EXTRACOUNT} are copied with "do not overwrite", so nothing of yours is replaced.
+WINDOWS ONLY INSTALLS ITS USB FILES WHEN SETUP FINDS A USB CONTROLLER IT
+RECOGNISES, and on an xHCI-only machine it never does, so on such a machine
+neither file is there. The install in step 4 therefore asks Windows to copy
+them from its own installation source. Each is copied only if it is absent,
+so a machine that already has them - one that ever had a USB 1.1 controller -
+keeps its own files and is asked for nothing.
 
-COMPLETING A COPY TAKEN FROM THE REPOSITORY
-...........................................
+  WINDOWS 98 SE   HAVE THE WINDOWS 98 SE INSTALLATION CD AT HAND. Unless the
+                  Windows CABs are on the hard disk (C:\WINDOWS\OPTIONS\CABS,
+                  as on OEM and Windows 98 QuickInstall installs), the
+                  install shows "Insert Disk" asking for the Windows 98
+                  Second Edition CD-ROM: insert it and click OK, and if it
+                  then asks where to copy from, give it the CD's WIN98
+                  folder. It is asking for usbd.sys and usbhub.sys, not for
+                  anything of this driver's.
 
-From a clone, all {EXTRACOUNT} are staged from your own Windows install media and
-checked by SHA-256. YOU HAVE TO SAY WHERE THAT MEDIA IS: neither ISO has a
-default, because where a person keeps installation media is a property of
-their machine. Run these from the top of the clone, in a PowerShell prompt:
+  WINDOWS 2000    Nothing to do: usbd.sys comes from the driver cache every
+                  Windows 2000 installation has.
 
-      powershell -ExecutionPolicy Bypass
-
-      .\scripts\package\extract-usbd-sources.ps1 `
-          -Win98Iso D:\W98SE.ISO -Win2KIso D:\W2KSP4.ISO
-
-      .\scripts\package\make-package.ps1 -Flavor release
-
-Substitute your own two paths. Each has to be an ISO file - the script reads
-inside it, so a mounted drive letter is not the same thing.
-
-LEAVING A PATH OUT IS NOT AN ERROR. The first command warns, skips that half,
-and still finishes successfully - so following this without the two arguments
-looks like it worked and stages nothing, and the second command is where you
-find out.
-
-Install from out\pkg-release\ - that directory has all {MEDIACOUNT} files. The
-download you are reading this in already has them; it is only a copy taken
-from the source repository that does not.
+If the prompt is cancelled the driver still installs, but the root hub fails
+as described above. That reads as a fault in this driver and is not one: put
+the CD in and install the driver again, or copy usbd.sys (and, on Windows 98
+with NUSB, usbhub.sys) out of the CD's WIN98 CABs into
+C:\WINDOWS\SYSTEM32\DRIVERS yourself.
 
 
 ==============================================================================
@@ -2154,7 +2007,11 @@ CD, a shared folder - then:
       it sits unclaimed with a yellow mark, usually under "Other devices".
       Then
           Properties -> Driver -> Update Driver -> Specify a location
-      and point it at the RELEASE\ directory. Reboot when asked.
+      and point it at the RELEASE\ directory. During the copy, on a machine
+      that never had a USB controller Windows recognised, "Insert Disk"
+      asks for the Windows 98 Second Edition CD-ROM: that is Windows
+      fetching its own usbd.sys and usbhub.sys (section 3). Insert it and
+      click OK. Reboot when asked.
 
       (If Windows finds the controller for you first, the Add New Hardware
       Wizard asks the same question - give it RELEASE\ too.)
@@ -2162,7 +2019,8 @@ CD, a shared folder - then:
   WINDOWS 2000 SP4
       Open Device Manager and find the unrecognised xHCI controller, then
           Properties -> Driver -> Update Driver -> Have Disk
-      and point it at the RELEASE\ directory.
+      and point it at the RELEASE\ directory. Nothing else is asked for;
+      usbd.sys comes from the driver cache every installation has.
 
 It installs as "USB 2.0 eXtensible Host Controller (xhci98)", with a "USB
 Root Hub" underneath it. Neither should carry a warning mark.
@@ -2249,10 +2107,12 @@ Two things are specific to this driver and worth knowing in advance:
     4. Device Manager -> the controller -> Remove. It completes, with no
        crash.
 
-  A Windows 98 uninstall then removes REGISTRY ENTRIES ONLY. xhci98.sys,
-  usbd.sys, the setup engine's cached copy of xhci98.inf (under
+  A Windows 98 uninstall then removes REGISTRY ENTRIES ONLY. xhci98.sys, the
+  usbd.sys and usbhub.sys the install had Windows copy from its CD (section
+  3), the setup engine's cached copy of xhci98.inf (under
   C:\WINDOWS\INF\OTHER) and the DisableSelectiveSuspend value of section 9
-  all stay behind. Delete them by hand if you want them gone.
+  all stay behind. Delete them by hand if you want them gone; the two Windows
+  files are Windows' own and harmless where they are.
 
   AFTER AN UPGRADE ON WINDOWS 98, RUN THE INF ONCE BY HAND
   .......................................................
@@ -2378,14 +2238,16 @@ COMPOSITE DEVICES ON WINDOWS 98 - HANDLED BY THIS PACKAGE
 A device that is more than one thing at once - a headset with buttons, a
 keyboard with media keys - stops at "USB Composite Device", Code 2, with
 nothing loading above it, on a Windows 98 machine that is missing one file.
-This package carries that file, so it is worth knowing what it is if you ever
-see that symptom on a machine this package did not set up.
+The install asks Windows for that file (section 3), so it is worth knowing
+what it is if you ever see that symptom on a machine this package did not set
+up, or on one where the Insert Disk prompt was cancelled.
 
 NUSB does not ship the composite parent, but that is not an NUSB defect:
 the parent is Windows 98 SE's own usbhub.sys, and Windows 98 setup only
 places its USB driver FILES when it finds a USB controller it recognises,
-so on an xHCI-only machine that file was simply never put there. Step 3 is
-where this package's copy of it is listed.
+so on an xHCI-only machine that file was simply never put there. Under
+SweetLow's stack the parent is its own usbccgp.sys and the file is not
+needed.
 
 
 ==============================================================================
@@ -2553,19 +2415,14 @@ the driver reads, and one the Windows 98 installer writes machine-wide.
 GNU GPL v2 - see the LICENSE file in this directory, beside this readme. This
 applies to xhci98.sys and xhci98.inf, which are this driver's own work.
 
-IT DOES NOT APPLY TO THESE, if they are present here:
-
-      {EXTRALIST}
-
-Those are Microsoft's - Windows 98 SE's and Windows 2000 SP4's own USBD.SYS,
-and Windows 98 SE's own USBHUB.SYS, all copied unmodified - and they remain
-under whatever terms apply to them. Nothing here grants you any right in them.
-They are included so that this download is a complete install set on an
-xHCI-only machine, which has none of them of its own; see step 3.
+No Microsoft file is in this download. The usbd.sys and usbhub.sys the
+install needs are copied by Windows from your own Windows installation
+source (section 3); nothing here grants you any right in them, and nothing
+here redistributes them.
 
 The provenance record for everything the project depends on but does not own
 is in docs/contributing/legal-provenance.md, in the project's source
-repository rather than here. Section 5 covers those {EXTRACOUNT} files.
+repository rather than here.
 '@
 
     # Markdown -> plain text for the embedded history.
@@ -2581,16 +2438,10 @@ repository rather than here. Section 5 covers those {EXTRACOUNT} files.
     $readme = $template.
         Replace("{VERSION}", $Version).
         Replace("{DATE}", $today).
-        Replace("{MEDIACOUNTUC}", $countWord[$mediaCount].ToUpper()).
-        Replace("{MEDIACOUNT}", $countWord[$mediaCount]).
-        Replace("{EXTRACOUNT}", $countWord[$extraCount]).
-        Replace("{MEDIALIST}", $mediaList).
-        Replace("{EXTRALIST}", $extraList).
         Replace("{CONTENTS}", (($contents -join "`r`n").TrimEnd() + "`r`n")).
         Replace("{HISTORY}", (($historyText -join "`r`n").TrimEnd()))
 
-    # Nothing may reach the reader still carrying a placeholder. The four added
-    # are derived from the manifest, so a typo in one of them
+    # Nothing may reach the reader still carrying a placeholder: a typo in one
     # would otherwise ship as literal braces in a file nobody re-reads.
     if ($readme -match '\{[A-Z]+\}') {
         throw "readme template left an unsubstituted placeholder: $($Matches[0])"
@@ -3190,20 +3041,11 @@ after checkout. Restore it with:  git checkout -- LICENSE
 
     # --- the upload set: what actually goes to the GitHub release ------------
     #
-    # `releases\<version>\` is the tracked half and carries only this project's
-    # own two files. The download a user gets carries every file the manifest
-    # names as well, because `usbhub20.sys` imports `USBD.SYS` on both targets
-    # and an xHCI-only machine has never had one placed - and, since batch 13-E,
-    # because Windows 98 setup never placed that system's composite parent
-    # either. See docs\contributing\legal-provenance.md section 5 for the
-    # decision and what that channel carries.
-    #
-    # **Assembled here rather than by hand, for one reason.** Swapping
-    # `usbd98.sys` and `usbd2k.sys` installs the wrong OS's build, and nothing
-    # detects it afterwards: both are named `usbd.sys` on the target, so the
-    # symptom is `usbhub20.sys` failing to load - the exact failure this whole
-    # per-target split exists to prevent. So the assembled tree is
-    # re-authenticated, not trusted for having been copied from a gated one.
+    # `releases\<version>\` is the tracked half. The download a user gets is
+    # the same tree, zipped, with each flavour directory gated as install
+    # media on the way. Since 1.0.0.1 it carries no Microsoft file: the OS
+    # supplies usbd.sys and usbhub.sys through the INF's LayoutFile. See
+    # docs\contributing\legal-provenance.md section 5.
     $uploadRoot = $null
     $uploadZip = $null
     if (-not $SkipUploadSet) {
@@ -3211,7 +3053,7 @@ after checkout. Restore it with:  git checkout -- LICENSE
         foreach ($f in $Flavor) { $pkgDirs[$f] = $staged[$f].PkgDir }
         $set = New-UploadSet -PublishedRoot $destRoot -Version $Version -Flavors $Flavor `
                              -PkgDirs $pkgDirs -UploadDir $UploadDir -Repo $repo `
-                             -ManifestPath $ManifestPath -Publishable $publishable
+                             -Publishable $publishable
         $uploadRoot = $set.Root
         $uploadZip = $set.Zip
     }
@@ -3242,20 +3084,15 @@ after checkout. Restore it with:  git checkout -- LICENSE
     if ($null -ne $uploadRoot) {
         Write-Host ""
         Write-Host "Upload:     $uploadZip"
-        # Derived from `usbd-sources.expected`, not written out - the same rule
-        # the readme's own lists follow, and for the same reason: this line
-        # named two files while the manifest held three, which is exactly the
-        # drift the pre-cut audit found four times inside the readme.
-        Write-Host ("            The same tree plus {0}" -f $extraList)
-        Write-Host "            in each flavour directory, so a download is complete install"
-        Write-Host "            media. This is the GitHub release asset; it is git-ignored"
-        Write-Host "            and must stay that way."
+        Write-Host "            The same tree, zipped: this project's two files per flavour,"
+        Write-Host "            the tools and the readmes, and no Microsoft file. This is the"
+        Write-Host "            GitHub release asset; it is git-ignored and must stay that way."
         Write-Host "            See releases\README.md and docs\contributing\legal-provenance.md"
         Write-Host "            section 5."
     } else {
         Write-Warn "-SkipUploadSet: no release asset was assembled, so there is nothing to upload."
-        Write-Host "            Install from out\pkg-<flavor>\, which has the Microsoft files"
-        Write-Host "            the tracked directory does not carry."
+        Write-Host "            Install from out\pkg-<flavor>\ or from the tracked directory;"
+        Write-Host "            both hold the same two files."
     }
 } catch {
     Write-Err $_.Exception.Message

@@ -27,13 +27,14 @@ What it checks, grouped by the failure each rule prevents:
            a .NTx86 section whose .NTx86.Services AddService names a binary the
            same CopyFiles section actually delivers, with the required kernel
            driver service type, demand start, and normal error control.
-  TGT-*    Files that are one name and two different binaries - usbd.sys, which
-           this INF carries because usbhub20.sys imports it on both targets and
-           nothing on an xHCI-only machine places it. Each install path must
-           deliver it from its own distinctly-named media file, through its own
-           CopyFiles section, with COPYFLG_NO_OVERWRITE and no version-based
-           overwrite flag, to System32\Drivers - so no engine can reach the
-           other target's build.
+  OS-*     The files the operating system supplies - usbd.sys on both targets
+           and usbhub.sys on Windows 98 - which the media does not carry since
+           release 1.0.0.1: [Version] must name LayoutFile=layout.inf, every
+           install path (device and right-click) must copy usbd.sys and the
+           Windows 98 paths alone usbhub.sys, each under its own name with
+           COPYFLG_NO_OVERWRITE and no overwrite flag to System32\Drivers, and
+           neither file, nor a 1.0.0.0 media name for one, may appear in
+           [SourceDisksFiles].
   VAL-*    Per-device registry values the driver reads at run time. Each must
            be written by BOTH install paths, as the right type, with the right
            default - a value present on one path only is invisible on the other
@@ -49,8 +50,7 @@ What it checks, grouped by the failure each rule prevents:
            written into src\xhci98.inf beside the values, and a future REG_SZ
            value here must bring the rule back with it.)
   PKG-*    A staged package (-PackageDir): every [SourceDisksFiles] entry is
-           present, and each per-target media file really is the build
-           scripts\package\usbd-sources.expected says it is.
+           present, and no Microsoft file is in it under any name.
 
 Every failure line starts with its rule id so the self-tests
 (scripts\inf-gate\test-inf-checks.ps1) can assert that a specific rule fired
@@ -62,12 +62,8 @@ The INF to check. Defaults to src\xhci98.inf.
 .PARAMETER PackageDir
 Optional. A staged install-media directory: every file named in
 [SourceDisksFiles] must be present in it (honouring the per-file subdir
-field), and every per-target file must be the build the source manifest names.
-Use this to check a package layout before copying it to a VM.
-
-.PARAMETER SourceManifest
-Optional. The per-target source manifest to authenticate a -PackageDir
-against. Defaults to scripts\package\usbd-sources.expected.
+field), and nothing in it may be a Microsoft file. Use this to check a
+package layout before copying it to a VM.
 
 .PARAMETER AllowUnpaddedDriverVer
 Accept a `DriverVer` date whose month or day is a single digit - `8/16/2026`
@@ -135,7 +131,6 @@ powershell -File scripts\inf-gate\check-inf.ps1 -PackageDir out\pkg-debug
 param(
     [string]$InfPath = "",
     [string]$PackageDir = "",
-    [string]$SourceManifest = "",
     [string]$EmitMediaLayout = "",
     [string]$EmitFootprint = "",
     [switch]$AllowUnpaddedDriverVer
@@ -144,7 +139,6 @@ param(
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "common.ps1")
-. (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "package") "package-common.ps1")
 
 $script:failures = @()
 $script:warnings = @()
@@ -815,6 +809,31 @@ foreach ($cf in ($referencedCopyFiles | Sort-Object -Unique)) {
     }
 }
 
+# ---- the files the operating system supplies -----------------------
+#
+# usbd.sys is one destination name and two different binaries, and usbhub.sys
+# is Windows 98's composite parent; nothing on an xHCI-only machine ever
+# places either (docs\contributing\lessons.md, "usbhub20.sys bugchecks
+# Win2000"; docs\issues\03-usbhub-sys-composite-devices.md). Since release
+# 1.0.0.1 the media carries neither: [Version] names LayoutFile=layout.inf,
+# neither file is in [SourceDisksFiles], and a CopyFiles entry the INF's own
+# [SourceDisksFiles] does not cover is resolved through the OS's layout.inf
+# and fetched from the OS's own install source. Each target therefore gets
+# its own OS's build by construction. This table is what BOTH-SOURCE exempts
+# and what the OS-* rules below hold the INF to: the paths that must copy each
+# file, and the paths that must not.
+$osSupplied = @(
+    @{ File = "usbd.sys";   On = @("Win98", "Win2000"); Off = @();
+       Why = "usbhub20.sys imports USBD.SYS on both targets and nothing else on an xHCI-only machine places it, so without it the root hub cannot load (Code 2 on Windows 98, a 0xc0000034 naming usbhub20.sys on Windows 2000)" },
+    @{ File = "usbhub.sys"; On = @("Win98");            Off = @("Win2000");
+       Why = "it is Windows 98's composite parent, which an xHCI-only machine never gets from setup, so every multi-interface device stops at 'USB Composite Device' with Code 2 without it; on Windows 2000 that name is the OS's own USB 1.1 hub driver and the composite parent is usbccgp.sys, both placed from driver.cab by every install" }
+)
+$osSuppliedNames = @($osSupplied | ForEach-Object { $_.File.ToLowerInvariant() })
+# The 1.0.0.0 media names, refused wherever they reappear: a package that
+# starts carrying a Microsoft file again must be refused whichever name it
+# hides under.
+$retiredMediaNames = @("usbd98.sys", "usbd2k.sys", "usbhub98.sys")
+
 # ---- BOTH-SOURCE: files, SourceDisksFiles, SourceDisksNames --------
 
 $sourceDisks = @{}
@@ -897,7 +916,9 @@ foreach ($cf in ($referencedCopyFiles | Sort-Object -Unique)) {
                 Add-Failure "W98-83PATH" ("CopyFiles entry '{0}' in [{1}] (line {2}) is not an 8.3 name." -f $n, $cf, $e.Line)
             }
         }
-        if (-not $sourceFiles.ContainsKey($src.ToLowerInvariant())) {
+        # An OS-supplied file is meant to be absent from [SourceDisksFiles]:
+        # LayoutFile is its source. The OS-* rules check that wiring.
+        if (-not $sourceFiles.ContainsKey($src.ToLowerInvariant()) -and -not ($osSuppliedNames -contains $src.ToLowerInvariant())) {
             Add-Failure "BOTH-SOURCE" ("[{0}] copies '{1}' (line {2}) but [SourceDisksFiles] does not list it; setup has no source to copy it from." -f $cf, $src, $e.Line)
         }
     }
@@ -921,71 +942,17 @@ foreach ($d in ($driverBinaries | Sort-Object -Unique)) {
     }
 }
 
-# ---- TGT-* : files that must be a different binary on each target --
+# ---- OS-* : the files the operating system supplies ---------------------
 #
-# usbd.sys is one destination name and two different binaries. usbhub20.sys
-# imports USBD.SYS on both targets and nothing on an xHCI-only machine ever
-# places it, so this INF carries it (docs\contributing\lessons.md, "usbhub20.sys bugchecks Win2000") - which means
-# the package holds Win98 SE's build and Windows 2000 SP4's build at the same
-# time, and the install must never pick the wrong one.
-#
-# The mechanism is the CopyFiles source-name field (Oney p.386: "the name of
-# the file as it exists on the distribution media if that name is different
-# from the Destination name"). Each install path names its own media file, so
-# selection is structural: an engine that cannot read a section cannot reach
-# the file that section names. These rules check that structure holds, because
-# every way of breaking it is silent - the target ends up with a file called
-# usbd.sys either way, and the wrong one surfaces only as usbhub20.sys failing
-# to load, which reads as "the miniport didn't work".
-
-$targetSpecific = @("usbd.sys")
-
-# ---- W98-* : files ONE target needs and the other must not receive -------
-#
-# usbhub.sys is Windows 98's composite parent driver. Without it every
-# multi-interface device on the machine stops at `USB Composite Device` with
-# Code 2 - matched, and the file not on disk. It goes missing for the same
-# reason usbd.sys does: Win98 ships USB.INF on every install but copies the USB
-# driver *files* only when setup detects a controller, and an xHCI-only machine
-# looks empty to Win98 setup. Found on real hardware by batch 13-E.
-#
-# It must NOT reach Windows 2000. There `usbhub.sys` is the name of the OS's own
-# USB 1.1 hub driver, and the composite parent is usbccgp.sys - a different file
-# this package does not carry. So the rule for this list is the OPPOSITE of
-# $targetSpecific's: exactly one path delivers it, and it is the Win98 one.
-#
-# The check runs in both directions on purpose. A missing Win98 entry is the
-# bug batch 13-E found; a Win2000 entry is someone "fixing" an asymmetry that is
-# deliberate, which is the more likely future mistake and the more dangerous.
-$win98Only = @("usbhub.sys")
-
-# The rules below can prove the two paths name *different* media files, but not
-# that each names the *right* one - the names are arbitrary strings to an INF.
-# scripts\package\usbd-sources.expected is the file that says which build goes
-# under which media name, so read the mapping from there rather than restating
-# it here. Absent (or unreadable), the structural rules still all apply and
-# only this cross-check is skipped.
-$mediaTarget = @{}
-$mediaTargetSource = ""
-$manifestForTargets = $SourceManifest
-if ($manifestForTargets -eq "") { $manifestForTargets = Get-UsbdSourceManifestPath }
-if (Test-Path -LiteralPath $manifestForTargets) {
-    try {
-        foreach ($row in @(Read-UsbdSourceManifest -Path $manifestForTargets -RepoRoot $repo)) {
-            $mediaTarget[$row.Media.ToLowerInvariant()] = $row.Target
-        }
-        $mediaTargetSource = $manifestForTargets
-    } catch {
-        Add-Failure "TGT-TARGET" ("could not read the per-target source manifest '{0}': {1}" -f $manifestForTargets, $_.Exception.Message)
-    }
-} elseif ($SourceManifest -ne "") {
-    # The caller typed the path, so a wrong one is a mistake to report, not a
-    # host with nothing staged: silently skipping TGT-TARGET and W98-TARGET
-    # would pass an INF the caller asked to have checked against a manifest.
-    Add-Failure "TGT-TARGET" ("the per-target source manifest '{0}' named by -SourceManifest does not exist." -f $manifestForTargets)
-} else {
-    Add-Warning2 "TGT-TARGET" ("no per-target source manifest at '{0}', so the gate cannot check that each install path names its own target's build - only that the two differ." -f $manifestForTargets)
-}
+# What these rules check is that the LayoutFile route is wired, because every
+# way of breaking it is silent on the target: the directive is present, the
+# media names no Microsoft file, both device-install paths and both
+# right-click paths copy usbd.sys, the Windows 98 paths alone copy usbhub.sys,
+# and every such copy is under its own name (a media-name field would send the
+# engine back to this disk), with COPYFLG_NO_OVERWRITE and no overwrite flag,
+# to System32\Drivers. The 1.0.0.0 media kept the two builds of usbd.sys apart
+# by name (usbd98.sys / usbd2k.sys, the TGT-* family) and hashed them against a
+# manifest; with the OS supplying the file there is no such split to check.
 
 function Get-CopyEntriesFor {
     param($Inf, [string[]]$Sections, [string]$File)
@@ -1041,13 +1008,27 @@ $COPYFLG_FORCE_FILE_IN_USE    = 0x00000008   # force file-in-use behavior
 $COPYFLG_NO_OVERWRITE         = 0x00000010   # do not copy if file exists on target
 $COPYFLG_OVERWRITE_OLDER_ONLY = 0x00000040   # leave target alone if version same as source
 
+# The directive itself. Without it a CopyFiles entry outside [SourceDisksFiles]
+# is asked for from this disk, which does not carry the file, and the install
+# stops at a prompt for a file the package cannot supply.
+$layoutFile = @(Get-Directive $inf "Version" "LayoutFile")
+if ($layoutFile.Count -ne 1 -or $layoutFile[0] -ine "layout.inf") {
+    Add-Failure "OS-LAYOUT" ("[Version] must carry exactly 'LayoutFile=layout.inf'; found '{0}'. It is what makes usbd.sys and usbhub.sys come from the OS's own install source rather than from this disk, which does not carry them." -f ($layoutFile -join ','))
+}
+
+# No Microsoft file on the media, under its own name or a 1.0.0.0 media name.
+foreach ($key in @($sourceFiles.Keys)) {
+    if ($osSuppliedNames -contains $key -or $retiredMediaNames -contains $key) {
+        Add-Failure "OS-MEDIA" ("[SourceDisksFiles] names '{0}' (line {1}). The media carries no Microsoft file since 1.0.0.1: usbd.sys and usbhub.sys come from the OS through LayoutFile, and an entry here would send the engine back to this disk for them (docs\contributing\legal-provenance.md section 5)." -f $sourceFiles[$key].Name, $sourceFiles[$key].Line)
+    }
+}
+
 # A [DefaultInstall] with no [DefaultInstall.NTx86] beside it is the one shape
 # the per-path rules below cannot see: setupapi's decorated-section lookup
 # falls back to the undecorated section, so a right-click Install on Windows
-# 2000 would run the Win98 section and stage that target's files. The per-path
-# rules skip a DefaultInstall pair whose NT half is missing, so refuse it here.
+# 2000 would run the Windows 98 file list, usbhub.sys included.
 if ((Test-SectionExists $inf "DefaultInstall") -and -not (Test-SectionExists $inf "DefaultInstall.NTx86")) {
-    Add-Failure "TGT-DEFAULT" "[DefaultInstall] exists without [DefaultInstall.NTx86]. Windows 2000 falls back to the undecorated section on a right-click Install and stages the Win98 files."
+    Add-Failure "OS-DEFAULT" "[DefaultInstall] exists without [DefaultInstall.NTx86]. Windows 2000 falls back to the undecorated section on a right-click Install and runs the Windows 98 file list, usbhub.sys included."
 }
 
 foreach ($m in $models) {
@@ -1058,161 +1039,67 @@ foreach ($m in $models) {
     }
 
     $paths = @(
-        @{ Name = "Win98"; Install = $base; Sections = @(Get-Directive $inf $base "CopyFiles"); Default = "DefaultInstall" },
-        @{ Name = "Win2000"; Install = $nt; Sections = @(Get-Directive $inf $nt "CopyFiles"); Default = "DefaultInstall.NTx86" }
+        @{ Name = "Win98";   Install = $base; Sections = @(Get-Directive $inf $base "CopyFiles"); Default = "DefaultInstall" },
+        @{ Name = "Win2000"; Install = $nt;   Sections = @(Get-Directive $inf $nt "CopyFiles");   Default = "DefaultInstall.NTx86" }
     )
 
-    foreach ($file in $targetSpecific) {
+    foreach ($os in $osSupplied) {
+        $file = $os.File
         foreach ($p in $paths) {
-            $p.Entries = @(Get-CopyEntriesFor $inf $p.Sections $file)
-            $p.Target = if ($p.Name -eq "Win98") { "win98" } else { "win2000" }
-        }
-
-        $absent = @($paths | Where-Object { $_.Entries.Count -eq 0 })
-        if ($absent.Count -eq $paths.Count) {
-            Add-Failure "TGT-MISSING" ("neither install path for model '{0}' delivers '{1}'. usbhub20.sys imports it on both targets and nothing else on an xHCI-only machine places it, so the root hub fails to load with a 0xc0000034 that names usbhub20.sys." -f $m.Id, $file)
-            continue
-        }
-        if ($absent.Count -gt 0) {
-            foreach ($p in $absent) {
-                Add-Failure "TGT-MISSING" ("the {0} install path ([{1}]) does not deliver '{2}', but the other path does. A file needed on one target and not the other is a packaging mistake, not an asymmetry - both targets' usbhub20.sys imports it." -f $p.Name, $p.Install, $file)
+            # Both routes into a target: the device install, and the
+            # right-click Install that pre-stages with no device present.
+            $routes = @(@{ Label = ("the {0} device install ([{1}])" -f $p.Name, $p.Install); Sections = $p.Sections })
+            if (Test-SectionExists $inf $p.Default) {
+                $routes += @{ Label = ("the {0} right-click Install ([{1}])" -f $p.Name, $p.Default); Sections = @(Get-Directive $inf $p.Default "CopyFiles") }
             }
-            continue
-        }
+            foreach ($route in $routes) {
+                $entries = @(Get-CopyEntriesFor $inf $route.Sections $file)
 
-        foreach ($p in $paths) {
-            if ($p.Entries.Count -gt 1) {
-                Add-Failure "TGT-DUP" ("the {0} install path delivers '{1}' {2} times (lines {3}). Which copy wins is engine-dependent; name exactly one source per path." -f $p.Name, $file, $p.Entries.Count, (($p.Entries | ForEach-Object { $_.Line }) -join ', '))
-            }
-        }
-
-        foreach ($p in $paths) {
-            $entry = $p.Entries[0]
-
-            if ($entry.Source.ToLowerInvariant() -eq $entry.Dest.ToLowerInvariant()) {
-                Add-Failure "TGT-MEDIANAME" ("[{0}] line {1} copies '{2}' from a media file of the same name. A per-target file needs a distinct source name in the second CopyFiles field, or the package can only hold one target's build." -f $entry.Section, $entry.Line, $file)
-            }
-
-            $flags = ConvertTo-CopyFlags $entry.Flags
-            if ($null -eq $flags) {
-                Add-Failure "TGT-FLAGS" ("[{0}] line {1}: '{2}' is not a copy-flag value." -f $entry.Section, $entry.Line, $entry.Flags)
-            } else {
-                if (($flags -band $COPYFLG_NO_OVERWRITE) -eq 0) {
-                    Add-Failure "TGT-FLAGS" ("[{0}] line {1} copies '{2}' without COPYFLG_NO_OVERWRITE (16). Presence is the whole requirement, so an existing usbd.sys - which may be newer than either packaged build - must be left alone rather than replaced." -f $entry.Section, $entry.Line, $file)
-                }
-                foreach ($bad in @(
-                    @{ Bit = $COPYFLG_NOVERSIONCHECK; Name = "COPYFLG_NOVERSIONCHECK (4)"; Why = "it overwrites the target regardless of version" },
-                    @{ Bit = $COPYFLG_FORCE_FILE_IN_USE; Name = "COPYFLG_FORCE_FILE_IN_USE (8)"; Why = "it schedules a replacement of a file that is in use" },
-                    @{ Bit = $COPYFLG_OVERWRITE_OLDER_ONLY; Name = "COPYFLG_OVERWRITE_OLDER_ONLY (64)"; Why = "it still replaces an older target file for no benefit" }
-                )) {
-                    if (($flags -band $bad.Bit) -ne 0) {
-                        Add-Failure "TGT-FLAGS" ("[{0}] line {1} sets {2} on '{3}': {4}." -f $entry.Section, $entry.Line, $bad.Name, $file, $bad.Why)
+                if ($os.Off -contains $p.Name) {
+                    if ($entries.Count -gt 0) {
+                        Add-Failure "OS-ONWIN2K" ("{0} copies '{1}' (line {2}). That is deliberate to NOT do: {3}. The asymmetry is intended - do not make the two paths symmetrical." -f $route.Label, $file, $entries[0].Line, $os.Why)
                     }
+                    continue
                 }
-            }
+                if (-not ($os.On -contains $p.Name)) { continue }
 
-            $srcKey = $entry.Source.ToLowerInvariant()
-            if ($mediaTargetSource -ne "" -and $mediaTarget.ContainsKey($srcKey) -and $mediaTarget[$srcKey] -ne $p.Target) {
-                Add-Failure "TGT-TARGET" ("the {0} install path copies '{1}' from '{2}', which '{3}' records as the {4} build. Swapping the two source names passes every structural check and installs the other OS's usbd.sys." -f $p.Name, $file, $entry.Source, $mediaTargetSource, $mediaTarget[$srcKey])
-            } elseif ($mediaTargetSource -ne "" -and -not $mediaTarget.ContainsKey($srcKey)) {
-                Add-Failure "TGT-TARGET" ("the {0} install path copies '{1}' from '{2}', which '{3}' does not name. Nothing then says which OS's build that media file should be, and the packager will not stage it." -f $p.Name, $file, $entry.Source, $mediaTargetSource)
-            }
-
-            $destKey = $entry.Section.ToLowerInvariant()
-            if ($destDirs.ContainsKey($destKey)) {
-                $dd = $destDirs[$destKey]
-                if ($dd.Dirid -ne "10" -or $dd.Subdir -ine "System32\Drivers") {
-                    Add-Failure "TGT-DEST" ("[{0}] delivers '{1}' to '{2},{3}'. usbhub20.sys resolves the import from System32\Drivers on both targets; spell it '10, System32\Drivers'." -f $entry.Section, $file, $dd.Dirid, $dd.Subdir)
+                if ($entries.Count -eq 0) {
+                    Add-Failure "OS-MISSING" ("{0} does not copy '{1}': {2}." -f $route.Label, $file, $os.Why)
+                    continue
                 }
-            }
-        }
+                if ($entries.Count -gt 1) {
+                    Add-Failure "OS-DUP" ("{0} copies '{1}' {2} times (lines {3}). Which copy wins is engine-dependent; name it once per path." -f $route.Label, $file, $entries.Count, (($entries | ForEach-Object { $_.Line }) -join ', '))
+                }
+                foreach ($entry in $entries) {
+                    if ($entry.Source.ToLowerInvariant() -ne $entry.Dest.ToLowerInvariant()) {
+                        Add-Failure "OS-SRCNAME" ("[{0}] line {1} copies '{2}' from a media file named '{3}'. An OS-supplied file is copied under its own name with no source-name field: a media name points the engine at this disk, which carries no Microsoft file." -f $entry.Section, $entry.Line, $file, $entry.Source)
+                    }
 
-        if ($paths[0].Entries.Count -eq 1 -and $paths[1].Entries.Count -eq 1) {
-            $w98 = $paths[0].Entries[0]
-            $ntE = $paths[1].Entries[0]
+                    $flags = ConvertTo-CopyFlags $entry.Flags
+                    if ($null -eq $flags) {
+                        Add-Failure "OS-FLAGS" ("[{0}] line {1}: '{2}' is not a copy-flag value." -f $entry.Section, $entry.Line, $entry.Flags)
+                    } else {
+                        if (($flags -band $COPYFLG_NO_OVERWRITE) -eq 0) {
+                            Add-Failure "OS-FLAGS" ("[{0}] line {1} copies '{2}' without COPYFLG_NO_OVERWRITE (16). Presence is the whole requirement: a machine that already has the file, possibly a newer serviced build, must keep it, and is then not asked for its Windows CD at all." -f $entry.Section, $entry.Line, $file)
+                        }
+                        foreach ($bad in @(
+                            @{ Bit = $COPYFLG_NOVERSIONCHECK; Name = "COPYFLG_NOVERSIONCHECK (4)"; Why = "it overwrites the target regardless of version" },
+                            @{ Bit = $COPYFLG_FORCE_FILE_IN_USE; Name = "COPYFLG_FORCE_FILE_IN_USE (8)"; Why = "it schedules a replacement of a file that is in use" },
+                            @{ Bit = $COPYFLG_OVERWRITE_OLDER_ONLY; Name = "COPYFLG_OVERWRITE_OLDER_ONLY (64)"; Why = "it still replaces an older target file for no benefit" }
+                        )) {
+                            if (($flags -band $bad.Bit) -ne 0) {
+                                Add-Failure "OS-FLAGS" ("[{0}] line {1} sets {2} on '{3}': {4}." -f $entry.Section, $entry.Line, $bad.Name, $file, $bad.Why)
+                            }
+                        }
+                    }
 
-            if ($w98.Source.ToLowerInvariant() -eq $ntE.Source.ToLowerInvariant()) {
-                Add-Failure "TGT-SAMESRC" ("both install paths copy '{0}' from the same media file '{1}'. One binary cannot be both Windows 98 SE's build and Windows 2000 SP4's; whichever is staged, one target gets the other target's usbd.sys." -f $file, $w98.Source)
-            }
-            if ($w98.Section.ToLowerInvariant() -eq $ntE.Section.ToLowerInvariant()) {
-                Add-Failure "TGT-SHAREDSEC" ("both install paths reach '{0}' through the same CopyFiles section [{1}]. The per-target selection has to be the section, since that is the only thing the two setup engines choose between." -f $file, $w98.Section)
-            }
-        }
-
-        # Right-click Install runs DefaultInstall, so the same split has to
-        # hold there or a pre-stage puts the wrong build on the machine.
-        foreach ($p in $paths) {
-            if ($p.Entries.Count -ne 1) { continue }
-            $mine = $p.Entries[0].Section
-            $other = @($paths | Where-Object { $_.Name -ne $p.Name })[0]
-            if ($other.Entries.Count -ne 1) { continue }
-            $theirs = $other.Entries[0].Section
-
-            if (-not (Test-SectionExists $inf $p.Default)) { continue }
-            $defaultCopies = @(Get-Directive $inf $p.Default "CopyFiles" | ForEach-Object { $_.ToLowerInvariant() })
-            if (-not ($defaultCopies -contains $mine.ToLowerInvariant())) {
-                Add-Failure "TGT-DEFAULT" ("[{0}] does not copy [{1}], so a right-click Install on {2} pre-stages everything except its own '{3}'." -f $p.Default, $mine, $p.Name, $file)
-            }
-            if ($mine.ToLowerInvariant() -ne $theirs.ToLowerInvariant() -and ($defaultCopies -contains $theirs.ToLowerInvariant())) {
-                Add-Failure "TGT-DEFAULT" ("[{0}] copies [{1}], the other target's '{2}'. A right-click Install on {3} would overwrite its own copy with the wrong build." -f $p.Default, $theirs, $file, $p.Name)
-            }
-        }
-    }
-
-    foreach ($file in $win98Only) {
-        foreach ($p in $paths) {
-            $p.Entries = @(Get-CopyEntriesFor $inf $p.Sections $file)
-        }
-        $w98Entries = @($paths[0].Entries)
-        $ntEntries  = @($paths[1].Entries)
-
-        if ($w98Entries.Count -eq 0) {
-            Add-Failure "W98-MISSING" ("the Win98 install path ([{0}]) does not deliver '{1}'. It is Windows 98's composite parent driver, and an xHCI-only machine never gets it from setup - every multi-interface device then stops at 'USB Composite Device' with Code 2. Found on real hardware by batch 13-E." -f $paths[0].Install, $file)
-        }
-        if ($ntEntries.Count -gt 0) {
-            Add-Failure "W98-ONWIN2K" ("the Win2000 install path ([{0}]) delivers '{1}'. That is deliberate to NOT do: on Windows 2000 that name is the OS's own USB 1.1 hub driver and the composite parent is usbccgp.sys, so shipping Windows 98 SE's build toward that target is wrong even with COPYFLG_NO_OVERWRITE protecting it. The asymmetry is intended - do not make the two paths symmetrical." -f $paths[1].Install, $file)
-        }
-        if ($w98Entries.Count -gt 1) {
-            Add-Failure "W98-DUP" ("the Win98 install path delivers '{0}' {1} times (lines {2}). Which copy wins is engine-dependent; name exactly one source." -f $file, $w98Entries.Count, (($w98Entries | ForEach-Object { $_.Line }) -join ', '))
-        }
-
-        # The same asymmetry has to hold on the right-click Install pair, or a
-        # pre-stage puts Windows 98's hub driver over Windows 2000's own.
-        foreach ($p in $paths) {
-            if (-not (Test-SectionExists $inf $p.Default)) { continue }
-            $defaultEntries = @(Get-CopyEntriesFor $inf @(Get-Directive $inf $p.Default "CopyFiles") $file)
-            if ($p.Name -eq "Win98" -and $defaultEntries.Count -eq 0) {
-                Add-Failure "W98-MISSING" ("[{0}] does not deliver '{1}', so a right-click Install on Windows 98 pre-stages everything except its composite parent driver." -f $p.Default, $file)
-            }
-            if ($p.Name -eq "Win2000" -and $defaultEntries.Count -gt 0) {
-                Add-Failure "W98-ONWIN2K" ("[{0}] delivers '{1}' to Windows 2000, where that name is the OS's own USB 1.1 hub driver. The asymmetry the device-install paths keep has to hold here too." -f $p.Default, $file)
-            }
-        }
-
-        foreach ($entry in $w98Entries) {
-            if ($entry.Source.ToLowerInvariant() -eq $entry.Dest.ToLowerInvariant()) {
-                Add-Failure "W98-MEDIANAME" ("[{0}] line {1} copies '{2}' from a media file of the same name. Give it a distinct media name, as usbd98.sys does, so the package cannot be confused about which OS's build it holds." -f $entry.Section, $entry.Line, $file)
-            }
-
-            $flags = ConvertTo-CopyFlags $entry.Flags
-            if ($null -eq $flags) {
-                Add-Failure "W98-FLAGS" ("[{0}] line {1}: '{2}' is not a copy-flag value." -f $entry.Section, $entry.Line, $entry.Flags)
-            } elseif (($flags -band $COPYFLG_NO_OVERWRITE) -eq 0) {
-                Add-Failure "W98-FLAGS" ("[{0}] line {1} copies '{2}' without COPYFLG_NO_OVERWRITE (16). Presence is the whole requirement, so a machine that already has its own usbhub.sys - one whose native USB stack was installed - must keep it." -f $entry.Section, $entry.Line, $file)
-            }
-
-            $srcKey = $entry.Source.ToLowerInvariant()
-            if ($mediaTargetSource -ne "" -and $mediaTarget.ContainsKey($srcKey) -and $mediaTarget[$srcKey] -ne "win98") {
-                Add-Failure "W98-TARGET" ("the Win98 install path copies '{0}' from '{1}', which '{2}' records as the {3} build." -f $file, $entry.Source, $mediaTargetSource, $mediaTarget[$srcKey])
-            } elseif ($mediaTargetSource -ne "" -and -not $mediaTarget.ContainsKey($srcKey)) {
-                Add-Failure "W98-TARGET" ("the Win98 install path copies '{0}' from '{1}', which '{2}' does not name. Nothing then says which build that media file should be, and the packager will not stage it." -f $file, $entry.Source, $mediaTargetSource)
-            }
-
-            $destKey = $entry.Section.ToLowerInvariant()
-            if ($destDirs.ContainsKey($destKey)) {
-                $dd = $destDirs[$destKey]
-                if ($dd.Dirid -ne "10" -or $dd.Subdir -ine "System32\Drivers") {
-                    Add-Failure "W98-DEST" ("[{0}] delivers '{1}' to '{2},{3}'. Windows 98 loads its composite parent from System32\Drivers; spell it '10, System32\Drivers'." -f $entry.Section, $file, $dd.Dirid, $dd.Subdir)
+                    $destKey = $entry.Section.ToLowerInvariant()
+                    if ($destDirs.ContainsKey($destKey)) {
+                        $dd = $destDirs[$destKey]
+                        if ($dd.Dirid -ne "10" -or $dd.Subdir -ine "System32\Drivers") {
+                            Add-Failure "OS-DEST" ("[{0}] delivers '{1}' to '{2},{3}'. Both targets load it from System32\Drivers; spell it '10, System32\Drivers'." -f $entry.Section, $file, $dd.Dirid, $dd.Subdir)
+                        }
+                    }
                 }
             }
         }
@@ -1716,40 +1603,20 @@ if ($PackageDir -ne "") {
                 Add-Failure "PKG-LAYOUT" ("[SourceDisksFiles] lists '{0}' but '{1}' is not in the staged package." -f $file, $full)
             }
         }
-        # Presence is not enough for the per-target files. The rules above prove
-        # the INF cannot pick the wrong one; this proves the package does not
-        # contain the wrong one under the right name, which is the half no
-        # amount of INF structure can establish and the half that is invisible
-        # afterwards - both builds are called usbd.sys once installed.
-        if ($SourceManifest -eq "") { $SourceManifest = Get-UsbdSourceManifestPath }
-        if (-not (Test-Path -LiteralPath $SourceManifest)) {
-            Add-Failure "PKG-IDENTITY" ("the per-target source manifest '{0}' is missing, so nothing can say which build each media file should be." -f $SourceManifest)
-        } else {
-            try {
-                $rows = @(Read-UsbdSourceManifest -Path $SourceManifest -RepoRoot $repo)
-                $mediaPaths = @{}
-                foreach ($r in $rows) {
-                    $mediaKey = $r.Media.ToLowerInvariant()
-                    $relative = $r.Media
-                    if ($sourceFiles.ContainsKey($mediaKey)) {
-                        $relative = $sourceFiles[$mediaKey].Relative
-                    }
-                    $mediaPaths[$mediaKey] = Join-Path $pkg $relative
-                }
-                $staged = @($rows | Where-Object { Test-Path -LiteralPath $mediaPaths[$_.Media.ToLowerInvariant()] })
-                foreach ($e in @(Get-PackagedFileValidationErrors -Rows $staged -PackageDir $pkg -MediaPaths $mediaPaths)) {
-                    Add-Failure "PKG-IDENTITY" ("{0}. Re-stage with scripts\package\make-package.ps1; a swapped pair installs Win98 SE's usbd.sys on Windows 2000 and is undetectable until usbhub20.sys fails to load." -f $e)
-                }
-                foreach ($r in $staged) {
-                    Write-Host ("  {0,-12} verified as the {1} build ({2})" -f $r.Media, $r.Target, $r.Version)
-                }
-            } catch {
-                Add-Failure "PKG-IDENTITY" ("could not read '{0}': {1}" -f $SourceManifest, $_.Exception.Message)
+        # Nothing in the package may be a Microsoft file, under its own name or
+        # a 1.0.0.0 media name, at the root or below it. The rules above prove
+        # the INF asks the OS for usbd.sys and usbhub.sys; this proves the
+        # package has not started carrying them again (legal-provenance.md
+        # section 5).
+        foreach ($item in (Get-ChildItem -LiteralPath $pkg -File -Recurse)) {
+            $n = $item.Name.ToLowerInvariant()
+            if ($osSuppliedNames -contains $n -or $retiredMediaNames -contains $n) {
+                Add-Failure "PKG-MSFILE" ("the staged package holds '{0}'. The media carries no Microsoft file since 1.0.0.1; usbd.sys and usbhub.sys come from the OS through LayoutFile, so take it out." -f $item.FullName.Substring($pkg.Length).TrimStart('\'))
             }
         }
 
         if ($script:failures.Count -eq 0) {
-            Write-Ok ("staged package '{0}' has every file [SourceDisksFiles] names, each authenticated as its target's own build" -f $pkg)
+            Write-Ok ("staged package '{0}' has every file [SourceDisksFiles] names and no Microsoft file" -f $pkg)
         }
     }
 }

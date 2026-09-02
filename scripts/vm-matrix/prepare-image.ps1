@@ -37,8 +37,10 @@ against a FRESH target - one whose config entry carries `CloneFrom` and
 pre-driver snapshot out of a Phase 10 image into a new file, and -Stamp takes
 the `base-<DriverVer>-qemu` snapshot the run checks before it boots anything.
 Between them the pass is the same as above: -Boot -Xfer (which on a fresh
-target stages the WHOLE qemu package, INF and usbd.sys included, because the
-guest has never had this driver), install by hand from the transfer drive,
+target stages the WHOLE qemu package, INF included, because the guest has
+never had this driver; the INF has the OS supply usbd.sys and usbhub.sys, so
+a Windows 98 prep boot needs the CD attached, which is what Win98Cd is for),
+install by hand from the transfer drive,
 -Attach each class, shut down.  docs\contributing\design\09-post-release-unattended-run.md
 section 8 is the procedure.
 
@@ -503,8 +505,9 @@ if ($Boot) {
         # image already has the driver installed and only needs the binary
         # replaced; a fresh one has never seen it, so the install goes through
         # the INF - which is the path a user's machine takes - and the INF
-        # delivers the per-target usbd.sys the base image was chosen not to
-        # carry.  The package directory is copied as make-package.ps1 laid it
+        # has the OS supply the usbd.sys the base image was chosen not to
+        # carry, which is why the CD is attached below (Win98Cd).  The
+        # package directory is copied as make-package.ps1 laid it
         # out, and the guest is pointed at the directory, never at a file.
         if ($isFresh -or $XferPackage) {
             $pkgDir = Join-Path $repo "out\pkg-qemu"

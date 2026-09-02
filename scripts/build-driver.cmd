@@ -51,15 +51,14 @@ rem WHY that build failed is not established (defect 2b), so the import gate
 rem carries it as "qemu required" and no published binary can have it.
 rem
 rem This builds and gates; it does not package. The install media a VM is
-rem actually fed also carries each target's own usbd.sys, which is not built
-rem here and is not in the repository, so it is a separate explicit step:
+rem fed is assembled by a separate explicit step, which re-runs the INF gate
+rem against the finished directory so a package is never less gated than the
+rem binary in it:
 rem
-rem   scripts\package\extract-usbd-sources.ps1   (once, from the install media)
 rem   scripts\package\make-package.ps1 [-Flavor release|debug]
 rem
-rem make-package.ps1 authenticates both usbd.sys builds and re-runs the INF gate
-rem against the finished directory, so a package is never less gated than the
-rem binary in it.
+rem The media is this project's two files and nothing else since 1.0.0.1; the
+rem OS supplies usbd.sys and usbhub.sys through the INF's LayoutFile.
 rem
 rem Usage:  scripts\build-driver.cmd [release|debug|qemu|both|all]
 rem                                                          (default: both)
@@ -618,7 +617,7 @@ exit /b 1
 echo.
 echo ERROR: the install-media packager's self-tests failed, so any package it
 echo builds is untrustworthy - including where it puts each file and whether
-echo the per-target usbd.sys it authenticates is the one setup would read.
+echo a Microsoft file has crept back onto the media.
 endlocal
 exit /b 1
 

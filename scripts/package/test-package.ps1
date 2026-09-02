@@ -10,7 +10,7 @@ VM is installed from, and two of its jobs fail quietly if they are wrong:
     a subdirectory. If the packager staged flat while the gate authenticated
     the subdirectory path (or the reverse), a package could be verified at one
     path and consumed at another. That is the same shape as the per-target
-    usbd.sys bug the whole task exists to close, so the packager takes the
+    usbd.sys bug the 1.0.0.0 media had to close, so the packager takes the
     layout from check-inf.ps1 -EmitMediaLayout instead of parsing
     [SourceDisksFiles] a second time - and this asserts it actually follows it.
 
@@ -19,11 +19,10 @@ VM is installed from, and two of its jobs fail quietly if they are wrong:
     session that has changed directory could stage a package somewhere the
     caller never named.
 
-Every case uses stand-in files - text "drivers", stand-in usbd.sys builds, and
-a stand-in manifest whose hashes match them - so nothing here needs a build,
-the git-ignored tools\ staging, a VM, or any Microsoft binary. One stand-in
-driver carries the exact probe marker to prove diagnostic artifacts are
-rejected before staging.
+Every case uses stand-in files - text "drivers" - so nothing here needs a
+build, the git-ignored tools\ staging, a VM, or any Microsoft binary. One
+stand-in driver carries the exact probe marker to prove diagnostic artifacts
+are rejected before staging.
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\package\test-package.ps1
@@ -101,22 +100,13 @@ function Invoke-Releaser {
 
 $tempBase = [System.IO.Path]::GetFullPath($env:TEMP)
 $script:work = Join-Path $tempBase ("xhci98-package-test-" + [System.IO.Path]::GetRandomFileName())
-$relSrc = "scripts\package\.testsrc-$([Guid]::NewGuid().ToString('N'))"
-$inRepoSrc = Join-Path $repo $relSrc
-$repoSourceCreated = $false
 
 try {
     New-Item -ItemType Directory -Path $script:work | Out-Null
 
     # --- stand-in inputs ----------------------------------------------------
-    $w98Bytes = [System.Text.Encoding]::ASCII.GetBytes("stand-in for Windows 98 SE usbd.sys 4.10.2222")
-    $w2kBytes = [System.Text.Encoding]::ASCII.GetBytes("stand-in for Windows 2000 SP4 USBD.SYS 5.00.2195.6658")
-    $hubBytes = [System.Text.Encoding]::ASCII.GetBytes("stand-in for Windows 98 SE usbhub.sys 4.10.2222")
-
     $srcDir = Join-Path $script:work "src"
     New-Item -ItemType Directory -Path $srcDir | Out-Null
-    [System.IO.File]::WriteAllBytes((Join-Path $srcDir "w98usbd.bin"), $w98Bytes)
-    [System.IO.File]::WriteAllBytes((Join-Path $srcDir "w2kusbd.bin"), $w2kBytes)
     #
     # Every stand-in "driver" carries a flavour marker, because the packager
     # reads one out of the image and refuses a binary with none (task 13-L.1).
@@ -126,28 +116,6 @@ try {
     $driver = Join-Path $srcDir "xhci98.sys"
     Set-Content -LiteralPath $driver -Value `
         "not a real driver XHCI98_FLAVOUR_DEBUG" -Encoding ASCII
-
-    # SOURCE paths are repo-relative in the manifest format, and the packager
-    # resolves them against the repo root - so point them at this test's own
-    # unique directory the same way, via a path that stays inside the repo.
-    # Never claim or pre-delete a fixed path: it may contain developer files,
-    # and concurrent test runs must not share scratch state.
-    New-Item -ItemType Directory -Path $inRepoSrc | Out-Null
-    $repoSourceCreated = $true
-    [System.IO.File]::WriteAllBytes((Join-Path $inRepoSrc "w98usbd.bin"), $w98Bytes)
-    [System.IO.File]::WriteAllBytes((Join-Path $inRepoSrc "w2kusbd.bin"), $w2kBytes)
-    # Windows 98's composite parent, a second win98 row - the manifest carried
-    # exactly one file per target until batch 13-E and now does not.
-    [System.IO.File]::WriteAllBytes((Join-Path $inRepoSrc "w98hub.bin"), $hubBytes)
-
-    # VERSION "-" is the manifest's "no version resource" marker.
-    $manifest = Join-Path $script:work "stand-in-sources.expected"
-    Set-Content -LiteralPath $manifest -Encoding ASCII -Value @(
-        "# stand-in manifest for scripts\package\test-package.ps1",
-        ("usbd98.sys win98   $relSrc\w98usbd.bin - {0} {1} stand-in" -f $w98Bytes.Length, (Get-StandInSha $w98Bytes)),
-        ("usbd2k.sys win2000 $relSrc\w2kusbd.bin - {0} {1} stand-in" -f $w2kBytes.Length, (Get-StandInSha $w2kBytes)),
-        ("usbhub98.sys win98 $relSrc\w98hub.bin - {0} {1} stand-in" -f $hubBytes.Length, (Get-StandInSha $hubBytes))
-    )
 
     function New-Inf {
         param([string]$Name, [scriptblock]$Mutate)
@@ -163,9 +131,9 @@ try {
     # --- the baseline package must build ------------------------------------
     Write-Step "a flat package builds and gates"
     $flatOut = Join-Path $script:work "pkg-flat"
-    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-ManifestPath", $manifest, "-OutDir", $flatOut)
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $flatOut)
     Assert-True ($r.ExitCode -eq 0) ("the baseline package was rejected:`n" + $r.Output)
-    foreach ($f in @("xhci98.inf", "xhci98.sys", "usbd98.sys", "usbd2k.sys", "usbhub98.sys")) {
+    foreach ($f in @("xhci98.inf", "xhci98.sys")) {
         Assert-True (Test-Path -LiteralPath (Join-Path $flatOut $f)) "'$f' is missing from the flat package."
     }
 
@@ -177,7 +145,7 @@ try {
         -Encoding ASCII
     $probeOut = Join-Path $script:work "pkg-probe"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $probeDriver,
-        "-ManifestPath", $manifest, "-OutDir", $probeOut)
+        "-OutDir", $probeOut)
     Assert-True ($r.ExitCode -ne 0) "a diagnostic probe driver was accepted for packaging."
     Assert-True ($r.Output -match "diagnostic probe build") `
         ("expected the rejection to identify the probe build. Output:`n" + $r.Output)
@@ -205,7 +173,7 @@ try {
         "stand-in driver from before the flavour marker existed"
     $nfOut = Join-Path $script:work "pkg-noflavour"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $noFlavourDriver,
-        "-ManifestPath", $manifest, "-OutDir", $nfOut)
+        "-OutDir", $nfOut)
     Assert-True ($r.ExitCode -ne 0) "a driver with no flavour marker was packaged."
     Assert-True ($r.Output -match "XHCI98_FLAVOUR") `
         ("expected the refusal to name the missing marker. Output:`n" + $r.Output)
@@ -220,7 +188,7 @@ try {
         "stand-in XHCI98_FLAVOUR_QEMU driver"
     $qwOut = Join-Path $script:work "pkg-qemu-as-debug"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $qemuDriver,
-        "-ManifestPath", $manifest, "-OutDir", $qwOut)
+        "-OutDir", $qwOut)
     Assert-True ($r.ExitCode -ne 0) "a qemu binary was staged as the debug flavour."
     Assert-True ($r.Output -match "qemu") `
         ("expected the refusal to name the flavour it found. Output:`n" + $r.Output)
@@ -230,7 +198,7 @@ try {
     # 3. The same mistake the other way round: a debug binary asked for as qemu.
     $dqOut = Join-Path $script:work "pkg-debug-as-qemu"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-        "-ManifestPath", $manifest, "-OutDir", $dqOut, "-Flavor", "qemu")
+        "-OutDir", $dqOut, "-Flavor", "qemu")
     Assert-True ($r.ExitCode -ne 0) "a debug binary was staged as the qemu flavour."
     Assert-True (-not (Test-Path -LiteralPath $dqOut)) `
         "the output directory was created for a mislabelled flavour."
@@ -240,11 +208,11 @@ try {
     #    never happen is publishing it, and make-release.ps1 owns that refusal.
     $qOut = Join-Path $script:work "pkg-qemu"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $qemuDriver,
-        "-ManifestPath", $manifest, "-OutDir", $qOut, "-Flavor", "qemu")
+        "-OutDir", $qOut, "-Flavor", "qemu")
     Assert-True ($r.ExitCode -eq 0) ("the qemu flavour was refused by make-package:`n" + $r.Output)
     Assert-True ($r.Output -match "NEVER PUBLISHED") `
         ("expected a banner saying the qemu flavour is never published. Output:`n" + $r.Output)
-    foreach ($f in @("xhci98.inf", "xhci98.sys", "usbd98.sys", "usbd2k.sys", "usbhub98.sys")) {
+    foreach ($f in @("xhci98.inf", "xhci98.sys")) {
         Assert-True (Test-Path -LiteralPath (Join-Path $qOut $f)) `
             "'$f' is missing from the qemu package."
     }
@@ -266,7 +234,7 @@ try {
     # 1. Without the switch it is a diagnostic build like any other.
     $fsRefusedOut = Join-Path $script:work "pkg-failstart-refused"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $failStartDriver,
-        "-ManifestPath", $manifest, "-OutDir", $fsRefusedOut)
+        "-OutDir", $fsRefusedOut)
     Assert-True ($r.ExitCode -ne 0) `
         "the failed-start artifact was packaged without -FailStartArtifact."
     Assert-True (-not (Test-Path -LiteralPath $fsRefusedOut)) `
@@ -275,7 +243,7 @@ try {
     # 2. The switch does not widen to a probe build that is not the artifact.
     $fsWrongOut = Join-Path $script:work "pkg-failstart-wrong"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $probeDriver,
-        "-ManifestPath", $manifest, "-OutDir", $fsWrongOut, "-FailStartArtifact")
+        "-OutDir", $fsWrongOut, "-FailStartArtifact")
     Assert-True ($r.ExitCode -ne 0) `
         "-FailStartArtifact packaged a probe build that is not task 12.3's artifact."
     Assert-True ($r.Output -match "XHCI98_FAILSTART_ARTIFACT_TASK_12_3") `
@@ -292,7 +260,7 @@ try {
          "driver with no probe marker")
     $fsBareOut = Join-Path $script:work "pkg-failstart-bare"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $fsBareDriver,
-        "-ManifestPath", $manifest, "-OutDir", $fsBareOut, "-FailStartArtifact")
+        "-OutDir", $fsBareOut, "-FailStartArtifact")
     Assert-True ($r.ExitCode -ne 0) `
         "an artifact with no do-not-deploy marker was staged."
     Assert-True ($r.Output -match "XHCI98_PROBE_BUILD_DO_NOT_DEPLOY") `
@@ -301,11 +269,11 @@ try {
     # 4. And with both markers and the switch it stages, loudly.
     $fsOut = Join-Path $script:work "pkg-failstart"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $failStartDriver,
-        "-ManifestPath", $manifest, "-OutDir", $fsOut, "-FailStartArtifact")
+        "-OutDir", $fsOut, "-FailStartArtifact")
     Assert-True ($r.ExitCode -eq 0) ("the failed-start artifact was rejected:`n" + $r.Output)
     Assert-True ($r.Output -match "FAILED-START ARTIFACT") `
         ("expected a banner naming the artifact. Output:`n" + $r.Output)
-    foreach ($f in @("xhci98.inf", "xhci98.sys", "usbd98.sys", "usbd2k.sys", "usbhub98.sys")) {
+    foreach ($f in @("xhci98.inf", "xhci98.sys")) {
         Assert-True (Test-Path -LiteralPath (Join-Path $fsOut $f)) `
             "'$f' is missing from the failed-start package; it has to be installable to be worth anything."
     }
@@ -320,7 +288,7 @@ try {
     Write-Step "the unpadded-date experiment changes the date and nothing else"
     $dfOut = Join-Path $script:work "pkg-datefmt"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-        "-ManifestPath", $manifest, "-OutDir", $dfOut, "-UnpaddedDriverVerExperiment")
+        "-OutDir", $dfOut, "-UnpaddedDriverVerExperiment")
     Assert-True ($r.ExitCode -eq 0) ("the unpadded-date package was rejected:`n" + $r.Output)
     Assert-True ($r.Output -match "UNPADDED-DriverVer EXPERIMENT") `
         ("expected a banner naming the experiment. Output:`n" + $r.Output)
@@ -357,7 +325,7 @@ try {
     Write-Step "-FailStartArtifact and -UnpaddedDriverVerExperiment exclude each other"
     $bothOut = Join-Path $script:work "pkg-both-modes"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $failStartDriver,
-        "-ManifestPath", $manifest, "-OutDir", $bothOut,
+        "-OutDir", $bothOut,
         "-FailStartArtifact", "-UnpaddedDriverVerExperiment")
     Assert-True ($r.ExitCode -ne 0) `
         "the packager accepted both special modes at once."
@@ -376,7 +344,7 @@ try {
     Write-Step "a failed run does not disturb an existing package"
     $keepOut = Join-Path $script:work "pkg-keep"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-        "-ManifestPath", $manifest, "-OutDir", $keepOut)
+        "-OutDir", $keepOut)
     Assert-True ($r.ExitCode -eq 0) ("the baseline package was rejected:`n" + $r.Output)
     $before = @{}
     foreach ($f in (Get-ChildItem -LiteralPath $keepOut -File -Recurse)) {
@@ -387,7 +355,7 @@ try {
     # happens before staging, but the assertion that matters is the same one a
     # later failure has to satisfy: what is already there is untouched.
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $probeDriver,
-        "-ManifestPath", $manifest, "-OutDir", $keepOut)
+        "-OutDir", $keepOut)
     Assert-True ($r.ExitCode -ne 0) "a probe build was packaged over an existing package."
     $after = @{}
     foreach ($f in (Get-ChildItem -LiteralPath $keepOut -File -Recurse)) {
@@ -417,7 +385,7 @@ try {
     $bystander = Join-Path $foreignOut "notes.txt"
     Set-Content -LiteralPath $bystander -Encoding ASCII -Value "someone else's file"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-        "-ManifestPath", $manifest, "-OutDir", $foreignOut)
+        "-OutDir", $foreignOut)
     Assert-True ($r.ExitCode -ne 0) `
         "the packager replaced a destination holding files it did not make."
     Assert-True (Test-Path -LiteralPath $bystander) `
@@ -432,20 +400,20 @@ try {
     Write-Step "a destination under releases\ is refused"
     $releaseOut = Join-Path $repo "releases\9.9.9.9\release"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-        "-ManifestPath", $manifest, "-OutDir", $releaseOut)
+        "-OutDir", $releaseOut)
     Assert-True ($r.ExitCode -ne 0) "the packager accepted an -OutDir under releases\."
     Assert-True ($r.Output -match "releases") ("the refusal did not name releases\:`n" + $r.Output)
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $repo "releases\9.9.9.9"))) `
         "the packager created a directory under releases\ before refusing."
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-        "-ManifestPath", $manifest, "-OutDir", (Join-Path $repo "releases"))
+        "-OutDir", (Join-Path $repo "releases"))
     Assert-True ($r.ExitCode -ne 0) "the packager accepted releases\ itself as -OutDir."
 
     # An empty directory is not foreign - it is the ordinary first run.
     $emptyOut = Join-Path $script:work "pkg-empty-dest"
     Ensure-Directory $emptyOut
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-        "-ManifestPath", $manifest, "-OutDir", $emptyOut)
+        "-OutDir", $emptyOut)
     Assert-True ($r.ExitCode -eq 0) `
         ("an existing empty destination was refused:`n" + $r.Output)
     Assert-True (Test-Path -LiteralPath (Join-Path $emptyOut "xhci98.inf")) `
@@ -465,7 +433,7 @@ try {
     Write-Step "a package survives a failure that happens after staging"
     $txOut = Join-Path $script:work "pkg-transactional"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-        "-ManifestPath", $manifest, "-OutDir", $txOut)
+        "-OutDir", $txOut)
     Assert-True ($r.ExitCode -eq 0) ("the baseline package was rejected:`n" + $r.Output)
     $txBefore = @{}
     foreach ($f in (Get-ChildItem -LiteralPath $txOut -File -Recurse)) {
@@ -482,7 +450,7 @@ try {
     $intruder = Join-Path $txOut "README.TXT"
     Set-Content -LiteralPath $intruder -Encoding ASCII -Value "notes from the operator"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $otherDriver,
-        "-ManifestPath", $manifest, "-OutDir", $txOut)
+        "-OutDir", $txOut)
     Assert-True ($r.ExitCode -ne 0) `
         "a destination holding an unaccounted-for file was replaced anyway."
     Assert-True ($r.Output -match "README") `
@@ -512,10 +480,10 @@ try {
     $slashOut = Join-Path $script:work "pkg-trailing"
     foreach ($pass in @("first", "second")) {
         $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-            "-ManifestPath", $manifest, "-OutDir", ($slashOut + "\"))
+            "-OutDir", ($slashOut + "\"))
         Assert-True ($r.ExitCode -eq 0) `
             ("the $pass run with a trailing separator failed:`n" + $r.Output)
-        foreach ($f in @("xhci98.inf", "xhci98.sys", "usbd98.sys", "usbd2k.sys", "usbhub98.sys")) {
+        foreach ($f in @("xhci98.inf", "xhci98.sys")) {
             Assert-True (Test-Path -LiteralPath (Join-Path $slashOut $f)) `
                 "'$f' is missing after the $pass trailing-separator run."
         }
@@ -536,7 +504,7 @@ try {
     Write-Step "the binary gates run unless -SkipBinaryGates is passed"
     $gatedOut = Join-Path $script:work "pkg-gated"
     $r = Invoke-Packager -WithBinaryGates -Arguments @("-InfPath", $plainInf,
-        "-DriverPath", $driver, "-ManifestPath", $manifest, "-OutDir", $gatedOut,
+        "-DriverPath", $driver, "-OutDir", $gatedOut,
         "-NoTargetEvidence")
     Assert-True ($r.ExitCode -ne 0) `
         "a stand-in driver was packaged with the binary gates enabled."
@@ -550,14 +518,14 @@ try {
     # "usbfiles" is exactly 8 characters, so the gate's 8.3 path rule does not
     # fire first and this case tests what it is meant to test.
     Write-Step "a [SourceDisksFiles] subdirectory is staged, not flattened"
-    $subInf = New-Inf -Name "subdir" -Mutate { param($t) $t.Replace("usbd98.sys=1", "usbd98.sys=1,usbfiles") }
+    $subInf = New-Inf -Name "subdir" -Mutate { param($t) $t.Replace("xhci98.sys=1", "xhci98.sys=1,usbfiles") }
     $subOut = Join-Path $script:work "pkg-subdir"
-    $r = Invoke-Packager @("-InfPath", $subInf, "-DriverPath", $driver, "-ManifestPath", $manifest, "-OutDir", $subOut)
+    $r = Invoke-Packager @("-InfPath", $subInf, "-DriverPath", $driver, "-OutDir", $subOut)
     Assert-True ($r.ExitCode -eq 0) ("a package with a [SourceDisksFiles] subdirectory was rejected:`n" + $r.Output)
-    Assert-True (Test-Path -LiteralPath (Join-Path $subOut "usbfiles\usbd98.sys")) `
-        "usbd98.sys was not staged into the 'usbfiles' subdirectory [SourceDisksFiles] names."
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $subOut "usbd98.sys"))) `
-        "usbd98.sys was also staged flat; a stray root copy is what let a substituted subdirectory file pass unnoticed."
+    Assert-True (Test-Path -LiteralPath (Join-Path $subOut "usbfiles\xhci98.sys")) `
+        "xhci98.sys was not staged into the 'usbfiles' subdirectory [SourceDisksFiles] names."
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $subOut "xhci98.sys"))) `
+        "xhci98.sys was also staged flat; a stray root copy is what let a substituted subdirectory file pass unnoticed."
     # And the staged package must satisfy the gate that reads the same INF.
     $gate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-inf.ps1"
     # Same relaxation as Invoke-Packager above, and for the same reason: under
@@ -567,7 +535,7 @@ try {
     $ErrorActionPreference = "Continue"
     try {
         $out = & powershell.exe @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate,
-            "-InfPath", $subInf, "-PackageDir", $subOut, "-SourceManifest", $manifest) 2>&1 | Out-String
+            "-InfPath", $subInf, "-PackageDir", $subOut) 2>&1 | Out-String
     } finally {
         $ErrorActionPreference = $savedEap
     }
@@ -575,33 +543,19 @@ try {
 
     # --- a media file with no source is an error, not a silent gap ----------
     Write-Step "an unsourced [SourceDisksFiles] entry is refused"
-    $extraInf = New-Inf -Name "extra" -Mutate { param($t) $t.Replace("usbd2k.sys=1", "usbd2k.sys=1`r`nusbhub.sys=1") }
-    $r = Invoke-Packager @("-InfPath", $extraInf, "-DriverPath", $driver, "-ManifestPath", $manifest,
-        "-OutDir", (Join-Path $script:work "pkg-extra"))
+    $extraInf = New-Inf -Name "extra" -Mutate { param($t) $t.Replace("xhci98.inf=1", "xhci98.inf=1`r`nextra.sys=1") }
+    $r = Invoke-Packager @("-InfPath", $extraInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-extra"))
     Assert-True ($r.ExitCode -ne 0) "a [SourceDisksFiles] entry with no source was accepted."
-    Assert-True ($r.Output -match "usbhub\.sys") ("expected the error to name the unsourced file. Output:`n" + $r.Output)
+    Assert-True ($r.Output -match "extra\.sys") ("expected the error to name the unsourced file. Output:`n" + $r.Output)
 
     # --- a broken INF stops the run before anything is staged ---------------
     Write-Step "a rejected INF stops the run before staging"
     $badInf = New-Inf -Name "bad" -Mutate { param($t) $t.Replace('Signature="$CHICAGO$"', 'Signature="$Windows NT$"') }
     $badOut = Join-Path $script:work "pkg-bad"
-    $r = Invoke-Packager @("-InfPath", $badInf, "-DriverPath", $driver, "-ManifestPath", $manifest, "-OutDir", $badOut)
+    $r = Invoke-Packager @("-InfPath", $badInf, "-DriverPath", $driver, "-OutDir", $badOut)
     Assert-True ($r.ExitCode -ne 0) "a package was built around an INF the gate rejects."
     Assert-True (-not (Test-Path -LiteralPath $badOut)) `
         "the output directory was created for an INF that failed the gate; nothing should be staged around a rejected INF."
-
-    # --- a substituted source is refused ------------------------------------
-    Write-Step "a source that does not match the manifest is refused"
-    $badManifest = Join-Path $script:work "wrong-hash.expected"
-    Set-Content -LiteralPath $badManifest -Encoding ASCII -Value @(
-        ("usbd98.sys win98   $relSrc\w98usbd.bin - {0} {1} stand-in" -f $w98Bytes.Length, (Get-StandInSha $w98Bytes)),
-        ("usbd2k.sys win2000 $relSrc\w2kusbd.bin - {0} {1} stand-in" -f $w2kBytes.Length, (Get-StandInSha $w98Bytes)),
-        ("usbhub98.sys win98 $relSrc\w98hub.bin - {0} {1} stand-in" -f $hubBytes.Length, (Get-StandInSha $hubBytes))
-    )
-    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-ManifestPath", $badManifest,
-        "-OutDir", (Join-Path $script:work "pkg-badhash"))
-    Assert-True ($r.ExitCode -ne 0) "a source file that does not match its manifest row was packaged."
-    Assert-True ($r.Output -match "SHA256") ("expected the mismatch to be reported by hash. Output:`n" + $r.Output)
 
     # --- a relative -OutDir means the caller's directory --------------------
     #
@@ -614,7 +568,7 @@ try {
     New-Item -ItemType Directory -Path $cwd | Out-Null
     $script = @(
         "Set-Location -LiteralPath '$cwd'",
-        "& '$packager' -InfPath '$plainInf' -DriverPath '$driver' -ManifestPath '$manifest' -OutDir 'relpkg' -SkipBinaryGates | Out-Null",
+        "& '$packager' -InfPath '$plainInf' -DriverPath '$driver' -OutDir 'relpkg' -SkipBinaryGates | Out-Null",
         "exit `$LASTEXITCODE"
     ) -join "; "
     $savedEap = $ErrorActionPreference
@@ -678,15 +632,12 @@ try {
             [System.IO.File]::WriteAllBytes((Join-Path $pubFlavour "xhci98.sys"), $flavourBytes[$fl])
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pubFlavour "xhci98.inf") -Force
 
-            # The gated package: the same two files byte for byte, plus the two
-            # per-target Microsoft builds the tracked tree may not carry.
+            # The gated package: the same two files byte for byte, and since
+            # 1.0.0.1 nothing else.
             $pkgFlavour = Join-Path $pkgRoot ("pkg-" + $fl)
             Ensure-Directory $pkgFlavour
             [System.IO.File]::WriteAllBytes((Join-Path $pkgFlavour "xhci98.sys"), $flavourBytes[$fl])
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pkgFlavour "xhci98.inf") -Force
-            [System.IO.File]::WriteAllBytes((Join-Path $pkgFlavour "usbd98.sys"), $w98Bytes)
-            [System.IO.File]::WriteAllBytes((Join-Path $pkgFlavour "usbd2k.sys"), $w2kBytes)
-            [System.IO.File]::WriteAllBytes((Join-Path $pkgFlavour "usbhub98.sys"), $hubBytes)
         }
         Set-Content -LiteralPath (Join-Path $pubRoot "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
@@ -704,7 +655,7 @@ try {
         }
 
         $relArgs = @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
-                     "-PackageRoot", $pkgRoot, "-UploadDir", $upRoot, "-ManifestPath", $manifest)
+                     "-PackageRoot", $pkgRoot, "-UploadDir", $upRoot)
         $r = Invoke-Releaser $relArgs
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled:`n" + $r.Output)
 
@@ -714,10 +665,10 @@ try {
         # the two drifting back together silently.
         $uploadZip = Join-Path $upRoot ("xhci98-" + $relVersion + ".zip")
 
-        # The four files the INF names, in one directory, per flavour. This is
-        # the assertion the malformed asset would have failed.
+        # The files the INF names, in one directory, per flavour. This is the
+        # assertion the malformed asset would have failed.
         foreach ($fl in @("release", "debug")) {
-            foreach ($name in @("xhci98.sys", "xhci98.inf", "usbd98.sys", "usbd2k.sys", "usbhub98.sys")) {
+            foreach ($name in @("xhci98.sys", "xhci98.inf")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from the upload set's $fl\ directory; a user pointing Windows at it gets an incomplete install."
             }
@@ -746,7 +697,7 @@ try {
             Assert-True ($backslashed.Count -eq 0) `
                 ("the archive names " + $backslashed.Count + " entry/entries with backslashes, which unzip on a Linux or macOS host extracts as flat files: " +
                  (($backslashed | Select-Object -First 3) -join ", "))
-            foreach ($want in @("release/xhci98.sys", "release/usbd98.sys", "debug/usbd2k.sys")) {
+            foreach ($want in @("release/xhci98.sys", "debug/xhci98.inf")) {
                 Assert-True ($entries -contains $want) "the archive has no '$want' entry."
             }
         }
@@ -811,28 +762,6 @@ try {
         Assert-True ($r.Output -match "was not asked to complete") `
             ("expected the refusal to name the flavour left behind. Output:`n" + $r.Output)
 
-        # --- a package whose layout the INF does not name --------------------
-        #
-        # Review finding 2. The hashes still match, so the identity
-        # check passes; the file is simply in a subdirectory the INF's
-        # [SourceDisksFiles] does not put it in. The first version of the
-        # layout check compared the assembled directory against the package it
-        # had just copied - the same derivation twice - so it agreed with
-        # itself and accepted an asset nobody could install from. The INF gate
-        # is the independent parse that catches it.
-        #
-        Write-Step "an upload set is refused when the package layout is not the INF's"
-        $strayDir = Join-Path $pkgRoot "pkg-debug\usbfiles"
-        Ensure-Directory $strayDir
-        Move-Item -LiteralPath (Join-Path $pkgRoot "pkg-debug\usbd98.sys") `
-                  -Destination (Join-Path $strayDir "usbd98.sys") -Force
-        $r = Invoke-Releaser $relArgs
-        Assert-True ($r.ExitCode -ne 0) `
-            "an upload set was assembled with usbd98.sys somewhere the INF does not name it."
-        Move-Item -LiteralPath (Join-Path $strayDir "usbd98.sys") `
-                  -Destination (Join-Path $pkgRoot "pkg-debug\usbd98.sys") -Force
-        Remove-Item -LiteralPath $strayDir -Recurse -Force
-
         # --- a relative -PackageRoot --------------------------------------
         #
         # Review finding 3. The relative path of each staged file
@@ -849,7 +778,7 @@ try {
         $relScript = @(
             "Set-Location -LiteralPath '$relPkgParent'",
             ("& '$releaser' -UploadSetOnly -Version '$relVersion' -ReleasesDir '$relRoot' " +
-             "-PackageRoot '$relPkgLeaf' -UploadDir '$upRoot' -ManifestPath '$manifest' | Out-Null"),
+             "-PackageRoot '$relPkgLeaf' -UploadDir '$upRoot' | Out-Null"),
             "exit `$LASTEXITCODE"
         ) -join "; "
         $savedEap2 = $ErrorActionPreference
@@ -862,7 +791,7 @@ try {
         }
         Assert-True ($relExit -eq 0) "a relative -PackageRoot was not accepted."
         foreach ($fl in @("release", "debug")) {
-            foreach ($name in @("xhci98.sys", "xhci98.inf", "usbd98.sys", "usbd2k.sys", "usbhub98.sys")) {
+            foreach ($name in @("xhci98.sys", "xhci98.inf")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from $fl\ after a relative -PackageRoot run; the relative path derivation cut in the wrong place."
             }
@@ -904,12 +833,12 @@ try {
         # package is refused too, rather than producing a directory that quietly
         # lacks it.
         Write-Step "a package missing a file the INF names is refused"
-        $heldBack = Join-Path $pkgRoot "pkg-release\usbd2k.sys"
+        $heldBack = Join-Path $pkgRoot "pkg-release\xhci98.inf"
         $heldBackBytes = [System.IO.File]::ReadAllBytes($heldBack)
         Remove-Item -LiteralPath $heldBack -Force
         $r = Invoke-Releaser $relArgs
-        Assert-True ($r.ExitCode -ne 0) "a package missing usbd2k.sys assembled an upload set."
-        Assert-True ($r.Output -match "usbd2k\.sys") `
+        Assert-True ($r.ExitCode -ne 0) "a package missing xhci98.inf assembled an upload set."
+        Assert-True ($r.Output -match "xhci98\.inf") `
             ("expected the refusal to name the missing file. Output:`n" + $r.Output)
         [System.IO.File]::WriteAllBytes($heldBack, $heldBackBytes)
 
@@ -994,7 +923,7 @@ try {
 
             $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion,
                                    "-ReleasesDir", $useReleases, "-PackageRoot", $pkgRoot,
-                                   "-UploadDir", $c.UploadDir, "-ManifestPath", $manifest)
+                                   "-UploadDir", $c.UploadDir)
             Assert-True ($r.ExitCode -ne 0) `
                 "the upload set was assembled $($c.Why) the written-once release directory."
             # The diagnostic, not just the exit code: copying a tree into its
@@ -1128,9 +1057,6 @@ try {
 } finally {
     if (Test-Path -LiteralPath $script:work) {
         Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue
-    }
-    if ($repoSourceCreated -and (Test-Path -LiteralPath $inRepoSrc)) {
-        Remove-Item -LiteralPath $inRepoSrc -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 

@@ -1,44 +1,41 @@
 <#
 .SYNOPSIS
-Stage each target's own usbd.sys, the per-target file xhci98.inf carries.
+Stage the reference copies of each target's own usbd.sys (and Windows 98 SE's
+usbhub.sys) under the git-ignored tools\, from that OS's install media.
 
 .DESCRIPTION
-usbhub20.sys imports USBD.SYS on both first-class targets and nothing on an
-xHCI-only machine ever places it, so src\xhci98.inf carries it (roadmap Phase 3
-task 7; docs\contributing\lessons.md, "usbhub20.sys bugchecks Win2000"). The two builds are different binaries with
-the same name, and each target must get its own:
+These files are NOT install media and are not packaged. Until release 1.0.0.1
+the package carried them under per-target names, authenticated against a
+manifest this script also read; since 1.0.0.1 the INF has the Windows setup
+engine copy usbd.sys and usbhub.sys from the operating system's own install
+source (LayoutFile=layout.inf), and the media carries no Microsoft file
+(docs\contributing\legal-provenance.md section 5). What is staged here is
+what the repository still reads them for:
 
-  tools\win98se-extracted\usbd.sys    Windows 98 SE 4.10.2222, from the SE CD.
-      Also stages usbhub.sys from the same cab: it is the [precedent] pair the
-      import gate's Win98 evidence list names, and both come out of one read.
-      The cab is found through the media's own layout.inf rather than being
-      hard-coded, so an OEM/retail layout difference fails loudly.
+  tools\win98se-extracted\usbd.sys, usbhub.sys
+      Windows 98 SE 4.10.2222, from the SE CD. The import gate's Windows 98
+      precedent pair: scripts\import-gate\win98-evidence.list names both with
+      their identity, and check-imports.ps1 reads their import tables as
+      evidence of what resolves on Windows 98. The cab is found through the
+      media's own layout.inf rather than being hard-coded, so an OEM/retail
+      layout difference fails loudly.
 
-  tools\win2ksp4-extracted\USBD.SYS   Windows 2000 SP4 5.00.2195.6658, expanded
-      from I386\USBD.SY_ on the retail SP4 ISO.
+  tools\win2ksp4-extracted\USBD.SYS
+      Windows 2000 SP4 5.00.2195.6658, expanded from I386\USBD.SY_ on the
+      retail SP4 ISO. What scripts\setup-qemu-win2k.ps1 stages for the
+      Windows 2000 VM's preparation boot, and what the ABI work read
+      statically (legal-provenance.md section 4).
 
-None of them is tracked, so tools\ is git-ignored and this script is how a fresh
-clone or the project's other host gets them back. (They go into the GitHub
-release download - a separate channel, recorded in
-docs\contributing\legal-provenance.md section 5, and one nothing has actually
-been uploaded to yet - which is why a clone still has to stage them and a
-downloader would not.) It said "Neither file" until the post-Phase 13 review rounds, from before
-task 13-E.1's remedy added usbhub98.sys; the manifest has held
-three rows since. Every staged file is verified against
-scripts\package\usbd-sources.expected before the script reports success -
-staging the wrong build is the one error the per-target split cannot catch
-later, because both files are named usbd.sys once installed.
+Every staged file is verified before the script reports success: the Windows
+98 pair against win98-evidence.list, the Windows 2000 file against the
+identity recorded below. Existing files are left alone unless -Force is
+given. Nothing here touches the VMs, the driver build, or the package.
 
-Existing files are left alone unless -Force is given. Nothing here touches the
-VMs, the driver build, or the package.
-
-Each ISO parameter is required to stage *its own* target, and neither has a
-default: where a person keeps installation media is a property of their machine,
-and a committed default is a path that is right on exactly one host and wrong
-everywhere else.  Omitting one skips that target with a warning, as an
-unreadable path does, and the package then cannot be built for that half.
-Omitting both, on a host where neither file is already staged, is an error:
-the run would otherwise report success having staged nothing.
+Each ISO parameter is required to stage its own target, and neither has a
+default: where a person keeps installation media is a property of their
+machine. Omitting one skips that target with a warning; omitting both, on a
+host where nothing is staged yet, is an error, because the run would
+otherwise report success having staged nothing.
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\package\extract-usbd-sources.ps1 `
@@ -49,17 +46,26 @@ powershell -ExecutionPolicy Bypass -File scripts\package\extract-usbd-sources.ps
 param(
     [string]$Win2KIso = "",
     [string]$Win98Iso = "",
-    [string]$ManifestPath = "",
     [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "common.ps1")
-. (Join-Path $PSScriptRoot "package-common.ps1")
+. (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "evidence-common.ps1")
 
 $repo = Get-RepoRoot
-if ($ManifestPath -eq "") { $ManifestPath = Get-UsbdSourceManifestPath }
 $work = Join-Path $env:TEMP ("xhci98-usbd-" + [System.IO.Path]::GetRandomFileName())
+
+# The Windows 2000 file's identity, as the retail SP4 ISO ships it. The
+# Windows 98 pair's identity lives in the import gate's evidence list, which
+# is read below rather than restated here.
+$w2kIdentity = [pscustomobject]@{
+    Path    = (Join-Path $repo "tools\win2ksp4-extracted\USBD.SYS")
+    Label   = "tools\win2ksp4-extracted\USBD.SYS (Windows 2000 SP4)"
+    Version = "5.00.2195.6658"
+    Length  = 20688
+    Sha256  = "45EE7C3D552E31BD21512E7C1D0190512492A8ADC9EE67B4A84D4A5D8EEB8927"
+}
 
 $sevenZip = Find-Tool "7z"
 if ($null -eq $sevenZip) {
@@ -134,11 +140,10 @@ function Get-Win98CabForFile {
 }
 
 try {
-    $rows = @(Read-UsbdSourceManifest -Path $ManifestPath -RepoRoot $repo)
     Ensure-Directory $work
 
-    # --- Windows 98 SE usbd.sys (+ usbhub.sys, the gate's precedent pair) ----
-    Write-Step "Windows 98 SE usbd.sys"
+    # --- Windows 98 SE usbd.sys + usbhub.sys (the gate's precedent pair) -----
+    Write-Step "Windows 98 SE usbd.sys and usbhub.sys"
 
     $w98Dir = Join-Path $repo "tools\win98se-extracted"
     Ensure-Directory $w98Dir
@@ -149,9 +154,9 @@ try {
         Write-Ok "already staged (pass -Force to redo)"
         foreach ($n in $w98Wanted) { Report-File (Join-Path $w98Dir $n) }
     } elseif ($Win98Iso -eq "") {
-        Write-Warn "no -Win98Iso given - skipping. The package cannot be built for the Win98 half without it."
+        Write-Warn "no -Win98Iso given - skipping the Windows 98 pair."
     } elseif (-not (Test-Path -LiteralPath $Win98Iso)) {
-        Write-Warn "Win98 SE ISO not found at '$Win98Iso' - skipping. The package cannot be built for the Win98 half without it."
+        Write-Warn "Win98 SE ISO not found at '$Win98Iso' - skipping the Windows 98 pair."
     } else {
         $loc = Get-Win98CabForFile -WorkDir $work -Iso $Win98Iso -Name "usbd.sys"
         Write-Host "  layout.inf: usbd.sys is on disk $($loc.Disk) = $($loc.Cab)"
@@ -178,15 +183,15 @@ try {
 
     $w2kDir = Join-Path $repo "tools\win2ksp4-extracted"
     Ensure-Directory $w2kDir
-    $w2kOut = Join-Path $w2kDir "USBD.SYS"
+    $w2kOut = $w2kIdentity.Path
 
     if ((Test-Path -LiteralPath $w2kOut) -and -not $Force) {
         Write-Ok "already staged (pass -Force to redo)"
         Report-File $w2kOut
     } elseif ($Win2KIso -eq "") {
-        Write-Warn "no -Win2KIso given - skipping. The package cannot be built for the Win2000 half without it."
+        Write-Warn "no -Win2KIso given - skipping the Windows 2000 file."
     } elseif (-not (Test-Path -LiteralPath $Win2KIso)) {
-        Write-Warn "Windows 2000 ISO not found at '$Win2KIso' - skipping. The package cannot be built for the Win2000 half without it."
+        Write-Warn "Windows 2000 ISO not found at '$Win2KIso' - skipping the Windows 2000 file."
     } else {
         Invoke-SevenZip @("e", "-y", "-o$work", $Win2KIso, "I386\USBD.SY_")
         $packed = Join-Path $work "USBD.SY_"
@@ -202,42 +207,45 @@ try {
     }
 
     # --- Authenticate whatever is now staged --------------------------------
-    Write-Step "Identity check against $ManifestPath"
+    Write-Step "Identity check"
+
+    $evidenceList = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "win98-evidence.list"
+    $w98Rows = @(Read-Win98EvidenceManifest -Path $evidenceList -RepoRoot $repo |
+                 Where-Object { $_.Relative -match '(?i)^tools\\win98se-extracted\\(usbd|usbhub)\.sys$' })
+    if ($w98Rows.Count -ne 2) {
+        throw "$evidenceList does not name both tools\win98se-extracted\usbd.sys and usbhub.sys; nothing can authenticate the Windows 98 pair."
+    }
+    $rows = @($w98Rows) + @($w2kIdentity)
 
     $present = @($rows | Where-Object { Test-Path -LiteralPath $_.Path })
     if ($present.Count -eq 0) {
-        # A run with no ISO arguments stages nothing, and a success exit would
-        # read as "staged" to a caller following the documented command.
         throw @"
-no source file is staged and this run staged none, so scripts\package\make-package.ps1
-has nothing to package. Name the install media:
+no reference file is staged and this run staged none. Name the install media:
   -Win98Iso <path to the Windows 98 SE CD image>
   -Win2KIso <path to the Windows 2000 SP4 CD image>
 Each stages its own target; either alone stages that half only.
 "@
-    } else {
-        $errors = @(Get-UsbdSourceValidationErrors -Rows $rows -SkipMissing)
-        if ($errors.Count -gt 0) {
-            throw @"
-staged source file(s) do not match '$ManifestPath':
+    }
+    $errors = @(Get-FileIdentityErrors -Rows $rows -SkipMissing)
+    if ($errors.Count -gt 0) {
+        throw @"
+staged file(s) do not match their recorded identity:
   - $($errors -join "`n  - ")
-Fix it one of these ways:
-  - re-run this script with -Force and the recorded install media
-  - delete the offending file and re-run with the media
-Do not package an unverified file: staging the wrong OS's usbd.sys is invisible
-after install, because both builds are called usbd.sys on the target.
+Re-run this script with -Force and the recorded install media, or delete the
+offending file and re-run with the media.
 "@
-        }
-        foreach ($r in $present) {
-            Write-Ok ("{0} -> {1} ({2})" -f $r.Relative, $r.Media, $r.Target)
-        }
-        if ($present.Count -lt $rows.Count) {
-            Write-Warn "only $($present.Count) of $($rows.Count) source files are staged; a full package needs both."
-        }
+    }
+    foreach ($r in $present) {
+        Write-Ok ("{0} is {1}" -f $r.Path, $r.Version)
+    }
+    if ($present.Count -lt $rows.Count) {
+        Write-Warn "only $($present.Count) of $($rows.Count) reference files are staged."
     }
 
     Write-Step "Done"
-    Write-Host "Next: scripts\package\make-package.ps1 to assemble the install media."
+    Write-Host "These are reference copies for the import gate and the Windows 2000 VM setup;"
+    Write-Host "the install media is assembled by scripts\package\make-package.ps1 and carries"
+    Write-Host "neither of them."
 } catch {
     Write-Err $_.Exception.Message
     exit 1

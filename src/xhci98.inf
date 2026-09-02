@@ -12,14 +12,18 @@
 ; SweetLow's) has already placed it in SYSTEM32\DRIVERS; on Win2000 SP4 it is
 ; native. Neither is copied here.
 ;
-; usbd.sys IS copied, and is the one file whose content differs per target.
-; usbhub20.sys imports USBD.SYS on both targets, and nothing on an xHCI-only
-; machine ever places it: Microsoft's usb.inf copies it only from the USB 1.1
-; sections and neither USB 2.0 stack ships it. Each target therefore gets its
-; own OS's build, carried on the media under a distinct name (usbd98.sys /
-; usbd2k.sys) and selected by the install section that runs, so neither engine
-; can reach the other's file. See docs\contributing\build-and-test.md,
-; "Carrying a per-target usbd.sys".
+; usbd.sys and usbhub.sys ARE copied, and neither travels on this media. Both
+; are the operating system's own files, and nothing on an xHCI-only machine
+; ever places them: Windows setup copies its USB driver files only when it
+; recognises a USB controller, and an xHCI-only machine looks empty to it.
+; usbhub20.sys imports USBD.SYS on both targets, so without usbd.sys the USB
+; 2.0 root hub cannot load; usbhub.sys is Windows 98's composite parent. So
+; this INF asks the setup engine to copy each from the OS's own install source
+; (LayoutFile= below), with flag 16 so a file already on the machine is never
+; touched, and Windows 2000 gets usbd.sys only. See
+; docs\contributing\build-and-test.md, "The files the OS supplies: usbd.sys
+; and usbhub.sys". Release 1.0.0.0 carried both on the media instead, under
+; per-target names; that was withdrawn before any upload.
 ;
 ; Both halves are transcribed from the shipping reference that installs the
 ; equivalent EHCI miniport on that target:
@@ -35,6 +39,16 @@ Signature="$CHICAGO$"
 Class=USB
 ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
+; LayoutFile is what lets the two OS files below come from the OS. A CopyFiles
+; entry whose file this INF's own [SourceDisksFiles] does not name is resolved
+; through the OS's layout.inf instead (C:\WINDOWS\INF\LAYOUT.INF on Windows 98,
+; %SystemRoot%\inf\layout.inf on Windows 2000), which records the cab each
+; file lives in, and the engine fetches it from the Windows source path: the
+; CABs on the hard disk (C:\WINDOWS\OPTIONS\CABS) or the Windows 98 CD, and
+; Windows 2000's own Driver Cache\i386\driver.cab. This is how the OS's own
+; INFs get their files, and Windows ME's USB.INF spells the same directive as
+; "LayoutFile=Layout.inf, Layout1.inf, Layout2.inf".
+LayoutFile=layout.inf
 ; DriverVer is not cosmetic on Windows 2000: the setup engine ranks candidate
 ; drivers by date-then-version, so a package whose version does not exceed the
 ; installed one is declined as not-better and an upgrade over an older build
@@ -52,7 +66,7 @@ Provider=%Provider%
 ; release date are edited. scripts\inf-gate\check-inf.ps1 refuses the two
 ; disagreeing, and scripts\package\make-package.ps1 checks the version compiled
 ; into the .sys it stages against this line.
-DriverVer=08/30/2026,1.0.0.0
+DriverVer=09/02/2026,1.0.0.1
 
 ; Provider and the manufacturer are two different fields. [Version]'s Provider
 ; is who supplied the driver (Driver tab, "Driver Provider"); the key below is
@@ -74,15 +88,12 @@ DriverVer=08/30/2026,1.0.0.0
 [SourceDisksNames]
 1=%DiskName%,xhci98.sys,,
 
-; usbd98.sys and usbd2k.sys are the two OS builds of the same usbd.sys, kept
-; apart on the media by name. The names are the media's, not the target's: both
-; are copied to SYSTEM32\DRIVERS as usbd.sys.
+; Only this project's two files are on the media. usbd.sys and usbhub.sys are
+; deliberately NOT listed: a file named here is fetched from this disk, and a
+; file not named here is fetched through LayoutFile from the OS's own source.
 [SourceDisksFiles]
 xhci98.sys=1
 xhci98.inf=1
-usbd98.sys=1
-usbd2k.sys=1
-usbhub98.sys=1
 
 ; Dirid 10 + System32\Drivers, never dirid 12: 12 resolves to
 ; \Windows\System\Iosubsys on Win98 and would install the driver to the wrong
@@ -258,56 +269,53 @@ LoadOrderGroup=Base
 xhci98.sys,,xhci98.tmp
 
 ; ------------------------------------------------------------------
-; The one file that differs per target: usbd.sys
+; The files the OS supplies: usbd.sys on both targets, usbhub.sys on 98
 ; ------------------------------------------------------------------
 ;
-; Field order is Destination,Source,Temporary,Flags (Oney p.386): the second
-; field is the name of the file on the distribution media when it differs from
-; the destination name, which is what keeps the two builds apart. Each section
-; names exactly one of them, and each section is reachable from exactly one
-; install path, so no ordering, version comparison or engine behaviour can let
-; Win98's build land on Win2000 or the reverse.
-;
-; Flag 16 = COPYFLG_NO_OVERWRITE, "do not copy if file exists on target"
+; Neither file is in [SourceDisksFiles], so each is resolved through
+; LayoutFile (see [Version]) and fetched from the OS's own install source
+; under its own name: each target gets its own OS's build by construction,
+; and the media carries no Microsoft file. The one flag is 16 =
+; COPYFLG_NO_OVERWRITE, "do not copy if file exists on target"
 ; (SETUPAPI.H). Presence is the entire requirement (usbhub20.sys needs the
-; import to resolve), so an existing usbd.sys is left strictly alone whatever
-; its version. That is deliberately stronger than the version-based flags: 4
-; (COPYFLG_NOVERSIONCHECK) would overwrite a newer hotfix build, and 32
-; (COPYFLG_NO_VERSION_DIALOG) still replaces an older one for no benefit. The
-; reference INFs use decimal in this field, so this does too. Should an engine
-; ignore the flag, the Win98 path is still safe: usbd98.sys is bit-for-bit
-; the file Win98 SE's own media ships.
+; import to resolve), so an existing file is left strictly alone whatever its
+; version: a machine that ever had a USB 1.1 controller already has both, and
+; is asked for nothing. That is deliberately stronger than the version-based
+; flags: 4 (COPYFLG_NOVERSIONCHECK) would overwrite a newer hotfix build, and
+; 32 (COPYFLG_NO_VERSION_DIALOG) still replaces an older one for no benefit.
+; The reference INFs use decimal in this field, so this does too.
 ;
-; ------------------------------------------------------------------
-; usbhub.sys - WINDOWS 98 ONLY, and the asymmetry is the point
-; ------------------------------------------------------------------
+; What the user sees on an xHCI-only Windows 98 machine is the engine's own
+; "Insert Disk" prompt naming the Windows 98 CD, unless the CABs are on the
+; hard disk (OEM and Windows 98 QuickInstall installs), in which case nothing
+; is asked. Windows 2000 takes usbd.sys from its driver cache and asks for
+; nothing. Measured 2026-09-02 in the VMs; docs\using\release-notes.md states
+; it for the user.
 ;
 ; usbhub.sys is Windows 98's composite parent driver: USB.INF binds a
 ; multi-interface device to it, and without it every composite device on a
 ; NUSB machine stops at "USB Composite Device" with Code 2 (matched but
-; unloadable). It is absent for the same reason usbd.sys is: Windows 98 ships
-; USB.INF on every install but copies the USB driver files only when setup
-; detects a USB controller, and an xHCI-only machine looks empty to Win98
-; setup. Under SweetLow's stack composites are parented by its usbccgp.sys
-; instead, and this copy is inert there.
+; unloadable). Under SweetLow's stack composites are parented by its
+; usbccgp.sys instead, and this copy is inert there.
 ;
 ; It is NOT delivered to Windows 2000, deliberately. There usbhub.sys is the
 ; name of the OS's own USB 1.1 hub driver and the composite parent is
-; usbccgp.sys; delivering Win98 SE's build toward that target would be wrong
-; even with flag 16 protecting it. Win2000 also does not need the help: setup
-; copies driver.cab unconditionally and PnP pulls in-box drivers from it with
-; no media prompt. That reasoning is structural rather than observed, since no
-; xHCI-only Windows 2000 vehicle exists in this project.
+; usbccgp.sys, both placed from driver.cab by every install, so there is
+; nothing for this INF to add and asking for it would be wrong even with flag
+; 16 protecting it. That reasoning is structural rather than observed, since
+; no xHCI-only Windows 2000 vehicle exists in this project.
 ;
-; scripts\inf-gate\check-inf.ps1 enforces the asymmetry in BOTH directions: the
-; Win98 path must deliver it and the Win2000 path must not.
+; scripts\inf-gate\check-inf.ps1 enforces all of it: LayoutFile present,
+; neither file in [SourceDisksFiles], each path copying usbd.sys with flag 16
+; to 10,System32\Drivers, and usbhub.sys on the Windows 98 path and not on the
+; Windows 2000 one.
 
 [Xhci.CopyW98]
-usbd.sys,usbd98.sys,,16
-usbhub.sys,usbhub98.sys,,16
+usbd.sys,,,16
+usbhub.sys,,,16
 
 [Xhci.CopyW2K]
-usbd.sys,usbd2k.sys,,16
+usbd.sys,,,16
 
 [Inf.CopyFiles]
 xhci98.inf

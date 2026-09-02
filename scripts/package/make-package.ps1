@@ -4,39 +4,27 @@ Assemble the install package both targets are installed from.
 
 .DESCRIPTION
 The package is an 8.3-clean directory - a floppy image, a VVFAT share, or a
-CD - holding everything [SourceDisksFiles] names:
+CD - holding everything [SourceDisksFiles] names, which since release 1.0.0.1
+is this project's two files and nothing else:
 
     xhci98.inf     the dual-path INF
     xhci98.sys     the built miniport (debug or release)
-    usbd98.sys     Windows 98 SE's usbd.sys, renamed for the media
-    usbd2k.sys     Windows 2000 SP4's usbd.sys, renamed for the media
-    usbhub98.sys   Windows 98 SE's usbhub.sys - its composite parent, added
-                   by batch 13-E. Windows 98 only, deliberately
 
-scripts\package\usbd-sources.expected is the authority for that list; a row
-added there is staged, authenticated and gated without editing this file.
+The two Microsoft files the driver depends on, usbd.sys (both targets) and
+usbhub.sys (Windows 98 only), are not on the media: the INF names
+LayoutFile=layout.inf and the Windows setup engine copies them from the
+operating system's own install source (docs\contributing\build-and-test.md,
+"The files the OS supplies"). Release 1.0.0.0 carried them here under
+per-target media names, authenticated against a manifest; that was withdrawn
+before any upload, and check-inf.ps1 -PackageDir now refuses a package that
+carries a Microsoft file under any name.
 
 Where each file goes is not decided here. check-inf.ps1 -EmitMediaLayout is
 asked for the layout its own [SourceDisksFiles] parse produces, and this script
 stages against that - so a per-file subdirectory is honoured automatically and
-the staged path and the authenticated path cannot drift apart. That call also
-gates the INF *before* anything is copied, which is the right order: there is
-no value in staging a package around an INF that will be rejected.
-
-One package serves both targets. The per-target file is selected by the install
-section the running setup engine picks, not by which package was copied: the
-undecorated [Xhci.Dev] names usbd98.sys and the decorated [Xhci.Dev.NTx86]
-names usbd2k.sys, so neither engine can reach the other's file. Both are copied
-to SYSTEM32\DRIVERS as usbd.sys with COPYFLG_NO_OVERWRITE, so an existing
-usbd.sys is never replaced.
-
-The rename is where the split could silently break, so it is checked twice:
-each source is authenticated against scripts\package\usbd-sources.expected
-before it is copied, and check-inf.ps1 -PackageDir re-checks the finished
-package by media name afterwards. A swapped pair is invisible on the target -
-both builds are called usbd.sys once installed - and would surface as
-usbhub20.sys failing to load, the exact symptom this whole mechanism exists to
-prevent.
+the staged path and the gated path cannot drift apart. That call also gates
+the INF *before* anything is copied, which is the right order: there is no
+value in staging a package around an INF that will be rejected.
 
 .PARAMETER Flavor
 debug (default), release or qemu - which src\obj*\i386\xhci98.sys to package.
@@ -142,7 +130,6 @@ param(
     [string]$OutDir = "",
     [string]$InfPath = "",
     [string]$DriverPath = "",
-    [string]$ManifestPath = "",
     [switch]$SkipPackageGate,
     [switch]$SkipBinaryGates,
     [switch]$NoTargetEvidence,
@@ -155,7 +142,6 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "package-common.ps1")
 
 $repo = Get-RepoRoot
-if ($ManifestPath -eq "") { $ManifestPath = Get-UsbdSourceManifestPath }
 if ($InfPath -eq "") { $InfPath = Join-Path $repo "src\xhci98.inf" }
 if ($DriverPath -eq "") {
     # Three flavours, two of them checked: "objchk" alone stopped identifying a
@@ -509,34 +495,6 @@ looks exactly like a bad INF.
         }
     }
 
-    $rows = @(Read-UsbdSourceManifest -Path $ManifestPath -RepoRoot $repo)
-
-    # Authenticate before copying, not after: an unverified file that has
-    # already been written into the package is one careless -SkipPackageGate
-    # away from a VM. (This comment said -SkipInfGate until a later pass; no such
-    # parameter exists, and a reader hunting the actual bypass would not have
-    # found it. The two that do exist are -SkipPackageGate and -SkipBinaryGates.)
-    $missing = @($rows | Where-Object { -not (Test-Path -LiteralPath $_.Path) })
-    if ($missing.Count -gt 0) {
-        throw @"
-missing per-target source file(s):
-  - $(($missing | ForEach-Object { "$($_.Relative)  (the $($_.Target) build, staged as $($_.Media))" }) -join "`n  - ")
-Stage them from the install media:
-  powershell -ExecutionPolicy Bypass -File scripts\package\extract-usbd-sources.ps1
-tools\ is git-ignored, so a fresh clone always starts here.
-"@
-    }
-    $errors = @(Get-UsbdSourceValidationErrors -Rows $rows)
-    if ($errors.Count -gt 0) {
-        throw @"
-per-target source file(s) do not match '$ManifestPath':
-  - $($errors -join "`n  - ")
-Re-stage them with scripts\package\extract-usbd-sources.ps1 -Force. Do not
-package an unverified usbd.sys: on the target both builds are called usbd.sys,
-so the wrong one is undetectable until usbhub20.sys fails to load.
-"@
-    }
-
     # --- where each file goes, from the gate's own parse ---------------------
     Write-Step "INF gate, and the media layout it derives"
 
@@ -547,7 +505,7 @@ so the wrong one is undetectable until usbhub20.sys fails to load.
         $ErrorActionPreference = "Continue"
         try {
             & powershell -NoProfile -ExecutionPolicy Bypass -File $gate `
-                -InfPath $InfPath -SourceManifest $ManifestPath -EmitMediaLayout $layoutFile `
+                -InfPath $InfPath -EmitMediaLayout $layoutFile `
                 @gateExtra
         } finally {
             $ErrorActionPreference = $savedEap
@@ -566,15 +524,15 @@ so the wrong one is undetectable until usbhub20.sys fails to load.
     # for a file the package cannot contain. xhci98.inf is also staged at the
     # package root unconditionally - that is the file the user points setup at.
     $staging = @{ "xhci98.inf" = $InfPath; "xhci98.sys" = $DriverPath }
-    foreach ($r in $rows) { $staging[$r.Media.ToLowerInvariant()] = $r.Path }
 
     $unsourced = @($layout.Keys | Where-Object { -not $staging.ContainsKey($_) })
     if ($unsourced.Count -gt 0) {
         throw @"
 [SourceDisksFiles] in '$InfPath' names file(s) this script has no source for:
   - $($unsourced -join "`n  - ")
-Add them to the staging table in scripts\package\make-package.ps1, or to
-'$ManifestPath' if they are per-target.
+Add them to the staging table in scripts\package\make-package.ps1. A Microsoft
+file is never one of them: since 1.0.0.1 the OS supplies usbd.sys and
+usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
 "@
     }
 
@@ -597,17 +555,6 @@ Add them to the staging table in scripts\package\make-package.ps1, or to
         Copy-Item -LiteralPath $InfPath -Destination $rootInf -Force
     }
 
-    # Re-check by media name, at the path each file was actually staged to.
-    # The copy above is the only place the two builds could be interchanged,
-    # and this is the one check that would notice.
-    $packErrors = @(Get-PackagedFileValidationErrors -Rows $rows -PackageDir $stageDir -MediaPaths $mediaPaths)
-    if ($packErrors.Count -gt 0) {
-        throw @"
-the staged package does not match '$ManifestPath':
-  - $($packErrors -join "`n  - ")
-"@
-    }
-
     Write-Host ""
     foreach ($item in (Get-ChildItem -LiteralPath $stageDir -File -Recurse | Sort-Object FullName)) {
         $version = $item.VersionInfo.FileVersion
@@ -616,9 +563,6 @@ the staged package does not match '$ManifestPath':
         Write-Host ("  {0,-22} {1,9} B  {2}" -f $shown, $item.Length, $version)
     }
     Write-Host ""
-    foreach ($r in $rows) {
-        Write-Ok ("{0} is the {1} build ({2}), reachable only from that target's install section" -f $r.Media, $r.Target, $r.Version)
-    }
 
     #
     # **The version the media actually carries, checked against the INF beside
@@ -692,7 +636,7 @@ a build that was never made.
         $ErrorActionPreference = "Continue"
         try {
             & powershell -NoProfile -ExecutionPolicy Bypass -File $gate `
-                -InfPath $rootInf -PackageDir $stageDir -SourceManifest $ManifestPath `
+                -InfPath $rootInf -PackageDir $stageDir `
                 @gateExtra
         } finally {
             $ErrorActionPreference = $savedEap

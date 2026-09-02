@@ -27,8 +27,8 @@ evidence rather than a warning.
       with the Win98/NUSB precedent binaries, which are staged elsewhere rather
       than by this script: the NUSB set by the Phase 2a package extraction, and
       Win98 SE's own usbd.sys/usbhub.sys by
-      scripts\package\extract-usbd-sources.ps1, which needs usbd.sys anyway
-      because xhci98.inf carries it.
+      scripts\package\extract-usbd-sources.ps1 (reference copies only; the
+      media has not carried them since 1.0.0.1).
 
 Existing files are left alone unless -Force is given. Nothing here touches the
 VMs or the driver build.
