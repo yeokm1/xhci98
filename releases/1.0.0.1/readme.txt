@@ -202,7 +202,8 @@ modern interrupt mechanism (MSI) that such a controller would require.
                      real machine). 32-bit Windows XP has never been run at
                      all.
 
-  On Windows 98      NUSB 3.3, installed BEFORE this driver.
+  On Windows 98      NUSB 3.3e or the newer SweetLow USB 2.0 stack, your
+                     choice, installed BEFORE this driver (section 4).
 
   On Windows ME      SweetLow's USB 2.0 stack, installed BEFORE this driver
                      (section 4). NOT NUSB: that is a Windows 98 SE package.
@@ -288,19 +289,21 @@ Put the whole unzipped package somewhere the machine can read - a floppy, a
 CD, a shared folder - then:
 
   WINDOWS 98 SE
-      A USB 2.0 stack (usbport.sys + usbhub20.sys) has to be there first.
-      Two options:
+      A USB 2.0 stack (usbport.sys + usbhub20.sys) has to be there first:
+      either NUSB 3.3e or the newer SweetLow stack, your choice.
 
-        NUSB 3.3 - the configuration this driver is tested against. Install
-        it first. NUSB 3.6 carries the same stack and also works.
+        NUSB 3.3e - the configuration this driver is tested against.
+        Install it first. NUSB 3.6 carries the same stack and also works.
 
         SWEETLOW'S STACK - the newer Windows XP lineage of the same port
         driver, under which disabling, removing and upgrading this driver
         do NOT crash Windows 98 (section 5). A system installed with
         Windows 98 QuickInstall 1.0.1 or later already has it. On any other
-        Windows 98 SE, fetch the [MBD]_sweetlow_usb2.0 folder from
-        https://github.com/oerg866/win98-driver-lib-base, right-click its
-        USB2.INF, choose Install, and reboot. If NUSB is already installed,
+        Windows 98 SE, download
+        http://sweetlow.orgfree.com/download/usb20_win9x.zip (the same
+        files win98-driver-lib-base carries as [MBD]_sweetlow_usb2.0),
+        unzip it, right-click the USB2.INF at its root, choose Install,
+        and reboot. If NUSB is already installed,
         first remove its USB 2.0 stack through Add/Remove Programs ("Remove
         Unofficial Universal USB 2.0 Stack"), then install SweetLow's before
         rebooting.

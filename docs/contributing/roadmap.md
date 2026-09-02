@@ -1548,14 +1548,21 @@ Tasks:
   post-release run, and the acceptance test's per-target steps.
   Not applicable: 18.4 chose supported-in-VM, so no matrix rows and no
   fresh target; the acceptance test gained the Windows ME rows under 18.4.
-- [ ] 18.6 The `1.0.0.1` entry in `releases/history.md` gains the Windows
+- [x] 18.6 The `1.0.0.1` entry in `releases/history.md` gains the Windows
   ME line the tier decision justifies, and `DriverVer`, `src/xhci_version.h`
   and that entry's date all move to the day of the cut.
+  Done 2026-09-02: the Windows ME line is in the entry (under 18.4), and
+  the cut is the same day the three dates already carried, so none moved;
+  `make-release.ps1` checked that they agree.
 - [ ] 18.7 Cut `1.0.0.1` with `make-release.ps1` on the full flavour set,
   every gate green, and run the release acceptance test on each target with
   the new procedure: Windows 98 once with the CABs absent so the CD prompt is
   exercised and once with them present; Windows 2000 once; Windows ME per
   18.4's tier.
+  The cut: done 2026-09-02 (`1cad620`), `releases/1.0.0.1/` and
+  `out\xhci98-1.0.0.1.zip` (245,029 B), every gate green, the asset holding
+  the two files per flavour, the two tools with their readmes and NOTICEs,
+  `LICENSE` and `readme.txt`, nothing else. The acceptance runs are owed.
 
 Checkpoint: a Windows ME guest boots the driver, the root hub comes up, a HID
 device and a mass-storage device work, and the tier is stated; and the asset

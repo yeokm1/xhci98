@@ -110,7 +110,8 @@ and how to read each result.
 The package is a directory holding two files, `xhci98.inf` and
 `xhci98.sys`, and no Microsoft file.
 
-- Windows 98 SE: install NUSB 3.3 (or SweetLow's stack) first. Then Device
+- Windows 98 SE: install NUSB 3.3e or the newer SweetLow stack first, your
+  choice (README, installation steps). Then Device
   Manager -> the unrecognised xHCI device -> *Update Driver* -> *Specify a
   location* -> the package directory.
 - Windows 2000 SP4: Device Manager -> the unrecognised xHCI device ->

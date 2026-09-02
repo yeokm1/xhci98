@@ -74,8 +74,11 @@ SweetLow's stack, and HID, mass storage and a composite audio device bound
 (`build-and-test.md`, "Windows ME target VM", has every reading). 18.4
 is decided (supported in VM, like Windows 2000; every document it names is
 edited) and 18.5 is therefore not applicable; the `1.0.0.1` history entry
-carries the Windows ME line (18.6's first half). What remains is the date
-move if the cut is not on 2026-09-02, and the cut itself (18.7). The plan as it was written,
+carries the Windows ME line (18.6's first half). The cut was made the same
+night (`1cad620`): `releases/1.0.0.1/` and `out\xhci98-1.0.0.1.zip`, every
+gate green. What remains of 18.7 is the acceptance test per target from
+that asset: Windows 98 with the CABs absent (the CD prompt) and present,
+Windows 2000, and Windows ME under SweetLow's stack. The plan as it was written,
 items 1 and 2 done, follows:
 
 1. Install Windows ME by hand: `scripts\setup-qemu.ps1 -WinMeIso
