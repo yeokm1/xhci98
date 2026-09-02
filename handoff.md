@@ -71,9 +71,11 @@ The owner decided that Windows ME support ships in 1.0.0.1. Late on
 (snapshots `winme-clean-install`, `winme-stock-stack-driver-attempt`, then
 the SweetLow-stack driver state), the driver registered and started under
 SweetLow's stack, and HID, mass storage and a composite audio device bound
-(`build-and-test.md`, "Windows ME target VM", has every reading). What
-remains is 18.4 (the owner's tier decision and the documents it names),
-18.5 if first-class, 18.6 and the cut (18.7). The plan as it was written,
+(`build-and-test.md`, "Windows ME target VM", has every reading). 18.4
+is decided (supported in VM, like Windows 2000; every document it names is
+edited) and 18.5 is therefore not applicable; the `1.0.0.1` history entry
+carries the Windows ME line (18.6's first half). What remains is the date
+move if the cut is not on 2026-09-02, and the cut itself (18.7). The plan as it was written,
 items 1 and 2 done, follows:
 
 1. Install Windows ME by hand: `scripts\setup-qemu.ps1 -WinMeIso

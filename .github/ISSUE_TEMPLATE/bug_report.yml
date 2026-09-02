@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for reporting. This is a hobby driver for two operating systems
+        Thanks for reporting. This is a hobby driver for operating systems
         that left support two decades ago, so bugs are expected - what makes a
         report useful is being able to tell your machine apart from everybody
         else's.
@@ -26,6 +26,7 @@ body:
       label: Operating system
       options:
         - Windows 98 SE
+        - Windows ME
         - Windows 2000 SP4
         - Windows 2000, earlier than SP4
         - Windows XP, 32-bit

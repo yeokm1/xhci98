@@ -1533,12 +1533,21 @@ Tasks:
   and game controllers; the controller and "USB 2.0 Root Hub" clean. No
   refusal counter moved. `endpoints opened` stays 3 because the isochronous
   endpoint is opened only when a stream starts.
-- [ ] 18.4 Decide the tier and state it: `AGENTS.md` (purpose and the target
+- [x] 18.4 Decide the tier and state it: `AGENTS.md` (purpose and the target
   table), `README.md`, the release notes' requirements, the bug-report form's
   operating-system list, and the INF's header comment. Until then none of
   them names Windows ME as supported.
-- [ ] 18.5 If first-class: matrix rows and a fresh target for the
+  Decided 2026-09-02 by the owner: supported in virtual machines, stated
+  the way Windows 2000's status is stated, under SweetLow's stack only, with
+  no checkpoint tax. Stated the same day in `AGENTS.md` (purpose and the
+  Quick Reference table), `README.md`, the release notes ("What this is",
+  "Requirements", "Installing"), both issue forms, the INF header comment,
+  the generated `readme.txt` (sections 1 to 4) and the acceptance test
+  (rows 4.5, 7.7 and 7.8).
+- [x] 18.5 If first-class: matrix rows and a fresh target for the
   post-release run, and the acceptance test's per-target steps.
+  Not applicable: 18.4 chose supported-in-VM, so no matrix rows and no
+  fresh target; the acceptance test gained the Windows ME rows under 18.4.
 - [ ] 18.6 The `1.0.0.1` entry in `releases/history.md` gains the Windows
   ME line the tier decision justifies, and `DriverVer`, `src/xhci_version.h`
   and that entry's date all move to the day of the cut.

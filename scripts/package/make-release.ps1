@@ -1709,14 +1709,14 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
     $template = @'
 ==============================================================================
                               x h c i 9 8   {VERSION}
-        USB 2.0 for Windows 98 SE and Windows 2000 on xHCI-only machines
+      USB 2.0 for Windows 98 SE, ME and 2000 SP4 on xHCI-only machines
 ==============================================================================
 
 Released {DATE}.
 
 Most x86 PCs made from around the mid 2010s onward have USB 3.0 (xHCI)
-controllers and nothing else. Neither Windows 98 SE nor Windows 2000 has any
-support for those. This driver fills that gap.
+controllers and nothing else. Neither Windows 98 SE, Windows ME nor Windows
+2000 has any support for those. This driver fills that gap.
 
 It gives you USB 2.0 speeds: High Speed, Full Speed and Low Speed. USB 3.0
 SuperSpeed is out of scope. A USB 3.0 device still works, at USB 2.0 speed,
@@ -1906,10 +1906,17 @@ modern interrupt mechanism (MSI) that such a controller would require.
  2. WHAT YOU NEED
 ==============================================================================
 
-  Operating system   Windows 98 SE (4.10.2222) or Windows 2000 SP4.
-                     32-bit Windows XP has never been run at all.
+  Operating system   Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows
+                     ME in virtual machines only (it has never been run on a
+                     real machine). 32-bit Windows XP has never been run at
+                     all.
 
   On Windows 98      NUSB 3.3, installed BEFORE this driver.
+
+  On Windows ME      SweetLow's USB 2.0 stack, installed BEFORE this driver
+                     (section 4). NOT NUSB: that is a Windows 98 SE package.
+                     Windows ME's own USB stack has no usbport.sys, and on
+                     it this driver installs and shows Code 2.
 
   On Windows 2000    SP4's own USB stack, or the standalone USB 2.0 update
                      KB319973. DO NOT install NUSB on Windows 2000.
@@ -1957,6 +1964,10 @@ keeps its own files and is asked for nothing.
                   then asks where to copy from, give it the CD's WIN98
                   folder. It is asking for usbd.sys and usbhub.sys, not for
                   anything of this driver's.
+
+  WINDOWS ME      The same as Windows 98 SE, with the Windows ME CD. The
+                  machine tried (a virtual one) had the CABs on its hard
+                  disk from its own Setup and asked for nothing.
 
   WINDOWS 2000    Nothing to do: usbd.sys comes from the driver cache every
                   Windows 2000 installation has.
@@ -2015,6 +2026,17 @@ CD, a shared folder - then:
 
       (If Windows finds the controller for you first, the Add New Hardware
       Wizard asks the same question - give it RELEASE\ too.)
+
+  WINDOWS ME
+      SweetLow's stack has to be there first, and only that one: NUSB is a
+      Windows 98 SE package and is not for Windows ME. Download
+      http://sweetlow.orgfree.com/download/usb20_win9x.zip, unzip it,
+      right-click the USB2.INF at its root, choose Install, and reboot.
+      Then the same Device Manager route as Windows 98 SE:
+          Properties -> Driver -> Update Driver -> Specify a location
+      pointed at the RELEASE\ directory. Without the stack the driver
+      installs and the controller shows Code 2. Windows ME has only been
+      run in a virtual machine.
 
   WINDOWS 2000 SP4
       Open Device Manager and find the unrecognised xHCI controller, then

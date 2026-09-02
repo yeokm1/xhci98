@@ -35,6 +35,14 @@ driver depends on come from Windows itself.
   what happens if the prompt is cancelled. A machine that ever had a USB 1.1
   controller already has the files and is not asked. Windows 2000 asks for
   nothing.
+- Windows ME is a supported target, in virtual machines only and under
+  SweetLow's USB 2.0 stack only, the standing Windows 2000 has. On
+  2026-09-02 a Windows ME guest loaded and started the driver and bound a
+  HID mouse, a USB mass-storage device and a composite audio device. Its
+  stock USB stack has no `usbport.sys`, so on a stock Windows ME machine the
+  driver installs and shows Code 2 until SweetLow's stack is installed;
+  NUSB is a Windows 98 SE package and is not for Windows ME. The INF is
+  unchanged by this: Windows ME reads its Windows 98 half.
 - `xhci98.sys` is rebuilt only so that its version resource matches; no
   driver code changed between `1.0.0.0` and this release.
 

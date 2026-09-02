@@ -33,6 +33,16 @@ VM, the SMP stress environment, the device matrix), not by metal. Do not write
 bare-metal Windows 98 result as covering Windows 2000.
 `docs/using/release-notes.md` states it under "What this is".
 
+Windows ME is a third target of that same standing, supported in virtual
+machines, since the owner's decision of 2026-09-02: one QEMU guest, under
+SweetLow's USB 2.0 stack only (its stock USB stack has no `usbport.sys`, so
+on a stock machine the driver installs and shows Code 2), the driver
+registered and started, and a HID mouse, a mass-storage device and a
+composite audio device bound. It carries no checkpoint tax: no phase waits
+on a Windows ME observation and "observed on both" does not include it. It
+has never run on real hardware. `docs/contributing/build-and-test.md`,
+"Windows ME target VM", is the record.
+
 Neither OS has xHCI support. Windows 98 shipped with UHCI/OHCI (USB 1.1) and
 got EHCI (USB 2.0) only through later back-ports: the Win2000-derived stack in
 NUSB, which is what the project tests against, and SweetLow's XP-derived
@@ -48,6 +58,7 @@ stack natively in SP4. This driver fills the gap for both.
 |---|---|
 | Primary targets | Windows 98 SE (4.10.2222) and Windows 2000 SP4 - one binary, both required |
 | Secondary targets | 32-bit Windows XP (best-effort) - one binary, accommodate it where the change is small and low-risk, but do not compromise either primary target or add checkpoint waits for it. Its registration packet is statically compatible, but runtime support remains unvalidated; see `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" |
+| Supported in VM | Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax. Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM" |
 | USB scope | USB 2.0 (HS/FS/LS) only; HID, mass storage, USB Ethernet, and USB Audio validation targets. USB 3.0 SuperSpeed is out of scope (see `docs/usb-xhci-info/xhci-programming.md`, "What SuperSpeed Support Would Require") |
 | Integration model | `usbport.sys` miniport (Option A) - reuse the USB 2.0 stack already on the target (NUSB's Win2000-derived build, SP4's native one, or SweetLow's XP-derived rebuild on Windows 98); do not re-implement the USB stack |
 | Compiler | MSVC 6.0, run in place from `tools/MSVC600` (unpacked from `tools/MSVC600.zip`) |

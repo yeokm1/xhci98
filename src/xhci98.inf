@@ -10,7 +10,11 @@
 ; because xhci98.sys imports USBPORT_RegisterUSBPortDriver from it, and the
 ; loader resolves that at image load. On Win98 the USB 2.0 stack (NUSB, or
 ; SweetLow's) has already placed it in SYSTEM32\DRIVERS; on Win2000 SP4 it is
-; native. Neither is copied here.
+; native. Neither is copied here. Windows ME reads the undecorated half too
+; (the same setup engine) and needs SweetLow's USB 2.0 stack first: its stock
+; USB stack has no usbport.sys, so on a stock Windows ME machine the driver
+; installs and NTKERN reports Code 2. Windows ME is supported in virtual
+; machines only (docs\contributing\build-and-test.md, "Windows ME target VM").
 ;
 ; usbd.sys and usbhub.sys ARE copied, and neither travels on this media. Both
 ; are the operating system's own files, and nothing on an xHCI-only machine
