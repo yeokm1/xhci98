@@ -66,8 +66,15 @@ keystroke with escape codes, and the prep monitor port is the config's plus
 
 ## Phase 18: Windows ME, then the cut
 
-The owner decided that Windows ME support ships in 1.0.0.1. Everything that
-needs no guest is done; what remains is the guest:
+The owner decided that Windows ME support ships in 1.0.0.1. Late on
+2026-09-02 tasks 18.1, 18.2 and 18.3 were observed: `vm\winme.img` installed
+(snapshots `winme-clean-install`, `winme-stock-stack-driver-attempt`, then
+the SweetLow-stack driver state), the driver registered and started under
+SweetLow's stack, and HID, mass storage and a composite audio device bound
+(`build-and-test.md`, "Windows ME target VM", has every reading). What
+remains is 18.4 (the owner's tier decision and the documents it names),
+18.5 if first-class, 18.6 and the cut (18.7). The plan as it was written,
+items 1 and 2 done, follows:
 
 1. Install Windows ME by hand: `scripts\setup-qemu.ps1 -WinMeIso
    'D:\isos\Windows Me OEM Full.iso' -CreateDisk` writes

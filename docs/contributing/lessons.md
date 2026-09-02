@@ -151,6 +151,54 @@ change visible.
 Affected: `scripts/vm-matrix/matrix.config.psd1` (the `2a-sweetlow` entry's
 comment), `scripts/vm-matrix/prepare-image.ps1`.
 
+## Windows ME on QEMU: the ME CD's own FORMAT never writes a sector, and its Setup restarts wedge like Windows 98's
+
+Environment: Phase 18, 2026-09-02, scoop QEMU 11.0.0, `-machine pc -cpu
+pentium3 -m 256`, the Windows ME OEM Full CD (El Torito, `[BOOT]\Boot-1.44M.img`),
+a fresh 4 GB qcow2 (`vm\winme.img`).
+
+Observed, three things:
+
+1. Booting the ME CD, its menu defaults straight into Setup without `/p j`
+   (F3 exits). After `fdisk` and a relaunch, `D:\WIN9X\FORMAT C:` printed
+   "Formatting 4,094.66M / 0 percent completed" and stayed there: `info
+   blockstats` showed `ide0-hd0 wr_operations=0` and six reads for the whole
+   run, `info registers` a real-mode CPU with IF clear looping in
+   `CS=3bd4` whose entire segment read back as zeros through `xp`, and the
+   stack filling with one repeated far pointer (`3bd4:e99b`), the stack
+   pointer falling by about 0x3a0 every half second. The program's image
+   in memory was gone and the CPU was executing what was left. The cause
+   was not chased. Windows 98 SE's `format c:` from the Windows 98 SE CD's
+   boot floppy, with the ME ISO attached as the second CD-ROM, formatted
+   the same partition in about thirty seconds, and `E:\WIN9X\SETUP.EXE /p
+   j` from that DOS installed Windows ME normally.
+2. Windows ME OEM Setup's copy phase reads the CD once (about 167 MB) and
+   then works from the hard disk in 512-byte BIOS operations at about 1
+   MB/s, so the file-copy bar sits at 10 to 25 percent for many minutes with
+   the disk busy; it is not stuck. The later INF installs (SweetLow's
+   `USB2.INF`, the driver package) asked for no CD, consistent with the CABs
+   being on the disk.
+3. Every restart the guest initiated, Setup's own included, wedged at the
+   Windows ME logo: the "guest reboot after a driver install wedges at the
+   splash" of the Windows 98 lesson above, with its mechanism now read:
+   after the warm reset the local APIC's LINT0 is masked (`info lapic`:
+   `LVT0 0x00010000`, `SPIV ... APIC disabled`), the 8259 holds IRQ0
+   pending and unmasked (`pic0 irr=11 imr=b8`), and IO.SYS spins on the BIOS
+   tick word at `0040:006C` (`cmp %es:0x46c,%dx / je`). A cold launch shows
+   `LVT0 0x00000700 ExtINT` and boots through.
+
+Reusable rules:
+
+- Format a Windows ME target's disk from the Windows 98 SE CD's boot
+  floppy, with the ME CD as the second CD-ROM; `setup-qemu.ps1 -WinMeIso
+  ... -Win98Iso ...` writes the launcher that way. Do not wait on the ME
+  CD's FORMAT.
+- A Win9x copy-phase bar is judged by `info blockstats`, not by the
+  percentage: a hard disk with rising `wr_operations` is progressing.
+- On these guests a restart is a Start-menu shutdown and a relaunch. When a
+  guest sits at the logo, `info lapic` with `LVT0` masked and `info pic`
+  with `irr` bit 0 set is the signature; kill QEMU and cold-start.
+
 ## Task 14.1.7 - the review-method rules earned across the audit rounds, salvaged out of the cross-phase review record
 
 These rules were carried in a consolidated cross-phase review record under
@@ -5909,6 +5957,12 @@ so `DriverEntry` had not run, and the CPU was in real mode (`CR0=0x10`,
 BIOS tick at `40:6C` to advance. `info irq` showed IRQ0 still being
 delivered (81091 -> 81190 over 4 s) while the tick word never changed.
 Killing QEMU and cold-starting boots straight through, every time.
+Mechanism, found 2026-09-02 on the Windows ME guest, which wedges the same
+way: after the guest-initiated warm reset `info lapic` shows the local
+APIC's LINT0 masked (`LVT0 0x00010000`), so the 8259's IRQ0, pending and
+unmasked there (`info pic`: `pic0 irr=11 imr=b8`), never reaches the CPU;
+a cold launch shows `LVT0 0x00000700 ExtINT`. See "Windows ME on QEMU"
+below the QEMU 11.1.0-rc2 entry.
 
 ### Reusable rules
 

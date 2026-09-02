@@ -1260,13 +1260,15 @@ separate, required checks.
 ### Windows ME target VM (`2e`)
 
 Windows ME support was asked for by the project owner on 2026-09-02, after
-the SweetLow-stack work, and this is where it stands: nothing has run on
-Windows ME yet. No Windows ME guest exists, the driver has not been loaded
-there, and no document in this repository may say the driver supports it
-until a guest has been observed. What follows is what was established
-statically from the owner's Windows ME OEM CD image on 2026-09-02 (the
-`win9x\` directory's `PRECOPY1.CAB`, read with 7-Zip; nothing executed) and
-the recipe for the observation.
+the SweetLow-stack work, and the same evening a Windows ME guest
+(`vm\winme.img`, target `2e`) was installed and the driver observed on it
+under SweetLow's stack: registration, `StartController`, the root-hub
+callbacks, then a HID mouse, a mass-storage device and a composite (audio)
+device, all bound. What tier that makes Windows ME is the owner's decision
+(roadmap task 18.4), and no document names it as supported until that is
+taken. What follows is what was established statically from the owner's
+Windows ME OEM CD image (the `win9x\` directory's `PRECOPY1.CAB`, read with
+7-Zip; nothing executed), the recipe, and what the run showed.
 
 Why it is expected to be close. Windows ME is the same 16-bit setup engine
 and the same VxD-hosted WDM model as Windows 98 SE, one WDM revision newer
@@ -1303,7 +1305,7 @@ What the CD says (static, file level):
   is therefore expected to be inert there, as it is under SweetLow's stack,
   and harmless (flag 16 never replaces a file).
 
-The recipe, none of it run yet:
+The recipe, as run on 2026-09-02 (deviations under "What the run showed"):
 
 1. Create the image and install the OS by hand. `scripts\setup-qemu.ps1
    -WinMeIso <path> -CreateDisk` creates `vm\winme.img` and writes
@@ -1327,11 +1329,63 @@ The recipe, none of it run yet:
    storage by hand. Whether the copy phase asks for the Windows ME CD for
    `usbd.sys` and `usbhub.sys` is the first reading to take.
 
-Until that has been observed, Windows ME is not a target of any tier. What
-it becomes afterwards (a third first-class target with the full checkpoint
+What the run showed (2026-09-02, scoop QEMU 11.0.0, `-machine pc`, the owner
+at the console, the host side through `prepare-image.ps1`):
+
+- The Windows ME CD is El Torito bootable and its boot menu defaults into
+  Setup without `/p j`; F3 exits to the prompt. After `fdisk`, the CD's own
+  `D:\WIN9X\FORMAT C:` printed "0 percent completed" and never wrote a
+  sector (`info blockstats`: `wr_operations=0` for minutes; the CPU looping
+  in real mode with interrupts off through a code segment that read back as
+  all zeros). The cause was not chased. The format that worked was Windows
+  98 SE's: boot the Windows 98 SE CD's floppy ("Boot from CD-ROM", then
+  "Start computer with CD-ROM support", F3 out of its Setup) with the
+  Windows ME ISO attached as the second CD-ROM (`-drive
+  file=Win98SE.iso,media=cdrom,index=2 -drive file="Windows Me OEM
+  Full.iso",media=cdrom,index=3 -boot once=d`), `format c:` from `D:\WIN98`
+  (about thirty seconds for 4 GB), then `E:\WIN9X\SETUP.EXE /p j`.
+  `setup-qemu.ps1 -WinMeIso` with `-Win98Iso` writes the launcher that way.
+- Windows ME OEM Setup copies its CAB set to the hard disk before
+  extracting (the CD was read once, about 167 MB, then only the hard disk
+  moved, in 512-byte BIOS operations), so the copy bar sits at 10 to 25
+  percent for long minutes while progressing. Neither the SweetLow
+  `USB2.INF` install nor the driver install later asked for the CD, which
+  is consistent with that on-disk copy; it was not confirmed with a `dir`.
+- Every restart the guest initiated wedged at the Windows ME logo exactly
+  as `lessons.md` records for Windows 98 ("the guest reboot after a driver
+  install wedges at the splash"), and the mechanism is now known: after the
+  warm reset the local APIC's LINT0 reads masked (`info lapic`: `LVT0
+  0x00010000`), so the 8259's IRQ0, pending and unmasked there, never
+  reaches the CPU and IO.SYS waits on the BIOS tick at `0040:006C` forever.
+  A cold launch shows `LVT0 0x00000700 ExtINT`. So every restart of this
+  guest is a Start-menu shutdown and a relaunch; Setup's own restarts
+  included.
+- Snapshots on `vm\winme.img`: `winme-clean-install` (the OS to the
+  desktop, first login done, nothing else), `winme-stock-stack-driver-attempt`
+  (the package installed on the stock USB 1.1 stack: the install went
+  through with no CD prompt and the controller shows Code 2, "The
+  NTKERN.VXD device loader(s) for this device could not load the device
+  driver", with the debug console at 0 bytes, `usbport.sys` being absent),
+  and the SweetLow-stack driver state after that, built from
+  `winme-clean-install`.
+- Under SweetLow's stack, from a cold start with the package installed:
+  `DriverEntry`, `USBPORT_GetHciMn=10000001`, `USBPORT_RegisterUSBPortDriver
+  status=0`, `StartController` (8 USB2-only ports, all managed), the
+  `RH_*` family, and `-Status` reading `devices addressed` 1 / `endpoints
+  opened` 1 for the keep-alive mouse. `-Attach storage` bound with no wizard
+  (`devices addressed` 2, `endpoints opened` 3, "USB Mass Storage Device");
+  a hot-plugged `usb-audio` (`device_add usb-audio,id=prep_audio,bus=xhci.0,
+  audiodev=prepaud` on the prep monitor) ran the Add New Hardware Wizard
+  from the CD and bound as "Composite Device" under Universal Serial Bus
+  controllers, Windows ME's own `usbccgp` parent, with "USB Audio Device"
+  under Sound, video and game controllers; the controller and "USB 2.0 Root
+  Hub" clean, no refusal counter moved.
+
+What Windows ME becomes (a third first-class target with the full checkpoint
 tax `AGENTS.md` describes, or a supported-in-VM target stated the way
-Windows 2000's status is stated) is the owner's decision, recorded in
-`handoff.md` as open.
+Windows 2000's status is stated) is the owner's decision, roadmap task 18.4,
+open at the time of writing; until it is taken no document names Windows ME
+as supported.
 
 ### Windows 2000 SMP Stress VM (Phase 2d)
 

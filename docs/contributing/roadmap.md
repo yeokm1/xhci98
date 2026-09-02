@@ -1520,8 +1520,19 @@ Tasks:
   `RH_SetFeaturePortPower`, `RH_SetFeaturePortReset`, the change clears,
   `RH_EnableIrq`/`RH_DisableIrq`); `-Status` read devices addressed 1,
   slots enabled 1, endpoints opened 1: the keep-alive mouse bound.
-- [ ] 18.3 HID, mass storage and one composite device by hand, with the
+- [x] 18.3 HID, mass storage and one composite device by hand, with the
   counters read the way the prep script reads them.
+  Observed 2026-09-02 on the same boot as 18.2: the keep-alive mouse bound
+  at boot (`endpoints opened` 1, "Human Interface Devices" in Device
+  Manager); `-Attach storage` bound with no wizard (`devices addressed` 2,
+  `endpoints opened` 3, "USB Mass Storage Device" and "Storage device");
+  a hot-plugged `usb-audio` ran the Add New Hardware Wizard from the
+  Windows ME CD and bound (`devices addressed` 3, `endpoint opens seen` 9)
+  as "Composite Device" under Universal Serial Bus controllers, Windows
+  ME's own `usbccgp` parent, with "USB Audio Device" under Sound, video
+  and game controllers; the controller and "USB 2.0 Root Hub" clean. No
+  refusal counter moved. `endpoints opened` stays 3 because the isochronous
+  endpoint is opened only when a stream starts.
 - [ ] 18.4 Decide the tier and state it: `AGENTS.md` (purpose and the target
   table), `README.md`, the release notes' requirements, the bug-report form's
   operating-system list, and the INF's header comment. Until then none of
