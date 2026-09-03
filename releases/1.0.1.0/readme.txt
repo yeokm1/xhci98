@@ -7,9 +7,8 @@ Released 2026-09-04.
 
 Most x86 PCs made from around the mid 2010s onward have USB 3.0 (xHCI)
 controllers and nothing else. Windows 98 SE, Windows ME and Windows 2000
-have no support for those, and 32-bit Windows XP has it only for add-in
-cards, never for the controller built into these machines. This driver
-fills that gap.
+have no support for those. This driver fills that gap. It also installs on
+32-bit Windows XP, as incidental support.
 
 It gives you USB 2.0 speeds: High Speed, Full Speed and Low Speed. USB 3.0
 SuperSpeed is out of scope. A USB 3.0 device still works, at USB 2.0 speed,
