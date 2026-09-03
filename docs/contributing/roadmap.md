@@ -1822,8 +1822,12 @@ Tasks:
   branch present, on the 09-03 binary before the update as well as after
   it: the guest's own HID-mouse class install, not the enumeration; the
   owner removed that entry and refreshed, and the mouse came up as
-  HID-compliant mouse. Screens in `out\post-release\1.0.1.0\asset-legs\`.
-  The ME, 2000 and XP legs are owed.
+  HID-compliant mouse. Windows ME (the same morning): `vm\winme.img` as
+  the 18.x install left it, SweetLow's stack, booted the same way with a
+  USB mouse attached at boot; Update Driver pointed at `D:\RELEASE`, no
+  prompt; controller and root hub with no mark, HID-compliant mouse under
+  Mouse, the base's two unclaimed PCI devices the only marks. Screens in
+  `out\post-release\1.0.1.0\asset-legs\`. The 2000 and XP legs are owed.
 
 Checkpoint: on an XP guest that has never had another USB controller, the
 `1.0.1.0` package installs from the asset, the driver loads on the first
