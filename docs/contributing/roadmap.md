@@ -1826,8 +1826,14 @@ Tasks:
   the 18.x install left it, SweetLow's stack, booted the same way with a
   USB mouse attached at boot; Update Driver pointed at `D:\RELEASE`, no
   prompt; controller and root hub with no mark, HID-compliant mouse under
-  Mouse, the base's two unclaimed PCI devices the only marks. Screens in
-  `out\post-release\1.0.1.0\asset-legs\`. The 2000 and XP legs are owed.
+  Mouse, the base's two unclaimed PCI devices the only marks. Windows 2000
+  SP4 (the same morning): a fresh clone of the xHCI-only base 19.5 made
+  (`win2k-xonly.img`, `win2k-xonly-clean-install`, no USB stack file on
+  its disk), booted the same way with a USB mouse attached at boot; Update
+  Driver, Have Disk at `D:\RELEASE`, no prompt for media; controller and
+  USB Root Hub with no mark, USB Human Interface Device and HID-compliant
+  mouse bound, the base's Ethernet and VGA controllers the only marks.
+  Screens in `out\post-release\1.0.1.0\asset-legs\`. The XP leg is owed.
 
 Checkpoint: on an XP guest that has never had another USB controller, the
 `1.0.1.0` package installs from the asset, the driver loads on the first
