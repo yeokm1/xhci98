@@ -87,8 +87,12 @@ in `Driver Cache\i386\sp4.cab` and nowhere in `system32`. The `usbd.sys`
 row matters more on Windows 2000 than the XP reading suggested: XP had left
 its stub behind, Windows 2000 leaves nothing, and a `usbhub20.sys` loaded
 without it is the `c000026c` bugcheck recorded below. The package-install
-half of the Windows 2000 reading is still inferred until 19.5's install is
-taken.
+half was measured the same evening on that snapshot: Have Disk with no CD
+attached, no prompt, the driver registered and started on that boot, the
+root hub up (so `usbhub20.sys` and `usbd.sys` both landed, the second by
+the INF's row, the first by the OS's own `USB.INF`), a hot-plugged mouse
+bound, and the guest's own listing showing all four files from `sp4.cab`.
+Neither half of the Windows 2000 reading is inferred any more.
 
 A second reading from the same afternoon, kept here because the same
 absent control hid it: about thirty seconds after `StartController` with

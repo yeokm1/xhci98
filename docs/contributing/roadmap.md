@@ -1532,7 +1532,7 @@ Tasks:
   Interface Device", interrupt transfers completing while the pointer was
   driven, every refusal and failure counter at zero, and the counters that
   did move identical to the hand-set `dss` run's.
-- [ ] 19.5 the fix observed where the gap is, Windows 2000: a fresh Windows
+- [x] 19.5 the fix observed where the gap is, Windows 2000: a fresh Windows
   2000 SP4 install with no USB controller attached (the existing install
   launcher, a throwaway image, the owner's key), a directory listing before
   any controller is attached (the measurement `lessons.md` records as
@@ -1570,6 +1570,38 @@ Tasks:
   imports `USBD.SYS`): a root hub that comes up, survives a restart and
   shows `usbd.sys` at 20,688 bytes is the reading, and a yellow bang on the
   hub is shut down and re-boot with `none`, never restart.
+  The install, read 2026-09-03 17:16-17:27 (run tag `p195`, host
+  `FW-W11P-YKM`, no Windows 2000 ISO attached so no CD prompt could have
+  been satisfied, the owner driving the wizard; the package the
+  1.0.0.2-state INF with the qemu-flavour binary built 15:33, still
+  versioned 1.0.0.1): the Found New Hardware wizard was on the desktop at
+  the first boot with the xHCI alone, Have Disk from the transfer drive
+  finished with no CD prompt and no reboot, and within twenty seconds the
+  debug console carried `DriverEntry`, `USBPORT_GetHciMn=57324B30` (the
+  Windows 2000 SP4 value both primary targets return),
+  `USBPORT_RegisterUSBPortDriver status=00000000`, `StartController` (four
+  USB 2.0 ports, all managed), the No Op self-test matched, then
+  `RH_GetRootHubData`, the four `RH_GetPortStatus` and
+  `RH_SetFeaturePortPower` calls, `RH_GetHubStatus` and `RH_EnableIrq`, and
+  Device Manager showed "USB 2.0 Root Hub" under the controller with no
+  mark on either: the OS's own `USB.INF` placed `usbhub20.sys`, the
+  reading the task existed for. `device_add usb-mouse` with no `port=`
+  from the monitor: three port status change events on port 1, `slots
+  enabled` 1, `SET_ADDRESS interceptions` 1, `devices addressed` 1,
+  `endpoints opened` 1, a "Human Interface Devices" branch in Device
+  Manager, `transfers submitted` 0x35 and `completed` 0x33 while the
+  pointer was driven from the monitor, and `transfers refused for retry`,
+  `records failed - no progress`, every `EP0 opens refused`, `endpoint
+  refusals` and `device command failures` counter at zero. `dir
+  %windir%\system32\drivers\usb*.sys` in the guest afterwards, six files:
+  `usbcamd.sys` 23,888 and `usbintel.sys` 15,120 (the 20-06-03 in-box
+  pair) and, all stamped 19-06-03 12:05p from `sp4.cab`, `usbd.sys` 20,688,
+  `usbhub.sys` 40,176, `usbhub20.sys` 49,776 and `usbport.sys` 138,288;
+  `xhci98.sys` 156,784 beside them. Shutdown from the Start menu:
+  `SuspendController` then `StopController`, the teardown clean. The
+  install half of the Windows 2000 inference in `lessons.md` is measured
+  with this; no `SuspendController` arrived while the guest idled, as
+  Windows 2000's usbport never has.
 - [ ] 19.6 the tier, decided by the owner: supported in virtual machines,
   stated the way Windows 2000's and Windows ME's status is, or something
   narrower; then every document that names the targets: `AGENTS.md` (Quick

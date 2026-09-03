@@ -1316,10 +1316,22 @@ the SP4 stamp 2003-06-19), the RTM `usbd.sys` and `usbhub.sys` in
 had inferred from `layout.inf`, now measured, with one addition the
 inference had not made explicit: `usbd.sys` is absent too, so the `.NTx86`
 copy section's third `LayoutFile` row is load-bearing on Windows 2000 (the
-missing-`usbd.sys` bugcheck below is what a failed row would give). The
-remaining task 19.5 readings (the package install with the xHCI alone,
-`usbport.sys` and `usbd.sys` placed or not, the root hub, a hot-plugged
-mouse) are recorded in the roadmap under that task as they are taken.
+missing-`usbd.sys` bugcheck below is what a failed row would give).
+
+The package install with the xHCI alone followed the same evening (run tag
+`p195`, no ISO attached, the owner at the wizard): Have Disk from the
+transfer drive, no CD prompt, no reboot, `DriverEntry` within twenty seconds
+of the wizard's start with `USBPORT_GetHciMn=57324B30`, registration status
+0, `StartController`, the `RH_*` family, and "USB 2.0 Root Hub" clean under
+the controller in Device Manager, so the OS's own `USB.INF` placed
+`usbhub20.sys` from the cache once usbport created the root hub PDO. A
+hot-plugged `usb-mouse` was addressed and bound as a HID device with every
+refusal counter at zero. The guest's own listing afterwards had six files:
+the two in-box ones plus `usbd.sys` 20,688, `usbhub.sys` 40,176,
+`usbhub20.sys` 49,776 and `usbport.sys` 138,288, all from `sp4.cab`. The
+roadmap's task 19.5 has the readings in full. That is the install a
+stranger's xHCI-only Windows 2000 machine makes, and the first time this
+project has seen one.
 
 The harness side: `prepare-image.ps1 -Target 2b-fresh -Clone` reads
 `win2k-xonly.img @ win2k-xonly-clean-install`. The old `fresh-2b.img`
