@@ -1425,7 +1425,7 @@ Tasks:
   (the two launchers reproduced; the run launcher is xHCI-only by default
   and `ehci` as its second argument adds the companion the spike used) and
   its row in `test-qemu-launchers.ps1`.
-- [ ] 19.1 the INF, NT path, file placement: `[Xhci.CopyW2K]` (rename to
+- [x] 19.1 the INF, NT path, file placement: `[Xhci.CopyW2K]` (rename to
   `Xhci.CopyNT`, every citation with it) copies `usbport.sys,,,16`,
   `usbd.sys,,,16` and `usbhub.sys,,,16` through `LayoutFile`, the owner's
   instruction of 2026-09-03 ("bring in usbport.sys, usbd.sys, usbhub.sys").
@@ -1442,9 +1442,12 @@ Tasks:
   the Windows 98 path, `OS-NEVER` for `usbhub20.sys` on no path (the
   owner's decision that evening: Windows 2000's own `USB.INF` places it
   when usbport creates the root hub PDO, XP has no such file, and clean
-  guests of both NT targets read the root hub coming up). Open until 19.4
-  reads the copy from a package install.
-- [ ] 19.2 the INF, NT path, idle suspend: XP's usbport reads
+  guests of both NT targets read the root hub coming up). Read 2026-09-03
+  from the 19.4 package install on the clean snapshot with no EHCI: no CD
+  prompt, and `system32\drivers` afterwards holding `usbport.sys` (143,872
+  bytes) and `usbhub.sys` (59,520) with the SP3 cab's stamp beside XP's
+  4,736-byte `usbd.sys` and `xhci98.sys`, the driver loaded on that boot.
+- [x] 19.2 the INF, NT path, idle suspend: XP's usbport reads
   `Services\USB\DisableSelectiveSuspend` through the same query table
   NUSB's build has, so the value the 9x path writes is written on the NT
   path too, from `[Xhci.Dev.NTx86]` and `[DefaultInstall.NTx86]`; the
@@ -1471,19 +1474,39 @@ Tasks:
   `SUSP-DUP` / `SUSP-VALUE` requiring the value once per route on both
   targets; `HcDisableSelectiveSuspend` recorded in the INF as considered
   and not taken (under NUSB the per-controller value alone still idled the
-  controller). Open until the package-install reading, with 19.4.
+  controller). Read 2026-09-03 from the 19.4 package install:
+  `Services\USB\DisableSelectiveSuspend` present in Registry Editor with
+  nothing hand-set, no `SuspendController` in the two minutes after start,
+  and the mouse hot-plugged after them bound as before.
 - [ ] 19.3 the XP readings, the owner at the console, the qemu flavour: a
   HID mouse, a `usb-storage` device formatted, written and read back,
   Device Manager disable, enable, remove and rescan (the door sequence that
   bugchecks Windows 98 under NUSB and that the SweetLow rebuild survives),
   and a `usb-audio` composite. Recorded in `build-and-test.md`, "Windows XP
   target VM", counters named as in 18.3.
-- [ ] 19.4 the fix observed where the gap is, XP: revert `vm\winxp.img` to
+- [x] 19.4 the fix observed where the gap is, XP: revert `vm\winxp.img` to
   `winxp-clean-install`, boot the run launcher with NO EHCI, install the
   `1.0.0.2` package from the transfer drive, and read: no CD prompt (the
   cabs are in the driver cache), `usbport.sys` placed, the driver loaded on
   the first boot, root hub up, then 19.2's hot-plug. This is the reading no
   earlier image could give, and the one the release claims.
+  Read 2026-09-03 (run tag `p194`, host `FW-W11P-YKM` with no XP ISO on
+  it, the owner driving the wizard; the package the 1.0.0.2-state INF with
+  the qemu-flavour binary still versioned 1.0.0.1): Have Disk from `E:\`
+  finished with "installed and ready to use", no CD prompt, no reboot
+  asked; `DriverEntry`, `USBPORT_GetHciMn=10000001`,
+  `USBPORT_RegisterUSBPortDriver status=0`, `StartController` (8 ports, 4
+  USB2 managed, 4 USB3 unpowered), the No Op self-test matched,
+  `RH_GetRootHubData`, "USB Root Hub" installed by XP's own `usbport.inf`
+  with no prompt, the controller and hub clean in Device Manager;
+  `usbport.sys` and `usbhub.sys` in `system32\drivers` from the SP3 cab and
+  `DisableSelectiveSuspend` under `Services\USB`, both placed by the
+  package; no `SuspendController` in two minutes idle; then `device_add
+  usb-mouse` with no `port=`: port status change on port 5, `SET_ADDRESS`
+  intercepted, `devices addressed` 1, `endpoints opened` 1, "USB Human
+  Interface Device", interrupt transfers completing while the pointer was
+  driven, every refusal and failure counter at zero, and the counters that
+  did move identical to the hand-set `dss` run's.
 - [ ] 19.5 the fix observed where the gap is, Windows 2000: a fresh Windows
   2000 SP4 install with no USB controller attached (the existing install
   launcher, a throwaway image, the owner's key), a directory listing before

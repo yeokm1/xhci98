@@ -1490,13 +1490,32 @@ What the first afternoon showed (2026-09-03, the owner at the console; the
   submitted and completed while the pointer was driven, no refusal or
   failure counter moved. Both "USB Root Hub" entries present. This is
   roadmap task 19.2's observation, before the INF change; the 1.0.0.2 INF
-  writes the value on the NT path, and 19.4 repeats the reading from a
-  package install on the clean snapshot with no EHCI.
+  writes the value on the NT path, and the `p194` run below repeated the
+  reading from a package install on the clean snapshot with no EHCI.
+- **The 1.0.0.2 INF from a package install, xHCI only, on the clean
+  snapshot (`p194`, later the same day, the owner driving the wizard on a
+  host with no XP ISO): the driver loaded on that boot.** Have Disk from
+  `E:\` finished with "installed and ready to use", no CD prompt and no
+  reboot asked; `DriverEntry` through the `RH_*` family as in the EHCI run
+  above, "USB Root Hub" installed by XP's own `usbport.inf` with no prompt,
+  the controller and hub clean in Device Manager. `dir usb*.sys` in
+  `system32\drivers` afterwards: `usbport.sys` (143,872 bytes) and
+  `usbhub.sys` (59,520) carrying the SP3 cab's 14-Apr-08 stamp, XP's own
+  4,736-byte `usbd.sys`, and the in-box `usbcamd.sys`, `usbcamd2.sys`,
+  `usbintel.sys` and `usb8023.sys` that Setup places on every install; the
+  two the 1.0.0.1 guest lacked are the two the `[Xhci.CopyNT]` rows
+  brought from `Driver Cache\i386`. `Services\USB\DisableSelectiveSuspend`
+  present in Registry Editor with nothing hand-set. No `SuspendController`
+  in two minutes idle, then the hot-plugged mouse bound exactly as in the
+  `dss` run (port 5, `SET_ADDRESS` intercepted, `devices addressed` 1,
+  `endpoints opened` 1, "USB Human Interface Device", interrupt transfers
+  completing while the pointer was driven), every refusal and failure
+  counter at zero. This is roadmap task 19.4, the reading release 1.0.0.2
+  claims; 19.1 and 19.2 closed on it.
 
 Not done on XP: real hardware (nothing in the fleet runs it), mass storage,
-a composite device, the disable, enable, remove and rescan sequence, and
-the install from a package that copies `usbport.sys` itself; roadmap Phase
-19 holds each as a task.
+a composite device, and the disable, enable, remove and rescan sequence;
+roadmap Phase 19 holds each as a task.
 
 ### Windows 2000 SMP Stress VM (Phase 2d)
 

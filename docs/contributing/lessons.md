@@ -74,9 +74,12 @@ resolve one) and `usbhub20.sys` on either (Windows 2000's own `USB.INF`
 copies it when usbport creates the root hub PDO; XP has no such file).
 Confirmed for the spike by relaunching with a companion EHCI: the in-box
 stack placed `usbport.sys` and the same binary then registered and started.
-The package-install reading on the clean snapshot with no EHCI is roadmap
-task 19.4, and the equivalent controller-free Windows 2000 install is 19.5;
-until those are taken the fix is inferred from the table and one XP boot.
+The package-install reading on the clean snapshot with no EHCI, roadmap
+task 19.4, was taken later the same day: no CD prompt, `usbport.sys` and
+`usbhub.sys` placed from the cache, the driver up on that boot, the root
+hub and a hot-plugged mouse bound. The equivalent controller-free Windows
+2000 install is 19.5; until it is taken the Windows 2000 half of the fix is
+inferred from the table alone.
 
 A second reading from the same afternoon, kept here because the same
 absent control hid it: about thirty seconds after `StartController` with
