@@ -1630,7 +1630,7 @@ Tasks:
   opening of `build-and-test.md`'s "Windows XP target VM". The issue forms
   already list 32-bit XP and are unchanged; the import gate gains no XP
   evidence, none being required to load.
-- [ ] 19.7 issue 4, the one driver change this release carries (the owner's
+- [x] 19.7 issue 4, the one driver change this release carries (the owner's
   decision of 2026-09-03 evening, reversing the afternoon's): the identity
   check in `XhciSlotSetEndpointState`'s REMOVE branch for the default pipe
   (`docs/issues/04-xp-restore-device-ep0-remove.md`, section 4). A REMOVE
@@ -1695,8 +1695,40 @@ Tasks:
   naming "USB Mass Storage Device", "USB Composite Device" and "USB Audio
   Device" with no mark on any; `records failed - no progress` 0, `transfers refused for retry` 0, every refusal counter
   0. Logs `vm\winxp-debugcon.i4b.log` and `vm\winxp-qemu-trace.i4b.log`;
-  the issue page is at fixed. Still owed: 2a and 2b on the same binary, the
-  reading that nothing changed and the counter stays 0.
+  the issue page is at fixed.
+  The primary targets, 2026-09-03 night (sixth session, host `FW-W11P-YKM`;
+  the 20:24 binary copied over the installed one in `vm\win98.img` and
+  `vm\win2k.img` on a `prepare-image.ps1 -Boot -Xfer` pass each, the
+  harness then reading `MiniPortExtensionSize` 90928 on both).
+  `run-matrix.ps1` on 2b (`out\phase10\matrix-19.7-2b.txt`): 11 PASS, 6
+  NODRIVER, 0 FAIL, exit code 0, the same seventeen rows as the 1.0.0.0
+  post-release run gave Windows 2000. On 2a (`matrix-19.7-2a.txt`, then
+  two more passes of the `other` group, `matrix-19.7-2a-other.txt` and
+  `-other2.txt`): every row the guest enumerated read as the Phase 10
+  baseline on this same untaught image, keyboards and mice at both speeds,
+  `usb-storage`, `usb-bot` and the hub PASS, `usb-net`, `usb-uas`,
+  `usb-audio` and `usb-ccid` NODRIVER, `usb-serial` and `usb-braille` FAIL
+  as in Phase 10; the rows that went unaddressed in a pass sat behind
+  Windows 98's modal Add New Hardware Wizard for the row before (the
+  harness's screenshots show the RNDIS and USB SERIAL wizards up, the
+  console every port change announced to usbport), the guest condition
+  `scripts\vm-matrix\README.md` records and not the driver; and
+  `u2f-emulated` was addressed but not bound in the third pass (PASS in
+  Phase 10 on this image, PASS on the taught fresh clone in Phase 16), a
+  row to read again on 19.8's taught clone, where these classes raise no
+  wizard. The Windows 98 door sequence, on the SweetLow guest where it is
+  survivable (`vm\sweetlow-2a.img`, the same binary copied in, the mouse
+  attached at boot; `out\phase10\prep-2a-sweetlow-debugcon-19.7-door.log`):
+  Disable ran `AbortTransfer`, `DisableInterrupts` and `StopController`
+  with the controller halted at `USBSTS=1` and eight ports unpowered;
+  Enable was `StartController` on the same extension and the mouse
+  re-addressed by itself; Remove the same teardown; Refresh a fresh
+  `DriverEntry`, registration and `StartController` on a new extension
+  with the mouse bound again; no crash, the 2026-09-02 shape exactly. `EP0
+  removes on a superseded handle` 0, `records failed - no progress` 0 and
+  `transfers refused for retry` 0 in every group on both targets and
+  through the door sequence: the two-handle restore is XP's alone, and
+  nothing changed on the primary targets.
 - [ ] 19.8 the 9x targets unchanged: the `1.0.1.0` package installed from
   the asset on Windows 98 SE under NUSB and under SweetLow, and on Windows
   ME, the 18.7 route, and `run-matrix.ps1 -PostRelease` on the fresh 2a and

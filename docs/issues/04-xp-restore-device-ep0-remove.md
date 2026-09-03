@@ -13,13 +13,15 @@ static reading of this driver's own code against the callback order the
 that order: on the REMOVE path as it was, the vector failed exactly as the
 run did. The owner's decision that afternoon was no driver code change in
 release `1.0.1.0`; reversed the same evening, the fix in section 4 is
-roadmap task 19.7. What that task still owes is the reading on both
-primary targets that nothing changed there (the counter at zero on Windows
-98 SE and Windows 2000 on the same binary). Before the fix the workaround
+roadmap task 19.7. The task's last reading, both primary targets on the
+same binary, was taken the same night: the device matrix on the Windows 98
+SE and Windows 2000 guests and the Windows 98 door sequence, with the
+counter at zero throughout (section 5). Before the fix the workaround
 was to unplug the device and plug it back in, which enumerated cleanly in
 the same run.
 
-Targets affected: Windows XP, the best-effort secondary target. Not seen on
+Targets affected: Windows XP, supported in virtual machines since `1.0.1.0`
+(roadmap task 19.6). Not seen on
 Windows 98 SE, Windows ME or Windows 2000 in any run of this project: the
 hub sequence that triggers it, a port reset and a second device handle for
 a device that is still enumerating, has not been observed from those hubs.
@@ -272,11 +274,17 @@ primary targets on the same binary with the reading that nothing changed.
   menu at 22:20: `SuspendController` (the controller halted), then
   `StopController` and `DisableInterrupts`, the teardown clean.
 - Whether the Windows 2000 hub ever takes the restore path against this
-  driver, and whether Windows 98 SE's does: task 19.7's remaining legs,
-  `run-matrix.ps1` on the 2a and 2b guests and the Windows 98 door
-  sequence on the same binary, with `EP0 removes on a superseded handle`
-  as the witness. Zero there says the two-handle restore is XP's alone;
-  nonzero says it is not, and that the fix was needed on a primary target.
+  driver, and whether Windows 98 SE's does: answered the same night, task
+  19.7's last legs. `run-matrix.ps1` on the 2b guest (11 PASS, 6 NODRIVER,
+  0 FAIL, the 1.0.0.0 post-release row set) and on the 2a guest (every row
+  the guest enumerated as the Phase 10 baseline; the rest behind Windows
+  98's modal wizard, the guest's condition), and the Windows 98 door
+  sequence on the SweetLow guest (disable, enable, remove, refresh, each
+  clean), all on the 20:24 binary: `EP0 removes on a superseded handle` 0
+  in every group and through the door sequence, `records failed - no
+  progress` 0, `transfers refused for retry` 0. The two-handle restore is
+  XP's alone; the fix was not needed on a primary target and changed
+  nothing there (roadmap task 19.7's closing paragraph names the reports).
 - Why XP's hub re-creates the device. Every first attach that took the
   restore path was also the first-ever installation of that class driver
   on the install (`usbstor.sys` or `usbaudio.sys` and their companions
