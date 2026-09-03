@@ -1260,6 +1260,60 @@ native SP4 stack, plus real spinlock contention. Win2000 Verifier still has no
 Deadlock Detection; the SMP stress run and static lock-order review remain
 separate, required checks.
 
+### Windows 2000 xHCI-only VM (`vm\win2k-xonly.img`): the fresh 2b base
+
+A second Windows 2000 SP4 guest, installed on 2026-09-03 for roadmap task
+19.5 with no USB controller of any kind attached, and by the owner's decision
+that evening the base the post-release run's fresh Windows 2000 clone is
+taken from (`2b-fresh`'s `CloneFrom` in `scripts\vm-matrix\config.sample.psd1`;
+design record 09, section 3.1), in place of `win2k.img @ phase2b-clean`.
+
+Why a second image: Windows 2000 installs its USB files per detected
+controller (the paragraph above), and every earlier Windows 2000 image here
+was installed or first booted with an EHCI, whose in-box driver install is
+what placed `usbport.sys` from `Driver Cache\i386`. No such image can show
+whether the `1.0.0.2` INF's `LayoutFile` line places the file itself on a
+machine that has only an xHCI, which is the reading the release claims and
+the install a stranger's xHCI-only machine makes. `vm\win2k.img` keeps its
+roles as the carried-along 2b target and the differential.
+
+The recipe, `scripts\setup-qemu-win2k-xonly.ps1` and the two launchers it
+writes:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win2k-xonly.ps1 -Win2KIso D:\isos\win2ksp4-retail.ISO -CreateDisk
+scripts\local\qemu-win2k-xonly-install.cmd        (the owner drives Setup; retail media asks for the key)
+    on the desktop, before any controller exists:  dir %windir%\system32\drivers\usb*.sys
+    shut down from the Start menu; quit at the monitor (port 55560) once "safe to turn off" is up
+qemu-img snapshot -c win2k-xonly-clean-install vm\win2k-xonly.img
+powershell -File scripts\package\make-package.ps1 -Flavor qemu -OutDir vm\xferxp
+scripts\local\qemu-win2k-xonly-run.cmd <tag> [none|ehci]     (the xHCI alone by default)
+```
+
+Same machine as the 2b recipe, TCG with `pc,acpi=off` and `pentium3,-apic`
+(the Standard-PC HAL; both launchers carry the same flags because the HAL is
+fixed at install time), 256 MB, cirrus, monitor 55560, the debug console to
+`vm\win2k-xonly-debugcon.log` (rotated to `.previous.log` at launch, so copy
+a log worth keeping to a tag name first) and the QEMU xhci trace to
+`vm\win2k-xonly-qemu-trace.<tag>.log`. The transfer drive is `vm\xferxp`,
+shared with the XP guest, since one qemu-flavour package serves every target.
+`qemu-xhci,p3=0` for the reason the XP launcher gives: QEMU never falls a
+SuperSpeed-capable device back to USB 2.0. The run launcher's second argument
+is `none` for a boot with no controller at all and `ehci` for the companion
+the old vehicle carried, for comparison only.
+
+What it has given so far: Setup ran under those flags to the desktop on
+2026-09-03, the owner at the console. The task 19.5 readings (the drivers
+listing before any controller, the package install with the xHCI alone,
+`usbport.sys` placed or not, the root hub, a hot-plugged mouse) are recorded
+in the roadmap under that task as they are taken.
+
+The harness side: `prepare-image.ps1 -Target 2b-fresh -Clone` reads
+`win2k-xonly.img @ win2k-xonly-clean-install`. The old `fresh-2b.img`
+(cloned from `phase2b-clean`, stamped `base-1.0.0.0-qemu`) is re-cloned with
+`-Clone -FreshCopy` before the next post-release run, whose Windows 2000 leg
+is then itself an xHCI-only install of the asset.
+
 ### Windows ME target VM (`2e`)
 
 Windows ME support was asked for by the project owner on 2026-09-02, after

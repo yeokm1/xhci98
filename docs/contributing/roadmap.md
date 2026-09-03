@@ -1542,6 +1542,14 @@ Tasks:
   root hub PDO, or not: this is the reading) and a HID mouse. If the root
   hub does not come up, the phase records what the OS did not place and the
   INF line that follows.
+  The owner's decision of 2026-09-03 evening, Setup at its final tasks on
+  `vm\win2k-xonly.img`: this install is the new fresh Windows 2000 base,
+  `win2k-xonly.img @ win2k-xonly-clean-install` replacing `win2k.img @
+  phase2b-clean` in `2b-fresh`'s `CloneFrom`, so that 19.8's Windows 2000
+  leg installs the asset on a guest that never had another controller.
+  `scripts\setup-qemu-win2k-xonly.ps1` commits the two launchers with a row
+  in `test-qemu-launchers.ps1`; `build-and-test.md` ("Windows 2000
+  xHCI-only VM") and design record 09, section 3.1, carry the change.
 - [ ] 19.6 the tier, decided by the owner: supported in virtual machines,
   stated the way Windows 2000's and Windows ME's status is, or something
   narrower; then every document that names the targets: `AGENTS.md` (Quick
@@ -1580,7 +1588,8 @@ Tasks:
 - [ ] 19.8 the 9x targets unchanged: the `1.0.0.2` package installed from
   the asset on Windows 98 SE under NUSB and under SweetLow, and on Windows
   ME, the 18.7 route, and `run-matrix.ps1 -PostRelease` on the fresh 2a and
-  2b clones as Phase 16 ran it. The Windows 2000 leg now also carries the
+  2b clones as Phase 16 ran it, the 2b clone re-cloned (`-Clone -FreshCopy`)
+  from the xHCI-only base 19.5 made. The Windows 2000 leg now also carries the
   `DisableSelectiveSuspend` value and every leg carries 19.7's change; the
   reading is that nothing changed.
 - [ ] 19.9 version `1.0.0.2` in `src\xhci_version.h` and the INF's

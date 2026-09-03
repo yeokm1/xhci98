@@ -170,8 +170,10 @@ powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-fresh -Attach kb
 powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-fresh -Stamp        # base-<DriverVer>-qemu, taken last
 ```
 
-Then the same for `2b-fresh` (`phase2b-clean` -> `vm\fresh-2b.img`), which
-needs no `-Attach` pass for HID and storage. Three things the first run
+Then the same for `2b-fresh` (`win2k-xonly.img @ win2k-xonly-clean-install`
+-> `vm\fresh-2b.img`; until 2026-09-03 it was `win2k.img @ phase2b-clean`, an
+install that had booted with an EHCI, see `build-and-test.md`, "Windows 2000
+xHCI-only VM"), which needs no `-Attach` pass for HID and storage. Three things the first run
 (2026-08-30) taught about the Windows 98 pass: a class that raises no wizard
 when attached is not necessarily taught, so read `-Status` and expect
 `devices addressed` to advance for every attach (`uas`, `serial` and

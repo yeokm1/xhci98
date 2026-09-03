@@ -192,7 +192,13 @@
             Monitor  = 55595
             BootSeconds = 300
             Like     = '2b'
-            CloneFrom = @{ Image = 'win2k.img'; Snapshot = 'phase2b-clean' }
+            # Since 2026-09-03 (roadmap task 19.5) the base is an install that
+            # never saw a USB controller of any kind, so the fresh clone's
+            # driver install is the xHCI-only one a stranger's machine makes:
+            # the OS has to place usbport.sys itself. The earlier base,
+            # win2k.img @ phase2b-clean, had booted with an EHCI whose install
+            # placed the file (build-and-test.md, "Windows 2000 xHCI-only VM").
+            CloneFrom = @{ Image = 'win2k-xonly.img'; Snapshot = 'win2k-xonly-clean-install' }
         }
         # THE WINDOWS ME TARGET (docs\contributing\build-and-test.md, "Windows
         # ME target VM"). Installed by hand from a Windows ME CD into a new
