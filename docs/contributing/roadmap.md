@@ -1739,6 +1739,46 @@ Tasks:
   The two fresh clones were re-taken on 2026-09-03 night (`-Clone
   -FreshCopy` on `2a-fresh` and `2b-fresh`, the latter from the xHCI-only
   base for the first time); the prep boots, the stamps and the run are owed.
+  The fresh-clone half, 2026-09-04 (host `FW-W11P-YKM`, the owner at the
+  console). Windows 98: the package installed from the transfer drive on
+  the first prep boot, the guest shut down and booted again, the driver up
+  (`DriverEntry` from the 20:24 build, `MiniPortExtensionSize` 90928, the
+  root hub with eight managed ports), then thirteen classes taught at port
+  2 in turn, the owner clicking each wizard and the monitor driven from the
+  harness, the tablets left out as README note 13 says and audio attached
+  once and last: fourteen devices addressed, twelve endpoints opened, every
+  refusal and failure counter at zero, and the stamp `base-1.0.1.0-qemu`
+  taken after a Start-menu shutdown. Windows 2000: Have Disk from the
+  transfer drive at the Found New Hardware wizard, no CD prompt and no
+  reboot, the same console shape as 19.5 and the OS binding the mouse
+  itself, `SuspendController` then `StopController` on the shutdown, the
+  stamp taken at "It is now safe to turn off". The run then went twice.
+  The first, both targets side by side, read every row as Phase 16 had
+  except `usb-audio/fs`, whose `device_add` returned no monitor prompt
+  within the harness's 16 s on either target, so the row read ERROR with no
+  reading taken, the group's console showing the device arriving after the
+  timeout: PASS on 2a-fresh, where the row is declared able to wedge the
+  guest, and FAIL on 2b-fresh, where it is not. The cause was proved
+  without a guest: `device_add usb-audio` names no audio backend, QEMU
+  opens its default host backend on the main loop, and on this host that
+  night, with no playback endpoint in the OK state, the open took over 16
+  s; the same command with `-audiodev none` answered in about a second,
+  which is what `prepare-image.ps1` has declared since repo audit D4 and
+  why the prep pass had attached audio instantly. The run now declares the
+  same backend (`run-matrix.ps1`, the `usb-audio` row's `AddArgs`,
+  `scripts\vm-matrix\README.md` note 16; `selftest.ps1` 196 checks). The
+  second run, on that harness: `2b-fresh` PASS, 17 rows, 6 NODRIVER
+  expected, 0 not reached, 0 against, 1:16:09, the report identical to
+  Phase 16's outside its header; `2a-fresh` PASS, 17 rows, 5 NODRIVER
+  expected, 3 not reached (the two tablets and `usb-hub/churn`, the
+  declared exclusions), 0 against, 0:57:09, and identical to Phase 16's
+  except that the `usb-uas/fs` note now names its `ExpectNoDriver` entry
+  and that the `usb-audio/fs` replug leg PASSED (addressed, slot and
+  endpoints opened each +1) where Phase 16 read the Insert Disk FAIL the
+  release notes carry as the USB Audio limitation: one better reading on a
+  freshly taught clone, recorded here and not promoted. Both reports are
+  `docs\contributing\runs\run-19-post-release\`. Nothing changed on the
+  primary targets; the install-from-asset legs wait for 19.9's asset.
 - [ ] 19.9 the release date in `src\xhci_version.h` and the INF's
   `DriverVer` (the number `1.0.1.0` has been there since 2026-09-03), the
   release notes' opening line, the `releases/history.md` entry (XP; `usbport.sys`,

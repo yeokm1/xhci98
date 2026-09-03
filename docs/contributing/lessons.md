@@ -24,6 +24,49 @@ Do not turn a hypothesis into a settled hardware quirk. Move confirmed design
 rules into the appropriate normative document while keeping the debugging
 history here.
 
+## The host's sound card reached into an unattended run through an unnamed audio backend
+
+Environment: host `FW-W11P-YKM`, QEMU 11.0.0 (scoop), the `1.0.1.0`
+post-release run of roadmap task 19.8 on the fresh Windows 98 SE and Windows
+2000 clones, 2026-09-04 between 00:50 and 02:03, both targets running side
+by side and then, for the second target's last group, alone.
+
+Symptom: the `usb-audio/fs` row read ERROR on both targets, "device_add was
+refused; nothing was attached", because the monitor returned no `(qemu)`
+prompt within the harness's 16 s after `device_add usb-audio,id=dut1,
+bus=xhci.0,port=2`. The verdict was PASS on Windows 98, where the row is
+declared able to wedge the guest, and FAIL on Windows 2000, where it is not.
+Every other row read as the Phase 16 run had. What survived: the group's
+debug console on both targets, which shows the device arriving after the
+timeout (a port status change on port 2, the slot, the address, on Windows
+98 the isochronous endpoint declaration parsed) with `transfers refused for
+retry` and `records failed - no progress` at zero; and the screenshot the
+harness took at the timeout, the desktop with nothing on it.
+
+Proven, without a guest: a bare `qemu-system-x86_64 -M pc -display none
+-m 64 -device qemu-xhci` with a TCP monitor gave the same 16 s silence to
+`device_add usb-audio,id=a1,bus=xhci.0` (the device was on the bus when
+`info usb` answered 7 s later), and answered `device_add ...,audiodev=aud0`
+in about one second with `-audiodev none,id=aud0` on the command line. So
+the stall is QEMU opening its default host audio backend on the main loop,
+not the guest and not the driver. The host that night listed no playback
+endpoint in the OK state (the Sound Blaster X4, the monitor's HDMI audio and
+every USB audio device were "Unknown"; only the on-board microphone was OK),
+which is inferred, not measured, to be why the open took so long: on
+2026-08-30 and on 2026-09-03 the same row attached in time on the same host.
+The prep pass had attached audio instantly the same night because
+`prepare-image.ps1` declares `-audiodev none` (repo audit D4). Unknown:
+which backend QEMU picked and where inside it the time went.
+
+Rule: a device that takes a host backend names one explicitly, and for a
+harness that plays nothing the backend is `none`; a run that leaves it to
+QEMU's default has made the host's peripherals part of its vehicle. The run
+now declares `-audiodev none,id=matrixaud` and the `usb-audio` row names it
+(`scripts\vm-matrix\run-matrix.ps1`, `matrix.psd1`, README note 16); the
+second run read PASS on both targets. The same reading rule as always: a
+monitor timeout is a vehicle reading, and the group's console says whether
+the device arrived.
+
 ## An NT install that never saw a USB controller has no `usbport.sys`, and the EHCI in every Windows 2000 vehicle hid it
 
 Environment: the Windows XP SP3 guest of roadmap Phase 19 (`vm\winxp.img`,
