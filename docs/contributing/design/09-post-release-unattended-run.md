@@ -155,7 +155,7 @@ The Windows 2000 row changed on 2026-09-03 (roadmap task 19.5). Until then
 it was `vm/win2k.img @ phase2b-clean` (2026-07-24, the xHCI unclaimed,
 `Code 1`), an install that had booted with an EHCI, and the in-box driver
 install for that EHCI is what had placed `usbport.sys`: a fresh clone of it
-could never show whether the `1.0.0.2` INF places the file itself, which is
+could never show whether the `1.0.1.0` INF places the file itself, which is
 what a stranger's xHCI-only machine needs. The first post-release run
 (section 9) ran on the old base. `build-and-test.md`, "Windows 2000
 xHCI-only VM", has the recipe, and `scripts\setup-qemu-win2k-xonly.ps1`

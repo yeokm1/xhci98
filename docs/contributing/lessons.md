@@ -66,7 +66,7 @@ machine), and it hid two things at once: the port driver, and the fact that
 the entry's inference "Windows 2000 needs no `usbhub.sys` from this INF,
 Setup places it from `driver.cab`" was wrong for the same reason.
 
-What was done: the 1.0.0.2 INF's NT copy section names `usbport.sys`,
+What was done: the 1.0.1.0 INF's NT copy section names `usbport.sys`,
 `usbd.sys` and `usbhub.sys` through `LayoutFile`, the route release 1.0.0.1
 built for the Windows 98 path; the gate refuses `usbport.sys` on the
 Windows 98 path (its `layout.inf` has no row, so the engine could not
@@ -103,7 +103,7 @@ of the INF had deliberately withheld `DisableSelectiveSuspend`; XP's does,
 through the same `Services\USB` query table the SweetLow rebuild carries.
 With the value set by hand (`Services\USB` does not exist on a stock XP
 install) the suspend did not happen and the hot-plugged mouse bound. The
-1.0.0.2 INF writes the value on both paths.
+1.0.1.0 INF writes the value on both paths.
 
 Rules this earns:
 
@@ -122,7 +122,7 @@ Affected: `src/xhci98.inf` (`[Xhci.CopyNT]`, `Xhci.AddReg.Global` on the
 NT routes), `scripts/inf-gate/check-inf.ps1` (`OS-ONWIN98`, `OS-NEVER`,
 `SUSP-*`), `docs/contributing/build-and-test.md` ("The files the OS
 supplies", "Windows XP target VM"), `scripts/setup-qemu-winxp.ps1`,
-release 1.0.0.2 (roadmap Phase 19).
+release 1.0.1.0 (roadmap Phase 19).
 
 ## The Windows 98 teardown bugcheck belongs to the Windows 2000-lineage usbport, and an XP-lineage rebuild of the same stack survives every door it dies at
 
@@ -1201,7 +1201,7 @@ does not copy them at Setup, and a Windows XP guest that had never seen a
 USB controller had none of them (Code 39 on the first boot; roadmap Phase
 19). The confound named above, an EHCI in every NT vehicle, was measured on
 XP by leaving the EHCI out, and the NT install path copies `usbport.sys` and
-`usbhub.sys` through `LayoutFile` since 1.0.0.2. The Phase 19 entry has the
+`usbhub.sys` through `LayoutFile` since 1.0.1.0. The Phase 19 entry has the
 disposition table.
 
 Rules this earns:
@@ -1222,10 +1222,10 @@ Rules this earns:
   commands contained the answer and were filed as "baseline is clean".
 
 Affected: `src/xhci98.inf` (`[Xhci.CopyW98]`, Win98 path only until
-1.0.0.2, then `[Xhci.CopyNT]` as well),
+1.0.1.0, then `[Xhci.CopyNT]` as well),
 `scripts/package/usbd-sources.expected`, `scripts/inf-gate/check-inf.ps1`
 (`W98-MISSING` / `W98-ONWIN2K` enforced the asymmetry in both directions;
-since 1.0.0.2 there is none to enforce for `usbhub.sys`, and `OS-ONWIN98`
+since 1.0.1.0 there is none to enforce for `usbhub.sys`, and `OS-ONWIN98`
 carries the one that remains, `usbport.sys` off the Windows 98 path),
 `docs/contributing/legal-provenance.md` section 5,
 `docs/contributing/runs/run-13e.md` ("Session record - bench session 1"),

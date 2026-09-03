@@ -530,7 +530,7 @@ from" paragraph still describes them. The measurements that made the change
 possible are in `docs/contributing/build-and-test.md`, "The SweetLow stack"
 and "The files the OS supplies"; roadmap Phase 17 has the tasks.
 
-Release 1.0.0.2 extends the same route on the NT install path to
+Release 1.0.1.0 extends the same route on the NT install path to
 `usbport.sys` and `usbhub.sys`, which that path did not copy until then: an
 NT install that never had a USB controller has neither (measured on a
 Windows XP guest on 2026-09-03), and both come from the `Driver Cache\i386`

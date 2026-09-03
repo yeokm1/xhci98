@@ -540,7 +540,7 @@ try {
     #
     # Since 1.0.0.1 the media carries no Microsoft file: usbd.sys and usbhub.sys
     # are copied from the OS's own install source through LayoutFile, and since
-    # 1.0.0.2 the NT path copies usbport.sys and usbhub20.sys the same way.
+    # 1.0.1.0 the NT path copies usbport.sys and usbhub20.sys the same way.
     # Every way of unwiring that is silent on the target - a root hub at Code 2
     # on Windows 98, a 0xc0000034 naming usbhub20.sys on Windows 2000, Code 39
     # with an empty trace on an NT install that never had usbport.sys - so each
@@ -642,7 +642,7 @@ try {
 
     # ---- SUSP-* : DisableSelectiveSuspend on every route (Phase 19) ---------
     #
-    # The machine-wide value, on four routes since 1.0.0.2. Each route losing
+    # The machine-wide value, on four routes since 1.0.1.0. Each route losing
     # it is a hot-plug that nothing notices on Windows 98 or Windows XP, and a
     # 0 or a non-DWORD is the same defect with the value still "present".
     Write-Step "DisableSelectiveSuspend on every route"
@@ -822,7 +822,7 @@ try {
 
     # Task 11-V.6's fix, asserted against the production INF by value on BOTH
     # paths - an assertion, not a mutation control, and named as such. Until
-    # 1.0.0.2 this pinned the value's ABSENCE on the Windows 2000 path, because
+    # 1.0.1.0 this pinned the value's ABSENCE on the Windows 2000 path, because
     # that target's native usbport never idle-suspends this controller; the
     # Windows XP reading of 2026-09-03 (roadmap task 19.2: usbport's
     # SuspendController within thirty seconds, the hot-plugged mouse invisible)
@@ -839,7 +839,7 @@ try {
     foreach ($os in @("Windows 98", "Windows 2000")) {
         $want11v6 = "reg|" + $os + "|Xhci.AddReg.Global|HKLM|System\CurrentControlSet\Services\USB|DisableSelectiveSuspend|0x00010001|1|remove"
         Assert-True (@($fp | Where-Object { $_ -eq $want11v6 }).Count -eq 2) (
-            "on " + $os + " both the device install and right-click Install must write Services\USB\DisableSelectiveSuspend = 1 (task 11-V.6's fix, on the NT path since 1.0.0.2). Rows:`n" + ($fp -join "`n"))
+            "on " + $os + " both the device install and right-click Install must write Services\USB\DisableSelectiveSuspend = 1 (task 11-V.6's fix, on the NT path since 1.0.1.0). Rows:`n" + ($fp -join "`n"))
     }
 
     # The AddService flags field. Three cases are ways the service stops being

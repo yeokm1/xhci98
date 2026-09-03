@@ -12,7 +12,7 @@ Dates are 2026 unless stated. Task ids are the roadmap's.
 Issues 1 to 3 were fixed before `1.0.0.0`, so none of them is a limitation
 of the release; those pages are here for the mechanism and for how it was
 found. Issue 4 was observed once on the Windows XP guest and recorded with
-its candidate cause; its fix is roadmap task 19.7 in release `1.0.0.2`, in
+its candidate cause; its fix is roadmap task 19.7 in release `1.0.1.0`, in
 the tree since 2026-09-03 with a host vector that reproduces the mechanism,
 and the page moves to fixed when the XP reading on a clean install is
 taken.

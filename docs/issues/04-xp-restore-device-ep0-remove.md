@@ -6,7 +6,7 @@ static reading of this driver's own code against the callback order the run
 recorded, and the host vector of section 4 reproduces it from that order:
 on the REMOVE path as it was, the vector failed exactly as the run did. The
 owner's decision that afternoon was no driver code change in release
-`1.0.0.2`; reversed the same evening, the fix in section 4 is roadmap task
+`1.0.1.0`; reversed the same evening, the fix in section 4 is roadmap task
 19.7 and landed that night. This page moves to fixed when the XP reading
 section 5 asks for is taken. Until then the workaround is to unplug the
 device and plug it back in, which enumerated cleanly in the same run.
@@ -241,7 +241,7 @@ primary targets on the same binary with the reading that nothing changed.
   attach); every attach with the class driver already present, the `p194`
   replugs included, has enumerated cleanly. A correlation on five attaches,
   not a mechanism. The reading that settles both this and the fix is the
-  clean snapshot (`winxp-clean-install`), the 1.0.0.2 package reinstalled
+  clean snapshot (`winxp-clean-install`), the 1.0.1.0 package reinstalled
   from `vm\xferxp` (the owner at the Have Disk wizard), then `usb-storage`
   and `usb-audio` each attached once: the counter at 1 and 2, the devices
   bound, and the failure counters at zero.

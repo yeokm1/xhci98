@@ -345,7 +345,7 @@ Windows 2000 SP4
 | 7.5 | Look at the Driver tab | The version is present and the date reads `Not available` |
 | 7.6 | Disable the controller in Device Manager, then re-enable it once | It goes and comes back, with no crash |
 
-7.4 is written by the NT install path since 1.0.0.2; until then it was
+7.4 is written by the NT install path since 1.0.1.0; until then it was
 absent by design. Windows 2000's native `usbport` never idle-suspends this
 controller, so on this target the value changes nothing this test can see;
 it is there because Windows XP's `usbport` does idle it, and the two halves

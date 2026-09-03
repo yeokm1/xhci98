@@ -290,7 +290,7 @@ and a Windows XP guest installed with no USB controller had none of the
 three (roadmap Phase 19; `build-and-test.md`, "The files the OS supplies",
 has the disposition table). The composite-parent half of the argument
 stands: on the NT targets that role is `usbccgp.sys`'s, and this issue's
-symptom is Windows 98's. Since 1.0.0.2 `[Xhci.CopyNT]` copies `usbhub.sys`
+symptom is Windows 98's. Since 1.0.1.0 `[Xhci.CopyNT]` copies `usbhub.sys`
 too, with the same flag, and `OS-ONWIN2K` is retired; the rule that
 survives it is `OS-ONWIN98`, for `usbport.sys`, which the Windows 98
 `layout.inf` cannot resolve.

@@ -2430,7 +2430,7 @@ the driver reads, and one the Windows 98 installer writes machine-wide.
   Until 1.0.0.1 the Windows 2000 install withheld it, because that system's
   USB stack never idles this controller and the value would have changed
   nothing. Windows XP's stack does idle it, about half a minute after start,
-  so since 1.0.0.2 the install writes it on Windows 2000 and XP as well as
+  so since 1.0.1.0 the install writes it on Windows 2000 and XP as well as
   on Windows 98. On Windows 2000 it still changes nothing you can see; it is
   the same machine-wide setting, with the same three consequences.
 

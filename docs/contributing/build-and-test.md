@@ -281,7 +281,7 @@ The build stamps are not in the header. `XHCIQUAL` and `XHCISNAP` each print a `
 
 A cut therefore has two toolchains as prerequisites beyond the DDK: Open Watcom for `XHCIQUAL.EXE` and the in-repo MSVC 6.0 for `XHCISNAP.EXE`. Neither is skippable on a real cut. `-SkipQualtool` and `-SkipSnapTool` exist for a host that cannot build one, and a release cut with the second publishes a read channel nobody can open.
 
-The scheme is one four-part version per released package, bumped in the last field, with the date set to the release date and never moving backwards within a series. It is a package version rather than a build counter: the deploy loop overwrites `xhci98.sys` in place and never re-runs the INF (see "Deploying a build into the Win98 VM"), so a per-build number would churn with no observer.
+The scheme is one four-part version per released package: the last field moves for a release that changes only the install media or the documents (`1.0.0.1`), the third field for one that changes the driver's code (`1.0.1.0`, the owner's decision of 2026-09-03 when task 19.7 put a code change into Phase 19's release), with the date set to the release date and never moving backwards within a series. It is a package version rather than a build counter: the deploy loop overwrites `xhci98.sys` in place and never re-runs the INF (see "Deploying a build into the Win98 VM"), so a per-build number would churn with no observer.
 
 The major version says whether this is a final release. It is `1`: task 14.2 cut `1.0.0.0`, the first one, and every package before it was a `0.x` pre-release that carried no claim of being finished. Those directories are gone and `releases\history.md` holds one entry. The current number is in `src\xhci_version.h` and is not repeated here.
 
@@ -991,7 +991,7 @@ This is fixed (roadmap task 11-V.6, and `docs/using/release-notes.md`,
 the `DisableSelectiveSuspend` entry under "Known limitations", which
 documents the setting rather than the defect). Both install paths write
 `HKLM\System\CurrentControlSet\Services\USB\DisableSelectiveSuspend = 1`
-(the Windows 98 path since task 11-V.6, the NT path since 1.0.0.2, when the
+(the Windows 98 path since task 11-V.6, the NT path since 1.0.1.0, when the
 Windows XP guest showed XP's usbport idling the controller about thirty
 seconds after start), which stops NUSB's usbport idling the controller at
 all: `SuspendController` never fires, `USBCMD` reads `0x00000005`, and a
@@ -1272,7 +1272,7 @@ Why a second image: Windows 2000 installs its USB files per detected
 controller (the paragraph above), and every earlier Windows 2000 image here
 was installed or first booted with an EHCI, whose in-box driver install is
 what placed `usbport.sys` from `Driver Cache\i386`. No such image can show
-whether the `1.0.0.2` INF's `LayoutFile` line places the file itself on a
+whether the `1.0.1.0` INF's `LayoutFile` line places the file itself on a
 machine that has only an xHCI, which is the reading the release claims and
 the install a stranger's xHCI-only machine makes. `vm\win2k.img` keeps its
 roles as the carried-along 2b target and the differential.
@@ -1483,7 +1483,7 @@ kept it best-effort for cost, with the static registration gate looking
 compatible. What tier XP becomes is the owner's decision, roadmap task 19.6,
 and no document names it as supported until that is taken. What follows is
 the recipe, what the first afternoon measured, and what the measurement
-changed: the two INF fixes release 1.0.0.2 carries ("The files the OS
+changed: the two INF fixes release 1.0.1.0 carries ("The files the OS
 supplies" below, and the `DisableSelectiveSuspend` block in
 `src/xhci98.inf`).
 
@@ -1555,7 +1555,7 @@ to the door sequence was on the launcher's original 4+4 port layout, plain
   `Driver Cache\i386\sp3.cab` only when a USB controller's install pulls
   it, and this guest never had one. The same `layout.inf` table says the
   same of Windows 2000, whose every vehicle here carried an EHCI; the
-  1.0.0.2 INF has the NT path copy the file itself ("The files the OS
+  1.0.1.0 INF has the NT path copy the file itself ("The files the OS
   supplies").
 - **With a companion EHCI (`qemu-winxp-run.cmd ehci ehci`), the same
   binary ran.** `DriverEntry`, `USBPORT_GetHciMn=10000001`,
@@ -1580,10 +1580,10 @@ to the door sequence was on the launcher's original 4+4 port layout, plain
   `endpoints opened` 1, "USB Human Interface Device", interrupt transfers
   submitted and completed while the pointer was driven, no refusal or
   failure counter moved. Both "USB Root Hub" entries present. This is
-  roadmap task 19.2's observation, before the INF change; the 1.0.0.2 INF
+  roadmap task 19.2's observation, before the INF change; the 1.0.1.0 INF
   writes the value on the NT path, and the `p194` run below repeated the
   reading from a package install on the clean snapshot with no EHCI.
-- **The 1.0.0.2 INF from a package install, xHCI only, on the clean
+- **The 1.0.1.0 INF from a package install, xHCI only, on the clean
   snapshot (`p194`, later the same day, the owner driving the wizard on a
   host with no XP ISO): the driver loaded on that boot.** Have Disk from
   `E:\` finished with "installed and ready to use", no CD prompt and no
@@ -1601,7 +1601,7 @@ to the door sequence was on the launcher's original 4+4 port layout, plain
   `dss` run (port 5, `SET_ADDRESS` intercepted, `devices addressed` 1,
   `endpoints opened` 1, "USB Human Interface Device", interrupt transfers
   completing while the pointer was driven), every refusal and failure
-  counter at zero. This is roadmap task 19.4, the reading release 1.0.0.2
+  counter at zero. This is roadmap task 19.4, the reading release 1.0.1.0
   claims; 19.1 and 19.2 closed on it.
 - **The door sequence, the same boot, the mouse attached (task 19.3).**
   Device Manager Disable: `AbortTransfer` on the mouse's pipe,
@@ -3880,12 +3880,12 @@ memory. Shape:
 | Both | `[XhciModels]` | `%XhciDesc%=Xhci.Dev,PCI\CC_0C0330`, one class-code entry, the analog of the references' `PCI\CC_0C0320` |
 | Win98 | `[Xhci.Dev]` | `AddReg=Xhci.AddReg`, `CopyFiles=Xhci.CopyFiles,Xhci.CopyW98` |
 | Win98 | `[Xhci.AddReg]` | `HKR,,DevLoader,,*NTKERN` + `HKR,,NTMPDriver,,xhci98.sys` |
-| Win2000 | `[Xhci.Dev.NTx86]` | `AddReg=Xhci.AddReg.NT,Xhci.AddReg.Global` (the second since 1.0.0.2, the NT half of the `DisableSelectiveSuspend` write), `CopyFiles=Xhci.CopyFiles,Xhci.CopyNT` |
+| Win2000 | `[Xhci.Dev.NTx86]` | `AddReg=Xhci.AddReg.NT,Xhci.AddReg.Global` (the second since 1.0.1.0, the NT half of the `DisableSelectiveSuspend` write), `CopyFiles=Xhci.CopyFiles,Xhci.CopyNT` |
 | Win2000 | `[Xhci.Dev.NTx86.Services]` | `AddService=xhci98,0x00000002,Xhci.AddService` |
 | Win2000 | `[Xhci.AddService]` | `ServiceBinary=%12%\xhci98.sys`, type 1, start 3, error 1, `LoadOrderGroup=Base` |
 | Shared | `[Xhci.CopyFiles]` | `xhci98.sys,,xhci98.tmp` -> `10, System32\Drivers` |
 | Win98 | `[Xhci.CopyW98]` | `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, both fetched from the OS's own install source through `LayoutFile` (neither is in `[SourceDisksFiles]`). The second is Windows 98's composite parent; on the NT targets the same name is the OS's own hub driver, and the NT row copies it too. |
-| Win2000 | `[Xhci.CopyNT]` | `usbport.sys,,,16`, `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, from `Driver Cache\i386` through `LayoutFile`. `usbd.sys` alone until 1.0.0.2; an NT install that never had a USB controller has none of the three (the Windows XP guest of 2026-09-03) |
+| Win2000 | `[Xhci.CopyNT]` | `usbport.sys,,,16`, `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, from `Driver Cache\i386` through `LayoutFile`. `usbd.sys` alone until 1.0.1.0; an NT install that never had a USB controller has none of the three (the Windows XP guest of 2026-09-03) |
 | Both | `[DefaultInstall]` / `[DefaultInstall.NTx86]` | right-click pre-stage; the 9x one also copies the INF to `%17%` |
 
 Four decisions in it depart from the references, each for a reason that would
@@ -3907,7 +3907,7 @@ otherwise cost a debug cycle:
   neither, unlike both references. On Windows 98 the USB 2.0 stack (NUSB or
   SweetLow's) places `usbport.sys` unconditionally and that OS's `layout.inf`
   has no row for it, so the engine could not resolve one. On the NT targets
-  it is the OS's own and is copied since 1.0.0.2 through the same
+  it is the OS's own and is copied since 1.0.1.0 through the same
   `LayoutFile` route as the next section's files; the belief until then,
   that SP4 places it natively, held only because every Windows 2000 vehicle
   had an EHCI (the Windows XP guest of 2026-09-03: Code 39). `usbhub20.sys`
@@ -3940,7 +3940,7 @@ parent, absent for the same reason, and without it every multi-interface
 device stops at "USB Composite Device", Code 2 (issue 03; batch 13-E measured
 it on the E460). Under SweetLow's stack the parent is his `usbccgp.sys` and
 the file is inert. On the NT targets the name belongs to the OS's own hub
-driver, and until 1.0.0.2 this section said it was "placed from `driver.cab`
+driver, and until 1.0.1.0 this section said it was "placed from `driver.cab`
 by every install, so the Windows 2000 path must not ask for it". That was
 wrong. Both NT targets' `layout.inf` give it the text-mode disposition that
 does not copy it at Setup (the table below), the Phase 2d Windows 2000
@@ -3989,7 +3989,7 @@ on clean guests of both NT targets (roadmap tasks 19.4 and 19.5); the gate
 refuses a path that names it (`OS-NEVER`).
 
 All three are the operating system's own files, so since release 1.0.0.1
-(1.0.0.2 for the NT path's `usbport.sys` and `usbhub.sys`) the INF takes
+(1.0.1.0 for the NT path's `usbport.sys` and `usbhub.sys`) the INF takes
 them from the operating system's own install source rather than carrying
 them:
 

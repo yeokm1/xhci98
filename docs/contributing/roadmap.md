@@ -48,8 +48,8 @@ limitation. Phase 17, opened and closed on 2026-09-02, has the operating
 system supply `usbd.sys` and `usbhub.sys` from its own install source, so the
 package stops carrying any Microsoft file; no driver code changes. Phase 18,
 closed the same day, is release `1.0.0.1`, that change together with Windows
-ME support. Phase 19, opened on 2026-09-03 on branch `1.0.0.2`, is release
-`1.0.0.2`: Windows XP support, and the fix for the two gaps the first XP
+ME support. Phase 19, opened on 2026-09-03 on branch `1.0.1.0`, is release
+`1.0.1.0`: Windows XP support, and the fix for the two gaps the first XP
 guest measured, an NT install that never had a USB controller has no
 `usbport.sys` for this driver to import, and XP's `usbport` idle-suspends the
 controller so a later hot-plug is invisible; both are INF changes that reach
@@ -122,7 +122,7 @@ bare-metal validation and Phase 14 the `1.0.0.0` release. Phase 15, added
 after the cut, moves the tree to revision 1.2c of the xHCI specification, and
 Phase 16 is the unattended post-release run on freshly installed guests. Phase
 17 has the OS supply `usbd.sys` and `usbhub.sys`, Phase 18 is release
-`1.0.0.1` with Windows ME, and Phase 19 is release `1.0.0.2` with Windows XP
+`1.0.0.1` with Windows ME, and Phase 19 is release `1.0.1.0` with Windows XP
 and the NT-side install fixes the XP guest found. Phase
 14 waited on Phase 13's bench batches reporting. Accepting the published release, from the download on a
 freshly installed VM and on a physical machine, is not a phase and has no
@@ -1346,10 +1346,10 @@ Records: `build-and-test.md` ("Windows ME target VM"); `lessons.md`
 ("Windows ME on QEMU"); `scripts/vm-matrix/README.md`; `releases/history.md`;
 `handoff.md`.
 
-## Phase 19 - Release `1.0.0.2`: Windows XP, and the NT Install Fixes
+## Phase 19 - Release `1.0.1.0`: Windows XP, and the NT Install Fixes
 
 Goal: the driver observed on a 32-bit Windows XP guest with its standing
-stated in every document that names the targets, and `1.0.0.2` cut carrying
+stated in every document that names the targets, and `1.0.1.0` cut carrying
 the two INF changes the first XP guest showed are needed on an xHCI-only NT
 machine: the operating system supplying `usbport.sys` (with `usbd.sys` and
 `usbhub.sys`) on the NT install path, and the NT path disabling usbport's
@@ -1360,7 +1360,12 @@ so neither gap could show there. One driver code change rides with them,
 issue 4's identity check on the EP0 REMOVE path, since the owner's decision
 of 2026-09-03 evening (task 19.7).
 
-Status: open, since 2026-09-03, on branch `1.0.0.2`. The owner asked that
+Status: open, since 2026-09-03, on branch `1.0.1.0` (the branch and the
+release were `1.0.0.2` until the night of 2026-09-03, when the owner
+renumbered to `1.0.1.0` because task 19.7 makes this a driver code change:
+the third field moves for code, the fourth for install media and documents;
+`src\xhci_version.h` and `DriverVer` carry the number since then, and the
+date moves at the cut). The owner asked that
 morning whether XP could be supported, installed the guest by hand the same
 afternoon (`vm\winxp.img`, snapshot `winxp-clean-install`, WHPX with ACPI
 on, the machine TCG storms), and drove the package install. The first boot
@@ -1511,12 +1516,12 @@ Tasks:
   evening, the fix is task 19.7.
 - [x] 19.4 the fix observed where the gap is, XP: revert `vm\winxp.img` to
   `winxp-clean-install`, boot the run launcher with NO EHCI, install the
-  `1.0.0.2` package from the transfer drive, and read: no CD prompt (the
+  `1.0.1.0` package from the transfer drive, and read: no CD prompt (the
   cabs are in the driver cache), `usbport.sys` placed, the driver loaded on
   the first boot, root hub up, then 19.2's hot-plug. This is the reading no
   earlier image could give, and the one the release claims.
   Read 2026-09-03 (run tag `p194`, host `FW-W11P-YKM` with no XP ISO on
-  it, the owner driving the wizard; the package the 1.0.0.2-state INF with
+  it, the owner driving the wizard; the package the 1.0.1.0-state INF with
   the qemu-flavour binary still versioned 1.0.0.1): Have Disk from `E:\`
   finished with "installed and ready to use", no CD prompt, no reboot
   asked; `DriverEntry`, `USBPORT_GetHciMn=10000001`,
@@ -1536,7 +1541,7 @@ Tasks:
   2000 SP4 install with no USB controller attached (the existing install
   launcher, a throwaway image, the owner's key), a directory listing before
   any controller is attached (the measurement `lessons.md` records as
-  inferred: `usbport.sys` absent), then the `1.0.0.2` package installed
+  inferred: `usbport.sys` absent), then the `1.0.1.0` package installed
   with the xHCI alone: `usbport.sys` placed from `Driver Cache`, root hub
   (`usbhub20.sys`, placed by the OS's own `USB.INF` when usbport creates the
   root hub PDO, or not: this is the reading) and a HID mouse. If the root
@@ -1573,7 +1578,7 @@ Tasks:
   The install, read 2026-09-03 17:16-17:27 (run tag `p195`, host
   `FW-W11P-YKM`, no Windows 2000 ISO attached so no CD prompt could have
   been satisfied, the owner driving the wizard; the package the
-  1.0.0.2-state INF with the qemu-flavour binary built 15:33, still
+  1.0.1.0-state INF with the qemu-flavour binary built 15:33, still
   versioned 1.0.0.1): the Found New Hardware wizard was on the desktop at
   the first boot with the xHCI alone, Have Disk from the transfer drive
   finished with no CD prompt and no reboot, and within twenty seconds the
@@ -1664,22 +1669,23 @@ Tasks:
   versioned 1.0.0.1). Still owed: the XP reading on a clean install (the
   counter moving while storage and audio bind on their first attach), then
   2a and 2b on the same binary.
-- [ ] 19.8 the 9x targets unchanged: the `1.0.0.2` package installed from
+- [ ] 19.8 the 9x targets unchanged: the `1.0.1.0` package installed from
   the asset on Windows 98 SE under NUSB and under SweetLow, and on Windows
   ME, the 18.7 route, and `run-matrix.ps1 -PostRelease` on the fresh 2a and
   2b clones as Phase 16 ran it, the 2b clone re-cloned (`-Clone -FreshCopy`)
   from the xHCI-only base 19.5 made. The Windows 2000 leg now also carries the
   `DisableSelectiveSuspend` value and every leg carries 19.7's change; the
   reading is that nothing changed.
-- [ ] 19.9 version `1.0.0.2` in `src\xhci_version.h` and the INF's
-  `DriverVer`, the `releases/history.md` entry (XP; `usbport.sys`,
+- [ ] 19.9 the release date in `src\xhci_version.h` and the INF's
+  `DriverVer` (the number `1.0.1.0` has been there since 2026-09-03), the
+  release notes' opening line, the `releases/history.md` entry (XP; `usbport.sys`,
   `usbd.sys`, `usbhub.sys` from the OS on the NT path; idle suspend
   disabled on the NT path; 19.7's change to the EP0 REMOVE path, issue 4),
   then the cut with `make-release.ps1`, every gate green, and the install
   route checked from the asset on every target as 18.7 did.
 
 Checkpoint: on an XP guest that has never had another USB controller, the
-`1.0.0.2` package installs from the asset, the driver loads on the first
+`1.0.1.0` package installs from the asset, the driver loads on the first
 boot with `usbport.sys` supplied by the OS from its own cache, the root hub
 comes up, a HID device hot-plugged after the idle window binds, and a
 mass-storage device works on its first attach (issue 4); the same install

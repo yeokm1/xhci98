@@ -30,7 +30,7 @@ What it checks, grouped by the failure each rule prevents:
   OS-*     The files the operating system supplies - usbd.sys and usbhub.sys
            on both targets, usbport.sys on the NT targets - which the media
            does not carry (usbd.sys and usbhub.sys since release 1.0.0.1,
-           usbport.sys on the NT path since 1.0.0.2): [Version] must name
+           usbport.sys on the NT path since 1.0.1.0): [Version] must name
            LayoutFile=layout.inf, every install path (device and right-click)
            must copy usbd.sys and usbhub.sys and the NT paths alone
            usbport.sys (Windows 98's layout.inf has no such file; NUSB or
@@ -44,7 +44,7 @@ What it checks, grouped by the failure each rule prevents:
            1: every install path (device and right-click, both targets) must
            write it as a DWORD 1. Windows 98's usbport builds idle-suspend the
            controller within half a second and Windows XP's within thirty
-           seconds, and a halted xHC cannot report a hot-plug. Until 1.0.0.2
+           seconds, and a halted xHC cannot report a hot-plug. Until 1.0.1.0
            the NT path omitted it and the self-tests pinned the asymmetry;
            the XP reading of 2026-09-03 inverted that.
   VAL-*    Per-device registry values the driver reads at run time. Each must
@@ -1160,7 +1160,7 @@ foreach ($m in $models) {
 # start with nothing attached; a halted xHC cannot report a port change, so a
 # device plugged in afterwards is invisible until Refresh. Windows 2000's
 # native build never idles this controller and the value changes nothing
-# there. Until 1.0.0.2 the NT path omitted it for that reason and the
+# there. Until 1.0.1.0 the NT path omitted it for that reason and the
 # self-tests pinned the omission; the XP reading of 2026-09-03 made the value
 # an NT-path need too, so now every route must write it.
 #
@@ -1202,7 +1202,7 @@ foreach ($m in $models) {
             }
         }
         if ($hits.Count -eq 0) {
-            Add-Failure "SUSP-MISSING" ("{0} does not write HKLM,{1},{2}. Windows 98's and Windows XP's usbport idle-suspend the controller without it and a halted xHC cannot report a hot-plug; since 1.0.0.2 every install route on both targets writes it." -f $route.Label, $suspKey, $suspValue)
+            Add-Failure "SUSP-MISSING" ("{0} does not write HKLM,{1},{2}. Windows 98's and Windows XP's usbport idle-suspend the controller without it and a halted xHC cannot report a hot-plug; since 1.0.1.0 every install route on both targets writes it." -f $route.Label, $suspKey, $suspValue)
             continue
         }
         if ($hits.Count -gt 1) {

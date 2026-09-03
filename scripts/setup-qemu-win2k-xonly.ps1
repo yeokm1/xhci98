@@ -13,7 +13,7 @@ what placed usbport.sys from Driver Cache\i386: Windows 2000 gives usbport.sys,
 usbhub.sys, usbehci.sys and usbd.sys the layout.inf disposition that does not
 copy them at Setup (docs\contributing\lessons.md, the 2026-09-03 entry). So on
 those images a package install could never show whether the INF's LayoutFile
-line places usbport.sys itself, which is the reading release 1.0.0.2 claims
+line places usbport.sys itself, which is the reading release 1.0.1.0 claims
 for an xHCI-only NT machine (roadmap task 19.5). This image can.
 
 Same machine as the checkpointed 2b recipe (scripts\setup-qemu-win2k.ps1): TCG
@@ -155,7 +155,7 @@ Write-AsciiFile $installCmd (@(
     "rem A Windows 2000 install that NEVER sees a USB controller, the base of the",
     "rem fresh Windows 2000 clone since 2026-09-03 (config.sample.psd1, 2b-fresh).",
     "rem Every earlier Windows 2000 image carried an EHCI whose install placed",
-    "rem usbport.sys from Driver Cache\i386, which hid whether the 1.0.0.2 INF",
+    "rem usbport.sys from Driver Cache\i386, which hid whether the 1.0.1.0 INF",
     "rem places it itself on an xHCI-only machine (lessons.md, 2026-09-03).",
     "rem",
     "rem Same machine as the checkpointed 2b recipe (qemu-win2k-install.cmd): TCG",

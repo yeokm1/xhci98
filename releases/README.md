@@ -141,7 +141,7 @@ and the Windows setup engine copies each from the OS's own install source,
 the CABs on the hard disk or the Windows 98 CD, and the NT targets'
 `Driver Cache\i386`, never overwriting a file already there. On an xHCI-only
 Windows 98 machine the install therefore asks for the Windows 98 SE CD; the
-generated `readme.txt` says so in its section 3. Until 1.0.0.2 the NT path
+generated `readme.txt` says so in its section 3. Until 1.0.1.0 the NT path
 copied `usbd.sys` only, and an NT install that had never seen a USB
 controller had no `usbport.sys` for the driver to load against (Code 39,
 measured on a Windows XP guest on 2026-09-03).

@@ -74,7 +74,7 @@ LayoutFile=layout.inf
 ; release date are edited. scripts\inf-gate\check-inf.ps1 refuses the two
 ; disagreeing, and scripts\package\make-package.ps1 checks the version compiled
 ; into the .sys it stages against this line.
-DriverVer=09/02/2026,1.0.0.1
+DriverVer=09/02/2026,1.0.1.0
 
 ; Provider and the manufacturer are two different fields. [Version]'s Provider
 ; is who supplied the driver (Driver tab, "Driver Provider"); the key below is
@@ -184,7 +184,7 @@ HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1
 ;     removing the device does not take it with it, and this package cannot
 ;     know whether something else wanted it.
 ;
-; Until release 1.0.0.2 the NT path omitted it, because Windows 2000's native
+; Until release 1.0.1.0 the NT path omitted it, because Windows 2000's native
 ; usbport never idle-suspends this controller and the value would have
 ; changed nothing there. Windows XP's does, so the NT path now writes it too:
 ; on Windows 2000 it still changes nothing (the reading roadmap task 19.8
@@ -328,7 +328,7 @@ xhci98.sys,,xhci98.tmp
 ; unloadable). Under SweetLow's stack composites are parented by its
 ; usbccgp.sys instead, and this copy is inert there. On the NT targets the
 ; same name is the OS's own hub driver, and it is delivered there too since
-; 1.0.0.2: it is not "placed by every install" as this file said until then.
+; 1.0.1.0: it is not "placed by every install" as this file said until then.
 ; Both NT targets' layout.inf give usbport.sys, usbhub.sys, usbehci.sys and
 ; usbd.sys the text-mode disposition that does not copy them at Setup, so
 ; an NT install that never had a USB controller has none of them (read from

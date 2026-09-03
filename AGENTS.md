@@ -345,7 +345,7 @@ rules that bind day-to-day work, and none of them is optional.
   the assembled asset carried three (`usbd98.sys`, `usbd2k.sys`,
   `usbhub98.sys`), by a decision `legal-provenance.md` section 5 records, and
   that was withdrawn on 2026-09-02 before any upload: release 1.0.0.1 has the
-  OS supply both files through the INF's `LayoutFile`, and 1.0.0.2 adds
+  OS supply both files through the INF's `LayoutFile`, and 1.0.1.0 adds
   `usbport.sys` on the NT path by the same route. **Do not put a
   Microsoft file back onto the media, under any name, without a decision
   recorded there**, and do not write "this project redistributes nothing"

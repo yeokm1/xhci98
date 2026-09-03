@@ -43,12 +43,12 @@
 
 /* The four-part package version, as four integers - what FILEVERSION and
  * PRODUCTVERSION take, and what the Windows shell sorts by. */
-#define XHCI_VER_CSV            1,0,0,1
+#define XHCI_VER_CSV            1,0,1,0
 
 /* The same number as a string - the resource's two version strings, the DOS
  * qualifier's banner, and the snapshot reader's report header. Must agree with
  * XHCI_VER_CSV above; the INF gate refuses a build where it does not. */
-#define XHCI_VER_STR            "1.0.0.1"
+#define XHCI_VER_STR            "1.0.1.0"
 
 /* The release date, in the MM/DD/YYYY form `DriverVer` takes, zero-padded -
  * the INF gate refuses an unpadded one, because Windows 98's 16-bit parser is

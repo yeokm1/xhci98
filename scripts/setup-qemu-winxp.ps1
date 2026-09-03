@@ -20,8 +20,8 @@ Setup, and the same flags ran XP Setup to the desktop with no storm. Probe
 WHPX on a new host before trusting it (the lessons entry names the probe).
 
 The run launcher attaches qemu-xhci alone by default. That is the reading
-release 1.0.0.2 claims: an NT install that never had a USB controller has no
-usbport.sys (Code 39 on the first XP boot, 2026-09-03), and since 1.0.0.2 the
+release 1.0.1.0 claims: an NT install that never had a USB controller has no
+usbport.sys (Code 39 on the first XP boot, 2026-09-03), and since 1.0.1.0 the
 INF has Windows place it from Driver Cache\i386 itself. Pass "ehci" as the
 launcher's second argument to add the companion EHCI the spike used before
 that fix, which makes the in-box stack place usbport.sys instead.
@@ -225,7 +225,7 @@ Write-AsciiFile $runCmd (@(
     "rem  - NO companion EHCI by default. An NT install that never had a USB",
     "rem    controller has no usbport.sys (Code 39 on the first XP boot,",
     "rem    2026-09-03: XP keeps it in Driver Cache\i386\sp3.cab and layout.inf",
-    "rem    says do not copy it at Setup), and since 1.0.0.2 the INF has Windows",
+    "rem    says do not copy it at Setup), and since 1.0.1.0 the INF has Windows",
     "rem    place it itself. That xHCI-only reading is what roadmap task 19.4",
     "rem    takes. %2 = ehci adds the companion EHCI the spike used before that",
     "rem    fix: the in-box stack binding it is what placed usbport.sys then.",
