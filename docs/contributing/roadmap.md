@@ -1833,7 +1833,16 @@ Tasks:
   Driver, Have Disk at `D:\RELEASE`, no prompt for media; controller and
   USB Root Hub with no mark, USB Human Interface Device and HID-compliant
   mouse bound, the base's Ethernet and VGA controllers the only marks.
-  Screens in `out\post-release\1.0.1.0\asset-legs\`. The XP leg is owed.
+  Windows XP (the same morning): `vm\winxp.img` at `winxp-clean-install`
+  (the i4b state kept as `pre-19.9-xp-asset-2026-09-04`), the run launcher
+  with the xHCI alone, the asset's `release\` on the transfer drive; Have
+  Disk at `E:\RELEASE`, no prompt for media, no reboot; a USB mouse
+  attached from the monitor after the install bound with no Refresh
+  (Found New Hardware, HID-compliant mouse), then `usb-storage` on its
+  first-ever attach on that install: USB Mass Storage Device, the disk and
+  its volume installed in turn, ready to use, the device's address never
+  moving; controller and USB Root Hub with no mark, the base's VGA
+  controller the only one. Screens in `out\post-release\1.0.1.0\asset-legs\`.
 
 Checkpoint: on an XP guest that has never had another USB controller, the
 `1.0.1.0` package installs from the asset, the driver loads on the first
