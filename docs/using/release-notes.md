@@ -11,9 +11,10 @@ copy to fix.
 ## What this is
 
 `xhci98.sys` is a USB host controller driver that gives Windows 98 SE,
-Windows 2000 SP4 and Windows ME working USB on machines whose only USB
-controller is xHCI. One binary serves all three, and the INF carries both
-install paths (Windows ME reads the Windows 98 one).
+Windows 2000 SP4, Windows ME and 32-bit Windows XP working USB on machines
+whose only USB controller is xHCI. One binary serves all four, and the INF
+carries both install paths (Windows ME reads the Windows 98 one, Windows XP
+the Windows 2000 one).
 
 It is a miniport for `usbport.sys`, not a whole USB stack. It plugs in
 underneath Microsoft's USB port driver the same way the in-box `usbehci.sys`
@@ -35,7 +36,13 @@ you would be the first. Windows ME stands where Windows 2000 does: supported
 in virtual machines only, observed once (2026-09-02) under SweetLow's USB 2.0
 stack, the only stack it is supported with, with the driver loading and a
 HID mouse, a mass-storage device and a composite audio device binding. It
-has never run on real hardware either.
+has never run on real hardware either. So does 32-bit Windows XP, since this
+release: supported in virtual machines only, observed in one QEMU guest (XP
+Professional SP3, 2026-09-03) on which the package installed with the xHCI
+alone and no prompt, the driver started under XP's own USB stack, a HID
+mouse, a mass-storage device and a composite audio device bound, and the
+disable, enable, remove and rescan sequence survived. It has never run on
+real hardware.
 
 ## What this is not
 
@@ -49,8 +56,8 @@ has never run on real hardware either.
   SuperSpeed side. If the machine presents more than one unrecognised xHCI,
   install on the one the qualifier reports USB 2.0 protocol ports for.
 - It is not signed. `xhci98.sys` carries no Authenticode signature. Windows 98
-  SE does not check; Windows 2000 SP4 shows an unsigned-driver warning during
-  install and then installs it.
+  SE does not check; Windows 2000 SP4 and Windows XP show an unsigned-driver
+  warning during install and then install it (on XP, choose Continue Anyway).
 - On Windows 98 it is not standalone. Windows 98 has no `usbport.sys` of its
   own. **NUSB must be installed first**; it is what places `usbport.sys`
   and `usbhub20.sys`. Without it the driver will not load, with no useful
@@ -70,10 +77,10 @@ has never run on real hardware either.
 
 | | |
 |---|---|
-| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000) in virtual machines only, see "What this is". 32-bit Windows XP is accommodated where the cost is small, but nothing about it has been run. |
-| USB stack | Windows 98: NUSB 3.3, installed before this driver (NUSB 3.6 ships the identical USB 2.0 stack and has been observed working, in a virtual machine only; so has the SweetLow stack that Windows 98 QuickInstall 1.0.1 and later bundle, which also removes the first known limitation below; see the README's installation steps). Windows ME: SweetLow's stack only; its own USB stack has no `usbport.sys`, and on it the driver installs and shows Code 2. Do not install NUSB on Windows ME, it is a Windows 98 SE package. Windows 2000: SP4's native stack, or the standalone USB 2.0 update KB319973. **Do not install NUSB on Windows 2000.** |
+| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000) and 32-bit Windows XP (SP3) in virtual machines only, see "What this is". |
+| USB stack | Windows 98: NUSB 3.3, installed before this driver (NUSB 3.6 ships the identical USB 2.0 stack and has been observed working, in a virtual machine only; so has the SweetLow stack that Windows 98 QuickInstall 1.0.1 and later bundle, which also removes the first known limitation below; see the README's installation steps). Windows ME: SweetLow's stack only; its own USB stack has no `usbport.sys`, and on it the driver installs and shows Code 2. Do not install NUSB on Windows ME, it is a Windows 98 SE package. Windows 2000: SP4's native stack, or the standalone USB 2.0 update KB319973. **Do not install NUSB on Windows 2000.** Windows XP: its own USB stack, nothing to install; NUSB is not for it either. |
 | Controller | An xHCI controller presenting PCI class code `0C0330`, with at least one USB 2.0 protocol port, a BAR0 mapped below 4 GB, and a legacy interrupt pin. Neither target has an MSI path, so a controller reporting `Interrupt Pin = 0` cannot be driven at all. |
-| Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk (`C:\WINDOWS\OPTIONS\CABS`). The install copies Windows' own `usbd.sys` and `usbhub.sys` from it. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the hard disk; the virtual machine tried asked for nothing. Windows 2000: nothing; `usbport.sys`, `usbd.sys` and `usbhub.sys` come from the driver cache every install has. |
+| Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk (`C:\WINDOWS\OPTIONS\CABS`). The install copies Windows' own `usbd.sys` and `usbhub.sys` from it. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the hard disk; the virtual machine tried asked for nothing. Windows 2000 and Windows XP: nothing; `usbport.sys`, `usbd.sys` and `usbhub.sys` come from the driver cache every install has (`sp4.cab` and `sp3.cab` respectively). |
 
 Run the qualifier before installing anything; it answers all three of the
 controller conditions in a single read-only pass.
@@ -114,8 +121,9 @@ The package is a directory holding two files, `xhci98.inf` and
   choice (README, installation steps). Then Device
   Manager -> the unrecognised xHCI device -> *Update Driver* -> *Specify a
   location* -> the package directory.
-- Windows 2000 SP4: Device Manager -> the unrecognised xHCI device ->
-  *Update Driver* -> *Have Disk* -> the package directory.
+- Windows 2000 SP4 and Windows XP: Device Manager -> the unrecognised xHCI
+  device -> *Update Driver* -> *Have Disk* -> the package directory. XP
+  shows its unsigned-driver warning; choose *Continue Anyway*.
 - Windows ME: SweetLow's stack first, and only that one (NUSB is a Windows
   98 SE package): [usb20_win9x.zip](http://sweetlow.orgfree.com/download/usb20_win9x.zip)
   from SweetLow's site, unzipped; right-click the `USB2.INF` at its root,
@@ -124,7 +132,8 @@ The package is a directory holding two files, `xhci98.inf` and
 Three files the driver depends on are not in the package because they are
 Windows' own: `usbd.sys`, which the USB 2.0 root hub imports on both
 targets; `usbhub.sys`, the driver for composite devices on Windows 98 and
-the hub driver on Windows 2000; and, on Windows 2000, `usbport.sys`, the
+the hub driver on Windows 2000 and XP; and, on Windows 2000 and XP,
+`usbport.sys`, the
 USB stack this driver plugs into (on Windows 98 NUSB or SweetLow's package
 supplies it). Windows places its USB files only when Setup finds a USB
 controller it recognises, and an xHCI-only machine has none of them, so the
@@ -136,8 +145,8 @@ On an xHCI-only Windows 98 machine that means an "Insert Disk" prompt naming
 the Windows 98 Second Edition CD-ROM during the copy, unless the Windows
 CABs are on the hard disk (OEM and Windows 98 QuickInstall installs). Insert
 the CD and click OK; if it then asks where to copy from, give it the CD's
-`WIN98` folder. Windows 2000 takes all three from its driver cache and asks
-for nothing. If the prompt is cancelled the driver still installs, but the
+`WIN98` folder. Windows 2000 and Windows XP take all three from their driver
+cache and ask for nothing. If the prompt is cancelled the driver still installs, but the
 USB 2.0 Root Hub sits at Code 2 (Windows 2000: a `0xc0000034` error naming
 `usbhub20.sys`); that reads as a fault in this driver and is not one. Put
 the CD in and install the driver again.

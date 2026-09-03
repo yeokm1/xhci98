@@ -1,6 +1,6 @@
 # xhci98
 
-This project xHCI98 is a WDM generic USB host controller driver for xHCI host controllers targeting Windows 98 SE, ME and 2000 SP4. Although xHCI Controllers offer USB 3.0, this driver runs USB 2.0 on the controller only.
+This project xHCI98 is a WDM generic USB host controller driver for xHCI host controllers targeting Windows 98 SE, ME, 2000 SP4 and 32-bit XP. Although xHCI Controllers offer USB 3.0, this driver runs USB 2.0 on the controller only.
 
 This driver is developed based on Intel's xHCI specification and tested only on Intel machines so far. No guarantees have been made on xHCI implementations from other vendors.
 
@@ -37,8 +37,9 @@ The driver needs a USB 2.0 stack (`usbport.sys` + `usbhub20.sys`) on the machine
 - **Windows 98 SE**: either [NUSB 3.3e](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html), the configuration this project tests against (NUSB 3.6 also works), or the newer [SweetLow stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip), under which disabling, removing and upgrading this driver do not crash Windows 98. For SweetLow's: unzip, right-click the `USB2.INF` at its root, *Install*, reboot. A [Windows 98 QuickInstall](https://github.com/oerg866/win98-quickinstall) 1.0.1 or later system already has it. If NUSB is installed, remove its USB 2.0 stack through Add/Remove Programs first, then install SweetLow's before rebooting.
 - **Windows ME**: the [SweetLow stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip) only, installed the same way. NUSB is a Windows 98 SE package. Without the stack the driver installs but the controller shows Code 2.
 - **Windows 2000 SP4**: nothing to install; SP4 has the stack (or use the standalone USB 2.0 update KB319973). **Do not install NUSB on Windows 2000.**
+- **Windows XP (32-bit)**: nothing to install; XP has the stack. **Do not install NUSB on Windows XP.**
 
-On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand**: the package carries no Microsoft file, so the install has Windows copy its own `usbd.sys` and `usbhub.sys` from the CD ("Insert Disk"), unless the Windows CABs are on the hard disk (`C:\WINDOWS\OPTIONS\CABS`, as on OEM and QuickInstall installs). A machine that ever had a USB 1.1 controller already has both files. Windows 2000 copies its own `usbport.sys`, `usbd.sys` and `usbhub.sys` from the driver cache every install has, and asks for nothing.
+On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand**: the package carries no Microsoft file, so the install has Windows copy its own `usbd.sys` and `usbhub.sys` from the CD ("Insert Disk"), unless the Windows CABs are on the hard disk (`C:\WINDOWS\OPTIONS\CABS`, as on OEM and QuickInstall installs). A machine that ever had a USB 1.1 controller already has both files. Windows 2000 and Windows XP copy their own `usbport.sys`, `usbd.sys` and `usbhub.sys` from the driver cache every install has, and ask for nothing.
 
 Optional but recommended: boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from the `XHCIQUAL\` folder. A controller reporting no legacy interrupt pin cannot be driven on either system and there is no software workaround, so find out before you install anything.
 
@@ -60,7 +61,7 @@ XHCIQUAL demo video: https://www.youtube.com/watch?v=Tv6blmBS6Do
 
 1. Put the unzipped package somewhere the machine can read: a floppy, a CD, a shared folder. `release\` is the one to install. `debug\` is the same driver built for troubleshooting, and a maintainer may ask you for it.
 2. In Device Manager, find the unrecognised xHCI controller. It sits unclaimed with a yellow mark, usually under "Other devices".
-3. Windows 98 SE and ME: Properties -> Driver -> Update Driver -> Specify a location -> the `release\` directory. Answer the "Insert Disk" prompt with the Windows CD if it appears (if it then asks where to copy from, give it the CD's `WIN98` folder, or `WIN9X` on the Windows ME CD), and reboot when asked. If the Add New Hardware Wizard finds the controller first, give it `release\` too. Windows 2000 SP4: Properties -> Driver -> Update Driver -> Have Disk -> the `release\` directory; nothing else is asked for.
+3. Windows 98 SE and ME: Properties -> Driver -> Update Driver -> Specify a location -> the `release\` directory. Answer the "Insert Disk" prompt with the Windows CD if it appears (if it then asks where to copy from, give it the CD's `WIN98` folder, or `WIN9X` on the Windows ME CD), and reboot when asked. If the Add New Hardware Wizard finds the controller first, give it `release\` too. Windows 2000 SP4 and Windows XP: Properties -> Driver -> Update Driver -> Have Disk -> the `release\` directory; nothing else is asked for (XP shows its unsigned-driver warning; choose Continue Anyway).
 4. It installs as "USB 2.0 eXtensible Host Controller (xhci98)" with a "USB Root Hub" underneath it, and neither should carry a warning mark.
 
 <img src="images/xhci98-driver-info.jpg" width="800">
@@ -69,7 +70,7 @@ XHCIQUAL demo video: https://www.youtube.com/watch?v=Tv6blmBS6Do
 
 ## What is tested, and what is not
 
-Windows 98 SE is validated on real hardware. Windows 2000 SP4 and Windows ME have only ever run in QEMU virtual machines.
+Windows 98 SE is validated on real hardware. Windows 2000 SP4, Windows ME and Windows XP have only ever run in QEMU virtual machines.
 
 | Machine | Controller |
 |---|---|
@@ -81,7 +82,7 @@ Windows 98 SE is validated on real hardware. Windows 2000 SP4 and Windows ME hav
 | Windows 98 SE | Validated on real hardware and in VMs. HID, mass storage, USB Ethernet and USB Audio have all run on real xHCI silicon, at a root port and behind hubs. |
 | Windows 2000 SP4 | Virtual machines only, including an SMP guest and Driver Verifier. It has never run on real hardware, and this project has no machine that can try. |
 | Windows ME | One virtual machine only, under SweetLow's USB 2.0 stack (the only stack it is supported with): the driver loads and starts, and a HID mouse, a USB mass-storage device and a composite audio device bind (2026-09-02). Never run on real hardware. |
-| 32-bit Windows XP | Nothing has been run. The INF accommodates it and the miniport registration is statically compatible. That is all that is established. |
+| 32-bit Windows XP | One virtual machine only (XP Professional SP3): the package installs on an xHCI-only machine with no prompt, the driver loads and starts under XP's own USB stack, and a HID mouse, a USB mass-storage device and a composite audio device bind; disable, enable, remove and rescan in Device Manager all survive (2026-09-03). Never run on real hardware. |
 | Intel 7/8-series (`XUSB2PR` mux), AMD | Never run on either. Everything said about the `XUSB2PR` port mux comes from Intel's datasheet and Linux, not silicon. The driver does not touch it. |
 | Resume from standby (Windows 2000) | Never executed anywhere. No available VM offers a resumable power transition, and there is no Windows 2000 machine. |
 | Low Speed, USB Audio, hub topologies | Work on Windows 98 hardware in the configurations tried. Not covered: an audio device with `bInterval > 1`, a USB 1.1 hub under a multi-TT hub, and the Windows 2000 side on silicon. |

@@ -17,7 +17,10 @@
 ; engine) and needs SweetLow's USB 2.0 stack first: its stock USB stack has
 ; no usbport.sys, so on a stock Windows ME machine the driver installs and
 ; NTKERN reports Code 2. Windows ME is supported in virtual machines only
-; (docs\contributing\build-and-test.md, "Windows ME target VM").
+; (docs\contributing\build-and-test.md, "Windows ME target VM"). 32-bit
+; Windows XP reads the .NTx86 half like Windows 2000 and is supported in
+; virtual machines only as well, since 1.0.1.0 (the same document, "Windows
+; XP target VM").
 ;
 ; usbd.sys and usbhub.sys ARE copied on both paths, and none of the three
 ; files travels on this media. All are the operating system's own, and

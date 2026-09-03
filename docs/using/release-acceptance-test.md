@@ -209,6 +209,7 @@ at a loose `xhci98.sys`; nothing about a copied file says which flavour it is.
 | 4.1 | Windows 98 SE | NUSB 3.3 first, then Device Manager, the unclaimed xHCI controller, Properties -> Driver -> Update Driver -> Specify a location -> `RELEASE\` | On an xHCI-only machine the copy phase asks for the Windows 98 Second Edition CD-ROM ("Insert Disk"); give it the CD, or its `WIN98` folder if asked where to copy from, and the install completes. A machine that already has `usbd.sys` and `usbhub.sys` is not asked. It never asks for a file from the driver's own disk. Record which it was |
 | 4.2 | Windows 2000 SP4 | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE\` | Completes with no prompt; `usbport.sys`, `usbd.sys` and `usbhub.sys` come from the driver cache |
 | 4.5 | Windows ME | SweetLow's stack first (NUSB is a Windows 98 SE package), then the Windows 98 SE route of 4.1 | Completes. The virtual machine tried asked for no CD, its Setup having left the CABs on the hard disk; a machine without them may ask for the Windows ME CD. Record which it was. This target is supported in virtual machines only |
+| 4.6 | Windows XP | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE\`; Continue Anyway at the unsigned-driver warning | Completes with no other prompt; `usbport.sys`, `usbd.sys` and `usbhub.sys` come from the driver cache (`sp3.cab`). This target is supported in virtual machines only |
 | 4.3 | Both | Look at Device Manager when the install is done | The two nodes below, and neither carries a warning mark |
 | 4.4 | Windows 98 SE | Look for the two cosmetic readings and note them | `xhci98.tmp` left in `System32\Drivers` and listed in Driver File Details (cosmetic; the loaded binary is the real one), and the Driver tab showing a date but no version (release notes, "Known limitations"). Neither is a failure and neither should be reported as one |
 
@@ -374,6 +375,22 @@ Windows ME (virtual machines only)
 (roadmap tasks 18.2 and 18.3; `docs/contributing/build-and-test.md`, "Windows
 ME target VM"). Windows 98 SE's 7.1 and 7.2 have not been measured on Windows
 ME and are `SKIP - other target` there.
+
+Windows XP (virtual machines only)
+
+| # | Do | Expected reading |
+|---|---|---|
+| 7.9 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | Present, value 1. `Services\USB` does not exist on a stock XP install; the package creates it |
+| 7.10 | Leave the machine idle for two minutes after boot with nothing plugged in, then plug in a Low-Speed HID | It enumerates and works with no Refresh. Without 7.9's value XP's `usbport` suspends the controller about thirty seconds after start and the device is invisible |
+| 7.11 | Plug in a flash drive, then a composite device, each for the first time on this installation | Each binds on its first attach, with no replug needed, while Windows installs its class driver |
+| 7.12 | Disable the controller in Device Manager, re-enable it, then uninstall it and Scan for hardware changes | It goes and comes back each time, with no crash; the Found New Hardware wizard returns on the rescan |
+
+7.9 to 7.12 were measured on the Windows XP virtual machine of 2026-09-03
+(roadmap tasks 19.2, 19.3, 19.4 and 19.7; `docs/contributing/build-and-test.md`,
+"Windows XP target VM"). 7.11 is issue 4's clause: before `1.0.1.0` a device
+XP re-created mid-enumeration was failed by this driver and bound only on a
+replug (`docs/issues/04-xp-restore-device-ep0-remove.md`). Windows 2000's 7.5
+has not been measured on XP and is `SKIP - other target` there.
 
 ### Step 8. Produce the log channel
 

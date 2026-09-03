@@ -1607,7 +1607,7 @@ Tasks:
   install half of the Windows 2000 inference in `lessons.md` is measured
   with this; no `SuspendController` arrived while the guest idled, as
   Windows 2000's usbport never has.
-- [ ] 19.6 the tier, decided by the owner: supported in virtual machines,
+- [x] 19.6 the tier, decided by the owner: supported in virtual machines,
   stated the way Windows 2000's and Windows ME's status is, or something
   narrower; then every document that names the targets: `AGENTS.md` (Quick
   Reference, the secondary-target row), `README.md`, the release notes
@@ -1617,6 +1617,19 @@ Tasks:
   Windows XP?", which currently argues the cost of promotion), and the
   import gate's documentation if XP evidence is added (XP exports a
   superset; none is required to load).
+  Decided 2026-09-03 night: supported in virtual machines, stated the way
+  Windows 2000 and Windows ME are. Swept the same night: `AGENTS.md` (the
+  target paragraph, and the Quick Reference, whose secondary-target row is
+  gone and whose "Supported in VM" row names XP), `README.md`, the release
+  notes ("What this is", the unsigned-driver line, the requirements table,
+  the install steps and the files-Windows-supplies paragraphs), the INF
+  header comment, the `readme.txt` template (title, section 2, section 3's
+  `usbport.sys` and driver-cache entries, a section 4 block), the acceptance
+  test (rows 4.6 and 7.9-7.12), `win98-wdm.md` ("What about Windows XP?":
+  the position, the static-pass close and the guest paragraph) and the
+  opening of `build-and-test.md`'s "Windows XP target VM". The issue forms
+  already list 32-bit XP and are unchanged; the import gate gains no XP
+  evidence, none being required to load.
 - [ ] 19.7 issue 4, the one driver change this release carries (the owner's
   decision of 2026-09-03 evening, reversing the afternoon's): the identity
   check in `XhciSlotSetEndpointState`'s REMOVE branch for the default pipe

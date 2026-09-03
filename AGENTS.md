@@ -43,6 +43,20 @@ on a Windows ME observation and "observed on both" does not include it. It
 has never run on real hardware. `docs/contributing/build-and-test.md`,
 "Windows ME target VM", is the record.
 
+32-bit Windows XP is a fourth target of the same standing, supported in
+virtual machines, since the owner's decision of 2026-09-03: one QEMU guest
+(XP Professional SP3), on which the `1.0.1.0` package installed on an
+xHCI-only install with no prompt, the driver registered and started under
+XP's own `usbport.sys`, a HID mouse, a mass-storage device and a composite
+audio device bound, and the Device Manager disable, enable, remove and
+rescan sequence survived. It reads the INF's `.NTx86` half, and the one
+XP-specific defect it showed (issue 4, the hub re-creating a device through
+a second device handle mid-enumeration) is fixed in `1.0.1.0`. It carries no
+checkpoint tax either, and the standing rule holds: accommodate XP where the
+change is small and low-risk, never at a primary target's expense. It has
+never run on real hardware. `docs/contributing/build-and-test.md`, "Windows
+XP target VM", is the record.
+
 Neither OS has xHCI support. Windows 98 shipped with UHCI/OHCI (USB 1.1) and
 got EHCI (USB 2.0) only through later back-ports: the Win2000-derived stack in
 NUSB, which is what the project tests against, and SweetLow's XP-derived
@@ -57,8 +71,7 @@ stack natively in SP4. This driver fills the gap for both.
 | Item | Value |
 |---|---|
 | Primary targets | Windows 98 SE (4.10.2222) and Windows 2000 SP4 - one binary, both required |
-| Secondary targets | 32-bit Windows XP (best-effort) - one binary, accommodate it where the change is small and low-risk, but do not compromise either primary target or add checkpoint waits for it. Its registration packet is statically compatible, but runtime support remains unvalidated; see `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" |
-| Supported in VM | Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax. Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM" |
+| Supported in VM | Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax. Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM". 32-bit Windows XP (SP3) - observed in one QEMU guest on 2026-09-03 (xHCI-only package install, HID, mass storage, composite audio, the disable/enable/remove/rescan sequence), never on metal, no checkpoint tax; the `.NTx86` INF half under XP's own `usbport.sys`. Accommodate it where the change is small and low-risk, never at a primary target's expense; see `docs/contributing/build-and-test.md`, "Windows XP target VM", and `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" |
 | USB scope | USB 2.0 (HS/FS/LS) only; HID, mass storage, USB Ethernet, and USB Audio validation targets. USB 3.0 SuperSpeed is out of scope (see `docs/usb-xhci-info/xhci-programming.md`, "What SuperSpeed Support Would Require") |
 | Integration model | `usbport.sys` miniport (Option A) - reuse the USB 2.0 stack already on the target (NUSB's Win2000-derived build, SP4's native one, or SweetLow's XP-derived rebuild on Windows 98); do not re-implement the USB stack |
 | Compiler | MSVC 6.0, run in place from `tools/MSVC600` (unpacked from `tools/MSVC600.zip`) |

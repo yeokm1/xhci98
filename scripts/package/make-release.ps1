@@ -1709,14 +1709,16 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
     $template = @'
 ==============================================================================
                               x h c i 9 8   {VERSION}
-      USB 2.0 for Windows 98 SE, ME and 2000 SP4 on xHCI-only machines
+    USB 2.0 for Windows 98 SE, ME, 2000 SP4 and XP on xHCI-only machines
 ==============================================================================
 
 Released {DATE}.
 
 Most x86 PCs made from around the mid 2010s onward have USB 3.0 (xHCI)
-controllers and nothing else. Neither Windows 98 SE, Windows ME nor Windows
-2000 has any support for those. This driver fills that gap.
+controllers and nothing else. Windows 98 SE, Windows ME and Windows 2000
+have no support for those, and 32-bit Windows XP has it only for add-in
+cards, never for the controller built into these machines. This driver
+fills that gap.
 
 It gives you USB 2.0 speeds: High Speed, Full Speed and Low Speed. USB 3.0
 SuperSpeed is out of scope. A USB 3.0 device still works, at USB 2.0 speed,
@@ -1907,9 +1909,8 @@ modern interrupt mechanism (MSI) that such a controller would require.
 ==============================================================================
 
   Operating system   Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows
-                     ME in virtual machines only (it has never been run on a
-                     real machine). 32-bit Windows XP has never been run at
-                     all.
+                     ME and 32-bit Windows XP (SP3) in virtual machines only
+                     (neither has been run on a real machine).
 
   On Windows 98      NUSB 3.3e or the newer SweetLow USB 2.0 stack, your
                      choice, installed BEFORE this driver (section 4).
@@ -1921,6 +1922,9 @@ modern interrupt mechanism (MSI) that such a controller would require.
 
   On Windows 2000    SP4's own USB stack, or the standalone USB 2.0 update
                      KB319973. DO NOT install NUSB on Windows 2000.
+
+  On Windows XP      XP's own USB stack; nothing to install. DO NOT install
+                     NUSB on Windows XP.
 
   Controller         xHCI, PCI class code 0C0330, at least one USB 2.0 port,
                      a memory window below 4 GB, and a legacy interrupt pin.
@@ -1951,7 +1955,7 @@ Microsoft's:
                its own composite driver). On Windows 2000 it is the USB hub
                driver.
 
-  usbport.sys  WINDOWS 2000 ONLY. The USB stack this driver plugs into.
+  usbport.sys  WINDOWS 2000 AND XP. The USB stack this driver plugs into.
                Without it the controller shows Code 39 and the driver never
                runs. On Windows 98 the USB 2.0 stack installed first (NUSB
                or SweetLow's) supplies it.
@@ -1977,7 +1981,7 @@ Windows recognised - keeps its own files and is asked for nothing.
                   disk from its own Setup and asked for nothing.
 
   WINDOWS 2000    Nothing to do: all three come from the driver cache every
-                  Windows 2000 installation has (Driver Cache\i386).
+  AND XP          Windows 2000 or XP installation has (Driver Cache\i386).
 
 If the prompt is cancelled the driver still installs, but the root hub fails
 as described above. That reads as a fault in this driver and is not one: put
@@ -2053,6 +2057,13 @@ CD, a shared folder - then:
       and point it at the RELEASE\ directory. Nothing else is asked for;
       usbport.sys, usbd.sys and usbhub.sys come from the driver cache every
       installation has.
+
+  WINDOWS XP (32-BIT)
+      The same route as Windows 2000 SP4:
+          Properties -> Driver -> Update Driver -> Have Disk
+      pointed at the RELEASE\ directory; choose "Continue Anyway" at the
+      unsigned-driver warning. Nothing else is asked for. Windows XP has
+      only been run in a virtual machine.
 
 It installs as "USB 2.0 eXtensible Host Controller (xhci98)", with a "USB
 Root Hub" underneath it. Neither should carry a warning mark.

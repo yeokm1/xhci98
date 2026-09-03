@@ -1480,8 +1480,9 @@ the same afternoon (`vm\winxp.img`, 8 GB, snapshot `winxp-clean-install`
 taken at 14:11 with the OS at the desktop and nothing else on it). Nothing
 had ever been run on XP itself; `win98-wdm.md` ("What about Windows XP?")
 kept it best-effort for cost, with the static registration gate looking
-compatible. What tier XP becomes is the owner's decision, roadmap task 19.6,
-and no document names it as supported until that is taken. What follows is
+compatible. XP is supported in virtual machines since the owner's decision
+of 2026-09-03 night (roadmap task 19.6), standing where Windows 2000 and
+Windows ME stand and never run on real hardware. What follows is
 the recipe, what the first afternoon measured, and what the measurement
 changed: the two INF fixes release 1.0.1.0 carries ("The files the OS
 supplies" below, and the `DisableSelectiveSuspend` block in
