@@ -12,7 +12,7 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
-## 1.0.1.0 - 2026-09-02
+## 1.0.1.0 - 2026-09-04
 
 Windows XP joins the targets supported in virtual machines, the Windows 2000
 and Windows XP install now has the operating system supply every file the
