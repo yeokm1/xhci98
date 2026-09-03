@@ -1356,7 +1356,9 @@ machine: the operating system supplying `usbport.sys` (with `usbd.sys` and
 idle suspend as the Windows 98 path already does. Both changes reach
 Windows 2000, whose every vehicle in this project has carried an EHCI that
 placed `usbport.sys` and whose native usbport never idled this controller,
-so neither gap could show there. No driver code change is expected.
+so neither gap could show there. One driver code change rides with them,
+issue 4's identity check on the EP0 REMOVE path, since the owner's decision
+of 2026-09-03 evening (task 19.7).
 
 Status: open, since 2026-09-03, on branch `1.0.0.2`. The owner asked that
 morning whether XP could be supported, installed the guest by hand the same
@@ -1504,8 +1506,9 @@ Tasks:
   this driver's REMOVE path reads as the live pipe closing; the record was
   refused for retry until the progress detector failed it (`records failed
   - no progress` 2). Recorded as `docs/issues/04-xp-restore-device-ep0-remove.md`,
-  open, no driver change in this release by the owner's decision; a replug
-  after a pause is the workaround.
+  open; a replug after a pause is the workaround. The owner's decision that
+  afternoon was no driver change in this release; reversed the same
+  evening, the fix is task 19.7.
 - [x] 19.4 the fix observed where the gap is, XP: revert `vm\winxp.img` to
   `winxp-clean-install`, boot the run launcher with NO EHCI, install the
   `1.0.0.2` package from the transfer drive, and read: no CD prompt (the
@@ -1549,15 +1552,41 @@ Tasks:
   Windows XP?", which currently argues the cost of promotion), and the
   import gate's documentation if XP evidence is added (XP exports a
   superset; none is required to load).
-- [ ] 19.7 the 9x targets unchanged: the `1.0.0.2` package installed from
+- [ ] 19.7 issue 4, the one driver change this release carries (the owner's
+  decision of 2026-09-03 evening, reversing the afternoon's): the identity
+  check in `XhciSlotSetEndpointState`'s REMOVE branch for the default pipe
+  (`docs/issues/04-xp-restore-device-ep0-remove.md`, section 4). A REMOVE
+  whose extension is neither NULL nor the one the record is bound to names
+  a superseded handle: clear that extension's own open flag, count it, and
+  leave the record's binding, its owed invalidate, its EP0 queue and any
+  pending SET_ADDRESS to the live handle. The same-extension reopen every
+  9x and Windows 2000 run performs arrives with the record bound to that
+  very extension and takes the existing path unchanged. In this order:
+  first the confirming run on the XP guest (a cold boot with `usb-storage`
+  as the first device, so the `SetEndpointState` print budget is intact
+  and the REMOVE on the superseded extension is seen rather than inferred
+  from the `CloseEndpoint` after it); then the host vector (enumerate and
+  address a device, reset its port again, open EP0 through a second static
+  extension at address 0 on the `xhciDevOpenOnRootPort` path, REMOVE the
+  first, and check that the flag, the pointer and a submit through the
+  second all survive); then the change, `build-driver.cmd all` with every
+  gate green and `vm\xferxp` restaged; then the XP reading (`usb-storage`
+  and `usb-audio` binding on their first attach, the new counter moving,
+  `records failed - no progress` at zero); then both primary targets on
+  the same binary, `run-matrix.ps1` on the 2a and 2b guests and the
+  Windows 98 door sequence, their reading being that nothing changed. The
+  issue page moves to fixed with the run named, the release notes carry no
+  XP first-attach limitation, and 19.9's history entry names the change.
+- [ ] 19.8 the 9x targets unchanged: the `1.0.0.2` package installed from
   the asset on Windows 98 SE under NUSB and under SweetLow, and on Windows
   ME, the 18.7 route, and `run-matrix.ps1 -PostRelease` on the fresh 2a and
   2b clones as Phase 16 ran it. The Windows 2000 leg now also carries the
-  `DisableSelectiveSuspend` value; its reading is that nothing changed.
-- [ ] 19.8 version `1.0.0.2` in `src\xhci_version.h` and the INF's
+  `DisableSelectiveSuspend` value and every leg carries 19.7's change; the
+  reading is that nothing changed.
+- [ ] 19.9 version `1.0.0.2` in `src\xhci_version.h` and the INF's
   `DriverVer`, the `releases/history.md` entry (XP; `usbport.sys`,
   `usbd.sys`, `usbhub.sys` from the OS on the NT path; idle suspend
-  disabled on the NT path; no driver code change, or the change named),
+  disabled on the NT path; 19.7's change to the EP0 REMOVE path, issue 4),
   then the cut with `make-release.ps1`, every gate green, and the install
   route checked from the asset on every target as 18.7 did.
 
@@ -1565,7 +1594,8 @@ Checkpoint: on an XP guest that has never had another USB controller, the
 `1.0.0.2` package installs from the asset, the driver loads on the first
 boot with `usbport.sys` supplied by the OS from its own cache, the root hub
 comes up, a HID device hot-plugged after the idle window binds, and a
-mass-storage device works; the same install reading on a Windows 2000 SP4
+mass-storage device works on its first attach (issue 4); the same install
+reading on a Windows 2000 SP4
 guest that has never had another USB controller; the three 9x-family
 install routes unchanged from the asset; the tier stated; and the asset
 holds `xhci98.sys`, `xhci98.inf`, the two tools and the readmes and no
@@ -1574,7 +1604,8 @@ other file.
 Records: `build-and-test.md` ("Windows XP target VM", "The files the OS
 supplies"); `lessons.md`; `win98-wdm.md` ("What about Windows XP?");
 `usbport-miniport-interface.md` ("The SweetLow rebuild");
-`scripts/inf-gate/`; `releases/history.md`.
+`docs/issues/04-xp-restore-device-ep0-remove.md`; `scripts/inf-gate/`;
+`releases/history.md`.
 
 ## Post-Release - Run the Acceptance Test by Hand
 

@@ -1,11 +1,13 @@
 # Issue 4 - A device Windows XP's hub re-creates mid-enumeration is failed by this driver: the REMOVE of the superseded EP0 handle unbinds the live one
 
-Status: open. Observed once, on the Windows XP guest, 2026-09-03 (roadmap
-task 19.3). The mechanism below is a static reading of this driver's own
-code against the callback order the run recorded; no fix has been tried, so
-it is a potential issue with a strong candidate cause, not a settled one.
-The owner's decision the same day: no driver code change in release
-`1.0.0.2`; record it. The workaround is to unplug the device and plug it
+Status: open, fix scheduled. Observed once, on the Windows XP guest,
+2026-09-03 (roadmap task 19.3). The mechanism below is a static reading of
+this driver's own code against the callback order the run recorded; no fix
+has been tried, so it is a potential issue with a strong candidate cause,
+not a settled one. The owner's decision that afternoon was no driver code
+change in release `1.0.0.2`; reversed the same evening, the fix in section
+4 is roadmap task 19.7, and this page moves to fixed when that task's run
+is read. Until then the workaround is to unplug the device and plug it
 back in, which enumerated cleanly in the same run.
 
 Targets affected: Windows XP, the best-effort secondary target. Not seen on
@@ -181,7 +183,7 @@ reset through the hub, which is what the two-handle restore serves) better
 than a hub distrusting the enumeration, but nothing in this run's evidence
 decides it.
 
-## 4. What a fix would look like, not taken
+## 4. The fix, roadmap task 19.7
 
 One identity check in the REMOVE branch: when `endpoint->Dci <= 1` and
 `dev->EndpointExtension` is neither NULL nor `endpoint`, the REMOVE names a
@@ -194,11 +196,15 @@ again, open EP0 through a second static extension at address 0 (the
 existing `xhciDevOpenOnRootPort` path), REMOVE the first, and check that
 the flag, the pointer and a submit through the second all survive.
 
-It was not taken because Phase 19 is an INF-and-documents release with the
-9x targets' install routes still to re-read from the asset (roadmap tasks
-19.7 and 19.8), and a change to the slot code is not free on either primary
-target. The owner's instruction of 2026-09-03: "let's not change the driver
-code, but write this up as a potential issue."
+It was not taken on the afternoon of 2026-09-03 because Phase 19 was an
+INF-and-documents release with the 9x targets' install routes still to
+re-read from the asset (roadmap tasks 19.8 and 19.9), and a change to the
+slot code is not free on either primary target; the owner's instruction
+then was "let's not change the driver code, but write this up as a
+potential issue." That evening the owner scheduled it as task 19.7, ahead
+of those two, in the order the task states: the confirming run section 5
+asks for first, the host vector, the change, the XP reading, then both
+primary targets on the same binary with the reading that nothing changed.
 
 ## 5. What is still open
 

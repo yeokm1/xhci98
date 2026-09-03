@@ -187,7 +187,7 @@ HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1
 ; Until release 1.0.0.2 the NT path omitted it, because Windows 2000's native
 ; usbport never idle-suspends this controller and the value would have
 ; changed nothing there. Windows XP's does, so the NT path now writes it too:
-; on Windows 2000 it still changes nothing (the reading roadmap task 19.7
+; on Windows 2000 it still changes nothing (the reading roadmap task 19.8
 ; takes), and on Windows XP it is what makes hot-plug work. Services\USB does
 ; not exist on a stock Windows XP install; this AddReg creates it.
 ;
