@@ -1814,8 +1814,16 @@ Tasks:
   the root hub with no mark and the pre-attached mouse under Human
   Interface Devices (the Unknown Device beside the PCI Ethernet Controller
   is the base clone's, seen on the 19.8 teaching pass); shut down from the
-  Start menu. Screens in `out\post-release\1.0.1.0\asset-legs\`. The
-  SweetLow, ME, 2000 and XP legs are owed.
+  Start menu. Windows 98 SE under SweetLow (the same morning): the installed
+  `sweetlow-2a.img` booted the same way, a USB mouse attached at boot;
+  Update Driver over the installed driver, pointed at `D:\RELEASE`, no
+  prompt, restart; controller and root hub with no mark. The mouse first
+  read as an Unknown Device under Mouse with the Human Interface Devices
+  branch present, on the 09-03 binary before the update as well as after
+  it: the guest's own HID-mouse class install, not the enumeration; the
+  owner removed that entry and refreshed, and the mouse came up as
+  HID-compliant mouse. Screens in `out\post-release\1.0.1.0\asset-legs\`.
+  The ME, 2000 and XP legs are owed.
 
 Checkpoint: on an XP guest that has never had another USB controller, the
 `1.0.1.0` package installs from the asset, the driver loads on the first
