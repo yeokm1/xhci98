@@ -1360,7 +1360,10 @@ so neither gap could show there. One driver code change rides with them,
 issue 4's identity check on the EP0 REMOVE path, since the owner's decision
 of 2026-09-03 evening (task 19.7).
 
-Status: open, since 2026-09-03, on branch `1.0.1.0` (the branch and the
+Status: closed, 2026-09-04: every task ticked, `1.0.1.0` cut that morning
+and its install route read from the asset on all five targets (task 19.9);
+the upload of `out\xhci98-1.0.1.0.zip` and the push of the branch are the
+owner's. Opened 2026-09-03, on branch `1.0.1.0` (the branch and the
 release were `1.0.0.2` until the night of 2026-09-03, when the owner
 renumbered to `1.0.1.0` because task 19.7 makes this a driver code change:
 the third field moves for code, the fourth for install media and documents;
@@ -1780,7 +1783,7 @@ Tasks:
   freshly taught clone, recorded here and not promoted. Both reports are
   `docs\contributing\runs\run-19-post-release\`. Nothing changed on the
   primary targets; the install-from-asset legs wait for 19.9's asset.
-- [ ] 19.9 the release date in `src\xhci_version.h` and the INF's
+- [x] 19.9 the release date in `src\xhci_version.h` and the INF's
   `DriverVer` (the number `1.0.1.0` has been there since 2026-09-03), the
   release notes' opening line, the `releases/history.md` entry (XP; `usbport.sys`,
   `usbd.sys`, `usbhub.sys` from the OS on the NT path; idle suspend
