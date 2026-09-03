@@ -60,7 +60,7 @@ XHCIQUAL demo video: https://www.youtube.com/watch?v=Tv6blmBS6Do
 
 1. Put the unzipped package somewhere the machine can read: a floppy, a CD, a shared folder. `release\` is the one to install. `debug\` is the same driver built for troubleshooting, only install if asked.
 2. In Device Manager, find the unrecognised xHCI controller. It sits unclaimed with a yellow mark, usually under "Other devices" such as "Universal Serial Bus Controller".
-3. Windows 98 SE and ME: Properties -> Driver -> Update Driver -> Specify a location -> the `release\` directory. Answer the "Insert Disk" prompt with the Windows CD if it appears (if it then asks where to copy from, give it the CD's `WIN98` folder, or `WIN9X` on the Windows ME CD), and reboot when asked. If the Add New Hardware Wizard finds the controller first, give it `release\` too. Windows 2000 SP4 and Windows XP: Properties -> Driver -> Update Driver -> Have Disk -> the `release\` directory.
+3. Properties -> Driver -> Update Driver -> Specify a location/Have Disk -> the `release\` directory.
 4. It installs as "USB 2.0 eXtensible Host Controller (xhci98)" with a "USB Root Hub" underneath it, and neither should carry a warning mark.
 
 <img src="images/xhci98-driver-info.jpg" width="800">
@@ -81,9 +81,9 @@ Windows 98 SE is validated on real hardware. Windows 2000 SP4, Windows ME and Wi
 | | State |
 |---|---|
 | Windows 98 SE | Validated on real hardware and in VMs. HID, mass storage, USB Ethernet and USB Audio have all run on real xHCI silicon, at a root port and behind hubs. |
-| Windows 2000 SP4 | Virtual machines only, including an SMP guest and Driver Verifier. It has never run on real hardware, and this project has no machine that can try. |
+| Windows 2000 SP4 | Virtual machines only, including an SMP guest and Driver Verifier. It has never run on real hardware. |
 | Windows ME | One virtual machine only, under SweetLow's USB 2.0 stack (the only stack it is supported with): the driver loads and starts, and a HID mouse, a USB mass-storage device and a composite audio device bind (2026-09-02). Never run on real hardware. |
-| 32-bit Windows XP | One virtual machine only (XP Professional SP3): the package installs on an xHCI-only machine with no prompt, the driver loads and starts under XP's own USB stack, and a HID mouse, a USB mass-storage device and a composite audio device bind; disable, enable, remove and rescan in Device Manager all survive (2026-09-03). Never run on real hardware. |
+| 32-bit Windows XP | One virtual machine only (XP Professional SP3): the package installs on an xHCI-only machine with no prompt, the driver loads and starts under XP's own USB stack, and a HID mouse, a USB mass-storage device and a composite audio device bind; disable, enable, remove and rescan in Device Manager all survive. Never run on real hardware. |
 | Intel 7/8-series (`XUSB2PR` mux), AMD | Never run on either. Everything said about the `XUSB2PR` port mux comes from Intel's datasheet and Linux, not silicon. The driver does not touch it. |
 | Resume from standby (Windows 2000) | Never executed anywhere. No available VM offers a resumable power transition, and there is no Windows 2000 machine. |
 | Low Speed, USB Audio, hub topologies | Work on Windows 98 hardware in the configurations tried. Not covered: an audio device with `bInterval > 1`, a USB 1.1 hub under a multi-TT hub, and the Windows 2000 side on silicon. |
