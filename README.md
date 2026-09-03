@@ -34,9 +34,9 @@ Every USB 3.x connector (USB4/Thunderbolt included) also carries the USB 2.0 wir
 
 The driver needs a USB 2.0 stack (`usbport.sys` + `usbhub20.sys`) on the machine first:
 
-- **Windows 98 SE**: either install [NUSB 3.3 or 3.6](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) or the newer [SweetLow stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip). For SweetLow's stack, unzip, right-click the `USB2.INF` at its root, install, reboot.
-- **Windows ME**: the [SweetLow stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip) only.
-- **Windows 2000 SP4 and XP SP3 (32-bit)**: nothing to install; SP4 has the stack (or use the standalone USB 2.0 update KB319973).
+- **Windows 98 SE**: Either install [NUSB 3.3 or 3.6](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) or the [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip). For SweetLow's stack, unzip, right-click the `USB2.INF` at its root, install, reboot.
+- **Windows ME**: Use [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip) only.
+- **Windows 2000 SP4 and XP SP3 (32-bit)**: Nothing to install; SP4 has the stack (or use the standalone USB 2.0 update KB319973).
 
 On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand** or the contents on disk as the driver needs some files from there.
 
