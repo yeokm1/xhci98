@@ -37,8 +37,8 @@ the port driver's role, was the documented fallback and was never needed. USB
 `docs/usb-xhci-info/win98-wdm.md` ("USB Stack Architecture and the Integration
 Decision") and `architecture.md`.
 
-Current status: Phases 0-17 are closed and Phase 18 is open. `1.0.0.0` is
-cut, and it is the only release this repository carries; Phase 15 moved the
+Current status: Phases 0-18 are closed and Phase 19 is open. `1.0.0.0` and
+`1.0.0.1` are cut, and neither has been uploaded; Phase 15 moved the
 tree from revision 1.2 of the xHCI specification to revision 1.2c, the only
 revision Intel now serves, without a code change; Phase 16, the fully
 automated run on freshly installed guests of both targets, closed on
@@ -46,13 +46,17 @@ automated run on freshly installed guests of both targets, closed on
 reading with one row against, the USB Audio replug, published as a
 limitation. Phase 17, opened and closed on 2026-09-02, has the operating
 system supply `usbd.sys` and `usbhub.sys` from its own install source, so the
-package stops carrying any Microsoft file; no driver code changes. Phase 18 is release
-`1.0.0.1`, which ships that change together with Windows ME support; its
-Windows ME side is written down and not started. Two acts sit
-outside the task list and are the project owner's to take: uploading the
-asset, and then running the release acceptance test by hand on a fresh VM
-and on a physical machine. The section this roadmap ends on is the reminder
-for the second.
+package stops carrying any Microsoft file; no driver code changes. Phase 18,
+closed the same day, is release `1.0.0.1`, that change together with Windows
+ME support. Phase 19, opened on 2026-09-03 on branch `1.0.0.2`, is release
+`1.0.0.2`: Windows XP support, and the fix for the two gaps the first XP
+guest measured, an NT install that never had a USB controller has no
+`usbport.sys` for this driver to import, and XP's `usbport` idle-suspends the
+controller so a later hot-plug is invisible; both are INF changes that reach
+Windows 2000 too. Two acts sit outside the task list and are the project
+owner's to take: uploading the asset, and then running the release
+acceptance test by hand on a fresh VM and on a physical machine. The section
+this roadmap ends on is the reminder for the second.
 
 ---
 
@@ -63,7 +67,7 @@ work can be confirmed and has no checkpoint of its own. A VM boot or a bench
 trip is the expensive unit, and most tasks do not need one, so from Phase 6
 onward a phase whose tasks are confirmed in more than one place groups them
 into batches. Phases 6, 7a, 7b, 8, 9, 11 and 13 are of this shape; Phases 0-5,
-10, 12, 14, 15, 16, 17 and 18 have plain per-phase task numbers.
+10, 12, 14, 15, 16, 17, 18 and 19 have plain per-phase task numbers.
 
 Task ids are `<batch>.<n>` in a batched phase (`6-B.4` is the fourth task of
 batch `6-B`) and plain `<phase>.<n>` otherwise (`12.3`, `14.1`). Phases 0-5
@@ -117,6 +121,9 @@ the stress and packaging pass, Phase 12 the machine-free decisions, Phase 13 the
 bare-metal validation and Phase 14 the `1.0.0.0` release. Phase 15, added
 after the cut, moves the tree to revision 1.2c of the xHCI specification, and
 Phase 16 is the unattended post-release run on freshly installed guests. Phase
+17 has the OS supply `usbd.sys` and `usbhub.sys`, Phase 18 is release
+`1.0.0.1` with Windows ME, and Phase 19 is release `1.0.0.2` with Windows XP
+and the NT-side install fixes the XP guest found. Phase
 14 waited on Phase 13's bench batches reporting. Accepting the published release, from the download on a
 freshly installed VM and on a physical machine, is not a phase and has no
 task: it is a hand-run procedure the project owner takes after the upload,
@@ -1338,6 +1345,164 @@ checked on each target from that asset.
 Records: `build-and-test.md` ("Windows ME target VM"); `lessons.md`
 ("Windows ME on QEMU"); `scripts/vm-matrix/README.md`; `releases/history.md`;
 `handoff.md`.
+
+## Phase 19 - Release `1.0.0.2`: Windows XP, and the NT Install Fixes
+
+Goal: the driver observed on a 32-bit Windows XP guest with its standing
+stated in every document that names the targets, and `1.0.0.2` cut carrying
+the two INF changes the first XP guest showed are needed on an xHCI-only NT
+machine: the operating system supplying `usbport.sys` (with `usbd.sys` and
+`usbhub.sys`) on the NT install path, and the NT path disabling usbport's
+idle suspend as the Windows 98 path already does. Both changes reach
+Windows 2000, whose every vehicle in this project has carried an EHCI that
+placed `usbport.sys` and whose native usbport never idled this controller,
+so neither gap could show there. No driver code change is expected.
+
+Status: open, since 2026-09-03, on branch `1.0.0.2`. The owner asked that
+morning whether XP could be supported, installed the guest by hand the same
+afternoon (`vm\winxp.img`, snapshot `winxp-clean-install`, WHPX with ACPI
+on, the machine TCG storms), and drove the package install. The first boot
+gave Code 39 with the debug console at zero bytes, and the extracted image
+showed why: `xhci98.sys` in `system32\drivers`, XP's own `usbd.sys` stub
+beside it, and no `usbport.sys` or `usbhub.sys` anywhere, `dllcache`
+included. Relaunched with a companion EHCI, the in-box stack placed the
+port driver from `Driver Cache\i386\sp3.cab` and the same binary then ran:
+`DriverEntry`, `USBPORT_GetHciMn=10000001` (the XP lineage, accepted since
+Phase 3), `USBPORT_RegisterUSBPortDriver status=0`, `StartController` with
+QEMU's 8 ports mapped as 4 USB2 companions managed and 4 USB3 left
+unpowered, the No Op self-test matched, the `RH_*` family, the root hub
+installed by the OS with no prompt, and Device Manager reporting the
+controller working. About thirty seconds after start, with nothing
+attached, usbport called `SuspendController` and the driver halted the xHC;
+a `usb-mouse` hot-plugged after that was invisible, the reading the SweetLow
+record (`usbport-miniport-interface.md`, "The SweetLow rebuild") predicted
+for an XP-lineage usbport without `DisableSelectiveSuspend`. Nothing has
+run on XP on real hardware, and no document promotes XP until task 19.6.
+
+Why a phase: `win98-wdm.md` ("What about Windows XP?") kept XP best-effort
+for cost, not for a technical obstacle, and said the static registration
+gate looked compatible; one guest confirmed the runtime side in an afternoon
+and found two install-time gaps that are the NT path's, not XP's. Fixing
+them changes the INF, the INF gate and its self-tests, the release notes'
+install procedure and limitations, and every statement about what the OS
+supplies, and it needs an install reading on an xHCI-only guest of each NT
+target, which no existing image can give: every Windows 2000 image was
+installed or first booted with an EHCI attached. That is a release's worth
+of change with an observation a release needs.
+
+What the CDs say, read statically on 2026-09-03 (7-Zip on the ISOs; nothing
+executed): both NT targets' `layout.inf` give `usbport.sys`, `usbhub.sys`,
+`usbehci.sys` and `usbd.sys` the text-mode disposition that does not copy
+them at Setup, and give `usbcamd.sys` and `usbintel.sys` the one that does;
+the XP guest had exactly the second pair and none of the first. So on both
+NT targets `usbport.sys` reaches the disk only when a USB controller's
+install pulls it from the driver cache, an xHCI-only machine has no such
+controller until this package loads, and this package cannot load without
+the file. XP SP3 keeps it in `sp3.cab`; Windows 2000 SP4's `layout.inf`
+lists it on disk 2 (`sp4.cab`, beside `driver.cab` in every install's
+`Driver Cache\i386`). The `LayoutFile` route Phase 17 built resolves through
+exactly that table, so one `usbport.sys,,,16` line on the NT copy section is
+the expected fix; the Windows 98 path gets no such line, since its
+`layout.inf` has no `usbport.sys` and NUSB or SweetLow supply it. The same
+table says `usbhub.sys` is not "placed from `driver.cab` by every install"
+as `build-and-test.md` and the INF gate's `OS-ONWIN2K` rule currently
+claim; the Phase 2d listing taken after the first EHCI boot shows
+`usbhub20.sys` and no `usbhub.sys`.
+
+Tasks:
+
+- [ ] 19.0 record what the XP guest measured before anything changes:
+  `build-and-test.md` gains "Windows XP target VM" (the recipe, WHPX not
+  TCG, the `qemu-winxp-install.cmd` and `qemu-winxp-run.cmd` launchers
+  committed as a `setup-qemu-winxp.ps1` like the Windows 2000 one, the
+  Code 39 reading and the extracted-image evidence, the suspend reading);
+  `lessons.md` gains the entry ("an NT install that never saw a USB
+  controller has no `usbport.sys`, and the EHCI in every Windows 2000
+  vehicle hid it"), with the `layout.inf` disposition table; `win98-wdm.md`
+  "What about Windows XP?" gets the runtime observation under its static
+  one; the SweetLow table's suspend row gains the XP corroboration.
+- [ ] 19.1 the INF, NT path, file placement: `[Xhci.CopyW2K]` (rename to
+  `Xhci.CopyNT`, every citation with it) copies `usbport.sys,,,16`,
+  `usbd.sys,,,16` and `usbhub.sys,,,16` through `LayoutFile`, the owner's
+  instruction of 2026-09-03 ("bring in usbport.sys, usbd.sys, usbhub.sys").
+  `usbd.sys` is already there; `usbhub.sys` inverts the deliberate
+  asymmetry Phase 17 recorded (the INF's "not delivered to Windows 2000"
+  block, `build-and-test.md` "The files the OS supplies", the `OS-ONWIN2K`
+  rule), so the block's reason is rewritten from the disposition table, not
+  deleted. The Windows 98 path is untouched. The INF gate: `OS-ONWIN2K`
+  retired, `OS-MISSING` extended to the three NT files, the `OS-MEDIA`
+  message and the self-tests updated, and a rule that the Windows 98 path
+  never names `usbport.sys` (its `layout.inf` cannot resolve it).
+- [ ] 19.2 the INF, NT path, idle suspend: XP's usbport reads
+  `Services\USB\DisableSelectiveSuspend` through the same query table
+  NUSB's build has, so the value the 9x path writes is written on the NT
+  path too, from `[Xhci.Dev.NTx86]` and `[DefaultInstall.NTx86]`; the
+  INF's block that says "deliberately not on the NT path" and the gate rule
+  that enforces the asymmetry are rewritten to say why it is now symmetric
+  (Windows 2000's native usbport never idles this controller, so the value
+  changes nothing there; XP's does within thirty seconds). The per-controller
+  `HcDisableSelectiveSuspend` alternative is recorded as considered and
+  why the global value was kept, or taken instead, with the reason. The
+  observation that closes this task: on the XP guest with the value present,
+  a `usb-mouse` hot-plugged a minute after a cold start binds.
+- [ ] 19.3 the XP readings, the owner at the console, the qemu flavour: a
+  HID mouse, a `usb-storage` device formatted, written and read back,
+  Device Manager disable, enable, remove and rescan (the door sequence that
+  bugchecks Windows 98 under NUSB and that the SweetLow rebuild survives),
+  and a `usb-audio` composite. Recorded in `build-and-test.md`, "Windows XP
+  target VM", counters named as in 18.3.
+- [ ] 19.4 the fix observed where the gap is, XP: revert `vm\winxp.img` to
+  `winxp-clean-install`, boot the run launcher with NO EHCI, install the
+  `1.0.0.2` package from the transfer drive, and read: no CD prompt (the
+  cabs are in the driver cache), `usbport.sys` placed, the driver loaded on
+  the first boot, root hub up, then 19.2's hot-plug. This is the reading no
+  earlier image could give, and the one the release claims.
+- [ ] 19.5 the fix observed where the gap is, Windows 2000: a fresh Windows
+  2000 SP4 install with no USB controller attached (the existing install
+  launcher, a throwaway image, the owner's key), a directory listing before
+  any controller is attached (the measurement `lessons.md` records as
+  inferred: `usbport.sys` absent), then the `1.0.0.2` package installed
+  with the xHCI alone: `usbport.sys` placed from `Driver Cache`, root hub
+  (`usbhub20.sys`, placed by the OS's own `USB.INF` when usbport creates the
+  root hub PDO, or not: this is the reading) and a HID mouse. If the root
+  hub does not come up, the phase records what the OS did not place and the
+  INF line that follows.
+- [ ] 19.6 the tier, decided by the owner: supported in virtual machines,
+  stated the way Windows 2000's and Windows ME's status is, or something
+  narrower; then every document that names the targets: `AGENTS.md` (Quick
+  Reference, the secondary-target row), `README.md`, the release notes
+  (requirements, install steps for XP, the limitations), both issue forms,
+  the INF header comment, the generated `readme.txt` template in
+  `make-release.ps1`, the acceptance test rows, `win98-wdm.md` ("What about
+  Windows XP?", which currently argues the cost of promotion), and the
+  import gate's documentation if XP evidence is added (XP exports a
+  superset; none is required to load).
+- [ ] 19.7 the 9x targets unchanged: the `1.0.0.2` package installed from
+  the asset on Windows 98 SE under NUSB and under SweetLow, and on Windows
+  ME, the 18.7 route, and `run-matrix.ps1 -PostRelease` on the fresh 2a and
+  2b clones as Phase 16 ran it. The Windows 2000 leg now also carries the
+  `DisableSelectiveSuspend` value; its reading is that nothing changed.
+- [ ] 19.8 version `1.0.0.2` in `src\xhci_version.h` and the INF's
+  `DriverVer`, the `releases/history.md` entry (XP; `usbport.sys`,
+  `usbd.sys`, `usbhub.sys` from the OS on the NT path; idle suspend
+  disabled on the NT path; no driver code change, or the change named),
+  then the cut with `make-release.ps1`, every gate green, and the install
+  route checked from the asset on every target as 18.7 did.
+
+Checkpoint: on an XP guest that has never had another USB controller, the
+`1.0.0.2` package installs from the asset, the driver loads on the first
+boot with `usbport.sys` supplied by the OS from its own cache, the root hub
+comes up, a HID device hot-plugged after the idle window binds, and a
+mass-storage device works; the same install reading on a Windows 2000 SP4
+guest that has never had another USB controller; the three 9x-family
+install routes unchanged from the asset; the tier stated; and the asset
+holds `xhci98.sys`, `xhci98.inf`, the two tools and the readmes and no
+other file.
+
+Records: `build-and-test.md` ("Windows XP target VM", "The files the OS
+supplies"); `lessons.md`; `win98-wdm.md` ("What about Windows XP?");
+`usbport-miniport-interface.md` ("The SweetLow rebuild");
+`scripts/inf-gate/`; `releases/history.md`.
 
 ## Post-Release - Run the Acceptance Test by Hand
 
