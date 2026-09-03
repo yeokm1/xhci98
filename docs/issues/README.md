@@ -11,18 +11,19 @@ Dates are 2026 unless stated. Task ids are the roadmap's.
 
 Issues 1 to 3 were fixed before `1.0.0.0`, so none of them is a limitation
 of the release; those pages are here for the mechanism and for how it was
-found. Issue 4 was observed once on the Windows XP guest and recorded with
-its candidate cause; its fix is roadmap task 19.7 in release `1.0.1.0`, in
-the tree since 2026-09-03 with a host vector that reproduces the mechanism,
-and the page moves to fixed when the XP reading on a clean install is
-taken.
+found. Issue 4 was observed on the Windows XP guest on 2026-09-03 and
+fixed the same day as roadmap task 19.7 in release `1.0.1.0`: a host vector
+reproduces the mechanism, and the closing run on a clean install (`i4b`)
+saw the restore recur on both devices and the fix carry them. What the
+task still owes is the reading on both primary targets that nothing changed
+there.
 
 | # | Issue | Status |
 |---|---|---|
 | 1 | [Getting a kernel log off a Windows 98 machine](01-windows-98-log-capture.md) - DebugView bugchecks real hardware, the driver owns no door of its own, and the way out was reading the driver's ring through usbport's own vendor IOCTL (`XHCISNAP`) | Fixed |
 | 2 | [The bare-metal wedge, the PORTSC watchdog that "fixed" it, and what was actually wrong](02-bare-metal-wedge-and-portsc-watchdog.md) - five hot-plugs kill the controller on two Intel generations and never in QEMU; a polled sweep recovers it for the wrong reason; the cause is a recovery step nobody ever sends | Fixed |
 | 3 | [Composite devices need `usbhub.sys`, and an xHCI-only machine never has it](03-usbhub-sys-composite-devices.md) - Code 2 on every multi-function device, blamed on NUSB for two weeks, settled by one file and a laptop that was not in the plan | Fixed |
-| 4 | [A device Windows XP's hub re-creates mid-enumeration is failed by this driver](04-xp-restore-device-ep0-remove.md) - XP re-created a mass-storage device through a second device handle and removed the first one's EP0 last; the driver's REMOVE path unbinds whichever EP0 extension arrives, the live handle is refused for retry, and the progress detector fails the device. Replugging works | Fix in the tree (task 19.7); the XP reading on a clean install owed |
+| 4 | [A device Windows XP's hub re-creates mid-enumeration is failed by this driver](04-xp-restore-device-ep0-remove.md) - XP re-created a mass-storage device through a second device handle and removed the first one's EP0 last; the driver's REMOVE path unbinds whichever EP0 extension arrives, the live handle is refused for retry, and the progress detector fails the device. Replugging works | Fixed in `1.0.1.0` (task 19.7, closing run `i4b` 2026-09-03: the counter moved to 2 while both devices bound on their first attach); the primary targets' reading that nothing changed there is still owed |
 
 ## Other issues worth a page
 

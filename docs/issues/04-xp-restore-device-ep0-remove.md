@@ -1,15 +1,23 @@
 # Issue 4 - A device Windows XP's hub re-creates mid-enumeration is failed by this driver: the REMOVE of the superseded EP0 handle unbinds the live one
 
-Status: fix in the tree, the closing run owed. Observed once, on the
-Windows XP guest, 2026-09-03 (roadmap task 19.3). The mechanism below is a
-static reading of this driver's own code against the callback order the run
-recorded, and the host vector of section 4 reproduces it from that order:
-on the REMOVE path as it was, the vector failed exactly as the run did. The
-owner's decision that afternoon was no driver code change in release
-`1.0.1.0`; reversed the same evening, the fix in section 4 is roadmap task
-19.7 and landed that night. This page moves to fixed when the XP reading
-section 5 asks for is taken. Until then the workaround is to unplug the
-device and plug it back in, which enumerated cleanly in the same run.
+Status: fixed, in release `1.0.1.0` (roadmap task 19.7). Observed
+2026-09-03 afternoon on the Windows XP guest (roadmap task 19.3, run
+`p194`); the fix landed that night and the closing reading was taken the
+same night (run `i4b`, section 5): on a clean-snapshot reinstall of the
+package the two-handle restore recurred on the first attach of both the
+mass-storage and the composite device, the counter `EP0 removes on a
+superseded handle` moved to 1 and then 2, and both devices bound on that
+first attach with every failure counter at zero. The mechanism below is a
+static reading of this driver's own code against the callback order the
+`p194` run recorded, and the host vector of section 4 reproduces it from
+that order: on the REMOVE path as it was, the vector failed exactly as the
+run did. The owner's decision that afternoon was no driver code change in
+release `1.0.1.0`; reversed the same evening, the fix in section 4 is
+roadmap task 19.7. What that task still owes is the reading on both
+primary targets that nothing changed there (the counter at zero on Windows
+98 SE and Windows 2000 on the same binary). Before the fix the workaround
+was to unplug the device and plug it back in, which enumerated cleanly in
+the same run.
 
 Targets affected: Windows XP, the best-effort secondary target. Not seen on
 Windows 98 SE, Windows ME or Windows 2000 in any run of this project: the
@@ -226,32 +234,58 @@ primary targets on the same binary with the reading that nothing changed.
 
 ## 5. What is still open
 
-- A run that confirms the mechanism, now with the fix in place: the
-  counter `Ep0RemovesSuperseded` moving while a mass-storage device and a
-  composite bind on their first attach. The confirming run the task asked
-  for first was taken 2026-09-03 evening (tag `i4`: a cold boot of the
-  `p194` install, `usb-storage` the first device on port 1 with the
-  `SetEndpointState` print budget intact, `usb-audio` second on port 2) and
-  did not reproduce it: both devices bound on their first attach through
-  one same-extension EP0 reopen each, no second port reset, `slots reset to
-  Default` 0, `records failed - no progress` 0. What the three `p194` first
-  attaches had that these two lacked is that each was also the first-ever
-  installation of its class driver on that XP install (`usbstor.sys`,
-  `usbaudio.sys` and their companions placed from the SP3 cab during the
-  attach); every attach with the class driver already present, the `p194`
-  replugs included, has enumerated cleanly. A correlation on five attaches,
-  not a mechanism. The reading that settles both this and the fix is the
-  clean snapshot (`winxp-clean-install`), the 1.0.1.0 package reinstalled
-  from `vm\xferxp` (the owner at the Have Disk wizard), then `usb-storage`
-  and `usb-audio` each attached once: the counter at 1 and 2, the devices
-  bound, and the failure counters at zero.
+- The closing run, taken 2026-09-03 night (run `i4b`, host `FW-W11P-YKM`;
+  `vm\winxp.img` reverted to `winxp-clean-install`, the `1.0.1.0` package
+  from `vm\xferxp` installed by the owner through Have Disk, the binary
+  built 20:24 with the fix, `FileVersion` 1.0.1.0), read from
+  `vm\winxp-debugcon.i4b.log`, the counters by offset and the QEMU xhci
+  trace `vm\winxp-qemu-trace.i4b.log`. `usb-storage` attached first (port
+  1, 22:08): EP0 opened at address 0 through extension `81F34D70`, the
+  same-extension REMOVE, `CloseEndpoint` and reopen, addressed 1; then a
+  further port reset, a second extension `820B1B38` opened at address 0
+  (`slots reset to Default` 1), its own reopen, addressed 2 (`SET_ADDRESS
+  interceptions` 2), then `EP0 removes on a superseded handle` moving to
+  1, and only after it the `CloseEndpoint` of `81F34D70`: the `p194` order
+  exactly, with the REMOVE of the old handle now landing on the identity
+  check. The trace's side of it, for slot 1: four `usb_xhci_port_reset
+  port 1`, `usb_xhci_slot_address` twice, `usb_xhci_slot_reset slotid 1`,
+  `usb_xhci_slot_address` a third time, then `usb_xhci_slot_configure`.
+  The bulk pair opened (`endpoints opened` 2), 1,157 transfers had
+  completed within twenty-five seconds, and Explorer opened `F:` with the
+  file the `p194` run left on the disk. `usb-audio` second (port 2,
+  22:10): addressed 3, the configuration descriptor's isochronous
+  declaration snooped, a port reset, `slots reset to Default` 2, addressed
+  4, the counter at 2, then the isochronous endpoint opened with its
+  interval derived from the descriptor (`endpoints opened` 3), which only
+  the audio class driver's interface selection produces; the trace shows
+  slot 2 through the same reset, address, slot reset, address, configure
+  sequence. `records failed - no progress` 0, `transfers refused for
+  retry` 0, every `EP0 opens refused` and `endpoint refusals` counter 0,
+  open accounting 13 opens all accounted for. The confirming run the task
+  asked for first (tag `i4`, the same evening: a cold boot of the `p194`
+  install, both class drivers already present) had not reproduced the
+  restore; `i4b` did, on both devices, so the correlation below now stands
+  on seven attaches. Device Manager at 22:18, both devices attached: "USB
+  Mass Storage Device", "USB Composite Device" and "USB Root Hub" under
+  the controller, "USB Audio Device" under Sound, video and game
+  controllers, and no mark on any of them. The shutdown from the Start
+  menu at 22:20: `SuspendController` (the controller halted), then
+  `StopController` and `DisableInterrupts`, the teardown clean.
 - Whether the Windows 2000 hub ever takes the restore path against this
-  driver. If it does, this is not an XP-only issue.
-- Why XP's hub re-created the disk and the audio device. A second attach
-  of each on the same boot did not repeat it, and neither did a first
-  attach on a later boot with the class drivers already installed (`i4`);
-  the first-ever installation of the class driver, during the attach, is
-  the candidate condition.
+  driver, and whether Windows 98 SE's does: task 19.7's remaining legs,
+  `run-matrix.ps1` on the 2a and 2b guests and the Windows 98 door
+  sequence on the same binary, with `EP0 removes on a superseded handle`
+  as the witness. Zero there says the two-handle restore is XP's alone;
+  nonzero says it is not, and that the fix was needed on a primary target.
+- Why XP's hub re-creates the device. Every first attach that took the
+  restore path was also the first-ever installation of that class driver
+  on the install (`usbstor.sys` or `usbaudio.sys` and their companions
+  placed from the SP3 cab while the device sat enumerated): the three
+  `p194` attaches and both `i4b` attaches. Every attach with the class
+  driver already present (the `p194` replugs, both `i4` attaches) went
+  through one same-extension reopen and no second handle. A correlation
+  on seven attaches, not a mechanism; the driver no longer depends on the
+  answer.
 
 ## Sources
 

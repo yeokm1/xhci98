@@ -1666,9 +1666,24 @@ Tasks:
   `Ep0RemovesSuperseded` ("EP0 removes on a superseded handle",
   `scripts\vm-matrix\offsets.txt` regenerated), `build-driver.cmd all` and
   every gate green, `vm\xferxp` restaged (the qemu binary built 19:34, still
-  versioned 1.0.0.1). Still owed: the XP reading on a clean install (the
-  counter moving while storage and audio bind on their first attach), then
-  2a and 2b on the same binary.
+  versioned 1.0.0.1; restaged again at 20:24 as 1.0.1.0).
+  The XP reading, 2026-09-03 night (fifth session, tag `i4b`): `vm\winxp.img`
+  reverted to `winxp-clean-install` (the `p194` state kept as snapshot
+  `p194-i4-installed`), the `1.0.1.0` package installed by the owner through
+  Have Disk with the xHCI alone, then `usb-storage` attached first and
+  `usb-audio` second from the monitor. Both took the two-handle restore
+  that `i4` had not shown, and both bound on their first attach: storage
+  through a second EP0 extension at address 0 after a further port reset
+  (`slots reset to Default` 1, addressed 2, `EP0 removes on a superseded
+  handle` 1, then the `CloseEndpoint` of the first extension, `endpoints
+  opened` 2, Explorer opening `F:`), audio the same way (`slots reset to
+  Default` 2, addressed 4, the counter at 2, the isochronous endpoint
+  opened with its interval derived, `endpoints opened` 3), Device Manager
+  naming "USB Mass Storage Device", "USB Composite Device" and "USB Audio
+  Device" with no mark on any; `records failed - no progress` 0, `transfers refused for retry` 0, every refusal counter
+  0. Logs `vm\winxp-debugcon.i4b.log` and `vm\winxp-qemu-trace.i4b.log`;
+  the issue page is at fixed. Still owed: 2a and 2b on the same binary, the
+  reading that nothing changed and the counter stays 0.
 - [ ] 19.8 the 9x targets unchanged: the `1.0.1.0` package installed from
   the asset on Windows 98 SE under NUSB and under SweetLow, and on Windows
   ME, the 18.7 route, and `run-matrix.ps1 -PostRelease` on the fresh 2a and

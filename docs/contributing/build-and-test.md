@@ -1667,9 +1667,36 @@ to the door sequence was on the launcher's original 4+4 port layout, plain
   (`EP0 removes on a superseded handle`) as the witness; see the issue page,
   section 5.
 
-Not done on XP: real hardware (nothing in the fleet runs it), and the
-first-attach enumeration of a mass-storage or composite device on a clean
-install with the 19.7 fix in the binary (issue 4's closing reading).
+- **Issue 4's closing reading (task 19.7; tag `i4b`, 2026-09-03 night):
+  the two-handle restore recurred on a clean install, on both devices, and
+  the fix carried them.** `vm\winxp.img` reverted to `winxp-clean-install`
+  (the `p194` state kept as snapshot `p194-i4-installed`), the run launcher
+  with no EHCI, the `1.0.1.0` package installed by the owner through Have
+  Disk (the qemu-flavour binary built 20:24, `FileVersion` 1.0.1.0):
+  `DriverEntry`, registration, `StartController`, the root hub, no
+  `SuspendController`. `usb-storage` first (port 1): the same-extension
+  reopen at address 1, then a further port reset, a second EP0 extension
+  at address 0 (`slots reset to Default` 1), addressed 2, then `EP0
+  removes on a superseded handle` 1 and only after it the `CloseEndpoint`
+  of the first extension; `endpoints opened` 2, 1,157 transfers within
+  twenty-five seconds, Explorer opening `F:`. `usb-audio` second (port 2):
+  addressed 3, a port reset, `slots reset to Default` 2, addressed 4, the
+  counter at 2, the isochronous endpoint opened with its interval derived
+  (`endpoints opened` 3). `records failed - no progress` 0, `transfers
+  refused for retry` 0, every refusal counter 0, open accounting 13 opens
+  all accounted for. Device Manager at 22:18: "USB Mass Storage Device",
+  "USB Composite Device" and "USB Root Hub" under the controller, "USB
+  Audio Device" under Sound, no mark on any of them; a clean
+  `SuspendController` then `StopController` on the shutdown. Read from
+  `vm\winxp-debugcon.i4b.log`,
+  `vm\winxp-qemu-trace.i4b.log` (each slot: port reset, address, slot
+  reset, address, configure) and `scripts\local\readcounters.ps1` against
+  the extension address the `cb` lines carry. So both first-ever
+  class-driver installations on this clean install took the restore path
+  that neither `i4` attach, with the class drivers present, had taken; the
+  issue page's section 5 carries the correlation.
+
+Not done on XP: real hardware (nothing in the fleet runs it).
 
 ### Windows 2000 SMP Stress VM (Phase 2d)
 
