@@ -5,8 +5,9 @@ Set-StrictMode -Version 2.0
 # [SourceDisksFiles], the binary-versus-INF version comparison, and the
 # flavour-marker reader. Until release 1.0.0.1 this file also read
 # usbd-sources.expected, the manifest of the Microsoft files the media then
-# carried; the media carries none now (the OS supplies usbd.sys and
-# usbhub.sys through the INF's LayoutFile), so there is nothing to
+# carried; the media carries none now (the OS supplies usbd.sys, usbhub.sys
+# and, on the NT targets, usbport.sys through the INF's LayoutFile), so
+# there is nothing to
 # authenticate and the reader is gone with the manifest.
 
 function Read-MediaLayout {

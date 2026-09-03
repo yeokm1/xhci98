@@ -207,7 +207,7 @@ at a loose `xhci98.sys`; nothing about a copied file says which flavour it is.
 | # | Target | Do | Expected reading |
 |---|---|---|---|
 | 4.1 | Windows 98 SE | NUSB 3.3 first, then Device Manager, the unclaimed xHCI controller, Properties -> Driver -> Update Driver -> Specify a location -> `RELEASE\` | On an xHCI-only machine the copy phase asks for the Windows 98 Second Edition CD-ROM ("Insert Disk"); give it the CD, or its `WIN98` folder if asked where to copy from, and the install completes. A machine that already has `usbd.sys` and `usbhub.sys` is not asked. It never asks for a file from the driver's own disk. Record which it was |
-| 4.2 | Windows 2000 SP4 | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE\` | Completes with no prompt; `usbd.sys` comes from the driver cache |
+| 4.2 | Windows 2000 SP4 | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE\` | Completes with no prompt; `usbport.sys`, `usbd.sys` and `usbhub.sys` come from the driver cache |
 | 4.5 | Windows ME | SweetLow's stack first (NUSB is a Windows 98 SE package), then the Windows 98 SE route of 4.1 | Completes. The virtual machine tried asked for no CD, its Setup having left the CABs on the hard disk; a machine without them may ask for the Windows ME CD. Record which it was. This target is supported in virtual machines only |
 | 4.3 | Both | Look at Device Manager when the install is done | The two nodes below, and neither carries a warning mark |
 | 4.4 | Windows 98 SE | Look for the two cosmetic readings and note them | `xhci98.tmp` left in `System32\Drivers` and listed in Driver File Details (cosmetic; the loaded binary is the real one), and the Driver tab showing a date but no version (release notes, "Known limitations"). Neither is a failure and neither should be reported as one |
@@ -341,15 +341,16 @@ Windows 2000 SP4
 
 | # | Do | Expected reading |
 |---|---|---|
-| 7.4 | Look for `DisableSelectiveSuspend` after the install | Absent, by design: the NT install path omits it |
+| 7.4 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | Present, value 1 |
 | 7.5 | Look at the Driver tab | The version is present and the date reads `Not available` |
 | 7.6 | Disable the controller in Device Manager, then re-enable it once | It goes and comes back, with no crash |
 
-7.4 is absent because that system's native `usbport` never idle-suspends this
-controller. Finding the value means something else on the machine wrote it;
-record that, it is not a failure of this package. (`src/xhci98.inf`:
-`[Xhci.Dev.NTx86]` carries only `Xhci.AddReg.NT`, and the comment block states
-the omission is intended.)
+7.4 is written by the NT install path since 1.0.0.2; until then it was
+absent by design. Windows 2000's native `usbport` never idle-suspends this
+controller, so on this target the value changes nothing this test can see;
+it is there because Windows XP's `usbport` does idle it, and the two halves
+of the INF write the same value. (`src/xhci98.inf`: `[Xhci.Dev.NTx86]`
+carries `Xhci.AddReg.Global`, and the comment block below it says why.)
 
 7.5 is expected and is not a failed install: the engine reads this package's
 `DriverVer` and declines the date half specifically. (Roadmap task 12.4,

@@ -131,15 +131,20 @@ stay markdown: they are read here, in the repository.
 project's own work: `xhci98.sys` and `xhci98.inf`. A version directory
 carries exactly those two per flavour, and so does the release download.
 
-Two files the driver depends on are not on the media, because they are the
-operating system's own: `usbd.sys` (`usbhub20.sys` imports it on both
-targets) and, on Windows 98, `usbhub.sys` (that system's composite parent).
-Nothing on an xHCI-only machine ever placed them, so the INF names
-`LayoutFile=layout.inf` and the Windows setup engine copies each from the
-OS's own install source, the CABs on the hard disk or the Windows 98 CD, and
-Windows 2000's `driver.cab`, never overwriting a file already there. On an
-xHCI-only Windows 98 machine the install therefore asks for the Windows 98
-SE CD; the generated `readme.txt` says so in its section 3.
+Three files the driver depends on are not on the media, because they are
+the operating system's own: `usbd.sys` (the USB 2.0 root hub imports it on
+both targets), `usbhub.sys` (Windows 98's composite parent and the NT
+targets' hub driver) and, on the NT targets, `usbport.sys` (the stack
+itself; on Windows 98 NUSB or SweetLow's package places it). Nothing on an
+xHCI-only machine ever placed them, so the INF names `LayoutFile=layout.inf`
+and the Windows setup engine copies each from the OS's own install source,
+the CABs on the hard disk or the Windows 98 CD, and the NT targets'
+`Driver Cache\i386`, never overwriting a file already there. On an xHCI-only
+Windows 98 machine the install therefore asks for the Windows 98 SE CD; the
+generated `readme.txt` says so in its section 3. Until 1.0.0.2 the NT path
+copied `usbd.sys` only, and an NT install that had never seen a USB
+controller had no `usbport.sys` for the driver to load against (Code 39,
+measured on a Windows XP guest on 2026-09-03).
 
 That is a change. From `0.0.0.4` to `1.0.0.0` the download carried three
 Microsoft files the tracked tree did not, `usbd98.sys`, `usbd2k.sys` and

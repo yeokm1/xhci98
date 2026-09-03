@@ -1094,6 +1094,16 @@ in this project has an EHCI, which is the same confound that hid the Windows
 it can never be observed either. It is published as a limitation rather than
 carried as a check.
 
+Amended 2026-09-03: the inference held for `usbccgp.sys` and failed for the
+file this entry is about. Both NT targets' `layout.inf` give `usbhub.sys`,
+`usbport.sys`, `usbehci.sys` and `usbd.sys` the text-mode disposition that
+does not copy them at Setup, and a Windows XP guest that had never seen a
+USB controller had none of them (Code 39 on the first boot; roadmap Phase
+19). The confound named above, an EHCI in every NT vehicle, was measured on
+XP by leaving the EHCI out, and the NT install path copies `usbport.sys` and
+`usbhub.sys` through `LayoutFile` since 1.0.0.2. The Phase 19 entry has the
+disposition table.
+
 Rules this earns:
 
 - On an xHCI-only machine, assume no USB file Windows ships is present.
@@ -1111,9 +1121,12 @@ Rules this earns:
 - A pre-install inventory is evidence, not ceremony. Stage E1.0's four `dir`
   commands contained the answer and were filed as "baseline is clean".
 
-Affected: `src/xhci98.inf` (`[Xhci.CopyW98]`, Win98 path only),
+Affected: `src/xhci98.inf` (`[Xhci.CopyW98]`, Win98 path only until
+1.0.0.2, then `[Xhci.CopyNT]` as well),
 `scripts/package/usbd-sources.expected`, `scripts/inf-gate/check-inf.ps1`
-(`W98-MISSING` / `W98-ONWIN2K` enforce the asymmetry in both directions),
+(`W98-MISSING` / `W98-ONWIN2K` enforced the asymmetry in both directions;
+since 1.0.0.2 there is none to enforce for `usbhub.sys`, and `OS-ONWIN98`
+carries the one that remains, `usbport.sys` off the Windows 98 path),
 `docs/contributing/legal-provenance.md` section 5,
 `docs/contributing/runs/run-13e.md` ("Session record - bench session 1"),
 release 0.0.0.4.

@@ -58,7 +58,8 @@ rem
 rem   scripts\package\make-package.ps1 [-Flavor release|debug]
 rem
 rem The media is this project's two files and nothing else since 1.0.0.1; the
-rem OS supplies usbd.sys and usbhub.sys through the INF's LayoutFile.
+rem OS supplies usbd.sys and usbhub.sys (and, on the NT targets, usbport.sys)
+rem through the INF's LayoutFile.
 rem
 rem Usage:  scripts\build-driver.cmd [release|debug|qemu|both|all]
 rem                                                          (default: both)

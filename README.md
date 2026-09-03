@@ -38,7 +38,7 @@ The driver needs a USB 2.0 stack (`usbport.sys` + `usbhub20.sys`) on the machine
 - **Windows ME**: the [SweetLow stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip) only, installed the same way. NUSB is a Windows 98 SE package. Without the stack the driver installs but the controller shows Code 2.
 - **Windows 2000 SP4**: nothing to install; SP4 has the stack (or use the standalone USB 2.0 update KB319973). **Do not install NUSB on Windows 2000.**
 
-On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand**: the package carries no Microsoft file, so the install has Windows copy its own `usbd.sys` and `usbhub.sys` from the CD ("Insert Disk"), unless the Windows CABs are on the hard disk (`C:\WINDOWS\OPTIONS\CABS`, as on OEM and QuickInstall installs). A machine that ever had a USB 1.1 controller already has both files. Windows 2000 asks for nothing.
+On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand**: the package carries no Microsoft file, so the install has Windows copy its own `usbd.sys` and `usbhub.sys` from the CD ("Insert Disk"), unless the Windows CABs are on the hard disk (`C:\WINDOWS\OPTIONS\CABS`, as on OEM and QuickInstall installs). A machine that ever had a USB 1.1 controller already has both files. Windows 2000 copies its own `usbport.sys`, `usbd.sys` and `usbhub.sys` from the driver cache every install has, and asks for nothing.
 
 Optional but recommended: boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from the `XHCIQUAL\` folder. A controller reporting no legacy interrupt pin cannot be driven on either system and there is no software workaround, so find out before you install anything.
 
@@ -143,7 +143,7 @@ The driver is C (C89/C90, no C++ or CRT), built and verified on Windows 11 x64. 
 
 4. Build the two tools that ship beside the driver. `xhciqual\build.cmd` produces `XHCIQUAL.EXE`, the DOS qualifier, and needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM` (or wherever `WATCOM` points). That is the only tool installed normally on the host, and the driver never uses it. `xhcisnap\build.cmd` produces `XHCISNAP.EXE`, the snapshot reader, with the in-repo MSVC 6.0.
 
-5. Make install media. A `.sys` on its own is not install media; the INF travels with it, and since 1.0.0.1 nothing else does, because the INF has Windows supply its own `usbd.sys` and `usbhub.sys`. For a Windows 98 SE target, first download NUSB 3.3 (`nusb33e.exe`) from [philscomputerlab.com](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) to `tools\nusb33e.exe`.
+5. Make install media. A `.sys` on its own is not install media; the INF travels with it, and since 1.0.0.1 nothing else does, because the INF has Windows supply its own `usbd.sys` and `usbhub.sys` (and, on Windows 2000 and XP, `usbport.sys`). For a Windows 98 SE target, first download NUSB 3.3 (`nusb33e.exe`) from [philscomputerlab.com](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) to `tools\nusb33e.exe`.
 
    | Script | Output |
    |---|---|
@@ -229,6 +229,6 @@ Neither PDF is tracked here. Fetch your own copies into the git-ignored `docs/re
 
 This project's own source is licensed under the GNU General Public License, version 2 ([LICENSE](LICENSE)), `GPL-2.0-only`. The repository tracks no third-party binary on its own, although the two tool executables it tracks under `releases/` carry statically linked third-party runtimes: `xhci98.sys` links no third-party object, runtime or extender, while `XHCIQUAL.EXE` embeds the Open Watcom runtime and the DOS/32A extender and `XHCISNAP.EXE` the MSVC 6.0 runtime and each ships with a `NOTICE.TXT` recording it (the `LICENSE` scope note states their terms).
 
-The release download carries no Microsoft file. The `usbd.sys` and `usbhub.sys` the install needs are Windows' own, and Windows copies them from its own installation source during the install, never overwriting a file already there; the assembled asset carried them from 0.0.0.4 to 1.0.0.0, before any upload, and [docs/contributing/legal-provenance.md](docs/contributing/legal-provenance.md) section 5 records that. 
+The release download carries no Microsoft file. The `usbd.sys` and `usbhub.sys` the install needs (and `usbport.sys` on Windows 2000 and XP) are Windows' own, and Windows copies them from its own installation source during the install, never overwriting a file already there; the assembled asset carried them from 0.0.0.4 to 1.0.0.0, before any upload, and [docs/contributing/legal-provenance.md](docs/contributing/legal-provenance.md) section 5 records that. 
 
 The full inventory, provenance methods and redistribution boundaries are in [docs/contributing/legal-provenance.md](docs/contributing/legal-provenance.md), which states facts, not legal conclusions.

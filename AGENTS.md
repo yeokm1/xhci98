@@ -287,20 +287,23 @@ registration failure. `build-driver.cmd` runs the INF gate on every build for
 that reason, including the Win98-parser traps its engine reports as nothing
 at all.
 
-The media carries no Microsoft file. `usbd.sys` (both targets) and
-`usbhub.sys` (Windows 98 only) are the OS's own, and nothing on an xHCI-only
-machine ever placed them, so the INF has the setup engine copy them from the
-OS's own install source through `LayoutFile=layout.inf`, never overwriting a
-file already there; on an xHCI-only Windows 98 machine that means the
-Windows 98 CD may be asked for. Do not put either file back on the media
-under any name: the INF gate's `OS-*` and `PKG-MSFILE` rules refuse it, and
-`legal-provenance.md` section 5 records why. Build install media with
-`scripts\package\make-package.ps1`, never by hand-copying the `.sys` and
-`.inf`.
+The media carries no Microsoft file. `usbd.sys` and `usbhub.sys` (both
+targets) and `usbport.sys` (the NT targets; on Windows 98 the USB 2.0 stack
+places it) are the OS's own, and nothing on an xHCI-only machine ever placed
+them, so the INF has the setup engine copy them from the OS's own install
+source through `LayoutFile=layout.inf`, never overwriting a file already
+there; on an xHCI-only Windows 98 machine that means the Windows 98 CD may
+be asked for, and the NT targets take them from `Driver Cache\i386` with no
+prompt. `usbhub20.sys` is on no path: the OS places it itself. Do not put
+any of them on the media under any name: the INF gate's `OS-*` and
+`PKG-MSFILE` rules refuse it, and `legal-provenance.md` section 5 records
+why. Build install media with `scripts\package\make-package.ps1`, never by
+hand-copying the `.sys` and `.inf`.
 
 See `docs/contributing/build-and-test.md` for environment setup, QEMU
 configuration, the install procedure, the two model INFs, and "The files the
-OS supplies: `usbd.sys` and `usbhub.sys`"; `docs/usb-xhci-info/win98-wdm.md`
+OS supplies: `usbport.sys`, `usbd.sys` and `usbhub.sys`";
+`docs/usb-xhci-info/win98-wdm.md`
 for the WDM API
 compatibility table and the "MSVC 6.0 / C89 Language Pitfalls" list.
 
@@ -342,7 +345,8 @@ rules that bind day-to-day work, and none of them is optional.
   the assembled asset carried three (`usbd98.sys`, `usbd2k.sys`,
   `usbhub98.sys`), by a decision `legal-provenance.md` section 5 records, and
   that was withdrawn on 2026-09-02 before any upload: release 1.0.0.1 has the
-  OS supply both files through the INF's `LayoutFile`. **Do not put a
+  OS supply both files through the INF's `LayoutFile`, and 1.0.0.2 adds
+  `usbport.sys` on the NT path by the same route. **Do not put a
   Microsoft file back onto the media, under any name, without a decision
   recorded there**, and do not write "this project redistributes nothing"
   anywhere: the two tool executables carry statically linked runtimes

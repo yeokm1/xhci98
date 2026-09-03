@@ -1927,7 +1927,7 @@ modern interrupt mechanism (MSI) that such a controller would require.
 
 
 ==============================================================================
- 3. THE TWO FILES WINDOWS SUPPLIES
+ 3. THE FILES WINDOWS SUPPLIES
 ==============================================================================
 
 xhci98.inf names two files of its own, xhci98.inf and xhci98.sys, and they
@@ -1935,27 +1935,33 @@ are in release\ and in debug\. Nothing else is in the package, and there is
 nothing to complete: a copy taken from the project's source repository is
 the same two files.
 
-Two files the driver depends on are NOT in the package, because they are
+Three files the driver depends on are NOT in the package, because they are
 Windows' own, unmodified, and this download redistributes nothing of
 Microsoft's:
 
-  usbd.sys     usbhub20.sys imports it on both systems. Without it the USB
-               ROOT HUB fails: Code 2 on Windows 98, error 0xc0000034
-               naming usbhub20.sys on Windows 2000.
+  usbd.sys     The USB 2.0 root hub imports it on both systems. Without it
+               the USB ROOT HUB fails: Code 2 on Windows 98, error
+               0xc0000034 naming usbhub20.sys on Windows 2000.
 
-  usbhub.sys   Windows 98's driver for devices that are more than one thing
-               at once - a sound card with a volume knob, a headset with
-               buttons, a keyboard with media keys. Without it every such
-               device stops at USB Composite Device with Code 2 and does
-               nothing at all. WINDOWS 98 ONLY, and only with NUSB's stack;
-               SweetLow's brings its own composite driver.
+  usbhub.sys   On Windows 98, the driver for devices that are more than one
+               thing at once - a sound card with a volume knob, a headset
+               with buttons, a keyboard with media keys. Without it every
+               such device stops at USB Composite Device with Code 2 and
+               does nothing at all (under NUSB's stack; SweetLow's brings
+               its own composite driver). On Windows 2000 it is the USB hub
+               driver.
+
+  usbport.sys  WINDOWS 2000 ONLY. The USB stack this driver plugs into.
+               Without it the controller shows Code 39 and the driver never
+               runs. On Windows 98 the USB 2.0 stack installed first (NUSB
+               or SweetLow's) supplies it.
 
 WINDOWS ONLY INSTALLS ITS USB FILES WHEN SETUP FINDS A USB CONTROLLER IT
 RECOGNISES, and on an xHCI-only machine it never does, so on such a machine
-neither file is there. The install in step 4 therefore asks Windows to copy
+none of them is there. The install in step 4 therefore asks Windows to copy
 them from its own installation source. Each is copied only if it is absent,
-so a machine that already has them - one that ever had a USB 1.1 controller -
-keeps its own files and is asked for nothing.
+so a machine that already has them - one that ever had a USB controller
+Windows recognised - keeps its own files and is asked for nothing.
 
   WINDOWS 98 SE   HAVE THE WINDOWS 98 SE INSTALLATION CD AT HAND. Unless the
                   Windows CABs are on the hard disk (C:\WINDOWS\OPTIONS\CABS,
@@ -1970,8 +1976,8 @@ keeps its own files and is asked for nothing.
                   machine tried (a virtual one) had the CABs on its hard
                   disk from its own Setup and asked for nothing.
 
-  WINDOWS 2000    Nothing to do: usbd.sys comes from the driver cache every
-                  Windows 2000 installation has.
+  WINDOWS 2000    Nothing to do: all three come from the driver cache every
+                  Windows 2000 installation has (Driver Cache\i386).
 
 If the prompt is cancelled the driver still installs, but the root hub fails
 as described above. That reads as a fault in this driver and is not one: put
@@ -2045,7 +2051,8 @@ CD, a shared folder - then:
       Open Device Manager and find the unrecognised xHCI controller, then
           Properties -> Driver -> Update Driver -> Have Disk
       and point it at the RELEASE\ directory. Nothing else is asked for;
-      usbd.sys comes from the driver cache every installation has.
+      usbport.sys, usbd.sys and usbhub.sys come from the driver cache every
+      installation has.
 
 It installs as "USB 2.0 eXtensible Host Controller (xhci98)", with a "USB
 Root Hub" underneath it. Neither should carry a warning mark.
@@ -2396,10 +2403,10 @@ the driver reads, and one the Windows 98 installer writes machine-wide.
   is gone. XhciLogVerbosity plus XHCISNAP is how a Windows 98 machine produces
   a report - see section 6. On Windows 2000 both routes work.
 
-  DisableSelectiveSuspend  -  Windows 98 only
-  ...........................................
+  DisableSelectiveSuspend  -  both systems
+  ........................................
 
-  DWORD, written as 1 by the Windows 98 installer, in
+  DWORD, written as 1 by the install on both systems, in
 
       HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB
 
@@ -2420,11 +2427,12 @@ the driver reads, and one the Windows 98 installer writes machine-wide.
       previous behaviour back - this driver's own devices then go back to
       needing Refresh.
 
-  Windows 2000 and Windows XP never have this written, and that is the
-  installer withholding it rather than an oversight: those systems read the
-  same setting name, so a value written there would take effect machine-wide
-  on controllers this package does not own - and they do not need it, because
-  their USB stack does not idle this controller in the first place.
+  Until 1.0.0.1 the Windows 2000 install withheld it, because that system's
+  USB stack never idles this controller and the value would have changed
+  nothing. Windows XP's stack does idle it, about half a minute after start,
+  so since 1.0.0.2 the install writes it on Windows 2000 and XP as well as
+  on Windows 98. On Windows 2000 it still changes nothing you can see; it is
+  the same machine-wide setting, with the same three consequences.
 
 
 ==============================================================================
@@ -2440,10 +2448,10 @@ the driver reads, and one the Windows 98 installer writes machine-wide.
 GNU GPL v2 - see the LICENSE file in this directory, beside this readme. This
 applies to xhci98.sys and xhci98.inf, which are this driver's own work.
 
-No Microsoft file is in this download. The usbd.sys and usbhub.sys the
-install needs are copied by Windows from your own Windows installation
-source (section 3); nothing here grants you any right in them, and nothing
-here redistributes them.
+No Microsoft file is in this download. The usbd.sys, usbhub.sys and (on
+Windows 2000) usbport.sys the install needs are copied by Windows from your
+own Windows installation source (section 3); nothing here grants you any
+right in them, and nothing here redistributes them.
 
 The provenance record for everything the project depends on but does not own
 is in docs/contributing/legal-provenance.md, in the project's source

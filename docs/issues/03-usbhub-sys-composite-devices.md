@@ -279,3 +279,18 @@ on the Windows 98 path only. The gate rules became the `OS-*` family
 `scripts/package/usbd-sources.expected` is gone. `legal-provenance.md`
 section 5 and `build-and-test.md`, "The files the OS supplies", have the
 record; nothing above about the cause or the symptom changes.
+
+### 2026-09-03: the Windows 2000 asymmetry was wrong
+
+The argument above that Windows 2000 needs no `usbhub.sys` from this INF
+rested on "Setup places it from `driver.cab` unconditionally". It does not.
+Both NT targets' `layout.inf` give `usbhub.sys` the text-mode disposition
+that does not copy it at Setup, the same as `usbport.sys` and `usbd.sys`,
+and a Windows XP guest installed with no USB controller had none of the
+three (roadmap Phase 19; `build-and-test.md`, "The files the OS supplies",
+has the disposition table). The composite-parent half of the argument
+stands: on the NT targets that role is `usbccgp.sys`'s, and this issue's
+symptom is Windows 98's. Since 1.0.0.2 `[Xhci.CopyNT]` copies `usbhub.sys`
+too, with the same flag, and `OS-ONWIN2K` is retired; the rule that
+survives it is `OS-ONWIN98`, for `usbport.sys`, which the Windows 98
+`layout.inf` cannot resolve.
