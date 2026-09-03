@@ -105,6 +105,7 @@ Setup scripts:
 | `scripts\setup-qemu.ps1` | Checks/configures the Win98 SE (Phase 2a) QEMU launchers; use `-Install` to try Winget QEMU install; use `-CreateDisk` for VM images |
 | `scripts\test-qemu-launchers.ps1` | Generates all three VMs' launchers against stand-in QEMU files and verifies per-boot debug-console log rotation plus the SMP default/fallback flags; run by `build-driver.cmd` |
 | `scripts\setup-qemu-win2k.ps1` | Same for the Win2000 SP4 (Phase 2b) VM, the second first-class target. Monitor port 55556, and it also stages `usbd.sys` (`-Win2KUsbdSys`) |
+| `scripts\setup-qemu-winxp.ps1` | The Windows XP SP3 guest of roadmap Phase 19 (`vm\winxp.img`, monitor 55559, transfer drive `vm\xferxp`): WHPX with `kernel-irqchip=off`, ACPI on, no companion EHCI unless the run launcher is given `ehci` as its second argument; see "Windows XP target VM" |
 | `scripts\setup-qemu-win2k-smp.ps1` | The Phase 2d SMP stress VM (`vm\win2k-smp.img`, monitor 55557). Defaults to the checkpoint-proven `whpx,kernel-irqchip=off` rung; `-Accel`/`-AcpiOff`/`-Smp`/`-MemoryMb` select another Phase 2d task-2 rung so each is a regenerated launcher, not a hand-edited copy |
 | `scripts\check-smp-parallelism.ps1` | Host-side Phase 2d checkpoint check against the running 2d VM: a complete one-to-one vCPU/`thread_id` mapping from `info cpus`, plus a process affinity mask allowing 2+ logical processors. Guest-side "MP kernel landed" checks do not distinguish those host conditions; this script does. Run-time, so not part of `build-driver.cmd`; `-SelfTest` needs no VM |
 | `scripts\setup-all.ps1` | Runs MSVC, DDK, and both Phase 2a/2b QEMU setups; use `-RunInstallers` for MSVC/DDK and `-InstallQemu` for QEMU. Pass `-Win2KIso` or the Win2000 half is skipped with a warning |
@@ -1391,6 +1392,111 @@ tax `AGENTS.md` describes, or a supported-in-VM target stated the way
 Windows 2000's status is stated) is the owner's decision, roadmap task 18.4,
 open at the time of writing; until it is taken no document names Windows ME
 as supported.
+
+### Windows XP target VM (roadmap Phase 19)
+
+The owner asked on the morning of 2026-09-03 whether Windows XP could be
+supported, and installed a 32-bit Windows XP Professional SP3 guest by hand
+the same afternoon (`vm\winxp.img`, 8 GB, snapshot `winxp-clean-install`
+taken at 14:11 with the OS at the desktop and nothing else on it). Nothing
+had ever been run on XP itself; `win98-wdm.md` ("What about Windows XP?")
+kept it best-effort for cost, with the static registration gate looking
+compatible. What tier XP becomes is the owner's decision, roadmap task 19.6,
+and no document names it as supported until that is taken. What follows is
+the recipe, what the first afternoon measured, and what the measurement
+changed: the two INF fixes release 1.0.0.2 carries ("The files the OS
+supplies" below, and the `DisableSelectiveSuspend` block in
+`src/xhci98.inf`).
+
+The recipe. `scripts\setup-qemu-winxp.ps1` writes both launchers into
+`scripts\local`; the hand-written ones that took the first readings are
+what it reproduces.
+
+1. `scripts\setup-qemu-winxp.ps1 -WinXpIso <path> -CreateDisk`, then
+   `scripts\local\qemu-winxp-install.cmd` and install the OS by hand (the
+   owner did; the VL media asks for a volume licence key). The machine is
+   `-machine pc` (ACPI on), `-accel whpx,kernel-irqchip=off`, `-cpu
+   pentium3`, 512 MB, `-vga std`, `-boot d` every boot (the XP CD's "Press
+   any key" falls through to the hard disk, which is what Setup's own
+   reboots need). WHPX, not TCG: XP Setup selects the ACPI APIC HAL, and on
+   this project's hosts TCG storms the APIC-clock ISR on that HAL
+   (`lessons.md`, "The vector-0xD1 storm is the accelerator"); under WHPX
+   the whole install ran with no storm. Probe WHPX on a new host first: a
+   bare `-M pc -accel whpx,kernel-irqchip=off -display none -m 64` that is
+   still alive after a few seconds is the yes. Shut down from the Start
+   menu and snapshot: `qemu-img snapshot -c winxp-clean-install
+   vm\winxp.img`.
+2. Stage the package: `make-package.ps1 -Flavor qemu -OutDir vm\xferxp`.
+   Only the qemu flavour writes the port-0xE9 trace the launcher captures.
+3. `scripts\local\qemu-winxp-run.cmd <tag>`: the same machine plus
+   `qemu-xhci`, the VVFAT transfer drive (`E:` in the guest; the CD, when
+   attached, is `D:`), `isa-debugcon` at 0xE9 into `vm\winxp-debugcon.log`
+   (rotated per boot like the other guests' logs), and the QEMU xhci trace
+   into `vm\winxp-qemu-trace.<tag>.log`. No companion EHCI unless `ehci` is
+   the second argument (below). No USB device is boot-attached
+   (`lessons.md`, "QEMU 11.1.0-rc2 parks a Windows 98 boot in SeaBIOS's SMM
+   handler"); hot-plug from the monitor on port 55559 with `device_add
+   usb-mouse,id=m1,bus=xhci.0` and no `port=` (`qemu-xhci` refuses a port
+   number and picks a USB2 port itself).
+4. Install the driver from the transfer drive: Device Manager, the
+   unrecognised "Universal Serial Bus (USB) Controller", Update Driver,
+   Have Disk, `E:\`. The unsigned-driver warning on 32-bit XP is a prompt
+   ("Continue Anyway"), not a blocker. The owner drove every wizard so far.
+5. What to read, the same list as the Windows ME recipe above:
+   `DriverEntry`, `USBPORT_GetHciMn` (expect `10000001`, the XP lineage;
+   both known values are accepted since Phase 3),
+   `USBPORT_RegisterUSBPortDriver status`, `StartController`, the `RH_*`
+   family; then a hot-plugged mouse, `usb-storage`, and Device Manager
+   disable, re-enable, remove and rescan (roadmap task 19.3, still owed).
+
+What the first afternoon showed (2026-09-03, the owner at the console; the
+`first`, `ehci` and `dss` trace tags in `vm\`):
+
+- **The 1.0.0.1 package, xHCI only: Code 39, debug console 0 bytes.** The
+  image, read on the host (`qemu-img convert -O raw`, then 7-Zip straight
+  through the MBR and NTFS; `Mount-DiskImage` needs elevation and refuses a
+  sparse VHD), had `xhci98.sys` in `system32\drivers`, XP's own 4,736-byte
+  `usbd.sys` beside it (the INF's own `LayoutFile` row placed it), and no
+  `usbport.sys` or `usbhub.sys` anywhere, `dllcache` included;
+  `setupapi.log` ends `CM_PROB_DRIVER_FAILED_LOAD (0x27)`. Its earlier
+  "Install failed, attempting to restore original files" is the copy-only
+  pass, not the failure. XP places `usbport.sys` from
+  `Driver Cache\i386\sp3.cab` only when a USB controller's install pulls
+  it, and this guest never had one. The same `layout.inf` table says the
+  same of Windows 2000, whose every vehicle here carried an EHCI; the
+  1.0.0.2 INF has the NT path copy the file itself ("The files the OS
+  supplies").
+- **With a companion EHCI (`qemu-winxp-run.cmd ehci ehci`), the same
+  binary ran.** `DriverEntry`, `USBPORT_GetHciMn=10000001`,
+  `USBPORT_RegisterUSBPortDriver status=00000000`, `StartController`
+  (`MaxPorts=8`: 4 USB2 companion ports managed and powered, 4 USB3 ports
+  left unpowered, `MaxSlotsEn=0x20`), the No Op self-test matched with
+  completion code 1, `RH_GetRootHubData` reporting 4 managed ports, the OS
+  installing "USB Root Hub" from its cache with no prompt (XP's own
+  `usbport.inf` binds `USB\ROOT_HUB20` to `usbhub.sys` and copies
+  `usbhub.sys` and `usbd.sys` with it), Device Manager "working properly".
+- **About thirty seconds after start with nothing attached, usbport called
+  `SuspendController` and the driver halted the xHC**; a `usb-mouse`
+  hot-plugged after that was invisible. That is the reading the SweetLow
+  record predicted for an XP-lineage usbport without
+  `DisableSelectiveSuspend` (`usbport-miniport-interface.md`, "The SweetLow
+  rebuild"); the 1.0.0.1 INF's NT half deliberately omitted the value.
+- **With `Services\USB\DisableSelectiveSuspend=1` set by hand** (the key
+  did not exist on the stock install; the owner created it in Registry
+  Editor, shut down, cold relaunch as `dss`): no `SuspendController` in two
+  minutes, then the hot-plugged mouse bound: port status change on port 5,
+  slot enabled, `SET_ADDRESS` intercepted, `devices addressed` 1,
+  `endpoints opened` 1, "USB Human Interface Device", interrupt transfers
+  submitted and completed while the pointer was driven, no refusal or
+  failure counter moved. Both "USB Root Hub" entries present. This is
+  roadmap task 19.2's observation, before the INF change; the 1.0.0.2 INF
+  writes the value on the NT path, and 19.4 repeats the reading from a
+  package install on the clean snapshot with no EHCI.
+
+Not done on XP: real hardware (nothing in the fleet runs it), mass storage,
+a composite device, the disable, enable, remove and rescan sequence, and
+the install from a package that copies `usbport.sys` itself; roadmap Phase
+19 holds each as a task.
 
 ### Windows 2000 SMP Stress VM (Phase 2d)
 

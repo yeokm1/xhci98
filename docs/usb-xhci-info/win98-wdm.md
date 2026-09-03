@@ -405,6 +405,22 @@ completes the controller stop on Windows 98
 rebuild"). That is XP-lineage code, but on Windows 98's kernel, in a VM; it
 says nothing about Windows XP itself.
 
+What the first Windows XP guest measured (2026-09-03, roadmap Phase 19;
+`docs/contributing/build-and-test.md`, "Windows XP target VM"): on 32-bit
+XP SP3 itself, in a virtual machine, the one binary registered
+(`USBPORT_GetHciMn=10000001`, `USBPORT_RegisterUSBPortDriver status=0`),
+started the controller, passed its No Op self-test, answered the root-hub
+callbacks, and bound a hot-plugged HID mouse with interrupt transfers
+flowing. Two things went wrong and neither was XP's runtime; both were the
+NT install path's. An xHCI-only NT install has no `usbport.sys` (Code 39
+until the INF copies it, which it does since 1.0.0.2), and XP's usbport
+idle-suspends the controller about thirty seconds after start unless
+`Services\USB\DisableSelectiveSuspend` is set, which the 1.0.0.2 INF writes
+on the NT path too. Mass storage, a composite device, the disable, enable,
+remove and rescan sequence, and real hardware are still unobserved on XP,
+and the tier is the owner's decision (roadmap task 19.6); until it is taken
+the position above stands.
+
 Why it is not promoted to a checkpointed target: cost, not a technical
 obstacle. "Target" in this project means every checkpoint is observed on it,
 which means a third VM, a third observation per phase, and real-hardware

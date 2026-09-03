@@ -1411,7 +1411,7 @@ claim; the Phase 2d listing taken after the first EHCI boot shows
 
 Tasks:
 
-- [ ] 19.0 record what the XP guest measured before anything changes:
+- [x] 19.0 record what the XP guest measured before anything changes:
   `build-and-test.md` gains "Windows XP target VM" (the recipe, WHPX not
   TCG, the `qemu-winxp-install.cmd` and `qemu-winxp-run.cmd` launchers
   committed as a `setup-qemu-winxp.ps1` like the Windows 2000 one, the
@@ -1421,6 +1421,10 @@ Tasks:
   vehicle hid it"), with the `layout.inf` disposition table; `win98-wdm.md`
   "What about Windows XP?" gets the runtime observation under its static
   one; the SweetLow table's suspend row gains the XP corroboration.
+  Recorded 2026-09-03: the four documents named, `scripts\setup-qemu-winxp.ps1`
+  (the two launchers reproduced; the run launcher is xHCI-only by default
+  and `ehci` as its second argument adds the companion the spike used) and
+  its row in `test-qemu-launchers.ps1`.
 - [ ] 19.1 the INF, NT path, file placement: `[Xhci.CopyW2K]` (rename to
   `Xhci.CopyNT`, every citation with it) copies `usbport.sys,,,16`,
   `usbd.sys,,,16` and `usbhub.sys,,,16` through `LayoutFile`, the owner's
@@ -1433,6 +1437,13 @@ Tasks:
   retired, `OS-MISSING` extended to the three NT files, the `OS-MEDIA`
   message and the self-tests updated, and a rule that the Windows 98 path
   never names `usbport.sys` (its `layout.inf` cannot resolve it).
+  INF and gate landed 2026-09-03 (`83596b1`; the documents in `d80c146`):
+  `[Xhci.CopyNT]` with the three files, `OS-ONWIN98` for `usbport.sys` off
+  the Windows 98 path, `OS-NEVER` for `usbhub20.sys` on no path (the
+  owner's decision that evening: Windows 2000's own `USB.INF` places it
+  when usbport creates the root hub PDO, XP has no such file, and clean
+  guests of both NT targets read the root hub coming up). Open until 19.4
+  reads the copy from a package install.
 - [ ] 19.2 the INF, NT path, idle suspend: XP's usbport reads
   `Services\USB\DisableSelectiveSuspend` through the same query table
   NUSB's build has, so the value the 9x path writes is written on the NT
@@ -1455,6 +1466,12 @@ Tasks:
   submitted and completed while the pointer was driven, no refusal or
   failure counter moved. What remains for the task is the INF and gate
   change itself, then the same reading from a package install.
+  INF and gate landed 2026-09-03 (`83596b1`): `Xhci.AddReg.Global` from
+  `[Xhci.Dev.NTx86]` and `[DefaultInstall.NTx86]`, `SUSP-MISSING` /
+  `SUSP-DUP` / `SUSP-VALUE` requiring the value once per route on both
+  targets; `HcDisableSelectiveSuspend` recorded in the INF as considered
+  and not taken (under NUSB the per-controller value alone still idled the
+  controller). Open until the package-install reading, with 19.4.
 - [ ] 19.3 the XP readings, the owner at the console, the qemu flavour: a
   HID mouse, a `usb-storage` device formatted, written and read back,
   Device Manager disable, enable, remove and rescan (the door sequence that
