@@ -90,9 +90,12 @@ reg|Windows 98|Xhci.AddReg|HKR||XhciLogDebugView|0x00010001|0|remove
 reg|Windows 98|Xhci.AddReg.Global|HKLM|System\CurrentControlSet\Services\USB|DisableSelectiveSuspend|0x00010001|1|remove
 path|Windows 2000|device install|Xhci.Dev.NTx86
 file|Windows 2000|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
-file|Windows 2000|Xhci.CopyW2K|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
+file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbport.sys|usbport.sys||16|keep
+file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
+file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbhub.sys|usbhub.sys||16|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010001|0|remove
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010001|0|remove
+reg|Windows 2000|Xhci.AddReg.Global|HKLM|System\CurrentControlSet\Services\USB|DisableSelectiveSuspend|0x00010001|1|remove
 service|Windows 2000|xhci98|Xhci.AddService|0x00000002|remove
 servicevalue|Windows 2000|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
 servicevalue|Windows 2000|xhci98|Xhci.AddService|ServiceType|1
@@ -108,4 +111,7 @@ file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbhub.sys|usbhub.sys||16|keep
 reg|Windows 98|Xhci.AddReg.Global|HKLM|System\CurrentControlSet\Services\USB|DisableSelectiveSuspend|0x00010001|1|remove
 path|Windows 2000|right-click Install|DefaultInstall.NTx86
 file|Windows 2000|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
-file|Windows 2000|Xhci.CopyW2K|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
+file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbport.sys|usbport.sys||16|keep
+file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
+file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbhub.sys|usbhub.sys||16|keep
+reg|Windows 2000|Xhci.AddReg.Global|HKLM|System\CurrentControlSet\Services\USB|DisableSelectiveSuspend|0x00010001|1|remove

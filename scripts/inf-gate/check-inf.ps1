@@ -27,14 +27,26 @@ What it checks, grouped by the failure each rule prevents:
            a .NTx86 section whose .NTx86.Services AddService names a binary the
            same CopyFiles section actually delivers, with the required kernel
            driver service type, demand start, and normal error control.
-  OS-*     The files the operating system supplies - usbd.sys on both targets
-           and usbhub.sys on Windows 98 - which the media does not carry since
-           release 1.0.0.1: [Version] must name LayoutFile=layout.inf, every
-           install path (device and right-click) must copy usbd.sys and the
-           Windows 98 paths alone usbhub.sys, each under its own name with
-           COPYFLG_NO_OVERWRITE and no overwrite flag to System32\Drivers, and
-           neither file, nor a 1.0.0.0 media name for one, may appear in
-           [SourceDisksFiles].
+  OS-*     The files the operating system supplies - usbd.sys and usbhub.sys
+           on both targets, usbport.sys on the NT targets - which the media
+           does not carry (usbd.sys and usbhub.sys since release 1.0.0.1,
+           usbport.sys on the NT path since 1.0.1.0): [Version] must name
+           LayoutFile=layout.inf, every install path (device and right-click)
+           must copy usbd.sys and usbhub.sys and the NT paths alone
+           usbport.sys (Windows 98's layout.inf has no such file; NUSB or
+           SweetLow's stack places it there), each under its own name with
+           COPYFLG_NO_OVERWRITE and no overwrite flag to System32\Drivers,
+           none of them, nor a 1.0.0.0 media name for one, may appear in
+           [SourceDisksFiles], and usbhub20.sys, which Windows 2000's own
+           USB.INF places with the root hub and XP does not have, is named
+           on no path at all.
+  SUSP-*   The one machine-wide value, Services\USB\DisableSelectiveSuspend =
+           1: every install path (device and right-click, both targets) must
+           write it as a DWORD 1. Windows 98's usbport builds idle-suspend the
+           controller within half a second and Windows XP's within thirty
+           seconds, and a halted xHC cannot report a hot-plug. Until 1.0.1.0
+           the NT path omitted it and the self-tests pinned the asymmetry;
+           the XP reading of 2026-09-03 inverted that.
   VAL-*    Per-device registry values the driver reads at run time. Each must
            be written by BOTH install paths, as the right type, with the right
            default - a value present on one path only is invisible on the other
@@ -811,24 +823,41 @@ foreach ($cf in ($referencedCopyFiles | Sort-Object -Unique)) {
 
 # ---- the files the operating system supplies -----------------------
 #
-# usbd.sys is one destination name and two different binaries, and usbhub.sys
-# is Windows 98's composite parent; nothing on an xHCI-only machine ever
-# places either (docs\contributing\lessons.md, "usbhub20.sys bugchecks
-# Win2000"; docs\issues\03-usbhub-sys-composite-devices.md). Since release
-# 1.0.0.1 the media carries neither: [Version] names LayoutFile=layout.inf,
-# neither file is in [SourceDisksFiles], and a CopyFiles entry the INF's own
-# [SourceDisksFiles] does not cover is resolved through the OS's layout.inf
-# and fetched from the OS's own install source. Each target therefore gets
-# its own OS's build by construction. This table is what BOTH-SOURCE exempts
-# and what the OS-* rules below hold the INF to: the paths that must copy each
-# file, and the paths that must not.
+# usbd.sys is one destination name and two different binaries, usbhub.sys is
+# Windows 98's composite parent and the NT targets' hub driver, and
+# usbport.sys is the port driver this miniport imports; nothing on an
+# xHCI-only machine ever places any of them (docs\contributing\lessons.md,
+# "usbhub20.sys bugchecks Win2000" and the Phase 19 entry;
+# docs\issues\03-usbhub-sys-composite-devices.md). The media carries none:
+# [Version] names LayoutFile=layout.inf, none of them is in
+# [SourceDisksFiles], and a CopyFiles entry the INF's own [SourceDisksFiles]
+# does not cover is resolved through the OS's layout.inf and fetched from the
+# OS's own install source. Each target therefore gets its own OS's build by
+# construction. This table is what BOTH-SOURCE exempts and what the OS-*
+# rules below hold the INF to: the paths that must copy each file, and the
+# paths that must not. Off carries the rule id and the reason, because the
+# one file with an Off path is refused for a reason of its own: Windows 98's
+# layout.inf has no usbport.sys row, so its engine could not resolve the
+# entry, and the file is placed there by NUSB or SweetLow's stack.
 $osSupplied = @(
-    @{ File = "usbd.sys";   On = @("Win98", "Win2000"); Off = @();
+    @{ File = "usbport.sys"; On = @("Win2000"); Off = @("Win98"); OffRule = "OS-ONWIN98";
+       Why = "xhci98.sys imports it, and an NT install that never had a USB controller does not have it (both NT targets' layout.inf give it the Setup disposition that does not copy it; a controller install pulls it from Driver Cache\i386), so the driver cannot load at all: Code 39 with nothing in the trace, measured on Windows XP on 2026-09-03";
+       OffWhy = "Windows 98's layout.inf has no usbport.sys row, so its 16-bit engine has no source to resolve the entry from; NUSB or SweetLow's stack places the file there and the 9x path must not ask for it" },
+    @{ File = "usbd.sys";    On = @("Win98", "Win2000"); Off = @();
        Why = "usbhub20.sys imports USBD.SYS on both targets and nothing else on an xHCI-only machine places it, so without it the root hub cannot load (Code 2 on Windows 98, a 0xc0000034 naming usbhub20.sys on Windows 2000)" },
-    @{ File = "usbhub.sys"; On = @("Win98");            Off = @("Win2000");
-       Why = "it is Windows 98's composite parent, which an xHCI-only machine never gets from setup, so every multi-interface device stops at 'USB Composite Device' with Code 2 without it; on Windows 2000 that name is the OS's own USB 1.1 hub driver and the composite parent is usbccgp.sys, both placed from driver.cab by every install" }
+    @{ File = "usbhub.sys";  On = @("Win98", "Win2000"); Off = @();
+       Why = "it is Windows 98's composite parent and the NT targets' hub driver, which an xHCI-only machine never gets from setup (both NT targets' layout.inf give it the disposition that does not copy it, read 2026-09-03), so on Windows 98 every multi-interface device stops at 'USB Composite Device' with Code 2 without it" }
 )
 $osSuppliedNames = @($osSupplied | ForEach-Object { $_.File.ToLowerInvariant() })
+# Files the OS places by itself when this driver's root hub appears, which
+# this INF must therefore name on no path. usbhub20.sys: Windows 2000 SP4's
+# USB.INF [ROOTHUB2.NT] copies it from the driver cache for USB\ROOT_HUB20
+# (read from the SP4 CD, 2026-09-03), and Windows XP has no such file, so a
+# row for it has no source on XP. The owner's decision of 2026-09-03.
+$osNeverNamed = @(
+    @{ File = "usbhub20.sys";
+       Why = "Windows 2000's own USB.INF copies it from the driver cache when usbport creates USB\ROOT_HUB20, and Windows XP has no such file (its usbport.inf binds that PDO to usbhub.sys), so on XP a row for it has no source; the OS places it, this INF does not" }
+)
 # The 1.0.0.0 media names, refused wherever they reappear: a package that
 # starts carrying a Microsoft file again must be refused whichever name it
 # hides under.
@@ -947,12 +976,13 @@ foreach ($d in ($driverBinaries | Sort-Object -Unique)) {
 # What these rules check is that the LayoutFile route is wired, because every
 # way of breaking it is silent on the target: the directive is present, the
 # media names no Microsoft file, both device-install paths and both
-# right-click paths copy usbd.sys, the Windows 98 paths alone copy usbhub.sys,
-# and every such copy is under its own name (a media-name field would send the
-# engine back to this disk), with COPYFLG_NO_OVERWRITE and no overwrite flag,
-# to System32\Drivers. The 1.0.0.0 media kept the two builds of usbd.sys apart
-# by name (usbd98.sys / usbd2k.sys, the TGT-* family) and hashed them against a
-# manifest; with the OS supplying the file there is no such split to check.
+# right-click paths copy usbd.sys and usbhub.sys, the NT paths alone copy
+# usbport.sys, and every such copy is under its own name (a media-name field
+# would send the engine back to this disk), with COPYFLG_NO_OVERWRITE and no
+# overwrite flag, to System32\Drivers. The 1.0.0.0 media kept the two builds
+# of usbd.sys apart by name (usbd98.sys / usbd2k.sys, the TGT-* family) and
+# hashed them against a manifest; with the OS supplying the file there is no
+# such split to check.
 
 function Get-CopyEntriesFor {
     param($Inf, [string[]]$Sections, [string]$File)
@@ -1013,22 +1043,36 @@ $COPYFLG_OVERWRITE_OLDER_ONLY = 0x00000040   # leave target alone if version sam
 # stops at a prompt for a file the package cannot supply.
 $layoutFile = @(Get-Directive $inf "Version" "LayoutFile")
 if ($layoutFile.Count -ne 1 -or $layoutFile[0] -ine "layout.inf") {
-    Add-Failure "OS-LAYOUT" ("[Version] must carry exactly 'LayoutFile=layout.inf'; found '{0}'. It is what makes usbd.sys and usbhub.sys come from the OS's own install source rather than from this disk, which does not carry them." -f ($layoutFile -join ','))
+    Add-Failure "OS-LAYOUT" ("[Version] must carry exactly 'LayoutFile=layout.inf'; found '{0}'. It is what makes usbport.sys, usbd.sys and usbhub.sys come from the OS's own install source rather than from this disk, which does not carry them." -f ($layoutFile -join ','))
 }
 
 # No Microsoft file on the media, under its own name or a 1.0.0.0 media name.
 foreach ($key in @($sourceFiles.Keys)) {
     if ($osSuppliedNames -contains $key -or $retiredMediaNames -contains $key) {
-        Add-Failure "OS-MEDIA" ("[SourceDisksFiles] names '{0}' (line {1}). The media carries no Microsoft file since 1.0.0.1: usbd.sys and usbhub.sys come from the OS through LayoutFile, and an entry here would send the engine back to this disk for them (docs\contributing\legal-provenance.md section 5)." -f $sourceFiles[$key].Name, $sourceFiles[$key].Line)
+        Add-Failure "OS-MEDIA" ("[SourceDisksFiles] names '{0}' (line {1}). The media carries no Microsoft file since 1.0.0.1: usbport.sys, usbd.sys and usbhub.sys come from the OS through LayoutFile, and an entry here would send the engine back to this disk for them (docs\contributing\legal-provenance.md section 5)." -f $sourceFiles[$key].Name, $sourceFiles[$key].Line)
+    }
+}
+
+# A file the OS places by itself, named anywhere: on any CopyFiles section
+# any install path reaches, and on the media.
+foreach ($never in $osNeverNamed) {
+    foreach ($cf in ($referencedCopyFiles | Sort-Object -Unique)) {
+        foreach ($entry in @(Get-CopyEntriesFor $inf @($cf) $never.File)) {
+            Add-Failure "OS-NEVER" ("[{0}] copies '{1}' (line {2}). This INF names it on no path: {3}." -f $cf, $never.File, $entry.Line, $never.Why)
+        }
+    }
+    if ($sourceFiles.ContainsKey($never.File.ToLowerInvariant())) {
+        Add-Failure "OS-NEVER" ("[SourceDisksFiles] names '{0}' (line {1}). The media carries no Microsoft file, and this one the OS places by itself: {2}." -f $never.File, $sourceFiles[$never.File.ToLowerInvariant()].Line, $never.Why)
     }
 }
 
 # A [DefaultInstall] with no [DefaultInstall.NTx86] beside it is the one shape
 # the per-path rules below cannot see: setupapi's decorated-section lookup
 # falls back to the undecorated section, so a right-click Install on Windows
-# 2000 would run the Windows 98 file list, usbhub.sys included.
+# 2000 would run the Windows 98 file list, which has no usbport.sys and
+# copies the INF into %17%.
 if ((Test-SectionExists $inf "DefaultInstall") -and -not (Test-SectionExists $inf "DefaultInstall.NTx86")) {
-    Add-Failure "OS-DEFAULT" "[DefaultInstall] exists without [DefaultInstall.NTx86]. Windows 2000 falls back to the undecorated section on a right-click Install and runs the Windows 98 file list, usbhub.sys included."
+    Add-Failure "OS-DEFAULT" "[DefaultInstall] exists without [DefaultInstall.NTx86]. Windows 2000 falls back to the undecorated section on a right-click Install and runs the Windows 98 file list, which has no usbport.sys and copies the INF into %17%."
 }
 
 foreach ($m in $models) {
@@ -1057,7 +1101,7 @@ foreach ($m in $models) {
 
                 if ($os.Off -contains $p.Name) {
                     if ($entries.Count -gt 0) {
-                        Add-Failure "OS-ONWIN2K" ("{0} copies '{1}' (line {2}). That is deliberate to NOT do: {3}. The asymmetry is intended - do not make the two paths symmetrical." -f $route.Label, $file, $entries[0].Line, $os.Why)
+                        Add-Failure $os.OffRule ("{0} copies '{1}' (line {2}). That is deliberate to NOT do: {3}. The asymmetry is intended - do not make the two paths symmetrical." -f $route.Label, $file, $entries[0].Line, $os.OffWhy)
                     }
                     continue
                 }
@@ -1101,6 +1145,72 @@ foreach ($m in $models) {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+# ---- SUSP-* : Services\USB\DisableSelectiveSuspend on every path ---------
+#
+# The one machine-wide value this package writes, and the only registry value
+# it writes outside the device's own key. Every usbport build this driver has
+# run under reads it (RtlQueryRegistryValues, RelativeTo = Services, "usb"),
+# and two of them idle-suspend the controller without it: Windows 98's within
+# half a second of the last transfer, Windows XP's within thirty seconds of a
+# start with nothing attached; a halted xHC cannot report a port change, so a
+# device plugged in afterwards is invisible until Refresh. Windows 2000's
+# native build never idles this controller and the value changes nothing
+# there. Until 1.0.1.0 the NT path omitted it for that reason and the
+# self-tests pinned the omission; the XP reading of 2026-09-03 made the value
+# an NT-path need too, so now every route must write it.
+#
+# Four routes, not two: the device install and the right-click Install on
+# each target. The right-click route exists because on Windows 98 with NUSB an
+# update over an existing install bugchecks before its registry phase, so a
+# value carried only by the device install never reaches a machine that
+# already had this driver. The value is pinned at 1 as a DWORD: a 0 here is a
+# silently disabled fix that presence alone would pass.
+
+$suspValue = "DisableSelectiveSuspend"
+$suspKey = "System\CurrentControlSet\Services\USB"
+foreach ($m in $models) {
+    $base = $m.Section
+    $nt = "$base.NTx86"
+    $suspRoutes = @()
+    foreach ($p in @(
+        @{ Name = "Windows 98";   Install = $base; Default = "DefaultInstall" },
+        @{ Name = "Windows 2000"; Install = $nt;   Default = "DefaultInstall.NTx86" }
+    )) {
+        if (Test-SectionExists $inf $p.Install) {
+            $suspRoutes += @{ Label = ("the {0} device install ([{1}])" -f $p.Name, $p.Install); Section = $p.Install }
+        }
+        if (Test-SectionExists $inf $p.Default) {
+            $suspRoutes += @{ Label = ("the {0} right-click Install ([{1}])" -f $p.Name, $p.Default); Section = $p.Default }
+        }
+    }
+    foreach ($route in $suspRoutes) {
+        $hits = @()
+        foreach ($ar in @(Get-Directive $inf $route.Section "AddReg")) {
+            $entries = Get-Section $inf $ar
+            if ($null -eq $entries) { continue }
+            foreach ($e in $entries) {
+                if ($e.Text -match ('^\s*HKLM\s*,\s*([^,]*)\s*,\s*{0}\s*,\s*([^,]*)\s*,\s*(.*)$' -f [regex]::Escape($suspValue))) {
+                    if ($matches[1].Trim() -ieq $suspKey) {
+                        $hits += @{ Section = $ar; Line = $e.Line; Flags = $matches[2].Trim(); Data = $matches[3].Trim() }
+                    }
+                }
+            }
+        }
+        if ($hits.Count -eq 0) {
+            Add-Failure "SUSP-MISSING" ("{0} does not write HKLM,{1},{2}. Windows 98's and Windows XP's usbport idle-suspend the controller without it and a halted xHC cannot report a hot-plug; since 1.0.1.0 every install route on both targets writes it." -f $route.Label, $suspKey, $suspValue)
+            continue
+        }
+        if ($hits.Count -gt 1) {
+            Add-Failure "SUSP-DUP" ("{0} writes {1} {2} times (lines {3}). Which one wins is engine-dependent; name it once per route." -f $route.Label, $suspValue, $hits.Count, (($hits | ForEach-Object { $_.Line }) -join ', '))
+        }
+        foreach ($hit in $hits) {
+            if ($hit.Flags.ToLowerInvariant() -ne "0x00010001" -or $hit.Data -ne "1") {
+                Add-Failure "SUSP-VALUE" ("[{0}] line {1} writes {2} as flags '{3}' data '{4}', not 0x00010001 (FLG_ADDREG_TYPE_DWORD) and 1. usbport reads four bytes and acts on nonzero; anything else is the fix silently switched off." -f $hit.Section, $hit.Line, $suspValue, $hit.Flags, $hit.Data)
             }
         }
     }

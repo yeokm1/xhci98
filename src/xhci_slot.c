@@ -5666,6 +5666,36 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
          * withdrawn.
          */
         if (endpoint->Dci <= 1) {
+            if (dev->EndpointExtension != NULL &&
+                dev->EndpointExtension != (PVOID)endpoint) {
+                /*
+                 * **A superseded EP0 handle, not the live one** (issue 4,
+                 * task 19.7). XP's hub re-creates a device it is still
+                 * enumerating through a second usbport device handle: the
+                 * port reset again, EP0 opened at address 0 through a new
+                 * extension that `xhciDevOpenOnRootPort` resolved to this
+                 * same record, the device addressed again through it - and
+                 * the first handle's EP0 removed last. Everything below this
+                 * branch belongs to the extension the record is bound to:
+                 * the flag, the pointer, the owed invalidate, the EP0 queue
+                 * and any SET_ADDRESS in flight. Taking it here unbound the
+                 * live handle, every submit through it was refused for
+                 * retry, and the progress detector failed a healthy device
+                 * (the XP guest, 2026-09-03, run `p194`). So this REMOVE
+                 * closes its own extension and touches nothing else.
+                 *
+                 * The same-extension reopen both primary targets perform
+                 * arrives with `EndpointExtension == endpoint` and falls
+                 * through unchanged; a REMOVE with the binding already gone
+                 * (`NULL`) does too, so a second REMOVE of a departed handle
+                 * still drains and cancels as it always has.
+                 */
+                ext->Ep0RemovesSuperseded++;
+                endpoint->Flags &= ~XHCI_ENDPOINT_FLAG_OPEN;
+                XhciControllerLockRelease(oldIrql);
+                XhciSlotDeferredWork(ext);
+                return;
+            }
             dev->Flags &= ~XHCI_DEV_FLAG_EP0_OPEN;
             dev->EndpointExtension = NULL;
             xhciDevDropInvalidate(ext, &dev->Flags,

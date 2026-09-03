@@ -6890,6 +6890,23 @@ typedef struct _XHCI_EXTENSION {
      * limitation would be worth revisiting for.
      */
     ULONG EndpointRemovesHeld;
+    /*
+     * `SetEndpointState(REMOVE)` for a default control pipe whose extension is
+     * not the one the record is bound to: a superseded EP0 handle (issue 4,
+     * task 19.7). XP's hub re-creates a device it is still enumerating through
+     * a second usbport device handle - the port reset again, EP0 opened at
+     * address 0 through a new extension, the device addressed again through it
+     * - and removes the first handle's EP0 last. That REMOVE closes its own
+     * extension and nothing else; the binding, the owed invalidate, the EP0
+     * queue and any SET_ADDRESS in flight belong to the live handle.
+     *
+     * **Expected zero on Windows 98 and Windows 2000**, whose hubs have only
+     * ever reopened EP0 through the same extension in any run here; nonzero
+     * there is the reading that the two-handle restore is not XP's alone. On
+     * XP it moves once per device the hub restores this way, and a device that
+     * binds on its first attach while it moves is issue 4 handled.
+     */
+    ULONG Ep0RemovesSuperseded;
     ULONG EndpointQuiesceLost;
     ULONG EndpointQuiesceUnavailable;
     ULONG EndpointQuiesceFailures;

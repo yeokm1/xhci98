@@ -10,11 +10,11 @@ is this project's two files and nothing else:
     xhci98.inf     the dual-path INF
     xhci98.sys     the built miniport (debug or release)
 
-The two Microsoft files the driver depends on, usbd.sys (both targets) and
-usbhub.sys (Windows 98 only), are not on the media: the INF names
-LayoutFile=layout.inf and the Windows setup engine copies them from the
-operating system's own install source (docs\contributing\build-and-test.md,
-"The files the OS supplies"). Release 1.0.0.0 carried them here under
+The Microsoft files the driver depends on, usbd.sys and usbhub.sys (both
+targets) and usbport.sys (the NT targets; on Windows 98 the USB 2.0 stack
+places it), are not on the media: the INF names LayoutFile=layout.inf and
+the Windows setup engine copies them from the operating system's own install
+source (docs\contributing\build-and-test.md, "The files the OS supplies"). Release 1.0.0.0 carried them here under
 per-target media names, authenticated against a manifest; that was withdrawn
 before any upload, and check-inf.ps1 -PackageDir now refuses a package that
 carries a Microsoft file under any name.

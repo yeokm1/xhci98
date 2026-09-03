@@ -149,7 +149,17 @@ any build of this driver existed, one per target.
 | Target | Source image | Snapshot | Taken | State |
 |---|---|---|---|---|
 | `2a` | `vm/win98.img` | `post-nusb` | 2026-07-22 | Windows 98 SE, NUSB 3.3 installed, the xHCI controller unclaimed (`Code 28`), no `usbd.sys` |
-| `2b` | `vm/win2k.img` | `phase2b-clean` | 2026-07-24 | Windows 2000 SP4, the xHCI controller unclaimed (`Code 1`) |
+| `2b` | `vm/win2k-xonly.img` | `win2k-xonly-clean-install` | 2026-09-03 | Windows 2000 SP4 installed with no USB controller of any kind attached; read from the snapshot the same day: `system32\drivers` holds `usbcamd.sys` and `usbintel.sys` only, no `usbport.sys`, `usbhub.sys`, `usbhub20.sys` or `usbd.sys` |
+
+The Windows 2000 row changed on 2026-09-03 (roadmap task 19.5). Until then
+it was `vm/win2k.img @ phase2b-clean` (2026-07-24, the xHCI unclaimed,
+`Code 1`), an install that had booted with an EHCI, and the in-box driver
+install for that EHCI is what had placed `usbport.sys`: a fresh clone of it
+could never show whether the `1.0.1.0` INF places the file itself, which is
+what a stranger's xHCI-only machine needs. The first post-release run
+(section 9) ran on the old base. `build-and-test.md`, "Windows 2000
+xHCI-only VM", has the recipe, and `scripts\setup-qemu-win2k-xonly.ps1`
+the launchers.
 
 `post-nusb` is chosen over the later `phase2a-usbd-ok` on purpose. The
 difference between them is one file, `usbd.sys`, copied in by hand on

@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Regression tests for the Win98 and Win2000 QEMU launcher generators.
+Regression tests for the Win98, Win2000, Windows XP and xHCI-only Win2000 QEMU launcher generators.
 
 .DESCRIPTION
 Generates launchers against stand-in QEMU executable files. QEMU is never
@@ -15,8 +15,10 @@ must be left alone. A launch that dies before QEMU writes anything leaves a
 zero-byte log behind, and rotating that unconditionally would push the last
 real trace out of <target>-debugcon.previous.log and replace it with nothing.
 
-All three VMs are covered because the phases close on comparisons between them:
+All five VMs are covered because the phases close on comparisons between them:
 the traces must land in separate files, and each must belong to one boot.
+(The Windows XP guest is the fourth and the xHCI-only Windows 2000 guest the
+fifth, both since roadmap Phase 19.)
 #>
 
 [CmdletBinding()]
@@ -29,7 +31,9 @@ $ErrorActionPreference = "Stop"
 $targets = @(
     @{ Name = "Win98";  Setup = "setup-qemu.ps1";          Launcher = "qemu-win98-run.cmd"; LogBase = "win98-debugcon" },
     @{ Name = "Win2000"; Setup = "setup-qemu-win2k.ps1";   Launcher = "qemu-win2k-run.cmd"; LogBase = "win2k-debugcon" },
-    @{ Name = "Win2000SMP"; Setup = "setup-qemu-win2k-smp.ps1"; Launcher = "qemu-win2k-smp-run.cmd"; LogBase = "win2k-smp-debugcon" }
+    @{ Name = "Win2000SMP"; Setup = "setup-qemu-win2k-smp.ps1"; Launcher = "qemu-win2k-smp-run.cmd"; LogBase = "win2k-smp-debugcon" },
+    @{ Name = "WinXP";  Setup = "setup-qemu-winxp.ps1";    Launcher = "qemu-winxp-run.cmd"; LogBase = "winxp-debugcon" },
+    @{ Name = "Win2000XOnly"; Setup = "setup-qemu-win2k-xonly.ps1"; Launcher = "qemu-win2k-xonly-run.cmd"; LogBase = "win2k-xonly-debugcon" }
 )
 $work = Join-Path ([System.IO.Path]::GetTempPath()) `
     ("xhci98-qemu-launcher-test-" + [System.IO.Path]::GetRandomFileName())
@@ -85,6 +89,46 @@ try {
         if ($name -eq "Win2000SMP") {
             Assert-True ($text.Contains("-accel whpx,kernel-irqchip=off")) `
                 "the Win2000 SMP launcher does not default to the proven WHPX rung."
+        }
+        if ($name -eq "WinXP") {
+            # build-and-test.md, "Windows XP target VM": WHPX not TCG, ACPI on,
+            # and no companion EHCI unless asked for, because the reading the
+            # guest exists to take is an xHCI-only install (roadmap task 19.4).
+            Assert-True ($text.Contains("-accel whpx,kernel-irqchip=off") -and $text.Contains("-machine pc ^")) `
+                "the Windows XP launcher does not use WHPX with ACPI on."
+            Assert-True ($text.Contains('set "EHCI="') -and $text.Contains('if /i "%2"=="ehci"') -and
+                -not ($text -match '(?m)^set "EHCI=-device')) `
+                "the Windows XP launcher does not leave the companion EHCI out by default."
+            Assert-True ($text.Contains('if not exist "%WINXP_ISO%"') -and $text.Contains('set "CDROM="')) `
+                "the Windows XP launcher does not boot without the CD when the ISO is absent."
+            # Roadmap task 19.3: QEMU pins a SuperSpeed-capable device to a
+            # SuperSpeed-capable root port and never falls it back to USB 2.0,
+            # so the storage and audio readings need USB 2.0-only root ports
+            # and an audio backend for the hot-plugged usb-audio.
+            Assert-True ($text.Contains("-device qemu-xhci,p3=0,id=xhci ^")) `
+                "the Windows XP launcher does not keep every root port USB 2.0 (p3=0)."
+            Assert-True ($text.Contains("-audiodev none,id=xpaud ^")) `
+                "the Windows XP launcher declares no audio backend for a hot-plugged usb-audio."
+        }
+        if ($name -eq "Win2000XOnly") {
+            # build-and-test.md, "Windows 2000 xHCI-only VM": the 2b recipe's
+            # TCG Standard-PC flags on both launchers (the HAL is fixed at
+            # install time), no USB controller at install, the xHCI alone at
+            # run unless asked otherwise, and USB 2.0-only root ports (roadmap
+            # task 19.5).
+            Assert-True ($text.Contains("-machine pc,acpi=off ^") -and $text.Contains("-cpu pentium3,-apic ^") -and
+                -not $text.Contains("-accel")) `
+                "the xHCI-only Windows 2000 run launcher does not carry the 2b recipe's TCG Standard-PC flags."
+            $install = [System.IO.File]::ReadAllText((Join-Path $launchers "qemu-win2k-xonly-install.cmd"))
+            Assert-True ($install.Contains("-machine pc,acpi=off ^") -and $install.Contains("-cpu pentium3,-apic ^") -and
+                -not $install.Contains(" -device ")) `
+                "the xHCI-only Windows 2000 install launcher drifted from the run launcher's HAL flags, or attaches a USB controller."
+            Assert-True ($text.Contains('set "CTRL=-device qemu-xhci,p3=0,id=xhci"') -and
+                $text.Contains('if /i "%2"=="none" set "CTRL="') -and $text.Contains('if /i "%2"=="ehci"') -and
+                -not ($text -match '(?m)^set "CTRL=.*usb-ehci')) `
+                "the xHCI-only Windows 2000 run launcher does not attach the xHCI alone by default, with none and ehci as the alternatives."
+            Assert-True ($text.Contains('if not exist "%WIN2K_ISO%"') -and $text.Contains('set "CDROM="')) `
+                "the xHCI-only Windows 2000 run launcher does not boot without the CD when the ISO is absent."
         }
 
         # --- the rotation preamble, actually executed -----------------------

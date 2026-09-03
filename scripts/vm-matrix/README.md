@@ -170,8 +170,10 @@ powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-fresh -Attach kb
 powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-fresh -Stamp        # base-<DriverVer>-qemu, taken last
 ```
 
-Then the same for `2b-fresh` (`phase2b-clean` -> `vm\fresh-2b.img`), which
-needs no `-Attach` pass for HID and storage. Three things the first run
+Then the same for `2b-fresh` (`win2k-xonly.img @ win2k-xonly-clean-install`
+-> `vm\fresh-2b.img`; until 2026-09-03 it was `win2k.img @ phase2b-clean`, an
+install that had booted with an EHCI, see `build-and-test.md`, "Windows 2000
+xHCI-only VM"), which needs no `-Attach` pass for HID and storage. Three things the first run
 (2026-08-30) taught about the Windows 98 pass: a class that raises no wizard
 when attached is not necessarily taught, so read `-Status` and expect
 `devices addressed` to advance for every attach (`uas`, `serial` and
@@ -320,3 +322,14 @@ Traps the harness paid for and documents rather than enforces:
     matrix then met unattended was the first anyone saw of the class. The
     prep spec now adds the matrix row's `scsi-hd` child on a second scratch
     drive and repairs `attached`, and `-Detach` removes the child first.
+16. The run declares `-audiodev none,id=matrixaud` and the `usb-audio` row
+    names it. Without a backend named, `device_add usb-audio` opens QEMU's
+    default host audio backend on its main loop, and on the first `1.0.1.0`
+    post-release run (2026-09-04) that open blocked the monitor past its
+    16 s reply limit on both targets, so the row read ERROR with no reading
+    taken, while the group's console showed the device arriving afterwards.
+    The host that night had no playback endpoint in the OK state; the same
+    command against a guestless QEMU took over 16 s by default and about a
+    second with `none`. The row plays nothing and its expectations are
+    inert, so `none` measures the same thing. `prepare-image.ps1` has
+    declared the same backend since repo audit D4.

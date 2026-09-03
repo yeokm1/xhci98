@@ -530,6 +530,13 @@ from" paragraph still describes them. The measurements that made the change
 possible are in `docs/contributing/build-and-test.md`, "The SweetLow stack"
 and "The files the OS supplies"; roadmap Phase 17 has the tasks.
 
+Release 1.0.1.0 extends the same route on the NT install path to
+`usbport.sys` and `usbhub.sys`, which that path did not copy until then: an
+NT install that never had a USB controller has neither (measured on a
+Windows XP guest on 2026-09-03), and both come from the `Driver Cache\i386`
+every install carries. No file was added to the media and none of the gate
+rules above was relaxed; roadmap Phase 19 has the tasks.
+
 Status: the exception was never used. No asset of any version was uploaded
 while it stood; this repository was private throughout, and the first upload
 is intended to be 1.0.0.1, which carries nothing under it. "The release

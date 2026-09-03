@@ -365,13 +365,15 @@ NUSB quirk to work around. See
 
 ### What about Windows XP?
 
-Position: best-effort secondary, and the only one. It shares the one binary
-and no checkpoint waits on it. Preserve XP compatibility when the
+Position: supported in virtual machines, since the owner's decision of
+2026-09-03 (roadmap task 19.6), standing where Windows 2000 and Windows ME
+stand: one binary, no checkpoint waits on it, never run on real hardware.
+Until that day it was best-effort and unrun, and the accommodation rule from
+then still governs the code: preserve XP compatibility when the
 accommodation is small, isolated, and low-risk; do not weaken Win98 SE or
-Win2000 behavior, add XP-only imports, create a separate implementation, or
-take on XP validation work to do so. This section exists so the boundary is
-not re-litigated. (32-bit XP only in any case; XP x64 is a different build and
-has never been in scope.)
+Win2000 behavior, add XP-only imports, or create a separate implementation
+to do so. This section exists so the boundary is not re-litigated. (32-bit
+XP only; XP x64 is a different build and has never been in scope.)
 
 Much of the compatibility comes for free. The driver codes to the Win98 export
 baseline and builds with the Win2K DDK; XP exports a strict superset of both,
@@ -395,9 +397,9 @@ block, and the same tail layout as both 2195.x builds. Packet format therefore
 does not rule XP out of Option A. Its `USBPORT_GetHciMn` value is
 `0x10000001`, while both primary targets return `0x57324B30`; accepting both
 known values in the optional sanity probe is the kind of small, isolated
-accommodation this policy permits. None of this proves callback call
-contracts, lifecycle behavior, or end-to-end compatibility, so XP remains
-best-effort and unvalidated. One related observation exists since 2026-09-02:
+accommodation this policy permits. None of this proved callback call
+contracts, lifecycle behavior, or end-to-end compatibility; the guest below
+did. One related observation exists since 2026-09-02:
 SweetLow's Windows 98 rebuild of XP SP2's `usbport.sys` (5.1.2600.2180,
 returning `0x10000001`) registers this driver, runs HID and mass storage, and
 completes the controller stop on Windows 98
@@ -405,11 +407,30 @@ completes the controller stop on Windows 98
 rebuild"). That is XP-lineage code, but on Windows 98's kernel, in a VM; it
 says nothing about Windows XP itself.
 
+What the first Windows XP guest measured (2026-09-03, roadmap Phase 19;
+`docs/contributing/build-and-test.md`, "Windows XP target VM"): on 32-bit
+XP SP3 itself, in a virtual machine, the one binary registered
+(`USBPORT_GetHciMn=10000001`, `USBPORT_RegisterUSBPortDriver status=0`),
+started the controller, passed its No Op self-test, answered the root-hub
+callbacks, and bound a hot-plugged HID mouse with interrupt transfers
+flowing. Two things went wrong and neither was XP's runtime; both were the
+NT install path's. An xHCI-only NT install has no `usbport.sys` (Code 39
+until the INF copies it, which it does since 1.0.1.0), and XP's usbport
+idle-suspends the controller about thirty seconds after start unless
+`Services\USB\DisableSelectiveSuspend` is set, which the 1.0.1.0 INF writes
+on the NT path too. The same guest then bound a `usb-storage` device and a
+`usb-audio` composite, survived the Device Manager disable, enable, remove
+and rescan sequence, and took the `1.0.1.0` package on an xHCI-only install
+with no prompt; the one XP-specific defect it showed, the hub re-creating a
+device through a second device handle mid-enumeration
+(`docs/issues/04-xp-restore-device-ep0-remove.md`), is fixed in `1.0.1.0`.
+Real hardware remains unobserved, which is why the tier is virtual machines.
+
 Why it is not promoted to a checkpointed target: cost, not a technical
 obstacle. "Target" in this project means every checkpoint is observed on it,
 which means a third VM, a third observation per phase, and real-hardware
 validation per OS. That is a recurring tax on every phase even though the
-static registration gate looks compatible.
+guest runs it.
 
 "XP already has xHCI drivers" is not a reason either. It does, and none of
 them apply to the hardware this project runs on. Renesas/NEC, ASMedia, Fresco

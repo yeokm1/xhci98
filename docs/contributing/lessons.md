@@ -24,6 +24,149 @@ Do not turn a hypothesis into a settled hardware quirk. Move confirmed design
 rules into the appropriate normative document while keeping the debugging
 history here.
 
+## The host's sound card reached into an unattended run through an unnamed audio backend
+
+Environment: host `FW-W11P-YKM`, QEMU 11.0.0 (scoop), the `1.0.1.0`
+post-release run of roadmap task 19.8 on the fresh Windows 98 SE and Windows
+2000 clones, 2026-09-04 between 00:50 and 02:03, both targets running side
+by side and then, for the second target's last group, alone.
+
+Symptom: the `usb-audio/fs` row read ERROR on both targets, "device_add was
+refused; nothing was attached", because the monitor returned no `(qemu)`
+prompt within the harness's 16 s after `device_add usb-audio,id=dut1,
+bus=xhci.0,port=2`. The verdict was PASS on Windows 98, where the row is
+declared able to wedge the guest, and FAIL on Windows 2000, where it is not.
+Every other row read as the Phase 16 run had. What survived: the group's
+debug console on both targets, which shows the device arriving after the
+timeout (a port status change on port 2, the slot, the address, on Windows
+98 the isochronous endpoint declaration parsed) with `transfers refused for
+retry` and `records failed - no progress` at zero; and the screenshot the
+harness took at the timeout, the desktop with nothing on it.
+
+Proven, without a guest: a bare `qemu-system-x86_64 -M pc -display none
+-m 64 -device qemu-xhci` with a TCP monitor gave the same 16 s silence to
+`device_add usb-audio,id=a1,bus=xhci.0` (the device was on the bus when
+`info usb` answered 7 s later), and answered `device_add ...,audiodev=aud0`
+in about one second with `-audiodev none,id=aud0` on the command line. So
+the stall is QEMU opening its default host audio backend on the main loop,
+not the guest and not the driver. The host that night listed no playback
+endpoint in the OK state (the Sound Blaster X4, the monitor's HDMI audio and
+every USB audio device were "Unknown"; only the on-board microphone was OK),
+which is inferred, not measured, to be why the open took so long: on
+2026-08-30 and on 2026-09-03 the same row attached in time on the same host.
+The prep pass had attached audio instantly the same night because
+`prepare-image.ps1` declares `-audiodev none` (repo audit D4). Unknown:
+which backend QEMU picked and where inside it the time went.
+
+Rule: a device that takes a host backend names one explicitly, and for a
+harness that plays nothing the backend is `none`; a run that leaves it to
+QEMU's default has made the host's peripherals part of its vehicle. The run
+now declares `-audiodev none,id=matrixaud` and the `usb-audio` row names it
+(`scripts\vm-matrix\run-matrix.ps1`, `matrix.psd1`, README note 16); the
+second run read PASS on both targets. The same reading rule as always: a
+monitor timeout is a vehicle reading, and the group's console says whether
+the device arrived.
+
+## An NT install that never saw a USB controller has no `usbport.sys`, and the EHCI in every Windows 2000 vehicle hid it
+
+Environment: the Windows XP SP3 guest of roadmap Phase 19 (`vm\winxp.img`,
+WHPX, `-machine pc`), 2026-09-03, the owner driving the wizard; the 1.0.0.1
+package installed from the transfer drive with `qemu-xhci` the only USB
+controller the guest had ever had.
+
+Symptom: Code 39 on the first boot, the debug console at 0 bytes, so
+`DriverEntry` never ran. The image, extracted on the host, had
+`xhci98.sys` in place and no `usbport.sys` anywhere, `dllcache` included;
+`setupapi.log` ends `CM_PROB_DRIVER_FAILED_LOAD (0x27)`. The driver imports
+`USBPORT_RegisterUSBPortDriver` from `usbport.sys`, so an absent file is an
+unresolved import and the loader never calls the entry point.
+
+Cause, read from the two NT CDs the same day (7-Zip on the ISOs, `expand`
+on the `.IN_` files; nothing executed): both `layout.inf` files give
+`usbport.sys`, `usbhub.sys`, `usbehci.sys` and `usbd.sys` the text-mode
+disposition that does not copy them at Setup (`,4,1,3`), and `usbcamd.sys`
+and `usbintel.sys` the one that does (`,4,0,0`). The XP guest had exactly
+that second pair. The files sit in every install's `Driver Cache\i386`
+(`sp3.cab` on XP SP3; `sp4.cab` beside `driver.cab` on Windows 2000 SP4,
+disk 2 in its `layout.inf`), and reach `system32\drivers` only when a USB
+controller's own INF asks for them. `build-and-test.md`, "The files the OS
+supplies", has the rows in full.
+
+| File | Windows 2000 SP4 | Windows XP SP3 |
+|---|---|---|
+| `usbport.sys` | disk 2 (`sp4.cab`), do not copy | disk 100, do not copy |
+| `usbhub.sys` | disk 2, do not copy | disk 100, do not copy |
+| `usbhub20.sys` | disk 2, do not copy | no row |
+| `usbd.sys` | disk 2, do not copy | disk 1, do not copy |
+| `usbcamd.sys`, `usbintel.sys` | copy | copy |
+
+Why no Windows 2000 image ever showed it: every Windows 2000 vehicle in
+this project was installed or first booted with a `usb-ehci` attached, from
+the Phase 2b recipe on, because the in-box stack binding the EHCI was the
+way to get a native `usbport.sys` on disk for the ABI work. That is the same
+confound the `usbhub.sys` entry below names for Windows 98 (an EHCI in every
+machine), and it hid two things at once: the port driver, and the fact that
+the entry's inference "Windows 2000 needs no `usbhub.sys` from this INF,
+Setup places it from `driver.cab`" was wrong for the same reason.
+
+What was done: the 1.0.1.0 INF's NT copy section names `usbport.sys`,
+`usbd.sys` and `usbhub.sys` through `LayoutFile`, the route release 1.0.0.1
+built for the Windows 98 path; the gate refuses `usbport.sys` on the
+Windows 98 path (its `layout.inf` has no row, so the engine could not
+resolve one) and `usbhub20.sys` on either (Windows 2000's own `USB.INF`
+copies it when usbport creates the root hub PDO; XP has no such file).
+Confirmed for the spike by relaunching with a companion EHCI: the in-box
+stack placed `usbport.sys` and the same binary then registered and started.
+The package-install reading on the clean snapshot with no EHCI, roadmap
+task 19.4, was taken later the same day: no CD prompt, `usbport.sys` and
+`usbhub.sys` placed from the cache, the driver up on that boot, the root
+hub and a hot-plugged mouse bound. The equivalent controller-free Windows
+2000 install is 19.5. Its listing half was measured the same evening, from
+the `win2k-xonly-clean-install` snapshot rather than a boot (`qemu-img
+convert -l` to raw, 7-Zip through the NTFS volume; nothing executed): the
+table's prediction held, `usbcamd.sys` and `usbintel.sys` on disk and
+nothing else, `usbport.sys`, `usbhub.sys`, `usbhub20.sys` and `usbd.sys` all
+in `Driver Cache\i386\sp4.cab` and nowhere in `system32`. The `usbd.sys`
+row matters more on Windows 2000 than the XP reading suggested: XP had left
+its stub behind, Windows 2000 leaves nothing, and a `usbhub20.sys` loaded
+without it is the `c000026c` bugcheck recorded below. The package-install
+half was measured the same evening on that snapshot: Have Disk with no CD
+attached, no prompt, the driver registered and started on that boot, the
+root hub up (so `usbhub20.sys` and `usbd.sys` both landed, the second by
+the INF's row, the first by the OS's own `USB.INF`), a hot-plugged mouse
+bound, and the guest's own listing showing all four files from `sp4.cab`.
+Neither half of the Windows 2000 reading is inferred any more.
+
+A second reading from the same afternoon, kept here because the same
+absent control hid it: about thirty seconds after `StartController` with
+nothing attached, XP's usbport called `SuspendController` and the driver
+halted the controller; a mouse hot-plugged afterwards was invisible.
+Windows 2000's native usbport never idles this controller, so the NT half
+of the INF had deliberately withheld `DisableSelectiveSuspend`; XP's does,
+through the same `Services\USB` query table the SweetLow rebuild carries.
+With the value set by hand (`Services\USB` does not exist on a stock XP
+install) the suspend did not happen and the hot-plugged mouse bound. The
+1.0.1.0 INF writes the value on both paths.
+
+Rules this earns:
+
+- A confound carried by every vehicle is invisible in every reading. The
+  EHCI was there for a good reason and stayed for no reason; when a fixture
+  is on every image, ask what it supplies that the target is being credited
+  for.
+- "Setup places it" is a claim about `layout.inf`'s last three fields, and
+  those are readable from the CD without booting anything. Read the row
+  before writing the sentence.
+- A file the driver imports is a load-time prerequisite with no symptom of
+  its own beyond Code 39 and an empty trace. Any NT-target install reading
+  starts with a listing of `system32\drivers`.
+
+Affected: `src/xhci98.inf` (`[Xhci.CopyNT]`, `Xhci.AddReg.Global` on the
+NT routes), `scripts/inf-gate/check-inf.ps1` (`OS-ONWIN98`, `OS-NEVER`,
+`SUSP-*`), `docs/contributing/build-and-test.md` ("The files the OS
+supplies", "Windows XP target VM"), `scripts/setup-qemu-winxp.ps1`,
+release 1.0.1.0 (roadmap Phase 19).
+
 ## The Windows 98 teardown bugcheck belongs to the Windows 2000-lineage usbport, and an XP-lineage rebuild of the same stack survives every door it dies at
 
 Environment: the `2a-sweetlow` guest (`vm\sweetlow-2a.img`, a clone of the
@@ -1094,6 +1237,16 @@ in this project has an EHCI, which is the same confound that hid the Windows
 it can never be observed either. It is published as a limitation rather than
 carried as a check.
 
+Amended 2026-09-03: the inference held for `usbccgp.sys` and failed for the
+file this entry is about. Both NT targets' `layout.inf` give `usbhub.sys`,
+`usbport.sys`, `usbehci.sys` and `usbd.sys` the text-mode disposition that
+does not copy them at Setup, and a Windows XP guest that had never seen a
+USB controller had none of them (Code 39 on the first boot; roadmap Phase
+19). The confound named above, an EHCI in every NT vehicle, was measured on
+XP by leaving the EHCI out, and the NT install path copies `usbport.sys` and
+`usbhub.sys` through `LayoutFile` since 1.0.1.0. The Phase 19 entry has the
+disposition table.
+
 Rules this earns:
 
 - On an xHCI-only machine, assume no USB file Windows ships is present.
@@ -1111,9 +1264,12 @@ Rules this earns:
 - A pre-install inventory is evidence, not ceremony. Stage E1.0's four `dir`
   commands contained the answer and were filed as "baseline is clean".
 
-Affected: `src/xhci98.inf` (`[Xhci.CopyW98]`, Win98 path only),
+Affected: `src/xhci98.inf` (`[Xhci.CopyW98]`, Win98 path only until
+1.0.1.0, then `[Xhci.CopyNT]` as well),
 `scripts/package/usbd-sources.expected`, `scripts/inf-gate/check-inf.ps1`
-(`W98-MISSING` / `W98-ONWIN2K` enforce the asymmetry in both directions),
+(`W98-MISSING` / `W98-ONWIN2K` enforced the asymmetry in both directions;
+since 1.0.1.0 there is none to enforce for `usbhub.sys`, and `OS-ONWIN98`
+carries the one that remains, `usbport.sys` off the Windows 98 path),
 `docs/contributing/legal-provenance.md` section 5,
 `docs/contributing/runs/run-13e.md` ("Session record - bench session 1"),
 release 0.0.0.4.

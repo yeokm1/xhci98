@@ -116,6 +116,7 @@ Mps0Corrections	EP0 max packet size corrections
 Mps0CorrectionsStale	EP0 max packet size corrections refused as stale
 OpenRefusals	EP0 opens refused
 OpenRefusalsNoClaim	EP0 opens refused - no route
+Ep0RemovesSuperseded	EP0 removes on a superseded handle
 EventDataEventsTotal	Event Data events
 LastHostControllerCode	event: HOST CONTROLLER EVENT, completion code
 EventsUnknown	events - unknown type

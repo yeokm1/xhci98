@@ -501,6 +501,10 @@
                 @{
                     Name = 'usb-audio/fs'
                     Model = 'usb-audio'
+                    # The run's `-audiodev none,id=matrixaud` (run-matrix.ps1):
+                    # the default host backend blocked the monitor on the
+                    # 1.0.1.0 post-release run, see the comment there.
+                    AddArgs = 'audiodev=matrixaud'
                     Settle = 35
                     Expect = @( 'advance endpoints opened >= 1' )
                     # Per-target additions.  These are the only predicted bind

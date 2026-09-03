@@ -730,6 +730,17 @@ foreach ($tgt in $targetsToRun) {
             # scratch `-drive if=none` alone does not.
             "-chardev", ("file,id=dbgcon,path={0}" -f $dbgLog),
             "-device", "isa-debugcon,iobase=0xe9,chardev=dbgcon",
+            # AN EXPLICIT `none` AUDIO BACKEND, so the audio row never depends
+            # on the host's sound devices.  Without one, `device_add usb-audio`
+            # opens QEMU's default host backend on the main loop, and on a host
+            # whose playback endpoint is absent that open blocked the monitor
+            # past its 16 s reply limit on BOTH targets of the 1.0.1.0
+            # post-release run (2026-09-04); the same command against a
+            # guestless QEMU took 16 s+ by default and about 1 s with `none`.
+            # The row plays nothing (its expectations are inert), so `none`
+            # measures the same thing; prepare-image.ps1 has used it since
+            # repo audit D4.  The usb-audio row's AddArgs names this id.
+            "-audiodev", "none,id=matrixaud",
             # ONE -trace argument with both keys.  QEMU keeps the LAST -trace, so
             # `-trace events=X -trace file=Y` silently discards the event list
             # and the log reads as "the driver did nothing".

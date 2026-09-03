@@ -1,10 +1,10 @@
 # xhci98
 
-This project xHCI98 is a WDM generic USB host controller driver for xHCI host controllers targeting Windows 98 SE, ME and 2000 SP4. Although xHCI Controllers offer USB 3.0, this driver runs USB 2.0 on the controller only.
+This project xHCI98 is a WDM generic USB host controller driver for xHCI host controllers targeting Windows 98 SE, ME, 2000 SP4 and 32-bit XP. Although xHCI Controllers offer USB 3.0, this driver runs USB 2.0 on the controller only.
 
 This driver is developed based on Intel's xHCI specification and tested only on Intel machines so far. No guarantees have been made on xHCI implementations from other vendors.
 
-This project is from a solo human with AI-assistance only so bugs are not unexpected. Feel free to report them if you encounter any issues or wish to support more chipsets.
+This project is from a solo human with AI-assistance only so bugs are not unexpected. Feel free to report them if you encounter any issues.
 
 <img src="images/xhci98-usb-devices.jpg" width="800">
 
@@ -34,11 +34,11 @@ Every USB 3.x connector (USB4/Thunderbolt included) also carries the USB 2.0 wir
 
 The driver needs a USB 2.0 stack (`usbport.sys` + `usbhub20.sys`) on the machine first:
 
-- **Windows 98 SE**: either [NUSB 3.3e](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html), the configuration this project tests against (NUSB 3.6 also works), or the newer [SweetLow stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip), under which disabling, removing and upgrading this driver do not crash Windows 98. For SweetLow's: unzip, right-click the `USB2.INF` at its root, *Install*, reboot. A [Windows 98 QuickInstall](https://github.com/oerg866/win98-quickinstall) 1.0.1 or later system already has it. If NUSB is installed, remove its USB 2.0 stack through Add/Remove Programs first, then install SweetLow's before rebooting.
-- **Windows ME**: the [SweetLow stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip) only, installed the same way. NUSB is a Windows 98 SE package. Without the stack the driver installs but the controller shows Code 2.
-- **Windows 2000 SP4**: nothing to install; SP4 has the stack (or use the standalone USB 2.0 update KB319973). **Do not install NUSB on Windows 2000.**
+- **Windows 98 SE**: Either install [NUSB 3.3 or 3.6](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) or the [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip). For SweetLow's stack, unzip, right-click the `USB2.INF` at its root, install, reboot.
+- **Windows ME**: Use [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip) only.
+- **Windows 2000 SP4 and XP SP3 (32-bit)**: Nothing to install; SP4 has the stack (or use the standalone USB 2.0 update KB319973).
 
-On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand**: the package carries no Microsoft file, so the install has Windows copy its own `usbd.sys` and `usbhub.sys` from the CD ("Insert Disk"), unless the Windows CABs are on the hard disk (`C:\WINDOWS\OPTIONS\CABS`, as on OEM and QuickInstall installs). A machine that ever had a USB 1.1 controller already has both files. Windows 2000 asks for nothing.
+On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand** or the contents on disk as the driver needs some files from there.
 
 Optional but recommended: boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from the `XHCIQUAL\` folder. A controller reporting no legacy interrupt pin cannot be driven on either system and there is no software workaround, so find out before you install anything.
 
@@ -58,18 +58,20 @@ XHCIQUAL demo video: https://www.youtube.com/watch?v=Tv6blmBS6Do
 
 ### Install
 
-1. Put the unzipped package somewhere the machine can read: a floppy, a CD, a shared folder. `release\` is the one to install. `debug\` is the same driver built for troubleshooting, and a maintainer may ask you for it.
-2. In Device Manager, find the unrecognised xHCI controller. It sits unclaimed with a yellow mark, usually under "Other devices".
-3. Windows 98 SE and ME: Properties -> Driver -> Update Driver -> Specify a location -> the `release\` directory. Answer the "Insert Disk" prompt with the Windows CD if it appears (if it then asks where to copy from, give it the CD's `WIN98` folder, or `WIN9X` on the Windows ME CD), and reboot when asked. If the Add New Hardware Wizard finds the controller first, give it `release\` too. Windows 2000 SP4: Properties -> Driver -> Update Driver -> Have Disk -> the `release\` directory; nothing else is asked for.
+1. Put the unzipped package somewhere the machine can read: a floppy, a CD, a shared folder. `release\` is the one to install. `debug\` is the same driver built for troubleshooting, only install if asked.
+2. In Device Manager, find the unrecognised xHCI controller. It sits unclaimed with a yellow mark, usually under "Other devices" such as "Universal Serial Bus Controller".
+3. Properties -> Driver -> Update Driver -> Specify a location/Have Disk -> the `release\` directory.
 4. It installs as "USB 2.0 eXtensible Host Controller (xhci98)" with a "USB Root Hub" underneath it, and neither should carry a warning mark.
 
 <img src="images/xhci98-driver-info.jpg" width="800">
 
-**On Windows 98 with NUSB, do not disable, remove or upgrade this driver in Device Manager before reading the release `readme.txt`.** Each of those blue-screens that system. The fault is in NUSB's `usbport.sys`, the Windows 2000 build of the USB 2.0 stack, not this driver. Microsoft's own USB drivers do the same thing on the same machine. The same driver on the same machine survives all three under SweetLow's build of that stack (see the installation steps). The readme has the way round it for NUSB systems.
+**On Windows 98 with NUSB, do not disable, remove or upgrade this driver in Device Manager**. Each of those blue-screens that system. The fault is in NUSB's `usbport.sys`, the Windows 2000 build of the USB 2.0 stack, not this driver. Microsoft's own USB drivers do the same thing on the same machine. The readme has the way round it for NUSB systems.
+
+The same driver on the same machine survives all three under SweetLow's build of that stack.
 
 ## What is tested, and what is not
 
-Windows 98 SE is validated on real hardware. Windows 2000 SP4 and Windows ME have only ever run in QEMU virtual machines.
+Windows 98 SE is validated on real hardware. Windows 2000 SP4, Windows ME and Windows XP have only ever run in QEMU virtual machines.
 
 | Machine | Controller |
 |---|---|
@@ -79,9 +81,9 @@ Windows 98 SE is validated on real hardware. Windows 2000 SP4 and Windows ME hav
 | | State |
 |---|---|
 | Windows 98 SE | Validated on real hardware and in VMs. HID, mass storage, USB Ethernet and USB Audio have all run on real xHCI silicon, at a root port and behind hubs. |
-| Windows 2000 SP4 | Virtual machines only, including an SMP guest and Driver Verifier. It has never run on real hardware, and this project has no machine that can try. |
+| Windows 2000 SP4 | Virtual machines only, including an SMP guest and Driver Verifier. It has never run on real hardware. |
 | Windows ME | One virtual machine only, under SweetLow's USB 2.0 stack (the only stack it is supported with): the driver loads and starts, and a HID mouse, a USB mass-storage device and a composite audio device bind (2026-09-02). Never run on real hardware. |
-| 32-bit Windows XP | Nothing has been run. The INF accommodates it and the miniport registration is statically compatible. That is all that is established. |
+| 32-bit Windows XP | One virtual machine only (XP Professional SP3): the package installs on an xHCI-only machine with no prompt, the driver loads and starts under XP's own USB stack, and a HID mouse, a USB mass-storage device and a composite audio device bind; disable, enable, remove and rescan in Device Manager all survive. Never run on real hardware. |
 | Intel 7/8-series (`XUSB2PR` mux), AMD | Never run on either. Everything said about the `XUSB2PR` port mux comes from Intel's datasheet and Linux, not silicon. The driver does not touch it. |
 | Resume from standby (Windows 2000) | Never executed anywhere. No available VM offers a resumable power transition, and there is no Windows 2000 machine. |
 | Low Speed, USB Audio, hub topologies | Work on Windows 98 hardware in the configurations tried. Not covered: an audio device with `bInterval > 1`, a USB 1.1 hub under a multi-TT hub, and the Windows 2000 side on silicon. |
@@ -103,9 +105,7 @@ The devices checked so far, all on the E460 under Windows 98 SE. Each is charact
 | Sound Blaster Play! 3, C-Media USB Audio Device (UAC 1.0) | `041E:324D`, `0D8C:0014` | Full | Enumerate and are named by the wizard. Found the Full-Speed `bMaxPacketSize0` bug. |
 | Sound Blaster X4 (UAC 2.0, `bInterval` 3 and 4) | `041E:3278` | High | Enumerates but does not bind on Windows 98 (one HID devnode at Code 10, no composite parent), so its `bInterval > 1` endpoints were never exercised. |
 
-One known defect plugging and unplugging a device repeatedly and quickly. Windows 98 At a rate of roughly twice a second sustained, Windows 98 can freeze after about dozen iterations, where Microsoft's own USB driver on the same machine handled ten times as many. No fix has been been attempted so far.
-
-Ordinary plugging and unplugging is fine.
+One known defect is plugging and unplugging a device repeatedly and quickly. Windows 98 at a rate of roughly twice a second sustained can freeze the machine. Ordinary plugging and unplugging is fine.
 
 <img src="images/xhci98-flash-speed-test.jpg" width="800">
 
@@ -143,7 +143,7 @@ The driver is C (C89/C90, no C++ or CRT), built and verified on Windows 11 x64. 
 
 4. Build the two tools that ship beside the driver. `xhciqual\build.cmd` produces `XHCIQUAL.EXE`, the DOS qualifier, and needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM` (or wherever `WATCOM` points). That is the only tool installed normally on the host, and the driver never uses it. `xhcisnap\build.cmd` produces `XHCISNAP.EXE`, the snapshot reader, with the in-repo MSVC 6.0.
 
-5. Make install media. A `.sys` on its own is not install media; the INF travels with it, and since 1.0.0.1 nothing else does, because the INF has Windows supply its own `usbd.sys` and `usbhub.sys`. For a Windows 98 SE target, first download NUSB 3.3 (`nusb33e.exe`) from [philscomputerlab.com](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) to `tools\nusb33e.exe`.
+5. Make install media. A `.sys` on its own is not install media; the INF travels with it, and since 1.0.0.1 nothing else does, because the INF has Windows supply its own `usbd.sys` and `usbhub.sys` (and, on Windows 2000 and XP, `usbport.sys`). For a Windows 98 SE target, first download NUSB 3.3 (`nusb33e.exe`) from [philscomputerlab.com](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) to `tools\nusb33e.exe`.
 
    | Script | Output |
    |---|---|
@@ -227,8 +227,16 @@ Neither PDF is tracked here. Fetch your own copies into the git-ignored `docs/re
 
 ## Licensing and provenance
 
-This project's own source is licensed under the GNU General Public License, version 2 ([LICENSE](LICENSE)), `GPL-2.0-only`. The repository tracks no third-party binary on its own, although the two tool executables it tracks under `releases/` carry statically linked third-party runtimes: `xhci98.sys` links no third-party object, runtime or extender, while `XHCIQUAL.EXE` embeds the Open Watcom runtime and the DOS/32A extender and `XHCISNAP.EXE` the MSVC 6.0 runtime and each ships with a `NOTICE.TXT` recording it (the `LICENSE` scope note states their terms).
+This project's own source is licensed under the GNU General Public License, version 2 ([LICENSE](LICENSE)), `GPL-2.0-only`. 
 
-The release download carries no Microsoft file. The `usbd.sys` and `usbhub.sys` the install needs are Windows' own, and Windows copies them from its own installation source during the install, never overwriting a file already there; the assembled asset carried them from 0.0.0.4 to 1.0.0.0, before any upload, and [docs/contributing/legal-provenance.md](docs/contributing/legal-provenance.md) section 5 records that. 
+The repository tracks no third-party binary on its own, although the two tool executables it tracks under `releases/` carry statically linked third-party runtimes.
+
+* `xhci98.sys` links no third-party object, runtime or extender.
+
+* `XHCIQUAL.EXE` embeds the Open Watcom runtime and the DOS/32A extender. 
+
+* `XHCISNAP.EXE` embeds the MSVC 6.0 runtime.
+
+Each ships with a `NOTICE.TXT` recording it, and the `LICENSE` scope note states their terms.
 
 The full inventory, provenance methods and redistribution boundaries are in [docs/contributing/legal-provenance.md](docs/contributing/legal-provenance.md), which states facts, not legal conclusions.
