@@ -1,4 +1,4 @@
-﻿# Development Roadmap
+# Development Roadmap
 
 This roadmap is the project-status index: the phase sequence, what each phase
 was for and what it delivered, the basis on which each closed, the task and
@@ -1736,6 +1736,9 @@ Tasks:
   from the xHCI-only base 19.5 made. The Windows 2000 leg now also carries the
   `DisableSelectiveSuspend` value and every leg carries 19.7's change; the
   reading is that nothing changed.
+  The two fresh clones were re-taken on 2026-09-03 night (`-Clone
+  -FreshCopy` on `2a-fresh` and `2b-fresh`, the latter from the xHCI-only
+  base for the first time); the prep boots, the stamps and the run are owed.
 - [ ] 19.9 the release date in `src\xhci_version.h` and the INF's
   `DriverVer` (the number `1.0.1.0` has been there since 2026-09-03), the
   release notes' opening line, the `releases/history.md` entry (XP; `usbport.sys`,
@@ -1743,6 +1746,8 @@ Tasks:
   disabled on the NT path; 19.7's change to the EP0 REMOVE path, issue 4),
   then the cut with `make-release.ps1`, every gate green, and the install
   route checked from the asset on every target as 18.7 did.
+  Drafted 2026-09-03 night: the history entry and the release notes'
+  opening line, dated 2026-09-02 with the INF until the cut moves all three.
 
 Checkpoint: on an XP guest that has never had another USB controller, the
 `1.0.1.0` package installs from the asset, the driver loads on the first
