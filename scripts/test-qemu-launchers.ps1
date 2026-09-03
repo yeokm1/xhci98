@@ -99,6 +99,14 @@ try {
                 "the Windows XP launcher does not leave the companion EHCI out by default."
             Assert-True ($text.Contains('if not exist "%WINXP_ISO%"') -and $text.Contains('set "CDROM="')) `
                 "the Windows XP launcher does not boot without the CD when the ISO is absent."
+            # Roadmap task 19.3: QEMU pins a SuperSpeed-capable device to a
+            # SuperSpeed-capable root port and never falls it back to USB 2.0,
+            # so the storage and audio readings need USB 2.0-only root ports
+            # and an audio backend for the hot-plugged usb-audio.
+            Assert-True ($text.Contains("-device qemu-xhci,p3=0,id=xhci ^")) `
+                "the Windows XP launcher does not keep every root port USB 2.0 (p3=0)."
+            Assert-True ($text.Contains("-audiodev none,id=xpaud ^")) `
+                "the Windows XP launcher declares no audio backend for a hot-plugged usb-audio."
         }
 
         # --- the rotation preamble, actually executed -----------------------

@@ -1429,15 +1429,25 @@ what it reproduces.
 2. Stage the package: `make-package.ps1 -Flavor qemu -OutDir vm\xferxp`.
    Only the qemu flavour writes the port-0xE9 trace the launcher captures.
 3. `scripts\local\qemu-winxp-run.cmd <tag>`: the same machine plus
-   `qemu-xhci`, the VVFAT transfer drive (`E:` in the guest; the CD, when
-   attached, is `D:`), `isa-debugcon` at 0xE9 into `vm\winxp-debugcon.log`
-   (rotated per boot like the other guests' logs), and the QEMU xhci trace
-   into `vm\winxp-qemu-trace.<tag>.log`. No companion EHCI unless `ehci` is
+   `qemu-xhci,p3=0`, the VVFAT transfer drive (`E:` in the guest; the CD,
+   when attached, is `D:`), an `-audiodev none,id=xpaud` backend for a
+   hot-plugged `usb-audio`, `isa-debugcon` at 0xE9 into
+   `vm\winxp-debugcon.log` (rotated per boot like the other guests' logs,
+   which overwrites the previous boot's `.previous.log`: copy a log worth
+   keeping to a tag name first), and the QEMU xhci trace into
+   `vm\winxp-qemu-trace.<tag>.log`. `p3=0` (USB 2.0 root ports only, as
+   every other guest) since the `p194` run: QEMU pins a SuperSpeed-capable
+   device to a SuperSpeed-capable root port and does not model the USB 2.0
+   fallback real hardware gives, so on the default 4+4 layout a hot-plugged
+   `usb-storage` attached at 5000 Mb/s on a USB3 port this driver leaves
+   unmanaged (`port event: not a managed port`) and XP never saw it; the
+   readings taken on the 4+4 layout are marked below, and `-XhciDevice
+   qemu-xhci` regenerates that launcher. No companion EHCI unless `ehci` is
    the second argument (below). No USB device is boot-attached
    (`lessons.md`, "QEMU 11.1.0-rc2 parks a Windows 98 boot in SeaBIOS's SMM
    handler"); hot-plug from the monitor on port 55559 with `device_add
-   usb-mouse,id=m1,bus=xhci.0` and no `port=` (`qemu-xhci` refuses a port
-   number and picks a USB2 port itself).
+   usb-mouse,id=m1,bus=xhci.0` and no `port=` (QEMU takes the first free
+   root port; a number above the port count is refused).
 4. Install the driver from the transfer drive: Device Manager, the
    unrecognised "Universal Serial Bus (USB) Controller", Update Driver,
    Have Disk, `E:\`. The unsigned-driver warning on 32-bit XP is a prompt
@@ -1450,7 +1460,8 @@ what it reproduces.
    disable, re-enable, remove and rescan (roadmap task 19.3, still owed).
 
 What the first afternoon showed (2026-09-03, the owner at the console; the
-`first`, `ehci` and `dss` trace tags in `vm\`):
+`first`, `ehci`, `dss` and `p194` trace tags in `vm\`; every run below was
+on the launcher's original 4+4 port layout, plain `qemu-xhci`):
 
 - **The 1.0.0.1 package, xHCI only: Code 39, debug console 0 bytes.** The
   image, read on the host (`qemu-img convert -O raw`, then 7-Zip straight
