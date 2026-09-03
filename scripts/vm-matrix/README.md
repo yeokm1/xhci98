@@ -322,3 +322,14 @@ Traps the harness paid for and documents rather than enforces:
     matrix then met unattended was the first anyone saw of the class. The
     prep spec now adds the matrix row's `scsi-hd` child on a second scratch
     drive and repairs `attached`, and `-Detach` removes the child first.
+16. The run declares `-audiodev none,id=matrixaud` and the `usb-audio` row
+    names it. Without a backend named, `device_add usb-audio` opens QEMU's
+    default host audio backend on its main loop, and on the first `1.0.1.0`
+    post-release run (2026-09-04) that open blocked the monitor past its
+    16 s reply limit on both targets, so the row read ERROR with no reading
+    taken, while the group's console showed the device arriving afterwards.
+    The host that night had no playback endpoint in the OK state; the same
+    command against a guestless QEMU took over 16 s by default and about a
+    second with `none`. The row plays nothing and its expectations are
+    inert, so `none` measures the same thing. `prepare-image.ps1` has
+    declared the same backend since repo audit D4.
