@@ -1799,9 +1799,12 @@ Tasks:
   night caught them one day old); then `make-release.ps1`, exit 0:
   `releases\1.0.1.0\` with `release\` and `debug\` (two files each), the
   two tools with their readmes and NOTICEs, `LICENSE` and `readme.txt`,
-  and the upload set `out\xhci98-1.0.1.0.zip` (248,457 bytes, thirteen
-  files, no Microsoft file). The install route from that asset on the five
-  targets is owed.
+  and the upload set `out\xhci98-1.0.1.0.zip` (thirteen files, no
+  Microsoft file; 248,457 bytes at the cut, 244,237 after the re-cut
+  `59ae951` the same morning, before any upload, for the readme's opening
+  paragraph: XP is incidental support, the add-in card claim dropped; the
+  driver and tool files are byte-identical across the two cuts). The
+  install route from that asset on the five targets is owed.
 
 Checkpoint: on an XP guest that has never had another USB controller, the
 `1.0.1.0` package installs from the asset, the driver loads on the first
