@@ -1303,10 +1303,23 @@ is `none` for a boot with no controller at all and `ehci` for the companion
 the old vehicle carried, for comparison only.
 
 What it has given so far: Setup ran under those flags to the desktop on
-2026-09-03, the owner at the console. The task 19.5 readings (the drivers
-listing before any controller, the package install with the xHCI alone,
-`usbport.sys` placed or not, the root hub, a hot-plugged mouse) are recorded
-in the roadmap under that task as they are taken.
+2026-09-03, the owner at the console, and the drivers listing before any
+controller was read the same day from the `win2k-xonly-clean-install`
+snapshot (`qemu-img convert -l win2k-xonly-clean-install -O raw`, then 7-Zip
+straight through the MBR and the NTFS volume, the recipe the XP spike used;
+nothing booted). `system32\drivers` holds `usbcamd.sys` and `usbintel.sys`
+and no other `usb*.sys`: no `usbport.sys`, `usbhub.sys`, `usbhub20.sys` or
+`usbd.sys`, and `dllcache` has none of them either. All four sit in
+`Driver Cache\i386\sp4.cab` (`usbd.sys` 20,688 bytes, `usbport.sys` 138,288,
+the SP4 stamp 2003-06-19), the RTM `usbd.sys` and `usbhub.sys` in
+`driver.cab` beside them. That is the listing "The files the OS supplies"
+had inferred from `layout.inf`, now measured, with one addition the
+inference had not made explicit: `usbd.sys` is absent too, so the `.NTx86`
+copy section's third `LayoutFile` row is load-bearing on Windows 2000 (the
+missing-`usbd.sys` bugcheck below is what a failed row would give). The
+remaining task 19.5 readings (the package install with the xHCI alone,
+`usbport.sys` and `usbd.sys` placed or not, the root hub, a hot-plugged
+mouse) are recorded in the roadmap under that task as they are taken.
 
 The harness side: `prepare-image.ps1 -Target 2b-fresh -Clone` reads
 `win2k-xonly.img @ win2k-xonly-clean-install`. The old `fresh-2b.img`

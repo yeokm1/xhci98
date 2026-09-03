@@ -149,7 +149,7 @@ any build of this driver existed, one per target.
 | Target | Source image | Snapshot | Taken | State |
 |---|---|---|---|---|
 | `2a` | `vm/win98.img` | `post-nusb` | 2026-07-22 | Windows 98 SE, NUSB 3.3 installed, the xHCI controller unclaimed (`Code 28`), no `usbd.sys` |
-| `2b` | `vm/win2k-xonly.img` | `win2k-xonly-clean-install` | 2026-09-03 | Windows 2000 SP4 installed with no USB controller of any kind attached, so no `usbport.sys`, `usbhub.sys` or `usbhub20.sys` on disk |
+| `2b` | `vm/win2k-xonly.img` | `win2k-xonly-clean-install` | 2026-09-03 | Windows 2000 SP4 installed with no USB controller of any kind attached; read from the snapshot the same day: `system32\drivers` holds `usbcamd.sys` and `usbintel.sys` only, no `usbport.sys`, `usbhub.sys`, `usbhub20.sys` or `usbd.sys` |
 
 The Windows 2000 row changed on 2026-09-03 (roadmap task 19.5). Until then
 it was `vm/win2k.img @ phase2b-clean` (2026-07-24, the xHCI unclaimed,

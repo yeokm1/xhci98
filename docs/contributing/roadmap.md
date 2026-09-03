@@ -1550,6 +1550,26 @@ Tasks:
   `scripts\setup-qemu-win2k-xonly.ps1` commits the two launchers with a row
   in `test-qemu-launchers.ps1`; `build-and-test.md` ("Windows 2000
   xHCI-only VM") and design record 09, section 3.1, carry the change.
+  The listing before any controller, read 2026-09-03 from the
+  `win2k-xonly-clean-install` snapshot itself rather than on a boot
+  (`qemu-img convert -l <snapshot> -O raw`, then 7-Zip through the MBR and
+  the NTFS volume; nothing executed, so the state is the one Setup left):
+  `system32\drivers` holds `usbcamd.sys` (23,888 bytes) and `usbintel.sys`
+  (15,120) and no other `usb*.sys`. No `usbport.sys`, no `usbhub.sys`, no
+  `usbhub20.sys`, and no `usbd.sys` either, which the expectation had listed
+  as present from the XP reading (XP's 4,736-byte stub has no Windows 2000
+  counterpart); `system32\dllcache` has no `usb*.sys` at all. Where they
+  are: `Driver Cache\i386\sp4.cab` carries `usbport.sys` (138,288),
+  `usbhub.sys` (40,176), `usbhub20.sys` (49,776), `usbd.sys` (20,688) and
+  `usbehci.sys` (19,728), all stamped 2003-06-19, and `driver.cab` the RTM
+  `usbd.sys` (20,592) and `usbhub.sys` (40,016) beside the two files Setup
+  did copy. Setup's own `setupapi.log` installed the USB device class and no
+  USB device. So the package install still to be taken has to place three
+  files from the cache, not two, and the third is the one whose absence
+  `lessons.md` records as the `c000026c` boot bugcheck (`usbhub20.sys`
+  imports `USBD.SYS`): a root hub that comes up, survives a restart and
+  shows `usbd.sys` at 20,688 bytes is the reading, and a yellow bang on the
+  hub is shut down and re-boot with `none`, never restart.
 - [ ] 19.6 the tier, decided by the owner: supported in virtual machines,
   stated the way Windows 2000's and Windows ME's status is, or something
   narrower; then every document that names the targets: `AGENTS.md` (Quick

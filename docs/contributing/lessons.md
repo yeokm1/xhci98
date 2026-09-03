@@ -78,8 +78,17 @@ The package-install reading on the clean snapshot with no EHCI, roadmap
 task 19.4, was taken later the same day: no CD prompt, `usbport.sys` and
 `usbhub.sys` placed from the cache, the driver up on that boot, the root
 hub and a hot-plugged mouse bound. The equivalent controller-free Windows
-2000 install is 19.5; until it is taken the Windows 2000 half of the fix is
-inferred from the table alone.
+2000 install is 19.5. Its listing half was measured the same evening, from
+the `win2k-xonly-clean-install` snapshot rather than a boot (`qemu-img
+convert -l` to raw, 7-Zip through the NTFS volume; nothing executed): the
+table's prediction held, `usbcamd.sys` and `usbintel.sys` on disk and
+nothing else, `usbport.sys`, `usbhub.sys`, `usbhub20.sys` and `usbd.sys` all
+in `Driver Cache\i386\sp4.cab` and nowhere in `system32`. The `usbd.sys`
+row matters more on Windows 2000 than the XP reading suggested: XP had left
+its stub behind, Windows 2000 leaves nothing, and a `usbhub20.sys` loaded
+without it is the `c000026c` bugcheck recorded below. The package-install
+half of the Windows 2000 reading is still inferred until 19.5's install is
+taken.
 
 A second reading from the same afternoon, kept here because the same
 absent control hid it: about thirty seconds after `StartController` with
