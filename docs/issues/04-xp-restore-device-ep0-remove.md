@@ -1,14 +1,15 @@
 # Issue 4 - A device Windows XP's hub re-creates mid-enumeration is failed by this driver: the REMOVE of the superseded EP0 handle unbinds the live one
 
-Status: open, fix scheduled. Observed once, on the Windows XP guest,
-2026-09-03 (roadmap task 19.3). The mechanism below is a static reading of
-this driver's own code against the callback order the run recorded; no fix
-has been tried, so it is a potential issue with a strong candidate cause,
-not a settled one. The owner's decision that afternoon was no driver code
-change in release `1.0.0.2`; reversed the same evening, the fix in section
-4 is roadmap task 19.7, and this page moves to fixed when that task's run
-is read. Until then the workaround is to unplug the device and plug it
-back in, which enumerated cleanly in the same run.
+Status: fix in the tree, the closing run owed. Observed once, on the
+Windows XP guest, 2026-09-03 (roadmap task 19.3). The mechanism below is a
+static reading of this driver's own code against the callback order the run
+recorded, and the host vector of section 4 reproduces it from that order:
+on the REMOVE path as it was, the vector failed exactly as the run did. The
+owner's decision that afternoon was no driver code change in release
+`1.0.0.2`; reversed the same evening, the fix in section 4 is roadmap task
+19.7 and landed that night. This page moves to fixed when the XP reading
+section 5 asks for is taken. Until then the workaround is to unplug the
+device and plug it back in, which enumerated cleanly in the same run.
 
 Targets affected: Windows XP, the best-effort secondary target. Not seen on
 Windows 98 SE, Windows ME or Windows 2000 in any run of this project: the
@@ -191,10 +192,27 @@ superseded extension. Clear that extension's own `XHCI_ENDPOINT_FLAG_OPEN`,
 count it, and leave the record's binding, its owed invalidate, its queue
 and its pending SET_ADDRESS alone, since they belong to the live handle.
 The same-extension reopen that both primary targets perform is unchanged
-by it. A host vector would enumerate and address a device, reset its port
-again, open EP0 through a second static extension at address 0 (the
-existing `xhciDevOpenOnRootPort` path), REMOVE the first, and check that
-the flag, the pointer and a submit through the second all survive.
+by it, and so is a REMOVE arriving with the binding already gone.
+
+Landed 2026-09-03 evening, in this order. The host vector first
+(`test_slot_ep0_remove_superseded_handle`, `test\test_init.c`): a device
+addressed at 2 through one extension, its port reset again, EP0 opened at
+address 0 through a second static extension (the existing
+`xhciDevOpenOnRootPort` path re-entering the record), SET_ADDRESS 3
+submitted through the second and still in flight, then the REMOVE of the
+first. Against the REMOVE path as it was, the vector failed at every one of
+the properties it asserts: the record's open flag and pointer gone, the
+pending SET_ADDRESS completed as cancelled (`0x10000`), the descriptor read
+through the live handle refused for retry, which is the run's livelock in
+miniature. Then the change in `src\xhci_slot.c`, `XhciSlotSetEndpointState`,
+with the counter `Ep0RemovesSuperseded` ("EP0 removes on a superseded
+handle" in the counter dump; expected zero on Windows 98 and Windows 2000,
+where a nonzero reading would say the two-handle restore is not XP's
+alone). A second vector removes the old handle late, in the `p194` order,
+with the new handle addressed and a descriptor read queued on it. The suite
+passes (12,209 checks), `build-driver.cmd all` and every gate are green, and
+the first vector's final REMOVE re-checks that the same-extension path is
+what it was.
 
 It was not taken on the afternoon of 2026-09-03 because Phase 19 was an
 INF-and-documents release with the 9x targets' install routes still to
@@ -208,16 +226,32 @@ primary targets on the same binary with the reading that nothing changed.
 
 ## 5. What is still open
 
-- A run that confirms the mechanism: the callback log with the
-  `SetEndpointState` print budget intact (a cold boot and the disk as the
-  first device), so the REMOVE on the superseded extension is seen rather
-  than inferred from the `CloseEndpoint` that follows it.
+- A run that confirms the mechanism, now with the fix in place: the
+  counter `Ep0RemovesSuperseded` moving while a mass-storage device and a
+  composite bind on their first attach. The confirming run the task asked
+  for first was taken 2026-09-03 evening (tag `i4`: a cold boot of the
+  `p194` install, `usb-storage` the first device on port 1 with the
+  `SetEndpointState` print budget intact, `usb-audio` second on port 2) and
+  did not reproduce it: both devices bound on their first attach through
+  one same-extension EP0 reopen each, no second port reset, `slots reset to
+  Default` 0, `records failed - no progress` 0. What the three `p194` first
+  attaches had that these two lacked is that each was also the first-ever
+  installation of its class driver on that XP install (`usbstor.sys`,
+  `usbaudio.sys` and their companions placed from the SP3 cab during the
+  attach); every attach with the class driver already present, the `p194`
+  replugs included, has enumerated cleanly. A correlation on five attaches,
+  not a mechanism. The reading that settles both this and the fix is the
+  clean snapshot (`winxp-clean-install`), the 1.0.0.2 package reinstalled
+  from `vm\xferxp` (the owner at the Have Disk wizard), then `usb-storage`
+  and `usb-audio` each attached once: the counter at 1 and 2, the devices
+  bound, and the failure counters at zero.
 - Whether the Windows 2000 hub ever takes the restore path against this
   driver. If it does, this is not an XP-only issue.
 - Why XP's hub re-created the disk and the audio device. A second attach
-  of each on the same boot did not repeat it; the first attach of a device
-  instance, with its class driver being installed, is the candidate
-  condition.
+  of each on the same boot did not repeat it, and neither did a first
+  attach on a later boot with the class drivers already installed (`i4`);
+  the first-ever installation of the class driver, during the attach, is
+  the candidate condition.
 
 ## Sources
 

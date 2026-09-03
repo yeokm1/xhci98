@@ -1637,6 +1637,33 @@ Tasks:
   Windows 98 door sequence, their reading being that nothing changed. The
   issue page moves to fixed with the run named, the release notes carry no
   XP first-attach limitation, and 19.9's history entry names the change.
+  Progress 2026-09-03 evening (third session). The confirming run (tag `i4`,
+  a cold boot of the `p194` install, `usb-storage` the first device on port
+  1 and `usb-audio` the second on port 2, the `SetEndpointState` print
+  budget intact for the first) did NOT reproduce the two-handle restore:
+  both bound on their first attach with one same-extension EP0 reopen each
+  (`820E2FB8` removed and reopened at address 1), no second port reset,
+  `slots reset to Default` 0, `records failed - no progress` 0, every
+  refusal counter 0, Explorer opening `F:`. What the three `p194` first
+  attaches had that these two lacked: each was also the first-ever
+  installation of its class driver (`usbstor.sys`, `usbaudio.sys` and their
+  companions from the SP3 cab) on that XP install, and every attach with
+  the class driver already present, the `p194` replugs included, has
+  enumerated cleanly. That is a correlation on five attaches, not a
+  mechanism; the confirming reading is owed from the clean snapshot with
+  the package reinstalled (issue page, section 5). The host vector
+  (`test_slot_ep0_remove_superseded_handle`, `test\test_init.c`) models the
+  restore from the `p194` trace and failed on the existing REMOVE path
+  exactly as the page describes (the binding dropped, the pending
+  SET_ADDRESS completed as cancelled, every submit through the live handle
+  refused); it passes with the change. The change is in the tree:
+  `XhciSlotSetEndpointState`, REMOVE branch, with the counter
+  `Ep0RemovesSuperseded` ("EP0 removes on a superseded handle",
+  `scripts\vm-matrix\offsets.txt` regenerated), `build-driver.cmd all` and
+  every gate green, `vm\xferxp` restaged (the qemu binary built 19:34, still
+  versioned 1.0.0.1). Still owed: the XP reading on a clean install (the
+  counter moving while storage and audio bind on their first attach), then
+  2a and 2b on the same binary.
 - [ ] 19.8 the 9x targets unchanged: the `1.0.0.2` package installed from
   the asset on Windows 98 SE under NUSB and under SweetLow, and on Windows
   ME, the 18.7 route, and `run-matrix.ps1 -PostRelease` on the fresh 2a and

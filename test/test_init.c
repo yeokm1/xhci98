@@ -14227,6 +14227,190 @@ static PXHCI_DEVICE slot_enumerate_addressed(ULONG hubPort,
 }
 
 /*
+ * **Issue 4, roadmap task 19.7: the REMOVE of a superseded EP0 handle.**
+ *
+ * XP's hub re-creates a device it is still enumerating through a second usbport
+ * device handle (`USBPORT_RestoreDevice`, reached from the hub's
+ * `RestoreUsbDevice`; ReactOS documents the shape): the port is reset again,
+ * EP0 is opened at address 0 through a NEW endpoint extension, the device is
+ * addressed again through it, and only then is the OLD handle's EP0 removed.
+ * So for one device two EP0 extensions are live at once, both resolving to the
+ * same record, and the older one is removed last. Read on the XP guest on
+ * 2026-09-03 (run `p194`, `docs/issues/04-xp-restore-device-ep0-remove.md`):
+ * the REMOVE of the first extension unbound the live one, every submit through
+ * the new handle was refused for retry, and the progress detector failed the
+ * device.
+ *
+ * The property under test is identity. A REMOVE naming an extension the record
+ * is no longer bound to may touch that extension alone; the binding, the owed
+ * invalidate, the EP0 queue and a SET_ADDRESS still in flight belong to the
+ * live handle and survive. The same-extension reopen every Windows 98 and
+ * Windows 2000 run performs (`test_slot_endpoint_remove`) arrives with the
+ * record bound to that very extension and takes the existing path, which the
+ * final REMOVE here re-checks on the live handle.
+ */
+static XHCI_ENDPOINT slotEndpointRestore;
+
+static void test_slot_ep0_remove_superseded_handle(void)
+{
+    PXHCI_DEVICE dev;
+    ULONG completions;
+    ULONG removesWithWork;
+    ULONG i;
+
+    /* A device addressed at 2 through the first handle: the state the disk was
+     * in when XP reset its port the second time. */
+    dev = slot_enumerate_addressed(3, 3, 5, 2);
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_ADDRESSED, "(addressed at 2)");
+    CHECK(dev->EndpointExtension == (PVOID)&slotEndpoint,
+          "(bound to the first handle)");
+
+    /* The hub resets the port again and creates the device anew: an EP0 open
+     * at address 0 through a second extension, which resolves to the record
+     * already on that port (xhciDevOpenOnRootPort) and re-enters the chain. */
+    slot_reset_port(3);
+    slot_properties(0, UsbHighSpeed, 64);
+    for (i = 0; i < sizeof(slotEndpointRestore) / sizeof(ULONG); i++) {
+        ((ULONG *)&slotEndpointRestore)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_now(&slotEndpointRestore), MP_STATUS_SUCCESS,
+             "EP0 opens at address 0 through a second handle");
+    CHECK_EQ(slotEndpointRestore.DeviceIndex, 1, "resolving to the same record");
+    CHECK(dev->EndpointExtension == (PVOID)&slotEndpointRestore,
+          "which is now bound to the new handle");
+    CHECK_EQ(slotEndpoint.Flags & XHCI_ENDPOINT_FLAG_OPEN,
+             XHCI_ENDPOINT_FLAG_OPEN,
+             "(while the first handle still believes itself open)");
+    deliver_events();               /* the re-entry completes: Default */
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "the chain re-ran to Default");
+
+    /* usbport addresses the device again through the new handle, and the
+     * command is still in flight when the old handle's REMOVE arrives. */
+    slot_setup(0x00, 0x05, 3, 0);
+    completions = completeTransferCalls;
+    CHECK_EQ(XhciRegPacket.SubmitTransfer(&ext, &slotEndpointRestore,
+                                          &slotParams, &slotTransfer,
+                                          &slotSgList),
+             MP_STATUS_SUCCESS, "SET_ADDRESS 3 is accepted through the new handle");
+    CHECK(dev->PendingSetAddress != NULL, "(and is pending on the command)");
+
+    removesWithWork = ext.RemovesWithWork;
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
+    CHECK_EQ(ext.Ep0RemovesSuperseded, 1,
+             "the REMOVE of the superseded handle is counted");
+    CHECK_EQ(slotEndpoint.Flags & XHCI_ENDPOINT_FLAG_OPEN, 0,
+             "and closes that handle");
+    CHECK_EQ(dev->Flags & XHCI_DEV_FLAG_EP0_OPEN, XHCI_DEV_FLAG_EP0_OPEN,
+             "but the record stays open");
+    CHECK(dev->EndpointExtension == (PVOID)&slotEndpointRestore,
+          "bound to the live handle");
+    CHECK_EQ(slotEndpointRestore.Flags & XHCI_ENDPOINT_FLAG_OPEN,
+             XHCI_ENDPOINT_FLAG_OPEN, "which is still open");
+    CHECK(dev->PendingSetAddress != NULL, "with its SET_ADDRESS still pending");
+    CHECK_EQ(completeTransferCalls, completions,
+             "and not completed as cancelled");
+    CHECK_EQ(ext.RemovesWithWork, removesWithWork,
+             "(the live handle's queue was not the REMOVE's subject)");
+
+    deliver_events();               /* Address Device (BSR = 0) completes */
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_ADDRESSED, "the device is addressed");
+    CHECK_EQ(dev->DeviceAddress, 3, "at the new address");
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "and the SET_ADDRESS completed exactly once");
+    CHECK_EQ(lastCompletedStatus, 0, "with success");
+
+    /* The live handle carries traffic: a descriptor read reaches the queue. */
+    slot_setup(0x80, 0x06, 0x0200, 0);
+    CHECK_EQ(XhciRegPacket.SubmitTransfer(&ext, &slotEndpointRestore,
+                                          &slotParams, &slotTransfer,
+                                          &slotSgList),
+             MP_STATUS_SUCCESS, "a submit through the live handle is accepted");
+    CHECK_EQ(dev->Ep0Queue.Count, 1, "and queued");
+
+    /* The REMOVE of the handle the record IS bound to is the existing path,
+     * unchanged: the binding goes, and the queued transfer is what the stop
+     * that follows is for. */
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpointRestore,
+                                   USBPORT_ENDPOINT_REMOVE);
+    CHECK_EQ(ext.Ep0RemovesSuperseded, 1,
+             "a REMOVE of the bound handle is not counted as superseded");
+    CHECK_EQ(dev->Flags & XHCI_DEV_FLAG_EP0_OPEN, 0,
+             "and drops the binding");
+    CHECK(dev->EndpointExtension == NULL, "and the pointer with it");
+    CHECK_EQ(ext.RemovesWithWork, removesWithWork + 1,
+             "counting the work it found queued");
+    deliver_events();               /* the Stop Endpoint */
+    deliver_events();               /* the Set TR Dequeue Pointer */
+}
+
+/*
+ * The same restore in the order the `p194` trace recorded it: the new handle's
+ * SET_ADDRESS has completed and a descriptor read through it is already queued
+ * when the old handle's REMOVE arrives (the run's `cb CloseEndpoint` on the
+ * first extension came after the third Address Device and its configuration
+ * reads). The vector above removes the old handle while the command is still in
+ * flight; this one removes it late, so both orderings the fix has to serve are
+ * asserted rather than one standing in for the other.
+ */
+static void test_slot_ep0_remove_superseded_handle_late(void)
+{
+    PXHCI_DEVICE dev;
+    ULONG completions;
+    ULONG removesWithWork;
+    ULONG refusals;
+    ULONG i;
+
+    dev = slot_enumerate_addressed(3, 3, 5, 2);
+    slot_reset_port(3);
+    slot_properties(0, UsbHighSpeed, 64);
+    for (i = 0; i < sizeof(slotEndpointRestore) / sizeof(ULONG); i++) {
+        ((ULONG *)&slotEndpointRestore)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_now(&slotEndpointRestore), MP_STATUS_SUCCESS,
+             "(EP0 opens at address 0 through a second handle)");
+    deliver_events();               /* the re-entry completes: Default */
+    slot_setup(0x00, 0x05, 3, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpointRestore, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    deliver_events();               /* Address Device (BSR = 0) completes */
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_ADDRESSED, "(addressed at 3)");
+    CHECK_EQ(dev->DeviceAddress, 3, "(through the new handle)");
+
+    /* The configuration read usbport had in flight when the old handle went. */
+    slot_setup(0x80, 0x06, 0x0200, 0);
+    CHECK_EQ(XhciRegPacket.SubmitTransfer(&ext, &slotEndpointRestore,
+                                          &slotParams, &slotTransfer,
+                                          &slotSgList),
+             MP_STATUS_SUCCESS, "(a descriptor read is queued on the live handle)");
+    CHECK_EQ(dev->Ep0Queue.Count, 1, "(one transfer outstanding)");
+
+    completions = completeTransferCalls;
+    removesWithWork = ext.RemovesWithWork;
+    refusals = ext.TransfersRefused;
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
+    CHECK_EQ(ext.Ep0RemovesSuperseded, 1,
+             "the late REMOVE of the superseded handle is counted");
+    CHECK_EQ(dev->Flags & XHCI_DEV_FLAG_EP0_OPEN, XHCI_DEV_FLAG_EP0_OPEN,
+             "and the record stays open");
+    CHECK(dev->EndpointExtension == (PVOID)&slotEndpointRestore,
+          "bound to the live handle");
+    CHECK_EQ(dev->Ep0Queue.Count, 1, "with its transfer still queued");
+    CHECK_EQ(completeTransferCalls, completions, "and not completed as cancelled");
+    CHECK_EQ(ext.RemovesWithWork, removesWithWork,
+             "(the queued work was not this REMOVE's)");
+    CHECK_EQ(dev->ActiveOp, XHCI_DEV_OP_NONE, "and no Stop Endpoint was issued");
+
+    /* The next poll would have refused this record on the old path; now the
+     * live handle keeps submitting. */
+    slot_setup(0x80, 0x06, 0x0200, 0);
+    CHECK_EQ(XhciRegPacket.SubmitTransfer(&ext, &slotEndpointRestore,
+                                          &slotParams, &slotTransfer2,
+                                          &slotSgList),
+             MP_STATUS_SUCCESS, "a further submit through the live handle is accepted");
+    CHECK_EQ(ext.TransfersRefused, refusals, "and nothing was refused for retry");
+}
+
+/*
  * The open, the Configure Endpoint it derives, and what each of them is allowed
  * to have touched.
  *
@@ -27813,6 +27997,8 @@ int main(void)
     test_slot_teardown();
     test_slot_command_ownership();
     test_slot_endpoint_remove();
+    test_slot_ep0_remove_superseded_handle();
+    test_slot_ep0_remove_superseded_handle_late();
     test_slot_port_disable_teardown();
     test_slot_port_disable_waits_for_the_port();
     test_slot_queue_counter_fold();

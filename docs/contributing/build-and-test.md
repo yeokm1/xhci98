@@ -1636,15 +1636,40 @@ to the door sequence was on the launcher's original 4+4 port layout, plain
   The first-attach failure is `docs/issues/04-xp-restore-device-ep0-remove.md`:
   XP re-creates the device through a second usbport device handle and
   removes the first handle's EP0 last, which the REMOVE path reads as the
-  live pipe closing. Open; no driver change in 1.0.0.2 by the owner's
-  decision. The 4+4 layout's own finding from the same afternoon: QEMU put
+  live pipe closing. The fix is roadmap task 19.7, in the tree since that
+  evening; the reading on a clean install is owed (below). The 4+4
+  layout's own finding from the same afternoon: QEMU put
   the SuperSpeed-capable disk on a USB3 port this driver leaves unmanaged
   (`port event: not a managed port`) and XP never saw it, which is why the
   launcher now defaults to `p3=0`.
 
-Not done on XP: real hardware (nothing in the fleet runs it), and a
-first-attach enumeration of a mass-storage or composite device that binds
-without a replug (issue 4).
+- **The confirming run for issue 4 (task 19.7; tag `i4`, the same evening,
+  the same `p194` install, a cold boot, no owner input needed): the
+  two-handle restore did not recur.** `usb-storage` hot-plugged as the
+  first device of the boot (port 1, so the `SetEndpointState` print budget
+  was intact): two port status changes, EP0 opened at address 0
+  (`820E2FB8`), the mid-enumeration reset XP always performs, REMOVE and
+  `CloseEndpoint` on that same extension, the reopen at address 1 through
+  it, `devices addressed` 1, the bulk pair opened (`endpoints opened` 2),
+  bulk traffic, Explorer opening `F:` with the `p194` file on it.
+  `usb-audio` second (port 2): addressed 2, the isochronous endpoint opened
+  with its interval derived from the descriptor (`endpoints opened` 3).
+  `slots reset to Default` 0, `records failed - no progress` 0, `transfers
+  refused for retry` 0, no second reset of either port, and a clean
+  `SuspendController` then `StopController` on the shutdown. So the
+  condition the `p194` first attaches met and these did not is the
+  candidate: on `p194` each first attach was also the first-ever
+  installation of its class driver on that XP install, with `usbstor.sys`
+  or `usbaudio.sys` and their companions being placed from the SP3 cab
+  while the device sat enumerated; on `i4` both class drivers were already
+  installed. The reading that settles it is a clean-snapshot reinstall of
+  the package followed by one attach of each device, with the fix's counter
+  (`EP0 removes on a superseded handle`) as the witness; see the issue page,
+  section 5.
+
+Not done on XP: real hardware (nothing in the fleet runs it), and the
+first-attach enumeration of a mass-storage or composite device on a clean
+install with the 19.7 fix in the binary (issue 4's closing reading).
 
 ### Windows 2000 SMP Stress VM (Phase 2d)
 

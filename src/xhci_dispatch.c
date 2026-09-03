@@ -1988,6 +1988,8 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
     XHCI_DBG_VALUE_CHANGED("endpoint context restores",
                            ext->EndpointContextRestores);
     XHCI_DBG_VALUE_CHANGED("endpoint removes held", ext->EndpointRemovesHeld);
+    XHCI_DBG_VALUE_CHANGED("EP0 removes on a superseded handle",
+                           ext->Ep0RemovesSuperseded);
     XHCI_DBG_VALUE_CHANGED("endpoint removes with work queued",
                            ext->RemovesWithWork);
     XHCI_DBG_VALUE_CHANGED("endpoint stops", ext->EndpointStops);
