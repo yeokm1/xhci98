@@ -1729,13 +1729,14 @@ Tasks:
   `transfers refused for retry` 0 in every group on both targets and
   through the door sequence: the two-handle restore is XP's alone, and
   nothing changed on the primary targets.
-- [ ] 19.8 the 9x targets unchanged: the `1.0.1.0` package installed from
-  the asset on Windows 98 SE under NUSB and under SweetLow, and on Windows
-  ME, the 18.7 route, and `run-matrix.ps1 -PostRelease` on the fresh 2a and
-  2b clones as Phase 16 ran it, the 2b clone re-cloned (`-Clone -FreshCopy`)
-  from the xHCI-only base 19.5 made. The Windows 2000 leg now also carries the
-  `DisableSelectiveSuspend` value and every leg carries 19.7's change; the
-  reading is that nothing changed.
+- [x] 19.8 the primary targets unchanged: `run-matrix.ps1 -PostRelease` on
+  the fresh 2a and 2b clones as Phase 16 ran it, the 2b clone re-cloned
+  (`-Clone -FreshCopy`) from the xHCI-only base 19.5 made, the Windows 2000
+  leg now also carrying the `DisableSelectiveSuspend` value and both legs
+  19.7's change; the reading is that nothing changed. The install from the
+  asset on every target, the 9x routes under NUSB, SweetLow and Windows ME
+  among them, is 19.9's last clause (reworded 2026-09-04, by the owner's
+  decision, from a wording that listed those legs here as well as there).
   The two fresh clones were re-taken on 2026-09-03 night (`-Clone
   -FreshCopy` on `2a-fresh` and `2b-fresh`, the latter from the xHCI-only
   base for the first time); the prep boots, the stamps and the run are owed.
@@ -1785,9 +1786,22 @@ Tasks:
   `usbd.sys`, `usbhub.sys` from the OS on the NT path; idle suspend
   disabled on the NT path; 19.7's change to the EP0 REMOVE path, issue 4),
   then the cut with `make-release.ps1`, every gate green, and the install
-  route checked from the asset on every target as 18.7 did.
+  route checked from the asset on every target as 18.7 did: Windows 98 SE
+  under NUSB and under SweetLow, Windows ME, Windows 2000 and XP.
   Drafted 2026-09-03 night: the history entry and the release notes'
   opening line, dated 2026-09-02 with the INF until the cut moves all three.
+  The cut, 2026-09-04 (commit `9cf9dda`): the date moved in the four places
+  that state it (`src\xhci_version.h`, the INF's `DriverVer`, the history
+  heading and the release notes' quoted `DriverVer`); `build-driver.cmd
+  all` at that header, every gate green; `XHCISNAP.EXE` and `XHCIQUAL.EXE`
+  rebuilt after the header, which `make-release.ps1` counts as a source of
+  both and refuses stale (a rehearsal into a scratch directory the same
+  night caught them one day old); then `make-release.ps1`, exit 0:
+  `releases\1.0.1.0\` with `release\` and `debug\` (two files each), the
+  two tools with their readmes and NOTICEs, `LICENSE` and `readme.txt`,
+  and the upload set `out\xhci98-1.0.1.0.zip` (248,457 bytes, thirteen
+  files, no Microsoft file). The install route from that asset on the five
+  targets is owed.
 
 Checkpoint: on an XP guest that has never had another USB controller, the
 `1.0.1.0` package installs from the asset, the driver loads on the first
