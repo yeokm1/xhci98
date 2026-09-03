@@ -105,7 +105,7 @@ The devices checked so far, all on the E460 under Windows 98 SE. Each is charact
 | Sound Blaster Play! 3, C-Media USB Audio Device (UAC 1.0) | `041E:324D`, `0D8C:0014` | Full | Enumerate and are named by the wizard. Found the Full-Speed `bMaxPacketSize0` bug. |
 | Sound Blaster X4 (UAC 2.0, `bInterval` 3 and 4) | `041E:3278` | High | Enumerates but does not bind on Windows 98 (one HID devnode at Code 10, no composite parent), so its `bInterval > 1` endpoints were never exercised. |
 
-One known defect is plugging and unplugging a device repeatedly and quickly. Windows 98 at a rate of roughly twice a second sustained can freeze the driver. Ordinary plugging and unplugging is fine.
+One known defect is plugging and unplugging a device repeatedly and quickly. Windows 98 at a rate of roughly twice a second sustained can freeze the machine. Ordinary plugging and unplugging is fine.
 
 <img src="images/xhci98-flash-speed-test.jpg" width="800">
 
@@ -235,8 +235,8 @@ The repository tracks no third-party binary on its own, although the two tool ex
 
 * `XHCIQUAL.EXE` embeds the Open Watcom runtime and the DOS/32A extender. 
 
-* `XHCISNAP.EXE` the MSVC 6.0 runtime and each ships with a `NOTICE.TXT` recording it 
+* `XHCISNAP.EXE` embeds the MSVC 6.0 runtime.
 
-Each ships with a NOTICE.TXT and the `LICENSE` scope note states their terms.
+Each ships with a `NOTICE.TXT` recording it, and the `LICENSE` scope note states their terms.
 
 The full inventory, provenance methods and redistribution boundaries are in [docs/contributing/legal-provenance.md](docs/contributing/legal-provenance.md), which states facts, not legal conclusions.

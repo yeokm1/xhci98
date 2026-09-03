@@ -12,6 +12,53 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 1.0.1.0 - 2026-09-02
+
+Windows XP joins the targets supported in virtual machines, the Windows 2000
+and Windows XP install now has the operating system supply every file the
+driver depends on, and one driver code change rides with them, for a fault
+the first XP guest showed. Windows 98 SE and Windows ME install as they did
+in `1.0.0.1`.
+
+### What changed
+
+- 32-bit Windows XP (SP3) is supported, in virtual machines only, the
+  standing Windows ME has. On 2026-09-03 an XP guest whose only USB
+  controller was the xHCI installed the package from its directory with no
+  prompt for media, loaded the driver on the first boot under XP's own USB
+  stack, and bound a HID mouse, a USB mass-storage device and a composite
+  audio device; disable, enable, remove and rescan in Device Manager all
+  survived. XP reads the INF's Windows 2000 half, shows its unsigned-driver
+  warning (choose Continue Anyway) and asks for nothing else. NUSB is a
+  Windows 98 SE package and is not for XP. Nothing has run on XP on real
+  hardware.
+- Windows 2000 and Windows XP: `usbport.sys`, the USB stack this driver
+  plugs into, now comes from the operating system's own driver cache
+  (`sp4.cab`, `sp3.cab`), the way `usbd.sys` already did, and `usbhub.sys`
+  with it; the install asks for no media. Windows Setup places none of the
+  three unless it finds a USB controller it recognises, so a Windows 2000
+  or XP machine that has never had another USB controller has none of them
+  on its disk. Until this release the package's NT install named only
+  `usbd.sys`, and on such a machine the driver installed but could not load
+  (Code 39 on XP). A machine that ever had a USB 1.1 or 2.0 controller
+  already has the files and sees no difference.
+- Windows 2000 and Windows XP: the install now writes
+  `DisableSelectiveSuspend = 1` under
+  `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB`, as the Windows
+  98 install has since `1.0.0.0`. XP's USB stack idles a
+  controller with nothing attached about half a minute after start, and a
+  sleeping xHCI cannot report a newly plugged device; Windows 2000's never
+  idles this controller, so there the value changes nothing you can see. It
+  is a machine-wide setting, and an uninstall does not remove it; the
+  release notes' "Known limitations" say what it does to other controllers.
+- The driver: when the hub driver re-creates a device in the middle of its
+  enumeration through a second device handle and then removes the first, as
+  Windows XP does on the first attach of a mass-storage or composite
+  device, the removal of the superseded handle's control endpoint is no
+  longer taken for the live one closing. Before this release such a device
+  failed on its first attach on XP and worked when unplugged and plugged in
+  again (`docs/issues/04-xp-restore-device-ep0-remove.md`). Windows 98 SE
+  and Windows 2000 never provoke it and read unchanged on the same binary.
 ## 1.0.0.1 - 2026-09-02
 
 The driver is unchanged. This release changes how it is installed: the

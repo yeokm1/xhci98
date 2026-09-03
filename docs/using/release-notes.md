@@ -1,7 +1,7 @@
 # xhci98 - Release Notes
 
-This file describes package version `1.0.0.1`
-(`DriverVer=09/02/2026,1.0.0.1`), the second release. Where this file and
+This file describes package version `1.0.1.0`
+(`DriverVer=09/02/2026,1.0.1.0`), the third release. Where this file and
 `docs/contributing/roadmap.md`, `docs/contributing/build-and-test.md` or
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
