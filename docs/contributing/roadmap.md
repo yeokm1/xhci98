@@ -1804,7 +1804,18 @@ Tasks:
   `59ae951` the same morning, before any upload, for the readme's opening
   paragraph: XP is incidental support, the add-in card claim dropped; the
   driver and tool files are byte-identical across the two cuts). The
-  install route from that asset on the five targets is owed.
+  install route from that asset, the owner at the console, the harness
+  attaching and reading only. Windows 98 SE under NUSB (2026-09-04 morning):
+  a fresh `post-nusb` clone of `win98.img` booted with the asset's
+  `release\` directory beside the qemu package on the transfer drive
+  (`-XferAdd`); Update Driver pointed at `D:\RELEASE`, the `usbd.sys`
+  prompt answered with the attached CD, restart; on the next boot the root
+  hub's wizard ran on its own and Device Manager read the controller and
+  the root hub with no mark and the pre-attached mouse under Human
+  Interface Devices (the Unknown Device beside the PCI Ethernet Controller
+  is the base clone's, seen on the 19.8 teaching pass); shut down from the
+  Start menu. Screens in `out\post-release\1.0.1.0\asset-legs\`. The
+  SweetLow, ME, 2000 and XP legs are owed.
 
 Checkpoint: on an XP guest that has never had another USB controller, the
 `1.0.1.0` package installs from the asset, the driver loads on the first
