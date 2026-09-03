@@ -536,13 +536,16 @@ try {
         param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles", "[Xhci.Dev]`r`nCopyFiles=Xhci.CopyFiles")
     }
 
-    # ---- the files the OS supplies (Phase 17, release 1.0.0.1) --------------
+    # ---- the files the OS supplies (Phase 17, release 1.0.0.1; Phase 19) ----
     #
     # Since 1.0.0.1 the media carries no Microsoft file: usbd.sys and usbhub.sys
-    # are copied from the OS's own install source through LayoutFile. Every way
-    # of unwiring that is silent on the target - a root hub at Code 2 on Windows
-    # 98, a 0xc0000034 naming usbhub20.sys on Windows 2000 - so each rule is
-    # watched firing here, in both directions where the asymmetry has two.
+    # are copied from the OS's own install source through LayoutFile, and since
+    # 1.0.0.2 the NT path copies usbport.sys and usbhub20.sys the same way.
+    # Every way of unwiring that is silent on the target - a root hub at Code 2
+    # on Windows 98, a 0xc0000034 naming usbhub20.sys on Windows 2000, Code 39
+    # with an empty trace on an NT install that never had usbport.sys - so each
+    # rule is watched firing here, in both directions where the asymmetry has
+    # two.
     Write-Step "the files the OS supplies"
     Assert-RuleFires "os-no-layoutfile" "OS-LAYOUT" {
         param($t) $t.Replace("LayoutFile=layout.inf`r`n", "")
@@ -563,53 +566,109 @@ try {
         param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16`r`n", "[Xhci.CopyW98]`r`n")
     }
     Assert-RuleFires "os-no-usbd-nt" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW2K",
-                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles")
+        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT",
+                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles")
     }
     Assert-RuleFires "os-default-no-usbd" "OS-MISSING" {
-        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW2K",
+        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT",
                              "[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles")
     }
     # The Windows 98 composite parent gone: the bug batch 13-E found on real
     # hardware, every composite device at Code 2 with nothing saying why.
     Assert-RuleFires "os-no-usbhub-w98" "OS-MISSING" {
-        param($t) $t.Replace("usbd.sys,,,16`r`nusbhub.sys,,,16", "usbd.sys,,,16")
+        param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16`r`nusbhub.sys,,,16", "[Xhci.CopyW98]`r`nusbd.sys,,,16")
     }
-    # The opposite direction, the more dangerous one: someone making the two
-    # paths look symmetrical. On Windows 2000 that name is the OS's own USB 1.1
-    # hub driver.
-    Assert-RuleFires "os-usbhub-on-nt" "OS-ONWIN2K" {
-        param($t) $t.Replace("[Xhci.CopyW2K]`r`nusbd.sys,,,16", "[Xhci.CopyW2K]`r`nusbd.sys,,,16`r`nusbhub.sys,,,16")
+    # The NT path's own two, one at a time. usbport.sys gone is the Windows
+    # XP reading of 2026-09-03: Code 39, the trace empty, nothing else saying
+    # why. usbhub.sys gone is the hub driver the OS cannot bind.
+    Assert-RuleFires "os-no-usbport-nt" "OS-MISSING" {
+        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`n", "[Xhci.CopyNT]`r`n")
     }
-    Assert-RuleFires "os-default-usbhub-on-nt" "OS-ONWIN2K" {
-        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW2K",
-                             "[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW2K,Xhci.CopyW98")
+    Assert-RuleFires "os-no-usbhub-nt" "OS-MISSING" {
+        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16`r`nusbhub.sys,,,16`r`n",
+                             "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16`r`n")
+    }
+    # The opposite direction: the Windows 98 path asking for a file its
+    # layout.inf has no row for, so its engine has no source to resolve it
+    # from. usbport.sys comes from NUSB or SweetLow there.
+    Assert-RuleFires "os-usbport-on-w98" "OS-ONWIN98" {
+        param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16", "[Xhci.CopyW98]`r`nusbport.sys,,,16`r`nusbd.sys,,,16")
+    }
+    Assert-RuleFires "os-default-nt-list-on-w98" "OS-ONWIN98" {
+        param($t) $t.Replace("[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98",
+                             "[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyNT")
+    }
+    # usbhub20.sys on any path, or on the media: Windows 2000's own USB.INF
+    # places it with the root hub, XP has no such file, and the owner's
+    # decision of 2026-09-03 is that this INF never names it.
+    Assert-RuleFires "os-usbhub20-on-nt" "OS-NEVER" {
+        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbhub20.sys,,,16")
+    }
+    Assert-RuleFires "os-usbhub20-on-w98" "OS-NEVER" {
+        param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16", "[Xhci.CopyW98]`r`nusbhub20.sys,,,16`r`nusbd.sys,,,16")
+    }
+    Assert-RuleFires "os-usbhub20-on-media" "OS-NEVER" {
+        param($t) $t.Replace("xhci98.inf=1`r`n", "xhci98.inf=1`r`nusbhub20.sys=1`r`n")
     }
     # No NT half at all: setupapi falls back to the undecorated section, and a
     # right-click Install on Windows 2000 runs the Windows 98 file list.
     Assert-RuleFires "no-defaultinstall-nt" "OS-DEFAULT" {
-        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW2K`r`n", "")
+        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT`r`nAddReg=Xhci.AddReg.Global`r`n", "")
     }
     Assert-RuleFires "os-dup" "OS-DUP" {
-        param($t) $t.Replace("[Xhci.CopyW2K]`r`nusbd.sys,,,16", "[Xhci.CopyW2K]`r`nusbd.sys,,,16`r`nusbd.sys,,,16")
+        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16`r`nusbd.sys,,,16")
     }
     # A media-name field sends the engine back to this disk for the file, which
     # is the 1.0.0.0 shape.
     Assert-RuleFires "os-srcname" "OS-SRCNAME" {
-        param($t) $t.Replace("[Xhci.CopyW2K]`r`nusbd.sys,,,16", "[Xhci.CopyW2K]`r`nusbd.sys,usbd2k.sys,,16")
+        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,usbd2k.sys,,16")
     }
     Assert-RuleFires "os-no-flag" "OS-FLAGS" {
-        param($t) $t.Replace("[Xhci.CopyW2K]`r`nusbd.sys,,,16", "[Xhci.CopyW2K]`r`nusbd.sys")
+        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys")
+    }
+    Assert-RuleFires "os-no-flag-usbport" "OS-FLAGS" {
+        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys")
     }
     # 16|4: NO_OVERWRITE plus NOVERSIONCHECK, which overwrites the target
     # regardless of version - including a newer serviced usbd.sys.
     Assert-RuleFires "os-noversioncheck" "OS-FLAGS" {
-        param($t) $t.Replace("[Xhci.CopyW2K]`r`nusbd.sys,,,16", "[Xhci.CopyW2K]`r`nusbd.sys,,,20")
+        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,20")
     }
     # Dirid 11 is \Windows\System, where nothing looks for it - and the copy
     # succeeds.
     Assert-RuleFires "os-dest" "OS-DEST" {
         param($t) $t.Replace("Xhci.CopyW98=10,System32\Drivers", "Xhci.CopyW98=11")
+    }
+
+    # ---- SUSP-* : DisableSelectiveSuspend on every route (Phase 19) ---------
+    #
+    # The machine-wide value, on four routes since 1.0.0.2. Each route losing
+    # it is a hot-plug that nothing notices on Windows 98 or Windows XP, and a
+    # 0 or a non-DWORD is the same defect with the value still "present".
+    Write-Step "DisableSelectiveSuspend on every route"
+    Assert-RuleFires "susp-no-9x-device" "SUSP-MISSING" {
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global", "[Xhci.Dev]`r`nAddReg=Xhci.AddReg")
+    }
+    Assert-RuleFires "susp-no-nt-device" "SUSP-MISSING" {
+        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global", "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT")
+    }
+    Assert-RuleFires "susp-no-9x-default" "SUSP-MISSING" {
+        param($t) $t.Replace("CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98`r`nAddReg=Xhci.AddReg.Global`r`n",
+                             "CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98`r`n")
+    }
+    Assert-RuleFires "susp-no-nt-default" "SUSP-MISSING" {
+        param($t) $t.Replace("CopyFiles=Xhci.CopyFiles,Xhci.CopyNT`r`nAddReg=Xhci.AddReg.Global`r`n",
+                             "CopyFiles=Xhci.CopyFiles,Xhci.CopyNT`r`n")
+    }
+    Assert-RuleFires "susp-value-zero" "SUSP-VALUE" {
+        param($t) $t.Replace("DisableSelectiveSuspend,0x00010001,1", "DisableSelectiveSuspend,0x00010001,0")
+    }
+    Assert-RuleFires "susp-not-dword" "SUSP-VALUE" {
+        param($t) $t.Replace("DisableSelectiveSuspend,0x00010001,1", "DisableSelectiveSuspend,,1")
+    }
+    Assert-RuleFires "susp-dup" "SUSP-DUP" {
+        param($t) $t.Replace("DisableSelectiveSuspend,0x00010001,1`r`n",
+                             "DisableSelectiveSuspend,0x00010001,1`r`nHKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1`r`n")
     }
 
     # ---- -EmitFootprint (roadmap tasks 11-B.3 and 11-V.3) ------------------
@@ -688,8 +747,8 @@ try {
     Assert-True ($null -ne $fp) "-EmitFootprint wrote nothing for an INF the gate rejects; it must be written from the parse, not the verdict."
     Assert-RowVerdict -Rows $fp -Prefix "file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbd.sys|" -Verdict "remove" `
         -What "dropping COPYFLG_NO_OVERWRITE must flip the Win98 usbd.sys rows"
-    Assert-RowVerdict -Rows $fp -Prefix "file|Windows 2000|Xhci.CopyW2K|" -Verdict "keep" `
-        -What "the untouched Windows 2000 usbd.sys rows"
+    Assert-RowVerdict -Rows $fp -Prefix "file|Windows 2000|Xhci.CopyNT|" -Verdict "keep" `
+        -What "the untouched Windows 2000 OS-file rows"
 
     # An unparseable flags field is not silently a zero.
     $badFlagInf = New-MutatedInf -Name "fp-bad-flags" -Mutate {
@@ -761,24 +820,27 @@ try {
     Assert-True (@($fp | Where-Object { $_ -eq "service|Windows 2000|xhci98|Xhci.AddService|0x00000002|remove" }).Count -eq 1) (
         "the service row must carry the AddService flags field. Rows:`n" + ($fp -join "`n"))
 
-    # Task 11-V.6's fix, asserted against the production INF by value and by
-    # ABSENCE on the other path - an assertion, not a mutation control, and
-    # named as such. A value present on only one install path is normally the
-    # exact failure this gate exists to catch (the VAL-* rules); this one is
-    # deliberate, because Windows 2000's usbport never idle-suspends this
-    # controller, so the asymmetry has to be pinned rather than merely allowed.
-    # Pinned as a whole row: the value 1 is what stops the idle suspend, and a
-    # 0 here would be a silently disabled fix that every VAL-* rule would pass.
-    # TWO rows, not one, and the count is the assertion: the value is delivered
-    # by the device install AND by right-click Install, because on Windows 98 an
+    # Task 11-V.6's fix, asserted against the production INF by value on BOTH
+    # paths - an assertion, not a mutation control, and named as such. Until
+    # 1.0.0.2 this pinned the value's ABSENCE on the Windows 2000 path, because
+    # that target's native usbport never idle-suspends this controller; the
+    # Windows XP reading of 2026-09-03 (roadmap task 19.2: usbport's
+    # SuspendController within thirty seconds, the hot-plugged mouse invisible)
+    # made it an NT-path need, so the pin inverted. Pinned as a whole row: the
+    # value 1 is what stops the idle suspend, and a 0 here would be a silently
+    # disabled fix that every VAL-* rule would pass. TWO rows per target, not
+    # one, and the count is the assertion: the value is delivered by the device
+    # install AND by right-click Install, because on Windows 98 an
     # update-over-an-existing-install bugchecks before its registry phase, so a
     # single-route value never reaches a machine that already had this driver.
-    # A drop to one row is that regression and must fail here.
-    $want11v6 = "reg|Windows 98|Xhci.AddReg.Global|HKLM|System\CurrentControlSet\Services\USB|DisableSelectiveSuspend|0x00010001|1|remove"
-    Assert-True (@($fp | Where-Object { $_ -eq $want11v6 }).Count -eq 2) (
-        "both the device install and right-click Install must write Services\USB\DisableSelectiveSuspend = 1 (task 11-V.6's fix). Rows:`n" + ($fp -join "`n"))
-    Assert-True (@($fp | Where-Object { $_ -like "reg|Windows 2000|*DisableSelectiveSuspend*" }).Count -eq 0) (
-        "the Windows 2000 path must NOT write DisableSelectiveSuspend - that target has no idle suspend to stop. Rows:`n" + ($fp -join "`n"))
+    # A drop to one row is that regression and must fail here. The SUSP-*
+    # rules in the gate say the same thing about a mutated INF; this is the
+    # production file.
+    foreach ($os in @("Windows 98", "Windows 2000")) {
+        $want11v6 = "reg|" + $os + "|Xhci.AddReg.Global|HKLM|System\CurrentControlSet\Services\USB|DisableSelectiveSuspend|0x00010001|1|remove"
+        Assert-True (@($fp | Where-Object { $_ -eq $want11v6 }).Count -eq 2) (
+            "on " + $os + " both the device install and right-click Install must write Services\USB\DisableSelectiveSuspend = 1 (task 11-V.6's fix, on the NT path since 1.0.0.2). Rows:`n" + ($fp -join "`n"))
+    }
 
     # The AddService flags field. Three cases are ways the service stops being
     # this package's to claim; two are cases that LOOK like one and are not -

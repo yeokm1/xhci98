@@ -9,25 +9,29 @@
 ; usbport.sys gets no service and no registry entry on either target: it loads
 ; because xhci98.sys imports USBPORT_RegisterUSBPortDriver from it, and the
 ; loader resolves that at image load. On Win98 the USB 2.0 stack (NUSB, or
-; SweetLow's) has already placed it in SYSTEM32\DRIVERS; on Win2000 SP4 it is
-; native. Neither is copied here. Windows ME reads the undecorated half too
-; (the same setup engine) and needs SweetLow's USB 2.0 stack first: its stock
-; USB stack has no usbport.sys, so on a stock Windows ME machine the driver
-; installs and NTKERN reports Code 2. Windows ME is supported in virtual
-; machines only (docs\contributing\build-and-test.md, "Windows ME target VM").
+; SweetLow's) has already placed it in SYSTEM32\DRIVERS, and the 9x path does
+; not copy it. On the NT targets it is the OS's own file, and an NT install
+; that never had a USB controller does not have it (Code 39, measured on
+; Windows XP on 2026-09-03), so the NT path copies it the way the two files
+; below are copied. Windows ME reads the undecorated half too (the same setup
+; engine) and needs SweetLow's USB 2.0 stack first: its stock USB stack has
+; no usbport.sys, so on a stock Windows ME machine the driver installs and
+; NTKERN reports Code 2. Windows ME is supported in virtual machines only
+; (docs\contributing\build-and-test.md, "Windows ME target VM").
 ;
-; usbd.sys and usbhub.sys ARE copied, and neither travels on this media. Both
-; are the operating system's own files, and nothing on an xHCI-only machine
-; ever places them: Windows setup copies its USB driver files only when it
-; recognises a USB controller, and an xHCI-only machine looks empty to it.
-; usbhub20.sys imports USBD.SYS on both targets, so without usbd.sys the USB
-; 2.0 root hub cannot load; usbhub.sys is Windows 98's composite parent. So
-; this INF asks the setup engine to copy each from the OS's own install source
-; (LayoutFile= below), with flag 16 so a file already on the machine is never
-; touched, and Windows 2000 gets usbd.sys only. See
-; docs\contributing\build-and-test.md, "The files the OS supplies: usbd.sys
-; and usbhub.sys". Release 1.0.0.0 carried both on the media instead, under
-; per-target names; that was withdrawn before any upload.
+; usbd.sys and usbhub.sys ARE copied on both paths, and none of the three
+; files travels on this media. All are the operating system's own, and
+; nothing on an xHCI-only machine ever places them: Windows setup copies its
+; USB driver files only when it recognises a USB controller, and an xHCI-only
+; machine looks empty to it. usbhub20.sys imports USBD.SYS on both targets,
+; so without usbd.sys the USB 2.0 root hub cannot load; usbhub.sys is Windows
+; 98's composite parent and the NT targets' hub driver. So this INF asks the
+; setup engine to copy each from the OS's own install source (LayoutFile=
+; below), with flag 16 so a file already on the machine is never touched. See
+; docs\contributing\build-and-test.md, "The files the OS supplies:
+; usbport.sys, usbd.sys and usbhub.sys". Release 1.0.0.0 carried usbd.sys
+; and usbhub.sys on the media instead, under per-target names; that was
+; withdrawn before any upload.
 ;
 ; Both halves are transcribed from the shipping reference that installs the
 ; equivalent EHCI miniport on that target:
@@ -92,9 +96,10 @@ DriverVer=09/02/2026,1.0.0.1
 [SourceDisksNames]
 1=%DiskName%,xhci98.sys,,
 
-; Only this project's two files are on the media. usbd.sys and usbhub.sys are
-; deliberately NOT listed: a file named here is fetched from this disk, and a
-; file not named here is fetched through LayoutFile from the OS's own source.
+; Only this project's two files are on the media. usbport.sys, usbd.sys and
+; usbhub.sys are deliberately NOT listed: a file named here is fetched from
+; this disk, and a file not named here is fetched through LayoutFile from
+; the OS's own source.
 [SourceDisksFiles]
 xhci98.sys=1
 xhci98.inf=1
@@ -107,7 +112,7 @@ xhci98.inf=1
 DefaultDestDir=10
 Xhci.CopyFiles=10,System32\Drivers
 Xhci.CopyW98=10,System32\Drivers
-Xhci.CopyW2K=10,System32\Drivers
+Xhci.CopyNT=10,System32\Drivers
 Inf.CopyFiles=17
 
 ; ------------------------------------------------------------------
@@ -129,8 +134,9 @@ HKR,,NTMPDriver,,xhci98.sys
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
 
-; This value lives in its own section because TWO install paths must deliver
-; it; see the block below for why one is not enough.
+; This value lives in its own section because FOUR install paths must deliver
+; it, the device install and the right-click Install on each target; see the
+; block below for why the device install alone is not enough.
 [Xhci.AddReg.Global]
 HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1
 
@@ -138,25 +144,32 @@ HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1
 ; DisableSelectiveSuspend - the only value here that is NOT ours
 ; ------------------------------------------------------------------
 ;
-; It is written from two sections on purpose. [Xhci.Dev] delivers it on a
-; device install; [DefaultInstall] delivers it on a right-click Install, which
-; touches no device. The second route exists because on Windows 98 with NUSB's
-; usbport every update-over-an-existing-install bugchecks the machine at
-; 0028:C00312EE (stopping the running driver is that fault), so an upgrade can
-; abort before its registry phase, and a value carried only by the device
-; install would then never arrive on a machine that already had this driver.
+; It is written from the device install AND the right-click Install on each
+; target. [Xhci.Dev] and [Xhci.Dev.NTx86] deliver it on a device install;
+; [DefaultInstall] and [DefaultInstall.NTx86] deliver it on a right-click
+; Install, which touches no device. The second route exists because on Windows
+; 98 with NUSB's usbport every update-over-an-existing-install bugchecks the
+; machine at 0028:C00312EE (stopping the running driver is that fault), so an
+; upgrade can abort before its registry phase, and a value carried only by the
+; device install would then never arrive on a machine that already had this
+; driver. The NT path carries the same two routes so that the two halves of
+; this file place the same value, which is the shape the INF gate checks.
 ;
-; Windows 98 only, and deliberately not on the NT path. Without it, a device
-; attached after the bus goes quiet is detected by nothing until the user
-; presses Refresh in Device Manager: the Windows 98 usbport builds (NUSB's and
-; SweetLow's alike) idle-suspend the controller within about half a second of
-; the last transfer, and a halted xHC cannot report a port change. The spec
-; gates Port Status Change Event generation on HCHalted = '0' (p.322) and says
-; EINT and PCD generate no interrupt (p.399), so unlike EHCI, which re-arms
-; USBINTR.PCD across its halt, there is no interrupt this driver could leave
-; enabled. The fix is therefore to stop the suspend happening, not to wake from
-; it. usbport reads this value itself, with RtlQueryRegistryValues(RelativeTo =
-; Services, L"usb", ...) alongside UsbBIOSx and DisableCcDetect.
+; Without it, a device attached after the bus goes quiet is detected by
+; nothing until the user presses Refresh in Device Manager: the Windows 98
+; usbport builds (NUSB's and SweetLow's alike) idle-suspend the controller
+; within about half a second of the last transfer, and Windows XP's within
+; about thirty seconds of start with nothing attached (measured 2026-09-03 in
+; a virtual machine: SuspendController, the xHC halted, a mouse hot-plugged
+; afterwards invisible), and a halted xHC cannot report a port change. The
+; spec gates Port Status Change Event generation on HCHalted = '0' (p.322)
+; and says EINT and PCD generate no interrupt (p.399), so unlike EHCI, which
+; re-arms USBINTR.PCD across its halt, there is no interrupt this driver could
+; leave enabled. The fix is therefore to stop the suspend happening, not to
+; wake from it. Every usbport build this driver has run under reads this
+; value itself, with RtlQueryRegistryValues(RelativeTo = Services, L"usb",
+; ...) alongside UsbBIOSx and DisableCcDetect; the XP-lineage builds
+; (SweetLow's, XP SP3's) carry the same query table as NUSB's.
 ;
 ; Three consequences, all stated in docs\using\release-notes.md:
 ;
@@ -171,11 +184,22 @@ HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1
 ;     removing the device does not take it with it, and this package cannot
 ;     know whether something else wanted it.
 ;
-; The NT path omits it: Windows 2000's native usbport never idle-suspends this
-; controller, so writing it there would change behaviour for no benefit. A
-; value that differs between the two paths is normally the failure shape the
-; INF gate exists to catch, which is why this one carries its reason here and
-; a gate rule of its own.
+; Until release 1.0.0.2 the NT path omitted it, because Windows 2000's native
+; usbport never idle-suspends this controller and the value would have
+; changed nothing there. Windows XP's does, so the NT path now writes it too:
+; on Windows 2000 it still changes nothing (the reading roadmap task 19.7
+; takes), and on Windows XP it is what makes hot-plug work. Services\USB does
+; not exist on a stock Windows XP install; this AddReg creates it.
+;
+; The per-controller alternative, HcDisableSelectiveSuspend under the
+; device's own key, was considered for the NT path and not taken: usbport
+; reads both, and under NUSB's build the per-controller value alone still
+; idled the controller while the global value stopped it (measured on the
+; Windows 98 guest, docs\contributing\lessons.md, "And then the whole
+; framing turned out to be wrong"); the global value is the one with a
+; measured effect on every build, XP's included, and one mechanism on both
+; paths is one thing to check. The cost, consequence 1, is the same on every
+; target.
 
 ; ------------------------------------------------------------------
 ; The two log values, on both install paths
@@ -244,8 +268,8 @@ HKR,,XhciLogDebugView,0x00010001,0
 ; ------------------------------------------------------------------
 
 [Xhci.Dev.NTx86]
-AddReg=Xhci.AddReg.NT
-CopyFiles=Xhci.CopyFiles,Xhci.CopyW2K
+AddReg=Xhci.AddReg.NT,Xhci.AddReg.Global
+CopyFiles=Xhci.CopyFiles,Xhci.CopyNT
 
 [Xhci.Dev.NTx86.Services]
 AddService=xhci98,0x00000002,Xhci.AddService
@@ -273,53 +297,79 @@ LoadOrderGroup=Base
 xhci98.sys,,xhci98.tmp
 
 ; ------------------------------------------------------------------
-; The files the OS supplies: usbd.sys on both targets, usbhub.sys on 98
+; The files the OS supplies: usbd.sys and usbhub.sys on both targets,
+; usbport.sys on the NT targets
 ; ------------------------------------------------------------------
 ;
-; Neither file is in [SourceDisksFiles], so each is resolved through
+; None of the three is in [SourceDisksFiles], so each is resolved through
 ; LayoutFile (see [Version]) and fetched from the OS's own install source
 ; under its own name: each target gets its own OS's build by construction,
 ; and the media carries no Microsoft file. The one flag is 16 =
 ; COPYFLG_NO_OVERWRITE, "do not copy if file exists on target"
-; (SETUPAPI.H). Presence is the entire requirement (usbhub20.sys needs the
-; import to resolve), so an existing file is left strictly alone whatever its
-; version: a machine that ever had a USB 1.1 controller already has both, and
-; is asked for nothing. That is deliberately stronger than the version-based
-; flags: 4 (COPYFLG_NOVERSIONCHECK) would overwrite a newer hotfix build, and
-; 32 (COPYFLG_NO_VERSION_DIALOG) still replaces an older one for no benefit.
-; The reference INFs use decimal in this field, so this does too.
+; (SETUPAPI.H). Presence is the entire requirement (an import has to
+; resolve), so an existing file is left strictly alone whatever its version:
+; a machine that ever had a USB controller Windows recognised already has
+; all of them, and is asked for nothing. That is deliberately stronger than
+; the version-based flags: 4 (COPYFLG_NOVERSIONCHECK) would overwrite a newer
+; hotfix build, and 32 (COPYFLG_NO_VERSION_DIALOG) still replaces an older
+; one for no benefit. The reference INFs use decimal in this field, so this
+; does too.
 ;
 ; What the user sees on an xHCI-only Windows 98 machine is the engine's own
 ; "Insert Disk" prompt naming the Windows 98 CD, unless the CABs are on the
 ; hard disk (OEM and Windows 98 QuickInstall installs), in which case nothing
-; is asked. Windows 2000 takes usbd.sys from its driver cache and asks for
-; nothing. Measured 2026-09-02 in the VMs; docs\using\release-notes.md states
-; it for the user.
+; is asked. The NT targets take the files from Driver Cache\i386, which every
+; install has, and ask for nothing. Measured 2026-09-02 in the VMs for
+; usbd.sys; docs\using\release-notes.md states it for the user.
 ;
 ; usbhub.sys is Windows 98's composite parent driver: USB.INF binds a
 ; multi-interface device to it, and without it every composite device on a
 ; NUSB machine stops at "USB Composite Device" with Code 2 (matched but
 ; unloadable). Under SweetLow's stack composites are parented by its
-; usbccgp.sys instead, and this copy is inert there.
+; usbccgp.sys instead, and this copy is inert there. On the NT targets the
+; same name is the OS's own hub driver, and it is delivered there too since
+; 1.0.0.2: it is not "placed by every install" as this file said until then.
+; Both NT targets' layout.inf give usbport.sys, usbhub.sys, usbehci.sys and
+; usbd.sys the text-mode disposition that does not copy them at Setup, so
+; an NT install that never had a USB controller has none of them (read from
+; the CDs on 2026-09-03; the Windows XP guest installed that day had exactly
+; that set missing, and the Phase 2d Windows 2000 listing shows usbhub20.sys
+; and no usbhub.sys).
 ;
-; It is NOT delivered to Windows 2000, deliberately. There usbhub.sys is the
-; name of the OS's own USB 1.1 hub driver and the composite parent is
-; usbccgp.sys, both placed from driver.cab by every install, so there is
-; nothing for this INF to add and asking for it would be wrong even with flag
-; 16 protecting it. That reasoning is structural rather than observed, since
-; no xHCI-only Windows 2000 vehicle exists in this project.
+; usbport.sys is the one that stops the driver loading at all: xhci98.sys
+; imports it, and an unresolved import is Code 39 with nothing written to
+; the trace (the Windows XP reading). The NT targets keep it in the same
+; driver cache (XP SP3 in sp3.cab, Windows 2000 SP4 in sp4.cab, beside
+; driver.cab), and layout.inf records that, so the same directive fetches
+; it. It is NOT on the Windows 98 path: Windows 98's layout.inf has no such
+; file, so the engine could not resolve it, and NUSB or SweetLow's stack
+; supplies it there.
+;
+; usbhub20.sys, Windows 2000's driver for the USB 2.0 root hub usbport
+; creates for this controller, is deliberately NOT here, on either path.
+; Windows 2000 SP4's own USB.INF binds USB\ROOT_HUB20 to it and its
+; [ROOTHUB2.NT] section copies usbhub20.sys from the driver cache when that
+; PDO appears (read from the SP4 CD on 2026-09-03; it is how every Phase 2
+; image got the file), so the OS places it itself; XP has no such file at
+; all (its usbport.inf binds ROOT_HUB20 to usbhub.sys and copies usbhub.sys
+; and usbd.sys with it), and a row XP's layout.inf cannot resolve has no
+; source on XP. The owner's decision of 2026-09-03: leave it out, and read
+; the root hub coming up on clean guests of both NT targets (roadmap tasks
+; 19.4 and 19.5).
 ;
 ; scripts\inf-gate\check-inf.ps1 enforces all of it: LayoutFile present,
-; neither file in [SourceDisksFiles], each path copying usbd.sys with flag 16
-; to 10,System32\Drivers, and usbhub.sys on the Windows 98 path and not on the
-; Windows 2000 one.
+; none of the three in [SourceDisksFiles], each path copying usbd.sys and
+; usbhub.sys with flag 16 to 10,System32\Drivers, usbport.sys on the NT
+; path and not on the Windows 98 one, and usbhub20.sys on neither.
 
 [Xhci.CopyW98]
 usbd.sys,,,16
 usbhub.sys,,,16
 
-[Xhci.CopyW2K]
+[Xhci.CopyNT]
+usbport.sys,,,16
 usbd.sys,,,16
+usbhub.sys,,,16
 
 [Inf.CopyFiles]
 xhci98.inf
@@ -335,7 +385,8 @@ AddReg=Xhci.AddReg.Global
 ; Win2000's setup engine keeps its own copy of an OEM INF as oemN.inf; copying
 ; this one into %17% as well would leave two INFs claiming PCI\CC_0C0330.
 [DefaultInstall.NTx86]
-CopyFiles=Xhci.CopyFiles,Xhci.CopyW2K
+CopyFiles=Xhci.CopyFiles,Xhci.CopyNT
+AddReg=Xhci.AddReg.Global
 
 ; ASCII only, and that is a parser requirement rather than a style note:
 ; [Strings] is read by both engines and this file is ANSI/CRLF for Win98's
