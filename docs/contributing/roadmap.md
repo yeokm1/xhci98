@@ -1350,519 +1350,155 @@ Records: `build-and-test.md` ("Windows ME target VM"); `lessons.md`
 
 Goal: the driver observed on a 32-bit Windows XP guest with its standing
 stated in every document that names the targets, and `1.0.1.0` cut carrying
-the two INF changes the first XP guest showed are needed on an xHCI-only NT
-machine: the operating system supplying `usbport.sys` (with `usbd.sys` and
-`usbhub.sys`) on the NT install path, and the NT path disabling usbport's
-idle suspend as the Windows 98 path already does. Both changes reach
-Windows 2000, whose every vehicle in this project has carried an EHCI that
-placed `usbport.sys` and whose native usbport never idled this controller,
-so neither gap could show there. One driver code change rides with them,
-issue 4's identity check on the EP0 REMOVE path, since the owner's decision
-of 2026-09-03 evening (task 19.7).
+the two INF changes that guest showed an xHCI-only NT machine needs (the
+operating system supplying `usbport.sys`, `usbd.sys` and `usbhub.sys` on the
+NT install path, and that path disabling usbport's idle suspend as the
+Windows 98 path already does), together with one driver change, issue 4's
+identity check on the EP0 REMOVE path.
 
-Status: closed, 2026-09-04: every task ticked, `1.0.1.0` cut that morning
-and its install route read from the asset on all five targets (task 19.9);
-the upload of `out\xhci98-1.0.1.0.zip` and the push of the branch are the
-owner's. Opened 2026-09-03, on branch `1.0.1.0` (the branch and the
-release were `1.0.0.2` until the night of 2026-09-03, when the owner
-renumbered to `1.0.1.0` because task 19.7 makes this a driver code change:
-the third field moves for code, the fourth for install media and documents;
-`src\xhci_version.h` and `DriverVer` carry the number since then, and the
-date moves at the cut). The owner asked that
-morning whether XP could be supported, installed the guest by hand the same
-afternoon (`vm\winxp.img`, snapshot `winxp-clean-install`, WHPX with ACPI
-on, the machine TCG storms), and drove the package install. The first boot
-gave Code 39 with the debug console at zero bytes, and the extracted image
-showed why: `xhci98.sys` in `system32\drivers`, XP's own `usbd.sys` stub
-beside it, and no `usbport.sys` or `usbhub.sys` anywhere, `dllcache`
-included. Relaunched with a companion EHCI, the in-box stack placed the
-port driver from `Driver Cache\i386\sp3.cab` and the same binary then ran:
-`DriverEntry`, `USBPORT_GetHciMn=10000001` (the XP lineage, accepted since
-Phase 3), `USBPORT_RegisterUSBPortDriver status=0`, `StartController` with
-QEMU's 8 ports mapped as 4 USB2 companions managed and 4 USB3 left
-unpowered, the No Op self-test matched, the `RH_*` family, the root hub
-installed by the OS with no prompt, and Device Manager reporting the
-controller working. About thirty seconds after start, with nothing
-attached, usbport called `SuspendController` and the driver halted the xHC;
-a `usb-mouse` hot-plugged after that was invisible, the reading the SweetLow
-record (`usbport-miniport-interface.md`, "The SweetLow rebuild") predicted
-for an XP-lineage usbport without `DisableSelectiveSuspend`. Nothing has
-run on XP on real hardware, and no document promotes XP until task 19.6.
+Status: closed on 2026-09-04, its second day, by the owner. It opened on
+2026-09-03 as `1.0.0.2`, when the owner asked whether XP could be supported
+and installed the guest by hand that afternoon, and was renumbered to
+`1.0.1.0` the same night because task 19.7 makes it a driver code change
+(the third field moves for code, the fourth for install media and
+documents). XP is supported in virtual machines, stated the way Windows 2000
+and Windows ME are, and `1.0.1.0` was cut and its install route read from
+the asset on all five targets. Nothing has run on XP on real hardware; the
+upload and the push are the owner's.
 
-Why a phase: `win98-wdm.md` ("What about Windows XP?") kept XP best-effort
-for cost, not for a technical obstacle, and said the static registration
-gate looked compatible; one guest confirmed the runtime side in an afternoon
-and found two install-time gaps that are the NT path's, not XP's. Fixing
-them changes the INF, the INF gate and its self-tests, the release notes'
-install procedure and limitations, and every statement about what the OS
-supplies, and it needs an install reading on an xHCI-only guest of each NT
-target, which no existing image can give: every Windows 2000 image was
-installed or first booted with an EHCI attached. That is a release's worth
-of change with an observation a release needs.
-
-What the CDs say, read statically on 2026-09-03 (7-Zip on the ISOs; nothing
-executed): both NT targets' `layout.inf` give `usbport.sys`, `usbhub.sys`,
-`usbehci.sys` and `usbd.sys` the text-mode disposition that does not copy
-them at Setup, and give `usbcamd.sys` and `usbintel.sys` the one that does;
-the XP guest had exactly the second pair and none of the first. So on both
-NT targets `usbport.sys` reaches the disk only when a USB controller's
-install pulls it from the driver cache, an xHCI-only machine has no such
-controller until this package loads, and this package cannot load without
-the file. XP SP3 keeps it in `sp3.cab`; Windows 2000 SP4's `layout.inf`
-lists it on disk 2 (`sp4.cab`, beside `driver.cab` in every install's
-`Driver Cache\i386`). The `LayoutFile` route Phase 17 built resolves through
-exactly that table, so one `usbport.sys,,,16` line on the NT copy section is
-the expected fix; the Windows 98 path gets no such line, since its
-`layout.inf` has no `usbport.sys` and NUSB or SweetLow supply it. The same
-table says `usbhub.sys` is not "placed from `driver.cab` by every install"
-as `build-and-test.md` and the INF gate's `OS-ONWIN2K` rule currently
-claim; the Phase 2d listing taken after the first EHCI boot shows
-`usbhub20.sys` and no `usbhub.sys`.
+Why a phase: `win98-wdm.md` had kept XP best-effort for cost, and the first
+guest settled the runtime side in an afternoon: the driver registered and
+ran under XP's own usbport once that file was on the disk. What the guest
+also showed were two install-time gaps that belong to the NT path, not to
+XP. An NT install that never saw a USB controller has no `usbport.sys`
+(both targets' `layout.inf` give it, `usbhub.sys`, `usbehci.sys` and
+`usbd.sys` the disposition Setup does not copy, so the file reaches the disk
+only when a controller's install pulls it from the driver cache), and on an
+xHCI-only machine the package installed but could not load, Code 39; every
+Windows 2000 vehicle in this project had carried an EHCI that hid it. And
+XP's usbport idles a controller with nothing attached about thirty seconds
+after start, after which a hot-plugged device is invisible, the reading the
+SweetLow record had predicted for an XP-lineage usbport without
+`DisableSelectiveSuspend`. Fixing both changes the INF, its gate, the
+release notes and every statement about what the OS supplies, and needs an
+install reading on an xHCI-only guest of each NT target, which no existing
+image could give.
 
 Tasks:
 
-- [x] 19.0 record what the XP guest measured before anything changes:
-  `build-and-test.md` gains "Windows XP target VM" (the recipe, WHPX not
-  TCG, the `qemu-winxp-install.cmd` and `qemu-winxp-run.cmd` launchers
-  committed as a `setup-qemu-winxp.ps1` like the Windows 2000 one, the
-  Code 39 reading and the extracted-image evidence, the suspend reading);
-  `lessons.md` gains the entry ("an NT install that never saw a USB
-  controller has no `usbport.sys`, and the EHCI in every Windows 2000
-  vehicle hid it"), with the `layout.inf` disposition table; `win98-wdm.md`
-  "What about Windows XP?" gets the runtime observation under its static
-  one; the SweetLow table's suspend row gains the XP corroboration.
-  Recorded 2026-09-03: the four documents named, `scripts\setup-qemu-winxp.ps1`
-  (the two launchers reproduced; the run launcher is xHCI-only by default
-  and `ehci` as its second argument adds the companion the spike used) and
-  its row in `test-qemu-launchers.ps1`.
-- [x] 19.1 the INF, NT path, file placement: `[Xhci.CopyW2K]` (rename to
-  `Xhci.CopyNT`, every citation with it) copies `usbport.sys,,,16`,
-  `usbd.sys,,,16` and `usbhub.sys,,,16` through `LayoutFile`, the owner's
-  instruction of 2026-09-03 ("bring in usbport.sys, usbd.sys, usbhub.sys").
-  `usbd.sys` is already there; `usbhub.sys` inverts the deliberate
-  asymmetry Phase 17 recorded (the INF's "not delivered to Windows 2000"
-  block, `build-and-test.md` "The files the OS supplies", the `OS-ONWIN2K`
-  rule), so the block's reason is rewritten from the disposition table, not
-  deleted. The Windows 98 path is untouched. The INF gate: `OS-ONWIN2K`
-  retired, `OS-MISSING` extended to the three NT files, the `OS-MEDIA`
-  message and the self-tests updated, and a rule that the Windows 98 path
-  never names `usbport.sys` (its `layout.inf` cannot resolve it).
-  INF and gate landed 2026-09-03 (`83596b1`; the documents in `d80c146`):
-  `[Xhci.CopyNT]` with the three files, `OS-ONWIN98` for `usbport.sys` off
-  the Windows 98 path, `OS-NEVER` for `usbhub20.sys` on no path (the
-  owner's decision that evening: Windows 2000's own `USB.INF` places it
-  when usbport creates the root hub PDO, XP has no such file, and clean
-  guests of both NT targets read the root hub coming up). Read 2026-09-03
-  from the 19.4 package install on the clean snapshot with no EHCI: no CD
-  prompt, and `system32\drivers` afterwards holding `usbport.sys` (143,872
-  bytes) and `usbhub.sys` (59,520) with the SP3 cab's stamp beside XP's
-  4,736-byte `usbd.sys` and `xhci98.sys`, the driver loaded on that boot.
-- [x] 19.2 the INF, NT path, idle suspend: XP's usbport reads
-  `Services\USB\DisableSelectiveSuspend` through the same query table
-  NUSB's build has, so the value the 9x path writes is written on the NT
-  path too, from `[Xhci.Dev.NTx86]` and `[DefaultInstall.NTx86]`; the
-  INF's block that says "deliberately not on the NT path" and the gate rule
-  that enforces the asymmetry are rewritten to say why it is now symmetric
-  (Windows 2000's native usbport never idles this controller, so the value
-  changes nothing there; XP's does within thirty seconds). The per-controller
-  `HcDisableSelectiveSuspend` alternative is recorded as considered and
-  why the global value was kept, or taken instead, with the reason. The
-  observation that closes this task: on the XP guest with the value present,
-  a `usb-mouse` hot-plugged a minute after a cold start binds. Observed
-  2026-09-03, before the INF change: the owner created `Services\USB`
-  (absent on a stock XP install; only the package's `AddReg` ever makes it)
-  with `DisableSelectiveSuspend=1` in Registry Editor, shut down, cold
-  relaunch; no `SuspendController` in the first two minutes, then the
-  hot-plugged mouse: port status change on port 5, slot enabled,
-  `SET_ADDRESS` intercepted, `devices addressed` 1, `endpoints opened` 1,
-  "USB Human Interface Device" in Device Manager, interrupt transfers
-  submitted and completed while the pointer was driven, no refusal or
-  failure counter moved. What remains for the task is the INF and gate
-  change itself, then the same reading from a package install.
-  INF and gate landed 2026-09-03 (`83596b1`): `Xhci.AddReg.Global` from
-  `[Xhci.Dev.NTx86]` and `[DefaultInstall.NTx86]`, `SUSP-MISSING` /
-  `SUSP-DUP` / `SUSP-VALUE` requiring the value once per route on both
-  targets; `HcDisableSelectiveSuspend` recorded in the INF as considered
-  and not taken (under NUSB the per-controller value alone still idled the
-  controller). Read 2026-09-03 from the 19.4 package install:
-  `Services\USB\DisableSelectiveSuspend` present in Registry Editor with
-  nothing hand-set, no `SuspendController` in the two minutes after start,
-  and the mouse hot-plugged after them bound as before.
-- [x] 19.3 the XP readings, the owner at the console, the qemu flavour: a
-  HID mouse, a `usb-storage` device formatted, written and read back,
-  Device Manager disable, enable, remove and rescan (the door sequence that
-  bugchecks Windows 98 under NUSB and that the SweetLow rebuild survives),
-  and a `usb-audio` composite. Recorded in `build-and-test.md`, "Windows XP
-  target VM", counters named as in 18.3.
-  Read 2026-09-03 on the `p194` install. The door sequence on the first
-  boot, the mouse attached: Disable ran `AbortTransfer`, `CloseEndpoint`,
-  `DisableInterrupts` and `StopController`, the quiesce halted the
-  controller and XP unloaded the driver; Enable was a fresh `DriverEntry`,
-  registration, `StartController` and the mouse re-addressed by itself;
-  Uninstall and rescan the same with the Found New Hardware wizard back
-  and the root hub recreated; no bugcheck, no bang, nothing refused. The
-  second boot on the `p3=0` launcher (the default 4+4 layout put the
-  SuperSpeed-capable disk on an unmanaged USB3 port, `19.3` is why the
-  launcher changed): `usb-storage` bound as "USB Mass Storage Device",
-  formatted as `F:`, a file written and read back, `endpoints opened` 2 and
-  3; `usb-audio` bound as "USB Composite Device" with "USB Audio Device"
-  under Sound, its isochronous endpoint opened with the interval derived
-  from the descriptor (`endpoints opened` 4). Both bound on their second
-  attach only: on the first, XP reset the
-  port after the configuration descriptor, re-created the device through
-  a second device handle and removed the first handle's EP0 last, which
-  this driver's REMOVE path reads as the live pipe closing; the record was
-  refused for retry until the progress detector failed it (`records failed
-  - no progress` 2). Recorded as `docs/issues/04-xp-restore-device-ep0-remove.md`,
-  open; a replug after a pause is the workaround. The owner's decision that
-  afternoon was no driver change in this release; reversed the same
-  evening, the fix is task 19.7.
-- [x] 19.4 the fix observed where the gap is, XP: revert `vm\winxp.img` to
-  `winxp-clean-install`, boot the run launcher with NO EHCI, install the
-  `1.0.1.0` package from the transfer drive, and read: no CD prompt (the
-  cabs are in the driver cache), `usbport.sys` placed, the driver loaded on
-  the first boot, root hub up, then 19.2's hot-plug. This is the reading no
-  earlier image could give, and the one the release claims.
-  Read 2026-09-03 (run tag `p194`, host `FW-W11P-YKM` with no XP ISO on
-  it, the owner driving the wizard; the package the 1.0.1.0-state INF with
-  the qemu-flavour binary still versioned 1.0.0.1): Have Disk from `E:\`
-  finished with "installed and ready to use", no CD prompt, no reboot
-  asked; `DriverEntry`, `USBPORT_GetHciMn=10000001`,
-  `USBPORT_RegisterUSBPortDriver status=0`, `StartController` (8 ports, 4
-  USB2 managed, 4 USB3 unpowered), the No Op self-test matched,
-  `RH_GetRootHubData`, "USB Root Hub" installed by XP's own `usbport.inf`
-  with no prompt, the controller and hub clean in Device Manager;
-  `usbport.sys` and `usbhub.sys` in `system32\drivers` from the SP3 cab and
-  `DisableSelectiveSuspend` under `Services\USB`, both placed by the
-  package; no `SuspendController` in two minutes idle; then `device_add
-  usb-mouse` with no `port=`: port status change on port 5, `SET_ADDRESS`
-  intercepted, `devices addressed` 1, `endpoints opened` 1, "USB Human
-  Interface Device", interrupt transfers completing while the pointer was
-  driven, every refusal and failure counter at zero, and the counters that
-  did move identical to the hand-set `dss` run's.
-- [x] 19.5 the fix observed where the gap is, Windows 2000: a fresh Windows
-  2000 SP4 install with no USB controller attached (the existing install
-  launcher, a throwaway image, the owner's key), a directory listing before
-  any controller is attached (the measurement `lessons.md` records as
-  inferred: `usbport.sys` absent), then the `1.0.1.0` package installed
-  with the xHCI alone: `usbport.sys` placed from `Driver Cache`, root hub
-  (`usbhub20.sys`, placed by the OS's own `USB.INF` when usbport creates the
-  root hub PDO, or not: this is the reading) and a HID mouse. If the root
-  hub does not come up, the phase records what the OS did not place and the
-  INF line that follows.
-  The owner's decision of 2026-09-03 evening, Setup at its final tasks on
-  `vm\win2k-xonly.img`: this install is the new fresh Windows 2000 base,
-  `win2k-xonly.img @ win2k-xonly-clean-install` replacing `win2k.img @
-  phase2b-clean` in `2b-fresh`'s `CloneFrom`, so that 19.8's Windows 2000
-  leg installs the asset on a guest that never had another controller.
-  `scripts\setup-qemu-win2k-xonly.ps1` commits the two launchers with a row
-  in `test-qemu-launchers.ps1`; `build-and-test.md` ("Windows 2000
-  xHCI-only VM") and design record 09, section 3.1, carry the change.
-  The listing before any controller, read 2026-09-03 from the
-  `win2k-xonly-clean-install` snapshot itself rather than on a boot
-  (`qemu-img convert -l <snapshot> -O raw`, then 7-Zip through the MBR and
-  the NTFS volume; nothing executed, so the state is the one Setup left):
-  `system32\drivers` holds `usbcamd.sys` (23,888 bytes) and `usbintel.sys`
-  (15,120) and no other `usb*.sys`. No `usbport.sys`, no `usbhub.sys`, no
-  `usbhub20.sys`, and no `usbd.sys` either, which the expectation had listed
-  as present from the XP reading (XP's 4,736-byte stub has no Windows 2000
-  counterpart); `system32\dllcache` has no `usb*.sys` at all. Where they
-  are: `Driver Cache\i386\sp4.cab` carries `usbport.sys` (138,288),
-  `usbhub.sys` (40,176), `usbhub20.sys` (49,776), `usbd.sys` (20,688) and
-  `usbehci.sys` (19,728), all stamped 2003-06-19, and `driver.cab` the RTM
-  `usbd.sys` (20,592) and `usbhub.sys` (40,016) beside the two files Setup
-  did copy. Setup's own `setupapi.log` installed the USB device class and no
-  USB device. So the package install still to be taken has to place three
-  files from the cache, not two, and the third is the one whose absence
-  `lessons.md` records as the `c000026c` boot bugcheck (`usbhub20.sys`
-  imports `USBD.SYS`): a root hub that comes up, survives a restart and
-  shows `usbd.sys` at 20,688 bytes is the reading, and a yellow bang on the
-  hub is shut down and re-boot with `none`, never restart.
-  The install, read 2026-09-03 17:16-17:27 (run tag `p195`, host
-  `FW-W11P-YKM`, no Windows 2000 ISO attached so no CD prompt could have
-  been satisfied, the owner driving the wizard; the package the
-  1.0.1.0-state INF with the qemu-flavour binary built 15:33, still
-  versioned 1.0.0.1): the Found New Hardware wizard was on the desktop at
-  the first boot with the xHCI alone, Have Disk from the transfer drive
-  finished with no CD prompt and no reboot, and within twenty seconds the
-  debug console carried `DriverEntry`, `USBPORT_GetHciMn=57324B30` (the
-  Windows 2000 SP4 value both primary targets return),
-  `USBPORT_RegisterUSBPortDriver status=00000000`, `StartController` (four
-  USB 2.0 ports, all managed), the No Op self-test matched, then
-  `RH_GetRootHubData`, the four `RH_GetPortStatus` and
-  `RH_SetFeaturePortPower` calls, `RH_GetHubStatus` and `RH_EnableIrq`, and
-  Device Manager showed "USB 2.0 Root Hub" under the controller with no
-  mark on either: the OS's own `USB.INF` placed `usbhub20.sys`, the
-  reading the task existed for. `device_add usb-mouse` with no `port=`
-  from the monitor: three port status change events on port 1, `slots
-  enabled` 1, `SET_ADDRESS interceptions` 1, `devices addressed` 1,
-  `endpoints opened` 1, a "Human Interface Devices" branch in Device
-  Manager, `transfers submitted` 0x35 and `completed` 0x33 while the
-  pointer was driven from the monitor, and `transfers refused for retry`,
-  `records failed - no progress`, every `EP0 opens refused`, `endpoint
-  refusals` and `device command failures` counter at zero. `dir
-  %windir%\system32\drivers\usb*.sys` in the guest afterwards, six files:
-  `usbcamd.sys` 23,888 and `usbintel.sys` 15,120 (the 20-06-03 in-box
-  pair) and, all stamped 19-06-03 12:05p from `sp4.cab`, `usbd.sys` 20,688,
-  `usbhub.sys` 40,176, `usbhub20.sys` 49,776 and `usbport.sys` 138,288;
-  `xhci98.sys` 156,784 beside them. Shutdown from the Start menu:
-  `SuspendController` then `StopController`, the teardown clean. The
-  install half of the Windows 2000 inference in `lessons.md` is measured
-  with this; no `SuspendController` arrived while the guest idled, as
-  Windows 2000's usbport never has.
-- [x] 19.6 the tier, decided by the owner: supported in virtual machines,
-  stated the way Windows 2000's and Windows ME's status is, or something
-  narrower; then every document that names the targets: `AGENTS.md` (Quick
-  Reference, the secondary-target row), `README.md`, the release notes
-  (requirements, install steps for XP, the limitations), both issue forms,
-  the INF header comment, the generated `readme.txt` template in
-  `make-release.ps1`, the acceptance test rows, `win98-wdm.md` ("What about
-  Windows XP?", which currently argues the cost of promotion), and the
-  import gate's documentation if XP evidence is added (XP exports a
-  superset; none is required to load).
-  Decided 2026-09-03 night: supported in virtual machines, stated the way
-  Windows 2000 and Windows ME are. Swept the same night: `AGENTS.md` (the
-  target paragraph, and the Quick Reference, whose secondary-target row is
-  gone and whose "Supported in VM" row names XP), `README.md`, the release
-  notes ("What this is", the unsigned-driver line, the requirements table,
-  the install steps and the files-Windows-supplies paragraphs), the INF
-  header comment, the `readme.txt` template (title, section 2, section 3's
-  `usbport.sys` and driver-cache entries, a section 4 block), the acceptance
-  test (rows 4.6 and 7.9-7.12), `win98-wdm.md` ("What about Windows XP?":
-  the position, the static-pass close and the guest paragraph) and the
-  opening of `build-and-test.md`'s "Windows XP target VM". The issue forms
-  already list 32-bit XP and are unchanged; the import gate gains no XP
-  evidence, none being required to load.
-- [x] 19.7 issue 4, the one driver change this release carries (the owner's
-  decision of 2026-09-03 evening, reversing the afternoon's): the identity
-  check in `XhciSlotSetEndpointState`'s REMOVE branch for the default pipe
-  (`docs/issues/04-xp-restore-device-ep0-remove.md`, section 4). A REMOVE
-  whose extension is neither NULL nor the one the record is bound to names
-  a superseded handle: clear that extension's own open flag, count it, and
-  leave the record's binding, its owed invalidate, its EP0 queue and any
-  pending SET_ADDRESS to the live handle. The same-extension reopen every
-  9x and Windows 2000 run performs arrives with the record bound to that
-  very extension and takes the existing path unchanged. In this order:
-  first the confirming run on the XP guest (a cold boot with `usb-storage`
-  as the first device, so the `SetEndpointState` print budget is intact
-  and the REMOVE on the superseded extension is seen rather than inferred
-  from the `CloseEndpoint` after it); then the host vector (enumerate and
-  address a device, reset its port again, open EP0 through a second static
-  extension at address 0 on the `xhciDevOpenOnRootPort` path, REMOVE the
-  first, and check that the flag, the pointer and a submit through the
-  second all survive); then the change, `build-driver.cmd all` with every
-  gate green and `vm\xferxp` restaged; then the XP reading (`usb-storage`
-  and `usb-audio` binding on their first attach, the new counter moving,
-  `records failed - no progress` at zero); then both primary targets on
-  the same binary, `run-matrix.ps1` on the 2a and 2b guests and the
-  Windows 98 door sequence, their reading being that nothing changed. The
-  issue page moves to fixed with the run named, the release notes carry no
-  XP first-attach limitation, and 19.9's history entry names the change.
-  Progress 2026-09-03 evening (third session). The confirming run (tag `i4`,
-  a cold boot of the `p194` install, `usb-storage` the first device on port
-  1 and `usb-audio` the second on port 2, the `SetEndpointState` print
-  budget intact for the first) did NOT reproduce the two-handle restore:
-  both bound on their first attach with one same-extension EP0 reopen each
-  (`820E2FB8` removed and reopened at address 1), no second port reset,
-  `slots reset to Default` 0, `records failed - no progress` 0, every
-  refusal counter 0, Explorer opening `F:`. What the three `p194` first
-  attaches had that these two lacked: each was also the first-ever
-  installation of its class driver (`usbstor.sys`, `usbaudio.sys` and their
-  companions from the SP3 cab) on that XP install, and every attach with
-  the class driver already present, the `p194` replugs included, has
-  enumerated cleanly. That is a correlation on five attaches, not a
-  mechanism; the confirming reading is owed from the clean snapshot with
-  the package reinstalled (issue page, section 5). The host vector
-  (`test_slot_ep0_remove_superseded_handle`, `test\test_init.c`) models the
-  restore from the `p194` trace and failed on the existing REMOVE path
-  exactly as the page describes (the binding dropped, the pending
-  SET_ADDRESS completed as cancelled, every submit through the live handle
-  refused); it passes with the change. The change is in the tree:
-  `XhciSlotSetEndpointState`, REMOVE branch, with the counter
-  `Ep0RemovesSuperseded` ("EP0 removes on a superseded handle",
-  `scripts\vm-matrix\offsets.txt` regenerated), `build-driver.cmd all` and
-  every gate green, `vm\xferxp` restaged (the qemu binary built 19:34, still
-  versioned 1.0.0.1; restaged again at 20:24 as 1.0.1.0).
-  The XP reading, 2026-09-03 night (fifth session, tag `i4b`): `vm\winxp.img`
-  reverted to `winxp-clean-install` (the `p194` state kept as snapshot
-  `p194-i4-installed`), the `1.0.1.0` package installed by the owner through
-  Have Disk with the xHCI alone, then `usb-storage` attached first and
-  `usb-audio` second from the monitor. Both took the two-handle restore
-  that `i4` had not shown, and both bound on their first attach: storage
-  through a second EP0 extension at address 0 after a further port reset
-  (`slots reset to Default` 1, addressed 2, `EP0 removes on a superseded
-  handle` 1, then the `CloseEndpoint` of the first extension, `endpoints
-  opened` 2, Explorer opening `F:`), audio the same way (`slots reset to
-  Default` 2, addressed 4, the counter at 2, the isochronous endpoint
-  opened with its interval derived, `endpoints opened` 3), Device Manager
-  naming "USB Mass Storage Device", "USB Composite Device" and "USB Audio
-  Device" with no mark on any; `records failed - no progress` 0, `transfers refused for retry` 0, every refusal counter
-  0. Logs `vm\winxp-debugcon.i4b.log` and `vm\winxp-qemu-trace.i4b.log`;
-  the issue page is at fixed.
-  The primary targets, 2026-09-03 night (sixth session, host `FW-W11P-YKM`;
-  the 20:24 binary copied over the installed one in `vm\win98.img` and
-  `vm\win2k.img` on a `prepare-image.ps1 -Boot -Xfer` pass each, the
-  harness then reading `MiniPortExtensionSize` 90928 on both).
-  `run-matrix.ps1` on 2b (`out\phase10\matrix-19.7-2b.txt`): 11 PASS, 6
-  NODRIVER, 0 FAIL, exit code 0, the same seventeen rows as the 1.0.0.0
-  post-release run gave Windows 2000. On 2a (`matrix-19.7-2a.txt`, then
-  two more passes of the `other` group, `matrix-19.7-2a-other.txt` and
-  `-other2.txt`): every row the guest enumerated read as the Phase 10
-  baseline on this same untaught image, keyboards and mice at both speeds,
-  `usb-storage`, `usb-bot` and the hub PASS, `usb-net`, `usb-uas`,
-  `usb-audio` and `usb-ccid` NODRIVER, `usb-serial` and `usb-braille` FAIL
-  as in Phase 10; the rows that went unaddressed in a pass sat behind
-  Windows 98's modal Add New Hardware Wizard for the row before (the
-  harness's screenshots show the RNDIS and USB SERIAL wizards up, the
-  console every port change announced to usbport), the guest condition
-  `scripts\vm-matrix\README.md` records and not the driver; and
-  `u2f-emulated` was addressed but not bound in the third pass (PASS in
-  Phase 10 on this image, PASS on the taught fresh clone in Phase 16), a
-  row to read again on 19.8's taught clone, where these classes raise no
-  wizard. The Windows 98 door sequence, on the SweetLow guest where it is
-  survivable (`vm\sweetlow-2a.img`, the same binary copied in, the mouse
-  attached at boot; `out\phase10\prep-2a-sweetlow-debugcon-19.7-door.log`):
-  Disable ran `AbortTransfer`, `DisableInterrupts` and `StopController`
-  with the controller halted at `USBSTS=1` and eight ports unpowered;
-  Enable was `StartController` on the same extension and the mouse
-  re-addressed by itself; Remove the same teardown; Refresh a fresh
-  `DriverEntry`, registration and `StartController` on a new extension
-  with the mouse bound again; no crash, the 2026-09-02 shape exactly. `EP0
-  removes on a superseded handle` 0, `records failed - no progress` 0 and
-  `transfers refused for retry` 0 in every group on both targets and
-  through the door sequence: the two-handle restore is XP's alone, and
-  nothing changed on the primary targets.
+- [x] 19.0 the XP guest recorded before anything changed: `build-and-test.md`
+  "Windows XP target VM" (WHPX, the two launchers from
+  `scripts\setup-qemu-winxp.ps1`, the Code 39 reading, the suspend reading),
+  `lessons.md` with the `layout.inf` disposition table, `win98-wdm.md`, and
+  the SweetLow table's suspend row. Done 2026-09-03.
+- [x] 19.1 the INF, NT path, file placement: `[Xhci.CopyNT]` copies
+  `usbport.sys`, `usbd.sys` and `usbhub.sys` through `LayoutFile` (the
+  owner's instruction); in the gate `OS-ONWIN2K` retired, `OS-MISSING`
+  extended to the three, `OS-ONWIN98` keeping `usbport.sys` off the Windows
+  98 path (its `layout.inf` cannot resolve it), `OS-NEVER` for `usbhub20.sys`
+  on no path (the owner's decision: Windows 2000's own `USB.INF` places it
+  when usbport creates the root hub PDO). Landed 2026-09-03 (`83596b1`).
+- [x] 19.2 the INF, NT path, idle suspend: `Services\USB\DisableSelectiveSuspend`
+  written from `[Xhci.Dev.NTx86]` and `[DefaultInstall.NTx86]` as the 9x
+  path has done since `1.0.0.0`, the gate requiring it once per route on
+  both targets; `HcDisableSelectiveSuspend` considered and not taken (under
+  NUSB the per-controller value alone still idled the controller). Read
+  first with the value hand-set, then from the 19.4 package install: no
+  `SuspendController` in two minutes idle, and a mouse hot-plugged after
+  them bound.
+- [x] 19.3 the XP readings on the qemu flavour (run `p194`): the Device
+  Manager door sequence (disable, enable, remove, rescan) clean, where
+  Windows 98 under NUSB bugchecks; `usb-storage` formatted, written and read
+  back; `usb-audio` bound as a composite with its isochronous endpoint
+  opened from the descriptor. Both bound on their second attach only: on
+  the first, XP re-created the device through a second usbport device
+  handle and removed the first handle's EP0 last, which the REMOVE path
+  read as the live pipe closing
+  (`docs/issues/04-xp-restore-device-ep0-remove.md`). The default 4+4 port
+  layout had put the SuperSpeed-capable disk on an unmanaged USB3 port, so
+  the launcher defaults to `p3=0` since.
+- [x] 19.4 the fix observed on XP: `winxp-clean-install`, the launcher with
+  no EHCI, Have Disk from the transfer drive: no CD prompt, no reboot,
+  `usbport.sys` and `usbhub.sys` placed from `sp3.cab` beside XP's
+  `usbd.sys` stub, the driver loaded on that boot, "USB Root Hub" installed
+  by XP's own `usbport.inf`, the value under `Services\USB`, no
+  `SuspendController` in two minutes, and the hot-plugged mouse bound.
+- [x] 19.5 the fix observed on Windows 2000: a fresh SP4 install with no USB
+  controller (`vm\win2k-xonly.img`, `win2k-xonly-clean-install`, the new
+  `2b-fresh` base; `scripts\setup-qemu-win2k-xonly.ps1`). Its disk, read
+  from the snapshot without a boot: `usbcamd.sys` and `usbintel.sys` and no
+  other `usb*.sys`, not even `usbd.sys`; the four stack files in `sp4.cab`.
+  The package install with the xHCI alone (run `p195`): no CD prompt, no
+  reboot, `usbport.sys`, `usbd.sys` and `usbhub.sys` from the cab, "USB 2.0
+  Root Hub" up through the OS's own `USB.INF` placing `usbhub20.sys`, a
+  mouse bound, every refusal counter at zero.
+- [x] 19.6 the tier, decided by the owner on 2026-09-03 night: supported in
+  virtual machines, stated the way Windows 2000 and Windows ME are, in
+  `AGENTS.md`, `README.md`, the release notes, the INF header comment, the
+  `readme.txt` template, the acceptance test (rows 4.6 and 7.9 to 7.12),
+  `win98-wdm.md` and `build-and-test.md`.
+- [x] 19.7 issue 4, the one driver change (the owner's decision of 2026-09-03
+  evening, reversing the afternoon's): in `XhciSlotSetEndpointState`'s
+  REMOVE branch for the default pipe, a REMOVE whose extension is neither
+  NULL nor the one the record is bound to names a superseded handle, so it
+  closes that extension alone and counts `Ep0RemovesSuperseded`, leaving
+  the binding, the owed invalidate, the EP0 queue and any pending
+  SET_ADDRESS to the live handle. Two host vectors model the `p194` order
+  and failed on the old path exactly as the run did (`c1ed2cb`). The closing
+  reading (run `i4b`, a clean-snapshot reinstall): the restore recurred on
+  the first attach of both `usb-storage` and `usb-audio`, the counter moved
+  to 1 and 2, and both bound with every failure counter at zero. Both
+  primary targets on the same binary (`run-matrix.ps1` on 2a and 2b, the
+  Windows 98 door sequence on the SweetLow guest; `out\phase10\matrix-19.7-*.txt`
+  and `prep-2a-sweetlow-debugcon-19.7-door.log`): the counter at zero
+  throughout, nothing changed. What the runs left is a correlation: every
+  first attach that took the restore path was also the first-ever install
+  of that class driver.
 - [x] 19.8 the primary targets unchanged: `run-matrix.ps1 -PostRelease` on
-  the fresh 2a and 2b clones as Phase 16 ran it, the 2b clone re-cloned
-  (`-Clone -FreshCopy`) from the xHCI-only base 19.5 made, the Windows 2000
-  leg now also carrying the `DisableSelectiveSuspend` value and both legs
-  19.7's change; the reading is that nothing changed. The install from the
-  asset on every target, the 9x routes under NUSB, SweetLow and Windows ME
-  among them, is 19.9's last clause (reworded 2026-09-04, by the owner's
-  decision, from a wording that listed those legs here as well as there).
-  The two fresh clones were re-taken on 2026-09-03 night (`-Clone
-  -FreshCopy` on `2a-fresh` and `2b-fresh`, the latter from the xHCI-only
-  base for the first time); the prep boots, the stamps and the run are owed.
-  The fresh-clone half, 2026-09-04 (host `FW-W11P-YKM`, the owner at the
-  console). Windows 98: the package installed from the transfer drive on
-  the first prep boot, the guest shut down and booted again, the driver up
-  (`DriverEntry` from the 20:24 build, `MiniPortExtensionSize` 90928, the
-  root hub with eight managed ports), then thirteen classes taught at port
-  2 in turn, the owner clicking each wizard and the monitor driven from the
-  harness, the tablets left out as README note 13 says and audio attached
-  once and last: fourteen devices addressed, twelve endpoints opened, every
-  refusal and failure counter at zero, and the stamp `base-1.0.1.0-qemu`
-  taken after a Start-menu shutdown. Windows 2000: Have Disk from the
-  transfer drive at the Found New Hardware wizard, no CD prompt and no
-  reboot, the same console shape as 19.5 and the OS binding the mouse
-  itself, `SuspendController` then `StopController` on the shutdown, the
-  stamp taken at "It is now safe to turn off". The run then went twice.
-  The first, both targets side by side, read every row as Phase 16 had
-  except `usb-audio/fs`, whose `device_add` returned no monitor prompt
-  within the harness's 16 s on either target, so the row read ERROR with no
-  reading taken, the group's console showing the device arriving after the
-  timeout: PASS on 2a-fresh, where the row is declared able to wedge the
-  guest, and FAIL on 2b-fresh, where it is not. The cause was proved
-  without a guest: `device_add usb-audio` names no audio backend, QEMU
-  opens its default host backend on the main loop, and on this host that
-  night, with no playback endpoint in the OK state, the open took over 16
-  s; the same command with `-audiodev none` answered in about a second,
-  which is what `prepare-image.ps1` has declared since repo audit D4 and
-  why the prep pass had attached audio instantly. The run now declares the
-  same backend (`run-matrix.ps1`, the `usb-audio` row's `AddArgs`,
-  `scripts\vm-matrix\README.md` note 16; `selftest.ps1` 196 checks). The
-  second run, on that harness: `2b-fresh` PASS, 17 rows, 6 NODRIVER
-  expected, 0 not reached, 0 against, 1:16:09, the report identical to
+  freshly re-taken 2a and 2b clones, 2b from the xHCI-only base: `2b-fresh`
+  PASS, 17 rows, 6 NODRIVER expected, 0 against, the report identical to
   Phase 16's outside its header; `2a-fresh` PASS, 17 rows, 5 NODRIVER
-  expected, 3 not reached (the two tablets and `usb-hub/churn`, the
-  declared exclusions), 0 against, 0:57:09, and identical to Phase 16's
-  except that the `usb-uas/fs` note now names its `ExpectNoDriver` entry
-  and that the `usb-audio/fs` replug leg PASSED (addressed, slot and
-  endpoints opened each +1) where Phase 16 read the Insert Disk FAIL the
-  release notes carry as the USB Audio limitation: one better reading on a
-  freshly taught clone, recorded here and not promoted. Both reports are
-  `docs\contributing\runs\run-19-post-release\`. Nothing changed on the
-  primary targets; the install-from-asset legs wait for 19.9's asset.
-- [x] 19.9 the release date in `src\xhci_version.h` and the INF's
-  `DriverVer` (the number `1.0.1.0` has been there since 2026-09-03), the
-  release notes' opening line, the `releases/history.md` entry (XP; `usbport.sys`,
-  `usbd.sys`, `usbhub.sys` from the OS on the NT path; idle suspend
-  disabled on the NT path; 19.7's change to the EP0 REMOVE path, issue 4),
-  then the cut with `make-release.ps1`, every gate green, and the install
-  route checked from the asset on every target as 18.7 did: Windows 98 SE
-  under NUSB and under SweetLow, Windows ME, Windows 2000 and XP.
-  Drafted 2026-09-03 night: the history entry and the release notes'
-  opening line, dated 2026-09-02 with the INF until the cut moves all three.
-  The cut, 2026-09-04 (commit `9cf9dda`): the date moved in the four places
-  that state it (`src\xhci_version.h`, the INF's `DriverVer`, the history
-  heading and the release notes' quoted `DriverVer`); `build-driver.cmd
-  all` at that header, every gate green; `XHCISNAP.EXE` and `XHCIQUAL.EXE`
-  rebuilt after the header, which `make-release.ps1` counts as a source of
-  both and refuses stale (a rehearsal into a scratch directory the same
-  night caught them one day old); then `make-release.ps1`, exit 0:
-  `releases\1.0.1.0\` with `release\` and `debug\` (two files each), the
-  two tools with their readmes and NOTICEs, `LICENSE` and `readme.txt`,
-  and the upload set `out\xhci98-1.0.1.0.zip` (thirteen files, no
-  Microsoft file; 248,457 bytes at the cut, 244,237 after the re-cut
-  `59ae951` the same morning, before any upload, for the readme's opening
-  paragraph: XP is incidental support, the add-in card claim dropped; the
-  driver and tool files are byte-identical across the two cuts). The
-  install route from that asset, the owner at the console, the harness
-  attaching and reading only. Windows 98 SE under NUSB (2026-09-04 morning):
-  a fresh `post-nusb` clone of `win98.img` booted with the asset's
-  `release\` directory beside the qemu package on the transfer drive
-  (`-XferAdd`); Update Driver pointed at `D:\RELEASE`, the `usbd.sys`
-  prompt answered with the attached CD, restart; on the next boot the root
-  hub's wizard ran on its own and Device Manager read the controller and
-  the root hub with no mark and the pre-attached mouse under Human
-  Interface Devices (the Unknown Device beside the PCI Ethernet Controller
-  is the base clone's, seen on the 19.8 teaching pass); shut down from the
-  Start menu. Windows 98 SE under SweetLow (the same morning): the installed
-  `sweetlow-2a.img` booted the same way, a USB mouse attached at boot;
-  Update Driver over the installed driver, pointed at `D:\RELEASE`, no
-  prompt, restart; controller and root hub with no mark. The mouse first
-  read as an Unknown Device under Mouse with the Human Interface Devices
-  branch present, on the 09-03 binary before the update as well as after
-  it: the guest's own HID-mouse class install, not the enumeration; the
-  owner removed that entry and refreshed, and the mouse came up as
-  HID-compliant mouse. Windows ME (the same morning): `vm\winme.img` as
-  the 18.x install left it, SweetLow's stack, booted the same way with a
-  USB mouse attached at boot; Update Driver pointed at `D:\RELEASE`, no
-  prompt; controller and root hub with no mark, HID-compliant mouse under
-  Mouse, the base's two unclaimed PCI devices the only marks. Windows 2000
-  SP4 (the same morning): a fresh clone of the xHCI-only base 19.5 made
-  (`win2k-xonly.img`, `win2k-xonly-clean-install`, no USB stack file on
-  its disk), booted the same way with a USB mouse attached at boot; Update
-  Driver, Have Disk at `D:\RELEASE`, no prompt for media; controller and
-  USB Root Hub with no mark, USB Human Interface Device and HID-compliant
-  mouse bound, the base's Ethernet and VGA controllers the only marks.
-  Windows XP (the same morning): `vm\winxp.img` at `winxp-clean-install`
-  (the i4b state kept as `pre-19.9-xp-asset-2026-09-04`), the run launcher
-  with the xHCI alone, the asset's `release\` on the transfer drive; Have
-  Disk at `E:\RELEASE`, no prompt for media, no reboot; a USB mouse
-  attached from the monitor after the install bound with no Refresh
-  (Found New Hardware, HID-compliant mouse), then `usb-storage` on its
-  first-ever attach on that install: USB Mass Storage Device, the disk and
-  its volume installed in turn, ready to use, the device's address never
-  moving; controller and USB Root Hub with no mark, the base's VGA
-  controller the only one. Screens in `out\post-release\1.0.1.0\asset-legs\`.
+  expected, 3 not reached (the declared exclusions), 0 against, identical
+  to Phase 16's except that the `usb-audio/fs` replug leg passed where
+  Phase 16 read the Insert Disk failure the release notes carry, one better
+  reading recorded and not promoted. A first run had read that row ERROR on
+  both targets because `device_add usb-audio` with no `audiodev=` opened
+  QEMU's default host backend and stalled the monitor; the run declares
+  `-audiodev none` since. Reports in
+  `docs\contributing\runs\run-19-post-release\`.
+- [x] 19.9 the cut, 2026-09-04 (`9cf9dda`; re-cut `59ae951` the same morning
+  for the readme's opening paragraph, before any upload): the date in
+  `src\xhci_version.h`, the INF's `DriverVer`, the history heading and the
+  release notes; `build-driver.cmd all` and both tools rebuilt after the
+  header, every gate green, `make-release.ps1` exit 0: `releases\1.0.1.0\`
+  and `out\xhci98-1.0.1.0.zip` (244,237 B, thirteen files, no Microsoft
+  file). The install route from that asset the same morning, the owner at
+  the console: Windows 98 SE under NUSB (a fresh `post-nusb` clone) asked
+  for `usbd.sys` with the CD prompt and came up with the root hub clean and
+  the mouse bound; Windows 98 SE under SweetLow (over the installed driver)
+  and Windows ME asked for nothing, controller, root hub and HID clean;
+  Windows 2000 (a fresh clone of the xHCI-only base) asked for nothing,
+  root hub and mouse working; XP (`winxp-clean-install`) asked for nothing,
+  a mouse attached after the install bound with no Refresh, and a
+  mass-storage device bound on its first-ever attach, disk and volume in
+  turn. Screens in `out\post-release\1.0.1.0\asset-legs\`.
 
 Checkpoint: on an XP guest that has never had another USB controller, the
 `1.0.1.0` package installs from the asset, the driver loads on the first
 boot with `usbport.sys` supplied by the OS from its own cache, the root hub
 comes up, a HID device hot-plugged after the idle window binds, and a
 mass-storage device works on its first attach (issue 4); the same install
-reading on a Windows 2000 SP4
-guest that has never had another USB controller; the three 9x-family
-install routes unchanged from the asset; the tier stated; and the asset
-holds `xhci98.sys`, `xhci98.inf`, the two tools and the readmes and no
-other file.
+reading on a Windows 2000 SP4 guest that has never had another USB
+controller; the three 9x-family install routes unchanged from the asset;
+the tier stated; and the asset holds `xhci98.sys`, `xhci98.inf`, the two
+tools and the readmes and no other file.
 
-Records: `build-and-test.md` ("Windows XP target VM", "The files the OS
-supplies"); `lessons.md`; `win98-wdm.md` ("What about Windows XP?");
-`usbport-miniport-interface.md` ("The SweetLow rebuild");
-`docs/issues/04-xp-restore-device-ep0-remove.md`; `scripts/inf-gate/`;
-`releases/history.md`.
+Records: `build-and-test.md` ("Windows XP target VM", "Windows 2000
+xHCI-only VM", "The files the OS supplies"); `lessons.md`; `win98-wdm.md`
+("What about Windows XP?"); `usbport-miniport-interface.md` ("The SweetLow
+rebuild"); `docs/issues/04-xp-restore-device-ep0-remove.md`;
+`scripts/inf-gate/`; `releases/history.md`;
+`docs/contributing/runs/run-19-post-release/`.
 
 ## Post-Release - Run the Acceptance Test by Hand
 
