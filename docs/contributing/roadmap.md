@@ -1478,12 +1478,34 @@ Tasks:
   `Services\USB\DisableSelectiveSuspend` present in Registry Editor with
   nothing hand-set, no `SuspendController` in the two minutes after start,
   and the mouse hot-plugged after them bound as before.
-- [ ] 19.3 the XP readings, the owner at the console, the qemu flavour: a
+- [x] 19.3 the XP readings, the owner at the console, the qemu flavour: a
   HID mouse, a `usb-storage` device formatted, written and read back,
   Device Manager disable, enable, remove and rescan (the door sequence that
   bugchecks Windows 98 under NUSB and that the SweetLow rebuild survives),
   and a `usb-audio` composite. Recorded in `build-and-test.md`, "Windows XP
   target VM", counters named as in 18.3.
+  Read 2026-09-03 on the `p194` install. The door sequence on the first
+  boot, the mouse attached: Disable ran `AbortTransfer`, `CloseEndpoint`,
+  `DisableInterrupts` and `StopController`, the quiesce halted the
+  controller and XP unloaded the driver; Enable was a fresh `DriverEntry`,
+  registration, `StartController` and the mouse re-addressed by itself;
+  Uninstall and rescan the same with the Found New Hardware wizard back
+  and the root hub recreated; no bugcheck, no bang, nothing refused. The
+  second boot on the `p3=0` launcher (the default 4+4 layout put the
+  SuperSpeed-capable disk on an unmanaged USB3 port, `19.3` is why the
+  launcher changed): `usb-storage` bound as "USB Mass Storage Device",
+  formatted as `F:`, a file written and read back, `endpoints opened` 2 and
+  3; `usb-audio` bound as "USB Composite Device" with "USB Audio Device"
+  under Sound, its isochronous endpoint opened with the interval derived
+  from the descriptor (`endpoints opened` 4). Both bound on their second
+  attach only: on the first, XP reset the
+  port after the configuration descriptor, re-created the device through
+  a second device handle and removed the first handle's EP0 last, which
+  this driver's REMOVE path reads as the live pipe closing; the record was
+  refused for retry until the progress detector failed it (`records failed
+  - no progress` 2). Recorded as `docs/issues/04-xp-restore-device-ep0-remove.md`,
+  open, no driver change in this release by the owner's decision; a replug
+  after a pause is the workaround.
 - [x] 19.4 the fix observed where the gap is, XP: revert `vm\winxp.img` to
   `winxp-clean-install`, boot the run launcher with NO EHCI, install the
   `1.0.0.2` package from the transfer drive, and read: no CD prompt (the

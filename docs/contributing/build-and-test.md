@@ -1459,9 +1459,10 @@ what it reproduces.
    family; then a hot-plugged mouse, `usb-storage`, and Device Manager
    disable, re-enable, remove and rescan (roadmap task 19.3, still owed).
 
-What the first afternoon showed (2026-09-03, the owner at the console; the
-`first`, `ehci`, `dss` and `p194` trace tags in `vm\`; every run below was
-on the launcher's original 4+4 port layout, plain `qemu-xhci`):
+What the first day showed (2026-09-03, the owner at the console; the
+`first`, `ehci`, `dss` and `p194` trace tags in `vm\`; every run below up
+to the door sequence was on the launcher's original 4+4 port layout, plain
+`qemu-xhci`, and the storage and audio readings on `p3=0`):
 
 - **The 1.0.0.1 package, xHCI only: Code 39, debug console 0 bytes.** The
   image, read on the host (`qemu-img convert -O raw`, then 7-Zip straight
@@ -1523,10 +1524,48 @@ on the launcher's original 4+4 port layout, plain `qemu-xhci`):
   completing while the pointer was driven), every refusal and failure
   counter at zero. This is roadmap task 19.4, the reading release 1.0.0.2
   claims; 19.1 and 19.2 closed on it.
+- **The door sequence, the same boot, the mouse attached (task 19.3).**
+  Device Manager Disable: `AbortTransfer` on the mouse's pipe,
+  `CloseEndpoint` twice, `DisableInterrupts`, `StopController`, the quiesce
+  reporting the controller halted, and XP unloading the driver. Enable: a
+  fresh `DriverEntry`, registration status 0, `StartController`, the root
+  hub queried and its ports powered, the mouse re-addressed with its
+  endpoint reopened and "HID-compliant mouse" back, nothing refused.
+  Uninstall then "Scan for hardware changes": the same stop and unload, the
+  Found New Hardware wizard again (the owner drove it from `E:\`), a third
+  `DriverEntry`, `RH_GetRootHubData` asked for twice as XP recreated "USB
+  Root Hub", the mouse re-addressed. No bugcheck, no bang. usbport called
+  `SuspendController` once, on the shutdown that followed, which is the
+  power-down path and not the idle suspend the registry value disables.
+- **Mass storage and a composite, the second boot of the same install, on
+  the `p3=0` launcher (task 19.3; the trace tag is `p194` again, the
+  relaunch having overwritten the first boot's files).** The driver loaded
+  on the boot with 4 USB2-only ports. `usb-storage` on the first attach:
+  addressed, the configuration descriptor read and committed, then XP
+  reset the port, this driver's Reset Device put the slot back to Default,
+  a second address, one `CloseEndpoint` of the first EP0 handle, and from
+  there every submit refused for retry until the progress detector failed
+  the record ("USB Device" with a bang; `records failed - no progress` 1).
+  Unplugged, fifteen seconds, plugged again: addressed, `endpoints opened`
+  2 and 3, "USB Mass Storage Device", formatted by the owner as `F:`, a
+  text file written and read back in Explorer. `usb-audio` (Full Speed):
+  the identical first-attach failure (`records failed - no progress` 2,
+  then XP disabled the port), and on the replug the isochronous endpoint
+  opened with its interval derived from the descriptor (`endpoints opened`
+  4), "USB Composite Device" clean under Universal Serial Bus controllers
+  and "USB Audio Device" under Sound, video and game controllers.
+  The first-attach failure is `docs/issues/04-xp-restore-device-ep0-remove.md`:
+  XP re-creates the device through a second usbport device handle and
+  removes the first handle's EP0 last, which the REMOVE path reads as the
+  live pipe closing. Open; no driver change in 1.0.0.2 by the owner's
+  decision. The 4+4 layout's own finding from the same afternoon: QEMU put
+  the SuperSpeed-capable disk on a USB3 port this driver leaves unmanaged
+  (`port event: not a managed port`) and XP never saw it, which is why the
+  launcher now defaults to `p3=0`.
 
-Not done on XP: real hardware (nothing in the fleet runs it), mass storage,
-a composite device, and the disable, enable, remove and rescan sequence;
-roadmap Phase 19 holds each as a task.
+Not done on XP: real hardware (nothing in the fleet runs it), and a
+first-attach enumeration of a mass-storage or composite device that binds
+without a replug (issue 4).
 
 ### Windows 2000 SMP Stress VM (Phase 2d)
 
