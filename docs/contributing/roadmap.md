@@ -1444,7 +1444,17 @@ Tasks:
   `HcDisableSelectiveSuspend` alternative is recorded as considered and
   why the global value was kept, or taken instead, with the reason. The
   observation that closes this task: on the XP guest with the value present,
-  a `usb-mouse` hot-plugged a minute after a cold start binds.
+  a `usb-mouse` hot-plugged a minute after a cold start binds. Observed
+  2026-09-03, before the INF change: the owner created `Services\USB`
+  (absent on a stock XP install; only the package's `AddReg` ever makes it)
+  with `DisableSelectiveSuspend=1` in Registry Editor, shut down, cold
+  relaunch; no `SuspendController` in the first two minutes, then the
+  hot-plugged mouse: port status change on port 5, slot enabled,
+  `SET_ADDRESS` intercepted, `devices addressed` 1, `endpoints opened` 1,
+  "USB Human Interface Device" in Device Manager, interrupt transfers
+  submitted and completed while the pointer was driven, no refusal or
+  failure counter moved. What remains for the task is the INF and gate
+  change itself, then the same reading from a package install.
 - [ ] 19.3 the XP readings, the owner at the console, the qemu flavour: a
   HID mouse, a `usb-storage` device formatted, written and read back,
   Device Manager disable, enable, remove and rescan (the door sequence that
