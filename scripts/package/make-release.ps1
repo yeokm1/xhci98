@@ -3,11 +3,14 @@
 Publish a built driver into releases\<version>\{release,debug}\.
 
 .DESCRIPTION
-`releases\` is the tracked, published half of packaging. Of the files the INF
-names it carries only the two that are this project's own work - `xhci98.sys`
-and `xhci98.inf` - which is why it is a separate step from `make-package.ps1`
-rather than an option on it: the rest are Microsoft's. See `releases\README.md`
-for that split and what it costs an installer.
+`releases\` is the tracked, published half of packaging. It carries the two
+files that are this project's own work - `xhci98.sys` and `xhci98.inf` - and
+since release 1.0.0.1 those are the only files on the media at all: the INF has
+the operating system supply `usbd.sys`, `usbhub.sys` and, on the NT path,
+`usbport.sys` from its own install source through `LayoutFile`. It is a
+separate step from `make-package.ps1` because the package is the gated build
+output and the release is the tracked, written-once record of it. See
+`releases\README.md`.
 
 **The upload set is the other output, and it is not the tracked one.** It
 is the published tree, zipped: `out\upload-<version>\` and
@@ -157,14 +160,14 @@ Where the upload set is assembled. Defaults to `out\` in the repository, which
 is git-ignored; the asset is generated output and stays out of the tree.
 
 .PARAMETER UploadSetOnly
-Assemble the upload set from what is already on disk - the tracked
-`releases\<version>\` tree and the gated `out\pkg-<flavour>\` directories - and
-publish nothing. Nothing is built, nothing is written under `releases\`, and
-the build-side gates - the host suite, the import gate, the binary's version
-resource - do not run again: this mode never touches a binary, so there is
-nothing for them to answer about. The **INF gate does** run, once per assembled
-flavour directory, because that one is about the media rather than the build -
-see the note under the assembly itself.
+Assemble the upload set from the tracked `releases\<version>\` tree alone, and
+publish nothing. Nothing is built, nothing is read from `out\`, nothing is
+written under `releases\`, and the build-side gates - the host suite, the
+import gate, the binary's version resource - do not run again: this mode never
+touches a binary, so there is nothing for them to answer about. The **INF gate
+does** run, once per assembled flavour directory, because that one is about the
+media rather than the build - see the note under the assembly itself. A fresh
+clone with no `out\` at all can therefore rebuild the current cut's asset.
 
 **This exists so that a broken or lost upload asset is not a reason to re-cut a
 release.** The upload set is assembled after the publish, so without this mode
@@ -173,14 +176,21 @@ non-reproducible binaries and rewrites a written-once version directory - the
 one thing `releases\README.md` says never to do. That trap fired for real: the
 first cut's asset was malformed and there was no way to rebuild it in place.
 
-What the build-side gates are replaced by is one check: the `xhci98.sys` and
-`xhci98.inf` in each `pkg-<flavour>\` directory must be byte-identical to the
-published ones. A package that matches the release by hash is the package that
-release was cut from; one that does not is some other build, and is refused.
+**It rebuilds the current cut's asset only.** The INF gate it runs encodes the
+current release's rules, and an older cut fails the rules added since it was
+cut (measured read-only on 2026-09-05: the 1.0.0.1 INF fails six of them, all
+added by 1.0.1.0). A `-Version` other than `src\xhci98.inf`'s `DriverVer` is
+refused with that reason; to rebuild an older cut's asset, check out the commit
+that cut it and run this mode there, where the gate is the one that cut passed.
+`issues-found.md` F15 has the record. Until that fix this mode also required
+`out\pkg-<flavour>\` to hash-match the published binaries, a dependency left
+over from when the media carried files the package supplied; since 1.0.0.1
+nothing from the package enters the asset, and the check is gone.
 
 .PARAMETER PackageRoot
-Where the gated `pkg-<flavour>\` directories are. Defaults to `out\` in the
-repository, which is where `make-package.ps1` writes them.
+Where the gated `pkg-<flavour>\` directories are read from and written to by an
+ordinary cut. Defaults to `out\` in the repository, which is where
+`make-package.ps1` writes them. Not read under `-UploadSetOnly`.
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1
@@ -635,12 +645,44 @@ half-done.
 "@
 }
 
+function Get-UploadSetPaths {
+    # The two things the assembly writes under -UploadDir, named in one place
+    # so that the early containment check and the assembly itself cannot
+    # disagree about what is about to be written where.
+    #
+    # **The archive is not named after the directory it is assembled from**,
+    # and the two names differ on purpose (project owner). `upload-` is a
+    # workspace name inside the git-ignored `out\`; the `.zip` is what a
+    # stranger downloads from a GitHub release and finds in their Downloads
+    # folder, where `upload-0.0.0.5.zip` says nothing about what project it
+    # belongs to. The archive carries no top-level directory - every entry is
+    # written relative to the upload root - so this name is the only thing the
+    # download says about itself until it is unpacked.
+    param([string]$UploadDir, [string]$Version)
+    return [pscustomobject]@{
+        Root = Join-Path $UploadDir ("upload-" + $Version)
+        Zip  = Join-Path $UploadDir ("xhci98-" + $Version + ".zip")
+    }
+}
+
 function Assert-UploadSetOutsideRelease {
-    # **The upload set may not be assembled inside the tree it is assembled
-    # from, and may not contain it.** The assembly deletes its own destination
-    # before copying, so an -UploadDir at or below `releases\<version>\` would
-    # delete a directory inside a written-once release and then copy that
-    # release into its own descendant.
+    # **Nothing the assembly writes may land inside `releases\`, and the
+    # upload directory may not contain it either.** The assembly deletes and
+    # recreates `upload-<version>\` and overwrites `xhci98-<version>.zip`, so
+    # either of them at or below `releases\` would write inside a tree whose
+    # every version directory is written once and never edited.
+    #
+    # **The whole `releases\` root is protected, not just the version being
+    # cut.** The first version of this guard compared the upload directory
+    # with the published release alone, so `-UploadDir releases\1.0.0.1` while
+    # assembling 1.0.1.0 was accepted: the older cut's directory would have
+    # gained an `upload-1.0.1.0\` and a sibling zip, and .gitignore ignores
+    # neither, so the next `git add -A` would have committed them into a cut
+    # (issues-found.md F4, reproduced read-only with the extracted guard). The
+    # published root is still named separately because the ordinary cut's
+    # staging directory sits under `releases\` too and the ancestor direction -
+    # an upload directory that would CONTAIN the release - is checked against
+    # both.
     #
     # **Called before the build as well as inside the assembly**, because the
     # geometry depends only on arguments that are known from the start. Checked
@@ -651,27 +693,39 @@ function Assert-UploadSetOutsideRelease {
     # and a sane -UploadDir, unlike the media-root case, but there is no reason
     # to reject an argument late that can be rejected free.
     #
-    # Both paths are already absolute and separator-normalised by
+    # Every path is already absolute and separator-normalised by
     # Resolve-DirectoryArgument, so this compares strings rather than resolving:
     # the early call happens before `releases\<version>\` exists, and
     # Resolve-Path cannot answer for a directory that is not there yet.
-    param([string]$UploadRoot, [string]$PublishedRoot)
+    param([string]$UploadRoot, [string]$UploadZip, [string]$PublishedRoot, [string]$ReleasesRoot)
 
-    $published = $PublishedRoot.TrimEnd('\')
-    $upload = $UploadRoot.TrimEnd('\')
-    $inside = $upload -eq $published -or
-              $upload.StartsWith($published + '\', [System.StringComparison]::OrdinalIgnoreCase) -or
-              $published.StartsWith($upload + '\', [System.StringComparison]::OrdinalIgnoreCase)
-    if (-not $inside) { return }
-
-    throw @"
-the upload set would be assembled at '$upload', which is inside - or contains -
-the published release '$published'.
-Assembling it clears that directory first and then copies the release into it,
-so this would write inside a version directory that is written once and never
-edited. Point -UploadDir somewhere git-ignored and outside releases\; out\ is
-the default and is where the Microsoft files may live.
+    $protected = @()
+    foreach ($p in @($ReleasesRoot, $PublishedRoot)) {
+        if (-not [string]::IsNullOrEmpty($p)) { $protected += $p.TrimEnd('\') }
+    }
+    $outputs = @(
+        @{ What = "upload directory"; Path = $UploadRoot },
+        @{ What = "upload archive";   Path = $UploadZip }
+    )
+    foreach ($o in $outputs) {
+        if ([string]::IsNullOrEmpty($o.Path)) { continue }
+        $out = $o.Path.TrimEnd('\')
+        foreach ($p in $protected) {
+            $inside = $out -eq $p -or
+                      $out.StartsWith($p + '\', [System.StringComparison]::OrdinalIgnoreCase) -or
+                      $p.StartsWith($out + '\', [System.StringComparison]::OrdinalIgnoreCase)
+            if (-not $inside) { continue }
+            throw @"
+the $($o.What) would be written at '$out', which is inside - or contains -
+'$p'.
+Every version directory under releases\ is written once and never edited
+(releases\README.md), and the assembly deletes and recreates its upload
+directory and overwrites its archive, so neither may land there: not in the
+version being cut, and not in any older one either. Point -UploadDir somewhere
+git-ignored and outside releases\; out\ is the default.
 "@
+        }
+    }
 }
 
 function Assert-PackageMatchesDeclaredMedia {
@@ -714,10 +768,12 @@ function Assert-PackageMatchesDeclaredMedia {
         throw @"
 '$PkgDir' holds $($unexpected.Count) file(s) the published $InfName does not name, or names elsewhere:
   - $($unexpected -join "`n  - ")
-The upload set is the one channel through which this project distributes files
-that are not its own, and it is exactly the ones the INF names - see
-docs\contributing\legal-provenance.md section 5. Take the file out of the
-package, or add it to [SourceDisksFiles] and cut a release that declares it.
+Since 1.0.0.1 the media carries this project's two files and nothing else: the
+operating system supplies usbd.sys, usbhub.sys and usbport.sys through the INF's
+LayoutFile, and the INF gate refuses a Microsoft file on the media
+(docs\contributing\legal-provenance.md section 5 records the decision). A file
+the INF does not name is not published; take it out of the package. Declaring a
+new media file is a release-layout decision recorded there, not a packaging step.
 "@
     }
     $absent = @($Expected.Keys | Where-Object { -not $seen.ContainsKey($_) })
@@ -752,18 +808,14 @@ function New-UploadSet {
 
     Write-Step "Upload set"
 
-    $uploadRoot = Join-Path $UploadDir ("upload-" + $Version)
-    # **The archive is not named after the directory it is assembled from**, and
-    # the two names differ on purpose (project owner). `upload-` is a
-    # workspace name inside the git-ignored `out\`; the `.zip` is what a stranger
-    # downloads from a GitHub release and finds in their Downloads folder, where
-    # `upload-0.0.0.5.zip` says nothing about what project it belongs to. The
-    # archive carries no top-level directory - every entry below is written
-    # relative to $uploadRoot - so this name is the only thing the download says
-    # about itself until it is unpacked.
-    $uploadZip = Join-Path $UploadDir ("xhci98-" + $Version + ".zip")
+    # Named in Get-UploadSetPaths, beside the early containment check that
+    # names the same two.
+    $paths = Get-UploadSetPaths -UploadDir $UploadDir -Version $Version
+    $uploadRoot = $paths.Root
+    $uploadZip = $paths.Zip
 
-    Assert-UploadSetOutsideRelease -UploadRoot $uploadRoot -PublishedRoot $PublishedRoot
+    Assert-UploadSetOutsideRelease -UploadRoot $uploadRoot -UploadZip $uploadZip `
+                                   -PublishedRoot $PublishedRoot -ReleasesRoot $ReleasesDir
 
     if (Test-Path -LiteralPath $uploadRoot) {
         Remove-Item -LiteralPath $uploadRoot -Recurse -Force
@@ -793,11 +845,14 @@ function New-UploadSet {
     # **Which directories have to be completed is read off the tree, not taken
     # from -Flavor.** The published tree is copied whole, so a release holding
     # both flavours brings both into the upload set - but only the flavours
-    # named on the command line get the Microsoft files added. Assembling
-    # with `-Flavor release` from a release published with both therefore
-    # shipped a `debug\` directory holding this project's two files and none of
-    # Microsoft's, exit 0, no warning: the nesting defect again, through a
-    # different door (review finding 1).
+    # named on the command line are completed and gated. When the media still
+    # carried Microsoft files (0.0.0.4 to 1.0.0.0), assembling with `-Flavor
+    # release` from a release published with both shipped a `debug\` directory
+    # holding this project's two files and none of the three, exit 0, no
+    # warning: the nesting defect again, through a different door (review
+    # finding 1). The media has carried no such file since 1.0.0.1; what the
+    # rule protects now is that every flavour directory in the asset was gated
+    # by this run.
     #
     # A directory carrying `xhci98.inf` is install media in the making. That is
     # the test used here rather than a list of flavour names, because it stays
@@ -873,30 +928,49 @@ flavour with -Flavor, or leave -Flavor at its default.
                                   -InfName $infName -Label "the published $infName"
 
     foreach ($f in $Flavors) {
-        $pkgDir = $PkgDirs[$f]
+        $pkgDir = $null
+        if ($null -ne $PkgDirs -and $PkgDirs.ContainsKey($f)) { $pkgDir = $PkgDirs[$f] }
         $uploadFlavorDir = Join-Path $uploadRoot $f
         $mediaPaths = @{}
 
-        # The backstop for the check the build loop already made on the
-        # ordinary path - and the only place it is made under -UploadSetOnly,
-        # which never passes through that loop.
-        Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
-                                           -PublishedPaths $publishedPaths `
-                                           -InfName $infName -Flavor $f
+        if ($null -ne $pkgDir) {
+            # The ordinary cut: the backstop for the check the build loop
+            # already made on the package it has just built.
+            Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
+                                               -PublishedPaths $publishedPaths `
+                                               -InfName $infName -Flavor $f
 
-        # Copied at the path the INF declares, which is where the check below
-        # will look for it. Taking the layout from the gate's parse rather than
-        # re-parsing [SourceDisksFiles] here is the rule make-package.ps1
-        # follows for the same reason: two parsers would be free to disagree,
-        # and the only way they can disagree is a file staged at one path and
-        # authenticated at another.
-        foreach ($name in $expected.Keys) {
-            $relative = $expected[$name]
-            $source = Join-Path $pkgDir $relative
-            $target = Join-Path $uploadFlavorDir $relative
-            Ensure-Directory (Split-Path -Parent $target)
-            Copy-Item -LiteralPath $source -Destination $target -Force
-            $mediaPaths[$name] = $target
+            # Copied at the path the INF declares, which is where the check
+            # below will look for it. Taking the layout from the gate's parse
+            # rather than re-parsing [SourceDisksFiles] here is the rule
+            # make-package.ps1 follows for the same reason: two parsers would
+            # be free to disagree, and the only way they can disagree is a file
+            # staged at one path and authenticated at another. Since 1.0.0.1
+            # `$expected` is empty and this loop copies nothing.
+            foreach ($name in $expected.Keys) {
+                $relative = $expected[$name]
+                $source = Join-Path $pkgDir $relative
+                $target = Join-Path $uploadFlavorDir $relative
+                Ensure-Directory (Split-Path -Parent $target)
+                Copy-Item -LiteralPath $source -Destination $target -Force
+                $mediaPaths[$name] = $target
+            }
+        } elseif ($expected.Count -gt 0) {
+            # -UploadSetOnly assembles from the tracked directory alone, and
+            # that directory carries this project's two files and nothing else.
+            # An INF naming a third file on the media would need a source this
+            # mode does not have - and since 1.0.0.1 no INF this gate accepts
+            # names one, so this is the refusal for a future layout change
+            # rather than a path a current cut can reach.
+            throw @"
+the published $infName names $($expected.Count) media file(s) beyond this project's two:
+  - $($expected.Keys -join "`n  - ")
+-UploadSetOnly assembles the download from the tracked releases\<version>\
+directory alone, which carries only xhci98.sys and xhci98.inf, so it has no
+source for those. A release whose media carries a third file is a layout
+decision recorded in docs\contributing\legal-provenance.md section 5, and its
+asset has to be assembled by the cut that publishes it.
+"@
         }
 
         # **Is this directory complete install media? Asked of the INF, not of
@@ -911,10 +985,10 @@ flavour with -Flavor, or leave -Flavor at its default.
         # check-inf.ps1 -PackageDir is the authority instead. It is a second,
         # independent parse of the INF that is about to be shipped in this very
         # directory: it fails PKG-* if any [SourceDisksFiles] entry is absent or
-        # in the wrong place, and with -SourceManifest it re-authenticates each
-        # per-target file by SHA-256 at the path the INF puts it. It is the same
-        # gate make-package.ps1 runs against a staged package, which is exactly
-        # what this directory now is.
+        # in the wrong place, or if a Microsoft file is beside them (the
+        # per-target SHA-256 manifest it once took went with the Microsoft
+        # files in 1.0.0.1). It is the same gate make-package.ps1 runs against
+        # a staged package, which is exactly what this directory now is.
         # **Its output is captured, not left on the pipeline.** This function
         # returns an object, and anything a command inside it writes to stdout
         # is returned alongside - so calling the gate bare made the caller's
@@ -1018,6 +1092,29 @@ If what you want really is to re-cut the published version, drop -UploadSetOnly.
     if ($Version -eq "") {
         $Version = $infVersion
     } elseif (-not (Test-DriverVersionMatches -Reported ($Version + "") -Declared $infVersion)) {
+        if ($UploadSetOnly) {
+            # The gate this mode runs on each assembled flavour directory is
+            # the current tree's, and it encodes the current release's rules;
+            # an older cut fails the rules added since it was cut. Measured
+            # read-only on 2026-09-05: the 1.0.0.1 INF fails six (OS-MISSING
+            # for usbport.sys and usbhub.sys on both NT routes, SUSP-MISSING on
+            # both), all added by 1.0.1.0, and the 1.0.0.0 INF names Microsoft
+            # files on the media, which OS-MEDIA refuses. Weakening the gate or
+            # pinning it per version is not the answer (issues-found.md F15);
+            # the tree that cut the older version carries the gate it passed.
+            throw @"
+-UploadSetOnly rebuilds the asset of the current cut only, and $Version is not
+it: src\xhci98.inf's DriverVer is $infVersion.
+The INF gate this mode runs on each assembled flavour directory encodes the
+current release's rules, and an older cut fails the rules added since it was
+cut, so its asset cannot be rebuilt from this tree without weakening the gate -
+which is not done. To rebuild the asset of $Version,
+check out the commit that cut it (releases\history.md names the cut) and run
+this mode there; the gate at that commit is the one $Version passed. Whether an
+older cut's asset should be rebuilt at all is the owner's decision under
+releases\README.md.
+"@
+        }
         throw @"
 -Version $Version does not match the INF's DriverVer $infVersion.
 The version is edited in src\xhci_version.h and nowhere else (task 14.1.10);
@@ -1044,10 +1141,18 @@ docs\contributing\build-and-test.md, "Versioning the driver".
     #
     # Nothing here is built, and the gates that are about the *build* do not
     # run again - the release this assembles for was gated when it was cut, and
-    # this mode never touches a binary. What stands in for them is the identity
-    # check below: a package whose two files hash the same as the published
-    # ones is the package the release came out of. The gate that is about the
-    # *media* does run, inside the assembly, once per flavour directory.
+    # this mode never touches a binary. The gate that is about the *media* does
+    # run, inside the assembly, once per flavour directory.
+    #
+    # **The tracked directory is the only input.** Until the Phase 20 fix pass
+    # this mode also required `out\pkg-<flavour>\` to exist and to hash-match
+    # the published binaries, standing in for the build gates. That was a
+    # dependency left over from when the media carried Microsoft files the
+    # package supplied: since 1.0.0.1 nothing from the package enters the
+    # asset, so the requirement only stopped a fresh clone - the machine a lost
+    # asset is most likely to be rebuilt on - from rebuilding it
+    # (issues-found.md F15). What the asset is made of is the published tree,
+    # and the INF gate on each assembled directory is what checks it.
     if ($UploadSetOnly) {
         Write-Step ("Upload set for {0}, from {1}" -f $Version, $finalRoot)
 
@@ -1059,52 +1164,21 @@ To cut one, run this script without it.
 "@
         }
 
-        $pkgDirs = @{}
         foreach ($f in $Flavor) {
             $pubDir = Join-Path $finalRoot $f
             if (-not (Test-Path -LiteralPath $pubDir)) {
                 throw "'$finalRoot' has no $f\ directory, so $Version was not published with that flavour."
             }
-            $pkgDir = Join-Path $PackageRoot ("pkg-" + $f)
-            if (-not (Test-Path -LiteralPath $pkgDir)) {
-                throw @"
-no gated package at '$pkgDir'.
-The upload set is assembled from the package make-package.ps1 gated, and there
-is none for the $f flavour on this machine. Build it with
-scripts\package\make-package.ps1 -Flavor $f - which does not touch
-'$finalRoot' - and run this again.
-"@
-            }
-
-            # **This is the check that stands in for every gate this mode
-            # skips.** Both files in a gated package that hash the same as the
-            # published ones came out of the run that published them. A
-            # package that does not match is some other build.
             foreach ($name in $publishable) {
-                $pub = Join-Path $pubDir $name
-                $pkg = Join-Path $pkgDir $name
-                if (-not (Test-Path -LiteralPath $pkg)) {
-                    throw "'$pkgDir' has no '$name', so it is not the package '$pubDir' was published from."
-                }
-                $pubHash = (Get-FileHash -LiteralPath $pub -Algorithm SHA256).Hash
-                $pkgHash = (Get-FileHash -LiteralPath $pkg -Algorithm SHA256).Hash
-                if ($pubHash -ne $pkgHash) {
-                    throw @"
-'$pkg' is not the file published as '$pub':
-  published $pubHash
-  package   $pkgHash
-So this package is not the one $Version was cut from. Rebuild the package from
-the sources $Version was built from, or cut a new version - do not assemble an
-upload set around a driver the release does not contain.
-"@
+                if (-not (Test-Path -LiteralPath (Join-Path $pubDir $name))) {
+                    throw "'$pubDir' has no '$name', so it is not a published flavour directory of $Version."
                 }
             }
-            $pkgDirs[$f] = $pkgDir
-            Write-Ok ("{0}\: '{1}' holds the published binary and INF, by SHA-256" -f $f, $pkgDir)
+            Write-Ok ("{0}\: '{1}' holds the published binary and INF" -f $f, $pubDir)
         }
 
         $set = New-UploadSet -PublishedRoot $finalRoot -Version $Version -Flavors $Flavor `
-                             -PkgDirs $pkgDirs -UploadDir $UploadDir -Repo $repo `
+                             -PkgDirs @{} -UploadDir $UploadDir -Repo $repo `
                              -Publishable $publishable
 
         Write-Step "Done"
@@ -1271,8 +1345,9 @@ readme.txt prints it beside the history entry, so the two cannot disagree.
     # builds and published the version directory before saying no. Review
     # round 5.
     if (-not $SkipUploadSet) {
-        Assert-UploadSetOutsideRelease -UploadRoot (Join-Path $UploadDir ("upload-" + $Version)) `
-                                       -PublishedRoot $finalRoot
+        $early = Get-UploadSetPaths -UploadDir $UploadDir -Version $Version
+        Assert-UploadSetOutsideRelease -UploadRoot $early.Root -UploadZip $early.Zip `
+                                       -PublishedRoot $finalRoot -ReleasesRoot $ReleasesDir
     }
 
     # --- build and gate each flavour, then take only what may be tracked -----
@@ -1379,9 +1454,10 @@ meant: scripts\build-driver.cmd $f
             Published = $f
             Path      = $sys
             Dir       = $destDir
-            # Kept so the upload set can take the Microsoft files from the
-            # directory make-package.ps1 already gated, rather than re-deriving
-            # where they came from or parsing [SourceDisksFiles] a second time.
+            # Kept so the upload set can take any file the INF declares beyond
+            # this project's two from the directory make-package.ps1 already
+            # gated - none since 1.0.0.1 - rather than re-deriving where it came
+            # from or parsing [SourceDisksFiles] a second time.
             PkgDir    = $pkgDir
             Length    = (Get-Item -LiteralPath $sys).Length
             Sha256    = (Get-FileHash -LiteralPath $sys -Algorithm SHA256).Hash

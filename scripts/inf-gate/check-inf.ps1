@@ -556,7 +556,34 @@ foreach ($m in $models) {
         if ($null -eq $ntmp) {
             Add-Failure "PATH-W98" ("install section [{0}] does not set HKR,,NTMPDriver. That value names the .sys ntkern loads; without it the device binds to nothing." -f $base)
         } else {
-            foreach ($d in ($ntmp -split ',')) { [void]$driverBinaries.Add($d.Trim()) }
+            $ntmpFiles = @($ntmp -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+            foreach ($d in $ntmpFiles) { [void]$driverBinaries.Add($d) }
+            # The file NTMPDriver names has to be one THIS section's own
+            # CopyFiles delivers - the mirror of PATH-NT's ServiceBinary check
+            # below. The global "some CopyFiles section delivers it" rule at the
+            # end of the file is satisfied by [<model>.NTx86]'s or
+            # [DefaultInstall]'s CopyFiles, so an undecorated section that had
+            # lost its own would pass the gate while a clean Windows 98 install
+            # wrote NTMPDriver=xhci98.sys and copied no such file: the silent
+            # yellow-bang the gate exists to catch (issues-found.md F14, which
+            # reproduced the pass with exactly that INF).
+            $w98Copy = @(Get-Directive $inf $base "CopyFiles")
+            $w98Delivered = New-Object System.Collections.ArrayList
+            foreach ($cf in $w98Copy) {
+                if ($cf.StartsWith('@')) {
+                    [void]$w98Delivered.Add($cf.Substring(1).Trim().ToLowerInvariant())
+                    continue
+                }
+                foreach ($e in (Get-Section $inf $cf)) {
+                    $dst = ($e.Text -split ',')[0].Trim()
+                    if ($dst -ne "") { [void]$w98Delivered.Add($dst.ToLowerInvariant()) }
+                }
+            }
+            foreach ($d in $ntmpFiles) {
+                if (-not $w98Delivered.Contains($d.ToLowerInvariant())) {
+                    Add-Failure "PATH-W98" ("[{0}] sets NTMPDriver to '{1}' but its own CopyFiles delivers ({2}). Windows 98 would write the loader value and never copy the file it names; the device shows a yellow bang with no diagnostic." -f $base, $d, ($w98Delivered -join ', '))
+                }
+            }
         }
     }
 

@@ -530,6 +530,16 @@ try {
     Assert-RuleFires "no-ntmpdriver" "PATH-W98" {
         param($t) $t.Replace("HKR,,NTMPDriver,,xhci98.sys`r`n", "")
     }
+    # The Win98 section keeps NTMPDriver but loses its own CopyFiles of the
+    # project files while the .NTx86 section and [DefaultInstall] keep theirs.
+    # The global "some CopyFiles section delivers the binary" rule is satisfied
+    # by those, and the gate passed exactly this INF (issues-found.md F14): a
+    # clean Windows 98 install would write the loader value and copy no
+    # driver. The OS-source list stays, so the OS-* rules are not what fires.
+    Assert-RuleFires "w98-copyfiles-gap" "PATH-W98" {
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98",
+                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyW98")
+    }
     # A Win2000-only INF - the mistake this task exists to prevent - must fail
     # on the Win98 half rather than quietly install on one target.
     Assert-RuleFires "nt-only" "PATH-W98" {

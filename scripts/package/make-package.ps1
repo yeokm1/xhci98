@@ -204,9 +204,11 @@ this script replaces its output directory wholesale. Name a subdirectory.
 #
 # Nothing under releases\ either. A published flavour directory holds only
 # xhci98.inf and xhci98.sys, both in the staged set, so the foreign-file check
-# at the swap would let this script replace it with the full package, and
-# .gitignore admits *.sys under releases\, so the next `git add -A` would commit
-# the Microsoft binaries. The compare is on the normalised strings, as
+# at the swap would let this script replace it with the package - and every
+# version directory under releases\ is written once and never edited. When the
+# package still carried Microsoft files (0.0.0.4 to 1.0.0.0) the cost was
+# larger: .gitignore admits *.sys under releases\, so the next `git add -A`
+# would have committed them. The compare is on the normalised strings, as
 # make-release.ps1's Assert-UploadSetOutsideRelease does.
 #
 $releasesRoot = (Join-Path $repo "releases").TrimEnd('\')
@@ -214,9 +216,9 @@ if ($OutDir.TrimEnd('\') -eq $releasesRoot -or
     $OutDir.StartsWith($releasesRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
     throw @"
 refusing to package into '$OutDir': that is inside releases\, which git tracks
-and which holds only the two publishable files per flavour. A package there
-would carry the Microsoft binaries into the next commit. Point -OutDir at a
-git-ignored directory; out\ is the default.
+and whose version directories are written once and never edited. A package
+there would replace a cut's files and ride into the next commit. Point -OutDir
+at a git-ignored directory; out\ is the default.
 "@
 }
 

@@ -714,25 +714,57 @@ try {
         Assert-True ($touched.Count -eq 0) `
             ("-UploadSetOnly rewrote " + $touched.Count + " file(s) of the published release, which it must never write to.")
 
-        # --- and a package that is not the one the release was cut from -----
+        # --- assembled from the tracked directory alone ---------------------
         #
-        # The gates do not re-run in this mode, so the identity check is all
-        # that stands between the published driver and some other build's usbd
-        # files - the swap nothing detects on the target, where both are called
-        # usbd.sys.
-        Write-Step "an upload set is refused around a package the release did not come from"
-        $goodDebugSys = [System.IO.File]::ReadAllBytes((Join-Path $pkgRoot "pkg-debug\xhci98.sys"))
-        [System.IO.File]::WriteAllBytes((Join-Path $pkgRoot "pkg-debug\xhci98.sys"),
-            [System.Text.Encoding]::ASCII.GetBytes("a different build entirely"))
-        $r = Invoke-Releaser $relArgs
-        Assert-True ($r.ExitCode -ne 0) `
-            "an upload set was assembled from a package whose driver is not the published one."
-        Assert-True ($r.Output -match "not the file published") `
-            ("expected the refusal to say the package is not the published build. Output:`n" + $r.Output)
-        # **Put it back.** Review finding 6: every case below would
-        # otherwise exit nonzero on this same mismatch, so a regression in the
-        # guard each one is actually about would still leave the test green.
-        [System.IO.File]::WriteAllBytes((Join-Path $pkgRoot "pkg-debug\xhci98.sys"), $goodDebugSys)
+        # issues-found.md F15. This mode used to require the gated
+        # out\pkg-<flavour>\ directories to exist and to hash-match the
+        # published binaries, a dependency left over from when the media
+        # carried Microsoft files the package supplied. Since 1.0.0.1 nothing
+        # from the package enters the asset, so a fresh clone with no out\ at
+        # all - the machine a lost asset is most likely to be rebuilt on - has
+        # to be able to rebuild it, and the run must not create the package
+        # root it was told does not exist.
+        Write-Step "the upload set is rebuilt from a clone with no out\ at all"
+        $noOut = Join-Path $script:work "no-such-out"
+        Remove-Item -LiteralPath $uploadDir -Recurse -Force
+        Remove-Item -LiteralPath $uploadZip -Force
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled without a package root:`n" + $r.Output)
+        foreach ($fl in @("release", "debug")) {
+            foreach ($name in @("xhci98.sys", "xhci98.inf")) {
+                Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
+                    "'$name' is missing from the upload set's $fl\ directory when assembled without a package root."
+            }
+        }
+        Assert-True (Test-Path -LiteralPath $uploadZip) "no upload archive was written when assembled without a package root."
+        Assert-True (-not (Test-Path -LiteralPath $noOut)) "the run created the package root it was told did not exist."
+
+        # --- and only the current cut's asset -------------------------------
+        #
+        # The INF gate this mode runs encodes the current release's rules, and
+        # an older cut fails the rules added since (the 1.0.0.1 INF fails six,
+        # measured read-only on 2026-09-05). An older -Version is refused with
+        # that reason before anything is assembled, rather than failing the
+        # gate with a message about the media.
+        Write-Step "-UploadSetOnly refuses a version other than the current cut, and says why"
+        $olderVersion = "0.9.9.9"
+        $olderRoot = Join-Path $relRoot $olderVersion
+        foreach ($fl in @("release", "debug")) {
+            Ensure-Directory (Join-Path $olderRoot $fl)
+            Copy-Item -LiteralPath (Join-Path $pubRoot "$fl\xhci98.sys") -Destination (Join-Path $olderRoot "$fl\xhci98.sys") -Force
+            Copy-Item -LiteralPath $plainInf -Destination (Join-Path $olderRoot "$fl\xhci98.inf") -Force
+        }
+        Set-Content -LiteralPath (Join-Path $olderRoot "readme.txt") -Encoding ASCII -Value "stand-in older cut"
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $olderVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -ne 0) "-UploadSetOnly assembled an asset for a version that is not the current cut."
+        Assert-True ($r.Output -match "current cut only") `
+            ("expected the refusal to say this mode rebuilds the current cut only. Output:`n" + $r.Output)
+        Assert-True ($r.Output -match "check out the commit that cut it") `
+            ("expected the refusal to name the way to rebuild an older cut. Output:`n" + $r.Output)
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $upRoot ("upload-" + $olderVersion)))) `
+            "the refused older-version run assembled an upload directory anyway."
 
         # --- the switches that contradict -UploadSetOnly --------------------
         Write-Step "-UploadSetOnly refuses the switches that contradict it"
@@ -769,8 +801,12 @@ try {
         # absolute FullName, so a relative root cut mid-path - and every check
         # downstream re-derived it the same wrong way and agreed. The run
         # exited 0 with files at paths like
-        # release\Data\Local\Temp\...\usbd98.sys. It has to resolve against the
-        # caller's location and produce the same asset as the absolute form.
+        # release\Data\Local\Temp\...\usbd98.sys. -UploadSetOnly no longer
+        # reads the package at all (F15, above), so what this case still holds
+        # is narrower: a relative -PackageRoot is resolved against the caller's
+        # location by Resolve-DirectoryArgument, as every directory argument is,
+        # and the asset it produces is the same complete one as the absolute
+        # form.
         #
         Write-Step "a relative -PackageRoot resolves against the caller's location"
         $relPkgParent = Split-Path -Parent $pkgRoot
@@ -815,32 +851,40 @@ try {
         # in the package that was not one of this project's own two files, and
         # check-inf.ps1 -PackageDir does not object to a file nobody declared -
         # it checks the declared ones are present. So anything left in
-        # out\pkg-<flavour>\ went up in the release asset. That download is the
-        # one channel through which this project distributes files that are not
-        # its own, and it is exactly two of them.
+        # out\pkg-<flavour>\ went up in the release asset.
         #
-        Write-Step "a package file the INF does not name is refused, not published"
-        $stray = Join-Path $pkgRoot "pkg-release\notes.txt"
-        Set-Content -LiteralPath $stray -Encoding ASCII -Value "left behind by hand"
-        $r = Invoke-Releaser $relArgs
-        Assert-True ($r.ExitCode -ne 0) `
-            "a file the INF does not name was accepted into the upload set."
-        Assert-True ($r.Output -match "notes\.txt") `
-            ("expected the refusal to name the undeclared file. Output:`n" + $r.Output)
-        Remove-Item -LiteralPath $stray -Force
-
-        # And the other half of the same rule: a declared file missing from the
-        # package is refused too, rather than producing a directory that quietly
-        # lacks it.
-        Write-Step "a package missing a file the INF names is refused"
-        $heldBack = Join-Path $pkgRoot "pkg-release\xhci98.inf"
-        $heldBackBytes = [System.IO.File]::ReadAllBytes($heldBack)
-        Remove-Item -LiteralPath $heldBack -Force
-        $r = Invoke-Releaser $relArgs
-        Assert-True ($r.ExitCode -ne 0) "a package missing xhci98.inf assembled an upload set."
-        Assert-True ($r.Output -match "xhci98\.inf") `
-            ("expected the refusal to name the missing file. Output:`n" + $r.Output)
-        [System.IO.File]::WriteAllBytes($heldBack, $heldBackBytes)
+        # **No longer drivable from here.** The two cases that held this rule
+        # ran -UploadSetOnly against a package with a stray file and against one
+        # missing a declared file; since the Phase 20 fix pass that mode does
+        # not read the package (F15), so both would exit 0 for the wrong reason.
+        # The rule itself stands in Assert-PackageMatchesDeclaredMedia, which the
+        # ordinary cut still applies to each package before the publish swap,
+        # and that path needs a build this suite does not have - the same limit
+        # the structural check below states for the media-root refusal. What
+        # replaced the coverage is narrower and is asserted in the F15 case
+        # above: the asset holds exactly the published tree, and nothing under
+        # the package root is read or created.
+        #
+        # -UploadSetOnly does still refuse an INF that names a media file beyond
+        # this project's two, since the tracked directory has no source for it.
+        # The mutation adds a third [SourceDisksFiles] entry; the current gate
+        # would refuse the file's presence on the media anyway, so the refusal
+        # this case pins is the one that fires with no package at all.
+        Write-Step "-UploadSetOnly refuses an INF naming a media file the tracked directory cannot supply"
+        $thirdInf = New-Inf -Name "third" -Mutate {
+            param($t) $t.Replace("xhci98.inf=1", "xhci98.inf=1`r`nextra.bin=1")
+        }
+        foreach ($fl in @("release", "debug")) {
+            Copy-Item -LiteralPath $thirdInf -Destination (Join-Path $pubRoot "$fl\xhci98.inf") -Force
+        }
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -ne 0) "an INF naming a third media file assembled an upload set from the tracked directory alone."
+        Assert-True ($r.Output -match "extra\.bin") `
+            ("expected the refusal to name the file the tracked directory cannot supply. Output:`n" + $r.Output)
+        foreach ($fl in @("release", "debug")) {
+            Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pubRoot "$fl\xhci98.inf") -Force
+        }
 
         # --- what is NOT covered here, and why -------------------------------
         #
@@ -895,14 +939,23 @@ try {
         # the guard could have been deleted and the case stayed green. Both
         # containment directions are driven, and both assert the diagnostic.
         #
-        Write-Step "-UploadDir inside or around the published release is refused"
+        Write-Step "-UploadDir inside or around the published release, or anywhere under releases\, is refused"
         $containment = @(
             # The upload set would land inside the version directory.
             @{ Why = "inside"; UploadDir = $pubRoot },
             # ...and the reverse: an upload root that would *contain* the
             # published tree, which is the branch nothing exercised.
             @{ Why = "around"; UploadDir = (Split-Path -Parent $relRoot);
-               Releases = (Join-Path (Join-Path $script:work "wrap") ("upload-" + $relVersion + "\releases")) }
+               Releases = (Join-Path (Join-Path $script:work "wrap") ("upload-" + $relVersion + "\releases")) },
+            # issues-found.md F4: the guard compared with the version being
+            # cut alone, so an -UploadDir under an OLDER cut was accepted and
+            # would have written `upload-<v>\` and the zip into a written-once
+            # directory .gitignore does not cover. The older cut staged for the
+            # F15 case above is the destination here.
+            @{ Why = "inside an older cut"; UploadDir = $olderRoot },
+            # ...and the releases root itself, whose `upload-<v>\` and zip
+            # would be siblings of every cut.
+            @{ Why = "at the releases root"; UploadDir = $relRoot }
         )
         # The "around" case needs the release to sit under what would become
         # the upload root, so it is staged as a copy rather than by moving the
@@ -914,7 +967,10 @@ try {
 
         foreach ($c in $containment) {
             $useReleases = if ($c.Why -eq "around") { $wrapReleases } else { $relRoot }
-            $useRoot = if ($c.Why -eq "around") { Join-Path $wrapReleases $relVersion } else { $pubRoot }
+            # What must be untouched: the whole releases tree, not only the
+            # version being assembled - the older cut is what F4 would have
+            # written into.
+            $useRoot = if ($c.Why -eq "around") { Join-Path $wrapReleases $relVersion } else { $relRoot }
             $before = @{}
             foreach ($f in (Get-ChildItem -LiteralPath $useRoot -File -Recurse)) {
                 $before[$f.FullName] = (Get-FileHash -LiteralPath $f.FullName).Hash
@@ -998,7 +1054,7 @@ try {
     $releaserText = [System.IO.File]::ReadAllText($releaser)
     $marks = @(
         @{ Name = "the media-root assertion";  Find = 'Assert-PublishableAtMediaRoot -Layout $declaredLayout' },
-        @{ Name = "the containment assertion"; Find = 'Assert-UploadSetOutsideRelease -UploadRoot (Join-Path $UploadDir' },
+        @{ Name = "the containment assertion"; Find = 'Assert-UploadSetOutsideRelease -UploadRoot $early.Root' },
         @{ Name = "the make-package call";     Find = '& powershell.exe @pkgArgs' },
         @{ Name = "the declared-media check";  Find = 'Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected' },
         @{ Name = "the publish swap";          Find = 'Move-Item -LiteralPath $destRoot -Destination $finalRoot' },
