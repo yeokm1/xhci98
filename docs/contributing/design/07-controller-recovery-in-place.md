@@ -264,13 +264,19 @@ the same bounded terminal state a refusing controller does, which is what the
 cap has to mean to be a bound.
 
 The charge is made only while the latch still stands. An arming can outlive
-its purpose: a reinitialising resume clears `ControllerFailed` and moves the
-start epoch, so the callback it was waiting for declines on the epoch and
-leaves `RecoveryArmed` set (the suspend vector in `test_init` produces exactly
-this). Such an arming is retired by the same age-out with nothing owed and
-nothing charged, counted in `RecoveryStaleCallbacks`, because spending a
-healthy controller's budget on a recovery it no longer needed is the
-expiry-date defect Finding T describes, one step removed.
+its purpose: another path (a reinitialising resume, an earlier recovery)
+clears `ControllerFailed` while it is out. Ordinarily its callback then
+arrives, finds the latch clear, counts itself stale and releases the arming;
+a resume does not move the start epoch (only `XhciCommandInit` does, from
+`StartController`), so the callback still matches, and the suspend vector in
+`test_init` delivers it and asserts exactly that. When that callback was lost
+as well, the age-out retires the arming with nothing owed and nothing
+charged, counted in `RecoveryStaleCallbacks`, because spending a healthy
+controller's budget on a recovery it no longer needed is the expiry-date
+defect Finding T describes, one step removed. (The first version of this
+paragraph said the resume's epoch move orphaned the arming; the Phase 20
+review found the vector behind it firing the mock's command watchdog instead
+of the recovery callback.)
 
 The difference the repair makes is not that failure became impossible. Failure
 became measured: `RecoveryAttempts`, `RecoveryFailures`,

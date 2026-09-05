@@ -3675,6 +3675,13 @@ typedef struct _XHCI_TRANSFER_QUEUE {
     ULONG Recoveries;
     ULONG UnmatchedEvents;  /* resolved to a ring index owned by no transfer */
     ULONG ForeignEvents;    /* did not resolve to this ring at all           */
+    /* Events whose TRB Pointer carried a nonzero RsvdZ 3:0. Masked off before
+     * the ring lookup (a conforming controller leaves them clear, and refusing
+     * a real completion over a bit the spec says is not there would leave the
+     * transfer to usbport's timeout), counted because a controller that sets
+     * them is a finding. The command path has done both since Phase 4; the
+     * transfer paths read the bits raw until the 2026-09-05 audit. */
+    ULONG ReservedBitsSet;
     ULONG EventDataEvents;  /* ED = 1: this driver places no Event Data TRBs */
     ULONG BadCodes;         /* impossible for this ring, or unassigned       */
     /* Codes 26-28 handed to `XhciXferEvent`: the slot layer owns those
@@ -5741,9 +5748,10 @@ typedef struct _XHCI_EXTENSION {
      * repeated loss reaches the same bounded terminal state a refusing
      * controller does. Polls while SUSPENDED do not age it; usbport gates its
      * own timer on HC_SUSPEND, and the callback declines then anyway. An
-     * arming aged out with the latch already clear (a reinitialising resume
-     * moved the start epoch under it, so its callback declined silently) is
-     * retired with nothing charged and counted in `RecoveryStaleCallbacks`.
+     * arming aged out with the latch already clear (another path brought the
+     * controller back while it was out, and its own callback - which would
+     * have counted itself stale and released it - was lost too) is retired
+     * with nothing charged and counted in `RecoveryStaleCallbacks`.
      */
     ULONG RecoveryGeneration;
     ULONG RecoveryArmedPolls;
@@ -6682,6 +6690,7 @@ typedef struct _XHCI_EXTENSION {
      * structure already uses for other things.
      */
     ULONG ForeignEventsTotal;
+    ULONG TransferEventsReservedBitsSet;   /* folded XHCI_TRANSFER_QUEUE.ReservedBitsSet */
     ULONG EventDataEventsTotal;
     ULONG BadCodesTotal;
     ULONG QueueErrorsTotal;

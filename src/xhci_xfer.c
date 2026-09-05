@@ -946,8 +946,13 @@ VOID XhciXferQueueInit(PXHCI_TRANSFER_QUEUE queue)
     queue->Recoveries = 0;
     queue->UnmatchedEvents = 0;
     queue->ForeignEvents = 0;
+    queue->ReservedBitsSet = 0;
     queue->EventDataEvents = 0;
     queue->BadCodes = 0;
+    /* Never set here until the Phase 20 review pass: the extension the queue
+     * lives in arrives zeroed, so production never noticed, and the host
+     * fixture's stack happened to read 0 until a new vector moved it. */
+    queue->StoppedRefused = 0;
     queue->ResidualRejects = 0;
     queue->LengthOverruns = 0;
     queue->SumFailures = 0;
@@ -1454,6 +1459,22 @@ static ULONG xhciXferResidualBytes(PXHCI_TRANSFER_QUEUE queue,
     return 1;
 }
 
+/*
+ * The Transfer Event's TRB Pointer with its RsvdZ low bits taken off, and the
+ * fact that they were set counted. Shared by the three event paths so they
+ * cannot disagree, and the mirror of what the command path has done since
+ * Phase 4: a controller that sets 3:0 is a finding, not a reason to let the
+ * transfer sit until usbport's timeout (the 2026-09-05 audit's first smaller
+ * item). The high DWORD is the caller's to reject, and both callers do.
+ */
+static ULONG xhciXferEventPointer(PXHCI_TRANSFER_QUEUE queue, ULONG eventTrbPA)
+{
+    if ((eventTrbPA & 0x0FUL) != 0) {
+        queue->ReservedBitsSet++;
+    }
+    return eventTrbPA & ~0x0FUL;
+}
+
 ULONG XhciXferQueueStopped(PXHCI_TRANSFER_QUEUE queue,
                            PXHCI_RING ring,
                            ULONG eventTrbPA,
@@ -1491,7 +1512,8 @@ ULONG XhciXferQueueStopped(PXHCI_TRANSFER_QUEUE queue,
     if (XhciXferCodeInfo(completionCode, &code) != XHCI_XFER_OK) {
         return 0;
     }
-    if (XhciRingIndexFromPA(ring, eventTrbPA, &reportedIndex) != XHCI_RING_OK) {
+    if (XhciRingIndexFromPA(ring, xhciXferEventPointer(queue, eventTrbPA),
+                            &reportedIndex) != XHCI_RING_OK) {
         return 0;
     }
 
@@ -1872,9 +1894,10 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
         return XHCI_XFER_OK;
     }
 
-    if (XhciRingIndexFromPA(ring, eventTrbPA, &reportedIndex) != XHCI_RING_OK) {
-        /* Zero (an error the xHC could not attribute to a TRB, 4.11.3.1), an
-         * address on another ring, or a misaligned value. */
+    if (XhciRingIndexFromPA(ring, xhciXferEventPointer(queue, eventTrbPA),
+                            &reportedIndex) != XHCI_RING_OK) {
+        /* Zero (an error the xHC could not attribute to a TRB, 4.11.3.1) or an
+         * address on another ring; the RsvdZ low bits were masked above. */
         queue->ForeignEvents++;
         return XHCI_XFER_OK;
     }
@@ -3445,7 +3468,8 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
         result->NeedsRecovery = 1;
     }
 
-    if (XhciRingIndexFromPA(ring, eventTrbPA, &reportedIndex) != XHCI_RING_OK) {
+    if (XhciRingIndexFromPA(ring, xhciXferEventPointer(queue, eventTrbPA),
+                            &reportedIndex) != XHCI_RING_OK) {
         queue->ForeignEvents++;
         return XHCI_XFER_OK;
     }

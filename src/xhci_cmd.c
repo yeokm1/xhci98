@@ -458,6 +458,14 @@ static VOID xhciCommandInvalidateLocked(PXHCI_EXTENSION ext)
      * exactly the window a quiesce arriving mid-pump lands in. */
     XhciSlotCommandLost(ext);
     ext->CommandGeneration++;
+    /*
+     * A rewritten No Op still waiting for its completion is given up with the
+     * ring: every path through here rebuilds the command ring before the
+     * engine runs again, and a marker that outlived the rebuild would match
+     * the first new command to land at that address and retire its completion
+     * as the No Op's (the Phase 20 review's first finding).
+     */
+    ext->CommandNoOpRewrittenPA = 0;
 }
 
 /* IRQL: <= DISPATCH_LEVEL. No wait is performed while the lock is held. */
@@ -1298,6 +1306,25 @@ static ULONG xhciCommandRingStopped(PXHCI_EXTENSION ext, ULONG pointer)
      * refuses falls through to the divergence reset below, since a position
      * that cannot be edited cannot safely be adopted either.
      */
+    if (abandoned != 0 && ext->CommandNoOpRewrittenPA != 0) {
+        /*
+         * A second abandonment while the first rewrite is still unanswered.
+         * If the xHC has still not fetched the No Op, the reported pointer is
+         * the No Op's address and the newly abandoned command sits behind it,
+         * valid and executable, which adopting the position would leave in
+         * place; if the xHC has passed the No Op, its completion is in flight
+         * with nothing left to recognise it once this marker is overwritten.
+         * Either way the ring's history is beyond what one marker tracks, and
+         * the honest answer is the divergence reset (the Phase 20 review's
+         * second finding).
+         */
+        ext->CommandRingDiverged++;
+        ext->CommandResetRequests++;
+        XHCI_DBG_VALUE_CHANGED("command: stopped again with a rewritten No Op "
+                               "still unanswered - requesting controller "
+                               "reset, TRB", pointer);
+        return XHCI_CMD_ACTION_RESET;
+    }
     if (abandoned != 0 && pointer == abandoned) {
         ULONG index;
 

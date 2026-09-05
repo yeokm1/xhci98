@@ -2408,8 +2408,9 @@ static void usage(void)
 "  -o BASE  output basename (default XHCISNAP)\n"
 "  -force   write to a key matched by value NAME alone\n"
 "\n"
-"Exit 0 = the .TXT is complete.  3 = it is NOT (write or close failed, or the\n"
-"extension came back the wrong size): send the .BIN and say so, not the .TXT.\n"
+"Exit 0 = the .TXT is complete.  3 = it is NOT (not created, a write or the\n"
+"close failed, or the extension came back the wrong size): send the .BIN and\n"
+"say so, not the .TXT.\n"
 "\n"
 "THE FOUR STEPS, and none of them is regedit:\n"
 "  1. xhcisnap -verbosity 2     0 off, 1 counters, 2 +note ring THE LOG,\n"
@@ -2500,9 +2501,8 @@ static void usage_long(void)
 
 /*
  * `-selftest-report BASE`: the report path alone. See the switch in main.
- * Exit 0 with BASE.TXT complete, 3 with it incomplete - the same code the dump
- * answers for the same condition - and 2 if the file could not be created at
- * all, which is the pre-existing open-failure behaviour and not the subject.
+ * Exit 0 with BASE.TXT complete, 3 with it incomplete or not created - the
+ * same codes the dump answers for the same conditions.
  */
 static int selftest_report(const char *base)
 {
@@ -2517,8 +2517,11 @@ static int selftest_report(const char *base)
     companion = fopen(textPath, "w");
     companionOpened = (companion != NULL) ? 1 : 0;
     if (companion == NULL) {
-        printf("selftest: cannot create %s\n", textPath);
-        return 2;
+        /* The same answer the dump gives: no .TXT is not a complete .TXT. */
+        printf("\n--- summary ------------------------------------------------\n");
+        printf("  report     *** NOT CREATED: %s - the report went to the "
+               "screen only.\n", textPath);
+        return 3;
     }
     comp("xhcisnap %s report self-test\n", XHCISNAP_VERSION);
     comp_wrapped("  ", "This file was written by xhcisnap -selftest-report "
@@ -3022,7 +3025,7 @@ int main(int argc, char **argv)
            (extLast.RingUsed == 0) ? "   EMPTY - the report says why" : "");
     printf("  coherence  %s\n",
            tearTorn ? "*** TORN - counters may be a mixture" : "no tearing");
-    if (companionWasWritten) {
+    {
         /*
          * **The path is resolved, not echoed.** With no `-o` the basename is
          * bare, so the files land in whatever the current directory happens to
@@ -3050,44 +3053,59 @@ int main(int argc, char **argv)
         if (GetFullPathNameA(extPath, sizeof(fullBin), fullBin, &namePart) == 0) {
             strcpy(fullBin, extPath);
         }
+        /*
+         * F17, and independent of whatever happened to the .TXT: the raw set is
+         * still evidence and is still named, but as what it is. The .TXT
+         * decodes a window the driver says is not the size the tool read, so
+         * its decoded part is not to be trusted; the .BIN is the bytes as they
+         * came back. (The Phase 20 review found this line nested under "the
+         * report was written", so a mismatch plus a report failure lost it.)
+         */
         if (extMismatch) {
-            /*
-             * F17: the raw set is still evidence and is still named, but it is
-             * named as what it is. The .TXT decodes a window the driver says
-             * is not the size the tool read, so its decoded part is not to be
-             * trusted; the .BIN is the bytes as they came back.
-             */
             printf("  extension  *** MISMATCH: %lu bytes read, the driver says "
                    "%lu\n", extBytes, extLast.ExtensionBytes);
-            printf("             DO NOT DECODE this dump. The files are the "
-                   "raw evidence only:\n");
-            printf("             %s\n", full);
-            printf("             %s (say the sizes disagreed)\n", fullBin);
+            printf("             DO NOT DECODE this dump. %s is the raw "
+                   "evidence only\n             (say the sizes disagreed).\n",
+                   fullBin);
+        }
+        if (companionWasWritten) {
+            if (extMismatch) {
+                printf("  report     %s (its decoded part is not to be "
+                       "trusted, see above)\n", full);
+            } else {
+                printf("  send       %s\n", full);
+                printf("             attach %s beside it\n", fullBin);
+            }
+        } else if (companionOpened) {
+            /*
+             * F5: the file was created but not completed - a write or the
+             * close failed, which is what a full or removed destination looks
+             * like - so the report on disk is truncated and must not be sent
+             * as the report. The raw dump beside it was written and checked
+             * by another path and is still worth having.
+             */
+            printf("  report     *** INCOMPLETE: %s could not be written in "
+                   "full\n", full);
+            printf("             (disk full, or the destination went away). "
+                   "Do not send it as the\n             report; the .BIN and "
+                   ".PSC beside it are still the raw evidence.\n");
         } else {
-            printf("  send       %s\n", full);
-            printf("             attach %s beside it\n", fullBin);
+            /*
+             * The file could not be created at all (a read-only .TXT already
+             * there, an unwritable destination): the report went to the
+             * screen above, where on real silicon it has scrolled off. Exit 3
+             * like the other two, because the documented meaning of 0 is
+             * "the .TXT is complete" and there is no .TXT (Phase 20 review,
+             * finding 6).
+             */
+            printf("  report     *** NOT CREATED: %s - the report went to the "
+                   "screen only.\n", full);
+            printf("             Name a writable location with -o and run "
+                   "the dump again; the .BIN and .PSC\n             beside it "
+                   "are still the raw evidence.\n");
         }
-    } else if (companionOpened) {
-        /*
-         * F5: the file was created but not completed - a write or the close
-         * failed, which is what a full or removed destination looks like - so
-         * the report on disk is truncated and must not be sent as the report.
-         * The raw dump beside it was written and checked by another path and
-         * is still worth having.
-         */
-        char full[MAX_PATH];
-        char *namePart;
-
-        if (GetFullPathNameA(textPath, sizeof(full), full, &namePart) == 0) {
-            strcpy(full, textPath);
-        }
-        printf("  report     *** INCOMPLETE: %s could not be written in "
-               "full\n", full);
-        printf("             (disk full, or the destination went away). Do "
-               "not send it as the\n             report; the .BIN and .PSC "
-               "beside it are still the raw evidence.\n");
     }
-    if (extMismatch || (companionOpened && !companionWasWritten)) {
+    if (extMismatch || !companionWasWritten) {
         return 3;
     }
     return 0;

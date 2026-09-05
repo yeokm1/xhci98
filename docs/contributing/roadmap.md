@@ -1623,12 +1623,22 @@ Tasks, in the audit's revised order:
   abandoned command pinned by a host vector and resolved with a
   command-ring No Op (type 23, not `XhciRingNoOpAt`'s type 8) or a
   divergence reset; `xhciqual`'s EHCI cleanup masking the RW1C status bits.
-- [x] 20.6 the smaller items and D2-D6, with three of the smaller items left
-  as the audit's own rule asks (the `PSModulePath` guard, not reproduced
-  from a PowerShell 7 parent; the import-allowlist duplicate-row matching,
-  latent with no row needing it; the multi-timer async mock, with no vector
-  needing it) and the optional D5 status clarification left to the owner
-  who names the version. As written: the audit's "Smaller code and script
+- [x] 20.6 the smaller items and D2-D6. Four of the smaller items are left,
+  each with its disposition: the `PSModulePath` guard (not reproduced from a
+  PowerShell 7 parent, and the audit's own rule is to promote only a
+  reproduced failure); the import-allowlist duplicate-row matching (latent,
+  no row needs it); the multi-timer async mock (the one vector that needed
+  two pending callbacks, F2's suspend case, captures its recovery callback
+  explicitly instead - the Phase 20 review caught the first version firing
+  the wrong one); and the addressed-`FAILED`-record EP0 reopen
+  (`xhciSlotOpenControl` accepting a record `xhciDevFailRecord` left
+  `ADDRESS_VALID` on, and queueing `EVALUATE_MPS` on it), which is a
+  behaviour change on a path no run has exercised and stays as the audit
+  recorded it - test the failed-record reopen first - for the owner to
+  schedule. The Transfer Event RsvdZ low-bits row is done (one shared mask
+  in `xhci_xfer.c`, counted per queue and folded). The optional D5 status
+  clarification is left to the owner who names the version. As written: the
+  audit's "Smaller code and script
   items" table, each promoted to a fix only once its contract is established
   and the failure reproduced, and the D2-D6 drift rows corrected from
   implementation behaviour, including this roadmap's Phase 18 pointer to a

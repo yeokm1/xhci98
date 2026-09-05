@@ -375,6 +375,7 @@ TtProgrammed	topology: TT pairs programmed
 TtUnresolved	topology: TT pairs unresolved
 QueueErrorsTotal	transfer error events
 TransferEventsForeign	transfer events for no open endpoint
+TransferEventsReservedBitsSet	transfer events with RsvdZ pointer bits set
 QueueRecoveriesTotal	transfer recoveries
 TransfersAborted	transfers aborted
 TransfersCancelled	transfers cancelled

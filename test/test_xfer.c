@@ -3252,6 +3252,27 @@ static void test_event_rejections(void)
              XHCI_XFER_OK, "ok");
     CHECK_EQ(fix.queue.ForeignEvents, 4, "off this ring");
 
+    /* RsvdZ bits 3:0 set on an address that IS on this ring (the 2026-09-05
+     * audit's first smaller item): masked off and counted, so the event
+     * resolves to its TRB instead of being refused as misaligned - here to an
+     * index no transfer owns, which is the unmatched count, not the foreign
+     * one. Before the mask this read as a fifth foreign event. */
+    {
+        ULONG unmatched;
+
+        unmatched = fix.queue.UnmatchedEvents;
+        CHECK_EQ(XhciXferEvent(&fix.queue, &fix.ring, FIX_SLOT, FIX_DCI,
+                               XhciRingTrbPA(&fix.ring, 20) | 0x8UL,
+                               event_dw2(XHCI_CC_SUCCESS, 0),
+                               event_dw3(FIX_SLOT, FIX_DCI), &result),
+                 XHCI_XFER_OK, "ok");
+        CHECK_EQ(fix.queue.ReservedBitsSet, 1, "RsvdZ pointer bits counted");
+        CHECK_EQ(fix.queue.ForeignEvents, 4, "and not read as off this ring");
+        CHECK_EQ(fix.queue.UnmatchedEvents, unmatched + 1,
+                 "but resolved to its (unowned) TRB");
+        CHECK_EQ(fix.queue.Count, 1, "with the transfer untouched");
+    }
+
     /* A code no Transfer Event on this ring may carry. Nothing here knows what
      * the controller did with the TRBs, so nothing is retired or completed. */
     CHECK_EQ(deliver(&fix, 2, XHCI_CC_COMMAND_ABORTED, 0, &result),
@@ -3264,7 +3285,8 @@ static void test_event_rejections(void)
     CHECK_EQ(deliver(&fix, 10, XHCI_CC_SUCCESS, 0, &result),
              XHCI_XFER_OK, "ok");
     CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "not ours");
-    CHECK_EQ(fix.queue.UnmatchedEvents, 1, "counted");
+    CHECK_EQ(fix.queue.UnmatchedEvents, 2,
+             "counted (the RsvdZ vector above was the first)");
 
     CHECK_EQ(XhciXferEvent(NULL, &fix.ring, FIX_SLOT, FIX_DCI, 0, 0, 0, &result),
              XHCI_XFER_BAD_PARAM, "NULL queue");

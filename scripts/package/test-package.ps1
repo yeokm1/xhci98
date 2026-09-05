@@ -955,7 +955,15 @@ try {
             @{ Why = "inside an older cut"; UploadDir = $olderRoot },
             # ...and the releases root itself, whose `upload-<v>\` and zip
             # would be siblings of every cut.
-            @{ Why = "at the releases root"; UploadDir = $relRoot }
+            @{ Why = "at the releases root"; UploadDir = $relRoot },
+            # The repository's OWN releases\ while -ReleasesDir points at the
+            # stand-in tree: the override moves the cut, not the protection
+            # (Phase 20 review, finding 5). The destination is a probe name
+            # under the canonical root that does not exist; the guard must
+            # refuse before anything is written, and the case removes the
+            # probe if a broken guard ever creates it.
+            @{ Why = "under the repository's own releases directory with -ReleasesDir overridden";
+               UploadDir = (Join-Path (Join-Path $repo "releases") (".selftest-probe-" + [System.IO.Path]::GetRandomFileName())) }
         )
         # The "around" case needs the release to sit under what would become
         # the upload root, so it is staged as a copy rather than by moving the
@@ -1002,6 +1010,13 @@ try {
             # leave.
             Assert-True ((@(Get-ChildItem -LiteralPath $useRoot -Directory -Recurse).Count) -eq $beforeDirs) `
                 "the refused $($c.Why) run left a directory behind inside the published release."
+            if ($c.UploadDir.StartsWith((Join-Path $repo "releases"), [System.StringComparison]::OrdinalIgnoreCase)) {
+                Assert-True (-not (Test-Path -LiteralPath $c.UploadDir)) `
+                    "the refused $($c.Why) run created its destination under the repository's own releases directory."
+                if (Test-Path -LiteralPath $c.UploadDir) {
+                    Remove-Item -LiteralPath $c.UploadDir -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
         }
     }
 

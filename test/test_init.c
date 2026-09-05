@@ -7672,6 +7672,88 @@ static void test_command_timeout(void)
     }
 
     /*
+     * **The rewrite marker does not outlive the ring** (Phase 20 review,
+     * finding 1). A rewritten No Op still unanswered when the controller is
+     * suspended and resumed - the resume rebuilds the command ring - would
+     * otherwise match the first new command to land at that address and
+     * retire its completion as the No Op's.
+     */
+    hc_build();
+    hwCmdHang = 1;
+    hwCmdAbortSkipsAborted = 1;
+    hwCmdStoppedAtHung = 1;
+    CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a controller that never fetches)");
+    hw_events_reset();
+    fire_async_timer();
+    deliver_events();
+    CHECK_EQ(ext.CommandRingStoppedOnAbandoned, 1, "(a rewrite is pending)");
+    CHECK(ext.CommandNoOpRewrittenPA != 0, "(and remembered)");
+    hwCmdHang = 0;
+    hwCmdStoppedAtHung = 0;
+    XhciRegPacket.SuspendController(&ext);
+    /* The reinitialisation carves the event ring afresh at index 0; the
+     * model's producer has to start there too (what enable_start does before
+     * a start, for the same reason). */
+    hw_events_reset();
+    CHECK_EQ(XhciRegPacket.ResumeController(&ext), MP_STATUS_SUCCESS,
+             "(a resume that rebuilds the command ring)");
+    CHECK_EQ(ext.CommandNoOpRewrittenPA, 0,
+             "the rebuilt ring inherits no rewrite marker");
+    deliver_events();               /* the resume's own No Op self-test */
+    {
+        ULONG unmatched;
+
+        unmatched = ext.CommandsUnmatched;
+        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+                 "(a command on the rebuilt ring)");
+        deliver_events();
+        CHECK_EQ(ext.CommandTrbPA, 0, "completes as its own");
+        CHECK_EQ(ext.CommandsUnmatched, unmatched, "(and is not misretired)");
+    }
+
+    /*
+     * **A second abandonment behind a pending rewrite is a divergence**
+     * (Phase 20 review, finding 2). The No Op is at the head, still unfetched;
+     * the next command is doorbelled behind it and hangs too; the abort
+     * reports the stop at the No Op's address, so the abandoned command sits
+     * behind it, valid and executable, and one marker cannot track both.
+     */
+    hc_build();
+    hwCmdHang = 1;
+    hwCmdAbortSkipsAborted = 1;
+    hwCmdStoppedAtHung = 1;
+    CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a controller that never fetches)");
+    hw_events_reset();
+    fire_async_timer();
+    deliver_events();
+    CHECK_EQ(ext.CommandRingStoppedOnAbandoned, 1, "(a rewrite is pending)");
+    {
+        ULONG diverged;
+
+        diverged = ext.CommandRingDiverged;
+        /* Still hanging: the doorbell for the next command fetches nothing,
+         * so the model's dequeue stays on the No Op. */
+        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+                 "(a second command, behind the No Op)");
+        fire_async_timer();             /* its watchdog: abort (writes CA) */
+        writeCount = 0;
+        invalidateCalls = 0;
+        deliver_events();               /* the stop, at the No Op's address */
+        CHECK_EQ(ext.CommandRingDiverged, diverged + 1,
+                 "a second stop with a rewrite still unanswered is a divergence");
+        CHECK_EQ(invalidateCalls, 1, "that asks usbport for a reset");
+        CHECK_EQ(ext.CommandRingStoppedOnAbandoned, 1,
+                 "and does not attempt a second rewrite");
+        CHECK_EQ(ext.CommandState, XHCI_CMD_STATE_ABORTING,
+                 "leaving the engine out of service until the reset");
+        CHECK_EQ(count_writes(HC_OP(XHCI_OP_CRCR)), 0,
+                 "and rewriting nothing");
+    }
+    hwCmdHang = 0;
+    hwCmdAbortSkipsAborted = 0;
+    hwCmdStoppedAtHung = 0;
+
+    /*
      * A Command Ring Stopped naming a position this ring cannot hold. The
      * obvious repair - rewrite CRCR, which is legal exactly here - **cannot be
      * expressed**: the Command Ring Pointer is bits 63:6 ("the low order 6 bits
@@ -14611,6 +14693,88 @@ static void test_slot_stale_handle_interrupt_endpoint(void)
     CHECK_EQ(record->EndpointExtension, NULL, "and drops the binding");
     CHECK_EQ(ext.RemovesWithWork, removesWithWork + 1,
              "counting the work it found queued");
+}
+
+/*
+ * The one call a superseded handle keeps (Phase 20 review, finding 3): a
+ * PAUSED from a handle that still owns queued work. A same-parameter reopen
+ * rebinds the record to B without draining what A queued, and usbport cancels
+ * A's transfers through A - PAUSED first, AbortTransfer after - so declining
+ * that PAUSED would remove the early Stop Endpoint that keeps the abort's DMA
+ * window narrow. Once the work is gone, A's PAUSED is declined like any other
+ * superseded call.
+ */
+static void test_slot_stale_handle_owning_work_may_pause(void)
+{
+    PXHCI_DEVICE dev;
+    PXHCI_ENDPOINT_RECORD record;
+    ULONG stale;
+
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    CHECK_EQ(slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                          USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1),
+             MP_STATUS_SUCCESS, "(the interrupt endpoint opens into handle A)");
+    deliver_events();
+    record = &dev->Endpoints[0];
+    slot_setup_xfer(&slotParams, &slotTransfer, &slotSgList, 8, 1);
+    CHECK_EQ(XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint2, &slotParams,
+                                          &slotTransfer, &slotSgList),
+             MP_STATUS_SUCCESS, "(A queues a transfer)");
+    CHECK_EQ(record->Queue.Count, 1, "(one outstanding)");
+
+    CHECK_EQ(slot_open_ep(&slotEndpoint3, 7, UsbHighSpeed, 0x81,
+                          USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1),
+             MP_STATUS_SUCCESS, "the same endpoint opens into handle B");
+    CHECK(record->EndpointExtension == (PVOID)&slotEndpoint3, "(bound to B)");
+    CHECK_EQ(record->Queue.Count, 1, "with A's transfer still queued");
+
+    /* usbport cancels A's transfer: PAUSED through A must still start the
+     * stop, because A owns work on that queue. */
+    stale = ext.EndpointCallsStale;
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint2, USBPORT_ENDPOINT_PAUSED);
+    CHECK_EQ(record->Quiesce.Flags & XHCI_EPQ_PAUSED, XHCI_EPQ_PAUSED,
+             "a PAUSED through a superseded handle that owns queued work pauses");
+    CHECK_EQ(ext.EndpointCallsStale, stale, "and is not counted stale");
+    CHECK_EQ(dev->ActiveOp, XHCI_DEV_OP_STOP_EP,
+             "so the Stop Endpoint starts before the abort, as the contract wants");
+
+    {
+        ULONG length;
+
+        length = 0;
+        XhciRegPacket.AbortTransfer(&ext, &slotEndpoint2, &slotTransfer, &length);
+    }
+    CHECK_EQ(record->Queue.Count, 0, "the abort withdraws A's transfer");
+    /* The stop, then the placement the reposition owes; driven until the
+     * chain is quiet rather than by a fixed count. */
+    for (stale = 0; stale < 6 && dev->ActiveOp != XHCI_DEV_OP_NONE; stale++) {
+        deliver_events();
+    }
+    CHECK_EQ(dev->ActiveOp, XHCI_DEV_OP_NONE, "(the quiesce chain completed)");
+
+    /* With nothing of A's left on the queue, A is just a superseded handle. */
+    stale = ext.EndpointCallsStale;
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint2, USBPORT_ENDPOINT_PAUSED);
+    CHECK_EQ(ext.EndpointCallsStale, stale + 1,
+             "a PAUSED through A with no work of A's left is declined");
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint2, USBPORT_ENDPOINT_ACTIVE);
+    CHECK_EQ(ext.EndpointCallsStale, stale + 2, "as is an ACTIVE through A");
+    CHECK_EQ(record->Quiesce.Flags & XHCI_EPQ_PAUSED, XHCI_EPQ_PAUSED,
+             "so the endpoint stays paused - until the health poll's restart "
+             "(XHCI_EP_RESTART_MS; test_slot_paused_endpoint_is_restarted_by_"
+             "the_poll pins that backstop) or an ACTIVE through the bound "
+             "handle, which is what B sends here");
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint3, USBPORT_ENDPOINT_ACTIVE);
+    CHECK_EQ(record->Quiesce.Flags & XHCI_EPQ_PAUSED, 0,
+             "an ACTIVE through B ends the pause");
+    CHECK_EQ(record->State, XHCI_EP_REC_CONFIGURED, "(still configured)");
+
+    /* B carries on. */
+    slot_setup_xfer(&slotParams2, &slotTransfer2, &slotSgList2, 8, 1);
+    CHECK_EQ(XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint3, &slotParams2,
+                                          &slotTransfer2, &slotSgList2),
+             MP_STATUS_SUCCESS, "a submit through B is accepted");
+    CHECK_EQ(record->Queue.Count, 1, "and queued");
 }
 
 static void test_slot_stale_handle_ep0(void)
@@ -28459,6 +28623,15 @@ static void test_recovery_delivery_loss(void)
     asyncRequests = 0;
     XhciRegPacket.CheckController(&ext);
     CHECK_EQ(ext.RecoveryArmed, 1, "(one recovery armed against the latch)");
+    /*
+     * Captured now, because the mock holds ONE pending callback and the
+     * resume below arms its own command watchdog over it: firing "the" timer
+     * after the resume would fire that watchdog and prove nothing about this
+     * arming (the Phase 20 review's fourth finding, which caught exactly that
+     * in the first version of this vector).
+     */
+    lost = asyncContext;
+    lostCallback = asyncCallback;
     XhciRegPacket.SuspendController(&ext);
     for (i = 0; i < XHCI_RECOVERY_DELIVERY_POLLS + 2; i++) {
         XhciRegPacket.CheckController(&ext);
@@ -28472,22 +28645,40 @@ static void test_recovery_delivery_loss(void)
              "(the resume brings the controller back)");
     CHECK_EQ(ext.ControllerFailed, 0, "(its reinitialisation clears the latch)");
     /*
-     * The reinitialising resume moved the start epoch, so the callback this
-     * arming is waiting for will decline on the epoch and leave the arming
-     * set - an arming that has outlived its purpose. The age-out retires it
-     * with nothing owed and, because the latch is clear, nothing charged.
+     * A reinitialising resume does NOT move the start epoch (only
+     * XhciCommandInit does, from StartController), so the recovery callback
+     * still matches when it arrives: it finds the latch clear, counts itself
+     * stale, and releases the arming itself. Delivered as the callback it is,
+     * not as whatever the mock's single slot holds now.
      */
-    fire_async_timer();
+    if (lostCallback != NULL) {
+        lostCallback(&ext, &lost);
+    }
     CHECK_EQ(ext.RecoveryAttempts, 0,
-             "(the callback from the old start declines on the epoch)");
-    CHECK_EQ(ext.RecoveryArmed, 1, "(and leaves the arming standing)");
+             "the recovery callback recovers nothing on a controller the "
+             "resume already brought back");
+    CHECK_EQ(ext.RecoveryStaleCallbacks, 1, "and counts itself stale");
+    CHECK_EQ(ext.RecoveryArmed, 0, "and releases its arming");
+    CHECK_EQ(ext.RecoveryRequested, 0,
+             "handing nothing back, because nothing is owed");
+    CHECK_EQ(ext.RecoveryDeliveriesLost, 0, "(nothing was lost)");
+
+    /*
+     * The age-out's uncharged branch, for the arming that outlives its
+     * purpose AND whose callback never comes: the latch cleared by another
+     * path while the arming was out, and the delivery lost as well. Produced
+     * directly, because no single sequence of callbacks reaches it; what is
+     * pinned is that a healthy controller's budget is not charged for it.
+     */
+    ext.RecoveryArmed = 1;
+    ext.RecoveryArmedPolls = 0;
     for (i = 0; i < XHCI_RECOVERY_DELIVERY_POLLS; i++) {
         XhciRegPacket.CheckController(&ext);
     }
     CHECK_EQ(ext.RecoveryArmed, 0,
-             "the age-out retires an arming the resume made pointless");
-    CHECK_EQ(ext.RecoveryStaleCallbacks, 1,
-             "counting it with the callbacks that had nothing to do");
+             "an arming aged out with the latch clear is retired");
+    CHECK_EQ(ext.RecoveryStaleCallbacks, 2,
+             "counted with the callbacks that had nothing to do");
     CHECK_EQ(ext.RecoveryDeliveriesLost, 0, "not as a lost delivery");
     CHECK_EQ(ext.RecoveryFailuresConsecutive, 0,
              "and charging a healthy controller's budget nothing");
@@ -28592,6 +28783,7 @@ int main(void)
     test_slot_ep0_remove_superseded_handle();
     test_slot_ep0_remove_superseded_handle_late();
     test_slot_stale_handle_interrupt_endpoint();
+    test_slot_stale_handle_owning_work_may_pause();
     test_slot_stale_handle_ep0();
     test_slot_stale_handle_after_record_reuse();
     test_slot_init_resets_the_table_in_one_hold();

@@ -1802,6 +1802,8 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
                            ext->DevicesDisabledOut);
     XHCI_DBG_VALUE_CHANGED("transfer events for no open endpoint",
                            ext->TransferEventsForeign);
+    XHCI_DBG_VALUE_CHANGED("transfer events with RsvdZ pointer bits set",
+                           ext->TransferEventsReservedBitsSet);
     XHCI_DBG_VALUE_CHANGED("short packets", ext->ShortPacketsTotal);
     XHCI_DBG_VALUE_CHANGED("short transfers reported as Success",
                            ext->ShortSuccessesTotal);
@@ -3017,13 +3019,15 @@ static VOID xhciArmRecovery(PXHCI_EXTENSION ext)
      * then.
      *
      * The charge is made only while the latch still stands. An arming can also
-     * outlive its purpose: a reinitialising resume clears `ControllerFailed`
-     * and moves the start epoch, so the callback it was waiting for declines
-     * on the epoch without touching `RecoveryArmed` - the shape the suspend
-     * vector produces. That arming is retired here with nothing owed and
-     * nothing charged, counted with the callbacks that had nothing to do,
-     * because charging a healthy controller's budget for a recovery it no
-     * longer needed would spend the next incident's attempts on this one.
+     * outlive its purpose: another path (a reinitialising resume, an earlier
+     * recovery) clears `ControllerFailed` while it is out. Ordinarily its
+     * callback then arrives, finds the latch clear, counts itself stale and
+     * releases the arming itself - the resume does not move the start epoch,
+     * so it still matches. This branch is for that arming when its delivery
+     * was lost as well: retired with nothing owed and nothing charged, counted
+     * with the callbacks that had nothing to do, because charging a healthy
+     * controller's budget for a recovery it no longer needed would spend the
+     * next incident's attempts on this one.
      */
     if (ext->RecoveryArmed && (ext->Flags & XHCI_EXT_FLAG_SUSPENDED) == 0) {
         ext->RecoveryArmedPolls++;

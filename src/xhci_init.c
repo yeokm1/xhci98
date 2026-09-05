@@ -1018,6 +1018,11 @@ static ULONG xhciProgramCommandRing(PXHCI_EXTENSION ext)
         return XHCI_RING_BAD_PARAM;
     }
 
+    /* The TRBs go with the ring, so a No Op rewritten over an abandoned
+     * command and not yet answered goes with them (see
+     * xhciCommandInvalidateLocked, which every path here has already run;
+     * cleared again because a rebuilt ring must never inherit the marker). */
+    ext->CommandNoOpRewrittenPA = 0;
     status = XhciRingInit(&ext->CommandRing,
                           (volatile XHCI_TRB *)
                               XhciCommonAt(ext, layout->CommandRingOffset),
@@ -3307,6 +3312,7 @@ static ULONG xhciRestoreState(PXHCI_EXTENSION ext)
      * when Command Ring Running (CRR) = '1'", p.368). Ordering is therefore the
      * specification's own: reinitialise, write, and only then run.
      */
+    ext->CommandNoOpRewrittenPA = 0;    /* the TRBs go with the ring */
     if (XhciRingInit(&ext->CommandRing,
                      (volatile XHCI_TRB *)
                          XhciCommonAt(ext, layout->CommandRingOffset),

@@ -699,8 +699,13 @@ function Assert-UploadSetOutsideRelease {
     # Resolve-Path cannot answer for a directory that is not there yet.
     param([string]$UploadRoot, [string]$UploadZip, [string]$PublishedRoot, [string]$ReleasesRoot)
 
+    # The repository's own releases\ is protected whatever -ReleasesDir says:
+    # an override points the CUT somewhere else, and the cuts that exist under
+    # the canonical root are still written once and never edited, so an
+    # -UploadDir under one of them is as wrong with the override as without it
+    # (the Phase 20 review's fifth finding).
     $protected = @()
-    foreach ($p in @($ReleasesRoot, $PublishedRoot)) {
+    foreach ($p in @($ReleasesRoot, $PublishedRoot, (Join-Path $repo "releases"))) {
         if (-not [string]::IsNullOrEmpty($p)) { $protected += $p.TrimEnd('\') }
     }
     $outputs = @(

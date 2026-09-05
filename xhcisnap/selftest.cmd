@@ -65,11 +65,26 @@ if errorlevel 1 (
 )
 set "XHCISNAP_FAULT="
 
-del /q "%BASE%.TXT" "%BASE%.no-fault.log" "%BASE%.write-fault.log" "%BASE%.close-fault.log" 2> nul
+rem A .TXT that cannot be created: the dump's own fopen-failure branch used to
+rem exit 0 with the report on screen (Phase 20 review, finding 6).
+attrib +R "%BASE%.TXT"
+"%~dp0XHCISNAP.EXE" -selftest-report "%BASE%" > "%BASE%.readonly.log"
+if not errorlevel 3 (
+    echo FAIL: a report whose .TXT could not be created exited %errorlevel%, expected 3
+    set FAILED=1
+)
+findstr /C:"NOT CREATED" "%BASE%.readonly.log" > nul
+if errorlevel 1 (
+    echo FAIL: the read-only summary does not say NOT CREATED
+    set FAILED=1
+)
+attrib -R "%BASE%.TXT"
+
+del /q "%BASE%.TXT" "%BASE%.no-fault.log" "%BASE%.write-fault.log" "%BASE%.close-fault.log" "%BASE%.readonly.log" 2> nul
 
 if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 3 cases, all passed
+echo xhcisnap selftest: 4 cases, all passed
 exit /b 0

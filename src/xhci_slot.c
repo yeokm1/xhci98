@@ -310,6 +310,7 @@ static VOID xhciDevFoldQueue(PXHCI_EXTENSION ext, PXHCI_TRANSFER_QUEUE queue)
      * exactly the way those are - as ext-level totals that survive an unplug.
      */
     ext->ForeignEventsTotal += queue->ForeignEvents;
+    ext->TransferEventsReservedBitsSet += queue->ReservedBitsSet;
     ext->EventDataEventsTotal += queue->EventDataEvents;
     ext->BadCodesTotal += queue->BadCodes;
     ext->QueueErrorsTotal += queue->Errors;
@@ -483,6 +484,33 @@ static ULONG xhciEpHandleSuperseded(PXHCI_DEVICE dev,
         bound = record->EndpointExtension;
     }
     return (bound != NULL && bound != (PVOID)endpoint) ? 1UL : 0UL;
+}
+
+/*
+ * Does this handle still own a transfer on the queue? A same-parameter reopen
+ * rebinds the record to the new extension without draining what the old one
+ * queued, and usbport cancels that work through the old handle: PAUSED first,
+ * then AbortTransfer. The PAUSED is what starts the Stop Endpoint early enough
+ * to shrink the window in which the xHC can still execute a TD whose buffer
+ * usbport is about to unmap, so a superseded handle that demonstrably owns
+ * queued work keeps that one right (the Phase 20 review's third finding);
+ * every other superseded call is declined. Each transfer records the extension
+ * it arrived through. Called with the lock held. IRQL: any.
+ */
+static ULONG xhciEpHandleOwnsWork(const XHCI_TRANSFER_QUEUE *queue,
+                                  PXHCI_ENDPOINT endpoint)
+{
+    PXHCI_TRANSFER walk;
+
+    if (queue == NULL || endpoint == NULL) {
+        return 0;
+    }
+    for (walk = queue->Head; walk != NULL; walk = walk->Next) {
+        if (walk->EndpointExtension == (PVOID)endpoint) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static PXHCI_ENDPOINT_RECORD xhciEpFree(PXHCI_DEVICE dev)
@@ -5710,13 +5738,20 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
         XhciControllerLockAcquire(&oldIrql);
         dev = xhciDevFromRef(ext, endpoint->DeviceIndex);
         if (dev != NULL && dev->State != XHCI_DEV_STATE_FREE &&
-            xhciEpHandleSuperseded(dev, endpoint->Dci, endpoint)) {
+            xhciEpHandleSuperseded(dev, endpoint->Dci, endpoint) &&
+            !(state == USBPORT_ENDPOINT_PAUSED &&
+              xhciEpResolve(dev, endpoint->Dci, &binding) &&
+              xhciEpHandleOwnsWork(binding.Queue, endpoint))) {
             /*
              * A handle a replacement has displaced (F1). PAUSED through it
              * would stop the *replacement's* endpoint and ACTIVE would restart
              * it on the old handle's say-so; the transfers this handle still
              * owns are withdrawn by AbortTransfer, which matches the transfer
-             * rather than the handle.
+             * rather than the handle. The one call let through is a PAUSED
+             * from a superseded handle that still owns queued work: that is
+             * usbport cancelling the old handle's transfers, and the early
+             * Stop Endpoint it asks for is what keeps the abort's DMA window
+             * narrow (xhciEpHandleOwnsWork).
              */
             ext->EndpointCallsStale++;
         } else if (dev != NULL && dev->State != XHCI_DEV_STATE_FREE &&

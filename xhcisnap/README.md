@@ -114,12 +114,15 @@ the bench reads on the spot. The headline test is per port: a port reporting a
 device connected with `PP` clear is Finding Q read off the register, whatever
 the other ports say.
 
-The exit code says whether the `.TXT` is the report. `0` means every write and
-the close reached the volume. `3` means it did not (a full or removed
-destination; the summary line reads `INCOMPLETE`) or that the extension window
-came back a different size from the one the driver declared (`MISMATCH`, `DO
-NOT DECODE`): in both cases the `.BIN` and `.PSC` are still the raw evidence
-and are still named, but the `.TXT` must not be sent as the report. Until the
+The exit code says whether the `.TXT` is the report. `0` means the file was
+created and every write and the close reached the volume. `3` means it was
+not created (the summary line reads `NOT CREATED`; the report went to the
+screen), or it was created but not completed (a full or removed destination;
+`INCOMPLETE`), or the extension window came back a different size from the
+one the driver declared (`MISMATCH`, `DO NOT DECODE`, printed whatever
+happened to the `.TXT`): in every case the `.BIN` and `.PSC` are still the
+raw evidence and are still named, but the `.TXT` must not be sent as the
+report. Until the
 2026-09-05 audit (`issues-found.md` F5, F17) `fopen` succeeding was the whole of
 "written", and a truncated report exited 0 with a "send this" underneath it.
 `xhcisnap -selftest-report BASE` drives the report path with no controller,
@@ -236,9 +239,9 @@ xhcisnap\build.cmd
 xhcisnap\selftest.cmd
 ```
 
-The second runs the report path three times with no controller present (no
-fault, a failing write, a failing close) and checks the exit codes and summary
-lines; see "Three files" above.
+The second runs the report path four times with no controller present (no
+fault, a failing write, a failing close, a `.TXT` that cannot be created) and
+checks the exit codes and summary lines; see "Three files" above.
 
 MSVC 6.0 in place from `tools\MSVC600`; nothing is installed machine-wide and
 `MSVC6` overrides the location. `/Za` is not used here even though the driver
