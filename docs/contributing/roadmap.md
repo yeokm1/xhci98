@@ -37,8 +37,8 @@ the port driver's role, was the documented fallback and was never needed. USB
 `docs/usb-xhci-info/win98-wdm.md` ("USB Stack Architecture and the Integration
 Decision") and `architecture.md`.
 
-Current status: Phases 0-19 are closed. `1.0.0.0`, `1.0.0.1` and `1.0.1.0`
-are cut, and none has been uploaded; Phase 15 moved the
+Current status: Phases 0-19 are closed and Phase 20 is open. `1.0.0.0`,
+`1.0.0.1` and `1.0.1.0` are cut, and none has been uploaded; Phase 15 moved the
 tree from revision 1.2 of the xHCI specification to revision 1.2c, the only
 revision Intel now serves, without a code change; Phase 16, the fully
 automated run on freshly installed guests of both targets, closed on
@@ -53,10 +53,14 @@ ME support. Phase 19, opened on 2026-09-03 on branch `1.0.1.0`, is release
 guest measured, an NT install that never had a USB controller has no
 `usbport.sys` for this driver to import, and XP's `usbport` idle-suspends the
 controller so a later hot-plug is invisible; both are INF changes that reach
-Windows 2000 too. Two acts sit outside the task list and are the project
-owner's to take: uploading the asset, and then running the release
-acceptance test by hand on a fresh VM and on a physical machine. The section
-this roadmap ends on is the reminder for the second.
+Windows 2000 too. Phase 20, opened on 2026-09-05 on branch `phase-20`, is
+the post-Phase-19 fix pass: the 2026-09-05 repository audit
+(`issues-found.md` at the repository root, eighteen findings and six
+documentation groups, reviewed to convergence) is worked through and the
+result cut. Two acts sit outside the task list and are the project owner's
+to take: uploading the asset, and then running the release acceptance test
+by hand on a fresh VM and on a physical machine. The section this roadmap
+ends on is the reminder for the second.
 
 ---
 
@@ -67,7 +71,7 @@ work can be confirmed and has no checkpoint of its own. A VM boot or a bench
 trip is the expensive unit, and most tasks do not need one, so from Phase 6
 onward a phase whose tasks are confirmed in more than one place groups them
 into batches. Phases 6, 7a, 7b, 8, 9, 11 and 13 are of this shape; Phases 0-5,
-10, 12, 14, 15, 16, 17, 18 and 19 have plain per-phase task numbers.
+10, 12, 14, 15, 16, 17, 18, 19 and 20 have plain per-phase task numbers.
 
 Task ids are `<batch>.<n>` in a batched phase (`6-B.4` is the fourth task of
 batch `6-B`) and plain `<phase>.<n>` otherwise (`12.3`, `14.1`). Phases 0-5
@@ -123,7 +127,8 @@ after the cut, moves the tree to revision 1.2c of the xHCI specification, and
 Phase 16 is the unattended post-release run on freshly installed guests. Phase
 17 has the OS supply `usbd.sys` and `usbhub.sys`, Phase 18 is release
 `1.0.0.1` with Windows ME, and Phase 19 is release `1.0.1.0` with Windows XP
-and the NT-side install fixes the XP guest found. Phase
+and the NT-side install fixes the XP guest found. Phase 20 works through the
+2026-09-05 audit (`issues-found.md`) and cuts the result. Phase
 14 waited on Phase 13's bench batches reporting. Accepting the published release, from the download on a
 freshly installed VM and on a physical machine, is not a phase and has no
 task: it is a hand-run procedure the project owner takes after the upload,
@@ -1499,6 +1504,150 @@ xHCI-only VM", "The files the OS supplies"); `lessons.md`; `win98-wdm.md`
 rebuild"); `docs/issues/04-xp-restore-device-ep0-remove.md`;
 `scripts/inf-gate/`; `releases/history.md`;
 `docs/contributing/runs/run-19-post-release/`.
+
+## Phase 20 - Post-Phase-19 Fixes: The 2026-09-05 Audit
+
+Goal: every finding in [`issues-found.md`](../../issues-found.md), the
+repository audit taken on 2026-09-05 at `6f356a9`, either fixed with the
+regression vector that pins it or recorded there as an owner decision not to
+fix, with the reason; the full gates green after the changes; both primary
+targets' post-release matrix reading unchanged or better; and the result
+cut. The audit found no critical defect. It found four P2 driver items (F1,
+F2, F8, F10) and one P3 conditional command-ownership case (F12), three
+matrix-verdict gaps
+(F3, F9, F11), two packaging guards (F4, F14) and one packaging workflow
+limitation (F15), a diagnostic tool whose success message is not checked
+(F5, F17), two provenance statements that are no longer true (F6, F7), an
+INF and documentation statement the owner's checks contradict (F18), and a
+documentation drift list (D1-D6 and the smaller items). Nothing in it is
+fixed as this phase opens.
+
+Status: opened on 2026-09-05 by the owner, on branch `phase-20`, the day the
+audit was reviewed. The version the fixes ship in is the owner's to name
+when the cut opens: the phase carries driver code changes, so the third
+field moves (`1.0.2.0` on the numbering Phase 19 states) unless the owner
+folds it into a larger release. `issues-found.md` is the record of what was
+found and why; this entry is the order of work. Cite findings by their IDs
+(F1-F18, D1-D6), not by line: the document's line numbers into the tree
+refer to `6f356a9` and stop matching as the fixes land.
+
+Why a phase: the findings cross every layer, from endpoint ownership in
+`xhci_slot.c` to the readme template, and several of them interact (F3 and
+F9 are one verdict rule seen from two sides; F1 and F8 are both table
+ownership; F6, F7, F18 and D1 all rewrite the same shipped statements), so
+fixing them piecemeal on a release branch would repeat the drift they
+describe. The audit's own review loop found something in each of its first
+three rounds' corrections, which is the reason each fix here carries a
+regression vector before it is called done. Windows 2000 observations
+remain VM-only, and a Windows 98 metal reading covers nothing on that
+target.
+
+Tasks, in the audit's revised order:
+
+- [ ] 20.0 the matrix verdict (F3, F9, F11): driver-refusal evidence takes
+  precedence over both `PASS` and the `NODRIVER` inference in
+  `scripts/vm-matrix/lib/verdict.ps1`, the refusal reason in the verdict,
+  applicable `zero` expectations for the open and configure failure
+  counters in `matrix.psd1`, an all-`EXCLUDED` target reading `FAIL` or
+  `ERROR` in `Get-TargetVerdict`; the exact reproduction vectors from
+  the audit in `selftest.ps1`, a true never-claimed `NODRIVER` retained;
+  the rule recorded in design record 06 section 2.1.
+- [ ] 20.1 the packaging guards (F4, F14, F15): `Assert-UploadSetOutsideRelease`
+  checking the upload tree and the ZIP against the whole `releases\` root,
+  tested on isolated temporary trees only; the INF gate's `PATH-W98`
+  mirroring `PATH-NT`'s own-`CopyFiles` check for `NTMPDriver`, with the
+  self-test that failed to catch the audit's scratch INF; `-UploadSetOnly`
+  assembling the current cut's asset from its tracked directory alone, the
+  `pkg-` hash check retired, older cuts refused with a message that says
+  the gate's rules have moved (the 1.0.0.1 INF fails six of them, read-only,
+  2026-09-05), and a `test-package.ps1` case for a clone with no `out\`.
+- [ ] 20.2 endpoint and table ownership (F1, F8): current-binding validation
+  under the controller lock at every endpoint callback entry, a stale
+  handle closed locally without touching its replacement, stale submits
+  rejected through the completion contract, record reuse considered; and
+  `XhciSlotInit`'s device-table reset and `DeferredBusy` clearing
+  serialised with the callbacks that read them, the active drainer's
+  ownership preserved across its unlocked interval. Host vectors first: the
+  audit's three F1 sequences with successful use of the replacement after
+  each, same-extension reopen, device-index reuse, non-default endpoints,
+  and an interleaving vector for the table reset. Then design record 05
+  section 2 and the invariants corrected. Preserve issue 4's working XP
+  behaviour and `Ep0RemovesSuperseded`.
+- [ ] 20.3 recovery delivery loss (F2): the owner's policy, either a
+  documented terminal residual with the "costs one attempt, bounded by the
+  cap" claim removed from `xhciArmRecovery`'s comment and design record 07
+  section 7, or a bounded age-out with a distinct delivery generation that
+  invalidates late callbacks and cannot start two recoveries, aged by a
+  clock that still advances while `ControllerFailed` is set (not
+  `PollClockMs`). Vectors: one lost delivery, eventual delivery, a late
+  callback from an expired request, repeated loss to the terminal state,
+  suspend and restart between arming and delivery.
+- [ ] 20.4 the shipped statements (F6, F7, F18, D1): the `LICENSE` scope
+  paragraph rewritten as history in `legal-provenance.md` section 5's form;
+  the `make-release.ps1` readme template ("WINDOWS 98 ONLY", "redistributes
+  nothing of Microsoft's", the stale table of contents, the 0.x sentence,
+  "Until 1.0.0.1") and `release-notes.md:295` corrected, with a packager
+  self-test that greps the rendered readme for the two forbidden phrases;
+  the "Windows 2000's native `usbport` never idle-suspends this controller"
+  statement and its "changes nothing" conclusion removed or qualified at
+  every active site F18 lists (INF comment, readme template, release notes,
+  acceptance test, both gate comments, `xhci_dispatch.c`, `xhci.h`, the
+  invariants, `build-and-test.md`), dated entries and `history.md` given a
+  dated qualification rather than a rewrite, and a Windows 2000 SP4 VM idle
+  observation with its conditions recorded in `build-and-test.md`; the
+  post-upload paragraph at the end of this roadmap made to defer to
+  `releases/README.md`'s uploaded rule. No cut directory is edited: F6 and
+  F7 reach the download at the next cut.
+- [ ] 20.5 the register and tool items (F5, F10, F12, F13, F16, F17):
+  `XHCISNAP` tracking `ferror` and `fclose` and reporting an incomplete
+  report with a nonzero exit, the extension-size mismatch carried into the
+  summary, with deterministic write-failure and close-failure injection;
+  `xhciRestoreState` restoring IMOD rather than writing zero, a `test_init`
+  vector reading it back through a successful-restore model, the three
+  IMOD statements made to agree (or IMOD 0 adopted in all three and the
+  isochronous IOC policy revisited); `XHCI_USBLEGCTLSTS_SMI_ENABLES` set to
+  the five enable bits with the RsvdP fields preserved and documented; the
+  Command Ring Stopped case where the reported pointer still names the
+  abandoned command pinned by a host vector and resolved with a
+  command-ring No Op (type 23, not `XhciRingNoOpAt`'s type 8) or a
+  divergence reset; `xhciqual`'s EHCI cleanup masking the RW1C status bits.
+- [ ] 20.6 the smaller items and D2-D6: the audit's "Smaller code and script
+  items" table, each promoted to a fix only once its contract is established
+  and the failure reproduced, and the D2-D6 drift rows corrected from
+  implementation behaviour, including this roadmap's Phase 18 pointer to a
+  removed `handoff.md`, the `1.0.0.1` name in the post-release paragraph,
+  `docs/README.md`'s phase-reading table carried to Phases 17-20, the
+  design-record and ABI-document rows, and the stale comments and IRQL tags
+  in D4. Cut directories and dated evidence untouched.
+- [ ] 20.7 the gates and the readings: `build-driver.cmd all` with every
+  self-test, `xhciqual\test\run-host-tests.cmd`, `vm-matrix\selftest.ps1`;
+  `run-matrix.ps1 -PostRelease` on fresh 2a and 2b clones against the
+  Phase 19 reports; Windows 2000 SMP in-place recovery on the 2d vehicle
+  for 20.2; the XP restore and lifecycle sequence (issue 4's run) for 20.2;
+  a successful-restore reading for 20.5's IMOD change, which QEMU's CRS
+  fallback cannot supply, so a host model or a controller whose restore
+  succeeds. Report which environment produced each reading.
+- [ ] 20.8 the cut, once the owner names the version: `src\xhci_version.h`,
+  the INF's `DriverVer`, the `history.md` entry naming what changed and
+  which findings it closes, the release notes' limitations revised where a
+  finding changed them, `make-release.ps1` from a tree with every gate
+  green, the install route from the asset read on the five targets as
+  task 19.9 did, and `issues-found.md` annotated finding by finding with
+  the commit that closed it or the owner's decision not to.
+
+Checkpoint: every F and D item in `issues-found.md` closed with a cited
+commit and regression vector or recorded as an owner decision with its
+reason; every gate and self-test green; the post-release matrix on both
+primary targets no worse than the Phase 19 reports; the Windows 2000 SMP
+recovery and XP lifecycle readings taken for 20.2; and the new version cut
+with a `history.md` entry. Not a checkpoint: any Windows 98 metal reading
+standing in for Windows 2000, or a host test standing in for a guest.
+
+Records: `issues-found.md` (the audit and its review history);
+`scripts/vm-matrix/selftest.ps1`, `scripts/package/test-package.ps1`,
+`scripts/inf-gate/test-inf-checks.ps1` and `test/test_init.c` (the
+regression vectors); design records 05, 06 and 07; `build-and-test.md`;
+`releases/history.md`.
 
 ## Post-Release - Run the Acceptance Test by Hand
 

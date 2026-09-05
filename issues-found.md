@@ -51,7 +51,9 @@ Verifier, or hardware validation was performed, and no checkpoint is advanced.
 
 A further pass re-read every cited line of this document against the tree,
 then ran a Codex review round over the document itself
-(`.claude/handoff-review-round1-{prompt,result}.txt`, thread
+(`.claude/handoff-review-round1-{prompt,result}.txt`; the `.claude/` review
+files named in this section are host-local receipts under a git-ignored
+directory, like `out/audit-20260905/`, not inputs a clone has; thread
 `01a07196-c11a-7751-9b1a-48875932b8ac`, 27 minutes); all nineteen of its
 findings were checked against the tree and accepted. What changed in this
 document:
