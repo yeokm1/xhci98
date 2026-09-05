@@ -148,6 +148,13 @@ With the value set by hand (`Services\USB` does not exist on a stock XP
 install) the suspend did not happen and the hot-plugged mouse bound. The
 1.0.1.0 INF writes the value on both paths.
 
+Qualification, 2026-09-05: "Windows 2000's native usbport never idles this
+controller" in the paragraph above was the repository's assumption at the
+time, generalised from the Phase 3 spike's observation window, not a
+measurement; the owner's checks of 2026-09-05 contradict it. The XP
+observation stands as recorded; the generalisation does not
+(`issues-found.md` F18).
+
 Rules this earns:
 
 - A confound carried by every vehicle is invisible in every reading. The

@@ -59,8 +59,9 @@ real hardware.
   SE does not check; Windows 2000 SP4 and Windows XP show an unsigned-driver
   warning during install and then install it (on XP, choose Continue Anyway).
 - On Windows 98 it is not standalone. Windows 98 has no `usbport.sys` of its
-  own. **NUSB must be installed first**; it is what places `usbport.sys`
-  and `usbhub20.sys`. Without it the driver will not load, with no useful
+  own. **A USB 2.0 stack must be installed first**, NUSB (the one this
+  project tests against) or SweetLow's; it is what places `usbport.sys` and
+  `usbhub20.sys`. Without one the driver will not load, with no useful
   diagnostic. NUSB 3.3 is the version this project tests against. NUSB 3.6
   carries the same USB 2.0 stack byte for byte and has been observed working
   with this driver (HID and mass storage, in a virtual machine only). A third
@@ -117,7 +118,7 @@ and how to read each result.
 The package is a directory holding two files, `xhci98.inf` and
 `xhci98.sys`, and no Microsoft file.
 
-- Windows 98 SE: install NUSB 3.3e or the newer SweetLow stack first, your
+- Windows 98 SE: install NUSB 3.3 or the newer SweetLow stack first, your
   choice (README, installation steps). Then Device
   Manager -> the unrecognised xHCI device -> *Update Driver* -> *Specify a
   location* -> the package directory.
@@ -247,8 +248,9 @@ because a user meets them through this driver.
   `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB`, a machine-wide
   setting, on both targets, because a sleeping xHCI controller cannot report
   a newly plugged device and Windows 98 otherwise idles it within a second
-  (Windows XP within about half a minute; Windows 2000 never does, and the
-  value changes nothing there). It also stops any other USB controller
+  (Windows XP within about half a minute of a start with nothing attached;
+  whether and when Windows 2000 idles it has not been measured). It also
+  stops any other USB controller
   idling, it slightly raises power draw, and an uninstall does not remove
   it; delete the value by hand if you want the previous behaviour back.
 - Windows 98: plugging and unplugging a device very fast and repeatedly (one
@@ -290,9 +292,9 @@ record is `docs/contributing/legal-provenance.md`.
 
 `xhci98.sys` and `xhci98.inf` are this project's own work, and they are the
 whole package. The `usbd.sys` and `usbhub.sys` the install needs, and on
-Windows 2000 the `usbport.sys`, are Windows' own and are copied by Windows
-from your own installation source;
-nothing in the download is Microsoft's. (Release `1.0.0.0` carried the two
+Windows 2000 and Windows XP the `usbport.sys`, are Windows' own and are
+copied by Windows from your own installation source; no Microsoft file is in
+the download. (Release `1.0.0.0` carried the two
 `usbd.sys` builds and Windows 98 SE's `usbhub.sys` under other names; that
 was withdrawn before any upload. `docs/contributing/legal-provenance.md`
 section 5 has the record.)

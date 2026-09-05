@@ -1654,7 +1654,8 @@ regression vectors); design records 05, 06 and 07; `build-and-test.md`;
 This is not a phase, has no task id, and nothing in this repository closes
 it. It is the reminder the roadmap ends on.
 
-Once `out\xhci98-1.0.0.1.zip` is uploaded, run
+Once the newest cut's asset (`out\xhci98-<version>.zip`, for the version
+`releases/history.md` names first) is uploaded, run
 [`release-acceptance-test.md`](../using/release-acceptance-test.md) end to end,
 by hand, twice: on a freshly installed VM of the target, and on a physical
 machine. Take the release from the published download, not this tree, and
@@ -1675,10 +1676,12 @@ lacks, that is the finding.
 Nothing is reported back into this repository. What comes back is a defect
 against the driver, as an issue, and a defect against the procedure, as an
 edit to `release-acceptance-test.md`. A driver defect found this way is
-fixed and the existing release re-cut with the fix; it is not a reason to
-withdraw the release, and it does not open a new version number. The one
-thing a failure changes immediately is what `docs/using/release-notes.md`
-claims.
+fixed and shipped as the next version, with its `history.md` entry, under
+the rule `releases/README.md` states: a version that has been uploaded is
+never re-cut, so the fix does open a new version number (the same-number
+re-cut that README permits applies only before the first upload, to a number
+nobody holds). It is not a reason to withdraw the release. The one thing a
+failure changes immediately is what `docs/using/release-notes.md` claims.
 
 Records: `docs/using/release-acceptance-test.md`; `releases/README.md`;
 `build-and-test.md` ("Available Test Hardware", "The bench rig",

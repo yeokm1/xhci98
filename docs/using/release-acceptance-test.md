@@ -347,11 +347,13 @@ Windows 2000 SP4
 | 7.6 | Disable the controller in Device Manager, then re-enable it once | It goes and comes back, with no crash |
 
 7.4 is written by the NT install path since 1.0.1.0; until then it was
-absent by design. Windows 2000's native `usbport` never idle-suspends this
-controller, so on this target the value changes nothing this test can see;
-it is there because Windows XP's `usbport` does idle it, and the two halves
-of the INF write the same value. (`src/xhci98.inf`: `[Xhci.Dev.NTx86]`
-carries `Xhci.AddReg.Global`, and the comment block below it says why.)
+absent by design. Windows XP's `usbport` was measured idling this controller
+within about thirty seconds of a start with nothing attached (2026-09-03),
+and a halted xHC cannot report a hot-plug; whether and when Windows 2000's
+`usbport` idles it has not been measured, so this test asserts the value's
+presence and nothing about its effect on this target. (`src/xhci98.inf`:
+`[Xhci.Dev.NTx86]` carries `Xhci.AddReg.Global`, and the comment block below
+it says why.)
 
 7.5 is expected and is not a failed install: the engine reads this package's
 `DriverVer` and declines the date half specifically. (Roadmap task 12.4,

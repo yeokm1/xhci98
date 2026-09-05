@@ -1662,8 +1662,10 @@ ULONG XhciUnmaskInterrupts(PXHCI_EXTENSION ext)
      * after restarting a controller whose resume failed
      * (docs/usb-xhci-info/usbport-miniport-abi.md; ReactOS power.c:192-212). The callback
      * returns void, so a refusal is invisible to usbport and the start still
-     * counts as successful. Win2000 may never idle-suspend, so "the next
-     * resume will re-enable" is not a recovery path: without one, a single
+     * counts as successful. Nothing guarantees an idle suspend will ever
+     * come (whether Win2000's usbport idles this controller at all is
+     * unmeasured), so "the next resume will re-enable" is not a recovery
+     * path: without one, a single
      * transient all-ones read leaves a started controller that never
      * interrupts again. The retries below cost nothing and cover a glitch that
      * clears immediately; anything longer-lived is the caller's to escalate -

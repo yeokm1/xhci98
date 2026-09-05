@@ -1110,7 +1110,10 @@ static VOID NTAPI xhciStopController(PVOID miniPortExtension,
  * than what is here - lives with them.
  *
  * IRQL: PASSIVE_LEVEL. Win98's NUSB usbport issues these pairs repeatedly at
- * idle; native Win2000 usbport never idle-suspended the controller at all.
+ * idle, and XP's after about thirty seconds with nothing attached; whether
+ * and when native Win2000 usbport idles this controller is unmeasured (it did
+ * not in the Phase 3 spike's window, which is an observation, not a
+ * contract; issues-found.md F18). The pair is target-agnostic either way.
  */
 static VOID NTAPI xhciSuspendController(PVOID miniPortExtension)
 {

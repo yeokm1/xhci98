@@ -1825,7 +1825,7 @@ WHAT THE VERSION NUMBER MEANS, AND WHAT IT DOES NOT
 
 It means the driver does what this file says it does and that its limits are
 written down in section 7. It does not mean nothing is left. This is a hobby
-driver for two operating systems that left support two decades ago, it has run
+driver for operating systems that left support two decades ago, it has run
 on a small number of machines, and BUGS ARE NOT UNEXPECTED.
 
 Please report what you find, on the project's GitHub page:
@@ -1841,7 +1841,7 @@ CONTENTS OF THIS FILE
 
   1. Check the machine first (optional, but recommended)
   2. What you need
-  3. Check the media is complete
+  3. The files Windows supplies
   4. Install
   5. Using it
   6. If something goes wrong
@@ -1987,7 +1987,7 @@ modern interrupt mechanism (MSI) that such a controller would require.
                      ME and 32-bit Windows XP (SP3) in virtual machines only
                      (neither has been run on a real machine).
 
-  On Windows 98      NUSB 3.3e or the newer SweetLow USB 2.0 stack, your
+  On Windows 98      NUSB 3.3 or the newer SweetLow USB 2.0 stack, your
                      choice, installed BEFORE this driver (section 4).
 
   On Windows ME      SweetLow's USB 2.0 stack, installed BEFORE this driver
@@ -2015,8 +2015,7 @@ nothing to complete: a copy taken from the project's source repository is
 the same two files.
 
 Three files the driver depends on are NOT in the package, because they are
-Windows' own, unmodified, and this download redistributes nothing of
-Microsoft's:
+Windows' own, unmodified, and no Microsoft file is in this download:
 
   usbd.sys     The USB 2.0 root hub imports it on both systems. Without it
                the USB ROOT HUB fails: Code 2 on Windows 98, error
@@ -2084,9 +2083,9 @@ CD, a shared folder - then:
 
   WINDOWS 98 SE
       A USB 2.0 stack (usbport.sys + usbhub20.sys) has to be there first:
-      either NUSB 3.3e or the newer SweetLow stack, your choice.
+      either NUSB 3.3 or the newer SweetLow stack, your choice.
 
-        NUSB 3.3e - the configuration this driver is tested against.
+        NUSB 3.3 - the configuration this driver is tested against.
         Install it first. NUSB 3.6 carries the same stack and also works.
 
         SWEETLOW'S STACK - the newer Windows XP lineage of the same port
@@ -2166,11 +2165,13 @@ Two things are specific to this driver and worth knowing in advance:
     carries the USB 2.0 wires, and that is the path used. The SuperSpeed half
     of each connector is deliberately left switched off.
 
-  * WINDOWS 98 ONLY: INSTALLING CHANGES ONE MACHINE-WIDE SETTING. It writes
+  * INSTALLING CHANGES ONE MACHINE-WIDE SETTING, ON EVERY SYSTEM. It writes
     DisableSelectiveSuspend = 1, which stops the USB stack putting the
-    controller to sleep. Without it the controller sleeps within about half a
-    second and cannot notice anything plugged in afterwards. It affects ANY
-    USB controller in the machine, and uninstalling does NOT remove it. See
+    controller to sleep. Without it Windows 98 sleeps the controller within
+    about half a second of the last transfer and Windows XP within about half
+    a minute of a start with nothing attached, and a sleeping controller
+    cannot notice anything plugged in afterwards. It affects ANY USB
+    controller in the machine, and uninstalling does NOT remove it. See
     section 9.
 
   WINDOWS 98 WITH NUSB: STOPPING A RUNNING USB CONTROLLER CRASHES THE MACHINE
@@ -2388,7 +2389,7 @@ debug throughout, in its build scripts and its documentation alike.)
 ==============================================================================
 
 Every registry value this driver reads or writes. There are three - two
-the driver reads, and one the Windows 98 installer writes machine-wide.
+the driver reads, and one the installer writes machine-wide on every system.
 
   YOU SHOULD NOT NEED THIS SECTION. XHCISNAP -verbosity 2 sets the one that
   matters, on every controller, and finds the key itself. It is here so you
@@ -2483,11 +2484,11 @@ the driver reads, and one the Windows 98 installer writes machine-wide.
   something happens on the bus. Level 1 adds none of that and still lets
   XHCISNAP read the counters, which is why it exists.
 
-  ON WINDOWS 98 THE SNAPSHOT ROUTE IS THE ONE THAT WORKS, and that is the
-  whole of what changed in this version. XhciLogDebugView still delivers
-  nothing there, for the reason given above, and the driver-written log file
-  is gone. XhciLogVerbosity plus XHCISNAP is how a Windows 98 machine produces
-  a report - see section 6. On Windows 2000 both routes work.
+  ON WINDOWS 98 THE SNAPSHOT ROUTE IS THE ONE THAT WORKS. XhciLogDebugView
+  delivers nothing there, for the reason given above, and there is no
+  driver-written log file. XhciLogVerbosity plus XHCISNAP is how a Windows 98
+  machine produces a report - see section 6. On Windows 2000 both routes
+  work.
 
   DisableSelectiveSuspend  -  both systems
   ........................................
@@ -2513,12 +2514,14 @@ the driver reads, and one the Windows 98 installer writes machine-wide.
       previous behaviour back - this driver's own devices then go back to
       needing Refresh.
 
-  Until 1.0.0.1 the Windows 2000 install withheld it, because that system's
-  USB stack never idles this controller and the value would have changed
-  nothing. Windows XP's stack does idle it, about half a minute after start,
-  so since 1.0.1.0 the install writes it on Windows 2000 and XP as well as
-  on Windows 98. On Windows 2000 it still changes nothing you can see; it is
-  the same machine-wide setting, with the same three consequences.
+  Until 1.0.1.0 the Windows 2000 install withheld it. Windows 98's USB stack
+  was measured putting this controller to sleep within about half a second
+  of the last transfer, and Windows XP's within about half a minute of a
+  start with nothing attached, and a sleeping controller cannot report a
+  newly plugged device - so since 1.0.1.0 the install writes it on every
+  system. Whether and when Windows 2000's USB stack puts this controller to
+  sleep has not been measured; there it is the same machine-wide setting,
+  with the same three consequences.
 
 
 ==============================================================================
@@ -2535,8 +2538,8 @@ GNU GPL v2 - see the LICENSE file in this directory, beside this readme. This
 applies to xhci98.sys and xhci98.inf, which are this driver's own work.
 
 No Microsoft file is in this download. The usbd.sys, usbhub.sys and (on
-Windows 2000) usbport.sys the install needs are copied by Windows from your
-own Windows installation source (section 3); nothing here grants you any
+Windows 2000 and XP) usbport.sys the install needs are copied by Windows from
+your own Windows installation source (section 3); nothing here grants you any
 right in them, and nothing here redistributes them.
 
 The provenance record for everything the project depends on but does not own

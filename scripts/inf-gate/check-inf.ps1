@@ -1185,11 +1185,13 @@ foreach ($m in $models) {
 # and two of them idle-suspend the controller without it: Windows 98's within
 # half a second of the last transfer, Windows XP's within thirty seconds of a
 # start with nothing attached; a halted xHC cannot report a port change, so a
-# device plugged in afterwards is invisible until Refresh. Windows 2000's
-# native build never idles this controller and the value changes nothing
-# there. Until 1.0.1.0 the NT path omitted it for that reason and the
-# self-tests pinned the omission; the XP reading of 2026-09-03 made the value
-# an NT-path need too, so now every route must write it.
+# device plugged in afterwards is invisible until Refresh. Whether and when
+# Windows 2000's native build idles this controller has not been measured
+# (the "never" this comment used to state was generalised from the Phase 3
+# spike's window; issues-found.md F18). Until 1.0.1.0 the NT path omitted the
+# value on that assumption and the self-tests pinned the omission; the XP
+# reading of 2026-09-03 made it an NT-path need, so now every route must
+# write it.
 #
 # Four routes, not two: the device install and the right-click Install on
 # each target. The right-click route exists because on Windows 98 with NUSB an

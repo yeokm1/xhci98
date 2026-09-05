@@ -1621,9 +1621,10 @@ must therefore do.
   decides to restart the xHC, then a Restore State operation is not required"
   (4.23.2, p.314). Win98's NUSB `usbport.sys` issues
   `SuspendController`/`ResumeController` pairs repeatedly, as idle behaviour
-  (measured in the Phase 3 spike; native Win2000 `usbport.sys` never idle-
-  suspended at all), and an idle pair that never reaches D3cold therefore costs
-  a halt and a restart - not a re-enumeration.
+  (measured in the Phase 3 spike; native Win2000 `usbport.sys` did not
+  idle-suspend in that observation window, which is an observation and not a
+  contract, `issues-found.md` F18), and an idle pair that never reaches D3cold
+  therefore costs a halt and a restart - not a re-enumeration.
 - **The suspend masks the interrupt enables itself, and must not wait to be
   asked.** `DisableInterrupts` was observed around the shutdown sequence, but
   nothing observed says the idle pairs are bracketed the same way. A suspend that

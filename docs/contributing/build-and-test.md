@@ -984,8 +984,14 @@ because QEMU fails every CSS/CRS restore (each reads `USBSTS=00000401`, `SRE`
 set) and the driver's reinitialize path is what runs instead; one 2a boot read
 4, one per pre-hub resume, with all ten hot-plug stages landing. So on a run
 with traffic, the evidence that nothing was lost is that every stage landed,
-and the counter only says how many idle windows there were. On 2b it reads 0,
-because native usbport never idle-suspends the controller.
+and the counter only says how many idle windows there were. On 2b it has read
+0 in every matrix run recorded so far. That is a reading, not a rule: whether
+and under what conditions Windows 2000's native usbport idles this controller
+has not been measured, the "never" this sentence used to state was
+generalised from the Phase 3 spike's window, and the owner's checks of
+2026-09-05 contradict it (`issues-found.md` F18). A Windows 2000 SP4 VM idle
+observation, with the `SuspendController` count and its conditions (nothing
+attached against a device attached, time from start), is owed here.
 
 This is fixed (roadmap task 11-V.6, and `docs/using/release-notes.md`,
 the `DisableSelectiveSuspend` entry under "Known limitations", which

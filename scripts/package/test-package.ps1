@@ -1076,6 +1076,24 @@ try {
         }
     }
 
+    # --- the readme template may not carry the two claims 1.0.1.0 shipped ----
+    #
+    # issues-found.md F7. The rendered readme.txt is byte-identical to the
+    # template apart from its placeholders, so the template is what this reads.
+    # "WINDOWS 98 ONLY" described DisableSelectiveSuspend as a Windows 98
+    # setting after 1.0.1.0 had made the NT path write it too, and the shipped
+    # file contradicted itself; "redistributes nothing of Microsoft's" is the
+    # sentence AGENTS.md forbids, because XHCISNAP.EXE statically links the
+    # MSVC 6.0 runtime the release's own NOTICE.TXT attributes to Microsoft.
+    # The defensible form is "No Microsoft file is in this download".
+    Write-Step "the readme template carries neither of the two forbidden claims"
+    foreach ($forbidden in @("WINDOWS 98 ONLY", "redistributes nothing")) {
+        Assert-True ($releaserText -notmatch [regex]::Escape($forbidden)) `
+            ("make-release.ps1 still says '" + $forbidden + "'; the readme it renders would repeat a claim 1.0.1.0 made false or AGENTS.md forbids.")
+    }
+    Assert-True ($releaserText -match "No Microsoft file is in this download") `
+        "make-release.ps1 lost the one defensible form of the no-Microsoft-file statement."
+
     Write-Step "the binary-vs-INF version comparison"
     #
     # Driven on strings rather than through a packaged binary, and that is the

@@ -187,12 +187,16 @@ HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1
 ;     removing the device does not take it with it, and this package cannot
 ;     know whether something else wanted it.
 ;
-; Until release 1.0.1.0 the NT path omitted it, because Windows 2000's native
-; usbport never idle-suspends this controller and the value would have
-; changed nothing there. Windows XP's does, so the NT path now writes it too:
-; on Windows 2000 it still changes nothing (the reading roadmap task 19.8
-; takes), and on Windows XP it is what makes hot-plug work. Services\USB does
-; not exist on a stock Windows XP install; this AddReg creates it.
+; Until release 1.0.1.0 the NT path omitted it, on the assumption that Windows
+; 2000's native usbport never idle-suspends this controller. That was never
+; measured (issues-found.md F18); what was measured is that Windows 98's
+; usbport idles the controller within about half a second of the last
+; transfer and Windows XP's within about thirty seconds of a start with
+; nothing attached (2026-09-03), and a halted xHC cannot report a hot-plug.
+; So the NT path writes it too: on Windows XP it is what makes hot-plug work,
+; and on Windows 2000 it is the same machine-wide value with the same three
+; consequences. Services\USB does not exist on a stock Windows XP install;
+; this AddReg creates it.
 ;
 ; The per-controller alternative, HcDisableSelectiveSuspend under the
 ; device's own key, was considered for the NT path and not taken: usbport

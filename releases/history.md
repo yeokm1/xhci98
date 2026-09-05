@@ -59,6 +59,14 @@ in `1.0.0.1`.
   failed on its first attach on XP and worked when unplugged and plugged in
   again (`docs/issues/04-xp-restore-device-ep0-remove.md`). Windows 98 SE
   and Windows 2000 never provoke it and read unchanged on the same binary.
+- Correction, 2026-09-05: the `DisableSelectiveSuspend` entry above says
+  Windows 2000's USB stack never idles this controller and the value changes
+  nothing there. That was generalised from the Phase 3 spike's observation
+  window and was never measured; the owner's checks of 2026-09-05 contradict
+  it. Whether and when Windows 2000 idles the controller is unestablished
+  until a reading is recorded (`issues-found.md` F18). The value is written
+  on every install path regardless, and that is unchanged.
+
 ## 1.0.0.1 - 2026-09-02
 
 The driver is unchanged. This release changes how it is installed: the

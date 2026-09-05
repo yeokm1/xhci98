@@ -832,8 +832,9 @@ try {
 
     # Task 11-V.6's fix, asserted against the production INF by value on BOTH
     # paths - an assertion, not a mutation control, and named as such. Until
-    # 1.0.1.0 this pinned the value's ABSENCE on the Windows 2000 path, because
-    # that target's native usbport never idle-suspends this controller; the
+    # 1.0.1.0 this pinned the value's ABSENCE on the Windows 2000 path, on the
+    # assumption that that target's native usbport never idle-suspends this
+    # controller (an assumption, not a measurement; issues-found.md F18); the
     # Windows XP reading of 2026-09-03 (roadmap task 19.2: usbport's
     # SuspendController within thirty seconds, the hot-plugged mouse invisible)
     # made it an NT-path need, so the pin inverted. Pinned as a whole row: the

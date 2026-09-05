@@ -5070,9 +5070,13 @@ typedef struct _XHCI_EXTENSION {
      * signal. SuspendFailures counts suspends where the controller would neither
      * halt nor give up bus mastering - i.e. it may have entered D3 still capable
      * of DMA. On Win98 these grow steadily by design: NUSB's usbport issues
-     * suspend/resume pairs repeatedly at idle, where native Win2000 usbport
-     * never idle-suspended at all, so a steadily rising SuspendCount on one
-     * target and a static one on the other is the expected shape.
+     * suspend/resume pairs repeatedly at idle (and XP's idles the controller
+     * about thirty seconds after a start with nothing attached), so a
+     * steadily rising SuspendCount there is the expected shape. On Win2000 it
+     * has read 0 in every run recorded so far; whether that target's usbport
+     * idles this controller under other conditions is unmeasured
+     * (issues-found.md F18), so read a nonzero there as a finding to record,
+     * not as a fault.
      */
     ULONG SuspendCount;
     ULONG SuspendUsbCmd;
