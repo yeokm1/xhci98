@@ -34,7 +34,7 @@ These need `ntddk.h` or a usbport service, take the controller lock, or derefere
 | `xhci_rh.c` | The root-hub callback family usbport reaches - port count, port status, port feature set/clear, change notification enable - and the port shadow behind it. Reads and writes `PORTSC` under the controller lock, which is why it is not `xhci_port.c`. |
 | `xhci_slot.c` | Devices: slots, the default control endpoint, the command chain from "a port reset finished" to "usbport has an address", `SET_ADDRESS` interception, the usbport-address to Slot ID map, endpoint open/close for every transfer type, and the hub and device positions it asks `xhci_topo.c` for. The largest file in the driver. |
 | `xhci_probe.c` | The runtime transfer-contract probe (task 6-V.1): instrumentation that classifies what usbport hands over at the registration-packet surface and leaves counters behind. Nothing in the driver branches on it; it stays here rather than in the pure core because it takes the controller lock. |
-| `xhci_dbg.c` | The `qemu` flavour's trace channel. Compiles to nothing without `XHCI_DBG_LIVE`, which `src/sources` defines for `chk_qemu` only, so neither published binary carries its `DbgPrint` import. |
+| `xhci_dbg.c` | The `qemu` flavour's per-line trace channel. Compiles to nothing without `XHCI_DBG_LIVE`, which `src/sources` defines for `chk_qemu` only, so the port-`0xE9` mirror and its `HAL.dll!WRITE_PORT_UCHAR` import exist in that flavour alone. Both shipping flavours still import `ntoskrnl.exe!DbgPrint`, for one deliberate site: the `XhciLogDebugView` sink in `xhci_dispatch.c`, which emits the bounded log ring from a PASSIVE-level flush when a user switches it on (AGENTS.md, "Coding Style"). |
 
 ## Headers
 
@@ -59,7 +59,7 @@ These need `ntddk.h` or a usbport service, take the controller lock, or derefere
 | `sources` | The Windows 2000 DDK build description: target name and type, the `SOURCES` list, defines per flavour, linker flags, and the comments that record which file belongs to the pure core and why. Read it before adding a file. |
 | `makefile` | The DDK build stub; it only includes `makefile.def`. Every setting lives in `sources`. |
 | `xhci98.rc` | The file version resource (task 8-A.4), so a binary recovered from a user's machine can be identified. Takes its fields from `xhci_version.h`; adds no import. |
-| `xhci98.inf` | The INF: one file for two setup engines. Windows 98 SE reads the undecorated sections and loads the driver through `NTKERN`; Windows 2000 SP4 reads the `.NTx86` sections and loads it as a kernel service. Both point at one `CopyFiles` section. |
+| `xhci98.inf` | The INF: one file for two setup engines. Windows 98 SE reads the undecorated sections and loads the driver through `NTKERN`; Windows 2000 SP4 reads the `.NTx86` sections and loads it as a kernel service. Both install sections copy the project's two files through the shared `Xhci.CopyFiles`, and each adds its own OS-supplied list (`Xhci.CopyW98`: `usbd.sys` and `usbhub.sys`; `Xhci.CopyNT`: those plus `usbport.sys`) that `LayoutFile` has the OS fetch from its own install source. |
 
 ## Generated, not tracked
 

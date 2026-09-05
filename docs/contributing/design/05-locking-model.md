@@ -261,13 +261,16 @@ that was not serialized against the drain could publish a pointer the DPC has
 already moved past, and could clear `EHB` mid-pass.
 
 The rule: any `ERDP` writer holds the controller lock, or holds the section 2
-precondition instead. There are three:
+precondition instead. There are three in every shipping build, and a fourth
+behind `XHCI_FIX_EVT_REARM` (`src/xhci_cmd.c`), a bench candidate no flavour
+defines, which takes the controller lock like the first two:
 
 | Writer | What serializes it |
 |---|---|
 | `XhciEventDpc` | the controller lock, for the whole drain |
 | `XhciEnableInterrupts` | the controller lock, with both enables still clear |
 | `XhciEventDiscardStale` | no lock; the section 2 precondition, below |
+| the `XHCI_FIX_EVT_REARM` re-arm (compiled out) | the controller lock |
 
 (The init sequence programs `ERDP` too, under the same precondition.)
 
@@ -343,7 +346,11 @@ plus the three non-callback entry points, not from recall.
 | `xhciRhPortTimeout` (async) | DISPATCH, no usbport lock | port shadow, `PORTSC` | two pointer checks before the lock; epoch, hub port and generation all validated under it, and the generation is claimed before any register is read |
 | `RH_DisableIrq` / `RH_EnableIrq` | DISPATCH | `Flags` | one `XhciControllerUpdateFlags` transition; touches no register |
 | `RH_ChirpRootPort` | DISPATCH | a counter | no register, no lock |
-| `OpenEndpoint` / `ReopenPipe` / `SetEndpointState` / `PollEndpoint` | DISPATCH, `MiniportSpinLock` | endpoint record, its ring and queue, the quiesce state | the controller lock; the Configure/Stop/Set TR Dequeue commands are issued under it and nothing waits |
+| `OpenEndpoint` / `ReopenEndpoint` / `SetEndpointState` / `PollEndpoint` | DISPATCH, `MiniportSpinLock` | endpoint record, its ring and queue, the quiesce state | the controller lock; the Configure/Stop/Set TR Dequeue commands are issued under it and nothing waits. A handle the record is bound to a different extension than is declined under the same lock (`xhciEpHandleSuperseded`, `issues-found.md` F1) |
+| `CloseEndpoint` / `GetEndpointState` / `QueryEndpointRequirements` | DISPATCH, `MiniportSpinLock` | the probe's counters only | the controller lock, taken inside `XhciProbeEndpoint` (`src/xhci_probe.c`); no record is read or written, and neither shipping build calls the first two |
+| `GetEndpointStatus` / `SetEndpointStatus` / `SetEndpointDataToggle` | DISPATCH, `MiniportSpinLock` | the record's quiesce state (the status pair); a counter (the toggle) | the controller lock; the reset-pipe chain is armed under it and driven by the deferred pass, and a superseded handle is declined |
+| `RebalanceEndpoint` / `StartSendOnePacket` / `EndSendOnePacket` | DISPATCH, `MiniportSpinLock` | a counter and a trace line | no register, no record, no lock needed |
+| `PassThru` | <= DISPATCH, the caller's context | the whole extension and the PORTSC array, read only | the controller lock across the whole snapshot (design record 08 section 13); acknowledges nothing |
 | `SubmitTransfer` | DISPATCH, `MiniportSpinLock` | transfer queue, ring, `SubmitEpoch` | the controller lock; the completion is deferred out of the submit bracket (section 7) rather than made inside it |
 | `SubmitIsoTransfer` | DISPATCH, `MiniportSpinLock` | as `SubmitTransfer` | reached through the same routine as `SubmitTransfer`, under the same lock at the same IRQL, so it follows that row's rules rather than needing its own (task 9-A.1). Listed separately so its absence from the rules is not read as an omission |
 | `AbortTransfer` | DISPATCH, `MiniportSpinLock` | transfer queue, completion list, quiesce state | the controller lock; searches the completion list as well as the queue (batch 7a-B) |

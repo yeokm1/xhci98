@@ -1996,20 +1996,23 @@ static ULONG xhciDevBuildMarkHubInput(PXHCI_EXTENSION ext, PXHCI_DEVICE dev)
 /* ------------------------------------------------------------------ */
 
 /*
- * Take every transfer this device still owns off its queue, and the intercepted
- * SET_ADDRESS with them, and put them on the completion list.
+ * One endpoint's queue, detached and put on the completion list. Split out
+ * because a REMOVE names one endpoint and a teardown names them all
+ * (xhciDevCancelWork, below, which also withdraws the intercepted SET_ADDRESS),
+ * and the two must not be able to disagree about what cancelling a queue does.
  *
- * The ring is deliberately **not** repositioned. Reclaiming TRBs the xHC may
- * still be executing needs Stop Endpoint and Set TR Dequeue Pointer, neither of
- * which can be issued from a context that may not wait, and both of which are
- * task 7a-B.1's. On a teardown that costs nothing, because the whole slot is
- * about to be disabled; the note matters for the REMOVE path, which is where the
- * ring survives the drain.
+ * This detaches transfers; it does not touch the ring. Reclaiming the TRBs the
+ * xHC may still be executing is the quiescence machinery's job - the Stop
+ * Endpoint and Set TR Dequeue Pointer that `xhciEpOweReposition` and
+ * `xhciEpArmIfBusy` arm and the deferred pass issues asynchronously (batch
+ * 7a-B) - and the callers that need it arm it beside this call. On a teardown
+ * the whole slot is about to be disabled, so nothing is owed here; on the
+ * REMOVE path the ring survives the drain and the reposition is what makes the
+ * next doorbell safe. (An earlier header said those commands "cannot be issued
+ * from a context that may not wait" and were future work; they are issued, and
+ * asynchronously, which is how a context that may not wait issues them.)
+ * Called with the lock held. IRQL: <= DISPATCH_LEVEL.
  */
-/* One endpoint's queue, detached and put on the completion list. Split out
- * because a REMOVE names one endpoint and a teardown names them all, and the two
- * must not be able to disagree about what cancelling a queue does.
- * Called with the lock held. IRQL: <= DISPATCH_LEVEL. */
 static VOID xhciDevCancelQueue(PXHCI_EXTENSION ext,
                                PXHCI_TRANSFER_QUEUE queue,
                                LONG usbdStatus)
@@ -3502,24 +3505,18 @@ static VOID xhciDevTopoDetach(PXHCI_EXTENSION ext, PXHCI_DEVICE dev)
  *              `DevicesAbandoned`. That is what `XhciSlotInvalidateAll` already
  *              does when it cannot prove the controller let go.
  *
- * An earlier draft released the record here and marked the *rings* with a
- * sentinel owner instead, so that they were withheld from the free list while
- * the record's index was reused. That protected the ring and handed the
- * transfers' mapped pages back in the same breath, which is the larger half of
- * the same hazard - so the sentinel is gone and the whole record is withheld.
+ * (An earlier draft released the record and withheld only its *rings* through a
+ * sentinel owner; that handed the transfers' mapped pages back while the xHC
+ * could still write them, so the whole record is withheld instead.)
  *
- * **This is not a complete answer and must not be read as one.** usbport
- * reclaims a deleted device's transfers on its own, so withholding a completion
- * here cannot keep a mapping alive indefinitely; what closes the hazard is Stop
- * Endpoint, which is task 7a-B.1's. See the batch 7a-B note in
- * `docs/contributing/roadmap.md` for the four hazards that batch owns.
+ * Withholding a completion cannot keep a mapping alive indefinitely, because
+ * usbport reclaims a deleted device's transfers on its own; what closes the
+ * hazard is the Stop Endpoint the teardown chain issues before the Disable
+ * Slot (batch 7a-B), and this branch is the fallback for a chain that could
+ * not prove the stop.
  *
- * Called with the lock held.
+ * Called with the lock held. IRQL: <= DISPATCH_LEVEL.
  */
-/* Give a record up, and `slotReleased` is the whole contract: 1 means the
- * controller has been *shown* to have let the slot go, 0 means it has not and
- * the record is abandoned in place instead. See the two branches.
- * Called with the lock held. IRQL: <= DISPATCH_LEVEL. */
 static VOID xhciDevRelease(PXHCI_EXTENSION ext,
                            PXHCI_DEVICE dev,
                            ULONG slotReleased)
@@ -4045,8 +4042,11 @@ VOID XhciSlotInvalidateAll(PXHCI_EXTENSION ext, ULONG controllerStopped)
              * failed - the caller's XhciFailClosedDma is the answer, and it
              * bugchecks rather than completing anything.
              *
-             * `EndpointExtension` is kept for the same reason: it is what a
-             * later completion is answered through.
+             * `EndpointExtension` is kept for the same reason: the binding
+             * has to survive the abandonment so a later REMOVE or reopen
+             * through that handle resolves to this record. (Completions
+             * themselves are answered through each XHCI_TRANSFER's own
+             * `EndpointExtension`, recorded at submit, not through this one.)
              */
             dev->State = XHCI_DEV_STATE_GONE;
             ext->DevicesAbandoned++;
@@ -4583,7 +4583,7 @@ static VOID xhciDevOweFromSlotState(PXHCI_EXTENSION ext, PXHCI_DEVICE dev)
  * Records left saying `CONFIGURED` make the later same-parameter reopen take the
  * rebind-only path, no Configure Endpoint is ever re-issued, and this driver
  * rings doorbells for DCIs the Slot Context no longer has. Putting them back to
- * `PENDING` is the established mechanism (`xhciEpContextRestore`): the pump
+ * `PENDING` is the established mechanism (`xhciEpOweContextRestore`): the pump
  * issues the Configure Endpoint from that state and submissions meanwhile are
  * refused for a retry rather than failed.
  *
@@ -10050,7 +10050,7 @@ static ULONG xhciDevPumpCommand(PXHCI_EXTENSION ext)
         /*
          * The record is picked here and not by the caller, because "which
          * endpoint owes one" is only answerable under the lock and the pump is
-         * the only thing holding it at this point. `ConfigureDci` is what the
+         * the only thing holding it at this point. `EndpointOpDci` is what the
          * completion resolves it back through - the record pointer itself must
          * not be carried across the unlock.
          */

@@ -95,7 +95,9 @@ other process's memory.
 - `.PSC` is the raw PORTSC array. When the driver reports that the controller
   has no usable register mapping (`SNAP_S_NO_MMIO`), PORTSC was not read and
   the `.PSC` is published as a 0-byte file beside a complete `.BIN`; the
-  screen says so at the time.
+  screen says so at the time. A controller whose root hub reports no ports
+  (`PortCount` 0) yields the same 0-byte `.PSC` with no such line: the
+  driver had nothing to read, and the empty file is the reading.
 
 A capture that fails before publication leaves the previous set alone. Each raw
 region is written to `NAME.BIN.TMP` / `NAME.PSC.TMP` and the pair is renamed
@@ -111,6 +113,18 @@ The PORTSC decode is printed on screen whatever the level, because that is what
 the bench reads on the spot. The headline test is per port: a port reporting a
 device connected with `PP` clear is Finding Q read off the register, whatever
 the other ports say.
+
+The exit code says whether the `.TXT` is the report. `0` means every write and
+the close reached the volume. `3` means it did not (a full or removed
+destination; the summary line reads `INCOMPLETE`) or that the extension window
+came back a different size from the one the driver declared (`MISMATCH`, `DO
+NOT DECODE`): in both cases the `.BIN` and `.PSC` are still the raw evidence
+and are still named, but the `.TXT` must not be sent as the report. Until the
+2026-09-05 audit (`issues-found.md` F5, F17) `fopen` succeeding was the whole of
+"written", and a truncated report exited 0 with a "send this" underneath it.
+`xhcisnap -selftest-report BASE` drives the report path with no controller,
+and the `XHCISNAP_FAULT` environment variable (`write` or `close`) makes the
+named step fail; `xhcisnap\selftest.cmd` runs the three cases.
 
 ## Three things to know before trusting a dump
 
@@ -219,7 +233,12 @@ value is set from ring 3 without needing the IOCTL at all.
 
 ```bat
 xhcisnap\build.cmd
+xhcisnap\selftest.cmd
 ```
+
+The second runs the report path three times with no controller present (no
+fault, a failing write, a failing close) and checks the exit codes and summary
+lines; see "Three files" above.
 
 MSVC 6.0 in place from `tools\MSVC600`; nothing is installed machine-wide and
 `MSVC6` overrides the location. `/Za` is not used here even though the driver

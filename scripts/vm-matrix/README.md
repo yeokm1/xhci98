@@ -221,11 +221,17 @@ lists each with its reason.
 ## What a report says
 
 ```text
-TARGET  ROW                  OUTCOME    EXPECTATION                          READING
-2b      usb-kbd/hs           PASS       advance devices addressed            +1
-2b      usb-braille/fs       NODRIVER   advance endpoints opened >= 1        +0
-2a      usb-audio/fs         NODRIVER   advance endpoints opened >= 1        +0  (USBAUDIO.VXD...)
+TARGET ROW                          OUTCOME   EXPECTATION                                                    READING
+2a-fresh usb-kbd/hs                   PASS      advance devices addressed                                      +1
+2a-fresh usb-kbd/hs                   PASS      advance endpoints opened >= 1                                  +1
+2a-fresh usb-braille/fs               NODRIVER  advance devices addressed                                      +1
+2a-fresh usb-braille/fs               -> NODRIVER advance endpoints opened >= 1                                +0
 ```
+
+(Taken from a real post-release report, `docs/contributing/runs/run-19-post-release/`,
+whose row column is 28 wide; the Phase 10 report's is 22. The `->` marks the
+expectation that did not hold; the `NODRIVER` on the other lines is the row's
+outcome repeated so the report reads a line at a time.)
 
 Five outcomes: `PASS`, `FAIL`, `NODRIVER`, `INERT`, `ERROR`. The middle two are
 results, not silences. A device the OS never claimed says nothing about this

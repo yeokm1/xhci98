@@ -104,8 +104,13 @@ from it.
       XhciRecoverController:
           XhciControllerBeginQuiesce   retire the command engine and the
                                        root-hub timers, drop INITIALIZED
-          XhciSlotInvalidateAll        drop every device, completing the
-                                       transfers usbport is holding
+          read USBSTS                  is the xHC halted? (all ones is not
+                                       a halt) - the `halted` argument below
+          XhciSlotInvalidateAll        drop every device: release the records
+                                       whose slots the halt proves gone,
+                                       abandon the rest in place
+          XhciSlotDeferredWork         deliver the completions that release
+                                       owed usbport
           XhciInitController(NULL)     HCRST and the whole sequence, with
                                        ext->InitBelowPassive set
           XhciEnableInterrupts         if usbport had asked for interrupts
@@ -149,7 +154,7 @@ it:
 | Site | What it does while set | Why |
 |---|---|---|
 | `XhciWaitForBits` | skips the sleep phase entirely; the wait is the existing 10 ms stall and nothing more | `UsbPortWait` is `KeDelayExecutionThread`. Not extended to busy-wait the full timeout: that would spin a DPC for the better part of a second on hardware that has already failed. A bit that does not settle inside the stall makes the attempt refuse, and the extra time comes from the next attempt rather than from a spin. |
-| `XhciDelayMs` | stalls instead of sleeping | Same reason. It is 20 ms once per attempt, the port-power settle, which the specification states as a duration rather than as a condition. |
+| `XhciDelayMs` | stalls instead of sleeping | Same reason. The port-power routine `xhciPowerPorts` reaches it through `xhciSettlePortPower`, twice per attempt: each call may spend an optional 20 ms transition delay (the specification states it as a duration, not a condition) plus up to 20 ms of confirmation polling in 5 ms steps, so that routine alone can stall for 60 ms in an attempt. That bounds the power-up step, not the whole recovery, which has other bounded waits and a possible teardown ahead of it. |
 | `XhciInitController` | skips the three PCI configuration-space reads (identification, the INTx gate, the bus-master gate) | `UsbPortReadWriteConfigSpace` goes out to the bus driver; this project's contract for it is PASSIVE_LEVEL. |
 | `xhciTryClearBusMaster` | declines outright | Same service. The proof it would obtain is unavailable, and on this path unnecessary (see below). |
 | `XhciFailClosedDma` | counts (`DmaFailClosedDeferred`) instead of bugchecking | The bugcheck's premise is a reclamation and this path has none. It is justified by usbport being about to take the common buffer back while an xHC that may still be mastering points at it. On the recovery path nothing is handing anything back, so the block stays this driver's. Taking a machine down here would turn a stall into a crash, the opposite of the task. |

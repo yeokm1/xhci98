@@ -69,11 +69,14 @@ dies as a timeout on an identity line that build cannot print.)*
 Where to build. Defaults to out\media-11v in the repository.
 
 .PARAMETER BaselineVersion
-The package version the upgrade is performed OVER. Defaults to 0.0.0.6, the
-version cut before the current one. It is checked rather than assumed: the
-staged baseline binary's own version resource must equal it, and it must be
-lower than the current package version. A directory name is not evidence of
-what is in it.
+The package version the upgrade is performed OVER. When not given it is
+derived: the newest `releases\<version>` directory whose version is lower
+than the current INF's, which is the version cut before the current one (the
+old literal default, `0.0.0.6`, named a package that no longer exists and let
+the ordering check pass against nothing; issues-found.md, smaller items). It
+is checked rather than assumed: the staged baseline binary's own version
+resource must equal it, and it must be lower than the current package
+version. A directory name is not evidence of what is in it.
 
 *(It defaulted to `1.0.0.2` - the version at the tip before batch 11-B - until
 a later review, and by then the script could not run at all with its own defaults:
@@ -112,7 +115,7 @@ param(
     [ValidateSet("qemu", "debug", "release", "both", "all")]
     [string]$Flavor = "qemu",
     [string]$OutRoot = "",
-    [string]$BaselineVersion = "0.0.0.6",
+    [string]$BaselineVersion = "",
     [string]$BaselineCommit = "",
     [switch]$SkipBaselineCheck,
     [switch]$NoTargetEvidence
@@ -265,6 +268,31 @@ try {
     # One comparison, on parsed values, so that an alternative spelling of the
     # same version - "1.0.0.03" against "1.0.0.3" - is caught as equal rather
     # than sliding past a textual inequality test.
+    if ($BaselineVersion -eq "") {
+        # The predecessor is read off releases\, not recalled: the version
+        # directories are the record of what was cut, and the newest one below
+        # the current INF's version is the package the upgrade leg is over.
+        $candidates = @()
+        $releasesDir = Join-Path $repo "releases"
+        if (Test-Path -LiteralPath $releasesDir) {
+            foreach ($d in (Get-ChildItem -LiteralPath $releasesDir -Directory)) {
+                if ($d.Name -match '^\d+\.\d+\.\d+\.\d+$') {
+                    try {
+                        $parsed = [System.Version]::Parse($d.Name)
+                        if ($current.Version -match '^\d+\.\d+\.\d+\.\d+$' -and
+                            $parsed -lt [System.Version]::Parse($current.Version)) {
+                            $candidates += $parsed
+                        }
+                    } catch { }
+                }
+            }
+        }
+        if ($candidates.Count -eq 0) {
+            throw ("no releases\<version> directory is older than the current package version {0}, so there is no predecessor to upgrade over; pass -BaselineVersion explicitly." -f $current.Version)
+        }
+        $BaselineVersion = ($candidates | Sort-Object -Descending | Select-Object -First 1).ToString()
+        Write-Ok ("baseline derived from releases\: {0}" -f $BaselineVersion)
+    }
     foreach ($v in @(@{ N = "-BaselineVersion"; V = $BaselineVersion },
                      @{ N = "the INF's DriverVer"; V = $current.Version })) {
         if ($v.V -notmatch '^\d+\.\d+\.\d+\.\d+$') {

@@ -8,9 +8,10 @@ release, which does not change.
 
 `1.0.0.0` is the first release. The packages cut while the work was going on
 were numbered `0.x`, none of them was uploaded or given to anyone, and they
-were removed when `1.0.0.0` was cut, so this tree holds one version directory
-and `history.md` holds one entry. A `0.x` number carries no claim of being
-finished, which is what it was for; nothing is expected to carry one again.
+were removed when `1.0.0.0` was cut, so the tree started that day with one
+version directory and `history.md` with one entry; every release since has
+added one of each. A `0.x` number carries no claim of being finished, which
+is what it was for; nothing is expected to carry one again.
 
 Each subdirectory is one released version of the driver, named for the version
 in its `DriverVer` (`1.0.0.0/`, and so on), and each is produced by

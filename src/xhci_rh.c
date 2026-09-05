@@ -2541,7 +2541,9 @@ VOID XhciRootHubRetireOperations(PXHCI_EXTENSION ext)
  * save-and-restore replaces that reinitialization - which is precisely when
  * nobody will be thinking about link states.
  *
- * IRQL: PASSIVE_LEVEL (it waits).
+ * IRQL: PASSIVE_LEVEL, or DISPATCH_LEVEL with InitBelowPassive set (the
+ * in-place recovery reaches it from XhciRecoverController, where its waits
+ * are stalls).
  */
 static VOID xhciRhDriveSuspendedPortsToU0(PXHCI_EXTENSION ext)
 {
@@ -2649,7 +2651,8 @@ static VOID xhciRhDriveSuspendedPortsToU0(PXHCI_EXTENSION ext)
  * - a start that acknowledged the bit without latching the change would leave a
  * boot-attached device connected, unreported and unenumerated.
  *
- * IRQL: PASSIVE_LEVEL (init only). Takes the controller lock like every other
+ * IRQL: PASSIVE_LEVEL, or DISPATCH_LEVEL with InitBelowPassive set (init and
+ * the in-place recovery). Takes the controller lock like every other
  * writer of this state, even though the init sequence runs with every other
  * context already refusing: the cost is one uncontended acquire per start, and
  * the alternative is a second rule about when this state may be touched

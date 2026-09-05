@@ -1226,10 +1226,13 @@ VOID XhciDisableInterrupts(PXHCI_EXTENSION ext)
  * Interrupters" (5.4.1, p.360), so the INTx line is not asserted however long
  * IP stays set. The
  * pending state is then cleared not by anything a flush could do but by the
- * resume, which reinitializes through HCRST: "after initial power-on or HCRST
- * ... all of the Operational and Runtime Registers shall be at their default
- * values" (4.23.1, p.312), and the defaults of IMAN and ERDP put IP, IE and EHB
- * at 0 while USBSTS's puts EINT there. That happens before the enables go back
+ * resume, which owns it on both of its paths. The reinitialising one goes
+ * through HCRST: "after initial power-on or HCRST ... all of the Operational
+ * and Runtime Registers shall be at their default values" (4.23.1, p.312), and
+ * the defaults of IMAN and ERDP put IP, IE and EHB at 0 while USBSTS's puts
+ * EINT there. The restoring one (`xhciRestoreState` succeeding, no HCRST)
+ * walks the event ring with `XhciEventDiscardStale` and republishes ERDP
+ * before the enables return. Either way it happens before the enables go back
  * on, so the interval in which a flush could have contributed anything is one
  * where nothing can be delivered anyway.
  *

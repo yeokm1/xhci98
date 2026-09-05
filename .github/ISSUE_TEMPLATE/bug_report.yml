@@ -18,7 +18,9 @@ body:
 
         **One thing is already known and is not a bug in this driver:**
         disabling, removing or upgrading the driver in Device Manager blue-screens
-        Windows 98 (Microsoft's own USB drivers do the same on the same machine).
+        Windows 98 when NUSB's USB 2.0 stack is installed (Microsoft's own USB
+        drivers do the same on the same machine; under SweetLow's stack the
+        three complete).
 
   - type: dropdown
     id: os
@@ -39,7 +41,7 @@ body:
     attributes:
       label: Driver version
       description: The version of the release you downloaded - it is at the top of its readme.txt, and in the driver's properties in Device Manager.
-      placeholder: "1.0.0.0"
+      placeholder: "the four-part number from readme.txt, e.g. 1.0.1.0"
     validations:
       required: true
 
@@ -84,8 +86,11 @@ body:
         - "Windows 98: NUSB, some other version"
         - "Windows 98: SweetLow's USB 2.0 stack (Windows 98 QuickInstall 1.0.1 or later)"
         - "Windows 98: no NUSB / not sure"
+        - "Windows ME: SweetLow's USB 2.0 stack (the only one this driver has run under on ME)"
+        - "Windows ME: something else / not sure"
         - "Windows 2000: SP4's own stack"
         - "Windows 2000: the standalone KB319973 update"
+        - "Windows XP: its own stack"
         - Not sure
     validations:
       required: true

@@ -27,10 +27,11 @@ and so is a verdict with no reading beside it.
 
 Two things the test never does on Windows 98, and both bite before the step
 that says so. Do not disable, remove or upgrade the driver in Device Manager:
-under NUSB's stack, which is what this test installs, each of the three
-blue-screens that system at `0028:C00312EE`, and 7.1 is where that is
-recorded (under SweetLow's stack they complete; the release notes say so, and
-this test does not cover that stack). Do not cycle one device rapidly in and out of a port: that
+under NUSB's stack, which is what this test installs on Windows 98, each of
+the three blue-screens that system at `0028:C00312EE`, and 7.1 is where that
+is recorded (under SweetLow's stack they complete; the release notes say so,
+and this test exercises that stack only on Windows ME, in 4.5, where it is
+the one stack the driver has run under). Do not cycle one device rapidly in and out of a port: that
 can freeze the machine and it is this driver's own defect (release notes,
 "Known limitations").
 
@@ -48,7 +49,7 @@ characterisation record for the hardware this project holds, and
 | # | What | The property that matters |
 |---|---|---|
 | 1 | An xHCI machine | PCI class code `0C0330`, at least one USB 2.0 port, a memory window below 4 GB, and a legacy interrupt pin. Step 3 confirms all four. A controller with no interrupt pin cannot be driven on either target, and there is no software workaround |
-| 2 | One target OS, already installed and working | Windows 98 SE (4.10.2222) with NUSB 3.3 already installed, or Windows 2000 SP4. Do not install NUSB on Windows 2000. One OS per run: a dual-boot machine is two runs and two records |
+| 2 | One target OS, already installed and working | Windows 98 SE (4.10.2222) with NUSB 3.3 already installed, or Windows 2000 SP4; for the VM-only rows, Windows ME (4.90.3000) with SweetLow's USB 2.0 stack installed (4.5, 4.6) or 32-bit Windows XP SP3 (7.7-7.12). Do not install NUSB on the NT targets. One OS per run: a dual-boot machine is two runs and two records |
 | 3 | A PS/2 or built-in keyboard and pointing device | A USB keyboard on the controller under test is unusable during the DOS pass and can stop responding mid-run. On a laptop the built-in keyboard is normally i8042-attached, but that is per machine; confirm it rather than assuming (`docs/contributing/build-and-test.md`, "Bootstrapping xHCI-only machines") |
 | 4 | A real-DOS boot medium, and a way to get a file off it | MS-DOS or FreeDOS on floppy, CD or USB key, booted without EMM386, a V86 monitor or a paging memory manager, but with `HIMEM.SYS` available, which is not one of those and which the qualifier may need (step 3). Not a DOS box inside Windows: the qualifier needs memory it can address one-to-one. Step 3 leaves `PROBE.LOG` on it, and that file is the run's first artefact |
 | 5 | A way to put the package on a machine whose USB does not work yet | Pull the disk and stage from another machine, burn a CD, or use a network share. On an xHCI-only machine there is no USB until this driver works; that is the chicken-and-egg this driver exists inside (`docs/contributing/build-and-test.md`, "Bootstrapping xHCI-only machines"). Pre-stage generously: every forgotten file is another disk swap |
@@ -146,9 +147,11 @@ per-line trace either; that lives only in the never-published `qemu` flavour.
 A flavour directory holds exactly `xhci98.inf` and `xhci98.sys` (2.3), since
 1.0.0.1: the download carries no Microsoft file, and a copy taken from the
 source repository is the same two files. What the install needs beyond them,
-`usbd.sys` and on Windows 98 `usbhub.sys`, Windows supplies from its own
-installation source at step 4, so on an xHCI-only Windows 98 machine have
-the Windows 98 SE CD at hand for that step (`readme.txt` section 3).
+`usbd.sys` and `usbhub.sys` on every target and, since 1.0.1.0, `usbport.sys`
+on Windows 2000 and XP, Windows supplies from its own installation source at
+step 4: the NT targets take them from their driver cache with no prompt, and
+an xHCI-only Windows 98 machine may ask for the Windows 98 SE CD, so have it
+at hand for that step (`readme.txt` section 3).
 
 If one directory nests another copy of the version inside itself (2.4): stop,
 and report the asset rather than the driver. That is a packaging defect and it

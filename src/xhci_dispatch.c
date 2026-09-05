@@ -2409,6 +2409,8 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
                            ext->CommandAbortsNotWritten);
     XHCI_DBG_VALUE_CHANGED("command abort waits", ext->CommandAbortWaits);
     XHCI_DBG_VALUE_CHANGED("command ring stops", ext->CommandRingStops);
+    XHCI_DBG_VALUE_CHANGED("command ring stops on the abandoned command",
+                           ext->CommandRingStoppedOnAbandoned);
     XHCI_DBG_VALUE_CHANGED("command ring diverged", ext->CommandRingDiverged);
     XHCI_DBG_VALUE_CHANGED("commands abandoned", ext->CommandsAbandoned);
     XHCI_DBG_VALUE_CHANGED("command stale callbacks",
@@ -3612,10 +3614,15 @@ static VOID NTAPI xhciAbortTransfer(PVOID miniPortExtension,
     XhciProbeEndpoint(ext, XHCI_PROBE_EVENT_ABORT, NULL,
                       (const XHCI_ENDPOINT *)endpointExtension, 0);
     /*
-     * The minimum that keeps the completion path honest, not task 7a-B.2's
-     * cancellation machine: detach the transfer so nothing can complete it a
-     * second time after usbport has reclaimed its record, and report what it
-     * moved. The ring is left alone - see XhciSlotAbortTransfer.
+     * The synchronous half: detach the transfer by its own identity so nothing
+     * can complete it a second time after usbport has reclaimed its record,
+     * and report what it moved. This callback runs at DISPATCH under a usbport
+     * lock and may not wait for a command, so the ring is not cleaned up here;
+     * XhciSlotAbortTransfer arms the asynchronous half instead - the Stop
+     * Endpoint (which usbport's earlier PAUSED may already have started) and
+     * the Set TR Dequeue Pointer that places the ring past the cancelled TD,
+     * rewritten as No Ops around any surviving work - and the deferred pass
+     * drives it. (An earlier comment here called that half future work.)
      */
     XhciSlotAbortTransfer(ext, (PXHCI_ENDPOINT)endpointExtension,
                           (PXHCI_TRANSFER)transferExtension, completedLength);

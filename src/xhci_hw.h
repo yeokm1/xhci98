@@ -892,8 +892,9 @@ MPSTATUS XhciRhChirpRootPort(PXHCI_EXTENSION ext, USHORT port);
 /*
  * Build the root hub from the post-reset port map and seed every shadow from a
  * live PORTSC read. Called by the init sequence at XHCI_INIT_STEP_ROOT_HUB, so
- * once per start and once per resume reinitialization. Returns an XHCI_RH_*
- * status; nonzero refuses the start. IRQL: PASSIVE_LEVEL.
+ * once per start, once per resume reinitialization and once per in-place
+ * recovery. Returns an XHCI_RH_* status; nonzero refuses the start. IRQL:
+ * PASSIVE_LEVEL, or DISPATCH_LEVEL with InitBelowPassive set.
  */
 /* `afterRestore` nonzero on the one caller that reaches here with the port
  * registers *surviving* - the restore-success branch of XhciResumeController.

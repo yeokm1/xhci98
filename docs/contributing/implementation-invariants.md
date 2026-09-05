@@ -87,7 +87,7 @@ evidence.
 
 - One command outstanding at a time. Match every Command Completion Event against the issued TRB's physical address regardless: "The Command TRB Pointer field of the Command Completion Event shall point to the Command TRB that initiated the event" (4.6.1, p.93), so an event naming anything else is either a duplicate or a disagreement about where the ring is, and both are worth counting apart from a completion.
 - Never wait for a command completion inside a usbport callback; callbacks run at DISPATCH_LEVEL under usbport's locks (`docs/usb-xhci-info/usbport-miniport-abi.md` section 7). Issue, ring `DB[0]`, return; complete from the DPC.
-- Every command carries a timeout. Recovery order: CRCR.CA abort -> adopt the dequeue pointer the Command Ring Stopped event reports -> escalate to `UsbPortInvalidateController(RESET)` if CRR stays set ~5 s after CA, or if that reported pointer is one the software ring cannot hold. The full ladder, and why repositioning CRCR is not an available rung, is in `docs/usb-xhci-info/xhci-programming.md` "Command Ring Discipline".
+- Every command carries a timeout. Recovery order: CRCR.CA abort -> adopt the dequeue pointer the Command Ring Stopped event reports (rewriting the abandoned command in place as a No Op Command first when the pointer still names it, `issues-found.md` F12) -> escalate to `UsbPortInvalidateController(RESET)` if CRR stays set ~5 s after CA, or if that reported pointer is one the software ring cannot hold. The full ladder, and why repositioning CRCR is not an available rung, is in `docs/usb-xhci-info/xhci-programming.md` "Command Ring Discipline, Timeout, and Abort".
 - **Do not ring `DB[0]` between asserting CA and seeing the Command Ring Stopped event.** "If the Command doorbell is rung before CRR = `0`, (i.e. the ring is not fully stopped), then the behavior is undefined, e.g. the Command Ring may not restart" (Table 5-24 note, p.368). That needs an aborting state distinct from "a command is outstanding", because a Command Aborted event alone does not end it.
 - Write the CRCR pointer field only while CRR = 0; keep a software copy of the ring pointer (the register reads back 0).
 - **Write CA only while CRR = 1, and compose it from a read.** RCS, CS, CA and the pointer all read back as `0`, but CRCR 5:4 are RsvdP (Table 5-24, p.367), the only bits of the register a read can carry anything in, so a read-modify-write is still required.
@@ -215,7 +215,11 @@ code:
 
 ## Fatal Errors
 
-- `CheckController` polls USBSTS.HCE and HSE every invocation. It reads the
+- `CheckController` polls USBSTS.HCE and HSE on every invocation it admits:
+  the health poll declines before reading while `HcInfoStatus` is bad, the
+  controller is already failed, or `INITIALIZED` is clear, and an all-ones
+  read is handled after the read as a window that stopped decoding, not as a
+  fatal report. A declined read is not a failed one. It reads the
   register under the controller lock and escalates after releasing it. A
   check of `ControllerFailed` followed by unsynchronized MMIO is the defect
   closed everywhere else in the driver, and `UsbPortInvalidateController` is a
@@ -786,7 +790,11 @@ Why there is no MSI on either target. MSI is an interrupt delivered as a memory 
   usbport lock, and every bounded wait in the init sequence stalls
   (`KeStallExecutionProcessor`) instead of sleeping; `XhciDelayMs`
   (`src/xhci_pci.c`) is the only fixed delay and takes the stall form there
-  too, 20 ms once per attempt. The flag is a contract: services documented
+  too: `xhciPowerPorts` reaches it twice per attempt through
+  `xhciSettlePortPower`, each call an optional 20 ms transition delay plus up
+  to 20 ms of confirmation polling in 5 ms steps, so that routine alone can
+  stall for 60 ms (design record 07 section 5). That bounds the power-up
+  step, not the whole recovery. The flag is a contract: services documented
   PASSIVE_LEVEL-only are skipped under it, not risked (see "Fatal Errors").
 
 ## MMIO Sanity
@@ -1306,12 +1314,17 @@ must therefore do.
   signalling with nothing to end it. Confirm each operation in its own target
   bit (`PP` for a power-off, `PED` for a disable - "there may be a delay in
   disabling or enabling a port", p.372) and retire nothing until it shows.
-- **There is one way to read a port, and everything uses it.** Reading PORTSC
-  obliges the reader to acknowledge the change bits it observed and fold them
-  into the shadow; a second reader that looks at one bit and discards the rest
-  drops connects on the floor. If a path needs a value from PORTSC, it goes
-  through the refresh - the same rule as "one way to write it", and broken the
-  same way: by a path added later for an unrelated reason.
+- **There is one way to acknowledge a port's change bits, and everything uses
+  it.** A reader that acknowledges PORTSC's RW1C change bits must fold them
+  into the shadow, so every path that acknowledges does so through
+  `xhciRhRefresh`; a second acknowledging reader that looks at one bit and
+  discards the rest drops connects on the floor. Raw single-field reads
+  through `XhciReadPortsc` that acknowledge nothing are permitted and exist
+  (the power-up confirmation in `xhci_init.c`, the reset, suspend and link
+  paths in `xhci_rh.c`), as are the composed writes `XhciWritePortsc` makes for
+  the feature callbacks; what they may not do is write a change bit. (Until
+  the 2026-09-05 audit this bullet said "one way to read a port", which the
+  eleven `XhciReadPortsc` call sites refuted; D6.)
 - **The one sanctioned exception to that rule is an observation mode.**
   `xhciPassThru` reads the raw PORTSC array through `XhciReadPortsc` and does
   not acknowledge and does not fold. It is not a second reader added for an

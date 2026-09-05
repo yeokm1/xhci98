@@ -141,13 +141,12 @@ must express it as traffic, not as a bind.
 
 ## 3. What an expectation can be
 
-Five kinds. Every one names a counter by the exact label the driver prints, so
+Four kinds. Every one names a counter by the exact label the driver prints, so
 a renamed counter fails loudly rather than silently matching nothing.
 
 | Kind | Written as | Holds when |
 |---|---|---|
-| `advance` | `advance <label>` | delta > 0 across the row's window |
-| `advance-by` | `advance <label> >= N` | delta >= N |
+| `advance` | `advance <label>`, or `advance <label> >= N` | delta >= N across the row's window, N defaulting to 1 (`verdict.ps1` parses both spellings into one kind with a `Min`) |
 | `zero` | `zero <label>` | delta == 0 |
 | `identity` | `identity <expr>` | an arithmetic relation over deltas holds exactly |
 | `inert` | `inert <label> because <reason>` | delta == 0, and the reason is printed |

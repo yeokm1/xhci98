@@ -1348,8 +1348,9 @@ the two tools and the readmes and no other file, with the install route
 checked on each target from that asset.
 
 Records: `build-and-test.md` ("Windows ME target VM"); `lessons.md`
-("Windows ME on QEMU"); `scripts/vm-matrix/README.md`; `releases/history.md`;
-`handoff.md`.
+("Windows ME on QEMU"); `scripts/vm-matrix/README.md`; `releases/history.md`.
+(The `handoff.md` this entry once pointed at was the 2026-08-29 audit, removed
+in `cd596cc` once its findings were fixed.)
 
 ## Phase 19 - Release `1.0.1.0`: Windows XP, and the NT Install Fixes
 
@@ -1544,7 +1545,7 @@ target.
 
 Tasks, in the audit's revised order:
 
-- [ ] 20.0 the matrix verdict (F3, F9, F11): driver-refusal evidence takes
+- [x] 20.0 the matrix verdict (F3, F9, F11): driver-refusal evidence takes
   precedence over both `PASS` and the `NODRIVER` inference in
   `scripts/vm-matrix/lib/verdict.ps1`, the refusal reason in the verdict,
   applicable `zero` expectations for the open and configure failure
@@ -1552,7 +1553,7 @@ Tasks, in the audit's revised order:
   `ERROR` in `Get-TargetVerdict`; the exact reproduction vectors from
   the audit in `selftest.ps1`, a true never-claimed `NODRIVER` retained;
   the rule recorded in design record 06 section 2.1.
-- [ ] 20.1 the packaging guards (F4, F14, F15): `Assert-UploadSetOutsideRelease`
+- [x] 20.1 the packaging guards (F4, F14, F15): `Assert-UploadSetOutsideRelease`
   checking the upload tree and the ZIP against the whole `releases\` root,
   tested on isolated temporary trees only; the INF gate's `PATH-W98`
   mirroring `PATH-NT`'s own-`CopyFiles` check for `NTMPDriver`, with the
@@ -1561,7 +1562,7 @@ Tasks, in the audit's revised order:
   `pkg-` hash check retired, older cuts refused with a message that says
   the gate's rules have moved (the 1.0.0.1 INF fails six of them, read-only,
   2026-09-05), and a `test-package.ps1` case for a clone with no `out\`.
-- [ ] 20.2 endpoint and table ownership (F1, F8): current-binding validation
+- [x] 20.2 endpoint and table ownership (F1, F8): current-binding validation
   under the controller lock at every endpoint callback entry, a stale
   handle closed locally without touching its replacement, stale submits
   rejected through the completion contract, record reuse considered; and
@@ -1573,7 +1574,11 @@ Tasks, in the audit's revised order:
   and an interleaving vector for the table reset. Then design record 05
   section 2 and the invariants corrected. Preserve issue 4's working XP
   behaviour and `Ep0RemovesSuperseded`.
-- [ ] 20.3 recovery delivery loss (F2): the owner's policy, either a
+- [x] 20.3 recovery delivery loss (F2): the policy taken on 2026-09-05 is the
+  bounded age-out (twenty health polls, a delivery generation, the loss
+  charged to the consecutive count, an arming the latch no longer needs
+  retired uncharged); the owner may still choose the terminal residual
+  instead. As written when the phase opened: the owner's policy, either a
   documented terminal residual with the "costs one attempt, bounded by the
   cap" claim removed from `xhciArmRecovery`'s comment and design record 07
   section 7, or a bounded age-out with a distinct delivery generation that
@@ -1582,7 +1587,10 @@ Tasks, in the audit's revised order:
   `PollClockMs`). Vectors: one lost delivery, eventual delivery, a late
   callback from an expired request, repeated loss to the terminal state,
   suspend and restart between arming and delivery.
-- [ ] 20.4 the shipped statements (F6, F7, F18, D1): the `LICENSE` scope
+- [x] 20.4 the shipped statements (F6, F7, F18, D1), except the Windows 2000
+  SP4 VM idle observation, which no session has taken yet; it is recorded as
+  owed in `build-and-test.md` and every rewritten site says "unmeasured"
+  rather than asserting either way. As written: the `LICENSE` scope
   paragraph rewritten as history in `legal-provenance.md` section 5's form;
   the `make-release.ps1` readme template ("WINDOWS 98 ONLY", "redistributes
   nothing of Microsoft's", the stale table of contents, the 0.x sentence,
@@ -1598,7 +1606,11 @@ Tasks, in the audit's revised order:
   post-upload paragraph at the end of this roadmap made to defer to
   `releases/README.md`'s uploaded rule. No cut directory is edited: F6 and
   F7 reach the download at the next cut.
-- [ ] 20.5 the register and tool items (F5, F10, F12, F13, F16, F17):
+- [x] 20.5 the register and tool items (F5, F10, F12, F13, F16, F17); F12
+  took the No Op Command rewrite rather than the divergence reset, and the
+  successful-restore reading for F10 is a host-model reading
+  (`test_save_restore`'s conforming controller), the hardware reading being
+  20.7's. As written:
   `XHCISNAP` tracking `ferror` and `fclose` and reporting an incomplete
   report with a nonzero exit, the extension-size mismatch carried into the
   summary, with deterministic write-failure and close-failure injection;
@@ -1611,7 +1623,12 @@ Tasks, in the audit's revised order:
   abandoned command pinned by a host vector and resolved with a
   command-ring No Op (type 23, not `XhciRingNoOpAt`'s type 8) or a
   divergence reset; `xhciqual`'s EHCI cleanup masking the RW1C status bits.
-- [ ] 20.6 the smaller items and D2-D6: the audit's "Smaller code and script
+- [x] 20.6 the smaller items and D2-D6, with three of the smaller items left
+  as the audit's own rule asks (the `PSModulePath` guard, not reproduced
+  from a PowerShell 7 parent; the import-allowlist duplicate-row matching,
+  latent with no row needing it; the multi-timer async mock, with no vector
+  needing it) and the optional D5 status clarification left to the owner
+  who names the version. As written: the audit's "Smaller code and script
   items" table, each promoted to a fix only once its contract is established
   and the failure reproduced, and the D2-D6 drift rows corrected from
   implementation behaviour, including this roadmap's Phase 18 pointer to a
@@ -1619,7 +1636,13 @@ Tasks, in the audit's revised order:
   `docs/README.md`'s phase-reading table carried to Phases 17-20, the
   design-record and ABI-document rows, and the stale comments and IRQL tags
   in D4. Cut directories and dated evidence untouched.
-- [ ] 20.7 the gates and the readings: `build-driver.cmd all` with every
+- [ ] 20.7 the gates and the readings. The host half was taken on 2026-09-05
+  after 20.6 (`build-driver.cmd all` with every self-test, the qualifier's
+  host tests, the matrix self-test, all green); the guest half - the
+  post-release matrix on both fresh clones, the Windows 2000 SMP recovery,
+  the XP lifecycle sequence, and a successful-restore reading for the IMOD
+  change - has not been taken and is what keeps this task open. As written:
+  `build-driver.cmd all` with every
   self-test, `xhciqual\test\run-host-tests.cmd`, `vm-matrix\selftest.ps1`;
   `run-matrix.ps1 -PostRelease` on fresh 2a and 2b clones against the
   Phase 19 reports; Windows 2000 SMP in-place recovery on the 2d vehicle

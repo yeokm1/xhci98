@@ -1224,8 +1224,16 @@ ULONG XhciRingSetDequeue(PXHCI_RING ring, ULONG dequeuePA)
 
 ULONG XhciRingNoOpAt(PXHCI_RING ring, ULONG index)
 {
+    return XhciRingNoOpAtType(ring, index, XHCI_TRB_TYPE_NOOP);
+}
+
+ULONG XhciRingNoOpAtType(PXHCI_RING ring, ULONG index, ULONG trbType)
+{
     ULONG cycle;
 
+    if (trbType != XHCI_TRB_TYPE_NOOP && trbType != XHCI_TRB_TYPE_NOOP_COMMAND) {
+        return XHCI_RING_BAD_PARAM;
+    }
     if (ring == NULL || ring->Base == NULL) {
         return XHCI_RING_BAD_PARAM;
     }
@@ -1257,7 +1265,7 @@ ULONG XhciRingNoOpAt(PXHCI_RING ring, ULONG index)
      * follows it, and an IOC would ask for an event for a transfer that no longer
      * exists.
      */
-    ring->Base[index].Control = XHCI_TRB_TYPE(XHCI_TRB_TYPE_NOOP) | cycle;
+    ring->Base[index].Control = XHCI_TRB_TYPE(trbType) | cycle;
     return XHCI_RING_OK;
 }
 

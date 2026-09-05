@@ -53,7 +53,7 @@ body:
     id: driver-version
     attributes:
       label: Driver version
-      placeholder: "1.0.0.0"
+      placeholder: "the four-part number from readme.txt, e.g. 1.0.1.0"
     validations:
       required: true
 

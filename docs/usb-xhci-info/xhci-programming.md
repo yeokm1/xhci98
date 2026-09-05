@@ -106,8 +106,10 @@ Controller").
    (the capability this driver wrote to is not where it wrote) and
    `XHCI_CAPS_TOPOLOGY_CHANGED` (the topology it is about to act on is not the
    one it validated). The third driver-raised code in that space,
-   `XHCI_CAPS_NO_MANAGED_PORTS`, is the preflight's (step 12 below), where the
-   port map is `XHCI_INIT_STEP_PORT_MAP` = 6.
+   `XHCI_CAPS_NO_MANAGED_PORTS`, is normally the preflight's (step 12 below),
+   where the port map is `XHCI_INIT_STEP_PORT_MAP` = 6; it is raised on either
+   pass, so a re-parse that finds no managed port reports it at
+   `XHCI_INIT_STEP_PORT_MAP_RECHECK` = 11.
 
    Compare the two field for field, and keep both maps in the miniport
    extension so exactness costs no stack. A digest is the wrong tool here: this

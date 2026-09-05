@@ -24,7 +24,8 @@
     # NOT `tools\w98se.img`: that is a 1.44 MB BOOT FLOPPY, whatever its name
     # suggests, and prepare-image.ps1 checks the size for exactly that reason.
     # The CABs live in \WIN98 on the CD.  This repo hardcodes no source; the
-    # image is proprietary and where you get it from is your business.
+    # image is proprietary and where you get it from is your business. Every
+    # ISO path in this file is an EXAMPLE to replace with your own.
     Win98Cd = 'D:\isos\w98se.iso'
 
     # $true (the default) boots every group with -snapshot, so the guest images
@@ -177,7 +178,14 @@
             Accel    = ''
             Monitor  = 55596
             BootSeconds = 240
+            # ReadySeconds (optional): how long the runner waits after the
+            # driver reports itself up before the first attach, when a target
+            # needs longer than the default to finish its own USB enumeration.
             Like     = '2a'
+            # EXAMPLE VALUES. The stamp is whatever prepare-image.ps1 -Stamp
+            # wrote onto YOUR clone (base-<version>-qemu for the version under
+            # test); this one is older than the newest run and is not a
+            # prediction of what your image carries.
             CloneFrom = @{ Image = 'fresh-2a.img'; Snapshot = 'base-1.0.0.0-qemu' }
         }
         @{

@@ -118,7 +118,13 @@ static int ep0_ctrl_in(CTRL *c, EP0DEV *d, u8 breq, u16 wval, u16 widx,
             code = (u8)TRB_GET_CODE(e.st);
             if (e.p0 == data_phys && wlen != 0 &&
                 (code == CC_SHORT_PKT || code == CC_SUCCESS)) {
-                *got = wlen - TRB_GET_RESID(e.st);
+                /* Clamped: a residual larger than the request (a malformed
+                 * reply) would underflow the count and let the descriptor
+                 * walk read past the buffer (issues-found.md, smaller items). */
+                if (TRB_GET_RESID(e.st) > wlen)
+                    *got = 0;
+                else
+                    *got = wlen - TRB_GET_RESID(e.st);
                 continue;               /* Status event still to come */
             }
             if (e.p0 == status_phys &&

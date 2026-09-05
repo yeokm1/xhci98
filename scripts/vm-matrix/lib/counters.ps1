@@ -228,8 +228,14 @@ function Get-CounterDelta {
     )
     $d = @{}
     foreach ($k in $After.Values.Keys) {
-        $b = if ($Before.Values.ContainsKey($k)) { $Before.Values[$k] } else { 0 }
-        $d[$k] = $After.Values[$k] - $b
+        # A field absent from Before is OMITTED, not read as zero: a delta made
+        # from one reading is an absolute value wearing a delta's name, and the
+        # rule this file states is that unread is an ERROR and never a zero.
+        # Unreachable today (Read-Counters throws on a short chunk), which is
+        # why the rule was written down here rather than found (issues-found.md,
+        # smaller items).
+        if (-not $Before.Values.ContainsKey($k)) { continue }
+        $d[$k] = $After.Values[$k] - $Before.Values[$k]
     }
     # A NEGATIVE delta means the extension was zeroed between the two readings -
     # a controller restart, a disable/enable, a Windows 2000 image reload.  It is
@@ -273,6 +279,31 @@ function Get-CounterDelta {
 # a different driver load than the "after" one.  The harness starts each boot
 # with a fresh file, and this reports every distinct value so that a stale one
 # is loud rather than silently resolved.
+# Has the driver reloaded since `Ident` was taken?  A Windows 2000
+# disable/enable mid-group loads the image at a new VA, and a read against the
+# old one decodes whatever now occupies that memory - plausible numbers, never
+# an error.  The matrix runner checked the identity once per group until the
+# 2026-09-05 audit (smaller items); soak-11v.ps1 re-checked per read.  Returns
+# "" when the identity is unchanged, otherwise the reason it is not.
+function Get-ExtensionIdentityDrift {
+    param(
+        [Parameter(Mandatory = $true)]$Ident,
+        [Parameter(Mandatory = $true)][string]$DebugconLog
+    )
+    $fresh = Find-ExtensionIdentity -DebugconLog $DebugconLog
+    if ($null -eq $fresh.Va) {
+        return ("the debug console log {0} no longer carries the driver's extension address, so no counter can be read against a known identity" -f $DebugconLog)
+    }
+    if ($fresh.Spans) {
+        return ("the debug console log now spans more than one driver load or binary (VAs: {0}; sizes: {1}); the driver reloaded inside this group, so this reading would decode freed memory" -f `
+            ($fresh.AllVas -join ", "), ($fresh.AllSizes -join ", "))
+    }
+    if ($fresh.Va -ne $Ident.Va) {
+        return ("the driver's extension moved from 0x{0} to 0x{1} since the group started; a reload happened and the window is void" -f $Ident.Va, $fresh.Va)
+    }
+    return ""
+}
+
 function Find-ExtensionIdentity {
     param([Parameter(Mandatory = $true)][string]$DebugconLog)
     if (-not (Test-Path -LiteralPath $DebugconLog)) {

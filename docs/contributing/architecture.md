@@ -319,9 +319,9 @@ The device's driver is the miniport itself (`xhci98.sys`). On Win98 `usbport.sys
 
 The section shapes, the dirid-12 trap, and the parser limits that constrain the shared INF are in `docs/contributing/build-and-test.md`, "The INF must carry both install paths".
 
-- PnP hardware ID: `PCI\CC_0C0330` (USB class, xHCI prog-IF); add specific vendor/device IDs as higher-priority entries.
-- Prerequisite on the target machine: the Win2000-derived USB 2.0 stack (`usbport.sys` + `usbhub20.sys`). On Win98 it ships in NUSB 3.3 and is already present on most retro Win98 SE installs; on Win2000 the same stack is native in SP4 (or KB319973) and NUSB must not be installed.
-- The root hub PDO that `usbport.sys` creates for a USB2-flagged miniport should match `USB\ROOT_HUB20`, which NUSB's existing INF binds to `usbhub20.sys`. Confirm the exact ID against the EHCI root hub during the spike.
+- PnP hardware ID: `PCI\CC_0C0330` (USB class, xHCI prog-IF). The INF has matched on the class code alone since the Phase 3 spike; no vendor/device entries have been needed on any machine or guest since, and none are planned.
+- Prerequisite on the target machine: a Win2000-derived USB 2.0 stack (`usbport.sys` + `usbhub20.sys`). On Win98 it ships in NUSB 3.3 (the tested configuration; 3.6 carries the same stack) or in SweetLow's XP-derived rebuild; on Win2000 the same stack is native in SP4 (or KB319973) and NUSB must not be installed; on Windows ME only SweetLow's stack has been run; XP uses its own.
+- The root hub PDO that `usbport.sys` creates for a USB2-flagged miniport matches `USB\ROOT_HUB20`, which the USB 2.0 stack's own INF binds to `usbhub20.sys`. Confirmed on the Windows 98 spike (Phase 3 task 8) and on every target since.
 
 ## Fallback: Option B (monolithic HCD)
 

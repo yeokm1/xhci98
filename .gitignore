@@ -62,6 +62,7 @@ objfre/
 # negations they are silently ignored (the tracked ones had to be git add -f).
 !xhciqual/build.cmd
 !xhcisnap/build.cmd
+!xhcisnap/selftest.cmd
 !xhciqual/test/*.cmd
 !scripts/**/*.cmd
 !test/*.cmd
@@ -82,26 +83,22 @@ tools/*
 vm/
 scripts/local/
 
-# Staged install media (scripts\package\make-package.ps1). Generated from the
-# built driver, the tracked INF, and the git-ignored per-target usbd.sys
-# sources under tools\ - reproducible, and half of it not ours.
-#
-# make-release.ps1 also assembles the GitHub release asset here as
-# out\upload-<version>\ and .zip. That tree deliberately contains every
-# Microsoft file scripts\package\usbd-sources.expected names - the two usbd.sys
-# builds and usbhub98.sys since batch 13-E - so it must stay ignored: publishing
-# them as a
-# release asset is a decision (docs\contributing\legal-provenance.md section 5),
-# committing them is not, and a git blob cannot be withdrawn the way an asset
-# can.
+# Staged install media (scripts\package\make-package.ps1), generated from the
+# built driver and the tracked INF, and the GitHub release asset
+# make-release.ps1 assembles here as out\upload-<version>\ and .zip. Generated
+# output, reproducible from the tree, and since 1.0.0.1 none of it is a
+# Microsoft file: the INF has the OS supply usbd.sys, usbhub.sys and usbport.sys
+# from its own install source (docs\contributing\legal-provenance.md section 5
+# records the earlier decision, 0.0.0.4 to 1.0.0.0, and its withdrawal). It
+# stays ignored because generated output is not the record; releases\ is.
 out/
 
 # Published releases (scripts\package\make-release.ps1) ARE tracked, binaries
 # included - that is the whole difference between releases\ and out\ above. The
 # global *.sys rule near the top would otherwise swallow them silently, so undo
 # it for this directory only. Only the two files this project owns can ever land
-# here: usbd98.sys, usbd2k.sys and usbhub98.sys are Microsoft's and are excluded
-# by the script, not by this rule - see releases\README.md.
+# here; the script publishes nothing else, and since 1.0.0.1 the INF gate
+# refuses a Microsoft file on the media at all - see releases\README.md.
 #
 # The *.exe and *.map pair is the DOS qualifier staged into each release. Its
 # MAP is what turns a fault address on a photographed DOS screen back into a
@@ -133,6 +130,8 @@ releases/.replaced-*/
 # escape it, and it is GUID-named so concurrent runs cannot share state. The
 # test removes only what it created, so a normal or failing run leaves nothing
 # behind - but an interrupted one would otherwise leave the tree looking dirty.
+# (test-package.ps1 itself now works under %TEMP%, so this pattern matches
+# nothing today; it stays for a run of the older layout.)
 scripts/package/.testsrc-*/
 
 # Local mirror of upstream reference sources (keep only its README tracked)
@@ -151,10 +150,9 @@ external/*
 docs/references/*
 !docs/references/README.md
 
-# Phase 0 qualification tool: build outputs fall under the global
-# patterns above; keep its scripts tracked despite *.cmd
-!xhciqual/build.cmd
-!xhciqual/test/run-qemu-test.cmd
+# Phase 0 qualification tool: build outputs fall under the global patterns
+# above; its scripts are un-ignored with the other .cmd files near the top
+# (`!xhciqual/build.cmd`, `!xhciqual/test/*.cmd`).
 xhciqual/test/hdd/
 xhciqual/test/win98hdd/
 xhciqual/test/usb.img

@@ -1970,8 +1970,11 @@ static VOID xhciPowerPorts(PXHCI_EXTENSION ext)
      * reached its target state before modifying it again" (Table 5-27, p.375 -
      * quoted with the specification's own grammar so the citation sweep can
      * find it). Every port of the class is read back, not only the ones this
-     * pass wrote: what comes out is how many ports are actually live, which is
-     * the number Phase 5's root hub is built on.
+     * pass wrote: what comes out is how many ports are actually live. It is a
+     * reading, not the root hub's port count - XhciRootHubBuild counts
+     * XhciPortIsManaged, so a port whose PP did not confirm is still a root-hub
+     * port that reports itself unpowered (design record 10 sections 4.2 and
+     * 14.4 record the earlier claim that this number built the hub).
      */
     ext->PortsPowered =
         xhciSettlePortPower(ext, XHCI_PP_WANT_ON, XHCI_PP_PHASE_START,
@@ -2898,6 +2901,10 @@ static ULONG xhciSaveState(PXHCI_EXTENSION ext)
     if (usbsts == 0xFFFFFFFFUL || (usbsts & XHCI_USBSTS_HCH) == 0) {
         return 0;
     }
+    /* Captured with the halt proven and the window decoding; the restore
+     * writes it back where it used to write 0 (F10). Harmless if the save is
+     * declined below - it is read only while SavedStateValid. */
+    ext->SavedImod = XhciReadIr0(ext, XHCI_IR_IMOD);
 
     /*
      * **Every queue, not just EP0's.** The save procedure begins "Stop all USB
@@ -3224,8 +3231,7 @@ static ULONG xhciRestoreState(PXHCI_EXTENSION ext)
                 XhciEventRingErdpValue(&ext->EventRing, 0));
     /*
      * IE clear: the enables are usbport's to ask for, and this is a restore of
-     * the pointer state rather than of the interrupt policy. IMOD 0 is the
-     * value this driver programs everywhere.
+     * the pointer state rather than of the interrupt policy.
      *
      * Through the read-modify-write, not the literal this used to be, and
      * unlike the acknowledge in xhciProgramEventRing this site **cannot** argue
@@ -3238,7 +3244,18 @@ static ULONG xhciRestoreState(PXHCI_EXTENSION ext)
         ext->RestoreFailures++;
         return 0;
     }
-    XhciWriteIr0(ext, XHCI_IR_IMOD, 0);
+    /*
+     * IMOD is written back as the save read it, not as 0. This is the only
+     * IMOD write in the driver: the start leaves the reset default (4000, 1 ms
+     * of moderation), which the isochronous builder's IOC-per-TD policy relies
+     * on to absorb up to 8,000 events a second, and the 0 this site used to
+     * write removed that moderation after every successful restore while a
+     * comment beside it claimed 0 was "the value this driver programs
+     * everywhere" (the 2026-09-05 audit's F10). The spec's restore list wants
+     * the register written before CRS (4.23.2 p.314), so it is written - with
+     * its pre-suspend value.
+     */
+    XhciWriteIr0(ext, XHCI_IR_IMOD, ext->SavedImod);
 
     XhciWriteOp(ext, XHCI_OP_USBSTS, XHCI_USBSTS_SRE);
 
@@ -4332,8 +4349,15 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
     /* First tier: the PCI Command register the bus-master gate accepted. Every
      * DMA this driver programs depends on bit 2 of it, and a machine whose
      * firmware or power management clears it later is a controller that goes
-     * silent with no other symptom. */
-    XhciLogNote(ext, "gate.busmaster.command", value);
+     * silent with no other symptom. On the recovery path the gate is skipped
+     * (configuration space is PASSIVE-only) and the register was not read, so
+     * the note says so rather than logging a 0 that reads as "the register
+     * was 0" (issues-found.md D4). */
+    if (ext->InitBelowPassive) {
+        XhciLogNote(ext, "gate.busmaster.skipped", 1);
+    } else {
+        XhciLogNote(ext, "gate.busmaster.command", value);
+    }
 
     /* Step 0c: MMIO sanity, before any register that has a side effect. */
     ext->InitStep = XHCI_INIT_STEP_CAP_SANITY;

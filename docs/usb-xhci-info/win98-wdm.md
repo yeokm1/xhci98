@@ -386,7 +386,8 @@ One further point cuts mildly in XP's favour, and it is an inference, not a
 measurement: the ABI reference this project builds against is itself XP-era.
 ReactOS reimplements the NT5.1 stack
 (`docs/usb-xhci-info/usbport-miniport-interface.md` section 1,
-`docs/usb-xhci-info/usbport-miniport-abi.md` "Trust order"), so where
+`docs/usb-xhci-info/usbport-miniport-abi.md`, the trust order its preamble
+states), so where
 `docs/usb-xhci-info/usbport-miniport-abi.md` and the `5.00.2195.x` binaries
 disagree, the transcription may well be describing XP's layout. That is a
 reason to record what XP does, not a reason to believe it in advance.

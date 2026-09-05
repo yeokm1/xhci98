@@ -572,6 +572,10 @@ static ULONG hwCmdHang;
 static ULONG hwCmdAbortSkipsAborted;
 static ULONG hwCmdStoppedPointerBad;
 static ULONG hwCmdIgnoreAbort;
+/* The stop's reported dequeue pointer names the hung command's OWN TRB rather
+ * than the one after it: the xHC never fetched it, so the abort had nothing to
+ * advance past (the 2026-09-05 audit's F12). */
+static ULONG hwCmdStoppedAtHung;
 /*
  * An abort that stops the ring but whose events are still in flight when the
  * abort watchdog next runs. CRR negates, so the watchdog concludes locally that
@@ -891,6 +895,7 @@ static void hc_build(void)
     hwCmdAbortSkipsAborted = 0;
     hwCmdStoppedPointerBad = 0;
     hwCmdIgnoreAbort = 0;
+    hwCmdStoppedAtHung = 0;
     hwCmdSilentAbort = 0;
     hwCmdCompletionCode = XHCI_CC_SUCCESS;
     hwCmdSlotId = 0;
@@ -2806,7 +2811,10 @@ static void hw_command_abort(void)
             hw_post_event(XHCI_TRB_TYPE_COMMAND_COMPLETION, hwCmdHungPA,
                           XHCI_CC_COMMAND_ABORTED << 24);
         }
-        hwCmdDequeuePA = hwCmdHungPA + sizeof(XHCI_TRB);
+        /* A command that was executing is advanced past (4.6.1.2 p.93); one
+         * the xHC never fetched stays where the dequeue pointer sits. */
+        hwCmdDequeuePA = hwCmdStoppedAtHung ? hwCmdHungPA
+                                            : hwCmdHungPA + sizeof(XHCI_TRB);
         hwCmdHungPA = 0;
     }
 
@@ -3152,7 +3160,35 @@ static void test_write_order(void)
     int run;
 
     hc_build();
+    /*
+     * USBLEGCTLSTS as firmware may leave it: every RsvdP field set (3:1, 12:5,
+     * 19:17), every SMI enable set, every RW1C status bit set. The handoff's
+     * write must clear the five enables, acknowledge the three status bits,
+     * and carry the RsvdP fields back untouched - the 2026-09-05 audit's F13
+     * found a blanket 0xFFFF enable mask zeroing them.
+     */
+    mmio[HC_LEGACY_OFFSET / 4 + 1] = XHCI_USBLEGCTLSTS_RSVDP |
+                                     XHCI_USBLEGCTLSTS_SMI_ENABLES |
+                                     XHCI_USBLEGCTLSTS_SMI_STATUS;
     CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "the same start, re-run");
+    {
+        int legctl;
+
+        legctl = first_write(HC_LEGACY_OFFSET + 4);
+        CHECK(legctl >= 0, "the handoff writes USBLEGCTLSTS");
+        if (legctl >= 0) {
+            CHECK_EQ(writeValue[legctl] & XHCI_USBLEGCTLSTS_RSVDP,
+                     XHCI_USBLEGCTLSTS_RSVDP,
+                     "preserving the RsvdP fields 3:1, 12:5 and 19:17");
+            CHECK_EQ(writeValue[legctl] & XHCI_USBLEGCTLSTS_SMI_ENABLES, 0,
+                     "clearing the five SMI enables");
+            CHECK_EQ(writeValue[legctl] & XHCI_USBLEGCTLSTS_SMI_STATUS,
+                     XHCI_USBLEGCTLSTS_SMI_STATUS,
+                     "and acknowledging the three RW1C status bits");
+            CHECK_EQ(writeValue[legctl] & 0x1FF00000UL, 0,
+                     "with the RsvdZ 28:21 and read-only 20 left at zero");
+        }
+    }
 
     /*
      * The ownership claim is the first write of any kind. Everything ahead of
@@ -7573,6 +7609,67 @@ static void test_command_timeout(void)
     CHECK_EQ(ext.CommandCompletionCode, XHCI_CC_COMMAND_RING_STOPPED,
              "recorded as the stop that ended it");
     CHECK_EQ(ext.CommandState, XHCI_CMD_STATE_IDLE, "with the ring in service");
+
+    /*
+     * **The stop that still names the abandoned command** (the 2026-09-05
+     * audit's F12). The header's premise - the xHC advanced past the aborted
+     * TRB - holds for a command that was executing; a command doorbelled but
+     * never fetched leaves the dequeue pointer ON it, valid and unexecuted, so
+     * adopting the position as reported would have the next doorbell execute
+     * the abandoned command ahead of the one it was rung for. The TRB has to
+     * be rewritten as a No Op COMMAND (type 23 - the transfer ring's type 8
+     * would be a TRB Error here), its completion retired as the rewrite's
+     * rather than counted unmatched, and the command that follows it must
+     * complete normally.
+     */
+    hc_build();
+    hwCmdHang = 1;
+    hwCmdAbortSkipsAborted = 1;
+    hwCmdStoppedAtHung = 1;
+    CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a controller that never fetches)");
+    hw_events_reset();
+    {
+        ULONG hungPA;
+        ULONG hungIndex;
+        ULONG unmatched;
+        ULONG completed;
+
+        hungPA = ext.CommandTrbPA;
+        CHECK(hungPA != 0, "(the self-test No Op is outstanding)");
+        CHECK_EQ(XhciRingIndexFromPA(&ext.CommandRing, hungPA, &hungIndex),
+                 XHCI_RING_OK, "(at an index on the ring)");
+        fire_async_timer();
+        deliver_events();
+        CHECK_EQ(ext.CommandRingStops, 1, "(the ring stopped)");
+        CHECK_EQ(ext.CommandRingStoppedOnAbandoned, 1,
+                 "a stop naming the abandoned command's own TRB is recognised");
+        CHECK_EQ(ext.CommandRingDiverged, 0, "and is not a divergence");
+        CHECK_EQ(XHCI_TRB_GET_TYPE(ext.CommandRing.Base[hungIndex].Control),
+                 XHCI_TRB_TYPE_NOOP_COMMAND,
+                 "the abandoned TRB is rewritten as a No Op Command, type 23");
+        CHECK_EQ(ext.CommandNoOpRewrittenPA, hungPA,
+                 "and remembered for its completion");
+        CHECK_EQ(ext.CommandRing.Dequeue, hungIndex,
+                 "with the dequeue pointer adopted on it");
+        CHECK_EQ(ext.CommandState, XHCI_CMD_STATE_IDLE, "and the ring in service");
+        CHECK_EQ(ext.CommandTrbPA, 0, "(with no command outstanding)");
+
+        /* The next command: the doorbell executes the No Op first, then it. */
+        hwCmdHang = 0;
+        unmatched = ext.CommandsUnmatched;
+        completed = ext.CommandsCompleted;
+        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+                 "the next command is accepted");
+        deliver_events();
+        CHECK_EQ(ext.CommandsUnmatched, unmatched,
+                 "the rewritten No Op's completion is not counted unmatched");
+        CHECK_EQ(ext.CommandNoOpRewrittenPA, 0, "and is forgotten once retired");
+        CHECK_EQ(ext.CommandTrbPA, 0, "the next command completed");
+        CHECK_EQ(ext.CommandsCompleted, completed + 1, "and was counted once");
+        CHECK_EQ(ext.CommandState, XHCI_CMD_STATE_IDLE, "leaving the ring idle");
+        CHECK_EQ(ext.CommandRing.Dequeue, ext.CommandRing.Enqueue,
+                 "and empty - both TRBs retired");
+    }
 
     /*
      * A Command Ring Stopped naming a position this ring cannot hold. The
@@ -26304,9 +26401,12 @@ static void test_save_restore(void)
     CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "(a device in Default)");
 
     reinits = ext.ResumeReinits;
+    mmio[HC_IR0(XHCI_IR_IMOD) / 4] = 4000UL;   /* the reset default, F10 below */
     XhciRegPacket.SuspendController(&ext);
     CHECK_EQ(ext.SavedStateValid, 1, "the save succeeded");
     CHECK_EQ(ext.SaveFailures, 0, "with no failure recorded");
+    CHECK_EQ(ext.SavedImod, 4000UL, "and captured IMOD as it read");
+    mmio[HC_IR0(XHCI_IR_IMOD) / 4] = 0;        /* what a restore has to undo */
 
     CHECK_EQ(XhciRegPacket.ResumeController(&ext), MP_STATUS_SUCCESS,
              "and the resume restores");
@@ -26320,6 +26420,18 @@ static void test_save_restore(void)
              "and the controller running again");
     CHECK_EQ(ext.SavedStateValid, 0,
              "the saved state is consumed - a restore is a one-shot");
+    /*
+     * The 2026-09-05 audit's F10: the restore wrote IMOD as 0, so a controller
+     * that restored successfully ran with no interrupt moderation while the
+     * isochronous builder's IOC-per-TD policy assumed the 1 ms default. The
+     * value the save read (set to the reset default here, because the model's
+     * IMOD is otherwise 0 and a check against 0 would pass for the wrong
+     * reason) is what the restore has to write back.
+     */
+    CHECK_EQ(mmio[HC_IR0(XHCI_IR_IMOD) / 4], 4000UL,
+             "the restore writes IMOD back as the save read it, not as 0");
+
+    /* --- restored, but the controller will not start. A restore that
 
     /* --- restored, but the controller will not start. A restore that
      * reprogrammed every register and then did not run is a failed resume. --- */

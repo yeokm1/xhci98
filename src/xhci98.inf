@@ -3,8 +3,10 @@
 ; One file, two setup engines, one xhci98.sys. Windows 98 SE's 16-bit engine
 ; reads only the undecorated sections and loads the driver through
 ; *NTKERN/NTMPDriver; Windows 2000 SP4 prefers the .NTx86-decorated sections
-; and loads it through a kernel service. Both install sections point at the
-; same CopyFiles section so the file list cannot drift between targets.
+; and loads it through a kernel service. Both install sections copy this
+; project's two files through the shared Xhci.CopyFiles, so that list cannot
+; drift between targets, and each adds its own OS-supplied list (Xhci.CopyW98,
+; Xhci.CopyNT) for the files LayoutFile has Windows fetch from its own source.
 ;
 ; usbport.sys gets no service and no registry entry on either target: it loads
 ; because xhci98.sys imports USBPORT_RegisterUSBPortDriver from it, and the

@@ -1038,6 +1038,22 @@ static ULONG xhciCommandCompleted(PXHCI_EXTENSION ext,
                                   ULONG code,
                                   ULONG control)
 {
+    if (ext->CommandNoOpRewrittenPA != 0 &&
+        pointer == ext->CommandNoOpRewrittenPA) {
+        /*
+         * The No Op Command xhciCommandRingStopped wrote over an abandoned
+         * command (F12), answered by the xHC on the doorbell that followed.
+         * It is nobody's outstanding command, so it is retired from the ring
+         * and forgotten rather than counted as an event naming no TRB; the
+         * command that doorbell was rung for completes after it, on its own
+         * match below.
+         */
+        ext->CommandNoOpRewrittenPA = 0;
+        xhciRetireCommand(ext, pointer, code);
+        XHCI_DBG_VALUE_CHANGED("command: the rewritten No Op completed, TRB",
+                               pointer);
+        return 1;
+    }
     if (ext->CommandTrbPA == 0 || pointer != ext->CommandTrbPA) {
         /*
          * Expected input rather than an error in one case - an event arriving
@@ -1221,6 +1237,8 @@ static VOID xhciCommandAborted(PXHCI_EXTENSION ext, ULONG pointer)
  */
 static ULONG xhciCommandRingStopped(PXHCI_EXTENSION ext, ULONG pointer)
 {
+    ULONG abandoned;
+
     ext->CommandRingStops++;
 
     if (ext->CommandState != XHCI_CMD_STATE_ABORTING) {
@@ -1236,6 +1254,7 @@ static ULONG xhciCommandRingStopped(PXHCI_EXTENSION ext, ULONG pointer)
         return XHCI_CMD_ACTION_RESET;
     }
 
+    abandoned = ext->CommandTrbPA;
     if (ext->CommandTrbPA != 0) {
         /* The abort found the ring between commands, so the Command Aborted
          * event never came: "a Command Completion Event with the Completion Code
@@ -1258,6 +1277,45 @@ static ULONG xhciCommandRingStopped(PXHCI_EXTENSION ext, ULONG pointer)
     if (pointer == XhciRingTrbPA(&ext->CommandRing,
                                  ext->CommandRing.Trbs - 1)) {
         pointer = XhciRingTrbPA(&ext->CommandRing, 0);
+    }
+
+    /*
+     * **The reported position may still name the command just given up**, and
+     * the header's premise - that the xHC advanced past the aborted TRB - holds
+     * only for a command that was executing. A command doorbelled but never
+     * fetched (CRR still 1, the fetch wedged, `CA` written and the stop event
+     * arriving anyway) leaves the dequeue pointer ON that TRB, valid and
+     * unexecuted. Adopting the position as it stands would make the next
+     * doorbell execute the abandoned command ahead of the one it was rung for
+     * - a Disable Slot or Address Device the slot layer has already been told
+     * was lost - with a completion no outstanding command matches (the
+     * 2026-09-05 audit's F12). So the TRB is rewritten in place as a No Op
+     * Command, which is the command ring's own type 23 and not the transfer
+     * ring's type 8 that XhciRingNoOpAt writes, keeping its cycle bit so the
+     * xHC still fetches it and answers it harmlessly; its completion is
+     * recognised by `CommandNoOpRewrittenPA` in xhciCommandCompleted and
+     * retired there rather than counted unmatched. A rewrite the ring layer
+     * refuses falls through to the divergence reset below, since a position
+     * that cannot be edited cannot safely be adopted either.
+     */
+    if (abandoned != 0 && pointer == abandoned) {
+        ULONG index;
+
+        if (XhciRingIndexFromPA(&ext->CommandRing, pointer, &index) !=
+                XHCI_RING_OK ||
+            XhciRingNoOpAtType(&ext->CommandRing, index,
+                               XHCI_TRB_TYPE_NOOP_COMMAND) != XHCI_RING_OK) {
+            ext->CommandRingDiverged++;
+            ext->CommandResetRequests++;
+            XHCI_DBG_VALUE_CHANGED("command: stopped on the abandoned command "
+                                   "and it could not be rewritten - requesting "
+                                   "controller reset, TRB", pointer);
+            return XHCI_CMD_ACTION_RESET;
+        }
+        ext->CommandRingStoppedOnAbandoned++;
+        ext->CommandNoOpRewrittenPA = pointer;
+        XHCI_DBG_VALUE_CHANGED("command: stopped on the abandoned command, "
+                               "rewritten as No Op Command, TRB", pointer);
     }
 
     if (XhciRingSetDequeue(&ext->CommandRing, pointer) != XHCI_RING_OK) {

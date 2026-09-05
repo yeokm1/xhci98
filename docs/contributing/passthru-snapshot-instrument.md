@@ -31,7 +31,7 @@ Where the code lives:
 | kernel side | `xhciPassThru` and its two helpers in `src/xhci_dispatch.c`; the wire format in the block after `XHCI_EXTENSION` in `src/xhci.h` |
 | host side | `xhcisnap/`: `xhcisnap.c`, `build.cmd`, `README.md` |
 | regression | `test_passthru_snapshot` and `test_passthru_snapshot_disabled` in `test/test_init.c`, run on every build |
-| the sanctioned PORTSC exception | the bullet in `docs/contributing/implementation-invariants.md` next to "there is one way to read a port" (section 5 rule 8) |
+| the sanctioned PORTSC exception | the bullet in `docs/contributing/implementation-invariants.md` that follows "there is one way to acknowledge a port's change bits" ("The one sanctioned exception to that rule is an observation mode") |
 
 How it is switched on and what a user is told to run: section 8. The four
 things a reader should know before decoding a dump:

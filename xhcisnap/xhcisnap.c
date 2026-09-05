@@ -144,6 +144,10 @@
  * second line sits under its text rather than under its number. Pass the same
  * string twice for a plain block.
  */
+/* Defined beside the companion state below; every companion write reports
+ * its result through it (issues-found.md F5). */
+static void note_write(FILE *dest, int rc);
+
 static void put_wrapped_to(FILE *dest, const char *indent, const char *hang,
                            const char *text)
 {
@@ -185,14 +189,14 @@ static void put_wrapped_to(FILE *dest, const char *indent, const char *hang,
                     brk++;
                 }
             }
-            fprintf(dest, "%s%.*s\n", lead, (int)(brk - p), p);
+            note_write(dest, fprintf(dest, "%s%.*s\n", lead, (int)(brk - p), p));
             lead = hang;
             p = brk;
             while (*p == ' ') {
                 p++;
             }
         }
-        fprintf(dest, "%s%.*s\n", lead, (int)(hard - p), p);
+        note_write(dest, fprintf(dest, "%s%.*s\n", lead, (int)(hard - p), p));
         lead = hang;
         if (*hard == '\0') {
             break;
@@ -725,6 +729,59 @@ static unsigned long dump_region(HANDLE device, unsigned long region,
 
 static FILE *companion;
 
+/*
+ * **Whether the report on disk is the report** (issues-found.md F5, F17).
+ * `fopen` succeeding used to be the whole of "the .TXT was written", and the
+ * summary then told the user to send it and exited 0 - while every `fprintf`
+ * result and the `fclose` were ignored, so a full floppy or a removed stick
+ * left a truncated file reported as complete. Buffered output makes the close
+ * the likeliest place for the failure to surface, which is why it is checked
+ * too. `companionOpened` says the file was created; `companionFailed` says a
+ * write, a flush or the close failed after that; `extMismatch` says the
+ * extension window came back a different size from what the driver declared,
+ * which the dump path warned about on a line that scrolls off first.
+ *
+ * `faultWrite` and `faultClose` are the deterministic injection for the
+ * self-test: set through the XHCISNAP_FAULT environment variable ("write" or
+ * "close") and read once in main. They exist because a real full disk is not
+ * a reproducible test and a report path that is never made to fail is a
+ * report path whose failure branch has never run.
+ */
+static int companionOpened;
+static int companionFailed;
+static int extMismatch;
+static int faultWrite;
+static int faultClose;
+
+/* Every write to the companion passes its return through here. */
+static void note_write(FILE *dest, int rc)
+{
+    if (dest == companion && companion != NULL && (rc < 0 || faultWrite)) {
+        companionFailed = 1;
+    }
+}
+
+/* Close the companion and say whether the file on disk is complete: opened,
+ * every write accepted, no error flagged on the stream, and the close - which
+ * is where buffered output finally reaches the volume - succeeded. */
+static int finish_companion(void)
+{
+    int complete;
+
+    if (companion == NULL) {
+        return 0;
+    }
+    if (ferror(companion)) {
+        companionFailed = 1;
+    }
+    if (fclose(companion) != 0 || faultClose) {
+        companionFailed = 1;
+    }
+    companion = NULL;
+    complete = companionFailed ? 0 : 1;
+    return complete;
+}
+
 /* The companion file is what a stranger pastes into a public issue, so it is
  * wrapped for the same reason the console is - a 230-column line in a GitHub
  * comment is read through a horizontal scrollbar. Data rows (the note ring, the
@@ -771,7 +828,7 @@ static void comp(const char *fmt, ...)
 
     va_start(ap, fmt);
     if (companion != NULL) {
-        vfprintf(companion, fmt, ap);
+        note_write(companion, vfprintf(companion, fmt, ap));
     } else {
         vprintf(fmt, ap);
     }
@@ -906,7 +963,10 @@ static void write_companion_ring(const SNAP_HEADER *h, const unsigned char *ext,
         comp("\nnote ring: empty.\n");
         return;
     }
-    if (h->RingOffset + h->RingBytes > extBytes) {
+    /* Two comparisons, not a sum: a reply whose offset and length add past
+     * 2^32 would wrap the sum below `extBytes` and pass (issues-found.md,
+     * smaller items). */
+    if (h->RingOffset > extBytes || h->RingBytes > extBytes - h->RingOffset) {
         comp("\nnote ring: the driver says it is at +%lu for %lu bytes, which "
              "is past the\n  end of the %lu bytes that came back. Not printing "
              "it - a ring read from the\n  wrong place is a wrong reading "
@@ -2346,7 +2406,10 @@ static void usage(void)
 "\n"
 "  -c N     controller index, opens \\\\.\\HCDN (default 0)\n"
 "  -o BASE  output basename (default XHCISNAP)\n"
-"  -force   write to a key matched by value NAME alone; the tool asks first\n"
+"  -force   write to a key matched by value NAME alone\n"
+"\n"
+"Exit 0 = the .TXT is complete.  3 = it is NOT (write or close failed, or the\n"
+"extension came back the wrong size): send the .BIN and say so, not the .TXT.\n"
 "\n"
 "THE FOUR STEPS, and none of them is regedit:\n"
 "  1. xhcisnap -verbosity 2     0 off, 1 counters, 2 +note ring THE LOG,\n"
@@ -2435,6 +2498,47 @@ static void usage_long(void)
 "it to anyone - so the value you set IS the lock.\n");
 }
 
+/*
+ * `-selftest-report BASE`: the report path alone. See the switch in main.
+ * Exit 0 with BASE.TXT complete, 3 with it incomplete - the same code the dump
+ * answers for the same condition - and 2 if the file could not be created at
+ * all, which is the pre-existing open-failure behaviour and not the subject.
+ */
+static int selftest_report(const char *base)
+{
+    char textPath[MAX_PATH];
+    int complete;
+
+    if (strlen(base) > (size_t)(MAX_PATH - 12)) {
+        printf("the output basename is too long\n");
+        return 2;
+    }
+    sprintf(textPath, "%s.TXT", base);
+    companion = fopen(textPath, "w");
+    companionOpened = (companion != NULL) ? 1 : 0;
+    if (companion == NULL) {
+        printf("selftest: cannot create %s\n", textPath);
+        return 2;
+    }
+    comp("xhcisnap %s report self-test\n", XHCISNAP_VERSION);
+    comp_wrapped("  ", "This file was written by xhcisnap -selftest-report "
+                       "through the same writers the dump report uses, so that "
+                       "the incomplete-report branch can be driven on a host "
+                       "with no controller: XHCISNAP_FAULT=write fails the "
+                       "writes, XHCISNAP_FAULT=close fails the close.");
+    comp("end of self-test report\n");
+    complete = finish_companion();
+
+    printf("\n--- summary ------------------------------------------------\n");
+    if (complete) {
+        printf("  report     %s written and closed\n", textPath);
+        return 0;
+    }
+    printf("  report     *** INCOMPLETE: %s could not be written in full\n",
+           textPath);
+    return 3;
+}
+
 int main(int argc, char **argv)
 {
     /*
@@ -2466,6 +2570,7 @@ int main(int argc, char **argv)
     int tearTorn;
     int tearSeen;
     int probeOnly;
+    int doDump;
     int doSetLevel;
     int doDisable;
     int force;
@@ -2474,6 +2579,7 @@ int main(int argc, char **argv)
     controller = 0;
     base = "XHCISNAP";
     probeOnly = 0;
+    doDump = 0;
     doSetLevel = 0;
     doDisable = 0;
     force = 0;
@@ -2502,6 +2608,18 @@ int main(int argc, char **argv)
     }
 
     verbosity = XHCISNAP_LEVEL_OFF;
+    {
+        const char *fault;
+
+        fault = getenv("XHCISNAP_FAULT");
+        if (fault != NULL) {
+            if (strcmp(fault, "write") == 0) {
+                faultWrite = 1;
+            } else if (strcmp(fault, "close") == 0) {
+                faultClose = 1;
+            }
+        }
+    }
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
             if (!parse_ulong(argv[++i], &controller)) {
@@ -2532,11 +2650,14 @@ int main(int argc, char **argv)
                 return 2;
             }
         } else if (strcmp(argv[i], "-dump") == 0) {
-            /* No state: taking a dump is what this program does when it is not
-             * asked for anything else. The flag exists so that a dump with
-             * every default can still be ASKED for - see the argc test in
-             * main, which stopped a bare invocation from writing three files
-             * as the side effect of somebody finding out what this is. */
+            /* Taking a dump is what this program does when it is not asked
+             * for anything else. The flag exists so that a dump with every
+             * default can still be ASKED for - see the argc test in main,
+             * which stopped a bare invocation from writing three files as the
+             * side effect of somebody finding out what this is - and it is
+             * recorded only so that combining it with the registry switches
+             * can be refused below. */
+            doDump = 1;
         } else if (strcmp(argv[i], "-help") == 0 ||
                    strcmp(argv[i], "-?") == 0 ||
                    strcmp(argv[i], "/?") == 0) {
@@ -2546,6 +2667,17 @@ int main(int argc, char **argv)
             return 0;
         } else if (strcmp(argv[i], "-probe") == 0) {
             probeOnly = 1;
+        } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
+            /*
+             * The report path on its own, with no device: open BASE.TXT, write
+             * through the same `comp`/`comp_wrapped` the dump uses, finish
+             * through the same `finish_companion`, and answer with the same
+             * summary line and exit code the dump would. With XHCISNAP_FAULT
+             * set to "write" or "close" the corresponding step is made to fail,
+             * which is how the incomplete-report branch is driven on a host
+             * with no controller and no full disk (issues-found.md F5).
+             */
+            return selftest_report(argv[++i]);
         } else if (strcmp(argv[i], "-disable") == 0) {
             doDisable = 1;
         } else if (strcmp(argv[i], "-force") == 0) {
@@ -2609,6 +2741,19 @@ int main(int argc, char **argv)
 
     if (doSetLevel && doDisable) {
         printf("-verbosity and -disable are opposites. Pick one.\n");
+        return 2;
+    }
+    /*
+     * The registry half returns before the device is opened, so `-probe` or
+     * `-dump` beside `-verbosity`/`-disable` used to perform the write and
+     * silently drop the probe or dump (issues-found.md, D5). Refused instead:
+     * a user who asked for two things and got one with no word about the
+     * other has been told something false by omission.
+     */
+    if ((probeOnly || doDump) && (doSetLevel || doDisable)) {
+        printf("-probe and -dump read the driver; -verbosity and -disable "
+               "write the registry and\nreturn before the driver is opened. "
+               "Run them as two commands.\n");
         return 2;
     }
 
@@ -2686,6 +2831,11 @@ int main(int argc, char **argv)
         return 1;
     }
     if (extBytes != extLast.ExtensionBytes) {
+        /* Carried into the summary and the exit code as well (issues-found.md
+         * F17): this line is the one least likely to survive on a 25-row
+         * console, and a set published with a "send this" underneath it is a
+         * set somebody will send as a good one. */
+        extMismatch = 1;
         printf("  *** WARNING: %lu bytes came back but the driver says the "
                "extension is %lu. Do not decode this dump.\n",
                extBytes, extLast.ExtensionBytes);
@@ -2731,6 +2881,7 @@ int main(int argc, char **argv)
      * that is printed to the screen explicitly below.
      */
     companion = fopen(textPath, "w");
+    companionOpened = (companion != NULL) ? 1 : 0;
     if (companion == NULL) {
         printf("\n  *** cannot create %s - the report will be on screen only, "
                "and on real\n      silicon it will scroll off. Name somewhere "
@@ -2787,11 +2938,15 @@ int main(int argc, char **argv)
         FILE *saved = companion;
 
         companion = NULL;
-        print_portsc(portsc_values, portscBytes / 4);
+        print_portsc(portsc_values,
+                             (portscBytes / 4 > MAX_PORTS) ? MAX_PORTS
+                                                           : portscBytes / 4);
         companion = saved;
         if (companion != NULL) {
             if (extLast.VerbosityApplied >= XHCISNAP_LEVEL_PORTSC) {
-                print_portsc(portsc_values, portscBytes / 4);
+                print_portsc(portsc_values,
+                             (portscBytes / 4 > MAX_PORTS) ? MAX_PORTS
+                                                           : portscBytes / 4);
             } else {
                 comp("\nPORTSC table: on screen only - it goes into this file "
                      "at verbosity 3 and above.\n");
@@ -2835,11 +2990,7 @@ int main(int argc, char **argv)
                      tearFirst);
     }
 
-    companionWasWritten = (companion != NULL) ? 1 : 0;
-    if (companion != NULL) {
-        fclose(companion);
-        companion = NULL;
-    }
+    companionWasWritten = finish_companion();
 
     /*
      * **The last six lines are the only ones guaranteed to be on the screen**,
@@ -2899,8 +3050,45 @@ int main(int argc, char **argv)
         if (GetFullPathNameA(extPath, sizeof(fullBin), fullBin, &namePart) == 0) {
             strcpy(fullBin, extPath);
         }
-        printf("  send       %s\n", full);
-        printf("             attach %s beside it\n", fullBin);
+        if (extMismatch) {
+            /*
+             * F17: the raw set is still evidence and is still named, but it is
+             * named as what it is. The .TXT decodes a window the driver says
+             * is not the size the tool read, so its decoded part is not to be
+             * trusted; the .BIN is the bytes as they came back.
+             */
+            printf("  extension  *** MISMATCH: %lu bytes read, the driver says "
+                   "%lu\n", extBytes, extLast.ExtensionBytes);
+            printf("             DO NOT DECODE this dump. The files are the "
+                   "raw evidence only:\n");
+            printf("             %s\n", full);
+            printf("             %s (say the sizes disagreed)\n", fullBin);
+        } else {
+            printf("  send       %s\n", full);
+            printf("             attach %s beside it\n", fullBin);
+        }
+    } else if (companionOpened) {
+        /*
+         * F5: the file was created but not completed - a write or the close
+         * failed, which is what a full or removed destination looks like - so
+         * the report on disk is truncated and must not be sent as the report.
+         * The raw dump beside it was written and checked by another path and
+         * is still worth having.
+         */
+        char full[MAX_PATH];
+        char *namePart;
+
+        if (GetFullPathNameA(textPath, sizeof(full), full, &namePart) == 0) {
+            strcpy(full, textPath);
+        }
+        printf("  report     *** INCOMPLETE: %s could not be written in "
+               "full\n", full);
+        printf("             (disk full, or the destination went away). Do "
+               "not send it as the\n             report; the .BIN and .PSC "
+               "beside it are still the raw evidence.\n");
+    }
+    if (extMismatch || (companionOpened && !companionWasWritten)) {
+        return 3;
     }
     return 0;
 }

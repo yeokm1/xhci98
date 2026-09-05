@@ -148,8 +148,9 @@ p.392).
 
 Safe-write rule (also in `docs/usb-xhci-info/xhci-programming.md`): build the
 value from the read, clear PED + PR + WPR + all RW1C change bits (`17:23`) +
-LWS, then OR in the one bit being changed. After PP 0->1, wait 20 ms before
-touching the port (spec 5.4.8 note).
+LWS + the RsvdZ bits (`2` and `29:28`, which `XHCI_PORTSC_UNSAFE_MASK`
+includes), then OR in the one bit being changed. After PP 0->1, wait 20 ms
+before touching the port (spec 5.4.8 note).
 
 Both reset strobes are cleared, not just PR. WPR is bit 31 and RW1S: "when
 software writes a `1` to this bit, the Warm Reset sequence as defined in the
@@ -347,14 +348,14 @@ is VM-observable and only the success path is bare-metal-only.
 | +0x30 + 32*n | IR[n].ERSTBA (64-bit) | RsvdP `5:0`, ERST base `63:6` (Table 5-41 p.394) |
 | +0x38 + 32*n | IR[n].ERDP (64-bit) | DESI `2:0`, EHB `3` (RW1C), dequeue pointer `63:4`. No reserved field (Table 5-42 p.394) |
 
-ISR/DPC rules:
+#### ISR/DPC rules
 
 - ISR: read USBSTS; if EINT = 0 the interrupt is not ours. Clear EINT (write 1), then clear IMAN.IP (write IMAN with IP = 1). Both are RW1C. EINT is a summary of IP 0->1 transitions, not the INTx line source; IMAN.IP holds INTx asserted. Acknowledge this pair once and defer Event Ring work. Do not copy a generic PCI ISR's status-drain loop into the xHCI path.
   - This driver's ISR writes IE as 0, not as 1. That costs no delivery: the xHC sets EHB when it sets IP and cannot set IP again while EHB is set, so no interrupt can be generated in the window the ISR opens whatever IE holds. What it buys is that the ISR, which runs at DIRQL and cannot take the miniport's DISPATCH-level controller lock, moves IE in the same direction every masking path does, so it can never re-publish an enable a concurrent mask has just cleared. IE is re-raised only by the DPC's re-arm, under the lock and only while usbport still wants interrupts. See `docs/contributing/implementation-invariants.md`, "Interrupt Ordering", and `src/xhci_evt.c` (`XhciIsr`).
 - DPC: after draining events, write ERDP = (current dequeue physical address) | EHB(bit 3) to clear Event Handler Busy. EHB gating is architectural, not controller-specific: the xHC sets EHB = 1 whenever it sets IP, and IP shall not be set again while EHB = 1 (spec 4.17.2 interrupt-assertion conditions, 4.17.5 IP rules, 5.5.2.3.3 EHB field). A drain in progress therefore cannot be re-interrupted by its own interrupter, and forgetting the final EHB = 1 write silences the interrupter permanently.
 - During a long drain, also write ERDP periodically (e.g. every 32 events), not only at the end: the xHC detects a full event ring from the software-advertised dequeue pointer, so a stale ERDP during an event burst causes Event Ring Full (completion code 21) even though the DPC is consuming events. EHB is RW1C, so put 0 in bit 3 on these intermediate writes. That preserves EHB = 1, keeping interrupts suppressed mid-drain; writing 1 would clear it. Only the final write after the ring is empty carries bit 3 = 1.
 - With PCI pin-based interrupts (this driver's only mode), the INTx line stays asserted while IMAN.IP = 1 (spec 5.5.2.1). It is a level-triggered line, so clearing IP in the ISR is mandatory or the machine hangs in an interrupt storm.
-- IMOD: leave default (4000 = 1 ms moderation) initially; lower it later only if HID latency is an issue.
+- IMOD: leave default (4000 = 1 ms moderation) initially; lower it later only if HID latency is an issue. The start never writes it; the one write is the Save/Restore resume path, which writes back the value read at the save (the restore list below requires IMOD to be written before CRS). It wrote 0 there until the 2026-09-05 audit's F10, silently removing the moderation the isochronous builder's IOC-per-TD policy relies on after every successful restore.
 
 ## 5. Doorbell Registers (BAR0 + DBOFF, spec 5.6)
 
@@ -384,7 +385,7 @@ Each capability header DWORD: `Capability ID 7:0`, `Next Capability Pointer
 ### USB Legacy Support (USBLEGSUP, spec 7.1.1)
 
 - DW0 (the capability header DWORD itself): ID `7:0` = 1, Next `15:8`, HC BIOS Owned Semaphore `16`, HC OS Owned Semaphore `24`.
-- DW1 (offset +4, USBLEGCTLSTS, spec 7.1.2): SMI enable bits in `15:0` (bit 0 = USB SMI Enable, bit 4 = SMI on Host System Error, bit 13 = SMI on OS Ownership Enable, bit 14 = SMI on PCI Command, bit 15 = SMI on BAR), status/RW1C bits in `31:16` (bit 29 = SMI on OS Ownership Change, 30 = SMI on PCI Command, 31 = SMI on BAR).
+- DW1 (offset +4, USBLEGCTLSTS, spec 7.1.2, Table 7-5): the SMI enables are five bits, not the whole low half - bit 0 = USB SMI Enable, bit 4 = SMI on Host System Error Enable, bit 13 = SMI on OS Ownership Enable, bit 14 = SMI on PCI Command Enable, bit 15 = SMI on BAR Enable (mask `0x0000E011`). Bits `3:1`, `12:5` and `19:17` are RsvdP and must be written back as read (mask `0x000E1FEE`); bit 16 (SMI on Event Interrupt) and bit 20 (SMI on Host System Error) are read-only status; `28:21` are RsvdZ; `31:29` are RW1C status (bit 29 = SMI on OS Ownership Change, 30 = SMI on PCI Command, 31 = SMI on BAR). The handoff's write used a blanket `0xFFFF` enable mask and zeroed the RsvdP fields until the 2026-09-05 audit's F13.
 
 Handoff: set DW0 bit 24; poll until bit 16 clears (~1 s timeout, proceed with a
 warning on timeout); then write DW1 clearing all enable bits in `15:0` and
@@ -573,9 +574,11 @@ a burst count into the TD Size field of every Isoch TRB.
 
 Link (type 6, spec 6.4.4.1): DW0/1 = next segment pointer (16-byte aligned); DW3: C `0`, TC `1` (Toggle Cycle; set on the wrap-back link of a single-segment ring), CH `4`, Type `15:10` = 6.
 
-TD composition and Link placement (spec 4.11.7, p.212; Link TRB notes p.208;
-CH field description p.464), transcribed because a TD that spans the
-wrap-back Link TRB has to obey all of it:
+#### TD composition and Link placement
+
+Spec 4.11.7, p.212; Link TRB notes p.208; CH field description p.464,
+transcribed because a TD that spans the wrap-back Link TRB has to obey all of
+it:
 
 - "The TRB Chain flag is used [to] identify the TRBs of a TD, where the Chain
   flag is set in all the TRBs of a TD except the last." A Link TRB inside a TD

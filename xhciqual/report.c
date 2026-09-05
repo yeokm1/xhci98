@@ -466,6 +466,13 @@ int final_verdict(CTRL *c, int active_requested)
         if (c->v_reset != V_PASS) {
             qprintf("  IRQ SELF-TEST FAILURE: halt/reset (C2) failed\n");
             qualified = 0;
+        } else if (c->v_dma == V_WARN) {
+            /* The full run treats a No Op that completed with a non-success
+             * code as warned-only; the self-test used to turn the same
+             * observation into a failure (issues-found.md, smaller items). */
+            qprintf("  IRQ SELF-TEST WARNING: DMA round-trip (C3) was %s - "
+                    "%s\n", verdict_name(c->v_dma), c->dma_note);
+            warned = 1;
         } else if (c->v_dma != V_PASS) {
             qprintf("  IRQ SELF-TEST FAILURE: DMA round-trip (C3) was %s - "
                     "%s\n", verdict_name(c->v_dma), c->dma_note);

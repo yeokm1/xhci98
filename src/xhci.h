@@ -1763,9 +1763,17 @@ ULONG XhciHcInfoEqual(const XHCI_HC_INFO *a, const XHCI_HC_INFO *b);
  */
 #define XHCI_USBLEGSUP_BYTES         8UL
 #define XHCI_USBLEGCTLSTS_OFFSET     4UL
-/* USBLEGCTLSTS: every SMI enable is in 15:0, and the RW1C status bits the
- * handoff acknowledges are 31:29. */
-#define XHCI_USBLEGCTLSTS_SMI_ENABLES   0x0000FFFFUL
+/*
+ * USBLEGCTLSTS (Table 7-5 p.479). The SMI enables are five bits - 0, 4, 13,
+ * 14 and 15 - not the whole low half: 3:1, 12:5 and 19:17 are RsvdP, which a
+ * write must carry back as read. The handoff's mask was 0x0000FFFF until the
+ * 2026-09-05 audit's F13 and zeroed the RsvdP fields, the class of error the
+ * RsvdP helpers in xhci_init.c exist to prevent for the operational
+ * registers. The RW1C status bits the handoff acknowledges are 31:29; 28:21
+ * are RsvdZ and 16 and 20 are read-only status.
+ */
+#define XHCI_USBLEGCTLSTS_SMI_ENABLES   0x0000E011UL
+#define XHCI_USBLEGCTLSTS_RSVDP         0x000E1FEEUL
 #define XHCI_USBLEGCTLSTS_SMI_STATUS    0xE0000000UL
 
 /* Supported Protocol (spec 7.2). */
@@ -2963,6 +2971,12 @@ ULONG XhciRingSetDequeue(PXHCI_RING ring, ULONG dequeuePA);
  * corrupt the ring rather than edit it.
  */
 ULONG XhciRingNoOpAt(PXHCI_RING ring, ULONG index);
+
+/* The same rewrite with the TRB type named by the caller: XHCI_TRB_TYPE_NOOP
+ * (8) is a transfer ring's No Op and XHCI_TRB_TYPE_NOOP_COMMAND (23) is the
+ * command ring's, and the two are not interchangeable - a type 8 on the command
+ * ring is a TRB Error (issues-found.md F12). XhciRingNoOpAt is this with 8. */
+ULONG XhciRingNoOpAtType(PXHCI_RING ring, ULONG index, ULONG trbType);
 
 /* The physical address the dequeue pointer currently sits at - the value a Set
  * TR Dequeue Pointer command must carry so the two pointers agree. 16-byte
@@ -5445,6 +5459,19 @@ typedef struct _XHCI_EXTENSION {
     ULONG CommandsAborted;       /* Command Aborted events (code 25)         */
     ULONG CommandRingStops;      /* Command Ring Stopped events (code 24)    */
     /*
+     * A Command Ring Stopped whose reported dequeue pointer still named the
+     * command the abort had given up on - the xHC never fetched it, so the
+     * abort had nothing to advance past (the 2026-09-05 audit's F12). Adopting
+     * that position would have left the abandoned TRB valid at the head of the
+     * ring, for the next doorbell to execute ahead of the command that
+     * doorbell was rung for, with a completion no outstanding command matched.
+     * The TRB is rewritten in place as a No Op Command (type 23) before the
+     * position is adopted, and `CommandNoOpRewrittenPA` remembers it so its
+     * completion is retired as the rewrite's rather than counted unmatched.
+     */
+    ULONG CommandRingStoppedOnAbandoned;
+    ULONG CommandNoOpRewrittenPA;
+    /*
      * A Command Ring Stopped event naming a dequeue position this driver's ring
      * cannot hold. It is not repaired here: CRCR's Command Ring Pointer is bits
      * 63:6, so only every fourth TRB is an expressible restart position (Table
@@ -7502,6 +7529,17 @@ typedef struct _XHCI_EXTENSION {
      * restore that has been consumed - because a restore attempted without one
      * is undefined behaviour rather than a failed restore (4.23.2, p.315). */
     ULONG SavedStateValid;
+    /*
+     * IMOD as it read at the save, written back by the restore (4.23.2 p.314
+     * lists IMOD among the registers software writes before CRS, and "the
+     * Restore operation overwrites internal default values asserted by a xHC
+     * reset"). The start never writes IMOD, so on every path but this one the
+     * interrupter runs at the reset default of 4000 (1 ms), which is what the
+     * isochronous builder's IOC-per-TD policy leans on; the restore used to
+     * write 0 here, so a successful restore silently removed that moderation
+     * (the 2026-09-05 audit's F10). Meaningful only while `SavedStateValid`.
+     */
+    ULONG SavedImod;
 
     /*
      * Task 6-V.1's transfer-contract probe (src/xhci_probe.c). Instrumentation

@@ -865,7 +865,7 @@ payloads that are not regions.
 The "counter block" is flush-time formatting (`src/xhci_dispatch.c`, "The
 counter block, appended at flush time") over counters scattered through the
 whole extension, and the note ring is a struct deep inside it. A channel that
-refused `REGION_EXTENSION` below level 4 would have nothing at all to serve at
+refused `XHCI_SNAPSHOT_REGION_EXTENSION` below level 4 would have nothing at all to serve at
 levels 1 and 2, while task 13-L.3's bench clause rightly expects a level-1
 dump to come back with the counter block and an empty ring.
 

@@ -385,7 +385,7 @@ the roadmap's per-task boxes hold the rest, each with its own method stated.
 | Post-`SubmitTransfer` lifetime: usbport's post-callback writes happen after it releases the miniport lock, and the completion path takes no lock ordering it behind them | static | abi §4 |
 | `AbortTransfer` post-return lifetime: usbport retains nothing, the record is `ExFreePool`d in the same worker pass, and the miniport extension is interior to the freed block | static | abi §4 |
 | `ENDPOINT_FLAG_NUKE` is a controller-teardown flag; on that path usbport completes and frees transfers with no miniport callback | static, with the whole-image negative enumerated so it is checkable without the files | abi §4 |
-| The `USBPORT_GetTt` defect: `USBPORT_CreateDevice` gates the TT lookup on `USB_MINIPORT_FLAGS_USB2` and not-High-Speed; `USBPORT_GetTt`'s single-TT branch has no empty-list guard and returns `0xFFFFFFEC`, which `OpenPipe`'s null check passes, bugchecking in `ExfInterlockedInsertTailList` | both: the bugcheck was observed on both targets first, then read out of the instructions | abi §6; the resulting untruth is in `docs/contributing/implementation-invariants.md`, "Root Hub Reporting" |
+| The `USBPORT_GetTt` defect: `USBPORT_CreateDevice` gates the TT lookup on `USB_MINIPORT_FLAGS_USB2` and not-High-Speed; `USBPORT_GetTt`'s single-TT branch has no empty-list guard and returns `0xFFFFFFEC`, which `OpenPipe`'s null check passes, bugchecking in `ExfInterlockedInsertTailList` | both: the bugcheck was observed on both targets first, then read out of the instructions | abi §8 ("The transaction-translator lookup, and why `USB_MINIPORT_FLAGS_USB2` must be set"); the resulting untruth is in `docs/contributing/implementation-invariants.md`, "Root Hub Reporting" |
 | Hub-descriptor request shape, and `PowerOnToPowerGood` copied straight through and truncated to a UCHAR (so 20 ms encodes as 10) | static | abi open item 7, root-hub block in §4 |
 | Root-hub `RH_DisableIrq`/`RH_EnableIrq` lifecycle: a close is not guaranteed a matching open; per-build addresses recorded | static | abi §4 |
 | `RH_SetFeatureUSB2PortPower`'s helper drops its lock before the callback (correcting an earlier wrong claim); caller-held locking in general remains unverified | static | abi §4 |
@@ -518,8 +518,9 @@ system's own install source: `LayoutFile=layout.inf` in the INF's
 `[Version]` section resolves a `CopyFiles` entry the INF's own
 `[SourceDisksFiles]` does not name through the OS's `layout.inf`, and the
 engine fetches the file from the Windows source path (the CABs on the hard
-disk or the Windows 98 CD, and Windows 2000's own `driver.cab`), with the
-same `COPYFLG_NO_OVERWRITE`. The release download carries this project's own
+disk or the Windows 98 CD, and the NT targets' own driver cache: Windows
+2000's `sp4.cab`, Windows XP's `sp3.cab`), with the same
+`COPYFLG_NO_OVERWRITE`. The release download carries this project's own
 files, the two tools and the readmes, and no Microsoft file; the INF gate
 refuses an INF or a package that names one (`OS-MEDIA`, `PKG-MSFILE`);
 `scripts/package/usbd-sources.expected` and the three-file wording in
@@ -539,12 +540,14 @@ rules above was relaxed; roadmap Phase 19 has the tasks.
 
 Status: the exception was never used. No asset of any version was uploaded
 while it stood; this repository was private throughout, and the first upload
-is intended to be 1.0.0.1, which carries nothing under it. "The release
-download carries three of them" was true of the assembled asset from 0.0.0.4
-to 1.0.0.0 and of no download anyone made.
+is intended to be the newest cut (1.0.1.0 as of 2026-09-05; `releases/history.md`
+names it first), every cut since 1.0.0.1 carrying nothing under it. "The
+release download carries three of them" was true of the assembled asset from
+0.0.0.4 to 1.0.0.0 and of no download anyone made.
 
-This note can look stale and is not. A version directory exists under
-`releases/`, `README.md` links a releases page, and this repository's prose
+This note can look stale and is not. Version directories exist under
+`releases/`, the issue-form configuration and the generated `readme.txt` link a
+releases page, and this repository's prose
 calls a cut asset "published". None of the three is a distribution: a cut
 writes `releases/<version>/` and `out/xhci98-<version>.zip` in this working
 tree, a publish uploads that zip to a GitHub release, and this project has

@@ -151,6 +151,12 @@ foreach ($g in $mx.Groups) {
         if ($available -notcontains $r.Model) {
             $problems += ("row {0}: this QEMU build has no device model '{1}'" -f $r.Name, $r.Model)
         }
+        # The attach leg sleeps on Settle; a row without the key threw there
+        # and ended its whole group, after boots had been spent (issues-found.md,
+        # smaller items). Refused before a boot, like every other matrix error.
+        if (-not $r.ContainsKey('Settle') -or -not ($r.Settle -is [int]) -or [int]$r.Settle -lt 0) {
+            $problems += ("row {0}: has no non-negative integer Settle, which the attach leg sleeps on" -f $r.Name)
+        }
         $problems += (Get-RowWedgeProblems -Row $r -TargetIds $targetIds)
         $problems += (Get-RowNoDriverProblems -Row $r -KnownKeys $targetIds)
         $texts = @()
@@ -270,7 +276,14 @@ function Add-RowBackends {
     # Measured with qom-get on QEMU 11: null -> false, file -> true, for both.
     if ($Row.ContainsKey('NeedsChardev')) {
         $chrPath = Join-Path $OutDir ("matrix-{0}-chr{1}.log" -f $tag, $Row.NeedsChardev)
-        $wanted += ("chardev-add file,id=matrixchr{0},path={1}" -f $Row.NeedsChardev, $chrPath)
+        # Quoted the way Save-GuestScreenshot quotes its path: an -OutDir with a
+        # space made every chardev row ERROR on every target, and a comma would
+        # end the HMP argument early whatever the quoting, so it is refused
+        # (issues-found.md, smaller items).
+        if ($chrPath.Contains(',')) {
+            throw ("the output directory path '{0}' contains a comma, which chardev-add cannot carry; name an -OutDir without one" -f $chrPath)
+        }
+        $wanted += ("chardev-add file,id=matrixchr{0},path={1}" -f $Row.NeedsChardev, (ConvertTo-HmpArgument -Text $chrPath))
     }
     foreach ($cmd in $wanted) {
         if ($script:backendsAdded.ContainsKey($cmd)) { continue }
@@ -405,10 +418,13 @@ function Invoke-AttachLeg {
         [Parameter(Mandatory = $true)]$Table,
         $Process,
         [bool]$Pump = $true,
-        [int]$DutPort = 2
+        [int]$DutPort = 2,
+        [string]$DebugconLog = ""
     )
     $legError = ""
     $attached = $false
+    $before = $null
+    $after = $null
 
     # Wake the controller immediately before the attach.  Windows 98
     # idle-suspends about half a second after the last transfer and
@@ -421,6 +437,16 @@ function Invoke-AttachLeg {
     # row's measured window.
     Add-RowBackends -Port $Port -Row $Row
 
+    # THE IDENTITY IS RE-CHECKED BEFORE EVERY READ, not once per group: a
+    # Windows 2000 disable/enable mid-group reloads the image at a new VA, and
+    # a read against the old one decodes freed memory into plausible numbers
+    # (issues-found.md, smaller items; soak-11v.ps1 already did this).
+    if ($DebugconLog -ne "") {
+        $drift = Get-ExtensionIdentityDrift -Ident $Ident -DebugconLog $DebugconLog
+        if ($drift -ne "") {
+            return [pscustomobject]@{ Error = $drift; Before = $null; After = $null; Attached = $false }
+        }
+    }
     $before = Read-Counters -Port $Port -BaseVa $Ident.Va -Table $Table -Process $Process
 
     # THE DEVICE UNDER TEST ALWAYS GOES ON THE SAME ROOT PORT.
@@ -598,7 +624,12 @@ function Invoke-AttachLeg {
             }
         } else {
             Start-Sleep -Seconds 3
-            $after = Read-Counters -Port $Port -BaseVa $Ident.Va -Table $Table -Process $Process
+            $drift = if ($DebugconLog -ne "") { Get-ExtensionIdentityDrift -Ident $Ident -DebugconLog $DebugconLog } else { "" }
+            if ($drift -ne "") {
+                $legError = $drift
+            } else {
+                $after = Read-Counters -Port $Port -BaseVa $Ident.Va -Table $Table -Process $Process
+            }
         }
     }
 
@@ -946,7 +977,8 @@ foreach ($tgt in $targetsToRun) {
                         Start-Sleep -Seconds 5
                     }
                     return (Invoke-AttachLeg -Port $tgt.Monitor -Row $row -Dut $dut -Ident $ident -Table $table `
-                                             -Process $proc -Pump ([bool]$grp.Pump) -DutPort $DutPort)
+                                             -Process $proc -Pump ([bool]$grp.Pump) -DutPort $DutPort `
+                                             -DebugconLog $dbgLog)
                 } -OnLegError {
                     param($Leg, $LegName, $LegResult)
                     $shot = Save-GuestScreenshot -Port $tgt.Monitor `

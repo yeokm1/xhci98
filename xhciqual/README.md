@@ -322,9 +322,19 @@ Family selection: `XHCIQUAL xhci`, `XHCIQUAL ehci`, or `XHCIQUAL ohci` scans
 only that family. `--scan TYPE` and `--scan=TYPE` are equivalent; repeat
 `--scan` to combine families (for example, `--scan ehci --scan ohci`). `all`
 restores the default all-family scan. The long shorthand forms `--xhci`,
-`--ehci` and `--ohci` are also accepted.
+`--ehci` and `--ohci` are also accepted, and so is `--controller TYPE`
+(`--controller=TYPE`), an alias of `--scan` whose TYPE is required; the parser
+strips any run of leading `-` or `/` from an option, so `/scan` and `-scan`
+are read as `--scan`. `print_usage()` omits `--controller`; this table is the
+complete one.
 
 Other flags:
+
+- `--quick`: the read-only one-screen scan a bare `XHCIQUAL` performs, asked
+  for explicitly. `--full` is the full active run across all families.
+- `--no-active`: an alias of `--probe-only`.
+- `--done-flag FILE`: create FILE only on normal completion, which is what the
+  QEMU smoke test waits on.
 
 - `--probe-only`: read-only Tier A plus Tier B when MSE is already enabled;
   it never changes PCI Command.
@@ -393,8 +403,9 @@ XHCIQUAL xhci --irq-selftest --no-page --log XIRQ.LOG
 
 QUALIFIED = C2 reset, C3 family-specific DMA proof, and C4 legacy-IRQ
 delivery all PASS, with C1 handoff either PASS or a recorded firmware warning
-and a non-empty root-port set. For xHCI the USB2 protocol topology and
-context size are also required. OHCI currently returns QUALIFIED WITH
+and a non-empty root-port set. For xHCI the USB2 protocol topology is also
+required; the context size is reported beside the verdict (`csz` in the
+controller block) and is not a condition of it. OHCI currently returns QUALIFIED WITH
 WARNINGS when SOF assertion passes and PCI INTx status is either observed or
 unavailable on a pre-PCI-2.3 interface, because CPU ISR delivery is not
 claimed by the safe DOS/32A path.

@@ -355,8 +355,11 @@ VOID XhciDelayMs(PXHCI_EXTENSION ext, ULONG milliseconds)
 
     /* Task 13-R.1: below PASSIVE_LEVEL the stall is the only legal form of this
      * wait, so the fallback path is taken deliberately rather than for want of
-     * the service. It is 20 ms once per recovery attempt (the port-power
-     * settle), on a controller that is out of service either way. */
+     * the service. The recovery's port-power routine reaches it twice per
+     * attempt through xhciSettlePortPower, each call an optional 20 ms
+     * transition delay plus up to 20 ms of 5 ms confirmation steps - up to
+     * 60 ms of stall in that routine, on a controller that is out of service
+     * either way (design record 07 section 5 has the accounting). */
     if (XhciRegPacket.UsbPortWait != NULL &&
         (ext == NULL || !ext->InitBelowPassive)) {
         XhciRegPacket.UsbPortWait(ext, milliseconds);

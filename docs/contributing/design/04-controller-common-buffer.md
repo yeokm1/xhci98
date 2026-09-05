@@ -119,7 +119,8 @@ for an unusable endpoint buffer is unreachable while this driver asks for `0`.
 choose; using fewer slots than the hardware offers is legal and normal. Each
 enabled slot costs a persistent Device Context (2048 B worst case) plus a
 persistent EP0 transfer ring (1024 B, section 3.4), 3 KB per slot, so enabling
-all 64 offered slots would cost 96 KB for capacity nobody will use.
+all 64 offered slots would cost a further 96 KB, for the 32 slots above the
+cap, for capacity nobody will use.
 
 Chosen: `min(HCSPARAMS1.MaxSlots, 32)`. A slot is consumed per device, hubs
 included, so 32 covers a root hub's worth of ports plus several tiers of
@@ -489,7 +490,10 @@ size before the register can be read; a runtime-variable stride would save
 
 ## 5. What Win98 and Win2000 are asked to allocate
 
-`MiniPortResourcesSize` = 409,600 bytes. Applying usbport's own rule from
+`MiniPortResourcesSize` = 409,600 bytes. The committed value is
+`XHCI_DECLARED_RESOURCES_SIZE`; a build may override it through
+`XHCI_PROBE_RESOURCES_SIZE` (`src/xhci_dispatch.c`), which is the knob open
+item 1 below would turn. Applying usbport's own rule from
 section 2:
 
 ```

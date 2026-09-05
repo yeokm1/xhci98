@@ -97,6 +97,7 @@ xhciqual/       Phase 0 DOS hardware-qualification tool (Open Watcom).
                 that roadmap checkpoints cite as evidence. Tracked.
 xhcisnap/       The host-side reader for the driver's log channel
                 (`XHCISNAP.EXE`); `xhcisnap/README.md` is its guide. Tracked.
+images/         The pictures `README.md` embeds. Tracked.
 docs/           The documentation tree: using/ (release notes, the release
                 acceptance test), contributing/ (roadmap, architecture,
                 build/test/runbooks, design records, run sheets and their
@@ -105,7 +106,7 @@ docs/           The documentation tree: using/ (release notes, the release
                 reachable from it.
 tools/          The build toolchain itself, used in place and installed
                 nowhere else (`MSVC600/`, `ntddk/`), plus the archives they
-                were unpacked from, the NUSB 3.3 package, and the
+                were unpacked from, the NUSB 3.3 and 3.6 packages, and the
                 `*-extracted/` shipping binaries every ABI derivation is read
                 from. Git-ignored except `tools/w98se.url.example`, the
                 template that tells a clone where to point the DOS harnesses
@@ -240,12 +241,15 @@ what Win2000 enforces; power/PnP/locking behaviour that "works" on Win98 is
 frequently just unexercised there. Never close a phase on a Win98-only
 observation.
 
-Use `ExAllocatePool`, never `ExAllocatePoolWithTag`; the import gate denies
-both tagged names. This is policy rather than a missing export: Option A
-needs no private pool at all, so prefer embedding fixed software metadata in
-the usbport-allocated miniport/common-buffer extensions. (The DDK's
-`POOL_TAGGING` rewrite of `ExAllocatePool` is undone in the compatibility
-header.)
+Allocate no pool at all. The import allowlist has no row for
+`ExAllocatePool` or for either tagged name, so a call to any of them fails the
+import gate as "not in the allowlist", and a row would need Windows 98
+evidence that none is intended to supply. This is policy rather than a
+missing export: Option A needs no private pool, so fixed software metadata is
+embedded in the usbport-allocated miniport/common-buffer extensions. (The
+DDK's `POOL_TAGGING` rewrite of `ExAllocatePool` is undone in the
+compatibility header so the untagged name is what a stray call would resolve
+to and be refused on.)
 
 See `docs/usb-xhci-info/win98-wdm.md` ("Imports are a silent load-time gate"
 and "Windows 2000 as a co-primary target") and

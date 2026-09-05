@@ -259,8 +259,11 @@ Write-AsciiFile $winMeInstallCmd (@(
 ) + $winMeCdLines + @(
     "  -boot once=d ^",
     "  -action reboot=reset -no-shutdown ^",
-    "  -monitor tcp:127.0.0.1:$($MonitorPort + 3),server=on,wait=off"
+    "  -monitor tcp:127.0.0.1:$($MonitorPort + 5),server=on,wait=off"
 ))
+# +5 = 55560 at the default base: +3 (55558) is the win2k-acpi machine's port
+# (build-and-test.md, "Windows 2000 ACPI HAL"), so the two could not run at
+# once (issues-found.md D5).
 
 $runCmd = Join-Path $LocalScriptDir "qemu-win98-run.cmd"
 Write-AsciiFile $runCmd @(

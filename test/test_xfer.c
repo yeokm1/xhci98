@@ -381,12 +381,12 @@ static void test_completion_code_mapping(void)
 /* ------------------------------------------------------------------ */
 
 /*
- * SET_ADDRESS is the no-data shape and the one every enumeration starts with.
- * It is also the transfer that must never reach a ring at all (task 6-B.3
- * intercepts it), which is exactly why the *shape* is pinned here: the
- * interception is a decision made above this layer, and this layer has to build
- * a correct no-data TD for every other zero-length request - SET_CONFIGURATION,
- * SET_INTERFACE, CLEAR_FEATURE.
+ * SET_CONFIGURATION is the no-data shape every configured device goes through;
+ * SET_INTERFACE and CLEAR_FEATURE are the same shape. The vector used to pin
+ * SET_ADDRESS, which is also zero-length - but that is the one request that
+ * must never reach a ring at all (task 6-B.3 intercepts it, and test_init
+ * asserts it is never placed), so encoding it as a correct TD taught the suite
+ * the forbidden request's ring shape (issues-found.md, smaller items).
  */
 static void test_build_no_data(void)
 {
@@ -394,8 +394,8 @@ static void test_build_no_data(void)
     XHCI_CONTROL_LAYOUT layout;
     XHCI_TRB out[XHCI_XFER_MAX_CONTROL_TRBS];
 
-    /* bmRequestType 0x00, bRequest 5, wValue 3, wIndex 0, wLength 0. */
-    request_init(&req, 0x00, 0x05, 3, 0, 0, 0, 8, NULL);
+    /* bmRequestType 0x00, bRequest 9, wValue 1, wIndex 0, wLength 0. */
+    request_init(&req, 0x00, 0x09, 1, 0, 0, 0, 8, NULL);
     CHECK_EQ(XhciXferBuildControl(&req, out, XHCI_XFER_MAX_CONTROL_TRBS,
                                   &layout),
              XHCI_XFER_OK, "no-data control transfer built");
@@ -408,8 +408,8 @@ static void test_build_no_data(void)
     CHECK_EQ(layout.TdLengths[1], 1, "Status Stage TD is one TRB");
 
     /* Setup Stage TRB, Figure 6-9 / Tables 6-23..6-26. DW0 is
-     * bmRequestType | bRequest << 8 | wValue << 16 = 0x00 | 0x0500 | 0x30000. */
-    CHECK_EQ(out[0].Param0, 0x00030500UL, "SETUP bytes 0-3 as immediate data");
+     * bmRequestType | bRequest << 8 | wValue << 16 = 0x00 | 0x0900 | 0x10000. */
+    CHECK_EQ(out[0].Param0, 0x00010900UL, "SETUP bytes 0-3 as immediate data");
     CHECK_EQ(out[0].Param1, 0x00000000UL, "wIndex 0, wLength 0");
     CHECK_EQ(out[0].Status, 8UL, "TRB Transfer Length is always 8");
     /* Type 2 << 10 = 0x800, IDT = 0x40, TRT = 0 (No Data Stage). */

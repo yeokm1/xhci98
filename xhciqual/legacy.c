@@ -765,8 +765,15 @@ void legacy_cleanup(LEGACY_CTRL *c)
         }
         if (c->legsup_off != 0) {
             off = (u8)c->legsup_off;
+            /* The firmware's enables come back, not its status: bits 31:29
+             * of EHCI's USBLEGCTLSTS (EHCI 2.1.8) are RW1C SMI status, so a
+             * saved 1 written back verbatim acknowledged whatever had been
+             * reasserted since the handoff (issues-found.md F16). 15:0 holds
+             * the enables and the reserved-preserve bits between them; 31:16
+             * is read-only or RW1C and is left alone, as the xHCI path's
+             * cleanup in bringup.c already does. */
             pci_write32(c->pci.bus, c->pci.dev, c->pci.fn,
-                        (u8)(off + 4), c->legctl_orig);
+                        (u8)(off + 4), c->legctl_orig & 0x0000FFFFUL);
             v = pci_read32(c->pci.bus, c->pci.dev, c->pci.fn, off);
             pci_write32(c->pci.bus, c->pci.dev, c->pci.fn, off,
                         v & ~0x01000000UL);

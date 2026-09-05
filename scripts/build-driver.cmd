@@ -205,6 +205,31 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\test-qemu-launchers.ps1"
 if errorlevel 1 goto qemutestfail
 
+rem The verdict evaluator's suite (design record 06) and the batch-file
+rem line-ending check were not wired in here until the 2026-09-05 audit's
+rem smaller items; a build that ran every other self-test could still ship a
+rem matrix that read a refusal as a pass. Both are guestless and quick.
+echo.
+echo === VM matrix verdict self-tests ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\vm-matrix\selftest.ps1"
+if errorlevel 1 goto matrixtestfail
+
+echo.
+echo === batch-file line endings ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\xhciqual\test\check-bat-eol.ps1"
+if errorlevel 1 goto eoltestfail
+
+rem The snapshot reader's report path, when its EXE has been built (it is a
+rem separate build.cmd, and a clone without Open Watcom still has this one).
+if exist "%REPO%\xhcisnap\XHCISNAP.EXE" (
+    echo.
+    echo === xhcisnap report self-test ===
+    call "%REPO%\xhcisnap\selftest.cmd"
+    if errorlevel 1 goto snaptestfail
+)
+
 echo.
 echo === host tests ===
 call "%REPO%\test\run-host-tests.cmd"
@@ -619,6 +644,27 @@ echo.
 echo ERROR: the install-media packager's self-tests failed, so any package it
 echo builds is untrustworthy - including where it puts each file and whether
 echo a Microsoft file has crept back onto the media.
+endlocal
+exit /b 1
+
+:matrixtestfail
+echo.
+echo ERROR: the VM matrix verdict self-tests failed, so a matrix run's PASS,
+echo FAIL and NODRIVER words cannot be trusted. Fix scripts\vm-matrix first.
+endlocal
+exit /b 1
+
+:eoltestfail
+echo.
+echo ERROR: a tracked batch file is not CRLF. MS-DOS 7.1 COMMAND.COM can fail
+echo to find goto labels in an LF-only file, silently breaking its error paths.
+endlocal
+exit /b 1
+
+:snaptestfail
+echo.
+echo ERROR: xhcisnap's report self-test failed, so a dump's "send this" line
+echo cannot be trusted to mean the report was written in full.
 endlocal
 exit /b 1
 

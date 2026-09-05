@@ -12,6 +12,7 @@ CommandResetRequests	command reset requests
 CommandsFatal	command reset requests from a fatal completion code
 CommandRingDiverged	command ring diverged
 CommandRingStops	command ring stops
+CommandRingStoppedOnAbandoned	command ring stops on the abandoned command
 CommandStaleCallbacks	command stale callbacks
 CommandTimerFailures	command timer failures
 CommandTimeoutArrivals	command watchdog callbacks that arrived

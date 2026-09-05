@@ -199,7 +199,7 @@
  * fault sequence in front of it.
  *
  * It lives in the miniport extension, which usbport allocates and zeroes - this
- * driver allocates no pool (AGENTS.md) - so this is 12 KB of non-paged pool per
+ * driver allocates no pool (AGENTS.md) - so this is 16 KB of non-paged pool per
  * controller, spent whether or not the log is switched on. That is the honest
  * cost and it is stated in docs/using/release-notes.md rather than left here.
  *
@@ -222,7 +222,7 @@
  *
  * **It is not the longest record**, and the name is older than that
  * distinction: only the label is capped here, so a full record is at most this
- * many bytes plus `=`, eight hex digits and a CRLF - 106 in all. Nothing
+ * many bytes plus `=`, eight hex digits and a CRLF - 107 in all. Nothing
  * depends on a record-length bound (the ring wraps by mask and drops the oldest
  * byte, whatever a record's shape), which is why the constant is left named as
  * it is rather than renamed across the tree; what is corrected is the claim.
