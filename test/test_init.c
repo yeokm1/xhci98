@@ -28223,6 +28223,167 @@ static void test_registered_unexercised_callbacks(void)
     CHECK_EQ(ext.Flags, flags, "and none of the seven moved lifecycle state");
 }
 
+/*
+ * **The 2026-09-05 audit's F2: a lost delivery is aged out, a late callback is
+ * declined, and repeated loss is bounded.** `UsbPortRequestAsyncCallback`
+ * answers 0 on its own pool-allocation failure as well as on success, so an
+ * arming that produced no callback is invisible at the call - and the audit's
+ * model (arm once, discard the callback, poll a hundred times) read
+ * `armed=1 requested=0 attempts=0`, stable: the attempts are counted only when
+ * a recovery runs, so the loss cost no attempt and the cap never bounded it.
+ * The repair ages the arming on the health poll, the one clock that keeps
+ * running while `ControllerFailed` is set, stamps every arming with a
+ * generation so the lost callback is declined if it turns up after all, and
+ * charges the loss to the consecutive count so repeated loss ends where a
+ * refusing controller does.
+ */
+static void test_recovery_delivery_loss(void)
+{
+    XHCI_COMMAND_TIMEOUT lost;
+    XHCI_ASYNC_TIMER_CALLBACK *lostCallback;
+    HW_ACCESS_SNAPSHOT before;
+    ULONG round;
+    ULONG i;
+
+    /* --- one arming, whose callback the service silently failed to queue --- */
+    hc_build();
+    CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a controller that starts)");
+    ext.ControllerFailed = 1;
+    ext.RecoveryRequested = 1;
+    asyncRequests = 0;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(ext.RecoveryArmed, 1, "(one recovery armed against the latch)");
+    CHECK_EQ(asyncRequests, 1, "(through one service call)");
+    CHECK(asyncContext.Generation != 0, "the arming carries a delivery generation");
+    CHECK_EQ(asyncContext.Generation, ext.RecoveryGeneration,
+             "which is the current one");
+    lost = asyncContext;
+    lostCallback = asyncCallback;
+    asyncCallback = NULL;               /* the allocation failed: no callback exists */
+
+    /* Short of the bound: still armed, nothing declared, nothing re-armed. */
+    for (i = 0; i + 1 < XHCI_RECOVERY_DELIVERY_POLLS; i++) {
+        XhciRegPacket.CheckController(&ext);
+    }
+    CHECK_EQ(ext.RecoveryArmed, 1, "the arming stands short of the bound");
+    CHECK_EQ(ext.RecoveryArmedPolls, XHCI_RECOVERY_DELIVERY_POLLS - 1,
+             "aged by the polls that found it out");
+    CHECK_EQ(ext.RecoveryDeliveriesLost, 0, "with nothing declared lost");
+    CHECK_EQ(asyncRequests, 1, "and nothing re-armed");
+
+    /* The bounding poll: lost, charged, re-requested and re-armed, in one. */
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(ext.RecoveryDeliveriesLost, 1,
+             "at the bound the delivery is declared lost");
+    CHECK_EQ(ext.RecoveryFailuresConsecutive, 1,
+             "and charged to the consecutive count the cap reads");
+    CHECK_EQ(ext.RecoveryAttempts, 0, "(no recovery ran to count it)");
+    CHECK_EQ(asyncRequests, 2, "and the same poll arms the next generation");
+    CHECK_EQ(ext.RecoveryArmed, 1, "which stands");
+    CHECK_EQ(ext.RecoveryRequested, 0, "consuming the re-request");
+    CHECK(asyncContext.Generation != lost.Generation,
+          "with a generation the lost arming does not share");
+    CHECK_EQ(ext.RecoveryArmedPolls, 0, "and an age of its own");
+
+    /* The lost callback arrives after all: late, and declined. */
+    hw_access_snapshot(&before);
+    if (lostCallback != NULL) {
+        lostCallback(&ext, &lost);
+    }
+    check_touched_nothing(&before, "a recovery callback from an aged-out arming");
+    CHECK_EQ(ext.RecoveryCallbacksLate, 1,
+             "a callback from the aged-out arming is counted late");
+    CHECK_EQ(ext.RecoveryAttempts, 0, "and recovers nothing");
+    CHECK_EQ(ext.RecoveryArmed, 1,
+             "and does not release the arming that belongs to the next one");
+    CHECK_EQ(ext.ControllerFailed, 1, "(the latch stands)");
+
+    /* The next generation is delivered: one recovery, the charge cleared. */
+    fire_async_timer();
+    CHECK_EQ(ext.RecoveryAttempts, 1, "the re-armed generation recovers");
+    CHECK_EQ(ext.RecoveryCompletions, 1, "and brings the controller back");
+    CHECK_EQ(ext.ControllerFailed, 0, "(the latch is open)");
+    CHECK_EQ(ext.RecoveryFailuresConsecutive, 0,
+             "and a success clears what the loss charged");
+    CHECK_EQ(ext.RecoveryArmed, 0, "with nothing left armed");
+    deliver_events();
+
+    /* --- repeated loss reaches the terminal state the cap describes --- */
+    hc_build();
+    CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a controller that starts)");
+    ext.ControllerFailed = 1;
+    ext.RecoveryRequested = 1;
+    asyncRequests = 0;
+    for (round = 0; round < XHCI_RECOVERY_MAX_ATTEMPTS; round++) {
+        XhciRegPacket.CheckController(&ext);
+        asyncCallback = NULL;           /* every arming is lost */
+        for (i = 0; i < XHCI_RECOVERY_DELIVERY_POLLS; i++) {
+            XhciRegPacket.CheckController(&ext);
+        }
+    }
+    CHECK_EQ(ext.RecoveryDeliveriesLost, XHCI_RECOVERY_MAX_ATTEMPTS,
+             "each lost arming is counted");
+    CHECK_EQ(ext.RecoveryFailuresConsecutive, XHCI_RECOVERY_MAX_ATTEMPTS,
+             "and charged, up to the cap");
+    CHECK_EQ(asyncRequests, XHCI_RECOVERY_MAX_ATTEMPTS,
+             "so exactly the cap's worth of armings were made");
+    CHECK_EQ(ext.RecoveryArmed, 0, "and after the last loss nothing is armed");
+    CHECK_EQ(ext.RecoveryRequested, 1,
+             "the request stands, measured, with nothing arming it");
+    CHECK_EQ(ext.ControllerFailed, 1, "and the controller is left latched");
+    for (i = 0; i < 5; i++) {
+        XhciRegPacket.CheckController(&ext);
+    }
+    CHECK_EQ(asyncRequests, XHCI_RECOVERY_MAX_ATTEMPTS,
+             "further polls arm nothing - the terminal state is terminal");
+    CHECK_EQ(ext.RecoveryDeliveriesLost, XHCI_RECOVERY_MAX_ATTEMPTS,
+             "and declare nothing more lost");
+
+    /* --- a suspend between the arming and its delivery does not age it --- */
+    hc_build();
+    CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a controller that starts)");
+    ext.ControllerFailed = 1;
+    ext.RecoveryRequested = 1;
+    asyncRequests = 0;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(ext.RecoveryArmed, 1, "(one recovery armed against the latch)");
+    XhciRegPacket.SuspendController(&ext);
+    for (i = 0; i < XHCI_RECOVERY_DELIVERY_POLLS + 2; i++) {
+        XhciRegPacket.CheckController(&ext);
+    }
+    CHECK_EQ(ext.RecoveryArmed, 1,
+             "polls while SUSPENDED do not age the arming");
+    CHECK_EQ(ext.RecoveryArmedPolls, 0, "(its age does not move)");
+    CHECK_EQ(ext.RecoveryDeliveriesLost, 0, "and declare nothing lost");
+    CHECK_EQ(asyncRequests, 1, "nor arm another");
+    CHECK_EQ(XhciRegPacket.ResumeController(&ext), MP_STATUS_SUCCESS,
+             "(the resume brings the controller back)");
+    CHECK_EQ(ext.ControllerFailed, 0, "(its reinitialisation clears the latch)");
+    /*
+     * The reinitialising resume moved the start epoch, so the callback this
+     * arming is waiting for will decline on the epoch and leave the arming
+     * set - an arming that has outlived its purpose. The age-out retires it
+     * with nothing owed and, because the latch is clear, nothing charged.
+     */
+    fire_async_timer();
+    CHECK_EQ(ext.RecoveryAttempts, 0,
+             "(the callback from the old start declines on the epoch)");
+    CHECK_EQ(ext.RecoveryArmed, 1, "(and leaves the arming standing)");
+    for (i = 0; i < XHCI_RECOVERY_DELIVERY_POLLS; i++) {
+        XhciRegPacket.CheckController(&ext);
+    }
+    CHECK_EQ(ext.RecoveryArmed, 0,
+             "the age-out retires an arming the resume made pointless");
+    CHECK_EQ(ext.RecoveryStaleCallbacks, 1,
+             "counting it with the callbacks that had nothing to do");
+    CHECK_EQ(ext.RecoveryDeliveriesLost, 0, "not as a lost delivery");
+    CHECK_EQ(ext.RecoveryFailuresConsecutive, 0,
+             "and charging a healthy controller's budget nothing");
+    CHECK_EQ(ext.RecoveryRequested, 0,
+             "with no recovery re-requested and so nothing re-armed");
+    deliver_events();
+}
+
 int main(void)
 {
     /*
@@ -28278,6 +28439,7 @@ int main(void)
     test_health_poll();
     test_command_event_validation();
     test_reset_controller();
+    test_recovery_delivery_loss();
     test_controller_recovery();
     test_bad_signature_bodies();
     test_registered_start_stop();

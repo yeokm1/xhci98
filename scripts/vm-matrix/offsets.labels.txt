@@ -144,8 +144,10 @@ InitStep	init step
 RecoveryCompletions	in-place recoveries completed
 RecoveryFailures	in-place recoveries refused
 RecoveryAttempts	in-place recovery attempts
+RecoveryCallbacksLate	in-place recovery callbacks late
 RecoveryStaleCallbacks	in-place recovery callbacks with nothing to do
 RecoveryFailuresConsecutive	in-place recovery consecutive refusals
+RecoveryDeliveriesLost	in-place recovery deliveries lost
 RecoveryLastStatus	in-place recovery, refusing init status
 RecoveryLastStep	in-place recovery, refusing init step
 IntermediateEventsTotal	intermediate Success events

@@ -1434,6 +1434,19 @@ VOID XhciSlotInvalidateAll(PXHCI_EXTENSION ext, ULONG controllerStopped);
  */
 #define XHCI_RECOVERY_DELAY_MS      50UL
 #define XHCI_RECOVERY_MAX_ATTEMPTS  3UL
+/*
+ * How many health polls an armed recovery callback may go undelivered before
+ * the arming is declared lost and re-requested (the 2026-09-05 audit's F2).
+ * `UsbPortRequestAsyncCallback` answers 0 on its own pool-allocation failure
+ * as well as on success, so a lost arming is invisible at the call; the poll
+ * is the one periodic context that survives the latch, and twenty of them at
+ * the nominal 500 ms period is about ten seconds against a 50 ms delay - far
+ * enough past a slow delivery that a slow one is not called lost, and short
+ * enough that a controller with a lost arming is not latched for good. Each
+ * loss is charged to `RecoveryFailuresConsecutive`, so the cap above bounds
+ * it.
+ */
+#define XHCI_RECOVERY_DELIVERY_POLLS 20UL
 
 /*
  * Epoch **and** generation, because they answer different questions and neither

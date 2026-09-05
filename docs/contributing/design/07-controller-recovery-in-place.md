@@ -229,11 +229,49 @@ the sequence ran) and `RecoveryLastStatus` carrying the `HcInfoStatus` that
 stopped it. A bound that is only decremented on the path that does work is not
 a bound.
 
+A lost delivery spends budget too, and this was not so until the 2026-09-05
+audit (`issues-found.md` F2). `UsbPortRequestAsyncCallback` answers 0 on
+success and 0 on its own pool-allocation failure, so an arming that produced
+no callback is indistinguishable at the call. The first version set
+`RecoveryArmed`, cleared the request, and left the two as they were: the
+attempts are counted only when a recovery runs, so the loss cost no attempt,
+and the comment beside the call that said "costs one attempt, bounded by the
+cap" described a bound that did not exist. The audit's host model armed once,
+discarded the callback and polled a hundred times: `armed=1 requested=0
+attempts=0`, stable.
+
+The repair is an age-out with a delivery generation. The health poll is the
+clock, because it is the one periodic context that survives the latch
+(`PollClockMs` stops advancing while `ControllerFailed` is set, so it cannot
+be). Every arming stamps `RecoveryGeneration` into its context and resets
+`RecoveryArmedPolls`; every poll that finds an arming out advances that count,
+and at `XHCI_RECOVERY_DELIVERY_POLLS` (20, about ten seconds at the nominal
+period against a 50 ms delay) the arming is declared lost: released, the
+request put back, `RecoveryDeliveriesLost` and `RecoveryFailuresConsecutive`
+both incremented, and the generation advanced. The same poll then arms the next
+generation through the ordinary predicate. A callback whose generation is not
+the current one is declined (`RecoveryCallbacksLate`) before it touches the
+latch, so a delivery that was merely slow cannot run a recovery beside the one
+its replacement owns, and two recoveries cannot start from one loss. Polls
+while `SUSPENDED` do not age an arming, for the reason section 8.1 gives; a
+restart zeroes all of it with the extension. Repeated loss therefore reaches
+the same bounded terminal state a refusing controller does, which is what the
+cap has to mean to be a bound.
+
+The charge is made only while the latch still stands. An arming can outlive
+its purpose: a reinitialising resume clears `ControllerFailed` and moves the
+start epoch, so the callback it was waiting for declines on the epoch and
+leaves `RecoveryArmed` set (the suspend vector in `test_init` produces exactly
+this). Such an arming is retired by the same age-out with nothing owed and
+nothing charged, counted in `RecoveryStaleCallbacks`, because spending a
+healthy controller's budget on a recovery it no longer needed is the
+expiry-date defect Finding T describes, one step removed.
+
 The difference the repair makes is not that failure became impossible. Failure
-became measured: `RecoveryAttempts`, `RecoveryFailures` and
-`RecoveryLastStep`/`RecoveryLastStatus` are readable from a release build, so
-"the controller would not come back, and it refused at step N" is a finding
-rather than a silence.
+became measured: `RecoveryAttempts`, `RecoveryFailures`,
+`RecoveryDeliveriesLost` and `RecoveryLastStep`/`RecoveryLastStatus` are
+readable from a release build, so "the controller would not come back, and it
+refused at step N" is a finding rather than a silence.
 
 ## 8. The known window, recorded rather than closed
 

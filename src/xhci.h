@@ -5687,6 +5687,39 @@ typedef struct _XHCI_EXTENSION {
     ULONG RecoveryFailuresConsecutive;
 
     /*
+     * **A lost delivery is aged out, not waited on for ever** (the 2026-09-05
+     * audit's F2). `UsbPortRequestAsyncCallback` answers 0 on success and 0 on
+     * its own pool-allocation failure, so an arming that produced no callback
+     * is indistinguishable at the call - and the first version of this latch
+     * then sat with `RecoveryArmed` set and nothing ever clearing it: the
+     * attempts are counted only when a recovery *runs*, so the "costs one
+     * attempt, bounded by the cap" reasoning was false, and a controller whose
+     * one arming was lost stayed latched with a recovery owed for ever.
+     *
+     * `RecoveryGeneration` is stamped into every armed context and advanced by
+     * every arming and every age-out, so a callback from an expired arming is
+     * recognised and declined (`RecoveryCallbacksLate`) rather than running a
+     * recovery beside the one the current arming owns. `RecoveryArmedPolls`
+     * counts the health polls since the arming - `CheckController` keeps
+     * running while `ControllerFailed` is set, which is what makes it the one
+     * clock that can age this; `PollClockMs` does not advance on a failed
+     * controller - and a delay of XHCI_RECOVERY_DELAY_MS that has not been
+     * delivered after XHCI_RECOVERY_DELIVERY_POLLS of them is declared lost
+     * (`RecoveryDeliveriesLost`): the arming is released, the request is put
+     * back, and the loss is charged to `RecoveryFailuresConsecutive`, so
+     * repeated loss reaches the same bounded terminal state a refusing
+     * controller does. Polls while SUSPENDED do not age it; usbport gates its
+     * own timer on HC_SUSPEND, and the callback declines then anyway. An
+     * arming aged out with the latch already clear (a reinitialising resume
+     * moved the start epoch under it, so its callback declined silently) is
+     * retired with nothing charged and counted in `RecoveryStaleCallbacks`.
+     */
+    ULONG RecoveryGeneration;
+    ULONG RecoveryArmedPolls;
+    ULONG RecoveryDeliveriesLost;
+    ULONG RecoveryCallbacksLate;
+
+    /*
      * Nonzero for exactly as long as an initialization sequence is running
      * **below PASSIVE_LEVEL** - which only the in-place recovery does. Two
      * things read it, and both are about services this driver may not call
