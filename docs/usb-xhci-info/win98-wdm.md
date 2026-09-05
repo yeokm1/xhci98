@@ -555,8 +555,10 @@ parsing, and enumeration.
 Chosen direction (Option A): write `xhci98.sys` as a `usbport.sys` miniport,
 reusing NUSB's ported Win2000 `usbport.sys` + `usbhub20.sys`, Windows 98 SE's
 own native `usbhub.sys` (the composite parent; NUSB does not ship it, and an
-xHCI-only machine does not get it from Setup either, so `xhci98.inf` carries
-it) and a per-target `usbd.sys` that the package supplies. This removes most
+xHCI-only machine does not get it from Setup either, so `xhci98.inf` has the
+setup engine copy it from the OS's own install source through `LayoutFile`)
+and the OS's own `usbd.sys`, placed the same way; the package media carries
+no Microsoft file (AGENTS.md, "Build and Target Constraints"). This removes most
 of the generic USB-stack work (root hub, hub class, URB demux, enumeration)
 and leaves the project owning only the xHCI hardware layer. It caps at USB
 2.0, since a Win2000-era `usbport` has no SuperSpeed concept. USB 3.0

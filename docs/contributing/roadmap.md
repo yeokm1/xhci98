@@ -37,8 +37,8 @@ the port driver's role, was the documented fallback and was never needed. USB
 `docs/usb-xhci-info/win98-wdm.md` ("USB Stack Architecture and the Integration
 Decision") and `architecture.md`.
 
-Current status: Phases 0-18 are closed and Phase 19 is open. `1.0.0.0` and
-`1.0.0.1` are cut, and neither has been uploaded; Phase 15 moved the
+Current status: Phases 0-19 are closed. `1.0.0.0`, `1.0.0.1` and `1.0.1.0`
+are cut, and none has been uploaded; Phase 15 moved the
 tree from revision 1.2 of the xHCI specification to revision 1.2c, the only
 revision Intel now serves, without a code change; Phase 16, the fully
 automated run on freshly installed guests of both targets, closed on

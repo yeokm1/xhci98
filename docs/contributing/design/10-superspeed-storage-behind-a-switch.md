@@ -9,8 +9,11 @@ tree as it stands, the two ABI records (`docs/usb-xhci-info/usbport-miniport-abi
 characterisations in `docs/contributing/test-equipment.md`.
 
 It was reviewed the day it was written and revised the same day on the
-owner's instruction; section 13 lists what the review changed and why, so a
-reader of the first draft can tell what moved.
+owner's instruction; section 13 lists what that review changed and why. A
+second review on 2026-09-05 checked the revised record against the tree and
+the 1.2c specification text and found twenty things wrong with it, five of
+them in the same-day revisions; section 14 lists those and where each
+correction landed, so a reader of either earlier draft can tell what moved.
 
 Two decisions the owner has already taken frame everything below:
 
@@ -138,13 +141,17 @@ without anyone having to ask.
 ### 3.3 Where the read sits in the start path, and why that is the whole design of the gate
 
 The port map is built by `xhciBuildPortMap` and the ports are powered by
-`xhciPowerPorts`, both from `XhciInitController`, both before the log values
-are read today. The switch must be read **before the port map is classified**,
-because the port map is the one place the two modes diverge (section 4). So
-the read moves ahead of `xhciBuildPortMap`, or `xhciBuildPortMap` takes the
-value as an argument; either way it is one PASSIVE read at one site, and the
-restore path (which skips `XhciInitController`) reuses the value already in
-the extension, since usbport does not zero the extension across a restore.
+`xhciPowerPorts`, both from `XhciInitController`. The switch must be read
+**before the port map is classified**, because the port map is the one place
+the two modes diverge (section 4). That order already holds: `StartController`
+in `src/xhci_dispatch.c` calls `xhciLogStart`, and so `xhciLogReadValues`,
+before it calls `XhciInitController`, and the comment on the call says the
+values are read before anything that might want to note something. So the
+switch is read at that existing site, beside the two log values, and nothing
+moves; it is one PASSIVE read at one site, and the restore path (which skips
+`XhciInitController`) reuses the value already in the extension, since
+usbport does not zero the extension across a restore. The first draft had the
+order reversed and proposed moving the read (section 14 item 1).
 
 ### 3.4 The second value: the reset policy
 
@@ -157,17 +164,18 @@ registry value rather than a constant:
 |---|---|
 | Name | `XhciSuperSpeedReset` |
 | Type | `REG_DWORD`, same key as `XhciSuperSpeed` |
-| `0` | **Automatic**, the default: hot reset (PR) when the link is in U0 or training, warm reset (WPR) when it is in SS.Inactive or Compliance |
+| `0` | **Automatic**, the default: hot reset (PR) when the port is Enabled with its link in U0, warm reset (WPR) when the port is in the Error state (link SS.Inactive) or in Compliance Mode (section 5.3) |
 | `1` | **Always warm**: every usbhub reset on a SuperSpeed port is a WPR. Slower per enumeration, one path, always recovers the link |
-| Other | Refused, not clamped: 0 applied and the refusal counted, the same rule as every other value this driver reads |
+| Other | Refused, not clamped: 0 applied and the refusal counted, the rule `XhciLogVerbosity` follows (`XhciLogDebugView` is a plain zero/non-zero switch and is not the template) |
 | Absent | 0 |
 
 Three rules bound it:
 
 - **It is read only when `XhciSuperSpeed` applied as 1.** With the main
   switch off the second value is never read, so the switch-off start path
-  makes exactly the registry reads it makes today. This is what keeps section
-  7's invariant a statement about one divergence point rather than two.
+  makes exactly one registry read more than today, the main switch itself,
+  and the second value adds none. This is what keeps section 7's invariant a
+  statement about one divergence point rather than two.
 - **It decides only what usbhub's `SET_FEATURE(PORT_RESET)` becomes.** The
   automatic warm reset the driver issues on its own when a port event reports
   SS.Inactive (the last row of section 5.3's table) is link recovery, not a
@@ -223,28 +231,40 @@ that count grows by the number of USB 3.x ports. Two rules:
   ports are appended after them. A user who turns the switch on must not see
   their existing devices move to different port numbers, and a bug report
   taken in one mode must be readable against the other.
-- The count is the number that actually confirmed powered, as it is today
-  (`PortsPowered` is "the number Phase 5's root hub is built on"), and it is
-  never zero (`src/xhci_rh.c`, "NumberOfPorts must never be zero"). No change
-  to that guard.
+- The count is the number of ports the classifier marked managed, as it is
+  today: the hub-port table is built by walking the port map and counting
+  every port for which `XhciPortIsManaged` is true (`src/xhci_port.c`), and
+  `src/xhci_rh.c` reports that count; power confirmation does not enter it.
+  `PortsPowered` is a counter beside it, not its source, and the comment on
+  `PortsPowered` in `src/xhci_init.c` that calls it "the number Phase 5's root
+  hub is built on" is stale and is corrected in the `-A` batch. The count is
+  never zero (`src/xhci_rh.c`, "NumberOfPorts must never be zero"). No
+  change to that guard.
 
 A SuperSpeed device on a connector therefore appears on a *different* hub port
-from a High-Speed device on the same connector. That is also how Windows 8 and
-later present an xHCI (as two root hubs), and Device Manager on the targets
+from a High-Speed device on the same connector. Device Manager on the targets
 shows only "Port N" either way.
 
 ## 5. What changes per device when the switch is on
 
 ### 5.1 Speed decode
 
-`xhciSpeedClassFromKilobits` already computes a class from the Supported
-Protocol PSI table in kilobits (SuperSpeed's 5 Gb/s does not fit 32 bits of
-b/s, and the code says so). It needs a `XHCI_SPEED_SUPER` class for the
-5,000,000 kb/s row, and the default-PSIV table (`xhciDefaultPsiv`,
-`xhciDefaultSpeedClass`) needs the SuperSpeed default ID, which both functions
-today deliberately omit with a comment naming this record's subject. The
-`XHCI_RH_SEEN_*` first-decode bits gain a SuperSpeed member so the "first
-decode of a speed" print exists for it.
+`XHCI_SPEED_SUPER` already exists, and the decode already produces it:
+`xhciSpeedClassFromKilobits` (`src/xhci_caps.c`) returns it for a PSI row of
+5,000,000 kb/s or more (kilobits because SuperSpeed's 5 Gb/s does not fit 32
+bits of b/s, and the code says so), `xhciDefaultSpeedClass` returns it for
+the default SuperSpeed PSIV, and `test/test_caps.c` already checks both. So
+with the switch off a device record *can* carry `XHCI_SPEED_SUPER` today;
+what stops it going anywhere is that the port it would sit on is never
+managed, and two refusals downstream of the decode: `xhciDefaultPsiv` returns
+0 for the class, so no Slot Context can be built from it, and
+`XhciInitialMps0` returns 0 (section 5.2), both with a comment naming this
+record's subject. What the switch changes is those two refusals, and it
+changes them **only for a device on a `USB3_MANAGED` port**: the speed class
+alone is not the admission, the port class is (section 7). The first draft
+said the class had to be added (section 14 item 2). The `XHCI_RH_SEEN_*`
+first-decode bits gain a SuperSpeed member so the "first decode of a speed"
+print exists for it.
 
 Every value transcribed here (the default PSIV, the Slot Context speed
 encoding, the PORTSC link-state encodings in 5.3) comes from
@@ -278,31 +298,36 @@ against the spec text:
 | usbhub does | On a USB 2.0 port today | On a SuperSpeed port |
 |---|---|---|
 | reads status | CCS -> connected; PED -> enabled; connected -> High Speed | same, plus: link in U3 -> suspended, and PED is **masked to 0 until the first `C_PORT_RESET` of the connection has been delivered** (5.3.1). Connected -> High Speed **as today**, which is the lie section 2 described |
-| `SET_FEATURE(PORT_RESET)` | write PR, report `C_PORT_RESET` on PRC | decided by `XhciSuperSpeedReset` (section 3.4). Automatic: link in U0, write PR (a hot reset) and report `C_PORT_RESET` on PRC; link in Polling, SS.Inactive or Compliance, write WPR (a warm reset) and report `C_PORT_RESET` on WRC. Always-warm: WPR every time. Hot and warm counted separately |
+| `SET_FEATURE(PORT_RESET)` | write PR, report `C_PORT_RESET` on PRC | decided by `XhciSuperSpeedReset` (section 3.4). Automatic: port Enabled with link in U0, write PR (a hot reset); port in the Error state (link SS.Inactive) or Compliance Mode, write WPR (a warm reset). Always-warm: WPR every time. `C_PORT_RESET` is reported on PRC, which the spec sets on every exit from the Reset state, hot or warm; WRC is set beside it for a warm reset, and also when a hot reset the driver asked for was turned into a warm one by the link (4.19.1.2.5), which is counted so the policy's readings can be told apart. Hot and warm counted separately |
 | `SET_FEATURE(PORT_SUSPEND)` | PLS = U3 with LWS | same write; the resume differs (next row) |
-| `CLEAR_FEATURE(PORT_SUSPEND)` | PLS = Resume, then U0 | PLS = U0 directly (no Resume state on a SuperSpeed link) |
+| `CLEAR_FEATURE(PORT_SUSPEND)` | PLS = Resume, then U0 | PLS = U0 with LWS directly: software does not resume a SuperSpeed link by writing Resume, the xHC runs the LFPS handshake from that U0 write (4.19.1.2.13.3). The port's own Resume substate still exists, for a device-initiated wake, and is reported as leaving suspend as today |
 | `CLEAR_FEATURE(PORT_ENABLE)` | PED = 0 | PED = 0. On a USB 3.x port this puts the link in SS.Disabled, and a SuperSpeed device whose SS link is disabled falls back to its USB 2.0 connection, which appears on the companion port. Section 6.1 uses this deliberately |
 | `CLEAR_FEATURE(PORT_POWER)` | PP = 0 | same |
 | port event with PLC only | acknowledged, no hub change unless leaving suspend | SS.Inactive: warm reset once, automatically; if the link does not reach U0, report as disconnected-then-connected so usbhub re-enumerates. CEC: same treatment |
 
-Three facts drive the reset rows. A USB 3.x port enables itself when a device
-attaches (link training sets PED without software writing PR), so usbhub's
-reset normally arrives on an already-enabled port in U0; a hot reset there is
-legal and cheap, and it is what usbhub expects to see complete. Warm reset is
-the only recovery from SS.Inactive and Compliance, states a USB 2.0 port
-cannot enter. And Polling is a warm-reset case rather than a hot-reset one:
-CCS is set when the device is detected, before training completes, so on a
-slow link usbhub's reset can arrive while PLS still reads Polling even though
-its debounce usually outlasts training; a hot reset is a link operation from
-U0, and a PR written to a port that has not reached U0 has nothing to act on,
-while a warm reset is defined from Polling. Whether a controller ignores or
-defers a PR in Polling is not something to build on. The `-0` batch reads the
-spec's port state machine (Figure 4-26) for the exact conditions and the
-record here is provisional on that reading. The existing rule that
-**every** change bit is acknowledged, WRC and CEC included, already holds
-(`src/xhci_port.c`, "Every change bit that was set is acknowledged"), so no
-SuperSpeed port can stop reporting for want of an acknowledgement; what
-changes is that WRC and CEC become inputs rather than noise.
+Three facts drive the reset rows, each read from the 1.2c text
+(`docs/references/spec-1.2c-dump.txt`) for this revision of the record. A
+USB 3.x port enables itself when a device attaches: link training sets PED
+without software writing PR, and CCS is asserted on the Polling to Enabled
+transition (Table 5-27, the footnote on CCS), so usbhub never sees a
+connected port whose link is still training; its reset arrives on an
+already-enabled port in U0, where a hot reset is legal and cheap and is what
+usbhub expects to see complete. Warm reset is the only recovery from
+SS.Inactive and Compliance Mode, states a USB 2.0 port cannot enter. And a PR
+or WPR write moves the port to the Reset state from **any** state except
+Disconnected, Powered-off and Disabled (4.19.1.2.5), so there is no
+"Polling" case for the policy to decide: a port in Polling is still in the
+Disconnected state with CCS clear, usbhub has nothing to reset, and a PR
+written there is ignored by definition. The first draft's Polling row rested
+on CCS being set before training completed, which the footnote says it is
+not, and is withdrawn (section 14 item 5). The `-0` batch transcribes the
+USB3 port state machine, Figure 4-27 in 1.2c (Figure 4-26 is the USB2 Enabled
+substate diagram), for the exact conditions, and the record here is
+provisional on that reading. The existing rule that **every** change bit is
+acknowledged, WRC and CEC included, already holds (`src/xhci_port.c`, "Every
+change bit that was set is acknowledged"), so no SuperSpeed port can stop
+reporting for want of an acknowledgement; what changes is that WRC and CEC
+become inputs rather than noise.
 
 #### 5.3.1 The enabled-before-reset mask
 
@@ -331,7 +356,7 @@ them literally:
 | Field | SuperSpeed device says | usbport/usbhub would do | Proposed |
 |---|---|---|---|
 | `bMaxPacketSize0` (device descriptor byte 7) | 9, meaning 2^9 = 512 | reopen EP0 with `TotalMaxPacketSize` = 9 | **rewrite to 64** in the reply before completion |
-| `bcdUSB` (bytes 2-3) | 0x0300 or 0x0310 | nothing measured; usbport patches its own root hub's to 0x0200 and reads a device's for nothing this project has found | **rewrite to 0x0200**, as cheap insurance and so a snapshot never carries a descriptor that contradicts the port's report |
+| `bcdUSB` (bytes 2-3) | 0x0300, 0x0310 or 0x0320 (the held units read 0x0320 on both flash drives and 0x0300 on the bridge, `test-equipment.md`) | nothing measured; usbport patches its own root hub's to 0x0200 and reads a device's for nothing this project has found | **rewrite to 0x0200**, as cheap insurance and so a snapshot never carries a descriptor that contradicts the port's report |
 | bulk `wMaxPacketSize` (configuration descriptor) | 1024 | passes bits 10:0 = 1024 into `MaxPacketSize` at the endpoint open; whether `OpenEndpoint` or `QueryEndpointRequirements` refuses 1024 for bulk is **unmeasured** in all three usbport builds | leave the descriptor alone; the endpoint open on a SuperSpeed slot ignores the value and programs 1024 (bulk), 512 (control), and the smaller of usbport's value and 1024 (interrupt). If the `-0` reading finds usbport refuses 1024, fall back to rewriting the field to 512 |
 | SuperSpeed Endpoint Companion descriptors (type 0x30, six bytes, one after each endpoint descriptor) | present | `USBD_ParseConfigurationDescriptorEx` and usbstor's walk skip unknown types by `bLength` | leave in place; **read `bMaxBurst` from them** for the Endpoint Context's Max Burst Size (section 5.5). A lost reading means burst 0, which works and is slow |
 | `DEVICE_QUALIFIER`, `OTHER_SPEED_CONFIGURATION`, BOS | STALL, STALL, present | usbhub on a port reported High Speed asks for none of these; a STALL is a tolerated answer | not intercepted |
@@ -365,7 +390,15 @@ did not need to establish.
   configuration discards it).
 - Control: 512, burst 0.
 - Interrupt: allowed, up to 1024, `bInterval` encoding the same as High
-  Speed (Table 6-12 has a SuperSpeed row; the `-0` batch reads it).
+  Speed (Table 6-12 has a SuperSpeed row; the `-0` batch reads it). Max ESIT
+  Payload is a **periodic** field, not an isochronous one
+  (`xhci-data-structures.md` already says "Periodic only"), so a SuperSpeed
+  interrupt endpoint needs it too, and for a SuperSpeed endpoint the spec
+  takes it from the companion descriptor's `wBytesPerInterval` (4.14.2)
+  rather than from Max Packet Size times burst. The descriptor walk records
+  that field beside `bMaxBurst`; a lost reading falls back to Max Packet Size
+  times (Max Burst + 1), the formula the code uses today for High Speed,
+  which over-states rather than under-states the payload.
 - Isochronous: **never opened on a SuperSpeed slot.** A configuration that
   carries one sends the device back to USB 2.0 at the configuration-descriptor
   read (section 6.3); an open that reaches the miniport anyway is refused and
@@ -400,7 +433,7 @@ The device does the rest. A SuperSpeed device whose link partner has withdrawn
 its terminations gives up the SuperSpeed path and connects on its USB 2.0
 wires, which terminate at the connector's companion port, where it enumerates
 as the High-Speed device it presents itself as at that speed
-(`test-equipment.md` rows 8 and 9 record that the same units present
+(`test-equipment.md` records that the two USB 3.0 flash drives present
 differently at the two speeds). That is the outcome today's port strategy
 produces for every device by never powering the USB 3.x half; the mechanism
 reproduces it per device, after the fact.
@@ -416,34 +449,52 @@ refused again, and ping-pongs between the two buses. So a held port is
 released only when the device has gone, and "gone" is decided per port class:
 
 - **Companion-paired port** (the connector's USB 2.0 port is on this
-  controller): the hold is released on the companion port's disconnect CSC, a
-  connect-side event the driver already receives and that already means "the
-  device has left". The release re-arms the USB 3.x port so it can detect the
-  next device: a warm reset (WPR) out of the Disabled state, or a PP cycle on
-  the USB 3.x half, whichever Figure 4-26 shows reaching Disconnected with
-  nothing attached; the `-0` batch reads it. A PP cycle on a paired port is
-  safe for VBus because VBus is the OR of the connector's two halves and the
-  USB 2.0 half stays asserted (the ordering argument on `xhciPowerPorts`).
-- **Orphan port** (the USB 2.0 wires reach a different xHCI): the driver never
-  sees the device leave, and a port in the Disabled state has no detection of
-  its own to fall back on, since the terminations it would detect a device
-  with are the ones it withdrew. The hold lasts until the controller's next
-  start. A supported device plugged into that connector later falls back to
-  the other xHCI's USB 2.0 port, which is today's behaviour for that
-  connector, so the failure mode is "no SuperSpeed on that connector until a
-  disable/enable or reboot", counted (`ss.held orphan`) and named in the
-  release notes. Re-arming an orphan port on a timer is refused for the
-  ping-pong reason above: the driver cannot tell whether the device is still
-  there on the other controller.
+  controller, by the pairing convention): the pairing is a **convention, not
+  a spec guarantee** (`xhciPairCompanions` says so, and today nothing depends
+  on its being right), so the release rule may not rest on it alone. It rests
+  on evidence instead: the hold is released on the companion port's
+  disconnect CSC **only if that companion port reported a connect CSC after
+  the hold began**, which is the fallen-back device arriving where the
+  convention said it would, and is the one observation that shows the pairing
+  is physical for this device. If no such connect is seen, because the device
+  was unplugged during the fallback or because the convention paired the
+  wrong ports, the hold is treated as an orphan hold (next bullet), and the
+  two outcomes are counted apart (`ss.held paired`, `ss.held unpaired`). A
+  disconnect on a companion port that never connected releases nothing, so a
+  connector the convention mis-paired cannot release another connector's
+  hold. The release re-arms the USB 3.x port so it can detect the next
+  device: a PORTSC write with PLS = RxDetect and LWS, which is the Disabled
+  state's exit to Disconnected (4.19.1.2.1). It is not a warm reset: PR and
+  WPR do not act on a port in the Disabled state (4.19.1.2.5), and the first
+  draft's "WPR out of Disabled" was wrong (section 14 item 7). Nor is it a PP
+  cycle, so no VBus argument is needed; the `-0` batch transcribes the exit
+  and its prerequisites.
+- **Orphan port** (the USB 2.0 wires reach a different xHCI), **and a paired
+  port whose companion never connected**: the driver never sees the device
+  leave, and a port in the Disabled state has no detection of its own to fall
+  back on, since the terminations it would detect a device with are the ones
+  it withdrew. The hold lasts until the controller's next start. A supported
+  device plugged into that connector later falls back to the other xHCI's USB
+  2.0 port (or, on a paired connector, to this controller's companion port),
+  which is today's behaviour for that connector, so the failure mode is "no
+  SuperSpeed on that connector until a disable/enable or reboot", counted
+  (`ss.held orphan`, `ss.held unpaired`) and named in the release notes.
+  Re-arming a held port on a timer is refused for the ping-pong reason above:
+  the driver cannot tell whether the device is still there on the other
+  controller, or still on its way to the companion port. The first draft had
+  no exit for the paired port whose companion never connected (section 14
+  item 9).
 
 Whether the Disabled state raises CSC on a physical disconnect is a spec
-question the `-0` batch transcribes from Figure 4-26 rather than assumes; the
+question the `-0` batch transcribes from Figure 4-27 rather than assumes; the
 paired-port rule does not need the answer, and the orphan rule is written on
 the pessimistic reading. Linux's xHCI driver refuses usbcore's request to
 disable a SuperSpeed port outright, which is one more reason to treat the PED
 write as a deliberate one-way step with a defined exit and not as an ordinary
-port feature. The held state, its two release rules and the counters are
-`test_port` vectors in the `-C` batch.
+port feature. The held state, its release rule with the connect-evidence
+condition, the unpaired case and the counters are `test_port` vectors in the
+`-C` batch, including the vector where the companion disconnects without ever
+having connected and the hold must stay.
 
 ### 6.2 A hub on a SuperSpeed port
 
@@ -468,9 +519,9 @@ The USB 3.0 hub units this project holds (`05E3:0610` High-Speed halves,
 
 ### 6.3 Isochronous endpoints
 
-Mult and Max ESIT Payload are SuperSpeed-isochronous fields, usbport's
-per-packet stamps are a High-Speed statement, and audio or video at SuperSpeed
-is not a target. The first draft of this record refused the isochronous open
+Mult is a SuperSpeed-isochronous field (Max ESIT Payload is periodic, and
+5.5 handles it for interrupt endpoints), usbport's per-packet stamps are a
+High-Speed statement, and audio or video at SuperSpeed is not a target. The first draft of this record refused the isochronous open
 and left the device at SuperSpeed with only its other pipes, on the grounds
 that nothing could make it fall back; 6.1 is exactly the thing that can, and
 it is cheaper to use it than to ship a webcam that half-works. So: when the
@@ -493,8 +544,9 @@ off.
 ### 6.4 UAS
 
 `usbstor.sys` on every target selects alternate setting 0, which is BOT on
-every unit this project holds (`test-equipment.md` rows 8 and 9, read at
-SuperSpeed: BOT plus UAS, 1024-byte bulk endpoints). UAS needs a class driver
+every unit this project holds (`test-equipment.md`, read at SuperSpeed: the
+`090C:2320` drive and the `174C:5106` bridge present BOT plus UAS, the
+`0781:55AB` drive BOT only, all with 1024-byte bulk endpoints). UAS needs a class driver
 neither Windows 98 nor Windows 2000 nor XP has, so the driver never sees a
 Stream request and needs no stream support. A UAS-only device, which exists
 but is rare, does not work and the release notes say so. It is not sent back
@@ -506,23 +558,35 @@ Unreachable by construction: no SuperSpeed hub is ever configured (6.2). A
 SuperSpeed device behind a hub is a High-Speed device behind a High-Speed hub,
 today's path.
 
-## 7. The invariant: switch off is byte-identical, and how that is held
+## 7. The invariant: switch off is today's behaviour, and how that is held
 
 The claim is stronger than "the feature is disabled". It is that a build
-carrying this feature, run with the value absent, produces the same port map,
-the same power writes, the same hub-port numbering, the same refusals, and
-the same counter readings as the release before it, on every controller.
+carrying this feature, run with the value absent or 0, produces the same port
+map, the same power writes, the same hub-port numbering, the same refusals,
+and the same readings in every counter the previous release has, on every
+controller. What it does **not** claim, because it cannot: the start path
+makes one registry read the previous release did not make (the main switch,
+section 3.4), the snapshot header carries fields the previous release's
+header does not (section 3.2), and an INF install writes two values the
+previous INF did not. Those are the additions, they are the whole list, and a
+diff of two matrix reports must expect exactly them and nothing else. The
+first draft said "byte-identical" and "exactly the registry reads it makes
+today", and neither survives the additions (section 14 item 3).
 
 What enforces it:
 
 - **One divergence point.** The only code that consults the switch is the
   port-map classification (section 3.3), plus the read of the second value,
   which is skipped unless the first applied as 1 (section 3.4). Every other
-  SuperSpeed path is reached through the `USB3_MANAGED` class or through a
-  device record whose speed is `XHCI_SPEED_SUPER`, and neither can exist when
-  the class is never assigned. A review rule for the batches: a
-  `SuperSpeed.Enabled` test anywhere but the classifier and that one read is
-  a defect, and `XhciSuperSpeedReset` is consulted only on a port of the
+  SuperSpeed path is reached through the `USB3_MANAGED` class: either a port
+  of that class, or a device record whose root port is of that class. A
+  device record's speed alone is **not** the key, because `XHCI_SPEED_SUPER`
+  already exists and the decode already produces it with the switch off
+  (section 5.1); a path keyed on the speed alone could change an existing
+  refusal. A review rule for the batches: a `SuperSpeed.Enabled` test
+  anywhere but the classifier and that one read is a defect, a SuperSpeed
+  behaviour keyed on `XHCI_SPEED_SUPER` without the port class is a defect,
+  and `XhciSuperSpeedReset` is consulted only on a port of the
   `USB3_MANAGED` class.
 - **Host tests on the classifier.** `test_caps.c` already carries port-map
   vectors; each gains a run with the switch off that must produce the exact
@@ -530,10 +594,14 @@ What enforces it:
   `test_port.c` gains the SuperSpeed translation rows of section 5.3 with the
   switch on, and a proof that a `USB3_COMPANION` port reaches none of them.
 - **The matrix.** The Phase 10 VM matrix and the Phase 16 unattended run
-  are run with the value absent and must read identically to the previous
-  release's run, which is what the Phase 16 report header exists to make
-  diffable. The `-V` batch adds a SuperSpeed leg beside it, never instead of
-  it.
+  are run in two switch-off setups, because the INF writing 0 and the value
+  being absent are different registries: once from a driver copied in by
+  hand with neither value present, and once from the package's INF install
+  with both present as 0. Both must read identically to the previous
+  release's run in every field it produced, with the header additions above
+  as the only expected difference, which is what the Phase 16 report header
+  exists to make diffable. The `-V` batch adds a SuperSpeed leg beside them,
+  never instead of them.
 - **The header.** The mode is in every snapshot, so no reading can be
   misattributed to the wrong mode.
 
@@ -541,37 +609,55 @@ What enforces it:
 
 ### 8.1 Virtual machines
 
-`qemu-xhci` is launched with `p3=0` on every guest today, and
+The matrix runner (`scripts/vm-matrix/run-matrix.ps1`), the image
+preparation and soak scripts beside it, and the XP and Windows 2000
+xHCI-only launcher generators (`scripts/setup-qemu-winxp.ps1`,
+`scripts/setup-qemu-win2k-xonly.ps1`) launch `qemu-xhci` with `p3=0`, and
 `docs/contributing/build-and-test.md` records why: QEMU never falls a
 SuperSpeed-capable device back to USB 2.0, so with SuperSpeed ports present
 its `usb-storage` trains at SuperSpeed onto a port the driver does not serve.
-That same property makes QEMU the SuperSpeed vehicle: a launcher with `p3=N`
-and the switch on attaches `usb-storage` at SuperSpeed on all three NT guests
-and the Windows 98 guest. What QEMU can and cannot show:
+The older generators (`scripts/setup-qemu.ps1`, `setup-qemu-win2k.ps1`,
+`setup-qemu-win2k-smp.ps1`) default to a plain `qemu-xhci` and take `p3=0`
+only through their `-XhciDevice` argument, so "every guest" is a statement
+about how the launchers are run, not about the committed defaults; the `-V`
+batch names the launchers it uses (section 14 item 14). That same QEMU
+property makes it the SuperSpeed vehicle: a launcher with `p3=N` and the
+switch on attaches `usb-storage` at SuperSpeed on all three NT guests and the
+Windows 98 guest. What QEMU can and cannot show:
 
 - Can: the whole enumeration and descriptor path, usbport's acceptance or
   refusal of 1024-byte bulk endpoints (measured, not derived, on NUSB, SP4
-  and XP's usbport), the EP0 reopen being ignored, the PED mask (5.3.1), the
-  first half of each refusal in section 6 (with a `usb-hub` behind a
-  SuperSpeed port for 6.2, and a `usb-audio` for 6.3; QEMU's hub is USB 1.1,
-  so this measures the refusal mechanics and not a SuperSpeed hub): the
-  failed transfer, the PED write, the held port, the slot teardown, and the
-  switch-off leg.
-- Cannot: the **second half of any refusal**. QEMU never reconnects a device
-  on USB 2.0 after its SuperSpeed link is disabled, so no VM run shows the
-  device reappearing on the companion port, or the held port's release on the
-  companion's disconnect. That half is bench-only (8.2), and a green `-V`
-  run must not be read as covering it. Nor: link training, warm reset,
+  and XP's usbport), the EP0 reopen being ignored, the PED mask (5.3.1), and
+  the switch-off leg.
+- Cannot, for want of a device: **neither refusal trigger of section 6.**
+  QEMU has no SuperSpeed hub model and no SuperSpeed isochronous model; its
+  `usb-hub` and `usb-audio` are Full-Speed devices, and QEMU attaches a Low,
+  Full or High-Speed device to one of its USB 2.0 ports whatever `p3` says,
+  so neither ever sits on a SuperSpeed slot and neither can carry the device
+  descriptor or configuration descriptor that fires 6.2 or 6.3. The first
+  draft named those two models for the first half of the refusals and was
+  wrong (section 14 item 11). The refusal mechanics, the failed transfer, the
+  PED write, the held port and the slot teardown, are `test_desc` and
+  `test_port` vectors in the `-C` batch; if the `-V` batch wants a VM reading
+  of them it needs a `qemu`-flavour build-time define that fires the trigger
+  on the storage device, and any such reading is labelled synthetic.
+- Cannot, by construction: the **second half of any refusal**. QEMU never
+  reconnects a device on USB 2.0 after its SuperSpeed link is disabled, so no
+  VM run shows the device reappearing on the companion port, or the held
+  port's release on the companion's disconnect. That half is bench-only
+  (8.2), and a green `-V` run must not be read as covering it. Nor: link training, warm reset,
   SS.Inactive, Compliance, U3 on a real PHY, Max Packet Size enforcement on
   IN transfers (QEMU's xHC does not enforce it, `src/xhci.h` on
   `XHCI_EP0_MPS_FULL_INITIAL`), or throughput that means anything.
 
 ### 8.2 Bench
 
-The devices are already held and characterised at SuperSpeed on a modern host
-(`docs/contributing/test-equipment.md`): `090C:2320` and `0781:55AB` flash
-drives and the `174C:5106` ASMedia bridge, all presenting BOT plus UAS with
-1024-byte bulk endpoints on a SuperSpeed root port. The bench machine has to
+The storage devices are already held and characterised at SuperSpeed on a
+modern host (`docs/contributing/test-equipment.md`): the `090C:2320` and
+`0781:55AB` flash drives and the `174C:5106` ASMedia bridge, all with
+1024-byte bulk endpoints on a SuperSpeed root port; the `090C:2320` drive and
+the bridge present BOT plus UAS, the `0781:55AB` drive BOT only, and the two
+flash drives report `bcdUSB` 0x0320 and the bridge 0x0300. The bench machine has to
 expose a SuperSpeed root port on the xHCI the driver is installed on; the
 E460 does, and the `test-equipment.md` rig positions already name a root
 connector (position D). The one reading the acceptance test cannot skip is a
@@ -579,10 +665,15 @@ file round trip at position D with the switch on, on Windows 98 SE metal,
 against the same round trip with the switch off (which is today's High-Speed
 fallback and is already a recorded reading). The readings only the bench can
 take are the second halves of section 6: the `05E3:0610` hub at position D
-refused on the SuperSpeed port and served on the companion (6.2), a USB Audio
-unit from `test-equipment.md` doing the same from its configuration descriptor
-(6.3), the held port staying held across usbhub's resets of the companion,
-and its release and re-arm on unplug (6.1).
+refused on the SuperSpeed port and served on the companion (6.2), the held
+port staying held across usbhub's resets of the companion, and its release
+and re-arm on unplug (6.1). **The isochronous refusal (6.3) has no specimen
+yet**: every USB Audio unit in `test-equipment.md` is Full Speed or High
+Speed, so none of them can appear on a SuperSpeed slot and none can fire the
+trigger. A SuperSpeed device carrying an isochronous endpoint (a USB 3.0
+webcam or capture device) is a prerequisite of the `-E` row for 6.3, and
+until one is acquired that half of 6.3 is unobserved on every vehicle and the
+release notes say so (section 14 item 12).
 
 ### 8.3 What stays unmeasured until a batch measures it
 
@@ -618,12 +709,12 @@ the version it would ship in has a code change and so moves the third field
 
 | Batch | Where confirmed | What |
 |---|---|---|
-| `-0` | Static | Spec transcription into `xhci-data-structures.md`: SuperSpeed PSIV default, Slot Context speed, PORTSC WPR/WRC/CEC and the PLS encodings for U0/U3/Polling/Inactive/Compliance, the USB3 port state machine of Figure 4-26 (the Disabled state's exits and whether CSC is raised there, which of WPR or a PP cycle reaches Disconnected from Disabled, warm reset from Polling, hot reset from U0 only), the USB 3.0 specification's SS.Disabled exit rule for an upstream port that has fallen back, Endpoint Context Max Burst Size, TD Size against burst, Table 6-12's SuperSpeed row. Binary reads for 8.3 items 1-4 and 7, recorded the way the ABI record records its other findings, with addresses |
-| `-A` | Host | The two values: read, refusal, the second read gated on the first, header fields, INF `AddReg` on both install paths with the comment block. The classifier, the new port class, and the all-SuperSpeed controller accepted under the switch. `test_caps` switch-off identity vectors and switch-on vectors |
+| `-0` | Static | Spec transcription into `xhci-data-structures.md`: SuperSpeed PSIV default, Slot Context speed, PORTSC WPR/WRC/CEC and the PLS encodings for U0/U3/Polling/Inactive/Compliance, the USB3 port state machine of Figure 4-27 (the Disabled state's exit to Disconnected by the PLS = RxDetect write with LWS and its prerequisites, whether CSC is raised in Disabled on a physical disconnect, the states PR and WPR act from and the hot-to-warm conversion of 4.19.1.2.5 with its WRC reporting, the Error and Compliance Mode states the automatic policy keys on, the CCS assertion point in Table 5-27), the USB 3.0 specification's SS.Disabled exit rule for an upstream port that has fallen back, Endpoint Context Max Burst Size and Max ESIT Payload from the companion descriptor (4.14.2), TD Size against burst, Table 6-12's SuperSpeed row. Binary reads for 8.3 items 1-4 and 7, recorded the way the ABI record records its other findings, with addresses |
+| `-A` | Host | The two values: read, refusal, the second read gated on the first, header fields, INF `AddReg` on both install paths with the comment block. The classifier, the new port class, and the all-SuperSpeed controller accepted under the switch. `test_caps` switch-off identity vectors (run twice: value absent, and value present as 0) and switch-on vectors; the stale `PortsPowered` comment in `src/xhci_init.c` corrected (section 4.2) |
 | `-B` | Host | Speed class, default PSIV, `XhciInitialMps0`, Slot Context, EP0 reopen ignored, endpoint MPS/burst policy. `test_ctx` vectors |
 | `-C` | Host | Descriptor rewrite in the completion drain, `bMaxBurst` in the descriptor walk, the send-back mechanism of 6.1 with its held state and the two release rules, the hub trigger (6.2) and the isochronous trigger (6.3), the isochronous-open backstop, the PED mask of 5.3.1. `test_desc` and `test_port` vectors |
-| `-V` | VM | `p3=N` launchers for the four guests with the value set; storage enumerated and round-tripped at SuperSpeed on each; the first half of the hub and isochronous refusals up to the held port (8.1 says why only the first half); the switch-off matrix identical to `1.0.1.0`'s |
-| `-E` (or the machine's initial) | Bench | Position D round trip, switch on and off, Windows 98 SE; the second half of the hub and isochronous refusals (the reappearance on the companion port, the hold across usbhub's resets, the release on unplug); warm reset and SS.Inactive observed if they occur; counters read through `XHCISNAP` |
+| `-V` | VM | `p3=N` launchers for the four guests with the value set, named per guest (8.1); storage enumerated and round-tripped at SuperSpeed on each; the switch-off matrix reading identically to `1.0.1.0`'s in every field the previous release produced (section 7), in both the value-absent and the INF-installed setups. No refusal trigger can fire in QEMU (8.1); a synthetic reading of the mechanics is optional and labelled |
+| `-E` (or the machine's initial) | Bench | Position D round trip, switch on and off, Windows 98 SE; the second half of the hub refusal (the reappearance on the companion port, the hold across usbhub's resets, the release on unplug); the isochronous refusal in both halves once a SuperSpeed isochronous specimen is held (8.2), recorded as unobserved until then; warm reset and SS.Inactive observed if they occur; counters read through `XHCISNAP` |
 
 Checkpoint: the bench round trip with the switch on, and the switch-off
 matrix diffing clean against the previous release. Neither alone.
@@ -645,6 +736,11 @@ Each of these states the opposite of what the switch does, and each would say
   block, beside the two log values.
 - `docs/contributing/implementation-invariants.md`, "Root Hub Reporting":
   the High-Speed report now covers a fourth speed.
+- `docs/usb-xhci-info/win98-wdm.md`, "USB Stack Architecture and the
+  Integration Decision": the Option B paragraph's "SuperSpeed would require
+  this full Option B stack first".
+- `docs/contributing/architecture.md`: the component tree's "USB3 ports: left
+  unpowered and unmanaged" line.
 - `README.md` and `docs/README.md`: one line each.
 
 ## 11. What this does not do
@@ -710,10 +806,17 @@ first draft can tell what moved and why.
    and did not consider that a fallen-back device retries SuperSpeed on every
    USB 2.0 reset it receives. 6.1 now releases a paired port on the
    companion's disconnect, holds an orphan port to the next start, and the
-   `-0` batch transcribes Figure 4-26 and the SS.Disabled exit rule.
+   `-0` batch transcribes the USB3 port state machine and the SS.Disabled
+   exit rule. (Written as "Figure 4-26" in that revision; it is Figure 4-27 in
+   1.2c, section 14 item 6.)
 3. **Polling is a warm-reset case.** The draft wrote a hot reset for a link
    "in U0 or training"; a hot reset is a U0 operation, so the automatic policy
-   now writes WPR from Polling (5.3).
+   was changed to write WPR from Polling (5.3). *Superseded on 2026-09-05*:
+   the 1.2c text puts CCS on the Polling to Enabled transition, so usbhub
+   never sees a port in Polling and the case does not arise; 3.4 and 5.3 now
+   key the policy on the Enabled, Error and Compliance Mode states. This item
+   also left 3.4's table saying "U0 or training" while changing 5.3. Both are
+   section 14 item 5.
 4. **PED is masked until the first reset.** A SuperSpeed port reports enabled
    at connect, an order usbhub's sequence is not written against; 5.3.1 masks
    it until the first `C_PORT_RESET`, and 8.3 item 7 records that usbhub's
@@ -721,3 +824,101 @@ first draft can tell what moved and why.
 5. **QEMU shows half of every refusal.** 8.1 now says the reappearance on the
    companion port is bench-only, and the `-V` and `-E` rows say which half
    each observes.
+
+## 14. Revisions from the 2026-09-05 review
+
+A second review, the day after the first, read the revised record against
+the tree, the launcher scripts, `test-equipment.md` and the 1.2c text in
+`docs/references/spec-1.2c-dump.txt`, and returned twenty findings. All
+twenty were verified against the source they name before being applied, and
+all twenty were accepted. None changes the two framing decisions or the five
+in section 12; two (items 8 and 9) change the design of the held port, one
+(item 5) withdraws a same-day revision, and three (items 11, 12 and 14)
+shrink what the record had claimed could be observed. Two more findings were
+about other documents and are recorded at the end.
+
+1. **The start order was backwards** (3.3). The record said the port map was
+   built before the log values were read and proposed moving the read;
+   `StartController` reads the log values before it calls
+   `XhciInitController`, so the switch is read at the existing site and
+   nothing moves.
+2. **`XHCI_SPEED_SUPER` already exists** (5.1, 7). The record said the class
+   had to be added and that both default-PSIV functions omitted it;
+   `xhciSpeedClassFromKilobits` and `xhciDefaultSpeedClass` both produce it
+   today and `test_caps` checks that they do. Only `xhciDefaultPsiv` and
+   `XhciInitialMps0` refuse it. Section 7's rule that a SuperSpeed path is
+   reached "through a device record whose speed is `XHCI_SPEED_SUPER`" was
+   therefore unsafe, since such a record can exist with the switch off; the
+   port class is now the key and the speed alone is named as a defect.
+3. **"Byte-identical" and "exactly the registry reads it makes today" were
+   both false** (3.4, 7, and the index entry). The main switch is one read
+   the previous release does not make, the header gains fields, and the INF
+   writes two values. Section 7 now lists those three as the whole set of
+   additions, and the matrix is run in both the value-absent and the
+   INF-installed setups, since the record had proposed testing "absent" with
+   an INF that makes the value present.
+4. **The hub-port count is not the powered count** (4.2). The table is built
+   from `XhciPortIsManaged`, not from `PortsPowered`, and the comment on
+   `PortsPowered` that the record quoted is itself stale; its correction is
+   `-A` work.
+5. **The Polling case does not exist, and 3.4 still said "U0 or training"**
+   (3.4, 5.3, 13). Table 5-27's footnote asserts CCS for a USB3 port on the
+   Polling to Enabled transition, so usbhub never sees a port in Polling;
+   4.19.1.2.5 lets PR or WPR act from any state but Disconnected, Powered-off
+   and Disabled and describes the hot-to-warm conversion with WRC set. The
+   policy now keys on the Enabled, Error and Compliance Mode states, the
+   reset row says what PRC and WRC report, and 3.4's table matches 5.3.
+6. **Figure 4-26 is the USB2 diagram** (5.3, 6.1, 9, 13). In 1.2c the USB3
+   Root Hub Port State Machine is Figure 4-27; every reference is corrected.
+7. **WPR is not the exit from Disabled** (6.1). 4.19.1.2.5 excludes the
+   Disabled state from reset entry; 4.19.1.2.1 exits it to Disconnected by a
+   PLS = RxDetect write with LWS. The re-arm is that write, and the PP-cycle
+   alternative with its VBus argument is dropped.
+8. **The pairing convention is not a correctness basis** (6.1).
+   `xhciPairCompanions` calls it a convention that costs nothing when wrong,
+   which stops being true once a release depends on it. The release now
+   requires a connect CSC on the companion after the hold began, so a
+   mis-paired connector cannot release another connector's hold.
+9. **A paired port whose companion never connects had no exit** (6.1). A
+   device unplugged during the fallback leaves a hold with no companion
+   disconnect to release it. It is now the unpaired case, held to the next
+   start like an orphan and counted apart.
+10. **Max ESIT Payload is periodic, not isochronous** (5.5, 6.3). The
+    record's own transcription says "Periodic only", and 4.14.2 takes the
+    SuperSpeed value from the companion descriptor's `wBytesPerInterval`.
+    The interrupt bullet in 5.5 now specifies it and the `-0` row reads it.
+11. **QEMU's `usb-hub` and `usb-audio` cannot fire either trigger** (8.1, 9).
+    Both are Full-Speed models and QEMU attaches them to USB 2.0 ports
+    whatever `p3` says, so the "first half" the `-V` row promised for 6.2 and
+    6.3 was unobservable. The refusal mechanics are host vectors; a VM
+    reading needs a synthetic trigger and is labelled as such.
+12. **No held audio unit can fire the isochronous trigger** (8.2, 9). All six
+    are Full or High Speed. A SuperSpeed isochronous specimen is a
+    prerequisite of the `-E` row for 6.3, recorded as unobserved until held.
+13. **`0781:55AB` is BOT only, and `bcdUSB` reads 0x0320** (5.4, 6.4, 8.2).
+    The record had all three storage units as BOT plus UAS and listed only
+    0x0300 and 0x0310 as what a device says; `test-equipment.md` has the
+    per-device readings and they are now transcribed.
+14. **`p3=0` is not on every committed launcher** (8.1). The matrix scripts
+    and the XP and Windows 2000 xHCI-only generators pass it; the Windows 98,
+    Windows 2000 and SMP generators default to a plain `qemu-xhci`. The
+    record now says which, and the `-V` row names its launchers.
+15. **"No Resume state on a SuperSpeed link" conflated two state machines**
+    (5.3). Software resumes by writing U0 with LWS, but 4.19.1.2.13.3 defines
+    a port Resume substate for a device-initiated wake; the row says both.
+16. **The refusal rule is `XhciLogVerbosity`'s, not every value's** (3.4).
+    `XhciLogDebugView` is applied as zero/non-zero and refuses nothing.
+17. **Windows 8 does not present an xHCI as two root hubs** (4.2). The
+    two-hub picture is an external USB 3.0 hub's two halves under one root
+    hub; the comparison is removed.
+18. **Section 10 missed two documents.** `win98-wdm.md`'s Option B paragraph
+    and `architecture.md`'s component tree both state the unconditional rule;
+    both are added.
+
+Two findings were about other documents and were applied outside this record
+in the same commit: `docs/contributing/roadmap.md`'s status paragraph still
+said Phase 19 was open and named two cut releases where there are three, and
+`docs/usb-xhci-info/win98-wdm.md`'s Option A paragraph still said the
+package supplied `usbhub.sys` and a per-target `usbd.sys`, which
+`src/xhci98.inf` and AGENTS.md contradict (the OS supplies both through
+`LayoutFile`, and the media carries no Microsoft file).
