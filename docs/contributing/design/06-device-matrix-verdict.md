@@ -42,11 +42,18 @@ A device row resolves to exactly one of these. Four of them are results; only
 
 | Outcome | Meaning |
 |---|---|
-| `PASS` | Every expectation held. |
-| `FAIL` | An expectation did not hold. The report names which, with both readings. |
+| `PASS` | Every expectation held, and no refusal counter moved (section 2.1). |
+| `FAIL` | An expectation did not hold, or this driver refused a function driver's request. The report names which, with both readings. |
 | `NODRIVER` | The miniport enumerated the device and no function driver bound on this target. This is a first-class result, not a silence. |
 | `INERT` | Every expectation this row could have is structurally zero on this vehicle. Reported as such, and it can never be `PASS`. |
 | `ERROR` | The harness could not take the reading: the guest was not alive, offsets were stale, the monitor did not answer, the device never attached. |
+
+The runner prints a sixth word, `EXCLUDED`, for a row the matrix declares is
+not run on a target (`ExcludedOnTarget`, with its reason). It is not an
+outcome of the evaluator: no reading was taken, and the row counts as not
+reached. A target on which every row was excluded or never reached has
+measured nothing and its verdict is `FAIL`, not an empty pass (the 2026-09-05
+audit's F11 found the tally reading such a target as `PASS`).
 
 `NODRIVER` and `INERT` are the two the checkpoint names explicitly, because
 they are the two a naive harness reports as `PASS`. A `usb-braille` on Windows
@@ -77,6 +84,43 @@ So:
 devices addressed advanced  AND  endpoints opened did not   ->  NODRIVER
 devices addressed did NOT advance                           ->  FAIL (ours)
 ```
+
+With one rule in front of both lines, added after the 2026-09-05 audit
+(`issues-found.md` F3 and F9): a refusal counter that moved decides the row
+before either. Eight counters in `xhci.h` say this driver declined a function
+driver's request, and none of them can move until something above usbport has
+selected a configuration and asked for a pipe. Five are the non-default open
+refusals (`endpoint refusals - type`, `- no device`, `- not ready`, `- params`,
+`- ring pool`) and three are the Configure Endpoint completion classes
+(`endpoint configure failures`, `endpoints refused - no bandwidth`, `endpoints
+refused - no resources`). The audit fed the evaluator a ring-pool refusal with
+EP0 as the only accepted open and got `NODRIVER`, the OS's silence, for a
+request this driver had refused; and an accepted open followed by a configure
+failure read `PASS`, because `endpoints opened` advances when the open is
+accepted, before the command has run, and nothing named the failure counters.
+
+```
+a permanent refusal counter moved                           ->  FAIL, naming it
+not ready moved  AND  endpoints opened did not               ->  FAIL, naming it
+not ready moved  AND  endpoints opened advanced              ->  tolerated
+```
+
+`endpoint refusals - not ready` is the one transient refusal: usbport retries
+a nonzero return, and a device still finishing its EP0 chain is meant to be
+told to come back, so it is judged by whether an open then landed. A
+not-ready count with no non-default endpoint opened is the livelock
+signature `xhci.h` describes beside the field, and it is proof a function
+driver asked, so it cannot be `NODRIVER`. The rule is in `Get-RowOutcome`
+itself, so a matrix whose expectations never name a refusal counter still
+reads it; `matrix.psd1`'s `Always` block also carries a `zero` for each of
+the seven permanent counters so the report has a line per refusal, and the
+`FAIL` reason names the counter and its reading. A refusal counter that could
+not be read is an `ERROR`, like every other unread counter. On the
+post-release run this matters twice over: a `FAIL` is not a `NODRIVER`, so an
+`ExpectNoDriver` entry cannot waive it (design record 09 section 4.2).
+`selftest.ps1` carries both audit vectors against the real `Always` block and
+the `usb-mouse/hs` row, plus a true never-asked `NODRIVER` through the same
+block.
 
 One caveat, stated because it is not visible from the counter name.
 `endpoints configured` is not an equivalent signal: task 7b-A.2 marks a hub

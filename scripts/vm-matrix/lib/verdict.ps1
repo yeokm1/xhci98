@@ -161,13 +161,89 @@ function Get-RowWedgeProblems {
     return $out
 }
 
+# ----------------------------------------------------------- refusal evidence ---
+#
+# THE COUNTERS THAT SAY THIS DRIVER DECLINED A FUNCTION DRIVER'S REQUEST.  Every
+# one of them moves at exactly one kind of site in src\xhci_slot.c: the
+# non-default branch of OpenEndpoint (the five `endpoint refusals - *`), or the
+# completion of the Configure Endpoint that open queued (the three configure
+# counters).  None of them can move until something above usbport has selected
+# a configuration and asked for a pipe - which is the very thing the NODRIVER
+# inference below says did not happen.
+#
+# The 2026-09-05 audit (issues-found.md F3 and F9) fed the real evaluator two
+# deltas and got two wrong answers from the same gap:
+#
+#   F3: `endpoint refusals - ring pool` +1 with `endpoints opened` 0 read
+#       NODRIVER - the OS's silence - when a function driver had asked and this
+#       driver had said no.  On a target with an ExpectNoDriver entry the
+#       post-release run then waived it.
+#   F9: `endpoints opened` +1 with `endpoint configure failures` +1 read PASS,
+#       because `EndpointsOpened` advances when the open is ACCEPTED, before
+#       the Configure Endpoint has run, and nothing named the failure counters.
+#
+# So refusal evidence outranks both PASS and NODRIVER, and the row is a FAIL
+# that names the refusal.  Seven of the eight are permanent: a type this driver
+# does not serve, an address with no record, properties the context builder
+# would not encode, the ring pool declining, and the three Configure Endpoint
+# completion classes.  `endpoint refusals - not ready` is the one TRANSIENT
+# refusal (src\xhci.h says so beside the field): usbport retries a nonzero
+# return, and a device still finishing its EP0 chain is meant to be told to
+# come back.  It is therefore not fatal on its own - but a not-ready count with
+# NO non-default endpoint opened is the livelock signature the same comment
+# names, and it is proof a function driver asked, so it disqualifies NODRIVER
+# and reads FAIL rather than the OS's disinterest.  The matrix's `Always` block
+# carries `zero` expectations for the seven as well, so the report has a line
+# for each; this function is what stops a matrix WITHOUT those lines from
+# reading a refusal as a pass or a silence.
+$script:DriverRefusalLabelsPermanent = @(
+    'endpoint refusals - type'
+    'endpoint refusals - no device'
+    'endpoint refusals - params'
+    'endpoint refusals - ring pool'
+    'endpoint configure failures'
+    'endpoints refused - no bandwidth'
+    'endpoints refused - no resources'
+)
+$script:DriverRefusalLabelTransient = 'endpoint refusals - not ready'
+
+# Returns $null when no refusal counter moved, an ERROR-shaped record when one
+# could not be read (unread is never a zero), or a record naming the refusals.
+# `Claimed` is the row's `endpoints opened` delta, which decides whether the
+# transient counter counts.
+function Get-DriverRefusalEvidence {
+    param(
+        [Parameter(Mandatory = $true)]$Delta,
+        [Parameter(Mandatory = $true)]$Table,
+        [int]$Claimed = 0
+    )
+    $moved = @()
+    foreach ($lbl in $script:DriverRefusalLabelsPermanent) {
+        $f = Resolve-CounterLabel -Table $Table -Label $lbl
+        if (-not $Delta.Values.ContainsKey($f)) {
+            return [pscustomobject]@{ Unread = $true; Label = $lbl; Moved = @(); Transient = $false }
+        }
+        if ($Delta.Values[$f] -ne 0) { $moved += ("{0} +{1}" -f $lbl, $Delta.Values[$f]) }
+    }
+    $tf = Resolve-CounterLabel -Table $Table -Label $script:DriverRefusalLabelTransient
+    if (-not $Delta.Values.ContainsKey($tf)) {
+        return [pscustomobject]@{ Unread = $true; Label = $script:DriverRefusalLabelTransient; Moved = @(); Transient = $false }
+    }
+    $transient = ($Delta.Values[$tf] -ne 0 -and $Claimed -eq 0)
+    if ($transient) { $moved += ("{0} +{1} with no non-default endpoint opened" -f $script:DriverRefusalLabelTransient, $Delta.Values[$tf]) }
+    if ($moved.Count -eq 0) { return $null }
+    return [pscustomobject]@{ Unread = $false; Label = ""; Moved = $moved; Transient = $transient }
+}
+
 # ------------------------------------------------------------------ outcome ---
 #
 # One of PASS / FAIL / NODRIVER / INERT / ERROR, per design doc 06 section 2.
 # The order of the tests is the design: ERROR outranks everything because it
-# means the reading was not taken; NODRIVER is checked before FAIL because a
-# device the OS never claimed is a RESULT and must not be reported as a defect
-# in this driver.
+# means the reading was not taken; refusal evidence outranks PASS and NODRIVER
+# because a request this driver declined is this driver's result whatever the
+# row's expectations happened to name (section 2.1); NODRIVER is checked before
+# FAIL because a device the OS never claimed is a RESULT and must not be
+# reported as a defect in this driver.
 function Get-RowOutcome {
     param(
         [Parameter(Mandatory = $true)]$Results,       # array of {Expectation, Test}
@@ -210,7 +286,36 @@ function Get-RowOutcome {
         return [pscustomobject]@{ Outcome = "INERT"; Why = "every expectation in this row is inert on this vehicle" }
     }
 
+    $addrField = Resolve-CounterLabel -Table $Table -Label $AddressedLabel
+    $claimField = Resolve-CounterLabel -Table $Table -Label $ClaimedLabel
+    $addressed = $(if ($Delta.Values.ContainsKey($addrField)) { $Delta.Values[$addrField] } else { 0 })
+    $claimed = $(if ($Delta.Values.ContainsKey($claimField)) { $Delta.Values[$claimField] } else { 0 })
+
+    # REFUSAL EVIDENCE FIRST (issues-found.md F3, F9).  A refusal counter that
+    # moved is this driver declining a function driver's request, and it
+    # decides the row before PASS and before the NODRIVER inference: a
+    # matrix whose expectations never named the counter must not read the
+    # refusal as success, and a target with an ExpectNoDriver entry must not
+    # have it waived as the OS's silence.  The reason is carried in Why so the
+    # report says WHICH refusal, not just that one happened.
     $failed = @($Results | Where-Object { -not $_.Test.Held })
+    $refused = Get-DriverRefusalEvidence -Delta $Delta -Table $Table -Claimed $claimed
+    if ($null -ne $refused) {
+        if ($refused.Unread) {
+            return [pscustomobject]@{
+                Outcome = "ERROR"
+                Why = ("the refusal counter '{0}' could not be read out of the guest, so the row cannot be judged" -f $refused.Label)
+            }
+        }
+        $also = @($failed | ForEach-Object { $_.Expectation.Text })
+        return [pscustomobject]@{
+            Outcome = "FAIL"
+            Why = ("this driver refused a function driver's request: {0}{1}" -f `
+                   ($refused.Moved -join "; "), `
+                   $(if ($also.Count -gt 0) { "; also failed: " + ($also -join "; ") } else { "" }))
+        }
+    }
+
     if ($failed.Count -eq 0) {
         return [pscustomobject]@{ Outcome = "PASS"; Why = "" }
     }
@@ -218,11 +323,8 @@ function Get-RowOutcome {
     # NODRIVER: this driver enumerated the device and nothing above usbport
     # opened a non-default endpoint.  Both halves are required - "no endpoints
     # opened" on a device that was never addressed is our failure, not the OS's
-    # disinterest.
-    $addrField = Resolve-CounterLabel -Table $Table -Label $AddressedLabel
-    $claimField = Resolve-CounterLabel -Table $Table -Label $ClaimedLabel
-    $addressed = $(if ($Delta.Values.ContainsKey($addrField)) { $Delta.Values[$addrField] } else { 0 })
-    $claimed = $(if ($Delta.Values.ContainsKey($claimField)) { $Delta.Values[$claimField] } else { 0 })
+    # disinterest.  A refusal counter that moved never reaches here: the block
+    # above has already said a function driver asked.
     if ($addressed -gt 0 -and $claimed -eq 0) {
         # ...and only if every failure is explained by the missing bind.
         #

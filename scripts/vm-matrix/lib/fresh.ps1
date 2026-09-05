@@ -415,9 +415,20 @@ function Invoke-RowLegs {
 # A TARGET'S VERDICT from its tally.  A target on which no row was evaluated
 # is a FAIL, not an empty pass; otherwise any row that counted against it is
 # a FAIL.
+#
+# "Evaluated" means REACHED, not counted.  `Rows` includes the rows that were
+# EXCLUDED on this target or never reached because the group ended early, and
+# both add to `NotReached`; the 2026-09-05 audit (issues-found.md F11) fed the
+# real function Rows=3, NotReached=3, Against=0 and got PASS - a target on
+# which nothing was measured, and which also slipped past the runner's
+# "no report lines" guard because excluded rows print a line each.  A target
+# with no reached row has no reading, so it is a FAIL by the same rule as an
+# empty one.
 function Get-TargetVerdict {
     param([Parameter(Mandatory = $true)]$Tally)
+    $notReached = $(if ($null -ne $Tally.NotReached) { [int]$Tally.NotReached } else { 0 })
     if ([int]$Tally.Rows -eq 0) { return "FAIL" }
+    if (([int]$Tally.Rows - $notReached) -le 0) { return "FAIL" }
     if ([int]$Tally.Against -gt 0) { return "FAIL" }
     return "PASS"
 }

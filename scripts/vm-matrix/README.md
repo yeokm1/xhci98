@@ -230,7 +230,13 @@ TARGET  ROW                  OUTCOME    EXPECTATION                          REA
 Five outcomes: `PASS`, `FAIL`, `NODRIVER`, `INERT`, `ERROR`. The middle two are
 results, not silences. A device the OS never claimed says nothing about this
 driver, and a row whose every expectation is structurally zero on this vehicle
-can never be a pass.
+can never be a pass. The runner prints a sixth word, `EXCLUDED`, for a row
+the matrix declares is not run on a target; it is not a reading, and a target
+whose every row was excluded or never reached is a `FAIL`. A refusal counter
+that moved (this driver declining a function driver's open, or a Configure
+Endpoint that failed after the open was accepted) is a `FAIL` naming the
+counter, before `PASS` and before the `NODRIVER` inference; design record 06
+section 2.1 has the rule.
 
 `INERT` has no reachable row in the current population. Every row inherits the
 live `Always` block, so no row's whole expectation set is structurally zero;

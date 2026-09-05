@@ -74,6 +74,28 @@
         'zero interrupt mask failures'
         'zero commands the engine gave up on'
 
+        # THIS DRIVER REFUSING A FUNCTION DRIVER'S REQUEST.  None of these can
+        # move until something above usbport has selected a configuration and
+        # asked for a pipe, so each is a defect in THIS driver's handling of a
+        # device the OS did claim - never the OS's silence, which is what the
+        # NODRIVER inference reads from `endpoints opened` staying at zero.
+        # The 2026-09-05 audit (issues-found.md F3, F9) showed the evaluator
+        # reading a ring-pool refusal as NODRIVER and a Configure Endpoint
+        # failure after an accepted open as PASS, because `endpoints opened`
+        # advances when the open is accepted, before the command has run, and
+        # no expectation named these counters.  lib\verdict.ps1 now gives
+        # refusal evidence precedence on its own; these rows put a line for
+        # each in the report.  `endpoint refusals - not ready` is deliberately
+        # absent: it is the one transient refusal (usbport retries it), and
+        # the evaluator judges it by whether an open then landed.
+        'zero endpoint refusals - type'
+        'zero endpoint refusals - no device'
+        'zero endpoint refusals - params'
+        'zero endpoint refusals - ring pool'
+        'zero endpoint configure failures'
+        'zero endpoints refused - no bandwidth'
+        'zero endpoints refused - no resources'
+
         # The nine-term open-accounting identity, transcribed from src\xhci.h's
         # own statement of it.  `EP0 opens refused - no route` is a SHARE of
         # `EP0 opens refused` and is deliberately absent.

@@ -153,6 +153,78 @@ Assert "unclaimed + tripped zero -> FAIL not NODRIVER" "FAIL" (Get-Outcome @(
     'zero fatal controller status'
 ) (New-Delta @{ 'devices addressed' = 1; 'fatal controller status' = 1 }))
 
+Write-Host "--- a refusal by THIS driver outranks NODRIVER and PASS (issues-found.md F3, F9) ---"
+#
+# The 2026-09-05 audit fed the real evaluator two deltas and got the two wrong
+# answers a verdict must never give: a request this driver REFUSED read as the
+# OS's silence (NODRIVER), and a Configure Endpoint that FAILED after the open
+# was accepted read as a pass.  Both vectors are evaluated here exactly as the
+# runner evaluates a row - the matrix's whole `Always` block plus the row's own
+# `Expect` - because a hand-picked subset is how the gap went unnoticed.
+function Get-OutcomeWhy {
+    param([string[]]$Texts, $Delta)
+    $results = @()
+    foreach ($t in $Texts) {
+        $e = ConvertTo-Expectation -Text $t -Table $table
+        $results += [pscustomobject]@{ Expectation = $e; Test = (Test-Expectation -Expectation $e -Delta $Delta) }
+    }
+    return (Get-RowOutcome -Results $results -Delta $Delta -HarnessError "" -Table $table).Why
+}
+$mx = Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot "matrix.psd1")
+$mouseRow = $null
+foreach ($g in $mx.Groups) { foreach ($r in $g.Rows) { if ($r.Name -eq 'usb-mouse/hs') { $mouseRow = $r } } }
+Assert "the matrix still carries the usb-mouse/hs row the vector was taken against" $true ($null -ne $mouseRow)
+$mouseTexts = @($mx.Always) + @($mouseRow.Expect)
+# Every refusal counter the evaluator names must resolve against the current
+# table, or a renamed counter would silently retire the rule.
+foreach ($lbl in @($script:DriverRefusalLabelsPermanent) + @($script:DriverRefusalLabelTransient)) {
+    $threw = $false
+    try { Resolve-CounterLabel -Table $table -Label $lbl | Out-Null } catch { $threw = $true }
+    Assert ("refusal label '{0}' resolves" -f $lbl) $false $threw
+}
+# F3, the audit's exact vector: EP0 is the one accepted open, the function
+# driver's open was refused by the ring pool, `endpoints opened` stays 0, the
+# identity holds.  The only failed expectation is the row's bind clause.
+$f3 = @{ 'devices addressed' = 1; 'slots enabled' = 1; 'endpoint opens seen' = 2; 'endpoint opens accepted' = 1; 'endpoint refusals - ring pool' = 1 }
+Assert "F3: a ring-pool refusal with EP0 the only accepted open -> FAIL, not NODRIVER" "FAIL" (Get-Outcome $mouseTexts (New-Delta $f3))
+Assert "...and the reason names the refusal"          $true ((Get-OutcomeWhy $mouseTexts (New-Delta $f3)) -match 'refused.*endpoint refusals - ring pool \+1')
+foreach ($lbl in @('endpoint refusals - type', 'endpoint refusals - no device', 'endpoint refusals - params')) {
+    $v = @{ 'devices addressed' = 1; 'slots enabled' = 1; 'endpoint opens seen' = 2; 'endpoint opens accepted' = 1 }
+    $v[$lbl] = 1
+    Assert ("F3 variant: '{0}' -> FAIL, not NODRIVER" -f $lbl) "FAIL" (Get-Outcome $mouseTexts (New-Delta $v))
+}
+# The transient refusal: usbport retries it, so a not-ready count followed by
+# an open that landed is tolerated - but a not-ready count with NO open is a
+# function driver that asked and never got its pipe, which is not the OS's
+# disinterest.
+$nrOpened = @{ 'devices addressed' = 1; 'slots enabled' = 1; 'endpoint opens seen' = 3; 'endpoint opens accepted' = 2; 'endpoint refusals - not ready' = 1; 'endpoints opened' = 1 }
+Assert "not-ready then an open that landed -> PASS (transient, tolerated)" "PASS" (Get-Outcome $mouseTexts (New-Delta $nrOpened))
+$nrNever = @{ 'devices addressed' = 1; 'slots enabled' = 1; 'endpoint opens seen' = 2; 'endpoint opens accepted' = 1; 'endpoint refusals - not ready' = 1 }
+Assert "not-ready with no open landed -> FAIL, not NODRIVER" "FAIL" (Get-Outcome $mouseTexts (New-Delta $nrNever))
+Assert "...and the reason says no endpoint opened"    $true ((Get-OutcomeWhy $mouseTexts (New-Delta $nrNever)) -match 'not ready \+1 with no non-default endpoint opened')
+# F9: the open was accepted (`endpoints opened` +1, which the row's bind clause
+# is satisfied by) and the Configure Endpoint it queued then failed.  Each of
+# the three completion classes must read FAIL and be named.
+foreach ($lbl in @('endpoint configure failures', 'endpoints refused - no bandwidth', 'endpoints refused - no resources')) {
+    $v = @{ 'devices addressed' = 1; 'slots enabled' = 1; 'endpoint opens seen' = 2; 'endpoint opens accepted' = 2; 'endpoints opened' = 1 }
+    $v[$lbl] = 1
+    Assert ("F9: accepted open then '{0}' -> FAIL, not PASS" -f $lbl) "FAIL" (Get-Outcome $mouseTexts (New-Delta $v))
+    Assert ("...and the reason names '{0}'" -f $lbl) $true ((Get-OutcomeWhy $mouseTexts (New-Delta $v)) -match [regex]::Escape($lbl))
+}
+# The rule lives in the evaluator, not only in the matrix's `Always` block: a
+# row evaluated with the bind clause ALONE still reads the refusal.
+Assert "F3 with the bind clause alone -> FAIL"        "FAIL" (Get-Outcome @('advance endpoints opened >= 1') (New-Delta $f3))
+Assert "F9 with the bind clause alone -> FAIL"        "FAIL" (Get-Outcome @('advance endpoints opened >= 1') (New-Delta @{ 'devices addressed' = 1; 'endpoints opened' = 1; 'endpoint configure failures' = 1 }))
+# A true NODRIVER is retained through the whole `Always` block: addressed,
+# EP0 opened and accepted, nothing refused, nothing above usbport asked.
+$trueNoDriver = @{ 'devices addressed' = 1; 'slots enabled' = 1; 'endpoint opens seen' = 1; 'endpoint opens accepted' = 1 }
+Assert "addressed, never asked, nothing refused -> still NODRIVER" "NODRIVER" (Get-Outcome $mouseTexts (New-Delta $trueNoDriver))
+# An unread refusal counter is an ERROR, never a zero - the rule every other
+# unread counter already follows.
+$unreadDelta = New-Delta $trueNoDriver
+$unreadDelta.Values.Remove((Resolve-CounterLabel -Table $table -Label 'endpoint refusals - ring pool'))
+Assert "an unread refusal counter -> ERROR, not NODRIVER" "ERROR" (Get-Outcome @('advance endpoints opened >= 1') $unreadDelta)
+
 Write-Host "--- INERT: an all-inert row can never be a PASS ---"
 Assert "all inert -> INERT" "INERT" (Get-Outcome @(
     'inert iso packets answered because no isochronous device is attached in this group'
@@ -449,6 +521,9 @@ Assert "PASS does not"                                 $false (Test-RowCountsAga
 Assert "EXCLUDED does not"                             $false (Test-RowCountsAgainst -Outcome "EXCLUDED")
 Assert "an unexpected NODRIVER counts"                 $true  (Test-RowCountsAgainst -Outcome "NODRIVER")
 Assert "an expected NODRIVER does not"                 $false (Test-RowCountsAgainst -Outcome "NODRIVER" -NoDriverExpected $true)
+# F3's whole point: the refusal reads FAIL, and FAIL is not a NODRIVER the
+# ExpectNoDriver entry can waive.
+Assert "a refusal is not waived by ExpectNoDriver"     $true  (Test-RowCountsAgainst -Outcome (Get-Outcome $mouseTexts (New-Delta $f3)) -NoDriverExpected $true)
 Assert "an undeclared wedge (ERROR) counts"            $true  (Test-RowCountsAgainst -Outcome "ERROR")
 Assert "a declared wedge (the pinned reading) does not" $false (Test-RowCountsAgainst -Outcome "ERROR" -WedgeDeclared $true)
 
@@ -575,6 +650,11 @@ Write-Host "--- the target verdict: no rows is a FAIL, not an empty pass ---"
 Assert "zero rows is FAIL"                     "FAIL" (Get-TargetVerdict -Tally @{ Rows = 0; Against = 0 })
 Assert "a row against the target is FAIL"      "FAIL" (Get-TargetVerdict -Tally @{ Rows = 3; Against = 1 })
 Assert "rows with nothing against is PASS"     "PASS" (Get-TargetVerdict -Tally @{ Rows = 3; Against = 0 })
+# issues-found.md F11: a target whose every row was EXCLUDED (or never reached)
+# has measured nothing, and read PASS.
+Assert "every row not reached is FAIL (F11)"   "FAIL" (Get-TargetVerdict -Tally @{ Rows = 3; NotReached = 3; Against = 0 })
+Assert "one row reached, nothing against, is PASS" "PASS" (Get-TargetVerdict -Tally @{ Rows = 3; NotReached = 2; Against = 0 })
+Assert "one row reached and against is FAIL"   "FAIL" (Get-TargetVerdict -Tally @{ Rows = 3; NotReached = 2; Against = 1 })
 
 Write-Host "--- the report file: header, column line, then this target's rows ---"
 $reportPath = Join-Path $env:TEMP ("xhci98-selftest-report-{0}.txt" -f $PID)
