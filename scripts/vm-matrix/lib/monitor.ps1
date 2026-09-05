@@ -167,6 +167,26 @@ function ConvertTo-HmpArgument {
     return ('"' + (($Text -replace '\\', '/') -replace '"', '\"') + '"')
 }
 
+# The `chardev-add file,...` command for a row's backend, composed here so the
+# quoting is right in one place.  HMP recognises a quoted string only as the
+# WHOLE of an argument: `path="C:/out dir/x.log"` embedded inside the
+# comma-separated options string does not stop the parser splitting at the
+# space, and QEMU 11 answers "extraneous characters at the end of line" (the
+# Phase 20 review's round 2 probed it against a null backend).  So the entire
+# `file,id=...,path=...` string is what gets quoted.  A comma in the path
+# cannot be carried at all - it ends the option whatever the quoting - and is
+# refused with the reason.
+function New-ChardevAddCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$Id,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    if ($Path.Contains(',')) {
+        throw ("the chardev log path '{0}' contains a comma, which chardev-add's option string cannot carry; name an -OutDir without one" -f $Path)
+    }
+    return ("chardev-add " + (ConvertTo-HmpArgument -Text ("file,id={0},path={1}" -f $Id, $Path)))
+}
+
 # A monitor command whose failure must be LOUD.  hub7bv0.ps1's defect 2: a
 # stage that did nothing must not look like a stage that worked, and
 # `bus=hub1.0` is not a bus - the error came back on the wire and was thrown

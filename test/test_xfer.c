@@ -3272,6 +3272,28 @@ static void test_event_rejections(void)
                  "but resolved to its (unowned) TRB");
         CHECK_EQ(fix.queue.Count, 1, "with the transfer untouched");
     }
+    /* ...and on an OWNED TRB the event has to go all the way to a completion:
+     * the mask must reach the classifier, not only the first lookup (the
+     * Phase 20 review's round 2 found it stopping short, and this vector's
+     * unowned cousin above returned before the classifier could refuse). A
+     * fresh fixture, so the rejections above keep their transfer. */
+    {
+        XFER_FIXTURE owned;
+
+        fixture_init(&owned, 32);
+        CHECK_EQ(fixture_submit_in(&owned, 0, 18), XHCI_XFER_OK, "submitted");
+        CHECK_EQ(XhciXferEvent(&owned.queue, &owned.ring, FIX_SLOT, FIX_DCI,
+                               XhciRingTrbPA(&owned.ring, 2) | 0x4UL,
+                               event_dw2(XHCI_CC_SUCCESS, 0),
+                               event_dw3(FIX_SLOT, FIX_DCI), &result),
+                 XHCI_XFER_OK, "ok");
+        CHECK_EQ(owned.queue.ReservedBitsSet, 1, "RsvdZ bits counted");
+        CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE,
+                 "and the Status Stage event completes the transfer regardless");
+        CHECK_EQ(owned.queue.Count, 0, "which is retired");
+        CHECK_EQ(owned.queue.ForeignEvents + owned.queue.UnmatchedEvents, 0,
+                 "with nothing read as foreign or unmatched");
+    }
 
     /* A code no Transfer Event on this ring may carry. Nothing here knows what
      * the controller did with the TRBs, so nothing is retired or completed. */

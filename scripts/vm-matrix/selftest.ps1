@@ -743,6 +743,14 @@ Assert "a reply without the prompt is not"            $false (Test-MonitorReplyC
 Assert "an absent reply is not"                       $false (Test-MonitorReplyComplete -Raw $null)
 Assert "a plain path is sent as it is"                'C:\out\x.ppm' (ConvertTo-HmpArgument -Text 'C:\out\x.ppm')
 Assert "a path with a space is quoted with forward slashes" '"C:/out dir/x.ppm"' (ConvertTo-HmpArgument -Text 'C:\out dir\x.ppm')
+# chardev-add: HMP quotes WHOLE arguments, so a spaced path must quote the
+# whole option string, not the value after path= (Phase 20 review, round 2,
+# probed against QEMU 11); a comma cannot be carried and is refused.
+Assert "a chardev-add with a plain path is unquoted"  'chardev-add file,id=matrixchr1,path=C:\out\m.log' (New-ChardevAddCommand -Id 'matrixchr1' -Path 'C:\out\m.log')
+Assert "a chardev-add with a spaced path quotes the whole option string" 'chardev-add "file,id=matrixchr1,path=C:/out dir/m.log"' (New-ChardevAddCommand -Id 'matrixchr1' -Path 'C:\out dir\m.log')
+$commaThrew = $false
+try { New-ChardevAddCommand -Id 'matrixchr1' -Path 'C:\out,dir\m.log' | Out-Null } catch { $commaThrew = $true }
+Assert "a chardev-add path with a comma is refused"   $true $commaThrew
 
 Write-Host "--- a monitor port that cannot be bound is a validation problem, not a sixty-second wait ---"
 $probeListener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)

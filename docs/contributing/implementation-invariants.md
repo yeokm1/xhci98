@@ -189,9 +189,14 @@ code:
   submit is failed `CANCELED` through the completion contract, never queued
   and never refused for retry. Superseded means bound to a *different*
   extension; an unbound record (a `REMOVE` waiting for its reopen) keeps the
-  answers it always had. `AbortTransfer` is the exception, by design: it
-  withdraws a transfer by the transfer's own identity, which an old handle may
-  still own (`issues-found.md` F1).
+  answers it always had. Two exceptions, both about work the old handle still
+  owns: `AbortTransfer` withdraws a transfer by the transfer's own identity,
+  and a `PAUSED` from a superseded handle that still has a transfer of its own
+  on the shared queue (`xhciEpHandleOwnsWork`) is admitted, because that is
+  usbport cancelling the old handle's work and the early Stop Endpoint is what
+  keeps the abort's DMA window narrow. Its later `ACTIVE` is still declined, so
+  the endpoint stays paused until the bound handle's `ACTIVE` or the health
+  poll's restart (`issues-found.md` F1; Phase 20 review, finding 3).
 
 ## Ring Full and Backpressure
 

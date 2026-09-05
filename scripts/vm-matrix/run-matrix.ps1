@@ -276,14 +276,12 @@ function Add-RowBackends {
     # Measured with qom-get on QEMU 11: null -> false, file -> true, for both.
     if ($Row.ContainsKey('NeedsChardev')) {
         $chrPath = Join-Path $OutDir ("matrix-{0}-chr{1}.log" -f $tag, $Row.NeedsChardev)
-        # Quoted the way Save-GuestScreenshot quotes its path: an -OutDir with a
-        # space made every chardev row ERROR on every target, and a comma would
-        # end the HMP argument early whatever the quoting, so it is refused
-        # (issues-found.md, smaller items).
-        if ($chrPath.Contains(',')) {
-            throw ("the output directory path '{0}' contains a comma, which chardev-add cannot carry; name an -OutDir without one" -f $chrPath)
-        }
-        $wanted += ("chardev-add file,id=matrixchr{0},path={1}" -f $Row.NeedsChardev, (ConvertTo-HmpArgument -Text $chrPath))
+        # Composed and quoted by New-ChardevAddCommand (lib\monitor.ps1): an
+        # -OutDir with a space made every chardev row ERROR on every target
+        # (issues-found.md, smaller items), and quoting the path value alone
+        # did not fix it - HMP quotes whole arguments only, so the whole
+        # option string is what is quoted, and a comma is refused.
+        $wanted += (New-ChardevAddCommand -Id ("matrixchr{0}" -f $Row.NeedsChardev) -Path $chrPath)
     }
     foreach ($cmd in $wanted) {
         if ($script:backendsAdded.ContainsKey($cmd)) { continue }

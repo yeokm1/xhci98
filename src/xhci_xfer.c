@@ -1512,8 +1512,10 @@ ULONG XhciXferQueueStopped(PXHCI_TRANSFER_QUEUE queue,
     if (XhciXferCodeInfo(completionCode, &code) != XHCI_XFER_OK) {
         return 0;
     }
-    if (XhciRingIndexFromPA(ring, xhciXferEventPointer(queue, eventTrbPA),
-                            &reportedIndex) != XHCI_RING_OK) {
+    /* Masked once, here, so every later use of the pointer in this function
+     * sees the same value the lookup did. */
+    eventTrbPA = xhciXferEventPointer(queue, eventTrbPA);
+    if (XhciRingIndexFromPA(ring, eventTrbPA, &reportedIndex) != XHCI_RING_OK) {
         return 0;
     }
 
@@ -1894,8 +1896,11 @@ ULONG XhciXferEvent(PXHCI_TRANSFER_QUEUE queue,
         return XHCI_XFER_OK;
     }
 
-    if (XhciRingIndexFromPA(ring, xhciXferEventPointer(queue, eventTrbPA),
-                            &reportedIndex) != XHCI_RING_OK) {
+    /* Masked once, here, so the classifier below and the short-TRB record see
+     * the same pointer the lookup resolved (the Phase 20 review's round 2
+     * found the first version masking the lookup alone). */
+    eventTrbPA = xhciXferEventPointer(queue, eventTrbPA);
+    if (XhciRingIndexFromPA(ring, eventTrbPA, &reportedIndex) != XHCI_RING_OK) {
         /* Zero (an error the xHC could not attribute to a TRB, 4.11.3.1) or an
          * address on another ring; the RsvdZ low bits were masked above. */
         queue->ForeignEvents++;
@@ -3468,8 +3473,8 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
         result->NeedsRecovery = 1;
     }
 
-    if (XhciRingIndexFromPA(ring, xhciXferEventPointer(queue, eventTrbPA),
-                            &reportedIndex) != XHCI_RING_OK) {
+    eventTrbPA = xhciXferEventPointer(queue, eventTrbPA);
+    if (XhciRingIndexFromPA(ring, eventTrbPA, &reportedIndex) != XHCI_RING_OK) {
         queue->ForeignEvents++;
         return XHCI_XFER_OK;
     }

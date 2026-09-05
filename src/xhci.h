@@ -7011,9 +7011,12 @@ typedef struct _XHCI_EXTENSION {
      * and `SetEndpointStatus(RUN)`. A stale PAUSED would have stopped the
      * replacement handle's endpoint and a stale RUN would have reset its
      * pipe (F1's second probe paused the live EP0 through the old handle).
-     * `AbortTransfer` is deliberately not counted here: it withdraws a
-     * transfer by the transfer's own identity, which an old handle may still
-     * legitimately own on the shared queue.
+     * Two calls are deliberately not counted here because they are about work
+     * the old handle still owns on the shared queue: `AbortTransfer`, which
+     * withdraws a transfer by the transfer's own identity, and a PAUSED from
+     * a superseded handle that still has a transfer of its own queued
+     * (`xhciEpHandleOwnsWork`), which is usbport cancelling that work and
+     * needs the early stop.
      */
     ULONG EndpointCallsStale;
     ULONG EndpointQuiesceLost;
