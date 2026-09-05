@@ -1772,6 +1772,8 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
      * added for. */
     XHCI_DBG_VALUE_CHANGED("transfers failed - endpoint gone",
                            ext->TransfersFailedGone);
+    XHCI_DBG_VALUE_CHANGED("transfers failed - stale endpoint handle",
+                           ext->TransfersFailedStale);
     /* And the net under both of them (task 7b-A.0): records the health poll gave
      * up on because they refused, placed nothing and had no command in flight.
      * Nonzero is this bound working - a device that would otherwise have been
@@ -1990,6 +1992,10 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
     XHCI_DBG_VALUE_CHANGED("endpoint removes held", ext->EndpointRemovesHeld);
     XHCI_DBG_VALUE_CHANGED("EP0 removes on a superseded handle",
                            ext->Ep0RemovesSuperseded);
+    XHCI_DBG_VALUE_CHANGED("endpoint removes on a superseded handle",
+                           ext->EndpointRemovesSuperseded);
+    XHCI_DBG_VALUE_CHANGED("endpoint calls on a stale handle",
+                           ext->EndpointCallsStale);
     XHCI_DBG_VALUE_CHANGED("endpoint removes with work queued",
                            ext->RemovesWithWork);
     XHCI_DBG_VALUE_CHANGED("endpoint stops", ext->EndpointStops);

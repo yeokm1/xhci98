@@ -6357,6 +6357,20 @@ typedef struct _XHCI_EXTENSION {
      */
     ULONG TransfersFailedGone;
     /*
+     * Transfers submitted through an endpoint extension that is not the one
+     * the record is bound to: a superseded handle (the two-handle restore of
+     * issue 4, or a handle whose device record has since been released and
+     * reused for another device). Its own counter beside `TransfersFailedGone`
+     * because the diagnosis differs: "gone" is a record with no binding at
+     * all, this is a record bound to a *different* extension, so the work
+     * usbport offered belongs to a handle it has already replaced. Failed
+     * with `CANCELED` rather than refused, by the permanent-refusal rule above
+     * - the old handle never becomes the bound one again - and the replacement
+     * handle's queue is never touched (the 2026-09-05 audit's F1, whose third
+     * probe queued a transfer on the live device through a closed old handle).
+     */
+    ULONG TransfersFailedStale;
+    /*
      * Device records failed by the health poll's progress detector: refusing
      * transfers, no command in flight, and nothing placed on a ring for
      * XHCI_DEV_STALL_MS of consecutive polls. This is the **bound** on task
@@ -6907,6 +6921,28 @@ typedef struct _XHCI_EXTENSION {
      * binds on its first attach while it moves is issue 4 handled.
      */
     ULONG Ep0RemovesSuperseded;
+    /*
+     * The same reading for a non-default endpoint: `SetEndpointState(REMOVE)`
+     * through an extension the record at that DCI is bound to a *different*
+     * one than. Until the 2026-09-05 audit (F1) this REMOVE cleared the
+     * record's pointer to the live handle and could start tearing down its
+     * queue; now it closes its own extension and touches nothing else, as the
+     * EP0 branch has since issue 4. No supported stack has been observed to
+     * deliver it - the two-handle restore XP performs had only EP0 open - so
+     * nonzero is a reading worth the trace that names the sequence.
+     */
+    ULONG EndpointRemovesSuperseded;
+    /*
+     * Every other endpoint callback that named a stale extension and was
+     * declined for it: `SetEndpointState(PAUSED|ACTIVE)`, `GetEndpointStatus`
+     * and `SetEndpointStatus(RUN)`. A stale PAUSED would have stopped the
+     * replacement handle's endpoint and a stale RUN would have reset its
+     * pipe (F1's second probe paused the live EP0 through the old handle).
+     * `AbortTransfer` is deliberately not counted here: it withdraws a
+     * transfer by the transfer's own identity, which an old handle may still
+     * legitimately own on the shared queue.
+     */
+    ULONG EndpointCallsStale;
     ULONG EndpointQuiesceLost;
     ULONG EndpointQuiesceUnavailable;
     ULONG EndpointQuiesceFailures;

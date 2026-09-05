@@ -91,15 +91,35 @@ poll; and every `Flags` transition listed above.
 ### What is outside it
 
 The init and reinit sequence (`XhciInitController` and everything it calls)
-runs at PASSIVE_LEVEL holding nothing, and touches the extension freely. That
-is safe on a stated precondition rather than by omission: the function clears
-`XHCI_EXT_FLAG_INITIALIZED` under the lock as its first act, and every
-DISPATCH-level path that could touch controller state (DPC, health poll,
-command submit, interrupt enable) tests that flag under the lock before doing
-anything. So the sequence runs with every other context already refusing. The
-ISR's separate `HcInfoStatus` gate covers the same window for the one context
-that has no admission flag; `XhciInitController` sets `HcInfoStatus` bad on
-entry for that reason.
+runs holding nothing (at PASSIVE_LEVEL on a start, at DISPATCH_LEVEL from the
+in-place recovery's DPC), and touches the controller registers and the
+controller-side state freely. That is safe on a stated precondition rather
+than by omission: the function clears `XHCI_EXT_FLAG_INITIALIZED` under the
+lock as its first act, and every DISPATCH-level path that touches controller
+state (DPC, health poll, command submit, interrupt enable) tests that flag
+under the lock before doing anything. So the sequence runs with those
+contexts already refusing. The ISR's separate `HcInfoStatus` gate covers the
+same window for the one context that has no admission flag;
+`XhciInitController` sets `HcInfoStatus` bad on entry for that reason.
+
+The precondition does not extend to the device table, and the 2026-09-05
+audit (`issues-found.md` F8) is why that has to be said. The slot callbacks
+(`SubmitTransfer`, `SetEndpointState`, `AbortTransfer`, `XhciSlotDeferredWork`)
+read and write `Devices[]` under the controller lock with no admission gate:
+`xhciDevAdmitted` is consulted only after the record has been read, and
+recovery itself calls the deferred drain to deliver owed completions while
+`INITIALIZED` is clear. The in-place recovery runs `XhciSlotInit` from a DPC
+with the controller still live from usbport's point of view, so on SMP a
+callback on another CPU is not refusing while the table is reset. That reset
+is therefore not part of the lockless sequence: `XhciSlotInit` cancels the
+queued work, zeroes the table and resets the owner and cursor fields inside
+one hold of the controller lock, so a callback sees the old table or the new
+one and never a half-zeroed record. The single-drainer guard `DeferredBusy`
+is not written there at all. Its owner is the `XhciSlotDeferredWork` call
+that set it, which drops the lock around every usbport service and re-takes
+it afterwards; clearing the flag under it would admit a second drainer, and a
+set flag at reinitialisation names a drainer that is still running and will
+clear it itself.
 
 The diagnostic counters, per the note in `XHCI_EXTENSION`: nothing branches
 on them and a torn count costs nothing.

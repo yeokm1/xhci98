@@ -14411,6 +14411,324 @@ static void test_slot_ep0_remove_superseded_handle_late(void)
 }
 
 /*
+ * **The 2026-09-05 audit's F1: a handle is not a binding.** Three sequences
+ * driven through the real callbacks reached the replacement handle's state
+ * through a superseded one - a non-default REMOVE unbound the replacement, an
+ * EP0 PAUSED paused the live pipe, a submit through a closed EP0 handle queued
+ * work on the live device. The three vectors below are those sequences, each
+ * followed by the replacement handle still working, plus the record-reuse form
+ * the audit's second pass named: a released record is reused for the next
+ * device, so a stale handle resolves to a record that belongs to someone else.
+ * The identity test is `xhciEpHandleSuperseded` - bound to a *different*
+ * extension, so an unbound record between a REMOVE and its reopen keeps its
+ * answers (`test_slot_quiesce_refusals` pins the reset-pipe in that window) -
+ * and what it deliberately does NOT gate is AbortTransfer, which matches the
+ * transfer rather than the handle.
+ *
+ * None of these sequences has been observed from a supported usbport stack -
+ * issue 4's run had only EP0 open on the restored device - and the third probe
+ * submits through a handle usbport has already been told is closed. They are
+ * callback-entry contracts, pinned so the identity rule cannot regress, not
+ * observed traffic.
+ */
+static void test_slot_stale_handle_interrupt_endpoint(void)
+{
+    PXHCI_DEVICE dev;
+    PXHCI_ENDPOINT_RECORD record;
+    ULONG removesWithWork;
+    ULONG completions;
+    ULONG stale;
+
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    CHECK_EQ(slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                          USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1),
+             MP_STATUS_SUCCESS, "(the interrupt endpoint opens into handle A)");
+    deliver_events();
+    record = &dev->Endpoints[0];
+    CHECK_EQ(record->State, XHCI_EP_REC_CONFIGURED, "(and is configured)");
+    CHECK(record->EndpointExtension == (PVOID)&slotEndpoint2, "(bound to A)");
+
+    /* The same endpoint opened again through a second extension: the record is
+     * rebound to B while A still believes itself open. */
+    CHECK_EQ(slot_open_ep(&slotEndpoint3, 7, UsbHighSpeed, 0x81,
+                          USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1),
+             MP_STATUS_SUCCESS, "the same endpoint opens into handle B");
+    CHECK(record->EndpointExtension == (PVOID)&slotEndpoint3,
+          "and the record is bound to B");
+    CHECK_EQ(slotEndpoint2.Flags & XHCI_ENDPOINT_FLAG_OPEN,
+             XHCI_ENDPOINT_FLAG_OPEN, "(while A still believes itself open)");
+
+    /* Probe 1: the REMOVE of the superseded handle. */
+    removesWithWork = ext.RemovesWithWork;
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint2, USBPORT_ENDPOINT_REMOVE);
+    CHECK_EQ(ext.EndpointRemovesSuperseded, 1,
+             "a REMOVE through A is counted as superseded");
+    CHECK_EQ(slotEndpoint2.Flags & XHCI_ENDPOINT_FLAG_OPEN, 0, "and closes A");
+    CHECK(record->EndpointExtension == (PVOID)&slotEndpoint3,
+          "but the record stays bound to B");
+    CHECK_EQ(record->State, XHCI_EP_REC_CONFIGURED, "still configured");
+    CHECK_EQ(record->Dci, 3, "with its record intact");
+    CHECK_EQ(dev->ActiveOp, XHCI_DEV_OP_NONE, "and no teardown of B's queue started");
+    CHECK_EQ(ext.RemovesWithWork, removesWithWork,
+             "(B's queue was not the REMOVE's subject)");
+
+    /* Probe 2's non-default form: PAUSED and the status calls through A. */
+    stale = ext.EndpointCallsStale;
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint2, USBPORT_ENDPOINT_PAUSED);
+    CHECK_EQ(record->Quiesce.Flags & XHCI_EPQ_PAUSED, 0,
+             "a PAUSED through A does not pause B's endpoint");
+    CHECK_EQ(ext.EndpointCallsStale, stale + 1, "and is counted stale");
+    CHECK_EQ(XhciRegPacket.GetEndpointStatus(&ext, &slotEndpoint2),
+             USBPORT_ENDPOINT_RUN, "a status query through A answers RUN");
+    CHECK_EQ(ext.EndpointCallsStale, stale + 2, "and is counted stale");
+    XhciRegPacket.SetEndpointStatus(&ext, &slotEndpoint2, USBPORT_ENDPOINT_RUN);
+    CHECK_EQ(ext.EndpointCallsStale, stale + 3, "as is a reset-pipe through A");
+    CHECK_EQ(dev->ActiveOp, XHCI_DEV_OP_NONE, "which resets nothing on B's pipe");
+
+    /* Probe 3's non-default form: a submit through the closed A is failed, not
+     * queued on B and not refused for retry. */
+    completions = completeTransferCalls;
+    slot_setup_xfer(&slotParams, &slotTransfer, &slotSgList, 8, 1);
+    CHECK_EQ(XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint2, &slotParams,
+                                          &slotTransfer, &slotSgList),
+             MP_STATUS_SUCCESS, "a submit through A is accepted to be answered");
+    CHECK_EQ(ext.TransfersFailedStale, 1, "and failed as stale");
+    CHECK_EQ(record->Queue.Count, 0, "never reaching B's queue");
+    deliver_events();
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "and completed back to usbport");
+    CHECK(lastCompletedStatus != 0, "as cancelled");
+
+    /* B is unaffected by all of it. */
+    slot_setup_xfer(&slotParams2, &slotTransfer2, &slotSgList2, 8, 1);
+    CHECK_EQ(XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint3, &slotParams2,
+                                          &slotTransfer2, &slotSgList2),
+             MP_STATUS_SUCCESS, "a submit through B is accepted");
+    CHECK_EQ(record->Queue.Count, 1, "and queued");
+    CHECK_EQ(ext.TransfersFailedStale, 1, "(not failed)");
+
+    /* And B's own REMOVE is the ordinary path, finding the work it queued. */
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint3, USBPORT_ENDPOINT_REMOVE);
+    CHECK_EQ(ext.EndpointRemovesSuperseded, 1,
+             "a REMOVE of the bound handle is not counted as superseded");
+    CHECK_EQ(record->EndpointExtension, NULL, "and drops the binding");
+    CHECK_EQ(ext.RemovesWithWork, removesWithWork + 1,
+             "counting the work it found queued");
+}
+
+static void test_slot_stale_handle_ep0(void)
+{
+    PXHCI_DEVICE dev;
+    ULONG completions;
+    ULONG stale;
+    ULONG refusals;
+    ULONG i;
+
+    /* The two-handle restore, carried through to the new handle's address. */
+    dev = slot_enumerate_addressed(3, 3, 5, 2);
+    slot_reset_port(3);
+    slot_properties(0, UsbHighSpeed, 64);
+    for (i = 0; i < sizeof(slotEndpointRestore) / sizeof(ULONG); i++) {
+        ((ULONG *)&slotEndpointRestore)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_now(&slotEndpointRestore), MP_STATUS_SUCCESS,
+             "(EP0 opens at address 0 through a second handle)");
+    deliver_events();
+    slot_setup(0x00, 0x05, 3, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpointRestore, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    deliver_events();
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_ADDRESSED, "(addressed at 3)");
+    CHECK(dev->EndpointExtension == (PVOID)&slotEndpointRestore,
+          "(bound to the new handle)");
+
+    /* Probe 2: PAUSED through the old handle, still open, must not pause the
+     * live EP0; neither status call may reach it either. */
+    stale = ext.EndpointCallsStale;
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_PAUSED);
+    CHECK_EQ(dev->Ep0Quiesce.Flags & XHCI_EPQ_PAUSED, 0,
+             "a PAUSED through the old handle does not pause the live EP0");
+    CHECK_EQ(ext.EndpointCallsStale, stale + 1, "and is counted stale");
+    CHECK_EQ(XhciRegPacket.GetEndpointStatus(&ext, &slotEndpoint),
+             USBPORT_ENDPOINT_RUN, "a status query through it answers RUN");
+    XhciRegPacket.SetEndpointStatus(&ext, &slotEndpoint, USBPORT_ENDPOINT_RUN);
+    CHECK_EQ(ext.EndpointCallsStale, stale + 3, "both counted stale");
+    CHECK_EQ(dev->ActiveOp, XHCI_DEV_OP_NONE, "and nothing issued for them");
+
+    /* Probe 3: the old handle is removed (issue 4's path), then a submit
+     * arrives through it anyway. */
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
+    CHECK_EQ(ext.Ep0RemovesSuperseded, 1, "(the old handle's REMOVE is superseded)");
+    CHECK_EQ(dev->Flags & XHCI_DEV_FLAG_EP0_OPEN, XHCI_DEV_FLAG_EP0_OPEN,
+             "(and the record stays open through the new one)");
+    completions = completeTransferCalls;
+    refusals = ext.TransfersRefused;
+    slot_setup(0x80, 0x06, 0x0100, 0);
+    CHECK_EQ(XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                          &slotTransfer, &slotSgList),
+             MP_STATUS_SUCCESS,
+             "a submit through the closed old handle is accepted to be answered");
+    CHECK_EQ(ext.TransfersFailedStale, 1, "and failed as stale");
+    CHECK_EQ(dev->Ep0Queue.Count, 0, "never reaching the live EP0 queue");
+    CHECK_EQ(ext.TransfersRefused, refusals, "and not refused for retry");
+    deliver_events();
+    CHECK_EQ(completeTransferCalls, completions + 1, "completed back to usbport");
+    CHECK(lastCompletedStatus != 0, "as cancelled");
+
+    /* The live handle carries on. */
+    slot_setup(0x80, 0x06, 0x0100, 0);
+    CHECK_EQ(XhciRegPacket.SubmitTransfer(&ext, &slotEndpointRestore, &slotParams,
+                                          &slotTransfer2, &slotSgList),
+             MP_STATUS_SUCCESS, "a submit through the live handle is accepted");
+    CHECK_EQ(dev->Ep0Queue.Count, 1, "and queued");
+    CHECK_EQ(ext.TransfersFailedStale, 1, "(not failed)");
+}
+
+static void test_slot_stale_handle_after_record_reuse(void)
+{
+    PXHCI_DEVICE dev;
+    PXHCI_ENDPOINT_RECORD record;
+    ULONG completions;
+    ULONG stale;
+    ULONG i;
+
+    /* A device with an interrupt endpoint in handle A, then unplugged: the
+     * Disable Slot completes and its record is released. */
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    CHECK_EQ(slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                          USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1),
+             MP_STATUS_SUCCESS, "(the first device's interrupt endpoint, handle A)");
+    deliver_events();
+    CHECK(dev == &ext.Devices[0], "(record 0)");
+    CHECK_EQ(slotEndpoint2.DeviceIndex, 1, "(A names record 0)");
+    slot_detach(3);
+    for (i = 0; i < 8 && ext.Devices[0].State != XHCI_DEV_STATE_FREE; i++) {
+        deliver_events();
+    }
+    CHECK_EQ(ext.Devices[0].State, XHCI_DEV_STATE_FREE, "the record is released");
+
+    /* The next device takes the same record, and opens the same DCI into B.
+     * Attached without restarting the controller, so this is reuse rather than
+     * a fresh table. */
+    hwCmdSlotId = 6;
+    slot_attach(3, 3);
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "(a second device on the same port)");
+    deliver_events();
+    deliver_events();
+    dev = &ext.Devices[0];
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "(reusing record 0)");
+    slot_setup(0x00, 0x05, 9, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    deliver_events();
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_ADDRESSED, "(addressed at 9)");
+    CHECK_EQ(slot_open_ep(&slotEndpoint3, 9, UsbHighSpeed, 0x81,
+                          USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1),
+             MP_STATUS_SUCCESS, "(its interrupt endpoint, handle B, same DCI)");
+    deliver_events();
+    record = &dev->Endpoints[0];
+    CHECK_EQ(record->Dci, 3, "(at the DCI A still names)");
+    CHECK(record->EndpointExtension == (PVOID)&slotEndpoint3, "(bound to B)");
+    CHECK_EQ(slotEndpoint3.DeviceIndex, slotEndpoint2.DeviceIndex,
+             "(B and A resolve to the same record)");
+
+    /* A, which belonged to the device that left, must reach nothing of B's. */
+    completions = completeTransferCalls;
+    slot_setup_xfer(&slotParams, &slotTransfer, &slotSgList, 8, 1);
+    CHECK_EQ(XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint2, &slotParams,
+                                          &slotTransfer, &slotSgList),
+             MP_STATUS_SUCCESS, "a submit through A is accepted to be answered");
+    CHECK_EQ(ext.TransfersFailedStale, 1, "and failed as stale");
+    CHECK_EQ(record->Queue.Count, 0, "never reaching B's queue");
+    deliver_events();
+    CHECK_EQ(completeTransferCalls, completions + 1, "completed as cancelled");
+    stale = ext.EndpointCallsStale;
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint2, USBPORT_ENDPOINT_PAUSED);
+    CHECK_EQ(record->Quiesce.Flags & XHCI_EPQ_PAUSED, 0,
+             "a PAUSED through A does not pause B's endpoint");
+    CHECK_EQ(ext.EndpointCallsStale, stale + 1, "and is counted stale");
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint2, USBPORT_ENDPOINT_REMOVE);
+    CHECK_EQ(ext.EndpointRemovesSuperseded, 1,
+             "a REMOVE through A is counted as superseded");
+    CHECK(record->EndpointExtension == (PVOID)&slotEndpoint3,
+          "and B stays bound");
+    CHECK_EQ(record->State, XHCI_EP_REC_CONFIGURED, "and configured");
+
+    slot_setup_xfer(&slotParams2, &slotTransfer2, &slotSgList2, 8, 1);
+    CHECK_EQ(XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint3, &slotParams2,
+                                          &slotTransfer2, &slotSgList2),
+             MP_STATUS_SUCCESS, "a submit through B is accepted");
+    CHECK_EQ(record->Queue.Count, 1, "and queued");
+}
+
+/*
+ * **The 2026-09-05 audit's F8: the device-table reset is one locked
+ * transition, and the active drainer keeps its guard.** A single-threaded
+ * suite cannot interleave a second CPU, so what is pinned is the contract's
+ * observable half: the table is wholly zero afterwards (a callback that reads
+ * it sees the old table or this), no nested acquisition happened while the
+ * reset ran under the lock, a set `DeferredBusy` - an active drainer inside its
+ * unlocked interval - survives the reset, and the work the reset cancelled is
+ * delivered by the drain rather than lost with the table.
+ */
+static void test_slot_init_resets_the_table_in_one_hold(void)
+{
+    PXHCI_DEVICE dev;
+    ULONG completions;
+    ULONG lockErrors;
+    ULONG nonZero;
+    ULONG i;
+
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    CHECK_EQ(slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                          USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1),
+             MP_STATUS_SUCCESS, "(an interrupt endpoint)");
+    deliver_events();
+    slot_setup(0x80, 0x06, 0x0100, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    CHECK_EQ(dev->Ep0Queue.Count, 1, "(with a transfer queued on EP0)");
+    /* What a callback on another CPU may have written into a record just
+     * before the reset: quiesce state a lockless zeroing could have left
+     * behind on a FREE record. */
+    dev->Ep0Quiesce.Flags |= XHCI_EPQ_FAILED | XHCI_EPQ_UNAVAILABLE;
+
+    ext.DeferredBusy = 1;           /* an active drainer, mid-service call */
+    completions = completeTransferCalls;
+    lockErrors = commandLockErrorsTotal;
+    XhciSlotInit(&ext);
+    CHECK_EQ(commandLockErrorsTotal, lockErrors,
+             "the reset took the lock once, with nothing nested under it");
+
+    nonZero = 0;
+    for (i = 0; i < XHCI_MAX_SLOTS * (sizeof(XHCI_DEVICE) / sizeof(ULONG)); i++) {
+        if (((ULONG *)ext.Devices)[i] != 0) {
+            nonZero++;
+        }
+    }
+    CHECK_EQ(nonZero, 0, "every word of the device table is zero afterwards");
+    CHECK_EQ(ext.Devices[0].Ep0Quiesce.Flags, 0,
+             "including the quiesce state written into it beforehand");
+    CHECK_EQ(ext.CommandOwner, 0, "the command owner is cleared");
+    CHECK_EQ(ext.PumpCursor, 0, "and the pump cursor");
+    CHECK_EQ(ext.EndpointInvalidatesOwed, 0, "and the invalidation total");
+    CHECK_EQ(ext.DeferredBusy, 1,
+             "the active drainer's ownership of the drain survives the reset");
+    CHECK_EQ(completeTransferCalls, completions,
+             "(and nothing was completed under it)");
+
+    /* The drainer returns from its service call and finishes; the cancelled
+     * transfer is what it delivers. */
+    ext.DeferredBusy = 0;
+    XhciSlotDeferredWork(&ext);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "the work the reset cancelled is delivered by the drain");
+    CHECK(lastCompletedStatus != 0, "as cancelled");
+    CHECK_EQ(ext.DeferredBusy, 0, "and the drain is free again");
+}
+
+/*
  * The open, the Configure Endpoint it derives, and what each of them is allowed
  * to have touched.
  *
@@ -27999,6 +28317,10 @@ int main(void)
     test_slot_endpoint_remove();
     test_slot_ep0_remove_superseded_handle();
     test_slot_ep0_remove_superseded_handle_late();
+    test_slot_stale_handle_interrupt_endpoint();
+    test_slot_stale_handle_ep0();
+    test_slot_stale_handle_after_record_reuse();
+    test_slot_init_resets_the_table_in_one_hold();
     test_slot_port_disable_teardown();
     test_slot_port_disable_waits_for_the_port();
     test_slot_queue_counter_fold();

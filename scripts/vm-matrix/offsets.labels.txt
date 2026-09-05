@@ -66,6 +66,7 @@ DpcsAfterFailure	DPCs after failure
 DrainBoundHits	drain bound hits
 DrainBoundEmptyHits	drain bound hits with the ring already empty
 EnablesWithEventsPending	enables with events pending
+EndpointCallsStale	endpoint calls on a stale handle
 EndpointConfigureFailures	endpoint configure failures
 EndpointContextRestores	endpoint context restores
 EndpointContextsDroppedByReset	endpoint contexts dropped by a re-enumeration
@@ -91,6 +92,7 @@ EndpointRefusalsParams	endpoint refusals - params
 EndpointRefusalsPool	endpoint refusals - ring pool
 EndpointRefusalsType	endpoint refusals - type
 EndpointRemovesHeld	endpoint removes held
+EndpointRemovesSuperseded	endpoint removes on a superseded handle
 RemovesWithWork	endpoint removes with work queued
 EndpointRetriesAsked	endpoint re-offers asked for
 EndpointResetFailures	endpoint reset failures
@@ -375,6 +377,7 @@ TransfersAborted	transfers aborted
 TransfersCancelled	transfers cancelled
 TransfersCompleted	transfers completed
 TransfersFailedGone	transfers failed - endpoint gone
+TransfersFailedStale	transfers failed - stale endpoint handle
 TransfersNoOpped	transfers No-Opped by a cancellation
 TransfersOnHaltedEndpoint	transfers on a halted endpoint
 TransfersRefusedRingFull	transfers refused - ring full

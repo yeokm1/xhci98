@@ -164,9 +164,34 @@ code:
 - **The init and reinit sequence is the one exemption**, and it rests on a
   precondition rather than on scope: `XhciInitController` clears
   `XHCI_EXT_FLAG_INITIALIZED` under the lock as its first act and sets
-  `HcInfoStatus` bad on entry, and every other context tests one of those before
-  touching controller state. Do not add a path that touches controller state
-  without such a gate.
+  `HcInfoStatus` bad on entry, and every DISPATCH-level path that touches
+  controller state (DPC, health poll, command submit, interrupt enable) tests
+  one of those before doing so. Do not add a path that touches controller
+  state without such a gate.
+- **The device table is not covered by that exemption.** The slot callbacks
+  read and write `Devices[]` under the controller lock with no admission gate
+  (`xhciDevAdmitted` is consulted after the record is read, and recovery calls
+  the deferred drain deliberately while `INITIALIZED` is clear), so
+  `XhciSlotInit` cancels queued work, zeroes the table and resets the owner
+  and cursor fields inside one hold of the lock, never outside it
+  (`issues-found.md` F8). `DeferredBusy` is never written by init: its owner
+  is the drainer that set it, which drops the lock around usbport services,
+  and clearing it from anywhere else admits a second drainer.
+- **A handle is not a binding.** Every endpoint callback names its record
+  through a saved device index and DCI, and both outlive the binding: a second
+  extension can be opened on the same endpoint while the first is still open
+  (issue 4's two-handle restore), and a released record is reused for the next
+  device. So every callback that changes state or accepts work compares the
+  record's `EndpointExtension` with the extension it was given
+  (`xhciEpHandleSuperseded`) before doing either: a superseded `REMOVE`
+  closes its own handle and touches nothing else, a superseded
+  `PAUSED`/`ACTIVE`/status call is counted and declined, and a superseded
+  submit is failed `CANCELED` through the completion contract, never queued
+  and never refused for retry. Superseded means bound to a *different*
+  extension; an unbound record (a `REMOVE` waiting for its reopen) keeps the
+  answers it always had. `AbortTransfer` is the exception, by design: it
+  withdraws a transfer by the transfer's own identity, which an old handle may
+  still own (`issues-found.md` F1).
 
 ## Ring Full and Backpressure
 
