@@ -115,13 +115,15 @@ ATTO Disk Benchmark on the P14s against the MSSU10-128GSR flash drive trasferrin
 
 The important ones. The full list, with how each was measured and the workarounds, is under "Known limitations" in [release-notes.md](docs/using/release-notes.md).
 
-- **Windows 98: disabling, uninstalling or upgrading the driver crashes the machine.** NUSB's `usbport.sys` cannot stop a running controller (Microsoft's own `usbehci.sys` crashes the same way). Rename `XHCI98.SYS` from an MS-DOS prompt, reboot, then remove it. SweetLow's usbport build does not have this defect.
-- **Every device on a root port is reported as High Speed.** Reporting a Full or Low Speed device at its true speed crashes usbport (it looks up a transaction translator the root port does not have). Devices work, but a mouse or keyboard on a root port polls at 1, 2 or 4 ms depending on its `bInterval`, and polling-rate tools only change it across those bands. Behind a hub the true speed is reported and this does not apply.
-- **`DisableSelectiveSuspend = 1` is written machine-wide.** A sleeping xHCI controller cannot see a newly plugged device, and Windows 98 idles the controller within a second once the root hub is empty. The value affects every USB controller and an uninstall does not remove it.
-- **Fast, repeated plug and unplug can freeze Windows 98.** About twice a second sustained. Ordinary use is fine. This is the driver's own defect and unexplained.
-- **Standby and resume are unproven.** On a controller without Force Save Context the bus is rebuilt on wake instead of restored; on one with it the restore path has only run in a host model. No real standby has been run anywhere.
-- **Windows 98 on an xHCI-only machine asks for the Windows 98 SE CD during install.** Windows fetches its own `usbd.sys` and `usbhub.sys`, which the package does not carry.
-- **Windows 2000 refuses to install a newer package over an older one.** Delete the cached `oemN.inf` and `.pnf` first.
+| Limitation | Detail |
+|---|---|
+| Windows 98: disabling, uninstalling or upgrading the driver crashes the machine | NUSB's `usbport.sys` cannot stop a running controller (Microsoft's own `usbehci.sys` crashes the same way). Rename `XHCI98.SYS` from an MS-DOS prompt, reboot, then remove it. SweetLow's usbport build does not have this defect. |
+| Every device on a root port is reported as High Speed | Reporting a Full or Low Speed device at its true speed crashes usbport (it looks up a transaction translator the root port does not have). Devices work, but a mouse or keyboard on a root port polls at 1, 2 or 4 ms depending on its `bInterval`, and polling-rate tools only change it across those bands. Behind a hub the true speed is reported and this does not apply. |
+| `DisableSelectiveSuspend = 1` is written machine-wide | A sleeping xHCI controller cannot see a newly plugged device, and Windows 98 idles the controller within a second once the root hub is empty. The value affects every USB controller and an uninstall does not remove it. |
+| Fast, repeated plug and unplug can freeze Windows 98 | About twice a second sustained. Ordinary use is fine. This is the driver's own defect and unexplained. |
+| Standby and resume are unproven | On a controller without Force Save Context the bus is rebuilt on wake instead of restored; on one with it the restore path has only run in a host model. No real standby has been run anywhere. |
+| Windows 98 on an xHCI-only machine asks for the Windows 98 SE CD during install | Windows fetches its own `usbd.sys` and `usbhub.sys`, which the package does not carry. |
+| Windows 2000 refuses to install a newer package over an older one | Delete the cached `oemN.inf` and `.pnf` first. |
 
 ## Toolchain and building
 
