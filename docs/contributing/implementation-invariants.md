@@ -235,9 +235,9 @@ code:
   run. So both stay set while the recovery is pending. The latch
   (`ControllerFatal`) is what stops the polls still admitted before
   `ResetController` closes admission, and every poll should that call never
-  arrive (the lost-delivery case is F2's), from asking usbport for a reset
-  each time; once `ControllerFailed` is set the poll declines before
-  reading, as the bullet above says. The latch reopens with
+  arrive, from asking usbport for a reset each time; once
+  `ControllerFailed` is set the poll declines before reading, as the bullet
+  above says. The latch reopens with
   `ControllerFailed` inside the reinitialization, once its HCRST has
   completed and the post-reset capability check has passed and before the
   steps that can still refuse: that HCRST has cleared the bits the latch
