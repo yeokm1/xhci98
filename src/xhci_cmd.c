@@ -583,16 +583,20 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
      * controller, so this is the poll docs/contributing/implementation-invariants.md, "Fatal
      * Errors" has required on every invocation since before the callback existed.
      *
-     * Neither bit is acknowledged. HSE is RW1C and clearing it would destroy the
-     * one durable record of why the controller was failed, on a path that has
-     * already decided not to retry in place; HCE cannot be cleared by software
-     * at all. The transition is what escalates - ControllerFatal latches - so a
-     * bit that stays set for the life of the failed controller does not ask
-     * usbport to queue a reset every 500 ms. The latch reopens when a
-     * reinitialization completes (XhciInitController clears it with
-     * ControllerFailed), because the HCRST it passed has cleared the bits the
-     * latch answered; a second fatal after a completed in-place recovery is a
-     * new transition and escalates again. It did not before 2026-09-06.
+     * Neither bit is acknowledged here. HSE is RW1C and clearing it would
+     * destroy the one durable record of why the controller was failed before
+     * the recovery has run; HCE cannot be cleared by software at all. The
+     * transition is what escalates - ControllerFatal latches - so a bit that
+     * stays set while the recovery is pending does not ask usbport to queue a
+     * reset every 500 ms. The latch reopens inside the reinitialization, once
+     * its HCRST has completed and the post-reset capability check has passed
+     * (XhciInitController clears it with ControllerFailed, before the steps
+     * that can still refuse): that HCRST has cleared the bits the latch
+     * answered, so a later report is a new transition and escalates again. A
+     * refusal before the HCRST leaves the latch standing; one after the clear
+     * re-latches ControllerFailed and is charged to the recovery budget, and
+     * a fresh fatal after it is a new transition. It did not reopen at all
+     * before 2026-09-06.
      */
     if ((usbsts & (XHCI_USBSTS_HCE | XHCI_USBSTS_HSE)) != 0) {
         if (!ext->ControllerFatal) {

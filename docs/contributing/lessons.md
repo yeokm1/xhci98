@@ -2325,13 +2325,14 @@ the defect is fixed by one `AddReg` line, on the Windows 98 path only, with
 no driver code at all.
 
 Postscript, 2026-09-06 (`issues-found.md` F18): Windows 2000 SP4's own stack
-never idles this controller, value or no value (measured in the VM on both
-HALs, `build-and-test.md`), and the same string pass explains why: the idle
-request comes from the hub driver, SP4's `usbhub.sys` carries no
-selective-suspend string, and the hub driver NUSB puts above this usbport,
-`usbhub20.sys` 5.00.2195.6891, does. The "never idles" sentence this project
-carried for weeks was right for the wrong reason, and stayed unmeasured
-because it happened to agree with every run.
+was not seen idling this controller in the VM, value or no value, in the
+conditions `build-and-test.md` records on both HALs, and the same kind of
+string pass suggests why, unconfirmed: the idle request comes from the hub
+driver, SP4's `usbhub.sys` carries no selective-suspend string, and the hub
+driver NUSB puts above this usbport, `usbhub20.sys` 5.00.2195.6891, does.
+The "never idles" sentence this project carried for weeks agreed with every
+run and was still unmeasured; the measurement now exists, and it is bounded
+by its conditions.
 
 ### Rules
 

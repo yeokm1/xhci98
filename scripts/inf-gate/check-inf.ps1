@@ -1186,10 +1186,10 @@ foreach ($m in $models) {
 # half a second of the last transfer, Windows XP's within thirty seconds of a
 # start with nothing attached; a halted xHC cannot report a port change, so a
 # device plugged in afterwards is invisible until Refresh. Windows 2000
-# SP4's native build was not seen idling this controller at all, with or
-# without the value (2026-09-06, a VM reading; its hub driver carries no
-# selective-suspend request; issues-found.md F18), so the value is inert
-# there and the NT path writes it for XP's sake. Until 1.0.1.0 the NT path omitted the
+# SP4's native build was not seen idling this controller in the VM, with or
+# without the value (2026-09-06, bounded readings; issues-found.md F18), so
+# the value had no observed effect there and the NT path writes it for
+# XP's sake. Until 1.0.1.0 the NT path omitted the
 # value on that assumption and the self-tests pinned the omission; the XP
 # reading of 2026-09-03 made it an NT-path need, so now every route must
 # write it.

@@ -28518,7 +28518,6 @@ static void test_fatal_after_recovery(void)
     CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a healthy start)");
     XhciRegPacket.EnableInterrupts(&ext);
     hw_events_reset();
-    isr_start();
     invalidateCalls = 0;
     fatalBefore = ext.FatalStatusDetected;
 
@@ -28537,6 +28536,23 @@ static void test_fatal_after_recovery(void)
     CHECK_EQ(ext.ControllerFailed, 1, "the controller is latched failed");
     XhciRegPacket.CheckController(&ext);
     CHECK_EQ(asyncRequests, 1, "the poll arms the recovery");
+    CHECK_EQ(ext.ControllerFatal, 1,
+             "and the latch stands while the recovery is pending - the poll "
+             "does not reopen it, the reinitialization does");
+
+    /* A recovery that refuses BEFORE its HCRST completes (CNR held) leaves
+     * the latch standing: the bits it answered are still set. */
+    cnrHeld = 1;
+    fire_async_timer();
+    cnrHeld = 0;
+    CHECK_EQ(ext.RecoveryFailures, 1, "the reinitialization refused at reset");
+    CHECK_EQ(ext.ControllerFailed, 1, "the controller stays failed");
+    CHECK_EQ(ext.ControllerFatal, 1,
+             "and the fatal latch stays closed - it reopens only past HCRST");
+
+    /* The poll arms again within the budget; this time the reset completes. */
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(asyncRequests, 2, "the poll re-arms after the refusal");
     fire_async_timer();
     CHECK_EQ(ext.RecoveryCompletions, 1, "the recovery completed");
     CHECK_EQ(ext.ControllerFailed, 0, "the failed latch is open");

@@ -1596,10 +1596,11 @@ Tasks, in the audit's revised order:
   eventual delivery, a late callback from an expired request, repeated loss
   to the terminal state, suspend and restart between arming and delivery.
 - [x] 20.4 the shipped statements (F6, F7, F18, D1). The Windows 2000 SP4
-  VM idle observation was taken on 2026-09-06 under 20.7 (SP4's stack never
-  idled the controller, with or without the value, on either HAL; its hub
-  driver carries no selective-suspend request) and every site that said
-  "unmeasured" now states it. As written: the `LICENSE` scope
+  VM idle observation was taken on 2026-09-06 under 20.7 (SP4's stack was
+  not seen idling the controller, with or without the value, in the
+  conditions recorded on either HAL; a string-search inference about its
+  hub driver is recorded as unconfirmed) and every site that said
+  "unmeasured" now states the reading. As written: the `LICENSE` scope
   paragraph rewritten as history in `legal-provenance.md` section 5's form;
   the `make-release.ps1` readme template ("WINDOWS 98 ONLY", "redistributes
   nothing of Microsoft's", the stale table of contents, the 0.x sentence,
@@ -1675,14 +1676,19 @@ Tasks, in the audit's revised order:
   1 against, 0:57:44, and the one row is the `usb-audio/fs` replug: the
   second arrival's connect change was announced to usbport three times and
   usbport never issued the port reset, so the device was never addressed
-  (+0 on the three advance expectations, no prompt on screen). That is
-  Phase 16's reading of the row the release notes carry as the USB Audio
-  limitation, one leg short of Phase 19's PASS; it read the same on both
-  binaries, and the audio group run alone on the same image afterwards
-  passed both legs in 4:57. So the Windows 98 report is equal to Phase 16
-  and one row behind Phase 19, and the checkpoint's "no worse than the
-  Phase 19 reports" clause is the owner's to weigh at the cut; nothing in
-  the row is this driver's. Reports in `docs/contributing/runs/run-20-post-release/`.
+  (+0 on the three advance expectations, no prompt on screen). The row is
+  the one the release notes carry as the USB Audio limitation and its
+  verdict matches Phase 16's, but the signature does not match fully:
+  Phase 16 saw an Insert Disk prompt for the second instance and this run
+  saw none, and the report's fault and refusal counters at zero say what
+  did not happen, not why enumeration never began. The cause is
+  unresolved and a miniport contribution is not excluded by this evidence.
+  It read the same on both binaries, and the audio group run alone on the
+  same image afterwards passed both legs in 4:57. So the Windows 98 report
+  is one row behind Phase 19's, and the checkpoint's "no worse than the
+  Phase 19 reports" clause is not satisfied by this run; it stands until a
+  qualifying run or a recorded owner decision resolves it. Reports in
+  `docs/contributing/runs/run-20-post-release/`.
   The Windows 2000 SMP in-place recovery for 20.2 (F8), on `win2k-smp.img`
   with the new build copied in: the controller was killed from outside the
   guest through QEMU's gdb stub (interrupter 0's `ERSTBA` written to an
@@ -1711,10 +1717,11 @@ Tasks, in the audit's revised order:
   fails every restore, so no VM can supply the hardware reading and the
   release notes' Force Save Context limitation says it is owed. The
   Windows 2000 SP4 idle observation owed since 20.4 was taken as well
-  (F18, `build-and-test.md`): SP4's stack never idled the controller with
-  the value present or deleted, nothing attached or a mouse attached, on
-  the Standard PC and the ACPI HALs, and the string-level reason is
-  recorded in `legal-provenance.md` section 4. As written:
+  (F18, `build-and-test.md`): SP4's stack was not seen idling the
+  controller, value present or deleted, nothing attached and then a mouse
+  on the Standard PC guest, a mouse attached and no value on the ACPI SMP
+  guest, in the intervals recorded there; a string-level candidate reason
+  is recorded in `legal-provenance.md` section 4 as unconfirmed. As written:
   `build-driver.cmd all` with every
   self-test, `xhciqual\test\run-host-tests.cmd`, `vm-matrix\selftest.ps1`;
   `run-matrix.ps1 -PostRelease` on fresh 2a and 2b clones against the

@@ -5095,8 +5095,8 @@ typedef struct _XHCI_EXTENSION {
      * about thirty seconds after a start with nothing attached), so a
      * steadily rising SuspendCount there is the expected shape. On Win2000 it
      * has read 0 in every run recorded so far, and on 2026-09-06 it read 0
-     * with the value deleted too, nothing attached and then a mouse, on both
-     * HALs: SP4's own hub driver never asks for the idle (issues-found.md
+     * with the value deleted too, nothing attached and then a mouse, in the
+     * conditions build-and-test.md records on both HALs (issues-found.md
      * F18). So read a nonzero there as a finding to record, not as a fault.
      */
     ULONG SuspendCount;
@@ -5351,11 +5351,13 @@ typedef struct _XHCI_EXTENSION {
      *
      * It is distinct from ControllerFailed, which is the *answer*: this says the
      * hardware reported a fatal condition, that says the ladder has ended.
-     * Both are cleared together when a reinitialization completes
-     * (XhciInitController): the HCRST it passed has cleared the bits this one
-     * answered, so a later report is a new transition. Measured on the SMP
-     * guest on 2026-09-06: with this latch left standing, a second HCE after
-     * a completed in-place recovery was never escalated.
+     * Both are cleared together inside a reinitialization, once its HCRST
+     * has completed and the post-reset capability check has passed
+     * (XhciInitController), before the steps that can still refuse: that
+     * HCRST has cleared the bits this one answered, so a later report is a
+     * new transition. Measured on the SMP guest on 2026-09-06: with this
+     * latch left standing, a second HCE after a completed in-place recovery
+     * was never escalated.
      * LastCheckStatus is the raw word behind the decision, readable from a free
      * build; HealthPollsDead counts polls that read all ones, which is a window
      * that has stopped decoding and is deliberately not treated as a fatal-bit
