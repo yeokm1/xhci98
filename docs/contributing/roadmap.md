@@ -1726,6 +1726,41 @@ Tasks, in the audit's revised order:
   the replug delay raised to 15 s, which tests the mechanism. Trace and
   console under `out\post-release\phase20-audio-trace\` on the host that
   ran it.
+  Isolated the trigger on 2026-09-06 evening. The row is the same driver
+  and image throughout; what decides pass from fail is host contention from
+  a second concurrent emulator, not anything the driver does. The audio
+  group run by itself passes both legs, repeatedly and including twice more
+  this evening with the QEMU window forced to the foreground and forced
+  minimized (so the window state is not the trigger); the same group run
+  beside a second QEMU guest fails, whether that guest is actively running
+  its own matrix or merely booted and idle. The 15 s replug delay above
+  refutes the removal-tail timing; a synthetic 91 percent host CPU load
+  alone does not reproduce it. A Codex read of the code (`.claude/
+  phase20-audio-consult-result.txt`) found no driver defect: no reset was
+  refused (the refusal counter prints `RH refusals=00000000` and never
+  moves, and every refusal site prints its first sample), `RH_GetPortStatus`
+  answers the correct `0x0501` for the reported PORTSC, and no Phase 20
+  change touches an executable path that gates a root-port reset. usbport
+  simply never asks for the reset: in the failing trace the hub polls the
+  port five times after the connect change and stops, where the passing
+  trace polls nine times and then issues it. Measuring the guest's own
+  clock, the idle health-poll rate is identical alone and beside an idle
+  second guest (1.43 polls/s, the guest millisecond clock at about 0.73x
+  wall in both), so the cause is transient host scheduling during the
+  replug's sub-second window, not a sustained clock slowdown. One caveat
+  keeps the checkpoint open rather than closing it here: a full `-Target
+  2a-fresh` run by itself, with no second guest, also failed the row, its
+  audio group being the fifth separate guest boot of a near-hour run - so
+  de-pairing the two targets is not by itself a demonstrated qualifying
+  run, and why a long solo run reaches the same host-timing state as a
+  paired one is not established. The driver needs no change on this
+  evidence; the row is a virtual-machine host-timing artifact and a
+  miniport contribution is not supported by any counter or trace. What the
+  checkpoint clause turns on is a harness or procedure decision - run the
+  targets sequentially, or judge the audio replug only when the host is
+  uncontended - which is the owner's to make. Evidence in
+  `out\post-release\phase20-audio-{alone-front,alone-minimized,alone-idle2b,
+  nodisplay,2a-alone}\` and the poll-rate log on the host that ran it.
   The Windows 2000 SMP in-place recovery for 20.2 (F8), on `win2k-smp.img`
   with the new build copied in: the controller was killed from outside the
   guest through QEMU's gdb stub (interrupter 0's `ERSTBA` written to an
