@@ -105,8 +105,6 @@ The devices checked so far, all on the E460 under Windows 98 SE. Each is charact
 | Sound Blaster Play! 3, C-Media USB Audio Device (UAC 1.0) | `041E:324D`, `0D8C:0014` | Full | Enumerate and are named by the wizard. Found the Full-Speed `bMaxPacketSize0` bug. |
 | Sound Blaster X4 (UAC 2.0, `bInterval` 3 and 4) | `041E:3278` | High | Enumerates but does not bind on Windows 98 (one HID devnode at Code 10, no composite parent), so its `bInterval > 1` endpoints were never exercised. |
 
-One known defect is plugging and unplugging a device repeatedly and quickly. Windows 98 at a rate of roughly twice a second sustained can freeze the machine. Ordinary plugging and unplugging is fine.
-
 <img src="images/xhci98-flash-speed-test.jpg" width="800">
 
 ATTO Disk Benchmark on the P14s against the MSSU10-128GSR flash drive trasferring around 18 MB/s read and write from 32 KB transfers upward. The USB 3.0 drive runs at USB 2.0 speed on this driver.
@@ -117,12 +115,10 @@ The important ones. The full list, with how each was measured and the workaround
 
 | Limitation | Detail |
 |---|---|
-| Windows 98: disabling, uninstalling or upgrading the driver crashes the machine | A defect in NUSB's `usbport.sys`, which cannot stop a running controller. Rename `XHCI98.SYS` from an MS-DOS prompt, reboot, then remove it. |
+| Disabling, uninstalling or upgrading an NUSB driver crashes the machine | A defect in NUSB's `usbport.sys`, which cannot stop a running controller. Rename `XHCI98.SYS` from an MS-DOS prompt, reboot, then remove it. |
 | Every device on a root port is reported as High Speed | Reporting the true speed crashes usbport. A mouse or keyboard on a root port therefore polls at 1, 2 or 4 ms only; behind a hub the true speed is reported. |
 | `DisableSelectiveSuspend = 1` is written machine-wide | A suspended xHCI controller cannot see a newly plugged device. An uninstall does not remove the value. |
-| Fast, repeated plug and unplug can freeze Windows 98 | About twice a second sustained; ordinary use is fine. |
-| Standby and resume are unproven | No real standby has been run anywhere; a controller without Force Save Context rebuilds the bus on wake. |
-
+| Fast, repeated plug and unplug can freeze Windows 98 | About twice a second sustained. Ordinary use is fine. |
 
 ## Toolchain and building
 
