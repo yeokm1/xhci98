@@ -9,7 +9,7 @@ each page.
 
 Dates are 2026 unless stated. Task ids are the roadmap's.
 
-Issues 1 to 3 and 5 were fixed before `1.0.0.0`, so none of them is a
+Issues 1 to 3, 5 and 6 were fixed before `1.0.0.0`, so none of them is a
 limitation of the release; those pages are here for the mechanism and for
 how it was found (issue 5's fix is a registry value the release notes list
 as a known limitation because it is machine-wide). Issue 4 was observed on the Windows XP guest on 2026-09-03 and
@@ -26,6 +26,7 @@ there.
 | 3 | [Composite devices need `usbhub.sys`, and an xHCI-only machine never has it](03-usbhub-sys-composite-devices.md) - Code 2 on every multi-function device, blamed on NUSB for two weeks, settled by one file and a laptop that was not in the plan | Fixed |
 | 4 | [A device Windows XP's hub re-creates mid-enumeration is failed by this driver](04-xp-restore-device-ep0-remove.md) - XP re-created a mass-storage device through a second device handle and removed the first one's EP0 last; the driver's REMOVE path unbinds whichever EP0 extension arrives, the live handle is refused for retry, and the progress detector fails the device. Replugging works | Fixed in `1.0.1.0` (task 19.7, closing run `i4b` 2026-09-03: the counter moved to 2 while both devices bound on their first attach; the same night the device matrix on both primary targets and the Windows 98 door sequence read unchanged on the same binary with the counter at 0) |
 | 5 | [A device plugged into an idle Windows 98 controller is seen by nothing, and why the package writes `DisableSelectiveSuspend`](05-idle-suspend-and-disableselectivesuspend.md) - usbport idle-suspends the controller half a second after the bus goes quiet, a halted xHC cannot raise a port event, EHCI's re-armed interrupt has no xHCI equivalent, and the fix is usbport's own registry switch, machine-wide and measured on both Windows 98 stacks (present = 1 stops the idle; absent or 0 does not) | Fixed (task 11-V.6 on the Windows 98 path; `1.0.1.0` on the NT path) |
+| 6 | [A Full-Speed device on a root port bugchecks both targets, and why every root port is reported as High Speed](06-full-speed-root-port-bugcheck.md) - usbport applies the EHCI model and looks up a transaction translator for any non-High-Speed root-port device; `USBPORT_GetTt` turns the root hub's empty TT list into a garbage pointer and the kernel faults on the first insertion, on both shipping builds; the one lever is the USB2 flag, so the driver reports every root port as High Speed and keeps the true speed for its own contexts, at the cost of 1/2/4 ms interrupt bands for Full and Low Speed devices on a root port | Fixed (Phase 5 task 7) |
 
 ## Other issues worth a page
 
@@ -41,12 +42,6 @@ reader.
   driver cannot change that, so a device answering in 16- or 64-byte packets
   on an endpoint declared as 8 dies on the first read. That is why Linux
   starts Full-Speed EP0 at 64. One constant changed.
-- A Full-Speed device on a root port bugchecks both targets. The
-  root hub was reporting correctly; the fault was in usbport's own handling of
-  a Full-Speed device that is a direct child of a 2.0 root hub, a situation no
-  EHCI miniport can produce, so Microsoft's binary had never been exercised on
-  it. Bugcheck forensics from raw parameters, a refuted hypothesis, and a fix
-  with a documented blast radius.
 - The multi-TRB short packet. A passed-through ASIX Ethernet
   adapter enumerated, bound, and never passed traffic: its 16 KB receive was a
   multi-TRB TD, the short packet landed on the first TRB, and QEMU's xHC
