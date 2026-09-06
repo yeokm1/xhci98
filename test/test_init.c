@@ -28540,21 +28540,48 @@ static void test_fatal_after_recovery(void)
              "and the latch stands while the recovery is pending - the poll "
              "does not reopen it, the reinitialization does");
 
-    /* A recovery that refuses BEFORE its HCRST completes (CNR held) leaves
-     * the latch standing: the bits it answered are still set. */
+    /* A recovery that refuses BEFORE its HCRST is written (the halt never
+     * proves HCHalted) leaves the latch standing, and the bit it answered is
+     * still set: nothing has reset the controller. */
+    refuseHalt = 1;
+    fire_async_timer();
+    refuseHalt = 0;
+    CHECK_EQ(ext.RecoveryFailures, 1, "the reinitialization refused at the halt");
+    CHECK_EQ(ext.InitStep, XHCI_INIT_STEP_HALT, "before the HCRST");
+    CHECK_EQ(mmio[HC_OP(XHCI_OP_USBSTS) / 4] & XHCI_USBSTS_HCE, XHCI_USBSTS_HCE,
+             "so HCE is still set - no HCRST was written");
+    CHECK_EQ(ext.RecoveryFailuresConsecutive, 1, "charged to the budget");
+    CHECK_EQ(ext.ControllerFailed, 1, "the controller stays failed");
+    CHECK_EQ(ext.ControllerFatal, 1, "and the fatal latch stays closed");
+
+    /* A recovery that refuses AFTER its HCRST has completed but before the
+     * latch clear: the reset has cleared HCE (the mock's HCRST leaves USBSTS
+     * at HCH, as hardware does) and CNR is held, so the post-reset wait
+     * times out. The latch still stands: it reopens at the clear, not at the
+     * reset. */
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(asyncRequests, 2, "the poll re-arms after the first refusal");
     cnrHeld = 1;
     fire_async_timer();
     cnrHeld = 0;
-    CHECK_EQ(ext.RecoveryFailures, 1, "the reinitialization refused at reset");
+    CHECK_EQ(ext.RecoveryFailures, 2, "the reinitialization refused at reset");
+    CHECK_EQ(ext.InitStep, XHCI_INIT_STEP_RESET, "at the CNR wait");
+    CHECK_EQ(mmio[HC_OP(XHCI_OP_USBSTS) / 4] & XHCI_USBSTS_HCE, 0,
+             "HCRST did land and cleared HCE");
+    CHECK_EQ(ext.RecoveryFailuresConsecutive, 2, "the second failure in a row");
     CHECK_EQ(ext.ControllerFailed, 1, "the controller stays failed");
     CHECK_EQ(ext.ControllerFatal, 1,
-             "and the fatal latch stays closed - it reopens only past HCRST");
+             "and the fatal latch stays closed - it reopens only at the clear "
+             "past HCRST, which this sequence never reached");
 
-    /* The poll arms again within the budget; this time the reset completes. */
+    /* The poll arms again within the budget; this time the sequence
+     * completes. */
     XhciRegPacket.CheckController(&ext);
-    CHECK_EQ(asyncRequests, 2, "the poll re-arms after the refusal");
+    CHECK_EQ(asyncRequests, 3, "the poll re-arms after the second refusal");
     fire_async_timer();
     CHECK_EQ(ext.RecoveryCompletions, 1, "the recovery completed");
+    CHECK_EQ(ext.RecoveryFailuresConsecutive, 0,
+             "and the run of failures ends with it");
     CHECK_EQ(ext.ControllerFailed, 0, "the failed latch is open");
     CHECK_EQ(mmio[HC_OP(XHCI_OP_USBSTS) / 4] & XHCI_USBSTS_HCE, 0,
              "HCRST cleared the bit the fatal latch answered");
@@ -28578,6 +28605,34 @@ static void test_fatal_after_recovery(void)
     XhciRegPacket.CheckController(&ext);
     CHECK_EQ(invalidateCalls, 1,
              "a poll that still sees the bit does not ask a second time");
+
+    /* And a refusal AFTER the clear - at the run, past HCRST and the
+     * capability recheck - leaves the fatal latch open and re-latches
+     * ControllerFailed against the budget: the bit the latch answered is
+     * gone, so a fatal after this refusal would be a new transition. */
+    asyncRequests = 0;
+    XhciRegPacket.ResetController(&ext);
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(asyncRequests, 1, "the poll arms the second recovery");
+    refuseRun = 1;
+    fire_async_timer();
+    refuseRun = 0;
+    CHECK_EQ(ext.RecoveryFailures, 3, "the reinitialization refused at the run");
+    CHECK_EQ(ext.InitStep, XHCI_INIT_STEP_RUN, "past the clear");
+    CHECK_EQ(ext.ControllerFailed, 1, "ControllerFailed is re-latched");
+    CHECK_EQ(ext.RecoveryFailuresConsecutive, 1,
+             "and charged to a new run of failures");
+    CHECK_EQ(mmio[HC_OP(XHCI_OP_USBSTS) / 4] & XHCI_USBSTS_HCE, 0,
+             "HCRST cleared the bit");
+    CHECK_EQ(ext.ControllerFatal, 0,
+             "and the fatal latch is open: it was cleared past HCRST, before "
+             "the step that refused");
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(asyncRequests, 2, "the poll re-arms within the budget");
+    fire_async_timer();
+    CHECK_EQ(ext.RecoveryCompletions, 2, "and the next attempt completes");
+    CHECK_EQ(ext.ControllerFailed, 0, "with the failed latch open");
+    CHECK_EQ(ext.ControllerFatal, 0, "and the fatal latch still open");
 }
 
 /*

@@ -232,15 +232,20 @@ code:
 - **Escalate on the transition, not on every poll.** HCE is read-only and HSE
   is left unacknowledged by the poll: clearing an RW1C bit would destroy the
   one durable record of why the controller failed before the recovery has
-  run. So both stay set while the recovery is pending, and an unlatched poll
-  would queue a reset on every health poll until it ran. The latch
-  (`ControllerFatal`) reopens with `ControllerFailed` inside the
-  reinitialization, once its HCRST has completed and the post-reset
-  capability check has passed and before the steps that can still refuse:
-  that HCRST has cleared the bits the latch answered, so a later report is a
-  new transition. A refusal before the HCRST leaves the latch standing; a
-  refusal after the clear re-latches `ControllerFailed` and is charged to
-  the bounded recovery budget. Left standing after a completed in-place
+  run. So both stay set while the recovery is pending. The latch
+  (`ControllerFatal`) is what stops the polls still admitted before
+  `ResetController` closes admission, and every poll should that call never
+  arrive (the lost-delivery case is F2's), from asking usbport for a reset
+  each time; once `ControllerFailed` is set the poll declines before
+  reading, as the bullet above says. The latch reopens with
+  `ControllerFailed` inside the reinitialization, once its HCRST has
+  completed and the post-reset capability check has passed and before the
+  steps that can still refuse: that HCRST has cleared the bits the latch
+  answered, so a later report is a new transition. A refusal before the
+  HCRST leaves the latch standing; a refusal after the clear on the recovery
+  path (`XhciRecoverController`) re-latches `ControllerFailed` and is charged
+  to the bounded recovery budget, and on the resume path counts a
+  `ResumeFailures` and returns the refusal to usbport. Left standing after a completed in-place
   recovery, the latch silenced every later fatal: on the SMP guest on
   2026-09-06 the first provoked HCE recovered and the next three were never
   escalated (`issues-found.md` F19).

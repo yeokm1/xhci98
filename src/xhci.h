@@ -5345,9 +5345,10 @@ typedef struct _XHCI_EXTENSION {
      * ControllerFatal is set the first time USBSTS reports HCE or HSE and is
      * what makes the escalation a *transition* rather than a repetition: HCE is
      * read-only and HSE is deliberately left unacknowledged - clearing an RW1C
-     * bit would destroy the record on a path that has already decided not to
-     * retry in place - so both stay set, and without this latch every 500 ms
-     * poll would ask usbport to queue another reset.
+     * bit would destroy the record of why the controller failed before the
+     * recovery has run - so both stay set, and without this latch the polls
+     * still admitted before ResetController closes admission (and every poll,
+     * should that call never arrive) would ask usbport to queue another reset.
      *
      * It is distinct from ControllerFailed, which is the *answer*: this says the
      * hardware reported a fatal condition, that says the ladder has ended.

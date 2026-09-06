@@ -586,17 +586,19 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
      * Neither bit is acknowledged here. HSE is RW1C and clearing it would
      * destroy the one durable record of why the controller was failed before
      * the recovery has run; HCE cannot be cleared by software at all. The
-     * transition is what escalates - ControllerFatal latches - so a bit that
-     * stays set while the recovery is pending does not ask usbport to queue a
-     * reset every 500 ms. The latch reopens inside the reinitialization, once
+     * transition is what escalates - ControllerFatal latches - so the polls
+     * still admitted before ResetController closes admission (and every poll,
+     * should that call never arrive) do not ask usbport to queue a reset every
+     * 500 ms; once ControllerFailed is set the poll declines above, before
+     * reading. The latch reopens inside the reinitialization, once
      * its HCRST has completed and the post-reset capability check has passed
      * (XhciInitController clears it with ControllerFailed, before the steps
      * that can still refuse): that HCRST has cleared the bits the latch
      * answered, so a later report is a new transition and escalates again. A
      * refusal before the HCRST leaves the latch standing; one after the clear
-     * re-latches ControllerFailed and is charged to the recovery budget, and
-     * a fresh fatal after it is a new transition. It did not reopen at all
-     * before 2026-09-06.
+     * on the recovery path (XhciRecoverController) re-latches ControllerFailed
+     * and is charged to the recovery budget, and a fresh fatal after it is a
+     * new transition. It did not reopen at all before 2026-09-06.
      */
     if ((usbsts & (XHCI_USBSTS_HCE | XHCI_USBSTS_HSE)) != 0) {
         if (!ext->ControllerFatal) {
