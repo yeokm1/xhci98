@@ -2524,9 +2524,10 @@ the driver reads, and one the installer writes machine-wide on every system.
   of the last transfer, and Windows XP's within about half a minute of a
   start with nothing attached, and a sleeping controller cannot report a
   newly plugged device - so since 1.0.1.0 the install writes it on every
-  system. Whether and when Windows 2000's USB stack puts this controller to
-  sleep has not been measured; there it is the same machine-wide setting,
-  with the same three consequences.
+  system. Windows 2000's own USB stack was not seen putting this controller
+  to sleep at all, with or without the value (measured in a virtual
+  machine); there it is the same machine-wide setting, with the same three
+  consequences.
 
 
 ==============================================================================

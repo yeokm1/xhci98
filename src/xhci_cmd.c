@@ -587,8 +587,12 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
      * one durable record of why the controller was failed, on a path that has
      * already decided not to retry in place; HCE cannot be cleared by software
      * at all. The transition is what escalates - ControllerFatal latches - so a
-     * bit that stays set for the life of the driver does not ask usbport to
-     * queue a reset every 500 ms.
+     * bit that stays set for the life of the failed controller does not ask
+     * usbport to queue a reset every 500 ms. The latch reopens when a
+     * reinitialization completes (XhciInitController clears it with
+     * ControllerFailed), because the HCRST it passed has cleared the bits the
+     * latch answered; a second fatal after a completed in-place recovery is a
+     * new transition and escalates again. It did not before 2026-09-06.
      */
     if ((usbsts & (XHCI_USBSTS_HCE | XHCI_USBSTS_HSE)) != 0) {
         if (!ext->ControllerFatal) {

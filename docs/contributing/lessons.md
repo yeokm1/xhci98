@@ -2324,6 +2324,15 @@ Refresh, and `CheckCallbacks` climbing continuously instead of freezing. So
 the defect is fixed by one `AddReg` line, on the Windows 98 path only, with
 no driver code at all.
 
+Postscript, 2026-09-06 (`issues-found.md` F18): Windows 2000 SP4's own stack
+never idles this controller, value or no value (measured in the VM on both
+HALs, `build-and-test.md`), and the same string pass explains why: the idle
+request comes from the hub driver, SP4's `usbhub.sys` carries no
+selective-suspend string, and the hub driver NUSB puts above this usbport,
+`usbhub20.sys` 5.00.2195.6891, does. The "never idles" sentence this project
+carried for weeks was right for the wrong reason, and stayed unmeasured
+because it happened to agree with every run.
+
 ### Rules
 
 - "How do I recover from state X" and "can I avoid state X" are different

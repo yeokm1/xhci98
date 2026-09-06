@@ -352,9 +352,10 @@ Windows 2000 SP4
 7.4 is written by the NT install path since 1.0.1.0; until then it was
 absent by design. Windows XP's `usbport` was measured idling this controller
 within about thirty seconds of a start with nothing attached (2026-09-03),
-and a halted xHC cannot report a hot-plug; whether and when Windows 2000's
-`usbport` idles it has not been measured, so this test asserts the value's
-presence and nothing about its effect on this target. (`src/xhci98.inf`:
+and a halted xHC cannot report a hot-plug; Windows 2000 SP4's `usbport` was
+not seen idling it with the value deleted (2026-09-06, a virtual-machine
+reading), so this test asserts the value's presence and nothing about its
+effect on this target. (`src/xhci98.inf`:
 `[Xhci.Dev.NTx86]` carries `Xhci.AddReg.Global`, and the comment block below
 it says why.)
 

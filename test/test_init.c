@@ -28500,6 +28500,71 @@ static void test_registered_unexercised_callbacks(void)
 }
 
 /*
+ * A fatal status after a completed in-place recovery escalates again.
+ *
+ * Measured on the SMP guest on 2026-09-06 (roadmap task 20.7): the first HCE
+ * provoked from outside the guest recovered cleanly, and the next three were
+ * never escalated - ControllerFatal, the transition latch, was set once and
+ * nothing reopened it, although HCRST had cleared the bit it answered. The
+ * controller would have stayed dead until a reboot, the state the recovery
+ * exists to close. The reinitialization now clears the latch with
+ * ControllerFailed.
+ */
+static void test_fatal_after_recovery(void)
+{
+    ULONG fatalBefore;
+
+    hc_build();
+    CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a healthy start)");
+    XhciRegPacket.EnableInterrupts(&ext);
+    hw_events_reset();
+    isr_start();
+    invalidateCalls = 0;
+    fatalBefore = ext.FatalStatusDetected;
+
+    /* The first fatal report, as the health poll sees it. */
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_HCE;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(ext.FatalStatusDetected, fatalBefore + 1, "HCE escalates");
+    CHECK_EQ(invalidateCalls, 1, "and asks usbport for a reset");
+    CHECK_EQ(ext.ControllerFatal, 1, "the transition latch closes");
+
+    /* usbport answers with ResetController, the poll arms the recovery, and
+     * the callback reinitializes through HCRST, which clears HCE. */
+    asyncCallback = NULL;
+    asyncRequests = 0;
+    XhciRegPacket.ResetController(&ext);
+    CHECK_EQ(ext.ControllerFailed, 1, "the controller is latched failed");
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(asyncRequests, 1, "the poll arms the recovery");
+    fire_async_timer();
+    CHECK_EQ(ext.RecoveryCompletions, 1, "the recovery completed");
+    CHECK_EQ(ext.ControllerFailed, 0, "the failed latch is open");
+    CHECK_EQ(mmio[HC_OP(XHCI_OP_USBSTS) / 4] & XHCI_USBSTS_HCE, 0,
+             "HCRST cleared the bit the fatal latch answered");
+    CHECK_EQ(ext.ControllerFatal, 0,
+             "so the fatal latch is open too - the next report is a new "
+             "transition, not a repetition of the one already answered");
+
+    /* A clean poll in between is not a fault. */
+    invalidateCalls = 0;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(invalidateCalls, 0,
+             "a clean USBSTS after the recovery is not escalated");
+
+    /* The second fatal, after the recovery: escalated again. */
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_HCE;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(ext.FatalStatusDetected, fatalBefore + 2,
+             "a second HCE after a completed recovery is detected");
+    CHECK_EQ(invalidateCalls, 1, "and asks usbport for a reset again");
+    CHECK_EQ(ext.ControllerFatal, 1, "and the latch closes again, once");
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(invalidateCalls, 1,
+             "a poll that still sees the bit does not ask a second time");
+}
+
+/*
  * **The 2026-09-05 audit's F2: a lost delivery is aged out, a late callback is
  * declined, and repeated loss is bounded.** `UsbPortRequestAsyncCallback`
  * answers 0 on its own pool-allocation failure as well as on success, so an
@@ -28744,6 +28809,7 @@ int main(void)
     test_reset_controller();
     test_recovery_delivery_loss();
     test_controller_recovery();
+    test_fatal_after_recovery();
     test_bad_signature_bodies();
     test_registered_start_stop();
     test_registered_callbacks();

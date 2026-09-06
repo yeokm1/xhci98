@@ -985,13 +985,41 @@ set) and the driver's reinitialize path is what runs instead; one 2a boot read
 4, one per pre-hub resume, with all ten hot-plug stages landing. So on a run
 with traffic, the evidence that nothing was lost is that every stage landed,
 and the counter only says how many idle windows there were. On 2b it has read
-0 in every matrix run recorded so far. That is a reading, not a rule: whether
-and under what conditions Windows 2000's native usbport idles this controller
-has not been measured, the "never" this sentence used to state was
-generalised from the Phase 3 spike's window, and the owner's checks of
-2026-09-05 contradict it (`issues-found.md` F18). A Windows 2000 SP4 VM idle
-observation, with the `SuspendController` count and its conditions (nothing
-attached against a device attached, time from start), is owed here.
+0 in every matrix run recorded so far, and the "never" this sentence used to
+state was generalised from the Phase 3 spike's window (`issues-found.md`
+F18). The observation was taken on 2026-09-06 (roadmap task 20.7), in the
+virtual machine, and it reads the same way on both HALs:
+
+- Fresh SP4 (`fresh-2b.img`, Standard PC HAL, booted under `-snapshot`),
+  the package's `DisableSelectiveSuspend = 1` present, nothing attached:
+  `SuspendCount` 0 from start through eight minutes (about 1,000 health
+  polls). Then the value deleted in regedit and the controller disabled and
+  re-enabled in Device Manager, which removes and re-adds it (a second
+  `DriverEntry` and `StartController` on the debug console), so usbport
+  re-read the registry with the value gone; a restart could not be used,
+  because this HAL halts on a guest restart, even after a monitor
+  `system_reset` (the CPU sits at `2000:0d4f` in NTLDR). Nothing attached:
+  `SuspendCount` 0 for seven minutes (about 700 polls). A `usb-mouse`
+  hot-plugged at root port 1 then bound at once (addressed 1, endpoints
+  opened 1) and `SuspendCount` stayed 0 for another five and a half minutes.
+- The SMP guest (`win2k-smp.img`, ACPI Multiprocessor HAL, Driver Verifier
+  on), whose driver key predates the NT-path `AddReg` and whose SYSTEM hive
+  carries neither `DisableSelectiveSuspend` name (checked offline by string
+  search): across three boots and about fifty minutes the same day, a mouse
+  attached nearly throughout, `SuspendController` arrived only at each
+  shutdown.
+
+Why it differs from Windows 98 and XP is a static reading, string-level,
+recorded in `legal-provenance.md` section 4: the idle request originates in
+the hub driver, and SP4's native `usbhub.sys` (5.00.2195.6689) carries no
+selective-suspend string at all, while the hub driver that serves usbport's
+root hub under NUSB, `usbhub20.sys` (5.00.2195.6891, a post-SP4 Windows 2000
+build), carries `DisableSelectiveSuspend` and `SelectiveSuspend`, and both
+usbport builds (SP4's 5.00.2195.6681 and NUSB 3.6's 5.00.2195.5652) carry
+the three registry names. So on SP4 there is nothing above usbport to ask
+for the idle, and the value is inert there; it stays in the package because
+the NT path also serves XP, whose stack does idle. That is the reading, and
+it is a VM reading: no Windows 2000 has run on metal in this project.
 
 This is fixed (roadmap task 11-V.6, and `docs/using/release-notes.md`,
 the `DisableSelectiveSuspend` entry under "Known limitations", which

@@ -249,7 +249,8 @@ because a user meets them through this driver.
   setting, on both targets, because a sleeping xHCI controller cannot report
   a newly plugged device and Windows 98 otherwise idles it within a second
   (Windows XP within about half a minute of a start with nothing attached;
-  whether and when Windows 2000 idles it has not been measured). It also
+  Windows 2000 SP4's own stack was never seen idling it, with or without
+  the value, measured in a virtual machine on 2026-09-06). It also
   stops any other USB controller
   idling, it slightly raises power draw, and an uninstall does not remove
   it; delete the value by hand if you want the previous behaviour back.
@@ -264,7 +265,12 @@ because a user meets them through this driver.
   `XHCIQUAL xhci --probe-only`), waking from standby rebuilds the USB bus
   instead of restoring it: every device is dropped and found again, slower
   and visible but with nothing lost. The counter is `SavesDeclinedNoFsc`.
-  A real standby and wake has not been run anywhere.
+  A real standby and wake has not been run anywhere, and the other half
+  of the same path is unobserved too: on a controller whose restore does
+  succeed, the driver now restores the interrupt moderation it saved
+  rather than leaving it at zero, and that has been read only through a
+  host model, because the virtual machines fail every restore and rebuild
+  the bus instead.
 - Windows 98 shows no driver version on the Driver tab, only the file date;
   the four-part version is under *Driver File Details*. USB Audio on Windows
   98 is uneven with the emulated device in the virtual machine: on a freshly

@@ -4548,6 +4548,17 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
 
         XhciControllerLockAcquire(&failedIrql);
         ext->ControllerFailed = 0;
+        /*
+         * And the health poll's transition latch, in the same breath. The
+         * HCRST this sequence passed has cleared the HCE or HSE the latch
+         * answered, so the next fatal report is a new transition and must
+         * escalate again. Left standing, it did not: on the SMP guest on
+         * 2026-09-06 (roadmap task 20.7) the first HCE provoked from outside
+         * the guest recovered cleanly and the next three were never
+         * escalated, which is the dead-until-reboot state this recovery
+         * exists to close.
+         */
+        ext->ControllerFatal = 0;
         XhciControllerLockRelease(failedIrql);
     }
 

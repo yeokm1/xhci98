@@ -284,6 +284,22 @@ became measured: `RecoveryAttempts`, `RecoveryFailures`,
 readable from a release build, so "the controller would not come back, and it
 refused at step N" is a finding rather than a silence.
 
+One more thing has to reopen for the bound to hold across recoveries: the
+health poll's transition latch, `ControllerFatal`, which makes an HCE or HSE
+escalate once rather than on every 500 ms poll. It was written before this
+recovery existed, when a fatal bit really did stay set for the life of the
+driver, and nothing reopened it. The HCRST this recovery passes clears both
+bits, so after one completed recovery a second fatal was a repetition to the
+latch and was never escalated: the controller was dead until reboot, the
+state section 1 describes, one recovery later. Measured on the Windows 2000
+SMP guest on 2026-09-06 with an HCE provoked from outside the guest (the
+interrupter's ERSTBA written to an unmapped address through QEMU's gdb
+stub): the first recovered cleanly, the next three set HCE with
+`ResetControllerCalls` still 1. `XhciInitController` now clears the fatal
+latch with `ControllerFailed`, `test_fatal_after_recovery` pins it, and the
+same four provocations on the corrected build read four recoveries
+completed, none refused (`issues-found.md` F19).
+
 ## 8. The known window, recorded rather than closed
 
 The recovery runs from a DPC holding no usbport lock, so on SMP Windows 2000

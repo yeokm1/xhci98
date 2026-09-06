@@ -1529,8 +1529,13 @@ when the cut opens: the phase carries driver code changes, so the third
 field moves (`1.0.2.0` on the numbering Phase 19 states) unless the owner
 folds it into a larger release. `issues-found.md` is the record of what was
 found and why; this entry is the order of work. Cite findings by their IDs
-(F1-F18, D1-D6), not by line: the document's line numbers into the tree
-refer to `6f356a9` and stop matching as the fixes land.
+(F1-F19, D1-D6), not by line: the document's line numbers into the tree
+refer to `6f356a9` and stop matching as the fixes land. On 2026-09-06 the
+20.7 guest readings were taken with the owner at the console, and the SMP
+recovery reading found one more driver defect, F19: the health poll's fatal
+latch was never reopened after a completed in-place recovery, so a second
+fatal was never escalated. It was fixed the same day with its vector, and
+the readings that follow it were taken on the fixed build.
 
 Why a phase: the findings cross every layer, from endpoint ownership in
 `xhci_slot.c` to the readme template, and several of them interact (F3 and
@@ -1590,10 +1595,11 @@ Tasks, in the audit's revised order:
   `ControllerFailed` is set (not `PollClockMs`). Vectors: one lost delivery,
   eventual delivery, a late callback from an expired request, repeated loss
   to the terminal state, suspend and restart between arming and delivery.
-- [x] 20.4 the shipped statements (F6, F7, F18, D1), except the Windows 2000
-  SP4 VM idle observation, which no session has taken yet; it is recorded as
-  owed in `build-and-test.md` and every rewritten site says "unmeasured"
-  rather than asserting either way. As written: the `LICENSE` scope
+- [x] 20.4 the shipped statements (F6, F7, F18, D1). The Windows 2000 SP4
+  VM idle observation was taken on 2026-09-06 under 20.7 (SP4's stack never
+  idled the controller, with or without the value, on either HAL; its hub
+  driver carries no selective-suspend request) and every site that said
+  "unmeasured" now states it. As written: the `LICENSE` scope
   paragraph rewritten as history in `legal-provenance.md` section 5's form;
   the `make-release.ps1` readme template ("WINDOWS 98 ONLY", "redistributes
   nothing of Microsoft's", the stale table of contents, the 0.x sentence,
@@ -1649,12 +1655,66 @@ Tasks, in the audit's revised order:
   `docs/README.md`'s phase-reading table carried to Phases 17-20, the
   design-record and ABI-document rows, and the stale comments and IRQL tags
   in D4. Cut directories and dated evidence untouched.
-- [ ] 20.7 the gates and the readings. The host half was taken on 2026-09-05
-  after 20.6 (`build-driver.cmd all` with every self-test, the qualifier's
-  host tests, the matrix self-test, all green); the guest half - the
-  post-release matrix on both fresh clones, the Windows 2000 SMP recovery,
-  the XP lifecycle sequence, and a successful-restore reading for the IMOD
-  change - has not been taken and is what keeps this task open. As written:
+- [x] 20.7 the gates and the readings, the guest half taken on 2026-09-06
+  with the owner driving every guest GUI and the harness driving the
+  monitor. The environments: QEMU 11.0.0, TCG for the fresh clones and the
+  XP guest under WHPX, the SMP guest under WHPX with two CPUs and Driver
+  Verifier listing `xhci98.sys` (the owner's `verifier /querysettings`).
+  The binary the readings stand on is the qemu flavour built 11:10:51,
+  sha256 `b75f48eeb9f29ff8`, from this tree with the F19 fix in and only
+  comments differing from the commit; a first pass on the pre-F19 build
+  (`e888718098f6983b`) read the same on every row. In the audit's order:
+  the post-release matrix on fresh clones of `win98.img @ post-nusb` and
+  `win2k-xonly.img @ win2k-xonly-clean-install`, the package installed by
+  the owner in each and the Windows 98 image taught fourteen classes at
+  root port 2 (the two tablets left out as in run 19), both stamped
+  `base-1.0.1.0-qemu` since the version is not yet named. `2b-fresh` PASS,
+  17 rows, 6 NODRIVER expected, 0 against, 1:16:32, the report identical to
+  Phase 19's outside the seven refusal-counter expectations 20.0 added to
+  each row. `2a-fresh` FAIL, 17 rows, 5 NODRIVER expected, 3 not reached,
+  1 against, 0:57:44, and the one row is the `usb-audio/fs` replug: the
+  second arrival's connect change was announced to usbport three times and
+  usbport never issued the port reset, so the device was never addressed
+  (+0 on the three advance expectations, no prompt on screen). That is
+  Phase 16's reading of the row the release notes carry as the USB Audio
+  limitation, one leg short of Phase 19's PASS; it read the same on both
+  binaries, and the audio group run alone on the same image afterwards
+  passed both legs in 4:57. So the Windows 98 report is equal to Phase 16
+  and one row behind Phase 19, and the checkpoint's "no worse than the
+  Phase 19 reports" clause is the owner's to weigh at the cut; nothing in
+  the row is this driver's. Reports in `docs/contributing/runs/run-20-post-release/`.
+  The Windows 2000 SMP in-place recovery for 20.2 (F8), on `win2k-smp.img`
+  with the new build copied in: the controller was killed from outside the
+  guest through QEMU's gdb stub (interrupter 0's `ERSTBA` written to an
+  unmapped address, which makes QEMU's model set `USBSTS.HCE`; the method
+  was verified on a throwaway instance first), with a monitor-pumped mouse
+  and a bulk-only disk behind a Full-Speed hub attached. On the pre-F19
+  build: one recovery (attempt 1, completion 1, every device
+  re-enumerated, the guest healthy) and then three further HCEs never
+  escalated, which is F19. On the fixed build, four provocations: fatal
+  status detected 4, resets requested 4, recovery attempts 4, completions
+  4, refusals 0, the devices re-enumerated each time with mouse traffic
+  resuming, and `EP0 removes on a superseded handle` climbing three to six
+  per recovery as Windows 2000 re-created each device through a new handle,
+  which exercised F1's path on two CPUs under Verifier; no bugcheck. The
+  XP restore and lifecycle sequence for 20.2 (F1), on `winxp.img` reverted
+  to `winxp-clean-install` (the previous state kept as
+  `pre-phase20-xp-2026-09-06`) and the new package installed by Have Disk:
+  `usb-storage` first-ever attach reproduced issue 4's two-handle restore
+  (slots reset to Default 1, the superseded-handle counter 1) and bound
+  (bulk pair open, 385 transfers); `usb-audio` first-ever attach the same
+  (reset 2, counter 2, the isochronous endpoint opened); then disable,
+  enable, uninstall and scan for hardware changes: three `StartController`
+  and two `StopController` across three extensions, both devices rebound
+  on the last with every refusal counter at zero. The successful-restore
+  reading for 20.5's IMOD change is the host model's (`test_init`); QEMU
+  fails every restore, so no VM can supply the hardware reading and the
+  release notes' Force Save Context limitation says it is owed. The
+  Windows 2000 SP4 idle observation owed since 20.4 was taken as well
+  (F18, `build-and-test.md`): SP4's stack never idled the controller with
+  the value present or deleted, nothing attached or a mouse attached, on
+  the Standard PC and the ACPI HALs, and the string-level reason is
+  recorded in `legal-provenance.md` section 4. As written:
   `build-driver.cmd all` with every
   self-test, `xhciqual\test\run-host-tests.cmd`, `vm-matrix\selftest.ps1`;
   `run-matrix.ps1 -PostRelease` on fresh 2a and 2b clones against the
@@ -1679,11 +1739,12 @@ recovery and XP lifecycle readings taken for 20.2; and the new version cut
 with a `history.md` entry. Not a checkpoint: any Windows 98 metal reading
 standing in for Windows 2000, or a host test standing in for a guest.
 
-Records: `issues-found.md` (the audit and its review history);
-`scripts/vm-matrix/selftest.ps1`, `scripts/package/test-package.ps1`,
-`scripts/inf-gate/test-inf-checks.ps1` and `test/test_init.c` (the
-regression vectors); design records 05, 06 and 07; `build-and-test.md`;
-`releases/history.md`.
+Records: `issues-found.md` (the audit, its review history, and the
+disposition of every finding); `scripts/vm-matrix/selftest.ps1`,
+`scripts/package/test-package.ps1`, `scripts/inf-gate/test-inf-checks.ps1`
+and `test/test_init.c` (the regression vectors); design records 05, 06 and
+07; `build-and-test.md`; `docs/contributing/runs/run-20-post-release/` (the
+20.7 matrix reports); `releases/history.md`.
 
 ## Post-Release - Run the Acceptance Test by Hand
 

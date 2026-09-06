@@ -233,7 +233,13 @@ code:
   is left unacknowledged: clearing an RW1C bit would destroy the one durable
   record of why the controller failed, on a path that has already decided not
   to retry in place. So both stay set, and an unlatched poll would queue a
-  reset on every health poll for the life of the driver.
+  reset on every health poll for the life of the failed controller. The
+  latch (`ControllerFatal`) reopens with `ControllerFailed` when a
+  reinitialization completes, because the HCRST it passed has cleared the
+  bits the latch answered, so a later report is a new transition. Left
+  standing after a completed in-place recovery, it silenced every later
+  fatal: on the SMP guest on 2026-09-06 the first provoked HCE recovered and
+  the next three were never escalated (`issues-found.md` F19).
 - **An all-ones USBSTS is not a fatal-bit report.** It is a window that has
   stopped decoding, and HCE and HSE are two of the thirty-two bits it answers
   with. The same operand rule applies to the interrupt masks; here the cost of

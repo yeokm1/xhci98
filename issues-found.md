@@ -1161,3 +1161,69 @@ and were left in place.
    cover that target.
 
 Do not recut or advance a checkpoint merely because the host tests pass.
+
+## Disposition - 2026-09-06
+
+Written on branch `phase-20` after the fix pass of 2026-09-05 (commits
+`72f3abd..c436e81`, one per roadmap task 20.0-20.6), the Codex review loop
+over those fixes (`0213d7a` round 1, eight findings applied; `0a3e6d4`
+round 2, three applied; round 3 returned NONE) and the owner's F2 policy
+confirmation (`59c0f5c`, documentation only). The findings above are left as
+written; this section records what became of each. "Host-verified" means a
+`test_init.c` or script vector on the Windows host, "self-tested" a
+script's own self-test, and "guest" a reading in a target VM. The 20.7
+guest readings and the 20.8 cut are recorded here as they stood when this
+section was written; the cut's `history.md` entry is the record of the
+version they ship in.
+
+| Finding | Disposition | Commit(s) | What remains |
+| --- | --- | --- | --- |
+| F1 | Fixed, host-verified: superseded means bound to a different non-`NULL` extension, validated under the controller lock at every endpoint callback entry; a superseded `PAUSED` is admitted while that handle still owns queued work and its later `ACTIVE` declined; three counters added | `0b826a8`, refined in `0213d7a` and `0a3e6d4` | Nothing: the XP restore and lifecycle sequence was taken on 2026-09-06 under 20.7 (the roadmap entry has the counters) |
+| F2 | Fixed, host-verified, by the bounded age-out: twenty health polls (`XHCI_RECOVERY_DELIVERY_POLLS`), a delivery generation that invalidates late callbacks, the loss charged to `RecoveryFailuresConsecutive` only while the latch stands, an arming the latch no longer needs retired uncharged; four fields added. Policy confirmed by the owner on 2026-09-06 after comparison with Linux, Microsoft's own miniports and UCX; the terminal residual is closed as an option | `a8322e9`, suspend vector corrected in `0213d7a`, `59c0f5c` | Nothing |
+| F3, F9, F11 | Fixed, self-tested: refusal evidence outranks `PASS` and the `NODRIVER` inference, the refusal reason is in the verdict, the open and configure failure counters carry `zero` expectations, an all-`EXCLUDED` target reads `FAIL`; a true never-claimed `NODRIVER` is retained | `72f3abd` | Nothing: the post-release matrix was run on 2026-09-06 under 20.7, `docs/contributing/runs/run-20-post-release/` |
+| F4 | Fixed, self-tested: the upload tree and the ZIP are checked against the whole canonical `releases\` root; a `-ReleasesDir` override no longer bypasses it | `1cd0b0f`, canonical root in `0213d7a` | Nothing |
+| F5, F17 | Fixed, self-tested: `XHCISNAP` tracks `ferror` and `fclose`, reports an incomplete report with exit code 3, carries the extension-size mismatch into the summary, and has deterministic write-failure and close-failure injection (`-selftest-report`, `xhcisnap\selftest.cmd`) | `c436e81`, exit codes and the `fopen` failure in `0213d7a` | Nothing; `XHCISNAP.EXE` is a build output and the next cut rebuilds it |
+| F6 | Fixed: the `LICENSE` scope paragraph rewritten as history in the form of `legal-provenance.md` section 5 | `42e54a1` | Reaches the download at the next cut |
+| F7 | Fixed, self-tested: the readme template corrected and a packager self-test that greps the rendered readme for the two forbidden phrases | `42e54a1` | Reaches the download at the next cut |
+| F8 | Fixed, host-verified: `XhciSlotInit` resets the device table under one lock hold and never writes `DeferredBusy`; the active drainer's ownership survives its unlocked interval; an interleaving vector pins it | `0b826a8` | Nothing: the SMP in-place recovery was provoked four times on 2026-09-06 under 20.7, and found F19 on the way |
+| F10 | Fixed, host-model verified: `xhciRestoreState` restores the saved IMOD (`SavedImod`) rather than writing zero; a `test_init` vector reads it back through a successful-restore model; the three IMOD statements agree | `c436e81` | A successful-restore reading on a controller whose CRS succeeds; QEMU fails every restore and falls back to reinitialisation, so neither target VM can supply it (20.7). Recorded as owed in `release-notes.md`'s Force Save Context limitation |
+| F12 | Fixed, host-verified, by the in-place No Op Command rewrite (type 23, `XhciRingNoOpAtType`, `CommandNoOpRewrittenPA`) for a first abandonment, and the divergence reset for a second abandonment while the first rewrite is unanswered; the marker survives ring rebuilds | `c436e81`, marker lifetime and second abandonment in `0213d7a` | Nothing host-side; the hardware trigger stays unobserved |
+| F13 | Fixed, host-verified: `XHCI_USBLEGCTLSTS_SMI_ENABLES` is the five enable bits and the RsvdP fields are preserved (`0xE011` and the `RSVDP` mask) | `c436e81` | Nothing |
+| F14 | Fixed, self-tested: `PATH-W98` mirrors `PATH-NT`'s own-`CopyFiles` check, with the self-test that refuses the audit's scratch INF | `1cd0b0f` | Nothing |
+| F15 | Fixed, self-tested: `-UploadSetOnly` assembles the current cut's asset from its tracked directory alone, the `pkg-` hash check is retired, and an older cut is refused with a message that says the gate's rules have moved | `1cd0b0f` | Nothing |
+| F16 | Fixed: the EHCI cleanup masks the RW1C status bits; the qualifier's host tests pass | `c436e81` | No DOS run was made |
+| F18 | Every active site qualified to "unmeasured" (INF comment, readme template, release notes, acceptance test, both gate comments, `xhci_dispatch.c`, `xhci.h`, the invariants, `build-and-test.md`); dated entries and `history.md` carry a dated qualification | `42e54a1`; the observation and the derivation in the commit that follows the readings | Nothing: taken on 2026-09-06 under 20.7. SP4's stack never idled the controller, value present or deleted, nothing attached or a mouse attached, Standard PC and ACPI HALs; SP4's `usbhub.sys` carries no selective-suspend string while NUSB's `usbhub20.sys` does (`build-and-test.md`, `legal-provenance.md` section 4) |
+| D1 | Fixed: the roadmap's post-upload paragraph defers to `releases/README.md`'s uploaded rule | `42e54a1` | Nothing |
+| D2, D3 | Fixed from implementation behaviour | `1cd0b0f`, `c436e81` | Nothing |
+| D4 | Fixed: the stale comments and drifted IRQL tags | `a8322e9`, `c436e81` | Nothing |
+| D5 | Fixed except the optional status clarification: the roadmap's Phase 20 status and design record 10 say `1.0.2.0` on Phase 19's numbering while the branch is named `1.1.0.0`; the owner settles it when naming the version | `c436e81` | The version name (20.8) |
+| D6 | Fixed, including the `AbortTransfer` row as revised by the third check | `c436e81` | Nothing |
+
+| F19 | New, from the 20.7 readings on 2026-09-06: `ControllerFatal`, the health poll's transition latch, was set on the first HCE or HSE and never reopened, although the in-place recovery's HCRST clears both bits. After one completed recovery a second fatal was never escalated and the controller stayed dead until reboot. Seen on the Windows 2000 SMP guest: an HCE provoked from outside the guest (the interrupter's ERSTBA pointed at an unmapped address through QEMU's gdb stub) recovered cleanly once, and the next three provocations set HCE with `ResetControllerCalls` still 1. Fixed: `XhciInitController` clears the fatal latch with `ControllerFailed`; `test_fatal_after_recovery` fails four ways on the old code | the commit that follows the readings | Nothing: four provocations on the fixed build read four recoveries completed, none refused (20.7) |
+
+Smaller code and script items: done in `c436e81` (with the Transfer Event
+RsvdZ low-bits row taking one shared mask in `xhci_xfer.c`, applied once at
+function entry after round 2, counted per queue and folded), except four,
+each left by the audit's own rule that an item is promoted to a fix only
+once its failure is reproduced, and each recorded with its reason in the
+roadmap's 20.6 note: the `PSModulePath` guard (not reproduced from a
+PowerShell 7 parent); the import-allowlist duplicate-row matching (latent,
+no row needs it); the multi-timer async mock (the one vector that needed two
+pending callbacks, F2's suspend case, captures its recovery callback
+explicitly instead); and the addressed-`FAILED`-record EP0 reopen (a
+behaviour change on a path no run has exercised; test the failed-record
+reopen first).
+
+Three counters (F1), four recovery fields (F2), one counter and one
+per-queue field (F12 and the RsvdZ mask) were added; `offsets.txt` was
+regenerated each time and its `SIZEOF` moved from 90928 to 91612. Every
+recorded run's `SIZEOF 90928` header is dated evidence and was left alone.
+
+Gates as of `0a3e6d4`, unchanged by `59c0f5c`: `build-driver.cmd all`
+(debug, release, qemu; the import gate on each; the INF gate; INF-gate
+self-tests 312, packager 179, launcher 116, matrix 230, xhcisnap 4 cases;
+the host suites with `test_init` above 12,400 checks),
+`xhciqual\test\run-host-tests.cmd` 146, `run-matrix.ps1 -ValidateOnly` 17
+rows against 391 counters. All green. The 20.7 guest readings were taken
+later the same day and the table's last column says so; the roadmap's
+Phase 20 entry (task 20.7) is their record, and no hardware run was made.

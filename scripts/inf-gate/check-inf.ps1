@@ -1185,10 +1185,11 @@ foreach ($m in $models) {
 # and two of them idle-suspend the controller without it: Windows 98's within
 # half a second of the last transfer, Windows XP's within thirty seconds of a
 # start with nothing attached; a halted xHC cannot report a port change, so a
-# device plugged in afterwards is invisible until Refresh. Whether and when
-# Windows 2000's native build idles this controller has not been measured
-# (the "never" this comment used to state was generalised from the Phase 3
-# spike's window; issues-found.md F18). Until 1.0.1.0 the NT path omitted the
+# device plugged in afterwards is invisible until Refresh. Windows 2000
+# SP4's native build was not seen idling this controller at all, with or
+# without the value (2026-09-06, a VM reading; its hub driver carries no
+# selective-suspend request; issues-found.md F18), so the value is inert
+# there and the NT path writes it for XP's sake. Until 1.0.1.0 the NT path omitted the
 # value on that assumption and the self-tests pinned the omission; the XP
 # reading of 2026-09-03 made it an NT-path need, so now every route must
 # write it.
