@@ -1577,16 +1577,19 @@ Tasks, in the audit's revised order:
 - [x] 20.3 recovery delivery loss (F2): the policy taken on 2026-09-05 is the
   bounded age-out (twenty health polls, a delivery generation, the loss
   charged to the consecutive count, an arming the latch no longer needs
-  retired uncharged); the owner may still choose the terminal residual
-  instead. As written when the phase opened: the owner's policy, either a
-  documented terminal residual with the "costs one attempt, bounded by the
-  cap" claim removed from `xhciArmRecovery`'s comment and design record 07
-  section 7, or a bounded age-out with a distinct delivery generation that
-  invalidates late callbacks and cannot start two recoveries, aged by a
-  clock that still advances while `ControllerFailed` is set (not
-  `PollClockMs`). Vectors: one lost delivery, eventual delivery, a late
-  callback from an expired request, repeated loss to the terminal state,
-  suspend and restart between arming and delivery.
+  retired uncharged); confirmed by the owner on 2026-09-06 after a
+  comparison with what Linux, Microsoft's own usbport miniports and UCX do
+  (none has the lost-delivery class; the bounded retry is the closest
+  analogue to UCX's bounded controller reset), so the terminal residual is
+  closed as an option. As written when the phase opened: the owner's
+  policy, either a documented terminal residual with the "costs one
+  attempt, bounded by the cap" claim removed from `xhciArmRecovery`'s
+  comment and design record 07 section 7, or a bounded age-out with a
+  distinct delivery generation that invalidates late callbacks and cannot
+  start two recoveries, aged by a clock that still advances while
+  `ControllerFailed` is set (not `PollClockMs`). Vectors: one lost delivery,
+  eventual delivery, a late callback from an expired request, repeated loss
+  to the terminal state, suspend and restart between arming and delivery.
 - [x] 20.4 the shipped statements (F6, F7, F18, D1), except the Windows 2000
   SP4 VM idle observation, which no session has taken yet; it is recorded as
   owed in `build-and-test.md` and every rewritten site says "unmeasured"
