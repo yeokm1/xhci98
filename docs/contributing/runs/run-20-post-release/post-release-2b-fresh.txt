@@ -3,7 +3,7 @@
 # image:     vm\fresh-2b.img, stamp base-1.0.1.0-qemu, from win2k-xonly.img win2k-xonly-clean-install
 # qemu:      11.0.0 (v11.0.0-12122-ga4bb4b10c9), accel tcg
 # offsets:   SIZEOF 91612, 391 counters
-# started:   2026-09-06 11:18:30, elapsed 1:16:32
+# started:   2026-09-07 00:27:01, elapsed 1:16:08
 # verdict:   2b-fresh PASS, 17 rows, 6 NODRIVER expected, 0 not reached
 #
 # Outcomes: PASS FAIL NODRIVER INERT ERROR EXCLUDED - see docs/contributing/design/06-device-matrix-verdict.md
@@ -11,6 +11,46 @@
 # A row name ending in '/replug' is the same device attached a second time - design record 09 section 5.
 #
 TARGET ROW                          OUTCOME   EXPECTATION                                                    READING
+2b-fresh usb-audio/fs                 PASS      advance devices addressed                                      +1
+2b-fresh usb-audio/fs                 PASS      advance slots enabled                                          +1
+2b-fresh usb-audio/fs                 PASS      zero fatal controller status                                   0
+2b-fresh usb-audio/fs                 PASS      zero transfer events for no open endpoint                      0
+2b-fresh usb-audio/fs                 PASS      zero endpoint opens refused - unusable buffer                  0
+2b-fresh usb-audio/fs                 PASS      zero endpoint opens refused - malformed call                   0
+2b-fresh usb-audio/fs                 PASS      zero interrupt mask failures                                   0
+2b-fresh usb-audio/fs                 PASS      zero commands the engine gave up on                            0
+2b-fresh usb-audio/fs                 PASS      zero endpoint refusals - type                                  0
+2b-fresh usb-audio/fs                 PASS      zero endpoint refusals - no device                             0
+2b-fresh usb-audio/fs                 PASS      zero endpoint refusals - params                                0
+2b-fresh usb-audio/fs                 PASS      zero endpoint refusals - ring pool                             0
+2b-fresh usb-audio/fs                 PASS      zero endpoint configure failures                               0
+2b-fresh usb-audio/fs                 PASS      zero endpoints refused - no bandwidth                          0
+2b-fresh usb-audio/fs                 PASS      zero endpoints refused - no resources                          0
+2b-fresh usb-audio/fs                 PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+2b-fresh usb-audio/fs                 PASS      advance endpoints opened >= 1                                  +1
+2b-fresh usb-audio/fs                 PASS      inert iso packets answered because nothing in an unattended run plays audio - batch 9-V needed a tone and a wav capture, and an idle usb-audio endpoint moves no isochronous traffic at all 0  (nothing in an unattended run plays audio - batch 9-V needed a tone and a wav capture, and an idle usb-audio endpoint moves no isochronous traffic at all)
+2b-fresh usb-audio/fs                 PASS      zero iso missed service errors                                 0
+2b-fresh usb-audio/fs                 PASS      zero iso packet errors                                         0
+2b-fresh usb-audio/fs/replug          PASS      advance devices addressed                                      +1
+2b-fresh usb-audio/fs/replug          PASS      advance slots enabled                                          +1
+2b-fresh usb-audio/fs/replug          PASS      zero fatal controller status                                   0
+2b-fresh usb-audio/fs/replug          PASS      zero transfer events for no open endpoint                      0
+2b-fresh usb-audio/fs/replug          PASS      zero endpoint opens refused - unusable buffer                  0
+2b-fresh usb-audio/fs/replug          PASS      zero endpoint opens refused - malformed call                   0
+2b-fresh usb-audio/fs/replug          PASS      zero interrupt mask failures                                   0
+2b-fresh usb-audio/fs/replug          PASS      zero commands the engine gave up on                            0
+2b-fresh usb-audio/fs/replug          PASS      zero endpoint refusals - type                                  0
+2b-fresh usb-audio/fs/replug          PASS      zero endpoint refusals - no device                             0
+2b-fresh usb-audio/fs/replug          PASS      zero endpoint refusals - params                                0
+2b-fresh usb-audio/fs/replug          PASS      zero endpoint refusals - ring pool                             0
+2b-fresh usb-audio/fs/replug          PASS      zero endpoint configure failures                               0
+2b-fresh usb-audio/fs/replug          PASS      zero endpoints refused - no bandwidth                          0
+2b-fresh usb-audio/fs/replug          PASS      zero endpoints refused - no resources                          0
+2b-fresh usb-audio/fs/replug          PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+2b-fresh usb-audio/fs/replug          PASS      advance endpoints opened >= 1                                  +1
+2b-fresh usb-audio/fs/replug          PASS      inert iso packets answered because nothing in an unattended run plays audio - batch 9-V needed a tone and a wav capture, and an idle usb-audio endpoint moves no isochronous traffic at all 0  (nothing in an unattended run plays audio - batch 9-V needed a tone and a wav capture, and an idle usb-audio endpoint moves no isochronous traffic at all)
+2b-fresh usb-audio/fs/replug          PASS      zero iso missed service errors                                 0
+2b-fresh usb-audio/fs/replug          PASS      zero iso packet errors                                         0
 2b-fresh usb-kbd/hs                   PASS      advance devices addressed                                      +1
 2b-fresh usb-kbd/hs                   PASS      advance slots enabled                                          +1
 2b-fresh usb-kbd/hs                   PASS      zero fatal controller status                                   0
@@ -241,7 +281,7 @@ TARGET ROW                          OUTCOME   EXPECTATION                       
 2b-fresh usb-storage/hs               PASS      zero endpoints refused - no resources                          0
 2b-fresh usb-storage/hs               PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 6 == 6
 2b-fresh usb-storage/hs               PASS      advance endpoints opened >= 2                                  +2
-2b-fresh usb-storage/hs               PASS      identity transfers submitted == transfers completed + transfers cancelled 354 == 354
+2b-fresh usb-storage/hs               PASS      identity transfers submitted == transfers completed + transfers cancelled 437 == 437
 2b-fresh usb-storage/hs/replug        PASS      advance devices addressed                                      +1
 2b-fresh usb-storage/hs/replug        PASS      advance slots enabled                                          +1
 2b-fresh usb-storage/hs/replug        PASS      zero fatal controller status                                   0
@@ -596,43 +636,3 @@ TARGET ROW                          OUTCOME   EXPECTATION                       
 2b-fresh u2f-emulated/fs/replug       NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
 2b-fresh u2f-emulated/fs/replug       -> NODRIVER advance endpoints opened >= 1                                  +0
 2b-fresh u2f-emulated/fs              NODRIVER  (no class driver expected on this target)                      measured NODRIVER on the carried-along 2b image; a HID with no boot interface that Windows 2000 did not claim
-2b-fresh usb-audio/fs                 PASS      advance devices addressed                                      +1
-2b-fresh usb-audio/fs                 PASS      advance slots enabled                                          +1
-2b-fresh usb-audio/fs                 PASS      zero fatal controller status                                   0
-2b-fresh usb-audio/fs                 PASS      zero transfer events for no open endpoint                      0
-2b-fresh usb-audio/fs                 PASS      zero endpoint opens refused - unusable buffer                  0
-2b-fresh usb-audio/fs                 PASS      zero endpoint opens refused - malformed call                   0
-2b-fresh usb-audio/fs                 PASS      zero interrupt mask failures                                   0
-2b-fresh usb-audio/fs                 PASS      zero commands the engine gave up on                            0
-2b-fresh usb-audio/fs                 PASS      zero endpoint refusals - type                                  0
-2b-fresh usb-audio/fs                 PASS      zero endpoint refusals - no device                             0
-2b-fresh usb-audio/fs                 PASS      zero endpoint refusals - params                                0
-2b-fresh usb-audio/fs                 PASS      zero endpoint refusals - ring pool                             0
-2b-fresh usb-audio/fs                 PASS      zero endpoint configure failures                               0
-2b-fresh usb-audio/fs                 PASS      zero endpoints refused - no bandwidth                          0
-2b-fresh usb-audio/fs                 PASS      zero endpoints refused - no resources                          0
-2b-fresh usb-audio/fs                 PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
-2b-fresh usb-audio/fs                 PASS      advance endpoints opened >= 1                                  +1
-2b-fresh usb-audio/fs                 PASS      inert iso packets answered because nothing in an unattended run plays audio - batch 9-V needed a tone and a wav capture, and an idle usb-audio endpoint moves no isochronous traffic at all 0  (nothing in an unattended run plays audio - batch 9-V needed a tone and a wav capture, and an idle usb-audio endpoint moves no isochronous traffic at all)
-2b-fresh usb-audio/fs                 PASS      zero iso missed service errors                                 0
-2b-fresh usb-audio/fs                 PASS      zero iso packet errors                                         0
-2b-fresh usb-audio/fs/replug          PASS      advance devices addressed                                      +1
-2b-fresh usb-audio/fs/replug          PASS      advance slots enabled                                          +1
-2b-fresh usb-audio/fs/replug          PASS      zero fatal controller status                                   0
-2b-fresh usb-audio/fs/replug          PASS      zero transfer events for no open endpoint                      0
-2b-fresh usb-audio/fs/replug          PASS      zero endpoint opens refused - unusable buffer                  0
-2b-fresh usb-audio/fs/replug          PASS      zero endpoint opens refused - malformed call                   0
-2b-fresh usb-audio/fs/replug          PASS      zero interrupt mask failures                                   0
-2b-fresh usb-audio/fs/replug          PASS      zero commands the engine gave up on                            0
-2b-fresh usb-audio/fs/replug          PASS      zero endpoint refusals - type                                  0
-2b-fresh usb-audio/fs/replug          PASS      zero endpoint refusals - no device                             0
-2b-fresh usb-audio/fs/replug          PASS      zero endpoint refusals - params                                0
-2b-fresh usb-audio/fs/replug          PASS      zero endpoint refusals - ring pool                             0
-2b-fresh usb-audio/fs/replug          PASS      zero endpoint configure failures                               0
-2b-fresh usb-audio/fs/replug          PASS      zero endpoints refused - no bandwidth                          0
-2b-fresh usb-audio/fs/replug          PASS      zero endpoints refused - no resources                          0
-2b-fresh usb-audio/fs/replug          PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
-2b-fresh usb-audio/fs/replug          PASS      advance endpoints opened >= 1                                  +1
-2b-fresh usb-audio/fs/replug          PASS      inert iso packets answered because nothing in an unattended run plays audio - batch 9-V needed a tone and a wav capture, and an idle usb-audio endpoint moves no isochronous traffic at all 0  (nothing in an unattended run plays audio - batch 9-V needed a tone and a wav capture, and an idle usb-audio endpoint moves no isochronous traffic at all)
-2b-fresh usb-audio/fs/replug          PASS      zero iso missed service errors                                 0
-2b-fresh usb-audio/fs/replug          PASS      zero iso packet errors                                         0

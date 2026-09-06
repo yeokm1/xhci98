@@ -1867,8 +1867,27 @@ Tasks, in the audit's revised order:
   which is the condition 20.7 could not clear; a first solo run in the
   matrix's own order was stopped eight minutes in for it, its partial
   output kept as `phase20-8-solo-aborted-hidonly`. Third, Windows 2000 was
-  not run, as written below. Evidence in
+  not run in that solo pass, as written below. Evidence in
   `out\post-release\phase20-8-audiofirst\` on the host that ran it.
+  Then, on 2026-09-07 at the owner's order, the audio group was made the
+  first group of `scripts/vm-matrix/matrix.psd1` itself (a pure reorder of
+  the block, with a comment at the group; self-test 230 checks and
+  validation green) and both fresh targets were run SIDE BY SIDE again in
+  the 20.7 shape, two invocations at once from the `vm\` images, started
+  00:27:00 and 00:27:01: `2a-fresh` PASS, 17 rows, 5 NODRIVER expected, 3
+  not reached, 0 against, 0:57:07, both `usb-audio/fs` legs PASS with the
+  Windows 2000 guest running beside it throughout; `2b-fresh` PASS, 17 rows,
+  6 NODRIVER expected, 0 against, 1:16:08. The Windows 98 body is identical
+  to the solo report's; the Windows 2000 body is the 20.7 report's, reordered,
+  with the storage row's transfer identity reading a different count (437
+  against 354) as such counts do. So the paired shape passes too when the
+  audio row is the first boot, and the two reports in `run-20-post-release/`
+  are these paired ones. The sequential procedure below stands as the
+  record of what was tried first; the owner's reading is that it may not be
+  needed. Evidence in `out\post-release\phase20-8-paired-{2a,2b}\`, and a
+  single-invocation `-Target 2a-fresh,2b-fresh` start that runs the targets
+  one after the other (one guest at a time, not the paired shape) was
+  stopped a minute in, kept as `phase20-8-paired-aborted-sequential`.
   As written: the first attempt on 2026-09-06 was
   aborted before the driver started: the guest booted into Safe Mode,
   which on a `-snapshot` boot means `vm\fresh-2a.img` itself carries a

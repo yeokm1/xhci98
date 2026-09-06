@@ -1,9 +1,9 @@
 ﻿# post-release run
 # driver:    1.0.1.0 qemu, 159536 B, sha256 b75f48eeb9f29ff8
-# image:     C:\Users\yeokm1\AppData\Local\Temp\claude\d--OneDrive-git-projects-xhci98\85d545c1-d22e-4a3a-94e1-484a38ccd549\scratchpad\p208\vmwork\fresh-2a.img, stamp base-1.0.1.0-qemu, from win98.img post-nusb
+# image:     vm\fresh-2a.img, stamp base-1.0.1.0-qemu, from win98.img post-nusb
 # qemu:      11.0.0 (v11.0.0-12122-ga4bb4b10c9), accel tcg
 # offsets:   SIZEOF 91612, 391 counters
-# started:   2026-09-06 23:24:51, elapsed 0:57:13
+# started:   2026-09-07 00:27:00, elapsed 0:57:07
 # verdict:   2a-fresh PASS, 17 rows, 5 NODRIVER expected, 3 not reached
 #
 # Outcomes: PASS FAIL NODRIVER INERT ERROR EXCLUDED - see docs/contributing/design/06-device-matrix-verdict.md
