@@ -1674,9 +1674,11 @@ Tasks, in the audit's revised order:
   Phase 19's outside the seven refusal-counter expectations 20.0 added to
   each row. `2a-fresh` FAIL, 17 rows, 5 NODRIVER expected, 3 not reached,
   1 against, 0:57:44, and the one row is the `usb-audio/fs` replug: the
-  second arrival's connect change was announced to usbport three times and
-  usbport never issued the port reset, so the device was never addressed
-  (+0 on the three advance expectations, no prompt on screen). The row is
+  second arrival's connect change was announced to usbport (the leg's
+  console shows three port events; the fourth reading below resolves them
+  as one arrival between two detaches) and usbport never issued the port
+  reset, so the device was never addressed (+0 on the three advance
+  expectations, no prompt on screen). The row is
   the one the release notes carry as the USB Audio limitation and its
   verdict matches Phase 16's, but the signature does not match fully:
   Phase 16 saw an Insert Disk prompt for the second instance and this run
@@ -1689,6 +1691,41 @@ Tasks, in the audit's revised order:
   Phase 19 reports" clause is not satisfied by this run; it stands until a
   qualifying run or a recorded owner decision resolves it. Reports in
   `docs/contributing/runs/run-20-post-release/`.
+  Read a fourth time on 2026-09-06, late afternoon, in the same shape (a
+  full `-Target 2a-fresh` run with the `2b-fresh` run beside it) with
+  QEMU's `usb_xhci_port_*` and `usb_port_*` trace events on: the row
+  failed the same way, with the verdict and every console counter line
+  identical to the two earlier full runs (against which stand two passes
+  of the audio group alone, one under synthetic host load, and two
+  scripted replugs with PORTSC read at each step), and the trace bounds
+  the cause from below. QEMU attached the second instance exactly once
+  (`usb_port_attach` port 2, full speed) and raised one connect change
+  for it; the driver read PORTSC `0x000206e1`, acknowledged CSC in the
+  register, latched the change and announced it once; PORTSC was then
+  read five times, every read `0x000006e1` (connected, Polling, not
+  enabled, no change bits), and no PR write followed; the next port event
+  is the harness's own detach at the end of the leg. After the
+  announcement usbport queried hub status, cleared one change bit on the
+  port and issued no reset. What the debug console cannot say is the
+  order of usbport's port-status query and its `C_PORT_CONNECTION` clear:
+  every `cb RH_*` site prints four times per driver life and every counter
+  line thirty-two, all spent by then, so their absence in that window is
+  not evidence. Candidate mechanism, unconfirmed: usbhub's tidy-up after
+  the first instance's removal (its port disable is the last write before
+  the attach in the trace) clears the port's connect change after the
+  arrival latched it, so its later status reads see connected without a
+  change and it does nothing; the harness replugs about 8 s after the
+  detach, timed on driver counters that lead usbhub's own removal
+  processing, and a host running a second guest slows this guest more
+  than the synthetic load did. That would be the stack's race rather
+  than this miniport's, but it is not shown, and a miniport contribution
+  stays open. Two readings would settle it: a qemu build whose
+  `RH_GetPortStatus` and `RH_ClearFeaturePortConnectChange` sites print
+  unbudgeted (or the log ring read with `XHCISNAP` before the group's
+  guest is discarded), which gives the order; and the same full run with
+  the replug delay raised to 15 s, which tests the mechanism. Trace and
+  console under `out\post-release\phase20-audio-trace\` on the host that
+  ran it.
   The Windows 2000 SMP in-place recovery for 20.2 (F8), on `win2k-smp.img`
   with the new build copied in: the controller was killed from outside the
   guest through QEMU's gdb stub (interrupter 0's `ERSTBA` written to an
