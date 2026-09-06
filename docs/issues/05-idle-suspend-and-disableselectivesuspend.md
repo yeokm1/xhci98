@@ -40,9 +40,13 @@ A Windows 98 machine with this driver, nothing on the bus, a minute idle: a
 mouse plugged in does nothing. No Add New Hardware wizard, no new device,
 no error. Device Manager -> Refresh, and the mouse appears and works. Every
 later plug on the same session behaves the same way once the bus has gone
-quiet again. A device that was attached at boot keeps working, and while a
-HID is attached the bus never goes quiet, which is why a machine with a USB
-keyboard never shows the defect and a bare machine always does.
+quiet again. A device that was attached at boot keeps working, and while
+anything is attached the hub never asks for the idle, a device with no
+driver included (measured: a smart-card reader Windows 98 cannot bind, left
+alone on the bus with the value deleted, kept the controller running while
+the bare-bus control suspended within seconds). That is why a machine with
+a USB keyboard, or a laptop with internal USB devices, never shows the
+defect and a bare machine always does.
 
 The driver's own counters say what "nothing" means. Across a 40 s window
 with the device attached to the idle controller: `HealthPolls` 41 -> 41,
@@ -196,10 +200,11 @@ controller, and one mechanism on both paths is one thing to check.
 ## 6. What is still open
 
 - Reproducing the defect, or checking the value, needs an observed
-  suspend: a bus with no traffic at boot, a few seconds of idle, then the
-  plug, with the halted state read before the plug. Any HID attached at
-  boot keeps the bus awake, and a 0 written by another tool reads as "no
-  effect". A reading taken without those conditions says nothing either way.
+  suspend: an empty root hub at boot, a few seconds of idle, then the plug,
+  with the halted state read before the plug. Any device attached at boot
+  keeps the hub awake, driver or not, so a laptop with internal USB devices
+  cannot show it, and a 0 written by another tool reads as "no effect". A
+  reading taken without those conditions says nothing either way.
 - A non-halting idle (leave R/S set with the rings quiet so a Port Status
   Change Event could wake usbport) is neither forbidden by the specification
   nor by the miniport ABI as documented, and is unverified. It is a roadmap

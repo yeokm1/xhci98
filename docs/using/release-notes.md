@@ -248,7 +248,10 @@ because a user meets them through this driver.
   `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB`, a machine-wide
   setting, on both targets, because a sleeping xHCI controller cannot report
   a newly plugged device and Windows 98 otherwise idles it within a second
-  (Windows XP within about half a minute of a start with nothing attached;
+  once nothing at all is on the bus (any attached device keeps it awake,
+  even one with no driver, so a laptop with internal USB devices never idles
+  it and the value changes nothing visible there; Windows XP idles it within
+  about half a minute of a start with nothing attached;
   Windows 2000 SP4's own stack was never seen idling it, with or without
   the value, measured in a virtual machine on 2026-09-06). It also
   stops any other USB controller

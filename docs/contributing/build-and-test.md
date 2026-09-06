@@ -1057,6 +1057,27 @@ from the batch 11-V baseline media, or any image predating this INF
 on such a guest, or install current media, before reading an idle hot-plug
 as a defect.
 
+The idle also needs an empty root hub, not merely a quiet one. Measured the
+same evening on a second overlay of the same image with the value DELETED
+(`regedit /s` of a `"DisableSelectiveSuspend"=-` file, clean shutdown): with
+QEMU's `usb-ccid` attached from boot, a class Windows 98 has no driver for
+(it sits under "Other devices"), and nothing else on the bus, `SuspendCount`
+stayed 0 over two idle minutes, `USBCMD` read `0x00000005`, and a `usb-kbd`
+hot-plugged then was addressed at once (`DevicesAddressed` 2); the control
+boot on the same overlay with the bus bare suspended within seconds of
+`StartController` and its plug stayed at address 0. So one device already
+on the bus, with no driver and no traffic of its own, is enough to keep
+usbport from idling the controller. A laptop whose xHCI carries internal
+USB devices (the E460 has three: Bluetooth, camera, fingerprint reader)
+therefore never shows the defect, value or no value, and the owner's
+reading on the E460 (value deleted, rebooted, hot-plug still seen) is that
+case, not a contradiction. Only a machine whose root hub is empty at idle
+ever suspends, which is what the QEMU vehicle is and most real machines
+are not. One side effect worth knowing when reading counters: with the
+reader attached, `CheckCallbacks` climbed two orders of magnitude faster
+than the bare-bus 1.4 per second; usbport's timer runs faster with a device
+on the bus.
+
 The fix is a setting and not driver code, and the reason also says what a
 future wake path would have to overcome. The differential came out the awkward
 way: NUSB's own `usbehci.sys`, under the same `usbport.sys` on the same idle
