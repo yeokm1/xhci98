@@ -3301,6 +3301,55 @@ archives) so Phase 2a does not depend on a live download.
    keyboard hot-plugged onto a suspended controller silently swallows every
    keystroke until `device_del` removes it.
 
+   The interval bands, measured with hidusbf (2026-09-06, on an overlay of
+   `fresh-2a.img`, NUSB 3.3, evidence in `out\post-release\issue4-hidusbf\`).
+   `docs/issues/06-full-speed-root-port-bugcheck.md` derives that a Full or
+   Low Speed device on a root port, reported to usbport as High Speed, gets
+   its interrupt interval bucketed in microframes and floored at 1 ms, so
+   `bInterval` 1 to 4 gives 1 ms, 5 gives 2 ms and 6 up gives 4 ms. The
+   reading used SweetLow's hidusbf (`https://github.com/LordOfMice/hidusbf`,
+   its `DRIVER\98ME\hidusbf.sys` 1.2.0.10, a lower filter that rewrites the
+   interrupt endpoints' `bInterval` in the `URB_FUNCTION_SELECT_CONFIGURATION`
+   descriptor from a `bInterval` DWORD in the device's driver key; read out
+   of the 3.6 KB binary), set by `.reg` file rather than its Setup GUI
+   (`LowerFilters` = `hidusbf.sys` on the `Enum\USB` instance, the file name
+   as Windows 98 wants it, and the DWORD on both the instance and its
+   `Class\HID\nnnn` key), each value followed by a `device_del`/`device_add`
+   of QEMU's `usb-mouse,usb_version=1` (Full Speed, `bInterval` 10). Three
+   readings per value: the `Period` usbport passed (the `ep.open.rate` note
+   in the ring, read out of guest memory with the log at level 2), the
+   `EndpointIntervalsFloored` counter, and the Endpoint Context's Interval
+   field read through the DCBAA with the monitor's `xp`. On a root port:
+   `bInterval` 1, 2, 5, 8 and the stock 10 arrived as `Period` 1, 2, 16, 32,
+   32 and were programmed as Interval 3, 3, 4, 5, 5 (1, 1, 2, 4, 4 ms), the
+   floor counter moving only for the first two. Behind a Full-Speed
+   `usb-hub` on a root port the same mouse was reported at its true speed
+   (the speed-mismatch counter did not move): `bInterval` 10, 1 and 4
+   arrived in frames as `Period` 8, 1 and 4, Interval 6, 3 and 5 (8, 1 and
+   4 ms), nothing floored. So the derivation holds on both sides of the hub.
+
+   The effective rate is measurable in QEMU only under load: its xHCI does
+   not poll an idle interrupt endpoint (after the first NAK it waits for
+   the device's `usb_wakeup`), so `mousepump.py` streams `mouse_move` at
+   2,000 events/s over the monitor and `countev.ps1` counts
+   `usb_xhci_xfer_success` per second; `hcd-xhci.c` completes at most one
+   TD per Interval, so the count is a lower bound set by the guest's
+   turnaround: about 250/s at Interval 5, 330 to 550/s at Interval 3, 330/s
+   at Interval 4. Route the monitor's pointer to the HID mouse first
+   (`info mice`, `mouse_set`); after a replug it returns to the PS/2 one.
+
+   Two traps of that tool's own. Its 9x filter imports `USBD_ParseDescriptors`
+   from `USBD.SYS`, which Windows 98 SE's `usbd.sys` 4.10.2222 (the file the
+   LayoutFile route places and NUSB 3.3 keeps) does not export; NTKERN then
+   fails the whole device stack with Code 2 ("could not load the device
+   driver"), whatever the filter name's form. NUSB 3.6's Windows ME
+   `usbd.sys` 4.90.3000.1 exports it, and copying that file over
+   `SYSTEM32\DRIVERS\USBD.SYS` (in use, the copy succeeds) and rebooting is
+   what made the readings above possible. And its `Setup.exe` needs a
+   pointer; the `.reg` route above is the keyboard-only equivalent. Both are
+   static readings (`dumpbin /exports`, `/disasm`) confirmed by the runtime
+   Code 2 and by the filter working once the export existed.
+
    What the stack needs beside it, measured 2026-09-02 on a guest cloned
    from `win98.img @ post-nusb` (NUSB 3.3's core files, no driver, no
    `usbd.sys`, no `usbhub.sys`), with NUSB's USB 2.0 stack removed and

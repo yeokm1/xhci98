@@ -164,7 +164,8 @@ The cost is the interrupt interval, and it is irrecoverable through this
 usbport. usbport turns a device's `bInterval` into the `Period` it hands the
 miniport using the speed it believes: for a High-Speed device that is
 `2^(bInterval-1)` microframes capped at 32, for a Full or Low Speed one the
-raw millisecond count. No raw `bInterval` reaches the miniport. A Full or
+frame count rounded down to a power of two. No raw `bInterval` reaches the
+miniport. A Full or
 Low Speed device on a root port is therefore bucketed on High-Speed rules,
 and the driver then floors its interrupt endpoints at 1 ms because the xHCI
 specification allows no less at those speeds (Table 6-12). The result is
@@ -173,7 +174,16 @@ three bands: `bInterval` 1 to 4 gives 1 ms, 5 gives 2 ms, 6 and above gives
 reachable, nothing faster than 1 ms either, and two values inside one band
 are indistinguishable. Always the faster direction: latency only, never a
 missed poll. An interval override tool that changes `bInterval` within a
-band shows no effect for this reason, and one that crosses a band does. The
+band shows no effect for this reason, and one that crosses a band does.
+Measured with such a tool, SweetLow's hidusbf and its Windows 9x lower
+filter, on a Full-Speed mouse in a virtual machine: `bInterval` 1, 2, 5 and
+8 on a root port arrived as `Period` 1, 2, 16 and 32 and were programmed as
+Interval 3, 3, 4 and 5 (1, 1, 2 and 4 ms), the first two through the floor;
+the same mouse behind a Full-Speed hub arrived at its true speed, with
+`bInterval` 10, 1 and 4 bucketed in frames as `Period` 8, 1 and 4 and
+programmed as Interval 6, 3 and 5 (8, 1 and 4 ms), nothing floored.
+`docs/contributing/build-and-test.md`, "The SweetLow stack", has the
+procedure, the evidence path and two traps of that tool's own. The
 prohibition on "reconstructing" `bInterval` from `Period` is in the
 invariants: the information is gone before the miniport sees it.
 

@@ -258,6 +258,24 @@ because a user meets them through this driver.
   idling, it slightly raises power draw, and an uninstall does not remove
   it; delete the value by hand (or set it to 0, which has the same effect)
   if you want the previous behaviour back.
+- Every device plugged directly into a root port is reported to Windows as
+  High Speed, whatever it is; Device Manager and USB tools show it so. This
+  is deliberate: the USB stack this driver plugs into crashes the machine
+  when a Full or Low Speed device is reported at its true speed on a root
+  port (it looks up a transaction translator that does not exist), so the
+  driver keeps the real speed to itself and programs the controller with it,
+  which is why such devices work. Two consequences. Windows sizes a Full or
+  Low Speed device's interrupt polling interval on High-Speed rules, and the
+  driver then raises it to the 1 ms minimum those speeds allow, so a mouse
+  or keyboard on a root port polls in three bands: `bInterval` 1 to 4 at
+  1 ms (1000 Hz), 5 at 2 ms (500 Hz), 6 and above at 4 ms (250 Hz), a stock
+  mouse included. A polling-rate tool that changes `bInterval` within a band
+  shows no effect and one that crosses a band does; nothing slower than 4 ms
+  and nothing faster than 1 ms is reachable there. Devices behind a hub
+  report their true speed and poll at the interval they ask for, so a mouse
+  on a hub polls at its own 8 ms and a polling-rate tool works as on any
+  controller. Measured in a virtual machine with SweetLow's hidusbf; the
+  bands are documented in full in `docs/issues/06-full-speed-root-port-bugcheck.md`.
 - Windows 98: plugging and unplugging a device very fast and repeatedly (one
   cycle every 0.6 s for minutes) can freeze the machine with no error. This
   one is this driver's own defect, with no explanation yet. Normal plugging
