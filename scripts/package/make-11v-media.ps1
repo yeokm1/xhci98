@@ -73,7 +73,7 @@ The package version the upgrade is performed OVER. When not given it is
 derived: the newest `releases\<version>` directory whose version is lower
 than the current INF's, which is the version cut before the current one (the
 old literal default, `0.0.0.6`, named a package that no longer exists and let
-the ordering check pass against nothing; issues-found.md, smaller items). It
+the ordering check pass against nothing; roadmap Phase 20, smaller items). It
 is checked rather than assumed: the staged baseline binary's own version
 resource must equal it, and it must be lower than the current package
 version. A directory name is not evidence of what is in it.

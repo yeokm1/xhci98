@@ -386,7 +386,7 @@ static void test_completion_code_mapping(void)
  * SET_ADDRESS, which is also zero-length - but that is the one request that
  * must never reach a ring at all (task 6-B.3 intercepts it, and test_init
  * asserts it is never placed), so encoding it as a correct TD taught the suite
- * the forbidden request's ring shape (issues-found.md, smaller items).
+ * the forbidden request's ring shape (roadmap Phase 20, smaller items).
  */
 static void test_build_no_data(void)
 {

@@ -87,7 +87,7 @@ evidence.
 
 - One command outstanding at a time. Match every Command Completion Event against the issued TRB's physical address regardless: "The Command TRB Pointer field of the Command Completion Event shall point to the Command TRB that initiated the event" (4.6.1, p.93), so an event naming anything else is either a duplicate or a disagreement about where the ring is, and both are worth counting apart from a completion.
 - Never wait for a command completion inside a usbport callback; callbacks run at DISPATCH_LEVEL under usbport's locks (`docs/usb-xhci-info/usbport-miniport-abi.md` section 7). Issue, ring `DB[0]`, return; complete from the DPC.
-- Every command carries a timeout. Recovery order: CRCR.CA abort -> adopt the dequeue pointer the Command Ring Stopped event reports (rewriting the abandoned command in place as a No Op Command first when the pointer still names it, `issues-found.md` F12) -> escalate to `UsbPortInvalidateController(RESET)` if CRR stays set ~5 s after CA, or if that reported pointer is one the software ring cannot hold. The full ladder, and why repositioning CRCR is not an available rung, is in `docs/usb-xhci-info/xhci-programming.md` "Command Ring Discipline, Timeout, and Abort".
+- Every command carries a timeout. Recovery order: CRCR.CA abort -> adopt the dequeue pointer the Command Ring Stopped event reports (rewriting the abandoned command in place as a No Op Command first when the pointer still names it, roadmap Phase 20, F12) -> escalate to `UsbPortInvalidateController(RESET)` if CRR stays set ~5 s after CA, or if that reported pointer is one the software ring cannot hold. The full ladder, and why repositioning CRCR is not an available rung, is in `docs/usb-xhci-info/xhci-programming.md` "Command Ring Discipline, Timeout, and Abort".
 - **Do not ring `DB[0]` between asserting CA and seeing the Command Ring Stopped event.** "If the Command doorbell is rung before CRR = `0`, (i.e. the ring is not fully stopped), then the behavior is undefined, e.g. the Command Ring may not restart" (Table 5-24 note, p.368). That needs an aborting state distinct from "a command is outstanding", because a Command Aborted event alone does not end it.
 - Write the CRCR pointer field only while CRR = 0; keep a software copy of the ring pointer (the register reads back 0).
 - **Write CA only while CRR = 1, and compose it from a read.** RCS, CS, CA and the pointer all read back as `0`, but CRCR 5:4 are RsvdP (Table 5-24, p.367), the only bits of the register a read can carry anything in, so a read-modify-write is still required.
@@ -174,7 +174,7 @@ code:
   the deferred drain deliberately while `INITIALIZED` is clear), so
   `XhciSlotInit` cancels queued work, zeroes the table and resets the owner
   and cursor fields inside one hold of the lock, never outside it
-  (`issues-found.md` F8). `DeferredBusy` is never written by init: its owner
+  (roadmap Phase 20, F8). `DeferredBusy` is never written by init: its owner
   is the drainer that set it, which drops the lock around usbport services,
   and clearing it from anywhere else admits a second drainer.
 - **A handle is not a binding.** Every endpoint callback names its record
@@ -196,7 +196,7 @@ code:
   usbport cancelling the old handle's work and the early Stop Endpoint is what
   keeps the abort's DMA window narrow. Its later `ACTIVE` is still declined, so
   the endpoint stays paused until the bound handle's `ACTIVE` or the health
-  poll's restart (`issues-found.md` F1; Phase 20 review, finding 3).
+  poll's restart (roadmap Phase 20, F1; Phase 20 review, finding 3).
 
 ## Ring Full and Backpressure
 
@@ -248,7 +248,7 @@ code:
   `ResumeFailures` and returns the refusal to usbport. Left standing after a completed in-place
   recovery, the latch silenced every later fatal: on the SMP guest on
   2026-09-06 the first provoked HCE recovered and the next three were never
-  escalated (`issues-found.md` F19).
+  escalated (roadmap Phase 20, F19).
 - **An all-ones USBSTS is not a fatal-bit report.** It is a window that has
   stopped decoding, and HCE and HSE are two of the thirty-two bits it answers
   with. The same operand rule applies to the interrupt masks; here the cost of
@@ -1656,7 +1656,7 @@ must therefore do.
   `SuspendController`/`ResumeController` pairs repeatedly, as idle behaviour
   (measured in the Phase 3 spike; native Win2000 `usbport.sys` did not
   idle-suspend in that observation window, which is an observation and not a
-  contract, `issues-found.md` F18), and an idle pair that never reaches D3cold
+  contract, roadmap Phase 20, F18), and an idle pair that never reaches D3cold
   therefore costs a halt and a restart - not a re-enumeration.
 - **The suspend masks the interrupt enables itself, and must not wait to be
   asked.** `DisableInterrupts` was observed around the shutdown sequence, but

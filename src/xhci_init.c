@@ -4358,7 +4358,7 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
      * silent with no other symptom. On the recovery path the gate is skipped
      * (configuration space is PASSIVE-only) and the register was not read, so
      * the note says so rather than logging a 0 that reads as "the register
-     * was 0" (issues-found.md D4). */
+     * was 0" (roadmap Phase 20, D4). */
     if (ext->InitBelowPassive) {
         XhciLogNote(ext, "gate.busmaster.skipped", 1);
     } else {

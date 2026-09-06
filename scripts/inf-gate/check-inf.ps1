@@ -565,7 +565,7 @@ foreach ($m in $models) {
             # [DefaultInstall]'s CopyFiles, so an undecorated section that had
             # lost its own would pass the gate while a clean Windows 98 install
             # wrote NTMPDriver=xhci98.sys and copied no such file: the silent
-            # yellow-bang the gate exists to catch (issues-found.md F14, which
+            # yellow-bang the gate exists to catch (roadmap Phase 20, F14, which
             # reproduced the pass with exactly that INF).
             $w98Copy = @(Get-Directive $inf $base "CopyFiles")
             $w98Delivered = New-Object System.Collections.ArrayList
@@ -1187,7 +1187,7 @@ foreach ($m in $models) {
 # start with nothing attached; a halted xHC cannot report a port change, so a
 # device plugged in afterwards is invisible until Refresh. Windows 2000
 # SP4's native build was not seen idling this controller in the VM, with or
-# without the value (2026-09-06, bounded readings; issues-found.md F18), so
+# without the value (2026-09-06, bounded readings; roadmap Phase 20, F18), so
 # the value had no observed effect there and the NT path writes it for
 # XP's sake. Until 1.0.1.0 the NT path omitted the
 # value on that assumption and the self-tests pinned the omission; the XP

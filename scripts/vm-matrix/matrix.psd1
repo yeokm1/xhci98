@@ -79,7 +79,7 @@
         # asked for a pipe, so each is a defect in THIS driver's handling of a
         # device the OS did claim - never the OS's silence, which is what the
         # NODRIVER inference reads from `endpoints opened` staying at zero.
-        # The 2026-09-05 audit (issues-found.md F3, F9) showed the evaluator
+        # The 2026-09-05 audit (roadmap Phase 20, F3, F9) showed the evaluator
         # reading a ring-pool refusal as NODRIVER and a Configure Endpoint
         # failure after an accepted open as PASS, because `endpoints opened`
         # advances when the open is accepted, before the command has run, and

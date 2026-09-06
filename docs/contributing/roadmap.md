@@ -55,7 +55,7 @@ guest measured, an NT install that never had a USB controller has no
 controller so a later hot-plug is invisible; both are INF changes that reach
 Windows 2000 too. Phase 20, opened on 2026-09-05 on branch `phase-20`, is
 the post-Phase-19 fix pass: the 2026-09-05 repository audit
-(`issues-found.md` at the repository root, eighteen findings and six
+(the findings tabled in its entry: eighteen findings and six
 documentation groups, reviewed to convergence) is worked through and the
 result cut. Two acts sit outside the task list and are the project owner's
 to take: uploading the asset, and then running the release acceptance test
@@ -128,7 +128,7 @@ Phase 16 is the unattended post-release run on freshly installed guests. Phase
 17 has the OS supply `usbd.sys` and `usbhub.sys`, Phase 18 is release
 `1.0.0.1` with Windows ME, and Phase 19 is release `1.0.1.0` with Windows XP
 and the NT-side install fixes the XP guest found. Phase 20 works through the
-2026-09-05 audit (`issues-found.md`) and cuts the result. Phase
+2026-09-05 audit (its findings tabled in that entry) and cuts the result. Phase
 14 waited on Phase 13's bench batches reporting. Accepting the published release, from the download on a
 freshly installed VM and on a physical machine, is not a phase and has no
 task: it is a hand-run procedure the project owner takes after the upload,
@@ -1508,9 +1508,9 @@ rebuild"); `docs/issues/04-xp-restore-device-ep0-remove.md`;
 
 ## Phase 20 - Post-Phase-19 Fixes: The 2026-09-05 Audit
 
-Goal: every finding in [`issues-found.md`](../../issues-found.md), the
-repository audit taken on 2026-09-05 at `6f356a9`, either fixed with the
-regression vector that pins it or recorded there as an owner decision not to
+Goal: every finding of the repository audit taken on 2026-09-05 at
+`6f356a9` (the table below), either fixed with the
+regression vector that pins it or recorded as an owner decision not to
 fix, with the reason; the full gates green after the changes; both primary
 targets' post-release matrix reading unchanged or better; and the result
 cut. The audit found no critical defect. It found four P2 driver items (F1,
@@ -1527,15 +1527,51 @@ Status: opened on 2026-09-05 by the owner, on branch `phase-20`, the day the
 audit was reviewed. The version the fixes ship in is the owner's to name
 when the cut opens: the phase carries driver code changes, so the third
 field moves (`1.0.2.0` on the numbering Phase 19 states) unless the owner
-folds it into a larger release. `issues-found.md` is the record of what was
-found and why; this entry is the order of work. Cite findings by their IDs
-(F1-F19, D1-D6), not by line: the document's line numbers into the tree
-refer to `6f356a9` and stop matching as the fixes land. On 2026-09-06 the
+folds it into a larger release. The audit document (`issues-found.md`,
+kept at the repository root while the phase ran, reviewed to convergence in
+three rounds on 2026-09-05, then the fix pass reviewed by Codex in seven
+rounds to NONE) was removed on 2026-09-06 once every finding was closed;
+the table below is what remains of it, and citations elsewhere in the tree
+of the form "roadmap Phase 20, F18" point here. On 2026-09-06 the
 20.7 guest readings were taken with the owner at the console, and the SMP
 recovery reading found one more driver defect, F19: the health poll's fatal
 latch was never reopened after a completed in-place recovery, so a second
 fatal was never escalated. It was fixed the same day with its vector, and
 the readings that follow it were taken on the fixed build.
+
+The findings, each closed by the task named (fix commits `72f3abd..c436e81`
+for 20.0-20.6, the Codex review rounds `0213d7a` and `0a3e6d4`, F19 in
+`65ee2b7`); "host" means a `test_init.c` or script vector, "self-test" a
+script's own self-test, "guest" a reading in a target VM under 20.7:
+
+| ID | Finding | Closed by |
+| --- | --- | --- |
+| F1 | Superseded endpoint handles could modify their replacement endpoint | 20.2, host; XP lifecycle guest reading in 20.7 |
+| F2 | An undelivered recovery callback left recovery armed indefinitely | 20.3, host, bounded age-out |
+| F3 | The matrix read a driver endpoint-resource refusal as `NODRIVER` | 20.0, self-test |
+| F4 | The upload containment check let an upload set land inside an older release | 20.1, self-test |
+| F5 | `XHCISNAP` reported a text report written without checking write and close errors | 20.5, self-test |
+| F6 | The root `LICENSE` still described Microsoft files in the download | 20.4; reaches the download at the next cut |
+| F7 | The generated `readme.txt` carried claims false since `1.0.1.0` | 20.4, self-test; reaches the download at the next cut |
+| F8 | `XhciSlotInit` rewrote the device table outside the lock | 20.2, host; SMP recovery guest reading in 20.7 |
+| F9 | A refused Configure Endpoint still read `PASS` in the matrix | 20.0, self-test |
+| F10 | The restore path programmed IMOD to zero and nothing restored it | 20.5, host model; the reading on a controller whose restore succeeds is owed (release notes, Force Save Context limitation) |
+| F11 | An all-`EXCLUDED` target read `PASS` | 20.0, self-test |
+| F12 | Command Ring Stopped could adopt the abandoned command's own TRB | 20.5, host, No Op Command rewrite; hardware trigger unobserved |
+| F13 | The BIOS-handoff write cleared RsvdP bits of `USBLEGCTLSTS` | 20.5, host |
+| F14 | The INF gate did not check the Win98 path delivers its own driver file | 20.1, self-test |
+| F15 | `-UploadSetOnly` depended on current sources and matching local packages | 20.1, self-test |
+| F16 | `xhciqual`'s EHCI cleanup wrote RW1C status bits back | 20.5; no DOS run made |
+| F17 | `XHCISNAP` contradicted itself on an extension-size mismatch | 20.5, self-test |
+| F18 | "Windows 2000 never idle-suspends this controller" was asserted at eleven sites and never measured | 20.4 qualified every site; the SP4 idle observation taken in 20.7 (`build-and-test.md`) |
+| F19 | The health poll's fatal latch never reopened after a completed recovery (found by 20.7's SMP reading) | 20.7, host and guest |
+| D1 | The post-upload repair policy contradicted immutable releases | 20.4 |
+| D2 | Import, INF and media descriptions carried superseded statements | 20.6 |
+| D3 | Navigation and current-status references lagged Phases 17-19 | 20.6 |
+| D4 | Stale comments and drifted IRQL tags in the driver source | 20.6 |
+| D5 | Documentation, sample-configuration and issue-form drift | 20.6; the optional status clarification waits on the version name |
+| D6 | Technical documents against the code | 20.6 |
+| smaller items | Code and script items below finding grade | 20.6, four left with their reasons in that note |
 
 Why a phase: the findings cross every layer, from endpoint ownership in
 `xhci_slot.c` to the readme template, and several of them interact (F3 and
@@ -1802,15 +1838,41 @@ Tasks, in the audit's revised order:
   a successful-restore reading for 20.5's IMOD change, which QEMU's CRS
   fallback cannot supply, so a host model or a controller whose restore
   succeeds. Report which environment produced each reading.
-- [ ] 20.8 the cut, once the owner names the version: `src\xhci_version.h`,
+- [ ] 20.8 the audio replug row read with the Windows 98 target run alone,
+  the owner's chosen way (2026-09-06) to resolve the one row 20.7 left
+  against the checkpoint: the two targets run sequentially, not side by
+  side. Not further investigation, and not a recorded artifact decision
+  yet; 20.7's evidence clears the driver, and what is untested is whether
+  a solo run on a clear host passes. The first attempt on 2026-09-06 was
+  aborted before the driver started: the guest booted into Safe Mode,
+  which on a `-snapshot` boot means `vm\fresh-2a.img` itself carries a
+  dirty-shutdown flag from an earlier hard kill of QEMU and every
+  `-snapshot` boot inherits it. So: boot `fresh-2a.img` once without
+  `-snapshot`, let Windows 98 run its ScanDisk and reach the desktop, shut
+  it down through the Start menu (no re-stamp, same driver); then the full
+  `run-matrix.ps1 -PostRelease -Target 2a-fresh` by itself, no second guest
+  on the host, into a fresh `-OutDir`. Windows 2000 is not needed for this
+  row: `2b-fresh` has passed identically in every run and a sequential 2b
+  cannot change the 2a result. If the row passes, that report replaces the
+  20.7 Windows 98 report in `run-20-post-release/` and satisfies the
+  checkpoint's "no worse than Phase 19" clause; if it fails again with the
+  host clear, de-pairing did not clear it and the decision returns to the
+  owner: record the row as a host-timing artifact with the reason, or take
+  the one reading 20.7 still names (the order of usbport's port-status
+  query against its connect-change clear, from an unbudgeted print or the
+  log ring read with `XHCISNAP` before the group's guest is discarded).
+  Neither outcome changes the driver.
+- [ ] 20.9 the cut, once the owner names the version: `src\xhci_version.h`,
   the INF's `DriverVer`, the `history.md` entry naming what changed and
-  which findings it closes, the release notes' limitations revised where a
-  finding changed them, `make-release.ps1` from a tree with every gate
-  green, the install route from the asset read on the five targets as
-  task 19.9 did, and `issues-found.md` annotated finding by finding with
-  the commit that closed it or the owner's decision not to.
+  which findings it closes (F1-F19, D1-D6; F10's hardware reading owed),
+  the release notes' limitations re-read where a finding changed them (the
+  DisableSelectiveSuspend and Force Save Context bullets were rewritten in
+  20.4 and 20.7), `make-release.ps1` from a tree with every gate green, the
+  install route from the asset read on the five targets as task 19.9 did,
+  and the stamped `fresh-2a.img` and `fresh-2b.img` re-stamped on the cut's
+  binary, since they carry `base-1.0.1.0-qemu` until the version moves.
 
-Checkpoint: every F and D item in `issues-found.md` closed with a cited
+Checkpoint: every finding in the table above closed with a cited
 commit and regression vector or recorded as an owner decision with its
 reason; every gate and self-test green; the post-release matrix on both
 primary targets no worse than the Phase 19 reports; the Windows 2000 SMP
@@ -1818,8 +1880,7 @@ recovery and XP lifecycle readings taken for 20.2; and the new version cut
 with a `history.md` entry. Not a checkpoint: any Windows 98 metal reading
 standing in for Windows 2000, or a host test standing in for a guest.
 
-Records: `issues-found.md` (the audit, its review history, and the
-disposition of every finding); `scripts/vm-matrix/selftest.ps1`,
+Records: the findings table above; `scripts/vm-matrix/selftest.ps1`,
 `scripts/package/test-package.ps1`, `scripts/inf-gate/test-inf-checks.ps1`
 and `test/test_init.c` (the regression vectors); design records 05, 06 and
 07; `build-and-test.md`; `docs/contributing/runs/run-20-post-release/` (the

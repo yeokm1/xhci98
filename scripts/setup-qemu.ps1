@@ -263,7 +263,7 @@ Write-AsciiFile $winMeInstallCmd (@(
 ))
 # +5 = 55560 at the default base: +3 (55558) is the win2k-acpi machine's port
 # (build-and-test.md, "Windows 2000 ACPI HAL"), so the two could not run at
-# once (issues-found.md D5).
+# once (roadmap Phase 20, D5).
 
 $runCmd = Join-Path $LocalScriptDir "qemu-win98-run.cmd"
 Write-AsciiFile $runCmd @(

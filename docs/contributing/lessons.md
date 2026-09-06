@@ -153,7 +153,7 @@ controller" in the paragraph above was the repository's assumption at the
 time, generalised from the Phase 3 spike's observation window, not a
 measurement; the owner's checks of 2026-09-05 contradict it. The XP
 observation stands as recorded; the generalisation does not
-(`issues-found.md` F18).
+(roadmap Phase 20, F18).
 
 Rules this earns:
 
@@ -2324,7 +2324,7 @@ Refresh, and `CheckCallbacks` climbing continuously instead of freezing. So
 the defect is fixed by one `AddReg` line, on the Windows 98 path only, with
 no driver code at all.
 
-Postscript, 2026-09-06 (`issues-found.md` F18): Windows 2000 SP4's own stack
+Postscript, 2026-09-06 (roadmap Phase 20, F18): Windows 2000 SP4's own stack
 was not seen idling this controller in the VM, value or no value, in the
 conditions `build-and-test.md` records on both HALs, and the same kind of
 string pass suggests why, unconfirmed: the idle request comes from the hub

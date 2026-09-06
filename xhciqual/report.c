@@ -469,7 +469,7 @@ int final_verdict(CTRL *c, int active_requested)
         } else if (c->v_dma == V_WARN) {
             /* The full run treats a No Op that completed with a non-success
              * code as warned-only; the self-test used to turn the same
-             * observation into a failure (issues-found.md, smaller items). */
+             * observation into a failure (roadmap Phase 20, smaller items). */
             qprintf("  IRQ SELF-TEST WARNING: DMA round-trip (C3) was %s - "
                     "%s\n", verdict_name(c->v_dma), c->dma_note);
             warned = 1;

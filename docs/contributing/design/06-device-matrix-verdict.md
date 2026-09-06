@@ -86,7 +86,7 @@ devices addressed did NOT advance                           ->  FAIL (ours)
 ```
 
 With one rule in front of both lines, added after the 2026-09-05 audit
-(`issues-found.md` F3 and F9): a refusal counter that moved decides the row
+(roadmap Phase 20, F3 and F9): a refusal counter that moved decides the row
 before either. Eight counters in `xhci.h` say this driver declined a function
 driver's request, and none of them can move until something above usbport has
 selected a configuration and asked for a pipe. Five are the non-default open

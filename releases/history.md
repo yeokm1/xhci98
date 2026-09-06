@@ -64,7 +64,7 @@ in `1.0.0.1`.
   nothing there. That was generalised from the Phase 3 spike's observation
   window and was never measured; the owner's checks of 2026-09-05 contradict
   it. Whether and when Windows 2000 idles the controller is unestablished
-  until a reading is recorded (`issues-found.md` F18). The value is written
+  until a reading is recorded (roadmap Phase 20, F18). The value is written
   on every install path regardless, and that is unchanged.
 
 ## 1.0.0.1 - 2026-09-02

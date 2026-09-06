@@ -145,7 +145,7 @@
  * string twice for a plain block.
  */
 /* Defined beside the companion state below; every companion write reports
- * its result through it (issues-found.md F5). */
+ * its result through it (roadmap Phase 20, F5). */
 static void note_write(FILE *dest, int rc);
 
 static void put_wrapped_to(FILE *dest, const char *indent, const char *hang,
@@ -730,7 +730,7 @@ static unsigned long dump_region(HANDLE device, unsigned long region,
 static FILE *companion;
 
 /*
- * **Whether the report on disk is the report** (issues-found.md F5, F17).
+ * **Whether the report on disk is the report** (roadmap Phase 20, F5, F17).
  * `fopen` succeeding used to be the whole of "the .TXT was written", and the
  * summary then told the user to send it and exited 0 - while every `fprintf`
  * result and the `fclose` were ignored, so a full floppy or a removed stick
@@ -964,7 +964,7 @@ static void write_companion_ring(const SNAP_HEADER *h, const unsigned char *ext,
         return;
     }
     /* Two comparisons, not a sum: a reply whose offset and length add past
-     * 2^32 would wrap the sum below `extBytes` and pass (issues-found.md,
+     * 2^32 would wrap the sum below `extBytes` and pass (roadmap Phase 20,
      * smaller items). */
     if (h->RingOffset > extBytes || h->RingBytes > extBytes - h->RingOffset) {
         comp("\nnote ring: the driver says it is at +%lu for %lu bytes, which "
@@ -2678,7 +2678,7 @@ int main(int argc, char **argv)
              * summary line and exit code the dump would. With XHCISNAP_FAULT
              * set to "write" or "close" the corresponding step is made to fail,
              * which is how the incomplete-report branch is driven on a host
-             * with no controller and no full disk (issues-found.md F5).
+             * with no controller and no full disk (roadmap Phase 20, F5).
              */
             return selftest_report(argv[++i]);
         } else if (strcmp(argv[i], "-disable") == 0) {
@@ -2749,7 +2749,7 @@ int main(int argc, char **argv)
     /*
      * The registry half returns before the device is opened, so `-probe` or
      * `-dump` beside `-verbosity`/`-disable` used to perform the write and
-     * silently drop the probe or dump (issues-found.md, D5). Refused instead:
+     * silently drop the probe or dump (roadmap Phase 20, D5). Refused instead:
      * a user who asked for two things and got one with no word about the
      * other has been told something false by omission.
      */
@@ -2834,7 +2834,7 @@ int main(int argc, char **argv)
         return 1;
     }
     if (extBytes != extLast.ExtensionBytes) {
-        /* Carried into the summary and the exit code as well (issues-found.md
+        /* Carried into the summary and the exit code as well (roadmap Phase 20,
          * F17): this line is the one least likely to survive on a 25-row
          * console, and a set published with a "send this" underneath it is a
          * set somebody will send as a good one. */

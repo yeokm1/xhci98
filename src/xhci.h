@@ -2975,7 +2975,7 @@ ULONG XhciRingNoOpAt(PXHCI_RING ring, ULONG index);
 /* The same rewrite with the TRB type named by the caller: XHCI_TRB_TYPE_NOOP
  * (8) is a transfer ring's No Op and XHCI_TRB_TYPE_NOOP_COMMAND (23) is the
  * command ring's, and the two are not interchangeable - a type 8 on the command
- * ring is a TRB Error (issues-found.md F12). XhciRingNoOpAt is this with 8. */
+ * ring is a TRB Error (roadmap Phase 20, F12). XhciRingNoOpAt is this with 8. */
 ULONG XhciRingNoOpAtType(PXHCI_RING ring, ULONG index, ULONG trbType);
 
 /* The physical address the dequeue pointer currently sits at - the value a Set
@@ -5096,7 +5096,7 @@ typedef struct _XHCI_EXTENSION {
      * steadily rising SuspendCount there is the expected shape. On Win2000 it
      * has read 0 in every run recorded so far, and on 2026-09-06 it read 0
      * with the value deleted too, nothing attached and then a mouse, in the
-     * conditions build-and-test.md records on both HALs (issues-found.md
+     * conditions build-and-test.md records on both HALs (roadmap Phase 20,
      * F18). So read a nonzero there as a finding to record, not as a fault.
      */
     ULONG SuspendCount;

@@ -235,7 +235,7 @@ stopped it. A bound that is only decremented on the path that does work is not
 a bound.
 
 A lost delivery spends budget too, and this was not so until the 2026-09-05
-audit (`issues-found.md` F2). `UsbPortRequestAsyncCallback` answers 0 on
+audit (roadmap Phase 20, F2). `UsbPortRequestAsyncCallback` answers 0 on
 success and 0 on its own pool-allocation failure, so an arming that produced
 no callback is indistinguishable at the call. The first version set
 `RecoveryArmed`, cleared the request, and left the two as they were: the
@@ -298,7 +298,7 @@ stub): the first recovered cleanly, the next three set HCE with
 `ResetControllerCalls` still 1. `XhciInitController` now clears the fatal
 latch with `ControllerFailed`, `test_fatal_after_recovery` pins it, and the
 same four provocations on the corrected build read four recoveries
-completed, none refused (`issues-found.md` F19).
+completed, none refused (roadmap Phase 20, F19).
 
 ## 8. The known window, recorded rather than closed
 

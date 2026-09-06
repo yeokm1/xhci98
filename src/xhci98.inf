@@ -191,7 +191,7 @@ HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1
 ;
 ; Until release 1.0.1.0 the NT path omitted it, on the assumption that Windows
 ; 2000's native usbport never idle-suspends this controller. That was never
-; measured (issues-found.md F18); what was measured is that Windows 98's
+; measured (roadmap Phase 20, F18); what was measured is that Windows 98's
 ; usbport idles the controller within about half a second of the last
 ; transfer and Windows XP's within about thirty seconds of a start with
 ; nothing attached (2026-09-03), and a halted xHC cannot report a hot-plug.

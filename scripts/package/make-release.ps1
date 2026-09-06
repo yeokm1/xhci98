@@ -182,7 +182,7 @@ cut (measured read-only on 2026-09-05: the 1.0.0.1 INF fails six of them, all
 added by 1.0.1.0). A `-Version` other than `src\xhci98.inf`'s `DriverVer` is
 refused with that reason; to rebuild an older cut's asset, check out the commit
 that cut it and run this mode there, where the gate is the one that cut passed.
-`issues-found.md` F15 has the record. Until that fix this mode also required
+roadmap Phase 20, F15 has the record. Until that fix this mode also required
 `out\pkg-<flavour>\` to hash-match the published binaries, a dependency left
 over from when the media carried files the package supplied; since 1.0.0.1
 nothing from the package enters the asset, and the check is gone.
@@ -678,7 +678,7 @@ function Assert-UploadSetOutsideRelease {
     # assembling 1.0.1.0 was accepted: the older cut's directory would have
     # gained an `upload-1.0.1.0\` and a sibling zip, and .gitignore ignores
     # neither, so the next `git add -A` would have committed them into a cut
-    # (issues-found.md F4, reproduced read-only with the extracted guard). The
+    # (roadmap Phase 20, F4, reproduced read-only with the extracted guard). The
     # published root is still named separately because the ordinary cut's
     # staging directory sits under `releases\` too and the ancestor direction -
     # an upload directory that would CONTAIN the release - is checked against
@@ -1105,7 +1105,7 @@ If what you want really is to re-cut the published version, drop -UploadSetOnly.
             # for usbport.sys and usbhub.sys on both NT routes, SUSP-MISSING on
             # both), all added by 1.0.1.0, and the 1.0.0.0 INF names Microsoft
             # files on the media, which OS-MEDIA refuses. Weakening the gate or
-            # pinning it per version is not the answer (issues-found.md F15);
+            # pinning it per version is not the answer (roadmap Phase 20, F15);
             # the tree that cut the older version carries the gate it passed.
             throw @"
 -UploadSetOnly rebuilds the asset of the current cut only, and $Version is not
@@ -1156,7 +1156,7 @@ docs\contributing\build-and-test.md, "Versioning the driver".
     # package supplied: since 1.0.0.1 nothing from the package enters the
     # asset, so the requirement only stopped a fresh clone - the machine a lost
     # asset is most likely to be rebuilt on - from rebuilding it
-    # (issues-found.md F15). What the asset is made of is the published tree,
+    # (roadmap Phase 20, F15). What the asset is made of is the published tree,
     # and the INF gate on each assembled directory is what checks it.
     if ($UploadSetOnly) {
         Write-Step ("Upload set for {0}, from {1}" -f $Version, $finalRoot)

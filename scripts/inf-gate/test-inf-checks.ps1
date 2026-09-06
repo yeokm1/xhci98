@@ -533,7 +533,7 @@ try {
     # The Win98 section keeps NTMPDriver but loses its own CopyFiles of the
     # project files while the .NTx86 section and [DefaultInstall] keep theirs.
     # The global "some CopyFiles section delivers the binary" rule is satisfied
-    # by those, and the gate passed exactly this INF (issues-found.md F14): a
+    # by those, and the gate passed exactly this INF (roadmap Phase 20, F14): a
     # clean Windows 98 install would write the loader value and copy no
     # driver. The OS-source list stays, so the OS-* rules are not what fires.
     Assert-RuleFires "w98-copyfiles-gap" "PATH-W98" {
@@ -834,7 +834,7 @@ try {
     # paths - an assertion, not a mutation control, and named as such. Until
     # 1.0.1.0 this pinned the value's ABSENCE on the Windows 2000 path, on the
     # assumption that that target's native usbport never idle-suspends this
-    # controller (an assumption, not a measurement; issues-found.md F18); the
+    # controller (an assumption, not a measurement; roadmap Phase 20, F18); the
     # Windows XP reading of 2026-09-03 (roadmap task 19.2: usbport's
     # SuspendController within thirty seconds, the hot-plugged mouse invisible)
     # made it an NT-path need, so the pin inverted. Pinned as a whole row: the

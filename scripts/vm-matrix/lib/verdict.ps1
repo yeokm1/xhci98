@@ -171,7 +171,7 @@ function Get-RowWedgeProblems {
 # a configuration and asked for a pipe - which is the very thing the NODRIVER
 # inference below says did not happen.
 #
-# The 2026-09-05 audit (issues-found.md F3 and F9) fed the real evaluator two
+# The 2026-09-05 audit (roadmap Phase 20, F3 and F9) fed the real evaluator two
 # deltas and got two wrong answers from the same gap:
 #
 #   F3: `endpoint refusals - ring pool` +1 with `endpoints opened` 0 read
@@ -291,7 +291,7 @@ function Get-RowOutcome {
     $addressed = $(if ($Delta.Values.ContainsKey($addrField)) { $Delta.Values[$addrField] } else { 0 })
     $claimed = $(if ($Delta.Values.ContainsKey($claimField)) { $Delta.Values[$claimField] } else { 0 })
 
-    # REFUSAL EVIDENCE FIRST (issues-found.md F3, F9).  A refusal counter that
+    # REFUSAL EVIDENCE FIRST (roadmap Phase 20, F3, F9).  A refusal counter that
     # moved is this driver declining a function driver's request, and it
     # decides the row before PASS and before the NODRIVER inference: a
     # matrix whose expectations never named the counter must not read the

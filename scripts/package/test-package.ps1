@@ -716,7 +716,7 @@ try {
 
         # --- assembled from the tracked directory alone ---------------------
         #
-        # issues-found.md F15. This mode used to require the gated
+        # roadmap Phase 20, F15. This mode used to require the gated
         # out\pkg-<flavour>\ directories to exist and to hash-match the
         # published binaries, a dependency left over from when the media
         # carried Microsoft files the package supplied. Since 1.0.0.1 nothing
@@ -947,7 +947,7 @@ try {
             # published tree, which is the branch nothing exercised.
             @{ Why = "around"; UploadDir = (Split-Path -Parent $relRoot);
                Releases = (Join-Path (Join-Path $script:work "wrap") ("upload-" + $relVersion + "\releases")) },
-            # issues-found.md F4: the guard compared with the version being
+            # roadmap Phase 20, F4: the guard compared with the version being
             # cut alone, so an -UploadDir under an OLDER cut was accepted and
             # would have written `upload-<v>\` and the zip into a written-once
             # directory .gitignore does not cover. The older cut staged for the
@@ -1093,7 +1093,7 @@ try {
 
     # --- the readme template may not carry the two claims 1.0.1.0 shipped ----
     #
-    # issues-found.md F7. The rendered readme.txt is byte-identical to the
+    # roadmap Phase 20, F7. The rendered readme.txt is byte-identical to the
     # template apart from its placeholders, so the template is what this reads.
     # "WINDOWS 98 ONLY" described DisableSelectiveSuspend as a Windows 98
     # setting after 1.0.1.0 had made the NT path write it too, and the shipped

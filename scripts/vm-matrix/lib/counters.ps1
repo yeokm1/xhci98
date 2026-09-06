@@ -232,7 +232,7 @@ function Get-CounterDelta {
         # from one reading is an absolute value wearing a delta's name, and the
         # rule this file states is that unread is an ERROR and never a zero.
         # Unreachable today (Read-Counters throws on a short chunk), which is
-        # why the rule was written down here rather than found (issues-found.md,
+        # why the rule was written down here rather than found (roadmap Phase 20,
         # smaller items).
         if (-not $Before.Values.ContainsKey($k)) { continue }
         $d[$k] = $After.Values[$k] - $Before.Values[$k]

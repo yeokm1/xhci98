@@ -123,7 +123,7 @@ one the driver declared (`MISMATCH`, `DO NOT DECODE`, printed whatever
 happened to the `.TXT`): in every case the `.BIN` and `.PSC` are still the
 raw evidence and are still named, but the `.TXT` must not be sent as the
 report. Until the
-2026-09-05 audit (`issues-found.md` F5, F17) `fopen` succeeding was the whole of
+2026-09-05 audit (roadmap Phase 20, F5, F17) `fopen` succeeding was the whole of
 "written", and a truncated report exited 0 with a "send this" underneath it.
 `xhcisnap -selftest-report BASE` drives the report path with no controller,
 and the `XHCISNAP_FAULT` environment variable (`write` or `close`) makes the

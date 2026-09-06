@@ -418,7 +418,7 @@ function Invoke-RowLegs {
 #
 # "Evaluated" means REACHED, not counted.  `Rows` includes the rows that were
 # EXCLUDED on this target or never reached because the group ended early, and
-# both add to `NotReached`; the 2026-09-05 audit (issues-found.md F11) fed the
+# both add to `NotReached`; the 2026-09-05 audit (roadmap Phase 20, F11) fed the
 # real function Rows=3, NotReached=3, Against=0 and got PASS - a target on
 # which nothing was measured, and which also slipped past the runner's
 # "no report lines" guard because excluded rows print a line each.  A target

@@ -1115,7 +1115,7 @@ static VOID NTAPI xhciStopController(PVOID miniPortExtension,
  * thirteen minutes on the Standard PC guest with DisableSelectiveSuspend
  * deleted, nothing attached and then a mouse, and 0 in fifty minutes on the
  * ACPI SMP guest with no value and a mouse attached (2026-09-06,
- * issues-found.md F18; build-and-test.md has the conditions and an
+ * roadmap Phase 20, F18; build-and-test.md has the conditions and an
  * unconfirmed hub-driver inference). The pair is target-agnostic either way.
  */
 static VOID NTAPI xhciSuspendController(PVOID miniPortExtension)

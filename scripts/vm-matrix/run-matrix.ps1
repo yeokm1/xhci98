@@ -152,7 +152,7 @@ foreach ($g in $mx.Groups) {
             $problems += ("row {0}: this QEMU build has no device model '{1}'" -f $r.Name, $r.Model)
         }
         # The attach leg sleeps on Settle; a row without the key threw there
-        # and ended its whole group, after boots had been spent (issues-found.md,
+        # and ended its whole group, after boots had been spent (roadmap Phase 20,
         # smaller items). Refused before a boot, like every other matrix error.
         if (-not $r.ContainsKey('Settle') -or -not ($r.Settle -is [int]) -or [int]$r.Settle -lt 0) {
             $problems += ("row {0}: has no non-negative integer Settle, which the attach leg sleeps on" -f $r.Name)
@@ -278,7 +278,7 @@ function Add-RowBackends {
         $chrPath = Join-Path $OutDir ("matrix-{0}-chr{1}.log" -f $tag, $Row.NeedsChardev)
         # Composed and quoted by New-ChardevAddCommand (lib\monitor.ps1): an
         # -OutDir with a space made every chardev row ERROR on every target
-        # (issues-found.md, smaller items), and quoting the path value alone
+        # (roadmap Phase 20, smaller items), and quoting the path value alone
         # did not fix it - HMP quotes whole arguments only, so the whole
         # option string is what is quoted, and a comma is refused.
         $wanted += (New-ChardevAddCommand -Id ("matrixchr{0}" -f $Row.NeedsChardev) -Path $chrPath)
@@ -438,7 +438,7 @@ function Invoke-AttachLeg {
     # THE IDENTITY IS RE-CHECKED BEFORE EVERY READ, not once per group: a
     # Windows 2000 disable/enable mid-group reloads the image at a new VA, and
     # a read against the old one decodes freed memory into plausible numbers
-    # (issues-found.md, smaller items; soak-11v.ps1 already did this).
+    # (roadmap Phase 20, smaller items; soak-11v.ps1 already did this).
     if ($DebugconLog -ne "") {
         $drift = Get-ExtensionIdentityDrift -Ident $Ident -DebugconLog $DebugconLog
         if ($drift -ne "") {

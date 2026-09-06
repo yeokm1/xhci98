@@ -768,7 +768,7 @@ void legacy_cleanup(LEGACY_CTRL *c)
             /* The firmware's enables come back, not its status: bits 31:29
              * of EHCI's USBLEGCTLSTS (EHCI 2.1.8) are RW1C SMI status, so a
              * saved 1 written back verbatim acknowledged whatever had been
-             * reasserted since the handoff (issues-found.md F16). 15:0 holds
+             * reasserted since the handoff (roadmap Phase 20, F16). 15:0 holds
              * the enables and the reserved-preserve bits between them; 31:16
              * is read-only or RW1C and is left alone, as the xHCI path's
              * cleanup in bringup.c already does. */

@@ -986,7 +986,7 @@ set) and the driver's reinitialize path is what runs instead; one 2a boot read
 with traffic, the evidence that nothing was lost is that every stage landed,
 and the counter only says how many idle windows there were. On 2b it has read
 0 in every matrix run recorded so far, and the "never" this sentence used to
-state was generalised from the Phase 3 spike's window (`issues-found.md`
+state was generalised from the Phase 3 spike's window (roadmap Phase 20,
 F18). The observation was taken on 2026-09-06 (roadmap task 20.7), in the
 virtual machine, under two different sets of conditions on two HALs, and
 neither showed an idle suspend:

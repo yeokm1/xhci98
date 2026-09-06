@@ -1,7 +1,7 @@
 @echo off
 rem selftest.cmd - drive XHCISNAP.EXE's report path with no controller present.
 rem
-rem The 2026-09-05 audit (issues-found.md F5, F17) found the tool reporting a
+rem The 2026-09-05 audit (roadmap Phase 20, F5, F17) found the tool reporting a
 rem text report as written on the strength of fopen alone: every fprintf and
 rem the fclose were unchecked, so a full or removed destination left a
 rem truncated .TXT that the summary told the user to send, exit 0. The tool now

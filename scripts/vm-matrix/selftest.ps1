@@ -153,7 +153,7 @@ Assert "unclaimed + tripped zero -> FAIL not NODRIVER" "FAIL" (Get-Outcome @(
     'zero fatal controller status'
 ) (New-Delta @{ 'devices addressed' = 1; 'fatal controller status' = 1 }))
 
-Write-Host "--- a refusal by THIS driver outranks NODRIVER and PASS (issues-found.md F3, F9) ---"
+Write-Host "--- a refusal by THIS driver outranks NODRIVER and PASS (roadmap Phase 20, F3, F9) ---"
 #
 # The 2026-09-05 audit fed the real evaluator two deltas and got the two wrong
 # answers a verdict must never give: a request this driver REFUSED read as the
@@ -650,7 +650,7 @@ Write-Host "--- the target verdict: no rows is a FAIL, not an empty pass ---"
 Assert "zero rows is FAIL"                     "FAIL" (Get-TargetVerdict -Tally @{ Rows = 0; Against = 0 })
 Assert "a row against the target is FAIL"      "FAIL" (Get-TargetVerdict -Tally @{ Rows = 3; Against = 1 })
 Assert "rows with nothing against is PASS"     "PASS" (Get-TargetVerdict -Tally @{ Rows = 3; Against = 0 })
-# issues-found.md F11: a target whose every row was EXCLUDED (or never reached)
+# roadmap Phase 20, F11: a target whose every row was EXCLUDED (or never reached)
 # has measured nothing, and read PASS.
 Assert "every row not reached is FAIL (F11)"   "FAIL" (Get-TargetVerdict -Tally @{ Rows = 3; NotReached = 3; Against = 0 })
 Assert "one row reached, nothing against, is PASS" "PASS" (Get-TargetVerdict -Tally @{ Rows = 3; NotReached = 2; Against = 0 })
