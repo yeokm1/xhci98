@@ -181,9 +181,7 @@ filter, on a Full-Speed mouse in a virtual machine: `bInterval` 1, 2, 5 and
 Interval 3, 3, 4 and 5 (1, 1, 2 and 4 ms), the first two through the floor;
 the same mouse behind a Full-Speed hub arrived at its true speed, with
 `bInterval` 10, 1 and 4 bucketed in frames as `Period` 8, 1 and 4 and
-programmed as Interval 6, 3 and 5 (8, 1 and 4 ms), nothing floored.
-`docs/contributing/build-and-test.md`, "The SweetLow stack", has the
-procedure, the evidence path and two traps of that tool's own. The
+programmed as Interval 6, 3 and 5 (8, 1 and 4 ms), nothing floored. The
 prohibition on "reconstructing" `bInterval` from `Period` is in the
 invariants: the information is gone before the miniport sees it.
 
