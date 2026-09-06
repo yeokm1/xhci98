@@ -1838,12 +1838,38 @@ Tasks, in the audit's revised order:
   a successful-restore reading for 20.5's IMOD change, which QEMU's CRS
   fallback cannot supply, so a host model or a controller whose restore
   succeeds. Report which environment produced each reading.
-- [ ] 20.8 the audio replug row read with the Windows 98 target run alone,
+- [x] 20.8 the audio replug row read with the Windows 98 target run alone,
   the owner's chosen way (2026-09-06) to resolve the one row 20.7 left
   against the checkpoint: the two targets run sequentially, not side by
-  side. Not further investigation, and not a recorded artifact decision
-  yet; 20.7's evidence clears the driver, and what is untested is whether
-  a solo run on a clear host passes. The first attempt on 2026-09-06 was
+  side. Done on the night of 2026-09-06: `2a-fresh` PASS, 17 rows, 5
+  NODRIVER expected, 3 not reached, 0 against, 0:57:13, started 23:24:51,
+  the same binary as 20.7 (sha256 `b75f48eeb9f29ff8`), QEMU 11.0.0 under
+  TCG, no other guest on the host; both `usb-audio/fs` legs PASS. The
+  report body is Phase 19's with nothing removed and only the seven
+  refusal-counter expectations 20.0 added on each of the 28 legs, so the
+  checkpoint's "no worse than the Phase 19 reports" clause is satisfied,
+  and the report replaces the 20.7 Windows 98 report in
+  `run-20-post-release/`. Three things about how it was taken. First, the
+  clean boot was done on a copy of `fresh-2a.img` on the local disk (the
+  synced tree is where a writable boot has hung QEMU before): it reached
+  the normal desktop in about 23 s with the driver up, no Safe Mode and no
+  ScanDisk pass seen, so the dirty-shutdown reading of the first attempt
+  is not confirmed by this boot; the Start-menu shutdown was driven over
+  the monitor and QEMU reported a clean shutdown, the image checks clean
+  and its stamp stays its only snapshot. That copy was not written back
+  over `vm\fresh-2a.img` (the harness's session was not allowed to
+  overwrite it; the owner copies it back or not), and the run booted the
+  copy through a configuration differing from the real one only in
+  `VmDir`, which is why the report's image line names a scratch path.
+  Second, the owner chose (asked mid-run) to read the audio group FIRST:
+  the run used the matrix with the audio group moved to the front, a pure
+  reorder, so the row is the first boot of the run rather than the fifth,
+  which is the condition 20.7 could not clear; a first solo run in the
+  matrix's own order was stopped eight minutes in for it, its partial
+  output kept as `phase20-8-solo-aborted-hidonly`. Third, Windows 2000 was
+  not run, as written below. Evidence in
+  `out\post-release\phase20-8-audiofirst\` on the host that ran it.
+  As written: the first attempt on 2026-09-06 was
   aborted before the driver started: the guest booted into Safe Mode,
   which on a `-snapshot` boot means `vm\fresh-2a.img` itself carries a
   dirty-shutdown flag from an earlier hard kill of QEMU and every

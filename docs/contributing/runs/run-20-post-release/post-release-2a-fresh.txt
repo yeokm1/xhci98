@@ -1,16 +1,52 @@
 ﻿# post-release run
 # driver:    1.0.1.0 qemu, 159536 B, sha256 b75f48eeb9f29ff8
-# image:     vm\fresh-2a.img, stamp base-1.0.1.0-qemu, from win98.img post-nusb
+# image:     C:\Users\yeokm1\AppData\Local\Temp\claude\d--OneDrive-git-projects-xhci98\85d545c1-d22e-4a3a-94e1-484a38ccd549\scratchpad\p208\vmwork\fresh-2a.img, stamp base-1.0.1.0-qemu, from win98.img post-nusb
 # qemu:      11.0.0 (v11.0.0-12122-ga4bb4b10c9), accel tcg
 # offsets:   SIZEOF 91612, 391 counters
-# started:   2026-09-06 11:18:27, elapsed 0:57:44
-# verdict:   2a-fresh FAIL, 17 rows, 5 NODRIVER expected, 3 not reached
+# started:   2026-09-06 23:24:51, elapsed 0:57:13
+# verdict:   2a-fresh PASS, 17 rows, 5 NODRIVER expected, 3 not reached
 #
 # Outcomes: PASS FAIL NODRIVER INERT ERROR EXCLUDED - see docs/contributing/design/06-device-matrix-verdict.md
 # A '-> X' in the outcome column marks the expectation that did not hold.
 # A row name ending in '/replug' is the same device attached a second time - design record 09 section 5.
 #
 TARGET ROW                          OUTCOME   EXPECTATION                                                    READING
+2a-fresh usb-audio/fs                 PASS      advance devices addressed                                      +1
+2a-fresh usb-audio/fs                 PASS      advance slots enabled                                          +1
+2a-fresh usb-audio/fs                 PASS      zero fatal controller status                                   0
+2a-fresh usb-audio/fs                 PASS      zero transfer events for no open endpoint                      0
+2a-fresh usb-audio/fs                 PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-audio/fs                 PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-audio/fs                 PASS      zero interrupt mask failures                                   0
+2a-fresh usb-audio/fs                 PASS      zero commands the engine gave up on                            0
+2a-fresh usb-audio/fs                 PASS      zero endpoint refusals - type                                  0
+2a-fresh usb-audio/fs                 PASS      zero endpoint refusals - no device                             0
+2a-fresh usb-audio/fs                 PASS      zero endpoint refusals - params                                0
+2a-fresh usb-audio/fs                 PASS      zero endpoint refusals - ring pool                             0
+2a-fresh usb-audio/fs                 PASS      zero endpoint configure failures                               0
+2a-fresh usb-audio/fs                 PASS      zero endpoints refused - no bandwidth                          0
+2a-fresh usb-audio/fs                 PASS      zero endpoints refused - no resources                          0
+2a-fresh usb-audio/fs                 PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+2a-fresh usb-audio/fs                 PASS      advance endpoints opened >= 1                                  +1
+2a-fresh usb-audio/fs                 PASS      inert iso packets answered because Windows 98 SE USBAUDIO.VXD faults after one URB - exonerated in batch 9-V through a UHCI control 0  (Windows 98 SE USBAUDIO.VXD faults after one URB - exonerated in batch 9-V through a UHCI control)
+2a-fresh usb-audio/fs/replug          PASS      advance devices addressed                                      +1
+2a-fresh usb-audio/fs/replug          PASS      advance slots enabled                                          +1
+2a-fresh usb-audio/fs/replug          PASS      zero fatal controller status                                   0
+2a-fresh usb-audio/fs/replug          PASS      zero transfer events for no open endpoint                      0
+2a-fresh usb-audio/fs/replug          PASS      zero endpoint opens refused - unusable buffer                  0
+2a-fresh usb-audio/fs/replug          PASS      zero endpoint opens refused - malformed call                   0
+2a-fresh usb-audio/fs/replug          PASS      zero interrupt mask failures                                   0
+2a-fresh usb-audio/fs/replug          PASS      zero commands the engine gave up on                            0
+2a-fresh usb-audio/fs/replug          PASS      zero endpoint refusals - type                                  0
+2a-fresh usb-audio/fs/replug          PASS      zero endpoint refusals - no device                             0
+2a-fresh usb-audio/fs/replug          PASS      zero endpoint refusals - params                                0
+2a-fresh usb-audio/fs/replug          PASS      zero endpoint refusals - ring pool                             0
+2a-fresh usb-audio/fs/replug          PASS      zero endpoint configure failures                               0
+2a-fresh usb-audio/fs/replug          PASS      zero endpoints refused - no bandwidth                          0
+2a-fresh usb-audio/fs/replug          PASS      zero endpoints refused - no resources                          0
+2a-fresh usb-audio/fs/replug          PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+2a-fresh usb-audio/fs/replug          PASS      advance endpoints opened >= 1                                  +1
+2a-fresh usb-audio/fs/replug          PASS      inert iso packets answered because Windows 98 SE USBAUDIO.VXD faults after one URB - exonerated in batch 9-V through a UHCI control 0  (Windows 98 SE USBAUDIO.VXD faults after one URB - exonerated in batch 9-V through a UHCI control)
 2a-fresh usb-kbd/hs                   PASS      advance devices addressed                                      +1
 2a-fresh usb-kbd/hs                   PASS      advance slots enabled                                          +1
 2a-fresh usb-kbd/hs                   PASS      zero fatal controller status                                   0
@@ -479,40 +515,3 @@ TARGET ROW                          OUTCOME   EXPECTATION                       
 2a-fresh u2f-emulated/fs/replug       PASS      zero endpoints refused - no resources                          0
 2a-fresh u2f-emulated/fs/replug       PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 4 == 4
 2a-fresh u2f-emulated/fs/replug       PASS      advance endpoints opened >= 1                                  +2
-2a-fresh usb-audio/fs                 PASS      advance devices addressed                                      +1
-2a-fresh usb-audio/fs                 PASS      advance slots enabled                                          +1
-2a-fresh usb-audio/fs                 PASS      zero fatal controller status                                   0
-2a-fresh usb-audio/fs                 PASS      zero transfer events for no open endpoint                      0
-2a-fresh usb-audio/fs                 PASS      zero endpoint opens refused - unusable buffer                  0
-2a-fresh usb-audio/fs                 PASS      zero endpoint opens refused - malformed call                   0
-2a-fresh usb-audio/fs                 PASS      zero interrupt mask failures                                   0
-2a-fresh usb-audio/fs                 PASS      zero commands the engine gave up on                            0
-2a-fresh usb-audio/fs                 PASS      zero endpoint refusals - type                                  0
-2a-fresh usb-audio/fs                 PASS      zero endpoint refusals - no device                             0
-2a-fresh usb-audio/fs                 PASS      zero endpoint refusals - params                                0
-2a-fresh usb-audio/fs                 PASS      zero endpoint refusals - ring pool                             0
-2a-fresh usb-audio/fs                 PASS      zero endpoint configure failures                               0
-2a-fresh usb-audio/fs                 PASS      zero endpoints refused - no bandwidth                          0
-2a-fresh usb-audio/fs                 PASS      zero endpoints refused - no resources                          0
-2a-fresh usb-audio/fs                 PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
-2a-fresh usb-audio/fs                 PASS      advance endpoints opened >= 1                                  +1
-2a-fresh usb-audio/fs                 PASS      inert iso packets answered because Windows 98 SE USBAUDIO.VXD faults after one URB - exonerated in batch 9-V through a UHCI control 0  (Windows 98 SE USBAUDIO.VXD faults after one URB - exonerated in batch 9-V through a UHCI control)
-2a-fresh usb-audio/fs/replug          -> FAIL   advance devices addressed                                      +0
-2a-fresh usb-audio/fs/replug          -> FAIL   advance slots enabled                                          +0
-2a-fresh usb-audio/fs/replug          FAIL      zero fatal controller status                                   0
-2a-fresh usb-audio/fs/replug          FAIL      zero transfer events for no open endpoint                      0
-2a-fresh usb-audio/fs/replug          FAIL      zero endpoint opens refused - unusable buffer                  0
-2a-fresh usb-audio/fs/replug          FAIL      zero endpoint opens refused - malformed call                   0
-2a-fresh usb-audio/fs/replug          FAIL      zero interrupt mask failures                                   0
-2a-fresh usb-audio/fs/replug          FAIL      zero commands the engine gave up on                            0
-2a-fresh usb-audio/fs/replug          FAIL      zero endpoint refusals - type                                  0
-2a-fresh usb-audio/fs/replug          FAIL      zero endpoint refusals - no device                             0
-2a-fresh usb-audio/fs/replug          FAIL      zero endpoint refusals - params                                0
-2a-fresh usb-audio/fs/replug          FAIL      zero endpoint refusals - ring pool                             0
-2a-fresh usb-audio/fs/replug          FAIL      zero endpoint configure failures                               0
-2a-fresh usb-audio/fs/replug          FAIL      zero endpoints refused - no bandwidth                          0
-2a-fresh usb-audio/fs/replug          FAIL      zero endpoints refused - no resources                          0
-2a-fresh usb-audio/fs/replug          FAIL      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 0 == 0
-2a-fresh usb-audio/fs/replug          -> FAIL   advance endpoints opened >= 1                                  +0
-2a-fresh usb-audio/fs/replug          FAIL      inert iso packets answered because Windows 98 SE USBAUDIO.VXD faults after one URB - exonerated in batch 9-V through a UHCI control 0  (Windows 98 SE USBAUDIO.VXD faults after one URB - exonerated in batch 9-V through a UHCI control)
-2a-fresh usb-audio/fs                 FAIL      (both legs)                                                    an expectation did not hold on the replug
