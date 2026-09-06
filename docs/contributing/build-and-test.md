@@ -1038,12 +1038,24 @@ documents the setting rather than the defect). Both install paths write
 Windows XP guest showed XP's usbport idling the controller about thirty
 seconds after start), which stops NUSB's usbport idling the controller at
 all: `SuspendController` never fires, `USBCMD` reads `0x00000005`, and a
-hot-plugged device enumerates with no Refresh. Everything below describes
-the behaviour without that value, which is what a guest installed from the
-batch 11-V baseline media, or any image predating this INF (including the
-working 2a and 2b images), still does. Set the value by hand on such a
-guest, or install current media, before reading an idle hot-plug as a
-defect.
+hot-plugged device enumerates with no Refresh. The value has to be 1: present
+and set to 0 it behaves exactly like absent, measured on 2026-09-06 on the
+fresh Windows 98 SE guest (NUSB 3.3, the 1.0.1.0 package, an overlay of
+`fresh-2a.img`, no USB device attached at boot, evidence in
+`out\post-release\issue4-dss0\`). With the shipped 1: `SuspendCount` 0
+after four idle minutes, `USBCMD` `0x00000005`, a `usb-kbd` hot-plugged then
+addressed at once. With 0 written by `regedit /s` and a clean shutdown, on
+each of two boots: `SuspendController` within seconds of `StartController`,
+`USBCMD` `0x00000000` with `USBSTS` HCH set, the health poll frozen at 62, a
+keyboard hot-plugged after two idle minutes still at address 0 forty seconds
+later with `DevicesAddressed` 0, and a Device Manager Refresh then bringing
+`ResumeController`, `USBCMD` `0x00000005` and the keyboard addressed. So a
+0 left by another tool reads as "the value has no effect". Everything below
+describes the behaviour without that value, which is what a guest installed
+from the batch 11-V baseline media, or any image predating this INF
+(including the working 2a and 2b images), still does. Set the value by hand
+on such a guest, or install current media, before reading an idle hot-plug
+as a defect.
 
 The fix is a setting and not driver code, and the reason also says what a
 future wake path would have to overcome. The differential came out the awkward
@@ -3261,7 +3273,9 @@ archives) so Phase 2a does not depend on a live download.
    a relaunch), `SuspendController` fired once shortly after start and a
    keyboard hot-plugged afterwards was never seen (QEMU lists it at the port
    with address 0, the driver's addressed count stays 0). The same behaviour
-   as NUSB's build, so the INF's global value stays. One QEMU trap on that
+   as NUSB's build, so the INF's global value stays; and under NUSB's build
+   the value present but set to 0 behaves like the deleted case (2026-09-06,
+   three boots, the idle-suspend paragraph above). One QEMU trap on that
    run: `sendkey` input follows the most recently added keyboard, so a USB
    keyboard hot-plugged onto a suspended controller silently swallows every
    keystroke until `device_del` removes it.

@@ -160,7 +160,8 @@ HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1
 ; driver. The NT path carries the same two routes so that the two halves of
 ; this file place the same value, which is the shape the INF gate checks.
 ;
-; Without it, a device attached after the bus goes quiet is detected by
+; Without it (or with it set to 0, which behaves the same; measured
+; 2026-09-06), a device attached after the bus goes quiet is detected by
 ; nothing until the user presses Refresh in Device Manager: the Windows 98
 ; usbport builds (NUSB's and SweetLow's alike) idle-suspend the controller
 ; within about half a second of the last transfer, and Windows XP's within

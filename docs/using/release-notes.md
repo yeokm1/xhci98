@@ -253,7 +253,8 @@ because a user meets them through this driver.
   the value, measured in a virtual machine on 2026-09-06). It also
   stops any other USB controller
   idling, it slightly raises power draw, and an uninstall does not remove
-  it; delete the value by hand if you want the previous behaviour back.
+  it; delete the value by hand (or set it to 0, which has the same effect)
+  if you want the previous behaviour back.
 - Windows 98: plugging and unplugging a device very fast and repeatedly (one
   cycle every 0.6 s for minutes) can freeze the machine with no error. This
   one is this driver's own defect, with no explanation yet. Normal plugging

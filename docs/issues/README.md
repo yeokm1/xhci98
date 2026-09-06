@@ -9,9 +9,10 @@ each page.
 
 Dates are 2026 unless stated. Task ids are the roadmap's.
 
-Issues 1 to 3 were fixed before `1.0.0.0`, so none of them is a limitation
-of the release; those pages are here for the mechanism and for how it was
-found. Issue 4 was observed on the Windows XP guest on 2026-09-03 and
+Issues 1 to 3 and 5 were fixed before `1.0.0.0`, so none of them is a
+limitation of the release; those pages are here for the mechanism and for
+how it was found (issue 5's fix is a registry value the release notes list
+as a known limitation because it is machine-wide). Issue 4 was observed on the Windows XP guest on 2026-09-03 and
 fixed the same day as roadmap task 19.7 in release `1.0.1.0`: a host vector
 reproduces the mechanism, and the closing run on a clean install (`i4b`)
 saw the restore recur on both devices and the fix carry them. What the
@@ -24,6 +25,7 @@ there.
 | 2 | [The bare-metal wedge, the PORTSC watchdog that "fixed" it, and what was actually wrong](02-bare-metal-wedge-and-portsc-watchdog.md) - five hot-plugs kill the controller on two Intel generations and never in QEMU; a polled sweep recovers it for the wrong reason; the cause is a recovery step nobody ever sends | Fixed |
 | 3 | [Composite devices need `usbhub.sys`, and an xHCI-only machine never has it](03-usbhub-sys-composite-devices.md) - Code 2 on every multi-function device, blamed on NUSB for two weeks, settled by one file and a laptop that was not in the plan | Fixed |
 | 4 | [A device Windows XP's hub re-creates mid-enumeration is failed by this driver](04-xp-restore-device-ep0-remove.md) - XP re-created a mass-storage device through a second device handle and removed the first one's EP0 last; the driver's REMOVE path unbinds whichever EP0 extension arrives, the live handle is refused for retry, and the progress detector fails the device. Replugging works | Fixed in `1.0.1.0` (task 19.7, closing run `i4b` 2026-09-03: the counter moved to 2 while both devices bound on their first attach; the same night the device matrix on both primary targets and the Windows 98 door sequence read unchanged on the same binary with the counter at 0) |
+| 5 | [A device plugged into an idle Windows 98 controller is seen by nothing, and why the package writes `DisableSelectiveSuspend`](05-idle-suspend-and-disableselectivesuspend.md) - usbport idle-suspends the controller half a second after the bus goes quiet, a halted xHC cannot raise a port event, EHCI's re-armed interrupt has no xHCI equivalent, and the fix is usbport's own registry switch, machine-wide and measured on both Windows 98 stacks (present = 1 stops the idle; absent or 0 does not) | Fixed (task 11-V.6 on the Windows 98 path; `1.0.1.0` on the NT path) |
 
 ## Other issues worth a page
 
@@ -32,18 +34,6 @@ These are recorded in [lessons.md](../contributing/lessons.md) and
 of the same shape. Listed roughly in order of how much they would teach a
 reader.
 
-- The Windows 98 idle hot-plug defect. A device plugged after the
-  controller idle-suspends is seen by nothing until a Device Manager Refresh.
-  Microsoft's own `usbehci.sys` was disassembled to learn that it re-arms Port
-  Change Detect after halting the controller, a trick that is a category error
-  on xHCI, where an interrupt exists only as an Event TRB and a halted
-  controller may not generate port events (spec Fig. 4-34 note). Timer polls
-  and PME# were then eliminated by measurement. The whole investigation had
-  answered "how does a driver wake a sleeping controller"; the owner asked
-  "can the sleep be prevented?", and `strings` on the same binary found two
-  registry values usbport reads (`HcDisableSelectiveSuspend` and the global
-  `DisableSelectiveSuspend`, which must both be set). Fixed by one `AddReg`
-  line, no driver code.
 - EP0's initial max packet size of 8 is babble on usbport. Two
   Sound Blasters read nothing (Code 22, no wizard). A field census of
   `bMaxPacketSize0` across the equipment showed the failing units shared only
