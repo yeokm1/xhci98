@@ -150,54 +150,18 @@ if ($Write -ne "") {
     exit 0
 }
 
-if ($Check -ne "") {
-    $stampPath = Join-Path $Check $stampName
-    if (-not (Test-Path -LiteralPath $stampPath)) {
-        Write-Host "no source stamp beside the binary in '$Check'"
-        exit 2
-    }
-    $haveRaw = [System.IO.File]::ReadAllText($stampPath)
-
-    # Split the binary line off before the source comparison, so the two are
-    # answered separately and a failure names which of them it was.
-    $haveBinary = ""
-    $keep = New-Object System.Collections.Generic.List[string]
-    foreach ($line in ($haveRaw -split "`r?`n")) {
-        if ($line -cmatch ("^" + $binaryTag + "\s+([0-9A-F]{64})\s+(.+)$")) {
-            $haveBinary = $Matches[1]
-            continue
-        }
-        if ($line -ne "") { $keep.Add($line) }
-    }
-    if ($haveBinary -eq "") {
-        # A stamp written before the binary line existed cannot answer for the
-        # binary, and answering only half the question is what let the restored
-        # `.sys` through. Reported as "no usable stamp" so the caller's own
-        # rule for that case applies, rather than as a match.
-        Write-Host ("the stamp beside the binary in '{0}' predates the binary hash, so it cannot say which .sys it was written for" -f $Check)
-        exit 2
-    }
-
-    $wantBinary = (Get-BinaryStampLine -Dir $Check) -split "\s+"
-    if ($haveBinary -ne $wantBinary[1]) {
-        Write-Host ("the stamp in '{0}' was written for a different {1}:" -f $Check, $binaryName)
-        Write-Host ("  - stamped {0}" -f $haveBinary)
-        Write-Host ("  - present {0}" -f $wantBinary[1])
-        Write-Host "  The sources may well match; this binary is not the one they were hashed beside."
-        exit 1
-    }
-
-    $have = (($keep -join "`r`n") + "`r`n")
+# The source hashes the stamp holds, against src\ as it is now. Returns the
+# human list of differences, empty when they match.
+function Get-SourceChanges {
+    param([Parameter(Mandatory = $true)][string]$Have)
     $want = Get-StampText
-    if ($have -ceq $want) {
-        exit 0
-    }
+    $changed = New-Object System.Collections.Generic.List[string]
+    if ($Have -ceq $want) { return $changed }
 
     $haveMap = @{}
-    foreach ($line in ($have -split "`r?`n")) {
+    foreach ($line in ($Have -split "`r?`n")) {
         if ($line -match '^([0-9A-F]{64})\s+(.+)$') { $haveMap[$Matches[2]] = $Matches[1] }
     }
-    $changed = New-Object System.Collections.Generic.List[string]
     foreach ($line in ($want -split "`r?`n")) {
         if ($line -notmatch '^([0-9A-F]{64})\s+(.+)$') { continue }
         $hash = $Matches[1]
@@ -212,10 +176,76 @@ if ($Check -ne "") {
         }
     }
     foreach ($name in $haveMap.Keys) { $changed.Add("$name (removed since the build)") }
+    return $changed
+}
 
-    Write-Host ("the binary in '{0}' was built from different sources:" -f $Check)
-    foreach ($c in ($changed | Sort-Object)) { Write-Host ("  - " + $c) }
-    exit 1
+if ($Check -ne "") {
+    $stampPath = Join-Path $Check $stampName
+    if (-not (Test-Path -LiteralPath $stampPath)) {
+        Write-Host "no source stamp beside the binary in '$Check'"
+        exit 2
+    }
+    $haveRaw = [System.IO.File]::ReadAllText($stampPath)
+
+    # Split the binary line off, so the two questions are answered separately
+    # and a failure names which of them it was.
+    $haveBinary = ""
+    $keep = New-Object System.Collections.Generic.List[string]
+    foreach ($line in ($haveRaw -split "`r?`n")) {
+        if ($line -cmatch ("^" + $binaryTag + "\s+([0-9A-F]{64})\s+(.+)$")) {
+            $haveBinary = $Matches[1]
+            continue
+        }
+        if ($line -ne "") { $keep.Add($line) }
+    }
+    $have = (($keep -join "`r`n") + "`r`n")
+
+    #
+    # **THE SOURCES ARE COMPARED FIRST, WHATEVER FORMAT THE STAMP IS IN.**
+    #
+    # This ordering is the fix to a regression the binary line introduced. The
+    # first cut answered 2 - "no usable stamp" - the moment it found no BINARY
+    # line, BEFORE looking at the sources at all. An old-format stamp whose
+    # sources had genuinely changed therefore stopped answering 1, which
+    # make-release.ps1 refuses outright, and started answering 2, which
+    # -AllowUnstampedDriver is allowed to wave through. A change meant to make
+    # this stricter had made the oldest guarantee bypassable for exactly the
+    # binaries least able to afford it.
+    #
+    # A source mismatch is knowable from any stamp ever written, so it is
+    # decided before anything about the format is. Exit 2 is reserved for what
+    # it means: the sources agree and the binary's identity is unavailable.
+    #
+    # @(...) because the pipeline unrolls a returned list, and an EMPTY one
+    # unrolls to $null - which under Set-StrictMode is a terminating error on
+    # .Count rather than a zero. The matching case is the common one, so this
+    # would have failed every check that should have passed.
+    $changed = @(Get-SourceChanges -Have $have)
+    if ($changed.Count -gt 0) {
+        Write-Host ("the binary in '{0}' was built from different sources:" -f $Check)
+        foreach ($c in ($changed | Sort-Object)) { Write-Host ("  - " + $c) }
+        exit 1
+    }
+
+    if ($haveBinary -eq "") {
+        # A stamp written before the binary line existed cannot say WHICH .sys
+        # those matching sources were hashed beside, and answering only half
+        # the question is what let a restored binary through. The caller's own
+        # rule for "no usable stamp" applies.
+        Write-Host ("the stamp beside the binary in '{0}' predates the binary hash: the sources match, but it cannot say which .sys they were hashed beside" -f $Check)
+        exit 2
+    }
+
+    $wantBinary = (Get-BinaryStampLine -Dir $Check) -split "\s+"
+    if ($haveBinary -ne $wantBinary[1]) {
+        Write-Host ("the stamp in '{0}' was written for a different {1}:" -f $Check, $binaryName)
+        Write-Host ("  - stamped {0}" -f $haveBinary)
+        Write-Host ("  - present {0}" -f $wantBinary[1])
+        Write-Host "  The sources match; this binary is not the one they were hashed beside."
+        exit 1
+    }
+
+    exit 0
 }
 
 throw "pass -Write <objdir> or -Check <objdir>."

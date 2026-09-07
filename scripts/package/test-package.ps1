@@ -1237,6 +1237,81 @@ try {
     Assert-True ($releaserText -match "Only Windows 98 SE has been validated on") `
         "make-release.ps1 no longer says which target the real-hardware validation belongs to, so the reader cannot tell that Windows 2000 SP4's is virtual-machine only."
 
+    # --- the source stamp: what it can and cannot vouch for -----------------
+    #
+    # Three rounds of review went into this one gate and each defect was found
+    # by reading rather than by a failing test, so here is the test. The
+    # `.sys` is a stand-in - `source-stamp.ps1` hashes it as bytes and never
+    # parses it - and the source half is hashed from the real `src\`, which is
+    # what makes case 4 a genuine mismatch rather than a fabricated one.
+    Write-Step "the source stamp: sources, binary identity, and the legacy format"
+    $stampScript = Join-Path $repo "scripts\source-stamp.ps1"
+    $stampWork = Join-Path $script:work "stamp"
+    New-Item -ItemType Directory -Path $stampWork | Out-Null
+    $stampSys = Join-Path $stampWork "xhci98.sys"
+    $stampFile = Join-Path $stampWork "xhci98.srcstamp"
+
+    function Invoke-Stamp {
+        param([string]$Mode, [string]$Dir)
+        $null = & powershell -NoProfile -ExecutionPolicy Bypass -File $stampScript $Mode $Dir 2>&1
+        return $LASTEXITCODE
+    }
+
+    [System.IO.File]::WriteAllBytes($stampSys, [byte[]](1, 2, 3, 4))
+    Assert-True ((Invoke-Stamp "-Write" $stampWork) -eq 0) `
+        "source-stamp.ps1 -Write failed on a directory holding an xhci98.sys."
+    # @(...) for the same strict-mode reason the script itself needed it: a
+    # single matching line comes back as a String, and a String has no .Count.
+    Assert-True (@(Get-Content -LiteralPath $stampFile | Where-Object { $_ -cmatch '^BINARY [0-9A-F]{64} xhci98\.sys$' }).Count -eq 1) `
+        "the stamp carries no BINARY line, so it cannot say which .sys it was written for (audit H13, round 3)."
+    Assert-True ((Invoke-Stamp "-Check" $stampWork) -eq 0) `
+        "a stamp checked against the tree and binary it was just written from must pass."
+
+    # The hole the first two H13 fixes both walked around: same sources, a
+    # different binary restored beside them. make-release.ps1's own
+    # staged-against-built comparison cannot see this - the restored file is on
+    # both sides of it - so only the stamp can.
+    [System.IO.File]::WriteAllBytes($stampSys, [byte[]](1, 2, 3, 9))
+    Assert-True ((Invoke-Stamp "-Check" $stampWork) -eq 1) `
+        "a binary swapped under an unchanged stamp must be refused (audit H13)."
+    [System.IO.File]::WriteAllBytes($stampSys, [byte[]](1, 2, 3, 4))
+
+    # A stamp written before the BINARY line existed. Sources agree, identity
+    # is unavailable: exit 2, which is the ONLY case -AllowUnstampedDriver may
+    # wave through.
+    $legacy = @(Get-Content -LiteralPath $stampFile | Where-Object { $_ -notmatch '^BINARY ' })
+    Set-Content -LiteralPath $stampFile -Value $legacy -Encoding ascii
+    Assert-True ((Invoke-Stamp "-Check" $stampWork) -eq 2) `
+        "a stamp with no BINARY line but matching sources must answer 2, not 0: it cannot vouch for the binary."
+
+    # ...and the regression that ordering caused. A legacy stamp whose SOURCES
+    # have changed must still be the unbypassable 1, not the waveable 2 - the
+    # first cut answered 2 the moment it saw no BINARY line, before comparing
+    # any sources at all, which made the oldest guarantee bypassable for
+    # exactly the binaries least able to afford it.
+    $mutated = @($legacy | ForEach-Object {
+        if ($_ -match 'xhci_log\.h$') { ("0" * 64) + " xhci_log.h" } else { $_ }
+    })
+    Set-Content -LiteralPath $stampFile -Value $mutated -Encoding ascii
+    Assert-True ((Invoke-Stamp "-Check" $stampWork) -eq 1) `
+        "a legacy stamp whose sources have CHANGED must answer 1, not the 2 that -AllowUnstampedDriver can wave through."
+
+    # And the same source mismatch under a current-format stamp.
+    [System.IO.File]::WriteAllBytes($stampSys, [byte[]](1, 2, 3, 4))
+    $null = Invoke-Stamp "-Write" $stampWork
+    $mutated = @(Get-Content -LiteralPath $stampFile | ForEach-Object {
+        if ($_ -match 'xhci_log\.h$') { ("0" * 64) + " xhci_log.h" } else { $_ }
+    })
+    Set-Content -LiteralPath $stampFile -Value $mutated -Encoding ascii
+    Assert-True ((Invoke-Stamp "-Check" $stampWork) -eq 1) `
+        "a current-format stamp whose sources have changed must be refused."
+
+    # No stamp at all is 2, not a pass: the caller decides, and make-release.ps1
+    # refuses unless -AllowUnstampedDriver says otherwise.
+    Remove-Item -LiteralPath $stampFile -Force
+    Assert-True ((Invoke-Stamp "-Check" $stampWork) -eq 2) `
+        "a directory with no stamp must answer 2."
+
     Write-Step "the binary-vs-INF version comparison"
     #
     # Driven on strings rather than through a packaged binary, and that is the
