@@ -326,7 +326,9 @@ because a user meets them through this driver.
   supersede the CD prompt as the latest result, not as a guarantee for every
   guest configuration. An older guest failed inside `USBAUDIO.VXD`; a
   physical UAC 1.0 device played clean on a ThinkPad E460, directly and behind
-  a High-Speed hub. Roadmap tasks 19.8, 20.7 and 20.8 retain the run details.
+  a High-Speed hub. Roadmap task 19.8 and `docs/contributing/runs/run-20.md`
+  retain the run details; `docs/contributing/lessons.md` has what the Phase 20
+  failures were isolated to.
 - Windows 98 on an xHCI-only machine: the driver install asks for the
   Windows 98 SE CD (an "Insert Disk" prompt naming the Windows 98 Second
   Edition CD-ROM) unless the Windows CABs are on the hard disk. That is

@@ -24,6 +24,114 @@ Do not turn a hypothesis into a settled hardware quirk. Move confirmed design
 rules into the appropriate normative document while keeping the debugging
 history here.
 
+## Proving a control-endpoint reopen on a RELEASE-flavour guest: the QEMU trace bounds it, and a debug-port target confirms the counter
+
+Observed on 2026-09-07 on the XP and Windows 2000 guests, `1.0.2.0` installed
+from the published asset (roadmap task 20.9). The release adds a refusal on
+the control-endpoint open path, so what needed reading was the opposite of
+the refusal: that a LEGITIMATE reopen still succeeds. The published release
+flavour writes nothing to the debug port, so the driver's own counters are
+unreadable on the guest the asset installs.
+
+Making the guest reopen rather than enumerate. Disable the controller in
+Device Manager and re-enable it, with a device still attached at QEMU. The
+disable is a real teardown - root hub, the whole HID node and the mouse all
+vanished from Device Manager, while QEMU still listed the device as attached
+- so the re-enable has to reopen the control endpoint rather than process a
+fresh plug. It came back line for line, no replug at any point.
+
+Two sources, in order of strength:
+
+- The QEMU trace, on the release flavour: enable, address and configure
+  commands recorded after the teardown sweep. This bounds it from below
+  rather than proving it, but the bound is tight - a wrongly refused reopen
+  fails the control endpoint, and no Configure Endpoint could follow it.
+- The counters, on a target whose debug port does work. The same sequence on
+  the Windows 2000 guest read `DevicesReopened` 1 and every refusal counter
+  0, both before the disable and after the enable. `DevicesReopened` is
+  incremented inside the branch the guard protects, so this retires the
+  inference the trace rested on. The sequence unloads and reloads the driver,
+  so the counters reset across it: those are two independent clean
+  traversals, not one reading taken twice.
+
+The reusable part: a RELEASE-flavour reading is not necessarily a blind one.
+Pick the target whose stack survives the door you need (Windows 98 under NUSB
+bugchecks on controller disable, which is why that target cannot take this
+reading at all), take the trace on the guest that has the published binary,
+and repeat the sequence on a debug-port target for the counter. Together they
+cover a guard that reads only this driver's own record state, never which
+usbport build called it.
+
+## The Windows 98 USB Audio replug row fails only with a second guest on the host, and four readings on one image, stamp and binary are what showed it
+
+Observed between 2026-09-06 and 2026-09-07 on the development host, QEMU
+11.0.0 under TCG, `fresh-2a.img` at `base-1.0.1.0-qemu` and later
+`base-1.0.2.0-qemu`, `run-matrix.ps1 -PostRelease` (roadmap tasks 20.7,
+20.8 and 20.9). The `usb-audio/fs` REPLUG leg read FAIL where Phase 19 had
+read PASS: the second arrival was never addressed at all, with no Insert
+Disk prompt, and with every fault and refusal counter in the report at
+zero. Phase 16's failure of the same row had a prompt, so the verdict
+matched an existing limitation but the signature did not.
+
+What the driver did, from QEMU's `usb_xhci_port_*` and `usb_port_*` traces
+with the debug console beside them. QEMU attached the second instance
+exactly once (`usb_port_attach`, port 2, full speed) and raised one connect
+change. The driver read PORTSC `0x000206e1`, acknowledged CSC in the
+register, latched the change and announced it once; PORTSC was then read
+five times, `0x000006e1` every time (connected, Polling, not enabled, no
+change bits), and no PR write followed. Usbport queried hub status, cleared
+one change bit and issued no reset. The next port event is the harness's own
+detach. `RH_GetPortStatus` answers the correct `0x0501` for that PORTSC,
+`RH refusals` never moves, and every refusal site prints its first sample,
+so no reset was refused - usbport simply never asked for one. In a passing
+trace the hub polls the port nine times after the connect change and then
+issues the reset; in a failing one it polls five times and stops.
+
+The trigger is host contention from a second concurrent emulator, not
+anything the driver does:
+
+- The audio group run by itself passes both legs, repeatedly, including
+  with the QEMU window forced to the foreground and forced minimized, so
+  the window state is not it.
+- The same group run beside a second QEMU guest fails, whether that guest
+  is running its own matrix or merely booted and idle.
+- The strongest reading is an A/B twenty minutes apart on one image, one
+  stamp, one binary and one host (2026-09-07): started in the paired shape,
+  the row failed on the same signature; de-paired, `2a-fresh` alone from
+  15:09:12 with `2b-fresh` started only after the audio group had cleared,
+  both legs PASS.
+- Moving the audio group to the front of `matrix.psd1`, which had been the
+  remedy on 2026-09-06, does not by itself hold: the paired attempt above
+  failed with the group already first.
+
+Refuted along the way: the removal-tail timing hypothesis (usbhub's tidy-up
+after the first instance clearing the connect change the arrival had
+latched) - raising the replug delay from about 8 s to 15 s changes nothing;
+a synthetic 91 percent host CPU load alone does not reproduce it; and a
+sustained guest clock slowdown is not it either, the idle health-poll rate
+being identical alone and beside an idle second guest (1.43 polls/s, the
+guest millisecond clock at about 0.73x wall in both). What is left is
+transient host scheduling inside the replug's sub-second window.
+
+One caveat keeps this short of a full explanation: a full solo
+`-Target 2a-fresh` run also failed the row once, its audio group being the
+fifth guest boot of a near-hour run, and why a long solo run reaches the
+same state as a paired one is not established. A Codex read of the code
+found no driver defect and no Phase 20 change on any executable path that
+gates a root-port reset.
+
+The rule: when a matrix row fails with every driver counter at zero and the
+trace shows the stack never asking for the operation, suspect the host
+before the driver, and settle it with an A/B on the same image, stamp and
+binary rather than with more runs of the same shape. The one reading that
+would still sharpen this is the order of usbport's port-status query
+against its `C_PORT_CONNECTION` clear, which needs an unbudgeted print of
+`RH_GetPortStatus` and `RH_ClearFeaturePortConnectChange` or the log ring
+read with `XHCISNAP` before the group's guest is discarded; every such site
+has spent its print budget by then, so their absence in the window is not
+evidence. The user-facing statement is the USB Audio bullet in the release
+notes; the roadmap tasks record which run is which.
+
 ## Test the actual shell chain when a build loses a PowerShell command
 
 Observed on 2026-09-07 on the Windows development host, PowerShell 7.6.5
