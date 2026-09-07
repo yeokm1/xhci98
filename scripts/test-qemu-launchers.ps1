@@ -37,17 +37,7 @@ $targets = @(
 )
 $work = Join-Path ([System.IO.Path]::GetTempPath()) `
     ("xhci98-qemu-launcher-test-" + [System.IO.Path]::GetRandomFileName())
-$script:failures = @()
-$script:checks = 0
-
-function Assert-True {
-    param([bool]$Condition, [string]$Message)
-    $script:checks++
-    if (-not $Condition) {
-        $script:failures += $Message
-        Write-Host "FAIL: $Message" -ForegroundColor Red
-    }
-}
+. (Join-Path $PSScriptRoot "test-harness.ps1")
 
 try {
     $bin = Join-Path $work "bin"
@@ -91,15 +81,25 @@ try {
             # reboot": `change floppy0 <path>` on the monitor is the
             # guest-to-host courier for 2a and 2b, and a floppy CONTROLLER
             # cannot be added to a running guest - so it has to be on the run
-            # launcher at boot, empty. The 2026-09-07 audit's H27 was that the
-            # doc had claimed this since batch 13-L with no generator writing
-            # it; its first fix then put the drive on 2b's PREPARATION
-            # launcher, which is booted once and never during a matrix run, so
-            # the claim stayed false for the launcher the doc is about. This
-            # asserts the generated text, which is the only thing that
-            # survives a regenerated `scripts\local\`.
-            Assert-True ($text -match '(?m)^\s*-drive if=floppy,file=') `
+            # launcher at boot. The 2026-09-07 audit's H27 was that the doc had
+            # claimed this since batch 13-L with no generator writing it; its
+            # first fix then put the drive on 2b's PREPARATION launcher, which
+            # is booted once and never during a matrix run, so the claim stayed
+            # false for the launcher the doc is about. This asserts the
+            # generated text, which is the only thing that survives a
+            # regenerated `scripts\local\`.
+            Assert-True ($text -match '(?m)^\s*-drive if=floppy') `
                 "the $name run launcher has no floppy controller, so a file cannot be couriered out of a running guest."
+        }
+        if ($name -eq "Win2000") {
+            # ...and EMPTY on 2b, because `vm\transfer.img` is one file that
+            # every guest shares and the Windows 98 run launcher mounts it
+            # WRITABLE. Two guests up at once with the same raw floppy image
+            # is a FAT volume with two writers and no arbitration. The drive is
+            # what has to exist at boot; the disk is chosen later, per guest,
+            # with `change floppy0`.
+            Assert-True ($text -notmatch '(?m)^\s*-drive if=floppy,file=') `
+                "the Windows 2000 run launcher mounts a floppy image at boot; vm\transfer.img is shared with the Windows 98 guest, which mounts it writable, so booting both would hand one image to two writers."
         }
         if ($name -eq "Win2000SMP") {
             Assert-True ($text.Contains("-accel whpx,kernel-irqchip=off")) `

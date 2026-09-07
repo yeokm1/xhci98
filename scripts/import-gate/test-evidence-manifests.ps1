@@ -14,17 +14,7 @@ SHA-256 in both.
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "evidence-common.ps1")
 
-$script:failures = @()
-$script:checks = 0
-
-function Assert-True {
-    param([bool]$Condition, [string]$Message)
-    $script:checks++
-    if (-not $Condition) {
-        $script:failures += $Message
-        Write-Host "FAIL: $Message" -ForegroundColor Red
-    }
-}
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "test-harness.ps1")
 
 $tempBase = [System.IO.Path]::GetFullPath($env:TEMP)
 $work = Join-Path $tempBase ("xhci98-evidence-manifest-test-" + [System.IO.Path]::GetRandomFileName())

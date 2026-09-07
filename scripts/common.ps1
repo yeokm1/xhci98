@@ -213,3 +213,61 @@ function Test-PathUnderRoot {
     $resolvedParent = (Resolve-Path -LiteralPath $parent).Path
     return $resolvedParent.StartsWith($resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase)
 }
+
+#
+# Stage the Windows 2000 SP4 USBD.SYS the two Win2000 generators' preparation
+# boots copy into the guest, and refuse anything that is not that exact file.
+#
+# There were two byte-identical copies of this - the identity check and the
+# twenty-line staging block around it - in setup-qemu-win2k.ps1 and
+# setup-qemu-win2k-smp.ps1 (the 2026-09-07 audit's J6, and the same shape as
+# the Get-QemuTool and flavour-marker duplications above). The pinned length
+# and version are the point of the function, so two copies of them is two
+# places for the pin to drift, in a check whose whole job is that it cannot.
+#
+# **Identity, not presence.** The 2b and 2d guests' USB stacks are incomplete
+# without this file, and a wrong one is worse than an absent one: the stack
+# half-starts and the failure surfaces later, somewhere else, as the driver's.
+#
+# Returns the staged path, or "" when nothing was staged - which is a warning
+# and not a failure, because the disk image may be built before the SP4 media
+# is to hand.
+#
+function Install-Win2KUsbdSys {
+    param(
+        [Parameter(Mandatory = $true)][string]$XferDir,
+        [string]$Win2KUsbdSys = ""
+    )
+
+    $stagedUsbd = Join-Path $XferDir "USBD.SYS"
+    $defaultUsbd = Join-Path (Get-DefaultToolsDir) "win2ksp4-extracted\USBD.SYS"
+    if ([string]::IsNullOrWhiteSpace($Win2KUsbdSys) -and
+        (Test-Path -LiteralPath $defaultUsbd)) {
+        $Win2KUsbdSys = $defaultUsbd
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Win2KUsbdSys)) {
+        if (-not (Test-Path -LiteralPath $Win2KUsbdSys)) {
+            throw "Win2000 USBD.SYS not found at: $Win2KUsbdSys"
+        }
+        Assert-Win2KUsbdFile -Path $Win2KUsbdSys
+        Copy-Item -LiteralPath $Win2KUsbdSys -Destination $stagedUsbd -Force
+        Write-Ok "Staged Win2000 USBD.SYS for the preparation boot: $stagedUsbd"
+        return $stagedUsbd
+    }
+    if (Test-Path -LiteralPath $stagedUsbd) {
+        Assert-Win2KUsbdFile -Path $stagedUsbd
+        Write-Ok "Using already-staged Win2000 USBD.SYS: $stagedUsbd"
+        return $stagedUsbd
+    }
+    Write-Warn "Win2000 USBD.SYS is not staged. Extract I386\USBD.SY_ from the SP4 ISO, expand it, then rerun with -Win2KUsbdSys <path> before attaching EHCI."
+    return ""
+}
+
+function Assert-Win2KUsbdFile {
+    param([string]$Path)
+    $file = Get-Item -LiteralPath $Path
+    $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($file.FullName).FileVersion
+    if ($file.Length -ne 20688 -or $version -ne "5.00.2195.6658") {
+        throw "Expected Win2000 SP4 USBD.SYS 5.00.2195.6658 (20688 bytes); found version '$version' ($($file.Length) bytes) at: $Path"
+    }
+}

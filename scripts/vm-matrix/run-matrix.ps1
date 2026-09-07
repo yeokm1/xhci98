@@ -59,14 +59,29 @@ powershell -File scripts\vm-matrix\run-matrix.ps1 -Config scripts\vm-matrix\matr
 [CmdletBinding()]
 param(
     [string]$Config = "",
+    # The device matrix itself - the rows, their groups and their per-target
+    # expectations. Default: matrix.psd1 beside this script. Separate from
+    # -Config, which is the HOST's part (images, ports, where QEMU is): the
+    # matrix is committed and the config is not.
     [string]$Matrix = "",
+    # The qemu-system-x86_64 to launch, overriding the config's Qemu. A
+    # relative path is taken against the repository root, as every path
+    # parameter here is.
     [string]$Qemu = "",
     [string[]]$Target = @(),
     [string[]]$Group = @(),
+    # Where the report, the per-target reports, the debug-console logs, the
+    # QEMU stderr and any failure screenshots are written. Defaults to the
+    # config's OutDir, or for -PostRelease to a per-version directory under
+    # its PostReleaseOutDir.
     [string]$OutDir = "",
     [string]$ReportName = "device-matrix.txt",
     [switch]$ValidateOnly,
     [switch]$PostRelease,
+    # On a group-level failure, leave the guest RUNNING on its monitor instead
+    # of quitting it, so the machine can be looked at in the state that failed.
+    # It also means the image file stays open, which is why the run cannot
+    # snapshot or copy it afterwards.
     [switch]$KeepGuestOnFailure,
     # The root port every device under test is attached to. Windows 98 keys a
     # devnode by bus location, so this must match where a prep pass taught the
@@ -75,19 +90,14 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "lib\repo.ps1")
 . (Join-Path $PSScriptRoot "lib\monitor.ps1")
 . (Join-Path $PSScriptRoot "lib\qemu.ps1")
 . (Join-Path $PSScriptRoot "lib\counters.ps1")
 . (Join-Path $PSScriptRoot "lib\verdict.ps1")
 . (Join-Path $PSScriptRoot "lib\fresh.ps1")
 
-$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-function Resolve-RepoPath {
-    param([string]$P)
-    if ([string]::IsNullOrWhiteSpace($P)) { return "" }
-    if ([IO.Path]::IsPathRooted($P)) { return $P }
-    return (Join-Path $repo $P)
-}
+$repo = Get-VmMatrixRepoRoot
 
 # ------------------------------------------------------------------- config ---
 if ($Config -eq "") {

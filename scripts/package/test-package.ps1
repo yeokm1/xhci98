@@ -41,17 +41,7 @@ $packager = Join-Path $PSScriptRoot "make-package.ps1"
 $releaser = Join-Path $PSScriptRoot "make-release.ps1"
 $prodInf = Join-Path $repo "src\xhci98.inf"
 
-$script:failures = @()
-$script:checks = 0
-
-function Assert-True {
-    param([bool]$Condition, [string]$Message)
-    $script:checks++
-    if (-not $Condition) {
-        $script:failures += $Message
-        Write-Host "FAIL: $Message" -ForegroundColor Red
-    }
-}
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "test-harness.ps1")
 
 function Get-StandInSha {
     param([byte[]]$Bytes)

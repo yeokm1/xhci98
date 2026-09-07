@@ -573,7 +573,9 @@ the pool region, which is lever 3's kind of change rather than a number: it
 puts non-EP0 rings back in endpoint memory, which section 3.6 rejected on
 soundness and not on price. These comparisons establish reduction options, not
 feasibility; Phase 3 tasks 8 and 9 observed the allocation at the pre-pool
-size on both target stacks, and the 7a-V runs owe the observation at this one.
+size on both target stacks, and section 3.6 records how the current size was
+observed in turn - every start from batch 7a-V onward is that observation,
+because the allocation fails before `StartController` is reached at all.
 
 ## 6. Cacheability
 

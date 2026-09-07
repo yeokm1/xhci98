@@ -173,34 +173,10 @@ if (-not (Test-Path -LiteralPath $Win2KIso)) {
     Write-Ok "Win2000 ISO: $Win2KIso"
 }
 
-function Assert-Win2KUsbdFile {
-    param([string]$Path)
-    $file = Get-Item -LiteralPath $Path
-    $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($file.FullName).FileVersion
-    if ($file.Length -ne 20688 -or $version -ne "5.00.2195.6658") {
-        throw "Expected Win2000 SP4 USBD.SYS 5.00.2195.6658 (20688 bytes); found version '$version' ($($file.Length) bytes) at: $Path"
-    }
-}
-
+# Both Win2000 generators stage this file the same way and pin it to the same
+# length and version; common.ps1 holds the one copy (audit J6).
 $stagedUsbd = Join-Path $xferDir "USBD.SYS"
-$defaultUsbd = Join-Path (Get-DefaultToolsDir) "win2ksp4-extracted\USBD.SYS"
-if ([string]::IsNullOrWhiteSpace($Win2KUsbdSys) -and
-    (Test-Path -LiteralPath $defaultUsbd)) {
-    $Win2KUsbdSys = $defaultUsbd
-}
-if (-not [string]::IsNullOrWhiteSpace($Win2KUsbdSys)) {
-    if (-not (Test-Path -LiteralPath $Win2KUsbdSys)) {
-        throw "Win2000 USBD.SYS not found at: $Win2KUsbdSys"
-    }
-    Assert-Win2KUsbdFile -Path $Win2KUsbdSys
-    Copy-Item -LiteralPath $Win2KUsbdSys -Destination $stagedUsbd -Force
-    Write-Ok "Staged Win2000 USBD.SYS for the preparation boot: $stagedUsbd"
-} elseif (Test-Path -LiteralPath $stagedUsbd) {
-    Assert-Win2KUsbdFile -Path $stagedUsbd
-    Write-Ok "Using already-staged Win2000 USBD.SYS: $stagedUsbd"
-} else {
-    Write-Warn "Win2000 USBD.SYS is not staged. Extract I386\USBD.SY_ from the SP4 ISO, expand it, then rerun with -Win2KUsbdSys <path> before attaching EHCI."
-}
+Install-Win2KUsbdSys -XferDir $xferDir -Win2KUsbdSys $Win2KUsbdSys | Out-Null
 
 if ($CreateDisk) {
     Write-Step "Creating QEMU disk image"

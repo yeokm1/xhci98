@@ -80,7 +80,15 @@ param(
     [string]$Detach = "",
     [switch]$Status,
     [switch]$Shot,
+    # Does NOT shut the guest down. It prints the safe way to do it - from
+    # inside Windows - and the one-line monitor `quit` for a guest already at
+    # "It is now safe to turn off". A qcow2 written by a killed QEMU is a state
+    # this repository has had to recover from.
     [switch]$Shutdown,
+    # Skip the dated safety snapshot a -Boot pass takes before it changes
+    # anything. A fresh (CloneFrom) target sets this itself: the clone IS the
+    # safety there, and a snapshot taken during prep would sit under the stamp
+    # the run reads.
     [switch]$NoSafetySnapshot,
     # Run the pass against a copy on a local disk (-Boot -WorkDir), then copy
     # it back with -CopyBack when the guest has exited cleanly.  Use this when
@@ -89,7 +97,15 @@ param(
     # boot witnessed, which is what -Stamp checks.
     [string]$WorkDir = "",
     [switch]$CopyBack,
+    # Leave the high-speed mouse out of the -Boot preload set. It is normally
+    # present so Windows 98's PnP stack meets a device as it starts and queues
+    # its wizard with the others, which is how the image is taught a class in
+    # one sitting.
     [switch]$NoKeepAlive,
+    # Replace an existing -WorkDir work copy from the vm-dir image, and, with
+    # -Clone, re-clone a fresh target's image over one already there. Reuse is
+    # the default in both places, because the alternative silently overwrites
+    # half-finished work with the stale original.
     [switch]$FreshCopy,
     # Attach a VVFAT transfer drive carrying the qemu xhci98.sys. OFF by
     # default: see the comment on $xferDir - it is the prime suspect for the
@@ -116,17 +132,13 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "lib\repo.ps1")
 . (Join-Path $PSScriptRoot "lib\monitor.ps1")
 . (Join-Path $PSScriptRoot "lib\qemu.ps1")
 . (Join-Path $PSScriptRoot "lib\counters.ps1")
 . (Join-Path $PSScriptRoot "lib\fresh.ps1")
 
-$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-function Resolve-RepoPath { param([string]$P)
-    if ([string]::IsNullOrWhiteSpace($P)) { return "" }
-    if ([IO.Path]::IsPathRooted($P)) { return $P }
-    return (Join-Path $repo $P)
-}
+$repo = Get-VmMatrixRepoRoot
 # The same two places run-matrix.ps1 looks, so one config serves both scripts.
 if ($Config -eq "") {
     foreach ($c in @("scripts\vm-matrix\matrix.config.psd1")) {

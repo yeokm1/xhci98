@@ -137,17 +137,12 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "lib\repo.ps1")
 . (Join-Path $PSScriptRoot "lib\monitor.ps1")
 . (Join-Path $PSScriptRoot "lib\qemu.ps1")
 . (Join-Path $PSScriptRoot "lib\counters.ps1")
 
-$repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-function Resolve-RepoPath {
-    param([string]$P)
-    if ([string]::IsNullOrWhiteSpace($P)) { return "" }
-    if ([IO.Path]::IsPathRooted($P)) { return $P }
-    return (Join-Path $repo $P)
-}
+$repo = Get-VmMatrixRepoRoot
 
 # ------------------------------------------------------------------- config ---
 if ($Config -eq "") {

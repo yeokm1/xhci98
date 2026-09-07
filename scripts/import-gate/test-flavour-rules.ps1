@@ -38,17 +38,7 @@ What it proves:
 $ErrorActionPreference = "Stop"
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "common.ps1")
 
-$script:failures = @()
-$script:checks = 0
-
-function Assert-True {
-    param([bool]$Condition, [string]$Message)
-    $script:checks++
-    if (-not $Condition) {
-        $script:failures += $Message
-        Write-Host "FAIL: $Message" -ForegroundColor Red
-    }
-}
+. (Join-Path (Split-Path -Parent $PSScriptRoot) "test-harness.ps1")
 
 $gate = Join-Path $PSScriptRoot "check-imports.ps1"
 
@@ -249,6 +239,15 @@ try {
             Assert-True ($row[0].Flavors -eq "all") "$kept must be allowed in every flavour"
         }
     }
+} catch {
+    # An exception mid-suite is a FAILED TEST, not a crashed script. Without
+    # this the run died at the throw with $ErrorActionPreference = "Stop",
+    # printed no summary line, and left the reader to tell a broken harness
+    # from a broken gate by reading a stack trace - while its sibling
+    # test-evidence-manifests.ps1 had recorded exactly this case as a failure
+    # since it was written (the 2026-09-07 audit's J6).
+    $script:failures += $_.Exception.Message
+    Write-Host "FAIL: $($_.Exception.Message)" -ForegroundColor Red
 } finally {
     if (Test-Path -LiteralPath $work) {
         Remove-Item -LiteralPath $work -Recurse -Force

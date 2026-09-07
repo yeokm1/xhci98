@@ -41,9 +41,16 @@ param(
     [string]$LocalScriptDir = "",
     [string]$Win2KIso = "D:\isos\win2ksp4.ISO",
     [string]$Win2KUsbdSys = "",
+    # Size of the qcow2 created by -CreateDisk, in qemu-img's own notation.
+    # Only read on creation: it cannot resize an image that already exists.
     [string]$DiskSize = "4G",
     [string]$QemuBinDir = "",
     [string]$XhciDevice = "qemu-xhci",
+    # The HMP monitor port the run launcher listens on. It must be UNIQUE
+    # across every launcher this repository generates, because the matrix
+    # addresses a guest by its port and two guests sharing one would answer
+    # for each other; scripts\test-qemu-launchers.ps1 asserts that no two
+    # generated launchers share a port.
     [int]$MonitorPort = 55556,
     [switch]$CreateDisk
 )
@@ -107,10 +114,25 @@ Ensure-Directory $xferDir
 # 2000 without a reboot and without the VVFAT disk, which is read-only. A
 # controller cannot be added live, so it has to be here at boot even though it
 # is empty; an empty floppy drive costs a Windows 2000 guest nothing.
+#
+# **EMPTY, not `file=vm\transfer.img`.** The first cut of this fix mounted the
+# shared courier image, which setup-qemu.ps1's Windows 98 run launcher already
+# mounts WRITABLE under the same path - so booting 2a and 2b together handed
+# one raw image to two guests to write, and a floppy image is a FAT volume
+# with no arbitration whatsoever. Empty is also what the workflow wants: the
+# whole point of `change floppy0` is choosing the disk at the moment the file
+# is ready, on a guest that is already up. Verified on QEMU 11: `-drive
+# if=floppy` with no `file=` starts, `info block` shows `floppy0: [not
+# inserted]`, and `change floppy0 <path>` inserts into it.
 $transferImage = Join-Path $VmDir "transfer.img"
 # Shared with setup-qemu.ps1's guests, which is deliberate: it is a courier,
 # and one blank 1.44 MB image serves every target. Created here too so this
 # script stands alone on a host where only the Windows 2000 guest exists.
+#
+# No launcher this script writes MOUNTS it - see the note above - so the
+# sharing costs nothing: it is inserted by hand, into one guest at a time,
+# with `change floppy0 <path>` on that guest's monitor. This variable exists
+# to make the file, and to name it in the next-steps text below.
 if (-not (Test-Path -LiteralPath $transferImage)) {
     $stream = [System.IO.File]::Open($transferImage, [System.IO.FileMode]::CreateNew)
     try {
@@ -133,34 +155,10 @@ if (-not (Test-Path -LiteralPath $Win2KIso)) {
 } else {
     Write-Ok "Win2000 ISO: $Win2KIso"
 }
-function Assert-Win2KUsbdFile {
-    param([string]$Path)
-    $file = Get-Item -LiteralPath $Path
-    $version = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($file.FullName).FileVersion
-    if ($file.Length -ne 20688 -or $version -ne "5.00.2195.6658") {
-        throw "Expected Win2000 SP4 USBD.SYS 5.00.2195.6658 (20688 bytes); found version '$version' ($($file.Length) bytes) at: $Path"
-    }
-}
-
+# Both Win2000 generators stage this file the same way and pin it to the same
+# length and version; common.ps1 holds the one copy (audit J6).
 $stagedUsbd = Join-Path $xferDir "USBD.SYS"
-$defaultUsbd = Join-Path (Get-DefaultToolsDir) "win2ksp4-extracted\USBD.SYS"
-if ([string]::IsNullOrWhiteSpace($Win2KUsbdSys) -and
-    (Test-Path -LiteralPath $defaultUsbd)) {
-    $Win2KUsbdSys = $defaultUsbd
-}
-if (-not [string]::IsNullOrWhiteSpace($Win2KUsbdSys)) {
-    if (-not (Test-Path -LiteralPath $Win2KUsbdSys)) {
-        throw "Win2000 USBD.SYS not found at: $Win2KUsbdSys"
-    }
-    Assert-Win2KUsbdFile -Path $Win2KUsbdSys
-    Copy-Item -LiteralPath $Win2KUsbdSys -Destination $stagedUsbd -Force
-    Write-Ok "Staged Win2000 USBD.SYS for the preparation boot: $stagedUsbd"
-} elseif (Test-Path -LiteralPath $stagedUsbd) {
-    Assert-Win2KUsbdFile -Path $stagedUsbd
-    Write-Ok "Using already-staged Win2000 USBD.SYS: $stagedUsbd"
-} else {
-    Write-Warn "Win2000 USBD.SYS is not staged. Extract I386\USBD.SY_ from the SP4 ISO, expand it, then rerun with -Win2KUsbdSys <path> before attaching EHCI."
-}
+Install-Win2KUsbdSys -XferDir $xferDir -Win2KUsbdSys $Win2KUsbdSys | Out-Null
 
 if ($CreateDisk) {
     Write-Step "Creating QEMU disk image"
@@ -269,7 +267,7 @@ Write-AsciiFile $runCmd (@(
     "  -m 256 ^",
     "  -vga cirrus ^",
     "  -drive file=""$diskImage"",format=qcow2,if=ide ^",
-    "  -drive if=floppy,file=""$transferImage"",format=raw ^",
+    "  -drive if=floppy ^",
     "  -drive ""file=fat:$xferDir,format=raw,if=ide,snapshot=on"" ^",
     "  -device usb-ehci,id=ehci ^",
     "  -device $XhciDevice,id=xhci ^",
@@ -302,7 +300,6 @@ Write-AsciiFile $prepareCmd (@(
     "  -m 256 ^",
     "  -vga cirrus ^",
     "  -drive file=""$diskImage"",format=qcow2,if=ide ^",
-    "  -drive if=floppy,file=""$transferImage"",format=raw ^",
     "  -drive ""file=fat:$xferDir,format=raw,if=ide,snapshot=on"" ^",
     "  -boot c ^",
     "  -rtc base=localtime ^",
@@ -320,3 +317,6 @@ Write-Host "  1. Run scripts\local\qemu-win2k-install.cmd and install Windows 20
 Write-Host "  2. Ensure SP4 USBD.SYS is staged (use -Win2KUsbdSys if needed), then boot qemu-win2k-prepare-usbd.cmd and copy it into C:\WINNT\system32\drivers."
 Write-Host "  3. Shut down, then boot qemu-win2k-run.cmd (adds EHCI + xHCI)."
 Write-Host "  4. Do NOT install NUSB - the usbport stack is native to Win2000 SP4."
+Write-Host "  5. To get a file OUT of the running guest: on its monitor, 'change floppy0 $transferImage',"
+Write-Host "     then 'copy C:\SNAP.TXT A:' in the guest. The drive is there but empty at boot, so no"
+Write-Host "     other guest is holding that image while this one writes to it."

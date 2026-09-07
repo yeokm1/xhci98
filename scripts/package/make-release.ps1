@@ -130,6 +130,14 @@ end up having been called by the same version.
 Passed through to make-package.ps1 for a host with no extracted target binaries
 staged.
 
+.PARAMETER AllowUnstampedDriver
+Publish a driver binary that has no `xhci98.srcstamp` beside it, so nothing has
+checked the published bytes against `src\`. `scripts\build-driver.cmd` writes
+that stamp, so the only binary this applies to is one built before the stamp
+existed - where rebuilding to acquire one would move the PE link timestamp and
+invalidate every reading already taken on these exact bytes. Without this the
+cut refuses; a stamp that MISMATCHES is refused either way.
+
 .PARAMETER SnapToolDir
 Where `XHCISNAP.EXE` is built. Defaults to `xhcisnap\` in the repository. It is
 staged into `releases\<version>\xhcisnap\`, beside the DOS qualifier's own
@@ -222,7 +230,8 @@ param(
     [switch]$UploadSetOnly,
     [string]$PackageRoot = "",
     [switch]$Force,
-    [switch]$NoTargetEvidence
+    [switch]$NoTargetEvidence,
+    [switch]$AllowUnstampedDriver
 )
 
 $ErrorActionPreference = "Stop"
@@ -1538,13 +1547,21 @@ meant: scripts\build-driver.cmd $f
         # comment-only commit, so a timestamp rule would fire on binaries it is
         # byte-for-byte responsible for and would be bypassed on its first use.
         #
-        # Exit 2 is "no stamp beside this binary", which a build older than that
-        # script gives. It is a WARNING rather than a refusal, and deliberately:
-        # refusing there would make every binary built before the stamp existed
-        # unpublishable, and the answer to that would be to rebuild - which for
-        # this release is precisely the thing that must not happen, because a
-        # rebuild moves the PE link timestamp and invalidates every reading
-        # taken on the published bytes. A mismatch (exit 1) is a refusal.
+        # Exit 2 is "no stamp beside this binary", which only a build older than
+        # that script gives - `scripts\build-driver.cmd` has written one since
+        # the same commit, so every binary this tree produces has one.
+        #
+        # It was a bare warning at first, and that made the whole check
+        # optional: an unstamped binary is exactly the case where nothing is
+        # known about its sources, and it was the case that passed. It is now
+        # a REFUSAL with a named way past it, because the reason for the
+        # leniency is real but narrow - a binary built before the stamp existed
+        # cannot be rebuilt to acquire one without moving the PE link timestamp
+        # and invalidating every reading already taken on the published bytes.
+        # That is a decision about a specific release, so it is spelled as one
+        # on the command line and printed into the log, rather than being the
+        # silent default for every cut thereafter. A mismatch (exit 1) is a
+        # refusal with no way past it at all.
         #
         # The stamp is written beside the BUILD output, not beside the staged
         # copy: only the INF and the .sys are copied into the staging
@@ -1592,10 +1609,22 @@ ones you mean to ship, rebuild anyway and re-read whatever was measured on the
 old ones. A release nobody can rebuild is a release nobody can debug.
 "@
             } elseif ($stampCode -eq 2) {
+                if (-not $AllowUnstampedDriver) {
+                    throw @"
+no source stamp beside the $f binary in
+$objRoot, so this script cannot tell whether src\ still reproduces it - which
+is the one case where nothing at all is known about the published bytes.
+Rebuild it (scripts\build-driver.cmd $f), which writes the stamp as it goes.
+If this binary must ship UNSTAMPED - the only good reason is that it predates
+scripts\source-stamp.ps1 and a rebuild would move its PE link timestamp and
+invalidate readings already taken on these exact bytes - say so:
+      scripts\package\make-release.ps1 ... -AllowUnstampedDriver
+"@
+                }
                 Write-Warn ("no source stamp beside the $f binary, so this script " +
-                            "cannot tell whether src\ still reproduces it. It was " +
-                            "built before scripts\source-stamp.ps1 existed; the next " +
-                            "scripts\build-driver.cmd $f writes one.")
+                            "cannot tell whether src\ still reproduces it, and " +
+                            "-AllowUnstampedDriver was passed. Nothing here has " +
+                            "checked the published bytes against src\.")
             } elseif ($stampCode -ne 0) {
                 throw "scripts\source-stamp.ps1 -Check '$objRoot' failed: $($stampOut -join "`n")"
             } else {

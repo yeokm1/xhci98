@@ -54,14 +54,35 @@ param(
     [ValidateSet("auto", "release", "debug", "qemu")]
     [string]$Flavor = "auto",
 
+    # The five path overrides below all default to a file beside this script or
+    # under the repository, resolved after `param(...)` rather than in it,
+    # because `$PSScriptRoot` is not available in a parameter default. Each
+    # names WHERE a fact is read from and never WHAT it must be: every one of
+    # these files is itself authenticated or enforced, so pointing the gate at
+    # a copy elsewhere cannot weaken it. They exist for a host that stages the
+    # extracted target material outside the tree, and for the gate's own tests,
+    # which drive it against fixtures.
+
+    # The allowlist. Default: xhci98-imports.allow beside this script.
     [string]$AllowPath = "",
 
+    # The usbport import expectations make-usbport-lib.cmd records.
+    # Default: scripts\usbport-lib\usbport-imports.expected.
     [string]$UsbportExpectedPath = "",
 
+    # Where the extracted Windows 2000 SP4 ntoskrnl.exe/hal.dll are staged, for
+    # step 2's export check. Default: tools\win2ksp4-extracted. An absent
+    # directory is the "no baseline present" warning, not a failure.
     [string]$Win2kDir = "",
 
+    # The manifest naming those files and their recorded hashes - what makes an
+    # extracted baseline authenticated rather than merely present.
+    # Default: win2k-baselines.expected beside this script.
     [string]$Win2kManifestPath = "",
 
+    # The Windows 98 / NUSB precedent binaries and their recorded identities,
+    # for step 3's positive-evidence scan. Default: win98-evidence.list beside
+    # this script.
     [string]$Win98EvidenceList = "",
 
     # Overrides where ntkern.vxd is read from, never what it must be: the
