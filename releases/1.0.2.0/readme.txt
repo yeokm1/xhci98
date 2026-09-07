@@ -250,14 +250,8 @@ Windows' own, unmodified, and no Microsoft file is in this download:
                or SweetLow's) supplies it.
 
   usbui.dll    NEW IN 1.0.2.0, and the one file here that is only cosmetic.
-               The USB property-page DLL. On Windows 2000 and Windows XP,
-               Windows' own INF asks for a Power tab on the USB Root Hub's
-               properties and names this file as the page's provider, so
-               without it that tab is silently absent; with it you get the
-               tab, showing the hub's power budget and what is attached.
-               On Windows 98 and Windows ME nothing you can see changes:
-               that page comes from sysclass.dll there, which those systems
-               already have. It is copied on all four targets even so.
+               It adds an extra USB property page in Device Manager. It is
+               copied on all four targets.
 
 WINDOWS ONLY INSTALLS ITS USB FILES WHEN SETUP FINDS A USB CONTROLLER IT
 RECOGNISES, and on an xHCI-only machine it never does, so on such a machine
