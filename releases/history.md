@@ -14,9 +14,9 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
 ## 1.0.2.0 - 2026-09-07
 
-A fix release. An audit on 2026-09-05 found no critical defect and nineteen
-things worth fixing across the driver, the two tools and the package. All of
-them are closed (`docs/contributing/roadmap.md`, Phase 20).
+A fix release. An audit found no critical defect and nineteen things worth
+fixing across the driver, the two tools and the package. All of them are
+closed (`docs/contributing/roadmap.md`, Phase 20).
 
 The install changes in one way: Windows now supplies `usbui.dll` as well,
 which brings back the USB Root Hub's Power tab on Windows 2000 and Windows
@@ -83,15 +83,14 @@ in `1.0.0.1`.
 ### What changed
 
 - 32-bit Windows XP (SP3) is supported, in virtual machines only, the
-  standing Windows ME has. On 2026-09-03 an XP guest whose only USB
-  controller was the xHCI installed the package from its directory with no
-  prompt for media, loaded the driver on the first boot under XP's own USB
-  stack, and bound a HID mouse, a USB mass-storage device and a composite
-  audio device; disable, enable, remove and rescan in Device Manager all
-  survived. XP reads the INF's Windows 2000 half, shows its unsigned-driver
-  warning (choose Continue Anyway) and asks for nothing else. NUSB is a
-  Windows 98 SE package and is not for XP. Nothing has run on XP on real
-  hardware.
+  standing Windows ME has. An XP guest whose only USB controller was the
+  xHCI installed the package from its directory with no prompt for media,
+  loaded the driver on the first boot under XP's own USB stack, and bound a
+  HID mouse, a USB mass-storage device and a composite audio device;
+  disable, enable, remove and rescan in Device Manager all survived. XP
+  reads the INF's Windows 2000 half, shows its unsigned-driver warning
+  (choose Continue Anyway) and asks for nothing else. NUSB is a Windows 98
+  SE package and is not for XP. Nothing has run on XP on real hardware.
 - Windows 2000 and Windows XP: `usbport.sys`, the USB stack this driver
   plugs into, now comes from the operating system's own driver cache
   (`sp4.cab`, `sp3.cab`), the way `usbd.sys` already did, and `usbhub.sys`
@@ -119,13 +118,13 @@ in `1.0.0.1`.
   failed on its first attach on XP and worked when unplugged and plugged in
   again (`docs/issues/04-xp-restore-device-ep0-remove.md`). Windows 98 SE
   and Windows 2000 never provoke it and read unchanged on the same binary.
-- Correction, 2026-09-05: the `DisableSelectiveSuspend` entry above says
-  Windows 2000's USB stack never idles this controller and the value changes
-  nothing there. That was generalised from the Phase 3 spike's observation
-  window and was never measured; the owner's checks of 2026-09-05 contradict
-  it. Whether and when Windows 2000 idles the controller is unestablished
-  until a reading is recorded (roadmap Phase 20, F18). The value is written
-  on every install path regardless, and that is unchanged.
+- Correction: the `DisableSelectiveSuspend` entry above says Windows 2000's
+  USB stack never idles this controller and the value changes nothing there.
+  That was generalised from the Phase 3 spike's observation window and was
+  never measured; the owner's checks contradict it. Whether and when Windows
+  2000 idles the controller is unestablished until a reading is recorded
+  (roadmap Phase 20, F18). The value is written on every install path
+  regardless, and that is unchanged.
 
 ## 1.0.0.1 - 2026-09-02
 
@@ -151,13 +150,13 @@ driver depends on come from Windows itself.
   controller already has the files and is not asked. Windows 2000 asks for
   nothing.
 - Windows ME is a supported target, in virtual machines only and under
-  SweetLow's USB 2.0 stack only, the standing Windows 2000 has. On
-  2026-09-02 a Windows ME guest loaded and started the driver and bound a
-  HID mouse, a USB mass-storage device and a composite audio device. Its
-  stock USB stack has no `usbport.sys`, so on a stock Windows ME machine the
-  driver installs and shows Code 2 until SweetLow's stack is installed;
-  NUSB is a Windows 98 SE package and is not for Windows ME. The INF is
-  unchanged by this: Windows ME reads its Windows 98 half.
+  SweetLow's USB 2.0 stack only, the standing Windows 2000 has. A Windows ME
+  guest loaded and started the driver and bound a HID mouse, a USB
+  mass-storage device and a composite audio device. Its stock USB stack has
+  no `usbport.sys`, so on a stock Windows ME machine the driver installs and
+  shows Code 2 until SweetLow's stack is installed; NUSB is a Windows 98 SE
+  package and is not for Windows ME. The INF is unchanged by this: Windows
+  ME reads its Windows 98 half.
 - `xhci98.sys` is rebuilt only so that its version resource matches; no
   driver code changed between `1.0.0.0` and this release.
 

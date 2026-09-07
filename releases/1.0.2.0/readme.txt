@@ -229,7 +229,7 @@ are in release\ and in debug\. Nothing else is in the package, and there is
 nothing to complete: a copy taken from the project's source repository is
 the same two files.
 
-Three files the driver depends on are NOT in the package, because they are
+Four files the driver depends on are NOT in the package, because they are
 Windows' own, unmodified, and no Microsoft file is in this download:
 
   usbd.sys     The USB 2.0 root hub imports it on both systems. Without it
@@ -249,6 +249,16 @@ Windows' own, unmodified, and no Microsoft file is in this download:
                runs. On Windows 98 the USB 2.0 stack installed first (NUSB
                or SweetLow's) supplies it.
 
+  usbui.dll    NEW IN 1.0.2.0, and the one file here that is only cosmetic.
+               The USB property-page DLL. On Windows 2000 and Windows XP,
+               Windows' own INF asks for a Power tab on the USB Root Hub's
+               properties and names this file as the page's provider, so
+               without it that tab is silently absent; with it you get the
+               tab, showing the hub's power budget and what is attached.
+               On Windows 98 and Windows ME nothing you can see changes:
+               that page comes from sysclass.dll there, which those systems
+               already have. It is copied on all four targets even so.
+
 WINDOWS ONLY INSTALLS ITS USB FILES WHEN SETUP FINDS A USB CONTROLLER IT
 RECOGNISES, and on an xHCI-only machine it never does, so on such a machine
 none of them is there. The install in step 4 therefore asks Windows to copy
@@ -262,15 +272,18 @@ Windows recognised - keeps its own files and is asked for nothing.
                   install shows "Insert Disk" asking for the Windows 98
                   Second Edition CD-ROM: insert it and click OK, and if it
                   then asks where to copy from, give it the CD's WIN98
-                  folder. It is asking for usbd.sys and usbhub.sys, not for
-                  anything of this driver's.
+                  folder. It is asking for usbd.sys, usbhub.sys and
+                  usbui.dll, not for anything of this driver's.
 
   WINDOWS ME      The same as Windows 98 SE, with the Windows ME CD. The
                   machine tried (a virtual one) had the CABs on its hard
                   disk from its own Setup and asked for nothing.
 
-  WINDOWS 2000    Nothing to do: all three come from the driver cache every
+  WINDOWS 2000    Nothing to do: all four come from the driver cache every
   AND XP          Windows 2000 or XP installation has (Driver Cache\i386).
+                  On Windows XP all four are in sp3.cab; on Windows 2000
+                  three are in sp4.cab and usbui.dll in driver.cab beside
+                  it, two cabinets in one pass and still no prompt.
 
 If the prompt is cancelled the driver still installs, but the root hub fails
 as described above. That reads as a fault in this driver and is not one: put
@@ -323,8 +336,11 @@ CD, a shared folder - then:
       and point it at the RELEASE\ directory. During the copy, on a machine
       that never had a USB controller Windows recognised, "Insert Disk"
       asks for the Windows 98 Second Edition CD-ROM: that is Windows
-      fetching its own usbd.sys and usbhub.sys (section 3). Insert it and
-      click OK. Reboot when asked.
+      fetching its own usbd.sys, usbhub.sys and usbui.dll (section 3).
+      Insert it and click OK. Reboot when asked. Upgrading from a release
+      before 1.0.2.0 can raise that prompt on a machine whose last install
+      did not, because usbui.dll is new here; it is on the same cabinet as
+      the other two, so the same CD answers it.
 
       (If Windows finds the controller for you first, the Add New Hardware
       Wizard asks the same question - give it RELEASE\ too.)
@@ -344,8 +360,8 @@ CD, a shared folder - then:
       Open Device Manager and find the unrecognised xHCI controller, then
           Properties -> Driver -> Update Driver -> Have Disk
       and point it at the RELEASE\ directory. Nothing else is asked for;
-      usbport.sys, usbd.sys and usbhub.sys come from the driver cache every
-      installation has.
+      usbport.sys, usbd.sys, usbhub.sys and usbui.dll come from the driver
+      cache every installation has.
 
   WINDOWS XP (32-BIT)
       The same route as Windows 2000 SP4:
@@ -442,11 +458,11 @@ Two things are specific to this driver and worth knowing in advance:
        crash.
 
   A Windows 98 uninstall then removes REGISTRY ENTRIES ONLY. xhci98.sys, the
-  usbd.sys and usbhub.sys the install had Windows copy from its CD (section
-  3), the setup engine's cached copy of xhci98.inf (under
+  usbd.sys, usbhub.sys and usbui.dll the install had Windows copy from its
+  CD (section 3), the setup engine's cached copy of xhci98.inf (under
   C:\WINDOWS\INF\OTHER) and the DisableSelectiveSuspend value of section 9
-  all stay behind. Delete them by hand if you want them gone; the two Windows
-  files are Windows' own and harmless where they are.
+  all stay behind. Delete them by hand if you want them gone; the three
+  Windows files are Windows' own and harmless where they are.
 
   AFTER AN UPGRADE ON WINDOWS 98, RUN THE INF ONCE BY HAND
   .......................................................
@@ -801,9 +817,9 @@ the driver reads, and one the installer writes machine-wide on every system.
 
   1.0.2.0 - 2026-09-07
 
-  A fix release. An audit on 2026-09-05 found no critical defect and nineteen
-  things worth fixing across the driver, the two tools and the package. All of
-  them are closed (docs/contributing/roadmap.md, Phase 20).
+  A fix release. An audit found no critical defect and nineteen things worth
+  fixing across the driver, the two tools and the package. All of them are
+  closed (docs/contributing/roadmap.md, Phase 20).
 
   The install changes in one way: Windows now supplies usbui.dll as well,
   which brings back the USB Root Hub's Power tab on Windows 2000 and Windows
@@ -871,15 +887,14 @@ the driver reads, and one the installer writes machine-wide on every system.
   What changed
 
     * 32-bit Windows XP (SP3) is supported, in virtual machines only, the
-      standing Windows ME has. On 2026-09-03 an XP guest whose only USB
-      controller was the xHCI installed the package from its directory with no
-      prompt for media, loaded the driver on the first boot under XP's own USB
-      stack, and bound a HID mouse, a USB mass-storage device and a composite
-      audio device; disable, enable, remove and rescan in Device Manager all
-      survived. XP reads the INF's Windows 2000 half, shows its
-      unsigned-driver warning (choose Continue Anyway) and asks for nothing
-      else. NUSB is a Windows 98 SE package and is not for XP. Nothing has run
-      on XP on real hardware.
+      standing Windows ME has. An XP guest whose only USB controller was the
+      xHCI installed the package from its directory with no prompt for media,
+      loaded the driver on the first boot under XP's own USB stack, and bound
+      a HID mouse, a USB mass-storage device and a composite audio device;
+      disable, enable, remove and rescan in Device Manager all survived. XP
+      reads the INF's Windows 2000 half, shows its unsigned-driver warning
+      (choose Continue Anyway) and asks for nothing else. NUSB is a Windows 98
+      SE package and is not for XP. Nothing has run on XP on real hardware.
     * Windows 2000 and Windows XP: usbport.sys, the USB stack this driver
       plugs into, now comes from the operating system's own driver cache
       (sp4.cab, sp3.cab), the way usbd.sys already did, and usbhub.sys with
@@ -907,14 +922,13 @@ the driver reads, and one the installer writes machine-wide on every system.
       failed on its first attach on XP and worked when unplugged and plugged
       in again (docs/issues/04-xp-restore-device-ep0-remove.md). Windows 98 SE
       and Windows 2000 never provoke it and read unchanged on the same binary.
-    * Correction, 2026-09-05: the DisableSelectiveSuspend entry above says
-      Windows 2000's USB stack never idles this controller and the value
-      changes nothing there. That was generalised from the Phase 3 spike's
-      observation window and was never measured; the owner's checks of
-      2026-09-05 contradict it. Whether and when Windows 2000 idles the
-      controller is unestablished until a reading is recorded (roadmap Phase
-      20, F18). The value is written on every install path regardless, and
-      that is unchanged.
+    * Correction: the DisableSelectiveSuspend entry above says Windows 2000's
+      USB stack never idles this controller and the value changes nothing
+      there. That was generalised from the Phase 3 spike's observation window
+      and was never measured; the owner's checks contradict it. Whether and
+      when Windows 2000 idles the controller is unestablished until a reading
+      is recorded (roadmap Phase 20, F18). The value is written on every
+      install path regardless, and that is unchanged.
 
   1.0.0.1 - 2026-09-02
 
@@ -941,13 +955,13 @@ the driver reads, and one the installer writes machine-wide on every system.
       had a USB 1.1 controller already has the files and is not asked. Windows
       2000 asks for nothing.
     * Windows ME is a supported target, in virtual machines only and under
-      SweetLow's USB 2.0 stack only, the standing Windows 2000 has. On
-      2026-09-02 a Windows ME guest loaded and started the driver and bound a
-      HID mouse, a USB mass-storage device and a composite audio device. Its
-      stock USB stack has no usbport.sys, so on a stock Windows ME machine the
-      driver installs and shows Code 2 until SweetLow's stack is installed;
-      NUSB is a Windows 98 SE package and is not for Windows ME. The INF is
-      unchanged by this: Windows ME reads its Windows 98 half.
+      SweetLow's USB 2.0 stack only, the standing Windows 2000 has. A Windows
+      ME guest loaded and started the driver and bound a HID mouse, a USB
+      mass-storage device and a composite audio device. Its stock USB stack
+      has no usbport.sys, so on a stock Windows ME machine the driver installs
+      and shows Code 2 until SweetLow's stack is installed; NUSB is a Windows
+      98 SE package and is not for Windows ME. The INF is unchanged by this:
+      Windows ME reads its Windows 98 half.
     * xhci98.sys is rebuilt only so that its version resource matches; no
       driver code changed between 1.0.0.0 and this release.
 
@@ -1039,10 +1053,10 @@ the driver reads, and one the installer writes machine-wide on every system.
 GNU GPL v2 - see the LICENSE file in this directory, beside this readme. This
 applies to xhci98.sys and xhci98.inf, which are this driver's own work.
 
-No Microsoft file is in this download. The usbd.sys, usbhub.sys and (on
-Windows 2000 and XP) usbport.sys the install needs are copied by Windows from
-your own Windows installation source (section 3); nothing here grants you any
-right in them, and nothing here redistributes them.
+No Microsoft file is in this download. The usbd.sys, usbhub.sys, usbui.dll
+and (on Windows 2000 and XP) usbport.sys the install needs are copied by
+Windows from your own Windows installation source (section 3); nothing here
+grants you any right in them, and nothing here redistributes them.
 
 The provenance record for everything the project depends on but does not own
 is in docs/contributing/legal-provenance.md, in the project's source

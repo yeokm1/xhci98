@@ -6,8 +6,9 @@ Publish a built driver into releases\<version>\{release,debug}\.
 `releases\` is the tracked, published half of packaging. It carries the two
 files that are this project's own work - `xhci98.sys` and `xhci98.inf` - and
 since release 1.0.0.1 those are the only files on the media at all: the INF has
-the operating system supply `usbd.sys`, `usbhub.sys` and, on the NT path,
-`usbport.sys` from its own install source through `LayoutFile`. It is a
+the operating system supply `usbd.sys`, `usbhub.sys`, `usbui.dll` and, on
+the NT path, `usbport.sys` from its own install source through `LayoutFile`.
+It is a
 separate step from `make-package.ps1` because the package is the gated build
 output and the release is the tracked, written-once record of it. See
 `releases\README.md`.
@@ -17,8 +18,8 @@ is the published tree, zipped: `out\upload-<version>\` and
 `out\xhci98-<version>.zip` under the git-ignored `out\`, the directory a
 workspace and the zip the GitHub release asset, which is why only the second
 is named after the project. Since release 1.0.0.1 it carries no Microsoft
-file: the INF has the operating system supply `usbd.sys` and `usbhub.sys`
-from its own install source (`docs\contributing\legal-provenance.md` section
+file: the INF has the operating system supply `usbd.sys`, `usbhub.sys` and
+`usbui.dll` from its own install source (`docs\contributing\legal-provenance.md` section
 5 records the decision and what it withdrew). It is still assembled here
 rather than by hand, because the layout is checked - every flavour directory
 is gated as the install media it is, nothing the INF does not name goes up -
@@ -774,8 +775,8 @@ function Assert-PackageMatchesDeclaredMedia {
 '$PkgDir' holds $($unexpected.Count) file(s) the published $InfName does not name, or names elsewhere:
   - $($unexpected -join "`n  - ")
 Since 1.0.0.1 the media carries this project's two files and nothing else: the
-operating system supplies usbd.sys, usbhub.sys and usbport.sys through the INF's
-LayoutFile, and the INF gate refuses a Microsoft file on the media
+operating system supplies usbd.sys, usbhub.sys, usbport.sys and usbui.dll
+through the INF's LayoutFile, and the INF gate refuses a Microsoft file on the media
 (docs\contributing\legal-provenance.md section 5 records the decision). A file
 the INF does not name is not published; take it out of the package. Declaring a
 new media file is a release-layout decision recorded there, not a packaging step.
@@ -2020,7 +2021,7 @@ are in release\ and in debug\. Nothing else is in the package, and there is
 nothing to complete: a copy taken from the project's source repository is
 the same two files.
 
-Three files the driver depends on are NOT in the package, because they are
+Four files the driver depends on are NOT in the package, because they are
 Windows' own, unmodified, and no Microsoft file is in this download:
 
   usbd.sys     The USB 2.0 root hub imports it on both systems. Without it
@@ -2040,6 +2041,16 @@ Windows' own, unmodified, and no Microsoft file is in this download:
                runs. On Windows 98 the USB 2.0 stack installed first (NUSB
                or SweetLow's) supplies it.
 
+  usbui.dll    NEW IN 1.0.2.0, and the one file here that is only cosmetic.
+               The USB property-page DLL. On Windows 2000 and Windows XP,
+               Windows' own INF asks for a Power tab on the USB Root Hub's
+               properties and names this file as the page's provider, so
+               without it that tab is silently absent; with it you get the
+               tab, showing the hub's power budget and what is attached.
+               On Windows 98 and Windows ME nothing you can see changes:
+               that page comes from sysclass.dll there, which those systems
+               already have. It is copied on all four targets even so.
+
 WINDOWS ONLY INSTALLS ITS USB FILES WHEN SETUP FINDS A USB CONTROLLER IT
 RECOGNISES, and on an xHCI-only machine it never does, so on such a machine
 none of them is there. The install in step 4 therefore asks Windows to copy
@@ -2053,15 +2064,18 @@ Windows recognised - keeps its own files and is asked for nothing.
                   install shows "Insert Disk" asking for the Windows 98
                   Second Edition CD-ROM: insert it and click OK, and if it
                   then asks where to copy from, give it the CD's WIN98
-                  folder. It is asking for usbd.sys and usbhub.sys, not for
-                  anything of this driver's.
+                  folder. It is asking for usbd.sys, usbhub.sys and
+                  usbui.dll, not for anything of this driver's.
 
   WINDOWS ME      The same as Windows 98 SE, with the Windows ME CD. The
                   machine tried (a virtual one) had the CABs on its hard
                   disk from its own Setup and asked for nothing.
 
-  WINDOWS 2000    Nothing to do: all three come from the driver cache every
+  WINDOWS 2000    Nothing to do: all four come from the driver cache every
   AND XP          Windows 2000 or XP installation has (Driver Cache\i386).
+                  On Windows XP all four are in sp3.cab; on Windows 2000
+                  three are in sp4.cab and usbui.dll in driver.cab beside
+                  it, two cabinets in one pass and still no prompt.
 
 If the prompt is cancelled the driver still installs, but the root hub fails
 as described above. That reads as a fault in this driver and is not one: put
@@ -2114,8 +2128,11 @@ CD, a shared folder - then:
       and point it at the RELEASE\ directory. During the copy, on a machine
       that never had a USB controller Windows recognised, "Insert Disk"
       asks for the Windows 98 Second Edition CD-ROM: that is Windows
-      fetching its own usbd.sys and usbhub.sys (section 3). Insert it and
-      click OK. Reboot when asked.
+      fetching its own usbd.sys, usbhub.sys and usbui.dll (section 3).
+      Insert it and click OK. Reboot when asked. Upgrading from a release
+      before 1.0.2.0 can raise that prompt on a machine whose last install
+      did not, because usbui.dll is new here; it is on the same cabinet as
+      the other two, so the same CD answers it.
 
       (If Windows finds the controller for you first, the Add New Hardware
       Wizard asks the same question - give it RELEASE\ too.)
@@ -2135,8 +2152,8 @@ CD, a shared folder - then:
       Open Device Manager and find the unrecognised xHCI controller, then
           Properties -> Driver -> Update Driver -> Have Disk
       and point it at the RELEASE\ directory. Nothing else is asked for;
-      usbport.sys, usbd.sys and usbhub.sys come from the driver cache every
-      installation has.
+      usbport.sys, usbd.sys, usbhub.sys and usbui.dll come from the driver
+      cache every installation has.
 
   WINDOWS XP (32-BIT)
       The same route as Windows 2000 SP4:
@@ -2233,11 +2250,11 @@ Two things are specific to this driver and worth knowing in advance:
        crash.
 
   A Windows 98 uninstall then removes REGISTRY ENTRIES ONLY. xhci98.sys, the
-  usbd.sys and usbhub.sys the install had Windows copy from its CD (section
-  3), the setup engine's cached copy of xhci98.inf (under
+  usbd.sys, usbhub.sys and usbui.dll the install had Windows copy from its
+  CD (section 3), the setup engine's cached copy of xhci98.inf (under
   C:\WINDOWS\INF\OTHER) and the DisableSelectiveSuspend value of section 9
-  all stay behind. Delete them by hand if you want them gone; the two Windows
-  files are Windows' own and harmless where they are.
+  all stay behind. Delete them by hand if you want them gone; the three
+  Windows files are Windows' own and harmless where they are.
 
   AFTER AN UPGRADE ON WINDOWS 98, RUN THE INF ONCE BY HAND
   .......................................................
@@ -2544,10 +2561,10 @@ the driver reads, and one the installer writes machine-wide on every system.
 GNU GPL v2 - see the LICENSE file in this directory, beside this readme. This
 applies to xhci98.sys and xhci98.inf, which are this driver's own work.
 
-No Microsoft file is in this download. The usbd.sys, usbhub.sys and (on
-Windows 2000 and XP) usbport.sys the install needs are copied by Windows from
-your own Windows installation source (section 3); nothing here grants you any
-right in them, and nothing here redistributes them.
+No Microsoft file is in this download. The usbd.sys, usbhub.sys, usbui.dll
+and (on Windows 2000 and XP) usbport.sys the install needs are copied by
+Windows from your own Windows installation source (section 3); nothing here
+grants you any right in them, and nothing here redistributes them.
 
 The provenance record for everything the project depends on but does not own
 is in docs/contributing/legal-provenance.md, in the project's source
@@ -3173,8 +3190,8 @@ after checkout. Restore it with:  git checkout -- LICENSE
     # `releases\<version>\` is the tracked half. The download a user gets is
     # the same tree, zipped, with each flavour directory gated as install
     # media on the way. Since 1.0.0.1 it carries no Microsoft file: the OS
-    # supplies usbd.sys and usbhub.sys through the INF's LayoutFile. See
-    # docs\contributing\legal-provenance.md section 5.
+    # supplies usbd.sys, usbhub.sys and usbui.dll through the INF's
+    # LayoutFile. See docs\contributing\legal-provenance.md section 5.
     $uploadRoot = $null
     $uploadZip = $null
     if (-not $SkipUploadSet) {
