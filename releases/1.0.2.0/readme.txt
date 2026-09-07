@@ -593,9 +593,9 @@ needed.
   The normal driver. This is the one you want.
 
       xhci98.inf
-      xhci98.sys   83,467 bytes
+      xhci98.sys   83,499 bytes
       SHA-256
-      C4CEDEEE4449434D3E53E6A2F99ADE9625B73BC908C682FD08708497C40566AD
+      69E7DE836F047558E5B30D6D0ADB466495FDAE60EA3F88E1CB61624CBDDE8DF8
 
   DEBUG\  - only when diagnosing a problem
 
@@ -606,9 +606,9 @@ needed.
   XHCISNAP, so you do not need this one to send a report.
 
       xhci98.inf
-      xhci98.sys   84,075 bytes
+      xhci98.sys   84,107 bytes
       SHA-256
-      49703E29539FE1776F125DF698619CA25F07566B811C43EAA779C7962BE05DA5
+      9581458EF960E920E6A2975569BA4B8AC85CD48A2BC5235157727D52E457D5B0
 
   XHCIQUAL\  - the DOS machine checker from step 1
 
@@ -800,13 +800,22 @@ the driver reads, and one the installer writes machine-wide on every system.
 
   1.0.2.0 - 2026-09-07
 
+  Re-cut on 2026-09-07 under the same number, before anything had been
+  uploaded, so there is no earlier 1.0.2.0 in anyone's hands to tell this one
+  apart from. Between the first cut that morning and this one, the last of the
+  audit's deferred items was fixed in the driver: it is the control-endpoint
+  refusal on a failed device, described below. The release date does not move,
+  because the re-cut is the same day.
+
   A fix release. A repository audit taken on 2026-09-05 found no critical
   defect and nineteen things worth fixing across the driver, the two tools and
   the package (docs/contributing/roadmap.md, Phase 20: findings F1 to F19 and
   D1 to D6, every one closed there with its regression test or its recorded
   decision). The install routes are unchanged on every target, and the
   post-release device matrix on Windows 98 SE and Windows 2000 read no worse
-  than 1.0.1.0's on this release's driver code.
+  than 1.0.1.0's. Those matrix readings were taken on a binary that predates
+  one change in this release, the control-endpoint refusal, and no run has
+  exercised the path that change is on.
 
   What changed
 
@@ -818,6 +827,13 @@ the driver reads, and one the installer writes machine-wide on every system.
       guest four times and recovered each time with every device back, and on
       the Windows XP restore and lifecycle sequence that 1.0.1.0's fix was
       for.
+    * The driver: a device this driver has given up on can no longer have its
+      control endpoint opened, or reopened after the failure. Such a record
+      keeps its address while it is torn down, and an open on that address was
+      taken for a live device's, which bound the endpoint and started the
+      command chain again on a device that had already failed. Found by the
+      audit's deferred items and covered by a host test; no machine has shown
+      it, and no guest run has been through that path.
     * The driver: after a completed in-place controller recovery the health
       poll's fatal latch is reopened, so a second fault is recovered too.
       Until this release only the first fault after boot was; a second was

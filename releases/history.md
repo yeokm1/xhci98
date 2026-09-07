@@ -14,13 +14,22 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
 ## 1.0.2.0 - 2026-09-07
 
+Re-cut on 2026-09-07 under the same number, before anything had been
+uploaded, so there is no earlier `1.0.2.0` in anyone's hands to tell this one
+apart from. Between the first cut that morning and this one, the last of the
+audit's deferred items was fixed in the driver: it is the control-endpoint
+refusal on a failed device, described below. The release date does not move,
+because the re-cut is the same day.
+
 A fix release. A repository audit taken on 2026-09-05 found no critical
 defect and nineteen things worth fixing across the driver, the two tools and
 the package (`docs/contributing/roadmap.md`, Phase 20: findings F1 to F19
 and D1 to D6, every one closed there with its regression test or its
 recorded decision). The install routes are unchanged on every target, and
 the post-release device matrix on Windows 98 SE and Windows 2000 read no
-worse than `1.0.1.0`'s on this release's driver code.
+worse than `1.0.1.0`'s. Those matrix readings were taken on a binary that
+predates one change in this release, the control-endpoint refusal, and no
+run has exercised the path that change is on.
 
 ### What changed
 
@@ -31,6 +40,13 @@ worse than `1.0.1.0`'s on this release's driver code.
   under Driver Verifier, the controller killed from outside the guest four
   times and recovered each time with every device back, and on the Windows
   XP restore and lifecycle sequence that `1.0.1.0`'s fix was for.
+- The driver: a device this driver has given up on can no longer have its
+  control endpoint opened, or reopened after the failure. Such a record
+  keeps its address while it is torn down, and an open on that address was
+  taken for a live device's, which bound the endpoint and started the
+  command chain again on a device that had already failed. Found by the
+  audit's deferred items and covered by a host test; no machine has shown
+  it, and no guest run has been through that path.
 - The driver: after a completed in-place controller recovery the health
   poll's fatal latch is reopened, so a second fault is recovered too. Until
   this release only the first fault after boot was; a second was noticed
