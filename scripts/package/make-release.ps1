@@ -1730,8 +1730,9 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         } else {
             $contents += ("  {0}\  - only when diagnosing a problem" -f $s.Published.ToUpper())
             $contents += ""
-            $contents += "  The same driver, built so a maintainer can get more out of it."
-            $contents += "  It prints nothing as it runs. It is here only so that it can be"
+            $contents += "  The same driver, built so that a crash on it can be traced"
+            $contents += "  further back. It records nothing more than RELEASE\ does, and"
+            $contents += "  it prints nothing as it runs. It is here only so that it can be"
             $contents += "  installed at this exact version if something goes wrong. Do not"
             $contents += "  install it otherwise - and note that BOTH builds answer"
             $contents += "  XHCISNAP, so you do not need this one to send a report."
@@ -2077,11 +2078,11 @@ INSTALL FROM THE RELEASE\ DIRECTORY. This package carries BOTH builds side by
 side - RELEASE\ and DEBUG\, each a complete set of files with the same names -
 so the directory you point Windows at is what decides which driver you get.
 RELEASE\ is the one you want. DEBUG\ is the same driver built so that a
-maintainer can get more out of it if you are asked for a report, and there
-only for troubleshooting a machine that has already gone wrong. It prints
-nothing as it runs. Section 8 describes both, and nothing
-about a copied file
-says which one it is - so point at a directory, never at a loose xhci98.sys.
+crash on it can be traced further back. It records nothing more than
+RELEASE\ does, and it is there only for troubleshooting a machine that has
+already gone wrong. It prints nothing as it runs. Section 8 describes both,
+and nothing about a copied file says which one it is - so point at a
+directory, never at a loose xhci98.sys.
 
 Put the whole unzipped package somewhere the machine can read - a floppy, a
 CD, a shared folder - then:

@@ -20,8 +20,9 @@
  *     carries the whole extension, kernel addresses included, at any level
  *     from 1 up; only the ring's ADDRESS records and the plain-text companion
  *     hold them back below 4. The channel is in
- *     **every** build flavour; what the flavour decides is how much there is to
- *     read, not whether the door exists.
+ *     **every** build flavour, and every flavour records the same: the level
+ *     alone decides how much there is to read, the flavour decides nothing
+ *     here.
  *   - **`XhciLogDebugView`** (`DWORD`, 0 by default) is an **emission** switch
  *     and nothing else: it hands the ring to `DbgPrint` **from the PASSIVE
  *     flush only**, never as live mirroring. See the box on it below.

@@ -7736,8 +7736,10 @@ typedef struct _XHCI_EXTENSION {
  * channel would have kept most of the defect it repairs: the user whose
  * machine misbehaves is running `release`, and telling them to install a
  * second binary before they can report anything is the same shape as telling
- * them to install one that does not load. **The flavour decides how much there
- * is to read, not whether the door exists.**
+ * them to install one that does not load. **The verbosity level decides how
+ * much there is to read; the flavour decides neither that nor whether the
+ * door exists** - all three flavours record the same (design record 08,
+ * section 5).
  *
  * **The door is shut until it is asked for.** `XhciLogVerbosity` in the
  * driver's own software key defaults to 0, and **rung 0 of that ladder IS the

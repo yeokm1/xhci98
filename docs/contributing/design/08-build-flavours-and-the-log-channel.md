@@ -184,20 +184,23 @@ with logging at all.
 | Flavour | DDK | Ships | Port `0xE9` | Live per-line emission | Recording |
 |---|---|---|---|---|---|
 | release | free | yes, default | no | no | the ring, bulk dump at the PASSIVE flush |
-| debug | checked | yes, as the diagnostic download | no | no (see section 6) | highest: richest ring, every producer tier on |
-| qemu | checked | never | yes | yes | highest, plus the live trace |
+| debug | checked | yes, as the diagnostic download | no | no (see section 6) | the same ring as release (the plan said "richest ring, every producer tier on"; see below) |
+| qemu | checked | never | yes | yes | the same ring, plus the live trace |
 
 - release is unchanged: what an ordinary user installs, minimal imports,
   minimal behaviour.
 - debug is the binary a maintainer asks a user with a problem to install, and
   its defining requirement is that it must load and run on real Windows 98 and
-  Windows 2000 hardware. It carries no `HAL.dll!WRITE_PORT_UCHAR`. It has the
-  highest log ability of the three in the sense that matters, what it records.
+  Windows 2000 hardware. It carries no `HAL.dll!WRITE_PORT_UCHAR`. The plan
+  gave it the highest log ability of the three in what it records; as built it
+  records exactly what `release` records, and what it adds is the checked
+  build's frame pointers and flags (see below).
 - qemu is the old debug flavour: the port-`0xE9` mirror and the live per-line
   trace, for the emulator and the bench. It is a first-class, gated, buildable
   flavour rather than an `XHCI_EXTRA_DEFINES` probe, but it is never published.
 
-As built, the table is accurate in every column but one.
+The table above describes the flavours as built. The plan's version of it
+differed in one column, and the difference is recorded here rather than erased.
 
 The "Live per-line emission" column is implemented as written. `src/xhci_dbg.c`
 compiles away without `XHCI_DBG_LIVE`, which only `qemu` defines, so `debug`
@@ -209,7 +212,8 @@ bugcheck Windows 98 metal, in the hands of the very users told to install it.
 `src/xhci_dbg.h`'s `XHCI_DBG_TRACE` is the gate, and `src/xhci_probe.c`'s two
 direct call sites go through it too.
 
-The "Recording" column is an intention and is not implemented. The producer set
+The plan's "Recording" column gave `debug` the richest ring, and that was never
+implemented. The producer set
 (the `XhciLogNote` sites) is identical in all three flavours, as `src/xhci_log.h`
 says, so `debug` records exactly what `release` records. What `debug` differs
 by today is the DDK's own `DBG`: `/Oy-` against `/Oy` plus a few flags, not
@@ -218,7 +222,9 @@ asserts and not unoptimised code. Both flavours compile `/Oxs` (the build logs
 `XHCI_C_ASSERT` in this driver is compile-time and fires in all three. "Every
 producer tier on" describes a producer tiering that does not exist. Section 6's
 argument for why it would be safe stands; the tiers themselves are unbuilt work
-with no task.
+with no task, and every document that describes the flavours (this one, the
+source comments, the generated `readme.txt`) now describes them as built: the
+verbosity level alone decides how much is recorded, in every flavour alike.
 
 That is a smaller gap than it looks. The claim task 13-L.1 is for is "the
 diagnostic binary loads", and that is delivered: `debug`'s import table is
@@ -229,8 +235,9 @@ The log a user sends is the same either way; that is section 13's channel.
 
 One column is missing from the table, and section 13 adds it: the PassThru
 snapshot read channel, which is in all three flavours. It is how a dump leaves
-a machine at all (13.0), so `release` carries it too. The flavour decides how
-much there is to read, not whether the door exists.
+a machine at all (13.0), so `release` carries it too. The verbosity level
+decides how much there is to read; the flavour decides neither that nor whether
+the door exists.
 
 ### 5.1 The polarity inverts
 
@@ -245,7 +252,8 @@ becomes the thing you ask for by name.
 
 ## 6. Recording is not emission
 
-This is the rule that makes "debug has the highest log ability" safe to say, and
+This is the rule that would make "debug has the highest log ability" safe to
+say if that ability were ever built (section 5 records that it was not), and
 it is what the old design got wrong.
 
 Filling the ring is cheap and safe at any IRQL. It is a bounded byte ring in the
@@ -263,11 +271,13 @@ Emitting is what is dangerous, and each sink for its own reason:
   chipset (section 3). By which mechanism is open, and section 3 says what the
   reading does and does not establish. The rate is irrelevant to it.
 
-So the debug flavour gets the richest recording and the most conservative
-emission: every producer tier on, the ring as full as it can be made, and the
-hand-over still exactly one bulk dump from the PASSIVE-level flush that already
-measures its own IRQL and refuses above `PASSIVE_LEVEL`
-(`xhciLogAtPassive` in `src/xhci_dispatch.c`).
+So the plan gave the debug flavour the richest recording and the most
+conservative emission: every producer tier on, the ring as full as it can be
+made, and the hand-over still exactly one bulk dump from the PASSIVE-level
+flush that already measures its own IRQL and refuses above `PASSIVE_LEVEL`
+(`xhciLogAtPassive` in `src/xhci_dispatch.c`). The emission half is built as
+written. The recording half is not: `debug` records what `release` records
+(section 5).
 
 `AGENTS.md`'s rule survives unchanged: no per-line printing outside `#if DBG`,
 and no hand-over site at DISPATCH_LEVEL or above. The change is that "record
@@ -365,7 +375,8 @@ place the two-flavour assumption was wired in.
   `ZwCreateFile`/`ZwWriteFile` resting on that tier alone as the reason; section
   13.0.1 removes both imports, which removes that consequence and not the
   question.)
-- Do not let "highest log ability" become "prints more". Section 6 is the
+- Do not let "highest log ability" (the plan's phrase; section 5 says it was
+  not built) become "prints more". Section 6 is the
   whole safety argument, and the bugcheck it routes around is measured on three
   device classes.
 - A third flavour is a third thing to keep gated. Every gate, self-test and
@@ -516,9 +527,11 @@ direction. A first draft put it in `debug` only, and that would have kept most
 of the defect: the user whose machine misbehaves is running `release`, and
 telling them to install a second binary before they can report anything is the
 same shape as telling them to install one that does not load. What matters is
-that an ordinary user produces evidence from the build they already have. What the
-flavour decides is the ladder's ceiling, how much there is to read, not whether
-the door exists.
+that an ordinary user produces evidence from the build they already have. The
+flavour decides neither the ladder's ceiling nor whether the door exists: as
+built, the ceiling is 4 in every flavour and how much there is to read is the
+verbosity level's alone. (The plan had the flavour set the ceiling; section 5
+records that it does not.)
 
 Two consequences of that, both cheap to state and expensive to discover:
 
@@ -880,9 +893,9 @@ ceiling is stronger with one value than it was with two.
 So the semantics are these, and each has one owner:
 
 - Recording is gated by verbosity: the ring fills at level 2 and above (the
-  whole point of the switch rework), richer producer tiers at 3 and 4 as the
-  flavour provides them. `XhciLogAppendAddress` refuses an address record below
-  `XHCI_LOG_VERBOSITY_FULL` and admits it at 4.
+  whole point of the switch rework), the PORTSC table and address records at 3
+  and 4, the same in every flavour. `XhciLogAppendAddress` refuses an address
+  record below `XHCI_LOG_VERBOSITY_FULL` and admits it at 4.
 - The read channel is gated by verbosity being nonzero, and by nothing else.
   Once engaged it serves both regions whole at every level: the `.BIN` stays the
   raw extension image it has always been, the artifact Findings R and S were
