@@ -1922,12 +1922,22 @@ Tasks, in the audit's revised order:
   with the storage row's transfer identity reading a different count (437
   against 354) as such counts do. So the paired shape passes too when the
   audio row is the first boot, and the two reports in `run-20-post-release/`
-  are these paired ones. The sequential procedure below stands as the
-  record of what was tried first; the owner's reading is that it may not be
-  needed. Evidence in `out\post-release\phase20-8-paired-{2a,2b}\`, and a
+  are these paired ones. Evidence in
+  `out\post-release\phase20-8-paired-{2a,2b}\`, and a
   single-invocation `-Target 2a-fresh,2b-fresh` start that runs the targets
   one after the other (one guest at a time, not the paired shape) was
   stopped a minute in and its partial output discarded.
+  The sequential procedure below is the task as it was first written, and
+  NOTHING FURTHER IS OWED AGAINST IT: the owner retired it on 2026-09-07.
+  It is not an outstanding run. It was carried out on 2026-09-06 and passed,
+  and the de-paired pass of 2026-09-07 repeated that result on the same
+  image, stamp, binary and host twenty minutes after the paired attempt
+  failed. Across the four readings this row has now had, it passes in every
+  shape where the Windows 98 guest runs alone and has failed only with a
+  second guest beside it, which is the isolation this task set out to make
+  and is as far as a matrix run can take it. Running the long solo matrix
+  again would re-measure a row already read four times and could not change
+  what the driver does, so it is retired rather than deferred.
   As written: the first attempt on 2026-09-06 was
   aborted before the driver started: the guest booted into Safe Mode,
   which on a `-snapshot` boot means `vm\fresh-2a.img` itself carries a
