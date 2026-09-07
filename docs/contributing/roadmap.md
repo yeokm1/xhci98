@@ -1523,7 +1523,21 @@ INF and documentation statement the owner's checks contradict (F18), and a
 documentation drift list (D1-D6 and the smaller items). Nothing in it is
 fixed as this phase opens.
 
-Status: opened on 2026-09-05 by the owner, on branch `phase-20`, the day the
+Status: closed on 2026-09-07 on the cut and its guest readings. Every finding
+in the table below is closed, every gate is green, the version is cut and
+re-cut under the same number, the install route from the published download
+reads clean on four targets, and the post-release matrix on both primary
+targets, re-taken on this release's own driver, is identical to the 20.8
+reports but for one transfer count. One clause of the checkpoint is met by a
+test on the development machine rather than in a guest, and 20.9 says so: the
+refusal this release adds, a control endpoint opened on a device the driver
+has given up on, has no guest that has been made to produce that state. What
+the guests read is the other half of it, that the guard does not refuse a
+legitimate reopen. What remains after this phase is the owner's alone: the
+upload of the asset, the push, and the by-hand acceptance test the roadmap
+ends on.
+
+It opened on 2026-09-05 by the owner, on branch `phase-20`, the day the
 audit was reviewed. The version the fixes ship in is `1.0.2.0`, named by the
 owner on 2026-09-07 when the cut opened (task 20.9): the phase carries
 driver code changes, so the third field moves on the numbering Phase 19
@@ -1933,7 +1947,7 @@ Tasks, in the audit's revised order:
   query against its connect-change clear, from an unbudgeted print or the
   log ring read with `XHCISNAP` before the group's guest is discarded).
   Neither outcome changes the driver.
-- [ ] 20.9 the cut. The version is `1.0.2.0`, named by the owner on
+- [x] 20.9 the cut. The version is `1.0.2.0`, named by the owner on
   2026-09-07, and the cut was made that morning (`8936949`): `1,0,2,0` and
   the date `09/07/2026` in `src\xhci_version.h`, the INF's `DriverVer`, the
   `history.md` entry (what changed, F1-F19 and D1-D6 named, F10's hardware
@@ -1961,7 +1975,11 @@ Tasks, in the audit's revised order:
   12,585), the INF gate self-tests 312, the packager 179, the launchers
   116, the matrix self-test 230, the `XHCISNAP` self-test 4 cases, the
   import gate on all three flavours; `make-release.ps1 -Force` exit 0, with
-  `out\xhci98-1.0.2.0.zip` at 254,751 B and thirteen files. Published
+  `out\xhci98-1.0.2.0.zip` at 254,751 B and thirteen files, and again at
+  254,821 B once the guest readings requalified the `history.md` sentence
+  the download's `readme.txt` embeds; that last regeneration restaged the
+  same object trees, so both driver binaries and the INF are byte-identical
+  across it and every leg reading below still stands on them. Published
   sha256 prefixes: release `69e7de836f047558`, debug `9581458ef960e920`,
   and the qemu flavour from the same build `df4d16fc249905b7`. The cut's
   own binaries (`c4cedeee4449434d`, `49703e29539fe177`) are superseded and
@@ -1974,13 +1992,102 @@ Tasks, in the audit's revised order:
   the two binaries, the Codex round-4 and round-5 commits and the citation
   rewrite, changed no code line. The new refusal is on a path no guest run
   has been through, but the guard it goes through sits in the ordinary EP0
-  open path, so the five asset legs are the first guest exercise of the
-  published binary. Whether a confirming paired `-PostRelease` run is owed
-  on the re-stamped images as well was left to the owner on 2026-09-07.
-  Still owed, no guest run at either cut by the owner's instruction: the
-  install route from the asset on the five targets as task 19.9 did, and
-  `fresh-2a.img` and `fresh-2b.img` re-stamped on the re-cut's binary,
-  since they carry `base-1.0.1.0-qemu`.
+  open path, so the asset legs are the first guest exercise of the
+  published binary.
+  The guest readings were then taken over the sessions of 2026-09-07, in
+  the order the owner set that evening: the legs first, then the re-stamp,
+  then the confirming run, which the owner settled the same evening as
+  owed. All of them pass.
+  THE ASSET LEGS. Four were taken, each installing the published release
+  binary `69e7de836f047558` from a `RELEASE\` directory on the transfer
+  drive, and each read from Device Manager on screen: leg 1 Windows 98 SE
+  under NUSB 3.3 on a fresh `post-nusb` clone, leg 3 Windows ME, leg 4
+  Windows 2000 SP4 on the xHCI-only image, leg 5 Windows XP SP3 from the
+  clean-install snapshot. Controller and root hub clean on all four, a HID
+  device bound on all four, and each screen matches its `1.0.1.0`
+  counterpart line for line, the base images' own yellow bangs included.
+  Leg 5 also re-read issue 4's clause: a `usb-storage` on its first ever
+  attach bound in turn with no replug. Screens in
+  `out\post-release\1.0.2.0\asset-legs\`. Four distinct usbport builds, so
+  the new guard is not a regression in the ordinary control-endpoint open
+  path on any of them, which is what a regression there would look like.
+  LEG 2, the SweetLow stack, was REMOVED rather than deferred, and not for
+  the reason first written down. That the INF has not changed since
+  `1.0.1.0` settles the packaging, and packaging was not this release's
+  risk. What leg 2 alone could have answered is the one code change: the
+  guard sits on the reopen branch, where usbport has torn the control
+  endpoint's private state down and rebuilt it, so the regression it could
+  cause is refusing a LEGITIMATE reopen, and SweetLow's guest was the only
+  one whose disable and re-enable sequence survives, NUSB bugchecking on
+  it. That question was answered another way (20.9's reopen check below),
+  and the guard reads only this driver's own record state and address map,
+  never which usbport build called it. What was left in leg 2 was stack
+  coverage `1.0.1.0` already had, against rebuilding a guest whose image
+  and config entry are both gone.
+  THE REOPEN CHECK, which is what was kept out of leg 2 and is the reading
+  aimed at the change itself. On the XP guest leg 5 left installed, with a
+  mouse attached, the owner disabled the controller in Device Manager and
+  re-enabled it. The disable was a real teardown: root hub, the whole HID
+  node and the mouse all vanished, while QEMU still listed the device as
+  attached, so the re-enable had to reopen rather than enumerate a fresh
+  plug. It came back line for line, no replug at any point. Screens
+  `reopen-xp-*.png` beside the legs. The release flavour writes nothing to
+  the debug port, so the driver's counters were not readable there; the
+  QEMU trace supplied a second source instead, recording the enable,
+  address and configure commands after the teardown sweep
+  (`vm\winxp-qemu-trace.reopen.log`). A wrongly refused reopen fails the
+  control endpoint, so no Configure Endpoint could have followed.
+  THE RE-STAMP. Both fresh images were re-cloned from their bases, given
+  the re-cut's qemu build `df4d16fc249905b7`, and stamped
+  `base-1.0.2.0-qemu`, each stamp the only snapshot on its file; the
+  fourteen device classes were taught on the Windows 98 image, and the
+  Windows 2000 one is prepared install-only as every run of this project
+  has prepared it. The reopen check was repeated there on the Windows 2000
+  guest, where the debug port does work, and read the counters directly:
+  `DevicesReopened` 1 and every refusal counter 0, both before the disable
+  and after the enable. That retires the inference the XP trace rested on,
+  because `DevicesReopened` is incremented immediately after the guard
+  returns true and inside the branch it guards. The disable and re-enable
+  unloaded and reloaded the driver on that target, so the counters reset
+  across the sequence and those are two independent clean traversals rather
+  than one reading taken twice. It was NOT repeated on the Windows 98
+  image: that sequence is the one NUSB bugchecks on, which is the same fact
+  that made leg 2 need SweetLow's guest.
+  THE CONFIRMING RUN, `run-matrix.ps1 -PostRelease` on both re-stamped
+  images, 2026-09-07. Both PASS. `2a-fresh` 17 rows, 5 NODRIVER expected, 3
+  not reached, 0 against, 0:57:52; `2b-fresh` 17 rows, 6 NODRIVER expected,
+  0 not reached, 0 against, 1:16:39. Set against the 20.8 reports the
+  checkpoint names, the Windows 98 body is IDENTICAL, all 505 lines, and
+  the Windows 2000 body differs in one line of 626: the storage row's
+  transfer identity, which holds in both and reads a different count, 357
+  against 437, as such counts do. So the matrix is no worse than before on
+  this release's own driver. Note which binary this reads: the qemu
+  flavour `df4d16fc249905b7`, not the published release binary the legs
+  install, from the same build; the two readings do not substitute for one
+  another. Evidence in `out\post-release\1.0.2.0\`. Both images were booted
+  with `-snapshot` and neither was written: each still carries its stamp as
+  its only snapshot.
+  HOW IT WAS TAKEN, because the shape was chosen mid-run and the reason
+  belongs with the reading. It was started in 20.8's paired shape, two
+  invocations side by side at 14:50:51, and the owner stopped it when the
+  Windows 98 `usb-audio/fs` REPLUG leg read FAIL again on the 20.7
+  signature, the replugged device never addressed at all. The targets were
+  then de-paired on the owner's instruction: `2a-fresh` alone from
+  15:09:12, and `2b-fresh` started at 15:14:36 once the Windows 98 guest
+  had cleared its audio group. Alone, both audio legs PASS. That is a
+  direct A/B on one image, one stamp, one binary and one host twenty
+  minutes apart, and it is the strongest evidence yet for 20.8's isolation
+  of that row to a second concurrent guest rather than to the driver;
+  moving the audio group first, which was 20.8's remedy, did not by itself
+  hold here. The Windows 2000 audio row passed both legs in both shapes, as
+  it always has. The aborted attempt's partial output is parked under
+  `out\post-release\1.0.2.0\aborted-paired-1450\` with a note saying it is
+  not a reading. One observation with no consequence: the Windows 2000
+  guest raises a Found New Hardware wizard on the `usb-net` row and it goes
+  unanswered, which costs nothing, because the harness reads counters over
+  the monitor and the debug port rather than off the screen, the row is one
+  the matrix expects no driver for, and the guest is discarded at the end
+  of its group.
   As written: once the owner names the version, `src\xhci_version.h`,
   the INF's `DriverVer`, the `history.md` entry naming what changed and
   which findings it closes (F1-F19, D1-D6; F10's hardware reading owed),
@@ -2003,7 +2110,10 @@ Records: the findings table above; `scripts/vm-matrix/selftest.ps1`,
 `scripts/package/test-package.ps1`, `scripts/inf-gate/test-inf-checks.ps1`
 and `test/test_init.c` (the regression vectors); design records 05, 06 and
 07; `build-and-test.md`; `docs/contributing/runs/run-20-post-release/` (the
-20.7 matrix reports); `releases/history.md`.
+matrix reports, 20.8's paired pair, which 20.9's confirming run on the cut
+binary matches); `out\post-release\1.0.2.0\` on the host that ran it (20.9's
+asset-leg screens, its reopen check and that confirming run);
+`releases/history.md`.
 
 ## Post-Release - Run the Acceptance Test by Hand
 
