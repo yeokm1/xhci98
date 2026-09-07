@@ -117,7 +117,7 @@ The important limitations. The full list is under "Known limitations" in [releas
 | Limitation | Detail |
 |---|---|
 | Disabling, uninstalling or upgrading an NUSB driver crashes the machine | A defect in NUSB's `usbport.sys` which cannot stop a running controller. Rename the existing `XHCI98.SYS`, reboot, then remove it. |
-| Every device on a root port is reported as High Speed | Reporting the true speed of a slower device crashes usbport. A mouse or keyboard on a root port therefore polls at 1, 2 or 4 ms only. Putting them behind a hub will allow the true speed to be reported. |
+| Every device on a root port is reported as High Speed | Reporting the true speed of a slower device crashes usbport as there is no companion controller. A mouse or keyboard on a root port therefore polls at 1, 2 or 4 ms only. If this is an issue for you, put your lower-speed device behind a hub to allow the true speed to be reported. |
 | `DisableSelectiveSuspend = 1` is written machine-wide | A suspended xHCI controller cannot see a newly plugged device. A driver uninstall does not remove the value. |
 | Fast, repeated plug and unplug can freeze Windows 98 | About twice a second sustained. Ordinary use is fine. |
 
