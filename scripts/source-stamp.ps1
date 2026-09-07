@@ -213,8 +213,12 @@ if ($Check -ne "") {
     # binaries least able to afford it.
     #
     # A source mismatch is knowable from any stamp ever written, so it is
-    # decided before anything about the format is. Exit 2 is reserved for what
-    # it means: the sources agree and the binary's identity is unavailable.
+    # decided before anything about the format is. Exit 2 then means the
+    # binary's identity is unavailable AND nothing was found to refuse: here,
+    # because the sources agree and only the BINARY line is missing; at the
+    # top of this block, because there is no stamp at all and neither half is
+    # knowable. The caller treats both the same way, which is why they share
+    # a code, but only this one has checked anything.
     #
     # @(...) because the pipeline unrolls a returned list, and an EMPTY one
     # unrolls to $null - which under Set-StrictMode is a terminating error on

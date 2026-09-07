@@ -1251,9 +1251,22 @@ try {
     $stampSys = Join-Path $stampWork "xhci98.sys"
     $stampFile = Join-Path $stampWork "xhci98.srcstamp"
 
+    # ErrorActionPreference is relaxed across the call, for the reason
+    # make-release.ps1 records at its make-package.ps1 invocation (audit H17):
+    # in Windows PowerShell 5.1 a native command's stderr line becomes an
+    # ErrorRecord, so under "Stop" the refusal this helper exists to MEASURE
+    # aborts the suite instead of being returned as an exit code. It bites
+    # only when the child's stderr is redirected, which is why the first cut
+    # of these tests passed until one of them made the script throw.
     function Invoke-Stamp {
         param([string]$Mode, [string]$Dir)
-        $null = & powershell -NoProfile -ExecutionPolicy Bypass -File $stampScript $Mode $Dir 2>&1
+        $saved = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $null = & powershell -NoProfile -ExecutionPolicy Bypass -File $stampScript $Mode $Dir 2>&1
+        } finally {
+            $ErrorActionPreference = $saved
+        }
         return $LASTEXITCODE
     }
 
@@ -1296,9 +1309,23 @@ try {
     Assert-True ((Invoke-Stamp "-Check" $stampWork) -eq 1) `
         "a legacy stamp whose sources have CHANGED must answer 1, not the 2 that -AllowUnstampedDriver can wave through."
 
+    # A source ADDED and a source REMOVED, which are the two kinds of drift the
+    # hash comparison reports differently from "contents differ" - a file the
+    # build gained, and one it lost. Both must refuse, and from a legacy stamp
+    # too, since that is the format this ordering is about.
+    $dropped = @($legacy | Where-Object { $_ -notmatch 'xhci_log\.h$' })
+    Set-Content -LiteralPath $stampFile -Value $dropped -Encoding ascii
+    Assert-True ((Invoke-Stamp "-Check" $stampWork) -eq 1) `
+        "a source file the stamp does not name - one added since the build - must be refused."
+    $added = @($legacy) + @(("0" * 64) + " nosuchfile.h")
+    Set-Content -LiteralPath $stampFile -Value $added -Encoding ascii
+    Assert-True ((Invoke-Stamp "-Check" $stampWork) -eq 1) `
+        "a source file the stamp names but src\ no longer has - one removed since the build - must be refused."
+
     # And the same source mismatch under a current-format stamp.
     [System.IO.File]::WriteAllBytes($stampSys, [byte[]](1, 2, 3, 4))
-    $null = Invoke-Stamp "-Write" $stampWork
+    Assert-True ((Invoke-Stamp "-Write" $stampWork) -eq 0) `
+        "source-stamp.ps1 -Write failed on the second write."
     $mutated = @(Get-Content -LiteralPath $stampFile | ForEach-Object {
         if ($_ -match 'xhci_log\.h$') { ("0" * 64) + " xhci_log.h" } else { $_ }
     })
@@ -1311,6 +1338,16 @@ try {
     Remove-Item -LiteralPath $stampFile -Force
     Assert-True ((Invoke-Stamp "-Check" $stampWork) -eq 2) `
         "a directory with no stamp must answer 2."
+
+    # A directory with no binary at all is an ERROR, not a 2. It must not join
+    # the one code -AllowUnstampedDriver can wave through: "there is nothing
+    # here to publish" is not "this binary's provenance is unknown".
+    $emptyDir = Join-Path $script:work "stamp-nobinary"
+    New-Item -ItemType Directory -Path $emptyDir | Out-Null
+    Assert-True ((Invoke-Stamp "-Write" $emptyDir) -ne 0) `
+        "stamping a directory with no xhci98.sys in it must fail."
+    Assert-True ((Invoke-Stamp "-Write" $emptyDir) -ne 2) `
+        "...and must not fail with 2, which is the code -AllowUnstampedDriver accepts."
 
     Write-Step "the binary-vs-INF version comparison"
     #
