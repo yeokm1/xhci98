@@ -101,7 +101,8 @@ images/         The pictures `README.md` embeds. Tracked.
 docs/           The documentation tree: using/ (release notes, the release
                 acceptance test), contributing/ (roadmap, architecture,
                 build/test/runbooks, design records, run sheets and their
-                evidence), issues/, usb-xhci-info/, and references/.
+                evidence), issues/, future-plans/ (proposals not
+                scheduled), usb-xhci-info/, and references/.
                 `docs/README.md` is the index, and every document below is
                 reachable from it.
 tools/          The build toolchain itself, used in place and installed

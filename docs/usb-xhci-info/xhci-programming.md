@@ -286,30 +286,16 @@ USB 3.x capable devices on USB 2.0 companion ports: if the USB 3.x logical compa
 
 ## What SuperSpeed Support Would Require
 
-SuperSpeed is not an extension of the USB 2.0 miniport path. The reused
-Win2000-era `usbport.sys` has no SuperSpeed speed reporting, bandwidth model,
-root-hub semantics, or USB 3.x hub support. A SuperSpeed implementation would
-first have to replace Option A with the Option B monolithic HCD described in
-`docs/usb-xhci-info/win98-wdm.md`, taking ownership of the root-hub PDO,
-`IOCTL_INTERNAL_USB_*`, URB parsing, enumeration, and scheduling.
+General SuperSpeed support is not an extension of the USB 2.0 miniport path.
+The reused Win2000-era `usbport.sys` has no SuperSpeed speed reporting,
+bandwidth model, root-hub semantics, or USB 3.x hub support, and a SuperSpeed
+implementation would first have to replace Option A with the Option B
+monolithic HCD before the xHCI layer gained the link, descriptor, burst, hub
+and bandwidth paths. What that would take is recorded in
+`docs/future-plans/superspeed-hcd-reimplementation.md`; the narrower case of
+a bulk device on a root port is `docs/future-plans/superspeed-storage-behind-a-switch.md`.
 
-Only after that USB 2.0 replacement worked would the xHCI layer gain the
-SuperSpeed-specific paths:
-
-- Power USB 3.x ports and implement link-state transitions, U0/U1/U2/U3,
-  warm reset, link training, and compliance-mode recovery.
-- Parse BOS, SuperSpeed Device Capability, and SuperSpeed Endpoint Companion
-  descriptors; use the 512-byte EP0 maximum packet size.
-- Program Max Burst, Mult, and Max ESIT Payload, account for burst transfers,
-  and add Stream Context Arrays if UAS bulk streams are supported.
-- Implement USB 3.x hub descriptors and port state. SuperSpeed hubs have no
-  transaction translators, but still require Route Strings; the NT5 hub
-  drivers cannot provide this path, so a USB 3.x-aware hub driver would also
-  be required unless support stopped at root-port devices.
-- Add a SuperSpeed bandwidth model and validate link training, warm reset,
-  U-state transitions, hubs, storage, Ethernet, and audio on real controllers.
-
-This is a separate driver-stack project with little practical benefit on the
+It is a separate driver-stack project with little practical benefit on the
 target operating systems; High-Speed already covers the intended HID, storage,
 Ethernet, and audio workloads. A controller exposing only USB 3.x protocol
 ports is therefore refused at start (`XHCI_CAPS_NO_MANAGED_PORTS`) rather than

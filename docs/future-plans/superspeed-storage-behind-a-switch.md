@@ -1,4 +1,4 @@
-# 10 - SuperSpeed storage on root ports, behind a registry switch
+# SuperSpeed storage on root ports, behind a registry switch
 
 Written 2026-09-04 at the project owner's request, after `1.0.1.0` was cut.
 It is a **proposal**. Nothing in it has been built, no boot has been taken for
