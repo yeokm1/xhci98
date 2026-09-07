@@ -9,6 +9,18 @@ it. The evidence it rests on is the tree as it stands, issue 6
 root-hub contracts in `docs/usb-xhci-info/usbport-miniport-abi.md`
 section 4.
 
+Two rules frame everything below, the same two the SuperSpeed storage
+proposal was written under:
+
+1. The virtual hubs are gated behind a registry value and **off by
+   default**.
+2. With the value absent or 0, the driver behaves **exactly as it does
+   today**. Not "equivalently": the same root-hub reports, the same
+   override, the same counters, the same trace lines, the same bytes on
+   the bus.
+
+Section 3.1 says what the value is, how it is read, and what holds rule 2.
+
 ## 1. The problem it would solve
 
 The driver reports every connected root port to `usbport.sys` as High Speed
@@ -80,13 +92,60 @@ translates is what usbport is told.
 
 ## 3. What the driver would have to do
 
-### 3.1 The root hub
+### 3.1 The switch, and what off means
+
+| | |
+|---|---|
+| Name | `XhciVirtualHub` (proposed; the owner settles the name) |
+| Type | `REG_DWORD` |
+| Where | The controller's driver (software) key: the key a plain `AddReg` under an INF install section writes, and the key `XhciLogVerbosity` and the SuperSpeed storage proposal's `XhciSuperSpeed` live in |
+| Values | `0` off, the default. `1` on, the permanent shape of section 4. Any other value is refused, not clamped: the driver applies 0 and records that it refused, on the rule the INF states for `XhciLogVerbosity`. A later on-demand shape would take the next value rather than a second switch |
+| Absent | 0, and not an error |
+| Set by | The user, by hand, in Registry Editor. The INF's `AddReg` writes the 0 so the value is visible where the user looks for it; `XHCISNAP` does not set it |
+
+It is read the way the log values and the SuperSpeed storage proposal's
+switch are read: through `UsbPortGetMiniportRegistryKeyValue` from
+`StartController`, in the routine that already reads `XhciLogVerbosity`
+(`xhciLogReadValues` in `src/xhci_dispatch.c`), because every constraint on
+a registry read has been paid for there. PASSIVE_LEVEL only, since
+`StartController` is the one callback this driver knows is PASSIVE. No new
+import, since the `Zw*` names are denied by the import gate and usbport's
+service is the only registry channel this project may use. Nothing in the
+read may fail a start: the value missing, the read failing and a NULL
+service pointer all leave it at 0 and the driver starts as today, with the
+`MPSTATUS` kept beside the value so a reader can tell a 0 somebody set from
+nothing found. usbport zeroes the miniport extension before every start, so
+the value is re-read at every start and cached nowhere else; changing it
+takes a disable and enable of the controller or a reboot. What was read,
+what was applied and the status go into the snapshot header
+(`docs/contributing/passthru-snapshot-instrument.md`), so a dump from a
+stranger's machine states which mode the driver was in.
+
+Rule 2 is held at one divergence point. With the switch applied as 0, no
+virtual record is ever created, the root hub reports each managed port from
+the shadow as it does now, the address map never holds an address without a
+Slot ID, and the topology graph never sees a hub it has to fold out; every
+path of 3.2 to 3.5 is behind a test of the applied value taken once at
+start, and the only new code that runs in the off state is that test and
+the read itself. Host vectors run the affected paths in both states, and
+the device matrix runs with the switch off in both the value-absent and
+the INF-installed setups, as the SuperSpeed storage proposal's plan does,
+so that "today's driver" is a measured reading rather than a claim.
+
+The gate is there for two reasons. The permanent shape puts N hub devnodes
+in Device Manager and N enumerations into every start, a visible change on
+every machine, and a user who would rather have the 4 ms mouse than the
+devnodes keeps today's driver by doing nothing. And the reading section 5
+rests on, that each hub driver gives the virtual hub a TT record, has not
+been taken; until it has on both primary targets, the default cannot move.
+
+### 3.2 The root hub
 
 The root hub keeps its descriptor and its port count. What changes is what
 each managed port reports: connected, enabled, powered and High Speed for
 as long as the controller is in service, whether or not anything is plugged
 in. A physical connect or disconnect stops being a root-port change and
-becomes a change on the virtual hub's port (3.3). The Port Status Change
+becomes a change on the virtual hub's port (3.4). The Port Status Change
 Event path and the start/resume seed keep every latch rule in
 `docs/contributing/implementation-invariants.md`, "Root Hub Reporting";
 what they announce moves from `UsbPortInvalidateRootHub` to the virtual
@@ -108,7 +167,7 @@ tears the virtual hub down and, through it, the device behind it; the
 physical port keeps its power, since the next thing usbhub does is re-create
 the hub.
 
-### 3.2 The virtual hub as a device
+### 3.3 The virtual hub as a device
 
 usbport creates the virtual hub the way it creates any device: EP0 open at
 address 0, `GET_DESCRIPTOR(Device)`, `SET_ADDRESS`, the descriptors again at
@@ -128,7 +187,7 @@ table is the whole device:
 | `SET_CONFIGURATION`, `SET_INTERFACE` (alt 0), `GET_STATUS` (device, interface, endpoint), `CLEAR_FEATURE(ENDPOINT_HALT)` | success, no data |
 | `GET_HUB_STATUS` | zero |
 | `GET_PORT_STATUS(1)` | the real port's shadow reported truthfully: the connect, enable, suspend, over-current, reset and power bits as today, and the Low-Speed or High-Speed bit from the decoded speed, neither for Full Speed |
-| `SET_PORT_FEATURE(1, PORT_RESET)` | the existing reset path: PORTSC.PR, the asynchronous timeout, a reset generation, `C_PORT_RESET` on completion, reported through 3.3 |
+| `SET_PORT_FEATURE(1, PORT_RESET)` | the existing reset path: PORTSC.PR, the asynchronous timeout, a reset generation, `C_PORT_RESET` on completion, reported through 3.4 |
 | `SET_PORT_FEATURE(1, PORT_POWER)`, `PORT_SUSPEND` | the existing `RH_SetFeature...` bodies, called for the underlying port |
 | `CLEAR_PORT_FEATURE(1, C_PORT_*)` | clear the shadow's change bit, as `RH_ClearFeaturePortXChange` does |
 | `CLEAR_PORT_FEATURE(1, PORT_ENABLE)`, `PORT_POWER`, `PORT_SUSPEND` | the existing disown and disable bodies (`XhciSlotPortDisowned` and the confirmed half), unchanged |
@@ -153,9 +212,9 @@ placement and from the reply bytes it reads at completion; the descriptor
 snoop (`src/xhci_desc.c`) reads configuration descriptors the same way. A
 virtual hub's traffic must either go through both folds and be recognised
 there, or be diverted before them. Going through is the smaller change and
-the graph then sees the virtual hub as a hub, which 3.4 has to correct.
+the graph then sees the virtual hub as a hub, which 3.5 has to correct.
 
-### 3.3 The status-change pipe
+### 3.4 The status-change pipe
 
 usbhub opens the hub's interrupt IN pipe and keeps one transfer pending on
 it. The driver holds that transfer on the virtual device's queue and
@@ -172,7 +231,7 @@ never programmed anywhere, since there is no endpoint. `AbortTransfer` on
 this pipe must find the held transfer wherever it is, queue or completion
 list, as design record 05 already requires.
 
-### 3.4 The topology graph
+### 3.5 The topology graph
 
 The virtual hub is a hub in usbport's view and must not be one in the
 xHC's. Four rules in the graph and the device records change meaning:
@@ -203,7 +262,7 @@ hub; with the virtual hub it leaves through the hub path, the
 and its subtree. That path has to reach the same disown bookkeeping the
 root-port path does, since the physical port really is being given up.
 
-### 3.5 What stays as it is
+### 3.6 What stays as it is
 
 Everything below the usbport-facing surface. Port speed decoding, the
 Slot Context and EP0 programming from the decoded speed, the interval floor
@@ -233,12 +292,9 @@ appears and disappears with the device, so that every removal, disown and
 resume path has two cases. It is the smaller visible change and the larger
 state change.
 
-Build the permanent shape first, behind a registry switch shaped like
-the SuperSpeed storage proposal's: a `REG_DWORD` in the controller's driver key read
-through `UsbPortGetMiniportRegistryKeyValue` at start, off by default, and
-with the value absent or 0 the driver behaves as it does today in every
-reading the previous release produces. The on-demand shape can be a later
-value of the same switch if the devnodes turn out to matter.
+Build the permanent shape first, as value 1 of the switch in 3.1. The
+on-demand shape can be a later value of the same switch if the devnodes
+turn out to matter.
 
 ## 5. What has to be measured before it is trusted
 
@@ -298,13 +354,14 @@ on root ports, with the interval read from the snapshot instrument.
 
 ## 8. Batches, if it is taken up
 
-- `-0`: the request table of 3.2 as host vectors (`test/`), fed the
+- `-0`: the request table of 3.3 as host vectors (`test/`), fed the
   setup packets both shipping hub drivers send, from the measurements in
   design record 02 (`wValue` 0 on `GET_DESCRIPTOR(Hub)`, `wLength` 71); the
-  graph fold of 3.4 as vectors over the existing topology tests; the
-  registry switch and its snapshot header fields.
+  graph fold of 3.5 as vectors over the existing topology tests; the
+  switch of 3.1, its refusal of unknown values, its snapshot header
+  fields, and the off-state vectors that hold rule 2.
 - `-A`: the virtual device record, the synthetic completion path, the
-  status-change pipe, the root-hub changes of 3.1.
+  status-change pipe, the root-hub changes of 3.2.
 - `-V`: section 6 on all four guests, switch off then on, the device matrix
   in both states.
 - `-E`: the E460 reading.
@@ -315,8 +372,10 @@ on root ports, with the interval read from the snapshot instrument.
    devnodes for an interval a stock mouse feels as 4 ms instead of 8 ms.
 2. Permanent or on demand, if section 4's recommendation is not taken.
 3. The virtual hub's vendor and product id and whether it carries strings.
-4. Whether the switch defaults to on in a later release once section 5 is
-   read on both primary targets, or stays an opt-in like the SuperSpeed storage proposal's.
+4. The switch's name, `XhciVirtualHub` being the proposal.
+5. Whether the switch defaults to on in a later release once section 5 is
+   read on both primary targets, or stays an opt-in like the SuperSpeed
+   storage proposal's.
 
 ## Sources
 
