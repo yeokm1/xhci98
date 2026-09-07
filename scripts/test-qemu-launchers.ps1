@@ -86,6 +86,21 @@ try {
             "the $name launcher still appends stale output instead of creating a per-boot trace."
         Assert-True ($text.IndexOf($moveLine) -lt $text.IndexOf($chardevLine)) `
             "the $name launcher does not archive the prior log before QEMU opens the new trace."
+        if ($name -eq "Win98" -or $name -eq "Win2000") {
+            # build-and-test.md, "A floppy can be inserted live without a
+            # reboot": `change floppy0 <path>` on the monitor is the
+            # guest-to-host courier for 2a and 2b, and a floppy CONTROLLER
+            # cannot be added to a running guest - so it has to be on the run
+            # launcher at boot, empty. The 2026-09-07 audit's H27 was that the
+            # doc had claimed this since batch 13-L with no generator writing
+            # it; its first fix then put the drive on 2b's PREPARATION
+            # launcher, which is booted once and never during a matrix run, so
+            # the claim stayed false for the launcher the doc is about. This
+            # asserts the generated text, which is the only thing that
+            # survives a regenerated `scripts\local\`.
+            Assert-True ($text -match '(?m)^\s*-drive if=floppy,file=') `
+                "the $name run launcher has no floppy controller, so a file cannot be couriered out of a running guest."
+        }
         if ($name -eq "Win2000SMP") {
             Assert-True ($text.Contains("-accel whpx,kernel-irqchip=off")) `
                 "the Win2000 SMP launcher does not default to the proven WHPX rung."

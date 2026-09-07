@@ -821,7 +821,16 @@ foreach ($tgt in $targetsToRun) {
         $proc = Start-Qemu -Qemu $qemuBin -QemuArgs $args -StderrFile $stderrFile
         $groupError = ""
         $rowInFlight = ""
-        $rowsBehind = @()
+        # EVERY ROW IS "BEHIND" UNTIL THE LOOP BELOW REACHES IT. The first cut
+        # of the H20 fix started this empty and filled it only inside the row
+        # loop, which left the failures that happen BEFORE the first row -
+        # the monitor never answering, the driver never starting, the offset
+        # table stale, the guest dead out of the boot - counting exactly one
+        # row and nothing not reached. Those are the commonest group-level
+        # failures there are, and they are the ones the audit's own example
+        # was: a failed HID boot must read as the group's whole row count, not
+        # as one.
+        $rowsBehind = @($grp.Rows)
         try {
             if (-not (Wait-Monitor -Port $tgt.Monitor -TimeoutSeconds 60)) {
                 $err = Get-QemuStderr -StderrFile $stderrFile
@@ -1130,25 +1139,31 @@ foreach ($tgt in $targetsToRun) {
             # outcome word stays ERROR either way, and the line is in the
             # report, so a run that does NOT reproduce the wedge changes the
             # diff.
-            $script:tgtTally.Rows++
             if ($PostRelease -and (Test-RowCountsAgainst -Outcome "ERROR" -WedgeDeclared $wedgeDeclared)) {
                 $script:tgtTally.Against++
             }
 
-            # **The rows behind the one that failed**, which used to vanish
+            # **The rows this group never measured**, which used to vanish
             # (audit H20). `lib\fresh.ps1` says `Rows` includes rows "never
             # reached because the group ended early" and that both add to
-            # `NotReached`; the row in flight was added above and the rest were
-            # not, so the count of what a run did not measure was short by the
-            # whole tail of every group that ended early. They are not
-            # EXCLUDED - nothing decided they should not run - so they get no
-            # report line of their own; what they get is the arithmetic.
+            # `NotReached`; only the row in flight was ever added, so the count
+            # of what a run did not measure was short by the whole tail of
+            # every group that ended early - and by the WHOLE group when the
+            # failure came before the first row, which is where the monitor
+            # timeout, the driver that never started and the dead guest all
+            # land. Unreached rows are not EXCLUDED - nothing decided they
+            # should not run - so they get no report line of their own; what
+            # they get is the arithmetic.
             $behind = 0
             if ($null -ne $rowsBehind) { $behind = @($rowsBehind).Count }
-            if ($behind -gt 0) {
-                $script:tgtTally.Rows += $behind
-                $script:tgtTally.NotReached += $behind
-                Write-Host ("  and {0} row(s) behind it in this group were never reached" -f $behind)
+            $add = Get-GroupFailureTally -GroupRows (@($grp.Rows).Count) `
+                                         -Reached (@($grp.Rows).Count - $behind) `
+                                         -RowInFlight ($rowInFlight -ne "")
+            $script:tgtTally.Rows += $add.Rows
+            $script:tgtTally.NotReached += $add.NotReached
+            if ($add.NotReached -gt 0) {
+                $where = if ($rowInFlight -ne "") { "behind it in this group" } else { "in this group" }
+                Write-Host ("  and {0} row(s) {1} were never reached" -f $add.NotReached, $where)
             }
 
             $label = if ($rowInFlight -ne "") {

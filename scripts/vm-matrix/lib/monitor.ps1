@@ -106,8 +106,12 @@ function Send-Mon {
         #
         # So the connect prompt is waited for and consumed here, and only then
         # is anything sent. A monitor that does not produce one within the
-        # window is not synchronised, and the drain-and-hope path is taken with
-        # that said out loud rather than silently.
+        # window is NOT synchronised, and the command is not sent at all: the
+        # first cut of this said so out loud and then sent anyway, which left
+        # the whole race in place behind a warning nobody reads in a matrix log
+        # thousands of lines long. A refusal here costs one row marked as a
+        # monitor error, which is what an unsynchronised monitor is; sending
+        # costs a departure that never happened.
         #
         $banner = New-Object System.Text.StringBuilder
         $sync = [Diagnostics.Stopwatch]::StartNew()
@@ -124,9 +128,10 @@ function Send-Mon {
             }
         }
         if (-not (Test-MonitorReplyComplete -Raw $banner.ToString())) {
-            if (-not $Quiet) {
-                Write-Host ("monitor: no (qemu) prompt on connect within 2000 ms before '{0}'; the reply cannot be separated from the banner and is not trusted" -f $Command)
-            }
+            Write-Host ("monitor: no (qemu) prompt on connect within 2000 ms before '{0}'; the reply could not be separated from the banner, so nothing was sent" -f $Command)
+            $script:MonitorErrors++
+            $stream.Close(); $client.Close()
+            return $null
         }
         # Anything still queued behind the prompt is not this command's.
         while ($stream.DataAvailable) { $null = $stream.ReadByte() }
@@ -161,9 +166,9 @@ function Send-Mon {
         # reply without a trailing `(qemu)` is given a second window, and one
         # that still lacks it is an error and returns nothing rather than a
         # fragment a caller could mistake for the whole answer.
-        if (-not (Test-MonitorReplyComplete -Raw $sb.ToString() -Echo $Command)) {
+        if (-not (Test-MonitorReplyComplete -Raw $sb.ToString() -Echo $Command -RequireEcho)) {
             $more = [Diagnostics.Stopwatch]::StartNew()
-            while ($more.ElapsedMilliseconds -lt $HardMs -and -not (Test-MonitorReplyComplete -Raw $sb.ToString() -Echo $Command)) {
+            while ($more.ElapsedMilliseconds -lt $HardMs -and -not (Test-MonitorReplyComplete -Raw $sb.ToString() -Echo $Command -RequireEcho)) {
                 if ($stream.DataAvailable) {
                     $n = $stream.Read($buf, 0, $buf.Length)
                     if ($n -gt 0) { [void]$sb.Append([System.Text.Encoding]::ASCII.GetString($buf, 0, $n)) }
@@ -173,8 +178,8 @@ function Send-Mon {
             }
         }
         $stream.Close(); $client.Close()
-        if (-not (Test-MonitorReplyComplete -Raw $sb.ToString() -Echo $Command)) {
-            Write-Host ("monitor: no (qemu) prompt came back after '{0}' within {1} ms; the reply is incomplete and is not used" -f $Command, ($HardMs * 2))
+        if (-not (Test-MonitorReplyComplete -Raw $sb.ToString() -Echo $Command -RequireEcho)) {
+            Write-Host ("monitor: no (qemu) prompt came back after '{0}'s own echo within {1} ms; the reply is incomplete and is not used" -f $Command, ($HardMs * 2))
             $script:MonitorErrors++
             return $null
         }
@@ -197,21 +202,32 @@ function Send-Mon {
 # belongs to the banner or to somebody else's command, and accepting it hands
 # the caller an empty answer that reads as a real one.
 #
-# The echo is not required to be present: the caller may have a monitor that
-# does not echo, and this function is also used on accumulated text that
-# starts mid-reply. What is required is that no prompt is accepted BEFORE it
-# when it is there.
+# By default the echo is not required to be PRESENT: this function is also
+# used on the connect banner, which answers no command, and on accumulated
+# text that starts mid-reply. What is always required is that no prompt is
+# accepted BEFORE the echo when the echo is there.
+#
+# `-RequireEcho` closes the rest of the hole, and `Send-Mon` passes it,
+# because QEMU's HMP always echoes what is written to it. Without it a reply
+# whose echo has not arrived yet is judged on whatever prompt IS in the
+# buffer - the banner's, if the connect-time drain lost the race - and an
+# empty reply comes back marked complete. That is the reading the whole of
+# H19 is about, and no timeout can see it, because from a timeout's side a
+# prompt is a prompt.
 #
 function Test-MonitorReplyComplete {
-    param([string]$Raw, [string]$Echo = "")
+    param([string]$Raw, [string]$Echo = "", [switch]$RequireEcho)
     if ($null -eq $Raw) { return $false }
     $clean = $Raw -replace "\x1b\[[0-9;]*[A-Za-z]", "" -replace "\x08", ""
+    $sawEcho = $false
     if ($Echo -ne "") {
         $at = $clean.IndexOf($Echo, [System.StringComparison]::Ordinal)
         if ($at -ge 0) {
+            $sawEcho = $true
             $clean = $clean.Substring($at + $Echo.Length)
         }
     }
+    if ($RequireEcho -and -not $sawEcho) { return $false }
     return ($clean.TrimEnd() -match '\(qemu\)$')
 }
 

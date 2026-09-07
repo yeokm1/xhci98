@@ -410,7 +410,15 @@ $manifestFiles
 function Get-Win98Precedent {
     param([object[]]$Rows, [string]$Dumpbin)
 
-    $map = @{}
+    # ORDINAL, because a PowerShell hashtable is case-INSENSITIVE by default
+    # and this map is evidence. `Test-NtkernName` was made `-cmatch` for the
+    # 2026-09-07 audit's H3 and this half was left as it was, so a precedent
+    # binary importing `EXALLOCATEPOOL` still answered for the allowlist's
+    # `ExAllocatePool` - the same wrong evidence in the other of the two
+    # places the Win98 rule is enforced, and the one that is quoted into the
+    # phase records as `win98-precedent <binary>`. An export name differing
+    # only in case is a different symbol, and the loader agrees.
+    $map = New-Object System.Collections.Hashtable([System.StringComparer]::Ordinal)
     $scanned = @()
 
     foreach ($row in @($Rows | Where-Object { $_.Role -eq "precedent" })) {
@@ -490,7 +498,9 @@ function Test-Image {
         return
     }
 
-    $matched = @{}
+    # Ordinal for the same reason as the precedent map above: the keys are
+    # symbol names, and two that differ only in case are two symbols.
+    $matched = New-Object System.Collections.Hashtable([System.StringComparer]::Ordinal)
 
     foreach ($pair in $pairs) {
         if (-not $pair.ByName) {

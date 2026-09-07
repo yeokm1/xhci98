@@ -202,8 +202,10 @@ order they bite:
    accident, the same reason `xhciZeroPacket` exists. A full window is bounded by the
    0x10000 usbport refuses above, less the 88-byte header: 65,448 iterations
    under the controller lock, and the host tool asks for 0xF000 = 61,440 at a
-   time (`SNAP_PARAM_BYTES` in `xhcisnap/xhcisnap.c`), so 61,440 is what is
-   actually reached. On the order of 100 us at DISPATCH. That is the right trade: the instrument runs on a wedged, idle
+   time (`SNAP_PARAM_BYTES` in `xhcisnap/xhcisnap.c`), which is the whole
+   parameter block and so carries the header too - 61,352 payload bytes, and
+   that is what is actually reached. (`xhcisnap.c` bounds its own reads by
+   `SNAP_PARAM_BYTES - sizeof(SNAP_HEADER)`, the same arithmetic.) On the order of 100 us at DISPATCH. That is the right trade: the instrument runs on a wedged, idle
    machine and is in no hot path, and the ISR does not take this lock, so
    what the hold delays is the command engine and the DPC, not interrupts.
 7. Refuse a PORTSC `Offset` that is not ULONG-aligned (`S_BAD_REQUEST`)

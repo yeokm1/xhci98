@@ -1546,8 +1546,37 @@ meant: scripts\build-driver.cmd $f
         # rebuild moves the PE link timestamp and invalidates every reading
         # taken on the published bytes. A mismatch (exit 1) is a refusal.
         #
+        # The stamp is written beside the BUILD output, not beside the staged
+        # copy: only the INF and the .sys are copied into the staging
+        # directory. Deriving the directory from $sys - which by here points
+        # into releases\.staging-<version>\<flavour> - is how the first cut of
+        # this check took the "no stamp" path on every ordinary release, and
+        # would have gone on taking it with the sources changed underneath.
         $stampScript = Join-Path $repo "scripts\source-stamp.ps1"
-        $objRoot = Split-Path -Parent $sys
+        $objRoot = Join-Path $repo ("src\" + $objDirName[$f] + "\i386")
+        $builtSys = Join-Path $objRoot "xhci98.sys"
+
+        # And a stamp only speaks for the binary it sits beside, so the staged
+        # bytes have to BE those bytes. Without this the check answers for
+        # src\obj*\i386\xhci98.sys while some other file ships.
+        if (-not (Test-Path -LiteralPath $builtSys)) {
+            throw @"
+the $f binary about to be published has no counterpart at
+$builtSys, so nothing ties it to the sources in src\. Build the flavour you
+meant: scripts\build-driver.cmd $f
+"@
+        }
+        $builtHash = (Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash
+        $stagedHash = (Get-FileHash -LiteralPath $sys -Algorithm SHA256).Hash
+        if ($builtHash -ne $stagedHash) {
+            throw @"
+the binary about to be published as $f\ is not the one in
+$builtSys ($stagedHash vs $builtHash), so the source stamp beside that build
+says nothing about the bytes being shipped. Re-run the packager against the
+build you mean: scripts\build-driver.cmd $f
+"@
+        }
+
         if (Test-Path -LiteralPath $stampScript) {
             $stampOut = & powershell -NoProfile -ExecutionPolicy Bypass `
                 -File $stampScript -Check $objRoot 2>&1
@@ -1919,9 +1948,10 @@ Released {DATE}.{INCOMPLETE}
 Most x86 PCs made from around the mid 2010s onward have USB 3.0 (xHCI)
 controllers and nothing else. Windows 98 SE, Windows ME, Windows 2000 and
 32-bit Windows XP have no support for those, and this driver fills that gap
-on all four. Windows 98 SE and Windows 2000 SP4 are the two the driver is
-validated on, including on real hardware; Windows ME and 32-bit Windows XP
-have been tested in virtual machines only.
+on all four. Windows 98 SE and Windows 2000 SP4 are the two primary targets,
+and a release has to work on both. Only Windows 98 SE has been validated on
+real hardware; Windows 2000 SP4, Windows ME and 32-bit Windows XP have been
+validated in virtual machines only.
 
 It gives you USB 2.0 speeds: High Speed, Full Speed and Low Speed. USB 3.0
 SuperSpeed is out of scope. A USB 3.0 device still works, at USB 2.0 speed,

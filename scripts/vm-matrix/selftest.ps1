@@ -656,6 +656,22 @@ Assert "every row not reached is FAIL (F11)"   "FAIL" (Get-TargetVerdict -Tally 
 Assert "one row reached, nothing against, is PASS" "PASS" (Get-TargetVerdict -Tally @{ Rows = 3; NotReached = 2; Against = 0 })
 Assert "one row reached and against is FAIL"   "FAIL" (Get-TargetVerdict -Tally @{ Rows = 3; NotReached = 2; Against = 1 })
 
+Write-Host "--- a group-level failure counts the rows it never measured (H20) ---"
+# The audit's own example: a seventeen-row group whose fifth row was in flight
+# owes twelve unreached rows, not zero.
+$midGroup = Get-GroupFailureTally -GroupRows 17 -Reached 5 -RowInFlight $true
+Assert "a row in flight owns the ERROR line"   1  ($midGroup.Rows - $midGroup.NotReached)
+Assert "...and the tail behind it is unreached" 12 $midGroup.NotReached
+# And the case the first fix missed entirely: the failure that happens before
+# the first row - a monitor that never answers, a driver that never starts.
+$preRow = Get-GroupFailureTally -GroupRows 17 -Reached 0 -RowInFlight $false
+Assert "a failure before the first row counts every row" 17 $preRow.Rows
+Assert "...all of them unreached"                        17 $preRow.NotReached
+Assert "...so the target cannot read PASS on it" "FAIL" (Get-TargetVerdict -Tally @{ Rows = $preRow.Rows; NotReached = $preRow.NotReached; Against = 0 })
+$lastRow = Get-GroupFailureTally -GroupRows 3 -Reached 3 -RowInFlight $true
+Assert "the last row in flight leaves nothing behind"    0 $lastRow.NotReached
+Assert "...and still counts itself"                      1 $lastRow.Rows
+
 Write-Host "--- the report file: header, column line, then this target's rows ---"
 $reportPath = Join-Path $env:TEMP ("xhci98-selftest-report-{0}.txt" -f $PID)
 try {
@@ -741,6 +757,15 @@ $esc = [string][char]27
 Assert "...also under readline escapes"               $true  (Test-MonitorReplyComplete -Raw ($esc + "[K(qemu) " + $esc + "[D"))
 Assert "a reply without the prompt is not"            $false (Test-MonitorReplyComplete -Raw "Device 0.0, Port 2, ID: dut1`r`n")
 Assert "an absent reply is not"                       $false (Test-MonitorReplyComplete -Raw $null)
+# H19, the half no timeout can see: the banner's own prompt still in the
+# buffer when the command goes out. Without -RequireEcho that reads complete
+# and the caller gets an empty answer, which for `info usb` is a departure
+# that never happened.
+$bannerOnly = "QEMU 11.0.0 monitor - type 'help'`r`n(qemu) "
+Assert "the banner's prompt alone is not this command's reply" $false (Test-MonitorReplyComplete -Raw $bannerOnly -Echo "info usb" -RequireEcho)
+Assert "...and it is exactly what the lenient form accepts" $true (Test-MonitorReplyComplete -Raw $bannerOnly -Echo "info usb")
+Assert "the echo with its own prompt after it is complete" $true (Test-MonitorReplyComplete -Raw ($bannerOnly + "info usb`r`nDevice 0.0, Port 2, ID: dut1`r`n(qemu) ") -Echo "info usb" -RequireEcho)
+Assert "the echo with no prompt after it is not"      $false (Test-MonitorReplyComplete -Raw ($bannerOnly + "info usb`r`n") -Echo "info usb" -RequireEcho)
 Assert "a plain path is sent as it is"                'C:\out\x.ppm' (ConvertTo-HmpArgument -Text 'C:\out\x.ppm')
 Assert "a path with a space is quoted with forward slashes" '"C:/out dir/x.ppm"' (ConvertTo-HmpArgument -Text 'C:\out dir\x.ppm')
 # chardev-add: HMP quotes WHOLE arguments, so a spaced path must quote the

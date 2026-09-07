@@ -596,12 +596,16 @@ Ordering rules stand on their own:
 
 ## 7. Open items
 
-1. The allocation itself. Phase 3 tasks 8/9 asked both targets for 372 KB and
-   both granted it, so that item is discharged at that size. Batch 7a-A raised
-   the request to 404 KB (section 3.6), and no target has been asked for that
-   yet; the 7a-V runs owe the observation. It is the first thing that fails
-   and it fails before `StartController`, so a silent success is not what to
-   look for. Record the granted size on both.
+1. The allocation itself - CLOSED. Phase 3 tasks 8/9 asked both targets for
+   372 KB and both granted it, which discharged this at that size; batch 7a-A
+   then raised the request to 404 KB (section 3.6) and this item was left open
+   because no target had been asked for the larger one. It has been since, and
+   section 3.6 records how: the allocation is the first thing that fails and
+   it fails before `StartController`, so every start from batch 7a-V onward -
+   thousands of them across both first-class targets, the Windows ME and
+   Windows XP guests, the device matrix and the E460 - is an observation that
+   the request was granted at the current size, with no failure ever recorded.
+   No dedicated run is owed.
 2. `Resources->StartVA`/`StartPA` at runtime. `XhciCheckResourceBase()`
    asserts page alignment on both. The Phase 3 spike logs the raw
    `USBPORT_RESOURCES` block anyway (interface doc section 9, open item 4);

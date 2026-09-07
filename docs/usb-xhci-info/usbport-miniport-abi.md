@@ -353,10 +353,7 @@ writes back ("out"):
 | 0x18 | `MiniPortTransferSize` | in | `sizeof(XHCI_TRANSFER)` |
 | 0x1C | `Reserved2` | - | sentinel-fill |
 | 0x20 | `Reserved3` | - | sentinel-fill |
-| 0x24 | `MiniPortResourcesSize` | in | Controller common-buffer block, delivered via `USBPORT_RESOURCES.StartVA/StartPA`: DCBAA + scratchpad buffer array, command ring + ERST, event ring, the input
-context, 32 device contexts, 32 EP0 rings and the pool rings, then the
-scratchpad pages - the full list is `XHCI_REGION_*` in `src/xhci.h`, and
-`XHCI_HC_RESOURCES_SIZE` is the number DriverEntry commits |
+| 0x24 | `MiniPortResourcesSize` | in | Controller common-buffer block, delivered via `USBPORT_RESOURCES.StartVA/StartPA`: DCBAA + scratchpad buffer array, command ring + ERST, event ring, the input context, 32 device contexts, 32 EP0 rings and the pool rings, then the scratchpad pages - the full list is `XHCI_REGION_*` in `src/xhci.h`, and `XHCI_HC_RESOURCES_SIZE` is the number DriverEntry commits |
 | 0x28 | `OpenEndpoint` | in | 26 miniport callbacks, in declaration order |
 | 0x2C | `ReopenEndpoint` | in | |
 | 0x30 | `QueryEndpointRequirements` | in | |

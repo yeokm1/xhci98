@@ -269,6 +269,7 @@ Write-AsciiFile $runCmd (@(
     "  -m 256 ^",
     "  -vga cirrus ^",
     "  -drive file=""$diskImage"",format=qcow2,if=ide ^",
+    "  -drive if=floppy,file=""$transferImage"",format=raw ^",
     "  -drive ""file=fat:$xferDir,format=raw,if=ide,snapshot=on"" ^",
     "  -device usb-ehci,id=ehci ^",
     "  -device $XhciDevice,id=xhci ^",

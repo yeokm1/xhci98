@@ -1230,6 +1230,23 @@ try {
     Assert-True ($releaserText -match "No Microsoft file is in this download") `
         "make-release.ps1 lost the one defensible form of the no-Microsoft-file statement."
 
+    # And the third claim, which the 2026-09-07 audit's D9 fix put IN while
+    # removing the other two: an introduction that named Windows 98 SE and
+    # Windows 2000 SP4 together as "validated on, including on real hardware".
+    # AGENTS.md, "Project Purpose", is explicit that Windows 2000 has never
+    # run on real hardware in this project and that every Windows 2000
+    # observation here is a virtual-machine one. A download that says
+    # otherwise is the one file a user reads before trusting the driver with
+    # a machine.
+    #
+    # Asserted as a pair - the wrong sentence absent, the right one present -
+    # because the absence alone is satisfied by deleting the paragraph, and
+    # the qualification is the point.
+    Assert-True ($releaserText -notmatch "validated on, including on real hardware") `
+        "make-release.ps1 tells the reader Windows 2000 SP4 is validated on real hardware; AGENTS.md says every Windows 2000 observation in this project is a virtual-machine one."
+    Assert-True ($releaserText -match "Only Windows 98 SE has been validated on") `
+        "make-release.ps1 no longer says which target the real-hardware validation belongs to, so the reader cannot tell that Windows 2000 SP4's is virtual-machine only."
+
     Write-Step "the binary-vs-INF version comparison"
     #
     # Driven on strings rather than through a packaged binary, and that is the

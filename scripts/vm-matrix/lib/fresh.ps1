@@ -412,6 +412,34 @@ function Invoke-RowLegs {
     return [pscustomobject]@{ Outcome = $rowOutcome; Why = $why; LegOutcomes = $legOutcomes }
 }
 
+# WHAT A GROUP-LEVEL FAILURE ADDS TO THE TALLY (the 2026-09-07 audit's H20,
+# and the correction to its first fix).  `$GroupRows` is the group's row
+# count, `$Reached` how many the loop had entered when it threw, and
+# `$RowInFlight` whether one was actually in flight.
+#
+# The two cases differ and used to be conflated.  A row in flight owns the
+# ERROR line, so it counts as a reached row and the tail behind it is not
+# reached.  A failure BEFORE the first row - the monitor never answering, the
+# driver never starting, a stale offset table, a guest dead out of the boot -
+# owns no row at all: every row of the group is unreached, and counting the
+# ERROR line as a row on top of them invents a reading the target never took.
+#
+# Returned as a pair so the runner adds it rather than deriving it twice, and
+# so this is testable without a guest.
+function Get-GroupFailureTally {
+    param(
+        [Parameter(Mandatory = $true)][int]$GroupRows,
+        [Parameter(Mandatory = $true)][int]$Reached,
+        [Parameter(Mandatory = $true)][bool]$RowInFlight
+    )
+    if (-not $RowInFlight) {
+        return [pscustomobject]@{ Rows = $GroupRows; NotReached = $GroupRows }
+    }
+    $behind = $GroupRows - $Reached
+    if ($behind -lt 0) { $behind = 0 }
+    return [pscustomobject]@{ Rows = 1 + $behind; NotReached = $behind }
+}
+
 # A TARGET'S VERDICT from its tally.  A target on which no row was evaluated
 # is a FAIL, not an empty pass; otherwise any row that counted against it is
 # a FAIL.

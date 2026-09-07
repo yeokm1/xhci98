@@ -85,10 +85,7 @@ section 3):
 | `MiniPortExtensionSize` | Bytes usbport allocates for the per-controller extension handed to every callback | `sizeof(XHCI_EXTENSION)` |
 | `MiniPortEndpointSize` | Bytes per endpoint extension | `sizeof(XHCI_ENDPOINT)` |
 | `MiniPortTransferSize` | Bytes per transfer extension | `sizeof(XHCI_TRANSFER)` |
-| `MiniPortResourcesSize` | Bytes of common-buffer the controller needs at start (EHCI puts its periodic frame list here) | Enough for DCBAA + scratchpad buffer array, command ring + ERST, event ring, the input
-context, 32 device contexts, 32 EP0 rings and the pool rings, then the
-scratchpad pages - the full list is `XHCI_REGION_*` in `src/xhci.h`, and
-`XHCI_HC_RESOURCES_SIZE` is the number DriverEntry commits (verify how the buffer is delivered in `StartController`'s resources) |
+| `MiniPortResourcesSize` | Bytes of common-buffer the controller needs at start (EHCI puts its periodic frame list here) | Enough for DCBAA + scratchpad buffer array, command ring + ERST, event ring, the input context, 32 device contexts, 32 EP0 rings and the pool rings, then the scratchpad pages - the full list is `XHCI_REGION_*` in `src/xhci.h`, and `XHCI_HC_RESOURCES_SIZE` is the number DriverEntry commits (verify how the buffer is delivered in `StartController`'s resources) |
 
 The extension pattern matters: usbport allocates all extension memory.
 The miniport never allocates its own device extension; it receives a
