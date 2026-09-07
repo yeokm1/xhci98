@@ -156,7 +156,15 @@ On an xHCI-only Windows 98 machine that means an "Insert Disk" prompt naming
 the Windows 98 Second Edition CD-ROM during the copy, unless the Windows
 CABs are on the hard disk (OEM and Windows 98 QuickInstall installs). Insert
 the CD and click OK; if it then asks where to copy from, give it the CD's
-`WIN98` folder. Windows 2000 and Windows XP take theirs from the driver cache
+`WIN98` folder.
+
+An upgrade from an earlier release can raise that prompt on a machine whose
+previous install did not, and that is expected rather than a fault.
+`usbui.dll` is new in `1.0.2.0`, so a Windows 98 or Windows ME machine that
+already has `usbd.sys` and `usbhub.sys` from an earlier install may still not
+have it. It sits on the same cabinet as those two, so the same CD answers it.
+
+Windows 2000 and Windows XP take theirs from the driver cache
 every install has and ask for nothing: on Windows XP all four out of
 `sp3.cab`, on Windows 2000 three out of `sp4.cab` and `usbui.dll` out of
 `driver.cab` beside it. Measured on Windows 2000 on 2026-09-07, installing on
@@ -323,7 +331,8 @@ because a user meets them through this driver.
   Windows 98 SE CD (an "Insert Disk" prompt naming the Windows 98 Second
   Edition CD-ROM) unless the Windows CABs are on the hard disk. That is
   Windows fetching its own `usbd.sys`, `usbhub.sys` and `usbui.dll`, which the
-  package does not carry; see "Installing". Cancelling the prompt leaves the USB 2.0
+  package does not carry; see "Installing". An upgrade can raise it where the
+  previous install did not, because `usbui.dll` is new in `1.0.2.0`. Cancelling the prompt leaves the USB 2.0
   Root Hub at Code 2 until the driver is installed again with the CD at
   hand. Measured on 2026-09-02 in a virtual machine with no CABs on disk.
 
