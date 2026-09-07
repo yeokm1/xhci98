@@ -1524,10 +1524,11 @@ documentation drift list (D1-D6 and the smaller items). Nothing in it is
 fixed as this phase opens.
 
 Status: opened on 2026-09-05 by the owner, on branch `phase-20`, the day the
-audit was reviewed. The version the fixes ship in is the owner's to name
-when the cut opens: the phase carries driver code changes, so the third
-field moves (`1.0.2.0` on the numbering Phase 19 states) unless the owner
-folds it into a larger release. The audit document (`issues-found.md`,
+audit was reviewed. The version the fixes ship in is `1.0.2.0`, named by the
+owner on 2026-09-07 when the cut opened (task 20.9): the phase carries
+driver code changes, so the third field moves on the numbering Phase 19
+states, and the branch was renamed to the version on 2026-09-06 once the
+fix pass had merged. The audit document (`issues-found.md`,
 kept at the repository root while the phase ran, reviewed to convergence in
 three rounds on 2026-09-05, then the fix pass reviewed by Codex in seven
 rounds to NONE) was removed on 2026-09-06 once every finding was closed;

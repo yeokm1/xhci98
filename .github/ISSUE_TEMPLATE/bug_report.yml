@@ -41,7 +41,7 @@ body:
     attributes:
       label: Driver version
       description: The version of the release you downloaded - it is at the top of its readme.txt, and in the driver's properties in Device Manager.
-      placeholder: "the four-part number from readme.txt, e.g. 1.0.1.0"
+      placeholder: "the four-part number from readme.txt, e.g. 1.0.2.0"
     validations:
       required: true
 

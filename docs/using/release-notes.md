@@ -1,7 +1,7 @@
 # xhci98 - Release Notes
 
-This file describes package version `1.0.1.0`
-(`DriverVer=09/04/2026,1.0.1.0`), the third release. Where this file and
+This file describes package version `1.0.2.0`
+(`DriverVer=09/07/2026,1.0.2.0`), the fourth release. Where this file and
 `docs/contributing/roadmap.md`, `docs/contributing/build-and-test.md` or
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
@@ -36,8 +36,8 @@ you would be the first. Windows ME stands where Windows 2000 does: supported
 in virtual machines only, observed once (2026-09-02) under SweetLow's USB 2.0
 stack, the only stack it is supported with, with the driver loading and a
 HID mouse, a mass-storage device and a composite audio device binding. It
-has never run on real hardware either. So does 32-bit Windows XP, since this
-release: supported in virtual machines only, observed in one QEMU guest (XP
+has never run on real hardware either. So does 32-bit Windows XP, since
+`1.0.1.0`: supported in virtual machines only, observed in one QEMU guest (XP
 Professional SP3, 2026-09-03) on which the package installed with the xHCI
 alone and no prompt, the driver started under XP's own USB stack, a HID
 mouse, a mass-storage device and a composite audio device bound, and the

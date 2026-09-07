@@ -544,7 +544,7 @@ rules above was relaxed; roadmap Phase 19 has the tasks.
 
 Status: the exception was never used. No asset of any version was uploaded
 while it stood; this repository was private throughout, and the first upload
-is intended to be the newest cut (1.0.1.0 as of 2026-09-05; `releases/history.md`
+is intended to be the newest cut (1.0.2.0 as of 2026-09-07; `releases/history.md`
 names it first), every cut since 1.0.0.1 carrying nothing under it. "The
 release download carries three of them" was true of the assembled asset from
 0.0.0.4 to 1.0.0.0 and of no download anyone made.

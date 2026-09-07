@@ -12,6 +12,55 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 1.0.2.0 - 2026-09-07
+
+A fix release. A repository audit taken on 2026-09-05 found no critical
+defect and nineteen things worth fixing across the driver, the two tools and
+the package (`docs/contributing/roadmap.md`, Phase 20: findings F1 to F19
+and D1 to D6, every one closed there with its regression test or its
+recorded decision). The install routes are unchanged on every target, and
+the post-release device matrix on Windows 98 SE and Windows 2000 read no
+worse than `1.0.1.0`'s on this release's driver code.
+
+### What changed
+
+- The driver: an endpoint handle the hub driver has already replaced can no
+  longer act on the endpoint that replaced it, and a device's endpoint table
+  is reset under the same lock the endpoint callbacks take, so a stale
+  handle cannot disturb a live device. Read on a two-CPU Windows 2000 guest
+  under Driver Verifier, the controller killed from outside the guest four
+  times and recovered each time with every device back, and on the Windows
+  XP restore and lifecycle sequence that `1.0.1.0`'s fix was for.
+- The driver: after a completed in-place controller recovery the health
+  poll's fatal latch is reopened, so a second fault is recovered too. Until
+  this release only the first fault after boot was; a second was noticed
+  and never acted on. Found by the Windows 2000 reading above.
+- The driver: a recovery whose delivery is lost no longer leaves recovery
+  armed for ever. It ages out after twenty health polls, is charged as one
+  of the bounded attempts, and a late delivery from the expired request is
+  ignored.
+- The driver, three smaller items: a Command Ring Stopped event whose
+  pointer still names the abandoned command is resolved with a No Op
+  Command rather than by adopting that command's own entry; the BIOS
+  handoff write preserves the reserved bits of `USBLEGCTLSTS`; and the
+  restore from standby puts back the interrupt moderation value it saved
+  rather than writing zero. The last has been read only through a host
+  model: the virtual machines fail every restore, so the Force Save Context
+  entry in the release notes' "Known limitations" says the hardware reading
+  is still owed.
+- `XHCISNAP` reports a text report it could not finish writing with a
+  nonzero exit instead of calling it written, and a snapshot whose
+  extension size does not match the driver's is refused in the summary as
+  well as in the detail. `XHCIQUAL`'s EHCI clean-up no longer writes the
+  controller's write-one-to-clear status bits back; no DOS run has been
+  made on that change.
+- The `readme.txt` and the `LICENSE` in the download no longer describe
+  Microsoft files the download stopped carrying in `1.0.0.1`, and the
+  "Windows 2000 never idles this controller" statement carries the
+  2026-09-06 measurement that qualified it (`1.0.1.0`'s correction below).
+  The checks that produce the download were tightened; nothing in its
+  layout changed.
+
 ## 1.0.1.0 - 2026-09-04
 
 Windows XP joins the targets supported in virtual machines, the Windows 2000
