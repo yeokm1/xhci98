@@ -412,8 +412,9 @@ may be read as saying:
   backstop. `XHCI_COMMAND_AGE_POLLS` was 64 polls, sized against a nominal
   500 ms period this machine does not have. Finding V measured the E460's poll
   at 36-80 ms, so the backstop stood at 2.3-5.1 s against
-  `XHCI_COMMAND_TIMEOUT_MS` = 5,000, at or under the watchdog it was sized to
-  sit 12 s behind. That is the whole of `CommandsTimedOut 0` across 76, 635 and
+  `XHCI_COMMAND_TIMEOUT_MS` = 5,000: at or under the watchdog, where 32 s was
+  sized to sit 12 s clear of the ladder's 20 s legitimate worst case
+  (`XHCI_COMMAND_TIMEOUT_MS` plus three `XHCI_COMMAND_ABORT_MS` waits). That is the whole of `CommandsTimedOut 0` across 76, 635 and
   123 commands on three boots. Task 13-R.3.5 repaired it by making every budget
   a duration in milliseconds on `PollClockMs`.
 - An earlier reading that "the xHC does not answer a Command Abort in this

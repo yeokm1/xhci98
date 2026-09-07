@@ -199,9 +199,11 @@ order they bite:
 6. Copy byte at a time. `RtlCopyMemory`/`memcpy` resolve to a compiler
    intrinsic or an `ntoskrnl` import depending on build flags, and this
    driver decides its import list on purpose rather than by build-flag
-   accident, the same reason `xhciZeroPacket` exists. A full window is up to
-   65,488 iterations under the controller lock, on the order of 100 us at
-   DISPATCH. That is the right trade: the instrument runs on a wedged, idle
+   accident, the same reason `xhciZeroPacket` exists. A full window is bounded by the
+   0x10000 usbport refuses above, less the 88-byte header: 65,448 iterations
+   under the controller lock, and the host tool asks for 0xF000 = 61,440 at a
+   time (`SNAP_PARAM_BYTES` in `xhcisnap/xhcisnap.c`), so 61,440 is what is
+   actually reached. On the order of 100 us at DISPATCH. That is the right trade: the instrument runs on a wedged, idle
    machine and is in no hot path, and the ISR does not take this lock, so
    what the hold delays is the command engine and the DPC, not interrupts.
 7. Refuse a PORTSC `Offset` that is not ULONG-aligned (`S_BAD_REQUEST`)
@@ -210,7 +212,8 @@ order they bite:
    hand the caller a shifted array to reassemble.
 8. The PORTSC region is read with `XhciReadPortsc` (a bare read) and neither
    acknowledges the change bits nor folds them into the port shadow. This is
-   the one sanctioned exception to "there is one way to read a port". The
+   the one sanctioned exception to "there is one way to acknowledge a port's
+   change bits". The
    reason: Finding Q established that nobody had ever read PORTSC in the
    wedged state, and an instrument that acknowledged what it came to measure
    would destroy the evidence on the one boot that mattered. The conditions
@@ -261,16 +264,26 @@ decoded against the wrong table is a wrong reading, not a failed one, and
 wrong readings are how the Finding 3 investigation lost time. The decoder
 refuses on a size mismatch.
 
-The decode chain:
+The offset table is the repository's, and is regenerated from the tree that
+built the driver:
 
 ```
-scripts\local\regen-offsets.cmd          (from the same tree)
-scripts\local\readsnap.py NAME.BIN --ladder
+powershell -ExecutionPolicy Bypass -File scripts\vm-matrix\gen-offsets.ps1
 ```
 
-`.BIN` is the raw extension image, the same artifact the QEMU live-counter
-reader produces, so `offsets.txt`, `counters.py` and `readcounters.ps1` decode
-it unchanged. `.PSC` is the raw PORTSC array; its decode is also printed on
+It derives every field from the driver's own `XHCI_DBG_VALUE_CHANGED` sites
+rather than from a hand-kept roster, and writes `scripts\vm-matrix\offsets.txt`.
+`scripts\vm-matrix\lib\counters.ps1` is what reads a table and a base address into
+named counters, and the matrix harness uses both.
+
+`.BIN` is the raw extension image, the same bytes the QEMU live-counter reader
+takes out of guest memory, so the same `offsets.txt` describes it. What the
+repository does NOT carry is a decoder that takes the `.BIN` as a file:
+`counters.ps1` reads a live guest through the monitor. Decoding a bench
+machine's `.BIN` off-line is per-host work today, and any script under
+`scripts\local\` that does it is one host's file, not a committed procedure
+(`AGENTS.md`, "scripts/"). Recording that gap rather than citing that
+tooling: a committed procedure may not depend on it. `.PSC` is the raw PORTSC array; its decode is also printed on
 screen, because that is what a bench reads on the spot.
 
 ## 8. The host side
@@ -480,8 +493,10 @@ Two rules for anyone who removes and restores it:
   and confirm the offset table you are decoding against came from the same
   tree. The extension size has moved between generations (87,592 when the
   instrument was first built, 90,600 and 90,280 in between, 90,272 in the
-  tree that ships it), and a dump taken before a move does not decode
-  against a later tree.
+  `0.0.0.6` tree, 91,612 at `1.0.2.0`), and a dump taken before a move does
+  not decode against a later tree. Do not read a figure out of this list:
+  `SIZEOF` in `scripts\vm-matrix\offsets.txt`, regenerated from the tree in
+  hand, is the only one that means anything.
 
 A guest's driver, its extension size and its `XHCISNAP.EXE` are three things
 that go stale independently. Confirm what is on a guest with `fc /b` against

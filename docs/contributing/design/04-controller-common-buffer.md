@@ -518,9 +518,13 @@ The observation that exists is at the old size. Phase 3 tasks 8 and 9 watched
 usbport grant 376,832 bytes on both targets, which is evidence about the
 allocator at that size and not a licence for a larger one. The 32 KB increase
 is small against the fragmentation risk the original figure already carried,
-but it has not been observed on a target; the 7a-V runs owe that observation
-(section 7, open item 1). The allocation is the first thing that fails, and it
-fails before `StartController`.
+It has been observed since. Every controller start from batch 7a-V onward
+discharges it: the allocation is the first thing that fails and it fails
+before `StartController`, so a guest or a machine that reaches
+`StartController` at all has granted the request at the current size. That is
+now thousands of starts across both first-class targets, the Windows ME and
+Windows XP guests, the device matrix and the E460, with no grant failure ever
+recorded. Section 7's open item 1 is closed by that, not by a dedicated run.
 
 The odd 101st page is the 48-byte header's rounding. Sizing the request to
 `k * 4096 - 48` would reclaim it, at the cost of coupling the layout to a

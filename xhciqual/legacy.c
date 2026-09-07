@@ -191,8 +191,24 @@ static int ehci_handoff(LEGACY_CTRL *c)
             break;
         msleep(10);
     }
+    /*
+     * USBLEGCTLSTS: disable every SMI source and acknowledge every SMI status
+     * bit, so no SMI can be raised at the firmware while this tool drives the
+     * controller.
+     *
+     * **Only the DEFINED status bits, not 0xFFFF0000** - the 2026-09-07
+     * audit's I4. EHCI 1.0 Table 2-4 defines the status half as bits 21:16
+     * (SMI on USB Complete, USB Error, Port Change Detect, Frame List
+     * Rollover, Host System Error, Async Advance) and 31:29 (SMI on OS
+     * Ownership Change, PCI Command, BAR); 28:22 are RESERVED. Writing ones
+     * into reserved bits of a register is the same defect the xHCI side of
+     * this project was audited for and fixed - a reserved bit is reserved
+     * because a later part may define it, and a tool that writes one is
+     * asking for behaviour nobody has specified on hardware nobody has seen.
+     * The enable half (15:0) is written as zero, which is what disables them.
+     */
     pci_write32(c->pci.bus, c->pci.dev, c->pci.fn, (u8)(off + 4),
-                0xFFFF0000UL);
+                0xE03F0000UL);
     if (v & 0x00010000UL) {
         sprintf(c->handoff_note,
                 "BIOS-Owned did not clear in 1 s (LEGSUP=%08lX)", v);
@@ -286,10 +302,24 @@ static int ehci_dma(LEGACY_CTRL *c)
     u32 ms;
     int touched;
 
+    /*
+     * **SKIP, NOT FAIL** - the 2026-09-07 audit's I2, and the xHCI path has
+     * said so since it was written: "distinguish 'the tool ran out of
+     * conventional memory' from 'the controller cannot do DMA' - reporting the
+     * former as a DMA failure disqualifies working hardware"
+     * (`xhci_dma_proof` in bringup.c). The legacy path set V_FAIL, and a
+     * V_FAIL on C3 prints DISQUALIFIED - so a perfectly good EHCI was
+     * disqualified because this tool could not get 96 bytes of conventional
+     * memory, which is a fact about the DOS box it was run in. Design record
+     * 01 section 4 states the rule it breaks: a tool limitation is not
+     * evidence about the controller.
+     */
     c->dma_a = dma_alloc(96, 32, 4096, &c->dma_a_phys);
     if (!c->dma_a) {
-        strcpy(c->dma_note, "could not allocate asynchronous QH");
-        c->v_dma = V_FAIL;
+        strcpy(c->dma_note,
+               "out of conventional memory for the asynchronous QH (96 bytes); "
+               "C3 not run");
+        c->v_dma = V_SKIP;
         return 0;
     }
     qh = (volatile u32 *)c->dma_a;
@@ -351,10 +381,14 @@ static int ohci_dma(LEGACY_CTRL *c)
     u32 control, interval;
     u32 ms;
 
+    /* As the EHCI half above: an allocation shortfall is this tool's limit
+     * and not the controller's (audit I2). */
     c->dma_a = dma_alloc(256, 256, 4096, &c->dma_a_phys);
     if (!c->dma_a) {
-        strcpy(c->dma_note, "could not allocate HCCA");
-        c->v_dma = V_FAIL;
+        strcpy(c->dma_note,
+               "out of conventional memory for the HCCA (256 bytes); "
+               "C3 not run");
+        c->v_dma = V_SKIP;
         return 0;
     }
     frame = (volatile u16 *)((u8 *)c->dma_a + 0x80);
@@ -476,6 +510,31 @@ static int ohci_irq(LEGACY_CTRL *c)
     if (!pci_irq_usable(c))
         return 0;
     pci23 = pci_intx_status_supported(c);
+    /*
+     * **MASK THE LINE AT THE 8259 FIRST** - the 2026-09-07 audit's I3.
+     *
+     * What follows enables the OHCI frame interrupt and installs NO handler:
+     * the whole point of this check is that it watches the status bit and the
+     * PCI INTx status bit rather than claiming CPU delivery, which is what
+     * makes it the safe DOS/32A path. But the LINE was left exactly as
+     * firmware had it, and a level-triggered line firmware left unmasked then
+     * asserts every millisecond into the BIOS's default vector, reached
+     * through DOS/32A's 16-bit interrupt-reflection thunk - the path design
+     * record 01 section 6 records as faulting. The check was safe only on
+     * machines whose firmware happened to have masked the line.
+     *
+     * Masking it is enough and is the least this can do: the two bits read
+     * below are register reads, so nothing here needs the interrupt to be
+     * deliverable. If the mask cannot be taken the interrupt is not enabled at
+     * all - a reading not taken is better than a machine wedged taking it.
+     */
+    if (!irq_line_mask(c->pci.iline)) {
+        sprintf(c->irq_note,
+                "could not mask IRQ %u at the 8259; SOF interrupt not enabled",
+                c->pci.iline);
+        c->v_irq = V_SKIP;
+        return 0;
+    }
     WR32(c->base + OREG_INTR_STATUS, OINT_SF);
     polled = 0;
     intx = 0;
@@ -491,6 +550,9 @@ static int ohci_irq(LEGACY_CTRL *c)
     }
     WR32(c->base + OREG_INTR_DISABLE, OINT_MIE | OINT_SF);
     WR32(c->base + OREG_INTR_STATUS, OINT_SF);
+    /* The controller's source is off and acknowledged, so the line can go
+     * back to whatever firmware had it at. */
+    irq_line_restore();
     if (polled && intx) {
         sprintf(c->irq_note,
                 "SOF and PCI INTx asserted on IRQ %u; ISR hook skipped",
@@ -523,12 +585,29 @@ static u32 ehci_port_read(LEGACY_CTRL *c, int port)
     return RD32(c->op + EOP_PORTSC(port));
 }
 
+/*
+ * **EHCI PORTSC IS NOT xHCI PORTSC, AND PED IS THE BIT THAT DIFFERS.**
+ *
+ * This mask was copied from the xHCI side, where Port Enabled/Disabled is
+ * write-1-to-CLEAR and so must be masked out of every read-modify-write. On
+ * EHCI it is read/WRITE (EHCI 1.0 Table 2-16): writing 0 DISABLES the port,
+ * and writing 1 is ignored (only the host controller may enable a port, by
+ * completing a reset). So clearing it here disabled every port the BIOS had
+ * enabled, on every write - benign for the verdict, because the reset in the
+ * loop below re-enables them, but it is a write this tool has no business
+ * making and it is spec-wrong. The 2026-09-07 audit's I4.
+ *
+ * What must still be masked: PR, because it is a level and writing the value
+ * back would restart a reset in progress; and the change bits, because they
+ * are write-1-to-clear and writing them back acknowledges changes this tool
+ * came to observe. PED is now preserved as read.
+ */
 static void ehci_port_write(LEGACY_CTRL *c, int port, u32 setbits)
 {
     u32 v;
 
     v = ehci_port_read(c, port);
-    v &= ~(EPORT_PED | EPORT_PR | EPORT_CHANGE);
+    v &= ~(EPORT_PR | EPORT_CHANGE);
     WR32(c->op + EOP_PORTSC(port), v | setbits);
 }
 
@@ -973,7 +1052,19 @@ int legacy_final_verdict(LEGACY_CTRL *c, int active_requested)
         qprintf("  DISQUALIFIED: halt/reset (C2) failed\n");
         qualified = 0;
     }
-    if (c->v_dma != V_PASS) {
+    /*
+     * **A SKIP IS NOT A FAILURE HERE EITHER** (the 2026-09-07 audit's E10).
+     * `xhciqual/README.md` and `hardware-testing.md` both say "C3 SKIP is
+     * never a disqualification" without qualification, and on this path any
+     * non-PASS disqualified - so the one sentence was true of the xHCI path
+     * and false of this one. A SKIP means the test did not run, which is a
+     * reading about the tool; only a FAIL is a reading about the controller.
+     */
+    if (c->v_dma == V_SKIP) {
+        qprintf("  NOT QUALIFIED: DMA proof (C3) could not be run - %s\n",
+                c->dma_note[0] ? c->dma_note : "no reason recorded");
+        warned = 1;
+    } else if (c->v_dma != V_PASS) {
         qprintf("  DISQUALIFIED: DMA proof (C3) failed\n");
         qualified = 0;
     }

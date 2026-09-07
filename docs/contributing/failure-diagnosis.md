@@ -55,8 +55,10 @@ DOS tool runs, but available in-situ for the lifetime of the driver.
 
 ## Instrumentation ladder (cheapest first)
 
-1. `DbgPrint` in a `qemu` build, the only flavour with per-line trace sites
-   (see `docs/contributing/build-and-test.md` "Debug Build Output").
+1. `DbgPrint` in a `qemu` build, the only flavour with per-line trace sites -
+   the published `debug` flavour has none (see
+   `docs/contributing/build-and-test.md`, "Per-line trace output, and which
+   flavour has it").
 2. QEMU debug console, port 0xE9. Works even when the display is dead
    (`docs/contributing/build-and-test.md`).
 3. QEMU xHCI trace events (`-trace "usb_xhci_*"`). The emulated controller
@@ -172,8 +174,10 @@ Sample EIP before naming a hang. An interrupt storm and a dead machine look
 identical on screen and are opposite in the registers: EIP cycling a small
 window with a device ISR above it and interrupts off, versus EIP pinned on
 `sti; nop; nop; cli` with interrupts on. Both said "Setup is starting Windows
-2000". Use `info registers` via `scripts\local\qmon.ps1`; `HLT=1` on a repeated
-sample is a healthy idle guest, not a hang.
+2000". Use `info registers` over the guest's monitor socket; `HLT=1` on a repeated
+sample is a healthy idle guest, not a hang. `scripts\vm-matrix\lib\monitor.ps1`
+is the tracked way to open that socket and send a command (any per-host
+wrapper under `scripts\local\` is one host's file, not a committed procedure).
 
 A healthy trace is not a living guest. Screendump before concluding anything
 from the log alone; this project has paid for it twice.
@@ -315,7 +319,7 @@ each row's test requires nothing from the rows below it.
 | 4 | Ring programming wrong (DMA works, no completion) | CRCR written with a virtual address instead of physical, or wrong initial Ring Cycle State. Verify every address written to CRCR/DCBAAP/ERSTBA came from the common-buffer physical side. |
 | 5 | Events reach memory, ISR never fires | This is the poll-vs-interrupt differential: events visible in ring memory but no interrupt = IRQ delivery problem (Interrupt Pin = 0? routing? see `docs/contributing/implementation-invariants.md` "Interrupt Delivery"), not a driver-logic problem. |
 | 6 | ISR fires once, never again | ERDP written back without setting EHB, or USBSTS.EINT / IMAN.IP not acknowledged; the interrupter stays latched busy. |
-| 7 | Ports powered but no connect events (Intel 7/8-series PCH, real hw) | XUSB2PR still routes the USB2 ports to EHCI (`docs/usb-xhci-info/xhci-programming.md`, the `XUSB2PR` section). Invisible in QEMU, and the driver does not detect it: it reads neither XUSB2PR nor XUSB2PRM by decision (Phase 4 end note in `docs/contributing/roadmap.md`), so this row is the only mechanism. Confirm with xhciqual test C7 (`2XPOLL` or later; `1PROBE` does not print it) or the firmware's own xHCI-mode setting, per the `XUSB2PR` run sheet in `xhciqual/hardware-testing.md`. Never observed by this project: no machine here has ever had an Intel 7/8-series mux, so the predicted signature (C1-C4 PASS, ports powered, `XUSB2PR=00000000` and no connect event at all) is read off the Intel datasheet and Linux's `usb_enable_intel_xhci_ports()`, not off silicon. It is indistinguishable from a healthy idle machine except by the C7 line; `Enabled` on the same machine reads `0000000F` and enumerates. On this silicon the fix is the BIOS setting. 100-series and later Intel and all modern AMD have no such mux, so on those the symptom means something else. |
+| 7 | Ports powered but no connect events (Intel 7/8-series PCH, real hw) | XUSB2PR still routes the USB2 ports to EHCI (`docs/usb-xhci-info/xhci-programming.md`, the `XUSB2PR` section). Invisible in QEMU, and the driver does not detect it: it reads neither XUSB2PR nor XUSB2PRM by decision (`docs/contributing/roadmap.md`, Phase 4: task 10, the `XUSB2PR` run, was withdrawn when the only such machine left the project, and `XUSB2PR` is published as untested ground), so this row is the only mechanism. Confirm with xhciqual test C7 (`2XPOLL` or later; `1PROBE` does not print it) or the firmware's own xHCI-mode setting, per the `XUSB2PR` run sheet in `xhciqual/hardware-testing.md`. Never observed by this project: no machine here has ever had an Intel 7/8-series mux, so the predicted signature (C1-C4 PASS, ports powered, `XUSB2PR=00000000` and no connect event at all) is read off the Intel datasheet and Linux's `usb_enable_intel_xhci_ports()`, not off silicon. It is indistinguishable from a healthy idle machine except by the C7 line; `Enabled` on the same machine reads `0000000F` and enumerates. On this silicon the fix is the BIOS setting. 100-series and later Intel and all modern AMD have no such mux, so on those the symptom means something else. |
 
 A release build gives two readings before any of the rows above.
 `XHCI_EXTENSION.InitStep` and `.InitStatus` record the failing step and its

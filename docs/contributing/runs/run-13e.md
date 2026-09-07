@@ -149,7 +149,7 @@ pre-trip item below, and where a row and its stage disagree, the stage wins.
 | 2 | The audio device's `bInterval` | Read on six devices. It is 1 on all five UAC 1.0 units; the UAC 2.0 Sound Blaster X4 (`041E:3278`) carries isoch `bInterval` 1, 3 and 4. Both targets ship UAC 1.0 drivers and the X4 has no fallback configuration, so clause 3 became "carry it and find out" (P2) |
 | 3 | Buy or publish: the Full-Speed 1.1 hub | Publish, no purchase. None held and not reliably purchasable. Recorded in `test-equipment.md` row 5 (P3) |
 | 4 | Buy if missing: a single-TT hub | No purchase. `05E3:0608` is held and characterised (P1) |
-| 5 | Confirm the Windows 98 SE CD | Second Edition confirmed by the project owner, and its USB components verified by hash: `usbd.sys` 18,912 bytes matches `usbd-sources.expected` exactly, so the disc carries the stack stage E5 installs and is the same media the package's `usbd98.sys` came from (P4) |
+| 5 | Confirm the Windows 98 SE CD | Second Edition confirmed by the project owner, and its USB components verified by hash: `usbd.sys` 18,912 bytes matched `usbd-sources.expected` exactly, so the disc carries the stack stage E5 installs and is the same media the package's `usbd98.sys` came from (P4; both that manifest and `usbd98.sys` were retired at 1.0.0.1) |
 | 6 | Confirm the storage enclosure exists | Held: `174C:5106` (ASMedia, "StoreJet Transcend", serial `NB202029162975`), a USB-SATA bridge characterised at both speeds at the enclosure visit. It replaced an earlier enclosure that left the fleet and is not recorded here; E4.2's enumeration half was taken on that departed unit (device table row 9) |
 | 7 | The `MTT`/`TTT` print site (the Windows 2000 batch's Q4) | Added before the trip. Nothing in this batch changes: the E460 carries the release flavour and has no counter channel either way |
 
@@ -486,7 +486,8 @@ the fix working.
 
 ### Finding 2 - FIXED, and confirmed by remedy at the bench
 
-`XHCI_EP0_MPS_FULL_INITIAL` 8 -> 64 (commit `79f0688`), built as
+`XHCI_EP0_MPS_FULL_INITIAL` 8 -> 64 (the change is in `src/xhci.h` and its
+reading is below), built as
 `out\bench-13e-mps0fix\`, sha256
 `d49546616ce3f6261ba7cb9a93e253d7c0fcd33e4bfc7c913bf80d285b4ba54e`. It is
 byte-for-byte the same size as release 0.0.0.3 and reports the same version.
@@ -939,7 +940,7 @@ from `BASE5.CAB` and matched exactly:
 
 | File | Size | SHA-256 | Against |
 |---|---|---|---|
-| `usbd.sys` | 18,912 | `0118DB14...F56A` | `scripts\package\usbd-sources.expected`, the Win98 SE 4.10.2222 row |
+| `usbd.sys` | 18,912 | `0118DB14...F56A` | `scripts\package\usbd-sources.expected`, the Win98 SE 4.10.2222 row. That manifest was retired at 1.0.0.1 with the packaged Microsoft files, so this row is the surviving record of the hash, not a check a clone can re-run |
 | `usbhub.sys` | 35,680 | `E898B75F...FC31` | `tools\win98se-extracted\`, the import gate's precedent binary |
 
 It is Second Edition and its USB components are on it, and the identical hashes
@@ -955,7 +956,7 @@ the hash. Do not verify by disc label or by file date.
 
 Run at bench session 1, at version `0.0.0.3`; the kit is staged at
 `out\bench-13e\` and its `MANIFEST.txt` is the hash list. The tree was commit
-`0c3565f` plus the version bump the cut needed. The readings are in the pre-trip
+that same tree plus the version bump the cut needed. The readings are in the pre-trip
 report below.
 
 ```
@@ -1434,7 +1435,8 @@ name this item as the description of `W15SLOW`, whose
 A proposed W14TELL ("force the announcement with no PORTSC read and no
 acknowledgement") could not split its two hypotheses. `RH_GetPortStatus`
 performs a live `xhciRhRefresh` (a PORTSC read and a full change-bit
-acknowledgement) whenever the controller is admitted (`src\xhci_rh.c:639`), and
+acknowledgement) whenever the controller is admitted (`xhciRhWritePortsc` in
+`src\xhci_rh.c`), and
 a forced `UsbPortInvalidateRootHub` makes usbport walk every port through
 `RH_GetPortStatus`, so the announce performs the read-and-ack one layer down as
 a side effect. Both rows of W14TELL's interpretation table collapse into
@@ -1654,8 +1656,9 @@ The defect and the repair are unchanged. At 36-80 ms the old counts were:
 | `XHCI_EP_RESTART_POLLS` 2 | 1 s | 72-160 ms |
 
 The first row is the whole defect. `XHCI_COMMAND_TIMEOUT_MS` is 5,000. A
-backstop at 2.3-5.1 s is at or under the watchdog it was sized to sit twelve
-seconds behind, so it pre-empted that watchdog on every hung command, which is
+backstop at 2.3-5.1 s is at or under that watchdog, where the 32 s it was meant
+to be sits twelve seconds clear of the ladder's 20 s legitimate worst case, so
+it pre-empted that watchdog on every hung command, which is
 why `CommandsTimedOut` read 0 across 76, then 635, then 123 commands on three
 separate boots.
 
@@ -1805,8 +1808,8 @@ ID depends on.
 The third column is Finding V's, at the measured 36-80 ms per poll. The task
 named the first three; the last two were found by reading the rest of the tree
 for the same shape. The first is the defect: a command backstop at 2.3-5.1 s
-sits at or under `XHCI_COMMAND_TIMEOUT_MS` = 5,000, the watchdog it was sized to
-sit 12 s behind. The port age had 0.6-1.3 s over the 500 ms this driver allows a
+sits at or under `XHCI_COMMAND_TIMEOUT_MS` = 5,000, where the 32 s it was meant
+to be sits 12 s clear of the ladder's 20 s legitimate worst case. The port age had 0.6-1.3 s over the 500 ms this driver allows a
 root-port reset, a margin of 1.2-2.6x where 16x was intended. The
 endpoint-restart net (`xhciEpRestartIfStopped` clears `XHCI_EPQ_PAUSED` and
 rings the doorbell) had about seventyfold over usbport's one-frame abort gate
@@ -2065,7 +2068,7 @@ it the one thing that ever recovered the port.
 
 The ring also carries the controller describing itself into a durable record for
 the first time: `hc.pci=9D2F8086` (Intel Sunrise Point-LP), `maxslots 0x40`,
-`maxports 0x12` (18), `contextsize 0x20` (64-byte contexts), `scratchpad 0x22`,
+`maxports 0x12` (18), `contextsize 0x20` (32 bytes: CSZ = 0, so 32-byte contexts), `scratchpad 0x22`,
 `map.managed 0x0C` (12 USB 2.0 ports), six USB2-only, six companion, six USB3.
 
 #### `ControllerFailed` is the latch, and it closes the W15SLOW tension
@@ -3758,14 +3761,16 @@ byte, which authenticates the whole stack on this machine:
 |---|---|---|
 | `USBPORT.SYS` | `eec79b5a...3f9b55` | `tools\nusb-extracted\USBPORT.SYS` exactly |
 | `USBHUB20.SYS` | `fe9de344...82e0d5` | `tools\nusb-extracted\USBHUB20.SYS` exactly |
-| `USBD.SYS` | `0118db14...f56a` | the SE CD's own `usbd.sys`, and `usbd-sources.expected`'s `usbd98.sys` row |
+| `USBD.SYS` | `0118db14...f56a` | the SE CD's own `usbd.sys`, and `usbd-sources.expected`'s `usbd98.sys` row (that manifest was retired at 1.0.0.1; the hash survives only here) |
 | `XHCI98.SYS` | `44d3edb0...4df4f` | the `0.0.0.5` release binary exactly |
 
 Until then the NUSB stack here was evidenced by size alone (135,920 and
 50,032), and this project's recurring trap is that the wrong build loads
-rather than failing; it is why `usbd.sys` ships under two names checked by
+rather than failing; it is why `usbd.sys` then shipped under two names checked by
 hash (`usbd-sources.expected`), and why `lessons.md` says a restore verified
-by size verifies nothing. The `usbd.sys` row closes the same loop from the
+by size verifies nothing. Both the two names and that manifest went at
+1.0.0.1, when the OS took over supplying the file; what the sentence is about
+outlived them. The `usbd.sys` row closes the same loop from the
 other end: the file this package's INF placed is the authenticated SE CD
 build, on the machine where stage E1.0 proved the OS had none.
 
@@ -4614,13 +4619,12 @@ often the fallback was needed.
 The mechanism survives as a latent defect. The causal direction did not.
 
 The acknowledgement is attempted before teardown is entered. `xhciRhRefresh`
-issues the ack at `src\xhci_rh.c:298`, and only afterwards, at
-`src\xhci_rh.c:387`, does `XhciSlotPortConnectChanged` reach `xhciDevTeardown`
-(`src\xhci_slot.c:9421`). Teardown runs after the ack attempt and cannot be
+(`src\xhci_rh.c`) issues the ack, and only afterwards does
+`XhciSlotPortConnectChanged` reach `xhciDevTeardown` (`src\xhci_slot.c`). Teardown runs after the ack attempt and cannot be
 what blocks the ack for that same CSC.
 
 No teardown path arms `PpPending` at all. A repository-wide search finds the
-only runtime arm at `src\xhci_rh.c:850`, reached solely from
+only runtime arm reached solely from
 `XhciRhSetFeaturePortPower` / `XhciRhClearFeaturePortPower`
 (`src\xhci_rh.c:1097`), a usbhub-initiated callback. `XhciPortShadowPpArm`
 (`src\xhci_port.c:607`) is the sole non-initialisation `PpPending = 1`.
@@ -5108,8 +5112,10 @@ off it?
    The binaries below come out of `make-package.ps1`, so they are media
    artifacts; only the act that puts one on this machine changes. The
    per-target `usbd.sys` reason the clause exists for is already discharged on
-   this machine (`usbd98.sys` and `usbhub98.sys` were placed by the P14 /
-   `0.0.0.5` deployment and neither flavour changes them), and a user-style
+   this machine: `usbd.sys` was placed by the E1.0 install and `usbhub.sys`
+   hand-copied at bench session 2, both before this deployment. The P14 /
+   `0.0.0.5` deployment swapped `xhci98.sys` alone and neither flavour
+   changes either file, and a user-style
    install from a zip is the acceptance run's act, on `1.0.0.0`, which
    spending it here would consume.
 2. This machine cannot warm-restart. Every restart below is a full power-off
@@ -5859,10 +5865,11 @@ equals `CheckCallbacks` (16,381), so the poll declined zero times.
 #### One STALL, fully recovered - and a teardown code worth a decision
 
 The note ring carries a single transfer error and its recovery. The label
-encodings are read out of the tree: `src/xhci_slot.c:8083` packs `xfer.error`
-as `slotId << 16 | dci << 8 | completionCode`, and `src/xhci_slot.c:2889` packs
-`ep.recovery` as `Dci << 16 | op << 8 | completionCode`, with the ops at
-`src/xhci.h:3811` and the codes beside them:
+encodings are read out of the tree: `XhciSlotTransferEvent` packs `xfer.error`
+as `slotId << 16 | dci << 8 | completionCode`, and `xhciEpQuiesceCompleted`
+packs `ep.recovery` as `Dci << 16 | op << 8 | completionCode`, both in
+`src/xhci_slot.c`, with the `XHCI_DEV_OP_*` ops in `src/xhci.h` and the codes
+beside them:
 
 ```
 ep.open=00070302 / ep.open=00070402     slot 7 - the device behind the hub
@@ -5902,7 +5909,8 @@ This corroborates that refutation from a third direction: the command completes
 promptly, with a non-Success code.
 
 The driver already treats the code as expected, to the letter of the spec.
-`src/xhci_slot.c:2906` exempts it from the failure path outright, then does
+`xhciEpQuiesceCompleted` (`src/xhci_slot.c`) exempts it from the failure path
+outright, then does
 what xHCI 4.6.9 p.123 tells software to do ("Software may verify that this
 case occurred by inspecting the EP State ... when a Stop Endpoint Command
 results in a Context State Error"): it reads the hardware state and branches

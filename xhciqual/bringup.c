@@ -793,8 +793,13 @@ int qual_ports(CTRL *c, int wait_secs)
             connected++;
     }
     if (!connected && wait_secs > 0) {
+        /* "any key", not "ESC": the loop below takes whatever `getch` returns
+         * and breaks, so telling the operator to press ESC describes a
+         * discrimination that is not made (the 2026-09-07 audit's I5). Saying
+         * "any key" is the honest form and is also the more useful one on a
+         * machine whose only keyboard is the one being tested. */
         qprintf("  C6: no device present. Plug a USB2 device now "
-                "(waiting %d s, ESC to skip)...\n", wait_secs);
+                "(waiting %d s, any key to skip)...\n", wait_secs);
         while (wait_secs > 0 && !connected) {
             msleep(1000);
             wait_secs--;

@@ -285,20 +285,38 @@ try {
     # the padding (then it measures nothing) and a switch that stages the
     # ordinary date anyway (then it measures nothing either, and says it did).
     #
+    #
+    # **Against a date this test owns, not against the live INF's.** The
+    # packager refuses the switch when the source date is already unpadded,
+    # because then there is nothing to vary - and the shipping date moves with
+    # every release. A cut on, say, 15 October 2026 has no leading zero to
+    # strip in either field, so the packager would throw and this case, which
+    # asserts exit 0, would fail the BUILD from the first cut carrying it. The
+    # experiment is about the padding, so the date it runs on has to be one
+    # with padding, and that is this file's business rather than the release
+    # calendar's. The 2026-09-07 audit's H12.
+    #
     Write-Step "the unpadded-date experiment changes the date and nothing else"
+    $paddedInf = New-Inf -Name "padded-date" -Mutate {
+        param($t) $t -replace '(?m)^DriverVer=\d{1,2}/\d{1,2}/(\d{4}),', 'DriverVer=01/02/$1,'
+    }
+    Assert-True ([System.IO.File]::ReadAllText($paddedInf) -match '(?m)^DriverVer=01/02/\d{4},') `
+        "the padded-date INF this case derives was not produced; fix the pattern, not the packager."
     $dfOut = Join-Path $script:work "pkg-datefmt"
-    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+    $r = Invoke-Packager @("-InfPath", $paddedInf, "-DriverPath", $driver,
         "-OutDir", $dfOut, "-UnpaddedDriverVerExperiment")
     Assert-True ($r.ExitCode -eq 0) ("the unpadded-date package was rejected:`n" + $r.Output)
     Assert-True ($r.Output -match "UNPADDED-DriverVer EXPERIMENT") `
         ("expected a banner naming the experiment. Output:`n" + $r.Output)
     if (Test-Path -LiteralPath (Join-Path $dfOut "xhci98.inf")) {
         $stagedText = [System.IO.File]::ReadAllText((Join-Path $dfOut "xhci98.inf"))
-        $prodText = [System.IO.File]::ReadAllText($plainInf)
+        $prodText = [System.IO.File]::ReadAllText($paddedInf)
         Assert-True ($stagedText -match '(?m)^DriverVer=\d{1,2}/\d{1,2}/\d{4},') `
             "the staged INF has no DriverVer date at all."
         Assert-True ($stagedText -notmatch '(?m)^DriverVer=0\d/') `
             "the staged INF's DriverVer month is still zero-padded, so nothing was varied."
+        Assert-True ($stagedText -match '(?m)^DriverVer=1/2/\d{4},') `
+            "the staged INF's date is not the unpadded form of the one this case supplied."
         # The single-difference property, checked rather than asserted: every
         # other line must be byte-identical to the INF it was derived from.
         $a = $prodText -split "`r`n"
@@ -510,8 +528,111 @@ try {
         "a stand-in driver was packaged with the binary gates enabled."
     Assert-True ($r.Output -match "host test suite|import-compatibility gate") `
         ("expected the refusal to name the gate that ran. Output:`n" + $r.Output)
+    # **"Gated" and "inconclusive" are different readings** (audit H18). Smart
+    # App Control blocking a freshly linked unsigned exe makes the host suite
+    # produce no result line, and the packager refuses on that too - with a
+    # message that says to run it again. That refusal would satisfy the two
+    # assertions above while proving nothing about whether the gates ran, so
+    # the one message that must NOT be what fired is named here.
+    Assert-True ($r.Output -notmatch "produced no result line") `
+        ("the host suite did not run at all (Smart App Control), so this case " +
+         "proved nothing about whether the gates are enabled by default. " +
+         "Run it again. Output:`n" + $r.Output)
     Assert-True (-not (Test-Path -LiteralPath $gatedOut)) `
         "the output directory was created for a driver that failed a binary gate."
+
+    # --- the output path refusals (audit H18) -------------------------------
+    #
+    # This script replaces its output directory wholesale, so where it is
+    # pointed is a data-loss question rather than a tidiness one. The packager
+    # refuses a volume root, the repository root, a path naming a file, and
+    # anything under releases\ - and none of those four refusals had a test.
+    # The volume-root one in particular is reached from two places in
+    # make-package.ps1 (an early check added because the later one was
+    # unreachable for `E:\`), and neither was ever produced.
+    Write-Step "the output path refusals"
+
+    $rootOut = [System.IO.Path]::GetPathRoot($script:work)
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $rootOut)
+    Assert-True ($r.ExitCode -ne 0) "the packager accepted a volume root as -OutDir."
+    Assert-True ($r.Output -match "volume or repository root") `
+        ("expected the volume-root refusal. Output:`n" + $r.Output)
+
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $repo)
+    Assert-True ($r.ExitCode -ne 0) "the packager accepted the repository root as -OutDir."
+    Assert-True ($r.Output -match "volume or repository root") `
+        ("expected the repository-root refusal. Output:`n" + $r.Output)
+
+    # A path that exists and is a FILE. The refusal has to name that, rather
+    # than failing later in a directory operation with no explanation.
+    $fileOut = Join-Path $script:work "not-a-directory"
+    Set-Content -LiteralPath $fileOut -Value "occupied" -Encoding ASCII
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $fileOut)
+    Assert-True ($r.ExitCode -ne 0) "the packager accepted a file as -OutDir."
+    Assert-True ($r.Output -match "is a file, not a directory") `
+        ("expected the not-a-directory refusal. Output:`n" + $r.Output)
+    Assert-True ((Get-Content -LiteralPath $fileOut -Raw).Trim() -eq "occupied") `
+        "the packager overwrote the file it was pointed at."
+
+    # --- a foreign file in a SUBDIRECTORY (audit H18) -----------------------
+    #
+    # The foreign-file check is recursive, and both existing cases put their
+    # bystander at the root - so the recursion was untested and a check written
+    # against the top level only would have passed them both. A transfer
+    # directory with a subdirectory of notes in it is the realistic shape.
+    Write-Step "a foreign file below the output root is found too"
+    $deepOut = Join-Path $script:work "pkg-foreign-deep"
+    Ensure-Directory (Join-Path $deepOut "notes")
+    $deepBystander = Join-Path $deepOut "notes\keep-me.txt"
+    Set-Content -LiteralPath $deepBystander -Value "not ours" -Encoding ASCII
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $deepOut)
+    Assert-True ($r.ExitCode -ne 0) `
+        "the packager replaced a directory holding a foreign file one level down."
+    Assert-True ($r.Output -match "did not stage") `
+        ("expected the foreign-file refusal. Output:`n" + $r.Output)
+    Assert-True (Test-Path -LiteralPath $deepBystander) `
+        "the foreign file below the output root was deleted."
+
+    # --- the missing-version-resource refusal (audit H18) -------------------
+    #
+    # NOT TESTED, and recorded here rather than left as a silent gap. That
+    # refusal fires only with the binary gates ON, and with them on the host
+    # test suite and the import gate run FIRST and refuse this harness's
+    # stand-in driver - which is a text file - before the version resource is
+    # ever looked at. Producing it needs a real linked driver built without
+    # src\xhci98.rc, which is a build this repository has not been able to make
+    # since task 8-A.4 put the .rc in src\sources. The negative control for the
+    # rule is what exists instead: the -SkipBinaryGates warning path is driven
+    # by every other case in this file, and the version COMPARISON is
+    # deliberately not gated on the switch, so a stand-in that does carry a
+    # version is still checked against the INF.
+
+    # --- the two degenerate unpadded-date inputs (audit H18) ----------------
+    #
+    # make-package.ps1 refuses both, and neither refusal had a test: a source
+    # whose date is already unpadded (the derived package would be
+    # byte-identical, so it is not an experiment) and a source with more than
+    # one DriverVer to rewrite (which of them varies is then unstated).
+    Write-Step "the unpadded-date experiment refuses its two degenerate inputs"
+    $alreadyUnpadded = New-Inf -Name "already-unpadded" -Mutate {
+        param($t) $t -replace '(?m)^DriverVer=\d{1,2}/\d{1,2}/(\d{4}),', 'DriverVer=1/2/$1,'
+    }
+    $r = Invoke-Packager @("-InfPath", $alreadyUnpadded, "-DriverPath", $driver,
+        "-OutDir", (Join-Path $script:work "pkg-already-unpadded"),
+        "-UnpaddedDriverVerExperiment")
+    Assert-True ($r.ExitCode -ne 0) `
+        "the experiment was accepted on a source whose date is already unpadded."
+    Assert-True ($r.Output -match "already unpadded") `
+        ("expected the already-unpadded refusal. Output:`n" + $r.Output)
+
+    $twoDriverVers = New-Inf -Name "two-driverver" -Mutate {
+        param($t) $t -replace '(?m)^(DriverVer=\d{1,2}/\d{1,2}/\d{4},.*)$', "`$1`r`n`$1"
+    }
+    $r = Invoke-Packager @("-InfPath", $twoDriverVers, "-DriverPath", $driver,
+        "-OutDir", (Join-Path $script:work "pkg-two-driverver"),
+        "-UnpaddedDriverVerExperiment")
+    Assert-True ($r.ExitCode -ne 0) `
+        "the experiment was accepted on a source carrying two DriverVer lines."
 
     # --- a [SourceDisksFiles] subdirectory must be honoured -----------------
     #

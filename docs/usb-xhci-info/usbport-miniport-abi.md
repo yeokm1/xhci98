@@ -261,9 +261,12 @@ conversion that follows from it.
 
 Miniport callbacks that return `MPSTATUS` use: `MP_STATUS_SUCCESS 0`,
 `MP_STATUS_FAILURE 1`, `MP_STATUS_NO_RESOURCES 2`, `MP_STATUS_NO_BANDWIDTH 3`
-(map xHCI Resource Error / Bandwidth Error / Secondary Bandwidth Error here so
-usbhub degrades gracefully; not No Slots Available, which belongs to Enable
-Slot),
+(where a synchronous miniport would map xHCI Resource Error / Bandwidth Error /
+Secondary Bandwidth Error so usbhub degrades gracefully; not No Slots
+Available, which belongs to Enable Slot. This driver never returns it: its
+Configure Endpoint is asynchronous, so the refusal is carried to the next
+`SubmitTransfer` and completed as `USBD_STATUS_NO_BANDWIDTH` instead - see
+`usbport-miniport-interface.md`, "Endpoints"),
 `MP_STATUS_ERROR 4`, `MP_STATUS_RESERVED1 5`, `MP_STATUS_NOT_SUPPORTED 6`,
 `MP_STATUS_HW_ERROR 7`, `MP_STATUS_UNSUCCESSFUL 8`. usbport treats any
 nonzero `StartController` return as failure [usbport/pnp.c:856].
@@ -350,7 +353,10 @@ writes back ("out"):
 | 0x18 | `MiniPortTransferSize` | in | `sizeof(XHCI_TRANSFER)` |
 | 0x1C | `Reserved2` | - | sentinel-fill |
 | 0x20 | `Reserved3` | - | sentinel-fill |
-| 0x24 | `MiniPortResourcesSize` | in | Controller common-buffer block: DCBAA + cmd ring + ERST + event ring + scratchpad (delivered via `USBPORT_RESOURCES.StartVA/StartPA`) |
+| 0x24 | `MiniPortResourcesSize` | in | Controller common-buffer block, delivered via `USBPORT_RESOURCES.StartVA/StartPA`: DCBAA + scratchpad buffer array, command ring + ERST, event ring, the input
+context, 32 device contexts, 32 EP0 rings and the pool rings, then the
+scratchpad pages - the full list is `XHCI_REGION_*` in `src/xhci.h`, and
+`XHCI_HC_RESOURCES_SIZE` is the number DriverEntry commits |
 | 0x28 | `OpenEndpoint` | in | 26 miniport callbacks, in declaration order |
 | 0x2C | `ReopenEndpoint` | in | |
 | 0x30 | `QueryEndpointRequirements` | in | |
@@ -1126,8 +1132,10 @@ than reported: a per-packet status of `0xC0000009` is stored to the URB, then
 logged and replaced with 0. `URB->ErrorCount` (`URB+0x50`) is incremented for
 every packet whose URB status is nonzero after that rewrite, so a rewritten
 one is not counted as an error. The constant is recorded as measured; this file
-does not name it, because `AGENTS.md` forbids naming a `USBD_STATUS` from
-memory.
+does not name it, because a `USBD_STATUS` value written down from memory
+rather than read out of the DDK header or a binary is exactly the mistake
+batch 6-A had to undo three times (`src/xhci_xfer.h` records which). That is a
+habit this project keeps, not a rule `AGENTS.md` states.
 
 Three things the tables above do not cover, and how the driver handles each:
 
@@ -1439,6 +1447,18 @@ carries the full annotation, the NUSB one records agreement and difference.
   not the miniport's: `USBD_STATUS_DEVICE_GONE` (`0xC0007000`) if the endpoint
   is NUKEd or the transfer is flagged `DEVICE_GONE`, else
   `USBD_STATUS_CANCELED` (`0xC0010000`).
+  - **That is not the value this driver uses, and the difference is real.**
+    `src/xhci_xfer.h` and `xhci-programming.md`'s completion-code table use
+    `USBD_STATUS_CANCELED = 0x00010000`, which is what the Windows 2000 DDK's
+    `usbdi.h` defines and is in the SUCCESS class (top two bits 00). The
+    `0xC0010000` above is what usbport itself selects when IT cancels, and is
+    in the error class (top two bits 11). So a miniport-side cancellation and
+    a usbport-side one reach a client as different status classes carrying
+    the same name. Nothing in this driver depends on which is seen - usbport
+    overwrites the URB status on the paths where it chooses its own - but do
+    not "fix" either constant to match the other, and do not read a
+    `0x00010000` in a trace as usbport's doing. Which of the two a client
+    actually observes, per path, has not been measured.
 - There is also an ISO-only early return before any abort: if the
   transfer's last frame has not passed yet, the whole pass returns and retries
   later. The threshold is `StartFrame + NumberOfPackets + 1`, not the sum -
@@ -2056,7 +2076,11 @@ tool using this route should check the route before trusting its absence.
 | 0x32 | `Reserved2/3` | UCHAR x2 | |
 
 The EHCI pattern for the common-buffer block - a single struct
-(`EHCI_HC_RESOURCES`) whose `sizeof` is `MiniPortResourcesSize`, carved via
+(`EHCI_HC_RESOURCES`) whose `sizeof` is `MiniPortResourcesSize` - this
+driver's equivalent is `XHCI_HC_RESOURCES_SIZE`, covering DCBAA + scratchpad buffer array, command ring + ERST, event ring, the input
+context, 32 device contexts, 32 EP0 rings and the pool rings, then the
+scratchpad pages - the full list is `XHCI_REGION_*` in `src/xhci.h`, and
+`XHCI_HC_RESOURCES_SIZE` is the number DriverEntry commits - carved via
 `FIELD_OFFSET` from `StartVA`/`StartPA` [usbehci.c:889-975, 3639] - is the
 model for the xHCI block (DCBAA, command ring, ERST, event ring, scratchpad
 array; scratchpad pages need their own PAGESIZE alignment, so place them last
@@ -2773,7 +2797,10 @@ key, which is what a plain `AddReg` under an INF's install section writes.
 The miniport needs no import of its own for any of this. The `Zw*` calls,
 the pool allocation and the string work are all inside `usbport.sys`. That is
 the property that makes this the only registry channel this project may use -
-`scripts/import-gate/xhci98-imports.allow` denies the `Zw*` names outright.
+`scripts/import-gate/xhci98-imports.allow` admits no `Zw*` name. The
+allowlist has no deny list: a name is refused by not being on it, which is
+why the file's remaining `Zw*` mentions are the removal note for task
+11-V.7's three file-sink imports rather than rules.
 
 ## 7. Locking, IRQL, and threading summary
 

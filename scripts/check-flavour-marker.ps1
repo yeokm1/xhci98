@@ -54,17 +54,12 @@ if (-not (Test-Path -LiteralPath $Image)) {
     exit 1
 }
 
-# HOSTTEST is in the list on purpose. It is the host suite's own marker and can
-# never be in a linked driver, so finding one here would mean the flavour
-# defines had gone somewhere very strange - and a check that silently ignored a
-# name it knows about is how a fourth flavour arrives unnoticed.
-$names = @("RELEASE", "DEBUG", "QEMU", "HOSTTEST")
+# The name list and the scan are `common.ps1`'s, so this gate and the packager
+# cannot disagree about what a marker is (audit J6). HOSTTEST is in that list
+# on purpose; the reason is given there.
+. (Join-Path $PSScriptRoot "common.ps1")
 
-$text = [System.Text.Encoding]::ASCII.GetString(
-    [System.IO.File]::ReadAllBytes($Image))
-
-$found = @($names | Where-Object { $text.Contains("XHCI98_FLAVOUR_" + $_) } |
-    ForEach-Object { "XHCI98_FLAVOUR_" + $_ })
+$found = @(Get-XhciFlavourMarkers -Path $Image)
 $want = "XHCI98_FLAVOUR_" + $Flavour.ToUpper()
 
 if ($found.Count -eq 1 -and $found[0] -eq $want) {

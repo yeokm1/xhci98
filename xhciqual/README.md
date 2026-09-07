@@ -133,7 +133,8 @@ The build also emits `XHCIQUAL.MAP` (the wlink `option map`). Keep it paired
 with the `.EXE` and the logs from each field run. If a run faults with a
 DOS/32A exception, the reported EIP is only resolvable to a symbol against the
 matching MAP. The run header prints a build stamp
-(`XHCIQUAL 1.0.0.0 (build <date time>)`, the version being `XHCI_VER_STR`) so a saved log or a photographed crash
+(`XHCIQUAL <version> (build <date time>)`, the version being `XHCI_VER_STR`,
+which tracks the driver's - `1.0.2.0` at the time of writing) so a saved log or a photographed crash
 screen ties back to the exact binary and its MAP.
 
 One deviation from the design doc is worth recording. The design sketches two
@@ -220,6 +221,18 @@ each says what to do next:
 
 The `Probe safety: PASS - no PCI configuration writes.` line is printed rather
 than suppressed for brevity. It is the proof that the read-only contract held.
+
+**The exit code, which is not the verdict.** A read-only mode - the quick scan
+and `--probe-only` alike - answers **1** whatever it found, because no
+qualification verdict was reached: only a full active run can qualify a
+controller, and only that run answers 0. So an exit code of 1 after a quick
+scan means "not qualified here", not "something went wrong", and a
+`LOOKS QUALIFIED` screen comes with it. **2** is a usage error: an argument
+this tool does not know, or a bad value for one. The batch wrappers bucket
+these with `IF ERRORLEVEL` and pair them with `--done-flag`, which is what
+separates a bad verdict from a crash - the flag is written on any normal exit,
+including a usage error. (Stated here because the audit of 2026-09-07 found
+this file describing it two ways.)
 
 "One screen" was measured in QEMU: three controllers print 11 lines under 4
 rows of DOS/32A startup plus the command line, 16 of the pager's 23 usable
@@ -328,13 +341,24 @@ strips any run of leading `-` or `/` from an option, so `/scan` and `-scan`
 are read as `--scan`. `print_usage()` omits `--controller`; this table is the
 complete one.
 
-Other flags:
+Other flags. Only `--quick`, `--probe-only` and its alias `--no-active` select
+a read-only run; `--no-page`, `--serial`, `--log`, `--done-flag` and `--help`
+are modifiers that say what to do with the report. A modifier on its own does
+NOT make the run read-only, because any argument at all turns off the
+no-argument quick scan (`opt_quick = (argc == 1)` in `main.c`), so
+`XHCIQUAL --log FILE` performs the full active bring-up. Pair a modifier with
+`--quick` or `--probe-only` when a read-only run is what is wanted.
 
 - `--quick`: the read-only one-screen scan a bare `XHCIQUAL` performs, asked
-  for explicitly. `--full` is the full active run across all families.
+  for explicitly. It looks at every family whatever selectors are given: a
+  family word or `--scan` is accepted and then ignored, because the scan's
+  question is what controllers the machine has. `--full` is the full active
+  run across all families.
 - `--no-active`: an alias of `--probe-only`.
-- `--done-flag FILE`: create FILE only on normal completion, which is what the
-  QEMU smoke test waits on.
+- `--done-flag FILE`, also spelled `--done-flag=FILE`: create FILE only on
+  normal completion, which is what the QEMU smoke test and the field `.BAT`
+  wrappers wait on. "Normal" includes a usage error, so the flag separates a
+  crash from a bad verdict rather than a pass from a fail.
 
 - `--probe-only`: read-only Tier A plus Tier B when MSE is already enabled;
   it never changes PCI Command.
@@ -410,8 +434,13 @@ WARNINGS when SOF assertion passes and PCI INTx status is either observed or
 unavailable on a pre-PCI-2.3 interface, because CPU ISR delivery is not
 claimed by the safe DOS/32A path.
 
-DISQUALIFIED on: Interrupt Pin = 0 (MSI-only), C4 never fires, PCI 2.3 INTx
-status fails, C3 never completes, C2 reset fails, or BAR0 above 4 GB.
+DISQUALIFIED on, from `report.c` (xHCI), `legacy.c` (EHCI/OHCI),
+`mmiodiag.c` and `main.c`: Interrupt Pin = 0 (MSI-only), C4 never fires, PCI
+2.3 INTx status fails, C3 never completes, C2 reset fails, cleanup could not
+quiesce the controller, the controller reports no root ports, no USB2 protocol
+ports (B7 empty, xHCI only), BAR0 above 4 GB, BAR0 unassigned, PCI Memory
+Space Enable could not be set, BAR0 MMIO not accessible with MSE set, and -
+in the quick scan - no xHCI function present at all.
 
 A C1 handoff timeout is a WARN, not a disqualifier. Some firmware ignores the
 semaphore but stops touching the controller anyway, and the driver may still
@@ -422,9 +451,12 @@ Anything short of C6 PASS, whether SKIP (no device was attached) or FAIL (a
 connected port refused to reset), is likewise a warning: never a clean
 QUALIFIED and never a disqualification.
 
-A C3 SKIP is neither. It means the tool could not run C3 (out of conventional
-memory, or PAGESIZE without 4 KB support), so the run reports NOT QUALIFIED
-with that reason rather than blaming the controller's bus-mastering.
+A C3 SKIP is neither, on the xHCI path. It means the tool could not run C3
+(out of conventional memory, or PAGESIZE without 4 KB support), so the run
+reports NOT QUALIFIED with that reason rather than blaming the controller's
+bus-mastering. There is also a C3 WARN, for a round trip that completed but
+with something the report names; like the C1 handoff warning it costs the run
+its clean verdict and nothing more.
 
 C8 (xHCI device identification) is informational only. A C8 failure on a
 machine that passes C1-C4 is worth recording in the machine's `results/`
@@ -601,7 +633,10 @@ The `v0.x` line ended at v0.11 (see "Versioning" above). Changes by version:
 
 v0.11 (roadmap task 11-V.8) made the no-argument default a read-only quick
 scan, added the three-outcome classifier every read-only verdict now comes
-from (one classifier, so the quick scan and the full run cannot disagree),
+from (one classifier for the xHCI path, so the quick scan and the full run
+cannot disagree there; on the legacy families the quick scan feeds it a
+substitute port count rather than a measured one, and since the 2026-09-07
+audit a machine with no xHCI is disqualified before any of them is judged),
 and took the host suite to 146 checks and the QEMU matrix to 40 cases.
 Re-run `3XIRQ` on a known-good machine before trusting a new bare-metal
 verdict.

@@ -31,34 +31,7 @@
 #include "../src/xhci.h"
 #include "../src/xhci_usbport.h"
 #include "../src/xhci_topo.h"
-
-static int failures;
-static int checks;
-
-#define CHECK(cond, what) check_impl((cond) ? 1 : 0, (what), __LINE__)
-
-static void check_impl(int cond, const char *what, int line)
-{
-    checks++;
-    if (!cond) {
-        failures++;
-        printf("FAIL %s:%d: %s\n", "test_topo.c", line, what);
-    }
-}
-
-#define CHECK_EQ(got, want, what) \
-    check_eq_impl((unsigned long)(got), (unsigned long)(want), (what), __LINE__)
-
-static void check_eq_impl(unsigned long got, unsigned long want,
-                          const char *what, int line)
-{
-    checks++;
-    if (got != want) {
-        failures++;
-        printf("FAIL %s:%d: %s (got 0x%08lX, want 0x%08lX)\n",
-               "test_topo.c", line, what, got, want);
-    }
-}
+#include "test_harness.h"
 
 /*
  * A node's fields are read through this, never off a raw pointer.
@@ -405,6 +378,56 @@ static void testPowerSweepHighWater(void)
     CHECK_EQ(topo.Pending, 0, "a port suspend arms no parent claim either");
     CHECK_EQ(topo.Resets, 0, "and is not a reset");
     CHECK_EQ(snoop.Reply, XHCI_TOPO_REPLY_NONE, "and asks for no reply");
+
+    /*
+     * **`CLEAR_TT_BUFFER` must not move the high-water mark**, and neither
+     * must the three requests beside it. This is audit finding A7, and the
+     * defect it fixed was real on a real bus: usbhub sends `CLEAR_TT_BUFFER`
+     * (bRequest 8, recipient Other, the same `0x23` request type as a port
+     * feature) to a multi-TT hub whenever a full- or low-speed transaction
+     * below it fails, and its `wIndex` is not a port number at all - it packs
+     * an endpoint number, device address, endpoint type and direction, so it
+     * reads as a port number in the thousands. `src/xhci_topo.c` filters on
+     * `bRequest` for exactly this reason, and until the 2026-09-07 audit's G8
+     * no packet with one of these requests appeared anywhere in this suite:
+     * deleting the filter passed the whole file and let the bug back in.
+     *
+     * The count is 8 from the sweep above and no descriptor has landed yet,
+     * so the guard is the only thing standing between these packets and a
+     * `PortCount` of 4,660.
+     */
+    s = setupOf(0x23, 0x08, 0, 0x1234, 0);      /* CLEAR_TT_BUFFER */
+    XhciTopoObserveSetup(&topo, 2, &s, &snoop);
+    node = XhciTopoFind(&topo, 2);
+    CHECK_EQ(nodeOrEmpty(node)->PortCount, 8,
+             "CLEAR_TT_BUFFER's wIndex is not a port number and moves nothing");
+    CHECK_EQ(snoop.Reply, XHCI_TOPO_REPLY_NONE, "and asks for no reply");
+    CHECK_EQ(topo.Pending, 0, "and arms no parent claim");
+    CHECK_EQ(topo.Resets, 0, "and is not a reset");
+
+    s = setupOf(0x23, 0x09, 0, 0x1234, 0);      /* RESET_TT */
+    XhciTopoObserveSetup(&topo, 2, &s, &snoop);
+    s = setupOf(0xA3, 0x0A, 0, 0x1234, 1);      /* GET_TT_STATE */
+    XhciTopoObserveSetup(&topo, 2, &s, &snoop);
+    s = setupOf(0x23, 0x0B, 0, 0x1234, 0);      /* STOP_TT */
+    XhciTopoObserveSetup(&topo, 2, &s, &snoop);
+    node = XhciTopoFind(&topo, 2);
+    CHECK_EQ(nodeOrEmpty(node)->PortCount, 8,
+             "nor do RESET_TT, GET_TT_STATE or STOP_TT beside it");
+
+    /*
+     * The contrast that makes the three above a statement about `bRequest`
+     * rather than about `wIndex`: the very same wIndex on a request the
+     * filter admits DOES move the mark, because there it really is a port
+     * number. Ports are 1-based and this hub has eight, so 12 is out of
+     * range for it - which is exactly the reading the high-water mark is
+     * allowed to take before a descriptor arrives.
+     */
+    s = portPower(12);
+    XhciTopoObserveSetup(&topo, 2, &s, &snoop);
+    node = XhciTopoFind(&topo, 2);
+    CHECK_EQ(nodeOrEmpty(node)->PortCount, 12,
+             "while SET_FEATURE(PORT_POWER) with a wider port number does");
 
     /* Once a descriptor lands, the sweep may no longer move the count - the
      * descriptor is the authority. */

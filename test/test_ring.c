@@ -27,34 +27,7 @@
 
 #include <stdio.h>
 #include "../src/xhci.h"
-
-static int failures;
-static int checks;
-
-#define CHECK(cond, what) check_impl((cond), (what), __LINE__)
-
-static void check_impl(int cond, const char *what, int line)
-{
-    checks++;
-    if (!cond) {
-        failures++;
-        printf("FAIL %s:%d: %s\n", "test_ring.c", line, what);
-    }
-}
-
-#define CHECK_EQ(got, want, what) \
-    check_eq_impl((unsigned long)(got), (unsigned long)(want), (what), __LINE__)
-
-static void check_eq_impl(unsigned long got, unsigned long want,
-                          const char *what, int line)
-{
-    checks++;
-    if (got != want) {
-        failures++;
-        printf("FAIL %s:%d: %s (got %lu / 0x%lX, want %lu / 0x%lX)\n",
-               "test_ring.c", line, what, got, got, want, want);
-    }
-}
+#include "test_harness.h"
 
 /* Plausible common-buffer physical bases: page aligned, below 4 GB. */
 #define RING_PA  0x0F001000UL
@@ -365,6 +338,16 @@ static void test_ring_wrap(void)
         CHECK_EQ(mem[7].Control & XHCI_TRB_LINK_TC, XHCI_TRB_LINK_TC,
                  "link keeps Toggle Cycle set");
         CHECK_EQ(XHCI_TRB_GET_TYPE(mem[7].Control), 6, "link stays type 6");
+        /*
+         * **And it still points where it pointed.** The chain rewrite touches
+         * the Link TRB's control word on every crossing, and until the
+         * 2026-09-07 audit's G11 nothing re-read its pointer afterwards - so a
+         * rewrite that clobbered Param0 would strand the segment's wrap and
+         * every lap after the first would run off the end of the ring.
+         */
+        CHECK_EQ(mem[7].Param0, RING_PA,
+                 "the link still names the segment base");
+        CHECK_EQ(mem[7].Param1, 0UL, "with the high half still zero");
         CHECK_EQ(ring.Cycle, expectCycle ^ 1, "producer toggled at the link");
         CHECK_EQ(ring.Enqueue, 0, "enqueue wrapped to the segment base");
     }
@@ -403,12 +386,26 @@ static void test_ring_full(void)
     CHECK_EQ(XhciRingHasRoom(&ring, 1), 0, "no room for one more");
     enqueueBefore = ring.Enqueue;
     cycleBefore = ring.Cycle;
+    /*
+     * The whole TRB is poisoned, not just its control word. Until the
+     * 2026-09-07 audit's G11 only Control was, and Control is written LAST by
+     * the producer - so a room check moved after the parameter and status
+     * stores would leave the slot half-written and still read here as "wrote
+     * nothing".
+     */
+    mem[enqueueBefore].Param0 = 0xDEADBEEFUL;
+    mem[enqueueBefore].Param1 = 0xDEADBEEFUL;
+    mem[enqueueBefore].Status = 0xDEADBEEFUL;
     mem[enqueueBefore].Control = 0xDEADBEEFUL;
 
     CHECK_EQ(XhciRingEnqueue(&ring, &trb, NULL), XHCI_RING_FULL,
              "enqueue past capacity refused");
     CHECK_EQ(ring.Enqueue, enqueueBefore, "refused enqueue did not advance");
     CHECK_EQ(ring.Cycle, cycleBefore, "refused enqueue did not toggle");
+    CHECK_EQ(mem[enqueueBefore].Param0, 0xDEADBEEFUL,
+             "not even the buffer pointer was stored");
+    CHECK_EQ(mem[enqueueBefore].Param1, 0xDEADBEEFUL, "nor its high half");
+    CHECK_EQ(mem[enqueueBefore].Status, 0xDEADBEEFUL, "nor the status word");
     CHECK_EQ(mem[enqueueBefore].Control, 0xDEADBEEFUL,
              "refused enqueue wrote nothing");
 
@@ -794,13 +791,23 @@ static void test_td_all_or_nothing(void)
 
     enqueueBefore = ring.Enqueue;
     cycleBefore = ring.Cycle;
+    /* Every word of both slots, for the reason given in test_ring_full. */
+    mem[enqueueBefore].Param0 = 0xDEADBEEFUL;
+    mem[enqueueBefore].Param1 = 0xDEADBEEFUL;
+    mem[enqueueBefore].Status = 0xDEADBEEFUL;
     mem[enqueueBefore].Control = 0xDEADBEEFUL;
+    mem[enqueueBefore + 1].Param0 = 0xDEADBEEFUL;
+    mem[enqueueBefore + 1].Param1 = 0xDEADBEEFUL;
+    mem[enqueueBefore + 1].Status = 0xDEADBEEFUL;
     mem[enqueueBefore + 1].Control = 0xDEADBEEFUL;
 
     CHECK_EQ(XhciRingEnqueueTd(&ring, td, 3, NULL), XHCI_RING_FULL,
              "a TD one TRB too long is refused");
     CHECK_EQ(ring.Enqueue, enqueueBefore, "enqueue did not move");
     CHECK_EQ(ring.Cycle, cycleBefore, "cycle did not toggle");
+    CHECK_EQ(mem[enqueueBefore].Param0, 0xDEADBEEFUL,
+             "not even the first TRB's buffer pointer was written");
+    CHECK_EQ(mem[enqueueBefore].Status, 0xDEADBEEFUL, "nor its status word");
     CHECK_EQ(mem[enqueueBefore].Control, 0xDEADBEEFUL,
              "not even the first TRB of the refused TD was written");
     CHECK_EQ(mem[enqueueBefore + 1].Control, 0xDEADBEEFUL, "nor the second");
@@ -2492,6 +2499,286 @@ static void test_endpoint_command_trb_encoding(void)
  * Rewriting a cancelled TD as No Ops - what a Stop Endpoint's "software may add,
  * delete, or otherwise rearrange TDs" (4.6.9 p.119) costs in this ring layer.
  */
+/*
+ * The four live entry points that had no vector anywhere until the 2026-09-07
+ * audit's G9. Each one is reachable from the driver and each one could have
+ * been deleted with the whole suite still green.
+ */
+/*
+ * Two more of the 2026-09-07 audit's G10: the command ring's own stopped
+ * classification, and its alignment refusal. Both were stated in the source and
+ * produced by nothing.
+ */
+static void test_command_ring_stopped_classification(void)
+{
+    XHCI_TRB mem[8];
+    XHCI_TRB one;
+    XHCI_RING cmd;
+    XHCI_RING endpoint;
+    XHCI_TD_COMPLETION completion;
+
+    /*
+     * Table 6-90 gives 24 (Command Ring Stopped) and 25 (Command Aborted) to
+     * Command Completion Events only, and 26-28 (Stopped, Stopped - Length
+     * Invalid, Stopped - Short Packet) to Transfer Events only. The classifier
+     * keeps the two sets apart per ring Kind, and the endpoint half of that
+     * split was pinned in test_classify_event while the COMMAND half was not:
+     * nothing anywhere classified an event on a command ring at all.
+     *
+     * It matters because "stopped" is what tells the abort ladder that the
+     * controller has let go of the ring and software may reposition CRCR. A
+     * command ring that failed to recognise its own stop would leave the
+     * engine answering BUSY for the life of the driver, which is Finding 3's
+     * shape exactly.
+     */
+    CHECK_EQ(XhciRingInit(&cmd, mem, RING_PA, 8, XHCI_RING_KIND_COMMAND),
+             XHCI_RING_OK, "command ring init");
+    XhciTrbNoOpCommand(&one);
+    CHECK_EQ(XhciRingEnqueue(&cmd, &one, NULL), XHCI_RING_OK, "a command");
+
+    CHECK_EQ(XhciRingClassifyEvent(&cmd, RING_PA, XHCI_CC_COMMAND_RING_STOPPED,
+                                   &completion),
+             XHCI_RING_OK, "Command Ring Stopped classifies on a command ring");
+    CHECK_EQ(completion.NeedsRecovery, 1,
+             "and says software repositions the ring");
+    CHECK_EQ(completion.CanRetire, 0, "without retiring the command");
+    CHECK_EQ(cmd.Dequeue, 0, "and moves nothing itself");
+
+    CHECK_EQ(XhciRingClassifyEvent(&cmd, RING_PA, XHCI_CC_COMMAND_ABORTED,
+                                   &completion),
+             XHCI_RING_OK, "so does Command Aborted");
+    CHECK_EQ(completion.NeedsRecovery, 1, "with the same meaning");
+
+    /* And the transfer ring's three are refused here, which is the half that
+     * makes it a split rather than a superset. */
+    CHECK_EQ(XhciRingClassifyEvent(&cmd, RING_PA, XHCI_CC_STOPPED,
+                                   &completion),
+             XHCI_RING_BAD_COMPLETION,
+             "Stopped cannot describe a command completion");
+    CHECK_EQ(XhciRingClassifyEvent(&cmd, RING_PA,
+                                   XHCI_CC_STOPPED_LENGTH_INVALID, &completion),
+             XHCI_RING_BAD_COMPLETION, "nor Stopped - Length Invalid");
+    CHECK_EQ(XhciRingClassifyEvent(&cmd, RING_PA,
+                                   XHCI_CC_STOPPED_SHORT_PACKET, &completion),
+             XHCI_RING_BAD_COMPLETION, "nor Stopped - Short Packet");
+
+    /* An ordinary success on the command ring still retires it, so the ring is
+     * not simply refusing everything. */
+    CHECK_EQ(XhciRingClassifyEvent(&cmd, RING_PA, XHCI_CC_SUCCESS,
+                                   &completion),
+             XHCI_RING_OK, "a Success classifies");
+    CHECK_EQ(completion.CanRetire, 1, "and this one does retire");
+    CHECK_EQ(completion.NeedsRecovery, 0, "with no repositioning owed");
+
+    /* The mirror image on an endpoint ring, so the Kind really is the
+     * discriminator rather than the code list being a union. */
+    CHECK_EQ(XhciRingInit(&endpoint, mem, RING_PA, 8, XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "endpoint ring init");
+    CHECK_EQ(XhciRingEnqueue(&endpoint, &one, NULL), XHCI_RING_OK, "a TD");
+    CHECK_EQ(XhciRingClassifyEvent(&endpoint, RING_PA, XHCI_CC_STOPPED,
+                                   &completion),
+             XHCI_RING_OK, "Stopped classifies on an endpoint ring");
+    CHECK_EQ(completion.NeedsRecovery, 1, "and asks for repositioning there");
+}
+
+static void test_command_ring_alignment(void)
+{
+    XHCI_TRB mem[8];
+    XHCI_RING ring;
+
+    /*
+     * Table 6-1: a transfer ring segment is 16-byte aligned and a COMMAND ring
+     * is 64-byte aligned, and `XhciRingInit` derives which rule applies from
+     * the Kind rather than trusting the carve. The carve does page-align every
+     * ring region, so this is unreachable in the shipping driver - but CRCR's
+     * pointer field is bits 63:6, so a 16-byte-aligned command ring is one
+     * whose base address the register physically cannot express, and the check
+     * is the only statement of that anywhere. Nothing produced it until the
+     * 2026-09-07 audit's G10.
+     */
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA + 16UL, 8,
+                          XHCI_RING_KIND_COMMAND),
+             XHCI_RING_BAD_PARAM,
+             "a 16-byte-aligned base is refused for a command ring");
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA + 32UL, 8,
+                          XHCI_RING_KIND_COMMAND),
+             XHCI_RING_BAD_PARAM, "and so is a 32-byte-aligned one");
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA + 64UL, 8,
+                          XHCI_RING_KIND_COMMAND),
+             XHCI_RING_OK, "while 64 is accepted");
+
+    /* The same three on an endpoint ring, where 16 is the rule: this is what
+     * says the alignment is derived from the Kind and not a constant. */
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA + 16UL, 8,
+                          XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "16 is enough for a transfer ring");
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA + 8UL, 8,
+                          XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_BAD_PARAM, "but 8 is not, for either kind");
+    CHECK_EQ(XhciRingInit(&ring, mem, RING_PA + 8UL, 8,
+                          XHCI_RING_KIND_ISOCH),
+             XHCI_RING_BAD_PARAM, "including the isochronous one");
+}
+
+static void test_reset_device_trb(void)
+{
+    XHCI_TRB t;
+
+    /*
+     * Reset Device is type 17. It carries a Slot ID and nothing else - "the
+     * Reset Device Command TRB (section 6.4.3.10) does not reference an Input
+     * Context" (4.6.11 p.130) - so DW0 and DW1 stay zero, exactly as Disable
+     * Slot's do. Slot ID is 31:24 and the type is 15:10, so slot 6 with type
+     * 17 is (6 << 24) | (17 << 10) = 0x06004400. Spelled as a literal, not
+     * rebuilt from the macros the encoder uses.
+     */
+    t.Param0 = 0xDEADBEEFUL;
+    t.Param1 = 0xDEADBEEFUL;
+    t.Status = 0xDEADBEEFUL;
+    t.Control = 0xDEADBEEFUL;
+    CHECK_EQ(XhciTrbResetDevice(&t, 6UL), XHCI_RING_OK, "reset device slot 6");
+    CHECK_EQ(t.Control, 0x06004400UL, "type 17 + slot 6");
+    CHECK_EQ(t.Param0, 0UL, "no Input Context pointer, low half");
+    CHECK_EQ(t.Param1, 0UL, "nor high half");
+    CHECK_EQ(t.Status, 0UL, "and Status cleared");
+
+    CHECK_EQ(XhciTrbResetDevice(NULL, 6UL), XHCI_RING_BAD_PARAM,
+             "a NULL TRB is refused rather than dereferenced");
+}
+
+static void test_completion_code_valid_per_kind(void)
+{
+    /*
+     * The list the isochronous event path uses instead of the shared decoder.
+     * The two codes that make it a separate list at all are Stall Error (6)
+     * and Invalid Stream ID (34): an isoch pipe has no handshake to stall with
+     * and this driver implements no streams, so neither is legal on an isoch
+     * ring, while both are legal on an endpoint one.
+     */
+    CHECK_EQ(XhciRingCompletionCodeValid(XHCI_RING_KIND_ENDPOINT,
+                                         XHCI_CC_STALL), 1UL,
+             "an endpoint ring may carry a Stall");
+    CHECK_EQ(XhciRingCompletionCodeValid(XHCI_RING_KIND_ISOCH,
+                                         XHCI_CC_STALL), 0UL,
+             "an isochronous ring may not");
+    CHECK_EQ(XhciRingCompletionCodeValid(XHCI_RING_KIND_ENDPOINT,
+                                         XHCI_CC_INVALID_STREAM_ID), 1UL,
+             "the endpoint list does carry Invalid Stream ID");
+    CHECK_EQ(XhciRingCompletionCodeValid(XHCI_RING_KIND_ISOCH,
+                                         XHCI_CC_INVALID_STREAM_ID), 0UL,
+             "and the isochronous list does not");
+
+    /* The two codes that go the other way: isoch-only. */
+    CHECK_EQ(XhciRingCompletionCodeValid(XHCI_RING_KIND_ISOCH,
+                                         XHCI_CC_MISSED_SERVICE), 1UL,
+             "Missed Service is an isochronous code");
+    CHECK_EQ(XhciRingCompletionCodeValid(XHCI_RING_KIND_ENDPOINT,
+                                         XHCI_CC_MISSED_SERVICE), 0UL,
+             "and means nothing on an endpoint ring");
+    CHECK_EQ(XhciRingCompletionCodeValid(XHCI_RING_KIND_ISOCH,
+                                         XHCI_CC_ISOCH_BUFFER_OVERRUN), 1UL,
+             "so is Isoch Buffer Overrun");
+    CHECK_EQ(XhciRingCompletionCodeValid(XHCI_RING_KIND_ENDPOINT,
+                                         XHCI_CC_ISOCH_BUFFER_OVERRUN), 0UL,
+             "and it too is refused on an endpoint ring");
+
+    /* Success is legal everywhere, and a command-only code is not. */
+    CHECK_EQ(XhciRingCompletionCodeValid(XHCI_RING_KIND_ISOCH,
+                                         XHCI_CC_SUCCESS), 1UL,
+             "Success on an isochronous ring");
+    CHECK_EQ(XhciRingCompletionCodeValid(XHCI_RING_KIND_COMMAND,
+                                         XHCI_CC_COMMAND_ABORTED), 1UL,
+             "Command Aborted on the command ring");
+    CHECK_EQ(XhciRingCompletionCodeValid(XHCI_RING_KIND_ISOCH,
+                                         XHCI_CC_COMMAND_ABORTED), 0UL,
+             "and nowhere else");
+
+    /* Vendor Defined is accepted on every Kind, by range rather than by list. */
+    CHECK_EQ(XhciRingCompletionCodeValid(XHCI_RING_KIND_ISOCH, 200UL), 1UL,
+             "a Vendor Defined code is accepted on any ring");
+    CHECK_EQ(XhciRingCompletionCodeValid(XHCI_RING_KIND_ISOCH, 0UL), 0UL,
+             "while code 0 is Invalid and accepted nowhere");
+}
+
+static void test_retire_iso_group(void)
+{
+    XHCI_TRB mem[8];
+    XHCI_TRB td[3];
+    XHCI_RING iso;
+    XHCI_RING endpoint;
+
+    /*
+     * The isochronous sweep: a group's tail retires the whole group at once,
+     * rather than waiting for a later group to sweep it. A stream that stalled
+     * a frame behind for ever is a dead stream, which is why this exists
+     * separately from XhciRingRetireAdvancedTd.
+     */
+    CHECK_EQ(XhciRingInit(&iso, mem, RING_PA, 8, XHCI_RING_KIND_ISOCH),
+             XHCI_RING_OK, "isoch ring init");
+    build_td(td, 3);
+    CHECK_EQ(XhciRingEnqueueTd(&iso, td, 3, NULL), XHCI_RING_OK, "a group");
+    CHECK_EQ(iso.Dequeue, 0UL, "nothing retired yet");
+    CHECK_EQ(XhciRingRetireIsoGroup(&iso, 2UL), XHCI_RING_OK,
+             "the group's tail retires it");
+    CHECK_EQ(iso.Dequeue, 3UL, "the dequeue pointer clears all three TRBs");
+
+    /* Retiring on the same position twice would move the pointer backwards. */
+    CHECK_EQ(XhciRingRetireIsoGroup(&iso, 2UL), XHCI_RING_NOT_ON_RING,
+             "a stale tail is refused rather than replayed");
+
+    /* Kind is the gate, and it is not the endpoint ring's to call. */
+    CHECK_EQ(XhciRingInit(&endpoint, mem, RING_PA, 8, XHCI_RING_KIND_ENDPOINT),
+             XHCI_RING_OK, "endpoint ring init");
+    CHECK_EQ(XhciRingEnqueueTd(&endpoint, td, 3, NULL), XHCI_RING_OK, "a TD");
+    CHECK_EQ(XhciRingRetireIsoGroup(&endpoint, 2UL), XHCI_RING_NOT_COMPLETE,
+             "an endpoint ring refuses the isochronous sweep");
+    CHECK_EQ(endpoint.Dequeue, 0UL, "and moves nothing");
+
+    CHECK_EQ(XhciRingRetireIsoGroup(NULL, 0UL), XHCI_RING_BAD_PARAM,
+             "a NULL ring is refused");
+}
+
+static void test_noop_at_type_command_ring(void)
+{
+    XHCI_TRB mem[8];
+    XHCI_TRB td[1];
+    XHCI_RING cmd;
+
+    /*
+     * The command ring's No Op is type 23, not the transfer ring's type 8, and
+     * the two are not interchangeable: a type 8 placed on the command ring
+     * completes as a TRB Error (roadmap Phase 20, F12). This is the rewrite
+     * the command-abort ladder uses when the Command Ring Stopped event still
+     * names the abandoned command's own TRB.
+     */
+    CHECK_EQ(XhciRingInit(&cmd, mem, RING_PA, 8, XHCI_RING_KIND_COMMAND),
+             XHCI_RING_OK, "command ring init");
+    build_td(td, 1);
+    CHECK_EQ(XhciRingEnqueueTd(&cmd, td, 1, NULL), XHCI_RING_OK, "a command");
+
+    CHECK_EQ(XhciRingNoOpAtType(&cmd, 0UL, XHCI_TRB_TYPE_NOOP_COMMAND),
+             XHCI_RING_OK, "rewritten as a No Op Command");
+    CHECK_EQ(XHCI_TRB_GET_TYPE(mem[0].Control), 23UL,
+             "type 23, the command ring's No Op");
+    CHECK_EQ(mem[0].Control & XHCI_TRB_CYCLE, XHCI_TRB_CYCLE,
+             "with the produced Cycle Bit preserved");
+    CHECK_EQ(mem[0].Control & XHCI_TRB_CH, 0UL, "Chain cleared");
+    CHECK_EQ(mem[0].Param0, 0UL, "operand cleared");
+    CHECK_EQ(mem[0].Param1, 0UL, "both halves");
+    CHECK_EQ(mem[0].Status, 0UL, "and Status");
+
+    /*
+     * Any other type is refused before the ring is even looked at, which is
+     * what stops a type 8 reaching the command ring.
+     */
+    CHECK_EQ(XhciRingNoOpAtType(&cmd, 0UL, XHCI_TRB_TYPE_LINK),
+             XHCI_RING_BAD_PARAM, "a Link type is refused");
+    CHECK_EQ(XhciRingNoOpAtType(&cmd, 0UL, 0UL),
+             XHCI_RING_BAD_PARAM, "and so is type 0");
+    CHECK_EQ(XhciRingNoOpAtType(NULL, 0UL, XHCI_TRB_TYPE_NOOP_COMMAND),
+             XHCI_RING_BAD_PARAM, "a NULL ring is refused");
+}
+
 static void test_ring_noop_rewrite(void)
 {
     XHCI_TRB mem[8];
@@ -2593,6 +2880,12 @@ int main(void)
     test_command_trb_encoding();
     test_endpoint_command_trb_encoding();
     test_ring_noop_rewrite();
+    test_reset_device_trb();
+    test_completion_code_valid_per_kind();
+    test_retire_iso_group();
+    test_noop_at_type_command_ring();
+    test_command_ring_stopped_classification();
+    test_command_ring_alignment();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

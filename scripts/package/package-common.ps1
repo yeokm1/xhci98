@@ -86,8 +86,10 @@ function Read-MediaLayout {
 # artifact instead of trusting the build wrapper. An image carrying two markers
 # is one the preprocessor let through with more than one flavour define, and it
 # is not a debug build with a stray string in it. `scripts\check-flavour-marker.ps1`
-# has always demanded exactly one; this did not until a Codex review of commit
-# `efa86a3` pointed out that the two gates disagreed.
+# has always demanded exactly one; this did not until a Codex review pointed
+# out that the two gates disagreed. (That review named commit `efa86a3`, which
+# is not in this repository's history: it predates the history rewrite and
+# cannot be resolved. The finding stands; the citation does not.)
 #
 # HOSTTEST is in the list for the same reason it is in that script's: it can
 # never be in a linked driver, so finding one means the flavour defines have
@@ -97,10 +99,12 @@ function Read-MediaLayout {
 function Get-ImageFlavourMarker {
     param([string]$Path)
 
-    $text = [System.Text.Encoding]::ASCII.GetString(
-        [System.IO.File]::ReadAllBytes($Path))
-    $found = @(@("QEMU", "DEBUG", "RELEASE", "HOSTTEST") |
-        Where-Object { $text.Contains("XHCI98_FLAVOUR_" + $_) })
+    # The scan is common.ps1's, so this and scripts\check-flavour-marker.ps1
+    # cannot disagree about what a marker is (audit J6). What differs is the
+    # answer's shape: that gate wants "exactly one, and this one", and this
+    # returns which one it is.
+    $found = @(Get-XhciFlavourMarkers -Path $Path |
+        ForEach-Object { $_.Substring("XHCI98_FLAVOUR_".Length) })
     if ($found.Count -eq 1) {
         return $found[0].ToLower()
     }

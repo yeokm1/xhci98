@@ -26,34 +26,7 @@
 
 #include <stdio.h>
 #include "../src/xhci.h"
-
-static int failures;
-static int checks;
-
-#define CHECK(cond, what) check_impl((cond), (what), __LINE__)
-
-static void check_impl(int cond, const char *what, int line)
-{
-    checks++;
-    if (!cond) {
-        failures++;
-        printf("FAIL %s:%d: %s\n", "test_caps.c", line, what);
-    }
-}
-
-#define CHECK_EQ(got, want, what) \
-    check_eq_impl((unsigned long)(got), (unsigned long)(want), (what), __LINE__)
-
-static void check_eq_impl(unsigned long got, unsigned long want,
-                          const char *what, int line)
-{
-    checks++;
-    if (got != want) {
-        failures++;
-        printf("FAIL %s:%d: %s (got %lu / 0x%lX, want %lu / 0x%lX)\n",
-               "test_caps.c", line, what, got, got, want, want);
-    }
-}
+#include "test_harness.h"
 
 /* ------------------------------------------------------------------ */
 /* A synthetic BAR0 window                                             */
@@ -1494,6 +1467,84 @@ static void test_replay_e460(void)
  * project has seen on real hardware and the reason XHCI_MAX_PSI keeps all 15.
  * xhciqual/results/p14s-gen1-2026-07-25/XEMPTY.LOG.
  */
+/*
+ * **The capability-loop refusal, which no vector produced until the 2026-09-07
+ * audit's G10.** Both walks in `src/xhci_caps.c` bound themselves at
+ * `XHCI_MAX_XECP_CAPS` (256) iterations and answer `XHCI_CAPS_LOOP` if they
+ * reach it. It is the only refusal in that file that is about the walk rather
+ * than about the data, and it was the only one never exercised.
+ *
+ * What it actually guards is worth stating, because the name invites the wrong
+ * reading: a Next Pointer is a FORWARD relative offset in DWORDs, and
+ * `xhciCapStep` computes `offset + next * 4`, so a literal cycle - a
+ * capability naming itself or an earlier one - cannot be expressed at all. A
+ * next of 0 terminates. So the only way to reach the bound is a chain of 256
+ * capabilities that neither terminates nor leaves the mapped window, which a
+ * window of 2 KB with a minimum step of one DWORD can just express.
+ *
+ * Without the bound this is not an infinite loop but a walk off the end of the
+ * BAR, which `xhciCapStep` would then refuse - so the bound is the cheaper of
+ * two nets and is checked here for that reason rather than for a hang.
+ */
+static void test_capability_loop_refused(void)
+{
+    ULONG offset;
+    ULONG i;
+
+    /* The terminating shape first, as the control: one capability, next = 0. */
+    bar_reset(0x800);
+    put_debug(0x100, 0);
+    CHECK_EQ(XhciFindExtendedCap(bar_read, NULL, 0x100, 0x800,
+                                 XHCI_XECP_ID_LEGACY, XHCI_USBLEGSUP_BYTES,
+                                 &offset),
+             XHCI_CAPS_NOT_FOUND,
+             "a terminated list ends in NOT_FOUND, not in LOOP");
+
+    /*
+     * A chain that runs off the window rather than terminating: three
+     * capabilities each pointing one DWORD on, then zeroes. The walk stops at
+     * the first header whose Next is 0, which is the zero DWORD after them.
+     */
+    bar_reset(0x800);
+    for (i = 0; i < 3; i++) {
+        bar[0x100 + i] = 10UL | (1UL << 8);
+    }
+    CHECK_EQ(XhciFindExtendedCap(bar_read, NULL, 0x100, 0x800,
+                                 XHCI_XECP_ID_LEGACY, XHCI_USBLEGSUP_BYTES,
+                                 &offset),
+             XHCI_CAPS_NOT_FOUND, "a short chain still terminates");
+
+    /*
+     * And the bound itself: 256 capabilities from 0x400 to 0x7FC, each naming
+     * the next DWORD, none of them the id being searched for and none of them
+     * terminating. That is exactly `XHCI_MAX_XECP_CAPS` steps, so the walk
+     * exits on its iteration bound rather than on the data.
+     */
+    bar_reset(0x800);
+    for (i = 0x100; i < BAR_DWORDS; i++) {
+        bar[i] = 10UL | (1UL << 8);
+    }
+    CHECK_EQ(XhciFindExtendedCap(bar_read, NULL, 0x100, 0x800,
+                                 XHCI_XECP_ID_LEGACY, XHCI_USBLEGSUP_BYTES,
+                                 &offset),
+             XHCI_CAPS_LOOP,
+             "a chain of 256 that never terminates is refused as a loop");
+    CHECK_EQ(barOutOfWindow, 0,
+             "and the walk never read outside the mapped window doing it");
+
+    /* One capability shorter, and the walk runs out of window instead - which
+     * is the other refusal, and says the bound above really was what fired. */
+    bar_reset(0x800);
+    for (i = 0x100; i < BAR_DWORDS - 1; i++) {
+        bar[i] = 10UL | (1UL << 8);
+    }
+    CHECK_EQ(XhciFindExtendedCap(bar_read, NULL, 0x100, 0x800,
+                                 XHCI_XECP_ID_LEGACY, XHCI_USBLEGSUP_BYTES,
+                                 &offset),
+             XHCI_CAPS_NOT_FOUND,
+             "255 of them terminate on the zero header that follows");
+}
+
 static void test_replay_p14s(void)
 {
     static const ULONG psi2[3] = { PSI_FS, PSI_LS, PSI_HS };
@@ -1536,6 +1587,7 @@ int main(void)
     test_digest_collision();
     test_replay_e460();
     test_replay_p14s();
+    test_capability_loop_refused();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

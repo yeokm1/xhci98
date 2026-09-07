@@ -39,34 +39,7 @@
  * engine's vocabulary, not the DDK's (batch 6-A: the Win2000 DDK does not
  * define three of the names ReactOS's usbehci uses). */
 #include "../src/xhci_xfer.h"
-
-static int failures;
-static int checks;
-
-#define CHECK(cond, what) check_impl((cond), (what), __LINE__)
-
-static void check_impl(int cond, const char *what, int line)
-{
-    checks++;
-    if (!cond) {
-        failures++;
-        printf("FAIL %s:%d: %s\n", "test_init.c", line, what);
-    }
-}
-
-#define CHECK_EQ(got, want, what) \
-    check_eq_impl((unsigned long)(got), (unsigned long)(want), (what), __LINE__)
-
-static void check_eq_impl(unsigned long got, unsigned long want,
-                          const char *what, int line)
-{
-    checks++;
-    if (got != want) {
-        failures++;
-        printf("FAIL %s:%d: %s (got %lu / 0x%lX, want %lu / 0x%lX)\n",
-               "test_init.c", line, what, got, got, want, want);
-    }
-}
+#include "test_harness.h"
 
 /* ------------------------------------------------------------------ */
 /* A synthetic controller                                              */
@@ -95,9 +68,10 @@ static void check_eq_impl(unsigned long got, unsigned long want,
  * directly.
  *
  * This is not a claim that the fleet looks like this: two of the three qualified
- * controllers report 1.00 (xhciqual/results/) - and since the gate is reach
- * rather than version, **whether either of them advertises FSC is unmeasured**,
- * because xhciqual prints HCCPARAMS1 and not HCCPARAMS2. That is roadmap task
+ * controllers report 1.00 (xhciqual/results/). xhciqual has printed and decoded
+ * HCCPARAMS2 since the 2026-08-22 run, and the E460 reads `HCCPARAMS2 00000000`,
+ * `fsc=0`; the two 2026-07-25 result sets predate that change, so **the P14s
+ * remains unmeasured**. That is roadmap task
  * 12.1's first step.
  */
 #define HC_HCIVERSION       0x0110UL
@@ -530,15 +504,23 @@ static void hw_flush_from_drain(void);
 static void hw_fire_stale_callback(void);
 
 /*
- * A one-shot that delivers a stale async callback from *inside*
- * KeInitializeSpinLock - the single instruction of a restart at which usbport
- * has zeroed the extension, the lock is being created, and the new start's epoch
- * has not been stored. Delivering the callback before or after a start meets a
- * consistent extension and proves nothing about that window; this is the same
- * technique the mid-drain FlushInterrupts vector uses, for the same reason.
+ * A one-shot that delivers a stale async callback in the window between
+ * usbport's zeroing of the extension and `StartController`'s first act - the
+ * point at which the extension has no signatures, no epoch and no state, and
+ * where a callback usbport cannot cancel would land if the timer expired
+ * mid-restart. It fires from `prepare_start_arguments` below, which is the
+ * last thing this harness does before calling into the driver, so the
+ * callback runs with the previous start's context against a zeroed extension.
+ * (An earlier version of this comment said "from inside KeInitializeSpinLock";
+ * the hook has never been there, and the 2026-09-07 audit's G16 corrected it.
+ * The lock the callback does take is the driver's own, which is what
+ * `staleAcquires` asserts.) Delivering the callback before or after a start
+ * meets a consistent extension and proves nothing about that window; this is
+ * the same technique the mid-drain FlushInterrupts vector uses, for the same
+ * reason.
  *
  * On a uniprocessor host this is reentrancy rather than concurrency, but it puts
- * the callback at exactly the instruction boundary an SMP interleaving would.
+ * the callback at exactly the boundary an SMP interleaving would.
  */
 static ULONG staleFireOnLockInit;
 static ULONG staleFiredAtInit;
@@ -806,6 +788,20 @@ static void hc_set_hciversion(ULONG version)
 {
     mmio[XHCI_CAP_CAPLENGTH / 4] = HC_CAPLENGTH | (version << 16);
 }
+
+/*
+ * There is deliberately no `hc_set_caplength`. This model places its
+ * operational registers with the compile-time `HC_OP(x)` = `HC_CAPLENGTH + x`,
+ * so moving CAPLENGTH at run time would move the operational block out from
+ * under every write the model makes and `run_init` would fail for that reason
+ * rather than for the one under test. An earlier comment below promised such
+ * a vector and named this helper; both were wrong, and the 2026-09-07 audit
+ * (G16) removed the promise. The reach gate itself IS tested, directly and
+ * from both sides - a short CAPLENGTH and a short mapped window - in
+ * `test_caps.c`, "FSC, and the two gates on believing HCCPARAMS2", which
+ * calls the decoder without an operational block at all and so can vary
+ * either number freely.
+ */
 
 static void hc_build(void)
 {
@@ -2408,10 +2404,47 @@ static MPSTATUS NTAPI logRegistryValue(PVOID miniPortExtension,
                                        PVOID out,
                                        ULONG outBytes);
 
+/*
+ * **Task 9-A.2's fold partition, as a running net rather than a snapshot.**
+ *
+ * Every reply that reaches the descriptor walk leaves through exactly one of
+ * four exits, so a fifth added later has to fail a check instead of quietly
+ * shrinking the total. Until the 2026-09-07 audit's G12 that identity was
+ * asserted once, at the end of `main`, on whatever the LAST start happened to
+ * leave in `ext` - and the last vector in this file zeroes the extension, so
+ * every operand was zero and the net read 0 == 0. Unlike the open-accounting
+ * and topology nets beside it, it had no "saw something" twin to catch that.
+ *
+ * It now runs immediately before usbport's zeroing below, which is the last
+ * moment a start's counters exist, and accumulates across every start in the
+ * file. The end of `main` asserts the accumulated identity and that the net
+ * both ran and saw folded replies.
+ */
+static ULONG descAccountingChecks;
+static ULONG descAccountingFailures;
+static ULONG descAccountingRepliesSeen;
+static ULONG descAccountingOutcomes;
+
+static void note_desc_accounting(void)
+{
+    ULONG accounted;
+
+    descAccountingChecks++;
+    accounted = ext.DescConfigsCommitted + ext.DescConfigsInactive +
+                ext.DescConfigsPartial + ext.DescConfigsMalformed;
+    if (accounted != ext.DescRepliesFolded) {
+        descAccountingFailures++;
+    }
+    descAccountingRepliesSeen += ext.DescRepliesFolded;
+    descAccountingOutcomes += accounted;
+}
+
 static void prepare_start_arguments(void)
 {
     ULONG i;
     ULONG_PTR aligned;
+
+    note_desc_accounting();
 
     /*
      * usbport's own `RtlZeroMemory(FdoExtension->MiniPortExt, ...)`, which it
@@ -8192,7 +8225,8 @@ static void test_command_restart_epoch(void)
      * finished, where the extension is consistent and the epoch already differs.
      * The window the epoch is actually racing is narrower: the moment usbport has
      * zeroed the extension and the new start is creating the lock. Deliver it
-     * there, from inside KeInitializeSpinLock itself.
+     * there: `prepare_start_arguments` fires it immediately before the
+     * driver is entered, with the extension zeroed.
      *
      * What rejects it there is the signature, which usbport's zeroing has just
      * erased and StartController has not yet written. It reaches that conclusion
@@ -26819,8 +26853,15 @@ static void test_save_restore(void)
     CHECK_EQ(ext.SavesDeclinedNoFsc, 0, "so nothing is declined for it");
     CHECK_EQ(ext.SavedStateValid, 1, "and the state is saved");
 
-    /* And a controller whose CAPLENGTH stops before HCCPARAMS2 has no bit to
-     * read, whatever its version, so it declines. */
+    /*
+     * The control, and the whole of what this file can say about the reach
+     * gate: the default model's CAPLENGTH (20h) does reach HCCPARAMS2, so the
+     * bit is read and believed. A controller whose CAPLENGTH stops before
+     * HCCPARAMS2 has no bit to read whatever its version, and that half is in
+     * `test_caps.c` rather than here, for the reason given at
+     * `hc_set_hciversion` above: this model's operational registers are
+     * placed at a compile-time offset from CAPLENGTH and cannot follow it.
+     */
     hc_build();
     CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a 1.1 controller)");
     CHECK_EQ(ext.HcInfo.Fsc, 1UL, "declares FSC when the register is reachable");
@@ -29270,16 +29311,17 @@ int main(void)
 
     /*
      * Task 9-A.2's fold partition, asserted rather than described (review round
-     * 2): every reply that reached the walk left through exactly one of four
-     * exits, so a fifth added later fails a check instead of quietly shrinking
-     * the total. It is a net over the *last* start's counters, which is enough -
-     * the identity is per controller and every vector that folds a reply runs
-     * inside one.
+     * 2), over every start in the file rather than only the last one. See
+     * `note_desc_accounting`.
      */
-    CHECK_EQ(ext.DescConfigsCommitted + ext.DescConfigsInactive +
-                 ext.DescConfigsPartial + ext.DescConfigsMalformed,
-             ext.DescRepliesFolded,
+    note_desc_accounting();
+    CHECK_EQ(descAccountingFailures, 0,
              "every folded descriptor reply left through exactly one outcome");
+    CHECK_EQ(descAccountingOutcomes, descAccountingRepliesSeen,
+             "and the two totals agree across every start");
+    CHECK(descAccountingChecks > 0, "the descriptor accounting net actually ran");
+    CHECK(descAccountingRepliesSeen > 0,
+          "and saw folded replies while it did");
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

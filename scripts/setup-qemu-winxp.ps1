@@ -40,7 +40,13 @@ powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-winxp.ps1 -WinXpIso 
 param(
     [string]$VmDir = "",
     [string]$LocalScriptDir = "",
-    [string]$WinXpIso = "D:\isos\en_windows_xp_professional_with_service_pack_3_x86_cd_vl_x14-73974.iso",
+    # Empty, like every other ISO parameter in these scripts (the 2026-09-07
+    # audit's J3). The default used to be one host's volume-licence media
+    # filename, baked into a tracked file: on any other host it named nothing,
+    # and the warning it produced pointed at a path that host had never had.
+    # The generated launcher carries the "edit this file or pass -WinXpIso"
+    # guard the Windows 98 one has.
+    [string]$WinXpIso = "",
     [string]$DiskSize = "8G",
     [string]$QemuBinDir = "",
     [string]$XhciDevice = "qemu-xhci,p3=0",
@@ -62,19 +68,8 @@ if ([string]::IsNullOrWhiteSpace($LocalScriptDir)) {
 Write-Step "Checking host"
 Test-SetupHost
 
-function Get-QemuTool {
-    param(
-        [string]$QemuBinDir,
-        [string]$ToolName
-    )
-    if (-not [string]::IsNullOrWhiteSpace($QemuBinDir)) {
-        $candidate = Join-Path $QemuBinDir $ToolName
-        if (Test-Path -LiteralPath $candidate) {
-            return $candidate
-        }
-    }
-    return (Find-Tool $ToolName)
-}
+# Get-QemuTool lives in common.ps1 - there were five copies of it and they
+# had drifted (the 2026-09-07 audit's H28).
 
 Write-Step "Checking QEMU"
 $qemuSystem = Get-QemuTool -QemuBinDir $QemuBinDir -ToolName "qemu-system-x86_64.exe"
@@ -82,7 +77,7 @@ $qemuImg = Get-QemuTool -QemuBinDir $QemuBinDir -ToolName "qemu-img.exe"
 
 if ($null -eq $qemuSystem) {
     Write-Warn "qemu-system-x86_64.exe is not on PATH. Install QEMU (see setup-qemu.ps1) or pass -QemuBinDir."
-    $qemuSystemCommand = "C:\Program Files\qemu\qemu-system-x86_64.exe"
+    $qemuSystemCommand = ""
 } else {
     Write-Ok "Found $qemuSystem"
     $qemuSystemCommand = $qemuSystem
@@ -107,7 +102,12 @@ Write-Ok "VM directory: $VmDir"
 Write-Ok "Local script directory: $LocalScriptDir"
 Write-Ok "Transfer (VVFAT) directory: $xferDir"
 
-if (-not (Test-Path -LiteralPath $WinXpIso)) {
+# The empty case first: -LiteralPath refuses an empty string outright, and
+# under "Stop" that ends the run with a parameter-binding error instead of the
+# sentence the operator needs.
+if ([string]::IsNullOrWhiteSpace($WinXpIso)) {
+    Write-Warn "No -WinXpIso given. The launchers are still written; edit the WINXP_ISO line in them, or re-run with -WinXpIso <path>."
+} elseif (-not (Test-Path -LiteralPath $WinXpIso)) {
     Write-Warn "Windows XP ISO not found at: $WinXpIso (pass -WinXpIso to override)."
 } else {
     Write-Ok "Windows XP ISO: $WinXpIso"
@@ -130,19 +130,11 @@ if ($CreateDisk) {
 Write-Step "Writing QEMU launchers"
 Write-Ok "Using xHCI device model: $XhciDevice"
 
-# The host that generated a launcher is not always the host that runs it
-# (scripts\local is git-ignored and OneDrive-synced), so the launcher resolves
-# QEMU at run time: the generating host's path first, then the two places
-# this project has found QEMU on its hosts, then a message naming the override.
-$qemuResolve = @(
-    "if not defined QEMU set ""QEMU=$qemuSystemCommand""",
-    "if not exist ""%QEMU%"" set ""QEMU=C:\Program Files\qemu\qemu-system-x86_64.exe""",
-    "if not exist ""%QEMU%"" set ""QEMU=%USERPROFILE%\scoop\apps\qemu\current\qemu-system-x86_64.exe""",
-    "if not exist ""%QEMU%"" (",
-    "  echo Could not find qemu-system-x86_64.exe on this host - set QEMU to its full path.",
-    "  exit /b 1",
-    ")"
-)
+# QEMU is resolved at RUN time by the launcher, not baked in here: the host
+# that generated a launcher is not always the host that runs it
+# (scripts\local is git-ignored and OneDrive-synced). One resolver for all
+# five generators, in common.ps1 (the 2026-09-07 audit's H28).
+$qemuResolve = Get-QemuLauncherResolver -FoundPath $qemuSystemCommand
 
 $installCmd = Join-Path $LocalScriptDir "qemu-winxp-install.cmd"
 Write-AsciiFile $installCmd (@(
@@ -168,6 +160,10 @@ Write-AsciiFile $installCmd (@(
     "rem falls through to the hard disk when no key is pressed, which is what",
     "rem Setup's own reboots need (text phase -> GUI phase -> first boot).",
     "set ""WINXP_ISO=$WinXpIso""",
+    "if ""%WINXP_ISO%""=="""" (",
+    "  echo Edit this file or set -WinXpIso when running setup-qemu-winxp.ps1.",
+    "  exit /b 1",
+    ")",
     "if not exist ""%WINXP_ISO%"" (",
     "  echo Missing ISO: %WINXP_ISO%",
     "  exit /b 1",

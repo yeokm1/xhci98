@@ -14,14 +14,25 @@ rem   4. the packager's regression tests - it decides where each file lands on
 rem      the install media, and a package staged at one path but authenticated
 rem      at another verifies nothing
 rem   5. the QEMU launcher regression tests - a stale append-only trace can
-rem      falsely attribute an earlier DriverEntry to the current binary
-rem   6. test\run-host-tests.cmd - the pure-core suite. It runs before the DDK
+rem      falsely attribute an earlier DriverEntry to the current binary, and
+rem      two launchers sharing a monitor port cannot both run
+rem   6. the vm-matrix verdict self-tests - a matrix that reads a refusal as a
+rem      pass makes every later FAIL and NODRIVER word untrustworthy
+rem   7. the tracked batch files' line endings - MS-DOS 7.1 COMMAND.COM can
+rem      fail on an LF-only .BAT, and the field wrappers are .BAT files
+rem   8. the XHCISNAP report self-test, when that EXE has been built (it has a
+rem      build.cmd of its own, and a clone without Open Watcom still runs
+rem      everything else here)
+rem   9. test\run-host-tests.cmd - the pure-core suite. It runs before the DDK
 rem      builds, not after: it compiles the same core files in seconds, so a
 rem      bad carve, ring or PORTSC constant should not cost two full builds
 rem      first
-rem   7. `build` for each requested flavor, with the compile-time layout and
+rem  10. `build` for each requested flavor, with the compile-time layout and
 rem      ABI asserts in src\xhci.h / src\xhci_usbport.h
-rem   8. scripts\import-gate\check-imports.ps1 on each linked binary
+rem  11. scripts\import-gate\check-imports.ps1 on each linked binary, then
+rem      scripts\check-flavour-marker.ps1 on it - which is what says the
+rem      binary in objfre really is the release flavour and not a checked
+rem      build staged under the wrong name
 rem
 rem Any failure stops the run. scripts\local\ddk-debug.cmd still exists for an
 rem interactive DDK prompt, but a binary built that way has not been through the
@@ -406,6 +417,16 @@ rem the second tripped over `|` inside a caret-continued quoted line.
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\check-flavour-marker.ps1" -Image "%OUTSYS%" -Flavour %FLAVOR%
 if errorlevel 1 goto flavourmissing
+
+rem Record which sources this binary came from, beside it. make-release.ps1
+rem checks it and refuses to publish a .sys the tree can no longer reproduce -
+rem the driver's equivalent of the "EXE newer than its own sources" refusals it
+rem already makes for XHCIQUAL and XHCISNAP (the 2026-09-07 audit's H13). It is
+rem content rather than timestamps, because an mtime moves on a checkout or a
+rem comment-only commit; scripts\source-stamp.ps1 says why at length.
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\source-stamp.ps1" -Write "%REPO%\src\%OBJDIR%\i386"
+if errorlevel 1 goto stampfailed
 endlocal
 exit /b 0
 
@@ -417,6 +438,17 @@ echo BUILD_ALT_DIR and src\xhci_dispatch.c emits the string; DriverEntry reads
 echo it so the linker cannot drop it. A binary that cannot be identified from
 echo the file is one a user cannot report against and one the packager cannot
 echo refuse by name.
+endlocal
+exit /b 1
+
+:stampfailed
+echo.
+echo ERROR: could not record the source stamp beside the %FLAVOR% image.
+echo scripts\source-stamp.ps1 hashes every file src\sources names plus every
+echo header in src\, and writes the list beside the binary so make-release.ps1
+echo can refuse to publish a .sys the tree can no longer reproduce. A build
+echo that cannot write it has a src\sources this script cannot read, or an
+echo obj directory it cannot write to.
 endlocal
 exit /b 1
 

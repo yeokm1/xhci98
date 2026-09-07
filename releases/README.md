@@ -26,9 +26,17 @@ nothing a user holds says which one they have.
 
 The one qualification is a version nobody holds. Until the first upload, a
 finding against the current version re-cuts it under the same number with
-`-Force` and says so in its `history.md` entry, because a number that was
-never given to anyone has not been spent; `1.0.0.0` was re-cut that way on
-2026-08-30. Once a version has been uploaded, the rule above is absolute.
+`-Force`, because a number that was never given to anyone has not been spent;
+`1.0.0.0` was re-cut that way on 2026-08-30, and `1.0.2.0` three times on
+2026-09-07. Once a version has been uploaded, the rule above is absolute.
+
+A re-cut is recorded in `docs/contributing/roadmap.md` and the phase's run
+sheet, NOT in the `history.md` entry. It used to be recorded in both, and
+both re-cut paragraphs were deliberately removed on 2026-09-07: the
+download's `readme.txt` embeds the `history.md` entry verbatim, so anything
+written there is addressed to a user, and how the release was assembled is
+not. That embedding is also why editing an entry at all desyncs
+`releases\<version>\` from the source and needs another `-Force` regeneration.
 
 That rule binds the generated files as much as the binaries. `readme.txt`,
 `LICENSE` and `NOTICE.TXT` are outputs of `make-release.ps1`, so the way to
@@ -132,11 +140,18 @@ stay markdown: they are read here, in the repository.
 project's own work: `xhci98.sys` and `xhci98.inf`. A version directory
 carries exactly those two per flavour, and so does the release download.
 
-Three files the driver depends on are not on the media, because they are
+Four files the driver depends on are not on the media, because they are
 the operating system's own: `usbd.sys` (the USB 2.0 root hub imports it on
 both targets), `usbhub.sys` (Windows 98's composite parent and the NT
-targets' hub driver) and, on the NT targets, `usbport.sys` (the stack
-itself; on Windows 98 NUSB or SweetLow's package places it). Nothing on an
+targets' hub driver), on the NT targets `usbport.sys` (the stack
+itself; on Windows 98 NUSB or SweetLow's package places it), and, since
+`1.0.2.0`, `usbui.dll` on all four paths - the USB Root Hub's property-page
+provider, which Windows 2000's own `USB.INF` and Windows XP's `usbport.inf`
+already name, so without it the Power tab is silently absent. It is the one
+of the four that goes to dirid 11 (`System32`) rather than dirid 10
+(`System32\Drivers`), and each target draws it from a different cabinet:
+`driver.cab` on Windows 2000, `sp3.cab` on Windows XP, and the same BASE cab
+as `usbd.sys` and `usbhub.sys` on Windows 98 and Windows ME. Nothing on an
 xHCI-only machine ever placed them, so the INF names `LayoutFile=layout.inf`
 and the Windows setup engine copies each from the OS's own install source,
 the CABs on the hard disk or the Windows 98 CD, and the NT targets'

@@ -778,7 +778,16 @@ foreach ($tgt in $targetsToRun) {
             "-action", "reboot=reset", "-no-shutdown",
             "-monitor", ("tcp:127.0.0.1:{0},server=on,wait=off" -f $tgt.Monitor)
         )
-        if ($tgt.Accel -ne "") { $args += @("-accel", $tgt.Accel) }
+        # A MISSING `Accel` KEY IS NOT AN EMPTY ONE. `$tgt.Accel` on a hashtable
+        # without that key answers $null, `$null -ne ""` is true, and the
+        # launch then carried a bare `-accel` with the next argument as its
+        # value - a dangling switch that eats `-smp` or `-drive` and fails with
+        # a message about the wrong option. Every tracked config has the key,
+        # which is why it survived; a hand-written one need not (the 2026-09-07
+        # audit's H25).
+        if ($tgt.ContainsKey('Accel') -and $null -ne $tgt.Accel -and "$($tgt.Accel)" -ne "") {
+            $args += @("-accel", "$($tgt.Accel)")
+        }
         # A TARGET WITHOUT AN `Smp` KEY GETS NO -smp ARGUMENT AT ALL, which is
         # what a uniprocessor guest needs - so this is additive and 2a and 2b
         # launch byte-for-byte as before.  It exists because the 2d SMP guest is
@@ -812,6 +821,7 @@ foreach ($tgt in $targetsToRun) {
         $proc = Start-Qemu -Qemu $qemuBin -QemuArgs $args -StderrFile $stderrFile
         $groupError = ""
         $rowInFlight = ""
+        $rowsBehind = @()
         try {
             if (-not (Wait-Monitor -Port $tgt.Monitor -TimeoutSeconds 60)) {
                 $err = Get-QemuStderr -StderrFile $stderrFile
@@ -922,6 +932,16 @@ foreach ($tgt in $targetsToRun) {
                 # when everything stopped, and the row had to be inferred from
                 # the fact that the group holds exactly one.
                 $rowInFlight = $row.Name
+                # And WHICH ROWS ARE STILL BEHIND IT, for the tally in the
+                # catch below (the 2026-09-07 audit's H20). The rows a group
+                # never reached because it ended early have to be counted, or
+                # the target's own report understates what it did not measure -
+                # a failed HID boot on 2b read as twelve rows and none not
+                # reached, where the truth is seventeen and six. That is the
+                # same shape as the F11 defect `lib\fresh.ps1` documents, one
+                # level up: a target with rows it never got to must not look
+                # like a target that had none.
+                $rowsBehind = @($grp.Rows | Select-Object -Skip ($grp.Rows.IndexOf($row) + 1))
                 $key = "{0}|{1}" -f $row.Name, $tgt.Id
                 $expectations = $parsed[$key]
                 # A UNIQUE id per row, not a shared `dut`.  When the first row
@@ -1113,6 +1133,22 @@ foreach ($tgt in $targetsToRun) {
             $script:tgtTally.Rows++
             if ($PostRelease -and (Test-RowCountsAgainst -Outcome "ERROR" -WedgeDeclared $wedgeDeclared)) {
                 $script:tgtTally.Against++
+            }
+
+            # **The rows behind the one that failed**, which used to vanish
+            # (audit H20). `lib\fresh.ps1` says `Rows` includes rows "never
+            # reached because the group ended early" and that both add to
+            # `NotReached`; the row in flight was added above and the rest were
+            # not, so the count of what a run did not measure was short by the
+            # whole tail of every group that ended early. They are not
+            # EXCLUDED - nothing decided they should not run - so they get no
+            # report line of their own; what they get is the arithmetic.
+            $behind = 0
+            if ($null -ne $rowsBehind) { $behind = @($rowsBehind).Count }
+            if ($behind -gt 0) {
+                $script:tgtTally.Rows += $behind
+                $script:tgtTally.NotReached += $behind
+                Write-Host ("  and {0} row(s) behind it in this group were never reached" -f $behind)
             }
 
             $label = if ($rowInFlight -ne "") {

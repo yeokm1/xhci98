@@ -702,8 +702,9 @@ against `PollClockMs`: 36-80 ms, 54.9 ms over the whole boot, `PollClockStalls`
 and the commands it pre-empted were slower than roughly 2.3 s.
 
 The consequences were invisible for three boots. 2.3-5.1 s is at or under
-`XHCI_COMMAND_TIMEOUT_MS` = 5,000, the watchdog this backstop was sized to sit
-12 s behind, so it pre-empted the 5,000 ms command watchdog on every boot.
+`XHCI_COMMAND_TIMEOUT_MS` = 5,000, where the 32 s this backstop was meant to
+be sits 12 s clear of the ladder's 20 s legitimate worst case, so it pre-empted
+the 5,000 ms command watchdog on every boot.
 That is what `CommandsTimedOut 0` across 76, 635 and 123 commands says, while
 `CommandTimeoutArrivals` showed 633 of 635 watchdogs arriving. And the driver
 escalated to a controller reset 33 times in 15 plug cycles.
@@ -1156,7 +1157,8 @@ nothing. No reading needs re-checking, and stage T1's gate value is current.
 
 ### What is proven, and what the alarm rested on
 
-The alarm rested on a proxy. `src/xhci.h` is ~4,000 lines and mostly prose;
+The alarm rested on a proxy. `src/xhci.h` is thousands of lines (about 4,000
+when this was written, 7,992 at `1.0.2.0`) and mostly prose;
 commits to it are a poor stand-in for changes to `XHCI_EXTENSION`. Extracting
 the struct at both ends of the range and diffing its non-comment lines gives
 446 against 446, identical. Every difference in the eight commits (not ten)
@@ -1440,8 +1442,9 @@ already in the fleet.
 What it does not change: the fleet's xHCI coverage argument is unmoved. The
 P14s is a third clean Intel controller beside the E460's, so it confirms
 rather than extends, and no quirky Intel silicon is in the fleet at all. It
-says nothing about Windows 2000, which bugchecks in Setup on this machine; the
-era wall recorded there stands, and this is not a reason to retry it.
+says nothing about Windows 2000, which bugchecks in Setup on this machine; no
+cause was investigated and no bugcheck code captured, and this is not a reason
+to retry it (`AGENTS.md`, "Observed on both").
 
 Where the consequence is owned: roadmap batch 13-E's heading and
 `docs/contributing/runs/run-13e.md`'s closing section. The machine owns no
@@ -3565,9 +3568,10 @@ That is where no-double-completion comes from.
 
 The change was written, run and reverted: it works, and its shape was wrong.
 Making the short packet terminal for a Normal TD does end the receive, and
-twelve existing vectors then fail (`test_ring.c`
-954/958/959/960/969/1040/1041/1043, `test_xfer.c` 1305/1312, `test_init.c`
-12135/12136), all of them asserting the old behaviour, so the direction is
+twelve existing vectors then fail (eight in `test_ring.c`, two in
+`test_xfer.c`, two in `test_init.c`; the line numbers this entry first named
+have long since moved, and the vectors are found by running the suite), all of
+them asserting the old behaviour, so the direction is
 confirmed by the vectors that should object. The flaw was in the ring half:
 `CanRetire` was widened so a Short Packet retires mid-TD, but the ring layer
 cannot make that call. It cannot tell a Normal TD from a control transfer's
@@ -6723,6 +6727,17 @@ callback contracts or runtime behaviour, and no XP validation follows from
 it. XP stays a best-effort secondary target with no VM and no checkpoint
 (`docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?").
 
+Amended 2026-09-03: the "no VM and no checkpoint" half is superseded. The
+owner decided that morning that 32-bit Windows XP is a fourth target of the
+same standing as Windows ME, supported in virtual machines, and a QEMU XP
+Professional SP3 guest exists (`AGENTS.md`; `build-and-test.md`, "Windows XP
+target VM"). What is unchanged is the rest: it carries no checkpoint tax,
+nothing waits on an XP observation, "observed on both" does not include it,
+and it has never run on real hardware. The paragraph's own claim - that
+packet format alone establishes nothing about XP callback contracts or
+runtime behaviour - also stands; the XP validation that followed came from
+the guest, not from this reading.
+
 ### Affected documentation
 
 `docs/usb-xhci-info/usbport-miniport-interface.md` "Target ABI record" (all
@@ -7345,7 +7360,11 @@ targets have the same latent hole; base Win98 SE ships `usbd.sys`, but that
 must be verified per machine rather than assumed.
 
 Consequence for Phase 3: check `usbd.sys` exists before the miniport spike,
-and carry it in `xhci98.inf`'s `CopyFiles`. Otherwise the root hub fails to
+and carry it in `xhci98.inf`'s `CopyFiles`. (Superseded at 1.0.0.1 as to the
+second half only: the file is still delivered by the INF, but through
+`LayoutFile` out of the OS's own install source rather than off this
+project's media. The hole this paragraph identifies is the same one, and it
+is still the reason a row exists.) Otherwise the root hub fails to
 load with a `0xc0000034` that names `usbhub20.sys` and reads as "the
 miniport didn't work", a false no-go on the architecture gate.
 
@@ -7575,6 +7594,15 @@ regardless of controllers, so `xhci98.inf` (binding `PCI\CC_0C0330`) can
 rely on the stack being there. Bundling the usbport files in `xhci98.inf`'s
 own `CopyFiles` is now an optional/defensive measure for a hypothetical
 non-NUSB host, not the hard requirement the earlier note claimed.
+
+Amended 2026-09-02: "optional" is superseded and the option is gone. The
+media carries no Microsoft file at all since 1.0.0.1, and the INF gate's
+`OS-MEDIA` and `PKG-MSFILE` rules refuse one on the media or in a staged
+package under any name. What the INF does instead is have the setup engine
+fetch each file from the OS's own install source through
+`LayoutFile=layout.inf` with flag 16, so the delivery is real rather than
+defensive and the file is still never overwritten. `AGENTS.md` and
+`legal-provenance.md` section 5 record the decision.
 
 ### Reusable rules
 

@@ -42,7 +42,13 @@ reports that the half did not run.
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\import-gate\extract-target-baselines.ps1 `
-    -Win2KIso D:\isos\win2ksp4-retail.ISO -Win98Iso D:\isos\w98se-oem.iso
+    -Win2KIso D:\isos\win2ksp4.ISO -Win98Iso D:\isos\Win98SE.iso
+
+The paths are examples and differ per host - name your own. The baselines in
+scripts\import-gate\win2k-baselines.expected were measured from
+D:\isos\win2ksp4-retail.ISO on the host `fw-w11p-ykm`, which is a provenance
+record rather than a path to type: any SP4 media whose files match the
+manifest satisfies this script.
 #>
 
 [CmdletBinding()]
@@ -146,6 +152,24 @@ try {
         Write-Warn "Windows 2000 ISO not found at '$Win2KIso' - skipping. The gate will warn that its Win2000 half did not run."
     } else {
         Invoke-SevenZip (@("e", "-y", "-o$work", $Win2KIso) + @($w2kMissing | ForEach-Object { "I386\" + $_.Packed }))
+
+        #
+        # **Expanded into the work directory and authenticated there, BEFORE
+        # anything is copied into tools\** - the same order the ntkern.vxd half
+        # below already used, and the 2026-09-07 audit's H5. It used to expand
+        # straight into $w2kDir and validate afterwards, so a run against the
+        # wrong SP4 media installed the files it was about to condemn and left
+        # them behind; the next run's "already staged" early-out then found
+        # them present, and only the manifest check caught it, naming the
+        # manifest rather than the media. The check belongs where the answer is
+        # actionable, and it must not have installed anything to reach it.
+        #
+        $expanded = Join-Path $work "w2k"
+        if (Test-Path -LiteralPath $expanded) {
+            Remove-Item -LiteralPath $expanded -Recurse -Force
+        }
+        New-Item -ItemType Directory -Path $expanded | Out-Null
+
         foreach ($w in $w2kMissing) {
             $packed = Join-Path $work $w.Packed
             if (-not (Test-Path -LiteralPath $packed)) {
@@ -156,15 +180,34 @@ try {
             # enumeration misses. The manifest marks the difference by whether
             # the packed name ends in "_".
             if ($w.Packed.EndsWith("_")) {
-                & $expand $packed (Join-Path $w2kDir $w.Out) | Out-Null
+                & $expand $packed (Join-Path $expanded $w.Out) | Out-Null
                 if ($LASTEXITCODE -ne 0) {
                     throw "expand failed on '$packed' (exit $LASTEXITCODE)"
                 }
             } else {
-                Copy-Item -LiteralPath $packed -Destination (Join-Path $w2kDir $w.Out) -Force
+                Copy-Item -LiteralPath $packed -Destination (Join-Path $expanded $w.Out) -Force
             }
         }
-        Write-Ok "staged into $w2kDir"
+
+        $freshErrors = @(Get-Win2kBaselineValidationErrors -Dir $expanded -Rows $w2kMissing)
+        if ($freshErrors.Count -gt 0) {
+            throw @"
+the Windows 2000 kernel/HAL files extracted from '$Win2KIso' are not the
+recorded builds:
+  - $($freshErrors -join "`n  - ")
+Nothing was staged. That media is a different Windows 2000 build from the one
+this project's baselines are recorded against. Either stage from the recorded
+media, or update scripts\import-gate\win2k-baselines.expected deliberately -
+those files are what the gate reads to decide whether a kernel or HAL import
+resolves on the co-primary target.
+"@
+        }
+
+        foreach ($w in $w2kMissing) {
+            Copy-Item -LiteralPath (Join-Path $expanded $w.Out) `
+                      -Destination (Join-Path $w2kDir $w.Out) -Force
+        }
+        Write-Ok "staged into $w2kDir and matched against win2k-baselines.expected"
         foreach ($w in $w2kWanted) { Report-File (Join-Path $w2kDir $w.Out) }
     }
 

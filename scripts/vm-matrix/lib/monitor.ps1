@@ -87,7 +87,48 @@ function Send-Mon {
         $client = New-Object System.Net.Sockets.TcpClient
         $client.Connect("127.0.0.1", $Port)
         $stream = $client.GetStream()
-        Start-Sleep -Milliseconds 150
+
+        #
+        # **SYNCHRONISE ON THE BANNER'S PROMPT, THEN DRAIN, THEN SEND.**
+        #
+        # This used to sleep 150 ms, drain whatever had arrived, and send. The
+        # race that leaves is the 2026-09-07 audit's H19, and it produces the
+        # exact reading the completeness test below exists to prevent. QEMU
+        # prints its banner and a `(qemu)` prompt on connect; if that lands
+        # AFTER the drain - a loaded host, a guest mid-boot, a third client
+        # queued ahead of this one - the banner's own prompt is still in the
+        # buffer when the command goes out. If the guest is then slow to
+        # answer, the idle window closes on a buffer whose tail is that
+        # prompt, `Test-MonitorReplyComplete` says the reply is complete, and
+        # the caller gets an EMPTY complete reply. For `info usb` that reads as
+        # "the device is not listed", which is a departure that never happened
+        # - the same wrong reading audit S-6 fixed from the other side.
+        #
+        # So the connect prompt is waited for and consumed here, and only then
+        # is anything sent. A monitor that does not produce one within the
+        # window is not synchronised, and the drain-and-hope path is taken with
+        # that said out loud rather than silently.
+        #
+        $banner = New-Object System.Text.StringBuilder
+        $sync = [Diagnostics.Stopwatch]::StartNew()
+        $syncBuf = New-Object byte[] 4096
+        while ($sync.ElapsedMilliseconds -lt 2000 -and
+               -not (Test-MonitorReplyComplete -Raw $banner.ToString())) {
+            if ($stream.DataAvailable) {
+                $n = $stream.Read($syncBuf, 0, $syncBuf.Length)
+                if ($n -gt 0) {
+                    [void]$banner.Append([System.Text.Encoding]::ASCII.GetString($syncBuf, 0, $n))
+                }
+            } else {
+                Start-Sleep -Milliseconds 20
+            }
+        }
+        if (-not (Test-MonitorReplyComplete -Raw $banner.ToString())) {
+            if (-not $Quiet) {
+                Write-Host ("monitor: no (qemu) prompt on connect within 2000 ms before '{0}'; the reply cannot be separated from the banner and is not trusted" -f $Command)
+            }
+        }
+        # Anything still queued behind the prompt is not this command's.
         while ($stream.DataAvailable) { $null = $stream.ReadByte() }
         $bytes = [System.Text.Encoding]::ASCII.GetBytes($Command + "`n")
         $stream.Write($bytes, 0, $bytes.Length)
@@ -120,9 +161,9 @@ function Send-Mon {
         # reply without a trailing `(qemu)` is given a second window, and one
         # that still lacks it is an error and returns nothing rather than a
         # fragment a caller could mistake for the whole answer.
-        if (-not (Test-MonitorReplyComplete -Raw $sb.ToString())) {
+        if (-not (Test-MonitorReplyComplete -Raw $sb.ToString() -Echo $Command)) {
             $more = [Diagnostics.Stopwatch]::StartNew()
-            while ($more.ElapsedMilliseconds -lt $HardMs -and -not (Test-MonitorReplyComplete -Raw $sb.ToString())) {
+            while ($more.ElapsedMilliseconds -lt $HardMs -and -not (Test-MonitorReplyComplete -Raw $sb.ToString() -Echo $Command)) {
                 if ($stream.DataAvailable) {
                     $n = $stream.Read($buf, 0, $buf.Length)
                     if ($n -gt 0) { [void]$sb.Append([System.Text.Encoding]::ASCII.GetString($buf, 0, $n)) }
@@ -132,7 +173,7 @@ function Send-Mon {
             }
         }
         $stream.Close(); $client.Close()
-        if (-not (Test-MonitorReplyComplete -Raw $sb.ToString())) {
+        if (-not (Test-MonitorReplyComplete -Raw $sb.ToString() -Echo $Command)) {
             Write-Host ("monitor: no (qemu) prompt came back after '{0}' within {1} ms; the reply is incomplete and is not used" -f $Command, ($HardMs * 2))
             $script:MonitorErrors++
             return $null
@@ -147,10 +188,30 @@ function Send-Mon {
 
 # The monitor's prompt is the end-of-reply marker: QEMU prints `(qemu) ` after
 # every command's output, including a command that printed nothing.
+#
+# `-Echo` names the command that was sent. When it is given, the prompt only
+# counts if it comes AFTER that command's echo - which is the second half of
+# the 2026-09-07 audit's H19, and the belt to the connect-time
+# synchronisation's brace. QEMU echoes what is written to the monitor, so the
+# echo is where this command's reply begins; a prompt sitting before it
+# belongs to the banner or to somebody else's command, and accepting it hands
+# the caller an empty answer that reads as a real one.
+#
+# The echo is not required to be present: the caller may have a monitor that
+# does not echo, and this function is also used on accumulated text that
+# starts mid-reply. What is required is that no prompt is accepted BEFORE it
+# when it is there.
+#
 function Test-MonitorReplyComplete {
-    param([string]$Raw)
+    param([string]$Raw, [string]$Echo = "")
     if ($null -eq $Raw) { return $false }
     $clean = $Raw -replace "\x1b\[[0-9;]*[A-Za-z]", "" -replace "\x08", ""
+    if ($Echo -ne "") {
+        $at = $clean.IndexOf($Echo, [System.StringComparison]::Ordinal)
+        if ($at -ge 0) {
+            $clean = $clean.Substring($at + $Echo.Length)
+        }
+    }
     return ($clean.TrimEnd() -match '\(qemu\)$')
 }
 

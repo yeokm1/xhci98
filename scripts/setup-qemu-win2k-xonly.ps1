@@ -64,19 +64,8 @@ if ([string]::IsNullOrWhiteSpace($LocalScriptDir)) {
 Write-Step "Checking host"
 Test-SetupHost
 
-function Get-QemuTool {
-    param(
-        [string]$QemuBinDir,
-        [string]$ToolName
-    )
-    if (-not [string]::IsNullOrWhiteSpace($QemuBinDir)) {
-        $candidate = Join-Path $QemuBinDir $ToolName
-        if (Test-Path -LiteralPath $candidate) {
-            return $candidate
-        }
-    }
-    return (Find-Tool $ToolName)
-}
+# Get-QemuTool lives in common.ps1 - there were five copies of it and they
+# had drifted (the 2026-09-07 audit's H28).
 
 Write-Step "Checking QEMU"
 $qemuSystem = Get-QemuTool -QemuBinDir $QemuBinDir -ToolName "qemu-system-x86_64.exe"
@@ -84,7 +73,7 @@ $qemuImg = Get-QemuTool -QemuBinDir $QemuBinDir -ToolName "qemu-img.exe"
 
 if ($null -eq $qemuSystem) {
     Write-Warn "qemu-system-x86_64.exe is not on PATH. Install QEMU (see setup-qemu.ps1) or pass -QemuBinDir."
-    $qemuSystemCommand = "C:\Program Files\qemu\qemu-system-x86_64.exe"
+    $qemuSystemCommand = ""
 } else {
     Write-Ok "Found $qemuSystem"
     $qemuSystemCommand = $qemuSystem
@@ -132,19 +121,11 @@ if ($CreateDisk) {
 Write-Step "Writing QEMU launchers"
 Write-Ok "Using xHCI device model: $XhciDevice"
 
-# The host that generated a launcher is not always the host that runs it
-# (scripts\local is git-ignored and OneDrive-synced), so the launcher resolves
-# QEMU at run time: the generating host's path first, then the two places
-# this project has found QEMU on its hosts, then a message naming the override.
-$qemuResolve = @(
-    "if not defined QEMU set ""QEMU=$qemuSystemCommand""",
-    "if not exist ""%QEMU%"" set ""QEMU=C:\Program Files\qemu\qemu-system-x86_64.exe""",
-    "if not exist ""%QEMU%"" set ""QEMU=%USERPROFILE%\scoop\apps\qemu\current\qemu-system-x86_64.exe""",
-    "if not exist ""%QEMU%"" (",
-    "  echo Could not find qemu-system-x86_64.exe on this host - set QEMU to its full path.",
-    "  exit /b 1",
-    ")"
-)
+# QEMU is resolved at RUN time by the launcher, not baked in here: the host
+# that generated a launcher is not always the host that runs it
+# (scripts\local is git-ignored and OneDrive-synced). One resolver for all
+# five generators, in common.ps1 (the 2026-09-07 audit's H28).
+$qemuResolve = Get-QemuLauncherResolver -FoundPath $qemuSystemCommand
 
 $installCmd = Join-Path $LocalScriptDir "qemu-win2k-xonly-install.cmd"
 Write-AsciiFile $installCmd (@(

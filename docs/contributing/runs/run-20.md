@@ -13,9 +13,6 @@ then the fix pass reviewed by Codex in seven rounds to NONE) was removed on
 what remains of it, and citations of the form "roadmap Phase 20, F18" resolve
 there.
 
-Fix commits `72f3abd..c436e81` for 20.0-20.6, the Codex review rounds
-`0213d7a` and `0a3e6d4`, F19 in `65ee2b7`.
-
 **On `out\...` and `vm\...` paths in this file.** They say where a reading was
 taken and what the file was called, on the host that ran it; they are not
 files a clone has.
@@ -274,8 +271,10 @@ beside it throughout; `2b-fresh` PASS, 17 rows, 6 NODRIVER expected, 0
 against, 1:16:08. The Windows 98 body is identical to the solo report's; the
 Windows 2000 body is the 20.7 report's, reordered, with the storage row's
 transfer identity reading a different count (437 against 354) as such counts
-do. Those two paired reports are the ones in `run-20-post-release/`.
-Evidence in `out\post-release\phase20-8-paired-{2a,2b}\`. A single-invocation
+do. Evidence in `out\post-release\phase20-8-paired-{2a,2b}\`. These two paired
+reports were the ones in `run-20-post-release/` until the confirming run of
+20.9 replaced them; they read the pre-cut `1.0.1.0` qemu binary
+`b75f48eeb9f29ff8`, which is why they were replaced. A single-invocation
 `-Target 2a-fresh,2b-fresh` start, which runs the targets one after the other
 rather than in the paired shape, was stopped a minute in and its partial
 output discarded.
@@ -305,12 +304,13 @@ re-read and left as 20.4 and 20.7 wrote them.
 Three cuts under the same number and the same date, which the uploaded-nothing
 rule in `releases\README.md` allows:
 
-1. `8936949`, the cut. `build-driver.cmd all` on that header (host suite
-   12,539 checks, INF gate self-tests 312, packager 179, launchers 116,
+1. The cut. `build-driver.cmd all` on that header (host suite
+   20,325 checks across twelve suites, `test_init` 12,539 of them; INF gate
+   self-tests 312, packager 179, launchers 116,
    matrix 230, `XHCISNAP` 4 cases, the import gate on all three flavours),
    `XHCIQUAL.EXE` and `XHCISNAP.EXE` rebuilt after the header and both
    printing `1.0.2.0`, `make-release.ps1` exit 0, zip 254,452 B.
-2. `45ced99`, because `9a65a3e` changed the driver after the cut and
+2. The first re-cut, because the driver changed after the cut and
    `releases\1.0.2.0\` no longer matched the source it is published from.
    Every gate green a second time on the tree it was taken from (host suite
    20,325 checks across twelve suites, `test_init` 12,585; the rest as
@@ -318,11 +318,14 @@ rule in `releases\README.md` allows:
    once the guest readings requalified the `history.md` sentence the
    download's `readme.txt` embeds. That regeneration restaged the same object
    trees, so both driver binaries and the INF are byte-identical across it.
-3. `36c6b6c`, the evening re-cut, when the owner decided `usbui.dll` goes
+3. The evening re-cut, when the owner decided `usbui.dll` goes
    into this release rather than the next. `make-release.ps1 -Force` exit 0,
    zip 257,160 B and thirteen files, `readme.txt` 57,082 -> 55,159 B, both
    flavours' INF 23,541 -> 27,840 B and byte-identical to the source INF and
-   to each other.
+   to each other. Two prose-only regenerations followed, neither of them a
+   fourth cut and neither touching a binary: the shipped artefacts are zip
+   257,313 B and `readme.txt` 55,775 B, which are what `releases\1.0.2.0\` and
+   `out\xhci98-1.0.2.0.zip` hold.
 
 NO BINARY MOVED across any re-cut, which is the check a `-Force` re-cut owes:
 it stages from the existing object trees rather than building, and an
@@ -334,7 +337,7 @@ published anywhere.
 
 **`usbui.dll`.** The INF copies it on all four install paths at dirid 11
 through the same `LayoutFile` route and flag 16 as the three drivers, and the
-INF gate holds it to that destination (`1e8b698`). The reason is the NT root
+INF gate holds it to that destination. The reason is the NT root
 hub, measured that day in both NT guests: Windows 2000's `USB.INF`
 `[ROOTHUB2.NT]` and Windows XP's `usbport.inf` `[ROOTHUB.Dev.NT]` already
 register `usbui.dll` as the hub page's provider, so on an xHCI-only machine
@@ -345,20 +348,20 @@ renders identically with `usbui.dll` renamed away in MS-DOS mode. The owner's
 E460 fits, carrying `sysclass.dll`, no `usbui.dll` and no tab, because this
 INF registers no property page at all; it still does not.
 
-The Windows 2000 prompt risk the file introduced was read and is silent
-(`43d2540`): on a clone of `win2k-xonly.img` rolled back to
+The Windows 2000 prompt risk the file introduced was read and is silent: on
+a clone of `win2k-xonly.img` rolled back to
 `win2k-xonly-clean-install` and verified to hold none of the four files, the
 install fetched three from `sp4.cab` and `usbui.dll` from `driver.cab` in one
 pass and asked for nothing, the root hub starting and its Power tab rendering
 being the two halves of that proof. The acceptance test now takes that
 reading itself, step 4's per-target rows naming the file and a new 4.7 taking
-the Power tab (`1e9f526`), which is what lets the Windows 98, Windows ME and
+the Power tab, which is what lets the Windows 98, Windows ME and
 Windows XP install legs ride the acceptance test rather than be re-read here;
 the owner settled that, the test running before the upload rather than after.
 `build-and-test.md` has the measurements and each target's source cabinet.
 
 `history.md` was shortened and both re-cut paragraphs removed from it, its
-own and `1.0.0.0`'s (`1de44ef`), so the download's `readme.txt` no longer
+own and `1.0.0.0`'s, so the download's `readme.txt` no longer
 explains how the release was assembled.
 
 **What the published driver is.** It differs from the binary 20.7 and 20.8
@@ -427,8 +430,11 @@ do. So the matrix is no worse than before on this release's own driver. Note
 which binary this reads: the qemu flavour `df4d16fc249905b7`, not the
 published release binary the legs install, from the same build; the two
 readings do not substitute for one another. Evidence in
-`out\post-release\1.0.2.0\`. Both images were booted with `-snapshot` and
-neither was written: each still carries its stamp as its only snapshot.
+`out\post-release\1.0.2.0\`, and the two reports themselves are committed as
+`run-20-post-release/post-release-{2a,2b}-fresh.txt`, replacing the 20.8
+pre-cut pair that stood there before. Both images were booted with
+`-snapshot` and neither was written: each still carries its stamp as its only
+snapshot.
 
 How it was taken, because the shape was chosen mid-run. It was started in
 20.8's paired shape, two invocations side by side at 14:50:51, and the owner
@@ -455,5 +461,5 @@ and the guest is discarded at the end of its group.
 ## What remains
 
 The upload of the asset, the push, and the by-hand acceptance test the
-roadmap ends on, taken from the published download and before the upload.
-All three are the owner's.
+roadmap ends on, taken from the release asset rather than from this tree and
+run before the upload. All three are the owner's.

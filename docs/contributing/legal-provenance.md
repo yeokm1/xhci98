@@ -117,8 +117,10 @@ and assembly, but it is not only that:
   "`system dos32a` embeds the full DOS/32A extender as the EXE stub ... so
   XHCIQUAL.EXE is one standalone file - no DOS4GW.EXE to carry." The linker map
   states it independently at its head: "creating a DOS/32 Advanced DOS Extender
-  (LE-style) executable". Static, read from `xhciqual/xhciqual.map` and the
-  makefile.
+  (LE-style) executable". Static, read from the linker map and the makefile. The tracked copy of the
+  map is `releases/<version>/xhciqual/XHCIQUAL.MAP`, which every release
+  stages beside the executable; `xhciqual/xhciqual.map` is the build's own
+  output and is git-ignored.
 - Open Watcom C runtime, statically linked. `XHCIQUAL.MAP` names the modules
   individually against `C:\WATCOM\lib386\dos\clib3r.lib` (`_strcmp`,
   `strncmp.c`, `fopen.c`, and others). Static, read from the map.
@@ -580,7 +582,7 @@ tree, a publish uploads that zip to a GitHub release, and this project has
 done the first and never the second. "Published" in that usage names which
 asset filename was in use at a cut, and `README.md`'s link is written for the
 repository as it will be. The roadmap carries no clause for the upload at
-all, deliberately: Phase 14 closed on the cut, and the upload is one act of
+all: Phase 14 closed on the cut, and the upload is one act of
 the project owner's rather than work this repository can do or close. When
 it happens, this note is the sentence that moves.
 

@@ -190,8 +190,15 @@ $cases = @(
     # plausible verdict, and that line is the only thing that would notice.
     (Case "quick_none" @() $quick @("quick scan (read-only)","No USB host controller found","DISQUALIFIED")),
     (Case "quick_xhci" @("-device","qemu-xhci,id=hc,msi=off,msix=off") $quick @("Found 1 USB host controller","xHCI ","LOOKS QUALIFIED","Probe safety: PASS - no PCI configuration writes.","Next: XHCIQUAL xhci --poll-only")),
-    (Case "quick_ehci" @("-device","usb-ehci,id=hc") $quick @("Found 1 USB host controller","EHCI ","LOOKS QUALIFIED","Probe safety: PASS - no PCI configuration writes.")),
-    (Case "quick_ohci" @("-device","pci-ohci,id=hc") $quick @("Found 1 USB host controller","OHCI ","LOOKS QUALIFIED","Probe safety: PASS - no PCI configuration writes.")),
+    # **AN EHCI-ONLY OR OHCI-ONLY MACHINE IS DISQUALIFIED**, and these two
+    # cases pinned the opposite until the 2026-09-07 audit's I1. The quick
+    # scan's question is whether THIS driver can work on THIS machine, and a
+    # machine with no xHCI function has nothing for it to bind to - which is
+    # what the code's own comment always said it was testing and what the two
+    # readmes promise. The controllers are still found and still reported;
+    # what they may not do is carry the verdict.
+    (Case "quick_ehci" @("-device","usb-ehci,id=hc") $quick @("none of them xHCI","EHCI ","DISQUALIFIED","no xHCI (PCI class 0C0330)","Probe safety: PASS - no PCI configuration writes.")),
+    (Case "quick_ohci" @("-device","pci-ohci,id=hc") $quick @("none of them xHCI","OHCI ","DISQUALIFIED","no xHCI (PCI class 0C0330)","Probe safety: PASS - no PCI configuration writes.")),
     (Case "quick_xhci_ehci" @("-device","qemu-xhci,id=xhci,msi=off,msix=off","-device","usb-ehci,id=ehci") $quick @("Found 2 USB host controller","xHCI ","EHCI ","LOOKS QUALIFIED","Probe safety: PASS - no PCI configuration writes.")),
     (Case "quick_xhci_ohci" @("-device","qemu-xhci,id=xhci,msi=off,msix=off","-device","pci-ohci,id=ohci") $quick @("Found 2 USB host controller","xHCI ","OHCI ","Probe safety: PASS - no PCI configuration writes.")),
     (Case "quick_ehci_ohci" @("-device","usb-ehci,id=ehci","-device","pci-ohci,id=ohci") $quick @("Found 2 USB host controller","EHCI ","OHCI ","Probe safety: PASS - no PCI configuration writes.")),

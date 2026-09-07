@@ -247,6 +247,6 @@ The repository tracks no third-party binary on its own, although the two tool ex
 
 * `XHCISNAP.EXE` embeds the MSVC 6.0 runtime.
 
-Each ships with a `NOTICE.TXT` recording it, and the `LICENSE` scope note states their terms.
+Each ships with a `NOTICE.TXT` recording it, and the `LICENSE` scope note says that those runtimes carry their own terms and are outside the grant. Neither quotes the terms themselves.
 
 The full inventory, provenance methods and redistribution boundaries are in [docs/contributing/legal-provenance.md](docs/contributing/legal-provenance.md), which states facts, not legal conclusions.

@@ -156,7 +156,9 @@ On an xHCI-only Windows 98 machine that means an "Insert Disk" prompt naming
 the Windows 98 Second Edition CD-ROM during the copy, unless the Windows
 CABs are on the hard disk (OEM and Windows 98 QuickInstall installs). Insert
 the CD and click OK; if it then asks where to copy from, give it the CD's
-`WIN98` folder.
+`WIN98` folder. If the prompt is cancelled the driver still installs, but the
+USB 2.0 Root Hub sits at Code 2; that reads as a fault in this driver and is
+not one. Put the CD in and install the driver again.
 
 An upgrade from an earlier release can raise that prompt on a machine whose
 previous install did not, and that is expected rather than a fault.
@@ -168,10 +170,10 @@ Windows 2000 and Windows XP take theirs from the driver cache
 every install has and ask for nothing: on Windows XP all four out of
 `sp3.cab`, on Windows 2000 three out of `sp4.cab` and `usbui.dll` out of
 `driver.cab` beside it. Measured on Windows 2000 on 2026-09-07, installing on
-a machine that had never had a USB controller: no prompt of any kind. If the prompt is cancelled the driver still installs, but the
-USB 2.0 Root Hub sits at Code 2 (Windows 2000: a `0xc0000034` error naming
-`usbhub20.sys`); that reads as a fault in this driver and is not one. Put
-the CD in and install the driver again.
+a machine that had never had a USB controller: no prompt of any kind, and
+therefore nothing to cancel. Should the files be missing anyway, the failure
+looks the same as the cancelled 9x prompt above, spelled as a `0xc0000034`
+error naming `usbhub20.sys` rather than as Code 2.
 
 `docs/contributing/build-and-test.md` has the full procedure, the recovery
 rungs, and the bootstrap path for a machine that has no working USB until this
@@ -267,7 +269,7 @@ because a user meets them through this driver.
   then power-cycle. Recovery is complete and loses nothing.
 - The package writes `DisableSelectiveSuspend = 1` under
   `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB`, a machine-wide
-  setting, on both targets, because a sleeping xHCI controller cannot report
+  setting, on all four targets, because a sleeping xHCI controller cannot report
   a newly plugged device and Windows 98 otherwise idles it within a second
   once nothing at all is on the bus (any attached device keeps it awake,
   even one with no driver, so a laptop with internal USB devices never idles

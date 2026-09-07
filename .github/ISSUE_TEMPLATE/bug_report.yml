@@ -131,15 +131,20 @@ body:
       description: |
         Boot **real DOS** (not a DOS box inside Windows) and run:
 
-            XHCIQUAL --probe-only --log probe.log
+            XHCIQUAL --probe-only --no-page --log PROBE.LOG
 
         That step is read-only - it takes ownership of nothing and writes no
         PCI configuration register. If it does not crash the machine, continue
         with the full run:
 
-            XHCIQUAL --log full.log
+            XHCIQUAL --full --no-page --log FULL.LOG
 
-        Attach probe.log and full.log (whichever you got) to this report, or
+        The second one TAKES OVER THE CONTROLLER: it resets it and resets its
+        ports. `--log` on its own does not make a run read-only - it only says
+        where the report goes - so `--full` is written out here to say plainly
+        which of the two you are running.
+
+        Attach PROBE.LOG and FULL.LOG (whichever you got) to this report, or
         paste them here.
       render: text
     validations:

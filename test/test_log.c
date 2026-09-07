@@ -41,34 +41,7 @@
 #include <string.h>
 #include "../src/xhci_compat.h"
 #include "../src/xhci_log.h"
-
-static int failures;
-static int checks;
-
-#define CHECK(cond, what) check_impl((cond) ? 1 : 0, (what), __LINE__)
-
-static void check_impl(int cond, const char *what, int line)
-{
-    checks++;
-    if (!cond) {
-        failures++;
-        printf("FAIL %s:%d: %s\n", "test_log.c", line, what);
-    }
-}
-
-#define CHECK_EQ(got, want, what) \
-    check_eq_impl((unsigned long)(got), (unsigned long)(want), (what), __LINE__)
-
-static void check_eq_impl(unsigned long got, unsigned long want,
-                          const char *what, int line)
-{
-    checks++;
-    if (got != want) {
-        failures++;
-        printf("FAIL %s:%d: %s (got %lu, want %lu)\n",
-               "test_log.c", line, what, got, want);
-    }
-}
+#include "test_harness.h"
 
 /* ------------------------------------------------------------------ */
 /* The accounting nets                                                 */
@@ -85,11 +58,71 @@ static unsigned long appendCallsEver;
 static unsigned long drained;
 static unsigned long drainedEver;
 
+/*
+ * **The byte-conservation net this file's header promises, which until the
+ * 2026-09-07 audit's G7 did not exist.** `drained` was reset by `resetLog`
+ * and never read by anything; there was no appended-bytes accumulator and no
+ * identity assertion, so the second of the two identities the header names -
+ * "what the drains handed back plus what the ring still holds plus what was
+ * dropped equals what the appends put in" - was described and not enforced.
+ *
+ * It is stated as an invariant over the ring's own three quantities rather
+ * than over a second transcription of the record format, because the format
+ * is pinned byte for byte elsewhere in this file and restating it here would
+ * only be a third copy to keep in step. The quantity
+ *
+ *     log.Used + log.BytesDropped + (bytes this vector's drains returned)
+ *
+ * is the total number of bytes the ring has ever been handed in this vector.
+ * Every `xhciLogPut` raises exactly one of `Used` or `BytesDropped`, and every
+ * drain must return exactly as many bytes as it takes out of `Used`. So the
+ * quantity may only ever go UP, and by exactly the bytes put. A drain that
+ * emptied the ring while reporting fewer bytes - the regression the header is
+ * about, and the one that would make a flush claim to have published a log it
+ * silently ate - shows up here as a decrease, at the drain that caused it.
+ *
+ * `ringBytesIn` accumulates the increases; `checkByteConservation` asserts the
+ * accumulated figure still equals the live one. They can only disagree if a
+ * decrease happened.
+ */
+static unsigned long ringBytesIn;
+static unsigned long ringBytesInLast;
+static unsigned long ringBytesInEver;
+static unsigned long ringConservationChecks;
+static unsigned long ringConservationFailures;
+
+static void noteRingBytes(int line)
+{
+    unsigned long live;
+
+    live = (unsigned long)log.Used + log.BytesDropped + drained;
+    ringConservationChecks++;
+    if (live < ringBytesInLast) {
+        ringConservationFailures++;
+        printf("FAIL %s:%d: the ring lost %lu byte(s): %lu handed in, %lu "
+               "accounted for now\n",
+               "test_log.c", line, ringBytesInLast - live, ringBytesInLast,
+               live);
+        failures++;
+    } else {
+        ringBytesIn += live - ringBytesInLast;
+        ringBytesInEver += live - ringBytesInLast;
+    }
+    ringBytesInLast = live;
+}
+
+static void checkByteConservation(const char *where)
+{
+    check_eq_impl((unsigned long)log.Used + log.BytesDropped + drained,
+                  ringBytesIn, where, __FILE__, __LINE__);
+}
+
 static void appendOne(const char *label, ULONG value, ULONG hasValue)
 {
     appendCalls++;
     appendCallsEver++;
     XhciLogAppend(&log, label, value, hasValue);
+    noteRingBytes(__LINE__);
 }
 
 static ULONG drainInto(UCHAR *out, ULONG capacity)
@@ -99,6 +132,7 @@ static ULONG drainInto(UCHAR *out, ULONG capacity)
     n = XhciLogDrain(&log, out, capacity);
     drained += n;
     drainedEver += n;
+    noteRingBytes(__LINE__);
     return n;
 }
 
@@ -141,7 +175,11 @@ static ULONG drainAll(UCHAR *out, ULONG capacity, ULONG chunkSize)
 static void checkAppendIdentity(unsigned long extra, const char *where)
 {
     check_eq_impl((unsigned long)log.Appends + log.Suppressed,
-                  appendCalls + extra, where, __LINE__);
+                  appendCalls + extra, where, __FILE__, __LINE__);
+    /* The byte identity rides the same call sites as the record one, so a
+     * vector written later cannot opt out of either. */
+    noteRingBytes(__LINE__);
+    checkByteConservation(where);
 }
 
 static void resetLog(void)
@@ -155,6 +193,8 @@ static void resetLog(void)
     }
     appendCalls = 0;
     drained = 0;
+    ringBytesIn = 0;
+    ringBytesInLast = 0;
     log.Enabled = 1;
     /*
      * **Two switches now, because task 13-L.2 separated them.** `Enabled` is
@@ -563,6 +603,23 @@ static void testFailedHandoverEmptiesTheRing(void)
     CHECK_EQ(log.Flushes, 0, "a failed hand-over is not a flush");
     CHECK_EQ(log.FlushFailures, 1, "it is a failure");
     CHECK_EQ(log.FlushBytes, 0, "and moved no bytes");
+
+    /*
+     * The half that zero cannot show (G11): `FlushBytes` is accumulated
+     * UNCONDITIONALLY, before the verdict, so a short delivery contributes the
+     * part that really left while still counting as a failure. Reporting 0
+     * bytes taken agrees with an implementation that only accumulates on
+     * success, so a nonzero one has to be asserted too.
+     */
+    XhciLogFlushEnd(&log, 7, 0);
+    CHECK_EQ(log.Flushes, 0, "still not a flush");
+    CHECK_EQ(log.FlushFailures, 2, "a second failure");
+    CHECK_EQ(log.FlushBytes, 7,
+             "and the seven bytes that did leave are counted anyway");
+    XhciLogFlushEnd(&log, 5, 1);
+    CHECK_EQ(log.Flushes, 1, "a successful hand-over is a flush");
+    CHECK_EQ(log.FlushFailures, 2, "and adds no failure");
+    CHECK_EQ(log.FlushBytes, 12, "with its bytes added to the same total");
     CHECK_EQ(log.Used, 0, "the ring is empty whatever the sink said");
 
     /* The next record still fits, which is the property that matters. */
@@ -706,7 +763,7 @@ static void testVerbosityLadder(void)
         CHECK_EQ(log.VerbosityRefused, 0, "an in-range level is not refused");
         check_eq_impl(log.Enabled,
                       (level >= XHCI_LOG_VERBOSITY_RING) ? 1UL : 0UL,
-                      "recording is on at the ring rung and above", __LINE__);
+                      "recording is on at the ring rung and above", __FILE__, __LINE__);
     }
     /*
      * **The top of the ladder is asserted rather than assumed.** A merge that
@@ -791,7 +848,7 @@ static void testChannelConsentIsRungZero(void)
         check_eq_impl((log.Verbosity == XHCI_LOG_VERBOSITY_OFF) ? 1UL : 0UL,
                       (level == 0) ? 1UL : 0UL,
                       "the channel is shut at rung 0 and open above it",
-                      __LINE__);
+                      __FILE__, __LINE__);
     }
 
     /* The sink does not open the channel, and the channel does not select a
@@ -841,10 +898,10 @@ static void testAddressRecordsNeedTheTopRung(void)
         } else {
             check_eq_impl(log.Used, 0,
                           "no level below the top records an address",
-                          __LINE__);
-            check_eq_impl(log.Appends, 0, "nothing was appended", __LINE__);
+                          __FILE__, __LINE__);
+            check_eq_impl(log.Appends, 0, "nothing was appended", __FILE__, __LINE__);
             check_eq_impl(log.Suppressed, 1,
-                          "and the refusal is accounted for", __LINE__);
+                          "and the refusal is accounted for", __FILE__, __LINE__);
         }
         checkAppendIdentity(0, "address tier");
     }
@@ -971,6 +1028,12 @@ int main(void)
     CHECK(appendCallsEver > 100, "the append identity measured real appends");
     CHECK(drainedEver > XHCI_LOG_RING_BYTES,
           "the drain accounting measured a full ring's worth and more");
+    CHECK_EQ(ringConservationFailures, 0,
+             "no drain ever took a byte out of the ring without returning it");
+    CHECK(ringConservationChecks > 100,
+          "the byte-conservation net actually ran");
+    CHECK(ringBytesInEver > XHCI_LOG_RING_BYTES,
+          "and saw more than a ring's worth of bytes handed in while it did");
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures;

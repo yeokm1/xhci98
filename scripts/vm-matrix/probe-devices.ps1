@@ -84,12 +84,43 @@ $fs.Close()
 # models get one each.  Sharing them made usb-serial read as "refused" with
 # `chardev 'probechr' is already in use` - a harness fault wearing a device
 # model's name, which is the failure mode this whole table exists to avoid.
+#
+# **`file` chardevs, not `null`** - the 2026-09-07 audit's H24, and trap 14 in
+# README.md is the whole reason. `usb-serial` and `usb-braille` put themselves
+# on the bus only when their chardev is OPEN, and a `null` chardev never is:
+# both models realise with `attached=false`, `qom-set attached true` is refused
+# ("not writable"), and the device never appears. Phase 10 read that as a
+# driver result and wrote `ExpectNoDriver` entries on it. The runner and
+# `prepare-image.ps1` were both moved to `file` chardevs then; this script was
+# not, so the population table - which is the authority on what the matrix can
+# present at all - was still measuring the harness rather than the device.
+# Measured: `null` gives false, `file` gives true, on both models.
+#
+$probeChr1 = Join-Path $scratch "probechr1.log"
+$probeChr2 = Join-Path $scratch "probechr2.log"
 $backendArgs = @(
     "-drive", ("if=none,id=probedrv,file={0},format=raw" -f $scratchImg),
     "-netdev", "user,id=probenet",
-    "-chardev", "null,id=probechr1",
-    "-chardev", "null,id=probechr2"
+    "-chardev", ("file,id=probechr1,path={0}" -f $probeChr1),
+    "-chardev", ("file,id=probechr2,path={0}" -f $probeChr2)
 )
+
+#
+# Is a device QEMU has realised actually on the bus? `auto_attach = 0` models -
+# the SCSI adapters with no LUN, and the chardev models whose backend is not
+# open - sit in their port with `attached` false, and a guest sees nothing.
+# The matrix runner asks the same question the same way (audit H24).
+#
+function Test-ProbeDeviceAttached {
+    param([Parameter(Mandatory = $true)][string]$Id)
+    $qom = "/machine/peripheral/" + $Id
+    $state = ((Get-MonitorText -Port $MonitorPort -Command ("qom-get {0} attached" -f $qom)) -join " ").Trim()
+    # A model with no `attached` property at all answers with an error rather
+    # than false, and that is not this check's finding: most USB models have
+    # no such property and are on the bus the moment they realise. Only an
+    # explicit false counts against a device.
+    return (-not ($state -match "(?i)\bfalse\b"))
+}
 
 # addArgs: what to append to device_add.  skip: why the model is not probed.
 #
@@ -122,7 +153,21 @@ $qemuArgs = @(
     "-S",
     "-M", "pc",
     "-m", "64",
-    "-monitor", ("telnet:127.0.0.1:{0},server,nowait" -f $MonitorPort),
+    #
+    # **A RAW SOCKET, NOT TELNET** (the 2026-09-07 audit's H25). Every other
+    # script here launches with `tcp:...,server=on,wait=off`, and they all talk
+    # to it through the same `lib\monitor.ps1` - which reads bytes and strips
+    # ANSI escapes and backspaces, and nothing else. A telnet monitor
+    # negotiates first: QEMU sends IAC option bytes (0xFF...) before the
+    # banner, and those are not escapes, so they arrive inside the text this
+    # script then matches `info usb` lines against. It worked because the
+    # negotiation lands ahead of the first reply and the patterns are anchored
+    # - which is luck, not a contract, and it is the population table's
+    # correctness that rides on it. The connect-time prompt synchronisation in
+    # `lib\monitor.ps1` makes the difference matter more, not less: it now
+    # looks for a `(qemu)` prompt in whatever the connect produced.
+    #
+    "-monitor", ("tcp:127.0.0.1:{0},server=on,wait=off" -f $MonitorPort),
     "-device", ("{0},id=xhci,p2=15,p3=2" -f $XhciDevice)
 ) + $backendArgs
 
@@ -234,6 +279,17 @@ try {
                     # must never be reported as an attach.
                     $row.Status = "attached, invisible"
                     $row.Note = ("device_add returned no error but info usb does not list id={0}" -f $id)
+                } elseif (-not (Test-ProbeDeviceAttached -Id $id)) {
+                    # **On the list is not the same as on the bus** (audit
+                    # H24). A model that realises with `auto_attach = 0` - the
+                    # SCSI adapters without a LUN, and the chardev models
+                    # whose backend is not open - can be listed by `info usb`
+                    # and still be electrically absent, which is what the
+                    # guest actually sees. The population table is what every
+                    # later expectation is written against, so a device that
+                    # is not really presentable must not be recorded as one.
+                    $row.Status = "listed, not attached"
+                    $row.Note = "info usb lists it but qom-get attached is false: QEMU realised the model and never put it on the bus, so a guest sees nothing"
                 } elseif ($row.Port -match '\.') {
                     # Nothing should be behind anything: the bus was empty when
                     # this device was added.  If it is, the reading is not a

@@ -83,7 +83,7 @@ Run all setup helpers (both target VMs):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\setup-all.ps1 `
-  -Win98Iso D:\iso\win98se.iso -Win2KIso D:\isos\win2ksp4.ISO -CreateDisk
+  -Win98Iso D:\isos\Win98SE.iso -Win2KIso D:\isos\win2ksp4.ISO -CreateDisk
 ```
 
 Or run only one component:
@@ -91,7 +91,7 @@ Or run only one component:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\setup-msvc6.ps1
 powershell -ExecutionPolicy Bypass -File scripts\setup-w2kddk.ps1
-powershell -ExecutionPolicy Bypass -File scripts\setup-qemu.ps1 -Win98Iso D:\iso\win98se.iso -CreateDisk
+powershell -ExecutionPolicy Bypass -File scripts\setup-qemu.ps1 -Win98Iso D:\isos\Win98SE.iso -CreateDisk
 powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win2k.ps1 -Win2KIso D:\isos\win2ksp4.ISO -CreateDisk
 ```
 
@@ -103,7 +103,9 @@ Setup scripts:
 | `scripts\setup-w2kddk.ps1` | Validates `tools\WIN2KDDK.EXE` and writes the DDK build wrappers into `scripts\local\`; `-RunInstaller` launches the GUI setup, which is never needed |
 | `scripts\install-w2kddk-cabs.ps1` | Unpacks the DDK build environment into `tools\ntddk` directly from the `WIN2KDDK.EXE` payload CABs: no GUI installer, no registry, nothing under `C:\`. `-DdkPath` puts it elsewhere (see notes below) |
 | `scripts\setup-qemu.ps1` | Checks/configures the Win98 SE (Phase 2a) QEMU launchers; use `-Install` to try Winget QEMU install; use `-CreateDisk` for VM images |
-| `scripts\test-qemu-launchers.ps1` | Generates all three VMs' launchers against stand-in QEMU files and verifies per-boot debug-console log rotation plus the SMP default/fallback flags; run by `build-driver.cmd` |
+| `scripts\check-flavour-marker.ps1` | Reads the flavour marker string out of a linked `.sys` and refuses anything but exactly one, matching the flavour asked for. `build-driver.cmd` runs it on each binary after the import gate; `make-release.ps1` reads the same marker to refuse publishing a `qemu` build as the debug download. It is what says a binary in `objfre` really is the release flavour, which `VS_FF_DEBUG` cannot, since `debug` and `qemu` are both checked builds |
+| `scripts\source-stamp.ps1` | `-Write <objdir>` hashes every file `src\sources` names plus every header in `src\` and records the list beside the built binary; `-Check <objdir>` recomputes it. `build-driver.cmd` writes one after each successful build and `make-release.ps1` refuses to publish a `.sys` whose sources have changed since - the driver's equivalent of the "EXE newer than its own sources" refusals the release script already makes for the two DOS tools. Content, not timestamps: the script says why at length |
+| `scripts\test-qemu-launchers.ps1` | Generates all six VMs' launchers (2a, 2b, the SMP 2d, the xHCI-only Windows 2000, Windows ME and Windows XP) against stand-in QEMU files and verifies per-boot debug-console log rotation, the SMP default/fallback flags, and that no two launchers share a QEMU monitor port; run by `build-driver.cmd` |
 | `scripts\setup-qemu-win2k.ps1` | Same for the Win2000 SP4 (Phase 2b) VM, the second first-class target. Monitor port 55556, and it also stages `usbd.sys` (`-Win2KUsbdSys`) |
 | `scripts\setup-qemu-winxp.ps1` | The Windows XP SP3 guest of roadmap Phase 19 (`vm\winxp.img`, monitor 55559, transfer drive `vm\xferxp`): WHPX with `kernel-irqchip=off`, ACPI on, no companion EHCI unless the run launcher is given `ehci` as its second argument; see "Windows XP target VM" |
 | `scripts\setup-qemu-win2k-smp.ps1` | The Phase 2d SMP stress VM (`vm\win2k-smp.img`, monitor 55557). Defaults to the checkpoint-proven `whpx,kernel-irqchip=off` rung; `-Accel`/`-AcpiOff`/`-Smp`/`-MemoryMb` select another Phase 2d task-2 rung so each is a regenerated launcher, not a hand-edited copy |
@@ -327,17 +329,17 @@ One tooling consequence to check for whenever a string in `src\xhci98.inf` chang
 
 Two consequences. The version resource is not decorative on Win98: the 16-bit engine does render an NT-style `VERSIONINFO` out of a `.sys`, and it is the only place on this target the four-part version appears at all. So when asking a Win98 user which build they are running, say "Driver File Details", not "the Driver tab": the Driver tab shows only a date, and two packages released on the same day are indistinguishable there. Two development builds carrying the same `08/08/2026` date and different version fields both ran on this VM within the hour.
 
-On Windows 2000 the halves are the other way round, and one of them is missing. This remains an open question. Measured on the 2b VM the same day: Driver Provider `xhci98 Project`, Driver Version showing the four-part version the package carried, Driver Date `Not available`, Digital Signer `Not digitally signed`. So each target surfaces one half of `DriverVer` and a different half, and Win2000 drops the date entirely.
+On Windows 2000 the halves are the other way round, and one of them is missing. Measured on the 2b VM the same day: Driver Provider `xhci98 Project`, Driver Version showing the four-part version the package carried, Driver Date `Not available`, Digital Signer `Not digitally signed`. So each target surfaces one half of `DriverVer` and a different half, and Win2000 drops the date entirely.
 
 The control rules out the obvious answer: Microsoft's own `Intel(r) 82801DB/DBM USB Enhanced Host Controller` on the same machine shows `Driver Date: 15-Feb-03`, from SP4's `USB.INF` `DriverVer=2/15/2003,5.1.2600.1`. This build populates the field, so "Not available" is about our package rather than about Windows 2000. Two further facts narrow it: our `DriverVer` line clearly parsed (the version half is displayed), and the date value itself is not absurd (Win98's engine accepted the same `08/08/2026` and rendered `8-8-2026`).
 
 Of the three candidates, batch 11-V's stage B eliminated one:
 
 - The date value: ruled out. Stage B5 installed `PKG2003`, byte-identical to the package beside it except that `DriverVer` reads `02/15/2003`, the date Microsoft's entry renders correctly, and it behaved the same. Whatever Windows 2000 objects to, it is not the year 2026.
-- Signed vs unsigned: still open. Microsoft's entry is signed by the Windows 2000 Publisher and ours is not. If Win2000 takes Driver Date from the package's catalog rather than from `DriverVer`, every observation above fits, and it would be unfixable here, since code signing is out of scope.
-- Zero-padding: still open. Ours is `02/15/2003` against Microsoft's `2/15/2003`. Separating this from signing needs an unpadded package, which this repository's own INF-gate rule `^\d{2}/\d{2}/\d{4}` refuses to produce, so the remaining step needs a narrow, deliberate exception rather than another run.
+- Zero-padding: ruled out, by task 12.4. An unpadded package (`make-package.ps1 -UnpaddedDriverVerExperiment`, staged through the gate's `-AllowUnpaddedDriverVer` relaxation) was installed on 2b and recorded no `DriverDate` either; the driver key held no such value at all. "Staging the unpadded-date experiment package (task 12.4)" below is the procedure and the reading.
+- Signed vs unsigned: the survivor, by elimination rather than by a measurement of its own. Microsoft's entry is signed by the Windows 2000 Publisher and ours is not. If Win2000 takes Driver Date from the package's catalog rather than from `DriverVer`, every observation above fits, and it would be unfixable here, since code signing is out of scope.
 
-This is not cosmetic. `DriverVer`'s date is the first key Windows 2000 ranks candidate drivers by; if it is never recorded, that ranking cannot be using it. Stage B showed the practical consequence directly (the package could not upgrade itself on Windows 2000, declined four ways) and found the remedy: delete the cached `%SystemRoot%\inf\oemN.inf` and its `.pnf`. Task 11-V.3 covered that half and is closed. What is left is separating signing from padding, which is task 12.4; it needs no machine beyond a 2b guest.
+This is not cosmetic. `DriverVer`'s date is the first key Windows 2000 ranks candidate drivers by; if it is never recorded, that ranking cannot be using it. Stage B showed the practical consequence directly (the package could not upgrade itself on Windows 2000, declined four ways) and found the remedy: delete the cached `%SystemRoot%\inf\oemN.inf` and its `.pnf`. Task 11-V.3 covered that half and is closed. Separating signing from padding was task 12.4, also closed: padding is excluded, and "unsigned" stands by elimination with no run left that could tighten it.
 
 `Driver File Details` also lists `xhci98.tmp` beside `xhci98.sys`, `NTKERN.vxd` and `USBD.SYS`. That is the `[Xhci.CopyFiles]` temporary name; Win98 copies through it correctly and then leaves it behind and registers it. Cosmetic, and not a reason to drop the third field: without it a replace over the loaded binary fails outright. Confirm which binary is live from the trace's `DriverEntry (built ...)` line rather than from that list.
 
@@ -413,7 +415,9 @@ In order: validate the flavour word and the optional `-NoTargetEvidence`,
 generate `src\usbport.lib` if it is missing, run the import gate's
 authenticated-baseline regression tests and its flavour-rules tests, run the
 INF gate's self-tests and then the gate on `src\xhci98.inf`, run the packager
-self-tests and the QEMU launcher self-tests, run `test\run-host-tests.cmd`,
+self-tests, the QEMU launcher self-tests, the vm-matrix verdict self-tests and
+the tracked batch files' line-ending check, run the XHCISNAP report self-test
+if `xhcisnap\XHCISNAP.EXE` has been built, run `test\run-host-tests.cmd`,
 `build` each requested flavour in its own child `cmd` (`setenv.bat` is not
 idempotent across flavours), fail on a build error or on the presence of
 `src\build{chk,fre,chk_qemu}.err`, then run the post-link import gate and the
@@ -474,7 +478,7 @@ any binary:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\import-gate\check-imports.ps1
-powershell -File scripts\import-gate\check-imports.ps1 -Image out\xhci98.sys -Flavor debug
+powershell -File scripts\import-gate\check-imports.ps1 -Image out\pkg-debug\xhci98.sys -Flavor debug
 ```
 
 With no `-Image` it checks whichever of `src\objfre\i386\xhci98.sys`,
@@ -985,9 +989,10 @@ set) and the driver's reinitialize path is what runs instead; one 2a boot read
 4, one per pre-hub resume, with all ten hot-plug stages landing. So on a run
 with traffic, the evidence that nothing was lost is that every stage landed,
 and the counter only says how many idle windows there were. On 2b it has read
-0 in every matrix run recorded so far, and the "never" this sentence used to
-state was generalised from the Phase 3 spike's window (roadmap Phase 20,
-F18). The observation was taken on 2026-09-06 (roadmap task 20.7), in the
+0 in every matrix run recorded so far, which is a reading about those runs
+rather than a claim that Windows 2000 never idle-suspends this controller: the
+windows they cover are short. The observation was taken on 2026-09-06 (roadmap
+task 20.7), in the
 virtual machine, under two different sets of conditions on two HALs, and
 neither showed an idle suspend:
 
@@ -1096,7 +1101,10 @@ leave enabled.
 The one route the architecture does offer is a PCI PME# wake,
 and `qemu-xhci` exposes no PCI Power Management capability at all (capability
 chain `@0x90 -> 0x11` MSI-X, next `0x00`), so it cannot be built against or
-tested in this vehicle. It is carried to Phase 13.
+tested in this vehicle. Phase 13 closed with no clause for it and none is
+owed: `lessons.md`, "PME# cannot be reached in this vehicle", records it as a
+property of the vehicle rather than a result, and there is no
+`PMCSR.PME_En` on this controller to arm.
 
 Two measurements from the same session belong beside the test-harness advice
 below. usbport does not call the miniport at all while it holds the controller
@@ -1152,7 +1160,7 @@ Hub trees have two further ceilings, both measured and neither obvious from the 
   Measured on the 2a VM: `device_add usb-mouse` behind a hub made `info mice` report `* Mouse #5: QEMU HID Mouse` as current, and `device_add usb-kbd` likewise took the key events, while Win98's Add New Hardware Wizard for those very devices was still open and modal. The wizard needs input to dismiss; the input was routed to the device the wizard was installing. The pointer is recoverable with `mouse_set <n>` (pick the `QEMU PS/2 Mouse` line from `info mice`), but there is no `keyboard_set`; the only way back is `device_del` on the `usb-kbd`.
 
   So dismiss every hardware wizard before adding the next HID device, and do not leave a `usb-kbd` attached while you still need to type in the guest. The same routing rule (QEMU sends keyboard input to the most recently added keyboard) means a `usb-kbd` with no guest driver silently swallows every keystroke and the guest reads as hung; when a run only needs a High-Speed HID on the bus, attach a `usb-tablet` instead. This is a QEMU input-routing trap and says nothing about the driver; it cannot occur on bare metal, where the keyboard is physical.
-- An attached hub keeps Win98's controller out of idle suspend. The trap documented above ("A replug onto an idle-suspended controller is invisible") applies to the first attach of a boot and then stops applying: a hub's interrupt pipe is polled continuously, so once one is enumerated the bus never goes idle. One 2a boot suspended four times, all before the first hub, and zero times across nine subsequent hot-plug stages. Useful in both directions: it makes hub churn easy to drive, and it means a run that needs an idle-suspend window (roadmap rider B1) cannot take it on a boot that has a hub attached.
+- An attached hub keeps Win98's controller out of idle suspend. The trap documented above ("A replug onto an idle-suspended controller is invisible") applies to the first attach of a boot and then stops applying: a hub's interrupt pipe is polled continuously, so once one is enumerated the bus never goes idle. One 2a boot suspended four times, all before the first hub, and zero times across nine subsequent hot-plug stages. Useful in both directions: it makes hub churn easy to drive, and it means a run that needs an idle-suspend window (`docs/issues/05-idle-suspend-and-disableselectivesuspend.md`) cannot take it on a boot that has a hub attached.
 
 Four clauses the emulated bus cannot present at all, each measured rather than assumed, so that nobody spends a boot on them again:
 
@@ -1411,9 +1419,10 @@ project has seen one.
 
 The harness side: `prepare-image.ps1 -Target 2b-fresh -Clone` reads
 `win2k-xonly.img @ win2k-xonly-clean-install`. The old `fresh-2b.img`
-(cloned from `phase2b-clean`, stamped `base-1.0.0.0-qemu`) is re-cloned with
-`-Clone -FreshCopy` before the next post-release run, whose Windows 2000 leg
-is then itself an xHCI-only install of the asset.
+(cloned from `phase2b-clean`, stamped `base-1.0.0.0-qemu`) was re-cloned with
+`-Clone -FreshCopy` on 2026-09-07 and re-stamped `base-1.0.2.0-qemu`, so the
+`1.0.2.0` post-release run's Windows 2000 leg is itself an xHCI-only install
+of the asset (`runs/run-20.md`, "The re-stamp").
 
 ### Windows ME target VM (`2e`)
 
@@ -1422,17 +1431,22 @@ the SweetLow-stack work, and the same evening a Windows ME guest
 (`vm\winme.img`, target `2e`) was installed and the driver observed on it
 under SweetLow's stack: registration, `StartController`, the root-hub
 callbacks, then a HID mouse, a mass-storage device and a composite (audio)
-device, all bound. What tier that makes Windows ME is the owner's decision
-(roadmap task 18.4), and no document names it as supported until that is
-taken. What follows is what was established statically from the owner's
+device, all bound. The tier that makes Windows ME was decided by the
+owner and closed as roadmap task 18.4: supported in virtual machines, under
+SweetLow's stack only, with no checkpoint tax, stated the way Windows 2000's
+status is stated (`AGENTS.md`, "Windows ME is a third target of that same
+standing"). What follows is what was established statically from the owner's
 Windows ME OEM CD image (the `win9x\` directory's `PRECOPY1.CAB`, read with
 7-Zip; nothing executed), the recipe, and what the run showed.
 
 Its launchers are generated by `scripts\setup-qemu.ps1`'s Windows ME half and
-listen on monitor port 55560 (the 2a base plus 5), chosen clear of 2a/55555,
-2b/55556, 2d/55557, the ACPI-HAL Windows 2000 machine's 55558 and XP's 55559;
-until the 2026-09-05 audit the ME launcher took 55558 and could not run
-beside that machine.
+listen on monitor port 55561 (the 2a base plus 6), chosen clear of 2a/55555,
+2b/55556, 2d/55557, the ACPI-HAL Windows 2000 machine's 55558, XP's 55559 and
+the xHCI-only Windows 2000 machine's 55560; until the 2026-09-05 audit the ME
+launcher took 55558 and could not run beside the ACPI machine, and until the
+2026-09-07 audit it took 55560 and could not run beside the xHCI-only one.
+`scripts\test-qemu-launchers.ps1` asserts that no two generated launchers share
+a monitor port.
 
 Why it is expected to be close. Windows ME is the same 16-bit setup engine
 and the same VxD-hosted WDM model as Windows 98 SE, one WDM revision newer
@@ -1548,11 +1562,12 @@ at the console, the host side through `prepare-image.ps1`):
   under Sound, video and game controllers; the controller and "USB 2.0 Root
   Hub" clean, no refusal counter moved.
 
-What Windows ME becomes (a third first-class target with the full checkpoint
-tax `AGENTS.md` describes, or a supported-in-VM target stated the way
-Windows 2000's status is stated) is the owner's decision, roadmap task 18.4,
-open at the time of writing; until it is taken no document names Windows ME
-as supported.
+What Windows ME became was settled by the owner as roadmap task 18.4: not a
+third first-class target with the full checkpoint tax `AGENTS.md` describes,
+but a supported-in-VM target stated the way Windows 2000's status is stated,
+under SweetLow's stack only. `AGENTS.md`, `README.md`, the release notes,
+both issue forms, the INF header comment, the generated `readme.txt` and the
+acceptance test (rows 4.5, 7.7, 7.8) all name it that way.
 
 ### Windows XP target VM (roadmap Phase 19)
 
@@ -1619,7 +1634,12 @@ what it reproduces.
    both known values are accepted since Phase 3),
    `USBPORT_RegisterUSBPortDriver status`, `StartController`, the `RH_*`
    family; then a hot-plugged mouse, `usb-storage`, and Device Manager
-   disable, re-enable, remove and rescan (roadmap task 19.3, still owed).
+   disable, re-enable, remove and rescan (roadmap task 19.3, closed: the door
+   sequence clean where Windows 98 under NUSB bugchecks, `usb-storage`
+   formatted, written and read back, and `usb-audio` bound as a composite
+   with its isochronous endpoint opened; both bound on their second attach
+   only, which is `docs/issues/04-xp-restore-device-ep0-remove.md`, fixed in
+   `1.0.1.0`).
 
 What the first day showed (2026-09-03, the owner at the console; the
 `first`, `ehci`, `dss` and `p194` trace tags in `vm\`; every run below up
@@ -3990,14 +4010,15 @@ memory. Shape:
 |---|---|---|
 | Both | `[Version]` | `$CHICAGO$`, `Class=USB` + the existing USB ClassGUID, `LayoutFile=layout.inf` ("The files the OS supplies" below), `DriverVer` per "Versioning the driver" above (the number moves, so read it out of `src/xhci98.inf` rather than from this row) |
 | Both | `[XhciModels]` | `%XhciDesc%=Xhci.Dev,PCI\CC_0C0330`, one class-code entry, the analog of the references' `PCI\CC_0C0320` |
-| Win98 | `[Xhci.Dev]` | `AddReg=Xhci.AddReg`, `CopyFiles=Xhci.CopyFiles,Xhci.CopyW98` |
+| Win98 | `[Xhci.Dev]` | `AddReg=Xhci.AddReg,Xhci.AddReg.Global` (the second since 1.0.1.0, the 9x half of the `DisableSelectiveSuspend` write), `CopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI` (the third since 1.0.2.0) |
 | Win98 | `[Xhci.AddReg]` | `HKR,,DevLoader,,*NTKERN` + `HKR,,NTMPDriver,,xhci98.sys` |
-| Win2000 | `[Xhci.Dev.NTx86]` | `AddReg=Xhci.AddReg.NT,Xhci.AddReg.Global` (the second since 1.0.1.0, the NT half of the `DisableSelectiveSuspend` write), `CopyFiles=Xhci.CopyFiles,Xhci.CopyNT` |
+| Win2000 | `[Xhci.Dev.NTx86]` | `AddReg=Xhci.AddReg.NT,Xhci.AddReg.Global` (the second since 1.0.1.0, the NT half of the `DisableSelectiveSuspend` write), `CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI` (the third since 1.0.2.0) |
 | Win2000 | `[Xhci.Dev.NTx86.Services]` | `AddService=xhci98,0x00000002,Xhci.AddService` |
 | Win2000 | `[Xhci.AddService]` | `ServiceBinary=%12%\xhci98.sys`, type 1, start 3, error 1, `LoadOrderGroup=Base` |
 | Shared | `[Xhci.CopyFiles]` | `xhci98.sys,,xhci98.tmp` -> `10, System32\Drivers` |
 | Win98 | `[Xhci.CopyW98]` | `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, both fetched from the OS's own install source through `LayoutFile` (neither is in `[SourceDisksFiles]`). The second is Windows 98's composite parent; on the NT targets the same name is the OS's own hub driver, and the NT row copies it too. |
 | Win2000 | `[Xhci.CopyNT]` | `usbport.sys,,,16`, `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, from `Driver Cache\i386` through `LayoutFile`. `usbd.sys` alone until 1.0.1.0; an NT install that never had a USB controller has none of the three (the Windows XP guest of 2026-09-03) |
+| All four | `[Xhci.CopyUI]` | `usbui.dll,,,16` -> `11, System32`, the one OS-supplied row that does not go to dirid 10, on all four install paths since 1.0.2.0. It is the root hub's property-page provider, which the NT targets' own INFs already name; `[DestinationDirs]` carries `Xhci.CopyUI=11` for it |
 | Both | `[DefaultInstall]` / `[DefaultInstall.NTx86]` | right-click pre-stage; the 9x one also copies the INF to `%17%` |
 
 Four decisions in it depart from the references, each for a reason that would
@@ -4156,8 +4177,12 @@ own, by installing over the already-installed image where flag 16 skips the
 three drivers, and that was silent too. On Windows XP the file is in
 `sp3.cab` beside `usbport.sys` and `usbhub.sys`, so it is free; on 9x it is
 on the same BASE cab as `usbd.sys` and `usbhub.sys`, so it rides the Insert
-Disk prompt the install already raises. The Windows 98, Windows ME and
-Windows XP install legs are still to be re-read against this INF.
+Disk prompt the install already raises. The Windows 98, Windows ME and Windows XP install legs were read against
+this INF on 2026-09-07 and all three completed as described
+(`docs/contributing/runs/run-20.md`, "The asset legs"; roadmap 20.9). They
+are not re-read separately again: `docs/using/release-acceptance-test.md` step
+4 is the standing vehicle for them, its four per-target rows naming the file
+and the cabinet each target draws it from.
 
 What the two NT CDs say, read statically on 2026-09-03 (7-Zip on the ISOs,
 `expand` on the `.IN_` files; nothing executed). The last three fields of a
@@ -4181,7 +4206,8 @@ loads, and this package cannot load without them. The XP guest's disk,
 extracted on the host after the 1.0.0.1 install, held `usbcamd.sys`,
 `usbintel.sys`, the `usbd.sys` that INF's own row had placed, and no
 `usbport.sys` or `usbhub.sys` anywhere, `dllcache` included. `usbhub20.sys`
-is deliberately on no path: Windows 2000 SP4's own `USB.INF` binds
+is on no path, by the owner's decision of 2026-09-03: Windows 2000 SP4's own
+`USB.INF` binds
 `USB\ROOT_HUB20` to it and its `[ROOTHUB2.NT]` section copies it from the
 cache when usbport creates that PDO (how every Phase 2 image got the file),
 and XP has no such file (its `usbport.inf` binds `ROOT_HUB20` to
@@ -4268,9 +4294,12 @@ The gate enforces the wiring, because every way of breaking it is silent:
 `OS-DEST`, `OS-DEFAULT`) requires `LayoutFile=layout.inf`, no Microsoft file
 in `[SourceDisksFiles]` under its own or a 1.0.0.0 media name, `usbd.sys`
 and `usbhub.sys` on both device-install paths and both right-click paths,
-`usbport.sys` on the NT ones and not the Windows 98 ones, `usbhub20.sys` on
-none, each under its own name with flag 16 and no overwrite flag to
-`10, System32\Drivers`; `PKG-MSFILE` refuses a staged package holding one.
+`usbport.sys` on the NT ones and not the Windows 98 ones, `usbui.dll` on all
+four, `usbhub20.sys` on none, each under its own name with flag 16 and no
+overwrite flag, and each to its own destination: the three drivers to
+`10, System32\Drivers` and `usbui.dll` alone to `11, System32`, which is the
+per-row destination `OS-DEST` grew in 1.0.2.0. `PKG-MSFILE` refuses a staged
+package holding any of them.
 The `SUSP-*` rules (`SUSP-MISSING`, `SUSP-DUP`, `SUSP-VALUE`) require each
 of the four install routes, device install and right-click Install on each
 target, to write `Services\USB\DisableSelectiveSuspend` once, as a DWORD 1.
@@ -4594,9 +4623,17 @@ Analysis" below before reverting the snapshot that destroys it.
 
 ## Debugging
 
-### Debug Build Output
+### Per-line trace output, and which flavour has it
 
-In a debug build, `DbgPrint` calls (inside `#if DBG` guards) emit to the kernel debugger, if one is attached.
+There are three flavours, not two, and the per-line trace belongs to exactly one of them. `src/sources` sets `-DXHCI_DBG_LIVE -DXHCI_DBG_E9` for `chk_qemu` alone; `src/xhci_dbg.h` derives `XHCI_DBG_TRACE` from `DBG && defined(XHCI_DBG_LIVE)`, and every trace site is guarded on `XHCI_DBG_TRACE` rather than on `#if DBG`. So:
+
+- `release` (`fre`): no trace sites at all.
+- `debug` (`chk`): a checked build with assertions and the counter set, and **no per-line trace**. It prints nothing. This is the flavour the download ships beside `release`, and a user asked for "the debug build's output" has none to give.
+- `qemu` (`chk_qemu`): the only flavour with the per-line trace, written to the port-0xE9 debug console. It is never published.
+
+Do not write `#if DBG` around anything that touches this channel: an earlier cut of the split did, in `src/xhci_probe.c`, and left two sites calling functions the `debug` build no longer compiles. `src/xhci_dbg.h` states the rule at its head. `docs/contributing/design/08-build-flavours-and-the-log-channel.md` is why the split exists.
+
+When a `qemu` build's `DbgPrint`-style output is wanted from inside the guest rather than off port 0xE9, it emits to the kernel debugger if one is attached.
 
 Win9x kernel debugging caveat: WinDbg's KD protocol does not support Win9x. The Win9x-family kernel debugger is `WDEB386.EXE` (ships with the 9x DDK), and it drives over a null-modem serial link. This project does not use it and does not plan to: no fleet machine has an RS-232 port, so on bare metal there is nothing to attach it to, and inside QEMU the GDB stub below is strictly better and needs no guest-side setup. Recorded so that "Win98 has no kernel debugger" is not read into this: it has one; this project has no vehicle for it. In practice, all three rungs actually used are guest-side or host-side:
 

@@ -587,6 +587,35 @@ foreach ($m in $models) {
                     Add-Failure "PATH-W98" ("[{0}] sets NTMPDriver to '{1}' but its own CopyFiles delivers ({2}). Windows 98 would write the loader value and never copy the file it names; the device shows a yellow bang with no diagnostic." -f $base, $d, ($w98Delivered -join ', '))
                 }
             }
+
+            #
+            # **The temporary name on the driver's own copy row**, which is the
+            # 2026-09-07 audit's H10: a documented Windows 98 trap with no rule
+            # behind it. Removing the third field passed the whole gate, and
+            # only the tracked footprint diff noticed - a diff whose likely
+            # answer is to regenerate the footprint.
+            #
+            # Windows 98's 16-bit engine copies a file that is already loaded
+            # by writing it under a temporary name and renaming at the next
+            # boot. Without the third field the replace over the running
+            # binary fails outright, which is the update-over-install path
+            # every user with an earlier release takes. The cost of having it
+            # is cosmetic and is published: the .tmp is left in
+            # System32\Drivers and listed in Driver File Details.
+            #
+            foreach ($cf in $w98Copy) {
+                if ($cf.StartsWith('@')) { continue }
+                foreach ($e in (Get-Section $inf $cf)) {
+                    $fields = @($e.Text -split ',' | ForEach-Object { $_.Trim() })
+                    $dst = $fields[0]
+                    if ($dst -eq "" -or -not ($ntmpFiles -contains $dst)) { continue }
+                    $temp = ""
+                    if ($fields.Count -ge 3) { $temp = $fields[2] }
+                    if ($temp -eq "") {
+                        Add-Failure "W98-TEMPNAME" ("[{0}] line {1} copies '{2}' with no temporary-name field. On Windows 98 that is the file NTMPDriver names, so an update over an install where it is already loaded cannot replace it and fails; the third field ('{2},,xhci98.tmp') is what makes the replace work. Its cost is the cosmetic .tmp left behind, which the release notes publish." -f $cf, $e.Line, $dst)
+                    }
+                }
+            }
         }
     }
 
@@ -903,6 +932,15 @@ $osNeverNamed = @(
 # starts carrying a Microsoft file again must be refused whichever name it
 # hides under.
 $retiredMediaNames = @("usbd98.sys", "usbd2k.sys", "usbhub98.sys")
+# Every Microsoft file name PKG-MSFILE refuses on the media: the four the OS
+# supplies, the three retired 1.0.0.0 media names, and the never-named ones.
+# usbhub20.sys was missing from this set until the 2026-09-07 audit's H6, so a
+# staged package holding it passed the package scan - against AGENTS.md, which
+# says "the INF gate's OS-* and PKG-MSFILE rules refuse it". OS-NEVER covers
+# only the INF; nothing covered the media.
+$osNeverNamedNames = @($osNeverNamed | ForEach-Object { $_.File.ToLowerInvariant() })
+$pkgRefusedNames = @($osSuppliedNames + $retiredMediaNames + $osNeverNamedNames |
+                     Sort-Object -Unique)
 
 # ---- BOTH-SOURCE: files, SourceDisksFiles, SourceDisksNames --------
 
@@ -1077,6 +1115,7 @@ function ConvertTo-CopyFlags {
 $COPYFLG_NOVERSIONCHECK       = 0x00000004   # ignore versions and overwrite target
 $COPYFLG_FORCE_FILE_IN_USE    = 0x00000008   # force file-in-use behavior
 $COPYFLG_NO_OVERWRITE         = 0x00000010   # do not copy if file exists on target
+$COPYFLG_NO_VERSION_DIALOG    = 0x00000020   # do not copy if target is newer
 $COPYFLG_OVERWRITE_OLDER_ONLY = 0x00000040   # leave target alone if version same as source
 
 # The directive itself. Without it a CopyFiles entry outside [SourceDisksFiles]
@@ -1114,6 +1153,23 @@ foreach ($never in $osNeverNamed) {
 # copies the INF into %17%.
 if ((Test-SectionExists $inf "DefaultInstall") -and -not (Test-SectionExists $inf "DefaultInstall.NTx86")) {
     Add-Failure "OS-DEFAULT" "[DefaultInstall] exists without [DefaultInstall.NTx86]. Windows 2000 falls back to the undecorated section on a right-click Install and runs the Windows 98 file list, which has no usbport.sys and copies the INF into %17%."
+}
+
+#
+# **BOTH right-click sections must exist at all**, which is the 2026-09-07
+# audit's H8. The OS-* and SUSP-* rules below build their route list by
+# APPENDING a right-click route only when its section exists, so deleting both
+# `[DefaultInstall]` and `[DefaultInstall.NTx86]` does not fail anything: it
+# silently halves the number of routes checked and the gate reports green over
+# an INF that has lost two of its four install paths. What goes with them is
+# the selective-suspend write on the Windows 98 update-over-install path, which
+# is the route a user who already has an earlier release takes and the one
+# issue 5 exists for. OS-DEFAULT above catches only the asymmetric case.
+#
+foreach ($defaultSection in @("DefaultInstall", "DefaultInstall.NTx86")) {
+    if (-not (Test-SectionExists $inf $defaultSection)) {
+        Add-Failure "OS-DEFAULT" ("[{0}] is missing. This INF has four install routes - a device install and a right-click Install on each of the 9x and NT paths - and every OS-* and SUSP-* rule below is checked against the routes that exist, so removing this section removes the checks with it rather than failing them." -f $defaultSection)
+    }
 }
 
 foreach ($m in $models) {
@@ -1170,6 +1226,7 @@ foreach ($m in $models) {
                         foreach ($bad in @(
                             @{ Bit = $COPYFLG_NOVERSIONCHECK; Name = "COPYFLG_NOVERSIONCHECK (4)"; Why = "it overwrites the target regardless of version" },
                             @{ Bit = $COPYFLG_FORCE_FILE_IN_USE; Name = "COPYFLG_FORCE_FILE_IN_USE (8)"; Why = "it schedules a replacement of a file that is in use" },
+                            @{ Bit = $COPYFLG_NO_VERSION_DIALOG; Name = "COPYFLG_NO_VERSION_DIALOG (32)"; Why = "it still replaces an equal-or-older target for no benefit, and asks for the Windows CD to do it - the table in build-and-test.md rejects it for exactly that, and nothing here refused it until the 2026-09-07 audit's H11" },
                             @{ Bit = $COPYFLG_OVERWRITE_OLDER_ONLY; Name = "COPYFLG_OVERWRITE_OLDER_ONLY (64)"; Why = "it still replaces an older target file for no benefit" }
                         )) {
                             if (($flags -band $bad.Bit) -ne 0) {
@@ -1765,8 +1822,8 @@ if ($PackageDir -ne "") {
         # section 5).
         foreach ($item in (Get-ChildItem -LiteralPath $pkg -File -Recurse)) {
             $n = $item.Name.ToLowerInvariant()
-            if ($osSuppliedNames -contains $n -or $retiredMediaNames -contains $n) {
-                Add-Failure "PKG-MSFILE" ("the staged package holds '{0}'. The media carries no Microsoft file since 1.0.0.1; usbd.sys, usbhub.sys, usbport.sys and usbui.dll all come from the OS through LayoutFile, so take it out." -f $item.FullName.Substring($pkg.Length).TrimStart('\'))
+            if ($pkgRefusedNames -contains $n) {
+                Add-Failure "PKG-MSFILE" ("the staged package holds '{0}'. The media carries no Microsoft file since 1.0.0.1: usbd.sys, usbhub.sys, usbport.sys and usbui.dll all come from the OS through LayoutFile, usbhub20.sys the OS places by itself, and usbd98.sys/usbd2k.sys/usbhub98.sys are the retired 1.0.0.0 media names. Take it out." -f $item.FullName.Substring($pkg.Length).TrimStart('\'))
             }
         }
 

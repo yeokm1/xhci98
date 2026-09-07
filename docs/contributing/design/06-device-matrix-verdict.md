@@ -231,10 +231,17 @@ be this document repeating the mistake it was written to prevent.
 
 So the transfer identity is a row-level, opt-in expectation and is not in the
 `Always` set. On the rows that carry it, the matrix is testing it rather than
-assuming it, and the first full run is what says whether it holds across the
-whole device population. If it does, it can be promoted to `Always` and the
-promotion recorded; if it does not, the row that broke it names the missing
-term. Putting it in `Always` today would have made every future violation look
+assuming it.
+
+The standing decision, after many full runs: it is NOT promoted to `Always`,
+and it stays on the one row that carries it, `usb-storage/hs` and its replug.
+It has held on every run since - both legs PASS on both targets in the
+`1.0.2.0` post-release pair, at 50 and 50 on Windows 98 and 357 and 165 on
+Windows 2000 - so what is missing is not evidence on that row. What is
+missing is evidence across the whole device population, and the rows that
+would supply it are the ones the matrix cannot count transfers on. Promoting
+it on a population it has never been measured over would recreate exactly the
+failure below. Putting it in `Always` would make every future violation look
 like a device failure instead of an incomplete partition, which is how
 `MidTdTailsDroppedTotal` hid.
 
@@ -321,11 +328,20 @@ TARGET  ROW                  OUTCOME    EXPECTATION                             
 2a      usb-audio/fs         NODRIVER   inert iso packets answered                     0   (USBAUDIO.VXD faults after one URB - batch 9-V)
 ```
 
+That listing is a worked example of the report format, not a current reading.
+It is kept at its 2026-08 shape because it is what the format section is
+illustrating; the `usb-audio` row in particular has moved on, and section 4.1
+of `design/09-post-release-unattended-run.md` and `matrix.psd1` are the
+current statement of it.
+
 The row name is `model/variant`, from the task 10.1 table, so the report and
 the population table share a key.
 
-The `usb-audio` line is `NODRIVER` and not `INERT`, and both halves of that
-are about this document's own distinctions:
+The `usb-audio` line in that example is `NODRIVER` and not `INERT`, and both
+halves of that were about this document's own distinctions. What the row
+actually carries today is different and is described at the end of this
+subsection; the reasoning below is kept because the `NODRIVER`-versus-`INERT`
+distinction it draws is the point of the example:
 
 - The row is `NODRIVER` by the rule in section 2.1. Measured three times on
   the prepared 2a image: `devices addressed` +1 and `slots enabled` +1, so our

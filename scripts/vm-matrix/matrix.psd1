@@ -220,12 +220,15 @@
                     # Phase 10's whole-matrix 2b run read NODRIVER for both
                     # mouse rows while the keyboards and the tablet bound: a
                     # second pointer beside the keep-alive mouse is what that
-                    # guest did not claim.  Written as measured; the first
-                    # fresh run says whether an SP4 with no history does the
-                    # same.
-                    ExpectNoDriver = @{
-                        '2b' = 'measured NODRIVER on the carried-along 2b image (a second usb-mouse beside the keep-alive); a fresh SP4 has no class driver that image lacked'
-                    }
+                    # guest did not claim.  **The fresh run answered it: both
+                    # bind.**  Every 2b-fresh post-release run since Phase 16
+                    # has read PASS here and printed "correct the entry"
+                    # alongside, so the reading belonged to that carried-along
+                    # image and not to Windows 2000 SP4.  The entry is removed
+                    # rather than kept as a curiosity (the 2026-09-07 audit's
+                    # H21): an ExpectNoDriver that does not apply waives a
+                    # GENUINE no-driver result on the row silently, which is
+                    # the one thing it must not do.
                 }
                 @{
                     Name = 'usb-mouse/fs'
@@ -236,9 +239,9 @@
                         'advance endpoints opened >= 1'
                         'advance endpoint speed mismatches'
                     )
-                    ExpectNoDriver = @{
-                        '2b' = 'measured NODRIVER on the carried-along 2b image (a second usb-mouse beside the keep-alive); a fresh SP4 has no class driver that image lacked'
-                    }
+                    # As usb-mouse/hs above: the Phase 10 reading was the
+                    # carried-along image's, and every fresh run since has read
+                    # PASS (audit H21).
                 }
                 @{
                     Name = 'usb-tablet/hs'
@@ -279,9 +282,10 @@
                     ExcludedOnTarget = @{
                         '2a' = 'excluded with usb-tablet/hs - the same absolute-pointer install path, never taught to the image for that reason'
                     }
-                    ExpectNoDriver = @{
-                        '2b' = 'measured NODRIVER on the carried-along 2b image; Windows 2000 SP4 ships no driver for a Wacom tablet'
-                    }
+                    # An ExpectNoDriver saying SP4 ships no Wacom driver stood
+                    # here and was wrong: every 2b-fresh run reads PASS, so SP4
+                    # binds this device through its own HID class driver and the
+                    # Phase 10 reading was the carried-along image's (audit H21).
                 }
             )
         }

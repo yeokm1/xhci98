@@ -32,7 +32,10 @@ check only to select between behaviors whose referenced symbols all exist on
 every target (or build separate binaries, or supply a compatibility stub). Do
 not use `PsGetVersion` for the check; per Oney (p.437) it is itself not
 exported on Win98/Me. The version primitive present on all three targets is
-`IoIsWdmVersionAvailable`:
+`IoIsWdmVersionAvailable`. Note that this driver imports it nowhere and the
+allowlist has no row for it, so the sketches below are what a driver that
+needed the distinction would write, not what this one does; a row plus its
+Windows 98 evidence would be needed first:
 
 ```c
 /* IRQL: PASSIVE_LEVEL (call from DriverEntry). Win98 gold/SE report 1.0;
@@ -61,8 +64,17 @@ do not re-read the field. The version predicates are essential:
 `ServiceKeyName` is also nonempty on Win2000, and WinMe is WDM 1.05, so the
 field test alone does not identify Win98 SE.
 
-Use the real `ExAllocatePool` entry point (not `ExAllocatePoolWithTag`), but
-see the local-DDK macro trap below.
+This driver allocates no pool at all, so neither name is called: the import
+allowlist has no row for `ExAllocatePool` or for either tagged name, and a
+call to any of them fails the import gate as "not in the allowlist"
+(`AGENTS.md`, "Allocate no pool at all"). Option A needs no private pool -
+fixed software metadata lives in the usbport-allocated miniport and
+common-buffer extensions. The local-DDK macro trap below still matters,
+because the compatibility header undoes the DDK's `POOL_TAGGING` rewrite so
+that a stray call resolves to the untagged name and is refused on it. Were a
+driver to need pool here, the real `ExAllocatePool` rather than
+`ExAllocatePoolWithTag` is the one Windows 98 SE exports; that is what the
+table below records, not an instruction to call it.
 
 ### Imports are a silent load-time gate
 
@@ -144,7 +156,7 @@ only bite if the Phase 3 spike forces the monolithic fallback.
 
 | Function | Win98/98 SE status | What to do instead |
 |---|---|---|
-| `ExAllocatePoolWithTag` / `ExFreePoolWithTag` | Oney says missing; measured otherwise on 98 SE (see the note below the table) | Undefine the local DDK's `ExAllocatePool` macro as shown above, then call real `ExAllocatePool`; use `ExFreePool`. The import gate denies the tagged names |
+| `ExAllocatePoolWithTag` / `ExFreePoolWithTag` | Oney says missing; measured otherwise on 98 SE (see the note below the table) | Not applicable to this driver, which allocates no pool: the import gate denies the tagged names AND the untagged ones, so any allocation call fails the build. The macro undefine above exists to make a stray call resolve to the name the gate refuses. For a driver that did need pool, the untagged `ExAllocatePool` / `ExFreePool` are the exported pair |
 | `IoAllocateWorkItem` / `IoQueueWorkItem` / `IoFreeWorkItem` | Not exported (p.375) | Option A: use usbport's uncancellable `UsbPortRequestAsyncCallback` with miniport-owned synchronization plus generation/lifecycle validation; Option B: `ExInitializeWorkItem` / `ExQueueWorkItem` only with explicit lifetime protection |
 | `IO_REMOVE_LOCK` family (`IoReleaseRemoveLockAndWait`) | Missing on 98 SE/Me; 98 gold has none of the family (p.191) | Do not use remove locks; roll your own outstanding-I/O count |
 | `MmGetSystemAddressForMdlSafe` | Expands to missing `MmMapLockedPagesSpecifyCache` (p.225) | Option B only: set `MDL_MAPPING_CAN_FAIL`, call `MmMapLockedPages`, check NULL, then restore the flag |
@@ -330,7 +342,7 @@ awareness. The advantage is the quality of the tool rather than its
 existence. Win98 is not debugger-less; it has the 9x DDK's `WDEB386.EXE` over
 the same kind of serial link. But KD's protocol does not support Win9x, and
 WDEB386 is assembly-level and awkward enough to be a last resort
-(`docs/contributing/build-and-test.md`, "Debug Build Output"). So when a bug
+(`docs/contributing/build-and-test.md`, "Per-line trace output, and which flavour has it"). So when a bug
 reproduces on both targets, debug it here. See the instrumentation ladder in
 `docs/contributing/failure-diagnosis.md` for where each debugger sits by setup
 cost.
@@ -475,7 +487,7 @@ build breaks or silent bugs:
 | Declarations after statements | Declare every variable at the top of its block |
 | `//` comments | `/* */` only (project rule; keeps any C89 tool happy) |
 | `stdint.h` (`uint32_t` ...) | `ULONG`/`USHORT`/`UCHAR` from `ntddk.h` |
-| Variadic macros (`#define P(...)`) | Fixed-arity macros. This driver's trace API is `XHCI_DBG_TEXT`/`XHCI_DBG_VALUE`/`XHCI_DBG_WORDS`/`XHCI_DBG_CB` (`src/xhci_dbg.h`), compiled under `#ifdef XHCI_DBG_TRACE` (never `#if DBG`), and `DbgPrint` is only ever called as `DbgPrint("%s", line)` |
+| Variadic macros (`#define P(...)`) | Fixed-arity macros. This driver's trace API is `XHCI_DBG_TEXT`/`XHCI_DBG_VALUE`/`XHCI_DBG_WORDS`/`XHCI_DBG_CB` (`src/xhci_dbg.h`), compiled under `#ifdef XHCI_DBG_TRACE` (never spelled `#if DBG`), and `DbgPrint` is only ever called as `DbgPrint("%s", line)`. `XHCI_DBG_TRACE` is not an escape from `DBG`: `src/xhci_dbg.h` defines it as `DBG && defined(XHCI_DBG_LIVE)`, so it is a narrowing of `DBG` to the `qemu` flavour alone. Writing `#if DBG` instead is what left two `src/xhci_probe.c` sites calling functions the `debug` build no longer compiles. There are exactly two `DbgPrint` call sites in the tree: `src/xhci_dbg.c`, under `XHCI_DBG_TRACE`, and `src/xhci_dispatch.c`'s PASSIVE-level log-ring flush, which is in every flavour and is the one sanctioned exception `AGENTS.md` names |
 | Designated initializers (`.field =`) | Positional initializers, or explicit assignments (preferred for the registration packet - order mistakes stay visible) |
 | `inline` | `__inline` (MSVC extension, works in C) |
 | `bool` | `BOOLEAN` with `TRUE`/`FALSE` |
@@ -860,8 +872,15 @@ IoConnectInterrupt(
 ```
 
 ISR must return `TRUE` only if the interrupt was from this device (check
-USBSTS.EINT). Clear USBSTS.EINT first, then clear IMAN.IP while preserving
-IMAN.IE.
+USBSTS.EINT). Clear USBSTS.EINT first, then clear IMAN.IP. IMAN is
+read-modify-write, so the write has to decide what IE holds, and THIS DRIVER
+WRITES IE AS 0 rather than preserving it (`XhciIsr` in `src/xhci_evt.c`). It
+costs no delivery - the xHC sets EHB when it sets IP and cannot set IP again
+while EHB is set - and it buys the ISR, which runs at DIRQL and cannot take
+the DISPATCH-level controller lock, the property that it moves IE in the same
+direction every masking path does and can never re-publish an enable a
+concurrent mask has just cleared. The DPC re-arms IE under the lock.
+`xhci-data-structures.md`, "ISR/DPC rules", has the full argument.
 
 Sharing the INTx line with a VxD on Win98. On the real target the xHCI INTx
 line is shared, and on Win98 the other occupant is frequently a VxD-driven
@@ -970,10 +989,11 @@ This is slower than direct DMA mapping, but it avoids relying on Win98 map-regis
 - Stack size: Win98 kernel stacks are smaller than Win2K. Avoid large stack
   allocations in driver routines; heap-allocate large structures.
 - `KeAcquireSpinLockAtDpcLevel`: available in Win98 WDM, and not used here.
-  This driver takes its controller lock through one `KeAcquireSpinLock`
-  wrapper from every context (`XhciControllerLockAcquire`, `src/xhci_cmd.c`)
-  so that it carries one import pair; a DPC-level variant would add a second
-  for no measured gain.
+  This driver takes its controller lock through one acquire/release wrapper
+  pair from every context (`XhciControllerLockAcquire` and its release,
+  `src/xhci_cmd.c`), so the tree carries exactly one import pair for it,
+  `KeAcquireSpinLock` and `KeReleaseSpinLock`; a DPC-level variant would add a
+  second pair for no measured gain.
 - IRP cancellation: implement a cancel routine for all pended IRPs. Win98 can
   cancel IRPs on device removal.
 - `IoCompleteRequest`: must not be called at or above DISPATCH_LEVEL for IRPs

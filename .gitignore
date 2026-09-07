@@ -87,8 +87,8 @@ scripts/local/
 # built driver and the tracked INF, and the GitHub release asset
 # make-release.ps1 assembles here as out\upload-<version>\ and .zip. Generated
 # output, reproducible from the tree, and since 1.0.0.1 none of it is a
-# Microsoft file: the INF has the OS supply usbd.sys, usbhub.sys and usbport.sys
-# from its own install source (docs\contributing\legal-provenance.md section 5
+# Microsoft file: the INF has the OS supply usbd.sys, usbhub.sys, usbport.sys
+# and, since 1.0.2.0, usbui.dll from its own install source (docs\contributing\legal-provenance.md section 5
 # records the earlier decision, 0.0.0.4 to 1.0.0.0, and its withdrawal). It
 # stays ignored because generated output is not the record; releases\ is.
 out/
@@ -96,9 +96,12 @@ out/
 # Published releases (scripts\package\make-release.ps1) ARE tracked, binaries
 # included - that is the whole difference between releases\ and out\ above. The
 # global *.sys rule near the top would otherwise swallow them silently, so undo
-# it for this directory only. Only the two files this project owns can ever land
-# here; the script publishes nothing else, and since 1.0.0.1 the INF gate
-# refuses a Microsoft file on the media at all - see releases\README.md.
+# it for this directory only. No Microsoft file can ever land here: the script
+# publishes nothing but this project's own work, and since 1.0.0.1 the INF gate
+# refuses a Microsoft file on the media at all - see releases\README.md. What
+# does land here, besides the two driver files, is the two DOS tools with their
+# maps (the negations below) and the generated readme.txt, LICENSE and
+# NOTICE.TXT in each release directory.
 #
 # The *.exe and *.map pair is the DOS qualifier staged into each release. Its
 # MAP is what turns a fault address on a photographed DOS screen back into a

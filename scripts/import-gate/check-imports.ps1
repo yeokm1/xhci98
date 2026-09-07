@@ -382,7 +382,9 @@ function Get-Win2kBaseline {
 Windows 2000 SP4 baseline in '$Dir' is incomplete or unauthenticated:
   - $($validationErrors -join "`n  - ")
 Fix it one of these ways:
-  - with the recorded SP4 media: scripts\import-gate\extract-target-baselines.ps1 -Force
+  - with the recorded SP4 media, naming the ISO explicitly - with the switch
+    alone and no ISO the script warns and stages nothing:
+      scripts\import-gate\extract-target-baselines.ps1 -Force -Win2KIso <path>
   - without it: delete only the manifest-owned files listed below from '$Dir';
     keep USBPORT/USBEHCI binaries, disassemblies, and every other file there.
     Removing the complete list returns this half of the gate to its
@@ -461,7 +463,10 @@ function Test-NtkernName {
     # NUL-delimited: the export name tables ntkern.vxd builds hold
     # zero-terminated strings, so this does not match a substring of a longer
     # symbol name.
-    return ($Text -match ("\x00" + [regex]::Escape($Symbol) + "\x00"))
+    # `-cmatch`, not `-match`: an export name differing only in case is a
+    # different symbol, and this line is quoted into the phase records as
+    # evidence for the exact name in the allowlist (the 2026-09-07 audit's H3).
+    return ($Text -cmatch ("\x00" + [regex]::Escape($Symbol) + "\x00"))
 }
 
 # -------------------------------------------------------------------- main ---
@@ -572,6 +577,46 @@ function Test-Image {
 
         if ($evidence.Count -eq 0) {
             Add-Warning "$($pair.Module)!$($pair.Symbol) has no host-side target evidence in this working copy. The allowlist row claims: $($row.Notes)"
+        }
+
+        #
+        # **THE WINDOWS 98 HALF OF THE RULE, ENFORCED RATHER THAN STATED.**
+        #
+        # `xhci98-imports.allow` states it: "every pair here must carry Win98
+        # evidence of its own, because every addition is a new way for the load
+        # to fail silently on Win98". Until the 2026-09-07 audit's H1 nothing
+        # checked it. The warning above fires only when a pair has NO evidence
+        # at all, and a `w2k-export` hit alone satisfies that - so a new kernel
+        # or HAL row whose only evidence is that Windows 2000 exports the
+        # symbol passed silently, which is precisely the case the rule exists
+        # for: Windows 2000 exporting something says nothing about whether
+        # Windows 98's ntkern.vxd does.
+        #
+        # The two things that count as Windows 98 evidence are a precedent
+        # binary importing the same pair and the ntkern.vxd export name table
+        # carrying the symbol. Both are host-side files this repository does
+        # not ship, so the check can only run when they are present: with
+        # neither source loaded there is nothing to conclude and the pair is
+        # left to the warning above. `usbport manifest` is not Windows 98
+        # evidence either way - that module is the same file on both targets.
+        #
+        if ($pair.Module -ieq "ntoskrnl.exe" -or $pair.Module -ieq "hal.dll") {
+            $win98Sources = ($null -ne $Precedent) -or ($null -ne $NtkernText)
+            $win98Evidence = @($evidence | Where-Object {
+                $_ -like "win98-precedent*" -or $_ -eq "ntkern-name"
+            })
+
+            if ($win98Sources -and $win98Evidence.Count -eq 0) {
+                Add-Failure ("$($pair.Module)!$($pair.Symbol) has no WINDOWS 98 evidence: " +
+                    "no precedent binary imports it and it is not in ntkern.vxd's export " +
+                    "name table. A Windows 2000 export does not answer this - see the rule " +
+                    "in scripts\import-gate\xhci98-imports.allow, and build-and-test.md, " +
+                    "'every pair carries Win98 evidence of its own'. Evidence found: $shown")
+            } elseif (-not $win98Sources) {
+                Add-Warning ("$($pair.Module)!$($pair.Symbol): the Windows 98 evidence sources " +
+                    "are not staged in this working copy, so the Win98 half of the allowlist " +
+                    "rule could not be checked for it.")
+            }
         }
     }
 

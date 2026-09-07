@@ -33,34 +33,7 @@
 
 #include <stdio.h>
 #include "../src/xhci_xfer.h"
-
-static int failures;
-static int checks;
-
-#define CHECK(cond, what) check_impl((cond), (what), __LINE__)
-
-static void check_impl(int cond, const char *what, int line)
-{
-    checks++;
-    if (!cond) {
-        failures++;
-        printf("FAIL %s:%d: %s\n", "test_xfer.c", line, what);
-    }
-}
-
-#define CHECK_EQ(got, want, what) \
-    check_eq_impl((unsigned long)(got), (unsigned long)(want), (what), __LINE__)
-
-static void check_eq_impl(unsigned long got, unsigned long want,
-                          const char *what, int line)
-{
-    checks++;
-    if (got != want) {
-        failures++;
-        printf("FAIL %s:%d: %s (got %lu / 0x%lX, want %lu / 0x%lX)\n",
-               "test_xfer.c", line, what, got, got, want, want);
-    }
-}
+#include "test_harness.h"
 
 #define RING_PA 0x0F001000UL
 
@@ -908,7 +881,15 @@ typedef struct _XFER_FIXTURE {
     XHCI_RING ring;
     XHCI_TRANSFER_QUEUE queue;
     XHCI_TRB scratch[XHCI_XFER_MAX_CONTROL_TRBS];
-    XHCI_TRANSFER transfers[4];
+    /*
+     * Eight, not four. `test_submit_normal_ring_full` needs seven distinct
+     * records to fill a ring and be refused on the eighth, and until the
+     * 2026-09-07 audit's G3 it re-used records 0, 1 and 2 while they were
+     * still queued - which design record 03 section 5 forbids by name, and
+     * which left the queue corrupt and two records unreachable for the rest
+     * of that vector.
+     */
+    XHCI_TRANSFER transfers[8];
     SG_BUFFER sg;
     XHCI_CONTROL_REQUEST req;
 } XFER_FIXTURE;
@@ -2469,22 +2450,27 @@ static void test_submit_normal_ring_full(void)
     ULONG enqueueBefore;
     ULONG i;
 
-    /* 8 TRBs is 6 usable slots, and each transfer here is one TRB. */
+    /*
+     * 8 TRBs is 6 usable slots, and each transfer here is one TRB. Every
+     * submission uses a record of its own: re-submitting a record that is
+     * still queued is forbidden (design record 03 section 5), and doing it
+     * here corrupted the queue for the rest of the vector rather than testing
+     * anything.
+     */
     fixture_init(&fix, 8);
-    for (i = 0; i < 4; i++) {
-        CHECK_EQ(fixture_submit_interrupt(&fix, i % 4, 8), XHCI_XFER_OK,
+    for (i = 0; i < 6; i++) {
+        CHECK_EQ(fixture_submit_interrupt(&fix, i, 8), XHCI_XFER_OK,
                  "fits");
     }
-    /* Fill the remaining two slots with the same transfer records - the queue
-     * bookkeeping is not what this checks, the ring's refusal is. */
-    (VOID)fixture_submit_interrupt(&fix, 0, 8);
-    (VOID)fixture_submit_interrupt(&fix, 1, 8);
     enqueueBefore = fix.ring.Enqueue;
     CHECK_EQ(XhciRingFree(&fix.ring), 0, "the ring is full");
+    CHECK_EQ(fix.queue.Count, 6UL,
+             "and the queue holds all six, none of them displaced");
 
-    CHECK_EQ(fixture_submit_interrupt(&fix, 2, 8), XHCI_XFER_BUSY,
+    CHECK_EQ(fixture_submit_interrupt(&fix, 6, 8), XHCI_XFER_BUSY,
              "the next transfer is refused");
     CHECK_EQ(fix.ring.Enqueue, enqueueBefore, "nothing was written");
+    CHECK_EQ(fix.queue.Count, 6UL, "and nothing was queued for it either");
 }
 
 /* ------------------------------------------------------------------ */
@@ -2716,8 +2702,19 @@ static void test_event_success(void)
      * case, not an error (4.11.3.1). */
     CHECK_EQ(deliver(&fix, 2, XHCI_CC_SUCCESS, 0, &result), XHCI_XFER_OK, "ok");
     CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "nothing to do");
-    CHECK_EQ(fix.queue.UnmatchedEvents + fix.queue.ForeignEvents, 1,
-             "counted once, as unowned");
+    /*
+     * Counted apart, not summed. Until the 2026-09-07 audit's G11 this was
+     * `UnmatchedEvents + ForeignEvents == 1`, which passes whichever of the
+     * two the classifier picked - and the two mean different things: an
+     * unmatched event names a TRB on this ring that no record owns, while a
+     * foreign one names a TRB that is not on this ring at all. A misclassified
+     * off-ring event is exactly the reading that would send a Set TR Dequeue
+     * to the wrong endpoint.
+     */
+    CHECK_EQ(fix.queue.UnmatchedEvents, 1,
+             "counted once, as unmatched - this TRB is on our ring");
+    CHECK_EQ(fix.queue.ForeignEvents, 0,
+             "and not as foreign, which would name another ring");
 }
 
 /*
@@ -3052,6 +3049,21 @@ static void test_event_stall(void)
              "an error on the data stage ends the transfer");
     CHECK_EQ((ULONG)result.Completed->UsbdStatus, WANT_USBD_STALL_PID, "stalled");
     CHECK_EQ(result.Completed->BytesTransferred, 0, "18 asked, 18 not delivered");
+    /*
+     * That zero is a weak reading on its own (G11): a residual equal to the
+     * TRB length gives the same answer as skipping the subtraction entirely.
+     * The same stall with a PARTIAL residual is what separates the two - and
+     * it is the realistic shape, since a device that stalls mid-packet has
+     * already moved some bytes.
+     */
+    fixture_init(&fix, 32);
+    CHECK_EQ(fixture_submit_in(&fix, 0, 18), XHCI_XFER_OK, "submitted again");
+    CHECK_EQ(deliver(&fix, 1, XHCI_CC_STALL, 6, &result), XHCI_XFER_OK, "ok");
+    CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "still ends it");
+    CHECK_EQ((ULONG)result.Completed->UsbdStatus, WANT_USBD_STALL_PID,
+             "still a stall");
+    CHECK_EQ(result.Completed->BytesTransferred, 12,
+             "18 asked, 6 residual, so 12 arrived - the subtraction is real");
     CHECK_EQ(result.NeedsRecovery, 1, "and the endpoint is halted");
     CHECK_EQ(fix.queue.Recoveries, 1, "counted");
     CHECK_EQ(fix.queue.Errors, 1, "counted as an error");

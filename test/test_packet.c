@@ -15,6 +15,17 @@
  * boundaries; this file exists to pin the fields *between* those boundaries,
  * with a failure message that names which one moved.
  *
+ * **So read the check count here as smaller than it looks.** About two dozen
+ * of the values below - the structure sizes, and the packet offsets at 0x24,
+ * 0x28, 0x38, 0x90 and the group boundaries around them - already have an
+ * `XHCI_C_ASSERT` twin in `src/xhci_usbport.h`, so a violation stops the
+ * COMPILE and this file never runs to report it. They are kept deliberately,
+ * because the anchors are what the fields between them are measured from and
+ * a reader checking one field against the ABI document should find its
+ * neighbours here too - but they are restatements, not coverage, and the
+ * 2026-09-07 audit's G13 counted them as such. What only exists here is the
+ * per-field offsets between the anchors, which is most of section 1.
+ *
  * Build and run:  test\run-host-tests.cmd
  * Exit code = number of failed checks (0 = pass).
  *
@@ -24,34 +35,7 @@
 #include <stdio.h>
 #include "../src/xhci.h"
 #include "../src/xhci_usbport.h"
-
-static int failures;
-static int checks;
-
-#define CHECK(cond, what) check_impl((cond), (what), __LINE__)
-
-static void check_impl(int cond, const char *what, int line)
-{
-    checks++;
-    if (!cond) {
-        failures++;
-        printf("FAIL %s:%d: %s\n", "test_packet.c", line, what);
-    }
-}
-
-#define CHECK_EQ(got, want, what) \
-    check_eq_impl((unsigned long)(got), (unsigned long)(want), (what), __LINE__)
-
-static void check_eq_impl(unsigned long got, unsigned long want,
-                          const char *what, int line)
-{
-    checks++;
-    if (got != want) {
-        failures++;
-        printf("FAIL %s:%d: %s (got %lu / 0x%lX, want %lu / 0x%lX)\n",
-               "test_packet.c", line, what, got, got, want, want);
-    }
-}
+#include "test_harness.h"
 
 /* Offset of a registration-packet field against its hand-typed expectation. */
 #define PACKET_OFFSET(field, expected) \
@@ -447,13 +431,17 @@ static void test_constants(void)
 
 static void test_extensions(void)
 {
-    /* usbport allocates and zeroes exactly MiniPortExtensionSize bytes, so a
-     * zero size would hand every callback a pointer to usbport's own state. */
-    CHECK(sizeof(XHCI_EXTENSION) > 0, "device extension is not empty");
-    CHECK(sizeof(XHCI_ENDPOINT) > 0, "endpoint extension is not empty");
-    CHECK(sizeof(XHCI_TRANSFER) > 0, "transfer extension is not empty");
-
     /*
+     * *(Three checks that each `sizeof` is greater than zero stood here. A C
+     * structure with at least one member cannot have a size of zero, so all
+     * three were true by construction and could not have failed - the
+     * 2026-09-07 audit's G13. The property they were reaching for is that
+     * usbport allocates and zeroes exactly `MiniPortExtensionSize` bytes, and
+     * that is not a fact about `sizeof` at all: it is about what DriverEntry
+     * publishes and what the callbacks then find, which `test_init.c` drives
+     * against a model that allocates exactly the published size and poisons
+     * everything either side of it.)*
+     *
      * The signature pair has to bracket the whole extension for the validity
      * check to mean what it claims: first word and last word.
      */

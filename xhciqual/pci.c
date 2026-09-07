@@ -154,7 +154,21 @@ void pci_read_static(PCIINFO *p)
     p->status_final = 0;
     p->status_rechecked = 0;
     if (status & 0x0010) {
+        /*
+         * **A LOWER BOUND AS WELL AS AN ITERATION GUARD** (the 2026-09-07
+         * audit's I5). The capability list lives in configuration space above
+         * the 64-byte predefined header, so a pointer below 0x40 is naming a
+         * header register - Vendor ID, the BARs, Interrupt Line - and reading
+         * an id and a next pointer out of one produces a chain of nonsense
+         * that the iteration guard then walks 48 times. The guard bounded the
+         * damage and nothing bounded the nonsense.
+         *
+         * 0x40 is the bound the PCI specification gives, and the `& 0xFC`
+         * above already enforces the DWORD alignment it also requires.
+         */
         capptr = pci_read8(p->bus, p->dev, p->fn, 0x34) & 0xFC;
+        if (capptr != 0 && capptr < 0x40)
+            capptr = 0;
         for (guard = 0; capptr != 0 && guard < 48; guard++) {
             u8 id   = pci_read8(p->bus, p->dev, p->fn, capptr);
             u8 next = pci_read8(p->bus, p->dev, p->fn, (u8)(capptr + 1));
@@ -182,7 +196,12 @@ void pci_read_static(PCIINFO *p)
             case 0x11: p->has_msix = 1; break;
             default: break;
             }
+            /* The same lower bound on every hop, not only the first: a
+             * capability whose Next names a header register walks the chain
+             * back into the header exactly as a bad 0x34 would. */
             capptr = next & 0xFC;
+            if (capptr != 0 && capptr < 0x40)
+                capptr = 0;
         }
     }
 }

@@ -30,34 +30,7 @@
 #include "../src/xhci.h"
 #include "../src/xhci_usbport.h"
 #include "../src/xhci_desc.h"
-
-static int failures;
-static int checks;
-
-#define CHECK(cond, what) check_impl((cond) ? 1 : 0, (what), __LINE__)
-
-static void check_impl(int cond, const char *what, int line)
-{
-    checks++;
-    if (!cond) {
-        failures++;
-        printf("FAIL %s:%d: %s\n", "test_desc.c", line, what);
-    }
-}
-
-#define CHECK_EQ(got, want, what) \
-    check_eq_impl((unsigned long)(got), (unsigned long)(want), (what), __LINE__)
-
-static void check_eq_impl(unsigned long got, unsigned long want,
-                          const char *what, int line)
-{
-    checks++;
-    if (got != want) {
-        failures++;
-        printf("FAIL %s:%d: %s (got 0x%08lX, want 0x%08lX)\n",
-               "test_desc.c", line, what, got, want);
-    }
-}
+#include "test_harness.h"
 
 /* ------------------------------------------------------------------ */
 /* Wire helpers                                                        */

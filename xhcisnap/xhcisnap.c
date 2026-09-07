@@ -41,9 +41,10 @@
  * It is not gated: IOCTL_USB_DIAGNOSTIC_MODE_ON is NOT a prerequisite.
  *
  * WINDOWING. usbport refuses ParameterLength > 0x10000 before the miniport is
- * ever reached, and the extension is larger than that (90,272 bytes as this is
- * written), so a dump is several windows and this tool concatenates them. The
- * cost is that the driver may run between windows, so every window carries a
+ * ever reached, and the extension is larger than that (90,272 bytes in the
+ * 0.0.0.6 tree this was first built against, 91,612 at 1.0.2.0), so a dump
+ * is several windows and this tool concatenates them. The cost is that the
+ * driver may run between windows, so every window carries a
  * tear detector and this tool reports whether they all agreed. A dump whose
  * tear detectors differ is not wrong, but any counter in it may be a mixture,
  * and that has to be said out loud rather than discovered later.
@@ -2364,8 +2365,9 @@ static unsigned char portsc_values[MAX_PORTS * 4];
 /*
  * The whole extension, kept in memory as well as written to the `.BIN`, so the
  * companion can print the note ring out of it. 128 KB is comfortably past the
- * 90,272 bytes this was built against and still a single static allocation on a
- * machine with 64 MB of RAM - which is what a Windows 98 SE target is. A driver
+ * 90,272 bytes this was first built against, and past the 91,612 of 1.0.2.0,
+ * and still a single static allocation on a machine with 64 MB of RAM -
+ * which is what a Windows 98 SE target is. A driver
  * whose extension outgrows it is reported rather than truncated: an image cut
  * short would give a rotated ring, which is a wrong reading and not a failed
  * one.

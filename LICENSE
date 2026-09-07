@@ -425,9 +425,10 @@ loaded by a kernel this project does not ship and could not ship;
 docs/contributing/legal-provenance.md section 2 records that boundary.
 
 The release download - as distinct from this repository - carries no Microsoft
-file. The usbd.sys and usbhub.sys the driver depends on, and on the Windows
-2000 and Windows XP install path the usbport.sys it plugs into, are those
-systems' own files: the INF has Windows Setup copy them from the user's own
+file. The usbd.sys and usbhub.sys the driver depends on, the usbui.dll that
+provides the USB Root Hub's property page, and on the Windows 2000 and
+Windows XP install path the usbport.sys it plugs into, are those systems'
+own files: the INF has Windows Setup copy them from the user's own
 installation source, never overwriting a file already present, and none of them
 is in the download or in this repository. Nothing here purports to license
 them to anyone. From release 0.0.0.4 to 1.0.0.0 the assembled download did
@@ -437,7 +438,8 @@ xHCI-only machine never has them placed by Windows Setup; that decision was
 withdrawn on 2026-09-02, before any upload, and since release 1.0.0.1 the OS
 supplies usbd.sys on both install paths and usbhub.sys on the Windows 98 path
 in this way, with release 1.0.1.0 adding usbport.sys and usbhub.sys on the NT
-path by the same route. docs/contributing/legal-provenance.md section 5
+path by the same route and release 1.0.2.0 adding usbui.dll on every install
+path. docs/contributing/legal-provenance.md section 5
 records the decision and what it withdrew.
 
 Building, testing, or fully documenting this driver requires material fetched

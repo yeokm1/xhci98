@@ -581,6 +581,11 @@ int  irq_uninstall(void);
 const char *irq_error_step(void);
 u16  irq_error_code(void);
 int  irq_elcr_level(int irq);          /* 1 = level-triggered per ELCR */
+/* Mask one 8259 line with NO vector hooked, for a window in which a
+ * controller interrupt is enabled but nothing is there to service it
+ * (the 2026-09-07 audit's I3). One at a time; restore always. */
+int  irq_line_mask(unsigned line);
+void irq_line_restore(void);
 
 /* ------------------------------------------------------------------ */
 /* legacy.c - EHCI/OHCI qualification                                */

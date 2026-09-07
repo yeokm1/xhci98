@@ -187,6 +187,17 @@
             # test); this one is older than the newest run and is not a
             # prediction of what your image carries.
             CloneFrom = @{ Image = 'fresh-2a.img'; Snapshot = 'base-1.0.0.0-qemu' }
+            # **PrepareOnly, and without it this template does not run.** The
+            # comment above already says "never a matrix target;
+            # prepare-image.ps1 only", and the flag is what makes that true -
+            # it was missing until the 2026-09-07 audit's H22. A target with a
+            # CloneFrom and no PrepareOnly is in the fresh pool, so
+            # `run-matrix.ps1 -PostRelease` validates it like any other and
+            # refuses the whole run over a sweetlow-2a.img that is missing or
+            # unstamped. Since this file is the template a fresh clone copies,
+            # that made the post-release run unrunnable out of the box on a
+            # host that had never built this guest.
+            PrepareOnly = $true
         }
         @{
             Id       = '2b-fresh'

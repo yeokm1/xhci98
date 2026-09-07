@@ -382,9 +382,10 @@ code:
     measured directly by this clock: 354,364 ms against 6,461 polls
     (`run-13e.md`, Finding V). Every budget in the driver was therefore about
     an order of magnitude short. `XHCI_COMMAND_AGE_POLLS` came out at 2.3-5.1 s
-    instead of 32 s, at or under the 5 s watchdog it was sized to sit 12 s
-    behind, so the backstop that "cannot pre-empt a ladder that is working"
-    was pre-empting it every time. `CommandsTimedOut` read 0 in every dump
+    instead of 32 s, at or under `XHCI_COMMAND_TIMEOUT_MS` = 5,000 rather than
+    12 s clear of the ladder's 20 s legitimate worst case, so the backstop
+    that "cannot pre-empt a ladder that is working" was pre-empting it every
+    time. `CommandsTimedOut` read 0 in every dump
     ever taken from that machine, and the driver had been resetting
     controllers over commands that were merely slow.
   - Do not repeat the earlier figure of about 1 ms for the poll period. It
@@ -405,7 +406,7 @@ code:
     watchdog ladder, the port age clearing the reset deadline) are
     `XHCI_C_ASSERT`s rather than prose. The port age was the worst of the
     five.
-  - The two `*_POLLS` names left in `src/` are both inside `#ifdef
+  - Two of the three `*_POLLS` names left in `src/` are inside `#ifdef
     XHCI_FIX_*`: `XHCI_RH_SWEEP_SLOW_POLLS` (W15SLOW) and
     `XHCI_RH_GATE_STUCK_POLLS` (W7), so no shipping flavour carries either.
     They are Finding 3 bench candidates whose cadence is the measurement, and
@@ -413,6 +414,21 @@ code:
     shipping flavour has to convert first, and W7's is the same defect as the
     rest: twenty polls is ten seconds at 500 ms and 0.7-1.6 s at the E460's
     36-80 ms.
+  - The third is `XHCI_RECOVERY_DELIVERY_POLLS` (`src/xhci_hw.h`, used at
+    `xhciCheckController` in `src/xhci_dispatch.c`), and it is unconditional:
+    every shipping flavour carries it. It is a stated exception to this rule,
+    not an oversight. What it bounds is not a duration but a number of
+    delivery opportunities: an armed `UsbPortRequestAsyncCallback` that never
+    arrives is only observable from the poll that would have preceded it, so
+    "twenty polls with no delivery" is the quantity, and converting it to
+    milliseconds would measure something the driver does not care about.
+    The residual is real and is recorded rather than fixed: its comment still
+    justifies the value of twenty in wall-clock terms at the nominal 500 ms
+    period, which is the very inference Finding V destroyed, and at the E460's
+    36-80 ms the same twenty polls is 0.7-1.6 s rather than about ten seconds.
+    That leaves the lost-arming detector firing sooner on a fast poller, which
+    costs a re-request rather than a missed fault, so it is owed as a comment
+    correction and not as a code change.
   - A poll rate may only change the resolution of an answer, never its size.
     That is the property the poll-count form claimed and did not have.
 - Either flag set: stop submitting, fail pending work, request `UsbPortInvalidateController(RESET)`.
@@ -460,7 +476,7 @@ code:
 
 ## Transfer Buffers
 
-- Under Option A, `usbport.sys` hands the miniport already-mapped scatter/gather physical addresses for URB payloads - confirmed statically in both target binaries, through the NT DMA adapter, page-granular. Program those into TRBs directly. What the static pass does not settle is element ordering versus `SgOffset` and everything else about `SubmitTransfer`; order TRBs by `SgOffset` and instrument the list when the callback first becomes reachable in Phase 6 (`docs/usb-xhci-info/usbport-miniport-interface.md`, "What Phase 3 can and cannot prove about transfer mapping").
+- Under Option A, `usbport.sys` hands the miniport already-mapped scatter/gather physical addresses for URB payloads - confirmed statically in both target binaries, through the NT DMA adapter, page-granular. Program those into TRBs directly. What the static pass does not settle is element ordering versus `SgOffset` and everything else about `SubmitTransfer`; order TRBs by `SgOffset` regardless, which is what `src/xhci_xfer.c` does, so the runtime ordering never has to be assumed. Phase 6 instrumented it rather than trusting it: `src/xhci_probe.c` counts `ProbeSgDisordered`, `ProbeSgGapped`, `ProbeSgHighDwords` and `ProbeSgMapped` in every build, and a run that ends with all four at zero is the probe confirming the static record (`docs/usb-xhci-info/usbport-miniport-interface.md`, "What Phase 3 can and cannot prove about transfer mapping").
 - A single TRB's data buffer must not span a 64 KB physical boundary (xHCI spec 6.4.1 note). Split every SG fragment at 64 KB boundaries into chained TRBs - length <= 64 KB alone is not sufficient.
 - Common-buffer bounce buffers are the fallback policy only where the driver owns the mapping itself (Option B, or if the spike shows usbport passes virtual buffers): OUT transfers copy caller data into the bounce buffer before ringing the doorbell; IN transfers copy from the bounce buffer back to the caller after completion.
 - **Actual transferred length is `requested_length - residual_length` only for a single-TRB TD.** Without the qualifier it is wrong for every multi-TRB TD: "For multi-TRB TDs, if ED = `0`, the TRB Transfer Length only reflects the number of bytes transferred for the buffer associated with the Transfer TRB pointed to by the Transfer Event, not the total bytes transferred for the TD" (Table 6-39 note, p.441).
@@ -626,11 +642,18 @@ Why there is no MSI on either target. MSI is an interrupt delivered as a memory 
   miniport's own `ResetController` at DISPATCH inside a usbport lock, and
   usbport does nothing afterwards but release it (`docs/usb-xhci-info/usbport-miniport-abi.md`,
   "`UsbPortInvalidateController(RESET)`: real in the binaries"). This driver's
-  `ResetController` marks the controller terminally failed.
+  `ResetController` masks the interrupt enables, marks the controller failed
+  and raises a recovery request; it repairs nothing itself, which is why it is
+  containment.
 
   So the escalation converts a silently non-interrupting controller into a
-  visibly failed one and stops the command engine cleanly. The only path that
-  actually restores service is a stop/start, which no miniport can initiate.
+  visibly failed one and stops the command engine cleanly. Service is restored
+  from there by `XhciRecoverController`, which reinitializes in place on
+  usbport's health-poll callback, bounded by `XHCI_RECOVERY_MAX_ATTEMPTS`;
+  a controller that will not come back within that bound stays latched, and
+  that latched state is the terminal one, not this callback's. See "The
+  recovery request has an owner" above, the escalation ladder below, and
+  `docs/contributing/design/07-controller-recovery-in-place.md`.
 - **On a refusal, mask and unmask go opposite ways, and that is intended.**
   Masking applies whichever half it could still derive: refusing a derivable
   `INTE` clear leaves the enable up, and `ResetController` publishes
@@ -689,8 +712,10 @@ Why there is no MSI on either target. MSI is an interrupt delivered as a memory 
   prior run, not one interrupt's snapshot. Once dequeued, the object can be
   queued again even while its callback is executing. Under Option A,
   usbport's `MiniportInterruptsSpinLock` serializes miniport
-  `InterruptDpc` callbacks; confirm the NUSB binary retains that contract in
-  the Phase 3 spike.
+  `InterruptDpc` callbacks. The Phase 3 static pass confirmed the NUSB binary
+  retains that contract, and recorded the corollary that `FlushInterrupts`
+  takes no lock at all and so can run concurrently with `InterruptDpc` on SMP
+  (`docs/usb-xhci-info/usbport-miniport-abi.md`).
 - The DPC must drain until the Event Ring Cycle Bit indicates empty.
   During a long burst, publish progress by updating `ERDP` periodically with
   EHB left set (the project uses every 32 events); after observing empty,
@@ -1346,9 +1371,9 @@ must therefore do.
   through `XhciReadPortsc` that acknowledge nothing are permitted and exist
   (the power-up confirmation in `xhci_init.c`, the reset, suspend and link
   paths in `xhci_rh.c`), as are the composed writes `XhciWritePortsc` makes for
-  the feature callbacks; what they may not do is write a change bit. (Until
-  the 2026-09-05 audit this bullet said "one way to read a port", which the
-  eleven `XhciReadPortsc` call sites refuted; D6.)
+  the feature callbacks; what they may not do is write a change bit. The rule
+  is about acknowledgement, not about reading: there are eleven
+  `XhciReadPortsc` call sites and they are all legitimate.
 - **The one sanctioned exception to that rule is an observation mode.**
   `xhciPassThru` reads the raw PORTSC array through `XhciReadPortsc` and does
   not acknowledge and does not fold. It is not a second reader added for an

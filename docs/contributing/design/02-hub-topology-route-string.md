@@ -505,7 +505,7 @@ bullet:
   at tier 2. That is correct, not a defect.
 
 Observed on both targets, and the stop rule closed affirmatively (roadmap
-batch 7b-A's verdict boxes). A device two tiers behind external hubs
+Phase 7b, batch 7b-A). A device two tiers behind external hubs
 enumerated on 2a and again on 2b: `BehindHubOpens` = `Claims` = `Addressed` =
 3 on each, against 7b-V0's 1,803 refusals and a dead guest. QEMU's own
 `usb_xhci_slot_address slotid 3, port 2.1` confirms the reconstructed Route
@@ -561,7 +561,13 @@ rebuilt. Read the record's tier, route and parent pair as numbers.
    or re-enumerates behind a hub, and whether the map survives that.
 3. Multi-TT hubs: MTT is selected by SET_INTERFACE (alternate setting 1 on the
    hub). The graph snoops that request and follows it rather than latching
-   (section 4, graph table). A multi-TT hub has not been measured on a target.
+   (section 4, graph table). Measured on a target in halves: the behavioural
+   half was read on the E460 at stage E3 of `runs/run-13e.md`, where a
+   single-TT hub at position T was swapped for a multi-TT one and all five
+   children came back identical across the swap, which is the enumeration
+   `MTT` can get wrong. The `MTT`/`TTT` context-field numbers themselves have
+   never been read: they need a counter channel, and the E460 carries the
+   release flavour.
 4. Whether any controller this project meets rejects Route String = 0 for a
    behind-hub HS device. Worth one experiment on real silicon once hubs work,
    purely to know how much slack exists (do not design for it).

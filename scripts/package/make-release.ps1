@@ -6,8 +6,9 @@ Publish a built driver into releases\<version>\{release,debug}\.
 `releases\` is the tracked, published half of packaging. It carries the two
 files that are this project's own work - `xhci98.sys` and `xhci98.inf` - and
 since release 1.0.0.1 those are the only files on the media at all: the INF has
-the operating system supply `usbd.sys`, `usbhub.sys`, `usbui.dll` and, on
-the NT path, `usbport.sys` from its own install source through `LayoutFile`.
+the operating system supply `usbd.sys` and `usbhub.sys` from its own install
+source through `LayoutFile`, joined by `usbport.sys` on the NT path in 1.0.1.0
+and by `usbui.dll` on every path in 1.0.2.0.
 It is a
 separate step from `make-package.ps1` because the package is the gated build
 output and the release is the tracked, written-once record of it. See
@@ -172,9 +173,12 @@ clone with no `out\` at all can therefore rebuild the current cut's asset.
 
 **This exists so that a broken or lost upload asset is not a reason to re-cut a
 release.** The upload set is assembled after the publish, so without this mode
-the only scripted way to produce it again is `-Force`, which rebuilds
-non-reproducible binaries and rewrites a written-once version directory - the
-one thing `releases\README.md` says never to do. That trap fired for real: the
+the only scripted way to produce it again is `-Force`, which rewrites a
+written-once version directory - the one thing `releases\README.md` says never
+to do. (`-Force` does not rebuild anything: it stages from the existing
+`src\objfre` / `src\objchk` trees and every gate still runs, so the binaries
+come through byte-identical. What it skips is the single "this version
+directory already exists" refusal.) That trap fired for real: the
 first cut's asset was malformed and there was no way to rebuild it in place.
 
 **It rebuilds the current cut's asset only.** The INF gate it runs encodes the
@@ -265,6 +269,57 @@ if ($SnapToolDir -eq "") { $SnapToolDir = Join-Path $repo "xhcisnap" }
 $versionHeader = Join-Path $repo "src\xhci_version.h"
 if ($PackageRoot -eq "") { $PackageRoot = Join-Path $repo "out" }
 if ($UploadDir -eq "") { $UploadDir = Join-Path $repo "out" }
+
+function Write-GeneratedText {
+    <#
+    Every plain-text file this script generates goes through here, and there
+    are five of them: the top-level readme.txt and a readme.txt plus a
+    NOTICE.TXT beside each of the two DOS tools.  Until the 2026-09-07 audit
+    only the first was checked, and the other four were written straight out
+    with `Write-AsciiFile`; four of them were shipping 79-column lines.
+
+    TWO GATES, BOTH OF THEM CHEAP AND BOTH OF THEM CAUGHT SOMETHING.
+
+    78 columns.  These are read in Windows 98 Notepad and DOS EDIT, where a
+    longer line wraps in the wrong place.  Widths are not fixed at authoring
+    time either: names, sizes and hashes are substituted in, so a line's
+    width depends on the manifest, and the first substitution overran by
+    nine characters on the day it was written.
+
+    ASCII.  `Write-AsciiFile` turns any non-ASCII byte into a question mark
+    SILENTLY, and the top-level readme embeds `history.md`, which is
+    markdown a person edits.  One typographic dash in a release entry would
+    ship as `?` in a file nobody re-reads after generating it.
+    `make-11v-media.ps1` already refuses non-ASCII for its INF rewrite; this
+    is the same rule for the same reason.
+    #>
+    param(
+        [string]$Path,
+        [string[]]$Lines
+    )
+
+    $name = Split-Path -Leaf $Path
+
+    $overLong = @($Lines | Where-Object { $_.Length -gt 78 })
+    if ($overLong.Count -gt 0) {
+        throw ("{0} has {1} line(s) past 78 columns, the first being:`n{2}" -f `
+               $name, $overLong.Count, $overLong[0])
+    }
+
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        $line = $Lines[$i]
+        for ($c = 0; $c -lt $line.Length; $c++) {
+            $code = [int][char]$line[$c]
+            if ($code -lt 0x20 -or $code -gt 0x7E) {
+                if ($code -eq 9) { continue }
+                throw ("{0} line {1} column {2} is not printable ASCII (U+{3:X4}); Write-AsciiFile would replace it with a question mark. The line reads:`n{4}" -f `
+                       $name, ($i + 1), ($c + 1), $code, $line)
+            }
+        }
+    }
+
+    Write-AsciiFile -Path $Path -Lines $Lines
+}
 
 function Resolve-DirectoryArgument {
     # **A directory parameter is made absolute here, and relative means the
@@ -1141,9 +1196,11 @@ docs\contributing\build-and-test.md, "Versioning the driver".
     # The upload set is assembled at the end of a cut, from a tree this script
     # has just published. That left one shape unreachable: the release is
     # published and committed, and the *asset* is wrong or gone. Re-running the
-    # cut means -Force, which rebuilds non-reproducible binaries and rewrites a
-    # written-once version directory, so the only scripted repair was the one
-    # thing releases\README.md forbids. This is the way back in.
+    # cut means -Force, which rewrites a written-once version directory, so the
+    # only scripted repair was the one thing releases\README.md forbids. This
+    # is the way back in. (-Force skips one "already exists" refusal and
+    # rebuilds nothing - it stages from the existing obj trees with every gate
+    # still running.)
     #
     # Nothing here is built, and the gates that are about the *build* do not
     # run again - the release this assembles for was gated when it was cut, and
@@ -1375,7 +1432,21 @@ readme.txt prints it beside the history entry, so the two cannot disagree.
         $pkgArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                      $makePackage, "-Flavor", $f, "-OutDir", $pkgDirForBuild)
         if ($NoTargetEvidence) { $pkgArgs += "-NoTargetEvidence" }
-        & powershell.exe @pkgArgs
+        # ErrorActionPreference relaxed across the call, as every other native
+        # call in this script does and this one did not until the 2026-09-07
+        # audit's H17. In Windows PowerShell 5.1 a native command's stderr line
+        # becomes an ErrorRecord, so under "Stop" a single warning from the
+        # packager aborts the cut here with an empty message instead of
+        # reaching the exit-code test below. It only bites when the child's
+        # stderr is redirected, which is why it survived: an interactive run
+        # never showed it.
+        $savedEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            & powershell.exe @pkgArgs
+        } finally {
+            $ErrorActionPreference = $savedEap
+        }
         if ($LASTEXITCODE -ne 0) {
             throw @"
 make-package.ps1 failed for the $f flavour, so there is nothing to release.
@@ -1453,6 +1524,54 @@ Only release and debug may be published; qemu carries the port-0xE9 mirror
 ThinkPad E460 a Code 2 under Windows 98 SE, and it is never shipped. Rebuild the flavour you
 meant: scripts\build-driver.cmd $f
 "@
+        }
+
+        #
+        # **And that the tree can still reproduce it** (the 2026-09-07 audit's
+        # H13). This script already refuses a staged XHCIQUAL or XHCISNAP older
+        # than its own sources; the driver had no equivalent, and the only tie
+        # between src\ and the published .sys was the file version against the
+        # INF's - which cannot see a code edit that did not bump the version.
+        #
+        # `scripts\source-stamp.ps1` compares CONTENT, not timestamps, and
+        # says at length why: an mtime moves on a checkout, a revert or a
+        # comment-only commit, so a timestamp rule would fire on binaries it is
+        # byte-for-byte responsible for and would be bypassed on its first use.
+        #
+        # Exit 2 is "no stamp beside this binary", which a build older than that
+        # script gives. It is a WARNING rather than a refusal, and deliberately:
+        # refusing there would make every binary built before the stamp existed
+        # unpublishable, and the answer to that would be to rebuild - which for
+        # this release is precisely the thing that must not happen, because a
+        # rebuild moves the PE link timestamp and invalidates every reading
+        # taken on the published bytes. A mismatch (exit 1) is a refusal.
+        #
+        $stampScript = Join-Path $repo "scripts\source-stamp.ps1"
+        $objRoot = Split-Path -Parent $sys
+        if (Test-Path -LiteralPath $stampScript) {
+            $stampOut = & powershell -NoProfile -ExecutionPolicy Bypass `
+                -File $stampScript -Check $objRoot 2>&1
+            $stampCode = $LASTEXITCODE
+            if ($stampCode -eq 1) {
+                throw @"
+the binary about to be published as $f\ was built from sources this tree no
+longer holds:
+$($stampOut -join "`n")
+Rebuild it (scripts\build-driver.cmd $f) so the published bytes are ones the
+tree can reproduce - or, if the difference is deliberate and the bytes are the
+ones you mean to ship, rebuild anyway and re-read whatever was measured on the
+old ones. A release nobody can rebuild is a release nobody can debug.
+"@
+            } elseif ($stampCode -eq 2) {
+                Write-Warn ("no source stamp beside the $f binary, so this script " +
+                            "cannot tell whether src\ still reproduces it. It was " +
+                            "built before scripts\source-stamp.ps1 existed; the next " +
+                            "scripts\build-driver.cmd $f writes one.")
+            } elseif ($stampCode -ne 0) {
+                throw "scripts\source-stamp.ps1 -Check '$objRoot' failed: $($stampOut -join "`n")"
+            } else {
+                Write-Ok "$f binary matches the sources in src\"
+            }
         }
 
         $staged[$f] = [pscustomobject]@{
@@ -1795,12 +1914,14 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
     USB 2.0 for Windows 98 SE, ME, 2000 SP4 and XP on xHCI-only machines
 ==============================================================================
 
-Released {DATE}.
+Released {DATE}.{INCOMPLETE}
 
 Most x86 PCs made from around the mid 2010s onward have USB 3.0 (xHCI)
-controllers and nothing else. Windows 98 SE, Windows ME and Windows 2000
-have no support for those. This driver fills that gap. It also installs on
-32-bit Windows XP, as incidental support.
+controllers and nothing else. Windows 98 SE, Windows ME, Windows 2000 and
+32-bit Windows XP have no support for those, and this driver fills that gap
+on all four. Windows 98 SE and Windows 2000 SP4 are the two the driver is
+validated on, including on real hardware; Windows ME and 32-bit Windows XP
+have been tested in virtual machines only.
 
 It gives you USB 2.0 speeds: High Speed, Full Speed and Low Speed. USB 3.0
 SuperSpeed is out of scope. A USB 3.0 device still works, at USB 2.0 speed,
@@ -1812,7 +1933,7 @@ WHY ONLY USB 2.0, WHEN THE CONTROLLER IS A USB 3.0 ONE
 
 The USB stack these systems already have - usbport.sys and everything above
 it - does not support USB 3.0 at all. This driver is only the bottom layer, so
-SuperSpeed would mean rewriting that whole stack on both systems: far more
+SuperSpeed would mean rewriting that whole stack on all four: far more
 work than this driver, for a speed that most machines running Windows 98 or
 Windows 2000 could not make much use of anyway.
 
@@ -1911,7 +2032,7 @@ the safety notes spelled out.
       --xhci --ehci --ohci   the same three selectors, written as options
       --scan TYPE            the same again; repeat it to combine families
 
-  READ-ONLY OPTIONS - these change nothing on the machine.
+  READ-ONLY MODES - these change nothing on the machine.
 
       --quick           the no-argument quick scan, asked for explicitly
       --probe-only      read-only discovery, fuller than --quick. It reads
@@ -1919,6 +2040,13 @@ the safety notes spelled out.
                         has already switched it on, and switches nothing on
                         itself
       --no-active       another name for --probe-only
+
+  MODIFIERS - these say what to do with the report, not what to run.
+  ON THEIR OWN THEY DO NOT MAKE THE RUN READ-ONLY. Any argument at all
+  turns off the no-argument quick scan, so XHCIQUAL --log FILE performs
+  the FULL ACTIVE run below. Pair one with --quick or --probe-only when a
+  read-only run is what you want.
+
       --no-page         do not stop at the end of each screenful
       --serial          mirror the output to COM1, 115200 8N1
       --log [FILE]      also write the report to a file, default
@@ -2024,9 +2152,10 @@ the same two files.
 Four files the driver depends on are NOT in the package, because they are
 Windows' own, unmodified, and no Microsoft file is in this download:
 
-  usbd.sys     The USB 2.0 root hub imports it on both systems. Without it
-               the USB ROOT HUB fails: Code 2 on Windows 98, error
-               0xc0000034 naming usbhub20.sys on Windows 2000.
+  usbd.sys     The USB 2.0 root hub imports it on every target. Without it
+               the USB ROOT HUB fails: Code 2 on Windows 98 and Windows ME,
+               error 0xc0000034 naming usbhub20.sys on Windows 2000 and
+               Windows XP.
 
   usbhub.sys   On Windows 98, the driver for devices that are more than one
                thing at once - a sound card with a volume knob, a headset
@@ -2042,8 +2171,15 @@ Windows' own, unmodified, and no Microsoft file is in this download:
                or SweetLow's) supplies it.
 
   usbui.dll    NEW IN 1.0.2.0, and the one file here that is only cosmetic.
-               It adds an extra USB property page in Device Manager. It is
-               copied on all four targets.
+               On Windows 2000 and Windows XP it brings back the USB Root
+               Hub's Power tab in Device Manager, which those systems' own
+               INFs ask for and name this file as the provider of, so on an
+               xHCI-only machine it was silently missing. On Windows 98 and
+               Windows ME nothing is visible either way - that page comes
+               from sysclass.dll there - but the file is copied on all four
+               targets so the install is the same everywhere. It is the one
+               file here that goes to WINDOWS\SYSTEM32 rather than
+               SYSTEM32\DRIVERS.
 
 WINDOWS ONLY INSTALLS ITS USB FILES WHEN SETUP FINDS A USB CONTROLLER IT
 RECOGNISES, and on an xHCI-only machine it never does, so on such a machine
@@ -2269,8 +2405,8 @@ Two things are specific to this driver and worth knowing in advance:
 
   XHCISNAP.EXE is in the XHCISNAP directory of this package. It reads the
   driver's own log straight out of the running machine and writes a report
-  you can paste into a bug report. It works the same way on both systems,
-  and on Windows 98 it is the ONLY way to get anything out.
+  you can paste into a bug report. It works the same way on every target,
+  and on Windows 98 and Windows ME it is the ONLY way to get anything out.
 
       1. XHCISNAP -verbosity 2
       2. restart the machine
@@ -2454,13 +2590,13 @@ the driver reads, and one the installer writes machine-wide on every system.
   A value that is missing entirely is not an error either - the driver starts
   normally with everything off, and the report says whether it read nothing
   or read a zero. They live in the device's own driver key, which is spelled
-  differently on the two systems:
+  one way on the NT targets and another on the 9x ones:
 
-    Windows 2000
+    Windows 2000 and Windows XP
       HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\
         {36FC9E60-C465-11CF-8056-444553540000}\0002
 
-    Windows 98
+    Windows 98 SE and Windows ME
       HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\Class\USB\0002
 
   THE LAST PART OF THE PATH IS ASSIGNED BY THE MACHINE AND WILL NOT
@@ -2507,10 +2643,10 @@ the driver reads, and one the installer writes machine-wide on every system.
   machine produces a report - see section 6. On Windows 2000 both routes
   work.
 
-  DisableSelectiveSuspend  -  both systems
+  DisableSelectiveSuspend  -  every target
   ........................................
 
-  DWORD, written as 1 by the install on both systems, in
+  DWORD, written as 1 by the install on every target, in
 
       HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB
 
@@ -2565,6 +2701,45 @@ is in docs/contributing/legal-provenance.md, in the project's source
 repository rather than here.
 '@
 
+    #
+    # **Version literals in the perpetual template, each one a decision.**
+    #
+    # The template above is written once and used by every cut, but two of its
+    # sentences are about a particular release - `usbui.dll` being new in
+    # 1.0.2.0, and an upgrade from before it raising a prompt a previous
+    # install did not. Both are still true at any later version, which is
+    # exactly why nobody would notice them going stale, and until the
+    # 2026-09-07 audit's H15 nothing made anyone look. Everything else in the
+    # template says {VERSION} and is substituted.
+    #
+    # So: every four-part version written into the template by hand has to be
+    # listed here with the reason it is there. A new one fails the cut until
+    # somebody decides it belongs; a listed one that has stopped being worth
+    # saying is removed from both places together. This runs against the
+    # template BEFORE substitution, so {VERSION} and the embedded history.md -
+    # which legitimately names every release there has ever been - are not in
+    # scope.
+    #
+    $allowedTemplateVersions = @{
+        "1.0.0.1" = "the release the media stopped carrying any Microsoft file"
+        "1.0.1.0" = "the release usbport.sys joined the NT install path"
+        "1.0.2.0" = "the release usbui.dll joined every install path; named in section 3's file list and in the Windows 98 install step, because an upgrade from before it can raise a CD prompt a previous install did not"
+    }
+    $templateVersions = @([regex]::Matches($template, '\b\d+\.\d+\.\d+\.\d+\b') |
+                          ForEach-Object { $_.Value } | Sort-Object -Unique)
+    $unlisted = @($templateVersions | Where-Object { -not $allowedTemplateVersions.ContainsKey($_) })
+    if ($unlisted.Count -gt 0) {
+        throw @"
+the readme template names version(s) $($unlisted -join ', ') by hand, and
+nothing in this script says why. Everything version-specific in that template
+is substituted from {VERSION}; a literal is release-specific prose in a
+perpetual file, which is how a readme goes quietly stale. Either write it with
+{VERSION}, or add it to `$allowedTemplateVersions` above with the reason it has
+to be spelled out - and check the others there are still worth saying while you
+are in it.
+"@
+    }
+
     # Markdown -> plain text for the embedded history.
     #
     # **Re-wrapped, not just re-prefixed.** history.md is wrapped for markdown at
@@ -2575,9 +2750,41 @@ repository rather than here.
     # indent - the paragraph shape survives, the width is enforced.
     $historyText = @(ConvertFrom-MarkdownBlocks -Lines $history -Width 78)
 
+    #
+    # **An incomplete cut has to say so IN THE FILE**, which is the 2026-09-07
+    # audit's H14. `-SkipQualtool` and `-SkipSnapTool` warn on the console and
+    # leave the section-8 listing out, but every other mention of those
+    # directories stayed: section 1 tells the reader the checker is in
+    # XHCIQUAL\, section 6 tells them to run XHCISNAP, and neither directory is
+    # there. build-and-test.md says the result "is incomplete and says so", and
+    # the console is not where a user reads it.
+    #
+    $missingTools = @()
+    if ($null -eq $qualtoolStaged) { $missingTools += "XHCIQUAL\ (the DOS machine checker of section 1)" }
+    if ($null -eq $snaptoolStaged) { $missingTools += "XHCISNAP\ (the report tool of section 6)" }
+    $incomplete = ""
+    if ($missingTools.Count -gt 0) {
+        # Leading blank line included, so an empty substitution leaves the
+        # "Released <date>." line exactly as it was.
+        $incomplete = @"
+
+
+******************************************************************************
+ THIS DOWNLOAD IS INCOMPLETE. It was cut without:
+
+$(($missingTools | ForEach-Object { "      " + $_ }) -join "`r`n")
+
+ The driver itself is whole and installs normally. What is missing is the
+ tooling, so the parts of this file that tell you to run those programs
+ cannot be followed - ignore them, or get a complete download.
+******************************************************************************
+"@
+    }
+
     $readme = $template.
         Replace("{VERSION}", $Version).
         Replace("{DATE}", $today).
+        Replace("{INCOMPLETE}", $incomplete).
         Replace("{CONTENTS}", (($contents -join "`r`n").TrimEnd() + "`r`n")).
         Replace("{HISTORY}", (($historyText -join "`r`n").TrimEnd()))
 
@@ -2592,12 +2799,8 @@ repository rather than here.
     # now that names and lists are substituted in, a line's width depends on the
     # manifest. The first substitution overran by nine characters on the day it
     # was written, in a file nobody re-reads after generating it.
-    $overLong = @(($readme -split "`r?`n") | Where-Object { $_.Length -gt 78 })
-    if ($overLong.Count -gt 0) {
-        throw ("readme.txt has {0} line(s) past 78 columns, the first being:`n{1}" -f $overLong.Count, $overLong[0])
-    }
-
-    Write-AsciiFile -Path (Join-Path $destRoot "readme.txt") -Lines ($readme -split "`r?`n")
+    Write-GeneratedText -Path (Join-Path $destRoot "readme.txt") `
+                        -Lines ($readme -split "`r?`n")
 
     # --- the qualifier's own readme -----------------------------------------
     if ($null -ne $qualtoolStaged) {
@@ -2717,13 +2920,22 @@ WHICH CONTROLLERS IT LOOKS AT
   --scan TYPE            the same again; repeat it to combine families
 
 
-READ-ONLY OPTIONS - these change nothing on the machine
+READ-ONLY MODES - these change nothing on the machine
 
   --quick           the no-argument quick scan, asked for explicitly
   --probe-only      read-only discovery, fuller than --quick. It reads the
                     controller's memory window only if the firmware has
                     already switched it on, and switches nothing on itself
   --no-active       another name for --probe-only
+
+
+MODIFIERS - these say what to do with the report, not what to run
+
+  ON THEIR OWN THEY DO NOT MAKE THE RUN READ-ONLY. Any argument at all
+  turns off the no-argument quick scan, so XHCIQUAL --log FILE performs the
+  FULL ACTIVE run below. Pair one with --quick or --probe-only when a
+  read-only run is what you want.
+
   --no-page         do not stop at the end of each screenful
   --serial          mirror the output to COM1, 115200 8N1
   --log [FILE]      also write the report to a file, default XHCIQUAL.LOG.
@@ -2819,8 +3031,8 @@ notices are in NOTICE.TXT beside this file, and this product uses DOS/32
 Advanced DOS Extender technology.
 '@
         $qualReadme = $qualReadme.Replace("{VERSION}", $Version)
-        Write-AsciiFile -Path (Join-Path $qualtoolStaged "readme.txt") `
-                        -Lines ($qualReadme -split "`r?`n")
+        Write-GeneratedText -Path (Join-Path $qualtoolStaged "readme.txt") `
+                            -Lines ($qualReadme -split "`r?`n")
 
         # --- the notices the qualifier binary carries with it ----------------
         #
@@ -2919,8 +3131,8 @@ this file records is the linkage and the copyright above; the project's full
 provenance record is docs\contributing\legal-provenance.md, section 2a.
 '@
         $qualNotice = $qualNotice.Replace("{VERSION}", $Version)
-        Write-AsciiFile -Path (Join-Path $qualtoolStaged "NOTICE.TXT") `
-                        -Lines ($qualNotice -split "`r?`n")
+        Write-GeneratedText -Path (Join-Path $qualtoolStaged "NOTICE.TXT") `
+                            -Lines ($qualNotice -split "`r?`n")
         Write-Ok "NOTICE.TXT written beside XHCIQUAL.EXE (DOS/32A + Open Watcom runtime)"
     }
 
@@ -2940,10 +3152,10 @@ If USB is not working properly with this driver, this is what to run. It reads
 the driver's own log straight out of the running machine and writes a report
 you can paste into a bug report.
 
-On Windows 98 it is the ONLY way to get anything out. That is not a gap in this
-driver - it is the price of how it plugs into Windows. The usual ways a driver
-writes a log are closed to it, and this route goes through the Microsoft USB
-driver it sits underneath, which does have them.
+On Windows 98 it is the ONLY way to get anything out. That is not a gap in
+this driver - it is the price of how it plugs into Windows. The usual ways
+a driver writes a log are closed to it, and this route goes through the
+Microsoft USB driver it sits underneath, which does have them.
 
 It changes nothing about how the driver behaves on the bus, and writes no file
 it was not asked to. It does READ the controller's port registers, which is a
@@ -2968,16 +3180,16 @@ state. See the registry section for what that does and does not mean.
 
 Then send C:\MYDUMP.TXT. Attach C:\MYDUMP.BIN as well if you are asked for it.
 
-You never have to open REGEDIT. Step 1 does the whole of that for you, on every
-xHCI controller the machine has.
+You never have to open REGEDIT. Step 1 does the whole of that for you, on
+every xHCI controller the machine has.
 
 
  WHY STEP 1 IS NOT OPTIONAL
 ------------------------------------------------------------------------------
 
-The driver answers nothing until it is asked to, and it reads that setting once
-when it starts. So without step 1 and the restart this tool gets no answer at
-all - which is right, not broken.
+The driver answers nothing until it is asked to, and it reads that setting
+once when it starts. So without step 1 and the restart this tool gets no
+answer at all - which is right, not broken.
 
 Level 2 is the one to use. The others exist and a maintainer may ask for one:
 
@@ -3009,9 +3221,9 @@ Level 2 is the one to use. The others exist and a maintainer may ask for one:
 
 That checks whether the route to the driver works at all, separately from
 whether this driver answers on it. If it says the request reached a driver and
-that driver declined, the usual cause is simply that step 1 has not been done -
-or that the machine has more than one USB controller and this is not the right
-one, in which case try -c 1 and -c 2.
+that driver declined, the usual cause is simply that step 1 has not been
+done - or that the machine has more than one USB controller and this is not
+the right one, in which case try -c 1 and -c 2.
 
 If it cannot open the device at all, no xHCI controller is started on this
 machine, and there is nothing for this tool to read.
@@ -3028,8 +3240,8 @@ file that runs on a machine with nothing installed on it. That linkage is
 recorded in NOTICE.TXT beside this file.
 '@
         $snapReadme = $snapReadme.Replace("{VERSION}", $Version)
-        Write-AsciiFile -Path (Join-Path $snaptoolStaged "readme.txt") `
-                        -Lines ($snapReadme -split "`r?`n")
+        Write-GeneratedText -Path (Join-Path $snaptoolStaged "readme.txt") `
+                            -Lines ($snapReadme -split "`r?`n")
         Write-Ok "readme.txt written beside XHCISNAP.EXE"
 
         # --- the notices the snapshot reader carries with it ------------------
@@ -3066,10 +3278,11 @@ GPL v2 - see the LICENSE file in the directory above.
 It is not only this project's code. It is compiled with Microsoft Visual C++
 6.0 and linked against that compiler's STATIC C runtime - the build passes no
 /MD - so those runtime modules are bound into this executable rather than
-loaded from a DLL when it runs. That is deliberate: it is what makes the tool a
-single file that works on a Windows 98 SE machine with nothing installed on it,
-which is the machine it exists for. You can see it for yourself in the import
-table, which names only KERNEL32.dll and ADVAPI32.dll and no C runtime DLL.
+loaded from a DLL when it runs. That is deliberate: it is what makes the
+tool a single file that works on a Windows 98 SE machine with nothing
+installed on it, which is the machine it exists for. You can see it for
+yourself in the import table, which names only KERNEL32.dll and ADVAPI32.dll
+and no C runtime DLL.
 
 Those runtime modules are Microsoft's. They are not covered by the GPL grant
 above, and they keep whatever terms accompany Visual C++ 6.0. What this file
@@ -3081,8 +3294,8 @@ No DOS extender and no Open Watcom code is in this executable; the NOTICE.TXT
 beside XHCIQUAL.EXE covers a different program and does not apply here.
 '@
         $snapNotice = $snapNotice.Replace("{VERSION}", $Version)
-        Write-AsciiFile -Path (Join-Path $snaptoolStaged "NOTICE.TXT") `
-                        -Lines ($snapNotice -split "`r?`n")
+        Write-GeneratedText -Path (Join-Path $snaptoolStaged "NOTICE.TXT") `
+                            -Lines ($snapNotice -split "`r?`n")
         Write-Ok "NOTICE.TXT written beside XHCISNAP.EXE (static MSVC 6.0 C runtime)"
     }
 

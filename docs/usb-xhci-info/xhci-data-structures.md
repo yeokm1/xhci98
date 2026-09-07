@@ -72,19 +72,19 @@ Notes:
 
     Appendix H.1 settles the other half: it lists the capabilities "that were optional for xHCI 1.0 implementations [and] are now required in xHCI 1.1 implementations", and H.1.6 is FSC (p.593), as are U3C (H.1.4), CTC (H.1.7) and CIC (H.1.8), three more bits of this same register. So a 1.0 controller may legitimately advertise FSC, and a driver that forces the bit to 0 on an HCIVERSION test is discarding a discovery bit. `src/xhci_caps.c` gates the read on reach instead (CAPLENGTH and the mapped window must both extend to 0x20), which is checkable rather than inferred.
   - What remains an inference: the PDF does not say what a controller predating the register returns at that address. With the reach gate the exposure is a controller whose CAPLENGTH covers 0x20 and which implements nothing there. The convention that such a read is 0 is a backward-compatibility assumption, not spec text; do not restate it as a requirement. An all-ones read is refused separately, since bit 2 of it is a 1.
-  - QEMU's model has no HCCPARAMS2 case at all and its capability reads default to 0, so FSC reads 0 there. That one is measured. The fleet controllers are not measured: `xhciqual` reads and prints HCCPARAMS2 and decodes FSC (`xhciqual/xhcicap.c`, `xhciqual/report.c`), but `xhciqual/results/` predates that change, so what it establishes for the fleet is HCIVERSION and CAPLENGTH and nothing about their FSC bit. Closing the gap needs a fresh bare-metal run, not a code change. Do not infer one controller's answer from another's.
+  - QEMU's model has no HCCPARAMS2 case at all and its capability reads default to 0, so FSC reads 0 there. That one is measured. The fleet is measured in part. `xhciqual` reads and prints HCCPARAMS2 and decodes FSC (`xhciqual/xhcicap.c`, `xhciqual/report.c`), and the E460 logs of 2026-08-22 carry it: `HCCPARAMS2 00000000`, `fsc=0` in the `FACT` line, corroborated at stage E0 of `runs/run-13e.md`. What predates the change is the two 2026-07-25 sets, the earlier E460 one and the P14s one, which establish HCIVERSION and CAPLENGTH and nothing about their FSC bit. Closing that half needs a fresh bare-metal run on the P14s, not a code change. Do not infer one controller's answer from another's.
 
 ## 3. Operational Registers (BAR0 + CAPLENGTH, spec 5.4)
 
 | Offset | Register | Bits used by this driver |
 |---|---|---|
-| +0x00 | USBCMD | R/S `0`, HCRST `1`, INTE `2`, HSEE `3`, RsvdP `6:4`, LHCRST `7`, CSS `8`, CRS `9`, EWE `10`, EU3S `11` |
+| +0x00 | USBCMD | R/S `0`, HCRST `1`, INTE `2`, HSEE `3`, RsvdP `6:4`, LHCRST `7`, CSS `8`, CRS `9`, EWE `10`, EU3S `11`, then the 1.1/1.2 additions CME `13`, ETE `14`, TSC_EN `15` and VTIOE `16` - defined bits this driver never enables and always writes as zero, which is why `XHCI_USBCMD_DEFINED_MASK` in `src/xhci.h` covers `16:0` and not just `11:0` |
 | +0x04 | USBSTS | HCH `0` (RO), HSE `2` (RW1C), EINT `3` (RW1C), PCD `4` (RW1C), SSS `8`, RSS `9`, SRE `10` (RW1C), CNR `11` (RO), HCE `12` (RO) |
 | +0x08 | PAGESIZE | Bit n set => page size 2^(n+12). Bit 0 = 4 KB (the normal case) |
 | +0x14 | DNCTRL | Notification Enable N0-N15 `15:0`, RsvdP `31:16` (Table 5-23 p.366). Write 0x0002 (enable FUNCTION_WAKE only, spec 5.4.4 Table 5-23 note; Function Wake is 4.13.2) or 0 |
 | +0x18 | CRCR (64-bit) | RCS `0`, CS `1` (RW1S), CA `2` (RW1S), CRR `3` (RO), RsvdP `5:4`, Command Ring Pointer `63:6` (Table 5-24 p.367-368) |
 | +0x30 | DCBAAP (64-bit) | Pointer `63:6`, low 6 bits RsvdZ - write 0, do not preserve (Table 5-25 p.369) |
-| +0x38 | CONFIG | MaxSlotsEn `7:0`, U3E `8`, CIE `9`, SOC `10` (RW, new in revision 1.2c; RsvdP in 1.2), RsvdP `31:11` (Table 5-26 p.370). This driver never sets SOC and its read-modify-write carries whatever it read, so the bit's promotion changed nothing |
+| +0x38 | CONFIG | MaxSlotsEn `7:0`, U3E `8`, CIE `9`, SOC `10` (RW, new in revision 1.2c; RsvdP in 1.2), RsvdP `31:11` (Table 5-26 p.370). This driver never sets SOC and its read-modify-write carries whatever it read, so the bit's promotion changed nothing - and the write behaviour is the same either way, which is why `xhci-programming.md`'s step 6 can call `31:10` RsvdP without any consequence following from the difference |
 | +0x400 + 0x10*(n-1) | PORTSC for port n (1-based) | See below |
 
 USBSTS is RW1C: to clear EINT write a value with bit 3 set. **Never
@@ -985,8 +985,9 @@ a generation, so once those TRBs are re-let the tail is indistinguishable from
 the new TD's own event and completes it with the wrong length: a truncated bulk
 IN reported as success. So the short event only defers. The transfer stays
 queued and keeps its TRBs, and the retire happens at the end of a drain pass
-that found the event ring empty (`XhciXferDrainSettled`, called from
-`XhciEventDpc` only when that pass observed the ring empty). At that instant
+that found the event ring empty (`XhciXferDrainSettled`, reached from
+`XhciEventDpc` only when that pass observed the ring empty - one level down,
+through `XhciSlotDrainSettled`, which is what the DPC actually calls). At that instant
 every tail the controller had written has been consumed and matched, so a TD
 still short is one whose tail was not sent.
 
@@ -1197,7 +1198,7 @@ Input Control Context (spec 6.2.5.1):
 |---|---|
 | 0 | Drop Context flags D2-D31 (bits `31:2`; bits 0-1 RsvdZ) - contexts to disable |
 | 1 | Add Context flags A0-A31 (bit i = context DCI i) - contexts to evaluate/enable |
-| 7 | Configuration Value `7:0`, Interface Number `15:8`, Alternate Setting `23:16` (only if HCCPARAMS1.CFC = 1; otherwise RsvdZ - leave 0) |
+| 7 | Configuration Value `7:0`, Interface Number `15:8`, Alternate Setting `23:16`. These are valid only when HCCPARAMS2.CIC = 1 **and** CONFIG.CIE is set; otherwise RsvdZ - leave 0. (CIC is Configuration Information Capability, HCCPARAMS2 bit 5, listed in Appendix H.1.8 as one of the bits that became required at xHCI 1.1. It is NOT HCCPARAMS1.CFC, which is Contiguous Frame ID and is described in section 5.) This driver never writes DW7 and never sets CONFIG.CIE, so it leaves the whole doubleword zero |
 
 Usage: Address Device sets A0 + A1 (slot + EP0). Configure Endpoint sets A0
 plus one A-bit per endpoint being added and D-bits for endpoints being

@@ -73,7 +73,7 @@ function Invoke-Gate {
 function New-MutatedInf {
     # $Mutate takes the production text and returns the text to write.
     param([string]$Name, [scriptblock]$Mutate, [switch]$Utf16, [switch]$LfOnly, [switch]$Latin1, [switch]$BareCr,
-          [switch]$InfUnchanged)
+          [switch]$Utf8Bom, [switch]$InfUnchanged)
     $original = [System.IO.File]::ReadAllText($prodInf)
     $text = & $Mutate $original
 
@@ -95,7 +95,7 @@ function New-MutatedInf {
     # point. And -InfUnchanged, for the version cross-check block, where what
     # is mutated is the `xhci98.rc` staged beside the INF - those cases assert
     # their own mutation landed, one file over.
-    if ($text -ceq $original -and -not ($Utf16 -or $LfOnly -or $BareCr -or $InfUnchanged)) {
+    if ($text -ceq $original -and -not ($Utf16 -or $LfOnly -or $BareCr -or $Utf8Bom -or $InfUnchanged)) {
         Assert-True $false ("$Name : the mutation left src\xhci98.inf unchanged, so whatever this case asserts, it asserts it about the production INF. Its pattern no longer matches - fix the pattern, not the gate.")
     }
 
@@ -111,6 +111,13 @@ function New-MutatedInf {
         # It goes at the head of the file, where Read-Inf's per-line Trim()
         # swallows it and every other rule sees the production INF unchanged.
         [System.IO.File]::WriteAllText($path, ("`r" + $text), (New-Object System.Text.ASCIIEncoding))
+    } elseif ($Utf8Bom) {
+        # Three bytes of BOM in front of otherwise perfect ASCII - the one
+        # encoding mistake an editor makes silently on save, and the branch of
+        # FILE-ENCODING that had no test until the 2026-09-07 audit's H9.
+        # Neither setup engine reads a BOM as anything but garbage at the head
+        # of [Version].
+        [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($true)))
     } elseif ($Utf16) {
         [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UnicodeEncoding($false, $true)))
     } elseif ($Latin1) {
@@ -126,8 +133,9 @@ function New-MutatedInf {
 }
 
 function Assert-RuleFires {
-    param([string]$Name, [string]$Rule, [scriptblock]$Mutate, [switch]$Utf16, [switch]$LfOnly, [switch]$Latin1, [switch]$BareCr)
-    $path = New-MutatedInf -Name $Name -Mutate $Mutate -Utf16:$Utf16 -LfOnly:$LfOnly -Latin1:$Latin1 -BareCr:$BareCr
+    param([string]$Name, [string]$Rule, [scriptblock]$Mutate, [switch]$Utf16, [switch]$LfOnly, [switch]$Latin1, [switch]$BareCr,
+          [switch]$Utf8Bom)
+    $path = New-MutatedInf -Name $Name -Mutate $Mutate -Utf16:$Utf16 -LfOnly:$LfOnly -Latin1:$Latin1 -BareCr:$BareCr -Utf8Bom:$Utf8Bom
     $r = Invoke-Gate -Path $path
     Assert-True ($r.ExitCode -ne 0) ("$Name : the gate accepted a broken INF (exit 0).")
     # A WARN line carries the same [RULE] tag, and several rules have both
@@ -540,10 +548,26 @@ try {
         param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98",
                              "[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyW98")
     }
-    # A Win2000-only INF - the mistake this task exists to prevent - must fail
-    # on the Win98 half rather than quietly install on one target.
-    Assert-RuleFires "nt-only" "PATH-W98" {
+    # The undecorated install section losing its AddReg: Windows 98 binds the
+    # device and then loads nothing, because DevLoader and NTMPDriver are what
+    # that section carries.
+    Assert-RuleFires "w98-no-addreg" "PATH-W98" {
         param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles", "[Xhci.Dev]`r`nCopyFiles=Xhci.CopyFiles")
+    }
+    #
+    # **A genuinely NT-only INF** - the mistake this task exists to prevent. It
+    # has to fail on the Windows 98 half rather than quietly install on one
+    # target. The case that stood here until the 2026-09-07 audit's H9 was
+    # named for this and did not build it: it deleted the `AddReg=` line and
+    # left `[Xhci.Dev]` in place, so what it exercised was the case above and
+    # the Windows 98 *path* branch - a model whose undecorated section is
+    # missing entirely - was never produced by anything.
+    #
+    # The whole section goes, models and all, which is what an author who wrote
+    # the INF against Windows 2000 alone would produce.
+    #
+    Assert-RuleFires "nt-only" "PATH-W98" {
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`n", "")
     }
 
     # ---- the files the OS supplies (Phase 17, release 1.0.0.1; Phase 19) ----
@@ -648,6 +672,121 @@ try {
     # succeeds.
     Assert-RuleFires "os-dest" "OS-DEST" {
         param($t) $t.Replace("Xhci.CopyW98=10,System32\Drivers", "Xhci.CopyW98=11")
+    }
+
+    # ---- usbui.dll, new in 1.0.2.0 -----------------------------------------
+    #
+    # **The 2026-09-07 audit's H7.** This file is the change the release turns
+    # on, and it had ZERO self-test coverage: the missing-file, on-media,
+    # never-named and flag rules were all untested for it, and so was the
+    # wrong-destination rule - which matters more than the rest, because
+    # `usbui.dll` is the only OS-supplied row that does not go to dirid 10 and
+    # the per-row destination mechanism was introduced by the same commit that
+    # added it. A rule with one user and no negative test is a rule nobody has
+    # watched fail.
+    #
+    # What each break costs on a target: the NT root hub's Power tab silently
+    # absent (the file not copied), or the file landing in System32\Drivers
+    # where the property-page loader does not look for it, which is the same
+    # silence from the other direction.
+    Write-Step "usbui.dll on every route"
+
+    # Gone from the 9x path, and from the NT path, one at a time.
+    Assert-RuleFires "os-no-usbui-w98" "OS-MISSING" {
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI",
+                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98")
+    }
+    Assert-RuleFires "os-no-usbui-nt" "OS-MISSING" {
+        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI",
+                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT")
+    }
+    # And from a right-click route, which is the one a user with an earlier
+    # release takes and the one no per-file rule would otherwise reach.
+    Assert-RuleFires "os-no-usbui-9x-default" "OS-MISSING" {
+        param($t) $t.Replace("[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI",
+                             "[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98")
+    }
+    # The row emptied rather than the section dropped: the section still exists
+    # and [DestinationDirs] still names it, so nothing structural is missing.
+    Assert-RuleFires "os-empty-copyui" "OS-MISSING" {
+        param($t) $t.Replace("[Xhci.CopyUI]`r`nusbui.dll,,,16`r`n", "[Xhci.CopyUI]`r`n")
+    }
+    # **The wrong destination**, which is the rule this file is the only user
+    # of: dirid 10 is System32\Drivers, where a user-mode property-page DLL is
+    # not looked for. The copy succeeds and the tab is still missing.
+    Assert-RuleFires "os-usbui-dest-drivers" "OS-DEST" {
+        param($t) $t.Replace("Xhci.CopyUI=11", "Xhci.CopyUI=10,System32\Drivers")
+    }
+    # Dirid 12 is System32\Drivers by another spelling, so this is the same
+    # mistake written the way an editor is most likely to write it.
+    Assert-RuleFires "os-usbui-dest-12" "OS-DEST" {
+        param($t) $t.Replace("Xhci.CopyUI=11", "Xhci.CopyUI=12")
+    }
+    # On the media: the file is Microsoft's, and this project ships none.
+    Assert-RuleFires "os-usbui-on-media" "OS-MEDIA" {
+        param($t) $t.Replace("xhci98.inf=1`r`n", "xhci98.inf=1`r`nusbui.dll=1`r`n")
+    }
+    # Without COPYFLG_NO_OVERWRITE it would replace the machine's own copy,
+    # which on a machine that has one is a downgrade and a CD prompt.
+    Assert-RuleFires "os-usbui-no-flag" "OS-FLAGS" {
+        param($t) $t.Replace("[Xhci.CopyUI]`r`nusbui.dll,,,16", "[Xhci.CopyUI]`r`nusbui.dll")
+    }
+    # A media-name field on it, the 1.0.0.0 shape applied to the new file.
+    Assert-RuleFires "os-usbui-srcname" "OS-SRCNAME" {
+        param($t) $t.Replace("[Xhci.CopyUI]`r`nusbui.dll,,,16", "[Xhci.CopyUI]`r`nusbui.dll,usbui2k.dll,,16")
+    }
+
+    # ---- rules whose negative branch had no test (audit H9) ----------------
+    #
+    # Each of these is a branch the gate carries and nothing had ever watched
+    # fire. A rule that has never failed is a rule that might not be able to.
+    Write-Step "the branches that had no negative test"
+
+    # The encoding rule's UTF-8 byte-order-mark branch. Neither setup engine
+    # reads a BOM as anything but three bytes of garbage at the head of
+    # [Version], and the file is otherwise valid ASCII, so this is the one
+    # encoding mistake an editor makes silently on save.
+    Assert-RuleFires "file-encoding-bom" "FILE-ENCODING" {
+        param($t) $t
+    } -Utf8Bom
+
+    # The 8.3 path rule: a copy row naming a file whose stem is longer than
+    # eight characters. Windows 98's 16-bit engine truncates it.
+    Assert-RuleFires "long-file-name" "W98-83PATH" {
+        param($t) $t.Replace("[Xhci.CopyFiles]`r`nxhci98.sys,,xhci98.tmp",
+                             "[Xhci.CopyFiles]`r`nxhci98driver.sys,,xhci98.tmp")
+    }
+
+    # The temporary-name field on the driver's own copy row (audit H10). Its
+    # absence is a documented Windows 98 trap - the replace over the loaded
+    # binary fails - and until that audit only the footprint diff noticed.
+    Assert-RuleFires "w98-no-tempname" "W98-TEMPNAME" {
+        param($t) $t.Replace("xhci98.sys,,xhci98.tmp", "xhci98.sys")
+    }
+
+    # Both right-click sections gone (audit H8). This is the shape that used to
+    # pass green: with neither section present the OS-* and SUSP-* route lists
+    # simply get shorter, so half the install routes stop being checked instead
+    # of failing.
+    Assert-RuleFires "no-default-sections-at-all" "OS-DEFAULT" {
+        param($t)
+        $s = $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n", "")
+        $s.Replace("[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n", "")
+    }
+
+    # COPYFLG_NO_VERSION_DIALOG (32), which the table in build-and-test.md
+    # rejects and which the flag rule did not object to until audit H11. 16|32
+    # keeps NO_OVERWRITE set, so only the added bit is under test.
+    Assert-RuleFires "os-no-version-dialog" "OS-FLAGS" {
+        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,48")
+    }
+    # COPYFLG_FORCE_FILE_IN_USE (8), the third refused bit, likewise untested.
+    Assert-RuleFires "os-force-file-in-use" "OS-FLAGS" {
+        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,24")
+    }
+    # COPYFLG_OVERWRITE_OLDER_ONLY (64), the fourth.
+    Assert-RuleFires "os-overwrite-older" "OS-FLAGS" {
+        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,80")
     }
 
     # ---- SUSP-* : DisableSelectiveSuspend on every route (Phase 19) ---------

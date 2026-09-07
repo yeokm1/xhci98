@@ -252,6 +252,57 @@ try {
     Assert-True ($meText.Contains("-machine pc ^") -and $meText.Contains("-cpu pentium3 ^") -and
         $meText.Contains("-action reboot=reset -no-shutdown ^")) `
         "the Windows ME launcher lost the machine, CPU or reboot flags the Windows 98 recipe fixes."
+
+    #
+    # **NO TWO GUESTS MAY SHARE A QEMU MONITOR PORT**, and nothing checked it
+    # until the 2026-09-07 audit's H31. Two launchers on one port cannot both
+    # run: the second QEMU fails to bind and dies, or - worse, and this is the
+    # one that costs a run - the harness connects to the FIRST guest's monitor
+    # believing it is talking to the second, and every reading it takes is of
+    # the wrong machine.
+    #
+    # It has happened twice. The Windows ME launcher took 55558, which is the
+    # ACPI-HAL Windows 2000 machine's, until the 2026-09-05 audit; it then took
+    # 55560, which is the xHCI-only Windows 2000 machine's, until the
+    # 2026-09-07 one. Both were found by reading, not by a check - which is the
+    # argument for this being the cheap check it is: the ports are written into
+    # the generators as arithmetic on a base, so a collision is a sum nobody
+    # evaluated.
+    #
+    # Every launcher this file generated is scanned, install and run alike:
+    # an install launcher colliding with a run launcher matters just as much,
+    # since the prepare and install passes are exactly when a second guest is
+    # most likely to be up.
+    #
+    $portsSeen = @{}
+    foreach ($dir in @($launchers, $fallbackLaunchers, $meLaunchers)) {
+        if (-not (Test-Path -LiteralPath $dir)) { continue }
+        foreach ($cmd in (Get-ChildItem -LiteralPath $dir -File -Filter "*.cmd")) {
+            foreach ($line in [System.IO.File]::ReadAllLines($cmd.FullName)) {
+                if ($line -match 'tcp:127\.0\.0\.1:(\d+),server') {
+                    $port = $Matches[1]
+                    # One generator writing the same port into its own install,
+                    # prepare and run launchers is correct and expected: they
+                    # are the same guest at three moments and never run at
+                    # once. What must not happen is two DIFFERENT guests
+                    # sharing one, so the key is the port and the value is the
+                    # set of launcher STEMS, with the guest's own suffix
+                    # removed.
+                    $guest = $cmd.BaseName -replace '-(install|prepare-usbd|run|usb-test|net-storage-test)$', ''
+                    if (-not $portsSeen.ContainsKey($port)) { $portsSeen[$port] = @() }
+                    if ($portsSeen[$port] -notcontains $guest) { $portsSeen[$port] += $guest }
+                }
+            }
+        }
+    }
+    Assert-True ($portsSeen.Count -gt 0) `
+        "no monitor port was found in any generated launcher, so this check measured nothing."
+    foreach ($port in ($portsSeen.Keys | Sort-Object)) {
+        Assert-True ($portsSeen[$port].Count -le 1) `
+            ("monitor port {0} is used by more than one guest: {1}. Two guests on one port cannot both run, and a harness that connects to it reads whichever one answered." -f `
+                $port, (($portsSeen[$port] | Sort-Object) -join ", "))
+    }
+    Write-Ok ("{0} monitor port(s) across the generated launchers, none shared" -f $portsSeen.Count)
 } finally {
     if (Test-Path -LiteralPath $work) {
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue

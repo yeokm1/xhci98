@@ -15,9 +15,10 @@ how it was found (issue 5's fix is a registry value the release notes list
 as a known limitation because it is machine-wide). Issue 4 was observed on the Windows XP guest on 2026-09-03 and
 fixed the same day as roadmap task 19.7 in release `1.0.1.0`: a host vector
 reproduces the mechanism, and the closing run on a clean install (`i4b`)
-saw the restore recur on both devices and the fix carry them. What the
-task still owes is the reading on both primary targets that nothing changed
-there.
+saw the restore recur on both devices and the fix carry them. The reading on
+both primary targets that nothing changed there was taken the same night: the
+device matrix on the Windows 98 SE and Windows 2000 guests plus the Windows 98
+door sequence, with the counter at zero throughout. Nothing is owed.
 
 | # | Issue | Status |
 |---|---|---|
@@ -59,11 +60,16 @@ reader.
   never returns and hangs the boot inside `StartController`. The probe that
   established it was itself confounded once by asking for the wrong access
   mask. This is why the file sink in issue 1 died.
-- The published debug flavour does not load on real silicon (still open). One
-  import differs from the release build, `HAL.dll!WRITE_PORT_UCHAR`, the
-  port-`0xE9` writer, and the E460 gives it Code 2. Either the import does not
-  resolve or something on that chipset decodes `0xE9`. The three-flavour split
-  exists so the question can stay open.
+- Why a `0.0.0.4`-era debug binary did not load on real silicon (defect 2b,
+  still open). That binary carried one import the release build did not,
+  `HAL.dll!WRITE_PORT_UCHAR`, the port-`0xE9` writer, and the E460 gave it
+  Code 2. Either the import did not resolve or something on that chipset
+  decodes `0xE9`; the P6 binaries of `runs/run-13e.md` were built to separate
+  the two and the cause has never been read. What is NOT open is the shipped
+  article: the three-flavour split of task 13-L.1 moved every `XHCI_DBG_*`
+  site and the `0xE9` mirror into the never-published `qemu` flavour, so the
+  published `debug` flavour no longer carries the differing import at all.
+  The split exists so the question can stay open without shipping it.
 - The hub-churn wedge and the false green. 150 hub add/remove
   pairs were written up as clean on the strength of a screenshot and a single
   `info irq` sample; the guest was silently wedged (IDE IRQ frozen, clock

@@ -21,34 +21,7 @@
 
 #include <stdio.h>
 #include "../src/xhci.h"
-
-static int failures;
-static int checks;
-
-#define CHECK(cond, what) check_impl((cond), (what), __LINE__)
-
-static void check_impl(int cond, const char *what, int line)
-{
-    checks++;
-    if (!cond) {
-        failures++;
-        printf("FAIL %s:%d: %s\n", "test_membuf.c", line, what);
-    }
-}
-
-#define CHECK_EQ(got, want, what) \
-    check_eq_impl((unsigned long)(got), (unsigned long)(want), (what), __LINE__)
-
-static void check_eq_impl(unsigned long got, unsigned long want,
-                          const char *what, int line)
-{
-    checks++;
-    if (got != want) {
-        failures++;
-        printf("FAIL %s:%d: %s (got %lu / 0x%lX, want %lu / 0x%lX)\n",
-               "test_membuf.c", line, what, got, got, want, want);
-    }
-}
+#include "test_harness.h"
 
 /* Independent restatement of the spec rule, not a call into the code. */
 static int spans(unsigned long offset, unsigned long size,
@@ -246,10 +219,47 @@ static void test_fleet_controller(void)
  *   Scratchpad array      64 B align, must not cross PAGESIZE
  *   Scratchpad pages      PAGESIZE align
  */
+/*
+ * **The singleton fields, pinned by value.**
+ *
+ * `check_layout_rules` below states Table 6-1's alignment and no-crossing
+ * rules, and ordering between the regions - all of it necessary, none of it
+ * sufficient. These five offsets and two counts are what `src/xhci_init.c`
+ * writes into DCBAAP, CRCR, ERSTBA, ERSTSZ and ERDP, and a layout that shifted
+ * all of them together by one page, or that halved the event ring, satisfies
+ * every rule in that function. `ErstEntries` in particular was checked by
+ * NOTHING anywhere in this suite until the 2026-09-07 audit's G6, and it is
+ * the operand of ERSTSZ: a zero there is an interrupter with no segment table
+ * and no event delivery at all.
+ *
+ * They are constants of the layout rather than of the controller, so they are
+ * the same on every shape `test_layouts` builds, which is why this is a
+ * separate function called from the same three places.
+ */
+static void check_layout_singletons(const XHCI_HC_LAYOUT *l, const char *tag)
+{
+    check_eq_impl(l->DcbaaOffset, 0x00000UL, tag, __FILE__, __LINE__);
+    check_eq_impl(l->ScratchpadArrayOffset, 0x00800UL, tag, __FILE__, __LINE__);
+    check_eq_impl(l->CommandRingOffset, 0x01000UL, tag, __FILE__, __LINE__);
+    check_eq_impl(l->ErstOffset, 0x01400UL, tag, __FILE__, __LINE__);
+    check_eq_impl(l->EventRingOffset, 0x02000UL, tag, __FILE__, __LINE__);
+    check_eq_impl(l->InputContextOffset, 0x03000UL, tag, __FILE__, __LINE__);
+    check_eq_impl(l->DeviceContextOffset, 0x04000UL, tag, __FILE__, __LINE__);
+
+    check_eq_impl(l->CommandRingTrbs, 64UL, tag, __FILE__, __LINE__);
+    check_eq_impl(l->EventRingTrbs, 256UL, tag, __FILE__, __LINE__);
+
+    /* One segment, which is what ERSTSZ is written with and what the single
+     * 64-byte ERST reservation holds. */
+    check_eq_impl(l->ErstEntries, 1UL, tag, __FILE__, __LINE__);
+}
+
 static void check_layout_rules(const XHCI_HC_LAYOUT *l, const char *tag)
 {
     ULONG i;
     ULONG off;
+
+    check_layout_singletons(l, tag);
 
     CHECK(l->DcbaaOffset % 64 == 0, tag);
     CHECK(!spans(l->DcbaaOffset, l->DcbaaBytes, XHCI_PAGE_SIZE), tag);

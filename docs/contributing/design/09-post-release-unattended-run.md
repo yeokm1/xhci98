@@ -109,9 +109,10 @@ The run covers Windows 98 SE and Windows 2000 SP4 on one CPU, which is targets
 
 That is a scope decision and not a claim that the SMP guest does not matter.
 It is Phase 11's and Phase 13's stress vehicle, and the one live residual this
-project has published on it, a suspend arriving during an in-place controller
-recovery on a multiprocessor machine, is untested ground the release notes do not
-list. What that guest measures is a driver under concurrency; what
+project carries on it - a suspend arriving during an in-place controller
+recovery on a multiprocessor machine - is untested ground. Phase 14 removed it
+from `docs/using/release-notes.md`, so it is recorded here and in
+`design/07-controller-recovery-in-place.md` and is not published. What that guest measures is a driver under concurrency; what
 this run measures is a release installing onto an operating system with no
 history and surviving plug and unplug. A third guest would multiply the
 preparation of section 2.1 for a reading this run was not built to take.
@@ -163,9 +164,11 @@ the launchers.
 
 `post-nusb` is chosen over the later `phase2a-usbd-ok` on purpose. The
 difference between them is one file, `usbd.sys`, copied in by hand on
-2026-07-24 as an environment fix. NUSB does not ship it, an xHCI-only machine
-never triggers the Windows 98 path that would, and `xhci98.inf` carries it for
-that reason. A base image that already has the file would hide whether the
+2026-07-24 as an environment fix. NUSB does not ship it and an xHCI-only
+machine never triggers the Windows 98 path that would, so `xhci98.inf` has the
+OS supply it: since 1.0.0.1 it is fetched through `LayoutFile` from the OS's
+own install source rather than carried on the media, which is the delivery a
+fresh target is there to exercise. A base image that already has the file would hide whether the
 INF still delivers it, and a stranger's machine does not have it either.
 
 The snapshots are cloned out, never reverted in place. `vm/win98.img` and
@@ -236,15 +239,25 @@ The rule is design record 06's, unchanged: a model this vehicle cannot present
 is a reading of the vehicle. It is recorded as not reached, never as a pass and
 never as a silence.
 
-### 4.1 The composite row on Windows 98 runs, pinned to the known failure
+### 4.1 The composite row on Windows 98 runs, with inert expectations
 
-The `usb-audio` row stays on target `2a` and is attached like any other. Its
-expectation on that target is written as the reading the release notes' USB
-Audio limitation records,
-so a run that reproduces the `USBAUDIO.VXD` failure passes its own pinned
-clause and a run that does not reproduce it shows in the diff either way. On
-Windows 2000 the row keeps its ordinary expectation. Excluding it would have
-been cheaper to prepare and would have turned a known reading into a silence.
+The `usb-audio` row stays on target `2a` and is attached like any other. It is
+NOT pinned to the `USBAUDIO.VXD` fault, and an earlier version of this record
+saying so is superseded. What it carries on both targets is inert isochronous
+expectations - the packet, missed-service and packet-error counters recorded
+as structurally zero, because an unattended run plays nothing and an idle
+`usb-audio` endpoint moves no isochronous traffic at all - plus, on `2a`
+alone, a `MayWedgeGuest` declaration, because Windows 98 SE's own
+`USBAUDIO.VXD` divides by zero after one 10 ms URB and can take the guest with
+it. That fault was exonerated in batch 9-V through a UHCI control with this
+driver idle-suspended, so it is the emulated device and the VxD rather than
+anything this driver does, and it is not something the row asserts must
+happen. Both audio legs read PASS on both targets in the `1.0.2.0`
+post-release pair. On Windows 2000 the row carries the same inert clauses and
+no `MayWedgeGuest`. Excluding it would have been cheaper to prepare and would
+have turned a known reading into a silence. `scripts/vm-matrix/matrix.psd1`'s
+audio group is the authority; read it rather than this paragraph if the two
+ever disagree.
 
 ### 4.2 A class the fresh OS has no driver for
 
@@ -462,9 +475,12 @@ What exists:
   the last prep boot's debug console never showed the qemu build running with
   the offset table's `SIZEOF`, so the stamp's claim about what was installed
   rests on a reading and not on the operator's word. On a fresh target the
-  transfer drive carries the whole qemu package, INF and per-target
-  `usbd.sys` included, because the install goes through the INF on a guest
-  that has never had the driver. No safety snapshot is taken on a clone; the
+  transfer drive carries the whole qemu package - `xhci98.inf` and
+  `xhci98.sys`, and nothing else - because the install goes through the INF on
+  a guest that has never had the driver. It carries no Microsoft file: since
+  1.0.0.1 the OS supplies `usbd.sys` and `usbhub.sys`, since 1.0.1.0
+  `usbport.sys` on the NT paths and since 1.0.2.0 `usbui.dll`, all through
+  `LayoutFile`, and the media may not carry any of them under any name. No safety snapshot is taken on a clone; the
   clone is the safety, and a snapshot under the stamp would only be a state
   the run has to read past.
 - `run-matrix.ps1 -PostRelease` boots the fresh targets and nothing else,
@@ -485,7 +501,7 @@ Choices the code made where this record was silent:
 - A five-second pause separates the detach from the replug, so the guest can
   finish removing the node; the acceptance test's warning about rapid cycling
   on Windows 98 is the reason.
-- The composite row's pinned reading (section 4.1) is carried as the existing
+- The composite row's wedge risk (section 4.1) is carried as the existing
   `MayWedgeGuest` declaration: a group that ends on such a row is still
   `ERROR` in the report and does not count against the target. No new outcome
   word was added, and a run that does not reproduce the wedge shows in the

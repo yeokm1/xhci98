@@ -201,10 +201,15 @@ Each batch first verifies that its directory is writable. The three active
 batches (`3XIRQ`, `4XEMPTY`, `5XDEV`) then pass `--done-flag`, test the
 completion flag with `IF EXIST` (the flag is written on a normal exit,
 including a usage error) and bucket the exit code with `IF ERRORLEVEL`, so
-they label normal qualified/provisional/failed results separately and
-preserve a partial log after an abnormal termination. `1PROBE` and `2XPOLL`
-are read-only and only check that their log exists; read the log's `Done.`
-line yourself. Each batch replaces an existing same-named log, so
+they preserve a partial log after an abnormal termination, so they separate a normal run whose test passed from a normal run whose test
+failed from an abnormal termination - three buckets, not the
+qualified/provisional/failed verdict words, which are the log's and not the
+exit code's. `1PROBE` and `2XPOLL` do not pass the flag and only check that
+their log exists; read the log's `Done.` line yourself. `1PROBE` is genuinely
+read-only. **`2XPOLL` IS NOT**: `--poll-only` is an active mode - it takes
+ownership, resets the controller, DMAs and resets ports, and only the
+interrupt handler is left out. Step 2 above says so; this list does not
+override it. Each batch replaces an existing same-named log, so
 archive that file before repeating a stage. If a batch prints `ERROR`, or the
 machine faults/freezes/reboots, stop the sequence, photograph any fault,
 power off, and preserve every completed log. These five helpers cover the
@@ -233,8 +238,11 @@ Families: xHCI EHCI OHCI
 Found N selected USB host controller(s).
 ```
 
-Expect one controller report and one `FACT type=...` line per detected
-xHCI/EHCI/OHCI function. A probe-only run intentionally does not qualify
+Expect one controller report and one `FACT` line per detected xHCI/EHCI/OHCI
+function. The two paths spell that line differently: the xHCI path prints
+`FACT id=8086:9D2F rev=... hciver=... csz=... slots=... ports=...`, with no
+`type=` field at all, while the legacy (EHCI/OHCI) path prints
+`FACT type=EHCI id=...`. A probe-only run intentionally does not qualify
 the machine and returns exit code 1 even when no static disqualifier is
 found. It ends with
 `Probe safety: PASS - no PCI configuration writes.` If firmware left Memory
@@ -247,13 +255,19 @@ silicon looks like:
 
 ```text
   PCI subsys: 17AA:5048
-  PCI caps: PM=1 MSI=1(en=0) MSI-X=0 PCIe=1
+  PCI caps: PM=1 MSI=1(en=0) MSI-X=0 PCIe=0
   PCI PM: v2  state=D0  D1=0 D2=0  PME_En=0 PME_Status=0
-    PME_Support: D0, D3hot, D3cold
+    PME_Support: D3hot, D3cold
     NoSoftRst=1 - keeps state across D3hot->D0
     flags: DSI=0 PMEClk=0  Aux=375mA
     raw: PMC=C1C2 PMCSR=0008
 ```
+
+That is the E460's real block, copied from
+`xhciqual/results/e460-2026-08-22/PROBE.LOG` rather than composed, which is
+the point of the next paragraph: `PMC=C1C2` decodes to D3hot and D3cold and
+not D0, and this controller reports `PCIe=0`. An earlier version of this
+example was hand-written and contradicted its own raw word on both counts.
 
 `state=D0` is what you want. Any other state means the controller is powered
 down and decodes no MMIO until a driver moves it to D0. The report says so,
@@ -511,7 +525,7 @@ C4 IRQ:      PASS  ISR fired on IRQ ...
 C6 ports:    PASS  ...
 C8 devices:  PASS  ...
 DEV port=... vid=.... pid=....
-FACT type=xHCI ...
+FACT id=8086:9D2F rev=21 bar=... irq=11 pin=1 hciver=0100 ... fsc=0
 ==> CONTROLLER QUALIFIED for cross-target driver development
 Done.
 ```

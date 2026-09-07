@@ -25,34 +25,7 @@
 /* For USBPORT_TRANSFER_TYPE_* - batch 7a-A.1's endpoint builder is fed from
  * usbport's endpoint vocabulary, so the vectors have to speak it too. */
 #include "../src/xhci_usbport.h"
-
-static int failures;
-static int checks;
-
-#define CHECK(cond, what) check_impl((cond), (what), __LINE__)
-
-static void check_impl(int cond, const char *what, int line)
-{
-    checks++;
-    if (!cond) {
-        failures++;
-        printf("FAIL %s:%d: %s\n", "test_ctx.c", line, what);
-    }
-}
-
-#define CHECK_EQ(got, want, what) \
-    check_eq_impl((unsigned long)(got), (unsigned long)(want), (what), __LINE__)
-
-static void check_eq_impl(unsigned long got, unsigned long want,
-                          const char *what, int line)
-{
-    checks++;
-    if (got != want) {
-        failures++;
-        printf("FAIL %s:%d: %s (got 0x%08lX, want 0x%08lX)\n",
-               "test_ctx.c", line, what, got, want);
-    }
-}
+#include "test_harness.h"
 
 /*
  * A context block big enough for a whole Input Context at the large stride,
@@ -183,6 +156,32 @@ static void test_slot_context_hub_fields(void)
     CHECK_EQ(block[1], 0x04051234UL, "hub slot DW1");
     /* parent slot 7 | parent port 3 << 8 | TTT 2 << 16 */
     CHECK_EQ(block[2], 0x00020307UL, "hub slot DW2");
+
+    /*
+     * **Interrupter Target, which no vector set to a nonzero value until the
+     * 2026-09-07 audit's G10.** It is 31:22 of DW2, ten bits, and it is what
+     * decides which interrupter a device's events are delivered on. This
+     * driver uses interrupter 0 and always will, so a wrong shift here is
+     * invisible on every target - and would stay invisible until the day a
+     * second interrupter was used, by which point the field would have been
+     * writing into TTT for years. Ten bits, so 0x3FF is the boundary and
+     * 0x400 is refused.
+     */
+    p.InterrupterTarget = 1;
+    CHECK_EQ(XhciBuildSlotContext(block, &p), XHCI_CTX_OK,
+             "interrupter target 1 builds");
+    CHECK_EQ(block[2], 0x00420307UL,
+             "and lands at bit 22, leaving TTT, parent port and slot alone");
+    p.InterrupterTarget = 0x3FFUL;
+    CHECK_EQ(XhciBuildSlotContext(block, &p), XHCI_CTX_OK,
+             "1023 fits its ten bits");
+    CHECK_EQ(block[2], 0xFFC20307UL, "filling 31:22 and nothing below");
+    p.InterrupterTarget = 0x400UL;
+    CHECK_EQ(XhciBuildSlotContext(block, &p), XHCI_CTX_BAD_PARAM,
+             "1024 is refused rather than masked to 0");
+    p.InterrupterTarget = 0;
+    CHECK_EQ(XhciBuildSlotContext(block, &p), XHCI_CTX_OK, "and back to 0");
+    CHECK_EQ(block[2], 0x00020307UL, "which restores the original DW2");
 
     /*
      * **MTT on a non-hub is legal**, so the TTT refusal below must not be
@@ -409,6 +408,109 @@ static void test_ep0_params_refusals(void)
              "MPS 512 refused");
 }
 
+/*
+ * The five field-range refusals, and the two fields no vector ever set to a
+ * nonzero value. Both gaps are the 2026-09-07 audit's G10.
+ *
+ * `MaxBurstSize`, `Mult`, `Interval`, `ErrorCount` and `MaxEsitPayload` each
+ * have a width in Table 6-8/6-9/6-11 and a refusal in `XhciBuildEndpointContext`
+ * for a value that does not fit it. None was ever produced, so all five could
+ * have been deleted - and the values that would then be programmed are not
+ * garbage, they are plausible truncations: a Mult of 4 masked to 0, an Interval
+ * of 256 masked to 0, a Max Burst of 256 masked to 0. Each is a different
+ * endpoint schedule from the one the caller asked for.
+ *
+ * Every refusal is checked at the boundary in both directions, so a `>=` where
+ * a `>` belongs fails here rather than shipping.
+ */
+static void test_endpoint_field_ranges(void)
+{
+    XHCI_EP_PARAMS ep;
+
+    CHECK_EQ(XhciBuildEp0Params(64UL, 0x00201000UL, 1UL, &ep), XHCI_CTX_OK,
+             "baseline builds");
+
+    /* Max Burst Size is 15:8 of DW1 - eight bits. */
+    ep.MaxBurstSize = 0xFFUL;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_OK,
+             "Max Burst Size 255 fits its eight bits");
+    CHECK_EQ(block[1] & 0x0000FF00UL, 0x0000FF00UL, "and lands at 15:8");
+    ep.MaxBurstSize = 0x100UL;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_BAD_PARAM,
+             "256 is refused rather than masked to 0");
+    ep.MaxBurstSize = 0;
+
+    /* Mult is 9:8 of DW0 - two bits. */
+    ep.Mult = 3UL;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_OK,
+             "Mult 3 fits its two bits");
+    CHECK_EQ(block[0] & 0x00000300UL, 0x00000300UL, "and lands at 9:8");
+    ep.Mult = 4UL;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_BAD_PARAM,
+             "4 is refused rather than masked to 0");
+    ep.Mult = 0;
+
+    /* Interval is 23:16 of DW0 - eight bits. */
+    ep.Interval = 0xFFUL;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_OK,
+             "Interval 255 fits its eight bits");
+    CHECK_EQ(block[0] & 0x00FF0000UL, 0x00FF0000UL, "and lands at 23:16");
+    ep.Interval = 0x100UL;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_BAD_PARAM,
+             "256 is refused rather than masked to 0");
+    ep.Interval = 0;
+
+    /* CErr is 2:1 of DW1 - two bits, and 0 is refused for a control endpoint
+     * by the rule the vector above pins, so only the upper bound is here. */
+    ep.ErrorCount = 3UL;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_OK,
+             "CErr 3 fits its two bits");
+    CHECK_EQ(block[1] & 0x00000006UL, 0x00000006UL, "and lands at 2:1");
+    ep.ErrorCount = 4UL;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_BAD_PARAM,
+             "4 is refused rather than masked to 0");
+    ep.ErrorCount = XHCI_EP_CERR_DEFAULT;
+
+    /* Max ESIT Payload is 31:16 of DW4 - sixteen bits. */
+    ep.MaxEsitPayload = 0xFFFFUL;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_OK,
+             "Max ESIT Payload 65535 fits its sixteen bits");
+    CHECK_EQ(block[4] & 0xFFFF0000UL, 0xFFFF0000UL, "and lands at 31:16");
+    ep.MaxEsitPayload = 0x10000UL;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_BAD_PARAM,
+             "65536 is refused rather than masked to 0");
+    ep.MaxEsitPayload = 0;
+
+    /* Max Packet Size is 31:16 of DW1, and its lower bound is a refusal of its
+     * own because a zero would divide the TD Size computation by zero. */
+    ep.MaxPacketSize = 0xFFFFUL;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_OK,
+             "Max Packet Size 65535 fits");
+    ep.MaxPacketSize = 0x10000UL;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_BAD_PARAM,
+             "65536 refused");
+    ep.MaxPacketSize = 0;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_BAD_PARAM,
+             "and 0 refused, which would divide TD Size by zero");
+    ep.MaxPacketSize = 64UL;
+
+    /* Nothing is left broken behind. */
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_OK,
+             "the vector every refusal was derived from still builds");
+
+    /*
+     * A refused value writes nothing, which matters because a caller that
+     * ignores the return would otherwise program a half-built context.
+     */
+    poison();
+    ep.Mult = 4UL;
+    CHECK_EQ(XhciBuildEndpointContext(block, &ep), XHCI_CTX_BAD_PARAM,
+             "refused again");
+    CHECK(poisonedFrom(0, XHCI_CONTEXT_DWORDS),
+          "and a refused range check wrote nothing at all");
+    ep.Mult = 0;
+}
+
 static void test_endpoint_context_refusals(void)
 {
     XHCI_EP_PARAMS ep;
@@ -592,7 +694,10 @@ static void test_both_strides(void)
 
         /* The three contexts are still distinguishable: the slot's DW0 was not
          * overwritten by the endpoint that follows it, and vice versa. */
-        CHECK_EQ(block[(controlOffset - base) / 4UL + XHCI_ICC_DW_ADD],
+        /* DW1 by its literal index, not through XHCI_ICC_DW_ADD: the point of
+          * this check is where the Add Context flags sit, and reading them at
+          * the offset the encoder wrote them to cannot fail (G11). */
+        CHECK_EQ(block[(controlOffset - base) / 4UL + 1UL],
                  0x00000003UL, "control context survived the two after it");
         CHECK_EQ(block[(slotOffset - base) / 4UL], 0x08300000UL,
                  "slot context survived the endpoint after it");
@@ -1252,6 +1357,7 @@ int main(void)
     test_ep0_context_by_speed();
     test_ep0_params_refusals();
     test_endpoint_context_refusals();
+    test_endpoint_field_ranges();
     test_input_control_context();
     test_both_strides();
     test_interval_from_period();

@@ -415,16 +415,50 @@ static int run_quick_scan(void)
     n = pci_scan_usb(pcis, MAX_CONTROLLERS, HC_MASK_ALL);
     if (n == 0) {
         /*
-         * No CC_0C0330 function is one of the disqualifiers a read-only pass
-         * genuinely sees, and for this project's purpose it is the decisive
-         * one - so it gets the verdict rather than the "no controller found"
-         * usage error the other modes return.
+         * No USB host controller of any family at all.
          */
         qprintf("\nNo USB host controller found on this machine.\n");
         qprintf("DISQUALIFIED: with no xHCI function there is nothing for\n"
                 "  xhci98.sys to bind to.\n");
         qprintf("Done.\n");
         return 1;
+    }
+
+    /*
+     * **AND NO xHCI FUNCTION IS THE SAME ANSWER**, which it was not until the
+     * 2026-09-07 audit's I1.
+     *
+     * The comment above has always said what this test is for - "no CC_0C0330
+     * function ... for this project's purpose it is the decisive one" - and
+     * the code tested something else: `pci_scan_usb` with `HC_MASK_ALL`
+     * answers nonzero for an EHCI-only or OHCI-only machine, so a laptop with
+     * two EHCI controllers and no xHCI reached the loop below, found nothing
+     * disqualifying about controllers this driver will never bind to, and
+     * printed LOOKS QUALIFIED with an invitation to run the active poll.
+     *
+     * That is the tool's headline question answered backwards, on the one
+     * kind of machine a user is most likely to be asking it about - and
+     * `xhciqual/README.md` and the shipped readme both promise the opposite.
+     * The other families are still scanned and still reported, because a
+     * machine's other controllers are part of the picture; what they may not
+     * do is carry the verdict.
+     */
+    {
+        int xhci_found = 0;
+        for (i = 0; i < n; i++) {
+            if (pcis[i].hctype == HC_XHCI)
+                xhci_found = 1;
+        }
+        if (!xhci_found) {
+            qprintf("Found %d USB host controller(s), none of them xHCI.\n\n", n);
+            qprintf("DISQUALIFIED: this machine has no xHCI (PCI class 0C0330)\n"
+                    "  function, so there is nothing for xhci98.sys to bind to.\n");
+            qprintf("  The controllers it does have already have drivers on\n"
+                    "  both target systems; this driver is for machines that\n"
+                    "  have xHCI and nothing else.\n");
+            qprintf("Done.\n");
+            return 1;
+        }
     }
 
     qprintf("Found %d USB host controller(s).\n\n", n);
@@ -471,7 +505,21 @@ static int run_quick_scan(void)
             /* A legacy controller has no Supported Protocol list to count USB2
              * ports from, and its ports are USB 2.0 or slower by construction.
              * Answering 1 keeps the shared classifier from reporting a
-             * disqualifier that does not apply to it. */
+             * disqualifier that does not apply to it.
+             *
+             * **So the "one classifier, so the quick scan and the full run
+             * cannot disagree" claim holds for xHCI only** - the 2026-09-07
+             * audit's I5. On a legacy controller this hands the classifier a
+             * port count it did not measure, while a full run disqualifies a
+             * legacy controller that really reports zero root ports. The
+             * classifier is still one function; what differs is what is fed
+             * to it. Since audit I1 the quick scan disqualifies a machine
+             * with no xHCI outright, so a legacy controller no longer carries
+             * a verdict at all and the divergence is unreachable from here -
+             * but the input is still a substitute rather than a reading, and
+             * a future caller that gives the legacy families a verdict again
+             * has to count their ports first. `xhciqual/README.md` states the
+             * qualification. */
             usb2_ports = 1;
             *p = lc->pci;
         }

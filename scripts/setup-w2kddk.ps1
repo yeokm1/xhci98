@@ -50,18 +50,35 @@ Write-Step "Checking host"
 Test-SetupHost
 
 Write-Step "Checking Win2K DDK installer"
+#
+# **Absent is not fatal unless -RunInstaller was asked for** (the 2026-09-07
+# audit's H30). This threw whenever the archive was missing, and the archive is
+# needed for exactly one thing: launching the GUI installer. A host whose DDK
+# is already unpacked - which is this project's recommended shape, and the one
+# `install-w2kddk-cabs.ps1` produces - has no use for it, and the throw took
+# `setup-all.ps1` down with it, so the whole setup run aborted over a file
+# nothing was going to read.
+#
 $ddkExe = Join-Path $ToolsDir "WIN2KDDK.EXE"
-if (-not (Test-Path -LiteralPath $ddkExe)) {
-    throw "Missing $ddkExe"
+$haveDdkExe = Test-Path -LiteralPath $ddkExe
+if ($haveDdkExe) {
+    Write-Ok "Found $ddkExe"
+} elseif ($RunInstaller) {
+    throw @"
+-RunInstaller needs '$ddkExe', which is not there. Either put the DDK archive
+at that path, or drop the switch and unpack it instead:
+  powershell -ExecutionPolicy Bypass -File scripts\install-w2kddk-cabs.ps1
+"@
+} else {
+    Write-Warn "No $ddkExe. That is only needed for -RunInstaller; the wrappers below do not use it."
 }
-Write-Ok "Found $ddkExe"
 
 $setenvBat = Join-Path $DdkPath "bin\setenv.bat"
 if (Test-Path -LiteralPath $setenvBat) {
     Write-Ok "Win2K DDK appears installed at $DdkPath"
 } else {
     Write-Warn "Win2K DDK not detected at $DdkPath"
-    if ($RunInstaller) {
+    if ($RunInstaller -and $haveDdkExe) {
         # The GUI installer writes wherever its own dialog says, which will not
         # be $DdkPath unless the operator types it - hence the note below.
         Write-Step "Launching Win2K DDK installer"

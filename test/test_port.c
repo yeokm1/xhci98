@@ -21,34 +21,7 @@
 
 #include <stdio.h>
 #include "../src/xhci.h"
-
-static int failures;
-static int checks;
-
-#define CHECK(cond, what) check_impl((cond), (what), __LINE__)
-
-static void check_impl(int cond, const char *what, int line)
-{
-    checks++;
-    if (!cond) {
-        failures++;
-        printf("FAIL %s:%d: %s\n", "test_port.c", line, what);
-    }
-}
-
-#define CHECK_EQ(got, want, what) \
-    check_eq_impl((unsigned long)(got), (unsigned long)(want), (what), __LINE__)
-
-static void check_eq_impl(unsigned long got, unsigned long want,
-                          const char *what, int line)
-{
-    checks++;
-    if (got != want) {
-        failures++;
-        printf("FAIL %s:%d: %s (got %lu / 0x%lX, want %lu / 0x%lX)\n",
-               "test_port.c", line, what, got, got, want, want);
-    }
-}
+#include "test_harness.h"
 
 /* ------------------------------------------------------------------ */
 /* 1. Bit positions, transcribed from spec Table 5-27                  */
@@ -120,16 +93,34 @@ static void test_neutral(void)
     CHECK_EQ(neutral & XHCI_PORTSC_WPR, 0, "WPR dropped");
     CHECK_EQ(neutral & XHCI_PORTSC_LWS, 0,
              "LWS dropped - it would arm the preserved PLS field");
-    CHECK_EQ(neutral & XHCI_PORTSC_CHANGE_MASK, 0,
-             "every change bit dropped - they are RW1C");
+    CHECK_EQ(neutral & 0x00FE0000UL, 0,
+             "every change bit dropped - they are RW1C (bits 17-23)");
     CHECK_EQ(neutral & 0x30000004UL, 0, "RsvdZ bits written as zero");
 
     CHECK_EQ(neutral, 0x00000E01UL, "the whole neutral value");
 
-    /* An all-ones read is the device not decoding; the builder must still not
-     * turn it into a port-disabling write if a caller gets that far. */
-    CHECK_EQ(XhciPortscNeutral(0xFFFFFFFFUL) & XHCI_PORTSC_UNSAFE_MASK, 0,
+    /*
+     * An all-ones read is the device not decoding; the builder must still not
+     * turn it into a port-disabling write if a caller gets that far.
+     *
+     * The mask is written out by hand rather than as `XHCI_PORTSC_UNSAFE_MASK`,
+     * which is the header's rule and was not followed here until the
+     * 2026-09-07 audit's G4: asserting that the builder strips the mask, using
+     * the mask the builder strips, cannot fail whatever either one becomes.
+     * PED 1, PR 4, WPR 31, LWS 16, the change bits 17-23, and the RsvdZ bits
+     * 2 and 28-29 - transcribed from the PORTSC table, Table 5-27. That is
+     * 0xB0FF0016.
+     */
+    CHECK_EQ(XhciPortscNeutral(0xFFFFFFFFUL) & 0xB0FF0016UL, 0,
              "even an all-ones read produces an inert value");
+    /*
+     * And the whole value, which says the same thing from the other side, so
+     * a mask that grew a bit it should NOT strip fails here too: CCS 0, OCA 3,
+     * PLS 8:5, PP 9, speed 13:10, PIC 15:14, CAS 24, WCE 25, WDE 26, WOE 27
+     * and DR 30 all survive.
+     */
+    CHECK_EQ(XhciPortscNeutral(0xFFFFFFFFUL), 0x4F00FFE9UL,
+             "and carries every state and wake bit through unchanged");
 
     /* A port mid-reset: PR reads 1, and writing it back would restart. */
     CHECK_EQ(XhciPortscNeutral(0x00000211UL), 0x00000201UL,
@@ -441,11 +432,10 @@ static void test_shadow_latch_and_ack(void)
     XhciPortShadowReport(&shadow, &status, &change);
     /* High Speed rides along on every connection whatever the speed decoded to
      * - Phase 5 task 7, asserted on its own in test_shadow_report_translation. */
-    CHECK_EQ(status,
-             XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_POWER |
-                 XHCI_HUB_PORT_HIGH_SPEED,
-             "reported as connected and powered");
-    CHECK_EQ(change, XHCI_HUB_C_PORT_CONNECTION, "with the connect change");
+    CHECK_EQ(status, 0x0501UL,
+             "reported as connected and powered, at hub-class positions 0, 8 "
+             "and 10");
+    CHECK_EQ(change, 0x0001UL, "with the connect change at position 0");
 
     /*
      * The hardware bit has been acknowledged by now, so the next read has CSC
@@ -654,13 +644,39 @@ static void test_shadow_report_translation(void)
     shadow.Speed = XHCI_SPEED_HIGH;
 
     XhciPortShadowReport(&shadow, &status, &change);
-    CHECK_EQ(status,
-             XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE |
-                 XHCI_HUB_PORT_OVER_CURRENT | XHCI_HUB_PORT_RESET |
-                 XHCI_HUB_PORT_POWER | XHCI_HUB_PORT_HIGH_SPEED,
+    /*
+     * **Written as literal hex, which is this file's rule and was not
+     * followed here until the 2026-09-07 audit's G5.** Every expectation in
+     * this function was built from the same `XHCI_HUB_PORT_*` macros the code
+     * translates with, so a wrong port-power bit - the one that decides
+     * whether usbhub thinks a port can supply current - passed on both sides.
+     * The positions are the USB 2.0 specification's wPortStatus, Table 11-21:
+     * CONNECTION 0, ENABLE 1, SUSPEND 2, OVER_CURRENT 3, RESET 4, POWER 8,
+     * LOW_SPEED 9, HIGH_SPEED 10. So connected + enabled + over-current +
+     * resetting + powered + high speed is 0x0001 | 0x0002 | 0x0008 | 0x0010 |
+     * 0x0100 | 0x0400.
+     */
+    CHECK_EQ(status, 0x051BUL,
              "every state bit translated to its hub-class position");
     CHECK(status != shadow.Portsc,
           "which is not the raw register value - the positions differ");
+
+    /* The macros the driver uses, checked once against those same literals, so
+     * the translations above and the driver's own spelling cannot drift apart
+     * without one of the two failing. */
+    CHECK_EQ(XHCI_HUB_PORT_CONNECTION, 0x0001UL, "wPortStatus bit 0");
+    CHECK_EQ(XHCI_HUB_PORT_ENABLE, 0x0002UL, "bit 1");
+    CHECK_EQ(XHCI_HUB_PORT_SUSPEND, 0x0004UL, "bit 2");
+    CHECK_EQ(XHCI_HUB_PORT_OVER_CURRENT, 0x0008UL, "bit 3");
+    CHECK_EQ(XHCI_HUB_PORT_RESET, 0x0010UL, "bit 4");
+    CHECK_EQ(XHCI_HUB_PORT_POWER, 0x0100UL, "bit 8");
+    CHECK_EQ(XHCI_HUB_PORT_LOW_SPEED, 0x0200UL, "bit 9");
+    CHECK_EQ(XHCI_HUB_PORT_HIGH_SPEED, 0x0400UL, "bit 10");
+    CHECK_EQ(XHCI_HUB_C_PORT_CONNECTION, 0x0001UL, "wPortChange bit 0");
+    CHECK_EQ(XHCI_HUB_C_PORT_ENABLE, 0x0002UL, "bit 1");
+    CHECK_EQ(XHCI_HUB_C_PORT_SUSPEND, 0x0004UL, "bit 2");
+    CHECK_EQ(XHCI_HUB_C_PORT_OVER_CURRENT, 0x0008UL, "bit 3");
+    CHECK_EQ(XHCI_HUB_C_PORT_RESET, 0x0010UL, "bit 4");
 
     /*
      * Phase 5 task 7: every connected port reports High Speed whatever it
@@ -727,8 +743,14 @@ static void test_shadow_report_translation(void)
      * scan reads - anything else is invisible to it anyway. */
     shadow.Changes = 0xFF;
     XhciPortShadowReport(&shadow, &status, &change);
-    CHECK_EQ(change & ~XHCI_HUB_C_PORT_MASK, 0,
+    /* 0x001F by hand, not `XHCI_HUB_C_PORT_MASK`: the five hub-class change
+     * bits are C_PORT_CONNECTION, _ENABLE, _SUSPEND, _OVER_CURRENT and _RESET
+     * at positions 0-4 (USB 2.0 specification Table 11-21). Asserting
+     * confinement with the very mask the code applies cannot fail (G4). */
+    CHECK_EQ(change & ~0x001FUL, 0,
              "the reported change set is confined to the scanned mask");
+    CHECK_EQ(change, 0x001FUL,
+             "and all five of those bits do come through");
 
     /* NULL is answered, not dereferenced. */
     status = 0xDEAD;
@@ -822,8 +844,9 @@ static void test_shadow_armed_operations(void)
     CHECK_EQ(shadow.Changes, XHCI_HUB_C_PORT_RESET,
              "a change can be latched without a register bit behind it");
     XhciPortShadowLatchChange(&shadow, 0xFFFFUL);
-    CHECK_EQ(shadow.Changes & ~XHCI_HUB_C_PORT_MASK, 0,
+    CHECK_EQ(shadow.Changes & ~0x001FUL, 0,
              "and is confined to the mask usbport's scan reads");
+    CHECK_EQ(shadow.Changes, 0x001FUL, "which is bits 0-4 and no others");
 
     /*
      * The age, which exists for the one failure the timer service cannot report:
@@ -996,7 +1019,8 @@ static void test_root_hub_rebuild_disown_debt(void)
              "and clears a standing disown obligation");
     CHECK_EQ(rh.Ports[0].DisownWantsPp, 0, "along with the bit it named");
     CHECK_EQ(rh.Ports[1].DisownPending, 0, "on every port, not just the first");
-    CHECK_EQ(rh.Ports[1].DisownWantsPp, 0, NULL);
+    CHECK_EQ(rh.Ports[1].DisownWantsPp, 0,
+             "and that bit is cleared on every port too");
 }
 
 int main(void)

@@ -93,6 +93,99 @@ function Write-AsciiFile {
     Set-Content -LiteralPath $Path -Value $Lines -Encoding ASCII
 }
 
+#
+# QEMU, found the same way by every generator (the 2026-09-07 audit's H28 and
+# J6). There were five copies of this, and they had drifted: three fell back to
+# the bare `qemu-system-x86_64` and two to a hard-coded
+# `C:\Program Files\qemu\...`, so which launchers survived being moved to
+# another host depended on which script wrote them.
+#
+function Get-QemuTool {
+    param(
+        [string]$QemuBinDir,
+        [string]$ToolName
+    )
+    if (-not [string]::IsNullOrWhiteSpace($QemuBinDir)) {
+        $candidate = Join-Path $QemuBinDir $ToolName
+        if (Test-Path -LiteralPath $candidate) {
+            return $candidate
+        }
+    }
+    return (Find-Tool $ToolName)
+}
+
+#
+# **What a generated launcher should write for QEMU, and why it is not simply
+# the absolute path this host found.** A launcher lives in the git-ignored
+# `scripts\local\`, so it is regenerated per host - but it is also read,
+# copied and quoted into run sheets, and an absolute path baked into one is
+# the standing move-to-another-host trap `build-and-test.md` names. The bare
+# command name has the opposite problem: it resolves through PATH, and
+# `setup-qemu.ps1 -Install` writes launchers in a process whose PATH predates
+# the install it just performed, so the name is right and unresolvable.
+#
+# So a launcher gets a resolver rather than a value: an override, then the
+# path this host found, then the two ordinary install locations, then the bare
+# name for PATH. Written as .cmd lines because that is where it runs.
+#
+function Get-QemuLauncherResolver {
+    param([string]$FoundPath)
+
+    $lines = @(
+        "rem Resolve QEMU at RUN time, not at generation time. In order:",
+        "rem   1. %XHCI98_QEMU%, if you have set it;",
+        "rem   2. where the script that generated this launcher found it;",
+        "rem   3. the two places this project has found QEMU on its hosts;",
+        "rem   4. a message naming the override, and a nonzero exit.",
+        "if not defined QEMU set ""QEMU=%XHCI98_QEMU%"""
+    )
+    if (-not [string]::IsNullOrWhiteSpace($FoundPath)) {
+        $lines += ("if not exist ""%QEMU%"" set ""QEMU={0}""" -f $FoundPath)
+    }
+    $lines += @(
+        "if not exist ""%QEMU%"" set ""QEMU=C:\Program Files\qemu\qemu-system-x86_64.exe""",
+        "if not exist ""%QEMU%"" set ""QEMU=%USERPROFILE%\scoop\apps\qemu\current\qemu-system-x86_64.exe""",
+        "if not exist ""%QEMU%"" (",
+        "  echo Could not find qemu-system-x86_64.exe on this host - set XHCI98_QEMU or QEMU to its full path.",
+        "  exit /b 1",
+        ")",
+        ""
+    )
+    return $lines
+}
+
+#
+# **The flavour markers a linked image may carry, in one place** (the
+# 2026-09-07 audit's J6). There were three scanners: this project's
+# `check-flavour-marker.ps1`, `Get-ImageFlavourMarker` in
+# `scripts\package\package-common.ps1`, and the list spelled out again in
+# `build-driver.cmd`'s comments. They agreed, which is the only reason nothing
+# had gone wrong; a fourth flavour would have had to be added to all three.
+#
+# HOSTTEST is in the list on purpose. It is the host suite's own marker and can
+# never be in a linked driver, so finding one would mean the flavour defines
+# had gone somewhere very strange - and a check that silently ignored a name it
+# knows about is how a fourth flavour arrives unnoticed.
+#
+$script:XhciFlavourNames = @("RELEASE", "DEBUG", "QEMU", "HOSTTEST")
+
+function Get-XhciFlavourNames {
+    return $script:XhciFlavourNames
+}
+
+# Every marker present in the image, as full `XHCI98_FLAVOUR_*` strings.
+# The caller decides what "exactly one, and this one" means for it: the build
+# gate wants a specific flavour, the release script wants to know which it is.
+function Get-XhciFlavourMarkers {
+    param([string]$Path)
+
+    $text = [System.Text.Encoding]::ASCII.GetString(
+        [System.IO.File]::ReadAllBytes($Path))
+    return @($script:XhciFlavourNames |
+        Where-Object { $text.Contains("XHCI98_FLAVOUR_" + $_) } |
+        ForEach-Object { "XHCI98_FLAVOUR_" + $_ })
+}
+
 function Test-SetupHost {
     if ($env:OS -ne "Windows_NT") {
         throw "These setup scripts are intended for Windows hosts."

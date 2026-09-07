@@ -35,19 +35,8 @@ if ([string]::IsNullOrWhiteSpace($LocalScriptDir)) {
 Write-Step "Checking host"
 Test-SetupHost
 
-function Get-QemuTool {
-    param(
-        [string]$QemuBinDir,
-        [string]$ToolName
-    )
-    if (-not [string]::IsNullOrWhiteSpace($QemuBinDir)) {
-        $candidate = Join-Path $QemuBinDir $ToolName
-        if (Test-Path -LiteralPath $candidate) {
-            return $candidate
-        }
-    }
-    return (Find-Tool $ToolName)
-}
+# Get-QemuTool lives in common.ps1 - there were five copies of it and they
+# had drifted (the 2026-09-07 audit's H28).
 
 Write-Step "Checking QEMU"
 $qemuSystem = Get-QemuTool -QemuBinDir $QemuBinDir -ToolName "qemu-system-x86_64.exe"
@@ -60,17 +49,64 @@ if (($null -eq $qemuSystem -or $null -eq $qemuImg) -and $Install) {
         throw "winget.exe was not found. Install QEMU manually or add -QemuBinDir."
     }
     & $winget install --id SoftwareFreedomConservancy.QEMU -e --source winget | Out-Host
+    $wingetRc = $LASTEXITCODE
+    #
+    # **The installer's exit code is read, and the re-lookup does not rely on
+    # PATH** (the 2026-09-07 audit's H29). Two things were wrong here. A winget
+    # failure was ignored entirely, so a refused or cancelled install carried
+    # straight on to write launchers. And the re-lookup below goes through
+    # `Find-Tool`, which searches THIS process's PATH - a value inherited when
+    # the process started, before the install happened - so a successful
+    # install is invisible to it and the script then wrote a launcher naming a
+    # QEMU it had just been told was absent.
+    #
+    # winget answers 0 for an install and also for "no applicable upgrade";
+    # anything else is worth stopping on rather than proceeding to write
+    # launchers around it.
+    #
+    if ($wingetRc -ne 0) {
+        throw @"
+winget exited $wingetRc installing QEMU, so nothing was installed and the
+launchers this script writes would name a QEMU that is not there. Install it
+by hand and re-run without -Install, or pass -QemuBinDir <dir>.
+"@
+    }
+    # The ordinary install locations, checked directly, because this process's
+    # PATH predates the install.
+    foreach ($dir in @(
+        (Join-Path $env:ProgramFiles "qemu"),
+        (Join-Path $env:LOCALAPPDATA "Programs\qemu"),
+        (Join-Path $env:USERPROFILE "scoop\apps\qemu\current")
+    )) {
+        if ([string]::IsNullOrWhiteSpace($QemuBinDir) -and
+            (Test-Path -LiteralPath (Join-Path $dir "qemu-system-x86_64.exe"))) {
+            $QemuBinDir = $dir
+            Write-Ok "QEMU installed into $dir"
+            break
+        }
+    }
     $qemuSystem = Get-QemuTool -QemuBinDir $QemuBinDir -ToolName "qemu-system-x86_64.exe"
     $qemuImg = Get-QemuTool -QemuBinDir $QemuBinDir -ToolName "qemu-img.exe"
+    if ($null -eq $qemuSystem) {
+        Write-Warn "winget reported success but qemu-system-x86_64.exe is in none of the usual places. Pass -QemuBinDir, or set XHCI98_QEMU before running a launcher."
+    }
 }
 
 if ($null -eq $qemuSystem) {
     Write-Warn "qemu-system-x86_64.exe is not on PATH. Install QEMU or pass -QemuBinDir."
-    $qemuSystemCommand = "qemu-system-x86_64"
+    $qemuSystemCommand = ""
 } else {
     Write-Ok "Found $qemuSystem"
     $qemuSystemCommand = $qemuSystem
 }
+
+# QEMU is resolved at RUN time by each launcher, not baked in here: the host
+# that generated a launcher is not always the host that runs it
+# (scripts\local is git-ignored and OneDrive-synced), and
+# `setup-qemu.ps1 -Install` in particular writes launchers in a process whose
+# PATH predates the install it just performed. One resolver for all five
+# generators, in common.ps1 (the 2026-09-07 audit's H28 and H29).
+$qemuResolve = Get-QemuLauncherResolver -FoundPath $qemuSystemCommand
 
 if ($null -eq $qemuImg) {
     Write-Warn "qemu-img.exe is not on PATH. Disk image creation will be skipped unless QEMU is installed."
@@ -151,8 +187,9 @@ Write-Step "Writing QEMU launchers"
 Write-Ok "Using xHCI device model: $XhciDevice"
 
 $installCmd = Join-Path $LocalScriptDir "qemu-win98-install.cmd"
-Write-AsciiFile $installCmd @(
-    "@echo off",
+Write-AsciiFile $installCmd (@(
+    "@echo off"
+) + $qemuResolve + @(
     "rem IMPORTANT: install Win98 with the ACPI HAL or PCI never enumerates under",
     "rem QEMU (plain auto-install -> ""Plug and Play BIOS"" Code 24, nothing on PCI).",
     "rem At the CD boot menu pick ""Start computer with CD-ROM support"", then at the",
@@ -170,7 +207,7 @@ Write-AsciiFile $installCmd @(
     "  echo Missing ISO: %WIN98_ISO%",
     "  exit /b 1",
     ")",
-    """$qemuSystemCommand"" ^",
+    """%QEMU%"" ^",
     "  -machine pc ^",
     "  -cpu pentium3 ^",
     "  -m 256 ^",
@@ -181,7 +218,7 @@ Write-AsciiFile $installCmd @(
     "  -boot once=d ^",
     "  -action reboot=reset -no-shutdown ^",
     "  -monitor tcp:127.0.0.1:$MonitorPort,server=on,wait=off"
-)
+))
 
 # The Windows ME install launcher. Same 16-bit setup engine as Windows 98,
 # same /p j rule; setup is under \WIN9X on that CD. Exercised 2026-09-02
@@ -228,7 +265,8 @@ if ($winMeBootsWin98) {
     $winMeCdLines = @("  -cdrom ""%WINME_ISO%"" ^")
 }
 Write-AsciiFile $winMeInstallCmd (@(
-    "@echo off",
+    "@echo off"
+) + $qemuResolve + @(
     "rem Windows ME install: the qemu-win98-install.cmd recipe with the Windows ME",
     "rem CD and image. Same 16-bit setup engine, so the same rule: install with",
     "rem the ACPI HAL or PCI never enumerates under QEMU. Every restart the guest",
@@ -250,7 +288,7 @@ Write-AsciiFile $winMeInstallCmd (@(
     "  echo Missing image: $winMeImage - run setup-qemu.ps1 -WinMeIso ... -CreateDisk",
     "  exit /b 1",
     ")",
-    """$qemuSystemCommand"" ^",
+    """%QEMU%"" ^",
     "  -machine pc ^",
     "  -cpu pentium3 ^",
     "  -m 256 ^",
@@ -259,15 +297,17 @@ Write-AsciiFile $winMeInstallCmd (@(
 ) + $winMeCdLines + @(
     "  -boot once=d ^",
     "  -action reboot=reset -no-shutdown ^",
-    "  -monitor tcp:127.0.0.1:$($MonitorPort + 5),server=on,wait=off"
+    "  -monitor tcp:127.0.0.1:$($MonitorPort + 6),server=on,wait=off"
 ))
-# +5 = 55560 at the default base: +3 (55558) is the win2k-acpi machine's port
-# (build-and-test.md, "Windows 2000 ACPI HAL"), so the two could not run at
-# once (roadmap Phase 20, D5).
+# +6 = 55561 at the default base. +3 (55558) is the win2k-acpi machine's port
+# (build-and-test.md, "Windows 2000 ACPI HAL") and +5 (55560) is
+# setup-qemu-win2k-xonly.ps1's default, so neither could run beside this one.
+# test-qemu-launchers.ps1 asserts the ports stay distinct.
 
 $runCmd = Join-Path $LocalScriptDir "qemu-win98-run.cmd"
-Write-AsciiFile $runCmd @(
-    "@echo off",
+Write-AsciiFile $runCmd (@(
+    "@echo off"
+) + $qemuResolve + @(
     "rem -boot c boots the installed HDD (the attached floppy is A:, not a boot",
     "rem source). -action reboot=reset keeps guest reboots in this QEMU session.",
     "rem The VVFAT drive exposes vm\xfer98 as a writable guest disk backed by a",
@@ -294,7 +334,7 @@ Write-AsciiFile $runCmd @(
     "    )",
     "  )",
     ")",
-    """$qemuSystemCommand"" ^",
+    """%QEMU%"" ^",
     "  -machine pc ^",
     "  -cpu pentium3 ^",
     "  -m 256 ^",
@@ -307,12 +347,13 @@ Write-AsciiFile $runCmd @(
     "  -boot c ^",
     "  -action reboot=reset -no-shutdown ^",
     "  -monitor tcp:127.0.0.1:$MonitorPort,server=on,wait=off"
-)
+))
 
 $usbTestCmd = Join-Path $LocalScriptDir "qemu-win98-usb-test.cmd"
-Write-AsciiFile $usbTestCmd @(
-    "@echo off",
-    """$qemuSystemCommand"" ^",
+Write-AsciiFile $usbTestCmd (@(
+    "@echo off"
+) + $qemuResolve + @(
+    """%QEMU%"" ^",
     "  -machine pc ^",
     "  -cpu pentium3 ^",
     "  -m 256 ^",
@@ -324,15 +365,16 @@ Write-AsciiFile $usbTestCmd @(
     "  -boot c ^",
     "  -action reboot=reset -no-shutdown ^",
     "  -monitor tcp:127.0.0.1:$MonitorPort,server=on,wait=off"
-)
+))
 
 $netStorageTestCmd = Join-Path $LocalScriptDir "qemu-win98-net-storage-test.cmd"
-Write-AsciiFile $netStorageTestCmd @(
-    "@echo off",
+Write-AsciiFile $netStorageTestCmd (@(
+    "@echo off"
+) + $qemuResolve + @(
     "rem Phase 8 bulk-path smoke test: USB Ethernet + USB mass storage on the xHCI bus.",
     "rem usb-net needs a Win98 function driver to bind; QEMU's emulated NIC may not have one.",
     "rem usb-storage needs NUSB mass-storage support or another Win98 function driver.",
-    """$qemuSystemCommand"" ^",
+    """%QEMU%"" ^",
     "  -machine pc ^",
     "  -cpu pentium3 ^",
     "  -m 256 ^",
@@ -346,7 +388,7 @@ Write-AsciiFile $netStorageTestCmd @(
     "  -boot c ^",
     "  -action reboot=reset -no-shutdown ^",
     "  -monitor tcp:127.0.0.1:$MonitorPort,server=on,wait=off"
-)
+))
 
 Write-Ok "Wrote $installCmd"
 Write-Ok "Wrote $winMeInstallCmd"

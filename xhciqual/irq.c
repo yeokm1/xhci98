@@ -92,6 +92,57 @@ static int dpmi_region(u16 service, u32 linear, u32 size,
     return 1;
 }
 
+/*
+ * **Mask one line at the 8259 with no vector hooked, and put it back.**
+ *
+ * The C4 path above installs a handler and keeps the line masked until its own
+ * source is pending. The OHCI C3 path wants neither: it enables a controller
+ * interrupt only to watch the status bit, and installs no handler at all. That
+ * left the line as firmware had it - and if firmware left it unmasked, the
+ * frame interrupt asserts every millisecond into whatever vector the BIOS put
+ * there, reached through DOS/32A's 16-bit reflection thunk, which is the path
+ * design record 01 section 6 records as faulting. The 2026-09-07 audit's I3.
+ *
+ * Separate from `irq_mask_current` because that one reads the line out of the
+ * installed ISR's state, and here there is no ISR. One line at a time, with
+ * one saved mask byte, because that is all any caller needs.
+ */
+static u8 line_saved_mask;
+static int line_saved_which = -1;   /* -1 none, 0 = PIC1, 1 = PIC2 */
+
+int irq_line_mask(unsigned line)
+{
+    if (line_saved_which >= 0)
+        return 0;               /* one at a time; a second is a caller bug */
+    if (line > 15)
+        return 0;
+    _disable();
+    if (line < 8) {
+        line_saved_which = 0;
+        line_saved_mask = (u8)inp(PIC1_DATA);
+        outp(PIC1_DATA, line_saved_mask | (u8)(1 << line));
+    } else {
+        line_saved_which = 1;
+        line_saved_mask = (u8)inp(PIC2_DATA);
+        outp(PIC2_DATA, line_saved_mask | (u8)(1 << (line - 8)));
+    }
+    _enable();
+    return 1;
+}
+
+void irq_line_restore(void)
+{
+    if (line_saved_which < 0)
+        return;
+    _disable();
+    if (line_saved_which == 0)
+        outp(PIC1_DATA, line_saved_mask);
+    else
+        outp(PIC2_DATA, line_saved_mask);
+    _enable();
+    line_saved_which = -1;
+}
+
 static void irq_mask_current(void)
 {
     int irq;

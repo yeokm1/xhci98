@@ -61,19 +61,8 @@ if ([string]::IsNullOrWhiteSpace($LocalScriptDir)) {
 Write-Step "Checking host"
 Test-SetupHost
 
-function Get-QemuTool {
-    param(
-        [string]$QemuBinDir,
-        [string]$ToolName
-    )
-    if (-not [string]::IsNullOrWhiteSpace($QemuBinDir)) {
-        $candidate = Join-Path $QemuBinDir $ToolName
-        if (Test-Path -LiteralPath $candidate) {
-            return $candidate
-        }
-    }
-    return (Find-Tool $ToolName)
-}
+# Get-QemuTool lives in common.ps1 - there were five copies of it and they
+# had drifted (the 2026-09-07 audit's H28).
 
 Write-Step "Checking QEMU"
 $qemuSystem = Get-QemuTool -QemuBinDir $QemuBinDir -ToolName "qemu-system-x86_64.exe"
@@ -81,11 +70,19 @@ $qemuImg = Get-QemuTool -QemuBinDir $QemuBinDir -ToolName "qemu-img.exe"
 
 if ($null -eq $qemuSystem) {
     Write-Warn "qemu-system-x86_64.exe is not on PATH. Install QEMU (see setup-qemu.ps1) or pass -QemuBinDir."
-    $qemuSystemCommand = "qemu-system-x86_64"
+    $qemuSystemCommand = ""
 } else {
     Write-Ok "Found $qemuSystem"
     $qemuSystemCommand = $qemuSystem
 }
+
+# QEMU is resolved at RUN time by each launcher, not baked in here: the host
+# that generated a launcher is not always the host that runs it
+# (scripts\local is git-ignored and OneDrive-synced), and
+# `setup-qemu.ps1 -Install` in particular writes launchers in a process whose
+# PATH predates the install it just performed. One resolver for all five
+# generators, in common.ps1 (the 2026-09-07 audit's H28 and H29).
+$qemuResolve = Get-QemuLauncherResolver -FoundPath $qemuSystemCommand
 
 if ($null -eq $qemuImg) {
     Write-Warn "qemu-img.exe is not on PATH. Disk image creation will be skipped unless QEMU is installed."
@@ -98,6 +95,32 @@ Ensure-Directory $VmDir
 Ensure-Directory $LocalScriptDir
 $xferDir = Join-Path $VmDir "xfer"
 Ensure-Directory $xferDir
+#
+# **A floppy controller on the run launcher**, empty at boot. build-and-test.md
+# has said since batch 13-L that "the launcher now carries `-drive if=floppy`",
+# and no generator wrote one - the fix was made by hand in the git-ignored
+# `scripts\local\` copy and was lost the next time this script ran, which is
+# the trap that doc paragraph goes on to name. The 2026-09-07 audit's H27.
+#
+# What it buys: `change floppy0 <path>` on the monitor inserts a disk into a
+# running guest at once, so `copy C:\SNAP.TXT A:` gets a file out of Windows
+# 2000 without a reboot and without the VVFAT disk, which is read-only. A
+# controller cannot be added live, so it has to be here at boot even though it
+# is empty; an empty floppy drive costs a Windows 2000 guest nothing.
+$transferImage = Join-Path $VmDir "transfer.img"
+# Shared with setup-qemu.ps1's guests, which is deliberate: it is a courier,
+# and one blank 1.44 MB image serves every target. Created here too so this
+# script stands alone on a host where only the Windows 2000 guest exists.
+if (-not (Test-Path -LiteralPath $transferImage)) {
+    $stream = [System.IO.File]::Open($transferImage, [System.IO.FileMode]::CreateNew)
+    try {
+        $stream.SetLength(1474560)
+    } finally {
+        $stream.Close()
+    }
+    Write-Ok "Created blank 1.44 MB transfer floppy image: $transferImage"
+    Write-Warn "It is blank; format it inside a guest before first use."
+}
 $diskImage = Join-Path $VmDir "win2k.img"
 $debugConLog = Join-Path $VmDir "win2k-debugcon.log"
 $debugConPreviousLog = Join-Path $VmDir "win2k-debugcon.previous.log"
@@ -157,8 +180,9 @@ Write-Step "Writing QEMU launchers"
 Write-Ok "Using xHCI device model: $XhciDevice"
 
 $installCmd = Join-Path $LocalScriptDir "qemu-win2k-install.cmd"
-Write-AsciiFile $installCmd @(
-    "@echo off",
+Write-AsciiFile $installCmd (@(
+    "@echo off"
+) + $qemuResolve + @(
     "rem Phase 2b: Windows 2000 SP4 differential VM install launcher.",
     "rem The ISO is Win2000 Pro with SP4 integrated (retail FPP - Setup prompts",
     "rem for a product key).",
@@ -178,7 +202,7 @@ Write-AsciiFile $installCmd @(
     "  echo Missing ISO: %WIN2K_ISO%",
     "  exit /b 1",
     ")",
-    """$qemuSystemCommand"" ^",
+    """%QEMU%"" ^",
     "  -name ""xhci98 Windows 2000 SP4 differential"" ^",
     "  -machine pc,acpi=off ^",
     "  -global ide-device.win2k-install-hack=on ^",
@@ -192,11 +216,12 @@ Write-AsciiFile $installCmd @(
     "  -net none ^",
     "  -action reboot=reset -no-shutdown ^",
     "  -monitor tcp:127.0.0.1:$MonitorPort,server=on,wait=off"
-)
+))
 
 $runCmd = Join-Path $LocalScriptDir "qemu-win2k-run.cmd"
-Write-AsciiFile $runCmd @(
-    "@echo off",
+Write-AsciiFile $runCmd (@(
+    "@echo off"
+) + $qemuResolve + @(
     "rem Phase 2b: boot the installed Windows 2000 SP4 differential VM from HDD.",
     "rem Keep the SAME Standard-PC HAL flags as install (-cpu ...,-apic + acpi=off)",
     "rem or the installed system hits the same APIC-clock storm on normal boot.",
@@ -237,7 +262,7 @@ Write-AsciiFile $runCmd @(
     "    )",
     "  )",
     ")",
-    """$qemuSystemCommand"" ^",
+    """%QEMU%"" ^",
     "  -name ""xhci98 Windows 2000 SP4 differential"" ^",
     "  -machine pc,acpi=off ^",
     "  -cpu pentium3,-apic ^",
@@ -254,10 +279,11 @@ Write-AsciiFile $runCmd @(
     "  -net none ^",
     "  -action reboot=reset -no-shutdown ^",
     "  -monitor tcp:127.0.0.1:$MonitorPort,server=on,wait=off"
-)
+))
 $prepareCmd = Join-Path $LocalScriptDir "qemu-win2k-prepare-usbd.cmd"
-Write-AsciiFile $prepareCmd @(
-    "@echo off",
+Write-AsciiFile $prepareCmd (@(
+    "@echo off"
+) + $qemuResolve + @(
     "rem SAFE PREPARATION BOOT: no USB controller is attached, so the incomplete",
     "rem Win2000 USB 2.0 stack cannot start. Before shutting down the guest, copy:",
     "rem   D:\USBD.SYS C:\WINNT\system32\drivers\USBD.SYS",
@@ -268,20 +294,21 @@ Write-AsciiFile $prepareCmd @(
     "  echo Rerun setup-qemu-win2k.ps1 with -Win2KUsbdSys ^<path-to-SP4-USBD.SYS^>.",
     "  exit /b 1",
     ")",
-    """$qemuSystemCommand"" ^",
+    """%QEMU%"" ^",
     "  -name ""xhci98 Windows 2000 SP4 USBD preparation"" ^",
     "  -machine pc,acpi=off ^",
     "  -cpu pentium3,-apic ^",
     "  -m 256 ^",
     "  -vga cirrus ^",
     "  -drive file=""$diskImage"",format=qcow2,if=ide ^",
+    "  -drive if=floppy,file=""$transferImage"",format=raw ^",
     "  -drive ""file=fat:$xferDir,format=raw,if=ide,snapshot=on"" ^",
     "  -boot c ^",
     "  -rtc base=localtime ^",
     "  -net none ^",
     "  -action reboot=reset -no-shutdown ^",
     "  -monitor tcp:127.0.0.1:$MonitorPort,server=on,wait=off"
-)
+))
 
 Write-Ok "Wrote $installCmd"
 Write-Ok "Wrote $prepareCmd"

@@ -674,13 +674,22 @@ Driver Verifier enabled, is what tests the design rather than its shape.
 ## 10. Open against the SMP checkpoint
 
 - The ISR/mask interleaving is closed by argument and by the direction of a
-  single bit. Confirm on the SMP VM that no interrupt storm and no lost
-  interrupt follows a `DisableInterrupts` under load.
+  single bit, and answered on the SMP VM: batch 7a-V's guest 2d reading below,
+  and Phase 11's stress runs on the same guest, show neither an interrupt
+  storm nor a lost interrupt following a `DisableInterrupts` under load.
 - The drain's hold time is unmeasured. Phase 6 adds work inside it; section 8
   is the trigger.
-- `FlushInterrupts` is counted, never acted on. If `InterruptFlushes` is still
-  zero after a D0 transition on either target, the call site was read wrong and
-  section 5 needs revisiting.
+- `FlushInterrupts` is counted, never acted on, and the check written here
+  cannot be run: it wants a D0 transition, and neither target can produce one.
+  `ResumeController` has never run on Windows 2000 - no QEMU configuration
+  delivers a sleep state, and that is a published limitation - while Windows
+  98's idle "suspend" of this controller is a software halt with the device
+  left in D0, so nothing writes a power register at suspend time
+  (`lessons.md`). A zero `InterruptFlushes` on either target is therefore the
+  expected reading and says nothing about whether the call site was read
+  right; `usbport-miniport-abi.md`, "`FlushInterrupts`: the call site the
+  mirror does not have", is where that question is actually settled, out of
+  all three shipping binaries.
 - The SMP reading that exists (batch 7a-V, guest 2d: WHPX, two vCPUs on
   distinct host threads, `info cpus` checked before and after):
   `AbortsDuringCompletion` stayed 0 across 14 aborts driven against live

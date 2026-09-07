@@ -91,19 +91,8 @@ if ([string]::IsNullOrWhiteSpace($LocalScriptDir)) {
 Write-Step "Checking host"
 Test-SetupHost
 
-function Get-QemuTool {
-    param(
-        [string]$QemuBinDir,
-        [string]$ToolName
-    )
-    if (-not [string]::IsNullOrWhiteSpace($QemuBinDir)) {
-        $candidate = Join-Path $QemuBinDir $ToolName
-        if (Test-Path -LiteralPath $candidate) {
-            return $candidate
-        }
-    }
-    return (Find-Tool $ToolName)
-}
+# Get-QemuTool lives in common.ps1 - there were five copies of it and they
+# had drifted (the 2026-09-07 audit's H28).
 
 Write-Step "Checking QEMU"
 $qemuSystem = Get-QemuTool -QemuBinDir $QemuBinDir -ToolName "qemu-system-x86_64.exe"
@@ -111,11 +100,19 @@ $qemuImg = Get-QemuTool -QemuBinDir $QemuBinDir -ToolName "qemu-img.exe"
 
 if ($null -eq $qemuSystem) {
     Write-Warn "qemu-system-x86_64.exe is not on PATH. Install QEMU (see setup-qemu.ps1) or pass -QemuBinDir."
-    $qemuSystemCommand = "qemu-system-x86_64"
+    $qemuSystemCommand = ""
 } else {
     Write-Ok "Found $qemuSystem"
     $qemuSystemCommand = $qemuSystem
 }
+
+# QEMU is resolved at RUN time by each launcher, not baked in here: the host
+# that generated a launcher is not always the host that runs it
+# (scripts\local is git-ignored and OneDrive-synced), and
+# `setup-qemu.ps1 -Install` in particular writes launchers in a process whose
+# PATH predates the install it just performed. One resolver for all five
+# generators, in common.ps1 (the 2026-09-07 audit's H28 and H29).
+$qemuResolve = Get-QemuLauncherResolver -FoundPath $qemuSystemCommand
 
 if ($null -eq $qemuImg) {
     Write-Warn "qemu-img.exe is not on PATH. Disk image creation will be skipped unless QEMU is installed."
@@ -252,7 +249,8 @@ $rungComment = @(
 
 $installCmd = Join-Path $LocalScriptDir "qemu-win2k-smp-install.cmd"
 Write-AsciiFile $installCmd (@(
-    "@echo off",
+    "@echo off"
+) + $qemuResolve + @(
     "rem Phase 2d: Windows 2000 SP4 SMP stress VM install launcher.",
     "rem The ISO is Win2000 Pro with SP4 integrated (retail FPP - Setup prompts",
     "rem for a product key).",
@@ -278,7 +276,7 @@ Write-AsciiFile $installCmd (@(
     "  echo Missing ISO: %WIN2K_ISO%",
     "  exit /b 1",
     ")",
-    """$qemuSystemCommand"" ^",
+    """%QEMU%"" ^",
     "  -name ""xhci98 Windows 2000 SP4 SMP stress"" ^",
     "  -machine $machine ^",
     "  -accel $Accel ^",
@@ -298,7 +296,8 @@ Write-AsciiFile $installCmd (@(
 
 $prepareCmd = Join-Path $LocalScriptDir "qemu-win2k-smp-prepare-usbd.cmd"
 Write-AsciiFile $prepareCmd (@(
-    "@echo off",
+    "@echo off"
+) + $qemuResolve + @(
     "rem SAFE PREPARATION BOOT: no USB controller is attached, so the incomplete",
     "rem Win2000 USB 2.0 stack cannot start. Before shutting down the guest, copy:",
     "rem   D:\USBD.SYS C:\WINNT\system32\drivers\USBD.SYS",
@@ -314,7 +313,7 @@ Write-AsciiFile $prepareCmd (@(
     "  echo Rerun setup-qemu-win2k-smp.ps1 with -Win2KUsbdSys ^<path-to-SP4-USBD.SYS^>.",
     "  exit /b 1",
     ")",
-    """$qemuSystemCommand"" ^",
+    """%QEMU%"" ^",
     "  -name ""xhci98 Windows 2000 SP4 SMP USBD preparation"" ^",
     "  -machine $machine ^",
     "  -accel $Accel ^",
@@ -333,7 +332,8 @@ Write-AsciiFile $prepareCmd (@(
 
 $runCmd = Join-Path $LocalScriptDir "qemu-win2k-smp-run.cmd"
 Write-AsciiFile $runCmd (@(
-    "@echo off",
+    "@echo off"
+) + $qemuResolve + @(
     "rem Phase 2d: boot the installed Windows 2000 SP4 SMP stress VM from HDD.",
     "rem This is the RACE DETECTOR, not the development loop: from Phase 4 onward",
     "rem every checkpoint's build is also exercised here, with Driver Verifier on.",
@@ -372,7 +372,7 @@ Write-AsciiFile $runCmd (@(
     "    )",
     "  )",
     ")",
-    """$qemuSystemCommand"" ^",
+    """%QEMU%"" ^",
     "  -name ""xhci98 Windows 2000 SP4 SMP stress"" ^",
     "  -machine $machine ^",
     "  -accel $Accel ^",

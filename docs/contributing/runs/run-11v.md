@@ -39,6 +39,14 @@ Before using this sheet again:
   upgrade legs, which are about install behaviour rather than the trace, still
   want the two shipping flavours. The run sections record what was actually
   installed at the time.
+- **`XhciLogFile` and the `C:\XHCI.LOG` file sink are retired.** Task 13-L.2
+  removed the value, the ring-0 file sink and `ZwCreateFile`/`ZwWriteFile`
+  with it (`src/xhci_log.h`). Stage C and stage H below describe both as
+  current because that is what they were on the day; nothing in them about the
+  file sink can be re-run. What survives is `XhciLogDebugView`, the DebugView
+  sink and the two-transition rule that the values are read at start and the
+  log handed over at stop. Read stage H's file-sink clauses as the record of
+  why the sink went, not as a procedure.
 - A healthy trace is not a living guest, and a refused monitor port is a dead
   QEMU process rather than a dead guest. Screenshot before concluding anything
   about liveness.
@@ -1630,9 +1638,9 @@ storage + 3 ASIX + 3 for the pre-window probe), `OpensTotal` 25 =
   is structurally zero rather than masked and to check it; this is that
   check, at scale, and it is clean. `ProbeSgShape` read 758,622, and the 2a
   load leg read the identical value on a different target with ten times the
-  transfers. It is not an observation count: `src/xhci.h:6369` and
-  `src/xhci_probe.c:299` make it an OR-accumulated bitmask of shape
-  properties, and the firing count is the separate `ProbeSgShapeFirings`. The
+  transfers. It is not an observation count: `ProbeSgShape` in `src/xhci.h` and
+  `xhciProbeFoldTransfer` in `src/xhci_probe.c` make it an OR-accumulated
+  bitmask of shape properties, and the firing count is the separate `ProbeSgShapeFirings`. The
   agreement across the two targets is the real finding: Windows 98
   uniprocessor and Windows 2000 SMP present usbport SG lists of the same
   shape set. A counter's name is not its semantics; two runs agreeing to the
@@ -1762,8 +1770,9 @@ Four findings, and the first two would each have closed this leg wrongly.
    | outcome | usbport stops enumerating, shell wedges | clean |
 
    At 6 s, cycles 1-5 alternate (every other replug enumerates) and at cycle 6
-   the driver refuses one EP0 reopen at `src\xhci_slot.c:4358`
-   (`xhciDevByAddress(ext, 1)` returned NULL, the task 6-B.4 rebuild path),
+   the driver refuses one EP0 reopen in `xhciSlotOpenControl`
+   (`src\xhci_slot.c`; the address-1 lookup returned NULL, the task 6-B.4
+   rebuild path),
    after which not one further transfer arrives across fourteen cycles. The
    guest is not hung (`Test-GuestAlive` reports alive throughout, the clock
    advances, `HealthPolls` reads 576,627, every controller counter is clean
@@ -2209,7 +2218,13 @@ duration, both closing exactly, both with the same 3 aborts, one per attached
 class. Record: `stageG-2b-shutdown-clean-*`.
 
 Asset captured: `asset-2b-devmgr-three-classes.png`, one Device Manager frame
-with `xHCI USB 2.0 Host Controller (xhci98)`, its USB 2.0 Root Hub and USB
+with the controller node - written down here as `xHCI USB 2.0 Host Controller
+(xhci98)`, which has not been the INF name since task 8-A.4 renamed it to
+`USB 2.0 eXtensible Host Controller (xhci98)`, three batches before this one.
+Either this line is a transcription slip or the working image was still
+showing a `DriverDesc` cached from an earlier install; the capture named
+below is the only thing that could say which, and it has not been re-read.
+Do not cite this line for the devnode name - its USB 2.0 Root Hub and USB
 Mass Storage Device, plus `USB Human Interface Device`, the `ASIX AX88772
 USB2.0 to Fast Ethernet Adapter` and a `Generic volume`, none of them banged.
 

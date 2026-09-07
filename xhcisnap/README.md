@@ -114,7 +114,13 @@ the bench reads on the spot. The headline test is per port: a port reporting a
 device connected with `PP` clear is Finding Q read off the register, whatever
 the other ports say.
 
-The exit code says whether the `.TXT` is the report. `0` means the file was
+The exit code says whether the `.TXT` is the report. There are four, not two.
+`1` is a route failure: `\\.\HCD0` would not open, or `-probe` ran and
+published no dump - nothing was attempted. `2` is a usage error: no arguments
+at all (which prints the short usage), a bad `-verbosity` value, or one of the
+refused flag combinations - `-verbosity` with `-disable`, which are opposites,
+or either of those with `-probe` or `-dump`, which read the driver rather than
+setting it. `0` means the file was
 created and every write and the close reached the volume. `3` means it was
 not created (the summary line reads `NOT CREATED`; the report went to the
 screen), or it was created but not completed (a full or removed destination;
@@ -127,7 +133,11 @@ report. Until the
 "written", and a truncated report exited 0 with a "send this" underneath it.
 `xhcisnap -selftest-report BASE` drives the report path with no controller,
 and the `XHCISNAP_FAULT` environment variable (`write` or `close`) makes the
-named step fail; `xhcisnap\selftest.cmd` runs the three cases.
+named step fail; `xhcisnap\selftest.cmd` runs four cases - no fault, write
+fault, close fault, and a read-only destination.
+
+The help is `-help`, `-?` or `/?`; all three print the long text, and a bare
+invocation prints the short usage and exits 2 rather than taking a dump.
 
 ## Three things to know before trusting a dump
 
@@ -177,8 +187,11 @@ It works on Windows 98. Observed in the 2a QEMU guest, on NUSB 3.3's own
 return 0 / 2 / 4 / 7, the driver's own debug trace carries `cb PassThru` lines
 (so the callback was reached rather than inferred), and an 87,592-byte
 extension image came back in two windows and decoded against an `offsets.txt`
-regenerated from the same tree, with the header's tear detector equal to the
-`CheckCallbacks` decoded out of the dump body.
+regenerated from the same tree, with the header's tear detector agreeing across both windows and equal to the
+`CheckCallbacks` decoded out of the dump body. The tear detector has since
+become a sum of four counters rather than that single one, so the equality in
+that reading is a property of the version it was taken on; what the tool
+checks now, and reports, is only that every window's detector agreed.
 
 Only three of those four numbers are fixed. The first control reports whether
 this driver answered, so it is state-dependent by design: `0` when the channel

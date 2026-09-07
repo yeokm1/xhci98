@@ -40,34 +40,7 @@
 
 #include <stdio.h>
 #include "../src/xhci_xfer.h"
-
-static int failures;
-static int checks;
-
-#define CHECK(cond, what) check_impl((cond), (what), __LINE__)
-
-static void check_impl(int cond, const char *what, int line)
-{
-    checks++;
-    if (!cond) {
-        failures++;
-        printf("FAIL %s:%d: %s\n", "test_iso.c", line, what);
-    }
-}
-
-#define CHECK_EQ(got, want, what) \
-    check_eq_impl((unsigned long)(got), (unsigned long)(want), (what), __LINE__)
-
-static void check_eq_impl(unsigned long got, unsigned long want,
-                          const char *what, int line)
-{
-    checks++;
-    if (got != want) {
-        failures++;
-        printf("FAIL %s:%d: %s (got %lu / 0x%lX, want %lu / 0x%lX)\n",
-               "test_iso.c", line, what, got, got, want, want);
-    }
-}
+#include "test_harness.h"
 
 #define RING_PA 0x0F002000UL
 
@@ -92,7 +65,8 @@ static void check_eq_impl(unsigned long got, unsigned long want,
 #define WANT_CC_SUCCESS             1UL
 #define WANT_CC_TRB_ERROR           5UL
 #define WANT_CC_STALL               6UL
-#define WANT_CC_INVALID_STREAM_ID  10UL
+#define WANT_CC_INVALID_STREAM_TYPE 10UL
+#define WANT_CC_INVALID_STREAM_ID  34UL
 #define WANT_CC_SHORT_PACKET       13UL
 #define WANT_CC_RING_UNDERRUN      14UL
 #define WANT_CC_RING_OVERRUN       15UL
@@ -588,6 +562,37 @@ static void test_build_burst_fields(void)
      */
     CHECK_EQ((out[0].Status >> 17) & 0x1FUL, 0UL,
              "DW2 21:17 is TD Size and is 0 on a single-TRB TD, not the TBC");
+
+    /*
+     * **TBC is structurally zero in this driver, and that is a statement
+     * rather than a coverage gap.** The 2026-09-07 audit's G10 asked for a
+     * vector with a nonzero burst count; there cannot be one, and the reason
+     * is worth writing down so nobody looks for it again.
+     *
+     * TBC is ROUNDUP(TDPC / (Max Burst + 1)) - 1, so it exceeds zero only when
+     * TDPC > Max Burst + 1, which means a TD longer than Max Packet Size *
+     * (Max Burst + 1). That product is exactly Max ESIT Payload for a
+     * High-Speed endpoint (4.14.1 p.234), and a packet above Max ESIT Payload
+     * is refused outright by the builder, two vectors below. So the only TD
+     * that could carry a nonzero TBC is one this builder will not construct:
+     * one spanning more than a single service opportunity.
+     *
+     * Both halves are asserted here, at the boundary. A TD exactly at Max ESIT
+     * Payload is the largest that builds, and it carries TBC 0; one byte more
+     * is refused rather than given TBC 1.
+     */
+    iso_init(&iso);
+    iso_add(&iso, 0x0B410000UL, 3072, 600);       /* exactly Max ESIT Payload */
+    iso_request(&req, &iso, 1, 1024, 2);
+    CHECK_EQ(XhciXferBuildIso(&req, 1, out, 8, &layout), XHCI_XFER_OK,
+             "a TD exactly at Max ESIT Payload builds");
+    CHECK_EQ((out[0].Control >> 7) & 3UL, 0UL,
+             "and is still TBC 0 - one service opportunity");
+    iso_init(&iso);
+    iso_add(&iso, 0x0B410000UL, 3073, 600);
+    iso_request(&req, &iso, 1, 1024, 2);
+    CHECK_EQ(XhciXferBuildIso(&req, 1, out, 8, &layout), XHCI_XFER_ISO_MALFORMED,
+             "and one byte more is refused, rather than built with TBC 1");
 }
 
 static void test_build_multiple_packets(void)
@@ -673,6 +678,70 @@ static void test_build_frame_ids(void)
                  "and the Frame ID field is left at zero, which SIA makes the "
                  "xHC ignore");
     }
+    /*
+     * **Which of the two gates just fired, and why that matters.** Moving one
+     * packet's stamp to 400 breaks the cadence as well as the window - the
+     * stamps read 600, 601, 400, 603 - and the cadence gate is tested first,
+     * so this vector proves nothing about the per-packet window loop. Until
+     * the 2026-09-07 audit's G1 that was the ONLY vector aimed at the loop,
+     * and `src/xhci_xfer.c`'s window scan could have been deleted with this
+     * file still green. Assert what actually happened here, then reach the
+     * loop separately below.
+     */
+    CHECK_EQ(layout.CadenceMismatch, 1UL,
+             "and it is the CADENCE gate that fired, not the window scan");
+
+    /*
+     * The window scan reached on its own: a group whose stamps are perfectly
+     * cadenced and entirely in the past. `xhciXferIsoCadenceAgrees` sees a
+     * clean run of consecutive frames and reports no mismatch, so
+     * `useFrameId` survives into the loop, and every packet then fails
+     * `XhciXferFrameIdUsable` because a distance taken in the 32-bit domain
+     * puts a stale stamp near 2^32 rather than 48 frames ahead. Without the
+     * loop this group would be given explicit Frame IDs naming frames that
+     * have gone - a Missed Service Error per TD until the pipe resynchronizes,
+     * which is the batch 9-A fourth MAJOR read from the other side.
+     */
+    iso_init(&iso);
+    for (i = 0; i < 4; i++) {
+        iso_add(&iso, 0x0B680000UL + i * 0x1000UL, 192, 400 + i);
+    }
+    iso_request(&req, &iso, 0, 1024, 0);
+    req.Frames.Allowed = 1;
+    req.Frames.CurrentFrame = 500;
+    req.Frames.IstFrames = 1;
+
+    CHECK_EQ(XhciXferBuildIso(&req, 0, out, 8, &layout), XHCI_XFER_OK,
+             "a consistently late group still builds");
+    CHECK_EQ(layout.CadenceMismatch, 0UL,
+             "its cadence is intact, so that gate does not fire");
+    CHECK_EQ(layout.FrameIdsUsed, 0UL,
+             "and the per-packet window scan is what drops it to SIA");
+    for (i = 0; i < 4; i++) {
+        CHECK_EQ(out[i].Control & ISO_SIA, ISO_SIA,
+                 "on every TD of it");
+        CHECK_EQ((out[i].Control >> 20) & 0x7FFUL, 0UL,
+                 "with no Frame ID naming a frame that has passed");
+    }
+
+    /*
+     * And the twin that says the scan is a window and not a blanket refusal:
+     * the same shape moved into the future is accepted, so the vector above
+     * cannot pass by the loop simply never admitting anything.
+     */
+    iso_init(&iso);
+    for (i = 0; i < 4; i++) {
+        iso_add(&iso, 0x0B690000UL + i * 0x1000UL, 192, 600 + i);
+    }
+    iso_request(&req, &iso, 0, 1024, 0);
+    req.Frames.Allowed = 1;
+    req.Frames.CurrentFrame = 500;
+    req.Frames.IstFrames = 1;
+
+    CHECK_EQ(XhciXferBuildIso(&req, 0, out, 8, &layout), XHCI_XFER_OK,
+             "the same shape in the future builds");
+    CHECK_EQ(layout.CadenceMismatch, 0UL, "same cadence");
+    CHECK_EQ(layout.FrameIdsUsed, 1UL, "and the scan admits it");
 
     /*
      * The Frame ID a stamp reduces to is the stamp mod 2048, so a group whose
@@ -799,6 +868,22 @@ static void test_build_refusals(void)
              XHCI_XFER_ISO_TOO_LARGE, "one more is refused as too large");
     CHECK_EQ(layout.TrbCount, 0UL,
              "and nothing was written - the refusal is not a partial build");
+    /*
+     * `TrbCount` is the layout's own bookkeeping, so on its own it says only
+     * that the builder did not CLAIM to write (G11). The output buffer is what
+     * the caller enqueues, so check that too: poison its first TRB and confirm
+     * the refusal left it alone.
+     */
+    out[0].Param0 = 0xDEADBEEFUL;
+    out[0].Param1 = 0xDEADBEEFUL;
+    out[0].Status = 0xDEADBEEFUL;
+    out[0].Control = 0xDEADBEEFUL;
+    CHECK_EQ(XhciXferBuildIso(&req, 0, out, XHCI_XFER_MAX_ISO_TRBS, &layout),
+             XHCI_XFER_ISO_TOO_LARGE, "refused again");
+    CHECK_EQ(out[0].Param0, 0xDEADBEEFUL, "the output buffer is untouched");
+    CHECK_EQ(out[0].Param1, 0xDEADBEEFUL, "in both halves");
+    CHECK_EQ(out[0].Status, 0xDEADBEEFUL, "in its status word");
+    CHECK_EQ(out[0].Control, 0xDEADBEEFUL, "and in its control word");
 
     /*
      * A scratch array smaller than the group needs reads as **too large**, not
@@ -1467,11 +1552,23 @@ static void test_codes_illegal_on_an_isoch_ring(void)
              "a Stall is not a code an isochronous ring can carry");
     CHECK_EQ(XhciXferIsoCodeInfo(WANT_CC_INVALID_STREAM_ID, &info),
              XHCI_XFER_BAD_PARAM, "nor an Invalid Stream ID");
-    /* And the contrast that makes it a statement about the *kind* rather than
-     * about the codes: the endpoint ring accepts both. */
+    CHECK_EQ(XhciXferIsoCodeInfo(WANT_CC_INVALID_STREAM_TYPE, &info),
+             XHCI_XFER_BAD_PARAM, "nor an Invalid Stream Type");
+    /*
+     * And the contrast that makes it a statement about the *kind* rather than
+     * about the codes: the endpoint ring accepts what the isochronous one
+     * refuses. This is the half the vector claimed and did not draw until the
+     * 2026-09-07 audit's G2 - `WANT_CC_INVALID_STREAM_ID` was defined as 10,
+     * which is Invalid Stream Type (`XHCI_CC_INVALID_STREAM_TYPE`), not 34
+     * (`XHCI_CC_INVALID_STREAM_ID`), so the two decoders were never contrasted
+     * on the same code.
+     */
     CHECK_EQ(XhciXferCodeInfo(WANT_CC_STALL, &info), XHCI_XFER_OK,
              "while the shared decoder still accepts a Stall, which is what this "
              "path used to reach");
+    CHECK_EQ(XhciXferCodeInfo(WANT_CC_INVALID_STREAM_ID, &info), XHCI_XFER_OK,
+             "and accepts an Invalid Stream ID, the code the isochronous "
+             "decoder above refuses");
 
     /* End to end: the event is refused before it can retire anything. */
     iso_fixture_init(&fix, 32);
@@ -1668,6 +1765,82 @@ static void test_submit_across_the_link(void)
              "completes the group across the Link");
     CHECK_EQ(fix.transfers[1].IsoPacketsAnswered, 4UL,
              "with every packet matched to its own TD, wrap included");
+
+    /*
+     * **The other half of the same rule, which nothing built until the
+     * 2026-09-07 audit's G10: the Link with its Chain bit SET.** Above, every
+     * TD is one TRB, so the Link always falls between two TDs and always
+     * reads Chain clear - the vector's own comment claims both halves and
+     * produces one. A Link whose Chain is clear where it should be set breaks
+     * the TD in two, and the xHC then executes the first half and reports a
+     * TD the driver never queued.
+     *
+     * To reach it a TD has to CONTINUE across the Link, which needs a packet
+     * of more than one TRB: `iso_add_split` gives the two-fragment shape
+     * usbport produces for a buffer crossing a page boundary.
+     *
+     * Placement: the ring has 7 usable slots and is empty at index 4 after the
+     * drain above, so a two-TRB TD submitted there occupies 4 and 5, and a
+     * second occupies 6 and - crossing the Link at 7 - index 0. The Link
+     * therefore sits INSIDE the second TD.
+     */
+    iso_fixture_init(&fix, 8);
+    iso_init(&fix.iso[2]);
+    iso_add(&fix.iso[2], 0x0C200000UL, 192, 700);
+    iso_add(&fix.iso[2], 0x0C201000UL, 192, 701);
+    iso_add(&fix.iso[2], 0x0C202000UL, 192, 702);
+    iso_request(&fix.req, &fix.iso[2], 1, 1024, 0);
+    CHECK_EQ(XhciXferSubmitIso(&fix.queue, &fix.ring, &fix.req, 1,
+                               &fix.transfers[2], (PVOID)0x2002UL,
+                               fix.scratch, XHCI_XFER_MAX_ISO_TRBS,
+                               &fix.layout),
+             XHCI_XFER_OK, "three single-TRB packets fill indices 0-2");
+    for (i = 0; i < 3; i++) {
+        CHECK_EQ(iso_event(&fix, i, WANT_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+                 "drained");
+    }
+    CHECK_EQ(fix.ring.Dequeue, 3UL, "the ring is empty at index 3");
+
+    /* Three more singles, so the ring is empty at index 6 - one slot before
+     * the Link, which is where a two-TRB TD has to start to straddle it. */
+    iso_init(&fix.iso[1]);
+    iso_add(&fix.iso[1], 0x0C210000UL, 192, 703);
+    iso_add(&fix.iso[1], 0x0C211000UL, 192, 704);
+    iso_add(&fix.iso[1], 0x0C212000UL, 192, 705);
+    iso_request(&fix.req, &fix.iso[1], 1, 1024, 0);
+    CHECK_EQ(XhciXferSubmitIso(&fix.queue, &fix.ring, &fix.req, 1,
+                               &fix.transfers[1], (PVOID)0x2001UL,
+                               fix.scratch, XHCI_XFER_MAX_ISO_TRBS,
+                               &fix.layout),
+             XHCI_XFER_OK, "three more fill indices 3-5");
+    for (i = 3; i < 6; i++) {
+        CHECK_EQ(iso_event(&fix, i, WANT_CC_SUCCESS, 0, &result), XHCI_XFER_OK,
+                 "drained");
+    }
+    CHECK_EQ(fix.ring.Dequeue, 6UL, "the ring is empty at index 6");
+
+    iso_init(&fix.iso[3]);
+    /* One packet split across a page boundary, so its TD is two TRBs: index 6,
+     * then the Link at 7, then index 0. */
+    iso_add_split(&fix.iso[3], 0x0C300F00UL, 256, 256, 706);
+    iso_request(&fix.req, &fix.iso[3], 1, 1024, 0);
+    CHECK_EQ(XhciXferSubmitIso(&fix.queue, &fix.ring, &fix.req, 1,
+                               &fix.transfers[3], (PVOID)0x2003UL,
+                               fix.scratch, XHCI_XFER_MAX_ISO_TRBS,
+                               &fix.layout),
+             XHCI_XFER_OK, "a two-TRB packet straddling the Link");
+    CHECK_EQ(fix.transfers[3].FirstIndex, 6UL, "starting at 6");
+    CHECK_EQ(fix.transfers[3].LastIndex, 0UL,
+             "and ending at 0, so the Link at index 7 is inside the last TD");
+    CHECK_EQ(fix.mem[7].Control & ISO_CH, ISO_CH,
+             "so the Link TRB carries Chain SET - the TD continues past it");
+    /* And the TRB before the Link is chained too, since it is not the TD's
+     * last: this is the preceding TRB whose Chain the Link's copies. */
+    CHECK_EQ(fix.mem[6].Control & ISO_CH, ISO_CH,
+             "as does the TD's first TRB, which the Link's copies");
+    /* The TD's real last TRB, after the wrap, ends the chain. */
+    CHECK_EQ(fix.mem[0].Control & ISO_CH, 0UL,
+             "while the TD's last TRB after the wrap clears it");
 }
 
 int main(void)

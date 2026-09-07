@@ -85,7 +85,10 @@ section 3):
 | `MiniPortExtensionSize` | Bytes usbport allocates for the per-controller extension handed to every callback | `sizeof(XHCI_EXTENSION)` |
 | `MiniPortEndpointSize` | Bytes per endpoint extension | `sizeof(XHCI_ENDPOINT)` |
 | `MiniPortTransferSize` | Bytes per transfer extension | `sizeof(XHCI_TRANSFER)` |
-| `MiniPortResourcesSize` | Bytes of common-buffer the controller needs at start (EHCI puts its periodic frame list here) | Enough for DCBAA + command ring + ERST + event ring + scratchpad (verify how the buffer is delivered in `StartController`'s resources) |
+| `MiniPortResourcesSize` | Bytes of common-buffer the controller needs at start (EHCI puts its periodic frame list here) | Enough for DCBAA + scratchpad buffer array, command ring + ERST, event ring, the input
+context, 32 device contexts, 32 EP0 rings and the pool rings, then the
+scratchpad pages - the full list is `XHCI_REGION_*` in `src/xhci.h`, and
+`XHCI_HC_RESOURCES_SIZE` is the number DriverEntry commits (verify how the buffer is delivered in `StartController`'s resources) |
 
 The extension pattern matters: usbport allocates all extension memory.
 The miniport never allocates its own device extension; it receives a
@@ -137,11 +140,21 @@ itself (`MiniPortBusBandwidth`) and only opens endpoints it believes fit, but
 the xHC independently admission-controls: Configure Endpoint can fail with
 completion code 7 (Resource Error), 8 (Bandwidth Error) or 35 (Secondary Bandwidth Error) for an endpoint usbport
 already approved, because the xHC's internal budget (which includes overheads
-usbport does not model) disagrees. `OpenEndpoint` must map that command
+usbport does not model) disagrees. A synchronous miniport would map that command
 failure to usbport's "no bandwidth" miniport status (verify the constant in
 usbmport.h; ReactOS has a distinct no-bandwidth code) so `usbhub` degrades
 gracefully, rather than returning a generic failure that reads as a broken
-device. Do not retry the command; the xHC's answer will not change.
+device.
+
+What this driver actually does, because the shape above cannot be reached
+from it. Configure Endpoint is asynchronous here: `OpenEndpoint` returns long
+before the command completes, so it has no failure to map and
+`MP_STATUS_NO_BANDWIDTH` appears nowhere in `src/*.c`. The record is instead
+left in `XHCI_EP_REC_REFUSED`, and the next `SubmitTransfer` on that endpoint
+completes the transfer with `USBD_STATUS_NO_BANDWIDTH` and returns
+`MP_STATUS_SUCCESS` (`src/xhci_slot.c`). usbhub degrades on the transfer
+status, which is the same information one layer later. Do not retry the
+command either way; the xHC's answer will not change.
 
 ### Transfers
 
