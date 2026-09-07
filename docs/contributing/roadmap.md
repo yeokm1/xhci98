@@ -1950,14 +1950,37 @@ Tasks, in the audit's revised order:
   and `XHCISNAP.EXE` rebuilt after the header, both printing `1.0.2.0`;
   `make-release.ps1` exit 0: `releases\1.0.2.0\` and
   `out\xhci98-1.0.2.0.zip` (254,452 B, thirteen files, no Microsoft file),
-  the readme at 78 columns throughout with the new entry embedded. The
-  driver code in the cut differs from the binary the 20.7 and 20.8
-  readings stand on (`b75f48eeb9f29ff8`) by comments and the version
-  resource only: the Codex round-4 and round-5 commits and the citation
-  rewrite changed no code line. Still owed, no guest run at the cut by the
-  owner's instruction: the install route from the asset on the five
-  targets as task 19.9 did, and `fresh-2a.img` and `fresh-2b.img`
-  re-stamped on the cut's binary, since they carry `base-1.0.1.0-qemu`.
+  the readme at 78 columns throughout with the new entry embedded.
+  Re-cut the same day under the same number (`45ced99`), because `9a65a3e`
+  changed the driver after the cut and `releases\1.0.2.0\` no longer
+  matched the source it is published from. The uploaded-nothing rule in
+  `releases\README.md` allows it, the `history.md` entry opens by saying so
+  in the `1.0.0.0` entry's shape, and neither the version nor the date
+  moves. Every gate green a second time on the tree the re-cut was taken
+  from: the host suite 20,325 checks across twelve suites (`test_init`
+  12,585), the INF gate self-tests 312, the packager 179, the launchers
+  116, the matrix self-test 230, the `XHCISNAP` self-test 4 cases, the
+  import gate on all three flavours; `make-release.ps1 -Force` exit 0, with
+  `out\xhci98-1.0.2.0.zip` at 254,751 B and thirteen files. Published
+  sha256 prefixes: release `69e7de836f047558`, debug `9581458ef960e920`,
+  and the qemu flavour from the same build `df4d16fc249905b7`. The cut's
+  own binaries (`c4cedeee4449434d`, `49703e29539fe177`) are superseded and
+  were never published anywhere. The driver code now published differs from
+  the binary the 20.7 and 20.8 readings stand on (`b75f48eeb9f29ff8`) by
+  one code path rather than by comments alone: `xhciSlotOpenControl`
+  refuses an addressed EP0 open or reopen on a FAILED record through the
+  shared `xhciDevMayOpenEndpoint` guard, with the host vector
+  `test_slot_failed_record_ep0_reopen` behind it. Everything else between
+  the two binaries, the Codex round-4 and round-5 commits and the citation
+  rewrite, changed no code line. The new refusal is on a path no guest run
+  has been through, but the guard it goes through sits in the ordinary EP0
+  open path, so the five asset legs are the first guest exercise of the
+  published binary. Whether a confirming paired `-PostRelease` run is owed
+  on the re-stamped images as well was left to the owner on 2026-09-07.
+  Still owed, no guest run at either cut by the owner's instruction: the
+  install route from the asset on the five targets as task 19.9 did, and
+  `fresh-2a.img` and `fresh-2b.img` re-stamped on the re-cut's binary,
+  since they carry `base-1.0.1.0-qemu`.
   As written: once the owner names the version, `src\xhci_version.h`,
   the INF's `DriverVer`, the `history.md` entry naming what changed and
   which findings it closes (F1-F19, D1-D6; F10's hardware reading owed),
