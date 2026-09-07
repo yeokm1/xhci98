@@ -26,10 +26,13 @@ defect and nineteen things worth fixing across the driver, the two tools and
 the package (`docs/contributing/roadmap.md`, Phase 20: findings F1 to F19
 and D1 to D6, every one closed there with its regression test or its
 recorded decision). The install routes are unchanged on every target, and
-the post-release device matrix on Windows 98 SE and Windows 2000 read no
-worse than `1.0.1.0`'s. Those matrix readings were taken on a binary that
-predates one change in this release, the control-endpoint refusal, and no
-run has exercised the path that change is on.
+were read from this release's own download on Windows 98 SE, Windows ME,
+Windows 2000 and Windows XP. The post-release device matrix on Windows 98
+SE and Windows 2000 was re-read on this release's driver, and reads no
+worse than `1.0.1.0`'s. One thing in this release is still not covered by a
+run on a machine: the refusal itself, a control endpoint opened on a device
+the driver has already given up on. Nothing has been made to produce that
+state on purpose, and a test on the development machine is what covers it.
 
 ### What changed
 
