@@ -28,8 +28,10 @@ and D1 to D6, every one closed there with its regression test or its
 recorded decision). The install routes change in one way, the `usbui.dll`
 copy described below. Everything else about them is as `1.0.1.0` left it and
 was read from this release's own download on Windows 98 SE, Windows ME,
-Windows 2000 and Windows XP; the readings covering the added file are owed
-before this release is published. The post-release device matrix on Windows 98
+Windows 2000 and Windows XP. The added file's route has been read on Windows
+2000, on a machine that had never had a USB controller, and asks for nothing
+there; the same reading on the other three targets is owed before this release
+is published. The post-release device matrix on Windows 98
 SE and Windows 2000 was re-read on this release's driver, and reads no
 worse than `1.0.1.0`'s. One thing in this release is still not covered by a
 run on a machine: the refusal itself, a control endpoint opened on a device
@@ -83,7 +85,10 @@ state on purpose, and a test on the development machine is what covers it.
   provider, and on a machine that never had a USB controller the file was
   never placed, so the tab was silently missing. Read on 2026-09-07 in the
   Windows 2000 and the Windows XP guest: both gained the tab, showing the
-  hub's power budget and what is attached, with nothing else changed. On
+  hub's power budget and what is attached, with nothing else changed. On a
+  Windows 2000 that had never had a USB controller, the install fetched this
+  file and the three drivers from the driver cache in one pass, out of two
+  different cabinets, and asked for nothing. On
   Windows 98 and Windows ME the file is placed for the same reason those
   systems' own USB install places it, and it changes nothing you can see,
   because the equivalent page comes from `sysclass.dll` there and those

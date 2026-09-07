@@ -4132,15 +4132,32 @@ Where each target's `usbui.dll` comes from, read statically on 2026-09-07
 | Windows XP SP3 | `usbui.dll = 100,,74240,,,,,2,1,3` | disk 100, the SP source, out of `I386\SP3.CAB` | 74,240 B, 5.1.2600.5512 |
 
 Four distinct per-OS builds, each fetched from its own OS by construction, as
-with the three drivers. **Windows 2000 is the one prompt risk and it is not
-yet observed**: there `usbd.sys`, `usbhub.sys` and `usbport.sys` come from
-disk 2 (`sp4.cab`) but `usbui.dll` from disk 1, satisfied out of `driver.cab`.
-Both cabs sit in `Driver Cache\i386` on every install, so it should stay
-silent, but that is inference from the exact size match and not a reading. A
-clean xHCI-only Windows 2000 install is owed before the release goes out. On
-Windows XP the file is in `sp3.cab` beside `usbport.sys` and `usbhub.sys`, so
-it is free; on 9x it is on the same BASE cab as `usbd.sys` and `usbhub.sys`,
-so it rides the Insert Disk prompt the install already raises.
+with the three drivers. Windows 2000 was the one prompt risk, because there
+`usbd.sys`, `usbhub.sys` and `usbport.sys` come from disk 2 (`sp4.cab`) but
+`usbui.dll` from disk 1, satisfied out of `driver.cab` - two different disks
+in one install. **It was read on 2026-09-07 and it is silent.** Two steps:
+
+- Statically, `vm\win2k-xonly.img`'s own `WINNT\Driver Cache\i386` holds both
+  cabs, and its `driver.cab` is byte-identical to the SP4 CD's (SHA-256
+  `45CC8941...`, 52,336,747 B) and carries `usbui.dll` at exactly the 59,664
+  bytes `layout.inf` names. So the file is in the cache with no CD needed.
+- At run time, on a clone of that image rolled back to its
+  `win2k-xonly-clean-install` snapshot - a Windows 2000 that has never had a
+  USB controller, verified to hold none of `usbport.sys`, `usbd.sys`,
+  `usbhub.sys`, `usbhub20.sys` or `usbui.dll` - the package installed with no
+  CD attached and **asked for nothing**. Both devnodes came up clean, and the
+  USB Root Hub's Power tab rendered, which is what proves `usbui.dll` was
+  fetched: the root hub starting proves the `sp4.cab` three, the Power tab
+  proves the `driver.cab` one.
+
+So the engine resolves a disk-1 row and disk-2 rows in the same pass out of
+the driver cache. An earlier pass the same day isolated the new file on its
+own, by installing over the already-installed image where flag 16 skips the
+three drivers, and that was silent too. On Windows XP the file is in
+`sp3.cab` beside `usbport.sys` and `usbhub.sys`, so it is free; on 9x it is
+on the same BASE cab as `usbd.sys` and `usbhub.sys`, so it rides the Insert
+Disk prompt the install already raises. The Windows 98, Windows ME and
+Windows XP install legs are still to be re-read against this INF.
 
 What the two NT CDs say, read statically on 2026-09-03 (7-Zip on the ISOs,
 `expand` on the `.IN_` files; nothing executed). The last three fields of a

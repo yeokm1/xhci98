@@ -81,7 +81,7 @@ real hardware.
 | Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000) and 32-bit Windows XP (SP3) in virtual machines only, see "What this is". |
 | USB stack | Windows 98: NUSB 3.3, installed before this driver (NUSB 3.6 ships the identical USB 2.0 stack and has been observed working, in a virtual machine only; so has the SweetLow stack that Windows 98 QuickInstall 1.0.1 and later bundle, which also removes the first known limitation below; see the README's installation steps). Windows ME: SweetLow's stack only; its own USB stack has no `usbport.sys`, and on it the driver installs and shows Code 2. Do not install NUSB on Windows ME, it is a Windows 98 SE package. Windows 2000: SP4's native stack, or the standalone USB 2.0 update KB319973. **Do not install NUSB on Windows 2000.** Windows XP: its own USB stack, nothing to install; NUSB is not for it either. |
 | Controller | An xHCI controller presenting PCI class code `0C0330`, with at least one USB 2.0 protocol port, a BAR0 mapped below 4 GB, and a legacy interrupt pin. Neither target has an MSI path, so a controller reporting `Interrupt Pin = 0` cannot be driven at all. |
-| Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk (`C:\WINDOWS\OPTIONS\CABS`). The install copies Windows' own `usbd.sys`, `usbhub.sys` and `usbui.dll` from it. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the hard disk; the virtual machine tried asked for nothing. Windows XP: nothing; `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll` all come out of `sp3.cab` in the driver cache every install has. Windows 2000: the same three out of `sp4.cab`, and `usbui.dll` out of `driver.cab` beside it in that cache. |
+| Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk (`C:\WINDOWS\OPTIONS\CABS`). The install copies Windows' own `usbd.sys`, `usbhub.sys` and `usbui.dll` from it. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the hard disk; the virtual machine tried asked for nothing. Windows XP: nothing; `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll` all come out of `sp3.cab` in the driver cache every install has. Windows 2000: nothing either; the same three out of `sp4.cab`, and `usbui.dll` out of `driver.cab` beside it in that cache. |
 
 Run the qualifier before installing anything; it answers all three of the
 controller conditions in a single read-only pass.
@@ -157,9 +157,10 @@ the Windows 98 Second Edition CD-ROM during the copy, unless the Windows
 CABs are on the hard disk (OEM and Windows 98 QuickInstall installs). Insert
 the CD and click OK; if it then asks where to copy from, give it the CD's
 `WIN98` folder. Windows 2000 and Windows XP take theirs from the driver cache
-every install has: on Windows XP all four out of `sp3.cab`, on Windows 2000
-three out of `sp4.cab` and `usbui.dll` out of `driver.cab` beside it. Windows
-XP asks for nothing. If the prompt is cancelled the driver still installs, but the
+every install has and ask for nothing: on Windows XP all four out of
+`sp3.cab`, on Windows 2000 three out of `sp4.cab` and `usbui.dll` out of
+`driver.cab` beside it. Measured on Windows 2000 on 2026-09-07, installing on
+a machine that had never had a USB controller: no prompt of any kind. If the prompt is cancelled the driver still installs, but the
 USB 2.0 Root Hub sits at Code 2 (Windows 2000: a `0xc0000034` error naming
 `usbhub20.sys`); that reads as a fault in this driver and is not one. Put
 the CD in and install the driver again.
