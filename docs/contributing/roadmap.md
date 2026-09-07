@@ -1866,7 +1866,7 @@ Tasks, in the audit's revised order:
   reorder, so the row is the first boot of the run rather than the fifth,
   which is the condition 20.7 could not clear; a first solo run in the
   matrix's own order was stopped eight minutes in for it, its partial
-  output kept as `phase20-8-solo-aborted-hidonly`. Third, Windows 2000 was
+  output discarded. Third, Windows 2000 was
   not run in that solo pass, as written below. Evidence in
   `out\post-release\phase20-8-audiofirst\` on the host that ran it.
   Then, on 2026-09-07 at the owner's order, the audio group was made the
@@ -1887,7 +1887,7 @@ Tasks, in the audit's revised order:
   needed. Evidence in `out\post-release\phase20-8-paired-{2a,2b}\`, and a
   single-invocation `-Target 2a-fresh,2b-fresh` start that runs the targets
   one after the other (one guest at a time, not the paired shape) was
-  stopped a minute in, kept as `phase20-8-paired-aborted-sequential`.
+  stopped a minute in and its partial output discarded.
   As written: the first attempt on 2026-09-06 was
   aborted before the driver started: the guest booted into Safe Mode,
   which on a `-snapshot` boot means `vm\fresh-2a.img` itself carries a
