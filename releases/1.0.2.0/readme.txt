@@ -287,11 +287,11 @@ INSTALL FROM THE RELEASE\ DIRECTORY. This package carries BOTH builds side by
 side - RELEASE\ and DEBUG\, each a complete set of files with the same names -
 so the directory you point Windows at is what decides which driver you get.
 RELEASE\ is the one you want. DEBUG\ is the same driver built so that a
-maintainer can get more out of it if you are asked for a report, and there
-only for troubleshooting a machine that has already gone wrong. It prints
-nothing as it runs. Section 8 describes both, and nothing
-about a copied file
-says which one it is - so point at a directory, never at a loose xhci98.sys.
+crash on it can be traced further back. It records nothing more than
+RELEASE\ does, and it is there only for troubleshooting a machine that has
+already gone wrong. It prints nothing as it runs. Section 8 describes both,
+and nothing about a copied file says which one it is - so point at a
+directory, never at a loose xhci98.sys.
 
 Put the whole unzipped package somewhere the machine can read - a floppy, a
 CD, a shared folder - then:
@@ -599,8 +599,9 @@ needed.
 
   DEBUG\  - only when diagnosing a problem
 
-  The same driver, built so a maintainer can get more out of it.
-  It prints nothing as it runs. It is here only so that it can be
+  The same driver, built so that a crash on it can be traced
+  further back. It records nothing more than RELEASE\ does, and
+  it prints nothing as it runs. It is here only so that it can be
   installed at this exact version if something goes wrong. Do not
   install it otherwise - and note that BOTH builds answer
   XHCISNAP, so you do not need this one to send a report.
@@ -800,72 +801,64 @@ the driver reads, and one the installer writes machine-wide on every system.
 
   1.0.2.0 - 2026-09-07
 
-  Re-cut on 2026-09-07 under the same number, before anything had been
-  uploaded, so there is no earlier 1.0.2.0 in anyone's hands to tell this one
-  apart from. Between the first cut that morning and this one, the last of the
-  audit's deferred items was fixed in the driver: it is the control-endpoint
-  refusal on a failed device, described below. The release date does not move,
-  because the re-cut is the same day.
+  A fix release. An audit on 2026-09-05 found no critical defect and nineteen
+  things worth fixing across the driver, the two tools and the package. All of
+  them are closed (docs/contributing/roadmap.md, Phase 20).
 
-  A fix release. A repository audit taken on 2026-09-05 found no critical
-  defect and nineteen things worth fixing across the driver, the two tools and
-  the package (docs/contributing/roadmap.md, Phase 20: findings F1 to F19 and
-  D1 to D6, every one closed there with its regression test or its recorded
-  decision). The install routes are unchanged on every target, and were read
-  from this release's own download on Windows 98 SE, Windows ME, Windows 2000
-  and Windows XP. The post-release device matrix on Windows 98 SE and Windows
-  2000 was re-read on this release's driver, and reads no worse than
-  1.0.1.0's. One thing in this release is still not covered by a run on a
-  machine: the refusal itself, a control endpoint opened on a device the
-  driver has already given up on. Nothing has been made to produce that state
-  on purpose, and a test on the development machine is what covers it.
+  The install changes in one way: Windows now supplies usbui.dll as well,
+  which brings back the USB Root Hub's Power tab on Windows 2000 and Windows
+  XP. Everything else about it is as 1.0.1.0 left it.
+
+  The device matrix on Windows 98 SE and Windows 2000 was re-read on this
+  driver and is no worse than 1.0.1.0's. One change here has no machine behind
+  it, the control-endpoint refusal below: nothing has been built to produce
+  that state on purpose, and a test on the development machine is what covers
+  it.
 
   What changed
 
     * The driver: an endpoint handle the hub driver has already replaced can
       no longer act on the endpoint that replaced it, and a device's endpoint
-      table is reset under the same lock the endpoint callbacks take, so a
-      stale handle cannot disturb a live device. Read on a two-CPU Windows
-      2000 guest under Driver Verifier, the controller killed from outside the
-      guest four times and recovered each time with every device back, and on
-      the Windows XP restore and lifecycle sequence that 1.0.1.0's fix was
-      for.
+      table is reset under the lock the endpoint callbacks take. Read on a
+      two-CPU Windows 2000 guest under Driver Verifier, the controller killed
+      from outside the guest four times and back each time with every device,
+      and on the Windows XP sequence 1.0.1.0's fix was for.
     * The driver: a device this driver has given up on can no longer have its
-      control endpoint opened, or reopened after the failure. Such a record
-      keeps its address while it is torn down, and an open on that address was
-      taken for a live device's, which bound the endpoint and started the
-      command chain again on a device that had already failed. Found by the
-      audit's deferred items and covered by a host test; no machine has shown
-      it, and no guest run has been through that path.
-    * The driver: after a completed in-place controller recovery the health
-      poll's fatal latch is reopened, so a second fault is recovered too.
-      Until this release only the first fault after boot was; a second was
-      noticed and never acted on. Found by the Windows 2000 reading above.
-    * The driver: a recovery whose delivery is lost no longer leaves recovery
-      armed for ever. It ages out after twenty health polls, is charged as one
-      of the bounded attempts, and a late delivery from the expired request is
+      control endpoint opened, or reopened after the failure. Covered by a
+      host test; no machine has shown it.
+    * The driver: after an in-place controller recovery the health poll's
+      fatal latch reopens, so a second fault is recovered too. Until now only
+      the first after boot was.
+    * The driver: a recovery whose delivery is lost no longer stays armed for
+      ever. It ages out after twenty health polls, counts as one of the
+      bounded attempts, and a late delivery from the expired request is
       ignored.
-    * The driver, three smaller items: a Command Ring Stopped event whose
-      pointer still names the abandoned command is resolved with a No Op
-      Command rather than by adopting that command's own entry; the BIOS
-      handoff write preserves the reserved bits of USBLEGCTLSTS; and the
-      restore from standby puts back the interrupt moderation value it saved
-      rather than writing zero. The last has been read only through a host
-      model: the virtual machines fail every restore, so the Force Save
-      Context entry in the release notes' "Known limitations" says the
-      hardware reading is still owed.
-    * XHCISNAP reports a text report it could not finish writing with a
-      nonzero exit instead of calling it written, and a snapshot whose
-      extension size does not match the driver's is refused in the summary as
-      well as in the detail. XHCIQUAL's EHCI clean-up no longer writes the
-      controller's write-one-to-clear status bits back; no DOS run has been
-      made on that change.
-    * The readme.txt and the LICENSE in the download no longer describe
-      Microsoft files the download stopped carrying in 1.0.0.1, and the
-      "Windows 2000 never idles this controller" statement carries the
-      2026-09-06 measurement that qualified it (1.0.1.0's correction below).
-      The checks that produce the download were tightened; nothing in its
-      layout changed.
+    * The driver, three smaller ones: a Command Ring Stopped event still
+      naming the abandoned command is resolved with a No Op rather than by
+      adopting that command's own entry; the BIOS handoff write preserves the
+      reserved bits of USBLEGCTLSTS; and the restore from standby puts back
+      the interrupt moderation value it saved instead of zero. The last is
+      host-model only, since the virtual machines fail every restore.
+    * The tools: XHCISNAP exits nonzero on a report it could not finish
+      writing instead of calling it written, and refuses a snapshot whose
+      extension size does not match the driver's. XHCIQUAL's EHCI clean-up no
+      longer writes the controller's write-one-to-clear status bits back.
+    * The install: Windows supplies usbui.dll too, from its own installation
+      source and only if the file is absent, by the same rule as usbd.sys and
+      usbhub.sys. On Windows 2000 and Windows XP that brings back the USB Root
+      Hub's Power tab, showing the hub's power budget and what is attached:
+      those systems' own installer asks for that page and names this file as
+      its provider, so on a machine that never had a USB controller it was
+      silently missing. On Windows 98 and Windows ME nothing you can see
+      changes. Upgrading a Windows 98 or Windows ME machine may ask for the
+      Windows CD where the last install did not, because this file is new
+      here; it sits on the same cabinet as the other two, so the same CD
+      answers it. No Microsoft file is in the download.
+    * The download: readme.txt and LICENSE no longer describe Microsoft files
+      it stopped carrying in 1.0.0.1, and the "Windows 2000 never idles this
+      controller" statement carries the measurement that qualified it
+      (1.0.1.0's correction below). The checks that produce the download were
+      tightened; its layout is unchanged.
 
   1.0.1.0 - 2026-09-04
 
@@ -959,25 +952,6 @@ the driver reads, and one the installer writes machine-wide on every system.
       driver code changed between 1.0.0.0 and this release.
 
   1.0.0.0 - 2026-08-30
-
-  Re-cut on 2026-08-30 under the same number, before anything had been
-  uploaded, so there is no earlier 1.0.0.0 in anyone's hands to tell this one
-  apart from. Between the first cut on 2026-08-29 and this one a repository
-  audit found and fixed a set of driver defects, none of which had been seen
-  on a machine: the PCI Bus Master restore now runs before the controller is
-  declared initialised on resume; an all-ones register read (a controller that
-  has dropped off the bus) is refused in every phase of a register wait rather
-  than only the first; a failed control-endpoint quiesce no longer survives a
-  device's re-enumeration; transfer events with codes the driver never asks
-  for are refused and counted instead of acted on; a Command Ring Stopped
-  event whose pointer sits on the ring's Link TRB is mapped to the right
-  entry; a lost Enable Slot on a device that has already gone is abandoned
-  instead of released twice; the resume-from-U3 pass writes U0 only to ports
-  it actually resumed. The DOS qualifier's legacy-handoff writes now preserve
-  the controller's reserved bits, and XHCISNAP refuses a snapshot whose
-  declared size does not fit. The installer's own comments and every guide
-  were corrected where they had drifted from the code. The release date moved
-  with the cut, as it always does.
 
   The first release. There is nothing before it to compare against: the builds
   this project cut while the work was going on were numbered 0.x, none was

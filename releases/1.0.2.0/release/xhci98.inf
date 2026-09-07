@@ -24,8 +24,9 @@
 ; virtual machines only as well, since 1.0.1.0 (the same document, "Windows
 ; XP target VM").
 ;
-; usbd.sys and usbhub.sys ARE copied on both paths, and none of the three
-; files travels on this media. All are the operating system's own, and
+; usbd.sys and usbhub.sys ARE copied on both paths, usbui.dll on all four
+; since 1.0.2.0, and none of the four files travels on this media. All are
+; the operating system's own, and
 ; nothing on an xHCI-only machine ever places them: Windows setup copies its
 ; USB driver files only when it recognises a USB controller, and an xHCI-only
 ; machine looks empty to it. usbhub20.sys imports USBD.SYS on both targets,
@@ -113,11 +114,20 @@ xhci98.inf=1
 ; \Windows\System\Iosubsys on Win98 and would install the driver to the wrong
 ; directory with no error. %12% appears once below, in ServiceBinary, inside a
 ; section Win98 never reads.
+;
+; Dirid 11 is the one exception, and it is not a driver: usbui.dll is a
+; user-mode property-page DLL. 11 resolves to \Windows\System on Windows 98
+; and Windows ME and to \WINNT\system32 (or \Windows\system32) on the NT
+; targets, which is where all four operating systems' own USB INFs put it -
+; USBUI.CopyFiles=11 on 9x, USBUI.CopyFiles.NT=11 on NT. It therefore needs
+; its own CopyFiles section: it cannot ride Xhci.CopyW98 or Xhci.CopyNT,
+; which are both 10,System32\Drivers.
 [DestinationDirs]
 DefaultDestDir=10
 Xhci.CopyFiles=10,System32\Drivers
 Xhci.CopyW98=10,System32\Drivers
 Xhci.CopyNT=10,System32\Drivers
+Xhci.CopyUI=11
 Inf.CopyFiles=17
 
 ; ------------------------------------------------------------------
@@ -126,13 +136,25 @@ Inf.CopyFiles=17
 
 [Xhci.Dev]
 AddReg=Xhci.AddReg,Xhci.AddReg.Global
-CopyFiles=Xhci.CopyFiles,Xhci.CopyW98
+CopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI
 
 ; The device's whole 9x registry footprint. NUSB's EHCI install adds a third,
 ; cosmetic EnumPropPages value; this file deliberately omits it, and its
-; Win2000 EnumPropPages32/Controller counterparts, because the property-page
-; DLLs (sysclass.dll, usbui.dll) are placed by USB installs that never ran on
-; an xHCI-only machine. They affect no binding and no load.
+; Win2000 EnumPropPages32/Controller counterparts. They affect no binding and
+; no load, and this package registers no property page of its own on either
+; target.
+;
+; What omitting it costs was MEASURED on 2026-09-07 in a Windows 98 guest
+; rather than left as an assumption. Adding
+;   HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"
+; here does give the controller an Advanced tab, carrying a "Disable USB
+; error detection" box and a Bandwidth Usage dialog that enumerates the bus.
+; The provider that draws it is sysclass.dll - which this INF does not copy
+; and which every 9x machine already has, the owner's E460 included - and
+; NOT the usbui.dll copied below: the tab and the dialog render identically
+; with usbui.dll renamed away in MS-DOS mode and Windows restarted. So the
+; 9x tab is one registry line away and is not a file question at all.
+; Whether to add that line is a separate decision, not taken.
 [Xhci.AddReg]
 HKR,,DevLoader,,*NTKERN
 HKR,,NTMPDriver,,xhci98.sys
@@ -279,7 +301,7 @@ HKR,,XhciLogDebugView,0x00010001,0
 
 [Xhci.Dev.NTx86]
 AddReg=Xhci.AddReg.NT,Xhci.AddReg.Global
-CopyFiles=Xhci.CopyFiles,Xhci.CopyNT
+CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI
 
 [Xhci.Dev.NTx86.Services]
 AddService=xhci98,0x00000002,Xhci.AddService
@@ -308,10 +330,10 @@ xhci98.sys,,xhci98.tmp
 
 ; ------------------------------------------------------------------
 ; The files the OS supplies: usbd.sys and usbhub.sys on both targets,
-; usbport.sys on the NT targets
+; usbport.sys on the NT targets (usbui.dll follows, in its own block)
 ; ------------------------------------------------------------------
 ;
-; None of the three is in [SourceDisksFiles], so each is resolved through
+; None of these three is in [SourceDisksFiles], so each is resolved through
 ; LayoutFile (see [Version]) and fetched from the OS's own install source
 ; under its own name: each target gets its own OS's build by construction,
 ; and the media carries no Microsoft file. The one flag is 16 =
@@ -381,6 +403,54 @@ usbport.sys,,,16
 usbd.sys,,,16
 usbhub.sys,,,16
 
+; ------------------------------------------------------------------
+; usbui.dll - the property-page DLL, dirid 11, all four paths
+; ------------------------------------------------------------------
+;
+; The same LayoutFile route and the same flag 16 as the three files above,
+; but a different destination (dirid 11, not System32\Drivers) and a
+; different reason, so it gets its own section. All four target CDs carry
+; it and all four layout.inf files have a row for it, read statically on
+; 2026-09-07: Windows 98 SE usbui.dll=5,,147456 (BASE5.CAB, 4.10.2222),
+; Windows ME =2,,147456 (BASE2.CAB, 4.90.3000), Windows 2000 SP4
+; = 1,,59664 (disk 1, I386\DRIVER.CAB, 5.00.2134.1) and Windows XP SP3
+; = 100,,74240 (the SP source, I386\SP3.CAB, 5.1.2600.5512). Four distinct
+; per-OS builds, each fetched from its own OS by construction.
+;
+; WHY, and it is an NT reason, not a 9x one. usbui.dll is the NT targets'
+; USB property-page provider, and the OS's own INF has ALREADY registered
+; it against the root hub this driver's usbport creates: Windows 2000's
+; USB.INF [ROOTHUB2.NT] and Windows XP's usbport.inf [ROOTHUB.Dev.NT] both
+; write HKR,,EnumPropPages32,,"usbui.dll,USBHubPropPageProvider". On an
+; xHCI-only machine that file was never placed, so the reference dangles
+; and Windows drops the page silently. Measured 2026-09-07 in both NT
+; guests: without the file the USB Root Hub has General and Driver only
+; (plus XP's Details); with it copied in, a Power tab appears and renders
+; "The hub is self-powered", "Total power available: 500 mA per port" and
+; the attached-device list. No registry change from this package is
+; involved - placing the file is the whole repair.
+;
+; On Windows 98 and Windows ME it buys no tab, and that was measured too
+; rather than assumed (see [Xhci.AddReg] above): the 9x controller page
+; comes from sysclass.dll, which this INF does not copy and every 9x
+; machine already has, and it renders identically with usbui.dll renamed
+; away. The file goes on the 9x paths anyway, by the owner's decision of
+; 2026-09-07, because it mirrors what Windows 98 SE's and Windows ME's own
+; USB.INF do (USBUI.CopyFiles=11) and because the same dirid-11 section
+; then serves all four paths unchanged.
+;
+; Windows 2000 is the one prompt risk and it is NOT yet observed: its
+; usbd.sys, usbhub.sys and usbport.sys come from disk 2 (sp4.cab) but
+; usbui.dll from disk 1, the base CD, satisfied out of driver.cab. Both
+; cabs sit in Driver Cache\i386 on every install, so it should stay
+; silent, but that is inference from the exact size match and a clean
+; xHCI-only install reading is owed before the release goes out. On
+; Windows XP it is free (sp3.cab, the same cab as usbport.sys and
+; usbhub.sys), and on 9x it rides the Insert Disk prompt the install
+; already raises (the same BASE cab as usbd.sys and usbhub.sys).
+[Xhci.CopyUI]
+usbui.dll,,,16
+
 [Inf.CopyFiles]
 xhci98.inf
 
@@ -389,13 +459,13 @@ xhci98.inf
 ; ------------------------------------------------------------------
 
 [DefaultInstall]
-CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98
+CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI
 AddReg=Xhci.AddReg.Global
 
 ; Win2000's setup engine keeps its own copy of an OEM INF as oemN.inf; copying
 ; this one into %17% as well would leave two INFs claiming PCI\CC_0C0330.
 [DefaultInstall.NTx86]
-CopyFiles=Xhci.CopyFiles,Xhci.CopyNT
+CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI
 AddReg=Xhci.AddReg.Global
 
 ; ASCII only, and that is a parser requirement rather than a style note:
