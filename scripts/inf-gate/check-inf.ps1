@@ -28,18 +28,21 @@ What it checks, grouped by the failure each rule prevents:
            same CopyFiles section actually delivers, with the required kernel
            driver service type, demand start, and normal error control.
   OS-*     The files the operating system supplies - usbd.sys and usbhub.sys
-           on both targets, usbport.sys on the NT targets - which the media
-           does not carry (usbd.sys and usbhub.sys since release 1.0.0.1,
-           usbport.sys on the NT path since 1.0.1.0): [Version] must name
+           on both targets, usbport.sys on the NT targets, usbui.dll on all
+           four paths - which the media does not carry (usbd.sys and
+           usbhub.sys since release 1.0.0.1, usbport.sys on the NT path
+           since 1.0.1.0, usbui.dll since 1.0.2.0): [Version] must name
            LayoutFile=layout.inf, every install path (device and right-click)
            must copy usbd.sys and usbhub.sys and the NT paths alone
            usbport.sys (Windows 98's layout.inf has no such file; NUSB or
            SweetLow's stack places it there), each under its own name with
-           COPYFLG_NO_OVERWRITE and no overwrite flag to System32\Drivers,
-           none of them, nor a 1.0.0.0 media name for one, may appear in
-           [SourceDisksFiles], and usbhub20.sys, which Windows 2000's own
-           USB.INF places with the root hub and XP does not have, is named
-           on no path at all.
+           COPYFLG_NO_OVERWRITE and no overwrite flag, to the destination
+           that file requires - System32\Drivers for the three drivers and
+           dirid 11, the system directory, for usbui.dll, which is a
+           user-mode property-page DLL and not a driver - none of them, nor
+           a 1.0.0.0 media name for one, may appear in [SourceDisksFiles],
+           and usbhub20.sys, which Windows 2000's own USB.INF places with
+           the root hub and XP does not have, is named on no path at all.
   SUSP-*   The one machine-wide value, Services\USB\DisableSelectiveSuspend =
            1: every install path (device and right-click, both targets) must
            write it as a DWORD 1. Windows 98's usbport builds idle-suspend the
@@ -866,14 +869,25 @@ foreach ($cf in ($referencedCopyFiles | Sort-Object -Unique)) {
 # one file with an Off path is refused for a reason of its own: Windows 98's
 # layout.inf has no usbport.sys row, so its engine could not resolve the
 # entry, and the file is placed there by NUSB or SweetLow's stack.
+# Each row carries its own destination, because usbui.dll is not a driver and
+# does not go where the three drivers go: dirid 11 is the system directory
+# (\Windows\System on Windows 98 and Windows ME, system32 on the NT targets),
+# which is where all four operating systems' own USB INFs put it
+# (USBUI.CopyFiles=11 on 9x, USBUI.CopyFiles.NT=11 on NT).
+$driversDest = @{ Dirid = "10"; Subdir = "System32\Drivers"; Spelling = "10, System32\Drivers";
+                  Why = "both targets load it from System32\Drivers" }
 $osSupplied = @(
-    @{ File = "usbport.sys"; On = @("Win2000"); Off = @("Win98"); OffRule = "OS-ONWIN98";
+    @{ File = "usbport.sys"; On = @("Win2000"); Off = @("Win98"); OffRule = "OS-ONWIN98"; Dest = $driversDest;
        Why = "xhci98.sys imports it, and an NT install that never had a USB controller does not have it (both NT targets' layout.inf give it the Setup disposition that does not copy it; a controller install pulls it from Driver Cache\i386), so the driver cannot load at all: Code 39 with nothing in the trace, measured on Windows XP on 2026-09-03";
        OffWhy = "Windows 98's layout.inf has no usbport.sys row, so its 16-bit engine has no source to resolve the entry from; NUSB or SweetLow's stack places the file there and the 9x path must not ask for it" },
-    @{ File = "usbd.sys";    On = @("Win98", "Win2000"); Off = @();
+    @{ File = "usbd.sys";    On = @("Win98", "Win2000"); Off = @(); Dest = $driversDest;
        Why = "usbhub20.sys imports USBD.SYS on both targets and nothing else on an xHCI-only machine places it, so without it the root hub cannot load (Code 2 on Windows 98, a 0xc0000034 naming usbhub20.sys on Windows 2000)" },
-    @{ File = "usbhub.sys";  On = @("Win98", "Win2000"); Off = @();
-       Why = "it is Windows 98's composite parent and the NT targets' hub driver, which an xHCI-only machine never gets from setup (both NT targets' layout.inf give it the disposition that does not copy it, read 2026-09-03), so on Windows 98 every multi-interface device stops at 'USB Composite Device' with Code 2 without it" }
+    @{ File = "usbhub.sys";  On = @("Win98", "Win2000"); Off = @(); Dest = $driversDest;
+       Why = "it is Windows 98's composite parent and the NT targets' hub driver, which an xHCI-only machine never gets from setup (both NT targets' layout.inf give it the disposition that does not copy it, read 2026-09-03), so on Windows 98 every multi-interface device stops at 'USB Composite Device' with Code 2 without it" },
+    @{ File = "usbui.dll";   On = @("Win98", "Win2000"); Off = @();
+       Dest = @{ Dirid = "11"; Subdir = ""; Spelling = "11";
+                 Why = "dirid 11 is the system directory, where all four operating systems' own USB INFs put it; System32\Drivers is for drivers and this is a user-mode property-page DLL" };
+       Why = "the NT targets' own INF has already registered it against the root hub usbport creates (Windows 2000's USB.INF [ROOTHUB2.NT] and Windows XP's usbport.inf [ROOTHUB.Dev.NT] both write EnumPropPages32 = 'usbui.dll,USBHubPropPageProvider'), and on an xHCI-only machine the file was never placed, so the page is dropped silently: measured 2026-09-07 in both NT guests, the USB Root Hub gains a working Power tab as soon as the file is present, with no registry change. On the 9x paths it places what Windows 98 SE's and Windows ME's own USB.INF place (USBUI.CopyFiles=11); the 9x controller page comes from sysclass.dll instead and is unaffected either way, measured the same day" }
 )
 $osSuppliedNames = @($osSupplied | ForEach-Object { $_.File.ToLowerInvariant() })
 # Files the OS places by itself when this driver's root hub appears, which
@@ -1070,13 +1084,13 @@ $COPYFLG_OVERWRITE_OLDER_ONLY = 0x00000040   # leave target alone if version sam
 # stops at a prompt for a file the package cannot supply.
 $layoutFile = @(Get-Directive $inf "Version" "LayoutFile")
 if ($layoutFile.Count -ne 1 -or $layoutFile[0] -ine "layout.inf") {
-    Add-Failure "OS-LAYOUT" ("[Version] must carry exactly 'LayoutFile=layout.inf'; found '{0}'. It is what makes usbport.sys, usbd.sys and usbhub.sys come from the OS's own install source rather than from this disk, which does not carry them." -f ($layoutFile -join ','))
+    Add-Failure "OS-LAYOUT" ("[Version] must carry exactly 'LayoutFile=layout.inf'; found '{0}'. It is what makes usbport.sys, usbd.sys, usbhub.sys and usbui.dll come from the OS's own install source rather than from this disk, which does not carry them." -f ($layoutFile -join ','))
 }
 
 # No Microsoft file on the media, under its own name or a 1.0.0.0 media name.
 foreach ($key in @($sourceFiles.Keys)) {
     if ($osSuppliedNames -contains $key -or $retiredMediaNames -contains $key) {
-        Add-Failure "OS-MEDIA" ("[SourceDisksFiles] names '{0}' (line {1}). The media carries no Microsoft file since 1.0.0.1: usbport.sys, usbd.sys and usbhub.sys come from the OS through LayoutFile, and an entry here would send the engine back to this disk for them (docs\contributing\legal-provenance.md section 5)." -f $sourceFiles[$key].Name, $sourceFiles[$key].Line)
+        Add-Failure "OS-MEDIA" ("[SourceDisksFiles] names '{0}' (line {1}). The media carries no Microsoft file since 1.0.0.1: usbport.sys, usbd.sys, usbhub.sys and usbui.dll come from the OS through LayoutFile, and an entry here would send the engine back to this disk for them (docs\contributing\legal-provenance.md section 5)." -f $sourceFiles[$key].Name, $sourceFiles[$key].Line)
     }
 }
 
@@ -1167,8 +1181,9 @@ foreach ($m in $models) {
                     $destKey = $entry.Section.ToLowerInvariant()
                     if ($destDirs.ContainsKey($destKey)) {
                         $dd = $destDirs[$destKey]
-                        if ($dd.Dirid -ne "10" -or $dd.Subdir -ine "System32\Drivers") {
-                            Add-Failure "OS-DEST" ("[{0}] delivers '{1}' to '{2},{3}'. Both targets load it from System32\Drivers; spell it '10, System32\Drivers'." -f $entry.Section, $file, $dd.Dirid, $dd.Subdir)
+                        $want = $os.Dest
+                        if ($dd.Dirid -ne $want.Dirid -or $dd.Subdir -ine $want.Subdir) {
+                            Add-Failure "OS-DEST" ("[{0}] delivers '{1}' to '{2},{3}'. {4}; spell it '{5}'." -f $entry.Section, $file, $dd.Dirid, $dd.Subdir, $want.Why, $want.Spelling)
                         }
                     }
                 }
@@ -1751,7 +1766,7 @@ if ($PackageDir -ne "") {
         foreach ($item in (Get-ChildItem -LiteralPath $pkg -File -Recurse)) {
             $n = $item.Name.ToLowerInvariant()
             if ($osSuppliedNames -contains $n -or $retiredMediaNames -contains $n) {
-                Add-Failure "PKG-MSFILE" ("the staged package holds '{0}'. The media carries no Microsoft file since 1.0.0.1; usbd.sys and usbhub.sys come from the OS through LayoutFile, so take it out." -f $item.FullName.Substring($pkg.Length).TrimStart('\'))
+                Add-Failure "PKG-MSFILE" ("the staged package holds '{0}'. The media carries no Microsoft file since 1.0.0.1; usbd.sys, usbhub.sys, usbport.sys and usbui.dll all come from the OS through LayoutFile, so take it out." -f $item.FullName.Substring($pkg.Length).TrimStart('\'))
             }
         }
 

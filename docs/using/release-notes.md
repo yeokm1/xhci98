@@ -81,7 +81,7 @@ real hardware.
 | Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000) and 32-bit Windows XP (SP3) in virtual machines only, see "What this is". |
 | USB stack | Windows 98: NUSB 3.3, installed before this driver (NUSB 3.6 ships the identical USB 2.0 stack and has been observed working, in a virtual machine only; so has the SweetLow stack that Windows 98 QuickInstall 1.0.1 and later bundle, which also removes the first known limitation below; see the README's installation steps). Windows ME: SweetLow's stack only; its own USB stack has no `usbport.sys`, and on it the driver installs and shows Code 2. Do not install NUSB on Windows ME, it is a Windows 98 SE package. Windows 2000: SP4's native stack, or the standalone USB 2.0 update KB319973. **Do not install NUSB on Windows 2000.** Windows XP: its own USB stack, nothing to install; NUSB is not for it either. |
 | Controller | An xHCI controller presenting PCI class code `0C0330`, with at least one USB 2.0 protocol port, a BAR0 mapped below 4 GB, and a legacy interrupt pin. Neither target has an MSI path, so a controller reporting `Interrupt Pin = 0` cannot be driven at all. |
-| Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk (`C:\WINDOWS\OPTIONS\CABS`). The install copies Windows' own `usbd.sys` and `usbhub.sys` from it. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the hard disk; the virtual machine tried asked for nothing. Windows 2000 and Windows XP: nothing; `usbport.sys`, `usbd.sys` and `usbhub.sys` come from the driver cache every install has (`sp4.cab` and `sp3.cab` respectively). |
+| Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk (`C:\WINDOWS\OPTIONS\CABS`). The install copies Windows' own `usbd.sys`, `usbhub.sys` and `usbui.dll` from it. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the hard disk; the virtual machine tried asked for nothing. Windows XP: nothing; `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll` all come out of `sp3.cab` in the driver cache every install has. Windows 2000: the same three out of `sp4.cab`, and `usbui.dll` out of `driver.cab` beside it in that cache. |
 
 Run the qualifier before installing anything; it answers all three of the
 controller conditions in a single read-only pass.
@@ -130,24 +130,36 @@ The package is a directory holding two files, `xhci98.inf` and
   from SweetLow's site, unzipped; right-click the `USB2.INF` at its root,
   *Install*, reboot. Then the Windows 98 SE route above.
 
-Three files the driver depends on are not in the package because they are
+Four files the driver depends on are not in the package because they are
 Windows' own: `usbd.sys`, which the USB 2.0 root hub imports on both
 targets; `usbhub.sys`, the driver for composite devices on Windows 98 and
-the hub driver on Windows 2000 and XP; and, on Windows 2000 and XP,
+the hub driver on Windows 2000 and XP; on Windows 2000 and XP,
 `usbport.sys`, the
 USB stack this driver plugs into (on Windows 98 NUSB or SweetLow's package
-supplies it). Windows places its USB files only when Setup finds a USB
-controller it recognises, and an xHCI-only machine has none of them, so the
-INF asks Windows to copy each from its own installation source, and only if
-it is absent; a machine that ever had a USB controller Windows recognised
-keeps its own files and is asked for nothing.
+supplies it); and `usbui.dll`, the USB property-page DLL. Windows places its
+USB files only when Setup finds a USB controller it recognises, and an
+xHCI-only machine has none of them, so the INF asks Windows to copy each from
+its own installation source, and only if it is absent; a machine that ever had
+a USB controller Windows recognised keeps its own files and is asked for
+nothing.
+
+`usbui.dll` is new in this release and is the one that is purely cosmetic. On
+Windows 2000 and Windows XP, Windows' own INF already asks for a Power tab on
+the USB Root Hub's properties and names that DLL as the page's provider; on a
+machine that never had a USB controller the file is missing, so the tab is
+silently absent. Copying it back gives you the tab, showing the hub's power
+budget and what is attached. On Windows 98 and Windows ME it changes nothing
+visible: that page comes from `sysclass.dll` there, which those systems
+already have.
 
 On an xHCI-only Windows 98 machine that means an "Insert Disk" prompt naming
 the Windows 98 Second Edition CD-ROM during the copy, unless the Windows
 CABs are on the hard disk (OEM and Windows 98 QuickInstall installs). Insert
 the CD and click OK; if it then asks where to copy from, give it the CD's
-`WIN98` folder. Windows 2000 and Windows XP take all three from their driver
-cache and ask for nothing. If the prompt is cancelled the driver still installs, but the
+`WIN98` folder. Windows 2000 and Windows XP take theirs from the driver cache
+every install has: on Windows XP all four out of `sp3.cab`, on Windows 2000
+three out of `sp4.cab` and `usbui.dll` out of `driver.cab` beside it. Windows
+XP asks for nothing. If the prompt is cancelled the driver still installs, but the
 USB 2.0 Root Hub sits at Code 2 (Windows 2000: a `0xc0000034` error naming
 `usbhub20.sys`); that reads as a fault in this driver and is not one. Put
 the CD in and install the driver again.
@@ -309,8 +321,8 @@ because a user meets them through this driver.
 - Windows 98 on an xHCI-only machine: the driver install asks for the
   Windows 98 SE CD (an "Insert Disk" prompt naming the Windows 98 Second
   Edition CD-ROM) unless the Windows CABs are on the hard disk. That is
-  Windows fetching its own `usbd.sys` and `usbhub.sys`, which the package
-  does not carry; see "Installing". Cancelling the prompt leaves the USB 2.0
+  Windows fetching its own `usbd.sys`, `usbhub.sys` and `usbui.dll`, which the
+  package does not carry; see "Installing". Cancelling the prompt leaves the USB 2.0
   Root Hub at Code 2 until the driver is installed again with the CD at
   hand. Measured on 2026-09-02 in a virtual machine with no CABs on disk.
 
@@ -321,8 +333,8 @@ This driver's own source is under the GNU General Public License, version 2
 record is `docs/contributing/legal-provenance.md`.
 
 `xhci98.sys` and `xhci98.inf` are this project's own work, and they are the
-whole package. The `usbd.sys` and `usbhub.sys` the install needs, and on
-Windows 2000 and Windows XP the `usbport.sys`, are Windows' own and are
+whole package. The `usbd.sys`, `usbhub.sys` and `usbui.dll` the install needs,
+and on Windows 2000 and Windows XP the `usbport.sys`, are Windows' own and are
 copied by Windows from your own installation source; no Microsoft file is in
 the download. (Release `1.0.0.0` carried the two
 `usbd.sys` builds and Windows 98 SE's `usbhub.sys` under other names; that

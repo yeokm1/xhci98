@@ -83,6 +83,7 @@ path|Windows 98|device install|Xhci.Dev
 file|Windows 98|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
 file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
 file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbhub.sys|usbhub.sys||16|keep
+file|Windows 98|Xhci.CopyUI|11||usbui.dll|usbui.dll||16|keep
 reg|Windows 98|Xhci.AddReg|HKR||DevLoader||*NTKERN|remove
 reg|Windows 98|Xhci.AddReg|HKR||NTMPDriver||xhci98.sys|remove
 reg|Windows 98|Xhci.AddReg|HKR||XhciLogVerbosity|0x00010001|0|remove
@@ -93,6 +94,7 @@ file|Windows 2000|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci9
 file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbport.sys|usbport.sys||16|keep
 file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
 file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbhub.sys|usbhub.sys||16|keep
+file|Windows 2000|Xhci.CopyUI|11||usbui.dll|usbui.dll||16|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010001|0|remove
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010001|0|remove
 reg|Windows 2000|Xhci.AddReg.Global|HKLM|System\CurrentControlSet\Services\USB|DisableSelectiveSuspend|0x00010001|1|remove
@@ -108,10 +110,12 @@ file|Windows 98|Inf.CopyFiles|17||xhci98.inf|xhci98.inf||0|remove
 file|Windows 98|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
 file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
 file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbhub.sys|usbhub.sys||16|keep
+file|Windows 98|Xhci.CopyUI|11||usbui.dll|usbui.dll||16|keep
 reg|Windows 98|Xhci.AddReg.Global|HKLM|System\CurrentControlSet\Services\USB|DisableSelectiveSuspend|0x00010001|1|remove
 path|Windows 2000|right-click Install|DefaultInstall.NTx86
 file|Windows 2000|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
 file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbport.sys|usbport.sys||16|keep
 file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
 file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbhub.sys|usbhub.sys||16|keep
+file|Windows 2000|Xhci.CopyUI|11||usbui.dll|usbui.dll||16|keep
 reg|Windows 2000|Xhci.AddReg.Global|HKLM|System\CurrentControlSet\Services\USB|DisableSelectiveSuspend|0x00010001|1|remove

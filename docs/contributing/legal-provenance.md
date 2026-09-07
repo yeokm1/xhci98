@@ -321,6 +321,27 @@ and nothing was disassembled, and no file from it is kept in this tree or
 under `tools/`. The facts are in `docs/contributing/build-and-test.md`,
 "Windows ME target VM".
 
+The four target CDs were read at the file level again on 2026-09-07, for the
+`usbui.dll` question: each one's `layout.inf` (from `PRECOPY1.CAB` on the two
+9x CDs, and `I386\LAYOUT.INF`, which the NT CDs carry uncompressed), and the
+`usbui.dll` and `sysclass.dll` files themselves, extracted with 7-Zip and
+`expand.exe`. Method static: the PE export and import tables were read with a
+parser, nothing was disassembled and nothing was executed. What it established
+is in `docs/contributing/build-and-test.md`, "The files the OS supplies" -
+four distinct per-OS `usbui.dll` builds, each exporting
+`USBControllerPropPageProvider` and `USBHubPropPageProvider`, and a 9x
+`sysclass.dll` that is a 16-bit NE module carrying the string `usbui.dll`. No
+file from any of those CDs is kept in this tree or under `tools/`; the copies
+read were staged into a scratch directory outside the repository.
+
+Separately, and not a binary-derived fact at all: the Device Manager behaviour
+those files drive was observed the same day in the four target virtual
+machines, by opening property sheets with the file present and with it absent.
+Those are observations of Windows' own user interface, made with this driver
+installed but not through its counters or its traces, so they carry neither
+the static nor the runtime tag defined above. `build-and-test.md` records them
+as guest readings, naming the guest each came from.
+
 A further package has been read, statically and at run time, on 2026-09-02:
 SweetLow's USB 2.0 stack for Windows 98, `usb20_win9x.zip`, from the download
 link its author gave the project owner

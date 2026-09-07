@@ -623,7 +623,7 @@ try {
     # No NT half at all: setupapi falls back to the undecorated section, and a
     # right-click Install on Windows 2000 runs the Windows 98 file list.
     Assert-RuleFires "no-defaultinstall-nt" "OS-DEFAULT" {
-        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT`r`nAddReg=Xhci.AddReg.Global`r`n", "")
+        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n", "")
     }
     Assert-RuleFires "os-dup" "OS-DUP" {
         param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16`r`nusbd.sys,,,16")
@@ -663,12 +663,12 @@ try {
         param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global", "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT")
     }
     Assert-RuleFires "susp-no-9x-default" "SUSP-MISSING" {
-        param($t) $t.Replace("CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98`r`nAddReg=Xhci.AddReg.Global`r`n",
-                             "CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98`r`n")
+        param($t) $t.Replace("CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n",
+                             "CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`n")
     }
     Assert-RuleFires "susp-no-nt-default" "SUSP-MISSING" {
-        param($t) $t.Replace("CopyFiles=Xhci.CopyFiles,Xhci.CopyNT`r`nAddReg=Xhci.AddReg.Global`r`n",
-                             "CopyFiles=Xhci.CopyFiles,Xhci.CopyNT`r`n")
+        param($t) $t.Replace("CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n",
+                             "CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n")
     }
     Assert-RuleFires "susp-value-zero" "SUSP-VALUE" {
         param($t) $t.Replace("DisableSelectiveSuspend,0x00010001,1", "DisableSelectiveSuspend,0x00010001,0")

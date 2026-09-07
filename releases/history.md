@@ -25,9 +25,11 @@ A fix release. A repository audit taken on 2026-09-05 found no critical
 defect and nineteen things worth fixing across the driver, the two tools and
 the package (`docs/contributing/roadmap.md`, Phase 20: findings F1 to F19
 and D1 to D6, every one closed there with its regression test or its
-recorded decision). The install routes are unchanged on every target, and
-were read from this release's own download on Windows 98 SE, Windows ME,
-Windows 2000 and Windows XP. The post-release device matrix on Windows 98
+recorded decision). The install routes change in one way, the `usbui.dll`
+copy described below. Everything else about them is as `1.0.1.0` left it and
+was read from this release's own download on Windows 98 SE, Windows ME,
+Windows 2000 and Windows XP; the readings covering the added file are owed
+before this release is published. The post-release device matrix on Windows 98
 SE and Windows 2000 was re-read on this release's driver, and reads no
 worse than `1.0.1.0`'s. One thing in this release is still not covered by a
 run on a machine: the refusal itself, a control endpoint opened on a device
@@ -73,6 +75,20 @@ state on purpose, and a test on the development machine is what covers it.
   well as in the detail. `XHCIQUAL`'s EHCI clean-up no longer writes the
   controller's write-one-to-clear status bits back; no DOS run has been
   made on that change.
+- The install now has Windows supply `usbui.dll` as well, from the system's
+  own installation source and only if the file is absent, by the same route
+  and the same rule as `usbd.sys` and `usbhub.sys`. On Windows 2000 and
+  Windows XP this restores a Power tab on the USB Root Hub's properties.
+  Those systems' own INF asks for that page and names `usbui.dll` as its
+  provider, and on a machine that never had a USB controller the file was
+  never placed, so the tab was silently missing. Read on 2026-09-07 in the
+  Windows 2000 and the Windows XP guest: both gained the tab, showing the
+  hub's power budget and what is attached, with nothing else changed. On
+  Windows 98 and Windows ME the file is placed for the same reason those
+  systems' own USB install places it, and it changes nothing you can see,
+  because the equivalent page comes from `sysclass.dll` there and those
+  systems already have it. No Microsoft file is in the download; Windows
+  copies its own, as it already did for the others.
 - The `readme.txt` and the `LICENSE` in the download no longer describe
   Microsoft files the download stopped carrying in `1.0.0.1`, and the
   "Windows 2000 never idles this controller" statement carries the

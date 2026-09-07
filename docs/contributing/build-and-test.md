@@ -4009,12 +4009,31 @@ otherwise cost a debug cycle:
   Disk", Win98 "Specify a location"). It cannot affect whether `usbport.sys`
   binds, so the risk of it suppressing the install path is all cost and no
   benefit.
-- No `EnumPropPages` / `EnumPropPages32` / `Controller`. Those name
-  property-page providers in `sysclass.dll` (9x) and `usbui.dll` (NT), files
-  placed by USB installs that never ran on an xHCI-only machine. That is the
-  same absent-dependency shape as the missing `usbd.sys` Phase 2b tripped over,
-  for a purely cosmetic Device Manager tab. Reversible in one line if the tab
-  turns out to be wanted.
+- No `EnumPropPages` / `EnumPropPages32` / `Controller`. Those name the
+  property-page providers for the *controller's* own Device Manager tab, and
+  this package still registers none. What that costs was measured on
+  2026-09-07 rather than assumed, and the measurement corrected the old
+  reasoning in two ways.
+
+  On Windows 98 the provider is `sysclass.dll`, **not** `usbui.dll`. Adding
+  `HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"` to
+  `[Xhci.AddReg]` does produce an Advanced tab, carrying a "Disable USB error
+  detection" box and a Bandwidth Usage dialog that enumerates the bus. The
+  tab and the dialog render identically with `usbui.dll` renamed away in
+  MS-DOS mode and Windows restarted, so the 9x tab is a registry line and not
+  a file. `sysclass.dll` is a 16-bit NE module carrying the string
+  `usbui.dll` (read statically), and it is on every 9x machine already,
+  including the owner's E460, which has `sysclass.dll` and no `usbui.dll`.
+  Its cab is not one this INF fetches from (Windows 98 disk 42 =
+  `WIN98_42.CAB`, 27,184 B; Windows ME disk 15 = `WIN_15.CAB`, 27,408 B).
+
+  On the NT targets `usbui.dll` genuinely is the provider, and since 1.0.2.0
+  the INF copies it - for the root hub's page, not the controller's; see
+  "The files the OS supplies" below. Adding the controller's own
+  `EnumPropPages32` remains a separate decision that has not been taken.
+
+  So the old "absent-dependency shape" framing was half right: the file was
+  indeed absent, but on 9x it was never the one that draws the tab.
 - `usbport.sys` is not copied on the Windows 98 path, and `usbhub20.sys` on
   neither, unlike both references. On Windows 98 the USB 2.0 stack (NUSB or
   SweetLow's) places `usbport.sys` unconditionally and that OS's `layout.inf`
@@ -4031,7 +4050,7 @@ otherwise cost a debug cycle:
   it can leave the previous binary in place, which reads as a code change that
   did nothing.
 
-#### The files the OS supplies: `usbport.sys`, `usbd.sys` and `usbhub.sys`
+#### The files the OS supplies: `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll`
 
 `usbhub20.sys` imports `USBD.SYS` on both targets and nothing on an xHCI-only
 machine ever places that file, so the install has to see to it. The full
@@ -4068,6 +4087,60 @@ the 1.0.0.1 package). Windows 98 differs only because NUSB or SweetLow's
 stack places the file unconditionally and its `layout.inf` has no row for
 it, so the Windows 98 path does not name it and the gate refuses a path
 that does (`OS-ONWIN98`).
+
+`usbui.dll` is the fourth, added in 1.0.2.0, and it is the only one that is
+not a driver: it is the user-mode USB property-page DLL, and it goes to dirid
+11 (the system directory) rather than `System32\Drivers`, so it has its own
+`[Xhci.CopyUI]` section and its own `[DestinationDirs]` row. It is copied on
+all four install paths.
+
+The reason is an NT one. Both NT targets' own INFs have **already registered**
+`usbui.dll` against the root hub that this driver's `usbport.sys` creates:
+Windows 2000's `USB.INF` `[ROOTHUB2.NT]` and Windows XP's `usbport.inf`
+`[ROOTHUB.Dev.NT]` each write
+`HKR,,EnumPropPages32,,"usbui.dll,USBHubPropPageProvider"`. On an xHCI-only
+machine the file was never placed, so that reference dangles and Windows
+drops the page without a word. Measured 2026-09-07 in both NT guests, on the
+1.0.2.0 install, by copying the OS's own `usbui.dll` into `system32` and
+changing nothing else:
+
+| Target | USB Root Hub tabs without `usbui.dll` | with it |
+|---|---|---|
+| Windows 2000 SP4 (`vm\win2k-xonly.img`) | General, Driver | General, **Power**, Driver |
+| Windows XP SP3 (`vm\winxp.img`) | General, Driver, Details | General, **Power**, Driver, Details |
+
+The Power tab renders live data on both: "The hub is self-powered", "Total
+power available: 500 mA per port", and an attached-device list reading
+"4 port(s) available". No error box appears in the without case; the page is
+simply absent. Our own controller's tab row is unchanged either way, since
+this package registers no provider for it.
+
+On Windows 98 and Windows ME the copy buys no tab at all, for the reason in
+the `EnumPropPages` bullet above: the 9x provider is `sysclass.dll`. It goes
+on the 9x paths by the owner's decision of 2026-09-07, because it is what
+Windows 98 SE's and Windows ME's own `USB.INF` place (`USBUI.CopyFiles=11`)
+and because one dirid-11 section then serves all four paths.
+
+Where each target's `usbui.dll` comes from, read statically on 2026-09-07
+(7-Zip on the ISOs, `expand` on the `.IN_` files; nothing executed):
+
+| Target | `layout.inf` row | resolves to | the file |
+|---|---|---|---|
+| Windows 98 SE | `usbui.dll=5,,147456` | disk 5, `BASE5.CAB` | 147,456 B, 4.10.2222 |
+| Windows ME | `usbui.dll=2,,147456` | disk 2, `BASE2.CAB` | 147,456 B, 4.90.3000 |
+| Windows 2000 SP4 | `usbui.dll = 1,,59664,,,,,2,1,3` | disk 1, the base CD `\i386`, out of `I386\DRIVER.CAB` | 59,664 B, 5.00.2134.1 |
+| Windows XP SP3 | `usbui.dll = 100,,74240,,,,,2,1,3` | disk 100, the SP source, out of `I386\SP3.CAB` | 74,240 B, 5.1.2600.5512 |
+
+Four distinct per-OS builds, each fetched from its own OS by construction, as
+with the three drivers. **Windows 2000 is the one prompt risk and it is not
+yet observed**: there `usbd.sys`, `usbhub.sys` and `usbport.sys` come from
+disk 2 (`sp4.cab`) but `usbui.dll` from disk 1, satisfied out of `driver.cab`.
+Both cabs sit in `Driver Cache\i386` on every install, so it should stay
+silent, but that is inference from the exact size match and not a reading. A
+clean xHCI-only Windows 2000 install is owed before the release goes out. On
+Windows XP the file is in `sp3.cab` beside `usbport.sys` and `usbhub.sys`, so
+it is free; on 9x it is on the same BASE cab as `usbd.sys` and `usbhub.sys`,
+so it rides the Insert Disk prompt the install already raises.
 
 What the two NT CDs say, read statically on 2026-09-03 (7-Zip on the ISOs,
 `expand` on the `.IN_` files; nothing executed). The last three fields of a
