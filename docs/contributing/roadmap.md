@@ -2097,6 +2097,46 @@ Tasks, in the audit's revised order:
   install route from the asset read on the five targets as task 19.9 did,
   and the stamped `fresh-2a.img` and `fresh-2b.img` re-stamped on the cut's
   binary, since they carry `base-1.0.1.0-qemu` until the version moves.
+  RE-CUT AGAIN 2026-09-07 EVENING, third time, same number and same date,
+  under the same uploaded-nothing rule. The owner decided that `usbui.dll`
+  goes into this release rather than the next, which reopened a cut that
+  was otherwise finished. The INF now copies it on all four install paths
+  at dirid 11 through the same `LayoutFile` route and flag 16 as the three
+  drivers, and the INF gate holds it to that destination (`1e8b698`). The
+  reason is the NT root hub, measured that day in both NT guests: Windows
+  2000's `USB.INF` `[ROOTHUB2.NT]` and Windows XP's `usbport.inf`
+  `[ROOTHUB.Dev.NT]` already register `usbui.dll` as the hub page's
+  provider, so on an xHCI-only machine that reference dangles and the Power
+  tab is silently absent; placing the file brings it back, with no registry
+  change. On Windows 98 it buys nothing, also measured: the 9x controller
+  page comes from `sysclass.dll`, and the tab renders identically with
+  `usbui.dll` renamed away in MS-DOS mode. The owner's E460 fits, carrying
+  `sysclass.dll`, no `usbui.dll` and no tab, because this INF registers no
+  property page at all; it still does not. The Windows 2000 prompt risk the
+  file introduced was read and is silent (`43d2540`): on a clone of
+  `win2k-xonly.img` rolled back to `win2k-xonly-clean-install` and verified
+  to hold none of the four files, the install fetched three from `sp4.cab`
+  and `usbui.dll` from `driver.cab` in one pass and asked for nothing, the
+  root hub starting and its Power tab rendering being the two halves of
+  that proof. The acceptance test now takes that reading itself, step 4's
+  per-target rows naming the file and a new 4.7 taking the Power tab
+  (`1e9f526`), which is what lets the Windows 98, Windows ME and Windows XP
+  install legs ride the acceptance test rather than be re-read separately;
+  the owner settled that, the test running before the upload rather than
+  after. `history.md` was shortened and both re-cut paragraphs removed from
+  it, its own and `1.0.0.0`'s (`1de44ef`), so the download's `readme.txt`
+  no longer explains how the release was assembled. The re-cut itself is
+  `36c6b6c`: `make-release.ps1 -Force` exit 0, the zip at 257,160 B and
+  thirteen files, `readme.txt` 57,082 -> 55,159 B, both flavours' INF
+  23,541 -> 27,840 B and byte-identical to the source INF and to each
+  other. NO BINARY MOVED, which is the check a `-Force` re-cut owes: it
+  stages from the existing object trees rather than building, an INF-only
+  change cannot reach a `.sys`, and the three published prefixes are
+  unchanged - release `69e7de836f047558`, debug `9581458ef960e920`, qemu
+  `df4d16fc249905b7`. So every reading above still stands on the binaries
+  it was taken on, and the re-stamped fresh images keep their stamps. What
+  remains is unchanged: the upload, the push and the acceptance test, the
+  owner's alone.
 
 Checkpoint: every finding in the table above closed with a cited
 commit and regression vector or recorded as an owner decision with its
