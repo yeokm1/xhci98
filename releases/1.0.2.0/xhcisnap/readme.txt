@@ -6,10 +6,10 @@ If USB is not working properly with this driver, this is what to run. It reads
 the driver's own log straight out of the running machine and writes a report
 you can paste into a bug report.
 
-On Windows 98 it is the ONLY way to get anything out. That is not a gap in this
-driver - it is the price of how it plugs into Windows. The usual ways a driver
-writes a log are closed to it, and this route goes through the Microsoft USB
-driver it sits underneath, which does have them.
+On Windows 98 it is the ONLY way to get anything out. That is not a gap in
+this driver - it is the price of how it plugs into Windows. The usual ways
+a driver writes a log are closed to it, and this route goes through the
+Microsoft USB driver it sits underneath, which does have them.
 
 It changes nothing about how the driver behaves on the bus, and writes no file
 it was not asked to. It does READ the controller's port registers, which is a
@@ -34,16 +34,16 @@ state. See the registry section for what that does and does not mean.
 
 Then send C:\MYDUMP.TXT. Attach C:\MYDUMP.BIN as well if you are asked for it.
 
-You never have to open REGEDIT. Step 1 does the whole of that for you, on every
-xHCI controller the machine has.
+You never have to open REGEDIT. Step 1 does the whole of that for you, on
+every xHCI controller the machine has.
 
 
  WHY STEP 1 IS NOT OPTIONAL
 ------------------------------------------------------------------------------
 
-The driver answers nothing until it is asked to, and it reads that setting once
-when it starts. So without step 1 and the restart this tool gets no answer at
-all - which is right, not broken.
+The driver answers nothing until it is asked to, and it reads that setting
+once when it starts. So without step 1 and the restart this tool gets no
+answer at all - which is right, not broken.
 
 Level 2 is the one to use. The others exist and a maintainer may ask for one:
 
@@ -75,9 +75,9 @@ Level 2 is the one to use. The others exist and a maintainer may ask for one:
 
 That checks whether the route to the driver works at all, separately from
 whether this driver answers on it. If it says the request reached a driver and
-that driver declined, the usual cause is simply that step 1 has not been done -
-or that the machine has more than one USB controller and this is not the right
-one, in which case try -c 1 and -c 2.
+that driver declined, the usual cause is simply that step 1 has not been
+done - or that the machine has more than one USB controller and this is not
+the right one, in which case try -c 1 and -c 2.
 
 If it cannot open the device at all, no xHCI controller is started on this
 machine, and there is nothing for this tool to read.

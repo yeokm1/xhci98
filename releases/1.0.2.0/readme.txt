@@ -6,9 +6,12 @@
 Released 2026-09-07.
 
 Most x86 PCs made from around the mid 2010s onward have USB 3.0 (xHCI)
-controllers and nothing else. Windows 98 SE, Windows ME and Windows 2000
-have no support for those. This driver fills that gap. It also installs on
-32-bit Windows XP, as incidental support.
+controllers and nothing else. Windows 98 SE, Windows ME, Windows 2000 and
+32-bit Windows XP have no support for those, and this driver fills that gap
+on all four. Windows 98 SE and Windows 2000 SP4 are the two primary targets,
+and a release has to work on both. Only Windows 98 SE has been validated on
+real hardware; Windows 2000 SP4, Windows ME and 32-bit Windows XP have been
+validated in virtual machines only.
 
 It gives you USB 2.0 speeds: High Speed, Full Speed and Low Speed. USB 3.0
 SuperSpeed is out of scope. A USB 3.0 device still works, at USB 2.0 speed,
@@ -20,7 +23,7 @@ WHY ONLY USB 2.0, WHEN THE CONTROLLER IS A USB 3.0 ONE
 
 The USB stack these systems already have - usbport.sys and everything above
 it - does not support USB 3.0 at all. This driver is only the bottom layer, so
-SuperSpeed would mean rewriting that whole stack on both systems: far more
+SuperSpeed would mean rewriting that whole stack on all four: far more
 work than this driver, for a speed that most machines running Windows 98 or
 Windows 2000 could not make much use of anyway.
 
@@ -119,7 +122,7 @@ the safety notes spelled out.
       --xhci --ehci --ohci   the same three selectors, written as options
       --scan TYPE            the same again; repeat it to combine families
 
-  READ-ONLY OPTIONS - these change nothing on the machine.
+  READ-ONLY MODES - these change nothing on the machine.
 
       --quick           the no-argument quick scan, asked for explicitly
       --probe-only      read-only discovery, fuller than --quick. It reads
@@ -127,6 +130,13 @@ the safety notes spelled out.
                         has already switched it on, and switches nothing on
                         itself
       --no-active       another name for --probe-only
+
+  MODIFIERS - these say what to do with the report, not what to run.
+  ON THEIR OWN THEY DO NOT MAKE THE RUN READ-ONLY. Any argument at all
+  turns off the no-argument quick scan, so XHCIQUAL --log FILE performs
+  the FULL ACTIVE run below. Pair one with --quick or --probe-only when a
+  read-only run is what you want.
+
       --no-page         do not stop at the end of each screenful
       --serial          mirror the output to COM1, 115200 8N1
       --log [FILE]      also write the report to a file, default
@@ -232,9 +242,10 @@ the same two files.
 Four files the driver depends on are NOT in the package, because they are
 Windows' own, unmodified, and no Microsoft file is in this download:
 
-  usbd.sys     The USB 2.0 root hub imports it on both systems. Without it
-               the USB ROOT HUB fails: Code 2 on Windows 98, error
-               0xc0000034 naming usbhub20.sys on Windows 2000.
+  usbd.sys     The USB 2.0 root hub imports it on every target. Without it
+               the USB ROOT HUB fails: Code 2 on Windows 98 and Windows ME,
+               error 0xc0000034 naming usbhub20.sys on Windows 2000 and
+               Windows XP.
 
   usbhub.sys   On Windows 98, the driver for devices that are more than one
                thing at once - a sound card with a volume knob, a headset
@@ -477,8 +488,8 @@ Two things are specific to this driver and worth knowing in advance:
 
   XHCISNAP.EXE is in the XHCISNAP directory of this package. It reads the
   driver's own log straight out of the running machine and writes a report
-  you can paste into a bug report. It works the same way on both systems,
-  and on Windows 98 it is the ONLY way to get anything out.
+  you can paste into a bug report. It works the same way on every target,
+  and on Windows 98 and Windows ME it is the ONLY way to get anything out.
 
       1. XHCISNAP -verbosity 2
       2. restart the machine
@@ -623,7 +634,7 @@ needed.
 
   XHCIQUAL\  - the DOS machine checker from step 1
 
-      XHCIQUAL.EXE 115,712 bytes
+      XHCIQUAL.EXE 116,376 bytes
       XHCIQUAL.MAP keep it beside the EXE; see xhciqual\readme.txt
       readme.txt
       NOTICE.TXT   third-party notices this EXE carries
@@ -717,13 +728,13 @@ the driver reads, and one the installer writes machine-wide on every system.
   A value that is missing entirely is not an error either - the driver starts
   normally with everything off, and the report says whether it read nothing
   or read a zero. They live in the device's own driver key, which is spelled
-  differently on the two systems:
+  one way on the NT targets and another on the 9x ones:
 
-    Windows 2000
+    Windows 2000 and Windows XP
       HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\
         {36FC9E60-C465-11CF-8056-444553540000}\0002
 
-    Windows 98
+    Windows 98 SE and Windows ME
       HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\Class\USB\0002
 
   THE LAST PART OF THE PATH IS ASSIGNED BY THE MACHINE AND WILL NOT
@@ -770,10 +781,10 @@ the driver reads, and one the installer writes machine-wide on every system.
   machine produces a report - see section 6. On Windows 2000 both routes
   work.
 
-  DisableSelectiveSuspend  -  both systems
+  DisableSelectiveSuspend  -  every target
   ........................................
 
-  DWORD, written as 1 by the install on both systems, in
+  DWORD, written as 1 by the install on every target, in
 
       HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB
 

@@ -9,10 +9,11 @@ GPL v2 - see the LICENSE file in the directory above.
 It is not only this project's code. It is compiled with Microsoft Visual C++
 6.0 and linked against that compiler's STATIC C runtime - the build passes no
 /MD - so those runtime modules are bound into this executable rather than
-loaded from a DLL when it runs. That is deliberate: it is what makes the tool a
-single file that works on a Windows 98 SE machine with nothing installed on it,
-which is the machine it exists for. You can see it for yourself in the import
-table, which names only KERNEL32.dll and ADVAPI32.dll and no C runtime DLL.
+loaded from a DLL when it runs. That is deliberate: it is what makes the
+tool a single file that works on a Windows 98 SE machine with nothing
+installed on it, which is the machine it exists for. You can see it for
+yourself in the import table, which names only KERNEL32.dll and ADVAPI32.dll
+and no C runtime DLL.
 
 Those runtime modules are Microsoft's. They are not covered by the GPL grant
 above, and they keep whatever terms accompany Visual C++ 6.0. What this file

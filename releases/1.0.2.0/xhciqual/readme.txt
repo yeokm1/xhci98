@@ -113,13 +113,22 @@ WHICH CONTROLLERS IT LOOKS AT
   --scan TYPE            the same again; repeat it to combine families
 
 
-READ-ONLY OPTIONS - these change nothing on the machine
+READ-ONLY MODES - these change nothing on the machine
 
   --quick           the no-argument quick scan, asked for explicitly
   --probe-only      read-only discovery, fuller than --quick. It reads the
                     controller's memory window only if the firmware has
                     already switched it on, and switches nothing on itself
   --no-active       another name for --probe-only
+
+
+MODIFIERS - these say what to do with the report, not what to run
+
+  ON THEIR OWN THEY DO NOT MAKE THE RUN READ-ONLY. Any argument at all
+  turns off the no-argument quick scan, so XHCIQUAL --log FILE performs the
+  FULL ACTIVE run below. Pair one with --quick or --probe-only when a
+  read-only run is what you want.
+
   --no-page         do not stop at the end of each screenful
   --serial          mirror the output to COM1, 115200 8N1
   --log [FILE]      also write the report to a file, default XHCIQUAL.LOG.

@@ -2230,15 +2230,8 @@ Windows' own, unmodified, and no Microsoft file is in this download:
                or SweetLow's) supplies it.
 
   usbui.dll    NEW IN 1.0.2.0, and the one file here that is only cosmetic.
-               On Windows 2000 and Windows XP it brings back the USB Root
-               Hub's Power tab in Device Manager, which those systems' own
-               INFs ask for and name this file as the provider of, so on an
-               xHCI-only machine it was silently missing. On Windows 98 and
-               Windows ME nothing is visible either way - that page comes
-               from sysclass.dll there - but the file is copied on all four
-               targets so the install is the same everywhere. It is the one
-               file here that goes to WINDOWS\SYSTEM32 rather than
-               SYSTEM32\DRIVERS.
+               It adds an extra USB property page in Device Manager. It is
+               copied on all four targets.
 
 WINDOWS ONLY INSTALLS ITS USB FILES WHEN SETUP FINDS A USB CONTROLLER IT
 RECOGNISES, and on an xHCI-only machine it never does, so on such a machine

@@ -35,9 +35,9 @@
 ; setup engine to copy each from the OS's own install source (LayoutFile=
 ; below), with flag 16 so a file already on the machine is never touched. See
 ; docs\contributing\build-and-test.md, "The files the OS supplies:
-; usbport.sys, usbd.sys and usbhub.sys". Release 1.0.0.0 carried usbd.sys
-; and usbhub.sys on the media instead, under per-target names; that was
-; withdrawn before any upload.
+; usbport.sys, usbd.sys, usbhub.sys and usbui.dll". Release 1.0.0.0 carried
+; usbd.sys and usbhub.sys on the media instead, under per-target names; that
+; was withdrawn before any upload.
 ;
 ; Both halves are transcribed from the shipping reference that installs the
 ; equivalent EHCI miniport on that target:
@@ -439,12 +439,12 @@ usbhub.sys,,,16
 ; USB.INF do (USBUI.CopyFiles=11) and because the same dirid-11 section
 ; then serves all four paths unchanged.
 ;
-; Windows 2000 is the one prompt risk and it is NOT yet observed: its
-; usbd.sys, usbhub.sys and usbport.sys come from disk 2 (sp4.cab) but
-; usbui.dll from disk 1, the base CD, satisfied out of driver.cab. Both
-; cabs sit in Driver Cache\i386 on every install, so it should stay
-; silent, but that is inference from the exact size match and a clean
-; xHCI-only install reading is owed before the release goes out. On
+; Windows 2000 was the one prompt risk, and it is silent: its usbd.sys,
+; usbhub.sys and usbport.sys come from disk 2 (sp4.cab) but usbui.dll from
+; disk 1, the base CD, satisfied out of driver.cab. Both cabs sit in
+; Driver Cache\i386 on every install. Read on 2026-09-07 on an xHCI-only
+; Windows 2000 guest holding none of the four files: it fetched three from
+; sp4.cab and usbui.dll from driver.cab in one pass and asked for nothing. On
 ; Windows XP it is free (sp3.cab, the same cab as usbport.sys and
 ; usbhub.sys), and on 9x it rides the Insert Disk prompt the install
 ; already raises (the same BASE cab as usbd.sys and usbhub.sys).
