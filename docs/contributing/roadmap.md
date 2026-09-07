@@ -1908,7 +1908,32 @@ Tasks, in the audit's revised order:
   query against its connect-change clear, from an unbudgeted print or the
   log ring read with `XHCISNAP` before the group's guest is discarded).
   Neither outcome changes the driver.
-- [ ] 20.9 the cut, once the owner names the version: `src\xhci_version.h`,
+- [ ] 20.9 the cut. The version is `1.0.2.0`, named by the owner on
+  2026-09-07, and the cut was made that morning (`8936949`): `1,0,2,0` and
+  the date `09/07/2026` in `src\xhci_version.h`, the INF's `DriverVer`, the
+  `history.md` entry (what changed, F1-F19 and D1-D6 named, F10's hardware
+  reading owed through the release notes' Force Save Context entry), the
+  release notes' header, with its XP "since this release" phrase pinned to
+  `1.0.1.0`, `legal-provenance.md` section 5's newest-cut sentence, the two
+  issue forms' example number, and the Status paragraph above (the D5
+  clarification 20.6 left to the version's namer). The
+  DisableSelectiveSuspend and Force Save Context bullets were re-read and
+  left as 20.4 and 20.7 wrote them. `build-driver.cmd all` on that header:
+  the host suite 12,539 checks, the INF gate self-tests 312, the packager
+  179, the launchers 116, the matrix self-test 230, the `XHCISNAP`
+  self-test 4 cases, the import gate on all three flavours; `XHCIQUAL.EXE`
+  and `XHCISNAP.EXE` rebuilt after the header, both printing `1.0.2.0`;
+  `make-release.ps1` exit 0: `releases\1.0.2.0\` and
+  `out\xhci98-1.0.2.0.zip` (254,452 B, thirteen files, no Microsoft file),
+  the readme at 78 columns throughout with the new entry embedded. The
+  driver code in the cut differs from the binary the 20.7 and 20.8
+  readings stand on (`b75f48eeb9f29ff8`) by comments and the version
+  resource only: the Codex round-4 and round-5 commits and the citation
+  rewrite changed no code line. Still owed, no guest run at the cut by the
+  owner's instruction: the install route from the asset on the five
+  targets as task 19.9 did, and `fresh-2a.img` and `fresh-2b.img`
+  re-stamped on the cut's binary, since they carry `base-1.0.1.0-qemu`.
+  As written: once the owner names the version, `src\xhci_version.h`,
   the INF's `DriverVer`, the `history.md` entry naming what changed and
   which findings it closes (F1-F19, D1-D6; F10's hardware reading owed),
   the release notes' limitations re-read where a finding changed them (the
