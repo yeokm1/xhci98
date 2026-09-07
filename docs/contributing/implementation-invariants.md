@@ -492,6 +492,10 @@ code:
 
 ## Device Addressing
 
+- An addressed EP0 open uses `xhciDevMayOpenEndpoint`, like non-default
+  endpoint opens. A failed record keeps `ADDRESS_VALID` for teardown; its
+  presence in the address map must not permit another binding or an
+  `EVALUATE_MPS` command. Host vector: `test_slot_failed_record_ep0_reopen`.
 - Never place a SET_ADDRESS setup packet on a transfer ring. The xHC blocks software-issued SET_ADDRESS and completes the TRB with a TRB Error (spec section 4.5.4.1); addresses are assigned via the Address Device command (spec section 4.6.5) - the xHC issues SET_ADDRESS on the bus itself.
 - `usbport.sys` sends SET_ADDRESS as an ordinary EP0 control transfer; the miniport must intercept it, issue Address Device (BSR = 0), and complete the transfer back as success.
 - Keep a usbport-address -> Slot ID map. Treat the address usbport assigns and the xHC-assigned one as unrelated: they may coincide (both allocators tend to count up from 1), so never infer the mapping from equality and never assert a mismatch. Every later endpoint open and transfer is keyed by usbport's address.
@@ -1087,34 +1091,34 @@ must therefore do.
     is what the slot and endpoint contexts and EP0's max packet size must be
     programmed from, because usbport now derives them on High Speed rules.
 
-    The interrupt interval is not recoverable and Phase 7 must not assume it
-    is. usbport branches on `DeviceSpeed` when it converts `bInterval` into
+    The interrupt interval is not recoverable. usbport branches on
+    `DeviceSpeed` when it converts `bInterval` into
     `EndpointProperties->Period`: a device it believes is High Speed goes
     through `USBPORT_NormalizeHsInterval`, which is `1 << min(bInterval-1, 5)`,
-    where the truthful Full/Low Speed path would have used `bInterval`
-    milliseconds directly. `USBPORT_ENDPOINT_PROPERTIES` carries no raw
+    measured in microframes; the truthful Full/Low Speed path buckets in
+    frames, to powers of two in 1..32 with Low Speed floored at 8.
+    `USBPORT_ENDPOINT_PROPERTIES` carries no raw
     `bInterval`, so the miniport receives only the result - and the result is
     lossy, because every true `bInterval >= 6` collapses onto the same clamped
-    32. The error is always in the slower direction, so it costs latency and
-    never over-commits bandwidth or violates the protocol, but a true 8 or 10 ms
-    HID endpoint arrives as 32 ms:
+    32 microframes. `XhciIntervalFromPeriod` uses usbport's believed speed
+    for that unit conversion; `XhciIntervalForSpeed` then uses the decoded
+    speed to floor Full/Low Speed interrupt service at 1 ms (Table 6-12).
 
-    | true `bInterval` (ms) | truthful `Period` | `Period` under the override |
-    |---|---|---|
-    | 1 | 1 | 1 |
-    | 2 | 2 | 2 |
-    | 3 | 2 | 4 |
-    | 4 | 4 | 8 |
-    | 8 | 8 | 32 |
-    | 10 | 8 | 32 |
-    | 16 | 16 | 32 |
-    | >= 32 | 32 | 32 |
+    | true `bInterval` (ms) | override `Period` (microframes) | programmed xHCI `Interval` | service interval |
+    |---|---|---|---|
+    | 1 | 1 | 3 | 1 ms |
+    | 2 | 2 | 3 | 1 ms |
+    | 3 | 4 | 3 | 1 ms |
+    | 4 | 8 | 3 | 1 ms |
+    | 5 | 16 | 4 | 2 ms |
+    | >= 6 | 32 | 5 | 4 ms |
 
-    Phase 7 therefore inherits a decision, not a fix: either accept the latency,
-    or have the miniport choose its own xHCI interval for Full and Low Speed
-    interrupt endpoints - which is legal, since `bInterval` bounds the maximum
-    service latency and polling sooner is permitted, but is a heuristic because
-    the true value is gone. Do not write code that claims to reconstruct it.
+    A true 8 or 10 ms interrupt endpoint therefore runs at 4 ms, not
+    32 ms. The override polls at the same or a shorter interval; changes
+    within a band cannot change the programmed interval. Periodic bandwidth
+    accounting under the believed speed remains unmeasured, so this is not
+    evidence that usbport's bandwidth budget is correct. Issue 06 section 4
+    records the measured bands. Do not reconstruct `bInterval` from `Period`.
   - **It is gated on a connection**, because the speed bits mean nothing without
     one and an empty port claiming High Speed would be a second untruth rather
     than the one that was argued for.

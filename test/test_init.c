@@ -691,6 +691,20 @@ static XHCI_COMMAND_TIMEOUT asyncContext;
 static XHCI_PORT_TIMEOUT asyncPortContext;
 static XHCI_ASYNC_TIMER_CALLBACK *asyncCallback;
 
+/* Opt-in delivery queue: older vectors inspect the last-request views above
+ * and deliver manually. Queue vectors own every captured timer explicitly. */
+#define HC_ASYNC_PENDING_MAX 16
+typedef struct _HC_ASYNC_PENDING {
+    PVOID Extension;
+    XHCI_ASYNC_TIMER_CALLBACK *Callback;
+    ULONG Milliseconds;
+    ULONG Length;
+    ULONG Context[4];
+} HC_ASYNC_PENDING;
+static HC_ASYNC_PENDING asyncPending[HC_ASYNC_PENDING_MAX];
+static ULONG asyncPendingCount;
+static ULONG asyncQueueEnabled;
+
 /* UsbPortInvalidateRootHub - the root hub's announcement (Phase 5 task 5). */
 static ULONG rootHubInvalidates;
 static ULONG rootHubInvalidatesUnderLock;
@@ -914,6 +928,8 @@ static void hc_build(void)
     staleCallback = NULL;
 
     asyncRequests = 0;
+    asyncPendingCount = 0;
+    asyncQueueEnabled = 0;
     asyncMs = 0;
     asyncContextLength = 0;
     asyncArmedUnderLock = 0;
@@ -2022,8 +2038,25 @@ static ULONG NTAPI hc_async_callback(PVOID extension, ULONG milliseconds,
                                      XHCI_ASYNC_TIMER_CALLBACK *callback)
 {
     ULONG i;
+    HC_ASYNC_PENDING *pending;
 
-    (void)extension;
+    if (asyncQueueEnabled) {
+        CHECK(asyncPendingCount < HC_ASYNC_PENDING_MAX,
+              "the async delivery queue must not drop a timer");
+        CHECK(contextLength <= sizeof(asyncPending[0].Context),
+              "the async delivery queue must not truncate a context");
+        if (asyncPendingCount < HC_ASYNC_PENDING_MAX &&
+            contextLength <= sizeof(asyncPending[0].Context)) {
+            pending = &asyncPending[asyncPendingCount++];
+            pending->Extension = extension;
+            pending->Callback = callback;
+            pending->Milliseconds = milliseconds;
+            pending->Length = contextLength;
+            for (i = 0; i < contextLength; i++) {
+                ((UCHAR *)pending->Context)[i] = ((const UCHAR *)context)[i];
+            }
+        }
+    }
 
     asyncRequests++;
     asyncMs = milliseconds;
@@ -2051,6 +2084,24 @@ static ULONG NTAPI hc_async_callback(PVOID extension, ULONG milliseconds,
         ((UCHAR *)&asyncPortContext)[i] = ((const UCHAR *)context)[i];
     }
     return 0;
+}
+
+static void hc_deliver_async(ULONG index)
+{
+    HC_ASYNC_PENDING pending;
+    ULONG i;
+
+    CHECK(index < asyncPendingCount, "deliver an existing async timer");
+    if (index >= asyncPendingCount) {
+        return;
+    }
+    pending = asyncPending[index];
+    asyncPendingCount--;
+    for (i = index; i < asyncPendingCount; i++) {
+        asyncPending[i] = asyncPending[i + 1];
+    }
+    /* Remove before entry: the callback may arm another timer. */
+    pending.Callback(pending.Extension, pending.Context);
 }
 
 /*
@@ -22060,6 +22111,49 @@ static void test_slot_fail_record_stops_before_draining(void)
     CHECK_EQ(record->Queue.Count, 0, "the queue drains at that moment");
 }
 
+/* A failed record keeps its address for teardown, not for another EP0 open. */
+static void test_slot_failed_record_ep0_reopen(void)
+{
+    PXHCI_DEVICE dev;
+    ULONG i;
+    ULONG refusals;
+    ULONG commands;
+    ULONG wanted;
+
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint,
+                                   USBPORT_ENDPOINT_REMOVE);
+    XhciRegPacket.CheckController(&ext);
+    for (i = 0; i < (XHCI_DEV_STALL_MS / 500UL) + 1UL; i++) {
+        slot_setup(0x80, 0x06, 0x0100, 0);
+        (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                           &slotTransfer, &slotSgList);
+        poll_after_ms(500UL);
+    }
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_FAILED, "(progress detector failed it)");
+    CHECK(dev->Flags & XHCI_DEV_FLAG_ADDRESS_VALID,
+          "(the failed record still owns its address)");
+    refusals = ext.OpenRefusals;
+    commands = hwCmdExecuted;
+    wanted = dev->WantedMaxPacketSize0;
+    for (i = 0; i < 2; i++) {
+        slot_properties(7, UsbHighSpeed, i ? 32 : dev->MaxPacketSize0);
+        CHECK_EQ(open_endpoint_now(&slotEndpointRestore),
+                 MP_STATUS_NO_RESOURCES, "a failed record refuses EP0 open");
+        CHECK_EQ(reopen_endpoint_now(&slotEndpoint),
+                 MP_STATUS_NO_RESOURCES, "a failed record refuses EP0 reopen");
+        CHECK_EQ(dev->State, XHCI_DEV_STATE_FAILED, "the record stays failed");
+        CHECK_EQ(dev->PendingOp, XHCI_DEV_OP_NONE, "no Evaluate MPS is queued");
+        CHECK_EQ(dev->WantedMaxPacketSize0, wanted, "no MPS change is retained");
+        CHECK(dev->EndpointExtension == NULL, "no failed binding is replaced");
+        CHECK((dev->Flags & XHCI_DEV_FLAG_EP0_OPEN) == 0, "EP0 stays closed");
+    }
+    CHECK_EQ(ext.OpenRefusals, refusals + 4, "every refused open is counted");
+    CHECK_EQ(hwCmdExecuted, commands, "no command reached the controller");
+    CHECK(dev->Flags & XHCI_DEV_FLAG_ADDRESS_VALID,
+          "the address is retained for the existing disown path");
+}
+
 /*
  * The tenth review's surviving mutations, each given the vector it exposed.
  * Grouped here rather than scattered because what they have in common is the
@@ -28754,20 +28848,13 @@ static void test_recovery_delivery_loss(void)
     /* --- a suspend between the arming and its delivery does not age it --- */
     hc_build();
     CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a controller that starts)");
+    asyncQueueEnabled = 1;
     ext.ControllerFailed = 1;
     ext.RecoveryRequested = 1;
     asyncRequests = 0;
     XhciRegPacket.CheckController(&ext);
     CHECK_EQ(ext.RecoveryArmed, 1, "(one recovery armed against the latch)");
-    /*
-     * Captured now, because the mock holds ONE pending callback and the
-     * resume below arms its own command watchdog over it: firing "the" timer
-     * after the resume would fire that watchdog and prove nothing about this
-     * arming (the Phase 20 review's fourth finding, which caught exactly that
-     * in the first version of this vector).
-     */
-    lost = asyncContext;
-    lostCallback = asyncCallback;
+    CHECK_EQ(asyncPendingCount, 1, "the recovery timer is queued");
     XhciRegPacket.SuspendController(&ext);
     for (i = 0; i < XHCI_RECOVERY_DELIVERY_POLLS + 2; i++) {
         XhciRegPacket.CheckController(&ext);
@@ -28780,16 +28867,21 @@ static void test_recovery_delivery_loss(void)
     CHECK_EQ(XhciRegPacket.ResumeController(&ext), MP_STATUS_SUCCESS,
              "(the resume brings the controller back)");
     CHECK_EQ(ext.ControllerFailed, 0, "(its reinitialisation clears the latch)");
+    CHECK(asyncPendingCount >= 2, "resume also queued a command watchdog");
     /*
      * A reinitialising resume does NOT move the start epoch (only
      * XhciCommandInit does, from StartController), so the recovery callback
      * still matches when it arrives: it finds the latch clear, counts itself
-     * stale, and releases the arming itself. Delivered as the callback it is,
-     * not as whatever the mock's single slot holds now.
+     * stale, and releases the arming itself. Deliver the newer watchdog first
+     * to show it cannot overwrite or consume the older recovery callback.
      */
-    if (lostCallback != NULL) {
-        lostCallback(&ext, &lost);
+    while (asyncPendingCount > 1) {
+        hc_deliver_async(asyncPendingCount - 1);
     }
+    CHECK_EQ(ext.RecoveryArmed, 1, "watchdogs cannot consume the recovery timer");
+    hc_deliver_async(0);
+    CHECK_EQ(asyncPendingCount, 0, "both timer families were delivered");
+    asyncQueueEnabled = 0;
     CHECK_EQ(ext.RecoveryAttempts, 0,
              "the recovery callback recovers nothing on a controller the "
              "resume already brought back");
@@ -29000,6 +29092,7 @@ int main(void)
     test_slot_suppressed_reset_is_bounded();
     test_slot_refusal_is_bounded();
     test_slot_fail_record_stops_before_draining();
+    test_slot_failed_record_ep0_reopen();
     test_probe_transfer_shapes();
     test_probe_gates();
     test_probe_endpoint_contract();

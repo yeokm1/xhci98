@@ -82,6 +82,11 @@ rem (a blocked exe launch, not a test failure - just run it again).
 
 setlocal
 
+rem A pwsh -> cmd -> powershell.exe launch retains PS7's module paths, unlike
+rem pwsh launching powershell.exe directly. Its Utility module hides the 5.1
+rem Get-FileHash command used by the gates. Scope the fix to this build.
+set "PSModulePath=%SystemRoot%\System32\WindowsPowerShell\v1.0\Modules;%ProgramFiles%\WindowsPowerShell\Modules"
+
 rem Normalize the repo root rather than carrying "scripts\.." through every
 rem derived path: DDKROOT is one of them and reaches setenv.bat, whose own
 rem derived paths are printed in error messages a developer has to read.

@@ -369,6 +369,7 @@ the roadmap's per-task boxes hold the rest, each with its own method stated.
 
 | Fact | Method | Where recorded |
 |---|---|---|
+| SweetLow's `USBPORT.SYS` has the same unguarded single-TT lookup: `CreateDevice` calls `0x26628` at `0x26B1D`; a zero count takes `0x2667A` and the empty list becomes `0xFFFFFFEC` at `0x26686` | static: MSVC 6 `dumpbin /disasm` on the 134,912-byte file, SHA-256 `8A3C9F1B568CB25CF5DD9AF3AF9E5C3400DE24BD087CAA3E4E3345588F5CFB56`; no truthful-speed execution | abi section 8; issue 06 section 6 |
 | `USBPORT_GetHciMn` present at ordinal 2, `USBPORT_RegisterUSBPortDriver` at 3, plus an undocumented `DllUnload` at 1; `usbehci.sys` imports only the first two | static (`dumpbin /exports`) | abi §1 |
 | `USBPORT_REGISTRATION_PACKET` layout identical across all three builds (Phase 3 task 1) | static | abi §3 |
 | The SweetLow WinDDK rebuild (5.1.2600.2180, Windows 98) has the same three exports and ordinals, the same `>= 100` / `>= 200` gate, the 300/316-byte copy, the 0x150 wrapper with `Version` at +0x10 and the packet at +0x14, writes the same 16 service pointers, and returns `0x10000001` from `USBPORT_GetHciMn` | both: read from `tools/sweetlow-extracted/usbport-registration-disasm.txt`, then `USBPORT_GetHciMn=10000001` and `packet size=0000013C` in this driver's trace on the `2a-sweetlow` guest | interface doc section 5, "The SweetLow rebuild" |

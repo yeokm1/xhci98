@@ -24,6 +24,24 @@ Do not turn a hypothesis into a settled hardware quirk. Move confirmed design
 rules into the appropriate normative document while keeping the debugging
 history here.
 
+## Test the actual shell chain when a build loses a PowerShell command
+
+Observed on 2026-09-07 on the Windows development host, PowerShell 7.6.5
+parent, `cmd /c scripts\build-driver.cmd all`. The evidence-manifest
+self-test failed because `Get-FileHash` was not recognised. A direct
+`powershell -NoProfile -Command 'Get-Command Get-FileHash'` from that same
+parent succeeded, so that probe alone would have repeated the earlier
+"not reproduced" disposition in roadmap 20.6.
+
+The intervening `cmd` is decisive: `cmd /c` launching the same PowerShell
+probe retained the PS7 user, system and runtime module directories ahead
+of the Windows PowerShell ones, and failed. The direct child had only
+Windows PowerShell paths. `build-driver.cmd` now sets `PSModulePath` to
+the Windows PowerShell system and Program Files module directories within
+its `setlocal`; the parent process and machine configuration are untouched.
+Use the full build entry point to verify this fix, not a direct child that
+does not inherit the failing environment.
+
 ## The host's sound card reached into an unattended run through an unnamed audio backend
 
 Environment: host `FW-W11P-YKM`, QEMU 11.0.0 (scoop), the `1.0.1.0`

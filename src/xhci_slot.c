@@ -5088,15 +5088,14 @@ static MPSTATUS xhciSlotOpenControl(
          * address and written by the SET_ADDRESS interception.
          */
         dev = xhciDevByAddress(ext, properties->DeviceAddress);
-        if (dev == NULL) {
+        if (!xhciDevMayOpenEndpoint(dev)) {
             /*
-             * An addressed device this driver has no record of. It is not a
-             * device it can serve: the slot, the device context and the ring the
-             * xHC would need are all things only the addressing chain creates.
+             * Failed records retain ADDRESS_VALID for teardown. That lookup
+             * must not let a reopen bind EP0 or restart the command chain.
              */
             ext->OpenRefusals++;
-            XHCI_DBG_VALUE_CHANGED("slot: EP0 open for an address no record "
-                                   "holds", properties->DeviceAddress);
+            XHCI_DBG_VALUE_CHANGED("slot: EP0 open for an address no live "
+                                   "record holds", properties->DeviceAddress);
             XhciControllerLockRelease(oldIrql);
             return MP_STATUS_NO_RESOURCES;
         }

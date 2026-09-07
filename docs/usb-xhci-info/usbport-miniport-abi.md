@@ -2877,6 +2877,28 @@ branch at `0x27874` does test for empty and returns NULL; ReactOS's
 "ReactOS added the guard the shipping code lacks" shape as the
 `NumberOfPorts = 0` arithmetic in section 4.
 
+The SweetLow rebuild has the same unguarded shape (static, read
+2026-09-07; `tools/sweetlow-extracted/USBPORT.SYS`, 134,912 bytes,
+SHA-256 `8A3C9F1B568CB25CF5DD9AF3AF9E5C3400DE24BD087CAA3E4E3345588F5CFB56`).
+Re-derive with MSVC 6 `dumpbin /disasm` on that file; the addresses below
+are the dumper's addresses, as in `usbport-disasm.txt` beside it:
+
+- `CreateDevice` tests the USB2 flag at `0x26B09` and the reported
+  High-Speed bit at `0x26B0F`, then calls `0x26628` at `0x26B1D` with
+  the parent handle and the address of its port local.
+- That `GetTt` walks `+0x10` until speed `+0x38` is 2, updating the output
+  port from `+0x06`. At `0x2664B` it compares the count at `+0x64` with
+  1; `0x26652` sends both zero and one to `0x2667A`.
+- At `0x2667A`-`0x26684`, an empty list at `+0x68` folds to zero. The
+  unconditional `lea ebx,[eax-14h]` at `0x26686` then produces
+  `0xFFFFFFEC`, returned at `0x266E4`-`0x266E8`. The separate multi-TT
+  empty-list exits at `0x26658` and `0x2665E` do not guard this branch.
+
+Thus this rebuild supplies no empty-list guard on which to base a truthful
+root-port speed option. No truthful-speed guest run was made on it; this
+is a static result, not a newly observed bugcheck. Its source package is
+the SweetLow `usb20_win9x.zip` recorded in `legal-provenance.md` section 4.
+
 `USBPORT_OpenPipe` (SP4 `0x24EBC`) then null-checks `TtExtension` at `0x24FC6`,
 which `0xFFFFFFEC` passes, and inserts at `TtExtension + 0xC`:
 

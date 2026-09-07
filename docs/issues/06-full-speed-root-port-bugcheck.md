@@ -220,8 +220,10 @@ what a function does with an empty list, not whether the list is empty.
   as well, because usbport would then bucket `Period` in frames, which
   `XhciIntervalFromPeriod` already handles. It must never be enabled by
   build detection: under NUSB's and SP4's usbport it bugchecks the machine.
-  Whether SweetLow's XP-lineage rebuild guards that branch has not been read
-  from its listing.
+  SweetLow's XP-lineage rebuild does not guard it either: its single-TT
+  branch at `0x2667A`-`0x26686` returns the same `0xFFFFFFEC` for an empty
+  list (static, ABI document section 8). No truthful-speed run has been
+  made on that rebuild; its lineage is not a basis for enabling an option.
 - **The bandwidth accounting above** has no measurement either way.
 - **Metal never ran the truthful build**, so the bugcheck itself is a VM
   observation. Nothing suggests real hardware differs: the fault is in

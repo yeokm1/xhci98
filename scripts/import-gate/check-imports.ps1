@@ -499,14 +499,17 @@ function Test-Image {
         }
 
         $row = $null
+        $pairRows = @()
         foreach ($candidate in $Rules.Allow) {
             if ($candidate.Module -ieq $pair.Module -and $candidate.Symbol -ceq $pair.Symbol) {
-                $row = $candidate
-                break
+                $pairRows += $candidate
+                if ($candidate.Flavors -eq "all" -or $candidate.Flavors -eq $ImageFlavor) {
+                    $row = $candidate
+                }
             }
         }
 
-        if ($null -eq $row) {
+        if ($pairRows.Count -eq 0) {
             $elsewhere = @($Rules.Allow | Where-Object { $_.Symbol -ceq $pair.Symbol })
             if ($elsewhere.Count -gt 0) {
                 Add-Failure "$($pair.Module)!$($pair.Symbol): allowed only from $(($elsewhere | ForEach-Object { $_.Module }) -join ', '). The PE import descriptor names the provider, so this is a different import and only one of them resolves."
@@ -516,8 +519,9 @@ function Test-Image {
             continue
         }
 
-        if ($row.Flavors -ne "all" -and $row.Flavors -ne $ImageFlavor) {
-            Add-Failure "$($pair.Module)!$($pair.Symbol): allowed in the $($row.Flavors) build only, but the $ImageFlavor build imports it."
+        if ($null -eq $row) {
+            $allowedFlavors = ($pairRows | ForEach-Object { $_.Flavors } | Sort-Object -Unique) -join ', '
+            Add-Failure "$($pair.Module)!$($pair.Symbol): allowed in $allowedFlavors only, but the $ImageFlavor build imports it."
             continue
         }
 

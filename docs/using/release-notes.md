@@ -294,16 +294,18 @@ because a user meets them through this driver.
   host model, because the virtual machines fail every restore and rebuild
   the bus instead.
 - Windows 98 shows no driver version on the Driver tab, only the file date;
-  the four-part version is under *Driver File Details*. USB Audio on Windows
-  98 is uneven with the emulated device in the virtual machine: on a freshly
-  installed guest it binds on its first arrival, and a second arrival on the
-  same port stops on a Windows 98 prompt for the installation CD (measured
-  twice on 2026-08-30 in the unattended post-release run); on the older,
-  carried-along guest it failed inside that system's own `USBAUDIO.VXD`. A
-  physical UAC 1.0 device played clean on a ThinkPad E460, directly and
-  behind a High-Speed hub. Both readings are that system's audio stack, not
-  this driver, which addressed the device and opened its endpoints each time
-  Windows asked.
+  the four-part version is under *Driver File Details*.
+- USB Audio on Windows 98 is uneven with the emulated device. The fresh-guest
+  replug stopped on an installation-CD prompt in the 2026-08-30 run. Both
+  arrival and replug subsequently passed in Phase 19 and in Phase 20's solo
+  and paired runs with the audio group first. Earlier Phase 20 runs failed
+  the replug without a prompt: the connect change was announced, but the
+  stack never requested a port reset. Those failures depended on the VM
+  run conditions; no driver defect was established. These later passes
+  supersede the CD prompt as the latest result, not as a guarantee for every
+  guest configuration. An older guest failed inside `USBAUDIO.VXD`; a
+  physical UAC 1.0 device played clean on a ThinkPad E460, directly and behind
+  a High-Speed hub. Roadmap tasks 19.8, 20.7 and 20.8 retain the run details.
 - Windows 98 on an xHCI-only machine: the driver install asks for the
   Windows 98 SE CD (an "Insert Disk" prompt naming the Windows 98 Second
   Edition CD-ROM) unless the Windows CABs are on the hard disk. That is

@@ -1,4 +1,4 @@
-﻿# Development Roadmap
+# Development Roadmap
 
 This roadmap is the project-status index: the phase sequence, what each phase
 was for and what it delivered, the basis on which each closed, the task and
@@ -1572,7 +1572,7 @@ script's own self-test, "guest" a reading in a target VM under 20.7:
 | D4 | Stale comments and drifted IRQL tags in the driver source | 20.6 |
 | D5 | Documentation, sample-configuration and issue-form drift | 20.6; the optional status clarification waits on the version name |
 | D6 | Technical documents against the code | 20.6 |
-| smaller items | Code and script items below finding grade | 20.6, four left with their reasons in that note |
+| smaller items | Code and script items below finding grade | 20.6; the four deferred items were taken up in the post-cut follow-up recorded there |
 
 Why a phase: the findings cross every layer, from endpoint ownership in
 `xhci_slot.c` to the readme template, and several of them interact (F3 and
@@ -1670,8 +1670,8 @@ Tasks, in the audit's revised order:
   abandoned command pinned by a host vector and resolved with a
   command-ring No Op (type 23, not `XhciRingNoOpAt`'s type 8) or a
   divergence reset; `xhciqual`'s EHCI cleanup masking the RW1C status bits.
-- [x] 20.6 the smaller items and D2-D6. Four of the smaller items are left,
-  each with its disposition: the `PSModulePath` guard (not reproduced from a
+- [x] 20.6 the smaller items and D2-D6. Four of the smaller items were left
+  at the cut, each with its disposition: the `PSModulePath` guard (not reproduced from a
   PowerShell 7 parent, and the audit's own rule is to promote only a
   reproduced failure); the import-allowlist duplicate-row matching (latent,
   no row needs it); the multi-timer async mock (the one vector that needed
@@ -1682,7 +1682,32 @@ Tasks, in the audit's revised order:
   `ADDRESS_VALID` on, and queueing `EVALUATE_MPS` on it), which is a
   behaviour change on a path no run has exercised and stays as the audit
   recorded it - test the failed-record reopen first - for the owner to
-  schedule. The Transfer Event RsvdZ low-bits row is done (one shared mask
+  schedule. The owner scheduled those four separately from 20.9 on
+  2026-09-07. The follow-up reproduced the failed-record EP0 reopen with
+  `test_slot_failed_record_ep0_reopen`: the progress detector really fails
+  an addressed record, and same-MPS and changed-MPS opens/reopens must
+  refuse without rebinding or issuing a command (twelve assertions failed
+  before the fix). `xhciSlotOpenControl` now applies the shared
+  `xhciDevMayOpenEndpoint` admission check, preserving the address for
+  teardown. The import gate's split debug/qemu rows failed in both orders
+  before the matcher included flavour; synthetic vectors now cover both
+  orders, release refusal, provider/symbol identity, required imports and
+  deny precedence. The async mock gained an opt-in copied-context queue;
+  the F2 suspend/resume vector holds both recovery and watchdog callbacks,
+  delivers the newer watchdogs first and then the original recovery, and
+  verifies that the recovery arming is released without another recovery.
+  The PowerShell issue reproduced only through the actual launch chain:
+  PowerShell 7.6.5 -> `cmd` -> Windows PowerShell 5.1 retained PS7 module
+  paths and could not resolve `Get-FileHash`; a direct PowerShell child
+  did resolve it. `build-driver.cmd` now selects Windows PowerShell module
+  paths inside `setlocal`. These are post-cut working-source changes;
+  no guest reading or change to the 1.0.2.0 cut is implied. Verification:
+  `build-driver.cmd all` passed from that PS7 parent, all three flavours
+  and import gates; 20,325 host checks across twelve suites (`test_init`
+  12,585), evidence manifests 15, import flavour rules 53, INF 312,
+  packager 179, launchers 116, matrix 230, and the snapshot-reader
+  self-test. Log: `out/open-items-build-all.log` on the host that ran it.
+  The Transfer Event RsvdZ low-bits row is done (one shared mask
   in `xhci_xfer.c`, counted per queue and folded). The optional D5 status
   clarification is left to the owner who names the version. As written: the
   audit's "Smaller code and script

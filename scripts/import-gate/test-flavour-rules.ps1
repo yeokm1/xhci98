@@ -67,6 +67,52 @@ $work = Join-Path $tempBase ("xhci98-flavour-rules-test-" + [System.IO.Path]::Ge
 try {
     New-Item -ItemType Directory -Path $work | Out-Null
 
+    # Exercise the real image matcher with synthetic dumpbin output. No built
+    # image is needed, so split-flavour rows are checked before the first link.
+    & {
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($gate, [ref]$null, [ref]$null)
+        foreach ($name in @('Get-ImportPairs', 'Read-AllowFile', 'Test-Image')) {
+            $function = $ast.Find({ param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
+            }, $true)
+            . ([scriptblock]::Create($function.Extent.Text))
+        }
+        function Invoke-Dumpbin { @('    HAL.dll', '        0 WRITE_PORT_UCHAR', '    Summary') }
+        function Test-NtkernName { $true }
+        function Add-Failure { param($Message) $script:importFailures += $Message }
+        foreach ($order in @(@('debug', 'qemu'), @('qemu', 'debug'))) {
+            $split = Join-Path $work 'split.allow'
+            Set-Content -LiteralPath $split -Encoding ASCII -Value @(
+                '[imports]',
+                "HAL.dll!WRITE_PORT_UCHAR $($order[0]) required",
+                "HAL.dll!WRITE_PORT_UCHAR $($order[1]) required"
+            )
+            $rules = Read-AllowFile $split
+            foreach ($flavour in @('debug', 'qemu', 'release')) {
+                $script:importFailures = @()
+                Test-Image -Path synthetic -ImageFlavor $flavour -Rules $rules
+                if ($flavour -eq 'release') {
+                    Assert-True ($script:importFailures.Count -eq 1) 'split debug/qemu rows still refuse release'
+                } else {
+                    Assert-True ($script:importFailures.Count -eq 0) "split rows admit $flavour in either order: $($script:importFailures)"
+                }
+            }
+        }
+        foreach ($case in @(
+            @{ Rows = @('HAL.dll!WRITE_PORT_UCHAR all required'); Failures = 0; Name = 'all still admits every flavour' },
+            @{ Rows = @('other.dll!WRITE_PORT_UCHAR qemu optional'); Failures = 1; Name = 'same symbol from a different provider is refused' },
+            @{ Rows = @('HAL.dll!write_port_uchar qemu optional'); Failures = 1; Name = 'symbol matching stays case-sensitive' },
+            @{ Rows = @('HAL.dll!WRITE_PORT_UCHAR debug optional', 'HAL.dll!WRITE_PORT_UCHAR qemu required', 'HAL.dll!Missing qemu required'); Failures = 1; Name = 'a missing required import still fails' },
+            @{ Rows = @('HAL.dll!WRITE_PORT_UCHAR qemu optional', '[deny]', 'WRITE_PORT_UCHAR synthetic denial'); Failures = 1; Name = 'deny still wins over an allowed row' }
+        )) {
+            Set-Content -LiteralPath $split -Encoding ASCII -Value (@('[imports]') + $case.Rows)
+            $rules = Read-AllowFile $split
+            $script:importFailures = @()
+            Test-Image -Path synthetic -ImageFlavor qemu -Rules $rules
+            Assert-True ($script:importFailures.Count -eq $case.Failures) $case.Name
+        }
+    }
+
     # ---------------------------------------------------------------------
     # The grammar, on synthetic files.
     # ---------------------------------------------------------------------
