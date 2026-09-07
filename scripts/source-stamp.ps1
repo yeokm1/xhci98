@@ -26,6 +26,15 @@ writes the list beside the binary; `-Check` recomputes and compares. A file
 rewritten with the same bytes is not a change. A file whose bytes differ is,
 whatever its timestamp says, and whether it moved forward or back.
 
+**And the binary's own hash, on the stamp's last line.** The source list alone
+says what `src\` held; it does not say which `.sys` it was written beside. A
+binary restored into the build directory from an archive - the same version,
+the same flavour, different bytes - therefore kept a stamp that still matched
+a tree nobody had touched, and passed. `make-release.ps1` could not catch that
+from its side either: its staged-against-built comparison has the restored
+file on BOTH sides. The stamp is the only thing that was present at the moment
+the sources and the binary were one event, so it is where the binding belongs.
+
 The source set is derived from `src\sources` rather than listed here, so a
 `.c` added to the build cannot be left out of the stamp by forgetting this
 file. Headers are not in `SOURCES` - the DDK discovers them by including them
@@ -38,14 +47,19 @@ nobody can reproduce.
 The `src\obj*\i386` directory holding the binary to stamp.
 
 .PARAMETER Check
-The same directory, to verify. Answers exit 0 when the stamp matches, 1 when
-it does not, and 2 when there is no stamp at all - which is not a failure: a
-binary built before this script existed has nothing to compare against, and
-the caller decides whether that is fatal.
+The same directory, to verify. Answers exit 0 when both the sources and the
+binary match, 1 when either does not, and 2 when there is no usable stamp -
+either none at all, or one written before the binary line existed, since a
+stamp that can answer only half the question must not report a match. Exit 2
+is not itself a verdict: a binary built before this script existed has nothing
+to compare against, and the caller decides whether that is fatal.
 
 .EXAMPLE
 powershell -File scripts\source-stamp.ps1 -Write src\objfre\i386
 powershell -File scripts\source-stamp.ps1 -Check src\objfre\i386
+
+Both take the directory, not the file: the stamp is written beside
+`xhci98.sys` there and now records that file's SHA-256 as well.
 #>
 param(
     [string]$Write = "",
@@ -58,6 +72,10 @@ Set-StrictMode -Version Latest
 $repo = Split-Path -Parent $PSScriptRoot
 $srcDir = Join-Path $repo "src"
 $stampName = "xhci98.srcstamp"
+$binaryName = "xhci98.sys"
+# Prefixed rather than listed like a source file, so the source comparison
+# below cannot mistake it for a file that appeared in src\.
+$binaryTag = "BINARY"
 
 function Get-SourceFiles {
     $wanted = New-Object System.Collections.Generic.List[string]
@@ -86,6 +104,27 @@ function Get-SourceFiles {
     return @($wanted | Sort-Object -Unique)
 }
 
+# The stamp's last line, and the reason there is one. The source hashes above
+# say what src\ held; they say nothing about WHICH binary they were beside, so
+# a `.sys` restored into the build directory from an archive - same version,
+# same flavour, different bytes - kept a stamp that still matched the tree and
+# passed. make-release.ps1's staged-vs-built comparison could not see it
+# either: it compares the staged copy against that same restored file, so both
+# sides are the wrong binary. Only the stamp can close this, because only the
+# stamp was written at the moment the sources and the binary were the same
+# event.
+function Get-BinaryStampLine {
+    param([Parameter(Mandatory = $true)][string]$Dir)
+    $bin = Join-Path $Dir $binaryName
+    if (-not (Test-Path -LiteralPath $bin)) {
+        throw "no '$binaryName' in '$Dir' to stamp."
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $hash = [System.BitConverter]::ToString(
+        $sha.ComputeHash([System.IO.File]::ReadAllBytes($bin))).Replace("-", "")
+    return ("{0} {1} {2}" -f $binaryTag, $hash, $binaryName)
+}
+
 function Get-StampText {
     $sha = [System.Security.Cryptography.SHA256]::Create()
     $lines = New-Object System.Collections.Generic.List[string]
@@ -105,7 +144,8 @@ if ($Write -ne "") {
     if (-not (Test-Path -LiteralPath $Write)) {
         throw "no such directory: '$Write'"
     }
-    [System.IO.File]::WriteAllText((Join-Path $Write $stampName), (Get-StampText),
+    $text = (Get-StampText) + (Get-BinaryStampLine -Dir $Write) + "`r`n"
+    [System.IO.File]::WriteAllText((Join-Path $Write $stampName), $text,
                                    (New-Object System.Text.ASCIIEncoding))
     exit 0
 }
@@ -116,7 +156,38 @@ if ($Check -ne "") {
         Write-Host "no source stamp beside the binary in '$Check'"
         exit 2
     }
-    $have = [System.IO.File]::ReadAllText($stampPath)
+    $haveRaw = [System.IO.File]::ReadAllText($stampPath)
+
+    # Split the binary line off before the source comparison, so the two are
+    # answered separately and a failure names which of them it was.
+    $haveBinary = ""
+    $keep = New-Object System.Collections.Generic.List[string]
+    foreach ($line in ($haveRaw -split "`r?`n")) {
+        if ($line -cmatch ("^" + $binaryTag + "\s+([0-9A-F]{64})\s+(.+)$")) {
+            $haveBinary = $Matches[1]
+            continue
+        }
+        if ($line -ne "") { $keep.Add($line) }
+    }
+    if ($haveBinary -eq "") {
+        # A stamp written before the binary line existed cannot answer for the
+        # binary, and answering only half the question is what let the restored
+        # `.sys` through. Reported as "no usable stamp" so the caller's own
+        # rule for that case applies, rather than as a match.
+        Write-Host ("the stamp beside the binary in '{0}' predates the binary hash, so it cannot say which .sys it was written for" -f $Check)
+        exit 2
+    }
+
+    $wantBinary = (Get-BinaryStampLine -Dir $Check) -split "\s+"
+    if ($haveBinary -ne $wantBinary[1]) {
+        Write-Host ("the stamp in '{0}' was written for a different {1}:" -f $Check, $binaryName)
+        Write-Host ("  - stamped {0}" -f $haveBinary)
+        Write-Host ("  - present {0}" -f $wantBinary[1])
+        Write-Host "  The sources may well match; this binary is not the one they were hashed beside."
+        exit 1
+    }
+
+    $have = (($keep -join "`r`n") + "`r`n")
     $want = Get-StampText
     if ($have -ceq $want) {
         exit 0

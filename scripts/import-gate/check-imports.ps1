@@ -56,12 +56,19 @@ param(
 
     # The five path overrides below all default to a file beside this script or
     # under the repository, resolved after `param(...)` rather than in it,
-    # because `$PSScriptRoot` is not available in a parameter default. Each
-    # names WHERE a fact is read from and never WHAT it must be: every one of
-    # these files is itself authenticated or enforced, so pointing the gate at
-    # a copy elsewhere cannot weaken it. They exist for a host that stages the
-    # extracted target material outside the tree, and for the gate's own tests,
-    # which drive it against fixtures.
+    # because `$PSScriptRoot` is not available in a parameter default. They
+    # exist for a host that stages the extracted target material outside the
+    # tree, and for the gate's own tests, which drive it against fixtures.
+    #
+    # **THESE ARE THE GATE'S POLICY, NOT MERELY WHERE IT LOOKS.** The allowlist
+    # IS the rule about which imports are permitted, and the two manifests ARE
+    # the recorded identities an extracted file is held to - so a caller who
+    # points any of them at a file of their own has changed what the gate
+    # enforces, not just where it read it from. That is what they are for: the
+    # tests pass deliberately malformed and deliberately relaxed fixtures. It
+    # also means a build that passes with one of these overridden has not
+    # passed the committed gate, and `scripts\build-driver.cmd` accordingly
+    # passes none of them.
 
     # The allowlist. Default: xhci98-imports.allow beside this script.
     [string]$AllowPath = "",

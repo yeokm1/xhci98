@@ -11,7 +11,12 @@
 @{
     # Blank means "find it": an explicit -Qemu argument, then $env:XHCI98_QEMU,
     # then PATH, then the install layouts this project has met (winget's
-    # C:\Program Files\qemu and a scoop prefix).  Set it here to pin one.
+    # C:\Program Files\qemu and a scoop prefix).  Set it here to pin one -
+    # either the executable or the directory holding it, absolute or relative
+    # to the repository.  A value that is not there is an error rather than the
+    # first guess of that search: pinning a QEMU is saying which build the
+    # readings were taken with, so falling back to another install would answer
+    # a different question under the same report.
     Qemu = ''
 
     VmDir = 'vm'

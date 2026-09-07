@@ -129,10 +129,13 @@ $transferImage = Join-Path $VmDir "transfer.img"
 # and one blank 1.44 MB image serves every target. Created here too so this
 # script stands alone on a host where only the Windows 2000 guest exists.
 #
-# No launcher this script writes MOUNTS it - see the note above - so the
-# sharing costs nothing: it is inserted by hand, into one guest at a time,
-# with `change floppy0 <path>` on that guest's monitor. This variable exists
-# to make the file, and to name it in the next-steps text below.
+# No launcher this script writes MOUNTS it - see the note above - so nothing
+# here creates the two-writer hazard on its own. The sharing is not thereby
+# harmless: setup-qemu.ps1's Windows 98 run launcher DOES mount it at boot, so
+# inserting it into this guest with `change floppy0` while that one is up is
+# still two writers on one FAT image. That is a per-use precondition rather
+# than a launcher defect, so it is stated where the operator is told to do it -
+# the next-steps text below - and not silently relied on.
 if (-not (Test-Path -LiteralPath $transferImage)) {
     $stream = [System.IO.File]::Open($transferImage, [System.IO.FileMode]::CreateNew)
     try {
@@ -318,5 +321,6 @@ Write-Host "  2. Ensure SP4 USBD.SYS is staged (use -Win2KUsbdSys if needed), th
 Write-Host "  3. Shut down, then boot qemu-win2k-run.cmd (adds EHCI + xHCI)."
 Write-Host "  4. Do NOT install NUSB - the usbport stack is native to Win2000 SP4."
 Write-Host "  5. To get a file OUT of the running guest: on its monitor, 'change floppy0 $transferImage',"
-Write-Host "     then 'copy C:\SNAP.TXT A:' in the guest. The drive is there but empty at boot, so no"
-Write-Host "     other guest is holding that image while this one writes to it."
+Write-Host "     then 'copy C:\SNAP.TXT A:' in the guest, then 'eject floppy0' when the copy is done."
+Write-Host "     transfer.img is SHARED with the Windows 98 guest, whose run launcher mounts it at boot,"
+Write-Host "     so insert it here only while that guest is down - two writers on one FAT image corrupt it."

@@ -64,9 +64,11 @@ param(
     # -Config, which is the HOST's part (images, ports, where QEMU is): the
     # matrix is committed and the config is not.
     [string]$Matrix = "",
-    # The qemu-system-x86_64 to launch, overriding the config's Qemu. A
-    # relative path is taken against the repository root, as every path
-    # parameter here is.
+    # The qemu-system-x86_64 to launch, overriding the config's Qemu. Either
+    # the executable or the directory holding it; a relative path is taken
+    # against the repository root, as every path parameter here is. Giving one
+    # that is not there is an ERROR rather than the first guess of a search:
+    # naming a QEMU is naming which build the readings were taken with.
     [string]$Qemu = "",
     [string[]]$Target = @(),
     [string[]]$Group = @(),

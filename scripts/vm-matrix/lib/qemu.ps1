@@ -10,7 +10,13 @@
 #
 # The search order is: an explicit -Qemu argument, then $env:XHCI98_QEMU, then
 # PATH, then the two install layouts this project has actually met.  A guess is
-# never silent: Resolve-QemuBinary throws with the list it tried.
+# never silent: Resolve-QemuBinary throws with the list it tried, and an
+# explicit hint that misses throws rather than falling through to the rest.
+
+# Sourced here rather than left to the caller: Resolve-QemuBinary resolves a
+# relative hint against the repository, so this file needs the resolver
+# whichever script loads it. Dot-sourcing it twice is harmless.
+. (Join-Path $PSScriptRoot "repo.ps1")
 
 function Resolve-QemuBinary {
     param(
@@ -20,11 +26,29 @@ function Resolve-QemuBinary {
     $tried = @()
 
     if ($Hint -ne "") {
+        # A RELATIVE hint is taken against the repository, like every other
+        # path these scripts accept, rather than against whatever directory
+        # the operator happened to run from. It was the working directory
+        # until now, which made `-Qemu tools\qemu\...` mean different files
+        # from different prompts.
+        $hintPath = Resolve-RepoPath $Hint
+
         # Accept either the executable itself or the directory holding it.
-        if (Test-Path -LiteralPath $Hint -PathType Leaf) { return (Resolve-Path -LiteralPath $Hint).Path }
-        $candidate = Join-Path $Hint $ToolName
-        $tried += $Hint, $candidate
+        if (Test-Path -LiteralPath $hintPath -PathType Leaf) { return (Resolve-Path -LiteralPath $hintPath).Path }
+        $candidate = Join-Path $hintPath $ToolName
+        $tried += $hintPath, $candidate
         if (Test-Path -LiteralPath $candidate) { return (Resolve-Path -LiteralPath $candidate).Path }
+
+        # **AND A HINT THAT MISSES IS FATAL**, rather than the first entry in a
+        # search that goes on to XHCI98_QEMU, PATH and the well-known layouts.
+        # Somebody who passes -Qemu, or sets it in the config, has said WHICH
+        # QEMU the readings are to be taken with; falling through to a
+        # different install and running the whole matrix against it answers a
+        # question nobody asked, and the report names a version rather than a
+        # path. The fallbacks below are for a caller who expressed no
+        # preference, and they keep serving that caller unchanged.
+        throw ("The QEMU given as '{0}' is not there: neither {1} nor {2} exists. Correct -Qemu, or the config's Qemu entry; leave it unset to search XHCI98_QEMU, PATH and the usual install directories." -f `
+            $Hint, $hintPath, $candidate)
     }
 
     if ($env:XHCI98_QEMU) {
