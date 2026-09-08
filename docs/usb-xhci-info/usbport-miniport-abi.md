@@ -315,6 +315,220 @@ the high DWORD of a mapped address is zero *because the adapter is created
 amd64, and holds regardless of how much RAM the machine has. The miniport rule
 does not change with it: the high DWORD is a value to check, never to assume.
 
+### The 6.0 and 6.1 lineages: a fourth export, four packet tiers, and a second DMA adapter
+
+Read 2026-09-09 from `tools/vista-x86-extracted/`, `tools/vista-x64-extracted/`,
+`tools/win7-x86-extracted/` and `tools/win7-x64-extracted/`: `usbport.sys` and
+`usbehci.sys` 6.0.6002.18005 (`lh_sp2rtm.090410-1830`) and 6.1.7601.17514
+(`win7sp1_rtm.101119-1850`), in both architectures - a sixth and seventh
+lineage. Method **static** throughout: `link -dump -exports`/`-headers`/
+`-imports`, then `cdb.exe -z` for the function bodies; nothing was executed and
+no guest was booted. `docs/contributing/design/11-x64-targets.md` section 3
+records the extraction and every file's size and SHA-256. Each image loads at
+its preferred base `0x10000`, so an RVA below is a listed address minus
+`0x10000`. The Windows XP SP3 x86 numbers quoted for comparison were re-read in
+the same pass, by the same tool, from `tools/winxpsp3-extracted/usbehci.sys`.
+
+**The short of it: for a miniport that registers with `Version = 200`, nothing
+in this interface has moved.** Five things did change, and none of them reaches
+this driver as it is built today - but one of them, the second DMA adapter on
+6.1, is a condition rather than an absence, and is the one to remember.
+
+**Exports - there are now four, and the ordinals shift.** All four builds
+export `DllInitialize` at ordinal 1, which pushes `DllUnload` to 2,
+`USBPORT_GetHciMn` to 3 and `USBPORT_RegisterUSBPortDriver` to 4. Every 32-bit
+NT 5.x lineage this project has read - NUSB 3.3, NUSB 3.6, SweetLow, Windows
+2000 SP4, Windows XP SP3 - and NT 5.2 amd64 export three, at ordinals 1/2/3.
+The names are unchanged and undecorated, and the import library
+`scripts\make-usbport-lib.cmd` generates binds **by name** - a PE import
+descriptor records the name, not the ordinal - so the shift is inert: a binary built against the generated `usbport.lib` resolves on 6.0 and
+6.1 exactly as it does on 5.x, and that script's exact-name check passes when
+handed one of these binaries as its reference.
+
+| Build | Machine | Time date stamp | `DllInitialize` | `DllUnload` | `USBPORT_GetHciMn` | `USBPORT_RegisterUSBPortDriver` |
+|---|---|---|---|---|---|---|
+| Vista x86 | `14C` | `49E01FCF` | `0x1D3FF` | `0x3041B` | `0x1D2EA` | `0x1DCFD` |
+| Vista x64 | `8664` | `49E02D1B` | `0x32E94` | `0x32F60` | `0x33048` | `0x33344` |
+| Windows 7 x86 | `14C` | `4CE79C15` | `0x17206` | `0x24D81` | `0x170F1` | `0x17AEB` |
+| Windows 7 x64 | `8664` | `4CE7A670` | `0x28C2C` | `0x28D24` | `0x28DB4` | `0x29060` |
+
+**`USBPORT_GetHciMn` returns `0x10000001` on all four** - the XP-lineage value,
+in the same two-instruction body, `b8 01 00 00 10` / `c3`, at the RVAs above.
+This was the sharpest edge in both Phase 21 and Phase 22: the 5.0 -> 5.1 step
+changed this constant while leaving the packet byte-identical, so a fourth
+constant on 6.0 or 6.1 would have been a code change to the *shipping* 32-bit
+binary. There is no fourth constant. `src/xhci_dispatch.c`'s lineage refusal
+needs no edit for Vista or Windows 7 in either architecture.
+
+**The version gate is unchanged; the packet now has four tiers and the
+Version-200 tier is the same size as ever.** `USBPORT_RegisterUSBPortDriver`
+still refuses `Version < 100` with `STATUS_UNSUCCESSFUL` and then selects a
+copy size by threshold. NT 5.x has two thresholds; 6.0 and 6.1 have four:
+
+| | `>= 100` | `>= 200` | `>= 300` (`0x12C`) | `>= 310` (`0x136`) | `'usbp'` allocation |
+|---|---|---|---|---|---|
+| NT 5.x x86 | `0x12C` | `0x13C` | - | - | |
+| Vista x86 | `0x12C` | **`0x13C`** | `0x1E0` | `0x1EC` | `0x208` |
+| Windows 7 x86 | `0x12C` | **`0x13C`** | `0x1E0` | `0x1FC` | `0x218` |
+| NT 5.2 amd64 | `0x230` | `0x250` | - | - | `0x278` |
+| Vista x64 | `0x230` | **`0x250`** | `0x368` | `0x380` | `0x3B8` |
+| Windows 7 x64 | `0x230` | **`0x250`** | `0x368` | `0x3A0` | `0x3D8` |
+
+Vista x86: gate at RVA `0x1DDC1` (`cmp eax,64h`), refusal at `0x1DDD8`; sizes at
+`0x1DE8B` (`0x12C`), `0x1DEBB`/`0x1DEE8` (`>= 0C8h` -> `0x13C`),
+`0x1DEEF`/`0x1DF30` (`>= 12Ch` -> `0x1E0`), `0x1DF37`/`0x1DF5F` (`>= 136h` ->
+`0x1EC`); copy at `0x1DF78`. Windows 7 x86: gate at `0x17B70`, refusal
+`0x17B7B`, base `0x12C` at `0x17B8E`, then `0x17C3D` (`add ebx,10h`, reaching
+`0x13C`), `0x17C44`, `0x17C65`; copy at `0x17C84`. Vista x64: gate at `0x334D1`,
+refusal `0x33544`, `mov edi,230h` at `0x3355B` then `0x336B3`, `0x336EE`,
+`0x33740`; copy at `0x33757`. Windows 7 x64: gate at `0x29125`, refusal
+`0x29133`, `mov eax,230h` / `lea ecx,[rax+20h]` / `cmovae eax,ecx` at
+`0x2922A`-`0x29232` (the flags come from the `cmp r13d,0C8h` at `0x2914A`), then
+`0x29245` and `0x2926F`; copy at `0x29293`.
+
+**usbport writes into the caller's packet before copying it, and at
+`Version = 200` it writes exactly what it always did.** The sixteen service
+pointers go in unconditionally, at `0xE4`-`0x120` on x86 and `0x1A0`-`0x218` on
+amd64 - the same block, at the same offsets, as every earlier lineage. The
+higher tiers add more: two at `0x1B0`/`0x1B4` (x86) and `0x308`/`0x310` (amd64)
+for `Version >= 300`, and one or two more for `Version >= 310` (Vista x86
+`0x1E4`; Windows 7 x86 `0x1E4` and `0x1EC`; Vista x64 `0x370`; Windows 7 x64
+`0x370` and `0x380`). **Those stores sit behind the version tests**, so a
+`Version = 200` miniport's `0x13C`/`0x250` packet is never written past
+`0x120`/`0x218`. That is the property that matters here: not merely that the
+copy is the right size, but that usbport does not touch the tail of a structure
+the miniport did not declare.
+
+**The wrapper around the packet moved, which no miniport reads but this document
+names elsewhere.** The `USBPORT_MINIPORT_INTERFACE` this driver never sees puts
+the packet at `interface+0x1C` on 6.0 and 6.1 x86 (from the copy destinations
+`lea eax,[ebx+1Ch]` and `lea eax,[edi+1Ch]`) and at `interface+0x38` on 6.0 and
+6.1 amd64, with `Version` at `interface+0x10` and `interface+0x20`
+respectively. The x86 value is a third one after XP/2000's `+0x14` and NUSB's
+`+0x10`; NT 5.2 amd64's is `+0x28`. Nothing here reads it - it is recorded
+because section 3's note on that offset would otherwise be stale, and because
+the DMA reading below depends on it.
+
+**The miniport callback block is unchanged, on all four, across all 50 slots.**
+Each `usbehci.sys` fills a static packet - base RVA `0xB1A0` on both x86 builds
+and `0xD2A0` on both amd64 builds, fixed by the four size stores at `+0x10`,
+`+0x14`, `+0x18` and `+0x24` - from `DriverEntry` (RVAs `0x6724` Vista x86,
+`0x67B0` Windows 7 x86, `0x7728` Vista x64, `0x763C` Windows 7 x64). Taking
+every pointer store into that packet and keeping those below the USB2 packet
+size gives, on both x86 builds, **exactly the 50 slots Windows XP SP3's
+`usbehci.sys` fills, at exactly the same offsets** (`0x028`-`0x0E0` less
+`0x08C`, plus `0x124`, `0x128`, `0x12C`, `0x130`); and on both amd64 builds,
+**exactly those 50 under `f(X) = 0x28 + (X - 0x28) * 2`** (`0x028`-`0x198` less
+`0x0F0`, plus `0x220`, `0x228`, `0x230`, `0x238`). Both comparisons were made
+set against set rather than by eye.
+
+Above the USB2 packet the shipping miniports fill more - x86 `0x16C`, `0x170`,
+`0x174`, `0x178`, `0x17C`, `0x180`, `0x1CC`, `0x1D8`, and on Windows 7 also
+`0x1F8`; amd64 `0x280`, `0x288`, `0x290`, `0x298`, `0x2A0`, `0x2A8`, `0x340`,
+`0x358`, and on Windows 7 also `0x398` - and **those offsets do not follow
+`f(X)`** (x86 `0x16C` would map to `0x2B0`, not `0x280`). The widening map is
+established for the USB2 packet and stops there; do not extend it into the
+version-300 region by arithmetic.
+
+**`USBPORT_RESOURCES` keeps its prefix and grows a tail.** Read from each
+`usbehci.sys`'s `StartController` - the function its own packet names at slot
+`0x38` (x86) / `0x48` (amd64), at RVAs `0x8FE8` Vista x86, `0x95DA` Windows 7
+x86, `0x9A3C` Vista x64, `0x9A98` Windows 7 x64 - where the load offsets and
+widths are the field offsets and widths:
+
+```
+Vista x64  (structure in rdx, kept in rbp)   Windows 7 x64  (kept in r12)
+  mov al,byte ptr [rbp]        0x00           mov eax,dword ptr [r12]      0x00
+  mov eax,dword ptr [rdx+4]    0x04           mov eax,dword ptr [r12+4]    0x04
+  mov r14,qword ptr [rbp+28h]  0x28           mov rsi,qword ptr [r12+28h]  0x28
+  mov rdx,qword ptr [rbp+38h]  0x38           mov rdx,qword ptr [r12+38h]  0x38
+  mov r8d,dword ptr [rbp+40h]  0x40 DWORD     mov r8d,dword ptr [r12+40h]  0x40 DWORD
+  cmp byte ptr [rbp+45h],r13b  0x45           cmp byte ptr [r12+45h],r15b  0x45
+```
+
+**`StartPA` is still a 4-byte read at `0x40` on both**, so NT 5.2 amd64's M4
+result carries to 6.0 and 6.1 unchanged and `XhciCheckResourceBase(ULONG_PTR
+startVA, ULONG startPA)` still has the right signature. On x86 the fields this
+driver uses are at their NT 5.x offsets too: Windows XP SP3's `usbehci.sys`
+reads `0x00`, `0x04`, `0x20`, `0x28`, `0x2C` and `0x31` and nothing else, and
+Vista and Windows 7 read that same set (Windows 7 adds `0x1C`).
+
+What is new is past the end. Vista x86 also reads `0x3C`, `0x40`, `0x5C` and
+`0x60`; Windows 7 x86 reads `0x3C`, `0x5C` and `0x84`; Vista x64 reads `0x50`,
+`0x58`, `0x90` and `0x94`; Windows 7 x64 reads `0x50`, `0x90` and `0xC0`. So the
+structure is larger than the `0x34` / `0x48` this document records, in a
+version-dependent way. That costs a miniport nothing - usbport allocates it,
+fills it and hands over a pointer, and reading a prefix of a longer structure is
+safe - but it does mean **`sizeof(USBPORT_RESOURCES)` is not a fact about 6.0 or
+6.1**, and nothing here may treat this driver's own declaration's size as the
+operating system's.
+
+**The DMA adapter: still 32-bit on Vista, and on Windows 7 still 32-bit for this
+driver - by a condition rather than unconditionally.** `IoGetDmaAdapter` is
+imported by `usbport.sys` and not by `usbehci.sys`, in every lineage read here
+including Windows XP SP3 and NT 5.2 amd64.
+
+Vista has exactly one call site in each architecture - x86 IAT RVA `0x3404C`,
+call at `0x1ACBD`, `DEVICE_DESCRIPTION` zeroed and filled at
+`0x1AC79`-`0x1ACAC`; amd64 IAT RVA `0x3B038`, call at `0x4E23`, descriptor
+filled at `0x4DDB`-`0x4E11` - and both fill it the way NT 5.2 amd64 does:
+
+```
+  +0x00 Version           = 0        +0x14 InterfaceType     = 5 (PCIBus)
+  +0x04 Master            = 1        +0x18 DmaWidth          = 2 (Width32Bits)
+  +0x05 ScatterGather     = 1        +0x1C DmaSpeed          = 0
+  +0x08 Dma32BitAddresses = 1        +0x20 MaximumLength     = 0xFFFFFFFF
+  +0x0B Dma64BitAddresses left zero by the zeroing store and never written
+```
+
+(On Vista x64 the two constants arrive in registers: `mov r11d,2` at RVA
+`0x4B54` and `lea ebp,[r11+3]` at `0x4B61` supply `DmaWidth = 2` and
+`InterfaceType = 5`.)
+
+**Windows 7 has two call sites, and the second asks for a 64-bit adapter** - x86
+`0x1543E` and `0x155E8` (IAT RVA `0x28060`), amd64 `0x43ED` and `0x4670` (IAT
+RVA `0x30040`). The first is the Vista descriptor above, unchanged - x86
+`mov byte ptr [ebp-58h],1` at `0x1541B` is `Dma32BitAddresses` - and its adapter
+goes to `FdoExtension+0x5C4` (x86). The second sets **`Dma64BitAddresses` at
+`+0x0B`** and leaves `Dma32BitAddresses` zero: x86 `mov byte ptr [ebp-55h],1` at
+`0x155C5`, amd64 `mov byte ptr [rsp+9Bh],r14b` at `0x463D`, where `r14b` is the
+same register that supplies `Master` and `ScatterGather` two stores earlier.
+`InterfaceType = 5` and `DmaWidth = 2` as before, and the adapter goes to
+`FdoExtension+0x5CC` (x86).
+
+That second call is gated, and the gate is the miniport's own declared version.
+On x86 the test is a small routine at RVA `0x13200`:
+
+```
+  mov   eax,dword ptr [esi+328h]        ; the USBPORT_MINIPORT_INTERFACE
+  cmp   dword ptr [eax+10h],136h        ; interface Version >= 310 ?
+  jb    -> return 0xC0000002 (STATUS_NOT_IMPLEMENTED), flag left alone
+  add   eax,214h                        ; = packet + 0x1F8 (the packet is at +0x1C)
+  cmp   dword ptr [eax],0               ; is that callback slot filled ?
+  je    -> return 0xC0000002
+  call  dword ptr [eax]                 ; ask the miniport
+  ...   mov dword ptr [esi+628h],eax    ; FdoExtension+0x628 = the answer
+```
+
+and the caller reads `FdoExtension+0x628` at `0x1559C`: when it is zero it jumps
+to `0x15610` and **copies the 32-bit adapter and its map-register count into the
+64-bit slots** instead of creating a second adapter. The amd64 test is the same
+thing inlined: `cmp dword ptr [rax+20h],136h`, then `cmp qword ptr
+[rax+3D0h],r15` - interface `Version` at `+0x20` and packet at `+0x38`, so
+`+0x3D0` is packet `0x398`, which is exactly the extra slot Windows 7's own
+amd64 `usbehci.sys` fills. The flag lands in `FdoExtension+0x84C`.
+
+`xhci98.sys` registers with `USB20_MINIPORT_INTERFACE_VERSION` (200) and
+declares a `0x13C` packet with nothing at `0x1F8`, so **on Windows 7 the 64-bit
+adapter path is unreachable for it**: usbport creates the 32-bit adapter, finds
+the flag zero, and uses that one adapter for both roles. The sentence this
+document already carries therefore still holds on 6.1 - the high DWORD of a
+mapped address is zero because the adapter is created 32-bit - but it now holds
+*for this driver's declared version* rather than for every miniport on the
+system, which is a materially weaker statement than the one NT 5.x supports.
+The miniport rule is unchanged and is what covers the difference: the high DWORD
+is a value to check, never to assume (`src/xhci_xfer.c:542`).
+
 ## 2. Constants
 
 ### Interface versions and packet version [usbmport.h:526-529, 636-637]
@@ -481,7 +695,10 @@ when disassembling `USBPORT_RegisterUSBPortDriver`.
 
 That wrapper layout is not the same in every build, and only the wrapper
 differs. The ReactOS/Win2000/XP shape above puts the packet at +0x14; NUSB's
-`USBPORT.SYS` puts it at +0x10, having no `Version` field there. So an
+`USBPORT.SYS` puts it at +0x10, having no `Version` field there; Vista and
+Windows 7 x86 put it at +0x1C, and the two 64-bit lineages at +0x28 (NT 5.2
+amd64) and +0x38 (6.0 and 6.1 amd64) - see the 6.0/6.1 subsection in section
+1. So an
 indirect call read out of a disassembly must be converted to a packet offset
 per binary: `interface+0x13C` and `interface+0x138` are the same slot 0x128
 in different builds. Worked example, discriminators and evidence:

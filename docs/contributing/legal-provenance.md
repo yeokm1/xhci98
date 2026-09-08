@@ -325,6 +325,29 @@ and the registration function's version gate and its two copied packet sizes,
 `0x250` and `0x230`. Nothing was executed and no 64-bit binary of this driver
 exists; no file from that media is tracked.
 
+Since 2026-09-09 it reads two more lineages, in both architectures: the
+`usbport.sys` and `usbehci.sys` of Windows Vista SP2 (6.0.6002.18005,
+`lh_sp2rtm.090410-1830`) and Windows 7 Professional SP1 (6.1.7601.17514,
+`win7sp1_rtm.101119-1850`), and - for the x86 pair only - those systems'
+`ntoskrnl.exe` and `hal.dll`, whose export tables are what an import check
+resolves against. All eight came out of the `sources\install.wim` of the project
+owner's own retail media, mounted read-only with `Mount-DiskImage` and opened
+with 7-Zip: routine unpacking of shipped media, section 1's recorded case, with
+nothing copied out of the ISOs but the eight files and nothing written back.
+They live git-ignored in `tools/vista-x86-extracted/`, `tools/vista-x64-extracted/`,
+`tools/win7-x86-extracted/` and `tools/win7-x64-extracted/`. Method **static**
+throughout, with the same tools as the NT 5.2 amd64 work: `link /dump` for
+exports, headers and imports, and `cdb.exe -z` for the function bodies. What was
+established (Phase 21 task 21.7, Phase 22 tasks 22.1 and 22.2; design record 11
+sections 3 and 6, and the ABI document's "The 6.0 and 6.1 lineages"): the export
+table gained a fourth name and the ordinals shifted; `USBPORT_GetHciMn` still
+returns `0x10000001`; the registration gate and the `Version >= 200` packet size
+are unchanged in both architectures; the `USBPORT_RESOURCES` prefix and the 50
+miniport callback slots are unchanged; Windows 7 has a second, 64-bit DMA
+adapter behind a `Version >= 310` gate; and every import the shipping 32-bit
+`xhci98.sys` names resolves, in the right module, in both x86 kernels. Nothing
+was executed, no guest was booted, and no file from that media is tracked.
+
 The toolchain that reads them is third-party material on the same terms.
 WDK 7.1 (`GRMWDK_EN_7600_1.ISO`, 649,877,504 bytes, SHA-256
 `5edc723b50ea28a070cad361dd0927df402b7a861a036bbcf11d27ebba77657d`, from the

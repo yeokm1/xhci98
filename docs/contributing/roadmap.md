@@ -70,7 +70,10 @@ is the 64-bit question - one NT 5.2 amd64 binary for Windows XP x64 and
 Server 2003 x64, which needs a second toolchain before it needs anything
 else. **Phase 22** is the 32-bit one - whether the binary that already ships
 runs on Windows Vista and Windows 7 as it stands, which needs no build at
-all. They share the Vista and Windows 7 media and nothing else.
+all. They share the Vista and Windows 7 media and nothing else, and the one
+pass they share was taken on 2026-09-09: the static ABI read of both
+operating systems in both architectures, which passes everywhere and leaves
+each phase with its own guests and, for 21, its own toolchain.
 
 ---
 
@@ -1614,8 +1617,15 @@ amd64 import library were needed. It answers the question it was taken for:
 known end. It also found one thing nobody was looking for -
 **`USBPORT_ENDPOINT_PROPERTIES` changes size on amd64 and none of M1-M6
 measured it** - which adds a reading to 21.4. Design record 11 section 8, "The
-compile scout", has it. Nothing else in the phase has started, and no binary
-exists.
+compile scout", has it. Task 21.7 is complete as of 2026-09-09: the same six
+measurements taken on Vista x64 and Windows 7 x64, and **all six pass on
+both**, so one `WNET` amd64 binary can serve them too and nothing here
+narrows to Windows XP x64 and Server 2003 x64. It cost only the extraction,
+and it found one thing worth carrying: **Windows 7's usbport has a second
+`IoGetDmaAdapter` call that asks for a 64-bit adapter**, reachable only by a
+miniport declaring `Version >= 310`, which is the one path by which a future
+change here could move physical addresses above 4 GB. Nothing else in the
+phase has started, and no binary exists.
 
 **Suggested running order, and nothing in it needs the owner** - WDK 7.1 is
 unpacked, the reference binaries are extracted, and none of the five open
@@ -1764,24 +1774,31 @@ are static readings and no other task's box may be ticked on one.
 - [ ] **21.6 - the record.** The tier stated where Windows ME and 32-bit XP
       are stated, in `AGENTS.md`, `build-and-test.md`, `win98-wdm.md` and the
       release notes, with the provenance rows beside it.
-- [ ] **21.7 - the same six measurements on Vista x64 and Windows 7 x64**,
-      which decides whether one `WNET` amd64 binary serves them too (design
-      record 11 section 6). Extraction and disassembly only: no VM, no build,
-      and no dependency on any other task here, so it can be taken whenever
-      the media is to hand. A difference in any of the six narrows the claim
-      to Windows XP x64 and Server 2003 x64 rather than blocking it, so
-      nothing else in this phase waits on it.
-  - [ ] Vista x64 - `usbport.sys` and `usbehci.sys` extracted, hashed,
-        version-stamped, and the six read
-  - [ ] Windows 7 x64 - the same
-  - [ ] whichever way they read, recorded: the tier claimed, and the two
-        things true of both regardless (kernel-mode code signing, and the
-        driver-store install path the `LayoutFile` route was not written for)
-  - [ ] **take the `i386` halves in the same pass** and hand them to task
-        22.1. The same media carries both architectures, so the marginal cost
-        of the 32-bit read is the disassembly alone - and the signing note
-        above is x64-only, which is exactly what makes Phase 22 the cheaper
-        of the two Vista/7 questions
+- [x] **21.7 - the same six measurements on Vista x64 and Windows 7 x64.**
+      Read 2026-09-09, extraction and disassembly only, no VM and no build.
+      **All six pass on both**, so one `WNET` amd64 binary can serve them as
+      far as this interface goes and the claim is not narrowed. Design record
+      11 section 6 has the outcome and its consequences; the transcription is
+      in `usb-xhci-info/usbport-miniport-abi.md`, "The 6.0 and 6.1 lineages".
+      Method `static` throughout.
+  - [x] Vista x64 - `usbport.sys` and `usbehci.sys` extracted from
+        `sources\install.wim` image 1, hashed, version-stamped
+        (6.0.6002.18005), and the six read
+  - [x] Windows 7 x64 - the same, 6.1.7601.17514
+  - [x] recorded, and three differences from NT 5.2 amd64 with them, none of
+        which reaches a miniport that registers with `Version = 200`: a fourth
+        export (`DllInitialize`) shifting all three ordinals, two further
+        packet version tiers above `0x250`, and - on 6.1 only - **a second
+        `IoGetDmaAdapter` call that asks for a 64-bit adapter**, gated on the
+        miniport declaring `Version >= 310` and filling packet slot `0x398`.
+        The tier claimed is unchanged, and so are the two things true of both
+        regardless: kernel-mode code signing, and the driver-store install
+        path the `LayoutFile` route was not written for - though the media
+        also shows both systems shipping `usbport.sys`, `usbhub.sys`,
+        `usbd.sys` and `usbehci.sys` in `System32\drivers` outright, which is
+        the opposite of an xHCI-only XP or 2000 install
+  - [x] **the `i386` halves taken in the same pass** and handed to task 22.1,
+        together with each system's `ntoskrnl.exe` and `hal.dll` for task 22.2
 
 Checkpoint. Every clause, or the phase is not closed:
 
@@ -1809,7 +1826,15 @@ on 32-bit Windows Vista and 32-bit Windows 7 - settled from the shipping
 `usbport.sys` first and guests second - and, if it does, its standing stated
 in every document that names the targets.
 
-Status: open, 2026-09-08, on the owner's instruction. Nothing has started.
+Status: open, 2026-09-08, on the owner's instruction. Tasks 22.1 and 22.2
+are complete as of 2026-09-09, taken in one pass with 21.7 off the same
+media: the six measurements on 6.0 and 6.1 x86 all pass, `USBPORT_GetHciMn`
+returns the value this driver already accepts, and every import the shipping
+binary names resolves in the right module on both systems. So **nothing read
+statically argues against the existing 32-bit binary on Vista or Windows 7,
+and task 22.5 has no work from either.** What is left is entirely the guest
+half - 22.3 and 22.4 - which is where the two hard parts below live and where
+the unsigned-driver assumption is confirmed or refuted.
 
 Why a phase, and why it is a different one from 21: **this asks nothing of
 the toolchain.** Phase 21 needs a second DDK, a second import library and an
@@ -1832,21 +1857,28 @@ Two things make it cheaper than 21's 64-bit leg:
   on the table. It is Windows 8 that replaces it for xHCI, and Windows 8 is
   not in scope here.
 
-Two make it harder, and both are already written down as consequences of
-Phase 21's reading:
+Two made it harder, both written down as consequences of Phase 21's reading.
+The second is settled as of 2026-09-09; the first is not, and is now the whole
+of the phase's risk:
 
 - **They stage driver packages into the driver store**, which the INF's
   `LayoutFile` route was not written for. That route is Phase 19's fix - the
   NT install path pulling `usbport.sys`, `usbd.sys` and `usbhub.sys` from the
   operating system's own cache, because an xHCI-only NT install has none of
   them on disk. Whether that mechanism survives into 6.0 and 6.1 is a
-  reading, not a deduction.
-- **`USBPORT_GetHciMn` has changed across lineages before.** The 5.0 -> 5.1
+  reading, not a deduction. One half of it looks easier than it did: both
+  install images carry all four Microsoft USB files in `System32\drivers`
+  outright, so every `COPYFLG_NO_OVERWRITE` copy should skip and never need a
+  source. What that does not answer is the driver store's own validation of
+  the package's file list, which is the part no static reading reaches.
+- **`USBPORT_GetHciMn` has changed across lineages before - settled
+  2026-09-09, and it did not change here.** The worry was real: the 5.0 -> 5.1
   step kept the registration packet byte-identical and *still* changed the
-  value. A new constant on 6.0 or 6.1 means a fourth arm on the refusal at
-  `src/xhci_dispatch.c:4640` - and unlike the XP x64 case, where M2 came back
-  already-accepted, that would be a code change to the **shipping 32-bit
-  binary**, with all four existing install legs to re-validate behind it.
+  value, and a fourth constant on 6.0 or 6.1 would have been a fourth arm on
+  the refusal at `src/xhci_dispatch.c:4640` - a code change to the **shipping
+  32-bit binary**, with all four existing install legs to re-validate behind
+  it. Both 6.0 and 6.1 return `0x10000001`, which that refusal already
+  accepts. Task 22.1 has the reading.
 
 Tier, if the phase closes yes: supported in virtual machines, stated the way
 Windows ME and 32-bit XP are. **No checkpoint tax.** No phase waits on a
@@ -1857,29 +1889,59 @@ small and low-risk, never at a primary target's expense.
 Tasks. A box is ticked only on the evidence its line names, and a static
 reading may not tick a box whose line names a guest.
 
-- [ ] **22.1 - the static ABI pass on 6.0 and 6.1 x86.** The six measurements
-      of 21.1, against 32-bit Vista and Windows 7 `usbport.sys` and
-      `usbehci.sys`. Extraction and disassembly only: no VM, no build.
-      **Share the pass with 21.7** - the same media carries both
-      architectures, and taking `i386` while the ISO is open costs nothing
-      extra. On Vista and 7 the media is WIM-based rather than a flat
-      directory, so extraction goes through `install.wim`; 7-Zip opens WIMs
-      directly.
-  - [ ] Vista x86 - `usbport.sys` and `usbehci.sys` extracted, hashed,
-        version-stamped, and the six read
-  - [ ] Windows 7 x86 - the same
-  - [ ] **M2 recorded either way.** A value the driver already accepts closes
-        the question; a new one becomes task 22.5's code change
-- [ ] **22.2 - the imports.** Whether every import the shipping binary names
-      still resolves on 6.0 and 6.1. `scripts\import-gate\` resolves against
-      Windows 2000 and XP baselines today and has nothing to say about these;
-      the answer is readable statically from their `ntoskrnl.exe` and
-      `hal.dll` export tables. Imports are a silent load-time gate, so this is
-      worth knowing before a guest exists rather than after one shows Code 2.
+- [x] **22.1 - the static ABI pass on 6.0 and 6.1 x86.** Taken 2026-09-09 in
+      one pass with 21.7, extraction and disassembly only. **All six pass on
+      both**, and the transcription is in
+      `usb-xhci-info/usbport-miniport-abi.md`, "The 6.0 and 6.1 lineages".
+      Method `static` throughout. Nothing here implies a driver change, so
+      task 22.5 has no work from this task.
+  - [x] Vista x86 - `usbport.sys` and `usbehci.sys` extracted from
+        `sources\install.wim` image 1 (`Windows Vista Business`), hashed,
+        version-stamped 6.0.6002.18005, and the six read
+  - [x] Windows 7 x86 - the same, 6.1.7601.17514
+  - [x] **M2 recorded: `USBPORT_GetHciMn` returns `0x10000001` on both** -
+        the XP-lineage value `src/xhci_dispatch.c:4640` already accepts. No
+        fourth constant, and no code change to the shipping binary
+  - [x] and the differences the pass did find, none of which reaches this
+        driver as it is built today: a fourth export (`DllInitialize`) that
+        shifts all three ordinals but is bound by name and so is inert; two
+        packet version tiers above `0x13C`, whose extra service-pointer stores
+        sit behind the version tests so a `Version = 200` packet is never
+        written past `0x120`; a `USBPORT_RESOURCES` that keeps every field
+        this driver reads at its NT 5.x offset while growing a tail past
+        `0x34`, which means its `sizeof` is not a fact about 6.0 or 6.1; the
+        usbport-internal wrapper moving the packet to `interface+0x1C`, which
+        no miniport reads; and the one to remember - **Windows 7's usbport has
+        a second `IoGetDmaAdapter` call that passes `Dma64BitAddresses = 1`**,
+        reached only by a miniport declaring `Version >= 310` *and* filling
+        packet slot `0x1F8`. This driver declares 200 and fills neither, so
+        usbport copies its 32-bit adapter into the 64-bit slot and there is
+        one 32-bit adapter as on every earlier lineage. Raising the declared
+        version some day is the one change that would move physical addresses
+        above 4 GB, and `src/xhci_xfer.c:542`'s high-DWORD check is what
+        stands between that and corruption
+- [x] **22.2 - the imports.** Read 2026-09-09 from the two systems'
+      `ntoskrnl.exe` and `hal.dll`, extracted in the same pass. **All ten
+      module/symbol pairs the shipping binary can name resolve, in the right
+      module, on both**: the five `ntoskrnl.exe` rows (`DbgPrint`,
+      `InterlockedIncrement`, `KeInitializeSpinLock`, `READ_REGISTER_ULONG`,
+      `WRITE_REGISTER_ULONG`), the four `HAL.dll` rows (`KeStallExecutionProcessor`,
+      `KeGetCurrentIrql`, `KfAcquireSpinLock`, `KfReleaseSpinLock`) and, though
+      it is never published, `HAL.dll!WRITE_PORT_UCHAR` for the `qemu` flavour.
+      Every one is a real code export with an RVA rather than a forwarder. The
+      `USBPORT.SYS` pair is covered by 22.1's M1. `scripts\import-gate\` still
+      has no 6.0/6.1 baseline behind it and this reading does not add one; it
+      answers the question ahead of a guest, which is the point of taking it.
 - [ ] **22.3 - the install path, read statically off a clean guest.** The two
       cheap readings 21.5 took for XP x64, on each of these:
   - [ ] whether an xHCI-only Vista/7 install has `usbport.sys`, `usbhub.sys`,
-        `usbd.sys` or `usbehci.sys` on disk at all
+        `usbd.sys` or `usbehci.sys` on disk at all. **A strong prior, but not
+        this box:** all four are in `Windows\System32\drivers` inside the
+        `install.wim` of both systems in both architectures (read 2026-09-09
+        with 22.1), and Vista and later apply the whole image rather than
+        copying drivers on demand the way XP Setup does. That is a reading of
+        the install media, not of an installed system, so the box stays open
+        until a guest is looked at
   - [ ] where the operating system keeps them if it does not, and whether the
         `LayoutFile` route can still reach them from a driver-store install
 - [ ] **22.4 - the guests.** One Vista x86 and one Windows 7 x86 QEMU guest,

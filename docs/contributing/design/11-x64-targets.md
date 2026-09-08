@@ -42,8 +42,9 @@ one-binary property `docs/using/release-notes.md` states, and buys nothing.
 
 What remains is one question with two halves: can this driver register with a
 64-bit `usbport.sys` at all, and if so, does one NT 5.2 amd64 binary also
-serve Vista x64 and Windows 7 x64? Section 5 answers the first for the three
-cheapest measurements and leaves three open. Section 6 covers the second.
+serve Vista x64 and Windows 7 x64? Section 5 answers the first: all six
+measurements taken, all six pass. Section 6 answers the second the same way,
+with three recorded differences that a Version-200 miniport never reaches.
 
 ---
 
@@ -107,6 +108,62 @@ decision. Two rules bind what happens next, and neither is optional:
 - **Every fact here is tagged `static`** - read from a disassembly, nothing
   executed - with its row in `legal-provenance.md` section 4. A reading is
   not upgraded to `runtime` because a VM later happens to boot.
+
+### The Vista and Windows 7 material (tasks 21.7 and 22.1)
+
+Eight more files, extracted 2026-09-09 from the project owner's own Windows
+Vista SP2 and Windows 7 Professional SP1 media, in one pass covering both
+architectures because the marginal cost of the second one is the disassembly
+alone. Vista's `install.wim` carries seven editions and Windows 7's one; the
+files below were taken from image 1 (`Windows Vista Business` 6.0.6002.18005;
+`Windows 7 Professional` 6.1.7601.17514) and `usbport.sys` was checked to be
+byte-identical in another Vista edition's image, which is what a WIM's shared
+resources imply and worth one hash to confirm.
+
+| Directory | File | Size | Version | SHA-256 |
+|---|---|---|---|---|
+| `tools/vista-x86-extracted/` | `usbport.sys` | 226,304 | 6.0.6002.18005 (`lh_sp2rtm.090410-1830`) | `c8b660e4afaf8a070e758f98f77f741b5a63c9772c550becab798fc45e5a7522` |
+| | `usbehci.sys` | 39,936 | same | `eb441d3b93965cd927e0c181031ad1082f59f9885bf35cabfdca08c6c76b0daf` |
+| | `ntoskrnl.exe` | 3,549,672 | same | `45c9cb0604b9da7ba15e8824ff4b446064ab40ffa8412679a49ec16eaf36f7fc` |
+| | `hal.dll` | 177,128 | same (internal name `halmacpi.dll`) | `b6d9de353b13e61eaccdc41eb73043919b7f3cb232756233f0d732071023afe8` |
+| `tools/vista-x64-extracted/` | `usbport.sys` | 259,584 | 6.0.6002.18005 | `a8efc84cd937906c87146ef0d3fa2326c16d75c59a12cc6e6fe05394313df5e1` |
+| | `usbehci.sys` | 49,664 | same | `0d158916645f782bdeff0be708ca7f4d77f762b9be6263b6608c11abb5f4ff9f` |
+| `tools/win7-x86-extracted/` | `usbport.sys` | 284,672 | 6.1.7601.17514 (`win7sp1_rtm.101119-1850`) | `abec8cc91704d13f11bfaa10c33de046653a40981e3687d601c74df0b19bcb88` |
+| | `usbehci.sys` | 42,496 | same | `d60698eaa8a085214d5945818b0863976cf116ebe523046c344af4e9392fdf80` |
+| | `ntoskrnl.exe` | 3,911,040 | same | `d74e389d1a3ed4c79ffc7c0af1c092102f13e67168ab66a9296cdde62a2c6cf8` |
+| | `hal.dll` | 194,432 | same (internal name `halmacpi.dll`) | `f8b007e41157452e8c2d262f37260eb662cb2099e22acffdf9d89836a6290264` |
+| `tools/win7-x64-extracted/` | `usbport.sys` | 325,120 | 6.1.7601.17514 | `e7fe3ec3da3cabdbbe2c23baa5fe3cd64da01ff73b4b4c2f077224a607e688dd` |
+| | `usbehci.sys` | 52,224 | same | `e8258ea65b0fcad4e077b176e9d9324646b652d6e651241e397346a39770d065` |
+
+The kernel and HAL images are for task 22.2 and are x86 only: there is no
+64-bit binary of this driver whose imports could be checked. The `hal.dll` in
+`System32` of both install images is the ACPI multiprocessor HAL - the variant
+a QEMU guest gets - which is what its version resource says; Setup places the
+matching variant under that name.
+
+Extraction, host-side, no VM and no `qemu-img`. Vista and Windows 7 media are
+WIM-based rather than the flat `I386`/`AMD64` directory the XP media has, so the
+route is one level deeper, and the ISO can be mounted rather than copied:
+
+```powershell
+$r = Mount-DiskImage -ImagePath "D:\isos\en_windows_7_professional_with_sp1_vl_build_x86_dvd_u_677896.iso" -PassThru
+($r | Get-Volume).DriveLetter        # F, below
+```
+```bat
+7z e "F:\sources\install.wim" -otools\win7-x86-extracted ^
+     "Windows\System32\drivers\usbport.sys" "Windows\System32\drivers\usbehci.sys" ^
+     "Windows\System32\ntoskrnl.exe" "Windows\System32\hal.dll"
+```
+
+On Vista, whose WIM holds seven images, every path takes an image-index prefix
+(`1\Windows\System32\...`). 7-Zip 26.00 opens both WIMs directly and no
+`dism` (which wants elevation) is needed; the edition names come from the WIM's
+own XML, which is stored uncompressed at the offset in the WIM header at
+`0x48`. `Dismount-DiskImage` afterwards.
+
+The same two rules bind this material as the XP x64 material above: nothing
+extracted is tracked, and every fact taken from it is tagged **static** with its
+row in `legal-provenance.md` section 4.
 
 ### The tool, which is not the one the 32-bit record used
 
@@ -396,47 +453,89 @@ today, read that slot rather than trusting the inference.
 
 ---
 
-## 6. Vista and Windows 7 x64
+## 6. Vista and Windows 7 x64 - read 2026-09-09, and the answer is yes
 
-Every measurement above is a static read of two files, so repeating it on
-Vista x64 and Windows 7 x64 costs extraction time and nothing else, and
-answers whether one NT 5.2 amd64 binary also serves them.
+Every measurement in section 5 is a static read of two files, so repeating it on
+Vista x64 and Windows 7 x64 cost extraction time and nothing else. It was taken
+on 2026-09-09 (task 21.7), in one pass with the `i386` halves of the same media
+that task 22.1 needed, and **all six measurements pass on both**. The
+transcription is in `usb-xhci-info/usbport-miniport-abi.md`, "The 6.0 and 6.1
+lineages"; this section states what it means for the plan.
 
-M3's outcome improves the prior but does not settle it. Vista and Windows 7
-still ship `usbehci.sys`, `usbohci.sys` and `usbuhci.sys` as usbport
-miniports; `usbport.sys` survives to 6.1 and is only displaced by the
-Windows 8 UCX model (`Ucx01000.sys`, `Usbxhci.sys`, `Usbhub3.sys`), which
-`docs/usb-xhci-info/win98-wdm.md` surveys. Against that, the 5.0 to 5.1 step
-kept the packet byte-identical and *still* changed the `GetHciMn` value.
-That precedent is the reason this stays a measurement.
+| | Vista x64 | Windows 7 x64 | vs NT 5.2 amd64 |
+|---|---|---|---|
+| M1 exports | 4 names, ordinals 1-4 | 4 names, ordinals 1-4 | **differs**: `DllInitialize` added at ordinal 1, shifting the other three |
+| M2 `USBPORT_GetHciMn` | `0x10000001` | `0x10000001` | same, and already accepted |
+| M3 gate / `Version >= 200` size | `>= 100`, `0x250` | `>= 100`, `0x250` | same; two further tiers added above |
+| M4 `USBPORT_RESOURCES` | prefix identical, `StartPA` a DWORD at `0x40` | same | same through `0x48`; the structure grows a tail |
+| M5 DMA adapter | 32-bit, one call site | 32-bit for a Version-200 miniport; a second, 64-bit adapter exists behind a version gate | **differs on 6.1**, harmlessly for this driver |
+| M6 offset map | 50 slots, all on `f(X)` | 50 slots, all on `f(X)` | same |
 
-Two things are true of Vista and Windows 7 x64 regardless, and both belong in
-the record before anyone builds a guest:
+So **one `WNET` amd64 binary can serve Vista x64 and Windows 7 x64 as far as
+this interface is concerned**, and the claim in task 21.6 does not have to be
+narrowed to Windows XP x64 and Server 2003 x64 on ABI grounds. Nothing else in
+the phase waited on this, and nothing in it changes 21.2 or 21.4.
 
-- **Kernel-mode code signing.** Windows XP x64 does not enforce it: an
-  unsigned driver installs with a warning and loads, which is why it is the
-  target this phase takes. Vista x64 and Windows 7 x64 do enforce it, and the
+Four things are worth carrying forward, in descending order of how much they
+could cost:
+
+- **Windows 7's usbport can create a 64-bit DMA adapter, and does not for us.**
+  It has two `IoGetDmaAdapter` call sites; the second passes
+  `Dma64BitAddresses = 1`. It is reached only when the miniport registered with
+  `Version >= 310` *and* filled the packet slot at `0x1F8` (x86) / `0x398`
+  (amd64) - Windows 7's own `usbehci.sys` fills it, and this driver does neither.
+  When the gate fails, usbport copies the 32-bit adapter into the 64-bit slot
+  and there is one adapter as before. This is the one place where a future
+  change - raising the declared interface version to get at something in the
+  version-300 region - would silently move physical addresses above 4 GB. The
+  existing high-DWORD check at `src/xhci_xfer.c:542` is what stands between that
+  and corruption, and this reading is the reason not to remove it.
+- **`USBPORT_RESOURCES` is longer than `0x48` on both.** Vista x64's
+  `usbehci.sys` reads fields at `0x50`, `0x58`, `0x90` and `0x94`; Windows 7
+  x64's at `0x50`, `0x90` and `0xC0`. usbport owns the allocation, so reading a
+  prefix stays safe, but the `sizeof` this driver declares is not the operating
+  system's on 6.0 or 6.1, and no assertion may claim otherwise.
+- **A fourth export shifts every ordinal.** The import library binds by name, so
+  nothing breaks; it is recorded so that a future reader of an ordinal-based
+  disassembly is not misled.
+- **The packet has four version tiers, not two.** At `Version = 200` usbport
+  copies `0x250` bytes and writes nothing into the caller's packet above
+  `0x218`, exactly as NT 5.2 amd64 does. The higher tiers' extra service
+  pointers are behind the version tests.
+
+Two things are true of Vista x64 and Windows 7 x64 regardless, unchanged by
+these readings, and both belong in the record before anyone builds a guest:
+
+- **Kernel-mode code signing.** Windows XP x64 does not enforce it: an unsigned
+  driver installs with a warning and loads, which is why it is the target this
+  phase takes. Vista x64 and Windows 7 x64 do enforce it, and the
   cross-certificate route that once made third-party Windows 7 x64 signing
   possible is no longer available in practice. Supporting those two means,
-  permanently, a guest booted with driver signature enforcement disabled (F8)
-  or with test-signing on. That goes in the release notes beside the tier,
-  not in a footnote.
+  permanently, a guest booted with driver signature enforcement disabled (F8) or
+  with test-signing on. That goes in the release notes beside the tier, not in a
+  footnote.
 - **The install path is different.** The INF's `LayoutFile=layout.inf` route,
   which is how the media carries no Microsoft file, is a Windows 2000 and XP
-  mechanism. Vista and later stage a driver package into the driver store
-  before installing it and validate its file list more strictly. Both ship
-  `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll` on disk already, so
-  `COPYFLG_NO_OVERWRITE` should skip every one of those copies and never need
-  a source - but "should" is doing work in that sentence and it has never been
-  tested. It is answerable only in a guest, and it is why Vista and 7 are a
-  second leg rather than free riders on the first.
+  mechanism. Vista and later stage a driver package into the driver store before
+  installing it and validate its file list more strictly. One thing read off the
+  media in the same pass makes this look easier than it did: both install images
+  carry `usbport.sys`, `usbehci.sys`, `usbhub.sys` and `usbd.sys` in
+  `Windows\System32\drivers` outright, in every architecture, so a Vista or
+  Windows 7 machine has them from its first boot whatever controllers it has -
+  the opposite of XP and 2000, where an xHCI-only install has none of them and
+  Phase 19's `LayoutFile` fix exists for exactly that. Every
+  `COPYFLG_NO_OVERWRITE` copy should therefore skip and never need a source.
+  "Should" is still doing work in that sentence: this is a reading of the
+  install image, not of an installed system, and the driver store's own
+  validation of the package's file list is not answered by it at all. It stays a
+  guest question (task 22.3 and 22.4).
 
 Windows 7 x64 is also the weakest of the three on merit:
-`docs/usb-xhci-info/win98-wdm.md` records that Intel's xHCI driver line
-*begins* at Windows 7. The genuine gap there is the newer PCH and SoC silicon
-Intel never shipped a Windows 7 driver for, which plausibly includes this
-project's own Skylake and Comet Lake machines but has not been checked.
-Windows XP x64 has the same total absence of options that 32-bit XP does.
+`docs/usb-xhci-info/win98-wdm.md` records that Intel's xHCI driver line *begins*
+at Windows 7. The genuine gap there is the newer PCH and SoC silicon Intel never
+shipped a Windows 7 driver for, which plausibly includes this project's own
+Skylake and Comet Lake machines but has not been checked. Windows XP x64 has the
+same total absence of options that 32-bit XP does.
 
 ---
 
@@ -451,7 +550,7 @@ The gate as written before any measurement, with what actually happened:
 | M2 gives a third constant; M3-M6 correspond to the x86 record widened | Proceed | Better than this: M2 gave a value the driver already accepts, and M6 confirmed the widening across 50 slots |
 | M4 shows `StartPA` widened, or any field where the compiler's natural layout disagrees with the binary | Proceed, but the declaration needs explicit padding and the asserts must carry measured numbers | `StartPA` did **not** widen and `USBPORT_RESOURCES` agrees with the natural layout; the packet does not, and is `0x250` against a natural `0x248` |
 | M5 shows a 64-bit adapter | Proceed with a `StartPA` high-DWORD refusal added first, and keep the guest under 4 GB until it has been exercised | Did not happen; the adapter is created 32-bit, `DmaWidth = Width32Bits` |
-| Vista / Windows 7 differ from 5.2 | Claim Windows XP x64 and Server 2003 x64 only, and record what differs | Open - their binaries have not been read |
+| Vista / Windows 7 differ from 5.2 | Claim Windows XP x64 and Server 2003 x64 only, and record what differs | Read 2026-09-09; all six pass on Vista x64 and Windows 7 x64, so the claim is not narrowed. Three differences recorded and none of them reaches a Version-200 miniport: a fourth export shifting the ordinals, two further packet version tiers, and - on 6.1 only - a second, 64-bit DMA adapter behind a `Version >= 310` gate. See section 6 |
 
 **All six measurements are taken and all six pass.** The static pass set out
 to find a reason this cannot work on Windows XP x64 and Server 2003 x64, and
@@ -804,7 +903,9 @@ download would carry two.
 
 1. Whether the tier is Windows XP x64 and Server 2003 x64 only, or also
    Vista x64 and Windows 7 x64, given that those two require a guest with
-   driver signature enforcement disabled, permanently and by design.
+   driver signature enforcement disabled, permanently and by design. The ABI
+   half of this is now settled and does not narrow the claim (section 6); what
+   is left is the signing decision and two more guests.
 2. One INF with a third install path and a four-leg re-validation, or a
    separate x64 package leaving `src/xhci98.inf` untouched.
 3. Whether WDK 7.1 stays in the tree as a third toolchain, and from which
@@ -832,7 +933,9 @@ download would carry two.
   wording, the `GetHciMn` lineage difference, and the vendor xHCI driver
   survey.
 - `docs/contributing/roadmap.md` Phase 19 (the template for adding a
-  VM-supported target) and Phase 21 (this record's tasks).
+  VM-supported target), Phase 21 (this record's tasks) and Phase 22, whose
+  tasks 22.1 and 22.2 were taken in the same pass as 21.7 off the same media
+  and whose static half section 6 therefore also settles.
 - `docs/contributing/legal-provenance.md` sections 1 and 4: routine
   unpacking, and the static tagging every fact here carries.
 - `docs/contributing/design/04-controller-common-buffer.md`: the arithmetic
