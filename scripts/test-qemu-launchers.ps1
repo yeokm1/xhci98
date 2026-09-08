@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Regression tests for the Win98, Win2000, Windows XP and xHCI-only Win2000 QEMU launcher generators.
+Regression tests for the Win98, Win2000, Windows XP, xHCI-only Win2000 and Windows XP x64 QEMU launcher generators.
 
 .DESCRIPTION
 Generates launchers against stand-in QEMU executable files. QEMU is never
@@ -15,10 +15,11 @@ must be left alone. A launch that dies before QEMU writes anything leaves a
 zero-byte log behind, and rotating that unconditionally would push the last
 real trace out of <target>-debugcon.previous.log and replace it with nothing.
 
-All five VMs are covered because the phases close on comparisons between them:
+All six VMs are covered because the phases close on comparisons between them:
 the traces must land in separate files, and each must belong to one boot.
 (The Windows XP guest is the fourth and the xHCI-only Windows 2000 guest the
-fifth, both since roadmap Phase 19.)
+fifth, both since roadmap Phase 19; the Windows XP x64 guest is the sixth,
+since roadmap Phase 21.)
 #>
 
 [CmdletBinding()]
@@ -33,7 +34,8 @@ $targets = @(
     @{ Name = "Win2000"; Setup = "setup-qemu-win2k.ps1";   Launcher = "qemu-win2k-run.cmd"; LogBase = "win2k-debugcon" },
     @{ Name = "Win2000SMP"; Setup = "setup-qemu-win2k-smp.ps1"; Launcher = "qemu-win2k-smp-run.cmd"; LogBase = "win2k-smp-debugcon" },
     @{ Name = "WinXP";  Setup = "setup-qemu-winxp.ps1";    Launcher = "qemu-winxp-run.cmd"; LogBase = "winxp-debugcon" },
-    @{ Name = "Win2000XOnly"; Setup = "setup-qemu-win2k-xonly.ps1"; Launcher = "qemu-win2k-xonly-run.cmd"; LogBase = "win2k-xonly-debugcon" }
+    @{ Name = "Win2000XOnly"; Setup = "setup-qemu-win2k-xonly.ps1"; Launcher = "qemu-win2k-xonly-run.cmd"; LogBase = "win2k-xonly-debugcon" },
+    @{ Name = "WinXP64"; Setup = "setup-qemu-winxp64.ps1"; Launcher = "qemu-winxp64-run.cmd"; LogBase = "winxp64-debugcon" }
 )
 $work = Join-Path ([System.IO.Path]::GetTempPath()) `
     ("xhci98-qemu-launcher-test-" + [System.IO.Path]::GetRandomFileName())
@@ -145,6 +147,55 @@ try {
             Assert-True ($text.Contains('if not exist "%WIN2K_ISO%"') -and $text.Contains('set "CDROM="')) `
                 "the xHCI-only Windows 2000 run launcher does not boot without the CD when the ISO is absent."
         }
+        if ($name -eq "WinXP64") {
+            # build-and-test.md, "Windows XP x64 target VM". Same WHPX/ACPI
+            # machine and same xHCI-only default as the 32-bit XP guest, and
+            # then the two flags that CANNOT be copied from it.
+            # **TCG is this guest's default and not a fallback**, which is the
+            # reverse of every other guest here and was measured on
+            # 2026-09-08: under whpx,kernel-irqchip=off XP x64 Setup wedges on
+            # "Setup is starting Windows" with RIP pinned, and the same command
+            # line under tcg reaches "Setup is copying files". Asserted because
+            # a well-meaning edit towards "the proven WHPX rung" - which is
+            # right for the 32-bit guests and written all over this repository
+            # - would silently produce a guest that cannot install.
+            Assert-True ($text.Contains("-accel tcg ^") -and $text.Contains("-machine pc ^")) `
+                "the Windows XP x64 launcher does not use TCG with ACPI on; WHPX wedges XP x64 Setup on this host family."
+            # **NO LONG MODE, NO GUEST.** pentium3 is the 32-bit XP launcher's
+            # model and the single most likely thing to survive a copy-paste
+            # into this one; an x64 Setup on it does not boot. The generator
+            # refuses such a -Cpu outright, and this asserts the generated
+            # text, which is the only thing that survives a regenerated
+            # scripts\local.
+            Assert-True (-not ($text -match '(?m)^\s*-cpu (pentium|486|coreduo|athlon-|n270)')) `
+                "the Windows XP x64 launcher names a CPU model with no long mode; XP x64 Setup will not boot on it."
+            Assert-True ($text -match '(?m)^\s*-cpu qemu64 \^') `
+                "the Windows XP x64 launcher does not default to the qemu64 x86-64 model."
+            # 512 MB is the 32-bit figure and the other copy-paste casualty.
+            # This is comfort, not correctness: measurement M5 read the NT 5.2
+            # amd64 usbport creating its DMA adapter 32-bit, so nothing lands
+            # above 4 GB whatever the guest has.
+            Assert-True ($text -match '(?m)^\s*-m 2048 \^') `
+                "the Windows XP x64 launcher does not give the guest the 2048 MB the x64 recipe calls for."
+            Assert-True ($text.Contains('set "EHCI="') -and $text.Contains('if /i "%2"=="ehci"') -and
+                -not ($text -match '(?m)^set "EHCI=-device')) `
+                "the Windows XP x64 launcher does not leave the companion EHCI out by default, so the xHCI-only usbport.sys reading cannot be taken."
+            Assert-True ($text.Contains('if not exist "%WINXP64_ISO%"') -and $text.Contains('set "CDROM="')) `
+                "the Windows XP x64 launcher does not boot without the CD when the ISO is absent."
+            Assert-True ($text.Contains("-device qemu-xhci,p3=0,id=xhci ^")) `
+                "the Windows XP x64 launcher does not keep every root port USB 2.0 (p3=0)."
+            Assert-True ($text.Contains("-audiodev none,id=xp64aud ^")) `
+                "the Windows XP x64 launcher declares no audio backend for a hot-plugged usb-audio."
+            $install64 = [System.IO.File]::ReadAllText((Join-Path $launchers "qemu-winxp64-install.cmd"))
+            Assert-True ($install64 -match '(?m)^\s*-cpu qemu64 \^' -and $install64 -match '(?m)^\s*-m 2048 \^' -and
+                $install64.Contains("-boot d ^") -and -not $install64.Contains(" -device ")) `
+                "the Windows XP x64 install launcher drifted from the run launcher's CPU or memory, lost -boot d, or attaches a USB controller."
+            # The HAL is fixed at INSTALL time, so a guest installed under one
+            # accelerator must be booted under it too - the 2b lesson, asserted
+            # here across the pair the way it already is for the SMP rungs.
+            Assert-True ($install64.Contains("-accel tcg ^")) `
+                "the Windows XP x64 install and run launchers disagree on the accelerator; the HAL is fixed at install time, so the installed system would not boot the way it was installed."
+        }
 
         # --- the rotation preamble, actually executed -----------------------
         #
@@ -194,6 +245,26 @@ try {
     # neither may write into the other's trace.
     Assert-True (($logPaths | Select-Object -Unique).Count -eq $targets.Count) `
         "the targets do not each get their own debug-console log."
+
+    # **The x64 generator must REFUSE a CPU model with no long mode**, rather
+    # than write a launcher that cannot boot. The 32-bit XP recipe is what the
+    # x64 one is modelled on and -cpu pentium3 is the one line of it that is
+    # actively wrong, so the refusal is the guard against the copy that looks
+    # right. Asserted by asking for it: a generator that quietly accepted it
+    # would write a launcher here and the throw would never happen.
+    $badCpuDir = Join-Path $work "launchers-xp64-badcpu"
+    New-Item -ItemType Directory -Path $badCpuDir | Out-Null
+    $refused = $false
+    try {
+        & (Join-Path $PSScriptRoot "setup-qemu-winxp64.ps1") -VmDir $vm `
+            -LocalScriptDir $badCpuDir -QemuBinDir $bin -Cpu "pentium3" | Out-Null
+    } catch {
+        $refused = $true
+    }
+    Assert-True $refused `
+        "setup-qemu-winxp64.ps1 accepted -Cpu pentium3, which has no long mode; the launcher it wrote would never boot XP x64 Setup."
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $badCpuDir "qemu-winxp64-run.cmd"))) `
+        "setup-qemu-winxp64.ps1 wrote a launcher for a CPU model with no long mode before refusing it."
 
     # The fallback rung changes the HAL Setup should select. Keep the generated
     # command line and the post-generation verification guidance in agreement.

@@ -105,9 +105,10 @@ Setup scripts:
 | `scripts\setup-qemu.ps1` | Checks/configures the Win98 SE (Phase 2a) QEMU launchers; use `-Install` to try Winget QEMU install; use `-CreateDisk` for VM images |
 | `scripts\check-flavour-marker.ps1` | Reads the flavour marker string out of a linked `.sys` and refuses anything but exactly one, matching the flavour asked for. `build-driver.cmd` runs it on each binary after the import gate; `make-release.ps1` reads the same marker to refuse publishing a `qemu` build as the debug download. It is what says a binary in `objfre` really is the release flavour, which `VS_FF_DEBUG` cannot, since `debug` and `qemu` are both checked builds |
 | `scripts\source-stamp.ps1` | `-Write <objdir>` hashes every file `src\sources` names plus every header in `src\`, and the built `xhci98.sys` itself, recording the list beside that binary; `-Check <objdir>` recomputes both. `build-driver.cmd` writes one after each successful build and `make-release.ps1` refuses to publish a `.sys` whose sources have changed since, one that is not the binary its stamp was written for, or one with no usable stamp at all (`-AllowUnstampedDriver` is the named way past that last case, and only that one) - the driver's equivalent of the "EXE newer than its own sources" refusals the release script already makes for the two DOS tools. Content, not timestamps: the script says why at length |
-| `scripts\test-qemu-launchers.ps1` | Generates all six VMs' launchers (2a, 2b, the SMP 2d, the xHCI-only Windows 2000, Windows ME and Windows XP) against stand-in QEMU files and verifies per-boot debug-console log rotation, the SMP default/fallback flags, and that no two launchers share a QEMU monitor port; run by `build-driver.cmd` |
+| `scripts\test-qemu-launchers.ps1` | Generates all seven VMs' launchers (2a, 2b, the SMP 2d, the xHCI-only Windows 2000, Windows ME, Windows XP and Windows XP x64) against stand-in QEMU files and verifies per-boot debug-console log rotation, the SMP default/fallback flags, that the x64 generator refuses a CPU model with no long mode, and that no two launchers share a QEMU monitor port; run by `build-driver.cmd` |
 | `scripts\setup-qemu-win2k.ps1` | Same for the Win2000 SP4 (Phase 2b) VM, the second first-class target. Monitor port 55556, and it also stages `usbd.sys` (`-Win2KUsbdSys`) |
 | `scripts\setup-qemu-winxp.ps1` | The Windows XP SP3 guest of roadmap Phase 19 (`vm\winxp.img`, monitor 55559, transfer drive `vm\xferxp`): WHPX with `kernel-irqchip=off`, ACPI on, no companion EHCI unless the run launcher is given `ehci` as its second argument; see "Windows XP target VM" |
+| `scripts\setup-qemu-winxp64.ps1` | The Windows XP Professional x64 SP2 guest of roadmap Phase 21 (`vm\winxp64.img`, 16 GB, monitor 55562, transfer drive `vm\xferxp64`): the 32-bit XP recipe with five changes - `-cpu qemu64` (`pentium3` has no long mode), 2048 MB, a bigger disk, a free monitor port, and **`-accel tcg`, which on this guest is the one that works and not the fallback** (WHPX wedges XP x64 Setup); `-Accel` selects another rung; see "Windows XP x64 target VM" |
 | `scripts\setup-qemu-win2k-smp.ps1` | The Phase 2d SMP stress VM (`vm\win2k-smp.img`, monitor 55557). Defaults to the checkpoint-proven `whpx,kernel-irqchip=off` rung; `-Accel`/`-AcpiOff`/`-Smp`/`-MemoryMb` select another Phase 2d task-2 rung so each is a regenerated launcher, not a hand-edited copy |
 | `scripts\check-smp-parallelism.ps1` | Host-side Phase 2d checkpoint check against the running 2d VM: a complete one-to-one vCPU/`thread_id` mapping from `info cpus`, plus a process affinity mask allowing 2+ logical processors. Guest-side "MP kernel landed" checks do not distinguish those host conditions; this script does. Run-time, so not part of `build-driver.cmd`; `-SelfTest` needs no VM |
 | `scripts\setup-all.ps1` | Runs MSVC, DDK, and both Phase 2a/2b QEMU setups; use `-RunInstallers` for MSVC/DDK and `-InstallQemu` for QEMU. Pass `-Win2KIso` or the Win2000 half is skipped with a warning |
@@ -178,6 +179,8 @@ Useful generated wrappers:
 | `scripts\local\qemu-win2k-install.cmd` | Start Win2000 SP4 setup from the configured ISO |
 | `scripts\local\qemu-win2k-prepare-usbd.cmd` | Controller-free boot used to stage `usbd.sys` before EHCI is attached (see "Windows 2000 SP4 Target VM") |
 | `scripts\local\qemu-win2k-run.cmd` | Boot the installed Win2000 VM with xHCI present |
+| `scripts\local\qemu-winxp64-install.cmd` | Start Windows XP x64 SP2 setup from the configured ISO (roadmap Phase 21) |
+| `scripts\local\qemu-winxp64-run.cmd` | Boot the installed XP x64 VM with xHCI present; `%2 = ehci` adds a companion EHCI |
 
 The generated wrappers and VM images are local machine artifacts and are ignored by git.
 
@@ -1445,6 +1448,7 @@ listen on monitor port 55561 (the 2a base plus 6), chosen clear of 2a/55555,
 the xHCI-only Windows 2000 machine's 55560; until the 2026-09-05 audit the ME
 launcher took 55558 and could not run beside the ACPI machine, and until the
 2026-09-07 audit it took 55560 and could not run beside the xHCI-only one.
+The XP x64 guest of Phase 21 took the next one clear of all of those, 55562.
 `scripts\test-qemu-launchers.ps1` asserts that no two generated launchers share
 a monitor port.
 
@@ -1800,6 +1804,108 @@ to the door sequence was on the launcher's original 4+4 port layout, plain
   issue page's section 5 carries the correlation.
 
 Not done on XP: real hardware (nothing in the fleet runs it).
+
+### Windows XP x64 target VM (roadmap Phase 21)
+
+The 64-bit guest. Design record 11
+(`docs/contributing/design/11-x64-targets.md`) establishes that Windows XP
+Professional x64 and Windows Server 2003 x64 are the same operating system,
+NT 5.2.3790 - Microsoft's own WDK says so, since `lib\wxp\i386` exists and
+`lib\wxp\amd64` does not, making `WNET` the only route to a 64-bit XP driver.
+One `WNET` amd64 binary therefore serves both, and this one guest observes it.
+XP x64 is the target this phase takes because it does **not** enforce
+kernel-mode code signing, which Vista x64 and Windows 7 x64 both do.
+
+`scripts\setup-qemu-winxp64.ps1` writes both launchers into `scripts\local`.
+It is the sibling of `setup-qemu-winxp.ps1` and most of the 32-bit XP recipe
+carries over unchanged; **four things differ**, and the first two fail
+silently or refuse to boot if the 32-bit launcher is copied across.
+
+| | 32-bit XP | XP x64 | Why |
+|---|---|---|---|
+| `-cpu` | `pentium3` | `qemu64` | `pentium3` has **no long mode**. The generator refuses any such `-Cpu` outright and the launcher gate asserts the generated text, because this is the one line of the 32-bit recipe that is actively wrong here |
+| RAM | 512 MB | 2048 MB | Comfort, **not correctness**: measurement M5 read the NT 5.2 amd64 usbport creating its DMA adapter 32-bit (`Dma32BitAddresses = 1`, `DmaWidth = Width32Bits`), so nothing lands above 4 GB whatever the guest has. The cap design record 11 originally called for is a convenience now, not a mitigation |
+| Disk | 8 GB | 16 GB | 8 GB is tight for XP x64 |
+| Monitor | 55559 | 55562 | 55555-55561 are taken (2a, 2b, the SMP 2d, the ACPI-HAL Windows 2000 machine, 32-bit XP, the xHCI-only Windows 2000 machine, Windows ME) |
+
+`qemu-system-x86_64.exe` is already what the 32-bit XP launcher uses, so that
+does not change. Everything else is the 32-bit recipe: `-machine pc` (ACPI
+on), `-vga std`, `-boot d` every boot (the CD's "Press any key" falls through
+to the hard disk, which is what Setup's own reboots need), `qemu-xhci,p3=0` on
+the run launcher, no USB device boot-attached, and the port-0xE9 debug console
+rotated per boot.
+
+**And then a fifth difference, which was not predicted and had to be measured:
+this guest wants TCG, and on it TCG is not a fallback - it is the one that
+works.** That is the reverse of every 32-bit guest in this project. Read on
+host `minis-w11p-ykm`, 2026-09-08, one flag apart:
+
+| `-accel` | Result |
+|---|---|
+| `whpx,kernel-irqchip=off` | XP x64 Setup **wedges** on "Setup is starting Windows" and stays there. Six minutes; `RIP` pinned at one address across five samples four seconds apart, `CS64`, `CPL=0`, `IF` set. WHPX itself initialises (the throwaway probe passes), so this is the guest and not partition creation |
+| `tcg` | The identical command line: text-mode Setup reaches "Setup is copying files" within about three minutes, `RIP` samples varied and productive, and it runs to the reboot into graphical Setup |
+
+So the accelerator is the discriminating variable here as it was for Windows
+2000, and it points the other way. `lessons.md`'s "The vector-0xD1 storm is
+the accelerator" reads TCG storming and WHPX running - but that was 32-bit
+Windows 2000 Setup under the ACPI APIC HAL, a different guest, a different
+bitness and a different workload. **Neither reading generalises to the other**,
+and on a new host both want probing. `-Accel` selects the rung, so it is a
+regenerated launcher rather than a hand edit, and the launcher gate asserts
+that the install and run launchers agree on it - the HAL is fixed at install
+time, so a guest installed under one rung must be booted under it too.
+
+1. `scripts\setup-qemu-winxp64.ps1 -WinXp64Iso <path> -CreateDisk`, then
+   `scripts\local\qemu-winxp64-install.cmd`. The owner drives Setup at the
+   console (the standing decision of 2026-09-03, taken for the 32-bit XP
+   guest). **This media is partly unattended, but not fully**, and the
+   distinction matters to whoever is waiting at the screen: on 2026-09-08 it
+   ran from boot through partitioning, formatting, the file copy and the
+   reboot into graphical Setup with no key pressed - and then stopped at
+   "Your Product Key" with only a partial volume-licence key pre-filled. So it
+   carries an answer file that does not carry a complete key, and the install
+   still needs the owner. Budget for an unattended stretch of roughly ten
+   minutes and then a prompt.
+2. Shut down from the Start menu and snapshot:
+   `qemu-img snapshot -c winxp64-clean-install vm\winxp64.img`.
+3. **Two cheap readings, neither needing a driver**, and both worth having
+   before one exists. Hash the guest's installed `usbport.sys` against
+   `tools\winxp64-extracted\usbport.sys`, confirming the file Setup placed is
+   the one every M1-M6 reading was taken from (the Phase 2a record-from-VM
+   step is the precedent). And check whether an xHCI-only XP x64 install has
+   `usbport.sys` on disk **at all**: on 32-bit XP it did not, which was the
+   Code 39 that release 1.0.1.0's INF fix answers. The NT install path already
+   copies it from `Driver Cache\i386`, so the expectation is that x64 behaves
+   the same from `Driver Cache\amd64` - but that is an expectation, and this
+   is the cheapest possible place to check it.
+
+**Then the guest waits, and its existence is not progress.** There is no
+amd64 binary to install: task 21.5's checkpoint needs one, and it depends on
+21.2 (the `WNET` amd64 build) and 21.4 (the code changes 21.1 implies). The
+run launcher's transfer drive `vm\xferxp64` is empty until then. Pass `ehci`
+as the run launcher's second argument to add a companion EHCI, which makes the
+in-box stack place `usbport.sys` instead - the same escape hatch the 32-bit
+launcher carries, and the thing to reach for if the xHCI-only reading comes
+back the way 32-bit XP's did.
+
+Phase 19 is the standing reminder for what to expect when the binary does
+arrive: there the ABI was right and the static work was right, and the guest
+still produced three problems in an afternoon - Code 39 from a missing
+`usbport.sys`, a thirty-second idle suspend that made hot-plug invisible, and
+issue 4. None was an ABI problem and two were install-path.
+
+Status: the guest was created and installed on 2026-09-08 on host
+`minis-w11p-ykm` (`vm\winxp64.img`, 16 GB qcow2, 2.29 GB allocated after the
+install). Snapshot **`winxp64-clean-install`** taken the same evening with the
+guest shut down from inside and the image cold - `qemu-img check` reported no
+errors first, and the snapshot lists with `VM_SIZE` 0 B, which is what a
+powered-off snapshot should read. Revert with `qemu-img snapshot -a
+winxp64-clean-install vm\winxp64.img`, guest off. Media
+`D:\isos\Win XP SP2 VL x64.iso`
+(628,168,704 bytes), the owner's own XP x64 SP2 media, which is also where
+`tools\winxp64-extracted\` came from. WHPX with `kernel-irqchip=off` probed OK
+on this host as a partition - and then wedged the guest, which is how the TCG
+reading above came to be taken.
 
 ### Windows 2000 SMP Stress VM (Phase 2d)
 

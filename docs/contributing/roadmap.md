@@ -1590,9 +1590,15 @@ Status: open, 2026-09-08. It opened when the owner asked how pull request 6
 (`WDK 7.1`, GeorgeK1ng) could be integrated and narrowed it to 64-bit
 guests. Task 21.1 is complete: all six measurements are read and all six
 pass, so nothing in the ABI argues against Windows XP x64 and Server 2003
-x64. Nothing else has started, and no 64-bit binary of this driver exists
-yet - which is also the limit of what has been shown, since a static pass
-cannot establish runtime behaviour.
+x64. No 64-bit binary of this driver exists yet - which is also the limit of
+what has been shown, since a static pass cannot establish runtime behaviour.
+Task 21.5's guest was begun on 2026-09-08: `scripts\setup-qemu-winxp64.ps1`,
+its two launchers and the 16 GB `vm\winxp64.img` exist and the launcher gate
+covers them. It cost one finding already, before any driver: **this guest
+needs `-accel tcg`, and WHPX - which every other guest here uses - wedges XP
+x64 Setup**, the reverse of the Windows 2000 reading (`lessons.md`, "The
+accelerator is the discriminating variable in both directions"). Nothing else
+in the phase has started.
 
 Why a phase: the same reason Phase 19 was one. A target is not a build. The
 static pass has to settle the ABI before any code is written, the guest has
@@ -1656,7 +1662,27 @@ are static readings and no other task's box may be ticked on one.
         `sizeof`s and the result stated
   - [ ] `test/test_packet.c` compiling the header for amd64, so
         `test\run-host-tests.cmd` checks the layout on the build host
-- [ ] **21.5 - the Windows XP x64 guest** and its checkpoint below.
+- [ ] **21.5 - the Windows XP x64 guest** and its checkpoint below. The guest
+      is a vehicle, and building it is preparation rather than the leg: the
+      checkpoint clauses need an amd64 binary, which needs 21.2 and 21.4. The
+      guest's existence is not progress on this task, and only the first two
+      boxes below can be ticked before that binary exists.
+  - [x] the guest installed from `scripts\setup-qemu-winxp64.ps1` and
+        snapshotted `winxp64-clean-install` - 2026-09-08, the owner at the
+        console for the product key, guest shut down from inside and the
+        snapshot taken with the image cold (`qemu-img check`: no errors,
+        13.36% of 16 GB allocated; snapshot ID 1, `VM_SIZE` 0 B, which is
+        what a powered-off snapshot should read). Evidence for "installed" is
+        the owner's own account of driving Setup to completion plus the
+        image's size; **no boot of the installed system has been observed
+        here yet**, and the two readings below are what would establish it
+  - [ ] the guest's installed `usbport.sys` hashed against
+        `tools/winxp64-extracted/usbport.sys`, confirming Setup placed the
+        file every M1-M6 reading was taken from
+  - [ ] whether an xHCI-only XP x64 install has `usbport.sys` on disk at all
+        - on 32-bit XP it did not, and `Driver Cache\amd64` behaving like
+        `Driver Cache\i386` is an expectation, not a reading
+  - [ ] the checkpoint clauses below, on the amd64 binary
 - [ ] **21.6 - the record.** The tier stated where Windows ME and 32-bit XP
       are stated, in `AGENTS.md`, `build-and-test.md`, `win98-wdm.md` and the
       release notes, with the provenance rows beside it.

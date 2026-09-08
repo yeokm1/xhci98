@@ -557,7 +557,24 @@ Modelled on Phase 19, which is the template for adding a VM-only target.
 
 - One guest, `scripts\setup-qemu-winxp64.ps1`, alongside the existing
   Windows XP, Windows 2000 and Windows ME launchers, with RAM capped below
-  4 GB pending M5.
+  4 GB pending M5. **Written and run 2026-09-08**, and M5 having read the DMA
+  adapter as 32-bit, the cap is a convenience rather than a mitigation: the
+  guest has 2048 MB because XP x64 wants it, not because 4 GB would be
+  unsafe.
+- **The guest cost one prediction this record did not make.** It was written
+  expecting the 32-bit XP recipe to carry over with a CPU model, a RAM figure,
+  a disk size and a monitor port changed. It does not: the accelerator changes
+  too, and in the direction nothing here would have guessed. Under
+  `-accel whpx,kernel-irqchip=off` - the value every other guest in this
+  project uses, and the one `lessons.md` argues for - XP x64 Setup wedges on
+  "Setup is starting Windows" with `RIP` pinned; under `-accel tcg`, the same
+  command line one flag apart, Setup runs. That is the reverse of the Windows
+  2000 reading, and it is now a second `lessons.md` entry with a cross-link on
+  the first. The generator defaults to TCG and the launcher gate holds it
+  there. **The methodological point belongs in this record**, because section
+  5's whole argument is that a static pass cannot establish runtime behaviour:
+  here the very act of building the vehicle for the runtime work produced a
+  fact no amount of reading `usbport.sys` could have.
 - The checkpoint the other VM tiers use: the package installs on an
   xHCI-only guest, the driver registers (`USBPORT_GetHciMn` and
   `USBPORT_RegisterUSBPortDriver status=0` both logged), the controller

@@ -4132,6 +4132,12 @@ workload, so `i386` is eliminated. Step 5 then changes only the accelerator
 on that same command line and the storm disappears, which makes the
 accelerator the discriminating variable on this host and this QEMU build.
 
+**Read this together with "The accelerator is the discriminating variable in
+both directions" below, and do not generalise this entry past the guest it was
+taken on.** On Windows XP x64 Setup the same two accelerators give the
+opposite answer: WHPX wedges and TCG runs. "WHPX, not TCG" is a fact about
+32-bit Windows 2000 Setup here, not a property of either accelerator.
+
 Not proven: the mechanism. An execution-rate explanation (WHPX drains the
 timer queue fast enough) remains the natural reading and remains untested;
 so does any explanation resting on how each accelerator delivers the
@@ -4165,6 +4171,69 @@ half on its own.
 solely to execute `ResumeController` on Windows 2000, which no other VM in
 the estate can do. 2b keeps its Standard-PC HAL flags unchanged and remains
 the Phase 3-5 evidence VM.
+
+## The accelerator is the discriminating variable in both directions: TCG wedges 32-bit Windows 2000 Setup, WHPX wedges Windows XP x64 Setup
+
+### Environment and operation
+
+Host `minis-w11p-ykm`, scoop QEMU 11.0.0, `qemu-system-x86_64`. Installing
+the roadmap Phase 21 guest, Windows XP Professional x64 SP2, from
+`D:\isos\Win XP SP2 VL x64.iso` onto a fresh 16 GB qcow2. Machine `-machine
+pc` (ACPI on), `-cpu qemu64`, `-m 2048`, `-vga std`, `-boot d`, no USB
+controller. One flag differed between the two runs.
+
+### What was read
+
+1. `-accel whpx,kernel-irqchip=off`, the value every other guest in this
+   project uses and the one the entry above argues for: Setup boots, paints
+   "Setup is starting Windows", and **stays there**. Six minutes. `RIP`
+   sampled five times four seconds apart is pinned at a single address, with
+   `CS64`, `CPL=0`, `IF` set and `HLT=0`; one earlier sample had been
+   elsewhere, so the guest is not dead, but it is not progressing either.
+2. `-accel tcg`, the identical command line with that one flag changed:
+   text-mode Setup reaches "Setup is copying files" in about three minutes,
+   `RIP` samples are varied (`fffffadfc85bd980`, `fffffadfc82508f1`,
+   `fffff800010449b3`), the copy runs to completion and the guest reboots into
+   graphical Setup.
+
+WHPX is not broken on this host: the throwaway `-M pc -accel
+whpx,kernel-irqchip=off -m 2048 -display none` probe that
+`build-and-test.md` asks for creates its partition and stays up. The failure
+is the guest under WHPX, not partition creation - which is the distinction
+the Phase 2d WHPX entry had to make in the other direction.
+
+### What this proves, and what it does not
+
+Proven: on this host the accelerator decides whether XP x64 Setup runs, and
+it decides the opposite way from the entry above. That entry is not wrong -
+it was 32-bit Windows 2000 Setup under the ACPI APIC HAL, and its step 5 is
+still the reading that got that guest installed. **What is wrong is treating
+either result as a property of the accelerator alone.** The project had
+generalised "WHPX, not TCG" into a default and written it into four
+generators and their documentation, and a fifth guest was one copied flag
+away from being unbuildable for a reason nobody would have looked for.
+
+Not proven: the mechanism, in either direction. Nothing here identifies what
+WHPX does differently on an NT 5.2 amd64 kernel, and the pinned `RIP` was not
+resolved to a symbol - there is no `ntoskrnl` for this guest on the host to
+disassemble against, and the address alone does not distinguish a spin from a
+starved idle loop the way the Windows 2000 idle-loop disassembly did. Also
+untouched: whether `-cpu core2duo` changes the WHPX result, and whether any
+of this survives a different QEMU build.
+
+### Consequences
+
+`scripts\setup-qemu-winxp64.ps1` defaults to `-Accel tcg`, and its parameter
+comment carries the measurement rather than the conclusion. The launcher gate
+asserts the TCG default **and** that the install and run launchers agree on
+it, because the HAL is fixed at install time: a guest installed under one rung
+must be booted under it too, and an edit towards "the proven WHPX rung" is the
+natural, wrong, well-meant change for someone who has read the rest of this
+repository.
+
+The general rule, which is the actual lesson: **probe the accelerator per
+host AND per guest.** Two accelerators, two guests, two opposite answers, all
+four on one machine.
 
 ## The Full-Speed bugcheck localized: a missing guard on the branch nobody takes
 
