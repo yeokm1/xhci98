@@ -64,6 +64,14 @@ The section this roadmap ends on is the reminder for the second, which runs
 before the upload: settled at `1.0.2.0`, and the order every release follows
 now.
 
+Two phases are open, both about operating systems this driver does not yet
+claim, and neither blocks the other or anything already closed. **Phase 21**
+is the 64-bit question - one NT 5.2 amd64 binary for Windows XP x64 and
+Server 2003 x64, which needs a second toolchain before it needs anything
+else. **Phase 22** is the 32-bit one - whether the binary that already ships
+runs on Windows Vista and Windows 7 as it stands, which needs no build at
+all. They share the Vista and Windows 7 media and nothing else.
+
 ---
 
 ## Batching Convention
@@ -73,7 +81,8 @@ work can be confirmed and has no checkpoint of its own. A VM boot or a bench
 trip is the expensive unit, and most tasks do not need one, so from Phase 6
 onward a phase whose tasks are confirmed in more than one place groups them
 into batches. Phases 6, 7a, 7b, 8, 9, 11 and 13 are of this shape; Phases 0-5,
-10, 12, 14, 15, 16, 17, 18, 19 and 20 have plain per-phase task numbers.
+10, 12, 14, 15, 16, 17, 18, 19, 20, 21 and 22 have plain per-phase task
+numbers.
 
 Task ids are `<batch>.<n>` in a batched phase (`6-B.4` is the fourth task of
 batch `6-B`) and plain `<phase>.<n>` otherwise (`12.3`, `14.1`). Phases 0-5
@@ -1754,6 +1763,11 @@ are static readings and no other task's box may be ticked on one.
   - [ ] whichever way they read, recorded: the tier claimed, and the two
         things true of both regardless (kernel-mode code signing, and the
         driver-store install path the `LayoutFile` route was not written for)
+  - [ ] **take the `i386` halves in the same pass** and hand them to task
+        22.1. The same media carries both architectures, so the marginal cost
+        of the 32-bit read is the disassembly alone - and the signing note
+        above is x64-only, which is exactly what makes Phase 22 the cheaper
+        of the two Vista/7 questions
 
 Checkpoint. Every clause, or the phase is not closed:
 
@@ -1773,6 +1787,117 @@ may cost a primary target anything.
 
 Records: `design/11-x64-targets.md`; `usb-xhci-info/usbport-miniport-abi.md`;
 `legal-provenance.md` section 4; `build-and-test.md`.
+
+## Phase 22 - The Existing 32-bit Binary on Windows Vista and Windows 7
+
+Goal: whether the binary this project already ships installs, loads and works
+on 32-bit Windows Vista and 32-bit Windows 7 - settled from the shipping
+`usbport.sys` first and guests second - and, if it does, its standing stated
+in every document that names the targets.
+
+Status: open, 2026-09-08, on the owner's instruction. Nothing has started.
+
+Why a phase, and why it is a different one from 21: **this asks nothing of
+the toolchain.** Phase 21 needs a second DDK, a second import library and an
+arch fork before a compiler is even reached; this phase's subject is the
+`xhci98.sys` that exists, unchanged, on the `.NTx86` half of the INF that
+exists. If the answer is yes, it costs guests and readings and no build at
+all. That is a different shape of work from 21 and a different set of ways to
+fail, which is why it is not a task inside it.
+
+Two things make it cheaper than 21's 64-bit leg:
+
+- **32-bit Vista and Windows 7 do not enforce kernel-mode code signing.**
+  That enforcement is x64-only. An unsigned build can load; PnP still warns
+  at install time that the publisher cannot be verified, which is a prompt
+  and not a refusal. **Confirm this on the guest rather than taking it from
+  here** - it is the single assumption that would make the phase pointless if
+  wrong, and it is cheap to check.
+- **Both still ship `usbport.sys`.** Vista and 7 carry the USB 1.1/2.0 stack
+  natively, so Option A - be a miniport under the OS's own usbport - is still
+  on the table. It is Windows 8 that replaces it for xHCI, and Windows 8 is
+  not in scope here.
+
+Two make it harder, and both are already written down as consequences of
+Phase 21's reading:
+
+- **They stage driver packages into the driver store**, which the INF's
+  `LayoutFile` route was not written for. That route is Phase 19's fix - the
+  NT install path pulling `usbport.sys`, `usbd.sys` and `usbhub.sys` from the
+  operating system's own cache, because an xHCI-only NT install has none of
+  them on disk. Whether that mechanism survives into 6.0 and 6.1 is a
+  reading, not a deduction.
+- **`USBPORT_GetHciMn` has changed across lineages before.** The 5.0 -> 5.1
+  step kept the registration packet byte-identical and *still* changed the
+  value. A new constant on 6.0 or 6.1 means a fourth arm on the refusal at
+  `src/xhci_dispatch.c:4640` - and unlike the XP x64 case, where M2 came back
+  already-accepted, that would be a code change to the **shipping 32-bit
+  binary**, with all four existing install legs to re-validate behind it.
+
+Tier, if the phase closes yes: supported in virtual machines, stated the way
+Windows ME and 32-bit XP are. **No checkpoint tax.** No phase waits on a
+Vista or Windows 7 observation, "observed on both" does not include them, and
+the standing rule holds unchanged - accommodate them where the change is
+small and low-risk, never at a primary target's expense.
+
+Tasks. A box is ticked only on the evidence its line names, and a static
+reading may not tick a box whose line names a guest.
+
+- [ ] **22.1 - the static ABI pass on 6.0 and 6.1 x86.** The six measurements
+      of 21.1, against 32-bit Vista and Windows 7 `usbport.sys` and
+      `usbehci.sys`. Extraction and disassembly only: no VM, no build.
+      **Share the pass with 21.7** - the same media carries both
+      architectures, and taking `i386` while the ISO is open costs nothing
+      extra. On Vista and 7 the media is WIM-based rather than a flat
+      directory, so extraction goes through `install.wim`; 7-Zip opens WIMs
+      directly.
+  - [ ] Vista x86 - `usbport.sys` and `usbehci.sys` extracted, hashed,
+        version-stamped, and the six read
+  - [ ] Windows 7 x86 - the same
+  - [ ] **M2 recorded either way.** A value the driver already accepts closes
+        the question; a new one becomes task 22.5's code change
+- [ ] **22.2 - the imports.** Whether every import the shipping binary names
+      still resolves on 6.0 and 6.1. `scripts\import-gate\` resolves against
+      Windows 2000 and XP baselines today and has nothing to say about these;
+      the answer is readable statically from their `ntoskrnl.exe` and
+      `hal.dll` export tables. Imports are a silent load-time gate, so this is
+      worth knowing before a guest exists rather than after one shows Code 2.
+- [ ] **22.3 - the install path, read statically off a clean guest.** The two
+      cheap readings 21.5 took for XP x64, on each of these:
+  - [ ] whether an xHCI-only Vista/7 install has `usbport.sys`, `usbhub.sys`,
+        `usbd.sys` or `usbehci.sys` on disk at all
+  - [ ] where the operating system keeps them if it does not, and whether the
+        `LayoutFile` route can still reach them from a driver-store install
+- [ ] **22.4 - the guests.** One Vista x86 and one Windows 7 x86 QEMU guest,
+      each with a committed generator and a launcher-gate row, the way
+      `setup-qemu-winxp.ps1` and `setup-qemu-winxp64.ps1` were done.
+      **Probe the accelerator per host AND per guest** - Phase 21 paid for
+      that rule twice, in opposite directions, and neither reading
+      generalises.
+- [ ] **22.5 - whatever 22.1 to 22.3 imply**, which may be nothing. If it is
+      a driver change it is a release, and all four existing install legs -
+      98, ME, 2000, XP32 - are re-validated behind it, because this is the
+      shipping binary and not a second one.
+- [ ] **22.6 - the record.** The tier stated where Windows ME and 32-bit XP
+      are stated, in `AGENTS.md`, `build-and-test.md`, `win98-wdm.md` and the
+      release notes, with the provenance rows beside it.
+
+Checkpoint. Every clause, on **each** of the two guests, or the phase is not
+closed:
+
+- [ ] the existing package installed on an xHCI-only machine, and what the
+      unsigned-driver prompt actually did recorded
+- [ ] the driver registered and started, and its No Op self-test passed
+- [ ] the root-hub callbacks answered
+- [ ] a HID mouse, a mass-storage device and a composite audio device bound
+- [ ] the Device Manager disable, enable, remove and rescan sequence survived
+
+Not a checkpoint: a static pass standing in for a guest, or one of the two
+guests standing in for the other. No primary target's checkpoint waits on any
+of this, and none of it may cost a primary target anything.
+
+Records: `usb-xhci-info/usbport-miniport-abi.md`; `build-and-test.md`;
+`usb-xhci-info/win98-wdm.md`; `lessons.md`.
 
 ## Post-Release - Run the Acceptance Test by Hand
 
