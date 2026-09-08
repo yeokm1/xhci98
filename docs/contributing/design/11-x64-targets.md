@@ -4,10 +4,10 @@ Design record for roadmap Phase 21. It was
 `docs/future-plans/x64-targets.md` from 2026-09-08 until later the same day,
 when the first three measurements it proposed were taken and passed and the
 work was scheduled; the future-plans page is gone and this record replaces
-it. Written in response to pull request 6 (`WDK 7.1`, GeorgeK1ng), which adds
-a GitHub Actions job building the driver with WDK 7.1 for Windows XP, Server
-2003, Vista and Windows 7 in both x86 and x64, and to the owner's narrowing
-of it to 64-bit guests.
+it. It was written after the owner asked what a WDK 7.1 build would take -
+one that would build the driver for Windows XP, Server 2003, Vista and
+Windows 7 in both x86 and x64 - and then narrowed the question to 64-bit
+guests.
 
 No 64-bit binary of this driver has been produced yet. What has been produced
 is the static ABI evidence that one could work, and that evidence is section
@@ -22,8 +22,8 @@ section 5 marked **read** was read from a disassembly; everything marked
 
 ## 1. The narrowing, and why it matters to the plan
 
-The pull request builds seven configurations. Two observations collapse that
-to one binary and one guest.
+That scope is a build matrix across four operating systems and two
+architectures. Two observations collapse it to one binary and one guest.
 
 **Windows XP Professional x64 and Windows Server 2003 x64 are the same
 operating system.** Both are NT 5.2.3790; the x64 edition of XP is the
@@ -34,7 +34,7 @@ confirms it from Microsoft's own side: the WDK ships `lib\wxp\i386` and no
 `lib\wxp\amd64`, so there is no XP-target x64 library set to build against -
 NT 5.2 (`WNET`) is the only route to a 64-bit XP driver.
 
-**The x86 half of the pull request should not be taken.** 32-bit Windows XP
+**The x86 half should not be taken.** 32-bit Windows XP
 is already a supported VM target (`AGENTS.md`, Quick Reference) and is served
 by the same MSVC 6.0 / Windows 2000 DDK binary as the two primary targets. A
 second x86 toolchain producing a *different* x86 binary subtracts from the
@@ -284,10 +284,10 @@ shifts, and `XhciCheckResourceBase(ULONG_PTR startVA, ULONG startPA)` already
 has the right signature. This was the most load-bearing open question in
 section 2 and it resolves in the driver's favour.
 
-Pull request 6's three `USBPORT_RESOURCES` assertions - `sizeof == 0x48`,
-`ResourceBase` at `0x28`, `StartVA` at `0x38` - are all **correct**. They were
-tautological as written, but the binary agrees with them, so promoting them to
-measured numbers costs nothing. That is not true of the packet (section 9
+The three obvious `USBPORT_RESOURCES` assertions - `sizeof == 0x48`,
+`ResourceBase` at `0x28`, `StartVA` at `0x38` - are all **correct**. Written
+against the compiler's own layout they would be tautological, but the binary
+agrees with them, so promoting them to measured numbers costs nothing. That is not true of the packet (section 9
 item 2), and the difference between the two cases is exactly why this had to
 be measured rather than reasoned out.
 
@@ -455,8 +455,9 @@ The gate as written before any measurement, with what actually happened:
 
 **All six measurements are taken and all six pass.** The static pass set out
 to find a reason this cannot work on Windows XP x64 and Server 2003 x64, and
-found none. What it found instead was one defect in the pull request that no
-compile-time assertion could have caught (section 9 item 2), and one
+found none. What it found instead was one trap in the obvious way of writing
+the packet, which no compile-time assertion could have caught (section 9
+item 2), and one
 assumption that turned out to be safe for a measured reason rather than a
 lucky one (M5).
 
@@ -478,19 +479,22 @@ diagnosable.
 **The gates do not cover a 64-bit binary, and skipping them is not an
 option.**
 
-- *Import gate.* The pull request's build calls `build -ceZ` directly and so
-  never runs `scripts\build-driver.cmd`, which means no import gate and no
-  INF gate on the produced binary. The Windows 98 export ceiling is
+- *Import gate.* A build that calls `build -ceZ` directly never runs
+  `scripts\build-driver.cmd`, which means no import gate and no INF gate on
+  the produced binary - so the amd64 build has to go through the wrapper like
+  every other. The Windows 98 export ceiling is
   meaningless on amd64, but the allowlist's purpose - that nothing enters the
   import table unreviewed - is not. This needs an `amd64` dimension in
   `scripts\import-gate\xhci98-imports.allow`, or a sibling allowlist, plus
   NT 5.2 amd64 baselines to resolve against in the way
   `win2k-baselines.expected` does for SP4.
-- *usbport import library.* The pull request's `make-usbport-lib-wdk.cmd`
-  drops all five verification steps `scripts\make-usbport-lib.cmd` performs -
-  the export-manifest check, the `_USBPORT_GetHciMn@0` decoration check, the
-  `DLL name : USBPORT.SYS` module check, and the NTAPI link proof - and
-  publishes straight over `src\usbport.lib`. The right shape is
+- *usbport import library.* There is no amd64 import library, and nothing can
+  link without one, so this is a prerequisite for a first build rather than a
+  gate refinement. The temptation is a second generator publishing straight
+  over `src\usbport.lib`; that would drop all five verification steps
+  `scripts\make-usbport-lib.cmd` performs - the export-manifest check, the
+  `_USBPORT_GetHciMn@0` decoration check, the `DLL name : USBPORT.SYS` module
+  check, and the NTAPI link proof. The right shape is
   arch-conditional checks inside the existing generator: on amd64 the
   decoration check becomes an undecorated-name check, M1 supplies the fourth
   lineage for the export manifest, and the other four steps stand unchanged.
@@ -498,7 +502,7 @@ option.**
   paths, the undecorated Windows 98 one and `.NTx86`, across 1854 lines. A
   third path is real work there.
 
-**On the INF, there is a cheap route and a pure one.** The pull request adds
+**On the INF, there is a cheap route and a pure one.** The obvious route adds
 `.NTamd64` sections to `src/xhci98.inf` and changes `[Manufacturer]` from
 `%Mfg%=XhciModels` to `%Mfg%=XhciModels,NTx86,NTamd64`. That single line is
 the one Windows 98's 16-bit engine parses to find its models section, and
@@ -527,14 +531,13 @@ ignored outright by the 64-bit setup engine, and
 2. `#ifdef _WIN64` declarations of `USBPORT_RESOURCES`, the registration
    packet and the scatter-gather structures carrying the *measured* offsets,
    with explicit padding wherever the compiler's natural layout disagrees.
-   **M3 already shows one disagreement**: pull request 6 asserts
-   `sizeof(USBPORT_REGISTRATION_PACKET) == 0x248` (584) under `_WIN64`, and
-   usbport copies `0x250` (592). That is eight bytes past the end of
+   **M3 already shows one disagreement**: declared the obvious way under
+   `_WIN64`, `sizeof(USBPORT_REGISTRATION_PACKET)` comes out `0x248` (584),
+   and usbport copies `0x250` (592). That is eight bytes past the end of
    `XhciRegPacket`, a static global, read into fields usbport believes are
-   part of the packet. The assertions in that pull request could not have
-   caught it, because they assert the compiler against itself; only the
-   binary shows it. The asserts must carry measured numbers so that they can
-   fail.
+   part of the packet. A `C_ASSERT` on the declared size cannot catch it,
+   because it asserts the compiler against itself; only the binary shows it.
+   The asserts must carry measured numbers so that they can fail.
 3. A `StartPA` high-DWORD refusal matching the one the scatter-gather path
    already makes. **M5 shows the adapter is created 32-bit, so this guards
    nothing measured** - it is the "check it, never assume it" rule applied one
@@ -646,23 +649,20 @@ download would carry two.
 2. One INF with a third install path and a four-leg re-validation, or a
    separate x64 package leaving `src/xhci98.inf` untouched.
 3. Whether WDK 7.1 stays in the tree as a third toolchain, and from which
-   source - the pull request's URL is a third-party GitHub rehost rather
-   than a Microsoft host. The copy now in `tools/WinDDK71/` came from the
-   owner's own media (section 4).
+   source. Third-party rehosts of the ISO exist and are not a Microsoft host;
+   the copy now in `tools/WinDDK71/` came from the owner's own media
+   (section 4), which is the provenance to keep.
 4. Whether this project adopts GitHub Actions at all. There are no workflows
    today, and the build's defining property is that its toolchain lives in
    the repository and installs nothing; a CI job that downloads and installs
    an SDK is a different arrangement, not an extension of that one.
-5. Whether the x86 half of pull request 6 is declined, as section 1
+5. Whether the x86 half of a WDK 7.1 build is declined, as section 1
    recommends.
 
 ---
 
 ## Sources
 
-- Pull request 6, `WDK 7.1` (GeorgeK1ng): the CI job, the WDK build wrapper,
-  the `.NTamd64` INF sections, and the `#ifdef _WIN64` assertion block
-  section 9 item 2 answers.
 - `docs/usb-xhci-info/usbport-miniport-abi.md`: the x86 ABI record every
   measurement here is the amd64 counterpart of, and where sections 5's
   results are transcribed.

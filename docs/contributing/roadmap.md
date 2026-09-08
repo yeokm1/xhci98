@@ -1586,9 +1586,8 @@ settled from the shipping binaries first and a guest second, and - if it can
 - one NT 5.2 amd64 binary observed on a Windows XP Professional x64 guest,
 with its standing stated in every document that names the targets.
 
-Status: open, 2026-09-08. It opened when the owner asked how pull request 6
-(`WDK 7.1`, GeorgeK1ng) could be integrated and narrowed it to 64-bit
-guests. Task 21.1 is complete: all six measurements are read and all six
+Status: open, 2026-09-08. It opened when the owner asked whether a WDK 7.1
+build could give this driver 64-bit guests. Task 21.1 is complete: all six measurements are read and all six
 pass, so nothing in the ABI argues against Windows XP x64 and Server 2003
 x64. No 64-bit binary of this driver exists yet - which is also the limit of
 what has been shown, since a static pass cannot establish runtime behaviour.

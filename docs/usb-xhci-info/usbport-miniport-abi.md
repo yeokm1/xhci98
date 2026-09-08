@@ -235,10 +235,11 @@ re-specified interface.
 **A consequence worth stating**, because it is invisible from the source
 side: a `_WIN64` declaration of this packet must be **`0x250` bytes**, and a
 compiler's natural widening of the x86 declaration is not guaranteed to reach
-it. Pull request 6's `#ifdef _WIN64` block asserts `0x248`, eight bytes short,
-which would have usbport copy eight bytes past the end of the miniport's
-static packet. A `C_ASSERT` on what the compiler produced cannot catch that;
-only this measurement can.
+it. A `_WIN64` declaration built that way comes out at `0x248` - eight bytes
+short, which would have usbport copy eight bytes past the end of the
+miniport's static packet. A `C_ASSERT` on what the compiler produced cannot
+catch that, because it would simply agree with the compiler; only this
+measurement can.
 
 The map was then checked across the whole packet from the other side. The
 amd64 `usbehci.sys` fills its own packet (base RVA `0x9C60`, fixed by its four
