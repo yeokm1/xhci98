@@ -585,7 +585,18 @@ Modelled on Phase 19, which is the template for adding a VM-only target.
   `1.0.1.0` - the OS supplying `usbport.sys`, and the
   `DisableSelectiveSuspend` value - and NT 5.2's usbport is XP-lineage by
   M2's reading, so both should apply unchanged. "Should" is doing work again;
-  the guest settles it.
+  the guest settles it. **Half of it is now settled, statically, 2026-09-08.**
+  An XP x64 install with no USB controller has no `usbport.sys`,
+  `usbhub.sys`, `usbehci.sys` or `usbd.sys` on disk at all - exactly the
+  32-bit XP finding, so the Code 39 would recur and the first fix is needed
+  here too. The files are in `WINDOWS\Driver Cache\amd64\`, which is the
+  `LayoutFile` route's premise, and the three in `sp2.cab` are **byte-identical
+  by `sha256` to `tools/winxp64-extracted/`** - so the stack this guest will
+  install is the one M1-M6 were read from, which was worth confirming and is
+  not something the measurements themselves could say. Two details for whoever
+  writes the `.NTamd64` copy section: `usbd.sys` comes from `driver.cab` and
+  not `sp2.cab`, and unlike 32-bit XP it is not on disk in any form. The
+  second fix, `DisableSelectiveSuspend`, still needs the running guest.
 - **The tier this earns is the Windows ME and 32-bit XP tier**: supported in
   virtual machines, never observed on real hardware, no checkpoint tax on any
   phase, accommodated where the change is small and low-risk and never at a

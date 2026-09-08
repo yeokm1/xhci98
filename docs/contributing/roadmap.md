@@ -1672,16 +1672,35 @@ are static readings and no other task's box may be ticked on one.
         console for the product key, guest shut down from inside and the
         snapshot taken with the image cold (`qemu-img check`: no errors,
         13.36% of 16 GB allocated; snapshot ID 1, `VM_SIZE` 0 B, which is
-        what a powered-off snapshot should read). Evidence for "installed" is
-        the owner's own account of driving Setup to completion plus the
-        image's size; **no boot of the installed system has been observed
-        here yet**, and the two readings below are what would establish it
-  - [ ] the guest's installed `usbport.sys` hashed against
-        `tools/winxp64-extracted/usbport.sys`, confirming Setup placed the
-        file every M1-M6 reading was taken from
-  - [ ] whether an xHCI-only XP x64 install has `usbport.sys` on disk at all
-        - on 32-bit XP it did not, and `Driver Cache\amd64` behaving like
-        `Driver Cache\i386` is an expectation, not a reading
+        what a powered-off snapshot should read). The static listing taken for
+        the readings below then corroborated the install independently: an
+        11,767-file NTFS volume with `Documents and Settings\Administrator`,
+        a System Restore `RP1`, and `Prefetch` entries for `CTFMON`,
+        `RUNDLL32`, `MSIEXEC` and `MMC` timestamped after the last reboot -
+        that is a system that reached a desktop and ran programs on it. **The
+        installed system has still not been booted from the run launcher
+        here**, so nothing about the xHCI is known yet
+  - [x] the USB stack the guest will install hashed against
+        `tools/winxp64-extracted/`. **All three match byte for byte**
+        (`sha256`): `usbport.sys` `6fc83f49...05e1d`, `usbhub.sys`
+        `92b1744e...30198`, `usbehci.sys` `657daf4a...83d9a`. Read
+        2026-09-08 from the `winxp64-clean-install` snapshot, statically,
+        with no boot: 7-Zip 26.00 lists straight through the qcow2's MBR and
+        NTFS, so no `qemu-img convert` was needed. **Taken from
+        `Driver Cache\amd64\sp2.cab` rather than from an installed copy,
+        because there is no installed copy** - which is the box below
+  - [x] whether an xHCI-only XP x64 install has `usbport.sys` on disk at all
+        - **it does not, exactly as 32-bit XP.** No `usbport.sys`,
+        `usbhub.sys`, `usbehci.sys` or `usbd.sys` anywhere in the 11,767-file
+        image, `dllcache` included; the only `usb*.sys` present are
+        `usb8023.sys` and `usbcamd2.sys`. They sit in
+        `WINDOWS\Driver Cache\amd64\` - `usbport`/`usbhub`/`usbehci` in
+        `sp2.cab`, and `usbd.sys` (7,552 B, RTM-dated) in `driver.cab`, not
+        `sp2.cab`. So `Driver Cache\amd64` does behave like
+        `Driver Cache\i386` and the INF's `LayoutFile` route is needed on the
+        `.NTamd64` path too. **One difference from 32-bit XP worth carrying:**
+        there, `usbd.sys` was on disk as a 4,736-byte stub; here it is not on
+        disk at all
   - [ ] the checkpoint clauses below, on the amd64 binary
 - [ ] **21.6 - the record.** The tier stated where Windows ME and 32-bit XP
       are stated, in `AGENTS.md`, `build-and-test.md`, `win98-wdm.md` and the

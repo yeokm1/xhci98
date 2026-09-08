@@ -1868,16 +1868,41 @@ time, so a guest installed under one rung must be booted under it too.
    minutes and then a prompt.
 2. Shut down from the Start menu and snapshot:
    `qemu-img snapshot -c winxp64-clean-install vm\winxp64.img`.
-3. **Two cheap readings, neither needing a driver**, and both worth having
-   before one exists. Hash the guest's installed `usbport.sys` against
-   `tools\winxp64-extracted\usbport.sys`, confirming the file Setup placed is
-   the one every M1-M6 reading was taken from (the Phase 2a record-from-VM
-   step is the precedent). And check whether an xHCI-only XP x64 install has
-   `usbport.sys` on disk **at all**: on 32-bit XP it did not, which was the
-   Code 39 that release 1.0.1.0's INF fix answers. The NT install path already
-   copies it from `Driver Cache\i386`, so the expectation is that x64 behaves
-   the same from `Driver Cache\amd64` - but that is an expectation, and this
-   is the cheapest possible place to check it.
+3. **Two cheap readings, neither needing a driver - both taken 2026-09-08,
+   both pass.** Read statically off the `winxp64-clean-install` snapshot with
+   the guest never booted here, and cheaper than the Phase 19 precedent: **7-Zip
+   26.00 lists straight through the qcow2's MBR and NTFS in one pass**, so
+   the `qemu-img convert -O raw` step that the Windows 2000 listing needed is
+   no longer required (`7z l vm\winxp64.img`, 11,767 files).
+
+   **Reading 1 - is the stack this guest will install the one M1-M6 was read
+   from?** Yes, byte for byte. `sha256` of the three files against
+   `tools\winxp64-extracted\`:
+
+   | File | sha256 | |
+   |---|---|---|
+   | `usbport.sys` | `6fc83f49...05e1d` | identical |
+   | `usbhub.sys` | `92b1744e...30198` | identical |
+   | `usbehci.sys` | `657daf4a...83d9a` | identical |
+
+   Taken from `WINDOWS\Driver Cache\amd64\sp2.cab` rather than from an
+   installed copy, because there is no installed copy - which is reading 2.
+
+   **Reading 2 - does an xHCI-only XP x64 install have `usbport.sys` on disk
+   at all?** **No, exactly as 32-bit XP.** No `usbport.sys`, `usbhub.sys`,
+   `usbehci.sys` or `usbd.sys` anywhere in the image, `dllcache` included; the
+   only `usb*.sys` present are `usb8023.sys` and `usbcamd2.sys`, with
+   `usbport.inf` there to bind the stack that is not. The files live in
+   `WINDOWS\Driver Cache\amd64\`: `usbport`/`usbhub`/`usbehci` in `sp2.cab`,
+   and `usbd.sys` (7,552 B, RTM-dated 2005-03-24) in `driver.cab`, *not* in
+   `sp2.cab`. So `Driver Cache\amd64` behaves like `Driver Cache\i386`, the
+   Code 39 that release 1.0.1.0's INF fix answers would recur here, and the
+   `LayoutFile` route is needed on the `.NTamd64` path too - which is now a
+   reading rather than the expectation it was.
+
+   **One difference from 32-bit XP worth carrying forward:** there, `usbd.sys`
+   was present on disk as a 4,736-byte stub. On x64 it is not on disk at all,
+   and it comes from a different cabinet than the other three.
 
 **Then the guest waits, and its existence is not progress.** There is no
 amd64 binary to install: task 21.5's checkpoint needs one, and it depends on
@@ -1885,8 +1910,9 @@ amd64 binary to install: task 21.5's checkpoint needs one, and it depends on
 run launcher's transfer drive `vm\xferxp64` is empty until then. Pass `ehci`
 as the run launcher's second argument to add a companion EHCI, which makes the
 in-box stack place `usbport.sys` instead - the same escape hatch the 32-bit
-launcher carries, and the thing to reach for if the xHCI-only reading comes
-back the way 32-bit XP's did.
+launcher carries. **Reading 2 above did come back the way 32-bit XP's did**,
+so that escape hatch is the one to reach for if the `.NTamd64` `LayoutFile`
+route turns out not to place the stack.
 
 Phase 19 is the standing reminder for what to expect when the binary does
 arrive: there the ABI was right and the static work was right, and the guest
