@@ -476,6 +476,26 @@ afternoon. Section 10 says what to expect.
 for the reason it exists on x86: it is the flavour that makes a VM leg
 diagnosable.
 
+**The build plumbing is single-architecture the whole way down**, and that
+blocks an amd64 binary harder than any of the code changes in section 9 do.
+Read 2026-09-08, not assumed:
+
+- `src/sources` hardcodes `TARGETLIBS=.\usbport.lib` - one library, one
+  architecture.
+- `scripts\build-driver.cmd` hardcodes `i386` in **seven places**, including
+  all four `OUTSYS` paths and the `source-stamp.ps1 -Write` call.
+- It drives the **Windows 2000 DDK's** `setenv.bat`, not WDK 7.1's. The two
+  take different arguments entirely and cannot share a code path without a
+  fork.
+- The scout adds a fourth: WDK 7.1's `setenv.bat` sets
+  `BUILD_ALT_DIR=fre_wnet_AMD64`, which `src/sources`' three-flavour `!ERROR`
+  refuses outright. The fork has to override it *after* `setenv.bat`, exactly
+  as `build-driver.cmd` already does for `chk_qemu`.
+
+So a first amd64 build needs a second toolchain path **and** the import
+library below before a compiler is reached. It is not a half-hour job, and the
+small code changes of section 9 are not what stands between here and a binary.
+
 **The gates do not cover a 64-bit binary, and skipping them is not an
 option.**
 
@@ -650,6 +670,14 @@ not been asked.
    `usbehci.sys`'s `OpenEndpoint`, then declare it under `_WIN64` with the
    measured numbers. Until that reading exists, this structure is the one
    remaining place where an amd64 binary would be running on an assumption.
+
+   What to watch for is *width*, not position. `BufferVA` is the declared
+   `ULONG_PTR` and the reason the size moves at all; the three fields this
+   header spells `ULONG` in place of NT enums - `DeviceSpeed`, `TransferType`
+   and `Direction` - are the ones to check are still 4 bytes.
+   `InterruptAffinity` in item 2 is the cautionary case: a field pinned here
+   to `ULONG` that the real amd64 structure widens to 8, and the whole of why
+   `USBPORT_RESOURCES` comes out `0x40` instead of `0x48`.
 3. A `StartPA` high-DWORD refusal matching the one the scatter-gather path
    already makes. **M5 shows the adapter is created 32-bit, so this guards
    nothing measured** - it is the "check it, never assume it" rule applied one
@@ -659,7 +687,14 @@ not been asked.
    `espBefore`/`espAfter` locals at `4591`-`4592` have to go inside the same
    guard, or the free build takes an unreferenced-local warning, which `/WX`
    makes an error there.
-5. `src/xhci_compat.h`'s `ULONG_PTR` typedef guarded for 64-bit hosts.
+5. `src/xhci_compat.h`'s `ULONG_PTR` typedef guarded for 64-bit hosts. **This
+   does not block the amd64 driver build at all**, and reading it as a blocker
+   is the easy mistake: the typedef sits inside the `#ifdef XHCI_HOST_TEST`
+   block, and in a driver build `ntddk.h` supplies the real one. What it
+   blocks is item 7 - `test/test_packet.c` compiling for amd64. Windows is
+   LLP64, so `unsigned long` stays 32 bits while `ULONG_PTR` must be
+   pointer-sized; the typedef is accidentally correct today only because the
+   host tests build x86.
 6. Design record 04's common-buffer arithmetic re-run against the amd64
    `sizeof`s, and the result stated rather than assumed to carry.
 7. `test/test_packet.c` extended to compile the header for amd64, so the

@@ -1617,6 +1617,17 @@ measured it** - which adds a reading to 21.4. Design record 11 section 8, "The
 compile scout", has it. Nothing else in the phase has started, and no binary
 exists.
 
+**Suggested running order, and nothing in it needs the owner** - WDK 7.1 is
+unpacked, the reference binaries are extracted, and none of the five open
+decisions in design record 11 section 12 gates a compile; they are all about
+shipping, INF shape and toolchain provenance. Take the
+`USBPORT_ENDPOINT_PROPERTIES` reading in 21.4 **first**, because the compiler
+now has nothing further to say about this source and that is the one
+declaration with no measurement behind it. Then the rest of 21.4's small
+items, then 21.2 - whose real weight is the build plumbing rather than the
+code, since it is single-architecture the whole way down (design record 11
+section 8).
+
 Why a phase: the same reason Phase 19 was one. A target is not a build. The
 static pass has to settle the ABI before any code is written, the guest has
 to settle the runtime the static pass cannot, and the gates, the INF and the
@@ -1702,7 +1713,10 @@ are static readings and no other task's box may be ticked on one.
   - [ ] `src/xhci_dispatch.c:1001`'s implicit `ULONG_PTR` -> `ULONG`
         truncation, the one thing the amd64 compiler objects to in this
         source, and fatal in `release` only
-  - [ ] `src/xhci_compat.h`'s `ULONG_PTR` typedef guarded for 64-bit hosts
+  - [ ] `src/xhci_compat.h`'s `ULONG_PTR` typedef guarded for 64-bit hosts.
+        **Not a blocker for the driver build** - the typedef is inside the
+        `#ifdef XHCI_HOST_TEST` block and `ntddk.h` supplies the real one in a
+        driver build. What it blocks is the `test/test_packet.c` box below
   - [ ] design record 04's common-buffer arithmetic re-run against the amd64
         `sizeof`s and the result stated
   - [ ] `test/test_packet.c` compiling the header for amd64, so
