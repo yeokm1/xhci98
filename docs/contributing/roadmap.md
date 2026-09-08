@@ -1588,9 +1588,11 @@ with its standing stated in every document that names the targets.
 
 Status: open, 2026-09-08. It opened when the owner asked how pull request 6
 (`WDK 7.1`, GeorgeK1ng) could be integrated and narrowed it to 64-bit
-guests. Task 21.1's first three measurements are read and all three pass;
-its other three are open, and nothing else has started. No 64-bit binary of
-this driver exists yet.
+guests. Task 21.1 is complete: all six measurements are read and all six
+pass, so nothing in the ABI argues against Windows XP x64 and Server 2003
+x64. Nothing else has started, and no 64-bit binary of this driver exists
+yet - which is also the limit of what has been shown, since a static pass
+cannot establish runtime behaviour.
 
 Why a phase: the same reason Phase 19 was one. A target is not a build. The
 static pass has to settle the ABI before any code is written, the guest has
@@ -1609,7 +1611,7 @@ extraction.
 
 | Task | Subject | State |
 |---|---|---|
-| 21.1 | the static ABI pass: M1 the two private exports, M2 the `USBPORT_GetHciMn` lineage value, M3 the version gate and copied packet size, M4 the `USBPORT_RESOURCES` layout, M5 the DMA adapter width, M6 the service-pointer block and callback offsets | M1-M3 read 2026-09-08, all pass; M4-M6 open |
+| 21.1 | the static ABI pass: M1 the two private exports, M2 the `USBPORT_GetHciMn` lineage value, M3 the version gate and copied packet size, M4 the `USBPORT_RESOURCES` layout, M5 the DMA adapter width, M6 the service-pointer block and callback offsets | all six read 2026-09-08, all pass |
 | 21.2 | the x64 build path: one `WNET` amd64 binary, `fre` and `chk`, and the `qemu` flavour's `__asm` exclusion | open |
 | 21.3 | the gates: an amd64 dimension in the import gate with NT 5.2 baselines, arch-conditional checks in the usbport import-library generator, and the INF decision with whatever gate work it implies | open |
 | 21.4 | the code changes task 21.1 implies (design record 11 section 9) | open |

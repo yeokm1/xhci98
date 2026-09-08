@@ -238,9 +238,81 @@ compiler's natural widening of the x86 declaration is not guaranteed to reach
 it. Pull request 6's `#ifdef _WIN64` block asserts `0x248`, eight bytes short,
 which would have usbport copy eight bytes past the end of the miniport's
 static packet. A `C_ASSERT` on what the compiler produced cannot catch that;
-only this measurement can. The amd64 `USBPORT_RESOURCES` layout and the
-identity of each of the sixteen service slots are not yet read (Phase 21 task
-21.1, M4 and M6).
+only this measurement can.
+
+The map was then checked across the whole packet from the other side. The
+amd64 `usbehci.sys` fills its own packet (base RVA `0x9C60`, fixed by its four
+size stores at `+0x10`, `+0x14`, `+0x18` and `+0x24`) in `DriverEntry` at RVA
+`0x6180`, and **all 50 pointer slots it writes land on `f(X)` of a field the
+x86 record names**, from `OpenEndpoint` at `0x28` to `RebalanceEndpoint` at
+`0x220` and the last callback at `0x238`. `0x238` is `f(0x130)`, the slot
+before the x86 record's two trailing `Reserved` fields at `0x134` and `0x138`;
+under the same map those sit at `0x240` and `0x248`, which puts the end of the
+structure at `0x250` and accounts for the eight bytes exactly. Which usbport
+service occupies each of the sixteen service slots is not individually read -
+the x86 identities plus this map carry them, and a future caller of a service
+this driver does not use today should read its slot rather than trust that.
+
+### `USBPORT_RESOURCES` on NT 5.2 amd64 (`StartPA` does not widen)
+
+Read from the amd64 `usbehci.sys`'s `StartController` - the function its packet
+names at slot `0x48`, at RVA `0x82D0` - which receives the structure in `rdx`
+(kept in `r12`). The load widths are the field widths:
+
+```
+  movzx eax,byte ptr [r12]        ; ResourcesTypes, then and al,6 / cmp al,6
+  mov   eax,dword ptr [rdx+4]     ; HcFlavor        dword at 0x04
+  mov   rdx,qword ptr [r12+28h]   ; ResourceBase    QWORD at 0x28
+  mov   rdx,qword ptr [r12+38h]   ; StartVA         QWORD at 0x38
+  mov   r8d,dword ptr [r12+40h]   ; StartPA         DWORD at 0x40
+  cmp   byte ptr [r12+45h],0      ; IsChirpHandled  byte  at 0x45
+```
+
+| Offset | Width | Field | vs x86 |
+|---|---|---|---|
+| `0x00` | 4 | `ResourcesTypes` | `0x00` |
+| `0x04` | 4 | `HcFlavor` | `0x04` |
+| `0x08` | 4 | `InterruptVector` | `0x08` |
+| `0x0C` | 1 + 3 pad | `InterruptLevel` | `0x0C` |
+| `0x10` | 8 | `InterruptAffinity` | `0x10`, widened (`KAFFINITY`) |
+| `0x18` | 1 + 3 pad | `ShareVector` | `0x14` |
+| `0x1C` | 4 | `InterruptMode` | `0x18` |
+| `0x20` | 4 + 4 pad | `Reserved` | `0x1C` |
+| `0x28` | 8 | `ResourceBase` | `0x20`, widened (`PVOID`) |
+| `0x30` | 4 + 4 pad | `IoSpaceLength` | `0x24` |
+| `0x38` | 8 | `StartVA` | `0x28`, widened |
+| `0x40` | **4** | `StartPA` | `0x2C`, **not widened** |
+| `0x44`-`0x47` | 1 each | `LegacySupport`, `IsChirpHandled`, `Reserved2`, `Reserved3` | `0x30`-`0x33` |
+
+`sizeof` is `0x48`. **`StartPA` stays a `ULONG`**, so the common-buffer
+physical address is 32-bit on amd64 as it is on x86 and nothing after it
+shifts. Unlike the registration packet, this structure's amd64 layout *is* what
+a compiler's natural widening of the x86 declaration produces - which is why
+both had to be measured rather than one inferred from the other.
+
+### The DMA adapter is created 32-bit on amd64 too
+
+`IoGetDmaAdapter` (IAT RVA `0x2A0D0`, confirmed through its import-name-table
+entry) has exactly one call site in the whole image, `.text` RVA `0x313E`,
+inside a function starting at RVA `0x2340` (`.pdata` chains `0x2929`-`0x34F1`
+-> `0x234E`-`0x2929` -> `0x2340`-`0x234E`). The `DEVICE_DESCRIPTION` it passes
+in `rdx` is zeroed and filled at RVA `0x269F`-`0x270B`:
+
+```
+  mov  byte  ptr [rsp+8Ch],1           ; +0x04 Master            = 1
+  mov  byte  ptr [rsp+8Dh],1           ; +0x05 ScatterGather     = 1
+  mov  byte  ptr [rsp+90h],1           ; +0x08 Dma32BitAddresses = 1
+  mov  dword ptr [rsp+9Ch],5           ; +0x14 InterfaceType     = PCIBus
+  mov  dword ptr [rsp+0A0h],2          ; +0x18 DmaWidth          = Width32Bits
+  mov  dword ptr [rsp+0A8h],0FFFFFFFFh ; +0x20 MaximumLength
+```
+
+`Dma64BitAddresses` (`+0x0B`) is left zero by the five zeroing stores and never
+written. So the sentence this document already carries for the 32-bit builds -
+the high DWORD of a mapped address is zero *because the adapter is created
+32-bit*, not because any element writer forces it - holds unchanged on NT 5.2
+amd64, and holds regardless of how much RAM the machine has. The miniport rule
+does not change with it: the high DWORD is a value to check, never to assume.
 
 ## 2. Constants
 

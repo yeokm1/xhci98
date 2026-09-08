@@ -55,12 +55,12 @@ two 32-bit primary targets, recorded where it was made, and each is a place a
 
 | Where | What it assumes | What 64 bits does to it |
 |---|---|---|
-| `src/xhci_usbport.h`, `USBPORT_RESOURCES.StartPA` | The common-buffer physical address is a `ULONG` at offset `0x2C`, "high DWORD is 0" | If the real amd64 structure holds a full 8-byte `PHYSICAL_ADDRESS` there, every field after it is misread. **M4, open.** |
+| `src/xhci_usbport.h`, `USBPORT_RESOURCES.StartPA` | The common-buffer physical address is a `ULONG` at offset `0x2C`, "high DWORD is 0" | If the real amd64 structure holds a full 8-byte `PHYSICAL_ADDRESS` there, every field after it is misread. **M4 read it: `StartPA` is a `ULONG` at `0x40`, unwidened, and nothing shifts.** |
 | `src/xhci_usbport.h` header, "binary-confirmed facts" | Registration copies `0x13C` (316) bytes for a `Version >= 200` miniport, and usbport writes 16 service pointers at `0xE4`-`0x120` | Both are x86 numbers. The amd64 counterparts are `0x250` and `0x1A0`-`0x218`; **M3 read them**, and both are the exact widening of the x86 pair. |
 | `src/xhci_dispatch.c:4640` | `USBPORT_GetHciMn` returns one of exactly two values, and any third is refused with `STATUS_UNSUCCESSFUL` | NT 5.2 amd64 returns `0x10000001`, which is already one of the two. **M2 read it; no change is needed.** |
 | `src/xhci_dispatch.c:4670`, `:4678` | Inline `__asm mov espBefore, esp` brackets the registration call under `XHCI_DBG_TRACE` | MSVC has no inline assembler on x64, so the `qemu` flavour - the one a VM leg most wants - does not compile until this is excluded under `_WIN64`. It is also unnecessary there: x64 has one calling convention, so the stack-delta check has nothing to catch. |
 | `src/xhci_compat.h:34` | `ULONG_PTR` is `typedef unsigned long` | Wrong under `_WIN64`. Harmless while the host tests build x86; a guard is needed before any 64-bit compile of the DDK-free core. |
-| `src/xhci_xfer.c:542`, `src/xhci_probe.c:162` | A scatter-gather element with `SgPhysicalAddressHi != 0` is refused | Already right, and why a >4 GB transfer address is a clean failure rather than silent corruption. It does not cover the controller common buffer, which arrives through `StartPA`. **M5, open.** |
+| `src/xhci_xfer.c:542`, `src/xhci_probe.c:162` | A scatter-gather element with `SgPhysicalAddressHi != 0` is refused | Already right, and why a >4 GB transfer address is a clean failure rather than silent corruption. It does not cover the controller common buffer, which arrives through `StartPA`. **M5 read the adapter: still created 32-bit, so nothing lands above 4 GB.** |
 | `docs/contributing/design/04-controller-common-buffer.md` | The fixed 400 KiB block's arithmetic, derived from the sizes of the driver's own structures | Several of those structures hold pointers and grow on amd64. The derivation is arithmetic over `sizeof`, so it does not silently break, but it has to be re-run and the record re-stated rather than assumed to carry. |
 | `AGENTS.md`, "Language and arithmetic" | No 64-bit arithmetic, because Windows 98's kernel may lack the `_alldiv`-style compiler helpers | This constraint exists for Windows 98 and does not bind an amd64 binary that never runs there. It must not be relaxed in shared code for that reason: the shared source still has to compile for Windows 98. |
 
@@ -160,8 +160,10 @@ what terms it is fetched, is decision 4 in section 12.
 
 ## 5. The six measurements
 
-M1 through M3 were read on 2026-09-08 and all three pass. M4 through M6 are
-the expensive transcription work and are open.
+All six were read on 2026-09-08 and all six pass. M1 through M3 came first
+and any one of them could have ended the investigation; M4 through M6 are
+the transcription work that M3's result turned from open questions into
+confirmation.
 
 ### M1 - the two private exports · **read, pass**
 
@@ -240,62 +242,157 @@ most important thing this measurement establishes. The packet is ten leading
 
 This is not an interface that happens to resemble the x86 one. It is the same
 C declaration compiled for a wider pointer, which is what NT 5.2 amd64
-`usbport.sys` is. That is what makes M4 and M6 transcription work rather than
-open questions.
+`usbport.sys` is. That is what turned M4 and M6 from open questions into
+confirmation, and the three sections below are that confirmation.
 
-### M6 (partial) - the service-pointer block · **read**
+### M4 - the `USBPORT_RESOURCES` layout - **read, pass**
 
-Taken for free while reading M3. Before copying, usbport writes 16 pointers
-into the *caller's* packet at these offsets, at RVAs `0x221FE` through
-`0x222E1`:
+Read from the amd64 `usbehci.sys`'s `StartController`, which the packet's
+`0x48` slot names as `usbehci+0x82D0`. It is handed the structure in `rdx`
+(saved into `r12`), and its loads give the field offsets and widths directly:
+
+```
+  movzx eax,byte ptr [r12]        ; ResourcesTypes, tested with and al,6 / cmp al,6
+  mov   eax,dword ptr [rdx+4]     ; HcFlavor          dword at 0x04
+  mov   rdx,qword ptr [r12+28h]   ; ResourceBase      QWORD at 0x28
+  mov   rdx,qword ptr [r12+38h]   ; StartVA           QWORD at 0x38
+  mov   r8d,dword ptr [r12+40h]   ; StartPA           DWORD at 0x40
+  cmp   byte ptr [r12+45h],0      ; IsChirpHandled    byte  at 0x45
+```
+
+giving the amd64 layout, `sizeof` `0x48`:
+
+| Offset | Width | Field |
+|---|---|---|
+| `0x00` | 4 | `ResourcesTypes` |
+| `0x04` | 4 | `HcFlavor` |
+| `0x08` | 4 | `InterruptVector` |
+| `0x0C` | 1 + 3 pad | `InterruptLevel` |
+| `0x10` | 8 | `InterruptAffinity` (`KAFFINITY`, widened) |
+| `0x18` | 1 + 3 pad | `ShareVector` |
+| `0x1C` | 4 | `InterruptMode` |
+| `0x20` | 4 + 4 pad | `Reserved` |
+| `0x28` | 8 | `ResourceBase` |
+| `0x30` | 4 + 4 pad | `IoSpaceLength` |
+| `0x38` | 8 | `StartVA` |
+| `0x40` | **4** | `StartPA` |
+| `0x44`-`0x47` | 1 each | `LegacySupport`, `IsChirpHandled`, `Reserved2`, `Reserved3` |
+
+**`StartPA` did not widen.** It is read as a dword, so the common-buffer
+physical address is a `ULONG` on amd64 exactly as on x86, nothing after it
+shifts, and `XhciCheckResourceBase(ULONG_PTR startVA, ULONG startPA)` already
+has the right signature. This was the most load-bearing open question in
+section 2 and it resolves in the driver's favour.
+
+Pull request 6's three `USBPORT_RESOURCES` assertions - `sizeof == 0x48`,
+`ResourceBase` at `0x28`, `StartVA` at `0x38` - are all **correct**. They were
+tautological as written, but the binary agrees with them, so promoting them to
+measured numbers costs nothing. That is not true of the packet (section 9
+item 2), and the difference between the two cases is exactly why this had to
+be measured rather than reasoned out.
+
+### M5 - the DMA adapter width - **read, pass**
+
+`IoGetDmaAdapter` is imported at IAT RVA `0x2A0D0` - verified by following
+that slot to its import-name-table entry, not by trusting name ordering - and
+is called from exactly **one** site in the whole image, `.text` RVA `0x313E`:
+
+```
+  mov  rcx,qword ptr [rbx+1A8h]   ; PDO
+  lea  r8,[rbx+6C8h]              ; &NumberOfMapRegisters
+  lea  rdx,[rsp+88h]              ; DEVICE_DESCRIPTION
+  call qword ptr [IoGetDmaAdapter]
+```
+
+The containing function starts at RVA `0x2340`: the `.pdata` entry covering
+the call site is a chained continuation, `0x2929`-`0x34F1` -> `0x234E`-`0x2929`
+-> `0x2340`-`0x234E`, and the descriptor is zeroed and filled in the primary
+chunk at RVA `0x269F`-`0x270B`:
+
+```
+  mov  qword ptr [rsp+88h],rax        ; zero the whole 0x28-byte descriptor
+  mov  qword ptr [rsp+90h],rax        ;   (rax = 0, five qword stores)
+  mov  qword ptr [rsp+98h],rax
+  mov  qword ptr [rsp+0A0h],rax
+  mov  qword ptr [rsp+0A8h],rax
+  mov  dword ptr [rsp+88h],r14d       ; +0x00 Version
+  mov  byte  ptr [rsp+8Ch],1          ; +0x04 Master            = 1
+  mov  byte  ptr [rsp+8Dh],1          ; +0x05 ScatterGather     = 1
+  mov  byte  ptr [rsp+90h],1          ; +0x08 Dma32BitAddresses = 1
+  mov  dword ptr [rsp+9Ch],5          ; +0x14 InterfaceType     = PCIBus
+  mov  dword ptr [rsp+0A0h],2         ; +0x18 DmaWidth          = Width32Bits
+  mov  dword ptr [rsp+0A4h],r14d      ; +0x1C DmaSpeed          = Compatible
+  mov  dword ptr [rsp+0A8h],0FFFFFFFFh; +0x20 MaximumLength
+```
+
+**`Dma32BitAddresses = 1`, `DmaWidth = Width32Bits`, and `Dma64BitAddresses`
+(`+0x0B`) is left zero by the zeroing stores and never written.** The adapter
+on NT 5.2 amd64 is created 32-bit, identical to what `src/xhci_usbport.h`'s
+scatter-gather comment records for the 32-bit builds.
+
+So on a 64-bit guest the common buffer and every mapped transfer buffer stay
+below 4 GB whatever the guest's RAM, the high DWORD of an address is zero for
+the same measured reason as before, and `StartPA` being a `ULONG` (M4) is
+consistent rather than lucky. The RAM cap this section previously called for
+is not needed; keeping the first guest small is free and worth doing anyway,
+but it is now a convenience rather than a mitigation.
+
+The rule this project already applies does not change: the high DWORD is a
+value to **check**, never to assume. `src/xhci_xfer.c:542` stays exactly as it
+is, and item 3 of section 9 stands on that principle rather than on a measured
+hazard.
+
+### M6 - the offset map, end to end - **read, pass**
+
+Two halves, both taken.
+
+**The service-pointer block.** Before copying, usbport writes 16 pointers into
+the *caller's* packet, at RVAs `0x221FE` through `0x222E1`, at offsets
 
 ```
 0x1A0 0x1A8 0x1B0 0x1B8 0x1C0 0x1C8 0x1D0 0x1D8
 0x1E0 0x1E8 0x1F0 0x1F8 0x200 0x208 0x210 0x218
 ```
 
-Sixteen, exactly as on x86, and the widening map `f(X) = 0x28 + (X - 0x28) *
-2` carries the x86 block `0xE4`-`0x120` onto `0x1A0`-`0x218` precisely. The
-behaviour is unchanged too: usbport writes these into the miniport's own
-packet and touches no other field before copying it.
+Sixteen, ascending, exactly as on x86, and the widening map `f(X) = 0x28 + (X
+- 0x28) * 2` carries the x86 block `0xE4`-`0x120` onto `0x1A0`-`0x218`
+precisely. usbport's behaviour is unchanged: it writes these into the
+miniport's own packet and touches no other field before copying it.
 
-Which service is at which of the sixteen slots is not yet read; that is the
-rest of M6.
+**The miniport callback block.** The amd64 `usbehci.sys` fills its packet -
+base RVA `0x9C60`, established from its four size stores at `+0x10`, `+0x14`,
+`+0x18` and `+0x24` - in `DriverEntry` at RVA `0x6180`. Extracting every
+`mov [rip+d],reg` into that packet gives **50 filled pointer slots, and every
+one lands on `f(X)` of a field the x86 record names**:
 
-### M4 - the `USBPORT_RESOURCES` layout · **open**
+```
+  0x028 OpenEndpoint         0x048 StartController     0x078 SubmitTransfer
+  0x030 ReopenEndpoint       0x050 StopController      0x080 SubmitIsoTransfer
+  0x038 QueryEndpointReqts   0x058 SuspendController   ...
+  0x040 CloseEndpoint        0x060 ResumeController    0x220 RebalanceEndpoint
+```
 
-The offset and width of every field, and in particular whether `StartPA` is
-4 bytes or 8. Read the amd64 `usbehci.sys`'s `StartController` callback,
-which is handed a pointer to this structure and loads from it: each load's
-displacement is a field offset and each load's width is a field width.
+running from `0x028` to `0x238`, no slot off the map and no slot unaccounted
+for. Fifty independent confirmations that the amd64 packet is the x86
+declaration compiled wide.
 
-`ResourceBase` (the mapped BAR0 virtual address), `StartVA` and `StartPA` are
-the three fields the driver's start path depends on, and
-`XhciCheckResourceBase(ULONG_PTR startVA, ULONG startPA)` takes the last as a
-`ULONG`. A widened `StartPA` shifts everything after it.
+**And the tail, which is where the eight bytes are.** The last slot usbehci
+fills is `0x238` = `f(0x130)`, the last callback before the x86 record's two
+trailing `Reserved` fields at `0x134` and `0x138`. Under the same map those
+land at `0x240` and `0x248`, and a field at `0x248` puts the structure's end at
+`0x250` - exactly what usbport copies. A declaration that keeps them 4 bytes
+wide packs them at `0x240` and `0x244` and ends at `0x248`, which is pull
+request 6's number and eight bytes short. The measured requirement is the
+size: **a `_WIN64` packet declaration must be `0x250` bytes.** Whether that is
+reached by widening the two `Reserved` fields or by explicit tail padding is an
+implementation choice - both are reserved and neither is read by this driver.
 
-Record it as a second `USBPORT_RESOURCES` table in
-`docs/usb-xhci-info/usbport-miniport-abi.md`, explicitly labelled amd64 and
-kept separate from the x86 one.
+What is *not* read, and needs not be for this phase: which usbport service
+sits in each of the sixteen service slots. Their x86 identities are already in
+the record and the map is now validated across 50 slots, so the arithmetic
+carries them. If a change ever calls a service this driver does not call
+today, read that slot rather than trusting the inference.
 
-### M5 - the DMA adapter width · **open**
-
-Does amd64 usbport create its DMA adapter with `Dma32BitAddresses` set, as
-the 32-bit builds do? Read the `DEVICE_DESCRIPTION` its start path fills
-before `IoGetDmaAdapter`.
-
-`src/xhci_usbport.h`'s scatter-gather comment records the measured reason the
-high DWORD of a transfer address is always zero on the 32-bit targets: *the
-adapter is created 32-bit, not because any element writer forces it*. On a
-64-bit guest with more than 4 GB of RAM, if the adapter is created 64-bit,
-the common buffer and the transfer buffers can land above 4 GB. The transfer
-path already refuses that cleanly; the controller common buffer, which
-arrives through `StartPA`, has no equivalent guard.
-
-This is the largest remaining *runtime* unknown, and the one that could
-produce a driver that works with 2 GB of guest RAM and fails intermittently
-with 8. **Interim mitigation: cap the guest below 4 GB**, which makes the
-question moot for a first VM leg without deciding it.
 
 ---
 
@@ -351,12 +448,22 @@ The gate as written before any measurement, with what actually happened:
 |---|---|---|
 | M1 fails | Stop. No Option A on 64-bit Windows. | Did not happen; three exports, same ordinals |
 | M3 shows a packet that is not the 316-byte one widened | Stop and record it: a different ABI, not a wider one, and a different project | Did not happen; `0x250` and `0x230` are the exact widening |
-| M2 gives a third constant; M3-M6 correspond to the x86 record widened | Proceed | Better than this: M2 gave a value the driver already accepts |
-| M4 shows `StartPA` widened, or any field where the compiler's natural layout disagrees with the binary | Proceed, but the declaration needs explicit padding and the asserts must carry measured numbers | **Already true - see section 9, item 2** |
-| M5 shows a 64-bit adapter | Proceed with a `StartPA` high-DWORD refusal added first, and keep the guest under 4 GB until it has been exercised | Open |
-| Vista / Windows 7 differ from 5.2 | Claim Windows XP x64 and Server 2003 x64 only, and record what differs | Open |
+| M2 gives a third constant; M3-M6 correspond to the x86 record widened | Proceed | Better than this: M2 gave a value the driver already accepts, and M6 confirmed the widening across 50 slots |
+| M4 shows `StartPA` widened, or any field where the compiler's natural layout disagrees with the binary | Proceed, but the declaration needs explicit padding and the asserts must carry measured numbers | `StartPA` did **not** widen and `USBPORT_RESOURCES` agrees with the natural layout; the packet does not, and is `0x250` against a natural `0x248` |
+| M5 shows a 64-bit adapter | Proceed with a `StartPA` high-DWORD refusal added first, and keep the guest under 4 GB until it has been exercised | Did not happen; the adapter is created 32-bit, `DmaWidth = Width32Bits` |
+| Vista / Windows 7 differ from 5.2 | Claim Windows XP x64 and Server 2003 x64 only, and record what differs | Open - their binaries have not been read |
 
-Nothing measured so far argues against Windows XP x64 and Server 2003 x64.
+**All six measurements are taken and all six pass.** The static pass set out
+to find a reason this cannot work on Windows XP x64 and Server 2003 x64, and
+found none. What it found instead was one defect in the pull request that no
+compile-time assertion could have caught (section 9 item 2), and one
+assumption that turned out to be safe for a measured reason rather than a
+lucky one (M5).
+
+What the static pass cannot establish is runtime behaviour, and Phase 19 is
+the standing reminder of how much that leaves: there, the ABI was right, the
+static work was right, and the guest still produced three problems in an
+afternoon. Section 10 says what to expect.
 
 ---
 
@@ -429,7 +536,9 @@ ignored outright by the 64-bit setup engine, and
    binary shows it. The asserts must carry measured numbers so that they can
    fail.
 3. A `StartPA` high-DWORD refusal matching the one the scatter-gather path
-   already makes. **From M5.**
+   already makes. **M5 shows the adapter is created 32-bit, so this guards
+   nothing measured** - it is the "check it, never assume it" rule applied one
+   place further, and is optional on the evidence rather than required by it.
 4. The `__asm` stack-delta check excluded under `_WIN64`.
 5. `src/xhci_compat.h`'s `ULONG_PTR` typedef guarded for 64-bit hosts.
 6. Design record 04's common-buffer arithmetic re-run against the amd64
