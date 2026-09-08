@@ -1605,29 +1605,90 @@ Windows XP x64 and Server 2003 x64 are one target, not two: both are NT
 5.2.3790, and the WDK ships `lib\wxp\i386` with no `amd64` counterpart, so
 NT 5.2 (`WNET`) is the only route to a 64-bit XP driver. Vista x64 and
 Windows 7 x64 are a separate question and a second leg, because both enforce
-kernel-mode code signing and both stage driver packages differently; task
-21.1 reads their binaries at the same time because doing so costs only
-extraction.
+kernel-mode code signing and both stage driver packages differently. Task
+21.7 reads their binaries by the same static method, because doing so costs
+only the extraction; nothing else in the phase waits on it.
 
-| Task | Subject | State |
-|---|---|---|
-| 21.1 | the static ABI pass: M1 the two private exports, M2 the `USBPORT_GetHciMn` lineage value, M3 the version gate and copied packet size, M4 the `USBPORT_RESOURCES` layout, M5 the DMA adapter width, M6 the service-pointer block and callback offsets | all six read 2026-09-08, all pass |
-| 21.2 | the x64 build path: one `WNET` amd64 binary, `fre` and `chk`, and the `qemu` flavour's `__asm` exclusion | open |
-| 21.3 | the gates: an amd64 dimension in the import gate with NT 5.2 baselines, arch-conditional checks in the usbport import-library generator, and the INF decision with whatever gate work it implies | open |
-| 21.4 | the code changes task 21.1 implies (design record 11 section 9) | open |
-| 21.5 | the Windows XP x64 guest and its checkpoint | open |
-| 21.6 | the record: the tier stated where Windows ME and 32-bit XP are stated, and the provenance rows | open |
+Tasks. A box is ticked only on the evidence its line names; `21.1`'s boxes
+are static readings and no other task's box may be ticked on one.
 
-Checkpoint: the static pass complete and transcribed into
-`usb-xhci-info/usbport-miniport-abi.md` with every fact tagged `static`; the
-gates green on an amd64 binary; and on a Windows XP x64 guest the package
-installed on an xHCI-only machine, the driver registered and started, its No
-Op self-test passed, the root-hub callbacks answered, a HID mouse, a
-mass-storage device and a composite audio device bound, and the Device
-Manager disable, enable, remove and rescan sequence survived. Not a
-checkpoint: a build that links, or a static reading standing in for a guest.
-No primary target's checkpoint waits on any of this, and none of it may cost
-a primary target anything.
+- [x] **21.1 - the static ABI pass.** Read 2026-09-08 from
+      `tools/winxp64-extracted/`, NT 5.2 amd64 `usbport.sys` and
+      `usbehci.sys` 5.2.3790.3959. Method `static` throughout; design record
+      11 section 5 has each reading with its RVA and instruction bytes, and
+      `usb-xhci-info/usbport-miniport-abi.md` carries the transcription.
+  - [x] M1 the two private exports - three names, same three ordinals as
+        every 32-bit lineage
+  - [x] M2 the `USBPORT_GetHciMn` value - `0x10000001`, already accepted, so
+        no code change follows
+  - [x] M3 the version gate and copied packet sizes - unchanged gate,
+        `0x250` / `0x230`, the exact widening of `0x13C` / `0x12C`
+  - [x] M4 the `USBPORT_RESOURCES` layout - `sizeof` `0x48`, and `StartPA`
+        stays a 4-byte `ULONG`, so nothing after it shifts
+  - [x] M5 the DMA adapter width - still created 32-bit
+        (`Dma32BitAddresses = 1`, `DmaWidth = Width32Bits`), so nothing
+        lands above 4 GB whatever the guest's RAM
+  - [x] M6 the offset map end to end - all 50 slots the amd64 `usbehci`
+        fills land on `f(X) = 0x28 + (X - 0x28) * 2`
+- [ ] **21.2 - the x64 build path.** One `WNET` amd64 binary, `fre` and
+      `chk`, from `tools/WinDDK71`.
+  - [ ] the `qemu` flavour's `__asm` exclusion under `_WIN64`, without which
+        that flavour does not compile at all
+  - [ ] the first build that links, which is also the first time this source
+        has been through a non-MSVC-6 compiler
+- [ ] **21.3 - the gates.** None of these may be skipped for an amd64
+      binary.
+  - [ ] an `amd64` dimension in the import gate, with NT 5.2 amd64 baselines
+        behind it as `win2k-baselines.expected` has for SP4
+  - [ ] arch-conditional checks in `scripts\make-usbport-lib.cmd` - the
+        undecorated-name check replacing the `@N` one, the other four steps
+        unchanged
+  - [ ] the INF decision (one INF and a four-leg re-validation, or a separate
+        x64 package leaving `src/xhci98.inf` byte-identical) and whatever
+        gate work it implies
+  - [ ] `make-package.ps1` staging a second architecture
+- [ ] **21.4 - the code changes task 21.1 implies** (design record 11
+      section 9).
+  - [ ] the `_WIN64` packet declaration at the measured `0x250`, with
+        asserts carrying measured numbers rather than the compiler's own
+  - [ ] `src/xhci_compat.h`'s `ULONG_PTR` typedef guarded for 64-bit hosts
+  - [ ] design record 04's common-buffer arithmetic re-run against the amd64
+        `sizeof`s and the result stated
+  - [ ] `test/test_packet.c` compiling the header for amd64, so
+        `test\run-host-tests.cmd` checks the layout on the build host
+- [ ] **21.5 - the Windows XP x64 guest** and its checkpoint below.
+- [ ] **21.6 - the record.** The tier stated where Windows ME and 32-bit XP
+      are stated, in `AGENTS.md`, `build-and-test.md`, `win98-wdm.md` and the
+      release notes, with the provenance rows beside it.
+- [ ] **21.7 - the same six measurements on Vista x64 and Windows 7 x64**,
+      which decides whether one `WNET` amd64 binary serves them too (design
+      record 11 section 6). Extraction and disassembly only: no VM, no build,
+      and no dependency on any other task here, so it can be taken whenever
+      the media is to hand. A difference in any of the six narrows the claim
+      to Windows XP x64 and Server 2003 x64 rather than blocking it, so
+      nothing else in this phase waits on it.
+  - [ ] Vista x64 - `usbport.sys` and `usbehci.sys` extracted, hashed,
+        version-stamped, and the six read
+  - [ ] Windows 7 x64 - the same
+  - [ ] whichever way they read, recorded: the tier claimed, and the two
+        things true of both regardless (kernel-mode code signing, and the
+        driver-store install path the `LayoutFile` route was not written for)
+
+Checkpoint. Every clause, or the phase is not closed:
+
+- [x] the static pass complete and transcribed into
+      `usb-xhci-info/usbport-miniport-abi.md`, every fact tagged `static`
+- [ ] the gates green on an amd64 binary
+- [ ] on a Windows XP x64 guest: the package installed on an xHCI-only
+      machine
+- [ ] the driver registered and started, and its No Op self-test passed
+- [ ] the root-hub callbacks answered
+- [ ] a HID mouse, a mass-storage device and a composite audio device bound
+- [ ] the Device Manager disable, enable, remove and rescan sequence survived
+
+Not a checkpoint: a build that links, or a static reading standing in for a
+guest. No primary target's checkpoint waits on any of this, and none of it
+may cost a primary target anything.
 
 Records: `design/11-x64-targets.md`; `usb-xhci-info/usbport-miniport-abi.md`;
 `legal-provenance.md` section 4; `build-and-test.md`.
