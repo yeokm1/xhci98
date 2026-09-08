@@ -521,6 +521,99 @@ ignored outright by the 64-bit setup engine, and
 `scripts\package\make-package.ps1` hardcodes a single `i386` payload path
 (line 155) and needs the arch dimension whichever route is chosen.
 
+### The compile scout - taken 2026-09-08, and it comes back nearly clean
+
+Before any of that plumbing is written, WDK 7.1's x64 compiler was pointed
+straight at `src/` to find out what amd64 actually says about this code. The
+scout needs none of the plumbing: `build /L` compiles every file and runs no
+link phase, so no amd64 `usbport.lib` and no arch fork through
+`build-driver.cmd` were required, and the repo's own `sources` drove it
+unmodified in a scratch copy of `src/`.
+`setenv.bat <root> {fre|chk} x64 WNET no_oacr` gives `cl` 15.00.30729.207 for
+x64; `BUILD_ALT_DIR` was overridden after it exactly as `build-driver.cmd`
+does for `chk_qemu`, so all three flavours were read. Nothing was built in the
+real tree and no binary was produced.
+
+**The code itself is nearly clean.** With the layout asserts of section 9
+item 2 neutralised - they are the expected failures, and neutralising them is
+what proves they were masking nothing - all 18 `.c` files compile for amd64 at
+`/W3` with **exactly one diagnostic in the whole driver**:
+
+```
+xhci_dispatch.c(1001) : warning C4242: 'function' : conversion from 'ULONG_PTR' to 'ULONG', possible loss of data
+```
+
+That is `XhciLogNoteAddress(ext, "start.ok", ext->ResourceBase)`, whose third
+parameter is a `ULONG`. It is one site rather than a class of problem: the
+only other call site, `:953`, already writes the truncation out as
+`(ULONG)(ULONG_PTR)resources`. So the first time this source has been through
+a non-MSVC-6 compiler it produced a single opinion, and **21.2 is a plumbing
+job with a known end rather than a long tail** - which is what the scout was
+taken to find out.
+
+**`/WX` is on in `fre` and off in `chk`**, which is the reverse of the
+intuition that the checked build is the strict one. WDK 7.1's `setenv.bat`
+sets `BUILD_ALLOW_COMPILER_WARNINGS=1` for a checked build and leaves it unset
+for a free one, so that single C4242 fails `release` outright (`C2220`, no
+object produced) and merely warns in `debug` and `qemu`. A first amd64 build
+that only ever ran `chk` would not see it.
+
+**The `__asm` exclusion is confirmed, with its sites.** The `qemu` flavour
+takes 10 errors and no others, at four lines - `4670`, `4673`, `4678`, `4695`
+- headed by `error C4235: nonstandard extension used : '__asm' keyword not
+supported on this architecture`. `release` and `debug` are unaffected.
+
+**The layout asserts split 12 failing against 11 passing, and the split is
+itself a reading.** The 11 that pass say the substituted types are 4-byte-exact
+on amd64 too: `USBPORT_ENDPOINT_REQUIREMENTS`, `XHCI_SETUP_PACKET`,
+`USBPORT_TRANSFER_PARAMETERS`, `USBPORT_SCATTER_GATHER_ELEMENT`,
+`USBPORT_ISO_PACKET`, `USBPORT_ISO_TRANSFER`, `USBPORT_ROOT_HUB_DATA` and both
+status words are unchanged, and so are the two packet offsets at or below the
+hinge - `MiniPortResourcesSize` at `0x24` and `OpenEndpoint` at `0x28`.
+
+The 12 that fail were read against the compiler's own layout with
+`/d1reportSingleClassLayout`. **For the registration packet the compiler
+reproduces M6's map and M3's boundary exactly, from an entirely different
+instrument**, and disagrees only on the total size:
+
+| Slot | x86 | `f(X) = 0x28 + (X - 0x28) * 2` | compiler |
+|---|---|---|---|
+| `MiniPortResourcesSize` | `0x24` | `0x24` (below the hinge) | `0x24` |
+| `OpenEndpoint` | `0x28` | `0x28` (the hinge) | `0x28` |
+| `StartController` | `0x38` | `0x48` | `0x48` |
+| `RH_GetRootHubData` | `0x90` | `0xF8` | `0xF8` |
+| `StartSendOnePacket` | `0xD8` | `0x188` | `0x188` |
+| `UsbPortDbgPrint` | `0xE4` | `0x1A0` | `0x1A0` |
+| `UsbPortNotifyDoubleBuffer` | `0x120` | `0x218` | `0x218` |
+| `RebalanceEndpoint` | `0x124` | `0x220` | `0x220` |
+| `RH_ChirpRootPort` | `0x12C` | `0x230` | `0x230` (= M3's measured short copy) |
+| `sizeof` | `0x13C` | - | **`0x248`, against M3's measured `0x250`** |
+
+So the eight-byte shortfall of section 9 item 2 is now a compiler reading as
+well as a disassembly one, and it sits entirely in the trailing reserved
+region: the compiler ends the structure at `Reserved5` + 4 = `0x248`, and
+usbport copies to `0x250`.
+
+**The other three failures are the finding the scout did not go looking for.**
+Each is a structure whose amd64 `sizeof` the current declaration gets wrong,
+and only one of the three has a measured number to be checked against:
+
+| Structure | x86 | current declaration on amd64 | measured | why it moves |
+|---|---|---|---|---|
+| `USBPORT_RESOURCES` | `0x34` | `0x40` | **`0x48`** (M4) | `ULONG InterruptAffinity` at `0x10`. M4 read it as **8 bytes** (`KAFFINITY`, widened); the declaration pins it to 4. That one field is the whole `0x8` gap, and everything after it in M4's table shifts by 8 |
+| `USBPORT_SCATTER_GATHER_LIST` | `0x40` | `0x50` | **not measured** | `ULONG_PTR CurrentVa` at `0x04` and `PVOID MappedSystemVa` at `0x08` both widen and realign; `SgElement[]` moves from `0x10` to `0x1C` |
+| `USBPORT_ENDPOINT_PROPERTIES` | `0x40` | `0x48` | **not measured** | `ULONG_PTR BufferVA` at `0x1C` widens and forces 8-byte alignment, so 4 bytes of padding appear at `0x1C`, `BufferVA` lands at `0x20`, and every field after it shifts by 8 |
+
+`USBPORT_RESOURCES` and the scatter-gather structures are already named in
+section 9 item 2. **`USBPORT_ENDPOINT_PROPERTIES` is not, and it is the
+structure every endpoint callback is handed** - `OpenEndpoint`,
+`ReopenEndpoint`, `QueryEndpointRequirements` and `RebalanceEndpoint` all
+receive a pointer to it. It changes shape on amd64 and its real layout has not
+been measured, so it is now item 2a below. The rule M4 and M3 established
+holds here with nothing to fall back on: the compiler's natural widening is
+a guess until the binary confirms it, and for this structure the binary has
+not been asked.
+
 ---
 
 ## 9. The code changes
@@ -538,19 +631,50 @@ ignored outright by the 64-bit setup engine, and
    part of the packet. A `C_ASSERT` on the declared size cannot catch it,
    because it asserts the compiler against itself; only the binary shows it.
    The asserts must carry measured numbers so that they can fail.
+   **The compile scout of section 8 has since read all three from the
+   compiler's side**: the packet is `0x248` against the measured `0x250`,
+   `USBPORT_RESOURCES` is `0x40` against M4's measured `0x48` - the whole gap
+   being `InterruptAffinity`, which M4 read as 8 bytes and the declaration
+   pins to 4 - and `USBPORT_SCATTER_GATHER_LIST` is `0x50` against `0x40`,
+   with `SgElement[]` moving from `0x10` to `0x1C`.
+
+   **2a - `USBPORT_ENDPOINT_PROPERTIES` has to be measured, and it has not
+   been.**
+   The scout found it changes size on amd64 - `0x40` to `0x48`, because
+   `ULONG_PTR BufferVA` at `0x1C` widens and realigns, moving `BufferVA` to
+   `0x20` and shifting every field after it by 8. It is the structure
+   `OpenEndpoint`, `ReopenEndpoint`, `QueryEndpointRequirements` and
+   `RebalanceEndpoint` are each handed, so a wrong layout is misread on every
+   endpoint operation, silently. None of M1-M6 covers it. It needs the same
+   treatment M4 gave `USBPORT_RESOURCES`: read the offsets out of the amd64
+   `usbehci.sys`'s `OpenEndpoint`, then declare it under `_WIN64` with the
+   measured numbers. Until that reading exists, this structure is the one
+   remaining place where an amd64 binary would be running on an assumption.
 3. A `StartPA` high-DWORD refusal matching the one the scatter-gather path
    already makes. **M5 shows the adapter is created 32-bit, so this guards
    nothing measured** - it is the "check it, never assume it" rule applied one
    place further, and is optional on the evidence rather than required by it.
-4. The `__asm` stack-delta check excluded under `_WIN64`.
+4. The `__asm` stack-delta check excluded under `_WIN64`. The scout names the
+   sites the compiler stops at - `4670`, `4673`, `4678`, `4695` - and the
+   `espBefore`/`espAfter` locals at `4591`-`4592` have to go inside the same
+   guard, or the free build takes an unreferenced-local warning, which `/WX`
+   makes an error there.
 5. `src/xhci_compat.h`'s `ULONG_PTR` typedef guarded for 64-bit hosts.
 6. Design record 04's common-buffer arithmetic re-run against the amd64
    `sizeof`s, and the result stated rather than assumed to carry.
 7. `test/test_packet.c` extended to compile the header for amd64, so the
    layout asserts are checked by `test\run-host-tests.cmd` on the build host
    rather than only inside a driver build.
+8. `src/xhci_dispatch.c:1001`'s implicit `ULONG_PTR` -> `ULONG` truncation,
+   which is the whole of what the amd64 compiler objects to in this source
+   (section 8's scout) and which fails the `release` build alone, because
+   `/WX` is on in `fre` and off in `chk`. The narrow fix is the explicit cast
+   `:953` already writes; the question it raises - whether the log channel
+   should carry a truncated kernel VA at all on a 64-bit target - is worth
+   answering once rather than casting twice.
 
-Items 4 and 5 are the only two that could be taken before M4 and M6 land.
+Items 4 and 5 are the only two that could be taken before M4 and M6 land;
+item 8 became known once the scout ran, and is a one-line change.
 
 ---
 

@@ -1596,8 +1596,17 @@ its two launchers and the 16 GB `vm\winxp64.img` exist and the launcher gate
 covers them. It cost one finding already, before any driver: **this guest
 needs `-accel tcg`, and WHPX - which every other guest here uses - wedges XP
 x64 Setup**, the reverse of the Windows 2000 reading (`lessons.md`, "The
-accelerator is the discriminating variable in both directions"). Nothing else
-in the phase has started.
+accelerator is the discriminating variable in both directions"). A **compile
+scout** was then taken on 2026-09-08 - WDK 7.1's x64 `cl` pointed at `src/`
+through `build /L`, compile-to-object only, so none of 21.2's plumbing and no
+amd64 import library were needed. It answers the question it was taken for:
+**this source produces exactly one diagnostic on amd64**, a `ULONG_PTR` ->
+`ULONG` truncation at `xhci_dispatch.c:1001`, so 21.2 is a plumbing job with a
+known end. It also found one thing nobody was looking for -
+**`USBPORT_ENDPOINT_PROPERTIES` changes size on amd64 and none of M1-M6
+measured it** - which adds a reading to 21.4. Design record 11 section 8, "The
+compile scout", has it. Nothing else in the phase has started, and no binary
+exists.
 
 Why a phase: the same reason Phase 19 was one. A target is not a build. The
 static pass has to settle the ABI before any code is written, the guest has
@@ -1638,9 +1647,19 @@ are static readings and no other task's box may be ticked on one.
 - [ ] **21.2 - the x64 build path.** One `WNET` amd64 binary, `fre` and
       `chk`, from `tools/WinDDK71`.
   - [ ] the `qemu` flavour's `__asm` exclusion under `_WIN64`, without which
-        that flavour does not compile at all
-  - [ ] the first build that links, which is also the first time this source
-        has been through a non-MSVC-6 compiler
+        that flavour does not compile at all. The scout confirmed it: 10
+        errors, no others, at `4670`, `4673`, `4678` and `4695`
+  - [ ] the first build that links. The scout has already taken the
+        compile half of this - the first time this source has been through a
+        non-MSVC-6 compiler, and it came back with one warning - so what is
+        left here is the arch fork through `build-driver.cmd` and
+        `src/sources`, the amd64 `usbport.lib`, and the link itself.
+        Two traps the scout paid for: `setenv.bat` sets
+        `BUILD_ALT_DIR=fre_wnet_AMD64`, which `src/sources`' three-flavour
+        check refuses, so the wrapper must override it after `setenv.bat`
+        exactly as it does for `chk_qemu` today; and `/WX` is on in `fre` and
+        off in `chk`, so a first build exercised only as `chk` would not see a
+        warning that fails `release`
 - [ ] **21.3 - the gates.** None of these may be skipped for an amd64
       binary.
   - [ ] an `amd64` dimension in the import gate, with NT 5.2 amd64 baselines
@@ -1655,7 +1674,25 @@ are static readings and no other task's box may be ticked on one.
 - [ ] **21.4 - the code changes task 21.1 implies** (design record 11
       section 9).
   - [ ] the `_WIN64` packet declaration at the measured `0x250`, with
-        asserts carrying measured numbers rather than the compiler's own
+        asserts carrying measured numbers rather than the compiler's own.
+        The scout read the compiler's own from the other side: `0x248`, with
+        every callback offset landing on M6's map and only the trailing
+        reserved region short
+  - [ ] **`USBPORT_ENDPOINT_PROPERTIES` read off the amd64 `usbehci.sys`**,
+        the way M4 read `USBPORT_RESOURCES`. The scout found it changes size
+        on amd64 (`0x40` to `0x48`, `BufferVA` moving `0x1C` -> `0x20` and
+        shifting everything after it) and **none of M1-M6 measured it**. It is
+        handed to `OpenEndpoint`, `ReopenEndpoint`,
+        `QueryEndpointRequirements` and `RebalanceEndpoint`, so a wrong layout
+        is misread on every endpoint operation and nothing catches it. This is
+        a static reading and needs no guest
+  - [ ] `USBPORT_RESOURCES` under `_WIN64` at M4's measured `0x48` - the
+        current declaration gives `0x40`, the whole gap being
+        `InterruptAffinity`, which M4 read as 8 bytes and the declaration pins
+        to 4
+  - [ ] `src/xhci_dispatch.c:1001`'s implicit `ULONG_PTR` -> `ULONG`
+        truncation, the one thing the amd64 compiler objects to in this
+        source, and fatal in `release` only
   - [ ] `src/xhci_compat.h`'s `ULONG_PTR` typedef guarded for 64-bit hosts
   - [ ] design record 04's common-buffer arithmetic re-run against the amd64
         `sizeof`s and the result stated
