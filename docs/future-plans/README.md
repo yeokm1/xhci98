@@ -42,21 +42,6 @@ tree wins.
   narrow (SuperSpeed hubs and isochronous devices sent back to USB 2.0, UAS
   never selected), the port-reset policy, what QEMU can and cannot show,
   the batches, the owner's five decisions, and the two reviews' corrections.
-- [x64-targets.md](x64-targets.md) - Investigation plan, written 2026-09-08
-  in response to pull request 6 (`WDK 7.1`) and the owner's narrowing of it
-  to 64-bit guests: whether this driver can register with a 64-bit
-  `usbport.sys` at all. Windows XP x64 and Server 2003 x64 are one target
-  (both NT 5.2.3790), so it is one binary and one guest. Six static
-  measurements decide it - the two private exports, the `USBPORT_GetHciMn`
-  lineage value the driver currently hard-refuses when unknown, the
-  registration version gate and copied packet size, the
-  `USBPORT_RESOURCES` layout, the DMA adapter width, and the
-  service-pointer block - all read from an extracted `usbport.sys` and
-  `usbehci.sys` with no VM and no build. Covers what the tree assumes today
-  that 64 bits touches, why the pull request's `#ifdef _WIN64` assertions
-  cannot fail as written, the decision gate, and - only if the measurements
-  pass - the build path, the code changes, the VM leg, and the six
-  decisions that are the owner's.
 - [superspeed-hcd-reimplementation.md](superspeed-hcd-reimplementation.md) -
   General USB 3.x SuperSpeed support, and why it is a separate driver-stack
   project: the Win2000-era `usbport.sys` has no SuperSpeed concept and no

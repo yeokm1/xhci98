@@ -130,7 +130,10 @@ Phase 16 is the unattended post-release run on freshly installed guests. Phase
 17 has the OS supply `usbd.sys` and `usbhub.sys`, Phase 18 is release
 `1.0.0.1` with Windows ME, and Phase 19 is release `1.0.1.0` with Windows XP
 and the NT-side install fixes the XP guest found. Phase 20 is release
-`1.0.2.0`, the 2026-09-05 audit worked through and cut. Phase
+`1.0.2.0`, the 2026-09-05 audit worked through and cut. Phase 21, open, asks
+whether this driver can be a miniport on 64-bit Windows at all, taking
+Windows XP x64 and Server 2003 x64 - one target, both NT 5.2.3790 - as its
+subject. Phase
 14 waited on Phase 13's bench batches reporting. Accepting the published release, from the download on a
 freshly installed VM and on a physical machine, is not a phase and has no
 task: it is a hand-run procedure the project owner takes before the upload,
@@ -1575,6 +1578,57 @@ in for a guest.
 
 Records: `runs/run-20.md`; design records 05, 06 and 07; `build-and-test.md`;
 `lessons.md`; `runs/run-20-post-release/`; `releases/history.md`.
+
+## Phase 21 - 64-bit Targets: Windows XP x64 and Server 2003 x64
+
+Goal: whether this driver can be an Option A miniport on a 64-bit Windows
+settled from the shipping binaries first and a guest second, and - if it can
+- one NT 5.2 amd64 binary observed on a Windows XP Professional x64 guest,
+with its standing stated in every document that names the targets.
+
+Status: open, 2026-09-08. It opened when the owner asked how pull request 6
+(`WDK 7.1`, GeorgeK1ng) could be integrated and narrowed it to 64-bit
+guests. Task 21.1's first three measurements are read and all three pass;
+its other three are open, and nothing else has started. No 64-bit binary of
+this driver exists yet.
+
+Why a phase: the same reason Phase 19 was one. A target is not a build. The
+static pass has to settle the ABI before any code is written, the guest has
+to settle the runtime the static pass cannot, and the gates, the INF and the
+packager all have to learn a second architecture before anything can ship.
+`design/11-x64-targets.md` is the record; it carries the measurements, the
+decision gate they feed, and the five decisions that are the owner's.
+
+Windows XP x64 and Server 2003 x64 are one target, not two: both are NT
+5.2.3790, and the WDK ships `lib\wxp\i386` with no `amd64` counterpart, so
+NT 5.2 (`WNET`) is the only route to a 64-bit XP driver. Vista x64 and
+Windows 7 x64 are a separate question and a second leg, because both enforce
+kernel-mode code signing and both stage driver packages differently; task
+21.1 reads their binaries at the same time because doing so costs only
+extraction.
+
+| Task | Subject | State |
+|---|---|---|
+| 21.1 | the static ABI pass: M1 the two private exports, M2 the `USBPORT_GetHciMn` lineage value, M3 the version gate and copied packet size, M4 the `USBPORT_RESOURCES` layout, M5 the DMA adapter width, M6 the service-pointer block and callback offsets | M1-M3 read 2026-09-08, all pass; M4-M6 open |
+| 21.2 | the x64 build path: one `WNET` amd64 binary, `fre` and `chk`, and the `qemu` flavour's `__asm` exclusion | open |
+| 21.3 | the gates: an amd64 dimension in the import gate with NT 5.2 baselines, arch-conditional checks in the usbport import-library generator, and the INF decision with whatever gate work it implies | open |
+| 21.4 | the code changes task 21.1 implies (design record 11 section 9) | open |
+| 21.5 | the Windows XP x64 guest and its checkpoint | open |
+| 21.6 | the record: the tier stated where Windows ME and 32-bit XP are stated, and the provenance rows | open |
+
+Checkpoint: the static pass complete and transcribed into
+`usb-xhci-info/usbport-miniport-abi.md` with every fact tagged `static`; the
+gates green on an amd64 binary; and on a Windows XP x64 guest the package
+installed on an xHCI-only machine, the driver registered and started, its No
+Op self-test passed, the root-hub callbacks answered, a HID mouse, a
+mass-storage device and a composite audio device bound, and the Device
+Manager disable, enable, remove and rescan sequence survived. Not a
+checkpoint: a build that links, or a static reading standing in for a guest.
+No primary target's checkpoint waits on any of this, and none of it may cost
+a primary target anything.
+
+Records: `design/11-x64-targets.md`; `usb-xhci-info/usbport-miniport-abi.md`;
+`legal-provenance.md` section 4; `build-and-test.md`.
 
 ## Post-Release - Run the Acceptance Test by Hand
 

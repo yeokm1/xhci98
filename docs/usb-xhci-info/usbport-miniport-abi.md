@@ -165,6 +165,83 @@ lose the service pointers when `DriverEntry` returns.
 `DriverEntry` (when loaded purely as an export provider) just returns success
 [usbport/usbport.c:2931-2937].
 
+### The NT 5.2 amd64 lineage: the same call, every pointer widened
+
+Read 2026-09-08 from `tools/winxp64-extracted/usbport.sys`, 5.2.3790.3959
+(`srv03_sp2_rtm.070216-1710`), the Windows XP Professional x64 / Windows
+Server 2003 x64 build - a fifth lineage and the first 64-bit one. Method
+**static**: `link /dump /exports` and `/headers`, then `cdb.exe -z` for the
+two function bodies. Neither MSVC 6.0's `dumpbin` nor WDK 7.1's `link /dump
+/disasm` can disassemble amd64 (the latter wants `msdis160.dll`, which is not
+on the WDK media), so the tool differs from the one this document names
+elsewhere; `docs/contributing/design/11-x64-targets.md` section 3 has the
+command and the four files' hashes. The image loads at its preferred base
+`0x10000`, so each RVA below is a listed address minus `0x10000`.
+
+**Exports.** `8664 machine (x64)`; three functions, three names, ordinal base
+1, time date stamp `45D6899F`. `DllUnload` at `0x21A00`, `USBPORT_GetHciMn`
+at `0x21A60`, `USBPORT_RegisterUSBPortDriver` at `0x22030` - the same three
+names at the same three ordinals as every 32-bit lineage, undecorated (amd64
+has no `__stdcall` decoration).
+
+**`USBPORT_GetHciMn` returns `0x10000001`**, the XP-lineage value, in the
+same two-instruction body:
+
+```
+usbport!USBPORT_GetHciMn:                      ; RVA 0x21A60
+  b8 01 00 00 10    mov     eax,10000001h
+  c3                ret
+```
+
+So the accommodation this section already recommends - accept `0x57324B30`
+and `0x10000001`, refuse anything else - covers NT 5.2 amd64 unchanged. It is
+not a fourth constant, and `src/xhci_dispatch.c`'s lineage refusal needs no
+edit for it.
+
+**The version gate is unchanged and the copied sizes are the widened pair.**
+In `USBPORT_RegisterUSBPortDriver` the arguments settle into `rbx` =
+DriverObject, `esi` = Version, `rbp` = RegistrationPacket:
+
+```
+  RVA 0x22176  83 fe 64            cmp     esi,64h          ; Version >= 100 ?
+  RVA 0x221D8  b8 01 00 00 c0      mov     eax,0C0000001h   ; else STATUS_UNSUCCESSFUL
+  RVA 0x221F3  ba 50 02 00 00      mov     edx,250h         ; 592
+  RVA 0x221F8  41 b8 30 02 00 00   mov     r8d,230h         ; 560
+  RVA 0x2220C  81 fe c8 00 00 00   cmp     esi,0C8h         ; Version >= 200 ?
+  RVA 0x22220  44 0f 43 c2         cmovae  r8d,edx
+  RVA 0x22232  48 8d 4f 28         lea     rcx,[rdi+28h]    ; destination
+  RVA 0x22244  48 8b d5            mov     rdx,rbp          ; source = caller's packet
+  RVA 0x222E8  e8 ...              call    (the copy)
+```
+
+The destination sits inside a `0x278`-byte `'usbp'`-tagged allocation made at
+RVA `0x2214B` and zeroed before the copy; allocation failure returns
+`0xC000009A` at RVA `0x221E2`, success returns `STATUS_SUCCESS`.
+
+| | x86 | amd64 | identity |
+|---|---|---|---|
+| USB2 (`Version >= 200`) | `0x13C` = 316 | `0x250` = 592 | 40 + 69 x 4 -> 40 + 69 x 8 |
+| USB1 (`100 <= V < 200`) | `0x12C` = 300 | `0x230` = 560 | 40 + 65 x 4 -> 40 + 65 x 8 |
+
+Both are the exact 64-bit widening of the x86 pair: the ten leading `ULONG`
+data fields (`0x00`-`0x27`, 40 bytes) unchanged, every function pointer
+doubled. The service-pointer block widens the same way, and usbport's
+behaviour around it does not change - it writes the same 16 pointers into the
+caller's packet before copying it, at `0x1A0`, `0x1A8` ... `0x218`, which is
+the x86 block `0xE4`-`0x120` under the map `f(X) = 0x28 + (X - 0x28) * 2`.
+This is the same C declaration compiled for a wider pointer, not a
+re-specified interface.
+
+**A consequence worth stating**, because it is invisible from the source
+side: a `_WIN64` declaration of this packet must be **`0x250` bytes**, and a
+compiler's natural widening of the x86 declaration is not guaranteed to reach
+it. Pull request 6's `#ifdef _WIN64` block asserts `0x248`, eight bytes short,
+which would have usbport copy eight bytes past the end of the miniport's
+static packet. A `C_ASSERT` on what the compiler produced cannot catch that;
+only this measurement can. The amd64 `USBPORT_RESOURCES` layout and the
+identity of each of the sixteen service slots are not yet read (Phase 21 task
+21.1, M4 and M6).
+
 ## 2. Constants
 
 ### Interface versions and packet version [usbmport.h:526-529, 636-637]

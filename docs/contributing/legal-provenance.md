@@ -305,6 +305,36 @@ individually inventoried below: both `usbehci.sys` builds (the periodic
 (import and load-gate work), and a function driver, `ax88772.sys` (a Phase 8
 behaviour question).
 
+Since 2026-09-08 the same work reads a fifth lineage, and the first 64-bit
+one: the NT 5.2 amd64 `usbport.sys` and `usbehci.sys` of Windows XP
+Professional x64 / Windows Server 2003 x64, both 5.2.3790.3959
+(`srv03_sp2_rtm.070216-1710`). They were expanded from the `AMD64` directory
+of the project owner's own Windows XP x64 SP2 media with 7-Zip and
+`expand.exe` - routine unpacking, section 1's recorded case - into
+git-ignored `tools/winxp64-extracted/`, together with that media's
+`usbhub.sys` and its `usbport.inf`. Method **static** throughout: the export
+table was read with `link /dump /exports` and the two functions below were
+disassembled with `cdb.exe -z`, which loads a raw PE and executes nothing.
+Neither MSVC 6.0's `dumpbin` nor WDK 7.1's `link /dump /disasm` can
+disassemble amd64 here, which is why the tool differs from the one this
+section names for the 32-bit work; `docs/contributing/design/11-x64-targets.md`
+section 3 records the method and the four files' sizes and SHA-256s. What was
+established (Phase 21 task 21.1, design record 11 section 5): the three
+exports and their ordinals, that `USBPORT_GetHciMn` returns `0x10000001`,
+and the registration function's version gate and its two copied packet sizes,
+`0x250` and `0x230`. Nothing was executed and no 64-bit binary of this driver
+exists; no file from that media is tracked.
+
+The toolchain that reads them is third-party material on the same terms.
+WDK 7.1 (`GRMWDK_EN_7600_1.ISO`, 649,877,504 bytes, SHA-256
+`5edc723b50ea28a070cad361dd0927df402b7a861a036bbcf11d27ebba77657d`, from the
+owner's own media) is unpacked into git-ignored `tools/WinDDK71/` with
+`msiexec /a`, an administrative install that lays out files and registers
+nothing; verified the same day that no WDK or debugger entry appears in
+installed programs and no `C:\WinDDK` exists. It is used in place and
+distributed nowhere, exactly as `tools/MSVC600` and `tools/ntddk` are.
+Whether it stays is design record 11's decision 3.
+
 One more package has been read at the file level only: `nusb36e.exe` (NUSB
 3.6, public download, kept git-ignored in `tools/` beside the 3.3 package).
 Method static throughout: its files were extracted, hashed and
