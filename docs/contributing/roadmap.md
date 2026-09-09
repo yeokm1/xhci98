@@ -66,9 +66,12 @@ now.
 
 Two phases are open, both about operating systems this driver does not yet
 claim, and neither blocks the other or anything already closed. **Phase 21**
-is the 64-bit question - one NT 5.2 amd64 binary for Windows XP x64 and
-Server 2003 x64, which needs a second toolchain before it needs anything
-else. **Phase 22** is the 32-bit one - whether the binary that already ships
+is the 64-bit question - one NT 5.2 amd64 binary, which needed a second
+toolchain before it needed anything else. Its Windows XP x64 and Server 2003
+x64 checkpoint passed on 2026-09-09; what is left is the record and a second
+guest leg for **Vista x64 and Windows 7 x64**, where the obstacles are code
+signing and the driver store rather than the ABI. **Phase 22** is the 32-bit
+one - whether the binary that already ships
 runs on Windows Vista and Windows 7 as it stands, which needs no build at
 all. They share the Vista and Windows 7 media and nothing else, and the one
 pass they share was taken on 2026-09-09: the static ABI read of both
@@ -145,7 +148,8 @@ and the NT-side install fixes the XP guest found. Phase 20 is release
 `1.0.2.0`, the 2026-09-05 audit worked through and cut. Phase 21, open, asks
 whether this driver can be a miniport on 64-bit Windows at all, taking
 Windows XP x64 and Server 2003 x64 - one target, both NT 5.2.3790 - as its
-subject. Phase
+subject, and since 2026-09-09 asking the same of Vista x64 and Windows 7 x64
+in task 21.8. Phase
 14 waited on Phase 13's bench batches reporting. Accepting the published release, from the download on a
 freshly installed VM and on a physical machine, is not a phase and has no
 task: it is a hand-run procedure the project owner takes before the upload,
@@ -1591,12 +1595,17 @@ in for a guest.
 Records: `runs/run-20.md`; design records 05, 06 and 07; `build-and-test.md`;
 `lessons.md`; `runs/run-20-post-release/`; `releases/history.md`.
 
-## Phase 21 - 64-bit Targets: Windows XP x64 and Server 2003 x64
+## Phase 21 - 64-bit Targets: Windows XP x64 and Server 2003 x64, then Vista x64 and Windows 7 x64
 
 Goal: whether this driver can be an Option A miniport on a 64-bit Windows
 settled from the shipping binaries first and a guest second, and - if it can
 - one NT 5.2 amd64 binary observed on a Windows XP Professional x64 guest,
-with its standing stated in every document that names the targets.
+with its standing stated in every document that names the targets. Since
+2026-09-09 the goal also asks the same of **Vista x64 and Windows 7 x64**
+(task 21.8): 21.7 read their interface and found nothing against them, and
+what is left is whether a binary the static pass says should work can be made
+to install and load on systems that enforce kernel-mode code signing and stage
+drivers through a driver store.
 
 Status: open, 2026-09-09 - **checkpoint passed, task 21.6 outstanding.** It
 opened on 2026-09-08 when the owner asked whether a WDK 7.1 build could give
@@ -1676,11 +1685,20 @@ is x86-only, and under a both-arch default it began demanding a `release-x64\`
 those cuts never had - so that mode now derives the architectures from the
 published tree unless `-Arch` is passed.
 
-So Phase 21 is a target observed and a package that can be cut, with only task
-21.6 - the record - open. What may be written is that the binary has been
-observed running: in one virtual machine, on one guest, never on real
-hardware, and the x64 half of any cut carries exactly that standing against
-the x86 half's four install legs.
+So Phase 21 is a target observed and a package that can be cut. What may be
+written is that the binary has been observed running: in one virtual machine,
+on one guest, never on real hardware, and the x64 half of any cut carries
+exactly that standing against the x86 half's four install legs.
+
+**Two tasks are open, and the phase closes on both.** 21.6 is the record. 21.8
+was added on 2026-09-09 on the owner's instruction and is a second guest leg:
+Vista x64 and Windows 7 x64, whose interface 21.7 already read and found
+nothing against. It is not a repeat of 21.5, because the two obstacles there
+are not ABI obstacles - both systems enforce kernel-mode code signing, so an
+unsigned driver loads only with enforcement disabled or test-signing on, and
+both stage a package through a driver store the `LayoutFile` route was not
+written for. Either could end the leg, and a well-characterised "no" is a
+complete result.
 
 The version was bumped to `1.1.0.0` in the same session, on the owner's
 instruction, as a separate step after that identity was proved - its only
@@ -2073,8 +2091,92 @@ are static readings and no other task's box may be ticked on one.
         the opposite of an xHCI-only XP or 2000 install
   - [x] **the `i386` halves taken in the same pass** and handed to task 22.1,
         together with each system's `ntoskrnl.exe` and `hal.dll` for task 22.2
+- [ ] **21.8 - the Vista x64 and Windows 7 x64 guests**, on the owner's
+      instruction of 2026-09-09. Task 21.7 read the interface and found
+      nothing against them; this is the leg that finds out whether the binary
+      runs. **It is a second leg, not a repeat of 21.5**, and the reason is
+      that neither of the two things 21.7 named as true regardless is an ABI
+      question - both are install-and-load questions that only a guest
+      settles, and one of them may not have an acceptable answer at all.
 
-Checkpoint. Every clause, or the phase is not closed:
+      **The gate to settle first, because everything else is wasted if it
+      fails: kernel-mode code signing.** Windows XP x64 does not enforce it,
+      which is why 21.5 took that target. Vista x64 and Windows 7 x64 both do,
+      and the cross-certificate route that once made third-party Windows 7 x64
+      signing possible is no longer available in practice (design record 11
+      section 6). So an unsigned `xhci98.sys` loads on those systems **only**
+      on a boot with driver signature enforcement disabled (F8) or with
+      test-signing on. Establish which of those works on each guest, and what
+      the user has to do at every boot, before spending a day on anything
+      else. If the answer is that the driver cannot be made to load at all,
+      that is the task's result and it is worth having.
+
+      **The second question, and 21.7 left it explicitly open: the driver
+      store.** The INF's `LayoutFile=layout.inf` route is a Windows 2000 and
+      XP mechanism; Vista and later stage the package into the driver store
+      first and validate its file list more strictly. 21.7 read one thing that
+      makes this look easier - both install images carry `usbport.sys`,
+      `usbhub.sys`, `usbd.sys` and `usbehci.sys` in `Windows\System32\drivers`
+      outright, in every architecture, so the Code 39 that Phase 19's fix
+      answers cannot arise and every `COPYFLG_NO_OVERWRITE` copy should skip
+      without needing a source. **"Should" is doing work there**: that is a
+      reading of an install image, not of an installed system, and it says
+      nothing about whether the driver store accepts the package's file list.
+      If it does not, the fix is a third INF or an `.NTamd64.6.0` decorated
+      section, and **that is a decision, not a change to make in passing** -
+      design record 11 section 12's decision 2 kept the 32-bit and 64-bit INFs
+      apart for a reason.
+
+      What is already settled and must not be re-litigated: `USBPORT_GetHciMn`
+      returns `0x10000001` on both, so no code change follows; the packet the
+      miniport fills is the same `0x250` one, because the higher version tiers'
+      extra stores sit behind version tests a `Version = 200` miniport never
+      passes; and Windows 7's second `IoGetDmaAdapter`, the one asking for a
+      64-bit adapter, is gated on `Version >= 310` and is unreachable from
+      here - **which is exactly why the high-DWORD check at
+      `src/xhci_xfer.c:542` must stay**, and M8 is the standing argument that
+      such checks earn their keep.
+  - [ ] the two guests built, from the media already on the development host:
+        `en_windows_vista_sp2_x64_dvd_342267.iso` and
+        `en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso` -
+        the same media 21.7 read its measurements out of, so the stack a guest
+        installs is the one that was measured, and saying so is cheap. Two
+        committed generators beside `setup-qemu-winxp64.ps1`, their launchers,
+        and their rows in `scripts\test-qemu-launchers.ps1`. **Monitor ports
+        55563 and 55564**: 55555-55562 are taken, and the gate exists because
+        two launchers sharing a port has happened twice
+  - [ ] **the accelerator probed on each, and the result recorded whichever
+        way it goes.** Do not copy XP x64's `-accel tcg` across as settled:
+        that reading is the reverse of every 32-bit guest here, and
+        `lessons.md`'s "The accelerator is the discriminating variable in both
+        directions" says plainly that neither reading generalises. A 64-bit
+        Vista or Windows 7 guest is a third workload and has been probed on
+        neither host
+  - [ ] the code-signing gate above: which route loads an unsigned driver on
+        each guest, what it costs the user at every boot, and whether it
+        survives a reboot at all
+  - [ ] the `.NTamd64` package installed on each guest, or the driver-store
+        refusal characterised precisely enough to decide what would fix it
+  - [ ] then the same clauses 21.5 took, on each guest: registered and
+        started, the No Op self-test, the root-hub callbacks, a HID mouse, a
+        mass-storage device and a composite audio device bound, and the Device
+        Manager disable/enable/remove/rescan sequence. **On the `release`
+        flavour as well as `qemu`**, for the reason 21.5 found the hard way -
+        the clauses were taken on a build that is never published, and closing
+        that gap is what licensed the 64-bit publisher default
+  - [ ] the tier decided and stated with the rest in task 21.6, including the
+        signing requirement, which belongs in the release notes beside the
+        tier rather than in a footnote
+
+      Not a checkpoint clause of this phase. Phase 21's checkpoint below is
+      written about a Windows XP x64 guest and passed on 2026-09-09; this task
+      does not reopen it. **The phase closes when 21.6 and 21.8 are done**, and
+      21.8 may close with a negative result - "the driver cannot be loaded on
+      these without disabling signature enforcement, and here is exactly what
+      that costs" is a complete answer to the question asked.
+
+Checkpoint (the Windows XP x64 guest). Every clause, or the phase is not
+closed:
 
 - [x] the static pass complete and transcribed into
       `usb-xhci-info/usbport-miniport-abi.md`, every fact tagged `static`.

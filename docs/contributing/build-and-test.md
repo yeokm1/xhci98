@@ -1974,6 +1974,50 @@ winxp64-clean-install vm\winxp64.img`, guest off. Media
 on this host as a partition - and then wedged the guest, which is how the TCG
 reading above came to be taken.
 
+### Vista x64 and Windows 7 x64 target VMs (roadmap task 21.8) - planned
+
+Not built. Added to the roadmap on 2026-09-09 on the owner's instruction,
+after task 21.7 read both systems' `usbport.sys` statically and found nothing
+in the interface against them. What is written here is what a builder needs
+before starting, and the last two items are the reason this is a separate leg
+rather than two more copies of the XP x64 recipe.
+
+| | value |
+|---|---|
+| Media | `D:\isos\en_windows_vista_sp2_x64_dvd_342267.iso` and `D:\isos\en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso` - **the same media task 21.7 read its measurements out of**, so the stack a guest installs is the stack that was measured |
+| Monitor ports | **55563** (Vista x64) and **55564** (Windows 7 x64). 55555-55562 are taken; the launcher gate asserts no two launchers share a port, and it exists because that has happened twice |
+| Generators | `scripts\setup-qemu-winvista64.ps1` and `scripts\setup-qemu-win7x64.ps1`, siblings of `setup-qemu-winxp64.ps1`, each with its launchers and its row in `scripts\test-qemu-launchers.ps1` |
+| CPU / RAM / disk | `-cpu qemu64` at least (long mode); size RAM and disk to the OS, not to the XP x64 numbers - both are heavier |
+| Accelerator | **Probe it. Do not inherit.** XP x64 needs `-accel tcg` and WHPX wedges its Setup, which is the reverse of every 32-bit guest here; `lessons.md`, "The accelerator is the discriminating variable in both directions", says plainly that neither reading generalises, and a 64-bit Vista or Windows 7 guest is a third workload probed on neither host |
+
+**The gate that comes before any of it: kernel-mode code signing.** Windows XP
+x64 does not enforce it, which is the whole reason Phase 21 took that target
+first. Vista x64 and Windows 7 x64 both do, and the cross-certificate route
+that once made third-party Windows 7 x64 signing possible is no longer
+available in practice. So `xhci98.sys` loads on these systems only on a boot
+with driver signature enforcement disabled (F8) or with test-signing on.
+Establish which works, and what it costs the user at every boot, before
+spending time on anything downstream - and if the answer is that it cannot be
+made to load, that is the leg's result. Design record 11 section 6 is the
+record; the requirement belongs in the release notes beside any tier that is
+claimed, not in a footnote.
+
+**And the install path is not the one the INF was written for.** The
+`LayoutFile=layout.inf` route that lets the media carry no Microsoft file is a
+Windows 2000 and XP mechanism; Vista and later stage a package into the driver
+store first and validate its file list more strictly. One reading from the
+same 21.7 pass makes this look easier than it did: both install images carry
+`usbport.sys`, `usbhub.sys`, `usbd.sys` and `usbehci.sys` in
+`Windows\System32\drivers` outright, in every architecture - the opposite of
+an xHCI-only XP or 2000 install - so the Code 39 that Phase 19's fix answers
+cannot arise and every `COPYFLG_NO_OVERWRITE` copy should skip without needing
+a source. **"Should" is doing the work there**: that is a reading of an
+install image, not of an installed system, and it says nothing about whether
+the driver store accepts the package's file list. If it does not, the fix is a
+decision rather than an edit - design record 11 section 12's decision 2 kept
+the 32-bit and 64-bit INFs apart deliberately, and a third one is the same
+kind of choice.
+
 ### Windows 2000 SMP Stress VM (Phase 2d)
 
 A third VM, separate from the 2b differential VM: Windows 2000 SP4 with two
