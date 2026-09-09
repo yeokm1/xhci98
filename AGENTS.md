@@ -342,9 +342,12 @@ and they are not separable: the obj subdirectory, which of the two INFs is
 staged, and the architecture both gates run under. A published release
 directory is a flavour AND an architecture - `release-x86`, `debug-x86`,
 `release-x64`, `debug-x64` - because both architectures' binaries are called
-`xhci98.sys`; `make-release.ps1 -Arch` defaults to `x86` alone until roadmap
-task 21.5 gives a 64-bit binary something to be published on the strength
-of.
+`xhci98.sys`; `make-release.ps1 -Arch` still defaults to `x86` alone, so an
+ordinary cut publishes exactly what `1.0.2.0` did. Roadmap task 21.5 passed on
+2026-09-09, so there is now an amd64 binary that has been observed running -
+in one virtual machine, on one guest, never on metal - and changing that
+default is licensed by that but remains the owner's deliberate act rather than
+a consequence of it.
 
 See `docs/contributing/build-and-test.md` for environment setup, QEMU
 configuration, the install procedure, the two model INFs, and "The files the

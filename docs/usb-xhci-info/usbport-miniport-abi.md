@@ -2990,6 +2990,12 @@ List header (`C_ASSERT` 64 bytes with 2 elements): `Flags` (0x00),
 `SgElement[]` (0x10, variable length - the list is the last member of
 usbport's transfer record [usbport/usbport.h:270-271]).
 
+**Both structures move on amd64, and the element is the trap.** It is still
+24 bytes there, so its `sizeof` says nothing at all; the two DWORDs after the
+address move up by four, and the array starts at `0x20` rather than the `0x1C`
+an all-`ULONG` declaration produces. See "The amd64 scatter-gather layout
+(M8)" below.
+
 `SgElementCount == 0` is a legal, common input, and the pointer is never
 NULL (binary-confirmed; see "The endpoint and transfer paths in the shipping
 builds" in section 4). The
@@ -3072,6 +3078,53 @@ transfer-record offset. Extracts in
 - `SgList->Flags` bit 0 is set when `MapTransfer` returns the same base
   physical address for two successive map rounds - i.e. a map-register/bounce
   mapping. Informational only; the miniport programs the elements either way.
+
+#### The amd64 scatter-gather layout (M8)
+
+Read 2026-09-09 off NT 5.2 amd64 `usbport.sys` `5.2.3790.3959`
+(`tools/winxp64-extracted/`), method `static`, and it is the reading that
+design record 11 had carried as owed since the amd64 build existed. The
+producer is at RVA `0xF468`; `kd -z` with the function boundaries taken from
+`.pdata` is what makes an amd64 image legible here, since this DDK's
+`dumpbin` has no amd64 disassembler.
+
+| Field | Instruction (verbatim) | amd64 | x86 |
+|---|---|---|---|
+| the list itself | `lea rdi,[rsi+118h]` (`488dbe18010000`) | transfer record `+0x118` | `+0x98` NUSB / `+0xC0` SP4 |
+| `Flags` | `mov dword ptr [rdi],r12d` (`448927`) | `0x00`, DWORD | `0x00` |
+| `Flags` bit 0 | `or dword ptr [rdi],1` (`830f01`) | `0x00` | `0x00` |
+| `CurrentVa` | `mov qword ptr [rdi+8],rcx` (`48894f08`) | `0x08`, QWORD | `0x04` |
+| `MappedSystemVa` | `mov qword ptr [rdi+10h],rax` (`48894710`) | `0x10`, QWORD | `0x08` |
+| `SgElementCount` | `mov dword ptr [rdi+18h],r12d` (`44896718`), then `inc dword ptr [rdi+18h]` (`ff4718`) per element | `0x18`, DWORD | `0x0C` |
+| `SgElement[0]` | `lea rbx,[rdi+20h]` (`488d5f20`) | **`0x20`** | `0x10` |
+| element stride | `add rbx,18h` (`4883c318`) | 24 | 24 |
+| `SgPhysicalAddress` | `mov qword ptr [rbx],rax` (`488903`) | element `0x00`, QWORD | `0x00` |
+| `SgTransferLength` | `mov dword ptr [rbx-8],r8d` (`448943f8`), issued after the stride advance | element **`0x10`** | `0x0C` |
+| `SgOffset` | `mov dword ptr [rbx+14h],r11d` (`44895b14`) | element **`0x14`** | `0x10` |
+
+The 4 KB split survives verbatim into the 64-bit build - `and edx,0FFFh`,
+`mov r8d,1000h`, `sub r8d,edx`, then `cmova r8d,r9d` to clamp to what is left
+- so the worst-case element count for an N-byte transfer is still
+`ceil(N / 4096) + 1`.
+
+**Two things a miniport author has to take from this.** First, the element's
+`sizeof` is 24 on both architectures and is therefore worthless as a check:
+eight bytes separate the address from the length on amd64 where four do on
+x86, and every field after the address moves. Second, the array offset does
+not follow from the header's declared fields. The real element type is
+8-aligned, its first member being a `PHYSICAL_ADDRESS`, so the array starts at
+`0x20`; a declaration that spells the address as two `ULONG`s - which this
+project's C89 rules require - aligns to 4 and puts it at `0x1C`. The
+declaration needs explicit padding, and `src/xhci_usbport.h` carries it with
+these numbers asserted.
+
+This was not an academic reading. Until it was taken, the amd64 driver refused
+every control transfer on the Windows XP x64 guest of roadmap task 21.5 with
+`XHCI_XFER_SG_HIGH_ADDRESS`: reading four bytes low put the miniport's
+`SgPhysicalAddressHi` on the real element's low DWORD, which is never zero.
+The refusal is the "check the high DWORD, never assume it" rule above doing
+exactly what it is for - the alternative to a refusal was a TRB pointing at an
+address assembled from two unrelated halves.
 
 ### USBPORT_ROOT_HUB_DATA [usbmport.h:695-703]
 

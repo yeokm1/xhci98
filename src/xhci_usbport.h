@@ -347,18 +347,43 @@ typedef struct _USBPORT_TRANSFER_PARAMETERS {
 typedef struct _USBPORT_SCATTER_GATHER_ELEMENT {
     ULONG SgPhysicalAddressLo;  /* 0x00 */
     ULONG SgPhysicalAddressHi;  /* 0x04 always 0 - verify, never use          */
+#ifdef _WIN64
+    /*
+     * M8: the eight bytes between the address and the length. On x86 this is
+     * one address-like private DWORD followed by the length; here the length
+     * is measured at 0x10, so eight bytes separate them. Whether that is one
+     * 8-byte private field or a 4-byte one plus padding was not measured -
+     * the miniport must not read or write either half, so it does not matter.
+     */
+    ULONG Reserved1Lo;          /* 0x08 */
+    ULONG Reserved1Hi;          /* 0x0C */
+    ULONG SgTransferLength;     /* 0x10 */
+    ULONG SgOffset;             /* 0x14 offset within the whole transfer buf  */
+#else
     ULONG Reserved1;            /* 0x08 */
     ULONG SgTransferLength;     /* 0x0C */
     ULONG SgOffset;             /* 0x10 offset within the whole transfer buf  */
     ULONG Reserved2;            /* 0x14 */
+#endif
 } USBPORT_SCATTER_GATHER_ELEMENT, *PUSBPORT_SCATTER_GATHER_ELEMENT;
 
 typedef struct _USBPORT_SCATTER_GATHER_LIST {
     ULONG Flags;                /* 0x00 */
-    ULONG_PTR CurrentVa;        /* 0x04 */
-    PVOID MappedSystemVa;       /* 0x08 */
-    ULONG SgElementCount;       /* 0x0C */
-    USBPORT_SCATTER_GATHER_ELEMENT SgElement[2];  /* 0x10, variable length */
+    /* On amd64 a 4-byte hole follows, which the compiler supplies itself. */
+    ULONG_PTR CurrentVa;        /* 0x04 / 0x08 */
+    PVOID MappedSystemVa;       /* 0x08 / 0x10 */
+    ULONG SgElementCount;       /* 0x0C / 0x18 */
+#ifdef _WIN64
+    /*
+     * M8, and the whole reason this padding is written out. The array starts
+     * at 0x20 on amd64 - the real element type is 8-aligned, since its first
+     * member is a `PHYSICAL_ADDRESS` - while every member of the declaration
+     * above is a `ULONG`, so the compiler's own alignment would put it at
+     * 0x1C and shift every field the transfer path reads by four bytes.
+     */
+    ULONG Reserved0;            /* 0x1C */
+#endif
+    USBPORT_SCATTER_GATHER_ELEMENT SgElement[2];  /* 0x10 / 0x20, variable length */
 } USBPORT_SCATTER_GATHER_LIST, *PUSBPORT_SCATTER_GATHER_LIST;
 
 /*
@@ -761,21 +786,46 @@ XHCI_C_ASSERT(transfer_parameters_size,
 XHCI_C_ASSERT(sg_element_size,
               sizeof(USBPORT_SCATTER_GATHER_ELEMENT) == 24);
 /*
- * **The amd64 number here is the one exception on this page: it is the
- * compiler's layout, not a measurement**, and it is written as `0x50` so that
- * the day someone reads the real structure out of a binary the assert either
- * confirms it or fires. `CurrentVa` and `MappedSystemVa` both widen and
- * realign, which moves `SgElement[]` from `0x10` to `0x1C` - the array's own
- * alignment stays 4, since every member of an element is a `ULONG`. Nothing
- * has read those offsets off the amd64 `usbport.sys`, so an amd64 binary
- * consuming a scatter-gather list is running on an assumption in a way it is
- * not anywhere else. Design record 11 section 9 item 2b carries it as owed.
+ * **M8, and it is the reading that closes the last assumption on this page.**
+ * These were the compiler's layout until 2026-09-09, written as `0x50` so that
+ * the day someone read the real structure the assert would either confirm it
+ * or fire. It fired - not as an assert, but on a Windows XP x64 guest, where
+ * every control transfer came back `XHCI_XFER_SG_HIGH_ADDRESS` because the
+ * element array was being read four bytes low. `sizeof` was right and
+ * `SgElement[]` was not: the real element type is 8-aligned (its first member
+ * is a `PHYSICAL_ADDRESS`), so the array starts at `0x20`, while a
+ * declaration made of `ULONG`s aligns to 4 and put it at `0x1C`.
+ *
+ * Read from the producer in NT 5.2 amd64 `usbport.sys` 5.2.3790.3959 at RVA
+ * `0xF468`: `lea rdi,[rsi+118h]` (the list, inside usbport's private transfer
+ * record), `mov dword ptr [rdi],r12d` (Flags), `mov qword ptr [rdi+8],rcx`
+ * (CurrentVa), `mov qword ptr [rdi+10h],rax` (MappedSystemVa),
+ * `mov dword ptr [rdi+18h],r12d` and `inc dword ptr [rdi+18h]`
+ * (SgElementCount), `lea rbx,[rdi+20h]` (SgElement[0]), `add rbx,18h` (the
+ * stride), `mov qword ptr [rbx],rax` (the address), `mov dword ptr
+ * [rbx-8],r8d` after that advance (the length, element `+0x10`) and
+ * `mov dword ptr [rbx+14h],r11d` (the offset). Method `static`; design record
+ * 11 section 5 M8 and `usbport-miniport-abi.md` carry it in full.
  */
 #ifdef _WIN64
 XHCI_C_ASSERT(sg_list_size, sizeof(USBPORT_SCATTER_GATHER_LIST) == 0x50);
 XHCI_C_ASSERT(sg_list_element_offset,
-              XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_LIST, SgElement) == 0x1C);
+              XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_LIST, SgElement) == 0x20);
+XHCI_C_ASSERT(sg_list_count_offset,
+              XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_LIST, SgElementCount) == 0x18);
+XHCI_C_ASSERT(sg_element_length_offset,
+              XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_ELEMENT,
+                             SgTransferLength) == 0x10);
+XHCI_C_ASSERT(sg_element_offset_offset,
+              XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_ELEMENT, SgOffset) == 0x14);
 #else
+XHCI_C_ASSERT(sg_list_count_offset,
+              XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_LIST, SgElementCount) == 0x0C);
+XHCI_C_ASSERT(sg_element_length_offset,
+              XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_ELEMENT,
+                             SgTransferLength) == 0x0C);
+XHCI_C_ASSERT(sg_element_offset_offset,
+              XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_ELEMENT, SgOffset) == 0x10);
 XHCI_C_ASSERT(sg_list_size, sizeof(USBPORT_SCATTER_GATHER_LIST) == 64);
 XHCI_C_ASSERT(sg_list_element_offset,
               XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_LIST, SgElement) == 0x10);

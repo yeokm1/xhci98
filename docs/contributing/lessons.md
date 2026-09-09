@@ -8034,6 +8034,78 @@ Normative detail: `docs/contributing/design/01-hardware-qualification-tool.md`,
 `docs/usb-xhci-info/xhci-data-structures.md`, and
 `docs/contributing/implementation-invariants.md`.
 
+## A matching `sizeof` proves nothing about a structure's fields
+
+Task 21.5's first amd64 run installed, started its controller, passed its No
+Op self-test and answered every root-hub callback - and then refused the first
+control transfer of every enumeration. The cause was
+`USBPORT_SCATTER_GATHER_LIST`, whose amd64 layout was the compiler's rather
+than a reading, and the two ways it was wrong are both invisible to the checks
+that were in place:
+
+- **The element is 24 bytes on x86 and 24 bytes on amd64, and two of its
+  fields still moved.** Its private address-like member widens from four bytes
+  to eight, so the length and the offset after it each sit four bytes higher
+  while the total stays the same. A size assert on such a structure is
+  reassurance, not coverage.
+- **The array's offset did not follow from the header's declared fields.** The
+  real element type is 8-aligned, its first member being a `PHYSICAL_ADDRESS`,
+  so the array starts at `0x20`. The declaration spells that address as two
+  `ULONG`s - which this project's C89 rules require - which makes the declared
+  element 4-aligned, and the compiler put the array at `0x1C`. `sizeof` came
+  out `0x50` either way, so the one number that had been asserted was the one
+  that had not moved.
+
+Reusable rules:
+
+- Assert **offsets**, not just sizes, on every structure the other side of an
+  ABI writes. A size is one equation over many unknowns.
+- When a declaration substitutes narrower members for a wider real field - a
+  Lo/Hi `ULONG` pair for a `PHYSICAL_ADDRESS`, say - it changes the
+  structure's *alignment* as well as its readability, and therefore the offset
+  of anything that follows it in an array or an enclosing structure. Pad
+  explicitly and assert the padding.
+- "This structure is all `ULONG`s, so both compilers lay it out the same" is
+  sound for the structure itself and says nothing about a structure that
+  *contains* it.
+- A check written for a condition that cannot arise can still be the thing
+  that catches you. The scatter-gather high-DWORD refusal guards against a
+  physical address above 4 GB, which measurement M5 says the 32-bit DMA
+  adapter cannot produce; what it actually caught was the miniport reading
+  four bytes off, on the first transfer, cleanly and with a counter. Keep
+  checks that test *the reading* rather than the hardware.
+
+Normative detail: `docs/contributing/design/11-x64-targets.md` section 5 M8;
+`docs/usb-xhci-info/usbport-miniport-abi.md`, "The amd64 scatter-gather layout
+(M8)".
+
+## Disassemble an amd64 image from `.pdata`, never by sweeping `.text`
+
+Reading the amd64 `usbport.sys` for M8 first went nowhere, and the reason was
+the method rather than the image. A linear disassembly from the start of
+`.text` desynchronises at the first jump table or data island and then emits
+plausible, wrong instructions for as long as it takes to resynchronise: over
+165 KB of code it reported 1,565 `call` instructions and not one of the
+indirect DMA-operations calls the search was for. Nothing announces this. The
+output looks like a disassembly.
+
+Every function in an amd64 PE is listed in `.pdata` as a `RUNTIME_FUNCTION` -
+`BeginAddress`, `EndAddress`, `UnwindInfo`, three DWORD RVAs - because the
+exception unwinder needs it. Parse that, and disassemble each function from
+its true entry point:
+
+- `!dh -s <module>` in `kd` gives `.pdata`'s file offset and size.
+- Each 12-byte entry gives one function's bounds; 653 of them in this image.
+- Feed `u <base+Begin> <base+End-1>` per function to `kd -cf <script>` with
+  `.logopen`, and the result is aligned throughout.
+
+Two notes on the tooling. `kd -z <image>` opens a plain PE as if it were a
+dump and resolves the image's own exports, which is enough to navigate by;
+this DDK's `dumpbin` has no amd64 disassembler (no `msdis160.dll`), so `kd` is
+the tool here whether or not you would have chosen it. And a live `kd -z`
+holds the file open, so never point one at a binary in `src\obj*` that a build
+is about to relink.
+
 ## Headless capture is display-mode specific
 
 The Phase 0 matrix established a reliable guest-agent-free DOS technique:

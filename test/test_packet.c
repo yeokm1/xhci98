@@ -37,9 +37,10 @@
  * measurements: M3 for the packet's size and its short-copy boundary, M6 for
  * the callback offsets, M4 for `USBPORT_RESOURCES`, M7 for
  * `USBPORT_ENDPOINT_PROPERTIES`. The one exception is
- * `USBPORT_SCATTER_GATHER_LIST`, whose amd64 numbers are the compiler's own
- * layout rather than a reading, and which says so where it appears (design
- * record 11 section 9 item 2b).
+ * `USBPORT_SCATTER_GATHER_LIST`, which was the compiler's own layout rather
+ * than a reading until 2026-09-09 and is now M8, taken off the producer in the
+ * amd64 `usbport.sys` after the Windows XP x64 guest of task 21.5 refused
+ * every control transfer on the four-byte shift that assumption cost.
  *
  * Build and run:  test\run-host-tests.cmd
  * Exit code = number of failed checks (0 = pass).
@@ -271,8 +272,12 @@ static void test_packet_tail(void)
  * is a fact about the declarations rather than a convention: a structure whose
  * every member is a ULONG or narrower is laid out identically by both
  * compilers, so USBPORT_TRANSFER_PARAMETERS, XHCI_SETUP_PACKET,
- * USBPORT_SCATTER_GATHER_ELEMENT, USBPORT_ENDPOINT_REQUIREMENTS, the two
- * isochronous blocks and USBPORT_ROOT_HUB_DATA carry one number each below.
+ * USBPORT_ENDPOINT_REQUIREMENTS, the two isochronous blocks and
+ * USBPORT_ROOT_HUB_DATA carry one number each below.
+ * USBPORT_SCATTER_GATHER_ELEMENT is the trap in that rule and cost task 21.5
+ * a guest: its size is 24 on both, so it looks like one of them, but the real
+ * amd64 element has eight bytes between the address and the length rather
+ * than four, and the fields after the address move (M8).
  * The three that move are the three with a pointer-sized member:
  * USBPORT_RESOURCES (InterruptAffinity), USBPORT_ENDPOINT_PROPERTIES
  * (BufferVA) and USBPORT_SCATTER_GATHER_LIST (CurrentVa and MappedSystemVa).
@@ -421,27 +426,34 @@ static void test_transfer_structures(void)
      * until the post-Phase 13 review rounds, which is the reading that document corrected. */
     CHECK_EQ(XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_ELEMENT,
                             SgPhysicalAddressHi), 0x04, "SG address high");
+    /*
+     * These two move on amd64 and the element's size does not, which is why
+     * the size alone could never have caught the defect below: eight bytes
+     * separate the address from the length there, against four here.
+     */
     CHECK_EQ(XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_ELEMENT, SgTransferLength),
-             0x0C, "SG element length");
-    CHECK_EQ(XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_ELEMENT, SgOffset), 0x10,
+             BY_ARCH(0x0C, 0x10), "SG element length");
+    CHECK_EQ(XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_ELEMENT, SgOffset),
+             BY_ARCH(0x10, 0x14),
              "SG element offset within the transfer buffer");
 
     /*
-     * **The amd64 column here is the only one on this page that is not a
-     * reading.** Nothing has read this structure off the amd64 usbport.sys, so
-     * 0x50 and 0x1C are what the compiler produces once CurrentVa and
-     * MappedSystemVa widen and realign - the element array's own alignment
-     * stays 4, since every member of an element is a ULONG. They are written
-     * out anyway so that the day someone reads the real structure these either
-     * confirm it or fail. Design record 11 section 9 item 2b carries it as
-     * owed, and the producer side in usbport.sys is where that reading starts.
+     * **M8, 2026-09-09, and it is the row that was wrong.** The amd64 column
+     * was the compiler's layout rather than a reading until the Windows XP x64
+     * guest of roadmap task 21.5 refused every control transfer with
+     * XHCI_XFER_SG_HIGH_ADDRESS: sizeof was right at 0x50 and SgElement[] was
+     * not, because the real element type is 8-aligned - its first member is a
+     * PHYSICAL_ADDRESS - so the array starts at 0x20, while a declaration made
+     * of ULONGs aligns to 4 and put it at 0x1C. Read off the producer in NT
+     * 5.2 amd64 usbport.sys at RVA 0xF468 (`lea rdi,[rsi+118h]` ...
+     * `lea rbx,[rdi+20h]`, `add rbx,18h`); design record 11 section 5 M8.
      */
     CHECK_EQ(sizeof(USBPORT_SCATTER_GATHER_LIST), BY_ARCH(64, 0x50),
              "SG list size with two elements");
     CHECK_EQ(XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_LIST, SgElementCount),
              BY_ARCH(0x0C, 0x18), "SG list element count");
     CHECK_EQ(XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_LIST, SgElement),
-             BY_ARCH(0x10, 0x1C), "SG list first element");
+             BY_ARCH(0x10, 0x20), "SG list first element");
 }
 
 /*

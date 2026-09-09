@@ -215,12 +215,19 @@ what terms it is fetched, is decision 3 in section 12.
 
 ---
 
-## 5. The six measurements
+## 5. The measurements
 
-All six were read on 2026-09-08 and all six pass. M1 through M3 came first
-and any one of them could have ended the investigation; M4 through M6 are
-the transcription work that M3's result turned from open questions into
-confirmation.
+The **six** the phase opened with were read on 2026-09-08 and all six pass.
+M1 through M3 came first and any one of them could have ended the
+investigation; M4 through M6 are the transcription work that M3's result
+turned from open questions into confirmation.
+
+**Two more were added afterwards, and neither was anybody's idea in advance.**
+M7 came from the compile scout, which noticed that a structure none of the six
+covered changes size. M8 came from the guest itself, which refused every
+control transfer until it was taken - the one measurement in this phase that a
+running driver demanded rather than a plan foresaw. Both are in this section
+in the order they were read.
 
 ### M1 - the two private exports · **read, pass**
 
@@ -515,6 +522,96 @@ this header spells `ULONG` in place of an NT enum: `DeviceSpeed` and
 `TransferType` are both read as DWORDs above. `Direction` is not touched by any
 path disassembled here, and sits between two measured anchors with no room to
 move.
+
+### M8 - `USBPORT_SCATTER_GATHER_LIST` and its element - read 2026-09-09, **the layout was wrong**
+
+The last structure on this interface that was running on the compiler's
+layout rather than a reading, named as owed in section 9 item 2b since the
+amd64 build existed. It was not read then because the consumer side is
+several calls deep in `usbehci`'s transfer submission rather than in one
+legible function, and section 9 said the producer in `usbport.sys` was the
+better instrument. That turned out to be right, and so did the worry: **the
+assumed layout was wrong, and it is the defect that stopped task 21.5's
+guest.** Method **static**, on the amd64 `usbport.sys` `5.2.3790.3959`.
+
+*How it surfaced.* The first amd64 binary to run installed cleanly, started
+its controller, passed its No Op self-test and answered the whole root-hub
+family - and then refused the first control transfer of every device
+enumeration with `slot: control transfer refused by the builder, status=5`,
+`XHCI_XFER_SG_HIGH_ADDRESS`. On a 2048 MB guest no physical address above
+4 GB exists, so the driver was demonstrably reading the wrong bytes rather
+than seeing a real high address.
+
+*How it was read.* `tools\WinDDK71\Debuggers\kd.exe -z` on the image, with
+every function boundary taken from `.pdata` (`RUNTIME_FUNCTION`:
+`BeginAddress`, `EndAddress`, `UnwindInfo`, three DWORD RVAs) and each one
+disassembled by `u <begin> <end-1>`. **That step is the technique worth
+keeping.** A linear sweep of `.text` desynchronises on the first jump table
+and silently produces plausible nonsense - it found 1,565 `call`
+instructions in 165 KB of code and not one of the indirect DMA calls this
+search was for. The `.pdata` walk finds 653 real functions and disassembles
+each from its true entry. This DDK has no amd64 disassembler in `dumpbin`
+(no `msdis160.dll`), so `kd -z` is the tool here regardless.
+
+The producer is at RVA `0xF468`. It is the same routine the x86 lineages
+carry, doing the same job in the same order:
+
+| Field | Instruction | amd64 | x86 |
+|---|---|---|---|
+| the list | `lea rdi,[rsi+118h]` | transfer record `+0x118` | `+0x98` / `+0xC0` |
+| `Flags` | `mov dword ptr [rdi],r12d`; `or dword ptr [rdi],1` | `0x00` | `0x00` |
+| `CurrentVa` | `mov qword ptr [rdi+8],rcx` | `0x08` | `0x04` |
+| `MappedSystemVa` | `mov qword ptr [rdi+10h],rax` | `0x10` | `0x08` |
+| `SgElementCount` | `mov dword ptr [rdi+18h],r12d`; `inc dword ptr [rdi+18h]` | `0x18` | `0x0C` |
+| `SgElement[0]` | `lea rbx,[rdi+20h]` | **`0x20`** | `0x10` |
+| stride | `add rbx,18h` | 24 | 24 |
+| `SgPhysicalAddress` | `mov qword ptr [rbx],rax` | elem `0x00` | `0x00` |
+| `SgTransferLength` | `mov dword ptr [rbx-8],r8d` | elem **`0x10`** | `0x0C` |
+| `SgOffset` | `mov dword ptr [rbx+14h],r11d` | elem **`0x14`** | `0x10` |
+
+The 4 KB split is unchanged (`and edx,0FFFh`, `mov r8d,1000h`, `sub r8d,edx`,
+`cmova r8d,r9d`), so the worst-case element count is still
+`ceil(N / 4096) + 1`.
+
+*What was wrong, precisely.* Two things, and the first is why the second was
+not caught:
+
+1. **The element's `sizeof` is 24 on both architectures**, so it passed the
+   size assert and looked like one of the structures that does not move. It
+   moves internally: eight bytes separate the address from the length on
+   amd64 against four on x86, so `SgTransferLength` and `SgOffset` both sit
+   four bytes higher. The x86 declaration's `Reserved1` is one DWORD; the
+   amd64 gap is eight bytes, which is consistent with the address-like
+   private field `usbport-miniport-abi.md` already records at element `+0x08`
+   becoming pointer-sized. Whether it is one 8-byte field or a 4-byte one
+   plus padding was **not** measured, and does not need to be: the miniport
+   must not read or write either half.
+2. **`SgElement[]` starts at `0x20`, not `0x1C`.** The real element type is
+   8-aligned - its first member is a `PHYSICAL_ADDRESS` - so the array is
+   8-aligned too. This project's C89 rules require the address to be spelled
+   as two `ULONG`s, which makes the declared element 4-aligned, and the
+   compiler put the array at `0x1C`. The declaration now carries explicit
+   padding.
+
+`sizeof(USBPORT_SCATTER_GATHER_LIST)` is `0x50` either way, which is why the
+one number section 9 item 2b predicted was the one that was right. **The size
+was never the risk and the assert on it was never going to fire.**
+
+*The lesson this generalises to*, and it is now in `lessons.md`: on this
+interface, a structure whose `sizeof` matches across architectures has proved
+nothing about its fields, and an array offset does not follow from the
+declared header when the real element type is wider-aligned than the
+declaration. Both are invisible to every check that was in place, and both
+corrupt silently in the general case. Here they did not corrupt anything,
+because the scatter-gather path's high-DWORD refusal in `src/xhci_xfer.c`
+turned a wrong read into a clean, counted refusal on the first transfer
+instead of a TRB pointing at an address assembled from two unrelated halves.
+That check exists for a condition M5 says cannot arise - the adapter is
+created 32-bit - and is there only because `usbport-miniport-abi.md` gives the
+miniport the rule "read the low DWORD, and check the high DWORD is zero rather
+than assume it". **It caught a defect it was not written for, the first time
+an amd64 binary ran**, which is the argument for item 3's sibling guard on
+`StartPA` as well.
 
 ---
 
@@ -1095,27 +1192,43 @@ dumper is `link /dump`; they are the same tool.
    `InterruptAffinity` in item 2 is the cautionary case: a field pinned here
    to `ULONG` that the real amd64 structure widens to 8, and the whole of why
    `USBPORT_RESOURCES` comes out `0x40` instead of `0x48`.
-   **2b - `USBPORT_SCATTER_GATHER_LIST` is now the one structure running on an
-   assumption, and it is the last of them.** M7 closed 2a; this one was named
-   in item 2 and has never been read off a binary. The compiler puts it at
-   `0x50` with `SgElement[]` at `0x1C` - `CurrentVa` and `MappedSystemVa` both
-   widen and realign, while the array's own alignment stays 4 because every
-   member of an element is a `ULONG`. `xhci_usbport.h` asserts those two
-   numbers under `_WIN64` and says in the same comment that they are the
-   compiler's rather than a measurement, so the day someone reads the real
-   structure the assert either confirms it or fires.
-   
-   It matters because the driver consumes this structure on the transfer path,
-   so a wrong `SgElement[]` offset corrupts every scatter-gather transfer
-   silently. It was not read in the M7 pass because the consumer side is
-   several calls deep in `usbehci`'s transfer submission rather than in one
-   legible function; the **producer** side in `usbport.sys` is the better
-   instrument and is where a future reading should start.
+   **2b - `USBPORT_SCATTER_GATHER_LIST`. DONE 2026-09-09, and the assumption
+   was wrong.** This is now M8 in section 5; what follows is what this item
+   said before the reading, kept because the prediction and its two misses are
+   the instructive part.
+
+   It said: the compiler puts it at `0x50` with `SgElement[]` at `0x1C`, that
+   `xhci_usbport.h` asserts those two numbers and says in the same comment
+   that they are the compiler's rather than a measurement, and that the day
+   someone read the real structure the assert would either confirm it or fire.
+   It said the reading should start from the **producer** in `usbport.sys`
+   rather than the consumer side several calls deep in `usbehci`, and it said
+   a wrong `SgElement[]` offset corrupts every scatter-gather transfer
+   silently.
+
+   **Right about where to look, right about the stakes, wrong about the
+   layout, and wrong about which check would catch it.** `0x50` was correct
+   and `0x1C` was not - the array is at `0x20`, because the real element type
+   is 8-aligned. So the assert that was left as a tripwire was on the number
+   that had not moved, and the one that had moved had no assert at all. Nor
+   was the element covered: its `sizeof` is 24 on both architectures, so it
+   read as a structure that does not move while two of its fields had shifted
+   four bytes. And it did not corrupt anything silently, because the
+   high-DWORD refusal of item 3 caught it on the first transfer - see M8.
 
 3. A `StartPA` high-DWORD refusal matching the one the scatter-gather path
    already makes. **M5 shows the adapter is created 32-bit, so this guards
    nothing measured** - it is the "check it, never assume it" rule applied one
    place further, and is optional on the evidence rather than required by it.
+
+   **The sibling guard it copies has since earned its keep, which is the
+   argument for taking this one.** M8 is a defect that made a physical address
+   read as being above 4 GB not because one was, but because the miniport was
+   reading four bytes off; the scatter-gather high-DWORD check turned that
+   into a counted refusal on the first control transfer of the first amd64 run
+   instead of a TRB built from two unrelated halves. A check written for a
+   condition that cannot arise caught a condition nobody had thought of, and
+   the reason is that it tests the *reading* rather than the hardware.
 4. The `__asm` stack-delta check excluded under `_WIN64`. The scout names the
    sites the compiler stops at - `4670`, `4673`, `4678`, `4695` - and the
    `espBefore`/`espAfter` locals at `4591`-`4592` have to go inside the same

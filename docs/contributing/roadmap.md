@@ -1598,11 +1598,12 @@ settled from the shipping binaries first and a guest second, and - if it can
 - one NT 5.2 amd64 binary observed on a Windows XP Professional x64 guest,
 with its standing stated in every document that names the targets.
 
-Status: open, 2026-09-08. It opened when the owner asked whether a WDK 7.1
-build could give this driver 64-bit guests. Task 21.1 is complete: all six measurements are read and all six
-pass, so nothing in the ABI argues against Windows XP x64 and Server 2003
-x64. No 64-bit binary of this driver exists yet - which is also the limit of
-what has been shown, since a static pass cannot establish runtime behaviour.
+Status: open, 2026-09-09 - **checkpoint passed, task 21.6 outstanding.** It
+opened on 2026-09-08 when the owner asked whether a WDK 7.1 build could give
+this driver 64-bit guests. Task 21.1 is complete: all six measurements are
+read and all six pass, so nothing in the ABI argues against Windows XP x64 and
+Server 2003 x64. That was the limit of what a static pass could show, and the
+paragraphs below are the record of what the phase then did about it.
 Task 21.5's guest was begun on 2026-09-08: `scripts\setup-qemu-winxp64.ps1`,
 its two launchers and the 16 GB `vm\winxp64.img` exist and the launcher gate
 covers them. It cost one finding already, before any driver: **this guest
@@ -1624,8 +1625,8 @@ narrows to Windows XP x64 and Server 2003 x64. It cost only the extraction,
 and it found one thing worth carrying: **Windows 7's usbport has a second
 `IoGetDmaAdapter` call that asks for a 64-bit adapter**, reachable only by a
 miniport declaring `Version >= 310`, which is the one path by which a future
-change here could move physical addresses above 4 GB. Nothing else in the
-phase has started, and no binary exists.
+change here could move physical addresses above 4 GB. That reading was taken
+when nothing else in the phase had started and no binary existed.
 
 **That order was taken on 2026-09-09 and it held.** The
 `USBPORT_ENDPOINT_PROPERTIES` reading went first and became M7; the rest of
@@ -1640,20 +1641,36 @@ module/symbol pairs against x86's eleven, and the differences are structural -
 and **21.3 was closed the same day**: the import gate, the library generator,
 a second INF, and both packagers.
 
-**So the host side of Phase 21 is done, and everything left needs a guest.**
 21.4's last two boxes closed the same day: design record 04's arithmetic was
 re-run against the amd64 `sizeof`s and does not move - nothing in the
 common-buffer layout is a `sizeof` - and the host suite now compiles and runs
 `test_packet` and `test_membuf` for amd64 as well as x86, so the `_WIN64` half
 of the ABI declaration is checked on the build host instead of only inside a
-driver build. An amd64 binary exists, passes every gate a 32-bit one does, and
-can be staged into install media; what nothing here has is evidence that it
-runs.
-No amd64 build of this driver has ever executed, on real hardware or in a
-virtual machine. That is task 21.5, and until it passes the publisher's
-`-Arch` deliberately defaults to `x86` alone, so an ordinary cut still
-publishes exactly what `1.0.2.0` did. Read the 64-bit package as complete
-tooling around an unobserved binary, and do not write anything stronger.
+driver build.
+
+**And then task 21.5 ran it, the same evening, and every checkpoint clause
+passes.** An amd64 `xhci98.sys` has now installed on an xHCI-only Windows XP
+Professional x64 SP2 guest, registered with that system's own `usbport.sys`,
+started its controller, passed its No Op self-test, answered the root-hub
+family, bound a HID mouse, a mass-storage device and a composite audio device,
+and survived the Device Manager disable/enable/remove/rescan sequence - with
+321 transfers completed and every refusal and error counter zero.
+
+**It cost one defect, and it was the one thing in the phase still running on
+an assumption.** `USBPORT_SCATTER_GATHER_LIST`'s amd64 layout had never been
+read off a binary; the compiler's guess was four bytes wrong in the element
+array's offset, and the first amd64 run refused every control transfer because
+of it. It is now measurement **M8**, taken statically off the producer in the
+NT 5.2 amd64 `usbport.sys`, and the fix is `_WIN64`-only - the x86 binary does
+not move. Task 21.5 has the account.
+
+So Phase 21 is a target observed rather than a package gated, and only task
+21.6 - the record - is open. **What has not changed on its own is the
+publisher.** `make-release.ps1 -Arch` still defaults to `x86` alone, so an
+ordinary cut publishes exactly what `1.0.2.0` did; a passing 21.5 licenses
+changing that line but does not change it, and it stays the owner's deliberate
+act. What can now be written is that the binary has been observed running -
+in one virtual machine, on one guest, never on real hardware.
 
 The version was bumped to `1.1.0.0` in the same session, on the owner's
 instruction, as a separate step after that identity was proved - its only
@@ -1857,6 +1874,10 @@ are static readings and no other task's box may be ticked on one.
 - [x] **21.4 - the code changes task 21.1 implies. Complete 2026-09-09**
       (design record 11 section 9). Five of the seven were done with 21.2;
       the last two, both of which needed no guest, were done the same day.
+      **An eighth followed the same evening and did need a guest** - the
+      `_WIN64` `USBPORT_SCATTER_GATHER_LIST` layout, which no measurement had
+      covered until the guest forced M8. It is recorded under 21.5 rather than
+      here, because what makes it worth reading is how it was found.
   - [x] the `_WIN64` packet declaration at the measured `0x250`. Reached by
         widening the two trailing `Reserved` canaries to `ULONG_PTR`, which
         M6 records as one of the two valid ways and which leaves the x86
@@ -1912,12 +1933,42 @@ are static readings and no other task's box may be ticked on one.
         x86 leg compiles the same files under it anyway; and it is skipped
         by name, with the run's verdict reading "x86 only", on a host with no
         WDK 7.1, since `tools/` is fetched per host rather than cloned
-- [ ] **21.5 - the Windows XP x64 guest** and its checkpoint below. The guest
-      is a vehicle, and building it is preparation rather than the leg: the
-      checkpoint clauses need an amd64 binary, which 21.2 and 21.4 have now
-      produced and gated. The
-      guest's existence is not progress on this task, and only the first two
-      boxes below can be ticked before that binary exists.
+- [x] **21.5 - the Windows XP x64 guest. COMPLETE 2026-09-09, and it cost one
+      defect.** Every checkpoint clause below was taken on the guest that
+      evening, on host `minis-w11p-ykm`, with the `qemu`-flavour amd64
+      `1.1.0.0` package staged to `vm\xferxp64`. The guest was a vehicle and
+      building it was preparation; this is the leg.
+
+      **The first amd64 binary ever to run did everything the static pass
+      predicted and then refused every control transfer.** It installed on an
+      xHCI-only machine, registered, started, passed its No Op self-test and
+      answered the whole root-hub family - and then failed each device
+      enumeration at the first control transfer with
+      `slot: control transfer refused by the builder, status=5`
+      (`XHCI_XFER_SG_HIGH_ADDRESS`). On a 2048 MB guest no physical address
+      above 4 GB exists, so the driver was reading the wrong bytes. The cause
+      was the one structure design record 11 had carried as an assumption
+      rather than a reading - `USBPORT_SCATTER_GATHER_LIST` - and it is now
+      **M8**: `SgElement[]` is at `0x20`, not the `0x1C` an all-`ULONG`
+      declaration produces, and the element's `SgTransferLength` and
+      `SgOffset` are each four bytes higher than on x86 while its `sizeof`
+      stays 24. Read statically off the producer in the NT 5.2 amd64
+      `usbport.sys` at RVA `0xF468`, fixed in `src/xhci_usbport.h` under
+      `_WIN64` alone, and now asserted there and in `test/test_packet.c` on
+      both architectures. The x86 binary does not move: two builds of
+      identical source differ in the same six bytes as a build across the
+      change, three import-table RVAs at the head of `.text`.
+
+      **Two things are worth carrying out of that.** The refusal came from the
+      scatter-gather high-DWORD check, which guards a condition M5 says cannot
+      arise and which design record 11 section 9 item 3 calls optional on the
+      evidence; it caught a defect nobody had predicted, on the first transfer,
+      cleanly and with a counter, instead of a TRB built from two unrelated
+      halves. And the reading needed a technique: a linear sweep of an amd64
+      `.text` desynchronises and lies, so the function boundaries come from
+      `.pdata` and each one is disassembled from its true entry with
+      `kd -z` - this DDK's `dumpbin` has no amd64 disassembler. Both are in
+      `lessons.md`.
   - [x] the guest installed from `scripts\setup-qemu-winxp64.ps1` and
         snapshotted `winxp64-clean-install` - 2026-09-08, the owner at the
         console for the product key, guest shut down from inside and the
@@ -1952,7 +2003,11 @@ are static readings and no other task's box may be ticked on one.
         `.NTamd64` path too. **One difference from 32-bit XP worth carrying:**
         there, `usbd.sys` was on disk as a 4,736-byte stub; here it is not on
         disk at all
-  - [ ] the checkpoint clauses below, on the amd64 binary
+  - [x] the checkpoint clauses below, on the amd64 binary. Taken 2026-09-09,
+        all seven, on `1.1.0.0` with the M8 fix. The owner drove the GUI (the
+        standing 2026-09-03 decision); the hot-plugs and the readings were
+        taken over the monitor on port 55562, and the trace is the
+        `qemu`-flavour port-`0xE9` log
 - [ ] **21.6 - the record.** The tier stated where Windows ME and 32-bit XP
       are stated, in `AGENTS.md`, `build-and-test.md`, `win98-wdm.md` and the
       release notes, with the provenance rows beside it.
@@ -1985,14 +2040,52 @@ are static readings and no other task's box may be ticked on one.
 Checkpoint. Every clause, or the phase is not closed:
 
 - [x] the static pass complete and transcribed into
-      `usb-xhci-info/usbport-miniport-abi.md`, every fact tagged `static`
-- [ ] the gates green on an amd64 binary
-- [ ] on a Windows XP x64 guest: the package installed on an xHCI-only
-      machine
-- [ ] the driver registered and started, and its No Op self-test passed
-- [ ] the root-hub callbacks answered
-- [ ] a HID mouse, a mass-storage device and a composite audio device bound
-- [ ] the Device Manager disable, enable, remove and rescan sequence survived
+      `usb-xhci-info/usbport-miniport-abi.md`, every fact tagged `static`.
+      **Eight measurements, not the six the phase opened with**: M7 came from
+      the compile scout and M8 from this guest
+- [x] the gates green on an amd64 binary. All three flavours, every gate,
+      2026-09-09: the amd64 import gate resolving all seven module/symbol
+      pairs directly against the NT 5.2 amd64 kernels and the one HAL, the
+      flavour marker, both INF profiles, and the host suite running
+      `test_packet` and `test_membuf` for amd64 as well as x86
+- [x] on a Windows XP x64 guest: the package installed on an xHCI-only
+      machine. No `usbport.sys`, `usbhub.sys`, `usbehci.sys` or `usbd.sys`
+      existed on that install; the `.NTamd64` half's `LayoutFile` route placed
+      the stack from `Driver Cache\amd64` with no prompt for the CD, and
+      Device Manager showed **USB 2.0 eXtensible Host Controller (xhci98)**
+      and **USB Root Hub** with no yellow bang
+- [x] the driver registered and started, and its No Op self-test passed.
+      `USBPORT_GetHciMn=10000001`, `packet size=00000250`,
+      `MiniPortExtensionSize=00017508`, `MiniPortTransferSize=00000098`,
+      `MiniPortResourcesSize=00064000` and `common buffer usbport will
+      request=00065000` - M2's and M3's measured values and task 21.4's
+      computed amd64 sizes, now read off a running driver, with the common
+      buffer identical to x86 as design record 04's re-run said it would be.
+      `USBPORT_RegisterUSBPortDriver status=00000000`,
+      `No Op self-test completion code=00000001`
+- [x] the root-hub callbacks answered. `RH_GetRootHubData` reporting 4 managed
+      ports, `RH_GetPortStatus`, `RH_SetFeaturePortPower` on all four,
+      `RH_ClearFeaturePortConnectChange`, `RH_ChirpRootPort`,
+      `RH_GetHubStatus`, `RH_EnableIrq`/`RH_DisableIrq`; port map 4 USB2-only
+      ports, 0 USB3, all four powered. No `SuspendController` on an idle
+      controller, so the NT half's `DisableSelectiveSuspend` works here as it
+      does on 32-bit XP
+- [x] a HID mouse, a mass-storage device and a composite audio device bound.
+      Hot-plugged from the monitor onto the `p3=0` root ports: **USB Human
+      Interface Device**, **USB Mass Storage Device**, and **USB Composite
+      Device** plus **USB Audio Device**, all without a yellow bang. The audio
+      device declared isochronous endpoints and they were opened; its
+      `endpoint speed differs from the port's, usbport << 8 | decoded=00000302`
+      line is the byte-for-byte precedented one from the Windows 98 audio run,
+      a 12 Mb/s device on a 480 Mb/s port
+- [x] the Device Manager disable, enable, remove and rescan sequence survived.
+      Read in the trace as `SuspendController: halted, USBCMD=00000000` then
+      `StopController` (disable), `DriverEntry` + `StartController` with all
+      three devices re-enumerating (enable), `StopController` (remove), and a
+      fresh `DriverEntry` + `StartController` reinstalling from the driver
+      store with no media prompt and "Your new hardware is installed and ready
+      to use" (rescan). 321 transfers completed across the run and **every
+      refusal and error counter zero**, `transfer error events` included
 
 Not a checkpoint: a build that links, or a static reading standing in for a
 guest. No primary target's checkpoint waits on any of this, and none of it

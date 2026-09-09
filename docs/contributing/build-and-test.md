@@ -1916,23 +1916,52 @@ time, so a guest installed under one rung must be booted under it too.
    was present on disk as a 4,736-byte stub. On x64 it is not on disk at all,
    and it comes from a different cabinet than the other three.
 
-**Then the guest waits, and its existence is not progress.** There is no
-amd64 binary to install: task 21.5's checkpoint needs one, and it depends on
-21.2 (the `WNET` amd64 build) and 21.4 (the code changes 21.1 implies). The
-run launcher's transfer drive `vm\xferxp64` is empty until then. Pass `ehci`
-as the run launcher's second argument to add a companion EHCI, which makes the
-in-box stack place `usbport.sys` instead - the same escape hatch the 32-bit
-launcher carries. **Reading 2 above did come back the way 32-bit XP's did**,
-so that escape hatch is the one to reach for if the `.NTamd64` `LayoutFile`
-route turns out not to place the stack.
+4. **The leg itself, taken 2026-09-09 with the `qemu`-flavour amd64 `1.1.0.0`
+   package staged to `vm\xferxp64`. Every checkpoint clause of roadmap task
+   21.5 passes.** The owner drove the GUI, per the standing 2026-09-03
+   decision; the hot-plugs and the readings were taken over the monitor on
+   port 55562 and the trace is the port-`0xE9` log.
 
-Phase 19 is the standing reminder for what to expect when the binary does
-arrive: there the ABI was right and the static work was right, and the guest
-still produced three problems in an afternoon - Code 39 from a missing
-`usbport.sys`, a thirty-second idle suspend that made hot-plug invisible, and
-issue 4. None was an ABI problem and two were install-path.
+   The install went through the `.NTamd64` half with **no prompt for the CD**,
+   which settles what reading 2 left open: `Driver Cache\amd64` does behave
+   like `Driver Cache\i386` and the `LayoutFile` route places the stack there
+   too. The companion-EHCI escape hatch was not needed. Device Manager showed
+   **USB 2.0 eXtensible Host Controller (xhci98)** and **USB Root Hub** with no
+   yellow bang on a machine that had had no USB stack on disk at all.
 
-Status: the guest was created and installed on 2026-09-08 on host
+   What the trace read: `USBPORT_GetHciMn=10000001`,
+   `packet size=00000250`, `MiniPortExtensionSize=00017508`,
+   `MiniPortTransferSize=00000098`, `MiniPortResourcesSize=00064000`,
+   `common buffer usbport will request=00065000`, register status 0, `No Op
+   self-test completion code=00000001`, the whole `RH_*` family, 4 managed
+   USB2-only ports all powered, and **no `SuspendController` on an idle
+   controller** - the NT half's `DisableSelectiveSuspend` works here as it does
+   on 32-bit XP. A hot-plugged HID mouse, `usb-storage` and composite
+   `usb-audio` all bound (**USB Human Interface Device**, **USB Mass Storage
+   Device**, **USB Composite Device** + **USB Audio Device**), and the Device
+   Manager disable / enable / remove / rescan sequence survived, the rescan
+   reinstalling from the driver store with no media prompt. 321 transfers
+   completed and every refusal and error counter zero.
+
+   **It cost one defect, and Phase 19 was the right thing to have expected.**
+   There the ABI was right and the static work was right and the guest still
+   produced three problems in an afternoon; here the first amd64 binary
+   installed, started, self-tested and answered the root hub, and then refused
+   every control transfer with `XHCI_XFER_SG_HIGH_ADDRESS` because
+   `USBPORT_SCATTER_GATHER_LIST`'s amd64 layout was the compiler's guess rather
+   than a reading - the one structure design record 11 had carried as owed. It
+   is now measurement M8, the fix is `_WIN64`-only, and the roadmap's 21.5
+   entry has the account.
+
+**What the guest is for now.** It is the vehicle for any future amd64
+observation, and the standing warning still applies to what it can settle: one
+guest, in a virtual machine, never on real hardware. Pass `ehci` as the run
+launcher's second argument to add a companion EHCI, which makes the in-box
+stack place `usbport.sys` itself - the same escape hatch the 32-bit launcher
+carries, and unnecessary in the leg above but worth knowing about.
+
+Status: **built, and roadmap task 21.5's checkpoint passed on it 2026-09-09.**
+The guest was created and installed on 2026-09-08 on host
 `minis-w11p-ykm` (`vm\winxp64.img`, 16 GB qcow2, 2.29 GB allocated after the
 install). Snapshot **`winxp64-clean-install`** taken the same evening with the
 guest shut down from inside and the image cold - `qemu-img check` reported no
