@@ -105,14 +105,14 @@ rem hard-errors on, and build.exe appends the architecture itself - so the
 rem override is what puts the output at src\objfre\amd64 beside src\objfre\i386
 rem with no second obj root and nothing renamed.
 rem
-rem WHAT AN amd64 BUILD IS NOT YET GATED ON, and it is deliberate rather than
-rem overlooked: the import gate enforces the committed allowlist on the binary
-rem in full, but there are no NT 5.2 amd64 kernel/HAL baselines to resolve the
-rem symbols against, so its Windows 2000 and Windows 98 evidence steps are
-rem withheld rather than run against x86 files that cannot speak for a 64-bit
-rem target. The gate says so loudly on every amd64 run. Those baselines are
-rem roadmap task 21.3, as is the second INF - there is no amd64 install media
-rem yet and this script does not build any.
+rem WHAT AN amd64 BUILD IS GATED ON, since roadmap task 21.3 closed: the import
+rem gate enforces xhci98-imports-amd64.allow and resolves every pair against
+rem authenticated NT 5.2 amd64 baselines (winxp64-baselines.expected), and the
+rem INF gate runs over BOTH production INFs on every build - src\xhci98.inf
+rem under -Arch x86 and src\xhci98-amd64.inf under -Arch amd64 - whichever
+rem architecture is being built. Both, always, because the two are one release
+rem and either drifting from the other is silent on the target;
+rem scripts\inf-gate\test-inf-checks.ps1 also compares them directly.
 rem
 rem Exit codes: 0 = built and gated, 1 = failure, 2 = host tests inconclusive
 rem (a blocked exe launch, not a test failure - just run it again).
@@ -254,9 +254,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
 if errorlevel 1 goto inftestfail
 
 echo.
-echo === INF gate ===
+echo === INF gate (x86) ===
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-inf.ps1"
+    "%REPO%\scripts\inf-gate\check-inf.ps1" -Arch x86
+if errorlevel 1 goto inffail
+
+rem The 64-bit package's INF, gated on every build and not only an -amd64 one.
+rem The two ship as one release, neither engine reports a mistake in either,
+rem and the cost of the second run is a second or two.
+echo.
+echo === INF gate (amd64) ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\inf-gate\check-inf.ps1" -Arch amd64
 if errorlevel 1 goto inffail
 
 rem Stand-ins only - no build, no staged media, no VM - so this runs here with

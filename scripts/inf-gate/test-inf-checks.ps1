@@ -35,6 +35,7 @@ $ErrorActionPreference = "Stop"
 $repo = Get-RepoRoot
 $gate = Join-Path $PSScriptRoot "check-inf.ps1"
 $prodInf = Join-Path $repo "src\xhci98.inf"
+$prodInfAmd64 = Join-Path $repo "src\xhci98-amd64.inf"
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "test-harness.ps1")
 
@@ -62,9 +63,14 @@ function Invoke-Gate {
 
 function New-MutatedInf {
     # $Mutate takes the production text and returns the text to write.
+    # -Source names which production INF to mutate: the 32-bit file by default,
+    # or src\xhci98-amd64.inf for the -Arch amd64 cases at the foot of this
+    # file. One mutator rather than two, so the "the mutation has to actually
+    # mutate" guard below covers both files.
     param([string]$Name, [scriptblock]$Mutate, [switch]$Utf16, [switch]$LfOnly, [switch]$Latin1, [switch]$BareCr,
-          [switch]$Utf8Bom, [switch]$InfUnchanged)
-    $original = [System.IO.File]::ReadAllText($prodInf)
+          [switch]$Utf8Bom, [switch]$InfUnchanged, [string]$Source = "")
+    if ($Source -eq "") { $Source = $prodInf }
+    $original = [System.IO.File]::ReadAllText($Source)
     $text = & $Mutate $original
 
     # **The mutation has to actually mutate**, and this is where that is
@@ -86,7 +92,7 @@ function New-MutatedInf {
     # is mutated is the `xhci98.rc` staged beside the INF - those cases assert
     # their own mutation landed, one file over.
     if ($text -ceq $original -and -not ($Utf16 -or $LfOnly -or $BareCr -or $Utf8Bom -or $InfUnchanged)) {
-        Assert-True $false ("$Name : the mutation left src\xhci98.inf unchanged, so whatever this case asserts, it asserts it about the production INF. Its pattern no longer matches - fix the pattern, not the gate.")
+        Assert-True $false ("$Name : the mutation left " + (Split-Path -Leaf $Source) + " unchanged, so whatever this case asserts, it asserts it about the production INF. Its pattern no longer matches - fix the pattern, not the gate.")
     }
 
     $path = Join-Path $script:work ("$Name.inf")
@@ -124,9 +130,11 @@ function New-MutatedInf {
 
 function Assert-RuleFires {
     param([string]$Name, [string]$Rule, [scriptblock]$Mutate, [switch]$Utf16, [switch]$LfOnly, [switch]$Latin1, [switch]$BareCr,
-          [switch]$Utf8Bom)
-    $path = New-MutatedInf -Name $Name -Mutate $Mutate -Utf16:$Utf16 -LfOnly:$LfOnly -Latin1:$Latin1 -BareCr:$BareCr -Utf8Bom:$Utf8Bom
-    $r = Invoke-Gate -Path $path
+          [switch]$Utf8Bom, [string]$Source = "", [string]$Arch = "")
+    $path = New-MutatedInf -Name $Name -Mutate $Mutate -Utf16:$Utf16 -LfOnly:$LfOnly -Latin1:$Latin1 -BareCr:$BareCr -Utf8Bom:$Utf8Bom -Source $Source
+    $extra = @()
+    if ($Arch -ne "") { $extra = @("-Arch", $Arch) }
+    $r = Invoke-Gate -Path $path -Extra $extra
     Assert-True ($r.ExitCode -ne 0) ("$Name : the gate accepted a broken INF (exit 0).")
     # A WARN line carries the same [RULE] tag, and several rules have both
     # forms, so only a FAIL line counts as the rule firing.
@@ -1131,6 +1139,335 @@ try {
     $r = Invoke-Gate -Path $prodInf -PackageDir $subPkg
     Assert-True ($r.ExitCode -ne 0) "a package holding usbfiles\usbd2k.sys was accepted."
     Assert-True ($r.Output -match [regex]::Escape("[PKG-MSFILE]")) ("expected PKG-MSFILE to fire on a subdirectory copy. Output:`n" + $r.Output)
+
+
+    # ---- the 64-bit package's INF (roadmap task 21.3) -------------------
+    #
+    # src\xhci98-amd64.inf is a SECOND production INF, not a variant of the
+    # first, and design record 11's decision 2 accepted one cost for it: two
+    # files now carry one package's facts. Everything below is that cost being
+    # paid rather than promised - the file passing its own profile, each rule
+    # of that profile shown firing, each file shown FAILING under the other's
+    # profile, and the shared facts compared directly between the two.
+
+    Write-Step "the 64-bit INF must pass its own profile"
+
+    $baseline64 = Invoke-Gate -Path $prodInfAmd64 -Extra @("-Arch", "amd64")
+    Assert-True ($baseline64.ExitCode -eq 0) ("src\xhci98-amd64.inf does not pass its own gate:`n" + $baseline64.Output)
+    Assert-True ($baseline64.Output -notmatch "FAIL \[") "src\xhci98-amd64.inf produced a FAIL line."
+    Assert-True ($baseline64.Output -notmatch "WARN:") ("src\xhci98-amd64.inf produced a warning:`n" + $baseline64.Output)
+
+    #
+    # **Each file must be REFUSED under the other's profile**, and this is the
+    # check that makes -Arch worth having at all. Without it the amd64 profile
+    # could be a set of rules that happens to accept anything the x86 one
+    # accepts - "coverage" that never distinguishes the two files - and the
+    # first sign would be a 64-bit package gated as though it were the 32-bit
+    # one. The interesting half is the second: src\xhci98.inf under -Arch
+    # amd64 must fail, because its [Manufacturer] line carries no NTamd64 field
+    # and its undecorated [Xhci.Dev] is exactly what PATH-NO9X exists to refuse.
+    #
+    $wrongProfile = Invoke-Gate -Path $prodInfAmd64
+    Assert-True ($wrongProfile.ExitCode -ne 0) ("the 64-bit INF passed the x86 profile. The two profiles do not distinguish the two files, so gating either says nothing about it.`n" + $wrongProfile.Output)
+    Assert-True ($wrongProfile.Output -match [regex]::Escape("FAIL [PATH-MFGDEC]")) ("expected PATH-MFGDEC on the 64-bit INF under -Arch x86. Output:`n" + $wrongProfile.Output)
+
+    #
+    # The 32-bit file is refused at its [Manufacturer] line, which is the FIRST
+    # thing wrong with it under this profile and the reason PATH-NO9X is not
+    # what to assert here: with no NTamd64 field there is no [XhciModels.NTamd64]
+    # to find, so no model is gathered, so the per-model loop PATH-NO9X lives in
+    # never runs. That rule's own case is `amd64-undecorated-dev` below, where
+    # the file is a valid 64-bit INF in every other respect. Asserting it here
+    # would have been asserting a rule that cannot reach this input.
+    #
+    $wrongProfile2 = Invoke-Gate -Path $prodInf -Extra @("-Arch", "amd64")
+    Assert-True ($wrongProfile2.ExitCode -ne 0) ("the 32-bit INF passed the amd64 profile.`n" + $wrongProfile2.Output)
+    Assert-True ($wrongProfile2.Output -match [regex]::Escape("FAIL [PATH-MFGDEC]")) ("expected PATH-MFGDEC on the 32-bit INF under -Arch amd64. Output:`n" + $wrongProfile2.Output)
+    Assert-True ($wrongProfile2.Output -match [regex]::Escape("FAIL [OS-DEFAULT]")) ("expected OS-DEFAULT to refuse the 32-bit file's undecorated [DefaultInstall] under -Arch amd64. Output:`n" + $wrongProfile2.Output)
+
+    Write-Step "the [Manufacturer] decoration, in both directions"
+
+    #
+    # **This is the rule that pins design record 11's decision 2**, and it is
+    # the one case here whose subject is the 32-bit file. Widening
+    # `%Mfg%=XhciModels` to `%Mfg%=XhciModels,NTx86,NTamd64` is the single-INF
+    # route the owner declined on 2026-09-09, because that line is what Windows
+    # 98's 16-bit engine parses to find its models section and whether that
+    # engine reads only the first field has never been measured here. Nothing
+    # else in the tree would notice the edit: the widened file still passes
+    # every other rule, and what it would cost is a re-run of all four existing
+    # install legs to find out whether it broke Windows 98.
+    #
+    Assert-RuleFires "x86-mfg-widened" "PATH-MFGDEC" {
+        param($t) $t.Replace("%Mfg%=XhciModels`r`n", "%Mfg%=XhciModels,NTx86,NTamd64`r`n")
+    }
+    # The other direction: the 64-bit file losing its decoration. The 64-bit
+    # setup engine then looks for an undecorated [XhciModels], ignores it, and
+    # the package installs nothing at all - which on the target is
+    # indistinguishable from media that was never copied.
+    Assert-RuleFires "amd64-mfg-undecorated" "PATH-MFGDEC" {
+        param($t) $t.Replace("%Mfg%=XhciModels,NTamd64", "%Mfg%=XhciModels")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    Write-Step "the 64-bit file's own install path"
+
+    #
+    # PATH-NO9X: an undecorated install section ADDED beside the decorated one,
+    # which is what an author merging the two files by hand would produce. It
+    # is not a missing section - everything the 64-bit engine needs is still
+    # there and the file installs correctly on x64. What it also does is offer
+    # an amd64 xhci98.sys to a 32-bit engine, which falls back to exactly this
+    # section, copies the binary, and creates a service pointing at it.
+    #
+    Assert-RuleFires "amd64-undecorated-dev" "PATH-NO9X" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=",
+                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    # The same hazard on the right-click route, which is the one a user takes
+    # with no device present - so nothing about the hardware stops it.
+    Assert-RuleFires "amd64-undecorated-default" "OS-DEFAULT" {
+        param($t) $t.Replace("[DefaultInstall.NTamd64]`r`nCopyFiles=",
+                             "[DefaultInstall]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    # And the right-click section going missing altogether, which halves the
+    # routes every OS-* and SUSP-* rule below is checked against rather than
+    # failing anything - the 2026-09-07 audit's H8, in its 64-bit form.
+    Assert-RuleFires "amd64-no-default" "OS-DEFAULT" {
+        param($t) $t.Replace("[DefaultInstall.NTamd64]", "[DefaultInstall.NTamd65]")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    Assert-RuleFires "amd64-no-services" "PATH-NT" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64.Services]", "[Xhci.Dev.NTamd64.Svc]")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-no-install-section" "PATH-NT" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]", "[Xhci.Dev.NT]")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-svc-binary-gap" "PATH-NT" {
+        param($t) $t.Replace("ServiceBinary=%12%\xhci98.sys", "ServiceBinary=%12%\xhci99.sys")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-bad-starttype" "PATH-NT" {
+        param($t) $t.Replace("StartType=3                         ; SERVICE_DEMAND_START", "StartType=4                         ; SERVICE_DISABLED")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    Write-Step "the 64-bit file's OS-supplied files and registry values"
+
+    # Every one of these is silent on the target in exactly the way its 32-bit
+    # counterpart is: a root hub that will not load, a property page that is
+    # dropped without a word, a controller that idle-suspends and stops seeing
+    # hot-plugs, or a log channel that cannot be turned on.
+    Assert-RuleFires "amd64-no-usbui" "OS-MISSING" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI",
+                             "[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-no-usbport" "OS-MISSING" {
+        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`n", "[Xhci.CopyNT]`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-usbport-no-flag" "OS-FLAGS" {
+        param($t) $t.Replace("usbport.sys,,,16", "usbport.sys")
+    } -Source $prodInfAmd64 -Arch amd64
+    # usbui.dll to the drivers directory: it is a user-mode property-page DLL,
+    # and dirid 11 is where all four operating systems' own USB INFs put it.
+    Assert-RuleFires "amd64-usbui-dest" "OS-DEST" {
+        param($t) $t.Replace("Xhci.CopyUI=11", "Xhci.CopyUI=10,System32\Drivers")
+    } -Source $prodInfAmd64 -Arch amd64
+    # The media carrying a Microsoft file again, on the 64-bit package this
+    # time: legal-provenance section 5's withdrawal is not per-architecture.
+    Assert-RuleFires "amd64-usbport-on-media" "OS-MEDIA" {
+        param($t) $t.Replace("[SourceDisksFiles]`r`nxhci98.sys=1", "[SourceDisksFiles]`r`nusbport.sys=1`r`nxhci98.sys=1")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-usbhub20" "OS-NEVER" {
+        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16", "[Xhci.CopyNT]`r`nusbhub20.sys,,,16`r`nusbport.sys,,,16")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-no-susp" "SUSP-MISSING" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global",
+                             "[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-susp-zero" "SUSP-VALUE" {
+        param($t) $t.Replace("DisableSelectiveSuspend,0x00010001,1", "DisableSelectiveSuspend,0x00010001,0")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-no-logvalues" "VAL-MISSING" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global",
+                             "[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.Global")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-logverbosity-default" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciLogVerbosity,0x00010001,0", "HKR,,XhciLogVerbosity,0x00010001,1")
+    } -Source $prodInfAmd64 -Arch amd64
+    #
+    # **The version tie reaches the 64-bit file too**, and proving that needs
+    # the header staged beside the mutated copy: the cross-check skips silently
+    # when there is no xhci_version.h next to the INF, which is correct for the
+    # packager's staged media and would make this case pass vacuously. So the
+    # good case asserts the check RAN, exactly as the 32-bit block above does,
+    # and only then is the drift case worth anything. Both packages are cut
+    # from one header at one version; a 64-bit INF claiming a version nobody
+    # built would install as an upgrade and report it for ever afterwards.
+    #
+    {
+        $stagedHdr64 = Join-Path $script:work "xhci_version.h"
+        $stagedRc64  = Join-Path $script:work "xhci98.rc"
+        $ascii64 = New-Object System.Text.ASCIIEncoding
+        [System.IO.File]::WriteAllText($stagedHdr64, [System.IO.File]::ReadAllText((Join-Path $repo "src\xhci_version.h")), $ascii64)
+        [System.IO.File]::WriteAllText($stagedRc64,  [System.IO.File]::ReadAllText((Join-Path $repo "src\xhci98.rc")), $ascii64)
+
+        $good64 = New-MutatedInf -Name "amd64-vergood" -Mutate { param($t) $t } -InfUnchanged -Source $prodInfAmd64
+        $r = Invoke-Gate -Path $good64 -Extra @("-Arch", "amd64")
+        Assert-True ($r.ExitCode -eq 0) ("amd64-vergood : the 64-bit INF and src\xhci_version.h disagree:`n" + $r.Output)
+        Assert-True (-not ($r.Output -match "cross-check skipped")) `
+            ("amd64-vergood : the version cross-check SKIPPED, so the drift case below would pass vacuously. Output was:`n" + $r.Output)
+
+        Assert-RuleFires "amd64-driverver-drift" "BOTH-VERSION" {
+            param($t) $t.Replace("DriverVer=09/09/2026,1.1.0.0", "DriverVer=09/09/2026,1.1.0.1")
+        } -Source $prodInfAmd64 -Arch amd64
+
+        Remove-Item -LiteralPath $stagedHdr64 -Force
+        Remove-Item -LiteralPath $stagedRc64 -Force
+    }.Invoke() | Out-Null
+
+    Write-Step "the two INFs must agree about the package"
+
+    #
+    # **The accepted cost of decision 2, mechanised.** Two files carry one
+    # package's facts, and the failure mode of that arrangement is not a
+    # crash - it is a 64-bit package that installs perfectly and behaves
+    # differently from the 32-bit one for a release or two before anybody
+    # notices. Nothing else in this tree compares them: each passes its own
+    # gate, each stages its own media, and the two are never read together.
+    #
+    # What is compared is what MUST be the same because it is one package:
+    # the hardware ID it binds to, the service it creates and every value of
+    # that service, the registry values the driver reads and their defaults,
+    # the machine-wide value, the OS-supplied file list and its flags, the
+    # media contents, the [Version] identity, and every [Strings] token the
+    # two share. What is deliberately NOT compared is what must differ - the
+    # decorations, the Windows 98 half, the temporary-name field, the INF
+    # copy - and that list is short enough to state, which is the argument
+    # for comparing the rest exactly rather than approximately.
+    #
+    function Get-InfSection {
+        # Section body with comments, blank lines and trailing whitespace
+        # removed, so a comment edit in one file is not a false disagreement.
+        param([string]$Path, [string]$Name)
+        $lines = [System.IO.File]::ReadAllText($Path) -split "`r`n"
+        $out = New-Object System.Collections.ArrayList
+        $inSection = $false
+        foreach ($raw in $lines) {
+            $line = $raw
+            $semi = $line.IndexOf(';')
+            if ($semi -ge 0) { $line = $line.Substring(0, $semi) }
+            $line = $line.Trim()
+            if ($line -match '^\[(.+)\]$') {
+                $inSection = ($matches[1] -ieq $Name)
+                continue
+            }
+            if ($inSection -and $line -ne "") { [void]$out.Add($line) }
+        }
+        return @($out)
+    }
+
+    function Assert-InfsAgree {
+        param([string]$Section, [string]$Why, [string[]]$Only = @())
+        $a = @(Get-InfSection -Path $prodInf -Name $Section)
+        $b = @(Get-InfSection -Path $prodInfAmd64 -Name $Section)
+        if ($Only.Count -gt 0) {
+            $keep = { param($rows) @($rows | Where-Object { $r = $_; @($Only | Where-Object { $r -imatch ('^\s*' + [regex]::Escape($_) + '\s*=') }).Count -gt 0 }) }
+            $a = & $keep $a
+            $b = & $keep $b
+        }
+        Assert-True ($a.Count -gt 0) ("INF-SYNC: [$Section] is empty or missing in src\xhci98.inf, so this comparison proves nothing.")
+        Assert-True ((($a -join "`n")) -eq (($b -join "`n"))) (
+            "INF-SYNC: src\xhci98.inf and src\xhci98-amd64.inf disagree in [$Section]." +
+            "`n$Why" +
+            "`nIf the change really belongs in one file only, say so here and exempt it - do not" +
+            "`nedit one file and leave the other behind." +
+            "`n`n--- src\xhci98.inf ---`n" + ($a -join "`n") +
+            "`n`n--- src\xhci98-amd64.inf ---`n" + ($b -join "`n"))
+    }
+
+    Assert-InfsAgree -Section "Version" -Only @("Signature", "Class", "ClassGUID", "Provider", "LayoutFile", "DriverVer") `
+        -Why "The two packages are one release cut from one src\xhci_version.h, and they install into the same device class through the same LayoutFile route."
+    Assert-InfsAgree -Section "Xhci.AddService" `
+        -Why "One package creates one service. A driver that is demand-start on one architecture and boot-start on the other is two products."
+    Assert-InfsAgree -Section "Xhci.AddReg.NT" `
+        -Why "These are the values the driver reads at run time through usbport. A default that drifted on one architecture is a diagnostic door open on machines whose owner never asked for one."
+    Assert-InfsAgree -Section "Xhci.AddReg.Global" `
+        -Why "DisableSelectiveSuspend is machine-wide and is the reason hot-plug works at all. It is the same value with the same three published consequences on every target."
+    Assert-InfsAgree -Section "Xhci.CopyNT" `
+        -Why "The NT paths of both packages fetch the same three files from the OS by the same LayoutFile route with the same COPYFLG_NO_OVERWRITE."
+    Assert-InfsAgree -Section "Xhci.CopyUI" `
+        -Why "usbui.dll is on every install path of both packages since 1.0.2.0, to dirid 11, with flag 16."
+    Assert-InfsAgree -Section "SourceDisksFiles" `
+        -Why "Both media carry this project's two files and nothing else. A Microsoft file appearing on one of them is legal-provenance section 5's withdrawal being undone on one architecture."
+    Assert-InfsAgree -Section "SourceDisksNames" `
+        -Why "One disk, described the same way."
+
+    # The hardware ID: the two models lines are decorated differently and sit in
+    # differently named sections, so the sections cannot be compared whole. What
+    # must match is what the engine binds on.
+    $idX86 = @(Get-InfSection -Path $prodInf -Name "XhciModels")
+    $id64  = @(Get-InfSection -Path $prodInfAmd64 -Name "XhciModels.NTamd64")
+    Assert-True ($idX86.Count -eq 1 -and $id64.Count -eq 1) "INF-SYNC: each file must have exactly one models line."
+    Assert-True ($idX86[0] -eq $id64[0]) (
+        "INF-SYNC: the two INFs bind different hardware. One package, one compatible ID." +
+        "`n  src\xhci98.inf        $($idX86[0])" +
+        "`n  src\xhci98-amd64.inf  $($id64[0])")
+
+    # [Strings]: every token the two share must have the same text, because
+    # only one of the two packages can ever install on a machine and a user
+    # reading Device Manager - or quoting it in a bug report - should see one
+    # product either way. Tokens present in one file only are not a
+    # disagreement; there are none today, and a 64-bit-only string would be.
+    $sX86 = @{}
+    foreach ($row in (Get-InfSection -Path $prodInf -Name "Strings")) {
+        if ($row -match '^\s*([^=]+?)\s*=\s*(.+)$') { $sX86[$matches[1].Trim()] = $matches[2].Trim() }
+    }
+    $s64 = @{}
+    foreach ($row in (Get-InfSection -Path $prodInfAmd64 -Name "Strings")) {
+        if ($row -match '^\s*([^=]+?)\s*=\s*(.+)$') { $s64[$matches[1].Trim()] = $matches[2].Trim() }
+    }
+    Assert-True ($sX86.Count -gt 0 -and $s64.Count -gt 0) "INF-SYNC: [Strings] parsed empty in one of the two INFs."
+    foreach ($tok in @($sX86.Keys | Sort-Object)) {
+        if (-not $s64.ContainsKey($tok)) { continue }
+        Assert-True ($sX86[$tok] -ceq $s64[$tok]) (
+            "INF-SYNC: [Strings] token %$tok% differs between the two INFs." +
+            "`n  src\xhci98.inf        $($sX86[$tok])" +
+            "`n  src\xhci98-amd64.inf  $($s64[$tok])" +
+            "`nOnly one of the two packages installs on a given machine; both should name one product.")
+    }
+
+    Write-Step "the 64-bit install footprint"
+
+    #
+    # A footprint file of its own, compared the same way and for the same
+    # reason (task 11-V.3): the 64-bit package places a different set of things
+    # on a different number of routes, so comparing it against the 32-bit file's
+    # footprint would mean nothing. Two claims, two files.
+    #
+    $tracked64 = Join-Path $repo "scripts\inf-gate\expected-footprint-amd64.txt"
+    Assert-True (Test-Path -LiteralPath $tracked64) "scripts\inf-gate\expected-footprint-amd64.txt is missing; regenerate it with -Arch amd64 -EmitFootprint."
+    if (Test-Path -LiteralPath $tracked64) {
+        $out64 = Join-Path $script:work ("fp64-" + [System.IO.Path]::GetRandomFileName() + ".txt")
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $gate `
+            -InfPath $prodInfAmd64 -Arch amd64 -EmitFootprint $out64 | Out-Null
+        Assert-True (Test-Path -LiteralPath $out64) "-EmitFootprint wrote no file for the 64-bit INF."
+        if (Test-Path -LiteralPath $out64) {
+            $actual64 = @(Get-Content -LiteralPath $out64 | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() -ne "" })
+            $expected64 = @(Get-Content -LiteralPath $tracked64 | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() -ne "" })
+            foreach ($row in $actual64) {
+                $kind = ($row -split '\|')[0]
+                Assert-True ($knownRowTypes -contains $kind) (
+                    "64-bit footprint line is neither a comment nor a known row type: '$row'")
+            }
+            Assert-True ((($actual64 -join "`n")) -eq (($expected64 -join "`n"))) (
+                "the 64-bit INF's footprint differs from scripts\inf-gate\expected-footprint-amd64.txt." +
+                "`nIf the INF's file or registry footprint really changed, task 11-V.3's uninstall" +
+                "`nexpectation changed with it - regenerate the file and say so in the commit:" +
+                "`n  powershell -File scripts\inf-gate\check-inf.ps1 -Arch amd64 -EmitFootprint scripts\inf-gate\expected-footprint-amd64.txt" +
+                "`n`n--- expected ---`n" + ($expected64 -join "`n") +
+                "`n`n--- actual ---`n" + ($actual64 -join "`n"))
+        }
+    }
 
 } finally {
     if (Test-Path -LiteralPath $script:work) {

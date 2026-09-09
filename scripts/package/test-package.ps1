@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 Regression tests for the install-media packager (roadmap Phase 3 task 7).
 
@@ -1179,7 +1179,12 @@ try {
     Write-Step "the media-root refusal comes before the build and the publish"
     $releaserText = [System.IO.File]::ReadAllText($releaser)
     $marks = @(
-        @{ Name = "the media-root assertion";  Find = 'Assert-PublishableAtMediaRoot -Layout $declaredLayout' },
+        # The anchor moved with roadmap task 21.3: the media-root assertion is
+        # now inside a per-architecture loop, because a cut may hold two INFs,
+        # so the layout it is handed is $layoutA rather than one $declaredLayout.
+        # What this list checks is the ORDER of the steps, and that is unchanged
+        # - the assertion still runs before anything is built or published.
+        @{ Name = "the media-root assertion";  Find = 'Assert-PublishableAtMediaRoot -Layout $layoutA' },
         @{ Name = "the containment assertion"; Find = 'Assert-UploadSetOutsideRelease -UploadRoot $early.Root' },
         @{ Name = "the make-package call";     Find = '& powershell.exe @pkgArgs' },
         @{ Name = "the declared-media check";  Find = 'Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected' },
@@ -1212,6 +1217,36 @@ try {
     # sentence AGENTS.md forbids, because XHCISNAP.EXE statically links the
     # MSVC 6.0 runtime the release's own NOTICE.TXT attributes to Microsoft.
     # The defensible form is "No Microsoft file is in this download".
+    #
+    # **Every placeholder in the readme template must be one the renderer
+    # substitutes.** The template is a literal here-string and the substitution
+    # is a fixed chain of .Replace() calls, so a placeholder added to one and
+    # not the other renders as itself - a user-facing file telling someone to
+    # install from the "{RELEASEDIR}\\" directory. Nothing else would notice:
+    # the readme is generated at the very end of a cut, after every gate.
+    #
+    # This became worth checking with roadmap task 21.3, which turned the
+    # hardcoded RELEASE\ into a placeholder because the directory is now named
+    # for its architecture as well as its flavour.
+    #
+    Write-Step "every readme placeholder is one the renderer substitutes"
+    $tplStart = $releaserText.IndexOf('$template = @' + [char]39)
+    Assert-True ($tplStart -ge 0) "make-release.ps1 no longer has a readme template this test can find."
+    if ($tplStart -ge 0) {
+        $tplEnd = $releaserText.IndexOf([char]39 + "@", $tplStart)
+        Assert-True ($tplEnd -gt $tplStart) "make-release.ps1's readme template has no closing delimiter."
+        $tplText = $releaserText.Substring($tplStart, $tplEnd - $tplStart)
+        # The chain, read from the renderer rather than restated here, so a
+        # substitution removed from it fails this instead of quietly passing.
+        $substituted = @([regex]::Matches($releaserText, 'Replace\("(\{[A-Z]+\})"') |
+                         ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+        Assert-True ($substituted.Count -ge 5) ("only " + $substituted.Count + " Replace(...) substitutions were found in make-release.ps1; this test cannot be reading the renderer correctly.")
+        foreach ($ph in @([regex]::Matches($tplText, '\{[A-Z]+\}') | ForEach-Object { $_.Value } | Sort-Object -Unique)) {
+            Assert-True ($substituted -contains $ph) (
+                "the readme template uses $ph but make-release.ps1 never substitutes it, so it would render literally into the file a user reads.")
+        }
+    }
+
     Write-Step "the readme template carries neither of the two forbidden claims"
     foreach ($forbidden in @("WINDOWS 98 ONLY", "redistributes nothing")) {
         Assert-True ($releaserText -notmatch [regex]::Escape($forbidden)) `
@@ -1348,6 +1383,177 @@ try {
         "stamping a directory with no xhci98.sys in it must fail."
     Assert-True ((Invoke-Stamp "-Write" $emptyDir) -ne 2) `
         "...and must not fail with 2, which is the code -AllowUnstampedDriver accepts."
+
+
+    # --- the second architecture (roadmap task 21.3) -------------------------
+    #
+    # -Arch moves three things at once and they must not be separable: which
+    # obj subdirectory the binary comes from, which of the two INFs is staged,
+    # and which architecture the INF and import gates are run under. The
+    # failure this coverage is about is not a crash - it is a package that
+    # stages an amd64 xhci98.sys around the 32-bit INF, installs on a 32-bit
+    # machine because that INF offers it a driver, and then fails its load with
+    # a yellow bang no log explains.
+    #
+    # **-UploadSetOnly against a tree cut with the NEW directory names.** The
+    # block above stages `release\` and `debug\` - the shape the four
+    # already-cut versions have - and so covers the legacy fallback. This
+    # covers the primary path, which is what every cut from now on produces,
+    # and the two together are why that fallback exists at all: the rename
+    # does not reach back through the write-once rule, so both shapes have to
+    # assemble.
+    #
+    Write-Step "-UploadSetOnly assembles a tree cut with the -x86 directory names"
+    {
+        # **The current version, not an invented one.** -UploadSetOnly refuses
+        # any version other than the one src\xhci98.inf declares - it rebuilds
+        # the asset of the current cut and nothing else - so a made-up number
+        # is refused for that reason and this case would be testing the wrong
+        # refusal.
+        $newInfText = [System.IO.File]::ReadAllText($prodInf)
+        Assert-True ($newInfText -match '(?m)^DriverVer\s*=\s*[^,\r\n]+,\s*([0-9.]+)\s*$') `
+            "src\xhci98.inf has no readable DriverVer version."
+        $newVersion = $Matches[1].Trim()
+        $newRelRoot = Join-Path $script:work "releases-newnames"
+        $newPubRoot = Join-Path $newRelRoot $newVersion
+        $newUpRoot = Join-Path $script:work "upload-newnames"
+        Ensure-Directory $newUpRoot
+
+        $newInf = $prodInf
+        foreach ($fl in @("release-x86", "debug-x86")) {
+            $d = Join-Path $newPubRoot $fl
+            Ensure-Directory $d
+            [System.IO.File]::WriteAllBytes((Join-Path $d "xhci98.sys"),
+                [System.Text.Encoding]::ASCII.GetBytes("stand-in xhci98.sys, $fl, $newVersion"))
+            Copy-Item -LiteralPath $newInf -Destination (Join-Path $d "xhci98.inf") -Force
+        }
+        Set-Content -LiteralPath (Join-Path $newPubRoot "readme.txt") -Encoding ASCII `
+                    -Value "stand-in per-version readme"
+        Copy-Item -LiteralPath (Join-Path $repo "LICENSE") `
+                  -Destination (Join-Path $newPubRoot "LICENSE") -Force
+
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $newVersion,
+                               "-ReleasesDir", $newRelRoot, "-UploadDir", $newUpRoot)
+        Assert-True ($r.ExitCode -eq 0) (
+            "-UploadSetOnly refused a published tree using the release-x86/debug-x86 names, which is what every cut from now on produces:`n" + $r.Output)
+        $newAssembled = Join-Path $newUpRoot ("upload-" + $newVersion)
+        foreach ($fl in @("release-x86", "debug-x86")) {
+            Assert-True (Test-Path -LiteralPath (Join-Path $newAssembled (Join-Path $fl "xhci98.sys"))) (
+                "the assembled upload set has no $fl\xhci98.sys. Output:`n" + $r.Output)
+            Assert-True (Test-Path -LiteralPath (Join-Path $newAssembled (Join-Path $fl "xhci98.inf"))) (
+                "the assembled upload set has no $fl\xhci98.inf. Output:`n" + $r.Output)
+        }
+    }.Invoke() | Out-Null
+
+    Write-Step "the second architecture: -Arch moves the INF with the binary"
+
+    #
+    # A real run, with the amd64 INF and a stand-in binary. What it asserts is
+    # the staged INF's identity, read out of the staged file rather than out of
+    # the arguments: the media has to carry the 64-bit file's decorations.
+    #
+    $amd64Inf = Join-Path $repo "src\xhci98-amd64.inf"
+    Assert-True (Test-Path -LiteralPath $amd64Inf) "src\xhci98-amd64.inf is missing; the 64-bit package has no INF."
+    $arch64Out = Join-Path $script:work "pkg-amd64"
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $amd64Inf, "-DriverPath", $driver, "-OutDir", $arch64Out)
+    Assert-True ($r.ExitCode -eq 0) ("the amd64 package was rejected:`n" + $r.Output)
+    $stagedInf64 = Join-Path $arch64Out "xhci98.inf"
+    Assert-True (Test-Path -LiteralPath $stagedInf64) "the amd64 package has no xhci98.inf."
+    if (Test-Path -LiteralPath $stagedInf64) {
+        $staged64Text = [System.IO.File]::ReadAllText($stagedInf64)
+        Assert-True ($staged64Text -match [regex]::Escape("%Mfg%=XhciModels,NTamd64")) `
+            "the amd64 package staged an INF with no NTamd64 models decoration, so a 64-bit engine would find no driver in it."
+        Assert-True ($staged64Text -notmatch [regex]::Escape("DevLoader")) `
+            "the amd64 package staged an INF carrying the Windows 98 loader values, so it is the 32-bit file under the 64-bit package's name."
+    }
+    # The staged file keeps the media name whatever the source file is called -
+    # both architectures' media carry xhci98.inf and xhci98.sys, which is why
+    # they need directories of their own rather than names of their own.
+    Assert-True (Test-Path -LiteralPath (Join-Path $arch64Out "xhci98.sys")) "the amd64 package has no xhci98.sys."
+
+    #
+    # **The wrong INF under the 64-bit architecture must be refused**, and this
+    # is the case that matters: the packager is asked for amd64 and handed
+    # src\xhci98.inf, which is what a caller who edited only the -DriverPath
+    # would produce. Without -Arch reaching the INF gate this passed, and the
+    # media it produced installs on a 32-bit machine.
+    #
+    $mismatchOut = Join-Path $script:work "pkg-arch-mismatch"
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $mismatchOut)
+    Assert-True ($r.ExitCode -ne 0) ("the packager staged the 32-bit INF as the amd64 package:`n" + $r.Output)
+    Assert-True ($r.Output -match [regex]::Escape("[PATH-MFGDEC]")) `
+        ("expected the INF gate's amd64 profile to refuse src\xhci98.inf. Output:`n" + $r.Output)
+    Assert-True (-not (Test-Path -LiteralPath $mismatchOut)) `
+        "the refused amd64 package left an output directory behind; a rejected INF must stop the run before staging."
+
+    # And the mirror, which is the likelier mistake: the 64-bit INF staged as
+    # the 32-bit package.
+    $mismatchOut2 = Join-Path $script:work "pkg-arch-mismatch2"
+    $r = Invoke-Packager @("-InfPath", $amd64Inf, "-DriverPath", $driver, "-OutDir", $mismatchOut2)
+    Assert-True ($r.ExitCode -ne 0) ("the packager staged the 64-bit INF as the x86 package:`n" + $r.Output)
+    Assert-True (-not (Test-Path -LiteralPath $mismatchOut2)) `
+        "the refused x86 package left an output directory behind."
+
+    #
+    # **The default paths carry the architecture, x86 included.** A structural
+    # check on make-package.ps1 rather than a run, because a run would need the
+    # real obj trees; what it locks is that neither default can be architecture-
+    # blind again. An untagged out\pkg-release would mean "x86" without saying
+    # so, and the file inside it is called xhci98.sys either way - so what a
+    # stale directory holds could not be read off its name.
+    #
+    $packagerText = [System.IO.File]::ReadAllText($packager)
+    foreach ($anchor in @(
+        @{ Find = '$DriverPath = Join-Path $repo "src\$objDir\$archDir\xhci98.sys"';
+           Why  = "the binary path no longer takes the architecture from -Arch, so an amd64 cut would stage the i386 build" },
+        @{ Find = '$archInf = if ($Arch -eq "amd64") { "src\xhci98-amd64.inf" } else { "src\xhci98.inf" }';
+           Why  = "the INF is no longer selected by -Arch, so one file would be staged for both architectures" },
+        @{ Find = '$OutDir = Join-Path $repo "out\pkg-$Flavor-$Arch"';
+           Why  = "the default output directory no longer carries the architecture, so two architectures' packages would overwrite each other" }
+    )) {
+        Assert-True ($packagerText.Contains($anchor.Find)) `
+            ("make-package.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
+    }
+    # -Arch has to reach BOTH gates. The import gate needs it because MSVC 6.0's
+    # dumpbin reads an amd64 image, exits 0 and prints no import section at all,
+    # so without the architecture the gate enforces the allowlist against an
+    # empty set and passes (design record 11 section 8).
+    Assert-True ($packagerText -match [regex]::Escape('$importGate, "-Image", $DriverPath, "-Flavor", $Flavor,')) `
+        "make-package.ps1 no longer passes the image and flavour to the import gate as this test recognises it."
+    Assert-True ($packagerText -match [regex]::Escape('"-Arch", $Arch)')) `
+        "make-package.ps1 no longer passes -Arch to the import gate, so an amd64 image would be gated against an empty import set."
+    Assert-True (([regex]::Matches($packagerText, [regex]::Escape('-InfPath $InfPath -Arch $Arch')).Count +
+                  [regex]::Matches($packagerText, [regex]::Escape('-InfPath $rootInf -Arch $Arch')).Count) -eq 2) `
+        "make-package.ps1 no longer passes -Arch to both of its INF gate runs - the pre-staging one that derives the media layout, and the post-staging one that checks the package."
+
+    #
+    # **And the publisher's four directories.** Structural for the same reason:
+    # a real cut needs two builds and the git-ignored tools\ staging. What is
+    # locked is the naming rule and the two refusals that depend on it.
+    #
+    Write-Step "the publisher's per-architecture payload"
+    foreach ($anchor in @(
+        @{ Find = 'Id      = "$f-$a"';
+           Why  = "the published directory name no longer joins the flavour and the architecture, so a second architecture would overwrite the first" },
+        @{ Find = '$destDir = Join-Path $destRoot $leg.Dir';
+           Why  = "the publish destination is no longer the leg's own directory" },
+        @{ Find = '$makePackage, "-Flavor", $f, "-Arch", $leg.PkgArch,';
+           Why  = "the publisher no longer tells the packager which architecture to build, so every leg would stage the x86 package" },
+        @{ Find = 'throw "the release and debug $a binaries are identical - one build was packaged twice."';
+           Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" }
+    )) {
+        Assert-True ($releaserText.Contains($anchor.Find)) `
+            ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
+    }
+    #
+    # -Arch defaults to x86 alone, and that default is asserted rather than
+    # left to reading. Roadmap task 21.5 has not run - no amd64 binary of this
+    # driver has ever executed - so an ordinary cut must publish what 1.0.2.0
+    # published, and staging a 64-bit pair must be something a cut says out
+    # loud. When 21.5 passes, this is the line to change, deliberately.
+    #
+    Assert-True ($releaserText -match [regex]::Escape('[string[]]$Arch = @("x86"),')) `
+        "make-release.ps1's -Arch no longer defaults to x86 alone: an ordinary cut would publish a 64-bit package that has never been observed running (roadmap task 21.5)."
 
     Write-Step "the binary-vs-INF version comparison"
     #

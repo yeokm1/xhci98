@@ -1634,9 +1634,20 @@ indeed where the weight was. **An amd64 `xhci98.sys` now exists in all three
 flavours** and the x86 binaries were held byte-identical across the whole
 change - `.text`, `.data`, `INIT`, `.rsrc` and `.reloc` unchanged against the
 published `1.0.2.0` pair, differing only in the enumerated PE metadata bytes a
-re-link always moves. What remains before an amd64 binary can pass its gates
-is task 21.3, and the first build made that task larger and more interesting
-than the plan assumed: see its first box.
+re-link always moves. The first build then made 21.3 larger and more
+interesting than the plan assumed - the amd64 import surface is seven
+module/symbol pairs against x86's eleven, and the differences are structural -
+and **21.3 was closed the same day**: the import gate, the library generator,
+a second INF, and both packagers.
+
+**So the host side of Phase 21 is done, and everything left needs a guest.**
+An amd64 binary exists, passes every gate a 32-bit one does, and can be
+staged into install media; what nothing here has is evidence that it runs.
+No amd64 build of this driver has ever executed, on real hardware or in a
+virtual machine. That is task 21.5, and until it passes the publisher's
+`-Arch` deliberately defaults to `x86` alone, so an ordinary cut still
+publishes exactly what `1.0.2.0` did. Read the 64-bit package as complete
+tooling around an unobserved binary, and do not write anything stronger.
 
 The version was bumped to `1.1.0.0` in the same session, on the owner's
 instruction, as a separate step after that identity was proved - its only
@@ -1707,9 +1718,14 @@ are static readings and no other task's box may be ticked on one.
         after `setenv.bat`, which puts the output beside `i386` with no second
         obj root, and `release` was built first precisely because `/WX` is on
         there
-- [ ] **21.3 - the gates.** None of these may be skipped for an amd64
-      binary. Two of the four done 2026-09-09; **an amd64 binary now passes
-      the import gate in full** in all three flavours.
+- [x] **21.3 - the gates. Complete 2026-09-09.** None of these may be
+      skipped for an amd64 binary, and none was. An amd64 binary passes the
+      import gate in full in all three flavours, `src/xhci98-amd64.inf`
+      exists and passes an INF gate that has learned a second profile, and
+      the packager and the publisher both take an architecture. The INF
+      gate's self-tests went from 350 checks to 450 and the packager's from
+      205 to 243; `build-driver.cmd` now runs the INF gate over **both**
+      INFs on every build, whichever architecture it is building.
   - [x] an `amd64` dimension in the import gate, with NT 5.2 amd64 baselines
         behind it as `win2k-baselines.expected` has for SP4. Done 2026-09-09,
         and task 21.2's first build made it concrete: the amd64 binary imports
@@ -1750,23 +1766,88 @@ are static readings and no other task's box may be ticked on one.
         the `@N` forms absent, plus a machine check, because a decorated
         symbol in an "amd64" library would mean an x86 library published under
         the 64-bit name
-  - [ ] the second INF. **The decision is taken, 2026-09-09: a separate x64
-        package, leaving `src/xhci98.inf` byte-identical**, so no existing
-        install leg is re-validated and Windows 98's engine is never asked
-        about a widened `[Manufacturer]` line. What is left is the INF itself
-        - `.NTamd64` decorations, and the `LayoutFile` route on that path,
-        which task 21.5 read as needed there too - and the third install path
-        `scripts\inf-gate\check-inf.ps1` has to learn across its 1854 lines
-  - [ ] the packager and the publisher staging a second architecture. **The
-        payload shape is decided, 2026-09-09**: `releases\<version>\` carries
-        `release-x86`, `debug-x86`, `release-x64` and `debug-x64`, four
-        self-contained directories each with its own `xhci98.inf` and
-        `xhci98.sys`, with the x86 pair renamed so that no untagged directory
-        silently means x86 - free to do now, because nothing has been
-        uploaded. `make-package.ps1` hardcodes one `i386` payload path (line
-        155); `make-release.ps1` is the larger half, because there the flavour
-        word is the directory name, and its identical-hash refusal has to
-        compare within an architecture
+  - [x] the second INF. **The decision was taken 2026-09-09: a separate x64
+        package**, so no existing install leg is re-validated and Windows 98's
+        engine is never asked about a widened `[Manufacturer]` line. Written
+        the same day as `src/xhci98-amd64.inf`: `.NTamd64` throughout - the
+        `[Manufacturer]` TargetOSVersion field, the models section, the
+        install section, its `.Services`, and the right-click section - and
+        the same `LayoutFile` route the 32-bit NT path uses, which task 21.5
+        had already read as needed here too.
+
+        **The owed reading was taken first**, because design record 11 said
+        it had to be: *whether the x64 media's `layout.inf` carries a
+        `usbui.dll` row*. It does. `AMD64\LAYOUT.INF` gives `usbui.dll =
+        1,,222222,,,,,2,1,3`, disk 1 being `\amd64` on the base CD, so it
+        comes from `AMD64\DRIVER.CAB` at 123,392 B / 5.2.3790.1830 - beside
+        `usbd.sys` from the same cabinet, and `usbport.sys` and `usbhub.sys`
+        from disk 100's `SP2.CAB`. `usbhub20.sys` has no row, as on 32-bit XP.
+        The three sizes that can be cross-checked match
+        `tools/winxp64-extracted/` exactly, which is what authenticates it,
+        and `7z l vm\winxp64.img -r usbui.dll` on the 21.5 guest returns zero
+        files, so the file is as absent there as it is on 32-bit XP. Method
+        `static` throughout; `legal-provenance.md` section 4 carries the rows.
+
+        The gate learned the path as a **profile switch, `-Arch`**, not a
+        second script - the opposite of the allowlist's sibling file next
+        door, and for the opposite reason: there the data forked, here the
+        rules are the same rules and only the path list differs. It is not a
+        relaxation either. It drops the Windows 98 rules because there is no
+        Windows 98 path, and adds two refusals the 32-bit file has no need
+        of: **`PATH-NO9X`**, an undecorated install section in the 64-bit
+        file, and **`OS-DEFAULT`** extended to refuse an undecorated
+        `[DefaultInstall]` there. Both are sections a 32-bit engine falls
+        back to, and reaching either puts an amd64 binary on a 32-bit
+        machine with a service pointing at it. **`PATH-MFGDEC`** holds
+        `[Manufacturer]`'s decoration in both directions, which is what pins
+        decision 2 in place: widening the 32-bit file's line now fails the
+        build.
+
+        The accepted cost of two files - that they drift - is mechanised
+        rather than promised. `test-inf-checks.ps1` compares the two INFs
+        directly (hardware ID, service and its five values, both log values
+        and their defaults, the selective-suspend value, the OS-supplied
+        file lists and flags, `[SourceDisksFiles]`, the `[Version]`
+        identity, every shared `[Strings]` token) and asserts each file is
+        **refused** under the other's profile - the check without which the
+        two profiles could accept everything and distinguish nothing.
+        `expected-footprint-amd64.txt` is the 64-bit package's own tracked
+        footprint, task 11-V.3's claim for the second media
+  - [x] the packager and the publisher staging a second architecture. Done
+        2026-09-09 to the shape decided the same day: `releases\<version>\`
+        carries `release-x86`, `debug-x86`, `release-x64` and `debug-x64`,
+        four self-contained directories each with its own `xhci98.inf` and
+        `xhci98.sys`, the x86 pair renamed so that no untagged directory
+        silently means x86 - free now, because nothing has been uploaded, and
+        `releases/README.md`'s write-once rule leaves the four cut versions
+        alone.
+
+        `make-package.ps1` gained **one** `-Arch` that moves three things
+        together and cannot be split: the obj subdirectory, which of the two
+        INFs is staged, and the architecture both gates run under. Three
+        switches that could disagree would have had a silent wrong answer -
+        an amd64 binary staged around the 32-bit INF installs on a 32-bit
+        machine and then fails its load with no diagnostic - and the
+        packager's self-tests drive exactly that mismatch in both directions
+        and assert the refusal. Its default output carries the architecture
+        too (`out\pkg-release-x86`), for the same reason the published
+        directory does.
+
+        `make-release.ps1` was the larger half. Every place the flavour word
+        was a directory name now goes through a **release leg**, one object
+        per published directory carrying its flavour, architecture, obj tree
+        and INF; the identical-hash refusal compares within an architecture,
+        where a collision is the only kind that could happen; and the
+        generated `readme.txt` names the directories the cut actually wrote
+        rather than a hardcoded `RELEASE\`, with a placeholder-completeness
+        check so a template token can never render literally into a
+        user-facing file.
+
+        **`-Arch` defaults to `x86` alone, and that default is asserted by
+        the self-tests.** The plumbing stages four directories the moment it
+        is asked to (`-Arch x86,x64`); what has not happened is task 21.5, so
+        an ordinary cut today publishes exactly what `1.0.2.0` did. Changing
+        that line is the deliberate act that a passing 21.5 licenses
 - [ ] **21.4 - the code changes task 21.1 implies** (design record 11
       section 9). Five of seven done 2026-09-09; the two left need no guest
       and block nothing that has started.

@@ -113,7 +113,7 @@ Setup scripts:
 | `scripts\check-smp-parallelism.ps1` | Host-side Phase 2d checkpoint check against the running 2d VM: a complete one-to-one vCPU/`thread_id` mapping from `info cpus`, plus a process affinity mask allowing 2+ logical processors. Guest-side "MP kernel landed" checks do not distinguish those host conditions; this script does. Run-time, so not part of `build-driver.cmd`; `-SelfTest` needs no VM |
 | `scripts\setup-all.ps1` | Runs MSVC, DDK, and both Phase 2a/2b QEMU setups; use `-RunInstallers` for MSVC/DDK and `-InstallQemu` for QEMU. Pass `-Win2KIso` or the Win2000 half is skipped with a warning |
 | `scripts\package\extract-usbd-sources.ps1` | Stages reference copies of each target's own `usbd.sys` (and Win98 SE's `usbhub.sys`, an import-gate precedent binary) from that OS's install media into the git-ignored `tools\`, then authenticates them. Packaged by nothing since 1.0.0.1; see "The files the OS supplies" |
-| `scripts\package\make-package.ps1` | Assembles the install media both targets are installed from (`out\pkg-<flavor>\`), staging against the layout `check-inf.ps1 -EmitMediaLayout` derives, and gates it |
+| `scripts\package\make-package.ps1` | Assembles the install media both targets are installed from (`out\pkg-<flavor>-<arch>\`), staging against the layout `check-inf.ps1 -EmitMediaLayout` derives, and gates it. `-Arch x86` (default) or `amd64` moves three things at once and they are not separable: the obj subdirectory, which of the two INFs is staged, and the architecture both gates run under |
 | `scripts\package\test-package.ps1` | The packager's regression tests; stand-ins only, run by `build-driver.cmd` |
 | `scripts\import-gate\test-flavour-rules.ps1` | Regression tests for the import allowlist's three-flavour `FLAVORS` grammar, on synthetic allowlists, including the row that keeps `HAL.dll!WRITE_PORT_UCHAR` out of every published binary. Run by `build-driver.cmd` |
 
@@ -4283,9 +4283,25 @@ Where each target's `usbui.dll` comes from, read statically on 2026-09-07
 | Windows ME | `usbui.dll=2,,147456` | disk 2, `BASE2.CAB` | 147,456 B, 4.90.3000 |
 | Windows 2000 SP4 | `usbui.dll = 1,,59664,,,,,2,1,3` | disk 1, the base CD `\i386`, out of `I386\DRIVER.CAB` | 59,664 B, 5.00.2134.1 |
 | Windows XP SP3 | `usbui.dll = 100,,74240,,,,,2,1,3` | disk 100, the SP source, out of `I386\SP3.CAB` | 74,240 B, 5.1.2600.5512 |
+| Windows XP x64 SP2 | `usbui.dll = 1,,222222,,,,,2,1,3` | disk 1, the base CD `\amd64`, out of `AMD64\DRIVER.CAB` | 123,392 B, 5.2.3790.1830 |
 
-Four distinct per-OS builds, each fetched from its own OS by construction, as
-with the three drivers. Windows 2000 was the one prompt risk, because there
+Five distinct per-OS builds, each fetched from its own OS by construction, as
+with the three drivers. The x64 row was read on 2026-09-09 for task 21.3, and
+its absence from a stock install was read the same day rather than inferred:
+`7z l vm\winxp64.img -r usbui.dll` on the task 21.5 guest's clean-install
+snapshot returns zero files, exactly as 32-bit XP did.
+
+**Vista and Windows 7 are a different shape, and the difference matters to
+Phase 22.** They have no `layout.inf` in this sense at all: `install.wim` *is*
+the applied image, and `usbui.dll` is already in it - Vista SP2 x86
+`Windows\System32\usbui.dll` 83,456 B 6.0.6001.18000; Vista SP2 x64
+`System32` 104,960 B 6.0.6000.16386 with a WOW64 copy at 83,456 B; Windows 7
+SP1 x86 80,896 B and x64 `System32` 101,376 B / `SysWOW64` 80,896 B, all
+6.1.7600.16385 (read 2026-09-09, 7-Zip on the owner's own mounted ISOs). So
+on those targets the file is present, flag 16 skips it, and the `LayoutFile`
+route is never consulted for it. Whether the other three OS-supplied files
+behave the same way there has **not** been read, and nothing should be
+written as though it had. Windows 2000 was the one prompt risk, because there
 `usbd.sys`, `usbhub.sys` and `usbport.sys` come from disk 2 (`sp4.cab`) but
 `usbui.dll` from disk 1, satisfied out of `driver.cab` - two different disks
 in one install. **It was read on 2026-09-07 and it is silent.** Two steps:
@@ -4321,14 +4337,26 @@ What the two NT CDs say, read statically on 2026-09-03 (7-Zip on the ISOs,
 `layout.inf` row are the text-mode Setup disposition: `,4,1,3` is "do not
 copy", `,4,0,0` is "copy":
 
-| File | Windows 2000 SP4 `layout.inf` | Windows XP SP3 `layout.inf` |
-|---|---|---|
-| `usbport.sys` | `= 2,,138288,,,,,4,1,3` (disk 2 = `sp4.cab`) | `= 100,,143872,,,,4_,4,1,3` (disk 100 = the service pack source) |
-| `usbhub.sys` | `= 2,,40176,,,,2_,4,1,3` | `= 100,,59520,,,,4_,4,1,3` |
-| `usbhub20.sys` | `= 2,,49776,,,,,4,1,3` | no row |
-| `usbd.sys` | `= 2,,20688,,,,2_,4,1,3` | `= 1,,4736,,,,4_,4,1,3` |
-| `usbehci.sys` | `= 2,,19728,,,,,4,1,3` | `= 100,,30208,,,,4_,4,1,3` |
-| `usbcamd.sys`, `usbintel.sys` | `,4,0,0` | `,4,0,0` |
+| File | Windows 2000 SP4 `layout.inf` | Windows XP SP3 `layout.inf` | Windows XP x64 SP2 `AMD64\LAYOUT.INF` |
+|---|---|---|---|
+| `usbport.sys` | `= 2,,138288,,,,,4,1,3` (disk 2 = `sp4.cab`) | `= 100,,143872,,,,4_,4,1,3` (disk 100 = the service pack source) | `= 100,,212480,,,,4_,4,1,3,,1,4` (disk 100 = `AMD64\SP2.CAB`) |
+| `usbhub.sys` | `= 2,,40176,,,,2_,4,1,3` | `= 100,,59520,,,,4_,4,1,3` | `= 100,,102400,,,,4_,4,1,3,,1,4` |
+| `usbhub20.sys` | `= 2,,49776,,,,,4,1,3` | no row | no row |
+| `usbd.sys` | `= 2,,20688,,,,2_,4,1,3` | `= 1,,4736,,,,4_,4,1,3` | `= 1,,222222,,,,4_,4,1,3,,1,4` (disk 1 = `AMD64\DRIVER.CAB`, 7,552 B) |
+| `usbehci.sys` | `= 2,,19728,,,,,4,1,3` | `= 100,,30208,,,,4_,4,1,3` | `= 100,,44160,,,,4_,4,1,3,,1,4` |
+| `usbcamd.sys`, `usbintel.sys` | `,4,0,0` | `,4,0,0` | not read |
+
+The x64 column was read on 2026-09-09 for roadmap task 21.3, the same way
+(7-Zip on the owner's own ISO and on its two cabinets; `LAYOUT.INF` is
+uncompressed on that medium, so no `expand`). `[SourceDisksNames.amd64]`
+gives disk 1 = `\amd64` on the base CD and disk 100 = `\amd64` on the
+service-pack source. The `222222` in the disk-1 rows is that medium's
+placeholder rather than a size; the cabinet's own sizes are what the
+parenthesised figures give, and the three that can be cross-checked match
+`tools/winxp64-extracted/` exactly, which is what authenticates the reading.
+Two differences from 32-bit XP: `usbd.sys` comes from `DRIVER.CAB` rather
+than the service-pack cabinet, and it is not on disk at all where 32-bit XP
+had a 4,736-byte stub.
 
 So on both NT targets `usbport.sys`, `usbhub.sys` and `usbd.sys` reach the
 disk only when a USB controller's own install pulls them from
@@ -4448,7 +4476,7 @@ xhci98.inf   xhci98.sys
 powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor debug
 ```
 
-It assembles `out\pkg-<flavor>\` and runs the INF gate against the finished
+It assembles `out\pkg-<flavor>-<arch>\` and runs the INF gate against the finished
 directory, so a package is never less gated than the binary in it. A copy
 taken from `releases\<version>\<flavor>\` is the same two files. The
 reference copies of the two `usbd.sys` builds and Windows 98 SE's
@@ -4523,7 +4551,57 @@ Both setup engines fail quietly. Win98 has no log at all, and a Win2000
 install that creates no service looks the same in Device Manager as a driver
 that loaded and failed. So the parser restrictions below are enforced as a
 build-time check rather than trusted to review. `scripts\build-driver.cmd`
-runs it on every build, after `scripts\inf-gate\test-inf-checks.ps1`.
+runs it on every build, after `scripts\inf-gate\test-inf-checks.ps1` - and
+since roadmap task 21.3 it runs it **twice, over both INFs**, whichever
+architecture is being built:
+
+```
+scripts\inf-gate\check-inf.ps1 -Arch x86      src\xhci98.inf
+scripts\inf-gate\check-inf.ps1 -Arch amd64    src\xhci98-amd64.inf
+```
+
+`-Arch` selects which install paths the file must carry, and nothing else
+about the gate changes: the same 1800 lines of rules run either way, walking
+a per-architecture path table instead of naming `.NTx86` themselves. That is
+deliberately the opposite of the import allowlist's sibling-file arrangement
+next door, and for the opposite reason - there the data forked, here only the
+path list does, and two copies of these rules would be two gates free to
+drift while claiming to be one.
+
+| | `-Arch x86` (default) | `-Arch amd64` |
+|---|---|---|
+| file | `src\xhci98.inf` | `src\xhci98-amd64.inf` |
+| `[Manufacturer]` | undecorated - `%Mfg%=XhciModels` | `%Mfg%=XhciModels,NTamd64` |
+| models section | `[XhciModels]` | `[XhciModels.NTamd64]` |
+| install paths | undecorated (Windows 98) + `.NTx86` | `.NTamd64` only |
+| right-click | `[DefaultInstall]` + `[DefaultInstall.NTx86]` | `[DefaultInstall.NTamd64]`, and **no** undecorated one |
+| footprint | `expected-footprint.txt` | `expected-footprint-amd64.txt` |
+
+**The amd64 profile is not a relaxation of the x86 one.** It drops the
+Windows 98 rules because there is no Windows 98 path to break, and adds two
+refusals the 32-bit file has no need of. `PATH-NO9X` refuses an undecorated
+install section in the 64-bit file and the extended `OS-DEFAULT` refuses an
+undecorated `[DefaultInstall]` there; setupapi's decorated-section lookup
+falls back, so either is a section a 32-bit engine reaches, and reaching one
+copies an amd64 `xhci98.sys` into a 32-bit `System32\Drivers` and creates a
+service pointing at it. `PATH-MFGDEC` holds the `[Manufacturer]` decoration
+in both directions at once: absent on the 32-bit file, `NTamd64` on the
+64-bit one. That first half is what pins design record 11's decision 2 in
+place - widening `%Mfg%=XhciModels` to `%Mfg%=XhciModels,NTx86,NTamd64` is
+the single-INF route the owner declined, because that line is what Windows
+98's 16-bit engine parses to find its models section, and it now fails the
+build rather than passing every other rule silently.
+
+**Two INFs can drift, and that is checked rather than promised.**
+`test-inf-checks.ps1` compares the two files directly and fails if they
+disagree about the hardware ID, the service name and its five values, both
+per-device log values and their defaults, the machine-wide
+`DisableSelectiveSuspend` value, the OS-supplied file lists and their copy
+flags, `[SourceDisksFiles]`, `[SourceDisksNames]`, the `[Version]` identity
+including `DriverVer`, or any `[Strings]` token they share. It also asserts
+that **each file is refused under the other's profile** - without that, the
+two profiles could accept everything and distinguish nothing, and gating
+either would say nothing about it.
 
 That self-test re-runs the gate against broken copies of the real INF (a
 `$Windows NT$` signature, a UTF-16 file, LF line endings, a 29-character
@@ -4549,11 +4627,14 @@ Rule ids are grouped by the failure they prevent:
   section cross-references, `DestinationDirs` coverage and driver-directory
   placement, `SourceDisksNames`/`SourceDisksFiles` coverage, defined
   `%strings%`).
-- `PATH-*`: the two install paths themselves, including the NT service's
-  required type/start/error values, and that each path's own `CopyFiles`
-  delivers the driver file its loader value names (`PATH-W98` for
-  `NTMPDriver` since the 2026-09-05 audit's F14, `PATH-NT` for
-  `ServiceBinary`).
+- `PATH-*`: the install paths themselves - the two of `-Arch x86` or the one
+  of `-Arch amd64` - including the NT service's required type/start/error
+  values, and that each path's own `CopyFiles` delivers the driver file its
+  loader value names (`PATH-W98` for `NTMPDriver` since the 2026-09-05
+  audit's F14, `PATH-NT` for `ServiceBinary`). `PATH-MFGDEC` holds
+  `[Manufacturer]`'s TargetOSVersion field to the file's architecture in both
+  directions, and `PATH-NO9X` refuses an undecorated install section in the
+  64-bit file (both since task 21.3).
 - `OS-*`: the `LayoutFile` route for the files the OS supplies (release
   1.0.0.1, then 1.0.1.0): the directive present, both device-install paths
   and both right-click paths copying `usbd.sys` and `usbhub.sys` under their

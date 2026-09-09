@@ -682,9 +682,18 @@ option.**
   arch-conditional checks inside the existing generator: on amd64 the
   decoration check becomes an undecorated-name check, M1 supplies the fourth
   lineage for the export manifest, and the other four steps stand unchanged.
-- *INF gate.* `scripts\inf-gate\check-inf.ps1` knows exactly two install
+- *INF gate.* `scripts\inf-gate\check-inf.ps1` knew exactly two install
   paths, the undecorated Windows 98 one and `.NTx86`, across 1854 lines. A
-  third path is real work there.
+  third path is real work there. **Done 2026-09-09 as a profile switch,
+  `-Arch x86` / `-Arch amd64`, on the one script** - deliberately the opposite
+  of the sibling-file choice made for the import allowlist, and for the
+  opposite reason. There the *data* forked: only 2 of 13 rows are shared and
+  27 denials rest on reasoning about two 32-bit operating systems. Here the
+  rules are the same rules and only the path list differs, so a second copy of
+  1800 lines would be two gates free to drift while claiming to be one. Every
+  path-shaped rule - `PATH-*`, `VAL-*`, `OS-*`, `SUSP-*` and the
+  `-EmitFootprint` derivation - now walks a per-architecture table instead of
+  naming `.NTx86` itself.
 
 **On the INF, there is a cheap route and a pure one.** The obvious route adds
 `.NTamd64` sections to `src/xhci98.inf` and changes `[Manufacturer]` from
@@ -708,18 +717,57 @@ re-validated and the `[Manufacturer]` question is never asked of Windows 98's
 engine. What is accepted with it is a second INF to keep in sync, and an INF
 gate that grows a third install path rather than a widened second one.
 
-That second INF is not a copy of the first, and two of its contents are
+That second INF is not a copy of the first, and two of its contents were
 already known to differ. Task 21.5 read an xHCI-only Windows XP x64 install as
 having no `usbport.sys`, `usbhub.sys`, `usbehci.sys` or `usbd.sys` on disk at
 all, so the `.NTamd64` path needs the `LayoutFile` route Phase 19 wrote for
 32-bit XP, sourced from `Driver Cache\amd64`; and `usbd.sys` there comes from
 `driver.cab` rather than `sp2.cab` and is not on disk in any form, which is
-the one difference from 32-bit XP. Unread, and owed before that INF is
-written: whether the x64 media's `layout.inf` carries a `usbui.dll` row, which
-`1.0.2.0` added on all four 32-bit targets.
+the one difference from 32-bit XP.
 
-**The payload, decided 2026-09-09: four directories, every one of them
-tagged.** `releases\<version>\` carries `release-x86`, `debug-x86`,
+**The owed reading was taken on 2026-09-09, and the answer is yes.** The
+question was whether the x64 media's `layout.inf` carries a `usbui.dll` row,
+which `1.0.2.0` added on all four 32-bit targets. `AMD64\LAYOUT.INF` on the
+owner's "Win XP SP2 VL x64" media, read with 7-Zip on the ISO and on its two
+cabinets (nothing executed), with `[SourceDisksNames.amd64]` giving disk 1 =
+`\amd64` on the base CD and disk 100 = `\amd64` on the service-pack source:
+
+| row | disk | cabinet | file |
+|---|---|---|---|
+| `usbport.sys = 100,,212480,,,,4_,4,1,3,,1,4` | 100 | `AMD64\SP2.CAB` | 212,480 B |
+| `usbhub.sys = 100,,102400,,,,4_,4,1,3,,1,4` | 100 | `AMD64\SP2.CAB` | 102,400 B |
+| `usbd.sys = 1,,222222,,,,4_,4,1,3,,1,4` | 1 | `AMD64\DRIVER.CAB` | 7,552 B, 5.2.3790.1830 |
+| **`usbui.dll = 1,,222222,,,,,2,1,3`** | 1 | `AMD64\DRIVER.CAB` | 123,392 B, 5.2.3790.1830 |
+| `usbhub20.sys` | - | **no row**, as on 32-bit XP | - |
+
+Three of those sizes can be cross-checked and all three match
+`tools/winxp64-extracted/` exactly, which is what authenticates the reading;
+the `222222` in the two disk-1 rows is this medium's placeholder, and the
+cabinet's own sizes are what the last column gives. The last three fields are
+the text-mode Setup disposition, and `4,1,3` and `2,1,3` both mean "do not
+copy at Setup" - so `usbui.dll` is as absent from a stock XP x64 install as it
+is from 32-bit XP, confirmed the same day by `7z l vm\winxp64.img -r
+usbui.dll` on the task 21.5 guest returning zero files. Two disks in one
+install, as on Windows 2000; both cabinets sit in `Driver Cache\amd64`, which
+21.5 had already listed, so the engine resolves them in one pass with no CD.
+
+**`src/xhci98-amd64.inf` was then written**, `.NTamd64` throughout: the
+`[Manufacturer]` TargetOSVersion field, the models section, the install
+section, its `.Services` and the right-click section. Microsoft's own
+`tools/winxp64-extracted/usbport.inf` decorates only its models sections and
+shares plain `.NT` install sections between two architectures; this file is
+single-architecture, so the more specific decoration says what it means and
+leaves no section any other engine can reach. Two things it deliberately does
+NOT have, and the gate refuses both by name: an undecorated install section
+(`PATH-NO9X`) and an undecorated `[DefaultInstall]` (`OS-DEFAULT`). Either is
+a section a 32-bit engine falls back to, and reaching one puts an amd64
+binary into a 32-bit `System32\Drivers` with a service pointing at it. The
+one other difference from the 32-bit file's NT half is the temporary-name
+field on the driver's own copy row, which exists for Windows 98's 16-bit
+engine and buys nothing on an NT copy queue.
+
+**The payload, decided 2026-09-09 and built the same day: four directories,
+every one of them tagged.** `releases\<version>\` carries `release-x86`, `debug-x86`,
 `release-x64` and `debug-x64`, each self-contained - its own `xhci98.inf` and
 its own `xhci98.sys`, both keeping those names, since the two architectures'
 binaries share a filename and so cannot share a directory. One download, with
@@ -745,23 +793,44 @@ rename. "Should" is the right word: that is read off this tree's existing
 layout rather than off a WDK 7.1 build, which has not happened. The first
 build settles it.
 
-What it costs in the scripts is two places rather than one.
-`scripts\package\make-package.ps1` hardcodes a single `i386` payload path
-(line 155) and needs the arch dimension. `scripts\package\make-release.ps1`
-needs more, because there the flavour word *is* the directory name: it
-publishes into `releases\<version>\<flavour>\`, keys `$objDirName` on the
-flavour alone (line 416), loops over the two flavour words (lines 222, 1901
-and 3473), and refuses a cut whose two staged binaries hash the same (line
-1862) - a refusal that now has to compare within an architecture, or four
-staged binaries trip it for the wrong reason. The generated `readme.txt`
-section 8 gains two entries and has to say which pair a reader wants.
+What it cost in the scripts was two places rather than one, and both are
+done. `scripts\package\make-package.ps1` gained **one** `-Arch` that moves
+three things together and cannot be split: the obj subdirectory, which of the
+two INFs is staged, and the architecture both gates are run under. Three
+switches that could disagree would have had a silent wrong answer - an amd64
+binary staged around the 32-bit INF installs on a 32-bit machine and fails its
+load with no diagnostic - and `test-package.ps1` now drives that mismatch in
+both directions and asserts the refusal. Its default output directory carries
+the architecture too, x86 included, for the same reason the published one
+does.
 
-One tracked document states the property the rename ends and has to be
-corrected with it: `releases\README.md` carries a directory-to-flavour table
-and the sentence that a release directory "needs no translating", which is
-true only while the directory name and the flavour word are the same string.
-It describes the published tree, so it changes when the tree does and not
-before.
+`scripts\package\make-release.ps1` needed more, because there the flavour word
+*was* the directory name: it published into `releases\<version>\<flavour>\`,
+keyed the obj tree on the flavour alone, looped over the two flavour words in
+four places, and refused a cut whose two staged binaries hash the same - a
+refusal that had to start comparing within an architecture, or four staged
+binaries would trip it for the wrong reason. All of that now goes through a
+**release leg**: one object per published directory carrying its flavour,
+architecture, obj tree and INF, built by `New-ReleaseLegs`. The generated
+`readme.txt` gained the remaining half of the job - it hardcoded `RELEASE\` in
+six places, which after the rename would have told a user to install from a
+directory the download does not contain - so the directory names are
+placeholders now, and a self-test asserts that every placeholder in the
+template is one the renderer substitutes.
+
+**`-Arch` defaults to `x86` alone.** The plumbing stages four directories the
+moment it is asked to; what has not happened is task 21.5, so there is nothing
+to publish a 64-bit package on the strength of yet. `test-package.ps1` asserts
+that default, which makes changing it a deliberate act rather than a drifting
+one.
+
+One tracked document stated the property the rename ends and was corrected
+with it: `releases\README.md` carried a directory-to-flavour table and the
+sentence that a release directory "needs no translating", true only while the
+directory name and the flavour word are the same string. Its table now has an
+architecture column, and it records that the four already-cut versions keep
+the bare `release/` and `debug/` names they were written with - the write-once
+rule, which the rename does not reach back through.
 
 ### The compile scout - taken 2026-09-08, and it comes back nearly clean
 

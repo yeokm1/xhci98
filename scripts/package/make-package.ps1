@@ -26,8 +26,22 @@ the staged path and the gated path cannot drift apart. That call also gates
 the INF *before* anything is copied, which is the right order: there is no
 value in staging a package around an INF that will be rejected.
 
+.PARAMETER Arch
+x86 (default) or amd64 - which architecture's binary and INF to package. It
+selects three things together and they must not be mixed: the obj
+subdirectory (src\obj*\i386 or src\obj*\amd64), the INF (src\xhci98.inf or
+src\xhci98-amd64.inf), and the -Arch the INF and import gates are run under.
+A package staging an amd64 binary under the 32-bit INF would install on a
+32-bit machine and fail its load with no diagnostic, which is why one switch
+moves all three rather than three switches that can disagree.
+
+The two architectures' binaries share a filename, so they cannot share a
+directory: the default output is out\pkg-<flavor>-<arch>, and a release cuts
+them into release-x86, debug-x86, release-x64 and debug-x64 (roadmap task
+21.3, design record 11 section 8).
+
 .PARAMETER Flavor
-debug (default), release or qemu - which src\obj*\i386\xhci98.sys to package.
+debug (default), release or qemu - which src\obj*\<arch>\xhci98.sys to package.
 The DDK's own words for the two *checked* builds are both "checked" and for the
 free one "free", and they survive only in the obj directory names it writes.
 
@@ -127,6 +141,8 @@ powershell -File scripts\package\make-package.ps1 -Flavor release -OutDir E:\xhc
 param(
     [ValidateSet("debug", "release", "qemu")]
     [string]$Flavor = "debug",
+    [ValidateSet("x86", "amd64")]
+    [string]$Arch = "x86",
     [string]$OutDir = "",
     [string]$InfPath = "",
     [string]$DriverPath = "",
@@ -142,7 +158,15 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "package-common.ps1")
 
 $repo = Get-RepoRoot
-if ($InfPath -eq "") { $InfPath = Join-Path $repo "src\xhci98.inf" }
+#
+# The three things -Arch moves, in one place. build-driver.cmd puts the amd64
+# output at src\obj<flavour>\amd64 beside i386 rather than in a second obj
+# root (roadmap task 21.2), so the only difference here is the last path
+# component - and the INF, which is a whole second file.
+#
+$archDir = if ($Arch -eq "amd64") { "amd64" } else { "i386" }
+$archInf = if ($Arch -eq "amd64") { "src\xhci98-amd64.inf" } else { "src\xhci98.inf" }
+if ($InfPath -eq "") { $InfPath = Join-Path $repo $archInf }
 if ($DriverPath -eq "") {
     # Three flavours, two of them checked: "objchk" alone stopped identifying a
     # build when task 13-L.1 added qemu, which is exactly why it has a tree of
@@ -152,17 +176,24 @@ if ($DriverPath -eq "") {
         "qemu"    { "objchk_qemu" }
         default   { "objfre" }
     }
-    $DriverPath = Join-Path $repo "src\$objDir\i386\xhci98.sys"
+    $DriverPath = Join-Path $repo "src\$objDir\$archDir\xhci98.sys"
 }
 if ($OutDir -eq "") {
     # A distinct default path for the artifact, so it cannot land where a real
     # package is copied to a VM from. Naming it is half of "narrow and loud".
+    #
+    # The architecture is in the directory name for both packages, x86
+    # included. The moment a second one exists an untagged out\pkg-release
+    # means "x86" without saying so, and the file inside it is called
+    # xhci98.sys either way - so what a stale directory holds cannot be read
+    # off its name. Free to do now: nothing under out\ is tracked or published.
+    #
     if ($FailStartArtifact) {
-        $OutDir = Join-Path $repo "out\pkg-failstart-$Flavor"
+        $OutDir = Join-Path $repo "out\pkg-failstart-$Flavor-$Arch"
     } elseif ($UnpaddedDriverVerExperiment) {
-        $OutDir = Join-Path $repo "out\pkg-datefmt-$Flavor"
+        $OutDir = Join-Path $repo "out\pkg-datefmt-$Flavor-$Arch"
     } else {
-        $OutDir = Join-Path $repo "out\pkg-$Flavor"
+        $OutDir = Join-Path $repo "out\pkg-$Flavor-$Arch"
     }
 }
 # Anchor a relative path to PowerShell's location, not the process directory.
@@ -257,7 +288,7 @@ $variantDir = ""
 $stageDir = ""
 
 try {
-    Write-Step ("Package ({0}) -> {1}" -f $Flavor, $OutDir)
+    Write-Step ("Package ({0}, {1}) -> {2}" -f $Flavor, $Arch, $OutDir)
 
     #
     # Review finding 4: the two special modes are not composable.
@@ -474,11 +505,18 @@ of those failures is silent on the target.
 "@
         }
 
-        Write-Step ("import gate ({0})" -f $Flavor)
+        Write-Step ("import gate ({0}, {1})" -f $Flavor, $Arch)
         $importGate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) `
             "import-gate") "check-imports.ps1"
+        # -Arch is what selects the amd64 allowlist and baselines - and, more
+        # to the point, what makes the gate read the image's own PE machine
+        # word and refuse a mismatch. MSVC 6.0's dumpbin reads an amd64 image,
+        # exits 0 and prints no import section at all, so without the arch the
+        # gate would enforce the allowlist against an empty set and pass
+        # (design record 11 section 8, "A dumper trap").
         $gateArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                      $importGate, "-Image", $DriverPath, "-Flavor", $Flavor)
+                      $importGate, "-Image", $DriverPath, "-Flavor", $Flavor,
+                      "-Arch", $Arch)
         if ($NoTargetEvidence) { $gateArgs += "-NoTargetEvidence" }
         $savedEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
@@ -507,7 +545,7 @@ looks exactly like a bad INF.
         $ErrorActionPreference = "Continue"
         try {
             & powershell -NoProfile -ExecutionPolicy Bypass -File $gate `
-                -InfPath $InfPath -EmitMediaLayout $layoutFile `
+                -InfPath $InfPath -Arch $Arch -EmitMediaLayout $layoutFile `
                 @gateExtra
         } finally {
             $ErrorActionPreference = $savedEap
@@ -638,7 +676,7 @@ a build that was never made.
         $ErrorActionPreference = "Continue"
         try {
             & powershell -NoProfile -ExecutionPolicy Bypass -File $gate `
-                -InfPath $rootInf -PackageDir $stageDir `
+                -InfPath $rootInf -Arch $Arch -PackageDir $stageDir `
                 @gateExtra
         } finally {
             $ErrorActionPreference = $savedEap
@@ -754,8 +792,24 @@ that does not exist, or clear that one yourself.
         Write-Host ""
     }
     Write-Host "Copy '$OutDir' to the VM's transfer volume and install from it:"
-    Write-Host "  Win98    Device Manager -> the xHCI device -> Update Driver -> Specify a location"
-    Write-Host "  Win2000  Device Manager -> the xHCI device -> Update Driver -> Have Disk"
+    if ($Arch -eq "amd64") {
+        #
+        # The 32-bit targets are not offered here, and that is the point rather
+        # than an omission: this media's INF is decorated .NTamd64 throughout,
+        # so a 32-bit engine pointed at it finds no driver at all. Naming Win98
+        # and Win2000 under an amd64 package would send someone to spend an
+        # install cycle discovering that.
+        #
+        Write-Host "  XP x64   Device Manager -> the xHCI device -> Update Driver -> Have Disk"
+        Write-Host "  2003 x64 the same; both are NT 5.2.3790 and one binary serves them"
+        Write-Host ""
+        Write-Warn "No amd64 build of this driver has ever been observed running (roadmap task 21.5)."
+        Write-Warn "This media is gated, not validated: treat a guest booted from it as the"
+        Write-Warn "experiment it is, and do not put it on a machine you need working."
+    } else {
+        Write-Host "  Win98    Device Manager -> the xHCI device -> Update Driver -> Specify a location"
+        Write-Host "  Win2000  Device Manager -> the xHCI device -> Update Driver -> Have Disk"
+    }
 } catch {
     Write-Err $_.Exception.Message
     exit 1

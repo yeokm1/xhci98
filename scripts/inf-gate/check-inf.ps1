@@ -22,11 +22,18 @@ What it checks, grouped by the failure each rule prevents:
            resolvable section cross-references, CopyFiles sections named in
            DestinationDirs with driver files sent to System32\Drivers,
            SourceDisksNames/SourceDisksFiles coverage, and defined %strings%.
-  PATH-*   The two install paths themselves - every model must reach both an
-           undecorated Win98 install section carrying DevLoader/NTMPDriver and
-           a .NTx86 section whose .NTx86.Services AddService names a binary the
-           same CopyFiles section actually delivers, with the required kernel
-           driver service type, demand start, and normal error control.
+  PATH-*   The install paths themselves, which are the two of -Arch x86 or the
+           one of -Arch amd64 (see that parameter). Under x86 every model must
+           reach both an undecorated Win98 install section carrying
+           DevLoader/NTMPDriver and a .NTx86 section whose .NTx86.Services
+           AddService names a binary the same CopyFiles section actually
+           delivers, with the required kernel driver service type, demand
+           start, and normal error control; under amd64 the one .NTamd64
+           section must do the second half of that and there must be no
+           undecorated section at all (PATH-NO9X). PATH-MFGDEC holds
+           [Manufacturer]'s TargetOSVersion field to the file's architecture in
+           both directions - absent on the 32-bit file, NTamd64 on the 64-bit
+           one - which is the line design record 11's decision 2 turns on.
   OS-*     The files the operating system supplies - usbd.sys and usbhub.sys
            on both targets, usbport.sys on the NT targets, usbui.dll on all
            four paths - which the media does not carry (usbd.sys and
@@ -72,7 +79,34 @@ Every failure line starts with its rule id so the self-tests
 rather than merely that something did.
 
 .PARAMETER InfPath
-The INF to check. Defaults to src\xhci98.inf.
+The INF to check. Defaults to src\xhci98.inf, or to src\xhci98-amd64.inf under
+-Arch amd64.
+
+.PARAMETER Arch
+Which of this project's two INFs is being gated, and therefore which install
+paths it must carry. Defaults to x86.
+
+  x86     src\xhci98.inf - the two-engine file. An undecorated Windows 98
+          install section carrying DevLoader/NTMPDriver, a .NTx86 one carrying
+          a service, and a right-click [DefaultInstall] for each.
+  amd64   src\xhci98-amd64.inf - the 64-bit package's file (roadmap task 21.3).
+          One install path, .NTamd64, plus its right-click counterpart, and
+          [Manufacturer] carrying the NTamd64 TargetOSVersion field that makes
+          the models section [XhciModels.NTamd64].
+
+This is a switch on the script rather than a second script, which is the
+opposite of the choice made for the import allowlist next door - and
+deliberately so. There the *data* forked (only 2 of 13 rows are shared, and 27
+denials are justified by reasoning that does not transfer), so a sibling file
+was right; here the rules are the same rules and only the path list differs, so
+a second copy of 1800 lines would be two gates free to drift while claiming to
+be one.
+
+**The amd64 profile is not a relaxation of the x86 one.** It drops the Windows
+98 rules because there is no Windows 98 path to break, and it adds two refusals
+the x86 file has no need of: an undecorated install section and an undecorated
+[DefaultInstall] are both sections a 32-bit engine falls back to, and either
+would put an amd64 binary on a 32-bit machine (PATH-NO9X, OS-DEFAULT).
 
 .PARAMETER PackageDir
 Optional. A staged install-media directory: every file named in
@@ -145,6 +179,8 @@ powershell -File scripts\inf-gate\check-inf.ps1 -PackageDir out\pkg-debug
 [CmdletBinding()]
 param(
     [string]$InfPath = "",
+    [ValidateSet("x86", "amd64")]
+    [string]$Arch = "x86",
     [string]$PackageDir = "",
     [string]$EmitMediaLayout = "",
     [string]$EmitFootprint = "",
@@ -286,14 +322,48 @@ function Test-Name83 {
 # --------------------------------------------------------------------
 
 $repo = Get-RepoRoot
-if ($InfPath -eq "") { $InfPath = Join-Path $repo "src\xhci98.inf" }
+
+# ---- the install paths this INF is expected to carry ---------------
+#
+# Every path-shaped rule below - PATH-*, VAL-*, OS-*, SUSP-*, and the
+# -EmitFootprint derivation - walks this list rather than naming .NTx86 or
+# [DefaultInstall] itself. That is what makes the amd64 profile one table
+# entry instead of a second gate.
+#
+#   Key      what $osSupplied's On/Off lists name, and what the OS-* messages
+#            print. Do not rename one without the other.
+#   Os       the long form, for prose: VAL-*, SUSP-* and the footprint.
+#   Suffix   appended to the model's install section - "" for the undecorated
+#            Windows 98 one, ".NTx86" or ".NTamd64" for a decorated one.
+#   Default  the right-click Install section that pre-stages with no device.
+#   Kind     "9x" gets the DevLoader/NTMPDriver rules, "nt" the AddService
+#            ones. There is no third kind and no path with neither.
+#
+if ($Arch -eq "amd64") {
+    if ($InfPath -eq "") { $InfPath = Join-Path $repo "src\xhci98-amd64.inf" }
+    $mfgDecoration = "NTamd64"
+    $archPaths = @(
+        @{ Key = "WinXP64"; Os = "Windows XP x64"; Suffix = ".NTamd64";
+           Default = "DefaultInstall.NTamd64"; Kind = "nt" }
+    )
+} else {
+    if ($InfPath -eq "") { $InfPath = Join-Path $repo "src\xhci98.inf" }
+    $mfgDecoration = ""
+    $archPaths = @(
+        @{ Key = "Win98";   Os = "Windows 98";   Suffix = "";
+           Default = "DefaultInstall";       Kind = "9x" },
+        @{ Key = "Win2000"; Os = "Windows 2000"; Suffix = ".NTx86";
+           Default = "DefaultInstall.NTx86"; Kind = "nt" }
+    )
+}
+
 if (-not (Test-Path -LiteralPath $InfPath)) {
     Write-Err "no INF at '$InfPath'."
     exit 1
 }
 $InfPath = (Resolve-Path -LiteralPath $InfPath).Path
 
-Write-Step ("INF gate: {0}" -f $InfPath)
+Write-Step ("INF gate ({0}): {1}" -f $Arch, $InfPath)
 
 # ---- FILE-* --------------------------------------------------------
 
@@ -502,16 +572,42 @@ if (-not (Test-SectionExists $inf "Manufacturer")) {
 } else {
     foreach ($e in (Get-Section $inf "Manufacturer")) {
         if ($e.Text -notmatch '^\s*[^=]+=\s*(.+)$') { continue }
-        foreach ($sec in ($matches[1] -split ',')) {
-            $sec = $sec.Trim()
-            # A trailing TargetOSVersion field is XP-era; this project has none.
-            if ($sec -eq "") { continue }
-            if (-not (Test-SectionExists $inf $sec)) {
-                Add-Failure "BOTH-XREF" ("[Manufacturer] names models section [{0}] (line {1}), which does not exist." -f $sec, $e.Line)
-            } else {
-                [void]$modelSections.Add($sec)
+        #
+        # `%Mfg%=<models-section>[,<TargetOSVersion>...]`. The first field is
+        # the section name; each further field is a decoration the engine
+        # appends to it, so `%Mfg%=XhciModels,NTamd64` means [XhciModels.NTamd64].
+        #
+        # **PATH-MFGDEC is the rule that pins design record 11's decision 2 in
+        # place.** The 32-bit file must carry NO decoration: widening this one
+        # line is precisely what the separate-package decision refused to do,
+        # because it is the line Windows 98's 16-bit engine parses to find its
+        # models section and whether that engine reads only the first field has
+        # never been measured here. The 64-bit file must carry NTamd64, because
+        # an undecorated models section is ignored outright by the 64-bit setup
+        # engine and the INF would then offer nothing at all.
+        #
+        $fields = @($matches[1] -split ',' | ForEach-Object { $_.Trim() })
+        $baseName = ""
+        foreach ($f in $fields) { if ($f -ne "") { $baseName = $f; break } }
+        if ($baseName -eq "") { continue }
+        $decorations = @($fields | Select-Object -Skip 1 | Where-Object { $_ -ne "" })
+
+        if ($mfgDecoration -eq "") {
+            if ($decorations.Count -gt 0) {
+                Add-Failure "PATH-MFGDEC" ("[Manufacturer] line {0} carries the TargetOSVersion field(s) '{1}'. The 32-bit file's models line must stay undecorated: it is the one line Windows 98's 16-bit engine parses to find its models section, whether that engine takes only the first field is unmeasured here, and widening it is exactly what design record 11's decision 2 declined - the 64-bit package has an INF of its own (src\xhci98-amd64.inf) so that this question is never asked." -f $e.Line, ($decorations -join ','))
             }
-            break   # only the first field is the models-section name
+            $sec = $baseName
+        } else {
+            if (-not ($decorations -contains $mfgDecoration)) {
+                Add-Failure "PATH-MFGDEC" ("[Manufacturer] line {0} does not carry the '{1}' TargetOSVersion field (found '{2}'). Without it the 64-bit setup engine looks for an undecorated models section, ignores it outright, and this INF offers no driver at all - which looks identical to a package that was never copied." -f $e.Line, $mfgDecoration, ($decorations -join ','))
+            }
+            $sec = "{0}.{1}" -f $baseName, $mfgDecoration
+        }
+
+        if (-not (Test-SectionExists $inf $sec)) {
+            Add-Failure "BOTH-XREF" ("[Manufacturer] names models section [{0}] (line {1}), which does not exist." -f $sec, $e.Line)
+        } else {
+            [void]$modelSections.Add($sec)
         }
     }
 }
@@ -540,164 +636,192 @@ $driverBinaries = New-Object System.Collections.ArrayList
 foreach ($m in $models) {
     $base = $m.Section
 
-    # Win98 half: the undecorated section, DevLoader and NTMPDriver.
-    if (-not (Test-SectionExists $inf $base)) {
-        Add-Failure "PATH-W98" ("model '{0}' names install section [{1}], which does not exist. Win98 reads only undecorated section names, so it would find nothing to install." -f $m.Id, $base)
-    } else {
-        $addRegs = @(Get-Directive $inf $base "AddReg")
-        $devLoader = $null
-        $ntmp = $null
-        foreach ($ar in $addRegs) {
-            foreach ($e in (Get-Section $inf $ar)) {
-                if ($e.Text -match '^\s*HKR\s*,\s*,\s*DevLoader\s*,[^,]*,\s*(.+)$') { $devLoader = $matches[1].Trim().Trim('"') }
-                if ($e.Text -match '^\s*HKR\s*,\s*,\s*NTMPDriver\s*,[^,]*,\s*(.+)$') { $ntmp = $matches[1].Trim().Trim('"') }
-            }
-        }
-        if ($null -eq $devLoader -or $devLoader.ToUpperInvariant() -ne "*NTKERN") {
-            Add-Failure "PATH-W98" ("install section [{0}] does not set HKR,,DevLoader,,*NTKERN. Without it Win98 never loads a WDM driver for the device." -f $base)
-        }
-        if ($null -eq $ntmp) {
-            Add-Failure "PATH-W98" ("install section [{0}] does not set HKR,,NTMPDriver. That value names the .sys ntkern loads; without it the device binds to nothing." -f $base)
-        } else {
-            $ntmpFiles = @($ntmp -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
-            foreach ($d in $ntmpFiles) { [void]$driverBinaries.Add($d) }
-            # The file NTMPDriver names has to be one THIS section's own
-            # CopyFiles delivers - the mirror of PATH-NT's ServiceBinary check
-            # below. The global "some CopyFiles section delivers it" rule at the
-            # end of the file is satisfied by [<model>.NTx86]'s or
-            # [DefaultInstall]'s CopyFiles, so an undecorated section that had
-            # lost its own would pass the gate while a clean Windows 98 install
-            # wrote NTMPDriver=xhci98.sys and copied no such file: the silent
-            # yellow-bang the gate exists to catch (roadmap Phase 20, F14, which
-            # reproduced the pass with exactly that INF).
-            $w98Copy = @(Get-Directive $inf $base "CopyFiles")
-            $w98Delivered = New-Object System.Collections.ArrayList
-            foreach ($cf in $w98Copy) {
-                if ($cf.StartsWith('@')) {
-                    [void]$w98Delivered.Add($cf.Substring(1).Trim().ToLowerInvariant())
-                    continue
-                }
-                foreach ($e in (Get-Section $inf $cf)) {
-                    $dst = ($e.Text -split ',')[0].Trim()
-                    if ($dst -ne "") { [void]$w98Delivered.Add($dst.ToLowerInvariant()) }
-                }
-            }
-            foreach ($d in $ntmpFiles) {
-                if (-not $w98Delivered.Contains($d.ToLowerInvariant())) {
-                    Add-Failure "PATH-W98" ("[{0}] sets NTMPDriver to '{1}' but its own CopyFiles delivers ({2}). Windows 98 would write the loader value and never copy the file it names; the device shows a yellow bang with no diagnostic." -f $base, $d, ($w98Delivered -join ', '))
-                }
-            }
+    #
+    # **PATH-NO9X: on the 64-bit file the undecorated section must NOT
+    # exist.** setupapi's decorated-section lookup falls back - .NTamd64,
+    # then .NT, then undecorated - so an undecorated [Xhci.Dev] in the
+    # amd64 INF is a section a 32-bit engine reaches, and reaching it means
+    # copying an amd64 xhci98.sys onto a 32-bit machine and pointing a
+    # service at it. Nothing downstream would report that: the file copies,
+    # the service is created, and the load fails with a yellow bang that
+    # looks like every other one. The 32-bit file has no counterpart rule
+    # because there the undecorated section IS the Windows 98 install.
+    #
+    if ($mfgDecoration -ne "" -and (Test-SectionExists $inf $base)) {
+        Add-Failure "PATH-NO9X" ("model '{0}' has an undecorated install section [{1}]. This INF carries the {2} binary, and a 32-bit setup engine falls back to an undecorated section when it finds no decoration of its own - so this one offers an amd64 driver to a 32-bit machine. The 64-bit package's sections are all decorated on purpose; the 32-bit package is src\xhci98.inf." -f $m.Id, $base, $mfgDecoration)
+    }
 
-            #
-            # **The temporary name on the driver's own copy row**, which is the
-            # 2026-09-07 audit's H10: a documented Windows 98 trap with no rule
-            # behind it. Removing the third field passed the whole gate, and
-            # only the tracked footprint diff noticed - a diff whose likely
-            # answer is to regenerate the footprint.
-            #
-            # Windows 98's 16-bit engine copies a file that is already loaded
-            # by writing it under a temporary name and renaming at the next
-            # boot. Without the third field the replace over the running
-            # binary fails outright, which is the update-over-install path
-            # every user with an earlier release takes. The cost of having it
-            # is cosmetic and is published: the .tmp is left in
-            # System32\Drivers and listed in Driver File Details.
-            #
-            foreach ($cf in $w98Copy) {
-                if ($cf.StartsWith('@')) { continue }
-                foreach ($e in (Get-Section $inf $cf)) {
-                    $fields = @($e.Text -split ',' | ForEach-Object { $_.Trim() })
-                    $dst = $fields[0]
-                    if ($dst -eq "" -or -not ($ntmpFiles -contains $dst)) { continue }
-                    $temp = ""
-                    if ($fields.Count -ge 3) { $temp = $fields[2] }
-                    if ($temp -eq "") {
-                        Add-Failure "W98-TEMPNAME" ("[{0}] line {1} copies '{2}' with no temporary-name field. On Windows 98 that is the file NTMPDriver names, so an update over an install where it is already loaded cannot replace it and fails; the third field ('{2},,xhci98.tmp') is what makes the replace work. Its cost is the cosmetic .tmp left behind, which the release notes publish." -f $cf, $e.Line, $dst)
+    foreach ($ap in @($archPaths | Where-Object { $_.Kind -eq "9x" })) {
+        # Win98 half: the undecorated section, DevLoader and NTMPDriver.
+        if (-not (Test-SectionExists $inf $base)) {
+            Add-Failure "PATH-W98" ("model '{0}' names install section [{1}], which does not exist. Win98 reads only undecorated section names, so it would find nothing to install." -f $m.Id, $base)
+        } else {
+            $addRegs = @(Get-Directive $inf $base "AddReg")
+            $devLoader = $null
+            $ntmp = $null
+            foreach ($ar in $addRegs) {
+                foreach ($e in (Get-Section $inf $ar)) {
+                    if ($e.Text -match '^\s*HKR\s*,\s*,\s*DevLoader\s*,[^,]*,\s*(.+)$') { $devLoader = $matches[1].Trim().Trim('"') }
+                    if ($e.Text -match '^\s*HKR\s*,\s*,\s*NTMPDriver\s*,[^,]*,\s*(.+)$') { $ntmp = $matches[1].Trim().Trim('"') }
+                }
+            }
+            if ($null -eq $devLoader -or $devLoader.ToUpperInvariant() -ne "*NTKERN") {
+                Add-Failure "PATH-W98" ("install section [{0}] does not set HKR,,DevLoader,,*NTKERN. Without it Win98 never loads a WDM driver for the device." -f $base)
+            }
+            if ($null -eq $ntmp) {
+                Add-Failure "PATH-W98" ("install section [{0}] does not set HKR,,NTMPDriver. That value names the .sys ntkern loads; without it the device binds to nothing." -f $base)
+            } else {
+                $ntmpFiles = @($ntmp -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+                foreach ($d in $ntmpFiles) { [void]$driverBinaries.Add($d) }
+                # The file NTMPDriver names has to be one THIS section's own
+                # CopyFiles delivers - the mirror of PATH-NT's ServiceBinary check
+                # below. The global "some CopyFiles section delivers it" rule at the
+                # end of the file is satisfied by [<model>.NTx86]'s or
+                # [DefaultInstall]'s CopyFiles, so an undecorated section that had
+                # lost its own would pass the gate while a clean Windows 98 install
+                # wrote NTMPDriver=xhci98.sys and copied no such file: the silent
+                # yellow-bang the gate exists to catch (roadmap Phase 20, F14, which
+                # reproduced the pass with exactly that INF).
+                $w98Copy = @(Get-Directive $inf $base "CopyFiles")
+                $w98Delivered = New-Object System.Collections.ArrayList
+                foreach ($cf in $w98Copy) {
+                    if ($cf.StartsWith('@')) {
+                        [void]$w98Delivered.Add($cf.Substring(1).Trim().ToLowerInvariant())
+                        continue
+                    }
+                    foreach ($e in (Get-Section $inf $cf)) {
+                        $dst = ($e.Text -split ',')[0].Trim()
+                        if ($dst -ne "") { [void]$w98Delivered.Add($dst.ToLowerInvariant()) }
+                    }
+                }
+                foreach ($d in $ntmpFiles) {
+                    if (-not $w98Delivered.Contains($d.ToLowerInvariant())) {
+                        Add-Failure "PATH-W98" ("[{0}] sets NTMPDriver to '{1}' but its own CopyFiles delivers ({2}). Windows 98 would write the loader value and never copy the file it names; the device shows a yellow bang with no diagnostic." -f $base, $d, ($w98Delivered -join ', '))
+                    }
+                }
+
+                #
+                # **The temporary name on the driver's own copy row**, which is the
+                # 2026-09-07 audit's H10: a documented Windows 98 trap with no rule
+                # behind it. Removing the third field passed the whole gate, and
+                # only the tracked footprint diff noticed - a diff whose likely
+                # answer is to regenerate the footprint.
+                #
+                # Windows 98's 16-bit engine copies a file that is already loaded
+                # by writing it under a temporary name and renaming at the next
+                # boot. Without the third field the replace over the running
+                # binary fails outright, which is the update-over-install path
+                # every user with an earlier release takes. The cost of having it
+                # is cosmetic and is published: the .tmp is left in
+                # System32\Drivers and listed in Driver File Details.
+                #
+                foreach ($cf in $w98Copy) {
+                    if ($cf.StartsWith('@')) { continue }
+                    foreach ($e in (Get-Section $inf $cf)) {
+                        $fields = @($e.Text -split ',' | ForEach-Object { $_.Trim() })
+                        $dst = $fields[0]
+                        if ($dst -eq "" -or -not ($ntmpFiles -contains $dst)) { continue }
+                        $temp = ""
+                        if ($fields.Count -ge 3) { $temp = $fields[2] }
+                        if ($temp -eq "") {
+                            Add-Failure "W98-TEMPNAME" ("[{0}] line {1} copies '{2}' with no temporary-name field. On Windows 98 that is the file NTMPDriver names, so an update over an install where it is already loaded cannot replace it and fails; the third field ('{2},,xhci98.tmp') is what makes the replace work. Its cost is the cosmetic .tmp left behind, which the release notes publish." -f $cf, $e.Line, $dst)
+                        }
                     }
                 }
             }
         }
     }
 
-    # Win2000 half: the .NTx86 section, its .Services, and the AddService.
-    $nt = "$base.NTx86"
-    if (-not (Test-SectionExists $inf $nt)) {
-        Add-Failure "PATH-NT" ("model '{0}' has no [{1}] section. Win2000 would fall back to the undecorated Win98 section, install no service, and leave the device with a driver-less devnode." -f $m.Id, $nt)
-        continue
-    }
-    foreach ($ar in @(Get-Directive $inf $nt "AddReg")) {
-        # Get-Section answers $null for a missing section and @($null) is a
-        # one-element array, not an empty one. This guard was latent until task
-        # 11-V.7 gave [<model>.NTx86] its first AddReg=: with no NT AddReg at
-        # all the loop never ran, so the xref-addreg self-test walked straight
-        # past it. A dangling AddReg= is BOTH-XREF's finding, not this one's.
-        $arEntries = Get-Section $inf $ar
-        if ($null -eq $arEntries) { continue }
-        foreach ($e in $arEntries) {
-            if ($e.Text -match '^\s*HKR\s*,\s*,\s*(DevLoader|NTMPDriver)\s*,') {
-                Add-Warning2 "PATH-NT" ("[{0}] writes a 9x-only loader value ({1}) into the Win2000 device key via [{2}]." -f $nt, $matches[1], $ar)
+    # The NT half: the decorated section, its .Services, and the AddService.
+    foreach ($ap in @($archPaths | Where-Object { $_.Kind -eq "nt" })) {
+        $nt = $base + $ap.Suffix
+        if (-not (Test-SectionExists $inf $nt)) {
+            # Two different silent failures, so two different sentences. On the
+            # 32-bit file the undecorated section is there to be fallen back to,
+            # and the devnode comes up with no service; on the 64-bit file there
+            # is nothing to fall back to (PATH-NO9X keeps it that way), so the
+            # engine matches the model and then finds no install section at all.
+            if ($ap.Suffix -eq ".NTx86") {
+                Add-Failure "PATH-NT" ("model '{0}' has no [{1}] section. Win2000 would fall back to the undecorated Win98 section, install no service, and leave the device with a driver-less devnode." -f $m.Id, $nt)
+            } else {
+                Add-Failure "PATH-NT" ("model '{0}' has no [{1}] section. {2} matches the model and then has no install section to run - and there is deliberately no undecorated one here to fall back to, so nothing is copied and no service is created." -f $m.Id, $nt, $ap.Os)
             }
+            continue
         }
-    }
-
-    $svcSection = "$nt.Services"
-    if (-not (Test-SectionExists $inf $svcSection)) {
-        Add-Failure "PATH-NT" ("[{0}] has no [{1}]. On Win2000 the device installs with no service: Device Manager shows it present and the driver never loads." -f $nt, $svcSection)
-        continue
-    }
-    $addSvc = @(Get-DirectiveRaw $inf $svcSection "AddService")
-    if ($addSvc.Count -ne 1) {
-        Add-Failure "PATH-NT" ("[{0}] must contain exactly one AddService; found {1}." -f $svcSection, $addSvc.Count)
-        continue
-    }
-    $svcFields = @($addSvc[0].Value -split ',' | ForEach-Object { $_.Trim() })
-    if ($svcFields.Count -lt 3 -or $svcFields[0] -eq "" -or $svcFields[2] -eq "") {
-        Add-Failure "PATH-NT" ("AddService in [{0}] needs a service name, flags, and an install section: '{1}'." -f $svcSection, $addSvc[0].Value)
-        continue
-    }
-    if ($svcFields[1] -notmatch '^(0x0*2|2)$') {
-        Add-Failure "PATH-NT" ("AddService in [{0}] must pass flag 0x00000002 (SPSVCINST_ASSOCSERVICE) so the service becomes the device's function driver; found '{1}'." -f $svcSection, $svcFields[1])
-    }
-    $svcInstall = $svcFields[2]
-    if (-not (Test-SectionExists $inf $svcInstall)) {
-        Add-Failure "BOTH-XREF" ("AddService in [{0}] names section [{1}], which does not exist." -f $svcSection, $svcInstall)
-        continue
-    }
-
-    $binary = @(Get-Directive $inf $svcInstall "ServiceBinary")
-    if ($binary.Count -ne 1) {
-        Add-Failure "PATH-NT" ("[{0}] needs exactly one ServiceBinary." -f $svcInstall)
-    } else {
-        if ($binary[0] -notmatch '^%12%\\(.+)$') {
-            Add-Failure "PATH-NT" ("ServiceBinary in [{0}] must be %12%\<driver>.sys; found '{1}'." -f $svcInstall, $binary[0])
-        } else {
-            $svcFile = $matches[1]
-            [void]$driverBinaries.Add($svcFile)
-            # The service binary has to be a file this INF actually delivers,
-            # via the CopyFiles of the .NTx86 section that installed it.
-            $ntCopy = @(Get-Directive $inf $nt "CopyFiles")
-            $delivered = New-Object System.Collections.ArrayList
-            foreach ($cf in $ntCopy) {
-                foreach ($e in (Get-Section $inf $cf)) {
-                    $dst = ($e.Text -split ',')[0].Trim()
-                    if ($dst -ne "") { [void]$delivered.Add($dst.ToLowerInvariant()) }
+        foreach ($ar in @(Get-Directive $inf $nt "AddReg")) {
+            # Get-Section answers $null for a missing section and @($null) is a
+            # one-element array, not an empty one. This guard was latent until task
+            # 11-V.7 gave [<model>.NTx86] its first AddReg=: with no NT AddReg at
+            # all the loop never ran, so the xref-addreg self-test walked straight
+            # past it. A dangling AddReg= is BOTH-XREF's finding, not this one's.
+            $arEntries = Get-Section $inf $ar
+            if ($null -eq $arEntries) { continue }
+            foreach ($e in $arEntries) {
+                if ($e.Text -match '^\s*HKR\s*,\s*,\s*(DevLoader|NTMPDriver)\s*,') {
+                    Add-Warning2 "PATH-NT" ("[{0}] writes a 9x-only loader value ({1}) into the Win2000 device key via [{2}]." -f $nt, $matches[1], $ar)
                 }
             }
-            if (-not $delivered.Contains($svcFile.ToLowerInvariant())) {
-                Add-Failure "PATH-NT" ("[{0}] ServiceBinary is '{1}' but the CopyFiles of [{2}] delivers ({3}). Win2000 would create a service pointing at a file the install never copied." -f $svcInstall, $svcFile, $nt, ($delivered -join ', '))
+        }
+
+        $svcSection = "$nt.Services"
+        if (-not (Test-SectionExists $inf $svcSection)) {
+            Add-Failure "PATH-NT" ("[{0}] has no [{1}]. On Win2000 the device installs with no service: Device Manager shows it present and the driver never loads." -f $nt, $svcSection)
+            continue
+        }
+        $addSvc = @(Get-DirectiveRaw $inf $svcSection "AddService")
+        if ($addSvc.Count -ne 1) {
+            Add-Failure "PATH-NT" ("[{0}] must contain exactly one AddService; found {1}." -f $svcSection, $addSvc.Count)
+            continue
+        }
+        $svcFields = @($addSvc[0].Value -split ',' | ForEach-Object { $_.Trim() })
+        if ($svcFields.Count -lt 3 -or $svcFields[0] -eq "" -or $svcFields[2] -eq "") {
+            Add-Failure "PATH-NT" ("AddService in [{0}] needs a service name, flags, and an install section: '{1}'." -f $svcSection, $addSvc[0].Value)
+            continue
+        }
+        if ($svcFields[1] -notmatch '^(0x0*2|2)$') {
+            Add-Failure "PATH-NT" ("AddService in [{0}] must pass flag 0x00000002 (SPSVCINST_ASSOCSERVICE) so the service becomes the device's function driver; found '{1}'." -f $svcSection, $svcFields[1])
+        }
+        $svcInstall = $svcFields[2]
+        if (-not (Test-SectionExists $inf $svcInstall)) {
+            Add-Failure "BOTH-XREF" ("AddService in [{0}] names section [{1}], which does not exist." -f $svcSection, $svcInstall)
+            continue
+        }
+
+        $binary = @(Get-Directive $inf $svcInstall "ServiceBinary")
+        if ($binary.Count -ne 1) {
+            Add-Failure "PATH-NT" ("[{0}] needs exactly one ServiceBinary." -f $svcInstall)
+        } else {
+            if ($binary[0] -notmatch '^%12%\\(.+)$') {
+                Add-Failure "PATH-NT" ("ServiceBinary in [{0}] must be %12%\<driver>.sys; found '{1}'." -f $svcInstall, $binary[0])
+            } else {
+                $svcFile = $matches[1]
+                [void]$driverBinaries.Add($svcFile)
+                # The service binary has to be a file this INF actually delivers,
+                # via the CopyFiles of the .NTx86 section that installed it.
+                $ntCopy = @(Get-Directive $inf $nt "CopyFiles")
+                $delivered = New-Object System.Collections.ArrayList
+                foreach ($cf in $ntCopy) {
+                    foreach ($e in (Get-Section $inf $cf)) {
+                        $dst = ($e.Text -split ',')[0].Trim()
+                        if ($dst -ne "") { [void]$delivered.Add($dst.ToLowerInvariant()) }
+                    }
+                }
+                if (-not $delivered.Contains($svcFile.ToLowerInvariant())) {
+                    Add-Failure "PATH-NT" ("[{0}] ServiceBinary is '{1}' but the CopyFiles of [{2}] delivers ({3}). Win2000 would create a service pointing at a file the install never copied." -f $svcInstall, $svcFile, $nt, ($delivered -join ', '))
+                }
             }
         }
-    }
-    foreach ($req in @(
-        @{ Name = "ServiceType"; Expected = 1; Meaning = "SERVICE_KERNEL_DRIVER" },
-        @{ Name = "StartType"; Expected = 3; Meaning = "SERVICE_DEMAND_START" },
-        @{ Name = "ErrorControl"; Expected = 1; Meaning = "SERVICE_ERROR_NORMAL" }
-    )) {
-        $value = @(Get-Directive $inf $svcInstall $req.Name)
-        if ($value.Count -ne 1) {
-            Add-Failure "PATH-NT" ("[{0}] needs exactly one {1}." -f $svcInstall, $req.Name)
-        } elseif ($value[0] -notmatch ("^(0x0*{0}|{0})$" -f $req.Expected)) {
-            Add-Failure "PATH-NT" ("[{0}] {1} must be {2} ({3}); found '{4}'." -f $svcInstall, $req.Name, $req.Expected, $req.Meaning, $value[0])
+        foreach ($req in @(
+            @{ Name = "ServiceType"; Expected = 1; Meaning = "SERVICE_KERNEL_DRIVER" },
+            @{ Name = "StartType"; Expected = 3; Meaning = "SERVICE_DEMAND_START" },
+            @{ Name = "ErrorControl"; Expected = 1; Meaning = "SERVICE_ERROR_NORMAL" }
+        )) {
+            $value = @(Get-Directive $inf $svcInstall $req.Name)
+            if ($value.Count -ne 1) {
+                Add-Failure "PATH-NT" ("[{0}] needs exactly one {1}." -f $svcInstall, $req.Name)
+            } elseif ($value[0] -notmatch ("^(0x0*{0}|{0})$" -f $req.Expected)) {
+                Add-Failure "PATH-NT" ("[{0}] {1} must be {2} ({3}); found '{4}'." -f $svcInstall, $req.Name, $req.Expected, $req.Meaning, $value[0])
+            }
         }
     }
 }
@@ -779,10 +903,9 @@ function Get-AddRegValues {
 }
 
 foreach ($m in $models) {
-    $paths = @(
-        @{ Name = "Windows 98"; Install = $m.Section },
-        @{ Name = "Windows 2000"; Install = ("{0}.NTx86" -f $m.Section) }
-    )
+    $paths = @($archPaths | ForEach-Object {
+        @{ Name = $_.Os; Install = ($m.Section + $_.Suffix) }
+    })
     foreach ($p in $paths) {
         if (-not (Test-SectionExists $inf $p.Install)) { continue }  # PATH-* said so
         $addRegs = @(Get-Directive $inf $p.Install "AddReg")
@@ -906,14 +1029,14 @@ foreach ($cf in ($referencedCopyFiles | Sort-Object -Unique)) {
 $driversDest = @{ Dirid = "10"; Subdir = "System32\Drivers"; Spelling = "10, System32\Drivers";
                   Why = "both targets load it from System32\Drivers" }
 $osSupplied = @(
-    @{ File = "usbport.sys"; On = @("Win2000"); Off = @("Win98"); OffRule = "OS-ONWIN98"; Dest = $driversDest;
+    @{ File = "usbport.sys"; On = @("Win2000", "WinXP64"); Off = @("Win98"); OffRule = "OS-ONWIN98"; Dest = $driversDest;
        Why = "xhci98.sys imports it, and an NT install that never had a USB controller does not have it (both NT targets' layout.inf give it the Setup disposition that does not copy it; a controller install pulls it from Driver Cache\i386), so the driver cannot load at all: Code 39 with nothing in the trace, measured on Windows XP on 2026-09-03";
        OffWhy = "Windows 98's layout.inf has no usbport.sys row, so its 16-bit engine has no source to resolve the entry from; NUSB or SweetLow's stack places the file there and the 9x path must not ask for it" },
-    @{ File = "usbd.sys";    On = @("Win98", "Win2000"); Off = @(); Dest = $driversDest;
+    @{ File = "usbd.sys";    On = @("Win98", "Win2000", "WinXP64"); Off = @(); Dest = $driversDest;
        Why = "usbhub20.sys imports USBD.SYS on both targets and nothing else on an xHCI-only machine places it, so without it the root hub cannot load (Code 2 on Windows 98, a 0xc0000034 naming usbhub20.sys on Windows 2000)" },
-    @{ File = "usbhub.sys";  On = @("Win98", "Win2000"); Off = @(); Dest = $driversDest;
+    @{ File = "usbhub.sys";  On = @("Win98", "Win2000", "WinXP64"); Off = @(); Dest = $driversDest;
        Why = "it is Windows 98's composite parent and the NT targets' hub driver, which an xHCI-only machine never gets from setup (both NT targets' layout.inf give it the disposition that does not copy it, read 2026-09-03), so on Windows 98 every multi-interface device stops at 'USB Composite Device' with Code 2 without it" },
-    @{ File = "usbui.dll";   On = @("Win98", "Win2000"); Off = @();
+    @{ File = "usbui.dll";   On = @("Win98", "Win2000", "WinXP64"); Off = @();
        Dest = @{ Dirid = "11"; Subdir = ""; Spelling = "11";
                  Why = "dirid 11 is the system directory, where all four operating systems' own USB INFs put it; System32\Drivers is for drivers and this is a user-mode property-page DLL" };
        Why = "the NT targets' own INF has already registered it against the root hub usbport creates (Windows 2000's USB.INF [ROOTHUB2.NT] and Windows XP's usbport.inf [ROOTHUB.Dev.NT] both write EnumPropPages32 = 'usbui.dll,USBHubPropPageProvider'), and on an xHCI-only machine the file was never placed, so the page is dropped silently: measured 2026-09-07 in both NT guests, the USB Root Hub gains a working Power tab as soon as the file is present, with no registry change. On the 9x paths it places what Windows 98 SE's and Windows ME's own USB.INF place (USBUI.CopyFiles=11); the 9x controller page comes from sysclass.dll instead and is unaffected either way, measured the same day" }
@@ -1151,8 +1274,24 @@ foreach ($never in $osNeverNamed) {
 # falls back to the undecorated section, so a right-click Install on Windows
 # 2000 would run the Windows 98 file list, which has no usbport.sys and
 # copies the INF into %17%.
-if ((Test-SectionExists $inf "DefaultInstall") -and -not (Test-SectionExists $inf "DefaultInstall.NTx86")) {
-    Add-Failure "OS-DEFAULT" "[DefaultInstall] exists without [DefaultInstall.NTx86]. Windows 2000 falls back to the undecorated section on a right-click Install and runs the Windows 98 file list, which has no usbport.sys and copies the INF into %17%."
+if ($mfgDecoration -eq "") {
+    if ((Test-SectionExists $inf "DefaultInstall") -and -not (Test-SectionExists $inf "DefaultInstall.NTx86")) {
+        Add-Failure "OS-DEFAULT" "[DefaultInstall] exists without [DefaultInstall.NTx86]. Windows 2000 falls back to the undecorated section on a right-click Install and runs the Windows 98 file list, which has no usbport.sys and copies the INF into %17%."
+    }
+} else {
+    #
+    # The 64-bit file's version of the same hazard, and it runs the other way:
+    # there an undecorated [DefaultInstall] is not a section to be completed
+    # but a section to be absent. It is what a 32-bit engine falls back to on
+    # a right-click Install, and this INF's file list would then copy an amd64
+    # xhci98.sys into a 32-bit System32\Drivers and write the machine-wide
+    # selective-suspend value on a machine this package does not serve. The
+    # right-click route is the one a user takes with no device present, so
+    # nothing about the hardware stops it.
+    #
+    if (Test-SectionExists $inf "DefaultInstall") {
+        Add-Failure "OS-DEFAULT" "[DefaultInstall] exists in the 64-bit file. A 32-bit engine falls back to the undecorated section on a right-click Install, so this one hands an amd64 xhci98.sys to a 32-bit machine with no device involved. Decorate it: the only right-click section here is [DefaultInstall.NTamd64]."
+    }
 }
 
 #
@@ -1166,23 +1305,23 @@ if ((Test-SectionExists $inf "DefaultInstall") -and -not (Test-SectionExists $in
 # is the route a user who already has an earlier release takes and the one
 # issue 5 exists for. OS-DEFAULT above catches only the asymmetric case.
 #
-foreach ($defaultSection in @("DefaultInstall", "DefaultInstall.NTx86")) {
+foreach ($defaultSection in @($archPaths | ForEach-Object { $_.Default })) {
     if (-not (Test-SectionExists $inf $defaultSection)) {
-        Add-Failure "OS-DEFAULT" ("[{0}] is missing. This INF has four install routes - a device install and a right-click Install on each of the 9x and NT paths - and every OS-* and SUSP-* rule below is checked against the routes that exist, so removing this section removes the checks with it rather than failing them." -f $defaultSection)
+        Add-Failure "OS-DEFAULT" ("[{0}] is missing. This INF has {1} install routes - a device install and a right-click Install on each of its {2} - and every OS-* and SUSP-* rule below is checked against the routes that exist, so removing this section removes the checks with it rather than failing them." -f $defaultSection, ($archPaths.Count * 2), (($archPaths | ForEach-Object { $_.Os }) -join ' and '))
     }
 }
 
 foreach ($m in $models) {
     $base = $m.Section
-    $nt = "$base.NTx86"
-    if (-not (Test-SectionExists $inf $base) -or -not (Test-SectionExists $inf $nt)) {
+    $missing = @($archPaths | Where-Object { -not (Test-SectionExists $inf ($base + $_.Suffix)) })
+    if ($missing.Count -gt 0) {
         continue    # already reported as PATH-W98 / PATH-NT
     }
 
-    $paths = @(
-        @{ Name = "Win98";   Install = $base; Sections = @(Get-Directive $inf $base "CopyFiles"); Default = "DefaultInstall" },
-        @{ Name = "Win2000"; Install = $nt;   Sections = @(Get-Directive $inf $nt "CopyFiles");   Default = "DefaultInstall.NTx86" }
-    )
+    $paths = @($archPaths | ForEach-Object {
+        $sec = $base + $_.Suffix
+        @{ Name = $_.Key; Install = $sec; Sections = @(Get-Directive $inf $sec "CopyFiles"); Default = $_.Default }
+    })
 
     foreach ($os in $osSupplied) {
         $file = $os.File
@@ -1277,12 +1416,10 @@ $suspValue = "DisableSelectiveSuspend"
 $suspKey = "System\CurrentControlSet\Services\USB"
 foreach ($m in $models) {
     $base = $m.Section
-    $nt = "$base.NTx86"
     $suspRoutes = @()
-    foreach ($p in @(
-        @{ Name = "Windows 98";   Install = $base; Default = "DefaultInstall" },
-        @{ Name = "Windows 2000"; Install = $nt;   Default = "DefaultInstall.NTx86" }
-    )) {
+    foreach ($p in @($archPaths | ForEach-Object {
+        @{ Name = $_.Os; Install = ($base + $_.Suffix); Default = $_.Default }
+    })) {
         if (Test-SectionExists $inf $p.Install) {
             $suspRoutes += @{ Label = ("the {0} device install ([{1}])" -f $p.Name, $p.Install); Section = $p.Install }
         }
@@ -1482,16 +1619,21 @@ if ($EmitFootprint -ne "") {
         "# .Services (.HW, .CoInstallers, .Interfaces, .LogConfigOverride)."
     )
 
-    # Fixed order, so the output is diffable: every model's two device-install
-    # paths, then the two right-click DefaultInstall paths. A path whose section
-    # does not exist is skipped here and reported by PATH-*.
+    # Fixed order, so the output is diffable: every model's device-install
+    # paths in profile order, then the right-click DefaultInstall paths in the
+    # same order. A path whose section does not exist is skipped here and
+    # reported by PATH-*. The 64-bit file has one of each rather than two, and
+    # so a footprint file of its own - the two are different claims about
+    # different media and comparing them to each other would mean nothing.
     $fpPaths = New-Object System.Collections.ArrayList
     foreach ($m in $models) {
-        [void]$fpPaths.Add(@{ Os = "Windows 98";   Kind = "device install"; Install = $m.Section })
-        [void]$fpPaths.Add(@{ Os = "Windows 2000"; Kind = "device install"; Install = ("{0}.NTx86" -f $m.Section) })
+        foreach ($ap in $archPaths) {
+            [void]$fpPaths.Add(@{ Os = $ap.Os; Kind = "device install"; Install = ($m.Section + $ap.Suffix) })
+        }
     }
-    [void]$fpPaths.Add(@{ Os = "Windows 98";   Kind = "right-click Install"; Install = "DefaultInstall" })
-    [void]$fpPaths.Add(@{ Os = "Windows 2000"; Kind = "right-click Install"; Install = "DefaultInstall.NTx86" })
+    foreach ($ap in $archPaths) {
+        [void]$fpPaths.Add(@{ Os = $ap.Os; Kind = "right-click Install"; Install = $ap.Default })
+    }
 
     # ---- the two derivations, each narrow on purpose --------------------
     #

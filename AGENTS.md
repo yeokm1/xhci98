@@ -297,13 +297,29 @@ derivations.
 ### The INF and install media
 
 The INF is a silent gate too, in both directions. One `src/xhci98.inf`
-carries both install paths: undecorated sections with `DevLoader=*NTKERN` for
-Win98's 16-bit engine, and `.NTx86` sections with `AddService` for Win2000. A
-single-path file does not half-work; Win2000 falls back to the undecorated
-section and leaves a devnode whose driver never loads, which reads as a
-registration failure. `build-driver.cmd` runs the INF gate on every build for
-that reason, including the Win98-parser traps its engine reports as nothing
-at all.
+carries both 32-bit install paths: undecorated sections with
+`DevLoader=*NTKERN` for Win98's 16-bit engine, and `.NTx86` sections with
+`AddService` for Win2000. A single-path file does not half-work; Win2000 falls
+back to the undecorated section and leaves a devnode whose driver never loads,
+which reads as a registration failure. `build-driver.cmd` runs the INF gate on
+every build for that reason, including the Win98-parser traps its engine
+reports as nothing at all.
+
+**There are two INFs, and they are two packages rather than one file with a
+third path.** `src/xhci98-amd64.inf` is the 64-bit package's, carrying one
+install path (`.NTamd64`) and a `[Manufacturer]` line decorated `NTamd64`.
+Merging it into the first would mean widening `%Mfg%=XhciModels` to
+`%Mfg%=XhciModels,NTx86,NTamd64` - the one line Windows 98's 16-bit engine
+parses to find its models section, and whether that engine takes only the
+first field is unmeasured here, so the merge costs a re-run of all four
+existing install legs to prove nothing broke (design record 11 section 12,
+decision 2). The gate takes `-Arch x86` or `-Arch amd64` and `build-driver.cmd`
+runs it over both files on every build; the self-tests compare the two
+directly, because the accepted cost of two files is that they can drift.
+Neither file may grow the other's sections: an undecorated section in the
+64-bit file is one a 32-bit engine falls back to, which would put an amd64
+binary on a 32-bit machine, and the gate refuses it by name (`PATH-NO9X`,
+`PATH-MFGDEC`).
 
 The media carries no Microsoft file. `usbd.sys` and `usbhub.sys` (both
 targets), `usbport.sys` (the NT targets; on Windows 98 the USB 2.0 stack
@@ -321,7 +337,14 @@ covers the four, the three retired 1.0.0.0 media names and `usbhub20.sys`. A
 name list cannot see the same bytes under a name nobody thought of; what closes
 that is the packager refusing to publish anything it did not itself stage.
 `legal-provenance.md` section 5 records why. Build install media with `scripts\package\make-package.ps1`, never by
-hand-copying the `.sys` and `.inf`.
+hand-copying the `.sys` and `.inf`. Its `-Arch` moves three things together
+and they are not separable: the obj subdirectory, which of the two INFs is
+staged, and the architecture both gates run under. A published release
+directory is a flavour AND an architecture - `release-x86`, `debug-x86`,
+`release-x64`, `debug-x64` - because both architectures' binaries are called
+`xhci98.sys`; `make-release.ps1 -Arch` defaults to `x86` alone until roadmap
+task 21.5 gives a 64-bit binary something to be published on the strength
+of.
 
 See `docs/contributing/build-and-test.md` for environment setup, QEMU
 configuration, the install procedure, the two model INFs, and "The files the

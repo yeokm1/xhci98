@@ -220,6 +220,8 @@ param(
     [string]$Version = "",
     [ValidateSet("release", "debug", "qemu")]
     [string[]]$Flavor = @("release", "debug"),
+    [ValidateSet("x86", "x64")]
+    [string[]]$Arch = @("x86"),
     [string]$ReleasesDir = "",
     [string]$QualtoolDir = "",
     [switch]$SkipQualtool,
@@ -265,9 +267,19 @@ may carry it, and
 scripts\import-gate\xhci98-imports.allow enforces that as "qemu required".
 To put it on a guest, stage it without publishing:
   scripts\package\make-package.ps1 -Flavor qemu
-A release publishes release\ and debug\, and nothing else.
+A release publishes the release and debug directories of each architecture it
+was asked for, and nothing else.
 "@
 }
+#
+# **One INF answers for the version and the date, and it is the 32-bit one.**
+# Since roadmap task 21.3 there are two, and they must agree: the INF gate ties
+# each to src\xhci_version.h on every build, and the gate's self-tests compare
+# the two files' [Version] sections directly. So reading DriverVer from either
+# gives the same answer, and reading it from a fixed one keeps the cut's
+# version independent of which architectures it was asked for - a cut with
+# -Arch x64 alone is still the same release at the same number.
+#
 $infPath = Join-Path $repo "src\xhci98.inf"
 if ($ReleasesDir -eq "") { $ReleasesDir = Join-Path $repo "releases" }
 if ($QualtoolDir -eq "") { $QualtoolDir = Join-Path $repo "xhciqual" }
@@ -407,13 +419,72 @@ $UploadDir   = Resolve-DirectoryArgument $UploadDir
 # called on the media matters: a long name is not what a DOS prompt will show.
 $qualtoolFiles = @{ "xhciqual.exe" = "XHCIQUAL.EXE"; "xhciqual.map" = "XHCIQUAL.MAP" }
 
+#
+# **A published directory is a flavour AND an architecture, and both are in its
+# name** - `release-x86`, `debug-x86`, `release-x64`, `debug-x64` (roadmap task
+# 21.3, design record 11 section 8). The two architectures' binaries are both
+# called xhci98.sys, so they cannot share a directory; and the x86 pair is
+# renamed rather than left bare, because the moment a second set exists an
+# untagged `release\` means "x86" without saying so and readme.txt's "INSTALL
+# THIS ONE" stops having one referent. That rename is free exactly now - no
+# release has been uploaded, so no user has ever seen `release\` - and
+# releases\README.md's write-once rule leaves the four existing cuts alone.
+#
+# A wrong pick by a user fails cleanly in both directions, which is what makes
+# four flat siblings safe: the 64-bit setup engine ignores an undecorated
+# models section outright and the 32-bit engines skip a %Mfg% line decorated
+# NTamd64, so the wrong directory offers no driver rather than installing a
+# mismatched binary.
+#
+# -Arch DEFAULTS TO x86 ALONE, and that is a decision rather than an oversight.
+# The plumbing here stages four directories the moment it is asked to; what has
+# not happened is roadmap task 21.5 - no amd64 binary of this driver has ever
+# executed, on metal or in a guest. So an ordinary cut publishes what 1.0.2.0
+# published, and `-Arch x86,x64` is what a cut says out loud once there is
+# evidence to say it with.
+$archDirName  = @{ "x86" = "i386"; "x64" = "amd64" }
+$archPkgName  = @{ "x86" = "x86";  "x64" = "amd64" }   # make-package.ps1's -Arch
+$archInfPath  = @{ "x86" = "src\xhci98.inf"; "x64" = "src\xhci98-amd64.inf" }
+
 # The two files a release directory may contain, and since 1.0.0.1 the only
 # two [SourceDisksFiles] names - see releases\README.md.
 $publishable = @("xhci98.inf", "xhci98.sys")
 
-# A flavour's published directory is its own name - see the .DESCRIPTION note
-# above. The DDK's obj directory is the one place its vocabulary is still read.
+# The DDK's obj directory is the one place its vocabulary is still read; the
+# published directory name is built from the flavour and the architecture
+# together by New-ReleaseLegs below, so the flavour word is no longer a
+# directory name on its own.
 $objDirName = @{ "release" = "objfre"; "debug" = "objchk" }
+
+function New-ReleaseLegs {
+    #
+    # Every (flavour, architecture) pair this cut publishes, in a fixed order -
+    # architecture outermost, so a four-directory cut reads release-x86,
+    # debug-x86, release-x64, debug-x64 and the readme's contents list comes
+    # out in that order too.
+    #
+    # One object per published directory, and everything that used to be
+    # derived from the flavour word alone hangs off it: which obj tree the
+    # binary is built into, which INF the package is staged around, what
+    # make-package.ps1 is asked for, and what the directory is called.
+    #
+    param([string[]]$Flavors, [string[]]$Arches)
+    $out = New-Object System.Collections.ArrayList
+    foreach ($a in $Arches) {
+        foreach ($f in $Flavors) {
+            [void]$out.Add([pscustomobject]@{
+                Id      = "$f-$a"
+                Dir     = "$f-$a"
+                Flavor  = $f
+                Arch    = $a
+                PkgArch = $archPkgName[$a]
+                ObjDir  = ("src\" + $objDirName[$f] + "\" + $archDirName[$a])
+                InfPath = $archInfPath[$a]
+            })
+        }
+    }
+    return @($out)
+}
 
 function Format-Wrapped {
     # Greedy word wrap with a separate first-line and continuation prefix, so a
@@ -949,8 +1020,9 @@ function New-UploadSet {
 Every directory in the published tree that carries $infName is install media, and
 the upload set carries all of them - so completing only some would ship a
 directory holding this project's two files and neither of Microsoft's, which is
-the incomplete-media defect the layout checks exist to prevent. Either name every
-flavour with -Flavor, or leave -Flavor at its default.
+the incomplete-media defect the layout checks exist to prevent. Name every one of
+them - -Flavor for the flavours and -Arch for the architectures - or leave both at
+their defaults.
 "@
     }
 
@@ -966,6 +1038,15 @@ flavour with -Flavor, or leave -Flavor at its default.
     # come from the OS now - and check-inf.ps1 refuses an INF or a package that
     # names one, so the refusal below is what keeps a fourth file from riding
     # along without anyone choosing it.
+    # **One INF answers for every published directory here, and what makes that
+    # sound is a check elsewhere.** Since roadmap task 21.3 a cut may hold two
+    # architectures' INFs, which differ in their decorations; what this parse
+    # is used for is the media LAYOUT - which file sits where on the disk - and
+    # the two agree about that because scripts\inf-gate\test-inf-checks.ps1
+    # compares their [SourceDisksFiles] and [SourceDisksNames] directly and
+    # fails if they ever stop agreeing. Each directory is still checked against
+    # the layout individually below; this is where the layout comes from, not a
+    # substitute for checking.
     $mediaLayout = Get-DeclaredMediaLayout `
         -InfPath (Join-Path $PublishedRoot (Join-Path $Flavors[0] $infName)) `
         -Label "the published $infName"
@@ -1236,20 +1317,40 @@ To cut one, run this script without it.
 "@
         }
 
-        foreach ($f in $Flavor) {
-            $pubDir = Join-Path $finalRoot $f
+        #
+        # -UploadSetOnly re-assembles the download for a version that is already
+        # published, so what it must name is the directories that cut actually
+        # wrote. A cut made before this task wrote `release\` and `debug\`; one
+        # made after writes `release-x86\` and so on. Rather than guess, take
+        # the leg names this run was asked for and fall back to the bare flavour
+        # word when the published tree has that instead - which is what the four
+        # already-cut versions under releases\ hold, and releases\README.md's
+        # write-once rule says they keep.
+        #
+        $legs = New-ReleaseLegs -Flavors $Flavor -Arches $Arch
+        $legDirs = @()
+        foreach ($leg in $legs) {
+            $pubDir = Join-Path $finalRoot $leg.Dir
+            $dirName = $leg.Dir
             if (-not (Test-Path -LiteralPath $pubDir)) {
-                throw "'$finalRoot' has no $f\ directory, so $Version was not published with that flavour."
+                $legacy = Join-Path $finalRoot $leg.Flavor
+                if ($leg.Arch -eq "x86" -and (Test-Path -LiteralPath $legacy)) {
+                    $pubDir = $legacy
+                    $dirName = $leg.Flavor
+                } else {
+                    throw "'$finalRoot' has no $($leg.Dir)\ directory, so $Version was not published with that flavour and architecture."
+                }
             }
             foreach ($name in $publishable) {
                 if (-not (Test-Path -LiteralPath (Join-Path $pubDir $name))) {
                     throw "'$pubDir' has no '$name', so it is not a published flavour directory of $Version."
                 }
             }
-            Write-Ok ("{0}\: '{1}' holds the published binary and INF" -f $f, $pubDir)
+            $legDirs += $dirName
+            Write-Ok ("{0}\: '{1}' holds the published binary and INF" -f $dirName, $pubDir)
         }
 
-        $set = New-UploadSet -PublishedRoot $finalRoot -Version $Version -Flavors $Flavor `
+        $set = New-UploadSet -PublishedRoot $finalRoot -Version $Version -Flavors $legDirs `
                              -PkgDirs @{} -UploadDir $UploadDir -Repo $repo `
                              -Publishable $publishable
 
@@ -1393,22 +1494,32 @@ readme.txt prints it beside the history entry, so the two cannot disagree.
     # Gating it here rather than at the point of use follows the changelog check
     # above: there is no value in building two flavours around a release that
     # will be rejected, and both builds run the full host suite.
+    # **Per architecture, because there are two INFs.** Each declares its own
+    # media, and each is checked on its own terms rather than one standing in
+    # for the other. The two do agree today - scripts\inf-gate\test-inf-checks.ps1
+    # compares their [SourceDisksFiles] directly - and this loop is what makes
+    # that agreement something the publisher rests on rather than assumes.
     $publishableKeys = @($publishable | ForEach-Object { $_.ToLowerInvariant() })
-    $declaredLayout = Get-DeclaredMediaLayout -InfPath $infPath -Label "src\xhci98.inf"
-    Assert-PublishableAtMediaRoot -Layout $declaredLayout -PublishableKeys $publishableKeys `
-                                  -InfName "xhci98.inf" -Label "src\xhci98.inf"
-    Write-Ok "src\xhci98.inf puts xhci98.sys and xhci98.inf at the media root, where a release directory carries them"
-
-    # The same split the assembly makes, made once here so the build loop below
-    # can hold each package to it as soon as make-package.ps1 returns.
     $declaredExpected = @{}
     $declaredPublished = @{}
-    foreach ($name in $declaredLayout.Keys) {
-        if ($name -in $publishableKeys) {
-            $declaredPublished[$name] = $declaredLayout[$name]
-        } else {
-            $declaredExpected[$name] = $declaredLayout[$name]
+    foreach ($a in $Arch) {
+        $archInf = Join-Path $repo $archInfPath[$a]
+        $layoutA = Get-DeclaredMediaLayout -InfPath $archInf -Label $archInfPath[$a]
+        Assert-PublishableAtMediaRoot -Layout $layoutA -PublishableKeys $publishableKeys `
+                                      -InfName "xhci98.inf" -Label $archInfPath[$a]
+        Write-Ok ("{0} puts xhci98.sys and xhci98.inf at the media root, where a release directory carries them" -f $archInfPath[$a])
+
+        # The same split the assembly makes, made once per architecture here so
+        # the build loop below can hold each package to it as soon as
+        # make-package.ps1 returns.
+        $expectedA = @{}
+        $publishedA = @{}
+        foreach ($name in $layoutA.Keys) {
+            if ($name -in $publishableKeys) { $publishedA[$name] = $layoutA[$name] }
+            else                            { $expectedA[$name] = $layoutA[$name] }
         }
+        $declaredExpected[$a] = $expectedA
+        $declaredPublished[$a] = $publishedA
     }
 
     # **And where the upload set would land, which is knowable now.** Checked
@@ -1426,8 +1537,10 @@ readme.txt prints it beside the history entry, so the two cannot disagree.
     $makePackage = Join-Path $PSScriptRoot "make-package.ps1"
     $staged = @{}
 
-    foreach ($f in $Flavor) {
-        Write-Step ("make-package.ps1 -Flavor {0}" -f $f)
+    $legs = New-ReleaseLegs -Flavors $Flavor -Arches $Arch
+    foreach ($leg in $legs) {
+        $f = $leg.Flavor
+        Write-Step ("make-package.ps1 -Flavor {0} -Arch {1}" -f $f, $leg.PkgArch)
 
         # **-OutDir is passed, not left to default.** The package this script
         # publishes from is read at $PackageRoot, so the package it *builds*
@@ -1437,9 +1550,10 @@ readme.txt prints it beside the history entry, so the two cannot disagree.
         # out\pkg-release at the same version with the right VS_FF_DEBUG flag
         # passes every check this script makes, while the build that actually
         # ran is discarded. Review finding 4.
-        $pkgDirForBuild = Join-Path $PackageRoot ("pkg-" + $f)
+        $pkgDirForBuild = Join-Path $PackageRoot ("pkg-" + $f + "-" + $leg.PkgArch)
         $pkgArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                     $makePackage, "-Flavor", $f, "-OutDir", $pkgDirForBuild)
+                     $makePackage, "-Flavor", $f, "-Arch", $leg.PkgArch,
+                     "-OutDir", $pkgDirForBuild)
         if ($NoTargetEvidence) { $pkgArgs += "-NoTargetEvidence" }
         # ErrorActionPreference relaxed across the call, as every other native
         # call in this script does and this one did not until the 2026-09-07
@@ -1458,14 +1572,14 @@ readme.txt prints it beside the history entry, so the two cannot disagree.
         }
         if ($LASTEXITCODE -ne 0) {
             throw @"
-make-package.ps1 failed for the $f flavour, so there is nothing to release.
-Do not work around this by copying src\$($objDirName[$f])\i386\xhci98.sys by hand: the gates it
+make-package.ps1 failed for the $($leg.Id) leg, so there is nothing to release.
+Do not work around this by copying $($leg.ObjDir)\xhci98.sys by hand: the gates it
 runs are what stand between a broken binary and a guest that cannot boot.
 "@
         }
 
-        $pkgDir = Join-Path $PackageRoot ("pkg-" + $f)
-        $destDir = Join-Path $destRoot $f
+        $pkgDir = $pkgDirForBuild
+        $destDir = Join-Path $destRoot $leg.Dir
         Ensure-Directory $ReleasesDir
         Ensure-Directory $destRoot
         Ensure-Directory $destDir
@@ -1484,9 +1598,9 @@ runs are what stand between a broken binary and a guest that cannot boot.
         # runs after it, and a refusal there leaves a written-once version
         # directory published with no asset. Review round 5, which
         # is the second instance of that shape in this loop.
-        Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected `
-                                           -PublishedPaths $declaredPublished `
-                                           -InfName "xhci98.inf" -Flavor $f
+        Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
+                                           -PublishedPaths $declaredPublished[$leg.Arch] `
+                                           -InfName "xhci98.inf" -Flavor $leg.Id
 
         $sys = Join-Path $destDir "xhci98.sys"
         $info = (Get-Item -LiteralPath $sys).VersionInfo
@@ -1496,8 +1610,8 @@ runs are what stand between a broken binary and a guest that cannot boot.
         # build cannot be published under a version it was never built as.
         if (-not (Test-DriverVersionMatches -Reported $info.FileVersion -Declared $Version)) {
             throw @"
-the binary for $f\ reports FileVersion '$($info.FileVersion)', not $Version.
-Rebuild with scripts\build-driver.cmd $f before releasing.
+the binary for $($leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version.
+Rebuild with scripts\build-driver.cmd $f$(if ($leg.Arch -eq "x64") { " -amd64" }) before releasing.
 "@
         }
 
@@ -1510,9 +1624,9 @@ Rebuild with scripts\build-driver.cmd $f before releasing.
         $expectDebug = ($f -eq "debug")
         if ($info.IsDebug -ne $expectDebug) {
             throw @"
-the binary about to be published as $f\ has VS_FF_DEBUG = $($info.IsDebug), expected $expectDebug.
-That is the wrong obj directory: src\objchk\i386 is the debug build and
-src\objfre\i386 is the release one. Rebuild the flavour you meant.
+the binary about to be published as $($leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug), expected $expectDebug.
+That is the wrong obj directory: src\objchk\$($archDirName[$leg.Arch]) is the debug build and
+src\objfre\$($archDirName[$leg.Arch]) is the release one. Rebuild the flavour you meant.
 "@
         }
 
@@ -1527,7 +1641,7 @@ src\objfre\i386 is the release one. Rebuild the flavour you meant.
         if ($publishedFlavour -ne $f) {
             $found = if ($publishedFlavour -eq "") { "none" } else { $publishedFlavour }
             throw @"
-the binary about to be published as $f\ carries the '$found' flavour marker.
+the binary about to be published as $($leg.Dir)\ carries the '$found' flavour marker.
 Only release and debug may be published; qemu carries the port-0xE9 mirror
 (HAL.dll!WRITE_PORT_UCHAR), the sole import delta of the build that gave the
 ThinkPad E460 a Code 2 under Windows 98 SE, and it is never shipped. Rebuild the flavour you
@@ -1570,7 +1684,7 @@ meant: scripts\build-driver.cmd $f
         # this check took the "no stamp" path on every ordinary release, and
         # would have gone on taking it with the sources changed underneath.
         $stampScript = Join-Path $repo "scripts\source-stamp.ps1"
-        $objRoot = Join-Path $repo ("src\" + $objDirName[$f] + "\i386")
+        $objRoot = Join-Path $repo $leg.ObjDir
         $builtSys = Join-Path $objRoot "xhci98.sys"
 
         # And a stamp only speaks for the binary it sits beside, so the staged
@@ -1578,16 +1692,16 @@ meant: scripts\build-driver.cmd $f
         # src\obj*\i386\xhci98.sys while some other file ships.
         if (-not (Test-Path -LiteralPath $builtSys)) {
             throw @"
-the $f binary about to be published has no counterpart at
-$builtSys, so nothing ties it to the sources in src\. Build the flavour you
-meant: scripts\build-driver.cmd $f
+the $($leg.Id) binary about to be published has no counterpart at
+$builtSys, so nothing ties it to the sources in src\. Build the leg you
+meant: scripts\build-driver.cmd $f$(if ($leg.Arch -eq "x64") { " -amd64" })
 "@
         }
         $builtHash = (Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash
         $stagedHash = (Get-FileHash -LiteralPath $sys -Algorithm SHA256).Hash
         if ($builtHash -ne $stagedHash) {
             throw @"
-the binary about to be published as $f\ is not the one in
+the binary about to be published as $($leg.Dir)\ is not the one in
 $builtSys ($stagedHash vs $builtHash), so the source stamp beside that build
 says nothing about the bytes being shipped. Re-run the packager against the
 build you mean: scripts\build-driver.cmd $f
@@ -1600,7 +1714,7 @@ build you mean: scripts\build-driver.cmd $f
             $stampCode = $LASTEXITCODE
             if ($stampCode -eq 1) {
                 throw @"
-the binary about to be published as $f\ was built from sources this tree no
+the binary about to be published as $($leg.Dir)\ was built from sources this tree no
 longer holds:
 $($stampOut -join "`n")
 Rebuild it (scripts\build-driver.cmd $f) so the published bytes are ones the
@@ -1628,13 +1742,14 @@ invalidate readings already taken on these exact bytes - say so:
             } elseif ($stampCode -ne 0) {
                 throw "scripts\source-stamp.ps1 -Check '$objRoot' failed: $($stampOut -join "`n")"
             } else {
-                Write-Ok "$f binary matches the sources in src\"
+                Write-Ok "$($leg.Id) binary matches the sources in src\"
             }
         }
 
-        $staged[$f] = [pscustomobject]@{
+        $staged[$leg.Id] = [pscustomobject]@{
             Flavor    = $f
-            Published = $f
+            Arch      = $leg.Arch
+            Published = $leg.Dir
             Path      = $sys
             Dir       = $destDir
             # Kept so the upload set can take any file the INF declares beyond
@@ -1855,12 +1970,27 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
                    "beside it and than that header") -f $snapVersion, $snapSchemaTool)
     }
 
+    #
     # Two flavours that hash the same are one binary published twice. The
     # VS_FF_DEBUG check above already makes that nearly impossible, which is the
     # reason to keep this: it is the check that fails if that one is ever
     # weakened, and it costs nothing.
-    if ($staged.Count -eq 2 -and $staged["release"].Sha256 -eq $staged["debug"].Sha256) {
-        throw "the release and debug binaries are identical - one build was packaged twice."
+    #
+    # **Compared WITHIN an architecture, and it has to be.** The x86 and x64
+    # binaries of the same flavour are different builds of different machine
+    # code and could never hash alike, so a flat comparison across four staged
+    # files would find every pair distinct and say nothing - while the pair
+    # this check exists for, release and debug of one architecture, would be
+    # buried among them. Two comparisons, each of the pair that could actually
+    # collide.
+    #
+    foreach ($a in $Arch) {
+        $rel = "release-$a"
+        $dbg = "debug-$a"
+        if ($staged.ContainsKey($rel) -and $staged.ContainsKey($dbg) -and
+            $staged[$rel].Sha256 -eq $staged[$dbg].Sha256) {
+            throw "the release and debug $a binaries are identical - one build was packaged twice."
+        }
     }
 
     # --- the per-version README ---------------------------------------------
@@ -1897,19 +2027,38 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         if ($_ -match '^##\s') { "#" + $_ } else { $_ }
     })
 
+    #
+    # One block per published directory, in leg order. The architecture is named
+    # in the heading rather than left to the directory name alone, because the
+    # user reading this has to pick one and the two directories differ in
+    # nothing a file listing shows: same two filenames, same version, same INF
+    # text apart from its decorations.
+    #
+    # A wrong pick is safe and is said so plainly. It is not a claim about
+    # taste - the 64-bit setup engine ignores an undecorated models section
+    # outright and the 32-bit engines skip an NTamd64-decorated one, so the
+    # wrong directory offers no driver at all rather than installing one that
+    # cannot load.
+    #
+    $multiArch = @($legs | ForEach-Object { $_.Arch } | Sort-Object -Unique).Count -gt 1
     $contents = @()
-    foreach ($f in @("release", "debug")) {
-        if (-not $staged.ContainsKey($f)) { continue }
-        $s = $staged[$f]
-        if ($f -eq "release") {
-            $contents += ("  {0}\  - INSTALL THIS ONE" -f $s.Published.ToUpper())
+    foreach ($leg in $legs) {
+        if (-not $staged.ContainsKey($leg.Id)) { continue }
+        $s = $staged[$leg.Id]
+        $which = if ($leg.Arch -eq "x64") { "64-bit Windows" } else { "32-bit Windows" }
+        if ($leg.Flavor -eq "release") {
+            if ($multiArch) {
+                $contents += ("  {0}\  - INSTALL THIS ONE, on {1}" -f $s.Published.ToUpper(), $which)
+            } else {
+                $contents += ("  {0}\  - INSTALL THIS ONE" -f $s.Published.ToUpper())
+            }
             $contents += ""
             $contents += "  The normal driver. This is the one you want."
         } else {
             $contents += ("  {0}\  - only when diagnosing a problem" -f $s.Published.ToUpper())
             $contents += ""
             $contents += "  The same driver, built so that a crash on it can be traced"
-            $contents += "  further back. It records nothing more than RELEASE\ does, and"
+            $contents += ("  further back. It records nothing more than {0}\ does, and" -f ("release-" + $leg.Arch).ToUpper())
             $contents += "  it prints nothing as it runs. It is here only so that it can be"
             $contents += "  installed at this exact version if something goes wrong. Do not"
             $contents += "  install it otherwise - and note that BOTH builds answer"
@@ -1920,6 +2069,13 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $contents += ("      xhci98.sys   {0:N0} bytes" -f $s.Length)
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.Sha256)
+        $contents += ""
+    }
+    if ($multiArch) {
+        $contents += "  Which pair: the -X86 directories are for 32-bit Windows and the"
+        $contents += "  -X64 ones for 64-bit Windows. If you pick the wrong one nothing"
+        $contents += "  breaks - Windows simply finds no driver in it and says so - so"
+        $contents += "  try the other."
         $contents += ""
     }
     if ($null -ne $qualtoolStaged) {
@@ -1962,6 +2118,36 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
     $contents += "  what in the wider project is third-party material and is NOT"
     $contents += "  covered by it. The LICENCE section at the end points here."
     $contents += ""
+
+    #
+    # **The install section names the directories this cut actually wrote.**
+    # Since roadmap task 21.3 those are RELEASE-X86 and DEBUG-X86, and a cut
+    # carrying both architectures has four. A one-architecture cut names its
+    # pair outright, which is what a reader wants; a two-architecture one names
+    # the pair for the architecture-neutral case and adds a paragraph saying
+    # how to choose, because there is then no single directory to point at.
+    #
+    # Hardcoding RELEASE\ here is what this replaces, and it would have been
+    # wrong in the quietest possible way: a readme telling a user to install
+    # from a directory the download does not contain.
+    #
+    $readmeArches = @($legs | ForEach-Object { $_.Arch } | Sort-Object -Unique)
+    if ($readmeArches.Count -eq 1) {
+        $readmeReleaseDir = ("release-" + $readmeArches[0]).ToUpper()
+        $readmeDebugDir   = ("debug-" + $readmeArches[0]).ToUpper()
+        $readmeArchNote   = ""
+    } else {
+        $readmeReleaseDir = "RELEASE-X86 or RELEASE-X64"
+        $readmeDebugDir   = "DEBUG-X86 or DEBUG-X64"
+        $readmeArchNote   = @"
+
+
+There are two of each, one per architecture: the -X86 directories are for
+32-bit Windows and the -X64 ones for 64-bit Windows. If you pick the wrong
+one nothing breaks - Windows finds no driver in it and says so - so try the
+other.
+"@
+    }
 
     # Plain text, 78 columns. Not markdown: this is read on the target machine,
     # in Windows 98 Notepad or DOS EDIT, where a .md file renders as nothing and
@@ -2270,15 +2456,15 @@ C:\WINDOWS\SYSTEM32\DRIVERS yourself.
  4. INSTALL
 ==============================================================================
 
-INSTALL FROM THE RELEASE\ DIRECTORY. This package carries BOTH builds side by
-side - RELEASE\ and DEBUG\, each a complete set of files with the same names -
-so the directory you point Windows at is what decides which driver you get.
-RELEASE\ is the one you want. DEBUG\ is the same driver built so that a
-crash on it can be traced further back. It records nothing more than
-RELEASE\ does, and it is there only for troubleshooting a machine that has
-already gone wrong. It prints nothing as it runs. Section 8 describes both,
-and nothing about a copied file says which one it is - so point at a
-directory, never at a loose xhci98.sys.
+INSTALL FROM THE {RELEASEDIR}\ DIRECTORY. This package carries BOTH builds
+side by side - {RELEASEDIR}\ and {DEBUGDIR}\, each a complete set of files
+with the same names - so the directory you point Windows at is what decides
+which driver you get. {RELEASEDIR}\ is the one you want. {DEBUGDIR}\ is the
+same driver built so that a crash on it can be traced further back. It
+records nothing more than {RELEASEDIR}\ does, and it is there only for
+troubleshooting a machine that has already gone wrong. It prints nothing as
+it runs. Section 8 describes both, and nothing about a copied file says which
+one it is - so point at a directory, never at a loose xhci98.sys.{ARCHNOTE}
 
 Put the whole unzipped package somewhere the machine can read - a floppy, a
 CD, a shared folder - then:
@@ -2307,7 +2493,7 @@ CD, a shared folder - then:
       it sits unclaimed with a yellow mark, usually under "Other devices".
       Then
           Properties -> Driver -> Update Driver -> Specify a location
-      and point it at the RELEASE\ directory. During the copy, on a machine
+      and point it at the {RELEASEDIR}\ directory. During the copy, on a machine
       that never had a USB controller Windows recognised, "Insert Disk"
       asks for the Windows 98 Second Edition CD-ROM: that is Windows
       fetching its own usbd.sys, usbhub.sys and usbui.dll (section 3).
@@ -2317,7 +2503,7 @@ CD, a shared folder - then:
       the other two, so the same CD answers it.
 
       (If Windows finds the controller for you first, the Add New Hardware
-      Wizard asks the same question - give it RELEASE\ too.)
+      Wizard asks the same question - give it {RELEASEDIR}\ too.)
 
   WINDOWS ME
       SweetLow's stack has to be there first, and only that one: NUSB is a
@@ -2326,21 +2512,21 @@ CD, a shared folder - then:
       right-click the USB2.INF at its root, choose Install, and reboot.
       Then the same Device Manager route as Windows 98 SE:
           Properties -> Driver -> Update Driver -> Specify a location
-      pointed at the RELEASE\ directory. Without the stack the driver
+      pointed at the {RELEASEDIR}\ directory. Without the stack the driver
       installs and the controller shows Code 2. Windows ME has only been
       run in a virtual machine.
 
   WINDOWS 2000 SP4
       Open Device Manager and find the unrecognised xHCI controller, then
           Properties -> Driver -> Update Driver -> Have Disk
-      and point it at the RELEASE\ directory. Nothing else is asked for;
+      and point it at the {RELEASEDIR}\ directory. Nothing else is asked for;
       usbport.sys, usbd.sys, usbhub.sys and usbui.dll come from the driver
       cache every installation has.
 
   WINDOWS XP (32-BIT)
       The same route as Windows 2000 SP4:
           Properties -> Driver -> Update Driver -> Have Disk
-      pointed at the RELEASE\ directory; choose "Continue Anyway" at the
+      pointed at the {RELEASEDIR}\ directory; choose "Continue Anyway" at the
       unsigned-driver warning. Nothing else is asked for. Windows XP has
       only been run in a virtual machine.
 
@@ -2836,6 +3022,9 @@ $(($missingTools | ForEach-Object { "      " + $_ }) -join "`r`n")
     $readme = $template.
         Replace("{VERSION}", $Version).
         Replace("{DATE}", $today).
+        Replace("{RELEASEDIR}", $readmeReleaseDir).
+        Replace("{DEBUGDIR}", $readmeDebugDir).
+        Replace("{ARCHNOTE}", $readmeArchNote).
         Replace("{INCOMPLETE}", $incomplete).
         Replace("{CONTENTS}", (($contents -join "`r`n").TrimEnd() + "`r`n")).
         Replace("{HISTORY}", (($historyText -join "`r`n").TrimEnd()))
@@ -3454,9 +3643,16 @@ after checkout. Restore it with:  git checkout -- LICENSE
     $uploadRoot = $null
     $uploadZip = $null
     if (-not $SkipUploadSet) {
+        # Keyed by published directory name, which is what New-UploadSet walks:
+        # to it a "flavour" is the name of a directory in the published tree,
+        # and since this task that name carries the architecture too.
         $pkgDirs = @{}
-        foreach ($f in $Flavor) { $pkgDirs[$f] = $staged[$f].PkgDir }
-        $set = New-UploadSet -PublishedRoot $destRoot -Version $Version -Flavors $Flavor `
+        $legDirs = @()
+        foreach ($leg in $legs) {
+            $pkgDirs[$leg.Dir] = $staged[$leg.Id].PkgDir
+            $legDirs += $leg.Dir
+        }
+        $set = New-UploadSet -PublishedRoot $destRoot -Version $Version -Flavors $legDirs `
                              -PkgDirs $pkgDirs -UploadDir $UploadDir -Repo $repo `
                              -Publishable $publishable
         $uploadRoot = $set.Root
@@ -3470,10 +3666,10 @@ after checkout. Restore it with:  git checkout -- LICENSE
         Write-Host ("  {0,-28} {1,9} B" -f $shown, $item.Length)
     }
     Write-Host ""
-    foreach ($f in @("release", "debug")) {
-        if ($staged.ContainsKey($f)) {
-            Write-Ok ("{0}\xhci98.sys is the {1} build (VS_FF_DEBUG = {2})" -f `
-                $staged[$f].Published, $f, ($f -eq "debug"))
+    foreach ($leg in $legs) {
+        if ($staged.ContainsKey($leg.Id)) {
+            Write-Ok ("{0}\xhci98.sys is the {1} {2} build (VS_FF_DEBUG = {3})" -f `
+                $staged[$leg.Id].Published, $leg.Arch, $leg.Flavor, ($leg.Flavor -eq "debug"))
         }
     }
     if ($null -eq $qualtoolStaged) {
@@ -3485,7 +3681,7 @@ after checkout. Restore it with:  git checkout -- LICENSE
 
     Write-Step "Done"
     Write-Host "Tracked:    $destRoot"
-    Write-Host "            Two files per flavour - this project's own. Commit this."
+    Write-Host "            Two files per published directory - this project's own. Commit this."
     if ($null -ne $uploadRoot) {
         Write-Host ""
         Write-Host "Upload:     $uploadZip"

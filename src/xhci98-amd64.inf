@@ -1,0 +1,231 @@
+; xhci98-amd64.inf - xHCI USB host controller miniport, the 64-bit package
+;
+; This is the SECOND INF, and it is deliberately a separate file rather than a
+; third install path inside src\xhci98.inf. The decision is design record 11
+; section 12 decision 2, taken 2026-09-09: merging would have meant widening
+; [Manufacturer] from "%Mfg%=XhciModels" to "%Mfg%=XhciModels,NTx86,NTamd64",
+; and that single line is the one Windows 98's 16-bit engine parses to find its
+; models section. Whether that engine reads only the first field is exactly the
+; sort of thing this tree refuses to assume about a file it documents as a
+; silent gate in both directions, and assuming it wrongly costs a full re-run
+; of all four existing install legs - 98, ME, 2000, XP32 - to prove nothing
+; broke. A separate package costs a second INF to keep in sync and no
+; re-validation at all. src\xhci98.inf is therefore untouched by this file's
+; existence, and Windows 98's engine is never asked the question.
+;
+; What it installs is the amd64 xhci98.sys, built by
+; "scripts\build-driver.cmd <flavor> -amd64" into src\obj<flavour>\amd64\, on
+; the NT 5.2 amd64 target: Windows XP Professional x64 and Windows Server 2003
+; x64, which are one target and not two (both are NT 5.2.3790, and WDK 7.1
+; ships lib\wxp\i386 with no amd64 counterpart, so WNET is the only route to a
+; 64-bit driver for them). Task 21.7 read the same six ABI measurements on
+; Vista x64 and Windows 7 x64 and all six pass there too, so nothing in this
+; file narrows to NT 5.2 - but those two enforce kernel-mode code signing and
+; are a separate leg with guests of their own.
+;
+; ------------------------------------------------------------------
+; Why every section here is decorated, and what a wrong pick costs
+; ------------------------------------------------------------------
+;
+; A wrong pick fails cleanly in BOTH directions, which is what makes the four
+; flat payload directories (release-x86, debug-x86, release-x64, debug-x64)
+; safe rather than a trap:
+;
+;   - a 32-bit engine reading THIS file finds no undecorated models section and
+;     no .NTx86 one. Windows 98's engine takes [Manufacturer]'s first field,
+;     looks for [XhciModels], and finds nothing to install; Windows 2000 and
+;     32-bit XP skip a %Mfg% line whose TargetOSVersion is NTamd64 outright.
+;     Either way the answer is "this INF offers no driver", not "here is a
+;     64-bit binary for your 32-bit machine".
+;   - a 64-bit engine reading src\xhci98.inf finds an undecorated models
+;     section, which it ignores outright, and a .NTx86 one, which is not its
+;     architecture.
+;
+; So there is deliberately NO undecorated [Xhci.Dev] and NO [DefaultInstall]
+; in this file. Either would be a section a 32-bit engine falls back to - and
+; setupapi's decorated-section lookup does fall back - which would copy an
+; amd64 xhci98.sys onto a 32-bit machine and create a service pointing at it.
+; scripts\inf-gate\check-inf.ps1 -Arch amd64 refuses both by name (PATH-NO9X,
+; OS-DEFAULT); they are not omissions to be tidied up later.
+;
+; The install sections carry .NTamd64 rather than the plain .NT that
+; Microsoft's own tools\winxp64-extracted\usbport.inf uses. That file is one
+; INF for two architectures and shares its install sections between them; this
+; one is single-architecture, so the more specific decoration says what it
+; means and leaves no section any other engine can reach.
+;
+; ------------------------------------------------------------------
+; The files the OS supplies, and where they come from on this target
+; ------------------------------------------------------------------
+;
+; The same four files as the 32-bit NT path, by the same LayoutFile route,
+; with the same flag 16 (COPYFLG_NO_OVERWRITE), and for the same reasons -
+; src\xhci98.inf states them at length and they are not restated here. What IS
+; specific to this target, read statically on 2026-09-09 from the owner's
+; "Win XP SP2 VL x64" media (7-Zip on the ISO and on its two cabinets; nothing
+; executed), is which disk and which cabinet each row resolves to. AMD64\
+; LAYOUT.INF, with [SourceDisksNames.amd64] giving disk 1 = \amd64 on the base
+; CD and disk 100 = \amd64 on the service-pack source:
+;
+;   usbport.sys = 100,,212480,,,,4_,4,1,3,,1,4    AMD64\SP2.CAB    212,480 B
+;   usbhub.sys  = 100,,102400,,,,4_,4,1,3,,1,4    AMD64\SP2.CAB    102,400 B
+;   usbd.sys    =   1,,222222,,,,4_,4,1,3,,1,4    AMD64\DRIVER.CAB   7,552 B
+;   usbui.dll   =   1,,222222,,,,,2,1,3           AMD64\DRIVER.CAB 123,392 B
+;
+; The three sizes that can be cross-checked match tools\winxp64-extracted\
+; exactly, which is what authenticates the reading. The last three fields are
+; the text-mode Setup disposition: 4,1,3 and 2,1,3 both mean "do not copy at
+; Setup", so an xHCI-only install has none of the four on disk - measured, not
+; assumed, on the task 21.5 guest: usbport.sys, usbhub.sys, usbehci.sys and
+; usbd.sys are absent from vm\winxp64.img including dllcache (2026-09-08), and
+; usbui.dll is absent from it too (2026-09-09). Both cabinets sit in
+; WINDOWS\Driver Cache\amd64 on every install, so the engine resolves a disk-1
+; row and disk-100 rows in one pass with no CD, which is the arrangement
+; Windows 2000 was already read doing on 2026-09-07.
+;
+; Two differences from 32-bit XP, both of which cost nothing here but are
+; worth having written down: usbd.sys comes from DRIVER.CAB rather than the
+; service-pack cabinet, and on 32-bit XP it was on disk already as a
+; 4,736-byte stub where on x64 it is not on disk at all.
+;
+; usbhub20.sys is on no path, as on every other target: XP x64's LAYOUT.INF
+; has no row for it at all, so a row here would have no source.
+;
+; ------------------------------------------------------------------
+; What this file must keep in sync with src\xhci98.inf
+; ------------------------------------------------------------------
+;
+; The accepted cost of decision 2 is that two files now carry one package's
+; facts. That cost is mechanised rather than left to care:
+; scripts\inf-gate\test-inf-checks.ps1 compares the two INFs directly and
+; fails if they disagree about the hardware ID, the service name, the service
+; install's five values, the driver binary's name, the per-device registry
+; values and their defaults, the machine-wide selective-suspend value, the
+; OS-supplied file list and its flags, or any [Strings] token they share.
+; DriverVer is tied to src\xhci_version.h from both files by the gate itself.
+; If a change to one of those belongs in one file only, the check is what will
+; make you say so out loud.
+
+[Version]
+Signature="$CHICAGO$"
+Class=USB
+ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
+Provider=%Provider%
+LayoutFile=layout.inf
+; Must equal src\xhci_version.h, exactly as src\xhci98.inf's line must - the
+; two packages are one release and are cut from one version. The INF gate
+; refuses either disagreeing with the header.
+DriverVer=09/09/2026,1.1.0.0
+
+; The TargetOSVersion field is what makes this file 64-bit-only, and it is the
+; whole of the difference from src\xhci98.inf's undecorated line. It is also
+; why the models section below is [XhciModels.NTamd64] and not [XhciModels]:
+; the engine appends the decoration it matched.
+[Manufacturer]
+%Mfg%=XhciModels,NTamd64
+
+[XhciModels.NTamd64]
+%XhciDesc%=Xhci.Dev,PCI\CC_0C0330
+
+[SourceDisksNames]
+1=%DiskName%,xhci98.sys,,
+
+; Only this project's two files, under the same names they have on the 32-bit
+; media: the two architectures' binaries share a filename, which is why they
+; cannot share a directory and why the payload is four self-contained ones.
+[SourceDisksFiles]
+xhci98.sys=1
+xhci98.inf=1
+
+; Dirid 10 + System32\Drivers for the drivers, and dirid 11 for usbui.dll,
+; which is a user-mode property-page DLL and not a driver. On this target
+; dirid 11 is the 64-bit system directory, so the amd64 usbui.dll out of
+; AMD64\DRIVER.CAB is the build that lands there.
+;
+; There is no Inf.CopyFiles here. On the 32-bit media the 9x right-click
+; Install copies the INF into %17%; the NT engines keep their own oemN.inf
+; copy, so copying it as well would leave two INFs claiming PCI\CC_0C0330.
+; This file has no 9x path, so the section has no route that wants it.
+[DestinationDirs]
+DefaultDestDir=10
+Xhci.CopyFiles=10,System32\Drivers
+Xhci.CopyNT=10,System32\Drivers
+Xhci.CopyUI=11
+
+; ------------------------------------------------------------------
+; NT 5.2 amd64 - the only install path in this file
+; ------------------------------------------------------------------
+
+[Xhci.Dev.NTamd64]
+AddReg=Xhci.AddReg.NT,Xhci.AddReg.Global
+CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI
+
+[Xhci.Dev.NTamd64.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+[Xhci.AddService]
+DisplayName=%XhciSvcDesc%
+ServiceType=1                       ; SERVICE_KERNEL_DRIVER
+StartType=3                         ; SERVICE_DEMAND_START
+ErrorControl=1                      ; SERVICE_ERROR_NORMAL
+ServiceBinary=%12%\xhci98.sys
+LoadOrderGroup=Base
+
+; The two log values, identical to the 32-bit file's NT half in name, type and
+; default, and read by the driver through the same usbport service. Both
+; default to 0: the safe configuration is the default and the convenience is
+; the thing asked for by name. src\xhci98.inf carries the full description of
+; what each rung does and why the door ships shut.
+[Xhci.AddReg.NT]
+HKR,,XhciLogVerbosity,0x00010001,0
+HKR,,XhciLogDebugView,0x00010001,0
+
+; The one machine-wide value, and the only one this package writes outside the
+; device's own key. Both routes into this target deliver it - the device
+; install above and the right-click Install below - for the reason the 32-bit
+; file gives: an install that aborts before its registry phase would otherwise
+; leave a machine that already had this driver without it. Every usbport build
+; this driver has run under reads it, and a halted xHC cannot report a
+; hot-plug.
+[Xhci.AddReg.Global]
+HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1
+
+; No temporary-name field on this row, unlike the 32-bit file's. That third
+; field exists for Windows 98's 16-bit engine, which cannot otherwise replace
+; a loaded binary, and it costs a cosmetic xhci98.tmp left in System32\Drivers.
+; The NT copy queue schedules a replacement of a file in use by itself, so on
+; this path the field would buy nothing and leave the same litter. Microsoft's
+; own tools\winxp64-extracted\usbport.inf writes its bare rows the same way.
+[Xhci.CopyFiles]
+xhci98.sys
+
+[Xhci.CopyNT]
+usbport.sys,,,16
+usbd.sys,,,16
+usbhub.sys,,,16
+
+[Xhci.CopyUI]
+usbui.dll,,,16
+
+; Right-click Install - pre-stages the files with no device present. Decorated,
+; and with no undecorated counterpart, for the reason at the head of this file.
+[DefaultInstall.NTamd64]
+CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI
+AddReg=Xhci.AddReg.Global
+
+; ASCII only and CRLF throughout, as in src\xhci98.inf. Windows 98's parser is
+; not the reason here - it never reads this file - but the gate holds both to
+; one encoding rule, and a file that is 7-bit ASCII cannot have two codepages
+; disagree about it.
+;
+; The strings are deliberately the SAME as src\xhci98.inf's, not variants of
+; them. Only one of the two packages can ever install on a given machine, so a
+; user reading Device Manager, and a bug report quoting it, should say the same
+; thing whichever architecture is underneath. The self-tests compare every
+; shared token.
+[Strings]
+Provider="Yeo Kheng Meng"
+Mfg="xHCI98 Project"
+DiskName="xhci98 xHCI Miniport Disk"
+XhciDesc="USB 2.0 eXtensible Host Controller (xhci98)"
+XhciSvcDesc="xHCI USB 2.0 Host Controller Miniport (xhci98)"
