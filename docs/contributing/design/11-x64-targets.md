@@ -1353,6 +1353,19 @@ Modelled on Phase 19, which is the template for adding a VM-only target.
   carry in `AGENTS.md` and `docs/contributing/build-and-test.md` is the
   wording to reuse.
 
+  **Stated 2026-09-09 as task 21.6**, in `AGENTS.md` ("Project Purpose" and
+  the Quick Reference), `docs/contributing/build-and-test.md` ("Windows XP x64
+  target VM"), `docs/usb-xhci-info/win98-wdm.md` ("And Windows XP x64?"),
+  `docs/using/release-notes.md` and `README.md`, with
+  `docs/contributing/legal-provenance.md` section 3 carrying the provenance
+  and a note that a running guest does not upgrade a `static` reading. The
+  reused wording had to be qualified in one way the plan above did not
+  anticipate, and it is said in every one of those places: **this is the only
+  target that is not the same binary.** Two narrower qualifications travel
+  with it - only XP x64 was booted, Server 2003 x64 rests on the NT 5.2.3790
+  identity; and Vista x64 and Windows 7 x64 are outside the tier pending task
+  21.8, which is the open half of decision 1 in section 12.
+
 What Phase 19 predicts about where the trouble comes from is worth stating in
 advance, because it is the calibration this record rests on. For 32-bit XP the
 ABI was fine and the static pass was right, and the guest then produced three

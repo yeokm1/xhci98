@@ -1607,7 +1607,8 @@ what is left is whether a binary the static pass says should work can be made
 to install and load on systems that enforce kernel-mode code signing and stage
 drivers through a driver store.
 
-Status: open, 2026-09-09 - **checkpoint passed, task 21.6 outstanding.** It
+Status: open, 2026-09-09 - **checkpoint passed, the record written, and task
+21.8 the only thing left.** It
 opened on 2026-09-08 when the owner asked whether a WDK 7.1 build could give
 this driver 64-bit guests. Task 21.1 is complete: all six measurements are
 read and all six pass, so nothing in the ABI argues against Windows XP x64 and
@@ -1690,7 +1691,11 @@ written is that the binary has been observed running: in one virtual machine,
 on one guest, never on real hardware, and the x64 half of any cut carries
 exactly that standing against the x86 half's four install legs.
 
-**Two tasks are open, and the phase closes on both.** 21.6 is the record. 21.8
+**One task is open, and the phase closes on it.** 21.6, the record, was
+written on 2026-09-09: the tier is stated in `AGENTS.md`, `build-and-test.md`,
+`win98-wdm.md`, the release notes and `README.md`, and what it cost was
+saying in each of them the thing this tier does not share with the other four
+- that it is not the same binary. 21.8
 was added on 2026-09-09 on the owner's instruction and is a second guest leg:
 Vista x64 and Windows 7 x64, whose interface 21.7 already read and found
 nothing against. It is not a repeat of 21.5, because the two obstacles there
@@ -2063,9 +2068,40 @@ are static readings and no other task's box may be ticked on one.
         exactly three full re-enumerations of three devices. The silence and
         the trace are complementary: one proves which flavour is loaded, the
         other proves it is working
-- [ ] **21.6 - the record.** The tier stated where Windows ME and 32-bit XP
-      are stated, in `AGENTS.md`, `build-and-test.md`, `win98-wdm.md` and the
-      release notes, with the provenance rows beside it.
+- [x] **21.6 - the record. Done 2026-09-09.** The tier is stated where
+      Windows ME's and 32-bit XP's are stated: `AGENTS.md` "Project Purpose"
+      and its Quick Reference, `build-and-test.md` "Windows XP x64 target
+      VM", `win98-wdm.md`'s new "And Windows XP x64?" beside "What about
+      Windows XP?", and `docs/using/release-notes.md`. `README.md` took a row
+      in its own target table with them, because that table states the same
+      thing to the same reader. The provenance is beside it in
+      `legal-provenance.md` section 3, whose amd64 paragraph now records that
+      a 64-bit binary has *run* and that this upgrades no `static` tag - the
+      rows themselves (M7, M8, the two `LayoutFile` readings, the NT 5.2
+      amd64 material, WDK 7.1) were already there from 21.1-21.5.
+
+      **The wording could not simply be reused, and the difference is the
+      point of the entry: this is the only target that is not the same
+      binary.** Every one of those documents says so, because the sentence
+      the other four tiers rest on - one binary, coded to the Windows 98
+      export baseline, therefore safe everywhere above it - has nothing to
+      say about a kernel Windows 98 never had. Two narrower qualifications
+      travel with it: only XP x64 was booted, so Server 2003 x64 rests on the
+      NT 5.2.3790 identity rather than on a run of its own; and Vista x64 and
+      Windows 7 x64 are **outside** the tier, which is task 21.8's question
+      and the open half of design record 11's decision 1. Three further
+      places were corrected in the same pass rather than left to drift:
+      `AGENTS.md`'s "a single `xhci98.sys` binary" now says which targets it
+      means (design record 11 section 11 asked for exactly that),
+      `AGENTS.md`'s Compiler and DDK rows name WDK 7.1 as the amd64
+      toolchain, and `xhci-data-structures.md`'s "the driver runs 32-bit
+      only" is now the measurement it rests on (M5) rather than a claim the
+      amd64 build appears to contradict. The user-facing copy of the release
+      notes - `make-release.ps1`'s readme template, which the script's own
+      comment binds to that file - gained the same statements behind three
+      placeholders that render empty on an x86-only cut, because
+      `-UploadSetOnly` re-renders the readme of already-published versions
+      and every one of those is x86-only. Packager self-tests still pass.
 - [x] **21.7 - the same six measurements on Vista x64 and Windows 7 x64.**
       Read 2026-09-09, extraction and disassembly only, no VM and no build.
       **All six pass on both**, so one `WNET` amd64 binary can serve them as

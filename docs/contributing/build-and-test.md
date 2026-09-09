@@ -1828,6 +1828,29 @@ One `WNET` amd64 binary therefore serves both, and this one guest observes it.
 XP x64 is the target this phase takes because it does **not** enforce
 kernel-mode code signing, which Vista x64 and Windows 7 x64 both do.
 
+**The tier, stated where Windows ME's and 32-bit XP's are stated** (roadmap
+task 21.6): Windows XP x64 and Server 2003 x64 are supported in virtual
+machines, standing where Windows 2000, Windows ME and 32-bit Windows XP
+stand, with no checkpoint tax and never run on real hardware. What settles it
+is roadmap task 21.5, passed on this guest on 2026-09-09, and the owner's
+instruction the same day that `make-release.ps1 -Arch` default to both
+architectures - publishing the 64-bit package by default is what claiming the
+target means here. `AGENTS.md`, "Project Purpose", states it;
+`docs/usb-xhci-info/win98-wdm.md`, "And Windows XP x64?", states it beside
+the 32-bit half it sits under; and `docs/using/release-notes.md` and
+`README.md` state it for the user.
+
+Three qualifications travel with that tier and none of them is optional.
+**It is not the same binary**, unlike every other target in this project: it
+is a separate amd64 build from a separate toolchain in a separate package
+with its own INF, so nothing the Windows 98 export baseline buys the 32-bit
+binary is inherited here. **Only XP x64 has been booted**; Server 2003 x64 is
+covered by the NT 5.2.3790 identity above, not by an observation of its own.
+And **Vista x64 and Windows 7 x64 are outside it** - task 21.7 found nothing
+in their interface against the same binary, but the two obstacles are the
+signing and driver-store ones the planned section below opens with, and task
+21.8 is what decides them. A negative there does not disturb this tier.
+
 `scripts\setup-qemu-winxp64.ps1` writes both launchers into `scripts\local`.
 It is the sibling of `setup-qemu-winxp.ps1` and most of the 32-bit XP recipe
 carries over unchanged; **four things differ**, and the first two fail
@@ -1960,7 +1983,8 @@ launcher's second argument to add a companion EHCI, which makes the in-box
 stack place `usbport.sys` itself - the same escape hatch the 32-bit launcher
 carries, and unnecessary in the leg above but worth knowing about.
 
-Status: **built, and roadmap task 21.5's checkpoint passed on it 2026-09-09.**
+Status: **built, roadmap task 21.5's checkpoint passed on it 2026-09-09, and
+the tier stated with task 21.6.**
 The guest was created and installed on 2026-09-08 on host
 `minis-w11p-ykm` (`vm\winxp64.img`, 16 GB qcow2, 2.29 GB allocated after the
 install). Snapshot **`winxp64-clean-install`** taken the same evening with the

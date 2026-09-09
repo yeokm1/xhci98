@@ -13,7 +13,11 @@ spec, so that modern machines, whose USB chipsets are xHCI-only, can run
 Windows 98 SE and Windows 2000 SP4 with working USB devices. Both operating
 systems are first-class targets: a single `xhci98.sys` binary must install and
 work on either, and a phase is not done until its checkpoint has been observed
-on both.
+on both. **"One binary" is a claim about the 32-bit targets**, and it also
+covers the two VM-supported 32-bit ones below; the 64-bit target added in
+roadmap Phase 21 is a second build from a second toolchain in a second
+package, so no statement about a single binary anywhere in this repository
+reaches it (design record 11 section 11).
 
 The two targets fail in different directions, so one is not a proxy for the
 other. Win98 is where the loader gate, the back-ported NUSB `usbport.sys`, and
@@ -57,6 +61,39 @@ change is small and low-risk, never at a primary target's expense. It has
 never run on real hardware. `docs/contributing/build-and-test.md`, "Windows
 XP target VM", is the record.
 
+**Windows XP x64 and Windows Server 2003 x64 are a fifth target of the same
+standing, supported in virtual machines, and they are the one target that is
+not the same binary.** The tier follows roadmap Phase 21 and the owner's
+instruction of 2026-09-09 that an ordinary release cut publishes the 64-bit
+package alongside the 32-bit one. What was observed is one QEMU guest (XP
+Professional x64 SP2, task 21.5, 2026-09-09): the amd64 package installed
+through `src/xhci98-amd64.inf`'s `.NTamd64` half on an xHCI-only install with
+no prompt, the driver registered with that system's own `usbport.sys`,
+started its controller, passed its No Op self-test, answered the root-hub
+family, bound a HID mouse, a mass-storage device and a composite audio
+device, and survived the Device Manager disable, enable, remove and rescan
+sequence - taken on the `qemu` flavour and then read again on the `release`
+flavour, on the same guest, the same evening. It carries no checkpoint tax,
+and it has never run on real hardware.
+
+Read that tier narrowly, because three things about it are narrower than the
+paragraphs above. The binary is a separate amd64 build from a separate
+toolchain (WDK 7.1, `WNET`) in a separate package with its own INF, so the
+Windows 98 export baseline argument that makes one 32-bit binary safe
+everywhere says nothing here; the amd64 import surface has an evidence rule
+of its own. Windows XP x64 and Server 2003 x64 are one operating system, NT
+5.2.3790, which is why one build serves both - but only XP x64 has been
+booted, and Server 2003 x64 rests on that identity rather than on an
+observation. And **Vista x64 and Windows 7 x64 are not in this tier**: task
+21.7 read their `usbport.sys` statically and found nothing in the interface
+against them, but both enforce kernel-mode code signing and both stage a
+package through a driver store the INF's `LayoutFile` route was not written
+for, so whether the binary can be made to load there is an open question and
+roadmap task 21.8. `docs/contributing/build-and-test.md`, "Windows XP x64
+target VM", and `docs/contributing/design/11-x64-targets.md` are the record;
+`docs/contributing/legal-provenance.md` sections 3 and 4 carry the provenance
+of every amd64 reading behind it, all of them `static`.
+
 Neither OS has xHCI support. Windows 98 shipped with UHCI/OHCI (USB 1.1) and
 got EHCI (USB 2.0) only through later back-ports: the Win2000-derived stack in
 NUSB, which is what the project tests against, and SweetLow's XP-derived
@@ -71,11 +108,11 @@ stack natively in SP4. This driver fills the gap for both.
 | Item | Value |
 |---|---|
 | Primary targets | Windows 98 SE (4.10.2222) and Windows 2000 SP4 - one binary, both required |
-| Supported in VM | Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax. Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM". 32-bit Windows XP (SP3) - observed in one QEMU guest on 2026-09-03 (xHCI-only package install, HID, mass storage, composite audio, the disable/enable/remove/rescan sequence), never on metal, no checkpoint tax; the `.NTx86` INF half under XP's own `usbport.sys`. Accommodate it where the change is small and low-risk, never at a primary target's expense; see `docs/contributing/build-and-test.md`, "Windows XP target VM", and `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" |
+| Supported in VM | Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax. Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM". 32-bit Windows XP (SP3) - observed in one QEMU guest on 2026-09-03 (xHCI-only package install, HID, mass storage, composite audio, the disable/enable/remove/rescan sequence), never on metal, no checkpoint tax; the `.NTx86` INF half under XP's own `usbport.sys`. Accommodate it where the change is small and low-risk, never at a primary target's expense; see `docs/contributing/build-and-test.md`, "Windows XP target VM", and `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" Windows XP x64 / Server 2003 x64 (NT 5.2.3790) - observed in one QEMU guest on 2026-09-09 (the same clauses, on both shipping flavours), never on metal, no checkpoint tax; the `.NTamd64` half of the *second* INF, and **a second binary, not this one** - see "Windows XP x64 target VM" and `docs/contributing/design/11-x64-targets.md`. Vista x64 and Windows 7 x64 are not in the tier (roadmap task 21.8) |
 | USB scope | USB 2.0 (HS/FS/LS) only; HID, mass storage, USB Ethernet, and USB Audio validation targets. USB 3.0 SuperSpeed is out of scope (see `docs/usb-xhci-info/xhci-programming.md`, "What SuperSpeed Support Would Require") |
 | Integration model | `usbport.sys` miniport (Option A) - reuse the USB 2.0 stack already on the target (NUSB's Win2000-derived build, SP4's native one, or SweetLow's XP-derived rebuild on Windows 98); do not re-implement the USB stack |
-| Compiler | MSVC 6.0, run in place from `tools/MSVC600` (unpacked from `tools/MSVC600.zip`) |
-| DDK | Windows 2000 DDK, unpacked into `tools/ntddk` (from `tools/WIN2KDDK.EXE`). Both toolchains live in the repo and install nothing machine-wide; every script finds them relative to itself. `DDKROOT` overrides where the DDK is found and reaches its `setenv.bat`, so it does redirect the compiler the driver is built with. `MSVC6` does NOT: the DDK build takes its compiler from the generated environment script, and `MSVC6` only redirects the host-side tools that need `dumpbin` and `cl` of their own - the import gate and `scripts\vm-matrix\gen-offsets.ps1` |
+| Compiler | MSVC 6.0, run in place from `tools/MSVC600` (unpacked from `tools/MSVC600.zip`). The amd64 build is the exception and cannot be otherwise: it is WDK 7.1's `cl` 15.00 from `tools/WinDDK71`, reached by `build-driver.cmd <flavour> -amd64`, because no compiler here older than that can target x64 |
+| DDK | Windows 2000 DDK, unpacked into `tools/ntddk` (from `tools/WIN2KDDK.EXE`), for every 32-bit build; WDK 7.1 in `tools/WinDDK71` (`x64 WNET`) for the amd64 one, whether it stays being design record 11's decision 3. All of them live in the repo and install nothing machine-wide; every script finds them relative to itself. `DDKROOT` overrides where the DDK is found and reaches its `setenv.bat`, so it does redirect the compiler the driver is built with. `MSVC6` does NOT: the DDK build takes its compiler from the generated environment script, and `MSVC6` only redirects the host-side tools that need `dumpbin` and `cl` of their own - the import gate and `scripts\vm-matrix\gen-offsets.ps1` |
 | Language | C (C89/C90 compatible with MSVC 6.0) |
 | Driver type | WDM kernel-mode driver (.sys) |
 | Hardware spec | xHCI 1.2c. Transcribed in `docs/usb-xhci-info/xhci-data-structures.md`; the PDF itself is fetched per-machine into the git-ignored `docs/references/` (see its README) |
@@ -323,13 +360,16 @@ binary on a 32-bit machine, and the gate refuses it by name (`PATH-NO9X`,
 
 The media carries no Microsoft file. `usbd.sys` and `usbhub.sys` (both
 targets), `usbport.sys` (the NT targets; on Windows 98 the USB 2.0 stack
-places it) and, since 1.0.2.0, `usbui.dll` (all four targets, the root hub's
+places it) and, since 1.0.2.0, `usbui.dll` (every target, the root hub's
 property-page provider) are the OS's own, and nothing on an xHCI-only machine
 ever placed them, so the INF has the setup engine copy them from the OS's own
 install source through `LayoutFile=layout.inf`, never overwriting a file
 already there; on an xHCI-only Windows 98 machine that means the Windows 98 CD
 may be asked for, and the NT targets take them from `Driver Cache\i386` with no
-prompt. The three drivers go to dirid 10 (`System32\Drivers`) and `usbui.dll`
+prompt - `Driver Cache\amd64` on Windows XP x64, where the same route was
+measured to work and to ask for nothing, and where `usbd.sys` and `usbui.dll`
+come from `driver.cab` while `usbport.sys` and `usbhub.sys` come from
+`sp2.cab`. The three drivers go to dirid 10 (`System32\Drivers`) and `usbui.dll`
 alone to dirid 11 (`System32`), which the INF gate holds it to. `usbhub20.sys` is on no path: the OS places it itself. Do not put
 any of them on the media: the INF gate's `OS-*` rules refuse an INF that names
 one, and `PKG-MSFILE` refuses a staged package holding one - by name, which

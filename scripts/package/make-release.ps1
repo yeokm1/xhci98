@@ -2172,6 +2172,13 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $readmeReleaseDir = ("release-" + $readmeArches[0]).ToUpper()
         $readmeDebugDir   = ("debug-" + $readmeArches[0]).ToUpper()
         $readmeArchNote   = ""
+        # An x86-only cut carries no 64-bit driver, so its readme may not name
+        # a 64-bit target. This is not hypothetical: -UploadSetOnly re-renders
+        # the readme of an already-published version, and every version
+        # published before 1.1.0.0 is x86-only.
+        $readmeArchOs     = ""
+        $readmeArchOsReq  = ""
+        $readmeArchFiles  = ""
     } else {
         $readmeReleaseDir = "RELEASE-X86 or RELEASE-X64"
         $readmeDebugDir   = "DEBUG-X86 or DEBUG-X64"
@@ -2182,6 +2189,30 @@ There are two of each, one per architecture: the -X86 directories are for
 32-bit Windows and the -X64 ones for 64-bit Windows. If you pick the wrong
 one nothing breaks - Windows finds no driver in it and says so - so try the
 other.
+"@
+        $readmeArchOs = @"
+
+
+This download also carries a 64-bit driver, for Windows XP Professional x64
+and Windows Server 2003 x64. It is a separate build in its own directories
+with an INF of its own, not the same file renamed, and it has been validated
+in one virtual machine only - never on a real machine, and Windows XP x64 is
+the only one of the two that has been booted at all. No 64-bit Windows after
+those two is supported: Vista x64 and everything later require every driver
+to be signed, and this one carries no signature.
+"@
+        $readmeArchOsReq = @"
+
+                     64-bit: Windows XP x64 or Windows Server 2003 x64 (SP2),
+                     in a virtual machine only as well. Nothing newer: Vista
+                     x64 and later will not load an unsigned driver.
+"@
+        $readmeArchFiles = @"
+
+  WINDOWS XP x64  Nothing to do either, from Driver Cache\amd64: usbport.sys
+                  and usbhub.sys out of sp2.cab, usbd.sys and usbui.dll out
+                  of driver.cab beside it. The machine tried (a virtual one,
+                  which had never had a USB controller) asked for nothing.
 "@
     }
 
@@ -2202,7 +2233,7 @@ controllers and nothing else. Windows 98 SE, Windows ME, Windows 2000 and
 on all four. Windows 98 SE and Windows 2000 SP4 are the two primary targets,
 and a release has to work on both. Only Windows 98 SE has been validated on
 real hardware; Windows 2000 SP4, Windows ME and 32-bit Windows XP have been
-validated in virtual machines only.
+validated in virtual machines only.{ARCHOS}
 
 It gives you USB 2.0 speeds: High Speed, Full Speed and Low Speed. USB 3.0
 SuperSpeed is out of scope. A USB 3.0 device still works, at USB 2.0 speed,
@@ -2401,7 +2432,7 @@ modern interrupt mechanism (MSI) that such a controller would require.
 
   Operating system   Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows
                      ME and 32-bit Windows XP (SP3) in virtual machines only
-                     (neither has been run on a real machine).
+                     (neither has been run on a real machine).{ARCHOSREQ}
 
   On Windows 98      NUSB 3.3 or the newer SweetLow USB 2.0 stack, your
                      choice, installed BEFORE this driver (section 4).
@@ -2453,7 +2484,7 @@ Windows' own, unmodified, and no Microsoft file is in this download:
 
   usbui.dll    NEW IN 1.0.2.0, and the one file here that is only cosmetic.
                It adds an extra USB property page in Device Manager. It is
-               copied on all four targets.
+               copied on every target this driver installs on.
 
 WINDOWS ONLY INSTALLS ITS USB FILES WHEN SETUP FINDS A USB CONTROLLER IT
 RECOGNISES, and on an xHCI-only machine it never does, so on such a machine
@@ -2477,9 +2508,9 @@ Windows recognised - keeps its own files and is asked for nothing.
 
   WINDOWS 2000    Nothing to do: all four come from the driver cache every
   AND XP          Windows 2000 or XP installation has (Driver Cache\i386).
-                  On Windows XP all four are in sp3.cab; on Windows 2000
-                  three are in sp4.cab and usbui.dll in driver.cab beside
-                  it, two cabinets in one pass and still no prompt.
+                  On 32-bit Windows XP all four are in sp3.cab; on Windows
+                  2000 three are in sp4.cab and usbui.dll in driver.cab
+                  beside it, two cabinets in one pass and still no prompt.{ARCHFILES}
 
 If the prompt is cancelled the driver still installs, but the root hub fails
 as described above. That reads as a fault in this driver and is not one: put
@@ -3061,6 +3092,9 @@ $(($missingTools | ForEach-Object { "      " + $_ }) -join "`r`n")
         Replace("{RELEASEDIR}", $readmeReleaseDir).
         Replace("{DEBUGDIR}", $readmeDebugDir).
         Replace("{ARCHNOTE}", $readmeArchNote).
+        Replace("{ARCHOS}", $readmeArchOs).
+        Replace("{ARCHOSREQ}", $readmeArchOsReq).
+        Replace("{ARCHFILES}", $readmeArchFiles).
         Replace("{INCOMPLETE}", $incomplete).
         Replace("{CONTENTS}", (($contents -join "`r`n").TrimEnd() + "`r`n")).
         Replace("{HISTORY}", (($historyText -join "`r`n").TrimEnd()))

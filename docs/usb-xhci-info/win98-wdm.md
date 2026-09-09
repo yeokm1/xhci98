@@ -384,8 +384,9 @@ Until that day it was best-effort and unrun, and the accommodation rule from
 then still governs the code: preserve XP compatibility when the
 accommodation is small, isolated, and low-risk; do not weaken Win98 SE or
 Win2000 behavior, add XP-only imports, or create a separate implementation
-to do so. This section exists so the boundary is not re-litigated. (32-bit
-XP only; XP x64 is a different build and has never been in scope.)
+to do so. This section exists so the boundary is not re-litigated. Everything
+above and below is about **32-bit** XP and the one binary; XP x64 is a
+different build and has its own tier, stated at the end of this section.
 
 Much of the compatibility comes for free. The driver codes to the Win98 export
 baseline and builds with the Win2K DDK; XP exports a strict superset of both,
@@ -475,6 +476,56 @@ nothing, but the result, including a negative one, goes in
 `docs/usb-xhci-info/usbport-miniport-interface.md` "Target ABI record" as a
 third column marked best-effort and static-only. The answer gets expensive to
 act on once Phase 4 onward has committed to the packet.
+
+### And Windows XP x64?
+
+Position: supported in virtual machines, since roadmap Phase 21 (task 21.6
+states the tier; task 21.5 is the observation), standing where Windows 2000,
+Windows ME and 32-bit Windows XP stand - no checkpoint waits on it, and it
+has never run on real hardware. What the paragraph above used to say - that
+XP x64 "is a different build and has never been in scope" - was true when it
+was written, and the first half of it is true still.
+
+**What is different from every other target here is that it is not the one
+binary.** Windows XP Professional x64 and Windows Server 2003 x64 are the
+same operating system, NT 5.2.3790, and Microsoft's own WDK says so by
+shipping `lib\wxp\i386` with no `amd64` counterpart - so `WNET` is the only
+route to a 64-bit XP driver and one build serves both. It is built with WDK
+7.1 rather than the Windows 2000 DDK, carried in its own package with its own
+INF (`src/xhci98-amd64.inf`, one `.NTamd64` install path), and it resolves
+against the NT 5.2 amd64 export tables directly, because the Windows 98
+export-baseline argument that protects the 32-bit binary has nothing to say
+about a kernel Windows 98 never had. The accommodation rule above is
+therefore not what governs it: this is a second target with its own gate
+inputs, not an accommodation inside the 32-bit one.
+
+What the static pass established, before any 64-bit binary existed: the same
+`>= 100` / `>= 200` registration-version tests, `USBPORT_GetHciMn` returning
+`0x10000001` exactly as 32-bit XP does, and a `0x250`-byte packet against
+x86's `0x13C`. Three structures change width and were measured rather than
+assumed - `USBPORT_RESOURCES`, `USBPORT_ENDPOINT_PROPERTIES`, and
+`USBPORT_SCATTER_GATHER_LIST`, the last of which was the one left to the
+compiler's guess and was wrong by four bytes. `usbport-miniport-abi.md` and
+`docs/contributing/design/11-x64-targets.md` section 5 carry all eight
+measurements; `docs/contributing/legal-provenance.md` section 3 carries their
+provenance, `static` throughout.
+
+What the guest measured (2026-09-09, roadmap task 21.5;
+`docs/contributing/build-and-test.md`, "Windows XP x64 target VM"): on XP
+Professional x64 SP2, in a virtual machine, the amd64 binary installed on an
+xHCI-only machine with no prompt, registered, started the controller, passed
+its No Op self-test, answered the root-hub family, bound a HID mouse, a
+mass-storage device and a composite audio device, and survived the Device
+Manager disable, enable, remove and rescan sequence - on the `qemu` flavour
+and then again on the `release` flavour. Real hardware remains unobserved,
+which is why the tier is virtual machines.
+
+Vista x64 and Windows 7 x64 are not in this tier. Task 21.7 read their
+`usbport.sys` by the same static method and all six measurements pass, so the
+interface does not argue against them; what does is that both enforce
+kernel-mode code signing and both stage a package through a driver store the
+INF's `LayoutFile` route was not written for. Roadmap task 21.8 is the leg
+that finds out, and it may end in a well-characterised no.
 
 ## MSVC 6.0 / C89 Language Pitfalls
 

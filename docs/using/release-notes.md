@@ -16,6 +16,13 @@ whose only USB controller is xHCI. One binary serves all four, and the INF
 carries both install paths (Windows ME reads the Windows 98 one, Windows XP
 the Windows 2000 one).
 
+From `1.1.0.0` the download also carries a **64-bit** driver, for Windows XP
+Professional x64 and Windows Server 2003 x64. That one is a separate build
+and a separate pair of directories with an INF of its own; it is not the same
+file under another name, and the 32-bit driver will not install on a 64-bit
+Windows or the other way round. Picking the wrong one is harmless - Windows
+finds no driver in that directory and says so.
+
 It is a miniport for `usbport.sys`, not a whole USB stack. It plugs in
 underneath Microsoft's USB port driver the same way the in-box `usbehci.sys`
 does. Everything above the controller (the root hub, enumeration, hubs, class
@@ -44,6 +51,18 @@ mouse, a mass-storage device and a composite audio device bound, and the
 disable, enable, remove and rescan sequence survived. It has never run on
 real hardware.
 
+Windows XP x64 stands there too, since `1.1.0.0`, and it is the thinnest
+record of the five: supported in virtual machines only, observed in one QEMU
+guest (XP Professional x64 SP2, 2026-09-09) on which the 64-bit package
+installed with the xHCI alone and no prompt, the driver started under that
+system's own USB stack, a HID mouse, a mass-storage device and a composite
+audio device bound, and the disable, enable, remove and rescan sequence
+survived. It has never run on real hardware. Windows Server 2003 x64 is the
+same operating system as Windows XP x64 and the same driver is meant for it,
+but no Server 2003 machine has been tried at all. **Windows Vista x64 and
+Windows 7 x64 are not supported**: they require every driver to be signed,
+this one is not, and nothing has been run on either.
+
 ## What this is not
 
 - It is not USB 3.0. SuperSpeed is out of scope and unreachable: the USB
@@ -57,7 +76,11 @@ real hardware.
   install on the one the qualifier reports USB 2.0 protocol ports for.
 - It is not signed. `xhci98.sys` carries no Authenticode signature. Windows 98
   SE does not check; Windows 2000 SP4 and Windows XP show an unsigned-driver
-  warning during install and then install it (on XP, choose Continue Anyway).
+  warning during install and then install it (on XP, choose Continue Anyway),
+  and Windows XP x64 installs it too, being the last 64-bit Windows that does
+  not require kernel-mode drivers to be signed. Every 64-bit Windows from
+  Vista onward does require it and will not load this driver, which is why
+  none of them is supported.
 - On Windows 98 it is not standalone. Windows 98 has no `usbport.sys` of its
   own. **A USB 2.0 stack must be installed first**, NUSB (the one this
   project tests against) or SweetLow's; it is what places `usbport.sys` and
@@ -78,10 +101,10 @@ real hardware.
 
 | | |
 |---|---|
-| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000) and 32-bit Windows XP (SP3) in virtual machines only, see "What this is". |
-| USB stack | Windows 98: NUSB 3.3, installed before this driver (NUSB 3.6 ships the identical USB 2.0 stack and has been observed working, in a virtual machine only; so has the SweetLow stack that Windows 98 QuickInstall 1.0.1 and later bundle, which also removes the first known limitation below; see the README's installation steps). Windows ME: SweetLow's stack only; its own USB stack has no `usbport.sys`, and on it the driver installs and shows Code 2. Do not install NUSB on Windows ME, it is a Windows 98 SE package. Windows 2000: SP4's native stack, or the standalone USB 2.0 update KB319973. **Do not install NUSB on Windows 2000.** Windows XP: its own USB stack, nothing to install; NUSB is not for it either. |
+| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000), 32-bit Windows XP (SP3) and, from `1.1.0.0`, Windows XP x64 / Server 2003 x64 (SP2) in virtual machines only, see "What this is". No 64-bit Windows after those two, and no 32-bit Windows after XP. |
+| USB stack | Windows 98: NUSB 3.3, installed before this driver (NUSB 3.6 ships the identical USB 2.0 stack and has been observed working, in a virtual machine only; so has the SweetLow stack that Windows 98 QuickInstall 1.0.1 and later bundle, which also removes the first known limitation below; see the README's installation steps). Windows ME: SweetLow's stack only; its own USB stack has no `usbport.sys`, and on it the driver installs and shows Code 2. Do not install NUSB on Windows ME, it is a Windows 98 SE package. Windows 2000: SP4's native stack, or the standalone USB 2.0 update KB319973. **Do not install NUSB on Windows 2000.** Windows XP, 32-bit or x64: its own USB stack, nothing to install; NUSB is not for it either. |
 | Controller | An xHCI controller presenting PCI class code `0C0330`, with at least one USB 2.0 protocol port, a BAR0 mapped below 4 GB, and a legacy interrupt pin. Neither target has an MSI path, so a controller reporting `Interrupt Pin = 0` cannot be driven at all. |
-| Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk (`C:\WINDOWS\OPTIONS\CABS`). The install copies Windows' own `usbd.sys`, `usbhub.sys` and `usbui.dll` from it. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the hard disk; the virtual machine tried asked for nothing. Windows XP: nothing; `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll` all come out of `sp3.cab` in the driver cache every install has. Windows 2000: nothing either; the same three out of `sp4.cab`, and `usbui.dll` out of `driver.cab` beside it in that cache. |
+| Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk (`C:\WINDOWS\OPTIONS\CABS`). The install copies Windows' own `usbd.sys`, `usbhub.sys` and `usbui.dll` from it. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the hard disk; the virtual machine tried asked for nothing. Windows XP: nothing; `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll` all come out of `sp3.cab` in the driver cache every install has. Windows XP x64: nothing either, and the guest asked for nothing; the same four come out of `Driver Cache\amd64`, `usbport.sys` and `usbhub.sys` from `sp2.cab` and `usbd.sys` and `usbui.dll` from `driver.cab` beside it. Windows 2000: nothing either; the same three out of `sp4.cab`, and `usbui.dll` out of `driver.cab` beside it in that cache. |
 
 Run the qualifier before installing anything; it answers all three of the
 controller conditions in a single read-only pass.
@@ -167,11 +190,13 @@ already has `usbd.sys` and `usbhub.sys` from an earlier install may still not
 have it. It sits on the same cabinet as those two, so the same CD answers it.
 
 Windows 2000 and Windows XP take theirs from the driver cache
-every install has and ask for nothing: on Windows XP all four out of
+every install has and ask for nothing: on 32-bit Windows XP all four out of
 `sp3.cab`, on Windows 2000 three out of `sp4.cab` and `usbui.dll` out of
-`driver.cab` beside it. Measured on Windows 2000 on 2026-09-07, installing on
-a machine that had never had a USB controller: no prompt of any kind, and
-therefore nothing to cancel. Should the files be missing anyway, the failure
+`driver.cab` beside it, and on Windows XP x64 two out of `sp2.cab` and two out
+of `driver.cab` in `Driver Cache\amd64`. Measured twice, each time on a
+machine that had never had a USB controller: Windows 2000 on 2026-09-07 and
+Windows XP x64 on 2026-09-09, and neither raised a prompt of any kind, so
+there was nothing to cancel. Should the files be missing anyway, the failure
 looks the same as the cancelled 9x prompt above, spelled as a `0xc0000034`
 error naming `usbhub20.sys` rather than as Code 2.
 
@@ -269,7 +294,7 @@ because a user meets them through this driver.
   then power-cycle. Recovery is complete and loses nothing.
 - The package writes `DisableSelectiveSuspend = 1` under
   `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB`, a machine-wide
-  setting, on all four targets, because a sleeping xHCI controller cannot report
+  setting, on every target - the 64-bit INF writes it too - because a sleeping xHCI controller cannot report
   a newly plugged device and Windows 98 otherwise idles it within a second
   once nothing at all is on the bus (any attached device keeps it awake,
   even one with no driver, so a laptop with internal USB devices never idles

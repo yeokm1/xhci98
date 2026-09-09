@@ -1,6 +1,6 @@
 # xhci98
 
-This project xHCI98 is a WDM generic USB host controller driver for xHCI host controllers targeting Windows 98 SE, ME, 2000 SP4 and 32-bit XP. Although xHCI Controllers offer USB 3.0, this driver runs USB 2.0 on the controller only.
+This project xHCI98 is a WDM generic USB host controller driver for xHCI host controllers targeting Windows 98 SE, ME, 2000 SP4 and 32-bit XP, plus a separate 64-bit build for Windows XP x64 and Server 2003 x64. Although xHCI Controllers offer USB 3.0, this driver runs USB 2.0 on the controller only.
 
 This driver is developed based on Intel's xHCI specification and tested only on Intel machines so far. No guarantees have been made on xHCI implementations from other vendors.
 
@@ -72,7 +72,7 @@ The same driver on the same machine survives all three under SweetLow's build of
 
 ## What is tested, and what is not
 
-Windows 98 SE is validated on real hardware. Windows 2000 SP4, Windows ME and Windows XP have only ever run in QEMU virtual machines.
+Windows 98 SE is validated on real hardware. Windows 2000 SP4, Windows ME and both Windows XPs have only ever run in QEMU virtual machines.
 
 | Machine | Controller |
 |---|---|
@@ -85,6 +85,7 @@ Windows 98 SE is validated on real hardware. Windows 2000 SP4, Windows ME and Wi
 | Windows 2000 SP4 | Virtual machines only, including an SMP guest and Driver Verifier. It has never run on real hardware. |
 | Windows ME | One virtual machine only, under SweetLow's USB 2.0 stack (the only stack it is supported with): the driver loads and starts, and a HID mouse, a USB mass-storage device and a composite audio device bind (2026-09-02). Never run on real hardware. |
 | 32-bit Windows XP | One virtual machine only (XP Professional SP3): the package installs on an xHCI-only machine with no prompt, the driver loads and starts under XP's own USB stack, and a HID mouse, a USB mass-storage device and a composite audio device bind; disable, enable, remove and rescan in Device Manager all survive. Never run on real hardware. |
+| Windows XP x64 / Server 2003 x64 | One virtual machine only (XP Professional x64 SP2), and **a separate 64-bit driver**, not the one above: the same clauses all pass, on both shipping builds, from a package with its own INF. Only XP x64 was booted; Server 2003 x64 is the same operating system and is covered by that identity, not by a run of its own. Never run on real hardware. Windows Vista x64 and Windows 7 x64 are not supported - both require signed drivers and this one is not signed. |
 | Intel 7/8-series (`XUSB2PR` mux), AMD | Never run on either. Everything said about the `XUSB2PR` port mux comes from Intel's datasheet and Linux, not silicon. The driver does not touch it. |
 | Resume from standby (Windows 2000) | Never executed anywhere. No available VM offers a resumable power transition, and there is no Windows 2000 machine. |
 | Low Speed, USB Audio, hub topologies | Work on Windows 98 hardware in the configurations tried. Not covered: an audio device with `bInterval > 1`, a USB 1.1 hub under a multi-TT hub, and the Windows 2000 side on silicon. |

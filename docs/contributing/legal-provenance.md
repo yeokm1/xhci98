@@ -337,9 +337,16 @@ nothing; it is the same technique and the same debugger engine as the `cdb.exe
 host - `msdis160.dll` is not present.
 
 **A 64-bit binary of this driver now exists**, built on 2026-09-09 (task
-21.2), which changes nothing about the tagging above: every fact in this
-paragraph and the one before it remains `static`, read from Microsoft's
-shipped binaries, and none of it has been corroborated by running anything.
+21.2), and on the same day it installed and ran on a Windows XP x64 guest
+(task 21.5) - which changes nothing about the tagging above. Every fact in
+this paragraph and the one before it remains `static`, read from Microsoft's
+shipped binaries. A running system is not corroboration of a reading: the
+standing rule is that a static fact is not upgraded because the machine also
+happens to work, and the one amd64 reading a runtime observation is entangled
+with, **M8**, says so in its own row - the defect was seen at runtime, the
+layout was read off the binary, and no fact rests on the run. The tier that
+observation supports is stated in `AGENTS.md`, "Project Purpose", and the
+tier does not change what any row here is tagged.
 
 Three more files came off the same media on 2026-09-09 for task 21.3, and they
 are a different kind of thing from the ABI readings: they are the *export
