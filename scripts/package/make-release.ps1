@@ -221,7 +221,7 @@ param(
     [ValidateSet("release", "debug", "qemu")]
     [string[]]$Flavor = @("release", "debug"),
     [ValidateSet("x86", "x64")]
-    [string[]]$Arch = @("x86"),
+    [string[]]$Arch = @("x86", "x64"),
     [string]$ReleasesDir = "",
     [string]$QualtoolDir = "",
     [switch]$SkipQualtool,
@@ -436,12 +436,18 @@ $qualtoolFiles = @{ "xhciqual.exe" = "XHCIQUAL.EXE"; "xhciqual.map" = "XHCIQUAL.
 # NTamd64, so the wrong directory offers no driver rather than installing a
 # mismatched binary.
 #
-# -Arch DEFAULTS TO x86 ALONE, and that is a decision rather than an oversight.
-# The plumbing here stages four directories the moment it is asked to; what has
-# not happened is roadmap task 21.5 - no amd64 binary of this driver has ever
-# executed, on metal or in a guest. So an ordinary cut publishes what 1.0.2.0
-# published, and `-Arch x86,x64` is what a cut says out loud once there is
-# evidence to say it with.
+# -Arch DEFAULTS TO BOTH ARCHITECTURES since 2026-09-09, and that is a decision
+# rather than a default nobody revisited. It was x86 alone until roadmap task
+# 21.5 ran, because until then no amd64 binary of this driver had ever executed
+# on metal or in a guest. 21.5 passed on a Windows XP Professional x64 SP2
+# guest: every checkpoint clause, and then the RELEASE flavour - the one this
+# publisher actually stages - installed and read separately, because the clauses
+# had been taken on the qemu build and a flavour that is never published cannot
+# stand in for one that is.
+#
+# What that evidence is and is not: one guest, one virtual machine, never real
+# hardware, and the x64 half of a cut carries exactly that standing. The x86
+# half is unaffected and is still the one with four install legs behind it.
 $archDirName  = @{ "x86" = "i386"; "x64" = "amd64" }
 $archPkgName  = @{ "x86" = "x86";  "x64" = "amd64" }   # make-package.ps1's -Arch
 $archInfPath  = @{ "x86" = "src\xhci98.inf"; "x64" = "src\xhci98-amd64.inf" }
@@ -1320,14 +1326,44 @@ To cut one, run this script without it.
         #
         # -UploadSetOnly re-assembles the download for a version that is already
         # published, so what it must name is the directories that cut actually
-        # wrote. A cut made before this task wrote `release\` and `debug\`; one
+        # wrote. A cut made before task 21.3 wrote `release\` and `debug\`; one
         # made after writes `release-x86\` and so on. Rather than guess, take
         # the leg names this run was asked for and fall back to the bare flavour
         # word when the published tree has that instead - which is what the four
         # already-cut versions under releases\ hold, and releases\README.md's
         # write-once rule says they keep.
         #
-        $legs = New-ReleaseLegs -Flavors $Flavor -Arches $Arch
+        # AND THE ARCHITECTURE IS TAKEN FROM THE PUBLISHED TREE WHEN -Arch WAS
+        # NOT ASKED FOR. Since 2026-09-09 -Arch defaults to both, which is right
+        # for a cut and wrong here: every already-published version is x86-only,
+        # and re-assembling one must not fail for want of a 64-bit directory
+        # that version never had. An -Arch the caller actually passed is still
+        # held to exactly - a missing directory is then the error it looks like.
+        #
+        $wantedArches = $Arch
+        if (-not $PSBoundParameters.ContainsKey("Arch")) {
+            $present = @()
+            foreach ($a in $Arch) {
+                foreach ($leg in (New-ReleaseLegs -Flavors $Flavor -Arches @($a))) {
+                    $tagged = Join-Path $finalRoot $leg.Dir
+                    $legacy = Join-Path $finalRoot $leg.Flavor
+                    if ((Test-Path -LiteralPath $tagged) -or
+                        ($a -eq "x86" -and (Test-Path -LiteralPath $legacy))) {
+                        $present += $a
+                        break
+                    }
+                }
+            }
+            if ($present.Count -eq 0) {
+                throw "'$finalRoot' holds no published flavour directory for any of: $($Arch -join ', ')."
+            }
+            if ($present.Count -ne $Arch.Count) {
+                Write-Ok ("architectures present in the published tree: {0} (pass -Arch to require others)" -f ($present -join ", "))
+            }
+            $wantedArches = $present
+        }
+
+        $legs = New-ReleaseLegs -Flavors $Flavor -Arches $wantedArches
         $legDirs = @()
         foreach ($leg in $legs) {
             $pubDir = Join-Path $finalRoot $leg.Dir

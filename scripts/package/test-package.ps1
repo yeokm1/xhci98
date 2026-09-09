@@ -877,6 +877,23 @@ try {
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $upRoot ("upload-" + $olderVersion)))) `
             "the refused older-version run assembled an upload directory anyway."
 
+        # --- the architecture -UploadSetOnly re-assembles for ----------------
+        #
+        # -Arch defaults to both architectures since roadmap task 21.5, which is
+        # right for a cut and would be wrong here: every already-published
+        # version is x86-only, and the case above re-assembles one of exactly
+        # that shape under the default. So the default is derived from the
+        # published tree. The other half is what this asserts - an -Arch the
+        # caller PASSED is held to exactly, because then a missing directory is
+        # a real mistake rather than an old cut's shape.
+        #
+        Write-Step "-UploadSetOnly derives the architecture, but obeys an explicit -Arch"
+        $r = Invoke-Releaser ($relArgs + @("-Arch", "x64"))
+        Assert-True ($r.ExitCode -ne 0) `
+            "-UploadSetOnly accepted -Arch x64 against a published tree that has no 64-bit directory."
+        Assert-True ($r.Output -match "release-x64") `
+            ("expected the refusal to name the directory it wanted. Output:`n" + $r.Output)
+
         # --- the switches that contradict -UploadSetOnly --------------------
         Write-Step "-UploadSetOnly refuses the switches that contradict it"
         foreach ($bad in @(
@@ -1546,14 +1563,16 @@ try {
             ("make-release.ps1 no longer contains '" + $anchor.Find + "': " + $anchor.Why + ".")
     }
     #
-    # -Arch defaults to x86 alone, and that default is asserted rather than
-    # left to reading. Roadmap task 21.5 has not run - no amd64 binary of this
-    # driver has ever executed - so an ordinary cut must publish what 1.0.2.0
-    # published, and staging a 64-bit pair must be something a cut says out
-    # loud. When 21.5 passes, this is the line to change, deliberately.
+    # -Arch defaults to BOTH architectures, and that default is asserted rather
+    # than left to reading - in the same place and for the same reason it was
+    # asserted as x86-alone before. Roadmap task 21.5 passed on 2026-09-09: an
+    # amd64 binary installed and ran on a Windows XP x64 guest through every
+    # checkpoint clause, and the release flavour this publisher stages was then
+    # installed and read separately rather than inferred from the qemu one.
+    # Changing this line back is as deliberate as changing it forwards was.
     #
-    Assert-True ($releaserText -match [regex]::Escape('[string[]]$Arch = @("x86"),')) `
-        "make-release.ps1's -Arch no longer defaults to x86 alone: an ordinary cut would publish a 64-bit package that has never been observed running (roadmap task 21.5)."
+    Assert-True ($releaserText -match [regex]::Escape('[string[]]$Arch = @("x86", "x64"),')) `
+        "make-release.ps1's -Arch no longer defaults to both architectures: an ordinary cut would silently stop publishing the 64-bit package that roadmap task 21.5 qualified."
 
     Write-Step "the binary-vs-INF version comparison"
     #

@@ -1664,13 +1664,23 @@ of it. It is now measurement **M8**, taken statically off the producer in the
 NT 5.2 amd64 `usbport.sys`, and the fix is `_WIN64`-only - the x86 binary does
 not move. Task 21.5 has the account.
 
-So Phase 21 is a target observed rather than a package gated, and only task
-21.6 - the record - is open. **What has not changed on its own is the
-publisher.** `make-release.ps1 -Arch` still defaults to `x86` alone, so an
-ordinary cut publishes exactly what `1.0.2.0` did; a passing 21.5 licenses
-changing that line but does not change it, and it stays the owner's deliberate
-act. What can now be written is that the binary has been observed running -
-in one virtual machine, on one guest, never on real hardware.
+**The publisher was then changed, on the owner's instruction and not as a
+consequence of the checkpoint.** `make-release.ps1 -Arch` defaults to both
+architectures since 2026-09-09, so an ordinary cut publishes four directories.
+The step that licensed it was not the checkpoint alone but the **release**
+flavour leg above: the clauses had been taken on the `qemu` build, and cutting
+a package on the strength of a flavour that is never published would have been
+the one soft spot in the phase. One consequence came with it and is fixed:
+`-UploadSetOnly` re-assembles an already-published version, every such version
+is x86-only, and under a both-arch default it began demanding a `release-x64\`
+those cuts never had - so that mode now derives the architectures from the
+published tree unless `-Arch` is passed.
+
+So Phase 21 is a target observed and a package that can be cut, with only task
+21.6 - the record - open. What may be written is that the binary has been
+observed running: in one virtual machine, on one guest, never on real
+hardware, and the x64 half of any cut carries exactly that standing against
+the x86 half's four install legs.
 
 The version was bumped to `1.1.0.0` in the same session, on the owner's
 instruction, as a separate step after that identity was proved - its only
@@ -1866,11 +1876,13 @@ are static readings and no other task's box may be ticked on one.
         check so a template token can never render literally into a
         user-facing file.
 
-        **`-Arch` defaults to `x86` alone, and that default is asserted by
-        the self-tests.** The plumbing stages four directories the moment it
-        is asked to (`-Arch x86,x64`); what has not happened is task 21.5, so
-        an ordinary cut today publishes exactly what `1.0.2.0` did. Changing
-        that line is the deliberate act that a passing 21.5 licenses
+        **`-Arch` defaulted to `x86` alone, and that default was asserted by
+        the self-tests** - the plumbing staged four directories the moment it
+        was asked to (`-Arch x86,x64`), and what had not happened was task
+        21.5, so an ordinary cut published exactly what `1.0.2.0` did.
+        Changing that line was the deliberate act a passing 21.5 licenses, and
+        it was taken on 2026-09-09 once the release flavour had been read on
+        the guest too. The assertion moved with it rather than being deleted
 - [x] **21.4 - the code changes task 21.1 implies. Complete 2026-09-09**
       (design record 11 section 9). Five of the seven were done with 21.2;
       the last two, both of which needed no guest, were done the same day.
@@ -2008,6 +2020,31 @@ are static readings and no other task's box may be ticked on one.
         standing 2026-09-03 decision); the hot-plugs and the readings were
         taken over the monitor on port 55562, and the trace is the
         `qemu`-flavour port-`0xE9` log
+  - [x] **and then the same again on the `release` flavour**, taken the same
+        evening on the same guest, because the clauses above were taken on the
+        `qemu` build and **that flavour is never published**. Without this the
+        64-bit package would have been cut on the strength of a binary no
+        released package contains - on amd64 the two are not near-copies
+        either, `release` being a free build where `qemu` is checked. Installed
+        by Have Disk from the transfer drive's `RELEASE\` directory (94,720 B,
+        `sha256 6dac158d...d7b5`, byte-identical to `src\objfre\amd64`), and it
+        read: the mouse, the mass-storage device and the composite audio device
+        all bound (**USB Human Interface Device**, **HID-compliant mouse**,
+        **USB Mass Storage Device**, **USB Composite Device**, **USB Audio
+        Device**), and the disable/enable/remove/rescan sequence survived.
+
+        **How a release flavour is read at all, since it writes no port-`0xE9`
+        trace, is the reusable part.** Three independent things say it: the
+        boot log holds one `DriverEntry` from the outgoing `qemu` build, then
+        `StopController`, then **nothing** - the replacement loaded and never
+        printed, and the file stayed at 31,548 bytes through three device
+        enumerations and the whole door sequence; the staged binary's hash
+        matches the built one; and **QEMU's own `usb_xhci_*` trace witnesses
+        what the driver was built not to say** - `slot_enable` 3 -> 9,
+        `slot_address` 6 -> 18, `slot_configure` 4 -> 12 across the sequence,
+        exactly three full re-enumerations of three devices. The silence and
+        the trace are complementary: one proves which flavour is loaded, the
+        other proves it is working
 - [ ] **21.6 - the record.** The tier stated where Windows ME and 32-bit XP
       are stated, in `AGENTS.md`, `build-and-test.md`, `win98-wdm.md` and the
       release notes, with the provenance rows beside it.

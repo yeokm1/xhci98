@@ -915,11 +915,21 @@ directory the download does not contain - so the directory names are
 placeholders now, and a self-test asserts that every placeholder in the
 template is one the renderer substitutes.
 
-**`-Arch` defaults to `x86` alone.** The plumbing stages four directories the
-moment it is asked to; what has not happened is task 21.5, so there is nothing
-to publish a 64-bit package on the strength of yet. `test-package.ps1` asserts
-that default, which makes changing it a deliberate act rather than a drifting
-one.
+**`-Arch` defaulted to `x86` alone until task 21.5 ran, and now defaults to
+both.** The plumbing always staged four directories the moment it was asked
+to; what had not happened was the evidence. `test-package.ps1` asserts the
+default either way, which is what made changing it a deliberate act rather
+than a drifting one - and it was changed on 2026-09-09, after 21.5's
+checkpoint and after the **release** flavour was separately installed and read
+on the same guest, since the clauses had been taken on the `qemu` build and a
+flavour that is never published cannot stand in for one that is.
+
+One consequence had to be fixed with it, and it is the kind a default change
+hides. `-UploadSetOnly` re-assembles the download for an already-published
+version, and every version published so far is x86-only; under a both-arch
+default it began demanding a `release-x64\` those cuts never had. So that mode
+now derives the architectures from the published tree when `-Arch` was not
+passed, and obeys an `-Arch` that was. Both halves are asserted.
 
 One tracked document stated the property the rename ends and was corrected
 with it: `releases\README.md` carried a directory-to-flavour table and the
