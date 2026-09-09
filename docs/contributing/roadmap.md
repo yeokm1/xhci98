@@ -149,7 +149,10 @@ and the NT-side install fixes the XP guest found. Phase 20 is release
 whether this driver can be a miniport on 64-bit Windows at all, taking
 Windows XP x64 and Server 2003 x64 - one target, both NT 5.2.3790 - as its
 subject, and since 2026-09-09 asking the same of Vista x64 and Windows 7 x64
-in task 21.8. Phase
+in task 21.8. Phase 22, open, asks whether the 32-bit binary that already
+ships runs on Vista and Windows 7 as it stands, and **carries the `1.1.0.0`
+cut** - the version Phase 21 bumped to and never published, and the first
+release to carry a 64-bit package. Phase
 14 waited on Phase 13's bench batches reporting. Accepting the published release, from the download on a
 freshly installed VM and on a physical machine, is not a phase and has no
 task: it is a hand-run procedure the project owner takes before the upload,
@@ -1689,7 +1692,11 @@ published tree unless `-Arch` is passed.
 So Phase 21 is a target observed and a package that can be cut. What may be
 written is that the binary has been observed running: in one virtual machine,
 on one guest, never on real hardware, and the x64 half of any cut carries
-exactly that standing against the x86 half's four install legs.
+exactly that standing against the x86 half's four install legs. **The cut
+itself is not this phase's.** `1.1.0.0` is published by Phase 22, on the
+owner's instruction of 2026-09-09, because this phase closes on task 21.8's
+guests and a release should not wait on a leg whose answer changes nothing
+about what is being published.
 
 **One task is open, and the phase closes on it.** 21.6, the record, was
 written on 2026-09-09: the tier is stated in `AGENTS.md`, `build-and-test.md`,
@@ -2269,22 +2276,54 @@ may cost a primary target anything.
 Records: `design/11-x64-targets.md`; `usb-xhci-info/usbport-miniport-abi.md`;
 `legal-provenance.md` section 4; `build-and-test.md`.
 
-## Phase 22 - The Existing 32-bit Binary on Windows Vista and Windows 7
+## Phase 22 - The Existing 32-bit Binary on Windows Vista and Windows 7, and Release `1.1.0.0`
 
 Goal: whether the binary this project already ships installs, loads and works
 on 32-bit Windows Vista and 32-bit Windows 7 - settled from the shipping
 `usbport.sys` first and guests second - and, if it does, its standing stated
-in every document that names the targets.
+in every document that names the targets; **and the tree cut as `1.1.0.0`**,
+which is the first release to carry a 64-bit package.
 
-Status: open, 2026-09-08, on the owner's instruction. Tasks 22.1 and 22.2
+**The cut was added to this phase on 2026-09-09 on the owner's instruction,
+and it is not a consequence of the Vista and Windows 7 work.** What it
+publishes is Phase 21's: an amd64 `xhci98.sys`, the second INF, and a
+publisher whose `-Arch` defaults to both architectures, so an ordinary cut
+now writes four directories - `release-x86`, `debug-x86`, `release-x64`,
+`debug-x64`. Phase 21 bumped `src\xhci_version.h` to `1.1.0.0` and stopped
+there; the number has never been spent, and until it is uploaded it stays
+free (`releases/README.md`). It lands in Phase 22 rather than in 21 because
+21 closes on task 21.8's guests, which may end in a negative result, and a
+cut should not wait on a leg whose answer changes nothing about what is being
+published.
+
+Two things follow from putting it here and both are ordering constraints
+rather than extra work. **The cut waits on task 22.5 being settled, not on a
+yes from the Vista and Windows 7 guests.** If 22.5 turns out to be a driver
+change it is a change to the shipping 32-bit binary, it goes into this
+release, and all four existing 32-bit install legs are re-validated behind it;
+if 22.5 stays empty, as everything read so far says it will, the 32-bit
+binary in this release is `1.0.2.0`'s code at a new version. Either way the
+cut is last. And **the asset gains a fifth install leg**, the amd64 package on
+the XP x64 guest, which no previous cut had; the x86 half keeps its four.
+
+**What the x64 half of this release may be said to be is exactly what task
+21.5 observed and no more**: one guest, one virtual machine, never real
+hardware, against the x86 half's four install legs. `AGENTS.md` states it and
+the release notes state it for the user; do not let the act of publishing
+inflate it.
+
+Status: open, 2026-09-08, on the owner's instruction, with the `1.1.0.0` cut
+added 2026-09-09. Tasks 22.1 and 22.2
 are complete as of 2026-09-09, taken in one pass with 21.7 off the same
 media: the six measurements on 6.0 and 6.1 x86 all pass, `USBPORT_GetHciMn`
 returns the value this driver already accepts, and every import the shipping
 binary names resolves in the right module on both systems. So **nothing read
 statically argues against the existing 32-bit binary on Vista or Windows 7,
-and task 22.5 has no work from either.** What is left is entirely the guest
-half - 22.3 and 22.4 - which is where the two hard parts below live and where
-the unsigned-driver assumption is confirmed or refuted.
+and task 22.5 has no work from either.** What is left of the Vista and
+Windows 7 question is entirely the guest half - 22.3 and 22.4 - which is
+where the two hard parts below live and where the unsigned-driver assumption
+is confirmed or refuted. Left beside it, and independent of how that comes
+out, is the `1.1.0.0` cut in 22.7 to 22.9.
 
 Why a phase, and why it is a different one from 21: **this asks nothing of
 the toolchain.** Phase 21 needs a second DDK, a second import library and an
@@ -2406,10 +2445,68 @@ reading may not tick a box whose line names a guest.
       shipping binary and not a second one.
 - [ ] **22.6 - the record.** The tier stated where Windows ME and 32-bit XP
       are stated, in `AGENTS.md`, `build-and-test.md`, `win98-wdm.md` and the
-      release notes, with the provenance rows beside it.
+      release notes, with the provenance rows beside it. Task 21.6 is the
+      worked example and its lesson transfers: check first whether the wording
+      the other tiers carry is true of this one before reusing it.
 
-Checkpoint. Every clause, on **each** of the two guests, or the phase is not
-closed:
+The `1.1.0.0` cut. These three run last, after 22.5 is settled either way,
+and they are the phase's other half rather than a coda to the first.
+
+- [ ] **22.7 - what a cut needs that no gate supplies.** Each of these is
+      hand-written or hand-bumped, and the first two are refusals rather than
+      omissions:
+  - [ ] the `releases\history.md` entry for `1.1.0.0`, dated to agree with
+        the INFs' `DriverVer` - `make-release.ps1` checks for it **before**
+        anything is built and refuses without it. What the entry says is
+        addressed to a user, because the download's `readme.txt` embeds it
+        verbatim; how the release was assembled does not belong in it
+        (`releases/README.md`)
+  - [ ] the release date in `src\xhci_version.h` and the `DriverVer` line in
+        **both** INFs set to the day of the cut. The INF gate checks the two
+        files against the header, and `check-inf.ps1 -Arch` runs over each,
+        so a stale date in the amd64 file fails the build rather than
+        shipping
+  - [ ] `docs/using/release-notes.md`'s opening line, which states the
+        version the file describes. **Nothing reads it and no gate catches
+        it**, and it has sat stale across cuts before
+        (`build-and-test.md`, "Versioning the driver"). The x64 statements
+        task 21.6 wrote into that file say "from `1.1.0.0`"; at the cut they
+        stop being a forward reference and should read as current
+  - [ ] and one thing the scheme paragraph in `build-and-test.md` does not
+        cover: it documents what the third and fourth fields mean and this
+        release moves the **second**, on the owner's instruction in Phase 21.
+        Record what that field meant here rather than inferring a rule
+- [ ] **22.8 - the primary targets unchanged**, the way task 19.8 and Phase
+      20 did it: `run-matrix.ps1 -PostRelease` on freshly re-taken 2a and 2b
+      clones, against the Phase 20 reports. Both primary targets are 32-bit
+      and neither is touched by anything in this release, so a difference
+      here is a finding about the release rather than about the phase.
+      Reports under `docs\contributing\runs\run-22-post-release\`.
+- [ ] **22.9 - the cut itself, and the install route read from the asset.**
+      `build-driver.cmd all` and `build-driver.cmd all -amd64` after the
+      header change, both tools rebuilt, every gate green, then
+      `make-release.ps1` with its default `-Arch`. It writes
+      `releases\1.1.0.0\` with **four** flavour directories and
+      `out\xhci98-1.1.0.0.zip`.
+  - [ ] the four x86 install legs from the unzipped asset, as every cut since
+        `1.0.1.0` has taken them - Windows 98 SE (on both stacks, NUSB and
+        SweetLow), Windows ME, Windows 2000 SP4 and 32-bit Windows XP
+  - [ ] **the fifth leg, which is new: the amd64 package on the XP x64
+        guest**, installed from the asset's `RELEASE-X64\` directory rather
+        than from `src\objfre\amd64`. Task 21.5 already read the `release`
+        flavour on that guest and the recipe for reading a flavour that
+        writes no port-`0xE9` trace is in its entry; what this leg adds is
+        that the bytes came out of the published download
+  - [ ] the asset's file list checked against what the packager staged, and
+        no Microsoft file in it. `PKG-MSFILE` refuses one by name; the rule
+        that actually closes it is the packager publishing nothing it did not
+        itself stage (`AGENTS.md`, `legal-provenance.md` section 5)
+  - [ ] a re-cut, if one is needed, under the same number with `-Force` while
+        nothing has been uploaded - recorded here and not in the `history.md`
+        entry, for the embedding reason `releases/README.md` gives
+
+Checkpoint, the first half. Every clause, on **each** of the two guests, or
+the phase is not closed:
 
 - [ ] the existing package installed on an xHCI-only machine, and what the
       unsigned-driver prompt actually did recorded
@@ -2422,8 +2519,38 @@ Not a checkpoint: a static pass standing in for a guest, or one of the two
 guests standing in for the other. No primary target's checkpoint waits on any
 of this, and none of it may cost a primary target anything.
 
+**A negative closes this half.** If neither guest will load the driver, or
+the driver store will not take the package, that is a complete result: the
+tier is not claimed, 22.6 records why, and the cut below goes ahead
+regardless, because nothing in it depends on the answer.
+
+Checkpoint, the second half - the cut. All of it, or the phase is not closed:
+
+- [ ] every gate and self-test green on both architectures, and
+      `make-release.ps1` exit 0 with `releases\1.1.0.0\` holding four flavour
+      directories
+- [ ] the post-release matrix on both primary targets no worse than Phase
+      20's reports
+- [ ] the install route read from the published asset on all five legs -
+      the four x86 ones every cut since `1.0.1.0` has taken, and the amd64
+      one on the XP x64 guest
+- [ ] the asset holding exactly what the packager staged - `xhci98.sys` and
+      its INF in each of the four flavour directories, the two tools, the
+      readmes and the licence texts - and no Microsoft file under any name
+- [ ] the prose that no gate reaches bumped: `history.md`'s entry, the
+      release notes' opening line, and the release date in the header and
+      both INFs
+
+Not a checkpoint: a `qemu`-flavour reading standing in for the published
+`release` binary, on either architecture - Phase 21 paid for that rule on the
+x64 side and it is why the `release` leg exists at all. Not a checkpoint
+either: the acceptance test from the download, or the upload. Both are the
+owner's, and the end of this file says so.
+
 Records: `usb-xhci-info/usbport-miniport-abi.md`; `build-and-test.md`;
-`usb-xhci-info/win98-wdm.md`; `lessons.md`.
+`usb-xhci-info/win98-wdm.md`; `lessons.md`; `releases/README.md` and
+`releases/history.md`; `docs/using/release-acceptance-test.md`;
+`docs/contributing/runs/run-22-post-release/`.
 
 ## Post-Release - Run the Acceptance Test by Hand
 
