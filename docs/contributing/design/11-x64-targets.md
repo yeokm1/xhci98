@@ -211,7 +211,7 @@ call tools\WinDDK71\bin\setenv.bat <ddkroot> fre x64 WNET no_oacr
 `BUILD_ALT_DIR=fre_wnet_AMD64` is what setenv sets, and is why the pull
 request has to override it to `fre`: `src/sources` hard-errors on any value
 that is not `fre`, `chk` or `chk_qemu`. Whether this toolchain stays, and on
-what terms it is fetched, is decision 4 in section 12.
+what terms it is fetched, is decision 3 in section 12.
 
 ---
 
@@ -637,8 +637,66 @@ simple build and not too much additional effort". Either way the x64 INF
 ignored outright by the 64-bit setup engine, and
 `tools/winxp64-extracted/usbport.inf` is Microsoft's own model for it.
 
+**Decided 2026-09-09: the separate package** (section 12 decision 2).
+`src/xhci98.inf` stays byte-identical, so no existing install leg is
+re-validated and the `[Manufacturer]` question is never asked of Windows 98's
+engine. What is accepted with it is a second INF to keep in sync, and an INF
+gate that grows a third install path rather than a widened second one.
+
+That second INF is not a copy of the first, and two of its contents are
+already known to differ. Task 21.5 read an xHCI-only Windows XP x64 install as
+having no `usbport.sys`, `usbhub.sys`, `usbehci.sys` or `usbd.sys` on disk at
+all, so the `.NTamd64` path needs the `LayoutFile` route Phase 19 wrote for
+32-bit XP, sourced from `Driver Cache\amd64`; and `usbd.sys` there comes from
+`driver.cab` rather than `sp2.cab` and is not on disk in any form, which is
+the one difference from 32-bit XP. Unread, and owed before that INF is
+written: whether the x64 media's `layout.inf` carries a `usbui.dll` row, which
+`1.0.2.0` added on all four 32-bit targets.
+
+**The payload, decided 2026-09-09: four directories, every one of them
+tagged.** `releases\<version>\` carries `release-x86`, `debug-x86`,
+`release-x64` and `debug-x64`, each self-contained - its own `xhci98.inf` and
+its own `xhci98.sys`, both keeping those names, since the two architectures'
+binaries share a filename and so cannot share a directory. One download, with
+`readme.txt`, `LICENSE`, `xhciqual\` and `xhcisnap\` shared at the top as they
+are today. The x86 pair is renamed rather than left alone: the moment a second
+set exists an untagged `release\` means "x86" without saying so, and
+`readme.txt` section 8's "INSTALL THIS ONE" stops having one referent. That
+rename is free now and will not stay free - no release has been uploaded, so
+no user has ever seen `release\`, and `releases\README.md`'s write-once rule
+leaves the four existing cuts exactly as they are.
+
+A wrong pick fails cleanly in both directions, which is what makes four flat
+siblings safe rather than a trap: the 64-bit setup engine ignores an
+undecorated models section outright, and the 32-bit engines ignore `.NTamd64`,
+so the wrong directory offers no driver rather than installing a mismatched
+binary.
+
+**None of this reaches the build tree.** `BUILD_ALT_DIR` is overridden back to
+`fre` or `chk` for the reason section 4 gives, so build.exe's own
+`obj<ALT>\<arch>` shape should put the amd64 binary at `src\objfre\amd64\`
+beside the existing `src\objfre\i386\`, with no second obj root and nothing to
+rename. "Should" is the right word: that is read off this tree's existing
+layout rather than off a WDK 7.1 build, which has not happened. The first
+build settles it.
+
+What it costs in the scripts is two places rather than one.
 `scripts\package\make-package.ps1` hardcodes a single `i386` payload path
-(line 155) and needs the arch dimension whichever route is chosen.
+(line 155) and needs the arch dimension. `scripts\package\make-release.ps1`
+needs more, because there the flavour word *is* the directory name: it
+publishes into `releases\<version>\<flavour>\`, keys `$objDirName` on the
+flavour alone (line 416), loops over the two flavour words (lines 222, 1901
+and 3473), and refuses a cut whose two staged binaries hash the same (line
+1862) - a refusal that now has to compare within an architecture, or four
+staged binaries trip it for the wrong reason. The generated `readme.txt`
+section 8 gains two entries and has to say which pair a reader wants.
+
+One tracked document states the property the rename ends and has to be
+corrected with it: `releases\README.md` carries a directory-to-flavour table
+and the sentence that a release directory "needs no translating", which is
+true only while the directory name and the flavour word are the same string.
+It describes the published tree, so it changes when the tree does and not
+before.
 
 ### The compile scout - taken 2026-09-08, and it comes back nearly clean
 
@@ -906,8 +964,10 @@ download would carry two.
    driver signature enforcement disabled, permanently and by design. The ABI
    half of this is now settled and does not narrow the claim (section 6); what
    is left is the signing decision and two more guests.
-2. One INF with a third install path and a four-leg re-validation, or a
-   separate x64 package leaving `src/xhci98.inf` untouched.
+2. ~~One INF with a third install path and a four-leg re-validation, or a
+   separate x64 package leaving `src/xhci98.inf` untouched.~~ **Decided
+   2026-09-09: the separate x64 package**, `src/xhci98.inf` byte-identical.
+   Section 8 has what follows from it.
 3. Whether WDK 7.1 stays in the tree as a third toolchain, and from which
    source. Third-party rehosts of the ISO exist and are not a Microsoft host;
    the copy now in `tools/WinDDK71/` came from the owner's own media

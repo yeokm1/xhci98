@@ -1628,9 +1628,11 @@ change here could move physical addresses above 4 GB. Nothing else in the
 phase has started, and no binary exists.
 
 **Suggested running order, and nothing in it needs the owner** - WDK 7.1 is
-unpacked, the reference binaries are extracted, and none of the five open
-decisions in design record 11 section 12 gates a compile; they are all about
-shipping, INF shape and toolchain provenance. Take the
+unpacked, the reference binaries are extracted, and none of the four
+decisions still open in design record 11 section 12 gates a compile; they are
+all about shipping and toolchain provenance. The fifth, the INF shape, was
+taken on 2026-09-09: a separate x64 package with its own INF, leaving
+`src/xhci98.inf` byte-identical. Take the
 `USBPORT_ENDPOINT_PROPERTIES` reading in 21.4 **first**, because the compiler
 now has nothing further to say about this source and that is the one
 declaration with no measurement behind it. Then the rest of 21.4's small
@@ -1697,10 +1699,23 @@ are static readings and no other task's box may be ticked on one.
   - [ ] arch-conditional checks in `scripts\make-usbport-lib.cmd` - the
         undecorated-name check replacing the `@N` one, the other four steps
         unchanged
-  - [ ] the INF decision (one INF and a four-leg re-validation, or a separate
-        x64 package leaving `src/xhci98.inf` byte-identical) and whatever
-        gate work it implies
-  - [ ] `make-package.ps1` staging a second architecture
+  - [ ] the second INF. **The decision is taken, 2026-09-09: a separate x64
+        package, leaving `src/xhci98.inf` byte-identical**, so no existing
+        install leg is re-validated and Windows 98's engine is never asked
+        about a widened `[Manufacturer]` line. What is left is the INF itself
+        - `.NTamd64` decorations, and the `LayoutFile` route on that path,
+        which task 21.5 read as needed there too - and the third install path
+        `scripts\inf-gate\check-inf.ps1` has to learn across its 1854 lines
+  - [ ] the packager and the publisher staging a second architecture. **The
+        payload shape is decided, 2026-09-09**: `releases\<version>\` carries
+        `release-x86`, `debug-x86`, `release-x64` and `debug-x64`, four
+        self-contained directories each with its own `xhci98.inf` and
+        `xhci98.sys`, with the x86 pair renamed so that no untagged directory
+        silently means x86 - free to do now, because nothing has been
+        uploaded. `make-package.ps1` hardcodes one `i386` payload path (line
+        155); `make-release.ps1` is the larger half, because there the flavour
+        word is the directory name, and its identical-hash refusal has to
+        compare within an architecture
 - [ ] **21.4 - the code changes task 21.1 implies** (design record 11
       section 9).
   - [ ] the `_WIN64` packet declaration at the measured `0x250`, with
