@@ -1130,10 +1130,40 @@ dumper is `link /dump`; they are the same tool.
    pointer-sized; the typedef is accidentally correct today only because the
    host tests build x86.
 6. Design record 04's common-buffer arithmetic re-run against the amd64
-   `sizeof`s, and the result stated rather than assumed to carry.
+   `sizeof`s, and the result stated rather than assumed to carry. **Done
+   2026-09-09, and the result is that nothing moves** - design record 04
+   section 8. The reason is worth carrying here too, because it is the
+   opposite of the packet's: nothing in the common-buffer layout is a
+   `sizeof` at all. Every region offset and size is a spec constant times a
+   declared policy limit, written as a `UL` literal, and the only two
+   `sizeof`s anywhere near it are `XHCI_TRB` and `XHCI_ERST_ENTRY`, both four
+   `ULONG`s. So `MiniPortResourcesSize` is 409,600 bytes on both
+   architectures and usbport is asked for the same 101 pages on both. What
+   the pass did turn up is the half that is not zero, and it is outside the
+   buffer: the three extensions usbport allocates for the miniport grow -
+   `XHCI_EXTENSION` 91,612 -> 95,496, `XHCI_TRANSFER` 120 -> 152,
+   `XHCI_ENDPOINT` unchanged at 20 - which needs no code change, since
+   `DriverEntry` publishes each as a `sizeof` the same compiler evaluated,
+   but does mean the snapshot channel's x86 offset table cannot decode an
+   amd64 extension. Section 8 of design record 04 flags that for whoever
+   first runs an amd64 binary; it is not owed before then.
 7. `test/test_packet.c` extended to compile the header for amd64, so the
    layout asserts are checked by `test\run-host-tests.cmd` on the build host
-   rather than only inside a driver build.
+   rather than only inside a driver build. **Done 2026-09-09**, and it went
+   further than the box: `run-host-tests.cmd` now builds `test_packet` AND
+   `test_membuf` a second time with WDK 7.1's amd64 cross compiler, runs both,
+   and every expectation in `test_packet.c` that differs between the two
+   architectures carries both numbers - M3's packet size and short-copy
+   boundary, M4's `USBPORT_RESOURCES` table, M7's
+   `USBPORT_ENDPOINT_PROPERTIES` table, and M6's widening map for the 50
+   callback slots between hand-typed anchors. 191 checks pass on each
+   architecture and 2,027 on each for `test_membuf`. Two things had to give
+   and both are recorded in the runner: the amd64 leg drops `/Za`, because
+   the WDK's own CRT headers are not C89-clean (`stdio.h` reaches
+   `driverspecs.h`, which spells macro names with `$`) and the x86 leg
+   compiles the same file under it anyway; and the leg is skipped by name,
+   with the final verdict saying "x86 only", on a host with no WDK 7.1, since
+   `tools/` is fetched per host rather than cloned.
 8. `src/xhci_dispatch.c:1001`'s implicit `ULONG_PTR` -> `ULONG` truncation,
    which is the whole of what the amd64 compiler objects to in this source
    (section 8's scout) and which fails the `release` build alone, because

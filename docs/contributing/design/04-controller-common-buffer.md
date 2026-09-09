@@ -6,8 +6,10 @@ that the one number Phase 3 can never take back, the resource size committed in
 `DriverEntry`, is the product of an argument rather than a first guess.
 
 Implemented by `src/xhci.h` (constants and region map), `src/xhci_mem.c`
-(computation and checks), and `test/test_membuf.c` (864 checks, run by
-`test\run-host-tests.cmd`).
+(computation and checks), and `test/test_membuf.c`, run by
+`test\run-host-tests.cmd` for x86 and, since task 21.4, for amd64 as well
+(section 8). It said 864 checks here for a long time after the suite had grown
+past 2,000 of them; take the count from the runner's own output.
 
 ## 1. The constraint
 
@@ -622,3 +624,85 @@ Ordering rules stand on their own:
    rather than pending. If a controller reports more than 64 scratchpad
    buffers, this design refuses it loudly, which is the intended behaviour,
    but the cap would then deserve revisiting.
+
+## 8. The same arithmetic on amd64
+
+Phase 21 task 21.4 owed this. Everything above was derived on a 32-bit target,
+an amd64 build of the same source exists since task 21.2, and "it still holds"
+is not a thing to assume about arithmetic. It was re-run on 2026-09-09, and it
+holds - but a null result is only worth writing down if it says what could have
+moved and did not.
+
+**Nothing in the common buffer is a `sizeof`.** Every number in section 4's
+table is a spec constant times a declared policy limit, and both are `UL`
+literals in `src/xhci.h`: `XHCI_PAGE_SIZE`, `XHCI_TRB_BYTES`,
+`XHCI_DCBAA_ENTRY_BYTES`, `XHCI_CONTEXT_SIZE_LARGE`, `XHCI_MAX_SLOTS`,
+`XHCI_MAX_SCRATCHPAD`, `XHCI_MAX_POOL_RINGS`. The only two `sizeof`s the layout
+touches at all are `XHCI_TRB` and `XHCI_ERST_ENTRY`, and each is four `ULONG`s
+with a compile-time assert pinning it at 16. That is the whole reason the
+result is a null one, and it is a property of the declarations rather than a
+convention: a pointer-sized member reaching any of them is what would break it.
+
+Measured rather than argued, the same headers compiled by MSVC 6.0 for x86 and
+by WDK 7.1's amd64 compiler:
+
+| Quantity | x86 | amd64 |
+|---|---|---|
+| the eight region offsets, `0x00000` to `0x24000` | as section 4 | identical |
+| the eight region sizes | as section 4 | identical |
+| `XHCI_HC_RESOURCES_SIZE` | 409,600 | 409,600 |
+| `XhciCommonBufferAllocationBytes()` of it | 413,696 | 413,696 |
+| `sizeof(XHCI_TRB)` | 16 | 16 |
+| `sizeof(XHCI_ERST_ENTRY)` | 16 | 16 |
+| `sizeof(XHCI_HC_LAYOUT)` | 112 | 112 |
+
+So `MiniPortResourcesSize` is 409,600 bytes on both architectures, usbport is
+asked for the same 101 pages on both, and section 5's feasibility argument
+carries across unchanged. `XHCI_HC_LAYOUT` is in the list because it is the
+computed carve the miniport holds in its extension, and a layout structure that
+changed width would be the first sign that an offset had become a pointer.
+
+This is a standing check rather than a reading taken once: `test/test_membuf.c`
+is now compiled and run for amd64 as well as x86 by `test\run-host-tests.cmd`,
+as `test_membuf_amd64`, and all 2,027 of its checks pass there - the region
+map, both context strides, and Table 6-1's alignment and no-cross-boundary
+rules applied to every slot and every scratchpad page.
+
+**The 48-byte header is usbport's, and it has not been read on amd64.**
+Section 2 measured it in the two 32-bit builds; a private header holding a
+`PHYSICAL_ADDRESS` and pointers is exactly the kind of structure that widens,
+and nothing here has looked. The arithmetic is insensitive to it either way:
+`ROUND_TO_PAGES(409600 + h)` is 413,696 bytes for every `h` from 1 to 4,096, so
+the odd 101st page absorbs any header this side of a page and the request costs
+the same. `XHCI_USBPORT_CB_HEADER_BYTES` is used for one diagnostic value and
+one overflow guard, never to place anything, so a wrong value there cannot
+misplace a region. It is recorded as unread rather than assumed to be 48.
+
+**What does change is the three extensions usbport allocates for the miniport,
+and none of them is in this buffer:**
+
+| Quantity | x86 | amd64 | delta |
+|---|---|---|---|
+| `sizeof(XHCI_EXTENSION)` | 91,612 | 95,496 | +3,884 |
+| `sizeof(XHCI_ENDPOINT)` | 20 | 20 | - |
+| `sizeof(XHCI_TRANSFER)` | 120 | 152 | +32 |
+| `sizeof(XHCI_DEVICE)` | 1,904 | 2,024 | +120 |
+
+`XHCI_DEVICE` is the reason the extension grows: it is 32 slots of it inside
+`XHCI_EXTENSION`, so 3,840 of those 3,884 bytes are the slot array. These are
+`sizeof`s `DriverEntry` publishes in `MiniPortExtensionSize`,
+`MiniPortEndpointSize` and `MiniPortTransferSize`, evaluated by the same
+compiler that laid the structures out, so usbport allocates the right size on
+each architecture with no change here. Stated plainly: an amd64 `xhci98.sys`
+asks usbport for 3,884 more bytes of miniport extension per controller and 32
+more per outstanding transfer, and for exactly the same 409,600-byte common
+buffer.
+
+One consequence of that growth belongs to somebody else and is flagged rather
+than fixed here. The snapshot channel's decode is an offset table generated by
+`scripts\vm-matrix\gen-offsets.ps1`, which compiles the extension with MSVC 6.0
+and therefore describes the x86 layout; an amd64 snapshot would need its own
+table, and `ExtensionBytes` in the header is what would give it away. No amd64
+binary has run anywhere yet (roadmap task 21.5), so this is owed at the point
+one does, not before.
+

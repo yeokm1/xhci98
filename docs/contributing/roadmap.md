@@ -1641,8 +1641,14 @@ and **21.3 was closed the same day**: the import gate, the library generator,
 a second INF, and both packagers.
 
 **So the host side of Phase 21 is done, and everything left needs a guest.**
-An amd64 binary exists, passes every gate a 32-bit one does, and can be
-staged into install media; what nothing here has is evidence that it runs.
+21.4's last two boxes closed the same day: design record 04's arithmetic was
+re-run against the amd64 `sizeof`s and does not move - nothing in the
+common-buffer layout is a `sizeof` - and the host suite now compiles and runs
+`test_packet` and `test_membuf` for amd64 as well as x86, so the `_WIN64` half
+of the ABI declaration is checked on the build host instead of only inside a
+driver build. An amd64 binary exists, passes every gate a 32-bit one does, and
+can be staged into install media; what nothing here has is evidence that it
+runs.
 No amd64 build of this driver has ever executed, on real hardware or in a
 virtual machine. That is task 21.5, and until it passes the publisher's
 `-Arch` deliberately defaults to `x86` alone, so an ordinary cut still
@@ -1848,9 +1854,9 @@ are static readings and no other task's box may be ticked on one.
         is asked to (`-Arch x86,x64`); what has not happened is task 21.5, so
         an ordinary cut today publishes exactly what `1.0.2.0` did. Changing
         that line is the deliberate act that a passing 21.5 licenses
-- [ ] **21.4 - the code changes task 21.1 implies** (design record 11
-      section 9). Five of seven done 2026-09-09; the two left need no guest
-      and block nothing that has started.
+- [x] **21.4 - the code changes task 21.1 implies. Complete 2026-09-09**
+      (design record 11 section 9). Five of the seven were done with 21.2;
+      the last two, both of which needed no guest, were done the same day.
   - [x] the `_WIN64` packet declaration at the measured `0x250`. Reached by
         widening the two trailing `Reserved` canaries to `ULONG_PTR`, which
         M6 records as one of the two valid ways and which leaves the x86
@@ -1874,13 +1880,42 @@ are static readings and no other task's box may be ticked on one.
         Windows is LLP64, so `unsigned long` stays 32 bits on amd64; the old
         unconditional typedef was accidentally correct only because the host
         suite has always been built x86
-  - [ ] design record 04's common-buffer arithmetic re-run against the amd64
-        `sizeof`s and the result stated
-  - [ ] `test/test_packet.c` compiling the header for amd64, so
+  - [x] design record 04's common-buffer arithmetic re-run against the amd64
+        `sizeof`s and the result stated. **Nothing in the layout moves, and
+        the reason is that nothing in it is a `sizeof`**: every region offset
+        and size is a spec constant times a declared policy limit, written as
+        a `UL` literal, and the only two `sizeof`s the carve touches are
+        `XHCI_TRB` and `XHCI_ERST_ENTRY`, four `ULONG`s each. So
+        `MiniPortResourcesSize` is 409,600 bytes on both architectures and
+        usbport is asked for the same 101 pages on both. Measured rather than
+        argued - the same headers through both compilers - and it is now a
+        standing check rather than a reading, since `test_membuf` is one of
+        the two suites the box below runs twice. What the pass did find is
+        outside the buffer: the extensions usbport allocates for the miniport
+        grow (`XHCI_EXTENSION` 91,612 -> 95,496, `XHCI_TRANSFER` 120 -> 152),
+        which needs no code change because `DriverEntry` publishes each as a
+        `sizeof`, but does mean the snapshot channel's x86 offset table cannot
+        decode an amd64 extension. Design record 04 section 8 states the
+        result and flags that for whoever first runs an amd64 binary
+  - [x] `test/test_packet.c` compiling the header for amd64, so
         `test\run-host-tests.cmd` checks the layout on the build host
+        rather than only inside a driver build. Done 2026-09-09, and it runs
+        the file rather than only compiling it: **191 checks pass on each
+        architecture**, with every expectation that differs carrying both
+        numbers - M4's `USBPORT_RESOURCES` table, M7's
+        `USBPORT_ENDPOINT_PROPERTIES` table, M3's packet size and short-copy
+        boundary, and M6's widening map for the 50 callback slots between
+        hand-typed anchors. `test_membuf` is built and run for amd64 by the
+        same leg, for the opposite reason - it is where the numbers must NOT
+        move - and passes 2,027 there. Two limits on the leg: it drops
+        `/Za`, because the WDK's own CRT headers are not C89-clean and the
+        x86 leg compiles the same files under it anyway; and it is skipped
+        by name, with the run's verdict reading "x86 only", on a host with no
+        WDK 7.1, since `tools/` is fetched per host rather than cloned
 - [ ] **21.5 - the Windows XP x64 guest** and its checkpoint below. The guest
       is a vehicle, and building it is preparation rather than the leg: the
-      checkpoint clauses need an amd64 binary, which needs 21.2 and 21.4. The
+      checkpoint clauses need an amd64 binary, which 21.2 and 21.4 have now
+      produced and gated. The
       guest's existence is not progress on this task, and only the first two
       boxes below can be ticked before that binary exists.
   - [x] the guest installed from `scripts\setup-qemu-winxp64.ps1` and

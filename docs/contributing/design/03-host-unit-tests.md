@@ -5,7 +5,10 @@ doc pins the design so the source files are structured to be testable.
 
 Status: built. Twelve suites, 20,325 checks at the `1.0.2.0` cut and 20,577
 after the 2026-09-07 audit's section G, run by
-`test\run-host-tests.cmd` on the Windows build host. A count written here goes
+`test\run-host-tests.cmd` on the Windows build host. Two of the twelve -
+`test_packet` and `test_membuf` - are compiled and run a second time for amd64
+since task 21.4, so the runner reports fourteen results from twelve files
+(section 5, "The second architecture"). A count written here goes
 stale silently, so take the current number from the runner's own output.
 Sections 3 and 5 below mark what exists and what is still owed. The suite runs before the
 DDK builds in `scripts\build-driver.cmd`, and again in
@@ -488,6 +491,30 @@ accumulates the project's bug history.
   This is mechanical rather than a convention: `scripts\build-driver.cmd` runs
   the suite before the DDK builds, and `scripts\package\make-package.ps1` runs
   it again, with the import gate, before staging install media.
+
+### The second architecture
+
+`src/xhci_usbport.h` has a `_WIN64` half - three structures that change size
+and a registration packet that grows by 0x114 bytes - and until task 21.4 the
+only thing that ever compiled it was a driver build. `test_packet` and
+`test_membuf` are therefore built and run twice, the second time with WDK 7.1's
+amd64 cross compiler as `test_packet_amd64` and `test_membuf_amd64`. The two
+are chosen for opposite reasons: the ABI declaration is where the layout moves
+with the pointer width, and the common-buffer carve is where it must not
+(design record 04 section 8). Every expectation in `test_packet.c` that differs
+between the two carries both numbers, each from design record 11's readings of
+the amd64 binaries, so the second leg is a second measurement rather than a
+compile check.
+
+Two properties of that leg are worth knowing before reading a run:
+
+- **it drops `/Za`**, which the x86 leg keeps. The WDK's own CRT headers are
+  not C89-clean, and the x86 leg compiles the same files under `/Za`, so the
+  dialect gate loses nothing;
+- **it is skipped, by name, on a host with no WDK 7.1**, and the run's final
+  verdict then says "x86 only" rather than "PASSED". `tools/` is fetched per
+  host rather than cloned, so a clone with MSVC 6.0 alone still gets the whole
+  x86 suite; what it does not get is silence about the half it did not check.
 
 ### Two properties of the model itself that a vector must be written against
 

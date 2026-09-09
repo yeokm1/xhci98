@@ -26,7 +26,10 @@ rem      everything else here)
 rem   9. test\run-host-tests.cmd - the pure-core suite. It runs before the DDK
 rem      builds, not after: it compiles the same core files in seconds, so a
 rem      bad carve, ring or PORTSC constant should not cost two full builds
-rem      first
+rem      first. Since task 21.4 it also builds and runs test_packet and
+rem      test_membuf a second time for amd64, whichever architecture this
+rem      wrapper was asked for, so the _WIN64 half of src\xhci_usbport.h is
+rem      checked on every build rather than only on an -amd64 one
 rem  10. `build` for each requested flavor, with the compile-time layout and
 rem      ABI asserts in src\xhci.h / src\xhci_usbport.h
 rem  11. scripts\import-gate\check-imports.ps1 on each linked binary, then

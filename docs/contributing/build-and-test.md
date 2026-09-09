@@ -435,6 +435,18 @@ full builds first. Both it and the import gate run again in
 media a VM is installed from and a binary can reach `src\obj*` without having
 been built by this wrapper.
 
+Since task 21.4 the suite covers **two architectures**: `test_packet` and
+`test_membuf` are built and run a second time with WDK 7.1's amd64 cross
+compiler, as `test_packet_amd64` and `test_membuf_amd64`, so the `_WIN64` half
+of `src\xhci_usbport.h` is checked here rather than only inside an `-amd64`
+driver build. Set `WDK71` to point that leg at a WDK 7.1 elsewhere, the way
+`MSVC6` points the rest of the suite. On a host with no WDK 7.1 the leg is
+skipped by name and the run's final line reads "Host tests PASSED - x86 only"
+instead of "Host tests PASSED"; the unqualified line is what says both
+architectures were checked. Design record 03, "The second architecture", has
+the shape and the two limits - no `/Za` on that leg, and why the WDK's own CRT
+headers are the reason.
+
 `scripts\local\ddk-debug.cmd` / `ddk-release.cmd` still open an interactive DDK
 prompt for one-off experiments, where `cd src && build` works as before. A
 binary built that way has not been through the gates; do not deploy one.
