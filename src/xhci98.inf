@@ -80,7 +80,7 @@ LayoutFile=layout.inf
 ; release date are edited. scripts\inf-gate\check-inf.ps1 refuses the two
 ; disagreeing, and scripts\package\make-package.ps1 checks the version compiled
 ; into the .sys it stages against this line.
-DriverVer=09/07/2026,1.0.2.0
+DriverVer=09/09/2026,1.1.0.0
 
 ; Provider and the manufacturer are two different fields. [Version]'s Provider
 ; is who supplied the driver (Driver tab, "Driver Provider"); the key below is

@@ -322,8 +322,24 @@ section 3 records the method and the four files' sizes and SHA-256s. What was
 established (Phase 21 task 21.1, design record 11 section 5): the three
 exports and their ordinals, that `USBPORT_GetHciMn` returns `0x10000001`,
 and the registration function's version gate and its two copied packet sizes,
-`0x250` and `0x230`. Nothing was executed and no 64-bit binary of this driver
-exists; no file from that media is tracked.
+`0x250` and `0x230`. Nothing was executed; no file from that media is tracked.
+
+A further reading was taken from the same two files on 2026-09-09 (task 21.4,
+design record 11 section 5, **M7**): the amd64 layout of
+`USBPORT_ENDPOINT_PROPERTIES`, read out of `usbehci.sys`'s `OpenEndpoint`,
+`QueryEndpointRequirements` and the two endpoint-open paths below them - the
+`sizeof` from the nine 8-byte moves that copy the structure, and nine field
+offsets each from the instruction that reads it. Method **static**, with
+`kd.exe -z` from WDK 7.1's amd64 debuggers, which loads a raw PE and executes
+nothing; it is the same technique and the same debugger engine as the `cdb.exe
+-z` above, and the reason a debugger is used at all is that neither MSVC 6.0's
+`dumpbin` nor WDK 7.1's `link /dump /disasm` can disassemble amd64 on this
+host - `msdis160.dll` is not present.
+
+**A 64-bit binary of this driver now exists**, built on 2026-09-09 (task
+21.2), which changes nothing about the tagging above: every fact in this
+paragraph and the one before it remains `static`, read from Microsoft's
+shipped binaries, and none of it has been corroborated by running anything.
 
 Since 2026-09-09 it reads two more lineages, in both architectures: the
 `usbport.sys` and `usbehci.sys` of Windows Vista SP2 (6.0.6002.18005,

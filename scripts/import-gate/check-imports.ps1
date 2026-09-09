@@ -107,7 +107,23 @@ param(
     # run: a malformed or wrongly-flavored row must be caught by a test rather
     # than by a binary reaching a bench. scripts\import-gate\test-flavour-rules.ps1
     # is the only caller.
-    [switch]$ParseOnly
+    [switch]$ParseOnly,
+
+    # The architecture of the image being gated. "auto" reads it from the
+    # image's parent directory - i386 or amd64 - the same way the flavor is
+    # read from its grandparent.
+    #
+    # **This selects the dumper, and that is not a convenience.** MSVC 6.0's
+    # dumpbin predates x64 by years: pointed at an amd64 PE it exits 0, prints
+    # the section summary, and prints NO IMPORT SECTION AT ALL. A gate that
+    # believed it would see an empty import table, find nothing disallowed in
+    # it, and pass the binary for the wrong reason. On amd64 the dumper is
+    # therefore WDK 7.1's link.exe /dump, and Test-DumperMachine below refuses
+    # to proceed unless the dumper reports the machine this run expects - so
+    # the failure mode above cannot recur silently if either path is ever
+    # rewired.
+    [ValidateSet("auto", "x86", "amd64")]
+    [string]$Arch = "auto"
 )
 
 $ErrorActionPreference = "Stop"
@@ -150,6 +166,40 @@ function Add-Warning {
 # ---------------------------------------------------------------- dumpbin ---
 
 function Initialize-Dumpbin {
+    param([string]$ForArch = "x86")
+
+    if ($ForArch -eq "amd64") {
+        # WDK 7.1 ships no dumpbin.exe; link.exe /dump is the same dumper, and
+        # Invoke-Dumpbin inserts the /dump for any exe named link.
+        $wdk = $env:WDKROOT
+        if ([string]::IsNullOrWhiteSpace($wdk)) {
+            $wdk = Join-Path $repo "tools\WinDDK71"
+        }
+        $link = Join-Path $wdk "bin\x86\amd64\link.exe"
+        if (-not (Test-Path -LiteralPath $link)) {
+            throw @"
+no x64 dumper found at '$link'.
+An amd64 image cannot be gated with MSVC 6.0's dumpbin: it reads the file
+without error and reports no imports at all, which would pass this gate for
+the wrong reason. Unpack WDK 7.1 into tools\WinDDK71 (design record 11
+section 4), or set WDKROOT.
+"@
+        }
+        # link.exe needs its own support DLLs from the sibling bin\x86.
+        $support = Join-Path $wdk "bin\x86"
+        if (Test-Path -LiteralPath $support) {
+            $onPath = $false
+            foreach ($entry in ($env:PATH -split ';')) {
+                $trimmed = $entry.Trim().TrimEnd('\')
+                if ($trimmed -ne "" -and $trimmed -eq $support.TrimEnd('\')) { $onPath = $true }
+            }
+            if (-not $onPath) {
+                $env:PATH = "$support;$env:PATH"
+            }
+        }
+        return $link
+    }
+
     $msvc = $env:MSVC6
     if ([string]::IsNullOrWhiteSpace($msvc)) {
         $msvc = Join-Path $repo "tools\MSVC600"
@@ -205,7 +255,14 @@ function Invoke-Dumpbin {
     $saved = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        $out = & $Exe $Mode $Path 2>&1
+        # link.exe is the same dumper behind a /dump prefix - that is all
+        # dumpbin.exe is. Keyed on the file name so every call site can keep
+        # passing a plain path.
+        if ([System.IO.Path]::GetFileNameWithoutExtension($Exe) -ieq "link") {
+            $out = & $Exe /dump $Mode $Path 2>&1
+        } else {
+            $out = & $Exe $Mode $Path 2>&1
+        }
     } finally {
         $ErrorActionPreference = $saved
     }
@@ -213,6 +270,55 @@ function Invoke-Dumpbin {
         throw "dumpbin $Mode failed on '$Path' (exit $LASTEXITCODE). If that is 53, MSPDB60.DLL is missing from PATH."
     }
     return @($out | ForEach-Object { [string]$_ })
+}
+
+function Get-PeMachine {
+    param([string]$Path)
+
+    # Read straight out of the file rather than asking a dumper, because the
+    # thing being guarded against is a dumper that misreads this very field.
+    # Returns $null for anything that is not a PE at all - the gate's own tests
+    # drive it with synthetic fixtures, and a non-PE cannot pass the import
+    # enforcement below in any case.
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($Path)
+    } catch {
+        return $null
+    }
+    if ($bytes.Length -lt 0x40) { return $null }
+    if ($bytes[0] -ne 0x4D -or $bytes[1] -ne 0x5A) { return $null }   # MZ
+    $peOff = [System.BitConverter]::ToInt32($bytes, 0x3C)
+    if ($peOff -le 0 -or ($peOff + 6) -ge $bytes.Length) { return $null }
+    if ($bytes[$peOff] -ne 0x50 -or $bytes[$peOff + 1] -ne 0x45) { return $null }  # PE
+    return [System.BitConverter]::ToUInt16($bytes, $peOff + 4)
+}
+
+function Test-DumperMachine {
+    param(
+        [string]$Path,
+        [string]$ExpectedArch
+    )
+
+    # The guard on the failure this gate would otherwise report as a PASS.
+    # MSVC 6.0's dumpbin predates x64: pointed at an amd64 image it exits 0,
+    # prints the section summary and prints no import section at all, so the
+    # gate would enforce the allowlist against an empty set of imports and find
+    # nothing wrong. Tying the image's own machine word to the architecture
+    # this run was told it is gating is what makes that combination impossible
+    # to reach quietly - the dumper is chosen from the same word.
+    $machine = Get-PeMachine -Path $Path
+    if ($null -eq $machine) { return }
+
+    $want = if ($ExpectedArch -eq "amd64") { 0x8664 } else { 0x014C }
+    if ($machine -ne $want) {
+        throw @"
+'$Path' is machine 0x$('{0:X4}' -f $machine) but this run is gating $ExpectedArch (expected 0x$('{0:X4}' -f $want)).
+Either the image is not the architecture it was staged as, or the wrong dumper
+was selected for it. Both matter: MSVC 6.0's dumpbin reports NO imports at all
+for an amd64 image, so that pairing passes this gate without having checked a
+single import.
+"@
+    }
 }
 
 function Get-ImportPairs {
@@ -688,7 +794,11 @@ if ($ParseOnly) {
 }
 
 try {
-    $dumpbin = Initialize-Dumpbin
+    # The x86 dumper is initialised unconditionally because the target-evidence
+    # files in steps 2 and 3 are x86 images whatever the driver's architecture.
+    # Per-image dumpers are added to this table as they are needed.
+    $dumpbin = Initialize-Dumpbin -ForArch "x86"
+    $dumpers = @{ "x86" = $dumpbin }
 
     $rules = Read-AllowFile -Path $AllowPath
     $usbportRows = Read-UsbportExpected -Path $UsbportExpectedPath
@@ -710,7 +820,10 @@ try {
     } else {
         foreach ($candidate in @("src\objfre\i386\xhci98.sys",
                                  "src\objchk\i386\xhci98.sys",
-                                 "src\objchk_qemu\i386\xhci98.sys")) {
+                                 "src\objchk_qemu\i386\xhci98.sys",
+                                 "src\objfre\amd64\xhci98.sys",
+                                 "src\objchk\amd64\xhci98.sys",
+                                 "src\objchk_qemu\amd64\xhci98.sys")) {
             $path = Join-Path $repo $candidate
             if (Test-Path -LiteralPath $path) {
                 $images += $path
@@ -835,8 +948,46 @@ Fix it one of these ways:
                 }
             }
         }
-        Test-Image -Path $path -ImageFlavor $imageFlavor -Rules $rules -Dumpbin $dumpbin `
-            -Win2k $win2k -Precedent $precedent -NtkernText $ntkernText
+        # The architecture, read from the parent directory the way the flavour
+        # is read from the grandparent, and settled BEFORE the dumper is chosen
+        # because on amd64 the wrong dumper reports no imports rather than
+        # failing.
+        $imageArch = $Arch
+        if ($imageArch -eq "auto") {
+            $archDir = Split-Path -Leaf (Split-Path -Parent $path)
+            switch ($archDir) {
+                "i386"  { $imageArch = "x86" }
+                "amd64" { $imageArch = "amd64" }
+                default {
+                    throw "cannot infer the architecture of '$path': its parent directory is '$archDir', not i386 or amd64. Pass -Arch x86 or -Arch amd64."
+                }
+            }
+        }
+        if (-not $dumpers.ContainsKey($imageArch)) {
+            $dumpers[$imageArch] = Initialize-Dumpbin -ForArch $imageArch
+        }
+        $imageDumpbin = $dumpers[$imageArch]
+        Test-DumperMachine -Path $path -ExpectedArch $imageArch
+
+        # **The target evidence is x86 evidence, and it is withheld rather than
+        # reused on amd64.** Steps 2 and 3 resolve imports against Windows 2000
+        # SP4's kernels and HALs and against Windows 98 / NUSB binaries; none of
+        # those says anything about whether a symbol resolves on NT 5.2 amd64.
+        # Passing them through would let an amd64 binary collect "w2k-export"
+        # ticks it has not earned, which is worse than having no evidence at
+        # all. The equivalent amd64 baselines are roadmap task 21.3's first box
+        # and do not exist yet, so enforcement runs in full and resolution does
+        # not run at all.
+        if ($imageArch -eq "amd64") {
+            Add-Warning ("amd64 image '$path': the committed allowlist was enforced in full, but NO target-resolution evidence was checked. " +
+                "The Windows 2000 SP4 and Windows 98 baselines are x86 and say nothing about NT 5.2 amd64; the amd64 baselines that would " +
+                "replace them are roadmap task 21.3 and are not staged. Nothing here has checked that these symbols exist on a 64-bit target.")
+            Test-Image -Path $path -ImageFlavor $imageFlavor -Rules $rules -Dumpbin $imageDumpbin `
+                -Win2k $null -Precedent $null -NtkernText $null
+        } else {
+            Test-Image -Path $path -ImageFlavor $imageFlavor -Rules $rules -Dumpbin $imageDumpbin `
+                -Win2k $win2k -Precedent $precedent -NtkernText $ntkernText
+        }
     }
 } catch {
     Write-Err $_.Exception.Message

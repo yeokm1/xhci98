@@ -1627,18 +1627,25 @@ miniport declaring `Version >= 310`, which is the one path by which a future
 change here could move physical addresses above 4 GB. Nothing else in the
 phase has started, and no binary exists.
 
-**Suggested running order, and nothing in it needs the owner** - WDK 7.1 is
-unpacked, the reference binaries are extracted, and none of the four
-decisions still open in design record 11 section 12 gates a compile; they are
-all about shipping and toolchain provenance. The fifth, the INF shape, was
-taken on 2026-09-09: a separate x64 package with its own INF, leaving
-`src/xhci98.inf` byte-identical. Take the
-`USBPORT_ENDPOINT_PROPERTIES` reading in 21.4 **first**, because the compiler
-now has nothing further to say about this source and that is the one
-declaration with no measurement behind it. Then the rest of 21.4's small
-items, then 21.2 - whose real weight is the build plumbing rather than the
-code, since it is single-architecture the whole way down (design record 11
-section 8).
+**That order was taken on 2026-09-09 and it held.** The
+`USBPORT_ENDPOINT_PROPERTIES` reading went first and became M7; the rest of
+21.4's declaration work followed from it; then 21.2's plumbing, which is
+indeed where the weight was. **An amd64 `xhci98.sys` now exists in all three
+flavours** and the x86 binaries were held byte-identical across the whole
+change - `.text`, `.data`, `INIT`, `.rsrc` and `.reloc` unchanged against the
+published `1.0.2.0` pair, differing only in the enumerated PE metadata bytes a
+re-link always moves. What remains before an amd64 binary can pass its gates
+is task 21.3, and the first build made that task larger and more interesting
+than the plan assumed: see its first box.
+
+The version was bumped to `1.1.0.0` in the same session, on the owner's
+instruction, as a separate step after that identity was proved - its only
+effect on the x86 binaries is eight bytes inside `.rsrc`, measured rather than
+assumed. **`src/xhci98.inf` is therefore no longer byte-identical to
+`1.0.2.0`'s**, since `DriverVer` moved with it; what decision 2 in design
+record 11 section 12 actually buys is unchanged and is the thing that
+mattered - no new install path, no widened `[Manufacturer]` line, and no
+existing install leg to re-validate.
 
 Why a phase: the same reason Phase 19 was one. A target is not a build. The
 static pass has to settle the ABI before any code is written, the guest has
@@ -1676,26 +1683,51 @@ are static readings and no other task's box may be ticked on one.
         lands above 4 GB whatever the guest's RAM
   - [x] M6 the offset map end to end - all 50 slots the amd64 `usbehci`
         fills land on `f(X) = 0x28 + (X - 0x28) * 2`
-- [ ] **21.2 - the x64 build path.** One `WNET` amd64 binary, `fre` and
-      `chk`, from `tools/WinDDK71`.
-  - [ ] the `qemu` flavour's `__asm` exclusion under `_WIN64`, without which
-        that flavour does not compile at all. The scout confirmed it: 10
-        errors, no others, at `4670`, `4673`, `4678` and `4695`
-  - [ ] the first build that links. The scout has already taken the
-        compile half of this - the first time this source has been through a
-        non-MSVC-6 compiler, and it came back with one warning - so what is
-        left here is the arch fork through `build-driver.cmd` and
-        `src/sources`, the amd64 `usbport.lib`, and the link itself.
-        Two traps the scout paid for: `setenv.bat` sets
-        `BUILD_ALT_DIR=fre_wnet_AMD64`, which `src/sources`' three-flavour
-        check refuses, so the wrapper must override it after `setenv.bat`
-        exactly as it does for `chk_qemu` today; and `/WX` is on in `fre` and
-        off in `chk`, so a first build exercised only as `chk` would not see a
-        warning that fails `release`
+- [x] **21.2 - the x64 build path.** Done 2026-09-09. All three flavours
+      compile and link for amd64 from `tools/WinDDK71`, with no errors and no
+      warnings, at `src/obj<flavour>/amd64/`. Design record 11 section 8, "The
+      first build".
+  - [x] the `qemu` flavour's `__asm` exclusion under `_WIN64`, without which
+        that flavour does not compile at all. Both sites and their two locals
+        now sit behind one named guard, `XHCI_CHECK_STACK_DELTA`; the check is
+        x86-only by nature, since the calling-convention mismatch it watches
+        for is a `__stdcall` decoration problem amd64 does not have
+  - [x] the first build that links. `build-driver.cmd -amd64` selects WDK 7.1
+        and `setenv <root> <flavor> x64 WNET no_oacr`, `make-usbport-lib.cmd
+        -amd64` produces `src/usbport_amd64.lib` through the same five
+        verification steps (the `_Name@N` decoration check becoming its mirror
+        - plain names present, decorated forms absent, machine `8664`), and
+        `src/sources` picks the library by `_BUILDARCH`. Both traps the scout
+        named held: `BUILD_ALT_DIR` is overridden back to the flavour word
+        after `setenv.bat`, which puts the output beside `i386` with no second
+        obj root, and `release` was built first precisely because `/WX` is on
+        there
 - [ ] **21.3 - the gates.** None of these may be skipped for an amd64
       binary.
   - [ ] an `amd64` dimension in the import gate, with NT 5.2 amd64 baselines
-        behind it as `win2k-baselines.expected` has for SP4
+        behind it as `win2k-baselines.expected` has for SP4. **Task 21.2's
+        first build made this concrete and bigger than it looked.** The gate
+        already selects the right dumper and enforces the committed allowlist
+        on an amd64 image in full, refusing it loudly; what it cannot do is
+        resolve the symbols, so it withholds its Windows 2000 and Windows 98
+        evidence steps rather than run them against x86 files. The amd64
+        binary imports **seven** pairs where x86 imports eleven, and the
+        difference is not cosmetic: `READ`/`WRITE_REGISTER_ULONG`,
+        `InterlockedIncrement`, `KeInitializeSpinLock` and `KeGetCurrentIrql`
+        become intrinsics or inlines and vanish; `HAL!KfAcquireSpinLock` and
+        `KfReleaseSpinLock` are replaced by `ntoskrnl!KeAcquireSpinLockRaiseToDpc`
+        and `ntoskrnl!KeReleaseSpinLock`; and **`ntoskrnl!KeBugCheckEx` appears,
+        reached through a DDK inline rather than any call this source makes** -
+        which is worth understanding before a guest runs it, not merely
+        allowlisting. Two decisions come with the work and neither is taken:
+        whether the allowlist grows an arch column or gains a sibling amd64
+        file, and how the standing "every pair carries Windows 98 evidence of
+        its own" rule is scoped, since it is a rule about a 32-bit operating
+        system that an amd64 binary cannot satisfy. The baselines themselves
+        need NT 5.2 amd64 `ntoskrnl.exe` and the HAL variants extracted and
+        authenticated; the XP x64 ISO is no longer on this host, but
+        `vm/winxp64.img` is, and task 21.5 read that image statically through
+        7-Zip without booting it
   - [ ] arch-conditional checks in `scripts\make-usbport-lib.cmd` - the
         undecorated-name check replacing the `@N` one, the other four steps
         unchanged
@@ -1717,31 +1749,31 @@ are static readings and no other task's box may be ticked on one.
         word is the directory name, and its identical-hash refusal has to
         compare within an architecture
 - [ ] **21.4 - the code changes task 21.1 implies** (design record 11
-      section 9).
-  - [ ] the `_WIN64` packet declaration at the measured `0x250`, with
-        asserts carrying measured numbers rather than the compiler's own.
-        The scout read the compiler's own from the other side: `0x248`, with
-        every callback offset landing on M6's map and only the trailing
-        reserved region short
-  - [ ] **`USBPORT_ENDPOINT_PROPERTIES` read off the amd64 `usbehci.sys`**,
-        the way M4 read `USBPORT_RESOURCES`. The scout found it changes size
-        on amd64 (`0x40` to `0x48`, `BufferVA` moving `0x1C` -> `0x20` and
-        shifting everything after it) and **none of M1-M6 measured it**. It is
-        handed to `OpenEndpoint`, `ReopenEndpoint`,
-        `QueryEndpointRequirements` and `RebalanceEndpoint`, so a wrong layout
-        is misread on every endpoint operation and nothing catches it. This is
-        a static reading and needs no guest
-  - [ ] `USBPORT_RESOURCES` under `_WIN64` at M4's measured `0x48` - the
-        current declaration gives `0x40`, the whole gap being
-        `InterruptAffinity`, which M4 read as 8 bytes and the declaration pins
-        to 4
-  - [ ] `src/xhci_dispatch.c:1001`'s implicit `ULONG_PTR` -> `ULONG`
+      section 9). Five of seven done 2026-09-09; the two left need no guest
+      and block nothing that has started.
+  - [x] the `_WIN64` packet declaration at the measured `0x250`. Reached by
+        widening the two trailing `Reserved` canaries to `ULONG_PTR`, which
+        M6 records as one of the two valid ways and which leaves the x86
+        layout untouched. The asserts carry M3's and M6's measured numbers on
+        each architecture rather than the compiler's own, so the eight-byte
+        shortfall the scout found can actually fail one
+  - [x] **`USBPORT_ENDPOINT_PROPERTIES` read off the amd64 `usbehci.sys`** -
+        design record 11 section 5, **M7**, read 2026-09-09, method `static`.
+        `sizeof` `0x48` measured from `OpenEndpoint`'s nine-qword copy rather
+        than inferred, `BufferVA` at `0x20` read as a QWORD, `BufferPA` still
+        4 bytes at `0x28`, and the TT pair at `0x38`/`0x3A`. The compiler's
+        natural widening turned out to be right, so no `#ifdef` was needed -
+        what the reading bought is the right to assert
+  - [x] `USBPORT_RESOURCES` under `_WIN64` at M4's measured `0x48` -
+        `InterruptAffinity` is now a `ULONG_PTR`, being a `KAFFINITY`, which
+        is the whole of the gap and is identical on x86
+  - [x] `src/xhci_dispatch.c:1001`'s implicit `ULONG_PTR` -> `ULONG`
         truncation, the one thing the amd64 compiler objects to in this
         source, and fatal in `release` only
-  - [ ] `src/xhci_compat.h`'s `ULONG_PTR` typedef guarded for 64-bit hosts.
-        **Not a blocker for the driver build** - the typedef is inside the
-        `#ifdef XHCI_HOST_TEST` block and `ntddk.h` supplies the real one in a
-        driver build. What it blocks is the `test/test_packet.c` box below
+  - [x] `src/xhci_compat.h`'s `ULONG_PTR` typedef guarded for 64-bit hosts.
+        Windows is LLP64, so `unsigned long` stays 32 bits on amd64; the old
+        unconditional typedef was accidentally correct only because the host
+        suite has always been built x86
   - [ ] design record 04's common-buffer arithmetic re-run against the amd64
         `sizeof`s and the result stated
   - [ ] `test/test_packet.c` compiling the header for amd64, so

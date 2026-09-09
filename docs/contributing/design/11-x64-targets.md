@@ -450,6 +450,71 @@ the record and the map is now validated across 50 slots, so the arithmetic
 carries them. If a change ever calls a service this driver does not call
 today, read that slot rather than trusting the inference.
 
+### M7 - `USBPORT_ENDPOINT_PROPERTIES` - read 2026-09-09, **pass**
+
+Added after M1-M6, because the compile scout of section 8 found that this
+structure changes size on amd64 and that none of the six covered it. It is
+handed to `OpenEndpoint`, `ReopenEndpoint`, `QueryEndpointRequirements` and
+`RebalanceEndpoint`, so a wrong layout is misread on every endpoint operation
+with nothing to catch it. Method **static**, on the amd64 `usbehci.sys`, the
+way M4 read `USBPORT_RESOURCES`.
+
+**The size is measured directly rather than inferred from the fields.**
+`OpenEndpoint` (packet slot `0x28` -> RVA `0x7A40`) copies the whole structure
+into its own endpoint extension as nine 8-byte moves:
+
+```
+usbehci!OpenEndpoint:                        ; rcx=ext rdx=props r8=epExt
+  41 c7 00 32 30 65 70   mov  dword ptr [r8],70653032h      ; '20ep' tag
+  48 8b 02               mov  rax,qword ptr [rdx]
+  49 89 40 08            mov  qword ptr [r8+8],rax
+  48 8b 42 08            mov  rax,qword ptr [rdx+8]
+  ...                                                       ; +10,+18,+20,+28
+  48 8b 42 40            mov  rax,qword ptr [rdx+40h]       ; the ninth
+  49 89 40 48            mov  qword ptr [r8+48h],rax
+```
+
+Nine qwords from `[rdx+0x00]` to `[rdx+0x40]` inclusive is **`0x48` bytes, and
+the count is the measurement**: a `0x40` structure would be eight moves and a
+`0x50` one ten. It is corroborated from the other side, because the copy lands
+at `epExt+8` and the extension's own fields resume at `+0x58` - immediately
+after the copy ends at `+0x50`.
+
+The individual fields, each read from an instruction:
+
+| Field | x86 | amd64 | how it was read |
+|---|---|---|---|
+| `DeviceAddress` | `0x00` | `0x00` | `mov al,byte ptr [r12]` then `and eax,7Fh` |
+| `EndpointAddress` | `0x02` | `0x02` | `movzx ecx,word ptr [r12+2]`, shifted to bits 8-11 |
+| `DeviceSpeed` | `0x08` | `0x08` | `cmp dword ptr [rdx+8],2` - 4 bytes, against `UsbHighSpeed` |
+| `TransferType` | `0x14` | `0x14` | `mov r9d,dword ptr [rdx+14h]`, switched on 0..3 |
+| `BufferVA` | `0x1C` | **`0x20`** | `mov r15,qword ptr [rdi+20h]` - a QWORD read |
+| `BufferPA` | `0x20` | **`0x28`** | `mov r13d,dword ptr [rdi+28h]` - still a DWORD |
+| `BufferLength` | `0x24` | **`0x2C`** | `mov r14d,dword ptr [rdi+2Ch]` |
+| `HubAddr` | `0x30` | **`0x38`** | `movzx eax,word ptr [r12+38h]`, `and eax,7F0000h` |
+| `PortNumber` | `0x32` | **`0x3A`** | `movzx ecx,word ptr [r12+3Ah]`, shifted to bit 24 |
+| `sizeof` | `0x40` | **`0x48`** | the nine-qword copy above |
+
+So the structure is the x86 declaration compiled wide, with `BufferVA` the one
+member that moves and four bytes of padding appearing at `0x1C` to align it.
+**Everything below `BufferVA` keeps its x86 offset and everything above it sits
+exactly 8 higher**, confirmed at both ends of both runs rather than at one
+point.
+
+Two corroborations worth keeping. `BufferPA` stays a 4-byte `ULONG` on amd64,
+which is M5 restated from the consumer's side - the adapter is created 32-bit,
+so a physical address still fits one - and the surrounding arithmetic in the
+control/bulk path advances `BufferVA` and `BufferPA` together by `0x100` while
+reducing `BufferLength`, which is a common-buffer carve and says the three
+fields were read as the trio this driver also treats them as. And the interrupt
+path reads `DeviceSpeed` through the extension's copy at `epExt+0x10`, which is
+`props+0x08` under the `+8` copy offset - the same field, reached a second way.
+
+The width question M4 made mandatory is answered for two of the three fields
+this header spells `ULONG` in place of an NT enum: `DeviceSpeed` and
+`TransferType` are both read as DWORDs above. `Direction` is not touched by any
+path disassembled here, and sits between two measured anchors with no room to
+move.
 
 ---
 
@@ -791,6 +856,53 @@ holds here with nothing to fall back on: the compiler's natural widening is
 a guess until the binary confirms it, and for this structure the binary has
 not been asked.
 
+### The first build - taken 2026-09-09, and it links
+
+Task 21.2 was taken with the plumbing this section calls for: an arch fork in
+`build-driver.cmd` (`-amd64`, WDK 7.1 and `setenv <root> <flavor> x64 WNET
+no_oacr` instead of the Windows 2000 DDK and `w2k x86`), an amd64 arm in
+`make-usbport-lib.cmd` producing `src\usbport_amd64.lib`, and `_BUILDARCH` in
+`src\sources` choosing between the two libraries. **All three flavours compile
+and link for amd64, with no errors and no warnings**, and the output lands at
+`src\obj<flavour>\amd64\` beside `i386` exactly as this section predicted - so
+`BUILD_ALT_DIR` overridden back to the flavour word does give one obj root per
+flavour with the architecture underneath, and nothing had to be renamed.
+
+Two things came out of it that no static pass could have.
+
+**The amd64 import surface is not the x86 one, and it is smaller.** Seven
+module/symbol pairs against x86's eleven:
+
+| x86 | amd64 | why |
+|---|---|---|
+| `ntoskrnl!READ_REGISTER_ULONG`, `WRITE_REGISTER_ULONG` | *gone* | intrinsics on amd64, compiled inline |
+| `ntoskrnl!InterlockedIncrement` | *gone* | intrinsic |
+| `ntoskrnl!KeInitializeSpinLock` | *gone* | inlined |
+| `HAL!KfAcquireSpinLock`, `KfReleaseSpinLock` | `ntoskrnl!KeAcquireSpinLockRaiseToDpc`, `ntoskrnl!KeReleaseSpinLock` | the `Kf*` fastcall pair is an x86-only HAL export; the amd64 equivalents live in the kernel |
+| `HAL!KeGetCurrentIrql` | *gone* | inlined |
+| - | **`ntoskrnl!KeBugCheckEx`** | **new**, and reached through a DDK inline rather than any call this source makes |
+| `HAL!KeStallExecutionProcessor`, `ntoskrnl!DbgPrint`, the two USBPORT exports | unchanged | |
+
+Every one of those needs an allowlist row with NT 5.2 amd64 evidence behind
+it, and `KeBugCheckEx` needs its origin established rather than merely
+allowed - a driver that can bugcheck from a path its own source does not name
+is worth understanding before it runs on a guest. This is the substance of
+task 21.3's first box and is bigger than "add a column": the allowlist's
+standing rule is that *every pair carries Windows 98 evidence of its own*,
+which is a rule about a 32-bit operating system and cannot be asked of an
+amd64 binary at all.
+
+**A dumper trap, found because the gate reported it as a pass.** MSVC 6.0's
+`dumpbin` predates x64: pointed at an amd64 image it exits 0, prints the
+section summary, and prints **no import section whatsoever**. The import gate
+would have enforced the allowlist against an empty set of imports, found
+nothing disallowed, and passed the binary - the exact shape of failure this
+project treats as worse than a refusal. `check-imports.ps1` now selects WDK
+7.1's `link /dump` for an amd64 image and reads the PE machine word out of the
+file itself, refusing to proceed unless it matches the architecture the run was
+told it is gating. WDK 7.1 ships no `dumpbin.exe` at all, which is why the
+dumper is `link /dump`; they are the same tool.
+
 ---
 
 ## 9. The code changes
@@ -815,7 +927,20 @@ not been asked.
    pins to 4 - and `USBPORT_SCATTER_GATHER_LIST` is `0x50` against `0x40`,
    with `SgElement[]` moving from `0x10` to `0x1C`.
 
-   **2a - `USBPORT_ENDPOINT_PROPERTIES` has to be measured, and it has not
+   **2a - `USBPORT_ENDPOINT_PROPERTIES` has to be measured. DONE 2026-09-09,
+   and the answer is the compiler's layout after all - see M7.** The size is
+   `0x48`, `BufferVA` is at `0x20` and `BufferPA` stays 4 bytes at `0x28`,
+   every number read off an instruction rather than derived. The declaration
+   therefore needs no `#ifdef`: `BufferVA` is already a `ULONG_PTR`, which is
+   the whole of what moves. What the measurement bought is not a change but
+   the right to assert - `xhci_usbport.h` now pins the size and six offsets on
+   each architecture from measured numbers, so the asserts can fail.
+   The paragraph below is kept because it is still the rule, and 2b is the
+   structure it now applies to.
+
+   *(Original text:)*
+
+   **`USBPORT_ENDPOINT_PROPERTIES` has to be measured, and it has not
    been.**
    The scout found it changes size on amd64 - `0x40` to `0x48`, because
    `ULONG_PTR BufferVA` at `0x1C` widens and realigns, moving `BufferVA` to
@@ -835,6 +960,23 @@ not been asked.
    `InterruptAffinity` in item 2 is the cautionary case: a field pinned here
    to `ULONG` that the real amd64 structure widens to 8, and the whole of why
    `USBPORT_RESOURCES` comes out `0x40` instead of `0x48`.
+   **2b - `USBPORT_SCATTER_GATHER_LIST` is now the one structure running on an
+   assumption, and it is the last of them.** M7 closed 2a; this one was named
+   in item 2 and has never been read off a binary. The compiler puts it at
+   `0x50` with `SgElement[]` at `0x1C` - `CurrentVa` and `MappedSystemVa` both
+   widen and realign, while the array's own alignment stays 4 because every
+   member of an element is a `ULONG`. `xhci_usbport.h` asserts those two
+   numbers under `_WIN64` and says in the same comment that they are the
+   compiler's rather than a measurement, so the day someone reads the real
+   structure the assert either confirms it or fires.
+   
+   It matters because the driver consumes this structure on the transfer path,
+   so a wrong `SgElement[]` offset corrupts every scatter-gather transfer
+   silently. It was not read in the M7 pass because the consumer side is
+   several calls deep in `usbehci`'s transfer submission rather than in one
+   legible function; the **producer** side in `usbport.sys` is the better
+   instrument and is where a future reading should start.
+
 3. A `StartPA` high-DWORD refusal matching the one the scatter-gather path
    already makes. **M5 shows the adapter is created 32-bit, so this guards
    nothing measured** - it is the "check it, never assume it" rule applied one

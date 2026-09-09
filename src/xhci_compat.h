@@ -24,14 +24,28 @@
 #ifdef XHCI_HOST_TEST
 
 /*
- * Host-test build: no ntddk.h. These must match the DDK's x86 widths, which
- * is what the layout asserts in xhci.h check.
+ * Host-test build: no ntddk.h. These must match the DDK's widths for whichever
+ * architecture the host suite is being compiled for, which is what the layout
+ * asserts in xhci.h check.
  */
 typedef unsigned long   ULONG;
 typedef unsigned short  USHORT;
 typedef unsigned char   UCHAR;
 typedef unsigned char   BOOLEAN;
+/*
+ * Pointer-sized, and on Windows that is not `unsigned long`. Windows is LLP64:
+ * `long` stays 32 bits on amd64 while a pointer becomes 64, so the old
+ * unconditional `unsigned long` was accidentally correct rather than correct -
+ * it agreed with the DDK only because the host suite has always been built
+ * x86. It is what `test/test_packet.c` needs in order to check the amd64
+ * layout of the miniport ABI on the build host, and getting it wrong there
+ * would make that test agree with a header that no driver build produces.
+ */
+#ifdef _WIN64
+typedef unsigned __int64 ULONG_PTR;
+#else
 typedef unsigned long   ULONG_PTR;
+#endif
 typedef long            LONG;
 typedef void            VOID;
 

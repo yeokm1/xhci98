@@ -19,11 +19,26 @@
  *   - USBPORT_GetHciMn returns 0x57324B30 on both primary targets and
  *     0x10000001 on the XP lineage.
  *
+ * **On amd64 those first two numbers are different, and the differences are
+ * measured rather than derived** (design record 11 sections 5 and 8, phase 21):
+ * the packet is `0x250` / `0x230`, every offset above the `OpenEndpoint` hinge
+ * at `0x28` lands on `f(X) = 0x28 + (X - 0x28) * 2`, and three support
+ * structures change size - `USBPORT_RESOURCES` (`0x34` to `0x48`),
+ * `USBPORT_ENDPOINT_PROPERTIES` (`0x40` to `0x48`) and
+ * `USBPORT_SCATTER_GATHER_LIST` (`0x40` to `0x50`, the one number here that is
+ * still the compiler's rather than a binary's). `USBPORT_GetHciMn` returns
+ * `0x10000001` on NT 5.2 amd64, which is the XP value this driver already
+ * accepts, so no lineage constant follows from 64-bit support.
+ *
  * The NT types the real header uses are deliberately *not* pulled in here.
  * Enums become ULONG and 64-bit fields become Lo/Hi ULONG pairs, per AGENTS.md
  * ("no enums for hardware layouts", "no 64-bit arithmetic"); the substituted
- * types are all 4-byte-exact on x86, and the size/offset asserts at the bottom
+ * types are all 4-byte-exact on x86 - and, where it was checked, on amd64 too -
+ * and the size/offset asserts at the bottom
  * of this file are what proves that claim rather than asserting it in prose.
+ * The two members that are genuinely pointer-sized, `USBPORT_RESOURCES`'s
+ * `InterruptAffinity` and `USBPORT_ENDPOINT_PROPERTIES`'s `BufferVA`, are
+ * declared `ULONG_PTR` for that reason and are identical on x86.
  * The substitution also lets test/test_packet.c compile this header on the
  * build host with no DDK (docs/contributing/design/03-host-unit-tests.md).
  *
@@ -153,13 +168,25 @@ typedef ULONG RHSTATUS;
  * page-aligned) before this arrives; ResourceBase is BAR0 already mapped.
  * LegacySupport is the one OUT field.
  */
+/*
+ * **This structure is a different size on amd64, and the whole of the
+ * difference is `InterruptAffinity`.** It is a `KAFFINITY`, which is
+ * pointer-sized, so it is declared `ULONG_PTR` rather than `ULONG` - identical
+ * on x86, eight bytes on amd64. Design record 11's M4 measured the amd64
+ * structure at `0x48` with `StartPA` still a 4-byte `ULONG` at `0x40`, and
+ * that is exactly what this declaration produces on both architectures; a
+ * `ULONG` here would give `0x40` and put every field from `ShareVector` on at
+ * the wrong offset. The offsets in the right-hand column are x86; the amd64
+ * ones are the same through `InterruptVector` and 8 higher from `ShareVector`
+ * onward.
+ */
 typedef struct _USBPORT_RESOURCES {
     ULONG ResourcesTypes;       /* 0x00 PORT|INTERRUPT|MEMORY bitmask       */
     ULONG HcFlavor;             /* 0x04 USB_CONTROLLER_FLAVOR enum          */
     ULONG InterruptVector;      /* 0x08                                     */
     UCHAR InterruptLevel;       /* 0x0C KIRQL                               */
     UCHAR Padded1[3];
-    ULONG InterruptAffinity;    /* 0x10 KAFFINITY                           */
+    ULONG_PTR InterruptAffinity;/* 0x10 KAFFINITY - pointer-sized, see above */
     UCHAR ShareVector;          /* 0x14 BOOLEAN                             */
     UCHAR Padded2[3];
     ULONG InterruptMode;        /* 0x18 KINTERRUPT_MODE enum                */
@@ -174,6 +201,44 @@ typedef struct _USBPORT_RESOURCES {
     UCHAR Reserved3;            /* 0x33                                     */
 } USBPORT_RESOURCES, *PUSBPORT_RESOURCES;
 
+/*
+ * **This structure changes size on amd64 and every endpoint callback is handed
+ * one**, so a wrong layout here is misread by `OpenEndpoint`,
+ * `ReopenEndpoint`, `QueryEndpointRequirements` and `RebalanceEndpoint` alike,
+ * silently. `BufferVA` is the reason it moves: it is the one pointer-sized
+ * member, so it forces 8-byte alignment, four bytes of padding appear at
+ * `0x1C`, and every field from `BufferVA` on sits 8 higher than the x86 column
+ * below.
+ *
+ * Measured off the amd64 `usbehci.sys` on 2026-09-09, method **static**, the
+ * way M4 read `USBPORT_RESOURCES` (design record 11 section 5, M7). The
+ * numbers this declaration must reproduce, each read from an instruction
+ * rather than inferred:
+ *
+ *   sizeof            0x48  OpenEndpoint copies the whole structure into its
+ *                           endpoint extension as nine 8-byte moves, from
+ *                           [rdx+0x00] to [rdx+0x40] inclusive, and the
+ *                           extension's own fields resume at +0x58 after the
+ *                           copy ends at +0x50
+ *   DeviceAddress     0x00  read as a byte and masked 0x7F
+ *   EndpointAddress   0x02  read as a word
+ *   DeviceSpeed       0x08  compared against 2 (UsbHighSpeed), 4 bytes
+ *   TransferType      0x14  switched on 0..3, 4 bytes
+ *   BufferVA          0x20  read as a QWORD - this is the field that moves
+ *   BufferPA          0x28  read as a DWORD, and still 32-bit (M5: the DMA
+ *                           adapter is created 32-bit, so a PA fits a ULONG)
+ *   BufferLength      0x2C  read as a DWORD
+ *   HubAddr           0x38  read as a word and masked 0x7F
+ *   PortNumber        0x3A  read as a word
+ *
+ * The three fields this header spells `ULONG` in place of an NT enum -
+ * `DeviceSpeed`, `TransferType` and `Direction` - are the ones that had to be
+ * checked for width rather than position, because `InterruptAffinity` in
+ * `USBPORT_RESOURCES` is the cautionary case of a field pinned here to `ULONG`
+ * that the real structure widens. Two of the three are measured above as
+ * 4 bytes; `Direction` is not read by any path disassembled, and sits between
+ * two measured anchors with no room to move.
+ */
 typedef struct _USBPORT_ENDPOINT_PROPERTIES {
     USHORT DeviceAddress;             /* 0x00 */
     USHORT EndpointAddress;           /* 0x02 */
@@ -579,8 +644,20 @@ typedef struct _USBPORT_REGISTRATION_PACKET {
     PHCI_FLUSH_INTERRUPTS FlushInterrupts;       /* 0x128 */
     PHCI_RH_PORT_OPERATION RH_ChirpRootPort;     /* 0x12C */
     PHCI_TAKE_PORT_CONTROL TakePortControl;      /* 0x130 */
-    ULONG Reserved4;                             /* 0x134 canary */
-    ULONG Reserved5;                             /* 0x138 canary */
+    /*
+     * Pointer-sized rather than `ULONG`, and that is a measured requirement on
+     * amd64 rather than tidiness. Registration copies `0x250` bytes there
+     * (design record 11, M3), and the callback before these two ends at
+     * `0x240`; two 4-byte canaries would pack into `0x240`/`0x244` and end the
+     * structure at `0x248`, so usbport would copy eight bytes past the end of
+     * `XhciRegPacket` - a static global - into fields it believes are part of
+     * the packet. M6 read the same `0x250` from the other side and records
+     * that widening these two or adding explicit tail padding are equally
+     * valid, since both are reserved and this driver reads neither. On x86
+     * `ULONG_PTR` is four bytes, so the x86 layout is exactly as it was.
+     */
+    ULONG_PTR Reserved4;                         /* 0x134 canary */
+    ULONG_PTR Reserved5;                         /* 0x138 canary */
 } USBPORT_REGISTRATION_PACKET, *PUSBPORT_REGISTRATION_PACKET;
 
 /* ------------------------------------------------------------------ */
@@ -601,11 +678,81 @@ typedef struct _USBPORT_REGISTRATION_PACKET {
  * every structure" - the ordinary support structures are pinned by size and by
  * group boundary - so it is written as what it is.)*
  */
-#define XHCI_OFFSET_OF(type, field) ((ULONG)&(((type *)0)->field))
+/*
+ * The inner `ULONG_PTR` cast is what keeps this usable on amd64: the address
+ * is pointer-sized there, and going straight to `ULONG` is a pointer
+ * truncation the compiler reports (C4311) - which `/WX` makes an error in the
+ * free build. The value is an offset and genuinely fits; the cast says so
+ * once, here, rather than at every use. On x86 both casts are identities.
+ */
+#define XHCI_OFFSET_OF(type, field) ((ULONG)(ULONG_PTR)&(((type *)0)->field))
 
+/*
+ * **Three of these structures are a different size on amd64, and the numbers
+ * below are measured on both architectures rather than derived from one
+ * another.** That distinction is the whole point: a size assert written from
+ * the compiler's own layout asserts the compiler against itself and cannot
+ * fail, and the registration packet is the case that proves it - declared the
+ * obvious way under `_WIN64` it comes out `0x248` while usbport copies
+ * `0x250`, an eight-byte overrun of a static global that no self-consistent
+ * assert could ever have caught. The amd64 numbers come from design record 11:
+ * M3 for the packet size and its short-copy boundary, M4 for
+ * `USBPORT_RESOURCES`, M6 for the callback offsets, and M7 for
+ * `USBPORT_ENDPOINT_PROPERTIES`.
+ */
+#ifdef _WIN64
+XHCI_C_ASSERT(resources_size, sizeof(USBPORT_RESOURCES) == 0x48);
+XHCI_C_ASSERT(endpoint_properties_size,
+              sizeof(USBPORT_ENDPOINT_PROPERTIES) == 0x48);
+#else
 XHCI_C_ASSERT(resources_size, sizeof(USBPORT_RESOURCES) == 52);
 XHCI_C_ASSERT(endpoint_properties_size,
               sizeof(USBPORT_ENDPOINT_PROPERTIES) == 64);
+#endif
+
+/*
+ * The individual fields M7 read out of the amd64 `usbehci.sys`, and their x86
+ * counterparts from the same record. `BufferVA` is the field that moves and
+ * the reason the structure changes size at all, so it is pinned on both sides
+ * along with the two fields either side of it and the TT pair at the tail -
+ * the ones an off-by-eight would corrupt first.
+ */
+#ifdef _WIN64
+XHCI_C_ASSERT(ep_props_device_speed_offset,
+              XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, DeviceSpeed) == 0x08);
+XHCI_C_ASSERT(ep_props_transfer_type_offset,
+              XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, TransferType) == 0x14);
+XHCI_C_ASSERT(ep_props_buffer_va_offset,
+              XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, BufferVA) == 0x20);
+XHCI_C_ASSERT(ep_props_buffer_pa_offset,
+              XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, BufferPA) == 0x28);
+XHCI_C_ASSERT(ep_props_buffer_length_offset,
+              XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, BufferLength) == 0x2C);
+XHCI_C_ASSERT(ep_props_hub_addr_offset,
+              XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, HubAddr) == 0x38);
+XHCI_C_ASSERT(ep_props_port_number_offset,
+              XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, PortNumber) == 0x3A);
+XHCI_C_ASSERT(resources_start_pa_offset,
+              XHCI_OFFSET_OF(USBPORT_RESOURCES, StartPA) == 0x40);
+#else
+XHCI_C_ASSERT(ep_props_device_speed_offset,
+              XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, DeviceSpeed) == 0x08);
+XHCI_C_ASSERT(ep_props_transfer_type_offset,
+              XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, TransferType) == 0x14);
+XHCI_C_ASSERT(ep_props_buffer_va_offset,
+              XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, BufferVA) == 0x1C);
+XHCI_C_ASSERT(ep_props_buffer_pa_offset,
+              XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, BufferPA) == 0x20);
+XHCI_C_ASSERT(ep_props_buffer_length_offset,
+              XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, BufferLength) == 0x24);
+XHCI_C_ASSERT(ep_props_hub_addr_offset,
+              XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, HubAddr) == 0x30);
+XHCI_C_ASSERT(ep_props_port_number_offset,
+              XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, PortNumber) == 0x32);
+XHCI_C_ASSERT(resources_start_pa_offset,
+              XHCI_OFFSET_OF(USBPORT_RESOURCES, StartPA) == 0x2C);
+#endif
+
 XHCI_C_ASSERT(endpoint_requirements_size,
               sizeof(USBPORT_ENDPOINT_REQUIREMENTS) == 8);
 XHCI_C_ASSERT(setup_packet_size, sizeof(XHCI_SETUP_PACKET) == 8);
@@ -613,7 +760,26 @@ XHCI_C_ASSERT(transfer_parameters_size,
               sizeof(USBPORT_TRANSFER_PARAMETERS) == 28);
 XHCI_C_ASSERT(sg_element_size,
               sizeof(USBPORT_SCATTER_GATHER_ELEMENT) == 24);
+/*
+ * **The amd64 number here is the one exception on this page: it is the
+ * compiler's layout, not a measurement**, and it is written as `0x50` so that
+ * the day someone reads the real structure out of a binary the assert either
+ * confirms it or fires. `CurrentVa` and `MappedSystemVa` both widen and
+ * realign, which moves `SgElement[]` from `0x10` to `0x1C` - the array's own
+ * alignment stays 4, since every member of an element is a `ULONG`. Nothing
+ * has read those offsets off the amd64 `usbport.sys`, so an amd64 binary
+ * consuming a scatter-gather list is running on an assumption in a way it is
+ * not anywhere else. Design record 11 section 9 item 2b carries it as owed.
+ */
+#ifdef _WIN64
+XHCI_C_ASSERT(sg_list_size, sizeof(USBPORT_SCATTER_GATHER_LIST) == 0x50);
+XHCI_C_ASSERT(sg_list_element_offset,
+              XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_LIST, SgElement) == 0x1C);
+#else
 XHCI_C_ASSERT(sg_list_size, sizeof(USBPORT_SCATTER_GATHER_LIST) == 64);
+XHCI_C_ASSERT(sg_list_element_offset,
+              XHCI_OFFSET_OF(USBPORT_SCATTER_GATHER_LIST, SgElement) == 0x10);
+#endif
 /*
  * The isochronous block had neither of these until the post-Phase 13 review rounds, and the comment
  * above claimed test/test_packet.c pinned every field offset while that file did
@@ -636,6 +802,44 @@ XHCI_C_ASSERT(port_status_size,
               sizeof(USBPORT_PORT_STATUS_AND_CHANGE) == 4);
 XHCI_C_ASSERT(hub_status_size, sizeof(USBPORT_HUB_STATUS_AND_CHANGE) == 4);
 
+/*
+ * The packet's own numbers. On amd64 every offset at or below the hinge is
+ * unchanged and every offset above it lands on M6's widening map,
+ * `f(X) = 0x28 + (X - 0x28) * 2` - ten leading `ULONG` data fields that do not
+ * widen, followed by function pointers that all do. The two the map is worth
+ * checking by hand are the hinge itself (`OpenEndpoint`, `0x28` on both) and
+ * the field below it (`MiniPortResourcesSize`, `0x24` on both).
+ *
+ * `packet_size` and `packet_last_reserved` are the pair that catch the
+ * eight-byte shortfall: M3 measured usbport copying `0x250`, and a declaration
+ * whose two trailing canaries stayed 4 bytes ends at `0x248`.
+ */
+#ifdef _WIN64
+XHCI_C_ASSERT(packet_size, sizeof(USBPORT_REGISTRATION_PACKET) == 0x250);
+XHCI_C_ASSERT(packet_short_copy_boundary,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, RH_ChirpRootPort)
+                  == 0x230);
+XHCI_C_ASSERT(packet_resources_size_offset,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, MiniPortResourcesSize)
+                  == 0x24);
+XHCI_C_ASSERT(packet_first_callback_offset,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, OpenEndpoint) == 0x28);
+XHCI_C_ASSERT(packet_start_controller_offset,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, StartController) == 0x48);
+XHCI_C_ASSERT(packet_first_roothub_offset,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, RH_GetRootHubData) == 0xF8);
+XHCI_C_ASSERT(packet_send_one_packet_offset,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, StartSendOnePacket) == 0x188);
+XHCI_C_ASSERT(packet_service_block_start,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, UsbPortDbgPrint) == 0x1A0);
+XHCI_C_ASSERT(packet_service_block_end,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, UsbPortNotifyDoubleBuffer)
+                  == 0x218);
+XHCI_C_ASSERT(packet_tail_group_start,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, RebalanceEndpoint) == 0x220);
+XHCI_C_ASSERT(packet_last_reserved,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, Reserved5) == 0x248);
+#else
 /* The number registration copies at Version >= 200. */
 XHCI_C_ASSERT(packet_size, sizeof(USBPORT_REGISTRATION_PACKET) == 0x13C);
 /* ...and the boundary that makes the short copy exactly the tail group. */
@@ -664,6 +868,7 @@ XHCI_C_ASSERT(packet_tail_group_start,
               XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, RebalanceEndpoint) == 0x124);
 XHCI_C_ASSERT(packet_last_reserved,
               XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, Reserved5) == 0x138);
+#endif
 
 /* ------------------------------------------------------------------ */
 /* The two usbport.sys exports (linked through src/usbport.lib)        */

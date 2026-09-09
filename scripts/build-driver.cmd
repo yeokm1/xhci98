@@ -73,6 +73,7 @@ rem OS supplies usbd.sys and usbhub.sys (and, on the NT targets, usbport.sys)
 rem through the INF's LayoutFile.
 rem
 rem Usage:  scripts\build-driver.cmd [release|debug|qemu|both|all]
+rem                                  [-amd64] [-NoTargetEvidence]
 rem                                                          (default: both)
 rem
 rem   "both" is the two SHIPPING flavors - release and debug - and it stays the
@@ -87,6 +88,31 @@ rem   clone builds wherever it is unpacked and nothing is installed under C:\.
 rem   Set DDKROOT to build against a DDK somewhere else.
 rem   Add -NoTargetEvidence after the flavor to skip the gate's target-file
 rem   evidence steps on a host that has none staged.
+rem
+rem SECOND ARCHITECTURE, since roadmap task 21.2. -amd64 builds the same three
+rem flavors for amd64 with WDK 7.1 (tools\WinDDK71) instead of the Windows 2000
+rem DDK, which cannot target it. The two toolchains are separate all the way
+rem down and the x86 path is untouched by the switch:
+rem
+rem   x86    tools\ntddk       setenv <root> <flavor> w2k x86
+rem                            src\usbport.lib          src\obj*\i386
+rem   amd64  tools\WinDDK71    setenv <root> <flavor> x64 WNET no_oacr
+rem                            src\usbport_amd64.lib    src\obj*\amd64
+rem
+rem BUILD_ALT_DIR is overridden back to fre/chk/chk_qemu after setenv.bat in
+rem BOTH cases. WDK 7.1's setenv sets it to fre_wnet_AMD64, which src\sources
+rem hard-errors on, and build.exe appends the architecture itself - so the
+rem override is what puts the output at src\objfre\amd64 beside src\objfre\i386
+rem with no second obj root and nothing renamed.
+rem
+rem WHAT AN amd64 BUILD IS NOT YET GATED ON, and it is deliberate rather than
+rem overlooked: the import gate enforces the committed allowlist on the binary
+rem in full, but there are no NT 5.2 amd64 kernel/HAL baselines to resolve the
+rem symbols against, so its Windows 2000 and Windows 98 evidence steps are
+rem withheld rather than run against x86 files that cannot speak for a 64-bit
+rem target. The gate says so loudly on every amd64 run. Those baselines are
+rem roadmap task 21.3, as is the second INF - there is no amd64 install media
+rem yet and this script does not build any.
 rem
 rem Exit codes: 0 = built and gated, 1 = failure, 2 = host tests inconclusive
 rem (a blocked exe launch, not a test failure - just run it again).
@@ -103,7 +129,15 @@ rem derived path: DDKROOT is one of them and reaches setenv.bat, whose own
 rem derived paths are printed in error messages a developer has to read.
 for %%I in ("%~dp0..") do set "REPO=%%~fI"
 set "FLAVORS=%~1"
-set "GATEOPT=%~2"
+rem Two optional switches in either order after the flavor, because -amd64 and
+rem -NoTargetEvidence are independent and a caller should not have to remember
+rem which comes first. :readopt leaves BADOPT set for anything else, which is
+rem refused below before a single self-test has run.
+set "GATEOPT="
+set "ARCH=x86"
+set "BADOPT="
+call :readopt "%~2"
+call :readopt "%~3"
 if "%FLAVORS%"=="" set "FLAVORS=both"
 if /i "%FLAVORS%"=="both" set "FLAVORS=debug release"
 if /i "%FLAVORS%"=="all" set "FLAVORS=debug release qemu"
@@ -118,13 +152,31 @@ rem parameter binding and reads as the binary failing the gate.
 set "FLAVOR="
 for %%F in (%FLAVORS%) do call :validateflavor %%F
 if defined FLAVOR goto badflavor
-if "%GATEOPT%"=="" goto gateoptok
-if /i "%GATEOPT%"=="-NoTargetEvidence" goto gateoptok
-goto badgateopt
-:gateoptok
+if defined BADOPT goto badgateopt
+rem The DDK output directory for the target architecture - build.exe's own
+rem <arch> component, and the one place this script turns ARCH into a path.
+set "ARCHDIR=i386"
+if /i "%ARCH%"=="amd64" set "ARCHDIR=amd64"
 rem The DDK is a repository directory, not a machine-wide install, so this
 rem default follows the clone. scripts\install-w2kddk-cabs.ps1 puts it there.
+rem
+rem An amd64 build takes WDK 7.1 instead, and the trailing setenv.bat arguments
+rem differ with it: the Windows 2000 DDK takes "w2k x86", WDK 7.1 takes
+rem "x64 WNET no_oacr" - WNET because NT 5.2 is the only lineage that ships an
+rem amd64 lib directory (there is no lib\wxp\amd64), which is what makes one
+rem binary serve Windows XP x64 and Server 2003 x64.
+set "SETENVARGS=w2k x86"
+set "LIBNAME=usbport.lib"
+set "LIBARG="
+if /i not "%ARCH%"=="amd64" goto ddkdefault
+set "SETENVARGS=x64 WNET no_oacr"
+set "LIBNAME=usbport_amd64.lib"
+set "LIBARG=-amd64"
+if "%DDKROOT%"=="" set "DDKROOT=%REPO%\tools\WinDDK71"
+goto ddkchosen
+:ddkdefault
 if "%DDKROOT%"=="" set "DDKROOT=%REPO%\tools\ntddk"
+:ddkchosen
 rem src\sources says XHCI_EXTRA_DEFINES is empty in every normal build and that a
 rem deploy build must be made with it unset, so any value at all means a probe.
 rem Do not narrow this to a substring test: `set VAR 2>nul | findstr` looks like
@@ -175,10 +227,10 @@ echo DDK: %DDKROOT%
 
 rem The import library is a build artifact, not a checked-in file. Generating it
 rem here rather than failing keeps a fresh clone one command away from a build.
-if not exist "%REPO%\src\usbport.lib" (
+if not exist "%REPO%\src\%LIBNAME%" (
     echo.
-    echo src\usbport.lib is missing - generating it.
-    call "%REPO%\scripts\make-usbport-lib.cmd"
+    echo src\%LIBNAME% is missing - generating it.
+    call "%REPO%\scripts\make-usbport-lib.cmd" %LIBARG%
     if errorlevel 1 goto libfail
 )
 
@@ -328,7 +380,7 @@ setlocal
 set "FLAVOR=%~1"
 call :flavordirs %FLAVOR%
 if "%OBJDIR%"=="" goto badflavor
-set "OUTSYS=%REPO%\src\%OBJDIR%\i386\xhci98.sys"
+set "OUTSYS=%REPO%\src\%OBJDIR%\%ARCHDIR%\xhci98.sys"
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$b=[System.IO.File]::ReadAllBytes('%OUTSYS%');" ^
     "$t=[System.Text.Encoding]::ASCII.GetString($b);" ^
@@ -374,7 +426,7 @@ setlocal
 set "FLAVOR=%~1"
 call :flavordirs %FLAVOR%
 if "%OBJDIR%"=="" goto badflavor
-set "OUTSYS=%REPO%\src\%OBJDIR%\i386\xhci98.sys"
+set "OUTSYS=%REPO%\src\%OBJDIR%\%ARCHDIR%\xhci98.sys"
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$b=[System.IO.File]::ReadAllBytes('%OUTSYS%');" ^
     "$t=[System.Text.Encoding]::ASCII.GetString($b);" ^
@@ -407,7 +459,7 @@ setlocal
 set "FLAVOR=%~1"
 call :flavordirs %FLAVOR%
 if "%OBJDIR%"=="" goto badflavor
-set "OUTSYS=%REPO%\src\%OBJDIR%\i386\xhci98.sys"
+set "OUTSYS=%REPO%\src\%OBJDIR%\%ARCHDIR%\xhci98.sys"
 rem In a script rather than inline, unlike :checkmarker next door. It needs a
 rem pipeline and a comparison, and a `powershell -Command` continuation is the
 rem wrong place for either: the first version compared $found[0] without
@@ -425,7 +477,7 @@ rem already makes for XHCIQUAL and XHCISNAP (the 2026-09-07 audit's H13). It is
 rem content rather than timestamps, because an mtime moves on a checkout or a
 rem comment-only commit; scripts\source-stamp.ps1 says why at length.
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\source-stamp.ps1" -Write "%REPO%\src\%OBJDIR%\i386"
+    "%REPO%\scripts\source-stamp.ps1" -Write "%REPO%\src\%OBJDIR%\%ARCHDIR%"
 if errorlevel 1 goto stampfailed
 endlocal
 exit /b 0
@@ -511,7 +563,7 @@ setlocal
 set "FLAVOR=%~1"
 call :flavordirs %FLAVOR%
 if "%OBJDIR%"=="" goto badflavor
-set "OUTSYS=%REPO%\src\%OBJDIR%\i386\xhci98.sys"
+set "OUTSYS=%REPO%\src\%OBJDIR%\%ARCHDIR%\xhci98.sys"
 rem objchk -> buildchk, objfre -> buildfre, objchk_qemu -> buildchk_qemu: the
 rem names build.exe writes its log and error file under, which are BUILD_ALT_DIR
 rem with "build" in front. The substitution below is the same rule spelled once.
@@ -533,7 +585,7 @@ rem possible at all: setenv.bat sets it to chk and derives the lib paths from it
 rem in the same breath, so overriding it here moves the OBJECT tree without
 rem moving the LIBRARY path. Overriding it before setenv.bat would do the
 rem opposite and look for a libchk_qemu that does not exist.
-cmd /c "call "%DDKROOT%\bin\setenv.bat" %DDKROOT% %DDKFLAVOR% w2k x86 && set "BUILD_ALT_DIR=%ALTDIR%" && cd /d "%REPO%\src" && build -cZ"
+cmd /c "call "%DDKROOT%\bin\setenv.bat" %DDKROOT% %DDKFLAVOR% %SETENVARGS% && set "BUILD_ALT_DIR=%ALTDIR%" && cd /d "%REPO%\src" && build -cZ"
 if errorlevel 1 goto buildfail
 
 rem build.exe's exit code is not sufficient on its own: it writes the errors it
@@ -544,7 +596,7 @@ if not exist "%OUTSYS%" goto nooutput
 echo.
 echo === import gate (%FLAVOR%) ===
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%OUTSYS%" -Flavor %FLAVOR% %GATEOPT%
+    "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%OUTSYS%" -Flavor %FLAVOR% -Arch %ARCH% %GATEOPT%
 if errorlevel 1 goto gatefail
 
 rem The image has to say which of the three it is, from an ASCII scan and with
@@ -575,11 +627,29 @@ endlocal
 exit /b 1
 
 :badgateopt
-echo ERROR: unknown second argument "%GATEOPT%". The only option after the
-echo flavor is -NoTargetEvidence, which skips the import gate's target-file
-echo evidence steps on a host with none staged.
+echo ERROR: unknown option "%BADOPT%". The options after the flavor are
+echo -NoTargetEvidence, which skips the import gate's target-file evidence
+echo steps on a host with none staged, and -amd64, which builds for amd64 with
+echo WDK 7.1 instead of x86 with the Windows 2000 DDK. Either order.
 endlocal
 exit /b 1
+
+rem ------------------------------------------------------------------
+rem :readopt <word>
+rem
+rem One optional switch, in either position. An empty argument is the ordinary
+rem case of a caller passing fewer than three. Anything unrecognised is left in
+rem BADOPT rather than refused here, so that the caller can refuse once, before
+rem any self-test has run - a mistyped switch used to reach check-imports.ps1
+rem verbatim and fail parameter binding, which reads as the binary failing the
+rem gate rather than as a typo.
+rem ------------------------------------------------------------------
+:readopt
+if "%~1"=="" exit /b 0
+if /i "%~1"=="-amd64" set "ARCH=amd64" & exit /b 0
+if /i "%~1"=="-NoTargetEvidence" set "GATEOPT=-NoTargetEvidence" & exit /b 0
+set "BADOPT=%~1"
+exit /b 0
 
 rem ------------------------------------------------------------------
 rem :validateflavor <word>

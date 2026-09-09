@@ -291,6 +291,50 @@ shifts. Unlike the registration packet, this structure's amd64 layout *is* what
 a compiler's natural widening of the x86 declaration produces - which is why
 both had to be measured rather than one inferred from the other.
 
+### `USBPORT_ENDPOINT_PROPERTIES` on NT 5.2 amd64 (`BufferVA` is the hinge)
+
+Read 2026-09-09 from the amd64 `usbehci.sys`, method `static`. This is the
+structure every endpoint callback receives, and until this reading none of the
+six phase-21 measurements covered it.
+
+**The size comes from a copy rather than from adding the fields up.**
+`OpenEndpoint` at RVA `0x7A40` - packet slot `0x28`, so identified by the map
+rather than by a symbol - tags its endpoint extension `'20ep'` and then copies
+the caller's structure into it as nine 8-byte moves, `[rdx+0x00]` through
+`[rdx+0x40]` inclusive, landing at `epExt+0x08`. Nine qwords is `0x48` bytes;
+eight would be `0x40` and ten `0x50`. The extension's own fields resume at
+`epExt+0x58`, immediately past where the copy ends at `+0x50`, which says the
+same thing a second way.
+
+| Offset (amd64) | Bytes | Field | x86 | Instruction it was read from |
+|---|---|---|---|---|
+| `0x00` | 2 | `DeviceAddress` | `0x00` | `mov al,byte ptr [r12]` + `and eax,7Fh` |
+| `0x02` | 2 | `EndpointAddress` | `0x02` | `movzx ecx,word ptr [r12+2]` |
+| `0x08` | 4 | `DeviceSpeed` | `0x08` | `cmp dword ptr [rdx+8],2` |
+| `0x14` | 4 | `TransferType` | `0x14` | `mov r9d,dword ptr [rdx+14h]` |
+| `0x1C` | 4 | *padding* | - | implied by `BufferVA`'s alignment |
+| `0x20` | 8 | `BufferVA` | `0x1C` | `mov r15,qword ptr [rdi+20h]` |
+| `0x28` | 4 | `BufferPA` | `0x20` | `mov r13d,dword ptr [rdi+28h]` |
+| `0x2C` | 4 | `BufferLength` | `0x24` | `mov r14d,dword ptr [rdi+2Ch]` |
+| `0x38` | 2 | `HubAddr` | `0x30` | `movzx eax,word ptr [r12+38h]` + `and eax,7F0000h` |
+| `0x3A` | 2 | `PortNumber` | `0x32` | `movzx ecx,word ptr [r12+3Ah]` |
+
+`sizeof` is `0x48`. **`BufferVA` is the only member that widens**, and the four
+bytes of padding it forces at `0x1C` are the whole of why the structure grows:
+everything below it keeps its x86 offset, everything above it sits exactly 8
+higher, and both runs are pinned at both ends rather than at one point.
+
+`BufferPA` staying 4 bytes is the DMA reading restated from the consumer's
+side, and the control/bulk path makes the intent explicit - it advances
+`BufferVA` and `BufferPA` together by `0x100` and reduces `BufferLength`, which
+is a common-buffer carve. Like `USBPORT_RESOURCES` and unlike the registration
+packet, this layout *is* the compiler's natural widening; that it had to be
+measured to know so is the point.
+
+One field is not covered: `Direction` (`0x18` on both) is read by no path
+disassembled here. It lies between two measured anchors with no room to move,
+which is weaker than a reading and is recorded as such.
+
 ### The DMA adapter is created 32-bit on amd64 too
 
 `IoGetDmaAdapter` (IAT RVA `0x2A0D0`, confirmed through its import-name-table

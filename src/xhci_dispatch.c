@@ -997,8 +997,18 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
     }
 
     (VOID)XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_STARTED);
-    /* The mapped register base - an address, for the reason above. */
-    XhciLogNoteAddress(ext, "start.ok", ext->ResourceBase);
+    /*
+     * The mapped register base - an address, for the reason above. The cast is
+     * written out for the same reason the one at the "start" site above is:
+     * `ResourceBase` is a `ULONG_PTR` and the log ring records a `ULONG`, so on
+     * amd64 this narrows. It is the only implicit narrowing in the driver that
+     * the x64 compiler objects to (C4242), and `/WX` is on in the free build,
+     * so left implicit it fails `release` while merely warning in `debug` and
+     * `qemu`. A register base is a mapped VA and the truncation loses real bits
+     * on a 64-bit host; what is logged is a low-half identifier for a human
+     * reading a trace, not an address anything dereferences.
+     */
+    XhciLogNoteAddress(ext, "start.ok", (ULONG)ext->ResourceBase);
     return MP_STATUS_SUCCESS;
 }
 
@@ -4574,6 +4584,27 @@ VOID XhciFillPacketForTest(VOID)
 #else
 
 /*
+ * The stack-delta check below is x86-only, and the guard is its own name
+ * because three separate regions have to agree about it - the two locals, the
+ * two `__asm` statements, and the comparison. MSVC's inline assembler does not
+ * exist on amd64 (`error C4235: nonstandard extension used : '__asm' keyword
+ * not supported on this architecture`), and it is the sole reason the `qemu`
+ * flavour would not compile there at all. The locals have to be inside the
+ * same guard rather than left declared: unreferenced locals are a warning, and
+ * `/WX` is on in the free build.
+ *
+ * Nothing is lost on amd64 that the check was protecting against. It exists to
+ * catch a calling-convention mismatch across `USBPORT_RegisterUSBPortDriver`,
+ * and the mismatch it watches for is a `__stdcall` decoration problem that
+ * only x86 has: amd64 has one calling convention and no name decoration, which
+ * is the same reason the import library's `_Name@N` check is x86-only by
+ * nature (design record 11 section 8).
+ */
+#if defined(XHCI_DBG_TRACE) && !defined(_WIN64)
+#define XHCI_CHECK_STACK_DELTA 1
+#endif
+
+/*
  * DriverEntry - the only entry point this driver has.
  *
  * On success usbport owns the driver object: it installs its own AddDevice and
@@ -4587,7 +4618,7 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT DriverObject,
 {
     NTSTATUS status;
     ULONG hciMn;
-#ifdef XHCI_DBG_TRACE
+#ifdef XHCI_CHECK_STACK_DELTA
     ULONG espBefore = 0;
     ULONG espAfter = 0;
 #endif
@@ -4666,7 +4697,7 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT DriverObject,
      * usbport saves this pointer and installs its own unload handler. */
     DriverObject->DriverUnload = NULL;
 
-#ifdef XHCI_DBG_TRACE
+#ifdef XHCI_CHECK_STACK_DELTA
     __asm mov espBefore, esp
 #endif
 
@@ -4674,7 +4705,7 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT DriverObject,
                                            USB20_MINIPORT_INTERFACE_VERSION,
                                            &XhciRegPacket);
 
-#ifdef XHCI_DBG_TRACE
+#ifdef XHCI_CHECK_STACK_DELTA
     __asm mov espAfter, esp
 
     /*
