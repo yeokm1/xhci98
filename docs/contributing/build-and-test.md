@@ -272,7 +272,7 @@ The version and the release date are edited in one place, `src\xhci_version.h`. 
 
 Four sites include it and cannot disagree: `FILEVERSION`, `PRODUCTVERSION`, `VALUE "FileVersion"` and `VALUE "ProductVersion"` in `src\xhci98.rc`. Two more include it across a directory boundary, by a path relative to the including file (which is what a quoted `#include` means to all three compilers): `TOOL_VERSION` in `xhciqual\qual.h` and `XHCISNAP_VERSION` in `xhcisnap\xhcisnap.c`. Both tools are published inside a release directory (`releases\<version>\xhciqual\`, `releases\<version>\xhcisnap\`) and print their number into every log a user saves and sends back, so a tool answering with a number that is not on the box ties a bug report to an artifact that does not exist.
 
-The seventh site cannot include anything. An INF is a data file Windows setup reads, not a compiled one, so `src\xhci98.inf`'s `DriverVer` keeps a literal and is checked against the header instead. Three gates cover what is left:
+The last two sites cannot include anything. An INF is a data file Windows setup reads, not a compiled one, so the `DriverVer` in `src\xhci98.inf` **and** the one in `src\xhci98-amd64.inf` each keep a literal and are checked against the header instead. There have been two since roadmap task 21.3, `check-inf.ps1 -Arch` cross-checks whichever file it is given against the `xhci_version.h` beside it, and `build-driver.cmd` runs it over both on every build - so a bumped header with a stale date in the 64-bit file fails the build rather than shipping. Three gates cover what is left:
 
 - `scripts\inf-gate\check-inf.ps1`, which every build runs, reads `src\xhci_version.h` as the authority and refuses four different disagreements: the header's two forms of the number differing from each other (nothing in any toolchain would notice, since `rc.exe` wants the integers and every other consumer wants the string), the header's version differing from `DriverVer`'s, the header's date differing from `DriverVer`'s, and a version literal appearing in `src\xhci98.rc` at all, or the include being dropped. That last rule is what keeps the header an authority rather than a suggestion.
 - `scripts\package\make-package.ps1` compares the built binary's own `FileVersion` with the `DriverVer` in the INF staged beside it. That is the copy a source-side gate cannot see and the only one an installed machine reads: bumping the source without rebuilding produces a package that installs cleanly, is accepted by Windows 2000 as an upgrade, and reports the older build for ever afterwards.
@@ -286,9 +286,20 @@ The build stamps are not in the header. `XHCIQUAL` and `XHCISNAP` each print a `
 
 A cut therefore has two toolchains as prerequisites beyond the DDK: Open Watcom for `XHCIQUAL.EXE` and the in-repo MSVC 6.0 for `XHCISNAP.EXE`. Neither is skippable on a real cut. `-SkipQualtool` and `-SkipSnapTool` exist for a host that cannot build one, and a release cut with the second publishes a read channel nobody can open.
 
-The scheme is one four-part version per released package: the last field moves for a release that changes only the install media or the documents (`1.0.0.1`), the third field for one that changes the driver's code (`1.0.1.0`, the owner's decision of 2026-09-03 when task 19.7 put a code change into Phase 19's release), with the date set to the release date and never moving backwards within a series. It is a package version rather than a build counter: the deploy loop overwrites `xhci98.sys` in place and never re-runs the INF (see "Deploying a build into the Win98 VM"), so a per-build number would churn with no observer.
+The scheme is one four-part version per released package, and all four fields have a meaning, settled by the project owner on 2026-09-10 after `1.1.0.0` moved the second one and nothing here said what that meant:
 
-The major version says whether this is a final release. It is `1`: task 14.2 cut `1.0.0.0`, the first one, and every package before it was a `0.x` pre-release that carried no claim of being finished. Those directories are gone; `releases\history.md` holds one entry per release since, newest first. The current number is in `src\xhci_version.h` and is not repeated here.
+| Field | Moves for | Cut that did it |
+|---|---|---|
+| First | A change really major enough to warrant it. It went `0` -> `1` for the first final release and has not moved since | `1.0.0.0` (task 14.2), the first release; everything before it was a `0.x` pre-release carrying no claim of being finished |
+| Second | A major change: a new architecture, or a new function | `1.1.0.0`, which adds the amd64 build and a second package (Phase 21; the cut is roadmap task 22.9) |
+| Third | A patch or a bug fix in the driver's code | `1.0.1.0`, the owner's decision of 2026-09-03 when task 19.7 put issue 4's fix into Phase 19's release |
+| Fourth | A release that changes only the install media or the documents | `1.0.0.1`, which moved `usbd.sys` and `usbhub.sys` onto the `LayoutFile` route and off the download |
+
+The date is set to the release date and never moves backwards within a series. Read the second and third fields as a pair rather than by size of diff: a bug fix is the third field however much code it touches, and a new architecture or capability is the second however little. `1.0.2.0` is the one number that predates the rule being written down, and it agrees with it - nineteen audit findings, code among them, and no new architecture or function.
+
+It is a package version rather than a build counter: the deploy loop overwrites `xhci98.sys` in place and never re-runs the INF (see "Deploying a build into the Win98 VM"), so a per-build number would churn with no observer.
+
+The major version also says whether this is a final release, which is the other half of the first field's meaning and the only reason it has ever moved. Those `0.x` directories are gone; `releases\history.md` holds one entry per release since, newest first. The current number is in `src\xhci_version.h` and is not repeated here.
 
 The numbering has been restarted once, at the project owner's direction: an earlier `1.0.0.x` series of development builds was removed from `releases\` and the version restarted at `0.0.0.1`, which is where the `0.x` pre-releases came from. Two consequences outlive it:
 

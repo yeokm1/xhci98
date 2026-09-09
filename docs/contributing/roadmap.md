@@ -2472,10 +2472,17 @@ and they are the phase's other half rather than a coda to the first.
         (`build-and-test.md`, "Versioning the driver"). The x64 statements
         task 21.6 wrote into that file say "from `1.1.0.0`"; at the cut they
         stop being a forward reference and should read as current
-  - [ ] and one thing the scheme paragraph in `build-and-test.md` does not
-        cover: it documents what the third and fourth fields mean and this
-        release moves the **second**, on the owner's instruction in Phase 21.
-        Record what that field meant here rather than inferring a rule
+  - [x] **the version scheme, which no longer has a gap. Settled by the owner
+        2026-09-10** and written into `build-and-test.md`, "Versioning the
+        driver": first field a change really major enough to warrant it (and
+        the `0` -> `1` step to a final release, which is the only time it has
+        moved), **second a major change - a new architecture, or a new
+        function**, third a patch or bug fix in the driver's code, fourth a
+        release that changes only the install media or the documents. Read
+        the second and third as a pair rather than by size of diff. This box
+        existed because the paragraph documented only the third and fourth
+        while `1.1.0.0` moved the second; all four published numbers agree
+        with the rule as now written
 - [ ] **22.8 - the primary targets unchanged**, the way task 19.8 and Phase
       20 did it: `run-matrix.ps1 -PostRelease` on freshly re-taken 2a and 2b
       clones, against the Phase 20 reports. Both primary targets are 32-bit

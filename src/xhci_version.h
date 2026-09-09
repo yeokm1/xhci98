@@ -5,10 +5,12 @@
  * **This file is the single editable source of the version.** Bump it here and
  * nowhere else. Four other sites take their value from it by including it -
  * `src\xhci98.rc`'s four resource fields, `xhciqual\qual.h`'s `TOOL_VERSION`,
- * and `xhcisnap\xhcisnap.c`'s `XHCISNAP_VERSION` - and one cannot, because it
- * is not compiled: `src\xhci98.inf`'s `DriverVer`. That one keeps a literal and
- * is **checked** against this file by `scripts\inf-gate\check-inf.ps1`, which
- * every build runs.
+ * and `xhcisnap\xhcisnap.c`'s `XHCISNAP_VERSION` - and two cannot, because an
+ * INF is not compiled: the `DriverVer` in `src\xhci98.inf` and the one in
+ * `src\xhci98-amd64.inf` (the 64-bit package's, since roadmap task 21.3). Both
+ * keep a literal and both are **checked** against this file by
+ * `scripts\inf-gate\check-inf.ps1`, which `build-driver.cmd` runs over each
+ * file on every build.
  *
  * **Three toolchains include this**: the Win2000 DDK's `rc.exe` (the driver
  * resource), MSVC 6.0's `cl.exe` (the snapshot reader and the host test suite)
