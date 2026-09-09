@@ -1684,9 +1684,14 @@ are static readings and no other task's box may be ticked on one.
   - [x] M6 the offset map end to end - all 50 slots the amd64 `usbehci`
         fills land on `f(X) = 0x28 + (X - 0x28) * 2`
 - [x] **21.2 - the x64 build path.** Done 2026-09-09. All three flavours
-      compile and link for amd64 from `tools/WinDDK71`, with no errors and no
-      warnings, at `src/obj<flavour>/amd64/`. Design record 11 section 8, "The
-      first build".
+      compile and link for amd64 from `tools/WinDDK71` at
+      `src/obj<flavour>/amd64/`, with **no diagnostic on any source file** - no
+      `build<flavour>.err`, no `.wrn`, and not one `warning Cnnnn` in the log.
+      Read the build summary's "21 files compiled - 5 Warnings" against that:
+      those five are `build.exe`'s own "x64 Native compiling isn't supported.
+      Using cross compilers." notice, counted once per pass, and say only that
+      an x64 host is using the x86-hosted cross compiler. Design record 11
+      section 8, "The first build".
   - [x] the `qemu` flavour's `__asm` exclusion under `_WIN64`, without which
         that flavour does not compile at all. Both sites and their two locals
         now sit behind one named guard, `XHCI_CHECK_STACK_DELTA`; the check is
@@ -1703,34 +1708,48 @@ are static readings and no other task's box may be ticked on one.
         obj root, and `release` was built first precisely because `/WX` is on
         there
 - [ ] **21.3 - the gates.** None of these may be skipped for an amd64
-      binary.
-  - [ ] an `amd64` dimension in the import gate, with NT 5.2 amd64 baselines
-        behind it as `win2k-baselines.expected` has for SP4. **Task 21.2's
-        first build made this concrete and bigger than it looked.** The gate
-        already selects the right dumper and enforces the committed allowlist
-        on an amd64 image in full, refusing it loudly; what it cannot do is
-        resolve the symbols, so it withholds its Windows 2000 and Windows 98
-        evidence steps rather than run them against x86 files. The amd64
-        binary imports **seven** pairs where x86 imports eleven, and the
-        difference is not cosmetic: `READ`/`WRITE_REGISTER_ULONG`,
-        `InterlockedIncrement`, `KeInitializeSpinLock` and `KeGetCurrentIrql`
-        become intrinsics or inlines and vanish; `HAL!KfAcquireSpinLock` and
-        `KfReleaseSpinLock` are replaced by `ntoskrnl!KeAcquireSpinLockRaiseToDpc`
-        and `ntoskrnl!KeReleaseSpinLock`; and **`ntoskrnl!KeBugCheckEx` appears,
-        reached through a DDK inline rather than any call this source makes** -
-        which is worth understanding before a guest runs it, not merely
-        allowlisting. Two decisions come with the work and neither is taken:
-        whether the allowlist grows an arch column or gains a sibling amd64
-        file, and how the standing "every pair carries Windows 98 evidence of
-        its own" rule is scoped, since it is a rule about a 32-bit operating
-        system that an amd64 binary cannot satisfy. The baselines themselves
-        need NT 5.2 amd64 `ntoskrnl.exe` and the HAL variants extracted and
-        authenticated; the XP x64 ISO is no longer on this host, but
-        `vm/winxp64.img` is, and task 21.5 read that image statically through
-        7-Zip without booting it
-  - [ ] arch-conditional checks in `scripts\make-usbport-lib.cmd` - the
+      binary. Two of the four done 2026-09-09; **an amd64 binary now passes
+      the import gate in full** in all three flavours.
+  - [x] an `amd64` dimension in the import gate, with NT 5.2 amd64 baselines
+        behind it as `win2k-baselines.expected` has for SP4. Done 2026-09-09,
+        and task 21.2's first build made it concrete: the amd64 binary imports
+        **seven** pairs where x86 imports eleven, and the difference is not
+        cosmetic. `READ`/`WRITE_REGISTER_ULONG`, `InterlockedIncrement`,
+        `KeInitializeSpinLock` and `KeGetCurrentIrql` become intrinsics or
+        inlines and vanish; `HAL!KfAcquireSpinLock` and `KfReleaseSpinLock` -
+        x86-only fastcall HAL exports - are replaced by
+        `ntoskrnl!KeAcquireSpinLockRaiseToDpc` and `ntoskrnl!KeReleaseSpinLock`,
+        a different module as well as a different name; and
+        `ntoskrnl!KeBugCheckEx` appears, **which was investigated rather than
+        allowlisted on sight** (the owner's call). It comes from
+        `__report_gsfailure`, WDK 7.1's `/GS` stack-cookie handler: one call
+        site in the whole of `.text`, reached only from
+        `__security_check_cookie`, issuing bugcheck `0xF7`
+        (`DRIVER_OVERRAN_STACK_BUFFER`). So it is unreachable except on a real
+        stack-buffer overrun and is a safety feature the x86 binary cannot
+        have, MSVC 6.0 predating `/GS` entirely - which is why it is accepted
+        rather than the flag being turned off to match x86. What was built:
+        `scripts\import-gate\xhci98-imports-amd64.allow` (**a sibling file,
+        not an arch column** - the owner's decision; only 2 of the 13
+        kernel/HAL rows are shared, and the x86 file's 27 denials are
+        justified end to end by absence on Windows 98 or by blocking the load
+        on Windows 2000, reasoning that does not transfer),
+        `winxp64-baselines.expected` and its three authenticated files, an
+        `-Amd64Iso` arm in `extract-target-baselines.ps1`, and an `-Arch`
+        dimension in `check-imports.ps1`. **The evidence rule for amd64 is
+        stronger than the Windows 98 one rather than a relaxation of it**, the
+        second decision the owner took: the Windows 98 rule compensates for a
+        target whose export tables are built at run time by `ntkern.vxd` and
+        so cannot be resolved against, while NT 5.2 amd64 has a real export
+        table, so direct resolution against both kernels and the one HAL is
+        the rule and no proxy is wanted
+  - [x] arch-conditional checks in `scripts\make-usbport-lib.cmd` - the
         undecorated-name check replacing the `@N` one, the other four steps
-        unchanged
+        unchanged. Done 2026-09-09 as part of 21.2, and it is the mirror check
+        rather than merely a weaker one: the plain names must be present *and*
+        the `@N` forms absent, plus a machine check, because a decorated
+        symbol in an "amd64" library would mean an x86 library published under
+        the 64-bit name
   - [ ] the second INF. **The decision is taken, 2026-09-09: a separate x64
         package, leaving `src/xhci98.inf` byte-identical**, so no existing
         install leg is re-validated and Windows 98's engine is never asked

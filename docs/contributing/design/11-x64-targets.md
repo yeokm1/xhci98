@@ -863,10 +863,19 @@ Task 21.2 was taken with the plumbing this section calls for: an arch fork in
 no_oacr` instead of the Windows 2000 DDK and `w2k x86`), an amd64 arm in
 `make-usbport-lib.cmd` producing `src\usbport_amd64.lib`, and `_BUILDARCH` in
 `src\sources` choosing between the two libraries. **All three flavours compile
-and link for amd64, with no errors and no warnings**, and the output lands at
-`src\obj<flavour>\amd64\` beside `i386` exactly as this section predicted - so
-`BUILD_ALT_DIR` overridden back to the flavour word does give one obj root per
-flavour with the architecture underneath, and nothing had to be renamed.
+and link for amd64 with no diagnostic on any source file** - no
+`build<flavour>.err`, no `.wrn`, not one `warning Cnnnn` in the log - and the
+output lands at `src\obj<flavour>\amd64\` beside `i386` exactly as this section
+predicted, so `BUILD_ALT_DIR` overridden back to the flavour word does give one
+obj root per flavour with the architecture underneath, and nothing had to be
+renamed.
+
+*(Read the build summary's "21 files compiled - 5 Warnings" against that
+sentence rather than as contradicting it. Those five are `build.exe`'s own
+"x64 Native compiling isn't supported. Using cross compilers." notice, which it
+counts once per pass; it says an x64 host is using the x86-hosted cross
+compiler and nothing about this source. This paragraph said "no errors and no
+warnings" until the count was checked.)*
 
 Two things came out of it that no static pass could have.
 
@@ -883,14 +892,71 @@ module/symbol pairs against x86's eleven:
 | - | **`ntoskrnl!KeBugCheckEx`** | **new**, and reached through a DDK inline rather than any call this source makes |
 | `HAL!KeStallExecutionProcessor`, `ntoskrnl!DbgPrint`, the two USBPORT exports | unchanged | |
 
-Every one of those needs an allowlist row with NT 5.2 amd64 evidence behind
-it, and `KeBugCheckEx` needs its origin established rather than merely
-allowed - a driver that can bugcheck from a path its own source does not name
-is worth understanding before it runs on a guest. This is the substance of
-task 21.3's first box and is bigger than "add a column": the allowlist's
-standing rule is that *every pair carries Windows 98 evidence of its own*,
-which is a rule about a 32-bit operating system and cannot be asked of an
-amd64 binary at all.
+Every one of those needed an allowlist row with NT 5.2 amd64 evidence behind
+it, and all of them now have one - see "The amd64 gate" below.
+
+**`KeBugCheckEx` was investigated rather than allowlisted on sight, and the
+answer is benign.** It comes from `__report_gsfailure`: WDK 7.1 enables `/GS`
+buffer security checks for amd64, so every function with a stack buffer gets a
+cookie, `__security_check_cookie` compares it, and on a mismatch jumps to that
+handler, which issues `KeBugCheckEx(0xF7, ...)` -
+`DRIVER_OVERRAN_STACK_BUFFER`. There is **exactly one call site in the whole
+of `.text`** (RVA `0x25218` in the release image), reached from nothing else,
+so the import is unreachable except on a genuine stack-buffer overrun. It is a
+safety feature the x86 binary cannot have - MSVC 6.0 predates `/GS` entirely,
+so a stack smash there corrupts silently where here it becomes an attributable
+bugcheck. That is why the flag stays on rather than being disabled to match
+x86. If a second call site ever appears it is a real call from this driver's
+own code and needs its own decision.
+
+### The amd64 gate - built 2026-09-09, and an amd64 binary now passes it
+
+Two decisions were taken to get there.
+
+**A sibling allowlist, not an arch column.** Only 2 of the 13 kernel/HAL rows
+are shared between the architectures, so a merged file would be two lists
+under one header - but the `[deny]` section is the stronger argument. All 27
+denials in `xhci98-imports.allow` are justified by "not exported on Win98" or
+"Windows XP and later - blocks the load on Win2000": reasoning about two
+32-bit operating systems that does not transfer to NT 5.2 amd64, where most of
+those APIs exist. Merging would have meant re-justifying 27 refusals against a
+target none of them was written about. `xhci98-imports-amd64.allow` carries
+five kernel/HAL rows and seven denials of its own, the surviving ones being
+those that are about *this project's architecture* - no private pool under
+Option A, usbport owning the interrupt object - rather than about an operating
+system's vintage.
+
+**The amd64 evidence rule is stronger than the Windows 98 one, not a
+relaxation of it.** The Windows 98 rule - every pair carries a precedent
+binary or an `ntkern.vxd` name-table hit - exists because Windows 98 builds its
+NT-style export tables at run time and has no export table on disk to resolve
+against; both sources are proxies whose absence proves nothing. NT 5.2 amd64
+has a real export table, so the rule here is direct resolution against every
+baseline image, and no proxy is wanted. `winxp64-baselines.expected` records
+the three files, `extract-target-baselines.ps1 -Amd64Iso` stages and
+authenticates them by version, length and SHA-256 before copying, and all
+seven pairs resolve.
+
+**Three baseline files, not ten, and the difference is real.** NT 5.2 amd64
+ships one HAL where i386 ships eight: x64 dropped the uniprocessor, non-ACPI,
+MPS and Standard-PC variants, because every amd64 machine is ACPI
+multiprocessor. That was established by listing every name on the media
+beginning `HAL` rather than by matching `HAL*.DL_`, which is the enumeration
+gap the i386 manifest's `HALBORG.DLL` note exists to warn about.
+
+**One guarantee is weaker on amd64 and it is recorded rather than papered
+over.** On x86, `HAL.dll!WRITE_PORT_UCHAR` is a `qemu required` row and is the
+whole of task 13-L.1's enforcement - the import that must never appear in a
+published binary. On amd64 that import does not exist: the compiler emits the
+`out` instruction inline, so **the qemu flavour's import table is identical to
+the release flavour's**, measured on all three amd64 flavours. The import gate
+therefore cannot tell them apart. The guarantee still holds through
+`check-flavour-marker.ps1`, which reads `XHCI98_FLAVOUR_*` out of every linked
+image, and `make-package.ps1`, which refuses the qemu flavour by name - but on
+amd64 it rests on the in-image marker alone where on x86 it rests on the marker
+and an import. Accepting that was the owner's decision, on the grounds that
+the marker check is mandatory, reads the artifact rather than the build files,
+and is what the packager already keys on.
 
 **A dumper trap, found because the gate reported it as a pass.** MSVC 6.0's
 `dumpbin` predates x64: pointed at an amd64 image it exits 0, prints the
@@ -1120,6 +1186,25 @@ download would carry two.
    an SDK is a different arrangement, not an extension of that one.
 5. Whether the x86 half of a WDK 7.1 build is declined, as section 1
    recommends.
+
+Three more arose from task 21.2's first build rather than from this plan, and
+all three were taken on 2026-09-09. They are recorded here because they are
+policy about what the gates promise, not implementation detail:
+
+6. ~~Whether the import allowlist grows an architecture column or gains a
+   sibling amd64 file.~~ **Decided: a sibling file**,
+   `xhci98-imports-amd64.allow`. Section 8, "The amd64 gate", has the argument;
+   the deciding one is that the x86 file's 27 denials are justified entirely by
+   absence on Windows 98 or by blocking the load on Windows 2000.
+7. ~~How the standing "every pair carries Windows 98 evidence of its own" rule
+   is scoped for a binary that cannot satisfy it.~~ **Decided: per target, and
+   amd64's rule is the stronger one** - direct resolution against the NT 5.2
+   amd64 export tables, because that target has one and Windows 98 does not.
+8. ~~What the amd64 gate should promise about telling a `qemu` build from a
+   `release` build, given that their import tables are identical there.~~
+   **Decided: the in-image flavour marker is accepted as sufficient on amd64,
+   and the asymmetry is written down** so that nobody later reads the import
+   gate as covering something it cannot.
 
 ---
 

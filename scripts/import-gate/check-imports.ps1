@@ -71,7 +71,27 @@ param(
     # passes none of them.
 
     # The allowlist. Default: xhci98-imports.allow beside this script.
+    # Pinning it applies that one file to every image in the run, whatever its
+    # architecture - the gate's own tests rely on that.
     [string]$AllowPath = "",
+
+    # The amd64 allowlist, a sibling file rather than a column in the one above
+    # (the owner's decision, 2026-09-09). Its header says why: only two of the
+    # thirteen kernel/HAL rows are shared between the architectures, and the
+    # x86 file's 27 denials are justified entirely by absence on Windows 98 or
+    # by blocking the load on Windows 2000 - reasoning that does not transfer
+    # to NT 5.2 amd64, where most of those APIs exist.
+    # Default: xhci98-imports-amd64.allow beside this script.
+    [string]$AllowPathAmd64 = "",
+
+    # Where the extracted NT 5.2 amd64 ntoskrnl.exe/ntkrnlmp.exe/hal.dll are
+    # staged. Default: tools\winxp64-extracted, beside the usbport.sys and
+    # usbehci.sys the phase-21 ABI readings came from.
+    [string]$Amd64Dir = "",
+
+    # The manifest naming those three files and their recorded hashes.
+    # Default: winxp64-baselines.expected beside this script.
+    [string]$Amd64ManifestPath = "",
 
     # The usbport import expectations make-usbport-lib.cmd records.
     # Default: scripts\usbport-lib\usbport-imports.expected.
@@ -132,8 +152,23 @@ $ErrorActionPreference = "Stop"
 
 $repo = Get-RepoRoot
 
+# Whether the caller pinned the allowlist. When they did, that one file is the
+# policy for every image in the run, including an amd64 one - the gate's own
+# tests drive it with fixtures and must not have a second file substituted
+# underneath them.
+$script:allowPathPinned = ($AllowPath -ne "")
+
 if ($AllowPath -eq "") {
     $AllowPath = Join-Path $PSScriptRoot "xhci98-imports.allow"
+}
+if ($AllowPathAmd64 -eq "") {
+    $AllowPathAmd64 = Join-Path $PSScriptRoot "xhci98-imports-amd64.allow"
+}
+if ($Amd64Dir -eq "") {
+    $Amd64Dir = Join-Path $repo "tools\winxp64-extracted"
+}
+if ($Amd64ManifestPath -eq "") {
+    $Amd64ManifestPath = Join-Path $PSScriptRoot "winxp64-baselines.expected"
 }
 if ($UsbportExpectedPath -eq "") {
     $UsbportExpectedPath = Join-Path $repo "scripts\usbport-lib\usbport-imports.expected"
@@ -491,7 +526,12 @@ function Get-Win2kBaseline {
     param(
         [string]$Dir,
         [string]$Dumpbin,
-        [object[]]$ManifestRows
+        [object[]]$ManifestRows,
+        # Which target's kernel/HAL set this is. The function is the same check
+        # for both architectures; only the diagnostics differ, and a message
+        # naming the wrong operating system is worse than none.
+        [string]$Label = "Windows 2000 SP4",
+        [string]$ExtractSwitch = "-Force -Win2KIso <path>"
     )
 
     if (-not (Test-Path -LiteralPath $Dir)) {
@@ -513,12 +553,12 @@ function Get-Win2kBaseline {
             "      $($_.Out)"
         }) -join "`n")
         throw @"
-Windows 2000 SP4 baseline in '$Dir' is incomplete or unauthenticated:
+$Label baseline in '$Dir' is incomplete or unauthenticated:
   - $($validationErrors -join "`n  - ")
 Fix it one of these ways:
-  - with the recorded SP4 media, naming the ISO explicitly - with the switch
+  - with the recorded media, naming the ISO explicitly - with the switch
     alone and no ISO the script warns and stages nothing:
-      scripts\import-gate\extract-target-baselines.ps1 -Force -Win2KIso <path>
+      scripts\import-gate\extract-target-baselines.ps1 $ExtractSwitch
   - without it: delete only the manifest-owned files listed below from '$Dir';
     keep USBPORT/USBEHCI binaries, disassemblies, and every other file there.
     Removing the complete list returns this half of the gate to its
@@ -619,9 +659,15 @@ function Test-Image {
         [string]$ImageFlavor,
         [object]$Rules,
         [string]$Dumpbin,
+        # The kernel/HAL export baselines for THIS image's target: Windows 2000
+        # SP4's ten images on x86, NT 5.2 amd64's three on amd64. The variable
+        # keeps its old name because the check is the same one; $BaselineLabel
+        # is what the diagnostics say, so a failure never names the wrong OS.
         [object]$Win2k,
+        [string]$BaselineLabel = "Windows 2000 SP4",
         [object]$Precedent,
-        [string]$NtkernText
+        [string]$NtkernText,
+        [string]$ImageArch = "x86"
     )
 
     Write-Step "$ImageFlavor build: $Path"
@@ -691,9 +737,9 @@ function Test-Image {
                     }
                 }
                 if ($absent.Count -gt 0) {
-                    Add-Failure "$($pair.Module)!$($pair.Symbol) is not exported by Windows 2000 SP4 $($absent -join ', ') - the driver cannot load on the co-primary target."
+                    Add-Failure "$($pair.Module)!$($pair.Symbol) is not exported by $BaselineLabel $($absent -join ', ') - the driver cannot load on that target."
                 } else {
-                    $evidence += "w2k-export"
+                    $evidence += if ($ImageArch -eq "amd64") { "nt52-amd64-export" } else { "w2k-export" }
                 }
             }
         }
@@ -745,6 +791,31 @@ function Test-Image {
         # evidence either way - that module is the same file on both targets.
         #
         if ($pair.Module -ieq "ntoskrnl.exe" -or $pair.Module -ieq "hal.dll") {
+            if ($ImageArch -eq "amd64") {
+                #
+                # **THE amd64 RULE, AND IT IS STRONGER THAN THE WINDOWS 98 ONE
+                # RATHER THAN A RELAXATION OF IT** (the owner's decision,
+                # 2026-09-09; xhci98-imports-amd64.allow's header argues it).
+                #
+                # The Windows 98 rule below compensates for a target with no
+                # on-disk export table: ntkern.vxd builds them at run time, so
+                # a precedent binary and a name-table hit are proxies whose
+                # absence proves nothing. NT 5.2 amd64 has a real export table,
+                # so resolution against it IS the evidence and no proxy is
+                # wanted. The $Win2k block above has already failed the pair if
+                # the symbol is missing from any baseline image, which is the
+                # enforcement; all that is left here is to refuse to call a
+                # pair evidenced when the baselines were never loaded.
+                #
+                if ($null -eq $Win2k) {
+                    Add-Warning ("$($pair.Module)!$($pair.Symbol): the $BaselineLabel kernel/HAL " +
+                        "baselines are not staged in this working copy, so nothing checked that " +
+                        "this symbol resolves on a 64-bit target. Stage them with " +
+                        "scripts\import-gate\extract-target-baselines.ps1 -Amd64.")
+                }
+                continue
+            }
+
             $win98Sources = ($null -ne $Precedent) -or ($null -ne $NtkernText)
             $win98Evidence = @($evidence | Where-Object {
                 $_ -like "win98-precedent*" -or $_ -eq "ntkern-name"
@@ -808,6 +879,13 @@ try {
     }
     Write-Ok ("allowlist: {0} pairs ({1} read from usbport-imports.expected), {2} denied symbols" -f `
         $rules.Allow.Count, $usbportRows.Count, $rules.Deny.Count)
+
+    # Per-architecture rule sets, populated as images of each are met. The x86
+    # set is the one read above; the amd64 set comes from its sibling file and
+    # is only read when an amd64 image is actually being gated, so an x86-only
+    # run never touches it and never warns about baselines it does not need.
+    $rulesByArch = @{ "x86" = $rules }
+    $script:nt52 = $null
 
     $images = @()
     if ($Image.Count -gt 0) {
@@ -969,24 +1047,48 @@ Fix it one of these ways:
         $imageDumpbin = $dumpers[$imageArch]
         Test-DumperMachine -Path $path -ExpectedArch $imageArch
 
-        # **The target evidence is x86 evidence, and it is withheld rather than
-        # reused on amd64.** Steps 2 and 3 resolve imports against Windows 2000
-        # SP4's kernels and HALs and against Windows 98 / NUSB binaries; none of
-        # those says anything about whether a symbol resolves on NT 5.2 amd64.
-        # Passing them through would let an amd64 binary collect "w2k-export"
-        # ticks it has not earned, which is worse than having no evidence at
-        # all. The equivalent amd64 baselines are roadmap task 21.3's first box
-        # and do not exist yet, so enforcement runs in full and resolution does
-        # not run at all.
+        # **Each architecture is held to its own allowlist and its own target
+        # evidence.** Windows 2000 SP4's kernels and HALs and the Windows 98
+        # precedent set are x86 files and say nothing about NT 5.2 amd64;
+        # letting an amd64 binary collect "w2k-export" ticks off them would be
+        # worse than having no evidence at all. So the amd64 rules and
+        # baselines are separate, loaded here the first time an amd64 image is
+        # seen, and the Windows 98 proxy rule does not apply to them at all -
+        # see Test-Image, and xhci98-imports-amd64.allow's header for why the
+        # rule that replaces it is stronger rather than weaker.
         if ($imageArch -eq "amd64") {
-            Add-Warning ("amd64 image '$path': the committed allowlist was enforced in full, but NO target-resolution evidence was checked. " +
-                "The Windows 2000 SP4 and Windows 98 baselines are x86 and say nothing about NT 5.2 amd64; the amd64 baselines that would " +
-                "replace them are roadmap task 21.3 and are not staged. Nothing here has checked that these symbols exist on a 64-bit target.")
-            Test-Image -Path $path -ImageFlavor $imageFlavor -Rules $rules -Dumpbin $imageDumpbin `
-                -Win2k $null -Precedent $null -NtkernText $null
+            if (-not $rulesByArch.ContainsKey("amd64")) {
+                $amd64AllowPath = if ($script:allowPathPinned) { $AllowPath } else { $AllowPathAmd64 }
+                $parsed = Read-AllowFile -Path $amd64AllowPath
+                $amd64Rules = [pscustomobject]@{
+                    Allow = @($parsed.Allow + $usbportRows)
+                    Deny  = $parsed.Deny
+                }
+                $rulesByArch["amd64"] = $amd64Rules
+                Write-Ok ("amd64 allowlist: {0} pairs ({1} read from usbport-imports.expected), {2} denied symbols" -f `
+                    $amd64Rules.Allow.Count, $usbportRows.Count, $amd64Rules.Deny.Count)
+
+                if (-not $NoTargetEvidence) {
+                    $amd64Manifest = @(Read-Win2kBaselineManifest -Path $Amd64ManifestPath)
+                    $script:nt52 = Get-Win2kBaseline -Dir $Amd64Dir -Dumpbin $imageDumpbin `
+                        -ManifestRows $amd64Manifest -Label "NT 5.2 amd64" `
+                        -ExtractSwitch "-Force -Amd64Iso <path>"
+                    if ($null -eq $script:nt52) {
+                        Add-Warning "none of the authenticated NT 5.2 amd64 kernel/HAL baselines are present in '$Amd64Dir' - the resolution half of the amd64 gate did not run."
+                    } else {
+                        Write-Ok ("NT 5.2 amd64 baseline: kernels {0}; HAL {1} (versions, lengths and SHA256 authenticated)" -f `
+                            (($script:nt52["ntoskrnl.exe"].Keys | Sort-Object) -join ", "), `
+                            (($script:nt52["hal.dll"].Keys | Sort-Object) -join ", "))
+                    }
+                }
+            }
+            Test-Image -Path $path -ImageFlavor $imageFlavor -Rules $rulesByArch["amd64"] -Dumpbin $imageDumpbin `
+                -Win2k $script:nt52 -BaselineLabel "NT 5.2 amd64" `
+                -Precedent $null -NtkernText $null -ImageArch "amd64"
         } else {
             Test-Image -Path $path -ImageFlavor $imageFlavor -Rules $rules -Dumpbin $imageDumpbin `
-                -Win2k $win2k -Precedent $precedent -NtkernText $ntkernText
+                -Win2k $win2k -BaselineLabel "Windows 2000 SP4" `
+                -Precedent $precedent -NtkernText $ntkernText -ImageArch "x86"
         }
     }
 } catch {

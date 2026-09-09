@@ -38,7 +38,17 @@ function Get-FileIdentityErrors {
         }
 
         $version = $file.VersionInfo.FileVersion
-        if ($row.Version -ne "-" -and $version -ne $row.Version) {
+        # The recorded version may be the whole FileVersion string or just its
+        # leading version NUMBER. Microsoft's NT 5.2 amd64 kernel and HAL carry
+        # a build-lab tag in that resource - "5.2.3790.3959
+        # (srv03_sp2_rtm.070216-1710)" - which cannot live in a
+        # whitespace-split manifest field, so the number alone is recorded and
+        # matched here. Windows 2000 SP4's images have no tag, so their rows
+        # still match whole-string and nothing about the x86 path changes.
+        # This only ever widens what is accepted as a version; SHA-256 and
+        # length are what actually authenticate the file.
+        $versionNumber = ($version -split "\s+")[0]
+        if ($row.Version -ne "-" -and $version -ne $row.Version -and $versionNumber -ne $row.Version) {
             if ([string]::IsNullOrWhiteSpace($version)) {
                 $version = "(no version resource)"
             }

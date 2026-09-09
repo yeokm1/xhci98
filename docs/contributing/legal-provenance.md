@@ -341,6 +341,23 @@ host - `msdis160.dll` is not present.
 paragraph and the one before it remains `static`, read from Microsoft's
 shipped binaries, and none of it has been corroborated by running anything.
 
+Three more files came off the same media on 2026-09-09 for task 21.3, and they
+are a different kind of thing from the ABI readings: they are the *export
+tables the import gate resolves against*, the amd64 counterpart of the Windows
+2000 SP4 kernels and HALs already recorded here. `NTOSKRNL.EX_`,
+`NTKRNLMP.EX_` and `HAL.DL_` were expanded from `AMD64\` with 7-Zip and
+`expand.exe` into git-ignored `tools/winxp64-extracted/`, all three
+5.2.3790.3959 (`srv03_sp2_rtm.070216-1710`), by
+`scripts\import-gate\extract-target-baselines.ps1 -Amd64Iso`, which
+authenticates each file against `scripts\import-gate\winxp64-baselines.expected`
+by version, length and SHA-256 *before* staging it. Method **static**: only
+the export tables are read, with `link /dump /exports`. **Three files and not
+ten** - NT 5.2 amd64 ships one HAL where i386 ships eight, checked by listing
+every name on the media beginning `HAL` rather than by a pattern, which is the
+`HALBORG.DLL` lesson the i386 manifest records. Nothing from that media is
+tracked; the manifest records the identities, which is what makes the claim
+re-derivable without the files.
+
 Since 2026-09-09 it reads two more lineages, in both architectures: the
 `usbport.sys` and `usbehci.sys` of Windows Vista SP2 (6.0.6002.18005,
 `lh_sp2rtm.090410-1830`) and Windows 7 Professional SP1 (6.1.7601.17514,
