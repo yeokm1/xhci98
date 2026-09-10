@@ -2322,7 +2322,7 @@ are static readings and no other task's box may be ticked on one.
         instructions and the command.
 
         **Fixed for amd64 and not for x86**, on section 6.1's reasoning:
-        `DriverEntry` already asks `IoIsWdmVersionAvailable(1, 0x30)` for the
+        `DriverEntry` already asks `IoIsWdmVersionAvailable` for the
         registration arity, and the same answer now settles
         `XhciResourcesRequired`, which `XhciInitController` reads at step 1.
         Unlike the arity branch **this one fails towards NT 5.x**, because the
@@ -2330,6 +2330,16 @@ are static readings and no other task's box may be ticked on one.
         import was added on either architecture, every gate is green, and the
         host tests carry both arms - which is the only place any host here can
         exercise the NT 6.x arm at all.
+
+        **The version predicate itself was wrong until 2026-09-11 and both
+        branches inherited it.** It was written `(1, 0x30)`; Server 2003
+        reports WDM 1.30 exactly and Windows XP x64 *is* Server 2003, so XP x64
+        answered TRUE, took the NT 6.x arm and refused at step 1 - **a
+        regression in committed code, in the one x64 target the project
+        claims.** It is now `(6, 0)`, read out of three kernels
+        (`winxp64` 1.30, `vista-x86` 6.00, `win7-x86` **6.00, not 6.01**).
+        Design record 11 section 6.3 is the record. This is exactly what box 5
+        existed to catch, and it caught it on the first boot.
 
         **Two things about this are the owner's to weigh, and neither is
         settled here.** First, `XhciResourcesRequired` is one unconditional
@@ -2347,10 +2357,17 @@ are static readings and no other task's box may be ticked on one.
         the cheaper: the arity needs a second decorated import stub, this needs
         only the version predicate that stub's branch already computes.
 
-        **What has NOT happened is a boot.** The fix is host-verified only, and
-        the Vista x64 guest has not been asked whether `StartController` now
-        gets past step 1 - which is the next thing to do at the console, and
-        the cheapest reading left in this task.
+        **Both guests have now answered.** Vista x64, 2026-09-10: the mask fix
+        clears step 1, all 22 init steps run, Device Manager's Code 10 goes and
+        a `USB Root Hub` appears - but `dpc count=00000000`, which is task
+        21.8's remaining wall and design record 11 section 6.4. XP x64,
+        2026-09-11, with the corrected predicate above: `wdm pre-6.00 ...=1`,
+        `resource bits required=00000006`, registration status 0 on the
+        **three-argument arm, executed for the first time anywhere**, `init
+        step=00000016 / init status=00000000`, No Op self-test `CC_SUCCESS`, a
+        hot-plugged HID mouse addressed and carrying transfers, and `isr count
+        == isr claimed == dpc count` climbing together. **Box 5 is closed.**
+        Evidence: `vm\task218-evidence\winxp64-wdm600-revalidation-boot.log`.
         **The host-side half is done, 2026-09-10, before either guest existed
         - which is the point, since this is the gate that comes first.** A
         complete test-signed `Vista_X64,7_X64` package can be produced from

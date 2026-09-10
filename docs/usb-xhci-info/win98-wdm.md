@@ -39,9 +39,27 @@ Windows 98 evidence would be needed first:
 
 ```c
 /* IRQL: PASSIVE_LEVEL (call from DriverEntry). Win98 gold/SE report 1.0;
-   Me 1.05; Win2000 1.10; XP 1.20. */
+   Me 1.05; Win2000 1.10; XP 1.20; Server 2003 - and therefore Windows XP
+   x64, which is NT 5.2.3790 - 1.30; Vista 6.00; Windows 7 ALSO 6.00. */
 BOOLEAN isWin9x = !IoIsWdmVersionAvailable(1, 0x10);   /* 1.10 unavailable => 9x */
 ```
+
+**Two of those rows are traps, and one of them cost this project a broken
+target.** The table above used to stop at "XP 1.20", which reads as though
+1.30 were the NT 6.x threshold. It is not: **Server 2003 reports 1.30
+exactly**, so `IoIsWdmVersionAvailable(1, 0x30)` is TRUE on Windows XP x64 and
+cannot separate NT 5.2 from NT 6.x. The amd64 build used exactly that test to
+choose its `usbport` registration arity and resource mask, and the consequence
+was that XP x64 took the NT 6.x arm and refused to start its controller
+(roadmap task 21.8; `docs/contributing/design/11-x64-targets.md` section 6.3).
+**The NT 6.x test is `IoIsWdmVersionAvailable(6, 0)`.** And do not "improve"
+it to `(6, 1)` for Windows 7: 7 reports 6.00 as well, so `(6, 1)` is FALSE
+there.
+
+Both rows are read, not recalled - out of the shipping kernels, static:
+`winxp64` `ntoskrnl+0x28BDE0` compares `cmp cl,1 / jb / jne / cmp dl,30h / ja`,
+while `vista-x86` `ntoskrnl+0x1A876F` and `win7-x86` `ntoskrnl+0x1CAB9B` carry
+the identical `cmp maj,6 / jb / jne / cmp min,0 / ja`.
 
 `IoIsWdmVersionAvailable` cannot separate the original Win98 retail release
 from Win98 SE. Both report 1.0, yet they differ in what they export (the

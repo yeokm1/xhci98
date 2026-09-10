@@ -410,6 +410,29 @@ log channel, which is a `runtime` observation of *this* driver's input and is
 recorded as the symptom; the bit assignment itself is read off Microsoft's
 binaries and is not upgraded by it.
 
+Two more readings were taken on 2026-09-10 and 2026-09-11, both method
+**static**, both with `kd.exe -z` and `link /dump`, nothing executed. The
+first (task 21.8, design record 11 section 6.4) is the miniport interrupt DPC
+slot, read in **six** `usbport.sys` builds - `vista-x64`, `win7-x64`,
+`vista-x86`, `win7-x86`, and the two NT 5.x comparisons the finding rests on,
+`winxp64` and `winxpsp3` - together with the version-gated copy length and the
+interface allocation size in each. As with `USBPORT_ParseResources`, the
+dispatch is not an exported function, so it was reached by following
+`IoConnectInterrupt` to usbport's own ISR and on through `KeInsertQueueDpc` to
+the DPC's `DeferredRoutine`; on the x86 builds part of that chain was located
+by scanning `.text` for raw displacement bytes, because the relevant
+`KeInitializeDpc` call goes through a register and no indirect-call scan can
+see it. The second (section 6.3) is the WDM version each kernel reports, read
+out of `IoIsWdmVersionAvailable` itself in `tools/winxp64-extracted/
+ntoskrnl.exe` (1.30), `tools/vista-x86-extracted/ntoskrnl.exe` (6.00) and
+`tools/win7-x86-extracted/ntoskrnl.exe` (6.00) - three kernels, five
+instructions each, and the fact that corrected this driver's own version
+predicate. **Both stay `static`.** The XP x64 guest booted on 2026-09-11 both
+before and after that correction, and what it reported is a `runtime`
+observation of *this* driver's behaviour, recorded as such; the version
+constants themselves are read off Microsoft's binaries and are not upgraded by
+it.
+
 The toolchain that reads them is third-party material on the same terms.
 WDK 7.1 (`GRMWDK_EN_7600_1.ISO`, 649,877,504 bytes, SHA-256
 `5edc723b50ea28a070cad361dd0927df402b7a861a036bbcf11d27ebba77657d`, from the

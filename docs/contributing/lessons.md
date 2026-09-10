@@ -8437,6 +8437,83 @@ entirely rather than relying on a no-overwrite flag to skip them - but
 *measure* that they are on disk on that guest first, rather than carrying the
 reading over from an install image or another architecture.
 
+## An indirect-call scan does not find every x86 import call site
+
+Finding where NT 6.x x86 `usbport.sys` dispatches the miniport interrupt DPC
+meant finding which `KeInitializeDpc` call set up the DPC the ISR queues. On
+x86 an import call is `FF 15 <abs32>` against an IAT slot, so a byte scan for
+`FF 15` / `FF 25` resolved against a map built from `link /dump /imports`
+looks complete. It is not, and nothing tells you so.
+
+`usbport` loads the import into a register once and calls through the register
+for a whole run of initialisations - `mov ebx,[0x441AC]` at `vista-x86` RVA
+`0x1D8D5`, then `lea eax,[esi+0D08h] / push eax / call ebx` repeatedly. The
+scan found four `KeInitializeDpc` sites and **none of them was the one that
+mattered**; the site it could not see was the one initialising the ISR's own
+DPC.
+
+What worked instead was scanning `.text` for the raw displacement bytes of the
+structure offset already known from the queue site - `08 0D 00 00` for
+`devExt+0xD08` - and disassembling every hit. Six hits, one of them the answer.
+Prefer that whenever you already know an offset and want its users; it is
+blind to how the call is made.
+
+Corroborate the result with the surrounding layout rather than trusting a
+single hit. Here `devExt+0xD04` was a spin lock, `+0xD08` the DPC (0x20 bytes
+on x86), `+0xD28` another spin lock and `+0xD2C` the next DPC - consecutive and
+exactly sized, which is also why the two DPCs sit `0x24` apart and not `0x20`,
+a gap that would otherwise look like a misreading.
+
+## `kd`'s module-relative display is an RVA, but the address beside it is not
+
+Two `kd -z` display conventions cost time on the same afternoon, and they pull
+in opposite directions.
+
+A label printed as `usbport+0x1c0a` **is** an RVA: these images have base
+`0x10000`, so the instruction is at absolute `0x11c0a`. But the absolute
+address `kd` prints in parentheses beside an operand is base+RVA already. So a
+`push offset usbport!SomeExport+0x20d2 (0002ae54)` names RVA **`0x1AE54`**, not
+`0x2AE54` - and `uf usbport+2ae54` answers `No code found, aborting`, which
+reads like the function is missing rather than like the address is wrong.
+
+Separately, **`u <start> <end>` mis-displays RIP-relative targets** on amd64,
+printing `module+<raw disp32>` instead of the resolved address - so a call to
+`IoConnectInterrupt` reads as `usbport+0x261f5`, a plausible-looking offset
+that is not a code address at all. `uf` on a real function resolves them
+correctly; a `u` range does not. Compute `next_VA + disp32` from the bytes when
+working from a range. And `u <begin> <end>` driven per `.pdata` entry
+**silently truncates long functions**, so a sweep built that way has holes - it
+missed the `IoConnectInterrupt` call site entirely, which is what sent the
+search down the register-indirect path above in the first place.
+
+One more, for the IAT map those scans need: the address `link /dump /imports`
+prints for the Import Address Table is **base+RVA already** (`0x44000` on
+vista-x86, not `0x34000`), entries follow in listed order, and the four header
+lines - "Import Address Table", "Import Name Table", "time date stamp", "Index
+of first forwarder reference" - must be skipped or every index is wrong by
+four.
+
+## A healthy Device Manager node says nothing about which binary is loaded
+
+The Windows XP x64 re-validation that found the WDM-version defect nearly
+reported a pass before it started. Device Manager showed `USB 2.0 eXtensible
+Host Controller (xhci98)` with a `USB Root Hub` beneath it and no warning icon
+- exactly what a working install looks like - while the driver was in fact
+refusing to start its controller at init step 1 on every boot.
+
+Two things combined. The guest still had the **release**-flavour binary from an
+earlier task installed, and the release flavour writes nothing at all to the
+`0xE9` debug console; and a `StartController` refusal does not necessarily cost
+the device its node.
+
+So: **an empty debug-console log means "the wrong flavour is installed" at
+least as often as it means "the driver never loaded"**, and a device node's
+appearance is not evidence about the code in it. Read the
+`DriverEntry (built <date> <time>)` stamp before reading any result, and if
+there is no stamp, find out why before concluding anything. The existing rule
+that a stale log must never be read as this boot's is the same rule one step
+earlier.
+
 ## A VVFAT floppy is the way out of a `snapshot=on` guest
 
 Guests here mount their package over VVFAT with `snapshot=on`, which is

@@ -4731,18 +4731,42 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT DriverObject,
      * import surface is unchanged, which is why the call sits inside the
      * _WIN64 guard rather than outside it with a runtime test.
      *
-     * WDM 1.30 is the NT 6.x threshold (Win2000 1.10, XP and Server 2003
-     * 1.20, Vista and Windows 7 1.30). THE TEST FAILS TOWARDS FOUR ON
-     * PURPOSE: a fourth argument on NT 5.2 is inert - the callee never reads
-     * r9, and x64 is caller-cleaned so nothing unbalances - while three on
-     * NT 6.x bugchecks inside usbport's memmove. So only a positive
-     * identification of a pre-6.x WDM takes the three-argument path.
+     * THE THRESHOLD IS WDM 6.00, NOT 1.30, AND THAT DIFFERENCE WAS A LIVE
+     * DEFECT HERE. `IoIsWdmVersionAvailable(1, 0x30)` reads like a pre-6.x
+     * test and is not one: **Windows Server 2003 reports WDM 1.30 exactly**,
+     * and Windows XP x64 IS Server 2003 (NT 5.2.3790), so that call answered
+     * TRUE there and this branch took the NT 6.x arm on an NT 5.x system.
+     * Observed on the XP x64 guest 2026-09-10 - `wdm pre-1.30 ...=00000000`,
+     * `resource bits required=0000000C`, usbport answering
+     * `ResourcesTypes=0x06`, `init REFUSED at step=00000001` - and then read
+     * out of the three kernels, static, which is what settles the constant:
+     *
+     *   NT 5.2  winxp64   ntoskrnl+0x28BDE0  cmp cl,1 / jb T / jne F /
+     *                                        cmp dl,30h / ja F   -> 1.30
+     *   NT 6.0  vista-x86 ntoskrnl+0x1A876F  cmp maj,6 / jb T / jne F /
+     *                                        cmp min,0 / ja F    -> 6.00
+     *   NT 6.1  win7-x86  ntoskrnl+0x1CAB9B  the same instructions -> 6.00
+     *
+     * (1,0x30) is therefore TRUE on all three; (6,0) is TRUE on exactly the
+     * two NT 6.x ones. Note Windows 7 reports 6.00 and NOT 6.01, so (6,1)
+     * would be wrong in the other direction.
+     *
+     * On x64 there is no Windows between 5.2 and 6.0, so `!(6,0)` is a
+     * POSITIVE identification of NT 5.2 rather than a fallback - which is
+     * what lets one answer still drive both decisions below. The old
+     * comment's "fails towards four" reasoning is retired with the constant
+     * it defended, and the fact it rested on is now observed rather than
+     * assumed: a fourth argument on NT 5.2 really is inert - the callee never
+     * reads r9, x64 is caller-cleaned so nothing unbalances - because the
+     * broken test sent XP x64 down the four-argument arm on 2026-09-10 and
+     * registration still returned STATUS_SUCCESS with all sixteen service
+     * pointers written.
      */
 #ifdef _WIN64
     {
-        BOOLEAN isNt5 = !IoIsWdmVersionAvailable(1, 0x30);
+        BOOLEAN isNt5 = !IoIsWdmVersionAvailable(6, 0);
 
-        XHCI_DBG_VALUE("wdm pre-1.30 (three-argument registration)",
+        XHCI_DBG_VALUE("wdm pre-6.00 (three-argument registration)",
                        (ULONG)isNt5);
 
         /*

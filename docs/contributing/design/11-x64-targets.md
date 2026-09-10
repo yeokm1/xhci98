@@ -879,8 +879,9 @@ twice that a question about this interface was answered by disassembling a
 caller or a writer rather than a structure.**
 
 **The fix, and it is amd64-only for section 6.1's reason.** `DriverEntry`
-already asks `IoIsWdmVersionAvailable(1, 0x30)` to choose the registration
-arity; the same answer now settles `XhciResourcesRequired`, a file-scope `ULONG`
+already asks `IoIsWdmVersionAvailable` to choose the registration arity (with
+the constant section 6.3 corrects); the same answer settles
+`XhciResourcesRequired`, a file-scope `ULONG`
 in `src\xhci_dispatch.c` that `XhciInitController` reads at step 1. It is
 settled once at PASSIVE_LEVEL rather than tested at the check because that check
 is also reached from task 13-R.1's recovery DPC. Unlike the arity branch **this
@@ -904,6 +905,235 @@ with the NT 6.x mask selected, `0x0C` starts the controller and `0x06` is
 refused at `XHCI_INIT_STEP_RESOURCES`. The second half is the one that says the
 bits moved rather than widened, and it is the only place any host here can
 exercise the NT 6.x arm at all.
+
+---
+
+### 6.3 The discriminator both branches hang off was wrong - found 2026-09-11 on XP x64
+
+Sections 6.1 and 6.2 each read an NT 6.x divergence correctly and each fixed it
+correctly. **Both then asked the same question to decide which arm to take, and
+that question was the defect.** It is worth its own section because the reading
+was sound and the wiring was not, which is a different failure from the two
+above and wants a different guard.
+
+`IoIsWdmVersionAvailable(1, 0x30)` was written as "is this WDM at least 1.30,
+i.e. NT 6.x". **It is not. Windows Server 2003 reports WDM 1.30 exactly, and
+Windows XP x64 IS Server 2003 (NT 5.2.3790)** - the identity this document
+relies on everywhere else. So the call answered TRUE on the one x64 target the
+project actually claims, `XhciResourcesRequired` was raised to the NT 6.x
+`0x0C`, usbport answered with the NT 5.x `0x06`, and the controller refused to
+start.
+
+**Read on the guest first, then out of the kernels.** XP x64, 2026-09-10, HEAD
+`12bc3cd`, amd64 qemu build `built Sep 10 2026 22:23:43`:
+
+    wdm pre-1.30 (three-argument registration)=00000000
+    resource bits required=0000000C
+    resources+00: 00000006
+    init REFUSED at step=00000001
+    init refusal status=00000006
+
+Then static, which is what settles the constant rather than the symptom. Export
+RVAs from `link /dump /exports`; bodies via
+`kd -z <ntoskrnl> -y C:\nosym -c "uf ntoskrnl+<rva>"`:
+
+| build | export | body | reports |
+|---|---|---|---|
+| NT 5.2 `winxp64` | `ntoskrnl+0x28BDE0` | `cmp cl,1 / jb T / jne F / cmp dl,30h / ja F` | **1.30** |
+| NT 6.0 `vista-x86` | `ntoskrnl+0x1A876F` | `cmp maj,6 / jb T / jne F / cmp min,0 / ja F` | **6.00** |
+| NT 6.1 `win7-x86` | `ntoskrnl+0x1CAB9B` | the same instructions | **6.00** |
+
+`(1, 0x30)` is therefore TRUE on all three, and `(6, 0)` is TRUE on exactly the
+two NT 6.x ones. **Note the third row: Windows 7 reports 6.00 and not 6.01**,
+so `(6, 1)` would be wrong in the other direction - the obvious "tighten it for
+7" edit breaks 7.
+
+**The fix** is one constant in `src\xhci_dispatch.c` -
+`!IoIsWdmVersionAvailable(6, 0)` - plus the debug label, which becomes
+`wdm pre-6.00 (three-argument registration)`. Still `_WIN64`-guarded, still no
+new import (`IoIsWdmVersionAvailable` was already allowlisted at hint 197), and
+the 32-bit binary is untouched because the whole branch is inside the guard.
+
+**What this retires.** Section 6.1's "the test fails towards four on purpose"
+was a hedge against an *unidentified* system. It is retired with the constant it
+defended: on x64 there is no Windows between 5.2 and 6.0, so `!(6, 0)` is a
+positive identification of NT 5.2, not a fallback, and one answer can still
+drive both branches. Note also that the defect proved the claim the hedge
+rested on - a fourth argument on NT 5.2 really is inert, because XP x64 was
+sent down the four-argument arm by the bug and registration still returned
+`STATUS_SUCCESS` with all sixteen service pointers written.
+
+**Re-validated on XP x64 2026-09-11** with `built Sep 10 2026 23:40:38`, which
+closes box 5 and is the first execution of the three-argument arm anywhere:
+`wdm pre-6.00 ...=00000001`, `resource bits required=00000006`, registration
+status 0, `init complete, USBSTS=00000008`, `init step=00000016 /
+init status=00000000`, `No Op self-test completion code=00000001`, and a
+hot-plugged HID mouse enumerated (`slots enabled=1`, `devices addressed=1`)
+with `isr count == isr claimed == dpc count` climbing together - the direct
+contrast with Vista x64's `dpc count=00000000` in section 6.4. Evidence:
+`vm\task218-evidence\winxp64-wdm600-revalidation-boot.log`.
+
+**A method lesson that nearly cost the finding.** Device Manager showed a
+healthy controller *and* a `USB Root Hub` throughout, because the guest still
+had the *release*-flavour binary from task 21.5 installed - and the release
+flavour writes nothing to the `0xE9` channel. **An empty debug-console log
+means "the wrong flavour is installed" at least as often as it means "the
+driver never loaded", and a healthy Device Manager node says nothing about
+which binary is running.** Read the `DriverEntry (built ...)` stamp before
+reading any result.
+
+---
+
+### 6.4 M11 - the miniport interrupt DPC slot - read 2026-09-10/11, **and it moved on both architectures**
+
+With 6.1, 6.2 and 6.3 in place the amd64 driver loads on Vista x64, registers,
+starts its controller and runs all 22 init steps. It then stops, and the
+symptom is three counters:
+
+    isr count=00000014   isr claimed=00000014   dpc count=00000000
+
+with no `cb InterruptDpc` line anywhere. Nothing drains the event ring, so the
+driver loops every ~15 s: No Op times out at 4 s, abort will not write, the ring
+will not stop, `ResetController`, task 13-R.1's in-place recovery, round again.
+**The controller is innocent** - QEMU queues `ER_COMMAND_COMPLETE, CC_SUCCESS`
+every cycle, and live `xp/1xw` off BAR0 reads `USBCMD=5` (R/S and INTE),
+`IMAN=2` (IE set), `USBSTS=0`, `ERDP` with EHB set and the dequeue pointer still
+at the ring base.
+
+**The cause is the same shape as 6.1 and 6.2 - a member was inserted and the
+field moved - and it is read, not inferred, in six shipping binaries.**
+
+| build | interface in devExt | packet in interface | `InterruptService` | `InterruptDpc` |
+|---|---|---|---|---|
+| NT 5.2 `winxp64` | devExt+0x1E8 | itf+0x28 | itf+0x90 = **pkt+0x68** | itf+0x98 = **pkt+0x70** |
+| NT 6.0 `vista-x64` | devExt+0x418 | itf+0x38 | **pkt+0x68** | itf+0x2D0 = **pkt+0x298** |
+| NT 6.1 `win7-x64` | devExt+0x408 | itf+0x38 | **pkt+0x68** | itf+0x2D0 = **pkt+0x298** |
+| NT 5.1 `winxpsp3` | devExt+0x144 | itf+0x14 | itf+0x5C = **pkt+0x48** | itf+0x60 = **pkt+0x4C** |
+| NT 6.0 `vista-x86` | devExt+0x310 | itf+0x1C | itf+0x64 = **pkt+0x48** | itf+0x194 = **pkt+0x178** |
+| NT 6.1 `win7-x86` | devExt+0x328 | itf+0x1C | itf+0x64 = **pkt+0x48** | itf+0x194 = **pkt+0x178** |
+
+**The ISR slot never moved on either architecture. The DPC slot moved on
+both.** The NT 5.x rows are the proof: one build reading a high offset says only
+that this build reads it; the 5.x build reading the slot immediately after the
+ISR is what says the field moved.
+
+**The dispatch is silent when the slot is zero.** On amd64 it is inlined -
+Vista x64 `usbport+0x37742` and Win7 x64 `usbport+0x3d548` assemble to the
+identical seven bytes `4c 8b 80 d0 02 00 00`:
+
+    mov  rax,[rbx+418h]      ; the miniport INTERFACE     (win7: rbx+408h)
+    mov  dl,byte ptr [rbx+4FCh] / shr dl,5 / and dl,1     ; enableInterrupts
+    mov  r8,[rax+2D0h]       ; <<< interface+0x2D0 = packet+0x298
+    test r8,r8
+    je   skip                ; <<< ZERO -> SKIPPED, no error, no bugcheck
+    mov  rcx,[rbx+410h]      ; MiniportExtension
+    call r8
+
+On x86 it is a tiny `ret 8` helper - `usbport+0x2c1e` (vista-x86),
+`usbport+0x182d` (win7-x86) - doing the same thing:
+
+    mov  ecx,[ebp+8]         ; devExt
+    mov  edx,[ecx+310h]      ; the INTERFACE              (win7: ecx+328h)
+    mov  edx,[edx+194h]      ; <<< interface+0x194 = packet+0x178
+    xor  eax,eax
+    test edx,edx
+    je   skip                ; <<< ZERO -> returns 0, no error, no bugcheck
+    push [ebp+0Ch]           ; enableInterrupts
+    push [ecx+30Ch]          ; MiniportExtension
+    call edx
+
+Its caller, the DPC routine `usbport+0x1dfa`, computes the argument and tests
+the result exactly as amd64 does: `mov al,[ebx+3D8h] / shr al,5 / and al,1`,
+then `test al,3` and `and dword ptr [ebx+3D8h],0FFFEFFFFh` - the x86 images of
+amd64's `[rbx+4FCh]`, `test r12b,1 / ,2` and `btr [devExt+4FCh],10h`.
+
+**Why a Version 200 miniport can never be called.** Registration `memcpy`s the
+miniport's packet into the interface with a length chosen by version:
+
+| version | amd64 vista/win7 | x86 vista | x86 win7 | x86 NT 5.1 |
+|---|---|---|---|---|
+| < 200 | 0x230 | 0x12C (300) | 0x12C | 0x12C |
+| **200 - 299** | **0x250** | **0x13C (316)** | **0x13C** | **0x13C** |
+| 300 - 309 | 0x368 | 0x1E0 (480) | 0x1E0 | - |
+| >= 310 | 0x380 / 0x3A0 | 0x1EC (492) | 0x1FC (508) | - |
+
+**This driver sends 200.** On amd64 the packet lands at interface+0x38, so
+`0x38 + 0x250 = 0x288` and `0x2D0` is past it. On x86 it lands at
+interface+0x1C, and `packet+0x178` is 376 where only 316 bytes are copied. The
+block is `ExAllocatePoolWithTag`-ed and zeroed first, so in both cases the slot
+reads zero for ever and the `test` above skips it.
+
+**The allocation size proves the interface is nothing but a header plus the
+packet**, which is what rules out anything else living at that offset: Vista
+x64 allocates `0x3B8` = `0x38 + 0x380`, Win7 x64 `0x3D8` = `0x38 + 0x3A0`,
+vista-x86 `0x208` = `0x1C + 0x1EC`, win7-x86 `0x218` = `0x1C + 0x1FC` - in each
+case exactly the header plus that build's largest packet. On Vista x64,
+`interface+0x2D0` is read in exactly one place and written nowhere in the whole
+`.text`, so it can only ever come from that copy.
+
+**This is the answer to Phase 22 as well as to 21.8, and the answer is
+negative.** The shipping 32-bit binary cannot work on Vista x86 or Windows 7
+x86 either - and for a second, independent reason that bites earlier and
+harder than the DPC: **x86 registration is callee-cleaned stdcall.**
+`winxpsp3` ends `ret 0Ch` (three arguments); `vista-x86` and `win7-x86` end
+`ret 10h` (four). A three-argument call to a four-argument callee unbalances
+the stack on return, and there is no "the extra argument is inert" escape the
+way there is on caller-cleaned x64. So **Version 300 is the single key to
+Vista/7 on both architectures**, which is what section 7 has to weigh.
+
+**Two things any Version 300 fix must reckon with, neither settled here.**
+First, **the NT 6.x callback returns a `ULONG`** whose bits 0 and 1 usbport
+tests and acts on - the signature is `ULONG (miniportExt, BOOLEAN
+enableInterrupts)` - while `xhciInterruptDpc` is `VOID`, so pointing the new
+slot at it unchanged hands usbport whatever is in `eax`. Second, **the slot
+only exists at Version >= 300**, and the 64-bit DMA adapter hazard section 6.1
+warns about is gated on **>= 310**, not 300, so declaring 300 does not by
+itself open it.
+**Nothing has been decided and no constant has moved.**
+
+**METHOD - two traps that cost real time, both worth keeping.**
+
+1. **`kd -z ... -c "u <start> <end>"` mis-displays RIP-relative targets**, printing
+   `module+<raw disp32>` instead of the resolved address, so a call to
+   `IoConnectInterrupt` reads as `usbport+0x261f5`. `uf` on a real function is
+   right; a `u` range is not. Compute `next_VA + disp32` from the bytes. And
+   `u <begin> <end>` per `.pdata` entry **silently truncates long functions**,
+   so a sweep built that way has holes.
+2. **On x86, an `FF 15` / `FF 25` import-call scan is not sufficient.** usbport
+   loads `KeInitializeDpc` into a register once (`mov ebx,[0x441AC]` at
+   vista-x86 RVA 0x1D8D5) and calls it through the register for a run of DPC
+   initialisations, so the site that initialises the ISR's own DPC is invisible
+   to such a scan - four sites were found and none was the one that mattered.
+   What found it was scanning `.text` for the raw displacement bytes
+   (`08 0D 00 00` for devExt+0xD08) and disassembling every hit. The layout
+   corroborates the reading: devExt+0xD04 spinlock, +0xD08 DPC (0x20 bytes),
+   +0xD28 spinlock, +0xD2C DPC - which is why the two DPCs are 0x24 apart and
+   not 0x20.
+
+Also note, for anyone re-walking this in `kd`: **the `usbport+0x<n>` label
+offset IS the RVA** (the base is 0x10000), but the absolute address printed
+beside a `push offset` is base+RVA. A target shown as `0002ae54` is RVA
+`0x1AE54`, and `uf usbport+2ae54` answers "No code found".
+
+**The chain, for anyone re-walking it (vista-x86).** `IoConnectInterrupt` is
+called exactly once, at `usbport+0x1AD2E`; of its eleven right-to-left pushes
+the tenth is `ServiceRoutine` = `usbport+0x1c0a`, usbport's real ISR. That ISR
+takes devExt from `[DeviceObject+0x28]`, calls the ISR helper `usbport+0x1dd2`,
+and on TRUE does `InterlockedIncrement(devExt+0x650)` then
+`KeInsertQueueDpc(devExt+0xD08, 0, 0)`, backing it out with
+`InterlockedDecrement` if the DPC was already queued. That DPC is initialised at
+`usbport+0x1D979` with a `DeferredRoutine` of `usbport+0x1dfa` - the routine
+that then calls `usbport+0x2c1e` and finds zero. **So the ISR half of usbport is
+healthy and the queue does happen**; everything downstream of
+`KeInsertQueueDpc` is what falls off. The NT 5.1 control chain runs the same
+way: `IoConnectInterrupt` at `usbport+0x1ED4`, ISR `usbport+0x1AE54` (which
+calls the miniport ISR inline, `mov eax,[esi+144h] / call dword ptr [eax+5Ch]`),
+DPC at devExt+0x56C initialised at `usbport+0x16D8` with `DeferredRoutine`
+`usbport+0x1B25C`, which does `mov eax,[ebx+144h] / push [ebx+140h] /
+call dword ptr [eax+60h]`.
+
+Provenance for every reading in this section: `legal-provenance.md` section 4,
+all of them `static`.
 
 ---
 
@@ -1681,16 +1911,30 @@ publishes:
     owner's preference was to send NT 5.x exactly what NT 5.x expects, and the
     branch also protects Server 2003 x64, which rests on identity with XP x64
     rather than on an observation. The discriminator is
-    `IoIsWdmVersionAvailable(1, 0x30)`, **not** `PsGetVersion`, which
+    `IoIsWdmVersionAvailable`, **not** `PsGetVersion`, which
     `usb-xhci-info/win98-wdm.md` rules out as unexported on Windows 98 and Me -
     chosen so Phase 22's 32-bit branch can use the same primitive. It is
-    guarded on `_WIN64` so the 32-bit import surface is untouched, and **the
-    test fails towards four on purpose**: four on NT 5.2 is inert, three on
-    6.x bugchecks. The amd64 allowlist gained one row, with the export
-    evidence its rule demands. Confirmed on the guest 2026-09-10:
-    `wdm pre-1.30 (three-argument registration)=00000000`, registration
-    status 0. **The three-argument arm has not been exercised since it was
-    written** and owes an XP x64 run - box 5's work.
+    guarded on `_WIN64` so the 32-bit import surface is untouched. The amd64
+    allowlist gained one row, with the export evidence its rule demands.
+
+    **The constant was wrong until 2026-09-11, and section 6.3 is the
+    record.** It was written `(1, 0x30)` on the belief that 1.30 was the NT 6.x
+    threshold; Server 2003 reports 1.30 exactly, so XP x64 answered TRUE and
+    took the NT 6.x arm. It is now `IoIsWdmVersionAvailable(6, 0)`. The
+    "fails towards four" argument that accompanied the old constant is retired
+    with it: on x64 there is no Windows between 5.2 and 6.0, so `!(6, 0)` is a
+    positive identification of NT 5.2 rather than a fallback.
+
+    **Both arms are now exercised.** The four-argument arm was confirmed on
+    Vista x64 2026-09-10 (registration status 0), and the three-argument arm on
+    XP x64 2026-09-11 with the corrected constant:
+    `wdm pre-6.00 (three-argument registration)=00000001`,
+    `resource bits required=00000006`, registration status 0, all sixteen
+    service pointers written, `init step=00000016 / init status=00000000`, and
+    a hot-plugged HID mouse addressed and carrying transfers. Box 5 is closed.
+    The old constant's own reading - that a fourth argument on NT 5.2 is inert
+    - is now an observation rather than a prediction, because the broken test
+    sent XP x64 down the four-argument arm and registration still succeeded.
 11. ~~Whether the `W98-SECTLEN` rule - Windows 98's 28-character section-name
     limit - applies to `src/xhci98-amd64.inf`.~~ **Decided 2026-09-10: it does
     not.** Windows 98's engine never reads that file, by the design at its own

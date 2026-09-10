@@ -776,8 +776,8 @@ writes back ("out"):
 | 0x3C | `StopController` | in | |
 | 0x40 | `SuspendController` | in | |
 | 0x44 | `ResumeController` | in | |
-| 0x48 | `InterruptService` | in | |
-| 0x4C | `InterruptDpc` | in | |
+| 0x48 | `InterruptService` | in | Same offset on every build read, NT 5.1 through 6.1, x86 and amd64 |
+| 0x4C | `InterruptDpc` | in | **This offset is NT 5.x/9x only.** NT 6.x moves the slot to `packet+0x178` (x86) / `packet+0x298` (amd64) - see the warning below the table |
 | 0x50 | `SubmitTransfer` | in | |
 | 0x54 | `SubmitIsoTransfer` | in | |
 | 0x58 | `AbortTransfer` | in | |
@@ -837,6 +837,31 @@ writes back ("out"):
 | 0x130 | `TakePortControl` | in | |
 | 0x134 | `Reserved4` | - | sentinel-fill |
 | 0x138 | `Reserved5` | - | sentinel-fill |
+
+**THE TABLE ABOVE IS THE NT 5.x/9x PACKET, AND ONE FIELD IN IT DOES NOT SURVIVE
+NT 6.x.** Everything in this document is derived from the builds this driver
+targets - NUSB 5652, SP4 6681, XP SP3 5512 and their amd64 sibling - and those
+agree field for field. They are **not** a description of Vista or Windows 7. Of
+the divergences read so far (roadmap task 21.8;
+`contributing/design/11-x64-targets.md` sections 6.1-6.4), the one that changes
+this table is:
+
+| field | NT 5.x / 9x | NT 6.0 and 6.1 |
+|---|---|---|
+| `InterruptService` | `packet+0x48` (x86), `packet+0x68` (amd64) | unchanged |
+| **`InterruptDpc`** | **`packet+0x4C`** (x86), **`packet+0x70`** (amd64) | **`packet+0x178`** (x86), **`packet+0x298`** (amd64) |
+
+A member was inserted below `InterruptDpc` and everything after it moved. The
+slot only exists at interface `Version >= 300`, so at the Version 200 this
+driver sends it is past the end of what registration copies (316 bytes on x86,
+`0x250` on amd64) - and NT 6.x tests the slot for NULL and **skips the callback
+with no error and no bugcheck**, which is what a miniport sees as an ISR that
+claims interrupts and a DPC that never runs. The NT 6.x callback also **returns
+a `ULONG`** whose bits 0 and 1 usbport acts on, where the NT 5.x one is `VOID`.
+
+The same applies to anything below that says where usbport calls `InterruptDpc`
+from, or which lock it holds while doing so: those readings are off the NT 5.x
+binaries and have not been re-taken on NT 6.x.
 
 The tail group at 0x124-0x138 (`RebalanceEndpoint`..`Reserved5`) was the
 highest-risk region before the binaries were read: ReactOS documents the
