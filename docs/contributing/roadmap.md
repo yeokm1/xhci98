@@ -2187,7 +2187,12 @@ are static readings and no other task's box may be ticked on one.
         committed generators beside `setup-qemu-winxp64.ps1`, their launchers,
         and their rows in `scripts\test-qemu-launchers.ps1`. **Monitor ports
         55563 and 55564**: 55555-55562 are taken, and the gate exists because
-        two launchers sharing a port has happened twice
+        two launchers sharing a port has happened twice. **That reservation
+        held on 2026-09-10 and is now enforced**: Phase 22's 32-bit Vista and
+        Windows 7 guests were drafted onto exactly this pair, were moved to
+        55565 and 55566 instead, and the launcher gate now asserts that
+        nothing takes 55563 or 55564 - a check to delete when the generators
+        below claim them, and not before
   - [ ] **the accelerator probed on each, and the result recorded whichever
         way it goes.** Do not copy XP x64's `-accel tcg` across as settled:
         that reading is the reverse of every 32-bit guest here, and
@@ -2325,6 +2330,14 @@ where the two hard parts below live and where the unsigned-driver assumption
 is confirmed or refuted. Left beside it, and independent of how that comes
 out, is the `1.1.0.0` cut in 22.7 to 22.9.
 
+**As of 2026-09-10 that guest half is down to two Setup runs.** Both
+generators, their shared body, their launcher-gate rows, both disks and the
+accelerator probe on each guest are done and green; what neither 22.3 nor 22.4
+can be given without the owner is the install itself, which the owner drives
+at the console under the standing decision of 2026-09-03. Both guests run under
+`whpx,kernel-irqchip=off`. `build-and-test.md`, "Windows Vista and Windows 7
+target VMs", is the recipe and the reading.
+
 Why a phase, and why it is a different one from 21: **this asks nothing of
 the toolchain.** Phase 21 needs a second DDK, a second import library and an
 arch fork before a compiler is even reached; this phase's subject is the
@@ -2422,7 +2435,9 @@ reading may not tick a box whose line names a guest.
       has no 6.0/6.1 baseline behind it and this reading does not add one; it
       answers the question ahead of a guest, which is the point of taking it.
 - [ ] **22.3 - the install path, read statically off a clean guest.** The two
-      cheap readings 21.5 took for XP x64, on each of these:
+      cheap readings 21.5 took for XP x64, on each of these. Everything but
+      the installs is in place as of 2026-09-10 (see 22.4), so what this waits
+      on is two Setup runs and two snapshots and nothing else:
   - [ ] whether an xHCI-only Vista/7 install has `usbport.sys`, `usbhub.sys`,
         `usbd.sys` or `usbehci.sys` on disk at all. **A strong prior, but not
         this box:** all four are in `Windows\System32\drivers` inside the
@@ -2430,15 +2445,70 @@ reading may not tick a box whose line names a guest.
         with 22.1), and Vista and later apply the whole image rather than
         copying drivers on demand the way XP Setup does. That is a reading of
         the install media, not of an installed system, so the box stays open
-        until a guest is looked at
+        until a guest is looked at. **Asked and answered on 2026-09-10 - why
+        not just read the WIM?** Because the gap between what Setup carries
+        and what Setup leaves is where the defect this box hunts actually
+        lived: on the XP lineage those same four files were on the media the
+        whole time, in `Driver Cache\i386`, and an xHCI-only install still had
+        none of them on disk, which is the Code 39 that `1.0.1.0`'s INF fix
+        answers. The WIM says what an install would apply, not what it has
   - [ ] where the operating system keeps them if it does not, and whether the
-        `LayoutFile` route can still reach them from a driver-store install
+        `LayoutFile` route can still reach them from a driver-store install.
+        **This half cannot be read off media at any price**:
+        `System32\DriverStore\FileRepository` is made by the install, so a WIM
+        listing cannot be asked the question at all
 - [ ] **22.4 - the guests.** One Vista x86 and one Windows 7 x86 QEMU guest,
       each with a committed generator and a launcher-gate row, the way
       `setup-qemu-winxp.ps1` and `setup-qemu-winxp64.ps1` were done.
       **Probe the accelerator per host AND per guest** - Phase 21 paid for
       that rule twice, in opposite directions, and neither reading
-      generalises.
+      generalises. **Everything but the two Setup runs was done 2026-09-10**;
+      the box stays open because a generator is not a guest.
+  - [x] the generators, and they are **one recipe written once**:
+        `scripts\qemu-nt6-common.ps1` holds the machine and
+        `scripts\setup-qemu-vista.ps1` / `setup-qemu-win7.ps1` are thin
+        callers. That is the one structural departure from the six generators
+        before them and the 2026-09-07 audit's H28 is the reason - five copies
+        of one resolver had drifted apart unnoticed, and two guests born the
+        same day out of one recipe are the pair that would drift next
+  - [x] their launcher-gate rows, plus two refusals the gate now asserts:
+        `-cpu pentium3` (the 32-bit XP recipe's own value, one line away in
+        the same directory) **predates the NX bit and Windows 7 Setup refuses
+        such a processor**, so the shared body throws rather than writing a
+        launcher that installs nothing; and the install and run launchers must
+        agree on the accelerator, since the HAL is fixed at install time.
+        209 checks, 9 monitor ports, none shared
+  - [x] **the accelerator probed on each, 2026-09-10, host `minis-w11p-ykm`:
+        both run under `whpx,kernel-irqchip=off`.** Vista was at its "Install
+        Windows" language page under four minutes from launch, Windows 7 at
+        the same page in about two. TCG was not needed on either and was not
+        tried, so the ordinary 32-bit answer holds here as a result rather
+        than as an inheritance. **And the probe taught a reading rule worth
+        more than the result**: at the Windows 7 language page `EIP` was
+        identical across samples 36 s apart with `HLT=0` - which is exactly
+        the signature that *was* a wedge on the XP x64 guest. It is not one
+        here. A guest spinning in a Setup prompt's input wait looks precisely
+        like a guest that has died in one, and **the screendump is the only
+        thing that tells them apart**
+  - [x] the disks (`vm\vista.img`, `vm\win7.img`, 32 GB each) and a smoke test
+        of the generated install launcher itself, which the gate cannot do:
+        `qemu-vista-install.cmd` boots the DVD and reaches "Windows is loading
+        files"
+  - [ ] **the two Setup runs.** The owner drives Setup at the console - the
+        standing decision of 2026-09-03, taken for the 32-bit XP guest and
+        unchanged here - then shut down from the Start menu and
+        `qemu-img snapshot -c <stem>-clean-install`
+  - [x] **a monitor-port collision caught before it was generated, and the
+        gate widened so the next one is not.** These two guests were drafted
+        onto **55563 and 55564**, which task 21.8 reserved in writing for the
+        Vista x64 and Windows 7 x64 guests on 2026-09-09. The launcher gate
+        compares generated launchers against each other, so it is blind to a
+        port reserved in prose and would have stayed silent until 21.8's
+        generators were written - months later, with both records believed in
+        between. The 32-bit pair took **55565 and 55566**, 21.8's reservation
+        stands untouched, and the gate now asserts the reservation itself.
+        Release that assertion when 21.8's generators claim the ports, not
+        before
 - [ ] **22.5 - whatever 22.1 to 22.3 imply**, which may be nothing. If it is
       a driver change it is a release, and all four existing install legs -
       98, ME, 2000, XP32 - are re-validated behind it, because this is the

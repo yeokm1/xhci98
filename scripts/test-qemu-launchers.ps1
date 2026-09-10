@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Regression tests for the Win98, Win2000, Windows XP, xHCI-only Win2000 and Windows XP x64 QEMU launcher generators.
+Regression tests for the Win98, Win2000, Windows XP, xHCI-only Win2000, Windows XP x64, Windows Vista and Windows 7 QEMU launcher generators.
 
 .DESCRIPTION
 Generates launchers against stand-in QEMU executable files. QEMU is never
@@ -15,11 +15,13 @@ must be left alone. A launch that dies before QEMU writes anything leaves a
 zero-byte log behind, and rotating that unconditionally would push the last
 real trace out of <target>-debugcon.previous.log and replace it with nothing.
 
-All six VMs are covered because the phases close on comparisons between them:
+All eight VMs are covered because the phases close on comparisons between them:
 the traces must land in separate files, and each must belong to one boot.
 (The Windows XP guest is the fourth and the xHCI-only Windows 2000 guest the
 fifth, both since roadmap Phase 19; the Windows XP x64 guest is the sixth,
-since roadmap Phase 21.)
+since roadmap Phase 21; the Windows Vista and Windows 7 guests are the seventh
+and eighth, since roadmap Phase 22, and they share one generator body in
+scripts\qemu-nt6-common.ps1 rather than carrying two copies of it.)
 #>
 
 [CmdletBinding()]
@@ -35,7 +37,9 @@ $targets = @(
     @{ Name = "Win2000SMP"; Setup = "setup-qemu-win2k-smp.ps1"; Launcher = "qemu-win2k-smp-run.cmd"; LogBase = "win2k-smp-debugcon" },
     @{ Name = "WinXP";  Setup = "setup-qemu-winxp.ps1";    Launcher = "qemu-winxp-run.cmd"; LogBase = "winxp-debugcon" },
     @{ Name = "Win2000XOnly"; Setup = "setup-qemu-win2k-xonly.ps1"; Launcher = "qemu-win2k-xonly-run.cmd"; LogBase = "win2k-xonly-debugcon" },
-    @{ Name = "WinXP64"; Setup = "setup-qemu-winxp64.ps1"; Launcher = "qemu-winxp64-run.cmd"; LogBase = "winxp64-debugcon" }
+    @{ Name = "WinXP64"; Setup = "setup-qemu-winxp64.ps1"; Launcher = "qemu-winxp64-run.cmd"; LogBase = "winxp64-debugcon" },
+    @{ Name = "Vista"; Setup = "setup-qemu-vista.ps1"; Launcher = "qemu-vista-run.cmd"; LogBase = "vista-debugcon" },
+    @{ Name = "Win7";  Setup = "setup-qemu-win7.ps1";  Launcher = "qemu-win7-run.cmd";  LogBase = "win7-debugcon" }
 )
 $work = Join-Path ([System.IO.Path]::GetTempPath()) `
     ("xhci98-qemu-launcher-test-" + [System.IO.Path]::GetRandomFileName())
@@ -197,6 +201,55 @@ try {
                 "the Windows XP x64 install and run launchers disagree on the accelerator; the HAL is fixed at install time, so the installed system would not boot the way it was installed."
         }
 
+        if ($name -eq "Vista" -or $name -eq "Win7") {
+            # build-and-test.md, "Windows Vista and Windows 7 target VMs".
+            # These two are ONE recipe with one body
+            # (scripts\qemu-nt6-common.ps1), so what is asserted here is
+            # asserted for both - and the pair is exactly the pair that would
+            # drift if it were ever copied into two.
+            $isoVar = if ($name -eq "Vista") { "VISTA_ISO" } else { "WIN7_ISO" }
+            $stem = if ($name -eq "Vista") { "vista" } else { "win7" }
+            # **NO NX BIT, NO GUEST.** pentium3 is the 32-bit XP launcher's
+            # model, it is the single most likely thing to survive a
+            # copy-paste into a 32-bit guest's launcher, and Windows 7 Setup
+            # refuses a processor without an NX bit. Asserted on the generated
+            # text, which is the only thing that survives a regenerated
+            # scripts\local.
+            Assert-True (-not ($text -match '(?m)^\s*-cpu (486|pentium|athlon |n270|kvm32|qemu32|coreduo)')) `
+                "the $name launcher names a CPU model with no NX bit; Windows 7 Setup refuses one."
+            Assert-True ($text -match '(?m)^\s*-cpu qemu64 \^') `
+                "the $name launcher does not default to the qemu64 CPU model the 6.x recipe calls for."
+            # 512 MB is the 32-bit XP figure and the other copy-paste
+            # casualty; Windows 7's own floor is 1 GB.
+            Assert-True ($text -match '(?m)^\s*-m 2048 \^') `
+                "the $name launcher does not give the guest the 2048 MB the 6.x recipe calls for."
+            # WHPX with ACPI on, measured for each of these two guests on
+            # 2026-09-10 rather than inherited from the other 32-bit guests -
+            # roadmap task 22.4 asks for the accelerator to be probed per host
+            # AND per guest, and the XP x64 guest is why.
+            Assert-True ($text.Contains("-accel whpx,kernel-irqchip=off ^") -and $text.Contains("-machine pc ^")) `
+                "the $name launcher does not use the measured WHPX rung with ACPI on."
+            Assert-True ($text.Contains('set "EHCI="') -and $text.Contains('if /i "%2"=="ehci"') -and
+                -not ($text -match '(?m)^set "EHCI=-device')) `
+                "the $name launcher does not leave the companion EHCI out by default, so task 22.3's xHCI-only reading cannot be taken."
+            Assert-True ($text.Contains("if not exist `"%$isoVar%`"") -and $text.Contains('set "CDROM="')) `
+                "the $name launcher does not boot without the DVD when the ISO is absent."
+            Assert-True ($text.Contains("-device qemu-xhci,p3=0,id=xhci ^")) `
+                "the $name launcher does not keep every root port USB 2.0 (p3=0)."
+            Assert-True ($text.Contains("-audiodev none,id=${stem}aud ^")) `
+                "the $name launcher declares no audio backend for a hot-plugged usb-audio."
+            $install6 = [System.IO.File]::ReadAllText((Join-Path $launchers "qemu-$stem-install.cmd"))
+            Assert-True ($install6 -match '(?m)^\s*-cpu qemu64 \^' -and $install6 -match '(?m)^\s*-m 2048 \^' -and
+                $install6.Contains("-boot d ^") -and -not $install6.Contains(" -device ")) `
+                "the $name install launcher drifted from the run launcher's CPU or memory, lost -boot d, or attaches a USB controller."
+            # The HAL is fixed at INSTALL time, so a guest installed under one
+            # accelerator must be booted under it too - the 2b lesson,
+            # asserted across the pair as it already is for the SMP rungs and
+            # for XP x64.
+            Assert-True ($install6.Contains("-accel whpx,kernel-irqchip=off ^")) `
+                "the $name install and run launchers disagree on the accelerator; the HAL is fixed at install time, so the installed system would not boot the way it was installed."
+        }
+
         # --- the rotation preamble, actually executed -----------------------
         #
         # The QEMU command line is the first line that starts with a quote (the
@@ -265,6 +318,33 @@ try {
         "setup-qemu-winxp64.ps1 accepted -Cpu pentium3, which has no long mode; the launcher it wrote would never boot XP x64 Setup."
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $badCpuDir "qemu-winxp64-run.cmd"))) `
         "setup-qemu-winxp64.ps1 wrote a launcher for a CPU model with no long mode before refusing it."
+
+    # **And the same refusal on the 6.x pair, for a different missing feature.**
+    # These two are 32-bit guests, so nothing about long mode protects them and
+    # -cpu pentium3 is not merely plausible here - it is the 32-bit XP recipe's
+    # own value, one line away in the same directory. Windows 7 Setup refuses a
+    # processor with no NX bit, so the generator must refuse the model rather
+    # than write a launcher that installs nothing. Asserted by asking for it on
+    # both, because the shared body is what refuses and a caller could bypass
+    # it.
+    foreach ($nt6 in @(
+        @{ Setup = "setup-qemu-vista.ps1"; Run = "qemu-vista-run.cmd" },
+        @{ Setup = "setup-qemu-win7.ps1";  Run = "qemu-win7-run.cmd" }
+    )) {
+        $badNxDir = Join-Path $work ("launchers-badnx-" + [System.IO.Path]::GetFileNameWithoutExtension($nt6.Setup))
+        New-Item -ItemType Directory -Path $badNxDir | Out-Null
+        $refusedNx = $false
+        try {
+            & (Join-Path $PSScriptRoot $nt6.Setup) -VmDir $vm `
+                -LocalScriptDir $badNxDir -QemuBinDir $bin -Cpu "pentium3" | Out-Null
+        } catch {
+            $refusedNx = $true
+        }
+        Assert-True $refusedNx `
+            "$($nt6.Setup) accepted -Cpu pentium3, which has no NX bit; Windows 7 Setup refuses such a processor."
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $badNxDir $nt6.Run))) `
+            "$($nt6.Setup) wrote a launcher for a CPU model with no NX bit before refusing it."
+    }
 
     # The fallback rung changes the HAL Setup should select. Keep the generated
     # command line and the post-generation verification guidance in agreement.
@@ -389,6 +469,26 @@ try {
                 $port, (($portsSeen[$port] | Sort-Object) -join ", "))
     }
     Write-Ok ("{0} monitor port(s) across the generated launchers, none shared" -f $portsSeen.Count)
+
+    #
+    # **A port can also be taken by a guest that does not exist yet, and this
+    # check is the only thing that can see that.** The scan above compares
+    # generated launchers against each other; it is blind to a number reserved
+    # in prose. Roadmap task 21.8 reserves 55563 and 55564 for the Vista x64
+    # and Windows 7 x64 guests (build-and-test.md, "Vista x64 and Windows 7
+    # x64 target VMs - planned"), and Phase 22's 32-bit Vista and Windows 7
+    # guests were within one edit of taking exactly that pair on 2026-09-10 -
+    # the collision would have surfaced only when 21.8's generators were
+    # written, which is months of drift later and after both records had been
+    # believed. So the reservation is asserted here, against every launcher
+    # this file generates. Release it by deleting these two lines WHEN 21.8's
+    # generators claim the ports themselves, and not before.
+    #
+    foreach ($reserved in @("55563", "55564")) {
+        Assert-True (-not $portsSeen.ContainsKey($reserved)) `
+            ("monitor port {0} is reserved for roadmap task 21.8's Vista x64 / Windows 7 x64 guests, and {1} took it." -f `
+                $reserved, (($portsSeen[$reserved] | Sort-Object) -join ", "))
+    }
 } finally {
     if (Test-Path -LiteralPath $work) {
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue

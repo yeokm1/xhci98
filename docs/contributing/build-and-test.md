@@ -105,10 +105,11 @@ Setup scripts:
 | `scripts\setup-qemu.ps1` | Checks/configures the Win98 SE (Phase 2a) QEMU launchers; use `-Install` to try Winget QEMU install; use `-CreateDisk` for VM images |
 | `scripts\check-flavour-marker.ps1` | Reads the flavour marker string out of a linked `.sys` and refuses anything but exactly one, matching the flavour asked for. `build-driver.cmd` runs it on each binary after the import gate; `make-release.ps1` reads the same marker to refuse publishing a `qemu` build as the debug download. It is what says a binary in `objfre` really is the release flavour, which `VS_FF_DEBUG` cannot, since `debug` and `qemu` are both checked builds |
 | `scripts\source-stamp.ps1` | `-Write <objdir>` hashes every file `src\sources` names plus every header in `src\`, and the built `xhci98.sys` itself, recording the list beside that binary; `-Check <objdir>` recomputes both. `build-driver.cmd` writes one after each successful build and `make-release.ps1` refuses to publish a `.sys` whose sources have changed since, one that is not the binary its stamp was written for, or one with no usable stamp at all (`-AllowUnstampedDriver` is the named way past that last case, and only that one) - the driver's equivalent of the "EXE newer than its own sources" refusals the release script already makes for the two DOS tools. Content, not timestamps: the script says why at length |
-| `scripts\test-qemu-launchers.ps1` | Generates all seven VMs' launchers (2a, 2b, the SMP 2d, the xHCI-only Windows 2000, Windows ME, Windows XP and Windows XP x64) against stand-in QEMU files and verifies per-boot debug-console log rotation, the SMP default/fallback flags, that the x64 generator refuses a CPU model with no long mode, and that no two launchers share a QEMU monitor port; run by `build-driver.cmd` |
+| `scripts\test-qemu-launchers.ps1` | Generates all nine VMs' launchers (2a, 2b, the SMP 2d, the xHCI-only Windows 2000, Windows ME, Windows XP, Windows XP x64, Windows Vista and Windows 7) against stand-in QEMU files and verifies per-boot debug-console log rotation, the SMP default/fallback flags, that the x64 generator refuses a CPU model with no long mode and the 6.x ones a model with no NX bit, that no two launchers share a QEMU monitor port, and that neither 6.x guest took one of the two ports roadmap task 21.8 reserves; run by `build-driver.cmd` |
 | `scripts\setup-qemu-win2k.ps1` | Same for the Win2000 SP4 (Phase 2b) VM, the second first-class target. Monitor port 55556, and it also stages `usbd.sys` (`-Win2KUsbdSys`) |
 | `scripts\setup-qemu-winxp.ps1` | The Windows XP SP3 guest of roadmap Phase 19 (`vm\winxp.img`, monitor 55559, transfer drive `vm\xferxp`): WHPX with `kernel-irqchip=off`, ACPI on, no companion EHCI unless the run launcher is given `ehci` as its second argument; see "Windows XP target VM" |
 | `scripts\setup-qemu-winxp64.ps1` | The Windows XP Professional x64 SP2 guest of roadmap Phase 21 (`vm\winxp64.img`, 16 GB, monitor 55562, transfer drive `vm\xferxp64`): the 32-bit XP recipe with five changes - `-cpu qemu64` (`pentium3` has no long mode), 2048 MB, a bigger disk, a free monitor port, and **`-accel tcg`, which on this guest is the one that works and not the fallback** (WHPX wedges XP x64 Setup); `-Accel` selects another rung; see "Windows XP x64 target VM" |
+| `scripts\setup-qemu-vista.ps1` and `scripts\setup-qemu-win7.ps1` | The two 32-bit guests of roadmap Phase 22 (`vm\vista.img` monitor 55565, `vm\win7.img` monitor 55566, 32 GB each, transfer drives `vm\xfervista` and `vm\xferwin7`). They are thin callers over one shared body, `scripts\qemu-nt6-common.ps1`, because they are one recipe: the 32-bit XP machine with `-cpu qemu64` (`pentium3` predates the NX bit and Windows 7 Setup refuses a processor without one), 2048 MB, a bigger disk, and `-accel whpx,kernel-irqchip=off` **measured for each guest rather than inherited**; `-Accel` selects another rung. See "Windows Vista and Windows 7 target VMs" |
 | `scripts\setup-qemu-win2k-smp.ps1` | The Phase 2d SMP stress VM (`vm\win2k-smp.img`, monitor 55557). Defaults to the checkpoint-proven `whpx,kernel-irqchip=off` rung; `-Accel`/`-AcpiOff`/`-Smp`/`-MemoryMb` select another Phase 2d task-2 rung so each is a regenerated launcher, not a hand-edited copy |
 | `scripts\check-smp-parallelism.ps1` | Host-side Phase 2d checkpoint check against the running 2d VM: a complete one-to-one vCPU/`thread_id` mapping from `info cpus`, plus a process affinity mask allowing 2+ logical processors. Guest-side "MP kernel landed" checks do not distinguish those host conditions; this script does. Run-time, so not part of `build-driver.cmd`; `-SelfTest` needs no VM |
 | `scripts\setup-all.ps1` | Runs MSVC, DDK, and both Phase 2a/2b QEMU setups; use `-RunInstallers` for MSVC/DDK and `-InstallQemu` for QEMU. Pass `-Win2KIso` or the Win2000 half is skipped with a warning |
@@ -1475,6 +1476,18 @@ The XP x64 guest of Phase 21 took the next one clear of all of those, 55562.
 `scripts\test-qemu-launchers.ps1` asserts that no two generated launchers share
 a monitor port.
 
+**And then the case that check cannot see: a port taken by a guest that does
+not exist yet.** Roadmap task 21.8 reserved **55563 and 55564** for the Vista
+x64 and Windows 7 x64 guests when it was written on 2026-09-09, and those
+guests are still unbuilt. Phase 22's 32-bit Vista and Windows 7 guests were
+drafted onto exactly that pair on 2026-09-10 and caught before they were
+generated - the launcher gate compares generated launchers against each other,
+so it would have stayed silent until 21.8's generators were written, months
+later and with both records believed in the meantime. The 32-bit pair took
+**55565 and 55566** instead, 21.8's reservation stands, and the gate now
+asserts the reservation itself rather than only the collisions it can see.
+That assertion is released when 21.8's generators claim the ports, not before.
+
 Why it is expected to be close. Windows ME is the same 16-bit setup engine
 and the same VxD-hosted WDM model as Windows 98 SE, one WDM revision newer
 (1.05 against 1.0; `docs/usb-xhci-info/win98-wdm.md`), so the undecorated
@@ -2008,6 +2021,97 @@ winxp64-clean-install vm\winxp64.img`, guest off. Media
 `tools\winxp64-extracted\` came from. WHPX with `kernel-irqchip=off` probed OK
 on this host as a partition - and then wedged the guest, which is how the TCG
 reading above came to be taken.
+
+### Windows Vista and Windows 7 target VMs (roadmap Phase 22)
+
+The two 32-bit guests Phase 22 asks for: whether the `xhci98.sys` this project
+already ships installs, loads and works on Windows Vista and Windows 7 as it
+stands. **Nothing is built for either of them.** The subject is the binary on
+the `.NTx86` half of the INF that already exists, which is what makes this a
+different shape of work from Phase 21's 64-bit leg and why it is a phase of its
+own; a yes costs guests and readings and no compiler at all.
+
+**They are one recipe, and they are written as one.** `scripts\setup-qemu-vista.ps1`
+and `scripts\setup-qemu-win7.ps1` are thin callers over a shared body,
+`scripts\qemu-nt6-common.ps1`; everything about their machines is identical
+except the ISO, the image name and the monitor port. That is the one structural
+difference from the six generators before them, each of which carries its own
+copy of the text, and the reason is the 2026-09-07 audit's H28 and J6: five
+copies of the QEMU resolver had drifted apart unnoticed, and two guests born on
+the same day out of one recipe are the pair that would drift next. A per-guest
+difference belongs in a parameter, never in a second copy of the body.
+
+| | value |
+|---|---|
+| Media | `D:\isos\en_windows_vista_sp2_x86_dvd_342266.iso` (Vista SP2 x86, Business is image 1 of seven) and `D:\isos\en_windows_7_professional_with_sp1_vl_build_x86_dvd_u_677896.iso` (Windows 7 SP1 x86 VL, Professional, one image) - **the same media tasks 22.1 and 22.2 read their measurements out of** on 2026-09-09, so the stack a guest installs is the stack that was measured. `usbport.sys` is byte-identical across Vista editions, so that does not rest on the edition alone |
+| Images | `vm\vista.img` and `vm\win7.img`, 32 GB qcow2 each (Windows 7 x86 wants 16 GB free, Vista 15 GB; qcow2 is sparse, so the file costs what the install writes) |
+| Monitor ports | **55565** (Vista) and **55566** (Windows 7) - *not* the next two free numbers; see the reservation above |
+| CPU | `-cpu qemu64`, **not** the 32-bit XP guest's `pentium3`. `pentium3` predates the NX bit and Windows 7 requires one: Setup refuses such a processor. A 32-bit guest wanting a 64-bit-era CPU *model* is not the same thing as a 64-bit guest, and this is the line most likely to be "corrected" back to the 32-bit recipe, so the shared body refuses such a `-Cpu` outright and the launcher gate asserts the generated text |
+| RAM | 2048 MB, not 512. Comfort - Windows 7's own floor is 1 GB. Nothing has been measured here about what the 6.x `usbport` does with memory above 4 GB, and it does not arise: a 32-bit guest with 2048 MB has none. Do not raise it without reading measurement M5 of design record 11 first |
+| Accelerator | `-accel whpx,kernel-irqchip=off` on **both**, measured per guest on host `minis-w11p-ykm`, 2026-09-10 |
+| Everything else | The 32-bit XP machine unchanged: `-machine pc` (ACPI on), `-vga std`, `-boot d` on every install boot, `qemu-xhci,p3=0` on the run launcher, no companion EHCI unless it is asked for, no USB device boot-attached, the VVFAT transfer drive, and the port-`0xE9` console rotated per boot |
+
+**The accelerator reading, and the one thing it taught.** Roadmap task 22.4
+says to probe the accelerator per host **and** per guest, because Phase 21 paid
+for that rule twice in opposite directions - every 32-bit guest here wants
+WHPX, and the XP x64 guest wants TCG because WHPX wedges its Setup. A 32-bit
+Vista or Windows 7 guest is covered by neither reading: it shares the bitness
+of one and the era of the other. Both were probed on 2026-09-10, and both run
+under WHPX: Vista was at its "Install Windows" language page under four minutes
+from launch, Windows 7 at the same page about two minutes from launch. **TCG
+was not needed on either and was not tried.** So the ordinary 32-bit answer
+holds here - as a result, not as an inheritance.
+
+What the probe taught is a reading rule rather than a fact about these guests.
+At the Windows 7 language page, `EIP` was **identical across samples 36 seconds
+apart with `HLT=0`** - which is precisely the signature that *was* a wedge on
+the XP x64 guest, five RIP samples pinned at one address. It is not one here: a
+guest sitting at a Setup prompt spins in an input wait, and it looks exactly
+like a guest that has died in one. **The screendump is what tells the two
+apart.** Take it before calling a pinned instruction pointer a wedge.
+
+The procedure:
+
+1. `scripts\setup-qemu-vista.ps1 -VistaIso <path> -CreateDisk` and
+   `scripts\setup-qemu-win7.ps1 -Win7Iso <path> -CreateDisk`, then
+   `scripts\local\qemu-vista-install.cmd` and `qemu-win7-install.cmd`. **The
+   owner drives Setup at the console** - the standing decision of 2026-09-03,
+   taken for the 32-bit XP guest and unchanged here.
+2. Shut the guest down from the Start menu and snapshot:
+   `qemu-img snapshot -c vista-clean-install vm\vista.img`, and the same for
+   `win7`.
+3. **Roadmap task 22.3's two readings, off the snapshot, with the guest never
+   booted here** - the pair task 21.5 took for XP x64, and cheap the same way:
+   7-Zip lists straight through the qcow2's partitioning and file system in one
+   pass, so no `qemu-img convert -O raw` step is needed (`7z l vm\vista.img`).
+   Reading 1 is whether an xHCI-only Vista or Windows 7 install has
+   `usbport.sys`, `usbhub.sys`, `usbd.sys` or `usbehci.sys` on disk at all;
+   reading 2 is where the system keeps them if it does not, and whether the
+   INF's `LayoutFile` route can still reach them from a driver-store install.
+
+   **The prior is strong and it is still not the reading, and the roadmap says
+   why in the task line itself.** All four files are in
+   `Windows\System32\drivers` inside the `install.wim` of both systems in both
+   architectures (read 2026-09-09 with task 22.1), and Vista and later apply a
+   whole image rather than copying drivers on demand the way XP Setup does - so
+   unlike XP and 2000 the Code 39 that release `1.0.1.0`'s INF fix answers
+   should not arise, and every `COPYFLG_NO_OVERWRITE` copy should skip without
+   needing a source. Two things keep that from closing the box. It is a reading
+   of the *media*: on the XP lineage the same four files were on the media the
+   whole time, in `Driver Cache\i386`, and an xHCI-only install still had none
+   of them on disk - the gap between what Setup carries and what Setup leaves
+   is precisely where that defect lived. And **the driver store does not exist
+   in a WIM at all**: `System32\DriverStore\FileRepository` is made by the
+   install, so whether the `LayoutFile` route reaches the operating system's
+   own copies from a driver-store install is not a question an image listing
+   can be asked.
+4. Stage the package (`make-package.ps1 -Flavor qemu -OutDir vm\xfervista`),
+   boot `qemu-vista-run.cmd <tag>`, and install from the transfer drive.
+   **Record what the unsigned-driver prompt actually did.** Kernel-mode code
+   signing enforcement is x64-only, so a prompt and not a refusal is the
+   expectation - and Phase 22 writes it down as the assumption to *confirm on
+   the guest*, because it is the one that would make the phase pointless if
+   wrong.
 
 ### Vista x64 and Windows 7 x64 target VMs (roadmap task 21.8) - planned
 
