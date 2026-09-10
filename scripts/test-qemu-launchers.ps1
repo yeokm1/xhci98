@@ -378,8 +378,31 @@ try {
             (New-Object System.Text.ASCIIEncoding))
 
         # No log yet: nothing to archive, and nothing may be invented.
-        $null = & cmd.exe /c $preamble
+        $preambleOut = (& cmd.exe /c $preamble) -join "`n"
         Assert-True ($LASTEXITCODE -eq 0) "$name rotation failed when there was no prior log."
+
+        # --- the launcher says which QEMU it resolved, and from which rung ---
+        #
+        # The resolver falls through rather than failing, which is what makes a
+        # launcher portable and also what let this host swap the emulator under
+        # two installed guests in silence (common.ps1, Get-QemuLauncherResolver).
+        # THIS GATE CANNOT CATCH THAT - it reads generated text and must not
+        # depend on the host - so what it can hold is that the launcher SAYS it,
+        # and these assertions read the preamble's real output rather than its
+        # source, because an echo that does not survive cmd's parsing is worth
+        # nothing.
+        Assert-True ($preambleOut -match "(?m)^QEMU: resolved from .+\.$") `
+            "the $name launcher does not say which rung of the resolver found QEMU, so a fall-through to a different emulator would be silent."
+        Assert-True ($preambleOut.Contains("QEMU: " + (Join-Path $bin "qemu-system-x86_64.exe"))) `
+            "the $name launcher does not echo the QEMU path it resolved."
+        Assert-True ($preambleOut.Contains("resolved from where this launcher was generated")) `
+            "the $name launcher did not resolve QEMU from the path its generator found, so the rung it names is wrong."
+
+        # The stand-in is not a runnable image, which is the degrade path: the
+        # version read must leave the launcher working and say it could not read
+        # one, never abort the boot.
+        Assert-True ($preambleOut.Contains("version unreadable")) `
+            "the $name launcher did not degrade gracefully when the resolved QEMU could not report a version."
         Assert-True (-not (Test-Path -LiteralPath $previous)) `
             "an archive was created for $name when there was no prior log to archive."
 
