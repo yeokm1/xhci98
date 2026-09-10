@@ -25,6 +25,13 @@
  */
 extern USBPORT_REGISTRATION_PACKET XhciRegPacket;
 
+/*
+ * The ResourcesTypes mask XhciInitController's step 1 requires, defined and
+ * settled in src/xhci_dispatch.c. It is not a constant because NT 6.x numbers
+ * those bits differently (src/xhci_usbport.h).
+ */
+extern ULONG XhciResourcesRequired;
+
 /* ------------------------------------------------------------------ */
 /* MMIO                                                                */
 /* ------------------------------------------------------------------ */

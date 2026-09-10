@@ -388,6 +388,28 @@ adapter behind a `Version >= 310` gate; and every import the shipping 32-bit
 `xhci98.sys` names resolves, in the right module, in both x86 kernels. Nothing
 was executed, no guest was booted, and no file from that media is tracked.
 
+Two further readings were taken from those same files on 2026-09-10, both
+method **static** and both with `kd.exe -z`, which loads a raw PE and executes
+nothing. The first (task 21.8, design record 11 section 6.1) is the arity of
+`USBPORT_RegisterUSBPortDriver` - four arguments on NT 6.x against three on NT
+5.x - read from the callee's use of the fourth argument register in
+`vista-x64-extracted` and `win7-x64-extracted`, from the `ret` immediate in the
+two x86 builds, and from the caller's side in Vista x64's own `usbehci.sys`.
+The second (section 6.2) is the `USBPORT_RESOURCES.ResourcesTypes` bit
+assignment, read out of `USBPORT_ParseResources` in all four of those
+`usbport.sys` builds **and in `tools/winxp64-extracted/usbport.sys`**, which is
+the NT 5.2 comparison the finding rests on: NT 6.x carries a second port bit
+and moves interrupt and memory up one place each. Because that function is not
+exported there was no symbol to disassemble by name, so the whole `.text`
+section of each image was swept with `u <start> <end>` - bounds from `link
+/dump /headers` - and the listing searched. Still nothing executed; the driver
+was later rebuilt and its host tests run, which is this project's own code and
+is not a reading of anyone's binary. **Both facts stay `static`.** A Vista x64
+guest was running on 2026-09-10 and did report `0x0C` through this driver's own
+log channel, which is a `runtime` observation of *this* driver's input and is
+recorded as the symptom; the bit assignment itself is read off Microsoft's
+binaries and is not upgraded by it.
+
 The toolchain that reads them is third-party material on the same terms.
 WDK 7.1 (`GRMWDK_EN_7600_1.ISO`, 649,877,504 bytes, SHA-256
 `5edc723b50ea28a070cad361dd0927df402b7a861a036bbcf11d27ebba77657d`, from the

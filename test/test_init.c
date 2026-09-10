@@ -3449,6 +3449,36 @@ static void test_preflight_refusals(void)
     check_refused(status, MP_STATUS_NO_RESOURCES, XHCI_INIT_STEP_RESOURCES,
                   USBPORT_RESOURCES_MEMORY, "no interrupt resource");
 
+    /*
+     * The same step under the NT 6.x numbering, which is the arm the amd64
+     * build selects in DriverEntry and which no host here can reach any other
+     * way. `0x0C` is what a Vista x64 guest reported on 2026-09-10 and was
+     * refused for; `0x06` is the NT 5.x value, and on NT 6.x it names a port
+     * and an interrupt rather than an interrupt and a memory window, so it
+     * must now be the one that is refused. The two cases together are what
+     * says the mask MOVED rather than widened.
+     */
+    XhciResourcesRequired =
+        USBPORT6_RESOURCES_MEMORY | USBPORT6_RESOURCES_INTERRUPT;
+    hc_build();
+    ext.ResourcesTypes = USBPORT_RESOURCES_MEMORY |
+                         USBPORT_RESOURCES_INTERRUPT;
+    resources.ResourcesTypes = ext.ResourcesTypes;
+    writeCount = 0;
+    check_refused(XhciInitController(&ext, &resources), MP_STATUS_NO_RESOURCES,
+                  XHCI_INIT_STEP_RESOURCES,
+                  USBPORT_RESOURCES_MEMORY | USBPORT_RESOURCES_INTERRUPT,
+                  "0x06 is refused under the NT 6.x numbering");
+    hc_build();
+    prepare_start_arguments();
+    resources.ResourcesTypes = USBPORT6_RESOURCES_MEMORY |
+                               USBPORT6_RESOURCES_INTERRUPT;
+    CHECK_EQ(XhciRegPacket.StartController(&ext, &resources),
+             MP_STATUS_SUCCESS,
+             "and 0x0C starts the controller that 0x06 used to");
+    XhciResourcesRequired =
+        USBPORT_RESOURCES_MEMORY | USBPORT_RESOURCES_INTERRUPT;
+
     /* Interrupt Pin 0 is MSI/MSI-X only, which neither target's usbport can
      * service. The gate runs before any MMIO precisely so this costs nothing. */
     hc_build();

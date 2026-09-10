@@ -788,6 +788,125 @@ callee-cleaned so arity must match exactly, and `src/usbport.lib` carries
 byte count and would stop resolving at `@16`. **Phase 22 will meet this on
 32-bit Vista and Windows 7**, and `XHCI_CHECK_STACK_DELTA` already sits at that
 call site to report it before anyone designs around it.
+### 6.2 M10 - `USBPORT_RESOURCES.ResourcesTypes` - read 2026-09-10, **and the bits moved**
+
+The bit that names a resource in `ResourcesTypes` is **not the same bit on NT
+6.x as on NT 5.x**. NT 5.x sets one bit for a port resource however that port
+is mapped; NT 6.x splits that into an I/O-space port and a memory-mapped one,
+and interrupt and memory each move up one place:
+
+| Resource | NT 5.x | NT 6.x |
+|---|---|---|
+| Port, in I/O space | `0x01` | `0x01` |
+| Port, memory-mapped | `0x01` | `0x02` |
+| Interrupt | `0x02` | `0x04` |
+| Memory | `0x04` | `0x08` |
+
+So the `MEMORY | INTERRUPT` this driver requires at
+`XHCI_INIT_STEP_RESOURCES` is `0x06` on NT 5.x and **`0x0C`** on NT 6.x, which
+is exactly what the Vista x64 guest reported on 2026-09-10 before refusing.
+
+**Read out of `USBPORT_ParseResources` in five shipping binaries, static.**
+That function is not exported, so `uf` has no symbol to take: the whole `.text`
+section is swept in one pass and the listing searched. `.text` bounds come from
+`link /dump /headers`, and the image loads at its preferred base `0x10000`, so
+a listed address minus `0x10000` is the RVA below:
+
+```bat
+tools\WinDDK71\bin\x86\amd64\link.exe /dump /headers tools\vista-x64-extracted\usbport.sys
+tools\WinDDK71\Debuggers\kd.exe -z tools\vista-x64-extracted\usbport.sys ^
+    -c "u 11000 4ab66;q"
+```
+
+The end address is the one `.text` row per binary: `39383` for
+`winxp64-extracted`, `4ab66` for `vista-x64-extracted`, `3fe36` for
+`win7-x64-extracted`, `4346f` for `vista-x86-extracted`, `37a3f` for
+`win7-x86-extracted`.
+
+Every one of the five has the same shape, and it is ReactOS's
+`USBPORT_ParseResources` (`drivers/usb/usbport/pnp.c`) instruction for
+instruction. One loop walks the translated partial-descriptor list at a stride
+of `0x14`, dispatching on `Type` - `1` port, `2` interrupt, `3` memory - and
+recording the **first** descriptor of each type in a register of its own. Three
+branches below it then OR a constant into offset `0` of the
+`USBPORT_RESOURCES` the caller passed:
+
+| Binary | Scan loop | Port, I/O | Port, mapped | Interrupt | Memory |
+|---|---|---|---|---|---|
+| `winxp64` 5.2 | `+0x12FC4` | `+0x130CC` `or [rbx],1` | *same site* | `+0x131A3` `or [rbx],2` | `+0x13179` `or [rbx],4` |
+| `vista-x64` 6.0 | `+0x1F676` | `+0x1F8AE` `or [rbx],edi` | `+0x1F8A9` `or [rbx],2` | `+0x1FA65` `or [rbx],4` | `+0x1F9EE` `or [rbx],8` |
+| `win7-x64` 6.1 | - | `+0x187DD` `or [rbx],r12d` | `+0x187D8` `or [rbx],2` | `+0x1885A` `or [rbx],4` | `+0x1884B` `or [rbx],8` |
+| `vista-x86` 6.0 | - | `+0x19DE4` `or [esi],1` | `+0x19DDF` `or [esi],2` | `+0x19F61` `or [esi],4` | `+0x19EFD` `or [esi],8` |
+| `win7-x86` 6.1 | - | `+0x1415F` `or [esi],1` | `+0x1415A` `or [esi],2` | `+0x141D6` `or [esi],4` | `+0x141C6` `or [esi],8` |
+
+`edi` and `r12d` hold `1` at those two sites; the amd64 compiler kept the
+constant in a register the x86 one folded into the instruction.
+
+**Which branch is which is fixed twice over, and the second way is the one
+worth having.** The first is the register the scan loop filled. The second is
+independent of it: each branch is guarded by the miniport's own
+`USB_MINIPORT_FLAGS_*` bit - `INTERRUPT 0x01`, `PORT_IO 0x02`, `MEMORY_IO
+0x04`, the values already in `src\xhci_usbport.h` - so the interrupt branch
+tests bit 0 of the flags word, the port branch bit 1 and the memory branch bit
+2, whatever they then write into `ResourcesTypes`. On all five binaries the two
+identifications agree. The NT 6.x pair also refuse outright, with
+`STATUS_UNSUCCESSFUL`, a miniport that declares `PORT_IO` and `MEMORY_IO`
+together.
+
+**The XP x64 row is the proof, not the Vista read.** A single binary showing
+`0x08` for memory says only that this build uses `0x08`; the pair showing `0x04`
+on 5.2 and `0x08` on 6.0 from the same function, reached the same way, is what
+says the value *moved*. The x86 rows cost one command each and extend the
+finding to the lineage Phase 22 asks about.
+
+**Two things were corroborated for free.** The port branch takes
+`ResourceBase` from `Start.QuadPart` when `CM_RESOURCE_PORT_IO` is set and from
+`MmMapIoSpace` otherwise, on 5.2 and 6.x alike - so the split is a finer
+*label* on a distinction the code already made, not new behaviour. And the
+interrupt branch's stores read out the amd64 `USBPORT_RESOURCES` prefix again
+on both NT 6.x builds - `InterruptVector` at `0x08`, `InterruptLevel` at `0x0C`,
+the `KAFFINITY` as a QWORD at `0x10`, `ShareVector` at `0x18`, `InterruptMode`
+at `0x1C` - which is M4's table, measured on 5.2, holding on 6.0 and 6.1.
+
+**The guess was right and it was still worth reading.** `0x0C` being `0x06 << 1`
+was a structural coincidence, and a structural coincidence is consistent with
+more than one cause - a widened mask, an unrelated flag, an MSI reading that was
+considered and dropped. What the disassembly adds is *why*: one enumerator was
+inserted at the bottom, and it is the second port bit. That is the difference
+between a constant changed on a hunch and a constant changed on a reading, and
+it is the same method that settled the arity in section 6.1 - **which is now
+twice that a question about this interface was answered by disassembling a
+caller or a writer rather than a structure.**
+
+**The fix, and it is amd64-only for section 6.1's reason.** `DriverEntry`
+already asks `IoIsWdmVersionAvailable(1, 0x30)` to choose the registration
+arity; the same answer now settles `XhciResourcesRequired`, a file-scope `ULONG`
+in `src\xhci_dispatch.c` that `XhciInitController` reads at step 1. It is
+settled once at PASSIVE_LEVEL rather than tested at the check because that check
+is also reached from task 13-R.1's recovery DPC. Unlike the arity branch **this
+one does not fail towards NT 6.x**: an unrecognised system keeps the NT 5.x
+mask, because the cost of being wrong here is a legible refusal at step 1 rather
+than a bugcheck, and four shipping targets are already known to satisfy it. The
+32-bit binary still compares against `0x06` and cannot do otherwise - nothing
+outside the `_WIN64` guard writes the global - but it is **not byte-identical**
+to the binary the four x86 install legs were taken on, because the comparison is
+now a load rather than an immediate. That is deliberate rather than overlooked:
+the alternative is a macro on x86 and a global elsewhere, which buys byte-
+identity by having the host test exercise a shape the shipping x86 driver does
+not have. Whether the x86 delta warrants a re-validation pass is the owner's
+call and is recorded in roadmap task 21.8 rather than decided here. **Phase 22
+inherits this alongside the arity**, and of the two it is much the cheaper: the
+arity needs a second decorated import stub, this needs only the version
+predicate that stub's branch already computes.
+
+The host tests carry both arms (`test/test_init.c`, `test_preflight_refusals`):
+with the NT 6.x mask selected, `0x0C` starts the controller and `0x06` is
+refused at `XHCI_INIT_STEP_RESOURCES`. The second half is the one that says the
+bits moved rather than widened, and it is the only place any host here can
+exercise the NT 6.x arm at all.
+
+---
+
 ## 7. The decision gate
 
 The gate as written before any measurement, with what actually happened:

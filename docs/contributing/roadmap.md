@@ -2291,22 +2291,66 @@ are static readings and no other task's box may be ticked on one.
            and **Phase 22 will meet the same boundary on 32-bit, where the fix
            is harder**.
 
-        **WHERE IT NOW STOPS, AND IT IS A NEW QUESTION.** The driver refuses
-        its own initialisation at `XHCI_INIT_STEP_RESOURCES` with
+        **WHERE IT STOPPED NEXT, AND THAT IS NOW READ AND FIXED.** The driver
+        refused its own initialisation at `XHCI_INIT_STEP_RESOURCES` with
         `ResourcesTypes = 0x0C`, which Device Manager shows as Code 10. Our
-        constants are `PORT=1, INTERRUPT=2, MEMORY=4`, so `0x0C` has memory but
-        not interrupt, and an undefined bit 3 instead. The rest of the resource
-        block maps onto the amd64 `USBPORT_RESOURCES` layout perfectly and the
-        interrupt fields are fully populated - vector `0x92`, IRQL 9, affinity
-        `0x0F` for the guest's four vCPUs, `ShareVector` set - and
-        `HcFlavor = 1000` is `EHCI_Generic`. The mask is also **exactly the NT
-        5.x value shifted one bit left** (`INTERRUPT|MEMORY = 0x06`, and
-        `0x06 << 1 = 0x0C`), which would follow from 6.x inserting a member at
-        the bottom of the resource-type enum. **That is an inference from a
-        structural coincidence and is not yet read out of usbport's code**;
-        confirming it means finding where Vista's `usbport.sys` writes that
-        field, the same treatment the arity got. Until then no constant here
-        changes.
+        constants were `PORT=1, INTERRUPT=2, MEMORY=4`, so `0x0C` had memory
+        but not interrupt, and an undefined bit 3 instead. The rest of the
+        resource block mapped onto the amd64 `USBPORT_RESOURCES` layout
+        perfectly and the interrupt fields were fully populated - vector
+        `0x92`, IRQL 9, affinity `0x0F` for the guest's four vCPUs,
+        `ShareVector` set - and `HcFlavor = 1000` is `EHCI_Generic`. The mask
+        was also **exactly the NT 5.x value shifted one bit left**
+        (`INTERRUPT|MEMORY = 0x06`, and `0x06 << 1 = 0x0C`), which would follow
+        from 6.x inserting a member at the bottom of the resource-type enum -
+        an inference from a structural coincidence, and the task refused to
+        change a constant on it.
+
+        **Read out of `USBPORT_ParseResources` on 2026-09-10, static, in five
+        shipping binaries, and the inference was right.** NT 6.x splits the
+        port bit in two - an I/O-space port keeps `0x01`, a memory-mapped one
+        takes `0x02` - and interrupt and memory move up to `0x04` and `0x08`.
+        `MEMORY|INTERRUPT` is therefore `0x06` on NT 5.x and `0x0C` on NT 6.x.
+        **XP x64 is what makes it a reading rather than a guess**: the same
+        function in `winxp64-extracted` writes `1`, `2` and `4` where
+        `vista-x64-extracted` writes `1`/`2`, `4` and `8`, so the value moved
+        rather than the build merely differing. The x86 pair were read in the
+        same pass and agree, which is Phase 22's half of it. Which branch is
+        which is fixed twice - by the descriptor-scan loop's registers and,
+        independently, by the `USB_MINIPORT_FLAGS_*` bit each branch tests as
+        its guard. Design record 11 **section 6.2** has the RVAs, the
+        instructions and the command.
+
+        **Fixed for amd64 and not for x86**, on section 6.1's reasoning:
+        `DriverEntry` already asks `IoIsWdmVersionAvailable(1, 0x30)` for the
+        registration arity, and the same answer now settles
+        `XhciResourcesRequired`, which `XhciInitController` reads at step 1.
+        Unlike the arity branch **this one fails towards NT 5.x**, because the
+        cost of being wrong is a legible refusal rather than a bugcheck. No
+        import was added on either architecture, every gate is green, and the
+        host tests carry both arms - which is the only place any host here can
+        exercise the NT 6.x arm at all.
+
+        **Two things about this are the owner's to weigh, and neither is
+        settled here.** First, `XhciResourcesRequired` is one unconditional
+        global rather than an `#ifdef`, so the *32-bit* binary changes too -
+        not in behaviour, since nothing outside the `_WIN64` guard ever writes
+        it and the mask it holds on x86 is the `0x06` the code always compared
+        against, but the codegen is a load where it used to be an immediate and
+        **the binary is therefore not byte-identical to the one the four x86
+        install legs were taken on**. The alternative - a macro on x86 and a
+        global elsewhere - buys byte-identity at the price of the host test
+        exercising a shape the shipping x86 driver does not have, which is the
+        trade this project has refused before. Whether that warrants an x86
+        re-validation pass is a call, not a fact. Second, Phase 22 inherits the
+        32-bit half of this alongside the arity, and of the two this is much
+        the cheaper: the arity needs a second decorated import stub, this needs
+        only the version predicate that stub's branch already computes.
+
+        **What has NOT happened is a boot.** The fix is host-verified only, and
+        the Vista x64 guest has not been asked whether `StartController` now
+        gets past step 1 - which is the next thing to do at the console, and
+        the cheapest reading left in this task.
         **The host-side half is done, 2026-09-10, before either guest existed
         - which is the point, since this is the gate that comes first.** A
         complete test-signed `Vista_X64,7_X64` package can be produced from

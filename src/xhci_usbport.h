@@ -93,10 +93,51 @@
 #define TOTAL_USB11_BUS_BANDWIDTH 12000
 #define TOTAL_USB20_BUS_BANDWIDTH 400000
 
-/* USBPORT_RESOURCES.ResourcesTypes */
+/*
+ * USBPORT_RESOURCES.ResourcesTypes - and the bit positions MOVED on NT 6.x.
+ *
+ * NT 5.x sets one bit for a port resource however that port is mapped. NT 6.x
+ * splits it in two - an I/O-space port and a memory-mapped one - and every
+ * enumerator above it moves up one bit, so the mask this driver requires is
+ * 0x06 there and 0x0C here.
+ *
+ * **Read out of USBPORT_ParseResources in five shipping binaries on
+ * 2026-09-10, static.** Each has one descriptor-scan loop (CmResourceType 1
+ * port, 2 interrupt, 3 memory; stride 0x14) that records the first descriptor
+ * of each type in its own register, and three branches below it that OR a
+ * constant into offset 0 of the USBPORT_RESOURCES the caller passed. Which
+ * branch is which is fixed twice over: by the register the scan loop filled,
+ * and by the USB_MINIPORT_FLAGS_* bit each branch tests as its guard
+ * (INTERRUPT 0x01, PORT_IO 0x02, MEMORY_IO 0x04 - the values above).
+ *
+ *   NT 5.2  winxp64    port 1 (both mappings, one site), interrupt 2, memory 4
+ *   NT 6.0  vista-x64  port 1 I/O or 2 mapped,           interrupt 4, memory 8
+ *   NT 6.1  win7-x64   the same
+ *   NT 6.0  vista-x86  the same
+ *   NT 6.1  win7-x86   the same
+ *
+ * RVAs, the exact commands and the instructions are in design record 11
+ * section 6.2. Provenance: legal-provenance.md section 4.
+ *
+ * The 0x0C a Vista x64 guest reported on 2026-09-10 - with a fully populated
+ * interrupt block behind it - was guessed to be 0x06 shifted one bit left. It
+ * is: the inserted member is the second port bit.
+ */
 #define USBPORT_RESOURCES_PORT      1
 #define USBPORT_RESOURCES_INTERRUPT 2
 #define USBPORT_RESOURCES_MEMORY    4
+
+/*
+ * The NT 6.x assignment of the same field. Bit 0 is an I/O-space port and bit
+ * 1 a memory-mapped one, where NT 5.x used bit 0 for both; interrupt and
+ * memory sit one bit higher than their NT 5.x namesakes. Selected at runtime
+ * in DriverEntry - src\xhci_dispatch.c, XhciResourcesRequired - and only in
+ * the amd64 build, for the reason the arity branch beside it gives.
+ */
+#define USBPORT6_RESOURCES_PORT_IO   1
+#define USBPORT6_RESOURCES_PORT_MEM  2
+#define USBPORT6_RESOURCES_INTERRUPT 4
+#define USBPORT6_RESOURCES_MEMORY    8
 
 /* Miniport callback return values. usbport treats any nonzero StartController
  * return as failure. */

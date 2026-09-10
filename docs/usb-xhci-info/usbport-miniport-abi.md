@@ -721,7 +721,10 @@ rows in section 4.
 - `USBPORT_TRANSFER_DIRECTION_OUT 1` [usbmport.h:649].
 - Resources type bits (for `USBPORT_RESOURCES.ResourcesTypes`):
   `PORT 1, INTERRUPT 2, MEMORY 4` [usbmport.h:39-42]. EHCI refuses to start
-  unless the expected bits are present [usbehci.c:1176-1180].
+  unless the expected bits are present [usbehci.c:1176-1180]. **These are the
+  NT 5.x values and they do not hold on 6.0 or 6.1** - see "The 6.0 and 6.1
+  lineages" below, where a second port bit is inserted and interrupt and memory
+  each move up one place.
 - `USBPORT_INVALIDATE_CONTROLLER_RESET 1 / SURPRISE_REMOVE 2 /
   SOFT_INTERRUPT 3` - the `Type` argument of `UsbPortInvalidateController`
   [usbmport.h:489-491].
@@ -2467,7 +2470,7 @@ tool using this route should check the route before trusting its absence.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 0x00 | `ResourcesTypes` | ULONG | Bitmask: PORT 1 / INTERRUPT 2 / MEMORY 4; check MEMORY+INTERRUPT before touching anything [usbehci.c:1176-1180] |
+| 0x00 | `ResourcesTypes` | ULONG | Bitmask: PORT 1 / INTERRUPT 2 / MEMORY 4 on NT 5.x, **PORT_IO 1 / PORT_MEM 2 / INTERRUPT 4 / MEMORY 8 on NT 6.x**; check MEMORY+INTERRUPT before touching anything [usbehci.c:1176-1180] |
 | 0x04 | `HcFlavor` | enum | `USB_CONTROLLER_FLAVOR` (NT header enum) |
 | 0x08 | `InterruptVector` | ULONG | Already used by usbport for `IoConnectInterrupt` [pnp.c:788-798] |
 | 0x0C | `InterruptLevel` | KIRQL + 3 pad | |

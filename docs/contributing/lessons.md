@@ -24,6 +24,63 @@ Do not turn a hypothesis into a settled hardware quirk. Move confirmed design
 rules into the appropriate normative document while keeping the debugging
 history here.
 
+## A structural coincidence is not a reading, and the writer is disassemblable even when it has no symbol
+
+Read 2026-09-10 (roadmap task 21.8, design record 11 section 6.2). The amd64
+driver, loaded on a Vista x64 guest under F8, refused at
+`XHCI_INIT_STEP_RESOURCES` with `ResourcesTypes = 0x0C` while every other field
+in usbport's resource block was sane and every interrupt field was populated.
+`0x0C` is exactly the NT 5.x `MEMORY|INTERRUPT` of `0x06` shifted one bit left,
+and the session that found it wrote down that the shift would follow from 6.x
+inserting a member at the bottom of the enum - **and refused to change the
+constant on it**.
+
+That refusal was right, and not because the guess was wrong. It was right.
+A coincidence of that shape is consistent with several causes - a widened mask,
+an unrelated flag, the MSI reading that was considered and dropped earlier the
+same evening - and a constant changed on the strength of one is a constant
+nobody can check later. What the disassembly added was the **cause**: NT 6.x
+splits the port bit in two, an I/O-space port against a memory-mapped one, and
+everything above it moves up one place. Same numbers, but now re-derivable by
+anyone with the binaries.
+
+**`uf` needs a symbol; a sweep needs only a section.** The function that writes
+the field, `USBPORT_ParseResources`, is not exported, so every previous static
+read here - which used `cdb -z` / `kd -z` plus `uf usbport!<name>` - had no way
+to reach it. The technique that does:
+
+```bat
+tools\WinDDK71\bin\x86\amd64\link.exe /dump /headers <image>   :: .text bounds
+tools\WinDDK71\Debuggers\kd.exe -z <image> -c "u 11000 4ab66;q" > listing.txt
+```
+
+`u <start> <end>` disassembles a whole section in one pass - 60,000 lines for a
+260 KB driver, seconds to produce - and the listing is then a text file to
+search. Here `grep "or      dword ptr \[r"` over five images found the three
+write sites in each on the first try. **The image loads at its preferred base
+`0x10000`, so kd's own `usbport+0x...` display is already the RVA**, which is
+what to quote. This works for any interior function, and it is how the
+*producer* of a value gets read rather than only its consumers.
+
+**Two identifications beat one.** Knowing that `or [rbx],8` sets "memory"
+needed the descriptor-scan loop above it (`Type` 1/2/3, stride `0x14`) to say
+which register held which descriptor. But each branch is *also* guarded by the
+miniport's own `USB_MINIPORT_FLAGS_*` bit - `INTERRUPT 0x01`, `PORT_IO 0x02`,
+`MEMORY_IO 0x04` - which this project already had transcribed. The two agreed
+on all five binaries. Look for the second witness; it is usually already in the
+listing.
+
+**And read the old lineage too.** One binary showing `0x08` says only that this
+build uses `0x08`. The XP x64 binary showing `0x04` at the same site in the
+same function is what says the value *moved*, which is the claim the fix rests
+on. The comparison cost one extra command.
+
+This is the second time in two days that a question about the usbport miniport
+interface was settled by disassembling a *caller or a writer* rather than a
+structure - the registration arity was the first. Task 21.7 passed six static
+reads of this interface's structures and neither of these two defects was
+visible in any of them.
+
 ## Proving a control-endpoint reopen on a RELEASE-flavour guest: the QEMU trace bounds it, and a debug-port target confirms the counter
 
 Observed on 2026-09-07 on the XP and Windows 2000 guests, `1.0.2.0` installed

@@ -4255,11 +4255,17 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
      * the same mapping and the same common buffer, all of which the extension
      * already holds. The check then runs against the copy StartController made,
      * which is what the rest of the sequence uses anyway.
+     *
+     * **The mask is not a constant**: NT 6.x names these two resources with
+     * different bits, so DriverEntry settles `XhciResourcesRequired` once at
+     * PASSIVE_LEVEL and this site only reads it. src\xhci_usbport.h has the
+     * five binaries it was read out of; a Vista x64 guest refused here with
+     * `0x0C` on 2026-09-10 because this test was hard-wired to the NT 5.x
+     * `0x06`.
      */
     if (((resources != NULL ? resources->ResourcesTypes
                             : ext->ResourcesTypes) &
-         (USBPORT_RESOURCES_MEMORY | USBPORT_RESOURCES_INTERRUPT)) !=
-        (USBPORT_RESOURCES_MEMORY | USBPORT_RESOURCES_INTERRUPT)) {
+         XhciResourcesRequired) != XhciResourcesRequired) {
         return xhciInitFailed(ext, XHCI_INIT_STEP_RESOURCES,
                               ext->ResourcesTypes, MP_STATUS_NO_RESOURCES);
     }

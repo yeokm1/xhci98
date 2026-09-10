@@ -45,6 +45,20 @@
  */
 USBPORT_REGISTRATION_PACKET XhciRegPacket;
 
+/*
+ * The `ResourcesTypes` bits usbport must report before this driver will start
+ * a controller. This is the NT 5.x mask; DriverEntry raises it to the NT 6.x
+ * one, where the same two resources are named by different bits
+ * (src\xhci_usbport.h).
+ *
+ * A global settled once rather than a test at the check site, because that
+ * site is also reached from task 13-R.1's in-place recovery, which runs at
+ * DISPATCH_LEVEL, and `IoIsWdmVersionAvailable` is a PASSIVE_LEVEL call. It is
+ * written in DriverEntry and only read afterwards.
+ */
+ULONG XhciResourcesRequired =
+    USBPORT_RESOURCES_MEMORY | USBPORT_RESOURCES_INTERRUPT;
+
 /* Forward: task 13-R.1's in-place recovery is *requested* by ResetController and
  * *armed* by the health poll, which sits above it in this file. The two are a
  * long way apart on purpose - see xhciArmRecovery for why the arming may not
@@ -4730,6 +4744,22 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT DriverObject,
 
         XHCI_DBG_VALUE("wdm pre-1.30 (three-argument registration)",
                        (ULONG)isNt5);
+
+        /*
+         * The same boundary moves the `USBPORT_RESOURCES.ResourcesTypes`
+         * enumerators up one bit, so the mask XhciInitController requires at
+         * step 1 is settled here from the same answer rather than read at the
+         * check - see the block above the two families in
+         * src\xhci_usbport.h. This one does NOT fail towards NT 6.x: an
+         * unrecognised system keeps the mask four shipping targets have
+         * already been observed to satisfy, and the cost of being wrong is a
+         * legible refusal at step 1 rather than a bugcheck.
+         */
+        if (!isNt5) {
+            XhciResourcesRequired =
+                USBPORT6_RESOURCES_MEMORY | USBPORT6_RESOURCES_INTERRUPT;
+        }
+        XHCI_DBG_VALUE("resource bits required", XhciResourcesRequired);
 
         if (isNt5) {
             status = USBPORT_RegisterUSBPortDriver(
