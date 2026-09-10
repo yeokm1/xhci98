@@ -49,11 +49,11 @@ characterisation record for the hardware this project holds, and
 | # | What | The property that matters |
 |---|---|---|
 | 1 | An xHCI machine | PCI class code `0C0330`, at least one USB 2.0 port, a memory window below 4 GB, and a legacy interrupt pin. Step 3 confirms all four. A controller with no interrupt pin cannot be driven on either target, and there is no software workaround |
-| 2 | One target OS, already installed and working | Windows 98 SE (4.10.2222) with NUSB 3.3 already installed, or Windows 2000 SP4; for the VM-only rows, Windows ME (4.90.3000) with SweetLow's USB 2.0 stack installed (4.5, 7.7-7.8) or 32-bit Windows XP SP3 (4.6, 7.9-7.12). Do not install NUSB on the NT targets. One OS per run: a dual-boot machine is two runs and two records |
+| 2 | One target OS, already installed and working | Windows 98 SE (4.10.2222) with NUSB 3.3 already installed, or Windows 2000 SP4; for the VM-only rows, Windows ME (4.90.3000) with SweetLow's USB 2.0 stack installed (4.5, 7.7-7.8), 32-bit Windows XP SP3 (4.6, 7.9-7.12), or Windows XP Professional x64 / Windows Server 2003 x64 SP2 (4.8, 7.13-7.16). Do not install NUSB on the NT targets. The 64-bit row is the one target that takes a different package: a separate 64-bit build in its own directory, not the same file under another name (step 2). One OS per run: a dual-boot machine is two runs and two records |
 | 3 | A PS/2 or built-in keyboard and pointing device | A USB keyboard on the controller under test is unusable during the DOS pass and can stop responding mid-run. On a laptop the built-in keyboard is normally i8042-attached, but that is per machine; confirm it rather than assuming (`docs/contributing/build-and-test.md`, "Bootstrapping xHCI-only machines") |
 | 4 | A real-DOS boot medium, and a way to get a file off it | MS-DOS or FreeDOS on floppy, CD or USB key, booted without EMM386, a V86 monitor or a paging memory manager, but with `HIMEM.SYS` available, which is not one of those and which the qualifier may need (step 3). Not a DOS box inside Windows: the qualifier needs memory it can address one-to-one. Step 3 leaves `PROBE.LOG` on it, and that file is the run's first artefact |
 | 5 | A way to put the package on a machine whose USB does not work yet | Pull the disk and stage from another machine, burn a CD, or use a network share. On an xHCI-only machine there is no USB until this driver works; that is the chicken-and-egg this driver exists inside (`docs/contributing/build-and-test.md`, "Bootstrapping xHCI-only machines"). Pre-stage generously: every forgotten file is another disk swap |
-| 6 | A way back | A recovery rung that survives a driver which loads and then fails. Windows 98: the Startup Menu and Safe Mode, both of which run before this driver's BIOS handoff. Windows 2000: F8, and the Recovery Console pre-installed with `winnt32 /cmdcons` while USB still works. Test-boot the rung once before the first install, not after |
+| 6 | A way back | A recovery rung that survives a driver which loads and then fails. Windows 98: the Startup Menu and Safe Mode, both of which run before this driver's BIOS handoff. The NT targets: F8, and the Recovery Console pre-installed with `winnt32 /cmdcons` while USB still works. Test-boot the rung once before the first install, not after |
 
 ### What an individual clause needs
 
@@ -110,7 +110,7 @@ failed" are different findings.
 |---|---|---|
 | 1.1 | Fill every field of "What to record for each machine" in `xhciqual/hardware-testing.md`: model, chipset, BIOS version and date, the DOS version and boot medium, and whether PS/2 or built-in input is available | Every field filled, or explicitly `n/a` with the reason |
 | 1.2 | Read every USB-related BIOS setting and write each one down, before anything else is done to the machine | Each setting with its value. A BIOS that offers no USB option at all is a result; write `NOT PRESENT` |
-| 1.3 | Record the target OS and its build, and whether any previous version of this package was ever installed here | Windows 98 SE (4.10.2222) or Windows 2000 SP4, or, for the VM-only rows, Windows ME (4.90.3000) or 32-bit Windows XP SP3, and `none` or the version. A machine that had one produces an upgrade result, which is a different measurement and is not what this test measures (the release notes' "Known limitations", the Windows 2000 upgrade entry) |
+| 1.3 | Record the target OS and its build, and whether any previous version of this package was ever installed here | Windows 98 SE (4.10.2222) or Windows 2000 SP4, or, for the VM-only rows, Windows ME (4.90.3000), 32-bit Windows XP SP3, or Windows XP x64 / Windows Server 2003 x64 SP2, with the architecture written down beside the build because it decides which package step 4 installs; and `none` or the version. A machine that had one produces an upgrade result, which is a different measurement and is not what this test measures (the release notes' "Known limitations", the Windows 2000 upgrade entry) |
 
 1.2 comes before anything else rather than as an afterthought because on Intel
 7- and 8-series chipsets a BIOS setting decides which controller owns the USB
@@ -135,21 +135,36 @@ Do: unzip the release asset and look at what came out.
 
 | # | Do | Expected reading |
 |---|---|---|
-| 2.1 | Unzip the asset and list the top level | No top-level directory: `readme.txt`, `LICENSE`, `release\`, `debug\`, `xhciqual\` and `xhcisnap\` come out directly |
+| 2.1 | Unzip the asset and list the top level | No top-level directory: `readme.txt`, `LICENSE`, the flavour directories, `xhciqual\` and `xhcisnap\` come out directly. From `1.1.0.0` a flavour directory carries its architecture in its name: `release-x86\` and `debug-x86\`, with `release-x64\` and `debug-x64\` beside them when the cut carries a 64-bit driver. A cut before that has `release\` and `debug\`, and is 32-bit only |
 | 2.2 | Check that `xhcisnap\` is one of them | Present. It is what step 8 needs, so a download without it is a cut made with `-SkipSnapTool` and step 8 cannot be run against it. Report that rather than skipping the step |
-| 2.3 | List `release\` and `debug\` against the file list in `readme.txt` section 8 | Each holds every file that section names. Read the list off that file rather than from memory, because it can change between releases |
+| 2.3 | List each flavour directory against the file list in `readme.txt` section 8 | Each holds every file that section names. Read the list off that file rather than from memory, because it can change between releases |
 | 2.4 | Look for a version directory nested inside another | None |
+| 2.5 | On a 64-bit target only: check that the cut carries a 64-bit pair at all | `release-x64\` and `debug-x64\` present, and `readme.txt` naming a 64-bit system among what it supports. A cut without them has no driver for this machine; record the version and stop the run there rather than pointing it at the 32-bit directory |
 
-`RELEASE\` is the one to install. `DEBUG\` is the same driver built for
-diagnosis and is for a machine that has already gone wrong. It carries no
-per-line trace either; that lives only in the never-published `qemu` flavour.
+The `release` directory for the machine's architecture is the one to install:
+`release-x86\` on 32-bit Windows, `release-x64\` on 64-bit. The `debug`
+directory beside it is the same driver built for diagnosis and is for a machine
+that has already gone wrong. It carries no per-line trace either; that lives
+only in the never-published `qemu` flavour.
+
+Pointing a machine at the other architecture's directory is safe in both
+directions, and it is worth knowing that before step 4 rather than after: the
+64-bit setup engine ignores the 32-bit INF's undecorated models section and the
+32-bit engines skip a `[Manufacturer]` line decorated `NTamd64`, so the wrong
+directory offers no driver at all rather than installing one that cannot load.
+Record it as a wrong pick and point at the other one.
 
 A flavour directory holds exactly `xhci98.inf` and `xhci98.sys` (2.3), since
 1.0.0.1: the download carries no Microsoft file, and a copy taken from the
-source repository is the same two files. What the install needs beyond them,
+source repository is the same two files. Both architectures use those two
+names, so a loose file says nothing about which one it is; the 64-bit pair's
+`xhci98.inf` is a second INF carrying the `.NTamd64` path, not a third path
+inside the first. What the install needs beyond them,
 `usbd.sys` and `usbhub.sys` on every target, since 1.0.1.0 `usbport.sys` on
 Windows 2000 and XP, and, since 1.0.2.0, `usbui.dll` on every target, Windows
-supplies from its own installation source at step 4: the NT targets take them from their driver cache with no prompt, and
+supplies from its own installation source at step 4: the NT targets take them
+from their driver cache with no prompt (`Driver Cache\i386`, and
+`Driver Cache\amd64` on Windows XP x64), and
 an xHCI-only Windows 98 machine may ask for the Windows 98 SE CD, so have it
 at hand for that step (`readme.txt` section 3; section 8 is the per-directory
 file list 2.3 checks).
@@ -161,8 +176,10 @@ deeper than the Microsoft files, leaving no directory in the download holding a
 complete install set.
 
 Observed: the layout and the assertion that protects it are
-`scripts/package/make-release.ps1`, `New-UploadSet`; the nesting defect and its
-fix are recorded in that function's own comments, and
+`scripts/package/make-release.ps1`, `New-UploadSet`; the architecture-tagged
+directory names, and why a wrong pick is safe in both directions, are
+`releases/README.md`, "These are the names the whole repository uses"; the
+nesting defect and its fix are recorded in that function's own comments, and
 `docs/contributing/legal-provenance.md` section 5 records why the asset
 carries no Microsoft file.
 
@@ -174,6 +191,10 @@ carries no Microsoft file.
 | 3.2 | `XHCIQUAL` | One of three verdicts: `LOOKS QUALIFIED`, `DISQUALIFIED` or `CANNOT SAY`. `LOOKS QUALIFIED` is the one that continues |
 | 3.3 | `XHCIQUAL --probe-only --no-page --log PROBE.LOG` | Read-only, writes nothing to the machine, and leaves `PROBE.LOG`, the run's first artefact |
 | 3.4 | Read the controller `FACT` line out of `PROBE.LOG` | `hciver`, `ports`, `usb2ports` (the managed and unmanaged split: this driver drives the USB 2.0 ports and leaves the USB 3.0 ones alone), `pin`, `bar` and `irq`, each written down |
+
+This step is the same on every target, the 64-bit one included. `XHCIQUAL` is a
+DOS program that reads the machine rather than the operating system installed
+on it, so the download carries one build of it and needs no other.
 
 If the tool will not run at all (3.1): add `HIMEM.SYS` before concluding
 anything about the machine. It is not what "no memory manager" excludes (the
@@ -203,25 +224,28 @@ Observed: the verdicts and the command line are `readme.txt` section 1;
 path" is the roadmap's Phase 0 checkpoint. Real bare-metal passes of this
 shape are in `xhciqual/results/`.
 
-### Step 4. Install, from `RELEASE\`
+### Step 4. Install, from the release directory
 
-Do: follow `readme.txt` section 4 for the target. Point at a directory, never
-at a loose `xhci98.sys`; nothing about a copied file says which flavour it is.
+Do: follow `readme.txt` section 4 for the target, out of the `release`
+directory for the machine's architecture (step 2). Point at a directory, never
+at a loose `xhci98.sys`; nothing about a copied file says which flavour it is,
+and since `1.1.0.0` nothing about it says which architecture either.
 
-The rows are grouped by phase rather than by number: the four install rows
+The rows are grouped by phase rather than by number: the five install rows
 first, one per target, then the three readings taken once the install is done.
-4.5 and 4.6 were added after 4.3 and 4.4 and keep their ids, because the
+4.5, 4.6 and 4.8 were added after 4.3 and 4.4 and keep their ids, because the
 roadmap and the run sheets cite them.
 
 | # | Target | Do | Expected reading |
 |---|---|---|---|
-| 4.1 | Windows 98 SE | NUSB 3.3 first, then Device Manager, the unclaimed xHCI controller, Properties -> Driver -> Update Driver -> Specify a location -> `RELEASE\` | On an xHCI-only machine the copy phase asks for the Windows 98 Second Edition CD-ROM ("Insert Disk"); give it the CD, or its `WIN98` folder if asked where to copy from, and the install completes. A machine that already has `usbd.sys`, `usbhub.sys` and `usbui.dll` is not asked. One that has the first two from an earlier release but not `usbui.dll`, which is new in `1.0.2.0`, is asked again although that earlier install was silent; that is expected, not a fault. It never asks for a file from the driver's own disk. Record which it was |
-| 4.2 | Windows 2000 SP4 | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE\` | Completes with no prompt; `usbport.sys`, `usbd.sys` and `usbhub.sys` come from the driver cache (`sp4.cab`) and `usbui.dll` from `driver.cab` beside them, two cabinets in one pass |
+| 4.1 | Windows 98 SE | NUSB 3.3 first, then Device Manager, the unclaimed xHCI controller, Properties -> Driver -> Update Driver -> Specify a location -> `RELEASE-X86\` | On an xHCI-only machine the copy phase asks for the Windows 98 Second Edition CD-ROM ("Insert Disk"); give it the CD, or its `WIN98` folder if asked where to copy from, and the install completes. A machine that already has `usbd.sys`, `usbhub.sys` and `usbui.dll` is not asked. One that has the first two from an earlier release but not `usbui.dll`, which is new in `1.0.2.0`, is asked again although that earlier install was silent; that is expected, not a fault. It never asks for a file from the driver's own disk. Record which it was |
+| 4.2 | Windows 2000 SP4 | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE-X86\` | Completes with no prompt; `usbport.sys`, `usbd.sys` and `usbhub.sys` come from the driver cache (`sp4.cab`) and `usbui.dll` from `driver.cab` beside them, two cabinets in one pass |
 | 4.5 | Windows ME | SweetLow's stack first (NUSB is a Windows 98 SE package), then the Windows 98 SE route of 4.1 | Completes. The virtual machine tried asked for no CD, its Setup having left the CABs on the hard disk; a machine without them may ask for the Windows ME CD, for `usbd.sys`, `usbhub.sys` and `usbui.dll`. Record which it was. This target is supported in virtual machines only |
-| 4.6 | Windows XP | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE\`; Continue Anyway at the unsigned-driver warning | Completes with no other prompt; `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll` all come from the driver cache (`sp3.cab`). This target is supported in virtual machines only |
-| 4.3 | All four | Look at Device Manager when the install is done | The two nodes below, and neither carries a warning mark |
+| 4.6 | Windows XP | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE-X86\`; Continue Anyway at the unsigned-driver warning | Completes with no other prompt; `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll` all come from the driver cache (`sp3.cab`). This target is supported in virtual machines only |
+| 4.8 | Windows XP x64, Windows Server 2003 x64 | The Windows 2000 route of 4.2, pointed at `RELEASE-X64\`; Continue Anyway at the unsigned-driver warning | Completes with no other prompt; `usbport.sys` and `usbhub.sys` come from `Driver Cache\amd64\sp2.cab` and `usbd.sys` and `usbui.dll` from `driver.cab` beside it, two cabinets in one pass. `RELEASE-X86\` offers this machine no driver at all, which is what a wrong pick looks like rather than a failed install. This target is supported in virtual machines only, and only Windows XP x64 has been tried |
+| 4.3 | All five | Look at Device Manager when the install is done | The two nodes below, and neither carries a warning mark |
 | 4.4 | Windows 98 SE | Look for the two cosmetic readings and note them | `xhci98.tmp` left in `System32\Drivers` and listed in Driver File Details (cosmetic; the loaded binary is the real one), and the Driver tab showing a date but no version (release notes, "Known limitations"). Neither is a failure and neither should be reported as one |
-| 4.7 | Windows 2000, Windows XP | The USB Root Hub of 4.3, Properties | A **Power** tab beside General and Driver, reading "The hub is self powered" and "Total power available: 500 mA per port", with the port count listed below. This is the reading that says `usbui.dll` arrived: Windows' own INF asks for that page and names that file as its provider, and on a machine that never had a USB controller the file is absent and the tab silently is too. Its absence is not a driver fault; record it |
+| 4.7 | Windows 2000, Windows XP, Windows XP x64 | The USB Root Hub of 4.3, Properties | A **Power** tab beside General and Driver, reading "The hub is self powered" and "Total power available: 500 mA per port", with the port count listed below. This is the reading that says `usbui.dll` arrived: Windows' own INF asks for that page and names that file as its provider, and on a machine that never had a USB controller the file is absent and the tab silently is too. Its absence is not a driver fault; record it. On Windows XP x64 the 64-bit INF copies the 64-bit `usbui.dll` by the same route, but the tab itself has not been read on that target here; whatever it shows is new information |
 
 The two nodes of 4.3, as Device Manager shows them:
 
@@ -231,9 +255,14 @@ USB 2.0 eXtensible Host Controller (xhci98)
 ```
 
 The controller string is the INF's, as written; the root hub is the system's
-own.
+own. Both INFs carry the same string, so those two lines look the same on a
+64-bit machine as on a 32-bit one and do not say which package was installed;
+what says that is which directory was pointed at.
 
-If the root hub fails with `0xc0000034` naming `usbhub20.sys` (Windows 2000)
+The rows name the directories a cut from `1.1.0.0` on writes. On an earlier cut
+the same directory is `RELEASE\` and there is no 64-bit one at all (2.1, 2.5).
+
+If the root hub fails with `0xc0000034` naming `usbhub20.sys` (the NT targets)
 or sits at Code 2 (Windows 98): `usbd.sys` is missing, which on Windows 98
 means the Insert Disk prompt of 4.1 was cancelled or answered with the wrong
 disk. Put the CD in and install the driver again.
@@ -249,11 +278,18 @@ Safe mode per the failed-start entry in the release notes' "Known
 limitations", which carries the steps and
 records that recovery is complete and loses nothing.
 
-Observed: the device string is `src/xhci98.inf`'s `XhciDesc`. The `0xc0000034`
+Observed: the device string is `src/xhci98.inf`'s `XhciDesc`, and
+`src/xhci98-amd64.inf` carries the same one. The `0xc0000034`
 failure is `readme.txt` section 3 and `docs/contributing/lessons.md`, the
 `USBD.SYS` lesson. `Code 10` versus the Windows 98 protection error was
 measured in both virtual machines (roadmap task 12.3; release notes, "Known
-limitations").
+limitations"). 4.8 was measured on the Windows XP x64 virtual machine of
+2026-09-09, which took the `.NTamd64` path with no prompt for the CD on a
+machine that had had no USB stack on disk at all (roadmap task 21.5;
+`docs/contributing/build-and-test.md`, "Windows XP x64 target VM"). That
+reading was taken from a package staged out of the source tree; the same
+install from a published download is what this step asks for and is what
+roadmap task 22.9's fifth leg exists to take.
 
 ### Step 5. Devices, one at a time, then a hub
 
@@ -405,6 +441,31 @@ XP re-created mid-enumeration was failed by this driver and bound only on a
 replug (`docs/issues/04-xp-restore-device-ep0-remove.md`). Windows 2000's 7.5
 has not been measured on XP and is `SKIP - other target` there.
 
+Windows XP x64 and Windows Server 2003 x64 (virtual machines only)
+
+| # | Do | Expected reading |
+|---|---|---|
+| 7.13 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | Present, value 1. The 64-bit INF writes it by the same `AddReg` the 32-bit one uses |
+| 7.14 | Leave the machine idle for two minutes after boot with nothing plugged in, then plug in a Low-Speed HID | It enumerates and works with no Refresh, as on 32-bit XP |
+| 7.15 | Plug in a flash drive, then a composite device, each for the first time on this installation | Each binds on its first attach, with no replug needed |
+| 7.16 | Disable the controller in Device Manager, re-enable it, then uninstall it and Scan for hardware changes | It goes and comes back each time, with no crash, and the rescan reinstalls with no media prompt |
+
+7.13 to 7.16 were measured on the Windows XP x64 virtual machine of 2026-09-09
+(roadmap task 21.5; `docs/contributing/build-and-test.md`, "Windows XP x64
+target VM"). Two of them are narrower than they read, and the record should say
+so where they are taken. 7.14's underlying reading there was the absence of any
+`SuspendController` on an idle controller in the driver's own trace, not this
+two-minute clause; and 7.15's devices were hot-plugged onto a running guest,
+which is the same act a tester performs but was not read as a first-ever
+class-driver install the way 32-bit XP's 7.11 was.
+
+Windows 2000's 7.5 has not been measured here and is `SKIP - other target`.
+
+Windows Server 2003 x64 is the same operating system as Windows XP x64, NT
+5.2.3790, and the same driver is meant for it, but no Server 2003 machine has
+been tried at all. A run of this block on one is new information rather than a
+repetition, so say in the record which of the two it was.
+
 ### Step 8. Produce the log channel
 
 The point of a log channel is that a stranger can produce one. This step tests
@@ -417,6 +478,20 @@ else those two documents own.
 
 It is the same procedure on both targets, which is itself worth confirming.
 Everything here runs out of this release's `XHCISNAP` directory.
+
+On Windows XP x64 it is the same procedure and the same tool: the download
+carries one `XHCISNAP.EXE`, a 32-bit program, and on that target it runs under
+WOW64 against a 64-bit driver. What it prints comes off the wire rather than
+out of an offset table, so nothing a tester reads back at 8.5 is specific to
+the architecture, and the keys it writes at 8.1 sit under
+`System\CurrentControlSet`, which WOW64 does not redirect. Both of those are
+properties of how the tool is built, not readings: it has never been run on a
+64-bit Windows at all. Take the step as written, and if it fails there, report
+the exact output as a finding about the tool on that target rather than reading
+it as a driver defect. The `.BIN` written beside the report is the one part
+that is architecture-specific: it is the raw extension image, and it is decoded
+by a maintainer against the offsets of the architecture the driver was built
+for, not read by the tester.
 
 | # | Do | Expected reading |
 |---|---|---|
