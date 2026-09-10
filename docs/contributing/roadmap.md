@@ -2212,6 +2212,45 @@ are static readings and no other task's box may be ticked on one.
         flavour as well as `qemu`**, for the reason 21.5 found the hard way -
         the clauses were taken on a build that is never published, and closing
         that gap is what licensed the 64-bit publisher default
+  - [ ] **memory above 4 GB, as a deliberate experiment with its own record
+        and not as a bumped default** (raised by the owner 2026-09-10). These
+        are the first guests where it is even askable: every guest this
+        project has ever booted has had less than 4 GB, so **the HAL's
+        double-buffering has never once executed**. Give one guest 8192 MB
+        by regenerating its launcher with `-MemoryMb`, leave the default at
+        2048, and record the reading either way.
+
+        **What it does NOT test, so that nobody reads more into a pass than
+        is there: 64-bit addressing stays unreachable.** Windows 7's second
+        `IoGetDmaAdapter` is gated on `Version >= 310` plus a packet slot this
+        driver does not fill; it is version-gated, not RAM-gated, and no
+        amount of memory opens it. usbport's adapter stays
+        `Dma32BitAddresses = 1` / `DmaWidth = Width32Bits`.
+
+        **What it DOES open is the shape of the scatter-gather list.** With
+        memory above the line the HAL must bounce high buffers down through
+        map registers, and that changes what `MapTransfer` produces -
+        fragment count, lengths, offsets. That is the real target, and it is
+        this driver's code that walks it: the `XHCI_XFER_MAX_DATA_TRBS` cap
+        (`src/xhci_xfer.c:517`), the 64 KB physical-boundary splitting, and
+        the `SgOffset` ordering and gap detection. Those edges are exercised
+        today only on the shapes a small 32-bit guest happens to produce.
+
+        **The read-out already exists and needs no new code**: the four probe
+        counters `ProbeSgDisordered`, `ProbeSgGapped`, `ProbeSgHighDwords` and
+        `ProbeSgMapped`, which every build maintains. All four at zero is the
+        static record confirmed under a workload that could have broken it.
+
+        **The dangerous case fails safe and the safe-looking one does not**,
+        which is the asymmetry to carry into the run. A high address in an SG
+        element is refused at `src/xhci_xfer.c:542` before anything is read or
+        written, and counted - visible, clean, no corruption. But
+        `USBPORT_RESOURCES.StartPA` is only a `ULONG`, so the common buffer's
+        high DWORD is not exposed and **cannot be checked at all**
+        (`implementation-invariants.md`, "DMA Addresses"); there the driver
+        rests on the 32-bit adapter contract alone, and a violation would be
+        silent. Read the common buffer's behaviour on its own terms rather
+        than inferring it from a clean transfer counter.
   - [ ] the tier decided and stated with the rest in task 21.6, including the
         signing requirement, which belongs in the release notes beside the
         tier rather than in a footnote

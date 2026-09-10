@@ -652,6 +652,15 @@ could cost:
   version-300 region - would silently move physical addresses above 4 GB. The
   existing high-DWORD check at `src/xhci_xfer.c:542` is what stands between that
   and corruption, and this reading is the reason not to remove it.
+
+  **A related experiment, and the distinction matters: giving a 64-bit guest
+  more than 4 GB does not reach any of this.** The second adapter is
+  version-gated, not RAM-gated. What memory above the line does open is the
+  HAL's double-buffering, which has never executed on any guest this project
+  has booted, and through it the *shape* of the scatter-gather list the
+  miniport walks. That is written up as a clause of roadmap task 21.8, along
+  with the reason the common buffer is the part to watch: `StartPA` is a
+  `ULONG`, so unlike the SG path it carries no check at all.
 - **`USBPORT_RESOURCES` is longer than `0x48` on both.** Vista x64's
   `usbehci.sys` reads fields at `0x50`, `0x58`, `0x90` and `0x94`; Windows 7
   x64's at `0x50`, `0x90` and `0xC0`. usbport owns the allocation, so reading a
