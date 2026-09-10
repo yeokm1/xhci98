@@ -58,6 +58,17 @@ WHAT DIFFERS, AND WHY:
            to catch actually arrives: the gate can only see launchers that
            have been generated, so a reservation on paper has to be honoured
            by hand. These take the pair above and leave 21.8's alone.
+  Smp      4 vCPUs, where every guest before this one takes the default 1.
+           This is about the accelerator, not the guest: Vista must run under
+           TCG here (below), and single-threaded TCG on a 2.0 GHz i7-9700T is
+           painful. QEMU emulates x86-on-x86 with MULTI-THREADED TCG, so vCPUs
+           become host threads and the emulation parallelises; four rather
+           than the host's eight leaves room for QEMU's own I/O and display
+           threads. `thread=multi` is derived here for a tcg accelerator and
+           is NEVER handed to WHPX, which rejects the whole -accel argument
+           rather than ignoring an option it does not know. The HAL is fixed
+           at install time, so -Smp must not differ between a guest's install
+           and run launchers, and the launcher gate asserts that it does not.
   Accel    A PARAMETER WITH NO INHERITED DEFAULT. Roadmap task 22.4 says to
            probe the accelerator per host AND per guest, because Phase 21 paid
            for that rule twice in opposite directions: every 32-bit guest here
@@ -66,7 +77,14 @@ WHAT DIFFERS, AND WHY:
            its Setup. A 32-bit Vista or Windows 7 guest is covered by neither
            reading - it shares the bitness of one and the era of the other -
            so each generator carries the value measured for ITS guest, and the
-           measurement is in build-and-test.md.
+           measurement is in build-and-test.md. **AND ON THIS HOST THE WHPX
+           OPTION SPACE IS ONE RUNG WIDE**: plain `-accel whpx` refuses to
+           initialise at all ("Failed to enable nested virtualization,
+           hr=80370302"), because the in-kernel irqchip wants nested
+           virtualisation the host does not offer. So `kernel-irqchip=off` is
+           not a tuning choice anywhere in this project - it is the only WHPX
+           there is here, and when it wedges a guest the alternative is TCG
+           rather than another WHPX rung.
 
 WHAT THIS RECIPE OWES THAT NO EARLIER ONE DID. Both these systems stage a
 driver package into a driver store, and both warn at install that an unsigned
@@ -122,6 +140,14 @@ function New-Nt6QemuGuest {
         [string]$XhciDevice = "qemu-xhci,p3=0",
         [string]$Cpu = "qemu64",
         [int]$MemoryMb = 2048,
+        # vCPUs. Four, and the reason is TCG rather than any property of the
+        # guest: Vista cannot use WHPX here (see the Accel note) and a
+        # single-threaded TCG guest on a 2.0 GHz i7-9700T is painful. QEMU
+        # emulates x86-on-x86 with multi-threaded TCG, so vCPUs become host
+        # threads and the emulation actually parallelises. Four rather than
+        # the host's eight leaves room for QEMU's own I/O and display threads,
+        # which are what a starved MTTCG guest waits on.
+        [int]$Smp = 4,
         [switch]$CreateDisk
     )
 
@@ -194,9 +220,18 @@ function New-Nt6QemuGuest {
         }
     }
 
+    # **thread=multi IS A TCG PROPERTY AND MUST NOT BE HANDED TO WHPX**, which
+    # rejects the whole -accel argument rather than ignoring the part it does
+    # not know. So it is derived here rather than written into either caller's
+    # -Accel default, and asking for it explicitly still wins.
+    $accelArg = $Accel
+    if ($Smp -gt 1 -and $Accel -match '^tcg' -and $Accel -notmatch 'thread=') {
+        $accelArg = $Accel + ",thread=multi"
+    }
+
     Write-Step "Writing QEMU launchers"
     Write-Ok "Using xHCI device model: $XhciDevice"
-    Write-Ok "Using CPU model: $Cpu; $MemoryMb MB; accelerator $Accel; monitor port $MonitorPort"
+    Write-Ok "Using CPU model: $Cpu; $MemoryMb MB; $Smp vCPU(s); accelerator $accelArg; monitor port $MonitorPort"
 
     # QEMU is resolved at RUN time by the launcher, not baked in here: the host
     # that generated a launcher is not always the host that runs it
@@ -223,8 +258,14 @@ function New-Nt6QemuGuest {
         "rem 32-bit guest wanting a 64-bit-era CPU model is not the same thing as a",
         "rem 64-bit guest.",
         "rem $MemoryMb MB, not 512, and a 32-bit guest, so nothing is above 4 GB.",
+        "rem $Smp vCPUs. Under TCG that is what makes the guest usable: QEMU",
+        "rem emulates x86-on-x86 with multi-threaded TCG, so vCPUs become host",
+        "rem threads. Four rather than the host's core count leaves room for",
+        "rem QEMU's own I/O and display threads. THE HAL IS FIXED AT INSTALL",
+        "rem TIME, so this must not be changed between installing a guest and",
+        "rem running it; regenerate both launchers with -Smp instead.",
         "rem",
-        "rem Accelerator: -accel $Accel."
+        "rem Accelerator: -accel $accelArg."
     ) + $accelComment + @(
         "rem The HAL is fixed at INSTALL time, so a guest installed under one rung",
         "rem must be booted under it too; regenerate with -Accel rather than editing",
@@ -256,8 +297,9 @@ function New-Nt6QemuGuest {
         """%QEMU%"" ^",
         "  -name ""xhci98 $GuestName"" ^",
         "  -machine pc ^",
-        "  -accel $Accel ^",
+        "  -accel $accelArg ^",
         "  -cpu $Cpu ^",
+        "  -smp $Smp ^",
         "  -m $MemoryMb ^",
         "  -vga std ^",
         "  -drive file=""$diskImage"",format=qcow2,if=ide ^",
@@ -275,8 +317,8 @@ function New-Nt6QemuGuest {
         "rem $GuestName guest - RUN launcher.",
         "rem Generated by scripts\$GeneratorName; regenerate rather than edit.",
         "rem",
-        "rem Same machine as qemu-$Stem-install.cmd (ACPI on, -accel $Accel,",
-        "rem -cpu $Cpu, $MemoryMb MB, -vga std) plus:",
+        "rem Same machine as qemu-$Stem-install.cmd (ACPI on, -accel $accelArg,",
+        "rem -cpu $Cpu, $Smp vCPUs, $MemoryMb MB, -vga std) plus:",
         "rem  - the xHCI ($($XhciDevice)): there is no in-box driver for",
         "rem    PCI\CC_0C0330 on 6.0 or 6.1 either, so it shows as an unrecognised",
         "rem    USB controller and the package installs through the INF's .NTx86",
@@ -354,8 +396,9 @@ function New-Nt6QemuGuest {
         """%QEMU%"" ^",
         "  -name ""xhci98 $GuestName"" ^",
         "  -machine pc ^",
-        "  -accel $Accel ^",
+        "  -accel $accelArg ^",
         "  -cpu $Cpu ^",
+        "  -smp $Smp ^",
         "  -m $MemoryMb ^",
         "  -vga std ^",
         "  -drive file=""$diskImage"",format=qcow2,if=ide ^",

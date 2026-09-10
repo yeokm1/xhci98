@@ -24,7 +24,16 @@ WHPX, measured rather than inherited (roadmap task 22.4 asks for the
 accelerator to be probed per host AND per guest). Under
 -accel whpx,kernel-irqchip=off on host minis-w11p-ykm, 2026-09-10, Windows 7
 Setup reached its "Install Windows" language page about two minutes from
-launch. TCG was not needed and was not tried.
+launch AND RAN THE WHOLE INSTALL THROUGH TO A FINISHED DESKTOP, first reboot
+included. That second half is what makes the value usable: the language page
+alone proves only that WinPE runs, which is exactly the reading that was wrong
+about the Vista guest.
+
+AND THE SIBLING GUEST DISAGREES. scripts\setup-qemu-vista.ps1 defaults to tcg,
+because Vista wedges on the boot after Setup's first reboot under this very
+rung. Two guests one WDM revision apart, out of one recipe, on one host, in
+one afternoon, do not share an accelerator - so do not "tidy" these two
+defaults into agreement.
 
 One reading from that probe is worth keeping, because it is the reading that
 went the other way on the XP x64 guest: at the language page EIP was IDENTICAL
@@ -60,6 +69,7 @@ param(
     [string]$Accel = "whpx,kernel-irqchip=off",
     [int]$MonitorPort = 55566,
     [int]$MemoryMb = 2048,
+    [int]$Smp = 4,
     [switch]$CreateDisk
 )
 
@@ -91,4 +101,5 @@ New-Nt6QemuGuest `
     -XhciDevice $XhciDevice `
     -Cpu $Cpu `
     -MemoryMb $MemoryMb `
+    -Smp $Smp `
     -CreateDisk:$CreateDisk

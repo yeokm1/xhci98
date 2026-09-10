@@ -223,12 +223,33 @@ try {
             # casualty; Windows 7's own floor is 1 GB.
             Assert-True ($text -match '(?m)^\s*-m 2048 \^') `
                 "the $name launcher does not give the guest the 2048 MB the 6.x recipe calls for."
-            # WHPX with ACPI on, measured for each of these two guests on
-            # 2026-09-10 rather than inherited from the other 32-bit guests -
-            # roadmap task 22.4 asks for the accelerator to be probed per host
-            # AND per guest, and the XP x64 guest is why.
-            Assert-True ($text.Contains("-accel whpx,kernel-irqchip=off ^") -and $text.Contains("-machine pc ^")) `
-                "the $name launcher does not use the measured WHPX rung with ACPI on."
+            # **THE ACCELERATOR IS PER GUEST, AND ON THIS PAIR THE TWO GUESTS
+            # DISAGREE.** Roadmap task 22.4 asks for it to be probed per host
+            # AND per guest, and this pair is now the third case that pays for
+            # the rule: Vista wants tcg, for the same reason the XP x64 guest
+            # does. Under whpx,kernel-irqchip=off Vista Setup ran its whole
+            # first phase and then wedged on the boot after it (2026-09-10:
+            # EIP pinned, disk idle twenty-two minutes, marquee still
+            # animating); under tcg the same image resumed and reached the
+            # desktop. Windows 7 was then installed under
+            # whpx,kernel-irqchip=off and ran the whole way through to a
+            # finished desktop, so BOTH values are confirmed through a
+            # completed install rather than a language page - and the pair
+            # disagrees, which is why neither may be copied to the other.
+            # thread=multi rides along on a tcg accelerator when the guest has
+            # more than one vCPU, and MUST NOT reach WHPX - it rejects the
+            # whole -accel argument rather than ignoring an option it does not
+            # know, so a launcher that carried it would not start at all.
+            $expectAccel = if ($name -eq "Vista") { "tcg,thread=multi" } else { "whpx,kernel-irqchip=off" }
+            Assert-True ($text.Contains("-accel $expectAccel ^") -and $text.Contains("-machine pc ^")) `
+                "the $name launcher does not use the measured accelerator ($expectAccel) with ACPI on."
+            Assert-True (-not ($text -match '-accel whpx[^ ]*thread=')) `
+                "the $name launcher hands thread= to WHPX, which refuses the whole -accel argument and will not start."
+            # Four vCPUs, which is what makes a TCG guest usable here. Asserted
+            # on BOTH launchers for the same reason the accelerator is: the HAL
+            # is fixed at install time.
+            Assert-True ($text -match '(?m)^\s*-smp 4 \^') `
+                "the $name launcher does not give the guest the 4 vCPUs the 6.x recipe calls for."
             Assert-True ($text.Contains('set "EHCI="') -and $text.Contains('if /i "%2"=="ehci"') -and
                 -not ($text -match '(?m)^set "EHCI=-device')) `
                 "the $name launcher does not leave the companion EHCI out by default, so task 22.3's xHCI-only reading cannot be taken."
@@ -246,8 +267,10 @@ try {
             # accelerator must be booted under it too - the 2b lesson,
             # asserted across the pair as it already is for the SMP rungs and
             # for XP x64.
-            Assert-True ($install6.Contains("-accel whpx,kernel-irqchip=off ^")) `
+            Assert-True ($install6.Contains("-accel $expectAccel ^")) `
                 "the $name install and run launchers disagree on the accelerator; the HAL is fixed at install time, so the installed system would not boot the way it was installed."
+            Assert-True ($install6 -match '(?m)^\s*-smp 4 \^') `
+                "the $name install and run launchers disagree on the vCPU count; the HAL is fixed at install time, so the installed system would not boot the way it was installed."
         }
 
         # --- the rotation preamble, actually executed -----------------------

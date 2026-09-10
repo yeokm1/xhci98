@@ -109,7 +109,7 @@ Setup scripts:
 | `scripts\setup-qemu-win2k.ps1` | Same for the Win2000 SP4 (Phase 2b) VM, the second first-class target. Monitor port 55556, and it also stages `usbd.sys` (`-Win2KUsbdSys`) |
 | `scripts\setup-qemu-winxp.ps1` | The Windows XP SP3 guest of roadmap Phase 19 (`vm\winxp.img`, monitor 55559, transfer drive `vm\xferxp`): WHPX with `kernel-irqchip=off`, ACPI on, no companion EHCI unless the run launcher is given `ehci` as its second argument; see "Windows XP target VM" |
 | `scripts\setup-qemu-winxp64.ps1` | The Windows XP Professional x64 SP2 guest of roadmap Phase 21 (`vm\winxp64.img`, 16 GB, monitor 55562, transfer drive `vm\xferxp64`): the 32-bit XP recipe with five changes - `-cpu qemu64` (`pentium3` has no long mode), 2048 MB, a bigger disk, a free monitor port, and **`-accel tcg`, which on this guest is the one that works and not the fallback** (WHPX wedges XP x64 Setup); `-Accel` selects another rung; see "Windows XP x64 target VM" |
-| `scripts\setup-qemu-vista.ps1` and `scripts\setup-qemu-win7.ps1` | The two 32-bit guests of roadmap Phase 22 (`vm\vista.img` monitor 55565, `vm\win7.img` monitor 55566, 32 GB each, transfer drives `vm\xfervista` and `vm\xferwin7`). They are thin callers over one shared body, `scripts\qemu-nt6-common.ps1`, because they are one recipe: the 32-bit XP machine with `-cpu qemu64` (`pentium3` predates the NX bit and Windows 7 Setup refuses a processor without one), 2048 MB, a bigger disk, and `-accel whpx,kernel-irqchip=off` **measured for each guest rather than inherited**; `-Accel` selects another rung. See "Windows Vista and Windows 7 target VMs" |
+| `scripts\setup-qemu-vista.ps1` and `scripts\setup-qemu-win7.ps1` | The two 32-bit guests of roadmap Phase 22 (`vm\vista.img` monitor 55565, `vm\win7.img` monitor 55566, 32 GB each, transfer drives `vm\xfervista` and `vm\xferwin7`). They are thin callers over one shared body, `scripts\qemu-nt6-common.ps1`, because they are one recipe: the 32-bit XP machine with `-cpu qemu64` (`pentium3` predates the NX bit and Windows 7 Setup refuses a processor without one), 2048 MB, a bigger disk, 4 vCPUs, and an accelerator **measured for each guest rather than inherited** - Vista `-accel tcg` (WHPX wedges its Setup after the first reboot), Windows 7 `-accel whpx,kernel-irqchip=off` and not yet confirmed through an install; `-Accel` and `-Smp` select another rung. See "Windows Vista and Windows 7 target VMs" |
 | `scripts\setup-qemu-win2k-smp.ps1` | The Phase 2d SMP stress VM (`vm\win2k-smp.img`, monitor 55557). Defaults to the checkpoint-proven `whpx,kernel-irqchip=off` rung; `-Accel`/`-AcpiOff`/`-Smp`/`-MemoryMb` select another Phase 2d task-2 rung so each is a regenerated launcher, not a hand-edited copy |
 | `scripts\check-smp-parallelism.ps1` | Host-side Phase 2d checkpoint check against the running 2d VM: a complete one-to-one vCPU/`thread_id` mapping from `info cpus`, plus a process affinity mask allowing 2+ logical processors. Guest-side "MP kernel landed" checks do not distinguish those host conditions; this script does. Run-time, so not part of `build-driver.cmd`; `-SelfTest` needs no VM |
 | `scripts\setup-all.ps1` | Runs MSVC, DDK, and both Phase 2a/2b QEMU setups; use `-RunInstallers` for MSVC/DDK and `-InstallQemu` for QEMU. Pass `-Win2KIso` or the Win2000 half is skipped with a warning |
@@ -2047,28 +2047,89 @@ difference belongs in a parameter, never in a second copy of the body.
 | Images | `vm\vista.img` and `vm\win7.img`, 32 GB qcow2 each (Windows 7 x86 wants 16 GB free, Vista 15 GB; qcow2 is sparse, so the file costs what the install writes) |
 | Monitor ports | **55565** (Vista) and **55566** (Windows 7) - *not* the next two free numbers; see the reservation above |
 | CPU | `-cpu qemu64`, **not** the 32-bit XP guest's `pentium3`. `pentium3` predates the NX bit and Windows 7 requires one: Setup refuses such a processor. A 32-bit guest wanting a 64-bit-era CPU *model* is not the same thing as a 64-bit guest, and this is the line most likely to be "corrected" back to the 32-bit recipe, so the shared body refuses such a `-Cpu` outright and the launcher gate asserts the generated text |
-| RAM | 2048 MB, not 512. Comfort - Windows 7's own floor is 1 GB. Nothing has been measured here about what the 6.x `usbport` does with memory above 4 GB, and it does not arise: a 32-bit guest with 2048 MB has none. Do not raise it without reading measurement M5 of design record 11 first |
-| Accelerator | `-accel whpx,kernel-irqchip=off` on **both**, measured per guest on host `minis-w11p-ykm`, 2026-09-10 |
+| vCPUs | **4**, where every guest before this one takes the default 1. This is about the accelerator, not the guest: Vista must run under TCG here, and single-threaded TCG on this host's 2.0 GHz i7-9700T is painful. QEMU emulates x86-on-x86 with **multi-threaded TCG**, so vCPUs become host threads and the emulation parallelises - measured on the Vista guest 2026-09-10, all four vCPU threads busy and roughly even (35 / 31.5 / 30.4 / 28.3 CPU-seconds over ~200 s of wall clock). Four rather than the host's eight leaves room for QEMU's own I/O and display threads. `thread=multi` is derived for a `tcg` accelerator and **never handed to WHPX**, which refuses the whole `-accel` argument rather than ignoring an option it does not know |
+| RAM | 2048 MB, not 512. Comfort - Windows 7's own floor is 1 GB. **More RAM is not a speed knob here**: what makes a TCG guest slow is instruction emulation, not memory. Nothing has been measured about what the 6.x `usbport` does with memory above 4 GB, and it does not arise: a 32-bit guest with 2048 MB has none. Do not raise it without reading measurement M5 of design record 11 first - on a **64-bit** guest, crossing 4 GB puts DMA above the line in play and is a change to the test surface, not a tuning choice |
+| Accelerator | **They differ**, and both are confirmed through a completed install. Vista is `-accel tcg` (WHPX wedges its Setup after the first reboot); Windows 7 is `-accel whpx,kernel-irqchip=off`. Host `minis-w11p-ykm`, 2026-09-10 |
 | Everything else | The 32-bit XP machine unchanged: `-machine pc` (ACPI on), `-vga std`, `-boot d` on every install boot, `qemu-xhci,p3=0` on the run launcher, no companion EHCI unless it is asked for, no USB device boot-attached, the VVFAT transfer drive, and the port-`0xE9` console rotated per boot |
 
-**The accelerator reading, and the one thing it taught.** Roadmap task 22.4
-says to probe the accelerator per host **and** per guest, because Phase 21 paid
-for that rule twice in opposite directions - every 32-bit guest here wants
-WHPX, and the XP x64 guest wants TCG because WHPX wedges its Setup. A 32-bit
-Vista or Windows 7 guest is covered by neither reading: it shares the bitness
-of one and the era of the other. Both were probed on 2026-09-10, and both run
-under WHPX: Vista was at its "Install Windows" language page under four minutes
-from launch, Windows 7 at the same page about two minutes from launch. **TCG
-was not needed on either and was not tried.** So the ordinary 32-bit answer
-holds here - as a result, not as an inheritance.
+**The accelerator reading, and the probe that was too shallow to take it.**
+Roadmap task 22.4 says to probe the accelerator per host **and** per guest,
+because Phase 21 paid for that rule twice in opposite directions - every 32-bit
+guest here wants WHPX, and the XP x64 guest wants TCG because WHPX wedges its
+Setup. A 32-bit Vista or Windows 7 guest is covered by neither reading: it
+shares the bitness of one and the era of the other.
 
-What the probe taught is a reading rule rather than a fact about these guests.
-At the Windows 7 language page, `EIP` was **identical across samples 36 seconds
-apart with `HLT=0`** - which is precisely the signature that *was* a wedge on
-the XP x64 guest, five RIP samples pinned at one address. It is not one here: a
-guest sitting at a Setup prompt spins in an input wait, and it looks exactly
-like a guest that has died in one. **The screendump is what tells the two
-apart.** Take it before calling a pinned instruction pointer a wedge.
+The first probe, on 2026-09-10, ran each guest as far as its "Install Windows"
+language page - Vista under four minutes from launch, Windows 7 about two - and
+recorded WHPX for both. **That reading was wrong for Vista, and the way it was
+wrong is the part worth keeping.** Installing Vista the same day under
+`whpx,kernel-irqchip=off` ran the entire first phase - partitioning, the file
+copy, the reboot - and then wedged on the boot that follows it. At the wedge:
+`EIP` confined to two addresses 188 bytes apart, interrupts enabled (`EFL` `IF`
+set) at `CPL=0` with `HLT=0`, about half a core burning, and **`ide0-hd0` idle
+for twenty-two minutes**. A `system_reset` re-entered the same wedge. Relaunched
+on the same half-installed image under `-accel tcg`, Setup **resumed** at
+"Please wait while Windows sets up your computer" and ran to the desktop.
+
+So **Vista is `-accel tcg`**, for the same reason the XP x64 guest is - and
+**Windows 7 is not**. Windows 7 was then installed the same day under
+`whpx,kernel-irqchip=off` and ran the whole way through, first reboot
+included, to a finished desktop. So its value is confirmed the way Vista's now
+is: through a completed install, not a language page.
+
+**The pair disagrees, and that is the point.** Two guests one WDM revision
+apart, built from one recipe on one host in one afternoon, do not share an
+accelerator. Neither answer could have been inherited from the other, and
+neither could have been inherited from the 32-bit guests before them. This is
+the third time task 22.4's "probe per host **and** per guest" rule has paid
+for itself, and the first time it has done so *within* a single pair.
+
+**And there is no third rung to reach for, which is worth knowing before
+anyone goes looking.** The obvious next experiment when
+`whpx,kernel-irqchip=off` wedges a guest is to try WHPX with the in-kernel
+irqchip - the flag is, after all, exactly what the wedge's symptoms point at.
+It cannot be run on this host at all:
+
+```
+-accel whpx: WHPX: Failed to enable nested virtualization, hr=80370302
+-accel whpx: failed to initialize whpx: Invalid argument
+```
+
+The in-kernel irqchip wants nested virtualisation the host does not offer, and
+QEMU refuses to initialise rather than falling back. So `kernel-irqchip=off`
+throughout this project is **not a tuning choice - it is the only WHPX there
+is here**, and when it wedges a guest the alternative is TCG, not another WHPX
+rung. That is also why the 6.x pair runs four vCPUs: TCG is the fallback, and
+multi-threaded TCG is what makes the fallback usable.
+
+Two rules come out of this, and they are worth more than either value.
+
+**Reaching the first prompt is not a probe of the accelerator.** It proves only
+that Setup's WinPE phase runs. It exercises no ACPI bring-up of an installed
+kernel, and that is where Vista dies. An accelerator may not be written down
+until an install has *completed* under it.
+
+**And a pinned instruction pointer is read differently at a prompt and at a
+boot screen.** At the Windows 7 language page, `EIP` was identical across
+samples 36 seconds apart with `HLT=0` - precisely the XP x64 wedge signature -
+and it was not a wedge: a guest sitting at a Setup prompt spins in an input
+wait and looks exactly like one that has died in it, so **the screendump is
+what tells the two apart**. At a boot screen the screendump *cannot*: the
+marquee animates either way, and on Vista the two pinned addresses were the
+code painting it. What separates them there is **disk idle time**
+(`info blockstats`) and whether `EIP` moves at all - twenty-two minutes of zero
+I/O is not a guest that is working. Take both readings before calling either
+way.
+
+One practical consequence, since it saved a reinstall here: **switching between
+WHPX and TCG does not require rebuilding the guest.** Both present the same
+virtual machine (`-machine pc`, ACPI on) and differ only in the execution
+engine, so the HAL chosen at install time stays correct across the switch. The
+install launcher's `-boot d` falls through to the hard disk, which is how
+Setup's own reboots resume - so a wedged install can simply be relaunched under
+the other rung. That is not a licence to mix rungs *within* an install: the
+launcher gate still asserts that a guest's install and run launchers agree,
+because the HAL is fixed at install time.
 
 The procedure:
 
@@ -2080,6 +2141,18 @@ The procedure:
 2. Shut the guest down from the Start menu and snapshot:
    `qemu-img snapshot -c vista-clean-install vm\vista.img`, and the same for
    `win7`.
+
+   **What `vm\vista.img` actually is, since it is not what a clean run of the
+   recipe above would produce.** It was installed on 2026-09-10 across three
+   machines, because that is how the accelerator was found: the first phase
+   under `whpx,kernel-irqchip=off` up to the wedge, the rest under
+   single-vCPU `tcg` after the relaunch resumed it, and it has been booted
+   since under `tcg,thread=multi` with four vCPUs, which it uses (so Setup
+   chose the multiprocessor HAL). It works, and the `vista-clean-install`
+   snapshot is of that. A guest built by the recipe as it now stands would
+   take one rung throughout, and if anything ever turns on this image's
+   provenance the honest move is to reinstall rather than to argue from this
+   paragraph.
 3. **Roadmap task 22.3's two readings, off the snapshot, with the guest never
    booted here** - the pair task 21.5 took for XP x64, and cheap the same way:
    7-Zip lists straight through the qcow2's partitioning and file system in one
@@ -2088,6 +2161,66 @@ The procedure:
    `usbport.sys`, `usbhub.sys`, `usbd.sys` or `usbehci.sys` on disk at all;
    reading 2 is where the system keeps them if it does not, and whether the
    INF's `LayoutFile` route can still reach them from a driver-store install.
+
+   **Vista's answer, read 2026-09-10 off `vista-clean-install`, is yes on
+   both counts.** `7z l vm\vista.img` listed 59,929 entries straight through
+   the qcow2, the MBR and NTFS in one pass. `Windows\System32\drivers` holds
+   `usbport.sys` (226,304 bytes), `usbhub.sys` (196,096), `usbehci.sys`
+   (39,936) and `usbd.sys` (5,888), plus `usbuhci.sys`, `usbohci.sys`,
+   `usbccgp.sys` and `hidusb.sys`. It is a stronger reading than the question
+   asks for, because this guest was installed with **no USB host controller at
+   all** rather than merely an xHCI-only one. And the driver store carries the
+   payload as well as the INFs: three generations of `usbport.inf_*` (RTM
+   `_4d107f9d`, SP1 `_dab84ba6`, SP2 `_2c537348`), each with all six `.sys`
+   files beside `usbport.inf`, `usbport.PNF`, `hccoin.dll` and `hcrstco.dll`.
+
+   **And `usbui.dll` is there too**, which matters because it is the fifth
+   file the install path needs and the one release `1.0.2.0` had to add to the
+   package for the four 9x and NT install sources: `Windows\System32\usbui.dll`,
+   83,456 bytes, version 6.0.6001.18000, with `en-US\usbui.dll.mui` beside it
+   and a WinSxS component backing both. It sits at the SP1 build while
+   `usbport.sys` is SP2 (2009-04-11), because SP2 did not revise it. So the
+   INF's copy of `usbui.dll` should skip here for the same reason the `.sys`
+   copies do.
+
+   **Windows 7's answer, read the same day off `win7-clean-install`, is the
+   same on every count.** `Windows\System32\drivers` holds `usbport.sys`
+   (284,672), `usbhub.sys` (258,560), `usbehci.sys` (42,496) and `usbd.sys`
+   (5,888), plus `usbuhci.sys`, `usbohci.sys`, `usbccgp.sys` and `hidusb.sys`;
+   the driver store stages `usbport.inf_x86_neutral_f9abf85fd00186bd` with
+   `usbport.sys`, `usbhub.sys`, `usbd.sys` and `usbehci.sys` in it; and
+   `Windows\System32\usbui.dll` is there at 80,896 bytes, 6.1.7600.16385, with
+   its WinSxS component. Note the store's naming changes between the two
+   systems - Vista's `<inf>_<hash>` becomes Windows 7's
+   `<inf>_<arch>_<lang>_<hash>` - so anything that matches those directory
+   names by pattern has to know which system it is looking at.
+
+   **And Windows 7 needs a different listing technique from every guest before
+   it, which is a trap rather than a detail.** Windows 7 Setup creates the
+   100 MB System Reserved partition that Vista and the NT 5.x guests do not,
+   so the one-pass trick task 21.5 found - `7z l vm\<stem>.img` straight
+   through the qcow2 - **stops at the MBR** and lists three volumes rather
+   than recursing into the file system, because 7-Zip only descends
+   automatically when there is a single nested stream. It does not error; it
+   just returns 32 lines instead of tens of thousands, which is easy to read
+   as an empty disk. Extract the Windows volume and list that instead:
+
+   ```
+   7z e vm\win7.img 1.ntfs -o<scratch>     # writes the full 32 GB volume
+   7z l <scratch>\1.ntfs                   # 57,664 entries
+   ```
+
+   Converting to a VHD (`qemu-img convert -O vpc -o subformat=dynamic`) and
+   mounting it read-only is tidier and needs no scratch space, but
+   `Mount-DiskImage` requires elevation, and the converted VHD comes out
+   sparse - which Windows refuses to mount until `fsutil sparse setflag <f> 0`
+   clears the flag.
+
+   So on Vista the Code 39 that XP and Windows 2000 suffer **does not arise**,
+   every `COPYFLG_NO_OVERWRITE` copy should skip with no source needed, and
+   **the `LayoutFile` route is not needed on this system at all** - the
+   condition it exists to answer, a file absent from the machine, is not the
+   condition here. Windows 7 is still owed the same reading.
 
    **The prior is strong and it is still not the reading, and the roadmap says
    why in the task line itself.** All four files are in

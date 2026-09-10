@@ -2330,13 +2330,28 @@ where the two hard parts below live and where the unsigned-driver assumption
 is confirmed or refuted. Left beside it, and independent of how that comes
 out, is the `1.1.0.0` cut in 22.7 to 22.9.
 
-**As of 2026-09-10 that guest half is down to two Setup runs.** Both
-generators, their shared body, their launcher-gate rows, both disks and the
-accelerator probe on each guest are done and green; what neither 22.3 nor 22.4
-can be given without the owner is the install itself, which the owner drives
-at the console under the standing decision of 2026-09-03. Both guests run under
-`whpx,kernel-irqchip=off`. `build-and-test.md`, "Windows Vista and Windows 7
-target VMs", is the recipe and the reading.
+**As of 2026-09-10, 22.3 and 22.4 are both closed.** Both guests are
+installed, shut down and snapshotted (`vista-clean-install`,
+`win7-clean-install`), and the static reading is taken off each. **It comes
+back the same on both, and it is the answer that makes the rest of this half
+cheap: everything the install path needs is already on disk.** All four
+Microsoft USB files are in `Windows\System32\drivers`, the driver store stages
+them again with their INF, and `usbui.dll` is there too - so the Code 39 that
+XP and Windows 2000 suffer does not arise on either system, and the INF's
+`LayoutFile` route is not needed on either.
+
+Two things the pair taught that outlive it. **The two guests do not share an
+accelerator** - Vista wants `tcg` because WHPX wedges its Setup after the first
+reboot, Windows 7 runs under `whpx,kernel-irqchip=off` - so task 22.4's
+"probe per host AND per guest" rule paid for itself for the first time
+*within* a single pair. And **an accelerator may not be written down until an
+install has completed under it**: the first probe stopped at the Setup
+language page, recorded WHPX for both, and was wrong about one of them.
+
+What the guest half still owes is the checkpoint itself: install the driver on
+each guest and record what the unsigned-driver prompt actually did.
+`build-and-test.md`, "Windows Vista and Windows 7 target VMs", is the recipe
+and the readings.
 
 Why a phase, and why it is a different one from 21: **this asks nothing of
 the toolchain.** Phase 21 needs a second DDK, a second import library and an
@@ -2434,11 +2449,15 @@ reading may not tick a box whose line names a guest.
       `USBPORT.SYS` pair is covered by 22.1's M1. `scripts\import-gate\` still
       has no 6.0/6.1 baseline behind it and this reading does not add one; it
       answers the question ahead of a guest, which is the point of taking it.
-- [ ] **22.3 - the install path, read statically off a clean guest.** The two
-      cheap readings 21.5 took for XP x64, on each of these. Everything but
-      the installs is in place as of 2026-09-10 (see 22.4), so what this waits
-      on is two Setup runs and two snapshots and nothing else:
-  - [ ] whether an xHCI-only Vista/7 install has `usbport.sys`, `usbhub.sys`,
+- [x] **22.3 - the install path, read statically off a clean guest.** The two
+      cheap readings 21.5 took for XP x64, on each of these. **Both taken
+      2026-09-10 off `vista-clean-install` and `win7-clean-install`, and both
+      come back the same way on both guests: everything the install path needs
+      is already on disk.** So the Code 39 that XP and Windows 2000 suffer
+      does not arise on either system, and the INF's `LayoutFile` route is not
+      needed on either - which settles the question this task was opened to
+      ask:
+  - [x] whether an xHCI-only Vista/7 install has `usbport.sys`, `usbhub.sys`,
         `usbd.sys` or `usbehci.sys` on disk at all. **A strong prior, but not
         this box:** all four are in `Windows\System32\drivers` inside the
         `install.wim` of both systems in both architectures (read 2026-09-09
@@ -2451,19 +2470,60 @@ reading may not tick a box whose line names a guest.
         lived: on the XP lineage those same four files were on the media the
         whole time, in `Driver Cache\i386`, and an xHCI-only install still had
         none of them on disk, which is the Code 39 that `1.0.1.0`'s INF fix
-        answers. The WIM says what an install would apply, not what it has
-  - [ ] where the operating system keeps them if it does not, and whether the
+        answers. The WIM says what an install would apply, not what it has.
+        **VISTA READ 2026-09-10 OFF `vista-clean-install`, AND THE ANSWER IS
+        YES - ALL FOUR ARE ON DISK.** `Windows\System32\drivers` holds
+        `usbport.sys` (226,304), `usbhub.sys` (196,096), `usbehci.sys`
+        (39,936) and `usbd.sys` (5,888), plus `usbuhci.sys`, `usbohci.sys`,
+        `usbccgp.sys` and `hidusb.sys`. And it is a **stronger** reading than
+        the box asks for: this guest was installed with **no USB host
+        controller at all**, not merely an xHCI-only one, so if the files
+        survive that they survive the xHCI case a fortiori. So the Code 39
+        that XP and 2000 suffer **does not arise on Vista**, and every
+        `COPYFLG_NO_OVERWRITE` copy should skip with no source needed.
+        **`usbui.dll` is on disk as well** (`Windows\System32\usbui.dll`,
+        83,456 bytes, 6.0.6001.18000, with its `en-US` MUI and a WinSxS
+        component behind it) - the fifth file the install path needs, and the
+        one release `1.0.2.0` had to add to the package for the four 9x and NT
+        sources. **WINDOWS 7 READ THE SAME DAY AND AGREES ON EVERY COUNT**:
+        `usbport.sys` (284,672), `usbhub.sys` (258,560), `usbehci.sys`
+        (42,496), `usbd.sys` (5,888), the same four companions, and
+        `usbui.dll` at 80,896 / 6.1.7600.16385. **Listing trap**: Windows 7
+        Setup makes the 100 MB System Reserved partition, so `7z l` on the
+        image **stops at the MBR** with three volumes instead of recursing -
+        no error, just 32 lines that read like an empty disk. Extract the
+        volume (`7z e vm\win7.img 1.ntfs`) and list that
+  - [x] where the operating system keeps them if it does not, and whether the
         `LayoutFile` route can still reach them from a driver-store install.
         **This half cannot be read off media at any price**:
         `System32\DriverStore\FileRepository` is made by the install, so a WIM
-        listing cannot be asked the question at all
-- [ ] **22.4 - the guests.** One Vista x86 and one Windows 7 x86 QEMU guest,
+        listing cannot be asked the question at all. **VISTA READ 2026-09-10,
+        and the store carries the whole payload, not just the INFs.** Three
+        generations of `usbport.inf_*` are staged - `_4d107f9d` (RTM,
+        2006-11-02), `_dab84ba6` (SP1, 2008-01-21) and `_2c537348` (SP2,
+        2009-04-11) - and each holds `usbport.sys`, `usbhub.sys`, `usbd.sys`,
+        `usbehci.sys`, `usbuhci.sys` and `usbohci.sys` beside its `.inf`,
+        `.PNF`, `hccoin.dll` and `hcrstco.dll`. So the operating system's own
+        copies are on disk in a place Setup can source from, and **the
+        `LayoutFile` route is not needed here at all** - the question it
+        exists to answer, a file that is not on the machine, does not arise
+        when the file is already at its destination. **Windows 7 agrees**:
+        `usbport.inf_x86_neutral_f9abf85fd00186bd` stages `usbport.sys`,
+        `usbhub.sys`, `usbd.sys` and `usbehci.sys`. Note the store's naming
+        differs between the two - Vista's `<inf>_<hash>` against Windows 7's
+        `<inf>_<arch>_<lang>_<hash>` - so anything matching those directories
+        by pattern must know which system it is reading
+- [x] **22.4 - the guests.** One Vista x86 and one Windows 7 x86 QEMU guest,
       each with a committed generator and a launcher-gate row, the way
       `setup-qemu-winxp.ps1` and `setup-qemu-winxp64.ps1` were done.
       **Probe the accelerator per host AND per guest** - Phase 21 paid for
       that rule twice, in opposite directions, and neither reading
-      generalises. **Everything but the two Setup runs was done 2026-09-10**;
-      the box stays open because a generator is not a guest.
+      generalises. **All of it done 2026-09-10**, both guests installed,
+      shut down and snapshotted. The accelerator rule paid for itself a third
+      time and for the first time *within* a pair: **these two guests do not
+      share one.** What this task does NOT cover, and what the phase's
+      checkpoint still owes, is installing the driver on either guest and
+      recording what the unsigned-driver prompt did.
   - [x] the generators, and they are **one recipe written once**:
         `scripts\qemu-nt6-common.ps1` holds the machine and
         `scripts\setup-qemu-vista.ps1` / `setup-qemu-win7.ps1` are thin
@@ -2478,26 +2538,57 @@ reading may not tick a box whose line names a guest.
         launcher that installs nothing; and the install and run launchers must
         agree on the accelerator, since the HAL is fixed at install time.
         209 checks, 9 monitor ports, none shared
-  - [x] **the accelerator probed on each, 2026-09-10, host `minis-w11p-ykm`:
-        both run under `whpx,kernel-irqchip=off`.** Vista was at its "Install
-        Windows" language page under four minutes from launch, Windows 7 at
-        the same page in about two. TCG was not needed on either and was not
-        tried, so the ordinary 32-bit answer holds here as a result rather
-        than as an inheritance. **And the probe taught a reading rule worth
-        more than the result**: at the Windows 7 language page `EIP` was
-        identical across samples 36 s apart with `HLT=0` - which is exactly
-        the signature that *was* a wedge on the XP x64 guest. It is not one
-        here. A guest spinning in a Setup prompt's input wait looks precisely
-        like a guest that has died in one, and **the screendump is the only
-        thing that tells them apart**
+  - [x] **the accelerator probed on each, 2026-09-10, host `minis-w11p-ykm` -
+        and the first probe was WRONG, which is the useful part.** It ran each
+        guest to its "Install Windows" language page (Vista under four
+        minutes, Windows 7 about two) and recorded WHPX for both. Installing
+        Vista the same day under `whpx,kernel-irqchip=off` ran the whole first
+        phase and then **wedged on the boot after it**: `EIP` confined to two
+        addresses, interrupts enabled at `CPL=0`, half a core burning, and the
+        disk idle for **twenty-two minutes** while the boot marquee kept
+        animating. Relaunched on the same half-installed image under
+        `-accel tcg`, Setup **resumed** and ran to the desktop. So **Vista is
+        `tcg`**, as the XP x64 guest is - and **Windows 7 is not**: installed
+        the same day under `whpx,kernel-irqchip=off` it ran the whole way
+        through, first reboot included, to a finished desktop, so its value is
+        confirmed the same way Vista's is. **The pair disagrees**, which is
+        the point: two guests one WDM revision apart, from one recipe on one
+        host in one afternoon, do not share an accelerator, and neither answer
+        could have been inherited from the other. Three rules came out of it,
+        all now in
+        `build-and-test.md`: reaching the first prompt probes nothing but
+        WinPE, so **an accelerator may not be written down until an install
+        has completed under it**; a pinned `EIP` is read differently at a
+        prompt (screendump) than at a boot screen (disk idle time, since the
+        marquee animates either way); and **plain `-accel whpx` cannot
+        initialise on this host at all** (it wants nested virtualisation), so
+        `kernel-irqchip=off` is the only WHPX there is here and TCG is the
+        only alternative when it wedges
+  - [x] **four vCPUs on both, and `thread=multi` when the accelerator is
+        TCG.** Not a property of these guests but a consequence of the line
+        above: TCG is the fallback, and QEMU emulates x86-on-x86 with
+        multi-threaded TCG, so vCPUs become host threads. Measured on the
+        Vista guest - all four threads busy and roughly even - which also
+        says Setup chose the multiprocessor HAL. `thread=multi` is never
+        handed to WHPX, which refuses the whole `-accel` argument rather than
+        ignoring an option it does not know, and the gate asserts both that
+        and the install/run agreement on `-smp`
   - [x] the disks (`vm\vista.img`, `vm\win7.img`, 32 GB each) and a smoke test
         of the generated install launcher itself, which the gate cannot do:
         `qemu-vista-install.cmd` boots the DVD and reaches "Windows is loading
         files"
-  - [ ] **the two Setup runs.** The owner drives Setup at the console - the
-        standing decision of 2026-09-03, taken for the 32-bit XP guest and
-        unchanged here - then shut down from the Start menu and
-        `qemu-img snapshot -c <stem>-clean-install`
+  - [x] **the two Setup runs, both taken 2026-09-10.** The owner drove Setup
+        at the console - the standing decision of 2026-09-03, taken for the
+        32-bit XP guest and unchanged here - and both guests are shut down and
+        snapshotted, `vista-clean-install` and `win7-clean-install`. Vista is
+        Business (the edition the media's image 1 and tasks 22.1/22.2 name),
+        confirmed on its own logon screen. **`vm\vista.img`'s provenance is
+        not what a clean run of the recipe would produce and the record says
+        so**: its first phase ran under WHPX up to the wedge, the rest under
+        single-vCPU TCG after the relaunch resumed it, and it has been booted
+        since under `tcg,thread=multi` with four vCPUs, which it uses - so
+        Setup chose the multiprocessor HAL. If anything ever turns on that
+        provenance, reinstall rather than argue from this line
   - [x] **a monitor-port collision caught before it was generated, and the
         gate widened so the next one is not.** These two guests were drafted
         onto **55563 and 55564**, which task 21.8 reserved in writing for the
