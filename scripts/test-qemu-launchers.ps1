@@ -42,16 +42,14 @@ $targets = @(
     @{ Name = "WinXP64"; Setup = "setup-qemu-winxp64.ps1"; Launcher = "qemu-winxp64-run.cmd"; LogBase = "winxp64-debugcon" },
     @{ Name = "Vista"; Setup = "setup-qemu-vista.ps1"; Launcher = "qemu-vista-run.cmd"; LogBase = "vista-debugcon" },
     @{ Name = "Win7";  Setup = "setup-qemu-win7.ps1";  Launcher = "qemu-win7-run.cmd";  LogBase = "win7-debugcon" },
-    # The 64-bit half of the same recipe (roadmap task 21.8). These two take an
-    # -Accel on the command line because their generators REFUSE to run without
-    # one - nothing has been measured for either - so they carry an extra
-    # field here that no other row needs. The value below is a placeholder for
-    # generating text to assert against and is NOT a measurement; what the
-    # checks below verify is that whatever was asked for reaches both
-    # launchers identically, which is the property that matters whatever the
-    # measured value turns out to be.
-    @{ Name = "VistaX64"; Setup = "setup-qemu-vista-x64.ps1"; Launcher = "qemu-vista-x64-run.cmd"; LogBase = "vista-x64-debugcon"; Accel = "tcg" },
-    @{ Name = "Win7X64";  Setup = "setup-qemu-win7-x64.ps1";  Launcher = "qemu-win7-x64-run.cmd";  LogBase = "win7-x64-debugcon";  Accel = "whpx,kernel-irqchip=off" }
+    # The 64-bit half of the same recipe (roadmap task 21.8). These two carried
+    # an -Accel field here until 2026-09-10, because their generators refused to
+    # run without one and nothing had been measured for either. Both installs
+    # have since COMPLETED under tcg,thread=multi, so the field is gone on
+    # purpose: passing no -Accel is what makes these rows exercise the
+    # generators' own measured defaults rather than a value this file supplies.
+    @{ Name = "VistaX64"; Setup = "setup-qemu-vista-x64.ps1"; Launcher = "qemu-vista-x64-run.cmd"; LogBase = "vista-x64-debugcon" },
+    @{ Name = "Win7X64";  Setup = "setup-qemu-win7-x64.ps1";  Launcher = "qemu-win7-x64-run.cmd";  LogBase = "win7-x64-debugcon" }
 )
 $work = Join-Path ([System.IO.Path]::GetTempPath()) `
     ("xhci98-qemu-launcher-test-" + [System.IO.Path]::GetRandomFileName())
@@ -267,21 +265,24 @@ try {
             # whole -accel argument rather than ignoring an option it does not
             # know, so a launcher that carried it would not start at all.
             #
-            # **AND ON THE 64-BIT PAIR THERE IS NO MEASURED VALUE TO ASSERT AT
-            # ALL**, which is why the row supplies one rather than this check
-            # naming it. Those two generators refuse to run without an -Accel
-            # (nothing has been installed on either), so what is asserted for
-            # them is the property that holds whatever the measurement turns
-            # out to be: the value ASKED FOR reaches both launchers, and
-            # thread=multi is still derived for tcg and still withheld from
-            # WHPX. Replace the row's value with a measured default here when
-            # a generator gains one.
+            # **AND THE 64-BIT PAIR AGREE, MEASURED 2026-09-10: BOTH WANT TCG.**
+            # Their rows pass no -Accel, so these values assert the generators'
+            # own defaults. Vista x64 bugchecks inside WinPE under WHPX (STOP
+            # 0x0A) before Setup writes a byte; Windows 7 x64 gets through its
+            # entire first phase and 7.27 GB on that rung and wedges at the
+            # first restart, which for most of an afternoon read like a
+            # disagreement with its sibling and was only a slower failure.
+            # Both defaults rest on an install that reached a desktop.
+            #
+            # Agreement across this pair and disagreement across the 32-bit pair
+            # is not an inconsistency to tidy up. It is the rule stated twice:
+            # the accelerator belongs to the guest, never to the family.
             #
             $expectAccel = switch ($name) {
                 "Vista"    { "tcg,thread=multi" }
                 "Win7"     { "whpx,kernel-irqchip=off" }
                 "VistaX64" { "tcg,thread=multi" }
-                "Win7X64"  { "whpx,kernel-irqchip=off" }
+                "Win7X64"  { "tcg,thread=multi" }
             }
             Assert-True ($text.Contains("-accel $expectAccel ^") -and $text.Contains("-machine pc ^")) `
                 "the $name launcher does not carry its accelerator ($expectAccel) with ACPI on."
@@ -448,8 +449,8 @@ try {
     foreach ($nt6 in @(
         @{ Setup = "setup-qemu-vista.ps1";     Run = "qemu-vista-run.cmd";     Missing = "no NX bit" },
         @{ Setup = "setup-qemu-win7.ps1";      Run = "qemu-win7-run.cmd";      Missing = "no NX bit" },
-        @{ Setup = "setup-qemu-vista-x64.ps1"; Run = "qemu-vista-x64-run.cmd"; Missing = "no long mode"; Accel = "tcg" },
-        @{ Setup = "setup-qemu-win7-x64.ps1";  Run = "qemu-win7-x64-run.cmd";  Missing = "no long mode"; Accel = "tcg" }
+        @{ Setup = "setup-qemu-vista-x64.ps1"; Run = "qemu-vista-x64-run.cmd"; Missing = "no long mode" },
+        @{ Setup = "setup-qemu-win7-x64.ps1";  Run = "qemu-win7-x64-run.cmd";  Missing = "no long mode" }
     )) {
         $badNxDir = Join-Path $work ("launchers-badcpu-" + [System.IO.Path]::GetFileNameWithoutExtension($nt6.Setup))
         New-Item -ItemType Directory -Path $badNxDir | Out-Null
@@ -472,35 +473,22 @@ try {
             "$($nt6.Setup) refused -Cpu pentium3 but named the wrong missing feature; it must say '$($nt6.Missing)', or the next reader picks a model that fails the same way."
     }
 
-    # **THE 64-BIT PAIR MUST REFUSE TO RUN WITH NO -Accel AT ALL**, which is
-    # the opposite of every other generator here and is the point. Nothing has
-    # been measured for either guest: XP x64 wants tcg, the 32-bit guests want
-    # WHPX, and the 32-bit Vista and Windows 7 pair disagreed with each other
-    # on 2026-09-10, so there is no value to inherit and a default would be a
-    # measurement this project has not taken. It has already been wrong once
-    # this way - the first Vista probe stopped at Setup's language page, wrote
-    # down WHPX, and that guest wedged on the boot after its first phase - so
-    # the rule is that an accelerator may not be written down until an install
-    # has COMPLETED under it, and the refusal is what holds the line until one
-    # has. Delete this check when a generator gains a measured default, and
-    # not before.
-    foreach ($noAccel in @("setup-qemu-vista-x64.ps1", "setup-qemu-win7-x64.ps1")) {
-        $noAccelDir = Join-Path $work ("launchers-noaccel-" + [System.IO.Path]::GetFileNameWithoutExtension($noAccel))
-        New-Item -ItemType Directory -Path $noAccelDir | Out-Null
-        $refusedAccel = $false
-        try {
-            & (Join-Path $PSScriptRoot $noAccel) -VmDir $vm `
-                -LocalScriptDir $noAccelDir -QemuBinDir $bin | Out-Null
-        } catch {
-            $refusedAccel = $true
-        }
-        Assert-True $refusedAccel `
-            "$noAccel wrote launchers with no -Accel given; no accelerator has been measured for a 64-bit Vista or Windows 7 guest, so it would be inheriting a value from a guest that is not this one."
-        # @() around it: an empty directory yields $null, and Set-StrictMode
-        # 2.0 refuses .Count on that.
-        Assert-True (@(Get-ChildItem -LiteralPath $noAccelDir -File).Count -eq 0) `
-            "$noAccel wrote a launcher before refusing the missing -Accel."
-    }
+    # THE 64-BIT PAIR'S refuses-without-`-Accel` CHECK LIVED HERE AND WAS
+    # DELETED ON 2026-09-10, WHICH IS WHAT IT WAS FOR. It held the line that an
+    # accelerator may not be written down until an install has COMPLETED under
+    # it, for as long as nothing had been measured for either guest. Both
+    # installs have now completed under tcg,thread=multi, both generators carry
+    # that as a measured default, and a check asserting they have none would
+    # assert the opposite of the truth.
+    #
+    # What replaces it is not nothing: the two rows at the top of this file now
+    # pass NO -Accel, so every accelerator assertion above reads the
+    # generators' own defaults rather than a value supplied here. A default that
+    # drifted from the measurement would fail there.
+    #
+    # If a fifth guest is ever added with nothing measured for it, bring the
+    # refusal back for THAT generator rather than widening one of these checks:
+    # the point was never the pair, it was the unmeasured value.
 
     # The fallback rung changes the HAL Setup should select. Keep the generated
     # command line and the post-generation verification guidance in agreement.

@@ -2203,23 +2203,48 @@ are static readings and no other task's box may be ticked on one.
         **Monitor ports 55563 and 55564 are now claimed rather than reserved**,
         so the gate's assertion that nothing takes them is gone, replaced by
         one that these two still do; the ordinary no-two-guests-share-a-port
-        scan covers them like any other guest
-  - [ ] **the accelerator probed on each, and the result recorded whichever
-        way it goes.** Do not copy XP x64's `-accel tcg` across as settled:
-        that reading is the reverse of every 32-bit guest here, and
-        `lessons.md`'s "The accelerator is the discriminating variable in both
-        directions" says plainly that neither reading generalises. A 64-bit
-        Vista or Windows 7 guest is a fourth workload and has been probed on
-        neither host - and the 32-bit pair then disagreed with **each other**
-        on 2026-09-10, which is the strongest form the rule has taken.
-        **Neither generator carries a default and both refuse to run without
-        an explicit `-Accel`**, which is the only way to hold the line that an
-        accelerator may not be written down until an install has COMPLETED
-        under it. The launchers as generated carry
-        `whpx,kernel-irqchip=off` as a probe - the fast rung, and switching to
-        TCG costs no reinstall. Give the generator a measured default in a
-        commit that says what was observed, and delete the gate's
-        refuses-without-`-Accel` check then, not before
+        scan covers them like any other guest. **Both guests were then
+        installed on 2026-09-10** by the owner at the console, each with one
+        snapshot of the clean install - `vista-x64-clean-install` and
+        `win7-x64-clean-install`, `qemu-img check` clean on both
+  - [x] **the accelerator probed on each, and the result recorded whichever
+        way it goes.** Done 2026-09-10: **both guests want `tcg,thread=multi`**,
+        each confirmed by an install that COMPLETED under it and was shut down
+        from the Start menu. Both generators now carry that as a measured
+        default, the launcher gate's refuses-without-`-Accel` check was deleted
+        in the same change (294 checks to 290), and the gate's two 64-bit rows
+        now pass no `-Accel` so its assertions read those defaults.
+
+        **The two failed differently under `whpx,kernel-irqchip=off`, and the
+        difference is what this box was for.** Vista x64 bugchecks inside WinPE
+        before Setup writes a byte - STOP `0x0000000A`, address `0x10` at IRQL
+        `0xC` on a read, a near-null dereference at device IRQL, which is the
+        surface `kernel-irqchip=off` touches. Windows 7 x64 clears WinPE, runs
+        its **entire first phase**, writes 7.27 GB, and only then wedges at the
+        first restart: screen unchanged for eight minutes, `ide0-hd0` idle
+        climbing monotonically past nine, RIP revisiting the same three
+        addresses with `HLT=0`. Screens at `out\task-21-8\`.
+
+        **For most of an afternoon that second reading looked like a
+        disagreement with the first, and it was only a slower failure.** Which
+        is precisely the rule this project paid for on 2026-09-10 and nearly
+        paid for twice: an accelerator may not be written down until an install
+        has COMPLETED under it. A prompt, a progress bar and a whole finished
+        phase all prove only that the guest has not failed yet.
+
+        **A wedge does not always leave a resumable image, and that qualifies a
+        rule this repository had stated flatly.** "Switching to TCG costs no
+        reinstall" held for `vm\vista.img`, which wedged on a boot *after* a
+        completed phase and so still had a bootable disk. Windows 7 x64 wedged
+        *at* the transition, before Setup laid its boot files down; the TCG
+        relaunch met `BOOTMGR is missing` and Setup had to run again from the
+        DVD. The rule needs its qualifier: no reinstall **provided the guest
+        already has a bootable disk**.
+
+        Worth noting and not worth promoting: the 64-bit pair agree where the
+        32-bit pair disagreed, and with XP x64 also on `tcg` every 64-bit guest
+        here now wants TCG. That is an observation about four guests, not a
+        property of bitness
   - [ ] the code-signing gate above: which route loads an unsigned driver on
         each guest, what it costs the user at every boot, and whether it
         survives a reboot at all.

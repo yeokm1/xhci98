@@ -34,27 +34,31 @@ end. The architecture is the whole point of this pair (a second binary, from a
 second toolchain, in a second package), so it is worth a visible suffix rather
 than a digit appended to a stem.
 
-THE ACCELERATOR IS NOT SET HERE AND THIS GENERATOR REFUSES TO RUN WITHOUT ONE.
-Every other generator in this directory carries a measured default; this one
-cannot, because nothing has been measured. A 64-bit Vista guest is a fourth
-workload - XP x64 wants tcg, the 32-bit guests want WHPX, and the 32-bit Vista
-and Windows 7 pair disagreed with EACH OTHER on 2026-09-10 - and none of those
-readings generalises here.
+THE ACCELERATOR IS MEASURED AND IT IS TCG, 2026-09-10. This generator used to
+refuse to run without an explicit -Accel, because nothing had been measured for
+a 64-bit Vista guest on any host. An install has now COMPLETED under
+tcg,thread=multi - Setup driven to the desktop, shut down from the Start menu,
+snapshot vista-x64-clean-install - so the refusal has served its purpose and the
+default below is a reading rather than an inheritance.
 
-The rule that refusal enforces was paid for on 2026-09-10 and it is the one
-most likely to be shortcut: AN ACCELERATOR MAY NOT BE WRITTEN DOWN UNTIL AN
-INSTALL HAS COMPLETED UNDER IT. The first probe of the 32-bit Vista guest
-stopped at Setup's language page, wrote down whpx,kernel-irqchip=off, and was
-wrong - that guest ran its entire first phase and then wedged on the boot after
-it, EIP pinned to two addresses with the disk idle for twenty-two minutes while
-the boot marquee kept animating. Reaching a prompt proves only that WinPE runs.
+WHAT WHPX DOES HERE, because a negative measured this precisely is worth
+keeping: under whpx,kernel-irqchip=off this guest BUGCHECKS INSIDE WinPE, before
+Setup writes a single byte. STOP 0x0000000A, IRQL_NOT_LESS_OR_EQUAL, referenced
+address 0x10 at IRQL 0xC on a read. A near-null dereference at device IRQL is an
+interrupt-delivery fault, which is the surface kernel-irqchip=off touches, and
+on this host that rung is the only WHPX there is - plain -accel whpx cannot
+initialise at all ("Failed to enable nested virtualization, hr=80370302"), so
+the alternative to it is TCG rather than another WHPX rung. The screen is kept
+at out\task-21-8\vista-x64-whpx-stop-0x0A.png.
 
-So: pass -Accel for the probe, install, and when an install COMPLETES, give
-this file a measured default in a commit that says what was observed. The
-candidates are "tcg" and "whpx,kernel-irqchip=off", and plain "whpx" is not one
-of them - it cannot initialise on this host at all ("Failed to enable nested
-virtualization, hr=80370302"), so kernel-irqchip=off is the only WHPX there is
-here and the alternative to it is TCG rather than another WHPX rung.
+THE RULE THAT THE REFUSAL ENFORCED STILL STANDS FOR EVERY FUTURE GUEST: AN
+ACCELERATOR MAY NOT BE WRITTEN DOWN UNTIL AN INSTALL HAS COMPLETED UNDER IT.
+The first probe of the 32-bit Vista guest stopped at Setup's language page,
+wrote down whpx,kernel-irqchip=off, and was wrong - that guest ran its entire
+first phase and then wedged on the boot after it. Reaching a prompt proves only
+that WinPE runs. It very nearly cost this pair the same mistake a second time:
+the 64-bit Windows 7 guest cleared WinPE under WHPX and looked like a
+disagreement with this one, then wedged at its first restart.
 
 .PARAMETER VistaX64Iso
 The Windows Vista SP2 x64 DVD image - the same media task 21.7 read its six
@@ -65,7 +69,7 @@ file that names nothing on any other host. The generated launchers carry the
 "edit this file or pass -VistaX64Iso" guard.
 
 .PARAMETER Accel
-Mandatory in effect: see above. There is no measured value for this guest.
+Defaults to the measured value, tcg. See above for what WHPX does instead.
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-vista-x64.ps1 -VistaX64Iso "D:\isos\en_windows_vista_sp2_x64_dvd_342267.iso" -Accel tcg -CreateDisk
@@ -80,10 +84,9 @@ param(
     [string]$QemuBinDir = "",
     [string]$XhciDevice = "qemu-xhci,p3=0",
     [string]$Cpu = "qemu64",
-    # No default, deliberately. See the .DESCRIPTION: nothing has been measured
-    # for this guest, and this project has already been wrong once about an
-    # accelerator it wrote down from a Setup prompt.
-    [string]$Accel = "",
+    # Measured 2026-09-10: an install COMPLETED under this rung. WHPX bugchecks
+    # this guest inside WinPE (STOP 0x0A) - see the .DESCRIPTION.
+    [string]$Accel = "tcg",
     [int]$MonitorPort = 55563,
     # 2048 for the install. Raising a 64-bit guest above 4 GB is roadmap task
     # 21.8's own experiment with its own record, taken AFTER the install; the
@@ -96,24 +99,6 @@ param(
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "qemu-nt6-common.ps1")
 
-if ([string]::IsNullOrWhiteSpace($Accel)) {
-    throw @"
--Accel is required for this guest: no accelerator has been measured for a
-64-bit Vista guest on any host, and this project has already written one down
-from a Setup prompt and been wrong (2026-09-10, the 32-bit Vista guest, which
-ran its whole first phase under whpx,kernel-irqchip=off and then wedged on the
-boot after it).
-
-Pass one of:
-  -Accel tcg
-  -Accel whpx,kernel-irqchip=off      (plain 'whpx' cannot initialise here)
-
-then INSTALL under it. An accelerator may not be written into this file as a
-default until an install has COMPLETED under it - reaching Setup's language
-page proves only that WinPE runs.
-"@
-}
-
 New-Nt6QemuGuest `
     -GuestName "Windows Vista Business SP2 x64" `
     -Stem "vista-x64" `
@@ -123,16 +108,19 @@ New-Nt6QemuGuest `
     -Arch "amd64" `
     -Accel $Accel `
     -AccelNote @(
-        "NOT MEASURED. This value was passed on the command line for a probe;",
-        "no 64-bit Vista guest has been installed on any host in this project.",
-        "XP x64 wants tcg, the 32-bit guests want WHPX, and the 32-bit Vista",
-        "and Windows 7 pair disagreed with EACH OTHER on 2026-09-10 - so none",
-        "of those readings reaches this guest. An accelerator may not be",
-        "written down as this guest's until an install has COMPLETED under it:",
-        "the 32-bit Vista probe stopped at Setup's language page, recorded",
-        "whpx,kernel-irqchip=off, and was wrong. When an install completes,",
-        "give setup-qemu-vista-x64.ps1 a measured default in a commit that says",
-        "what was observed, and regenerate."
+        "MEASURED 2026-09-10, by an install that COMPLETED under it: Setup",
+        "driven to the desktop and shut down from the Start menu, snapshot",
+        "vista-x64-clean-install.",
+        "The other rung was tried first and is a clean negative. Under",
+        "whpx,kernel-irqchip=off this guest bugchecks INSIDE WinPE, before",
+        "Setup writes a byte: STOP 0x0000000A, IRQL_NOT_LESS_OR_EQUAL,",
+        "address 0x10 at IRQL 0xC on a read - a near-null dereference at",
+        "device IRQL, which is the surface kernel-irqchip=off touches. That",
+        "rung is the only WHPX on this host; plain 'whpx' cannot initialise",
+        "at all, so the alternative to it is TCG and not another WHPX rung.",
+        "The 64-bit Windows 7 guest wants TCG too, but do not read that as a",
+        "rule: it failed DIFFERENTLY, clearing WinPE and wedging at its first",
+        "restart, and the 32-bit pair disagreed with each other outright."
     ) `
     -MonitorPort $MonitorPort `
     -Iso $VistaX64Iso `

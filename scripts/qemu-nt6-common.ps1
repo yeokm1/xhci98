@@ -136,17 +136,32 @@ WHAT DIFFERS, AND WHY:
            wants tcg and Windows 7 installed clean under WHPX. Do not "tidy"
            the two values into agreement.
 
-           **AND THE 64-BIT PAIR HAVE NO MEASURED VALUE AT ALL YET**, so
-           setup-qemu-vista-x64.ps1 and setup-qemu-win7-x64.ps1 REFUSE to run
-           without an explicit -Accel rather than inherit one. They are a
-           fourth workload, probed on neither host, and the rule this project
-           paid for on 2026-09-10 is that AN ACCELERATOR MAY NOT BE WRITTEN
-           DOWN UNTIL AN INSTALL HAS COMPLETED UNDER IT: the first Vista probe
-           stopped at Setup's language page, wrote down WHPX, and was wrong -
-           the guest ran its whole first phase and then wedged on the boot
-           after it. Reaching a prompt proves only that WinPE runs. When an
-           install completes, give the caller its measured default in a commit
-           that says what was observed.
+           **AND THE 64-BIT PAIR AGREE WITH EACH OTHER, MEASURED 2026-09-10:
+           BOTH WANT TCG.** setup-qemu-vista-x64.ps1 and setup-qemu-win7-x64.ps1
+           carried no default at all until then and refused to run without an
+           explicit -Accel; both installs have since COMPLETED under
+           tcg,thread=multi and both generators carry that. Agreement here and
+           disagreement one bitness away is not a contradiction, it is the rule:
+           the value belongs to the guest, not to the family.
+
+           **THE TWO FAILED DIFFERENTLY UNDER WHPX AND THAT IS THE PART WORTH
+           KEEPING.** Vista x64 bugchecks inside WinPE before Setup writes a
+           byte (STOP 0x0A, address 0x10 at IRQL 0xC). Windows 7 x64 clears
+           WinPE, runs its ENTIRE first phase, writes 7.27 GB, and only then
+           wedges at the first restart. For most of an afternoon that second
+           reading looked like a disagreement with the first. It was a slower
+           failure, which is exactly what the rule this project paid for on
+           2026-09-10 exists to catch: AN ACCELERATOR MAY NOT BE WRITTEN DOWN
+           UNTIL AN INSTALL HAS COMPLETED UNDER IT. Reaching a prompt, or a
+           progress bar, or a whole finished phase, proves only that the guest
+           has not failed YET.
+
+           **AND A WEDGE DOES NOT ALWAYS LEAVE A RESUMABLE IMAGE.** "Switching
+           to TCG costs no reinstall" holds where the guest already has a
+           bootable disk - vm\vista.img wedged on a boot after a completed
+           phase and resumed fine. Windows 7 x64 wedged AT the transition,
+           before its boot files were written, and the TCG relaunch met
+           "BOOTMGR is missing": that install had to be run again from the DVD.
 
            **AND ON THIS HOST THE WHPX
            OPTION SPACE IS ONE RUNG WIDE**: plain `-accel whpx` refuses to
@@ -654,8 +669,9 @@ function New-Nt6QemuGuest {
     Write-Host "  1. Run scripts\local\qemu-$Stem-install.cmd and install $GuestName by hand (the owner drives Setup)."
     Write-Host "  2. Shut the guest down from the Start menu; snapshot: qemu-img snapshot -c $Stem-clean-install vm\$Stem.img"
     if ($isAmd64) {
-        Write-Host "     THE ACCELERATOR ABOVE IS A PROBE, NOT A MEASUREMENT, until this install COMPLETES under it."
-        Write-Host "     Reaching Setup's language page proves only that WinPE runs (2026-09-10, the Vista x86 guest)."
+        Write-Host "     The accelerator above is MEASURED (2026-09-10): both 64-bit guests installed under tcg."
+        Write-Host "     Under WHPX Vista x64 bugchecks in WinPE and Windows 7 x64 wedges at its first restart -"
+        Write-Host "     after a whole finished phase, which is why only a COMPLETED install may be recorded."
         Write-Host "  3. SETTLE THE CODE-SIGNING GATE BEFORE ANYTHING ELSE (roadmap task 21.8). This system enforces"
         Write-Host "     kernel-mode code signing, so an unsigned xhci98.sys does not load at all. Establish which of"
         Write-Host "     F8 (Disable Driver Signature Enforcement, every boot) and bcdedit -set TESTSIGNING ON (with the"

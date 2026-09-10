@@ -4235,6 +4235,94 @@ The general rule, which is the actual lesson: **probe the accelerator per
 host AND per guest.** Two accelerators, two guests, two opposite answers, all
 four on one machine.
 
+## The 64-bit Vista and Windows 7 guests: a slow failure reads as a disagreement, and a wedge does not always leave a resumable image
+
+### Environment and operation
+
+Host `minis-w11p-ykm`, QEMU 11.0.92. Installing roadmap task 21.8's two
+guests, Vista Business SP2 x64 and Windows 7 Professional SP1 x64, from the
+media task 21.7 read its measurements out of, onto fresh 32 GB qcow2 images.
+`-machine pc`, `-cpu qemu64`, `-smp 4`, `-m 2048`, `-boot d`, no USB
+controller. Both launchers were generated carrying `whpx,kernel-irqchip=off`
+as a probe, on the reasoning that it is the fast rung and that switching to
+TCG costs no reinstall. Both parts of that reasoning turned out to need
+qualifying.
+
+### What was read
+
+1. Vista x64 under `whpx,kernel-irqchip=off` bugchecks inside WinPE, before
+   Setup writes a single byte. STOP `0x0000000A`, `IRQL_NOT_LESS_OR_EQUAL`,
+   referenced address `0x10`, IRQL `0xC`, read, at `fffff800'0a4cb489`. The
+   image was still 0.2 MB afterwards, and both `ide0-hd0` and `ide1-cd0` had
+   been idle about 88 seconds. `VM status` stayed `running`: a bugcheck screen
+   is a live CPU, not a stopped one.
+2. Vista x64 under `tcg,thread=multi`, the same command line with that one
+   flag changed: WinPE comes up, Setup runs to the desktop, and the guest
+   shuts down clean at 8.45 GiB.
+3. Windows 7 x64 under `whpx,kernel-irqchip=off` clears WinPE, reaches
+   "Expanding Windows files", ticks Copying, Expanding and Installing
+   features, and writes 7.27 GB. Then it stops. Screen byte-identical across
+   eight minutes; `ide0-hd0` idle time climbing monotonically 89, 154, 218,
+   314, 388, 461, 537 seconds; `RIP` moving but revisiting `d2930c3`,
+   `d2935a0` and `d7fdf75` with `HLT=0` throughout.
+4. Windows 7 x64 under `tcg,thread=multi`: installs to the desktop.
+
+### What this proves, and what it does not
+
+Proven, and it is the useful half: **a failure that arrives late reads as a
+different answer.** Between readings 1 and 3 the pair looked like the 32-bit
+Vista and Windows 7 pair, which genuinely does disagree. It was not a
+disagreement. Windows 7 x64 simply failed more slowly, and the only thing that
+distinguished the two cases was refusing to record an accelerator until an
+install had finished. This project had already paid for that rule once, on the
+first 32-bit Vista probe, which stopped at Setup's language page and wrote
+down WHPX; this is the second time the same discipline was what stood between
+a probe and a wrong default.
+
+Proven, and it corrects something this repository had stated flatly:
+**"switching to TCG costs no reinstall" holds only where the guest already has
+a bootable disk.** `vm\vista.img` wedged on a boot after a completed phase, so
+its disk was bootable and the TCG relaunch resumed on the same image. Windows
+7 x64 wedged at the transition, before Setup laid its boot files down. The TCG
+relaunch fell through "Press any key to boot from CD or DVD" to the hard disk
+and got `BOOTMGR is missing`; that install had to be run again from the DVD.
+The cheap rescue is still usually right, but it is worth ten seconds to ask
+whether the guest ever became bootable.
+
+Also worth having: on a boot or progress screen the discriminator is not the
+CPU. `RIP` identical with `HLT=1` is an idle loop and means nothing is wrong;
+`RIP` moving among a handful of addresses with `HLT=0` and no disk I/O at all
+is a spin. The counter that settled reading 3 was `ide1-cd0`'s idle time going
+*backwards* between two samples earlier in the same install, which is positive
+proof of progress in a way no register sample is.
+
+Not proven: the mechanism, in either direction. Nothing here identifies what
+WHPX does differently on these kernels. The Vista x64 bugcheck is suggestive -
+a near-null read at device IRQL is an interrupt-delivery fault, and
+`kernel-irqchip=off` is exactly the interrupt path - but the address was not
+resolved to a symbol and the Windows 7 x64 spin was not resolved at all. Note
+also that `kernel-irqchip=off` is not a tuning choice on this host: plain
+`-accel whpx` cannot initialise ("Failed to enable nested virtualization,
+hr=80370302"), so it is the only WHPX available and the alternative to it is
+TCG rather than another WHPX rung.
+
+### Consequences
+
+`scripts\setup-qemu-vista-x64.ps1` and `scripts\setup-qemu-win7-x64.ps1` both
+default to `-Accel tcg`, each carrying its own measurement rather than the
+shared conclusion. Both generators previously refused to run without an
+explicit `-Accel`, and the launcher gate asserted that refusal; that check was
+deleted in the same change that added the defaults, which is what it existed
+for, and the gate went from 294 checks to 290. The gate's two 64-bit rows now
+pass no `-Accel`, so its accelerator assertions read the generators' defaults.
+
+One thing not to draw from this. The 64-bit pair agree where the 32-bit pair
+disagreed, and with XP x64 also on `tcg` every 64-bit guest in this project
+wants TCG. That is an observation about four guests, not a property of
+bitness, and the rule from the entry above is unchanged: probe the accelerator
+per host and per guest, and let the value belong to the guest rather than to
+the family.
+
 ## The Full-Speed bugcheck localized: a missing guard on the branch nobody takes
 
 ### Environment and operation

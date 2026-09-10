@@ -5,8 +5,31 @@ Create the Windows 7 Professional SP1 x64 guest disk image and QEMU launchers (r
 .DESCRIPTION
 The second of task 21.8's two guests, and the sibling of
 scripts\setup-qemu-vista-x64.ps1. Read that file's .DESCRIPTION first: the
-reason this pair exists, the naming, and the refusal to carry an unmeasured
-accelerator are all the same here and are not repeated.
+reason this pair exists and the naming are the same here and are not repeated.
+
+THE ACCELERATOR IS MEASURED AND IT IS TCG, 2026-09-10, by an install that
+completed under tcg,thread=multi (snapshot win7-x64-clean-install). Both
+generators used to refuse to run without an explicit -Accel; both now carry the
+measurement instead.
+
+THIS GUEST IS THE REASON THE "COMPLETED INSTALL" RULE IS WORTH ITS COST, because
+it very nearly bought the same wrong answer twice. Under whpx,kernel-irqchip=off
+it cleared WinPE, ran its ENTIRE first phase and wrote 7.27 GB - which read at
+the time like a disagreement with its sibling, since Vista x64 bugchecks in
+WinPE on that rung. It then WEDGED at the first restart: screen unchanged for
+eight minutes, ide0-hd0 idle climbing monotonically past nine, RIP revisiting
+the same three addresses with HLT=0. Anything short of a completed install would
+have recorded WHPX here. Screen at
+out\task-21-8\win7-x64-whpx-wedge-at-first-restart.png.
+
+AND IT COST A REINSTALL, WHICH IS NOT WHAT THIS PROJECT HAD WRITTEN DOWN. The
+rule was "switching to TCG costs no reinstall - same virtual machine, only the
+execution engine differs, so the install-time HAL stays correct". That held for
+vm\vista.img, which wedged on a boot AFTER a completed phase and so still had a
+bootable disk. This guest wedged AT the transition, before Setup laid its boot
+files down, and the TCG relaunch got "BOOTMGR is missing" - the half-install was
+unrecoverable and Setup had to be run again from the DVD. The rule needs its
+qualifier: no reinstall PROVIDED THE GUEST ALREADY HAS A BOOTABLE DISK.
 
 WHAT IS DIFFERENT ABOUT THIS GUEST RATHER THAN ITS SIBLING, and it is one thing
 that matters and one that does not.
@@ -38,10 +61,10 @@ key; the owner drives Setup at the console, the standing decision of
 2026-09-03.
 
 .PARAMETER Accel
-Mandatory in effect. There is no measured value for this guest, and the fact
-that the 32-bit Windows 7 guest installed clean under whpx,kernel-irqchip=off
-on 2026-09-10 is NOT a reading of this one - its own sibling, one WDM revision
-away on the same host in the same afternoon, needed the other rung.
+Defaults to the measured value, tcg. The 32-bit Windows 7 guest installs clean
+under whpx,kernel-irqchip=off and that was never a reading of this one: this
+guest gets further under WHPX than its 64-bit sibling does and still does not
+finish. See above.
 
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win7-x64.ps1 -Win7X64Iso "D:\isos\en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso" -Accel whpx,kernel-irqchip=off -CreateDisk
@@ -56,10 +79,11 @@ param(
     [string]$QemuBinDir = "",
     [string]$XhciDevice = "qemu-xhci,p3=0",
     [string]$Cpu = "qemu64",
-    # No default, deliberately - and on this guest the tempting wrong answer is
-    # not XP x64's tcg but its OWN 32-bit sibling's whpx,kernel-irqchip=off.
-    # That pair disagreed with each other; a bitness away is at least as far.
-    [string]$Accel = "",
+    # Measured 2026-09-10: an install COMPLETED under this rung. WHPX runs this
+    # guest's whole first phase and then wedges at the restart - see the
+    # .DESCRIPTION, which is the clearest case this project has for why a
+    # partial install may not be read as an accelerator measurement.
+    [string]$Accel = "tcg",
     [int]$MonitorPort = 55564,
     [int]$MemoryMb = 2048,
     [int]$Smp = 4,
@@ -68,24 +92,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "qemu-nt6-common.ps1")
-
-if ([string]::IsNullOrWhiteSpace($Accel)) {
-    throw @"
--Accel is required for this guest: no accelerator has been measured for a
-64-bit Windows 7 guest on any host. The 32-bit Windows 7 guest installed clean
-under whpx,kernel-irqchip=off on 2026-09-10, and that is NOT a reading of this
-one - its own 32-bit sibling, one WDM revision away on the same host in the
-same afternoon, needed tcg instead.
-
-Pass one of:
-  -Accel whpx,kernel-irqchip=off      (plain 'whpx' cannot initialise here)
-  -Accel tcg
-
-then INSTALL under it. An accelerator may not be written into this file as a
-default until an install has COMPLETED under it - reaching Setup's language
-page proves only that WinPE runs.
-"@
-}
 
 New-Nt6QemuGuest `
     -GuestName "Windows 7 Professional SP1 x64" `
@@ -96,17 +102,18 @@ New-Nt6QemuGuest `
     -Arch "amd64" `
     -Accel $Accel `
     -AccelNote @(
-        "NOT MEASURED. This value was passed on the command line for a probe;",
-        "no 64-bit Windows 7 guest has been installed on any host in this",
-        "project. The 32-bit Windows 7 guest took whpx,kernel-irqchip=off and",
-        "installed clean under it on 2026-09-10 - and that is not a reading of",
-        "this guest, because that guest's own sibling, one WDM revision away on",
-        "the same host in the same afternoon, wedged under the same rung and",
-        "needed tcg. An accelerator may not be written down as this guest's",
-        "until an install has COMPLETED under it; reaching Setup's language",
-        "page proves only that WinPE runs. When one completes, give",
-        "setup-qemu-win7-x64.ps1 a measured default in a commit that says what",
-        "was observed, and regenerate."
+        "MEASURED 2026-09-10, by an install that COMPLETED under it: Setup",
+        "driven to the desktop and shut down, snapshot win7-x64-clean-install.",
+        "THE NEGATIVE HERE IS THE INSTRUCTIVE ONE. Under",
+        "whpx,kernel-irqchip=off this guest clears WinPE, runs its ENTIRE",
+        "first phase and writes 7.27 GB - and then wedges at the first",
+        "restart: screen unchanged for eight minutes, disk idle climbing past",
+        "nine, RIP revisiting three addresses with HLT=0. Any test short of a",
+        "completed install would have written WHPX down here.",
+        "It also cost a REINSTALL. 'Switching to TCG costs no reinstall' holds",
+        "only where the guest already has a bootable disk; this one wedged",
+        "before Setup laid its boot files down, so the TCG relaunch met",
+        "'BOOTMGR is missing' and Setup had to run again from the DVD."
     ) `
     -MonitorPort $MonitorPort `
     -Iso $Win7X64Iso `

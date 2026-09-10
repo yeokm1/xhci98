@@ -2248,11 +2248,11 @@ The procedure:
 
 ### Vista x64 and Windows 7 x64 target VMs (roadmap task 21.8)
 
-Built but not yet installed, as of 2026-09-10. Added to the roadmap on
-2026-09-09 on the owner's instruction, after task 21.7 read both systems'
-`usbport.sys` statically and found nothing in the interface against them. The
-generators, launchers and disk images exist; the two Setup runs are the owner's
-and have not been taken.
+Both installed 2026-09-10. Added to the roadmap on 2026-09-09 on the owner's
+instruction, after task 21.7 read both systems' `usbport.sys` statically and
+found nothing in the interface against them. The generators, launchers and disk
+images exist, both Setup runs have been taken by the owner at the console, and
+each guest carries one snapshot of its clean install.
 
 | | Vista Business SP2 x64 | Windows 7 Professional SP1 x64 |
 |---|---|---|
@@ -2260,7 +2260,8 @@ and have not been taken.
 | Generator | `scripts\setup-qemu-vista-x64.ps1` | `scripts\setup-qemu-win7-x64.ps1` |
 | Image | `vm\vista-x64.img`, 32 GB | `vm\win7-x64.img`, 32 GB |
 | Monitor | 55563 | 55564 |
-| Accelerator | **unmeasured** | **unmeasured** |
+| Accelerator | `tcg,thread=multi` | `tcg,thread=multi` |
+| Snapshot | `vista-x64-clean-install` | `win7-x64-clean-install` |
 | vCPUs / RAM | 4 / 2048 MB | 4 / 2048 MB |
 | CPU model | `qemu64` | `qemu64` |
 
@@ -2285,20 +2286,49 @@ recipe. They take the 32-bit stems with an explicit `-x64`. And **monitor ports
 assertion that nothing took them is gone, replaced by one that these two still
 do.
 
-**The accelerator is not set in either generator, and both refuse to run
-without an explicit `-Accel`.** Every other generator here carries a measured
-default; these cannot, because nothing has been measured. XP x64 wants `tcg`,
-the 32-bit guests want WHPX, and on 2026-09-10 the 32-bit Vista and Windows 7
-pair disagreed with *each other* - so there is no value to inherit and a
-default would be a measurement this project has not taken. The launchers as
-generated on 2026-09-10 carry `whpx,kernel-irqchip=off` as a **probe**, chosen
-because it is the fast rung and because switching to TCG costs no reinstall
-(same virtual machine, only the execution engine differs). When an install
-COMPLETES, give the generator a measured default in a commit that says what was
-observed. Until then the rule stands: an accelerator may not be written down
-until an install has completed under it - the first 32-bit Vista probe stopped
-at Setup's language page, recorded WHPX, and that guest wedged on the boot after
-its whole first phase.
+**The accelerator is measured on both and both want TCG**, 2026-09-10. Each
+generator carried no default and refused to run without an explicit `-Accel`
+until an install completed under one; both now carry `tcg`, and the launcher
+gate's refuses-without-`-Accel` check was deleted in the same change, which is
+what it was there for. The two rows in that gate pass no `-Accel` at all now, so
+its accelerator assertions read the generators' own defaults.
+
+**The two failed differently under WHPX, and the difference is the lesson.**
+
+| guest | under `whpx,kernel-irqchip=off` | under `tcg,thread=multi` |
+|---|---|---|
+| Vista x64 | STOP `0x0000000A` inside WinPE, address `0x10` at IRQL `0xC` on a read, **zero bytes written** | installs to the desktop |
+| Win7 x64 | clears WinPE, runs its **entire first phase**, writes 7.27 GB, then **wedges at the first restart** | installs to the desktop |
+
+Screens are kept at `out\task-21-8\`. A near-null dereference at device IRQL is
+an interrupt-delivery fault, which is the surface `kernel-irqchip=off` touches,
+and that rung is the only WHPX on this host - plain `-accel whpx` cannot
+initialise at all, so the alternative to it is TCG rather than another WHPX rung.
+
+For most of an afternoon the Windows 7 x64 reading looked like a *disagreement*
+with its sibling, because it got so much further. It was a slower failure. That
+is exactly what the rule exists to catch: **an accelerator may not be written
+down until an install has COMPLETED under it.** Reaching a prompt, a progress
+bar, or a whole finished phase proves only that the guest has not failed yet.
+The rule was paid for by the first 32-bit Vista probe, which stopped at Setup's
+language page, recorded WHPX, and was wrong; this pair nearly bought the same
+mistake a second time.
+
+**And a wedge does not always leave a resumable image.** "Switching to TCG costs
+no reinstall - same virtual machine, only the execution engine differs, so the
+install-time HAL stays correct" holds **only where the guest already has a
+bootable disk**. `vm\vista.img` wedged on a boot *after* a completed phase and
+resumed under TCG with no reinstall. Windows 7 x64 wedged *at* the transition,
+before Setup laid its boot files down; the TCG relaunch met `BOOTMGR is missing`
+and Setup had to be run again from the DVD. Check for a bootable disk before
+counting on the cheap rescue.
+
+**Note the shape of the result, but do not promote it to a rule.** The 64-bit
+pair agree with each other where the 32-bit pair disagreed, and with XP x64 also
+on `tcg`, every 64-bit guest in this project now wants TCG. That is an
+observation about four guests, not a property of bitness. The accelerator
+belongs to the guest, never to the family, and this project has now been paid
+twice for treating one guest's reading as another's.
 
 #### The gate that comes before any of it: kernel-mode code signing
 
