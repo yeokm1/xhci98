@@ -684,7 +684,10 @@ these readings, and both belong in the record before anyone builds a guest:
   possible is no longer available in practice. Supporting those two means,
   permanently, a guest booted with driver signature enforcement disabled (F8) or
   with test-signing on. That goes in the release notes beside the tier, not in a
-  footnote.
+  footnote. **Shipping a signed package was considered as the way out and
+  declined** on 2026-09-10 (decision 9): it buys the claimed tier nothing,
+  since that tier does not enforce, and it is not what would rescue these two
+  anyway.
 - **The install path is different.** The INF's `LayoutFile=layout.inf` route,
   which is how the media carries no Microsoft file, is a Windows 2000 and XP
   mechanism. Vista and later stage a driver package into the driver store before
@@ -1415,7 +1418,8 @@ download would carry two.
    Vista x64 and Windows 7 x64, given that those two require a guest with
    driver signature enforcement disabled, permanently and by design. The ABI
    half of this is now settled and does not narrow the claim (section 6); what
-   is left is the signing decision and two more guests.
+   is left is the two guests. The signing half was taken separately on
+   2026-09-10 and is decision 9.
 2. ~~One INF with a third install path and a four-leg re-validation, or a
    separate x64 package leaving `src/xhci98.inf` untouched.~~ **Decided
    2026-09-09: the separate x64 package**, `src/xhci98.inf` byte-identical.
@@ -1449,6 +1453,32 @@ policy about what the gates promise, not implementation detail:
    **Decided: the in-image flavour marker is accepted as sufficient on amd64,
    and the asymmetry is written down** so that nobody later reads the import
    gate as covering something it cannot.
+
+One more arose from task 21.8's host-side signing probe, and it is recorded
+here rather than in the roadmap because it is policy about what this project
+publishes:
+
+9. ~~Whether the shipping x64 package is code-signed, and with it whether
+   `src/xhci98-amd64.inf` gains the `CatalogFile.NTamd64=xhci98.cat` line that
+   `Inf2Cat` demands.~~ **Decided 2026-09-10: the package is not signed, and
+   the line is not added.** Signing buys the claimed tier nothing - XP x64 and
+   Server 2003 x64 do not enforce kernel-mode code signing (section 6), which
+   is why the tier is what it is, and the package installs and loads there
+   unsigned today. The two enforcing systems are outside the tier pending task
+   21.8, so the decision costs the tier nothing at all.
+
+   What the decision turns on is that **signing a release and signing on a
+   guest are different things**. The guest work measures what a *user* of an
+   enforcing system would have to do, and it survives this decision intact.
+   It also needs no catalog: the service is `StartType=3`, demand-start rather
+   than boot-start, so the load-time check takes an embedded Authenticode
+   signature on `xhci98.sys` on its own, and the catalog governs only the
+   install-time publisher prompt. So `src/xhci98-amd64.inf` stays
+   byte-identical, decision 2 above is undisturbed, and the INF gate is not
+   asked for an opinion it does not owe. **The demand-start reading is a
+   reading and not a measurement**; task 21.8 tries the embedded-only route
+   first, and only a failure there reopens the catalog question, on a staged
+   copy before anything is proposed for the shipping INF.
 
 ---
 

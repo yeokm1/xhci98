@@ -2242,14 +2242,44 @@ are static readings and no other task's box may be ticked on one.
         VMs", has the commands; two of the findings change what this task
         owes:
 
-        **It costs one INF line, and that line is a decision.** `Inf2Cat`
-        refuses `src\xhci98-amd64.inf` outright - `22.9.4: Missing AMD64
-        CatalogFile entry ... from [Version] section` - and adding
-        `CatalogFile.NTamd64=xhci98.cat` makes it pass with zero errors. **It
-        has not been added.** It is a change to the shipping 64-bit package's
-        INF, the INF gate would want an opinion about it, and design record 11
-        section 12's decision 2 is the standing reminder that the two INFs are
-        kept apart deliberately.
+        **The package is not signed, and as of 2026-09-10 that is decided
+        rather than pending** (owner). Signing a release buys the claimed tier
+        nothing: XP x64 and Server 2003 x64 do not enforce kernel-mode code
+        signing, which is the whole reason 21.5 took that target, and the
+        published package installs and loads there unsigned today. Vista x64
+        and Windows 7 x64 are outside the tier until this task says otherwise,
+        so a decision never to sign costs the tier nothing at all. **What the
+        guests measure is what a USER would have to do**, not what this project
+        ships, and that measurement stands either way.
+
+        **So the INF line is retired as an open question rather than
+        deferred.** `Inf2Cat` refuses `src\xhci98-amd64.inf` outright -
+        `22.9.4: Missing AMD64 CatalogFile entry ... from [Version] section` -
+        and adding `CatalogFile.NTamd64=xhci98.cat` makes it pass with zero
+        errors. **It has not been added and does not need to be**, because a
+        catalog is not what the loader checks. `src\xhci98-amd64.inf` stays
+        byte-identical, design record 11 section 12's decision 2 is
+        undisturbed, and the INF gate is not asked for an opinion it does not
+        owe.
+
+        **What makes that true: the test-signing route needs no catalog and so
+        no INF change.** The service is `StartType=3`, demand-start rather than
+        boot-start, and the load-time check takes an embedded Authenticode
+        signature on `xhci98.sys` directly - `SignTool sign` on the binary and
+        stop there, no `Inf2Cat`, no `.cat`. The catalog governs the
+        install-time publisher prompt rather than the loader, and an unsigned
+        package there costs a "Windows can't verify the publisher" dialog and
+        an "Install anyway" click, which is a cost to record and not a block.
+        Boot-start would have been the other answer, since that case requires
+        the embedded signature and admits no catalog at all; this driver is not
+        boot-start, so both are open to it and the cheaper one is enough.
+
+        **That paragraph is a reading and not a measurement, and the guest is
+        what settles it**, which is the right place for it. Try embedded-only
+        first. If it loads, the INF line is never needed and the question is
+        closed. If it does not, the catalog question reopens, and only then is
+        that line a decision - taken on a staged copy and measured there before
+        it is ever proposed for the shipping INF.
 
         **And Microsoft's own package validator blesses the `LayoutFile`
         route, by name, for exactly these two systems.** All four OS-supplied
@@ -2260,11 +2290,13 @@ are static readings and no other task's box may be ticked on one.
         `Vista_X64` and `7_X64` specifically - and **it is still not the
         reading**: a signability test is not the driver store at install time.
 
-        What is left is entirely guest-side: whether F8 or
-        `bcdedit -set TESTSIGNING ON` actually loads it, and what either costs
-        at every boot. The test root has to reach the guest's Trusted Root
-        **and** Trusted Publishers stores, both, before test-signing buys
-        anything
+        What is left is entirely guest-side, and it is two routes on each
+        guest. **F8, Disable Driver Signature Enforcement**, which needs no
+        signing at all and is per boot by design. And **`bcdedit -set
+        TESTSIGNING ON`** over an embedded-signed `.sys`, where the test root
+        has to reach the guest's Trusted Root **and** Trusted Publishers
+        stores, both, before it buys anything. Record what each costs the user
+        at every boot and whether either survives a reboot
   - [ ] the `.NTamd64` package installed on each guest, or the driver-store
         refusal characterised precisely enough to decide what would fix it
   - [ ] then the same clauses 21.5 took, on each guest: registered and

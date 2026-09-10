@@ -2350,15 +2350,13 @@ step:
   were run here and **their diagnostics are identical**, which is why the two
   findings below are readings of the package rather than of the runtime.
   Either way: check for the `.cat`, not the exit code.
-- **The amd64 INF as it stands cannot be catalogued at all.** `Inf2Cat` refuses
-  it with `22.9.4: Missing AMD64 CatalogFile entry (CatalogFile.ntamd64,
-  CatalogFile.nt, CatalogFile) from [Version] section`. Adding one line -
-  `CatalogFile.NTamd64=xhci98.cat` - makes the same package pass with zero
-  errors and generate its catalog. **That line has NOT been added to
-  `src\xhci98-amd64.inf`**: it is an INF change on the shipping 64-bit package,
-  it would want the INF gate to have an opinion about it, and design record 11
-  section 12's decision 2 is the standing reminder that the two INFs are kept
-  apart deliberately. It is the owner's call, and it is cheap once made.
+- **The amd64 INF as it stands cannot be catalogued at all, and that turns out
+  not to matter.** `Inf2Cat` refuses it with `22.9.4: Missing AMD64 CatalogFile
+  entry (CatalogFile.ntamd64, CatalogFile.nt, CatalogFile) from [Version]
+  section`. Adding one line - `CatalogFile.NTamd64=xhci98.cat` - makes the same
+  package pass with zero errors and generate its catalog. **That line has NOT
+  been added to `src\xhci98-amd64.inf` and is not owed**, because nothing this
+  project does needs the catalog. See the next section for why.
 - **The `LayoutFile` route survives Microsoft's own signability test, named
   explicitly, targeted at these two systems.** Every one of the four
   OS-supplied files produces the same warning and nothing else:
@@ -2386,6 +2384,45 @@ the guest-side cost: the test root has to be imported into the guest's
 before `bcdedit -set TESTSIGNING ON` buys anything. Nothing from this probe was
 left behind: the certificate was removed from the host store afterwards, and no
 file in the repository was changed by it.
+
+#### This project does not sign its package, and does not need to
+
+**Decided by the owner on 2026-09-10.** Signing a release buys the claimed tier
+nothing. Windows XP x64 and Server 2003 x64 do not enforce kernel-mode code
+signing, which is the whole reason Phase 21 took that target first, and the
+published package installs and loads there unsigned today. Vista x64 and
+Windows 7 x64 sit outside the tier until task 21.8 says otherwise, so a
+decision never to sign costs the tier nothing at all.
+
+**Two things were being conflated, and separating them is what settles the
+INF question.** Signing a *release* is a shipping decision, and the answer is
+no. Signing on a *guest* is a measurement of what a user of an enforcing system
+would have to do to load an unsigned driver, and that measurement is worth
+taking whether or not anything is ever signed for publication.
+
+**The measurement needs no catalog, so it needs no INF change.** The service
+is `StartType=3` in `src\xhci98-amd64.inf`, demand-start rather than
+boot-start, and the load-time check accepts an embedded Authenticode signature
+on `xhci98.sys` directly. Sign the binary and stop:
+
+```
+MakeCert -r -pe -ss PrivateCertStore -n "CN=<name>" <name>.cer
+SignTool sign /v /s PrivateCertStore /n "<name>" <staged>\xhci98.sys
+```
+
+No `Inf2Cat`, no `.cat`, no `CatalogFile.NTamd64`, and `src\xhci98-amd64.inf`
+stays byte-identical. The catalog governs the install-time publisher prompt
+rather than the loader; an unsigned package there costs a "Windows can't verify
+the publisher" dialog and an "Install anyway" click, which is a cost to write
+down and not a block. Had the driver been boot-start the answer would have gone
+the other way round, since that case requires the embedded signature and admits
+no catalog at all.
+
+**This is a reading of the loader and not a measurement of one**, and it is
+flagged as such deliberately. Task 21.8 tries the embedded-only route first on
+each guest. If the driver loads, the INF line is never needed. If it does not,
+the catalog question reopens - and then the line is added to a *staged* copy of
+the INF and measured there, before anyone proposes it for the shipping package.
 
 #### And the install path is not the one the INF was written for
 
