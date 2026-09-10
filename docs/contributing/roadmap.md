@@ -2249,6 +2249,64 @@ are static readings and no other task's box may be ticked on one.
         each guest, what it costs the user at every boot, and whether it
         survives a reboot at all.
 
+        **F8 TAKEN ON THE VISTA X64 GUEST, 2026-09-10, AND THE ANSWER IS YES:
+        the amd64 binary loads and runs on 6.0.** `DriverEntry` completes,
+        `USBPORT_GetHciMn` returns `0x10000001` and the packet size is `0x250`
+        - task 21.7 read both statically and both are now measured live - the
+        registration succeeds, usbport writes back its 16 service pointers and
+        calls `StartController`. **Box 3's decisive question is answered and
+        boxes 4 to 7 are not foreclosed.** The cost is what the box predicted:
+        the F8 menu item applies to exactly one boot, was re-chosen on every
+        boot of the session, and survives nothing. `TESTSIGNING` was not
+        reached and Windows 7 x64 was not booted, so the box stays open.
+
+        Three things had to be fixed or found on the way, in the order they
+        bit, and none of them was a signing question:
+
+        1. **The install aborted before the driver existed on disk.** The
+           driver store *accepted and staged* the package - the refusal box 4
+           anticipated did not happen - but `_COMMIT_FILE_QUEUE` then aborted
+           on `usbport.sys`: setupapi resolved it through
+           `LayoutFile=layout.inf` against Vista's own `usbport.inf_518a1f35`
+           driver-store package, built an unresolvable source path, and
+           `SPFILENOTIFY_NEEDMEDIA` returned `FILEOP_ABORT`.
+           `COPYFLG_NO_OVERWRITE` does not save it: the queue resolves the
+           source **before** it decides to skip, which is exactly the "should
+           is doing work there" caveat this task put on 21.7's reading.
+           `usbui.dll` pruned cleanly; the three `[Xhci.CopyNT]` files did not.
+        2. **A `.6.0`-decorated install section is silently never read.** The
+           OS-version part of a `TargetOSVersion` decoration selects the
+           **models** section only; the install section takes the platform
+           extension and nothing more, so setupapi ran `[Xhci.Dev.NTAMD64]`
+           while logging a driver node of `XhciModels.NTamd64.6.0`. The shape
+           that works names a **different install section** from the 6.0 models
+           section - `Xhci.Dev6` - and it passes the INF gate as written.
+           **Measured on a staged copy only; `src/xhci98-amd64.inf` is
+           untouched and the shipping shape is not decided.**
+        3. **`USBPORT_RegisterUSBPortDriver` takes a fourth argument on NT
+           6.x**, and a three-argument call bugchecks `0x7E` inside usbport's
+           `memmove` before any of section 5's measurements is exercised.
+           Fixed for amd64 under a runtime arity branch; design record 11
+           section 6.1 and decision 10 carry the evidence and the reasoning,
+           and **Phase 22 will meet the same boundary on 32-bit, where the fix
+           is harder**.
+
+        **WHERE IT NOW STOPS, AND IT IS A NEW QUESTION.** The driver refuses
+        its own initialisation at `XHCI_INIT_STEP_RESOURCES` with
+        `ResourcesTypes = 0x0C`, which Device Manager shows as Code 10. Our
+        constants are `PORT=1, INTERRUPT=2, MEMORY=4`, so `0x0C` has memory but
+        not interrupt, and an undefined bit 3 instead. The rest of the resource
+        block maps onto the amd64 `USBPORT_RESOURCES` layout perfectly and the
+        interrupt fields are fully populated - vector `0x92`, IRQL 9, affinity
+        `0x0F` for the guest's four vCPUs, `ShareVector` set - and
+        `HcFlavor = 1000` is `EHCI_Generic`. The mask is also **exactly the NT
+        5.x value shifted one bit left** (`INTERRUPT|MEMORY = 0x06`, and
+        `0x06 << 1 = 0x0C`), which would follow from 6.x inserting a member at
+        the bottom of the resource-type enum. **That is an inference from a
+        structural coincidence and is not yet read out of usbport's code**;
+        confirming it means finding where Vista's `usbport.sys` writes that
+        field, the same treatment the arity got. Until then no constant here
+        changes.
         **The host-side half is done, 2026-09-10, before either guest existed
         - which is the point, since this is the gate that comes first.** A
         complete test-signed `Vista_X64,7_X64` package can be produced from
@@ -2364,7 +2422,19 @@ are static readings and no other task's box may be ticked on one.
         installed
   - [ ] the `.NTamd64` package installed on each guest, or the driver-store
         refusal characterised precisely enough to decide what would fix it
-  - [ ] then the same clauses 21.5 took, on each guest: registered and
+
+        **ANSWERED FOR VISTA X64, 2026-09-10, AND NOT THE WAY THIS BOX
+        EXPECTED.** The driver store does **not** refuse the package: it
+        accepted and staged it, `xhci98.inf_0da41353\` in the FileRepository,
+        with the only complaint a `sto:` warning that the INF carries no
+        `CatalogFile` for the architecture - which did not stop staging, so
+        decision 9's no-signing choice costs nothing structural on 6.0. What
+        failed is a later and separate step, the file copy queue, and box 3
+        above carries it. The `.NTamd64` package therefore installs on 6.0
+        once the copy list stops asking for the four OS-supplied files, which
+        the `Xhci.Dev6` shape does. **Windows 7 x64 is still owed, and so is
+        the decision about whether that shape reaches the shipping INF** - it
+        has only ever run from a staged copy.  - [ ] then the same clauses 21.5 took, on each guest: registered and
         started, the No Op self-test, the root-hub callbacks, a HID mouse, a
         mass-storage device and a composite audio device bound, and the Device
         Manager disable/enable/remove/rescan sequence. **On the `release`

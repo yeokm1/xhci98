@@ -2282,6 +2282,51 @@ each guest carries one snapshot of its clean install.
 Both are the same media task 21.7 read its six measurements out of, so the
 stack a guest installs is the stack that was measured, and saying so is cheap.
 
+**WHAT THE VISTA X64 GUEST HAS ALREADY SHOWN, 2026-09-10, AND WHAT AN OPERATOR
+SHOULD EXPECT.** The amd64 driver **loads and runs on 6.0** with F8 / Disable
+Driver Signature Enforcement, and no signing of any kind was needed to get
+there. Getting a working install took three separate things, none of them a
+signing question, and an operator repeating this will meet them in this order:
+
+1. **The stock package does not install on 6.0.** The copy queue aborts on
+   `usbport.sys` because the `LayoutFile` route cannot resolve a source there,
+   with a wizard error - "The filename, directory name, or volume label syntax
+   is incorrect" - that names neither the file nor the cause. The driver store
+   itself is fine; it stages the package. **A staged INF whose 6.0 models
+   section names its own install section** (`%XhciDesc%=Xhci.Dev6,...` ->
+   `[Xhci.Dev6.NTamd64]`, copying `xhci98.sys` and nothing else) installs
+   cleanly. All four OS-supplied files are already on disk on this guest -
+   `usbd.sys` 7,680, `usbhub.sys` 273,920, `usbport.sys` 259,584, and
+   `usbui.dll` in `system32` - measured, not carried over. **That INF shape has
+   only ever run from a staged copy; `src\xhci98-amd64.inf` is unchanged and
+   whether it ships is undecided.**
+2. **A pre-fix binary bugchecks the guest at load** - `0x7E` inside usbport,
+   from the registration call. Fixed 2026-09-10; if you see it, you are running
+   a driver built before that. Check the `DriverEntry (built ...)` stamp on the
+   `0xE9` channel before reading anything into a result.
+3. **Booting without F8 is safe and useful.** Enforcement blocks the unsigned
+   driver, so the guest boots to a normal desktop with the device at Code 39
+   and nothing loaded. That is the state to install from, change the registry
+   from, or recover in - there is no boot loop to fear. Code 39 there is the
+   signature gate, not a defect; the `0xE9` log staying empty is what proves it.
+
+**Turn off "Automatically restart" first** (System Properties -> Advanced ->
+Startup and Recovery). You cannot pick two F8 items at once, so a bugcheck
+otherwise reboots before it can be read.
+
+**As of 2026-09-10 the driver reaches `StartController` and refuses there**,
+`init REFUSED at step=00000001`, `ResourcesTypes = 0x0C`, shown as Code 10.
+That is the driver declining deliberately, not a crash, and it is roadmap task
+21.8's open question. **Windows 7 x64 has not been booted with the driver at
+all**, and `TESTSIGNING` has not been tried on either guest.
+
+**Getting files in and out.** The transfer drive is VVFAT `snapshot=on`, so the
+guest cannot write anything back to the host through it. Use the floppy:
+`change floppy0 <img> raw` for a writable disk the guest formats and writes
+(then `eject floppy0` to flush before reading it with 7-Zip), and
+`change floppy0 fat:floppy:rw:<dir>` to serve a host directory in. That is how
+`setupapi.dev.log` and the crash minidumps came out, and how a corrected INF
+and a rebuilt `.sys` went in without restaging or relaunching.
 **The machine is `scripts\qemu-nt6-common.ps1`, which these two share with the
 32-bit pair**; `-Arch amd64` is what makes it the 64-bit recipe. Four things
 turn on that switch and the third is the one that inverts rather than varies:

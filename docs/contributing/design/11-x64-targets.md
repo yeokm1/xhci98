@@ -229,7 +229,7 @@ control transfer until it was taken - the one measurement in this phase that a
 running driver demanded rather than a plan foresaw. Both are in this section
 in the order they were read.
 
-### M1 - the two private exports · **read, pass**
+### M1 - the two private exports ? **read, pass**
 
 `link /dump /headers` gives `8664 machine (x64)`. `link /dump /exports` gives
 three functions, three names, ordinal base 1, time date stamp `45D6899F`:
@@ -246,7 +246,7 @@ lineages, undecorated. amd64 has no `__stdcall` name decoration, so the
 here - that check is x86-only by nature, not by oversight, and section 8 says
 what replaces it.
 
-### M2 - the `USBPORT_GetHciMn` lineage value · **read, pass**
+### M2 - the `USBPORT_GetHciMn` lineage value ? **read, pass**
 
 ```
 usbport!USBPORT_GetHciMn:                      ; RVA 0x21A60
@@ -263,7 +263,7 @@ refuses to register on an unknown lineage, and the failure presents as a
 yellow bang indistinguishable from a bad INF. It is simply gone, and no code
 change follows from it.
 
-### M3 - the version gate and the copied packet size · **read, pass**
+### M3 - the version gate and the copied packet size ? **read, pass**
 
 `USBPORT_RegisterUSBPortDriver` at RVA `0x22030`. The arguments settle into
 `rbx` = DriverObject, `esi` = Version, `rbp` = RegistrationPacket.
@@ -301,8 +301,8 @@ most important thing this measurement establishes. The packet is ten leading
 
 | | x86 | amd64 | identity |
 |---|---|---|---|
-| USB2 (`Version >= 200`) | `0x13C` = 316 | `0x250` = 592 | 40 + 69 x 4 → 40 + 69 x 8 |
-| USB1 (`100 <= V < 200`) | `0x12C` = 300 | `0x230` = 560 | 40 + 65 x 4 → 40 + 65 x 8 |
+| USB2 (`Version >= 200`) | `0x13C` = 316 | `0x250` = 592 | 40 + 69 x 4 ? 40 + 69 x 8 |
+| USB1 (`100 <= V < 200`) | `0x12C` = 300 | `0x230` = 560 | 40 + 65 x 4 ? 40 + 65 x 8 |
 
 This is not an interface that happens to resemble the x86 one. It is the same
 C declaration compiled for a wider pointer, which is what NT 5.2 amd64
@@ -617,6 +617,19 @@ an amd64 binary ran**, which is the argument for item 3's sibling guard on
 
 ## 6. Vista and Windows 7 x64 - read 2026-09-09, and the answer is yes
 
+> **CORRECTED 2026-09-10, ON A GUEST. The answer below is still yes, and it was
+> still incomplete.** Every measurement in section 5 is about a *shape* this
+> interface passes - the registration packet, the resources block, the endpoint
+> properties, the scatter-gather list - and every one of them holds on both 6.x
+> targets. **None of them asked how many arguments
+> `USBPORT_RegisterUSBPortDriver` takes**, and that changed at the same
+> NT 5.x -> 6.x boundary. A three-argument call bugchecks Vista x64 inside
+> usbport before a single one of those six shapes is ever exercised. See 6.1.
+>
+> The general lesson is worth more than the specific one: a static read of the
+> structures an interface carries is not a read of the interface. Section 5's
+> method could not have found this, because it never disassembled a caller.
+
 Every measurement in section 5 is a static read of two files, so repeating it on
 Vista x64 and Windows 7 x64 cost extraction time and nothing else. It was taken
 on 2026-09-09 (task 21.7), in one pass with the `i386` halves of the same media
@@ -713,6 +726,68 @@ same total absence of options that 32-bit XP does.
 
 ---
 
+### 6.1 M9 - the registration export's arity - measured 2026-09-10, **and it differs**
+
+`USBPORT_RegisterUSBPortDriver` takes **three** arguments on NT 5.x and **four**
+on NT 6.x, on both architectures. The fourth is `DriverEntry`'s `RegistryPath`.
+
+| Build | Evidence | Args |
+|---|---|---|
+| Win2000 SP4, NUSB, XP SP3 (x86) | `ret 0Ch` | 3 |
+| XP x64 / Server 2003 x64 (amd64) | reaches its first `call` without reading `r9` | 3 |
+| Vista x86, Windows 7 x86 | `ret 10h` | 4 |
+| Vista x64 (6.0) | `mov r14,r9` at +0x36 | 4 |
+| Windows 7 x64 (6.1) | `mov r12,r9` | 4 |
+
+The 32-bit rows are read as the first `ret` after the function entry, so they
+are corroboration rather than proof; the amd64 rows are a callee reading the
+fourth argument register and are not circumstantial.
+
+**The identity of the fourth argument is read off Microsoft's own call site, not
+inferred from its shape.** Vista x64's `usbehci.sys` `DriverEntry` does
+`mov rdi,rdx` in its prologue - `rdx` being `DriverEntry`'s `RegistryPath` - and
+then, immediately before the call:
+
+```
+lea     r8,[usbehci+0xd2a0]   ; arg 3, its registration packet
+mov     r9,rdi                ; arg 4, RegistryPath
+mov     edx,136h              ; arg 2, Version = 310
+mov     rcx,rbx               ; arg 1, DriverObject
+call    qword ptr [usbehci+0xc010]
+```
+
+usbport dereferences the fourth as a `UNICODE_STRING` - `movzx r8d,word ptr
+[r14]` for `Length`, `mov rdx,qword ptr [r14+8]` for `Buffer` - and copies the
+buffer into an allocation of its own.
+
+**What a three-argument call does.** `r9` holds whatever the loader last left
+there. On the Vista x64 guest of 2026-09-10 that was `fffff800018b24e0`, an
+address inside ntoskrnl's own image, whose instruction bytes read back as
+`Length = 0x9000` and `Buffer = 0x909096108e481090`; usbport then memcpy'd
+36,864 bytes from nowhere. Bugcheck `0x7E` / `STATUS_ACCESS_VIOLATION` in
+`USBPORT!memmove+0x250`, from `USBPORT_RegisterUSBPortDriver+0x46a`, from
+`xhci98+0x3797a`, from `nt!IopLoadDriver`. Read from the guest's own minidump
+against Vista SP2's `usbport.sys`, `49E02D1B`, byte-identical to
+`tools/vista-x64-extracted/`.
+
+**Note that `Version` is 310 there and this driver still sends 200.** That is
+deliberate and must stay: 310 is the gate that hands out the 64-bit DMA adapter
+this driver does not implement, which is the whole argument for keeping the
+high-DWORD check at `src/xhci_xfer.c:542` (see the first bullet of section 6).
+The version is not part of this defect and raising it would be a regression
+wearing a fix's clothes.
+
+**The amd64 half is fixed; the 32-bit half is a different change and is not
+made.** On amd64 the arity could in principle be ignored - x64 is caller-cleaned,
+the 32-byte shadow space is allocated either way, and NT 5.2's usbport cannot
+observe a fourth argument - so an unconditional four-argument call would be
+correct everywhere. The owner's decision of 2026-09-10 was a runtime branch
+instead (section 12, decision 10). On x86 none of that holds: stdcall is
+callee-cleaned so arity must match exactly, and `src/usbport.lib` carries
+`_USBPORT_RegisterUSBPortDriver@12`, a decorated symbol whose name encodes the
+byte count and would stop resolving at `@16`. **Phase 22 will meet this on
+32-bit Vista and Windows 7**, and `XHCI_CHECK_STACK_DELTA` already sits at that
+call site to report it before anyone designs around it.
 ## 7. The decision gate
 
 The gate as written before any measurement, with what actually happened:
@@ -1479,6 +1554,32 @@ publishes:
    reading and not a measurement**; task 21.8 tries the embedded-only route
    first, and only a failure there reopens the catalog question, on a staged
    copy before anything is proposed for the shipping INF.
+10. ~~Whether the amd64 build passes the NT 6.x fourth argument to
+    `USBPORT_RegisterUSBPortDriver` unconditionally, or selects the arity at
+    run time.~~ **Decided 2026-09-10: select it at run time.** Unconditional
+    four was correct - x64 is caller-cleaned, and NT 5.2's usbport provably
+    cannot observe a fourth argument (6.1) - and was the recommendation. The
+    owner's preference was to send NT 5.x exactly what NT 5.x expects, and the
+    branch also protects Server 2003 x64, which rests on identity with XP x64
+    rather than on an observation. The discriminator is
+    `IoIsWdmVersionAvailable(1, 0x30)`, **not** `PsGetVersion`, which
+    `usb-xhci-info/win98-wdm.md` rules out as unexported on Windows 98 and Me -
+    chosen so Phase 22's 32-bit branch can use the same primitive. It is
+    guarded on `_WIN64` so the 32-bit import surface is untouched, and **the
+    test fails towards four on purpose**: four on NT 5.2 is inert, three on
+    6.x bugchecks. The amd64 allowlist gained one row, with the export
+    evidence its rule demands. Confirmed on the guest 2026-09-10:
+    `wdm pre-1.30 (three-argument registration)=00000000`, registration
+    status 0. **The three-argument arm has not been exercised since it was
+    written** and owes an XP x64 run - box 5's work.
+11. ~~Whether the `W98-SECTLEN` rule - Windows 98's 28-character section-name
+    limit - applies to `src/xhci98-amd64.inf`.~~ **Decided 2026-09-10: it does
+    not.** Windows 98's engine never reads that file, by the design at its own
+    head, so the gate applying the rule there is the gate's defect and not the
+    INF's. Raised by a real refusal: `[Xhci.Dev.NTamd64.6.0.Services]` is 29
+    characters. The shape eventually adopted (`Xhci.Dev6`, 6.1 and task 21.8)
+    is 26 and passes either way, so **nothing is blocked and the gate change is
+    owed rather than urgent**.
 
 ---
 

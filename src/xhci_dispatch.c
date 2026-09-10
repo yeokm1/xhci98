@@ -4701,9 +4701,55 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT DriverObject,
     __asm mov espBefore, esp
 #endif
 
+    /*
+     * The registration export takes FOUR arguments on NT 6.x and three on
+     * NT 5.x - see the block above its declaration in src\xhci_usbport.h for
+     * the evidence and for what a three-argument call does to Vista x64.
+     *
+     * The branch is amd64-only. On x86 the arity cannot be varied at all
+     * without a second import stub, and the 32-bit binary's four shipped
+     * targets are all NT 5.x or 9x, so it keeps the call it has always made.
+     *
+     * `IoIsWdmVersionAvailable` is the version primitive rather than
+     * `PsGetVersion`, which is not exported on Windows 98 or Me
+     * (docs\usb-xhci-info\win98-wdm.md). It is imported only by the amd64
+     * build, and only that build's allowlist carries a row for it; the 32-bit
+     * import surface is unchanged, which is why the call sits inside the
+     * _WIN64 guard rather than outside it with a runtime test.
+     *
+     * WDM 1.30 is the NT 6.x threshold (Win2000 1.10, XP and Server 2003
+     * 1.20, Vista and Windows 7 1.30). THE TEST FAILS TOWARDS FOUR ON
+     * PURPOSE: a fourth argument on NT 5.2 is inert - the callee never reads
+     * r9, and x64 is caller-cleaned so nothing unbalances - while three on
+     * NT 6.x bugchecks inside usbport's memmove. So only a positive
+     * identification of a pre-6.x WDM takes the three-argument path.
+     */
+#ifdef _WIN64
+    {
+        BOOLEAN isNt5 = !IoIsWdmVersionAvailable(1, 0x30);
+
+        XHCI_DBG_VALUE("wdm pre-1.30 (three-argument registration)",
+                       (ULONG)isNt5);
+
+        if (isNt5) {
+            status = USBPORT_RegisterUSBPortDriver(
+                         DriverObject,
+                         USB20_MINIPORT_INTERFACE_VERSION,
+                         &XhciRegPacket);
+        } else {
+            status = ((XHCI_REGISTER_USBPORT_NT6)
+                          USBPORT_RegisterUSBPortDriver)(
+                         DriverObject,
+                         USB20_MINIPORT_INTERFACE_VERSION,
+                         &XhciRegPacket,
+                         RegistryPath);
+        }
+    }
+#else
     status = USBPORT_RegisterUSBPortDriver(DriverObject,
                                            USB20_MINIPORT_INTERFACE_VERSION,
                                            &XhciRegPacket);
+#endif
 
 #ifdef XHCI_CHECK_STACK_DELTA
     __asm mov espAfter, esp

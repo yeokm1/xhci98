@@ -8307,3 +8307,94 @@ controller is unsupported for this Win98 design regardless of otherwise
 valid xHCI capabilities. Do not attempt to program MSI behind the OS's
 back; the kernel/HAL must allocate the vector and APIC message, and Win9x
 has no such infrastructure.
+
+## An interface's structures are not its call signature
+
+Task 21.7 read six measurements of the usbport miniport interface on Vista x64
+and Windows 7 x64 - the registration packet, the resources block, the endpoint
+properties, the scatter-gather list - and all six passed, so the ABI question
+was recorded as settled. It was not. `USBPORT_RegisterUSBPortDriver` gained a
+fourth parameter at the NT 5.x -> 6.x boundary, on both architectures, and a
+three-argument call bugchecks `0x7E` inside usbport before a single one of
+those six shapes is ever exercised. The method could not have found it: every
+one of the six was a static read of a *structure*, and none disassembled a
+*caller*.
+
+The crash names its own cause once read properly. The faulting instruction was
+inside a statically linked `memmove` - `cmp r9,2000h` with a `prefetchnta` /
+`movnti` large-block path is the CRT, not the surrounding symbol kd attributes
+it to - and the call site read a `USHORT` at `[reg]` and a pointer at
+`[reg+8]`, which is a `UNICODE_STRING`. A `UNICODE_STRING` whose `Length` and
+`Buffer` are both garbage, in a function taking a `DriverObject`, is a missing
+`RegistryPath` argument. Microsoft's own miniport for the same `usbport.sys`
+then confirmed it at its call site rather than leaving it inferred.
+
+Reusable rule: when a driver interface is being ported across an OS
+generation, disassemble the **prologue of every exported function you call**
+and count the argument registers it saves - `mov r1x,r9` on amd64, the `ret`
+immediate on stdcall x86 - not only the structures those functions carry. And
+when the fix is an extra argument, check the import library too: a decorated
+x86 stub name encodes the byte count (`_USBPORT_RegisterUSBPortDriver@12`), so
+changing arity there is a different job from changing it on amd64, where the
+name is bare and the convention is caller-cleaned.
+
+## A version-decorated install section is silently never read
+
+`[Manufacturer]`'s `TargetOSVersion` decoration selects the **models** section
+only. The install section named by that models entry takes the *platform*
+extension and nothing further, so `[Xhci.Dev.NTamd64.6.0]` is a section name
+setupapi never looks for. There is no error, no warning and no log line: the
+engine quietly runs `[Xhci.Dev.NTAMD64]` instead, and the resulting failure
+looks unrelated to the INF. The `setupapi.dev.log` says so in two lines twelve
+apart that disagree - a driver node of `xhci98.inf:XhciModels.NTamd64.6.0:...`
+and then `{Install Inf Section [Xhci.Dev.NTAMD64]}`.
+
+Reusable rule: to vary an install section by OS version, give the version's
+models section a **different install section name** and decorate that by
+platform - `%XhciDesc%=Xhci.Dev6,...` reaching `[Xhci.Dev6.NTamd64]`. And read
+`{Install Inf Section [...]}` in the log to see what actually ran, rather than
+`Selected driver installs from section [...]`, which prints the undecorated
+base name and cannot distinguish the two.
+
+## `COPYFLG_NO_OVERWRITE` does not save a source the queue cannot resolve
+
+An INF that reaches OS-supplied files through `LayoutFile=layout.inf` installs
+on NT 5.x and aborts on 6.x, because the file copy queue resolves each file's
+**source before** it decides whether to skip it. On Vista, `usbport.sys`
+resolved against the OS's own `usbport.inf_<hash>` driver-store package, the
+path came back unresolvable, and `SPFILENOTIFY_NEEDMEDIA` returned
+`FILEOP_ABORT`. Every file was already on disk and every copy would have been
+pruned - `usbui.dll`, which had no such mapping, pruned cleanly and proves the
+mechanism.
+
+Two further traps around it. The driver store *staged the package fine*, so
+"the install failed" is not evidence that the store rejected the file list -
+staging and copy-commit are separate steps with separate failure modes. And
+the wizard's error text is not the log's: the same fault reported
+`ERROR_INVALID_NAME` once and `ERROR_FILE_NOT_FOUND` twice, because the
+malformed source path contained uninitialised bytes that differed per attempt
+and were only sometimes syntactically invalid.
+
+Reusable rule: on 6.0 and later, omit the OS-supplied files from the copy list
+entirely rather than relying on a no-overwrite flag to skip them - but
+*measure* that they are on disk on that guest first, rather than carrying the
+reading over from an install image or another architecture.
+
+## A VVFAT floppy is the way out of a `snapshot=on` guest
+
+Guests here mount their package over VVFAT with `snapshot=on`, which is
+read-only host-side: anything the guest writes there lands in a throw-away
+overlay and never reaches the host. Screendumps get text out one screen at a
+time, which is fine for an error dialog and hopeless for a 1.1 MB
+`setupapi.dev.log` or a 264 KB minidump.
+
+The machines have an empty `floppy0`. `change floppy0 <path> raw` inserts a
+writable raw image the guest can format and write, and `eject floppy0` flushes
+it so 7-Zip can read it host-side; `change floppy0 fat:floppy:rw:<dir>` serves
+a host directory into the guest for the other direction. That is how a crash
+dump reached `kd.exe` on the host and how a corrected INF and a rebuilt `.sys`
+reached the guest, with no reboot and no restaging.
+
+Reusable rule: reach for the floppy before the screendump whenever the artefact
+is a file rather than a sentence. `qemu-img` and 7-Zip read the image directly,
+so the round trip costs one monitor command in each direction.

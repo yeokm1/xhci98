@@ -927,10 +927,67 @@ XHCI_C_ASSERT(packet_last_reserved,
 #ifndef XHCI_HOST_TEST
 ULONG NTAPI USBPORT_GetHciMn(VOID);
 
+/*
+ * FOUR arguments on NT 6.x, three on NT 5.x, and the fourth is DriverEntry's
+ * RegistryPath. Read out of the shipping binaries; the boundary is the same
+ * on both architectures:
+ *
+ *   Win2000 SP4 / NUSB / XP SP3 (x86)      ret 0Ch                 three
+ *   XP x64 / Server 2003 x64 (amd64)       no r9 read before call  three
+ *   Vista x86 / Windows 7 x86              ret 10h                 four
+ *   Vista x64 / Windows 7 x64              mov r14,r9 / mov r12,r9 four
+ *
+ * The identity of the fourth is taken from Microsoft's own call site rather
+ * than inferred from its shape: Vista x64's usbehci.sys DriverEntry does
+ * `mov rdi,rdx` in its prologue - rdx being DriverEntry's RegistryPath - and
+ * `mov r9,rdi` immediately before the call. usbport then dereferences it as a
+ * UNICODE_STRING (`movzx r8d,word ptr [r14]` = Length, `mov rdx,qword ptr
+ * [r14+8]` = Buffer) and copies the buffer into an allocation of its own.
+ *
+ * Passing it unconditionally is correct on all four amd64 targets and needs
+ * no version test. The x64 convention is caller-cleaned and the 32-byte
+ * shadow space for four register arguments is allocated either way, so no
+ * arity mismatch can unbalance the stack; and NT 5.2's usbport reaches its
+ * first call without reading r9, which - being volatile - it can never
+ * recover afterwards. A three-parameter function compiled from source cannot
+ * observe a fourth argument.
+ *
+ * MEASURED, not deduced. A three-argument call bugchecks Vista x64 with
+ * 0x7E / STATUS_ACCESS_VIOLATION inside USBPORT!memmove, reached from
+ * USBPORT_RegisterUSBPortDriver+0x46a, r9 holding whatever nt!IopLoadDriver
+ * last left there - on the guest of 2026-09-10 an address inside ntoskrnl's
+ * own image, whose instruction bytes read back as Length=0x9000 and
+ * Buffer=0x9090... (roadmap task 21.8).
+ *
+ * THE 32-BIT HALF IS NOT THIS CHANGE AND MUST NOT BE MADE HERE. stdcall is
+ * callee-cleaned, so arity must match exactly or the stack is wrong on
+ * Windows 98, Windows 2000 and XP - the primary targets - and src\usbport.lib
+ * carries _USBPORT_RegisterUSBPortDriver@12, a decorated symbol whose name
+ * encodes the byte count and would stop resolving at @16. That needs a
+ * runtime-selected prototype and a version signal that survives the Windows
+ * 98 export baseline, and it is Phase 22's decision, not this one.
+ */
 NTSTATUS NTAPI USBPORT_RegisterUSBPortDriver(
     IN PDRIVER_OBJECT DriverObject,
     IN ULONG Version,
     IN PUSBPORT_REGISTRATION_PACKET RegistrationPacket);
+
+/*
+ * The NT 6.x form of the same export, called through a cast because the
+ * import library carries one symbol and this is the same entry point with a
+ * fourth argument. amd64 only: on x86 the caller would have to push a fourth
+ * slot that a `ret 0Ch` callee never cleans, and the decorated import name
+ * itself encodes the byte count, so the 32-bit half is a different change
+ * (see above). Guarded on _WIN64 so the 32-bit build's import table and
+ * codegen are untouched.
+ */
+#ifdef _WIN64
+typedef NTSTATUS (NTAPI *XHCI_REGISTER_USBPORT_NT6)(
+    IN PDRIVER_OBJECT DriverObject,
+    IN ULONG Version,
+    IN PUSBPORT_REGISTRATION_PACKET RegistrationPacket,
+    IN PUNICODE_STRING RegistryPath);
+#endif
 #endif
 
 #endif /* XHCI_USBPORT_H */
