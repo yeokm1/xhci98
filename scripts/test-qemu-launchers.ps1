@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Regression tests for the Win98, Win2000, Windows XP, xHCI-only Win2000, Windows XP x64, Windows Vista and Windows 7 QEMU launcher generators.
+Regression tests for the Win98, Win2000, Windows XP, xHCI-only Win2000, Windows XP x64, and Windows Vista and Windows 7 (both architectures) QEMU launcher generators.
 
 .DESCRIPTION
 Generates launchers against stand-in QEMU executable files. QEMU is never
@@ -15,13 +15,15 @@ must be left alone. A launch that dies before QEMU writes anything leaves a
 zero-byte log behind, and rotating that unconditionally would push the last
 real trace out of <target>-debugcon.previous.log and replace it with nothing.
 
-All eight VMs are covered because the phases close on comparisons between them:
+All ten VMs are covered because the phases close on comparisons between them:
 the traces must land in separate files, and each must belong to one boot.
 (The Windows XP guest is the fourth and the xHCI-only Windows 2000 guest the
 fifth, both since roadmap Phase 19; the Windows XP x64 guest is the sixth,
-since roadmap Phase 21; the Windows Vista and Windows 7 guests are the seventh
-and eighth, since roadmap Phase 22, and they share one generator body in
-scripts\qemu-nt6-common.ps1 rather than carrying two copies of it.)
+since roadmap Phase 21; the 32-bit Windows Vista and Windows 7 guests are the
+seventh and eighth, since roadmap Phase 22; and their 64-bit counterparts are
+the ninth and tenth, since roadmap task 21.8. All four of the last group share
+one generator body in scripts\qemu-nt6-common.ps1 rather than carrying four
+copies of it, with -Arch selecting the parts that differ.)
 #>
 
 [CmdletBinding()]
@@ -39,7 +41,17 @@ $targets = @(
     @{ Name = "Win2000XOnly"; Setup = "setup-qemu-win2k-xonly.ps1"; Launcher = "qemu-win2k-xonly-run.cmd"; LogBase = "win2k-xonly-debugcon" },
     @{ Name = "WinXP64"; Setup = "setup-qemu-winxp64.ps1"; Launcher = "qemu-winxp64-run.cmd"; LogBase = "winxp64-debugcon" },
     @{ Name = "Vista"; Setup = "setup-qemu-vista.ps1"; Launcher = "qemu-vista-run.cmd"; LogBase = "vista-debugcon" },
-    @{ Name = "Win7";  Setup = "setup-qemu-win7.ps1";  Launcher = "qemu-win7-run.cmd";  LogBase = "win7-debugcon" }
+    @{ Name = "Win7";  Setup = "setup-qemu-win7.ps1";  Launcher = "qemu-win7-run.cmd";  LogBase = "win7-debugcon" },
+    # The 64-bit half of the same recipe (roadmap task 21.8). These two take an
+    # -Accel on the command line because their generators REFUSE to run without
+    # one - nothing has been measured for either - so they carry an extra
+    # field here that no other row needs. The value below is a placeholder for
+    # generating text to assert against and is NOT a measurement; what the
+    # checks below verify is that whatever was asked for reaches both
+    # launchers identically, which is the property that matters whatever the
+    # measured value turns out to be.
+    @{ Name = "VistaX64"; Setup = "setup-qemu-vista-x64.ps1"; Launcher = "qemu-vista-x64-run.cmd"; LogBase = "vista-x64-debugcon"; Accel = "tcg" },
+    @{ Name = "Win7X64";  Setup = "setup-qemu-win7-x64.ps1";  Launcher = "qemu-win7-x64-run.cmd";  LogBase = "win7-x64-debugcon";  Accel = "whpx,kernel-irqchip=off" }
 )
 $work = Join-Path ([System.IO.Path]::GetTempPath()) `
     ("xhci98-qemu-launcher-test-" + [System.IO.Path]::GetRandomFileName())
@@ -60,8 +72,10 @@ try {
     $logPaths = @()
     foreach ($target in $targets) {
         $name = $target.Name
+        $extra = @{}
+        if ($target.ContainsKey("Accel")) { $extra["Accel"] = $target.Accel }
         & (Join-Path $PSScriptRoot $target.Setup) -VmDir $vm -LocalScriptDir $launchers `
-            -QemuBinDir $bin | Out-Null
+            -QemuBinDir $bin @extra | Out-Null
 
         $run = Join-Path $launchers $target.Launcher
         Assert-True (Test-Path -LiteralPath $run) "the $name run launcher was not generated."
@@ -201,14 +215,26 @@ try {
                 "the Windows XP x64 install and run launchers disagree on the accelerator; the HAL is fixed at install time, so the installed system would not boot the way it was installed."
         }
 
-        if ($name -eq "Vista" -or $name -eq "Win7") {
-            # build-and-test.md, "Windows Vista and Windows 7 target VMs".
-            # These two are ONE recipe with one body
-            # (scripts\qemu-nt6-common.ps1), so what is asserted here is
-            # asserted for both - and the pair is exactly the pair that would
-            # drift if it were ever copied into two.
-            $isoVar = if ($name -eq "Vista") { "VISTA_ISO" } else { "WIN7_ISO" }
-            $stem = if ($name -eq "Vista") { "vista" } else { "win7" }
+        if ($name -eq "Vista" -or $name -eq "Win7" -or $name -eq "VistaX64" -or $name -eq "Win7X64") {
+            # build-and-test.md, "Windows Vista and Windows 7 target VMs" and
+            # "Windows Vista x64 and Windows 7 x64 target VMs". All FOUR are
+            # one recipe with one body (scripts\qemu-nt6-common.ps1), so what
+            # is asserted here is asserted for all of them - and four guests
+            # out of one recipe are exactly what would drift if it were ever
+            # copied into four.
+            $isAmd64 = ($name -eq "VistaX64" -or $name -eq "Win7X64")
+            $stem = switch ($name) {
+                "Vista"    { "vista" }
+                "Win7"     { "win7" }
+                "VistaX64" { "vista-x64" }
+                "Win7X64"  { "win7-x64" }
+            }
+            $isoVar = switch ($name) {
+                "Vista"    { "VISTA_ISO" }
+                "Win7"     { "WIN7_ISO" }
+                "VistaX64" { "VISTA_X64_ISO" }
+                "Win7X64"  { "WIN7_X64_ISO" }
+            }
             # **NO NX BIT, NO GUEST.** pentium3 is the 32-bit XP launcher's
             # model, it is the single most likely thing to survive a
             # copy-paste into a 32-bit guest's launcher, and Windows 7 Setup
@@ -240,9 +266,25 @@ try {
             # more than one vCPU, and MUST NOT reach WHPX - it rejects the
             # whole -accel argument rather than ignoring an option it does not
             # know, so a launcher that carried it would not start at all.
-            $expectAccel = if ($name -eq "Vista") { "tcg,thread=multi" } else { "whpx,kernel-irqchip=off" }
+            #
+            # **AND ON THE 64-BIT PAIR THERE IS NO MEASURED VALUE TO ASSERT AT
+            # ALL**, which is why the row supplies one rather than this check
+            # naming it. Those two generators refuse to run without an -Accel
+            # (nothing has been installed on either), so what is asserted for
+            # them is the property that holds whatever the measurement turns
+            # out to be: the value ASKED FOR reaches both launchers, and
+            # thread=multi is still derived for tcg and still withheld from
+            # WHPX. Replace the row's value with a measured default here when
+            # a generator gains one.
+            #
+            $expectAccel = switch ($name) {
+                "Vista"    { "tcg,thread=multi" }
+                "Win7"     { "whpx,kernel-irqchip=off" }
+                "VistaX64" { "tcg,thread=multi" }
+                "Win7X64"  { "whpx,kernel-irqchip=off" }
+            }
             Assert-True ($text.Contains("-accel $expectAccel ^") -and $text.Contains("-machine pc ^")) `
-                "the $name launcher does not use the measured accelerator ($expectAccel) with ACPI on."
+                "the $name launcher does not carry its accelerator ($expectAccel) with ACPI on."
             Assert-True (-not ($text -match '-accel whpx[^ ]*thread=')) `
                 "the $name launcher hands thread= to WHPX, which refuses the whole -accel argument and will not start."
             # Four vCPUs, which is what makes a TCG guest usable here. Asserted
@@ -271,6 +313,49 @@ try {
                 "the $name install and run launchers disagree on the accelerator; the HAL is fixed at install time, so the installed system would not boot the way it was installed."
             Assert-True ($install6 -match '(?m)^\s*-smp 4 \^') `
                 "the $name install and run launchers disagree on the vCPU count; the HAL is fixed at install time, so the installed system would not boot the way it was installed."
+
+            #
+            # **THE ONE THING THAT INVERTS BETWEEN THE TWO ARCHITECTURES, AND
+            # THE ONLY ONE THAT WOULD MISLEAD AN OPERATOR RATHER THAN BREAK A
+            # BOOT.** On the 32-bit pair, kernel-mode code signing enforcement
+            # is x64-only, so an unsigned driver raises a prompt and loads,
+            # and the launcher says to record what the prompt did. On the
+            # 64-bit pair it is enforced, an unsigned driver does not load at
+            # all, and the launcher has to name the two routes that exist and
+            # say to settle them first.
+            #
+            # Every other check in this file guards against a launcher that
+            # will not work. This one guards against a launcher that works and
+            # tells the operator the wrong thing - which is worse, because a
+            # guest that boots and then refuses the driver with no explanation
+            # is exactly the shape of a day lost. The shared body builds both
+            # variants from -Arch, so the failure mode is one caller passing
+            # the wrong arch, and nothing else in the generated text would
+            # show it.
+            #
+            if ($isAmd64) {
+                Assert-True ($text.Contains("this system ENFORCES kernel-mode code signing") -and
+                    $text.Contains("bcdedit -set TESTSIGNING ON") -and
+                    $text.Contains("Disable Driver Signature Enforcement")) `
+                    "the $name run launcher does not tell the operator that this system enforces kernel-mode code signing, or does not name both routes around it; an unsigned driver does not load here and roadmap task 21.8 is which route works."
+                Assert-True (-not $text.Contains("Kernel-mode code signing enforcement is")) `
+                    "the $name run launcher carries the 32-bit pair's 'enforcement is x64-only' sentence, which is false on this guest and would send the operator looking for a prompt that never comes."
+                Assert-True ($text.Contains(".NTamd64 half") -and -not $text.Contains(".NTx86")) `
+                    "the $name run launcher names the wrong INF half; the 64-bit guests install the second package through src\xhci98-amd64.inf."
+                # make-package.ps1 -Arch moves the obj subdirectory, the INF
+                # and both gates' architecture together. Without it the
+                # transfer drive gets the 32-bit package, which installs on
+                # this guest and then does not load, with nothing on the
+                # guest saying why.
+                Assert-True ($text.Contains("make-package.ps1 -Arch amd64 -Flavor qemu -OutDir vm\xfer$stem")) `
+                    "the $name run launcher's staging command omits -Arch amd64, so it would put the 32-bit package on a 64-bit guest's transfer drive."
+            } else {
+                Assert-True ($text.Contains("Kernel-mode code signing enforcement is") -and
+                    $text.Contains("x64-only, so a prompt and not a refusal is the expectation")) `
+                    "the $name run launcher lost the sentence saying enforcement is x64-only here, which is the assumption roadmap Phase 22 sends the operator to confirm."
+                Assert-True ($text.Contains(".NTx86") -and -not $text.Contains(".NTamd64")) `
+                    "the $name run launcher names the wrong INF half; the 32-bit guests install through src\xhci98.inf's .NTx86 half."
+            }
         }
 
         # --- the rotation preamble, actually executed -----------------------
@@ -350,23 +435,71 @@ try {
     # than write a launcher that installs nothing. Asserted by asking for it on
     # both, because the shared body is what refuses and a caller could bypass
     # it.
+    # **AND THE SAME REFUSAL ON ALL FOUR OF THE 6.x GUESTS, FOR TWO DIFFERENT
+    # MISSING FEATURES.** The 32-bit pair need an NX bit, which Windows 7 Setup
+    # requires; the 64-bit pair need long mode. pentium3 lacks both, it is the
+    # 32-bit XP recipe's own value one file away in the same directory, and
+    # -cpu is the line most likely to be copied. The generator must refuse the
+    # model rather than write a launcher that installs nothing - and it must
+    # name the feature THAT guest is missing, so the next reader does not
+    # "fix" a 64-bit refusal by reaching for a model with NX and no long mode.
+    # Asserted by asking for it on each, because the shared body is what
+    # refuses and a caller could bypass it.
     foreach ($nt6 in @(
-        @{ Setup = "setup-qemu-vista.ps1"; Run = "qemu-vista-run.cmd" },
-        @{ Setup = "setup-qemu-win7.ps1";  Run = "qemu-win7-run.cmd" }
+        @{ Setup = "setup-qemu-vista.ps1";     Run = "qemu-vista-run.cmd";     Missing = "no NX bit" },
+        @{ Setup = "setup-qemu-win7.ps1";      Run = "qemu-win7-run.cmd";      Missing = "no NX bit" },
+        @{ Setup = "setup-qemu-vista-x64.ps1"; Run = "qemu-vista-x64-run.cmd"; Missing = "no long mode"; Accel = "tcg" },
+        @{ Setup = "setup-qemu-win7-x64.ps1";  Run = "qemu-win7-x64-run.cmd";  Missing = "no long mode"; Accel = "tcg" }
     )) {
-        $badNxDir = Join-Path $work ("launchers-badnx-" + [System.IO.Path]::GetFileNameWithoutExtension($nt6.Setup))
+        $badNxDir = Join-Path $work ("launchers-badcpu-" + [System.IO.Path]::GetFileNameWithoutExtension($nt6.Setup))
         New-Item -ItemType Directory -Path $badNxDir | Out-Null
+        $nx6Extra = @{}
+        if ($nt6.ContainsKey("Accel")) { $nx6Extra["Accel"] = $nt6.Accel }
         $refusedNx = $false
+        $refusalText = ""
         try {
             & (Join-Path $PSScriptRoot $nt6.Setup) -VmDir $vm `
-                -LocalScriptDir $badNxDir -QemuBinDir $bin -Cpu "pentium3" | Out-Null
+                -LocalScriptDir $badNxDir -QemuBinDir $bin -Cpu "pentium3" @nx6Extra | Out-Null
         } catch {
             $refusedNx = $true
+            $refusalText = $_.Exception.Message
         }
         Assert-True $refusedNx `
-            "$($nt6.Setup) accepted -Cpu pentium3, which has no NX bit; Windows 7 Setup refuses such a processor."
+            "$($nt6.Setup) accepted -Cpu pentium3, which has $($nt6.Missing); that guest's Setup will not run on it."
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $badNxDir $nt6.Run))) `
-            "$($nt6.Setup) wrote a launcher for a CPU model with no NX bit before refusing it."
+            "$($nt6.Setup) wrote a launcher for a CPU model with $($nt6.Missing) before refusing it."
+        Assert-True ($refusalText.Contains($nt6.Missing)) `
+            "$($nt6.Setup) refused -Cpu pentium3 but named the wrong missing feature; it must say '$($nt6.Missing)', or the next reader picks a model that fails the same way."
+    }
+
+    # **THE 64-BIT PAIR MUST REFUSE TO RUN WITH NO -Accel AT ALL**, which is
+    # the opposite of every other generator here and is the point. Nothing has
+    # been measured for either guest: XP x64 wants tcg, the 32-bit guests want
+    # WHPX, and the 32-bit Vista and Windows 7 pair disagreed with each other
+    # on 2026-09-10, so there is no value to inherit and a default would be a
+    # measurement this project has not taken. It has already been wrong once
+    # this way - the first Vista probe stopped at Setup's language page, wrote
+    # down WHPX, and that guest wedged on the boot after its first phase - so
+    # the rule is that an accelerator may not be written down until an install
+    # has COMPLETED under it, and the refusal is what holds the line until one
+    # has. Delete this check when a generator gains a measured default, and
+    # not before.
+    foreach ($noAccel in @("setup-qemu-vista-x64.ps1", "setup-qemu-win7-x64.ps1")) {
+        $noAccelDir = Join-Path $work ("launchers-noaccel-" + [System.IO.Path]::GetFileNameWithoutExtension($noAccel))
+        New-Item -ItemType Directory -Path $noAccelDir | Out-Null
+        $refusedAccel = $false
+        try {
+            & (Join-Path $PSScriptRoot $noAccel) -VmDir $vm `
+                -LocalScriptDir $noAccelDir -QemuBinDir $bin | Out-Null
+        } catch {
+            $refusedAccel = $true
+        }
+        Assert-True $refusedAccel `
+            "$noAccel wrote launchers with no -Accel given; no accelerator has been measured for a 64-bit Vista or Windows 7 guest, so it would be inheriting a value from a guest that is not this one."
+        # @() around it: an empty directory yields $null, and Set-StrictMode
+        # 2.0 refuses .Count on that.
+        Assert-True (@(Get-ChildItem -LiteralPath $noAccelDir -File).Count -eq 0) `
+            "$noAccel wrote a launcher before refusing the missing -Accel."
     }
 
     # The fallback rung changes the HAL Setup should select. Keep the generated
@@ -494,24 +627,28 @@ try {
     Write-Ok ("{0} monitor port(s) across the generated launchers, none shared" -f $portsSeen.Count)
 
     #
-    # **A port can also be taken by a guest that does not exist yet, and this
-    # check is the only thing that can see that.** The scan above compares
-    # generated launchers against each other; it is blind to a number reserved
-    # in prose. Roadmap task 21.8 reserves 55563 and 55564 for the Vista x64
-    # and Windows 7 x64 guests (build-and-test.md, "Vista x64 and Windows 7
-    # x64 target VMs - planned"), and Phase 22's 32-bit Vista and Windows 7
-    # guests were within one edit of taking exactly that pair on 2026-09-10 -
-    # the collision would have surfaced only when 21.8's generators were
-    # written, which is months of drift later and after both records had been
-    # believed. So the reservation is asserted here, against every launcher
-    # this file generates. Release it by deleting these two lines WHEN 21.8's
-    # generators claim the ports themselves, and not before.
+    # **THE RESERVATION ON 55563 AND 55564 HAS BEEN CLAIMED AND THE CHECK THAT
+    # HELD IT IS GONE.** From 2026-09-10 this file asserted that nothing took
+    # those two, because roadmap task 21.8 had reserved them in prose for
+    # guests that did not exist yet and Phase 22's 32-bit Vista and Windows 7
+    # guests had been drafted onto exactly that pair. The scan above compares
+    # generated launchers against each other and is blind to a number reserved
+    # in writing, so the reservation had to be honoured by hand until the
+    # generators claiming it were written. They now are -
+    # setup-qemu-vista-x64.ps1 takes 55563 and setup-qemu-win7-x64.ps1 takes
+    # 55564, both generated and scanned above - so the ordinary
+    # no-two-guests-share-a-port check covers them like any other guest, and
+    # keeping the reservation would now assert that they must NOT exist.
     #
-    foreach ($reserved in @("55563", "55564")) {
-        Assert-True (-not $portsSeen.ContainsKey($reserved)) `
-            ("monitor port {0} is reserved for roadmap task 21.8's Vista x64 / Windows 7 x64 guests, and {1} took it." -f `
-                $reserved, (($portsSeen[$reserved] | Sort-Object) -join ", "))
-    }
+    # The episode is why the check existed and is worth the paragraph: a port
+    # taken by a guest nobody has built yet is invisible to every mechanical
+    # check here, and the collision surfaces only when that guest is finally
+    # generated - which is months later, after both records have been believed.
+    # If a future task reserves ports the same way, re-add the same assertion
+    # with the same instruction to delete it on claiming.
+    #
+    Assert-True (($portsSeen.ContainsKey("55563")) -and ($portsSeen.ContainsKey("55564"))) `
+        "roadmap task 21.8's guests no longer take monitor ports 55563 and 55564; those two were reserved in writing for them and released only because their generators claimed them, so a guest that has given one up has left it reserved for nothing."
 } finally {
     if (Test-Path -LiteralPath $work) {
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue

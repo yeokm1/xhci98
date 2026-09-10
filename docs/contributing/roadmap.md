@@ -2179,30 +2179,85 @@ are static readings and no other task's box may be ticked on one.
       here - **which is exactly why the high-DWORD check at
       `src/xhci_xfer.c:542` must stay**, and M8 is the standing argument that
       such checks earn their keep.
-  - [ ] the two guests built, from the media already on the development host:
+  - [x] the two guests built, from the media already on the development host:
         `en_windows_vista_sp2_x64_dvd_342267.iso` and
         `en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso` -
         the same media 21.7 read its measurements out of, so the stack a guest
-        installs is the one that was measured, and saying so is cheap. Two
-        committed generators beside `setup-qemu-winxp64.ps1`, their launchers,
-        and their rows in `scripts\test-qemu-launchers.ps1`. **Monitor ports
-        55563 and 55564**: 55555-55562 are taken, and the gate exists because
-        two launchers sharing a port has happened twice. **That reservation
-        held on 2026-09-10 and is now enforced**: Phase 22's 32-bit Vista and
-        Windows 7 guests were drafted onto exactly this pair, were moved to
-        55565 and 55566 instead, and the launcher gate now asserts that
-        nothing takes 55563 or 55564 - a check to delete when the generators
-        below claim them, and not before
+        installs is the one that was measured, and saying so is cheap. Done
+        2026-09-10: `scripts\setup-qemu-vista-x64.ps1` and
+        `setup-qemu-win7-x64.ps1`, their launchers, `vm\vista-x64.img` and
+        `vm\win7-x64.img` at 32 GB, and their rows in
+        `scripts\test-qemu-launchers.ps1` (294 checks, 11 monitor ports, none
+        shared). **Not two more copies of `setup-qemu-winxp64.ps1`**: they are
+        the 64-bit half of the Vista and Windows 7 recipe and share
+        `scripts\qemu-nt6-common.ps1` with the 32-bit pair, with a new `-Arch`
+        selecting the four things that differ - the CPU refusal's missing
+        feature (long mode, not the NX bit), the INF half and the
+        `make-package.ps1 -Arch amd64` staging command, the code-signing
+        paragraph, and the memory note. The 32-bit pair's generated launcher
+        text was held byte-identical across that change and checked by
+        generating both ways and comparing. The planned names
+        `setup-qemu-winvista64.ps1` / `setup-qemu-win7x64.ps1` were dropped:
+        they disagreed with each other and were coined when these guests were
+        expected to be XP x64's siblings rather than Vista's and Windows 7's.
+        **Monitor ports 55563 and 55564 are now claimed rather than reserved**,
+        so the gate's assertion that nothing takes them is gone, replaced by
+        one that these two still do; the ordinary no-two-guests-share-a-port
+        scan covers them like any other guest
   - [ ] **the accelerator probed on each, and the result recorded whichever
         way it goes.** Do not copy XP x64's `-accel tcg` across as settled:
         that reading is the reverse of every 32-bit guest here, and
         `lessons.md`'s "The accelerator is the discriminating variable in both
         directions" says plainly that neither reading generalises. A 64-bit
-        Vista or Windows 7 guest is a third workload and has been probed on
-        neither host
+        Vista or Windows 7 guest is a fourth workload and has been probed on
+        neither host - and the 32-bit pair then disagreed with **each other**
+        on 2026-09-10, which is the strongest form the rule has taken.
+        **Neither generator carries a default and both refuse to run without
+        an explicit `-Accel`**, which is the only way to hold the line that an
+        accelerator may not be written down until an install has COMPLETED
+        under it. The launchers as generated carry
+        `whpx,kernel-irqchip=off` as a probe - the fast rung, and switching to
+        TCG costs no reinstall. Give the generator a measured default in a
+        commit that says what was observed, and delete the gate's
+        refuses-without-`-Accel` check then, not before
   - [ ] the code-signing gate above: which route loads an unsigned driver on
         each guest, what it costs the user at every boot, and whether it
-        survives a reboot at all
+        survives a reboot at all.
+
+        **The host-side half is done, 2026-09-10, before either guest existed
+        - which is the point, since this is the gate that comes first.** A
+        complete test-signed `Vista_X64,7_X64` package can be produced from
+        tools already in this repository with no network and nothing
+        installed: `MakeCert`, `SignTool` and `CertMgr` in
+        `tools\WinDDK71\bin\x86`, `Inf2Cat` in `tools\WinDDK71\bin\selfsign`.
+        Sign the `.sys` first, then `Inf2Cat`, then sign the `.cat` - the
+        catalog hashes the signed binary. `build-and-test.md`, "Vista x64 and
+        Windows 7 x64 target VMs", has the commands and three findings; two
+        of them change what this task owes:
+
+        **It costs one INF line, and that line is a decision.** `Inf2Cat`
+        refuses `src\xhci98-amd64.inf` outright - `22.9.4: Missing AMD64
+        CatalogFile entry ... from [Version] section` - and adding
+        `CatalogFile.NTamd64=xhci98.cat` makes it pass with zero errors. **It
+        has not been added.** It is a change to the shipping 64-bit package's
+        INF, the INF gate would want an opinion about it, and design record 11
+        section 12's decision 2 is the standing reminder that the two INFs are
+        kept apart deliberately.
+
+        **And Microsoft's own package validator blesses the `LayoutFile`
+        route, by name, for exactly these two systems.** All four OS-supplied
+        files come back as `22.9.10: ... missing from [SourceDisksFiles]
+        section ...; ok if file source is provided via LayoutFile in
+        [Version].` and nothing else. That is a better prior than the "should"
+        the second question rests on - it is the vendor's tool asked about
+        `Vista_X64` and `7_X64` specifically - and **it is still not the
+        reading**: a signability test is not the driver store at install time.
+
+        What is left is entirely guest-side: whether F8 or
+        `bcdedit -set TESTSIGNING ON` actually loads it, and what either costs
+        at every boot. The test root has to reach the guest's Trusted Root
+        **and** Trusted Publishers stores, both, before test-signing buys
+        anything
   - [ ] the `.NTamd64` package installed on each guest, or the driver-store
         refusal characterised precisely enough to decide what would fix it
   - [ ] then the same clauses 21.5 took, on each guest: registered and
@@ -2636,9 +2691,13 @@ reading may not tick a box whose line names a guest.
         port reserved in prose and would have stayed silent until 21.8's
         generators were written - months later, with both records believed in
         between. The 32-bit pair took **55565 and 55566**, 21.8's reservation
-        stands untouched, and the gate now asserts the reservation itself.
-        Release that assertion when 21.8's generators claim the ports, not
-        before
+        stood untouched, and the gate asserted the reservation itself.
+        **Released 2026-09-10, the way it was meant to be**: task 21.8's
+        generators now claim 55563 and 55564, so the assertion that nothing
+        takes them is gone - keeping it would assert that those guests must
+        not exist - and in its place the gate asserts that they still do, so a
+        guest that gave one up cannot leave it reserved for nothing. The
+        ordinary no-two-guests-share-a-port scan now covers all four
 - [ ] **22.5 - whatever 22.1 to 22.3 imply**, which may be nothing. If it is
       a driver change it is a release, and all four existing install legs -
       98, ME, 2000, XP32 - are re-validated behind it, because this is the

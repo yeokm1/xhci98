@@ -2246,49 +2246,174 @@ The procedure:
    the guest*, because it is the one that would make the phase pointless if
    wrong.
 
-### Vista x64 and Windows 7 x64 target VMs (roadmap task 21.8) - planned
+### Vista x64 and Windows 7 x64 target VMs (roadmap task 21.8)
 
-Not built. Added to the roadmap on 2026-09-09 on the owner's instruction,
-after task 21.7 read both systems' `usbport.sys` statically and found nothing
-in the interface against them. What is written here is what a builder needs
-before starting, and the last two items are the reason this is a separate leg
-rather than two more copies of the XP x64 recipe.
+Built but not yet installed, as of 2026-09-10. Added to the roadmap on
+2026-09-09 on the owner's instruction, after task 21.7 read both systems'
+`usbport.sys` statically and found nothing in the interface against them. The
+generators, launchers and disk images exist; the two Setup runs are the owner's
+and have not been taken.
 
-| | value |
+| | Vista Business SP2 x64 | Windows 7 Professional SP1 x64 |
+|---|---|---|
+| Media | `D:\isos\en_windows_vista_sp2_x64_dvd_342267.iso` | `D:\isos\en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso` |
+| Generator | `scripts\setup-qemu-vista-x64.ps1` | `scripts\setup-qemu-win7-x64.ps1` |
+| Image | `vm\vista-x64.img`, 32 GB | `vm\win7-x64.img`, 32 GB |
+| Monitor | 55563 | 55564 |
+| Accelerator | **unmeasured** | **unmeasured** |
+| vCPUs / RAM | 4 / 2048 MB | 4 / 2048 MB |
+| CPU model | `qemu64` | `qemu64` |
+
+Both are the same media task 21.7 read its six measurements out of, so the
+stack a guest installs is the stack that was measured, and saying so is cheap.
+
+**The machine is `scripts\qemu-nt6-common.ps1`, which these two share with the
+32-bit pair**; `-Arch amd64` is what makes it the 64-bit recipe. Four things
+turn on that switch and the third is the one that inverts rather than varies:
+the CPU refusal names long mode instead of the NX bit, the run launcher points
+at `.NTamd64` and `make-package.ps1 -Arch amd64`, the code-signing paragraph
+says enforcement is *on* rather than absent, and the memory note becomes the
+`>4 GB` experiment. The launcher gate asserts each of them per architecture.
+
+Two naming notes, so neither reads as drift. The generators are not called
+`setup-qemu-winvista64.ps1` and `setup-qemu-win7x64.ps1`, which is what this
+table carried from 2026-09-09: that pair disagreed with each other, and it was
+written when these guests were expected to be siblings of
+`setup-qemu-winxp64.ps1` rather than the 64-bit half of the Vista and Windows 7
+recipe. They take the 32-bit stems with an explicit `-x64`. And **monitor ports
+55563 and 55564 are now claimed rather than reserved**: the launcher gate's
+assertion that nothing took them is gone, replaced by one that these two still
+do.
+
+**The accelerator is not set in either generator, and both refuse to run
+without an explicit `-Accel`.** Every other generator here carries a measured
+default; these cannot, because nothing has been measured. XP x64 wants `tcg`,
+the 32-bit guests want WHPX, and on 2026-09-10 the 32-bit Vista and Windows 7
+pair disagreed with *each other* - so there is no value to inherit and a
+default would be a measurement this project has not taken. The launchers as
+generated on 2026-09-10 carry `whpx,kernel-irqchip=off` as a **probe**, chosen
+because it is the fast rung and because switching to TCG costs no reinstall
+(same virtual machine, only the execution engine differs). When an install
+COMPLETES, give the generator a measured default in a commit that says what was
+observed. Until then the rule stands: an accelerator may not be written down
+until an install has completed under it - the first 32-bit Vista probe stopped
+at Setup's language page, recorded WHPX, and that guest wedged on the boot after
+its whole first phase.
+
+#### The gate that comes before any of it: kernel-mode code signing
+
+Windows XP x64 does not enforce it, which is the whole reason Phase 21 took
+that target first. Vista x64 and Windows 7 x64 both do, and the
+cross-certificate route that once made third-party Windows 7 x64 signing
+possible is no longer available in practice. So `xhci98.sys` loads on these
+systems only on a boot with driver signature enforcement disabled (F8) or with
+test-signing on. Establish which works, and what it costs the user at every
+boot, before spending time on anything downstream - and if the answer is that
+it cannot be made to load, that is the leg's result. Design record 11 section 6
+is the record; the requirement belongs in the release notes beside any tier
+that is claimed, not in a footnote.
+
+**The host-side half of that was proved out on 2026-09-10, before either guest
+existed, and it works end to end with no network and nothing installed.** The
+whole toolchain is already in this repository:
+
+| tool | where |
 |---|---|
-| Media | `D:\isos\en_windows_vista_sp2_x64_dvd_342267.iso` and `D:\isos\en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso` - **the same media task 21.7 read its measurements out of**, so the stack a guest installs is the stack that was measured |
-| Monitor ports | **55563** (Vista x64) and **55564** (Windows 7 x64). 55555-55562 are taken; the launcher gate asserts no two launchers share a port, and it exists because that has happened twice |
-| Generators | `scripts\setup-qemu-winvista64.ps1` and `scripts\setup-qemu-win7x64.ps1`, siblings of `setup-qemu-winxp64.ps1`, each with its launchers and its row in `scripts\test-qemu-launchers.ps1` |
-| CPU / RAM / disk | `-cpu qemu64` at least (long mode); size RAM and disk to the OS, not to the XP x64 numbers - both are heavier |
-| Accelerator | **Probe it. Do not inherit.** XP x64 needs `-accel tcg` and WHPX wedges its Setup, which is the reverse of every 32-bit guest here; `lessons.md`, "The accelerator is the discriminating variable in both directions", says plainly that neither reading generalises, and a 64-bit Vista or Windows 7 guest is a third workload probed on neither host |
+| `MakeCert.exe`, `SignTool.exe`, `CertMgr.exe` | `tools\WinDDK71\bin\x86` and `...\bin\amd64` |
+| `Inf2Cat.exe` | `tools\WinDDK71\bin\selfsign` |
 
-**The gate that comes before any of it: kernel-mode code signing.** Windows XP
-x64 does not enforce it, which is the whole reason Phase 21 took that target
-first. Vista x64 and Windows 7 x64 both do, and the cross-certificate route
-that once made third-party Windows 7 x64 signing possible is no longer
-available in practice. So `xhci98.sys` loads on these systems only on a boot
-with driver signature enforcement disabled (F8) or with test-signing on.
-Establish which works, and what it costs the user at every boot, before
-spending time on anything downstream - and if the answer is that it cannot be
-made to load, that is the leg's result. Design record 11 section 6 is the
-record; the requirement belongs in the release notes beside any tier that is
-claimed, not in a footnote.
+The sequence, and **the order is not free - the catalog hashes the signed
+`.sys`, so signing has to come first**:
 
-**And the install path is not the one the INF was written for.** The
-`LayoutFile=layout.inf` route that lets the media carry no Microsoft file is a
-Windows 2000 and XP mechanism; Vista and later stage a package into the driver
-store first and validate its file list more strictly. One reading from the
-same 21.7 pass makes this look easier than it did: both install images carry
-`usbport.sys`, `usbhub.sys`, `usbd.sys` and `usbehci.sys` in
-`Windows\System32\drivers` outright, in every architecture - the opposite of
-an xHCI-only XP or 2000 install - so the Code 39 that Phase 19's fix answers
-cannot arise and every `COPYFLG_NO_OVERWRITE` copy should skip without needing
-a source. **"Should" is doing the work there**: that is a reading of an
-install image, not of an installed system, and it says nothing about whether
-the driver store accepts the package's file list. If it does not, the fix is a
-decision rather than an edit - design record 11 section 12's decision 2 kept
-the 32-bit and 64-bit INFs apart deliberately, and a third one is the same
-kind of choice.
+```
+MakeCert -r -pe -ss PrivateCertStore -n "CN=<name>" <name>.cer
+SignTool sign /v /s PrivateCertStore /n "<name>" <staged>\xhci98.sys
+Inf2Cat /driver:<staged> /os:Vista_X64,7_X64
+SignTool sign /v /s PrivateCertStore /n "<name>" <staged>\xhci98.cat
+```
+
+Three things came out of running it, and the second is a decision rather than a
+step:
+
+- **`Inf2Cat` is a managed .NET 2.0 application and this host has no .NET 2.0**,
+  so it exits `0x80131700` **printing absolutely nothing** - no error, no usage,
+  no exit message, which reads exactly like a tool that did its job. What fixes
+  it is an `Inf2Cat.exe.config` beside the executable declaring
+  `<supportedRuntime version="v4.0"/>` under a `<startup
+  useLegacyV2RuntimeActivationPolicy="true">`, which is a configuration file
+  next to the tool and not a modification of it. Check for the `.cat` rather
+  than trusting the exit.
+- **The amd64 INF as it stands cannot be catalogued at all.** `Inf2Cat` refuses
+  it with `22.9.4: Missing AMD64 CatalogFile entry (CatalogFile.ntamd64,
+  CatalogFile.nt, CatalogFile) from [Version] section`. Adding one line -
+  `CatalogFile.NTamd64=xhci98.cat` - makes the same package pass with zero
+  errors and generate its catalog. **That line has NOT been added to
+  `src\xhci98-amd64.inf`**: it is an INF change on the shipping 64-bit package,
+  it would want the INF gate to have an opinion about it, and design record 11
+  section 12's decision 2 is the standing reminder that the two INFs are kept
+  apart deliberately. It is the owner's call, and it is cheap once made.
+- **The `LayoutFile` route survives Microsoft's own signability test, named
+  explicitly, targeted at these two systems.** Every one of the four
+  OS-supplied files produces the same warning and nothing else:
+
+  ```
+  22.9.10: usbport.sys in [xhci.copynt] is missing from [SourceDisksFiles]
+  section in \xhci98-amd64.inf; ok if file source is provided via LayoutFile
+  in [Version].
+  ```
+
+  and the same for `usbd.sys`, `usbhub.sys` and `usbui.dll`. That is a
+  meaningfully better prior than the "should" below, because it is the vendor's
+  package validator being asked about `Vista_X64` and `7_X64` specifically and
+  blessing the arrangement by name. **It is still not the reading**: a
+  signability test is not the driver store at install time, and only a guest
+  settles that.
+
+What the signature costs and what it does not: the embedded signature appends
+1,024 bytes to the amd64 `release` binary (94,720 to 95,744) and changes
+nothing else. `SignTool verify /pa` then **fails** on the host with "A
+certificate chain processed, but terminated in a root certificate which is not
+trusted by the trust provider" - which is the expected result and is precisely
+the guest-side cost: the test root has to be imported into the guest's
+**Trusted Root Certification Authorities and Trusted Publishers** stores, both,
+before `bcdedit -set TESTSIGNING ON` buys anything. Nothing from this probe was
+left behind: the certificate was removed from the host store afterwards, and no
+file in the repository was changed by it.
+
+#### And the install path is not the one the INF was written for
+
+The `LayoutFile=layout.inf` route that lets the media carry no Microsoft file is
+a Windows 2000 and XP mechanism; Vista and later stage a package into the driver
+store first and validate its file list more strictly. Two readings now make this
+look easier than it did. Both install images carry `usbport.sys`, `usbhub.sys`,
+`usbd.sys` and `usbehci.sys` in `Windows\System32\drivers` outright, in every
+architecture (task 21.7, 2026-09-09) - the opposite of an xHCI-only XP or 2000
+install - and the 32-bit guests of Phase 22 **confirmed on an installed system**
+that all four plus `usbui.dll` are on disk after an install with no USB host
+controller at all. So the Code 39 that Phase 19's fix answers should not arise
+and every `COPYFLG_NO_OVERWRITE` copy should skip without needing a source.
+
+**"Should" is still doing work there**, and less of it than before but not none:
+the confirmed reading is of the 32-bit guests, the amd64 halves of both images
+are a media reading, and neither says whether the driver store accepts the
+package's file list. If it does not, the fix is a decision rather than an edit -
+design record 11 section 12's decision 2 kept the 32-bit and 64-bit INFs apart
+deliberately, and a third one, or an `.NTamd64.6.0` decorated section, is the
+same kind of choice.
+
+#### One trap this pair inherits from the 32-bit one
+
+Windows 7 Setup creates the 100 MB System Reserved partition Vista does not, so
+`7z l vm\win7-x64.img` **stops at the MBR** and lists three volumes instead of
+recursing - 7-Zip descends automatically only when there is a single nested
+stream. It does not error; it returns about thirty lines that read like an empty
+disk. Extract the Windows volume and list that, exactly as for the 32-bit
+guest:
+
+```
+7z e vm\win7-x64.img 1.ntfs -o<scratch>
+7z l <scratch>\1.ntfs
+```
 
 ### Windows 2000 SMP Stress VM (Phase 2d)
 
