@@ -803,9 +803,21 @@ that does not exist, or clear that one yourself.
         Write-Host "  XP x64   Device Manager -> the xHCI device -> Update Driver -> Have Disk"
         Write-Host "  2003 x64 the same; both are NT 5.2.3790 and one binary serves them"
         Write-Host ""
-        Write-Warn "No amd64 build of this driver has ever been observed running (roadmap task 21.5)."
-        Write-Warn "This media is gated, not validated: treat a guest booted from it as the"
-        Write-Warn "experiment it is, and do not put it on a machine you need working."
+        #
+        # This warning said "no amd64 build has ever been observed running"
+        # until 2026-09-10. Roadmap task 21.5 closed on 2026-09-09 and that
+        # sentence has been false since: it is one guest, not none. Say which
+        # guest, because the gap between XP x64 and the two systems below it is
+        # the whole of roadmap task 21.8.
+        #
+        Write-Warn "ONE guest has ever been observed running an amd64 build: Windows XP x64 SP2,"
+        Write-Warn "on both shipping flavours (roadmap task 21.5, 2026-09-09). Windows Server"
+        Write-Warn "2003 x64 rests on being the same operating system, NT 5.2.3790, and was"
+        Write-Warn "never booted. Vista x64 and Windows 7 x64 are NOT in that tier: they enforce"
+        Write-Warn "kernel-mode code signing, and whether this binary can be made to load there"
+        Write-Warn "at all is roadmap task 21.8, open."
+        Write-Warn "No amd64 build has ever run on real hardware. Treat a guest booted from this"
+        Write-Warn "media as the experiment it is, and do not put it on a machine you need working."
     } else {
         Write-Host "  Win98    Device Manager -> the xHCI device -> Update Driver -> Specify a location"
         Write-Host "  Win2000  Device Manager -> the xHCI device -> Update Driver -> Have Disk"
