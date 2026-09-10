@@ -462,7 +462,8 @@ function New-Nt6QemuGuest {
             "rem      costs a desktop watermark. The host-side half of this is proved",
             "rem      out and recorded in build-and-test.md, ""Vista x64 and Windows 7",
             "rem      x64 target VMs"" - MakeCert, SignTool and Inf2Cat are all in",
-            "rem      tools\WinDDK71 and need no network.",
+            "rem      tools\WinDDK71, and Inf2Cat wants the .NET 3.5 feature or it",
+            "rem      exits printing nothing at all.",
             "rem    SETTLE THIS BEFORE ANYTHING DOWNSTREAM. Everything else this",
             "rem    guest is for is wasted if the driver cannot be made to load, and",
             "rem    a negative is a complete answer to the task."

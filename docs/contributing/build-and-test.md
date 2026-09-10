@@ -2320,7 +2320,7 @@ whole toolchain is already in this repository:
 | tool | where |
 |---|---|
 | `MakeCert.exe`, `SignTool.exe`, `CertMgr.exe` | `tools\WinDDK71\bin\x86` and `...\bin\amd64` |
-| `Inf2Cat.exe` | `tools\WinDDK71\bin\selfsign` |
+| `Inf2Cat.exe` | `tools\WinDDK71\bin\selfsign` - **needs the .NET 3.5 feature**, see below |
 
 The sequence, and **the order is not free - the catalog hashes the signed
 `.sys`, so signing has to come first**:
@@ -2335,14 +2335,21 @@ SignTool sign /v /s PrivateCertStore /n "<name>" <staged>\xhci98.cat
 Three things came out of running it, and the second is a decision rather than a
 step:
 
-- **`Inf2Cat` is a managed .NET 2.0 application and this host has no .NET 2.0**,
-  so it exits `0x80131700` **printing absolutely nothing** - no error, no usage,
-  no exit message, which reads exactly like a tool that did its job. What fixes
-  it is an `Inf2Cat.exe.config` beside the executable declaring
+- **`Inf2Cat` is a managed .NET 2.0 application, so the .NET 3.5 feature is a
+  prerequisite - and its absence is silent.** On a stock Windows 11 host, which
+  does not enable `NetFx3`, it exits `0x80131700` **printing absolutely
+  nothing**: no error, no usage, no exit message, which reads exactly like a
+  tool that did its job. It was hit on this host on 2026-09-10 and the owner
+  enabled .NET 3.5 the same day, so `Inf2Cat` now runs in place out of
+  `tools\WinDDK71\bin\selfsign` with nothing beside it; **the tool directory is
+  unmodified and must stay that way**. Where the feature cannot be enabled, an
+  `Inf2Cat.exe.config` next to a *copy* of the executable, declaring
   `<supportedRuntime version="v4.0"/>` under a `<startup
-  useLegacyV2RuntimeActivationPolicy="true">`, which is a configuration file
-  next to the tool and not a modification of it. Check for the `.cat` rather
-  than trusting the exit.
+  useLegacyV2RuntimeActivationPolicy="true">`, runs it on .NET 4 instead - a
+  configuration file beside the tool, not a modification of it. Both routes
+  were run here and **their diagnostics are identical**, which is why the two
+  findings below are readings of the package rather than of the runtime.
+  Either way: check for the `.cat`, not the exit code.
 - **The amd64 INF as it stands cannot be catalogued at all.** `Inf2Cat` refuses
   it with `22.9.4: Missing AMD64 CatalogFile entry (CatalogFile.ntamd64,
   CatalogFile.nt, CatalogFile) from [Version] section`. Adding one line -

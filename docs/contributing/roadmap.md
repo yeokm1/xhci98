@@ -2231,9 +2231,16 @@ are static readings and no other task's box may be ticked on one.
         installed: `MakeCert`, `SignTool` and `CertMgr` in
         `tools\WinDDK71\bin\x86`, `Inf2Cat` in `tools\WinDDK71\bin\selfsign`.
         Sign the `.sys` first, then `Inf2Cat`, then sign the `.cat` - the
-        catalog hashes the signed binary. `build-and-test.md`, "Vista x64 and
-        Windows 7 x64 target VMs", has the commands and three findings; two
-        of them change what this task owes:
+        catalog hashes the signed binary. One host prerequisite, and its
+        absence is silent: `Inf2Cat` is a managed .NET 2.0 application, and on
+        a stock Windows 11 host it exits `0x80131700` **printing nothing at
+        all**. The owner enabled .NET 3.5 on 2026-09-10 and it now runs in
+        place; where that is not possible, a `.config` beside a copy of it
+        runs it on .NET 4, and both routes give **identical** diagnostics -
+        so the two findings below are readings of the package, not of the
+        runtime. `build-and-test.md`, "Vista x64 and Windows 7 x64 target
+        VMs", has the commands; two of the findings change what this task
+        owes:
 
         **It costs one INF line, and that line is a decision.** `Inf2Cat`
         refuses `src\xhci98-amd64.inf` outright - `22.9.4: Missing AMD64
