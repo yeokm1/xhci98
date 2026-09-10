@@ -2343,6 +2343,40 @@ it cannot be made to load, that is the leg's result. Design record 11 section 6
 is the record; the requirement belongs in the release notes beside any tier
 that is claimed, not in a footnote.
 
+**Take F8 first, and on one guest before both.** It needs no certificate, no
+catalog and nothing staged, so it is the cheapest route to the question that
+actually decides the leg: does the amd64 binary load and work on these systems
+at all. A negative there ends it, and everything downstream is saved. Only if
+it loads is the test-signing route worth setting up, and then what that route
+buys is one specific thing: whether the cost can be reduced from per-boot to
+one-time.
+
+**F8 answers half of this, and the other half is the half that reaches the
+tier.** It applies to exactly one boot, by design, so what it establishes is
+that the user must press F8 and choose that option every time the machine
+starts. For a USB host controller driver that is a heavy cost rather than a
+footnote - the machine can never boot unattended into working USB - and it is
+materially weaker than what this project claims for XP x64 and Server 2003 x64,
+where the package installs and loads with nothing asked of the user. A tier
+claim has to name which route it rests on rather than treat the two as
+equivalent. `bcdedit -set TESTSIGNING ON` is the route that persists across
+reboots, being a BCD setting; its costs are the two certificate stores named
+below and a permanent desktop watermark.
+
+Two things F8 does not do, so neither reads as a failure when it happens:
+
+- **It does not silence the install-time publisher prompt.** "Windows can't
+  verify the publisher of this driver software" still appears during Update
+  Driver and still wants "Install this driver software anyway". That prompt is
+  the catalog's business, not the loader's - the same distinction the rest of
+  this section rests on - and it is a cost to record rather than a block.
+- **It says nothing about the driver store.** Whether these systems accept the
+  package's file list is a different mechanism with a different failure mode. A
+  clean load under F8 is not evidence about it in either direction.
+
+On the guests the F8 menu is reachable over the PS/2 keyboard, so there is no
+chicken-and-egg between the boot menu and the controller being installed.
+
 **The host-side half of that was proved out on 2026-09-10, before either guest
 existed, and it works end to end with no network and nothing installed.** The
 whole toolchain is already in this repository:

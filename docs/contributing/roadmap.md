@@ -2321,7 +2321,47 @@ are static readings and no other task's box may be ticked on one.
         TESTSIGNING ON`** over an embedded-signed `.sys`, where the test root
         has to reach the guest's Trusted Root **and** Trusted Publishers
         stores, both, before it buys anything. Record what each costs the user
-        at every boot and whether either survives a reboot
+        at every boot and whether either survives a reboot.
+
+        **TAKE F8 FIRST, AND ON ONE GUEST BEFORE BOTH.** It needs no
+        certificate, no catalog and nothing staged, so it is the cheapest path
+        to the question that actually decides this task: does the amd64 binary
+        load and work on these systems at all. A negative there closes 21.8 and
+        boxes 4 to 7 never happen. Only if it loads is the test-signing route
+        worth the time, and then what that route buys is a specific,
+        answerable thing: whether the cost can be reduced from per-boot to
+        one-time.
+
+        **F8 ANSWERS HALF THIS BOX AND THE OTHER HALF IS THE ONE THAT REACHES
+        THE TIER.** It applies to exactly one boot, by design, so the finding
+        it produces is "the user must press F8 and choose that option every
+        time the machine starts". For a USB host controller driver that is a
+        heavy cost rather than a footnote: the machine can never boot
+        unattended into working USB. That is a materially different claim from
+        the one this project makes about XP x64 and Server 2003 x64, where the
+        package installs and loads with nothing asked of the user, and task
+        21.6's tier wording has to say so rather than list both routes as
+        equivalent. `TESTSIGNING` is the route that persists across reboots,
+        being a BCD setting; its own costs are the two certificate stores above
+        and a permanent desktop watermark.
+
+        Two things F8 does NOT do, so neither reads as a failure when it
+        happens:
+
+        - **It does not silence the install-time publisher prompt.** "Windows
+          can't verify the publisher of this driver software" still appears
+          during Update Driver, and still wants "Install this driver software
+          anyway". That prompt is the catalog's business, not the loader's -
+          the same distinction the paragraphs above rest on - and it is a cost
+          to write down rather than a block.
+        - **It says nothing about the box below it.** Whether the driver store
+          accepts this package's file list is a different mechanism with a
+          different failure mode. A clean load under F8 is not evidence about
+          it in either direction.
+
+        On the guests the F8 menu is reachable over the PS/2 keyboard, so there
+        is no chicken-and-egg between the boot menu and the controller being
+        installed
   - [ ] the `.NTamd64` package installed on each guest, or the driver-store
         refusal characterised precisely enough to decide what would fix it
   - [ ] then the same clauses 21.5 took, on each guest: registered and
