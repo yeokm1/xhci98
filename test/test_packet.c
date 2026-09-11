@@ -4,7 +4,8 @@
  * Covers src/xhci_usbport.h, which is the shape of every conversation this
  * driver will ever have with usbport.sys. If a field of the registration
  * packet moves, registration still "succeeds" - usbport copies 316 bytes
- * either way, or 592 on amd64 - and the damage appears later as a callback
+ * either way, or 592 on amd64, and 480 / 872 from an NT 6.x usbport offered
+ * Version 300 - and the damage appears later as a callback
  * jumping through the wrong slot with arguments meant for a different
  * function. There is no
  * diagnostic for that on either guest, so it gets caught here.
@@ -248,19 +249,96 @@ static void test_packet_tail(void)
      */
     PACKET_ANCHOR_OFFSET(Reserved5, 0x138, 0x248);
 
-    CHECK_EQ(sizeof(USBPORT_REGISTRATION_PACKET), BY_ARCH(316, 0x250),
-             "packet size copied at Version >= 200");
+    /*
+     * Since task 22.5 the structure continues past here into the Version 300
+     * tier, so the number every NT 5.x and 9x usbport copies at Version 200 is
+     * the offset of the tier's first field rather than sizeof.
+     */
+    CHECK_EQ(XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, ExtraCommonBufferCount),
+             BY_ARCH(316, 0x250),
+             "packet bytes copied at 200 <= Version < 300");
 
     /*
-     * The difference between the two copy sizes the binaries use must be
-     * exactly the four tail fields - that is how a Version < 200 miniport ends
-     * up with RH_ChirpRootPort ungated. Four pointer-sized fields, so 16 bytes
-     * on x86 and 32 on amd64 (0x250 - 0x230).
+     * The difference between the two NT 5.x copy sizes must be exactly the
+     * four tail fields - that is how a Version < 200 miniport ends up with
+     * RH_ChirpRootPort ungated. Four pointer-sized fields, so 16 bytes on x86
+     * and 32 on amd64 (0x250 - 0x230).
      */
-    CHECK_EQ(sizeof(USBPORT_REGISTRATION_PACKET) -
+    CHECK_EQ(XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, ExtraCommonBufferCount) -
                  XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, RH_ChirpRootPort),
              BY_ARCH(16, 32),
              "the short copy stops exactly before the tail four");
+}
+
+/*
+ * The Version 300 tier (task 22.5), read slot by slot out of the four NT 6.x
+ * usbport.sys / usbehci.sys pairs on 2026-09-11 with Microsoft's public
+ * symbols loaded (docs/usb-xhci-info/usbport-miniport-abi.md, "The Version 300
+ * tier, slot by slot"). Both columns are hand-typed from that table; the amd64
+ * column is NOT M6's f(X) - the tier has its own map, `0x250 + (X - 0x13C)`
+ * for the twelve ULONGs and `0x280 + (X - 0x16C) * 2` for the pointers - and
+ * the point of typing every row is that an arithmetic slip in the declaration
+ * lands on a slot usbport NULL-checks, which is silent, or on InterruptDpcEx,
+ * which is the one slot the whole tier exists for.
+ */
+static void test_packet_version_300_tier(void)
+{
+    CHECK_EQ(USBPORT_NT6_MINIPORT_INTERFACE_VERSION, 300,
+             "the NT 6.x interface version presented");
+    CHECK_EQ(USBPORT_DPC_EX_PORT_CHANGE, 2, "InterruptDpcEx port-change bit");
+    CHECK_EQ(USBPORT_DPC_EX_TRANSFER_WORK, 1, "InterruptDpcEx transfer bit");
+
+    /* The twelve ULONGs: count, eight sizes, three context sizes. */
+    PACKET_ANCHOR_OFFSET(ExtraCommonBufferCount, 0x13C, 0x250);
+    PACKET_ANCHOR_OFFSET(ExtraCommonBufferSize, 0x140, 0x254);
+    CHECK_EQ(sizeof(((USBPORT_REGISTRATION_PACKET *)0)->ExtraCommonBufferSize),
+             8 * 4, "eight ULONG sizes, one per extra common buffer");
+    PACKET_ANCHOR_OFFSET(HsbControllerContextSize, 0x160, 0x274);
+    PACKET_ANCHOR_OFFSET(HsbTtContextSize, 0x164, 0x278);
+    PACKET_ANCHOR_OFFSET(HsbEndpointContextSize, 0x168, 0x27C);
+
+    /* The 29 pointer slots, in order. */
+    PACKET_ANCHOR_OFFSET(ReleasePortControl, 0x16C, 0x280);
+    PACKET_ANCHOR_OFFSET(ReadCfgFlag, 0x170, 0x288);
+    PACKET_ANCHOR_OFFSET(SetWakeOnConnect, 0x174, 0x290);
+    PACKET_ANCHOR_OFFSET(InterruptDpcEx, 0x178, 0x298);
+    PACKET_ANCHOR_OFFSET(NotifyTransferQueueState, 0x17C, 0x2A0);
+    PACKET_ANCHOR_OFFSET(CheckHwSync, 0x180, 0x2A8);
+    PACKET_ANCHOR_OFFSET(UsbxInitHsbTransactionTranslator, 0x184, 0x2B0);
+    PACKET_ANCHOR_OFFSET(UsbxInitHsbController, 0x188, 0x2B8);
+    PACKET_ANCHOR_OFFSET(UsbxInitHsbEndpoint, 0x18C, 0x2C0);
+    PACKET_ANCHOR_OFFSET(UsbxAllocateBandwidth, 0x190, 0x2C8);
+    PACKET_ANCHOR_OFFSET(UsbxFreeBandwidth, 0x194, 0x2D0);
+    PACKET_ANCHOR_OFFSET(Unreferenced198, 0x198, 0x2D8);
+    PACKET_ANCHOR_OFFSET(UsbxPokeEndpoint, 0x19C, 0x2E0);
+    PACKET_ANCHOR_OFFSET(UsbxOpenEndpoint, 0x1A0, 0x2E8);
+    PACKET_ANCHOR_OFFSET(UsbxQueryBandwidthData, 0x1A4, 0x2F0);
+    PACKET_ANCHOR_OFFSET(UsbxQueryTtBandwidthData, 0x1A8, 0x2F8);
+    PACKET_ANCHOR_OFFSET(UsbxQueryEpBandwidthData, 0x1AC, 0x300);
+    PACKET_ANCHOR_OFFSET(UsbPortRequestAsyncCallbackEx, 0x1B0, 0x308);
+    PACKET_ANCHOR_OFFSET(UsbPortCancelAsyncCallback, 0x1B4, 0x310);
+    PACKET_ANCHOR_OFFSET(Unreferenced1B8, 0x1B8, 0x318);
+    PACKET_ANCHOR_OFFSET(Unreferenced1BC, 0x1BC, 0x320);
+    PACKET_ANCHOR_OFFSET(Unreferenced1C0, 0x1C0, 0x328);
+    PACKET_ANCHOR_OFFSET(CreateDeviceData, 0x1C4, 0x330);
+    PACKET_ANCHOR_OFFSET(DeleteDeviceData, 0x1C8, 0x338);
+    PACKET_ANCHOR_OFFSET(DbgFreeEndpoint, 0x1CC, 0x340);
+    PACKET_ANCHOR_OFFSET(Unreferenced1D0, 0x1D0, 0x348);
+    PACKET_ANCHOR_OFFSET(Unreferenced1D4, 0x1D4, 0x350);
+    PACKET_ANCHOR_OFFSET(HaltController, 0x1D8, 0x358);
+    PACKET_ANCHOR_OFFSET(Get32BitMicroFrameNumber, 0x1DC, 0x360);
+
+    /* What an NT 6.x usbport copies at 300 <= Version < 310. */
+    CHECK_EQ(sizeof(USBPORT_REGISTRATION_PACKET), BY_ARCH(0x1E0, 0x368),
+             "packet bytes copied at Version 300");
+
+    /* The two maps, stated as arithmetic on the declaration. */
+    CHECK_EQ(XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, ReleasePortControl) -
+                 XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, ExtraCommonBufferCount),
+             12 * 4, "twelve ULONGs before the first 300-tier pointer");
+    CHECK_EQ(sizeof(USBPORT_REGISTRATION_PACKET) -
+                 XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, ReleasePortControl),
+             29 * BY_ARCH(4, 8), "29 pointer slots to the end of the tier");
 }
 
 /* ------------------------------------------------------------------ */
@@ -613,6 +691,7 @@ int main(void)
     test_packet_roothub_callbacks();
     test_packet_service_block();
     test_packet_tail();
+    test_packet_version_300_tier();
     test_resources();
     test_endpoint_properties();
     test_transfer_structures();

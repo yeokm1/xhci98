@@ -915,7 +915,12 @@ rows in section 4.
 
 Transcribed from [usbmport.h:544-634]. On x86 every field is 4 bytes
 (`ULONG`/`SIZE_T`/function pointer), so offsets are mechanical.
-`sizeof(USBPORT_REGISTRATION_PACKET) = 0x13C (316)`. The wrapper
+`sizeof(USBPORT_REGISTRATION_PACKET) = 0x13C (316)` in that header and in
+every NT 5.x and 9x usbport's copy; **since 2026-09-11 this driver's own
+declaration continues past `0x138` into the Version 300 tier and its
+`sizeof` is `0x1E0` (`0x368` on amd64)** - the table below is the 200 tier,
+unchanged, and section 1's "The Version 300 tier, slot by slot" is the rest.
+The wrapper
 `USBPORT_MINIPORT_INTERFACE` (usbport-internal: DriverObject 0x00,
 LIST_ENTRY 0x04, DriverUnload 0x0C, Version 0x10, Packet 0x14) is
 `C_ASSERT`ed at `32 + 76*sizeof(PVOID)` = 336 bytes on x86

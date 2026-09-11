@@ -9757,6 +9757,10 @@ static void test_registered_callbacks(void)
 
     CHECK(XhciRegPacket.InterruptService != NULL, "the packet carries an ISR");
     CHECK(XhciRegPacket.InterruptDpc != NULL, "and a DPC");
+    /* Task 22.5: the NT 6.x slot is served by the same function, the way
+     * Vista's own usbehci serves both of its slots with one routine. */
+    CHECK(XhciRegPacket.InterruptDpcEx == XhciRegPacket.InterruptDpc,
+          "and the Version 300 InterruptDpcEx slot is that same DPC");
     CHECK(XhciRegPacket.EnableInterrupts != NULL, "and EnableInterrupts");
     CHECK(XhciRegPacket.DisableInterrupts != NULL, "and DisableInterrupts");
     CHECK(XhciRegPacket.FlushInterrupts != NULL, "and FlushInterrupts");
@@ -9789,7 +9793,9 @@ static void test_registered_callbacks(void)
           "signature only, by design");
 
     hw_access_snapshot(&before);
-    XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(XhciRegPacket.InterruptDpc(&ext, TRUE), 0,
+             "the registered DPC reports nothing to NT 6.x on a bad trailing "
+             "signature");
     check_touched_nothing(&before, "the registered DPC, bad trailing signature");
     CHECK_EQ(ext.DpcCount, 0, "and it does not count itself");
 
@@ -9861,7 +9867,9 @@ static void test_registered_callbacks(void)
 
     dpcs = ext.DpcCount;
     hw_access_snapshot(&before);
-    XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(XhciRegPacket.InterruptDpc(&ext, TRUE), 0,
+             "the registered DPC reports nothing to NT 6.x on a bad leading "
+             "signature");
     check_touched_nothing(&before,
                           "registered DPC, bad leading signature");
     CHECK_EQ(ext.DpcCount, dpcs, "and the DPC counts nothing");
@@ -9922,11 +9930,30 @@ static void test_registered_callbacks(void)
 
     ext.Signature = XHCI_EXTENSION_SIGNATURE;
 
+    /*
+     * Task 22.5: what the DPC hands back to an NT 6.x caller, through the
+     * registered pointer. usbport reads bits 0 and 1 and invalidates the
+     * root-hub interrupt endpoint on either; this driver reports the port bit
+     * after a pass that consumed a Port Status Change Event and nothing
+     * otherwise, derived from the counter the drain already keeps.
+     */
+    dpcs = ext.DpcCount;
+    CHECK_EQ(XhciRegPacket.InterruptDpc(&ext, TRUE), 0,
+             "a pass that consumed no port change reports nothing to NT 6.x");
+    CHECK_EQ(ext.DpcCount, dpcs + 1, "and it was a real pass");
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, 1UL << 24, 0);
+    CHECK_EQ(XhciRegPacket.InterruptDpc(&ext, TRUE), USBPORT_DPC_EX_PORT_CHANGE,
+             "a pass that consumed a Port Status Change Event reports the "
+             "port bit");
+    CHECK_EQ(XhciRegPacket.InterruptDpc(&ext, TRUE), 0,
+             "and the next quiet pass reports nothing again");
+
     /* And NULL, through the same pointers. */
     hw_access_snapshot(&before);
     CHECK_EQ(XhciRegPacket.InterruptService(NULL), FALSE,
              "the registered ISR declines NULL");
-    XhciRegPacket.InterruptDpc(NULL, TRUE);
+    CHECK_EQ(XhciRegPacket.InterruptDpc(NULL, TRUE), 0,
+             "the registered DPC reports nothing to NT 6.x on NULL");
     XhciRegPacket.EnableInterrupts(NULL);
     XhciRegPacket.DisableInterrupts(NULL);
     XhciRegPacket.FlushInterrupts(NULL);

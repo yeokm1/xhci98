@@ -1202,18 +1202,50 @@ static BOOLEAN NTAPI xhciInterruptService(PVOID miniPortExtension)
  * bracket test - which the DIRQL path deliberately does not pay for - on the
  * DPC path.
  */
-static VOID NTAPI xhciInterruptDpc(PVOID miniPortExtension,
-                                   BOOLEAN enableInterrupts)
+static ULONG NTAPI xhciInterruptDpc(PVOID miniPortExtension,
+                                    BOOLEAN enableInterrupts)
 {
     PXHCI_EXTENSION ext;
+    ULONG portChangesBefore;
+    ULONG result;
 
     ext = (PXHCI_EXTENSION)miniPortExtension;
+    result = 0;
 
     XHCI_DBG_CB("InterruptDpc", miniPortExtension, enableInterrupts, 0);
 
     if (xhciExtensionValid(ext)) {
+        /*
+         * One function serves two slots since task 22.5: the NT 5.x
+         * InterruptDpc at packet+0x4C, whose caller declares it VOID and never
+         * reads eax, and the NT 6.x InterruptDpcEx at +0x178 / +0x298, whose
+         * caller reads bits 0 and 1 and invalidates the root-hub interrupt
+         * endpoint on either. Microsoft's own usbehci is built the same way -
+         * its 0x4C function is a thunk onto its InterruptDpcEx.
+         *
+         * The bit reported is the port one, and it is derived from the counter
+         * XhciEventDpc already keeps rather than from a new flag: a pass that
+         * consumed at least one Port Status Change Event is a pass after which
+         * the hub driver should look at the ports. The body still calls
+         * UsbPortInvalidateRootHub itself where it always did; on NT 6.x that
+         * and this bit reach the same place twice, which is harmless, and on
+         * NT 5.x the bit is simply not read. Bit 0 - usbehci's "transfer
+         * interrupt with pending work" - is not reported, because this driver
+         * completes transfers from the drain itself and has nothing pending
+         * for usbport to poll.
+         */
+        portChangesBefore = ext->EventCounts[XHCI_EVENT_TYPE_INDEX(
+            XHCI_TRB_TYPE_PORT_STATUS_CHANGE)];
+
         XhciEventDpc(ext, enableInterrupts);
+
+        if (ext->EventCounts[XHCI_EVENT_TYPE_INDEX(
+                XHCI_TRB_TYPE_PORT_STATUS_CHANGE)] != portChangesBefore) {
+            result = USBPORT_DPC_EX_PORT_CHANGE;
+        }
     }
+
+    return result;
 }
 
 /*
@@ -4460,6 +4492,14 @@ static VOID xhciFillPacket(VOID)
     XhciRegPacket.ResumeController = xhciResumeController;
     XhciRegPacket.InterruptService = xhciInterruptService;
     XhciRegPacket.InterruptDpc = xhciInterruptDpc;
+    /*
+     * The one Version 300 slot this driver fills (task 22.5). An NT 6.x
+     * usbport takes the interrupt DPC from here and never from the slot
+     * above; every other 300-tier slot is NULL-checked by its reader and
+     * stays zero from xhciZeroPacket - see the tier's block in
+     * src\xhci_usbport.h.
+     */
+    XhciRegPacket.InterruptDpcEx = xhciInterruptDpc;
     XhciRegPacket.SubmitTransfer = xhciSubmitTransfer;
     XhciRegPacket.SubmitIsoTransfer = xhciSubmitIsoTransfer;
     XhciRegPacket.AbortTransfer = xhciAbortTransfer;
@@ -4512,6 +4552,13 @@ static VOID xhciFillPacket(VOID)
 }
 
 /*
+ * The Version argument DriverEntry handed to usbport: 300 to an NT 6.x
+ * usbport, 200 to every other (task 22.5). Recorded so the verifier below can
+ * hold usbport to the tier it was offered, and so the log says which one ran.
+ */
+static ULONG xhciInterfaceVersionPresented = USB20_MINIPORT_INTERFACE_VERSION;
+
+/*
  * Check what registration did to the packet, and log the evidence.
  *
  * Returns 1 if everything is as the ABI record says it must be. A 0 is
@@ -4527,6 +4574,49 @@ static ULONG xhciVerifyPacketAfterRegistration(VOID)
     ULONG ok;
 
     ok = 1;
+
+    /*
+     * The Version 300 tier, both ways round. An NT 6.x usbport offered 300
+     * writes exactly two services into it - UsbPortRequestAsyncCallbackEx and
+     * UsbPortCancelAsyncCallback - and nothing else, so on that arm both must
+     * be present and every other slot this driver left zero must still be
+     * zero; on the 200 arm nothing past 0x13C / 0x250 is copied or written,
+     * so all of it must still be zero, the two services included. Either
+     * failure is the same kind of evidence the canaries give: a usbport whose
+     * idea of the tier differs from the reading it was declared from.
+     */
+    if (xhciInterfaceVersionPresented >= USBPORT_NT6_MINIPORT_INTERFACE_VERSION) {
+        if (XhciRegPacket.UsbPortRequestAsyncCallbackEx == NULL ||
+            XhciRegPacket.UsbPortCancelAsyncCallback == NULL) {
+            XHCI_DBG_TEXT("ABI-SUSPECT: usbport did not write the two "
+                          "Version 300 services");
+            ok = 0;
+        }
+    } else {
+        if (XhciRegPacket.UsbPortRequestAsyncCallbackEx != NULL ||
+            XhciRegPacket.UsbPortCancelAsyncCallback != NULL) {
+            XHCI_DBG_TEXT("ABI-SUSPECT: a Version 200 registration wrote "
+                          "into the Version 300 tier");
+            ok = 0;
+        }
+    }
+    XHCI_DBG_VALUE("nt6 services written",
+                   (XhciRegPacket.UsbPortRequestAsyncCallbackEx != NULL ? 1UL : 0UL) +
+                   (XhciRegPacket.UsbPortCancelAsyncCallback != NULL ? 1UL : 0UL));
+    if (XhciRegPacket.InterruptDpcEx != xhciInterruptDpc ||
+        XhciRegPacket.ExtraCommonBufferCount != 0 ||
+        XhciRegPacket.Unreferenced198 != NULL ||
+        XhciRegPacket.Unreferenced1B8 != NULL ||
+        XhciRegPacket.Unreferenced1BC != NULL ||
+        XhciRegPacket.Unreferenced1C0 != NULL ||
+        XhciRegPacket.Unreferenced1D0 != NULL ||
+        XhciRegPacket.Unreferenced1D4 != NULL ||
+        XhciRegPacket.HaltController != NULL ||
+        XhciRegPacket.Get32BitMicroFrameNumber != NULL) {
+        XHCI_DBG_TEXT("ABI-SUSPECT: a Version 300 slot this driver left "
+                      "alone was written");
+        ok = 0;
+    }
 
     if (XhciRegPacket.Reserved1 != XHCI_CANARY_1 ||
         XhciRegPacket.Reserved2 != XHCI_CANARY_2 ||
@@ -4720,16 +4810,24 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT DriverObject,
      * NT 5.x - see the block above its declaration in src\xhci_usbport.h for
      * the evidence and for what a three-argument call does to Vista x64.
      *
-     * The branch is amd64-only. On x86 the arity cannot be varied at all
-     * without a second import stub, and the 32-bit binary's four shipped
-     * targets are all NT 5.x or 9x, so it keeps the call it has always made.
+     * The branch runs on both architectures since task 22.5 (it was amd64-only
+     * from task 21.8 until then). On x86 the arity is selected by calling
+     * through a cast of the one import - the import library binds by plain
+     * name, so no second stub is needed - and the same answer selects the
+     * interface version: 300 to an NT 6.x usbport, whose interrupt DPC lives
+     * in a slot that exists only at that tier, and 200 to every other, so
+     * that NT 5.x and 9x see exactly the call and the packet length they have
+     * always been observed with. The whole 300 tier was read slot by slot
+     * before this branch was widened (docs\usb-xhci-info\usbport-miniport-abi.md,
+     * "The Version 300 tier, slot by slot"), and every NT 5.x and 9x usbport
+     * was read to test the version at 100 and 200 only.
      *
      * `IoIsWdmVersionAvailable` is the version primitive rather than
      * `PsGetVersion`, which is not exported on Windows 98 or Me
-     * (docs\usb-xhci-info\win98-wdm.md). It is imported only by the amd64
-     * build, and only that build's allowlist carries a row for it; the 32-bit
-     * import surface is unchanged, which is why the call sits inside the
-     * _WIN64 guard rather than outside it with a runtime test.
+     * (docs\usb-xhci-info\win98-wdm.md). Windows 98 reports WDM 1.0 from it,
+     * so the 9x targets take the NT 5.x arm. Both allowlists carry a row for
+     * it; the 32-bit row's Windows 98 evidence is NUSB's own USBPORT.SYS,
+     * which imports the same pair, and the name in ntkern.vxd's table.
      *
      * THE THRESHOLD IS WDM 6.00, NOT 1.30, AND THAT DIFFERENCE WAS A LIVE
      * DEFECT HERE. `IoIsWdmVersionAvailable(1, 0x30)` reads like a pre-6.x
@@ -4762,7 +4860,6 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT DriverObject,
      * registration still returned STATUS_SUCCESS with all sixteen service
      * pointers written.
      */
-#ifdef _WIN64
     {
         BOOLEAN isNt5 = !IoIsWdmVersionAvailable(6, 0);
 
@@ -4785,25 +4882,34 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT DriverObject,
         }
         XHCI_DBG_VALUE("resource bits required", XhciResourcesRequired);
 
+        /*
+         * The version is the third thing the one answer settles. 300 is
+         * what puts InterruptDpcEx inside the bytes an NT 6.x usbport copies
+         * (0x1E0 / 0x368 against 0x13C / 0x250 at 200); 200 everywhere else
+         * keeps the NT 5.x and 9x targets on the packet length they have been
+         * observed with, although each of their usbports was read to copy
+         * 0x13C / 0x250 for any version at or above 200.
+         */
+        xhciInterfaceVersionPresented =
+            isNt5 ? USB20_MINIPORT_INTERFACE_VERSION
+                  : USBPORT_NT6_MINIPORT_INTERFACE_VERSION;
+        XHCI_DBG_VALUE("interface version presented",
+                       xhciInterfaceVersionPresented);
+
         if (isNt5) {
             status = USBPORT_RegisterUSBPortDriver(
                          DriverObject,
-                         USB20_MINIPORT_INTERFACE_VERSION,
+                         xhciInterfaceVersionPresented,
                          &XhciRegPacket);
         } else {
             status = ((XHCI_REGISTER_USBPORT_NT6)
                           USBPORT_RegisterUSBPortDriver)(
                          DriverObject,
-                         USB20_MINIPORT_INTERFACE_VERSION,
+                         xhciInterfaceVersionPresented,
                          &XhciRegPacket,
                          RegistryPath);
         }
     }
-#else
-    status = USBPORT_RegisterUSBPortDriver(DriverObject,
-                                           USB20_MINIPORT_INTERFACE_VERSION,
-                                           &XhciRegPacket);
-#endif
 
 #ifdef XHCI_CHECK_STACK_DELTA
     __asm mov espAfter, esp

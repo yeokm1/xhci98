@@ -32,10 +32,12 @@ check only to select between behaviors whose referenced symbols all exist on
 every target (or build separate binaries, or supply a compatibility stub). Do
 not use `PsGetVersion` for the check; per Oney (p.437) it is itself not
 exported on Win98/Me. The version primitive present on all three targets is
-`IoIsWdmVersionAvailable`. Note that this driver imports it nowhere and the
-allowlist has no row for it, so the sketches below are what a driver that
-needed the distinction would write, not what this one does; a row plus its
-Windows 98 evidence would be needed first:
+`IoIsWdmVersionAvailable`. Since 2026-09-11 (roadmap task 22.5) this driver
+imports it on both architectures, from `DriverEntry` alone, to tell an NT 6.x
+`usbport.sys` from every other; both allowlists carry the row, the 32-bit one
+with NUSB's own `USBPORT.SYS` as the Windows 98 precedent and the name in
+`ntkern.vxd`'s table. The sketch below is the 9x-versus-NT distinction, which
+this driver still does not make:
 
 ```c
 /* IRQL: PASSIVE_LEVEL (call from DriverEntry). Win98 gold/SE report 1.0;

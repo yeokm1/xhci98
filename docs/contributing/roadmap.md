@@ -3015,24 +3015,34 @@ reading may not tick a box whose line names a guest.
           packet under `200` is inert there by reading and not by hope.
           **Found: exactly that, on all four, every compare in `.text` listed
           in `legal-provenance.md` section 4**
-  - [ ] **the design, written into design record 11 before code**: the
+  - [x] **the design, written into design record 11 before code**: the
         300-tier packet declaration with measured sizes and offsets on both
         architectures, the two-version registration, the x86 four-argument
         call through a cast of the one import (the import library binds by
         plain name, so no second stub is needed and `XHCI_CHECK_STACK_DELTA`
         is the net under the `qemu` flavour), the `ULONG` DPC serving both
         slots, and `XhciResourcesRequired` settled on x86 from the same answer.
-        **Recommended and not yet decided: `300` on NT 6.x only, `200`
-        everywhere else** - it keeps every NT 5.x and 9x system wire-identical
-        to what it has been observed with, at the price of the runtime branch
-        decision 10 already chose
-  - [ ] **the build**: `src\xhci_usbport.h`, `src\xhci_dispatch.c`,
+        **Decided by the owner 2026-09-11 as recommended: `300` on NT 6.x
+        only, `200` everywhere else** - it keeps every NT 5.x and 9x system
+        wire-identical to what it has been observed with, at the price of the
+        runtime branch decision 10 already chose. Design record 11 section
+        6.5 is the design
+  - [x] **the build**: `src\xhci_usbport.h`, `src\xhci_dispatch.c`,
         `test\test_packet.c` and host tests carrying both arms; the x86
         allowlist row for `ntoskrnl.exe!IoIsWdmVersionAvailable` with its
         Windows 98 evidence - `w2k-export` in both SP4 kernels,
         `win98-precedent` in NUSB's own `USBPORT.SYS`, which imports it, and
         `ntkern-name`; every gate green on all three flavours of both
-        architectures
+        architectures. **Done 2026-09-11.** The tier is declared as read
+        (`sizeof` `0x1E0` / `0x368`, six new asserts), `xhciInterruptDpc`
+        returns the `ULONG` and serves both slots, DriverEntry's branch runs
+        on both architectures and the built x86 `qemu` binary shows the
+        three-`push` and four-`push` arms into one IAT slot, the
+        post-registration verifier holds usbport to the tier it was offered,
+        and the gate re-derived all three kinds of Windows 98 evidence for the
+        new row itself. Host tests 12,610 + 232 + 2,027 (both architectures),
+        import gate 13 pairs x86 / 8 amd64, INF self-tests 452, packager 254,
+        launchers 330. No INF touched. Design record 11 section 6.5, "Built"
   - [ ] **the guests, in this order, `qemu` flavour first, and the readings
         named before each boot**: Vista x64, where the wall is known (`dpc
         count` climbing with `isr count`, No Op `CC_SUCCESS`, then the clauses

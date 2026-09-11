@@ -1224,6 +1224,36 @@ gives slot, gate and arguments in one command. The files are identified in
 `legal-provenance.md` section 2 and cached under `tools/symbols/`;
 `lessons.md` has the note.
 
+**Built 2026-09-11, the same evening - task 22.5's second and third boxes.**
+`src/xhci_usbport.h` declares the tier exactly as the table has it: twelve
+`ULONG`s and 29 pointer-sized slots after `Reserved5`, `sizeof` now `0x1E0` /
+`0x368`, the Version 200 copy length carried by the offset of the first tier
+field, and six new compile-time asserts on the count field, the first
+pointer, `InterruptDpcEx`, the first OUT service and the last slot. The
+unfilled slots are declared `PVOID` on purpose: a signature nobody here has
+exercised would be documentation of a contract this driver does not have.
+`PHCI_INTERRUPT_DPC` returns `ULONG`, and one `xhciInterruptDpc` serves both
+slots, returning the port bit after a pass that consumed a Port Status Change
+Event - derived from the event counter the drain already keeps - and zero
+otherwise. `DriverEntry`'s NT 6.x branch lost its `_WIN64` guard: the same
+`IoIsWdmVersionAvailable(6, 0)` answer now selects the registration arity,
+the resource mask and the interface version on both architectures, and on
+x86 the four-argument arm calls through a cast of the one import, which the
+disassembly of the built `qemu` binary shows as a three-`push` arm and a
+four-`push` arm into the same IAT slot with `esp` captured on both sides for
+`XHCI_CHECK_STACK_DELTA`. The post-registration verifier holds usbport to the
+tier it was offered: two OUT services present at 300 and every other tier
+slot untouched, none of them written at 200. The 32-bit allowlist gained
+`ntoskrnl.exe!IoIsWdmVersionAvailable`, and the gate itself re-derived all
+three kinds of Windows 98 evidence for it - the Windows 2000 export, NUSB's
+own `USBPORT.SYS` importing the same pair, and the name in `ntkern.vxd`.
+Gates on both architectures, all three flavours: host tests 12,610 + 232 +
+2,027 (the packet suite grew from 191 to 232 checks, both architectures; the
+init suite by the eight DPC return-value checks), import gate 13 pairs x86 /
+8 amd64, INF self-tests 452, packager 254, launchers 330, every flavour
+marker right. `MiniPortFlags` is unchanged at `0x95`. No INF was touched.
+What the build cannot settle is the guest half, which is the fourth box.
+
 ---
 
 ## 7. The decision gate

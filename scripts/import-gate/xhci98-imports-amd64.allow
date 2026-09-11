@@ -133,7 +133,7 @@ ntoskrnl.exe!DbgPrint                     all  required  nt52-amd64-export (hint
 # own code and needs its own decision - the same discipline the other file
 # applies to DbgPrint's single emit site.
 ntoskrnl.exe!KeBugCheckEx                 all  required  nt52-amd64-export (hint 213, ntoskrnl RVA 0x41690 / ntkrnlmp 0x2E950); /GS __report_gsfailure only, one call site, bugcheck 0xF7
-ntoskrnl.exe!IoIsWdmVersionAvailable      all  required  nt52-amd64-export (hint 197, ntoskrnl RVA 0x28BDE0 / ntkrnlmp 0x322B90); DriverEntry only, one call site - selects the three- or four-argument form of USBPORT_RegisterUSBPortDriver (src\xhci_usbport.h). NOT PsGetVersion, which docs\usb-xhci-info\win98-wdm.md rules out as unexported on Win98/Me; this pair is amd64-only and the 32-bit allowlist deliberately still has no row for it
+ntoskrnl.exe!IoIsWdmVersionAvailable      all  required  nt52-amd64-export (hint 197, ntoskrnl RVA 0x28BDE0 / ntkrnlmp 0x322B90); DriverEntry only, one call site - selects the three- or four-argument form of USBPORT_RegisterUSBPortDriver (src\xhci_usbport.h). NOT PsGetVersion, which docs\usb-xhci-info\win98-wdm.md rules out as unexported on Win98/Me. amd64-only from task 21.8 until 2026-09-11; since task 22.5 the 32-bit allowlist carries the same pair, with NUSB's own USBPORT.SYS as its Windows 98 precedent, because the same answer now selects the Version 300 interface on both architectures
 
 [deny]
 #

@@ -112,6 +112,19 @@ ntoskrnl.exe!KeInitializeSpinLock     all  required  w2k-export; win98-precedent
 # ABI serializes StartController across controllers - so a plain ++ could hand
 # the same token to both, which is the one thing that counter must never do.
 ntoskrnl.exe!InterlockedIncrement     all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!InterlockedIncrement, hint 28); ntkern-name
+# --- The NT 6.x discriminator (src\xhci_dispatch.c, DriverEntry) ---------
+# One call site, DriverEntry only, PASSIVE_LEVEL. IoIsWdmVersionAvailable(6, 0)
+# is what selects the four-argument registration call, the NT 6.x resource
+# mask and the Version 300 interface for Vista and Windows 7 (roadmap task
+# 22.5; design record 11 sections 6.1-6.5). It was amd64-only from task 21.8
+# until 2026-09-11, when the owner decided the 32-bit binary is to run on
+# Vista and Windows 7 as well. Windows 98 reports WDM 1.0 from it, so the 9x
+# targets take the NT 5.x arm. NOT PsGetVersion, which
+# docs\usb-xhci-info\win98-wdm.md rules out as unexported on Win98/Me. The
+# Windows 98 evidence is the strongest kind this file has: NUSB's own
+# USBPORT.SYS - the module this miniport registers with on the 2a VM -
+# imports the same pair, and the name is in ntkern.vxd's table.
+ntoskrnl.exe!IoIsWdmVersionAvailable  all  required  w2k-export (ordinal 357, hint 153, ntoskrnl RVA 0x97AC6 / ntkrnlmp 0xA7AF4); win98-precedent USBPORT.SYS 5.00.2195.5652 NUSB (NTOSKRNL.EXE!IoIsWdmVersionAvailable, hint 55); ntkern-name
 HAL.dll!KfAcquireSpinLock             all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (HAL.DLL!KfAcquireSpinLock, hint 6); ntkern-name. KeAcquireSpinLock(a,b) is the DDK's x86 macro for this.
 HAL.dll!KfReleaseSpinLock             all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (HAL.DLL!KfReleaseSpinLock, hint 9); ntkern-name. KeReleaseSpinLock(a,b) is the DDK's x86 macro for this.
 

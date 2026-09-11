@@ -11,11 +11,20 @@
  *
  * The binary-confirmed facts this file encodes, so a future edit knows what it
  * is allowed to move:
- *   - sizeof(USBPORT_REGISTRATION_PACKET) = 0x13C (316). Registration copies
- *     exactly that many bytes when the Version argument is >= 200, and 0x12C
- *     (300) when 100 <= Version < 200.
- *   - The miniport fills 0x00-0x130; usbport writes 16 service pointers at
- *     0xE4-0x120 and touches no other field before copying.
+ *   - Registration copies 0x12C (300) bytes when 100 <= Version < 200, 0x13C
+ *     (316) when 200 <= Version < 300 - the whole packet every NT 5.x and 9x
+ *     usbport knows - and, on NT 6.x only, 0x1E0 (480) at 300 <= Version <
+ *     310. sizeof(USBPORT_REGISTRATION_PACKET) is therefore 0x1E0 since
+ *     2026-09-11 (roadmap task 22.5): the 200 tier this driver always
+ *     declared, followed by the Version 300 tier read slot by slot out of
+ *     the four NT 6.x binaries (docs/usb-xhci-info/usbport-miniport-abi.md,
+ *     "The Version 300 tier, slot by slot"). The driver presents 300 to an
+ *     NT 6.x usbport and 200 to every other, so below NT 6.x the tail past
+ *     0x13C is never copied and never read.
+ *   - The miniport fills 0x00-0x130 and, in the 300 tier, InterruptDpcEx at
+ *     0x178 alone; usbport writes 16 service pointers at 0xE4-0x120 and, at
+ *     Version >= 300, two more at 0x1B0/0x1B4, and touches no other field
+ *     before copying.
  *   - USBPORT_GetHciMn returns 0x57324B30 on both primary targets and
  *     0x10000001 on the XP lineage.
  *
@@ -62,6 +71,30 @@
  */
 #define USB10_MINIPORT_INTERFACE_VERSION 100
 #define USB20_MINIPORT_INTERFACE_VERSION 200
+
+/*
+ * The NT 6.x tier. Vista's and Windows 7's usbport select a copy size at four
+ * thresholds - 100, 200, 300 and 310 - and the miniport interrupt DPC is taken
+ * from a slot that exists only at >= 300 (packet+0x178 x86 / +0x298 amd64);
+ * a Version 200 miniport's DPC is never called there at all. 300 rather than
+ * 310 on purpose: 310 is the tier that hands out Windows 7's 64-bit DMA
+ * adapter, which this driver does not implement (design record 11 section
+ * 6). Presented only when IoIsWdmVersionAvailable(6, 0) answers TRUE; every
+ * NT 5.x and 9x usbport was read and tests the version at 100 and 200 only.
+ */
+#define USBPORT_NT6_MINIPORT_INTERFACE_VERSION 300
+
+/*
+ * What the NT 6.x InterruptDpcEx callback returns. usbport reads bits 0 and 1
+ * and treats them alike: either one makes it invalidate the root-hub interrupt
+ * endpoint so the hub driver polls port status. Microsoft's own usbehci
+ * returns 2 after a pass that saw a port with a connect, enable or
+ * overcurrent change and 1 for a transfer interrupt with pending work; this
+ * driver returns 2 after a pass that consumed a Port Status Change Event and
+ * 0 otherwise. Read out of USBPORT_IsrDpc and EHCI_InterruptDpcEx, static.
+ */
+#define USBPORT_DPC_EX_TRANSFER_WORK    0x00000001UL
+#define USBPORT_DPC_EX_PORT_CHANGE      0x00000002UL
 
 /*
  * USBPORT_GetHciMn return values. The shipping usbehci.sys of each lineage
@@ -551,7 +584,15 @@ typedef VOID (NTAPI *PHCI_STOP_CONTROLLER)(PVOID, BOOLEAN);
 typedef VOID (NTAPI *PHCI_SUSPEND_CONTROLLER)(PVOID);
 typedef MPSTATUS (NTAPI *PHCI_RESUME_CONTROLLER)(PVOID);
 typedef BOOLEAN (NTAPI *PHCI_INTERRUPT_SERVICE)(PVOID);
-typedef VOID (NTAPI *PHCI_INTERRUPT_DPC)(PVOID, BOOLEAN);
+/*
+ * ULONG, not VOID, since task 22.5. NT 5.x declares the 0x4C slot VOID and
+ * never reads eax; NT 6.x reads the 0x178 / 0x298 slot's return (bits 0 and 1,
+ * USBPORT_DPC_EX_*). One function serves both slots, which is exactly what
+ * Vista's and Windows 7's own usbehci does - its 0x4C function is a thunk
+ * onto its InterruptDpcEx - so the widened return type is the vendor's shape
+ * rather than an accommodation.
+ */
+typedef ULONG (NTAPI *PHCI_INTERRUPT_DPC)(PVOID, BOOLEAN);
 typedef MPSTATUS (NTAPI *PHCI_SUBMIT_TRANSFER)(PVOID, PVOID, PUSBPORT_TRANSFER_PARAMETERS, PVOID, PUSBPORT_SCATTER_GATHER_LIST);
 typedef MPSTATUS (NTAPI *PHCI_SUBMIT_ISO_TRANSFER)(PVOID, PVOID, PUSBPORT_TRANSFER_PARAMETERS, PVOID, PVOID);
 typedef VOID (NTAPI *PHCI_ABORT_TRANSFER)(PVOID, PVOID, PVOID, PULONG);
@@ -724,6 +765,62 @@ typedef struct _USBPORT_REGISTRATION_PACKET {
      */
     ULONG_PTR Reserved4;                         /* 0x134 canary */
     ULONG_PTR Reserved5;                         /* 0x138 canary */
+
+    /*
+     * The Version 300 tier - copied only by an NT 6.x usbport, and only when
+     * this driver presented USBPORT_NT6_MINIPORT_INTERFACE_VERSION. Read slot
+     * by slot on 2026-09-11 (roadmap task 22.5; usbport-miniport-abi.md, "The
+     * Version 300 tier, slot by slot"; legal-provenance.md section 4): twelve
+     * ULONGs, then 29 pointer slots, and the arithmetic closes on both
+     * architectures - x86 0x13C + 48 = 0x16C, + 116 = 0x1E0; amd64 0x250 +
+     * 48 = 0x280, + 232 = 0x368, the two copy lengths registration uses.
+     *
+     * Every pointer slot is NULL-checked by the usbport wrapper that reads it,
+     * and the twelve ULONGs are a count of extra common buffers (zero: none),
+     * their sizes, and three context sizes behind a MiniPortFlags bit this
+     * driver does not set. So everything here is left zero except
+     * InterruptDpcEx, which is the slot the whole tier is declared for. The
+     * unfilled callback slots are declared PVOID rather than with a signature:
+     * naming a signature this driver never implements would document a
+     * contract nobody here has exercised, and the ABI record carries what
+     * usbport passes for anyone who later needs one. The two OUT fields are
+     * services usbport writes at >= 300; nothing here calls them. Offsets in
+     * the comments are x86 / amd64.
+     */
+    ULONG ExtraCommonBufferCount;                /* 0x13C / 0x250 - IN, 0 */
+    ULONG ExtraCommonBufferSize[8];              /* 0x140 / 0x254 - IN, 0 */
+    ULONG HsbControllerContextSize;              /* 0x160 / 0x274 - IN, 0 */
+    ULONG HsbTtContextSize;                      /* 0x164 / 0x278 - IN, 0 */
+    ULONG HsbEndpointContextSize;                /* 0x168 / 0x27C - IN, 0 */
+    PVOID ReleasePortControl;                    /* 0x16C / 0x280 */
+    PVOID ReadCfgFlag;                           /* 0x170 / 0x288 */
+    PVOID SetWakeOnConnect;                      /* 0x174 / 0x290 */
+    PHCI_INTERRUPT_DPC InterruptDpcEx;           /* 0x178 / 0x298 - FILLED */
+    PVOID NotifyTransferQueueState;              /* 0x17C / 0x2A0 */
+    PVOID CheckHwSync;                           /* 0x180 / 0x2A8 */
+    PVOID UsbxInitHsbTransactionTranslator;      /* 0x184 / 0x2B0 */
+    PVOID UsbxInitHsbController;                 /* 0x188 / 0x2B8 */
+    PVOID UsbxInitHsbEndpoint;                   /* 0x18C / 0x2C0 */
+    PVOID UsbxAllocateBandwidth;                 /* 0x190 / 0x2C8 */
+    PVOID UsbxFreeBandwidth;                     /* 0x194 / 0x2D0 */
+    PVOID Unreferenced198;                       /* 0x198 / 0x2D8 - no reader */
+    PVOID UsbxPokeEndpoint;                      /* 0x19C / 0x2E0 */
+    PVOID UsbxOpenEndpoint;                      /* 0x1A0 / 0x2E8 */
+    PVOID UsbxQueryBandwidthData;                /* 0x1A4 / 0x2F0 */
+    PVOID UsbxQueryTtBandwidthData;              /* 0x1A8 / 0x2F8 */
+    PVOID UsbxQueryEpBandwidthData;              /* 0x1AC / 0x300 */
+    PVOID UsbPortRequestAsyncCallbackEx;         /* 0x1B0 / 0x308 - OUT */
+    PVOID UsbPortCancelAsyncCallback;            /* 0x1B4 / 0x310 - OUT */
+    PVOID Unreferenced1B8;                       /* 0x1B8 / 0x318 - no reader */
+    PVOID Unreferenced1BC;                       /* 0x1BC / 0x320 - no reader */
+    PVOID Unreferenced1C0;                       /* 0x1C0 / 0x328 - no reader */
+    PVOID CreateDeviceData;                      /* 0x1C4 / 0x330 */
+    PVOID DeleteDeviceData;                      /* 0x1C8 / 0x338 */
+    PVOID DbgFreeEndpoint;                       /* 0x1CC / 0x340 */
+    PVOID Unreferenced1D0;                       /* 0x1D0 / 0x348 - no reader */
+    PVOID Unreferenced1D4;                       /* 0x1D4 / 0x350 - no reader */
+    PVOID HaltController;                        /* 0x1D8 / 0x358 */
+    PVOID Get32BitMicroFrameNumber;              /* 0x1DC / 0x360 */
 } USBPORT_REGISTRATION_PACKET, *PUSBPORT_REGISTRATION_PACKET;
 
 /* ------------------------------------------------------------------ */
@@ -905,8 +1002,32 @@ XHCI_C_ASSERT(hub_status_size, sizeof(USBPORT_HUB_STATUS_AND_CHANGE) == 4);
  * eight-byte shortfall: M3 measured usbport copying `0x250`, and a declaration
  * whose two trailing canaries stayed 4 bytes ends at `0x248`.
  */
+/*
+ * Three tiers, three boundaries, on each architecture. `packet_size` is what
+ * an NT 6.x usbport copies at Version 300; `packet_nt5_copy_boundary` is what
+ * every NT 5.x and 9x usbport copies at Version 200 and is the offset of the
+ * first 300-tier field, which is why that field and not `sizeof` carries the
+ * old number; `packet_short_copy_boundary` is the Version < 200 length. The
+ * 300-tier anchors are the slots the reading named as load-bearing: the
+ * first pointer, InterruptDpcEx, the first OUT service and the last slot.
+ */
 #ifdef _WIN64
-XHCI_C_ASSERT(packet_size, sizeof(USBPORT_REGISTRATION_PACKET) == 0x250);
+XHCI_C_ASSERT(packet_size, sizeof(USBPORT_REGISTRATION_PACKET) == 0x368);
+XHCI_C_ASSERT(packet_nt5_copy_boundary,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, ExtraCommonBufferCount)
+                  == 0x250);
+XHCI_C_ASSERT(packet_first_nt6_pointer,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, ReleasePortControl)
+                  == 0x280);
+XHCI_C_ASSERT(packet_interrupt_dpc_ex,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, InterruptDpcEx)
+                  == 0x298);
+XHCI_C_ASSERT(packet_nt6_service_block,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET,
+                             UsbPortRequestAsyncCallbackEx) == 0x308);
+XHCI_C_ASSERT(packet_last_nt6_slot,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET,
+                             Get32BitMicroFrameNumber) == 0x360);
 XHCI_C_ASSERT(packet_short_copy_boundary,
               XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, RH_ChirpRootPort)
                   == 0x230);
@@ -931,8 +1052,24 @@ XHCI_C_ASSERT(packet_tail_group_start,
 XHCI_C_ASSERT(packet_last_reserved,
               XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, Reserved5) == 0x248);
 #else
-/* The number registration copies at Version >= 200. */
-XHCI_C_ASSERT(packet_size, sizeof(USBPORT_REGISTRATION_PACKET) == 0x13C);
+/* The number an NT 6.x usbport copies at Version 300. */
+XHCI_C_ASSERT(packet_size, sizeof(USBPORT_REGISTRATION_PACKET) == 0x1E0);
+/* The number every NT 5.x and 9x usbport copies at Version 200. */
+XHCI_C_ASSERT(packet_nt5_copy_boundary,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, ExtraCommonBufferCount)
+                  == 0x13C);
+XHCI_C_ASSERT(packet_first_nt6_pointer,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, ReleasePortControl)
+                  == 0x16C);
+XHCI_C_ASSERT(packet_interrupt_dpc_ex,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, InterruptDpcEx)
+                  == 0x178);
+XHCI_C_ASSERT(packet_nt6_service_block,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET,
+                             UsbPortRequestAsyncCallbackEx) == 0x1B0);
+XHCI_C_ASSERT(packet_last_nt6_slot,
+              XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET,
+                             Get32BitMicroFrameNumber) == 0x1DC);
 /* ...and the boundary that makes the short copy exactly the tail group. */
 XHCI_C_ASSERT(packet_short_copy_boundary,
               XHCI_OFFSET_OF(USBPORT_REGISTRATION_PACKET, RH_ChirpRootPort)
@@ -1000,13 +1137,21 @@ ULONG NTAPI USBPORT_GetHciMn(VOID);
  * own image, whose instruction bytes read back as Length=0x9000 and
  * Buffer=0x9090... (roadmap task 21.8).
  *
- * THE 32-BIT HALF IS NOT THIS CHANGE AND MUST NOT BE MADE HERE. stdcall is
- * callee-cleaned, so arity must match exactly or the stack is wrong on
- * Windows 98, Windows 2000 and XP - the primary targets - and src\usbport.lib
- * carries _USBPORT_RegisterUSBPortDriver@12, a decorated symbol whose name
- * encodes the byte count and would stop resolving at @16. That needs a
- * runtime-selected prototype and a version signal that survives the Windows
- * 98 export baseline, and it is Phase 22's decision, not this one.
+ * ON x86 THE ARITY MUST MATCH EXACTLY, AND SINCE TASK 22.5 IT DOES ON BOTH
+ * SIDES OF THE BOUNDARY. stdcall is callee-cleaned: a three-argument call
+ * into a `ret 10h` callee leaves the stack four bytes wrong on return, and
+ * a four-argument call into a `ret 0Ch` one leaves it four bytes the other
+ * way, on Windows 98, Windows 2000 and XP - the primary targets. What makes
+ * a runtime choice possible without a second import stub is that
+ * src\usbport.lib binds the import BY NAME: `_USBPORT_RegisterUSBPortDriver@12`
+ * is only the linker-side name of the one IAT slot, and the loader resolves
+ * that slot against usbport's plain export `USBPORT_RegisterUSBPortDriver`
+ * whatever the callee's arity. So DriverEntry calls through that slot with
+ * the prototype below on NT 5.x and 9x, and through XHCI_REGISTER_USBPORT_NT6
+ * - a cast of the same address - on NT 6.x, and the compiler emits the push
+ * count and the post-call stack expectation of the prototype it was given.
+ * `XHCI_CHECK_STACK_DELTA` in the qemu flavour measures esp across the call
+ * and reports an imbalance, which is the net under both arms.
  */
 NTSTATUS NTAPI USBPORT_RegisterUSBPortDriver(
     IN PDRIVER_OBJECT DriverObject,
@@ -1016,19 +1161,17 @@ NTSTATUS NTAPI USBPORT_RegisterUSBPortDriver(
 /*
  * The NT 6.x form of the same export, called through a cast because the
  * import library carries one symbol and this is the same entry point with a
- * fourth argument. amd64 only: on x86 the caller would have to push a fourth
- * slot that a `ret 0Ch` callee never cleans, and the decorated import name
- * itself encodes the byte count, so the 32-bit half is a different change
- * (see above). Guarded on _WIN64 so the 32-bit build's import table and
- * codegen are untouched.
+ * fourth argument. On amd64 the cast changes nothing about the stack (x64 is
+ * caller-cleaned with a fixed shadow area); on x86 it is what makes the
+ * emitted call a four-argument stdcall call, `push` count and post-call
+ * expectation both - see the block above. Both architectures since task
+ * 22.5; it was amd64-only from task 21.8 until then.
  */
-#ifdef _WIN64
 typedef NTSTATUS (NTAPI *XHCI_REGISTER_USBPORT_NT6)(
     IN PDRIVER_OBJECT DriverObject,
     IN ULONG Version,
     IN PUSBPORT_REGISTRATION_PACKET RegistrationPacket,
     IN PUNICODE_STRING RegistryPath);
-#endif
 #endif
 
 #endif /* XHCI_USBPORT_H */
