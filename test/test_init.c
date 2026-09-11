@@ -23094,7 +23094,7 @@ static void test_probe_endpoint_contract(void)
              "nothing has called CloseEndpoint");
     CHECK_EQ(ext.ProbeEpEvents[XHCI_PROBE_EVENT_GET_STATE], 0,
              "nor GetEndpointState");
-    XhciRegPacket.CloseEndpoint(&ext, &slotEndpoint, FALSE);
+    XhciRegPacket.CloseEndpoint(&ext, &slotEndpoint);
     (void)XhciRegPacket.GetEndpointState(&ext, &slotEndpoint);
     CHECK_EQ(ext.ProbeEpEvents[XHCI_PROBE_EVENT_CLOSE], 1,
              "a build that did call CloseEndpoint would say so");
@@ -23786,7 +23786,7 @@ static void test_probe_surface_wiring(void)
           "the registered QueryEndpointRequirements");
     CHECK(ext.ProbeEpEvents[XHCI_PROBE_EVENT_OPEN] > 0,
           "the registered OpenEndpoint");
-    XhciRegPacket.CloseEndpoint(&ext, &slotEndpoint, FALSE);
+    XhciRegPacket.CloseEndpoint(&ext, &slotEndpoint);
     CHECK_EQ(ext.ProbeEpEvents[XHCI_PROBE_EVENT_CLOSE], 1,
              "the registered CloseEndpoint");
     (void)XhciRegPacket.GetEndpointState(&ext, &slotEndpoint);

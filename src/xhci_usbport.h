@@ -578,7 +578,24 @@ typedef struct _USBPORT_ISO_TRANSFER {
 typedef MPSTATUS (NTAPI *PHCI_OPEN_ENDPOINT)(PVOID, PUSBPORT_ENDPOINT_PROPERTIES, PVOID);
 typedef MPSTATUS (NTAPI *PHCI_REOPEN_ENDPOINT)(PVOID, PUSBPORT_ENDPOINT_PROPERTIES, PVOID);
 typedef VOID (NTAPI *PHCI_QUERY_ENDPOINT_REQUIREMENTS)(PVOID, PUSBPORT_ENDPOINT_PROPERTIES, PUSBPORT_ENDPOINT_REQUIREMENTS);
-typedef VOID (NTAPI *PHCI_CLOSE_ENDPOINT)(PVOID, PVOID, BOOLEAN);
+/*
+ * TWO parameters, not three. ReactOS declares a third, IsDoDisablePeriodic
+ * (endpoint.c:580), and this typedef carried it until 2026-09-11 - but no
+ * shipping usbport ever passes it. NT 6.x is the only caller that exists at
+ * all (MPf_CloseEndpoint returns immediately below interface version 300:
+ * `cmp dword ptr [eax+10h],12Ch`), and on x86 it pushes exactly two:
+ *
+ *     0001f390 push edi                  ; endpointExtension
+ *     0001f391 push dword ptr [esi+30Ch] ; miniportExtension
+ *     0001f397 call dword ptr [eax+50h]  ; 0x50 - 0x1C = our 0x34
+ *
+ * Vista x86 and Windows 7 x86 agree on the shape. The third parameter made
+ * the callee `ret 0Ch` against a caller that had pushed 8, over-popping
+ * usbport's stack by four bytes and sending its epilogue's `ret` into data:
+ * bugcheck 0xD1 on the first device attach, measured on Vista x86 2026-09-11.
+ * amd64 never showed it because there the CALLER cleans the stack.
+ */
+typedef VOID (NTAPI *PHCI_CLOSE_ENDPOINT)(PVOID, PVOID);
 typedef MPSTATUS (NTAPI *PHCI_START_CONTROLLER)(PVOID, PUSBPORT_RESOURCES);
 typedef VOID (NTAPI *PHCI_STOP_CONTROLLER)(PVOID, BOOLEAN);
 typedef VOID (NTAPI *PHCI_SUSPEND_CONTROLLER)(PVOID);

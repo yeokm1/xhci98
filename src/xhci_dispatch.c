@@ -3393,24 +3393,28 @@ static MPSTATUS NTAPI xhciReopenEndpoint(PVOID miniPortExtension,
 }
 
 /*
- * The probe call is the point of this stub now. Batch 6-0 established across
- * both whole images that no shipping build calls this, and the driver stubs it
- * on that strength; `ProbeEpEvents[XHCI_PROBE_EVENT_CLOSE]` is what a
- * *release* build would show if that static read were wrong on a target,
- * which no trace line can (task 6-V.1).
+ * **NT 6.x DOES call this, at interface version 300 and above.** Measured on
+ * Vista x86 on 2026-09-11: usbport!USBPORT_iSetGlobalEndpointStateTx calls
+ * MPf_CloseEndpoint during the post-SET_ADDRESS EP0 close, on the very first
+ * device attach. Batch 6-0's census said no shipping build calls this slot,
+ * and that stays true of NT 5.x - but it was never a statement about Vista or
+ * Windows 7, neither of which was in that census. So this is a live callback
+ * on the 300 tier, not a defensive stub.
+ *
+ * Its signature is therefore load-bearing rather than decorative: see
+ * PHCI_CLOSE_ENDPOINT for why it takes TWO parameters and what the third one
+ * cost. `ProbeEpEvents[XHCI_PROBE_EVENT_CLOSE]` remains what a *release*
+ * build shows, which no trace line can (task 6-V.1).
  *
  * IRQL: DISPATCH_LEVEL, under MiniportSpinLock.
  */
 static VOID NTAPI xhciCloseEndpoint(PVOID miniPortExtension,
-                                    PVOID endpointExtension,
-                                    BOOLEAN isDoDisablePeriodic)
+                                    PVOID endpointExtension)
 {
-    XHCI_DBG_CB("CloseEndpoint", miniPortExtension, endpointExtension,
-                isDoDisablePeriodic);
+    XHCI_DBG_CB("CloseEndpoint", miniPortExtension, endpointExtension, 0);
     XhciProbeEndpoint((PXHCI_EXTENSION)miniPortExtension,
                       XHCI_PROBE_EVENT_CLOSE, NULL,
-                      (const XHCI_ENDPOINT *)endpointExtension,
-                      isDoDisablePeriodic);
+                      (const XHCI_ENDPOINT *)endpointExtension, 0);
 }
 
 /*
