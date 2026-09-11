@@ -1209,6 +1209,22 @@ try {
         param($t) $t.Replace("%Mfg%=XhciModels,NTamd64", "%Mfg%=XhciModels")
     } -Source $prodInfAmd64 -Arch amd64
 
+    # Decision 11 (design record 11 section 12): the 28-character section-name
+    # limit is Windows 98's, and Windows 98's engine never reads this file, so
+    # under -Arch amd64 W98-SECTLEN does not run. Raised by a real refusal - a
+    # staged [Xhci.Dev.NTamd64.6.0.Services] is 29 characters. The mutation
+    # renames one section at its header and at every reference, to 31
+    # characters, so length is the only thing that differs from the production
+    # file; the x86 "sectlen" case above is what proves the rule still fires
+    # where it applies. Both halves are asserted: the rule's own tag must be
+    # absent, and the file must pass outright.
+    $long64 = New-MutatedInf -Name "amd64-sectlen-ok" -Mutate {
+        param($t) $t.Replace("Xhci.AddReg.Global", "Xhci.AddReg.GlobalMachineWideXX")
+    } -Source $prodInfAmd64
+    $r = Invoke-Gate -Path $long64 -Extra @("-Arch", "amd64")
+    Assert-True ($r.Output -notmatch [regex]::Escape("[W98-SECTLEN]")) ("amd64-sectlen-ok : W98-SECTLEN fired on the 64-bit file, which Windows 98's engine never reads. Output was:`n" + $r.Output)
+    Assert-True ($r.ExitCode -eq 0) ("amd64-sectlen-ok : the gate refused a 64-bit INF whose only change is a 31-character section name. Output was:`n" + $r.Output)
+
     Write-Step "the 64-bit file's own install path"
 
     #

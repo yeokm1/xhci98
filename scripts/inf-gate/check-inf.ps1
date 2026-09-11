@@ -403,10 +403,19 @@ if ($bytes.Length -gt 0 -and $bytes[$bytes.Length - 1] -ne 10) {
 $inf = Read-Inf -Path $InfPath
 
 # ---- W98-SECTLEN / W98-DUPSECT -------------------------------------
-
-foreach ($name in $inf.SectionOrder) {
-    if ($name.Length -gt 28) {
-        Add-Failure "W98-SECTLEN" ("section [{0}] is {1} characters; Win98's parser limit is 28." -f $name, $name.Length)
+#
+# The 28-character limit is Windows 98's parser's, and Windows 98's engine
+# never reads the 64-bit file - PATH-NO9X is what keeps it that way - so under
+# -Arch amd64 the limit constrains nothing and the rule does not run (design
+# record 11, decision 11, 2026-09-10). It was raised by a real refusal: a
+# staged [Xhci.Dev.NTamd64.6.0.Services] is 29 characters. W98-DUPSECT is
+# untouched by that decision and runs under both profiles.
+#
+if ($Arch -ne "amd64") {
+    foreach ($name in $inf.SectionOrder) {
+        if ($name.Length -gt 28) {
+            Add-Failure "W98-SECTLEN" ("section [{0}] is {1} characters; Win98's parser limit is 28." -f $name, $name.Length)
+        }
     }
 }
 

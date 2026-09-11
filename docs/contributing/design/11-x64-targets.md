@@ -1942,7 +1942,10 @@ publishes:
     INF's. Raised by a real refusal: `[Xhci.Dev.NTamd64.6.0.Services]` is 29
     characters. The shape eventually adopted (`Xhci.Dev6`, 6.1 and task 21.8)
     is 26 and passes either way, so **nothing is blocked and the gate change is
-    owed rather than urgent**.
+    owed rather than urgent**. **Done 2026-09-11**: `check-inf.ps1` runs the
+    rule only outside `-Arch amd64`, and its self-test now holds the gate to a
+    pass on a 64-bit copy whose only change is a 31-character section name,
+    beside the 32-bit case that still fires.
 
 ---
 

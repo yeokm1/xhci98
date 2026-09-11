@@ -5295,7 +5295,9 @@ staged under the git-ignored `tools\`.
 Rule ids are grouped by the failure they prevent:
 
 - `FILE-*`: encoding and line endings.
-- `W98-*`: the Win98-parser traps listed below.
+- `W98-*`: the Win98-parser traps listed below. The section-name limit is
+  not applied under `-Arch amd64`: Windows 98's engine never reads that file
+  (design record 11, decision 11).
 - `BOTH-*`: the rules both engines share (signature, class, resolvable
   section cross-references, `DestinationDirs` coverage and driver-directory
   placement, `SourceDisksNames`/`SourceDisksFiles` coverage, defined
