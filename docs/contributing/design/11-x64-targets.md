@@ -1964,6 +1964,22 @@ publishes:
     rule only outside `-Arch amd64`, and its self-test now holds the gate to a
     pass on a 64-bit copy whose only change is a 31-character section name,
     beside the 32-bit case that still fires.
+12. ~~Whether this driver is to run on Vista and Windows 7 at all, given that
+    no Version 200 miniport can (sections 6.1 to 6.4) and that reaching the
+    Version 300 slot means a third runtime version tier, a packet grown to
+    `0x1E0` / `0x368`, a `ULONG`-returning interrupt DPC and, on x86, a
+    four-argument stdcall registration call.~~ **Decided 2026-09-11: yes, on
+    both architectures.** The owner will tell 64-bit users about kernel-mode
+    signature enforcement in the release notes rather than sign the package
+    (decision 9 stands); 32-bit Vista and Windows 7 do not enforce it. Roadmap
+    task 22.5 carries the work and its order - the static reading of the whole
+    300 tier first, then the design written here, then the build, then the
+    guests, then every existing install leg re-validated, because this changes
+    the shipping 32-bit binary as well as the amd64 one. Two sub-choices are
+    recommended there and not yet taken: `300` presented to NT 6.x only with
+    `200` everywhere else, and the x86 INF's manufacturer line, which is
+    decision 2's unmeasured question and is to be measured on the Windows 98
+    guest before the shipping INF is touched.
 
 ---
 

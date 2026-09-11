@@ -2689,6 +2689,20 @@ each guest and record what the unsigned-driver prompt actually did.
 `build-and-test.md`, "Windows Vista and Windows 7 target VMs", is the recipe
 and the readings.
 
+**As of 2026-09-11 the premise of this phase is overtaken, and 22.5 is its
+main work rather than an empty box.** Task 21.8's guests and the static
+reading behind them (design record 11 sections 6.1 to 6.4) found that no
+Version 200 miniport can run on Vista or Windows 7 in either architecture:
+registration takes a fourth argument, the resource bits moved, and the
+interrupt DPC is taken from a Version 300 slot past the end of what a Version
+200 packet copies - and on x86 the registration is callee-cleaned, so there is
+no inert-extra-argument escape. The owner decided the same day that the driver
+is to run on Vista and Windows 7 on both architectures, with 64-bit users told
+about signature enforcement in the release notes (design record 11 section 12,
+decision 12). So 22.5 is a change to the shipping 32-bit binary and to the
+amd64 one, this release carries it, and every install leg is re-validated
+behind it - which is the case the paragraph above 22.5 always provided for.
+
 Why a phase, and why it is a different one from 21: **this asks nothing of
 the toolchain.** Phase 21 needs a second DDK, a second import library and an
 arch fork before a compiler is even reached; this phase's subject is the
@@ -2940,10 +2954,86 @@ reading may not tick a box whose line names a guest.
         not exist - and in its place the gate asserts that they still do, so a
         guest that gave one up cannot leave it reserved for nothing. The
         ordinary no-two-guests-share-a-port scan now covers all four
-- [ ] **22.5 - whatever 22.1 to 22.3 imply**, which may be nothing. If it is
-      a driver change it is a release, and all four existing install legs -
-      98, ME, 2000, XP32 - are re-validated behind it, because this is the
-      shipping binary and not a second one.
+- [ ] **22.5 - Version 300 on NT 6.x, both architectures.** The owner's
+      decision of 2026-09-11 (design record 11 section 12, decision 12). The
+      driver presents `Version = 300` to an NT 6.x `usbport.sys` and `200` to
+      everything else, from the `IoIsWdmVersionAvailable(6, 0)` answer the
+      amd64 build already takes and the x86 build will now take too; its
+      packet grows to the 300 tier (`0x1E0` x86, `0x368` amd64); its interrupt
+      DPC returns the `ULONG` NT 6.x reads; and x86 registration passes the
+      fourth argument through a cast the same way amd64 does. **Read first,
+      then design, then build, then guests, in that order, and no constant
+      moves before its reading is written down.** Four NT 6.x divergences were
+      each invisible until the one before it was fixed (task 21.8), and that
+      task's method lesson stands: disassemble the *callers*, not just the
+      structures.
+  - [ ] **the static reading of the 300 tier**, `static`, off the four NT 6.x
+        `usbport.sys` and `usbehci.sys` already in `tools\`, transcribed into
+        `usbport-miniport-abi.md` with its provenance rows:
+    - [ ] every test of the interface `Version` field (`interface+0x10` x86,
+          `+0x20` amd64) in all four binaries, so that what `300` turns on is
+          enumerated rather than assumed. The `>= 0x12C` copy size and its two
+          service pointers are known, the `>= 0x136` 64-bit DMA adapter gate is
+          known and must stay closed; anything else is the finding
+    - [ ] every read of a packet slot in `[0x13C, 0x1E0)` x86 and
+          `[0x250, 0x368)` amd64: which slots usbport calls, from where, under
+          which lock, NULL-checked or not, with what arguments and return - a
+          table with a verdict per slot, must-fill, may-zero, or written by
+          usbport. The slots Microsoft's own `usbehci.sys` fills (x86
+          `0x16C`-`0x180`, `0x1CC`, `0x1D8`; amd64 `0x280`-`0x2A8`, `0x340`,
+          `0x358`) are identified by reading what usbehci puts there
+    - [ ] the `InterruptDpc` return value: what bits 0 and 1 mean, read from
+          usbport's consumer and from usbehci's producer both, and whether NT
+          6.x still reads `packet+0x4C` / `+0x70` for anything at all
+    - [ ] the NT 5.x control: that NUSB, SP4, XP SP3 and XP x64 `usbport.sys`
+          test `Version` nowhere but at `>= 100` and `>= 200`, so a grown
+          packet under `200` is inert there by reading and not by hope
+  - [ ] **the design, written into design record 11 before code**: the
+        300-tier packet declaration with measured sizes and offsets on both
+        architectures, the two-version registration, the x86 four-argument
+        call through a cast of the one import (the import library binds by
+        plain name, so no second stub is needed and `XHCI_CHECK_STACK_DELTA`
+        is the net under the `qemu` flavour), the `ULONG` DPC serving both
+        slots, and `XhciResourcesRequired` settled on x86 from the same answer.
+        **Recommended and not yet decided: `300` on NT 6.x only, `200`
+        everywhere else** - it keeps every NT 5.x and 9x system wire-identical
+        to what it has been observed with, at the price of the runtime branch
+        decision 10 already chose
+  - [ ] **the build**: `src\xhci_usbport.h`, `src\xhci_dispatch.c`,
+        `test\test_packet.c` and host tests carrying both arms; the x86
+        allowlist row for `ntoskrnl.exe!IoIsWdmVersionAvailable` with its
+        Windows 98 evidence - `w2k-export` in both SP4 kernels,
+        `win98-precedent` in NUSB's own `USBPORT.SYS`, which imports it, and
+        `ntkern-name`; every gate green on all three flavours of both
+        architectures
+  - [ ] **the guests, in this order, `qemu` flavour first, and the readings
+        named before each boot**: Vista x64, where the wall is known (`dpc
+        count` climbing with `isr count`, No Op `CC_SUCCESS`, then the clauses
+        21.5 took - HID, mass storage, composite audio, disable / enable /
+        remove / rescan); Windows 7 x64, never yet booted with the driver;
+        Vista x86 and Windows 7 x86 off `vista-clean-install` and
+        `win7-clean-install`, which also takes this phase's unsigned-prompt
+        reading; then XP x64 again, for the `200` arm on amd64; then the four
+        32-bit legs - 98, ME, 2000, XP32 - because the shipping binary changed
+  - [ ] **the INF for the 6.x installs, an owner's decision on each file.**
+        Vista's file queue aborts on the `LayoutFile` copies (task 21.8), and
+        the shape that installs is a `.6.0`-decorated models section naming
+        its own install section (`Xhci.Dev6`, a staged copy only so far). On
+        amd64 that is a line in `src\xhci98-amd64.inf` that no 9x engine
+        reads. **On x86 it is `%Mfg%=XhciModels,NTx86.6.0` in the one line
+        Windows 98's 16-bit engine parses**, the measurement decision 2
+        declined to make - so measure it on the Windows 98 guest during that
+        leg's re-validation before the shipping x86 INF is touched, and record
+        the answer either way
+  - [ ] **`TESTSIGNING` tried once on an x64 guest**, for the release notes'
+        64-bit paragraph: what the user does once, what it costs at every
+        boot, and whether it survives a reboot. F8 is already measured
+  - [ ] **the record**: task 21.6's tier wording for Vista and Windows 7 on
+        both architectures - VM-supported, no checkpoint tax, and for x64 the
+        signing paragraph beside the tier rather than in a footnote -
+        `AGENTS.md`, `build-and-test.md`, `win98-wdm.md`, the release notes,
+        and the `legal-provenance.md` section 4 rows; task 21.8's last box
+        closes with it
 - [ ] **22.6 - the record.** The tier stated where Windows ME and 32-bit XP
       are stated, in `AGENTS.md`, `build-and-test.md`, `win98-wdm.md` and the
       release notes, with the provenance rows beside it. Task 21.6 is the
