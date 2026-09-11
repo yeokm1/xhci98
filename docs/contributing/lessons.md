@@ -8532,3 +8532,40 @@ reached the guest, with no reboot and no restaging.
 Reusable rule: reach for the floppy before the screendump whenever the artefact
 is a file rather than a sentence. `qemu-img` and 7-Zip read the image directly,
 so the round trip costs one monitor command in each direction.
+## Microsoft's public symbols name every usbport-to-miniport call
+
+Every static reading of `usbport.sys` here through 2026-09-10 was taken
+without symbols: `.text` swept with `u`, call sites found by scanning for
+displacement bytes, functions named by what they did. The Version 300 reading
+of 2026-09-11 (roadmap task 22.5) was taken with Microsoft's public PDBs
+loaded, and the difference was the whole day. The symbol server carries a PDB
+for every `usbport.sys` and `usbehci.sys` in `tools/`, fetched by the GUID and
+age in the binary's own `RSDS` record, and `kd -z <binary>
+-y srv*tools\symbols` loads them offline (`legal-provenance.md` section 2 has
+the twelve identifiers and the URL shape).
+
+What the names buy on NT 6.x is structural, not cosmetic: **every call from
+usbport into a miniport goes through a wrapper named `usbport!MPf_<Callback>`**
+- 48 of them on Vista x86, 51 on Windows 7 x86 - so `x usbport!MPf_*` is the
+complete list of what usbport can ask a miniport to do, and `uf` on each one
+gives the packet slot, the version gate, the NULL check and the argument list
+in a single command. The amd64 builds inline about two thirds of the wrappers,
+so read x86 first and confirm the offsets on amd64 by grepping a whole-`.text`
+listing for the interface-relative displacements. On the miniport side,
+`usbehci!RegistrationPacket` is a named global and its `DriverEntry` stores
+name every slot Microsoft fills. And the two Vista-era x86 `usbport.pdb`
+files are private PDBs - function names for statics as well, though still no
+types - which is why a `dt` still finds nothing.
+
+Two traps from the same session, both cheap. **A whole-`.text` `u` range ends
+at image base + section RVA + section size**, not at the RVA plus size: the
+XP SP3 control was first swept to `0x1DA00` instead of `0x2DA00`, produced
+18,070 lines that looked complete, and found nothing - which read as "no
+version tests" until the line count was compared with the section size.
+And **the PowerShell substring on `IndexOf("Reading initial command")` fails
+silently when `kd` prints nothing**, leaving the previous run's file in
+place; capture the raw output first and look at its head.
+
+Reusable rule: before disassembling a Microsoft binary by hand, dump its
+`RSDS` GUID and ask the symbol server. If a PDB exists, read the wrappers by
+name and spend the hand work on what the names do not settle.

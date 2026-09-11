@@ -1153,6 +1153,77 @@ call dword ptr [eax+60h]`.
 Provenance for every reading in this section: `legal-provenance.md` section 4,
 all of them `static`.
 
+### 6.5 The Version 300 tier read from the inside - 2026-09-11, task 22.5's first box
+
+Decision 12 (section 12) made Version 300 the plan, and roadmap task 22.5 put
+the static reading of the whole tier ahead of any constant moving. It is
+done, and the full transcription is `usb-xhci-info/usbport-miniport-abi.md`,
+"The Version 300 tier, slot by slot". What it settles, in the order the
+design needs it:
+
+- **The tier is twelve `ULONG`s and 29 pointers, and zero is safe for every
+  one of them but one.** The first `ULONG` is a count of extra common buffers
+  usbport allocates before `StartController`, capped at 8, followed by eight
+  sizes and three USBX context sizes gated on `MiniPortFlags & 0x400`; a zero
+  count allocates nothing and there is no division. Every one of the 29
+  callback slots is NULL-checked by the wrapper that reads it, and the ones
+  that matter also test `Version >= 300` first. The one slot that must be
+  filled is **`InterruptDpcEx` at `0x178` / `0x298`**, and it is the one that
+  is NULL-checked without a version test - the copy length was the gate that
+  kept it zero at 200.
+- **The `InterruptDpcEx` contract is `ULONG (extension, BOOLEAN
+  enableInterrupts)`, called under usbport's DPC lock, and only bits 0 and 1
+  of the result are read**: either set clears a device-extension flag and
+  invalidates the root-hub interrupt endpoint so the hub driver polls port
+  status. Vista's `usbehci` returns 2 for a port with a connect, enable or
+  overcurrent change and 1 for a transfer interrupt with a pending private
+  count; Microsoft's own `0x4C`-slot function is a thunk onto the same
+  routine, so one `ULONG`-returning DPC serving both slots has vendor
+  precedent, and NT 6.x never reads the `0x4C` / `0x70` slot at all.
+- **Three callbacks this driver already fills become reachable for the first
+  time on NT 6.x**, because their wrappers test `>= 300` before reading a
+  200-tier slot: `CloseEndpoint` (its wrapper is the only call through the
+  slot, so a Version 200 miniport on Vista never had an endpoint closed),
+  `RebalanceEndpoint` and `TakePortControl`. All three run today on the NT
+  5.x targets with the same arguments; the guest step should expect them.
+- **Two OUT service pointers are written into the caller's packet at
+  `>= 300`**, `UsbPortRequestAsyncCallbackEx` at `0x1B0` / `0x308` and
+  `UsbPortCancelAsyncCallback` at `0x1B4` / `0x310`; the declaration names
+  them and nothing calls them.
+- **`MiniPortFlags` stays `0x95`.** Microsoft's `usbehci` sends `0x295` on
+  XP, `0xA95` on Vista and `0x80A95` on Windows 7, always at `Version = 310`.
+  Each opt-in bit NT 6.x tests (`0x400`, `0x800`, `0x4000`, `0x10000`,
+  `0x40000`, `0x80000`) has an else-path, and one of them is a hard rule: the
+  310-tier root-hub async-command slot at `0x1E0` / `0x368` is called
+  **without a NULL check**, behind `MiniPortFlags & 0x4000` alone. Never set
+  `0x4000`.
+- **The NT 5.x control passes.** XP SP3, XP x64, Windows 2000 SP4 and NUSB's
+  `usbport.sys` compare the version against 100 and 200 only; none tests for
+  300 or 310. A 300-tier packet presented under `Version = 200` is copied to
+  `0x13C` / `0x250` and handled as it always was. That makes "300 to NT 6.x,
+  200 to everything else" a choice about keeping NT 5.x and 9x wire-identical
+  to what was observed, not a necessity - the recommendation stands and the
+  choice is still the owner's.
+
+**So the design is small and needs no new import, callback or flag**: the
+packet declared at `0x1E0` / `0x368` with measured asserts on the count field,
+the first pointer, `InterruptDpcEx` and the two OUT slots; `xhciInterruptDpc`
+returning a `ULONG` (2 after a pass that consumed a port status change event,
+0 otherwise, keeping the `UsbPortInvalidateRootHub` call it makes today);
+the version argument selected from the same `IoIsWdmVersionAvailable(6, 0)`
+answer as the arity and the resource mask, now on both architectures; and the
+x86 four-argument call through a cast of the one import, with
+`XHCI_CHECK_STACK_DELTA` as the net. That is task 22.5's second box.
+
+**Method, because it changes what the next reading costs.** Microsoft's
+public symbol server carries PDBs for all twelve `usbport.sys` and
+`usbehci.sys` builds in `tools/`, and with them every usbport-to-miniport call
+on NT 6.x goes through a named `usbport!MPf_<Callback>` wrapper: `x
+usbport!MPf_*` is the complete list of what usbport can ask, and `uf` on each
+gives slot, gate and arguments in one command. The files are identified in
+`legal-provenance.md` section 2 and cached under `tools/symbols/`;
+`lessons.md` has the note.
+
 ---
 
 ## 7. The decision gate

@@ -2967,27 +2967,54 @@ reading may not tick a box whose line names a guest.
       each invisible until the one before it was fixed (task 21.8), and that
       task's method lesson stands: disassemble the *callers*, not just the
       structures.
-  - [ ] **the static reading of the 300 tier**, `static`, off the four NT 6.x
+  - [x] **the static reading of the 300 tier**, `static`, off the four NT 6.x
         `usbport.sys` and `usbehci.sys` already in `tools\`, transcribed into
-        `usbport-miniport-abi.md` with its provenance rows:
-    - [ ] every test of the interface `Version` field (`interface+0x10` x86,
+        `usbport-miniport-abi.md` with its provenance rows. **Done 2026-09-11,
+        the same day, with Microsoft's public symbol files loaded** - every
+        usbport-to-miniport call on NT 6.x is a named `usbport!MPf_<Callback>`
+        wrapper, which turned the reading into an afternoon (`lessons.md`).
+        `usbport-miniport-abi.md`, "The Version 300 tier, slot by slot", and
+        design record 11 section 6.5 are the record; the tier is twelve
+        `ULONG`s and 29 pointers, zero is safe for every one of them, and the
+        one slot that must be filled is `InterruptDpcEx`:
+    - [x] every test of the interface `Version` field (`interface+0x10` x86,
           `+0x20` amd64) in all four binaries, so that what `300` turns on is
           enumerated rather than assumed. The `>= 0x12C` copy size and its two
           service pointers are known, the `>= 0x136` 64-bit DMA adapter gate is
-          known and must stay closed; anything else is the finding
-    - [ ] every read of a packet slot in `[0x13C, 0x1E0)` x86 and
+          known and must stay closed; anything else is the finding. **Found:
+          every `>= 300` test outside registration is a wrapper gate that
+          NULL-checks the slot behind it, plus one in
+          `USBPORT_AllocateControllerCommonBuffers` that reads packet `0x13C`
+          as a count of extra common buffers, zero meaning none. Three
+          wrappers on 200-tier slots - `CloseEndpoint`, `RebalanceEndpoint`,
+          `TakePortControl` - test `>= 300` before calling at all, so those
+          three become reachable on NT 6.x for the first time**
+    - [x] every read of a packet slot in `[0x13C, 0x1E0)` x86 and
           `[0x250, 0x368)` amd64: which slots usbport calls, from where, under
           which lock, NULL-checked or not, with what arguments and return - a
           table with a verdict per slot, must-fill, may-zero, or written by
           usbport. The slots Microsoft's own `usbehci.sys` fills (x86
           `0x16C`-`0x180`, `0x1CC`, `0x1D8`; amd64 `0x280`-`0x2A8`, `0x340`,
-          `0x358`) are identified by reading what usbehci puts there
-    - [ ] the `InterruptDpc` return value: what bits 0 and 1 mean, read from
+          `0x358`) are identified by reading what usbehci puts there. **Found:
+          29 named slots, all NULL-checked; two OUT services at `0x1B0`/`0x1B4`
+          (`0x308`/`0x310`); six slots with no reader at all; the amd64 map is
+          `0x280 + (X - 0x16C) * 2`, confirmed at every site. One hard rule
+          from the tier above: the 310 slot at `0x1E0`/`0x368` is called
+          without a NULL check behind `MiniPortFlags & 0x4000` - never set it**
+    - [x] the `InterruptDpc` return value: what bits 0 and 1 mean, read from
           usbport's consumer and from usbehci's producer both, and whether NT
-          6.x still reads `packet+0x4C` / `+0x70` for anything at all
-    - [ ] the NT 5.x control: that NUSB, SP4, XP SP3 and XP x64 `usbport.sys`
+          6.x still reads `packet+0x4C` / `+0x70` for anything at all. **Found:
+          `ULONG (extension, BOOLEAN enableInterrupts)` under usbport's DPC
+          lock; bits 0 and 1 are read identically and either invalidates the
+          root-hub interrupt endpoint; usbehci returns 2 for a port change, 1
+          for a transfer interrupt with a pending count, 0 otherwise, and its
+          own `0x4C`-slot function is a thunk onto the same routine. NT 6.x
+          never reads `0x4C` / `0x70`**
+    - [x] the NT 5.x control: that NUSB, SP4, XP SP3 and XP x64 `usbport.sys`
           test `Version` nowhere but at `>= 100` and `>= 200`, so a grown
-          packet under `200` is inert there by reading and not by hope
+          packet under `200` is inert there by reading and not by hope.
+          **Found: exactly that, on all four, every compare in `.text` listed
+          in `legal-provenance.md` section 4**
   - [ ] **the design, written into design record 11 before code**: the
         300-tier packet declaration with measured sizes and offsets on both
         architectures, the two-version registration, the x86 four-argument
