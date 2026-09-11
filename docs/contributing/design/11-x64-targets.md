@@ -973,6 +973,24 @@ with `isr count == isr claimed == dpc count` climbing together - the direct
 contrast with Vista x64's `dpc count=00000000` in section 6.4. Evidence:
 `vm\task218-evidence\winxp64-wdm600-revalidation-boot.log`.
 
+**Re-checked on Vista x64 2026-09-11** with `built Sep 11 2026 00:18:56` - the
+same source as the XP x64 build above; the tree was rebuilt after documentation
+edits and the two binaries differ only in the PE timestamp, checksum, debug
+directory and PDB GUID - on QEMU 11.1.0, from the `vista-x64-clean-install`
+snapshot, installed through the staged `Xhci.Dev6` INF and loaded under F8.
+The 2026-09-10 Vista result was taken on the `(1, 0x30)` predicate, which
+happened to answer the same way on 6.0, so until this boot the corrected
+constant had been observed selecting only the NT 5.x arm. It selects the NT
+6.x arm too: `wdm pre-6.00 (three-argument registration)=00000000`,
+`resource bits required=0000000C`, `resources+00: 0000000C`, registration
+status 0 with all sixteen service pointers written, `init complete,
+USBSTS=00000008`, `init step=00000016 / init status=00000000` - and then
+section 6.4's wall exactly as before: `isr count == isr claimed` climbing with
+`dpc count=00000000`, no `cb InterruptDpc` line, and the `ResetController`
+cycle behind the No Op timeout. Both arms of `(6, 0)` are now observed rather
+than reasoned. Evidence:
+`vm\task218-evidence\vista-x64-wdm600-revalidation-boot.log`.
+
 **A method lesson that nearly cost the finding.** Device Manager showed a
 healthy controller *and* a `USB Root Hub` throughout, because the guest still
 had the *release*-flavour binary from task 21.5 installed - and the release

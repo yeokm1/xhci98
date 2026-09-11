@@ -2368,6 +2368,13 @@ are static readings and no other task's box may be ticked on one.
         hot-plugged HID mouse addressed and carrying transfers, and `isr count
         == isr claimed == dpc count` climbing together. **Box 5 is closed.**
         Evidence: `vm\task218-evidence\winxp64-wdm600-revalidation-boot.log`.
+        Vista x64 was then re-checked with the corrected predicate on
+        2026-09-11 (`built Sep 11 2026 00:18:56`, QEMU 11.1.0, from the
+        clean-install snapshot through the staged `Xhci.Dev6` INF under F8):
+        `wdm pre-6.00 ...=0`, `resource bits required=0000000C`, registration
+        status 0, all 22 init steps, and the same `dpc count=00000000` wall -
+        so both arms of `(6, 0)` are observed, not reasoned. Evidence:
+        `vm\task218-evidence\vista-x64-wdm600-revalidation-boot.log`.
         **The host-side half is done, 2026-09-10, before either guest existed
         - which is the point, since this is the gate that comes first.** A
         complete test-signed `Vista_X64,7_X64` package can be produced from
