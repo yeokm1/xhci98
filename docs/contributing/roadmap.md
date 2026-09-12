@@ -3069,12 +3069,57 @@ reading may not tick a box whose line names a guest.
           completion; the loss is entirely inside usbport, on a path guarded
           by a lock not exposed to miniports. **Written up as
           [issue 7](../issues/07-win7-x86-enable-arrest-usbport-done-dpc.md),
-          which states plainly what is NOT established** - above all that
-          the single-vCPU run predicted to make it disappear is unrun, so
-          this is a reading of a binary and not a result. **Owner's ruling,
+          which states plainly what is NOT established.** When this box was
+          written the single-vCPU run was unrun and this was a reading of a
+          binary rather than a result; **that run was taken on 2026-09-12
+          on the x64 guest and the prediction held** (the Windows 7 x64
+          sub-box below). **The x86 guest has still not been re-run
+          single-processor**, and the two objects usbport holds are still
+          unnamed on either target. **Owner's ruling,
           2026-09-12: the leg stops being the critical path and the cut goes
           ahead**, with 22.6 disclosing it as a limitation of `1.1.0.0`
           rather than the cut waiting on it
+    - [x] **Vista x64 and Windows 7 x64 RE-TAKEN against the current binary,
+          2026-09-12** (`p225vistax64re1`, `p225win7x64re1`), because
+          `8a46d1b` and `789848c` landed after the 2026-09-11 legs and those
+          were therefore recorded against a superseded binary. Each image was
+          reverted to its clean-install snapshot first. **Install, the three
+          devices and the Device Manager disable PASS on both**, with
+          `read-v300.ps1 -Expect nt6` reading ALL PASS on every load -
+          `presented 0000012C`, `nt6 services written 2`, `isr == dpc`, No Op
+          `CC_SUCCESS`, no `ABI-SUSPECT`, no `ResetController` - and all
+          three devices bound with `DescIsoEntries 2`. **Vista x64's enable
+          also passes, so the 2026-09-11 result holds on the new binary**
+    - [ ] **Windows 7 x64: the ENABLE ARRESTS, and it is issue 7's defect on
+          the other architecture.** One install on a freshly reverted image;
+          the enable came back with **2 slots, 1 device, `DescIsoEntries 0`**
+          and held for a **threshold fixed at ten minutes before the run**
+          (twenty identical samples). usbport's ring was **100% its idle
+          poll with zero work records**, `Tmt2` naming **exactly two objects
+          per tick for ever**, while this driver showed submitted ==
+          completed and every refusal counter zero. **So the defect is not
+          x86-only and not a property of the 32-bit binary** - a separate
+          amd64 build, a separate toolchain, a different `usbport.sys`.
+          **Then `-smp 1` was run on the same guest within the hour and the
+          arrest VANISHED across five consecutive disable/enable cycles**,
+          all six loads at `SlotsEnabled 3` / `DescIsoEntries 2` with no
+          non-zero refusal counter at all - **which is issue 7 section 6's
+          own experiment, and it held.** Evidence in `vm\ring-win7x64-re1\`.
+          What is still owed here: the x86 guest re-run single-processor,
+          and the identity of the two objects
+    - [ ] **Vista x64: REMOVE/RESCAN does not complete, twice, and that
+          clause had never been run on this guest.** Device Manager Uninstall
+          of the devnode (package left in the store) wedged: attempt 1 sent
+          **nothing to the driver at all in ~21 measured minutes**, its ring
+          one `biCF` tag on two objects at ~37 records/s; attempt 2, after a
+          reset and a fresh load, **reached the driver at 4m01s**
+          (`AbortTransfer`, endpoint stop/dequeue/restart) and then stopped
+          dead, its ring 100% idle poll with `Tmt2` on **eleven** objects.
+          **Not the same phase as issue 7's enable arrest and NOT tested
+          under `-smp 1`**, so do not fold the two together. Note also that
+          the 2026-09-11 Vista x64 record covered install, devices, disable
+          and enable only - **this clause is newly run, not newly broken.**
+          Evidence in `vm\ring-vistax64-re1\`
   - [ ] **the INF for the 6.x installs, an owner's decision on each file.**
         Vista's file queue aborts on the `LayoutFile` copies (task 21.8), and
         the shape that installs is a `.6.0`-decorated models section naming
@@ -3099,16 +3144,35 @@ reading may not tick a box whose line names a guest.
       release notes, with the provenance rows beside it. Task 21.6 is the
       worked example and its lesson transfers: check first whether the wording
       the other tiers carry is true of this one before reusing it.
-  - [ ] **the Windows 7 x86 disclosure, and it is not optional.** The
-        `1.1.0.0` cut goes ahead over a known, open defect on that target
-        (the guest box in 22.5, and
+  - [ ] **the Windows 7 disclosure - BOTH ARCHITECTURES - and it is not
+        optional.** The `1.1.0.0` cut goes ahead over a known, open defect
+        (the guest boxes in 22.5, and
         [issue 7](../issues/07-win7-x86-enable-arrest-usbport-done-dpc.md)),
         so the release notes must say what a user meets - a disable/enable
         cycle can come back with a device missing, a restart recovers it and
         a rescan does not - **without** stating as settled what is only a
-        reading of `usbport.sys`. The tier wording may not lean on "the
-        defect is not ours": that is the claim the issue page explicitly
-        declines to make until the single-vCPU run is taken
+        reading of `usbport.sys`.
+    - [ ] **The scope this box was written with is WRONG and must be widened
+          before it is drafted.** It said Windows 7 x86; on 2026-09-12 the
+          same arrest, with the same ring signature, reproduced on **Windows
+          7 x64** - a different binary from a different toolchain against a
+          different `usbport.sys`. The disclosure covers **both**, and it
+          may not imply the 32-bit binary is the thing at fault
+    - [ ] **What the single-vCPU run does and does not license.** That run
+          was taken 2026-09-12 and the prediction held five times over, so
+          the notes **may** say the fault has needed more than one processor
+          wherever it has been looked at - naming that as one target, one
+          architecture, five cycles, and not a proof of absence. **The tier
+          wording still may not lean on "the defect is not ours"**: the two
+          objects usbport holds are unnamed on both targets and issue 7
+          still declines that claim
+    - [ ] **Decide what to say, if anything, about Vista x64's remove and
+          rescan**, which did not complete on 2026-09-12 (22.5). It is a
+          different clause from the enable arrest, was never run on that
+          guest before, and was not tested single-processor - so it is
+          either a second disclosed limitation or an explicitly untested
+          clause, and saying nothing at all is the one option that is not
+          honest
 
 - [ ] **22.7 - a charset gate on tracked source.** Added after the cut tasks
       were written and numbered 22.10 at first; renumbered here so the phase

@@ -6,16 +6,32 @@ four runs on 2026-09-12 (`p225win7x86r2` through `r5`, roadmap task 22.5's
 guest leg). The mechanism below is read from usbport's own log ring,
 captured live against a signature-checked miniport extension, and from a
 static reading of `usbport.sys` 6.1.7601.17514 x86 against Microsoft's
-public symbols. **It is a reading, not a result**: the one experiment that
-would confirm or refute it - the same guest with a single vCPU - has not
-been run. Nothing in this driver is known to be wrong, and nothing in this
-driver is known to be right either; section 5 says exactly what the
-evidence licenses.
+public symbols. **The one experiment that would confirm or refute it - the
+same guest with a single vCPU - HAS NOW BEEN RUN, on 2026-09-12, and it
+agrees** (section 6 item 1). It was run on Windows 7 **x64** rather than
+x86, and on that target the arrest vanished across five consecutive
+disable/enable cycles. That lifts the mechanism below out of "a reading of
+a binary" and into a prediction that held once, on one target. It does not
+settle the rest: nothing in this driver is known to be wrong, and nothing
+in this driver is known to be right either; section 5 says exactly what
+the evidence licenses, and it is unchanged by the single-vCPU run.
 
-Targets affected: Windows 7 x86 in a virtual machine. Not seen on Windows
-98 SE, Windows ME, Windows 2000 or Windows XP in any run of this project.
-Whether it reaches Vista, the x64 builds, or real hardware is unknown - no
-run has looked.
+Targets affected: Windows 7 x86 **and Windows 7 x64**, both in virtual
+machines. Not seen on Windows 98 SE, Windows ME, Windows 2000 or Windows
+XP in any run of this project. **The x64 half was added 2026-09-12**: on a
+freshly reverted guest carrying one install of the same binary, an enable
+came back with one device of three and held that way for a measured ten
+minutes, with usbport's ring showing the same signature (the Windows 7 x64 block at the end of section 2).
+**So this is not an x86 defect, and it is not a property of the 32-bit
+binary** - it reproduced on a separate amd64 build from a separate
+toolchain against a different `usbport.sys`. Whether it reaches real
+hardware is still unknown; no run has looked.
+
+**The file keeps its `07-win7-x86-...` name** so existing links stay
+valid, and the name is now narrower than the issue. Vista x64 is **not**
+listed above: what that guest showed on 2026-09-12 is a *remove/rescan*
+wedge, a different clause from the enable, not tested under `-smp 1`, and
+it is recorded in roadmap task 22.5 rather than here.
 
 The short version: on a clean install with three devices on root ports and
 no hub, install, first plug, disable and restart-recovery all pass, but a
@@ -143,6 +159,54 @@ comparison. The healthy one holds 2016 work records, nine submits and
   taken just after a disable had torn the driver down, so `+0x324` led to a
   dead FDO. Before concluding logging is off, take the extension from the
   current load and check its signature and its `'HFDO'` at `+0x324`.
+
+### The Windows 7 x64 reproduction, 2026-09-12
+
+Taken on `vm\win7-x64.img` reverted to `win7-x64-clean-install` and given
+**one** install of the amd64 `qemu` binary built Sep 12 2026 14:25:43 - one
+driver generation through one devnode. Install, all three devices and the
+Device Manager disable all passed, `read-v300.ps1 -Expect nt6` reading
+ALL PASS. The enable then came back short and **stayed short across a
+threshold fixed at ten minutes before the run** (twenty samples at thirty
+seconds, every value identical, the debug log untouched throughout):
+
+| reading | failing enable | healthy |
+|---|---|---|
+| `SlotsEnabled` | **2** | 3 |
+| `DevicesAddressed` | **1** | 3 |
+| `DevicesReopened` | **1** | 3 |
+| SET_ADDRESS interceptions | **1** | 3 |
+| endpoints configured | **2** | 3 |
+| `DescIsoEntries` | **0** | 2 |
+| interface selections | **0** | 2 |
+| `TransfersSubmitted` / `Completed` | 0xA4 / 0xA4 | equal |
+| every refusal counter | 0 | 0 |
+
+The counters are not the same set the x86 table above uses - `XHCISNAP` was
+not run on this guest - but the conclusion is the same one: **submitted
+equals completed, every refusal counter is zero, and this driver is holding
+nothing.**
+
+usbport's ring says the rest. The whole 1,024-record buffer - about the
+last 105 seconds at the measured rate - is **its idle poll and nothing
+else**: `Tmt2` 293, `Tmt0`/`chgZ`/`chg0`/`nes+`/`nes-` about 146 each,
+**zero work records**. `Tmt2` names **exactly two distinct objects**, each
+examined once per tick across 146 ticks, for ever. That is the same shape
+as the Vista x64 stall of 2026-09-11, which recorded exactly two objects
+per tick, one per blocked thread.
+
+**Two measurements needed to read a ring on these guests, neither of which
+carries across builds:** the usbport FDO extension is
+`miniportExtension - 0x1500` on Windows 7 x64 against `- 0x16E0` on Vista
+x64, and the ring header is shifted eight bytes with it (index at `+0x18`,
+mask `+0x20`, base `+0x28` on Windows 7 x64). Find the offset by scanning
+back from the signature-checked miniport extension for the `'HFDO'` dword
+`0x4f444648` - six `x/256xg` over the 0x3000 below it answers in under a
+minute and needs no disassembler.
+
+**What the two objects are was not established.** Naming them is a static
+read of Windows 7 x64's `usbport.sys`, and it has not been done, so the
+boundary statement in section 5 is unchanged by this run.
 
 ## 3. The wrong turns
 
@@ -395,9 +459,27 @@ settled:
 
 ## 6. What would confirm or refute it, cheapest first
 
-1. **The same guest with `-smp 1`.** The diagnosis predicts the arrest
-   disappears. If it does not, the reading in section 4.4 is wrong. This
-   is the single sharpest remaining experiment and it is cheap.
+1. ~~**The same guest with `-smp 1`.**~~ **TAKEN 2026-09-12, ON WINDOWS 7
+   x64, AND THE PREDICTION HELD.** Same guest, same image, same binary,
+   same three devices, same operator sequence, inside one hour: under
+   `-smp 4` the enable arrested at two slots and one device and stayed
+   there for a measured ten minutes; under `-smp 1` (`info cpus` listing
+   only CPU #0) it passed **five consecutive disable/enable cycles**. All
+   six loads of that run end at `SlotsEnabled 3` and `DescIsoEntries 2`,
+   ALL PASS each time, `isr count == dpc count` throughout, and **not one
+   non-zero refusal counter** - not even the `transfers refused for
+   retry=1` that every four-vCPU run of this project carries. Removing the
+   second processor removed the symptom, which is what a write-after-queue
+   race needing two processors predicts, and section 4.4 survives it.
+
+   **Three things it does not establish, and they matter.** It was run on
+   **x64, not on the x86 guest this page is named for** - that leg has
+   still not been re-run single-processor. **Five clean cycles is not proof
+   of absence**: leg 4's own rate wandered from three-in-five to one-in-
+   eleven, and this page's section 1 says why a rate measured without a
+   fixed wait threshold is not a measurement at all. And it names nothing:
+   **the two objects usbport holds are still unidentified**, so section 5's
+   refusal to say "the defect is not ours" stands untouched.
 2. **A run with QEMU's `usb_xhci_xfer_*` trace enabled.** It was off for
    both `r4` and `r5` (`scripts\local\xhci-trace-events.txt` carries only
    `port_*`, `slot_*`, `queue_event`, `irq_intx`). It says whether the TD
@@ -411,10 +493,13 @@ settled:
    pattern**, which would turn an unfixable usbport defect into something
    this driver could make rare.
 
-Until at least the first of these is done, the honest statement is the one
-at the top of this page: the arrest was localised to a usbport code path
-the miniport cannot influence, on one reading of the binary, not yet
-confirmed by experiment.
+The first of these is now done, so the honest statement has moved, but not
+as far as it may look. The arrest was localised to a usbport code path the
+miniport cannot influence, on one reading of the binary; that reading made
+a prediction; the prediction held on one target, five times over. What is
+still missing is the identity of what usbport is holding, and a
+single-processor run of the **x86** guest this page is named for. Item 2
+below is now the cheapest useful thing left.
 
 ## Sources
 
@@ -426,6 +511,15 @@ Evidence, all under `vm\`:
 - `vm\ring-r5-healthy-firstplug\`, copied to
   `vm\task225-evidence\win7-x86-r5-HEALTHY-firstplug-ring-decoded.txt`
 - `vm\ring-r4-cycle3\` - the first ring taken against a live extension
+- `vm\ring-win7x64-re1\` - the 2026-09-12 Windows 7 x64 material: the
+  arrest's debug log (`...smp4-arrest.log`), its ring
+  (`win7-x64-ring-enable.txt`), the twenty threshold samples
+  (`enable-threshold-samples.txt`), the five clean single-vCPU cycles
+  (`...smp1-five-cycles.log`), and the exact one-off invocation used
+  (`win7-x64-smp1.cmd`, identical to the generated launcher but `-smp 1`)
+- `vm\ring-vistax64-re1\` - the Vista x64 material of the same evening. It
+  belongs to a **different clause** (remove/rescan, not enable) and is
+  listed here only so it is not lost
 - `vm\task225-evidence\win7-x86-r5-ARREST-counters-full.txt`,
   `win7-x86-r4-cycle3-counters.txt`
 - the debug-console logs `win7-x86-p225win7x86r2-ENABLE-NO-AUDIO-...`
@@ -452,5 +546,8 @@ overstates and its central claim is refuted by section 3 item 5**),
 `healthy-ring-has-no-cancel-2026-09-12`,
 `win7-x86-leg4-r4-descriptor-round-2026-09-12`,
 `win7-x86-enable-stall-repeat-2026-09-12`,
+`win7-x64-enable-arrest-2026-09-12`,
+`smp1-clears-the-enable-arrest-2026-09-12`,
+`vista-x64-retake-and-remove-rescan-wedge-2026-09-12`,
 `usbport-internals-win7-x86-2026-09-12`,
 `setaddress-wedge-hypothesis-and-usbport-survey-2026-09-12`.

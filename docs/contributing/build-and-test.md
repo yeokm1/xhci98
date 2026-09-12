@@ -2316,11 +2316,29 @@ signing question, and an operator repeating this will meet them in this order:
 Startup and Recovery). You cannot pick two F8 items at once, so a bugcheck
 otherwise reboots before it can be read.
 
-**As of 2026-09-10 the driver reaches `StartController` and refuses there**,
-`init REFUSED at step=00000001`, `ResourcesTypes = 0x0C`, shown as Code 10.
-That is the driver declining deliberately, not a crash, and it is roadmap task
-21.8's open question. **Windows 7 x64 has not been booted with the driver at
-all**, and `TESTSIGNING` has not been tried on either guest.
+**That 2026-09-10 reading is superseded twice over and is kept only so an
+operator meeting it knows what it was.** It read: the driver reaches
+`StartController` and refuses there, `init REFUSED at step=00000001`,
+`ResourcesTypes = 0x0C`, Code 10 - the driver declining deliberately, not a
+crash, and roadmap task 21.8's open question at the time. **The Version 300
+work of task 22.5 closed it**: both guests now start their controllers, and
+`scripts\local\read-v300.ps1 -Expect nt6` reads ALL PASS on each.
+
+**Both have since been booted with the driver, and both were re-taken on
+2026-09-12 against the current binary** (roadmap 22.5, guests
+`p225vistax64re1` and `p225win7x64re1`, each off a fresh revert of its
+clean-install snapshot). Install, the three devices and the Device Manager
+disable pass on both; Vista x64's enable passes; **Windows 7 x64's enable
+intermittently arrests** (issue 7, which that evening stopped being an x86-only
+page), and **Vista x64's remove/rescan did not complete**. Read those two
+boxes before running either sequence, so a known result is not re-discovered
+as a surprise.
+
+**`TESTSIGNING` has still not been tried on either guest** - it remains an
+open box in 22.5, and F8 is what every run so far has used. **Note that QEMU's
+monitor `sendkey f8` is ignored on these guests' boot path**: F8 has to be
+pressed at the console, and a `system_reset` reaches "Starting Windows" within
+about 25 seconds, so be at the keyboard before resetting.
 
 **Getting files in and out.** The transfer drive is VVFAT `snapshot=on`, so the
 guest cannot write anything back to the host through it. Use the floppy:
