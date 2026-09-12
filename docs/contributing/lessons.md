@@ -24,6 +24,59 @@ Do not turn a hypothesis into a settled hardware quirk. Move confirmed design
 rules into the appropriate normative document while keeping the debugging
 history here.
 
+## A comment written through a PowerShell here-string put a BEL into `src\`, and every gate passed
+
+Environment: the Windows development host, 2026-09-12, adding a log-only
+diagnostic to `src\xhci_slot.c` and `src\xhci_dispatch.c`. The edit was applied
+with PowerShell `[IO.File]::WriteAllText` and a **double-quoted** here-string,
+which is the mechanism this project uses for source edits because the Bash tool
+mangles quotes.
+
+In a double-quoted PowerShell string the backtick is the escape character. The
+comment contained ``` `address << 16 | usbdStatus >> 16` ```, and ``` `a ``` is
+PowerShell's *alert* escape, so a literal **BEL (0x07)** was written into the
+C comment; the text rendered as "ddress". Every other backtick pair in the same
+comment silently lost its backticks, so the identifier quoting the surrounding
+comments use was stripped as well - visible only by reading the diff.
+
+**What is proven.** `scripts\build-driver.cmd all` then compiled all three x86
+flavours and **passed every gate** with the BEL present: import gate, INF
+self-tests, host tests, packager, launcher, matrix, EOL and flavour markers. A
+C compiler accepts a control character inside a comment, and nothing else in
+the chain looks. The defect was caught only because "ddress" is visibly wrong
+in `git diff`.
+
+**What that says about the gates.** There is **no charset or control-character
+check on `src\`**. The EOL gate checks line endings, not the bytes between
+them. A control character in a string literal rather than a comment would have
+reached the shipping binary the same way.
+
+**The reusable rules.**
+
+- Use **single-quoted** here-strings for any content containing backticks, and
+  treat ``` `a `b `f `n `r `t `v `0 `e ``` as the dangerous set - the rest merely
+  drop the backtick, which corrupts prose quietly rather than loudly.
+- **Scan added source for bytes below 0x20 outside CR/LF/TAB before
+  committing.** One line of Python over the file does it, and no gate will.
+- Read `git diff` as prose, not just as a shape. The rendering "ddress" was the
+  whole signal.
+
+This is a cousin of "A counter label that is legal C and correct on screen can
+still be invisible to the tool that makes it readable": both are cases where
+the artefact compiles, the tooling is content, and only a human reading the
+output notices.
+
+**A second thing the same session rediscovered rather than read.** It was
+asserted that a diagnostic confined to the `qemu` flavour would leave the
+`release` binary *byte-identical*, and the rebuild disproved it - all three x86
+binaries changed hash, release and debug at identical size with only the PE
+`TimeDateStamp` moved. **"Task 13-L.4 - a byte compare cannot show 'the
+published binary is the bench binary', because a re-link moves the PE
+timestamp" in this same file had already recorded exactly that**, and
+`make-release.ps1 -Force` already stages from `src\objfre` / `src\objchk`
+rather than rebuilding for the same reason. Identity across a re-link is a
+source-tree claim made from history and the gates, never a file-compare claim -
+and this file is where to check before promising one.
 ## A structural coincidence is not a reading, and the writer is disassemblable even when it has no symbol
 
 Read 2026-09-10 (roadmap task 21.8, design record 11 section 6.2). The amd64

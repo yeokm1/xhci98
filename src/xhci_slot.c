@@ -8862,9 +8862,36 @@ static VOID xhciDevFinishSetAddress(PXHCI_EXTENSION ext,
         /* Aborted, or torn down, while the command was in flight. The command
          * still completed and its effect on the slot is real; there is simply
          * nobody left to tell. */
+        /*
+         * Logged, because "nobody left to tell" is itself a reading: usbport
+         * waits for this transfer on an INFINITE, non-alertable
+         * `KeWaitForSingleObject` - a NULL timeout in every usbport in
+         * `tools\` that resolves symbols (XP, Vista and Windows 7, both
+         * architectures), read 2026-09-12 - so a completion with nothing to
+         * complete means that wait was already
+         * answered by some other path. The durable witness is
+         * `SetAddressIntercepts` against `DevicesAddressed`.
+         */
+        XHCI_DBG_VALUE_LIMITED("slot: Address Device completed with no "
+                               "SET_ADDRESS to answer, device address",
+                               dev->DeviceAddress);
         return;
     }
     dev->PendingSetAddress = NULL;
+    /*
+     * **The status usbport actually receives for the intercepted SET_ADDRESS**,
+     * which is what decides whether `USBPORT_InitializeDevice` goes on to
+     * `USBPORT_PokeEndpoint` (the EP0 reopen) or frees the address and deletes
+     * the device handle: it tests the completion status and branches on
+     * negative. 2026-09-12 left this unreadable from our side - the value is
+     * `address << 16 | usbdStatus >> 16`, so 0x00030000 is address 3 completed
+     * SUCCESS and 0x0003C000 is address 3 completed with a failure class.
+     * Durable witness: `SetAddressIntercepts` and `DevicesAddressed`.
+     */
+    XHCI_DBG_VALUE_LIMITED("slot: SET_ADDRESS answered to usbport, "
+                           "address << 16 | usbd status >> 16",
+                           (((ULONG)dev->DeviceAddress) << 16) |
+                               (((ULONG)usbdStatus >> 16) & 0xFFFFUL));
     transfer->Next = NULL;
     transfer->UsbdStatus = usbdStatus;
     /* SET_ADDRESS has no data stage, so the byte count is zero by construction

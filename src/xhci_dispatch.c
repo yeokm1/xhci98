@@ -3331,6 +3331,24 @@ static VOID NTAPI xhciQueryEndpointRequirements(
         return;
     }
     XhciProbeEndpoint(ext, XHCI_PROBE_EVENT_QUERY, properties, NULL, 0);
+    /*
+     * **Which device this query is for.** usbport calls this slot
+     * unconditionally inside `USBPORT_PokeEndpoint`, ahead of every failure
+     * path in it, and again on the `USBPORT_ReopenPipe` route - so a query
+     * that is never followed by an open means the reopen was attempted and
+     * failed inside usbport, and NO query for a device that was addressed
+     * means the reopen was never attempted at all. On 2026-09-12 that
+     * distinction had to be inferred from `ProbeEpEvents[QUERY]` equalling
+     * `[OPEN]` in aggregate; per device it is a reading. Value is
+     * `DeviceAddress << 16 | EndpointAddress`. Durable witnesses:
+     * `ProbeEpEvents[XHCI_PROBE_EVENT_QUERY]` and `[..._OPEN]`.
+     */
+    if (properties != NULL) {
+        XHCI_DBG_VALUE_LIMITED("cb QueryEndpointRequirements for "
+                               "address << 16 | endpoint",
+                               (((ULONG)properties->DeviceAddress) << 16) |
+                                   (ULONG)properties->EndpointAddress);
+    }
     XhciSlotQueryEndpointRequirements(ext, properties, requirements);
 }
 
@@ -3350,6 +3368,15 @@ static MPSTATUS NTAPI xhciOpenEndpoint(PVOID miniPortExtension,
         return MP_STATUS_NOT_SUPPORTED;
     }
     XhciProbeEndpoint(ext, XHCI_PROBE_EVENT_OPEN, properties, NULL, 0);
+    /* The other half of the pair above: an open names the device it is for, so
+     * the query/open sequence can be read per device rather than as two
+     * totals. A non-zero address here is the post-SET_ADDRESS EP0 reopen
+     * (`DevicesReopened`). */
+    if (properties != NULL) {
+        XHCI_DBG_VALUE_LIMITED("cb OpenEndpoint for address << 16 | endpoint",
+                               (((ULONG)properties->DeviceAddress) << 16) |
+                                   (ULONG)properties->EndpointAddress);
+    }
     return XhciSlotOpenEndpoint(ext, properties,
                                 (PXHCI_ENDPOINT)endpointExtension);
 }
