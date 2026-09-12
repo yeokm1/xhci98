@@ -497,6 +497,23 @@ between `StartController` and shutdown. See
 `docs/contributing/build-and-test.md`, "Getting a trace off a bare-metal
 machine".
 
+**Source is ASCII with CRLF endings, and a gate now says so.** Every source
+edit in this repository passes through a PowerShell string layer, because the
+Bash tool mangles quotes - and in a **double-quoted** PowerShell string the
+backtick is the escape character, so `` `a `` becomes a literal BEL. That
+happened on 2026-09-12: a comment written into `src/xhci_slot.c` carried a BEL
+into the tree, and all three x86 flavours compiled and passed every gate with
+it there. Use **single-quoted** here-strings for anything containing a
+backtick. `scripts\check-source-charset.ps1`, which `build-driver.cmd` runs,
+refuses a control byte below 0x20 other than TAB, CR and LF anywhere in
+tracked source, and a UTF-8 BOM at the head of any file the 1998-era toolchain
+reads, and **any byte >= 0x80** anywhere - a rule taken on 2026-09-12 at
+the cost of one character, a UTF-8 section sign in an `src/xhci.h` comment
+rewritten as "section" (roadmap task 22.7). Above all, never
+put a non-ASCII byte in a **string literal**: the driver's strings go out the
+debugcon channel and onto a Windows 98 console, where the encoding is not
+UTF-8.
+
 ---
 
 ## What NOT to Do

@@ -301,6 +301,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\xhciqual\test\check-bat-eol.ps1"
 if errorlevel 1 goto eoltestfail
 
+rem And the bytes INSIDE tracked source, which nothing checked until task
+rem 22.7: every other gate here reads src\ through a compiler or a parser
+rem that accepts any byte at all inside a comment or a string literal. A BEL
+rem written into src\xhci_slot.c by a PowerShell escape passed all three x86
+rem flavours and every gate on 2026-09-12.
+echo.
+echo === source charset ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-source-charset.ps1"
+if errorlevel 1 goto charsetfail
+
 rem The snapshot reader's report path, when its EXE has been built (it is a
 rem separate build.cmd, and a clone without Open Watcom still has this one).
 if exist "%REPO%\xhcisnap\XHCISNAP.EXE" (
@@ -777,6 +788,13 @@ exit /b 1
 echo.
 echo ERROR: a tracked batch file is not CRLF. MS-DOS 7.1 COMMAND.COM can fail
 echo to find goto labels in an LF-only file, silently breaking its error paths.
+endlocal
+exit /b 1
+
+:charsetfail
+echo.
+echo ERROR: tracked source carries a stray control byte or a UTF-8 BOM where the
+echo 1998-era toolchain cannot read one. See the check's output above.
 endlocal
 exit /b 1
 

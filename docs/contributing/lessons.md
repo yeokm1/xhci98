@@ -56,13 +56,33 @@ parser that tolerates a control character in a comment. **A control character
 in a string literal rather than a comment would have reached the shipping
 binary the same way, and nothing in the chain would have said so.**
 
+**Closed the same day.** Roadmap task 22.7 added
+`scripts\check-source-charset.ps1`, which `build-driver.cmd` runs beside the
+batch-file line-ending check: a control byte below 0x20 that is not TAB, CR or
+LF anywhere in tracked source, any byte >= 0x80 anywhere in tracked source,
+and a UTF-8 BOM at the head of any file the 1998-era toolchain reads (that
+last rule is narrower because five tracked files carry a BOM that does no
+harm, and on a `.ps1` it is the fix rather than the defect). The gate carries
+seven in-memory self-tests that run on
+every invocation, so its failure path is exercised on every build rather than
+only on the day something breaks - a gate that has only ever passed reports a
+pass it did not establish. **The non-ASCII half was weighed separately and
+then taken**, on its own argument rather than the control-character one: a
+high byte in a *string literal* reaches the debugcon channel and a Windows 98
+console, where the encoding is not UTF-8. It cost exactly one character - a
+UTF-8 section sign in an `src\xhci.h` comment, rewritten as "section", which
+is what line 7788 of that same file already said 32 lines away.
+
 **The reusable rules.**
 
 - Use **single-quoted** here-strings for any content containing backticks, and
   treat ``` `a `b `f `n `r `t `v `0 `e ``` as the dangerous set - the rest merely
   drop the backtick, which corrupts prose quietly rather than loudly.
 - **Scan added source for bytes below 0x20 outside CR/LF/TAB before
-  committing.** One line of Python over the file does it, and no gate will.
+  committing.** A gate does this now - `scripts\check-source-charset.ps1`,
+  roadmap task 22.7, added the same day and run from `build-driver.cmd` - but
+  the habit is still the cheaper place to catch it, because the gate runs at
+  build time and `git diff` is where the damage is legible.
 - Read `git diff` as prose, not just as a shape. The rendering "ddress" was the
   whole signal.
 

@@ -289,7 +289,7 @@ machine that had had no USB stack on disk at all (roadmap task 21.5;
 `docs/contributing/build-and-test.md`, "Windows XP x64 target VM"). That
 reading was taken from a package staged out of the source tree; the same
 install from a published download is what this step asks for and is what
-roadmap task 22.9's fifth leg exists to take.
+roadmap task 22.10's fifth leg exists to take.
 
 ### Step 5. Devices, one at a time, then a hub
 

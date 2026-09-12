@@ -2664,7 +2664,7 @@ and task 22.5 has no work from either.** What is left of the Vista and
 Windows 7 question is entirely the guest half - 22.3 and 22.4 - which is
 where the two hard parts below live and where the unsigned-driver assumption
 is confirmed or refuted. Left beside it, and independent of how that comes
-out, is the `1.1.0.0` cut in 22.7 to 22.9.
+out, is the `1.1.0.0` cut in 22.8 to 22.10.
 
 **As of 2026-09-10, 22.3 and 22.4 are both closed.** Both guests are
 installed, shut down and snapshotted (`vista-clean-install`,
@@ -3077,9 +3077,11 @@ reading may not tick a box whose line names a guest.
       worked example and its lesson transfers: check first whether the wording
       the other tiers carry is true of this one before reusing it.
 
-- [ ] **22.10 - a charset gate on tracked source.** Numbered last because it
-      was added last, but **it runs BEFORE the cut**, so `1.1.0.0` is taken
-      with it in place and exercised rather than with it pending: the cut's
+- [ ] **22.7 - a charset gate on tracked source.** Added after the cut tasks
+      were written and numbered 22.10 at first; renumbered here so the phase
+      reads in order, which also puts the number where the work sits, because
+      **it runs BEFORE the cut**: `1.1.0.0` is taken with it in place and
+      exercised rather than with it pending. The cut's
       own checkpoint clause is "every gate and self-test green on both
       architectures", and a gate added afterwards would never have been run
       against a release. It is small and additive, and if it is dropped the
@@ -3090,25 +3092,65 @@ reading may not tick a box whose line names a guest.
       skips its `:logerr` branches), and every other gate reads `src\` through
       a compiler or parser that accepts any byte inside a comment or a string
       literal.
-  - [ ] **the check**, shaped like `check-bat-eol.ps1` and run from
+  - [x] **the check**, shaped like `check-bat-eol.ps1` and run from
         `build-driver.cmd` with its own `errorlevel` label: **control bytes
         below 0x20 other than TAB, CR and LF, and a UTF-8 BOM at the head of a
-        source file.** Measured against the tree on 2026-09-12, both rules
-        flag **zero** files, so this is additive and needs no cleanup
-  - [ ] **the non-ASCII half is a SEPARATE decision and is not assumed.** A
-        rule on bytes >= 0x80 would fail the build today on exactly one
-        character: a UTF-8 `§` (`0xC2 0xA7`) in a `src\xhci.h` comment reading
-        "Design record 08 §13.2's dated amendment". It is harmless where it
-        sits, so taking this half means first deciding whether to rewrite it
-        as "section" or carry an exception. Its argument is different from the
-        control-character one and is worth weighing on its own: the targets
-        are Windows 98 and MSVC 6.0 with C89, and a non-ASCII byte in a
-        **string literal** reaches the debugcon channel and a Windows 98
-        console, where the encoding is not UTF-8
-  - [ ] **which trees it covers** - `src\` is the one that ships; `test\`,
-        `scripts\`, `xhcisnap\` and `xhciqual\` were clean on 2026-09-12 too,
-        so including them costs nothing today but adds places a future edit
-        can trip the gate
+        source file.** **Done 2026-09-12**: `scripts\check-source-charset.ps1`,
+        wired in after the batch-file line-ending check with its own
+        `:charsetfail` label. It scans 158 files and reports them clean.
+        **One correction to the measurement this box was written from.** The
+        control-byte rule does flag **zero** files across all five trees, as
+        stated. The BOM rule does not - **five tracked files carry a UTF-8
+        BOM**: `scripts\inf-gate\check-inf.ps1`,
+        `scripts\inf-gate\test-inf-checks.ps1`,
+        `scripts\package\test-package.ps1`,
+        `scripts\vm-matrix\offsets.labels.txt` and `xhcisnap\README.md`. None
+        is read by the 1998-era toolchain, and **on a `.ps1` a BOM is not a
+        defect but the fix**: Windows PowerShell 5.1 reads a BOM-less script as
+        the system ANSI codepage, so the BOM is what makes a non-ASCII script
+        read correctly. The BOM rule is therefore scoped to the kinds MSVC 6.0,
+        `rc.exe`, `build.exe`, `COMMAND.COM` and Win98 setup read - `.c`, `.h`,
+        `.asm`, `.rc`, `.def`, `.inf`, `.bat`, `.cmd`, `makefile` and `sources`
+        - while the control-byte rule keeps the full scope. Scoped that way
+        both rules flag zero and the gate stayed additive, as intended
+  - [x] **the check's own failure path is exercised**, added because a gate
+        that has only ever passed reports a pass it did not establish - which
+        is the whole of what this task is about. Seven in-memory self-tests run
+        on **every** invocation (BEL caught, NUL caught, BOM caught where
+        forbidden, BOM allowed where not, TAB/CR/LF clean, a UTF-8 section sign
+        caught as two bytes, and a permitted BOM not hiding a non-ASCII byte
+        after it) and abort the gate if the detector is broken.
+        An on-disk run confirmed all three behaviours against real files,
+        reproducing the original BEL-inside-"address" shape in a `src\*.c` and
+        confirming a BOM on a `.ps1` still passes
+  - [x] **the non-ASCII half, TAKEN by the owner 2026-09-12.** A rule on bytes
+        `>= 0x80` failed the tree on exactly one character: a UTF-8 section
+        sign (`0xC2 0xA7`) in an `src\xhci.h` comment reading "Design record
+        08 (section)13.2's dated amendment". **Line 7788 of the same file
+        already wrote "section 13.2" in plain ASCII**, 32 lines from it, so
+        the tree was inconsistent with itself and the rewrite cost one
+        character and a re-wrap of the paragraph. `src\xhci.h` is now pure
+        ASCII, and the gate carries the rule at full scope. Its argument was
+        weighed on its own and is different from the control-character one:
+        the targets are Windows 98 and MSVC 6.0 with C89, and a non-ASCII byte
+        in a **string literal** reaches the debugcon channel and a Windows 98
+        console, where the encoding is not UTF-8. A **permitted** BOM (on the
+        kinds the BOM rule does not cover) is not counted against this rule -
+        the gate's own self-test caught that double-report the moment the rule
+        was added, which is what the self-tests are for
+  - [x] **which trees it covers** - `src\` is the one that ships; `test\`,
+        `scripts\`, `xhcisnap\` and `xhciqual\` were clean on 2026-09-12 too
+        under the rules as scoped above, so including them costs nothing today
+        but adds places a future edit can trip the gate. **All five are
+        covered.** The walk is a filesystem walk, not `git ls-files` - no other
+        gate in this build shells out to git and this one does not start - so
+        four git-ignored paths that a walk finds and git would not are skipped
+        by name, each for a stated reason: `src\obj*` (build output),
+        `scripts\local\` (per-operator bench tooling), `xhciqual\test\hdd\` and
+        `...\win98hdd\` (generated guest disks), and
+        `scripts\vm-matrix\matrix.config.psd1` (the per-host copy of a tracked
+        sample). An extension allowlist does the rest of the work, so no
+        binary is ever opened
 
       **Why this is worth a task rather than a habit.** On 2026-09-12 a
       diagnostic comment written into `src\xhci_slot.c` through a
@@ -3129,7 +3171,7 @@ reading may not tick a box whose line names a guest.
 The `1.1.0.0` cut. These three run last, after 22.5 is settled either way,
 and they are the phase's other half rather than a coda to the first.
 
-- [ ] **22.7 - what a cut needs that no gate supplies.** Each of these is
+- [ ] **22.8 - what a cut needs that no gate supplies.** Each of these is
       hand-written or hand-bumped, and the first two are refusals rather than
       omissions:
   - [ ] the `releases\history.md` entry for `1.1.0.0`, dated to agree with
@@ -3160,13 +3202,13 @@ and they are the phase's other half rather than a coda to the first.
         existed because the paragraph documented only the third and fourth
         while `1.1.0.0` moved the second; all four published numbers agree
         with the rule as now written
-- [ ] **22.8 - the primary targets unchanged**, the way task 19.8 and Phase
+- [ ] **22.9 - the primary targets unchanged**, the way task 19.8 and Phase
       20 did it: `run-matrix.ps1 -PostRelease` on freshly re-taken 2a and 2b
       clones, against the Phase 20 reports. Both primary targets are 32-bit
       and neither is touched by anything in this release, so a difference
       here is a finding about the release rather than about the phase.
       Reports under `docs\contributing\runs\run-22-post-release\`.
-- [ ] **22.9 - the cut itself, and the install route read from the asset.**
+- [ ] **22.10 - the cut itself, and the install route read from the asset.**
       `build-driver.cmd all` and `build-driver.cmd all -amd64` after the
       header change, both tools rebuilt, every gate green, then
       `make-release.ps1` with its default `-Arch`. It writes

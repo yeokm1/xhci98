@@ -7753,11 +7753,12 @@ typedef struct _XHCI_EXTENSION {
  * *(A separate `XhciLogSnapshot` value held that consent until the merge, when
  * it merged into the ladder: it was a pure consent bit, the channel serves
  * everything or nothing, and consent nests inside depth. Design record 08
- * §13.2's dated amendment carries the reasoning and the security posture - of
- * which the load-bearing half is that **the enable step is the access control,
- * because this driver owns no other**: usbport hardcodes `\DosDevices\HCD<n>`,
- * completes `IRP_MJ_CREATE` with no work, and the IOCTL is `FILE_ANY_ACCESS`,
- * so Option A leaves the miniport no lever on the door itself.)*
+ * section 13.2's dated amendment carries the reasoning and the security
+ * posture - of which the load-bearing half is that **the enable step is the
+ * access control, because this driver owns no other**: usbport hardcodes
+ * `\DosDevices\HCD<n>`, completes `IRP_MJ_CREATE` with no work, and the IOCTL
+ * is `FILE_ANY_ACCESS`, so Option A leaves the miniport no lever on the door
+ * itself.)*
  *
  * **The release build's import profile must not move**, which is why the copy
  * below is a byte loop rather than `RtlCopyMemory`/`memcpy`: those resolve to a
