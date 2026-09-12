@@ -9,6 +9,12 @@ each page.
 
 Dates are 2026 unless stated. Task ids are the roadmap's.
 
+Issue 7 is the only one open, and it **is** a limitation of `1.1.0.0`: it
+was known at the cut and the cut went ahead on the owner's ruling of
+2026-09-12, because the defect it describes is localised to a code path
+inside `usbport.sys` that a miniport cannot influence - a reading that is
+not yet confirmed by experiment, and the page says so at its head.
+
 Issues 1 to 3, 5 and 6 were fixed before `1.0.0.0`, so none of them is a
 limitation of the release; those pages are here for the mechanism and for
 how it was found (issue 5's fix is a registry value the release notes list
@@ -28,6 +34,7 @@ door sequence, with the counter at zero throughout. Nothing is owed.
 | 4 | [A device Windows XP's hub re-creates mid-enumeration is failed by this driver](04-xp-restore-device-ep0-remove.md) - XP re-created a mass-storage device through a second device handle and removed the first one's EP0 last; the driver's REMOVE path unbinds whichever EP0 extension arrives, the live handle is refused for retry, and the progress detector fails the device. Replugging works | Fixed in `1.0.1.0` (task 19.7, closing run `i4b` 2026-09-03: the counter moved to 2 while both devices bound on their first attach; the same night the device matrix on both primary targets and the Windows 98 door sequence read unchanged on the same binary with the counter at 0) |
 | 5 | [A device plugged into an idle Windows 98 controller is seen by nothing, and why the package writes `DisableSelectiveSuspend`](05-idle-suspend-and-disableselectivesuspend.md) - usbport idle-suspends the controller half a second after the bus goes quiet, a halted xHC cannot raise a port event, EHCI's re-armed interrupt has no xHCI equivalent, and the fix is usbport's own registry switch, machine-wide and measured on both Windows 98 stacks (present = 1 stops the idle; absent or 0 does not) | Fixed (task 11-V.6 on the Windows 98 path; `1.0.1.0` on the NT path) |
 | 6 | [A Full-Speed device on a root port bugchecks both targets, and why every root port is reported as High Speed](06-full-speed-root-port-bugcheck.md) - usbport applies the EHCI model and looks up a transaction translator for any non-High-Speed root-port device; `USBPORT_GetTt` turns the root hub's empty TT list into a garbage pointer and the kernel faults on the first insertion, on both shipping builds; the one lever is the USB2 flag, so the driver reports every root port as High Speed and keeps the true speed for its own contexts, at the cost of 1/2/4 ms interrupt bands for Full and Low Speed devices on a root port | Fixed (Phase 5 task 7) |
+| 7 | [An enable on Windows 7 x86 intermittently loses one device, and the completion it is waiting for is dropped inside usbport's own DPC state machine](07-win7-x86-enable-arrest-usbport-done-dpc.md) - a disable/enable cycle intermittently comes back without the audio device; the driver completes its configuration descriptor with 252 bytes and usbport accepts the completion, then never drains it, because `USBPORT_Xdpc_iSignal` calls `KeInsertQueueDpc` before storing the queued state and the DPC that won that race left the done list marked queued for ever. The enumeration thread is parked in a NULL-timeout, non-alertable wait, which is why a restart recovers and a rescan does not | **Open** - the mechanism is a reading of usbport's binary, not yet confirmed by experiment; the single-vCPU run that would confirm or refute it is unrun |
 
 ## Other issues worth a page
 

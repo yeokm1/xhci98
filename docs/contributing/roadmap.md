@@ -3052,6 +3052,29 @@ reading may not tick a box whose line names a guest.
         `win7-clean-install`, which also takes this phase's unsigned-prompt
         reading; then XP x64 again, for the `200` arm on amd64; then the four
         32-bit legs - 98, ME, 2000, XP32 - because the shipping binary changed
+    - [x] **Windows 7 x86: taken 2026-09-12 over four runs (`p225win7x86r2`
+          to `r5`), and it found a defect that does NOT block this cut.**
+          Install, first plug, disable and recovery-by-restart all pass; a
+          **disable/enable cycle intermittently comes back without the audio
+          device**, at a rate that is not a measurement (3 in 5, then 1 in
+          11, with one cycle recovering on its own minutes later - only the
+          observer's waiting time separates "arrested" from "slow").
+          Localised, from usbport's own log ring and a static read of
+          `usbport.sys`, to a **write-after-queue lost wakeup in**
+          **`USBPORT_Xdpc_iSignal`**: it calls `KeInsertQueueDpc` before
+          storing the queued state and takes no lock, so a DPC that fires
+          first reads the stale idle state, drops the work, and leaves the
+          done list marked queued for ever. This driver completed the
+          transfer that is waited on (252 bytes) and usbport accepted the
+          completion; the loss is entirely inside usbport, on a path guarded
+          by a lock not exposed to miniports. **Written up as
+          [issue 7](../issues/07-win7-x86-enable-arrest-usbport-done-dpc.md),
+          which states plainly what is NOT established** - above all that
+          the single-vCPU run predicted to make it disappear is unrun, so
+          this is a reading of a binary and not a result. **Owner's ruling,
+          2026-09-12: the leg stops being the critical path and the cut goes
+          ahead**, with 22.6 disclosing it as a limitation of `1.1.0.0`
+          rather than the cut waiting on it
   - [ ] **the INF for the 6.x installs, an owner's decision on each file.**
         Vista's file queue aborts on the `LayoutFile` copies (task 21.8), and
         the shape that installs is a `.6.0`-decorated models section naming
@@ -3076,6 +3099,16 @@ reading may not tick a box whose line names a guest.
       release notes, with the provenance rows beside it. Task 21.6 is the
       worked example and its lesson transfers: check first whether the wording
       the other tiers carry is true of this one before reusing it.
+  - [ ] **the Windows 7 x86 disclosure, and it is not optional.** The
+        `1.1.0.0` cut goes ahead over a known, open defect on that target
+        (the guest box in 22.5, and
+        [issue 7](../issues/07-win7-x86-enable-arrest-usbport-done-dpc.md)),
+        so the release notes must say what a user meets - a disable/enable
+        cycle can come back with a device missing, a restart recovers it and
+        a rescan does not - **without** stating as settled what is only a
+        reading of `usbport.sys`. The tier wording may not lean on "the
+        defect is not ours": that is the claim the issue page explicitly
+        declines to make until the single-vCPU run is taken
 
 - [ ] **22.7 - a charset gate on tracked source.** Added after the cut tasks
       were written and numbered 22.10 at first; renumbered here so the phase
