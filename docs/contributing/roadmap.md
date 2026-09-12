@@ -3077,6 +3077,55 @@ reading may not tick a box whose line names a guest.
       worked example and its lesson transfers: check first whether the wording
       the other tiers carry is true of this one before reusing it.
 
+- [ ] **22.10 - a charset gate on tracked source.** Numbered last because it
+      was added last, but **it runs BEFORE the cut**, so `1.1.0.0` is taken
+      with it in place and exercised rather than with it pending: the cut's
+      own checkpoint clause is "every gate and self-test green on both
+      architectures", and a gate added afterwards would never have been run
+      against a release. It is small and additive, and if it is dropped the
+      cut is unaffected. **There is no byte-level check on `src\` anywhere in
+      the build.** The one line-ending guard, `xhciqual\test\check-bat-eol.ps1`,
+      scans `*.BAT` only, for a reason that does not generalise (MS-DOS 7.1
+      `COMMAND.COM` parses batch lines on CR, so an LF-only `.BAT` dies and
+      skips its `:logerr` branches), and every other gate reads `src\` through
+      a compiler or parser that accepts any byte inside a comment or a string
+      literal.
+  - [ ] **the check**, shaped like `check-bat-eol.ps1` and run from
+        `build-driver.cmd` with its own `errorlevel` label: **control bytes
+        below 0x20 other than TAB, CR and LF, and a UTF-8 BOM at the head of a
+        source file.** Measured against the tree on 2026-09-12, both rules
+        flag **zero** files, so this is additive and needs no cleanup
+  - [ ] **the non-ASCII half is a SEPARATE decision and is not assumed.** A
+        rule on bytes >= 0x80 would fail the build today on exactly one
+        character: a UTF-8 `§` (`0xC2 0xA7`) in a `src\xhci.h` comment reading
+        "Design record 08 §13.2's dated amendment". It is harmless where it
+        sits, so taking this half means first deciding whether to rewrite it
+        as "section" or carry an exception. Its argument is different from the
+        control-character one and is worth weighing on its own: the targets
+        are Windows 98 and MSVC 6.0 with C89, and a non-ASCII byte in a
+        **string literal** reaches the debugcon channel and a Windows 98
+        console, where the encoding is not UTF-8
+  - [ ] **which trees it covers** - `src\` is the one that ships; `test\`,
+        `scripts\`, `xhcisnap\` and `xhciqual\` were clean on 2026-09-12 too,
+        so including them costs nothing today but adds places a future edit
+        can trip the gate
+
+      **Why this is worth a task rather than a habit.** On 2026-09-12 a
+      diagnostic comment written into `src\xhci_slot.c` through a
+      **double-quoted** PowerShell here-string put a literal **BEL (0x07)**
+      into the source - the backtick is PowerShell's escape character and
+      `` `a `` is its alert escape - and `build-driver.cmd all` then compiled
+      all three x86 flavours and **passed every gate with that byte present**.
+      It was caught only because the text rendered as "ddress" in `git diff`.
+      Writing source through a PowerShell string layer is the documented
+      method in this repository, because the Bash tool mangles quotes and eats
+      a backslash level, so every source edit passes through an escape layer
+      that can inject a byte silently. It landed in a comment this time; in a
+      string literal it would have reached the shipping binary, and the
+      driver's strings go out the channel the project reads its evidence from.
+      `docs\contributing\lessons.md`, "A comment written through a PowerShell
+      here-string put a BEL into `src\`, and every gate passed", is the record.
+
 The `1.1.0.0` cut. These three run last, after 22.5 is settled either way,
 and they are the phase's other half rather than a coda to the first.
 

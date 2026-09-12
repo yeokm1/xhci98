@@ -46,10 +46,15 @@ C compiler accepts a control character inside a comment, and nothing else in
 the chain looks. The defect was caught only because "ddress" is visibly wrong
 in `git diff`.
 
-**What that says about the gates.** There is **no charset or control-character
-check on `src\`**. The EOL gate checks line endings, not the bytes between
-them. A control character in a string literal rather than a comment would have
-reached the shipping binary the same way.
+**What that says about the gates.** There is **no byte-level check on `src\` at
+all**. The one line-ending guard in the build,
+`xhciqual\test\check-bat-eol.ps1`, scans `*.BAT` only - it exists because
+MS-DOS 7.1 `COMMAND.COM` parses batch lines on CR, so an LF-only `.BAT` dies
+with "Bad command or file name" and silently skips its `:logerr` branches. It
+never looks at C source. Every other gate reads `src\` through a compiler or a
+parser that tolerates a control character in a comment. **A control character
+in a string literal rather than a comment would have reached the shipping
+binary the same way, and nothing in the chain would have said so.**
 
 **The reusable rules.**
 
