@@ -24,6 +24,88 @@ Do not turn a hypothesis into a settled hardware quirk. Move confirmed design
 rules into the appropriate normative document while keeping the debugging
 history here.
 
+## `open(path, 'wb')` empties the file before it evaluates what to write, and a Windows path in a Python literal is an escape sequence
+
+Environment: the Windows development host, 2026-09-12 evening, editing the
+untracked `HANDOFF.md` through short Python scripts run from the Bash tool.
+This is the sequel to the BEL entry below, from the same day and the same
+family - a string layer between the intent and the bytes - and it cost a whole
+file rather than one character.
+
+**The destroying line.**
+
+```
+open(p, 'wb').write(d.encode('ascii'))
+```
+
+`open(p, 'wb')` truncates the file the moment it is called. The argument
+`d.encode('ascii')` is evaluated **afterwards**, and it raised - so the write
+never happened and the file was left at **zero bytes**. `HANDOFF.md` is
+untracked by design, which is the whole point of it, so `git restore` had
+nothing to offer and no local backup existed. It was rebuilt by hand from the
+session's own reading of it, faithful in substance but not byte-identical.
+
+**What raised the exception, and it is the more insidious half.** The string
+being written contained a Windows path, in a **non-raw** Python literal:
+
+```
+"a re-staged `vm\xferwin7\` is needed"
+```
+
+`\xfe` is a **hex escape**, so `vm\xferwin7\` becomes `vm` + byte 0xFE + `rwin7` +
+a backslash. Earlier in the same session the same mistake with
+`docs\issues\07-` produced `\0` - a **BEL**, twice.
+
+**So a Windows path in a Python string literal manufactures, by itself,
+exactly the two byte classes roadmap task 22.7's charset gate exists to
+refuse**: a byte >= 0x80 and a control byte below 0x20. Five such bytes reached
+disk across two files in one session - two BELs in `HANDOFF.md`, and two 0xFE
+plus a BEL in `.claude\memory\MEMORY.md` - produced by an agent whose task
+that day had been to build that gate. A sixth never landed, because it is the
+one that raised the exception above.
+
+**What is proven, and what the gate does not cover.**
+`scripts\check-source-charset.ps1` scans `src\`, `test\`, `scripts\`,
+`xhcisnap\` and `xhciqual\`. It does **not** scan `docs\`, and it walks the
+filesystem rather than `git ls-files`, but it cannot see a file outside those
+five trees at all - so an untracked file at the repository root is invisible to
+it. All three bad bytes landed outside its reach. Each was caught by a hand
+byte-scan run after every edit, which is the habit the BEL entry below already
+asks for; the zeroed file was caught by the same scan reporting a length of 0.
+
+**The reusable rules.**
+
+- **Build the bytes, validate them, and only then open anything for writing.**
+  Opening for write is a destructive act on its own, independent of whether a
+  write ever follows. The safe shape is encode, assert, write to a temporary
+  file, then `os.replace` over the target - which is atomic, and leaves the
+  original intact if any step fails.
+- **Use raw strings for anything containing a backslash**, and remember that
+  the dangerous set in Python is wider than it looks: `\x` takes two hex
+  digits, `\0` through `\7` take octal, and `\N{...}` takes a Unicode name. A
+  path like `src\xhci.h` is already a hex escape waiting for two digits.
+- **Byte-scan every file edited through a shell or an interpreter**, whether or
+  not a gate covers it. Three numbers are enough: bytes >= 0x80, bytes below
+  0x20 outside TAB/CR/LF, and lone LFs in a CRLF document.
+- **For a whole file, prefer a direct file-write tool over a shell or
+  interpreter string layer**, and reserve scripted edits for surgical in-place
+  changes. This project already learned that the Bash tool could not write
+  `check-source-charset.ps1` at all, and that a Bash here-string silently ate a
+  probe script's regex escaping and returned a plausible wrong answer.
+- **An untracked file has no safety net.** Anything the repository
+  deliberately does not track - a handoff, `.claude\memory\`, `scripts\local\` -
+  should be written temp-then-rename every time, because there is nothing to
+  restore from.
+
+This is a cousin of 'Test the actual shell chain when a build loses a
+PowerShell command' below: in both, the command as typed and the command as
+executed differ, and only the bytes on disk say so.
+
+**Affected.** No source file and no binary: the damage was confined to
+`HANDOFF.md`, plus three bytes in one line of `.claude\memory\MEMORY.md` that
+the same scan found, repaired by rebuilding that line out of `chr(92)` and
+`chr(96)` rather than out of any escape at all.
+
 ## A comment written through a PowerShell here-string put a BEL into `src\`, and every gate passed
 
 Environment: the Windows development host, 2026-09-12, adding a log-only
