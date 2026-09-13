@@ -121,6 +121,7 @@ The important limitations. The full list is under "Known limitations" in [releas
 | Every device on a root port is reported as High Speed | Reporting the true speed of a slower device crashes usbport as there is no companion controller. A mouse or keyboard on a root port therefore polls at 1, 2 or 4 ms only. If this is an issue for you, put your lower-speed device behind a hub to allow the true speed to be reported. |
 | `DisableSelectiveSuspend = 1` is written machine-wide | A suspended xHCI controller cannot see a newly plugged device. A driver uninstall does not remove the value. |
 | Fast, repeated plug and unplug can freeze Windows 98 | About twice a second sustained. Ordinary use is fine. |
+| Mass-storage throughput seems slow | About 18 MB/s read and write in the ATTO run above, below what USB 2.0 High Speed usually reaches. A likely but unmeasured cause is the controller's interrupt moderation, left at its 1 ms reset default. |
 
 ## Toolchain and building
 
