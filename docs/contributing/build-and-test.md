@@ -1479,6 +1479,20 @@ The XP x64 guest of Phase 21 took the next one clear of all of those, 55562.
 `scripts\test-qemu-launchers.ps1` asserts that no two generated launchers share
 a monitor port.
 
+**What that assertion cannot see is the host.** Windows reserves TCP ranges
+for dynamic use and reassigns them at every boot, and an explicit bind inside
+one fails with `AccessDenied` - so a port this project holds uniquely can
+still be unusable on the day. On 2026-09-13 the host's excluded ranges
+included 55527-55626, which swallowed **every** guest's monitor port from
+55555 to 55564; only 55465 and 55466 were left bindable. The XP x64 leg of
+issue 7 section 7.6 was run by regenerating its launchers with
+`setup-qemu-winxp64.ps1 -MonitorPort 55700`, which is the J3 rule (regenerate,
+never hand-edit `scripts\local`) and is local-only, `scripts\local\` being
+git-ignored and the launcher gate generating into a temp directory. **Re-probe
+before every run** - `netsh interface ipv4 show excludedportrange
+protocol=tcp`, or just try the bind - and treat a launcher that dies at startup
+with nothing on the monitor as this first.
+
 **And then the case that check cannot see: a port taken by a guest that does
 not exist yet.** Roadmap task 21.8 reserved **55563 and 55564** for the Vista
 x64 and Windows 7 x64 guests when it was written on 2026-09-09, with nothing
@@ -2024,7 +2038,10 @@ stack place `usbport.sys` itself - the same escape hatch the 32-bit launcher
 carries, and unnecessary in the leg above but worth knowing about.
 
 Status: **built, roadmap task 21.5's checkpoint passed on it 2026-09-09, and
-the tier stated with task 21.6.**
+the tier stated with task 21.6.** It also carried issue 7's first NT 5.x leg
+on 2026-09-13 (issue section 7.6, roadmap 22.5), which is the reading this
+guest is uniquely placed to give - the `200` arm on amd64 - and which ran on
+one vCPU, this launcher carrying no `-smp`.
 The guest was created and installed on 2026-09-08 on host
 `minis-w11p-ykm` (`vm\winxp64.img`, 16 GB qcow2, 2.29 GB allocated after the
 install). Snapshot **`winxp64-clean-install`** taken the same evening with the

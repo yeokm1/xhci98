@@ -3144,6 +3144,25 @@ reading may not tick a box whose line names a guest.
             section 7.5 is the record. **Owed: the NT 5.x legs** (XP x64 for
             the `200` arm on amd64, then 98, ME, 2000, XP32), where the tier
             must read `completions delivered only under usbport's lock` 0
+      - [x] **2026-09-13, the first NT 5.x leg: Windows XP x64, the `200`
+            arm on amd64** (`fix7xp64`). Off a fresh revert, one install,
+            the three devices, five watched disable/enable cycles against a
+            ten-minute threshold, remove and rescan. Seven loads, one build
+            stamp, `read-v300.ps1 -Expect nt5` ALL PASS on every one; all
+            five disables applied live with no restart prompt; every reload
+            3 slots / 3 reopened / iso 2. **The tier read the 0 it must** -
+            `completions delivered only under usbport's lock` 0, and
+            `delivered under usbport's lock`, `held for PollEndpoint`,
+            `forced` and `fallback polls` 0 with it, exact rather than
+            capped. **But this guest ran on ONE vCPU** (its launcher carries
+            no `-smp`, where section 7.5's four ran `-smp 4`), and `-smp 1`
+            is the rung under which the UNFIXED binary also passed five
+            cycles - so this is a 200-tier compatibility result and **not**
+            an SMP one, and raising it means a reinstall, the HAL being
+            fixed at install time. Deviation: the remove took two 30 s
+            samples where all four NT 6.x guests took one, with forward
+            progress in between. Issue 7 section 7.6 is the record.
+            **Owed: 98, ME, 2000, XP32**
     - [ ] **Vista x64: REMOVE/RESCAN does not complete, twice, and that
           clause had never been run on this guest.** Device Manager Uninstall
           of the devnode (package left in the store) wedged: attempt 1 sent

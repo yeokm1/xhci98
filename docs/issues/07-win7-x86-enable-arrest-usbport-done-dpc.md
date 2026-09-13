@@ -736,10 +736,86 @@ Vista x64's remove wedge of 2026-09-12 did not recur in one remove. That
 suggests it shared this cause, but one remove does not show it, and the fix
 was not written against it.
 
+### 7.6 The first NT 5.x leg, 2026-09-13: Windows XP x64
+
+Windows XP x64 SP2 is the `200` arm on amd64 - the only guest in this project
+that takes the pre-6.00 three-argument registration on a 64-bit build - and it
+is the first of the five NT 5.x legs section 7.4 owes. It was reverted to
+`winxp64-clean-install` (`qemu-img check` clean before and after, 13.36%
+allocated and image end offset 2,296,971,264 both times), installed **once**
+from the `qemu`-flavour amd64 package staged in `vm\xferxp64` (sha256
+`249badfe...`, built `Sep 13 2026 00:44:14` - the same binary section 7.5's
+two 64-bit guests ran), and put through the section 7.4 sequence: the three
+devices, five watched disable/enable cycles, remove and rescan. The wait
+threshold was fixed at ten minutes before every click and held; a watcher
+sampled the debug log every 30 s from before the click to the result. Seven
+loads, the stamp read on every one, `read-v300.ps1 -Expect nt5` **ALL PASS**
+on every one.
+
+| stage | reading |
+|---|---|
+| install + three devices | ALL PASS; 3 slots / 5 addressed / 5 reopened / iso 2 |
+| disables 1-5 | all five applied **live**, no restart prompt; teardown complete inside one 30 s sample each |
+| enables 1-5 | 5 of 5 healthy inside one 30 s sample each; 3 slots / 3 reopened / iso 2 on every reload |
+| remove | complete, in **two** 30 s samples |
+| rescan | healthy in two samples; tree clean |
+
+The install load's `5 addressed / 5 reopened / 5 SET_ADDRESS interceptions`
+against 3 slots is not a property of the 200 tier: it is the first-install
+sequence, where the three devices were hot-plugged one at a time into a stack
+that had just bound. Every one of the six later loads enumerated all three in
+one pass and read 3 / 3 / 3. The rescan's tree carried the controller, the
+root hub, the composite and mass-storage devices, the HID mouse and the audio
+device, with no bangs - the same list the task 21.5 leg of 2026-09-09 read on
+this guest.
+
+**The counters.** The tier is confirmed on every load: `wdm pre-6.00` 1,
+interface version presented `000000C8`, **`nt6 services written` 0**, so the
+300 tier's locked-callback path is not in play here at all. What section 7.4
+asked of this tier is met: **`completions delivered only under usbport's
+lock` reads 0**, and so do `delivered under usbport's lock`, `held for
+PollEndpoint`, `delivered forced` and `completion fallback polls` - on all
+seven loads. Those five are exact rather than capped, by section 7.5's own
+reasoning: a counter that never changes prints no change for the print cap to
+hide. `PollEndpoint callbacks` ran 31 to 3,703 a load, which is this usbport
+polling hard and is the 200 tier behaving as designed. `isr count` equalled
+`dpc count` on every load, `ResetController` was 0 throughout, and there are
+no memory reads on amd64, so the transfer totals are lower bounds at the cap.
+
+**This guest ran on ONE vCPU, and that bounds the leg hard.** Its launcher
+carries no `-smp`, where all four of section 7.5's guests ran `-smp 4`. Under
+`-smp 1` the *unfixed* binary also passed five consecutive clean cycles on
+Windows 7 x64 (section 6's experiment, taken 2026-09-12), so **a uniprocessor
+pass cannot discriminate a fixed binary from an unfixed one** for the race
+this page is about. This leg is therefore evidence for what section 7.4 asked
+the NT 5.x legs for - the delivery lock and the `PollEndpoint` drain do not
+break the 200 tier, and the 200 tier reads the zero it must - and it is **not**
+evidence that the fix holds under contention on NT 5.x. Nothing here is an SMP
+result. Raising this guest to `-smp 4` is not a launcher edit either: the HAL
+is fixed at install time, so it would mean reinstalling the guest.
+
+**One deviation, stated rather than smoothed over.** The remove took two 30 s
+samples where every guest in section 7.5 finished inside one. It was not a
+stall: the intermediate sample had `AbortTransfer+2` and `disowned+3` already
+in, with `DisableInterrupts`, `StopController` and `unpowered` arriving in the
+next one, and the whole thing finished about 60 s into a ten-minute threshold.
+It is recorded because it is a difference, not because it is a fault.
+
+What this establishes: on the `200` arm on amd64, single-processor, the fix's
+completion path runs as section 7.3 designed it, never forces a drain and
+never falls back to the poll, across seven loads including five
+disable/enable cycles, a remove and a rescan. **Four NT 5.x legs remain** (98,
+ME, 2000, XP32), and none of the five reaches real hardware.
+
 ## Sources
 
 Evidence, all under `vm\`:
 
+- `vm\fix-issue7-xp64\` - the 2026-09-13 Windows XP x64 leg (section 7.6):
+  the full debug log and QEMU trace, `read-01.txt` and `counters-01..07.txt`,
+  every `disable1-5` / `enable1-5` / `remove` / `rescan` watcher's samples,
+  and `rescan-tree.png`. Taken over monitor port **55700**, not the launcher's
+  generated 55562, which the host had excluded that day
 - `vm\fix-issue7-win7-x64\`, `vm\fix-issue7-vista-x64\`,
   `vm\fix-issue7-win7\` and `vm\fix-issue7-vista\` - the 2026-09-13 re-run
   (section 7.5): each guest's full debug log and QEMU trace, the
