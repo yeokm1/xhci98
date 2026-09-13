@@ -9,9 +9,11 @@ each page.
 
 Dates are 2026 unless stated. Task ids are the roadmap's.
 
-Issue 8 is open too, and is newer than any cut: a rare bugcheck on the
-Windows XP x64 guest at four vCPUs, found on 2026-09-13 while taking issue
-7's fix across the NT 5.x legs, whose writer is not established.
+Issue 8 is newer than any cut: a bugcheck on the Windows XP x64 guest at four
+vCPUs, found on 2026-09-13 while taking issue 7's fix across the NT 5.x legs.
+Its cause was read and a fix run on 2026-09-14 (one run, not yet a leg): this
+driver delivered completions on XP x64 without the transfer's own endpoint
+lock, which XP x64's usbport needs.
 
 Issue 7 is open, and it **is** a limitation of `1.1.0.0`: it
 was known at the cut and the cut went ahead on the owner's ruling of
@@ -54,7 +56,7 @@ this race (issue section 7.6); raised to four vCPUs the same evening it
 pointer with its low 32 bits zeroed, which did NOT reproduce over six further
 cycles and whose writer is not yet established (issue section 7.7); the other
 four NT 5.x legs are still owed** - the lost wakeup is real and it is reachable only because this driver delivered completions from contexts usbport never expected (the r5 one from `RH_GetPortStatus`, which NT 6.x usbport calls at PASSIVE with no lock); `USBPORTSVC_CompleteTransfer` assumes its caller holds usbport's EpList lock, and Microsoft's usbehci completes from `PollEndpoint` alone. Fixed by delivering at DISPATCH always and, on the Version 300 tier, only from `PollEndpoint`, `AbortTransfer` and `SetEndpointState`, with a forced path for the lifecycle drains and a 1 s poll fallback (issue section 7). The arrest **also reproduced on Windows 7 x64**, so the title is narrower than the issue |
-| 8 | [Windows XP x64 at four vCPUs rarely bugchecks in usbport, on a list head whose low 32 bits were overwritten](08-xp64-smp-usbport-list-head-low-dword.md) - two `D1` bugchecks inside `usbport.sys` on one guest, one on a live enable and one on an idle machine; the full kernel dump of the second shows a `LIST_ENTRY` head in usbport's device extension with exactly the low half of its `Flink` zeroed and every element intact. usbport's own code never stores 32 bits there, and this driver's extension sits 0x2A0 bytes further on in the same allocation; the writer is not identified | **Open, rare (2 in about ten live four-vCPU cycles plus idle, 0 in 7 uniprocessor loads); cause not established, next instrument a kernel-debugger write breakpoint** |
+| 8 | [Windows XP x64 at four vCPUs rarely bugchecks in usbport, on a list head whose low 32 bits were overwritten](08-xp64-smp-usbport-list-head-low-dword.md) - four `D1` bugchecks inside `usbport.sys` on one guest, on enables, on an idle machine and on a first enumeration; three dumps show a `LIST_ENTRY` head in usbport's device extension with exactly the low half of its `Flink` zeroed. A kernel debugger's data breakpoint missed the write under TCG; a QEMU gdbstub watchpoint caught it: usbport's own `mov dword ptr [rcx+28h],edx` through a transfer walk that had followed a transfer moved, on another CPU, onto the done list, and took that list's head for a transfer. The move was this driver's `UsbPortCompleteTransfer` from a context without the transfer's endpoint lock, which XP x64's completion service leaves to its caller | **Fixed 2026-09-14 on the amd64 Version 200 tier only** (completions delivered only from a usbport callback for their own endpoint); one run, 10 live four-vCPU cycles, 0 bugchecks, 0 fallbacks (issue section 4c). The 32-bit Version 200 targets are not changed and not yet read for the same unlink |
 
 ## Other issues worth a page
 

@@ -33,8 +33,10 @@ CommandsReservedBitsSet	commands with reserved bits set
 CompletionFallbackPolls	completion fallback polls
 CompletionsDeliveredForced	completions delivered forced
 DeliverUnderUsbportLockOnly	completions delivered only under usbport's lock
+DeliverPerEndpointOnly	completions delivered per endpoint only
 CompletionsDeliveredLocked	completions delivered under usbport's lock
 CompletionsHeldBySubmit	completions held by a submit
+CompletionsHeldOtherEndpoint	completions held for another endpoint's poll
 CompletionsHeldForPoll	completions held for PollEndpoint
 CompletionsHeldByPass	completions held for the next pass
 ResetControllerCalls	controller resets requested of usbport
@@ -88,6 +90,7 @@ OpenRefusalsMalformed	endpoint opens refused - malformed call
 OpenRefusalsBuffer	endpoint opens refused - unusable buffer
 OpensTotal	endpoint opens seen
 EndpointPlacementFailures	endpoint placement failures
+CompletionPollInvalidates	endpoint polls requested for a parked completion
 EndpointQuiesceFailures	endpoint quiescence failures
 EndpointQuiesceLost	endpoint quiescence lost
 EndpointQuiesceUnavailable	endpoint quiescence unavailable

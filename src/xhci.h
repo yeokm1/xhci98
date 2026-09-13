@@ -5987,8 +5987,11 @@ typedef struct _XHCI_EXTENSION {
      * an abort. usbport polls every active endpoint on every HcInt pass and
      * IsrDpc signals that pass on every interrupt, so PollEndpoint is the
      * ordinary deliverer; the fallback exists for an endpoint usbport has
-     * stopped polling. On the 200 tier the service is self-synchronising (an
-     * interlocked insert and a plain DPC) and every context is safe.
+     * stopped polling. On the 32-bit 200 tier this driver still delivers from
+     * any context. **That the Version 200 service is self-synchronising is
+     * wrong for XP x64** (issue 8): its done-list insert is interlocked, but
+     * the unlink from the endpoint's own list before it takes no endpoint
+     * lock - see `DeliverPerEndpointOnly` below.
      */
     ULONG DeliverUnderUsbportLockOnly;
     /* The poll's fallback: armed by the first poll that finds the list
@@ -6002,6 +6005,30 @@ typedef struct _XHCI_EXTENSION {
     ULONG CompletionsDeliveredForced;
     ULONG CompletionFallbackPolls;
     ULONG PollEndpointCalls;
+    /*
+     * **Issue 8: on XP x64 a completion is handed over only from a callback
+     * usbport made under the lock of the transfer's own endpoint.** XP x64's
+     * completion service (usbport+0xc060) unlinks the transfer from its
+     * endpoint's list at +0xc2f1 holding no endpoint lock, while usbport walks
+     * that list under the endpoint's own lock (endpoint+0x160, taken at
+     * +0xae01); a completion delivered from the event DPC on another CPU moved
+     * a transfer onto the done list under a walk, the walk took the done-list
+     * head for a transfer, and usbport's own `dword` store through it zeroed
+     * the low half of the device-handle list head (all static, and the store
+     * caught by a watchpoint). The gate above does not close that alone: that
+     * usbport's lock is one per endpoint, so PollEndpoint for one endpoint
+     * delivering another endpoint's completion is the same race.
+     *
+     * Set with the gate on the amd64 build's Version 200 tier - XP x64 and
+     * Server 2003 x64 - and nowhere else. A completion for an endpoint other
+     * than the one the locked callback names stays parked and the pass asks
+     * usbport to poll that endpoint, which is what delivers it; the gate's
+     * fallback still fires after XHCI_COMPLETION_FALLBACK_MS, and counts, so a
+     * nonzero reading says an endpoint was not polled when asked.
+     */
+    ULONG DeliverPerEndpointOnly;
+    ULONG CompletionsHeldOtherEndpoint;
+    ULONG CompletionPollInvalidates;
     /*
      * The transfer a `UsbPortCompleteTransfer` call is inside right now, or
      * NULL. It is off both the endpoint queue and the completion list for the

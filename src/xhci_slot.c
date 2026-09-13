@@ -5767,7 +5767,7 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
         }
         XhciControllerLockRelease(oldIrql);
 
-        XhciSlotDeferredWorkLocked(ext);
+        XhciSlotDeferredWorkForEndpoint(ext, (PVOID)endpoint);
         return;
     }
     if (state != USBPORT_ENDPOINT_REMOVE) {
@@ -5823,7 +5823,7 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
                 ext->Ep0RemovesSuperseded++;
                 endpoint->Flags &= ~XHCI_ENDPOINT_FLAG_OPEN;
                 XhciControllerLockRelease(oldIrql);
-                XhciSlotDeferredWorkLocked(ext);
+                XhciSlotDeferredWorkForEndpoint(ext, (PVOID)endpoint);
                 return;
             }
             dev->Flags &= ~XHCI_DEV_FLAG_EP0_OPEN;
@@ -5838,7 +5838,7 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
             if (record == NULL) {
                 endpoint->Flags &= ~XHCI_ENDPOINT_FLAG_OPEN;
                 XhciControllerLockRelease(oldIrql);
-                XhciSlotDeferredWorkLocked(ext);
+                XhciSlotDeferredWorkForEndpoint(ext, (PVOID)endpoint);
                 return;
             }
             if (record->EndpointExtension != NULL &&
@@ -5855,7 +5855,7 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
                 ext->EndpointRemovesSuperseded++;
                 endpoint->Flags &= ~XHCI_ENDPOINT_FLAG_OPEN;
                 XhciControllerLockRelease(oldIrql);
-                XhciSlotDeferredWorkLocked(ext);
+                XhciSlotDeferredWorkForEndpoint(ext, (PVOID)endpoint);
                 return;
             }
             /*
@@ -5934,7 +5934,7 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
     endpoint->Flags &= ~XHCI_ENDPOINT_FLAG_OPEN;
     XhciControllerLockRelease(oldIrql);
 
-    XhciSlotDeferredWorkLocked(ext);
+    XhciSlotDeferredWorkForEndpoint(ext, (PVOID)endpoint);
 }
 
 /* ------------------------------------------------------------------ */
@@ -8095,7 +8095,7 @@ VOID XhciSlotAbortTransfer(PXHCI_EXTENSION ext,
      * back. `SubmitTransfer` is the one that does, which is why the
      * `SubmitDepth` bracket exists and is confined to it.
      */
-    XhciSlotDeferredWorkLocked(ext);
+    XhciSlotDeferredWorkForEndpoint(ext, (PVOID)endpoint);
 }
 
 /* ------------------------------------------------------------------ */
@@ -10553,29 +10553,41 @@ VOID XhciSlotLeaveSubmit(PXHCI_EXTENSION ext)
 #define XHCI_DELIVER_LOCKED 1UL
 #define XHCI_DELIVER_FORCED 2UL
 
-static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit);
+static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
+                                   PVOID lockedEndpoint);
 
 /* IRQL: <= DISPATCH_LEVEL, controller lock **not** held. */
 VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext)
 {
-    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_NONE);
+    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_NONE, NULL);
 }
 
 VOID XhciSlotDeferredWorkLocked(PXHCI_EXTENSION ext)
 {
-    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_LOCKED);
+    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_LOCKED, NULL);
+}
+
+VOID XhciSlotDeferredWorkForEndpoint(PXHCI_EXTENSION ext,
+                                     PVOID endpointExtension)
+{
+    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_LOCKED, endpointExtension);
 }
 
 VOID XhciSlotDeferredWorkForced(PXHCI_EXTENSION ext)
 {
-    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_FORCED);
+    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_FORCED, NULL);
 }
 
-static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit)
+static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
+                                   PVOID lockedEndpoint)
 {
     KIRQL oldIrql;
     PXHCI_TRANSFER transfer;
+    PXHCI_TRANSFER prev;
     PVOID endpointExtension;
+    PVOID pollEndpoint;
+    ULONG pollRequested;
+    ULONG heldOtherCounted;
     ULONG passEpoch;
     ULONG heldBySubmitCounted;
     ULONG heldByPassCounted;
@@ -10589,6 +10601,8 @@ static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit)
     heldBySubmitCounted = 0;
     heldByPassCounted = 0;
     heldForPollCounted = 0;
+    heldOtherCounted = 0;
+    pollRequested = 0;
 
     XhciControllerLockAcquire(&oldIrql);
     if (ext->DeferredBusy) {
@@ -10650,6 +10664,35 @@ static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit)
          * step off the 500 ms poll.
          */
         transfer = ext->CompletionHead;
+        prev = NULL;
+        pollEndpoint = NULL;
+        /*
+         * Issue 8 (XHCI_EXTENSION.DeliverPerEndpointOnly): a locked callback
+         * delivers only the oldest completion of the endpoint whose lock
+         * usbport holds. Anything else stays parked, and the pass asks
+         * usbport to poll the endpoint at the head, once, so that it is
+         * collected under its own lock rather than by the fallback.
+         */
+        if (transfer != NULL && ext->DeliverPerEndpointOnly) {
+            pollEndpoint = transfer->EndpointExtension;
+            if (admit == XHCI_DELIVER_LOCKED) {
+                while (transfer != NULL &&
+                       (lockedEndpoint == NULL ||
+                        transfer->EndpointExtension != lockedEndpoint)) {
+                    prev = transfer;
+                    transfer = transfer->Next;
+                }
+                if (transfer == NULL) {
+                    prev = NULL;
+                    if (!heldOtherCounted) {
+                        heldOtherCounted = 1;
+                        ext->CompletionsHeldOtherEndpoint++;
+                    }
+                } else if (transfer == ext->CompletionHead) {
+                    pollEndpoint = NULL;
+                }
+            }
+        }
         if (transfer != NULL && ext->SubmitDepth != 0) {
             /*
              * Latched once per pass (Phase 7 review, B5): this sits inside the
@@ -10703,9 +10746,15 @@ static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit)
             }
         }
         if (transfer != NULL) {
-            ext->CompletionHead = transfer->Next;
+            if (prev != NULL) {
+                prev->Next = transfer->Next;
+            } else {
+                ext->CompletionHead = transfer->Next;
+            }
+            if (ext->CompletionTail == transfer) {
+                ext->CompletionTail = prev;
+            }
             if (ext->CompletionHead == NULL) {
-                ext->CompletionTail = NULL;
                 ext->CompletionFallbackArmed = 0;
             }
             if (ext->DeliverUnderUsbportLockOnly) {
@@ -10807,6 +10856,22 @@ static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit)
                 ext->CompletingTransfer = NULL;
             }
             XhciControllerLockRelease(oldIrql);
+            continue;
+        }
+
+        /*
+         * Issue 8: nothing this pass could hand over, so ask
+         * usbport to poll the endpoint whose completion is oldest. Once a
+         * pass, because the request is idempotent and the loop would
+         * otherwise repeat it for as long as the completion stays parked.
+         */
+        if (pollEndpoint != NULL && !pollRequested) {
+            pollRequested = 1;
+            if (XhciRegPacket.UsbPortInvalidateEndpoint != NULL) {
+                ext->CompletionPollInvalidates++;
+                (VOID)XhciRegPacket.UsbPortInvalidateEndpoint(ext,
+                                                              pollEndpoint);
+            }
             continue;
         }
 

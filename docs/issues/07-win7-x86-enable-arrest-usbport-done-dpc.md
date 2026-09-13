@@ -895,6 +895,11 @@ showed this list head damaged again in exactly its low 32 bits while every
 element was intact, and it corrects one claim above: `fffffadf` is the high
 half of every pool pointer on that guest, not usbport's own. The bugcheck is
 tracked there from now on, as a clause of its own; this leg stays unfinished.
+Issue 8 section 4c (2026-09-14) found the cause in this fix's territory: on
+XP x64 the delivery gate was off, on the premise that the Version 200 service
+synchronises itself, and it unlinks from the endpoint list without the
+endpoint lock; the XP x64 tier now delivers per endpoint. **This leg has to be
+taken again on that build.**
 
 ## Sources
 

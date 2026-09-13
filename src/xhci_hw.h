@@ -1214,6 +1214,14 @@ VOID XhciSlotLeaveSubmit(PXHCI_EXTENSION ext);
  */
 VOID XhciSlotDeferredWorkLocked(PXHCI_EXTENSION ext);
 /*
+ * XhciSlotDeferredWorkLocked naming the endpoint whose lock usbport holds, so
+ * that under `XHCI_EXTENSION.DeliverPerEndpointOnly` only that endpoint's
+ * completions are handed over. `endpointExtension` is usbport's extension for
+ * it. IRQL: DISPATCH_LEVEL, controller lock not held.
+ */
+VOID XhciSlotDeferredWorkForEndpoint(PXHCI_EXTENSION ext,
+                                     PVOID endpointExtension);
+/*
  * XhciSlotDeferredWork with the tier's delivery gate overridden: for the
  * lifecycle paths (suspend, stop, resume, recovery), where usbport's own
  * deliverers are gated off and a completion left parked would sit until the

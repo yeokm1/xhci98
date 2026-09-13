@@ -595,9 +595,14 @@ callbacks it makes through `iSetGlobalEndpointStateTx` - `PollEndpoint`,
 usbehci completes transfers from `PollEndpoint` alone. Delivered from
 `RH_GetPortStatus` at PASSIVE with no lock, the queued DPC ran on the same
 CPU before the store, read idle, and the done list was marked queued for
-ever. On NT 5.x the same service is an interlocked insert and a plain DPC,
-safe from anywhere, which is why the discipline was never contradicted
-before Windows 7.
+ever. On NT 5.x the same service's done-list insert is interlocked, which
+was read as "safe from anywhere" and is why the discipline was never
+contradicted before Windows 7. **Issue 8 refutes that for XP x64**: the
+service unlinks the transfer from its endpoint's list before that insert
+with no lock of its own, while usbport walks that list under the endpoint's
+lock, so on XP x64 a completion is delivered only from a callback for its
+own endpoint (`XHCI_EXTENSION.DeliverPerEndpointOnly`, below). The 32-bit
+NT 5.x services have not been read for the same unlink.
 
 The rule the driver now carries (`XHCI_EXTENSION.DeliverUnderUsbportLockOnly`,
 `src/xhci_slot.c` `XhciSlotDeferredWork`):
@@ -630,7 +635,12 @@ The rule the driver now carries (`XHCI_EXTENSION.DeliverUnderUsbportLockOnly`,
   accepted over a request that never completes; a nonzero
   `completion fallback polls` during ordinary traffic means usbport stopped
   polling an endpoint that still owed work.
-- The 200 tier is unchanged but for the raise.
+- The 32-bit 200 tier is unchanged but for the raise.
+- **The amd64 200 tier (XP x64, Server 2003 x64) sets the gate and
+  `DeliverPerEndpointOnly` with it** (issue 8): a locked callback delivers
+  only its own endpoint's oldest completion, any other pass leaves it parked
+  and calls `UsbPortInvalidateEndpoint` for the endpoint that owes it, and
+  the fallback and forced drains are as above.
 
 The suite holds it with two never-reset nets - the service is never called
 outside the delivery lock, and the delivery lock is never nested or taken

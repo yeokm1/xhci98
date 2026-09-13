@@ -20198,6 +20198,63 @@ static void test_slot_completion_fallback_poll(void)
 }
 
 /*
+ * **Issue 8: per endpoint, not merely under a lock.** With
+ * `DeliverPerEndpointOnly` set, PollEndpoint for one endpoint leaves another
+ * endpoint's completion parked - usbport holds only the polled endpoint's lock,
+ * and XP x64's completion service unlinks from the transfer's own endpoint
+ * list - and the pass asks usbport to poll the endpoint that owes it. A poll
+ * of that endpoint then delivers it.
+ */
+static void test_slot_completion_per_endpoint_only(void)
+{
+    PXHCI_DEVICE dev;
+    PXHCI_ENDPOINT_RECORD record;
+    ULONG completions;
+    ULONG invalidates;
+
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                       USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
+    deliver_events();
+    record = &dev->Endpoints[0];
+    (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
+                          &slotSgList);
+
+    ext.DeliverUnderUsbportLockOnly = 1;
+    ext.DeliverPerEndpointOnly = 1;
+    completions = completeTransferCalls;
+    invalidates = invalidateEndpointCalls;
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
+                     XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(5) | XHCI_TRB_EP_ID(3));
+    (void)XhciIsr(&ext);
+    (void)XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(ext.CompletionsOwed, 1, "(parked by the event DPC)");
+    CHECK_EQ(completeTransferCalls, completions, "(not delivered there)");
+    CHECK(invalidateEndpointCalls > invalidates,
+          "the DPC's pass asks usbport to poll the endpoint that owes it");
+    CHECK(lastInvalidatedEndpoint == &slotEndpoint2, "- that one");
+    CHECK(ext.CompletionPollInvalidates != 0, "and counts the request");
+
+    XhciRegPacket.PollEndpoint(&ext, &slotEndpoint);
+    CHECK_EQ(completeTransferCalls, completions,
+             "PollEndpoint for EP0 does not deliver the interrupt pipe's");
+    CHECK_EQ(ext.CompletionsHeldOtherEndpoint, 1, "and says so, once per pass");
+    CHECK_EQ(ext.CompletionsOwed, 1, "(still parked)");
+
+    XhciRegPacket.PollEndpoint(&ext, &slotEndpoint2);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "PollEndpoint for its own endpoint delivers it");
+    CHECK_EQ(ext.CompletionsDeliveredLocked, 1, "as a locked delivery");
+    CHECK_EQ(ext.CompletionsOwed, 0, "and the list is empty");
+    CHECK(ext.CompletionHead == NULL && ext.CompletionTail == NULL,
+          "head and tail both");
+    ext.DeliverPerEndpointOnly = 0;
+    ext.DeliverUnderUsbportLockOnly = 0;
+}
+
+/*
  * The other two locked contexts, and the lifecycle override. `AbortTransfer`
  * and `SetEndpointState` are reached through usbport's EpList lock too, so a
  * completion parked when either arrives is delivered from inside it; and the
@@ -29444,6 +29501,7 @@ int main(void)
     test_slot_completion_waits_for_poll_endpoint();
     test_slot_completion_fallback_poll();
     test_slot_completion_locked_contexts_and_forced();
+    test_slot_completion_per_endpoint_only();
     test_slot_completion_holds_for_a_pass_after_the_bracket();
     test_slot_abort_before_the_stop_completes();
     test_slot_reconfigure_with_work();

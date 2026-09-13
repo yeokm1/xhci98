@@ -942,13 +942,28 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
     /*
      * The tier decides where a completion may be handed over (issue 7,
      * XHCI_EXTENSION.DeliverUnderUsbportLockOnly): a Version 300 usbport's
-     * completion service assumes its EpList lock is held by the caller, a
-     * Version 200 one synchronises itself. Set before the signatures so no
-     * callback can observe the extension without it.
+     * completion service assumes its EpList lock is held by the caller. XP
+     * x64's Version 200 service needs the transfer's own endpoint lock
+     * (issue 8, XHCI_EXTENSION.DeliverPerEndpointOnly). Set before the
+     * signatures so no callback can observe the extension without it.
      */
     ext->DeliverUnderUsbportLockOnly =
         (xhciInterfaceVersionPresented >= USBPORT_NT6_MINIPORT_INTERFACE_VERSION)
             ? 1UL : 0UL;
+    ext->DeliverPerEndpointOnly = 0;
+#if defined(_WIN64)
+    /*
+     * Issue 8 (XHCI_EXTENSION.DeliverPerEndpointOnly): XP x64 and Server 2003
+     * x64 are the amd64 build's Version 200 tier, where the completion service
+     * unlinks from the endpoint list without the endpoint lock. The 32-bit
+     * Version 200 targets are not changed by this: their services have not
+     * been read for it (issue 8).
+     */
+    if (!ext->DeliverUnderUsbportLockOnly) {
+        ext->DeliverUnderUsbportLockOnly = 1;
+        ext->DeliverPerEndpointOnly = 1;
+    }
+#endif
 
     ext->Signature = XHCI_EXTENSION_SIGNATURE;
     ext->TrailingSignature = XHCI_EXTENSION_TRAILING;
@@ -2192,6 +2207,16 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
     XHCI_DBG_VALUE_CHANGED("completion fallback polls",
                            ext->CompletionFallbackPolls);
     XHCI_DBG_VALUE_CHANGED("PollEndpoint callbacks", ext->PollEndpointCalls);
+    /* Issue 8, amd64 Version 200 tier only (0 everywhere else). Held-for-
+     * another-endpoint and polls-requested climb with ordinary traffic;
+     * the fallback polls above are the reading that says a request was not
+     * answered. */
+    XHCI_DBG_VALUE_CHANGED("completions delivered per endpoint only",
+                           ext->DeliverPerEndpointOnly);
+    XHCI_DBG_VALUE_CHANGED("completions held for another endpoint's poll",
+                           ext->CompletionsHeldOtherEndpoint);
+    XHCI_DBG_VALUE_CHANGED("endpoint polls requested for a parked completion",
+                           ext->CompletionPollInvalidates);
     XHCI_DBG_VALUE_CHANGED("submit brackets closed with none open",
                            ext->SubmitUnderflows);
     /*
@@ -3567,7 +3592,7 @@ static VOID NTAPI xhciPollEndpoint(PVOID miniPortExtension,
         return;
     }
     ext->PollEndpointCalls++;
-    XhciSlotDeferredWorkLocked(ext);
+    XhciSlotDeferredWorkForEndpoint(ext, endpointExtension);
 }
 
 /*

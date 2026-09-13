@@ -1,12 +1,15 @@
 # Issue 8 - Windows XP x64 at four vCPUs rarely bugchecks in usbport, on a list head whose low 32 bits were overwritten
 
-Status: **open, rare, cause not established.** Two bugchecks on one guest,
-2026-09-13, both `D1` inside `usbport.sys`, both on a list head in usbport's
+Status: **fixed in this driver on 2026-09-14 (section 4c), uncommitted at the
+time of writing; one run, not yet a leg.** The cause is this driver's: on XP
+x64 it handed completions to usbport from contexts that did not hold the
+transfer's own endpoint lock, and XP x64's completion service needs that lock
+(section 4c). The corruption itself is a store by usbport, caught by a
+watchpoint (section 4b). Four bugchecks on one guest, 2026-09-13, all `D1`
+inside `usbport.sys`, the first three dumps showing a list head in usbport's
 device extension whose 64-bit forward pointer had exactly its low 32 bits
-replaced. **Which module wrote those 32 bits is not known.** usbport faulted;
-that does not mean usbport wrote it, and this driver is a suspect, not
-convicted. Nothing on this page is a fix, and nothing on it may be read as
-exonerating this driver.
+replaced. Sections 1 to 4a are the chase as it happened and say "not known"
+where it was not yet known; read them with 4b and 4c.
 
 Target affected: Windows XP Professional x64 SP2 (NT 5.2.3790) in QEMU, at
 `-smp 4 -accel tcg,thread=multi`, on the amd64 `qemu` build carrying issue 7's
@@ -55,8 +58,11 @@ disable/enable cycles with auto-restart off, **all clean**; then a revert to
 `winxp64-smp4-installed-kerneldump`, Driver Verifier on `xhci98.sys`
 (section 5), and two more live cycles, **both clean**, before crash 2.
 
+A third, on the first enumeration after a clean boot with no Verifier, is
+section 4a.
+
 **Rate:** 0 in 7 uniprocessor loads; at four vCPUs, 2 bugchecks across about
-ten live cycles plus idle time. Too rare to chase by repetition at one
+ten live cycles plus idle time, then a third within a minute of a boot. Too rare to chase by repetition at one
 operator click per cycle, and the second one did not need a cycle at all.
 
 ## 2. Crash 1: a handle-list walk reads a pointer with a zero low half
@@ -135,7 +141,247 @@ back to the head. The rest of that list was not reconciled.
 **Two heads 0x20 apart in the same device extension, both damaged in the
 low 32 bits of `Flink` only.**
 
+## 4a. Crash 3: the same head, 57 seconds after a clean boot
+
+Taken 2026-09-13 about 22:15 guest time, tag `fix7xp64smp4leg`, while
+resuming issue 7 section 7.7's leg. The image had been reverted to
+`winxp64-smp4-installed-kerneldump` (**no Driver Verifier**), booted at four
+vCPUs, and the mouse, audio and storage devices hot-plugged from the
+monitor. **No Device Manager action had been taken.** The driver's log had
+reached `slots enabled=00000001` and was answering usbport's first control
+transfers on the second device when the guest stopped.
+
+**runtime** - `D1 {0000009b'00000040, 2, 0, fffffadf'c7969d95}`, a read at
+IRQL 2, `USBPORT+0xbd95` (loaded image timestamp `45d69800` again), system
+uptime 0:00:57, full kernel dump. The stack is usbhub's enumeration calling
+into usbport (`usbhub+0x3c1e` ... `USBPORT+0x3948` ... `+0x127a4`,
+`+0x10e17`, `+0xdc4a`, `+0xae9e`, `+0xa698`, `+0xbd95`).
+
+**runtime** - FDO `fffffadf'ce680050`, device extension
+`[FDO+0x40]` = `fffffadf'ce6801a0`. **The head at `devext+0x988` reads
+`Flink` = `fffffadf'00000000`**, `Blink` = `fffffadf'ce1df588`, whose own
+`Flink` points back at the head. The element that `Blink` belongs to starts
+with the ASCII tag `DevH` at `-0x78`, which is consistent with section 2's
+reading of this as a device-handle list. **Three boots, three dumps or
+minidumps, the same head, the same value.** The empty heads at `+0x998`,
+`+0x9B8` and `+0x9C8` again point to themselves.
+
+**static and runtime** - the fault itself is on section 4's list. The walk at
+`usbport+0xa3e5` follows `[element+0x48]`, stops when it equals a saved end
+pointer (`r15`, which the trap frame does not preserve), and hands
+`CONTAINING_RECORD(entry, +0x48)` to `usbport+0xbd60`, which removes that
+entry and loads `[[rcx+0xA8]+0x18]+0x40`. It was handed
+`rcx` = `devext+0x960`, which is the head `devext+0x9A8` taken as an element.
+`[devext+0x960+0xA8]` is `devext+0xA08`, an empty self-pointing head, and
+`+0x18` beyond that holds a small count (`0000009f'00000000` in the dump), so
+`r9` = `0000009b'00000000` was that field's value at the fault and the load
+missed. The one real element on the `+0x9A8` list, `fffffadf'ce5834c8`,
+reads `Flink` = `Blink` = itself in the dump, which is what `+0xbd60`'s
+remove writes when it unlinks the head from a one-element list, so this
+list's state before the fault cannot be read back from it. **Why the walk
+reached the head without meeting its end pointer is not established**; the
+`+0x9A8` head's `Flink` low half being wrong, as in crash 2, would do it, but
+the dump no longer shows the value it had.
+
+What crash 3 changes:
+
+- **It needs no disable/enable cycle.** The damage at `+0x988` is present
+  within a minute of a cold boot, before the third device was addressed. So
+  a write breakpoint armed from boot (section 6, item 1) is expected to fire
+  in the first minute, and the per-enable re-arming is not needed to catch
+  it once.
+- **It happened without Driver Verifier**, so crash 2's Verifier
+  configuration is not a factor.
+- Rate on this guest at four vCPUs is now 3 bugchecks: one on a live enable,
+  one idle, one on the first enumeration after boot.
+
+## 4b. Crash 4: the write caught, and the writer is usbport
+
+Taken 2026-09-13 about 23:31 guest time, tag `i8gdb1`, from
+`winxp64-smp4-installed-kerneldump` (no Verifier, no `/debug`), at four
+vCPUs, the three devices hot-plugged, on the **second** Device Manager enable
+of the boot, about two seconds after `StartController`.
+
+**The instrument.** A kernel debugger's data breakpoint was tried first and
+was not trusted: with kd on a named-pipe COM1, `ba w4` on `devext+0x988`
+stayed silent while the head was demonstrably written (it read self-pointing
+when armed and held the root hub's handle when next read), although a `ba w4`
+on this driver's own interrupt counter did fire. The kd link also froze the
+guest when combined with the second instrument, so it was dropped. What
+caught the write is **QEMU's gdbstub**, started from the monitor
+(`gdbserver`), driven by a small remote-protocol client that sets a
+`Z2` write watchpoint of four bytes on the head, records `rip`, the general
+registers, the head, the bytes around `rip` and the stack on every hit, and
+continues. A TCG watchpoint is enforced by the emulator on every vCPU and
+does not depend on the guest's debug registers. Each load's head was
+computed from this driver's own log, `cb StartController a=` minus `0x2A0`,
+and the watch was moved to it within about a second of that line. It was
+proved live on the busy `+0x9A8` list first (76 legitimate hits in about 20
+seconds) and on `+0x988` by a legitimate teardown unlink in the first
+disable.
+
+**runtime** - the hit, with usbport loaded at `fffffadf'c6294000` (from the
+bugcheck screen):
+
+```
+stop     watch:fffffadfcdc36b28  (devext+0x988)
+rip      fffffadf'c629fd8e = usbport+0xbd8e
+rbx      fffffadf'cdc361a0       usbport device extension
+rcx=rsi=r11  fffffadf'cdc36b00   devext+0x960
+rdx      0
+r12      fffffadf'cdfb2010       endpoint (tag "hcEP")
+r15      fffffadf'cdfb2070       endpoint+0x60
+head     fffffadf'00000000  fffffadf'cdf694d8
+```
+
+**static** - the instruction that ends at `usbport+0xbd8e`, in the routine at
+`usbport+0xbd60` already read for crash 3 (section 4a):
+
+```
+usbport+0xbd8b:  mov dword ptr [rcx+28h], edx
+```
+
+The routine takes a transfer (`LIST_ENTRY` at `+0x48`, endpoint at `+0xA8`)
+and stores a 32-bit field at `+0x28`. It was handed `rcx` = `devext+0x960`,
+which is the `+0x9A8` list head taken as an element, so its `+0x28` is
+`devext+0x988` and **the `dword` zero lands on the low half of the
+device-handle list's `Flink`.** The guest bugchecked seconds later at
+`usbport+0xbd95` - `D1 {000002ce'00000040, 2, 0, fffffadf'c629fd95}`, the
+same instruction as crash 3 - loading through the field `+0xA8` of the same
+false element.
+
+**This corrects section 5's first bullet.** usbport *does* store 32 bits at
+`devext+0x988`, through `[rcx+28h]` on a wrong base, which a search for the
+displacement `0x988` cannot find. It is a consequence, not the defect: the
+defect is whatever makes usbport treat its `+0x9A8` head as a transfer.
+
+**static and runtime** - how the head became an element. The caller is the
+walk at `usbport+0xa3a1..0xa3e5`: `rax = [r12+60h]`, `r15 = r12+60h`, and
+each step `rax = [transfer+48h]` until `rax == r15`. So the walk was over
+**the endpoint's list at `endpoint+0x60`**, not the device extension's
+`+0x9A8`. It left that list by following a transfer's `+0x48` link that
+pointed at `devext+0x9A8`, then took that head for the next transfer. In the
+kernel dump:
+
+- the endpoint's `+0x60` list is empty (`fffffadf'cdfb2070` points to itself);
+- the first transfer on `devext+0x9A8` is `fffffadf'cdf5f400`, and its `+0xA8`
+  is `fffffadf'cdfb2010` - **a transfer of the same endpoint**, now on the
+  device extension's list with `Blink` = that head;
+- CPU 3 (the fault) is on usbhub's enumeration thread in the walk; **CPU 0**,
+  at the same instant, is in usbport's DPC path `+0x12485` -> `+0x1026a` ->
+  `+0xca44` with that transfer, that endpoint and `devext+0x9A8` among its
+  arguments. That is section 4's list-processing routine's caller (crash 2's
+  `+0x100b0` is reached from the same `+0x12485`).
+
+The reading, which is **inference and not established**: a transfer was moved
+from its endpoint's list to the device extension's `+0x9A8` list on one CPU
+while another CPU was walking the endpoint's list, and the walk followed the
+moved link. Crash 2's damaged `+0x9A8` head and crash 3's walk onto the head
+fit the same race. Which path moved the transfer, and under which lock, is
+the next thing to read. This driver's `UsbPortCompleteTransfer` call is one
+candidate and not the only one: on the 200 tier it is made "from whichever
+context got here" (`src/xhci_slot.c`, the completion drain), and whether
+usbport 5.2 requires that call under a lock of its own is not established
+here. **Section 4c establishes it.**
+
+## 4c. The mover, the fix, and the run that tested it
+
+**static** - XP x64's completion service, the function this driver calls as
+`UsbPortCompleteTransfer` (packet slot `+0x1D0` = `usbport+0xc060`, stored at
+`+0x2225c`/`+0x22263`), takes the transfer as `TransferParameters - 0x60`
+(`+0xc107`), takes and releases a lock at `[rbx+58h]` around marking bit
+`0xB` on the entries of a list at `rbx+0xB8` (`+0xc20d`..`+0xc2ce`), and
+**then** unlinks the transfer from its endpoint's list with no lock held
+(`+0xc2f1`/`+0xc2f4`) before inserting it on `devext+0x9A8` under
+`devext+0x400` (`+0xc36b`..`+0xc37d`). The walk that crashed is reached with
+**the endpoint's own lock**, `endpoint+0x160`, held (`+0xadf5`/`+0xae01`,
+walk called at `+0xae99`), and CPU 0's done-list path was waiting on the same
+lock (`+0xca32`/`+0xca3e`). So the unlink and the walk are ordered only if the
+service's caller holds that endpoint's lock - which usbport's own callbacks
+for that endpoint do (`PollEndpoint`, `SetEndpointState`, `AbortTransfer`),
+and which this driver's event DPC, health poll and root-hub paths do not.
+Bit `0xB` is also the flag the walk tests before calling `+0xbd60`
+(`+0xa454`), which is how a moved transfer reaches the store of section 4b.
+
+These offsets were first proposed by a second-opinion reading (another model,
+read-only, 2026-09-13) and every one was re-read with `kd -z` before being
+written here; the lock at `[rbx+58h]` is a refinement that reading did not
+report.
+
+**This driver's side** - on the Version 200 tier it delivered every
+completion from whichever context drained the list (`src/xhci_slot.c`, the
+completion drain): the event DPC, the health poll, root-hub callbacks,
+`OpenEndpoint`, `SubmitTransfer` failures, and the lifecycle paths. The
+issue 7 gate (`DeliverUnderUsbportLockOnly`) was off on that tier, on the
+recorded premise that its service is self-synchronising, which is true of the
+done-list insert and false of the unlink before it. The gate alone would not
+have been enough either: usbport's lock here is **per endpoint**, and
+`PollEndpoint` for one endpoint drained the controller-wide completion list,
+so it could complete another endpoint's transfer without that endpoint's lock.
+
+**The fix** (`XHCI_EXTENSION.DeliverPerEndpointOnly`, `src/xhci_slot.c`
+`xhciSlotDeferredWorkEx`, `src/xhci_dispatch.c` `xhciStartController`), set
+with the gate on the amd64 build's Version 200 tier only - XP x64 and Server
+2003 x64:
+
+- a completion is handed over only from `PollEndpoint`, `SetEndpointState` or
+  `AbortTransfer` **for its own endpoint**; the oldest such completion is taken
+  from wherever it sits on the list, so per-endpoint order is kept;
+- any other pass leaves it parked and asks usbport to poll the endpoint that
+  owes it (`UsbPortInvalidateEndpoint`, once a pass), which is what delivers
+  it;
+- the gate's 1 s fallback and the lifecycle paths' forced drains are
+  unchanged, and both are counted;
+- three counters: `completions delivered per endpoint only` (1 on this tier,
+  0 everywhere else), `completions held for another endpoint's poll`, and
+  `endpoint polls requested for a parked completion`.
+
+A host test holds it (`test_slot_completion_per_endpoint_only`): with the mode
+set, the event DPC parks and requests a poll of the owing endpoint,
+`PollEndpoint` for EP0 does not deliver an interrupt pipe's completion, and
+`PollEndpoint` for the pipe does. Every x86 path is unchanged: the mode is
+compiled only under `_WIN64`, and with it off the drain selects the head as
+before.
+
+**runtime** - 2026-09-14, tag `i8diag1`, snapshot `winxp64-smp4-issue8diag`
+(snapshot 3 plus the new amd64 `qemu` build copied over
+`System32\drivers\xhci98.sys`, SHA-256 `FDE30B38...4889343C`), `-smp 4`, the
+three devices hot-plugged, the gdbstub watch of section 4b armed on
+`devext+0x988` for every load:
+
+| | |
+|---|---|
+| loads / live disable-enable cycles | 11 / 10, all three devices back on every enable |
+| bugchecks | **0** |
+| watch hits zeroing the low half | **0** of 16; the 16 are one teardown unlink per disable (the section 4b routine's `RemoveEntryList`, head going self-pointing) and two reuses of a freed extension being zeroed and re-initialized |
+| `completions delivered forced` / `completion fallback polls` | **0 / 0** on every load - exact, a counter that never changes prints no change for the sample cap to hide |
+| `completions delivered under usbport's lock` | tracked `transfers completed` (`0x3A` each on load 1, both capped lower bounds) |
+| `isr count` / `dpc count` | equal on every load |
+
+Against the unfixed tier the same evening - four bugchecks in roughly fifteen
+loads, two of them within the first two enumerations of a boot - eleven clean
+loads by chance is about one in fifteen. That supports the fix; it is one run
+on one guest, not proof, and the build it ran differs from the committed one
+only in comments and its build stamp.
+
+**What this does not cover:**
+
+- **The 32-bit Version 200 targets** (Windows 98 SE, ME, 2000 SP4, XP SP3)
+  still deliver from any context. Their services have not been read for this
+  unlink; `src/xhci.h` already records, from design review A7, that SP4 and
+  NUSB's completion path unlinks from the endpoint list "with no endpoint lock
+  held", which would put Windows 2000's SMP environment in the same shape.
+  Not observed there, and not established.
+- **Vista and Windows 7** keep the issue 7 gate without per-endpoint matching.
+  Issue 7 section 7.1 reads their lock as one per controller (the EpList
+  lock), which would make cross-endpoint delivery safe there; whether every
+  NT 6.x transfer-list walk and unlink runs under that lock is not yet read.
+- Server 2003 x64 rests on being NT 5.2.3790, as the rest of that tier does.
+
 ## 5. What was ruled out, and what an instrument could not see
+
+**The first bullet below is wrong; section 4b corrects it.**
+
 
 - **usbport does not store 32 bits at `devext+0x988`.** *static* - a byte
   search for the displacement `0x988` in the image finds nine hits, and each
@@ -170,6 +416,10 @@ low 32 bits of `Flink` only.**
 
 ## 6. What would name the writer, cheapest first
 
+*Written before sections 4b and 4c and kept as the plan it was. Item 1 was
+tried and did not work under TCG (section 4b); a QEMU gdbstub watchpoint did.
+Items 2 and 3 were not needed.*
+
 1. **A kernel debugger and a write breakpoint on `devext+0x988`** (`ba w4`,
    the low half). The guest already loads `kdcom`; it needs `/debug
    /debugport=com1 /baudrate=115200` in `boot.ini`, a named-pipe serial port
@@ -200,9 +450,32 @@ Evidence, all under `vm\` (git-ignored):
   shutdown, and the `kd-*.txt` readings; `v1-shot-01.png` and
   `v1-query2.png` / `v1-query3.png` (the Verifier queries), `v1-disable1/2`
   and `v1-enable1/2.png`, `v1-bsod-01/02.png`, `v1-afterreset.png`
-- `vm\winxp64.img` - **not reverted** after crash 2: it still holds both dumps
-  and the Verifier setting. Snapshots `winxp64-clean-install`,
-  `winxp64-clean-install-smp4` and `winxp64-smp4-installed-kerneldump`
+- `vm\fix-issue7-xp64-smp4\dump2\v1-winxp64-debugcon.log` and
+  `v1-winxp64-qemu-trace.log` - crash 2's debug log and QEMU trace, copied
+  there before the image was reverted
+- `vm\fix-issue7-xp64-smp4\leg\` - crash 3: `bsod-01.png`,
+  `afterreset-02.png` (the error-report dialog), `crash3-debugcon-at-bsod.log`,
+  `winxp64-debugcon.log` (with the post-reset boot),
+  `winxp64-qemu-trace.fix7xp64smp4leg.log`, and `dump3\` holding `MEMORY.DMP`,
+  `Mini091326-02.dmp` (this crash's; `Mini091326-01.dmp` beside it is crash
+  1's, carried in the snapshot) and the `kd*.txt` scripts with their
+  `kd-0*-out.txt` readings
+- `vm\issue8-kd\` - the instruments and crash 4: `gdbwatch.ps1` (the gdbstub
+  client), `autoarm.ps1`, the kd attempt (`winxp64-smp4-kd.cmd`,
+  `kd-attach.cmd`, `init.txt`, `arm.txt`, `hit.txt`, `canary.txt`, `kd-*.log`),
+  `gdb-hits*.log` and `gdb-load1/2-*.log` (the hit records; crash 4's write is
+  `gdb-load2-fffffadfcdc36b28.log`), `gdb1-bsod.png`,
+  `crash4-debugcon-at-bsod.log`, `winxp64-debugcon-i8gdb1.log`, and
+  `dump4\` holding `MEMORY.DMP`, `Mini091326-02.dmp` and `kd-01-out.txt`
+- `vm\issue8-kd\diag1\` - the fix's run (section 4c): `gdb-load1..11-*.log`
+  (every watch hit), `winxp64-debugcon-i8diag1.log`, `diag1-01.png`; the
+  staging boot's log is `vm\issue8-kd\winxp64-debugcon-i8diag0.log`, and the
+  binary was staged as `vm\xferxp64\ISSUE8\XHCI98.SYS`
+- `vm\winxp64.img` - snapshots `winxp64-clean-install`,
+  `winxp64-clean-install-smp4`, `winxp64-smp4-installed-kerneldump` (the
+  unfixed driver), `winxp64-smp4-installed-kd` (`/debug` on COM1, otherwise
+  snapshot 3) and `winxp64-smp4-issue8diag` (snapshot 3 with the fix's
+  build copied in)
 
 Documents:
 
