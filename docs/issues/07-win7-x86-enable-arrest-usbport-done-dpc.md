@@ -889,6 +889,13 @@ guests had exposed, because nothing had gone wrong on them:
   trace**, `-trace` being resolved against `%~dp0`. The crash run has no trace
   because of it; the re-run does.
 
+**Continued as [issue 8](08-xp64-smp-usbport-list-head-low-dword.md).** A
+second bugcheck on the same guest that evening, with a full kernel dump,
+showed this list head damaged again in exactly its low 32 bits while every
+element was intact, and it corrects one claim above: `fffffadf` is the high
+half of every pool pointer on that guest, not usbport's own. The bugcheck is
+tracked there from now on, as a clause of its own; this leg stays unfinished.
+
 ## Sources
 
 Evidence, all under `vm\`:

@@ -9,7 +9,11 @@ each page.
 
 Dates are 2026 unless stated. Task ids are the roadmap's.
 
-Issue 7 is the only one open, and it **is** a limitation of `1.1.0.0`: it
+Issue 8 is open too, and is newer than any cut: a rare bugcheck on the
+Windows XP x64 guest at four vCPUs, found on 2026-09-13 while taking issue
+7's fix across the NT 5.x legs, whose writer is not established.
+
+Issue 7 is open, and it **is** a limitation of `1.1.0.0`: it
 was known at the cut and the cut went ahead on the owner's ruling of
 2026-09-12, because the defect it describes is localised to a code path
 inside `usbport.sys` that a miniport cannot influence. **Two things changed
@@ -50,6 +54,7 @@ this race (issue section 7.6); raised to four vCPUs the same evening it
 pointer with its low 32 bits zeroed, which did NOT reproduce over six further
 cycles and whose writer is not yet established (issue section 7.7); the other
 four NT 5.x legs are still owed** - the lost wakeup is real and it is reachable only because this driver delivered completions from contexts usbport never expected (the r5 one from `RH_GetPortStatus`, which NT 6.x usbport calls at PASSIVE with no lock); `USBPORTSVC_CompleteTransfer` assumes its caller holds usbport's EpList lock, and Microsoft's usbehci completes from `PollEndpoint` alone. Fixed by delivering at DISPATCH always and, on the Version 300 tier, only from `PollEndpoint`, `AbortTransfer` and `SetEndpointState`, with a forced path for the lifecycle drains and a 1 s poll fallback (issue section 7). The arrest **also reproduced on Windows 7 x64**, so the title is narrower than the issue |
+| 8 | [Windows XP x64 at four vCPUs rarely bugchecks in usbport, on a list head whose low 32 bits were overwritten](08-xp64-smp-usbport-list-head-low-dword.md) - two `D1` bugchecks inside `usbport.sys` on one guest, one on a live enable and one on an idle machine; the full kernel dump of the second shows a `LIST_ENTRY` head in usbport's device extension with exactly the low half of its `Flink` zeroed and every element intact. usbport's own code never stores 32 bits there, and this driver's extension sits 0x2A0 bytes further on in the same allocation; the writer is not identified | **Open, rare (2 in about ten live four-vCPU cycles plus idle, 0 in 7 uniprocessor loads); cause not established, next instrument a kernel-debugger write breakpoint** |
 
 ## Other issues worth a page
 
