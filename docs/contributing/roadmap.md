@@ -3158,11 +3158,33 @@ reading may not tick a box whose line names a guest.
             no `-smp`, where section 7.5's four ran `-smp 4`), and `-smp 1`
             is the rung under which the UNFIXED binary also passed five
             cycles - so this is a 200-tier compatibility result and **not**
-            an SMP one, and raising it means a reinstall, the HAL being
-            fixed at install time. Deviation: the remove took two 30 s
-            samples where all four NT 6.x guests took one, with forward
-            progress in between. Issue 7 section 7.6 is the record.
+            an SMP one. Deviation: the remove took two 30 s samples where
+            all four NT 6.x guests took one, with forward progress in
+            between. Issue 7 section 7.6 is the record.
             **Owed: 98, ME, 2000, XP32**
+      - [ ] **2026-09-13, XP x64 raised to `-smp 4` and it BUGCHECKED on the
+            second live disable/enable cycle** (`fix7xp64smp4`). Raising it
+            needed **no reinstall and no HAL switch** - the claim in 7.6 that
+            it would was wrong and is corrected there; XP x64 has one HAL and
+            has reported `ACPI Multiprocessor x64-based PC` since install, so
+            `-smp 4` plus one restart was the whole change, and the dump reads
+            `MP (4 procs)`. `D1 DRIVER_IRQL_NOT_LESS_OR_EQUAL` at
+            **`USBPORT+0x1d1a7`**, reading `fffffadf00000000` at IRQL 2 while
+            walking a usbport-private list under usbport's own lock - an
+            address carrying **usbport's high 32 bits with a zero low dword**,
+            which is a 64-bit pointer written 32 bits wide and is M8's failure
+            mode on the guest that already produced it once. **It did not
+            reproduce**: one cold enable and five live cycles clean
+            afterwards, so it is timing-dependent, not deterministic (0 in 7
+            uniprocessor loads, 1 in 2 SMP cycles, 0 in 6 more). **Whose write
+            it is has NOT been established** - usbport faulted, which does not
+            mean usbport wrote it - and whether the 7.3 fix introduced it is
+            unknown, task 21.5 having passed this sequence on one vCPU only.
+            Owed: Driver Verifier special pool (catches a true out-of-bounds
+            write) **and** an amd64 layout audit (catches a wrong-offset write
+            *inside* a usbport allocation, which Verifier cannot see). Issue 7
+            section 7.7 is the record. **The SMP leg is UNFINISHED, not
+            passed**
     - [ ] **Vista x64: REMOVE/RESCAN does not complete, twice, and that
           clause had never been run on this guest.** Device Manager Uninstall
           of the devnode (package left in the store) wedged: attempt 1 sent

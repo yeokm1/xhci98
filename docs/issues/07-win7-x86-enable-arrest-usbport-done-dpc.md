@@ -791,8 +791,19 @@ this page is about. This leg is therefore evidence for what section 7.4 asked
 the NT 5.x legs for - the delivery lock and the `PollEndpoint` drain do not
 break the 200 tier, and the 200 tier reads the zero it must - and it is **not**
 evidence that the fix holds under contention on NT 5.x. Nothing here is an SMP
-result. Raising this guest to `-smp 4` is not a launcher edit either: the HAL
-is fixed at install time, so it would mean reinstalling the guest.
+result.
+
+**Correction, made the same evening.** This section first said that raising the
+guest would mean reinstalling it, the HAL being fixed at install time. **That
+is wrong, and the rule it leaned on does not reach this guest.** The "HAL is
+fixed at install time" lesson was written for the 32-bit targets, where the
+HAL zoo and the `ntoskrnl`/`ntkrnlmp` split are real. XP x64 has **one** HAL,
+and this guest has reported **`ACPI Multiprocessor x64-based PC`** since it was
+installed on 2026-09-08. Adding `-smp 4` was all it took: Windows enumerated
+four `QEMU Virtual CPU` processors, asked once for a restart to install them,
+and then scheduled on all four (four Task Manager graphs; the dump of section
+7.7 reads `MP (4 procs)`). No reinstall, no HAL switch. Section 7.7 is what
+that produced.
 
 **One deviation, stated rather than smoothed over.** The remove took two 30 s
 samples where every guest in section 7.5 finished inside one. It was not a
@@ -807,9 +818,93 @@ never falls back to the poll, across seven loads including five
 disable/enable cycles, a remove and a rescan. **Four NT 5.x legs remain** (98,
 ME, 2000, XP32), and none of the five reaches real hardware.
 
+### 7.7 XP x64 raised to four vCPUs, 2026-09-13: a BUGCHECK, and the leg is UNFINISHED
+
+Section 7.6 ran on one vCPU and said so. Raised to `-smp 4` the same evening -
+`-accel tcg,thread=multi` to match section 7.5's four guests, from a new
+`winxp64-clean-install-smp4` snapshot, one install - **the second live
+disable/enable cycle bugchecked.** Seven uniprocessor loads had not touched
+this. **Nothing in this section is a pass; the leg is unfinished.**
+
+**The bugcheck.** `D1 DRIVER_IRQL_NOT_LESS_OR_EQUAL`,
+`{fffffadf00000000, 2, 0, fffffadfc62201a7}` - a **read**, at **IRQL 2**, of
+`fffffadf00000000`. usbport is loaded `fffffadf'c6203000-c623d000`, so the
+faulting instruction is **`USBPORT+0x1d1a7`** and `kd` says "Probably caused
+by : USBPORT.SYS". The loaded image's timestamp `45D69800` matches
+`tools\winxp64-extracted\usbport.sys` exactly, so that file is the build that
+crashed and the disassembly below is of the real code.
+
+**What it was doing.** Function `usbport+1d140..1d1ee` walks a doubly-linked
+list under usbport's own spinlock: extension from `[rcx+0x40]`, lock at
+`+0x460`, list head at `+0x988`, `LIST_ENTRY` at offset `0x78` inside each
+element (`lea rax,[rcx-0x78]`), comparing each element against a
+caller-supplied object and doing `lock inc dword ptr [rbx+8]` on a match -
+the shape of a handle validation and reference. It faulted at
+`mov rcx,[rax+0x78]`, loading the **next `Flink`**.
+
+**The observation that matters.** The address it read,
+`fffffadf00000000`, carries **usbport's own high 32 bits with a zero low
+dword**. Freed pool carries poison and a wild pointer is wild; this is
+neither. It is **a 64-bit pointer whose low half was overwritten with zero, or
+written 32 bits wide** - which is the M8 failure mode, on the one guest that
+has already produced it once.
+
+**It did not reproduce.** Same guest, auto-restart turned off and the dump
+raised to a kernel dump, then one cold enable and **five live disable/enable
+cycles, all clean**, `ALL PASS` throughout. With auto-restart off a bugcheck
+would halt rather than reboot, so those results are trustworthy. **The fault
+is timing-dependent, not deterministic**: 0 crashes in 7 uniprocessor loads,
+1 in 2 live SMP cycles, 0 in 6 more.
+
+**What is NOT established.** Which module corrupted the link. usbport faulted;
+that does not mean usbport wrote it. Whether the fix of section 7.3 introduced
+it - the task 21.5 leg of 2026-09-09 passed this sequence on this guest, but
+at one vCPU, so it never tested this. And the last load carries an unresolved
+`isr 232 / dpc 206` that the amd64 instrument cannot settle (no memory reads,
+32-sample print cap), which per this project's standing trap is **not** to be
+called a shortfall from the log.
+
+**What the audit has established so far.** The list is **usbport-private**:
+its head at `devext+0x988` is referenced from 7 sites in 6 functions, all
+inside usbport, and the miniport is handed its own `MiniportExtension`, never
+usbport's extension. So this driver cannot reach that list directly, and if it
+is the writer the write is collateral - in one of two shapes needing different
+instruments. A true **out-of-bounds** write into a neighbouring pool block is
+what **Driver Verifier special pool** catches at the instant of the write. A
+**wrong-offset write inside** a usbport allocation is what Verifier
+**cannot** catch, the write being in bounds - M8's shape exactly - and only
+reading the layouts finds it. Both are owed.
+
+**Three instrument defects surfaced with it**, none of which the five clean
+guests had exposed, because nothing had gone wrong on them:
+
+- **`watch-threshold.ps1` reported the post-bugcheck REBOOT as a healthy
+  re-enable.** It waits for one more boot in the log and cannot tell why the
+  boot happened. Every green enable in every leg rests on that assumption.
+  Turning off "Automatically restart" removes the ambiguity, which is why the
+  re-run did so first.
+- **It cannot start from a cold log** - exit 2, "NO DriverEntry line", which
+  is exactly the state after a failed enable.
+- A one-off launcher copied outside `scripts\local\` **silently loses the QEMU
+  trace**, `-trace` being resolved against `%~dp0`. The crash run has no trace
+  because of it; the re-run does.
+
 ## Sources
 
 Evidence, all under `vm\`:
+
+- `vm\fix-issue7-xp64-smp4\` - the 2026-09-13 `-smp 4` leg (section 7.7):
+  `Mini091326-01.dmp` (the crash's minidump, lifted out of the qcow2 with
+  7-Zip after shutdown), `post-bsod-state.png` (the error-reporting dialog,
+  which is where the bugcheck arguments came from - the BSOD itself was lost
+  to auto-restart), the probe screenshots showing
+  `ACPI Multiprocessor x64-based PC` and four CPU graphs, both runs' debug
+  logs, the re-run's QEMU trace, every watcher's samples, and
+  `winxp64-smp4.cmd` (the generated launcher plus `-smp 4` and
+  `-accel tcg,thread=multi`). Snapshots `winxp64-clean-install-smp4` and
+  `winxp64-smp4-installed-kerneldump` (driver installed, kernel dumps armed,
+  auto-restart off) are on the image; the 2026-09-08 `winxp64-clean-install`
+  is untouched
 
 - `vm\fix-issue7-xp64\` - the 2026-09-13 Windows XP x64 leg (section 7.6):
   the full debug log and QEMU trace, `read-01.txt` and `counters-01..07.txt`,
