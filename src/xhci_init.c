@@ -3432,7 +3432,7 @@ VOID XhciSuspendController(PXHCI_EXTENSION ext)
      * not call SuspendController from inside a SubmitTransfer, so nothing is
      * held back.
      */
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWorkForced(ext);
 
     /* Quiesce masks before closing ISR/DPC admission and before the halt, even
      * when the halt later fails. Win98's unbracketed idle suspend depends on it. */
@@ -3584,7 +3584,7 @@ MPSTATUS XhciResumeController(PXHCI_EXTENSION ext)
              * review, B3). */
             XhciSlotResumeSweep(ext);
             XhciRootHubDeferredWork(ext);
-            XhciSlotDeferredWork(ext);
+            XhciSlotDeferredWorkForced(ext);
             return MP_STATUS_SUCCESS;
         }
 
@@ -3634,7 +3634,7 @@ MPSTATUS XhciResumeController(PXHCI_EXTENSION ext)
         XhciControllerLockAcquire(&oldIrql);
         XhciSlotInvalidateAll(ext, halted);
         XhciControllerLockRelease(oldIrql);
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWorkForced(ext);
     }
 
     /*
@@ -3809,7 +3809,7 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
     XhciControllerLockAcquire(&oldIrql);
     XhciSlotInvalidateAll(ext, halted);
     XhciControllerLockRelease(oldIrql);
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWorkForced(ext);
 
     ext->InitBelowPassive = 1;
     status = XhciInitController(ext, NULL);
@@ -4174,7 +4174,7 @@ ULONG XhciStopController(PXHCI_EXTENSION ext)
         XhciControllerLockAcquire(&oldIrql);
         XhciSlotInvalidateAll(ext, quiesced);
         XhciControllerLockRelease(oldIrql);
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWorkForced(ext);
 
         return quiesced;
     }

@@ -5767,7 +5767,7 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
         }
         XhciControllerLockRelease(oldIrql);
 
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWorkLocked(ext);
         return;
     }
     if (state != USBPORT_ENDPOINT_REMOVE) {
@@ -5823,7 +5823,7 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
                 ext->Ep0RemovesSuperseded++;
                 endpoint->Flags &= ~XHCI_ENDPOINT_FLAG_OPEN;
                 XhciControllerLockRelease(oldIrql);
-                XhciSlotDeferredWork(ext);
+                XhciSlotDeferredWorkLocked(ext);
                 return;
             }
             dev->Flags &= ~XHCI_DEV_FLAG_EP0_OPEN;
@@ -5838,7 +5838,7 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
             if (record == NULL) {
                 endpoint->Flags &= ~XHCI_ENDPOINT_FLAG_OPEN;
                 XhciControllerLockRelease(oldIrql);
-                XhciSlotDeferredWork(ext);
+                XhciSlotDeferredWorkLocked(ext);
                 return;
             }
             if (record->EndpointExtension != NULL &&
@@ -5855,7 +5855,7 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
                 ext->EndpointRemovesSuperseded++;
                 endpoint->Flags &= ~XHCI_ENDPOINT_FLAG_OPEN;
                 XhciControllerLockRelease(oldIrql);
-                XhciSlotDeferredWork(ext);
+                XhciSlotDeferredWorkLocked(ext);
                 return;
             }
             /*
@@ -5934,7 +5934,7 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
     endpoint->Flags &= ~XHCI_ENDPOINT_FLAG_OPEN;
     XhciControllerLockRelease(oldIrql);
 
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWorkLocked(ext);
 }
 
 /* ------------------------------------------------------------------ */
@@ -8095,7 +8095,7 @@ VOID XhciSlotAbortTransfer(PXHCI_EXTENSION ext,
      * back. `SubmitTransfer` is the one that does, which is why the
      * `SubmitDepth` bracket exists and is confined to it.
      */
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWorkLocked(ext);
 }
 
 /* ------------------------------------------------------------------ */
@@ -10542,8 +10542,36 @@ VOID XhciSlotLeaveSubmit(PXHCI_EXTENSION ext)
      */
 }
 
+/*
+ * The three entry points to the drain differ only in what they are allowed
+ * to hand to usbport on the Version 300 tier: nothing, everything because
+ * usbport's EpList lock is held, everything because a lifecycle path or the
+ * poll's fallback says so. The admission is an argument and not a field so
+ * that it belongs to this call on this CPU.
+ */
+#define XHCI_DELIVER_NONE   0UL
+#define XHCI_DELIVER_LOCKED 1UL
+#define XHCI_DELIVER_FORCED 2UL
+
+static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit);
+
 /* IRQL: <= DISPATCH_LEVEL, controller lock **not** held. */
 VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext)
+{
+    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_NONE);
+}
+
+VOID XhciSlotDeferredWorkLocked(PXHCI_EXTENSION ext)
+{
+    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_LOCKED);
+}
+
+VOID XhciSlotDeferredWorkForced(PXHCI_EXTENSION ext)
+{
+    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_FORCED);
+}
+
+static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit)
 {
     KIRQL oldIrql;
     PXHCI_TRANSFER transfer;
@@ -10551,12 +10579,16 @@ VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext)
     ULONG passEpoch;
     ULONG heldBySubmitCounted;
     ULONG heldByPassCounted;
+    ULONG heldForPollCounted;
+    ULONG deliveredLocked;
+    KIRQL deliveryIrql;
 
     if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
         return;
     }
     heldBySubmitCounted = 0;
     heldByPassCounted = 0;
+    heldForPollCounted = 0;
 
     XhciControllerLockAcquire(&oldIrql);
     if (ext->DeferredBusy) {
@@ -10649,10 +10681,39 @@ VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext)
             }
             transfer = NULL;
         }
+        /*
+         * The third hold, and unlike the two above it is about usbport's
+         * state rather than this driver's: on the Version 300 tier the
+         * completion service is safe only from a callback usbport made under
+         * its EpList lock (XHCI_EXTENSION.DeliverUnderUsbportLockOnly). A
+         * pass reached from anywhere else - the event DPC, a root-hub query,
+         * the health poll - leaves the completion for the next PollEndpoint,
+         * unless a lifecycle path or the poll's fallback has forced it.
+         */
+        deliveredLocked = 0;
+        if (transfer != NULL && ext->DeliverUnderUsbportLockOnly) {
+            if (admit == XHCI_DELIVER_LOCKED) {
+                deliveredLocked = 1;
+            } else if (admit == XHCI_DELIVER_NONE) {
+                if (!heldForPollCounted) {
+                    heldForPollCounted = 1;
+                    ext->CompletionsHeldForPoll++;
+                }
+                transfer = NULL;
+            }
+        }
         if (transfer != NULL) {
             ext->CompletionHead = transfer->Next;
             if (ext->CompletionHead == NULL) {
                 ext->CompletionTail = NULL;
+                ext->CompletionFallbackArmed = 0;
+            }
+            if (ext->DeliverUnderUsbportLockOnly) {
+                if (deliveredLocked) {
+                    ext->CompletionsDeliveredLocked++;
+                } else {
+                    ext->CompletionsDeliveredForced++;
+                }
             }
             transfer->Next = NULL;
             if (ext->CompletionsOwed != 0) {
@@ -10714,6 +10775,15 @@ VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext)
              * endpoint what kind it is would be a second statement of a fact
              * that can drift.
              */
+            /*
+             * **At DISPATCH_LEVEL, whatever the caller's IRQL** (issue 7).
+             * On the 300 tier the service queues usbport's done DPC before
+             * storing its queued state; below DISPATCH that DPC runs on
+             * this CPU inside the window and the work is dropped for ever.
+             * The delivery lock guards nothing - it is the raise, and it is
+             * never held together with the controller lock.
+             */
+            XhciDeliveryLockAcquire(&deliveryIrql);
             if ((transfer->Flags & XHCI_XFER_FLAG_ISOCH) != 0) {
                 if (XhciRegPacket.UsbPortCompleteIsoTransfer != NULL) {
                     (VOID)XhciRegPacket.UsbPortCompleteIsoTransfer(
@@ -10726,6 +10796,7 @@ VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext)
                     transfer->TransferParameters, transfer->UsbdStatus,
                     transfer->BytesTransferred);
             }
+            XhciDeliveryLockRelease(deliveryIrql);
             XhciControllerLockAcquire(&oldIrql);
             /* Only if it is still ours to clear. The binaries say the service
              * call re-enters no miniport slot (the corrected comment at the
@@ -10923,12 +10994,37 @@ VOID XhciSlotPoll(PXHCI_EXTENSION ext)
 {
     KIRQL oldIrql;
     ULONG i;
+    ULONG force;
 
     if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
         return;
     }
+    force = 0;
 
     XhciControllerLockAcquire(&oldIrql);
+    /*
+     * The delivery gate's safety net (XHCI_EXTENSION.DeliverUnderUsbportLockOnly):
+     * a completion usbport's own polling has not collected within
+     * XHCI_COMPLETION_FALLBACK_MS is delivered from here, at DISPATCH under
+     * the delivery lock but outside usbport's EpList lock. That is the
+     * contract's transient hazard rather than its permanent one, and it is
+     * taken only because the alternative is a request that never completes.
+     * Counted, because a nonzero reading says usbport stopped polling an
+     * endpoint that still owed work.
+     */
+    if (ext->DeliverUnderUsbportLockOnly) {
+        if (ext->CompletionHead == NULL) {
+            ext->CompletionFallbackArmed = 0;
+        } else if (!ext->CompletionFallbackArmed) {
+            ext->CompletionFallbackArmed = 1;
+            ext->CompletionFallbackStamp = ext->PollClockMs;
+        } else if ((ext->PollClockMs - ext->CompletionFallbackStamp) >=
+                   XHCI_COMPLETION_FALLBACK_MS) {
+            ext->CompletionFallbackArmed = 0;
+            ext->CompletionFallbackPolls++;
+            force = 1;
+        }
+    }
     for (i = 0; i < XHCI_MAX_SLOTS; i++) {
         PXHCI_DEVICE dev = &ext->Devices[i];
 
@@ -10970,5 +11066,9 @@ VOID XhciSlotPoll(PXHCI_EXTENSION ext)
     }
     XhciControllerLockRelease(oldIrql);
 
-    XhciSlotDeferredWork(ext);
+    if (force) {
+        XhciSlotDeferredWorkForced(ext);
+    } else {
+        XhciSlotDeferredWork(ext);
+    }
 }

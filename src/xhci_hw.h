@@ -1203,6 +1203,24 @@ VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext);
  */
 VOID XhciSlotEnterSubmit(PXHCI_EXTENSION ext);
 VOID XhciSlotLeaveSubmit(PXHCI_EXTENSION ext);
+/*
+ * XhciSlotDeferredWork from inside a callback usbport makes under its EpList
+ * lock - PollEndpoint, AbortTransfer, SetEndpointState - which on the
+ * Version 300 tier are the only contexts a completion may be handed over
+ * from (`XHCI_EXTENSION.DeliverUnderUsbportLockOnly`). SubmitTransfer is
+ * under that lock too and does not use this: its own hold parks every
+ * completion until the callback returns. IRQL: DISPATCH_LEVEL, controller
+ * lock not held.
+ */
+VOID XhciSlotDeferredWorkLocked(PXHCI_EXTENSION ext);
+/*
+ * XhciSlotDeferredWork with the tier's delivery gate overridden: for the
+ * lifecycle paths (suspend, stop, resume, recovery), where usbport's own
+ * deliverers are gated off and a completion left parked would sit until the
+ * far side, and for the poll's fallback. IRQL: <= DISPATCH_LEVEL, controller
+ * lock not held.
+ */
+VOID XhciSlotDeferredWorkForced(PXHCI_EXTENSION ext);
 
 /*
  * The device half of usbport's CheckController poll: age the outstanding command
@@ -1526,6 +1544,15 @@ VOID XhciControllerGlobalInit(VOID);
  * be called while held. IRQL: <= DISPATCH_LEVEL on acquire. */
 VOID XhciControllerLockAcquire(PKIRQL oldIrql);
 VOID XhciControllerLockRelease(KIRQL oldIrql);
+/*
+ * Held across the completion service call only (src/xhci_cmd.c says why).
+ * IRQL: <= DISPATCH_LEVEL on entry, DISPATCH_LEVEL while held.
+ */
+VOID XhciDeliveryLockAcquire(PKIRQL oldIrql);
+VOID XhciDeliveryLockRelease(KIRQL oldIrql);
+#ifdef XHCI_HOST_TEST
+PKSPIN_LOCK XhciHostDeliveryLockWord(VOID);
+#endif
 
 /*
  * Update the shared lifecycle word under the stable controller lock. Returns

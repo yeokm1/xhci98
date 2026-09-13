@@ -170,6 +170,14 @@ is the constraint rule 2 in section 2 is written around. Nesting is the
 mistake this design is most likely to make, and it is the mistake a reader who
 takes "innermost" to mean "always safe to take" will make first.
 
+The second lock, `xhciDeliveryLock`, added for issue 7 (section 7, "Where a
+completion may be handed over"), sits outside this order rather than in it:
+it is taken only after the controller lock has been released, holds no
+state, and the one call made under it takes no usbport lock and re-enters
+no miniport slot. The controller lock may be taken inside it - the
+suite's defensive re-entry vector does - and it may never be taken inside
+the controller lock; the host model counts either inversion as an error.
+
 ## 4. The DIRQL exception
 
 `XhciIsr` runs at DIRQL. It cannot take `xhciControllerLock`: a DISPATCH-level
@@ -340,13 +348,13 @@ plus the three non-callback entry points, not from recall.
 | `xhciCommandTimeout` (async) | DISPATCH, no usbport lock | command state, `CRCR` | two pointer checks before the lock; epoch, generation, `INITIALIZED` and `ControllerFailed` all validated under it |
 | `InterruptNextSOF` | DISPATCH, `MiniportSpinLock` (derived, task 9-A.3: both builds acquire it for this call alone) | none | counter only; nothing waits on the callback and its state-change list is drained by usbport's own 500 ms timer DPC regardless (`docs/usb-xhci-info/usbport-miniport-abi.md` section 4) |
 | `PollController`, `TakePortControl` | DISPATCH / any | none | trace only |
-| Root-hub status queries (`RH_GetRootHubData`, `RH_GetStatus`, `RH_GetPortStatus`, `RH_GetHubStatus`) | DISPATCH, `MiniportSpinLock` | port shadow, `PORTSC` | the controller lock around the read, the shadow update and the change acknowledgement; `RH_GetStatus` is a constant and takes nothing |
+| Root-hub status queries (`RH_GetRootHubData`, `RH_GetStatus`, `RH_GetPortStatus`, `RH_GetHubStatus`) | **PASSIVE with no usbport lock on NT 6.x** (issue 7, 2026-09-13: `USBPORT_RootHub_ClassCommand` calls `RH_GetPortStatus` and `RH_GetHubStatus` directly, static on Windows 7 x86 and x64, and this driver's callback log reads `irql=00` for all four on both); DISPATCH under `MiniportSpinLock` on NT 5.x as ReactOS documents it | port shadow, `PORTSC` | the controller lock around the read, the shadow update and the change acknowledgement; `RH_GetStatus` is a constant and takes nothing. The drain `RH_GetPortStatus` runs afterwards may not hand a completion to usbport on the 300 tier (section 7, "Where a completion may be handed over") |
 | Root-hub feature callbacks (the twelve `RH_Set/ClearFeature*`) | DISPATCH, no usbport lock established either way | port shadow, `PORTSC` | the controller lock; the write is composed and issued inside it, and nothing waits |
 | `RH_SetFeaturePortReset` / `RH_ClearFeaturePortSuspend` | DISPATCH, as above | port shadow, `PORTSC`, the armed generation | as above, plus `XhciRootHubDeferredWork` after the release; the timer arm and the announcement are both usbport services |
 | `xhciRhPortTimeout` (async) | DISPATCH, no usbport lock | port shadow, `PORTSC` | two pointer checks before the lock; epoch, hub port and generation all validated under it, and the generation is claimed before any register is read |
 | `RH_DisableIrq` / `RH_EnableIrq` | DISPATCH | `Flags` | one `XhciControllerUpdateFlags` transition; touches no register |
 | `RH_ChirpRootPort` | DISPATCH | a counter | no register, no lock |
-| `OpenEndpoint` / `ReopenEndpoint` / `SetEndpointState` / `PollEndpoint` | DISPATCH, `MiniportSpinLock` | endpoint record, its ring and queue, the quiesce state | the controller lock; the Configure/Stop/Set TR Dequeue commands are issued under it and nothing waits. A handle the record is bound to a different extension than is declined under the same lock (`xhciEpHandleSuperseded`, roadmap Phase 20, F1), except a `PAUSED` from a handle that still owns queued work (`xhciEpHandleOwnsWork`), which starts the stop that handle's abort needs |
+| `OpenEndpoint` / `ReopenEndpoint` / `SetEndpointState` / `PollEndpoint` | DISPATCH, `MiniportSpinLock`; `SetEndpointState` and `PollEndpoint` also under usbport's EpList lock on NT 6.x (reached through `USBPORT_SetGlobalEndpointState` and the HcInt worker's `iSetGlobalEndpointStateTx`, static), which is why they are two of the three callbacks the 300 tier delivers completions from (section 7) | endpoint record, its ring and queue, the quiesce state | the controller lock; the Configure/Stop/Set TR Dequeue commands are issued under it and nothing waits. A handle the record is bound to a different extension than is declined under the same lock (`xhciEpHandleSuperseded`, roadmap Phase 20, F1), except a `PAUSED` from a handle that still owns queued work (`xhciEpHandleOwnsWork`), which starts the stop that handle's abort needs |
 | `CloseEndpoint` / `GetEndpointState` / `QueryEndpointRequirements` | DISPATCH, `MiniportSpinLock` | the probe's counters only | the controller lock, taken inside `XhciProbeEndpoint` (`src/xhci_probe.c`); no record is read or written, and neither shipping build calls the first two |
 | `GetEndpointStatus` / `SetEndpointStatus` / `SetEndpointDataToggle` | DISPATCH, `MiniportSpinLock` | the record's quiesce state (the status pair); a counter (the toggle) | the controller lock; the reset-pipe chain is armed under it and driven by the deferred pass, and a superseded handle is declined |
 | `RebalanceEndpoint` / `StartSendOnePacket` / `EndSendOnePacket` | DISPATCH, `MiniportSpinLock` | a counter and a trace line | no register, no record, no lock needed |
@@ -447,9 +455,13 @@ and resume generations under the controller lock:
   usbport lock at all, so nothing else would serialize them against that DPC,
   or against each other on SMP.
 
-`RH_GetPortStatus` and the other status queries do run under `MiniportSpinLock`,
-but that is a different lock from the DPC's, so they take the controller lock
-too. `UsbPortInvalidateRootHub` is a usbport service: decide under the lock,
+`RH_GetPortStatus` and the other status queries take the controller lock too.
+This paragraph used to say they "do run under `MiniportSpinLock`"; on NT 6.x
+they do not - `USBPORT_RootHub_ClassCommand` calls `RH_GetPortStatus` and
+`RH_GetHubStatus` directly at the URB dispatcher's IRQL, measured as 0 by
+this driver's callback log on Windows 7 x86 and x64 (issue 7 section 7).
+Either way nothing else serializes them against the DPC.
+`UsbPortInvalidateRootHub` is a usbport service: decide under the lock,
 call after releasing.
 
 ### Transfer metadata (Phase 6)
@@ -567,6 +579,67 @@ tears a device down, and the sites that observe one are the event DPC,
 third is `RH_GetPortStatus`, which does not (its change goes back in the
 answer rather than into an announcement) and therefore calls the device
 layer's drain itself. The suite found that missing rather than review.
+
+### Where a completion may be handed over (issue 7, 2026-09-13)
+
+"Decide under the lock, act after it" said where the completion service may
+not be called from - inside the controller lock - and nothing about where it
+may. Issue 7 is the cost of that gap: an NT 6.x usbport's
+`USBPORTSVC_CompleteTransfer` takes no lock of its own and runs
+`USBPORT_Core_iCompleteTransfer`, whose `i` means the caller holds usbport's
+EpList lock; that function queues the done DPC before storing its queued
+state, and the EpList lock, held by the caller and taken by the DPC's
+worker, is the only thing that orders the two. usbport holds it across the
+callbacks it makes through `iSetGlobalEndpointStateTx` - `PollEndpoint`,
+`SubmitTransfer`, `AbortTransfer`, `SetEndpointState` - and Microsoft's
+usbehci completes transfers from `PollEndpoint` alone. Delivered from
+`RH_GetPortStatus` at PASSIVE with no lock, the queued DPC ran on the same
+CPU before the store, read idle, and the done list was marked queued for
+ever. On NT 5.x the same service is an interlocked insert and a plain DPC,
+safe from anywhere, which is why the discipline was never contradicted
+before Windows 7.
+
+The rule the driver now carries (`XHCI_EXTENSION.DeliverUnderUsbportLockOnly`,
+`src/xhci_slot.c` `XhciSlotDeferredWork`):
+
+- **The service is always called at DISPATCH_LEVEL**, on every tier and
+  from every context, under `xhciDeliveryLock` (section 11). The lock
+  guards nothing; it is the raise, and the import ceiling has spin locks
+  and no `KeRaiseIrql`. It is taken only with the controller lock released
+  and never the other way round (section 3); the service takes no usbport
+  lock and re-enters no miniport slot (batch 7a-V), so it is innermost too.
+- **On the Version 300 tier, a completion leaves the list only from inside
+  `PollEndpoint`, `AbortTransfer` or `SetEndpointState`** (their drains are
+  `XhciSlotDeferredWorkLocked`; the admission is an argument of the call
+  rather than a field, because a per-controller counter would admit another
+  CPU's event DPC for as long as one CPU sat inside an abort;
+  `SubmitTransfer`'s own hold already parks everything until it returns).
+  The event DPC retires the TD, threads the completion, and reports
+  `USBPORT_DPC_EX_TRANSFER_WORK`; usbport's HcInt pass, signalled on every
+  interrupt, polls every active endpoint under its lock and `PollEndpoint`
+  delivers. Any other context - the event DPC itself, the root-hub
+  callbacks, the health poll - counts `completions held for PollEndpoint`
+  and leaves it.
+- **Two overrides**, both through `XhciSlotDeferredWorkForced`: the
+  lifecycle drains (suspend, stop, resume, recovery), where usbport's own
+  deliverers are gated off and a parked completion would sit until the far
+  side; and the health poll's fallback, which delivers anything parked for
+  `XHCI_COMPLETION_FALLBACK_MS` and counts the poll that did. The fallback
+  is the contract's transient hazard (an unlocked signal can race
+  `Xdpc_End`'s state-3 read and lose one signal until the next completion)
+  accepted over a request that never completes; a nonzero
+  `completion fallback polls` during ordinary traffic means usbport stopped
+  polling an endpoint that still owed work.
+- The 200 tier is unchanged but for the raise.
+
+The suite holds it with two never-reset nets - the service is never called
+outside the delivery lock, and the delivery lock is never nested or taken
+under the controller lock - and three vectors: the event DPC, a root-hub
+query, a bare drain and the first poll all leave a completion parked and
+`PollEndpoint` delivers it; the fallback fires once at the threshold and
+not again; `SetEndpointState`, `AbortTransfer` and the forced drain each
+deliver from their own context, and the 200 tier still delivers from the
+DPC.
 
 ### Endpoint records and the quiescence machine (Phases 7a and 8)
 
@@ -736,6 +809,7 @@ could find already populated by the first.
 | `xhciControllerLock` (`src/xhci_cmd.c`) | 4 | The one `KSPIN_LOCK`, section 2 | It carries no controller information at all. It is a mutual-exclusion primitive, and the alternative (a lock in the extension) is the race section 2 exists to remove. Two controllers serialize against each other; that is a throughput cost, not shared state |
 | `xhciStartEpoch` (`src/xhci_cmd.c`) | 4 | The start-token allocator | A token source, not a count of anything. No controller's behaviour depends on its value; each extension records the token it was handed, and every comparison is for equality. Allocated with `InterlockedIncrement` because it is shared and PnP can start two controllers at once |
 | `XhciRegPacket` (`src/xhci_dispatch.c`) | 316 | The registration packet | Write-once, before registration, and read-only for the life of the load. Every assignment to it is inside `xhciFillPacket`, whose only caller in a shipping image is `DriverEntry` (the second caller is `XhciFillPacketForTest`, compiled only under `XHCI_HOST_TEST`). It is also the service table the miniport calls through, so the ABI record says to keep it global |
+| `xhciDeliveryLock` (`src/xhci_cmd.c`), added 2026-09-13 after the sweep above was taken | 4 | The second `KSPIN_LOCK`, section 7 "Where a completion may be handed over" | The same argument as the first: a mutual-exclusion primitive carrying no controller information, held across one usbport service call so that the call is made at DISPATCH_LEVEL from every context. Two controllers serialize their completion hand-overs against each other, which is a throughput cost and not shared state. The sweep's "exactly three" is the batch 11-A measurement and now reads four |
 
 The verdict is pass, and it rests on a distinction worth stating because the
 rule can be read as banning all three. What the rule forbids is controller

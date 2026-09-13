@@ -127,11 +127,45 @@ static LONG xhciStartEpoch;
  */
 static KSPIN_LOCK xhciControllerLock;
 
+/*
+ * The second lock, and it protects no state at all: it is held across the
+ * `UsbPortCompleteTransfer` / `UsbPortCompleteIsoTransfer` call so that the
+ * call is made at DISPATCH_LEVEL from every context, which is what stops an
+ * NT 6.x usbport's done DPC - queued inside that service before its queued
+ * state is stored - from running on the same CPU before the store (issue 7;
+ * `XHCI_EXTENSION.DeliverUnderUsbportLockOnly`). A private lock rather than a
+ * raised IRQL because the import ceiling has spin locks and no
+ * `KeRaiseIrql`. Never held with the controller lock, and the service takes
+ * no usbport lock and re-enters no miniport slot, so it is innermost too.
+ *
+ * IRQL: DISPATCH_LEVEL while held.
+ */
+static KSPIN_LOCK xhciDeliveryLock;
+
 /* IRQL: PASSIVE_LEVEL (DriverEntry only). */
 VOID XhciControllerGlobalInit(VOID)
 {
     KeInitializeSpinLock(&xhciControllerLock);
+    KeInitializeSpinLock(&xhciDeliveryLock);
 }
+
+VOID XhciDeliveryLockAcquire(PKIRQL oldIrql)
+{
+    KeAcquireSpinLock(&xhciDeliveryLock, oldIrql);
+}
+
+VOID XhciDeliveryLockRelease(KIRQL oldIrql)
+{
+    KeReleaseSpinLock(&xhciDeliveryLock, oldIrql);
+}
+
+#ifdef XHCI_HOST_TEST
+/* The host model tells the two locks apart by address; nothing else may. */
+PKSPIN_LOCK XhciHostDeliveryLockWord(VOID)
+{
+    return &xhciDeliveryLock;
+}
+#endif
 
 /*
  * Functions rather than an exposed lock word: every user has one spelling for

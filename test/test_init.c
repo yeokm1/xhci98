@@ -1868,8 +1868,30 @@ VOID XhciHostInitSpinLock(PKSPIN_LOCK lock)
     *lock = 0;
 }
 
+/*
+ * The delivery lock (issue 7, `src/xhci_cmd.c`): held across the completion
+ * service call so it is made at DISPATCH from every context. Modelled apart
+ * from the controller lock because the two have an order - the controller
+ * lock may be taken inside it (the defensive re-entry vector does exactly
+ * that) and never the other way round - and because the "service under the
+ * controller lock" nets below must not fire on it.
+ */
+static ULONG deliveryLockDepth;
+static ULONG deliveryLockErrorsTotal;
+
 VOID XhciHostAcquireSpinLock(PKSPIN_LOCK lock, PKIRQL oldIrql)
 {
+    if (lock == XhciHostDeliveryLockWord()) {
+        /* Nested in itself is the hang; taken under the controller lock is
+         * the order inversion design record 05 section 3 forbids. */
+        if (deliveryLockDepth != 0 || commandLockDepth != 0) {
+            deliveryLockErrorsTotal++;
+        }
+        deliveryLockDepth++;
+        *lock = 1;
+        *oldIrql = 0;
+        return;
+    }
     commandLockAcquires++;
     if (commandLockDepth != 0) {
         /* On the target this is not a warning, it is a hang: a DISPATCH-level
@@ -1898,6 +1920,15 @@ VOID XhciHostReleaseSpinLock(PKSPIN_LOCK lock, KIRQL oldIrql)
     PVOID dpcExtension;
 
     (void)oldIrql;
+    if (lock == XhciHostDeliveryLockWord()) {
+        if (deliveryLockDepth == 0) {
+            deliveryLockErrorsTotal++;
+        } else {
+            deliveryLockDepth--;
+        }
+        *lock = 0;
+        return;
+    }
     resetExtension = NULL;
     dpcExtension = NULL;
     commandLockReleases++;
@@ -2175,6 +2206,13 @@ static ULONG completeTransferReentries;
  */
 static ULONG completeTransferInSubmit;
 static ULONG completeTransferInSubmitTotal;
+/*
+ * **And it must always be called under the delivery lock** (issue 7): the
+ * lock is the raise to DISPATCH that keeps an NT 6.x usbport's done DPC from
+ * running on this CPU between its `KeInsertQueueDpc` and its state store. A
+ * never-reset net over both services.
+ */
+static ULONG completeTransferOutsideDeliveryLockTotal;
 
 /*
  * "usbport's callback returned, and the next context that drains ran." Every
@@ -2212,6 +2250,9 @@ static VOID NTAPI hc_complete_transfer(PVOID extension,
     if (commandLockDepth != 0) {
         completeTransferUnderLock++;
         completeTransferUnderLockTotal++;
+    }
+    if (deliveryLockDepth == 0) {
+        completeTransferOutsideDeliveryLockTotal++;
     }
 
     if (completeTransferReenters) {
@@ -2288,6 +2329,9 @@ static ULONG NTAPI hc_complete_iso_transfer(PVOID extension,
         isoBlockNullBlocks++;
     }
     note_no_lock_here("UsbPortCompleteIsoTransfer");
+    if (deliveryLockDepth == 0) {
+        completeTransferOutsideDeliveryLockTotal++;
+    }
     if (commandLockDepth != 0) {
         completeTransferUnderLock++;
         completeTransferUnderLockTotal++;
@@ -20025,6 +20069,236 @@ static void test_slot_abort_takes_it_off_the_completion_list(void)
 }
 
 /*
+ * **Issue 7: on the Version 300 tier a completion is handed over only from a
+ * callback usbport makes under its EpList lock.** An NT 6.x usbport's
+ * completion service queues its done DPC before storing the DPC's queued
+ * state and takes no lock of its own; the r5 arrest was a completion this
+ * driver delivered from `RH_GetPortStatus`, which usbport calls at PASSIVE
+ * with no lock, so the DPC ran first, read idle, and the done list was marked
+ * queued for ever. Microsoft's usbehci completes from PollEndpoint alone.
+ *
+ * So with the tier's gate set the event DPC retires the transfer, reports
+ * bit 0, and delivers nothing; the root-hub query, a bare drain and the
+ * health poll all leave it parked; PollEndpoint delivers it.
+ */
+static void test_slot_completion_waits_for_poll_endpoint(void)
+{
+    PXHCI_DEVICE dev;
+    PXHCI_ENDPOINT_RECORD record;
+    USBPORT_PORT_STATUS_AND_CHANGE portStatus;
+    ULONG completions;
+    ULONG result;
+
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                       USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
+    deliver_events();
+    record = &dev->Endpoints[0];
+    (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
+                          &slotSgList);
+
+    ext.DeliverUnderUsbportLockOnly = 1;
+    completions = completeTransferCalls;
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
+                     XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(5) | XHCI_TRB_EP_ID(3));
+    (void)XhciIsr(&ext);
+    result = XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(record->Queue.Count, 0, "the event took it off the queue");
+    CHECK_EQ(ext.CompletionsOwed, 1, "and onto the completion list");
+    CHECK_EQ(completeTransferCalls, completions,
+             "where the event DPC leaves it - it is not a locked context");
+    /* Once per pass, and the DPC makes two: the root hub's deferred work
+     * ends in the device layer's drain, then the DPC calls it again. */
+    CHECK_EQ(ext.CompletionsHeldForPoll, 2, "and says so, once per pass");
+    CHECK_EQ(result & USBPORT_DPC_EX_TRANSFER_WORK, USBPORT_DPC_EX_TRANSFER_WORK,
+             "and reports transfer work, as usbehci would");
+
+    /* The r5 context: a root-hub port query, PASSIVE and unlocked on the
+     * target. It drains (its refresh can tear a device down) but delivers
+     * nothing. */
+    (void)XhciRegPacket.RH_GetPortStatus(&ext, 3, &portStatus);
+    CHECK_EQ(completeTransferCalls, completions,
+             "RH_GetPortStatus does not deliver it");
+    XhciSlotDeferredWork(&ext);
+    CHECK_EQ(completeTransferCalls, completions, "nor a bare drain");
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(completeTransferCalls, completions,
+             "nor the first health poll, which only arms the fallback");
+    CHECK_EQ(ext.CompletionFallbackArmed, 1, "(armed)");
+    /* The query, the bare drain, and the poll's two (the root hub's sweep
+     * and the device layer's). */
+    CHECK_EQ(ext.CompletionsHeldForPoll, 6, "each pass counted once");
+
+    XhciRegPacket.PollEndpoint(&ext, &slotEndpoint2);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "PollEndpoint - usbport's HcInt pass, under its EpList lock - "
+             "delivers it");
+    CHECK_EQ(ext.CompletionsDeliveredLocked, 1, "counted as delivered locked");
+    CHECK_EQ(ext.CompletionsDeliveredForced, 0, "not forced");
+    CHECK_EQ(ext.CompletionsOwed, 0, "and the list is empty");
+    CHECK_EQ(ext.CompletionFallbackArmed, 0, "which disarms the fallback");
+    CHECK_EQ(ext.PollEndpointCalls, 1, "(the callback counted)");
+    CHECK_EQ(XhciRegPacket.InterruptDpc(&ext, TRUE) &
+                 USBPORT_DPC_EX_TRANSFER_WORK, 0,
+             "and a DPC with nothing parked reports no transfer work");
+    ext.DeliverUnderUsbportLockOnly = 0;
+}
+
+/*
+ * The same tier, the safety net: an endpoint usbport stopped polling. The
+ * health poll arms on the first pass that finds the list non-empty, and after
+ * XHCI_COMPLETION_FALLBACK_MS on the poll clock delivers the completion
+ * itself - forced, at DISPATCH under the delivery lock, outside usbport's -
+ * and counts the poll that did so.
+ */
+static void test_slot_completion_fallback_poll(void)
+{
+    PXHCI_DEVICE dev;
+    PXHCI_ENDPOINT_RECORD record;
+    ULONG completions;
+
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                       USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
+    deliver_events();
+    record = &dev->Endpoints[0];
+    (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
+                          &slotSgList);
+
+    ext.DeliverUnderUsbportLockOnly = 1;
+    completions = completeTransferCalls;
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
+                     XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(5) | XHCI_TRB_EP_ID(3));
+    (void)XhciIsr(&ext);
+    (void)XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(ext.CompletionsOwed, 1, "(parked)");
+
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(completeTransferCalls, completions, "the first poll arms");
+    poll_after_ms(XHCI_COMPLETION_FALLBACK_MS / 2UL);
+    CHECK_EQ(completeTransferCalls, completions, "half way is still waiting");
+    CHECK_EQ(ext.CompletionFallbackPolls, 0, "(not fired)");
+    poll_after_ms(XHCI_COMPLETION_FALLBACK_MS);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "past the threshold the poll delivers it");
+    CHECK_EQ(ext.CompletionFallbackPolls, 1, "and counts the poll that did");
+    CHECK_EQ(ext.CompletionsDeliveredForced, 1, "as a forced delivery");
+    CHECK_EQ(ext.CompletionsDeliveredLocked, 0, "not a locked one");
+    CHECK_EQ(ext.CompletionFallbackArmed, 0, "and the net disarmed");
+
+    /* One completion, one fallback: a later poll with nothing parked does not
+     * fire again. */
+    poll_after_ms(XHCI_COMPLETION_FALLBACK_MS * 2UL);
+    CHECK_EQ(ext.CompletionFallbackPolls, 1, "and only once");
+    ext.DeliverUnderUsbportLockOnly = 0;
+}
+
+/*
+ * The other two locked contexts, and the lifecycle override. `AbortTransfer`
+ * and `SetEndpointState` are reached through usbport's EpList lock too, so a
+ * completion parked when either arrives is delivered from inside it; and the
+ * suspend drain, where usbport's own deliverers are gated off, forces the
+ * hand-over rather than leaving a completion parked across the suspend.
+ */
+static void test_slot_completion_locked_contexts_and_forced(void)
+{
+    PXHCI_DEVICE dev;
+    PXHCI_ENDPOINT_RECORD record;
+    ULONG completions;
+
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                       USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
+    deliver_events();
+    record = &dev->Endpoints[0];
+
+    /* SetEndpointState. */
+    (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
+                          &slotSgList);
+    ext.DeliverUnderUsbportLockOnly = 1;
+    completions = completeTransferCalls;
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
+                     XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(5) | XHCI_TRB_EP_ID(3));
+    (void)XhciIsr(&ext);
+    (void)XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(completeTransferCalls, completions, "(parked)");
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint2,
+                                   USBPORT_ENDPOINT_ACTIVE);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "SetEndpointState delivers what was parked");
+    CHECK_EQ(ext.CompletionsDeliveredLocked, 1, "as a locked delivery");
+
+    /* The forced drain. */
+    (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
+                          &slotSgList);
+    completions = completeTransferCalls;
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
+                     XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(5) | XHCI_TRB_EP_ID(3));
+    (void)XhciIsr(&ext);
+    (void)XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(completeTransferCalls, completions, "(parked)");
+    XhciSlotDeferredWorkForced(&ext);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "a forced drain delivers it from an unlocked context");
+    CHECK_EQ(ext.CompletionsDeliveredForced, 1, "and counts it as forced");
+
+    /* And the tier's other half: with the gate off, the event DPC delivers
+     * as it always did and reports no transfer work. */
+    ext.DeliverUnderUsbportLockOnly = 0;
+    (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
+                          &slotSgList);
+    completions = completeTransferCalls;
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
+                     XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(5) | XHCI_TRB_EP_ID(3));
+    (void)XhciIsr(&ext);
+    CHECK_EQ(XhciRegPacket.InterruptDpc(&ext, TRUE) &
+                 USBPORT_DPC_EX_TRANSFER_WORK, 0,
+             "the 200 tier reports no transfer work");
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "because the event DPC delivered it");
+    CHECK_EQ(ext.CompletionsHeldForPoll, 4,
+             "(the two DPCs' holds above, two passes each, no more)");
+
+    /* AbortTransfer of a second transfer, with a third parked: the abort
+     * takes its own transfer off the list and delivers the other. Last,
+     * because its asynchronous half leaves the endpoint mid-stop. */
+    ext.DeliverUnderUsbportLockOnly = 1;
+    (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
+                          &slotSgList);
+    (void)slot_submit_int(&slotEndpoint2, &slotParams2, &slotTransfer2,
+                          &slotSgList2);
+    completions = completeTransferCalls;
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
+                     XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(5) | XHCI_TRB_EP_ID(3));
+    (void)XhciIsr(&ext);
+    (void)XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(ext.CompletionsOwed, 1, "(the first parked)");
+    {
+        ULONG length;
+
+        length = 0;
+        XhciRegPacket.AbortTransfer(&ext, &slotEndpoint2, &slotTransfer2,
+                                    &length);
+    }
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "AbortTransfer's pass delivers the parked one");
+    CHECK_EQ(ext.CompletionsDeliveredLocked, 2, "locked again");
+    ext.DeliverUnderUsbportLockOnly = 0;
+}
+
+/*
  * **And the search must not depend on the device record resolving.** A Disable
  * Slot completion releases the record - zeroing it - with its cancelled
  * transfers parked on the completion list, and the `SubmitDepth` hold can keep
@@ -29167,6 +29441,9 @@ int main(void)
     test_slot_paused_endpoint_is_restarted_by_the_poll();
     test_slot_abort_takes_it_off_the_completion_list();
     test_slot_abort_after_the_record_is_released();
+    test_slot_completion_waits_for_poll_endpoint();
+    test_slot_completion_fallback_poll();
+    test_slot_completion_locked_contexts_and_forced();
     test_slot_completion_holds_for_a_pass_after_the_bracket();
     test_slot_abort_before_the_stop_completes();
     test_slot_reconfigure_with_work();
@@ -29340,6 +29617,12 @@ int main(void)
              "and never from inside a SubmitTransfer callback, anywhere in this "
              "suite - usbport writes to the transfer record after that call "
              "returns success");
+    CHECK_EQ(completeTransferOutsideDeliveryLockTotal, 0,
+             "and always under the delivery lock, anywhere in this suite - the "
+             "raise to DISPATCH that issue 7's lost wakeup needs");
+    CHECK_EQ(deliveryLockErrorsTotal, 0,
+             "and the delivery lock was never nested in itself or taken under "
+             "the controller lock");
 
     /*
      * The open path's accounting, as a net rather than as a vector (task

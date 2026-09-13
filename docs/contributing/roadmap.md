@@ -3107,6 +3107,24 @@ reading may not tick a box whose line names a guest.
           own experiment, and it held.** Evidence in `vm\ring-win7x64-re1\`.
           What is still owed here: the x86 guest re-run single-processor,
           and the identity of the two objects
+      - [x] **2026-09-13, host-side: the two objects named, the cause
+            read, and the fix landed in source - live re-run owed.** The
+            objects are two usbport transfer records (`TrxC`) on the FDO's
+            all-transfers list, which `Tmt2` walks - a count of outstanding
+            transfers, one of them the mouse's standing read, not of blocked
+            threads. The cause: NT 6.x `USBPORTSVC_CompleteTransfer` takes no
+            lock and assumes the miniport calls it from a callback usbport
+            made under its EpList lock (`PollEndpoint`, as usbehci does);
+            this driver delivered from anywhere, and the r5 completion came
+            from `RH_GetPortStatus`, which usbport calls at PASSIVE with no
+            lock, so the done DPC ran on the same CPU before its state store.
+            Fixed: delivery always at DISPATCH under a private lock, and on
+            the 300 tier only from `PollEndpoint` / `AbortTransfer` /
+            `SetEndpointState`, with forced lifecycle drains and a 1 s poll
+            fallback. Host tests 12,675 green with three new vectors and two
+            new nets; both architectures built through every gate. **Not
+            run on a guest.** Issue 7 section 7 is the record; the re-run is
+            the first box of the next session's handoff
     - [ ] **Vista x64: REMOVE/RESCAN does not complete, twice, and that
           clause had never been run on this guest.** Device Manager Uninstall
           of the devnode (package left in the store) wedged: attempt 1 sent
@@ -3173,6 +3191,13 @@ reading may not tick a box whose line names a guest.
           either a second disclosed limitation or an explicitly untested
           clause, and saying nothing at all is the one option that is not
           honest
+    - [ ] **The premise of this box changed on 2026-09-13**: the defect's
+          cause was read and is fixed in source (22.5's last sub-box,
+          issue 7 section 7), and the fault was this driver's completion
+          context rather than usbport's alone. If the re-run holds on all
+          four NT 6.x guests the disclosure becomes a note that `1.1.0.0`
+          carries the fix and what it was; if it does not, the boxes above
+          stand as written. Draft nothing here until the re-run is read
 
 - [ ] **22.7 - a charset gate on tracked source.** Added after the cut tasks
       were written and numbered 22.10 at first; renumbered here so the phase

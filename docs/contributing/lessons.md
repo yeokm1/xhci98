@@ -8729,3 +8729,35 @@ place; capture the raw output first and look at its head.
 Reusable rule: before disassembling a Microsoft binary by hand, dump its
 `RSDS` GUID and ask the symbol server. If a PDB exists, read the wrappers by
 name and spend the hand work on what the names do not settle.
+
+## A usbport service's lock assumptions are not in its signature
+
+Issue 7 cost four guest runs, two log rings, and a static read of three
+`usbport.sys` builds before the last hour of reading found that the
+defect was on this side of the boundary. The write-after-queue in
+`USBPORT_Xdpc_iSignal` is real, and it was correctly read as the place the
+wakeup is lost. What the reading stopped short of asking was **what makes
+that order safe for Microsoft's own miniport**, and the answer - usbport
+holds its EpList lock across the callbacks it makes through
+`iSetGlobalEndpointStateTx`, and `USBPORTSVC_CompleteTransfer` is written
+on the assumption that its caller is one of them - is not visible in the
+service's signature, its documentation, or ReactOS, which has no Xdpc state
+machine at all. It is visible in two places only: the `i` prefix on
+`Core_iCompleteTransfer`, and the fact that `usbehci.sys` calls the service
+from `PollEndpoint` and from nowhere else.
+
+Two things would have found it a day earlier. The driver's own callback log
+records the IRQL of every callback, and it had been saying
+`RH_GetPortStatus irql=00` on every NT 6.x run while the locking record
+said DISPATCH under `MiniportSpinLock`; a table that contradicts a
+measurement is the finding, not the measurement. And the healthy ring
+carried the control: for the same DPC object the order was always signal,
+store, ISR DPC exit, then the DPC firing, and a DPC that fires before the
+ISR DPC exits on a system that sets no target processor can only have been
+queued from below DISPATCH.
+
+Reusable rule: when a usbport path looks racy, read the vendor's miniport
+for the context it calls that path from before concluding the race is
+usbport's. A service with an `i`-prefixed body is a service with a lock
+assumption, and the miniport that ships with the OS is the specification of
+which callbacks satisfy it.

@@ -888,6 +888,8 @@ static VOID xhciLogStart(PXHCI_EXTENSION ext)
  * IRQL: PASSIVE_LEVEL (usbport calls it from its start-device path; UsbPortWait
  * is legal here and nowhere else in this file).
  */
+static ULONG xhciInterfaceVersionPresented;
+
 static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
                                           PUSBPORT_RESOURCES resources)
 {
@@ -937,6 +939,16 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
      * guarantee if the epoch is ever stored earlier.
      */
     XhciCommandInit(ext);
+    /*
+     * The tier decides where a completion may be handed over (issue 7,
+     * XHCI_EXTENSION.DeliverUnderUsbportLockOnly): a Version 300 usbport's
+     * completion service assumes its EpList lock is held by the caller, a
+     * Version 200 one synchronises itself. Set before the signatures so no
+     * callback can observe the extension without it.
+     */
+    ext->DeliverUnderUsbportLockOnly =
+        (xhciInterfaceVersionPresented >= USBPORT_NT6_MINIPORT_INTERFACE_VERSION)
+            ? 1UL : 0UL;
 
     ext->Signature = XHCI_EXTENSION_SIGNATURE;
     ext->TrailingSignature = XHCI_EXTENSION_TRAILING;
@@ -1229,10 +1241,17 @@ static ULONG NTAPI xhciInterruptDpc(PVOID miniPortExtension,
          * the hub driver should look at the ports. The body still calls
          * UsbPortInvalidateRootHub itself where it always did; on NT 6.x that
          * and this bit reach the same place twice, which is harmless, and on
-         * NT 5.x the bit is simply not read. Bit 0 - usbehci's "transfer
-         * interrupt with pending work" - is not reported, because this driver
-         * completes transfers from the drain itself and has nothing pending
-         * for usbport to poll.
+         * NT 5.x the bit is simply not read.
+         *
+         * Bit 0 - usbehci's "transfer interrupt with pending work" - is
+         * reported on the Version 300 tier whenever the drain left a
+         * completion parked for PollEndpoint, which since issue 7's cause was
+         * read is every completion the event DPC retires: on that tier the
+         * completion service is safe only from a callback usbport makes under
+         * its EpList lock, so this DPC retires and PollEndpoint delivers.
+         * usbport's IsrDpc signals the HcInt pass on every return regardless;
+         * the bit is what usbehci returns, and reporting it keeps this
+         * miniport's shape the one that usbport was written against.
          */
         portChangesBefore = ext->EventCounts[XHCI_EVENT_TYPE_INDEX(
             XHCI_TRB_TYPE_PORT_STATUS_CHANGE)];
@@ -1242,6 +1261,15 @@ static ULONG NTAPI xhciInterruptDpc(PVOID miniPortExtension,
         if (ext->EventCounts[XHCI_EVENT_TYPE_INDEX(
                 XHCI_TRB_TYPE_PORT_STATUS_CHANGE)] != portChangesBefore) {
             result = USBPORT_DPC_EX_PORT_CHANGE;
+        }
+        if (ext->DeliverUnderUsbportLockOnly) {
+            KIRQL oldIrql;
+
+            XhciControllerLockAcquire(&oldIrql);
+            if (ext->CompletionHead != NULL) {
+                result |= USBPORT_DPC_EX_TRANSFER_WORK;
+            }
+            XhciControllerLockRelease(oldIrql);
         }
     }
 
@@ -2144,6 +2172,26 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
                            ext->CompletionsHeldByPass);
     XHCI_DBG_VALUE_CHANGED("deferred-work re-entries declined",
                            ext->DeferredReentries);
+    /*
+     * Issue 7's delivery gate, Version 300 only (all of these stay 0 on the
+     * 200 tier but the last). Held-for-poll is expected nonzero and roughly
+     * tracks the event DPC's passes; delivered-locked is the ordinary
+     * PollEndpoint route and should carry nearly every completion;
+     * delivered-forced is the lifecycle drains plus the fallback, and
+     * fallback polls climbing during ordinary traffic means usbport stopped
+     * polling an endpoint that owed work.
+     */
+    XHCI_DBG_VALUE_CHANGED("completions delivered only under usbport's lock",
+                           ext->DeliverUnderUsbportLockOnly);
+    XHCI_DBG_VALUE_CHANGED("completions held for PollEndpoint",
+                           ext->CompletionsHeldForPoll);
+    XHCI_DBG_VALUE_CHANGED("completions delivered under usbport's lock",
+                           ext->CompletionsDeliveredLocked);
+    XHCI_DBG_VALUE_CHANGED("completions delivered forced",
+                           ext->CompletionsDeliveredForced);
+    XHCI_DBG_VALUE_CHANGED("completion fallback polls",
+                           ext->CompletionFallbackPolls);
+    XHCI_DBG_VALUE_CHANGED("PollEndpoint callbacks", ext->PollEndpointCalls);
     XHCI_DBG_VALUE_CHANGED("submit brackets closed with none open",
                            ext->SubmitUnderflows);
     /*
@@ -3484,14 +3532,42 @@ static VOID NTAPI xhciSetEndpointState(PVOID miniPortExtension,
     }
     XhciProbeEndpoint(ext, XHCI_PROBE_EVENT_SET_STATE, NULL,
                       (const XHCI_ENDPOINT *)endpointExtension, state);
+    /*
+     * Reached through `USBPORT_SetGlobalEndpointState`, which takes the
+     * EpList lock first (win7-x86 `+7a`, static), so the drains inside are
+     * `XhciSlotDeferredWorkLocked` - one of the contexts the Version 300
+     * delivery gate admits.
+     */
     XhciSlotSetEndpointState(ext, (PXHCI_ENDPOINT)endpointExtension, state);
 }
 
-/* IRQL: DISPATCH_LEVEL. */
+/*
+ * **The ordinary deliverer on the Version 300 tier** (issue 7). An NT 6.x
+ * usbport's HcInt worker, signalled from `USBPORT_IsrDpc` on every pass,
+ * walks every active endpoint under its EpList lock and reaches this
+ * callback for each through `iSetGlobalEndpointStateTx`, which is the one
+ * context in which `USBPORTSVC_CompleteTransfer` is safe - Microsoft's usbehci
+ * completes transfers from here and nowhere else. The event DPC still
+ * retires the TDs; this is where their completions are handed over. On the
+ * 200 tier usbport reaches it after an `InvalidateEndpoint`, and draining
+ * here is harmless there too.
+ *
+ * IRQL: DISPATCH_LEVEL, under MiniportSpinLock and usbport's EpList lock.
+ */
 static VOID NTAPI xhciPollEndpoint(PVOID miniPortExtension,
                                    PVOID endpointExtension)
 {
+    PXHCI_EXTENSION ext;
+
+    ext = (PXHCI_EXTENSION)miniPortExtension;
+
     XHCI_DBG_CB("PollEndpoint", miniPortExtension, endpointExtension, 0);
+
+    if (!xhciExtensionValid(ext)) {
+        return;
+    }
+    ext->PollEndpointCalls++;
+    XhciSlotDeferredWorkLocked(ext);
 }
 
 /*
@@ -3718,6 +3794,8 @@ static VOID NTAPI xhciAbortTransfer(PVOID miniPortExtension,
      * rewritten as No Ops around any surviving work - and the deferred pass
      * drives it. (An earlier comment here called that half future work.)
      */
+    /* Under usbport's EpList lock (`Core_iAbortEndpoint`), so the drain
+     * inside is `XhciSlotDeferredWorkLocked`. */
     XhciSlotAbortTransfer(ext, (PXHCI_ENDPOINT)endpointExtension,
                           (PXHCI_TRANSFER)transferExtension, completedLength);
 }

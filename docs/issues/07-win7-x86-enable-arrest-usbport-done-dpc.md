@@ -1,6 +1,18 @@
 # Issue 7 - An enable on Windows 7 x86 intermittently loses one device, and the completion it is waiting for is dropped inside usbport's own DPC state machine
 
-Status: **open**, and deliberately left open at the `1.1.0.0` cut on the
+Status: **cause read and fixed in source on 2026-09-13; the live re-run is
+owed** - section 7 has the cause, the fix and what the re-run must show.
+The lost wakeup in usbport described below is real, and it is reachable
+only because this driver called usbport's completion service from contexts
+usbport was never written to expect; Microsoft's own miniport never does.
+So the sentence this page carried until 2026-09-13, "the loss is entirely
+inside usbport, on a path guarded by a lock not exposed to miniports", is
+withdrawn: the lock is not exposed, and usbport assumes the miniport is
+already inside it. Everything from here to section 7 is the record as it
+was written on 2026-09-12 and is kept as it stood, with the corrections
+marked where they land.
+
+Was: open, and deliberately left open at the `1.1.0.0` cut on the
 owner's ruling of 2026-09-12. Observed on the Windows 7 x86 guest across
 four runs on 2026-09-12 (`p225win7x86r2` through `r5`, roadmap task 22.5's
 guest leg). The mechanism below is read from usbport's own log ring,
@@ -45,7 +57,11 @@ write-after-queue race in `USBPORT_Xdpc_iSignal`. The enumeration thread
 is parked in a `KeWaitForSingleObject` with a NULL timeout and
 `Alertable = FALSE`, so nothing - not the cancel that eventually arrives,
 not a rescan - can release it. Only a driver reload does, which is why a
-restart recovers and a rescan does not.
+restart recovers and a rescan does not. **Why the race is reachable at all
+is section 7**: the completion
+that stranded the DPC was delivered from `RH_GetPortStatus`, at PASSIVE
+level with no usbport lock held, and usbport's service assumes its caller
+holds the lock that makes the queue-then-store safe.
 
 ## 1. The symptom
 
@@ -424,7 +440,9 @@ throughout the remaining records.
 
 ## 5. What this leaves for this driver, stated carefully
 
-**This is the part to read before quoting the page.**
+**Superseded by section 7 on 2026-09-13.** The bullets below were true as
+readings of usbport and are kept; what they left open - "whether the defect
+is outside this driver" - is now answered, and the answer is no.
 
 What the evidence licenses:
 
@@ -488,10 +506,13 @@ settled:
 3. **Whether any miniport-visible action can un-strand a DPC already in
    state 2.** On the reading above, no - every later signal is a no-op -
    but this was not chased, and a workaround, if one exists at all, lives
-   here.
+   here. *(2026-09-13: still no, and none is needed - the fix keeps the
+   DPC from being stranded in the first place, section 7.)*
 4. **Whether the window's width depends on this driver's delivery
    pattern**, which would turn an unfixable usbport defect into something
-   this driver could make rare.
+   this driver could make rare. *(2026-09-13: it does, entirely - the
+   window is open only from the contexts this driver was delivering from,
+   section 7.)*
 
 The first of these is now done, so the honest statement has moved, but not
 as far as it may look. The arrest was localised to a usbport code path the
@@ -500,6 +521,143 @@ a prediction; the prediction held on one target, five times over. What is
 still missing is the identity of what usbport is holding, and a
 single-processor run of the **x86** guest this page is named for. Item 2
 below is now the cheapest useful thing left.
+
+## 7. The cause, read 2026-09-13, and the fix
+
+Host-side, no guest. `tools\win7-x86-extracted\usbport.sys` and
+`tools\win7-x64-extracted\usbport.sys` and `usbehci.sys`, with Microsoft's
+public PDBs, read with capstone (`scripts\local\usbport-disasm.py`); the
+r5 arrest ring and the healthy ring beside it; this driver's own callback
+log, which records the IRQL of every callback. All of the binary facts are
+**static** (`legal-provenance.md` section 4).
+
+### 7.1 usbport's contract for its completion service
+
+- `USBPORT_Xdpc_Worker` takes `USBPORT_TxAcquireLock`, which is
+  `USBPORT_AcquireEpListLock` - a per-FDO spin lock (x64: fdo+0xF88) that
+  is neither the ISR DPC's lock (fdo+0x1028) nor `MiniportSpinLock`
+  (fdo+0x868). It reads the DPC's state under that lock, and it calls the
+  worker function with the lock still held.
+- `USBPORT_Xdpc_iSignal` takes no lock and, on state 1, queues the DPC
+  before storing state 2 - section 4.4. The `i` is usbport's convention
+  for "the caller holds the lock"; `USBPORT_Xdpc_Signal` is the locked
+  wrapper and is what `IsrDpc` and the timer DPC call.
+- **`USBPORTSVC_CompleteTransfer` acquires nothing** before calling
+  `USBPORT_Core_iCompleteTransfer`, which ends in `Xdpc_iSignal` (x64 RVA
+  `154dc`: `AssertSig`, the `cmpT` record, `AssertSig`,
+  `EndpointFromHandle`, `Core_iCompleteTransfer`, `WmiLogEvent`; x86 RVA
+  `8d32` the same). So the service is safe only from a caller usbport has
+  already placed under the EpList lock.
+- usbport provides exactly that caller: `USBPORT_Core_UsbHcIntDpc_Worker`,
+  signalled from `IsrDpc` on every pass, walks every active endpoint under
+  the lock and reaches `MPf_PollEndpoint` through
+  `iSetGlobalEndpointStateTx` op `0xE`, once per endpoint per pass.
+  `SubmitTransfer`, `AbortTransfer` and `SetEndpointState` are reached the
+  same way (`iSubmitTransferToMiniport`, `Core_iAbortEndpoint`,
+  `USBPORT_SetGlobalEndpointState+7a` takes the lock first).
+- **Microsoft's usbehci obeys it.** Every call through Windows 7 x64
+  `usbehci.sys`'s `RegistrationPacket`: the CompleteTransfer slot (amd64
+  `+0x1D0`, x86 `+0xFC`) is called only from `EHCI_ProcessDoneAsyncTd+20f`
+  and `EHCI_sMode_PollEndpointSlot+51e/+57c`, both inside `PollEndpoint`.
+  `EHCI_InterruptDpcEx` calls `InvalidateEndpoint` (`+0x1C8`) and one
+  300-tier slot, never the completion service.
+  `USBPORTSVC_InvalidateEndpoint` on Windows 7 is an `AssertSig`-only
+  no-op; the per-pass poll of every active endpoint replaces it.
+- NT 5.x usbport has no Xdpc state machine: the same service does an
+  interlocked insert onto the done list and queues a plain DPC, so it is
+  safe from any context. That is why 98, ME, 2000 and XP never see this.
+
+### 7.2 What this driver did, and the r5 break with its cause
+
+`XhciSlotDeferredWork` delivered completions from whichever context reached
+it - the event DPC (inside usbport's `IsrDpc`, under its interrupt lock, not
+the EpList lock), the health poll, the lifecycle paths, and
+`XhciRhGetPortStatus`. This driver's `PollEndpoint` was a logging stub and
+its `InterruptDpcEx` never reported bit 0, "because this driver completes
+transfers from the drain itself".
+
+The driver's own log records `cb RH_GetPortStatus irql=00` on Windows 7 x86
+and x64 alike, and the binary says why: `USBPORT_RootHub_ClassCommand`
+calls `RH_GetPortStatus` (x86 `+514`) and `RH_GetHubStatus` (`+540`)
+directly, with no lock, at the URB dispatcher's IRQL; only the
+Set/ClearFeature requests go through `USBPORT_RootHub_PortRequest` and its
+spin lock. **Design record 05's row "root-hub status queries: DISPATCH,
+`MiniportSpinLock`" was wrong for NT 6.x** and is corrected.
+
+The r5 break re-read with that (newest-first indices, read down):
+
+| idx | record | who |
+|---|---|---|
+| 964/963 | `iDP+` `iDlk` | CPU B: `IsrDpc` calls our InterruptDpc; the event DPC retires 84566CB8 and queues its completion; its own drain hands off |
+| 955..952 | `quTR neo1 ctw1 rCCM` | CPU A: the hub driver's GET_PORT_STATUS to the root hub enters `RootHub_ClassCommand` - no `rSCM` (`PortRequest`) record follows, so this is the direct, unlocked `RH_GetPortStatus` |
+| 951/950 | `cmpT 0xFC` `cmpU` | CPU A, PASSIVE, no usbport lock: `XhciRhGetPortStatus` -> `XhciSlotDeferredWork` delivers the completion CPU B parked |
+| 948/947 | `cpt0` `Xsi1` | `Core_iCompleteTransfer`, `Xdpc_iSignal` on the Done DPC, state 1, `KeInsertQueueDpc` - **at PASSIVE the DPC interrupt is taken on CPU A at once** |
+| 946/945 | `xdw0` `xdw2 1` | the worker runs on CPU A inside the window, takes the EpList lock (nobody holds it), reads 1 |
+| 944 | `iDuk` | CPU B releases its interrupt lock: B's bracket 963..935 encloses A's records, so they are two CPUs |
+| 943 | `xdw8` | the do-nothing branch |
+| 941 | `xSt0 7 2` | CPU A stores 2. Stranded |
+
+The control: every one of the eight completions in the healthy ring, and
+six of the eight in the arrest ring, were delivered from inside
+`iDlk..iDuk`, and for those the DPC fires only after `iDP-` - a DPC queued
+at DISPATCH on the same CPU waits for the ISR DPC to return, and usbport
+sets no target processor (`Xdpc_InitDpc` is `KeInitializeDpc` alone). The
+only way the worker runs before the store is the signalling CPU being
+below DISPATCH, and the root-hub query is that path.
+
+Why the symptoms looked as they did: it needs the ISR DPC on one CPU to
+retire a transfer while a root-hub query on another is inside the drain, so
+the query delivers it - hence intermittent, hence rare but not impossible
+under `-smp 1` (the interrupt must then land inside the query's own drain
+window), hence heavier during enumeration, when the hub polls port status
+most. And it needs NT 6.x usbport.
+
+### 7.3 The fix
+
+Three parts, all in this driver, host-tested (three new vectors and two
+never-reset nets), built for both architectures, **not yet run on a
+guest**:
+
+1. **Every completion is handed over at DISPATCH_LEVEL**, on every tier and
+   from every context, by holding a private spin lock (`xhciDeliveryLock`,
+   `src\xhci_cmd.c`) across the `UsbPortCompleteTransfer` /
+   `UsbPortCompleteIsoTransfer` call. The lock guards no state; it is the
+   raise, because the import ceiling has spin locks and no `KeRaiseIrql`.
+   This alone closes the same-CPU race above.
+2. **On the Version 300 tier a completion is delivered only from a
+   callback usbport made under its EpList lock** -
+   `XHCI_EXTENSION.DeliverUnderUsbportLockOnly`, set in `StartController`
+   from the interface version presented. `PollEndpoint` now drains, and
+   the drains inside `AbortTransfer` and `SetEndpointState` are
+   `XhciSlotDeferredWorkLocked` - the admission travels with the call, not
+   with a per-controller counter another CPU could ride; the event DPC
+   retires and reports
+   `USBPORT_DPC_EX_TRANSFER_WORK`, as usbehci does, and every other context
+   parks the completion and counts `completions held for PollEndpoint`.
+   This is what closes the transient shape too - an unlocked signal racing
+   `Xdpc_End`'s state-3 read - which the raise alone does not.
+3. **Two overrides so nothing can wait for ever**: the lifecycle drains
+   (suspend, stop, resume, recovery) force delivery, and the health poll
+   delivers anything parked for more than `XHCI_COMPLETION_FALLBACK_MS`
+   (1000 ms, two poll periods), counting `completion fallback polls`. A
+   nonzero fallback count during ordinary traffic says usbport stopped
+   polling an endpoint that owed work, and is the first thing to read.
+
+The 200 tier keeps delivering from the drain, as it always has, and the
+suite's existing nets (never under the controller lock, never inside a
+submit) hold unchanged.
+
+### 7.4 What the re-run must show, and what it does not settle
+
+The four NT 6.x guests under `-smp 4`, `qemu` flavour: install, three
+devices, disable, enable through five cycles each, remove and rescan, with
+the counters read after every cycle - `completions delivered under
+usbport's lock` carrying nearly everything, `completions delivered forced`
+small, `completion fallback polls` zero. Then the NT 5.x legs (98, ME,
+2000, XP32, XP x64), because the delivery lock and the `PollEndpoint`
+drain touch them too. Five clean cycles per guest is what this page said
+it is: not proof of absence. Vista x64's remove/rescan wedge is a different
+clause and is not claimed by this fix until it is re-run.
 
 ## Sources
 
@@ -536,6 +694,13 @@ Tools and tables:
   (PDB age 12), read with `tools\WinDDK71\Debuggers\dbh.exe` and capstone.
   `dbh` wants **hex**, prints a **leading blank line**, and fails silently
   in bursts - re-running the same loop works.
+- Section 7's tools, all git-ignored under `scripts\local\`:
+  `usbport-disasm.py` (capstone over any of the three usbport builds with
+  symbol-annotated calls and cross-references), `usbport-vista-tags.py`
+  (Vista x64 builds its ring tags with byte stores, so no literal exists in
+  the file), `pdbid.py`, `usbport-syms\` (dbh enumerations, unioned over
+  many patterns because `enum *` silently drops symbols), and the tag
+  tables `usbport-ring-tags-win7-x64.txt` / `usbport-ring-tags-vista-x64.txt`.
 
 Working notes, `.claude\memory\` (git-ignored, so they may not be present):
 `leg4-usbport-done-dpc-stranded-2026-09-12`,

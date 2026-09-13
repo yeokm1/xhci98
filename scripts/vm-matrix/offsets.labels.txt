@@ -30,7 +30,12 @@ CommandsTimedOut	commands timed out
 CommandsUnmatched	commands unmatched
 CommandsBadCompletion	commands with a bad completion code
 CommandsReservedBitsSet	commands with reserved bits set
+CompletionFallbackPolls	completion fallback polls
+CompletionsDeliveredForced	completions delivered forced
+DeliverUnderUsbportLockOnly	completions delivered only under usbport's lock
+CompletionsDeliveredLocked	completions delivered under usbport's lock
 CompletionsHeldBySubmit	completions held by a submit
+CompletionsHeldForPoll	completions held for PollEndpoint
 CompletionsHeldByPass	completions held for the next pass
 ResetControllerCalls	controller resets requested of usbport
 DeferredReentries	deferred-work re-entries declined
@@ -227,6 +232,7 @@ MidTdSettles	mid-TD transfers settled by them
 NoOpWitnessFired	No Op self-test witnesses
 OpenRefusalsNoRecord	open refusals - no record
 OrphanedGroupsTotal	orphaned TD groups
+PollEndpointCalls	PollEndpoint callbacks
 PortEventChanges	port event changes
 PortEventsMapped	port events mapped
 PortEventsUnmapped	port events unmapped

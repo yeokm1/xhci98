@@ -4359,6 +4359,14 @@ typedef struct _XHCI_ENDPOINT {
  * rule above XHCI_COMMAND_AGE_MS in src/xhci_hw.h.
  */
 #define XHCI_EP_RESTART_MS      1000UL
+/*
+ * How long a completion may wait on the list for a locked usbport callback
+ * before the health poll delivers it itself (XHCI_EXTENSION
+ * .DeliverUnderUsbportLockOnly). Two poll periods: one to arm, one to fire,
+ * which is long enough for the HcInt pass IsrDpc signals on every interrupt
+ * to have run several times if usbport was ever going to poll the endpoint.
+ */
+#define XHCI_COMPLETION_FALLBACK_MS 1000UL
 
 typedef struct _XHCI_EP_QUIESCE {
     ULONG Flags;                /* XHCI_EPQ_*                              */
@@ -5952,6 +5960,48 @@ typedef struct _XHCI_EXTENSION {
     PXHCI_TRANSFER CompletionHead;
     PXHCI_TRANSFER CompletionTail;
     ULONG CompletionsOwed;
+    /*
+     * **Where a completion may be handed to usbport** (issue 7, the cause read
+     * 2026-09-13). An NT 6.x usbport's `USBPORTSVC_CompleteTransfer` takes no
+     * lock of its own: it runs `USBPORT_Core_iCompleteTransfer`, whose `i`
+     * means "the caller holds the EpList lock", and that function signals the
+     * done DPC by queueing it BEFORE storing its queued state. The only thing
+     * that keeps the DPC's worker from reading the stale idle state and
+     * dropping the work is that lock, which usbport holds across the
+     * callbacks it reaches through `iSetGlobalEndpointStateTx` - PollEndpoint,
+     * SubmitTransfer, AbortTransfer, SetEndpointState - and Microsoft's own
+     * usbehci completes transfers from PollEndpoint alone. Delivered from
+     * anywhere else the state machine can be stranded: the r5 arrest was a
+     * completion delivered from `RH_GetPortStatus`, which usbport calls at
+     * PASSIVE with no lock, so the queued DPC ran on the same CPU before the
+     * store, saw idle, and the done list was marked queued for ever.
+     *
+     * `DeliverUnderUsbportLockOnly` is set on the Version 300 tier. While it
+     * is set, `XhciSlotDeferredWork` parks every completion, and only the two
+     * admitted entry points hand one over: `XhciSlotDeferredWorkLocked`,
+     * called from inside the callbacks usbport makes under that lock, and
+     * `XhciSlotDeferredWorkForced`, the lifecycle paths' and the poll
+     * fallback's override. The admission travels with the call rather than
+     * sitting in a counter here, because a counter is per controller and on
+     * SMP would admit another CPU's drain for as long as one CPU sat inside
+     * an abort. usbport polls every active endpoint on every HcInt pass and
+     * IsrDpc signals that pass on every interrupt, so PollEndpoint is the
+     * ordinary deliverer; the fallback exists for an endpoint usbport has
+     * stopped polling. On the 200 tier the service is self-synchronising (an
+     * interlocked insert and a plain DPC) and every context is safe.
+     */
+    ULONG DeliverUnderUsbportLockOnly;
+    /* The poll's fallback: armed by the first poll that finds the list
+     * non-empty with nothing delivering, fired once XHCI_COMPLETION_FALLBACK_MS
+     * have passed on the poll clock, disarmed when the list empties. */
+    ULONG CompletionFallbackArmed;
+    ULONG CompletionFallbackStamp;
+    /* Once per pass, like the two holds above it. */
+    ULONG CompletionsHeldForPoll;
+    ULONG CompletionsDeliveredLocked;
+    ULONG CompletionsDeliveredForced;
+    ULONG CompletionFallbackPolls;
+    ULONG PollEndpointCalls;
     /*
      * The transfer a `UsbPortCompleteTransfer` call is inside right now, or
      * NULL. It is off both the endpoint queue and the completion list for the

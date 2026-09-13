@@ -1121,7 +1121,7 @@ The opaque `PVOID` arguments follow one convention everywhere:
 | `SuspendController` | `VOID (ext)` [186-187] | Win98: minimal (no real power management). Win2000: actually invoked - implement and verify there |
 | `ResumeController` | `MPSTATUS (ext)` [189-190] | |
 | `InterruptService` | `BOOLEAN (ext)` [192-193] | Real DIRQL ISR body. usbport's ISR wrapper only calls it while its interrupt-enabled flags are set, and queues the DPC only on TRUE [usbport.c:1110-1142]. Claim only if USBSTS.EINT proves ownership |
-| `InterruptDpc` | `VOID (ext, BOOLEAN EnableInterrupts)` [195-198] | DISPATCH_LEVEL under `MiniportInterruptsSpinLock` [usbport.c:1089-1095]. The BOOLEAN is usbport's "interrupts should be enabled" flag - re-arm controller interrupt enables per it. This is where the event ring is drained; complete transfers with `UsbPortCompleteTransfer`, report port changes with `UsbPortInvalidateRootHub` (EHCI DPC does exactly this [usbehci.c:1426-1521]) |
+| `InterruptDpc` | `VOID (ext, BOOLEAN EnableInterrupts)` [195-198] | DISPATCH_LEVEL under `MiniportInterruptsSpinLock` [usbport.c:1089-1095]. The BOOLEAN is usbport's "interrupts should be enabled" flag - re-arm controller interrupt enables per it. This is where the event ring is drained; report port changes with `UsbPortInvalidateRootHub` (EHCI DPC does exactly this [usbehci.c:1426-1521]). **Completing transfers from here is safe on NT 5.x only** - on NT 6.x the completion service assumes usbport's EpList lock is held, which it is not here; see "Completion path" below and issue 7 |
 | `EnableInterrupts` / `DisableInterrupts` | `VOID (ext)` [248-252] | Under `MiniportSpinLock` unless `NOT_LOCK_INT` [usbport.c:553-586]. Called on success of `StartController` [pnp.c:876-878] and around the restart of a controller whose `ResumeController` failed [power.c:192, 212], and not after a successful resume, so the miniport's own resume has to restore the enables. xHCI: clear USBCMD.INTE then IMAN.IE on the way down; on the way up release `ERDP.EHB` first and then set IMAN.IE and USBCMD.INTE, acknowledging nothing (`docs/contributing/implementation-invariants.md`, "Interrupt Ordering") |
 | `CheckController` | `VOID (ext)` [239-240] | Periodic health check, called from the worker thread under `MiniportSpinLock` [usbport.c:1177-1184] and from timer/root-hub paths [usbport.c:1642, roothub.c:682]. Check USBSTS.HCE/HSE here; on fatal error call `UsbPortInvalidateController(ext, USBPORT_INVALIDATE_CONTROLLER_RESET)` |
 | `Get32BitFrameNumber` | `ULONG (ext)` [242-243] | Called frequently under `MiniportSpinLock` (state stamps [endpoint.c:410], iso bookkeeping [endpoint.c:1483], URB frame queries [urb.c:58]). xHCI: `MFINDEX >> 3` + software rollover extension. What this driver publishes is a delta, not the register. MFINDEX is eleven bits of frame and restarts at zero after HCRST, so an absolute reading goes backwards twice a second. usbport's post-open wait is uncapped and compares against a frame stamped before a suspend, so a reader that froze on a halted or suspended controller (Win98 idle-suspends within about half a second of every start, and MFINDEX stops on a halted xHC) would hang the enumerating thread. A controller that cannot be read is therefore answered with an increment, the safe direction since nothing is in flight on a halted xHC. The published number is also kept congruent to MFINDEX's Frame Index, because usbport stamps every isochronous packet from this callback and a Frame ID derived from a stamp is only legal if the two axes agree: the resync after a stall advances the number forward to the next value congruent to the register (at most 2,047 frames, never backwards, so monotonicity is untouched). `FrameCongruent` says when that holds and `FrameResyncSkew` measures how much axis the stall path invented |
@@ -1624,12 +1624,36 @@ cannot support a negative.
 | `SubmitIsoTransfer` | `MPSTATUS (ext, epExt, params, transferExt, PVOID isoParams)` [208-214] | ReactOS's iso path is a stub (`iso.c` is 33 lines; the submit site passes NULL with a FIXME [endpoint.c:1570-1576]), so the layout could not come from there. Derived from both shipping binaries; see "Isochronous transfers" below. The declared signature is confirmed, and the fifth argument is a block usbport carves out of the transfer allocation |
 | `AbortTransfer` | `VOID (ext, epExt, transferExt, PULONG CompletedLength)` [216-221] | DISPATCH under `MiniportSpinLock`; write the bytes actually transferred through arg 4 [endpoint.c:1495-1511]. Arg 3 and arg 4 do not survive the return; see "`AbortTransfer`: what survives the return" below |
 
-Completion path: from `InterruptDpc`, call
+Completion path: call
 `UsbPortCompleteTransfer(ext, epExt, TransferParameters, USBD_STATUS, transferredBytes)`
 - the third argument is the same `PUSBPORT_TRANSFER_PARAMETERS` pointer that
 `SubmitTransfer` received (usbport recovers its transfer record from it), as
 EHCI does [usbehci.c:3041]. Keep that pointer in the miniport transfer
 extension.
+
+**From which context is a term of the ABI on NT 6.x, and it is not written
+down anywhere but in the binaries** (issue 7, read 2026-09-13, static on
+Windows 7 x86 and x64 with Microsoft's public PDBs). `USBPORTSVC_CompleteTransfer`
+acquires no lock and calls `USBPORT_Core_iCompleteTransfer`, whose `i`
+means the caller holds the FDO's EpList lock (`USBPORT_AcquireEpListLock`,
+x64 fdo+0xF88 - not `MiniportSpinLock` and not the `IsrDpc` lock); that
+function signals the done DPC by queueing it before storing its queued
+state, and the DPC's worker takes the same lock before reading the state.
+usbport holds the lock across `PollEndpoint`, `SubmitTransfer`,
+`AbortTransfer` and `SetEndpointState` (all reached through
+`iSetGlobalEndpointStateTx` or a caller that took it), and the shipping
+Windows 7 x64 `usbehci.sys` calls the completion slot (`RegistrationPacket+0x1D0`,
+x86 `+0xFC`) from `EHCI_ProcessDoneAsyncTd` and `EHCI_sMode_PollEndpointSlot`
+only - inside `PollEndpoint` - while `EHCI_InterruptDpcEx` calls
+`InvalidateEndpoint` (`+0x1C8`) and returns bit 0. `USBPORTSVC_InvalidateEndpoint`
+on Windows 7 is an `AssertSig`-only no-op; `USBPORT_Core_UsbHcIntDpc_Worker`,
+signalled from `IsrDpc` on every pass, polls every active endpoint under
+the lock instead. Called from anywhere else - the DPC, a root-hub
+callback, a passive path - the service can strand the done DPC: at PASSIVE
+the queued DPC runs on the same CPU before the store. On NT 5.x the same
+service is an interlocked insert and a plain DPC and any context is safe.
+This driver's rule is design record 05 section 7, "Where a completion may
+be handed over".
 
 usbport does not zero the miniport transfer extension between transfers
 (runtime observation): the extension is interior to a transfer allocation that

@@ -54,7 +54,7 @@ Everything xHCI-specific. The hardware model is unchanged from a monolithic desi
 - Slot/endpoint lifecycle: Enable Slot, Address Device, Configure Endpoint, Disable Slot, device/input contexts - including intercepting usbport's SET_ADDRESS control transfer and emulating it with Address Device (xHCI forbids software-issued SET_ADDRESS; see the enumeration data flow below).
 - Transfer encoding: usbport "submit transfer" calls -> TRBs on the right endpoint ring -> doorbell.
 - Root-hub callbacks: report port count/status, perform port reset, report speed (usbport builds the hub descriptor and PDO from these).
-- Interrupt handling: the miniport's ISR/DPC hooks drain the xHCI event ring and complete transfers back to usbport.
+- Interrupt handling: the miniport's ISR/DPC hooks drain the xHCI event ring and retire transfers. On an NT 5.x usbport the DPC's own drain hands the completions back; on NT 6.x they are handed back from `PollEndpoint`, the callback usbport makes under the lock its completion service assumes (issue 7, design record 05 section 7).
 
 ## Internal Components
 
