@@ -3122,9 +3122,28 @@ reading may not tick a box whose line names a guest.
             the 300 tier only from `PollEndpoint` / `AbortTransfer` /
             `SetEndpointState`, with forced lifecycle drains and a 1 s poll
             fallback. Host tests 12,675 green with three new vectors and two
-            new nets; both architectures built through every gate. **Not
-            run on a guest.** Issue 7 section 7 is the record; the re-run is
-            the first box of the next session's handoff
+            new nets; both architectures built through every gate. Issue 7
+            section 7 is the record
+      - [x] **2026-09-13, the fix RE-RUN on all four NT 6.x guests, and
+            every clause passes on each** (`fix7win7x64`, `fix7vistax64`,
+            `fix7win7x86`, `fix7vistax86`): each off a fresh revert, one
+            install, `-smp 4`, the three devices, five watched
+            disable/enable cycles against a ten-minute threshold fixed
+            before each click, remove and rescan. Every enable reached 3
+            slots / 3 reopened / iso 2 within a minute; every remove's
+            teardown finished within one 30 s sample; every rescan tree was
+            clean. `completions delivered forced` and `completion fallback
+            polls` read 0 on every load - from guest memory on both x86
+            guests, and exactly from the log on amd64, where the other two
+            completion counters are lower bounds at the print cap.
+            **Deviation, stated rather than smoothed over: the first
+            Windows 7 x86 disable was refused by Windows** (a restart prompt
+            twice, nothing reached the driver) and was applied by a restart;
+            what vetoed it was not read. Every later disable on that guest,
+            and every disable on the other three, applied live. Issue 7
+            section 7.5 is the record. **Owed: the NT 5.x legs** (XP x64 for
+            the `200` arm on amd64, then 98, ME, 2000, XP32), where the tier
+            must read `completions delivered only under usbport's lock` 0
     - [ ] **Vista x64: REMOVE/RESCAN does not complete, twice, and that
           clause had never been run on this guest.** Device Manager Uninstall
           of the devnode (package left in the store) wedged: attempt 1 sent
@@ -3137,7 +3156,12 @@ reading may not tick a box whose line names a guest.
           under `-smp 1`**, so do not fold the two together. Note also that
           the 2026-09-11 Vista x64 record covered install, devices, disable
           and enable only - **this clause is newly run, not newly broken.**
-          Evidence in `vm\ring-vistax64-re1\`
+          Evidence in `vm\ring-vistax64-re1\`. **2026-09-13: on the fixed
+          binary (`fix7vistax64`) the remove's teardown finished within the
+          first 30 s sample and the rescan reinstalled clean.** One remove
+          is not proof that the wedge shared issue 7's cause, and the fix
+          was not written against it, so this box stays open until the
+          owner decides what that one remove licenses (22.6)
   - [ ] **the INF for the 6.x installs, an owner's decision on each file.**
         Vista's file queue aborts on the `LayoutFile` copies (task 21.8), and
         the shape that installs is a `.6.0`-decorated models section naming
@@ -3197,7 +3221,11 @@ reading may not tick a box whose line names a guest.
           context rather than usbport's alone. If the re-run holds on all
           four NT 6.x guests the disclosure becomes a note that `1.1.0.0`
           carries the fix and what it was; if it does not, the boxes above
-          stand as written. Draft nothing here until the re-run is read
+          stand as written. Draft nothing here until the re-run is read.
+          **The re-run was read on 2026-09-13 and held on all four**
+          (22.5, issue 7 section 7.5), so the condition for the note is
+          met on NT 6.x. What the note says, and whether it waits for the
+          NT 5.x legs, is the owner's decision and is not yet taken
 
 - [ ] **22.7 - a charset gate on tracked source.** Added after the cut tasks
       were written and numbered 22.10 at first; renumbered here so the phase

@@ -2332,7 +2332,9 @@ disable pass on both; Vista x64's enable passes; **Windows 7 x64's enable
 intermittently arrests** (issue 7, which that evening stopped being an x86-only
 page), and **Vista x64's remove/rescan did not complete**. Read those two
 boxes before running either sequence, so a known result is not re-discovered
-as a surprise.
+as a surprise. **On 2026-09-13 issue 7's fix was run on both, and on both
+32-bit guests too, and every clause passed on all four** (issue 7 section
+7.5): five disable/enable cycles each, and remove and rescan included.
 
 **`TESTSIGNING` has still not been tried on either guest** - it remains an
 open box in 22.5, and F8 is what every run so far has used. **Note that QEMU's

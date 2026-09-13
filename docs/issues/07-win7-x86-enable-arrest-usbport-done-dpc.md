@@ -1,7 +1,12 @@
 # Issue 7 - An enable on Windows 7 x86 intermittently loses one device, and the completion it is waiting for is dropped inside usbport's own DPC state machine
 
-Status: **cause read and fixed in source on 2026-09-13; the live re-run is
-owed** - section 7 has the cause, the fix and what the re-run must show.
+Status: **cause read and fixed in source on 2026-09-13, and the fix re-run
+the same day on all four NT 6.x guests, every clause passing on each**
+(section 7.5, including one Windows 7 x86 disable that Windows itself
+refused and that is stated there, not smoothed over). **The NT 5.x legs
+are still owed**, because the fix changes the delivery path there too.
+Section 7 has the cause, the fix, what the re-run had to show and what it
+showed.
 The lost wakeup in usbport described below is real, and it is reachable
 only because this driver called usbport's completion service from contexts
 usbport was never written to expect; Microsoft's own miniport never does.
@@ -615,8 +620,8 @@ most. And it needs NT 6.x usbport.
 ### 7.3 The fix
 
 Three parts, all in this driver, host-tested (three new vectors and two
-never-reset nets), built for both architectures, **not yet run on a
-guest**:
+never-reset nets), built for both architectures, and **run on the four NT
+6.x guests on 2026-09-13** (section 7.5):
 
 1. **Every completion is handed over at DISPATCH_LEVEL**, on every tier and
    from every context, by holding a private spin lock (`xhciDeliveryLock`,
@@ -659,9 +664,88 @@ drain touch them too. Five clean cycles per guest is what this page said
 it is: not proof of absence. Vista x64's remove/rescan wedge is a different
 clause and is not claimed by this fix until it is re-run.
 
+### 7.5 The re-run, 2026-09-13: the four NT 6.x guests
+
+Each guest was reverted to its clean-install snapshot (`qemu-img check`
+clean before and after), installed **once** with the `qemu` flavour, run
+under `-smp 4` on QEMU 11.1.0, and put through the section 7.4 sequence:
+install, the three devices (HID mouse, mass storage, composite audio),
+five watched disable/enable cycles, remove (Uninstall, package left in the
+store) and a rescan. **The wait threshold was fixed at ten minutes before
+every click and held**; a watcher sampled the debug log every 30 s from
+before the click to the result. The binaries: amd64 sha256 `249badfe...`,
+built `Sep 13 2026 00:44:14`; x86 sha256 `A74734C3...`, built `Sep 13 2026
+00:40:04`. The stamp was read on every load.
+
+| guest | tag | install + devices | enables | remove / rescan |
+|---|---|---|---|---|
+| Windows 7 x64 | `fix7win7x64` | ALL PASS; 3 slots / 3 reopened / iso 2 | 5 of 5, each within 30-31 s | remove complete within 30 s; rescan clean |
+| Vista x64 | `fix7vistax64` | ALL PASS; 3 / 3 / iso 2 | 5 of 5, each within one 30 s sample | remove complete within the first 30 s sample; rescan clean |
+| Windows 7 x86 | `fix7win7x86` | ALL PASS; 3 / 3 / iso 2 on all seven loads | 5 of 5, each within 30-60 s | remove complete within one sample; rescan clean |
+| Vista x86 | `fix7vistax86` | ALL PASS; 3 / 3 / iso 2 on all seven loads | 5 of 5, each within one 30 s sample | remove complete within one sample; rescan clean |
+
+Every tree after the rescan showed the controller, the root hub, the
+composite and mass-storage devices, the HID mouse and the audio device,
+with no bangs. Windows 7 x64 is the guest whose enable arrested on the
+**first** attempt on 2026-09-12, and Windows 7 x86 is the guest this page is
+named for; on 2026-09-12 its fourth leg had also come back with two devices
+reopened and no iso endpoints, and on this run all seven loads read three
+and two.
+
+**The counters, and how far each can be trusted.** On the two x86 guests
+they were read out of guest memory (`XHCI_EXTENSION`, 91,644 bytes,
+signature-checked at the base) after every load: `transfers completed` is
+`transfers submitted` less 2, `completions delivered under usbport's lock`
+is `transfers completed` less 1 to 3, `completions held for PollEndpoint` is
+in the tens of thousands, and **`completions delivered forced`, `completion
+fallback polls` and `ResetController` are 0 on every load**. On the two
+amd64 guests the extension is 95,528 bytes, the x86 offsets table does not
+describe it, and the change-gated debug log is the only instrument. That
+log caps each print site at 32 samples a load, so there `delivered under
+usbport's lock` (31-32 against 31 completed) and `held for PollEndpoint`
+are lower bounds taken at the cap. `forced 0`, `fallback 0` and `only under
+usbport's lock 1` are exact there too: a counter that never changes prints
+no change for the cap to hide. `forced` is 0 rather than the small number
+section 7.4 expected because the lifecycle drains found nothing parked.
+
+**One deviation, on Windows 7 x86, and its cause is not known.** The first
+disable after the hot-plug was refused by Windows: Device Manager asked to
+restart twice, the operator declined both times, the watcher saw nothing
+reach the driver, and the device then offered Enable. No Explorer or
+AutoPlay window was open. That disable was applied by restarting the guest
+instead; the shutdown took the ordinary suspended-controller stop, so that
+guest's first enable followed a restart rather than a live disable.
+**Event Viewer was not read before the restart, so what vetoed it is not
+recorded.** Disables 2 to 5 on that guest, and every disable on the other
+three, applied live with no prompt, and the teardown finished within one
+sample each time. On Vista x86, run afterwards with the same sequence, the
+first disable applied live. A disable that asks to restart never reaches this
+driver, so this is not evidence against the fix. It is still an unexplained
+refusal, and the next guest that shows one should have Kernel-PnP event 225
+read before anything else.
+
+What this establishes: on each of the four NT 6.x guests, under four
+virtual processors, the sequence that arrested before the fix completed
+five times over, with the completion path running as section 7.3 designed
+it and the fallback never needed. It does **not** establish absence: five
+cycles a guest is what section 6 said it is. It does not reach real
+hardware. **The NT 5.x legs have not been run against this binary**, and
+the delivery lock and the `PollEndpoint` drain change them too; there the
+200 tier must read `completions delivered only under usbport's lock` 0.
+Vista x64's remove wedge of 2026-09-12 did not recur in one remove. That
+suggests it shared this cause, but one remove does not show it, and the fix
+was not written against it.
+
 ## Sources
 
 Evidence, all under `vm\`:
+
+- `vm\fix-issue7-win7-x64\`, `vm\fix-issue7-vista-x64\`,
+  `vm\fix-issue7-win7\` and `vm\fix-issue7-vista\` - the 2026-09-13 re-run
+  (section 7.5): each guest's full debug log and QEMU trace, the
+  `read-v300.ps1` reading per stage, every disable/enable/remove/rescan
+  watcher's samples, the x86 guests' counter reads from memory, and the
+  post-rescan Device Manager screenshots
 
 - `vm\ring-r5-ARREST-enable\` - the arrest's ring (`.bin`, decoded `.txt`,
   and a 2 MB window), copied to
