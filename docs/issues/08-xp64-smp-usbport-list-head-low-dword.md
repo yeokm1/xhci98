@@ -1,7 +1,8 @@
 # Issue 8 - Windows XP x64 at four vCPUs rarely bugchecks in usbport, on a list head whose low 32 bits were overwritten
 
-Status: **fixed in this driver on 2026-09-14 (section 4c), uncommitted at the
-time of writing; one run, not yet a leg.** The cause is this driver's: on XP
+Status: **fixed in this driver on 2026-09-14 (section 4c, commit `20af60b`),
+and issue 7 section 7.8's XP x64 four-vCPU leg passed on the committed build
+the same day** - two clean runs, not proof. The cause is this driver's: on XP
 x64 it handed completions to usbport from contexts that did not hold the
 transfer's own endpoint lock, and XP x64's completion service needs that lock
 (section 4c). The corruption itself is a store by usbport, caught by a
@@ -364,6 +365,14 @@ loads by chance is about one in fifteen. That supports the fix; it is one run
 on one guest, not proof, and the build it ran differs from the committed one
 only in comments and its build stamp.
 
+**runtime** - 2026-09-14 evening, the committed build (SHA-256
+`0BD32770...8502F13E`, rebuilt from `d1b4e71`) through issue 7's full leg at
+`-smp 4` with the same watch: settled read, five live disable/enable cycles,
+remove and rescan, **0 bugchecks, 0 of 17 watch records zeroing the low half,
+forced and fallback 0 on every load**. Issue 7 section 7.8 is the record,
+including a first rescan that reinstalled the older build from the transfer
+drive and was taken again.
+
 **What this does not cover:**
 
 - **The 32-bit Version 200 targets** (Windows 98 SE, ME, 2000 SP4, XP SP3)
@@ -471,6 +480,8 @@ Evidence, all under `vm\` (git-ignored):
   (every watch hit), `winxp64-debugcon-i8diag1.log`, `diag1-01.png`; the
   staging boot's log is `vm\issue8-kd\winxp64-debugcon-i8diag0.log`, and the
   binary was staged as `vm\xferxp64\ISSUE8\XHCI98.SYS`
+- `vm\issue8-kd\i7smp4b\` - the committed build's leg (issue 7 section 7.8),
+  every watch record and both parts' debug logs
 - `vm\winxp64.img` - snapshots `winxp64-clean-install`,
   `winxp64-clean-install-smp4`, `winxp64-smp4-installed-kerneldump` (the
   unfixed driver), `winxp64-smp4-installed-kd` (`/debug` on COM1, otherwise
@@ -480,6 +491,6 @@ Evidence, all under `vm\` (git-ignored):
 Documents:
 
 - [Issue 7](07-win7-x86-enable-arrest-usbport-done-dpc.md) sections 7.6 and
-  7.7 - the leg this was found on
+  7.7 - the leg this was found on; section 7.8 - that leg retaken on the fix
 - [legal-provenance.md](../contributing/legal-provenance.md) section 4 - the
   provenance row for the readings above

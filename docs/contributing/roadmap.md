@@ -3162,7 +3162,7 @@ reading may not tick a box whose line names a guest.
             all four NT 6.x guests took one, with forward progress in
             between. Issue 7 section 7.6 is the record.
             **Owed: 98, ME, 2000, XP32**
-      - [ ] **2026-09-13, XP x64 raised to `-smp 4` and it BUGCHECKED on the
+      - [x] **2026-09-13, XP x64 raised to `-smp 4` and it BUGCHECKED on the
             second live disable/enable cycle** (`fix7xp64smp4`). Raising it
             needed **no reinstall and no HAL switch** - the claim in 7.6 that
             it would was wrong and is corrected there; XP x64 has one HAL and
@@ -3184,7 +3184,13 @@ reading may not tick a box whose line names a guest.
             write) **and** an amd64 layout audit (catches a wrong-offset write
             *inside* a usbport allocation, which Verifier cannot see). Issue 7
             section 7.7 is the record. **The SMP leg is UNFINISHED, not
-            passed**
+            passed**. *2026-09-14: the writer was usbport's own store,
+            reached through this driver's delivery without the endpoint lock
+            (issue 8, fixed in `20af60b`), and the leg was retaken on that
+            build and PASSED - settled read, five live cycles, remove,
+            rescan, 0 bugchecks, 0 damaged heads (issue 7 section 7.8). The
+            Verifier and layout-audit items above are superseded by issue 8's
+            caught write.*
     - [ ] **Vista x64: REMOVE/RESCAN does not complete, twice, and that
           clause had never been run on this guest.** Device Manager Uninstall
           of the devnode (package left in the store) wedged: attempt 1 sent

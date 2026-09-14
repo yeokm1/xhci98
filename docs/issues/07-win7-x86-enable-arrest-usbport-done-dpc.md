@@ -3,8 +3,11 @@
 Status: **cause read and fixed in source on 2026-09-13, and the fix re-run
 the same day on all four NT 6.x guests, every clause passing on each**
 (section 7.5, including one Windows 7 x86 disable that Windows itself
-refused and that is stated there, not smoothed over). **The NT 5.x legs
-are still owed**, because the fix changes the delivery path there too.
+refused and that is stated there, not smoothed over). Of the NT 5.x legs,
+**Windows XP x64 has passed at four vCPUs** on the build carrying issue 8's
+fix (section 7.8, 2026-09-14, after a bugcheck on the earlier build in
+section 7.7). **The other four NT 5.x legs are still owed**, because the fix
+changes the delivery path there too.
 Section 7 has the cause, the fix, what the re-run had to show and what it
 showed.
 The lost wakeup in usbport described below is real, and it is reachable
@@ -899,11 +902,81 @@ Issue 8 section 4c (2026-09-14) found the cause in this fix's territory: on
 XP x64 the delivery gate was off, on the premise that the Version 200 service
 synchronises itself, and it unlinks from the endpoint list without the
 endpoint lock; the XP x64 tier now delivers per endpoint. **This leg has to be
-taken again on that build.**
+taken again on that build.** It was, on 2026-09-14, and passed: section 7.8.
+
+### 7.8 The XP x64 four-vCPU leg retaken on issue 8's fix, 2026-09-14: PASSED
+
+Section 7.7's leg, taken again on the committed build that carries issue 8's
+per-endpoint delivery (commit `20af60b`): the amd64 `qemu` flavour rebuilt from
+the clean tree at `d1b4e71`, SHA-256 `0BD32770...8502F13E`, stamp
+`DriverEntry (built Sep 14 2026 20:24:13)`. Same guest, same launcher (`-smp 4
+-accel tcg,thread=multi`), started from snapshot `winxp64-smp4-issue8diag` with
+the new binary copied over `System32\drivers\xhci98.sys` and one restart. The
+three devices were hot-plugged from the monitor, and issue 8 section 4b's
+gdbstub watch was armed on `devext+0x988` on every load it could reach. The
+owner drove Device Manager; every stage was read before the next click.
+
+| stage | reading |
+|---|---|
+| settled read | `read-v300.ps1 -Expect nt5` ALL PASS; 3 slots / 3 addressed / 3 reopened / iso 2 |
+| disables 1-5 | all five applied live, no restart prompt; `DisableInterrupts`, `StopController` and `ports unpowered=4` inside the first read each |
+| enables 1-5 | 5 of 5 back with 3 / 3 / 3 / iso 2, ALL PASS on each, `isr count` = `dpc count` (46 or 47) |
+| remove, three devices attached | teardown complete inside the first read |
+| rescan | reinstalled on the fixed build (see below), ALL PASS, 3 / 3 / 3 / iso 2, `isr` 47 = `dpc` 47; tree clean - the controller, root hub, composite and mass-storage devices, the HID mouse and the USB Audio device, no bangs |
+
+**The counters.** `completions delivered per endpoint only` reads 1 on every
+fixed-build load, and with it `completions delivered only under usbport's
+lock` reads 1: that tier sets the gate now, so section 7.6's expected 0 no
+longer applies to amd64 (`read-v300.ps1`'s verdict does not test that line,
+which is why it still reads ALL PASS). **`completions delivered forced` and
+`completion fallback polls` read 0 on every load**, exact by section 7.5's
+reasoning. `ResetController` 0 throughout.
+
+**The watch.** 17 records over 9 watched loads, **none with a zeroed low
+half.** Every one is a shape issue 8 section 4c already names: the teardown
+unlink on each disable and the remove (head going self-pointing, a full 64-bit
+value); a freed extension reused at the same address, zeroed as a whole qword,
+re-initialized and inserted into; one whole-qword zero with a foreign `Blink`
+as the extension was freed at a guest restart; and one stop at QEMU's own
+`quit` that was not a watch hit.
+
+**The rescan first ran the wrong binary, and was taken again.** An uninstall
+followed by a rescan reinstalls through the INF from the transfer drive's
+root, not from the copy placed in `System32\drivers`, and that root still held
+this section's predecessor, issue 7's build `249BADFE` without issue 8's fix.
+The first rescan's load printed `DriverEntry (built Sep 13 2026 00:44:14)` and
+no `per endpoint only` line, so it is **not** a reading of the fixed build and
+is not counted above (it also printed `isr 167 / dpc 154` past the print cap,
+which per this project's standing trap is not called a shortfall, and belongs
+to the old build either way). The fixed binary was copied back and the guest
+restarted (ALL PASS, 3 / 3 / 3 / iso 2); the guest was shut down, the
+transfer root restaged with the fixed build while QEMU was stopped, and the
+guest relaunched without a revert. That boot's remove ran with **no devices
+attached and no watch armed** - the click came before the hot-plug - and the
+devices were then attached to the driverless controller before the rescan,
+whose load is the row above. The remove with all three devices attached is the
+part-one row, on the fixed build.
+
+What this establishes: on the `200` arm on amd64 at four vCPUs, the build
+carrying issue 7's and issue 8's fixes passed every section 7.4 clause - the
+settled read, five live disable/enable cycles, remove and rescan - with no
+bugcheck, no damaged head, no forced drain and no fallback poll. Against the
+unfixed tier's four bugchecks in about fifteen loads, that is a second clean
+run after issue 8's `i8diag1`, on one guest, in a virtual machine; it is
+support, not proof. **Four NT 5.x legs remain** (98, ME, 2000, XP32), and
+issue 8 section 4c's note on the 32-bit Version 200 targets still stands.
 
 ## Sources
 
 Evidence, all under `vm\`:
+
+- `vm\issue8-kd\i7smp4b\` - the 2026-09-14 retake (section 7.8): `part1\`
+  (launcher tag `i7smp4b`: the debug log of the swap boot, the five cycles,
+  the remove, the wrong-binary rescan and the restart; `gdb-load1..8-*.log`;
+  `boot-01.png`, `rescan-01.png`) and `part2\` (tag `i7smp4b2`: the remove and
+  the fixed-build rescan's debug log, `gdb-load1-*.log`, `rescan-tree.png`),
+  and `step.ps1`, the per-stage reader. QEMU traces
+  `vm\winxp64-qemu-trace.i7smp4b.log` and `...i7smp4b2.log`
 
 - `vm\fix-issue7-xp64-smp4\` - the 2026-09-13 `-smp 4` leg (section 7.7):
   `Mini091326-01.dmp` (the crash's minidump, lifted out of the qcow2 with
