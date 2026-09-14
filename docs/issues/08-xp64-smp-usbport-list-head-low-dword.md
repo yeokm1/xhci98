@@ -394,6 +394,53 @@ drive and was taken again.
   NT 6.x transfer-list walk and unlink runs under that lock is not yet read.
 - Server 2003 x64 rests on being NT 5.2.3790, as the rest of that tier does.
 
+## 4d. The 32-bit Version 200 tier, read statically, 2026-09-15
+
+Section 4c left the 32-bit targets unread. Issue 7 section 7.9 then showed the
+mechanism live on Windows XP SP3 x86 at four vCPUs - the walker holding the
+endpoint lock, the mover not - and the owner asked for the remaining 32-bit
+`usbport` builds to be read before deciding whether the tier takes the fix.
+All four were read on the same evening (`legal-provenance.md` section 4 has
+the row with every address; `vm\issue7-xp32-smp4\static-tier\README.md`
+the table and the `kd` logs): XP SP3 x86 by name from its public PDB, and
+NUSB 3.3 = 3.6 (one file, byte-identical), SweetLow's XP-derived build (the
+Windows ME target's stack) and Windows 2000 SP4 without symbols, reached
+from the exported `USBPORT_RegisterUSBPortDriver`'s sixteen service stores.
+
+**The mover is the same function in all four.** The `CompleteTransfer`
+service ends in a routine that takes the transfer's `Blink` and `Flink`,
+splices them - `RemoveEntryList` with **no lock and no interlock** - stores
+the status, then `ExfInterlockedInsertTailList` on the FDO's done list under
+the done-list lock, then `KeInsertQueueDpc` on the flush DPC. Only the
+offsets differ (done list `+0x6F8` / `+0x63C` / `+0x64C` / `+0x690`).
+
+**The reader holds a per-endpoint lock in all four.** On XP it is
+`EndpointHasQueuedTransfers` under `endpoint+0xC4`, from the flush loop. The
+older builds have no such walk in their flush loop - they call
+`InvalidateEndpoint` after every done transfer instead - and their reading of
+the endpoint's lists lives in the endpoint worker (NUSB `0x9c80`, SweetLow
+`0x7836`, Windows 2000 `0xa096`), which takes `endpoint+0xD4` first and, inside
+it, calls the miniport's `PollEndpoint` under the FDO miniport lock
+(`fdo+0x288`, Windows 2000 `+0x28C`).
+
+So the contract section 4c read out of XP x64 is the contract of the whole
+32-bit tier: `UsbPortCompleteTransfer` assumes its caller is inside a
+callback usbport made for that endpoint, under that endpoint's lock; the
+service itself locks nothing. A completion this driver delivers from any
+other context - the interrupt DPC, a root-hub callback, the health poll -
+races every endpoint-worker read of that list on every 32-bit build, exactly
+as it raced the walker on XP x64 and, on 2026-09-15, on XP x86. What the
+race does when it lands differs by build and is not read further: on XP x64
+the walker wrote (bugcheck `D1`); on XP x86 the walker only read (a livelock,
+issue 7 section 7.9); what the older workers do with a transfer that moved
+under them is not established, and does not need to be for the decision.
+
+What this does not say: nothing has been run at four vCPUs on Windows 98,
+ME or 2000, so the exposure there is by reading, not by observation, and
+the fix's cost on those targets has been measured only by analogy (amd64:
+`forced` 0, `fallback polls` 0 across every load). The decision is the
+owner's; the read says the tier is one tier.
+
 ## 5. What was ruled out, and what an instrument could not see
 
 **The first bullet below is wrong; section 4b corrects it.**
