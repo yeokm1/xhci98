@@ -3496,25 +3496,50 @@ static MPSTATUS NTAPI xhciReopenEndpoint(PVOID miniPortExtension,
  * **NT 6.x DOES call this, at interface version 300 and above.** Measured on
  * Vista x86 on 2026-09-11: usbport!USBPORT_iSetGlobalEndpointStateTx calls
  * MPf_CloseEndpoint during the post-SET_ADDRESS EP0 close, on the very first
- * device attach. Batch 6-0's census said no shipping build calls this slot,
- * and that stays true of NT 5.x - but it was never a statement about Vista or
- * Windows 7, neither of which was in that census. So this is a live callback
- * on the 300 tier, not a defensive stub.
+ * device attach. **And so does Windows XP SP3 x86**, at 200: usbport's
+ * USBPORT_InitializeDevice closes EP0 after SET_ADDRESS through
+ * USBPORT_PokeEndpoint and MP_CloseEndpoint - with THREE arguments where NT
+ * 6.x pushes two (the readings are above PHCI_CLOSE_ENDPOINT in
+ * src\xhci_usbport.h). Batch 6-0's census said no shipping build calls this
+ * slot, and that stays true of Windows 2000 SP4 and NUSB; it was never a
+ * statement about XP, Vista or Windows 7, none of which was in it. So this is
+ * a live callback on both tiers, not a defensive stub.
  *
- * Its signature is therefore load-bearing rather than decorative: see
- * PHCI_CLOSE_ENDPOINT for why it takes TWO parameters and what the third one
- * cost. `ProbeEpEvents[XHCI_PROBE_EVENT_CLOSE]` remains what a *release*
- * build shows, which no trace line can (task 6-V.1).
+ * Two callees for one body, because on x86 a stdcall callee's `ret` has to
+ * match what its caller pushed and the two tiers push differently: the
+ * two-parameter one is what the packet is filled with, and DriverEntry
+ * overwrites the slot with the three-parameter one on the NT 5.x arm. The
+ * third parameter exists for the stack contract only and is not read - XP x64
+ * takes the same arm, and whether its wrapper passes anything in r8 has not
+ * been read, so a value logged from it could be noise. The 2026-09-12 move to
+ * two parameters was measured on Vista x86 alone and cost XP x86 bugcheck
+ * 0xFC on its first device (issue 7 section 7.9).
+ * `ProbeEpEvents[XHCI_PROBE_EVENT_CLOSE]` remains what a *release* build
+ * shows, which no trace line can (task 6-V.1).
  *
  * IRQL: DISPATCH_LEVEL, under MiniportSpinLock.
  */
-static VOID NTAPI xhciCloseEndpoint(PVOID miniPortExtension,
-                                    PVOID endpointExtension)
+static VOID xhciCloseEndpointBody(PVOID miniPortExtension,
+                                  PVOID endpointExtension)
 {
     XHCI_DBG_CB("CloseEndpoint", miniPortExtension, endpointExtension, 0);
     XhciProbeEndpoint((PXHCI_EXTENSION)miniPortExtension,
                       XHCI_PROBE_EVENT_CLOSE, NULL,
                       (const XHCI_ENDPOINT *)endpointExtension, 0);
+}
+
+static VOID NTAPI xhciCloseEndpoint(PVOID miniPortExtension,
+                                    PVOID endpointExtension)
+{
+    xhciCloseEndpointBody(miniPortExtension, endpointExtension);
+}
+
+static VOID NTAPI xhciCloseEndpointNt5(PVOID miniPortExtension,
+                                       PVOID endpointExtension,
+                                       BOOLEAN isDoDisablePeriodic)
+{
+    (VOID)isDoDisablePeriodic;
+    xhciCloseEndpointBody(miniPortExtension, endpointExtension);
 }
 
 /*
@@ -5029,6 +5054,19 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT DriverObject,
                   : USBPORT_NT6_MINIPORT_INTERFACE_VERSION;
         XHCI_DBG_VALUE("interface version presented",
                        xhciInterfaceVersionPresented);
+
+        /*
+         * The fourth thing, and the one slot whose x86 shape differs between
+         * the tiers: XP's MP_CloseEndpoint pushes a third argument that NT
+         * 6.x's MPf_CloseEndpoint does not, and a stdcall callee cleans one
+         * count or the other. The field is typed with the NT 6.x shape and
+         * filled with it; the cast is what puts the NT 5.x shape in - see
+         * PHCI_CLOSE_ENDPOINT in src\xhci_usbport.h for both readings.
+         */
+        if (isNt5) {
+            XhciRegPacket.CloseEndpoint =
+                (PHCI_CLOSE_ENDPOINT)xhciCloseEndpointNt5;
+        }
 
         if (isNt5) {
             status = USBPORT_RegisterUSBPortDriver(

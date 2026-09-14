@@ -2,7 +2,14 @@
 
 Status: **fixed in this driver on 2026-09-14 (section 4c, commit `20af60b`),
 and issue 7 section 7.8's XP x64 four-vCPU leg passed on the committed build
-the same day** - two clean runs, not proof. The cause is this driver's: on XP
+the same day** - two clean runs, not proof. **The same mechanism was then
+read on Windows XP SP3 x86 at four vCPUs on 2026-09-15, where the fix does
+not reach (it is compiled under `_WIN64` only): usbport's active-list walker
+holding a transfer that had been moved to the done list under it, spinning
+for ever with the endpoint lock held - a livelock rather than a bugcheck,
+because the x86 walk only reads** (issue 7 section 7.9,
+`vm\issue7-xp32-smp4\r3\livelock-readings.md`). Whether the 32-bit Version
+200 tier takes the fix is the owner's decision. The cause is this driver's: on XP
 x64 it handed completions to usbport from contexts that did not hold the
 transfer's own endpoint lock, and XP x64's completion service needs that lock
 (section 4c). The corruption itself is a store by usbport, caught by a

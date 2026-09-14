@@ -3191,6 +3191,21 @@ reading may not tick a box whose line names a guest.
             rescan, 0 bugchecks, 0 damaged heads (issue 7 section 7.8). The
             Verifier and layout-audit items above are superseded by issue 8's
             caught write.*
+      - [ ] **2026-09-14/15, XP 32-bit raised to `-smp 4` (`-cpu core2duo`,
+            `-accel tcg,thread=multi`): UNFINISHED, two findings.** First,
+            bugcheck `FC` on the first device attach, twice, with the mouse
+            alone - **not SMP**: XP SP3's `MP_CloseEndpoint` pushes three
+            arguments and the 2026-09-12 two-parameter callee cleaned eight
+            bytes, so usbport's epilogue returned into its own stack; XP x86
+            had not run since 2026-09-07. Fixed with one callee per tier
+            (`PHCI_CLOSE_ENDPOINT`), Windows 2000, NUSB and SweetLow read as
+            never calling the slot. Second, on the fixed build, after a
+            settled read ALL PASS (3 slots / iso 2, `only under usbport's
+            lock` 0) the guest **livelocked before its first disable** on
+            issue 8's mechanism, which the x86 tier does not carry the fix
+            for. Issue 7 section 7.9 is the record. **Owed: the x86 tier
+            decision on issue 8's fix, then this leg's five cycles, remove
+            and rescan; then 98, ME, 2000**
     - [ ] **Vista x64: REMOVE/RESCAN does not complete, twice, and that
           clause had never been run on this guest.** Device Manager Uninstall
           of the devnode (package left in the store) wedged: attempt 1 sent

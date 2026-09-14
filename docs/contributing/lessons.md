@@ -8761,3 +8761,43 @@ for the context it calls that path from before concluding the race is
 usbport's. A service with an `i`-prefixed body is a service with a lock
 assumption, and the miniport that ships with the OS is the specification of
 which callbacks satisfy it.
+
+## A parameter count read from one usbport build is a change to every target that reaches the slot
+
+On 2026-09-12 `CloseEndpoint` went from three parameters to two, because
+Vista x86 had bugchecked `0xD1` on the first device attach and its
+`MPf_CloseEndpoint` pushes exactly two. The reading was right and the fix
+was right for the tier it was read on. On 2026-09-14 Windows XP SP3 x86
+bugchecked `0xFC` on the first device attach, twice, with the mouse alone:
+its `MP_CloseEndpoint` pushes three (the third is ReactOS's
+`IsDoDisablePeriodic`, exactly as declared), and its epilogue is four pops
+and a `ret 8` with no frame-pointer restore, so a callee that cleans eight
+bytes leaves the third argument under every pop and `ret` takes the saved
+ebp - a stack address. The x86 stdcall contract is that the callee cleans
+what the caller pushed, so one callee cannot serve two callers that push
+different counts; the driver now registers a callee per arm
+(`src/xhci_usbport.h`, `PHCI_CLOSE_ENDPOINT`; issue 7 section 7.9).
+
+Two things made this cost two guest runs rather than none. The record said
+"NT 5.x never calls this slot", and that sentence was a census of the two
+shipping builds - Windows 2000 SP4 and NUSB - which had been generalised
+to the whole tier in the retelling; XP had been calling the slot on every
+device attach since its first run, with the three-parameter callee that
+happened to match. And the crash arrived on a new rung (`-smp 4`,
+`-cpu core2duo`) two days after the change, so it was read as the rung's
+for two runs; the XP x86 guest had last run on 2026-09-07, before the
+change, and nothing in either run distinguished "SMP" from "first run of
+this build on this target".
+
+Reusable rules. **A census is a statement about the images it swept**;
+write the image names into the sentence, not the tier. **A callee's
+parameter count on x86 is an ABI fact per usbport build**: before changing
+one, read the push sequence in every usbport that reaches the slot
+(`x usbport!MP*_<Name>` where symbols exist, a byte sweep for
+`call [reg+slot]` where they do not), and afterwards re-run every target
+that had passed on the old count before calling the change done. And **a
+bugcheck on a new rung is not evidence about the rung until the same build
+has run on the old one**. One incidental: `-cpu core2duo` carries NX, so
+XP loaded its PAE kernel and an execute-from-stack became a legible `0xFC`
+with a trap frame; on `-cpu pentium3` the same defect would have executed
+stack bytes and died somewhere else.

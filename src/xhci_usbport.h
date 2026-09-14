@@ -579,23 +579,62 @@ typedef MPSTATUS (NTAPI *PHCI_OPEN_ENDPOINT)(PVOID, PUSBPORT_ENDPOINT_PROPERTIES
 typedef MPSTATUS (NTAPI *PHCI_REOPEN_ENDPOINT)(PVOID, PUSBPORT_ENDPOINT_PROPERTIES, PVOID);
 typedef VOID (NTAPI *PHCI_QUERY_ENDPOINT_REQUIREMENTS)(PVOID, PUSBPORT_ENDPOINT_PROPERTIES, PUSBPORT_ENDPOINT_REQUIREMENTS);
 /*
- * TWO parameters, not three. ReactOS declares a third, IsDoDisablePeriodic
- * (endpoint.c:580), and this typedef carried it until 2026-09-11 - but no
- * shipping usbport ever passes it. NT 6.x is the only caller that exists at
- * all (MPf_CloseEndpoint returns immediately below interface version 300:
- * `cmp dword ptr [eax+10h],12Ch`), and on x86 it pushes exactly two:
+ * TWO parameters on the NT 6.x arm and THREE on the NT 5.x arm, and one
+ * stdcall callee cannot serve both, because on x86 its `ret` cleans a fixed
+ * count and the two tiers push different counts. The slot is typed with the
+ * NT 6.x shape and filled with it; DriverEntry stores a cast of the
+ * three-parameter callee (xhciCloseEndpointNt5, src\xhci_dispatch.c) when
+ * `IoIsWdmVersionAvailable(6, 0)` is FALSE. The readings, both x86, both
+ * static, each confirmed by the bugcheck the other shape produced:
+ *
+ * NT 6.x - Vista x86 MPf_CloseEndpoint returns at once below interface
+ * version 300 (`cmp dword ptr [eax+10h],12Ch`) and above it pushes two:
  *
  *     0001f390 push edi                  ; endpointExtension
  *     0001f391 push dword ptr [esi+30Ch] ; miniportExtension
  *     0001f397 call dword ptr [eax+50h]  ; 0x50 - 0x1C = our 0x34
  *
- * Vista x86 and Windows 7 x86 agree on the shape. The third parameter made
- * the callee `ret 0Ch` against a caller that had pushed 8, over-popping
- * usbport's stack by four bytes and sending its epilogue's `ret` into data:
- * bugcheck 0xD1 on the first device attach, measured on Vista x86 2026-09-11.
- * amd64 never showed it because there the CALLER cleans the stack.
+ * Windows 7 x86 agrees. ReactOS's third parameter, IsDoDisablePeriodic
+ * (endpoint.c:580), which this typedef carried until 2026-09-12, made the
+ * callee `ret 0Ch` against 8 pushed, over-popping usbport's stack by four
+ * and sending its epilogue's `ret` into data: bugcheck 0xD1 on the first
+ * device attach, Vista x86, 2026-09-11.
+ *
+ * NT 5.x - Windows XP SP3 x86 MP_CloseEndpoint (5.1.2600.5512, RVA 0x1568A,
+ * the only call through the slot in that image) pushes three, the third
+ * being exactly ReactOS's IsDoDisablePeriodic:
+ *
+ *     000156c4 cmp dword ptr [edi+114h],0 ; open periodic endpoints
+ *     000156d1 sete cl
+ *     000156d4 push ecx                   ; IsDoDisablePeriodic
+ *     000156d5 lea ecx,[esi+178h]
+ *     000156db push ecx                   ; endpointExtension
+ *     000156dc push dword ptr [edi+140h]  ; miniportExtension
+ *     000156e2 call dword ptr [eax+48h]   ; 0x48 - 0x14 = our 0x34
+ *     ...
+ *     00015700 pop edi / pop esi / pop ebx / pop ebp / ret 8
+ *
+ * No `mov esp,ebp` before those pops, so a two-parameter callee's `ret 8`
+ * leaves the third argument under every one of them: `pop edi` takes it,
+ * `pop ebp` takes the caller's saved ebx, and `ret` takes the saved ebp - a
+ * stack address, which the PAE kernel refuses to execute: bugcheck 0xFC on
+ * the first device attach, XP SP3 x86, 2026-09-14, matched register for
+ * register against the dump (issue 7 section 7.9). The caller is
+ * USBPORT_InitializeDevice's EP0 close after SET_ADDRESS, by way of
+ * USBPORT_PokeEndpoint. The 2026-09-12 change was measured on Vista alone;
+ * XP x86 had last run on 2026-09-07, on the three-parameter callee.
+ *
+ * The rest of the NT 5.x arm never reaches the slot: Windows 2000 SP4, NUSB
+ * and SweetLow's XP-derived 5.1.2600.2180 (the Windows ME target's stack)
+ * have no `call [reg+48h]` that is a CloseEndpoint at all (NUSB's three are
+ * StartController behind its 0x10 header, SweetLow's 0x44 and 0x4C are
+ * QueryEndpointRequirements and StartController behind a 0x14 one). XP x64
+ * takes this arm too, where the caller cleans and a third register argument
+ * is inert whether or not it is passed; its MP_CloseEndpoint is inlined and
+ * has not been read.
  */
 typedef VOID (NTAPI *PHCI_CLOSE_ENDPOINT)(PVOID, PVOID);
+typedef VOID (NTAPI *PHCI_CLOSE_ENDPOINT_NT5)(PVOID, PVOID, BOOLEAN);
 typedef MPSTATUS (NTAPI *PHCI_START_CONTROLLER)(PVOID, PUSBPORT_RESOURCES);
 typedef VOID (NTAPI *PHCI_STOP_CONTROLLER)(PVOID, BOOLEAN);
 typedef VOID (NTAPI *PHCI_SUSPEND_CONTROLLER)(PVOID);

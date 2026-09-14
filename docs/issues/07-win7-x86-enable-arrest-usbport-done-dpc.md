@@ -966,10 +966,157 @@ run after issue 8's `i8diag1`, on one guest, in a virtual machine; it is
 support, not proof. **Four NT 5.x legs remain** (98, ME, 2000, XP32), and
 issue 8 section 4c's note on the 32-bit Version 200 targets still stands.
 
+### 7.9 The XP 32-bit four-vCPU leg, 2026-09-14: a BUGCHECK on the first device that was not SMP's, and its fix
+
+The 32-bit XP guest raised to four vCPUs for the same leg section 7.8 took on
+XP x64. `vm\winxp.img` at snapshot `winxp-clean-install-smp4`: a clean XP
+Professional SP3, on the `ACPI Multiprocessor PC` HAL (XP switched to it by
+itself on the first `-smp` boot), four `Intel Core 2 Duo T7700` cores in one
+socket, kernel memory dump, automatic restart off. The launcher
+`vm\fix-issue7-xp-smp4\winxp-smp4.cmd` is the generated XP launcher plus
+`-accel tcg,thread=multi`, `-cpu core2duo` and `-smp 4,sockets=1,cores=4`
+(XP Professional licenses two sockets, so the four are cores; `pentium3` has
+no multi-core CPUID). The build was the x86 `qemu` flavour of `363d52e`,
+SHA-256 `F1BC64F5...`, stamp `DriverEntry (built Sep 14 2026 22:34:18)`, and
+its install read ALL PASS with the stamp matching the transfer root.
+
+**Two runs, one bugcheck, identical each time.** Run 1 (`i7xp32smp4`) had the
+three devices hot-plugged together and bugchecked within a minute:
+`STOP 0x000000FC (0xF8AF98E8, 0x02B20963, 0xF8AF9848, 0x00000001)`,
+ATTEMPTED_EXECUTE_OF_NOEXECUTE_MEMORY at a kernel-stack address. Run 2
+(`i7xp32smp4r2`), off a fresh revert, the mouse alone:
+`0xFC (0xF8B058E8, 0x02B2B963, 0xF8B05848, 0x00000001)` - the same stack
+offsets in a different stack, the same trap-frame registers, the same last
+lines in the debug log. The log ends on the first device's EP0 close after
+SET_ADDRESS every time: `SET_ADDRESS answered to usbport` (address 1), `cb
+SetEndpointState ... c=00000004`, `cb CloseEndpoint`, its `probe.ep
+03000101` line, and nothing after. One device is enough and the point never
+moves, so this is not a race.
+
+**The dump, read with `kd -z` and the public `usbport.pdb`.** The thread is
+usbhub's device-setup worker at PASSIVE_LEVEL, inside
+`USBPORT_InitializeDevice` -> `USBPORT_PokeEndpoint` -> `MP_CloseEndpoint`,
+usbport's wrapper for the packet's `CloseEndpoint` slot. That wrapper pushes
+**three** arguments - `cmp dword ptr [edi+114h],0` / `sete cl` / `push ecx`
+(ReactOS's `IsDoDisablePeriodic`, exactly as declared), the endpoint
+extension, the miniport extension - and ends `pop edi / pop esi / pop ebx /
+pop ebp / ret 8` with no `mov esp,ebp`. This driver's callee had cleaned
+eight bytes since commit `8a46d1b` (2026-09-12, "CloseEndpoint takes two
+parameters, because that is what NT 6.x pushes"), so the third argument was
+still on the stack under every pop, and the trap frame says so slot for
+slot:
+
+| register at the trap | value | what the shifted pop took |
+|---|---|---|
+| `edi` | `8210d301` | the leftover third argument: `ecx` with `cl` set to 1 |
+| `esi` | `8210d0e0` | the wrapper's saved `edi`, usbport's device extension |
+| `ebx` | `81f638f8` | the wrapper's saved `esi`, the endpoint |
+| `ebp` | `80546abc` | the wrapper's saved `ebx`, `USBPORT_PokeEndpoint`'s `InterlockedDecrement` import |
+| `eip` | `f8b058e8` | the wrapper's saved `ebp` - `USBPORT_PokeEndpoint`'s frame, a stack address |
+
+`-cpu core2duo` carries the NX bit, so XP loaded its PAE kernel
+(`ntkrpamp.exe`) and refused the execute with a legible `0xFC`; on the
+generated launcher's `pentium3` the same defect would have executed stack
+bytes. **Nothing here is SMP.** The 32-bit XP guest had last run on
+2026-09-07, on the three-parameter callee that happened to match; this was
+its first run on the two-parameter build, which would fail the same way on
+one vCPU (an inference, not run). Section 7.8's "four NT 5.x legs remain" is
+therefore still exactly the count: this leg is not taken by these two runs.
+
+**The scope, read statically** (`legal-provenance.md` section 4, the XP SP3
+`MP_CloseEndpoint` row). XP SP3 x86 has exactly one call through the slot and
+it pushes three. Vista x86 and Windows 7 x86 push two (the 2026-09-11
+reading, still right). Windows 2000 SP4, NUSB and SweetLow's XP-derived
+5.1.2600.2180 - the Windows ME target's stack - have no call through the slot
+at all, so the two shipping targets and ME never reached either shape.
+amd64 is caller-cleaned, so XP x64 saw nothing either way.
+
+**The fix.** One x86 stdcall callee cannot serve two callers that push
+different counts, so there are now two: the packet is filled with the
+two-parameter `xhciCloseEndpoint`, and `DriverEntry` stores a cast of the
+three-parameter `xhciCloseEndpointNt5` on the NT 5.x arm it already selects
+with `IoIsWdmVersionAvailable(6, 0)` - the same answer that picks the
+registration arity, the resource mask and the interface version. The third
+parameter is declared for the stack contract and not read. Both share one
+body; `kd` on the new x86 `qemu` build shows `xhciCloseEndpointNt5` ending
+`ret 0Ch` and `xhciCloseEndpoint` `ret 8`. `src\xhci_usbport.h` above
+`PHCI_CLOSE_ENDPOINT` carries both readings, and the ABI document's
+`CloseEndpoint` row no longer says NT 5.x never calls the slot - that
+sentence was a census of the two shipping builds and had been generalised.
+`lessons.md` has the rule that came out of it.
+
+**The re-run on the fixed build (`i7xp32smp4r3`, 2026-09-15 00:00), and the
+leg is UNFINISHED.** Off a fresh revert, the x86 `qemu` build of the fix,
+SHA-256 `0BA0133C...B46B00`, stamp `DriverEntry (built Sep 14 2026
+23:54:46)`, staged at the transfer root. The mouse alone first, the sequence
+that had crashed run 2: `cb CloseEndpoint` came and went, and the device was
+addressed, reopened and configured. Then the audio and mass-storage devices:
+
+| stage | reading |
+|---|---|
+| settled read | `read-v300.ps1 -Expect nt5` ALL PASS; 3 slots / 5 addressed / 5 reopened / iso 2; `isr` 69 = `dpc` 69; `completions delivered only under usbport's lock` 0, which is what the x86 tier must read; `forced` 0, `fallback polls` 0; `cb CloseEndpoint` 4 |
+
+The 5 against XP x64's 3 is XP re-enumerating two of the three devices as
+their class drivers installed (addresses 1, 2, 3, then 2 again and 4, on the
+same three slots): usbhub's port reset on a restarted PDO, not a driver event.
+
+**Then, before the first disable, the guest froze** - while XP was still
+installing the USB Audio class driver, about two minutes after the settled
+read, with the debug log's last lines `short packets` climbing and
+`transfers submitted 7D / completed 7B`. QEMU reported `running`; the screen
+and the log stopped. Read live over the monitor (`vm\issue7-xp32-smp4\r3\
+livelock-readings.md` has every value): CPUs 2 and 3 idle in `intelppm`;
+CPU0 in `USBPORT_IsrDpc -> IsrDpcWorker -> DpcWorker -> CoreEndpointWorker`
+spinning in HAL's `KfAcquireSpinLock` on the lock of usbport endpoint
+`81eede40` (our slot 3, DCI 3: the mass-storage device's bulk IN); CPU1 in
+`USBPORT_TransferFlushDpc -> FlushDoneTransferList ->
+EndpointHasQueuedTransfers`, holding that lock and walking the endpoint's
+**active** transfer list without end, 40 of 40 samples inside the walk at one
+stack depth. The endpoint's active and pending lists read empty, and the
+FDO's done list held one transfer, `8205d260`, whose list entry linked to the
+**done** head. That is the walker's cycle: it holds a transfer that was moved
+from the active list to the done list after the walker had taken its entry,
+and from the done head it steps to a phantom transfer inside the FDO
+extension whose `+0x38` is the done head again. The mover therefore ran
+without the endpoint lock the walker holds.
+
+**That is issue 8's mechanism, on x86** - issue 8 section 4c's mover,
+`Core_iCompleteTransfer` taking a transfer active -> done under the done-list
+lock only, reached from a `UsbPortCompleteTransfer` this driver delivered
+outside `PollEndpoint` and its endpoint lock. On amd64 the same walk *wrote*
+the done head's low dword and bugchecked `D1`; on x86 this walk only reads
+and logs, so it spins with the endpoint lock held and CPU0 starves on it: a
+livelock at DISPATCH on two CPUs, no bugcheck, no dump. Issue 8's fix, delivery
+per endpoint from usbport's own callback, is compiled under `_WIN64` only,
+exactly as section 7.8 and issue 8 section 4c left it, so this run is the
+first reading of the 32-bit Version 200 tier's exposure and it says the tier
+is exposed. 512 MB of guest physical memory was saved while frozen
+(`guest-phys-512m.bin`); the guest was then reset and shut down cleanly.
+
+What this establishes: the `CloseEndpoint` fix holds on XP SP3 x86 (the crash
+point passed twice over, with one device and with three), and the XP 32-bit
+four-vCPU leg is **not taken** - it stopped before its first disable on a
+finding of its own. Whether the x86 Version 200 tier takes issue 8's fix is
+the owner's decision, which issue 8 section 4c already names; until then the
+leg cannot be run to its clauses. Windows 98, ME and 2000 at four vCPUs
+remain unrun, and this reading says they share the exposure only if their
+`usbport` moves the transfer the same way, which is not read.
+
 ## Sources
 
 Evidence, all under `vm\`:
 
+- `vm\issue7-xp32-smp4\` - the 2026-09-14/15 XP 32-bit four-vCPU leg (section
+  7.9): run 1's `bsod.png`, `MEMORY.DMP`, `Mini091426-01.dmp`, the debug logs
+  and `kd-analyze.log` / `kd-dis.log` / `kd-stack.log`; `r2\` (the mouse-only
+  repeat: `r2-mouse.png`, its `MEMORY.DMP`, `kd.log`, `kd2.log`, `kd3.log`,
+  `kd4-symbols.log` with the `MP_CloseEndpoint` naming, `kd6-sweetlow.log`,
+  `kd7-newbuild.log` showing the two callees' `ret`); `r3\` (the fixed-build
+  run: `debugcon-settled.log`, `settled.png`, `hang.png`,
+  `debugcon-frozen.log`, `livelock-readings.md`, `guest-phys-512m.bin`,
+  `kd1-loop.log`, `kd2-callers.log`). Launcher
+  `vm\fix-issue7-xp-smp4\winxp-smp4.cmd`; snapshot `winxp-clean-install-smp4`
+  on `vm\winxp.img`
 - `vm\issue8-kd\i7smp4b\` - the 2026-09-14 retake (section 7.8): `part1\`
   (launcher tag `i7smp4b`: the debug log of the swap boot, the five cycles,
   the remove, the wrong-binary rescan and the restart; `gdb-load1..8-*.log`;
