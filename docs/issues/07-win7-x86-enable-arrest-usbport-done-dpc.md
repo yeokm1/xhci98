@@ -1205,6 +1205,17 @@ driver saw nothing of it at all - no endpoint stop, no abort, no port
 disable. So the refusal needs a bound USB Audio Device and reproduces without
 the per-endpoint delivery. What holds the stack is still not read.
 
+**And the audio device alone is enough** (2026-09-16,
+`vm\i8tier-1cpu\win2k-audio-r1\`). On the leg's own image, per-endpoint
+build, with only the audio device attached and USB Audio Device bound, the
+disable asked for a restart and again reached nothing in this driver. Its
+counters, read twice ten seconds after the refusal, were flat: 218
+transfers submitted and 218 completed, 180 isochronous submits, all from
+binding. When Windows refuses, this driver has no transfer outstanding and
+is being asked for nothing, so the holder is above the miniport. That it is
+Windows 2000's audio stack keeping the device open is an inference - the
+binding did open the stream - and no handle was read inside the guest.
+
 **The Windows ME departures, all procedural.** Update Driver over the old
 build stopped the controller and loaded the image again with no restart
 prompt, but from the old file (its `DriverEntry` still read 2026-09-02); the new file was copied into
