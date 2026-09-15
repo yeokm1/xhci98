@@ -14,8 +14,9 @@ decision of 2026-09-15 the guard was lifted: the 32-bit build sets the mode
 on its Version 200 tier too. Its first run, the XP 32-bit four-vCPU leg,
 passed on 2026-09-15 under WHPX** (issue 7 section 7.9: settled read, five
 live cycles, remove and rescan, `forced` 0 and `fallback polls` 0 on every
-load; one run, on one host), and the two shipping targets and ME have only
-the reading, not a run. The cause is this driver's: on XP
+load; one run, on one host), and Windows 98, ME and 2000 then passed on
+one core under TCG, each through the clauses it can take (issue 7 section
+7.10). The cause is this driver's: on XP
 x64 it handed completions to usbport from contexts that did not hold the
 transfer's own endpoint lock, and XP x64's completion service needs that lock
 (section 4c). The corruption itself is a store by usbport, caught by a
@@ -478,10 +479,20 @@ disable/enable cycles, remove and rescan with `forced` 0 and `fallback polls`
 driver - one on a third disable, one on a device install before any cycle -
 and are set aside by the owner's decision that multi-core 32-bit XP under TCG
 is not a representative system; issue 7 section 7.9 has all three runs and
-what they do not isolate. What remains is Windows 98, ME and 2000 on one core
+what they do not isolate. What remained was Windows 98, ME and 2000 on one core
 under TCG (the owner's decision of the same day, replacing the four-vCPU legs
 named above: 98 and ME are uniprocessor by construction), as regression
 readings of the mode on those stacks rather than tests of this race.
+
+**runtime** - 2026-09-15, those three, same build (issue 7 section 7.10):
+`completions delivered per endpoint only` read 1 on every load of NUSB's
+Windows 98 stack, SweetLow's stack on Windows ME and Windows 2000 SP4's own,
+and with the mode set each passed every clause its target can take - on ME
+five live cycles, remove and rescan; on Windows 2000 the same, with the USB
+audio device unplugged before each disable because Windows refused a live
+disable while it was attached; on Windows 98, where NUSB cannot survive a
+controller stop, device unplug and replug - with `forced` 0 and `fallback
+polls` 0 in every read. Nothing SMP is owed on this tier now.
 
 ## 5. What was ruled out, and what an instrument could not see
 

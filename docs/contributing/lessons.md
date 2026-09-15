@@ -8825,3 +8825,25 @@ target does**: `UsbPortInvalidateEndpoint` is not a counter to usbport, it is
 a request that usbport answers with a poll under the endpoint lock, and a
 harness that only counted it could not deliver a parked completion at all.
 The suite now has `usbport_worker()` for that, run after every DPC.
+
+## On Windows ME a new build is running only after a DriverEntry with its stamp, and three routes that look like one are not
+
+Taking issue 7 section 7.10's ME leg on a guest that already had the
+2026-09-02 build cost three boots, and each route looked finished. Update
+Driver from the new package asked for no restart and visibly reloaded the
+driver - a `StopController`, then a `DriverEntry` - with the **old** stamp:
+the installer kept the file already in `SYSTEM32\DRIVERS`. A disable and
+enable after copying the new file over it by hand restarted the controller
+with no `DriverEntry` at all, because Windows ME does not unload the image on
+a disable. And QEMU's `system_powerdown` does not shut ME down, it
+**hibernates** it: the relaunch's log began at `ResumeController`, the old
+image restored from disk. What loaded the new build was a Start-menu *Shut
+down* and a cold launch.
+
+Rules. **Read the stamp on the `DriverEntry` line, not the fact of a reload.**
+To replace a build on a 9x guest that already carries one, copy the file,
+shut down from the Start menu, and launch again; never `system_powerdown` an
+ME guest (Windows 98's shut down cleanly the same night, and 2b's
+`acpi=off` machine ignores it). And a controller restart on 9x is not an image
+load, so per-image trace budgets do not reset across its disable/enable
+cycles - silence in a later cycle's trace is the budget, not the path.

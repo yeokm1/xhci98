@@ -3216,13 +3216,32 @@ reading may not tick a box whose line names a guest.
             device install) and are not driver evidence by the owner's
             decision that multi-core 32-bit XP under TCG is not
             representative; this guest's SMP legs run under WHPX.*
-      - [ ] **the remaining legs on the per-endpoint build, single-core under
+      - [x] **the remaining legs on the per-endpoint build, single-core under
             TCG** (owner, 2026-09-15; no four-vCPU and no two-processor leg -
             98 and ME are uniprocessor by construction): Windows 98 under
             NUSB, ME under SweetLow's stack, Windows 2000 SP4. Install, the
             three devices, disable/enable, remove and rescan, with `per
             endpoint only` 1 and `forced` / `fallback polls` 0. Regression
-            readings of the mode, not tests of issue 8's race
+            readings of the mode, not tests of issue 8's race. *Taken
+            2026-09-15, all three PASSED on what each can take (issue 7
+            section 7.10): ME the full leg; Windows 98 without controller
+            stops, which NUSB cannot survive, device unplug/replug instead;
+            Windows 2000 with the USB audio device unplugged before each
+            disable.*
+      - [ ] **Windows 2000 refuses a live controller disable while a USB
+            audio device is attached** (2026-09-15, issue 7 section 7.10):
+            twice a restart prompt, the driver seeing only the mouse
+            endpoint's stop and aborts and no `StopController`; with audio
+            unplugged every disable applied live. What holds the stack was not
+            read, and whether it is the OS audio stack or something this
+            driver answers is not established. No earlier Windows 2000 run had
+            audio attached for a disable
+      - [ ] **`scripts\vm-matrix\prepare-image.ps1 -Xfer` stages a stale
+            package**: it reads `out\pkg-qemu`, while `make-package.ps1` has
+            written `out\pkg-qemu-<arch>` since the x64 split, so a prep boot
+            is handed whatever the old directory last held (found
+            2026-09-15, when it held a 1.0.2.0-era build; the single-core
+            legs were run from `vm\xferxp` instead)
     - [ ] **Vista x64: REMOVE/RESCAN does not complete, twice, and that
           clause had never been run on this guest.** Device Manager Uninstall
           of the devnode (package left in the store) wedged: attempt 1 sent

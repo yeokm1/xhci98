@@ -10,8 +10,10 @@ section 7.7), and **Windows XP SP3 x86 has passed at four vCPUs under WHPX**
 on the build carrying issue 8's fix on the 32-bit tier (section 7.9,
 2026-09-15, one run, after two TCG runs on that build stalled in PnP and were
 set aside by the owner's decision as not representative). **Windows 98, ME and
-2000 are still owed**, single-core under TCG by the owner's decision of the
-same day, because the fix changes the delivery path there too.
+2000 then passed single-core under TCG** the same night (section 7.10), each
+through the clauses it can take: Windows 98 under NUSB takes no controller
+stop at all, and Windows 2000 refused a live disable while a USB audio device
+was attached, a refusal not yet explained.
 Section 7 has the cause, the fix, what the re-run had to show and what it
 showed.
 The lost wakeup in usbport described below is real, and it is reachable
@@ -1154,7 +1156,60 @@ stack and Windows 2000, each on one core under TCG, by the owner's decision of
 four-vCPU leg would not be one there, and the owner did not take a
 two-processor Windows 2000 leg (its Professional edition's ceiling). These
 legs are regression readings of the per-endpoint delivery on those stacks,
-not tests of issue 8's race.
+not tests of issue 8's race. They were taken the same night: section 7.10.
+
+### 7.10 Windows 98, ME and 2000 on one core, 2026-09-15: the per-endpoint build on the older stacks, PASSED with two recorded departures
+
+Section 7.9's build (`B410BA07`, the x86 `qemu` flavour of `413581c`), from
+`vm\xferxp`, on each guest's ordinary machine under TCG with one CPU, host
+`minis-w11p-ykm`. Each guest ran from a local qcow2 converted out of a
+snapshot, so no image under `vm\` was written: Windows 98 SE from
+`win98.img` at `post-nusb` (NUSB 3.3, no driver), Windows 2000 SP4 from
+`win2k-xonly.img` at `win2k-xonly-clean-install` (no driver), and Windows ME
+from `winme.img` at `winme-sweetlow-driver` - SweetLow's stack with the
+2026-09-02 build already on it, since no snapshot has the stack without a
+driver. The owner drove Device Manager; the three devices were hot-plugged
+from the monitor as before (mouse, then audio and mass storage). Every reading
+is **runtime**, from this driver's log and its counters read live.
+
+| guest | reading |
+|---|---|
+| Windows 98 SE, NUSB | install from the transfer root and a shutdown; the load read stamp `Sep 15 2026 08:30:44`, interface `0xC8`, `completions delivered per endpoint only` 1, `only under usbport's lock` 1. All three devices bound (an install stall of about a minute on the USB disk cleared by itself, the guest idle). Settled read ALL PASS, 3 slots / 3 addressed / 3 reopened / iso 2, `isr` 50 = `dpc` 50. **No disable, enable, remove or rescan**: on Windows 98 under NUSB any controller stop bugchecks inside NUSB's `usbport.sys` (release notes, known limitations). Taken instead: the mass-storage device and the mouse unplugged and replugged, both back and working; live, 5,824 transfers submitted / 5,820 completed, `forced` 0, `fallback polls` 0. Shutdown: `SuspendController`, `DisableInterrupts`, `StopController(TRUE)` |
+| Windows ME, SweetLow | the new build on a cold boot, per-endpoint 1 and lock-only 1; three devices bound; settled read ALL PASS, 3 / 3 / 3 / iso 2; **five live disable/enable cycles**, every disable ending in `StopController(TRUE)`, 4 ports unpowered, halted, and every enable reading 3 slots / 3 addressed / 3 reopened with commands issued = completed, `forced` 0, `fallback polls` 0, `ResetController` 0 and both mode flags 1 read from memory; **remove** clean, **rescan** a fresh image load at the same stamp, ALL PASS, 3 / 3 / 3 / iso 2, tree complete |
+| Windows 2000 SP4 | install through Have Disk with no restart and no prompt; per-endpoint 1 and lock-only 1; three devices bound; settled read ALL PASS, 3 / 3 / 3 / iso 2. **A live disable with the USB audio device attached was refused by Windows, twice** (see below). With audio unplugged before each disable and replugged after each enable: disables 2 to 5 applied live, each ending in `StopController(TRUE)`, 4 ports unpowered, halted; every enable a fresh image load reading 2 slots / 2 / 2 for mouse and disk, commands issued = completed, `forced` 0, `fallback polls` 0, both mode flags 1, and 3 slots with commands issued = completed once audio was back. **Uninstall** clean with no restart; **rescan** a fresh load at the same stamp, ALL PASS, `forced` 0, `fallback polls` 0, then audio back and the tree complete |
+
+**The Windows 2000 refusal.** With all three devices attached, Device
+Manager's disable asked for a restart, twice. On both attempts the driver saw
+only the mouse endpoint's Stop Endpoint and two `AbortTransfer` - no port
+disable, no `DisableInterrupts`, no `StopController` - and the tree stayed;
+the mouse went on working, and `forced` and `fallback polls` stayed 0. The
+first was applied through the owner's restart (the controller booted
+disabled, and enable 1 was a clean fresh load: ALL PASS, 3 / 3 / 3 / iso 2).
+Then the audio device alone was unplugged and the disable retried, and the
+controller stopped live, its children leaving the tree; every later disable
+with audio unplugged applied live. So the refusal needs the audio device
+attached. **What held the stack was not read**, and whether it is Windows
+2000's audio stack holding the device open or something this driver answers
+is **not established**. No earlier Windows 2000 record here had an audio
+device attached for a disable, so this is the first reading of the
+combination, not a regression against one.
+
+**The Windows ME departures, all procedural.** Update Driver over the old
+build stopped the controller and loaded the image again with no restart
+prompt, but from the old file (its `DriverEntry` still read 2026-09-02); the new file was copied into
+`SYSTEM32\DRIVERS` from an MS-DOS prompt. A disable and enable then restarted
+the same loaded image (Windows ME does not unload it), and a monitor
+`system_powerdown` **hibernated** the guest, whose relaunch resumed the old
+build. Only a Start-menu shutdown and a cold boot loaded the new one, and the
+leg above is that boot.
+
+What this establishes: the per-endpoint delivery, on one CPU under TCG, runs
+on NUSB's Windows 98 stack, SweetLow's stack on Windows ME and Windows 2000
+SP4's own through every clause each target can take, with no forced drain, no
+fallback poll and no `ResetController` in any read. It is one run per
+guest, in virtual machines, and says nothing about SMP. Two things remain
+open: Windows 98's cycles, which that stack cannot take at all, and Windows
+2000's refusal with audio attached.
 
 ## Sources
 
@@ -1176,6 +1231,12 @@ Evidence, all under `vm\`:
   reads, screenshots and `guest-phys-512m-settle-stall.bin`); `static-tier\`
   (issue 8 section 4d). Launcher `vm\fix-issue7-xp-smp4\winxp-smp4.cmd`;
   snapshot `winxp-clean-install-smp4` on `vm\winxp.img`
+- `vm\i8tier-1cpu\` - the 2026-09-15 single-core legs (section 7.10): the
+  three launchers, and `win98-r1\`, `winme-r1\`, `win2k-r1\`, each with its
+  `readings.md`, full debug log, QEMU trace, `read-v300` verdicts, live
+  counter reads per stage and screenshots; `winme-r1\` also keeps the two
+  old-build logs. The work images are under
+  `C:\Users\yeokm1\xhci98-work\i8tier\` on `minis-w11p-ykm`
 - `vm\issue8-kd\i7smp4b\` - the 2026-09-14 retake (section 7.8): `part1\`
   (launcher tag `i7smp4b`: the debug log of the swap boot, the five cycles,
   the remove, the wrong-binary rescan and the restart; `gdb-load1..8-*.log`;
