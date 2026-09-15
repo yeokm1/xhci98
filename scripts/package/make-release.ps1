@@ -2243,21 +2243,24 @@ through the same physical connector.
 WHY ONLY USB 2.0, WHEN THE CONTROLLER IS A USB 3.0 ONE
 ------------------------------------------------------------------------------
 
-The USB stack these systems already have - usbport.sys and everything above
-it - does not support USB 3.0 at all. This driver is only the bottom layer, so
-SuperSpeed would mean rewriting that whole stack on all four: far more
-work than this driver, for a speed that most machines running Windows 98 or
-Windows 2000 could not make much use of anyway.
+The existing usbport.sys this driver depends on does not support USB 3.0, and
+neither does anything above it. This driver, xhci98.sys, is only the miniport
+underneath that stack.
 
-Nothing is lost but speed. Every USB 3.0 socket also carries the USB 2.0
-wires, and the controller presents them as two separate ports; this driver
-drives the USB 2.0 one, so a USB 3.0 device falls back to it and runs at High
-Speed. USB4 and Thunderbolt sockets are no different: USB4 carries USB 3.0,
-DisplayPort and PCIe through its tunnel but leaves USB 2.0 on the ordinary
-wires, so those sockets still have a USB 2.0 port behind them. What can differ
-on such a machine is which controller that port belongs to, so the machine may
-show more than one unrecognised USB controller - install on the one XHCIQUAL
-reports USB 2.0 ports for.
+SuperSpeed would mean rewriting the entire USB host controller driver for
+every one of these operating systems. That is significantly more work than
+this driver, for a speed that most machines running Windows 98 or Windows
+2000 are unlikely to effectively use. The project's xHCI programming guide,
+docs/usb-xhci-info/xhci-programming.md in the source repository, summarises
+what it would take.
+
+Every USB 3.x connector (USB4 and Thunderbolt included) also carries the USB
+2.0 wires, and xHCI exposes them as a separate logical port per connector.
+This driver manages those USB 2.0 ports and leaves the USB 3.x ones
+unpowered, so a SuperSpeed-capable device falls back on the USB 2.0 port and
+runs at High Speed. What can differ on such a machine is which controller a
+given port belongs to, so the machine may show more than one unrecognised USB
+controller - install on the one XHCIQUAL reports USB 2.0 ports for.
 
 
 WHAT THE VERSION NUMBER MEANS, AND WHAT IT DOES NOT
