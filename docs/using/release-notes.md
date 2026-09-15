@@ -286,6 +286,16 @@ because a user meets them through this driver.
   setup engine records no driver date for this unsigned package. Delete the
   cached `%SystemRoot%\inf\oemN.inf` and its `.pnf`, then install the new
   package; Setup picks it immediately.
+- Windows 2000: disabling the controller in Device Manager while a USB audio
+  device is attached and installed asks for a restart instead of applying.
+  Say *Yes*, or unplug the audio device first and the disable applies at
+  once. The refusal happens before anything reaches this driver: it has no
+  transfer outstanding and is asked nothing, and two builds with different
+  completion-delivery code behave the same. Which part of Windows holds the
+  device is not known. Measured with QEMU's emulated USB audio device in a
+  virtual machine on 2026-09-15/16; with mouse and storage devices alone the
+  disable applies live, and Windows ME under SweetLow's stack, with the same
+  audio device attached, disabled live in the same runs.
 - Windows 98: if the driver ever fails while starting the controller, the
   machine stops with `Windows protection error. You need to restart your
   computer.` (Windows 2000 simply reports Code 10.) Restart, press `F8`,

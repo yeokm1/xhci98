@@ -3228,7 +3228,7 @@ reading may not tick a box whose line names a guest.
             stops, which NUSB cannot survive, device unplug/replug instead;
             Windows 2000 with the USB audio device unplugged before each
             disable.*
-      - [ ] **Windows 2000 refuses a live controller disable while a USB
+      - [x] **Windows 2000 refuses a live controller disable while a USB
             audio device is attached** (2026-09-15, issue 7 section 7.10):
             twice a restart prompt, the driver seeing only the mouse
             endpoint's stop and aborts and no `StopController`; with audio
@@ -3242,8 +3242,9 @@ reading may not tick a box whose line names a guest.
             change. Audio alone reproduces it (per-endpoint build), with this
             driver's counters flat and nothing outstanding at the refusal, so
             the holder is above the miniport - the audio stack holding the
-            device open is inferred, not read. What is left is naming the
-            holder inside the guest, or recording it as a limitation*
+            device open is inferred, not read. Closed 2026-09-16 on the
+            owner's decision: recorded as a Windows 2000 known limitation in
+            `docs/using/release-notes.md`, the holder left unnamed*
       - [ ] **`scripts\vm-matrix\prepare-image.ps1 -Xfer` stages a stale
             package**: it reads `out\pkg-qemu`, while `make-package.ps1` has
             written `out\pkg-qemu-<arch>` since the x64 split, so a prep boot

@@ -1215,6 +1215,8 @@ binding. When Windows refuses, this driver has no transfer outstanding and
 is being asked for nothing, so the holder is above the miniport. That it is
 Windows 2000's audio stack keeping the device open is an inference - the
 binding did open the stream - and no handle was read inside the guest.
+On the owner's decision of 2026-09-16 it is recorded as a Windows 2000 known
+limitation in the release notes, with the holder left unnamed.
 
 **The Windows ME departures, all procedural.** Update Driver over the old
 build stopped the controller and loaded the image again with no restart
