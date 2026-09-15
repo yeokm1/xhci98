@@ -10,7 +10,11 @@ This project is from a solo human with AI-assistance only so bugs are not unexpe
 
 This is my 2020 ThinkPad P14s Gen 1 (Comet Lake xHCI, no EHCI) on Windows 98 SE. Connected devices are 7-port hub, USB Ethernet, USB Audio, a USB-to-SATA bridge, two flash drives and a mouse all using the xHCI controller.
 
-Demo video: https://www.youtube.com/watch?v=AU77f9CSbYc
+Video by [Omores](https://www.youtube.com/@O_mores) featuring this driver:
+
+[![omores video](https://img.youtube.com/vi/7SOyvvC7P4E/hqdefault.jpg)](https://www.youtube.com/watch?v=7SOyvvC7P4E)
+
+My personal demo video: https://www.youtube.com/watch?v=AU77f9CSbYc
 
 Blog post of this project: https://yeokhengmeng.com/2026/08/xhci98-usb-host-driver/
 
