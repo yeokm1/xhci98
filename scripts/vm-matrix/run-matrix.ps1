@@ -1222,12 +1222,12 @@ foreach ($tgt in $targetsToRun) {
         # the preparation carried into the guest.  Absent, it says so; the stamp
         # and the identity line are the witnesses that a driver is installed,
         # and this line is only what it was built from.
-        $pkgSys = Join-Path $repo "out\pkg-qemu\xhci98.sys"
+        $pkgSys = Join-Path (Get-QemuPackageDir -Repo $repo -Arch 'x86') "xhci98.sys"
         $driverLine = if (Test-Path -LiteralPath $pkgSys) {
             $item = Get-Item -LiteralPath $pkgSys
             ("{0} qemu, {1} B, sha256 {2}" -f $version, $item.Length, (Get-FileHash -LiteralPath $pkgSys -Algorithm SHA256).Hash.Substring(0, 16).ToLowerInvariant())
         } else {
-            ("{0} qemu, out\pkg-qemu\xhci98.sys not present on this host" -f $version)
+            ("{0} qemu, {1} not present on this host" -f $version, $pkgSys)
         }
         $imageLine = ("{0}, stamp {1}, from {2} {3}" -f (Join-Path $cfg.VmDir $tgt.Image), $imageStampByTarget[$tgt.Id], $tgt.CloneFrom.Image, $tgt.CloneFrom.Snapshot)
         $accel = if ($tgt.Accel -ne "") { $tgt.Accel } else { "tcg" }

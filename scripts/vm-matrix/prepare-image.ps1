@@ -121,7 +121,7 @@ param(
     # guest needs beside the driver and that the package must never carry -
     # the first use is SweetLow's USB 2.0 stack under test (tools\sweetlow-
     # extracted, issue #1), which a fresh 2a guest installs by right-clicking
-    # its USB2.INF. Third-party files stay out of out\pkg-qemu this way.
+    # its USB2.INF. Third-party files stay out of the qemu package this way.
     [string]$XferAdd = "",
     # Pin the device to a specific ROOT port - see the comment at the attach.
     [int]$AtPort = 0,
@@ -516,7 +516,9 @@ if ($Boot) {
     if ($Xfer) {
         $xferDir = if ($WorkDir -ne "") { Join-Path $WorkDir "xfer" } else { Join-Path $vmDir "xfer-p10" }
         if (-not (Test-Path $xferDir)) { New-Item -ItemType Directory -Path $xferDir -Force | Out-Null }
-        $qemuSys = Join-Path $repo "out\pkg-qemu\xhci98.sys"
+        $pkgDir = Get-QemuPackageDir -Repo $repo -Arch 'x86'
+        $pkgProblem = Get-QemuPackageProblem -Repo $repo -Arch 'x86'
+        $qemuSys = Join-Path $pkgDir "xhci98.sys"
         $staged = Join-Path $xferDir "XHCI98.SYS"
         # A FRESH GUEST GETS THE WHOLE PACKAGE, NOT A LOOSE .SYS.  A Phase 10
         # image already has the driver installed and only needs the binary
@@ -527,16 +529,13 @@ if ($Boot) {
         # package directory is copied as make-package.ps1 laid it
         # out, and the guest is pointed at the directory, never at a file.
         if ($isFresh -or $XferPackage) {
-            $pkgDir = Join-Path $repo "out\pkg-qemu"
-            if (-not (Test-Path -LiteralPath (Join-Path $pkgDir "xhci98.inf"))) {
-                throw ("no qemu package at {0} (xhci98.inf missing). Build it with: scripts\build-driver.cmd qemu, then scripts\package\make-package.ps1 -Flavor qemu." -f $pkgDir)
-            }
+            if ($null -ne $pkgProblem) { throw $pkgProblem }
             Get-ChildItem -LiteralPath $xferDir -Force | Remove-Item -Recurse -Force
             Copy-Item -Path (Join-Path $pkgDir "*") -Destination $xferDir -Recurse -Force
             $staged = Join-Path $xferDir "xhci98.sys"
             Write-Host ("transfer drive carries the whole qemu package from {0}:" -f $pkgDir)
             foreach ($f in (Get-ChildItem -LiteralPath $xferDir -File)) { Write-Host ("  {0,-16} {1,9:N0} B" -f $f.Name, $f.Length) }
-        } elseif (Test-Path $qemuSys) {
+        } elseif ($null -eq $pkgProblem) {
             Copy-Item -LiteralPath $qemuSys -Destination $staged -Force
         } else {
             # **The stale file is DELETED, not left behind.** This directory
@@ -548,7 +547,7 @@ if ($Boot) {
             # it makes the guest's copy step fail loudly instead.
             if (Test-Path $staged) { Remove-Item -LiteralPath $staged -Force }
             $staged = $null
-            Write-Warning ("no qemu build at {0} - build it with: scripts\build-driver.cmd qemu, then scripts\package\make-package.ps1 -Flavor qemu. Any XHCI98.SYS left on the transfer drive by an earlier run has been removed, so the drive carries no driver." -f $qemuSys)
+            Write-Warning ("{0} Any XHCI98.SYS left on the transfer drive by an earlier run has been removed, so the drive carries no driver." -f $pkgProblem)
         }
         # The extra directory rides in a subdirectory so it can never shadow a
         # package file, and the 8.3 name is what the guest will see it as.

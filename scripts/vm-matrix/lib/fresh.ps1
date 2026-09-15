@@ -594,3 +594,40 @@ function Get-StampProblems {
     }
     return $problems
 }
+
+# WHERE THE QEMU PACKAGE IS.  make-package.ps1 names its default output
+# out\pkg-<flavour>-<arch>, and both harness scripts read the package from
+# here - prepare-image.ps1 to stage it on a transfer drive, run-matrix.ps1 to
+# name it in a post-release header.  They each read out\pkg-qemu until
+# 2026-09-16, a directory the packager had stopped writing, so a prep boot was
+# handed whatever that directory last held (a 1.0.2.0-era build, found that
+# day) and nothing said so.  Every matrix target is a 32-bit guest, so the
+# callers ask for x86.
+function Get-QemuPackageDir {
+    param(
+        [Parameter(Mandatory = $true)][string]$Repo,
+        [ValidateSet('x86', 'amd64')][string]$Arch = 'x86'
+    )
+    return (Join-Path $Repo ("out\pkg-qemu-{0}" -f $Arch))
+}
+
+# Why the package cannot be used, or $null when it can.  A package is the INF
+# and the binary together.  The untagged out\pkg-qemu is named when it holds a
+# binary, because that is the stale copy the old path read, and it is refused
+# rather than used: its presence says nothing about which build it is.
+function Get-QemuPackageProblem {
+    param(
+        [Parameter(Mandatory = $true)][string]$Repo,
+        [ValidateSet('x86', 'amd64')][string]$Arch = 'x86'
+    )
+    $dir = Get-QemuPackageDir -Repo $Repo -Arch $Arch
+    if ((Test-Path -LiteralPath (Join-Path $dir "xhci98.inf")) -and (Test-Path -LiteralPath (Join-Path $dir "xhci98.sys"))) {
+        return $null
+    }
+    $build = ("Build it with: scripts\build-driver.cmd qemu, then scripts\package\make-package.ps1 -Flavor qemu -Arch {0}." -f $Arch)
+    $legacy = Join-Path $Repo "out\pkg-qemu"
+    if (Test-Path -LiteralPath (Join-Path $legacy "xhci98.sys")) {
+        return ("no qemu package at {0} (it needs xhci98.inf and xhci98.sys). {1} holds a binary, but make-package.ps1 no longer writes that directory, so it is an older build of unknown origin and is not used. {2}" -f $dir, $legacy, $build)
+    }
+    return ("no qemu package at {0} (it needs xhci98.inf and xhci98.sys). {1}" -f $dir, $build)
+}

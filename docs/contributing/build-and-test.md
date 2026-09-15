@@ -3018,7 +3018,7 @@ controller at all, and the bring-up order is:
    `C:\WINNT\system32\drivers\USBD.SYS`. Shut down cleanly.
 2. Install boot: `qemu-win2k-acpi-run.cmd`. Device Manager -> the
    unrecognised USB controller (`PCI\CC_0C0330`, Code 1) -> Update Driver ->
-   Have Disk -> `xhci98.inf` from `out\pkg-qemu\` (staged on the VVFAT share
+   Have Disk -> `xhci98.inf` from `out\pkg-qemu-x86\` (staged on the VVFAT share
    at `vm\xfer\pkg\`). Accept the unsigned-driver warning. Confirm
    `DriverEntry (built ...)` and a clean start in `vm\win2kacpi-debugcon.log`.
    That confirmation reads the port-`0xE9` log, and only the `qemu` flavour
@@ -4328,7 +4328,7 @@ to learn.
   previous build while `vm\xfer\XHCI98.SYS` beside it had been refreshed, so
   a correct copy from the wrong source produced a banner indistinguishable
   from a copy that never happened. Refresh every staged copy of a binary, not
-  the one you happen to be thinking of: `Copy-Item out\pkg-qemu\* vm\xfer\pkg\
+  the one you happen to be thinking of: `Copy-Item out\pkg-qemu-x86\* vm\xfer\pkg\
   -Force` alongside the root-level file.
 
   A VM session that reads the trace or

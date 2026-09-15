@@ -142,7 +142,8 @@ these labels is unique in the tree, so `grep` finds them.
 
 Note the spelling: `RhPortsDriventoU0`, lowercase `t` in "to", declared in
 `src/xhci.h`. `RhPortsDrivenToU0` matches nothing in `src/`. All these lines are
-`XHCI_DBG_*`, so `qemu` build only: diagnose from `out\pkg-qemu\`.
+`XHCI_DBG_*`, so `qemu` build only: diagnose from `out\pkg-qemu-x86\`
+(`out\pkg-qemu-amd64\` for the 64-bit build).
 `src\sources` defines `XHCI_DBG_LIVE` for that flavour and for nothing else,
 and without that define each macro compiles to nothing. The shipping `debug`
 build keeps the DDK's `DBG` (which here is `/Oy-` and `VS_FF_DEBUG`, not

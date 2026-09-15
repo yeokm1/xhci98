@@ -3245,12 +3245,18 @@ reading may not tick a box whose line names a guest.
             device open is inferred, not read. Closed 2026-09-16 on the
             owner's decision: recorded as a Windows 2000 known limitation in
             `docs/using/release-notes.md`, the holder left unnamed*
-      - [ ] **`scripts\vm-matrix\prepare-image.ps1 -Xfer` stages a stale
+      - [x] **`scripts\vm-matrix\prepare-image.ps1 -Xfer` stages a stale
             package**: it reads `out\pkg-qemu`, while `make-package.ps1` has
             written `out\pkg-qemu-<arch>` since the x64 split, so a prep boot
             is handed whatever the old directory last held (found
             2026-09-15, when it held a 1.0.2.0-era build; the single-core
-            legs were run from `vm\xferxp` instead)
+            legs were run from `vm\xferxp` instead). *Fixed 2026-09-16:
+            `lib\fresh.ps1` `Get-QemuPackageDir` / `Get-QemuPackageProblem`
+            name `out\pkg-qemu-<arch>` for both `prepare-image.ps1` and
+            `run-matrix.ps1`'s post-release header, and refuse (rather than
+            use) an untagged `out\pkg-qemu` or a binary without its INF;
+            `selftest.ps1` holds 11 checks for it, 7 of which fail against
+            the old path, and reads 252 checks, all passed. No guest run*
     - [ ] **Vista x64: REMOVE/RESCAN does not complete, twice, and that
           clause had never been run on this guest.** Device Manager Uninstall
           of the devnode (package left in the store) wedged: attempt 1 sent

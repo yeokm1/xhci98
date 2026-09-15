@@ -48,13 +48,13 @@ free one "free", and they survive only in the obj directory names it writes.
 qemu is a first-class flavour and this script stages it, because that is how it
 reaches a guest at all - it is the emulator and bench build, carrying the
 port-0xE9 mirror and the live per-line trace. **It is NEVER PUBLISHED**: it
-stages to out\pkg-qemu with a banner saying so, and scripts\package\make-release.ps1
+stages to out\pkg-qemu-<arch> with a banner saying so, and scripts\package\make-release.ps1
 refuses it by reading the image's own flavour marker rather than by trusting a
 path. See docs\contributing\design\08-build-flavours-and-the-log-channel.md.
 
 .PARAMETER OutDir
 Where to build the package. A relative path is taken as relative to the current
-directory. Defaults to out\pkg-<flavor> in the repository.
+directory. Defaults to out\pkg-<flavor>-<arch> in the repository.
 
 .PARAMETER SkipPackageGate
 Skip the post-staging check-inf.ps1 -PackageDir run only. The INF is gated

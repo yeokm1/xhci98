@@ -751,6 +751,35 @@ Assert "no MiniPortExtensionSize refuses the stamp"    $true (@(Get-StampProblem
 $stampWrong = $stampOk.Clone(); $stampWrong.IdentSize = 99999
 Assert "another binary's size refuses the stamp"       $true (@(Get-StampProblems @stampWrong) -join ' ' -match 'not the build under test')
 
+Write-Host "--- the qemu package: read from out\pkg-qemu-<arch>, and the untagged out\pkg-qemu is refused, not used ---"
+$pkgRepo = Join-Path ([IO.Path]::GetTempPath()) ("xhci98-selftest-pkg-" + [IO.Path]::GetRandomFileName())
+New-Item -ItemType Directory -Path $pkgRepo -Force | Out-Null
+try {
+    Assert "the x86 package directory is what make-package.ps1 writes" (Join-Path $pkgRepo 'out\pkg-qemu-x86') (Get-QemuPackageDir -Repo $pkgRepo)
+    Assert "...and amd64 names its own"                    (Join-Path $pkgRepo 'out\pkg-qemu-amd64') (Get-QemuPackageDir -Repo $pkgRepo -Arch 'amd64')
+    $msg = Get-QemuPackageProblem -Repo $pkgRepo
+    Assert "no package at all is a problem"                $true ($msg -match 'no qemu package at .*pkg-qemu-x86')
+    Assert "...that says how to build one"                 $true ($msg -match 'make-package\.ps1 -Flavor qemu -Arch x86')
+    Assert "...and names no stale directory that is not there" $false ($msg -match 'older build')
+    $legacyDir = Join-Path $pkgRepo 'out\pkg-qemu'
+    New-Item -ItemType Directory -Path $legacyDir -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $legacyDir 'xhci98.sys') -Value 'old' -Encoding ascii
+    Set-Content -LiteralPath (Join-Path $legacyDir 'xhci98.inf') -Value 'old' -Encoding ascii
+    $msg = Get-QemuPackageProblem -Repo $pkgRepo
+    Assert "a stale untagged out\pkg-qemu does not stand in for the package" $true ($null -ne $msg)
+    Assert "...and is named as the older build it is"      $true ($msg -match 'pkg-qemu holds a binary' -and $msg -match 'not used')
+    $newDir = Get-QemuPackageDir -Repo $pkgRepo
+    New-Item -ItemType Directory -Path $newDir -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $newDir 'xhci98.sys') -Value 'new' -Encoding ascii
+    Assert "a binary without its INF is not a package"     $true ($null -ne (Get-QemuPackageProblem -Repo $pkgRepo))
+    Set-Content -LiteralPath (Join-Path $newDir 'xhci98.inf') -Value 'new' -Encoding ascii
+    Assert "the INF and the binary together are"           $true ($null -eq (Get-QemuPackageProblem -Repo $pkgRepo))
+    Assert "...whatever the untagged directory still holds" $true (Test-Path -LiteralPath (Join-Path $legacyDir 'xhci98.sys'))
+    Assert "an x86 package does not satisfy amd64"         $true ($null -ne (Get-QemuPackageProblem -Repo $pkgRepo -Arch 'amd64'))
+} finally {
+    Remove-Item -LiteralPath $pkgRepo -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host "--- the monitor transport: a reply is complete only with its prompt, and a path with a space is quoted ---"
 Assert "a reply ending in the prompt is complete"     $true  (Test-MonitorReplyComplete -Raw "info usb`r`n(qemu) ")
 $esc = [string][char]27
