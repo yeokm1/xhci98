@@ -3235,7 +3235,11 @@ reading may not tick a box whose line names a guest.
             unplugged every disable applied live. What holds the stack was not
             read, and whether it is the OS audio stack or something this
             driver answers is not established. No earlier Windows 2000 run had
-            audio attached for a disable
+            audio attached for a disable. *2026-09-16: reproduced on the
+            build before `413581c` (per-endpoint delivery compiled out, both
+            mode flags 0) once USB Audio Device was bound, with this driver
+            seeing nothing of the refused disable - so not the per-endpoint
+            change. Next: attach audio alone, then read who holds the stack*
       - [ ] **`scripts\vm-matrix\prepare-image.ps1 -Xfer` stages a stale
             package**: it reads `out\pkg-qemu`, while `make-package.ps1` has
             written `out\pkg-qemu-<arch>` since the x64 split, so a prep boot

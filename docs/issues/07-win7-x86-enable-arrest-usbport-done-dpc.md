@@ -1194,6 +1194,17 @@ is **not established**. No earlier Windows 2000 record here had an audio
 device attached for a disable, so this is the first reading of the
 combination, not a regression against one.
 
+**It is not the per-endpoint change** (2026-09-16, `vm\i8tier-1cpu\win2k-base-r1\`).
+The x86 `qemu` build of `bc16c6e` - the commit before `413581c`, identical
+but for the guard, so both mode flags read 0 - was installed on a fresh copy
+of the same clean image and given the same three devices. Its first disable
+applied live, but it came a minute after the audio device was plugged and
+before the USB Audio Device was shown bound; after an enable, with USB Audio
+Device visibly bound, the next disable **asked for a restart**, and this
+driver saw nothing of it at all - no endpoint stop, no abort, no port
+disable. So the refusal needs a bound USB Audio Device and reproduces without
+the per-endpoint delivery. What holds the stack is still not read.
+
 **The Windows ME departures, all procedural.** Update Driver over the old
 build stopped the controller and loaded the image again with no restart
 prompt, but from the old file (its `DriverEntry` still read 2026-09-02); the new file was copied into
