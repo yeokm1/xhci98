@@ -3191,8 +3191,9 @@ reading may not tick a box whose line names a guest.
             rescan, 0 bugchecks, 0 damaged heads (issue 7 section 7.8). The
             Verifier and layout-audit items above are superseded by issue 8's
             caught write.*
-      - [ ] **2026-09-14/15, XP 32-bit raised to `-smp 4` (`-cpu core2duo`,
-            `-accel tcg,thread=multi`): UNFINISHED, two findings.** First,
+      - [x] **2026-09-14/15, XP 32-bit raised to `-smp 4` (`-cpu core2duo`,
+            `-accel tcg,thread=multi`): two findings, then PASSED under WHPX
+            on 2026-09-15.** First,
             bugcheck `FC` on the first device attach, twice, with the mouse
             alone - **not SMP**: XP SP3's `MP_CloseEndpoint` pushes three
             arguments and the 2026-09-12 two-parameter callee cleaned eight
@@ -3207,10 +3208,19 @@ reading may not tick a box whose line names a guest.
             was taken the same night: every 32-bit usbport was read to share
             the unlocked mover (issue 8 section 4d) and the `_WIN64` guard was
             lifted, so the 32-bit binary now delivers per endpoint on its 200
-            tier.* **Owed: this leg's settled read, five cycles, remove and
-            rescan on that build; then 98, ME, 2000 at four vCPUs, and the
-            shipping targets' single-vCPU install legs, since their binary
-            changed**
+            tier.* *2026-09-15: on that build (`B410BA07`) the leg PASSED
+            under `-accel whpx,kernel-irqchip=off` (r5, host `fw-w11p-ykm`) -
+            settled read, five live cycles, remove, rescan, `forced` 0 and
+            `fallback polls` 0 on every load; one run. Two TCG runs of the
+            same build stalled in PnP (r4 on the third disable, r6 on a
+            device install) and are not driver evidence by the owner's
+            decision that multi-core 32-bit XP under TCG is not
+            representative; this guest's SMP legs run under WHPX.*
+      - [ ] **the remaining NT 5.x legs on the per-endpoint build**: Windows
+            98 under NUSB, ME under SweetLow's stack and Windows 2000 at four
+            vCPUs, each launcher's accelerator, CPU and `-smp` lines checked
+            first; and the two shipping targets' single-vCPU install legs,
+            since their 32-bit binary changed. Issue 7 section 7.9's clauses
     - [ ] **Vista x64: REMOVE/RESCAN does not complete, twice, and that
           clause had never been run on this guest.** Device Manager Uninstall
           of the devnode (package left in the store) wedged: attempt 1 sent

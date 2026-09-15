@@ -11,8 +11,11 @@ bugcheck, because the x86 walk only reads** (issue 7 section 7.9,
 `vm\issue7-xp32-smp4\r3\livelock-readings.md`). Section 4d then read the
 other three 32-bit builds as sharing the mover, and **on the owner's
 decision of 2026-09-15 the guard was lifted: the 32-bit build sets the mode
-on its Version 200 tier too. Its first run - the XP 32-bit four-vCPU leg -
-is owed**, and the two shipping targets have only the reading, not a run. The cause is this driver's: on XP
+on its Version 200 tier too. Its first run, the XP 32-bit four-vCPU leg,
+passed on 2026-09-15 under WHPX** (issue 7 section 7.9: settled read, five
+live cycles, remove and rescan, `forced` 0 and `fallback polls` 0 on every
+load; one run, on one host), and the two shipping targets and ME have only
+the reading, not a run. The cause is this driver's: on XP
 x64 it handed completions to usbport from contexts that did not hold the
 transfer's own endpoint lock, and XP x64's completion service needs that lock
 (section 4c). The corruption itself is a store by usbport, caught by a
@@ -465,6 +468,18 @@ four-vCPU leg on this build (issue 7 section 7.9's clauses), then Windows 98
 under NUSB, ME under SweetLow's stack and Windows 2000 at four vCPUs, and the
 single-vCPU install legs of the two shipping targets, since their binary
 changed.
+
+**runtime** - 2026-09-15, the first of those, on the x86 `qemu` build of
+`413581c` (SHA-256 `B410BA07...5CAF47EE`): XP SP3 x86 at four vCPUs read
+`completions delivered per endpoint only` 1 on every load, and under
+`-accel whpx,kernel-irqchip=off` passed the settled read, five live
+disable/enable cycles, remove and rescan with `forced` 0 and `fallback polls`
+0 throughout. Two runs of the same build under TCG stalled in PnP above the
+driver - one on a third disable, one on a device install before any cycle -
+and are set aside by the owner's decision that multi-core 32-bit XP under TCG
+is not a representative system; issue 7 section 7.9 has all three runs and
+what they do not isolate. Windows 98, ME and 2000 at four vCPUs and the two
+single-vCPU install legs remain owed.
 
 ## 5. What was ruled out, and what an instrument could not see
 

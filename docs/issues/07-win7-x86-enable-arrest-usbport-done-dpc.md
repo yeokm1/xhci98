@@ -6,8 +6,12 @@ the same day on all four NT 6.x guests, every clause passing on each**
 refused and that is stated there, not smoothed over). Of the NT 5.x legs,
 **Windows XP x64 has passed at four vCPUs** on the build carrying issue 8's
 fix (section 7.8, 2026-09-14, after a bugcheck on the earlier build in
-section 7.7). **The other four NT 5.x legs are still owed**, because the fix
-changes the delivery path there too.
+section 7.7), and **Windows XP SP3 x86 has passed at four vCPUs under WHPX**
+on the build carrying issue 8's fix on the 32-bit tier (section 7.9,
+2026-09-15, one run, after two TCG runs on that build stalled in PnP and were
+set aside by the owner's decision as not representative). **Windows 98, ME and
+2000 at four vCPUs are still owed**, because the fix changes the delivery
+path there too.
 Section 7 has the cause, the fix, what the re-run had to show and what it
 showed.
 The lost wakeup in usbport described below is real, and it is reachable
@@ -966,7 +970,7 @@ run after issue 8's `i8diag1`, on one guest, in a virtual machine; it is
 support, not proof. **Four NT 5.x legs remain** (98, ME, 2000, XP32), and
 issue 8 section 4c's note on the 32-bit Version 200 targets still stands.
 
-### 7.9 The XP 32-bit four-vCPU leg, 2026-09-14: a BUGCHECK on the first device that was not SMP's, and its fix
+### 7.9 The XP 32-bit four-vCPU leg, 2026-09-14/15: a BUGCHECK on the first device that was not SMP's, its fix, a livelock, and a PASS under WHPX
 
 The 32-bit XP guest raised to four vCPUs for the same leg section 7.8 took on
 XP x64. `vm\winxp.img` at snapshot `winxp-clean-install-smp4`: a clean XP
@@ -1102,7 +1106,51 @@ finding of its own. Whether the x86 Version 200 tier takes issue 8's fix is
 the owner's decision, which issue 8 section 4c already names; until then the
 leg cannot be run to its clauses. Windows 98, ME and 2000 at four vCPUs
 remain unrun, and this reading says they share the exposure only if their
-`usbport` moves the transfer the same way, which is not read.
+`usbport` moves the transfer the same way, which is not read. *(Both were
+answered the same night: issue 8 section 4d read all three as moving it the
+same way, and the owner took the fix on the whole 32-bit tier. The leg was
+then taken on that build, below.)*
+
+**The leg on the per-endpoint build, 2026-09-15: three runs, and it PASSED
+under WHPX.** All three off a fresh revert of `winxp-clean-install-smp4`, on
+the x86 `qemu` build carrying `413581c` (the `_WIN64` guard lifted), SHA-256
+`B410BA07...5CAF47EE`, stamp `DriverEntry (built Sep 15 2026 08:30:44)`,
+staged at the transfer root. Every load read `completions delivered per
+endpoint only` 1 and `completions delivered only under usbport's lock` 1 -
+the x86 tier's expected values from this build on, replacing the 0 the r3
+row above carries - and the stamp matched the root. r1 to r4 ran on the
+owner's other host; r5 and r6 on `fw-w11p-ykm` (i5-1240P). Every reading
+below is **runtime**, from this driver's own log and counters.
+
+| run | host, accelerator | reading |
+|---|---|---|
+| r4 (`i7xp32smp4r4`) | other host, `-accel tcg,thread=multi` (the section's launcher, unchanged) | settled read ALL PASS, 3 slots / 5 addressed / iso 2 / `forced` 0 / `fallback polls` 0; alive more than six minutes past where r3 livelocked, CPU samples in idle and HAL, never usbport. Cycles 1 and 2 clean. **Cycle 3's disable hung in PnP**: the log stops after usbhub's port-3 and port-2 disables, before the mouse endpoint's Stop Endpoint and aborts that cycle 2 showed at the same point; three CPUs halted in the idle driver, the guest clock running, IRQ 5 static, `USBSTS` 0; live counters read twice 20 s apart moved only on `CheckController`, health polls and frame samples - no `PollEndpoint`, no invalidate, no command, `transfers submitted` = `completed` |
+| r5 (`i7xp32smp4r5`) | `fw-w11p-ykm`, `-accel whpx,kernel-irqchip=off`, otherwise r4's command line | settled read ALL PASS, 3 slots / 5 addressed / iso 2 / 0 / 0; **five disable/enable cycles, cycle 3 included**, every disable the full sequence (ports 3 and 2, Stop Endpoint on the mouse's DCI 3, two `AbortTransfer`, port 1, `DisableInterrupts`, `StopController`, 4 ports unpowered, halted), every enable ALL PASS with 3 slots / 3 addressed / iso 2 / `forced` 0 / `fallback polls` 0; **remove and rescan** clean, the reload's stamp and the binary's hash unchanged, ALL PASS, tree back; `system_powerdown` clean |
+| r6 (`i7xp32smp4r6`) | `fw-w11p-ykm`, `-accel tcg,thread=multi` (r4's launcher) | laggy from boot; load and first plug ALL PASS, all three devices on the bus; then **Device Manager stalled at least nine minutes** on the "Disk drive" install during the settle, before any cycle, while the driver's counters kept moving (transfers, interrupts, DPCs, `PollEndpoint`, health polls; commands 17/17; `forced` 0) and the QEMU trace showed the mass-storage device's CBW/CSW polling pair about twice a second. Stopped. Physical memory saved, not analysed |
+
+**The owner's decision, 2026-09-15**: multi-core 32-bit XP under TCG does not
+work well enough to be a representative system, so this guest's SMP legs run
+under WHPX, and r4's and r6's PnP stalls are **not driver evidence** - they
+are recorded here, not chased. That does not withdraw what TCG found on this
+guest: r1/r2's `0xFC` and r3's livelock were real defects, read to their
+cause and fixed. The decision is about this guest; the other guests' four-vCPU
+legs (sections 7.7 and 7.8 on XP x64) ran under TCG and stand as they are.
+
+What this establishes, and no more: on XP SP3 x86 at four vCPUs, the build
+carrying issue 7's fix, the `CloseEndpoint` fix and issue 8's per-endpoint
+delivery passed every section 7.4 clause **once, under WHPX, on one host** -
+the settled read, five live disable/enable cycles, remove and rescan - with
+no bugcheck, no livelock, no forced drain and no fallback poll. r5 changed the
+host **and** the accelerator against r4, and r6 held the host and put TCG
+back and stalled earlier, in a different place, so the three do not isolate
+which change removed r4's cycle-3 hang. What r4 read is consistent with a wait
+above the miniport - the driver held no outstanding transfer by its own
+counters and usbport was issuing it nothing - but whether a completion the
+per-endpoint mode had parked was never handed back is not established: no
+counter publishes the completions parked at a given moment. **Three NT 5.x
+legs remain**: Windows 98 under NUSB, ME under SweetLow's stack and Windows
+2000 at four vCPUs, under WHPX, and the two shipping targets' single-vCPU
+install legs, since their binary changed.
 
 ## Sources
 
@@ -1116,9 +1164,14 @@ Evidence, all under `vm\`:
   `kd7-newbuild.log` showing the two callees' `ret`); `r3\` (the fixed-build
   run: `debugcon-settled.log`, `settled.png`, `hang.png`,
   `debugcon-frozen.log`, `livelock-readings.md`, `guest-phys-512m.bin`,
-  `kd1-loop.log`, `kd2-callers.log`). Launcher
-  `vm\fix-issue7-xp-smp4\winxp-smp4.cmd`; snapshot `winxp-clean-install-smp4`
-  on `vm\winxp.img`
+  `kd1-loop.log`, `kd2-callers.log`); `r4\hang-readings.md` (with
+  `guest-phys-512m.bin`, the hang screenshots, register and counter reads and
+  the build's `offsets.txt`); `r5\readings.md` (with `debugcon-full.log`, the
+  counter reads, screenshots and `winxp-smp4-whpx.cmd`, the WHPX launcher);
+  `r6\readings.md` (with `debugcon-full.log`, `qemu-trace.log`, the counter
+  reads, screenshots and `guest-phys-512m-settle-stall.bin`); `static-tier\`
+  (issue 8 section 4d). Launcher `vm\fix-issue7-xp-smp4\winxp-smp4.cmd`;
+  snapshot `winxp-clean-install-smp4` on `vm\winxp.img`
 - `vm\issue8-kd\i7smp4b\` - the 2026-09-14 retake (section 7.8): `part1\`
   (launcher tag `i7smp4b`: the debug log of the swap boot, the five cycles,
   the remove, the wrong-binary rescan and the restart; `gdb-load1..8-*.log`;
