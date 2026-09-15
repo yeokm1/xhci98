@@ -478,8 +478,10 @@ disable/enable cycles, remove and rescan with `forced` 0 and `fallback polls`
 driver - one on a third disable, one on a device install before any cycle -
 and are set aside by the owner's decision that multi-core 32-bit XP under TCG
 is not a representative system; issue 7 section 7.9 has all three runs and
-what they do not isolate. Windows 98, ME and 2000 at four vCPUs and the two
-single-vCPU install legs remain owed.
+what they do not isolate. What remains is Windows 98, ME and 2000 on one core
+under TCG (the owner's decision of the same day, replacing the four-vCPU legs
+named above: 98 and ME are uniprocessor by construction), as regression
+readings of the mode on those stacks rather than tests of this race.
 
 ## 5. What was ruled out, and what an instrument could not see
 

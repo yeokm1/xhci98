@@ -10,8 +10,8 @@ section 7.7), and **Windows XP SP3 x86 has passed at four vCPUs under WHPX**
 on the build carrying issue 8's fix on the 32-bit tier (section 7.9,
 2026-09-15, one run, after two TCG runs on that build stalled in PnP and were
 set aside by the owner's decision as not representative). **Windows 98, ME and
-2000 at four vCPUs are still owed**, because the fix changes the delivery
-path there too.
+2000 are still owed**, single-core under TCG by the owner's decision of the
+same day, because the fix changes the delivery path there too.
 Section 7 has the cause, the fix, what the re-run had to show and what it
 showed.
 The lost wakeup in usbport described below is real, and it is reachable
@@ -1147,10 +1147,14 @@ which change removed r4's cycle-3 hang. What r4 read is consistent with a wait
 above the miniport - the driver held no outstanding transfer by its own
 counters and usbport was issuing it nothing - but whether a completion the
 per-endpoint mode had parked was never handed back is not established: no
-counter publishes the completions parked at a given moment. **Three NT 5.x
-legs remain**: Windows 98 under NUSB, ME under SweetLow's stack and Windows
-2000 at four vCPUs, under WHPX, and the two shipping targets' single-vCPU
-install legs, since their binary changed.
+counter publishes the completions parked at a given moment. **Three legs
+remain, and none of them is SMP**: Windows 98 under NUSB, ME under SweetLow's
+stack and Windows 2000, each on one core under TCG, by the owner's decision of
+2026-09-15. Windows 98 and ME are uniprocessor by construction, so a
+four-vCPU leg would not be one there, and the owner did not take a
+two-processor Windows 2000 leg (its Professional edition's ceiling). These
+legs are regression readings of the per-endpoint delivery on those stacks,
+not tests of issue 8's race.
 
 ## Sources
 

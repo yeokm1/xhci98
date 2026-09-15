@@ -3216,11 +3216,13 @@ reading may not tick a box whose line names a guest.
             device install) and are not driver evidence by the owner's
             decision that multi-core 32-bit XP under TCG is not
             representative; this guest's SMP legs run under WHPX.*
-      - [ ] **the remaining NT 5.x legs on the per-endpoint build**: Windows
-            98 under NUSB, ME under SweetLow's stack and Windows 2000 at four
-            vCPUs, each launcher's accelerator, CPU and `-smp` lines checked
-            first; and the two shipping targets' single-vCPU install legs,
-            since their 32-bit binary changed. Issue 7 section 7.9's clauses
+      - [ ] **the remaining legs on the per-endpoint build, single-core under
+            TCG** (owner, 2026-09-15; no four-vCPU and no two-processor leg -
+            98 and ME are uniprocessor by construction): Windows 98 under
+            NUSB, ME under SweetLow's stack, Windows 2000 SP4. Install, the
+            three devices, disable/enable, remove and rescan, with `per
+            endpoint only` 1 and `forced` / `fallback polls` 0. Regression
+            readings of the mode, not tests of issue 8's race
     - [ ] **Vista x64: REMOVE/RESCAN does not complete, twice, and that
           clause had never been run on this guest.** Device Manager Uninstall
           of the devnode (package left in the store) wedged: attempt 1 sent
