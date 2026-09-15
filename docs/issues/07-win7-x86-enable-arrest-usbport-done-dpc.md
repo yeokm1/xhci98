@@ -1087,10 +1087,12 @@ outside `PollEndpoint` and its endpoint lock. On amd64 the same walk *wrote*
 the done head's low dword and bugchecked `D1`; on x86 this walk only reads
 and logs, so it spins with the endpoint lock held and CPU0 starves on it: a
 livelock at DISPATCH on two CPUs, no bugcheck, no dump. Issue 8's fix, delivery
-per endpoint from usbport's own callback, is compiled under `_WIN64` only,
+per endpoint from usbport's own callback, was compiled under `_WIN64` only,
 exactly as section 7.8 and issue 8 section 4c left it, so this run is the
 first reading of the 32-bit Version 200 tier's exposure and it says the tier
-is exposed. 512 MB of guest physical memory was saved while frozen
+is exposed. *(The guard was lifted later the same night, after issue 8
+section 4d read the other 32-bit builds as sharing the mover; the leg's next
+run is on that build.)* 512 MB of guest physical memory was saved while frozen
 (`guest-phys-512m.bin`); the guest was then reset and shut down cleanly.
 
 What this establishes: the `CloseEndpoint` fix holds on XP SP3 x86 (the crash

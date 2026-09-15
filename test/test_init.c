@@ -2354,11 +2354,39 @@ static ULONG invalidateEndpointUnderLockTotal;
  * service stubs run with the controller lock dropped. */
 static ULONG invalidateLeavesSubmit;
 
+/*
+ * usbport's answer to UsbPortInvalidateEndpoint is to poll that endpoint from
+ * its worker, under the endpoint's lock - which, since the Version 200 tier
+ * delivers per endpoint (issue 8 section 4d, both architectures), is the only
+ * thing that hands a parked completion over. The stub records the request
+ * here and usbport_worker() below makes the polls after each DPC, the way the
+ * real worker runs after IsrDpc; polling synchronously from inside the
+ * service would find the drain busy and deliver nothing.
+ */
+#define PENDING_POLL_MAX 32
+static PVOID pendingPolls[PENDING_POLL_MAX];
+static ULONG pendingPollCount;
+static ULONG pendingPollOverflows;
+
 static ULONG NTAPI hc_invalidate_endpoint(PVOID extension,
                                           PVOID endpointExtension)
 {
+    ULONG i;
+
     invalidateEndpointCalls++;
     lastInvalidatedEndpoint = endpointExtension;
+    for (i = 0; i < pendingPollCount; i++) {
+        if (pendingPolls[i] == endpointExtension) {
+            break;
+        }
+    }
+    if (i == pendingPollCount) {
+        if (pendingPollCount < PENDING_POLL_MAX) {
+            pendingPolls[pendingPollCount++] = endpointExtension;
+        } else {
+            pendingPollOverflows++;
+        }
+    }
     note_no_lock_here("UsbPortInvalidateEndpoint");
     if (commandLockDepth != 0) {
         invalidateEndpointUnderLock++;
@@ -7220,18 +7248,56 @@ static void fire_async_timer(void)
 /* Drive one whole interrupt: the ISR acknowledges, the DPC drains. This is the
  * only way a command completion ever reaches the engine on the target, so it is
  * the only way these vectors deliver one. */
+/*
+ * The worker half of usbport (see hc_invalidate_endpoint): every endpoint the
+ * driver asked to have polled is polled, through the registered PollEndpoint,
+ * until a pass asks for nothing new. Bounded, because a driver that asked for
+ * the same poll for ever would otherwise hang the suite instead of failing it.
+ */
+/*
+ * The invalidates that are re-offers of a refused transfer, as opposed to the
+ * poll requests a parked completion makes on the per-endpoint tier, which the
+ * driver counts apart in CompletionPollInvalidates. Both reach the same
+ * service; the tests about re-offers count only the first.
+ */
+#define REOFFER_CALLS (invalidateEndpointCalls - ext.CompletionPollInvalidates)
+
+static void usbport_worker(void)
+{
+    ULONG rounds;
+    ULONG i;
+    PVOID batch[PENDING_POLL_MAX];
+    ULONG count;
+
+    for (rounds = 0; rounds < 16 && pendingPollCount != 0; rounds++) {
+        count = pendingPollCount;
+        for (i = 0; i < count; i++) {
+            batch[i] = pendingPolls[i];
+        }
+        pendingPollCount = 0;
+        for (i = 0; i < count; i++) {
+            if (XhciRegPacket.PollEndpoint != NULL) {
+                XhciRegPacket.PollEndpoint(&ext, batch[i]);
+            }
+        }
+    }
+}
+
 static void deliver_events(void)
 {
     (void)XhciIsr(&ext);
     XhciEventDpc(&ext, FALSE);
+    usbport_worker();
 }
 
 /* The completion half of that, for a transfer failed inside a SubmitTransfer
  * callback: no event is involved, so what delivers it on the target is the DPC's
- * drain or the CheckController poll's, and both are this one call. */
+ * drain or the CheckController poll's, and both are this one call - followed,
+ * as on the target, by usbport polling whatever the drain asked for. */
 static void deliver_after_submit(void)
 {
     XhciSlotDeferredWork(&ext);
+    usbport_worker();
 }
 
 /*
@@ -15166,11 +15232,13 @@ static void test_slot_init_resets_the_table_in_one_hold(void)
              "(and nothing was completed under it)");
 
     /* The drainer returns from its service call and finishes; the cancelled
-     * transfer is what it delivers. */
+     * transfer is what it delivers - through the poll it asks usbport for,
+     * since the 200 tier delivers per endpoint (issue 8 section 4d). */
     ext.DeferredBusy = 0;
     XhciSlotDeferredWork(&ext);
+    usbport_worker();
     CHECK_EQ(completeTransferCalls, completions + 1,
-             "the work the reset cancelled is delivered by the drain");
+             "the work the reset cancelled is delivered by the drain's poll");
     CHECK(lastCompletedStatus != 0, "as cancelled");
     CHECK_EQ(ext.DeferredBusy, 0, "and the drain is free again");
 }
@@ -17469,6 +17537,9 @@ static void test_slot_bulk_short_packet_bound_and_empty_still_settles(void)
     XhciEventDpc(&ext, FALSE);
     refillOnErdp = 0;
     refillBudget = XHCI_MODEL_REFILL_UNLIMITED;
+    /* usbport's poll, which is what hands the settled transfer over on the
+     * per-endpoint tier; the DPC's own work is read before it below. */
+    usbport_worker();
 
     CHECK_EQ(ext.EventsTotal >= XHCI_DPC_MAX_EVENTS, 1,
              "(the pass reached the drain bound)");
@@ -17780,7 +17851,7 @@ static void test_slot_bulk_ring_full_retry(void)
 
     refusedRingFull = ext.TransfersRefusedRingFull;
     retriesAsked = ext.EndpointRetriesAsked;
-    invalidates = invalidateEndpointCalls;
+    invalidates = REOFFER_CALLS;
     enqueue = record->Ring.Enqueue;
     slot_setup_bulk_xfer(3, 16, 1);
     CHECK_EQ(slot_submit_bulk(&slotEndpoint2, 3),
@@ -17795,7 +17866,7 @@ static void test_slot_bulk_ring_full_retry(void)
              "against the free count that refused it");
     CHECK_EQ(ext.EndpointRetriesAsked, retriesAsked,
              "and no re-offer yet - nothing has freed a TRB");
-    CHECK_EQ(invalidateEndpointCalls, invalidates, "so usbport was not called");
+    CHECK_EQ(REOFFER_CALLS, invalidates, "so usbport was not called");
 
     /* The first transfer completes, which retires sixteen TRBs. */
     trbPA = XhciRingTrbPA(&record->Ring, bulkTransfer[0].LastIndex);
@@ -17807,8 +17878,9 @@ static void test_slot_bulk_ring_full_retry(void)
              "the completion released the latch");
     CHECK_EQ(record->Queue.RetryArmed, 0, "which is disarmed once spent");
     CHECK_EQ(record->Queue.RetriesAsked, 1, "and counted on the queue too");
-    CHECK_EQ(invalidateEndpointCalls, invalidates + 1,
-             "with UsbPortInvalidateEndpoint actually called");
+    CHECK_EQ(REOFFER_CALLS, invalidates + 1,
+             "with UsbPortInvalidateEndpoint actually called for it (the "
+             "poll requests a parked completion makes are counted apart)");
     CHECK(lastInvalidatedEndpoint == &slotEndpoint2,
           "naming the bulk endpoint, not EP0");
 
@@ -17816,7 +17888,7 @@ static void test_slot_bulk_ring_full_retry(void)
      * And it is one re-offer per refusal, not one per completion: the second
      * transfer completing with the latch already spent must ask for nothing.
      */
-    invalidates = invalidateEndpointCalls;
+    invalidates = REOFFER_CALLS;
     trbPA = XhciRingTrbPA(&record->Ring, bulkTransfer[1].LastIndex);
     hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT, trbPA, 0,
                      XHCI_CC_SUCCESS << 24,
@@ -17824,8 +17896,8 @@ static void test_slot_bulk_ring_full_retry(void)
     deliver_events();
     CHECK_EQ(ext.EndpointRetriesAsked, retriesAsked + 1,
              "a completion with nothing armed asks for no re-offer");
-    CHECK_EQ(invalidateEndpointCalls, invalidates,
-             "so a busy pipe does not call usbport once per transfer");
+    CHECK_EQ(REOFFER_CALLS, invalidates,
+             "so a busy pipe does not re-offer once per transfer");
 }
 
 /*
@@ -20064,8 +20136,10 @@ static void test_slot_abort_takes_it_off_the_completion_list(void)
 
     ext.DeferredBusy = 0;
     XhciSlotDeferredWork(&ext);
+    usbport_worker();
     CHECK_EQ(completeTransferCalls, completions + 1,
-             "so exactly the one that was not aborted is completed");
+             "so exactly the one that was not aborted is completed, by the "
+             "poll the drain asks for");
 }
 
 /*
@@ -20088,6 +20162,9 @@ static void test_slot_completion_waits_for_poll_endpoint(void)
     USBPORT_PORT_STATUS_AND_CHANGE portStatus;
     ULONG completions;
     ULONG result;
+    ULONG held;
+    ULONG locked;
+    ULONG polls;
 
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
@@ -20097,7 +20174,13 @@ static void test_slot_completion_waits_for_poll_endpoint(void)
     (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
                           &slotSgList);
 
+    /* Since issue 8 section 4d the gate is set by StartController on the 200
+     * tier too, so the enumeration above already held and polled; the counts
+     * below are deltas from here. */
     ext.DeliverUnderUsbportLockOnly = 1;
+    held = ext.CompletionsHeldForPoll;
+    locked = ext.CompletionsDeliveredLocked;
+    polls = ext.PollEndpointCalls;
     completions = completeTransferCalls;
     hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
                      XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
@@ -20111,7 +20194,7 @@ static void test_slot_completion_waits_for_poll_endpoint(void)
              "where the event DPC leaves it - it is not a locked context");
     /* Once per pass, and the DPC makes two: the root hub's deferred work
      * ends in the device layer's drain, then the DPC calls it again. */
-    CHECK_EQ(ext.CompletionsHeldForPoll, 2, "and says so, once per pass");
+    CHECK_EQ(ext.CompletionsHeldForPoll, held + 2, "and says so, once per pass");
     CHECK_EQ(result & USBPORT_DPC_EX_TRANSFER_WORK, USBPORT_DPC_EX_TRANSFER_WORK,
              "and reports transfer work, as usbehci would");
 
@@ -20129,17 +20212,18 @@ static void test_slot_completion_waits_for_poll_endpoint(void)
     CHECK_EQ(ext.CompletionFallbackArmed, 1, "(armed)");
     /* The query, the bare drain, and the poll's two (the root hub's sweep
      * and the device layer's). */
-    CHECK_EQ(ext.CompletionsHeldForPoll, 6, "each pass counted once");
+    CHECK_EQ(ext.CompletionsHeldForPoll, held + 6, "each pass counted once");
 
     XhciRegPacket.PollEndpoint(&ext, &slotEndpoint2);
     CHECK_EQ(completeTransferCalls, completions + 1,
              "PollEndpoint - usbport's HcInt pass, under its EpList lock - "
              "delivers it");
-    CHECK_EQ(ext.CompletionsDeliveredLocked, 1, "counted as delivered locked");
+    CHECK_EQ(ext.CompletionsDeliveredLocked, locked + 1,
+             "counted as delivered locked");
     CHECK_EQ(ext.CompletionsDeliveredForced, 0, "not forced");
     CHECK_EQ(ext.CompletionsOwed, 0, "and the list is empty");
     CHECK_EQ(ext.CompletionFallbackArmed, 0, "which disarms the fallback");
-    CHECK_EQ(ext.PollEndpointCalls, 1, "(the callback counted)");
+    CHECK_EQ(ext.PollEndpointCalls, polls + 1, "(the callback counted)");
     CHECK_EQ(XhciRegPacket.InterruptDpc(&ext, TRUE) &
                  USBPORT_DPC_EX_TRANSFER_WORK, 0,
              "and a DPC with nothing parked reports no transfer work");
@@ -20158,6 +20242,7 @@ static void test_slot_completion_fallback_poll(void)
     PXHCI_DEVICE dev;
     PXHCI_ENDPOINT_RECORD record;
     ULONG completions;
+    ULONG locked;
 
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
@@ -20168,6 +20253,7 @@ static void test_slot_completion_fallback_poll(void)
                           &slotSgList);
 
     ext.DeliverUnderUsbportLockOnly = 1;
+    locked = ext.CompletionsDeliveredLocked;
     completions = completeTransferCalls;
     hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
                      XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
@@ -20187,7 +20273,7 @@ static void test_slot_completion_fallback_poll(void)
              "past the threshold the poll delivers it");
     CHECK_EQ(ext.CompletionFallbackPolls, 1, "and counts the poll that did");
     CHECK_EQ(ext.CompletionsDeliveredForced, 1, "as a forced delivery");
-    CHECK_EQ(ext.CompletionsDeliveredLocked, 0, "not a locked one");
+    CHECK_EQ(ext.CompletionsDeliveredLocked, locked, "not a locked one");
     CHECK_EQ(ext.CompletionFallbackArmed, 0, "and the net disarmed");
 
     /* One completion, one fallback: a later poll with nothing parked does not
@@ -20211,6 +20297,7 @@ static void test_slot_completion_per_endpoint_only(void)
     PXHCI_ENDPOINT_RECORD record;
     ULONG completions;
     ULONG invalidates;
+    ULONG locked;
 
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
@@ -20222,6 +20309,7 @@ static void test_slot_completion_per_endpoint_only(void)
 
     ext.DeliverUnderUsbportLockOnly = 1;
     ext.DeliverPerEndpointOnly = 1;
+    locked = ext.CompletionsDeliveredLocked;
     completions = completeTransferCalls;
     invalidates = invalidateEndpointCalls;
     hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
@@ -20246,7 +20334,7 @@ static void test_slot_completion_per_endpoint_only(void)
     XhciRegPacket.PollEndpoint(&ext, &slotEndpoint2);
     CHECK_EQ(completeTransferCalls, completions + 1,
              "PollEndpoint for its own endpoint delivers it");
-    CHECK_EQ(ext.CompletionsDeliveredLocked, 1, "as a locked delivery");
+    CHECK_EQ(ext.CompletionsDeliveredLocked, locked + 1, "as a locked delivery");
     CHECK_EQ(ext.CompletionsOwed, 0, "and the list is empty");
     CHECK(ext.CompletionHead == NULL && ext.CompletionTail == NULL,
           "head and tail both");
@@ -20266,6 +20354,8 @@ static void test_slot_completion_locked_contexts_and_forced(void)
     PXHCI_DEVICE dev;
     PXHCI_ENDPOINT_RECORD record;
     ULONG completions;
+    ULONG locked;
+    ULONG held;
 
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
@@ -20273,10 +20363,14 @@ static void test_slot_completion_locked_contexts_and_forced(void)
     deliver_events();
     record = &dev->Endpoints[0];
 
-    /* SetEndpointState. */
+    /* SetEndpointState. Deltas from here: the gate has been on since
+     * StartController (issue 8 section 4d), so the enumeration above already
+     * held and delivered. */
     (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
                           &slotSgList);
     ext.DeliverUnderUsbportLockOnly = 1;
+    locked = ext.CompletionsDeliveredLocked;
+    held = ext.CompletionsHeldForPoll;
     completions = completeTransferCalls;
     hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
                      XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
@@ -20289,7 +20383,7 @@ static void test_slot_completion_locked_contexts_and_forced(void)
                                    USBPORT_ENDPOINT_ACTIVE);
     CHECK_EQ(completeTransferCalls, completions + 1,
              "SetEndpointState delivers what was parked");
-    CHECK_EQ(ext.CompletionsDeliveredLocked, 1, "as a locked delivery");
+    CHECK_EQ(ext.CompletionsDeliveredLocked, locked + 1, "as a locked delivery");
 
     /* The forced drain. */
     (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
@@ -20323,7 +20417,7 @@ static void test_slot_completion_locked_contexts_and_forced(void)
              "the 200 tier reports no transfer work");
     CHECK_EQ(completeTransferCalls, completions + 1,
              "because the event DPC delivered it");
-    CHECK_EQ(ext.CompletionsHeldForPoll, 4,
+    CHECK_EQ(ext.CompletionsHeldForPoll, held + 4,
              "(the two DPCs' holds above, two passes each, no more)");
 
     /* AbortTransfer of a second transfer, with a third parked: the abort
@@ -20351,7 +20445,7 @@ static void test_slot_completion_locked_contexts_and_forced(void)
     }
     CHECK_EQ(completeTransferCalls, completions + 1,
              "AbortTransfer's pass delivers the parked one");
-    CHECK_EQ(ext.CompletionsDeliveredLocked, 2, "locked again");
+    CHECK_EQ(ext.CompletionsDeliveredLocked, locked + 2, "locked again");
     ext.DeliverUnderUsbportLockOnly = 0;
 }
 
@@ -20466,8 +20560,10 @@ static void test_slot_completion_holds_for_a_pass_after_the_bracket(void)
              "yet the pass delivers nothing - it began inside the bracket");
     CHECK(ext.CompletionsHeldByPass != 0, "and says why");
 
-    /* The next pass began after the close, so it may deliver. */
+    /* The next pass began after the close, so it may deliver - and on the
+     * per-endpoint tier what delivers is the poll that pass asks for. */
     XhciSlotDeferredWork(&ext);
+    usbport_worker();
     CHECK_EQ(completeTransferCalls, completions + 1,
              "the next pass delivers it");
     CHECK_EQ(ext.CompletionsOwed, 0, "and the list is empty");
@@ -28652,6 +28748,9 @@ static void test_lifecycle_release_evidence(void)
              "the resume reinitialises");
     CHECK_EQ(ext.Devices[0].State, XHCI_DEV_STATE_FREE,
              "and the record is released once the reset really happened");
+    /* The resume's drain parks it and asks for the poll; usbport's poll
+     * answers it, once. */
+    usbport_worker();
     CHECK_EQ(completeTransferCalls, completions + 1,
              "with the transfer the abandonment held back answered exactly "
              "once, on the far side of HCRST");

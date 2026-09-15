@@ -951,19 +951,19 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
         (xhciInterfaceVersionPresented >= USBPORT_NT6_MINIPORT_INTERFACE_VERSION)
             ? 1UL : 0UL;
     ext->DeliverPerEndpointOnly = 0;
-#if defined(_WIN64)
     /*
-     * Issue 8 (XHCI_EXTENSION.DeliverPerEndpointOnly): XP x64 and Server 2003
-     * x64 are the amd64 build's Version 200 tier, where the completion service
-     * unlinks from the endpoint list without the endpoint lock. The 32-bit
-     * Version 200 targets are not changed by this: their services have not
-     * been read for it (issue 8).
+     * Issue 8 (XHCI_EXTENSION.DeliverPerEndpointOnly): every Version 200
+     * usbport's completion service unlinks from the endpoint's list holding no
+     * endpoint lock, while usbport reads that list under one. Read out of XP
+     * x64 first and guarded `_WIN64` until 2026-09-15; then XP SP3 x86 livelocked
+     * on the same race (issue 7 section 7.9) and the other 32-bit builds -
+     * NUSB, SweetLow's, Windows 2000 SP4's - were read to share the mover and
+     * the locked reader (issue 8 section 4d), so the whole tier takes it.
      */
     if (!ext->DeliverUnderUsbportLockOnly) {
         ext->DeliverUnderUsbportLockOnly = 1;
         ext->DeliverPerEndpointOnly = 1;
     }
-#endif
 
     ext->Signature = XHCI_EXTENSION_SIGNATURE;
     ext->TrailingSignature = XHCI_EXTENSION_TRAILING;

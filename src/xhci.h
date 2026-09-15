@@ -5987,11 +5987,11 @@ typedef struct _XHCI_EXTENSION {
      * an abort. usbport polls every active endpoint on every HcInt pass and
      * IsrDpc signals that pass on every interrupt, so PollEndpoint is the
      * ordinary deliverer; the fallback exists for an endpoint usbport has
-     * stopped polling. On the 32-bit 200 tier this driver still delivers from
-     * any context. **That the Version 200 service is self-synchronising is
-     * wrong for XP x64** (issue 8): its done-list insert is interlocked, but
-     * the unlink from the endpoint's own list before it takes no endpoint
-     * lock - see `DeliverPerEndpointOnly` below.
+     * stopped polling. **That the Version 200 service is self-synchronising
+     * is wrong on every build of it** (issue 8): its done-list insert is
+     * interlocked, but the unlink from the endpoint's own list before it takes
+     * no endpoint lock - see `DeliverPerEndpointOnly` below, which is why the
+     * gate is set on the 200 tier too, on both architectures.
      */
     ULONG DeliverUnderUsbportLockOnly;
     /* The poll's fallback: armed by the first poll that finds the list
@@ -6019,8 +6019,12 @@ typedef struct _XHCI_EXTENSION {
      * usbport's lock is one per endpoint, so PollEndpoint for one endpoint
      * delivering another endpoint's completion is the same race.
      *
-     * Set with the gate on the amd64 build's Version 200 tier - XP x64 and
-     * Server 2003 x64 - and nowhere else. A completion for an endpoint other
+     * Set with the gate on every Version 200 tier since 2026-09-15: the amd64
+     * build's (XP x64, Server 2003 x64) from 2026-09-14, and the 32-bit one
+     * (XP SP3, NUSB, SweetLow's, Windows 2000 SP4) after XP SP3 x86 livelocked
+     * on the same race at four vCPUs and the other three builds were read to
+     * carry the same unlocked mover and locked reader (issue 8 section 4d,
+     * endpoint+0xD4 where XP has +0xC4). A completion for an endpoint other
      * than the one the locked callback names stays parked and the pass asks
      * usbport to poll that endpoint, which is what delivers it; the gate's
      * fallback still fires after XHCI_COMPLETION_FALLBACK_MS, and counts, so a

@@ -3,13 +3,16 @@
 Status: **fixed in this driver on 2026-09-14 (section 4c, commit `20af60b`),
 and issue 7 section 7.8's XP x64 four-vCPU leg passed on the committed build
 the same day** - two clean runs, not proof. **The same mechanism was then
-read on Windows XP SP3 x86 at four vCPUs on 2026-09-15, where the fix does
-not reach (it is compiled under `_WIN64` only): usbport's active-list walker
-holding a transfer that had been moved to the done list under it, spinning
-for ever with the endpoint lock held - a livelock rather than a bugcheck,
-because the x86 walk only reads** (issue 7 section 7.9,
-`vm\issue7-xp32-smp4\r3\livelock-readings.md`). Whether the 32-bit Version
-200 tier takes the fix is the owner's decision. The cause is this driver's: on XP
+read on Windows XP SP3 x86 at four vCPUs on 2026-09-15, where the fix did
+not yet reach (it was compiled under `_WIN64` only): usbport's active-list
+walker holding a transfer that had been moved to the done list under it,
+spinning for ever with the endpoint lock held - a livelock rather than a
+bugcheck, because the x86 walk only reads** (issue 7 section 7.9,
+`vm\issue7-xp32-smp4\r3\livelock-readings.md`). Section 4d then read the
+other three 32-bit builds as sharing the mover, and **on the owner's
+decision of 2026-09-15 the guard was lifted: the 32-bit build sets the mode
+on its Version 200 tier too. Its first run - the XP 32-bit four-vCPU leg -
+is owed**, and the two shipping targets have only the reading, not a run. The cause is this driver's: on XP
 x64 it handed completions to usbport from contexts that did not hold the
 transfer's own endpoint lock, and XP x64's completion service needs that lock
 (section 4c). The corruption itself is a store by usbport, caught by a
@@ -347,9 +350,12 @@ with the gate on the amd64 build's Version 200 tier only - XP x64 and Server
 A host test holds it (`test_slot_completion_per_endpoint_only`): with the mode
 set, the event DPC parks and requests a poll of the owing endpoint,
 `PollEndpoint` for EP0 does not deliver an interrupt pipe's completion, and
-`PollEndpoint` for the pipe does. Every x86 path is unchanged: the mode is
-compiled only under `_WIN64`, and with it off the drain selects the head as
-before.
+`PollEndpoint` for the pipe does. Every x86 path was unchanged at this point:
+the mode was compiled only under `_WIN64`, and with it off the drain selected
+the head as before. *That guard was lifted on 2026-09-15, after section 4d
+read the whole 32-bit tier as sharing the mover; the x86 build now sets the
+mode on its Version 200 tier too, and its first run is owed (issue 7 section
+7.9's leg).*
 
 **runtime** - 2026-09-14, tag `i8diag1`, snapshot `winxp64-smp4-issue8diag`
 (snapshot 3 plus the new amd64 `qemu` build copied over
@@ -438,8 +444,27 @@ under them is not established, and does not need to be for the decision.
 What this does not say: nothing has been run at four vCPUs on Windows 98,
 ME or 2000, so the exposure there is by reading, not by observation, and
 the fix's cost on those targets has been measured only by analogy (amd64:
-`forced` 0, `fallback polls` 0 across every load). The decision is the
-owner's; the read says the tier is one tier.
+`forced` 0, `fallback polls` 0 across every load). The read says the tier is
+one tier, and the owner took the fix on all of it the same night: the
+`_WIN64` guard in `xhciStartController` is gone, `DeliverPerEndpointOnly` is
+set on every Version 200 load, and `completions delivered per endpoint only`
+must now read 1 on XP x86 as it does on XP x64. Lifting the guard hung the
+host suite, which had never run the mode: it builds x86, so the mode had been
+compiled out of everything it exercised except the four vectors that set the
+flag by hand, and its `deliver_events()` - the event DPC - had been the
+suite's deliverer of completions since Phase 7. The harness now carries the
+half of usbport it lacked: `UsbPortInvalidateEndpoint` records the endpoint
+and `usbport_worker()` polls it through the registered `PollEndpoint` after
+every DPC, as usbport's worker does after `IsrDpc`. The hang itself was a
+harness artefact - a global transfer record, parked once and reused by the
+next vector, appended to the completion list twice and made it a one-node
+cycle - and it cannot happen against usbport, which never resubmits a record
+it is still waiting on; twenty count expectations moved to deltas or to
+re-offer counts, and the suite reads 12,695 checks, 0 failures. Owed, in order: the XP 32-bit
+four-vCPU leg on this build (issue 7 section 7.9's clauses), then Windows 98
+under NUSB, ME under SweetLow's stack and Windows 2000 at four vCPUs, and the
+single-vCPU install legs of the two shipping targets, since their binary
+changed.
 
 ## 5. What was ruled out, and what an instrument could not see
 

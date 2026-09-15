@@ -3203,9 +3203,14 @@ reading may not tick a box whose line names a guest.
             settled read ALL PASS (3 slots / iso 2, `only under usbport's
             lock` 0) the guest **livelocked before its first disable** on
             issue 8's mechanism, which the x86 tier does not carry the fix
-            for. Issue 7 section 7.9 is the record. **Owed: the x86 tier
-            decision on issue 8's fix, then this leg's five cycles, remove
-            and rescan; then 98, ME, 2000**
+            for. Issue 7 section 7.9 is the record. *The x86 tier decision
+            was taken the same night: every 32-bit usbport was read to share
+            the unlocked mover (issue 8 section 4d) and the `_WIN64` guard was
+            lifted, so the 32-bit binary now delivers per endpoint on its 200
+            tier.* **Owed: this leg's settled read, five cycles, remove and
+            rescan on that build; then 98, ME, 2000 at four vCPUs, and the
+            shipping targets' single-vCPU install legs, since their binary
+            changed**
     - [ ] **Vista x64: REMOVE/RESCAN does not complete, twice, and that
           clause had never been run on this guest.** Device Manager Uninstall
           of the devnode (package left in the store) wedged: attempt 1 sent

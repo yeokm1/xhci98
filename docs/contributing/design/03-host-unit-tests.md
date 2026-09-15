@@ -539,6 +539,27 @@ vector could notice. A green vector over a command sequence is evidence about
 this driver, not about the sequence's legality; that has to come from the
 spec.
 
+The model carries usbport's worker as well as its services, since 2026-09-15.
+Every Version 200 load delivers completions per endpoint (issue 8 section
+4d): the event DPC parks a completion and asks `UsbPortInvalidateEndpoint`
+for that endpoint, and only a `PollEndpoint` for it - which usbport's worker
+makes under the endpoint's lock - hands it over. The stub therefore records
+the endpoint, and `usbport_worker()` polls every recorded one through the
+registered `PollEndpoint` after each DPC; `deliver_events()` and
+`deliver_after_submit()` both end in it. A vector that drives `XhciEventDpc`
+or `XhciSlotDeferredWork` directly and expects a completion to reach
+`hc_complete_transfer` has to call `usbport_worker()` itself, as the target
+would have usbport do; the four vectors that assert the *hold* (issue 7's and
+issue 8's, around `test_slot_completion_waits_for_poll_endpoint`) drive the
+DPC and the poll by hand for that reason, and count from a snapshot because
+`StartController` has already set the gate before they set it again. Counts
+of `UsbPortInvalidateEndpoint` calls that mean re-offers use `REOFFER_CALLS`,
+which subtracts the driver's own `CompletionPollInvalidates`. And the suite's
+global transfer records are not usbport's: a record parked in one vector and
+resubmitted by the next is a shape usbport never produces, and it was what
+turned the lifted `_WIN64` guard into a hang rather than a failure (a
+one-node cycle in the completion list; issue 8 section 4d).
+
 The driver side of that example is fixed: the re-enumeration reads the Output
 Slot Context's Slot State and issues Reset Device where that is the legal
 transition. The model's gap is not fixed. It still posts Success for any

@@ -8801,3 +8801,27 @@ has run on the old one**. One incidental: `-cpu core2duo` carries NX, so
 XP loaded its PAE kernel and an execute-from-stack became a legible `0xFC`
 with a trap frame; on `-cpu pentium3` the same defect would have executed
 stack bytes and died somewhere else.
+
+## A guard compiled out on the host suite's architecture is a mode the suite has never run
+
+Issue 8's per-endpoint delivery was `_WIN64`-only from 2026-09-14 to
+2026-09-15, and the host suite builds x86: every one of its 12,695 checks ran
+with the mode off, except four vectors that set the flag by hand after
+`StartController`. When the guard was lifted for the whole 32-bit tier the
+suite did not fail - it hung, in a vector two thousand lines from the change,
+because the mode parks completions the suite's `deliver_events()` (the event
+DPC) had always delivered, and a global transfer record parked in one vector
+was reused by the next and appended to the completion list twice. Reading
+the spin under `cdb` (a `/Zi /Fm` rebuild of the suite in a scratch
+directory, `-pv` attach, `kb`, then `dt` on the list) named it in minutes;
+the build runner had sat on it for two hours, because the suite runs before
+the compiler and prints nothing until it ends.
+
+Two rules. **When a build flag selects behaviour by architecture, say in the
+same commit which suite exercises which arm**, and if the answer for one arm
+is "none", write the vector that sets the flag by hand before shipping the
+arm. And **a host stub that answers a service must answer it the way the
+target does**: `UsbPortInvalidateEndpoint` is not a counter to usbport, it is
+a request that usbport answers with a poll under the endpoint lock, and a
+harness that only counted it could not deliver a parked completion at all.
+The suite now has `usbport_worker()` for that, run after every DPC.
