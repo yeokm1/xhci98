@@ -62,14 +62,25 @@ body:
     attributes:
       label: XHCIQUAL report
       description: |
-        The single most useful thing you can attach, and it is read-only. From
-        **real DOS**, not a DOS box inside Windows:
+        The single most useful thing you can attach. Boot **real DOS** (not a
+        DOS box inside Windows) and run:
 
-            XHCIQUAL --probe-only --no-page --log PROBE.LOG
+            XHCIQUAL --probe-only --log PROBE.LOG
 
-        Attach PROBE.LOG or paste it here. It identifies the controller, its
-        capabilities, its interrupt pin and its ports - which is most of what makes
-        one machine's result transferable to another.
+        That step is read-only - it takes ownership of nothing and writes no
+        PCI configuration register. If it does not crash the machine, continue
+        with the full run:
+
+            XHCIQUAL --log FULL.LOG
+
+        The second one TAKES OVER THE CONTROLLER: it resets it and resets its
+        ports. Use a PS/2 keyboard, and do not write the log to a drive on the
+        controller being tested.
+
+        Attach PROBE.LOG and FULL.LOG (whichever you got) or paste them here.
+        They identify the controller, its capabilities, its interrupt pin and
+        its ports - which is most of what makes one machine's result
+        transferable to another.
       render: text
     validations:
       required: false

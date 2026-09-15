@@ -60,6 +60,11 @@ Controller qualified verdict.
 
 XHCIQUAL demo video: https://www.youtube.com/watch?v=Tv6blmBS6Do
 
+To submit logs with a [bug or hardware report](https://github.com/yeokm1/xhci98/issues/new/choose), run these from real DOS and attach whichever logs you got:
+
+1. `XHCIQUAL --probe-only --log PROBE.LOG` is read-only. It takes ownership of nothing and writes no PCI configuration register.
+2. If that does not crash the machine, continue with `XHCIQUAL --log FULL.LOG`. This one **takes over the controller**, resets it and resets its ports. Use a PS/2 keyboard and do not write the log to a drive on the controller being tested.
+
 ### Install
 
 1. Put the unzipped package somewhere the machine can read: a floppy, a CD, a shared folder. `release\` is the one to install. `debug\` is the same driver built for troubleshooting, only install if asked.

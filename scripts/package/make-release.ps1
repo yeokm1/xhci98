@@ -2386,10 +2386,20 @@ the safety notes spelled out.
       --no-wait         do not wait 15 seconds for a device to be plugged in
       --no-devid        skip the xHCI device identification step
 
-IF YOU ARE ASKED FOR A LOG, this one command reads everything the read-only
-path can see, writes nothing to the machine, and leaves PROBE.LOG beside it:
+IF YOU ARE ASKED FOR LOGS, run these two in order. The first reads everything
+the read-only path can see, writes nothing to the machine, and leaves
+PROBE.LOG beside it:
 
-      XHCIQUAL --probe-only --no-page --log PROBE.LOG
+      XHCIQUAL --probe-only --log PROBE.LOG
+
+If that does not crash the machine, continue with the full run, which leaves
+FULL.LOG. THIS ONE TAKES OVER THE CONTROLLER, resets it and resets its ports;
+use a PS/2 keyboard, and do not write the log to a drive on the controller
+being tested:
+
+      XHCIQUAL --log FULL.LOG
+
+Send whichever of the two files you got.
 
 It returns 0 if the active tests passed, 1 if the machine is not qualified or
 the run was read-only - which cannot pass tests it does not run, so 1 is the
@@ -3275,15 +3285,22 @@ ACTIVE OPTIONS - THESE TAKE OVER THE CONTROLLER
   --no-devid        skip the xHCI device identification step
 
 
-IF YOU ARE ASKED FOR A LOG
+IF YOU ARE ASKED FOR LOGS
 
-  This command reads everything the read-only path can see and leaves
-  PROBE.LOG in the current directory. Nothing in it writes to the machine:
+  Run these two in order. The first reads everything the read-only path can
+  see and leaves PROBE.LOG in the current directory. Nothing in it writes to
+  the machine:
 
-           XHCIQUAL --probe-only --no-page --log PROBE.LOG
+           XHCIQUAL --probe-only --log PROBE.LOG
 
-  Send that file. Keep a note of the BIOS settings you had, and of any
-  device that was plugged in.
+  If that does not crash the machine, continue with the full run, which
+  leaves FULL.LOG. THIS ONE TAKES OVER THE CONTROLLER - read A NOTE ON SAFETY
+  below first:
+
+           XHCIQUAL --log FULL.LOG
+
+  Send whichever of the two files you got. Keep a note of the BIOS settings
+  you had, and of any device that was plugged in.
 
 
 WHAT IT RETURNS TO DOS
