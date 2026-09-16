@@ -7,8 +7,12 @@ listed under "Known limitations" in `docs/using/release-notes.md` because
 it is machine-wide and outlives an uninstall.
 
 Targets affected: Windows 98 SE under either USB 2.0 stack (NUSB's
-`usbport.sys` and SweetLow's XP-lineage rebuild, both measured), and Windows
-XP (measured in a virtual machine). Windows 2000 SP4's own stack
+`usbport.sys` and SweetLow's XP-lineage rebuild, both measured), Windows
+XP (measured in a virtual machine), and 32-bit Windows 7 (measured in a
+virtual machine, 2026-09-16, section 5). 32-bit Windows Vista was not seen
+idling this controller without the value in the same runs, although its
+stack reads the value; the x64 editions of both were not measured without
+it. Windows 2000 SP4's own stack
 was not seen idling this controller in any recorded run, with or without the
 value; that is a bounded VM observation, not a "never" (roadmap Phase 20,
 F18). Real hardware behaves the same as the VM on Windows 98: the fix went
@@ -197,6 +201,35 @@ same three consequences. The per-controller alternative was considered for
 the NT path and not taken: under NUSB's build it alone still idled the
 controller, and one mechanism on both paths is one thing to check.
 
+The NT 6.x install path, `[Xhci.Dev6.*]`, writes the value as well, and on
+2026-09-16 the question was asked of it directly on the two 32-bit guests,
+Vista SP2 and Windows 7 SP1 (runtime, `qemu` build, the committed
+`src/xhci98.inf`, the owner at the console). Each was read the way section
+6 says a reading has to be: nothing attached at boot, the controller's
+callbacks on the debug console, `USBCMD`/`USBSTS` read off the QEMU monitor,
+then a hot-plugged mouse. With the value present, neither guest suspended
+the controller at all, from an install start or from a boot.
+
+- **Windows 7 needs it.** With the value deleted and the guest restarted,
+  `SuspendController` arrived 9 s after `StartController` and nothing
+  resumed it: `USBCMD` `0x00000000`, `USBSTS` `0x00000001`. A mouse plugged
+  in at the desktop sat at address 0 for 60 s, and Device Manager's Scan for
+  hardware changes brought `ResumeController` and the enumeration. After it
+  was unplugged the controller was suspended again about 30 s later. That
+  is the Windows 98 defect exactly, on Windows XP's timing.
+- **Vista did not idle the controller without it, and does read it.** Two
+  runs, the second on a fresh install: with the value deleted, each boot
+  showed a `SuspendController` 3 to 4 s after `StartController` and a
+  `ResumeController` 2 to 3 s later, which a boot with the value present
+  did not show; then no suspend in five idle minutes at the desktop
+  (`USBCMD` `0x00000005`), a mouse addressed at once, and no suspend in the
+  three minutes after it was unplugged. That is a bounded reading, five
+  minutes, not a "never".
+
+So the value stays on the NT 6.x path: it is what makes hot-plug work on
+Windows 7, and on Vista it is the same machine-wide value with the same
+three consequences.
+
 ## 6. What is still open
 
 - Reproducing the defect, or checking the value, needs an observed
@@ -211,6 +244,8 @@ controller, and one mechanism on both paths is one thing to check.
   candidate, not a promise.
 - PME# on real hardware (`USB_MINIPORT_FLAGS_WAKE_SUPPORT`) was never
   evaluated; the VM has no PCI Power Management capability to arm.
+- Vista x64 and Windows 7 x64 were never read without the value. Every run
+  on those guests installed a package that writes it.
 
 ## 7. Lessons the record kept
 
@@ -237,9 +272,10 @@ controller, and one mechanism on both paths is one thing to check.
   the usbehci listing, the specification pages, the two closed candidates,
   the usbport strings and the measured table) and its postscript.
 - [build-and-test.md](../contributing/build-and-test.md): the idle-suspend
-  paragraph (Windows 2000 SP4's bounded observation, the value = 0 reading)
-  and the SweetLow stack section (the reading under the XP-lineage
-  rebuild).
+  paragraph (Windows 2000 SP4's bounded observation, the value = 0 reading),
+  the SweetLow stack section (the reading under the XP-lineage rebuild),
+  and "Windows Vista and Windows 7 target VMs" (the NT 6.x readings of
+  section 5).
 - `src/xhci98.inf`, the comment block above `[Xhci.AddReg.Global]` (the
   four delivery routes and the three consequences).
 - [release-notes.md](../using/release-notes.md), "Known limitations", the
@@ -247,7 +283,7 @@ controller, and one mechanism on both paths is one thing to check.
 - [roadmap.md](../contributing/roadmap.md): task 11-V.6, task 19.2 (the NT
   path), Phase 20 finding F18.
 - [legal-provenance.md](../contributing/legal-provenance.md) section 4: the
-  static rows for `usbehci.sys` `SuspendController` and the usbport registry
-  reads.
+  static rows for `usbehci.sys` `SuspendController`, the usbport registry
+  reads, and the NT 6.x usbport strings.
 - xHCI 1.2c: Figure 4-34 and its note (p.294), section 4.19.3 (p.295),
   `USBSTS` (p.364).

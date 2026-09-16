@@ -1082,7 +1082,8 @@ registry names. If that inference holds, nothing above usbport on SP4 asks
 for the idle and the value has no effect there. It is unconfirmed: a string
 absent from a binary does not prove the absence of every idle-request path.
 The value stays in the package either way, because the NT path also serves
-XP, whose stack does idle.
+XP, whose stack does idle, and 32-bit Windows 7, whose stack idles it too
+("Windows Vista and Windows 7 target VMs", the idle-suspend reading).
 
 This is fixed (roadmap task 11-V.6, and `docs/using/release-notes.md`,
 the `DisableSelectiveSuspend` entry under "Known limitations", which
@@ -2322,6 +2323,57 @@ The procedure:
    said, and which choice took it, is still unrecorded. Roadmap task 22.10's
    eighth and ninth install legs read it, and until then the release notes do
    not quote it.
+
+**The idle-suspend reading: Windows 7 needs `DisableSelectiveSuspend`, and
+Vista was not seen to.** Taken on 2026-09-16 at the owner's request, on both
+32-bit guests, because the NT 6.x install path writes the value and nobody
+had asked whether these stacks idle the controller (`docs/issues/05-idle-suspend-and-disableselectivesuspend.md`
+section 5 carries the reasoning). The subject was the `qemu` build of that
+day (`built Sep 16 2026 20:16:51`) staged with the committed `src\xhci98.inf`
+into `vm\xfer-dss-x86`, installed from Device Manager by the owner. Each
+guest ran on a throw-away qcow2 overlay over `vm\vista.img` or
+`vm\win7.img` rather than on the image itself, through a copy of its run
+launcher pointed at the overlay, so neither image was written and nothing
+had to be reverted - a cheaper way to take a destructive reading than the
+snapshot revert, and the base image's mtime is the check that it held.
+`-smp 4`, TCG, nothing attached at boot, and the method of the idle-suspend
+paragraph above: `cb SuspendController` / `cb ResumeController` on the
+debug console, `USBCMD`/`USBSTS` read with `xp /2wx` at BAR0 + 0x40
+(`0xfebf0040` on both guests), then a hot-plugged `usb-mouse` and the
+driver's `devices addressed`.
+
+- **Windows 7, value present** (the install's start, then a boot): no
+  suspend in four and three and a half minutes, `USBCMD` `0x00000005`, the
+  mouse addressed at once.
+- **Windows 7, value deleted in regedit, guest restarted:**
+  `SuspendController` 9 s after `StartController`, nothing resuming it,
+  `USBCMD` `0x00000000` and `USBSTS` `0x00000001` (HCH) through the logon. A
+  mouse plugged in at the desktop was at address 0 after 60 s (`info usb`
+  showed `Device 0.0`), `devices addressed` 0. Device Manager's Scan for
+  hardware changes brought `ResumeController`, the mouse addressed and
+  `USBCMD` back to `0x00000005`. After the mouse was unplugged the
+  controller was suspended again about 30 s later.
+- **Vista, value present** (a boot): no suspend in five minutes, `USBCMD`
+  `0x00000005`.
+- **Vista, value deleted, guest restarted - taken twice, the second time on
+  a fresh overlay and a fresh install:** each boot showed
+  `SuspendController` 3 to 4 s after `StartController` and
+  `ResumeController` 2 to 3 s after that, which the boot with the value did
+  not show, so this stack does read it. Then no suspend in five minutes at
+  the desktop, `USBCMD` `0x00000005`, a hot-plugged mouse addressed at once,
+  and no suspend in the three minutes after it was unplugged.
+
+So the NT 6.x path keeps the value: on Windows 7 it is what makes hot-plug
+work, and on Vista it is harmless and the same machine-wide setting. Vista's
+"no idle" is a five-minute bound, not a never. The x64 pair was not read
+without the value; every run there installed a package that writes it.
+
+One thing in that key is not ours and is worth knowing before anyone deletes
+it by mistake: on Vista, `Services\usb` also holds `FastS4_OverrideBiosS4 =
+1`. It is in the clean-install image's `SYSTEM` hive, neither of this
+project's INFs names it, and Vista's own `usbport.inf` has no `AddReg` that
+does; Vista's `usbport.sys` carries the name and Windows 7's does not
+(`legal-provenance.md` section 4). What it does was not read.
 
 ### Vista x64 and Windows 7 x64 target VMs (roadmap task 21.8)
 

@@ -2737,9 +2737,10 @@ Two things are specific to this driver and worth knowing in advance:
   * INSTALLING CHANGES ONE MACHINE-WIDE SETTING, ON EVERY SYSTEM. It writes
     DisableSelectiveSuspend = 1, which stops the USB stack putting the
     controller to sleep. Without it Windows 98 sleeps the controller within
-    about half a second of the last transfer and Windows XP within about half
-    a minute of a start with nothing attached, and a sleeping controller
-    cannot notice anything plugged in afterwards. It affects ANY USB
+    about half a second of the last transfer, Windows XP within about half a
+    minute of a start with nothing attached and 32-bit Windows 7 within
+    about ten seconds, and a sleeping controller cannot notice anything
+    plugged in afterwards. It affects ANY USB
     controller in the machine, and uninstalling does NOT remove it. See
     section 9.
 
@@ -3091,6 +3092,15 @@ the driver reads, and one the installer writes machine-wide on every system.
   to sleep at all, with or without the value (measured in a virtual
   machine); there it is the same machine-wide setting, with the same three
   consequences.
+
+  Windows Vista and Windows 7 were measured on 2026-09-16, 32-bit only, in
+  virtual machines. Windows 7's USB stack puts this controller to sleep
+  within about ten seconds of a start with nothing attached, and again about
+  half a minute after the last device is unplugged, and a device plugged in
+  then is not seen until Refresh - the Windows XP behaviour. Windows Vista's
+  stack reads the value but was not seen putting the controller to sleep in
+  five minutes without it. The x64 editions of both were not measured
+  without it; the 64-bit install writes it all the same.
 
 
 ==============================================================================

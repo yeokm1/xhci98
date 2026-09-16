@@ -354,7 +354,12 @@ because a user meets them through this driver.
   once nothing at all is on the bus (any attached device keeps it awake,
   even one with no driver, so a laptop with internal USB devices never idles
   it and the value changes nothing visible there; Windows XP idles it within
-  about half a minute of a start with nothing attached;
+  about half a minute of a start with nothing attached; 32-bit Windows 7
+  idles it within about ten seconds of a start with nothing attached, and
+  again about half a minute after the last device is unplugged;
+  32-bit Windows Vista was not seen idling it in five minutes without the
+  value, though its stack does read it, both measured in virtual machines
+  on 2026-09-16, and the x64 editions of both were not measured without it;
   Windows 2000 SP4's own stack was never seen idling it, with or without
   the value, measured in a virtual machine on 2026-09-06). It also
   stops any other USB controller
