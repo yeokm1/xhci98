@@ -1443,7 +1443,10 @@ Tasks:
   written from `[Xhci.Dev.NTx86]` and `[DefaultInstall.NTx86]` as the 9x
   path has done since `1.0.0.0`, the gate requiring it once per route on
   both targets; `HcDisableSelectiveSuspend` considered and not taken (under
-  NUSB the per-controller value alone still idled the controller). Read
+  NUSB the per-controller value alone still idled the controller - a single
+  2026-08-13 boot that did not reproduce: on 2026-09-16 the value alone
+  stopped the idle in two boots under NUSB and two under SweetLow's stack, and
+  the binaries agree; issue 5 section 4). Read
   first with the value hand-set, then from the 19.4 package install: no
   `SuspendController` in two minutes idle, and a mouse hot-plugged after
   them bound.

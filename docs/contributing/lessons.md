@@ -2651,8 +2651,10 @@ the same binary the rest of this entry was derived from.
 `DisableSelectiveSuspend`. Both are live reads:
 
 - `HcDisableSelectiveSuspend` is read per controller from the driver key (VA
-  `0x11C10`; `push 1` = the driver/software key, `push 34h` = the name's 52
-  bytes), returning TRUE when the value is absent or zero.
+  `0x11C10`; the `push 1` there is the reader helper's BOOLEAN, which the
+  helper at `0x2D00A` turns into `IoOpenDeviceRegistryKey`'s
+  `PLUGPLAY_REGKEY_DRIVER` (2); `push 34h` = the name's 52 bytes), returning
+  TRUE when the value is absent or zero.
 - `DisableSelectiveSuspend` is read globally via
   `RtlQueryRegistryValues(RelativeTo = Services, L"usb", ...)` at VA
   `0x11DBE`, in a table beside `UsbBIOSx` and `DisableCcDetect`.
@@ -2663,14 +2665,48 @@ suspend still arrived), which falsified `0x800` as the gate and would have
 ended the investigation if the two values had been treated as one lever. But
 the global read sets a second flag (`0x08000000`) the per-controller one
 never touches, which made it a different experiment rather than a repeat.
+**That paragraph is wrong in its runtime claim and in its reading of the
+flags; see the correction below the table.**
 
 Measured on the 2a guest, one boot each:
 
 | | `SuspendController` | `USBCMD` | hot-plug while idle |
 |---|---|---|---|
 | neither value | 1, within seconds | `0x00000000` (halted) | invisible until Refresh |
-| `HcDisableSelectiveSuspend = 1` | 1, within seconds | `0x00000000` | (not retested) |
+| `HcDisableSelectiveSuspend = 1` | 1, within seconds (one boot; not reproduced, see below) | `0x00000000` | (not retested) |
 | `+ Services\USB\DisableSelectiveSuspend = 1` | 0 | `0x00000005` (R/S, INTE) | enumerates on its own |
+
+**Correction, 2026-09-16: the per-controller value alone does stop the
+idle.** The middle row was re-taken after SweetLow (LordOfMice on GitHub,
+issue #4) suggested `HKR,,HcDisableSelectiveSuspend,0x00010001,1` in
+`[Xhci.AddReg]`, on an
+overlay of `fresh-2a.img` with the value set by hand in
+`Services\Class\USB\0002` (the controller's software key, `NTMPDriver =
+xhci98.sys`) and the global value deleted, each boot against a same-overlay
+control with neither value (runtime, the owner at the console):
+
+| stack | per-controller value only | neither value (control) |
+|---|---|---|
+| NUSB 3.3 (`GetHciMn` `57324B30`) | 2 boots: no `SuspendController` in 150 s and 300 s, `USBCMD` `0x00000005`, a hot-plugged `usb-kbd` addressed at once, no re-idle 90 s after unplugging it | `SuspendController` within seconds, `USBCMD` `0x00000000` / `USBSTS` `0x00000001`, the keyboard at address 0 after 40 s, Refresh recovers |
+| SweetLow's (`GetHciMn` `10000001`), NUSB removed on the same overlay | 2 boots, the same: no suspend in 300 s, keyboard addressed within 20 s, no re-idle after unplugging | the same defect |
+
+The static reading agrees with the new rows and not with the old paragraph
+(re-derived in full on all three 32-bit builds, `legal-provenance.md`
+section 4). `0x800` is "selective suspend allowed", set once in the start
+routine (NUSB `0x10933`) only when the Hc read allows it AND the global is 0;
+either value nonzero leaves it clear. It is the only gate: the root hub's
+idle-notification IOCTL (`0x220027`, handler `0x1F13E`) tests it at `0x1F1BB`
+and completes the IRP `STATUS_NOT_SUPPORTED` when it is clear, so the hub
+never powers the root hub down and the miniport's `SuspendController` is
+never reached. `0x08000000` has no reader on that path at all; its one test
+is in the bus-interface setter (`0x13214`) that lets the hub turn selective
+suspend back on at run time, which it refuses while the global is set. So the
+two values are one lever for the idle and differ only there. Why the
+2026-08-13 boot suspended is not established: its evidence was discarded on
+2026-08-30, and the candidates (the value in a key other than the one
+`IoOpenDeviceRegistryKey(..., 2)` resolves to, written after the start
+routine had already read it, or rewritten to 0 by that setter) cannot be told
+apart now.
 
 `SlotsEnabled` 1, `DevicesAddressed` 1, `OpensTotal` 2, wizard raised with no
 Refresh, and `CheckCallbacks` climbing continuously instead of freezing. So
@@ -2685,7 +2721,12 @@ driver, SP4's `usbhub.sys` carries no selective-suspend string, and the hub
 driver NUSB puts above this usbport, `usbhub20.sys` 5.00.2195.6891, does.
 The "never idles" sentence this project carried for weeks agreed with every
 run and was still unmeasured; the measurement now exists, and it is bounded
-by its conditions.
+by its conditions. (2026-09-16, static: usbport itself also explains it. The
+start routine of SP4's build defaults the global value to 1 when
+`IoIsWdmVersionAvailable` reports WDM 1.10 but not 1.20, which is Windows
+2000, so `0x800` is never set there unless `Services\usb` holds an explicit 0
+(`0x10890`); NUSB's build carries the same default at `0x1082B`, and
+SweetLow's has no such check.)
 
 ### Rules
 
@@ -2695,9 +2736,12 @@ by its conditions.
   cheaper question went unasked for the whole investigation. When a
   derivation keeps closing doors, check whether the room was the right one.
 - A pair of registry values with near-identical names is two experiments,
-  not one. The per-controller value failing is what looked like a refutation
-  of the whole idea; the global one differed in a flag bit, and that bit was
-  the reading.
+  not one. That rule survives, and the example it was written from does not:
+  the per-controller value did not fail (2026-09-16 correction above), and the
+  flag bit that "differed" gates nothing on the idle path. A single boot that
+  contradicts the binary's own logic is a reading to repeat, not a refutation;
+  the listing already said `0x800` was cleared by either value, and one more
+  boot would have said so too.
 - The strings were in a binary already disassembled twice in the same
   session. A `strings` pass over the other side is minutes of work and was
   not taken until prompted. It belongs beside "derive the mechanism from the

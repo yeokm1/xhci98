@@ -15,7 +15,8 @@ stack reads the value; the x64 editions of both were not measured without
 it. Windows 2000 SP4's own stack
 was not seen idling this controller in any recorded run, with or without the
 value; that is a bounded VM observation, not a "never" (roadmap Phase 20,
-F18). Real hardware behaves the same as the VM on Windows 98: the fix went
+F18), and usbport's own start routine explains it statically: on Windows 2000
+it defaults the global value to 1 unless `Services\usb` holds an explicit 0. Real hardware behaves the same as the VM on Windows 98: the fix went
 into the media before the bare-metal batches and the idle hot-plug has not
 been reported on metal since.
 
@@ -140,17 +141,33 @@ build, VAs `0x11C10` and `0x11DBE`):
   `RtlQueryRegistryValues(RelativeTo = Services, L"usb", ...)`, in a table
   beside `UsbBIOSx` and `DisableCcDetect`.
 
-Setting the per-controller value alone changed nothing, which would have
-ended the idea if the two had been treated as one lever. The global read
-sets a second flag the per-controller one never touches, so it was a
+At the time, setting the per-controller value alone appeared to change
+nothing, and the global read was taken to set a second flag the
+per-controller one never touches, so the global value was tried as a
 different experiment, and it worked. Measured on the 2a guest, one boot
 each (runtime):
 
 | | `SuspendController` | `USBCMD` | hot-plug while idle |
 |---|---|---|---|
 | neither value | 1, within seconds | `0x00000000` (halted) | invisible until Refresh |
-| `HcDisableSelectiveSuspend = 1` | 1, within seconds | `0x00000000` | (not retested) |
+| `HcDisableSelectiveSuspend = 1` | 1, within seconds (one boot; not reproduced) | `0x00000000` | (not retested) |
 | plus `Services\USB\DisableSelectiveSuspend = 1` | 0 | `0x00000005` (R/S, INTE) | enumerates on its own |
+
+**The middle row is wrong.** Re-taken on 2026-09-16 to check a suggested
+`HKR,,HcDisableSelectiveSuspend,0x00010001,1` in `[Xhci.AddReg]`: with only the per-controller value set (by hand, in the controller's software
+key `Services\Class\USB\<NNNN>`) and the global value deleted, the controller
+did not idle in two boots under NUSB's usbport and two under SweetLow's
+(150 to 300 s each, `USBCMD` `0x00000005`, a hot-plugged keyboard addressed
+at once, no re-idle after unplugging it), while a control boot with neither
+value on the same disk suspended within seconds and missed the keyboard until
+Refresh (runtime). The binaries say the same (static, all three 32-bit
+builds): usbport sets one flag, "selective suspend allowed", only when both
+values are absent or 0, and the root hub's idle request is refused whenever
+that flag is clear, so either value alone stops the idle. The second flag the
+global value sets gates only whether the hub may switch selective suspend back
+on at run time. Why the one boot of 2026-08-13 suspended is not established;
+its evidence no longer exists. [lessons.md](../contributing/lessons.md) has
+the correction with addresses.
 
 With the value set: `SlotsEnabled` 1, `DevicesAddressed` 1, the wizard
 raised with no Refresh, `CheckCallbacks` climbing instead of frozen. One
@@ -198,8 +215,10 @@ XP's usbport idles it about thirty seconds after a start with
 nothing attached, with the same invisible hot-plug, so the NT path writes
 the value too; on Windows 2000 it is the same machine-wide value with the
 same three consequences. The per-controller alternative was considered for
-the NT path and not taken: under NUSB's build it alone still idled the
-controller, and one mechanism on both paths is one thing to check.
+the NT path and not taken, on the strength of the 2026-08-13 boot in which it
+alone still idled the controller under NUSB's build, and because one
+mechanism on both paths is one thing to check. That reason fell on
+2026-09-16 (section 4).
 
 The NT 6.x install path, `[Xhci.Dev6.*]`, writes the value as well, and on
 2026-09-16 the question was asked of it directly on the two 32-bit guests,
@@ -261,7 +280,9 @@ three consequences.
   the stimulus. Elapsed idle is not a state reading.
 - Two registry names with similar meanings are two levers until measured
   otherwise. Treating them as one would have ended the investigation one
-  experiment early.
+  experiment early. And the converse cost a month: one boot that
+  contradicted the binary's own flag logic was taken as a refutation of the
+  per-controller value instead of a reading to repeat.
 - A value has to be checked for its content, not its presence: present and
   0 is absent.
 

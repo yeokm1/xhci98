@@ -246,13 +246,15 @@ HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1
 ;
 ; The per-controller alternative, HcDisableSelectiveSuspend under the
 ; device's own key, was considered for the NT path and not taken: usbport
-; reads both, and under NUSB's build the per-controller value alone still
-; idled the controller while the global value stopped it (measured on the
-; Windows 98 guest, docs\contributing\lessons.md, "And then the whole
-; framing turned out to be wrong"); the global value is the one with a
-; measured effect on every build, XP's included, and one mechanism on both
-; paths is one thing to check. The cost, consequence 1, is the same on every
-; target.
+; reads both, and in one boot under NUSB's build the per-controller value
+; alone still idled the controller while the global value stopped it; the
+; global value is the one with a measured effect on every build, XP's
+; included, and one mechanism on both paths is one thing to check. The cost,
+; consequence 1, is the same on every target. That boot did not reproduce: on
+; 2026-09-16 the per-controller value alone stopped the idle in two boots
+; under NUSB's usbport and two under SweetLow's, and usbport's own flag logic
+; says either value alone suffices (docs\contributing\lessons.md, "And then
+; the whole framing turned out to be wrong", the correction).
 
 ; ------------------------------------------------------------------
 ; The two log values, on both install paths
