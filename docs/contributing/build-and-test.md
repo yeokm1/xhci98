@@ -2375,8 +2375,10 @@ as a surprise. **On 2026-09-13 issue 7's fix was run on both, and on both
 32-bit guests too, and every clause passed on all four** (issue 7 section
 7.5): five disable/enable cycles each, and remove and rescan included.
 
-**`TESTSIGNING` has still not been tried on either guest** - it remains an
-open box in 22.5, and F8 is what every run so far has used. **Note that QEMU's
+**F8 is what every run has used, and it is the only route.** `TESTSIGNING`
+was never tried on either guest and was removed from the roadmap by the owner
+on 2026-09-16: test-signing mode loads a test-signed driver, and this package
+is not signed. **Note that QEMU's
 monitor `sendkey f8` is ignored on these guests' boot path**: F8 has to be
 pressed at the console, and a `system_reset` reaches "Starting Windows" within
 about 25 seconds, so be at the keyboard before resetting.
@@ -2456,32 +2458,20 @@ Windows XP x64 does not enforce it, which is the whole reason Phase 21 took
 that target first. Vista x64 and Windows 7 x64 both do, and the
 cross-certificate route that once made third-party Windows 7 x64 signing
 possible is no longer available in practice. So `xhci98.sys` loads on these
-systems only on a boot with driver signature enforcement disabled (F8) or with
-test-signing on. Establish which works, and what it costs the user at every
-boot, before spending time on anything downstream - and if the answer is that
-it cannot be made to load, that is the leg's result. Design record 11 section 6
-is the record; the requirement belongs in the release notes beside any tier
-that is claimed, not in a footnote.
+systems only on a boot with driver signature enforcement disabled (F8).
+Test-signing mode is not a route for the published package: it loads a
+test-signed driver, and this package is not signed (next section). Design
+record 11 section 6 is the record; the requirement belongs in the release notes
+beside any tier that is claimed, not in a footnote.
 
-**Take F8 first, and on one guest before both.** It needs no certificate, no
-catalog and nothing staged, so it is the cheapest route to the question that
-actually decides the leg: does the amd64 binary load and work on these systems
-at all. A negative there ends it, and everything downstream is saved. Only if
-it loads is the test-signing route worth setting up, and then what that route
-buys is one specific thing: whether the cost can be reduced from per-boot to
-one-time.
-
-**F8 answers half of this, and the other half is the half that reaches the
-tier.** It applies to exactly one boot, by design, so what it establishes is
-that the user must press F8 and choose that option every time the machine
-starts. For a USB host controller driver that is a heavy cost rather than a
-footnote - the machine can never boot unattended into working USB - and it is
-materially weaker than what this project claims for XP x64 and Server 2003 x64,
-where the package installs and loads with nothing asked of the user. A tier
-claim has to name which route it rests on rather than treat the two as
-equivalent. `bcdedit -set TESTSIGNING ON` is the route that persists across
-reboots, being a BCD setting; its costs are the two certificate stores named
-below and a permanent desktop watermark.
+**F8 works on both guests** (roadmap tasks 21.8 and 22.5). It needs no
+certificate, no catalog and nothing staged. It applies to exactly one boot, by
+design, so what it establishes is that the user must press F8 and choose that
+option every time the machine starts. For a USB host controller driver that is
+a heavy cost rather than a footnote - the machine can never boot unattended
+into working USB - and it is materially weaker than what this project claims
+for XP x64 and Server 2003 x64, where the package installs and loads with
+nothing asked of the user. A tier claim has to say so.
 
 Two things F8 does not do, so neither reads as a failure when it happens:
 
@@ -2497,9 +2487,12 @@ Two things F8 does not do, so neither reads as a failure when it happens:
 On the guests the F8 menu is reachable over the PS/2 keyboard, so there is no
 chicken-and-egg between the boot menu and the controller being installed.
 
-**The host-side half of that was proved out on 2026-09-10, before either guest
-existed, and it works end to end with no network and nothing installed.** The
-whole toolchain is already in this repository:
+**A test-signed package was proved out host-side on 2026-09-10, before either
+guest existed, and it works end to end with no network and nothing installed.**
+It is kept as a record, not a step: the guest half of that route
+(`bcdedit -set TESTSIGNING ON`) was removed by the owner on 2026-09-16 without
+being tried, since no user of the unsigned download can take it without signing
+the driver themselves. The whole toolchain is already in this repository:
 
 | tool | where |
 |---|---|

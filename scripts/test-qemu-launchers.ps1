@@ -322,8 +322,10 @@ try {
             # is x64-only, so an unsigned driver raises a prompt and loads,
             # and the launcher says to record what the prompt did. On the
             # 64-bit pair it is enforced, an unsigned driver does not load at
-            # all, and the launcher has to name the two routes that exist and
-            # say to settle them first.
+            # all except on an F8 boot, and the launcher has to name that route
+            # and its every-boot cost. It must not offer test-signing: that
+            # mode loads only a test-signed driver, the package is unsigned,
+            # and the owner removed the route on 2026-09-16.
             #
             # Every other check in this file guards against a launcher that
             # will not work. This one guards against a launcher that works and
@@ -336,9 +338,11 @@ try {
             #
             if ($isAmd64) {
                 Assert-True ($text.Contains("this system ENFORCES kernel-mode code signing") -and
-                    $text.Contains("bcdedit -set TESTSIGNING ON") -and
-                    $text.Contains("Disable Driver Signature Enforcement")) `
-                    "the $name run launcher does not tell the operator that this system enforces kernel-mode code signing, or does not name both routes around it; an unsigned driver does not load here and roadmap task 21.8 is which route works."
+                    $text.Contains("Disable Driver Signature Enforcement") -and
+                    $text.Contains("EVERY BOOT")) `
+                    "the $name run launcher does not tell the operator that this system enforces kernel-mode code signing, or does not name the F8 route and its every-boot cost; an unsigned driver loads here only on an F8 boot."
+                Assert-True (-not $text.Contains("TESTSIGNING")) `
+                    "the $name run launcher offers bcdedit TESTSIGNING, which does not load this unsigned package; the owner removed that route on 2026-09-16."
                 Assert-True (-not $text.Contains("Kernel-mode code signing enforcement is")) `
                     "the $name run launcher carries the 32-bit pair's 'enforcement is x64-only' sentence, which is false on this guest and would send the operator looking for a prompt that never comes."
                 Assert-True ($text.Contains(".NTamd64 half") -and -not $text.Contains(".NTx86")) `

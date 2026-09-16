@@ -671,9 +671,10 @@ could cost:
   version-gated, not RAM-gated. What memory above the line does open is the
   HAL's double-buffering, which has never executed on any guest this project
   has booted, and through it the *shape* of the scatter-gather list the
-  miniport walks. That is written up as a clause of roadmap task 21.8, along
-  with the reason the common buffer is the part to watch: `StartPA` is a
-  `ULONG`, so unlike the SG path it carries no check at all.
+  miniport walks, and the common buffer, which is the part to watch:
+  `StartPA` is a `ULONG`, so unlike the SG path it carries no check at all.
+  **It was a clause of roadmap task 21.8 until the owner removed it on
+  2026-09-16, untaken**, so double-buffering has still never executed here.
 - **`USBPORT_RESOURCES` is longer than `0x48` on both.** Vista x64's
   `usbehci.sys` reads fields at `0x50`, `0x58`, `0x90` and `0x94`; Windows 7
   x64's at `0x50`, `0x90` and `0xC0`. usbport owns the allocation, so reading a
@@ -695,8 +696,10 @@ these readings, and both belong in the record before anyone builds a guest:
   phase takes. Vista x64 and Windows 7 x64 do enforce it, and the
   cross-certificate route that once made third-party Windows 7 x64 signing
   possible is no longer available in practice. Supporting those two means,
-  permanently, a guest booted with driver signature enforcement disabled (F8) or
-  with test-signing on. That goes in the release notes beside the tier, not in a
+  permanently, every boot with driver signature enforcement disabled (F8) -
+  test-signing mode loads only a test-signed driver, and this package is not
+  signed, so the owner removed that route from the roadmap on 2026-09-16
+  untried. That goes in the release notes beside the tier, not in a
   footnote. **Shipping a signed package was considered as the way out and
   declined** on 2026-09-10 (decision 9): it buys the claimed tier nothing,
   since that tier does not enforce, and it is not what would rescue these two

@@ -38,9 +38,9 @@ and every one of them is load-bearing:
   code signing    THE INVERSION THAT MATTERS. On the 32-bit pair, kernel-mode
                   code signing enforcement is x64-only, so an unsigned driver
                   raises a PROMPT and loads. On the 64-bit pair it is enforced,
-                  so an unsigned driver does not load at all and the guest
-                  needs test-signing or an F8 boot. Task 21.8 exists to find
-                  out which, and a negative closes it.
+                  so an unsigned driver loads only on an F8 boot with
+                  signature enforcement disabled (measured, tasks 21.8 and
+                  22.5). Test-signing is no route: the package is unsigned.
   memory          A 32-bit guest with 2048 MB has nothing above 4 GB and the
                   question does not arise. A 64-bit guest above 4 GB is a
                   change to the TEST SURFACE, not tuning - it is the first
@@ -77,12 +77,11 @@ WHAT DIFFERS, AND WHY:
            that it declares interface Version 200 - not anything about the
            guest's RAM.
 
-           ON THE 64-BIT PAIR IT IS A DELIBERATE EXPERIMENT AND NOT A DEFAULT
-           (roadmap task 21.8, the owner's clause of 2026-09-10). These are
-           the first guests this project has ever had where more than 4 GB is
-           even askable, so THE HAL'S DOUBLE-BUFFERING HAS NEVER ONCE
-           EXECUTED. Install at 2048; then, as its own run with its own
-           record, regenerate ONE guest with -MemoryMb 8192. What that opens
+           ON THE 64-BIT PAIR IT WOULD BE A DELIBERATE EXPERIMENT AND NOT A
+           DEFAULT. It was a clause of roadmap task 21.8 until the owner
+           removed it on 2026-09-16, untaken, so THE HAL'S DOUBLE-BUFFERING HAS
+           NEVER ONCE EXECUTED. -MemoryMb still works; install at 2048 and
+           regenerate afterwards if the run is ever taken. What that opens
            is not 64-bit addressing - the second IoGetDmaAdapter is
            version-gated, not RAM-gated, and no amount of memory reaches it -
            but the SHAPE of the scatter-gather list this driver walks, read
@@ -184,12 +183,13 @@ Phase 22 as the assumption to confirm on the guest, since it is the one that
 would make that half of the phase pointless if wrong. On the 64-bit pair it IS
 enforced, the cross-certificate route that once made third-party Windows 7 x64
 signing possible is not available in practice, and an unsigned xhci98.sys
-therefore loads only on a boot with signature enforcement disabled (F8) or with
-test-signing on. Roadmap task 21.8 goes to those guests to find out which works
-and what it costs the user at every boot, and a negative is a complete answer.
-build-and-test.md, "Vista x64 and Windows 7 x64 target VMs", carries the two
-routes and the host-side signing recipe that was proved out before either guest
-existed.
+therefore loads only on a boot with signature enforcement disabled (F8), chosen
+at the console on every boot - measured on both guests (roadmap tasks 21.8 and
+22.5). Test-signing mode loads only a test-signed driver and this package is
+not signed, so the owner removed that route on 2026-09-16 untried.
+build-and-test.md, "Vista x64 and Windows 7 x64 target VMs", carries the F8
+cost and, as a record, the host-side signing recipe proved out before either
+guest existed.
 #>
 
 $ErrorActionPreference = "Stop"
@@ -401,8 +401,8 @@ function New-Nt6QemuGuest {
         if ($MemoryMb -gt 4096) {
             $memComment = @(
                 "rem $MemoryMb MB - ABOVE 4 GB, AND THAT IS A DELIBERATE EXPERIMENT",
-                "rem RATHER THAN A DEFAULT (roadmap task 21.8, the owner's clause of",
-                "rem 2026-09-10). Every guest this project has booted before this one",
+                "rem RATHER THAN A DEFAULT, and not on the roadmap (removed by the",
+                "rem owner 2026-09-16). Every guest this project has booted before this one",
                 "rem had less than 4 GB, so the HAL's double-buffering has never",
                 "rem executed. IT DOES NOT TEST 64-BIT ADDRESSING: usbport's second",
                 "rem IoGetDmaAdapter is gated on the miniport declaring Version >= 310",
@@ -418,8 +418,9 @@ function New-Nt6QemuGuest {
                 "rem $MemoryMb MB, which is the INSTALL value for all four 6.x guests.",
                 "rem Raising a 64-bit guest above 4 GB is a change to the test surface",
                 "rem and not tuning - it is the first time the HAL's double-buffering",
-                "rem could execute at all - so it is its own run with its own record:",
-                "rem regenerate with -MemoryMb 8192 AFTER the install, never before."
+                "rem could execute at all. That run is not planned (removed from the",
+                "rem roadmap 2026-09-16); if it is ever taken, regenerate with a larger",
+                "rem -MemoryMb AFTER the install, never before."
             )
         }
     } else {
@@ -467,21 +468,15 @@ function New-Nt6QemuGuest {
             "rem    sibling, where enforcement is absent and an unsigned driver raises",
             "rem    a prompt and loads. Here an unsigned xhci98.sys does not load, and",
             "rem    the cross-certificate route that once made third-party Windows 7",
-            "rem    x64 signing possible is not available in practice. Two routes are",
-            "rem    left and roadmap task 21.8 is which of them works and what it",
-            "rem    costs the user at EVERY BOOT:",
+            "rem    x64 signing possible is not available in practice. ONE route is",
+            "rem    left, measured on this guest (roadmap tasks 21.8 and 22.5):",
             "rem      F8 at boot -> Disable Driver Signature Enforcement. Costs a",
-            "rem      keypress every single boot and survives nothing.",
-            "rem      bcdedit -set TESTSIGNING ON, with a test certificate in the",
-            "rem      guest's Trusted Root AND Trusted Publishers stores. Persistent,",
-            "rem      costs a desktop watermark. The host-side half of this is proved",
-            "rem      out and recorded in build-and-test.md, ""Vista x64 and Windows 7",
-            "rem      x64 target VMs"" - MakeCert, SignTool and Inf2Cat are all in",
-            "rem      tools\WinDDK71, and Inf2Cat wants the .NET 3.5 feature or it",
-            "rem      exits printing nothing at all.",
-            "rem    SETTLE THIS BEFORE ANYTHING DOWNSTREAM. Everything else this",
-            "rem    guest is for is wasted if the driver cannot be made to load, and",
-            "rem    a negative is a complete answer to the task."
+            "rem      choice at the console on EVERY BOOT and survives nothing.",
+            "rem      QEMU's monitor sendkey f8 is ignored on this boot path, so be",
+            "rem      at the keyboard before a system_reset.",
+            "rem    Test-signing mode is NOT a route: it loads only a test-signed",
+            "rem    driver, and this package is not signed. See build-and-test.md,",
+            "rem    ""Vista x64 and Windows 7 x64 target VMs""."
         )
     } else {
         $infHalfComment = @(
@@ -672,17 +667,12 @@ function New-Nt6QemuGuest {
         Write-Host "     The accelerator above is MEASURED (2026-09-10): both 64-bit guests installed under tcg."
         Write-Host "     Under WHPX Vista x64 bugchecks in WinPE and Windows 7 x64 wedges at its first restart -"
         Write-Host "     after a whole finished phase, which is why only a COMPLETED install may be recorded."
-        Write-Host "  3. SETTLE THE CODE-SIGNING GATE BEFORE ANYTHING ELSE (roadmap task 21.8). This system enforces"
-        Write-Host "     kernel-mode code signing, so an unsigned xhci98.sys does not load at all. Establish which of"
-        Write-Host "     F8 (Disable Driver Signature Enforcement, every boot) and bcdedit -set TESTSIGNING ON (with the"
-        Write-Host "     test certificate in the guest's Trusted Root AND Trusted Publishers stores) works here, and what"
-        Write-Host "     it costs the user at every boot. A NEGATIVE CLOSES THE TASK. The host-side recipe is in"
-        Write-Host "     build-and-test.md, 'Vista x64 and Windows 7 x64 target VMs'; the tools are in tools\WinDDK71."
+        Write-Host "  3. This system enforces kernel-mode code signing and the package is unsigned, so the driver loads"
+        Write-Host "     only on an F8 boot: Disable Driver Signature Enforcement, chosen at the console on EVERY boot"
+        Write-Host "     (measured, roadmap tasks 21.8 and 22.5). Test-signing mode is not a route for an unsigned package."
         Write-Host "  4. Then the amd64 package: make-package.ps1 -Arch amd64 -Flavor qemu -OutDir vm\xfer$Stem, boot"
         Write-Host "     qemu-$Stem-run.cmd <tag>, and install through the second INF's .NTamd64 half."
         Write-Host "     Then task 21.5's clauses, on the release flavour as well as qemu."
-        Write-Host "  5. LAST, and as its own run with its own record: regenerate with -MemoryMb 8192 and read the four"
-        Write-Host "     ProbeSg* counters. It tests the SG list's shape, NOT 64-bit addressing."
     } else {
         Write-Host "  3. Roadmap task 22.3's two readings, neither needing a driver and neither needing a boot:"
         Write-Host "     7z l vm\$Stem.img, then look for usbport.sys / usbhub.sys / usbd.sys / usbehci.sys in"

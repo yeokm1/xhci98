@@ -1716,7 +1716,7 @@ was added on 2026-09-09 on the owner's instruction and is a second guest leg:
 Vista x64 and Windows 7 x64, whose interface 21.7 already read and found
 nothing against. It is not a repeat of 21.5, because the two obstacles there
 are not ABI obstacles - both systems enforce kernel-mode code signing, so an
-unsigned driver loads only with enforcement disabled or test-signing on, and
+unsigned driver loads only on a boot with enforcement disabled, and
 both stage a package through a driver store the `LayoutFile` route was not
 written for. Either could end the leg, and a well-characterised "no" is a
 complete result.
@@ -2157,8 +2157,10 @@ are static readings and no other task's box may be ticked on one.
       and the cross-certificate route that once made third-party Windows 7 x64
       signing possible is no longer available in practice (design record 11
       section 6). So an unsigned `xhci98.sys` loads on those systems **only**
-      on a boot with driver signature enforcement disabled (F8) or with
-      test-signing on. Establish which of those works on each guest, and what
+      on a boot with driver signature enforcement disabled (F8). Test-signing
+      mode is not a route for it: that mode loads a test-signed driver, and
+      this package is not signed (design record 11 section 12, decision 9).
+      Establish whether F8 works on each guest, and what
       the user has to do at every boot, before spending a day on anything
       else. If the answer is that the driver cannot be made to load at all,
       that is the task's result and it is worth having.
@@ -2252,9 +2254,19 @@ are static readings and no other task's box may be ticked on one.
         32-bit pair disagreed, and with XP x64 also on `tcg` every 64-bit guest
         here now wants TCG. That is an observation about four guests, not a
         property of bitness
-  - [ ] the code-signing gate above: which route loads an unsigned driver on
+  - [x] the code-signing gate above: which route loads an unsigned driver on
         each guest, what it costs the user at every boot, and whether it
         survives a reboot at all.
+
+        **Closed 2026-09-16 on F8, the one route there is.** Every NT 6.x x64
+        leg since, on both guests, loaded the driver on an F8 boot (task
+        22.5), at the cost measured below: the choice is made at the console
+        on every boot and survives nothing. **`bcdedit -set TESTSIGNING ON`
+        was removed from this task by the owner the same day, untried**:
+        test-signing mode loads a test-signed driver, and the published
+        package is not signed (decision 9), so it would measure a route
+        that no user of the download can take without signing the driver
+        themselves.
 
         **F8 TAKEN ON THE VISTA X64 GUEST, 2026-09-10, AND THE ANSWER IS YES:
         the amd64 binary loads and runs on 6.0.** `DriverEntry` completes,
@@ -2262,10 +2274,10 @@ are static readings and no other task's box may be ticked on one.
         - task 21.7 read both statically and both are now measured live - the
         registration succeeds, usbport writes back its 16 service pointers and
         calls `StartController`. **Box 3's decisive question is answered and
-        boxes 4 to 7 are not foreclosed.** The cost is what the box predicted:
+        boxes 4 to 6 are not foreclosed.** The cost is what the box predicted:
         the F8 menu item applies to exactly one boot, was re-chosen on every
-        boot of the session, and survives nothing. `TESTSIGNING` was not
-        reached and Windows 7 x64 was not booted, so the box stays open.
+        boot of the session, and survives nothing. Windows 7 x64 was not
+        booted that day, so the box stayed open.
 
         Three things had to be fixed or found on the way, in the order they
         bit, and none of them was a signing question:
@@ -2420,24 +2432,13 @@ are static readings and no other task's box may be ticked on one.
         undisturbed, and the INF gate is not asked for an opinion it does not
         owe.
 
-        **What makes that true: the test-signing route needs no catalog and so
-        no INF change.** The service is `StartType=3`, demand-start rather than
-        boot-start, and the load-time check takes an embedded Authenticode
-        signature on `xhci98.sys` directly - `SignTool sign` on the binary and
-        stop there, no `Inf2Cat`, no `.cat`. The catalog governs the
-        install-time publisher prompt rather than the loader, and an unsigned
-        package there costs a "Windows can't verify the publisher" dialog and
-        an "Install anyway" click, which is a cost to record and not a block.
-        Boot-start would have been the other answer, since that case requires
-        the embedded signature and admits no catalog at all; this driver is not
-        boot-start, so both are open to it and the cheaper one is enough.
-
-        **That paragraph is a reading and not a measurement, and the guest is
-        what settles it**, which is the right place for it. Try embedded-only
-        first. If it loads, the INF line is never needed and the question is
-        closed. If it does not, the catalog question reopens, and only then is
-        that line a decision - taken on a staged copy and measured there before
-        it is ever proposed for the shipping INF.
+        **What makes that true: nothing is signed, so there is nothing for a
+        catalog to vouch for.** The catalog governs the install-time publisher
+        prompt rather than the loader, and an unsigned package there costs a
+        "Windows can't verify the publisher" dialog and an "Install anyway"
+        click, which is a cost to record and not a block. The Vista x64 guest
+        confirmed it: the driver store staged the package with only a `sto:`
+        warning about the missing `CatalogFile` (box 4).
 
         **And Microsoft's own package validator blesses the `LayoutFile`
         route, by name, for exactly these two systems.** All four OS-supplied
@@ -2448,35 +2449,22 @@ are static readings and no other task's box may be ticked on one.
         `Vista_X64` and `7_X64` specifically - and **it is still not the
         reading**: a signability test is not the driver store at install time.
 
-        What is left is entirely guest-side, and it is two routes on each
-        guest. **F8, Disable Driver Signature Enforcement**, which needs no
-        signing at all and is per boot by design. And **`bcdedit -set
-        TESTSIGNING ON`** over an embedded-signed `.sys`, where the test root
-        has to reach the guest's Trusted Root **and** Trusted Publishers
-        stores, both, before it buys anything. Record what each costs the user
-        at every boot and whether either survives a reboot.
+        What is left is entirely guest-side: **F8, Disable Driver Signature
+        Enforcement**, which needs no signing at all and is per boot by
+        design. Record what it costs the user at every boot. It needs no
+        certificate, no catalog and nothing staged, so it goes straight to the
+        question that decides this task: does the amd64 binary load and work
+        on these systems at all. A negative there closes 21.8 and boxes 4 to 6
+        never happen.
 
-        **TAKE F8 FIRST, AND ON ONE GUEST BEFORE BOTH.** It needs no
-        certificate, no catalog and nothing staged, so it is the cheapest path
-        to the question that actually decides this task: does the amd64 binary
-        load and work on these systems at all. A negative there closes 21.8 and
-        boxes 4 to 7 never happen. Only if it loads is the test-signing route
-        worth the time, and then what that route buys is a specific,
-        answerable thing: whether the cost can be reduced from per-boot to
-        one-time.
-
-        **F8 ANSWERS HALF THIS BOX AND THE OTHER HALF IS THE ONE THAT REACHES
-        THE TIER.** It applies to exactly one boot, by design, so the finding
-        it produces is "the user must press F8 and choose that option every
-        time the machine starts". For a USB host controller driver that is a
-        heavy cost rather than a footnote: the machine can never boot
-        unattended into working USB. That is a materially different claim from
-        the one this project makes about XP x64 and Server 2003 x64, where the
-        package installs and loads with nothing asked of the user, and task
-        21.6's tier wording has to say so rather than list both routes as
-        equivalent. `TESTSIGNING` is the route that persists across reboots,
-        being a BCD setting; its own costs are the two certificate stores above
-        and a permanent desktop watermark.
+        **WHAT F8 COSTS IS WHAT THE TIER WORDING HAS TO SAY.** It applies to
+        exactly one boot, by design, so the finding it produces is "the user
+        must press F8 and choose that option every time the machine starts".
+        For a USB host controller driver that is a heavy cost rather than a
+        footnote: the machine can never boot unattended into working USB. That
+        is a materially different claim from the one this project makes about
+        XP x64 and Server 2003 x64, where the package installs and loads with
+        nothing asked of the user, and the tier wording has to say so.
 
         Two things F8 does NOT do, so neither reads as a failure when it
         happens:
@@ -2510,52 +2498,23 @@ are static readings and no other task's box may be ticked on one.
         the `Xhci.Dev6` shape does. **Windows 7 x64 is still owed, and so is
         the decision about whether that shape reaches the shipping INF** - it
         has only ever run from a staged copy.
-  - [ ] then the same clauses 21.5 took, on each guest: registered and
+  - [x] then the same clauses 21.5 took, on each guest: registered and
         started, the No Op self-test, the root-hub callbacks, a HID mouse, a
         mass-storage device and a composite audio device bound, and the Device
         Manager disable/enable/remove/rescan sequence. **On the `release`
         flavour as well as `qemu`**, for the reason 21.5 found the hard way -
         the clauses were taken on a build that is never published, and closing
-        that gap is what licensed the 64-bit publisher default
-  - [ ] **memory above 4 GB, as a deliberate experiment with its own record
-        and not as a bumped default** (raised by the owner 2026-09-10). These
-        are the first guests where it is even askable: every guest this
-        project has ever booted has had less than 4 GB, so **the HAL's
-        double-buffering has never once executed**. Give one guest 8192 MB
-        by regenerating its launcher with `-MemoryMb`, leave the default at
-        2048, and record the reading either way.
+        that gap is what licensed the 64-bit publisher default.
 
-        **What it does NOT test, so that nobody reads more into a pass than
-        is there: 64-bit addressing stays unreachable.** Windows 7's second
-        `IoGetDmaAdapter` is gated on `Version >= 310` plus a packet slot this
-        driver does not fill; it is version-gated, not RAM-gated, and no
-        amount of memory opens it. usbport's adapter stays
-        `Dma32BitAddresses = 1` / `DmaWidth = Width32Bits`.
-
-        **What it DOES open is the shape of the scatter-gather list.** With
-        memory above the line the HAL must bounce high buffers down through
-        map registers, and that changes what `MapTransfer` produces -
-        fragment count, lengths, offsets. That is the real target, and it is
-        this driver's code that walks it: the `XHCI_XFER_MAX_DATA_TRBS` cap
-        (`src/xhci_xfer.c:517`), the 64 KB physical-boundary splitting, and
-        the `SgOffset` ordering and gap detection. Those edges are exercised
-        today only on the shapes a small 32-bit guest happens to produce.
-
-        **The read-out already exists and needs no new code**: the four probe
-        counters `ProbeSgDisordered`, `ProbeSgGapped`, `ProbeSgHighDwords` and
-        `ProbeSgMapped`, which every build maintains. All four at zero is the
-        static record confirmed under a workload that could have broken it.
-
-        **The dangerous case fails safe and the safe-looking one does not**,
-        which is the asymmetry to carry into the run. A high address in an SG
-        element is refused at `src/xhci_xfer.c:542` before anything is read or
-        written, and counted - visible, clean, no corruption. But
-        `USBPORT_RESOURCES.StartPA` is only a `ULONG`, so the common buffer's
-        high DWORD is not exposed and **cannot be checked at all**
-        (`implementation-invariants.md`, "DMA Addresses"); there the driver
-        rests on the 32-bit adapter contract alone, and a violation would be
-        silent. Read the common buffer's behaviour on its own terms rather
-        than inferring it from a clean transfer counter.
+        **The `qemu` half is taken, under task 22.5, and the `release` half
+        moved to Phase 22 by the owner on 2026-09-16.** Every clause passes on
+        both guests on the `qemu` build with issue 7's fix (`fix7vistax64`,
+        `fix7win7x64`, 2026-09-13), and Vista x64's remove and rescan held
+        five times more on 2026-09-16 (`vm\vistax64-rr\`). The `release` build
+        has run on neither guest. It is read in task 22.10, from the
+        published asset, alongside the other install legs; that leg is also
+        Windows 7 x64's first install through the committed
+        `src\xhci98-amd64.inf` rather than a staged copy
   - [ ] the tier decided and stated with the rest in task 21.6, including the
         signing requirement, which belongs in the release notes beside the
         tier rather than in a footnote
@@ -2652,8 +2611,10 @@ change it is a change to the shipping 32-bit binary, it goes into this
 release, and all four existing 32-bit install legs are re-validated behind it;
 if 22.5 stays empty, as everything read so far says it will, the 32-bit
 binary in this release is `1.0.2.0`'s code at a new version. Either way the
-cut is last. And **the asset gains a fifth install leg**, the amd64 package on
-the XP x64 guest, which no previous cut had; the x86 half keeps its four.
+cut is last. And **the asset gains three install legs**, all of them the amd64
+package, which no previous cut had: on the XP x64 guest, and - on the owner's
+instruction of 2026-09-16, carrying task 21.8's `release`-flavour clause - on
+the Vista x64 and Windows 7 x64 guests. The x86 half keeps its four.
 
 **What the x64 half of this release may be said to be is exactly what task
 21.5 observed and no more**: one guest, one virtual machine, never real
@@ -3443,9 +3404,6 @@ reading may not tick a box whose line names a guest.
         reaches a 6.x-only right-click section - which the lesson that a
         version decoration selects the models section only says is not
         `[DefaultInstall.NTx86.6.0]`
-  - [ ] **`TESTSIGNING` tried once on an x64 guest**, for the release notes'
-        64-bit paragraph: what the user does once, what it costs at every
-        boot, and whether it survives a reboot. F8 is already measured
   - [ ] **the record**: task 21.6's tier wording for Vista and Windows 7 on
         both architectures - VM-supported, no checkpoint tax, and for x64 the
         signing paragraph beside the tier rather than in a footnote -
@@ -3684,6 +3642,17 @@ and they are the phase's other half rather than a coda to the first.
         reading. So read `setupapi.log` off the image as well, for the
         `XhciModels.NTamd64` models section and `[Xhci.Dev.NTamd64]` - not
         `Xhci.Dev6` - and for the four OS-supplied files on disk after it
+  - [ ] **the sixth and seventh legs: the amd64 package on the Vista x64 and
+        Windows 7 x64 guests**, from the asset's `RELEASE-X64\` directory,
+        each off its clean-install snapshot under F8. Added 2026-09-16 on the
+        owner's instruction, and it closes the `release`-flavour half of task
+        21.8's clauses box: every NT 6.x x64 reading so far was taken on the
+        `qemu` build. Take 21.5's clauses - registered and started, the three
+        devices, disable / enable / remove / rescan - read the way 21.5 read a
+        flavour that writes no port-`0xE9` trace. On Windows 7 x64 it is also
+        the first install through the committed `src\xhci98-amd64.inf` (22.5's
+        INF box); read `setupapi.log` for `XhciModels.NTamd64.6.0` and
+        `[Xhci.Dev6.NTamd64]` on both
   - [ ] the asset's file list checked against what the packager staged, and
         no Microsoft file in it. `PKG-MSFILE` refuses one by name; the rule
         that actually closes it is the packager publishing nothing it did not
@@ -3718,9 +3687,9 @@ Checkpoint, the second half - the cut. All of it, or the phase is not closed:
       directories
 - [ ] the post-release matrix on both primary targets no worse than Phase
       20's reports
-- [ ] the install route read from the published asset on all five legs -
+- [ ] the install route read from the published asset on all seven legs -
       the four x86 ones every cut since `1.0.1.0` has taken, and the amd64
-      one on the XP x64 guest
+      ones on the XP x64, Vista x64 and Windows 7 x64 guests
 - [ ] the asset holding exactly what the packager staged - `xhci98.sys` and
       its INF in each of the four flavour directories, the two tools, the
       readmes and the licence texts - and no Microsoft file under any name

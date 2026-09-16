@@ -88,9 +88,9 @@ param(
     # this guest inside WinPE (STOP 0x0A) - see the .DESCRIPTION.
     [string]$Accel = "tcg",
     [int]$MonitorPort = 55563,
-    # 2048 for the install. Raising a 64-bit guest above 4 GB is roadmap task
-    # 21.8's own experiment with its own record, taken AFTER the install; the
-    # shared body's -MemoryMb note says what it does and does not test.
+    # 2048 for the install. Raising a 64-bit guest above 4 GB was an experiment
+    # the owner removed from the roadmap on 2026-09-16, untaken; the shared
+    # body's -MemoryMb note says what it would and would not test.
     [int]$MemoryMb = 2048,
     [int]$Smp = 4,
     [switch]$CreateDisk
