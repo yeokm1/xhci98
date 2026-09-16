@@ -1,6 +1,8 @@
 <#
 .SYNOPSIS
-Publish a built driver into releases\<version>\{release,debug}\.
+Publish a built driver into releases\<version>\<flavour>-<arch>\ - four
+directories for an ordinary cut (release-x86, debug-x86, release-x64,
+debug-x64).
 
 .DESCRIPTION
 `releases\` is the tracked, published half of packaging. It carries the two
@@ -62,22 +64,25 @@ machine - Windows 98's Notepad, or DOS `EDIT` - where a `.md` file is neither
 rendered nor associated with anything, and markdown syntax is just noise. Plain
 text, 78 columns, CRLF.
 
-Both flavours are published at one version, in separate directories. They are
-byte-different builds sharing a file name and a `DriverVer`, so the only thing
-that can tell a stray copy apart is the `VS_FF_DEBUG` flag `src\xhci98.rc` sets
-under `#if DBG`. This script checks that flag on each staged binary rather than
-trusting which obj directory it came out of - packaging objfre twice is a silent
-mistake otherwise, and it is silent on the target too.
+Every published binary is at one version, in a directory of its own. They are
+byte-different builds sharing a file name and a `DriverVer`, so **nothing on
+the file identifies it**: the `VS_FF_DEBUG` flag `src\xhci98.rc` sets under
+`#if DBG` separates release from debug and says nothing about the
+architecture, and the in-image `XHCI98_FLAVOUR_*` marker is what names all
+three flavours. This script checks the flag on each staged binary rather than
+trusting which obj directory it came out of - packaging objfre twice is a
+silent mistake otherwise, and it is silent on the target too.
 
-**The published directory names are the build names**, and that is the point of
-the vocabulary this project uses: `release\` and `debug\` here, `-Flavor
-release|debug`, `out\pkg-release\` and `out\pkg-debug\` on the build side, and
-the same two words throughout `docs\contributing\`. The DDK's own words are
-"free" and "checked" - "free" reads as *free of charge* to anyone who has not
-met that convention - and they survive only where the DDK itself requires them:
-`setenv.bat`'s flavour argument and the `src\objfre` / `src\objchk` trees it
-writes into. Both published names are 8.3-clean, because a release directory can
-end up on media a Win98 setup engine reads.
+**A published directory is a flavour AND an architecture** (roadmap task 21.3):
+`release-x86\`, `debug-x86\`, `release-x64\`, `debug-x64\`. The flavour half is
+the vocabulary this project uses everywhere - `-Flavor release|debug`,
+`out\pkg-<flavour>-<arch>\` on the build side, and the same two words
+throughout `docs\contributing\`. The DDK's own words are "free" and "checked" -
+"free" reads as *free of charge* to anyone who has not met that convention -
+and they survive only where the DDK itself requires them: `setenv.bat`'s
+flavour argument and the `src\objfre` / `src\objchk` trees it writes into.
+Every published name is 8.3-clean, because a release directory can end up on
+media a Win98 setup engine reads.
 
 Every gate lives in `make-package.ps1` and is reached by calling it, not by
 reimplementing it here: the host test suite, the import gate, the INF gate, and
@@ -116,6 +121,27 @@ job - `debug` and `qemu` are both checked builds and both set it.
 This script does not build; it publishes what is already built and gated. Run
 `scripts\build-driver.cmd all` first, which builds and gates all three flavours,
 so that the one that is never published has still been through every gate.
+
+.PARAMETER Arch
+Which architectures to publish - `x86` or `x64`, which are `make-package.ps1`'s
+`x86` and `amd64`. **Defaults to both**, since the owner's instruction of
+2026-09-09 and on the strength of roadmap task 21.5, so an ordinary cut writes
+four directories. It defaulted to `x86` alone until then, because until then no
+amd64 binary of this driver had ever executed.
+
+Read the x64 half of a cut as narrowly as its evidence is: one Windows XP x64
+guest, one virtual machine, never real hardware, against the x86 half's four
+install legs. Publishing it by default is what claiming the target means, not a
+claim that the two halves are equally attested.
+
+`-UploadSetOnly` is the one mode that does not follow the default: it derives
+the architectures from the published tree instead, because every version
+published so far is x86-only and re-assembling one must not fail for want of a
+64-bit directory that cut never wrote. An `-Arch` passed explicitly is held to
+exactly, in that mode as in every other.
+
+`scripts\package\test-package.ps1` asserts the default, so changing it back is
+as deliberate an act as changing it forwards was.
 
 .PARAMETER ReleasesDir
 Where the version directory is created. Defaults to `releases\` in the
@@ -711,7 +737,20 @@ function Get-DeclaredMediaLayout {
     # rule make-package.ps1 follows, and the same call: two parsers would be
     # free to disagree, and the only way they can disagree is a file staged at
     # one path and authenticated at another.
-    param([string]$InfPath, [string]$Label)
+    #
+    # **-Arch is mandatory, and it is the gate's vocabulary (x86 / amd64), not
+    # this script's (x86 / x64).** The gate defaults to x86 and its PATH-* and
+    # OS-* rules are written per install path, so handing it
+    # src\xhci98-amd64.inf under the default profile fails five checks
+    # (PATH-MFGDEC, BOTH-XREF twice, OS-DEFAULT twice) - which is a refusal of
+    # the caller, not of the INF. It was omitted here until 2026-09-16, so the
+    # two-architecture cut this script has defaulted to since 2026-09-09 threw
+    # at its own pre-build layout step; make-package.ps1 has always passed it.
+    param(
+        [Parameter(Mandatory = $true)][string]$InfPath,
+        [Parameter(Mandatory = $true)][ValidateSet("x86", "amd64")][string]$Arch,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
 
     $gate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-inf.ps1"
     $layoutFile = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-uploadlayout-" + [System.IO.Path]::GetRandomFileName())
@@ -726,7 +765,7 @@ function Get-DeclaredMediaLayout {
         $ErrorActionPreference = "Continue"
         try {
             $out = & powershell.exe @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate,
-                                      "-InfPath", $InfPath,
+                                      "-InfPath", $InfPath, "-Arch", $Arch,
                                       "-EmitMediaLayout", $layoutFile) 2>&1 | Out-String
         } finally {
             $ErrorActionPreference = $savedEap
@@ -943,15 +982,35 @@ function New-UploadSet {
     # write. Both have to produce the same bytes; a second copy of this would be
     # free to differ from the first in exactly the way that is invisible until
     # someone installs from the download.
+    #
+    # **$LegArches is what keeps the INF gate on the right profile.** To this
+    # function a "flavour" is the name of a directory in the published tree, and
+    # since task 21.3 that name carries the architecture too - but the legacy
+    # `release\`/`debug\` directories the four already-cut versions hold do not,
+    # so the architecture cannot be recovered from the name. Both callers know
+    # it and hand it over per directory: gate an amd64 directory under the
+    # gate's default x86 profile and it fails five checks that are about the
+    # caller rather than about the INF.
     param(
         [string]$PublishedRoot,
         [string]$Version,
         [string[]]$Flavors,
+        [hashtable]$LegArches,
         [hashtable]$PkgDirs,
         [string]$UploadDir,
         [string]$Repo,
         [string[]]$Publishable
     )
+
+    $missingArch = @($Flavors | Where-Object { -not $LegArches.ContainsKey($_) })
+    if ($missingArch.Count -gt 0) {
+        # Not reachable from either caller, both of which build $LegArches from
+        # the same leg list they build $Flavors from. It is checked rather than
+        # assumed because the consequence is silent: a $null -Arch would let the
+        # gate fall back to its x86 default, which is exactly the defect this
+        # parameter exists to close.
+        throw "no architecture was given for published directory(ies): $($missingArch -join ', ')."
+    }
 
     Write-Step "Upload set"
 
@@ -1055,6 +1114,7 @@ their defaults.
     # substitute for checking.
     $mediaLayout = Get-DeclaredMediaLayout `
         -InfPath (Join-Path $PublishedRoot (Join-Path $Flavors[0] $infName)) `
+        -Arch $LegArches[$Flavors[0]] `
         -Label "the published $infName"
 
     # Source name -> where the INF puts it, lower-cased on both sides, split
@@ -1160,7 +1220,8 @@ asset has to be assembled by the cut that publishes it.
         $ErrorActionPreference = "Continue"
         try {
             $gateOut = & powershell.exe @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate,
-                                          "-InfPath", $flavorInf, "-PackageDir", $uploadFlavorDir) 2>&1 | Out-String
+                                          "-InfPath", $flavorInf, "-Arch", $LegArches[$f],
+                                          "-PackageDir", $uploadFlavorDir) 2>&1 | Out-String
         } finally {
             $ErrorActionPreference = $savedEap
         }
@@ -1365,6 +1426,12 @@ To cut one, run this script without it.
 
         $legs = New-ReleaseLegs -Flavors $Flavor -Arches $wantedArches
         $legDirs = @()
+        # The architecture of each published directory, under the name that
+        # directory actually has - which is the tagged one for a cut made after
+        # task 21.3 and the bare flavour word for the four made before, all of
+        # them x86. New-UploadSet cannot recover it from a legacy name, so it is
+        # carried rather than re-derived.
+        $legArches = @{}
         foreach ($leg in $legs) {
             $pubDir = Join-Path $finalRoot $leg.Dir
             $dirName = $leg.Dir
@@ -1383,10 +1450,12 @@ To cut one, run this script without it.
                 }
             }
             $legDirs += $dirName
+            $legArches[$dirName] = $leg.PkgArch
             Write-Ok ("{0}\: '{1}' holds the published binary and INF" -f $dirName, $pubDir)
         }
 
         $set = New-UploadSet -PublishedRoot $finalRoot -Version $Version -Flavors $legDirs `
+                             -LegArches $legArches `
                              -PkgDirs @{} -UploadDir $UploadDir -Repo $repo `
                              -Publishable $publishable
 
@@ -1540,7 +1609,7 @@ readme.txt prints it beside the history entry, so the two cannot disagree.
     $declaredPublished = @{}
     foreach ($a in $Arch) {
         $archInf = Join-Path $repo $archInfPath[$a]
-        $layoutA = Get-DeclaredMediaLayout -InfPath $archInf -Label $archInfPath[$a]
+        $layoutA = Get-DeclaredMediaLayout -InfPath $archInf -Arch $archPkgName[$a] -Label $archInfPath[$a]
         Assert-PublishableAtMediaRoot -Layout $layoutA -PublishableKeys $publishableKeys `
                                       -InfName "xhci98.inf" -Label $archInfPath[$a]
         Write-Ok ("{0} puts xhci98.sys and xhci98.inf at the media root, where a release directory carries them" -f $archInfPath[$a])
@@ -2172,6 +2241,17 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         $readmeReleaseDir = ("release-" + $readmeArches[0]).ToUpper()
         $readmeDebugDir   = ("debug-" + $readmeArches[0]).ToUpper()
         $readmeArchNote   = ""
+        # Where the INF says its two files live, and what tells two copies of
+        # xhci98.sys apart. Both were hardcoded in the template as "release\
+        # and debug\" and "the debug flag on the Version tab", which a
+        # four-directory cut makes false twice over: there are four
+        # directories, and the debug flag does not separate x86 from x64 (the
+        # 2026-09-16 audit's D5).
+        $readmeDirList    = ("{0}\ and in {1}\" -f $readmeReleaseDir, $readmeDebugDir)
+        $readmeTellApart  = @"
+The one thing that tells them apart is the "debug" flag shown
+on the Version tab of the file's properties.
+"@
         # An x86-only cut carries no 64-bit driver, so its readme may not name
         # a 64-bit target. This is not hypothetical: -UploadSetOnly re-renders
         # the readme of an already-published version, and every version
@@ -2182,6 +2262,12 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
     } else {
         $readmeReleaseDir = "RELEASE-X86 or RELEASE-X64"
         $readmeDebugDir   = "DEBUG-X86 or DEBUG-X64"
+        $readmeDirList    = "RELEASE-X86\, DEBUG-X86\, RELEASE-X64\ and DEBUG-X64\"
+        $readmeTellApart  = @"
+The directory a copy came out of is the only thing that
+identifies it: the "debug" flag on the Version tab separates RELEASE from
+DEBUG, and nothing on the file separates 32-bit from 64-bit.
+"@
         $readmeArchNote   = @"
 
 
@@ -2470,7 +2556,7 @@ modern interrupt mechanism (MSI) that such a controller would require.
 ==============================================================================
 
 xhci98.inf names two files of its own, xhci98.inf and xhci98.sys, and they
-are in release\ and in debug\. Nothing else is in the package, and there is
+are in {DIRLIST}. Nothing else is in the package, and there is
 nothing to complete: a copy taken from the project's source repository is
 the same two files.
 
@@ -2845,10 +2931,9 @@ needed.
 ==============================================================================
 
 {CONTENTS}
-Both driver binaries are called xhci98.sys and both carry driver version
-{VERSION}, so a copy taken out of its directory cannot be identified by name
-or by version. The one thing that tells them apart is the "debug" flag shown
-on the Version tab of the file's properties.
+Every driver binary in this download is called xhci98.sys and every one
+carries driver version {VERSION}, so a copy taken out of its directory cannot
+be identified by name or by version. {TELLAPART}
 
 (In Windows driver-kit terms, RELEASE is what the DDK calls a "free" build
 and DEBUG is what it calls a "checked" build. This project says release and
@@ -3104,6 +3189,8 @@ $(($missingTools | ForEach-Object { "      " + $_ }) -join "`r`n")
         Replace("{DATE}", $today).
         Replace("{RELEASEDIR}", $readmeReleaseDir).
         Replace("{DEBUGDIR}", $readmeDebugDir).
+        Replace("{DIRLIST}", $readmeDirList).
+        Replace("{TELLAPART}", $readmeTellApart).
         Replace("{ARCHNOTE}", $readmeArchNote).
         Replace("{ARCHOS}", $readmeArchOs).
         Replace("{ARCHOSREQ}", $readmeArchOsReq).
@@ -3738,11 +3825,14 @@ after checkout. Restore it with:  git checkout -- LICENSE
         # and since this task that name carries the architecture too.
         $pkgDirs = @{}
         $legDirs = @()
+        $legArches = @{}
         foreach ($leg in $legs) {
             $pkgDirs[$leg.Dir] = $staged[$leg.Id].PkgDir
             $legDirs += $leg.Dir
+            $legArches[$leg.Dir] = $leg.PkgArch
         }
         $set = New-UploadSet -PublishedRoot $destRoot -Version $Version -Flavors $legDirs `
+                             -LegArches $legArches `
                              -PkgDirs $pkgDirs -UploadDir $UploadDir -Repo $repo `
                              -Publishable $publishable
         $uploadRoot = $set.Root

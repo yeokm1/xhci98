@@ -139,12 +139,13 @@ function Test-Expectation {
 # group that ended early is still an ERROR: a row being allowed to wedge a guest
 # is not a licence to report the wedge as a result.  All it does is tell the
 # reader which of the two findings they are looking at.
-function Test-RowMayWedge {
-    param($Row, [Parameter(Mandatory = $true)][string]$TargetId)
-    if ($null -eq $Row) { return $false }
-    if (-not $Row.ContainsKey('MayWedgeGuest')) { return $false }
-    return ([string[]]$Row.MayWedgeGuest -contains $TargetId)
-}
+#
+# **The runner reads it through `Test-TargetInList` (lib/fresh.ps1)**, which
+# matches a target by any of its keys rather than by `Id` alone.  There was a
+# `Test-RowMayWedge` here that did the exact-Id comparison, and nothing but the
+# self-test ever called it - so the harness had two answers to one question and
+# was checking the one it does not use (the 2026-09-16 audit's D4).  The
+# self-test now drives `Test-TargetInList`.
 
 # A typo in that field would silently mean "no target", which is the same
 # failure the field already had.  Checked before a boot is spent, like every

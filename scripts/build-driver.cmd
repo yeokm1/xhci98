@@ -69,11 +69,11 @@ rem fed is assembled by a separate explicit step, which re-runs the INF gate
 rem against the finished directory so a package is never less gated than the
 rem binary in it:
 rem
-rem   scripts\package\make-package.ps1 [-Flavor release|debug]
+rem   scripts\package\make-package.ps1 [-Flavor release|debug] [-Arch x86|amd64]
 rem
 rem The media is this project's two files and nothing else since 1.0.0.1; the
-rem OS supplies usbd.sys and usbhub.sys (and, on the NT targets, usbport.sys)
-rem through the INF's LayoutFile.
+rem OS supplies usbd.sys and usbhub.sys, usbport.sys on the NT targets, and
+rem usbui.dll on every target since 1.0.2.0, through the INF's LayoutFile.
 rem
 rem Usage:  scripts\build-driver.cmd [release|debug|qemu|both|all]
 rem                                  [-amd64] [-NoTargetEvidence]
@@ -175,7 +175,28 @@ if /i not "%ARCH%"=="amd64" goto ddkdefault
 set "SETENVARGS=x64 WNET no_oacr"
 set "LIBNAME=usbport_amd64.lib"
 set "LIBARG=-amd64"
-if "%DDKROOT%"=="" set "DDKROOT=%REPO%\tools\WinDDK71"
+rem
+rem **DDKROOT NAMES THE WIN2000 DDK AND MUST NOT REACH THIS LEG.**  It is an
+rem override for the 32-bit build, and it reaches setenv.bat - so an exported
+rem DDKROOT pointing at tools\ntddk was being called with `x64 WNET`, which the
+rem Win2000 DDK does not have.  The run then died at :nooutput naming the wrong
+rem cause entirely (the 2026-09-16 audit's D7).  WDK71ROOT is this leg's own
+rem override, which is the shape the import gate already uses for WDKROOT.
+rem
+if defined DDKROOT (
+    echo ERROR: DDKROOT is set, and it is the Windows 2000 DDK override.
+    echo   DDKROOT=%DDKROOT%
+    echo The -amd64 leg builds with WDK 7.1 and would call that DDK's setenv.bat
+    echo with "x64 WNET", which it cannot do - and the failure would be reported
+    echo as a missing output rather than as this.
+    echo Clear DDKROOT, or set WDK71ROOT to redirect the 64-bit toolchain:
+    echo   set DDKROOT=
+    echo   set WDK71ROOT=^<path to WDK 7.1^>
+    endlocal
+    exit /b 1
+)
+set "DDKROOT=%REPO%\tools\WinDDK71"
+if not "%WDK71ROOT%"=="" set "DDKROOT=%WDK71ROOT%"
 goto ddkchosen
 :ddkdefault
 if "%DDKROOT%"=="" set "DDKROOT=%REPO%\tools\ntddk"
@@ -338,7 +359,11 @@ echo.
 if defined XHCI_RESOURCE_PROBE goto probesuccess
 echo BUILD + GATES PASSED (%FLAVORS%)
 echo Next, to build the install media a VM can be pointed at:
-echo   powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1
+if /i "%ARCH%"=="amd64" (
+    echo   powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Arch amd64
+) else (
+    echo   powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1
+)
 endlocal
 exit /b 0
 
@@ -368,7 +393,11 @@ echo binary carries the marker make-package.ps1 rejects - this warning is a
 echo courtesy and the packaging gate is the enforcement.
 echo Clear XHCI_EXTRA_DEFINES and rebuild before packaging:
 echo   set XHCI_EXTRA_DEFINES=
-echo   scripts\build-driver.cmd both
+if /i "%ARCH%"=="amd64" (
+    echo   scripts\build-driver.cmd both -amd64
+) else (
+    echo   scripts\build-driver.cmd both
+)
 endlocal
 exit /b 0
 
@@ -383,12 +412,17 @@ echo   powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1
 echo Do not install it on a machine you are not prepared to recover. When you are
 echo done, clear XHCI_EXTRA_DEFINES and rebuild before packaging anything else:
 echo   set XHCI_EXTRA_DEFINES=
-echo   scripts\build-driver.cmd both
+if /i "%ARCH%"=="amd64" (
+    echo   scripts\build-driver.cmd both -amd64
+) else (
+    echo   scripts\build-driver.cmd both
+)
 endlocal
 exit /b 0
 
 rem ------------------------------------------------------------------
-rem :checkfailstart <release|debug>
+rem :checkfailstart <flavour>   (release, debug or qemu - the caller passes
+rem                              whichever it just built)
 rem
 rem Task 12.3's artifact must carry XHCI98_FAILSTART_ARTIFACT_TASK_12_3, which is
 rem the string the packager's narrow exception keys on. Read out of the image for
@@ -437,7 +471,8 @@ endlocal
 exit /b 1
 
 rem ------------------------------------------------------------------
-rem :checkmarker <release|debug>
+rem :checkmarker <flavour>      (release, debug or qemu - the caller passes
+rem                              whichever it just built)
 rem
 rem A diagnostic build must carry XHCI98_PROBE_BUILD_DO_NOT_DEPLOY, because that
 rem string is the only thing make-package.ps1 can see. Read out of the image, so

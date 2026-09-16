@@ -108,10 +108,17 @@ ULONG XhciBuildInputControlContext(volatile ULONG *context,
     xhciCtxStore(context, XHCI_ICC_DW_ADD, addFlags);
     /*
      * DW7's Configuration Value / Interface Number / Alternate Setting are
-     * meaningful only when HCCPARAMS1.CFC = 1, and are RsvdZ otherwise
-     * (section 8). This driver sets none of them, so the word stays the zero the
-     * loop above wrote - stated here because "we left it alone" and "we decided
-     * it is zero" are different claims and only the second survives a reviewer.
+     * valid only when **HCCPARAMS2.CIC = 1 and CONFIG.CIE is set**, and are
+     * RsvdZ otherwise (`docs/usb-xhci-info/xhci-data-structures.md`, Input
+     * Control Context). This driver sets none of them and never sets CONFIG.CIE,
+     * so the word stays the zero the loop above wrote - stated here because "we
+     * left it alone" and "we decided it is zero" are different claims and only
+     * the second survives a reviewer.
+     *
+     * *(This named HCCPARAMS1.CFC, which is Contiguous Frame ID and governs
+     * something else entirely - the 2026-09-16 audit's B10. The conclusion did
+     * not depend on the wrong capability, but a reader checking the citation
+     * would have found it did not say this.)*
      *
      * *(This said "issues no Configure Endpoint yet" until the post-Phase 13 review rounds, which has
      * been false since task 7a-A.1: `src/xhci_slot.c` builds and submits

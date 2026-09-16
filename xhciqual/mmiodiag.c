@@ -197,7 +197,12 @@ void report_pci_status(const PCIINFO *p)
  * name a cause that was never reached. */
 void report_mmio_dead(const PCIINFO *p)
 {
-    if (p->bar_hi != 0)
+    /* What the mapper actually refused on, when it recorded one. It is more
+     * proximate than anything derivable from PCI state below, because it is
+     * the reason the code took rather than a reason the reader reconstructs. */
+    if (p->mmio_reason != 0)
+        qprintf("    cause: %s\n", p->mmio_reason);
+    else if (p->bar_hi != 0)
         qprintf("    cause: BAR0 is above 4 GB and cannot be mapped by this "
                 "32-bit path\n");
     else if (p->bar_phys == 0)

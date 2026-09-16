@@ -201,8 +201,9 @@ Each batch first verifies that its directory is writable. The three active
 batches (`3XIRQ`, `4XEMPTY`, `5XDEV`) then pass `--done-flag`, test the
 completion flag with `IF EXIST` (the flag is written on a normal exit,
 including a usage error) and bucket the exit code with `IF ERRORLEVEL`, so
-they preserve a partial log after an abnormal termination, so they separate a normal run whose test passed from a normal run whose test
-failed from an abnormal termination - three buckets, not the
+they preserve a partial log after an abnormal termination and separate a
+normal run whose test passed from a normal run whose test failed from an
+abnormal termination - three buckets, not the
 qualified/provisional/failed verdict words, which are the log's and not the
 exit code's. `1PROBE` and `2XPOLL` do not pass the flag and only check that
 their log exists; read the log's `Done.` line yourself. `1PROBE` is genuinely
@@ -232,7 +233,7 @@ scan to decide whether to continue; use this to record why.
 Expected output begins like:
 
 ```text
-XHCIQUAL 1.0.0.0 (build <date time>) - Win98/Win2000 USB qualification
+XHCIQUAL <version> (build <date time>) - Win98/Win2000 USB qualification
 Mode: PROBE-ONLY (read-only)
 Families: xHCI EHCI OHCI
 Found N selected USB host controller(s).

@@ -378,7 +378,10 @@ three devices hot-plugged, the gdbstub watch of section 4b armed on
 
 Against the unfixed tier the same evening - four bugchecks in roughly fifteen
 loads, two of them within the first two enumerations of a boot - eleven clean
-loads by chance is about one in fifteen. That supports the fix; it is one run
+loads by chance is about one in thirty - `(11/15)^11`, which is 0.033.
+*(This read "about one in fifteen"; the arithmetic is the same either way and
+the fix is supported either way, but a number in a results table has to be the
+number. The 2026-09-16 audit's E8.)* That supports the fix; it is one run
 on one guest, not proof, and the build it ran differs from the committed one
 only in comments and its build stamp.
 

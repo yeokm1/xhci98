@@ -305,7 +305,6 @@
                     # 8-V.1).  The flag lived only in an unrecorded monitor
                     # device_add for a whole session because of that.
                     AddArgs = 'drive=matrixdrv,removable=on'
-                    NeedsDrive = $true
                     Settle = 30
                     Expect = @(
                         'advance endpoints opened >= 2'
@@ -342,7 +341,6 @@
                     Name = 'usb-bot/fs'
                     Model = 'usb-bot'
                     Child = 'scsi-hd,bus={ID}.0,drive=matrixdrv2'
-                    NeedsDrive2 = $true
                     Settle = 30
                     Expect = @(
                         'advance endpoints opened >= 1'
@@ -352,7 +350,6 @@
                     Name = 'usb-uas/fs'
                     Model = 'usb-uas'
                     Child = 'scsi-hd,bus={ID}.0,drive=matrixdrv3,scsi-id=0,lun=0'
-                    NeedsDrive2 = $true
                     Settle = 30
                     Expect = @(
                         'advance endpoints opened >= 1'

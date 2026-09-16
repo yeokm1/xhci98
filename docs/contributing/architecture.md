@@ -317,7 +317,7 @@ The device's driver is the miniport itself (`xhci98.sys`). On Win98 `usbport.sys
 - Win98 does it the 9x way: `DevLoader=*ntkern` + `NTMPDriver=xhci98.sys`, the same shape NUSB's `USB2.inf` uses for `usbehci.sys`; ntkern resolves the miniport's `usbport.sys` imports at load. The registry layout is mirrored from the installed NUSB EHCI device and was confirmed during the spike.
 - Win2000 uses a `.NTx86`-decorated service install (`AddService`/`ServiceBinary`). Here `usbport.sys` does have its own service, a native OS one that already exists; the miniport still reaches it as an import dependency rather than by creating it.
 
-The section shapes, the dirid-12 trap, and the parser limits that constrain the shared INF are in `docs/contributing/build-and-test.md`, "The INF must carry both install paths".
+The section shapes, the dirid-12 trap, and the parser limits that constrain the shared INF are in `docs/contributing/build-and-test.md`, "Why the INF must carry both install paths".
 
 - PnP hardware ID: `PCI\CC_0C0330` (USB class, xHCI prog-IF). The INF has matched on the class code alone since the Phase 3 spike; no vendor/device entries have been needed on any machine or guest since, and none are planned.
 - Prerequisite on the target machine: a Win2000-derived USB 2.0 stack (`usbport.sys` + `usbhub20.sys`). On Win98 it ships in NUSB 3.3 (the tested configuration; 3.6 carries the same stack) or in SweetLow's XP-derived rebuild; on Win2000 the same stack is native in SP4 (or KB319973) and NUSB must not be installed; on Windows ME only SweetLow's stack has been run; XP uses its own.

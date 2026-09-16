@@ -490,7 +490,10 @@ ULONG XhciTopoAttachChild(PXHCI_TOPOLOGY topo,
 /* ------------------------------------------------------------------ */
 
 /*
- * Remove `address` and everything below it.
+ * Remove every node whose ParentAddress no longer answers to anything - a route
+ * through a hub that is not in the graph names nothing. Split from the prune
+ * because a migration orphans children the same way (their ParentAddress keeps
+ * naming the old key). Called after whatever made parents disappear.
  *
  * The walk is repeated until a pass removes nothing rather than done in one
  * sweep, because the table is unordered: a grandchild may sit at a lower index
@@ -498,12 +501,12 @@ ULONG XhciTopoAttachChild(PXHCI_TOPOLOGY topo,
  * ParentAddress nobody answers to. Bounded by XHCI_TOPO_NODES passes, which is
  * the depth of the deepest possible chain in a table of that size.
  *
+ * *(The repeated-walk paragraph described `xhciTopoPruneFrom` and sat above
+ * this function, which is the one it is actually about - the 2026-09-16 audit's
+ * B10.)*
+ *
  * IRQL: any.
  */
-/* Remove every node whose ParentAddress no longer answers to anything - a
- * route through a hub that is not in the graph names nothing. Split from the
- * prune because a migration orphans children the same way (their ParentAddress
- * keeps naming the old key). Called after whatever made parents disappear. */
 static VOID xhciTopoSweepOrphans(PXHCI_TOPOLOGY topo)
 {
     ULONG pass;
@@ -536,6 +539,8 @@ static VOID xhciTopoSweepOrphans(PXHCI_TOPOLOGY topo)
     }
 }
 
+/* Remove `address`, then let the orphan sweep take everything that routed
+ * through it. IRQL: any. */
 static VOID xhciTopoPruneFrom(PXHCI_TOPOLOGY topo, ULONG address)
 {
     XHCI_TOPO_NODE *node;

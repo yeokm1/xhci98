@@ -134,7 +134,7 @@ with the `.EXE` and the logs from each field run. If a run faults with a
 DOS/32A exception, the reported EIP is only resolvable to a symbol against the
 matching MAP. The run header prints a build stamp
 (`XHCIQUAL <version> (build <date time>)`, the version being `XHCI_VER_STR`,
-which tracks the driver's - `1.0.2.0` at the time of writing) so a saved log or a photographed crash
+which tracks the driver's, so it is whatever `src\xhci_version.h` says) so a saved log or a photographed crash
 screen ties back to the exact binary and its MAP.
 
 One deviation from the design doc is worth recording. The design sketches two

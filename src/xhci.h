@@ -3300,6 +3300,22 @@ typedef struct _XHCI_TRANSFER {
     ULONG TopoPort;
     ULONG_PTR TopoReplyVa;
     /*
+     * **And which record armed it**, on exactly the terms `DescDeviceRef` and
+     * `DescTenancy` below are kept on: `TopoAddress` is usbport's address,
+     * which is a recycled name, so a completion parked across a disown plus a
+     * re-enumeration would fold one hub's reply into whatever the graph now
+     * holds under that key. The fold had only the address to go on until the
+     * 2026-09-16 audit's B3, while the descriptor half beside it had been
+     * gated on identity since the first review round - one channel, two
+     * observers, and only one of them asking.
+     *
+     * Reachable only through that parked-completion window, which is why it
+     * survived: the ordinary path folds under the same lock the submit armed
+     * it under.
+     */
+    ULONG TopoDeviceRef;
+    ULONG TopoTenancy;
+    /*
      * Task 9-A.2's use of the same channel: a `GET_DESCRIPTOR(Configuration)`
      * whose reply carries the isochronous `bInterval` values, or a
      * `SET_CONFIGURATION`/`SET_INTERFACE` saying what the device is now running
@@ -5978,7 +5994,7 @@ typedef struct _XHCI_EXTENSION {
      *
      * `DeliverUnderUsbportLockOnly` is set on the Version 300 tier. While it
      * is set, `XhciSlotDeferredWork` parks every completion, and only the two
-     * admitted entry points hand one over: `XhciSlotDeferredWorkLocked`,
+     * admitted entry points hand one over: `XhciSlotDeferredWorkForEndpoint`,
      * called from inside the callbacks usbport makes under that lock, and
      * `XhciSlotDeferredWorkForced`, the lifecycle paths' and the poll
      * fallback's override. The admission travels with the call rather than

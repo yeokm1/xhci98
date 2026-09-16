@@ -14,7 +14,8 @@ rem   test_ring    - TRB encoding, ring wrap/cycle, ring-full detection, and
 rem                  the event-ring consumer (src\xhci_ring.c)
 rem   test_caps    - the extended-capability walk, port classification, and
 rem                  PSI speed decoding (src\xhci_caps.c)
-rem   test_port    - PORTSC write construction (src\xhci_port.c)
+rem   test_port    - PORTSC write construction, the logical-port map and the
+rem                  per-port shadow (src\xhci_port.c)
 rem   test_xfer    - the control-transfer engine (src\xhci_xfer.c): Setup/Data/
 rem                  Status TD construction, the scatter/gather walk and its
 rem                  64 KB splits, the pending-transfer queue, and what a

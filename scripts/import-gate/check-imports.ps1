@@ -40,11 +40,17 @@ Three things happen, in order:
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\import-gate\check-imports.ps1
 
-Checks whichever of src\objfre\i386\xhci98.sys, src\objchk\i386\xhci98.sys and
-src\objchk_qemu\i386\xhci98.sys exist, inferring the flavor from the path.
+Checks whichever of the six default images exist - the three flavours under
+src\objfre, src\objchk and src\objchk_qemu, in i386 and in amd64 - inferring
+the flavor AND the architecture from the path.
 
 .EXAMPLE
-powershell -File scripts\import-gate\check-imports.ps1 -Image out\xhci98.sys -Flavor debug
+powershell -File scripts\import-gate\check-imports.ps1 -Image out\pkg-debug-x86\xhci98.sys -Flavor debug -Arch x86
+
+An image outside the obj trees infers nothing from its path, so -Flavor and
+-Arch are both required: `-Arch auto` throws rather than guess, because MSVC
+6.0's dumpbin reads an amd64 image, exits 0 and prints no import section at
+all - a wrong guess would gate the allowlist against an empty set and pass.
 #>
 
 [CmdletBinding()]

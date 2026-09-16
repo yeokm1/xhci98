@@ -120,9 +120,13 @@ int legacy_map_and_read(LEGACY_CTRL *c)
     u32 dw;
 
     c->mmio_ok = 0;
-    if (c->pci.bar_hi != 0 || c->pci.bar_phys == 0 ||
-        (c->pci.bar_lo & 1) != 0)
+    if (c->pci.bar_hi != 0 || c->pci.bar_phys == 0)
         return 0;
+    if ((c->pci.bar_lo & 1) != 0) {
+        c->pci.mmio_reason = "BAR0 selects I/O space, so it cannot be mapped "
+                             "as memory";
+        return 0;
+    }
     c->base = (volatile u8 *)dpmi_map_phys(c->pci.bar_phys,
                                            LEGACY_MAP_SIZE);
     if (c->base == 0)
@@ -206,6 +210,15 @@ static int ehci_handoff(LEGACY_CTRL *c)
      * because a later part may define it, and a tool that writes one is
      * asking for behaviour nobody has specified on hardware nobody has seen.
      * The enable half (15:0) is written as zero, which is what disables them.
+     *
+     * **Only 31:29 are R/WC, though, and the ones in 21:16 acknowledge
+     * nothing** (the 2026-09-16 audit's C5). Those six are read-only shadows
+     * of the corresponding USBSTS bits - the cleanup write further down has
+     * this right and says so - so the `0x003F0000` half of this literal is a
+     * harmless write to read-only bits rather than the acknowledgement the
+     * paragraph above implied. It is kept at `0xE03F0000` rather than dropped
+     * to `0xE0000000` only because changing a literal that has been through a
+     * bench run buys nothing; what was wrong was the claim, not the value.
      */
     pci_write32(c->pci.bus, c->pci.dev, c->pci.fn, (u8)(off + 4),
                 0xE03F0000UL);
@@ -770,7 +783,20 @@ void legacy_run(LEGACY_CTRL *c, int wait_secs)
     reset_ok = (c->pci.hctype == HC_EHCI) ?
                ehci_reset(c) : ohci_reset(c);
     if (!reset_ok) {
-        qprintf("  C2 failed - skipping C3-C6\n");
+        /* **The three tests that will not now run are marked SKIP with a
+         * reason**, the way main.c has always marked the xHCI path's. Without
+         * this they kept whatever the zeroed context held, and the verdict
+         * printed their reasons as empty strings - which is how a report came
+         * to say "could not be run - " with nothing after it (the 2026-09-16
+         * audit's C3). "C2 failed" is also the wrong word for a C2 that was
+         * SKIPped rather than FAILed, so the verdict name is printed. */
+        c->v_dma = V_SKIP;
+        strcpy(c->dma_note, "C2 did not pass; C3 not run");
+        c->v_irq = V_SKIP;
+        strcpy(c->irq_note, "C2 did not pass; C4 not run");
+        c->v_port = V_SKIP;
+        strcpy(c->port_note, "C2 did not pass; C6 not run");
+        qprintf("  C2: %s - skipping C3-C6\n", verdict_name(c->v_reset));
         return;
     }
     qprintf("  C2: PASS in %lu ms\n", c->reset_ms);
@@ -778,7 +804,15 @@ void legacy_run(LEGACY_CTRL *c, int wait_secs)
             hc_name(c->pci.hctype));
     dma_ok = (c->pci.hctype == HC_EHCI) ? ehci_dma(c) : ohci_dma(c);
     if (!dma_ok) {
-        qprintf("  C3 failed - skipping C4/C6\n");
+        /* As above: a reason for each test that will not run, and the C3
+         * verdict named rather than assumed to be a failure. */
+        c->v_irq = V_SKIP;
+        strcpy(c->irq_note, "C3 did not complete; C4 not run");
+        c->v_port = V_SKIP;
+        strcpy(c->port_note, "C3 did not complete; C6 not run");
+        qprintf("  C3: %s - %s - skipping C4/C6\n",
+                verdict_name(c->v_dma),
+                c->dma_note[0] ? c->dma_note : "no reason recorded");
         return;
     }
     qprintf("  C3: %s - %s\n", verdict_name(c->v_dma), c->dma_note);
@@ -803,7 +837,19 @@ void legacy_run(LEGACY_CTRL *c, int wait_secs)
             qprintf("  C6: SKIP - %s\n", c->port_note);
         }
     } else {
-        ohci_irq(c);
+        /* **`--poll-only` means no CPU ISR on the OHCI path too** (the
+         * 2026-09-16 audit's C5). `ohci_irq` installs one, so a poll-only run
+         * used to install exactly what the flag forbids and then have the
+         * verdict tell the reader C4 was not tested and end PROVISIONAL - the
+         * report and the run disagreed about what had happened to the machine.
+         * The EHCI arm above has always had this guard. */
+        if (c->poll_only) {
+            c->v_irq = V_SKIP;
+            strcpy(c->irq_note, "poll-only run: no ISR installed; CPU/PIC "
+                   "delivery not tested");
+        } else {
+            ohci_irq(c);
+        }
         qprintf("  C4: %s - %s\n", verdict_name(c->v_irq), c->irq_note);
         qprintf("  C6: checking OHCI root ports...\n");
         ohci_ports(c, wait_secs);
@@ -1024,19 +1070,35 @@ int legacy_final_verdict(LEGACY_CTRL *c, int active_requested)
         if (c->v_reset != V_PASS) {
             qprintf("  CONTROLLER FAILURE: halt/reset (C2) failed\n");
             qualified = 0;
+            disqualified = 1;
         }
-        if (c->v_dma != V_PASS) {
+        /* The same separation the main path makes, and report.c's poll-only
+         * branch has always made: a FAIL is a reading about the controller, a
+         * SKIP is a reading about the tool, and calling a SKIP a CONTROLLER
+         * FAILURE names the wrong thing (the 2026-09-16 audit's C3). */
+        if (c->v_dma == V_FAIL) {
             qprintf("  CONTROLLER FAILURE: DMA proof (C3) failed\n");
             qualified = 0;
+            disqualified = 1;
+        } else if (c->v_dma != V_PASS) {
+            qprintf("  TOOL LIMIT: C3 could not run - %s\n",
+                    c->dma_note[0] ? c->dma_note : "no reason recorded");
+            qualified = 0;
+            tool_limited = 1;
         }
         if (c->cleanup_failed) {
             qprintf("  CONTROLLER FAILURE: cleanup: %s\n",
                     c->cleanup_note);
             qualified = 0;
+            disqualified = 1;
         }
         if (!qualified) {
-            qprintf("  ==> NOT QUALIFIED - a disqualifier above was hit "
-                    "(C4 interrupt delivery was not tested)\n");
+            if (disqualified)
+                qprintf("  ==> NOT QUALIFIED - a controller disqualifier "
+                        "above was hit (C4 was not tested)\n");
+            else
+                qprintf("  ==> NOT QUALIFIED - the tool could not complete "
+                        "C3 (C4 was not tested)\n");
         } else {
             qprintf("  ==> PROVISIONAL - C2/C3%s completed with no ISR and "
                     "no fault.\n"
@@ -1053,32 +1115,54 @@ int legacy_final_verdict(LEGACY_CTRL *c, int active_requested)
         qualified = 0;
     }
     /*
-     * **A SKIP IS NOT A FAILURE HERE EITHER** (the 2026-09-07 audit's E10).
+     * **A SKIP IS NOT A FAILURE HERE EITHER, BUT IT IS NOT A PASS** (the
+     * 2026-09-07 audit's E10, corrected by the 2026-09-16 audit's C3).
      * `xhciqual/README.md` and `hardware-testing.md` both say "C3 SKIP is
      * never a disqualification" without qualification, and on this path any
-     * non-PASS disqualified - so the one sentence was true of the xHCI path
-     * and false of this one. A SKIP means the test did not run, which is a
-     * reading about the tool; only a FAIL is a reading about the controller.
+     * non-PASS used to disqualify - so the one sentence was true of the xHCI
+     * path and false of this one. A SKIP means the test did not run, which is
+     * a reading about the tool; only a FAIL is a reading about the controller.
+     *
+     * E10 fixed that by setting `warned` alone, which made the run print
+     * "NOT QUALIFIED: DMA proof (C3) could not be run" and then "CONTROLLER
+     * QUALIFIED (with warnings)" **for the same controller**, and exit 0. The
+     * xHCI path in report.c has always answered this by keeping the two
+     * readings apart: not qualified, and `tool_limited` rather than
+     * `disqualified`, so the closing line says no controller fault was
+     * inferred. That is what is mirrored here, and it is what both runbooks
+     * already describe.
      */
     if (c->v_dma == V_SKIP) {
         qprintf("  NOT QUALIFIED: DMA proof (C3) could not be run - %s\n",
                 c->dma_note[0] ? c->dma_note : "no reason recorded");
-        warned = 1;
+        qualified = 0;
+        tool_limited = 1;
     } else if (c->v_dma != V_PASS) {
         qprintf("  DISQUALIFIED: DMA proof (C3) failed\n");
         qualified = 0;
+        disqualified = 1;
     }
     if (c->v_irq == V_FAIL) {
         qprintf("  DISQUALIFIED: legacy IRQ delivery (C4) failed for "
                 "Win98/PIC-HAL use\n");
         qprintf("      Win2000 APIC-HAL routing remains inconclusive.\n");
         qualified = 0;
-    } else if (c->v_irq != V_PASS)
+        disqualified = 1;
+    } else if (c->v_irq == V_WARN) {
         warned = 1;
+    } else if (c->v_irq != V_PASS) {
+        /* SKIP: the interrupt test did not run at all. Same reading as C3's
+         * SKIP above, and the same one report.c gives it. */
+        qprintf("  NOT QUALIFIED: C4 interrupt test was not run - %s\n",
+                c->irq_note[0] ? c->irq_note : "no reason recorded");
+        qualified = 0;
+        tool_limited = 1;
+    }
     if (c->cleanup_failed) {
         qprintf("  DISQUALIFIED: cleanup could not quiesce the controller: "
                 "%s\n", c->cleanup_note);
         qualified = 0;
+        disqualified = 1;
     }
     if (c->v_port != V_PASS)
         warned = 1;
@@ -1092,6 +1176,9 @@ int legacy_final_verdict(LEGACY_CTRL *c, int active_requested)
     } else {
         qprintf("  ==> NOT QUALIFIED for cross-target Win98/Win2000 %s "
                 "use\n", hc_name(c->pci.hctype));
+        if (tool_limited && !disqualified)
+            qprintf("      No controller fault was inferred from the tool "
+                    "limit above.\n");
     }
     return qualified;
 }

@@ -894,6 +894,75 @@ try {
         Assert-True ($r.Output -match "release-x64") `
             ("expected the refusal to name the directory it wanted. Output:`n" + $r.Output)
 
+        # --- and a published tree that DOES hold the 64-bit pair --------------
+        #
+        # Every case above assembles an x86-only tree, which is what the four
+        # already-published versions are - so the whole assembly ran under the
+        # INF gate's default x86 profile and nothing noticed that it was never
+        # told otherwise. Hand it a `release-x64\` holding the amd64 INF and the
+        # profile stops being a detail: that file fails five of the gate's x86
+        # rules (PATH-MFGDEC, BOTH-XREF twice, OS-DEFAULT twice), so before
+        # 2026-09-16 this exited non-zero on a tree that is perfectly good.
+        #
+        # It is worth driving for real rather than asserting a source anchor
+        # because of *where* the failure lands: in an ordinary cut this call is
+        # the tail of the run, after `releases\<version>\` has been moved into
+        # place - the published-with-no-asset state make-release.ps1's own
+        # comments exist to prevent. -UploadSetOnly is the only way to reach the
+        # same code without two builds.
+        #
+        Write-Step "-UploadSetOnly assembles a four-directory tree, each INF under its own architecture"
+        # The tracked 64-bit INF, read from src\ rather than mutated, because
+        # what is under test is the gate profile it is parsed under.
+        $amd64InfSrc = Join-Path $repo "src\xhci98-amd64.inf"
+        Assert-True (Test-Path -LiteralPath $amd64InfSrc) `
+            "src\xhci98-amd64.inf is missing; the 64-bit half of the upload set cannot be driven."
+        $relRoot4 = Join-Path $script:work "releases-4dir"
+        $pubRoot4 = Join-Path $relRoot4 $relVersion
+        foreach ($leg in @(
+            @{ Dir = "release-x86"; Inf = $plainInf },
+            @{ Dir = "debug-x86";   Inf = $plainInf },
+            @{ Dir = "release-x64"; Inf = $amd64InfSrc },
+            @{ Dir = "debug-x64";   Inf = $amd64InfSrc }
+        )) {
+            $d = Join-Path $pubRoot4 $leg.Dir
+            Ensure-Directory $d
+            # Distinct bytes per directory for the reason the pair above uses
+            # them: a run that crossed two legs should fail rather than pass.
+            [System.IO.File]::WriteAllBytes((Join-Path $d "xhci98.sys"),
+                [System.Text.Encoding]::ASCII.GetBytes("stand-in xhci98.sys, $($leg.Dir), $relVersion"))
+            # Both architectures' media carry the file as xhci98.inf; which one
+            # it is is said by the directory, which is the whole reason the
+            # architecture has to be carried alongside the name.
+            Copy-Item -LiteralPath $leg.Inf -Destination (Join-Path $d "xhci98.inf") -Force
+        }
+        Set-Content -LiteralPath (Join-Path $pubRoot4 "readme.txt") -Encoding ASCII `
+                    -Value "stand-in per-version readme"
+
+        $up4 = Join-Path $script:work "upload-4dir"
+        Ensure-Directory $up4
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
+                               "-PackageRoot", $noOut, "-UploadDir", $up4)
+        Assert-True ($r.ExitCode -eq 0) `
+            ("-UploadSetOnly refused a published tree holding both architectures - the likeliest cause is the INF gate being run on the amd64 file under its default x86 profile:`n" + $r.Output)
+        $uploadDir4 = Join-Path $up4 ("upload-" + $relVersion)
+        foreach ($d in @("release-x86", "debug-x86", "release-x64", "debug-x64")) {
+            foreach ($name in @("xhci98.sys", "xhci98.inf")) {
+                Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\$name")) `
+                    "'$name' is missing from the upload set's $d\ directory."
+            }
+        }
+        # The 64-bit directories really do carry the 64-bit INF, so the run
+        # above gated what it claims to have gated rather than four copies of
+        # one file.
+        foreach ($d in @("release-x64", "debug-x64")) {
+            $t = [System.IO.File]::ReadAllText((Join-Path $uploadDir4 "$d\xhci98.inf"))
+            Assert-True ($t -match [regex]::Escape("%Mfg%=XhciModels,NTamd64")) `
+                "the upload set's $d\xhci98.inf is not the amd64 file, so the case that needs the gate's amd64 profile was never run."
+        }
+        Assert-True (Test-Path -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip"))) `
+            "no upload archive was written for the four-directory tree."
+
         # --- the switches that contradict -UploadSetOnly --------------------
         Write-Step "-UploadSetOnly refuses the switches that contradict it"
         foreach ($bad in @(
@@ -1573,6 +1642,35 @@ try {
     #
     Assert-True ($releaserText -match [regex]::Escape('[string[]]$Arch = @("x86", "x64"),')) `
         "make-release.ps1's -Arch no longer defaults to both architectures: an ordinary cut would silently stop publishing the 64-bit package that roadmap task 21.5 qualified."
+
+    #
+    # **And -Arch has to reach every one of the publisher's INF gate runs too.**
+    # make-package.ps1 has the same assertion above, and make-release.ps1 had
+    # none until 2026-09-16 - which is how all three of its calls came to run
+    # under the gate's default x86 profile. The consequence is not a weakened
+    # check but a refused cut: the amd64 INF fails five rules under the x86
+    # profile (PATH-MFGDEC, BOTH-XREF twice, OS-DEFAULT twice), so the
+    # two-architecture default threw at the pre-build layout step, and fixing
+    # only that site would have moved the refusal to the upload assembly, which
+    # runs *after* the publish swap - the published-with-no-asset state this
+    # script's own comments exist to prevent.
+    #
+    # Structural rather than a run for the reason the block above is: a real cut
+    # needs two builds and the git-ignored tools\ staging. The -UploadSetOnly
+    # case further down drives the third site for real.
+    #
+    Assert-True ($releaserText -match [regex]::Escape('"-InfPath", $InfPath, "-Arch", $Arch,')) `
+        "make-release.ps1's Get-DeclaredMediaLayout no longer passes -Arch to the INF gate, so the amd64 INF would be parsed under the gate's x86 profile and refuse the cut."
+    Assert-True ($releaserText -match [regex]::Escape('Get-DeclaredMediaLayout -InfPath $archInf -Arch $archPkgName[$a]')) `
+        "make-release.ps1's pre-build layout loop no longer tells Get-DeclaredMediaLayout which architecture each INF is, so both legs would be gated as x86."
+    Assert-True ($releaserText -match [regex]::Escape('-Arch $LegArches[$Flavors[0]]')) `
+        "make-release.ps1's upload assembly no longer derives the media layout under the published directory's own architecture."
+    Assert-True ($releaserText -match [regex]::Escape('"-InfPath", $flavorInf, "-Arch", $LegArches[$f],')) `
+        "make-release.ps1 no longer passes -Arch to the per-directory INF gate in the upload assembly, so an assembled release-x64\ would be gated as x86 - after the publish swap."
+    # Both callers have to carry the architecture in, or the mandatory parameter
+    # above is satisfied by whatever the hashtable lookup returns.
+    Assert-True (([regex]::Matches($releaserText, [regex]::Escape('-LegArches $legArches')).Count) -eq 2) `
+        "make-release.ps1 no longer hands New-UploadSet a per-directory architecture map from both of its call sites."
 
     Write-Step "the binary-vs-INF version comparison"
     #

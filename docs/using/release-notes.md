@@ -60,8 +60,11 @@ audio device bound, and the disable, enable, remove and rescan sequence
 survived. It has never run on real hardware. Windows Server 2003 x64 is the
 same operating system as Windows XP x64 and the same driver is meant for it,
 but no Server 2003 machine has been tried at all. **Windows Vista x64 and
-Windows 7 x64 are not supported**: they require every driver to be signed,
-this one is not, and nothing has been run on either.
+Windows 7 x64 are not supported**: they require every driver to be signed and
+this one is not. Guests of both have since been built and booted, and what they
+showed is a second obstacle in front of the signing one - the miniport
+interface those systems expect is not the one this driver implements - so
+nothing about them is settled by the signing sentence alone.
 
 ## What this is not
 

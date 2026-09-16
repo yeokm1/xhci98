@@ -87,11 +87,12 @@ version, or the first thing a re-run of batch 11-V meets is an error about its
 own parameters.)*
 
 .PARAMETER BaselineCommit
-The commit whose src\xhci98.inf and src\xhci98.rc carry -BaselineVersion, used
-only in the regeneration recipe this script prints. There is no default: the
-caller names the last commit whose `src\xhci98.inf` reads the baseline
-version (`git log -S"0.0.0.6" -- src\xhci98.inf` finds it), and the recipe
-shows a placeholder when none is given. It moves with -BaselineVersion; the
+The commit whose tree carries -BaselineVersion, used only in the regeneration
+recipe this script prints. There is no default: the caller names the last
+commit at that version - `git log -S"0.0.0.6" -- src\xhci_version.h` finds it
+on any tree since task 14.1.10, which is where the version moved to, and
+`-- src\xhci98.inf` finds it on an older one - and the recipe shows a
+placeholder when none is given. It moves with -BaselineVersion; the
 two are a pair and a mismatched one prints a recipe that regenerates the
 wrong package.
 
@@ -306,7 +307,7 @@ try {
         throw ("cannot compare versions: -BaselineVersion '{0}' or the INF's '{1}' did not parse." -f $BaselineVersion, $current.Version)
     }
     if ($baselineParsed -ge $currentParsed) {
-        throw ("-BaselineVersion {0} is not older than the current package version {1}. The upgrade leg needs a package the setup engine will rank below this one; bump src\xhci98.inf and src\xhci98.rc, or pass the real predecessor. (Nothing has been built or staged - this is checked before any packaging runs.)" -f $BaselineVersion, $current.Version)
+        throw ("-BaselineVersion {0} is not older than the current package version {1}. The upgrade leg needs a package the setup engine will rank below this one; bump src\xhci_version.h, which is where the version has lived since task 14.1.10 and which both INFs and the resource read, or pass the real predecessor. (Nothing has been built or staged - this is checked before any packaging runs.)" -f $BaselineVersion, $current.Version)
     }
     Write-Ok ("baseline {0} ranks below the current package {1}" -f $BaselineVersion, $current.Version)
 

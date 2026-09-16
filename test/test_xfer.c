@@ -3499,6 +3499,54 @@ static void test_queue_stopped_latches_length(void)
              0, "an EDTLA past the buffer is refused");
     CHECK_EQ(fix.transfers[0].BytesTransferred, 0, "with nothing reported");
 
+    /*
+     * **Stopped on the Status Stage TRB: the whole data stage moved** (the
+     * 2026-09-16 audit's B7).
+     *
+     * The Status Stage is the TD's last TRB and the xHC reaches it only once
+     * every Data Stage TRB has completed, so 18 bytes are on the wire by the
+     * time an event can name it. It carries no length field, though, so it sits
+     * outside the data range both arms above are written about: code 26 came
+     * back 0 with the residual counted as ignored, and code 27's walk did not
+     * find it and latched nothing at all. `AbortTransfer` then reported nought
+     * for a transfer that had finished its data.
+     *
+     * The event's own residual is deliberately non-zero here, and is ignored -
+     * a residual against a TRB with no length field is not a byte count.
+     */
+    {
+        ULONG statusPa = XhciRingTrbPA(&fix.ring, fix.transfers[0].LastIndex);
+
+        CHECK(fix.transfers[0].LastIndex != fix.transfers[0].DataFirstIndex,
+              "(the Status Stage is a TRB of its own)");
+
+        fix.transfers[0].BytesTransferred = 0;
+        CHECK_EQ(XhciXferQueueStopped(&fix.queue, &fix.ring, statusPa,
+                                      (WANT_CC_STOPPED << 24) | 5UL),
+                 1, "a Stopped event on the Status Stage latches");
+        CHECK_EQ(fix.transfers[0].BytesTransferred, 18,
+                 "the whole data stage, not the 0 the residual arithmetic gave");
+
+        fix.transfers[0].BytesTransferred = 0;
+        CHECK_EQ(XhciXferQueueStopped(
+                     &fix.queue, &fix.ring, statusPa,
+                     (WANT_CC_STOPPED_LENGTH_INVALID << 24) | 5UL),
+                 1, "and so does Stopped - Length Invalid there");
+        CHECK_EQ(fix.transfers[0].BytesTransferred, 18,
+                 "which used to latch nothing at all");
+
+        /* Stopped - Short Packet keeps its EDTLA even on the Status Stage: it
+         * is a measurement of this TD and the sum would be a derivation. */
+        fix.transfers[0].BytesTransferred = 0;
+        CHECK_EQ(XhciXferQueueStopped(
+                     &fix.queue, &fix.ring, statusPa,
+                     (WANT_CC_STOPPED_SHORT_PACKET << 24) | 5UL),
+                 1, "Stopped - Short Packet still takes its EDTLA");
+        CHECK_EQ(fix.transfers[0].BytesTransferred, 5,
+                 "the controller's own total, not the sum of the range");
+        fix.transfers[0].BytesTransferred = 0;
+    }
+
     /* Nothing at all for an event that names no queued transfer, and for a code
      * that is not one of the three. */
     CHECK_EQ(XhciXferQueueStopped(&fix.queue, &fix.ring,
@@ -3541,10 +3589,11 @@ static void test_queue_stopped_latches_length(void)
                  "that including it would give");
 
         /*
-         * And named against a TRB of the transfer that is **not** in its data
-         * range - the Setup Stage at index 0, or the Status Stage at 4. Neither
-         * carries a length the sum may include, so the walk finds no
-         * predecessor for it and nothing is latched.
+         * And named against the **Setup Stage** at index 0, which is not in the
+         * data range and is not the TD's last TRB either: its own length is the
+         * 8 bytes of the setup packet, which is not part of what the caller
+         * asked to move, so the walk finds no predecessor and nothing is
+         * latched.
          */
         multi.transfers[0].Flags &= ~1UL;        /* clear LENGTH_FIXED */
         multi.transfers[0].BytesTransferred = 0;
@@ -3552,11 +3601,23 @@ static void test_queue_stopped_latches_length(void)
                                       XhciRingTrbPA(&multi.ring, 0),
                                       (WANT_CC_STOPPED_LENGTH_INVALID << 24)),
                  0, "the Setup Stage TRB derives nothing");
+        CHECK_EQ(multi.transfers[0].BytesTransferred, 0, "with no length set");
+
+        /*
+         * The **Status Stage** at index 4 is the other one outside the data
+         * range, and it answers differently: the xHC reaches it only once every
+         * Data Stage TRB has completed, so all 320 bytes moved. This latched
+         * nothing until the 2026-09-16 audit's B7 - the walk above stays inside
+         * the data range, did not find it, and returned - which made
+         * `AbortTransfer` report nought for a transfer that had finished its
+         * data stage.
+         */
         CHECK_EQ(XhciXferQueueStopped(&multi.queue, &multi.ring,
                                       XhciRingTrbPA(&multi.ring, 4),
                                       (WANT_CC_STOPPED_LENGTH_INVALID << 24)),
-                 0, "and neither does the Status Stage TRB");
-        CHECK_EQ(multi.transfers[0].BytesTransferred, 0, "with no length set");
+                 1, "the Status Stage TRB latches the whole data stage");
+        CHECK_EQ(multi.transfers[0].BytesTransferred, 320,
+                 "128 + 128 + 64, because the Status Stage is behind all three");
     }
 }
 

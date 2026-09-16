@@ -67,6 +67,12 @@ To submit logs with a [bug or hardware report](https://github.com/yeokm1/xhci98/
 
 ### Install
 
+These steps describe the `1.0.2.0` download, which is 32-bit only and whose
+directories are `release\` and `debug\`. A later cut names them
+`release-x86\`, `debug-x86\`, `release-x64\` and `debug-x64\`, and the readme
+inside the download always says which one to install - read that rather than
+this if the two disagree.
+
 1. Put the unzipped package somewhere the machine can read: a floppy, a CD, a shared folder. `release\` is the one to install. `debug\` is the same driver built for troubleshooting, only install if asked.
 2. In Device Manager, find the unrecognised xHCI controller. It sits unclaimed with a yellow mark, usually under "Other devices" such as "Universal Serial Bus Controller".
 3. Properties -> Driver -> Update Driver -> Specify a location/Have Disk -> the `release\` directory.
@@ -94,7 +100,7 @@ Windows 98 SE is validated on real hardware. Windows 2000 SP4, Windows ME and bo
 | Windows 2000 SP4 | Virtual machines only, including an SMP guest and Driver Verifier. It has never run on real hardware. |
 | Windows ME | One virtual machine only, under SweetLow's USB 2.0 stack (the only stack it is supported with): the driver loads and starts, and a HID mouse, a USB mass-storage device and a composite audio device bind (2026-09-02). Never run on real hardware. |
 | 32-bit Windows XP | One virtual machine only (XP Professional SP3): the package installs on an xHCI-only machine with no prompt, the driver loads and starts under XP's own USB stack, and a HID mouse, a USB mass-storage device and a composite audio device bind; disable, enable, remove and rescan in Device Manager all survive. Never run on real hardware. |
-| Windows XP x64 / Server 2003 x64 | One virtual machine only (XP Professional x64 SP2), and **a separate 64-bit driver**, not the one above: the same clauses all pass, on both shipping builds, from a package with its own INF. Only XP x64 was booted; Server 2003 x64 is the same operating system and is covered by that identity, not by a run of its own. Never run on real hardware. Windows Vista x64 and Windows 7 x64 are not supported - both require signed drivers and this one is not signed. |
+| Windows XP x64 / Server 2003 x64 | One virtual machine only (XP Professional x64 SP2), and **a separate 64-bit driver**, not the one above: the same clauses all pass, taken on the `qemu` build and then read again on the `release` flavour, from a package with its own INF. The `debug` build of it has never been run. Only XP x64 was booted; Server 2003 x64 is the same operating system and is covered by that identity, not by a run of its own. Never run on real hardware. Windows Vista x64 and Windows 7 x64 are not supported - both require signed drivers and this one is not signed. |
 | Intel 7/8-series (`XUSB2PR` mux), AMD | Never run on either. Everything said about the `XUSB2PR` port mux comes from Intel's datasheet and Linux, not silicon. The driver does not touch it. |
 | Resume from standby (Windows 2000) | Never executed anywhere. No available VM offers a resumable power transition, and there is no Windows 2000 machine. |
 | Low Speed, USB Audio, hub topologies | Work on Windows 98 hardware in the configurations tried. Not covered: an audio device with `bInterval > 1`, a USB 1.1 hub under a multi-TT hub, and the Windows 2000 side on silicon. |
@@ -143,6 +149,8 @@ The driver is C (C89/C90, no C++ or CRT), built and verified on Windows 11 x64. 
    | `tools\MSVC600.zip` | MSVC 6.0 - [itsmattkc/MSVC600](https://github.com/itsmattkc/MSVC600) |
    | `tools\WIN2KDDK.EXE` | Windows 2000 DDK - [KunYi/WDK_DDKArchive](https://github.com/KunYi/WDK_DDKArchive/releases/tag/Win2K_DDK) |
 
+   The 64-bit build needs a third, unpacked to `tools\WinDDK71`: WDK 7.1 (7600.16385.1), because no compiler older than its `cl` 15.00 can target x64. It is needed only for the amd64 package; a clone without it builds every 32-bit flavour.
+
 2. Unpack them in place:
 
    ```powershell
@@ -162,14 +170,26 @@ The driver is C (C89/C90, no C++ or CRT), built and verified on Windows 11 x64. 
    | `debug` | `src\objchk\i386\xhci98.sys` - the diagnostic build, also shipped |
    | `qemu` | `src\objchk_qemu\i386\xhci98.sys` - emulator-only, never published |
 
+   Add `-amd64` for the 64-bit build, which is a **separate binary from a separate toolchain in a separate package** - no statement about "one binary" reaches it:
+
+   ```
+   scripts\build-driver.cmd both -amd64
+   ```
+
+   | Flavour | Output |
+   |---|---|
+   | `release` | `src\objfre\amd64\xhci98.sys` |
+   | `debug` | `src\objchk\amd64\xhci98.sys` |
+   | `qemu` | `src\objchk_qemu\amd64\xhci98.sys` - emulator-only, never published |
+
 4. Build the two tools that ship beside the driver. `xhciqual\build.cmd` produces `XHCIQUAL.EXE`, the DOS qualifier, and needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM` (or wherever `WATCOM` points). That is the only tool installed normally on the host, and the driver never uses it. `xhcisnap\build.cmd` produces `XHCISNAP.EXE`, the snapshot reader, with the in-repo MSVC 6.0.
 
 5. Make install media. A `.sys` on its own is not install media; the INF travels with it, and since 1.0.0.1 nothing else does, because the INF has Windows supply its own `usbd.sys` and `usbhub.sys` (since 1.0.1.0, `usbport.sys` on Windows 2000 and XP; since 1.0.2.0, `usbui.dll` on all four). For a Windows 98 SE target, first download NUSB 3.3 (`nusb33e.exe`) from [philscomputerlab.com](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) to `tools\nusb33e.exe`.
 
    | Script | Output |
    |---|---|
-   | `scripts\package\make-package.ps1` | `out\pkg-<flavour>\` - media a VM or a machine can be pointed at |
-   | `scripts\package\make-release.ps1` | `releases\<version>\` and `out\xhci98-<version>.zip` - the published cut |
+   | `scripts\package\make-package.ps1` | `out\pkg-<flavour>-<arch>\` - media a VM or a machine can be pointed at |
+   | `scripts\package\make-release.ps1` | `releases\<version>\` and `out\xhci98-<version>.zip` - the published cut, four directories since the `-Arch` default became both architectures |
 
 6. Test in QEMU with the `qemu-xhci` device: a Win98 SE guest, a Win2000 SP4 guest, and an SMP Win2000 guest for race detection.
 

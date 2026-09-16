@@ -32,6 +32,8 @@ body:
         - Windows 2000 SP4
         - Windows 2000, earlier than SP4
         - Windows XP, 32-bit
+        - Windows XP, 64-bit
+        - Windows Server 2003, 64-bit
         - Other / not sure
     validations:
       required: true
@@ -129,22 +131,35 @@ body:
     attributes:
       label: XHCIQUAL report
       description: |
-        Boot **real DOS** (not a DOS box inside Windows) and run:
+        Boot **real DOS** (not a DOS box inside Windows), put XHCIQUAL.EXE on
+        writable storage that is NOT on the controller being tested, and start
+        with the quick scan:
 
-            XHCIQUAL --probe-only --log PROBE.LOG
+            XHCIQUAL
 
-        That step is read-only - it takes ownership of nothing and writes no
-        PCI configuration register. If it does not crash the machine, continue
-        with the full run:
+        With no arguments it is a read-only one-screen verdict: no log file,
+        no PCI configuration write, no ownership taken. A DISQUALIFIED here
+        ends it. Then the probe, still read-only, which does write a log:
 
-            XHCIQUAL --log FULL.LOG
+            XHCIQUAL --probe-only --no-page --log PROBE.LOG
 
-        The second one TAKES OVER THE CONTROLLER: it resets it and resets its
-        ports. Use a PS/2 keyboard, and do not write the log to a drive on the
-        controller being tested.
+        (`--no-page` matters: without it the run stops every 23 rows waiting
+        for a key.)
 
-        Attach PROBE.LOG and FULL.LOG (whichever you got) to this report, or
-        paste them here.
+        If the probe does not crash the machine, the active runs come next.
+        They TAKE OVER THE CONTROLLER - reset it, reset its ports - so use a
+        PS/2 keyboard. Run them from the five batch files that ship beside the
+        tool rather than as one long run, **cold-booting between each**:
+
+            1PROBE
+            2XPOLL
+            3XIRQ
+            4XEMPTY      (no external test device attached)
+            5XDEV        (one expendable USB 2.0 device attached directly)
+
+        Attach whichever of PROBE.LOG, XPOLL.LOG, XIRQ.LOG, XEMPTY.LOG and
+        XDEV.LOG you got to this report, or paste them here. Getting only the
+        first one or two is still worth reporting.
       render: text
     validations:
       required: false

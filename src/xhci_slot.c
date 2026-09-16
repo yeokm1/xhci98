@@ -3517,6 +3517,60 @@ static VOID xhciDevTopoDetach(PXHCI_EXTENSION ext, PXHCI_DEVICE dev)
 }
 
 /*
+ * **Drop every other record's claim on a topology address that is about to be
+ * re-assigned.** `TopoAddress` is the key a record remembers so that a teardown
+ * arriving mid-re-enumeration can still find its node (see `xhciDevTopoDetach`
+ * above) - but the re-entry branches clear `DeviceAddress` and keep it, so a
+ * record can sit holding a key to a node that is no longer its own.
+ *
+ * The sequence that makes that a defect needs two hubs and address reuse across
+ * an address-0 window. Hub H at address 5 is destroyed and re-enumerated: the
+ * record is kept and `TopoAddress` stays 5. Hub D enumerates first and is given
+ * 5, whose stale node the migration below prunes, and D's own hub traffic then
+ * builds a fresh node under 5. When H is finally addressed - say 6 - its
+ * migration re-keys **D's** node from 5 to 6. D loses its node and its children
+ * are orphan-swept at the next fold, while H owns a node carrying D's Tier,
+ * Route String and RootPort, so every device behind H is programmed from D's
+ * position. `xhciDevHubMark` refuses on a position mismatch, but
+ * `XhciTopoChildOf`, `XhciTopoClaimChild` and `XhciTopoTtFor` do not - which is
+ * design record 02 section 3's named failure. H's later teardown then detaches
+ * D's node as well.
+ *
+ * Clearing here is what makes the record's key mean what it says: the node it
+ * named has just been pruned, so the claim is spent whether or not this record
+ * ever notices. Not observed, and reasoned from the two sides rather than
+ * measured (the 2026-09-16 audit's B2); the host vector for the H/D sequence is
+ * in `test/test_init.c`.
+ *
+ * Deliberately not counted. Every counter in `XHCI_EXTENSION` is part of the
+ * snapshot layout `scripts\vm-matrix\gen-offsets.ps1` pins and the matrix reads
+ * by offset, and a field added for a path with no measured occurrence is not
+ * worth re-cutting that table for; the host vector is where this is observable.
+ *
+ * Called with the lock held. IRQL: <= DISPATCH_LEVEL.
+ */
+static VOID xhciDevForgetTopoAddress(PXHCI_EXTENSION ext,
+                                     PXHCI_DEVICE keep,
+                                     ULONG address)
+{
+    ULONG i;
+
+    if (address == 0) {
+        return;
+    }
+    for (i = 0; i < XHCI_MAX_SLOTS; i++) {
+        PXHCI_DEVICE other = &ext->Devices[i];
+
+        if (other == keep) {
+            continue;
+        }
+        if (other->TopoAddress == address) {
+            other->TopoAddress = 0;
+        }
+    }
+}
+
+/*
  * Put a record back in the pool.
  *
  * `slotReleased` says whether the xHC has been shown to have let this device's
@@ -4809,6 +4863,20 @@ static PXHCI_DEVICE xhciDevOpenOnRootPort(PXHCI_EXTENSION ext, ULONG hubPort)
          * not land on this one (review round 2). */
         xhciDevNewTenancy(ext, dev);
         /*
+         * **The intercepted SET_ADDRESS is held on the record and no drain can
+         * see it**, so a re-entry that resets everything around it has to ask
+         * for it by name, exactly as the teardown and an EP0 REMOVE do. Left
+         * held, it would sit against a record whose address has just been
+         * cleared: `xhciDevOwedOp` would derive `ADDRESS_SET` from it and the
+         * completion would stamp `ADDRESS_VALID` with `DeviceAddress == 0`.
+         * Practically unreachable - usbport waits on its SET_ADDRESS with an
+         * INFINITE, non-alertable timeout, so the thread that would have to
+         * re-open this port is parked inside the transfer this cancels - but
+         * the record is only unreachable by an argument made somewhere else
+         * (the 2026-09-16 audit's B4).
+         */
+        xhciDevCancelSetAddress(ext, dev, XHCI_USBD_STATUS_CANCELED);
+        /*
          * The speed is re-read with the Max Packet Size below, not just under
          * it. A device can come back on the same root port at a different speed
          * - a marginal HS link falling back to FS on the second reset is the
@@ -4988,6 +5056,9 @@ static PXHCI_DEVICE xhciDevOpenBehindHub(
          * held a moment ago, so an action armed under the old tenancy must
          * not land on this one (review round 2). */
         xhciDevNewTenancy(ext, dev);
+        /* And the held SET_ADDRESS, one tier down and for the reason the
+         * root-port branch gives at length. */
+        xhciDevCancelSetAddress(ext, dev, XHCI_USBD_STATUS_CANCELED);
     } else {
         dev = xhciDevAllocate(ext);
         if (dev == NULL) {
@@ -6393,6 +6464,11 @@ static VOID xhciDevTopoSnoopSubmit(PXHCI_EXTENSION ext,
     transfer->TopoAddress = snoop.Address;
     transfer->TopoPort = snoop.Port;
     transfer->TopoReplyVa = (ULONG_PTR)sgList->MappedSystemVa;
+    /* The record this reply belongs to, named by tenancy rather than by the
+     * address the graph is keyed on - see XHCI_TRANSFER, and the identical
+     * pair `xhciDevDescSnoopSubmit` has kept since the first review round. */
+    transfer->TopoDeviceRef = xhciDevRef(ext, dev);
+    transfer->TopoTenancy = dev->Tenancy;
 }
 
 /* ------------------------------------------------------------------ */
@@ -6786,6 +6862,34 @@ static VOID xhciDevTopoFoldReply(PXHCI_EXTENSION ext, PXHCI_TRANSFER transfer)
     if (transfer->UsbdStatus != XHCI_USBD_STATUS_SUCCESS ||
         transfer->BytesTransferred == 0 || transfer->TopoReplyVa == 0) {
         return;
+    }
+
+    /*
+     * **The record that armed this reply must still be the one holding the
+     * address the graph is keyed on**, which is the gate `xhciDevDescApply`
+     * makes of the descriptor half of this same channel and this half did not
+     * (the 2026-09-16 audit's B3).
+     *
+     * `TopoAddress` here is usbport's address, a recycled name. A completion
+     * parked across a disown plus a re-enumeration would arrive with its key
+     * naming whatever the graph now holds under it, and fold one hub's port
+     * status or hub descriptor into another hub's node. The reference is the
+     * record slot and the tenancy is which device has held it since, so a
+     * mismatch is the answer rather than a plausible wrong node. Counted on
+     * `DescRepliesOrphaned` because it is the same fact about the same
+     * channel - "a snooped reply outlived its record" - and a second counter
+     * would split one event across two readings.
+     */
+    {
+        PXHCI_DEVICE owner;
+
+        owner = xhciDevFromRef(ext, transfer->TopoDeviceRef);
+        if (owner == NULL || owner->Tenancy != transfer->TopoTenancy ||
+            owner->State == XHCI_DEV_STATE_FREE ||
+            owner->DeviceAddress != transfer->TopoAddress) {
+            ext->DescRepliesOrphaned++;
+            return;
+        }
     }
 
     snoop.Reply = transfer->TopoReply;
@@ -7802,6 +7906,11 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
          * leave the graph keyed on an address the record now holds.
          */
         XhciTopoMigrate(&ext->Topology, dev->TopoAddress, address);
+        /* The prune above spent every other record's claim on this key, and
+         * one of them may still be holding it across an address-0 window -
+         * see xhciDevForgetTopoAddress for the two-hub sequence that turns a
+         * kept claim into another hub's position. */
+        xhciDevForgetTopoAddress(ext, dev, address);
         if (dev->TopoAddress != 0) {
             dev->TopoAddress = address;
         }
@@ -9197,9 +9306,27 @@ VOID XhciSlotCommandEvent(PXHCI_EXTENSION ext,
             XhciLogNoteLocked(ext, "slot.enabled",
                               (slotId << 8) | dev->HubPort);
             if (!xhciDevPrepareSlot(ext, dev)) {
-                dev->PendingOp = XHCI_DEV_OP_DISABLE_SLOT;
-                dev->State = XHCI_DEV_STATE_FAILED;
+                /*
+                 * **Torn down rather than left FAILED holding an owed Disable
+                 * Slot.** A slot was granted and its carve could not be
+                 * prepared, so the slot has to go back - but a FAILED record is
+                 * still one `xhciDevByHubPort` admits, and the re-open that
+                 * finds it runs `xhciDevOweFromSlotState`, which re-derives
+                 * `PendingOp` from the hardware slot state and writes
+                 * `ADDRESS_BSR` over the Disable Slot. The command is then
+                 * never issued and the Slot ID leaks until an unplug. GONE is
+                 * the state that says "this record's device has left"; the
+                 * teardown owes the same Disable Slot behind the same
+                 * quiescence ordering, and the next open on this port
+                 * allocates a fresh record rather than inheriting this one's
+                 * slot (the 2026-09-16 audit's B5).
+                 *
+                 * Reachable only if `xhciDevPrepareSlot` fails after the
+                 * `MaxSlotsEn` check has passed, which is why it went
+                 * unnoticed.
+                 */
                 ext->CommandFailures++;
+                xhciDevTeardown(ext, dev);
                 break;
             }
             if (dev->EndpointExtension != NULL) {
@@ -10560,11 +10687,6 @@ static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
 VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext)
 {
     xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_NONE, NULL);
-}
-
-VOID XhciSlotDeferredWorkLocked(PXHCI_EXTENSION ext)
-{
-    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_LOCKED, NULL);
 }
 
 VOID XhciSlotDeferredWorkForEndpoint(PXHCI_EXTENSION ext,

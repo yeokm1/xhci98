@@ -84,12 +84,20 @@ everywhere says nothing here; the amd64 import surface has an evidence rule
 of its own. Windows XP x64 and Server 2003 x64 are one operating system, NT
 5.2.3790, which is why one build serves both - but only XP x64 has been
 booted, and Server 2003 x64 rests on that identity rather than on an
-observation. And **Vista x64 and Windows 7 x64 are not in this tier**: task
-21.7 read their `usbport.sys` statically and found nothing in the interface
-against them, but both enforce kernel-mode code signing and both stage a
-package through a driver store the INF's `LayoutFile` route was not written
-for, so whether the binary can be made to load there is an open question and
-roadmap task 21.8. `docs/contributing/build-and-test.md`, "Windows XP x64
+observation. And **Vista x64 and Windows 7 x64 are not in this tier, and the reason changed
+on 2026-09-10**: task 21.7 had read their `usbport.sys` statically and found
+nothing in the interface against them, leaving code signing and the driver
+store as the open questions. Task 21.8's guests and the measurements behind
+them (design record 11, M9 to M11) overturned that reading - **no Version 200
+miniport can run on Vista or Windows 7 in either architecture.** Registration
+takes a fourth argument there, the `USBPORT_RESOURCES` type bits moved, and the
+interrupt DPC is taken from a Version 300 slot past the end of what a Version
+200 packet copies; on x86 the registration is callee-cleaned, so there is no
+inert-extra-argument escape. The owner decided the same day that the driver is
+to run on all four of those systems, which makes it a Version 300 path in both
+binaries rather than a question about signing - roadmap task 22.5, open, and
+the tier statement here does not move until it closes.
+`docs/contributing/build-and-test.md`, "Windows XP x64
 target VM", and `docs/contributing/design/11-x64-targets.md` are the record;
 `docs/contributing/legal-provenance.md` sections 3 and 4 carry the provenance
 of every amd64 reading behind it, all of them `static`.
@@ -108,7 +116,7 @@ stack natively in SP4. This driver fills the gap for both.
 | Item | Value |
 |---|---|
 | Primary targets | Windows 98 SE (4.10.2222) and Windows 2000 SP4 - one binary, both required |
-| Supported in VM | Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax. Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM". 32-bit Windows XP (SP3) - observed in one QEMU guest on 2026-09-03 (xHCI-only package install, HID, mass storage, composite audio, the disable/enable/remove/rescan sequence), never on metal, no checkpoint tax; the `.NTx86` INF half under XP's own `usbport.sys`. Accommodate it where the change is small and low-risk, never at a primary target's expense; see `docs/contributing/build-and-test.md`, "Windows XP target VM", and `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" Windows XP x64 / Server 2003 x64 (NT 5.2.3790) - observed in one QEMU guest on 2026-09-09 (the same clauses, on both shipping flavours), never on metal, no checkpoint tax; the `.NTamd64` half of the *second* INF, and **a second binary, not this one** - see "Windows XP x64 target VM" and `docs/contributing/design/11-x64-targets.md`. Vista x64 and Windows 7 x64 are not in the tier (roadmap task 21.8) |
+| Supported in VM | Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax. Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM". 32-bit Windows XP (SP3) - observed in one QEMU guest on 2026-09-03 (xHCI-only package install, HID, mass storage, composite audio, the disable/enable/remove/rescan sequence), never on metal, no checkpoint tax; the `.NTx86` INF half under XP's own `usbport.sys`. Accommodate it where the change is small and low-risk, never at a primary target's expense; see `docs/contributing/build-and-test.md`, "Windows XP target VM", and `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" Windows XP x64 / Server 2003 x64 (NT 5.2.3790) - observed in one QEMU guest on 2026-09-09 (the same clauses, on the `qemu` build and then the `release` flavour; `debug-x64` has never been read in a guest), never on metal, no checkpoint tax; the `.NTamd64` half of the *second* INF, and **a second binary, not this one** - see "Windows XP x64 target VM" and `docs/contributing/design/11-x64-targets.md`. Vista x64 and Windows 7 x64 are not in the tier: no Version 200 miniport can run on either (design record 11, M9-M11), which roadmap task 22.5 is the change for |
 | USB scope | USB 2.0 (HS/FS/LS) only; HID, mass storage, USB Ethernet, and USB Audio validation targets. USB 3.0 SuperSpeed is out of scope (see `docs/usb-xhci-info/xhci-programming.md`, "What SuperSpeed Support Would Require") |
 | Integration model | `usbport.sys` miniport (Option A) - reuse the USB 2.0 stack already on the target (NUSB's Win2000-derived build, SP4's native one, or SweetLow's XP-derived rebuild on Windows 98); do not re-implement the USB stack |
 | Compiler | MSVC 6.0, run in place from `tools/MSVC600` (unpacked from `tools/MSVC600.zip`). The amd64 build is the exception and cannot be otherwise: it is WDK 7.1's `cl` 15.00 from `tools/WinDDK71`, reached by `build-driver.cmd <flavour> -amd64`, because no compiler here older than that can target x64 |

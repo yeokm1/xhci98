@@ -149,11 +149,14 @@ VOID XhciControllerGlobalInit(VOID)
     KeInitializeSpinLock(&xhciDeliveryLock);
 }
 
+/* IRQL: <= DISPATCH_LEVEL on entry, DISPATCH_LEVEL while held. See the
+ * contract in src/xhci_hw.h. */
 VOID XhciDeliveryLockAcquire(PKIRQL oldIrql)
 {
     KeAcquireSpinLock(&xhciDeliveryLock, oldIrql);
 }
 
+/* IRQL: DISPATCH_LEVEL (the lock is held). */
 VOID XhciDeliveryLockRelease(KIRQL oldIrql)
 {
     KeReleaseSpinLock(&xhciDeliveryLock, oldIrql);
@@ -212,6 +215,8 @@ ULONG XhciControllerUpdateFlags(PXHCI_EXTENSION ext,
  * host suite with no lock, no DDK and no IRQL (design doc 03 section 2).
  *
  * See the contracts in src/xhci_hw.h.
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock held.
  */
 VOID XhciLogNoteLocked(PXHCI_EXTENSION ext, const char *label, ULONG value)
 {
@@ -221,6 +226,7 @@ VOID XhciLogNoteLocked(PXHCI_EXTENSION ext, const char *label, ULONG value)
     XhciLogAppend(&ext->Log, label, value, 1);
 }
 
+/* IRQL: <= DISPATCH_LEVEL, controller lock **not** held - it takes it. */
 VOID XhciLogNote(PXHCI_EXTENSION ext, const char *label, ULONG value)
 {
     KIRQL oldIrql;
@@ -234,6 +240,7 @@ VOID XhciLogNote(PXHCI_EXTENSION ext, const char *label, ULONG value)
     XhciControllerLockRelease(oldIrql);
 }
 
+/* IRQL: <= DISPATCH_LEVEL, controller lock **not** held - it takes it. */
 VOID XhciLogNoteAddress(PXHCI_EXTENSION ext, const char *label, ULONG value)
 {
     KIRQL oldIrql;

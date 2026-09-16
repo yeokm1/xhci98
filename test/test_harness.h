@@ -48,6 +48,12 @@ static int checks;
  * passing a wider type would otherwise have it truncated at the call. The
  * comparison is made in the caller's own type, where it is exact.
  */
+/*
+ * **Both macros take a `what` the failure line prints**, and design record 03
+ * section 5 describes them as `CHECK(cond)` / `CHECK_EQ(got, want)`. The
+ * description is the one that is wrong; the third argument is what makes a
+ * failure readable without opening the file (the 2026-09-16 audit's C6).
+ */
 #define CHECK(cond, what) \
     check_impl(((cond) != 0), (what), __FILE__, __LINE__)
 

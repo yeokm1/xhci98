@@ -3317,15 +3317,21 @@ static void test_write_order(void)
 
     hc_build();
     /*
-     * USBLEGCTLSTS as firmware may leave it: every RsvdP field set (3:1, 12:5,
-     * 19:17), every SMI enable set, every RW1C status bit set. The handoff's
+     * USBLEGCTLSTS as firmware may leave it: **every bit set**. The handoff's
      * write must clear the five enables, acknowledge the three status bits,
-     * and carry the RsvdP fields back untouched - the 2026-09-05 audit's F13
-     * found a blanket 0xFFFF enable mask zeroing them.
+     * carry the RsvdP fields back untouched - the 2026-09-05 audit's F13
+     * found a blanket 0xFFFF enable mask zeroing them - and write zero to the
+     * RsvdZ 28:21 and the read-only status at 16 and 20.
+     *
+     * **The stimulus used to be `RSVDP | SMI_ENABLES | SMI_STATUS`, and that
+     * is why the last two assertions passed against a `& ~SMI_ENABLES` write
+     * that carried 28:21 and 16/20 straight back**: those bits were never set
+     * in what the driver read, so the two spellings could not be told apart
+     * (the 2026-09-16 audit's B8). 0xFFFFFFFF would be the not-decoding value
+     * and is refused, so the stimulus is everything below the top bit plus the
+     * status bits.
      */
-    mmio[HC_LEGACY_OFFSET / 4 + 1] = XHCI_USBLEGCTLSTS_RSVDP |
-                                     XHCI_USBLEGCTLSTS_SMI_ENABLES |
-                                     XHCI_USBLEGCTLSTS_SMI_STATUS;
+    mmio[HC_LEGACY_OFFSET / 4 + 1] = 0x7FFFFFFFUL;
     CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "the same start, re-run");
     {
         int legctl;
@@ -3341,8 +3347,8 @@ static void test_write_order(void)
             CHECK_EQ(writeValue[legctl] & XHCI_USBLEGCTLSTS_SMI_STATUS,
                      XHCI_USBLEGCTLSTS_SMI_STATUS,
                      "and acknowledging the three RW1C status bits");
-            CHECK_EQ(writeValue[legctl] & 0x1FF00000UL, 0,
-                     "with the RsvdZ 28:21 and read-only 20 left at zero");
+            CHECK_EQ(writeValue[legctl] & 0x1FF10000UL, 0,
+                     "with the RsvdZ 28:21 and the read-only 16 and 20 written as zero");
         }
     }
 
@@ -9562,7 +9568,6 @@ static void test_controller_recovery(void)
      * permanently dead controller on every real machine and a green suite on
      * both guests.
      */
-    saveRestoreShape = SR_CONFORMING;
     hc_build();
     saveRestoreShape = SR_CONFORMING;
     CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a conforming controller)");
@@ -9639,7 +9644,6 @@ static void test_controller_recovery(void)
      * second of every start, and almost none of those suspends meet a failed
      * controller.
      */
-    saveRestoreShape = SR_CONFORMING;
     hc_build();
     saveRestoreShape = SR_CONFORMING;
     CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a conforming controller)");
@@ -10672,7 +10676,6 @@ static void test_poll_clock(void)
     CHECK_EQ(ext.PollClockMs, before + 12UL,
              "and the poll after that counts normally from the new axis");
 
-    saveRestoreShape = SR_CONFORMING;
     enable_start(0);
     saveRestoreShape = SR_CONFORMING;
     hostMfindex = 8UL * 1900UL;
@@ -16394,7 +16397,7 @@ static void test_slot_iso_submit_refusals(void)
  * property of the gate, and an `if` written at one of them and forgotten at the
  * other is exactly the shape the vectors caught once already in this task.
  *
- * The second half is `xhciDevStampFailure`'s `Flags = 0`: usbport does **not**
+ * The second half is `xhciDevStampTransfer`'s `Flags = 0`: usbport does **not**
  * zero the transfer extension between transfers, so a record inheriting
  * `XHCI_XFER_FLAG_ISOCH` from a previous tenant would send an ordinary bulk
  * failure through `UsbPortCompleteIsoTransfer` with a block pointer belonging to
@@ -19662,7 +19665,6 @@ static void test_slot_interrupt_teardown_returns_rings(void)
      * Slot that has not disabled a thing.
      */
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -19702,7 +19704,6 @@ static void test_slot_interrupt_teardown_returns_rings(void)
      * postcondition reached differently. */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -21102,7 +21103,6 @@ static void test_slot_stop_reads_the_ep_state(void)
      * the ring is software's and the position may be programmed. */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -21138,7 +21138,6 @@ static void test_slot_stop_reads_the_ep_state(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -21200,7 +21199,6 @@ static void test_slot_stop_reads_the_ep_state(void)
      * this ring. */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -21428,7 +21426,6 @@ static void test_slot_ep0_address_device_clears_no_context(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate(3, 3, 5);          /* stops after BSR = 1: Default */
     CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "(the slot is in Default)");
 
@@ -21688,7 +21685,6 @@ static void test_slot_reconfigure_survives_failure_and_revert(void)
     /* --- B2: the revert reopen inside one command round. --- */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -21815,7 +21811,6 @@ static void test_slot_quiesce_refusals(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate(3, 3, 5);
     slot_setup(0x80, 0x06, 0x0100, 0);
     (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
@@ -21842,7 +21837,6 @@ static void test_slot_quiesce_refusals(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -21880,7 +21874,6 @@ static void test_slot_quiesce_refusals(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -21912,7 +21905,6 @@ static void test_slot_quiesce_refusals(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate(3, 3, 5);
     slot_setup(0x80, 0x06, 0x0100, 0);
     (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
@@ -21960,7 +21952,6 @@ static void test_slot_quiesce_refusals(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -22195,7 +22186,6 @@ static void test_slot_reenumeration_reset_still_arms(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate(3, 3, 5);
     dev->State = XHCI_DEV_STATE_FAILED;
     suppressed = ext.EnumResetsSuppressed;
@@ -22208,7 +22198,6 @@ static void test_slot_reenumeration_reset_still_arms(void)
      *    reopen is the enumeration that follows. */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate(3, 3, 5);
     dev->Flags &= ~XHCI_DEV_FLAG_EP0_OPEN;
     suppressed = ext.EnumResetsSuppressed;
@@ -22225,7 +22214,6 @@ static void test_slot_reenumeration_reset_still_arms(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate(3, 3, 5);
     CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "(mid-enumeration again)");
     suppressed = ext.EnumResetsSuppressed;
@@ -22244,7 +22232,6 @@ static void test_slot_reenumeration_reset_still_arms(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate(3, 3, 5);
     suppressed = ext.EnumResetsSuppressed;
     slot_attach(1, 3);
@@ -22413,7 +22400,6 @@ static void test_slot_refusal_is_bounded(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -22484,7 +22470,6 @@ static void test_slot_refusal_is_bounded(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
     stalled = ext.DevicesStalledOut;
@@ -22517,7 +22502,6 @@ static void test_slot_refusal_is_bounded(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     CHECK_EQ(slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x82,
                           USBPORT_TRANSFER_TYPE_BULK, 512, 0, 1),
@@ -24283,6 +24267,36 @@ static void topo_reply_buffer(const UCHAR *bytes, ULONG count)
  * `topoReplyBuffer` as the mapped buffer. Returns the bytes the completion
  * reported.
  */
+static void topo_submit_and_complete_slot(PXHCI_DEVICE dev,
+                                          ULONG slotId,
+                                          ULONG type,
+                                          ULONG request,
+                                          ULONG value,
+                                          ULONG index,
+                                          ULONG length)
+{
+    ULONG statusPA;
+
+    slot_setup(type, request, value, length);
+    slotParams.SetupPacket.wIndex = (USHORT)index;
+    slotParams.TransferFlags = 1;               /* IN */
+    slotParams.TransferBufferLength = length;
+    slotSgList.SgElementCount = 1;
+    slotSgList.SgElement[0].SgPhysicalAddressLo = 0x00100000UL;
+    slotSgList.SgElement[0].SgTransferLength = length;
+    slotSgList.SgElement[0].SgOffset = 0;
+    slotSgList.MappedSystemVa = topoReplyBuffer;
+
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    statusPA = XhciRingTrbPA(&dev->Ep0Ring, slotTransfer.LastIndex);
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT, statusPA, 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(slotId) | XHCI_TRB_EP_ID(1));
+    deliver_events();
+}
+
+/* Slot 5, which is the Slot ID every vector here but the two-hub one uses. */
 static void topo_submit_and_complete(PXHCI_DEVICE dev,
                                      ULONG type,
                                      ULONG request,
@@ -26122,6 +26136,84 @@ static void test_hub_marking_does_not_follow_a_reused_address(void)
 }
 
 /*
+ * **Two hubs and one reused address: the record that gave the address back must
+ * not keep a key to the node the new owner builds under it** (the 2026-09-16
+ * audit's B2).
+ *
+ * `TopoAddress` is the key a record remembers so a teardown arriving
+ * mid-re-enumeration can still find its node, and the re-entry branches keep it
+ * while clearing `DeviceAddress`. That leaves a window in which two records can
+ * name the same key, and only one of them owns the node:
+ *
+ *   - hub H is at address 2 with a node of its own, then re-enumerates, so its
+ *     address is 0 and `TopoAddress` is still 2;
+ *   - hub D enumerates first and usbport hands it 2. D's SET_ADDRESS
+ *     interception prunes whatever sat under 2 - H's node - and D's own hub
+ *     traffic then builds a fresh one there;
+ *   - H is finally addressed, say 9, and its migration re-keys the node under
+ *     its remembered 2 to 9. That node is D's.
+ *
+ * D then loses its node and its children are orphan-swept at the next fold,
+ * while H owns a node carrying D's Tier, Route String and RootPort - design
+ * record 02 section 3's named failure, reached without either hub doing
+ * anything unusual. `xhciDevHubMark` refuses on a position mismatch, but
+ * `XhciTopoChildOf`, `XhciTopoClaimChild` and `XhciTopoTtFor` do not.
+ *
+ * What is asserted here is the invariant the fix establishes - the claim is
+ * dropped when the address changes hands - because that is the fact the later
+ * migration reads. Against the unfixed driver H keeps the key and the first
+ * `CHECK_EQ` below fails.
+ */
+static void test_a_reused_address_drops_the_old_records_topo_claim(void)
+{
+    PXHCI_DEVICE first;
+    PXHCI_DEVICE second;
+
+    /* H: a hub on root port 3 at address 2, with a node and a marking. */
+    first = slot_enumerate_addressed(3, 3, 5, 2);
+    topo_reply_buffer(hubMarkDescriptor, 9);
+    topo_submit_and_complete(first, 0xA0, 0x06, 0x0000, 0, 9);
+    deliver_events();
+    CHECK_EQ(ext.HubSlotsMarked, 1, "(H is marked as a hub at address 2)");
+    CHECK_EQ(first->TopoAddress, 2, "(and its record remembers that key)");
+
+    /* H re-enumerates: the address goes back, the node is deliberately kept. */
+    slot_reset_port(3);
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "(H re-enters the chain)");
+    deliver_events();
+    CHECK_EQ(first->DeviceAddress, 0, "(H sits at address 0)");
+    CHECK_EQ(first->TopoAddress, 2, "(still holding the key, by design)");
+
+    /* D enumerates on another root port and is handed H's old address. */
+    hwCmdSlotId = 6;
+    slot_attach(1, 3);
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "(a second hub enumerates)");
+    deliver_events();
+    deliver_events();
+    second = &ext.Devices[1];
+    CHECK_EQ(second->HubPort, 1, "(on another root port)");
+    slot_setup(0x00, 0x05, 2, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    deliver_events();
+    CHECK_EQ(second->DeviceAddress, 2, "(D takes the address H gave back)");
+
+    /* The migration pruned the node under 2, so H's remembered key names
+     * nothing of H's any more - and must say so. */
+    CHECK_EQ(first->TopoAddress, 0,
+             "H's claim on address 2 is dropped when D takes it");
+
+    /* D becomes a hub, so the node now under 2 is D's own. */
+    topo_reply_buffer(hubMarkDescriptor, 9);
+    topo_submit_and_complete_slot(second, 6, 0xA0, 0x06, 0x0000, 0, 9);
+    deliver_events();
+    CHECK(XhciTopoFind(&ext.Topology, 2) != NULL, "D has a node at address 2");
+    CHECK_EQ(second->TopoAddress, 2, "and D is the record holding that key");
+}
+
+/*
  * **A hub torn down at address 0 must not leak its topology node** (Phase 7
  * review, finding A4). The address-0 open clears the record's address while
  * the graph deliberately keeps the node - and the stuck/recovering hub spends
@@ -27152,7 +27244,6 @@ static void test_save_restore(void)
 
     /* --- a controller that keeps nothing: the restore fails for a different
      * reason and must not present as a success --- */
-    saveRestoreShape = SR_NO_SAVE;
     dev = slot_enumerate(3, 3, 5);
     saveRestoreShape = SR_NO_SAVE;
     reinits = ext.ResumeReinits;
@@ -27163,7 +27254,6 @@ static void test_save_restore(void)
     CHECK_EQ(ext.Devices[0].State, XHCI_DEV_STATE_FREE, "and dropping devices");
 
     /* --- the conforming controller: state really is restored --- */
-    saveRestoreShape = SR_CONFORMING;
     enable_start(0);
     deliver_events();
     saveRestoreShape = SR_CONFORMING;
@@ -27225,7 +27315,6 @@ static void test_save_restore(void)
     /* --- a save the bus is not quiet enough for. The specification's procedure
      * begins with Stop Endpoint on every Running endpoint, which is task
      * 7a-B.1's command; declining to save is what makes its absence sound. --- */
-    saveRestoreShape = SR_CONFORMING;
     dev = slot_enumerate(3, 3, 5);
     saveRestoreShape = SR_CONFORMING;
     slot_setup(0x80, 0x06, 0x0100, 0);
@@ -27249,7 +27338,6 @@ static void test_save_restore(void)
     saveRestoreShape = SR_CONFORMING;
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -27267,7 +27355,6 @@ static void test_save_restore(void)
     CHECK_EQ(hostSaves, 0, "and CSS is still not written");
 
     /* --- and the third outcome: an operation that never finishes --- */
-    saveRestoreShape = SR_CONFORMING;
     enable_start(0);
     deliver_events();
     saveRestoreShape = SR_CONFORMING;
@@ -27584,10 +27671,20 @@ static void test_save_declines_while_a_stop_is_unproven(void)
 
     hc_build();
     CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a started controller)");
-    saveRestoreShape = SR_CONFORMING;
     deliver_events();
 
     dev = slot_enumerate_addressed(3, 3, 5, 7);
+    /*
+     * **The shape is selected here, after the enumerate, and it used to be
+     * selected before it - where the write was dead** (the 2026-09-16 audit's
+     * C2). `slot_enumerate_addressed` reaches `enable_start` and then
+     * `hc_build`, which puts the knob back to the measured QEMU shape; the
+     * second half of this vector already carried a comment saying exactly that.
+     * So the first half ran on `SR_QEMU`, where every restore sets SRE - which
+     * left the closing assertion below passing for the wrong reason, since a
+     * reinitialisation drops the devices whether or not the save was declined.
+     */
+    saveRestoreShape = SR_CONFORMING;
     CHECK_EQ(slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x82,
                           USBPORT_TRANSFER_TYPE_BULK, 512, 0, 1),
              MP_STATUS_SUCCESS, "(a bulk IN endpoint)");
@@ -27614,10 +27711,14 @@ static void test_save_declines_while_a_stop_is_unproven(void)
           "while the chain that would prove the endpoint stopped is still "
           "unfinished");
 
+    hostSaves = 0;
     XhciRegPacket.SuspendController(&ext);
     CHECK_EQ(ext.SavedStateValid, 0,
              "so the save is declined: a CSS taken here would capture a "
              "controller still executing a ring this driver has rewritten");
+    CHECK_EQ(hostSaves, 0,
+             "and CSS is not written at all - declined before the controller "
+             "is touched, not attempted and failed");
 
     /*
      * **And the gate is not simply stuck shut** - without this half the fix would
@@ -27638,6 +27739,12 @@ static void test_save_declines_while_a_stop_is_unproven(void)
     CHECK_EQ(dev->State, XHCI_DEV_STATE_FREE,
              "the declined save cost the bus: the resume reinitialised and every "
              "device went with it, which is the trade this gate makes");
+    /* And it cost the bus *because the save was declined*, which is only a
+     * statement about the gate on the conforming shape - on SR_QEMU the
+     * restore sets SRE and the reinitialisation follows whatever the save did,
+     * so the assertion above would hold against a gate that never ran. */
+    CHECK_EQ(saveRestoreShape, SR_CONFORMING,
+             "(and the shape it was measured on is still the conforming one)");
 
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     /* `slot_enumerate` starts from `enable_start`, which rebuilds the model
@@ -27893,7 +28000,7 @@ static void test_restore_refuses_host_controller_event(void)
  * Event**.
  *
  * So the same loss can arrive on the ring wearing the type the drain was told to
- * discard, from an endpoint the controller has already halted. `xhciXferCodeInfo`
+ * discard, from an endpoint the controller has already halted. `XhciXferCodeInfo`
  * classes code 32 alone among the transfer codes as `Fatal` and the DPC's
  * transfer path escalates it to a controller invalidation; a restore that
  * dropped it would restart on top of a halted endpoint having consumed the only
@@ -28769,7 +28876,6 @@ static void test_restore_preconditions(void)
 
     /* Bus mastering, and it is the one with no symptom: a controller restored
      * without it runs, takes doorbells, and delivers nothing at all. */
-    saveRestoreShape = SR_CONFORMING;
     enable_start(0);
     deliver_events();
     saveRestoreShape = SR_CONFORMING;
@@ -28786,7 +28892,6 @@ static void test_restore_preconditions(void)
 
     /* So drive the precondition directly: a valid save, then a Command register
      * that will not take BME back. */
-    saveRestoreShape = SR_CONFORMING;
     enable_start(0);
     deliver_events();
     saveRestoreShape = SR_CONFORMING;
@@ -28812,7 +28917,6 @@ static void test_restore_preconditions(void)
 
     /* CNR. Every register the restore writes is an operational or runtime one,
      * and a power transition is exactly when the bit is set. */
-    saveRestoreShape = SR_CONFORMING;
     enable_start(0);
     deliver_events();
     saveRestoreShape = SR_CONFORMING;
@@ -28828,7 +28932,6 @@ static void test_restore_preconditions(void)
 
     /* "Is this still the same controller", which the reinitialisation asks
      * twice and the first draft of the restore asked never. */
-    saveRestoreShape = SR_CONFORMING;
     enable_start(0);
     deliver_events();
     saveRestoreShape = SR_CONFORMING;
@@ -29656,6 +29759,7 @@ int main(void)
     test_hub_marking_races_a_set_interface();
     test_hub_reenumeration_forgets_the_multi_tt_interface();
     test_hub_marking_does_not_follow_a_reused_address();
+    test_a_reused_address_drops_the_old_records_topo_claim();
     test_hub_unplugged_at_address_zero_frees_its_node();
     test_hub_with_no_ports_is_not_marked();
     test_behind_hub_device_is_addressed();

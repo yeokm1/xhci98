@@ -878,7 +878,10 @@ it is the same method that settled the arity in section 6.1 - **which is now
 twice that a question about this interface was answered by disassembling a
 caller or a writer rather than a structure.**
 
-**The fix, and it is amd64-only for section 6.1's reason.** `DriverEntry`
+**The fix, which was amd64-only for section 6.1's reason and no longer is -
+see section 12's account of the guard coming off, and read the `_WIN64`
+sentences below as the state on the day rather than as the tree.**
+`DriverEntry`
 already asks `IoIsWdmVersionAvailable` to choose the registration arity (with
 the constant section 6.3 corrects); the same answer settles
 `XhciResourcesRequired`, a file-scope `ULONG`
@@ -950,9 +953,13 @@ so `(6, 1)` would be wrong in the other direction - the obvious "tighten it for
 
 **The fix** is one constant in `src\xhci_dispatch.c` -
 `!IoIsWdmVersionAvailable(6, 0)` - plus the debug label, which becomes
-`wdm pre-6.00 (three-argument registration)`. Still `_WIN64`-guarded, still no
-new import (`IoIsWdmVersionAvailable` was already allowlisted at hint 197), and
-the 32-bit binary is untouched because the whole branch is inside the guard.
+`wdm pre-6.00 (three-argument registration)`.
+
+*(`_WIN64`-guarded when this was written, and not since: the guard came off
+with task 22.5's work, so the branch is unconditional, the 32-bit binary DOES
+carry it, and `xhci98-imports.allow` carries `IoIsWdmVersionAvailable` for x86
+as well. The section below records the removal; these sentences are the state
+on the day and are marked rather than rewritten - the 2026-09-16 audit's E4.)*
 
 **What this retires.** Section 6.1's "the test fails towards four on purpose"
 was a hedge against an *unidentified* system. It is retired with the constant it
@@ -1184,8 +1191,15 @@ design needs it:
   time on NT 6.x**, because their wrappers test `>= 300` before reading a
   200-tier slot: `CloseEndpoint` (its wrapper is the only call through the
   slot, so a Version 200 miniport on Vista never had an endpoint closed),
-  `RebalanceEndpoint` and `TakePortControl`. All three run today on the NT
-  5.x targets with the same arguments; the guest step should expect them.
+  `RebalanceEndpoint` and `TakePortControl`. `RebalanceEndpoint` and
+  `TakePortControl` run today on the NT 5.x targets with the same arguments.
+  **`CloseEndpoint` does not, any more**: issue 7 section 7.9's XP SP3 `FC`
+  bugcheck was a parameter-count regression there, and `DriverEntry` now
+  registers a three-argument `xhciCloseEndpointNt5` when the load is NT 5.x
+  and the four-argument form otherwise. So the guest step should expect the
+  NT 6.x form, which is a different callee from the one the NT 5.x legs
+  exercise (this bullet said all three were the same call - the 2026-09-16
+  audit's E4).
 - **Two OUT service pointers are written into the caller's packet at
   `>= 300`**, `UsbPortRequestAsyncCallbackEx` at `0x1B0` / `0x308` and
   `UsbPortCancelAsyncCallback` at `0x1B4` / `0x310`; the declaration names
@@ -1611,7 +1625,12 @@ warnings" until the count was checked.)*
 Two things came out of it that no static pass could have.
 
 **The amd64 import surface is not the x86 one, and it is smaller.** Seven
-module/symbol pairs against x86's eleven:
+module/symbol pairs against x86's eleven **as the surfaces stood on the day of
+this measurement**; both have since grown by one - the x86 side took
+`IoIsWdmVersionAvailable` when the `_WIN64` guard came off - and the gate
+reports 13 x86 against 8 amd64 today. Take the counts from the gate, not from
+here; the table below is about which symbols differ and why, which is what has
+not changed.
 
 | x86 | amd64 | why |
 |---|---|---|
@@ -1730,8 +1749,10 @@ dumper is `link /dump`; they are the same tool.
    every number read off an instruction rather than derived. The declaration
    therefore needs no `#ifdef`: `BufferVA` is already a `ULONG_PTR`, which is
    the whole of what moves. What the measurement bought is not a change but
-   the right to assert - `xhci_usbport.h` now pins the size and six offsets on
-   each architecture from measured numbers, so the asserts can fail.
+   the right to assert - `xhci_usbport.h` now pins the size and seven offsets
+   on each architecture from measured numbers, so the asserts can fail. (Six
+   when this was written; `PortNumber` was added with the seventh. The
+   2026-09-16 audit's E4.)
    The paragraph below is kept because it is still the rule, and 2b is the
    structure it now applies to.
 

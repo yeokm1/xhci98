@@ -263,7 +263,7 @@ code:
   generated for the endpoint ... [and] shall halt the endpoint", 4.10.1,
   p.173); both routes escalate.
 
-  Code 32 is not the only completion code `xhciXferCodeInfo` marks `Fatal`.
+  Code 32 is not the only completion code `XhciXferCodeInfo` marks `Fatal`.
   Table 6-90 marks Undefined Error (33) fatal outright ("An Undefined Error
   shall be treated as a fatal error by software", p.469) and requires an
   unrecognised vendor error (192-223) to be read as that condition, which is
@@ -351,7 +351,7 @@ code:
   is a live trace; the snapshot is a read on demand rather than a stop-time
   flush, so the record is taken after the fact rather than caught as it
   happens. No run of this project has produced one.
-- **The list of fatal codes lives in `xhciXferCodeInfo` and nowhere else.**
+- **The list of fatal codes lives in `XhciXferCodeInfo` and nowhere else.**
   Every hand-written enumeration of them found downstream was short by at
   least one. Any path that has to know whether a code is fatal (the DPC's
   transfer arm, the restore's stale-event drain) asks the table, so that
@@ -400,12 +400,14 @@ code:
     `CheckCallbacks`-to-`HealthPolls` ratios.
   - So: size from the mechanism the wait belongs to, in that mechanism's own
     unit, and compare against `PollClockMs` with an unsigned difference. The
-    five in the shipping tree are `XHCI_COMMAND_AGE_MS`, `XHCI_DEV_AGE_MS`,
-    `XHCI_DEV_STALL_MS`, `XHCI_PORT_AGE_MS` and `XHCI_EP_RESTART_MS`, and the
+    six in the shipping tree are `XHCI_COMMAND_AGE_MS`, `XHCI_DEV_AGE_MS`,
+    `XHCI_DEV_STALL_MS`, `XHCI_PORT_AGE_MS`, `XHCI_EP_RESTART_MS` and
+    `XHCI_COMPLETION_FALLBACK_MS` - the last added with issue 7's delivery
+    gate and compared against `PollClockMs` in `xhci_slot.c` like the rest,
+    which is why it belongs on this list (the 2026-09-16 audit's E3). The
     two relationships that have to hold (the command backstop clearing the
     watchdog ladder, the port age clearing the reset deadline) are
-    `XHCI_C_ASSERT`s rather than prose. The port age was the worst of the
-    five.
+    `XHCI_C_ASSERT`s rather than prose. The port age was the worst of them.
   - Two of the three `*_POLLS` names left in `src/` are inside `#ifdef
     XHCI_FIX_*`: `XHCI_RH_SWEEP_SLOW_POLLS` (W15SLOW) and
     `XHCI_RH_GATE_STUCK_POLLS` (W7), so no shipping flavour carries either.
@@ -543,7 +545,7 @@ code:
 - **An isochronous endpoint's Interval comes from usbport's per-packet stamps, not from `Period`**, which usbport forces to 1 for isoch. The stamps are one packet per microframe on High Speed and one per frame otherwise - an ESIT - so Interval is 0 and 3, both inside Table 6-12's isoch rows (FS Isoch is 3-18 where FS/LS Interrupt stops at 10). CErr is 0 by `shall`, and Low Speed is refused outright because USB 2.0 gives it no isochronous transfers at all. That Interval is correct only when `bInterval = 1`; the configuration-descriptor snoop below is what replaces the assumption where a descriptor was seen.
 - **The Frame ID window is a distance, taken in the full 32-bit domain and only then compared against the spec's two bounds.** `(current + IST + 1)` to `(current + 895)` is measured as `frameNumber - CurrentFrame` on the full 32-bit numbers: a magnitude comparison is right for half of every second and wrong for the other half (fails 9 checks), and reducing both sides mod 2048 first makes a stamp from a lap ago indistinguishable from one 48 frames ahead. Only the Frame ID written into the TRB is the low 11 bits.
 - **There is no isochronous-specific cancellation path.** An isochronous transfer leaves its queue through the same `XhciXferQueueRemove` and its TRBs are reclaimed by the same quiescence chain as every other kind; a second policy for a state that already has one is not wanted.
-- **usbport does not zero the transfer extension between transfers.** A record inheriting `XHCI_XFER_FLAG_ISOCH` from a previous tenant would send an ordinary bulk failure through the isochronous completion service with a block pointer usbport had already freed; `xhciDevStampFailure` clears `Flags`, and every path that fails a request before it reaches the ring goes through one kind-aware helper so the completion service cannot be picked wrong.
+- **usbport does not zero the transfer extension between transfers.** A record inheriting `XHCI_XFER_FLAG_ISOCH` from a previous tenant would send an ordinary bulk failure through the isochronous completion service with a block pointer usbport had already freed; `xhciDevStampTransfer` clears `Flags`, and every path that fails a request before it reaches the ring goes through one kind-aware helper so the completion service cannot be picked wrong.
 - **The configuration-descriptor snoop (`src/xhci_desc.c`) commits only a complete configuration.** usbport reads the nine-byte header first to learn `wTotalLength` and then re-reads the whole descriptor, so a partial reply is the ordinary first half of every enumeration and not a fault - but a table built from one would say "no isochronous endpoint past byte 64" and be believed.
 
   The walk is a byte-level state machine fed in 32-byte chunks off the SG list's `MappedSystemVa` (no private pool, DISPATCH_LEVEL), so feeding the same bytes at every chunk size must produce the same table, which `test_desc` sweeps. The table records its own `bConfigurationValue`, and a snooped `SET_CONFIGURATION` selecting any other value discards it (`DescConfigsSuperseded`, expected 0) - acted on at the submit, since the selection has no reply. An alternate-setting disagreement makes the reading unusable rather than picking one: `SET_INTERFACE` never reaches the miniport.
@@ -685,12 +687,24 @@ Why there is no MSI on either target. MSI is an interrupt delivered as a memory 
     declines its own controller's interrupt - on a line that "remains asserted
     until the device driver clears the Interrupt Pending (IP) flag" (4.17.3,
     p.268). That live-locks the whole IRQ, not just this device.
-- **Every `ERDP` writer holds the controller lock.** The DPC owns the software dequeue pointer
-  and relies on its own intermediate publications carrying EHB = 0; a second
-  writer can publish a pointer the DPC has already moved past and can clear EHB
-  in the middle of a drain. Any callback that wants to acknowledge interrupt
-  state therefore inherits that constraint, because the acknowledgement and the
-  EHB release are inseparable (above).
+- **Every `ERDP` writer holds the controller lock, EXCEPT where no drain can be
+  running - and those three sites are named here rather than left as
+  exceptions.** The DPC owns the software dequeue pointer and relies on its own
+  intermediate publications carrying EHB = 0; a second writer can publish a
+  pointer the DPC has already moved past and can clear EHB in the middle of a
+  drain. Any callback that wants to acknowledge interrupt state therefore
+  inherits that constraint, because the acknowledgement and the EHB release are
+  inseparable (above).
+
+  The three unlocked writers are `xhci_evt.c`'s `XhciEventDiscardStale`,
+  `xhci_init.c`'s initialisation, and `xhci_init.c`'s `xhciRestoreState`. All
+  three run under the reinitialisation precondition design record 05 describes:
+  the controller is halted or not yet started, interrupts are masked, and there
+  is no DPC to race - the ring is being *built*, not drained. **Stated as a
+  precondition rather than as a lock**, because that is what makes them
+  conforming; as written before the 2026-09-16 audit's E3 this rule made three
+  correct sites non-conforming, and design record 05's meta-rule says this file
+  wins, so a reader reconciling the two had to choose which to disbelieve.
 
   `EnableInterrupts` qualifies only because both enables are still clear when
   it writes, so no DPC can be in flight. `FlushInterrupts` does not: all three
@@ -1707,9 +1721,16 @@ must therefore do.
   `usbport.sys` does not reclaim across a suspend. Restore the interrupt enables
   afterwards if usbport had them on, since the initialization path
   leaves them masked.
-- **The fallback is the measured path, not the exception.** QEMU sets `SRE` on
-  every restore (batch 6-0), so both target VMs exercise the error path and the
-  reinitialization carries every resume there. Do not let the restore path's
+- **The fallback is the measured path, not the exception - and it is reached
+  before the restore, not by failing one.** `qemu-xhci` reads
+  `HCCPARAMS2 = 0`, so FSC is absent, `xhciSaveState` declines before writing
+  anything, and the resume finds no saved state to restore from:
+  `SavesDeclinedNoFsc` is the counter that moves on a VM and `RestoreFailures`
+  has never moved on one. The reinitialization carries every resume there
+  either way. (This entry said the VMs exercised the restore's *error* path,
+  which would need the save to have happened - the 2026-09-16 audit's B10.)
+  QEMU would also set `SRE` on a CRS write (batch 6-0), so the error path is
+  what a VM *would* take if it ever saved. Do not let the restore path's
   correctness rest on VM evidence.
 - **A restore does not bring back what it never covered.** "The state of a Root
   Hub port is not covered by a Save or Restore operation" (p.315), so the port
@@ -1774,7 +1795,7 @@ must therefore do.
     only as a Host Controller Event; that is true of Event Ring Full and false
     of Event Lost. A TD-related one is "generated for the endpoint" and "shall
     halt the endpoint" (4.10.1, p.173), arriving as a Transfer Event with
-    completion code 32, the one transfer code `xhciXferCodeInfo` marks
+    completion code 32, the one transfer code `XhciXferCodeInfo` marks
     `Fatal`.
 
     Nor does the save gate establish that no ordinary Transfer Event
@@ -1885,10 +1906,11 @@ must therefore do.
   on this step rather than a branch anything takes. The ordering is the
   specification's: after `CRS`, which would otherwise overwrite it, and before
   `R/S`, after which `CRR = 1` makes the write ignored.
-  - **Unexercised by construction on every run this project has taken.** QEMU
-    implements `CRS` as `usbsts |= SRE`, so both target VMs take the error path
-    and never reach these lines. A result box closing this says so; a green host
-    suite is a statement about the model.
+  - **Unexercised by construction on every run this project has taken**, and
+    for a reason earlier than `CRS`: `qemu-xhci` declares no FSC, so the save is
+    declined and `xhciRestoreState` is never entered on either target VM. A
+    result box closing this says so; a green host suite is a statement about the
+    model.
 - **Retiring the armed port generations lives in the quiesce transition**
   (`XhciRootHubRetireOperations` under `XhciControllerBeginQuiesce`), not in the
   two lifecycle callbacks - because a stop, a suspend and a failed-start

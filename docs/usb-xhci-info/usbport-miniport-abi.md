@@ -963,7 +963,7 @@ writes back ("out"):
 | 0x3C | `StopController` | in | |
 | 0x40 | `SuspendController` | in | |
 | 0x44 | `ResumeController` | in | |
-| 0x48 | `InterruptService` | in | Same offset on every build read, NT 5.1 through 6.1, x86 and amd64 |
+| 0x48 | `InterruptService` | in | Same offset on every build read, NT 5.1 through 6.1, **within each architecture** - `0x48` on x86 and `0x68` on amd64, as the widening map further down gives it |
 | 0x4C | `InterruptDpc` | in | **This offset is NT 5.x/9x only.** NT 6.x moves the slot to `packet+0x178` (x86) / `packet+0x298` (amd64) - see the warning below the table |
 | 0x50 | `SubmitTransfer` | in | |
 | 0x54 | `SubmitIsoTransfer` | in | |
@@ -3497,15 +3497,21 @@ key, which is what a plain `AddReg` under an INF's install section writes.
 The miniport needs no import of its own for any of this. The `Zw*` calls,
 the pool allocation and the string work are all inside `usbport.sys`. That is
 the property that makes this the only registry channel this project may use -
-`scripts/import-gate/xhci98-imports.allow` admits no `Zw*` name. The
-allowlist has no deny list: a name is refused by not being on it, which is
-why the file's remaining `Zw*` mentions are the removal note for task
-11-V.7's three file-sink imports rather than rules.
+`scripts/import-gate/xhci98-imports.allow` admits no `Zw*` name. **No `Zw*` name is admitted OR denied**: the allowlist has a `[deny]` section,
+with 25 rows, but no `Zw*` is among them, so such a name is refused by not
+being on the allow side rather than by a rule of its own - which is why the
+file's remaining `Zw*` mentions are the removal note for task 11-V.7's three
+file-sink imports rather than rules. (This said the allowlist "has no deny
+list" at all, which is not so and which matters to a reader diagnosing a
+failure: `check-imports.ps1` reports a deny hit as `DENIED: <reason>`, a
+distinct outcome from `not in the allowlist`. The 2026-09-16 audit's E9.)
 
 ## 7. Locking, IRQL, and threading summary
 
-These are the ABI *facts*. What this driver does about them - the single
-innermost driver-image lock, its order against the two below, the DIRQL
+These are the ABI *facts*. What this driver does about them - its two
+innermost driver-image locks (the controller lock, and since 2026-09-13 the
+delivery lock that is a raise rather than a guard; design record 05 sections 2
+and 11), their order against the two below, the DIRQL
 exception, the static review of every entry point, and where the driver's own
 state goes - is derived from this table in
 `docs/contributing/design/05-locking-model.md`.

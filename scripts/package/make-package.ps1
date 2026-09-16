@@ -11,8 +11,10 @@ is this project's two files and nothing else:
     xhci98.sys     the built miniport (debug or release)
 
 The Microsoft files the driver depends on, usbd.sys and usbhub.sys (both
-targets) and usbport.sys (the NT targets; on Windows 98 the USB 2.0 stack
-places it), are not on the media: the INF names LayoutFile=layout.inf and
+targets), usbport.sys (the NT targets; on Windows 98 the USB 2.0 stack
+places it) and, since 1.0.2.0, usbui.dll (every target, the root hub's
+property-page provider, to dirid 11 rather than 10), are not on the media:
+the INF names LayoutFile=layout.inf and
 the Windows setup engine copies them from the operating system's own install
 source (docs\contributing\build-and-test.md, "The files the OS supplies"). Release 1.0.0.0 carried them here under
 per-target media names, authenticated against a manifest; that was withdrawn
@@ -56,6 +58,19 @@ path. See docs\contributing\design\08-build-flavours-and-the-log-channel.md.
 Where to build the package. A relative path is taken as relative to the current
 directory. Defaults to out\pkg-<flavor>-<arch> in the repository.
 
+.PARAMETER InfPath
+The INF to stage, overriding the one -Arch selects (`src\xhci98.inf` for x86,
+`src\xhci98-amd64.inf` for amd64). It is still gated under -Arch, so handing
+this the wrong architecture's file is refused rather than staged - which is the
+case that matters, because a caller who edited only -DriverPath produces
+exactly it. Exists for the packager's own self-tests, which stage mutated INFs.
+
+.PARAMETER DriverPath
+The binary to stage, overriding `src\obj<flavour>\<archdir>\xhci98.sys`. The
+flavour marker in the image is still checked against -Flavor, so this cannot be
+used to publish one flavour under another's name. Exists for the self-tests,
+which stage text stand-ins carrying a marker and nothing else.
+
 .PARAMETER SkipPackageGate
 Skip the post-staging check-inf.ps1 -PackageDir run only. The INF is gated
 before staging either way, because that run is also where the media layout
@@ -92,7 +107,7 @@ talked into passing a broken driver is worth less afterwards than the clause is
 worth").
 
 It is also loud: the run prints a banner, and the default output directory is
-out\pkg-failstart-<flavor> rather than out\pkg-<flavor>, so the artifact cannot
+out\pkg-failstart-<flavor>-<arch> rather than out\pkg-<flavor>-<arch>, so the artifact cannot
 quietly occupy the path a real package is copied from.
 
 The artifact must be built with XHCI_EXTRA_DEFINES holding that define and
@@ -125,7 +140,7 @@ second INF for src\xhci98.inf to drift from: the date is rewritten in place,
 xhci98.rc is copied beside it so the version cross-check still runs, and the
 gate is invoked with -AllowUnpaddedDriverVer, which relaxes the padding rule and
 nothing else. Like the artifact above it is loud and lands in its own directory,
-out\pkg-datefmt-<flavor>.
+out\pkg-datefmt-<flavor>-<arch>.
 
 Mutually exclusive with -FailStartArtifact: a package varying both the driver's
 behaviour and the INF's date answers neither question.
@@ -702,18 +717,18 @@ a build that was never made.
     # root holds xhci98.inf, an empty directory is fine, and a volume or
     # repository root is never either.
     #
+    # **The volume/repository-root half is settled before anything is built**,
+    # at the top of this script, so that a caller who names one is told before
+    # paying for a host suite and a link. What is left here is the
+    # foreign-directory question, which needs the staged package to exist.
+    # There was a second copy of the root refusal in this block, unreachable
+    # behind the early one and therefore untestable (the 2026-09-16 audit's
+    # D6); the file-not-directory check below is NOT a duplicate and stays.
+    #
     $retired = ""
     if (Test-Path -LiteralPath $OutDir) {
         if (-not (Test-Path -LiteralPath $OutDir -PathType Container)) {
             throw "'$OutDir' exists and is a file, not a directory."
-        }
-        $outRoot = [System.IO.Path]::GetPathRoot($OutDir)
-        if ($OutDir.TrimEnd('\') -eq $outRoot.TrimEnd('\') -or
-            $OutDir.TrimEnd('\') -eq $repo.TrimEnd('\')) {
-            throw @"
-refusing to package into '$OutDir': that is a volume or repository root, and
-this script replaces its output directory wholesale. Name a subdirectory.
-"@
         }
         #
         # **What counts as "a package this script made" is every entry, not one

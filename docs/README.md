@@ -82,8 +82,10 @@ source comments, scripts, and other docs use these same locations.
   rule kept (the Windows 98 log channel, the bare-metal wedge behind the
   PORTSC watchdog, `usbhub.sys` for composite devices, Windows XP's
   two-handle device restore removing the superseded EP0, idle suspend and
-  `DisableSelectiveSuspend`, and the Full-Speed root-port bugcheck), with a
-  list of the next candidates. Narratives distilled from `lessons.md` and the run sheets;
+  `DisableSelectiveSuspend`, the Full-Speed root-port bugcheck, the NT 6.x
+  enable arrest inside usbport's own DPC state machine, and the SMP list-head
+  corruption that came out of completing without the transfer's endpoint
+  lock), with a list of the next candidates. Narratives distilled from `lessons.md` and the run sheets;
   those remain the evidence.
 
 ## Future plans

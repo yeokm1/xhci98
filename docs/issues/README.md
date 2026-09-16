@@ -9,25 +9,37 @@ each page.
 
 Dates are 2026 unless stated. Task ids are the roadmap's.
 
-Issue 8 is newer than any cut: a bugcheck on the Windows XP x64 guest at four
-vCPUs, found on 2026-09-13 while taking issue 7's fix across the NT 5.x legs.
-Its cause was read and a fix run on 2026-09-14 (one run, not yet a leg): this
-driver delivered completions on XP x64 without the transfer's own endpoint
-lock, which XP x64's usbport needs.
+**Issues 7 and 8 are both newer than every cut, and neither is a limitation of
+a published release.** Both were found while preparing `1.1.0.0`, which has not
+been cut: the newest published version is `1.0.2.0` and `releases/` holds no
+`1.1.0.0/` directory. Read any "at the cut" wording on those two pages as
+"before the cut"; what they record is work in progress on this branch.
 
-Issue 7 is open, and it **is** a limitation of `1.1.0.0`: it
-was known at the cut and the cut went ahead on the owner's ruling of
-2026-09-12, because the defect it describes is localised to a code path
-inside `usbport.sys` that a miniport cannot influence. **Two things changed
-that evening and the page carries both.** The reading made a prediction -
-that a single-processor guest would not show the arrest - and **that run
-was taken and the prediction held, five consecutive cycles**, so the
-mechanism is no longer unconfirmed by experiment. And the arrest **also
-reproduced on Windows 7 x64**, so the issue is not x86-only and not a
-property of the 32-bit binary, though the file keeps its `x86` name for
-link stability. What is still unestablished is what usbport is holding, so
-the page continues to refuse the claim that the defect is not this
-driver's.
+Issue 8 is a bugcheck on the Windows XP x64 guest at four vCPUs, found on
+2026-09-13 while taking issue 7's fix across the NT 5.x legs. Its cause was
+read and a fix run on 2026-09-14: this driver delivered completions without the
+transfer's own endpoint lock, which usbport's completion service leaves to its
+caller. The fix was amd64-only for one day. A static read on 2026-09-15 of
+every 32-bit `usbport.sys` this project targets (XP SP3, NUSB 3.3 = 3.6,
+SweetLow, Windows 2000 SP4) found the same unlocked mover and locked reader, so
+the guard was lifted onto the whole 32-bit tier that night, and the 32-bit legs
+have since passed: XP SP3 x86 at four vCPUs under WHPX on 2026-09-15, then
+Windows 98, ME and Windows 2000 single-core under TCG.
+
+Issue 7 was fixed in source on 2026-09-13 and the legs re-run: all four NT 6.x
+guests the same day, then the NT 5.x tier as issue 8's fix reached each
+architecture. Two things the page records are worth carrying here. The reading
+made a prediction - that a single-processor guest would not show the arrest -
+and **that run was taken and the prediction held, five consecutive cycles**, so
+the mechanism is no longer unconfirmed by experiment. And the arrest **also
+reproduced on Windows 7 x64**, so the issue is not x86-only and not a property
+of the 32-bit binary, though the file keeps its `x86` name for link stability.
+
+What stays open on issue 7 is not the defect but two things around it: what
+`usbport.sys` is holding when the enumeration thread parks - unread, so the
+page continues to refuse the claim that the defect is not this driver's - and
+how much of that to say in the release notes, which is roadmap task 22.6 and
+the owner's call.
 
 Issues 1 to 3, 5 and 6 were fixed before `1.0.0.0`, so none of them is a
 limitation of the release; those pages are here for the mechanism and for
@@ -105,7 +117,7 @@ reader.
   still open). That binary carried one import the release build did not,
   `HAL.dll!WRITE_PORT_UCHAR`, the port-`0xE9` writer, and the E460 gave it
   Code 2. Either the import did not resolve or something on that chipset
-  decodes `0xE9`; the P6 binaries of `runs/run-13e.md` were built to separate
+  decodes `0xE9`; the P6 binaries of `../contributing/runs/run-13e.md` were built to separate
   the two and the cause has never been read. What is NOT open is the shipped
   article: the three-flavour split of task 13-L.1 moved every `XHCI_DBG_*`
   site and the `0xE9` mirror into the never-published `qemu` flavour, so the

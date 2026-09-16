@@ -1,4 +1,4 @@
-﻿# xhcisnap - reading this driver's own log off a running machine
+# xhcisnap - reading this driver's own log off a running machine
 
 `XHCISNAP.EXE` reads `xhci98.sys`'s miniport extension and its raw PORTSC array
 from user mode, through usbport's `PassThru` vendor escape, and writes a report
@@ -43,7 +43,9 @@ XHCISNAP -dump -c 1 -o WEDGED   controller 1 to WEDGED.BIN/.PSC/.TXT
 XHCISNAP -disable        exactly -verbosity 0: back to 0, which is off outright
 XHCISNAP -probe          check the ROUTE only, with four controls
 XHCISNAP -help           the long help; bare XHCISNAP prints the short one
-XHCISNAP -force ...      write to a key matched by value NAME alone
+XHCISNAP -force ...      write to a key matched by value NAME alone. It is a
+                         modifier on -verbosity / -disable only: on its own it
+                         asks for nothing and is refused with exit 2
 ```
 
 The ladder: 0 off; 1 the channel with counters only and the ring still off;
@@ -51,7 +53,8 @@ The ladder: 0 off; 1 the channel with counters only and the ring still off;
 to the `.TXT`; 4 adds everything including kernel addresses.
 
 The published sequence is four steps and none of them is `regedit`:
-`-verbosity 2`, restart, reproduce, `-o C:\NAME`. There is one value to set.
+`-verbosity 2`, restart, reproduce, `-o C:\NAME` (`-o` and `-c` each imply
+`-dump`, so the last step needs no flag of its own). There is one value to set.
 `-verbosity N` sets exactly N, up or down, and is the only knob.
 
 `-verbosity N` prints each key's previous level beside the write. A value out
@@ -106,8 +109,10 @@ the same moment. So `-c` naming the wrong controller, or a channel that was
 never switched on, leaves `NAME.BIN`, `NAME.PSC` and `NAME.TXT` as they were,
 rather than truncating the first and leaving the other two beside it looking
 like a set. A failure during publication is loud: if either rename fails the
-tool deletes both final raw names and says no dump was published, so what is
-left is an absence and not a mixture.
+tool deletes both final raw names **and the old `.TXT`** and says no dump was
+published, so what is left is an absence and not a mixture. (The `.TXT` was
+left standing on that branch until the 2026-09-16 audit, which made the newest
+file in the directory a report of a set that had just been deleted.)
 
 The PORTSC decode is printed on screen whatever the level, because that is what
 the bench reads on the spot. The headline test is per port: a port reporting a
@@ -115,12 +120,23 @@ device connected with `PP` clear is Finding Q read off the register, whatever
 the other ports say.
 
 The exit code says whether the `.TXT` is the report. There are four, not two.
-`1` is a route failure: `\\.\HCD0` would not open, or `-probe` ran and
-published no dump - nothing was attempted. `2` is a usage error: no arguments
-at all (which prints the short usage), a bad `-verbosity` value, or one of the
-refused flag combinations - `-verbosity` with `-disable`, which are opposites,
-or either of those with `-probe` or `-dump`, which read the driver rather than
-setting it. `0` means the file was
+
+`1` is **anything the run attempted and could not finish**: `\\.\HCD0` would
+not open, `-probe` ran and published no dump, the driver refused the window or
+answered with a schema this build does not know, a publish rename failed, or a
+`-verbosity` / `-disable` registry write failed.
+
+`2` is a usage error, and it covers more than the flag combinations: no
+arguments at all (which prints the short usage), a `-c` or `-verbosity`
+argument that is not a whole number, a `-verbosity` above the ladder's top, an
+`-o` basename too long for the three names built from it, a
+`-selftest-report` basename too long, an unrecognised flag, `-force` with
+nothing to modify, and the refused combinations - `-verbosity` with `-disable`,
+which are opposites, or either of those with `-probe` or `-dump`, which read
+the driver rather than setting it. **`-dump` is implied by `-c` and by `-o`**,
+so those combinations are refused under the implied spelling too.
+
+`0` means the file was
 created and every write and the close reached the volume. `3` means it was
 not created (the summary line reads `NOT CREATED`; the report went to the
 screen), or it was created but not completed (a full or removed destination;

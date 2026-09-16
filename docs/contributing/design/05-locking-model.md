@@ -23,7 +23,8 @@ same thing:
 | Context | IRQL | usbport lock held | Reaches |
 |---|---|---|---|
 | Lifecycle (`StartController`, `StopController`, `Suspend`/`ResumeController`) | PASSIVE | none for start; power paths vary | everything |
-| Callbacks (endpoint open/close/state, submit/abort, root-hub status queries, `CheckController`, `Get32BitFrameNumber`, `Enable`/`DisableInterrupts`) | DISPATCH | `MiniportSpinLock` | command state, flags, MMIO |
+| Callbacks (endpoint open/close/state, submit/abort, `CheckController`, `Get32BitFrameNumber`, `Enable`/`DisableInterrupts`) | DISPATCH | `MiniportSpinLock` | command state, flags, MMIO |
+| Root-hub status queries (`RH_GetRootHubData`, `RH_GetStatus`, `RH_GetPortStatus`, `RH_GetHubStatus`) | **PASSIVE on NT 6.x**, DISPATCH on NT 5.x | **none on NT 6.x**, `MiniportSpinLock` on NT 5.x | port shadow, `PORTSC` |
 | `InterruptDpc` | DISPATCH | `MiniportInterruptsSpinLock` | event ring, command completion, ERDP, IMAN |
 | `InterruptService` (ISR) | DIRQL | none; usbport's own ISR gate only | USBSTS, IMAN |
 | Async timer callbacks (`UsbPortRequestAsyncCallback`) | DISPATCH | neither | command state, CRCR |
@@ -191,9 +192,10 @@ So the ISR is excluded from nothing, and the design has to make exclusion
 unnecessary rather than pretend to it. It does that in three ways.
 
 It is stateless in the sense that matters. It reads `USBSTS`, writes
-`USBSTS.EINT`, read-modify-writes `IMAN`, and writes three diagnostic fields
-(`InterruptCount`, `LastIsrStatus`, `InterruptsClaimed`) which nothing
-branches on. It reads `Flags`, `ControllerFailed`, `HcInfoStatus` and
+`USBSTS.EINT`, read-modify-writes `IMAN`, and writes four diagnostic fields
+(`InterruptCount`, `LastIsrStatus`, `InterruptsClaimed`,
+`IsrImanLiteralAcks`) which nothing branches on - the same four section 9
+lists, where this said three. It reads `Flags`, `ControllerFailed`, `HcInfoStatus` and
 `InterruptDeliverySuppressed` as gates, and writes none of them; it touches no
 ring and no command state.
 
@@ -357,7 +359,8 @@ plus the three non-callback entry points, not from recall.
 | `OpenEndpoint` / `ReopenEndpoint` / `SetEndpointState` / `PollEndpoint` | DISPATCH, `MiniportSpinLock`; `SetEndpointState` and `PollEndpoint` also under usbport's EpList lock on NT 6.x (reached through `USBPORT_SetGlobalEndpointState` and the HcInt worker's `iSetGlobalEndpointStateTx`, static), which is why they are two of the three callbacks the 300 tier delivers completions from (section 7) | endpoint record, its ring and queue, the quiesce state | the controller lock; the Configure/Stop/Set TR Dequeue commands are issued under it and nothing waits. A handle the record is bound to a different extension than is declined under the same lock (`xhciEpHandleSuperseded`, roadmap Phase 20, F1), except a `PAUSED` from a handle that still owns queued work (`xhciEpHandleOwnsWork`), which starts the stop that handle's abort needs |
 | `CloseEndpoint` / `GetEndpointState` / `QueryEndpointRequirements` | DISPATCH, `MiniportSpinLock` | the probe's counters only | the controller lock, taken inside `XhciProbeEndpoint` (`src/xhci_probe.c`); no record is read or written, and neither shipping build calls the first two |
 | `GetEndpointStatus` / `SetEndpointStatus` / `SetEndpointDataToggle` | DISPATCH, `MiniportSpinLock` | the record's quiesce state (the status pair); a counter (the toggle) | the controller lock; the reset-pipe chain is armed under it and driven by the deferred pass, and a superseded handle is declined |
-| `RebalanceEndpoint` / `StartSendOnePacket` / `EndSendOnePacket` | DISPATCH, `MiniportSpinLock` | a counter and a trace line | no register, no record, no lock needed |
+| `RebalanceEndpoint` | DISPATCH, `MiniportSpinLock` | a counter and a trace line | no register, no record, no lock needed |
+| `StartSendOnePacket` / `EndSendOnePacket` | **PASSIVE, assumed rather than measured** - neither shipping build has been seen to call either, and the code says so where it declines them | **nothing at all**: they trace and return `MP_STATUS_NOT_SUPPORTED`, and carry no counter | no register, no record, no lock needed |
 | `PassThru` | <= DISPATCH, the caller's context | the whole extension and the PORTSC array, read only | the controller lock across the whole snapshot (design record 08 section 13); acknowledges nothing |
 | `SubmitTransfer` | DISPATCH, `MiniportSpinLock` | transfer queue, ring, `SubmitEpoch` | the controller lock; the completion is deferred out of the submit bracket (section 7) rather than made inside it |
 | `SubmitIsoTransfer` | DISPATCH, `MiniportSpinLock` | as `SubmitTransfer` | reached through the same routine as `SubmitTransfer`, under the same lock at the same IRQL, so it follows that row's rules rather than needing its own (task 9-A.1). Listed separately so its absence from the rules is not read as an omission |
@@ -460,6 +463,15 @@ This paragraph used to say they "do run under `MiniportSpinLock`"; on NT 6.x
 they do not - `USBPORT_RootHub_ClassCommand` calls `RH_GetPortStatus` and
 `RH_GetHubStatus` directly at the URB dispatcher's IRQL, measured as 0 by
 this driver's callback log on Windows 7 x86 and x64 (issue 7 section 7).
+
+**`RH_GetHubStatus` is the second callback that takes no lock of this
+driver's either, and the list above named only `RH_GetStatus`** (the
+2026-09-16 audit's E2). It writes `ext->RhHubStatusQueries++` outside the
+controller lock, and the argument that makes that sound is in its own comment
+rather than here: this driver has exactly ONE writer of that counter - that
+line - and every other reference is a read. What the rule forbids is a counter
+with two disciplines, not one without a lock. `RH_GetStatus` is a constant and
+touches nothing at all.
 Either way nothing else serializes them against the DPC.
 `UsbPortInvalidateRootHub` is a usbport service: decide under the lock,
 call after releasing.
@@ -602,7 +614,9 @@ service unlinks the transfer from its endpoint's list before that insert
 with no lock of its own, while usbport walks that list under the endpoint's
 lock, so on XP x64 a completion is delivered only from a callback for its
 own endpoint (`XHCI_EXTENSION.DeliverPerEndpointOnly`, below). The 32-bit
-NT 5.x services have not been read for the same unlink.
+NT 5.x services **have since been read for the same unlink, and they have it**
+(issue 8 section 4d, 2026-09-15): XP SP3, NUSB 3.3 = 3.6, SweetLow's and
+Windows 2000 SP4's, all static.
 
 The rule the driver now carries (`XHCI_EXTENSION.DeliverUnderUsbportLockOnly`,
 `src/xhci_slot.c` `XhciSlotDeferredWork`):
@@ -615,7 +629,7 @@ The rule the driver now carries (`XHCI_EXTENSION.DeliverUnderUsbportLockOnly`,
   lock and re-enters no miniport slot (batch 7a-V), so it is innermost too.
 - **On the Version 300 tier, a completion leaves the list only from inside
   `PollEndpoint`, `AbortTransfer` or `SetEndpointState`** (their drains are
-  `XhciSlotDeferredWorkLocked`; the admission is an argument of the call
+  `XhciSlotDeferredWorkForEndpoint`; the admission is an argument of the call
   rather than a field, because a per-controller counter would admit another
   CPU's event DPC for as long as one CPU sat inside an abort;
   `SubmitTransfer`'s own hold already parks everything until it returns).
@@ -635,12 +649,20 @@ The rule the driver now carries (`XHCI_EXTENSION.DeliverUnderUsbportLockOnly`,
   accepted over a request that never completes; a nonzero
   `completion fallback polls` during ordinary traffic means usbport stopped
   polling an endpoint that still owed work.
-- The 32-bit 200 tier is unchanged but for the raise.
-- **The amd64 200 tier (XP x64, Server 2003 x64) sets the gate and
-  `DeliverPerEndpointOnly` with it** (issue 8): a locked callback delivers
-  only its own endpoint's oldest completion, any other pass leaves it parked
-  and calls `UsbPortInvalidateEndpoint` for the endpoint that owes it, and
-  the fallback and forced drains are as above.
+- **The WHOLE Version 200 tier sets the gate and `DeliverPerEndpointOnly`
+  with it**, in both architectures (issue 8): a locked callback delivers only
+  its own endpoint's oldest completion, any other pass leaves it parked and
+  calls `UsbPortInvalidateEndpoint` for the endpoint that owes it, and the
+  fallback and forced drains are as above. `src/xhci_dispatch.c` sets both
+  flags for every Version 200 load with no `_WIN64` guard.
+
+  It was amd64-only for one day. Read out of XP x64 first and guarded
+  `_WIN64`; then on 2026-09-15 XP SP3 x86 livelocked on the same race (issue
+  7 section 7.9) and the other 32-bit builds - NUSB's, SweetLow's, Windows
+  2000 SP4's - were read to share the unlocked mover and the locked reader
+  (issue 8 section 4d), so the guard was lifted onto the whole tier that
+  night. This entry and the summary table said amd64-only until the
+  2026-09-16 audit.
 
 The suite holds it with two never-reset nets - the service is never called
 outside the delivery lock, and the delivery lock is never nested or taken
@@ -807,19 +829,29 @@ link -dump -headers  src\objfre\i386\xhci98.sys
 link -dump -rawdata:bytes -section:.data src\objfre\i386\xhci98.sys
 ```
 
-Measured at the batch 11-A tip: the release build has exactly three writable
-process-global objects, and its whole `.data` section reads as zero (348
+Measured at the batch 11-A tip: the release build had exactly three writable
+process-global objects, and its whole `.data` section read as zero (348
 bytes: 324 of objects, the rest section padding). Zero-filled is the stronger
 statement of the two. It means no initialised writable global exists anywhere
 in the image, so there is no table, cache or default that a second controller
 could find already populated by the first.
+
+**That measurement is out of date in both halves, and the table below now
+carries six objects** (the 2026-09-16 audit's E2). Three post-date the sweep,
+and one of them is initialised and nonzero - `XhciResourcesRequired` - so the
+"`.data` reads as zero" claim no longer holds as written. Re-run the
+`link -dump -symbols` sweep before quoting a count or a section size from this
+section; what the table argues about each object is independent of the sweep
+and stands.
 
 | Object | Bytes | What it is | Why process-global is correct |
 |---|---|---|---|
 | `xhciControllerLock` (`src/xhci_cmd.c`) | 4 | The one `KSPIN_LOCK`, section 2 | It carries no controller information at all. It is a mutual-exclusion primitive, and the alternative (a lock in the extension) is the race section 2 exists to remove. Two controllers serialize against each other; that is a throughput cost, not shared state |
 | `xhciStartEpoch` (`src/xhci_cmd.c`) | 4 | The start-token allocator | A token source, not a count of anything. No controller's behaviour depends on its value; each extension records the token it was handed, and every comparison is for equality. Allocated with `InterlockedIncrement` because it is shared and PnP can start two controllers at once |
 | `XhciRegPacket` (`src/xhci_dispatch.c`) | 316 | The registration packet | Write-once, before registration, and read-only for the life of the load. Every assignment to it is inside `xhciFillPacket`, whose only caller in a shipping image is `DriverEntry` (the second caller is `XhciFillPacketForTest`, compiled only under `XHCI_HOST_TEST`). It is also the service table the miniport calls through, so the ABI record says to keep it global |
-| `xhciDeliveryLock` (`src/xhci_cmd.c`), added 2026-09-13 after the sweep above was taken | 4 | The second `KSPIN_LOCK`, section 7 "Where a completion may be handed over" | The same argument as the first: a mutual-exclusion primitive carrying no controller information, held across one usbport service call so that the call is made at DISPATCH_LEVEL from every context. Two controllers serialize their completion hand-overs against each other, which is a throughput cost and not shared state. The sweep's "exactly three" is the batch 11-A measurement and now reads four |
+| `xhciDeliveryLock` (`src/xhci_cmd.c`), added 2026-09-13 after the sweep above was taken | 4 | The second `KSPIN_LOCK`, section 7 "Where a completion may be handed over" | The same argument as the first: a mutual-exclusion primitive carrying no controller information, held across one usbport service call so that the call is made at DISPATCH_LEVEL from every context. Two controllers serialize their completion hand-overs against each other, which is a throughput cost and not shared state |
+| `XhciResourcesRequired` (`src/xhci_dispatch.c`), added after the sweep | 4 | `MEMORY \| INTERRUPT`, the resource mask handed to usbport at registration | **The one INITIALISED writable global, so it is why the ".data reads as zero" claim above no longer holds.** It is non-const because M10 found the NT 6.x bit values differ from the NT 5.x ones, so the mask is chosen at `DriverEntry` from the interface version and cannot be a compile-time constant. Written once, in `DriverEntry`, before any controller exists; read by the packet fill. It carries no controller information - it is a statement about the usbport this image registered with, which is one thing per load |
+| `xhciInterfaceVersionPresented` (`src/xhci_dispatch.c`), added after the sweep | 4 | Which miniport interface version this load registered under | Write-once in `DriverEntry`, on the same line of reasoning as the object above and for the same reason: the version is a property of the `usbport.sys` this image bound to, not of a controller, and every controller started by this load registered through it. It is branched on at `StartController` to set the two delivery gates, which is a read of a value that cannot change after the write that precedes registration. **The write-once argument is the whole of its safety**, and it is stated here because a second writer would make it per-controller state in a process-global slot |
 
 The verdict is pass, and it rests on a distinction worth stating because the
 rule can be read as banning all three. What the rule forbids is controller

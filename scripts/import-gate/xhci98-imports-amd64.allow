@@ -77,7 +77,10 @@
 # THE ROWS
 # ---------------------------------------------------------------------------
 #
-# Five kernel/HAL pairs, against x86's nine plus the qemu row. The USBPORT.SYS
+# Six kernel/HAL pairs, against x86's ten plus the qemu row - the sixth on each
+# side is IoIsWdmVersionAvailable, which arrived here with task 21.8 and on the
+# x86 side with task 22.5, and the header said five while listing six (the
+# 2026-09-16 audit's E4). The USBPORT.SYS
 # pairs are NOT listed here for the same reason they are not listed there: they
 # are read from scripts\usbport-lib\usbport-imports.expected, which the .def
 # and both import libraries are generated from, so a second hand-maintained

@@ -84,10 +84,14 @@ do not re-read the field. The version predicates are essential:
 `ServiceKeyName` is also nonempty on Win2000, and WinMe is WDM 1.05, so the
 field test alone does not identify Win98 SE.
 
-This driver allocates no pool at all, so neither name is called: the import
-allowlist has no row for `ExAllocatePool` or for either tagged name, and a
-call to any of them fails the import gate as "not in the allowlist"
-(`AGENTS.md`, "Allocate no pool at all"). Option A needs no private pool -
+This driver allocates no pool at all, so neither name is called, and the import
+gate refuses all four - but by two different routes, which is worth knowing
+when you are reading a gate failure. `ExAllocatePoolWithTag` and
+`ExFreePoolWithTag` have **deny rows**, so they fail as `DENIED:` with the
+reason attached; `ExAllocatePool` and `ExFreePool` have **no row at all**, so
+they fail as `not in the allowlist` (`AGENTS.md`, "Allocate no pool at all").
+The table further down this page has this right; this paragraph said all four
+had no row until the 2026-09-16 audit's E9. Option A needs no private pool -
 fixed software metadata lives in the usbport-allocated miniport and
 common-buffer extensions. The local-DDK macro trap below still matters,
 because the compatibility header undoes the DDK's `POOL_TAGGING` rewrite so

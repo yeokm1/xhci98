@@ -119,6 +119,16 @@ function Test-ProbeDeviceAttached {
     # than false, and that is not this check's finding: most USB models have
     # no such property and are on the bus the moment they realise. Only an
     # explicit false counts against a device.
+    #
+    # **This is deliberately looser than `Confirm-DeviceAttached` in
+    # run-matrix.ps1, which requires an explicit `true` and reports anything
+    # else as unreadable.** The two ask the same question of different
+    # populations: the runner asks it of the handful of models the matrix
+    # names, all of which carry the property, and a silence there means the
+    # monitor is not answering. This asks it of every model QEMU has, most of
+    # which do not carry it, and treating that silence as a failure would
+    # disqualify the majority of the survey. Stated because the difference
+    # reads as an oversight otherwise (the 2026-09-16 audit's D4).
     return (-not ($state -match "(?i)\bfalse\b"))
 }
 

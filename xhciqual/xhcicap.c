@@ -113,9 +113,15 @@ int xhci_map(CTRL *c)
      * in I/O space - 5.2.1 requires a memory BAR - so this is a refusal for a
      * controller that is misdescribing itself, and a refusal is the right answer
      * to that. */
-    if (c->pci.bar_hi != 0 || c->pci.bar_phys == 0 ||
-        (c->pci.bar_lo & 1) != 0)
-        return 0;                       /* above 4 GB, unassigned, or I/O space */
+    if (c->pci.bar_hi != 0 || c->pci.bar_phys == 0)
+        return 0;                       /* above 4 GB or unassigned */
+    if ((c->pci.bar_lo & 1) != 0) {
+        /* Named rather than left to report_mmio_dead's "undetermined": this is
+         * a controller misdescribing itself, not a dead window. */
+        c->pci.mmio_reason = "BAR0 selects I/O space, and xHCI 5.2.1 requires "
+                             "a memory BAR - refusing to map it as memory";
+        return 0;
+    }
 
     c->base = (volatile u8 *)dpmi_map_phys(c->pci.bar_phys, BAR_MAP_SIZE);
     if (c->base == 0)
@@ -127,8 +133,12 @@ int xhci_map(CTRL *c)
         goto unmap;                     /* not decoding (MSE off? D3?) */
     c->caplength  = (u8)(dw & 0xFF);
     c->hciversion = (u16)(dw >> 16);
-    if (c->caplength == 0 || c->hciversion < 0x0090)
+    if (c->caplength == 0 || c->hciversion < 0x0090) {
+        c->pci.mmio_reason = "the capability registers decode, but CAPLENGTH "
+                             "is 0 or HCIVERSION is below 0.90 - this is not "
+                             "an xHCI register block";
         goto unmap;
+    }
 
     c->hcs1 = RD32(c->base + XCAP_HCSPARAMS1);
     c->hcs2 = RD32(c->base + XCAP_HCSPARAMS2);
@@ -148,8 +158,15 @@ int xhci_map(CTRL *c)
      * operational block (PORTSC for MAX_PORTS ports), runtime, doorbells. */
     if ((u32)c->caplength + XOP_PORTSC(MAX_PORTS) + 0x10UL > BAR_MAP_SIZE ||
         c->rtsoff == 0 || c->rtsoff > BAR_MAP_SIZE - 0x40UL ||
-        c->dboff == 0 || c->dboff > BAR_MAP_SIZE - doorbell_bytes)
+        c->dboff == 0 || c->dboff > BAR_MAP_SIZE - doorbell_bytes) {
+        /* A TOOL LIMIT, and it must not read as dead silicon: this tool maps a
+         * fixed 64 KB window and this controller puts its runtime, doorbell or
+         * port registers outside it. */
+        c->pci.mmio_reason = "the runtime, doorbell or port registers sit "
+                             "outside the fixed 64 KB window this tool maps - "
+                             "a tool limit, not a controller fault";
         goto unmap;
+    }
 
     c->op = c->base + c->caplength;
     c->rt = c->base + c->rtsoff;

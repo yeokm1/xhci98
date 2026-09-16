@@ -119,13 +119,17 @@ struct _XHCI_SETUP_PACKET;
 #define XHCI_TOPO_REQ_CLEAR_FEATURE 0x01U
 #define XHCI_TOPO_REQ_SET_FEATURE   0x03U
 #define XHCI_TOPO_REQ_GET_DESCRIPTOR 0x06U
+/* Named for completeness beside the request type above; the graph matches
+ * SET_INTERFACE on `XHCI_TOPO_RT_SET_INTERFACE` and does not read this. */
 #define XHCI_TOPO_REQ_SET_INTERFACE 0x0BU
 
 /*
  * Port feature selectors, measured on the bus (see the file header) rather than
- * transcribed from a specification this repository does not hold. Only the four
+ * transcribed from a specification this repository does not hold. Only the two
  * the graph acts on are named; the rest are deliberately absent, because a
- * constant nothing reads is a constant nobody checks.
+ * constant nothing reads is a constant nobody checks. *(It said four, and two
+ * are defined - the 2026-09-16 audit's B10, which is the rule catching itself
+ * rather than an exception to it.)*
  */
 #define XHCI_TOPO_SEL_PORT_RESET    4U
 #define XHCI_TOPO_SEL_PORT_POWER    8U

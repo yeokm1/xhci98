@@ -1240,11 +1240,42 @@ try {
                              "[Xhci.Dev]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
     } -Source $prodInfAmd64 -Arch amd64
 
+    #
+    # **And the two DECORATED spellings a 32-bit engine reaches BEFORE the
+    # undecorated one** (the 2026-09-16 audit's D7). The fallback chain is
+    # .NTx86, then .NT, then the bare name, so `[Xhci.Dev.NTx86]` in the 64-bit
+    # file is not a fallback at all - it is the section that engine was looking
+    # for. Both were accepted while only the bare name was refused, which made
+    # the rule read as "do not rely on the fallback" when what it means is "a
+    # 32-bit engine must find nothing here".
+    #
+    Assert-RuleFires "amd64-ntx86-dev" "PATH-NO9X" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=",
+                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    Assert-RuleFires "amd64-nt-dev" "PATH-NO9X" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=",
+                             "[Xhci.Dev.NT]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
+    } -Source $prodInfAmd64 -Arch amd64
+
     # The same hazard on the right-click route, which is the one a user takes
     # with no device present - so nothing about the hardware stops it.
     Assert-RuleFires "amd64-undecorated-default" "OS-DEFAULT" {
         param($t) $t.Replace("[DefaultInstall.NTamd64]`r`nCopyFiles=",
                              "[DefaultInstall]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    # ...and its two decorated siblings, for the reason the device-install pair
+    # above gives.
+    Assert-RuleFires "amd64-ntx86-default" "OS-DEFAULT" {
+        param($t) $t.Replace("[DefaultInstall.NTamd64]`r`nCopyFiles=",
+                             "[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    Assert-RuleFires "amd64-nt-default" "OS-DEFAULT" {
+        param($t) $t.Replace("[DefaultInstall.NTamd64]`r`nCopyFiles=",
+                             "[DefaultInstall.NT]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
     } -Source $prodInfAmd64 -Arch amd64
 
     # And the right-click section going missing altogether, which halves the

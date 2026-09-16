@@ -445,6 +445,34 @@ static void test_dead_causes(void)
     reset_out();
     report_mmio_dead(&p);
     CHECK(has("undetermined"), "all checks clean reports undetermined");
+
+    /*
+     * **A reason the mapper recorded wins over every reconstruction below it**
+     * (the 2026-09-16 audit's C5). Three of the mapper's refusals - an
+     * I/O-space BAR, a CAPLENGTH of 0 or an HCIVERSION below 0.90, and a
+     * register block past the fixed 64 KB window - leave PCI state looking
+     * perfectly healthy, so every one of them used to print "undetermined" and
+     * be read as dead silicon. They are readings about the tool or about a
+     * controller misdescribing itself.
+     */
+    base_pci(&p);
+    p.mmio_reason = "the runtime registers sit outside the window this tool "
+                    "maps - a tool limit, not a controller fault";
+    reset_out();
+    report_mmio_dead(&p);
+    CHECK(has("a tool limit"), "a recorded reason is printed");
+    CHECK(!has("undetermined"), "and displaces the undetermined fallback");
+
+    /* And it is preferred even where a PCI-state cause could be reconstructed,
+     * because it is the reason the code actually took. */
+    base_pci(&p);
+    p.cmd_effective = 0;
+    p.mmio_reason = "BAR0 selects I/O space";
+    reset_out();
+    report_mmio_dead(&p);
+    CHECK(has("I/O space"), "the mapper's own reason is the proximate one");
+    CHECK(!has("Memory Space Enable is clear"),
+          "and the reconstructed cause is not printed beside it");
 }
 
 /* The verdict classifier: only genuine hardware/platform blockers may return

@@ -250,9 +250,23 @@ typedef ULONG RHSTATUS;
  * structure at `0x48` with `StartPA` still a 4-byte `ULONG` at `0x40`, and
  * that is exactly what this declaration produces on both architectures; a
  * `ULONG` here would give `0x40` and put every field from `ShareVector` on at
- * the wrong offset. The offsets in the right-hand column are x86; the amd64
- * ones are the same through `InterruptVector` and 8 higher from `ShareVector`
- * onward.
+ * the wrong offset.
+ *
+ * **The offsets in the right-hand column are x86, and the amd64 ones do not
+ * move by one constant.** Each pointer-sized member takes its own alignment, so
+ * the drift accumulates: identical through `InterruptLevel`, then `ShareVector`
+ * / `InterruptMode` / `Reserved` are +4 (`0x18` / `0x1C` / `0x20`),
+ * `ResourceBase` is +8 (`0x28`), `IoSpaceLength` +12 (`0x30`), `StartVA` +16
+ * (`0x38`), and `StartPA` and everything after it +20 - `StartPA` at `0x40`,
+ * which is the offset M4 measured. *(This said "8 higher from `ShareVector`
+ * onward", which is true of no field: the 2026-09-16 audit's B10.)*
+ *
+ * **Only two of those are measured.** M4 read `sizeof` = `0x48` and `StartPA`
+ * = `0x40` out of the shipping amd64 `usbport.sys`; the rest are what this
+ * declaration lays out, and they are consistent with both readings rather than
+ * separately confirmed. The compile-time asserts at the foot of this file pin
+ * the size on each architecture, which is what makes a silent divergence in the
+ * middle of the structure impossible to reach without moving the end of it.
  */
 typedef struct _USBPORT_RESOURCES {
     ULONG ResourcesTypes;       /* 0x00 PORT|INTERRUPT|MEMORY bitmask       */
@@ -685,7 +699,35 @@ typedef VOID (NTAPI *PHCI_TAKE_PORT_CONTROL)(PVOID);
 typedef ULONG (*PUSBPORT_DBG_PRINT)(PVOID, ULONG, PCHAR, ...);  /* cdecl! */
 typedef ULONG (NTAPI *PUSBPORT_TEST_DEBUG_BREAK)(PVOID);
 typedef ULONG (NTAPI *PUSBPORT_ASSERT_FAILURE)(PVOID, PVOID, PVOID, ULONG, PCHAR);
-typedef MPSTATUS (NTAPI *PUSBPORT_GET_MINIPORT_REGISTRY_KEY_VALUE)(PVOID, ULONG, PVOID, ULONG, PVOID, ULONG);
+/*
+ * **Arguments 4 and 6 are `SIZE_T`, not `ULONG`, and on amd64 that is a
+ * difference rather than a spelling.** `usbmport.h` lines 416-423 and the
+ * abi record's argument-by-argument table both say `SIZE_T`: argument 4 is the
+ * value name's byte length and argument 6 the number of bytes copied, and the
+ * callee uses them as `arg4 + arg6 + 0x18` for its allocation and as the
+ * unconditional copy length.
+ *
+ * On x86 the two widths are the same and this declaration was harmless. On
+ * amd64 argument 6 is the second *stack* argument: a caller typed `ULONG`
+ * stores four bytes into an eight-byte home slot and a callee compiled for
+ * `SIZE_T` reads all eight, so the copy length is four bytes of the caller's
+ * intent and four bytes of whatever the loader left there. `ULONG_PTR` is the
+ * width on both - identical to `ULONG` on x86, so the 32-bit binary does not
+ * move - and the call sites cast rather than passing `sizeof`, which is
+ * already `SIZE_T`-typed but says so nowhere a reader can see.
+ *
+ * **Unmeasured on the tier it matters on.** No run has read the log channel on
+ * the XP x64 guest, and there is no static read of that build's thunk behind
+ * this: it is taken from the declaration and the x86 reading, so
+ * `legal-provenance.md` gains no row for it. What the narrowing could have
+ * produced there is either both switches reading 0 - so `XhciLogVerbosity`
+ * could never open the snapshot channel on x64 - or an oversized copy into a
+ * four-byte local. The same widening is applied to the two other services
+ * whose declarations carry a `SIZE_T`, where it is inert: argument 4 of
+ * `UsbPortRequestAsyncCallback` is register-passed on amd64, and
+ * `UsbPortNotifyDoubleBuffer` is not called by this driver at all.
+ */
+typedef MPSTATUS (NTAPI *PUSBPORT_GET_MINIPORT_REGISTRY_KEY_VALUE)(PVOID, ULONG, PVOID, ULONG_PTR, PVOID, ULONG_PTR);
 typedef ULONG (NTAPI *PUSBPORT_INVALIDATE_ROOT_HUB)(PVOID);
 typedef ULONG (NTAPI *PUSBPORT_INVALIDATE_ENDPOINT)(PVOID, PVOID);
 typedef VOID (NTAPI *PUSBPORT_COMPLETE_TRANSFER)(PVOID, PVOID, PVOID, XHCI_USBD_STATUS, ULONG);
@@ -706,12 +748,12 @@ typedef ULONG (NTAPI *PUSBPORT_COMPLETE_ISO_TRANSFER)(PVOID, PVOID, PVOID, PVOID
 typedef ULONG (NTAPI *PUSBPORT_LOG_ENTRY)(PVOID, ULONG, ULONG, ULONG, ULONG, ULONG);
 typedef PVOID (NTAPI *PUSBPORT_GET_MAPPED_VIRTUAL_ADDRESS)(ULONG, PVOID, PVOID);
 typedef VOID (NTAPI XHCI_ASYNC_TIMER_CALLBACK)(PVOID, PVOID);
-typedef ULONG (NTAPI *PUSBPORT_REQUEST_ASYNC_CALLBACK)(PVOID, ULONG, PVOID, ULONG, XHCI_ASYNC_TIMER_CALLBACK *);
+typedef ULONG (NTAPI *PUSBPORT_REQUEST_ASYNC_CALLBACK)(PVOID, ULONG, PVOID, ULONG_PTR, XHCI_ASYNC_TIMER_CALLBACK *);
 typedef MPSTATUS (NTAPI *PUSBPORT_READ_WRITE_CONFIG_SPACE)(PVOID, BOOLEAN, PVOID, ULONG, ULONG);
 typedef LONG (NTAPI *PUSBPORT_WAIT)(PVOID, ULONG);
 typedef ULONG (NTAPI *PUSBPORT_INVALIDATE_CONTROLLER)(PVOID, ULONG);
 typedef VOID (NTAPI *PUSBPORT_BUG_CHECK)(PVOID);
-typedef ULONG (NTAPI *PUSBPORT_NOTIFY_DOUBLE_BUFFER)(PVOID, PVOID, PVOID, ULONG);
+typedef ULONG (NTAPI *PUSBPORT_NOTIFY_DOUBLE_BUFFER)(PVOID, PVOID, PVOID, ULONG_PTR);
 
 /* ------------------------------------------------------------------ */
 /* USBPORT_REGISTRATION_PACKET                                         */

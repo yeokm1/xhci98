@@ -243,7 +243,7 @@ $specs['mouse'] = $specs['mouse-hs']
 # in run-matrix.ps1), so the prep pass presents what the run will present.
 $children = @{
     'bot' = 'scsi-hd,id=prep_bot_lun,bus=prep_bot.0,drive=prepdrv2'
-    'uas' = 'scsi-hd,id=prep_uas_lun,bus=prep_uas.0,drive=prepdrv2,scsi-id=0,lun=0'
+    'uas' = 'scsi-hd,id=prep_uas_lun,bus=prep_uas.0,drive=prepdrv3,scsi-id=0,lun=0'
 }
 
 # The QEMU id one of these rows will create, so `-Detach` can be given the same
@@ -468,10 +468,15 @@ if ($Boot) {
 
     $scratch = Join-Path $outDir ("prep-{0}-scratch.img" -f $Target)
     if (-not (Test-Path $scratch)) { $fs = [IO.File]::Create($scratch); $fs.SetLength(64MB); $fs.Close() }
-    # A second scratch for the SCSI children ($children): a drive node can back
-    # exactly one device at a time, and `storage` may still be on the first.
+    # A scratch per consumer: a block node can back exactly one device at a
+    # time, so `storage`, `bot` and `uas` need one each.  `bot` and `uas` shared
+    # `prepdrv2` until the 2026-09-16 audit's D3, which made `-Attach bot` then
+    # `-Attach uas` refuse loudly - and README trap 15 says "a second scratch
+    # drive" as though two were enough.
     $scratch2 = Join-Path $outDir ("prep-{0}-scratch2.img" -f $Target)
     if (-not (Test-Path $scratch2)) { $fs = [IO.File]::Create($scratch2); $fs.SetLength(64MB); $fs.Close() }
+    $scratch3 = Join-Path $outDir ("prep-{0}-scratch3.img" -f $Target)
+    if (-not (Test-Path $scratch3)) { $fs = [IO.File]::Create($scratch3); $fs.SetLength(64MB); $fs.Close() }
     if (Test-Path -LiteralPath $dbg) { Remove-Item -LiteralPath $dbg -Force }
     # Written where the DEFAULT OutDir is, so a later -Status finds it without
     # having to be told -WorkDir again.  The second line is the image this
@@ -578,8 +583,22 @@ if ($Boot) {
         # first sweep: `Port 4.1` for the fifth attach.  p3=0 keeps every port
         # USB 2.0, since a Full Speed device cannot attach to a SuperSpeed one.
         "-device", "qemu-xhci,id=xhci,p2=8,p3=0",
-        "-drive", ("if=none,id=prepdrv,file={0},format=raw" -f $scratch),
-        "-drive", ("if=none,id=prepdrv2,file={0},format=raw" -f $scratch2),
+        # THE SCRATCH DISKS ARE -blockdev NODES, NOT -drive if=none, for the
+        # reason run-matrix.ps1 gives at its own declaration: QEMU auto-deletes
+        # a `-drive if=none` backend when the device holding it is unplugged, so
+        # an Attach / Detach / Attach of the same row answers
+        # `Property 'usb-storage.drive' can't find value 'prepdrv'` the second
+        # time.  A node name declared with -blockdev is accepted by `drive=` and
+        # survives the unplug.  The run path moved to -blockdev at repo audit
+        # S-1; the prep path did not, and it drives exactly the same devices
+        # through exactly the same monitor commands (the 2026-09-16 audit's D3).
+        #
+        # One node per consumer, because a node may back exactly one device at a
+        # time: `storage`, and then the SCSI children of `bot` and `uas`, which
+        # shared prepdrv2 and therefore could not both be presented.
+        "-blockdev", ("driver=raw,node-name=prepdrv,file.driver=file,file.filename={0}" -f $scratch),
+        "-blockdev", ("driver=raw,node-name=prepdrv2,file.driver=file,file.filename={0}" -f $scratch2),
+        "-blockdev", ("driver=raw,node-name=prepdrv3,file.driver=file,file.filename={0}" -f $scratch3),
         # The chardevs are declared up front - they create no PCI device, so
         # unlike `-netdev` they cannot disturb the guest's hardware layout.
         # FILE, NOT NULL: a `null` chardev is never open, and `usb-serial` and

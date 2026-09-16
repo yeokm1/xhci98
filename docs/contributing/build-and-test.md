@@ -395,6 +395,22 @@ scripts\build-driver.cmd qemu       REM the emulator-only third flavour
 scripts\build-driver.cmd all        REM all three - what a release cut gates
 ```
 
+**`-amd64` is a second axis, not a fourth flavour**, and it goes after the
+flavour word:
+
+```
+scripts\build-driver.cmd both -amd64    REM the shipping pair, 64-bit
+scripts\build-driver.cmd all  -amd64    REM all three - what a release cut gates
+```
+
+It selects WDK 7.1 (`x64 WNET`) instead of the Windows 2000 DDK,
+`src\usbport_amd64.lib` instead of `src\usbport.lib`, and
+`src\obj<flavour>\amd64\` instead of `src\obj<flavour>\i386\`. A release cut
+runs both legs. `DDKROOT` overrides the 32-bit DDK only and is REFUSED on this
+leg - `WDK71ROOT` is the 64-bit override - because handing the Win2000 DDK's
+`setenv.bat` an `x64 WNET` argument fails with a message about the wrong thing
+entirely.
+
 There are three flavours, and only two of them are ever published. `release`
 and `debug` are the shipping pair and are what `-Flavor`, `out\pkg-*`,
 `releases\<version>\` and "both flavours" mean throughout these documents.
@@ -422,7 +438,7 @@ gate" below.
 The DDK calls `release` and `debug` free and checked, and those words survive
 only where it requires them: `setenv.bat`'s flavour argument, the
 `src\objfre` / `src\objchk` trees, and the `buildfre` / `buildchk` logs.
-`build-driver.cmd` translates once, in `:buildflavor`, which is also where
+`build-driver.cmd` translates once, in `:flavordirs`, which is also where
 `qemu` is mapped onto checked with its own `BUILD_ALT_DIR`, since `debug` and
 `qemu` are both checked builds and would otherwise collide in one output tree.
 Do not reintroduce the DDK vocabulary anywhere else: "free" reads as free of
@@ -431,7 +447,9 @@ charge to a user, so `releases\` never says it.
 In order: validate the flavour word and the optional `-NoTargetEvidence`,
 generate `src\usbport.lib` if it is missing, run the import gate's
 authenticated-baseline regression tests and its flavour-rules tests, run the
-INF gate's self-tests and then the gate on `src\xhci98.inf`, run the packager
+INF gate's self-tests and then the gate on **both** INFs - `src\xhci98.inf`
+under `-Arch x86` and `src\xhci98-amd64.inf` under `-Arch amd64`, two runs
+whatever architecture is being built - run the packager
 self-tests, the QEMU launcher self-tests, the vm-matrix verdict self-tests,
 the tracked batch files' line-ending check and the source charset check, run
 the XHCISNAP report self-test
@@ -473,7 +491,7 @@ parameter had been named `except`, which the DDK headers define as `__except`,
 so the DDK build had not compiled for a whole batch while the host suite stayed
 green throughout.
 
-Two `BUILD_ALT_DIR` facts the wrapper's `:buildflavor` depends on, verified
+Two `BUILD_ALT_DIR` facts the wrapper's `:flavordirs` depends on, verified
 against this DDK's own `build.exe`: the value may be at most 10 characters
 (`build.exe` says so itself; `chk_qemu` fits and yields `src\objchk_qemu\i386\`
 and `buildchk_qemu.log`), and it must be overridden after `setenv.bat`, so that
@@ -508,7 +526,7 @@ any binary:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\import-gate\check-imports.ps1
-powershell -File scripts\import-gate\check-imports.ps1 -Image out\pkg-debug\xhci98.sys -Flavor debug
+powershell -File scripts\import-gate\check-imports.ps1 -Image out\pkg-debug-x86\xhci98.sys -Flavor debug -Arch x86
 ```
 
 With no `-Image` it checks whichever of `src\objfre\i386\xhci98.sys`,
@@ -4476,7 +4494,7 @@ scripts\build-driver.cmd both
 ```
 
 The package lands in `out\pkg-failstart-debug\`, a different directory from
-`out\pkg-debug\` on purpose, so it cannot quietly become the one a VM is
+`out\pkg-debug-x86\` on purpose, so it cannot quietly become the one a VM is
 installed from.
 
 What it does on the target. The init sequence runs to the end (the controller
@@ -4591,9 +4609,10 @@ and nothing else:
 powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor debug -UnpaddedDriverVerExperiment
 ```
 
-It lands in `out\pkg-datefmt-<flavor>\`, and its INF differs from
+It lands in `out\pkg-datefmt-<flavor>-<arch>\`, and its INF differs from
 `src\xhci98.inf` on exactly one line: a `DriverVer` date without its leading
-zeros (`8/18/2026` rather than `08/18/2026`). The variant is derived at
+zeros - `9/9/2026` where the tree's own `DriverVer` reads `09/09/2026`, and
+both digits lose their zero rather than only the month. The variant is derived at
 staging time, never committed, so there is no second INF in the tree to drift;
 `xhci98.rc` is copied beside it so the DriverVer/FILEVERSION cross-check still
 runs; and the gate is invoked with `-AllowUnpaddedDriverVer`, which widens
@@ -4643,7 +4662,7 @@ zero-padding is excluded, and the remaining named difference is that the
 package is unsigned (the same tab says `Digital Signer: Not digitally signed`).
 
 Recovery left 2b as it was found: uninstall, cached `oem0.inf`/`.pnf` deleted,
-`out\pkg-debug` installed and re-confirmed by a second `findstr` reading the
+`out\pkg-debug-x86` installed and re-confirmed by a second `findstr` reading the
 padded date, root hub back, a mass-storage device enumerated (`slots
 enabled=1`, `devices addressed=1`, `SET_ADDRESS interceptions=1`, speed decode
 `00010103`, `transfers submitted == completed == 0xAB`, `isr count == claimed
@@ -4862,7 +4881,7 @@ memory. Shape:
 | Shared | `[Xhci.CopyFiles]` | `xhci98.sys,,xhci98.tmp` -> `10, System32\Drivers` |
 | Win98 | `[Xhci.CopyW98]` | `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, both fetched from the OS's own install source through `LayoutFile` (neither is in `[SourceDisksFiles]`). The second is Windows 98's composite parent; on the NT targets the same name is the OS's own hub driver, and the NT row copies it too. |
 | Win2000 | `[Xhci.CopyNT]` | `usbport.sys,,,16`, `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, from `Driver Cache\i386` through `LayoutFile`. `usbd.sys` alone until 1.0.1.0; an NT install that never had a USB controller has none of the three (the Windows XP guest of 2026-09-03) |
-| All four | `[Xhci.CopyUI]` | `usbui.dll,,,16` -> `11, System32`, the one OS-supplied row that does not go to dirid 10, on all four install paths since 1.0.2.0. It is the root hub's property-page provider, which the NT targets' own INFs already name; `[DestinationDirs]` carries `Xhci.CopyUI=11` for it |
+| All four | `[Xhci.CopyUI]` | `usbui.dll,,,16` -> dirid `11` (the system directory), the one OS-supplied row that does not go to dirid 10, on all four install paths since 1.0.2.0. It is the root hub's property-page provider, which the NT targets' own INFs already name; `[DestinationDirs]` carries `Xhci.CopyUI=11` for it - the bare number, which is what the gate requires and what the INF has |
 | Both | `[DefaultInstall]` / `[DefaultInstall.NTx86]` | right-click pre-stage; the 9x one also copies the INF to `%17%` |
 
 Four decisions in it depart from the references, each for a reason that would
@@ -5169,8 +5188,11 @@ and `usbhub.sys` on both device-install paths and both right-click paths,
 `usbport.sys` on the NT ones and not the Windows 98 ones, `usbui.dll` on all
 four, `usbhub20.sys` on none, each under its own name with flag 16 and no
 overwrite flag, and each to its own destination: the three drivers to
-`10, System32\Drivers` and `usbui.dll` alone to `11, System32`, which is the
-per-row destination `OS-DEST` grew in 1.0.2.0. `PKG-MSFILE` refuses a staged
+`10,System32\Drivers` and `usbui.dll` alone to **`11` and nothing after it**,
+which is the per-row destination `OS-DEST` grew in 1.0.2.0. Write the bare
+`11`: the gate requires exactly that, and `src\xhci98.inf` carries
+`Xhci.CopyUI=11`, so the `11, System32` this paragraph used to show is a
+spelling the INF gate FAILS (the 2026-09-16 audit's E5). `PKG-MSFILE` refuses a staged
 package holding any of them.
 The `SUSP-*` rules (`SUSP-MISSING`, `SUSP-DUP`, `SUSP-VALUE`) require each
 of the four install routes, device install and right-click Install on each
@@ -5555,7 +5577,7 @@ Analysis" below before reverting the snapshot that destroys it.
 There are three flavours, not two, and the per-line trace belongs to exactly one of them. `src/sources` sets `-DXHCI_DBG_LIVE -DXHCI_DBG_E9` for `chk_qemu` alone; `src/xhci_dbg.h` derives `XHCI_DBG_TRACE` from `DBG && defined(XHCI_DBG_LIVE)`, and every trace site is guarded on `XHCI_DBG_TRACE` rather than on `#if DBG`. So:
 
 - `release` (`fre`): no trace sites at all.
-- `debug` (`chk`): a checked build with assertions and the counter set, and **no per-line trace**. It prints nothing. This is the flavour the download ships beside `release`, and a user asked for "the debug build's output" has none to give.
+- `debug` (`chk`): a checked build with the counter set, and **no per-line trace**. It prints nothing. This is the flavour the download ships beside `release`, and a user asked for "the debug build's output" has none to give. **No runtime assertions**: every `XHCI_C_ASSERT` in this driver is compile-time and fires in every flavour alike, and `src\xhci_dbg.h` defines no runtime `ASSERT` at all - so "a checked build with assertions" was wrong twice over, and contradicted this page's own earlier statement of the same fact (the 2026-09-16 audit's E5).
 - `qemu` (`chk_qemu`): the only flavour with the per-line trace, written to the port-0xE9 debug console. It is never published.
 
 Do not write `#if DBG` around anything that touches this channel: an earlier cut of the split did, in `src/xhci_probe.c`, and left two sites calling functions the `debug` build no longer compiles. `src/xhci_dbg.h` states the rule at its head. `docs/contributing/design/08-build-flavours-and-the-log-channel.md` is why the split exists.

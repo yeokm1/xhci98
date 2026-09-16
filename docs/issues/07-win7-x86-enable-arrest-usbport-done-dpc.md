@@ -26,8 +26,11 @@ already inside it. Everything from here to section 7 is the record as it
 was written on 2026-09-12 and is kept as it stood, with the corrections
 marked where they land.
 
-Was: open, and deliberately left open at the `1.1.0.0` cut on the
-owner's ruling of 2026-09-12. Observed on the Windows 7 x86 guest across
+Was: open, and deliberately left open on the owner's ruling of 2026-09-12,
+which was that it would not hold up the `1.1.0.0` cut that was then being
+prepared. **That cut has still not been made** - the newest published version
+is `1.0.2.0` - so nothing below describes a limitation of a release anyone
+can download. Observed on the Windows 7 x86 guest across
 four runs on 2026-09-12 (`p225win7x86r2` through `r5`, roadmap task 22.5's
 guest leg). The mechanism below is read from usbport's own log ring,
 captured live against a signature-checked miniport extension, and from a
@@ -254,7 +257,8 @@ Runs `r4` and `r5` **refute it**: the failure reproduces with
 in `r2` was real, but it is not what the later arrests do.
 
 **3. A leaked `SubmitDepth` pinning a completion for ever.** This is a real
-mechanism in this driver - `src\xhci_slot.c:10632` deliberately holds
+mechanism in this driver - `xhciSlotDeferredWorkEx` in `src\xhci_slot.c`
+deliberately holds
 completions while `SubmitDepth != 0`, leaving delivery to the next event
 DPC or `XhciSlotPoll` - and `CompletionsHeldBySubmit` reads 1 in the
 arrest, which looks like a confirmation. **Refuted by the same live read
@@ -641,9 +645,14 @@ never-reset nets), built for both architectures, and **run on the four NT
 2. **On the Version 300 tier a completion is delivered only from a
    callback usbport made under its EpList lock** -
    `XHCI_EXTENSION.DeliverUnderUsbportLockOnly`, set in `StartController`
-   from the interface version presented. `PollEndpoint` now drains, and
+   from the interface version presented - **and then set again, with
+   `DeliverPerEndpointOnly` beside it, for every Version 200 load**, which is
+   issue 8's fix on the whole tier. So it is not version-derived alone: a
+   Version 200 target reaches the same gate by the other route, and the
+   difference between the tiers is which contexts are admitted rather than
+   whether any are. `PollEndpoint` now drains, and
    the drains inside `AbortTransfer` and `SetEndpointState` are
-   `XhciSlotDeferredWorkLocked` - the admission travels with the call, not
+   `XhciSlotDeferredWorkForEndpoint` - the admission travels with the call, not
    with a per-controller counter another CPU could ride; the event DPC
    retires and reports
    `USBPORT_DPC_EX_TRANSFER_WORK`, as usbehci does, and every other context

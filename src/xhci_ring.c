@@ -8,8 +8,11 @@
  * docs/usb-xhci-info/xhci-data-structures.md section 7.
  *
  * Nothing here rings a doorbell or touches a register. That is the split
- * design doc 03 section 2 asks for: encode first, then one call site in
- * xhci_init.c / xhci_pci.c writes the doorbell. It is also what makes >= 3
+ * design doc 03 section 2 asks for: encode first, then a caller writes the
+ * doorbell - `xhci_cmd.c` for the command ring and `xhci_slot.c` for the six
+ * transfer-ring sites. *(This named "one call site in xhci_init.c /
+ * xhci_pci.c", which was true before there was a command engine or a slot
+ * layer; the 2026-09-16 audit's B10.)* It is also what makes >= 3
  * full laps of a ring - the case no amount of VM testing produces
  * deliberately - a test that runs in milliseconds.
  *

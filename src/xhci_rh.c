@@ -297,9 +297,17 @@ static ULONG xhciRhRefresh(PXHCI_EXTENSION ext,
 
 #ifdef XHCI_FIX_ACK_OWED
     /*
-     * **Bench candidate W13 for Finding 3** (`run-13e.md` **Finding O**). The
-     * shipping form of these six lines discards the write's answer, and that is
-     * the defect: `xhciRhWritePortsc` refuses every write while a Port Power
+     * **Bench candidate W13 for Finding 3** (`run-13e.md` **Finding O**), and
+     * read the tense carefully: **W13ACK was retracted.** Finding O was refuted
+     * by its own repair - the debt-carrying form below was built, taken to the
+     * bench and did not fix the wedge (`docs/issues/02`, section 4, and
+     * `run-13e.md`), and issue 2's cause turned out to be a recovery step
+     * nobody was sending. So what follows is a real latent defect that is not
+     * *the* defect, kept compiled-out as the instrument it became. No shipping
+     * flavour defines `XHCI_FIX_ACK_OWED`.
+     *
+     * What the shipping form does is discard the write's answer:
+     * `xhciRhWritePortsc` refuses every write while a Port Power
      * change is in flight, `ackBits` is a stack local, and a refusal therefore
      * *drops* the acknowledgement. Nothing retries it - the health poll's only
      * refresh for this port is gated on `PpPending`, which `XhciPortShadowPpAge`
@@ -543,8 +551,13 @@ VOID XhciRhGetRootHubData(PXHCI_EXTENSION ext, PUSBPORT_ROOT_HUB_DATA data)
  * standard command path rather than the class one. Self-powered, no remote
  * wakeup: the root hub is the machine.
  *
- * IRQL: DISPATCH_LEVEL, under MiniportSpinLock.
- */
+ * IRQL: <= DISPATCH_LEVEL. **The lock discipline differs by target and is not
+ * this driver's to choose**: NT 5.x usbport calls the root-hub status queries
+ * at DISPATCH under `MiniportSpinLock`, and issue 7 measured NT 6.x calling
+ * `RH_GetPortStatus` at PASSIVE with no lock at all. The body below is written
+ * not to depend on the answer, which is this file's standing rule; what was
+ * wrong was the tag, which named one of the two as though it were the contract
+ * (the 2026-09-16 audit's B11). */
 MPSTATUS XhciRhGetStatus(PXHCI_EXTENSION ext, PUSHORT status)
 {
     (VOID)ext;
@@ -567,8 +580,13 @@ MPSTATUS XhciRhGetStatus(PXHCI_EXTENSION ext, PUSHORT status)
  * Succeeds unconditionally: a nonzero return here abandons the entire
  * status-change scan, and there is no state this could fail on.
  *
- * IRQL: DISPATCH_LEVEL, under MiniportSpinLock.
- */
+ * IRQL: <= DISPATCH_LEVEL. **The lock discipline differs by target and is not
+ * this driver's to choose**: NT 5.x usbport calls the root-hub status queries
+ * at DISPATCH under `MiniportSpinLock`, and issue 7 measured NT 6.x calling
+ * `RH_GetPortStatus` at PASSIVE with no lock at all. The body below is written
+ * not to depend on the answer, which is this file's standing rule; what was
+ * wrong was the tag, which named one of the two as though it were the contract
+ * (the 2026-09-16 audit's B11). */
 MPSTATUS XhciRhGetHubStatus(PXHCI_EXTENSION ext,
                             PUSBPORT_HUB_STATUS_AND_CHANGE status)
 {
@@ -623,8 +641,13 @@ MPSTATUS XhciRhGetHubStatus(PXHCI_EXTENSION ext,
  * to report *into* - and usbport validates the buffer before the scan, so it is
  * unreachable from either shipping build.
  *
- * IRQL: DISPATCH_LEVEL, under MiniportSpinLock.
- */
+ * IRQL: <= DISPATCH_LEVEL. **The lock discipline differs by target and is not
+ * this driver's to choose**: NT 5.x usbport calls the root-hub status queries
+ * at DISPATCH under `MiniportSpinLock`, and issue 7 measured NT 6.x calling
+ * `RH_GetPortStatus` at PASSIVE with no lock at all. The body below is written
+ * not to depend on the answer, which is this file's standing rule; what was
+ * wrong was the tag, which named one of the two as though it were the contract
+ * (the 2026-09-16 audit's B11). */
 MPSTATUS XhciRhGetPortStatus(PXHCI_EXTENSION ext,
                              USHORT port,
                              PUSBPORT_PORT_STATUS_AND_CHANGE status)
@@ -2733,10 +2756,16 @@ ULONG XhciRootHubInit(PXHCI_EXTENSION ext, ULONG afterRestore)
      * branch needs bare-metal FSC >= 1 - which is why it is closed here before a
      * machine makes it live rather than after.
      *
-     * A port left mid-Resume by a device-initiated remote wake is not lost with
-     * it: the shadow, the armed operation and the port's own generation all
-     * survive the suspend (usbport zeroes the extension only before a
-     * *StartController*), so the ordinary resume-completion path still owns it.
+     * A port left mid-Resume by a device-initiated remote wake is **not** owned
+     * by an armed operation on the other side of this: the suspend's quiesce
+     * runs `XhciRootHubRetireOperations` (`src/xhci_cmd.c`), which disarms every
+     * port and advances its generation so no uncancellable timer can fire into
+     * the new tenancy, and `XhciRootHubBuild` (`src/xhci_port.c`) zeroes `Armed`
+     * and `ArmPending` on the way back. What survives is the *record* usbport
+     * does not reclaim - the extension is zeroed only before a
+     * *StartController* - so the port is picked up by the next refresh reading
+     * hardware, not by a resume-completion path still holding it. (This said
+     * all three survived; two of them do not. The 2026-09-16 audit's B10.)
      */
     if (afterRestore) {
         ext->RhU3PassSkippedAfterRestore++;

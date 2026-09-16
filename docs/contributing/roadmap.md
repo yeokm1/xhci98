@@ -69,14 +69,19 @@ claim, and neither blocks the other or anything already closed. **Phase 21**
 is the 64-bit question - one NT 5.2 amd64 binary, which needed a second
 toolchain before it needed anything else. Its Windows XP x64 and Server 2003
 x64 checkpoint passed on 2026-09-09; what is left is the record and a second
-guest leg for **Vista x64 and Windows 7 x64**, where the obstacles are code
-signing and the driver store rather than the ABI. **Phase 22** is the 32-bit
-one - whether the binary that already ships
-runs on Windows Vista and Windows 7 as it stands, which needs no build at
-all. They share the Vista and Windows 7 media and nothing else, and the one
-pass they share was taken on 2026-09-09: the static ABI read of both
-operating systems in both architectures, which passes everywhere and leaves
-each phase with its own guests and, for 21, its own toolchain.
+guest leg for **Vista x64 and Windows 7 x64**, where 21.7's static pass said
+the obstacles were code signing and the driver store rather than the ABI -
+**and 21.8's guests overturned that on 2026-09-10.** **Phase 22** is the
+32-bit one - whether the binary that already ships runs on Windows Vista and
+Windows 7 as it stands, which was expected to need no build at all. Both
+premises fell together: measurements M9 to M11 of design record 11 found that
+no Version 200 miniport can run on Vista or Windows 7 in either architecture,
+so the work in both phases is now one change, the Version 300 path of task
+22.5, and it touches the shipping 32-bit binary as well as the amd64 one.
+They share the Vista and Windows 7 media, and the one pass they shared was
+taken on 2026-09-09: the static ABI read of both operating systems in both
+architectures, which passed everywhere and is exactly the reading M9 to M11
+corrected.
 
 ---
 
@@ -1606,9 +1611,13 @@ settled from the shipping binaries first and a guest second, and - if it can
 with its standing stated in every document that names the targets. Since
 2026-09-09 the goal also asks the same of **Vista x64 and Windows 7 x64**
 (task 21.8): 21.7 read their interface and found nothing against them, and
-what is left is whether a binary the static pass says should work can be made
-to install and load on systems that enforce kernel-mode code signing and stage
-drivers through a driver store.
+what was left looked like whether a binary the static pass says should work can
+be made to install and load on systems that enforce kernel-mode code signing
+and stage drivers through a driver store. **21.8's guests answered a different
+question on 2026-09-10**: a Version 200 miniport cannot run there at all
+(measurements M9 to M11), so the goal's second half is now carried by task
+22.5's Version 300 path rather than by this phase, and signing was separately
+decided against (design record 11 section 12, decision 9).
 
 Status: open, 2026-09-09 - **checkpoint passed, the record written, and task
 21.8 the only thing left.** It
@@ -2171,10 +2180,8 @@ are static readings and no other task's box may be ticked on one.
       apart for a reason.
 
       What is already settled and must not be re-litigated: `USBPORT_GetHciMn`
-      returns `0x10000001` on both, so no code change follows; the packet the
-      miniport fills is the same `0x250` one, because the higher version tiers'
-      extra stores sit behind version tests a `Version = 200` miniport never
-      passes; and Windows 7's second `IoGetDmaAdapter`, the one asking for a
+      returns `0x10000001` on both, so no code change follows; and Windows 7's
+      second `IoGetDmaAdapter`, the one asking for a
       64-bit adapter, is gated on `Version >= 310` and is unreachable from
       here - **which is exactly why the high-DWORD check at
       `src/xhci_xfer.c:542` must stay**, and M8 is the standing argument that
@@ -2502,7 +2509,8 @@ are static readings and no other task's box may be ticked on one.
         once the copy list stops asking for the four OS-supplied files, which
         the `Xhci.Dev6` shape does. **Windows 7 x64 is still owed, and so is
         the decision about whether that shape reaches the shipping INF** - it
-        has only ever run from a staged copy.  - [ ] then the same clauses 21.5 took, on each guest: registered and
+        has only ever run from a staged copy.
+  - [ ] then the same clauses 21.5 took, on each guest: registered and
         started, the No Op self-test, the root-hub callbacks, a HID mouse, a
         mass-storage device and a composite audio device bound, and the Device
         Manager disable/enable/remove/rescan sequence. **On the `release`
@@ -3090,7 +3098,7 @@ reading may not tick a box whose line names a guest.
           `CC_SUCCESS`, no `ABI-SUSPECT`, no `ResetController` - and all
           three devices bound with `DescIsoEntries 2`. **Vista x64's enable
           also passes, so the 2026-09-11 result holds on the new binary**
-    - [ ] **Windows 7 x64: the ENABLE ARRESTS, and it is issue 7's defect on
+    - [x] **Windows 7 x64: the ENABLE ARRESTS, and it is issue 7's defect on
           the other architecture.** One install on a freshly reverted image;
           the enable came back with **2 slots, 1 device, `DescIsoEntries 0`**
           and held for a **threshold fixed at ten minutes before the run**
@@ -3105,8 +3113,15 @@ reading may not tick a box whose line names a guest.
           all six loads at `SlotsEnabled 3` / `DescIsoEntries 2` with no
           non-zero refusal counter at all - **which is issue 7 section 6's
           own experiment, and it held.** Evidence in `vm\ring-win7x64-re1\`.
-          What is still owed here: the x86 guest re-run single-processor,
-          and the identity of the two objects
+          What was still owed when this box was written - the x86 guest
+          re-run single-processor, and the identity of the two objects - is
+          **answered by the sub-boxes below**, which is why this box is now
+          ticked: the two objects are named in the next one (two usbport
+          transfer records on the FDO's all-transfers list), and the
+          single-processor run is the `-smp 1` result recorded in the
+          paragraph above. *(The box stayed unticked over eight ticked
+          children with its own owed list answered underneath it - the
+          2026-09-16 audit's E8.)*
       - [x] **2026-09-13, host-side: the two objects named, the cause
             read, and the fix landed in source - live re-run owed.** The
             objects are two usbport transfer records (`TrxC`) on the FDO's
@@ -3171,9 +3186,12 @@ reading may not tick a box whose line names a guest.
             `MP (4 procs)`. `D1 DRIVER_IRQL_NOT_LESS_OR_EQUAL` at
             **`USBPORT+0x1d1a7`**, reading `fffffadf00000000` at IRQL 2 while
             walking a usbport-private list under usbport's own lock - an
-            address carrying **usbport's high 32 bits with a zero low dword**,
-            which is a 64-bit pointer written 32 bits wide and is M8's failure
-            mode on the guest that already produced it once. **It did not
+            address whose **low dword is zero**, which is a 64-bit pointer
+            written 32 bits wide. *(This said "usbport's high 32 bits", and
+            issue 8 section 3 withdrew that: `fffffadf` is the high half of
+            every non-paged pool pointer on this guest, not something
+            particular to usbport. The finding is the zero low half. The
+            2026-09-16 audit's E8.)* **It did not
             reproduce**: one cold enable and five live cycles clean
             afterwards, so it is timing-dependent, not deterministic (0 in 7
             uniprocessor loads, 1 in 2 SMP cycles, 0 in 6 more). **Whose write
@@ -3340,7 +3358,10 @@ reading may not tick a box whose line names a guest.
           met on NT 6.x. What the note says, and whether it waits for the
           NT 5.x legs, is the owner's decision and is not yet taken
 
-- [ ] **22.7 - a charset gate on tracked source.** Added after the cut tasks
+- [x] **22.7 - a charset gate on tracked source.** All four boxes done on
+      2026-09-12; the parent stayed unticked until the 2026-09-16 audit's E8
+      found it, which is the shape that makes a task list unreadable - a
+      reader scanning the parents sees work owed that is not. Added after the cut tasks
       were written and numbered 22.10 at first; renumbered here so the phase
       reads in order, which also puts the number where the work sits, because
       **it runs BEFORE the cut**: `1.1.0.0` is taken with it in place and
@@ -3454,6 +3475,16 @@ and they are the phase's other half rather than a coda to the first.
         (`build-and-test.md`, "Versioning the driver"). The x64 statements
         task 21.6 wrote into that file say "from `1.1.0.0`"; at the cut they
         stop being a forward reference and should read as current
+  - [ ] `README.md`'s **Install** section, which describes the `1.0.2.0`
+        download by name - two directories, `release\` and `debug\`. The
+        moment `1.1.0.0` is uploaded that download has four with different
+        names, and nothing reads this either. The 2026-09-16 audit added the
+        naming note that makes the section honest until then; at the cut it is
+        the section itself that changes
+  - [ ] `.github/ISSUE_TEMPLATE/bug_report.yml` and `hardware_report.yml`,
+        whose operating-system lists stop at "Windows XP, 32-bit". A reporter
+        on the tier this release publishes for has no row to pick, and no gate
+        reads a form
   - [x] **the version scheme, which no longer has a gap. Settled by the owner
         2026-09-10** and written into `build-and-test.md`, "Versioning the
         driver": first field a change really major enough to warrant it (and

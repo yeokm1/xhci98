@@ -153,7 +153,8 @@ then taken**, on its own argument rather than the control-character one: a
 high byte in a *string literal* reaches the debugcon channel and a Windows 98
 console, where the encoding is not UTF-8. It cost exactly one character - a
 UTF-8 section sign in an `src\xhci.h` comment, rewritten as "section", which
-is what line 7788 of that same file already said 32 lines away.
+is what the same file already said in plain ASCII 32 lines away. (A line
+number stood here; it has drifted, and the fact does not depend on it.)
 
 **The reusable rules.**
 
@@ -641,8 +642,11 @@ they are re-run on this QEMU, or QEMU 11.0.0 is put back. Record the QEMU
 version in every run header, as the matrix already does; it is what made the
 change visible.
 
-Affected: `scripts/vm-matrix/matrix.config.psd1` (the `2a-sweetlow` entry's
-comment), `scripts/vm-matrix/prepare-image.ps1`.
+Affected: `scripts/vm-matrix/config.sample.psd1` (the `2a-sweetlow` entry's
+comment - the tracked file; `matrix.config.psd1` is the per-host copy an
+operator makes from it and is git-ignored, so naming it here pointed a reader
+at a file a clone does not have),
+`scripts/vm-matrix/prepare-image.ps1`.
 
 ## Windows ME on QEMU: the ME CD's own FORMAT never writes a sector, and its Setup restarts wedge like Windows 98's
 
@@ -1618,7 +1622,10 @@ Rules this earns:
 
 Affected: `src/xhci98.inf` (`[Xhci.CopyW98]`, Win98 path only until
 1.0.1.0, then `[Xhci.CopyNT]` as well),
-`scripts/package/usbd-sources.expected`, `scripts/inf-gate/check-inf.ps1`
+`scripts/package/usbd-sources.expected` (**retired with release 1.0.0.1**,
+when the media stopped carrying Microsoft files and there was nothing left to
+authenticate - named here because it is what the lesson happened to, not
+because a clone will find it), `scripts/inf-gate/check-inf.ps1`
 (`W98-MISSING` / `W98-ONWIN2K` enforced the asymmetry in both directions;
 since 1.0.1.0 there is none to enforce for `usbhub.sys`, and `OS-ONWIN98`
 carries the one that remains, `usbport.sys` off the Windows 98 path),
@@ -6776,7 +6783,10 @@ discriminating test.
 
 `src/xhci98.inf`, `scripts/package/*`, `scripts/inf-gate/check-inf.ps1`
 (`TGT-*`, `PKG-IDENTITY`), `scripts/inf-gate/test-inf-checks.ps1`;
-`docs/contributing/build-and-test.md` "Carrying a per-target `usbd.sys`".
+`docs/contributing/build-and-test.md`, "The files the OS supplies:
+`usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll`" - which is the
+section that replaced "Carrying a per-target `usbd.sys`" when release 1.0.0.1
+took the Microsoft files off the media.
 
 ## The import gate: Win2000 can be settled on the host, Win98 cannot, and `ExAllocatePoolWithTag` is not actually missing on 98 SE
 
@@ -7744,7 +7754,9 @@ miniport didn't work", a false no-go on the architecture gate.
 
 Done (Phase 3 task 7). `xhci98.inf` carries both builds under distinct media
 names, selected by the install section each engine reads; see
-`docs/contributing/build-and-test.md`, "Carrying a per-target `usbd.sys`",
+`docs/contributing/build-and-test.md`, "The files the OS supplies:
+`usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll`" (which replaced
+"Carrying a per-target `usbd.sys`" at 1.0.0.1),
 and the `usbd.sys` authentication entry in this file for what re-verifying
 this diagnosis turned up.
 
@@ -8699,8 +8711,12 @@ without symbols: `.text` swept with `u`, call sites found by scanning for
 displacement bytes, functions named by what they did. The Version 300 reading
 of 2026-09-11 (roadmap task 22.5) was taken with Microsoft's public PDBs
 loaded, and the difference was the whole day. The symbol server carries a PDB
-for every `usbport.sys` and `usbehci.sys` in `tools/`, fetched by the GUID and
-age in the binary's own `RSDS` record, and `kd -z <binary>
+for every NT 5.1 and later `usbport.sys` and `usbehci.sys` in `tools/` - the
+twelve `legal-provenance.md` section 2 lists - fetched by the GUID and
+age in the binary's own `RSDS` record. **Windows 2000 SP4's and NUSB's have
+none and were read without symbols**, which is where the address arithmetic
+still lives (the 2026-09-16 audit's E8: this said "every", and the two that
+matter most to this project are the exceptions). `kd -z <binary>
 -y srv*tools\symbols` loads them offline (`legal-provenance.md` section 2 has
 the twelve identifiers and the URL shape).
 

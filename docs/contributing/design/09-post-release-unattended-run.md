@@ -359,7 +359,7 @@ reopen them.
 | What `NODRIVER` means on a fresh guest | The same word; rows expected to lack a class driver are marked in the matrix file | 4.2 |
 | Whether the `release` binary is ever run here | No; it is read on a physical machine, by hand | 2.2 |
 | The storage row's file round-trip | Not taken; enumerate, detach, reattach | 4.3 |
-| The composite row on Windows 98 | Run, pinned to the release notes' USB Audio reading | 4.1 |
+| The composite row on Windows 98 | Run, with INERT isochronous expectations - **not** pinned to the `USBAUDIO.VXD` fault, which section 4.1 supersedes and which `matrix.psd1` never carried | 4.1 |
 | Accelerator and time budget | TCG; no budget until one run has been measured | 2.5 |
 
 ## 8. The preparation

@@ -1230,7 +1230,16 @@ foreach ($tgt in $targetsToRun) {
             ("{0} qemu, {1} not present on this host" -f $version, $pkgSys)
         }
         $imageLine = ("{0}, stamp {1}, from {2} {3}" -f (Join-Path $cfg.VmDir $tgt.Image), $imageStampByTarget[$tgt.Id], $tgt.CloneFrom.Image, $tgt.CloneFrom.Snapshot)
-        $accel = if ($tgt.Accel -ne "") { $tgt.Accel } else { "tcg" }
+        # Same guard as the launch site, and here it is not about a dangling
+        # switch but about the report: `New-PostReleaseHeader -Accel` is a
+        # mandatory string, so a target with no `Accel` key reached it with
+        # $null and THREW - after the whole run, before the report was written,
+        # losing everything the run measured (the 2026-09-16 audit's D2).
+        $accel = if ($tgt.ContainsKey('Accel') -and $null -ne $tgt.Accel -and "$($tgt.Accel)" -ne "") {
+            "$($tgt.Accel)"
+        } else {
+            "tcg"
+        }
         $hdr = New-PostReleaseHeader -TargetId $tgt.Id -Version $version -DriverLine $driverLine -ImageLine $imageLine `
                    -QemuVersion $qemuVer -Accel $accel -Sizeof $table.Sizeof -Counters $table.Offsets.Count `
                    -Started $tgtStarted -Elapsed $tgtClock.Elapsed -Verdict $verdict -Rows $script:tgtTally.Rows `
@@ -1303,5 +1312,27 @@ Write-Host ("report: {0}" -f $reportPath)
 $bad = 0
 foreach ($k in $rowSummary.Keys) { if ($k -match 'FAIL|ERROR') { $bad += $rowSummary[$k] } }
 if ($bad -gt 0) { exit 1 }
+
+# AND A RUN THAT REACHED NO ROW DID NOT PASS EITHER, WHICH IS THE SAME RULE THE
+# PER-TARGET VERDICT MAKES.
+#
+# The "no rows at all" guard above cannot fire when every row was EXCLUDED: an
+# excluded row is reported rather than skipped silently, so it adds a report
+# line and `$report.Count` is nonzero.  The F11 fix that closed this - and the
+# reasoning behind `Get-TargetVerdict`, which is where it lives - was applied
+# only on the -PostRelease path, while design record 06 and the README state
+# the rule generally (the 2026-09-16 audit's D1).
+#
+# Not reachable with the tracked `matrix.psd1`, where no target excludes every
+# row.  It is a property of the runner rather than of the configuration, and a
+# configuration is a thing an operator edits.
+$reached = 0
+foreach ($k in $rowSummary.Keys) { if ($k -ne "EXCLUDED") { $reached += $rowSummary[$k] } }
+if ($reached -le 0) {
+    Write-Host ""
+    Write-Host "*** every row this run evaluated was EXCLUDED, so nothing was measured."
+    Write-Host "    That is a failure, not an empty pass - see docs/contributing/design/06-device-matrix-verdict.md."
+    exit 2
+}
 exit 0
 

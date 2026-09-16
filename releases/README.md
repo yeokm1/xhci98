@@ -89,7 +89,7 @@ releases/
       xhci98.inf
       xhci98.sys         the same driver, for diagnosis only - it carries no
                          per-line trace either; that is the qemu flavour's
-    release-x64/         only in a cut made with -Arch x86,x64; see below
+    release-x64/         an ordinary cut publishes all four; see below
       xhci98.inf         the .NTamd64 INF, from src\xhci98-amd64.inf
       xhci98.sys         the amd64 build, 64-bit Windows
     debug-x64/
@@ -219,7 +219,7 @@ a cut carries one). What this section is about is the flavour half of the name;
 the architecture half decides nothing else, and the paragraphs below are true of
 both.
 
-`release/` is the build to install. No per-line tracing: none of the
+`release` is the build to install. No per-line tracing: none of the
 `XHCI_DBG_*` sites compile into it, so it does not carry the `0xE9` debug
 console and does not import `WRITE_PORT_UCHAR`. It does import `DbgPrint` and
 `KeGetCurrentIrql`, and neither is a leak:
@@ -241,7 +241,7 @@ however many times the code calls it, so the gate answers "may this binary
 import `DbgPrint` at all", not "how many call sites are there". Keeping the
 exception to one site is a review obligation on whoever adds the second one.
 
-`debug/` is for diagnosing a machine you cannot attach a debugger to. It
+`debug` is for diagnosing a machine you cannot attach a debugger to. It
 imports the same two symbols the release build does. What it adds over
 `release` is the DDK's own `DBG`: both flavours compile `/Oxs` and differ by
 `/Oy-` against `/Oy`, so the checked build keeps frame pointers, and it also
@@ -316,13 +316,27 @@ undecorated models section outright and the 32-bit engines skip a
 `[Manufacturer]` line decorated `NTamd64`, so the wrong directory offers no
 driver at all rather than installing a binary that cannot load.
 
-**The x64 pair is opt-in, and an ordinary cut does not produce it.**
-`make-release.ps1 -Arch` defaults to `x86` alone. The plumbing stages four
-directories the moment it is asked to (`-Arch x86,x64`), but roadmap task 21.5
-has not run - no amd64 binary of this driver has ever executed, on real
-hardware or in a virtual machine - so there is nothing to publish it on the
-strength of yet. `scripts\package\test-package.ps1` asserts that default, so
-changing it is a deliberate act rather than a drifting one.
+**An ordinary cut publishes all four directories.** `make-release.ps1 -Arch`
+defaults to `x86,x64` since the owner's instruction of 2026-09-09, on the
+strength of roadmap task 21.5: the amd64 package installed through
+`src\xhci98-amd64.inf`'s `.NTamd64` half on a Windows XP Professional x64 SP2
+guest and passed every checkpoint clause on the `qemu` flavour, and then the
+`release` flavour - the one this publisher actually stages - was installed and
+read separately on the same guest, because a flavour that is never published
+cannot stand in for one that is. It defaulted to `x86` alone until that ran.
+`scripts\package\test-package.ps1` asserts the default, so changing it back is
+as deliberate an act as changing it forwards was.
+
+**Read the x64 half of a cut as narrowly as its evidence is**: one guest, one
+virtual machine, never real hardware, against the x86 half's four install legs
+(Windows 98 on both USB 2.0 stacks, Windows ME, Windows 2000, 32-bit Windows
+XP). Publishing it by default is what claiming the target means, not a claim
+that the two halves are equally attested.
+
+`-UploadSetOnly` is the one mode that does not follow the default: it derives
+the architectures from the published tree instead, because every version
+published so far is x86-only and re-assembling one must not fail for want of a
+64-bit directory that cut never wrote.
 
 There is a third flavour, and it is kept out of here by design. `qemu` is
 `debug` plus the port-`0xE9` trace mirror and the `HAL.dll!WRITE_PORT_UCHAR`

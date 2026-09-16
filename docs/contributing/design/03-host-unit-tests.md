@@ -3,8 +3,7 @@
 Design doc 03. Applies from Phase 3/4 onward (the moment `src/` exists); this
 doc pins the design so the source files are structured to be testable.
 
-Status: built. Twelve suites, 20,325 checks at the `1.0.2.0` cut and 20,577
-after the 2026-09-07 audit's section G, run by
+Status: built. Twelve suites, run by
 `test\run-host-tests.cmd` on the Windows build host. Two of the twelve -
 `test_packet` and `test_membuf` - are compiled and run a second time for amd64
 since task 21.4, so the runner reports fourteen results from twelve files
@@ -446,8 +445,12 @@ accumulates the project's bug history.
 - `test/` directory beside `src/`, not referenced by the DDK `sources` file,
   so the driver build stays untouched. The dependency runs the other way:
   each suite compiles the `src/` file it covers.
-- One runner per pure-core module, plain C89, no framework: a `CHECK(cond)` /
-  `CHECK_EQ(got, want)` pair that prints file/line and counts failures;
+- One runner per pure-core module, plain C89, no framework: a
+  `CHECK(cond, what)` / `CHECK_EQ(got, want, what)` pair that prints
+  file/line, the `what`, and for `CHECK_EQ` both values in decimal and hex,
+  and counts failures. **The `what` is not optional** - it is what makes a
+  failure line readable without opening the file, and this entry described the
+  two-argument form the harness has never had (the 2026-09-16 audit's C6);
   process exit code = failure count.
 
   | Runner | Covers |

@@ -90,10 +90,26 @@ u32 portsc_read(CTRL *c, int port)
     return RD32(c->op + XOP_PORTSC(port));
 }
 
+/*
+ * The safe-write rule of docs/usb-xhci-info/xhci-data-structures.md, and it has
+ * to strip the same set the driver's `XHCI_PORTSC_UNSAFE_MASK` does: PED is
+ * RW1C so writing the 1 that says "enabled" disables the port, PR is RW1S and
+ * reads back 1 while a reset runs so writing it back restarts it, LWS turns
+ * the PLS field into a link-state write, and the change bits are RW1C.
+ *
+ * **WPR and the RsvdZ bits were missing here** (the 2026-09-16 audit's C5).
+ * WPR is bit 31 and RW1S - a warm reset strobe - and although it "shall always
+ * return 0 when read", a tool that is about to drive a controller nobody has
+ * characterised should not be the one place in this project that relies on
+ * that. The RsvdZ bits are 2 and 29:28; a reserved bit is reserved because a
+ * later part may define it, which is the same argument the legacy handoff
+ * write below makes for not writing ones into EHCI's reserved status bits.
+ */
 void portsc_write(CTRL *c, int port, u32 setbits)
 {
     u32 v = portsc_read(c, port);
-    v &= ~(PSC_PED | PSC_PR | PSC_LWS | PSC_CHANGE_BITS);
+    v &= ~(PSC_PED | PSC_PR | PSC_WPR | PSC_LWS | PSC_CHANGE_BITS |
+           PSC_RSVDZ);
     v |= setbits;
     WR32(c->op + XOP_PORTSC(port), v);
 }
@@ -181,6 +197,7 @@ done:
 int qual_handoff(CTRL *c)
 {
     u32 dw0;
+    u32 dw1;
     int waited;
 
     if (c->legsup_off == 0) {
@@ -194,6 +211,18 @@ int qual_handoff(CTRL *c)
         strcpy(c->handoff_note, "already OS-owned");
     }
 
+    /*
+     * **Saved before the ownership write, not after it** (the 2026-09-16
+     * audit's C5; `legacy.c`'s EHCI handoff has always read it here). This is
+     * what `qual_cleanup` puts back, so it has to be the firmware's own SMI
+     * enables - and the whole point of the ownership write is that firmware
+     * may react to it. Read after the write and the 1 s wait, what was
+     * restored was whatever the firmware had settled on *having been told the
+     * OS was taking over*, which is a different register value and not the one
+     * the machine booted with.
+     */
+    c->legctl_orig = RD32(c->base + c->legsup_off + 4);
+
     WR32(c->base + c->legsup_off, dw0 | LEGSUP_OS_OWNED);
     for (waited = 0; waited < 1000; waited += 10) {
         dw0 = RD32(c->base + c->legsup_off);
@@ -202,11 +231,14 @@ int qual_handoff(CTRL *c)
         msleep(10);
     }
 
-    /* disable firmware SMI regardless: clear enables 15:0, ack RW1C 31:29,
-     * preserve RsvdP (D2) */
-    c->legctl_orig = RD32(c->base + c->legsup_off + 4);
+    /* Disable firmware SMI regardless: clear enables 15:0, ack RW1C 31:29,
+     * preserve RsvdP (D2). Composed against a **fresh** read rather than
+     * against the saved copy above, because RsvdP means "carry back what you
+     * read" and what was read a moment ago is no longer what is there if the
+     * firmware touched the register on its way out. */
+    dw1 = RD32(c->base + c->legsup_off + 4);
     WR32(c->base + c->legsup_off + 4,
-         (c->legctl_orig & LEGCTL_RSVDP) | 0xE0000000UL);
+         (dw1 & LEGCTL_RSVDP) | 0xE0000000UL);
 
     if (dw0 & LEGSUP_BIOS_OWNED) {
         sprintf(c->handoff_note,
@@ -526,6 +558,21 @@ int qual_irq(CTRL *c)
     if (c->pci.iline == 2) {
         strcpy(c->irq_note,
                "Interrupt Line 2 is the PIC cascade, not a usable IRQ");
+        c->v_irq = V_FAIL;
+        return 0;
+    }
+    /*
+     * **PCI Command bit 10, Interrupt Disable, which the legacy path checks
+     * and this one did not** (the 2026-09-16 audit's C5). It blocks INTx at
+     * the device, so with it set the controller raises IP and the ISR never
+     * fires - and the runbook reads that exact pattern as a PIC-routing
+     * failure. It is a different fault with a different remedy, and naming it
+     * costs one config read.
+     */
+    if (pci_read16(c->pci.bus, c->pci.dev, c->pci.fn, 0x04) &
+        PCI_CMD_INTX_OFF) {
+        strcpy(c->irq_note, "PCI Interrupt Disable bit stuck set: INTx is "
+               "blocked at the device, not misrouted");
         c->v_irq = V_FAIL;
         return 0;
     }

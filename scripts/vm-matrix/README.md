@@ -189,6 +189,18 @@ never written on an image that has not been seen to carry the driver.
 Anything persisted after the stamp fails the newest-snapshot check; re-stamp
 after any further preparation.
 
+**`-WorkDir` and `-CopyBack`, which the sequence above does not use and which
+the `-Stamp` refusal depends on.** `vm\` is inside OneDrive on the development
+host, and OneDrive re-writing a running image is how a prep boot corrupts one;
+`prepare-image.ps1` says so where it resolves the image. `-WorkDir <dir>`
+copies the image somewhere outside the synced tree, boots the copy, and leaves
+it there; `-CopyBack` puts it back when the boot is done. The path the boot
+actually ran is the second line of the paths file, and `-Stamp` compares the
+image it is asked to stamp against it - so a `-Boot -WorkDir` followed by a
+`-Stamp` without `-CopyBack` is refused rather than stamping an image that was
+not the one prepared. Pausing OneDrive for the duration is the alternative, and
+is what the recorded runs did.
+
 A third fresh-style target, `2a-sweetlow`, is a Windows 98 guest running
 SweetLow's XP-lineage USB 2.0 stack instead of NUSB's. It clones the stamped
 `fresh-2a.img` (driver already installed), is never stamped and never a
@@ -332,8 +344,15 @@ Traps the harness paid for and documents rather than enforces:
 15. `prepare-image.ps1 -Attach uas` (and `bot`) taught nothing, because the
     bare adapter is never presented by QEMU without a LUN; the wizard the
     matrix then met unattended was the first anyone saw of the class. The
-    prep spec now adds the matrix row's `scsi-hd` child on a second scratch
-    drive and repairs `attached`, and `-Detach` removes the child first.
+    prep spec now adds the matrix row's `scsi-hd` child on a scratch drive of
+    its own and repairs `attached`, and `-Detach` removes the child first.
+    **One scratch per consumer, and they are `-blockdev` nodes**: `bot` and
+    `uas` shared `prepdrv2`, so presenting one after the other was refused,
+    and the whole set was declared with `-drive if=none`, which QEMU deletes
+    along with the device that held it - so an Attach / Detach / Attach of the
+    same row failed the second time with `can't find value 'prepdrv'`. The run
+    path moved to `-blockdev` at audit S-1; the prep path followed on
+    2026-09-16.
 16. The run declares `-audiodev none,id=matrixaud` and the `usb-audio` row
     names it. Without a backend named, `device_add usb-audio` opens QEMU's
     default host audio backend on its main loop, and on the first `1.0.1.0`

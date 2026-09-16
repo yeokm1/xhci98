@@ -528,7 +528,8 @@ static VOID xhciLogReadValues(PXHCI_EXTENSION ext,
     value = 0;
     status = XhciRegPacket.UsbPortGetMiniportRegistryKeyValue(
         ext, TRUE, XHCI_LOG_VERBOSITY_VALUE_NAME,
-        XHCI_LOG_VERBOSITY_VALUE_BYTES, &value, sizeof(value));
+        (ULONG_PTR)XHCI_LOG_VERBOSITY_VALUE_BYTES, &value,
+        (ULONG_PTR)sizeof(value));
     ext->Log.SwitchStatusVerbosity = (ULONG)status;
     if (status == MP_STATUS_SUCCESS) {
         *verbosityValue = value;
@@ -536,8 +537,9 @@ static VOID xhciLogReadValues(PXHCI_EXTENSION ext,
 
     value = 0;
     status = XhciRegPacket.UsbPortGetMiniportRegistryKeyValue(
-        ext, TRUE, XHCI_LOG_DBGVIEW_VALUE_NAME, XHCI_LOG_DBGVIEW_VALUE_BYTES,
-        &value, sizeof(value));
+        ext, TRUE, XHCI_LOG_DBGVIEW_VALUE_NAME,
+        (ULONG_PTR)XHCI_LOG_DBGVIEW_VALUE_BYTES, &value,
+        (ULONG_PTR)sizeof(value));
     ext->Log.SwitchStatusDebugView = (ULONG)status;
     if (status == MP_STATUS_SUCCESS) {
         *debugViewValue = value;
@@ -909,9 +911,13 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
     /*
      * The one deliberate dereference of a usbport-owned structure in the spike.
      * docs/usb-xhci-info/usbport-miniport-abi.md section 9 item 4 asks for exactly this: the
-     * raw 52 bytes usbport actually passes, so USBPORT_RESOURCES' layout is
+     * raw bytes usbport actually passes, so USBPORT_RESOURCES' layout is
      * confirmed from the target rather than assumed from the transcription.
-     * 13 words is sizeof(USBPORT_RESOURCES) / 4, asserted in xhci_usbport.h.
+     * The count is `sizeof(USBPORT_RESOURCES) / 4`, which is **13 words on x86
+     * and 18 on amd64** - the structure is 0x34 bytes on one and 0x48 on the
+     * other, and the size is asserted per architecture in xhci_usbport.h.
+     * *(This named 52 bytes and 13 words as though they were the only answer;
+     * the 2026-09-16 audit's B10.)*
      */
     XHCI_DBG_WORDS("resources", (const ULONG *)resources,
                    sizeof(USBPORT_RESOURCES) / sizeof(ULONG));
@@ -3585,7 +3591,7 @@ static VOID NTAPI xhciSetEndpointState(PVOID miniPortExtension,
     /*
      * Reached through `USBPORT_SetGlobalEndpointState`, which takes the
      * EpList lock first (win7-x86 `+7a`, static), so the drains inside are
-     * `XhciSlotDeferredWorkLocked` - one of the contexts the Version 300
+     * `XhciSlotDeferredWorkForEndpoint` - one of the contexts the Version 300
      * delivery gate admits.
      */
     XhciSlotSetEndpointState(ext, (PXHCI_ENDPOINT)endpointExtension, state);
@@ -3845,7 +3851,7 @@ static VOID NTAPI xhciAbortTransfer(PVOID miniPortExtension,
      * drives it. (An earlier comment here called that half future work.)
      */
     /* Under usbport's EpList lock (`Core_iAbortEndpoint`), so the drain
-     * inside is `XhciSlotDeferredWorkLocked`. */
+     * inside is `XhciSlotDeferredWorkForEndpoint`. */
     XhciSlotAbortTransfer(ext, (PXHCI_ENDPOINT)endpointExtension,
                           (PXHCI_TRANSFER)transferExtension, completedLength);
 }
@@ -3928,8 +3934,8 @@ static MPSTATUS NTAPI xhciRhGetStatus(PVOID miniPortExtension, PUSHORT status)
     return XhciRhGetStatus(ext, status);
 }
 
-/* IRQL: DISPATCH_LEVEL, under MiniportSpinLock. */
-static MPSTATUS NTAPI xhciRhGetPortStatus(PVOID miniPortExtension,
+/* IRQL: <= DISPATCH_LEVEL; under MiniportSpinLock on NT 5.x, PASSIVE and
+ * unlocked on NT 6.x (issue 7). The body depends on neither. */static MPSTATUS NTAPI xhciRhGetPortStatus(PVOID miniPortExtension,
                                           USHORT port,
                                           PUSBPORT_PORT_STATUS_AND_CHANGE status)
 {
@@ -3950,8 +3956,8 @@ static MPSTATUS NTAPI xhciRhGetPortStatus(PVOID miniPortExtension,
     return XhciRhGetPortStatus(ext, port, status);
 }
 
-/* IRQL: DISPATCH_LEVEL, under MiniportSpinLock. */
-static MPSTATUS NTAPI xhciRhGetHubStatus(PVOID miniPortExtension,
+/* IRQL: <= DISPATCH_LEVEL; under MiniportSpinLock on NT 5.x, PASSIVE and
+ * unlocked on NT 6.x (issue 7). The body depends on neither. */static MPSTATUS NTAPI xhciRhGetHubStatus(PVOID miniPortExtension,
                                          PUSBPORT_HUB_STATUS_AND_CHANGE status)
 {
     PXHCI_EXTENSION ext;

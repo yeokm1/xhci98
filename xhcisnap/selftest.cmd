@@ -9,10 +9,11 @@ rem tracks write and close failures and answers exit 3 with an INCOMPLETE line.
 rem A real full disk is not a repeatable test, so `-selftest-report BASE` opens
 rem BASE.TXT through the same writers and the same finish as the dump, and the
 rem XHCISNAP_FAULT environment variable ("write" or "close") makes the named
-rem step fail deterministically. This script runs the three cases and checks
-rem the exit codes and the summary lines.
+rem step fail deterministically. This script runs four cases - a clean report,
+rem a write fault, a close fault and a .TXT that cannot be created at all - and
+rem checks the exit codes and the summary lines.
 rem
-rem Exit code 0 = all three cases behaved. Run it after build.cmd.
+rem Exit code 0 = all four cases behaved. Run it after build.cmd.
 setlocal
 cd /d "%~dp0"
 

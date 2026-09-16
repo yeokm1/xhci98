@@ -97,7 +97,12 @@ tool source/
   devid.c      C8: Enable Slot, Address Device, GET_DESCRIPTOR device listing [needs extender]
   legacy.c     EHCI/OHCI capability, handoff, reset, DMA, IRQ, port tests     [needs extender]
   irq.c        IVT hook, 8259 mask/EOI, ISR, poll-vs-interrupt differential   [needs extender]
+  irqasm.asm   The ISR entry itself, in assembly - the one thing that cannot
+               be written in C because it owns the interrupt frame
   report.c     Per-controller fact sheet + PASS/FAIL verdict; console pager
+  mmiodiag.c   Pure PCIINFO -> report-text: the PM block and the two dead-MMIO
+               classifiers. A translation unit of its own precisely so the host
+               suite below can reach it                                [host-testable]
   main.c       Sequencing, family selection (default all), CLI flags
                (--probe-only/--no-active, --poll-only, --irq-selftest, --set-intel-ports,
                --no-wait, --no-devid, --no-page, --serial, --log [filename],
@@ -127,6 +132,8 @@ The cases are: standalone help, an isolated locked xHCI IRQ self-test, two `--pr
 Four `--poll-only` cases (xHCI empty, xHCI HS storage, an xHCI hub that produces repeated port-status-change events, and EHCI HS storage) confirm the no-ISR active path drains the event ring, reaches a `PROVISIONAL` verdict, and completes with no DOS/32A exception.
 
 The two `--probe-only` cases enforce the read-only contract by requiring the `Probe safety: PASS - no PCI configuration writes.` line the tool prints from its own write counter. One runs xHCI alone; the other scans xHCI + EHCI + OHCI together, because the config writes that must stay behind the active gate (EHCI legacy handoff, the PCI 2.3 INTx-status probe, cleanup) live in the legacy paths, and the safety line is global to the run.
+
+The QEMU matrix is not the whole of what runs per build. `xhciqual/build.cmd` runs the host suite below first, and that suite covers the PCI-status decode, the C7 routing verdict and the quick classifier as well as the two dead-MMIO ones - none of which the matrix can reach.
 
 ### Host-side unit tests
 
@@ -176,7 +183,7 @@ During development, enabling OHCI SOF at the protected-mode vector caused a repe
 | C1 | BIOS->OS handoff | Set OS-Owned in USBLEGSUP; poll BIOS-Owned | Clears within timeout (driver's first action; a hang here dooms Phase 4) |
 | C2 | Halt + reset | Clear R/S, wait HCH; set HCRST, wait it + CNR clear; time it | Reset completes; record latency |
 | C3 | DMA round-trip | Alloc DCBAA + command ring + event ring; write CRCR/ERSTBA/ERDP; enqueue a No-Op Command TRB (type 23); ring DB[0] | A Command Completion Event (type 33, code Success) appears on the event ring -> bus-master DMA works |
-| C4 | Interrupt delivery | Hook the Line-register IRQ vector (IRQ0-7->INT 08-0F, 8-15->INT 70-77); unmask in 8259; enable IR0.IE + USBCMD.INTE; power a port | ISR fires on a port event; EOI correctly |
+| C4 | Interrupt delivery | Hook the Line-register IRQ vector (IRQ0-7->INT 08-0F, 8-15->INT 70-77) after refusing Pin 0, an unusable Line, the PIC cascade and a set PCI Interrupt Disable; unmask in 8259; enable IR0.IE + USBCMD.INTE; then **arm a No-Op command completion as the owned interrupt source** rather than waiting on a port event, so the test does not depend on somebody plugging something in | ISR fires on that completion; EOI correctly. *(This row described powering a port and waiting for a port event, which is what the tool did before the owned source was built - the 2026-09-16 audit's C5.)* |
 | C5 | Poll-vs-interrupt | Also poll USBSTS.EINT / event ring for the same events | Poll sees event but ISR does not -> routing failure pinpointed (vs dead controller) |
 | C6 | Port connect + reset | Power a USB2 port (PP=1 if PPC); plug a device; observe CCS/CSC; issue Port Reset (PR); read speed | Connect detected, reset completes, plausible speed |
 | C7 | Intel switchover | If Intel and USB2 ports look unrouted: set `XUSB2PR` to route switchable USB2 ports to xHCI, leave `USB3_PSSEN` unchanged for this USB2-only project, then re-run C6. The verdict is pure PCIINFO->text in `mmiodiag.c` (`report_xusb2pr`) because no QEMU case reaches C7 at all, so the host runner is its only coverage. Neither decided branch has ever executed on hardware, because no machine in this project has an Intel 7/8-series mux. It reports UNDETERMINED rather than "routed" when `XUSB2PRM` is `0` or all ones, or `XUSB2PR` is all ones: a zero mask makes "every switchable port is routed" true by containing nothing, and that false negative would retire the very question C7 exists to answer. The `--set-intel-ports` write is held to the same rule. Its read back is re-classified through the same function into three outcomes: confirmed; the write demonstrably did not take; or the read back cannot say, where the report declines to attribute the following C6 result to routing or to the ports, since "the write did not take" is itself a claim that needs readable words | USB2 ports now detect connects (classic "no devices show up" trap) |

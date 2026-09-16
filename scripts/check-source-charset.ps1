@@ -66,7 +66,10 @@ $toolchainExt = @(".c", ".h", ".asm", ".rc", ".def", ".inf", ".bat", ".cmd")
 $toolchainName = @("makefile", "sources")
 
 # Everything else that is source in this tree. Rules 1 and 2 only - see above.
-$otherExt = @(".ps1", ".psd1", ".md", ".txt", ".list", ".expected")
+# `.allow` is the import allowlist, which is tracked source this project edits
+# by hand and which no other gate reads for encoding (the 2026-09-16 audit's
+# D7).
+$otherExt = @(".ps1", ".psd1", ".md", ".txt", ".list", ".expected", ".allow")
 
 # Repo-relative paths that are not tracked source, each git-ignored for the
 # reason given. A filesystem walk finds them; git would not, but no other gate

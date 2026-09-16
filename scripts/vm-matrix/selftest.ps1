@@ -365,18 +365,6 @@ if (Test-MonitorPortFree -Port $freePort) {
     Assert "...and says nothing was probed"           $true         ($probe.Detail -match 'no probe was taken')
 }
 
-Write-Host "--- MayWedgeGuest must be read, and a typo in it must not pass ---"
-#
-# It was set on the audio row and read by NOTHING for the life of the harness,
-# so when that group did end early the report could not say whether the matrix
-# had predicted it. A declaration nothing reads is not a declaration.
-$wedgeRow = @{ Name = 'usb-audio/fs'; MayWedgeGuest = @('2a') }
-Assert "a declared target is recognised"   $true  (Test-RowMayWedge -Row $wedgeRow -TargetId '2a')
-Assert "an undeclared target is not"       $false (Test-RowMayWedge -Row $wedgeRow -TargetId '2b')
-Assert "a row with no declaration is not"  $false (Test-RowMayWedge -Row @{ Name = 'x' } -TargetId '2a')
-Assert "a real target validates clean"     0 (@(Get-RowWedgeProblems -Row $wedgeRow -TargetIds @('2a','2b')).Count)
-Assert "a target that does not exist is a problem" 1 (@(Get-RowWedgeProblems -Row @{ Name = 'x'; MayWedgeGuest = @('2c') } -TargetIds @('2a','2b')).Count)
-
 Write-Host "--- stage G's teardown scanner must answer NO as readily as YES ---"
 #
 # Find-Teardown is the whole oracle for batch 11-V stage G's stop clause, and
@@ -440,6 +428,23 @@ Write-Host "--- the post-release run's refusals must fire, guestless (design rec
 # and one about a target's inherited keys.  Every one is a case here because
 # a refusal nobody has watched fire is the same untested guard as trap 4.
 . (Join-Path $PSScriptRoot "lib\fresh.ps1")
+
+Write-Host "--- MayWedgeGuest must be read, and a typo in it must not pass ---"
+#
+# It was set on the audio row and read by NOTHING for the life of the harness,
+# so when that group did end early the report could not say whether the matrix
+# had predicted it. A declaration nothing reads is not a declaration.
+#
+# Driven through `Test-TargetInList`, which is what run-matrix.ps1 calls - a
+# `Test-RowMayWedge` beside it answered the same question by exact Id only and
+# was called by this self-test and by nothing else, so the harness was checking
+# the answer it does not use (the 2026-09-16 audit's D4).
+$wedgeRow = @{ Name = 'usb-audio/fs'; MayWedgeGuest = @('2a') }
+Assert "a declared target is recognised"   $true  (Test-TargetInList -List $wedgeRow.MayWedgeGuest -Target @{ Id = '2a' })
+Assert "an undeclared target is not"       $false (Test-TargetInList -List $wedgeRow.MayWedgeGuest -Target @{ Id = '2b' })
+Assert "a row with no declaration is not"  $false (Test-TargetInList -List (@{ Name = 'x' }).MayWedgeGuest -Target @{ Id = '2a' })
+Assert "a real target validates clean"     0 (@(Get-RowWedgeProblems -Row $wedgeRow -TargetIds @('2a','2b')).Count)
+Assert "a target that does not exist is a problem" 1 (@(Get-RowWedgeProblems -Row @{ Name = 'x'; MayWedgeGuest = @('2c') } -TargetIds @('2a','2b')).Count)
 
 # The list parser, fed the exact shape qemu-img 11 prints.
 $snapText = @"

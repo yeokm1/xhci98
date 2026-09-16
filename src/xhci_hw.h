@@ -310,10 +310,16 @@ ULONG XhciWriteCrcrAbort(PXHCI_EXTENSION ext, ULONG *crcrRead);
  * three, and Win98 idle-suspends within about a second of every start, so a
  * resume that reinitialised would drop every device context an enumerated bus
  * depends on. The suspend now attempts a Save State and the resume a Restore;
- * **the error path is the one the target VMs exercise** - QEMU implements CRS as
- * "set SRE" and nothing else - and it ends in XhciSlotInvalidateAll, which tells
- * usbport its addressed devices are gone rather than leaving the address map
- * pointing at slots the xHC no longer has.
+ * **neither runs on either target VM, and the reason is earlier than the
+ * restore** - `qemu-xhci` reads `HCCPARAMS2 = 0`, so FSC is absent and
+ * `xhciSaveState` declines before writing anything, counting
+ * `SavesDeclinedNoFsc`. The resume then has no saved state to restore from and
+ * reinitialises. (This said the restore's *error* path was the one the VMs
+ * exercised, which would need the save to have happened; `RestoreFailures`
+ * has never moved on a VM. The 2026-09-16 audit's B10.) The reinitialisation
+ * ends in XhciSlotInvalidateAll, which tells usbport its addressed devices are
+ * gone rather than leaving the address map pointing at slots the xHC no longer
+ * has.
  *
  * IRQL: PASSIVE_LEVEL.
  */
@@ -1207,17 +1213,19 @@ VOID XhciSlotLeaveSubmit(PXHCI_EXTENSION ext);
  * XhciSlotDeferredWork from inside a callback usbport makes under its EpList
  * lock - PollEndpoint, AbortTransfer, SetEndpointState - which on the
  * Version 300 tier are the only contexts a completion may be handed over
- * from (`XHCI_EXTENSION.DeliverUnderUsbportLockOnly`). SubmitTransfer is
- * under that lock too and does not use this: its own hold parks every
- * completion until the callback returns. IRQL: DISPATCH_LEVEL, controller
- * lock not held.
- */
-VOID XhciSlotDeferredWorkLocked(PXHCI_EXTENSION ext);
-/*
- * XhciSlotDeferredWorkLocked naming the endpoint whose lock usbport holds, so
- * that under `XHCI_EXTENSION.DeliverPerEndpointOnly` only that endpoint's
- * completions are handed over. `endpointExtension` is usbport's extension for
- * it. IRQL: DISPATCH_LEVEL, controller lock not held.
+ * from (`XHCI_EXTENSION.DeliverUnderUsbportLockOnly`), naming the endpoint
+ * whose lock usbport holds, so that under
+ * `XHCI_EXTENSION.DeliverPerEndpointOnly` only that endpoint's completions are
+ * handed over. `endpointExtension` is usbport's extension for it.
+ * SubmitTransfer is under that lock too and does not use this: its own hold
+ * parks every completion until the callback returns.
+ *
+ * *(There was an endpoint-less `XhciSlotDeferredWorkLocked` beside this until
+ * the 2026-09-16 audit's B9. Every caller passes an endpoint, so it had no
+ * call site; what it had was four comments and two documents naming it as
+ * though it were the one in use.)*
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock not held.
  */
 VOID XhciSlotDeferredWorkForEndpoint(PXHCI_EXTENSION ext,
                                      PVOID endpointExtension);

@@ -610,6 +610,16 @@ static ULONG xhciBiosHandoff(PXHCI_EXTENSION ext)
      * ends with two owners. Clear every enable in 15:0 and acknowledge the
      * RW1C status bits in 31:29 (docs/usb-xhci-info/xhci-data-structures.md section 6).
      *
+     * **The write names the bits it carries rather than the bits it clears.**
+     * `dw1 & ~SMI_ENABLES` kept the RsvdP fields, which was the 2026-09-05
+     * audit's F13 - but it also carried back bits 28:21, which are RsvdZ and
+     * must be written as zero, and the read-only status at 16 and 20, which a
+     * write has no business asserting. Every bit of this register is spoken
+     * for: 0/4/15:13 are the enables, 3:1 and 12:5 and 19:17 are RsvdP,
+     * 16 and 20 are read-only, 28:21 are RsvdZ and 31:29 are RW1C status. So
+     * the positive form is complete, and it is the one the operational
+     * registers' RsvdP helpers use for the same reason.
+     *
      * This DWORD is why the search above had to prove eight bytes rather than
      * four: it is written, not just read.
      */
@@ -619,7 +629,7 @@ static ULONG xhciBiosHandoff(PXHCI_EXTENSION ext)
         return XHCI_CAPS_NOT_DECODING;
     }
     XhciWrite32(ext, offset + XHCI_USBLEGCTLSTS_OFFSET,
-                (dw1 & ~XHCI_USBLEGCTLSTS_SMI_ENABLES) |
+                (dw1 & XHCI_USBLEGCTLSTS_RSVDP) |
                     XHCI_USBLEGCTLSTS_SMI_STATUS);
 
     XHCI_DBG_VALUE("handoff: USBLEGSUP after", XhciRead32(ext, offset));
@@ -1978,8 +1988,12 @@ static VOID xhciPowerPorts(PXHCI_EXTENSION ext)
      * pass wrote: what comes out is how many ports are actually live. It is a
      * reading, not the root hub's port count - XhciRootHubBuild counts
      * XhciPortIsManaged, so a port whose PP did not confirm is still a root-hub
-     * port that reports itself unpowered (design record 10 sections 4.2 and
-     * 14.4 record the earlier claim that this number built the hub).
+     * port that reports itself unpowered
+     * (docs/future-plans/superspeed-storage-behind-a-switch.md section 4.2
+     * records the earlier claim that this number built the hub; that document
+     * was design record 10 when this comment was written, and the second
+     * section it cited, 14.4, does not exist in it - the 2026-09-16 audit's
+     * B10).
      */
     ext->PortsPowered =
         xhciSettlePortPower(ext, XHCI_PP_WANT_ON, XHCI_PP_PHASE_START,
@@ -2302,51 +2316,6 @@ VOID XhciFailClosedDma(PXHCI_EXTENSION ext)
     XhciRegPacket.UsbPortBugCheck(ext);
 }
 
-/*
- * SuspendController / ResumeController.
- *
- * **The suspend halts the controller, and the resume reinitializes it.** That
- * is the whole design, and both halves are load-bearing:
- *
- *   Leaving USBCMD.R/S set across a suspend is unsafe on Windows 2000, which
- *   performs real D-state transitions - a running xHC entering D3 is doing DMA
- *   into memory nobody is expecting it to touch, and the spec's power-management
- *   sequence (4.23.2, p.313) begins by stopping the controller for exactly that
- *   reason.
- *
- *   Masking the interrupt enables is part of the same obligation, and cannot be
- *   left to usbport. The Phase 3 spike traced DisableInterrupts around the
- *   *shutdown* sequence, but Win98's NUSB usbport also issues suspend/resume
- *   pairs repeatedly at idle, and nothing observed says those are bracketed the
- *   same way. Once task 6 enables IMAN.IE, a suspend that left it set would leave
- *   the controller able to assert INTx while this driver has already dropped
- *   XHCI_EXT_FLAG_INITIALIZED - so the ISR would decline every one of them, and
- *   the line would stay asserted with nobody to claim it.
- *
- * The earlier version of this pair did neither, on the argument that halting
- * without a restore would stop USB dead at Win98's first idle suspend. That
- * argument was wrong, and the specification says why: "the internal state of the
- * xHC shall be valid until it enters the D3cold state ... If prior to setting
- * the xHC into the D3cold state, software decides to restart the xHC, then a
- * Restore State operation is not required" (4.23.2, p.314). A halt is not a loss
- * of state. An idle suspend/resume pair that never reaches D3cold costs a halt
- * and a restart, and nothing else.
- *
- * **What is deliberately not implemented is CSS/CRS**, the Save State and
- * Restore State flags, and the reason is that they have nothing to preserve yet.
- * Their purpose is to carry internal Slot, Endpoint and Stream state across a
- * D3cold transition (4.23.2.1, p.315); at this point in Phase 4 there are no
- * slots, no endpoints and no outstanding commands, so a full reinitialization
- * restores the controller to a state indistinguishable from the one it left -
- * it re-derives every capability register from the hardware and reprograms
- * DCBAAP, CRCR, the event ring, CONFIG and port power from a common buffer that
- * usbport does not reclaim across a suspend. The protocol becomes necessary in
- * Phase 6, when a resume would otherwise drop device contexts, and it needs the
- * register-image save and restore of steps 4 and 4 (p.313-314) to be worth
- * anything. Roadmap Phase 4 task 8 carries it with that trigger recorded.
- *
- * IRQL: PASSIVE_LEVEL (both halt and reinitialize).
- */
 /* ------------------------------------------------------------------ */
 /* The 32-bit frame number (task 6-B.1)                                */
 /* ------------------------------------------------------------------ */
@@ -3091,10 +3060,15 @@ static ULONG xhciSaveState(PXHCI_EXTENSION ext)
  * The first command after such a resume is then ignored or a stale TRB is
  * consumed, and the watchdog escalates to a controller reset.
  *
- * **This is unexercised by construction on every run this project has taken.**
- * QEMU implements CRS as `usbsts |= SRE` and nothing else (batch 6-0), so both
- * target VMs go down the error path and never reach these lines. Whatever result
- * box closes this must say so rather than counting a green suite as evidence.
+ * **This is unexercised by construction on every run this project has taken,
+ * and the reason is earlier than the restore.** `qemu-xhci` reads
+ * `HCCPARAMS2 = 0`, so FSC is absent and `xhciSaveState` declines before it
+ * writes anything - `SavesDeclinedNoFsc` is the counter that moves, and
+ * `RestoreFailures` has never moved on a VM. With no saved state the resume
+ * reinitialises and `xhciRestoreState` is never entered at all, so these lines
+ * are not merely past an error branch: nothing reaches the function holding
+ * them. Whatever result box closes this must say so rather than counting a
+ * green suite as evidence.
  *
  * **Step 10 - "Restart each of the previously Running endpoints by ringing
  * their doorbells" - is still not performed, and the reason is not the one this
@@ -3274,11 +3248,16 @@ static ULONG xhciRestoreState(PXHCI_EXTENSION ext)
     if (!xhciSaveRestoreWait(ext, XHCI_USBSTS_RSS)) {
         ext->RestoreFailures++;
         /*
-         * **The reading both target VMs produce**, and it is predicted rather
-         * than surprising: QEMU 11.0.0 implements a CRS write as `usbsts |= SRE`
-         * and nothing else (batch 6-0), so every restore there reports an error.
-         * The caller falls back to a full reinitialisation and tells usbport its
-         * devices are gone, which is the path the Phase 6 checkpoint exercises.
+         * **Not the reading either target VM produces - they never get here.**
+         * `qemu-xhci` reads `HCCPARAMS2 = 0`, so `xhciSaveState` declines on the
+         * absent FSC and the resume has no saved state to restore from. This
+         * branch is what a controller that *did* save and then failed its CRS
+         * would give, and QEMU 11.0.0 would give it too (a CRS write is
+         * `usbsts |= SRE` and nothing else, batch 6-0) if a save had ever been
+         * made there. The caller falls back to a full reinitialisation and tells
+         * usbport its devices are gone - which is the path the Phase 6
+         * checkpoint exercises, reached on a VM through the decline rather than
+         * through here.
          */
         XHCI_DBG_VALUE("restore: failed, USBSTS", ext->LastSaveRestoreStatus);
         return 0;
@@ -3388,6 +3367,54 @@ static ULONG xhciRestoreState(PXHCI_EXTENSION ext)
     return 1;
 }
 
+/*
+ * SuspendController / ResumeController.
+ *
+ * **The suspend halts the controller, and the resume reinitializes it.** That
+ * is the whole design, and both halves are load-bearing:
+ *
+ *   Leaving USBCMD.R/S set across a suspend is unsafe on Windows 2000, which
+ *   performs real D-state transitions - a running xHC entering D3 is doing DMA
+ *   into memory nobody is expecting it to touch, and the spec's power-management
+ *   sequence (4.23.2, p.313) begins by stopping the controller for exactly that
+ *   reason.
+ *
+ *   Masking the interrupt enables is part of the same obligation, and cannot be
+ *   left to usbport. The Phase 3 spike traced DisableInterrupts around the
+ *   *shutdown* sequence, but Win98's NUSB usbport also issues suspend/resume
+ *   pairs repeatedly at idle, and nothing observed says those are bracketed the
+ *   same way. Once task 6 enables IMAN.IE, a suspend that left it set would leave
+ *   the controller able to assert INTx while this driver has already dropped
+ *   XHCI_EXT_FLAG_INITIALIZED - so the ISR would decline every one of them, and
+ *   the line would stay asserted with nobody to claim it.
+ *
+ * The earlier version of this pair did neither, on the argument that halting
+ * without a restore would stop USB dead at Win98's first idle suspend. That
+ * argument was wrong, and the specification says why: "the internal state of the
+ * xHC shall be valid until it enters the D3cold state ... If prior to setting
+ * the xHC into the D3cold state, software decides to restart the xHC, then a
+ * Restore State operation is not required" (4.23.2, p.314). A halt is not a loss
+ * of state. An idle suspend/resume pair that never reaches D3cold costs a halt
+ * and a restart, and nothing else.
+ *
+ * **CSS/CRS is implemented, and the paragraph that used to stand here said it
+ * was deliberately not.** That was true in Phase 4, whose argument was that
+ * with no slots, no endpoints and no outstanding commands a full
+ * reinitialization restores the controller to a state indistinguishable from
+ * the one it left. Phase 6 creates all three, so task 6-B.6 built the protocol
+ * with exactly the trigger Phase 4 task 8 recorded: `xhciSaveState` below and
+ * `xhciRestoreState` beside it. The Phase 4 text survived the change and sat
+ * here, several hundred lines from either function, until the 2026-09-16
+ * audit's B10.
+ *
+ * What is still true of the reinitialization is what makes it the fallback: it
+ * re-derives every capability register from the hardware and reprograms DCBAAP,
+ * CRCR, the event ring, CONFIG and port power from a common buffer that usbport
+ * does not reclaim across a suspend. It is correct whatever the controller did,
+ * and it costs every addressed device.
+ *
+ * IRQL: PASSIVE_LEVEL (both halt and reinitialize).
+ */
 VOID XhciSuspendController(PXHCI_EXTENSION ext)
 {
     if (ext == NULL) {
@@ -3589,9 +3616,10 @@ MPSTATUS XhciResumeController(PXHCI_EXTENSION ext)
         }
 
         /*
-         * The restore failed, which in both target VMs is the *expected* reading
-         * rather than a defect: QEMU implements CRS as "set SRE" and nothing
-         * else. Fall through to the reinitialisation, which drops the devices.
+         * The restore failed. On a VM this is not the branch taken: the save was
+         * declined for want of FSC, so there was no saved state and the restore
+         * was never attempted. Either way the fall-through is the same
+         * reinitialisation, which drops the devices.
          */
         XHCI_DBG_VALUE_CHANGED("ResumeController: restore failed, "
                                "reinitializing, USBSTS",
@@ -3946,8 +3974,11 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
  * controller to write PORTSC at all (5.4.8, p.370); it belongs before the halt,
  * in the ordered teardown task 8 owns.
  *
- * IRQL: PASSIVE_LEVEL.
- */
+ * IRQL: PASSIVE_LEVEL (it waits), or DISPATCH_LEVEL with
+ * `ext->InitBelowPassive` set (task 13-R.1), where the waits underneath take
+ * their stall-only path. The declaration in src/xhci_hw.h has the full
+ * contract; a bare "PASSIVE_LEVEL" stood here until the 2026-09-16 audit's
+ * B11 and contradicted it. */
 ULONG XhciQuiesceController(PXHCI_EXTENSION ext)
 {
     ULONG usbcmd;
@@ -4107,8 +4138,11 @@ ULONG XhciQuiesceController(PXHCI_EXTENSION ext)
  * owes XhciFailClosedDma on a 0** - the stop callback and both reclaiming exits
  * of XhciInitController.
  *
- * IRQL: PASSIVE_LEVEL.
- */
+ * IRQL: PASSIVE_LEVEL (it waits), or DISPATCH_LEVEL with
+ * `ext->InitBelowPassive` set (task 13-R.1), where the waits underneath take
+ * their stall-only path. The declaration in src/xhci_hw.h has the full
+ * contract; a bare "PASSIVE_LEVEL" stood here until the 2026-09-16 audit's
+ * B11 and contradicted it. */
 ULONG XhciStopController(PXHCI_EXTENSION ext)
 {
     if (ext == NULL) {

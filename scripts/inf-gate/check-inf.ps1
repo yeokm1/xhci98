@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
 Setup-engine compatibility gate for src\xhci98.inf (roadmap Phase 3 task 6).
 
@@ -173,7 +173,7 @@ verdict, so callers must check the exit code before trusting it.
 powershell -ExecutionPolicy Bypass -File scripts\inf-gate\check-inf.ps1
 
 .EXAMPLE
-powershell -File scripts\inf-gate\check-inf.ps1 -PackageDir out\pkg-debug
+powershell -File scripts\inf-gate\check-inf.ps1 -PackageDir out\pkg-debug-x86
 #>
 
 [CmdletBinding()]
@@ -656,8 +656,26 @@ foreach ($m in $models) {
     # looks like every other one. The 32-bit file has no counterpart rule
     # because there the undecorated section IS the Windows 98 install.
     #
-    if ($mfgDecoration -ne "" -and (Test-SectionExists $inf $base)) {
-        Add-Failure "PATH-NO9X" ("model '{0}' has an undecorated install section [{1}]. This INF carries the {2} binary, and a 32-bit setup engine falls back to an undecorated section when it finds no decoration of its own - so this one offers an amd64 driver to a 32-bit machine. The 64-bit package's sections are all decorated on purpose; the 32-bit package is src\xhci98.inf." -f $m.Id, $base, $mfgDecoration)
+    #
+    # **The fallback chain is .NTamd64, then .NTx86, then .NT, then
+    # undecorated, and the rule refused only the last of the four** (the
+    # 2026-09-16 audit's D7). A 32-bit engine looking for this model reaches
+    # `[<base>.NTx86]` and `[<base>.NT]` before it ever falls back to the bare
+    # name, so either of those in the amd64 file puts an amd64 binary on a
+    # 32-bit machine just as surely - and more directly, since no fallback is
+    # needed at all. All three are refused under the same id, because they are
+    # one mistake with three spellings.
+    #
+    if ($mfgDecoration -ne "") {
+        foreach ($reachable in @(
+            @{ Name = $base;             What = "undecorated" },
+            @{ Name = ($base + ".NT");   What = "decorated .NT" },
+            @{ Name = ($base + ".NTx86"); What = "decorated .NTx86" }
+        )) {
+            if (Test-SectionExists $inf $reachable.Name) {
+                Add-Failure "PATH-NO9X" ("model '{0}' has an {1} install section [{2}]. This INF carries the {3} binary, and a 32-bit setup engine reaches .NTx86, then .NT, then the undecorated name - so this one offers an amd64 driver to a 32-bit machine. The 64-bit package's sections are decorated {3} and nothing else, on purpose; the 32-bit package is src\xhci98.inf." -f $m.Id, $reachable.What, $reachable.Name, $mfgDecoration)
+            }
+        }
     }
 
     foreach ($ap in @($archPaths | Where-Object { $_.Kind -eq "9x" })) {
@@ -1298,8 +1316,17 @@ if ($mfgDecoration -eq "") {
     # right-click route is the one a user takes with no device present, so
     # nothing about the hardware stops it.
     #
-    if (Test-SectionExists $inf "DefaultInstall") {
-        Add-Failure "OS-DEFAULT" "[DefaultInstall] exists in the 64-bit file. A 32-bit engine falls back to the undecorated section on a right-click Install, so this one hands an amd64 xhci98.sys to a 32-bit machine with no device involved. Decorate it: the only right-click section here is [DefaultInstall.NTamd64]."
+    # The undecorated section, and the two DECORATED ones a 32-bit engine
+    # reaches before it ever falls back to it. `[DefaultInstall.NTx86]` and
+    # `[DefaultInstall.NT]` in the 64-bit file are not fallbacks at all - they
+    # are the section that engine was looking for - so they are the same
+    # hazard arriving sooner, and only the fallback was refused (the
+    # 2026-09-16 audit's D7).
+    foreach ($reachable in @("DefaultInstall", "DefaultInstall.NT",
+                             "DefaultInstall.NTx86")) {
+        if (Test-SectionExists $inf $reachable) {
+            Add-Failure "OS-DEFAULT" ("[{0}] exists in the 64-bit file. A 32-bit engine reaches .NTx86, then .NT, then the undecorated section on a right-click Install, so this one hands an amd64 xhci98.sys to a 32-bit machine with no device involved. The only right-click section here is [DefaultInstall.NTamd64]." -f $reachable)
+        }
     }
 }
 

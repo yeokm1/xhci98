@@ -647,6 +647,23 @@ static unsigned long dump_region(HANDLE device, unsigned long region,
                    (unsigned long)(SNAP_PARAM_BYTES - sizeof(SNAP_HEADER)));
             return abandon_region(file, path);
         }
+        /*
+         * **And the same question of the region as a whole**, which nothing was
+         * asking (the 2026-09-16 audit's C4). Each window is bounded, and the
+         * loop below runs until a header stops setting TRUNCATED - so a driver
+         * whose windows never stop would write a `.BIN` larger than the region
+         * it claims to be, and the summary line would then print a byte count
+         * beside a `RegionBytes` that contradicts it. Refused rather than
+         * printed, for the reason the per-window check gives: a file this tool
+         * cannot describe is worse than no file.
+         */
+        if (header.RegionBytes != 0 &&
+            header.PayloadBytes > header.RegionBytes - total) {
+            printf("  the driver has sent %lu bytes of a %lu-byte region and "
+                   "offers %lu more -\n  refusing the reply\n",
+                   total, header.RegionBytes, header.PayloadBytes);
+            return abandon_region(file, path);
+        }
 
         if (header.PayloadBytes != 0) {
             written = 0;
@@ -975,9 +992,30 @@ static void write_companion_ring(const SNAP_HEADER *h, const unsigned char *ext,
              h->RingOffset, h->RingBytes, extBytes);
         return;
     }
+    /*
+     * **And the two things the mask arithmetic below assumes of the header,
+     * which nothing else checks** (the 2026-09-16 audit's C4). Neither can be
+     * produced by this driver, and that is the point: every other field of this
+     * header is bounds-checked before it is believed, and these two were taken
+     * on trust.
+     *
+     * `RingUsed > RingBytes` would print a record more than once - the index is
+     * masked, so it is a wrong reading rather than a read out of bounds, which
+     * is exactly the class this file refuses rather than prints. A `RingBytes`
+     * that is not a power of two makes `mask` name a different set of bits than
+     * the size does, so the wrap would land somewhere the driver never wrote.
+     */
+    if (h->RingUsed > h->RingBytes ||
+        (h->RingBytes & (h->RingBytes - 1)) != 0) {
+        comp("\nnote ring: the driver says %lu bytes are in use of a %lu-byte "
+             "ring, and this\n  tool's wrap arithmetic needs a used count "
+             "within a power-of-two size. Not\n  printing it - see the .BIN.\n",
+             h->RingUsed, h->RingBytes);
+        return;
+    }
 
     /* The ring's size is a power of two, so the wrap is a mask - the same
-     * arithmetic the driver uses. */
+     * arithmetic the driver uses, and checked to be one just above. */
     mask = h->RingBytes - 1;
     start = (h->RingHead - h->RingUsed) & mask;
 
@@ -2410,19 +2448,15 @@ static void usage(void)
 "  -o BASE  output basename (default XHCISNAP)\n"
 "  -force   write to a key matched by value NAME alone\n"
 "\n"
-"Exit 0 = the .TXT is complete.  3 = it is NOT (not created, a write or the\n"
-"close failed, or the extension came back the wrong size): send the .BIN and\n"
-"say so, not the .TXT.\n"
+"Exit 0 = the .TXT is complete.  3 = it is NOT: send the .BIN and say so.\n"
 "\n"
 "THE FOUR STEPS, and none of them is regedit:\n"
 "  1. xhcisnap -verbosity 2     0 off, 1 counters, 2 +note ring THE LOG,\n"
 "  2. restart the machine       3 +PORTSC table, 4 +everything\n"
 "  3. reproduce the problem\n"
 "  4. xhcisnap -o C:\\MYDUMP     then send MYDUMP.TXT\n"
-"\n"
-"The channel ships OFF in every build, so step 1 is not optional.  Run\n"
-"xhcisnap -disable once you have sent the capture: while it is on, anyone\n"
-"using this machine can read this driver's diagnostic state through it.\n");
+"Step 1 is not optional - the channel ships OFF.  Run xhcisnap -disable once\n"
+"you have sent the capture; -help says what leaving it on costs.\n");
 }
 
 /*
@@ -2627,6 +2661,15 @@ int main(int argc, char **argv)
     }
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-c") == 0 && i + 1 < argc) {
+            /* Naming a controller is asking for a dump of it - the long help
+             * says `-dump` is "Implied by -c and -o", and this is where that
+             * is true. It was not until the 2026-09-16 audit's C1: `doDump`
+             * was set only in the literal `-dump` branch, so the refusal
+             * below could not see an implied dump and
+             * `XHCISNAP -verbosity 2 -o C:\X` wrote the registry, exited 0
+             * and took no dump - Phase 20's defect D5 surviving in the
+             * implied spelling. */
+            doDump = 1;
             if (!parse_ulong(argv[++i], &controller)) {
                 printf("-c takes a controller number and nothing else. '%s' "
                        "is not one, and this\ntool will not guess: on a "
@@ -2636,6 +2679,8 @@ int main(int argc, char **argv)
                 return 2;
             }
         } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            /* As for `-c`: naming where the dump goes is asking for one. */
+            doDump = 1;
             base = argv[++i];
             /*
              * **Bounded before it is used, because three fixed buffers are
@@ -2746,6 +2791,20 @@ int main(int argc, char **argv)
 
     if (doSetLevel && doDisable) {
         printf("-verbosity and -disable are opposites. Pick one.\n");
+        return 2;
+    }
+    /*
+     * **`-force` is a modifier on the registry write and nothing else**, which
+     * is what `README.md` documents it as. On its own it used to fall through
+     * to a default-named dump - so a user who typed it expecting to override
+     * something got three files in the current directory instead, which is the
+     * same surprise the bare-invocation refusal above exists to prevent (the
+     * 2026-09-16 audit's C4).
+     */
+    if (force && !doSetLevel && !doDisable) {
+        printf("-force only has meaning beside -verbosity or -disable, where "
+               "it allows a write to\na key matched by value name alone. On "
+               "its own it asks for nothing.\n");
         return 2;
     }
     /*
@@ -2870,6 +2929,13 @@ int main(int argc, char **argv)
         DeleteFileA(portscTmpPath);
         DeleteFileA(extPath);
         DeleteFileA(portscPath);
+        /* **And the previous .TXT, which this branch used to leave standing.**
+         * The paragraph above promises "an absence and not a mixture", and
+         * README.md repeats the promise - but the only `DeleteFileA(textPath)`
+         * was the success-path one below, so a failed publish left last run's
+         * report as the newest file with the set it describes deleted from
+         * under it (the 2026-09-16 audit's C4). */
+        DeleteFileA(textPath);
         printf("  no dump was published\n");
         return 1;
     }
