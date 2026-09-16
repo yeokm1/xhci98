@@ -2099,8 +2099,9 @@ state it for the user. Two qualifications travel with it for this pair:
 **every clause was taken on the `qemu` build**, and **the install was a staged
 copy of the NT 6.x sections, not the committed `src\xhci98.inf`**, which took
 them on 2026-09-16 after those runs; neither the `release` flavour nor the
-committed file has been installed on either guest, and no task yet schedules
-it. The x64 pair's tier, and its signing requirement, are the next section's.
+committed file has been installed on either guest, and roadmap task 22.10's
+eighth and ninth install legs are where both are read, from the published
+asset. The x64 pair's tier, and its signing requirement, are the next section's.
 
 **They are one recipe, and they are written as one.** `scripts\setup-qemu-vista.ps1`
 and `scripts\setup-qemu-win7.ps1` are thin callers over a shared body,
@@ -2318,8 +2319,9 @@ The procedure:
    wrong. **The refusal half is confirmed**: both guests installed and loaded
    the unsigned driver on every leg of issue 7 section 7.5. **The prompt
    itself was not written down** on any of those legs, so what the dialog
-   said, and which choice took it, is still unrecorded; read it on the next
-   install, and until then the release notes do not quote it.
+   said, and which choice took it, is still unrecorded. Roadmap task 22.10's
+   eighth and ninth install legs read it, and until then the release notes do
+   not quote it.
 
 ### Vista x64 and Windows 7 x64 target VMs (roadmap task 21.8)
 

@@ -120,7 +120,8 @@ decisions 10 and 12). **Every clause was taken on the `qemu` build.** The
 roadmap task 22.10's sixth and seventh install legs, which is also Windows 7
 x64's first install through the committed INF; the two 32-bit guests have run
 neither the `release` flavour nor the committed `src/xhci98.inf`, only a
-staged copy of the NT 6.x sections it now carries. **The x64 half loads only
+staged copy of the NT 6.x sections it now carries, and the eighth and ninth
+legs of the same task are their first of both. **The x64 half loads only
 on a boot with driver signature enforcement disabled**: the package is not
 signed (design record 11 section 12, decision 9), so the user presses F8 and
 chooses Disable Driver Signature Enforcement at every start, the machine can

@@ -1693,10 +1693,11 @@ change it is a change to the shipping 32-bit binary, it goes into this
 release, and all four existing 32-bit install legs are re-validated behind it;
 if 22.5 stays empty, as everything read so far says it will, the 32-bit
 binary in this release is `1.0.2.0`'s code at a new version. Either way the
-cut is last. And **the asset gains three install legs**, all of them the amd64
-package, which no previous cut had: on the XP x64 guest, and - on the owner's
-instruction of 2026-09-16, carrying task 21.8's `release`-flavour clause - on
-the Vista x64 and Windows 7 x64 guests. The x86 half keeps its four.
+cut is last. And **the asset gains five install legs** no previous cut had:
+the amd64 package on the XP x64 guest, and - on the owner's instruction of
+2026-09-16 - the amd64 package on the Vista x64 and Windows 7 x64 guests,
+carrying task 21.8's `release`-flavour clause, and the x86 package on the
+Vista x86 and Windows 7 x86 guests. The x86 half's four existing legs stay.
 
 **What the x64 half of this release may be said to be is exactly what tasks
 21.5 and 22.5 observed and no more**: three guests in virtual machines, never
@@ -2496,10 +2497,10 @@ reading may not tick a box whose line names a guest.
         that day: both architectures at once, nothing said about Vista x64's
         remove and rescan, and nothing about issue 7. Two gaps are stated
         rather than closed: the 32-bit pair ran only the `qemu` build from a
-        staged copy of the NT 6.x sections, with no task yet scheduling the
-        `release` flavour or the committed `src\xhci98.inf` on them, and the
-        32-bit install prompt was never written down (`build-and-test.md`,
-        step 4 of the 32-bit section)
+        staged copy of the NT 6.x sections, and the 32-bit install prompt
+        was never written down (`build-and-test.md`, step 4 of the 32-bit
+        section). Both are task 22.10's eighth and ninth install legs, added
+        the same day
 - [x] **22.6 - the record.** The tier stated where Windows ME and 32-bit XP
       are stated, in `AGENTS.md`, `build-and-test.md`, `win98-wdm.md` and the
       release notes, with the provenance rows beside it. Task 21.6 is the
@@ -2751,6 +2752,20 @@ and they are the phase's other half rather than a coda to the first.
         the first install through the committed `src\xhci98-amd64.inf` (22.5's
         INF box); read `setupapi.log` for `XhciModels.NTamd64.6.0` and
         `[Xhci.Dev6.NTamd64]` on both
+  - [ ] **the eighth and ninth legs: the x86 package on the Vista x86 and
+        Windows 7 x86 guests**, from the asset's `RELEASE-X86\` directory,
+        each off `vista-clean-install` / `win7-clean-install`. Added
+        2026-09-16 on the owner's instruction, because the NT 6.x tier's
+        32-bit half had no leg in the cut at all: every reading on those two
+        guests was taken on the `qemu` build from a staged copy of the NT 6.x
+        sections, so **this is their first `release` flavour and their first
+        install through the committed `src\xhci98.inf`** (22.5's INF box,
+        `d165773`). Take the same clauses as the sixth and seventh legs,
+        read the same way, and `setupapi.log` for `XhciModels.NTx86.6.0` and
+        `[Xhci.Dev6.NTx86]`. **Write down what the unsigned-driver prompt
+        says and which choice took it** - no leg has recorded it on either
+        guest (`build-and-test.md`, step 4 of "Windows Vista and Windows 7
+        target VMs"), and the release notes' install step waits on it
   - [ ] the asset's file list checked against what the packager staged, and
         no Microsoft file in it. `PKG-MSFILE` refuses one by name; the rule
         that actually closes it is the packager publishing nothing it did not
@@ -2785,9 +2800,10 @@ Checkpoint, the second half - the cut. All of it, or the phase is not closed:
       directories
 - [ ] the post-release matrix on both primary targets no worse than Phase
       20's reports
-- [ ] the install route read from the published asset on all seven legs -
-      the four x86 ones every cut since `1.0.1.0` has taken, and the amd64
-      ones on the XP x64, Vista x64 and Windows 7 x64 guests
+- [ ] the install route read from the published asset on all nine legs -
+      the four x86 ones every cut since `1.0.1.0` has taken, the amd64 ones
+      on the XP x64, Vista x64 and Windows 7 x64 guests, and the x86 ones on
+      the Vista x86 and Windows 7 x86 guests
 - [ ] the asset holding exactly what the packager staged - `xhci98.sys` and
       its INF in each of the four flavour directories, the two tools, the
       readmes and the licence texts - and no Microsoft file under any name
