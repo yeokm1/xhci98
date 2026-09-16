@@ -407,7 +407,8 @@ It selects WDK 7.1 (`x64 WNET`) instead of the Windows 2000 DDK,
 `src\usbport_amd64.lib` instead of `src\usbport.lib`, and
 `src\obj<flavour>\amd64\` instead of `src\obj<flavour>\i386\`. A release cut
 runs both legs. `DDKROOT` overrides the 32-bit DDK only and is REFUSED on this
-leg - `WDK71ROOT` is the 64-bit override - because handing the Win2000 DDK's
+leg - `WDKROOT` is the 64-bit override, and it is the one name the import gate
+and `make-usbport-lib.cmd` read too - because handing the Win2000 DDK's
 `setenv.bat` an `x64 WNET` argument fails with a message about the wrong thing
 entirely.
 

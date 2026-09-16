@@ -354,7 +354,13 @@ DDK's own words for the same two builds are free and checked. "Free" reads as
 free of charge to anyone who has not met that convention, and "checked" says
 nothing at all to a first-time reader, so they survive only where the DDK
 itself requires them: `setenv.bat`'s flavour argument, and the `objfre` /
-`objchk` directories it writes into. Both published names are 8.3-clean,
+`objchk` directories it writes into. **The published names are not 8.3-clean**
+- `release-x86` is eleven characters - which is a cost task 21.3 took
+deliberately, because the alternative is two architectures' `xhci98.sys` in one
+directory or names that do not say which is which, and because nothing in the
+install route resolves a directory by name: the user points Have Disk at
+whichever directory they opened. A Win98 setup engine reading this off media
+sees a short-name alias,
 because a release directory can end up on media a Windows 98 setup engine has
 to read.
 

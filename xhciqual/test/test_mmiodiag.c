@@ -515,6 +515,28 @@ static void test_tool_limit_is_not_a_disqualification(void)
           "a controller misdescribing its own BAR is still disqualified");
     reset_out();
     CHECK(report_mmio_unavailable(&p, 1) == 1, "and reported as one");
+
+    /*
+     * **The quick scan's REASON has to agree with the quick scan's VERDICT.**
+     * `quick_reason` reconstructs from PCI state exactly as the classifier
+     * does, so it reached the same "MMIO is dead" fallback the classifier
+     * reached - and printed it beside a CANNOT SAY. Two answers to one
+     * question, in the one place a user reads both on the same line.
+     */
+    /* `ipin` non-zero, because Interrupt Pin = 0 is answered before the MMIO
+     * question and would mask what this is about. */
+    base_pci(&p);
+    p.ipin = 1;
+    p.mmio_tool_limit = 1;
+    CHECK(strstr(quick_reason(&p, 0, 4, 1), "tool limit") != 0,
+          "the quick reason names the tool limit");
+    CHECK(strstr(quick_reason(&p, 0, 4, 1), "dead") == 0,
+          "and does not call the window dead beside a CANNOT SAY");
+
+    base_pci(&p);
+    p.ipin = 1;
+    CHECK(strstr(quick_reason(&p, 0, 4, 1), "dead") != 0,
+          "a window that really is dead still says so");
 }
 
 /* The verdict classifier: only genuine hardware/platform blockers may return

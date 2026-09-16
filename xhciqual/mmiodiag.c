@@ -346,6 +346,13 @@ const char *quick_reason(const PCIINFO *p, int mmio_ok, int usb2_ports,
         if ((p->cmd_effective & PCI_CMD_MSE) == 0)
             return active_requested ? "Memory Space Enable could not be set"
                                     : "Memory Space Enable is clear";
+        /* The verdict for this one is CANNOT SAY, so the reason beside it may
+         * not say the window is dead - the mapper recorded why it gave up and
+         * that reason is about this tool. Kept in step with
+         * quick_classify_mmio by hand; the two are one answer in two forms. */
+        if (p->mmio_tool_limit)
+            return "the register block reaches outside the window this tool "
+                   "maps - a tool limit, not a reading about the controller";
         return "BAR0 MMIO is dead with MSE set and the device in D0";
     }
 

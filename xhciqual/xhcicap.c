@@ -154,11 +154,30 @@ int xhci_map(CTRL *c)
     c->rtsoff = rtsoff_raw & 0xFFFFFFE0UL;
     doorbell_bytes = ((c->hcs1 & 0xFF) + 1) * 4;
 
+    /*
+     * **A ZERO RTSOFF OR DBOFF IS THE CONTROLLER, NOT THIS TOOL**, and it is
+     * asked first for that reason. Both are offsets from the start of the
+     * register block, and zero puts the runtime or doorbell array back inside
+     * capability-register space, overlapping the registers just read - which
+     * is a controller misdescribing its own layout, exactly like the
+     * CAPLENGTH and HCIVERSION refusal above. Sharing a branch with the
+     * window-size check below would have handed it "a tool limit, not a
+     * controller fault" and a CANNOT SAY verdict, which is the opposite
+     * reading.
+     */
+    if (c->rtsoff == 0 || c->dboff == 0) {
+        c->pci.mmio_reason = "RTSOFF or DBOFF is zero, which places the "
+                             "runtime or doorbell registers on top of the "
+                             "capability registers - the controller is "
+                             "misdescribing its own layout";
+        goto unmap;
+    }
+
     /* Everything this tool touches must live inside the mapped window:
      * operational block (PORTSC for MAX_PORTS ports), runtime, doorbells. */
     if ((u32)c->caplength + XOP_PORTSC(MAX_PORTS) + 0x10UL > BAR_MAP_SIZE ||
-        c->rtsoff == 0 || c->rtsoff > BAR_MAP_SIZE - 0x40UL ||
-        c->dboff == 0 || c->dboff > BAR_MAP_SIZE - doorbell_bytes) {
+        c->rtsoff > BAR_MAP_SIZE - 0x40UL ||
+        c->dboff > BAR_MAP_SIZE - doorbell_bytes) {
         /* A TOOL LIMIT, and it must not read as dead silicon: this tool maps a
          * fixed 64 KB window and this controller puts its runtime, doorbell or
          * port registers outside it. */
