@@ -2127,7 +2127,14 @@ publishes:
       Windows ME's, which shares the engine) before the shipping file is
       touched, and to record the answer either way. Until then the 32-bit
       package does not install on Vista or Windows 7 as shipped, and
-      `PATH-MFGDEC` still refuses any decoration on that file.
+      `PATH-MFGDEC` still refuses any decoration on that file. **Read the
+      same day: both 16-bit engines take the line.** Windows 98 SE under
+      NUSB, from a snapshot that never had this driver, offered the device
+      from the widened INF, installed `[Xhci.Dev]` and loaded the driver;
+      Windows ME's stock engine offered and installed it too (Code 2 there,
+      the stock stack's documented outcome). The NT 5.x engines - Windows
+      2000 SP4 and 32-bit XP - read the same line and are not yet measured
+      with it; roadmap task 22.5 has the readings.
 
 ---
 

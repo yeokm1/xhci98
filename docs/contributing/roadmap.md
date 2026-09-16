@@ -3275,7 +3275,7 @@ reading may not tick a box whose line names a guest.
             use) an untagged `out\pkg-qemu` or a binary without its INF;
             `selftest.ps1` holds 11 checks for it, 7 of which fail against
             the old path, and reads 252 checks, all passed. No guest run*
-    - [ ] **Vista x64: REMOVE/RESCAN does not complete, twice, and that
+    - [x] **Vista x64: REMOVE/RESCAN does not complete, twice, and that
           clause had never been run on this guest.** Device Manager Uninstall
           of the devnode (package left in the store) wedged: attempt 1 sent
           **nothing to the driver at all in ~21 measured minutes**, its ring
@@ -3297,7 +3297,23 @@ reading may not tick a box whose line names a guest.
           nothing on its own; more remove/rescan cycles on Vista x64, on the
           current binary off a fresh revert, are taken before the box is
           ticked or a word goes into the release notes, and that is a guest
-          session rather than host work
+          session rather than host work.
+          **RE-RUN 2026-09-16 (`vm\vistax64-rr\`): five remove/rescan cycles,
+          all five pass.** A fresh copy of `vista-x64-clean-install`, `-smp 4`
+          under TCG, one install of the qemu package at `3fb63c5` - whose INF
+          is the committed `src\xhci98-amd64.inf`, so this is also the first
+          install of the shipping NT 6.x path - the three devices, then each
+          remove and each rescan held to a ten-minute threshold fixed before
+          the run, with the watcher armed before every click. Every teardown
+          reached `quiesce: halted` within the first 30 s sample; every rescan
+          reloaded the driver at 3 slots / 3 reopened / iso 2 and read
+          `read-v300.ps1 -Expect nt6` ALL PASS with `forced` and `fallback
+          polls` 0 - four within one sample, the fourth after four samples with
+          the log flat until then, where the click time was not recorded, so
+          operator and PnP latency are not separable. Device Manager's tree was
+          clean after the last. **Six clean removes in six since issue 7's
+          fix**, against two wedges before it; that still does not establish
+          the wedge shared issue 7's cause
   - [ ] **the INF for the 6.x installs, an owner's decision on each file.**
         Vista's file queue aborts on the `LayoutFile` copies (task 21.8), and
         the shape that installs is a `.6.0`-decorated models section naming
@@ -3343,7 +3359,28 @@ reading may not tick a box whose line names a guest.
           key by `InfSection`, matched exactly against `Xhci.Dev` and
           `Xhci.Dev.NTx86`, and fails closed on anything else - what an NT 6.x
           install records there is unread, and if it is `Xhci.Dev6` the tool
-          will not recognise the key until a row is added
+          will not recognise the key until a row is added.
+          **The 16-bit engine half was READ 2026-09-16, and it takes the
+          line** (`vm\inf60-w98\`, `vm\inf60-me\`). The candidate was
+          `src\xhci98.inf` at `3fb63c5` plus exactly the three staged hunks
+          (byte-identical to `vm\xfervista\xhci98.inf`), and the x86 gate
+          refused it on `PATH-MFGDEC` alone, no `W98-*` rule. **Windows 98 SE
+          under NUSB**, off a fresh copy of `post-nusb` that never had this
+          driver: Found New Hardware, location `d:\` only, and the engine
+          offered "USB 2.0 eXtensible Host Controller (xhci98)" from
+          `D:\XHCI98.INF` - a name only `[XhciModels]` carries - installed it
+          with the documented Windows 98 CD prompt, and on the cold boot the
+          driver loaded (`built Sep 16 2026 18:39:20`, `read-v300.ps1 -Expect
+          nt5` ALL PASS) and a hot-plugged mouse enumerated, so `[Xhci.Dev]`'s
+          loader values were written. **Windows ME**, off
+          `winme-clean-install` (stock stack, never had this driver): the same
+          offer from the same file, installed with no prompt, and Device
+          Manager shows the controller with Manufacturer "xHCI98 Project" at
+          Code 2 - the documented stock-stack outcome, so a reading of the
+          engine and not of a load. **What is left before the shipping file
+          changes is the NT half**: Windows 2000 SP4's and 32-bit XP's setupapi
+          read the same line, and whether each falls back to the undecorated
+          `[XhciModels]` when `NTx86.6.0` does not match is unmeasured here
   - [ ] **`TESTSIGNING` tried once on an x64 guest**, for the release notes'
         64-bit paragraph: what the user does once, what it costs at every
         boot, and whether it survives a reboot. F8 is already measured
@@ -3395,7 +3432,9 @@ reading may not tick a box whose line names a guest.
           either a second disclosed limitation or an explicitly untested
           clause, and saying nothing at all is the one option that is not
           honest. **Owner, 2026-09-16: re-run it first** (22.5's box); the
-          wording waits on that reading
+          wording waits on that reading. *Taken the same evening: five
+          cycles, all pass (22.5). The wording is the owner's; the reading
+          supports saying nothing about it*
     - [x] **The premise of this box changed on 2026-09-13**: the defect's
           cause was read and is fixed in source (22.5's last sub-box,
           issue 7 section 7), and the fault was this driver's completion
