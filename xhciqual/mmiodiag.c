@@ -249,6 +249,17 @@ int report_mmio_unavailable(const PCIINFO *p, int active_requested)
                 "address it)\n");
     } else if (p->bar_phys == 0) {
         qprintf("  DISQUALIFIED: BAR0 is unassigned\n");
+    } else if ((p->bar_lo & 1) != 0) {
+        /* The third function that has to ask this before the D-state and MSE
+         * branches, and the one the fix missed: `quick` above already answers
+         * DISQUALIFIED for it, so without this the run returned 1 - a hard
+         * disqualifier - while printing "No controller fault inferred" and
+         * advice about powering the part up or enabling MSE. The verdict and
+         * the words under it have to be one answer (Codex review round 5). */
+        qprintf("  DISQUALIFIED: BAR0 selects I/O space, and xHCI 5.2.1 "
+                "requires a memory BAR\n");
+        qprintf("      True whatever the power state and Memory Space Enable "
+                "say; powering it up will not change it.\n");
     } else if (p->has_pm && p->pm_state != 0) {
         qprintf("  NOT QUALIFIED: controller is in D%d, not D0; MMIO and "
                 "active tests are unavailable\n", p->pm_state);

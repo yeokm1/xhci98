@@ -580,6 +580,11 @@ static void test_io_bar_outranks_power_and_mse(void)
           "an I/O BAR disqualifies even with MSE clear on a probe-only run");
     CHECK(strstr(quick_reason(&p, 0, 4, 0), "I/O space") != 0,
           "and the reason names the BAR rather than the MSE bit");
+    reset_out();
+    CHECK(report_mmio_unavailable(&p, 0) == 1,
+          "the long-form verdict disqualifies it on a probe-only run too");
+    CHECK(!has("No controller fault inferred"),
+          "with no reassurance under a disqualification");
 
     /* And out of D0, which is the other branch that used to mask it. */
     base_pci(&p);
@@ -595,6 +600,19 @@ static void test_io_bar_outranks_power_and_mse(void)
     reset_out();
     report_mmio_dead(&p);
     CHECK(has("I/O space"), "the long-form cause agrees, with no reason recorded");
+
+    /* And the long-form VERDICT, which is the third function that asks this
+     * and the one the first cut of the fix missed: it returned 1 - a hard
+     * disqualifier - while printing the D-state reassurance and advice about
+     * powering the part up. */
+    reset_out();
+    CHECK(report_mmio_unavailable(&p, 1) == 1,
+          "the long-form verdict disqualifies an I/O BAR in D3");
+    CHECK(has("I/O space"), "and says so");
+    CHECK(!has("No controller fault inferred"),
+          "without the reassurance that contradicts its own return value");
+    CHECK(!has("transition it to D0"),
+          "and without advice that would not help");
 
     /* A memory BAR with MSE clear is unchanged: that IS the MSE reading. */
     base_pci(&p);
