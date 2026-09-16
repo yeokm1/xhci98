@@ -707,6 +707,23 @@ static unsigned long dump_region(HANDLE device, unsigned long region,
         }
     }
 
+    /*
+     * **The same question once more, of the whole region.** The per-reply
+     * guard above sits after the `PAST_END` break, so a terminal reply is the
+     * one that never passes it - and a driver that sent eight bytes of an
+     * eight-byte region and then answered `PAST_END` with `RegionBytes = 0`
+     * produced a file this tool would describe as "8 bytes (region is 0)".
+     * That is the mixture the guard exists to refuse, arriving on the one
+     * reply it could not see. `last` is the final header, which is the one
+     * whose `RegionBytes` is about to be printed and recorded.
+     */
+    if (total != last->RegionBytes) {
+        printf("  the driver sent %lu bytes but its last reply calls the "
+               "region %lu bytes -\n  refusing the dump\n",
+               total, last->RegionBytes);
+        return abandon_region(file, path);
+    }
+
     CloseHandle(file);
     printf("  %s: %lu bytes in %lu window(s) (region is %lu)\n",
            path, total, windows, last->RegionBytes);

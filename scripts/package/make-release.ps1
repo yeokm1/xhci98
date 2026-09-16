@@ -2271,9 +2271,11 @@ on the Version tab of the file's properties.
         $readmeDebugDir   = "DEBUG-X86 or DEBUG-X64"
         $readmeDirList    = "RELEASE-X86\, DEBUG-X86\, RELEASE-X64\ and DEBUG-X64\"
         $readmeTellApart  = @"
-The directory a copy came out of is the only thing that
-identifies it: the "debug" flag on the Version tab separates RELEASE from
-DEBUG, and nothing on the file separates 32-bit from 64-bit.
+Nothing you can see in Explorer tells the two
+architectures apart: the "debug" flag on the Version tab separates RELEASE
+from DEBUG, and there is no equivalent for 32-bit against 64-bit. (The
+architecture IS in the file, in the PE header, but reading it takes a tool.)
+So the directory a copy came out of is what identifies it.
 "@
         $readmeArchNote   = @"
 

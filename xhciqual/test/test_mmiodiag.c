@@ -524,19 +524,35 @@ static void test_tool_limit_is_not_a_disqualification(void)
      * question, in the one place a user reads both on the same line.
      */
     /* `ipin` non-zero, because Interrupt Pin = 0 is answered before the MMIO
-     * question and would mask what this is about. */
+     * question and would mask what this is about. The mapper sets the reason
+     * and the flag together, so the vectors do too. */
     base_pci(&p);
     p.ipin = 1;
     p.mmio_tool_limit = 1;
+    p.mmio_reason = "the registers sit outside the window this tool maps - a "
+                    "tool limit, not a controller fault";
     CHECK(strstr(quick_reason(&p, 0, 4, 1), "tool limit") != 0,
           "the quick reason names the tool limit");
     CHECK(strstr(quick_reason(&p, 0, 4, 1), "dead") == 0,
           "and does not call the window dead beside a CANNOT SAY");
 
+    /* A recorded reason that is about the CONTROLLER is carried through too.
+     * The verdict stays DISQUALIFIED, and "BAR0 MMIO is dead" would be the
+     * wrong reason for it: the window decoded and the registers in it are
+     * wrong, which is the distinction the reader needs. */
+    base_pci(&p);
+    p.ipin = 1;
+    p.mmio_reason = "RTSOFF or DBOFF is zero, which places the runtime or "
+                    "doorbell registers on top of the capability registers";
+    CHECK(strstr(quick_reason(&p, 0, 4, 1), "RTSOFF") != 0,
+          "a layout fault is named rather than called a dead window");
+    CHECK(quick_classify_mmio(&p, 1) == QUICK_DISQUALIFIED,
+          "and it is still a disqualification");
+
     base_pci(&p);
     p.ipin = 1;
     CHECK(strstr(quick_reason(&p, 0, 4, 1), "dead") != 0,
-          "a window that really is dead still says so");
+          "a window that really is dead, with no recorded reason, still says so");
 }
 
 /* The verdict classifier: only genuine hardware/platform blockers may return

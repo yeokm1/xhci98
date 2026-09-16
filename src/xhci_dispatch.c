@@ -3880,7 +3880,12 @@ static VOID NTAPI xhciAbortTransfer(PVOID miniPortExtension,
  *   itself in the trace - which is the same reason they were separate in the
  *   Phase 3 spike, and it has not stopped being true now that they do work.
  *
- * IRQL: DISPATCH_LEVEL throughout.
+ * IRQL: <= DISPATCH_LEVEL throughout, and **the lock discipline is not one
+ * thing across this family**: NT 5.x usbport calls the status queries at
+ * DISPATCH under `MiniportSpinLock`, while issue 7 measured NT 6.x calling
+ * them at PASSIVE with no lock. Each wrapper below carries its own tag; this
+ * blanket said DISPATCH throughout and contradicted three of them (the
+ * 2026-09-16 audit's B11, completed after Codex round 3).
  */
 static VOID NTAPI xhciRhGetRootHubData(PVOID miniPortExtension, PVOID data)
 {
@@ -3915,7 +3920,9 @@ static VOID NTAPI xhciRhGetRootHubData(PVOID miniPortExtension, PVOID data)
     XhciRhGetRootHubData(ext, hubData);
 }
 
-/* IRQL: DISPATCH_LEVEL, under MiniportSpinLock. */
+/* IRQL: <= DISPATCH_LEVEL; under MiniportSpinLock on NT 5.x, PASSIVE and
+ * unlocked on NT 6.x (issue 7). The body depends on neither - it answers a
+ * constant. */
 static MPSTATUS NTAPI xhciRhGetStatus(PVOID miniPortExtension, PUSHORT status)
 {
     PXHCI_EXTENSION ext;

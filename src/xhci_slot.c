@@ -9197,10 +9197,17 @@ VOID XhciSlotCommandEvent(PXHCI_EXTENSION ext,
      * usbport's EP0 pointing at something no lookup answers for. It is handled
      * below instead: the accounting and the DCBAA clear happen, and then the new
      * tenancy starts its chain over from `ENABLE_SLOT`, which is exactly what a
-     * re-entry that finds no slot already does. It is reachable through the one
-     * path that owes a Disable Slot from a record a reopen can still find: a
-     * failed `xhciDevPrepareSlot` leaves `FAILED`, and `xhciDevByHubPort`
-     * excludes only `FREE` and `GONE`.
+     * re-entry that finds no slot already does.
+     *
+     * **What made it reachable no longer does.** This used to say a failed
+     * `xhciDevPrepareSlot` leaves a `FAILED` record that `xhciDevByHubPort`
+     * still admits, since that lookup excludes only `FREE` and `GONE` - which
+     * was true until the 2026-09-16 audit's B5 routed that failure through
+     * `xhciDevTeardown`, so the record is `GONE` and no reopen finds it. The
+     * guard stays because it is about the shape - a Disable Slot completing
+     * into a record a new tenancy has taken over - and not about the one path
+     * that used to produce it; a teardown racing a reopen reaches the same
+     * shape without going near `xhciDevPrepareSlot`.
      *
      * `XhciSlotCommandLost` deliberately does **not** take this guard. There the
      * command's effect is unknown rather than known-stale, so it may have

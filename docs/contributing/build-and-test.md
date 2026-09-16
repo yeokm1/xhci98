@@ -4494,7 +4494,7 @@ set "XHCI_EXTRA_DEFINES="
 scripts\build-driver.cmd both
 ```
 
-The package lands in `out\pkg-failstart-debug\`, a different directory from
+The package lands in `out\pkg-failstart-debug-x86\`, a different directory from
 `out\pkg-debug-x86\` on purpose, so it cannot quietly become the one a VM is
 installed from.
 

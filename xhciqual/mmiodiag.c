@@ -346,13 +346,20 @@ const char *quick_reason(const PCIINFO *p, int mmio_ok, int usb2_ports,
         if ((p->cmd_effective & PCI_CMD_MSE) == 0)
             return active_requested ? "Memory Space Enable could not be set"
                                     : "Memory Space Enable is clear";
-        /* The verdict for this one is CANNOT SAY, so the reason beside it may
-         * not say the window is dead - the mapper recorded why it gave up and
-         * that reason is about this tool. Kept in step with
-         * quick_classify_mmio by hand; the two are one answer in two forms. */
-        if (p->mmio_tool_limit)
-            return "the register block reaches outside the window this tool "
-                   "maps - a tool limit, not a reading about the controller";
+        /*
+         * **Whatever the mapper recorded beats the fallback below**, on the
+         * same terms report_mmio_dead takes it: it is the reason the code
+         * actually stopped on, where the fallback is a reconstruction from PCI
+         * state that by this point has ruled everything out. It matters for
+         * both kinds. A tool limit printed as "dead" contradicts the CANNOT
+         * SAY beside it. A controller misdescribing its own layout - a zero
+         * RTSOFF or DBOFF, a CAPLENGTH of 0 - is correctly DISQUALIFIED, but
+         * "BAR0 MMIO is dead" is the wrong reason for it: the window decoded
+         * perfectly and the registers in it are wrong, which is what the
+         * reader needs to be told apart.
+         */
+        if (p->mmio_reason != 0)
+            return p->mmio_reason;
         return "BAR0 MMIO is dead with MSE set and the device in D0";
     }
 

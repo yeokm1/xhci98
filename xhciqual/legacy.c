@@ -1059,6 +1059,10 @@ int legacy_final_verdict(LEGACY_CTRL *c, int active_requested)
     if (c->mmio_ok && c->maxports == 0) {
         qprintf("  DISQUALIFIED: controller reports no root ports\n");
         qualified = 0;
+        /* `disqualified`, for the reason the C2 branch below gives: a later
+         * SKIP sets `tool_limited`, and without this the verdict would close
+         * with "No controller fault was inferred" under a DISQUALIFIED line. */
+        disqualified = 1;
     }
     if (!active_requested) {
         qprintf("  Probe-only run: %s so far. Active tests NOT run.\n",
