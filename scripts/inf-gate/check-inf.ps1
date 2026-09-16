@@ -32,7 +32,8 @@ What it checks, grouped by the failure each rule prevents:
            .NTamd64 install section must do the second half of that and there
            must be no undecorated section at all (PATH-NO9X). PATH-MFGDEC holds
            [Manufacturer]'s TargetOSVersion fields to the file's profile in
-           both directions - absent on the 32-bit file; NTamd64 and
+           both directions - NTx86.6.0 and nothing else on the 32-bit file,
+           the one field read on all four engines that parse it; NTamd64 and
            NTamd64.6.0, and nothing else, on the 64-bit one - which is the line
            design record 11's decision 2 turns on.
   OS-*     The files the operating system supplies - usbd.sys and usbhub.sys
@@ -92,7 +93,9 @@ paths it must carry. Defaults to x86.
 
   x86     src\xhci98.inf - the two-engine file. An undecorated Windows 98
           install section carrying DevLoader/NTMPDriver, a .NTx86 one carrying
-          a service, and a right-click [DefaultInstall] for each.
+          a service, and a right-click [DefaultInstall] for each; and, through
+          the NTx86.6.0 models section (since 2026-09-16), a Vista and Windows
+          7 install section copying xhci98.sys alone.
   amd64   src\xhci98-amd64.inf - the 64-bit package's file (roadmap task 21.3).
           [Manufacturer] carries two TargetOSVersion fields and so two models
           sections: NTamd64 for NT 5.2, whose .NTamd64 install section fetches
@@ -378,7 +381,17 @@ if ($Arch -eq "amd64") {
         @{ Key = "Win98";   Os = "Windows 98";   Suffix = "";
            Default = "DefaultInstall";       Kind = "9x"; Models = ""; OsFiles = $true },
         @{ Key = "Win2000"; Os = "Windows 2000"; Suffix = ".NTx86";
-           Default = "DefaultInstall.NTx86"; Kind = "nt"; Models = ""; OsFiles = $true }
+           Default = "DefaultInstall.NTx86"; Kind = "nt"; Models = ""; OsFiles = $true },
+        #
+        # **The 32-bit NT 6.x path, since 2026-09-16** - the same reason as the
+        # amd64 file's, reached through the one line decision 2 would not
+        # widen until it was measured. It was: Windows 98 SE and ME's 16-bit
+        # engine, and Windows 2000 SP4's and 32-bit XP's setupapi, each read
+        # `%Mfg%=XhciModels,NTx86.6.0`, each installed from the undecorated
+        # models section, and none selected this path (roadmap task 22.5).
+        #
+        @{ Key = "Nt6x86"; Os = "Windows Vista and 7 x86"; Suffix = ".NTx86";
+           Default = ""; Kind = "nt"; Models = "NTx86.6.0"; OsFiles = $false }
     )
 }
 # Every TargetOSVersion field this profile has a models section for, in
@@ -644,28 +657,40 @@ if (-not (Test-SectionExists $inf "Manufacturer")) {
         if ($baseName -eq "") { continue }
         $decorations = @($fields | Select-Object -Skip 1 | Where-Object { $_ -ne "" })
 
+        #
+        # **Since 2026-09-16 the 32-bit file carries exactly one field,
+        # NTx86.6.0, and nothing else.** It is the line Windows 98's 16-bit
+        # engine parses, which is why decision 2 would not widen it unread;
+        # that one field was then read on all four engines that parse this
+        # file (roadmap task 22.5) and taken. Any OTHER field is still refused
+        # for the old reason: it is unmeasured on that engine - and
+        # `NTx86,NTamd64` in particular is the single-INF merge decision 2
+        # declined outright.
+        #
         $wanted = @()
         if ($mfgDecoration -eq "") {
-            if ($decorations.Count -gt 0) {
-                Add-Failure "PATH-MFGDEC" ("[Manufacturer] line {0} carries the TargetOSVersion field(s) '{1}'. The 32-bit file's models line must stay undecorated: it is the one line Windows 98's 16-bit engine parses to find its models section, whether that engine takes only the first field is unmeasured here, and widening it is exactly what design record 11's decision 2 declined - the 64-bit package has an INF of its own (src\xhci98-amd64.inf) so that this question is never asked." -f $e.Line, ($decorations -join ','))
-            }
             $wanted += @{ Section = $baseName; Decoration = "" }
-        } else {
-            if (-not ($decorations -contains $mfgDecoration)) {
-                Add-Failure "PATH-MFGDEC" ("[Manufacturer] line {0} does not carry the '{1}' TargetOSVersion field (found '{2}'). Without it the 64-bit setup engine looks for an undecorated models section, ignores it outright, and this INF offers no driver at all - which looks identical to a package that was never copied." -f $e.Line, $mfgDecoration, ($decorations -join ','))
-            }
-            foreach ($d in $mfgDecorations) {
-                if ($d -eq $mfgDecoration) { continue }
-                if (-not ($decorations -contains $d)) {
-                    Add-Failure "PATH-MFGDEC" ("[Manufacturer] line {0} does not carry the '{1}' TargetOSVersion field (found '{2}'). Without it Windows Vista and Windows 7 x64 match the NT 5.2 models section and run its install path, whose LayoutFile copies abort the file queue on NT 6.x (roadmap task 21.8) - the package stages and then does not install." -f $e.Line, $d, ($decorations -join ','))
-                }
-            }
-            foreach ($d in $decorations) {
-                if ($mfgDecorations -contains $d) {
-                    $wanted += @{ Section = ("{0}.{1}" -f $baseName, $d); Decoration = $d }
+        } elseif (-not ($decorations -contains $mfgDecoration)) {
+            Add-Failure "PATH-MFGDEC" ("[Manufacturer] line {0} does not carry the '{1}' TargetOSVersion field (found '{2}'). Without it the 64-bit setup engine looks for an undecorated models section, ignores it outright, and this INF offers no driver at all - which looks identical to a package that was never copied." -f $e.Line, $mfgDecoration, ($decorations -join ','))
+        }
+        foreach ($d in $mfgDecorations) {
+            if ($d -eq $mfgDecoration) { continue }
+            if (-not ($decorations -contains $d)) {
+                if ($mfgDecoration -eq "") {
+                    $nt6Why = "Windows Vista and Windows 7 match the undecorated models section and run [<model>.NTx86], whose LayoutFile copies abort the file queue on NT 6.x (roadmap task 21.8)"
                 } else {
-                    Add-Failure "PATH-MFGDEC" ("[Manufacturer] line {0} carries the TargetOSVersion field '{1}', which this profile has no install path for (it knows '{2}'). The models section it selects would be read by a setup engine and by no rule here." -f $e.Line, $d, ($mfgDecorations -join ','))
+                    $nt6Why = "Windows Vista and Windows 7 x64 match the NT 5.2 models section and run its install path, whose LayoutFile copies abort the file queue on NT 6.x (roadmap task 21.8)"
                 }
+                Add-Failure "PATH-MFGDEC" ("[Manufacturer] line {0} does not carry the '{1}' TargetOSVersion field (found '{2}'). Without it {3} - the package stages and then does not install." -f $e.Line, $d, ($decorations -join ','), $nt6Why)
+            }
+        }
+        foreach ($d in $decorations) {
+            if ($mfgDecorations -contains $d) {
+                $wanted += @{ Section = ("{0}.{1}" -f $baseName, $d); Decoration = $d }
+            } elseif ($mfgDecoration -eq "") {
+                Add-Failure "PATH-MFGDEC" ("[Manufacturer] line {0} carries the TargetOSVersion field '{1}'. The 32-bit file's line is the one Windows 98's 16-bit engine parses to find its models section, and the only field measured there is '{2}' (roadmap task 22.5, all four engines that read this file); any other is unmeasured, and widening it towards the 64-bit package - NTx86,NTamd64 - is exactly what design record 11's decision 2 declined. The 64-bit package has an INF of its own (src\xhci98-amd64.inf)." -f $e.Line, $d, ($mfgDecorations -join ','))
+            } else {
+                Add-Failure "PATH-MFGDEC" ("[Manufacturer] line {0} carries the TargetOSVersion field '{1}', which this profile has no install path for (it knows '{2}'). The models section it selects would be read by a setup engine and by no rule here." -f $e.Line, $d, ($mfgDecorations -join ','))
             }
         }
 
@@ -826,7 +851,7 @@ foreach ($m in $models) {
             # and the devnode comes up with no service; on the 64-bit file there
             # is nothing to fall back to (PATH-NO9X keeps it that way), so the
             # engine matches the model and then finds no install section at all.
-            if ($ap.Suffix -eq ".NTx86") {
+            if ($ap.Key -eq "Win2000") {
                 Add-Failure "PATH-NT" ("model '{0}' has no [{1}] section. Win2000 would fall back to the undecorated Win98 section, install no service, and leave the device with a driver-less devnode." -f $m.Id, $nt)
             } else {
                 Add-Failure "PATH-NT" ("model '{0}' has no [{1}] section. {2} matches the model and then has no install section to run - and there is deliberately no undecorated one here to fall back to, so nothing is copied and no service is created." -f $m.Id, $nt, $ap.Os)

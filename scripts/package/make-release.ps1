@@ -999,7 +999,7 @@ function New-UploadSet {
     # `release\`/`debug\` directories the four already-cut versions hold do not,
     # so the architecture cannot be recovered from the name. Both callers know
     # it and hand it over per directory: gate an amd64 directory under the
-    # gate's default x86 profile and it fails five checks that are about the
+    # gate's default x86 profile and it fails seven checks that are about the
     # caller rather than about the INF.
     param(
         [string]$PublishedRoot,

@@ -3314,7 +3314,7 @@ reading may not tick a box whose line names a guest.
           clean after the last. **Six clean removes in six since issue 7's
           fix**, against two wedges before it; that still does not establish
           the wedge shared issue 7's cause
-  - [ ] **the INF for the 6.x installs, an owner's decision on each file.**
+  - [x] **the INF for the 6.x installs, an owner's decision on each file.**
         Vista's file queue aborts on the `LayoutFile` copies (task 21.8), and
         the shape that installs is a `.6.0`-decorated models section naming
         its own install section (`Xhci.Dev6`, a staged copy only so far). On
@@ -3347,7 +3347,7 @@ reading may not tick a box whose line names a guest.
           task 22.10's fifth leg is what reads it. The NT 6.x legs of
           2026-09-13 ran the same sections from a staged copy, so they are
           the evidence for the shape and not for this file
-    - [ ] **`src\xhci98.inf`: measured on Windows 98 first**, as this box
+    - [x] **`src\xhci98.inf`: measured on Windows 98 first**, as this box
           always said. Install `%Mfg%=XhciModels,NTx86.6.0` with its
           `[XhciModels.NTx86.6.0]` and `[Xhci.Dev6.NTx86]` sections (the
           staged `vm\xfervista\xhci98.inf` is that file) on the Windows 98
@@ -3380,7 +3380,32 @@ reading may not tick a box whose line names a guest.
           engine and not of a load. **What is left before the shipping file
           changes is the NT half**: Windows 2000 SP4's and 32-bit XP's setupapi
           read the same line, and whether each falls back to the undecorated
-          `[XhciModels]` when `NTx86.6.0` does not match is unmeasured here
+          `[XhciModels]` when `NTx86.6.0` does not match is unmeasured here.
+          **Read the same evening (`vm\inf60-w2k\`, `vm\inf60-xp\`), and it
+          does**, off `win2k-xonly-clean-install` and `winxp-clean-install`,
+          neither of which had had this driver, with the same candidate: each
+          installed "USB 2.0 eXtensible Host Controller (xhci98)", loaded it
+          (`read-v300.ps1 -Expect nt5` ALL PASS) and enumerated a hot-plugged
+          mouse, and each `setupapi.log`, read offline from the image, names
+          `Section: Xhci.Dev` and the install section `[Xhci.Dev.NTx86]`, with
+          `Xhci.Dev6` nowhere. `usbport.sys`, `usbd.sys`, `usbhub.sys` and
+          `usbui.dll` were on disk after each, so the NT 5.x path's
+          `LayoutFile` copies ran. **Deviation:** Windows 2000 asked for a
+          restart after the install (declined; the driver was already
+          running), which the earlier Have Disk route on that image family did
+          not, and `setupapi.log` holds no reboot entry after the install - the
+          cause is not established. **So `src\xhci98.inf` took the line the
+          same evening**: its non-comment content is exactly the measured
+          candidate's; `PATH-MFGDEC` now requires `NTx86.6.0` on the 32-bit
+          file and refuses any other field; the x86 profile gained the NT 6.x
+          path with `OS-ONNT6`; eight new self-test cases, each seen to fail
+          against the previous gate, plus `models: 2` and the two NT 6.x models
+          lines compared whole; `expected-footprint.txt` regenerated. What was
+          re-taken on the four NT 5.x and 9x targets is the INSTALL and a load
+          with one device, not the full device legs - those are task 22.10's
+          install legs from the asset, which read this file on every target.
+          The `xhcisnap` row above stays owed: nothing has read what an NT 6.x
+          install records as `InfSection`
   - [ ] **`TESTSIGNING` tried once on an x64 guest**, for the release notes'
         64-bit paragraph: what the user does once, what it costs at every
         boot, and whether it survives a reboot. F8 is already measured

@@ -105,6 +105,18 @@ servicevalue|Windows 2000|xhci98|Xhci.AddService|StartType|3
 servicevalue|Windows 2000|xhci98|Xhci.AddService|ErrorControl|1
 servicevalue|Windows 2000|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
 servicevalue|Windows 2000|xhci98|Xhci.AddService|LoadOrderGroup|Base
+path|Windows Vista and 7 x86|device install|Xhci.Dev6.NTx86
+file|Windows Vista and 7 x86|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010001|0|remove
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010001|0|remove
+reg|Windows Vista and 7 x86|Xhci.AddReg.Global|HKLM|System\CurrentControlSet\Services\USB|DisableSelectiveSuspend|0x00010001|1|remove
+service|Windows Vista and 7 x86|xhci98|Xhci.AddService|0x00000002|remove
+servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
+servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|ServiceType|1
+servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|StartType|3
+servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|ErrorControl|1
+servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
+servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|LoadOrderGroup|Base
 path|Windows 98|right-click Install|DefaultInstall
 file|Windows 98|Inf.CopyFiles|17||xhci98.inf|xhci98.inf||0|remove
 file|Windows 98|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove

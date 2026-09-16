@@ -357,8 +357,10 @@ NT 5.2 gets `[Xhci.Dev.NTamd64]`, which fetches the OS-supplied files, and
 Vista and Windows 7 x64 get `[Xhci.Dev6.NTamd64]`, which copies `xhci98.sys`
 alone because their file queue aborts on a `LayoutFile` copy (design record 11
 section 12, decision 13; the gate refuses an OS file there as `OS-ONNT6`).
-The 32-bit file has no NT 6.x path yet: its `[Manufacturer]` line is the one
-Windows 98's engine parses, and widening it waits on a Windows 98 reading.
+The 32-bit file carries the same NT 6.x path as `[Xhci.Dev6.NTx86]`, through
+`%Mfg%=XhciModels,NTx86.6.0` - the one line Windows 98's engine parses, so that
+field was read on Windows 98 SE, ME, 2000 and 32-bit XP before it was taken
+(roadmap task 22.5), and the gate refuses any other field on that file.
 Merging it into the first would mean widening `%Mfg%=XhciModels` to
 `%Mfg%=XhciModels,NTx86,NTamd64` - the one line Windows 98's 16-bit engine
 parses to find its models section, and whether that engine takes only the

@@ -22,7 +22,8 @@
 ; (docs\contributing\build-and-test.md, "Windows ME target VM"). 32-bit
 ; Windows XP reads the .NTx86 half like Windows 2000 and is supported in
 ; virtual machines only as well, since 1.0.1.0 (the same document, "Windows
-; XP target VM").
+; XP target VM"). 32-bit Windows Vista and Windows 7 take a third path, through
+; the NT 6.x models section below, which copies this project's binary alone.
 ;
 ; usbd.sys and usbhub.sys ARE copied on both paths, usbui.dll on all four
 ; since 1.0.2.0, and none of the four files travels on this media. All are
@@ -88,8 +89,19 @@ DriverVer=09/09/2026,1.1.0.0
 ; "Manufacturer", stored as Mfg). The first is a person and the second is the
 ; project: this driver binds by class code, so the silicon is Intel's or AMD's
 ; or Renesas's and naming anyone here as its maker would be false.
+;
+; The one TargetOSVersion field, NTx86.6.0, selects [XhciModels.NTx86.6.0] on
+; Windows Vista and Windows 7 and nothing anywhere else. This is the line Windows
+; 98's 16-bit engine parses to find its models section, so it stayed undecorated
+; until the field was read on every engine that parses this file (2026-09-16,
+; roadmap task 22.5): Windows 98 SE and Windows ME offered and installed the
+; driver from [XhciModels], and Windows 2000 SP4 and 32-bit XP ran
+; [Xhci.Dev.NTx86] from it, each off a snapshot that had never had this driver.
+; Add no other field: nothing else has been read on those engines, and
+; "NTx86,NTamd64" is the single-INF merge design record 11's decision 2
+; declined. scripts\inf-gate\check-inf.ps1 refuses both (PATH-MFGDEC).
 [Manufacturer]
-%Mfg%=XhciModels
+%Mfg%=XhciModels,NTx86.6.0
 
 ; PCI\CC_0C0330 is the xHCI class-code compatible ID, the exact analog of the
 ; PCI\CC_0C0320 catch-all both reference INFs use for EHCI. Nothing else on
@@ -98,6 +110,15 @@ DriverVer=09/09/2026,1.1.0.0
 ; vendor-specific entry to outrank.
 [XhciModels]
 %XhciDesc%=Xhci.Dev,PCI\CC_0C0330
+
+; A different install section NAME rather than a .6.0 decoration on Xhci.Dev:
+; the version decoration selects the models section only, and the install
+; section it names takes the platform extension and nothing further, so a
+; [Xhci.Dev.NTx86.6.0] would never be looked for (measured on Vista x64
+; 2026-09-10; docs\contributing\lessons.md, "A version-decorated install
+; section is silently never read").
+[XhciModels.NTx86.6.0]
+%XhciDesc%=Xhci.Dev6,PCI\CC_0C0330
 
 [SourceDisksNames]
 1=%DiskName%,xhci98.sys,,
@@ -304,6 +325,29 @@ AddReg=Xhci.AddReg.NT,Xhci.AddReg.Global
 CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI
 
 [Xhci.Dev.NTx86.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+; ------------------------------------------------------------------
+; Windows Vista and Windows 7, 32-bit (.NTx86 of the NT 6.x models section)
+; ------------------------------------------------------------------
+;
+; The same registry values and the same service, and xhci98.sys alone. None of
+; the four OS-supplied files is on this path: the NT 6.x file queue resolves a
+; source for each BEFORE COPYFLG_NO_OVERWRITE can skip it, finds the OS's own
+; driver-store package, and aborts (task 21.8, Vista x64); and all four are on
+; disk after any install of either system, with no USB host controller at all
+; (task 22.3, read off the 32-bit guests). This shape installed on both 32-bit
+; NT 6.x guests on 2026-09-13 from a staged copy. OS-ONNT6 in the INF gate
+; refuses an OS file here.
+;
+; No right-click route of its own: [DefaultInstall.NTx86] is the one an NT 6.x
+; engine would run, it carries the LayoutFile copies, and what it does on 6.x
+; has not been read.
+[Xhci.Dev6.NTx86]
+AddReg=Xhci.AddReg.NT,Xhci.AddReg.Global
+CopyFiles=Xhci.CopyFiles
+
+[Xhci.Dev6.NTx86.Services]
 AddService=xhci98,0x00000002,Xhci.AddService
 
 [Xhci.AddService]

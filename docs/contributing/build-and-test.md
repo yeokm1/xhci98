@@ -2338,8 +2338,9 @@ signing question, and an operator repeating this will meet them in this order:
    `usbui.dll` in `system32` - measured, not carried over. **That INF shape is
    `src\xhci98-amd64.inf`'s own since 2026-09-16** (design record 11 section
    12, decision 13), so the package built from the tree installs this way with
-   no staged copy. The 32-bit file does not carry it yet: its line is the one
-   Windows 98's engine parses, and it is measured there first.
+   no staged copy. The 32-bit file carries it too, as `[Xhci.Dev6.NTx86]`, since
+   the same day - after its widened line was read on Windows 98 SE, ME, 2000
+   and 32-bit XP, because that line is the one Windows 98's engine parses.
 2. **A pre-fix binary bugchecks the guest at load** - `0x7E` inside usbport,
    from the registration call. Fixed 2026-09-10; if you see it, you are running
    a driver built before that. Check the `DriverEntry (built ...)` stamp on the
@@ -2630,8 +2631,12 @@ files, and it was a decision per INF rather than an edit (design record 11
 section 12, decision 13): `src\xhci98-amd64.inf` carries it since 2026-09-16
 as an `NTamd64.6.0` models section naming `[Xhci.Dev6.NTamd64]`, which the INF
 gate now checks as a second path (`OS-ONNT6` refuses an OS file on it), and
-`src\xhci98.inf` waits on the Windows 98 reading of its widened
-`[Manufacturer]` line.
+`src\xhci98.inf` carries the same path as `[Xhci.Dev6.NTx86]` behind
+`%Mfg%=XhciModels,NTx86.6.0`, taken the same day once that line had been read
+on every engine that parses the file: Windows 98 SE and ME installed from
+`[XhciModels]`, and Windows 2000 SP4 and 32-bit XP ran `[Xhci.Dev.NTx86]`
+(their `setupapi.log`: `Section: Xhci.Dev`, `Actual install section:
+[Xhci.Dev.NTx86]`), each off a snapshot that never had this driver.
 
 #### One trap this pair inherits from the 32-bit one
 
@@ -5313,9 +5318,9 @@ drift while claiming to be one.
 | | `-Arch x86` (default) | `-Arch amd64` |
 |---|---|---|
 | file | `src\xhci98.inf` | `src\xhci98-amd64.inf` |
-| `[Manufacturer]` | undecorated - `%Mfg%=XhciModels` | `%Mfg%=XhciModels,NTamd64,NTamd64.6.0` |
-| models sections | `[XhciModels]` | `[XhciModels.NTamd64]` (NT 5.2) and `[XhciModels.NTamd64.6.0]` (Vista and Windows 7, since 2026-09-16) |
-| install paths | undecorated (Windows 98) + `.NTx86` | `[Xhci.Dev.NTamd64]` (NT 5.2, fetches the OS-supplied files) and `[Xhci.Dev6.NTamd64]` (NT 6.x, `xhci98.sys` alone) |
+| `[Manufacturer]` | `%Mfg%=XhciModels,NTx86.6.0` - the one field, read on all four engines that parse this file before it was taken | `%Mfg%=XhciModels,NTamd64,NTamd64.6.0` |
+| models sections | `[XhciModels]` and `[XhciModels.NTx86.6.0]` (Vista and Windows 7, since 2026-09-16) | `[XhciModels.NTamd64]` (NT 5.2) and `[XhciModels.NTamd64.6.0]` (Vista and Windows 7, since 2026-09-16) |
+| install paths | undecorated (Windows 98) + `.NTx86`, and `[Xhci.Dev6.NTx86]` (NT 6.x, `xhci98.sys` alone) | `[Xhci.Dev.NTamd64]` (NT 5.2, fetches the OS-supplied files) and `[Xhci.Dev6.NTamd64]` (NT 6.x, `xhci98.sys` alone) |
 | right-click | `[DefaultInstall]` + `[DefaultInstall.NTx86]` | `[DefaultInstall.NTamd64]`, and **no** undecorated one |
 | footprint | `expected-footprint.txt` | `expected-footprint-amd64.txt` |
 
@@ -5327,12 +5332,14 @@ undecorated `[DefaultInstall]` there; setupapi's decorated-section lookup
 falls back, so either is a section a 32-bit engine reaches, and reaching one
 copies an amd64 `xhci98.sys` into a 32-bit `System32\Drivers` and creates a
 service pointing at it. `PATH-MFGDEC` holds the `[Manufacturer]` decoration
-in both directions at once: absent on the 32-bit file, `NTamd64` and
-`NTamd64.6.0` and nothing else on the 64-bit one. That first half is what pins design record 11's decision 2 in
-place - widening `%Mfg%=XhciModels` to `%Mfg%=XhciModels,NTx86,NTamd64` is
-the single-INF route the owner declined, because that line is what Windows
-98's 16-bit engine parses to find its models section, and it now fails the
-build rather than passing every other rule silently.
+in both directions at once: `NTx86.6.0` and nothing else on the 32-bit file,
+`NTamd64` and `NTamd64.6.0` and nothing else on the 64-bit one. That first half
+is what pins design record 11's decision 2 in place - widening the 32-bit line
+towards `NTx86,NTamd64` is the single-INF route the owner declined, because
+that line is what Windows 98's 16-bit engine parses to find its models
+section, and it fails the build rather than passing every other rule
+silently. The one field it does carry was read on Windows 98 SE, ME, 2000 and
+32-bit XP before it was taken (roadmap task 22.5).
 
 **Two INFs can drift, and that is checked rather than promised.**
 `test-inf-checks.ps1` compares the two files directly and fails if they

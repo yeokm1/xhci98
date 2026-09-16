@@ -152,6 +152,9 @@ try {
     Assert-True ($baseline.ExitCode -eq 0) ("src\xhci98.inf does not pass its own gate:`n" + $baseline.Output)
     Assert-True ($baseline.Output -notmatch "FAIL \[") "src\xhci98.inf produced a FAIL line."
     Assert-True ($baseline.Output -notmatch "WARN:") ("src\xhci98.inf produced a warning:`n" + $baseline.Output)
+    # Both models sections READ - the undecorated one and NT 6.x's - for the
+    # reason the 64-bit baseline below gives.
+    Assert-True ($baseline.Output -match "models: 2\b") ("src\xhci98.inf: expected the gate to gather two models (the undecorated one and NTx86.6.0). Output:`n" + $baseline.Output)
 
     Write-Step "file format"
     Assert-RuleFires "utf16" "FILE-ENCODING" { param($t) $t } -Utf16
@@ -1196,18 +1199,51 @@ try {
     Write-Step "the [Manufacturer] decoration, in both directions"
 
     #
-    # **This is the rule that pins design record 11's decision 2**, and it is
-    # the one case here whose subject is the 32-bit file. Widening
-    # `%Mfg%=XhciModels` to `%Mfg%=XhciModels,NTx86,NTamd64` is the single-INF
-    # route the owner declined on 2026-09-09, because that line is what Windows
-    # 98's 16-bit engine parses to find its models section and whether that
-    # engine reads only the first field has never been measured here. Nothing
-    # else in the tree would notice the edit: the widened file still passes
-    # every other rule, and what it would cost is a re-run of all four existing
-    # install legs to find out whether it broke Windows 98.
+    # **This is the rule that pins design record 11's decision 2**, and these
+    # are the cases whose subject is the 32-bit file. Widening its line towards
+    # `NTx86,NTamd64` is the single-INF route the owner declined on 2026-09-09,
+    # because that line is what Windows 98's 16-bit engine parses to find its
+    # models section. The ONE field it carries, `NTx86.6.0`, was read on all four
+    # engines that parse this file before it was taken (2026-09-16, roadmap
+    # task 22.5); anything beyond it is unread there. Nothing else in the tree
+    # would notice the edit: the widened file still passes every other rule.
     #
     Assert-RuleFires "x86-mfg-widened" "PATH-MFGDEC" {
-        param($t) $t.Replace("%Mfg%=XhciModels`r`n", "%Mfg%=XhciModels,NTx86,NTamd64`r`n")
+        param($t) $t.Replace("%Mfg%=XhciModels,NTx86.6.0`r`n", "%Mfg%=XhciModels,NTx86.6.0,NTx86,NTamd64`r`n")
+    }
+    # The measured field lost: Vista and Windows 7 x86 then match the
+    # undecorated models section and abort in the NT 5.x path's LayoutFile
+    # copies, and every other rule still passes.
+    Assert-RuleFires "x86-mfg-no-nt6" "PATH-MFGDEC" {
+        param($t) $t.Replace("%Mfg%=XhciModels,NTx86.6.0`r`n", "%Mfg%=XhciModels`r`n")
+    }
+    Assert-RuleFires "x86-nt6-models-missing" "BOTH-XREF" {
+        param($t) $t.Replace("[XhciModels.NTx86.6.0]", "[XhciModels.NTx86.6.1]")
+    }
+    # The 32-bit NT 6.x install path, checked the way the 64-bit one is below:
+    # a second path is a second place each rule can break.
+    Assert-RuleFires "x86-nt6-no-services" "PATH-NT" {
+        param($t) $t.Replace("[Xhci.Dev6.NTx86.Services]", "[Xhci.Dev6.NTx86.Svc]")
+    }
+    Assert-RuleFires "x86-nt6-no-driver-copy" "PATH-NT" {
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`n")
+    }
+    Assert-RuleFires "x86-nt6-copies-usbport" "OS-ONNT6" {
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT`r`n")
+    }
+    Assert-RuleFires "x86-nt6-copies-w98-list" "OS-ONNT6" {
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98`r`n")
+    }
+    Assert-RuleFires "x86-nt6-no-susp" "SUSP-MISSING" {
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global",
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT")
+    }
+    Assert-RuleFires "x86-nt6-no-logvalues" "VAL-MISSING" {
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global",
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.Global")
     }
     # The other direction: the 64-bit file losing its decoration. The 64-bit
     # setup engine then looks for an undecorated [XhciModels], ignores it, and
@@ -1536,6 +1572,17 @@ try {
             "INF-SYNC: the NT 6.x models line binds different hardware from every other target." +
             "`n  src\xhci98.inf                       $($idX86[0])" +
             "`n  src\xhci98-amd64.inf (NTamd64.6.0)   $($id64nt6[0])")
+    }
+    # And the two NT 6.x models lines agree with each other whole - the same
+    # hardware ID and the same install section name - because they are one
+    # path on two architectures.
+    $idX86nt6 = @(Get-InfSection -Path $prodInf -Name "XhciModels.NTx86.6.0")
+    Assert-True ($idX86nt6.Count -eq 1) "INF-SYNC: src\xhci98.inf must have exactly one NT 6.x models line."
+    if ($idX86nt6.Count -eq 1 -and $id64nt6.Count -eq 1) {
+        Assert-True ($idX86nt6[0] -eq $id64nt6[0]) (
+            "INF-SYNC: the two INFs' NT 6.x models lines differ." +
+            "`n  src\xhci98.inf        (NTx86.6.0)     $($idX86nt6[0])" +
+            "`n  src\xhci98-amd64.inf  (NTamd64.6.0)   $($id64nt6[0])")
     }
 
     # [Strings]: every token the two share must have the same text, because

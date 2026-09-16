@@ -900,8 +900,8 @@ try {
         # already-published versions are - so the whole assembly ran under the
         # INF gate's default x86 profile and nothing noticed that it was never
         # told otherwise. Hand it a `release-x64\` holding the amd64 INF and the
-        # profile stops being a detail: that file fails five of the gate's x86
-        # rules (PATH-MFGDEC, BOTH-XREF twice, OS-DEFAULT twice), so before
+        # profile stops being a detail: that file fails seven of the gate's x86
+        # checks (PATH-MFGDEC three times, BOTH-XREF twice, OS-DEFAULT twice), so before
         # 2026-09-16 this exited non-zero on a tree that is perfectly good.
         #
         # It is worth driving for real rather than asserting a source anchor
@@ -1648,8 +1648,8 @@ try {
     # make-package.ps1 has the same assertion above, and make-release.ps1 had
     # none until 2026-09-16 - which is how all three of its calls came to run
     # under the gate's default x86 profile. The consequence is not a weakened
-    # check but a refused cut: the amd64 INF fails five rules under the x86
-    # profile (PATH-MFGDEC, BOTH-XREF twice, OS-DEFAULT twice), so the
+    # check but a refused cut: the amd64 INF fails seven checks under the x86
+    # profile (PATH-MFGDEC three times, BOTH-XREF twice, OS-DEFAULT twice), so the
     # two-architecture default threw at the pre-build layout step, and fixing
     # only that site would have moved the refusal to the upload assembly, which
     # runs *after* the publish swap - the published-with-no-asset state this

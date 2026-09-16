@@ -12,6 +12,9 @@
 ; broke. A separate package costs a second INF to keep in sync and no
 ; re-validation at all. src\xhci98.inf is therefore untouched by this file's
 ; existence, and Windows 98's engine is never asked the question.
+; (It was later asked a narrower one: the 32-bit file's line gained the single
+; field NTx86.6.0 on 2026-09-16, read first on all four engines that parse it,
+; roadmap task 22.5. The merge itself stays declined.)
 ;
 ; What it installs is the amd64 xhci98.sys, built by
 ; "scripts\build-driver.cmd <flavor> -amd64" into src\obj<flavour>\amd64\, on
@@ -39,8 +42,8 @@
 ;     Either way the answer is "this INF offers no driver", not "here is a
 ;     64-bit binary for your 32-bit machine".
 ;   - a 64-bit engine reading src\xhci98.inf finds an undecorated models
-;     section, which it ignores outright, and a .NTx86 one, which is not its
-;     architecture.
+;     section, which it ignores outright, and an NTx86.6.0 one and .NTx86
+;     install sections, none of which is its architecture.
 ;
 ; So there is deliberately NO undecorated [Xhci.Dev] and NO [DefaultInstall]
 ; in this file. Either would be a section a 32-bit engine falls back to - and
@@ -119,8 +122,8 @@ LayoutFile=layout.inf
 ; refuses either disagreeing with the header.
 DriverVer=09/09/2026,1.1.0.0
 
-; The TargetOSVersion field is what makes this file 64-bit-only, and it is the
-; whole of the difference from src\xhci98.inf's undecorated line. It is also
+; The NTamd64 TargetOSVersion field is what makes this file 64-bit-only, where
+; src\xhci98.inf's line carries only NTx86.6.0. It is also
 ; why the models section below is [XhciModels.NTamd64] and not [XhciModels]:
 ; the engine appends the decoration it matched.
 ;
