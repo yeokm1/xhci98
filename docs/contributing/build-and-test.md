@@ -1919,10 +1919,10 @@ is a separate amd64 build from a separate toolchain in a separate package
 with its own INF, so nothing the Windows 98 export baseline buys the 32-bit
 binary is inherited here. **Only XP x64 has been booted**; Server 2003 x64 is
 covered by the NT 5.2.3790 identity above, not by an observation of its own.
-And **Vista x64 and Windows 7 x64 are outside it** - task 21.7 found nothing
-in their interface against the same binary, but the two obstacles are the
-signing and driver-store ones the planned section below opens with, and task
-21.8 is what decides them. A negative there does not disturb this tier.
+And **Vista x64 and Windows 7 x64 are outside it**: they have a tier of their
+own since 2026-09-16, stated in "Vista x64 and Windows 7 x64 target VMs"
+below, on the Version 300 registration path this guest never takes and with a
+signing requirement this guest does not have.
 
 `scripts\setup-qemu-winxp64.ps1` writes both launchers into `scripts\local`.
 It is the sibling of `setup-qemu-winxp.ps1` and most of the 32-bit XP recipe
@@ -2078,10 +2078,29 @@ reading above came to be taken.
 
 The two 32-bit guests Phase 22 asks for: whether the `xhci98.sys` this project
 already ships installs, loads and works on Windows Vista and Windows 7 as it
-stands. **Nothing is built for either of them.** The subject is the binary on
-the `.NTx86` half of the INF that already exists, which is what makes this a
-different shape of work from Phase 21's 64-bit leg and why it is a phase of its
-own; a yes costs guests and readings and no compiler at all.
+stands. **That was the question, and the answer was no**: no Version 200
+miniport can run on either (design record 11 sections 6.1 to 6.4), so the one
+binary gained a Version 300 registration path it takes on NT 6.x only (roadmap
+task 22.5, design record 11 section 6.5), and `src\xhci98.inf` gained the
+`[Xhci.Dev6.NTx86]` install path (decision 13).
+
+**The tier, stated where Windows ME's and 32-bit XP's are stated** (roadmap
+tasks 21.8 and 22.5, the owner's decision of 2026-09-16): 32-bit Windows Vista
+and Windows 7 are supported in virtual machines, standing where Windows 2000,
+Windows ME and both Windows XPs stand, with no checkpoint tax and never run on
+real hardware. What settles it is issue 7 section 7.5, taken on these two
+guests and their x64 siblings on 2026-09-13: one install each off a fresh
+revert, `-smp 4`, the three devices bound, five disable/enable cycles held to
+a ten-minute threshold, a remove and a rescan, with `read-v300.ps1 -Expect
+nt6` ALL PASS on every load. `AGENTS.md`, "Project Purpose", states it;
+`docs/usb-xhci-info/win98-wdm.md`, "And Windows Vista and Windows 7?", states
+it beside the other tiers; and `docs/using/release-notes.md` and `README.md`
+state it for the user. Two qualifications travel with it for this pair:
+**every clause was taken on the `qemu` build**, and **the install was a staged
+copy of the NT 6.x sections, not the committed `src\xhci98.inf`**, which took
+them on 2026-09-16 after those runs; neither the `release` flavour nor the
+committed file has been installed on either guest, and no task yet schedules
+it. The x64 pair's tier, and its signing requirement, are the next section's.
 
 **They are one recipe, and they are written as one.** `scripts\setup-qemu-vista.ps1`
 and `scripts\setup-qemu-win7.ps1` are thin callers over a shared body,
@@ -2272,7 +2291,7 @@ The procedure:
    every `COPYFLG_NO_OVERWRITE` copy should skip with no source needed, and
    **the `LayoutFile` route is not needed on this system at all** - the
    condition it exists to answer, a file absent from the machine, is not the
-   condition here. Windows 7 is still owed the same reading.
+   condition here, and Windows 7's reading above agrees.
 
    **The prior is strong and it is still not the reading, and the roadmap says
    why in the task line itself.** All four files are in
@@ -2296,7 +2315,11 @@ The procedure:
    signing enforcement is x64-only, so a prompt and not a refusal is the
    expectation - and Phase 22 writes it down as the assumption to *confirm on
    the guest*, because it is the one that would make the phase pointless if
-   wrong.
+   wrong. **The refusal half is confirmed**: both guests installed and loaded
+   the unsigned driver on every leg of issue 7 section 7.5. **The prompt
+   itself was not written down** on any of those legs, so what the dialog
+   said, and which choice took it, is still unrecorded; read it on the next
+   install, and until then the release notes do not quote it.
 
 ### Vista x64 and Windows 7 x64 target VMs (roadmap task 21.8)
 
@@ -2305,6 +2328,25 @@ instruction, after task 21.7 read both systems' `usbport.sys` statically and
 found nothing in the interface against them. The generators, launchers and disk
 images exist, both Setup runs have been taken by the owner at the console, and
 each guest carries one snapshot of its clean install.
+
+**The tier, and the signing requirement beside it** (roadmap tasks 21.8 and
+22.5, the owner's decision of 2026-09-16): Vista x64 and Windows 7 x64 are
+supported in virtual machines, standing where their 32-bit siblings in the
+section above stand, with no checkpoint tax and never run on real hardware,
+on the second, amd64 binary. What settles it is issue 7 section 7.5 on these
+two guests (`fix7vistax64`, `fix7win7x64`, 2026-09-13) and Vista x64's five
+further remove/rescan cycles of 2026-09-16 (`vm\vistax64-rr\`), which were
+also the first install of the committed `src\xhci98-amd64.inf`'s NT 6.x path.
+**It is weaker than every other tier here in one way that a user meets at
+every start**: the package is not signed (next sections), so the driver loads
+only on a boot where F8 -> Disable Driver Signature Enforcement was chosen,
+the choice lasts that one boot, and without it the device sits at Code 39
+with nothing loaded (read on Vista x64, item 3 below) - so the machine can never boot unattended into working
+USB. The release notes carry that beside the tier. **Every clause was taken
+on the `qemu` build**; the `release` flavour is roadmap task 22.10's sixth
+and seventh install legs, from the published asset, and on Windows 7 x64 that
+leg is also the first install through the committed INF rather than a staged
+copy of the same sections.
 
 | | Vista Business SP2 x64 | Windows 7 Professional SP1 x64 |
 |---|---|---|
@@ -2567,9 +2609,11 @@ file in the repository was changed by it.
 **Decided by the owner on 2026-09-10.** Signing a release buys the claimed tier
 nothing. Windows XP x64 and Server 2003 x64 do not enforce kernel-mode code
 signing, which is the whole reason Phase 21 took that target first, and the
-published package installs and loads there unsigned today. Vista x64 and
-Windows 7 x64 sit outside the tier until task 21.8 says otherwise, so a
-decision never to sign costs the tier nothing at all.
+published package installs and loads there unsigned today. When this was
+decided, Vista x64 and Windows 7 x64 sat outside the tier, so the decision
+cost the tier nothing. **Since 2026-09-16 they are inside it, and what the
+decision costs there is the F8 boot**: nothing about installing, and
+everything about starting unattended. The tier statement above says so.
 
 **Two things were being conflated, and separating them is what settles the
 INF question.** Signing a *release* is a shipping decision, and the answer is

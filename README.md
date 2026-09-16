@@ -41,6 +41,7 @@ The driver needs a USB 2.0 stack (`usbport.sys` + `usbhub20.sys`) on the machine
 - **Windows 98 SE**: Either install [NUSB 3.3 or 3.6](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) or the [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip). For SweetLow's stack, unzip, right-click the `USB2.INF` at its root then install. Reboot if requested after installing the USB 2.0 stack.
 - **Windows ME**: Use [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip) only.
 - **Windows 2000 SP4 and XP SP3 (32-bit)**: Nothing to install, both OSes at their service pack level already have the stack.
+- **Windows XP x64, Vista and 7 (32-bit or x64)**: Nothing to install either. On **Vista x64 and 7 x64**, driver signature enforcement has to be disabled as this driver is not signed.
 
 On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand** or the contents on disk as the driver needs some files from there.
 
@@ -87,7 +88,7 @@ The same driver on the same machine survives all three under SweetLow's build of
 
 ## What is tested, and what is not
 
-Windows 98 SE is validated on real hardware. Windows 2000 SP4, Windows ME and both Windows XPs have only ever run in QEMU virtual machines.
+Windows 98 SE is validated on real hardware. Windows 2000 SP4, Windows ME, both Windows XPs, and Windows Vista and 7 have only ever run in QEMU virtual machines.
 
 | Machine | Controller |
 |---|---|
@@ -100,7 +101,8 @@ Windows 98 SE is validated on real hardware. Windows 2000 SP4, Windows ME and bo
 | Windows 2000 SP4 | Virtual machines only, including an SMP guest and Driver Verifier. It has never run on real hardware. |
 | Windows ME | One virtual machine only, under SweetLow's USB 2.0 stack (the only stack it is supported with): the driver loads and starts, and a HID mouse, a USB mass-storage device and a composite audio device bind (2026-09-02). Never run on real hardware. |
 | 32-bit Windows XP | One virtual machine only (XP Professional SP3): the package installs on an xHCI-only machine with no prompt, the driver loads and starts under XP's own USB stack, and a HID mouse, a USB mass-storage device and a composite audio device bind; disable, enable, remove and rescan in Device Manager all survive. Never run on real hardware. |
-| Windows XP x64 / Server 2003 x64 | One virtual machine only (XP Professional x64 SP2), and **a separate 64-bit driver**, not the one above: the same clauses all pass, taken on the `qemu` build and then read again on the `release` flavour, from a package with its own INF. The `debug` build of it has never been run. Only XP x64 was booted; Server 2003 x64 is the same operating system and is covered by that identity, not by a run of its own. Never run on real hardware. Windows Vista x64 and Windows 7 x64 are not supported - both require signed drivers and this one is not signed. |
+| Windows XP x64 / Server 2003 x64 | One virtual machine only (XP Professional x64 SP2), and **a separate 64-bit driver**, not the one above: the same clauses all pass, taken on the `qemu` build and then read again on the `release` flavour, from a package with its own INF. The `debug` build of it has never been run. Only XP x64 was booted; Server 2003 x64 is the same operating system and is covered by that identity, not by a run of its own. Never run on real hardware. |
+| Windows Vista SP2 and Windows 7 SP1, 32-bit and x64 | One virtual machine each (four in all). The 32-bit ones run the same driver as 98 to XP, the x64 ones the 64-bit driver. The package installs, the driver loads and starts, a HID mouse, a USB mass-storage device and a composite audio device bind, and five disable/enable cycles, remove and rescan in Device Manager all survive. Taken on the `qemu` build only. On Vista x64 and 7 x64, driver signature enforcement has to be disabled as this driver is not signed. Never run on real hardware. |
 | Intel 7/8-series (`XUSB2PR` mux), AMD | Never run on either. Everything said about the `XUSB2PR` port mux comes from Intel's datasheet and Linux, not silicon. The driver does not touch it. |
 | Resume from standby (Windows 2000) | Never executed anywhere. No available VM offers a resumable power transition, and there is no Windows 2000 machine. |
 | Low Speed, USB Audio, hub topologies | Work on Windows 98 hardware in the configurations tried. Not covered: an audio device with `bInterval > 1`, a USB 1.1 hub under a multi-TT hub, and the Windows 2000 side on silicon. |

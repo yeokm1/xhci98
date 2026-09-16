@@ -14,10 +14,10 @@ Windows 98 SE and Windows 2000 SP4 with working USB devices. Both operating
 systems are first-class targets: a single `xhci98.sys` binary must install and
 work on either, and a phase is not done until its checkpoint has been observed
 on both. **"One binary" is a claim about the 32-bit targets**, and it also
-covers the two VM-supported 32-bit ones below; the 64-bit target added in
-roadmap Phase 21 is a second build from a second toolchain in a second
-package, so no statement about a single binary anywhere in this repository
-reaches it (design record 11 section 11).
+covers the VM-supported 32-bit ones below; the 64-bit targets added in
+roadmap Phases 21 and 22 are a second build from a second toolchain in a
+second package, so no statement about a single binary anywhere in this
+repository reaches them (design record 11 section 11).
 
 The two targets fail in different directions, so one is not a proxy for the
 other. Win98 is where the loader gate, the back-ported NUSB `usbport.sys`, and
@@ -84,23 +84,54 @@ everywhere says nothing here; the amd64 import surface has an evidence rule
 of its own. Windows XP x64 and Server 2003 x64 are one operating system, NT
 5.2.3790, which is why one build serves both - but only XP x64 has been
 booted, and Server 2003 x64 rests on that identity rather than on an
-observation. And **Vista x64 and Windows 7 x64 are not in this tier, and the reason changed
-on 2026-09-10**: task 21.7 had read their `usbport.sys` statically and found
-nothing in the interface against them, leaving code signing and the driver
-store as the open questions. Task 21.8's guests and the measurements behind
-them (design record 11, M9 to M11) overturned that reading - **no Version 200
-miniport can run on Vista or Windows 7 in either architecture.** Registration
-takes a fourth argument there, the `USBPORT_RESOURCES` type bits moved, and the
-interrupt DPC is taken from a Version 300 slot past the end of what a Version
-200 packet copies; on x86 the registration is callee-cleaned, so there is no
-inert-extra-argument escape. The owner decided the same day that the driver is
-to run on all four of those systems, which makes it a Version 300 path in both
-binaries rather than a question about signing - roadmap task 22.5, open, and
-the tier statement here does not move until it closes.
-`docs/contributing/build-and-test.md`, "Windows XP x64
-target VM", and `docs/contributing/design/11-x64-targets.md` are the record;
-`docs/contributing/legal-provenance.md` sections 3 and 4 carry the provenance
-of every amd64 reading behind it, all of them `static`.
+observation. And **Vista x64 and Windows 7 x64 are not part of this tier**:
+they are the next paragraph's, and what they run is a different registration
+path in the same binary. `docs/contributing/build-and-test.md`, "Windows XP
+x64 target VM", and `docs/contributing/design/11-x64-targets.md` are the
+record; `docs/contributing/legal-provenance.md` sections 3 and 4 carry the
+provenance of every amd64 reading behind it, all of them `static`.
+
+**Windows Vista and Windows 7, in both architectures, are a sixth target of
+the same standing, supported in virtual machines**, since the owner's
+decision of 2026-09-16 (roadmap tasks 21.8 and 22.5). What was observed is
+four QEMU guests - Vista Business SP2 and Windows 7 Professional SP1, each
+32-bit and x64 - on 2026-09-13 (`docs/issues/07-win7-x86-enable-arrest-usbport-done-dpc.md`
+section 7.5): the package installed on a guest with no other USB host
+controller, the driver registered and started its controller, passed its No
+Op self-test, bound a HID mouse, a mass-storage device and a composite audio
+device, and survived five Device Manager disable/enable cycles, a remove and
+a rescan, each guest under four virtual processors. Vista x64 then took five
+more remove/rescan cycles on 2026-09-16, installed through the committed
+`src/xhci98-amd64.inf`. The 32-bit guests run the one binary and the x64
+guests the second, both through the `Xhci.Dev6` install path, which copies
+`xhci98.sys` alone because every install of those systems already carries the
+four OS-supplied files. It carries no checkpoint tax, it has never run on
+real hardware, and the standing rule holds: accommodate them where the change
+is small and low-risk, never at a primary target's expense.
+
+Read that tier narrowly too, because four things about it are narrower than
+the XP tiers. **It is not the NT 5.x code path.** No Version 200 miniport can
+run on Vista or Windows 7 in either architecture (design record 11, M9 to
+M11), so on NT 6.x both binaries present `Version = 300`, pass registration a
+fourth argument and return their interrupt DPC through a Version 300 slot,
+chosen at run time from `IoIsWdmVersionAvailable(6, 0)` (section 6.5,
+decisions 10 and 12). **Every clause was taken on the `qemu` build.** The
+`release` flavour is read on the two x64 guests from the published asset as
+roadmap task 22.10's sixth and seventh install legs, which is also Windows 7
+x64's first install through the committed INF; the two 32-bit guests have run
+neither the `release` flavour nor the committed `src/xhci98.inf`, only a
+staged copy of the NT 6.x sections it now carries. **The x64 half loads only
+on a boot with driver signature enforcement disabled**: the package is not
+signed (design record 11 section 12, decision 9), so the user presses F8 and
+chooses Disable Driver Signature Enforcement at every start, the machine can
+never boot unattended into working USB, and without it the device sits at
+Code 39 with nothing loaded. 32-bit Vista and Windows 7 do not enforce
+kernel-mode signing. The release notes carry that requirement beside the
+tier, not in a footnote. **And it rests on five cycles a guest**, which is
+what issue 7 section 6 says five cycles are: not a proof that the enable
+arrest this path was fixed for cannot recur. `docs/contributing/build-and-test.md`,
+"Windows Vista and Windows 7 target VMs" and "Vista x64 and Windows 7 x64
+target VMs", are the record.
 
 Neither OS has xHCI support. Windows 98 shipped with UHCI/OHCI (USB 1.1) and
 got EHCI (USB 2.0) only through later back-ports: the Win2000-derived stack in
@@ -116,7 +147,7 @@ stack natively in SP4. This driver fills the gap for both.
 | Item | Value |
 |---|---|
 | Primary targets | Windows 98 SE (4.10.2222) and Windows 2000 SP4 - one binary, both required |
-| Supported in VM | Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax. Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM". 32-bit Windows XP (SP3) - observed in one QEMU guest on 2026-09-03 (xHCI-only package install, HID, mass storage, composite audio, the disable/enable/remove/rescan sequence), never on metal, no checkpoint tax; the `.NTx86` INF half under XP's own `usbport.sys`. Accommodate it where the change is small and low-risk, never at a primary target's expense; see `docs/contributing/build-and-test.md`, "Windows XP target VM", and `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" Windows XP x64 / Server 2003 x64 (NT 5.2.3790) - observed in one QEMU guest on 2026-09-09 (the same clauses, on the `qemu` build and then the `release` flavour; `debug-x64` has never been read in a guest), never on metal, no checkpoint tax; the `.NTamd64` half of the *second* INF, and **a second binary, not this one** - see "Windows XP x64 target VM" and `docs/contributing/design/11-x64-targets.md`. Vista x64 and Windows 7 x64 are not in the tier: no Version 200 miniport can run on either (design record 11, M9-M11), which roadmap task 22.5 is the change for |
+| Supported in VM | Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax. Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM". 32-bit Windows XP (SP3) - observed in one QEMU guest on 2026-09-03 (xHCI-only package install, HID, mass storage, composite audio, the disable/enable/remove/rescan sequence), never on metal, no checkpoint tax; the `.NTx86` INF half under XP's own `usbport.sys`. Accommodate it where the change is small and low-risk, never at a primary target's expense; see `docs/contributing/build-and-test.md`, "Windows XP target VM", and `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" Windows XP x64 / Server 2003 x64 (NT 5.2.3790) - observed in one QEMU guest on 2026-09-09 (the same clauses, on the `qemu` build and then the `release` flavour; `debug-x64` has never been read in a guest), never on metal, no checkpoint tax; the `.NTamd64` half of the *second* INF, and **a second binary, not this one** - see "Windows XP x64 target VM" and `docs/contributing/design/11-x64-targets.md`. Windows Vista (SP2) and Windows 7 (SP1), 32-bit and x64 - observed in four QEMU guests on 2026-09-13 (the same clauses plus five disable/enable cycles each, on the `qemu` build only), never on metal, no checkpoint tax; the `Xhci.Dev6` install path of both INFs and the Version 300 registration path of both binaries. **The x64 half loads only on an F8 boot with signature enforcement disabled, every boot**; see "Windows Vista and Windows 7 target VMs" and "Vista x64 and Windows 7 x64 target VMs" |
 | USB scope | USB 2.0 (HS/FS/LS) only; HID, mass storage, USB Ethernet, and USB Audio validation targets. USB 3.0 SuperSpeed is out of scope (see `docs/usb-xhci-info/xhci-programming.md`, "What SuperSpeed Support Would Require") |
 | Integration model | `usbport.sys` miniport (Option A) - reuse the USB 2.0 stack already on the target (NUSB's Win2000-derived build, SP4's native one, or SweetLow's XP-derived rebuild on Windows 98); do not re-implement the USB stack |
 | Compiler | MSVC 6.0, run in place from `tools/MSVC600` (unpacked from `tools/MSVC600.zip`). The amd64 build is the exception and cannot be otherwise: it is WDK 7.1's `cl` 15.00 from `tools/WinDDK71`, reached by `build-driver.cmd <flavour> -amd64`, because no compiler here older than that can target x64 |
@@ -404,8 +435,9 @@ until roadmap task 21.5 passed - an amd64 binary installing and running
 through every checkpoint clause on a Windows XP x64 guest, and then the
 release flavour installed and read separately on the same guest, because the
 clauses had been taken on the `qemu` build. **The x64 half of a cut carries
-exactly that standing: one guest, one virtual machine, never real hardware**,
-against the x86 half's four install legs. `-UploadSetOnly` is the one mode
+exactly that standing: virtual machines only, never real hardware** - the XP
+x64 guest, and the Vista x64 and Windows 7 x64 guests from `1.1.0.0` - against
+the x86 half's four install legs. `-UploadSetOnly` is the one mode
 that does not follow the default - it derives the architectures from the
 published tree, since every version published so far is x86-only.
 

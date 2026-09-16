@@ -2143,7 +2143,7 @@ are static readings and no other task's box may be ticked on one.
         the opposite of an xHCI-only XP or 2000 install
   - [x] **the `i386` halves taken in the same pass** and handed to task 22.1,
         together with each system's `ntoskrnl.exe` and `hal.dll` for task 22.2
-- [ ] **21.8 - the Vista x64 and Windows 7 x64 guests**, on the owner's
+- [x] **21.8 - the Vista x64 and Windows 7 x64 guests**, on the owner's
       instruction of 2026-09-09. Task 21.7 read the interface and found
       nothing against them; this is the leg that finds out whether the binary
       runs. **It is a second leg, not a repeat of 21.5**, and the reason is
@@ -2483,8 +2483,19 @@ are static readings and no other task's box may be ticked on one.
         On the guests the F8 menu is reachable over the PS/2 keyboard, so there
         is no chicken-and-egg between the boot menu and the controller being
         installed
-  - [ ] the `.NTamd64` package installed on each guest, or the driver-store
-        refusal characterised precisely enough to decide what would fix it
+  - [x] the `.NTamd64` package installed on each guest, or the driver-store
+        refusal characterised precisely enough to decide what would fix it.
+
+        **Closed 2026-09-16, on the owner's decision.** Both halves this box
+        was left owing are answered: the `Xhci.Dev6` shape reached the
+        shipping file (task 22.5's INF box, design record 11 section 12,
+        decision 13), and Windows 7 x64 installed the package through a
+        staged copy of that same shape on 2026-09-12 and 2026-09-13
+        (`p225win7x64re1`, `fix7win7x64`), every clause passing on the
+        second. Vista x64 has also installed through the committed file
+        (`vm\vistax64-rr\`, 22.5). **Windows 7 x64's first install through
+        the committed `src\xhci98-amd64.inf` is task 22.10's seventh install
+        leg**, which reads `setupapi.log` for it
 
         **ANSWERED FOR VISTA X64, 2026-09-10, AND NOT THE WAY THIS BOX
         EXPECTED.** The driver store does **not** refuse the package: it
@@ -2515,9 +2526,18 @@ are static readings and no other task's box may be ticked on one.
         published asset, alongside the other install legs; that leg is also
         Windows 7 x64's first install through the committed
         `src\xhci98-amd64.inf` rather than a staged copy
-  - [ ] the tier decided and stated with the rest in task 21.6, including the
+  - [x] the tier decided and stated with the rest in task 21.6, including the
         signing requirement, which belongs in the release notes beside the
-        tier rather than in a footnote
+        tier rather than in a footnote. **Decided and stated 2026-09-16**
+        (owner): Vista and Windows 7, both architectures, supported in
+        virtual machines with no checkpoint tax, on the `qemu` build's
+        evidence, with the F8-at-every-boot cost beside the x64 half in
+        `AGENTS.md`, `build-and-test.md`, `win98-wdm.md` and the release
+        notes, and the runtime row in `legal-provenance.md` section 4.
+        `README.md` says only that signature enforcement has to be disabled
+        because the driver is unsigned, on the owner's instruction of the
+        same day, and leaves the per-boot detail to the release notes. Task
+        22.5's record box is the same change
 
       Not a checkpoint clause of this phase. Phase 21's checkpoint below is
       written about a Windows XP x64 guest and passed on 2026-09-09; this task
@@ -2616,9 +2636,10 @@ package, which no previous cut had: on the XP x64 guest, and - on the owner's
 instruction of 2026-09-16, carrying task 21.8's `release`-flavour clause - on
 the Vista x64 and Windows 7 x64 guests. The x86 half keeps its four.
 
-**What the x64 half of this release may be said to be is exactly what task
-21.5 observed and no more**: one guest, one virtual machine, never real
-hardware, against the x86 half's four install legs. `AGENTS.md` states it and
+**What the x64 half of this release may be said to be is exactly what tasks
+21.5 and 22.5 observed and no more**: three guests in virtual machines, never
+real hardware, with Vista x64 and Windows 7 x64 loading the driver only on an
+F8 boot, against the x86 half's four install legs. `AGENTS.md` states it and
 the release notes state it for the user; do not let the act of publishing
 inflate it.
 
@@ -3012,7 +3033,7 @@ reading may not tick a box whose line names a guest.
         new row itself. Host tests 12,610 + 232 + 2,027 (both architectures),
         import gate 13 pairs x86 / 8 amd64, INF self-tests 452, packager 254,
         launchers 330. No INF touched. Design record 11 section 6.5, "Built"
-  - [ ] **the guests, in this order, `qemu` flavour first, and the readings
+  - [x] **the guests, in this order, `qemu` flavour first, and the readings
         named before each boot**: Vista x64, where the wall is known (`dpc
         count` climbing with `isr count`, No Op `CC_SUCCESS`, then the clauses
         21.5 took - HID, mass storage, composite audio, disable / enable /
@@ -3404,18 +3425,30 @@ reading may not tick a box whose line names a guest.
         reaches a 6.x-only right-click section - which the lesson that a
         version decoration selects the models section only says is not
         `[DefaultInstall.NTx86.6.0]`
-  - [ ] **the record**: task 21.6's tier wording for Vista and Windows 7 on
+  - [x] **the record**: task 21.6's tier wording for Vista and Windows 7 on
         both architectures - VM-supported, no checkpoint tax, and for x64 the
         signing paragraph beside the tier rather than in a footnote -
         `AGENTS.md`, `build-and-test.md`, `win98-wdm.md`, the release notes,
         and the `legal-provenance.md` section 4 rows; task 21.8's last box
-        closes with it
-- [ ] **22.6 - the record.** The tier stated where Windows ME and 32-bit XP
+        closes with it. **Written 2026-09-16** on the owner's decisions of
+        that day: both architectures at once, nothing said about Vista x64's
+        remove and rescan, and nothing about issue 7. Two gaps are stated
+        rather than closed: the 32-bit pair ran only the `qemu` build from a
+        staged copy of the NT 6.x sections, with no task yet scheduling the
+        `release` flavour or the committed `src\xhci98.inf` on them, and the
+        32-bit install prompt was never written down (`build-and-test.md`,
+        step 4 of the 32-bit section)
+- [x] **22.6 - the record.** The tier stated where Windows ME and 32-bit XP
       are stated, in `AGENTS.md`, `build-and-test.md`, `win98-wdm.md` and the
       release notes, with the provenance rows beside it. Task 21.6 is the
       worked example and its lesson transfers: check first whether the wording
-      the other tiers carry is true of this one before reusing it.
-  - [ ] **the Windows 7 disclosure - BOTH ARCHITECTURES - and it is not
+      the other tiers carry is true of this one before reusing it. **Done
+      2026-09-16, as task 22.5's record box** - one change for both
+      architectures. The lesson did transfer: XP x64's "on the `qemu` build
+      and then the `release` flavour" is true of neither pair here, and its
+      "installed with no prompt" is recorded for neither, so the wording
+      reuses neither
+  - [x] **the Windows 7 disclosure - BOTH ARCHITECTURES - and it is not
         optional.** The `1.1.0.0` cut goes ahead over a known, open defect
         (the guest boxes in 22.5, and
         [issue 7](../issues/07-win7-x86-enable-arrest-usbport-done-dpc.md)),
@@ -3445,7 +3478,7 @@ reading may not tick a box whose line names a guest.
           wording still may not lean on "the defect is not ours"**: the two
           objects usbport holds are unnamed on both targets and issue 7
           still declines that claim
-    - [ ] **Decide what to say, if anything, about Vista x64's remove and
+    - [x] **Decide what to say, if anything, about Vista x64's remove and
           rescan**, which did not complete on 2026-09-12 (22.5). It is a
           different clause from the enable arrest, was never run on that
           guest before, and was not tested single-processor - so it is
@@ -3454,7 +3487,10 @@ reading may not tick a box whose line names a guest.
           honest. **Owner, 2026-09-16: re-run it first** (22.5's box); the
           wording waits on that reading. *Taken the same evening: five
           cycles, all pass (22.5). The wording is the owner's; the reading
-          supports saying nothing about it*
+          supports saying nothing about it.* **Owner, 2026-09-16: nothing is
+          said.** The tier wording treats remove and rescan on Vista x64 as
+          the passing clause it has been six times in six since issue 7's
+          fix
     - [x] **The premise of this box changed on 2026-09-13**: the defect's
           cause was read and is fixed in source (22.5's last sub-box,
           issue 7 section 7), and the fault was this driver's completion

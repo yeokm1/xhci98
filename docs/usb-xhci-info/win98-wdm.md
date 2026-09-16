@@ -544,12 +544,67 @@ Manager disable, enable, remove and rescan sequence - on the `qemu` flavour
 and then again on the `release` flavour. Real hardware remains unobserved,
 which is why the tier is virtual machines.
 
-Vista x64 and Windows 7 x64 are not in this tier. Task 21.7 read their
-`usbport.sys` by the same static method and all six measurements pass, so the
-interface does not argue against them; what does is that both enforce
-kernel-mode code signing and both stage a package through a driver store the
-INF's `LayoutFile` route was not written for. Roadmap task 21.8 is the leg
-that finds out, and it may end in a well-characterised no.
+Vista x64 and Windows 7 x64 are not in this tier. They have one of their
+own, below, on a different registration path.
+
+### And Windows Vista and Windows 7?
+
+Position: supported in virtual machines, in both architectures, since the
+owner's decision of 2026-09-16 (roadmap tasks 21.8 and 22.5), standing where
+Windows 2000, Windows ME and both Windows XPs stand - no checkpoint waits on
+them, the accommodation rule above governs them, and they have never run on
+real hardware. The 32-bit pair run the one binary; the x64 pair run the
+second one, above.
+
+**What the static pass said, and why it was not enough.** Tasks 21.7 and
+22.1 read Vista SP2's and Windows 7 SP1's `usbport.sys` in both architectures
+by the method this section describes for XP, and all six measurements
+passed: the same exports, `USBPORT_GetHciMn` returning `0x10000001`, and the
+same `>= 200` packet size. The Vista x64 guest, and the static readings it
+sent the project back for, then found that **no Version 200 miniport can run
+on either system in either architecture**, for three reasons no measurement
+of the packet could see
+(`docs/contributing/design/11-x64-targets.md` sections 6.1 to 6.4):
+`USBPORT_RegisterUSBPortDriver` takes a fourth argument, and on x86 it is
+callee-cleaned, so a three-argument call unbalances the stack; the
+`USBPORT_RESOURCES.ResourcesTypes` bits moved, so a Version 200 mask refuses
+the controller's own resources; and the interrupt DPC is called through a
+Version 300 slot past the end of what a Version 200 packet copies, so the
+controller starts, the ISR claims its interrupts, and the DPC that services
+them never runs. The lesson is the one
+this document already states for imports, applied to behaviour: an interface
+that reads the same is not a caller that behaves the same, so disassemble the
+callers and not only the structures.
+
+**So on NT 6.x the driver is a Version 300 miniport**, in both binaries, and
+a Version 200 one everywhere else. The choice is made at run time from
+`IoIsWdmVersionAvailable(6, 0)` - Windows 7 reports WDM 6.00, not 6.01, and
+Server 2003 and XP x64 report 1.30, which is why the predicate is `(6, 0)` -
+and it keeps every NT 5.x and 9x system wire-identical to what it was observed
+with (design record 11 section 6.5, decision 12). The x86 import this needs,
+`IoIsWdmVersionAvailable`, carries Windows 98 evidence of its own in the
+import allowlist, as every row must.
+
+**What the guests measured** (2026-09-13, roadmap task 22.5; issue 7 section
+7.5): on all four, each under four virtual processors, the package installed,
+the driver registered presenting `Version = 300`, usbport wrote back the two
+Version 300 services, the interrupt DPC ran in step with the ISR, the No Op
+self-test passed, a HID mouse, a mass-storage device and a composite audio
+device bound, and five disable/enable cycles, a remove and a rescan completed.
+Vista x64 took five more remove/rescan cycles on 2026-09-16. Every clause was
+taken on the `qemu` build.
+
+**Two install-path facts are specific to these systems.** Every install
+already carries `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll`, so
+the Code 39 that an xHCI-only Windows 2000 or XP install meets does not
+arise - but the INF's `LayoutFile` copies abort Vista's file queue even so,
+because the queue resolves a source before it decides to skip. Both INFs
+therefore reach NT 6.x through a `.6.0`-decorated models section naming
+`Xhci.Dev6`, which copies `xhci98.sys` alone (design record 11 section 12,
+decision 13). And **the x64 pair enforce kernel-mode code signing**: the
+package is unsigned, so the driver loads only on a boot where the user has
+pressed F8 and chosen Disable Driver Signature Enforcement, at every start.
+32-bit Vista and Windows 7 do not enforce it.
 
 ## MSVC 6.0 / C89 Language Pitfalls
 

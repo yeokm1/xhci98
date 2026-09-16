@@ -1981,12 +1981,16 @@ download would carry two.
 
 ## 12. The owner's decisions
 
-1. Whether the tier is Windows XP x64 and Server 2003 x64 only, or also
+1. ~~Whether the tier is Windows XP x64 and Server 2003 x64 only, or also
    Vista x64 and Windows 7 x64, given that those two require a guest with
-   driver signature enforcement disabled, permanently and by design. The ABI
-   half of this is now settled and does not narrow the claim (section 6); what
-   is left is the two guests. The signing half was taken separately on
-   2026-09-10 and is decision 9.
+   driver signature enforcement disabled, permanently and by design.~~
+   **Decided 2026-09-16: also Vista x64 and Windows 7 x64**, together with
+   their 32-bit siblings, supported in virtual machines with the F8 cost
+   stated beside the tier. The ABI half turned out not to be settled by
+   section 6 - sections 6.1 to 6.4 overturned it and decision 12 answered it
+   with the Version 300 path - and the guests took every clause on that path
+   (roadmap task 22.5). The signing half is decision 9; `AGENTS.md`, "Project
+   Purpose", states the tier.
 2. ~~One INF with a third install path and a four-leg re-validation, or a
    separate x64 package leaving `src/xhci98.inf` untouched.~~ **Decided
    2026-09-09: the separate x64 package**, `src/xhci98.inf` byte-identical.
@@ -2032,7 +2036,9 @@ publishes:
    Server 2003 x64 do not enforce kernel-mode code signing (section 6), which
    is why the tier is what it is, and the package installs and loads there
    unsigned today. The two enforcing systems are outside the tier pending task
-   21.8, so the decision costs the tier nothing at all.
+   21.8, so the decision costs the tier nothing at all. *(Since 2026-09-16
+   they are inside it - decision 1 - and there the decision costs the F8
+   boot, every boot, which the tier states.)*
 
    What the decision turns on is that **signing a release and signing on a
    guest are different things**. The guest work measures what a *user* of an
