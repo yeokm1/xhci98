@@ -23,17 +23,18 @@ What it checks, grouped by the failure each rule prevents:
            DestinationDirs with driver files sent to System32\Drivers,
            SourceDisksNames/SourceDisksFiles coverage, and defined %strings%.
   PATH-*   The install paths themselves, which are the two of -Arch x86 or the
-           one of -Arch amd64 (see that parameter). Under x86 every model must
+           two of -Arch amd64 (see that parameter). Under x86 every model must
            reach both an undecorated Win98 install section carrying
            DevLoader/NTMPDriver and a .NTx86 section whose .NTx86.Services
            AddService names a binary the same CopyFiles section actually
            delivers, with the required kernel driver service type, demand
-           start, and normal error control; under amd64 the one .NTamd64
-           section must do the second half of that and there must be no
-           undecorated section at all (PATH-NO9X). PATH-MFGDEC holds
-           [Manufacturer]'s TargetOSVersion field to the file's architecture in
-           both directions - absent on the 32-bit file, NTamd64 on the 64-bit
-           one - which is the line design record 11's decision 2 turns on.
+           start, and normal error control; under amd64 each models section's
+           .NTamd64 install section must do the second half of that and there
+           must be no undecorated section at all (PATH-NO9X). PATH-MFGDEC holds
+           [Manufacturer]'s TargetOSVersion fields to the file's profile in
+           both directions - absent on the 32-bit file; NTamd64 and
+           NTamd64.6.0, and nothing else, on the 64-bit one - which is the line
+           design record 11's decision 2 turns on.
   OS-*     The files the operating system supplies - usbd.sys and usbhub.sys
            on both targets, usbport.sys on the NT targets, usbui.dll on all
            four paths - which the media does not carry (usbd.sys and
@@ -50,6 +51,9 @@ What it checks, grouped by the failure each rule prevents:
            a 1.0.0.0 media name for one, may appear in [SourceDisksFiles],
            and usbhub20.sys, which Windows 2000's own USB.INF places with
            the root hub and XP does not have, is named on no path at all.
+           The 64-bit file's NT 6.x path is the exception and must name none
+           of the four (OS-ONNT6): its file queue aborts on a LayoutFile copy,
+           and all four are on disk after any Vista or Windows 7 install.
   SUSP-*   The one machine-wide value, Services\USB\DisableSelectiveSuspend =
            1: every install path (device and right-click, both targets) must
            write it as a DWORD 1. Windows 98's usbport builds idle-suspend the
@@ -90,9 +94,11 @@ paths it must carry. Defaults to x86.
           install section carrying DevLoader/NTMPDriver, a .NTx86 one carrying
           a service, and a right-click [DefaultInstall] for each.
   amd64   src\xhci98-amd64.inf - the 64-bit package's file (roadmap task 21.3).
-          One install path, .NTamd64, plus its right-click counterpart, and
-          [Manufacturer] carrying the NTamd64 TargetOSVersion field that makes
-          the models section [XhciModels.NTamd64].
+          [Manufacturer] carries two TargetOSVersion fields and so two models
+          sections: NTamd64 for NT 5.2, whose .NTamd64 install section fetches
+          the OS-supplied files and has the one right-click counterpart, and
+          NTamd64.6.0 for Vista and Windows 7 x64 (roadmap task 22.5, since
+          2026-09-16), whose install section copies xhci98.sys alone.
 
 This is a switch on the script rather than a second script, which is the
 opposite of the choice made for the import allowlist next door - and
@@ -338,23 +344,51 @@ $repo = Get-RepoRoot
 #   Default  the right-click Install section that pre-stages with no device.
 #   Kind     "9x" gets the DevLoader/NTMPDriver rules, "nt" the AddService
 #            ones. There is no third kind and no path with neither.
+#   Models   the [Manufacturer] TargetOSVersion field whose models section
+#            this path serves - "" for the undecorated one. A model is checked
+#            against the paths of ITS models section and no others, which is
+#            what lets one file carry an NT 5.2 path and an NT 6.x path that
+#            copy different files.
+#   OsFiles  $true when the path fetches the OS-supplied files through
+#            LayoutFile (the OS-* table below says which), $false when it must
+#            name none of them (OS-ONNT6).
+#
+# Default may be "": the NT 6.x path has no right-click section of its own.
 #
 if ($Arch -eq "amd64") {
     if ($InfPath -eq "") { $InfPath = Join-Path $repo "src\xhci98-amd64.inf" }
     $mfgDecoration = "NTamd64"
     $archPaths = @(
         @{ Key = "WinXP64"; Os = "Windows XP x64"; Suffix = ".NTamd64";
-           Default = "DefaultInstall.NTamd64"; Kind = "nt" }
+           Default = "DefaultInstall.NTamd64"; Kind = "nt"; Models = "NTamd64"; OsFiles = $true },
+        #
+        # **The NT 6.x path, since the owner's decision of 2026-09-16** (roadmap
+        # task 22.5). Vista's file queue aborts on the LayoutFile copies, and
+        # all four files are on disk there already, so this path copies the
+        # driver and nothing else - which is a different claim from the NT 5.2
+        # path's, and is why paths are per models section rather than per file.
+        #
+        @{ Key = "Nt6x64"; Os = "Windows Vista and 7 x64"; Suffix = ".NTamd64";
+           Default = ""; Kind = "nt"; Models = "NTamd64.6.0"; OsFiles = $false }
     )
 } else {
     if ($InfPath -eq "") { $InfPath = Join-Path $repo "src\xhci98.inf" }
     $mfgDecoration = ""
     $archPaths = @(
         @{ Key = "Win98";   Os = "Windows 98";   Suffix = "";
-           Default = "DefaultInstall";       Kind = "9x" },
+           Default = "DefaultInstall";       Kind = "9x"; Models = ""; OsFiles = $true },
         @{ Key = "Win2000"; Os = "Windows 2000"; Suffix = ".NTx86";
-           Default = "DefaultInstall.NTx86"; Kind = "nt" }
+           Default = "DefaultInstall.NTx86"; Kind = "nt"; Models = ""; OsFiles = $true }
     )
+}
+# Every TargetOSVersion field this profile has a models section for, in
+# profile order. [Manufacturer] must carry each of them and nothing else.
+$mfgDecorations = @($archPaths | ForEach-Object { $_.Models } | Where-Object { $_ -ne "" } | Select-Object -Unique)
+$rightClickSections = @($archPaths | ForEach-Object { $_.Default } | Where-Object { $_ -ne "" } | Select-Object -Unique)
+
+function Get-ModelPaths {
+    param($Model)
+    return @($archPaths | Where-Object { $_.Models -eq $Model.Decoration })
 }
 
 if (-not (Test-Path -LiteralPath $InfPath)) {
@@ -595,42 +629,66 @@ if (-not (Test-SectionExists $inf "Manufacturer")) {
         # an undecorated models section is ignored outright by the 64-bit setup
         # engine and the INF would then offer nothing at all.
         #
+        # **And since 2026-09-16 the 64-bit file must carry NTamd64.6.0 too**,
+        # and nothing else. Without it Vista and Windows 7 x64 match
+        # [XhciModels.NTamd64] and run the NT 5.2 path, whose LayoutFile copies
+        # abort the file queue there. A decoration outside the profile is
+        # refused rather than tolerated: until that date this rule checked only
+        # that NTamd64 was present, so a staged INF with a second models section
+        # passed with that section never read at all - "models: 1" over a file
+        # that had two.
+        #
         $fields = @($matches[1] -split ',' | ForEach-Object { $_.Trim() })
         $baseName = ""
         foreach ($f in $fields) { if ($f -ne "") { $baseName = $f; break } }
         if ($baseName -eq "") { continue }
         $decorations = @($fields | Select-Object -Skip 1 | Where-Object { $_ -ne "" })
 
+        $wanted = @()
         if ($mfgDecoration -eq "") {
             if ($decorations.Count -gt 0) {
                 Add-Failure "PATH-MFGDEC" ("[Manufacturer] line {0} carries the TargetOSVersion field(s) '{1}'. The 32-bit file's models line must stay undecorated: it is the one line Windows 98's 16-bit engine parses to find its models section, whether that engine takes only the first field is unmeasured here, and widening it is exactly what design record 11's decision 2 declined - the 64-bit package has an INF of its own (src\xhci98-amd64.inf) so that this question is never asked." -f $e.Line, ($decorations -join ','))
             }
-            $sec = $baseName
+            $wanted += @{ Section = $baseName; Decoration = "" }
         } else {
             if (-not ($decorations -contains $mfgDecoration)) {
                 Add-Failure "PATH-MFGDEC" ("[Manufacturer] line {0} does not carry the '{1}' TargetOSVersion field (found '{2}'). Without it the 64-bit setup engine looks for an undecorated models section, ignores it outright, and this INF offers no driver at all - which looks identical to a package that was never copied." -f $e.Line, $mfgDecoration, ($decorations -join ','))
             }
-            $sec = "{0}.{1}" -f $baseName, $mfgDecoration
+            foreach ($d in $mfgDecorations) {
+                if ($d -eq $mfgDecoration) { continue }
+                if (-not ($decorations -contains $d)) {
+                    Add-Failure "PATH-MFGDEC" ("[Manufacturer] line {0} does not carry the '{1}' TargetOSVersion field (found '{2}'). Without it Windows Vista and Windows 7 x64 match the NT 5.2 models section and run its install path, whose LayoutFile copies abort the file queue on NT 6.x (roadmap task 21.8) - the package stages and then does not install." -f $e.Line, $d, ($decorations -join ','))
+                }
+            }
+            foreach ($d in $decorations) {
+                if ($mfgDecorations -contains $d) {
+                    $wanted += @{ Section = ("{0}.{1}" -f $baseName, $d); Decoration = $d }
+                } else {
+                    Add-Failure "PATH-MFGDEC" ("[Manufacturer] line {0} carries the TargetOSVersion field '{1}', which this profile has no install path for (it knows '{2}'). The models section it selects would be read by a setup engine and by no rule here." -f $e.Line, $d, ($mfgDecorations -join ','))
+                }
+            }
         }
 
-        if (-not (Test-SectionExists $inf $sec)) {
-            Add-Failure "BOTH-XREF" ("[Manufacturer] names models section [{0}] (line {1}), which does not exist." -f $sec, $e.Line)
-        } else {
-            [void]$modelSections.Add($sec)
+        foreach ($w in $wanted) {
+            if (-not (Test-SectionExists $inf $w.Section)) {
+                Add-Failure "BOTH-XREF" ("[Manufacturer] names models section [{0}] (line {1}), which does not exist." -f $w.Section, $e.Line)
+            } else {
+                [void]$modelSections.Add($w)
+            }
         }
     }
 }
 
 foreach ($ms in $modelSections) {
-    foreach ($e in (Get-Section $inf $ms)) {
+    foreach ($e in (Get-Section $inf $ms.Section)) {
         if ($e.Text -notmatch '^\s*(.+?)\s*=\s*(.+)$') { continue }
         $desc = $matches[1]
         $fields = @($matches[2] -split ',' | ForEach-Object { $_.Trim() })
         if ($fields.Count -lt 2) {
-            Add-Failure "BOTH-XREF" ("models line {0} in [{1}] has no hardware ID." -f $e.Line, $ms)
+            Add-Failure "BOTH-XREF" ("models line {0} in [{1}] has no hardware ID." -f $e.Line, $ms.Section)
             continue
         }
-        [void]$models.Add(@{ Section = $fields[0]; Id = $fields[1]; Desc = $desc; Line = $e.Line })
+        [void]$models.Add(@{ Section = $fields[0]; Id = $fields[1]; Desc = $desc; Line = $e.Line; Decoration = $ms.Decoration })
     }
 }
 
@@ -678,7 +736,7 @@ foreach ($m in $models) {
         }
     }
 
-    foreach ($ap in @($archPaths | Where-Object { $_.Kind -eq "9x" })) {
+    foreach ($ap in @(Get-ModelPaths $m | Where-Object { $_.Kind -eq "9x" })) {
         # Win98 half: the undecorated section, DevLoader and NTMPDriver.
         if (-not (Test-SectionExists $inf $base)) {
             Add-Failure "PATH-W98" ("model '{0}' names install section [{1}], which does not exist. Win98 reads only undecorated section names, so it would find nothing to install." -f $m.Id, $base)
@@ -760,7 +818,7 @@ foreach ($m in $models) {
     }
 
     # The NT half: the decorated section, its .Services, and the AddService.
-    foreach ($ap in @($archPaths | Where-Object { $_.Kind -eq "nt" })) {
+    foreach ($ap in @(Get-ModelPaths $m | Where-Object { $_.Kind -eq "nt" })) {
         $nt = $base + $ap.Suffix
         if (-not (Test-SectionExists $inf $nt)) {
             # Two different silent failures, so two different sentences. On the
@@ -930,7 +988,7 @@ function Get-AddRegValues {
 }
 
 foreach ($m in $models) {
-    $paths = @($archPaths | ForEach-Object {
+    $paths = @(Get-ModelPaths $m | ForEach-Object {
         @{ Name = $_.Os; Install = ($m.Section + $_.Suffix) }
     })
     foreach ($p in $paths) {
@@ -1341,22 +1399,22 @@ if ($mfgDecoration -eq "") {
 # is the route a user who already has an earlier release takes and the one
 # issue 5 exists for. OS-DEFAULT above catches only the asymmetric case.
 #
-foreach ($defaultSection in @($archPaths | ForEach-Object { $_.Default })) {
+foreach ($defaultSection in $rightClickSections) {
     if (-not (Test-SectionExists $inf $defaultSection)) {
-        Add-Failure "OS-DEFAULT" ("[{0}] is missing. This INF has {1} install routes - a device install and a right-click Install on each of its {2} - and every OS-* and SUSP-* rule below is checked against the routes that exist, so removing this section removes the checks with it rather than failing them." -f $defaultSection, ($archPaths.Count * 2), (($archPaths | ForEach-Object { $_.Os }) -join ' and '))
+        Add-Failure "OS-DEFAULT" ("[{0}] is missing. This INF has {1} install routes - a device install on each of its {2}, and {3} right-click Install section(s) - and every OS-* and SUSP-* rule below is checked against the routes that exist, so removing this section removes the checks with it rather than failing them." -f $defaultSection, ($archPaths.Count + $rightClickSections.Count), (($archPaths | ForEach-Object { $_.Os }) -join ' and '), $rightClickSections.Count)
     }
 }
 
 foreach ($m in $models) {
     $base = $m.Section
-    $missing = @($archPaths | Where-Object { -not (Test-SectionExists $inf ($base + $_.Suffix)) })
+    $missing = @(Get-ModelPaths $m | Where-Object { -not (Test-SectionExists $inf ($base + $_.Suffix)) })
     if ($missing.Count -gt 0) {
         continue    # already reported as PATH-W98 / PATH-NT
     }
 
-    $paths = @($archPaths | ForEach-Object {
+    $paths = @(Get-ModelPaths $m | ForEach-Object {
         $sec = $base + $_.Suffix
-        @{ Name = $_.Key; Install = $sec; Sections = @(Get-Directive $inf $sec "CopyFiles"); Default = $_.Default }
+        @{ Name = $_.Key; Install = $sec; Sections = @(Get-Directive $inf $sec "CopyFiles"); Default = $_.Default; OsFiles = $_.OsFiles }
     })
 
     foreach ($os in $osSupplied) {
@@ -1365,11 +1423,30 @@ foreach ($m in $models) {
             # Both routes into a target: the device install, and the
             # right-click Install that pre-stages with no device present.
             $routes = @(@{ Label = ("the {0} device install ([{1}])" -f $p.Name, $p.Install); Sections = $p.Sections })
-            if (Test-SectionExists $inf $p.Default) {
+            if ($p.Default -ne "" -and (Test-SectionExists $inf $p.Default)) {
                 $routes += @{ Label = ("the {0} right-click Install ([{1}])" -f $p.Name, $p.Default); Sections = @(Get-Directive $inf $p.Default "CopyFiles") }
             }
             foreach ($route in $routes) {
                 $entries = @(Get-CopyEntriesFor $inf $route.Sections $file)
+
+                #
+                # **OS-ONNT6: a path that must name none of the four.** Not an
+                # entry in the table's Off lists, because the reason is the
+                # path's rather than the file's, and it is the same reason for
+                # all four: on NT 6.x the file copy queue resolves a source
+                # BEFORE COPYFLG_NO_OVERWRITE skips the copy, the source it
+                # finds for an OS file is the OS's own driver-store package,
+                # and the queue aborts on it (measured on Vista x64
+                # 2026-09-10, roadmap task 21.8) - while every one of the four
+                # is already on disk (task 22.3). The flag that makes the NT 5.x
+                # copies harmless does not reach that far.
+                #
+                if (-not $p.OsFiles) {
+                    if ($entries.Count -gt 0) {
+                        Add-Failure "OS-ONNT6" ("{0} copies '{1}' (line {2}). The NT 6.x path copies xhci98.sys and nothing else: its file queue resolves a source for this file before COPYFLG_NO_OVERWRITE can skip it, the source is the OS's own driver-store package, and the queue aborts with an error naming neither the file nor the cause (roadmap task 21.8, Vista x64) - and the file is on disk already after any Vista or Windows 7 install (task 22.3)." -f $route.Label, $file, $entries[0].Line)
+                    }
+                    continue
+                }
 
                 if ($os.Off -contains $p.Name) {
                     if ($entries.Count -gt 0) {
@@ -1453,13 +1530,13 @@ $suspKey = "System\CurrentControlSet\Services\USB"
 foreach ($m in $models) {
     $base = $m.Section
     $suspRoutes = @()
-    foreach ($p in @($archPaths | ForEach-Object {
+    foreach ($p in @(Get-ModelPaths $m | ForEach-Object {
         @{ Name = $_.Os; Install = ($base + $_.Suffix); Default = $_.Default }
     })) {
         if (Test-SectionExists $inf $p.Install) {
             $suspRoutes += @{ Label = ("the {0} device install ([{1}])" -f $p.Name, $p.Install); Section = $p.Install }
         }
-        if (Test-SectionExists $inf $p.Default) {
+        if ($p.Default -ne "" -and (Test-SectionExists $inf $p.Default)) {
             $suspRoutes += @{ Label = ("the {0} right-click Install ([{1}])" -f $p.Name, $p.Default); Section = $p.Default }
         }
     }
@@ -1658,16 +1735,18 @@ if ($EmitFootprint -ne "") {
     # Fixed order, so the output is diffable: every model's device-install
     # paths in profile order, then the right-click DefaultInstall paths in the
     # same order. A path whose section does not exist is skipped here and
-    # reported by PATH-*. The 64-bit file has one of each rather than two, and
-    # so a footprint file of its own - the two are different claims about
+    # reported by PATH-*. The 64-bit file has two device installs (NT 5.2 and
+    # NT 6.x) and one right-click section rather than two of each, and so a
+    # footprint file of its own - the two are different claims about
     # different media and comparing them to each other would mean nothing.
     $fpPaths = New-Object System.Collections.ArrayList
     foreach ($m in $models) {
-        foreach ($ap in $archPaths) {
+        foreach ($ap in @(Get-ModelPaths $m)) {
             [void]$fpPaths.Add(@{ Os = $ap.Os; Kind = "device install"; Install = ($m.Section + $ap.Suffix) })
         }
     }
     foreach ($ap in $archPaths) {
+        if ($ap.Default -eq "") { continue }
         [void]$fpPaths.Add(@{ Os = $ap.Os; Kind = "right-click Install"; Install = $ap.Default })
     }
 

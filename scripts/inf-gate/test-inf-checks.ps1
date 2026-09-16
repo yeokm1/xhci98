@@ -1156,6 +1156,14 @@ try {
     Assert-True ($baseline64.ExitCode -eq 0) ("src\xhci98-amd64.inf does not pass its own gate:`n" + $baseline64.Output)
     Assert-True ($baseline64.Output -notmatch "FAIL \[") "src\xhci98-amd64.inf produced a FAIL line."
     Assert-True ($baseline64.Output -notmatch "WARN:") ("src\xhci98-amd64.inf produced a warning:`n" + $baseline64.Output)
+    #
+    # **Both models sections must be READ, not merely present.** Until
+    # 2026-09-16 the gate took one models section per [Manufacturer] line, so a
+    # staged INF carrying the NT 6.x section passed with that section - and the
+    # whole install path behind it - never checked: "models: 1" over a file with
+    # two. Passing says nothing about a path the rules did not walk.
+    #
+    Assert-True ($baseline64.Output -match "models: 2\b") ("src\xhci98-amd64.inf: expected the gate to gather two models (NT 5.2 and NT 6.x). Output:`n" + $baseline64.Output)
 
     #
     # **Each file must be REFUSED under the other's profile**, and this is the
@@ -1207,6 +1215,23 @@ try {
     # indistinguishable from media that was never copied.
     Assert-RuleFires "amd64-mfg-undecorated" "PATH-MFGDEC" {
         param($t) $t.Replace("%Mfg%=XhciModels,NTamd64", "%Mfg%=XhciModels")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    # The NT 6.x field lost. Nothing else breaks: [XhciModels.NTamd64.6.0] is
+    # still there, unreferenced, and every NT 5.2 rule passes - while Vista and
+    # Windows 7 x64 match the NT 5.2 models section and abort in its LayoutFile
+    # copies (roadmap task 21.8).
+    Assert-RuleFires "amd64-mfg-no-nt6" "PATH-MFGDEC" {
+        param($t) $t.Replace("%Mfg%=XhciModels,NTamd64,NTamd64.6.0", "%Mfg%=XhciModels,NTamd64")
+    } -Source $prodInfAmd64 -Arch amd64
+    # A field the profile has no path for, with its models section present, so
+    # the only thing wrong is that no rule would ever read that section.
+    Assert-RuleFires "amd64-mfg-unknown" "PATH-MFGDEC" {
+        param($t) $t.Replace("%Mfg%=XhciModels,NTamd64,NTamd64.6.0", "%Mfg%=XhciModels,NTamd64,NTamd64.6.0,NTamd64.6.1").Replace(
+                             "[XhciModels.NTamd64.6.0]`r`n", "[XhciModels.NTamd64.6.1]`r`n%XhciDesc%=Xhci.Dev6,PCI\CC_0C0330`r`n`r`n[XhciModels.NTamd64.6.0]`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt6-models-missing" "BOTH-XREF" {
+        param($t) $t.Replace("[XhciModels.NTamd64.6.0]", "[XhciModels.NTamd64.6.1]")
     } -Source $prodInfAmd64 -Arch amd64
 
     # Decision 11 (design record 11 section 12): the 28-character section-name
@@ -1294,6 +1319,22 @@ try {
     Assert-RuleFires "amd64-svc-binary-gap" "PATH-NT" {
         param($t) $t.Replace("ServiceBinary=%12%\xhci98.sys", "ServiceBinary=%12%\xhci99.sys")
     } -Source $prodInfAmd64 -Arch amd64
+    # The NT 6.x install path gets the same checks, because a second path is a
+    # second place each of them can break.
+    Assert-RuleFires "amd64-nt6-undecorated-dev" "PATH-NO9X" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=",
+                             "[Xhci.Dev6]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles`r`n`r`n[Xhci.Dev6.NTamd64]`r`nAddReg=")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt6-no-services" "PATH-NT" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64.Services]", "[Xhci.Dev6.NTamd64.Svc]")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt6-no-install-section" "PATH-NT" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`n", "[Xhci.Dev6.NTamd65]`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt6-no-driver-copy" "PATH-NT" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-bad-starttype" "PATH-NT" {
         param($t) $t.Replace("StartType=3                         ; SERVICE_DEMAND_START", "StartType=4                         ; SERVICE_DISABLED")
     } -Source $prodInfAmd64 -Arch amd64
@@ -1337,6 +1378,29 @@ try {
     Assert-RuleFires "amd64-no-logvalues" "VAL-MISSING" {
         param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global",
                              "[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.Global")
+    } -Source $prodInfAmd64 -Arch amd64
+    #
+    # **OS-ONNT6: the NT 6.x path naming an OS-supplied file.** This is the
+    # shape Vista's file queue aborts on (task 21.8), and it is the obvious
+    # "tidy-up" - making the two install paths copy the same list - so it is
+    # refused for the driver list and for usbui.dll separately, since they are
+    # two sections an editor could add one at a time.
+    #
+    Assert-RuleFires "amd64-nt6-copies-usbport" "OS-ONNT6" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt6-copies-usbui" "OS-ONNT6" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyUI`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt6-no-susp" "SUSP-MISSING" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global",
+                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt6-no-logvalues" "VAL-MISSING" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global",
+                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.Global")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-logverbosity-default" "VAL-DEFAULT" {
         param($t) $t.Replace("HKR,,XhciLogVerbosity,0x00010001,0", "HKR,,XhciLogVerbosity,0x00010001,1")
@@ -1459,6 +1523,20 @@ try {
         "INF-SYNC: the two INFs bind different hardware. One package, one compatible ID." +
         "`n  src\xhci98.inf        $($idX86[0])" +
         "`n  src\xhci98-amd64.inf  $($id64[0])")
+    # The NT 6.x models line names a different install section on purpose
+    # (Xhci.Dev6), so its hardware ID is compared on its own - and it must be
+    # the same one, or Vista and Windows 7 x64 bind something no other target
+    # does.
+    $id64nt6 = @(Get-InfSection -Path $prodInfAmd64 -Name "XhciModels.NTamd64.6.0")
+    Assert-True ($id64nt6.Count -eq 1) "INF-SYNC: src\xhci98-amd64.inf must have exactly one NT 6.x models line."
+    if ($id64nt6.Count -eq 1 -and $idX86.Count -eq 1) {
+        $hwX86 = (($idX86[0] -split '=', 2)[1] -split ',')[1].Trim()
+        $hwNt6 = (($id64nt6[0] -split '=', 2)[1] -split ',')[1].Trim()
+        Assert-True ($hwX86 -eq $hwNt6) (
+            "INF-SYNC: the NT 6.x models line binds different hardware from every other target." +
+            "`n  src\xhci98.inf                       $($idX86[0])" +
+            "`n  src\xhci98-amd64.inf (NTamd64.6.0)   $($id64nt6[0])")
+    }
 
     # [Strings]: every token the two share must have the same text, because
     # only one of the two packages can ever install on a machine and a user

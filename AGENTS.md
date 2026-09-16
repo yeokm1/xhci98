@@ -351,8 +351,14 @@ every build for that reason, including the Win98-parser traps its engine
 reports as nothing at all.
 
 **There are two INFs, and they are two packages rather than one file with a
-third path.** `src/xhci98-amd64.inf` is the 64-bit package's, carrying one
-install path (`.NTamd64`) and a `[Manufacturer]` line decorated `NTamd64`.
+third path.** `src/xhci98-amd64.inf` is the 64-bit package's, carrying no
+Windows 98 path and a `[Manufacturer]` line decorated `NTamd64,NTamd64.6.0`:
+NT 5.2 gets `[Xhci.Dev.NTamd64]`, which fetches the OS-supplied files, and
+Vista and Windows 7 x64 get `[Xhci.Dev6.NTamd64]`, which copies `xhci98.sys`
+alone because their file queue aborts on a `LayoutFile` copy (design record 11
+section 12, decision 13; the gate refuses an OS file there as `OS-ONNT6`).
+The 32-bit file has no NT 6.x path yet: its `[Manufacturer]` line is the one
+Windows 98's engine parses, and widening it waits on a Windows 98 reading.
 Merging it into the first would mean widening `%Mfg%=XhciModels` to
 `%Mfg%=XhciModels,NTx86,NTamd64` - the one line Windows 98's 16-bit engine
 parses to find its models section, and whether that engine takes only the

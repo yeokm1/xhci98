@@ -2335,9 +2335,11 @@ signing question, and an operator repeating this will meet them in this order:
    `[Xhci.Dev6.NTamd64]`, copying `xhci98.sys` and nothing else) installs
    cleanly. All four OS-supplied files are already on disk on this guest -
    `usbd.sys` 7,680, `usbhub.sys` 273,920, `usbport.sys` 259,584, and
-   `usbui.dll` in `system32` - measured, not carried over. **That INF shape has
-   only ever run from a staged copy; `src\xhci98-amd64.inf` is unchanged and
-   whether it ships is undecided.**
+   `usbui.dll` in `system32` - measured, not carried over. **That INF shape is
+   `src\xhci98-amd64.inf`'s own since 2026-09-16** (design record 11 section
+   12, decision 13), so the package built from the tree installs this way with
+   no staged copy. The 32-bit file does not carry it yet: its line is the one
+   Windows 98's engine parses, and it is measured there first.
 2. **A pre-fix binary bugchecks the guest at load** - `0x7E` inside usbport,
    from the registration call. Fixed 2026-09-10; if you see it, you are running
    a driver built before that. Check the `DriverEntry (built ...)` stamp on the
@@ -2618,13 +2620,18 @@ that all four plus `usbui.dll` are on disk after an install with no USB host
 controller at all. So the Code 39 that Phase 19's fix answers should not arise
 and every `COPYFLG_NO_OVERWRITE` copy should skip without needing a source.
 
-**"Should" is still doing work there**, and less of it than before but not none:
-the confirmed reading is of the 32-bit guests, the amd64 halves of both images
-are a media reading, and neither says whether the driver store accepts the
-package's file list. If it does not, the fix is a decision rather than an edit -
-design record 11 section 12's decision 2 kept the 32-bit and 64-bit INFs apart
-deliberately, and a third one, or an `.NTamd64.6.0` decorated section, is the
-same kind of choice.
+**"Should" turned out to be wrong, and the paragraph above is kept for what it
+predicted.** Task 21.8 measured it on Vista x64: the queue resolves a source
+for each file *before* `COPYFLG_NO_OVERWRITE` skips the copy, the source it
+finds is the OS's own driver-store package, and the queue aborts
+(`lessons.md`, "`COPYFLG_NO_OVERWRITE` does not save a source the queue cannot
+resolve"). The answer is an NT 6.x install path that names none of the four
+files, and it was a decision per INF rather than an edit (design record 11
+section 12, decision 13): `src\xhci98-amd64.inf` carries it since 2026-09-16
+as an `NTamd64.6.0` models section naming `[Xhci.Dev6.NTamd64]`, which the INF
+gate now checks as a second path (`OS-ONNT6` refuses an OS file on it), and
+`src\xhci98.inf` waits on the Windows 98 reading of its widened
+`[Manufacturer]` line.
 
 #### One trap this pair inherits from the 32-bit one
 
@@ -5306,9 +5313,9 @@ drift while claiming to be one.
 | | `-Arch x86` (default) | `-Arch amd64` |
 |---|---|---|
 | file | `src\xhci98.inf` | `src\xhci98-amd64.inf` |
-| `[Manufacturer]` | undecorated - `%Mfg%=XhciModels` | `%Mfg%=XhciModels,NTamd64` |
-| models section | `[XhciModels]` | `[XhciModels.NTamd64]` |
-| install paths | undecorated (Windows 98) + `.NTx86` | `.NTamd64` only |
+| `[Manufacturer]` | undecorated - `%Mfg%=XhciModels` | `%Mfg%=XhciModels,NTamd64,NTamd64.6.0` |
+| models sections | `[XhciModels]` | `[XhciModels.NTamd64]` (NT 5.2) and `[XhciModels.NTamd64.6.0]` (Vista and Windows 7, since 2026-09-16) |
+| install paths | undecorated (Windows 98) + `.NTx86` | `[Xhci.Dev.NTamd64]` (NT 5.2, fetches the OS-supplied files) and `[Xhci.Dev6.NTamd64]` (NT 6.x, `xhci98.sys` alone) |
 | right-click | `[DefaultInstall]` + `[DefaultInstall.NTx86]` | `[DefaultInstall.NTamd64]`, and **no** undecorated one |
 | footprint | `expected-footprint.txt` | `expected-footprint-amd64.txt` |
 
@@ -5320,8 +5327,8 @@ undecorated `[DefaultInstall]` there; setupapi's decorated-section lookup
 falls back, so either is a section a 32-bit engine reaches, and reaching one
 copies an amd64 `xhci98.sys` into a 32-bit `System32\Drivers` and creates a
 service pointing at it. `PATH-MFGDEC` holds the `[Manufacturer]` decoration
-in both directions at once: absent on the 32-bit file, `NTamd64` on the
-64-bit one. That first half is what pins design record 11's decision 2 in
+in both directions at once: absent on the 32-bit file, `NTamd64` and
+`NTamd64.6.0` and nothing else on the 64-bit one. That first half is what pins design record 11's decision 2 in
 place - widening `%Mfg%=XhciModels` to `%Mfg%=XhciModels,NTx86,NTamd64` is
 the single-INF route the owner declined, because that line is what Windows
 98's 16-bit engine parses to find its models section, and it now fails the
@@ -5364,19 +5371,26 @@ Rule ids are grouped by the failure they prevent:
   section cross-references, `DestinationDirs` coverage and driver-directory
   placement, `SourceDisksNames`/`SourceDisksFiles` coverage, defined
   `%strings%`).
-- `PATH-*`: the install paths themselves - the two of `-Arch x86` or the one
-  of `-Arch amd64` - including the NT service's required type/start/error
+- `PATH-*`: the install paths themselves - the two of `-Arch x86` or the two
+  of `-Arch amd64`, each model checked against the paths of its own models
+  section - including the NT service's required type/start/error
   values, and that each path's own `CopyFiles` delivers the driver file its
   loader value names (`PATH-W98` for `NTMPDriver` since the 2026-09-05
   audit's F14, `PATH-NT` for `ServiceBinary`). `PATH-MFGDEC` holds
   `[Manufacturer]`'s TargetOSVersion field to the file's architecture in both
   directions, and `PATH-NO9X` refuses an undecorated install section in the
-  64-bit file (both since task 21.3).
+  64-bit file (both since task 21.3). Since 2026-09-16 `PATH-MFGDEC` also
+  requires the 64-bit file's `NTamd64.6.0` field and refuses any field the
+  profile has no path for: until then the gate read only the first models
+  section, so a second one passed unchecked.
 - `OS-*`: the `LayoutFile` route for the files the OS supplies (release
   1.0.0.1, then 1.0.1.0): the directive present, both device-install paths
   and both right-click paths copying `usbd.sys` and `usbhub.sys` under their
   own names with `COPYFLG_NO_OVERWRITE`, the NT paths alone copying
-  `usbport.sys`, and no Microsoft file named on the media (`OS-MEDIA`). The
+  `usbport.sys`, and no Microsoft file named on the media (`OS-MEDIA`).
+  `OS-ONNT6` is the one path that must name none of the four - the 64-bit
+  file's NT 6.x path, whose file queue aborts on a `LayoutFile` copy (task
+  21.8) and which finds all four on disk (task 22.3). The
   `TGT-*` family and the `usbd-sources.expected` manifest they checked went
   with the packaged Microsoft files in 1.0.0.1.
 - `SUSP-*`: `DisableSelectiveSuspend = 1` written by every install route on

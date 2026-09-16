@@ -2097,11 +2097,37 @@ publishes:
     task 22.5 carries the work and its order - the static reading of the whole
     300 tier first, then the design written here, then the build, then the
     guests, then every existing install leg re-validated, because this changes
-    the shipping 32-bit binary as well as the amd64 one. Two sub-choices are
-    recommended there and not yet taken: `300` presented to NT 6.x only with
-    `200` everywhere else, and the x86 INF's manufacturer line, which is
-    decision 2's unmeasured question and is to be measured on the Windows 98
-    guest before the shipping INF is touched.
+    the shipping 32-bit binary as well as the amd64 one. Two sub-choices were
+    recommended there: `300` presented to NT 6.x only with `200` everywhere
+    else, **taken 2026-09-11** (section 6.5), and the INF shape for NT 6.x,
+    which is decision 13.
+13. ~~How each package's INF reaches NT 6.x, given that the `LayoutFile`
+    copies abort Vista's file queue (roadmap task 21.8) and the shape that
+    installed on all four NT 6.x guests - a `.6.0` models section naming its
+    own install section, `Xhci.Dev6`, that copies `xhci98.sys` alone - had only
+    ever run from staged copies.~~ **Decided 2026-09-16, one answer per file,
+    and they are different answers.**
+    - **`src/xhci98-amd64.inf`: adopted as staged.** `%Mfg%=XhciModels,NTamd64,NTamd64.6.0`,
+      `[XhciModels.NTamd64.6.0]` naming `[Xhci.Dev6.NTamd64]`. No 9x engine
+      reads this file, so decision 2's question does not arise. What the change
+      does NOT have is an XP x64 reading of the two-field line: every XP x64
+      leg installed through the one-field line, so that the 5.2 engine ignores
+      a `6.0` field is documented behaviour and not yet this project's
+      observation. Roadmap task 22.10's fifth install leg is what reads it.
+      `check-inf.ps1 -Arch amd64` gained the path the same day: each models
+      section is checked against the install path it selects, both fields are
+      required and no third is accepted (`PATH-MFGDEC`), and the NT 6.x path
+      may name none of the four OS-supplied files (`OS-ONNT6`). The gate had
+      been reading only the first models section, so a staged copy with both
+      passed with the second never checked.
+    - **`src/xhci98.inf`: measured first.** The same shape there is
+      `%Mfg%=XhciModels,NTx86.6.0` - the one line Windows 98's 16-bit engine
+      parses, which is decision 2's unmeasured question in its sharpest form.
+      The owner chose to install that line on the Windows 98 guest (and
+      Windows ME's, which shares the engine) before the shipping file is
+      touched, and to record the answer either way. Until then the 32-bit
+      package does not install on Vista or Windows 7 as shipped, and
+      `PATH-MFGDEC` still refuses any decoration on that file.
 
 ---
 

@@ -3292,7 +3292,12 @@ reading may not tick a box whose line names a guest.
           first 30 s sample and the rescan reinstalled clean.** One remove
           is not proof that the wedge shared issue 7's cause, and the fix
           was not written against it, so this box stays open until the
-          owner decides what that one remove licenses (22.6)
+          owner decides what that one remove licenses (22.6).
+          **Owner's ruling, 2026-09-16: re-run it first.** One pass licenses
+          nothing on its own; more remove/rescan cycles on Vista x64, on the
+          current binary off a fresh revert, are taken before the box is
+          ticked or a word goes into the release notes, and that is a guest
+          session rather than host work
   - [ ] **the INF for the 6.x installs, an owner's decision on each file.**
         Vista's file queue aborts on the `LayoutFile` copies (task 21.8), and
         the shape that installs is a `.6.0`-decorated models section naming
@@ -3302,7 +3307,43 @@ reading may not tick a box whose line names a guest.
         Windows 98's 16-bit engine parses**, the measurement decision 2
         declined to make - so measure it on the Windows 98 guest during that
         leg's re-validation before the shipping x86 INF is touched, and record
-        the answer either way
+        the answer either way.
+        **Owner's decisions, 2026-09-16 - one per file, and they differ**
+        (design record 11 section 12, decision 13):
+    - [x] **`src\xhci98-amd64.inf`: adopted as staged.**
+          `%Mfg%=XhciModels,NTamd64,NTamd64.6.0`, `[XhciModels.NTamd64.6.0]`
+          naming `[Xhci.Dev6.NTamd64]`, which copies `xhci98.sys` alone and
+          writes the same values and service as the NT 5.2 path. The gate
+          learned the path the same day, and learning it found a gap: it read
+          **only the first models section** of a `[Manufacturer]` line, so the
+          staged copy had passed as `models: 1` with its whole NT 6.x path
+          never checked. Now each model is checked against the install path its
+          own models section selects, `PATH-MFGDEC` requires both fields and
+          refuses a third, and `OS-ONNT6` refuses any of the four OS-supplied
+          files on the NT 6.x path. Eleven new self-test cases, each run
+          against the previous gate and seen to fail there, plus a `models: 2`
+          assertion and the hardware ID of the new models line in the
+          two-INF comparison; `expected-footprint-amd64.txt` regenerated with
+          the NT 6.x device install. **What it has not had is a guest:** the
+          XP x64 engine has never read the two-field line (every XP x64 leg
+          installed through the one-field one), and that it ignores the `6.0`
+          field is documented behaviour rather than this project's reading -
+          task 22.10's fifth leg is what reads it. The NT 6.x legs of
+          2026-09-13 ran the same sections from a staged copy, so they are
+          the evidence for the shape and not for this file
+    - [ ] **`src\xhci98.inf`: measured on Windows 98 first**, as this box
+          always said. Install `%Mfg%=XhciModels,NTx86.6.0` with its
+          `[XhciModels.NTx86.6.0]` and `[Xhci.Dev6.NTx86]` sections (the
+          staged `vm\xfervista\xhci98.inf` is that file) on the Windows 98
+          guest under NUSB, and on Windows ME, which shares the 16-bit engine;
+          record what each engine does with the line; only then change the
+          shipping file, lift `PATH-MFGDEC`'s x86 refusal for exactly that
+          field, and re-take the NT 5.x x86 legs behind it. **One consequence
+          to carry with it:** `xhcisnap.c`'s `ourSections` recognises a driver
+          key by `InfSection`, matched exactly against `Xhci.Dev` and
+          `Xhci.Dev.NTx86`, and fails closed on anything else - what an NT 6.x
+          install records there is unread, and if it is `Xhci.Dev6` the tool
+          will not recognise the key until a row is added
   - [ ] **`TESTSIGNING` tried once on an x64 guest**, for the release notes'
         64-bit paragraph: what the user does once, what it costs at every
         boot, and whether it survives a reboot. F8 is already measured
@@ -3325,13 +3366,21 @@ reading may not tick a box whose line names a guest.
         cycle can come back with a device missing, a restart recovers it and
         a rescan does not - **without** stating as settled what is only a
         reading of `usbport.sys`.
-    - [ ] **The scope this box was written with is WRONG and must be widened
+        **Owner's decision, 2026-09-16: the release notes say nothing about
+        issue 7** - no known limitation and no fixed-in note. The fix held on
+        all four NT 6.x guests and on every NT 5.x leg (22.5), and no
+        published release ever claimed Vista or Windows 7, so there is no
+        user who met the defect to be told it is gone. Issue 7 stays the
+        record. That settles the three boxes below that were about the
+        wording; the Vista x64 remove/rescan box is a different clause and
+        stays open behind its re-run, which is why this one does too
+    - [x] **The scope this box was written with is WRONG and must be widened
           before it is drafted.** It said Windows 7 x86; on 2026-09-12 the
           same arrest, with the same ring signature, reproduced on **Windows
           7 x64** - a different binary from a different toolchain against a
           different `usbport.sys`. The disclosure covers **both**, and it
           may not imply the 32-bit binary is the thing at fault
-    - [ ] **What the single-vCPU run does and does not license.** That run
+    - [x] **What the single-vCPU run does and does not license.** That run
           was taken 2026-09-12 and the prediction held five times over, so
           the notes **may** say the fault has needed more than one processor
           wherever it has been looked at - naming that as one target, one
@@ -3345,8 +3394,9 @@ reading may not tick a box whose line names a guest.
           guest before, and was not tested single-processor - so it is
           either a second disclosed limitation or an explicitly untested
           clause, and saying nothing at all is the one option that is not
-          honest
-    - [ ] **The premise of this box changed on 2026-09-13**: the defect's
+          honest. **Owner, 2026-09-16: re-run it first** (22.5's box); the
+          wording waits on that reading
+    - [x] **The premise of this box changed on 2026-09-13**: the defect's
           cause was read and is fixed in source (22.5's last sub-box,
           issue 7 section 7), and the fault was this driver's completion
           context rather than usbport's alone. If the re-run holds on all
@@ -3356,7 +3406,8 @@ reading may not tick a box whose line names a guest.
           **The re-run was read on 2026-09-13 and held on all four**
           (22.5, issue 7 section 7.5), so the condition for the note is
           met on NT 6.x. What the note says, and whether it waits for the
-          NT 5.x legs, is the owner's decision and is not yet taken
+          NT 5.x legs, is the owner's decision and is not yet taken.
+          *Taken 2026-09-16: no note at all* (the parent box)
 
 - [x] **22.7 - a charset gate on tracked source.** All four boxes done on
       2026-09-12; the parent stayed unticked until the 2026-09-16 audit's E8

@@ -18,10 +18,11 @@
 ; the NT 5.2 amd64 target: Windows XP Professional x64 and Windows Server 2003
 ; x64, which are one target and not two (both are NT 5.2.3790, and WDK 7.1
 ; ships lib\wxp\i386 with no amd64 counterpart, so WNET is the only route to a
-; 64-bit driver for them). Task 21.7 read the same six ABI measurements on
-; Vista x64 and Windows 7 x64 and all six pass there too, so nothing in this
-; file narrows to NT 5.2 - but those two enforce kernel-mode code signing and
-; are a separate leg with guests of their own.
+; 64-bit driver for them) - and, through a second models section, on Windows
+; Vista x64 and Windows 7 x64, where the same binary presents the Version 300
+; tier (roadmap task 22.5). Those two enforce kernel-mode code signing and this
+; package is unsigned; that is a boot-time choice the user makes, not anything
+; this file can answer.
 ;
 ; ------------------------------------------------------------------
 ; Why every section here is decorated, and what a wrong pick costs
@@ -58,6 +59,7 @@
 ; The files the OS supplies, and where they come from on this target
 ; ------------------------------------------------------------------
 ;
+; On the NT 5.2 path only - the NT 6.x path below names none of them.
 ; The same four files as the 32-bit NT path, by the same LayoutFile route,
 ; with the same flag 16 (COPYFLG_NO_OVERWRITE), and for the same reasons -
 ; src\xhci98.inf states them at length and they are not restated here. What IS
@@ -121,11 +123,30 @@ DriverVer=09/09/2026,1.1.0.0
 ; whole of the difference from src\xhci98.inf's undecorated line. It is also
 ; why the models section below is [XhciModels.NTamd64] and not [XhciModels]:
 ; the engine appends the decoration it matched.
+;
+; The second field, NTamd64.6.0, is the NT 6.x install path, taken into this
+; file on the owner's decision of 2026-09-16 (roadmap task 22.5). An engine
+; picks the most specific decoration its own version satisfies, so Vista x64
+; and Windows 7 x64 take [XhciModels.NTamd64.6.0] and XP x64 / Server 2003 x64
+; (5.2) keep [XhciModels.NTamd64]. That the 5.2 engine really does ignore the
+; 6.0 field is the documented behaviour and has NOT been read here: every XP x64
+; leg before this change installed through a one-field line. Task 22.10's fifth
+; install leg, the amd64 package on the XP x64 guest, is what measures it.
 [Manufacturer]
-%Mfg%=XhciModels,NTamd64
+%Mfg%=XhciModels,NTamd64,NTamd64.6.0
 
 [XhciModels.NTamd64]
 %XhciDesc%=Xhci.Dev,PCI\CC_0C0330
+
+; A different install section NAME, not a .6.0 decoration on Xhci.Dev. The
+; version decoration selects the models section only; the install section the
+; models line names takes the platform extension and nothing further, so a
+; [Xhci.Dev.NTamd64.6.0] would never be looked for and Vista would silently run
+; [Xhci.Dev.NTamd64] instead (measured on Vista x64 2026-09-10, task 21.8;
+; docs\contributing\lessons.md, "A version-decorated install section is
+; silently never read").
+[XhciModels.NTamd64.6.0]
+%XhciDesc%=Xhci.Dev6,PCI\CC_0C0330
 
 [SourceDisksNames]
 1=%DiskName%,xhci98.sys,,
@@ -153,7 +174,7 @@ Xhci.CopyNT=10,System32\Drivers
 Xhci.CopyUI=11
 
 ; ------------------------------------------------------------------
-; NT 5.2 amd64 - the only install path in this file
+; NT 5.2 amd64 - Windows XP x64 and Server 2003 x64
 ; ------------------------------------------------------------------
 
 [Xhci.Dev.NTamd64]
@@ -161,6 +182,33 @@ AddReg=Xhci.AddReg.NT,Xhci.AddReg.Global
 CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI
 
 [Xhci.Dev.NTamd64.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+; ------------------------------------------------------------------
+; NT 6.x amd64 - Windows Vista x64 and Windows 7 x64
+; ------------------------------------------------------------------
+;
+; The same registry values and the same service, and xhci98.sys alone. None of
+; the four OS-supplied files is on this path, for two reasons that each
+; suffice. The LayoutFile copies ABORT the file queue on 6.x: the queue resolves
+; a file's source before it decides whether COPYFLG_NO_OVERWRITE skips it, the
+; source it finds for usbport.sys is the OS's own driver-store package, and
+; that path comes back unresolvable (measured on Vista x64 2026-09-10, task
+; 21.8; lessons.md, "COPYFLG_NO_OVERWRITE does not save a source the queue
+; cannot resolve"). And there is nothing to fetch: usbport.sys, usbd.sys,
+; usbhub.sys and usbui.dll are on disk after an install of either system with
+; no USB host controller at all (task 22.3, read off the 32-bit guests; this
+; shape then installed on all four NT 6.x guests, 2026-09-13).
+; scripts\inf-gate\check-inf.ps1 refuses any of the four here (OS-ONNT6).
+;
+; There is no right-click route of its own. [DefaultInstall.NTamd64] below is
+; the one an NT 6.x engine would run, it carries the LayoutFile copies, and
+; what it does on 6.x has not been read.
+[Xhci.Dev6.NTamd64]
+AddReg=Xhci.AddReg.NT,Xhci.AddReg.Global
+CopyFiles=Xhci.CopyFiles
+
+[Xhci.Dev6.NTamd64.Services]
 AddService=xhci98,0x00000002,Xhci.AddService
 
 [Xhci.AddService]
