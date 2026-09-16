@@ -3406,6 +3406,43 @@ reading may not tick a box whose line names a guest.
           install legs from the asset, which read this file on every target.
           The `xhcisnap` row above stays owed: nothing has read what an NT 6.x
           install records as `InfSection`
+  - [ ] **`xhcisnap` on an NT 6.x install.** `ourSections` in
+        `xhcisnap\xhcisnap.c` recognises a driver key by its `InfSection`
+        value, matched exactly against `Xhci.Dev` and `Xhci.Dev.NTx86`, and
+        fails closed on anything else. Both INFs now install NT 6.x through
+        `Xhci.Dev6` (the INF box above), and what that install records in the
+        key is unread - Windows 2000 was measured recording the undecorated
+        name rather than the section it ran, so neither `Xhci.Dev6` nor
+        `Xhci.Dev6.NTx86` may be assumed. Read the value off a Vista or
+        Windows 7 x86 guest after an install from the tree, add the row that
+        matches it, and rebuild the tool. Until then the tool does not
+        recognise the key on those systems. Owed since 2026-09-16
+  - [ ] **Windows 2000's restart prompt after the NT 6.x-line install.**
+        On 2026-09-16 (`vm\inf60-w2k\`), installing the candidate through
+        the Found New Hardware wizard on `win2k-xonly-clean-install` ended
+        in "You must restart your computer", declined with the driver
+        already loaded and ALL PASS. The earlier Have Disk install on the same
+        image family asked for no restart, and that run's `setupapi.log`
+        holds no "Device required reboot" entry after the install, so the
+        cause is not in the log and is not established - whether it is the
+        wizard route, the root hub's `usb.inf` install, or the widened line.
+        One install off the same snapshot through Have Disk with the shipping
+        INF separates the first from the other two. A restart prompt is not a
+        failure, but a user will see it and the release notes say nothing
+        about one
+  - [ ] **The right-click Install on NT 6.x.** Neither INF has a
+        right-click section of its own for Vista or Windows 7:
+        `[DefaultInstall.NTx86]` and `[DefaultInstall.NTamd64]` are what an
+        NT 6.x engine would run, and both carry the `LayoutFile` copies of
+        `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll` - the copies
+        whose unresolvable source aborts Vista's file queue on the device
+        route (task 21.8). What the right-click route does on 6.x is unread,
+        and the INF gate's `OS-ONNT6` covers device install paths only. Read
+        it once on a Vista guest; if it aborts, either document the
+        right-click route as unsupported on 6.x or find a decoration that
+        reaches a 6.x-only right-click section - which the lesson that a
+        version decoration selects the models section only says is not
+        `[DefaultInstall.NTx86.6.0]`
   - [ ] **`TESTSIGNING` tried once on an x64 guest**, for the release notes'
         64-bit paragraph: what the user does once, what it costs at every
         boot, and whether it survives a reboot. F8 is already measured
@@ -3625,13 +3662,28 @@ and they are the phase's other half rather than a coda to the first.
       `out\xhci98-1.1.0.0.zip`.
   - [ ] the four x86 install legs from the unzipped asset, as every cut since
         `1.0.1.0` has taken them - Windows 98 SE (on both stacks, NUSB and
-        SweetLow), Windows ME, Windows 2000 SP4 and 32-bit Windows XP
+        SweetLow), Windows ME, Windows 2000 SP4 and 32-bit Windows XP.
+        **These legs are also the device-level re-validation of the x86 INF
+        change** (22.5's INF box, `d165773`): on 2026-09-16 the widened
+        `%Mfg%=XhciModels,NTx86.6.0` line was read on each of the four with an
+        install and a one-device load only (ME on its stock stack, engine
+        only). So each leg takes the full clauses - the three devices, and
+        disable / enable / remove / rescan wherever that target can take them
+        - and on the NT pair reads `setupapi.log` for `Section: Xhci.Dev` and
+        `[Xhci.Dev.NTx86]`, as the 2026-09-16 readings did
   - [ ] **the fifth leg, which is new: the amd64 package on the XP x64
         guest**, installed from the asset's `RELEASE-X64\` directory rather
         than from `src\objfre\amd64`. Task 21.5 already read the `release`
         flavour on that guest and the recipe for reading a flavour that
         writes no port-`0xE9` trace is in its entry; what this leg adds is
-        that the bytes came out of the published download
+        that the bytes came out of the published download. **It is also the
+        first XP x64 install through the two-field line**
+        `%Mfg%=XhciModels,NTamd64,NTamd64.6.0` (22.5's INF box, `3fb63c5`):
+        every earlier XP x64 leg installed through `NTamd64` alone, and that
+        NT 5.2 ignores the `6.0` field is documented behaviour, not a
+        reading. So read `setupapi.log` off the image as well, for the
+        `XhciModels.NTamd64` models section and `[Xhci.Dev.NTamd64]` - not
+        `Xhci.Dev6` - and for the four OS-supplied files on disk after it
   - [ ] the asset's file list checked against what the packager staged, and
         no Microsoft file in it. `PKG-MSFILE` refuses one by name; the rule
         that actually closes it is the packager publishing nothing it did not
