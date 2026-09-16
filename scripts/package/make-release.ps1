@@ -81,8 +81,15 @@ throughout `docs\contributing\`. The DDK's own words are "free" and "checked" -
 "free" reads as *free of charge* to anyone who has not met that convention -
 and they survive only where the DDK itself requires them: `setenv.bat`'s
 flavour argument and the `src\objfre` / `src\objchk` trees it writes into.
-Every published name is 8.3-clean, because a release directory can end up on
-media a Win98 setup engine reads.
+**These names are NOT 8.3-clean**, and that is a deliberate change from the
+bare `release\` and `debug\` that were: `release-x86` is eleven characters, so
+a Win98 setup engine reading this directory off media sees a short-name alias
+rather than the name printed here. That cost was taken with task 21.3 because
+the alternative - two architectures' `xhci98.sys` in one directory, or names
+that do not say which is which - is worse, and because nothing in the install
+route resolves a directory BY name: the user points Have Disk at whichever
+directory they opened, and readme.txt tells them which to open in the same
+words this script renders into it.
 
 Every gate lives in `make-package.ps1` and is reached by calling it, not by
 reimplementing it here: the host test suite, the import gate, the INF gate, and

@@ -1113,6 +1113,17 @@ int legacy_final_verdict(LEGACY_CTRL *c, int active_requested)
     if (c->v_reset != V_PASS) {
         qprintf("  DISQUALIFIED: halt/reset (C2) failed\n");
         qualified = 0;
+        /*
+         * **`disqualified`, not just `qualified = 0`.** A failed reset now
+         * marks C3, C4 and C6 as SKIPped with a reason, so the C3 branch
+         * below sets `tool_limited` - and without this line the closing
+         * verdict printed "DISQUALIFIED: halt/reset (C2) failed" and then
+         * "No controller fault was inferred from the tool limit above",
+         * which is the same self-contradiction this pass came here to
+         * remove. A controller that will not reset IS a controller fault;
+         * the tool limits behind it are consequences of that fault.
+         */
+        disqualified = 1;
     }
     /*
      * **A SKIP IS NOT A FAILURE HERE EITHER, BUT IT IS NOT A PASS** (the

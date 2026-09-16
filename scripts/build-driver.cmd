@@ -180,24 +180,31 @@ rem **DDKROOT NAMES THE WIN2000 DDK AND MUST NOT REACH THIS LEG.**  It is an
 rem override for the 32-bit build, and it reaches setenv.bat - so an exported
 rem DDKROOT pointing at tools\ntddk was being called with `x64 WNET`, which the
 rem Win2000 DDK does not have.  The run then died at :nooutput naming the wrong
-rem cause entirely (the 2026-09-16 audit's D7).  WDK71ROOT is this leg's own
-rem override, which is the shape the import gate already uses for WDKROOT.
+rem cause entirely (the 2026-09-16 audit's D7).  WDKROOT is this leg's own
+rem override - the SAME name the import gate and scripts\make-usbport-lib.cmd
+rem honour, so one variable redirects the whole 64-bit toolchain rather than
+rem three scripts each having their own.
 rem
-if defined DDKROOT (
-    echo ERROR: DDKROOT is set, and it is the Windows 2000 DDK override.
-    echo   DDKROOT=%DDKROOT%
-    echo The -amd64 leg builds with WDK 7.1 and would call that DDK's setenv.bat
-    echo with "x64 WNET", which it cannot do - and the failure would be reported
-    echo as a missing output rather than as this.
-    echo Clear DDKROOT, or set WDK71ROOT to redirect the 64-bit toolchain:
-    echo   set DDKROOT=
-    echo   set WDK71ROOT=^<path to WDK 7.1^>
-    endlocal
-    exit /b 1
-)
+rem A LABEL RATHER THAN A PARENTHESISED BLOCK, which is this file's idiom for
+rem every other refusal and is not a style choice here: cmd ends an `if (`
+rem block at the first unescaped `)`, including one inside an `echo`, so a
+rem diagnostic that wants a bracketed aside cannot live in one.
+if defined DDKROOT goto ddkrootset
 set "DDKROOT=%REPO%\tools\WinDDK71"
-if not "%WDK71ROOT%"=="" set "DDKROOT=%WDK71ROOT%"
+if not "%WDKROOT%"=="" set "DDKROOT=%WDKROOT%"
 goto ddkchosen
+:ddkrootset
+echo ERROR: DDKROOT is set, and it is the Windows 2000 DDK override.
+echo   DDKROOT=%DDKROOT%
+echo The -amd64 leg builds with WDK 7.1 and would call that DDK's setenv.bat
+echo with "x64 WNET", which it cannot do - and the failure would be reported
+echo as a missing output rather than as this.
+echo Clear DDKROOT, or set WDKROOT to redirect the 64-bit toolchain - the same
+echo variable the import gate and make-usbport-lib.cmd read:
+echo   set DDKROOT=
+echo   set WDKROOT=^<path to WDK 7.1^>
+endlocal
+exit /b 1
 :ddkdefault
 if "%DDKROOT%"=="" set "DDKROOT=%REPO%\tools\ntddk"
 :ddkchosen

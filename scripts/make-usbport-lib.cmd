@@ -106,7 +106,10 @@ rem usbport-stub.c) and the link uses /NODEFAULTLIB, so an inherited INCLUDE
 rem from a surrounding DDK prompt is the only way this could pick up a header
 rem it was never meant to see. bin\x86 follows bin\x86\amd64 on PATH because
 rem the cross compiler's own support DLLs live there.
-set "WDKROOT=%REPO%\tools\WinDDK71"
+rem Honours an inherited WDKROOT, which is the one name the whole 64-bit
+rem toolchain is redirected by - the import gate reads it too, and
+rem build-driver.cmd's -amd64 leg takes it in place of DDKROOT.
+if "%WDKROOT%"=="" set "WDKROOT=%REPO%\tools\WinDDK71"
 set "OUTLIB=%REPO%\src\usbport_amd64.lib"
 set "LINKMACHINE=x64"
 rem No __stdcall decoration on amd64, so the entry symbol is the bare name.

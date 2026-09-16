@@ -115,6 +115,18 @@ typedef struct {
      * audit's C5). Points at a string literal; never freed.
      */
     const char *mmio_reason;
+    /*
+     * **And whether that reason is about the TOOL rather than the
+     * controller.** Two of the three recorded refusals are about a controller
+     * misdescribing itself - an I/O-space BAR, a CAPLENGTH of 0 - and stay
+     * disqualifying. The third, a register block reaching past the fixed
+     * 64 KB window this tool maps, is a limit of this tool on a controller
+     * that may be perfectly sound, so it must reach the verdict as CANNOT SAY
+     * and not as a disqualification. Without this the reason string said "a
+     * tool limit, not a controller fault" while the verdict below it still
+     * disqualified the part.
+     */
+    int mmio_tool_limit;
 } PCIINFO;
 
 u32  pci_read32(u8 bus, u8 dev, u8 fn, u8 off);

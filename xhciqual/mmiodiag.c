@@ -260,6 +260,14 @@ int report_mmio_unavailable(const PCIINFO *p, int active_requested)
             qprintf("      No controller fault inferred; use an active mode "
                     "to test whether MSE can be enabled.\n");
         }
+    } else if (p->mmio_tool_limit) {
+        /* The mapper refused for a reason that is about this tool. Saying
+         * DISQUALIFIED here would name dead silicon for a controller that may
+         * be sound, which is what report_mmio_dead's recorded reason exists to
+         * prevent - and the two must agree. */
+        qprintf("  NOT QUALIFIED: this tool could not map the controller's "
+                "register block\n");
+        qprintf("      No controller fault inferred; see the cause above.\n");
     } else {
         qprintf("  DISQUALIFIED: BAR0 MMIO not accessible with MSE set, BAR "
                 "assigned below 4 GB, and device in D0\n");
@@ -293,6 +301,13 @@ int quick_classify_mmio(const PCIINFO *p, int active_requested)
         return QUICK_CANNOT_SAY;
     if ((p->cmd_effective & PCI_CMD_MSE) == 0)
         return active_requested ? QUICK_DISQUALIFIED : QUICK_CANNOT_SAY;
+    /* A recorded tool limit is the last thing asked, because everything above
+     * it is a reading about the machine and this one is a reading about the
+     * tool: the window decoded, the device is in D0 with MSE set, and what
+     * failed is that this tool maps a fixed 64 KB. CANNOT SAY, not
+     * DISQUALIFIED - a verdict about silicon needs evidence about silicon. */
+    if (p->mmio_tool_limit)
+        return QUICK_CANNOT_SAY;
     return QUICK_DISQUALIFIED;
 }
 

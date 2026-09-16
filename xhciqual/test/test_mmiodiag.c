@@ -475,6 +475,48 @@ static void test_dead_causes(void)
           "and the reconstructed cause is not printed beside it");
 }
 
+/*
+ * **A recorded TOOL limit must reach the verdict, not just the cause line.**
+ * The window-size refusal is about this tool mapping a fixed 64 KB, on a
+ * controller whose BAR is assigned below 4 GB, which is in D0 and has MSE
+ * set - so every reconstruction says "nothing wrong" and the fallback used to
+ * be DISQUALIFIED. Naming the cause while still disqualifying the part is the
+ * contradiction the cause line was added to remove, so the two are checked
+ * together here (Codex review of the 2026-09-16 audit's C5 fix).
+ */
+static void test_tool_limit_is_not_a_disqualification(void)
+{
+    PCIINFO p;
+
+    base_pci(&p);
+    p.mmio_tool_limit = 1;
+    p.mmio_reason = "the runtime registers sit outside the window this tool "
+                    "maps - a tool limit, not a controller fault";
+
+    CHECK(quick_classify_mmio(&p, 1) == QUICK_CANNOT_SAY,
+          "an active run cannot say, rather than disqualifying");
+    CHECK(quick_classify_mmio(&p, 0) == QUICK_CANNOT_SAY,
+          "and neither can a probe-only one");
+
+    reset_out();
+    CHECK(report_mmio_unavailable(&p, 1) == 0,
+          "so it is not reported as a hard disqualifier");
+    CHECK(has("NOT QUALIFIED"), "the verdict says NOT QUALIFIED");
+    CHECK(!has("DISQUALIFIED"), "and not DISQUALIFIED");
+    CHECK(has("No controller fault inferred"),
+          "with the same footnote the other tool-limited causes carry");
+
+    /* And the two refusals that ARE about the controller keep disqualifying,
+     * so the flag is not a way to soften every mapping failure. */
+    base_pci(&p);
+    p.mmio_reason = "BAR0 selects I/O space, and xHCI 5.2.1 requires a memory "
+                    "BAR";
+    CHECK(quick_classify_mmio(&p, 1) == QUICK_DISQUALIFIED,
+          "a controller misdescribing its own BAR is still disqualified");
+    reset_out();
+    CHECK(report_mmio_unavailable(&p, 1) == 1, "and reported as one");
+}
+
 /* The verdict classifier: only genuine hardware/platform blockers may return
  * a disqualification. A temporary power or configuration state must not be
  * turned into a silicon verdict. */
@@ -826,6 +868,7 @@ int main(void)
     test_status_ignores_non_error_bits();
     test_dead_bar_beats_power_state();
     test_dead_causes();
+    test_tool_limit_is_not_a_disqualification();
     test_unavailable_hard_disqualifiers();
     test_unavailable_inconclusive();
     test_xusb2pr_routed_and_not();

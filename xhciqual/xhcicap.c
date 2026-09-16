@@ -165,6 +165,7 @@ int xhci_map(CTRL *c)
         c->pci.mmio_reason = "the runtime, doorbell or port registers sit "
                              "outside the fixed 64 KB window this tool maps - "
                              "a tool limit, not a controller fault";
+        c->pci.mmio_tool_limit = 1;
         goto unmap;
     }
 

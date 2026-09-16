@@ -657,7 +657,17 @@ static unsigned long dump_region(HANDLE device, unsigned long region,
          * printed, for the reason the per-window check gives: a file this tool
          * cannot describe is worse than no file.
          */
-        if (header.RegionBytes != 0 &&
+        /*
+         * **Both comparisons, and no exemption for a zero `RegionBytes`.**
+         * `RegionBytes - total` is unsigned, so a later reply declaring a
+         * region SMALLER than what has already been sent wraps to a huge
+         * allowance and the check passes - which is the same class of defect
+         * as the `RingOffset + RingBytes` sum this tool refuses in the note
+         * ring, arrived at from the other direction. A zero `RegionBytes`
+         * with a payload behind it is refused too: a region of no bytes that
+         * is sending bytes is not a reply this tool can describe.
+         */
+        if (total > header.RegionBytes ||
             header.PayloadBytes > header.RegionBytes - total) {
             printf("  the driver has sent %lu bytes of a %lu-byte region and "
                    "offers %lu more -\n  refusing the reply\n",
