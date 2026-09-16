@@ -191,10 +191,18 @@ after any further preparation.
 
 **`-WorkDir` and `-CopyBack`, which the sequence above does not use and which
 the `-Stamp` refusal depends on.** `vm\` is inside OneDrive on the development
-host, and OneDrive re-writing a running image is how a prep boot corrupts one;
-`prepare-image.ps1` says so where it resolves the image. `-WorkDir <dir>`
-copies the image somewhere outside the synced tree, boots the copy, and leaves
-it there; `-CopyBack` puts it back when the boot is done. The path the boot
+host, and a prep boot is the one pass that WRITES to the image, so keeping a
+sync client off it while that runs is a precaution worth taking.
+
+**It is a precaution and not a diagnosis.** `prepare-image.ps1`'s own account
+of the four prep-boot hangs offers OneDrive as one of three explanations and
+then refutes all three - two of those hangs ran from a local disk - and every
+one of them left the image intact with **zero corruptions**. What correlates
+is the device being installed, not the storage. So do not read `-WorkDir` as
+the fix for a known failure; read it as not asking the question.
+
+`-WorkDir <dir>` copies the image somewhere outside the synced tree, boots the
+copy, and leaves it there; `-CopyBack` puts it back when the boot is done. The path the boot
 actually ran is the second line of the paths file, and `-Stamp` compares the
 image it is asked to stamp against it - so a `-Boot -WorkDir` followed by a
 `-Stamp` without `-CopyBack` is refused rather than stamping an image that was

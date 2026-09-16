@@ -397,10 +397,12 @@ if ($Boot) {
     if ($syncedTree -and $WorkDir -eq "") {
         Write-Host ""
         Write-Host "*** WARNING: this image is inside a OneDrive-synced tree, and this is the"
-        Write-Host "    one boot that WRITES to it. A sync client touching the file under a"
-        Write-Host "    running QEMU blocks its main loop and the guest hangs with the monitor"
-        Write-Host "    dead - measured. Consider -WorkDir <local-path> to run the"
-        Write-Host "    pass on a local disk and copy the result back, or pause syncing first."
+        Write-Host "    one boot that WRITES to it. Nothing here has been measured to go wrong"
+        Write-Host "    because of that - the prep-boot hangs recorded below were traced to the"
+        Write-Host "    device being installed, not to the storage, and left 0 corruptions - so"
+        Write-Host "    this is a precaution rather than a known failure. Consider -WorkDir"
+        Write-Host "    <local-path> to run the pass on a local disk and copy the result back,"
+        Write-Host "    or pause syncing first."
         Write-Host ""
     }
 
