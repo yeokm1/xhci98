@@ -210,8 +210,8 @@ reset, a 15-second wait for a plug, and device identification. That is the
 opposite of what the safety section in `hardware-testing.md` tells a
 first-time user to do. If you have older notes, `--full` is that behaviour.
 
-A read-only pass cannot observe C2, C3 or C4, so it has three outcomes, and
-each says what to do next:
+A read-only pass cannot observe C2, C3 or C4, so it has three outcomes. The
+screen ends on the verdict and does not print a next command:
 
 | Outcome | Means |
 |---|---|
@@ -237,9 +237,9 @@ this file describing it two ways.)
 "One screen" was measured in QEMU: three controllers print 11 lines under 4
 rows of DOS/32A startup plus the command line, 16 of the pager's 23 usable
 rows (`PAGE_ROWS`, `report.c`). Each controller is one line, and from the
-seventh controller the output ends in an `N more controller(s) - for the full
-list run: XHCIQUAL --probe-only --no-page --log PROBE.LOG` tail (or `the full
-list is in the log` when one is open) rather than scrolling. The real-console count on a multi-controller machine
+seventh controller the output ends in an `N more controller(s) not shown.`
+tail (or `N more controller(s) - the full list is in the log.` when one is
+open) rather than scrolling; `--probe-only` lists them all. The real-console count on a multi-controller machine
 was never taken: no machine left in the fleet has more than one USB
 controller, so it is published as a limitation and reopens for one DOS boot
 on any two-controller machine.

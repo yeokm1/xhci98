@@ -556,22 +556,13 @@ static int run_quick_scan(void)
     }
 
     if (hidden > 0) {
-        /*
-         * **The advice used to be `--log`, and `--log` is not a read-only
-         * mode** (repo audit D1). Any argument makes `argc != 1`, so `opt_quick`
-         * stays 0 and `XHCIQUAL --log` performs the full active bring-up - BIOS
-         * handoff, HCRST, DMA and port resets on every controller - which is
-         * precisely what the quick scan exists to shield a first-time user from
-         * (task 11-V.8). The read-only spelling is the one the verdict footer
-         * below already uses.
-         */
+        /* The screen reports a result, not the next command: the owner's
+         * decision of 2026-09-16. */
         if (report_logging())
             qprintf("%d more controller(s) - the full list is in the log.\n",
                     hidden);
         else
-            qprintf("%d more controller(s) - for the full list run:\n"
-                    "  XHCIQUAL --probe-only --no-page --log PROBE.LOG\n",
-                    hidden);
+            qprintf("%d more controller(s) not shown.\n", hidden);
     }
 
     /*
@@ -587,26 +578,20 @@ static int run_quick_scan(void)
     }
 
     /*
-     * End with the next command to run, so the screen is an instruction rather
-     * than just a verdict - and make it depend on the outcome, because "run the
-     * active tests" is the wrong advice for a machine that is already out.
+     * The verdict alone, with no next command after it: the owner's decision of
+     * 2026-09-16, because whoever runs the tool knows what to run next and
+     * `--help` lists the sequence.
      */
     if (worst == QUICK_DISQUALIFIED) {
         qprintf("Verdict: DISQUALIFIED - at least one controller cannot "
                 "work on either target.\n");
-        qprintf("Next: XHCIQUAL --probe-only --no-page --log PROBE.LOG   "
-                "(the detail behind it)\n");
     } else if (worst == QUICK_CANNOT_SAY) {
         qprintf("Verdict: CANNOT SAY - a state this read-only pass may not "
                 "change is in the way.\n");
-        qprintf("Next: XHCIQUAL --probe-only --no-page --log PROBE.LOG   "
-                "(the detail behind it)\n");
     } else {
         qprintf("Verdict: LOOKS QUALIFIED, subject to the active tests "
                 "(C2/C3/C4), which this\n"
                 "  read-only pass cannot observe.\n");
-        qprintf("Next: XHCIQUAL xhci --poll-only --no-wait --log XPOLL.LOG\n");
-        qprintf("Then: XHCIQUAL --full --log ALLDEV.LOG\n");
     }
 
     /* The same completion marker every other mode prints, and it is not

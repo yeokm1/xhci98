@@ -141,7 +141,7 @@ controller conditions in a single read-only pass.
 `XHCIQUAL.EXE` is a DOS tool that reads the machine's xHCI controller and says
 whether this driver can work on it. Run it with no arguments for a read-only
 quick scan. It writes no PCI configuration register and prints one of three
-verdicts, each ending with the next command to run:
+verdicts:
 
 | Verdict | Means |
 |---|---|
