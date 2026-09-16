@@ -9205,9 +9205,16 @@ VOID XhciSlotCommandEvent(PXHCI_EXTENSION ext,
      * was true until the 2026-09-16 audit's B5 routed that failure through
      * `xhciDevTeardown`, so the record is `GONE` and no reopen finds it. The
      * guard stays because it is about the shape - a Disable Slot completing
-     * into a record a new tenancy has taken over - and not about the one path
-     * that used to produce it; a teardown racing a reopen reaches the same
-     * shape without going near `xhciDevPrepareSlot`.
+     * into a record a new tenancy has taken over - rather than about the path
+     * that used to produce it. **No path is known to reach it now**, and that
+     * is the honest statement: the obvious candidate, a teardown racing a
+     * reopen, does not, because both run under the controller lock and
+     * whichever goes first settles it - a teardown marks the record GONE
+     * before it owes the Disable Slot, and both reopen lookups exclude GONE.
+     * Kept defensively, as a guard on a shape that costs one comparison, and
+     * NOT as a claim that something reaches it. *(An earlier version of this
+     * paragraph asserted the teardown race as the live path; Codex traced the
+     * transitions and it does not hold.)*
      *
      * `XhciSlotCommandLost` deliberately does **not** take this guard. There the
      * command's effect is unknown rather than known-stale, so it may have

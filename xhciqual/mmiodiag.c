@@ -208,6 +208,10 @@ void report_mmio_dead(const PCIINFO *p)
     else if (p->bar_phys == 0)
         qprintf("    cause: BAR0 is unassigned - firmware allocated no MMIO "
                 "window\n");
+    else if ((p->bar_lo & 1) != 0)
+        qprintf("    cause: BAR0 selects I/O space, and xHCI 5.2.1 requires a "
+                "memory BAR - this is true whatever the power state and "
+                "Memory Space Enable say\n");
     else if (p->has_pm && p->pm_state != 0)
         qprintf("    cause: device is in D%d, not D0 - it decodes no MMIO "
                 "until powered up\n", p->pm_state);
@@ -297,6 +301,19 @@ int quick_classify_mmio(const PCIINFO *p, int active_requested)
         return QUICK_DISQUALIFIED;
     if (p->bar_phys == 0)
         return QUICK_DISQUALIFIED;
+    /*
+     * **An I/O-space BAR0 is disqualifying whatever the power state or MSE
+     * says, and it has to be asked before both of them.** xHCI 5.2.1 requires
+     * a memory BAR, and the mapper refuses this one before it touches
+     * anything - so it needs neither D0 nor MSE to be established. Asked after
+     * them, a controller that is both in D3 and misdescribing its BAR type
+     * came back CANNOT SAY on the D-state, and the definitive refusal - the
+     * one that stays true when somebody powers it up - was never reported.
+     * A PCI-state fact rather than a `mmio_reason` test, so it holds on a path
+     * where the mapper never ran.
+     */
+    if ((p->bar_lo & 1) != 0)
+        return QUICK_DISQUALIFIED;
     if (p->has_pm && p->pm_state != 0)
         return QUICK_CANNOT_SAY;
     if ((p->cmd_effective & PCI_CMD_MSE) == 0)
@@ -341,6 +358,11 @@ const char *quick_reason(const PCIINFO *p, int mmio_ok, int usb2_ports,
             return "BAR0 is above 4 GB";
         if (p->bar_phys == 0)
             return "BAR0 is unassigned";
+        /* Before the power and MSE questions, for the reason
+         * quick_classify_mmio gives at the same position: this one is true
+         * whatever those two say, and the verdict is DISQUALIFIED. */
+        if ((p->bar_lo & 1) != 0)
+            return "BAR0 selects I/O space, and xHCI requires a memory BAR";
         if (p->has_pm && p->pm_state != 0)
             return "not in D0 - a driver must power it up first";
         if ((p->cmd_effective & PCI_CMD_MSE) == 0)

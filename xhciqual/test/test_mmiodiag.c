@@ -555,6 +555,57 @@ static void test_tool_limit_is_not_a_disqualification(void)
           "a window that really is dead, with no recorded reason, still says so");
 }
 
+/*
+ * **An I/O-space BAR0 outranks a temporary power or configuration state.**
+ * xHCI 5.2.1 requires a memory BAR and the mapper refuses one before it
+ * touches anything, so the refusal needs neither D0 nor MSE to be
+ * established - and it stays true when somebody powers the part up, which the
+ * D-state and MSE readings do not. Asked after them, a controller that is
+ * both in D3 and misdescribing its BAR type came back CANNOT SAY on the
+ * D-state and the definitive refusal was never reported (Codex review round
+ * 4 of the 2026-09-16 audit).
+ */
+static void test_io_bar_outranks_power_and_mse(void)
+{
+    PCIINFO p;
+
+    /* MSE clear, BAR0 = 0xE001: an I/O BAR on a controller whose memory
+     * decoding is off. Both readings are true; only one of them is final. */
+    base_pci(&p);
+    p.ipin = 1;
+    p.bar_lo = 0x0000E001UL;
+    p.bar_phys = 0x0000E000UL;
+    p.cmd_effective = 0;
+    CHECK(quick_classify_mmio(&p, 0) == QUICK_DISQUALIFIED,
+          "an I/O BAR disqualifies even with MSE clear on a probe-only run");
+    CHECK(strstr(quick_reason(&p, 0, 4, 0), "I/O space") != 0,
+          "and the reason names the BAR rather than the MSE bit");
+
+    /* And out of D0, which is the other branch that used to mask it. */
+    base_pci(&p);
+    p.ipin = 1;
+    p.bar_lo = 0x0000E001UL;
+    p.bar_phys = 0x0000E000UL;
+    p.has_pm = 1;
+    p.pm_state = 3;
+    CHECK(quick_classify_mmio(&p, 1) == QUICK_DISQUALIFIED,
+          "an I/O BAR disqualifies even in D3");
+    CHECK(strstr(quick_reason(&p, 0, 4, 1), "I/O space") != 0,
+          "and the reason names the BAR rather than the D-state");
+    reset_out();
+    report_mmio_dead(&p);
+    CHECK(has("I/O space"), "the long-form cause agrees, with no reason recorded");
+
+    /* A memory BAR with MSE clear is unchanged: that IS the MSE reading. */
+    base_pci(&p);
+    p.ipin = 1;
+    p.cmd_effective = 0;
+    CHECK(quick_classify_mmio(&p, 0) == QUICK_CANNOT_SAY,
+          "a memory BAR with MSE clear still cannot say on a probe-only run");
+    CHECK(strstr(quick_reason(&p, 0, 4, 0), "Memory Space Enable") != 0,
+          "and still names the MSE bit");
+}
+
 /* The verdict classifier: only genuine hardware/platform blockers may return
  * a disqualification. A temporary power or configuration state must not be
  * turned into a silicon verdict. */
@@ -907,6 +958,7 @@ int main(void)
     test_dead_bar_beats_power_state();
     test_dead_causes();
     test_tool_limit_is_not_a_disqualification();
+    test_io_bar_outranks_power_and_mse();
     test_unavailable_hard_disqualifiers();
     test_unavailable_inconclusive();
     test_xusb2pr_routed_and_not();

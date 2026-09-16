@@ -65,11 +65,14 @@ rendered nor associated with anything, and markdown syntax is just noise. Plain
 text, 78 columns, CRLF.
 
 Every published binary is at one version, in a directory of its own. They are
-byte-different builds sharing a file name and a `DriverVer`, so **nothing on
-the file identifies it**: the `VS_FF_DEBUG` flag `src\xhci98.rc` sets under
+byte-different builds sharing a file name and a `DriverVer`, so **nothing a
+user can SEE identifies one**: the `VS_FF_DEBUG` flag `src\xhci98.rc` sets under
 `#if DBG` separates release from debug and says nothing about the
-architecture, and the in-image `XHCI98_FLAVOUR_*` marker is what names all
-three flavours. This script checks the flag on each staged binary rather than
+architecture, and Explorer shows nothing that separates the two architectures
+at all. What IS in the file is the in-image `XHCI98_FLAVOUR_*` marker, which
+names all three flavours, and the PE header's Machine field, which the import
+gate reads to tell `0x014C` from `0x8664` - both need a tool.
+This script checks the flag on each staged binary rather than
 trusting which obj directory it came out of - packaging objfre twice is a
 silent mistake otherwise, and it is silent on the target too.
 
