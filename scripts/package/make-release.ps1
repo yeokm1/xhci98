@@ -889,9 +889,19 @@ function Publish-UploadSet {
     }
     Move-Item -LiteralPath $Set.Root -Destination $Set.Final.Root
 
+    # A `.previous` left by an interrupted earlier run is handled BEFORE this
+    # run's own rename, and by what is beside it (Codex review round 4): with
+    # the final zip absent it is the last good asset and goes back onto the
+    # final name; with the final zip present it is the older of the two and
+    # goes. It is never deleted while the final zip is absent.
     $zipAside = $Set.Final.Zip + ".previous"
     if (Test-Path -LiteralPath $zipAside) {
-        Remove-Item -LiteralPath $zipAside -Force
+        if (-not (Test-Path -LiteralPath $Set.Final.Zip)) {
+            Write-Warn ("'{0}' is left from an interrupted run and '{1}' is absent; restoring it as the previous asset first" -f $zipAside, $Set.Final.Zip)
+            Move-Item -LiteralPath $zipAside -Destination $Set.Final.Zip
+        } else {
+            Remove-Item -LiteralPath $zipAside -Force
+        }
     }
     $hadPrevious = Test-Path -LiteralPath $Set.Final.Zip
     try {
@@ -912,6 +922,26 @@ function Publish-UploadSet {
         }
     }
     return $Set.Final
+}
+
+# The one repair command every post-swap warning prints, rendered from the
+# arguments actually in effect (Codex review round 4): -UploadSetOnly honours
+# -Version, -Flavor, -ReleasesDir and -UploadDir, and -Arch only when the
+# caller passed it (otherwise it derives the architectures from the published
+# tree - see the -UploadSetOnly branch). A bare `-UploadSetOnly -Version`
+# would repair the default locations, which is not always the cut that just
+# happened.
+function Get-UploadSetRepairCommand {
+    $cmd = "scripts\package\make-release.ps1 -UploadSetOnly -Version " + $Version
+    # The SCRIPT's bound parameters, captured at script scope: inside a
+    # function $PSBoundParameters is the function's own, and this one has none.
+    $bound = $script:boundArgs
+    if ($null -eq $bound) { $bound = @{} }
+    if ($bound.ContainsKey("Flavor")) { $cmd += " -Flavor " + ($Flavor -join ",") }
+    if ($bound.ContainsKey("Arch")) { $cmd += " -Arch " + ($Arch -join ",") }
+    if ($bound.ContainsKey("ReleasesDir")) { $cmd += " -ReleasesDir '" + $ReleasesDir + "'" }
+    if ($bound.ContainsKey("UploadDir")) { $cmd += " -UploadDir '" + $UploadDir + "'" }
+    return $cmd
 }
 
 # The rollback half: a staged set whose cut did not publish is removed, and
@@ -1397,6 +1427,8 @@ $stagedUpload = $null
 # published whatever happens after, and the failure path below must say so
 # rather than call it a failed cut or touch what was published.
 $swapDone = $false
+# What the caller actually passed, for Get-UploadSetRepairCommand.
+$boundArgs = $PSBoundParameters
 
 try {
     if ($UploadSetOnly -and $SkipUploadSet) {
@@ -4047,7 +4079,7 @@ after checkout. Restore it with:  git checkout -- LICENSE
             Write-Host   "            The staged set has been left in place. out\ now holds:"
             foreach ($l in $stateLines) { Write-Host $l }
             Write-Host   "            Rebuild the asset from the published tree with:"
-            Write-Host  ("              scripts\package\make-release.ps1 -UploadSetOnly -Version {0}" -f $Version)
+            Write-Host  ("              {0}" -f (Get-UploadSetRepairCommand))
             $stagedUpload = $null
         }
     }
@@ -4084,7 +4116,7 @@ after checkout. Restore it with:  git checkout -- LICENSE
         Write-Host "            See releases\README.md and docs\contributing\legal-provenance.md"
         Write-Host "            section 5."
     } elseif ($uploadPublishError -ne "") {
-        Write-Warn ("the upload set was NOT moved onto its final names (see above); rebuild it with: scripts\package\make-release.ps1 -UploadSetOnly -Version {0}" -f $Version)
+        Write-Warn ("the upload set was NOT moved onto its final names (see above); rebuild it with: {0}" -f (Get-UploadSetRepairCommand))
     } else {
         Write-Warn "-SkipUploadSet: no release asset was assembled, so there is nothing to upload."
         Write-Host "            Install from out\pkg-<flavor>\ or from the tracked directory;"
@@ -4100,7 +4132,7 @@ after checkout. Restore it with:  git checkout -- LICENSE
         Remove-StagedUploadSet -Set $stagedUpload
         Write-Warn ("the staged upload set was removed; the previous {0}, if any, is untouched" -f $stagedUpload.Final.Zip)
     } elseif ($swapDone) {
-        Write-Warn ("the release IS published at {0}; what failed came after the publish swap. If the upload set is missing or stale, rebuild it with: scripts\package\make-release.ps1 -UploadSetOnly -Version {1}" -f $finalRoot, $Version)
+        Write-Warn ("the release IS published at {0}; what failed came after the publish swap. If the upload set is missing or stale, rebuild it with: {1}" -f $finalRoot, (Get-UploadSetRepairCommand))
     }
     exit 1
 }

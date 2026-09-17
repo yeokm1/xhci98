@@ -1359,7 +1359,7 @@ try {
     $pubBlock = $releaserText.Substring($pubAt, $releaserText.IndexOf('# --- summary', $pubAt) - $pubAt)
     Assert-True ($pubAt -ge 0 -and $pubCatchAt -gt $pubAt -and $pubCatchAt -lt ($pubAt + $pubBlock.Length)) `
         "make-release.ps1 no longer catches a Publish-UploadSet failure locally, so a rename that fails in out\ reports a published cut as failed."
-    Assert-True ($pubBlock.Contains('make-release.ps1 -UploadSetOnly -Version') -and $pubBlock.Contains('The staged set has been left in place')) `
+    Assert-True ($pubBlock.Contains('(Get-UploadSetRepairCommand)') -and $pubBlock.Contains('The staged set has been left in place')) `
         "make-release.ps1's upload-publish catch no longer keeps the staged set and names -UploadSetOnly as the way to rebuild the asset."
     Assert-True (-not $pubBlock.Contains('Remove-StagedUploadSet')) `
         "make-release.ps1's upload-publish catch discards the staged set, which after the swap is the only copy of the new asset."
@@ -1379,6 +1379,40 @@ try {
         "make-release.ps1's outer catch prints 'the previous asset is untouched' without checking that the failure came before the swap."
     Assert-True ($releaserText.IndexOf('$swapDone = $true') -gt $releaserText.IndexOf('Move-Item -LiteralPath $destRoot -Destination $finalRoot')) `
         "make-release.ps1 no longer marks the swap done right after the release rename, so the outer catch cannot tell a pre-swap failure from a post-swap one."
+
+    # --- a stale .previous is the last good asset when the final zip is gone
+    #
+    # Codex review round 4. An interruption between the aside rename and the
+    # staged move leaves `.previous` present and the final zip absent; a retry
+    # that deleted the stale aside first, then failed its own staged move,
+    # would lose the only previous archive. So the stale aside is judged by
+    # what is beside it - restored when the final zip is absent, dropped only
+    # when the final zip is present - and nothing deletes it before that test.
+    Write-Step "a stale .previous is restored, not deleted, when the final zip is absent"
+    $staleTest = $fnText.IndexOf('if (-not (Test-Path -LiteralPath $Set.Final.Zip)) {')
+    $staleRestore = $fnText.IndexOf('Move-Item -LiteralPath $zipAside -Destination $Set.Final.Zip')
+    $firstAsideDrop = $fnText.IndexOf('Remove-Item -LiteralPath $zipAside')
+    Assert-True ($staleTest -ge 0 -and $staleRestore -gt $staleTest) `
+        "Publish-UploadSet no longer tests for the final zip's absence and restores a stale .previous onto it."
+    Assert-True ($firstAsideDrop -gt $staleTest) `
+        "Publish-UploadSet removes a stale .previous before asking whether the final zip is there, so a retry can delete the only previous archive."
+    Assert-True ($fnText.IndexOf('Remove-Item -LiteralPath $zipAside -Force') -gt $staleTest) `
+        "Publish-UploadSet's unconditional removal of .previous precedes the final-zip test."
+
+    # --- the repair command names the cut that actually happened -------------
+    Write-Step "the -UploadSetOnly repair hint is rendered by one helper from the bound arguments"
+    $helperAt = $releaserText.IndexOf('function Get-UploadSetRepairCommand')
+    Assert-True ($helperAt -ge 0) "make-release.ps1 no longer has Get-UploadSetRepairCommand, so each repair hint renders its own command and can drop -ReleasesDir, -UploadDir or -Flavor."
+    $helperText = $releaserText.Substring($helperAt, $releaserText.IndexOf('function Remove-StagedUploadSet') - $helperAt)
+    foreach ($p in @('"Flavor"', '"Arch"', '"ReleasesDir"', '"UploadDir"')) {
+        Assert-True ($helperText.Contains('ContainsKey(' + $p + ')')) "Get-UploadSetRepairCommand does not carry -$($p.Trim('"')) through when it was passed."
+    }
+    $calls = ([regex]::Matches($releaserText, [regex]::Escape('(Get-UploadSetRepairCommand)'))).Count
+    Assert-True ($calls -ge 3) ("only " + $calls + " site(s) render the repair hint through Get-UploadSetRepairCommand; the local catch, the summary hint and the outer catch must all use it.")
+    Assert-True ($pubBlock.Contains('(Get-UploadSetRepairCommand)') -and $outerCatch.Contains('(Get-UploadSetRepairCommand)')) `
+        "the upload-publish catch or the outer catch renders its own -UploadSetOnly command instead of calling Get-UploadSetRepairCommand."
+    Assert-True (-not ($releaserText -match '-UploadSetOnly -Version \{')) `
+        "a repair hint still formats '-UploadSetOnly -Version {n}' by hand, bypassing Get-UploadSetRepairCommand."
 
     # --- the readme template may not carry the two claims 1.0.1.0 shipped ----
     #
