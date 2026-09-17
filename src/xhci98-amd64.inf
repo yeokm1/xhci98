@@ -205,8 +205,11 @@ AddService=xhci98,0x00000002,Xhci.AddService
 ; scripts\inf-gate\check-inf.ps1 refuses any of the four here (OS-ONNT6).
 ;
 ; There is no right-click route of its own. [DefaultInstall.NTamd64] below is
-; the one an NT 6.x engine would run, it carries the LayoutFile copies, and
-; what it does on 6.x has not been read.
+; the one an NT 6.x engine would run and it carries the LayoutFile copies. Its
+; 32-bit twin was read on Vista x86 (roadmap 22.5, 2026-09-17): it asks for
+; usbport.sys from "(Unknown)" and a Cancel aborts it, leaving xhci98.sys with
+; no service. This one has not been run on Vista x64 or Windows 7 x64; the
+; release notes send those systems to the device install.
 [Xhci.Dev6.NTamd64]
 AddReg=Xhci.AddReg.NT
 CopyFiles=Xhci.CopyFiles

@@ -323,9 +323,12 @@ AddService=xhci98,0x00000002,Xhci.AddService
 ; NT 6.x guests on 2026-09-13 from a staged copy. OS-ONNT6 in the INF gate
 ; refuses an OS file here.
 ;
-; No right-click route of its own: [DefaultInstall.NTx86] is the one an NT 6.x
-; engine would run, it carries the LayoutFile copies, and what it does on 6.x
-; has not been read.
+; No right-click route of its own, and the right-click Install is not supported
+; on NT 6.x: [DefaultInstall.NTx86] is the one that engine runs, and its
+; LayoutFile copies have no source there. Read on Vista x86 (roadmap 22.5,
+; 2026-09-17): it asks for usbport.sys from "(Unknown)", a Cancel aborts the
+; queue with no message, and xhci98.sys is left in System32\drivers with no
+; service. Use the device install.
 [Xhci.Dev6.NTx86]
 AddReg=Xhci.AddReg.NT
 CopyFiles=Xhci.CopyFiles

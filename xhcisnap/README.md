@@ -229,6 +229,13 @@ default, not a difference between the targets). So the route is an observation
 on both targets, and the two usbport builds answer this escape identically at
 run time as well as in their comparison chains.
 
+On 32-bit Windows Vista only the registry half has run. An install through
+Device Manager records `InfSection = Xhci.Dev6` in the driver key, which the
+tool did not recognise until that name was added to the ones it matches
+(roadmap task 22.5, 2026-09-17): the earlier build skipped the key as matched
+by a value name alone, and the current one matches it and sets
+`-verbosity`. The `\\.\HCD0` route has not been run on Vista or Windows 7.
+
 ## The one way this route can be missing, and how to tell
 
 usbport builds its symbolic link at a fixed index from its own controller

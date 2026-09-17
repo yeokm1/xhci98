@@ -2010,7 +2010,7 @@ reading may not tick a box whose line names a guest.
         not exist - and in its place the gate asserts that they still do, so a
         guest that gave one up cannot leave it reserved for nothing. The
         ordinary no-two-guests-share-a-port scan now covers all four
-- [ ] **22.5 - Version 300 on NT 6.x, both architectures.** The owner's
+- [x] **22.5 - Version 300 on NT 6.x, both architectures.** The owner's
       decision of 2026-09-11 (design record 11 section 12, decision 12). The
       driver presents `Version = 300` to an NT 6.x `usbport.sys` and `200` to
       everything else, from the `IoIsWdmVersionAvailable(6, 0)` answer the
@@ -2454,7 +2454,7 @@ reading may not tick a box whose line names a guest.
           install legs from the asset, which read this file on every target.
           The `xhcisnap` row above stays owed: nothing has read what an NT 6.x
           install records as `InfSection`
-  - [ ] **`xhcisnap` on an NT 6.x install.** `ourSections` in
+  - [x] **`xhcisnap` on an NT 6.x install.** `ourSections` in
         `xhcisnap\xhcisnap.c` recognises a driver key by its `InfSection`
         value, matched exactly against `Xhci.Dev` and `Xhci.Dev.NTx86`, and
         fails closed on anything else. Both INFs now install NT 6.x through
@@ -2464,8 +2464,21 @@ reading may not tick a box whose line names a guest.
         `Xhci.Dev6.NTx86` may be assumed. Read the value off a Vista or
         Windows 7 x86 guest after an install from the tree, add the row that
         matches it, and rebuild the tool. Until then the tool does not
-        recognise the key on those systems. Owed since 2026-09-16
-  - [ ] **Windows 2000's restart prompt after the NT 6.x-line install.**
+        recognise the key on those systems. Owed since 2026-09-16. **Read
+        2026-09-17 (`vm\p225-vista-infsection\`): `Xhci.Dev6`, undecorated,
+        as Windows 2000 records its section.** Off a fresh copy of
+        `vista-clean-install`, installed through Device Manager from the
+        committed `src\xhci98.inf` and the `qemu` x86 build: the driver key,
+        read offline from the SYSTEM hive, holds `InfSection = Xhci.Dev6` and
+        `InfSectionExt = .NTx86`, and `setupapi.dev.log` names `InstallSec -
+        Xhci.Dev6` and `ActualSec - Xhci.Dev6.NTx86`. `ourSections` gained
+        exactly that row and the tool rebuilt, self-test green. On the same
+        install, elevated, the tool built from `7ea7115` SKIPPED the key as
+        "identified by a value NAME alone" and wrote nothing, and the new one
+        matched it (`InfSection = Xhci.Dev6`) and set it. What ran is the key
+        match and the registry write; the `\\.\HCD0` dump route has not been
+        run on Vista or Windows 7
+  - [x] **Windows 2000's restart prompt after the NT 6.x-line install.**
         On 2026-09-16 (`vm\inf60-w2k\`), installing the candidate through
         the Found New Hardware wizard on `win2k-xonly-clean-install` ended
         in "You must restart your computer", declined with the driver
@@ -2477,8 +2490,27 @@ reading may not tick a box whose line names a guest.
         One install off the same snapshot through Have Disk with the shipping
         INF separates the first from the other two. A restart prompt is not a
         failure, but a user will see it and the release notes say nothing
-        about one
-  - [ ] **The right-click Install on NT 6.x.** Neither INF has a
+        about one. **Read 2026-09-17 (`vm\p225-w2k-havedisk\`): it is the
+        route.** Off a fresh copy of `win2k-xonly-clean-install`, the wizard
+        cancelled, then Device Manager -> *Update Driver* -> *Have Disk* ->
+        `E:\` with the committed `src\xhci98.inf` and the `qemu` x86 build of
+        13:13:02: **no restart prompt**, the driver loaded (interface `0xC8`,
+        registration 0, init complete) and Device Manager showed the
+        controller and the USB 2.0 Root Hub with no bang. Its `setupapi.log`,
+        read offline, is line for line the 2026-09-16 wizard install's -
+        `Section: Xhci.Dev`, `[Xhci.Dev.NTx86]`, the one `xhci98.sys` copy,
+        the root hub's copy-only then full install from `usb.inf` - and
+        neither holds a reboot entry; the one difference is the caller,
+        `rundll32.exe newdev.dll,DevInstall` there against `mmc.exe
+        devmgmt.msc` here. So the widened line and the root hub are ruled
+        out; the prompt belongs to the Found New Hardware wizard, which also
+        raised it on both of 2026-09-17's issue 5 installs
+        (`out\post-release\issue5-ssflag\README.md`, the `w2k` rows) and was
+        declined there too with the driver running. Why that route asks is
+        not established. The release notes' documented Windows 2000 route is
+        the Have Disk one, which does not ask; they now also say that the
+        wizard's prompt can be answered No
+  - [x] **The right-click Install on NT 6.x.** Neither INF has a
         right-click section of its own for Vista or Windows 7:
         `[DefaultInstall.NTx86]` and `[DefaultInstall.NTamd64]` are what an
         NT 6.x engine would run, and both carry the `LayoutFile` copies of
@@ -2490,7 +2522,24 @@ reading may not tick a box whose line names a guest.
         right-click route as unsupported on 6.x or find a decoration that
         reaches a 6.x-only right-click section - which the lesson that a
         version decoration selects the models section only says is not
-        `[DefaultInstall.NTx86.6.0]`
+        `[DefaultInstall.NTx86.6.0]`. **Read 2026-09-17 on Vista x86
+        (`vm\p225-vista-rightclick\`), and it fails; the owner's decision the
+        same evening is to document the route as unsupported on NT 6.x.** Off
+        a fresh copy of `vista-clean-install`, right-click *Install* on the
+        committed `src\xhci98.inf`: UAC for "INF Default Install", then
+        "Files Needed - The file 'usbport.sys' on (Unknown) is needed".
+        Cancelled, the route ends with no message at all. `setupapi.app.log`,
+        read offline: `InfDefaultInstall.exe`, five queued copies, the four
+        `LayoutFile` ones each warned `Missing
+        SourceDisksFiles/SourceDisksNames information from INF`, then
+        `SPFILENOTIFY_NEEDMEDIA: returned FILEOP_ABORT` and `Install failed,
+        attempting to restore original files`. **Left behind anyway:
+        `System32\drivers\xhci98.sys`**, absent from the clean base, with no
+        `xhci98` service and the controller unbound, since a right-click
+        section touches no device. The release notes, both INFs' comments and
+        `build-and-test.md` now say so. Not read: `[DefaultInstall.NTamd64]`
+        on Vista x64 or Windows 7 x64, which carries the same four copies and
+        is documented as untried rather than as failing, and Windows 7 x86
   - [x] **the record**: task 21.6's tier wording for Vista and Windows 7 on
         both architectures - VM-supported, no checkpoint tax, and for x64 the
         signing paragraph beside the tier rather than in a footnote -

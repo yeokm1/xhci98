@@ -174,7 +174,9 @@ The package is a directory holding two files, `xhci98.inf` and
   location* -> the package directory.
 - Windows 2000 SP4 and Windows XP: Device Manager -> the unrecognised xHCI
   device -> *Update Driver* -> *Have Disk* -> the package directory. XP
-  shows its unsigned-driver warning; choose *Continue Anyway*.
+  shows its unsigned-driver warning; choose *Continue Anyway*. If Windows
+  2000's *Found New Hardware* wizard is used instead, it ends by asking for a
+  restart; *No* is fine, the driver is already running.
 - Windows ME: SweetLow's stack first, and only that one (NUSB is a Windows
   98 SE package): [usb20_win9x.zip](http://sweetlow.orgfree.com/download/usb20_win9x.zip)
   from SweetLow's site, unzipped; right-click the `USB2.INF` at its root,
@@ -184,8 +186,11 @@ The package is a directory holding two files, `xhci98.inf` and
   software* -> the package directory. If Windows warns that the driver is not
   signed or its publisher cannot be verified, choose to install it anyway.
   Use Device Manager rather
-  than right-clicking `xhci98.inf`: the right-click *Install* route has not
-  been tried on these systems. On Vista x64 and Windows 7 x64 the install
+  than right-clicking `xhci98.inf`: the right-click *Install* route is not
+  supported on these systems. On 32-bit Vista it asks for `usbport.sys`,
+  which you cannot supply, and cancelling ends it with no message and
+  without installing the driver, although `xhci98.sys` is left in
+  `System32\drivers`. On Vista x64 and Windows 7 x64 the install
   can be done on an ordinary boot, but the driver starts only after a
   restart with *Disable Driver Signature Enforcement* chosen from the F8
   menu, and only on such a boot.

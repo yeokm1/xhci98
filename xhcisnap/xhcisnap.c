@@ -1522,10 +1522,10 @@ static int read_string(HKEY key, const char *name, char *out, DWORD outBytes)
  * This was `starts_with_ci(text, "Xhci.Dev")` for one commit, which is an
  * over-generalisation with a cost: `Xhci.Device` and `Xhci.Developer` would
  * have been read as decisive. There is no reason to accept a family here - the
- * INF is in this repository and has exactly two install sections, so the test
- * can be the two names. A third section added to the INF must be added here
- * too, and that is the right kind of coupling: it fails closed, by refusing to
- * recognise a key, rather than by claiming one.
+ * INF is in this repository and names its install sections, so the test can be
+ * those names. A section added to the INF must be added here too, and that is
+ * the right kind of coupling: it fails closed, by refusing to recognise a key,
+ * rather than by claiming one.
  *
  * **The phrase printed for a match lives beside the name it belongs to**, so
  * the two cannot drift apart: a section added to one is a compile error away
@@ -1552,13 +1552,23 @@ static int read_string(HKEY key, const char *name, char *out, DWORD outBytes)
  * engine records the section as NAMED IN `[XhciModels]`, with the platform
  * decoration applied when it is processed - is an explanation and has not been
  * checked, so do not write it down as one.)*
+ *
+ * **The NT 6.x path is the third section, and Vista records it the same way.**
+ * Roadmap task 22.5 gave both INFs `Xhci.Dev6` for Vista and Windows 7; on a
+ * Vista x86 guest installed through Device Manager from the committed
+ * `src\xhci98.inf` (2026-09-17, read offline from the SYSTEM hive) the driver
+ * key reads `InfSection = Xhci.Dev6` with `InfSectionExt = .NTx86`, and
+ * `setupapi.dev.log` agrees: `InstallSec - Xhci.Dev6`, `ActualSec -
+ * Xhci.Dev6.NTx86`. So the row is the undecorated name, and no decorated
+ * `Xhci.Dev6.*` row is added on a guess.
  */
 static const struct {
     const char *section;
     const char *why;
 } ourSections[] = {
     { "Xhci.Dev",       "InfSection = Xhci.Dev" },
-    { "Xhci.Dev.NTx86", "InfSection = Xhci.Dev.NTx86" }
+    { "Xhci.Dev.NTx86", "InfSection = Xhci.Dev.NTx86" },
+    { "Xhci.Dev6",      "InfSection = Xhci.Dev6" }
 };
 
 /*
@@ -1606,7 +1616,7 @@ static int key_match(HKEY parent, const char *name, const char **why)
 
     /*
      * Both engines write the install section they used, and this INF's are
-     * `Xhci.Dev` and `Xhci.Dev.NTx86`. It survives a `.sys` swap because it
+     * `ourSections` above. It survives a `.sys` swap because it
      * records the last INSTALL, which is what makes it the useful signal on the
      * NT path - there is no NTMPDriver there.
      */
