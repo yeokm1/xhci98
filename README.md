@@ -2,7 +2,7 @@
 
 This project xHCI98 is a WDM generic USB host controller driver for xHCI host controllers targeting Windows 98 SE, ME, 2000 SP4 and 32-bit XP, plus a separate 64-bit build for Windows XP x64 and Server 2003 x64. Although xHCI Controllers offer USB 3.0, this driver runs USB 2.0 on the controller only.
 
-This driver is developed based on Intel's xHCI specification and tested only on Intel machines so far. No guarantees have been made on xHCI implementations from other vendors.
+This driver is developed based on Intel's xHCI specification and tested mainly on Intel machines so far. No guarantees have been made on xHCI implementations from other vendors. [Omores](https://www.youtube.com/@O_mores) has also [tested it](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/).
 
 This project is from a solo human with AI-assistance only so bugs are not unexpected. Feel free to report them if you encounter any issues.
 
@@ -88,12 +88,17 @@ The same driver on the same machine survives all three under SweetLow's build of
 
 ## What is tested, and what is not
 
-Windows 98 SE is validated on real hardware. Windows 2000 SP4, Windows ME, both Windows XPs, and Windows Vista and 7 have only ever run in QEMU virtual machines.
+Windows 98 SE is validated on real hardware. Windows 2000 SP4, Windows ME, Windows XP (x86/x64), Windows Vista (x86/x64) and 7 (x86/x64) have only ever run in QEMU virtual machines.
 
-| Machine | Controller |
-|---|---|
-| ThinkPad E460 (2016) | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0, `8086:9D2F`, 18 ports (12 USB 2.0 managed, 6 USB 3.0 left unpowered), no EHCI. |
-| ThinkPad P14s Gen 1 (2020) | Intel Comet Lake PCH-LP (400-series). xHCI 1.1, `8086:02ED`, 18 ports (12 USB 2.0 managed, 6 USB 3.1 left unpowered), no EHCI. |
+| Machine | Controller | Result | Tested by |
+|---|---|---|---|
+| 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | OK | Me |
+| 2020 ThinkPad P14s Gen 1 | Intel Comet Lake PCH-LP (400-series). xHCI 1.1. | OK | Me |
+| Socket 1151 desktop (H110) | Intel 100-series PCH xHCI. | OK | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) |
+| Socket 1151 v2 desktop (B360) | Intel Cannon Lake PCH (300-series) xHCI. | OK | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) |
+| AM4 desktop (B550) | AMD 500-series chipset xHCI, plus the Ryzen CPU's own xHCI. | OK | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) |
+| AM4 desktop (X570) | AMD-designed X570 chipset xHCI, plus the Ryzen CPU's own xHCI. | Not OK | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) |
+| AM5 desktop (X670) | AMD 600-series chipset xHCI, plus the Ryzen CPU's own xHCIs. | OK | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) |
 
 | | State |
 |---|---|
@@ -103,7 +108,7 @@ Windows 98 SE is validated on real hardware. Windows 2000 SP4, Windows ME, both 
 | 32-bit Windows XP | One virtual machine only (XP Professional SP3): the package installs on an xHCI-only machine with no prompt, the driver loads and starts under XP's own USB stack, and a HID mouse, a USB mass-storage device and a composite audio device bind; disable, enable, remove and rescan in Device Manager all survive. Never run on real hardware. |
 | Windows XP x64 / Server 2003 x64 | One virtual machine only (XP Professional x64 SP2), and **a separate 64-bit driver**, not the one above: the same clauses all pass, taken on the `qemu` build and then read again on the `release` flavour, from a package with its own INF. The `debug` build of it has never been run. Only XP x64 was booted; Server 2003 x64 is the same operating system and is covered by that identity, not by a run of its own. Never run on real hardware. |
 | Windows Vista SP2 and Windows 7 SP1, 32-bit and x64 | One virtual machine each (four in all). The 32-bit ones run the same driver as 98 to XP, the x64 ones the 64-bit driver. The package installs, the driver loads and starts, a HID mouse, a USB mass-storage device and a composite audio device bind, and five disable/enable cycles, remove and rescan in Device Manager all survive. Taken on the `qemu` build only. On Vista x64 and 7 x64, driver signature enforcement has to be disabled as this driver is not signed. Never run on real hardware. |
-| Intel 7/8-series (`XUSB2PR` mux), AMD | Never run on either. Everything said about the `XUSB2PR` port mux comes from Intel's datasheet and Linux, not silicon. The driver does not touch it. |
+| Intel 7/8-series (`XUSB2PR` mux) | Never run. Everything said about the `XUSB2PR` port mux comes from Intel's datasheet and Linux, not silicon. The driver does not touch it. |
 | Resume from standby (Windows 2000) | Never executed anywhere. No available VM offers a resumable power transition, and there is no Windows 2000 machine. |
 | Low Speed, USB Audio, hub topologies | Work on Windows 98 hardware in the configurations tried. Not covered: an audio device with `bInterval > 1`, a USB 1.1 hub under a multi-TT hub, and the Windows 2000 side on silicon. |
 
