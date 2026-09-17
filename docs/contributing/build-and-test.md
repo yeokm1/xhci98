@@ -1090,8 +1090,13 @@ This is fixed (roadmap task 11-V.6, and `docs/using/release-notes.md` under
 the fix has moved once. **From 1.1.0.0 the driver declares
 `USB_MINIPORT_FLAGS_DISABLE_SS` (0x20) in its `MiniPortFlags` and the INFs
 write nothing** (`docs/issues/05-idle-suspend-and-disableselectivesuspend.md`
-section 5.4). Releases 1.0.0.0 to 1.0.2.0 did it with a registry value
-instead, and every reading in this section was taken against those: both
+section 5.4). That replacement was itself read at run time on 2026-09-17, on
+seven of the ten targets, each against a control leg on the previous build
+with the value deleted so that the OS is known to idle without it; section
+5.5 of the same document carries the per-target table, and Vista x64 and the
+two SweetLow-stack 9x targets are still outstanding. Releases 1.0.0.0 to
+1.0.2.0 did it with a registry value instead, and every reading in this
+section was taken against those: both
 install paths wrote
 `HKLM\System\CurrentControlSet\Services\USB\DisableSelectiveSuspend = 1`
 (the Windows 98 path since task 11-V.6, the NT path since 1.0.1.0, when the

@@ -374,6 +374,80 @@ consumer on these systems and it never asks. A third-party driver on a
 particular machine could ask, and no reading here can enumerate what is not
 on the machine.
 
+### 5.5 The runtime readings of 2026-09-17
+
+Section 5.4's case is static: nine disassemblies and a bit swept for every
+reader. On 2026-09-17 the flag was put in front of the operating systems
+themselves, one clean install at a time. Seven of the ten targets have been
+read; three have not (below), so this section is a record in progress and no
+roadmap box is ticked on it.
+
+**What a leg is.** Per target, one clean disk copy, two throw-away overlays
+over it, and the `qemu` build on both. The *test* leg installs the `1.1.0.0`
+package - the miniport flag, no registry value written anywhere - and the
+*control* leg installs the previous build, whose INF writes the machine-wide
+value, and then deletes that value. The control is the point: it says the
+operating system under test would have idled the controller, so that the test
+leg's quiet five minutes mean something. Each leg was read the way section 6
+requires - nothing attached at boot, an empty root hub, the controller's
+callbacks on the debug console, `USBCMD`/`USBSTS` read from the QEMU monitor
+at `BAR0+0x40`, then a keyboard hot-plugged onto the quiet bus and unplugged
+again. `USBCMD 0x00000005` / `USBSTS 0x00000000` is running; `0x00000000` /
+`0x00000001` is halted. `info usb` reports `Device 0.1` for an addressed
+device and `Device 0.0` for one the stack never saw.
+
+| target | test leg: the flag, no value | control leg: previous build, value deleted |
+|---|---|---|
+| Windows 98 SE + NUSB 3.3 | running 5 min, no `SuspendController`; keyboard addressed within 5 s; no re-idle 90 s after the unplug | suspends right after start; keyboard unseen for 40 s |
+| Windows 2000 SP4 | running 5 min; addressed within 8 s; no re-idle 102 s | suspends shortly after start; keyboard unseen for 40 s |
+| Windows XP SP3 x86 | no `Services\USB` key at all; running 5 min; addressed within 5 s; no re-idle 96 s | halts within about 45 s of launch; keyboard unseen at +5, +20 and +40 s |
+| Windows XP x64 SP2 | no such key; running 5 min; addressed within 6 s; no re-idle 96 s | suspends right after start, no resume; keyboard unseen at +5, +20 and +40 s |
+| Windows Vista SP2 x86 | no boot-time suspend/resume pair; running 5 min; addressed; **survives the Balanced plan flip** (below) | boot-time pair; **halts 4 s after the same flip**; keyboard unseen for 40 s |
+| Windows 7 SP1 x86 | no `Services\USB` key at all; running 5 min, well past the 9 s mark; addressed within 10 s; no re-idle 101 s | halts between 10 and 20 s after start; keyboard unseen for 40 s |
+| Windows 7 SP1 x64 | no such key; running 5 min; addressed within 6 s; no re-idle 97 s | suspends before the desktop was reported, no resume; keyboard unseen at +5, +20 and +40 s |
+
+Four of those readings are worth singling out.
+
+- **Windows 7 x86 is the hardest case and it passes.** 5.3 measured the
+  value-less build halting 9 s after `StartController`; the control leg
+  reproduced it at 10 to 20 s, and the flag build ran five minutes and saw
+  the hot-plug at once.
+- **Vista has no idle to prevent unless it is provoked**, so the discriminator
+  there is 5.4's own stimulus: `powercfg -setacvalueindex <Balanced> ...
+  48e6b7a6-... 1` followed by `-setactive`, the flip that rewrote
+  `HcDisableSelectiveSuspend` to 0 and killed the per-controller route. Under
+  the flag the controller was still running 3 min 35 s after the flip and
+  addressed a keyboard hot-plugged afterwards; the value-less control halted
+  4 s after the same `setactive` and never saw its keyboard. That is the
+  clearest evidence that the flag is not reachable from the power plan.
+- **Windows 2000 needed an explicit `DisableSelectiveSuspend = 0` on both
+  legs** or the two could not differ, for the reason section 6 gives: its
+  usbport defaults the absent value to 1. With that 0 in place the control
+  idled - the first Windows 2000 idle observed in this project - and the flag
+  build did not. That it is also the explanation of Phase 20's F18 remains the
+  static reading's claim; these boots did not test it.
+- **Windows XP x64 and Windows 7 x64 had never been read without the value at
+  all** (section 6's fourth bullet). They have now, on the amd64 build, and
+  both controls idle. One binary difference separates each pair of legs, and
+  one INF difference: `[Xhci.AddReg.Global]`, referenced from both install
+  routes in the previous INF and present only as a comment in the shipped one.
+
+Two cautions for anyone repeating this. **A clean shutdown logs
+`SuspendController` and then `StopController`** - that pair is the shutdown
+path and is not an idle; on XP and XP x64, where the controller had already
+idled, the shutdown appended only the `StopController`, usbport not suspending
+an already-suspended controller twice. And on three controls a single
+`ResumeController` landed after the last hot-plug reading and before the
+shutdown, with no device addressed in between; whether the unplug or the
+power-down drew it was not separated, and nothing in these verdicts rests on
+it.
+
+**Not yet read at run time:** Windows Vista x64, and the two SweetLow-stack
+9x targets (Windows 98 SE under SweetLow's USB 2.0 stack, and Windows ME).
+Until those are done, "read at run time on every target" is not a claim this
+repository can make. Every reading here is a virtual-machine reading; none of
+this has been taken on real hardware.
+
 ## 6. What is still open
 
 - Reproducing the defect, or checking the value, needs an observed
@@ -388,21 +462,22 @@ on the machine.
   candidate, not a promise.
 - PME# on real hardware (`USB_MINIPORT_FLAGS_WAKE_SUPPORT`) was never
   evaluated; the VM has no PCI Power Management capability to arm.
-- Vista x64 and Windows 7 x64 were never read without the value. Every run
-  on those guests installed a package that writes it.
-- **The flag of section 5.4 has not been read at run time on any target.**
-  Every reading behind it is static. The per-OS runtime legs - a clean
-  install of the new package on each target, an empty bus, a watch for
-  `SuspendController`, a hot-plug, and a control leg on the previous build
-  where the OS is known to idle - are the outstanding work, and Windows 7
-  x86 is the case that matters most because it is the one that idles in 9
-  seconds. Windows 2000's control leg needs an explicit
+- ~~Vista x64 and Windows 7 x64 were never read without the value.~~
+  **Windows 7 x64 was read without it on 2026-09-17** (section 5.5): its
+  control leg idles. Vista x64 still has not been, and its leg is outstanding.
+- ~~The flag of section 5.4 has not been read at run time on any target.~~
+  **Seven of the ten targets were read on 2026-09-17** (section 5.5), each
+  against a control leg that idles, Windows 7 x86's 9-second case included.
+  **Three remain: Vista x64, and the two SweetLow-stack targets** (Windows 98
+  SE under SweetLow, Windows ME), each of which needs its stack installed
+  before the legs can run. Windows 2000's control leg needs an explicit
   `DisableSelectiveSuspend = 0`, because its usbport defaults the value to 1
   when the WDM version check says 1.10 but not 1.20 and so never idles
   otherwise (static: NUSB `0x1082B`, SP4 `0x10890`; this is also what
-  explains Phase 20's F18). On Vista the plan's USB selective suspend
-  setting should be flipped to Enabled during the leg, since that is what
-  broke the registry route.
+  explains Phase 20's F18) - that is how its leg was run. On Vista x64 the
+  plan's USB selective suspend setting has to be flipped to Enabled during
+  the leg, as it was on Vista x86, since that is what broke the registry
+  route and it is the only discriminator Vista offers.
 - ~~`USBPORTBUSIF_UsbdQueryControllerType` hands the raw `MiniPortFlags` word
   to its callers on Vista and Windows 7, and those callers were not read.~~
   **Closed 2026-09-17** (section 5.4): no `usbhub.sys` on any of the four NT
