@@ -939,8 +939,15 @@ function Get-UploadSetRepairCommand {
     if ($null -eq $bound) { $bound = @{} }
     if ($bound.ContainsKey("Flavor")) { $cmd += " -Flavor " + ($Flavor -join ",") }
     if ($bound.ContainsKey("Arch")) { $cmd += " -Arch " + ($Arch -join ",") }
-    if ($bound.ContainsKey("ReleasesDir")) { $cmd += " -ReleasesDir '" + $ReleasesDir + "'" }
-    if ($bound.ContainsKey("UploadDir")) { $cmd += " -UploadDir '" + $UploadDir + "'" }
+    # Single-quoted, with an embedded apostrophe doubled - the one escape a
+    # single-quoted PowerShell string has (Codex review round 5: a path such
+    # as D:\O'Brien\ rendered as an unparseable line). The apostrophe is built
+    # from its code point so this file carries no doubled-apostrophe literal
+    # for the charset rules to trip on.
+    $q = [string][char]39
+    $quote = { param([string]$s) return $q + ($s -replace $q, ($q + $q)) + $q }
+    if ($bound.ContainsKey("ReleasesDir")) { $cmd += " -ReleasesDir " + (& $quote $ReleasesDir) }
+    if ($bound.ContainsKey("UploadDir")) { $cmd += " -UploadDir " + (& $quote $UploadDir) }
     return $cmd
 }
 

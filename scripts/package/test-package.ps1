@@ -1414,6 +1414,46 @@ try {
     Assert-True (-not ($releaserText -match '-UploadSetOnly -Version \{')) `
         "a repair hint still formats '-UploadSetOnly -Version {n}' by hand, bypassing Get-UploadSetRepairCommand."
 
+    # --- ...and the rendered line parses, apostrophes and all -----------------
+    #
+    # Codex review round 5: the paths were single-quoted with no escaping, so
+    # a directory such as D:\O'Brien\ rendered a line no shell could parse.
+    # This case EXECUTES the helper rather than grepping it: its body is
+    # loaded from make-release.ps1's text, driven with bound arguments naming
+    # such a path, and the line it renders is parsed with PowerShell's own
+    # parser and read back. The fixture is built by concatenation, because a
+    # doubled apostrophe inside a here-string is literal (AGENTS.md).
+    Write-Step "the repair command survives an apostrophe in a directory path"
+    $helperEnd = $helperText.IndexOf("`n}", $helperText.IndexOf('function Get-UploadSetRepairCommand'))
+    $helperBody = $helperText.Substring(0, $helperEnd + 2)
+    Invoke-Expression $helperBody
+    $apos = [string][char]39
+    $trickyDir = "D:\O" + $apos + "Brien\releases"
+    $Version = "9.9.9.9"
+    $Flavor = @("release")
+    $ReleasesDir = $trickyDir
+    $UploadDir = "D:\out"
+    $script:boundArgs = @{ ReleasesDir = $trickyDir; Flavor = $Flavor }
+    $rendered = Get-UploadSetRepairCommand
+    $tokens = $null; $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($rendered, [ref]$tokens, [ref]$parseErrors)
+    Assert-True ($parseErrors.Count -eq 0) ("the rendered repair command does not parse: " + $rendered)
+    $cmdAst = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)
+    $readBack = $null
+    if ($null -ne $cmdAst) {
+        for ($i = 0; $i -lt $cmdAst.CommandElements.Count - 1; $i++) {
+            $el = $cmdAst.CommandElements[$i]
+            if ($el -is [System.Management.Automation.Language.CommandParameterAst] -and $el.ParameterName -eq "ReleasesDir") {
+                $readBack = $cmdAst.CommandElements[$i + 1].Value
+            }
+        }
+    }
+    Assert-True ($readBack -eq $trickyDir) ("-ReleasesDir did not round-trip through the rendered repair command: got '" + $readBack + "' from " + $rendered)
+    Assert-True (-not $rendered.Contains("-UploadDir")) "the repair command carried -UploadDir although it was not among the bound arguments."
+    Assert-True ($rendered.Contains("-Flavor release")) "the repair command dropped the bound -Flavor."
+    Remove-Variable -Name Version, Flavor, ReleasesDir, UploadDir -ErrorAction SilentlyContinue
+    Remove-Variable -Name boundArgs -Scope Script -ErrorAction SilentlyContinue
+
     # --- the readme template may not carry the two claims 1.0.1.0 shipped ----
     #
     # roadmap Phase 20, F7. The rendered readme.txt is byte-identical to the

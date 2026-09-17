@@ -148,9 +148,9 @@ const char *hc_name(int hctype);
 #define QF_XUSB2PR    0x0001  /* Intel 7/8-series EHCI<->xHCI port routing */
 #define QF_FW_UPLOAD  0x0002  /* Renesas uPD720201/202: fw upload on ROM-less cards */
 #define QF_FW_SPI     0x0004  /* NEC uPD720200: fw from on-card SPI flash */
-#define QF_SPURIOUS   0x0008  /* spurious-success: trust residual length only */
+#define QF_SPURIOUS   0x0008  /* spurious Success event after a short packet on the same TD (ignore it) */
 #define QF_BEI        0x0010  /* mishandles BEI in isoch TRBs */
-#define QF_COMPLIANCE 0x0020  /* SS compliance-mode lockup (USB3-only, FYI) */
+#define QF_COMPLIANCE 0x0020  /* SS compliance-mode lockup (USB3-only, FYI; DMI-keyed in Linux, no row sets it) */
 #define QF_PME_STUCK  0x0040  /* PME wake latch bug (bites Win2000 power mgmt) */
 #define QF_BULK64K    0x0080  /* keep bulk TRB chains under 64 KB */
 #define QF_AVOID      0x0100  /* known-unreliable silicon */

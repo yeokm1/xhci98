@@ -6,22 +6,25 @@
  * not there, so the VIA 0x1106 and ASMedia 0x1B21 vendor IDs are from the
  * 2026-09-17 audit, not re-read from the mirror). Flags are of two kinds:
  *
- *   Linux-derived, one QF_ per Linux quirk bit: QF_XUSB2PR (pci-quirks.c's
- *   Intel port switchover), QF_COMPLIANCE (XHCI_COMP_MODE_QUIRK), QF_BEI
+ *   Linux-derived, one QF_ per Linux quirk bit keyed on the PCI ID: QF_BEI
  *   (XHCI_AVOID_BEI), QF_PME_STUCK (XHCI_PME_STUCK_QUIRK), QF_SPURIOUS
  *   (XHCI_SPURIOUS_SUCCESS), QF_BROKEN_MSI (XHCI_BROKEN_MSI), QF_FW_UPLOAD
  *   (xhci-pci-renesas.c's ROM-less firmware load).
  *
- *   This tool's own reading of a Linux mechanism, with no quirk bit of its
- *   own: QF_FW_SPI is what XHCI_NEC_HOST's Get Firmware command implies for
- *   the uPD720200 (the firmware is on the card and nothing is uploaded), and
- *   QF_AVOID on Etron is this project's verdict on a part Linux gives four
- *   quirk bits (XHCI_ETRON_HOST, XHCI_RESET_ON_RESUME, XHCI_BROKEN_STREAMS,
+ *   This tool's own reading of a Linux mechanism, with no per-ID bit of its
+ *   own: QF_XUSB2PR marks the PCH generations pci-quirks.c's Intel port
+ *   switchover has an EHCI to switch from (it is applied to every Intel
+ *   xHCI and keyed on an EHCI being present, not on an ID); QF_FW_SPI is
+ *   what XHCI_NEC_HOST's Get Firmware command implies for the uPD720200 (the
+ *   firmware is on the card and nothing is uploaded); QF_AVOID on Etron is
+ *   this project's verdict on a part Linux gives four quirk bits
+ *   (XHCI_ETRON_HOST, XHCI_RESET_ON_RESUME, XHCI_BROKEN_STREAMS,
  *   XHCI_NO_SOFT_RETRY), none of which this table has a flag for.
  *
  *   Defined and printed by report.c but set by no row since the 2026-09-17
- *   audit: QF_BULK64K (an ASM1042 claim no source supported) and QF_CMD_RETRY
- *   (a NEC/Renesas claim the mirror has no counterpart for).
+ *   audit: QF_BULK64K (an ASM1042 claim no source supported), QF_CMD_RETRY
+ *   (a NEC/Renesas claim the mirror has no counterpart for) and
+ *   QF_COMPLIANCE (XHCI_COMP_MODE_QUIRK is keyed on DMI strings, not an ID).
  *
  * Linux quirk bits this table has no flag for (streams, reset-on-resume,
  * 64-bit register zeroing, TRB overfetch) are named in the row comments. This
@@ -34,21 +37,39 @@
 #include "qual.h"
 
 static const QUIRK quirk_table[] = {
-    /* Intel 7/8-series: EHCI<->xHCI mux via XUSB2PR (config 0xD0) */
-    { 0x8086, 0x1E31, QF_XUSB2PR | QF_COMPLIANCE | QF_BEI,
+    /* Intel. xhci-pci.c:345-349 gives every Intel xHCI XHCI_AVOID_BEI, so
+     * QF_BEI is on every row. QF_PME_STUCK follows xhci-pci.c:371-380's
+     * list exactly (Sunrise Point-H/LP, Comet Lake PCH-H, and mobile parts
+     * this table does not carry); until the 2026-09-17 audit it also sat on
+     * 8C31, 8CB1, 8D31, A2AF and A36D, which the list does not name.
+     * XHCI_COMP_MODE_QUIRK is keyed on DMI strings (HP Z420/Z620/Z820/Z1,
+     * xhci.c:431-447), not on a PCI ID, so no row can carry QF_COMPLIANCE.
+     *
+     * The 7/8/9-series and C610 rows: pci-quirks.c's port switchover
+     * (usb_enable_intel_xhci_ports) is applied to every Intel xHCI and does
+     * nothing where no Intel EHCI exists, so keying QF_XUSB2PR on the four
+     * PCH generations that ship an EHCI is this tool's own reading; Skylake
+     * and later have no EHCI and no XUSB2PR.
+     *
+     * Fleet: 9D2F is the one row bare-metal runs in results/ have printed
+     * (ThinkPad E460); the other fleet machine, a Comet Lake-LP 02ED, has no
+     * row because the mirror has none (lessons.md, results/p14s-gen1-*). */
+    { 0x8086, 0x1E31, QF_XUSB2PR | QF_BEI,
       "Intel Panther Point (7-series PCH)" },
-    { 0x8086, 0x8C31, QF_XUSB2PR | QF_COMPLIANCE | QF_BEI | QF_PME_STUCK,
+    { 0x8086, 0x8C31, QF_XUSB2PR | QF_BEI,
       "Intel Lynx Point (8-series PCH)" },
-    { 0x8086, 0x8CB1, QF_XUSB2PR | QF_COMPLIANCE | QF_BEI | QF_PME_STUCK,
+    { 0x8086, 0x8CB1, QF_XUSB2PR | QF_BEI,
       "Intel Wildcat Point (9-series PCH)" },
-    { 0x8086, 0x8D31, QF_XUSB2PR | QF_COMPLIANCE | QF_BEI | QF_PME_STUCK,
+    { 0x8086, 0x8D31, QF_XUSB2PR | QF_BEI,
       "Intel Wellsburg (C610 PCH)" },
-
-    /* Intel Skylake+ (no EHCI, no XUSB2PR - ports hardwired to xHCI) */
-    { 0x8086, 0xA12F, QF_PME_STUCK, "Intel Sunrise Point-H (100-series)" },
-    { 0x8086, 0x9D2F, QF_PME_STUCK, "Intel Sunrise Point-LP (100-series)" },
-    { 0x8086, 0xA2AF, QF_PME_STUCK, "Intel Union Point (200-series)" },
-    { 0x8086, 0xA36D, QF_PME_STUCK, "Intel Cannon Point (300-series)" },
+    { 0x8086, 0xA12F, QF_BEI | QF_PME_STUCK,
+      "Intel Sunrise Point-H (100-series)" },
+    { 0x8086, 0x9D2F, QF_BEI | QF_PME_STUCK,
+      "Intel Sunrise Point-LP (100-series)" },
+    { 0x8086, 0xA2AF, QF_BEI, "Intel Union Point (200-series)" },
+    { 0x8086, 0xA36D, QF_BEI, "Intel Cannon Point (300-series)" },
+    { 0x8086, 0xA3AF, QF_BEI | QF_PME_STUCK,
+      "Intel Comet Lake PCH-H (400-series)" },
 
     /* NEC / Renesas. Linux's XHCI_NEC_HOST (every 0x1033 xHCI) does two
      * things: it queues a vendor NEC Get Firmware command at start and logs
