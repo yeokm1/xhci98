@@ -29687,6 +29687,59 @@ static void test_recovery_refuses_into_set_cnr(void)
     }
     CHECK_EQ(hcrstWrites, 1, "through exactly one HCRST, written once CNR "
                              "read clear");
+
+    /*
+     * **HCRST alone, with CNR already clear** (Codex round 2). CNR's clearing
+     * is not the reset ending - HCRST "is cleared to '0' by the Host
+     * Controller when the reset process is complete" (5.4.1) and step 3 of
+     * the sequence polls both bits - so a USBCMD reading HCRST = 1 is a reset
+     * in progress whatever USBSTS says, and the vector above, which set both,
+     * could not tell whether the preflight read HCRST at all.
+     */
+    XhciRegPacket.EnableInterrupts(&ext);
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] = HC_USBCMD_RSVDP_SEED | XHCI_USBCMD_HCRST;
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] = XHCI_USBSTS_HCH;
+    ext.ControllerFailed = 1;
+    ext.RecoveryRequested = 1;
+    asyncRequests = 0;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(asyncRequests, 1, "(the poll arms a recovery)");
+
+    writeCount = 0;
+    fire_async_timer();
+    CHECK_EQ(ext.RecoveryAttempts, 3, "the attempt ran");
+    CHECK_EQ(ext.RecoveryFailures, 2, "and refused");
+    CHECK_EQ(ext.RecoveryFailuresConsecutive, 1, "charged to a new run");
+    CHECK_EQ(ext.RecoveryLastStep, XHCI_INIT_STEP_RESET,
+             "at the reset step, on HCRST alone");
+    CHECK_EQ(ext.InitStep, XHCI_INIT_STEP_RESET, "(the step record agrees)");
+    CHECK_EQ(ext.RecoveryLastStatus & XHCI_USBSTS_CNR, 0,
+             "(with a USBSTS reading that shows CNR clear - HCRST was the "
+             "reason)");
+    CHECK_EQ(writeCount, 0,
+             "and no MMIO write at all - the reset it read is not re-issued");
+    CHECK_EQ(mmio[HC_OP(XHCI_OP_USBCMD) / 4] & XHCI_USBCMD_HCRST,
+             XHCI_USBCMD_HCRST, "the reset in progress is left in progress");
+    CHECK_EQ(ext.ControllerFailed, 1, "and the latch stands");
+
+    /* HCRST clears; the retry completes through exactly one HCRST. */
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] &= ~XHCI_USBCMD_HCRST;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(asyncRequests, 2, "the poll re-arms within the budget");
+    writeCount = 0;
+    fire_async_timer();
+    CHECK_EQ(ext.RecoveryCompletions, 2, "and the attempt completes");
+    CHECK_EQ(ext.RecoveryFailuresConsecutive, 0, "ending that run too");
+    CHECK_EQ(ext.ControllerFailed, 0, "with the failed latch open");
+    hcrstWrites = 0;
+    for (i = 0; i < writeCount; i++) {
+        if (writeOffset[i] == HC_OP(XHCI_OP_USBCMD) &&
+            (writeValue[i] & XHCI_USBCMD_HCRST) != 0) {
+            hcrstWrites++;
+        }
+    }
+    CHECK_EQ(hcrstWrites, 1, "through exactly one HCRST, written once HCRST "
+                             "read clear");
 }
 
 /*

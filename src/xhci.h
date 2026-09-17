@@ -3827,10 +3827,17 @@ typedef struct _XHCI_TRANSFER_QUEUE {
      *                       TRB this driver owns, so it is not an
      *                       `UnmatchedEvents` reading, and a conforming
      *                       controller raises one for every page-crossing isoch
-     *                       IN packet that ends short. Rises with
-     *                       `IsoGroupsAwaitingTail` on a controller that sends
-     *                       the tails; a gap between the two is one that drops
-     *                       them.
+     *                       IN packet that ends short. **Not comparable with
+     *                       `IsoGroupsAwaitingTail`**: this counts every
+     *                       packet's tail, that counts only groups whose *last*
+     *                       packet was answered by an event short of
+     *                       `LastIndex`, so an interior short packet raises
+     *                       this by one and that by nothing (Codex round 2).
+     *                       The dropped-tail reading is the one above -
+     *                       `IsoGroupsAwaitingTail` rising while `Completed`
+     *                       does not; this counter only says the controller
+     *                       sends tails at all, and nothing about the ones it
+     *                       did not.
      */
     ULONG IsoPackets;
     ULONG IsoPacketsAnswered;

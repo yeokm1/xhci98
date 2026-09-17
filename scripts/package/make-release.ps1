@@ -849,10 +849,54 @@ function Get-UploadSetPaths {
     # belongs to. The archive carries no top-level directory - every entry is
     # written relative to the upload root - so this name is the only thing the
     # download says about itself until it is unpacked.
-    param([string]$UploadDir, [string]$Version)
+    #
+    # **-Staged names the same two under a `.staging` suffix.** The ordinary
+    # cut assembles the set BEFORE the publish swap (the 2026-09-17 audit's
+    # D5), and assembling it straight onto the final names there deleted the
+    # previous asset and overwrote the versioned zip while the swap could still
+    # fail and roll the tracked release back - leaving the old release paired
+    # with the new release's zip (Codex review round 2). So the pre-swap set is
+    # built under these names and renamed onto the final ones only once both
+    # renames of the swap have succeeded; a rollback removes the staged pair
+    # and never touches a pre-existing asset. -UploadSetOnly, which publishes
+    # nothing, writes the final names directly.
+    param([string]$UploadDir, [string]$Version, [switch]$Staged)
+    $suffix = if ($Staged) { ".staging" } else { "" }
     return [pscustomobject]@{
-        Root = Join-Path $UploadDir ("upload-" + $Version)
-        Zip  = Join-Path $UploadDir ("xhci98-" + $Version + ".zip")
+        Root = Join-Path $UploadDir ("upload-" + $Version + $suffix)
+        Zip  = Join-Path $UploadDir ("xhci98-" + $Version + ".zip" + $suffix)
+    }
+}
+
+# Move a set New-UploadSet built with -Staged onto its final names. Called only
+# after the publish swap has completed, so this is the first moment the previous
+# asset is touched. Directory then zip, the zip last, because the zip is the
+# thing a reader looks for: a failure between the two leaves the final zip
+# absent or the previous one in place, never a new zip beside an old tree.
+function Publish-UploadSet {
+    param([Parameter(Mandatory = $true)]$Set)
+    if ($null -eq $Set.Final) { throw "Publish-UploadSet was handed a set that was not built with -Staged." }
+    if (Test-Path -LiteralPath $Set.Final.Root) {
+        Remove-Item -LiteralPath $Set.Final.Root -Recurse -Force
+    }
+    Move-Item -LiteralPath $Set.Root -Destination $Set.Final.Root
+    if (Test-Path -LiteralPath $Set.Final.Zip) {
+        Remove-Item -LiteralPath $Set.Final.Zip -Force
+    }
+    Move-Item -LiteralPath $Set.Zip -Destination $Set.Final.Zip
+    return $Set.Final
+}
+
+# The rollback half: a staged set whose cut did not publish is removed, and
+# whatever asset was there before the run is left exactly as it was. Best
+# effort - this runs on the failure path, where a second error would hide the
+# first.
+function Remove-StagedUploadSet {
+    param([Parameter(Mandatory = $true)]$Set)
+    foreach ($p in @($Set.Root, $Set.Zip)) {
+        if (Test-Path -LiteralPath $p) {
+            Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -1009,7 +1053,13 @@ function New-UploadSet {
         [hashtable]$PkgDirs,
         [string]$UploadDir,
         [string]$Repo,
-        [string[]]$Publishable
+        [string[]]$Publishable,
+        # Build under the `.staging` names of Get-UploadSetPaths -Staged; the
+        # caller moves the result onto the final names with Publish-UploadSet
+        # once its publish has succeeded, or drops it with
+        # Remove-StagedUploadSet. Without it the final names are written
+        # directly, which is what -UploadSetOnly wants.
+        [switch]$Staged
     )
 
     $missingArch = @($Flavors | Where-Object { -not $LegArches.ContainsKey($_) })
@@ -1026,13 +1076,23 @@ function New-UploadSet {
 
     # Named in Get-UploadSetPaths, beside the early containment check that
     # names the same two.
-    $paths = Get-UploadSetPaths -UploadDir $UploadDir -Version $Version
+    $paths = Get-UploadSetPaths -UploadDir $UploadDir -Version $Version -Staged:$Staged
     $uploadRoot = $paths.Root
     $uploadZip = $paths.Zip
+    $finalPaths = $null
+    if ($Staged) {
+        $finalPaths = Get-UploadSetPaths -UploadDir $UploadDir -Version $Version
+        # The final names are checked too: they are what Publish-UploadSet
+        # writes later, from a place that has no PublishedRoot to check against.
+        Assert-UploadSetOutsideRelease -UploadRoot $finalPaths.Root -UploadZip $finalPaths.Zip `
+                                       -PublishedRoot $PublishedRoot -ReleasesRoot $ReleasesDir
+    }
 
     Assert-UploadSetOutsideRelease -UploadRoot $uploadRoot -UploadZip $uploadZip `
                                    -PublishedRoot $PublishedRoot -ReleasesRoot $ReleasesDir
 
+    # Under -Staged these are the `.staging` names, so a leftover from an
+    # interrupted run is what goes here and the previous asset is untouched.
     if (Test-Path -LiteralPath $uploadRoot) {
         Remove-Item -LiteralPath $uploadRoot -Recurse -Force
     }
@@ -1299,8 +1359,13 @@ $gateOut
     }
     Write-Ok ("zipped to {0} ({1:N0} B)" -f $uploadZip, (Get-Item -LiteralPath $uploadZip).Length)
 
-    return [pscustomobject]@{ Root = $uploadRoot; Zip = $uploadZip }
+    return [pscustomobject]@{ Root = $uploadRoot; Zip = $uploadZip; Final = $finalPaths }
 }
+
+# The upload set the ordinary cut has built but not yet published, for the
+# failure path at the bottom: a cut that throws with this set still staged
+# removes it and leaves any previous asset as it was.
+$stagedUpload = $null
 
 try {
     if ($UploadSetOnly -and $SkipUploadSet) {
@@ -3838,6 +3903,13 @@ after checkout. Restore it with:  git checkout -- LICENSE
     # the zip entries are named relative to that copy, and the readme was
     # rendered into the staging tree above with no path in it - so the bytes
     # are the ones a post-swap run produced.
+    #
+    # **And built under the `.staging` names, published after the swap.** The
+    # previous asset - `upload-<version>\` and `xhci98-<version>.zip` from an
+    # earlier -Force cut of this version - is not touched here; it is replaced
+    # by Publish-UploadSet below only once both renames of the swap have
+    # succeeded, and a swap that fails removes the staged pair and leaves it
+    # (Codex review round 2 on D5).
     $uploadRoot = $null
     $uploadZip = $null
     if (-not $SkipUploadSet) {
@@ -3855,9 +3927,8 @@ after checkout. Restore it with:  git checkout -- LICENSE
         $set = New-UploadSet -PublishedRoot $destRoot -Version $Version -Flavors $legDirs `
                              -LegArches $legArches `
                              -PkgDirs $pkgDirs -UploadDir $UploadDir -Repo $repo `
-                             -Publishable $publishable
-        $uploadRoot = $set.Root
-        $uploadZip = $set.Zip
+                             -Publishable $publishable -Staged
+        $stagedUpload = $set
     }
 
     # --- publish: replace the destination only now ---------------------------
@@ -3917,6 +3988,15 @@ after checkout. Restore it with:  git checkout -- LICENSE
     }
     $destRoot = $finalRoot
 
+    # --- the upload set onto its final names, now that the release is published
+    if ($null -ne $stagedUpload) {
+        $final = Publish-UploadSet -Set $stagedUpload
+        $stagedUpload = $null
+        $uploadRoot = $final.Root
+        $uploadZip = $final.Zip
+        Write-Ok ("upload set published as {0}" -f $uploadZip)
+    }
+
     # --- summary -------------------------------------------------------------
     Write-Host ""
     foreach ($item in (Get-ChildItem -LiteralPath $destRoot -File -Recurse | Sort-Object FullName)) {
@@ -3955,6 +4035,12 @@ after checkout. Restore it with:  git checkout -- LICENSE
     }
 } catch {
     Write-Err $_.Exception.Message
+    if ($null -ne $stagedUpload) {
+        # The cut did not publish, so the set built for it goes, and the
+        # asset that was there before the run stays what it was.
+        Remove-StagedUploadSet -Set $stagedUpload
+        Write-Warn ("the staged upload set was removed; the previous {0}, if any, is untouched" -f $stagedUpload.Final.Zip)
+    }
     exit 1
 }
 

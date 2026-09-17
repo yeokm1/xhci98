@@ -942,6 +942,21 @@ static ULONG xhciReset(PXHCI_EXTENSION ext)
         XHCI_DBG_VALUE("reset: CNR still set before HCRST, USBSTS", value);
         return 0;
     }
+    /*
+     * HCRST too, because CNR clearing is not the reset ending: HCRST "is
+     * cleared to '0' by the Host Controller when the reset process is
+     * complete" (5.4.1, p.360), the sequence's step 3 polls both bits after a
+     * reset for that reason (docs/usb-xhci-info/xhci-programming.md,
+     * "Initialization Sequence"), and the read-modify-write below would carry
+     * a read 1 straight back as a second reset (Codex round 2).
+     */
+    if (!XhciWaitForBits(ext,
+                         ext->HcInfo.OperationalOffset + XHCI_OP_USBCMD,
+                         XHCI_USBCMD_HCRST, 0,
+                         XHCI_RESET_TIMEOUT_MS, &value)) {
+        XHCI_DBG_VALUE("reset: a previous HCRST has not cleared, USBCMD", value);
+        return 0;
+    }
 
     /* HCRST alone. Every other *defined* bit is reset by the operation anyway,
      * and the read value came from firmware - but the write still goes through
@@ -3842,6 +3857,7 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
 {
     MPSTATUS status;
     ULONG usbsts;
+    ULONG usbcmd;
     ULONG halted;
     KIRQL oldIrql;
 
@@ -3893,8 +3909,23 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
      * controller is left exactly as found, the latch stands, and the retry
      * is the next poll's (2026-09-17 audit, B7, Codex round 1).
      */
+    /*
+     * **And HCRST, which is the other half of "the reset is over" and not
+     * implied by CNR.** HCRST "is cleared to '0' by the Host Controller when
+     * the reset process is complete" (5.4.1, p.360), and the sequence's own
+     * step 3 polls both - "set USBCMD.HCRST = 1. Poll USBCMD.HCRST = 0 and
+     * USBSTS.CNR = 0" (docs/usb-xhci-info/xhci-programming.md, "Initialization
+     * Sequence") - because a controller may drop CNR while HCRST still reads 1
+     * or the other way round. A USBCMD reading HCRST = 1 is a reset in
+     * progress whatever CNR says, and the RMW the quiesce would perform on it
+     * carries the write-1-to-reset bit straight back (Codex round 2). The
+     * refusal is the same one, recorded with the USBSTS reading as every
+     * XHCI_INIT_STEP_RESET refusal is; the trace carries USBCMD.
+     */
     usbsts = XhciReadOp(ext, XHCI_OP_USBSTS);
-    if (usbsts != 0xFFFFFFFFUL && (usbsts & XHCI_USBSTS_CNR) != 0) {
+    usbcmd = XhciReadOp(ext, XHCI_OP_USBCMD);
+    if ((usbsts != 0xFFFFFFFFUL && (usbsts & XHCI_USBSTS_CNR) != 0) ||
+        (usbcmd != 0xFFFFFFFFUL && (usbcmd & XHCI_USBCMD_HCRST) != 0)) {
         (VOID)xhciInitFailed(ext, XHCI_INIT_STEP_RESET, usbsts,
                              MP_STATUS_HW_ERROR);
         ext->RecoveryFailures++;
@@ -3902,8 +3933,9 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
         ext->RecoveryLastStep = ext->InitStep;
         ext->RecoveryLastStatus = ext->InitStatus;
         XhciLogNote(ext, "ctrl.recover.refused", ext->InitStep);
-        XHCI_DBG_VALUE("recover: CNR still set from the previous reset - "
+        XHCI_DBG_VALUE("recover: the previous reset is still running - "
                        "refusing before touching a register, USBSTS", usbsts);
+        XHCI_DBG_VALUE("recover: ... and USBCMD", usbcmd);
         return 0;
     }
 

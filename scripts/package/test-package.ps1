@@ -1280,7 +1280,12 @@ try {
         # asset - the exact shape this list exists to prevent, one step later
         # than it was looking.
         @{ Name = "the upload assembly";       Find = '$set = New-UploadSet -PublishedRoot $destRoot' },
-        @{ Name = "the publish swap";          Find = 'Move-Item -LiteralPath $destRoot -Destination $finalRoot' }
+        @{ Name = "the publish swap";          Find = 'Move-Item -LiteralPath $destRoot -Destination $finalRoot' },
+        # ...and the set built before the swap reaches its final names only
+        # after it (Codex review round 2): built straight onto them, a swap
+        # that failed and rolled the release back left the OLD release beside
+        # the NEW release's zip.
+        @{ Name = "the upload publish";        Find = '$final = Publish-UploadSet -Set $stagedUpload' }
     )
     # The qemu refusal is not in that list because it is not in that sequence:
     # it fires at parameter time, before the first thing the list names, and
@@ -1311,6 +1316,33 @@ try {
         "make-release.ps1 removes the replaced release under Stop after the swap, so a held handle in it fails a cut whose publish already completed."
     Assert-True ($releaserText.Contains("'`$asideCheck' exists and '`$finalRoot' does not")) `
         "make-release.ps1's leftover-aside check no longer asks whether the published tree is beside it before calling the previous run interrupted."
+
+    # --- a failed swap leaves the previous asset in place ---------------------
+    #
+    # Codex review round 2 on the D5 reorder. The upload set is assembled
+    # before the swap, so it must be assembled under names that are not the
+    # previous asset's: the ordinary cut passes -Staged, Get-UploadSetPaths
+    # -Staged yields the `.staging` pair, New-UploadSet takes its paths from
+    # that call (so its delete-existing steps hit the staged names only), the
+    # final names are written by Publish-UploadSet after the swap (the ordering
+    # list above), and the outer catch removes the staged pair so a rollback
+    # leaves neither a stale staged set nor a touched previous asset.
+    # -UploadSetOnly publishes nothing and writes the final names directly.
+    Write-Step "a failed publish swap leaves the previous upload set and zip untouched"
+    Assert-True ($releaserText.Contains('-Publishable $publishable -Staged')) `
+        "make-release.ps1's ordinary cut no longer assembles the upload set with -Staged, so a swap that fails leaves the old release beside the new release's zip."
+    Assert-True ($releaserText.Contains('Get-UploadSetPaths -UploadDir $UploadDir -Version $Version -Staged:$Staged')) `
+        "New-UploadSet no longer takes its paths from Get-UploadSetPaths -Staged, so its delete-existing and zip steps would hit the final names before the swap."
+    Assert-True ($releaserText.Contains('("upload-" + $Version + $suffix)') -and $releaserText.Contains('+ ".zip" + $suffix)') -and $releaserText.Contains('".staging"')) `
+        "Get-UploadSetPaths -Staged no longer names the set under a .staging suffix, so a staged assembly would overwrite the previous asset."
+    $catchAt = $releaserText.LastIndexOf('} catch {')
+    $catchText = $releaserText.Substring($catchAt)
+    Assert-True ($catchText.Contains('Remove-StagedUploadSet -Set $stagedUpload')) `
+        "make-release.ps1's outer catch no longer removes the staged upload set, so a rolled-back cut leaves a .staging pair behind."
+    $usoStart = $releaserText.IndexOf('if ($UploadSetOnly) {')
+    $usoEnd = $releaserText.IndexOf('exit 0', $usoStart)
+    Assert-True ($usoStart -ge 0 -and $usoEnd -gt $usoStart -and -not $releaserText.Substring($usoStart, $usoEnd - $usoStart).Contains('-Staged')) `
+        "-UploadSetOnly assembles with -Staged, but nothing publishes a staged set in that mode, so it would leave .staging names and no asset."
 
     # --- the readme template may not carry the two claims 1.0.1.0 shipped ----
     #
