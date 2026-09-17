@@ -347,12 +347,32 @@ inverted to refuse either registry spelling anywhere in either file.
 but it is worth recording that it was never found wrong, only too wide. Every
 reading in sections 4 and 5.3 stands.
 
-One thing about the flag is **not** closed, and section 6 carries it: on
-Vista and Windows 7 `USBPORTBUSIF_UsbdQueryControllerType` (Vista x86
-`0x2695B`, Win7 x86 `0x2692E`) returns the raw flags word to its caller, and
-the callers were not read. Inside usbport, state 3 and state 4 are
-indistinguishable; above it, a caller could tell the flag apart from the
-value this package used to write.
+One loose end was chased down on 2026-09-17 and is closed. On Vista and
+Windows 7 the bus-interface routine `USBPORTBUSIF_UsbdQueryControllerType`
+hands the raw `MiniPortFlags` word out to whoever holds the USBDI interface -
+`mov ecx,[fdo+310h]` / `mov ecx,[ecx+20h]` / store to the caller's first
+output parameter (Vista x86 `0x26955`, and `interface+0x20` is confirmed as
+`MiniPortFlags` by the identical addressing in `USBPORT_OpenEndpoint`'s
+`0x800` test at `0x1FB05`). That is the one place above usbport where
+something could tell the flag's state 4 apart from the machine-wide value's
+state 3, since inside usbport every reader treats them alike.
+
+**Nothing calls it.** The routine is stored at bus-interface offset `0x2C` on
+x86 (Vista `0x2279F`... `0x227DE`, Windows 7 `0x21492`) and `0x58` on amd64
+(Vista x64 `0x212F7`, Windows 7 x64 `0x1D20D`). A byte sweep for every
+indirect call through that slot across all four NT 6.x `usbhub.sys` images
+finds **zero**, while the neighbouring slots used as controls - `GetUSBDIVersion`
+and `QueryBusTime` - find 4 and 5 on each x86 build and 3 and 4 on each x64
+one, which is what says the sweep works. The handful of `mov reg,[reg+2Ch]`
+loads in the x86 hubs were read and are unrelated: a stack parameter in
+`UsbhException`, a field-pair copy in `UsbhGetHubDeviceInformation`, one
+mid-instruction byte coincidence in `UsbhDisableTimerObject`, and Windows 7's
+WPP trace cleanup.
+
+The bounded form of the claim: the hub driver is the USBDI interface's
+consumer on these systems and it never asks. A third-party driver on a
+particular machine could ask, and no reading here can enumerate what is not
+on the machine.
 
 ## 6. What is still open
 
@@ -383,12 +403,13 @@ value this package used to write.
   explains Phase 20's F18). On Vista the plan's USB selective suspend
   setting should be flipped to Enabled during the leg, since that is what
   broke the registry route.
-- **`USBPORTBUSIF_UsbdQueryControllerType` hands the raw `MiniPortFlags`
-  word to its callers on Vista and Windows 7** (Vista x86 `0x2695B`, Win7
-  x86 `0x2692E`), and those callers were not read. Inside usbport the flag's
-  state 4 and the machine-wide value's state 3 are indistinguishable to
-  every reader; this is the one place above usbport where something could
-  tell them apart, and it is the only gap in the flag sweep.
+- ~~`USBPORTBUSIF_UsbdQueryControllerType` hands the raw `MiniPortFlags` word
+  to its callers on Vista and Windows 7, and those callers were not read.~~
+  **Closed 2026-09-17** (section 5.4): no `usbhub.sys` on any of the four NT
+  6.x builds calls that slot at all. What remains is not a gap in the reading
+  but a limit on what any reading here can cover - a third-party driver
+  holding the USBDI interface on a particular machine could ask, and this
+  repository cannot enumerate what is not on the machine.
 
 ## 7. Lessons the record kept
 

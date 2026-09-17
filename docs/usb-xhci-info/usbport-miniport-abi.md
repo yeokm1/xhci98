@@ -844,12 +844,25 @@ of which load is the flags word: `0x1094C mov ecx,[eax+14h]` loads packet+4
 neighbours test `0x80`, `0x200` and `0x1` - POLLING, WAKE_SUPPORT and
 INTERRUPT, in a group that only the flags word can be.
 
-**One gap, and it is stated rather than closed.** On Vista and Windows 7
-`USBPORTBUSIF_UsbdQueryControllerType` (Vista x86 `0x2695B`, Windows 7 x86
-`0x2692E`) returns the raw flags word to its caller, and the callers were not
-read. Inside usbport nothing can tell state 4 from state 3; above it,
-something could. `docs/issues/05-idle-suspend-and-disableselectivesuspend.md`
-section 6 carries this as open.
+**The one route out of usbport, and it is unused.** On Vista and Windows 7 the
+bus-interface routine `USBPORTBUSIF_UsbdQueryControllerType` (Vista x86
+`0x2691D`, Windows 7 x86 `0x268F0`) hands the raw flags word to whoever holds
+the USBDI interface: `mov ecx,[fdo+310h]` / `mov ecx,[ecx+20h]` / store to the
+first output parameter (Vista x86 `0x26955`). `interface+0x20` is the flags
+word, confirmed by the identical addressing in `USBPORT_OpenEndpoint`'s `0x800`
+test at `0x1FB05`. Inside usbport nothing can tell state 4 from state 3; this
+is the only place above it that could.
+
+Nothing calls it. The slot is `interface+0x2C` on x86 (the table built in
+`USBPORT_GetBusInterfaceUSBDI`: Vista `0x227DE`, Windows 7 `0x21492`) and
+`interface+0x58` on amd64 (Vista x64 `0x212F7`, Windows 7 x64 `0x1D20D`). A
+byte sweep for every indirect call through that slot over all four NT 6.x
+`usbhub.sys` images returns zero; the adjacent slots `GetUSBDIVersion` and
+`QueryBusTime`, swept the same way as controls, return 4 and 5 per x86 build
+and 3 and 4 per x64 build. The few `mov reg,[reg+2Ch]` loads in the x86 hubs
+are unrelated and were each read. The claim is bounded by what is on the
+machine: the hub driver never asks, and a third-party holder of the interface
+is not something a reading here can enumerate.
 
 ### Bus bandwidth [usbmport.h:541-542]
 

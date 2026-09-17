@@ -2810,11 +2810,14 @@ and they are the phase's other half rather than a coda to the first.
         one that matters most** - it idles 9 s after the start.
         `out\post-release\issue5-ssflag\` holds the prepared harness (ten
         launchers on monitors 57110-57119, `prepare.ps1`, the per-OS plan)
-  - [ ] the one open static item, if the owner wants it closed before the
-        cut: the callers of `USBPORTBUSIF_UsbdQueryControllerType` on Vista
-        and Windows 7 (x86 `0x2695B` / `0x2692E`), which receive the raw
-        `MiniPortFlags` word. Inside usbport the flag's state is
-        indistinguishable from the value's; above it, nothing was read
+  - [x] the last open static item, closed 2026-09-17: the callers of
+        `USBPORTBUSIF_UsbdQueryControllerType`, the one route by which the raw
+        `MiniPortFlags` word leaves usbport. There are none - no NT 6.x
+        `usbhub.sys` calls that slot (`interface+0x2C` x86, `+0x58` amd64),
+        against 4 and 5 calls per x86 build and 3 and 4 per x64 build on the
+        two adjacent slots swept as controls. Bounded to the OS's own
+        drivers; a third-party holder of the USBDI interface is not something
+        a reading here can enumerate
 
 Checkpoint, the first half. Every clause, on **each** of the two guests, or
 the phase is not closed:

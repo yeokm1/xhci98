@@ -129,6 +129,15 @@ static VOID xhciArmRecovery(PXHCI_EXTENSION ext);
  * defaults that setting to Enabled on battery, so the registry route loses
  * the fix on any laptop that unplugs. The flag is outside that setter's
  * reach: it refuses unless the state is 1 or 2, and the flag's state is 4.
+ *
+ * The one route by which the flags word leaves usbport is the bus-interface
+ * routine USBPORTBUSIF_UsbdQueryControllerType, which copies it to its
+ * caller. Nothing calls it: a sweep of every indirect call through that slot
+ * (interface+0x2C on x86, +0x58 on amd64) in all four NT 6.x usbhub.sys
+ * builds returns zero, against 3 to 5 on each of the two adjacent slots swept
+ * as controls. That is bounded to the OS's own drivers - a third-party holder
+ * of the USBDI interface could ask, and no static reading here can enumerate
+ * what is not on the machine.
  */
 #define XHCI_MINIPORT_VERSION USB_MINIPORT_VERSION_EHCI
 #define XHCI_MINIPORT_FLAGS                                        \
