@@ -2776,7 +2776,7 @@ and they are the phase's other half rather than a coda to the first.
   - [ ] a re-cut, if one is needed, under the same number with `-Force` while
         nothing has been uploaded - recorded here and not in the `history.md`
         entry, for the embedding reason `releases/README.md` gives
-- [ ] **22.11 - issue 5's mechanism replaced, and read on every target.**
+- [x] **22.11 - issue 5's mechanism replaced, and read on every target.**
       The owner's instruction of 2026-09-16: stop writing the machine-wide
       `Services\USB\DisableSelectiveSuspend`, and confirm the replacement
       against each OS's own `usbport.sys`. **This is a prerequisite of 22.10,
@@ -2796,7 +2796,7 @@ and they are the phase's other half rather than a coda to the first.
         `HcDisableSelectiveSuspend` to 0 and suspending the controller at once
   - [x] the code, both INFs, the INF gate and its self-tests, the two
         footprints, the packager's readme template, and the documents
-  - [ ] **the runtime legs, one per target, owner at the console.** Each:
+  - [x] **the runtime legs, one per target, owner at the console.** Each:
         a clean disk with the new package, an empty bus, five minutes watched
         for `cb SuspendController`, `USBCMD`/`USBSTS` off the monitor, a
         hot-plugged `usb-kbd`, then an unplug and 90 s. Plus a CONTROL leg on
@@ -2810,14 +2810,15 @@ and they are the phase's other half rather than a coda to the first.
         one that matters most** - it idles 9 s after the start.
         `out\post-release\issue5-ssflag\` holds the prepared harness (ten
         launchers on monitors 57110-57119, `prepare.ps1`, the per-OS plan).
-        **9 of 10 done, 2026-09-17, all PASS with a valid control**: Windows
-        98 SE + NUSB, Windows 98 SE + SweetLow's stack, Windows 2000 SP4, Windows XP x86, Windows XP x64,
+        **All 10 done, 2026-09-17, all PASS with a valid control**: Windows
+        98 SE + NUSB, Windows 98 SE + SweetLow's stack, Windows ME +
+        SweetLow's stack, Windows 2000 SP4, Windows XP x86, Windows XP x64,
         Vista x86 and Vista x64 (both on the plan flip), Windows 7 x86,
-        Windows 7 x64. XP x64, Vista x64 and Windows 7 x64 were the first
-        readings of those systems without the value at all. **Outstanding:
-        me** - the box stays unticked until all ten are read.
-        The readings are written up in issue 5 section 5.5 (Vista x64's
-        per-run detail included) and their provenance row in
+        Windows 7 x64. ME, XP x64, Vista x64 and Windows 7 x64 were the
+        first readings of those systems without the value at all. Virtual
+        machines only; 22.10 is no longer waiting on this task.
+        The readings are written up in issue 5 section 5.5 (per-run detail for
+        Vista x64 and the two SweetLow-stack targets included) and their provenance row in
         `legal-provenance.md` section 4
   - [x] the last open static item, closed 2026-09-17: the callers of
         `USBPORTBUSIF_UsbdQueryControllerType`, the one route by which the raw

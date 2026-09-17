@@ -378,9 +378,8 @@ on the machine.
 
 Section 5.4's case is static: nine disassemblies and a bit swept for every
 reader. On 2026-09-17 the flag was put in front of the operating systems
-themselves, one clean install at a time. Nine of the ten targets have been
-read; one has not (below), so this section is a record in progress and no
-roadmap box is ticked on it.
+themselves, one clean install at a time, and by that evening all ten targets
+had been read, each against a control that idles.
 
 **What a leg is.** Per target, one clean disk copy, two throw-away overlays
 over it, and the `qemu` build on both. The *test* leg installs the `1.1.0.0`
@@ -400,6 +399,7 @@ device and `Device 0.0` for one the stack never saw.
 |---|---|---|
 | Windows 98 SE + NUSB 3.3 | running 5 min, no `SuspendController`; keyboard addressed within 5 s; no re-idle 90 s after the unplug | suspends right after start; keyboard unseen for 40 s |
 | Windows 98 SE + SweetLow's USB 2.0 stack | running 5 min, no `SuspendController`; keyboard addressed within 5 s; no re-idle 132 s after the unplug | suspends right after start; keyboard unseen at +5, +20 and +40 s |
+| Windows ME + SweetLow's USB 2.0 stack | running 5 min, no `SuspendController`; keyboard addressed within 5 s; no re-idle 93 s after the unplug | suspends right after start; keyboard unseen at +5, +20 and +40 s |
 | Windows 2000 SP4 | running 5 min; addressed within 8 s; no re-idle 102 s | suspends shortly after start; keyboard unseen for 40 s |
 | Windows XP SP3 x86 | no `Services\USB` key at all; running 5 min; addressed within 5 s; no re-idle 96 s | halts within about 45 s of launch; keyboard unseen at +5, +20 and +40 s |
 | Windows XP x64 SP2 | no such key; running 5 min; addressed within 6 s; no re-idle 96 s | suspends right after start, no resume; keyboard unseen at +5, +20 and +40 s |
@@ -440,10 +440,10 @@ Two cautions for anyone repeating this. **A clean shutdown logs
 `SuspendController` and then `StopController`** - that pair is the shutdown
 path and is not an idle; on XP and XP x64, where the controller had already
 idled, the shutdown appended only the `StopController`, usbport not suspending
-an already-suspended controller twice. And on five controls a single
+an already-suspended controller twice. And on six controls a single
 `ResumeController` landed after the last hot-plug reading and before the
 shutdown, with no device addressed in between; whether the unplug or the
-power-down drew it was not separated on four of them, and nothing in these
+power-down drew it was not separated on five of them, and nothing in these
 verdicts rests on it. On Vista x64 the unplug did not draw it within 42 s (the
 controller was still halted then), so there it came with or after the
 power-down.
@@ -545,10 +545,51 @@ describes, and again unplug and shutdown were not separated.
 flag keeps the controller out of the idle that the value-less previous build
 enters right after start.
 
-**Not yet read at run time:** Windows ME, under SweetLow's stack.
-Until that is done, "read at run time on every target" is not a claim this
-repository can make. Every reading here is a virtual-machine reading; none of
-this has been taken on real hardware.
+**Windows ME under SweetLow's USB 2.0 stack (2026-09-17 evening).** From
+`winme.img @ winme-clean-install`, the ME CD attached, with the same extra
+overlay under both legs: stock ME has no `usbport.sys`, so on it the owner
+installed SweetLow's `USB2.INF` from the transfer drive and shut down from
+the Start menu, and it was made read-only under both legs. Every boot of
+both legs logged `USBPORT_GetHciMn=10000001`. The same two x86 builds. ME had
+never been read without the value before this, with or without the flag.
+
+*Test leg.* Installed through the Add New Hardware wizard (Advanced,
+Removable Media unticked, `D:\`), with no CD prompt. Read offline before the
+observation boot: `SYSTEM.DAT` held no `DisableSelectiveSuspend` or
+`HcDisableSelectiveSuspend`, SweetLow's `USBPORT.SYS` was in
+`System32\Drivers`, and `XHCI98.TMP` (163,088 bytes) waited on its
+`WININIT.INI` rename. On the observation boot (build stamp 13:13:02,
+`StartController` at line 23, BAR0 `0xfebf0000` - the first time it was
+recorded for this guest) `USBCMD`/`USBSTS` read `0x5`/`0x0` at eleven reads
+from 20:55:47 to 21:00:56; a keyboard hot-plugged at 21:01:06 was
+`Device 0.1` within 5 s (`devices addressed=00000001`, line 935); after its
+unplug at 21:01:40, seven reads from 3 s to 93 s stayed `0x5`/`0x0`. The
+log's only `SuspendController` (1342) sits directly before `StopController`
+(1347): the Start-menu shutdown.
+
+*Control leg.* The previous package installed the same way; offline, its
+`SYSTEM.DAT` held `DisableSelectiveSuspend` (one occurrence) and
+`XHCI98.TMP` was the 163,190-byte build. On the next boot the owner ran
+`regedit /s D:\DSSDEL.REG`, and Registry Editor then showed
+`HKLM\System\CurrentControlSet\Services\USB` holding only `(Default)`. On the
+observation boot (build stamp 13:20:38) `SuspendController` came at line 701,
+directly after start; the log stopped growing at 21:18:58 and
+`USBCMD`/`USBSTS` read `0x0`/`0x1` (halted) at 21:19:08 and 21:19:20. A
+keyboard hot-plugged at 21:19:21 was `Device 0.0` at +5, +20 and +40 s with
+the controller still halted and no `devices addressed=00000001`. It was
+unplugged at 21:20:04 and the owner shut down from the Start menu; a single
+`ResumeController` (705) landed between the +40 s read and the shutdown's
+`SuspendController` (834) and `StopController` (838), unplug and shutdown
+again not separated.
+
+**Verdict: PASS.** On ME, as on Windows 98 SE under the same stack, the flag
+keeps the controller out of the idle that the value-less previous build
+enters right after start.
+
+**All ten targets have now been read at run time**, each test leg against a
+control leg that idles. That is a claim about these ten operating systems in
+QEMU guests on the `qemu` build: every reading here is a virtual-machine
+reading, and none of this has been taken on real hardware.
 
 ## 6. What is still open
 
@@ -569,10 +610,10 @@ this has been taken on real hardware.
   control leg idles. **So was Vista x64, the same evening** (section 5.5): its
   control shows the boot-time pair and halts within 5 s of the plan flip.
 - ~~The flag of section 5.4 has not been read at run time on any target.~~
-  **Nine of the ten targets were read on 2026-09-17** (section 5.5), each
-  against a control leg that idles, Windows 7 x86's 9-second case, Vista x64
-  and Windows 98 SE under SweetLow's stack included. **One remains: Windows
-  ME**, which needs SweetLow's stack installed before its legs can run. Windows 2000's control leg needs an explicit
+  **All ten targets were read on 2026-09-17** (section 5.5), each against a
+  control leg that idles, Windows 7 x86's 9-second case, Vista x64 and both
+  SweetLow-stack 9x targets included; ME had never been read without the
+  value before. Virtual machines only. Windows 2000's control leg needs an explicit
   `DisableSelectiveSuspend = 0`, because its usbport defaults the value to 1
   when the WDM version check says 1.10 but not 1.20 and so never idles
   otherwise (static: NUSB `0x1082B`, SP4 `0x10890`; this is also what
