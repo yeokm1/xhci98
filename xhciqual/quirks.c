@@ -90,8 +90,10 @@ static const QUIRK quirk_table[] = {
       "Renesas uPD720202 (fw upload if ROM-less)" },
 
     /* ASMedia. Linux's PCI_DEVICE_ID_ASMEDIA_* names: 0x1142 is the ASM1042A
-     * and 0x1242 the ASM1142; the three newer parts carry only
-     * XHCI_NO_64BIT_SUPPORT, which cannot matter to a 32-bit-only driver.
+     * and 0x1242 the ASM1142; the three newer parts carry
+     * XHCI_NO_64BIT_SUPPORT, which cannot matter to a 32-bit-only driver,
+     * and the ASM1042A alone also XHCI_ASMEDIA_MODIFY_FLOWCONTROL (a
+     * vendor register written during reset; no flag here).
      * The ASM1042 gets XHCI_SPURIOUS_SUCCESS and XHCI_BROKEN_STREAMS (no
      * flag here for streams). It carried QF_BULK64K instead until the
      * 2026-09-17 audit; no source in this repository or in Linux supports a
