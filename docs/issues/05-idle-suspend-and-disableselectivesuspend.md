@@ -1,16 +1,26 @@
-# Issue 5 - A device plugged into an idle Windows 98 controller is seen by nothing, and why the package writes `DisableSelectiveSuspend`
+# Issue 5 - A device plugged into an idle Windows 98 controller is seen by nothing, and how the package stops the idle
 
-Status: fixed by one registry value, no driver code. The Windows 98 install
-path has written it since roadmap task 11-V.6; the NT path since release
-`1.0.1.0`, when Windows XP showed the same idle. The value is
-listed under "Known limitations" in `docs/using/release-notes.md` because
-it is machine-wide and outlives an uninstall.
+Status: fixed, and the fix has moved once. From roadmap task 11-V.6 to
+release `1.0.2.0` it was one registry value and no driver code: the
+machine-wide `Services\USB\DisableSelectiveSuspend`, on the Windows 98 path
+from 11-V.6 and on the NT path from `1.0.1.0`, when Windows XP showed the
+same idle. Since `1.1.0.0` it is one bit in the driver instead -
+`USB_MINIPORT_FLAGS_DISABLE_SS` (0x20) in the `MiniPortFlags` the miniport
+registers with - and **the INFs write no idle-suspend value at all**. Section
+5.4 is the reasoning and the readings; section 4 is how the original value
+was found, which is still how the defect is understood.
+
+The two mechanisms reach the same state inside usbport, so nothing about the
+defect or its cure changed - only what carries it, and what else it touches.
+Machines upgraded from `1.0.0.0` to `1.0.2.0` keep the old value, because it
+sits outside the devnode and no `DelReg` removes it; `docs/using/release-notes.md`
+says so and says how to delete it by hand.
 
 Targets affected: Windows 98 SE under either USB 2.0 stack (NUSB's
 `usbport.sys` and SweetLow's XP-lineage rebuild, both measured), Windows
 XP (measured in a virtual machine), and 32-bit Windows 7 (measured in a
-virtual machine, 2026-09-16, section 5). 32-bit Windows Vista was not seen
-idling this controller without the value in the same runs, although its
+virtual machine, 2026-09-16, section 5.3). 32-bit Windows Vista was not seen
+idling this controller without the fix in the same runs, although its
 stack reads the value; the x64 editions of both were not measured without
 it. Windows 2000 SP4's own stack
 was not seen idling this controller in any recorded run, with or without the
@@ -32,9 +42,11 @@ such bit. Three correct derivations of "how does a driver wake from this"
 each ended in a dead end. The fix came from a different question, "can the
 sleep be prevented", and from two strings in usbport's own binary: usbport
 reads `DisableSelectiveSuspend` from `Services\USB` and stops idling when it
-is 1. This page is the story; the mechanism's evidence is in
-[lessons.md](../contributing/lessons.md), "Batch 11-V stage A", and the
-shipped reasoning in the comment block above `[Xhci.AddReg.Global]` in
+is 1. What ships now says the same thing to the same code by a different
+route, the miniport flag of section 5.4. This page is the story; the
+mechanism's evidence is in [lessons.md](../contributing/lessons.md), "Batch
+11-V stage A", and the shipped reasoning in the comment block above
+`XHCI_MINIPORT_FLAGS` in `src/xhci_dispatch.c` and under "Idle suspend" in
 `src/xhci98.inf`. Where this page and those disagree, they win.
 
 ---
@@ -170,11 +182,14 @@ its evidence no longer exists. [lessons.md](../contributing/lessons.md) has
 the correction with addresses.
 
 With the value set: `SlotsEnabled` 1, `DevicesAddressed` 1, the wizard
-raised with no Refresh, `CheckCallbacks` climbing instead of frozen. One
-`AddReg` line, `[Xhci.AddReg.Global]` in `src/xhci98.inf`, delivered from
-four routes (the device install and the right-click Install on each target)
-because a Windows 98 update over an existing install can bugcheck before
-its registry phase and the value must still arrive.
+raised with no Refresh, `CheckCallbacks` climbing instead of frozen. That
+shipped as one `AddReg` line, `[Xhci.AddReg.Global]` in `src/xhci98.inf`,
+delivered from four routes (the device install and the right-click Install
+on each target) because a Windows 98 update over an existing install can
+bugcheck before its registry phase and the value must still arrive. It is
+what releases `1.0.0.0` to `1.0.2.0` carry; **section 5.4 is what replaced
+it in `1.1.0.0` and why**. Everything above this line is unaffected by that
+change - it is how the defect was found and what it is.
 
 The same reading was repeated under SweetLow's XP-lineage rebuild of
 usbport (value present: no suspend in four idle minutes, a
@@ -186,41 +201,57 @@ set, a keyboard plugged two minutes later still at address 0 after forty
 seconds, Refresh bringing `ResumeController` and the enumeration). The
 value has to be 1. Both readings are transcribed in `build-and-test.md`.
 
-## 5. Why the value is the fix rather than a workaround, and what it costs
+## 5. Why prevention is the fix rather than a workaround, and what carries it
+
+### 5.1 Why prevention
 
 The reason also says what any future wake path would have to overcome.
 `SuspendController` must halt: the save/restore path the miniport contract
 needs (`src/xhci_init.c`, the quiesce and the restore) rests on it, and a
 halted xHC cannot report a port change. Nothing the miniport can leave
 armed changes that. So the fix is to stop usbport asking for the idle, and
-usbport itself provides the switch.
+usbport provides more than one switch for that. Which switch is section 5.4;
+the cost is the same whichever it is:
 
-Three consequences, all in the release notes:
+**The controller never idles, which costs a little power.** That is the same
+trade Microsoft's own `HcDisableSelectiveSuspend` exists to let an
+administrator make. And the user cannot make it the other way while this
+package is installed - usbport refuses the root hub's "Allow the computer to
+turn off this device" while selective suspend is disabled by either
+mechanism, so the flag takes away no knob the value left standing.
+
+### 5.2 What `1.0.0.0` to `1.0.2.0` shipped, and the two costs that moved it
+
+The machine-wide value carried two further consequences, both stated in the
+release notes of those versions:
 
 1. It is global, under `Services\USB`, so it changes behaviour for every
    controller usbport drives on the machine, Microsoft's EHCI included. On
    an xHCI-only machine, where this driver is the whole USB stack, that is
-   the intent.
-2. The controller never idles, which costs a little power. That is the same
-   trade Microsoft's own `HcDisableSelectiveSuspend` exists to let an
-   administrator make.
-3. It outlives the devnode. An uninstall does not remove it, because the
+   the intent - but the package cannot know that a given machine is one.
+2. It outlives the devnode. An uninstall does not remove it, because the
    package cannot know whether something else wanted it. Delete it by hand,
    or set it to 0, to get the idle back.
+
+Those two are what the owner asked to be replaced on 2026-09-16, and section
+5.4 is the replacement. They still describe any machine upgraded from one of
+those releases: the value is still there and this package does not delete it.
+
+### 5.3 The NT 6.x readings of 2026-09-16
 
 Until `1.0.1.0` the NT install path omitted the value on the assumption
 that Windows 2000's native usbport never idles this controller. That was
 never measured (roadmap Phase 20, F18). What was measured is that Windows
 XP's usbport idles it about thirty seconds after a start with
-nothing attached, with the same invisible hot-plug, so the NT path writes
-the value too; on Windows 2000 it is the same machine-wide value with the
-same three consequences. The per-controller alternative was considered for
+nothing attached, with the same invisible hot-plug, so the NT path wrote
+the value too; on Windows 2000 it was the same machine-wide value with the
+same consequences. The per-controller alternative was considered for
 the NT path and not taken, on the strength of the 2026-08-13 boot in which it
 alone still idled the controller under NUSB's build, and because one
 mechanism on both paths is one thing to check. That reason fell on
 2026-09-16 (section 4).
 
-The NT 6.x install path, `[Xhci.Dev6.*]`, writes the value as well, and on
+The NT 6.x install path, `[Xhci.Dev6.*]`, wrote the value as well, and on
 2026-09-16 the question was asked of it directly on the two 32-bit guests,
 Vista SP2 and Windows 7 SP1 (runtime, `qemu` build, the committed
 `src/xhci98.inf`, the owner at the console). Each was read the way section
@@ -245,9 +276,83 @@ the controller at all, from an install start or from a boot.
   three minutes after it was unplugged. That is a bounded reading, five
   minutes, not a "never".
 
-So the value stays on the NT 6.x path: it is what makes hot-plug work on
-Windows 7, and on Vista it is the same machine-wide value with the same
-three consequences.
+Those two readings are why the NT 6.x path needed a mechanism at all, and
+they are what the replacement had to keep: Windows 7 is the hardest case on
+any target, at 9 seconds.
+
+### 5.4 What `1.1.0.0` ships: `USB_MINIPORT_FLAGS_DISABLE_SS`
+
+The owner asked on 2026-09-16 for the machine-wide value to be replaced, for
+5.2's two costs, and for the replacement to be confirmed against each OS's
+own `usbport.sys`. Three candidates were read.
+
+**The per-controller registry values.** `HcDisableSelectiveSuspend` on 9x and
+NT 5.x, `HcDisableAllSelectiveSuspend` on Windows 7 - which has no
+`HcDisableSelectiveSuspend` string at all - both read from the software key
+(`IoOpenDeviceRegistryKey` type 2), which is where a plain `HKR` under an
+install section writes. Statically they work on all nine builds: the start
+routine sets its "selective suspend allowed" flag only when the
+per-controller and the global values are both absent or 0, and the root hub's
+idle IOCTL is refused whenever that flag is clear. On Windows 98 they were
+measured working, twice under NUSB's usbport and twice under SweetLow's
+(section 4).
+
+They were refused on a runtime reading taken on a Vista x86 guest on
+2026-09-17. usbport's own `USBPORTBUSIF_ControllerSelectiveSuspend` writes
+`HcDisableSelectiveSuspend = !Enable` back to that key, and where the 9x, XP
+and 2000 hubs call it only from the root hub's "Allow the computer to turn
+off this device" checkbox - an explicit user action - Vista's `usbhub` also
+registers `UsbhPowerCallback` for `GUID_USB_SETTING_SELECTIVE_SUSPEND`
+(`48e6b7a6-50f5-4782-a5d4-53bb8f07e226`) at hub start, so the power plan
+reaches it with nobody touching anything. Measured: with the global value
+deleted and `HcDisableSelectiveSuspend = 1` in the controller's class key,
+the value survived a restart and the boot suspend/resume did not appear; then
+`powercfg -setacvalueindex <Balanced> ... 48e6b7a6-... 1` and `-setactive`
+rewrote it to **0** and `SuspendController` arrived at once, `USBCMD`
+`0x00000000` / `USBSTS` `0x00000001`. The Balanced plan ships that setting as
+Disabled on AC and **Enabled on battery**, so a laptop on `[Xhci.Dev6.*]`
+would lose the fix the moment it was unplugged. Vista and Windows 7 also
+share that one install section and do not share the value's name, so the
+registry route needed two spellings on one path.
+
+**The miniport flag, `USB_MINIPORT_FLAGS_DISABLE_SS` (0x20).** Taken. It is
+declared in the `USBPORT_REGISTRATION_PACKET` at registration, so it names
+this controller and nothing else, writes no registry key, and leaves nothing
+behind when the device goes.
+
+What it does was read on all nine builds rather than assumed, by sweeping
+every read of `MiniPortFlags` in each `.text` (37 to 65 per build, traced
+from usbport's copy of the packet) and then sweeping in reverse for every
+test of bit 5. **Bit 0x20 is tested exactly once per build, in the start
+routine, after the registry reads, and does nothing but force the
+selective-suspend-disabled state**: on NUSB (`0x109BC`), SweetLow (`0x11687`),
+SP4 (`0x10A2C`), XP x86 (`0x11862`) and XP x64 (`0x129A5`) it clears the FDO's
+"SS allowed" flag `0x800` and sets `0x08000000`; on Vista x86 (`0x2AB35`), x64
+(`0x14C7A`), Win7 x86 (`0x25308`) and x64 (`0x1427A`) it sets SS state 4.
+Every reader treats that identically to the state the machine-wide value
+produces (`0x08000000`, or state 3), and nothing tests the bit for S3/S4,
+D-state choice, wake, root-hub power or `EnIdleEndpointSupport`. So the flag
+reaches the same place the shipped value reached, by a route no OS path can
+undo: `ControllerSelectiveSuspend` refuses while `0x08000000` is set and
+refuses unless the NT 6.x state is 1 or 2, and the flag's state is 4.
+
+The flag costs the same power as the value and, like it, offers no user
+switch (5.1). It is a one-bit change in `XHCI_MINIPORT_FLAGS`
+(`src/xhci_dispatch.c`, `0x95` to `0xB5`) with a `C_ASSERT` holding it and a
+host-test row pinning the word; both INFs lost `[Xhci.AddReg.Global]` and
+every `AddReg=` reference to it, and the INF gate's `SUSP-*` rules were
+inverted to refuse either registry spelling anywhere in either file.
+
+**The global value, kept.** Not seriously - it is what was being replaced -
+but it is worth recording that it was never found wrong, only too wide. Every
+reading in sections 4 and 5.3 stands.
+
+One thing about the flag is **not** closed, and section 6 carries it: on
+Vista and Windows 7 `USBPORTBUSIF_UsbdQueryControllerType` (Vista x86
+`0x2695B`, Win7 x86 `0x2692E`) returns the raw flags word to its caller, and
+the callers were not read. Inside usbport, state 3 and state 4 are
+indistinguishable; above it, a caller could tell the flag apart from the
+value this package used to write.
 
 ## 6. What is still open
 
@@ -265,6 +370,25 @@ three consequences.
   evaluated; the VM has no PCI Power Management capability to arm.
 - Vista x64 and Windows 7 x64 were never read without the value. Every run
   on those guests installed a package that writes it.
+- **The flag of section 5.4 has not been read at run time on any target.**
+  Every reading behind it is static. The per-OS runtime legs - a clean
+  install of the new package on each target, an empty bus, a watch for
+  `SuspendController`, a hot-plug, and a control leg on the previous build
+  where the OS is known to idle - are the outstanding work, and Windows 7
+  x86 is the case that matters most because it is the one that idles in 9
+  seconds. Windows 2000's control leg needs an explicit
+  `DisableSelectiveSuspend = 0`, because its usbport defaults the value to 1
+  when the WDM version check says 1.10 but not 1.20 and so never idles
+  otherwise (static: NUSB `0x1082B`, SP4 `0x10890`; this is also what
+  explains Phase 20's F18). On Vista the plan's USB selective suspend
+  setting should be flipped to Enabled during the leg, since that is what
+  broke the registry route.
+- **`USBPORTBUSIF_UsbdQueryControllerType` hands the raw `MiniPortFlags`
+  word to its callers on Vista and Windows 7** (Vista x86 `0x2695B`, Win7
+  x86 `0x2692E`), and those callers were not read. Inside usbport the flag's
+  state 4 and the machine-wide value's state 3 are indistinguishable to
+  every reader; this is the one place above usbport where something could
+  tell them apart, and it is the only gap in the flag sweep.
 
 ## 7. Lessons the record kept
 
@@ -285,6 +409,19 @@ three consequences.
   per-controller value instead of a reading to repeat.
 - A value has to be checked for its content, not its presence: present and
   0 is absent.
+- **A setting that works is not the same as a setting that holds.** The
+  per-controller value was read correctly by every one of the nine builds
+  and would have passed any install-time check; what disqualified it is that
+  Vista's own power plan writes it back, on a callback nobody invokes by
+  hand, with a default that differs on battery. "Does the OS honour this?"
+  and "does the OS leave it alone?" are two questions, and only the first
+  one gets asked by default.
+- Where a mechanism can live in the driver or in the registry, the driver is
+  the narrower place. The registry value had to be delivered from four
+  install routes, survive an upgrade that bugchecks mid-install, outlive
+  nothing, and mean the same thing under two different names on two OS
+  families sharing one install section. The flag is one bit in a structure
+  this driver already fills in.
 
 ## Sources
 
@@ -297,14 +434,19 @@ three consequences.
   the SweetLow stack section (the reading under the XP-lineage rebuild),
   and "Windows Vista and Windows 7 target VMs" (the NT 6.x readings of
   section 5).
-- `src/xhci98.inf`, the comment block above `[Xhci.AddReg.Global]` (the
-  four delivery routes and the three consequences).
+- `src/xhci_dispatch.c`, the comment block above `XHCI_MINIPORT_FLAGS` (the
+  flag, the nine addresses it was read at, and why it replaced the value),
+  and `src/xhci98.inf` under "Idle suspend" (what the INF stopped writing
+  and what upgraders keep).
 - [release-notes.md](../using/release-notes.md), "Known limitations", the
   `DisableSelectiveSuspend` entry.
 - [roadmap.md](../contributing/roadmap.md): task 11-V.6, task 19.2 (the NT
   path), Phase 20 finding F18.
 - [legal-provenance.md](../contributing/legal-provenance.md) section 4: the
   static rows for `usbehci.sys` `SuspendController`, the usbport registry
-  reads, and the NT 6.x usbport strings.
+  reads, the NT 6.x usbport strings, and - for section 5.4 - the selective
+  suspend gate on all nine builds, the `MiniPortFlags` bit 0x20 sweep, the
+  hub callers of `ControllerSelectiveSuspend`, and the Vista x86 runtime row
+  for the power-plan rewrite.
 - xHCI 1.2c: Figure 4-34 and its note (p.294), section 4.19.3 (p.295),
   `USBSTS` (p.364).

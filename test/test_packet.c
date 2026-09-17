@@ -622,7 +622,17 @@ static void test_constants(void)
     /* The flag word both primary targets' own usbehci.sys declares. */
     CHECK_EQ(USB_MINIPORT_FLAGS_INTERRUPT | USB_MINIPORT_FLAGS_MEMORY_IO |
                  USB_MINIPORT_FLAGS_USB2 | USB_MINIPORT_FLAGS_POLLING,
-             0x95, "first-probe MiniPortFlags");
+             0x95, "usbehci.sys MiniPortFlags");
+    /* What this driver declares since 1.1.0.0: the same word plus DISABLE_SS,
+     * which is issue 5's fix - usbport must never idle-suspend an xHC, because
+     * a halted one cannot report a port change. XHCI_MINIPORT_FLAGS itself is
+     * private to xhci_dispatch.c and a C_ASSERT there is what holds the bit;
+     * this row pins the value that assert is about. */
+    CHECK_EQ(USB_MINIPORT_FLAGS_INTERRUPT | USB_MINIPORT_FLAGS_MEMORY_IO |
+                 USB_MINIPORT_FLAGS_USB2 | USB_MINIPORT_FLAGS_DISABLE_SS |
+                 USB_MINIPORT_FLAGS_POLLING,
+             0xB5, "xhci98.sys MiniPortFlags");
+    CHECK_EQ(USB_MINIPORT_FLAGS_DISABLE_SS, 0x0020, "DISABLE_SS bit position");
     /* Setting this one would silently zero MiniPortResourcesSize and skip the
      * DMA adapter, with no diagnostic anywhere. */
     CHECK_EQ(USB_MINIPORT_FLAGS_NO_DMA, 0x0100, "NO_DMA bit position");

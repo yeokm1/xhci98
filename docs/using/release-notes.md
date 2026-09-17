@@ -347,25 +347,35 @@ because a user meets them through this driver.
   choose Safe mode, put a working `XHCI98.SYS` back into
   `C:\WINDOWS\SYSTEM32\DRIVERS\` or remove the controller in Device Manager,
   then power-cycle. Recovery is complete and loses nothing.
-- The package writes `DisableSelectiveSuspend = 1` under
-  `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB`, a machine-wide
-  setting, on every target - the 64-bit INF writes it too - because a sleeping xHCI controller cannot report
-  a newly plugged device and Windows 98 otherwise idles it within a second
-  once nothing at all is on the bus (any attached device keeps it awake,
-  even one with no driver, so a laptop with internal USB devices never idles
-  it and the value changes nothing visible there; Windows XP idles it within
-  about half a minute of a start with nothing attached; 32-bit Windows 7
-  idles it within about ten seconds of a start with nothing attached, and
-  again about half a minute after the last device is unplugged;
-  32-bit Windows Vista was not seen idling it in five minutes without the
-  value, though its stack does read it, both measured in virtual machines
-  on 2026-09-16, and the x64 editions of both were not measured without it;
-  Windows 2000 SP4's own stack was never seen idling it, with or without
-  the value, measured in a virtual machine on 2026-09-06). It also
-  stops any other USB controller
-  idling, it slightly raises power draw, and an uninstall does not remove
-  it; delete the value by hand (or set it to 0, which has the same effect)
-  if you want the previous behaviour back.
+- This controller never goes to sleep, so it draws slightly more power, and
+  there is no way to turn that off. A sleeping xHCI controller cannot report
+  a newly plugged device, and Windows otherwise idles it once nothing at all
+  is on the bus: Windows 98 within a second, Windows XP within about half a
+  minute of a start with nothing attached, 32-bit Windows 7 within about ten
+  seconds of a start and again about half a minute after the last device is
+  unplugged. (Any attached device keeps it awake, even one with no driver, so
+  a laptop with internal USB devices never idles it and this changes nothing
+  visible there. 32-bit Windows Vista was not seen idling it in five minutes
+  either way, though its stack does read the setting; the x64 editions of
+  both were not measured. Windows 2000 SP4's own stack was never seen idling
+  it. All measured in virtual machines, 2026-09-06 and 2026-09-16.) The
+  driver tells Windows this as it registers, so **nothing outside the
+  device's own settings is written and no other controller is affected**.
+- **Upgrading from 1.0.0.0, 1.0.1.0 or 1.0.2.0: one machine-wide setting of
+  theirs stays behind.** Those releases did the same job by writing
+  `DisableSelectiveSuspend = 1` under
+  `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB`. It sits outside
+  the device's key, so neither an uninstall nor this upgrade removes it, and
+  this package deliberately does not delete it - on a machine with more than
+  one USB controller it may be doing a job for another one. It is harmless
+  beside the new mechanism; both say the same thing. Delete the value in
+  Registry Editor and restart if you want it gone. Why the change: it was
+  machine-wide, so it also stopped every other USB controller idling, and it
+  outlived the device that installed it. The obvious per-controller
+  replacement was tried and does not hold - on Windows Vista the power plan's
+  "USB selective suspend setting" rewrites it, and the Balanced plan enables
+  that on battery by default, which would have put the fault back on any
+  laptop that unplugged.
 - Every device plugged directly into a root port is reported to Windows as
   High Speed, whatever it is; Device Manager and USB tools show it so. This
   is deliberate: the USB stack this driver plugs into crashes the machine

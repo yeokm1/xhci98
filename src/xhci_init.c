@@ -3432,9 +3432,11 @@ VOID XhciSuspendController(PXHCI_EXTENSION ext)
      * because "this target idle-suspends at all" is a fact about the platform;
      * the rest are `power.suspends` in the counter block at flush.
      *
-     * Task 11-V.6's `DisableSelectiveSuspend` removes these on the shipping
-     * Win98 install path, which makes this cheaper and does not make it
-     * optional: the value is machine-wide and a machine can have it cleared.
+     * Task 11-V.6's `DisableSelectiveSuspend` removed these on the shipping
+     * Win98 install path, and since 1.1.0.0 the miniport flag
+     * USB_MINIPORT_FLAGS_DISABLE_SS does. Either way this stays: the record
+     * is cheap rather than optional, and a system suspend still reaches the
+     * suspend path with the flag set.
      */
     if (ext->SuspendCount == 1) {
         XhciLogNote(ext, "power.suspend.first", ext->Flags);

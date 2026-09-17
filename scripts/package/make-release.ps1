@@ -2734,15 +2734,18 @@ Two things are specific to this driver and worth knowing in advance:
     carries the USB 2.0 wires, and that is the path used. The SuperSpeed half
     of each connector is deliberately left switched off.
 
-  * INSTALLING CHANGES ONE MACHINE-WIDE SETTING, ON EVERY SYSTEM. It writes
-    DisableSelectiveSuspend = 1, which stops the USB stack putting the
-    controller to sleep. Without it Windows 98 sleeps the controller within
+  * THIS CONTROLLER NEVER GOES TO SLEEP, SO IT DRAWS SLIGHTLY MORE POWER.
+    Windows normally puts an idle USB controller to sleep - Windows 98 within
     about half a second of the last transfer, Windows XP within about half a
-    minute of a start with nothing attached and 32-bit Windows 7 within
-    about ten seconds, and a sleeping controller cannot notice anything
-    plugged in afterwards. It affects ANY USB
-    controller in the machine, and uninstalling does NOT remove it. See
-    section 9.
+    minute of a start with nothing attached, 32-bit Windows 7 within about
+    ten seconds - and a sleeping controller of this kind cannot notice
+    anything plugged in afterwards. The driver tells Windows not to, for this
+    controller only. Nothing else in the machine is affected and nothing is
+    written outside the device's own settings. See section 9.
+
+    Upgrading from 1.0.2.0 or earlier? Those versions did it a different way,
+    with a machine-wide setting that an uninstall does not remove. Section 9
+    says where it is and how to delete it if you want to.
 
   WINDOWS 98 WITH NUSB: STOPPING A RUNNING USB CONTROLLER CRASHES THE MACHINE
   ..........................................................................
@@ -2798,19 +2801,19 @@ Two things are specific to this driver and worth knowing in advance:
 
   A Windows 98 uninstall then removes REGISTRY ENTRIES ONLY. xhci98.sys, the
   usbd.sys, usbhub.sys and usbui.dll the install had Windows copy from its
-  CD (section 3), the setup engine's cached copy of xhci98.inf (under
-  C:\WINDOWS\INF\OTHER) and the DisableSelectiveSuspend value of section 9
-  all stay behind. Delete them by hand if you want them gone; the three
-  Windows files are Windows' own and harmless where they are.
+  CD (section 3) and the setup engine's cached copy of xhci98.inf (under
+  C:\WINDOWS\INF\OTHER) all stay behind. Delete them by hand if you want them
+  gone; the three Windows files are Windows' own and harmless where they are.
+  If this machine ever had 1.0.2.0 or earlier, the machine-wide setting those
+  versions wrote stays behind too - section 9.
 
   AFTER AN UPGRADE ON WINDOWS 98, RUN THE INF ONCE BY HAND
   .......................................................
 
   Right-click xhci98.inf in the package directory and choose Install. That
-  writes the machine-wide settings the crashed upgrade never reached -
-  including DisableSelectiveSuspend, without which a device plugged in
-  afterwards is not noticed. It touches no device, so it cannot hit the
-  crash.
+  puts the driver file in place even though the upgrade crashed before it
+  could. It touches no device, so it cannot hit the crash. Then restart, and
+  the controller picks up the new file.
 
 
 ==============================================================================
@@ -3059,39 +3062,40 @@ the driver reads, and one the installer writes machine-wide on every system.
   machine produces a report - see section 6. On Windows 2000 both routes
   work.
 
-  DisableSelectiveSuspend  -  every target
-  ........................................
+  SLEEP, AND A LEFTOVER SETTING FROM 1.0.2.0 AND EARLIER
+  ......................................................
 
-  DWORD, written as 1 by the install on every target, in
+  THERE IS NOTHING TO SET HERE. Since 1.1.0.0 the driver tells Windows, as
+  it registers, never to put THIS controller to sleep. It is part of the
+  driver, there is no registry value behind it, and nothing outside the
+  device's own settings is written.
+
+  The trade is the same as it always was: THE CONTROLLER NEVER IDLES, SO IT
+  DRAWS SLIGHTLY MORE POWER. There is no switch to turn it back on, and the
+  earlier versions offered none in practice either - Windows refused the USB
+  Root Hub's "Allow the computer to turn off this device" box while their
+  setting was in place, exactly as it does now.
+
+  IF THIS MACHINE RAN 1.0.0.0 TO 1.0.2.0, ONE SETTING OF THEIRS IS STILL
+  THERE. Those versions did the same job with a machine-wide value:
 
       HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB
+          DisableSelectiveSuspend  (DWORD, 1)
 
-  It stops the USB stack putting the controller to sleep, which is what makes
-  hot-plug work without a Device Manager Refresh. Three things about it are
-  deliberate, and none is hidden:
+  It does not live with the device, so neither an uninstall nor this upgrade
+  removes it, and this package will not delete it for you - on a machine with
+  more than one USB controller it may be doing a job for another one. It is
+  harmless beside the new mechanism: both say the same thing. If you want it
+  gone, delete the value in Registry Editor and restart. This driver's own
+  controller is unaffected either way.
 
-    * IT IS MACHINE-WIDE, not per-controller, so it also stops any OTHER USB
-      controller idling. On the machines this driver exists for - where it is
-      the whole USB stack - that is the intent.
-
-    * THE CONTROLLER NEVER IDLES, SO IT DRAWS SLIGHTLY MORE POWER. That is
-      the trade, and it is the same one Microsoft's own
-      HcDisableSelectiveSuspend setting exists to let an administrator make.
-
-    * UNINSTALLING DOES NOT REMOVE IT. It does not live with the device, so
-      nothing takes it away. Delete it by hand and reboot if you want the
-      previous behaviour back - this driver's own devices then go back to
-      needing Refresh.
-
-  Until 1.0.1.0 the Windows 2000 install withheld it. Windows 98's USB stack
-  was measured putting this controller to sleep within about half a second
-  of the last transfer, and Windows XP's within about half a minute of a
-  start with nothing attached, and a sleeping controller cannot report a
-  newly plugged device - so since 1.0.1.0 the install writes it on every
-  system. Windows 2000's own USB stack was not seen putting this controller
-  to sleep at all, with or without the value (measured in a virtual
-  machine); there it is the same machine-wide setting, with the same three
-  consequences.
+  Why the change: the old value was machine-wide, so it reached every USB
+  controller in the machine, not just this one, and it outlived the device
+  that installed it. The obvious per-controller replacement was tried and
+  does not hold - on Windows Vista the power plan's "USB selective suspend
+  setting" rewrites it, and on battery the Balanced plan turns it back on by
+  default, which would have put the sleeping-controller fault back on any
+  laptop that unplugged.
 
   Windows Vista and Windows 7 were measured on 2026-09-16, 32-bit only, in
   virtual machines. Windows 7's USB stack puts this controller to sleep

@@ -87,18 +87,62 @@ static VOID xhciArmRecovery(PXHCI_EXTENSION ext);
  *   consumed later than registration. Start with the combination the shipping
  *   binaries demonstrably accept; revisit once the spike passes.
  *
- *   MiniPortFlags 0x95 = INTERRUPT | MEMORY_IO | USB2 | POLLING, deliberately
- *   without WAKE_SUPPORT (0x200): Win2000 acts on that flag and this driver has
- *   no wake behaviour yet. NO_DMA (0x100) must never appear - it silently zeros
- *   MiniPortResourcesSize and skips the DMA adapter entirely.
+ *   MiniPortFlags 0xB5 = INTERRUPT | MEMORY_IO | USB2 | DISABLE_SS | POLLING,
+ *   deliberately without WAKE_SUPPORT (0x200): Win2000 acts on that flag and
+ *   this driver has no wake behaviour yet. NO_DMA (0x100) must never appear -
+ *   it silently zeros MiniPortResourcesSize and skips the DMA adapter
+ *   entirely. usbehci.sys declares 0x95; DISABLE_SS (0x20) is this driver's
+ *   one departure from it, and the block below is why.
+ *
+ * DISABLE_SS (USB_MINIPORT_FLAGS_DISABLE_SS, 0x20) tells usbport never to
+ * idle-suspend this controller. A halted xHC cannot report a port change -
+ * the spec gates Port Status Change Event generation on HCHalted = '0'
+ * (p.322) and says EINT and PCD generate no interrupt (p.399) - so unlike
+ * EHCI, which re-arms USBINTR.PCD across its halt, there is no interrupt this
+ * driver could leave enabled to wake it. The fix has to stop the suspend
+ * happening rather than wake from it; without it a device attached after the
+ * bus goes quiet is seen by nothing until the user presses Refresh in Device
+ * Manager (docs\issues\05-idle-suspend-and-disableselectivesuspend.md).
+ *
+ * Read static on all nine usbport builds this driver runs under (NUSB
+ * 5.00.2195.5652, SweetLow 5.1.2600.2180, Win2000 SP4 5.00.2195.6681, XP SP3
+ * x86, XP/2003 x64 5.2.3790.3959, Vista SP2 x86/x64, Win7 SP1 x86/x64): bit
+ * 0x20 is tested exactly once per build, in the start routine, AFTER the
+ * registry reads, and does nothing but force the selective-suspend-disabled
+ * state - NUSB 0x109BC, SweetLow 0x11687, SP4 0x10A2C, XP x86 0x11862, XP x64
+ * 0x129A5 clear the FDO's "SS allowed" flag 0x800 and set 0x08000000; Vista
+ * x86 0x2AB35, x64 0x14C7A, Win7 x86 0x25308, x64 0x1427A set SS state 4.
+ * Every reader treats that exactly as it treats the state the machine-wide
+ * Services\USB\DisableSelectiveSuspend produces, which is what releases
+ * 1.0.0.0 to 1.0.2.0 shipped instead (docs\contributing\legal-provenance.md
+ * section 4).
+ *
+ * Why the flag and not a registry value. The per-controller values work
+ * statically on every build (HcDisableSelectiveSuspend on 9x and NT 5.x,
+ * HcDisableAllSelectiveSuspend on Windows 7), but usbport's own
+ * USBPORTBUSIF_ControllerSelectiveSuspend WRITES HcDisableSelectiveSuspend =
+ * !Enable back to the software key, and on Vista usbhub calls it from a
+ * power-setting callback rather than only from the root hub's "Allow the
+ * computer to turn off this device" checkbox. Measured on a Vista x86 guest on
+ * 2026-09-17: setting the Balanced plan's USB selective suspend to Enabled
+ * rewrote the value to 0 and the controller suspended at once. Balanced
+ * defaults that setting to Enabled on battery, so the registry route loses
+ * the fix on any laptop that unplugs. The flag is outside that setter's
+ * reach: it refuses unless the state is 1 or 2, and the flag's state is 4.
  */
 #define XHCI_MINIPORT_VERSION USB_MINIPORT_VERSION_EHCI
-#define XHCI_MINIPORT_FLAGS                                     \
+#define XHCI_MINIPORT_FLAGS                                        \
     (USB_MINIPORT_FLAGS_INTERRUPT | USB_MINIPORT_FLAGS_MEMORY_IO | \
-     USB_MINIPORT_FLAGS_USB2 | USB_MINIPORT_FLAGS_POLLING)
+     USB_MINIPORT_FLAGS_USB2 | USB_MINIPORT_FLAGS_DISABLE_SS |     \
+     USB_MINIPORT_FLAGS_POLLING)
 
 XHCI_C_ASSERT(miniport_flags_have_no_dma_bit,
               (XHCI_MINIPORT_FLAGS & USB_MINIPORT_FLAGS_NO_DMA) == 0);
+
+/* Losing this bit costs hot-plug on every target and says nothing at build or
+ * load time; it is the whole of issue 5's fix since 1.1.0.0. */
+XHCI_C_ASSERT(miniport_flags_disable_selective_suspend,
+              (XHCI_MINIPORT_FLAGS & USB_MINIPORT_FLAGS_DISABLE_SS) != 0);
 
 /*
  * XHCI_PROBE_RESOURCES_SIZE - a diagnostic override for the declared controller

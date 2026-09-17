@@ -80,7 +80,7 @@ section 3):
 | Field | Meaning | xhci98.sys value (initial) |
 |---|---|---|
 | `MiniPortVersion` | Controller-type constant (`USB_MINIPORT_VERSION_*`), not the interface version | `3`, what `usbehci` fills; the register call's `Version` argument is `200` (step 2 above) |
-| `MiniPortFlags` | `USB_MINIPORT_FLAGS_*` OR-mask | `INTERRUPT \| MEMORY_IO \| USB2 \| POLLING` = `0x95`, what `usbehci` fills (names per usbmport.h) |
+| `MiniPortFlags` | `USB_MINIPORT_FLAGS_*` OR-mask | `INTERRUPT \| MEMORY_IO \| USB2 \| DISABLE_SS \| POLLING` = `0xB5` (names per usbmport.h). `usbehci` fills `0x95`; `DISABLE_SS` (`0x20`) is this driver's one addition, since `1.1.0.0`, and is issue 5's fix - a halted xHC cannot report a port change, so usbport must not idle-suspend it |
 | `MiniPortBusBandwidth` | Bandwidth budget usbport uses for periodic scheduling | `TOTAL_USB20_BUS_BANDWIDTH` = 400000, what usbehci passes (confirmed in the mirror) |
 | `MiniPortExtensionSize` | Bytes usbport allocates for the per-controller extension handed to every callback | `sizeof(XHCI_EXTENSION)` |
 | `MiniPortEndpointSize` | Bytes per endpoint extension | `sizeof(XHCI_ENDPOINT)` |

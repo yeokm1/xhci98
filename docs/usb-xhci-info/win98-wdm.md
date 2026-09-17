@@ -454,9 +454,10 @@ callbacks, and bound a hot-plugged HID mouse with interrupt transfers
 flowing. Two things went wrong and neither was XP's runtime; both were the
 NT install path's. An xHCI-only NT install has no `usbport.sys` (Code 39
 until the INF copies it, which it does since 1.0.1.0), and XP's usbport
-idle-suspends the controller about thirty seconds after start unless
-`Services\USB\DisableSelectiveSuspend` is set, which the 1.0.1.0 INF writes
-on the NT path too. The same guest then bound a `usb-storage` device and a
+idle-suspends the controller about thirty seconds after start unless it is
+told not to - `Services\USB\DisableSelectiveSuspend`, which the 1.0.1.0 INF
+wrote on the NT path too, and since 1.1.0.0 the driver's own
+`USB_MINIPORT_FLAGS_DISABLE_SS` instead. The same guest then bound a `usb-storage` device and a
 `usb-audio` composite, survived the Device Manager disable, enable, remove
 and rescan sequence, and took the `1.0.1.0` package on an xHCI-only install
 with no prompt; the one XP-specific defect it showed, the hub re-creating a

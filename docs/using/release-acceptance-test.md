@@ -310,8 +310,8 @@ this driver's own defect (release notes, "Known limitations").
 | 5.6 | Every device above | Record the negotiated speed wherever the OS will show it | `Low`, `Full` or `High`. A USB 3.0 device on a USB 3.0 connector is expected to fall back and run at High Speed: the SuperSpeed half of every connector is left switched off by design |
 
 If a device is only noticed after pressing Refresh in Device Manager (Windows
-98): that is the idle-sleep symptom, and it points at step 7's
-`DisableSelectiveSuspend` check rather than at the device. Take step 7 now, and
+98): that is the idle-sleep symptom, and it points at step 7's idle hot-plug
+check rather than at the device. Take step 7 now, and
 say in the record that it was reached this way.
 
 If a device does not enumerate at all: record its VID/PID, its speed if
@@ -363,18 +363,25 @@ Windows 98 SE
 | # | Do | Expected reading |
 |---|---|---|
 | 7.1 | Do not disable, remove or upgrade this driver in Device Manager. Disabling the USB Root Hub is fine | Nothing to see: the clause is a prohibition, and what the record says is that it was respected. Each of the three blue-screens the machine at `0028:C00312EE` under NUSB's stack, the one this test installs |
-| 7.2 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | Present, value 1 |
+| 7.2 | Unplug everything from the machine's USB ports, leave it a full minute, then plug in a mouse | It enumerates on its own, with no Refresh in Device Manager. And: `HKLM\System\CurrentControlSet\Services\USB` has NO `DisableSelectiveSuspend` value written by this install - on a machine upgraded from 1.0.2.0 or earlier it may be there from before, which is expected and is not this package's |
 | 7.3 | Plug in one composite device, something that is more than one thing at once | It enumerates and its functions load, rather than `USB Composite Device` with `Code 2` and nothing above it |
 
 7.1 is not this driver: Microsoft's own `usbehci.sys` does the same on the same
 machine. A tester who needs the driver gone uses the unload-first route in
 `readme.txt` section 5. (Release notes, "Known limitations".)
 
-7.2 without the value, the USB stack idle-suspends the controller within about
-half a second of the last transfer, and a device plugged in afterwards is
-noticed by nothing until Refresh, which is what step 5 would have shown.
-(Measured on the Windows 98 virtual machine; release notes, "Known limitations";
-`src/xhci98.inf`'s `[Xhci.AddReg.Global]` and the comment block below it.)
+7.2 is a behaviour check since `1.1.0.0`, and that is the point of the change.
+Without the fix the USB stack idle-suspends the controller within about half a
+second of the last transfer, and a device plugged in afterwards is noticed by
+nothing until Refresh. Until `1.0.2.0` the fix was a registry value and this
+step read the value; now it is `USB_MINIPORT_FLAGS_DISABLE_SS` inside the
+driver, where there is nothing to look at, so the step reads the behaviour
+instead - which is what the value was ever a proxy for. **Empty the bus
+properly:** any attached device keeps the controller awake, even one with no
+driver, so a machine with an internal USB device cannot show this either way.
+(Measured on the Windows 98 virtual machine; release notes, "Known
+limitations"; `src/xhci_dispatch.c` above `XHCI_MINIPORT_FLAGS`, and
+`docs/issues/05-idle-suspend-and-disableselectivesuspend.md`.)
 
 7.3 is what Windows 98's own `usbhub.sys` is for, which the install at step 4
 has Windows copy from its CD or CABs: Windows 98 Setup places its composite
@@ -388,19 +395,20 @@ Windows 2000 SP4
 
 | # | Do | Expected reading |
 |---|---|---|
-| 7.4 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | Present, value 1 |
+| 7.4 | Unplug everything from the machine's USB ports, leave it a full minute, then plug in a mouse | It enumerates on its own, with no Refresh. And no `DisableSelectiveSuspend` under `HKLM\System\CurrentControlSet\Services\USB` from this install - see 7.2 |
 | 7.5 | Look at the Driver tab | The version is present and the date reads `Not available` |
 | 7.6 | Disable the controller in Device Manager, then re-enable it once | It goes and comes back, with no crash |
 
-7.4 is written by the NT install path since 1.0.1.0; until then it was
-absent by design. Windows XP's `usbport` was measured idling this controller
-within about thirty seconds of a start with nothing attached (2026-09-03),
-and a halted xHC cannot report a hot-plug; Windows 2000 SP4's `usbport` was
-not seen idling it with the value deleted (2026-09-06, a virtual-machine
-reading), so this test asserts the value's presence and nothing about its
-effect on this target. (`src/xhci98.inf`:
-`[Xhci.Dev.NTx86]` carries `Xhci.AddReg.Global`, and the comment block below
-it says why.)
+7.4 is 7.2's step on the other primary target, and it is weaker here than it
+reads. Windows 2000 SP4's `usbport` was never seen idling this controller
+with the old registry value deleted (2026-09-06, a virtual-machine reading),
+and its start routine explains that statically - it defaults the setting to
+enabled-off on Windows 2000 unless `Services\usb` holds an explicit 0. So a
+pass here is consistent with the fix working and equally consistent with this
+target never idling in the first place; it is the Windows 98 and Windows XP
+steps that carry the reading. (The NT install path had the old value from
+`1.0.1.0` and has no registry value at all from `1.1.0.0`;
+`docs/issues/05-idle-suspend-and-disableselectivesuspend.md` section 5.)
 
 7.5 is expected and is not a failed install: the engine reads this package's
 `DriverVer` and declines the date half specifically. (Roadmap task 12.4,
@@ -429,30 +437,36 @@ Windows XP (virtual machines only)
 
 | # | Do | Expected reading |
 |---|---|---|
-| 7.9 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | Present, value 1. `Services\USB` does not exist on a stock XP install; the package creates it |
-| 7.10 | Leave the machine idle for two minutes after boot with nothing plugged in, then plug in a Low-Speed HID | It enumerates and works with no Refresh. Without 7.9's value XP's `usbport` suspends the controller about thirty seconds after start and the device is invisible |
+| 7.9 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | ABSENT, and on a clean XP install `Services\USB` should not exist at all - this package no longer creates it. If the key is there, this machine ran 1.0.2.0 or earlier; note that in the record, because it would mask 7.10 |
+| 7.10 | Leave the machine idle for two minutes after boot with nothing plugged in, then plug in a Low-Speed HID | It enumerates and works with no Refresh. This is the sharpest form of the check on any target bar Windows 7: without the fix XP's `usbport` suspends the controller about thirty seconds after start and the device is invisible |
 | 7.11 | Plug in a flash drive, then a composite device, each for the first time on this installation | Each binds on its first attach, with no replug needed, while Windows installs its class driver |
 | 7.12 | Disable the controller in Device Manager, re-enable it, then uninstall it and Scan for hardware changes | It goes and comes back each time, with no crash; the Found New Hardware wizard returns on the rescan |
 
 7.9 to 7.12 were measured on the Windows XP virtual machine of 2026-09-03
 (roadmap tasks 19.2, 19.3, 19.4 and 19.7; `docs/contributing/build-and-test.md`,
-"Windows XP target VM"). 7.11 is issue 4's clause: before `1.0.1.0` a device
-XP re-created mid-enumeration was failed by this driver and bound only on a
-replug (`docs/issues/04-xp-restore-device-ep0-remove.md`). Windows 2000's 7.5
-has not been measured on XP and is `SKIP - other target` there.
+"Windows XP target VM"), **and 7.9 has inverted since**: the reading of
+2026-09-03 was taken against a package that wrote the value, and from `1.1.0.0`
+no package does. 7.10 is unchanged and is now the whole of the check - it was
+always the clause that read the effect. 7.11 is issue 4's clause: before
+`1.0.1.0` a device XP re-created mid-enumeration was failed by this driver and
+bound only on a replug (`docs/issues/04-xp-restore-device-ep0-remove.md`).
+Windows 2000's 7.5 has not been measured on XP and is `SKIP - other target`
+there.
 
 Windows XP x64 and Windows Server 2003 x64 (virtual machines only)
 
 | # | Do | Expected reading |
 |---|---|---|
-| 7.13 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | Present, value 1. The 64-bit INF writes it by the same `AddReg` the 32-bit one uses |
+| 7.13 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | ABSENT. The 64-bit INF wrote it by the same `AddReg` the 32-bit one used until `1.0.2.0`, and both files stopped at `1.1.0.0` |
 | 7.14 | Leave the machine idle for two minutes after boot with nothing plugged in, then plug in a Low-Speed HID | It enumerates and works with no Refresh, as on 32-bit XP |
 | 7.15 | Plug in a flash drive, then a composite device, each for the first time on this installation | Each binds on its first attach, with no replug needed |
 | 7.16 | Disable the controller in Device Manager, re-enable it, then uninstall it and Scan for hardware changes | It goes and comes back each time, with no crash, and the rescan reinstalls with no media prompt |
 
 7.13 to 7.16 were measured on the Windows XP x64 virtual machine of 2026-09-09
 (roadmap task 21.5; `docs/contributing/build-and-test.md`, "Windows XP x64
-target VM"). Two of them are narrower than they read, and the record should say
+target VM"), and 7.13 has inverted with 7.9 for the same reason: that run
+installed a package that wrote the value, and from `1.1.0.0` none does. Two of
+them are narrower than they read, and the record should say
 so where they are taken. 7.14's underlying reading there was the absence of any
 `SuspendController` on an idle controller in the driver's own trace, not this
 two-minute clause; and 7.15's devices were hot-plugged onto a running guest,

@@ -615,7 +615,7 @@ builds rather than derived from them.
 | `0x168` | `0x27C` | the same, per endpoint | `MPx_HsbEndpointContextSize`; amd64 `USBPORT_OpenEndpoint` | 0 / 0 |
 
 All three context-size readers test `MiniPortFlags & 0x400` first and fall
-back to a usbport global when it is clear; this driver's flags are `0x95`, so
+back to a usbport global when it is clear; this driver's flags are `0xB5`, so
 they are never read. **A zero count allocates nothing and writes
 `USBPORT_RESOURCES+0x38 = 0`; there is no division and no minimum.** Verdict
 for all twelve: zero is safe.
@@ -731,11 +731,21 @@ family and the three context sizes), `0x800` endpoint flag `0x2000` in place
 of `0x200` at `USBPORT_OpenEndpoint`, which routes state changes through
 `CheckHwSync`, `0x4000` the root-hub async command path, `0x10000`
 `CloseEndpoint` without the lock, `0x40000` an extra DPC signal in
-`USBPORT_Core_UsbHcIntDpc_Worker`, and on Windows 7 `0x80000`, tested on a
-local copy in `MPf_SuspendController` (`0x1E5D5`) and
-`USBPORT_SyncPowerAndChirpUsb2Ports` (`0x2B118`). This driver's `0x95` sets
-none of the opt-ins, which is the Vista-era default every one of those sites
-provides for.
+`USBPORT_Core_UsbHcIntDpc_Worker` and a second test in `USBPORT_DM_IoTimerDpc`
+(Windows 7 x86 `0x11564`, x64 `0x1F2C9`), and on Windows 7 `0x80000`, tested
+on a local copy in `MPf_SuspendController` (x86 `0x1E5D5`, x64 `0x112F6`).
+This driver's `0xB5` sets none of the opt-ins - `DISABLE_SS` (`0x20`) is not
+one of them, it is the start routine's selective-suspend switch above - which
+is the Vista-era default every one of those sites provides for.
+
+**Correction, 2026-09-17.** This paragraph also named
+`USBPORT_SyncPowerAndChirpUsb2Ports` (`0x2B118`) as a `0x80000` `MiniPortFlags`
+site. It is not one: that `0x80000` is a port-status bit out of
+`RH_GetPortStatus`, and the two happen to share a constant. The reading was
+re-taken during the issue 5 flag sweep, which had to enumerate every
+`MiniPortFlags` read in each build and so put every claimed site under the
+same test. `MPf_SuspendController` is the real `0x80000` flags site, and the
+amd64 address above is new with the correction.
 
 **The NT 5.x control.** Every `cmp` against `64h`, `0C8h`, `12Ch` or `136h`
 in the `.text` of XP SP3, XP x64, Windows 2000 SP4 and NUSB's `usbport.sys`:
@@ -751,9 +761,11 @@ before - by reading, not by hope.
 with the twelve `ULONG`s zero, `InterruptDpcEx` pointing at the same
 `ULONG`-returning DPC the `0x4C` slot points at, the two OUT service slots
 named, and every other 300-tier pointer NULL; present `300` to NT 6.x and
-`200` to everything else; leave `MiniPortFlags` at `0x95`. Nothing in the
-tier requires a new callback, a new import, or a flag change. Design record
-11 section 6.5 carries the decision-side summary.
+`200` to everything else; leave `MiniPortFlags` as it is. Nothing in the
+tier requires a new callback, a new import, or a flag change. (The flag word
+did change later, at `1.1.0.0`, from `0x95` to `0xB5` - but for issue 5, not
+for this tier, and `DISABLE_SS` is read identically by every version.) Design
+record 11 section 6.5 carries the decision-side summary.
 
 ## 2. Constants
 
@@ -784,7 +796,7 @@ register call, since usbport replaces it.
 | `USB_MINIPORT_FLAGS_PORT_IO` | 0x0002 | I/O-port register space (UHCI); not xHCI |
 | `USB_MINIPORT_FLAGS_MEMORY_IO` | 0x0004 | MMIO register space (xHCI: set) |
 | `USB_MINIPORT_FLAGS_USB2` | 0x0010 | USB2-class miniport: enables the USB2 bandwidth budgeter, TT bookkeeping, `usbhub20` root hub |
-| `USB_MINIPORT_FLAGS_DISABLE_SS` | 0x0020 | (name per ReactOS; not set by usbehci) |
+| `USB_MINIPORT_FLAGS_DISABLE_SS` | 0x0020 | Name per ReactOS, and the name is exactly right: **it disables selective suspend for this controller and does nothing else**. Not set by usbehci; **set by `xhci98.sys` since 1.1.0.0**, and the whole of issue 5's fix. Measured on all nine usbport builds this driver runs under - see below |
 | `USB_MINIPORT_FLAGS_NOT_LOCK_INT` | 0x0040 | Skip `MiniportSpinLock` around Enable/DisableInterrupts [usbport.c:568-571] |
 | `USB_MINIPORT_FLAGS_POLLING` | 0x0080 | usbehci sets it alongside INTERRUPT [usbehci.c:3628-3632] |
 | `USB_MINIPORT_FLAGS_NO_DMA` | 0x0100 | Not for this project |
@@ -799,10 +811,45 @@ miniports differ as recorded below.
 Binary observation: the shipping 2195.x `usbehci.sys` builds set `0x95` =
 `INTERRUPT | MEMORY_IO | USB2 | POLLING`, without `WAKE_SUPPORT`; XP's sets
 `0x295`, i.e. ReactOS's set. The flag values decode cleanly against this table
-in both cases, so the table itself is corroborated. `xhci98.sys` uses the
-2195.x set (`0x95`): it is what both primary targets' own miniport declares,
-and it avoids committing the driver to real wake behaviour on Win2000 before
-any of it exists.
+in both cases, so the table itself is corroborated. `xhci98.sys` used the
+2195.x set (`0x95`) until `1.1.0.0` and now uses `0xB5`, that set plus
+`DISABLE_SS`: the 2195.x base is what both primary targets' own miniport
+declares and it avoids committing the driver to real wake behaviour on Win2000
+before any of it exists, and the one added bit is issue 5's fix.
+
+#### What `DISABLE_SS` does, on all nine builds (static)
+
+The question this answers is not "does the bit disable selective suspend" -
+the name says that - but "does it do anything ELSE", because a miniport flag
+is read by usbport in places a miniport cannot see. Every read of
+`MiniPortFlags` in each build's `.text` was enumerated from usbport's own copy
+of the registration packet (37 to 65 reads per build) and then swept in
+reverse for every test of bit 5.
+
+**Bit `0x20` is tested exactly once per build, in the start routine, after the
+registry reads, and does nothing but force the selective-suspend-disabled
+state.** On the NT 5.x-era builds it clears the FDO extension's "selective
+suspend allowed" flag `0x800` and sets `0x08000000` - NUSB `0x109BC`, SweetLow
+`0x11687`, Windows 2000 SP4 `0x10A2C`, XP x86 `0x11862`, XP x64 `0x129A5`. On
+NT 6.x it sets selective-suspend state 4 - Vista x86 `0x2AB35`, x64 `0x14C7A`,
+Windows 7 x86 `0x25308`, x64 `0x1427A`. Every reader treats that identically to
+the state the machine-wide `Services\USB\DisableSelectiveSuspend` produces
+(`0x08000000`, or state 3), which is what releases `1.0.0.0` to `1.0.2.0`
+shipped. Nothing tests the bit for S3/S4, D-state choice, wake, root-hub power
+or `EnIdleEndpointSupport`.
+
+Hand-verified on NUSB, because the sweep is only as good as its identification
+of which load is the flags word: `0x1094C mov ecx,[eax+14h]` loads packet+4
+(NUSB copies the packet to its record `+0x10` at `0x27836`), and its
+neighbours test `0x80`, `0x200` and `0x1` - POLLING, WAKE_SUPPORT and
+INTERRUPT, in a group that only the flags word can be.
+
+**One gap, and it is stated rather than closed.** On Vista and Windows 7
+`USBPORTBUSIF_UsbdQueryControllerType` (Vista x86 `0x2695B`, Windows 7 x86
+`0x2692E`) returns the raw flags word to its caller, and the callers were not
+read. Inside usbport nothing can tell state 4 from state 3; above it,
+something could. `docs/issues/05-idle-suspend-and-disableselectivesuspend.md`
+section 6 carries this as open.
 
 ### Bus bandwidth [usbmport.h:541-542]
 
@@ -2764,7 +2811,7 @@ the design consequences are in `docs/contributing/design/04-controller-common-bu
 - `MiniPortFlags` bit `0x100` (`NO_DMA`) suppresses all of it:
   `StartDevice` skips `IoGetDmaAdapter` *and* overwrites its own copy of
   `MiniPortResourcesSize` with zero. No adapter, no buffer, no diagnostic.
-  `xhci98.sys`'s `0x95` does not set it; do not add it.
+  `xhci98.sys`'s `0xB5` does not set it; do not add it.
 - Incidental confirmations of section 3's packet offsets, from the same
   routine: `MiniPortResourcesSize` at packet `0x24`, `MiniPortExtensionSize`
   at `0x10` (used as the `rep stos` count that zeroes the miniport

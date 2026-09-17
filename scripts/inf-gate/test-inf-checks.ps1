@@ -454,9 +454,12 @@ try {
         param($t) $t.Replace("HKR,,NTMPDriver,,xhci98.sys`r`nHKR,,XhciLogVerbosity,0x00010001,0",
                              "HKR,,NTMPDriver,,xhci98.sys")
     }
+    # Anchored on NTMPDriver, which only the 9x section has, rather than on the
+    # comment that used to follow it: that comment introduced
+    # [Xhci.AddReg.Global] and went with the section in 1.1.0.0.
     Assert-RuleFires "logdbgview-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciLogDebugView,0x00010001,0`r`n`r`n; This value lives",
-                             "`r`n; This value lives")
+        param($t) $t.Replace("HKR,,NTMPDriver,,xhci98.sys`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,,XhciLogDebugView,0x00010001,0",
+                             "HKR,,NTMPDriver,,xhci98.sys`r`nHKR,,XhciLogVerbosity,0x00010001,0")
     }
 
     # And the NT path, the same two.
@@ -546,14 +549,14 @@ try {
     # clean Windows 98 install would write the loader value and copy no
     # driver. The OS-source list stays, so the OS-* rules are not what fires.
     Assert-RuleFires "w98-copyfiles-gap" "PATH-W98" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98",
-                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyW98")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98",
+                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyW98")
     }
     # The undecorated install section losing its AddReg: Windows 98 binds the
     # device and then loads nothing, because DevLoader and NTMPDriver are what
     # that section carries.
     Assert-RuleFires "w98-no-addreg" "PATH-W98" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles", "[Xhci.Dev]`r`nCopyFiles=Xhci.CopyFiles")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles", "[Xhci.Dev]`r`nCopyFiles=Xhci.CopyFiles")
     }
     #
     # **A genuinely NT-only INF** - the mistake this task exists to prevent. It
@@ -568,7 +571,7 @@ try {
     # the INF against Windows 2000 alone would produce.
     #
     Assert-RuleFires "nt-only" "PATH-W98" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`n", "")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`n", "")
     }
 
     # ---- the files the OS supplies (Phase 17, release 1.0.0.1; Phase 19) ----
@@ -601,8 +604,8 @@ try {
         param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16`r`n", "[Xhci.CopyW98]`r`n")
     }
     Assert-RuleFires "os-no-usbd-nt" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT",
-                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles")
+        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT",
+                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles")
     }
     Assert-RuleFires "os-default-no-usbd" "OS-MISSING" {
         param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT",
@@ -648,7 +651,7 @@ try {
     # No NT half at all: setupapi falls back to the undecorated section, and a
     # right-click Install on Windows 2000 runs the Windows 98 file list.
     Assert-RuleFires "no-defaultinstall-nt" "OS-DEFAULT" {
-        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n", "")
+        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n", "")
     }
     Assert-RuleFires "os-dup" "OS-DUP" {
         param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16`r`nusbd.sys,,,16")
@@ -694,12 +697,12 @@ try {
 
     # Gone from the 9x path, and from the NT path, one at a time.
     Assert-RuleFires "os-no-usbui-w98" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI",
-                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI",
+                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98")
     }
     Assert-RuleFires "os-no-usbui-nt" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI",
-                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT")
+        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI",
+                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT")
     }
     # And from a right-click route, which is the one a user with an earlier
     # release takes and the one no per-file rule would otherwise reach.
@@ -771,8 +774,8 @@ try {
     # of failing.
     Assert-RuleFires "no-default-sections-at-all" "OS-DEFAULT" {
         param($t)
-        $s = $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n", "")
-        $s.Replace("[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n", "")
+        $s = $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n", "")
+        $s.Replace("[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`n", "")
     }
 
     # COPYFLG_NO_VERSION_DIALOG (32), which the table in build-and-test.md
@@ -790,35 +793,56 @@ try {
         param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,80")
     }
 
-    # ---- SUSP-* : DisableSelectiveSuspend on every route (Phase 19) ---------
+    # ---- SUSP-* : no idle-suspend registry value, anywhere --------------
     #
-    # The machine-wide value, on four routes since 1.0.1.0. Each route losing
-    # it is a hot-plug that nothing notices on Windows 98 or Windows XP, and a
-    # 0 or a non-DWORD is the same defect with the value still "present".
-    Write-Step "DisableSelectiveSuspend on every route"
-    Assert-RuleFires "susp-no-9x-device" "SUSP-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global", "[Xhci.Dev]`r`nAddReg=Xhci.AddReg")
+    # Inverted on 2026-09-17 with the rules themselves. From 1.0.1.0 to 1.0.2.0
+    # these cases asserted that removing the machine-wide value from any of the
+    # four routes failed the gate; the file wrote it and the driver did not.
+    # Since 1.1.0.0 the driver declares USB_MINIPORT_FLAGS_DISABLE_SS (0x20)
+    # and the file writes nothing, so the cases ADD a value back and assert
+    # the gate refuses it.
+    #
+    # Adding is the harder direction to test and the one that matters. A rule
+    # that merely stopped demanding the value would pass the production file
+    # while saying nothing about a later edit that puts it back - and putting
+    # it back is exactly what an editor reaching for the old fix would do.
+    Write-Step "no idle-suspend registry value on any route"
+    $suspRow = "HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1"
+    # On the 9x device install's own AddReg section.
+    Assert-RuleFires "susp-global-9x" "SUSP-GLOBAL" {
+        param($t) $t.Replace("[Xhci.AddReg]`r`nHKR,,DevLoader,,*NTKERN",
+                             "[Xhci.AddReg]`r`n$suspRow`r`nHKR,,DevLoader,,*NTKERN")
     }
-    Assert-RuleFires "susp-no-nt-device" "SUSP-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global", "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT")
+    # And on the NT one, which is where releases 1.0.1.0 to 1.0.2.0 had it.
+    Assert-RuleFires "susp-global-nt" "SUSP-GLOBAL" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`n$suspRow`r`nHKR,,XhciLogVerbosity")
     }
-    Assert-RuleFires "susp-no-9x-default" "SUSP-MISSING" {
-        param($t) $t.Replace("CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n",
-                             "CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`n")
+    # The whole-file check's own case: a section no install route references.
+    # The old route-walking rules would not have looked here, and a section
+    # sitting in the file is one line away from being wired up again.
+    Assert-RuleFires "susp-global-orphan" "SUSP-GLOBAL" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`n",
+                             "[Xhci.AddReg.Global]`r`n$suspRow`r`n`r`n[Xhci.AddReg.NT]`r`n")
     }
-    Assert-RuleFires "susp-no-nt-default" "SUSP-MISSING" {
-        param($t) $t.Replace("CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n",
-                             "CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n")
+    # The per-controller values, the replacement that was measured and refused:
+    # usbport writes the first one back, and on Vista from a power-setting
+    # callback (2026-09-17). Both spellings, because Windows 7 has only the
+    # second and the NT 6.x path serves Vista and Windows 7 together.
+    Assert-RuleFires "susp-hc-per-controller" "SUSP-HCVALUE" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`nHKR,,HcDisableSelectiveSuspend,0x00010001,1`r`nHKR,,XhciLogVerbosity")
     }
-    Assert-RuleFires "susp-value-zero" "SUSP-VALUE" {
-        param($t) $t.Replace("DisableSelectiveSuspend,0x00010001,1", "DisableSelectiveSuspend,0x00010001,0")
+    Assert-RuleFires "susp-hc-all-win7" "SUSP-HCVALUE" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`nHKR,,HcDisableAllSelectiveSuspend,0x00010001,1`r`nHKR,,XhciLogVerbosity")
     }
-    Assert-RuleFires "susp-not-dword" "SUSP-VALUE" {
-        param($t) $t.Replace("DisableSelectiveSuspend,0x00010001,1", "DisableSelectiveSuspend,,1")
-    }
-    Assert-RuleFires "susp-dup" "SUSP-DUP" {
-        param($t) $t.Replace("DisableSelectiveSuspend,0x00010001,1`r`n",
-                             "DisableSelectiveSuspend,0x00010001,1`r`nHKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1`r`n")
+    # A 0 is refused too. The old SUSP-VALUE rule existed because present-and-0
+    # was a silently disabled fix; the same reasoning inverted says the value's
+    # data is not what makes it unwanted - its being here at all is.
+    Assert-RuleFires "susp-global-zero" "SUSP-GLOBAL" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`nHKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,0`r`nHKR,,XhciLogVerbosity")
     }
 
     # ---- -EmitFootprint (roadmap tasks 11-B.3 and 11-V.3) ------------------
@@ -970,28 +994,26 @@ try {
     Assert-True (@($fp | Where-Object { $_ -eq "service|Windows 2000|xhci98|Xhci.AddService|0x00000002|remove" }).Count -eq 1) (
         "the service row must carry the AddService flags field. Rows:`n" + ($fp -join "`n"))
 
-    # Task 11-V.6's fix, asserted against the production INF by value on BOTH
-    # paths - an assertion, not a mutation control, and named as such. Until
-    # 1.0.1.0 this pinned the value's ABSENCE on the Windows 2000 path, on the
-    # assumption that that target's native usbport never idle-suspends this
-    # controller (an assumption, not a measurement; roadmap Phase 20, F18); the
-    # Windows XP reading of 2026-09-03 (roadmap task 19.2: usbport's
-    # SuspendController within thirty seconds, the hot-plugged mouse invisible)
-    # made it an NT-path need, so the pin inverted. Pinned as a whole row: the
-    # value 1 is what stops the idle suspend, and a 0 here would be a silently
-    # disabled fix that every VAL-* rule would pass. TWO rows per target, not
-    # one, and the count is the assertion: the value is delivered by the device
-    # install AND by right-click Install, because on Windows 98 an
-    # update-over-an-existing-install bugchecks before its registry phase, so a
-    # single-route value never reaches a machine that already had this driver.
-    # A drop to one row is that regression and must fail here. The SUSP-*
-    # rules in the gate say the same thing about a mutated INF; this is the
-    # production file.
-    foreach ($os in @("Windows 98", "Windows 2000")) {
-        $want11v6 = "reg|" + $os + "|Xhci.AddReg.Global|HKLM|System\CurrentControlSet\Services\USB|DisableSelectiveSuspend|0x00010001|1|remove"
-        Assert-True (@($fp | Where-Object { $_ -eq $want11v6 }).Count -eq 2) (
-            "on " + $os + " both the device install and right-click Install must write Services\USB\DisableSelectiveSuspend = 1 (task 11-V.6's fix, on the NT path since 1.0.1.0). Rows:`n" + ($fp -join "`n"))
-    }
+    # Task 11-V.6's fix, asserted against the production INF - and inverted
+    # twice now, which is worth saying because the direction is the whole
+    # assertion. Until 1.0.1.0 this pinned the value's ABSENCE on the Windows
+    # 2000 path, on the assumption that that target's native usbport never
+    # idle-suspends this controller (an assumption, not a measurement; roadmap
+    # Phase 20, F18). The Windows XP reading of 2026-09-03 (roadmap task 19.2:
+    # usbport's SuspendController within thirty seconds, the hot-plugged mouse
+    # invisible) made it an NT-path need and the pin became "two rows on every
+    # target". Since 1.1.0.0 the fix is not a registry value at all - the
+    # driver declares USB_MINIPORT_FLAGS_DISABLE_SS (0x20) - so the pin is
+    # ABSENCE again, and this time on every path of both files.
+    #
+    # The footprint is the right place for it. It is derived from the INF's
+    # own AddReg rows rather than from a rule's opinion of them, so a row
+    # reappearing under any section name, on any route, with any data, shows
+    # up here. The gate's SUSP-* rules say the same thing about a mutated INF;
+    # this is the production file.
+    $suspRows = @($fp | Where-Object { $_ -match "SelectiveSuspend" })
+    Assert-True ($suspRows.Count -eq 0) (
+        "src\xhci98.inf's footprint still carries a selective-suspend registry row. Since 1.1.0.0 this package writes none - the driver declares USB_MINIPORT_FLAGS_DISABLE_SS (0x20) instead, and the machine-wide value it used to write reached every controller usbport drives and outlived the devnode. Rows:`n" + ($suspRows -join "`n"))
 
     # The AddService flags field. Three cases are ways the service stops being
     # this package's to claim; two are cases that LOOK like one and are not -
@@ -1226,24 +1248,27 @@ try {
         param($t) $t.Replace("[Xhci.Dev6.NTx86.Services]", "[Xhci.Dev6.NTx86.Svc]")
     }
     Assert-RuleFires "x86-nt6-no-driver-copy" "PATH-NT" {
-        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles`r`n",
-                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`n")
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`n")
     }
     Assert-RuleFires "x86-nt6-copies-usbport" "OS-ONNT6" {
-        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles`r`n",
-                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT`r`n")
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT`r`n")
     }
     Assert-RuleFires "x86-nt6-copies-w98-list" "OS-ONNT6" {
-        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles`r`n",
-                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98`r`n")
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98`r`n")
     }
-    Assert-RuleFires "x86-nt6-no-susp" "SUSP-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global",
-                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT")
-    }
+    # There is no NT 6.x SUSP case here any more, and its absence is the point.
+    # Until 1.0.2.0 "x86-nt6-no-susp" checked that [Xhci.Dev6.NTx86] delivered
+    # the machine-wide value, because the rules walked install routes and each
+    # route needed its own case. The inverted rules are whole-file: they ask
+    # whether the value appears at all, so a per-path case would exercise the
+    # same line of the gate as "susp-global-nt" above and prove nothing extra.
+    # The NT 6.x path keeps its own VAL-* case below, which is still per-route.
     Assert-RuleFires "x86-nt6-no-logvalues" "VAL-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global",
-                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.Global")
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT",
+                             "[Xhci.Dev6.NTx86]")
     }
     # The other direction: the 64-bit file losing its decoration. The 64-bit
     # setup engine then looks for an undecorated [XhciModels], ignores it, and
@@ -1280,7 +1305,7 @@ try {
     # where it applies. Both halves are asserted: the rule's own tag must be
     # absent, and the file must pass outright.
     $long64 = New-MutatedInf -Name "amd64-sectlen-ok" -Mutate {
-        param($t) $t.Replace("Xhci.AddReg.Global", "Xhci.AddReg.GlobalMachineWideXX")
+        param($t) $t.Replace("Xhci.AddReg.NT", "Xhci.AddReg.NTThirtyOneCharsXXX")
     } -Source $prodInfAmd64
     $r = Invoke-Gate -Path $long64 -Extra @("-Arch", "amd64")
     Assert-True ($r.Output -notmatch [regex]::Escape("[W98-SECTLEN]")) ("amd64-sectlen-ok : W98-SECTLEN fired on the 64-bit file, which Windows 98's engine never reads. Output was:`n" + $r.Output)
@@ -1298,7 +1323,7 @@ try {
     #
     Assert-RuleFires "amd64-undecorated-dev" "PATH-NO9X" {
         param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=",
-                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
+                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
     } -Source $prodInfAmd64 -Arch amd64
 
     #
@@ -1312,31 +1337,31 @@ try {
     #
     Assert-RuleFires "amd64-ntx86-dev" "PATH-NO9X" {
         param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=",
-                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
+                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
     } -Source $prodInfAmd64 -Arch amd64
 
     Assert-RuleFires "amd64-nt-dev" "PATH-NO9X" {
         param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=",
-                             "[Xhci.Dev.NT]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
+                             "[Xhci.Dev.NT]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
     } -Source $prodInfAmd64 -Arch amd64
 
     # The same hazard on the right-click route, which is the one a user takes
     # with no device present - so nothing about the hardware stops it.
     Assert-RuleFires "amd64-undecorated-default" "OS-DEFAULT" {
         param($t) $t.Replace("[DefaultInstall.NTamd64]`r`nCopyFiles=",
-                             "[DefaultInstall]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
+                             "[DefaultInstall]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
     } -Source $prodInfAmd64 -Arch amd64
 
     # ...and its two decorated siblings, for the reason the device-install pair
     # above gives.
     Assert-RuleFires "amd64-ntx86-default" "OS-DEFAULT" {
         param($t) $t.Replace("[DefaultInstall.NTamd64]`r`nCopyFiles=",
-                             "[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
+                             "[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
     } -Source $prodInfAmd64 -Arch amd64
 
     Assert-RuleFires "amd64-nt-default" "OS-DEFAULT" {
         param($t) $t.Replace("[DefaultInstall.NTamd64]`r`nCopyFiles=",
-                             "[DefaultInstall.NT]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
+                             "[DefaultInstall.NT]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
     } -Source $prodInfAmd64 -Arch amd64
 
     # And the right-click section going missing altogether, which halves the
@@ -1359,7 +1384,7 @@ try {
     # second place each of them can break.
     Assert-RuleFires "amd64-nt6-undecorated-dev" "PATH-NO9X" {
         param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=",
-                             "[Xhci.Dev6]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles`r`n`r`n[Xhci.Dev6.NTamd64]`r`nAddReg=")
+                             "[Xhci.Dev6]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n`r`n[Xhci.Dev6.NTamd64]`r`nAddReg=")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-nt6-no-services" "PATH-NT" {
         param($t) $t.Replace("[Xhci.Dev6.NTamd64.Services]", "[Xhci.Dev6.NTamd64.Svc]")
@@ -1368,8 +1393,8 @@ try {
         param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`n", "[Xhci.Dev6.NTamd65]`r`n")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-nt6-no-driver-copy" "PATH-NT" {
-        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles`r`n",
-                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`n")
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`n")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-bad-starttype" "PATH-NT" {
         param($t) $t.Replace("StartType=3                         ; SERVICE_DEMAND_START", "StartType=4                         ; SERVICE_DISABLED")
@@ -1382,8 +1407,8 @@ try {
     # dropped without a word, a controller that idle-suspends and stops seeing
     # hot-plugs, or a log channel that cannot be turned on.
     Assert-RuleFires "amd64-no-usbui" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI",
-                             "[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT")
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI",
+                             "[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-no-usbport" "OS-MISSING" {
         param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`n", "[Xhci.CopyNT]`r`n")
@@ -1404,16 +1429,21 @@ try {
     Assert-RuleFires "amd64-usbhub20" "OS-NEVER" {
         param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16", "[Xhci.CopyNT]`r`nusbhub20.sys,,,16`r`nusbport.sys,,,16")
     } -Source $prodInfAmd64 -Arch amd64
-    Assert-RuleFires "amd64-no-susp" "SUSP-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global",
-                             "[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT")
+    # The 64-bit file must refuse the same two spellings. Both files carry the
+    # rules, but the accepted cost of two INFs is that they can drift, and this
+    # is the drift that would matter: the 64-bit half is the one whose targets
+    # (Vista x64, Windows 7 x64) were never read without the value at all.
+    Assert-RuleFires "amd64-susp-global" "SUSP-GLOBAL" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`n$suspRow`r`nHKR,,XhciLogVerbosity")
     } -Source $prodInfAmd64 -Arch amd64
-    Assert-RuleFires "amd64-susp-zero" "SUSP-VALUE" {
-        param($t) $t.Replace("DisableSelectiveSuspend,0x00010001,1", "DisableSelectiveSuspend,0x00010001,0")
+    Assert-RuleFires "amd64-susp-hc" "SUSP-HCVALUE" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`nHKR,,HcDisableSelectiveSuspend,0x00010001,1`r`nHKR,,XhciLogVerbosity")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-no-logvalues" "VAL-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global",
-                             "[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.Global")
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT",
+                             "[Xhci.Dev.NTamd64]")
     } -Source $prodInfAmd64 -Arch amd64
     #
     # **OS-ONNT6: the NT 6.x path naming an OS-supplied file.** This is the
@@ -1423,20 +1453,18 @@ try {
     # two sections an editor could add one at a time.
     #
     Assert-RuleFires "amd64-nt6-copies-usbport" "OS-ONNT6" {
-        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles`r`n",
-                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT`r`n")
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT`r`n")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-nt6-copies-usbui" "OS-ONNT6" {
-        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles`r`n",
-                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyUI`r`n")
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyUI`r`n")
     } -Source $prodInfAmd64 -Arch amd64
-    Assert-RuleFires "amd64-nt6-no-susp" "SUSP-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global",
-                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT")
-    } -Source $prodInfAmd64 -Arch amd64
+    # No NT 6.x SUSP case, for the reason the 32-bit half gives: the inverted
+    # rules are whole-file and a per-path case would re-test one line.
     Assert-RuleFires "amd64-nt6-no-logvalues" "VAL-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global",
-                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.Global")
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT",
+                             "[Xhci.Dev6.NTamd64]")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-logverbosity-default" "VAL-DEFAULT" {
         param($t) $t.Replace("HKR,,XhciLogVerbosity,0x00010001,0", "HKR,,XhciLogVerbosity,0x00010001,1")
@@ -1538,8 +1566,11 @@ try {
         -Why "One package creates one service. A driver that is demand-start on one architecture and boot-start on the other is two products."
     Assert-InfsAgree -Section "Xhci.AddReg.NT" `
         -Why "These are the values the driver reads at run time through usbport. A default that drifted on one architecture is a diagnostic door open on machines whose owner never asked for one."
-    Assert-InfsAgree -Section "Xhci.AddReg.Global" `
-        -Why "DisableSelectiveSuspend is machine-wide and is the reason hot-plug works at all. It is the same value with the same three published consequences on every target."
+    # [Xhci.AddReg.Global] was compared here until 1.1.0.0 removed it from both
+    # files. What replaced it is not comparable this way: the flag lives in
+    # src\xhci_dispatch.c, one definition both architectures compile, so the
+    # two packages cannot disagree about it the way two INF sections could.
+    # The footprint assertion above is what holds the value out of either file.
     Assert-InfsAgree -Section "Xhci.CopyNT" `
         -Why "The NT paths of both packages fetch the same three files from the OS by the same LayoutFile route with the same COPYFLG_NO_OVERWRITE."
     Assert-InfsAgree -Section "Xhci.CopyUI" `

@@ -1085,13 +1085,19 @@ The value stays in the package either way, because the NT path also serves
 XP, whose stack does idle, and 32-bit Windows 7, whose stack idles it too
 ("Windows Vista and Windows 7 target VMs", the idle-suspend reading).
 
-This is fixed (roadmap task 11-V.6, and `docs/using/release-notes.md`,
-the `DisableSelectiveSuspend` entry under "Known limitations", which
-documents the setting rather than the defect). Both install paths write
+This is fixed (roadmap task 11-V.6, and `docs/using/release-notes.md` under
+"Known limitations", which documents the cost rather than the defect), and
+the fix has moved once. **From 1.1.0.0 the driver declares
+`USB_MINIPORT_FLAGS_DISABLE_SS` (0x20) in its `MiniPortFlags` and the INFs
+write nothing** (`docs/issues/05-idle-suspend-and-disableselectivesuspend.md`
+section 5.4). Releases 1.0.0.0 to 1.0.2.0 did it with a registry value
+instead, and every reading in this section was taken against those: both
+install paths wrote
 `HKLM\System\CurrentControlSet\Services\USB\DisableSelectiveSuspend = 1`
 (the Windows 98 path since task 11-V.6, the NT path since 1.0.1.0, when the
 Windows XP guest showed XP's usbport idling the controller about thirty
-seconds after start), which stops NUSB's usbport idling the controller at
+seconds after start). Either way usbport reaches the same state, and what
+was measured is that it stops NUSB's usbport idling the controller at
 all: `SuspendController` never fires, `USBCMD` reads `0x00000005`, and a
 hot-plugged device enumerates with no Refresh. The value has to be 1: present
 and set to 0 it behaves exactly like absent, measured on 2026-09-06 on the
@@ -1182,7 +1188,7 @@ all), but the keep-alive is harmless, so use one script for all three.
   want `mouse_move` to generate bus traffic.
 - Win98 needs one Device Manager -> Refresh per boot to resume the
   idle-suspended controller before it will see a monitor-attached device,
-  unless `DisableSelectiveSuspend` is set as described above. Once HID traffic
+  unless the idle is switched off as described above. Once HID traffic
   flows the controller stays awake and everything else can be driven from the
   monitor.
 - Win98 has no HID driver on disk, so the first attach of each device class
@@ -1672,8 +1678,9 @@ of 2026-09-03 night (roadmap task 19.6), standing where Windows 2000 and
 Windows ME stand and never run on real hardware. What follows is
 the recipe, what the first afternoon measured, and what the measurement
 changed: the two INF fixes release 1.0.1.0 carries ("The files the OS
-supplies" below, and the `DisableSelectiveSuspend` block in
-`src/xhci98.inf`).
+supplies" below, and the `DisableSelectiveSuspend` write that
+`src/xhci98.inf` carried until 1.0.2.0 - from 1.1.0.0 the driver's own
+`USB_MINIPORT_FLAGS_DISABLE_SS` does that job and the INF writes nothing).
 
 The recipe. `scripts\setup-qemu-winxp.ps1` writes both launchers into
 `scripts\local`; the hand-written ones that took the first readings are
@@ -2032,8 +2039,9 @@ time, so a guest installed under one rung must be booted under it too.
    `common buffer usbport will request=00065000`, register status 0, `No Op
    self-test completion code=00000001`, the whole `RH_*` family, 4 managed
    USB2-only ports all powered, and **no `SuspendController` on an idle
-   controller** - the NT half's `DisableSelectiveSuspend` works here as it does
-   on 32-bit XP. A hot-plugged HID mouse, `usb-storage` and composite
+   controller** - the NT half's `DisableSelectiveSuspend`, which is what that
+   package wrote, works here as it does
+   on 32-bit XP. (`1.1.0.0` replaced it with the miniport flag, unread here.) A hot-plugged HID mouse, `usb-storage` and composite
    `usb-audio` all bound (**USB Human Interface Device**, **USB Mass Storage
    Device**, **USB Composite Device** + **USB Audio Device**), and the Device
    Manager disable / enable / remove / rescan sequence survived, the rescan
@@ -2324,11 +2332,17 @@ The procedure:
    eighth and ninth install legs read it, and until then the release notes do
    not quote it.
 
-**The idle-suspend reading: Windows 7 needs `DisableSelectiveSuspend`, and
-Vista was not seen to.** Taken on 2026-09-16 at the owner's request, on both
-32-bit guests, because the NT 6.x install path writes the value and nobody
-had asked whether these stacks idle the controller (`docs/issues/05-idle-suspend-and-disableselectivesuspend.md`
-section 5 carries the reasoning). The subject was the `qemu` build of that
+**The idle-suspend reading: Windows 7 needs the idle stopped, and Vista was
+not seen to.** Taken on 2026-09-16 at the owner's request, on both
+32-bit guests, because the NT 6.x install path then wrote
+`DisableSelectiveSuspend` and nobody
+had asked whether these stacks idle the controller. (The value is what was
+present or deleted in every reading below; `1.1.0.0` replaced it with the
+driver's own `USB_MINIPORT_FLAGS_DISABLE_SS`, which reaches the same state in
+the same start routine, so the readings stand and only the lever changed - and
+the flag itself has not been read at run time on either guest;
+`docs/issues/05-idle-suspend-and-disableselectivesuspend.md` sections 5.3 and
+5.4 carry the reasoning for both.) The subject was the `qemu` build of that
 day (`built Sep 16 2026 20:16:51`) staged with the committed `src\xhci98.inf`
 into `vm\xfer-dss-x86`, installed from Device Manager by the owner. Each
 guest ran on a throw-away qcow2 overlay over `vm\vista.img` or
@@ -4280,9 +4294,12 @@ archives) so Phase 2a does not depend on a live download.
    a relaunch), `SuspendController` fired once shortly after start and a
    keyboard hot-plugged afterwards was never seen (QEMU lists it at the port
    with address 0, the driver's addressed count stays 0). The same behaviour
-   as NUSB's build, so the INF's global value stays; and under NUSB's build
-   the value present but set to 0 behaves like the deleted case (2026-09-06,
-   three boots, the idle-suspend paragraph above). One QEMU trap on that
+   as NUSB's build, so the INF's global value stayed (until 1.1.0.0 moved the
+   whole mechanism into the driver as `USB_MINIPORT_FLAGS_DISABLE_SS`, which
+   SweetLow's build reads in the same start routine - the reading here is
+   unaffected, only the thing that sets the state changed); and under NUSB's
+   build the value present but set to 0 behaves like the deleted case
+   (2026-09-06, three boots, the idle-suspend paragraph above). One QEMU trap on that
    run: `sendkey` input follows the most recently added keyboard, so a USB
    keyboard hot-plugged onto a suspended controller silently swallows every
    keystroke until `device_del` removes it.
@@ -4491,7 +4508,11 @@ to learn.
     witnesses agreed (`Services\USB` absent, `DriverDate` still the baseline
     file's, the cached INF the new one). The repair is the INF's right-click
     Install (`[DefaultInstall]` touches no device, so it cannot reach the
-    teardown), which is what delivers `[Xhci.AddReg.Global]`.
+    teardown), which is what delivered `[Xhci.AddReg.Global]`. From `1.1.0.0`
+    that section is gone and the right-click route carries `CopyFiles` only -
+    the reasoning it existed for is unchanged, but what a lost registry phase
+    now costs is the two per-device log values rather than the idle-suspend
+    fix, which the driver carries itself.
   - Rollback is not a separate case: Win98 has no Roll Back Driver, so a
     rollback is an uninstall plus a reinstall, two teardowns rather than one.
   - The uninstall route that costs no crash is to unload the driver first:
@@ -4503,7 +4524,10 @@ to learn.
     contaminates the rows being read. What the uninstall takes is the devnode
     and its driver key: `xhci98.sys`, `usbd.sys`,
     `C:\WINDOWS\INF\OTHER\XHCI98~1.INF` and `Services\USB\
-    DisableSelectiveSuspend` all survive it.
+    DisableSelectiveSuspend` all survive it. (The last of those is on a
+    machine that installed 1.0.0.0 to 1.0.2.0. From 1.1.0.0 no install writes
+    it, so a clean machine has nothing there to survive - and one upgraded
+    from an earlier release still does, because nothing removes it.)
 - This collides with the one procedure that can observe a description or
   identity change, and the collision is unavoidable. Both setup engines cache
   `DriverDesc` in the device's software key at install time, so a renamed
@@ -4977,9 +5001,9 @@ memory. Shape:
 |---|---|---|
 | Both | `[Version]` | `$CHICAGO$`, `Class=USB` + the existing USB ClassGUID, `LayoutFile=layout.inf` ("The files the OS supplies" below), `DriverVer` per "Versioning the driver" above (the number moves, so read it out of `src/xhci98.inf` rather than from this row) |
 | Both | `[XhciModels]` | `%XhciDesc%=Xhci.Dev,PCI\CC_0C0330`, one class-code entry, the analog of the references' `PCI\CC_0C0320` |
-| Win98 | `[Xhci.Dev]` | `AddReg=Xhci.AddReg,Xhci.AddReg.Global` (the second since 1.0.1.0, the 9x half of the `DisableSelectiveSuspend` write), `CopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI` (the third since 1.0.2.0) |
+| Win98 | `[Xhci.Dev]` | `AddReg=Xhci.AddReg`, `CopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI` (the third since 1.0.2.0). A second `AddReg` section, `Xhci.AddReg.Global`, carried the `DisableSelectiveSuspend` write from 1.0.1.0 to 1.0.2.0 and went at 1.1.0.0 with the mechanism |
 | Win98 | `[Xhci.AddReg]` | `HKR,,DevLoader,,*NTKERN` + `HKR,,NTMPDriver,,xhci98.sys` |
-| Win2000 | `[Xhci.Dev.NTx86]` | `AddReg=Xhci.AddReg.NT,Xhci.AddReg.Global` (the second since 1.0.1.0, the NT half of the `DisableSelectiveSuspend` write), `CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI` (the third since 1.0.2.0) |
+| Win2000 | `[Xhci.Dev.NTx86]` | `AddReg=Xhci.AddReg.NT`, `CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI` (the third since 1.0.2.0); the same `Xhci.AddReg.Global` history as the row above |
 | Win2000 | `[Xhci.Dev.NTx86.Services]` | `AddService=xhci98,0x00000002,Xhci.AddService` |
 | Win2000 | `[Xhci.AddService]` | `ServiceBinary=%12%\xhci98.sys`, type 1, start 3, error 1, `LoadOrderGroup=Base` |
 | Shared | `[Xhci.CopyFiles]` | `xhci98.sys,,xhci98.tmp` -> `10, System32\Drivers` |
@@ -5298,9 +5322,14 @@ which is the per-row destination `OS-DEST` grew in 1.0.2.0. Write the bare
 `Xhci.CopyUI=11`, so the `11, System32` this paragraph used to show is a
 spelling the INF gate FAILS (the 2026-09-16 audit's E5). `PKG-MSFILE` refuses a staged
 package holding any of them.
-The `SUSP-*` rules (`SUSP-MISSING`, `SUSP-DUP`, `SUSP-VALUE`) require each
-of the four install routes, device install and right-click Install on each
-target, to write `Services\USB\DisableSelectiveSuspend` once, as a DWORD 1.
+The `SUSP-*` rules (`SUSP-GLOBAL`, `SUSP-HCVALUE`) refuse an idle-suspend
+registry write anywhere in either file: the machine-wide
+`Services\USB\DisableSelectiveSuspend`, and the per-controller
+`HcDisableSelectiveSuspend` / `HcDisableAllSelectiveSuspend`. They REQUIRED
+the first of those on all four install routes from 1.0.1.0 to 1.0.2.0 and
+were inverted at 1.1.0.0, when the driver took the job over with
+`USB_MINIPORT_FLAGS_DISABLE_SS`; they are whole-file rather than per-route
+now, so a section no route references is refused too.
 `test-inf-checks.ps1` watches each fire.
 
 The package. One flat, 8.3-clean directory serves both targets, and it is
@@ -5435,8 +5464,7 @@ silently. The one field it does carry was read on Windows 98 SE, ME, 2000 and
 **Two INFs can drift, and that is checked rather than promised.**
 `test-inf-checks.ps1` compares the two files directly and fails if they
 disagree about the hardware ID, the service name and its five values, both
-per-device log values and their defaults, the machine-wide
-`DisableSelectiveSuspend` value, the OS-supplied file lists and their copy
+per-device log values and their defaults, the OS-supplied file lists and their copy
 flags, `[SourceDisksFiles]`, `[SourceDisksNames]`, the `[Version]` identity
 including `DriverVer`, or any `[Strings]` token they share. It also asserts
 that **each file is refused under the other's profile** - without that, the
@@ -5491,8 +5519,8 @@ Rule ids are grouped by the failure they prevent:
   21.8) and which finds all four on disk (task 22.3). The
   `TGT-*` family and the `usbd-sources.expected` manifest they checked went
   with the packaged Microsoft files in 1.0.0.1.
-- `SUSP-*`: `DisableSelectiveSuspend = 1` written by every install route on
-  both targets (the NT path since 1.0.1.0).
+- `SUSP-*`: no idle-suspend registry value anywhere in either file, machine-wide
+  or per-controller (inverted at 1.1.0.0; they required one from 1.0.1.0).
 - `VAL-*`: the per-device registry values the miniport reads, present on
   both paths with the required type and default.
 - `PKG-*`: the staged-package checks `-PackageDir` runs, below.
@@ -5982,7 +6010,9 @@ That leaves three channels, in the order worth trying:
    second hand-over site would have to run at PASSIVE_LEVEL, and on a Windows
    98 machine running this package there is no PASSIVE moment between
    `StartController` and the shutdown. The idle suspend is switched off by
-   `DisableSelectiveSuspend` (task 11-V.6), a disable bugchecks the target,
+   the package (task 11-V.6's `DisableSelectiveSuspend` until 1.0.2.0, the
+   driver's own `USB_MINIPORT_FLAGS_DISABLE_SS` since), a disable bugchecks
+   the target,
    and `CheckController` is DISPATCH_LEVEL under usbport's `MiniportSpinLock`.
 
 3. The snapshot read. `XHCISNAP` reads the counters and the stored log out of

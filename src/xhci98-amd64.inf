@@ -181,7 +181,7 @@ Xhci.CopyUI=11
 ; ------------------------------------------------------------------
 
 [Xhci.Dev.NTamd64]
-AddReg=Xhci.AddReg.NT,Xhci.AddReg.Global
+AddReg=Xhci.AddReg.NT
 CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI
 
 [Xhci.Dev.NTamd64.Services]
@@ -208,7 +208,7 @@ AddService=xhci98,0x00000002,Xhci.AddService
 ; the one an NT 6.x engine would run, it carries the LayoutFile copies, and
 ; what it does on 6.x has not been read.
 [Xhci.Dev6.NTamd64]
-AddReg=Xhci.AddReg.NT,Xhci.AddReg.Global
+AddReg=Xhci.AddReg.NT
 CopyFiles=Xhci.CopyFiles
 
 [Xhci.Dev6.NTamd64.Services]
@@ -231,15 +231,16 @@ LoadOrderGroup=Base
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
 
-; The one machine-wide value, and the only one this package writes outside the
-; device's own key. Both routes into this target deliver it - the device
-; install above and the right-click Install below - for the reason the 32-bit
-; file gives: an install that aborts before its registry phase would otherwise
-; leave a machine that already had this driver without it. Every usbport build
-; this driver has run under reads it, and a halted xHC cannot report a
-; hot-plug.
-[Xhci.AddReg.Global]
-HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1
+; This file writes nothing outside the device's own key. Until 1.0.2.0 a
+; [Xhci.AddReg.Global] section here wrote the machine-wide
+; HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend on both
+; routes into this target; since 1.1.0.0 the driver declares
+; USB_MINIPORT_FLAGS_DISABLE_SS (0x20) in its MiniPortFlags instead, which
+; names this controller alone and which no OS path rewrites. The 32-bit file
+; carries the full reasoning, and src\xhci_dispatch.c the addresses the flag
+; was read at on each usbport build, this file's three included (XP/2003 x64
+; 0x129A5, Vista x64 0x14C7A, Windows 7 x64 0x1427A). Upgrades keep the old
+; value; no DelReg is written for it, on purpose.
 
 ; No temporary-name field on this row, unlike the 32-bit file's. That third
 ; field exists for Windows 98's 16-bit engine, which cannot otherwise replace
@@ -262,7 +263,6 @@ usbui.dll,,,16
 ; and with no undecorated counterpart, for the reason at the head of this file.
 [DefaultInstall.NTamd64]
 CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI
-AddReg=Xhci.AddReg.Global
 
 ; ASCII only and CRLF throughout, as in src\xhci98.inf. Windows 98's parser is
 ; not the reason here - it never reads this file - but the gate holds both to

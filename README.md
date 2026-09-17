@@ -136,7 +136,7 @@ The important limitations. The full list is under "Known limitations" in [releas
 |---|---|
 | Disabling, uninstalling or upgrading an NUSB driver crashes the machine | A defect in NUSB's `usbport.sys` which cannot stop a running controller. Rename the existing `XHCI98.SYS`, reboot, then remove it. |
 | Every device on a root port is reported as High Speed | Reporting the true speed of a slower device crashes usbport as there is no companion controller. A mouse or keyboard on a root port therefore polls at 1, 2 or 4 ms only. If this is an issue for you, put your lower-speed device behind a hub to allow the true speed to be reported. |
-| `DisableSelectiveSuspend = 1` is written machine-wide | A suspended xHCI controller cannot see a newly plugged device. A driver uninstall does not remove the value. |
+| The controller never idles, so it draws slightly more power | A suspended xHCI controller cannot see a newly plugged device, so the driver tells Windows not to suspend this one. There is no switch to turn it back on. Releases up to `1.0.2.0` did this with a machine-wide `DisableSelectiveSuspend = 1` instead; that value stays behind on an upgraded machine and nothing removes it. |
 | Fast, repeated plug and unplug can freeze Windows 98 | About twice a second sustained. Ordinary use is fine. |
 | Mass-storage throughput seems slow | About 18 MB/s read and write in the ATTO run above, below what USB 2.0 High Speed usually reaches. A likely but unmeasured cause is the controller's interrupt moderation, left at its 1 ms reset default. |
 

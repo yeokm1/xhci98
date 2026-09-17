@@ -313,7 +313,8 @@ turn out to matter.
 - **Idle suspend.** usbport idle-suspends a quiet controller (issue 5). N
   permanently present hubs with pending interrupt transfers may keep it
   from ever going idle, or may not count; either reading changes what the
-  package's `DisableSelectiveSuspend` is for.
+  package's `USB_MINIPORT_FLAGS_DISABLE_SS` is for (the machine-wide
+  `DisableSelectiveSuspend`, until 1.0.2.0).
 - **Resume.** After a resume the virtual hubs already exist and usbhub does
   not rescan the root hub. A device plugged during the suspend has to be
   reported through the hub's pipe from the seed, and whether usbhub re-arms

@@ -1207,7 +1207,11 @@ design needs it:
   `>= 300`**, `UsbPortRequestAsyncCallbackEx` at `0x1B0` / `0x308` and
   `UsbPortCancelAsyncCallback` at `0x1B4` / `0x310`; the declaration names
   them and nothing calls them.
-- **`MiniPortFlags` stays `0x95`.** Microsoft's `usbehci` sends `0x295` on
+- **`MiniPortFlags` stays `0x95`.** (It did, for this work. `1.1.0.0` later
+  made it `0xB5` by adding `DISABLE_SS`, `0x20`, for issue 5 - a bit outside
+  the opt-in set this bullet is about, tested once per build in the start
+  routine and read identically at every `Version`. Nothing below changes.)
+  Microsoft's `usbehci` sends `0x295` on
   XP, `0xA95` on Vista and `0x80A95` on Windows 7, always at `Version = 310`.
   Each opt-in bit NT 6.x tests (`0x400`, `0x800`, `0x4000`, `0x10000`,
   `0x40000`, `0x80000`) has an else-path, and one of them is a hard rule: the

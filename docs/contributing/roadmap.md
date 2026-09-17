@@ -2776,6 +2776,45 @@ and they are the phase's other half rather than a coda to the first.
   - [ ] a re-cut, if one is needed, under the same number with `-Force` while
         nothing has been uploaded - recorded here and not in the `history.md`
         entry, for the embedding reason `releases/README.md` gives
+- [ ] **22.11 - issue 5's mechanism replaced, and read on every target.**
+      The owner's instruction of 2026-09-16: stop writing the machine-wide
+      `Services\USB\DisableSelectiveSuspend`, and confirm the replacement
+      against each OS's own `usbport.sys`. **This is a prerequisite of 22.10,
+      not a successor** - the cut must not be taken until the runtime legs
+      below pass, because the mechanism it publishes is untested at run time
+      on every target. The code, INF, gate and document half is done
+      (2026-09-17): the driver declares `USB_MINIPORT_FLAGS_DISABLE_SS`
+      (0x20), both INFs lost `[Xhci.AddReg.Global]`, and the gate's `SUSP-*`
+      rules inverted from requiring the value to refusing either registry
+      spelling anywhere. `docs/issues/05-idle-suspend-and-disableselectivesuspend.md`
+      section 5.4 is the reasoning and every address.
+  - [x] the mechanism chosen against all nine usbport builds, statically -
+        bit 0x20 tested once per build, in the start routine, after the
+        registry reads, forcing the selective-suspend-disabled state and
+        nothing else; and the per-controller registry alternative refused on
+        a Vista x86 runtime reading, the Balanced plan rewriting
+        `HcDisableSelectiveSuspend` to 0 and suspending the controller at once
+  - [x] the code, both INFs, the INF gate and its self-tests, the two
+        footprints, the packager's readme template, and the documents
+  - [ ] **the runtime legs, one per target, owner at the console.** Each:
+        a clean disk with the new package, an empty bus, five minutes watched
+        for `cb SuspendController`, `USBCMD`/`USBSTS` off the monitor, a
+        hot-plugged `usb-kbd`, then an unplug and 90 s. Plus a CONTROL leg on
+        the previous build with no value, on each target the OS is known to
+        idle (98 under both stacks, ME, XP, XP x64, the Vista boot pair,
+        Windows 7 x86 and x64) - without the control a pass says nothing.
+        Windows 2000's control needs an explicit `DisableSelectiveSuspend = 0`
+        or it cannot idle at all. On Vista, flip the Balanced plan's USB
+        selective suspend to Enabled during the leg: that is what broke the
+        registry route and the flag must survive it. **Windows 7 x86 is the
+        one that matters most** - it idles 9 s after the start.
+        `out\post-release\issue5-ssflag\` holds the prepared harness (ten
+        launchers on monitors 57110-57119, `prepare.ps1`, the per-OS plan)
+  - [ ] the one open static item, if the owner wants it closed before the
+        cut: the callers of `USBPORTBUSIF_UsbdQueryControllerType` on Vista
+        and Windows 7 (x86 `0x2695B` / `0x2692E`), which receive the raw
+        `MiniPortFlags` word. Inside usbport the flag's state is
+        indistinguishable from the value's; above it, nothing was read
 
 Checkpoint, the first half. Every clause, on **each** of the two guests, or
 the phase is not closed:

@@ -103,8 +103,10 @@ is not freshly allocated.
 `MiniPortFlags` bit 0x100 (`NO_DMA`) would disable all of this. If it is set,
 `StartDevice` skips `IoGetDmaAdapter` and overwrites its own copy of
 `MiniPortResourcesSize` with zero: no adapter, no common buffer, no
-diagnostic. `xhci98.sys` uses `MiniPortFlags = 0x95`, which does not include
-it. This is recorded so a future flag edit cannot quietly remove the buffer.
+diagnostic. `xhci98.sys` uses `MiniPortFlags = 0xB5`, which does not include
+it. This is recorded so a future flag edit cannot quietly remove the buffer -
+and there has been one flag edit since, `1.1.0.0` adding `DISABLE_SS` (`0x20`)
+for issue 5, which is why the word is `0xB5` and not `0x95`.
 
 With `HeaderBufferSize = 0`, usbport supplies a per-endpoint common buffer for
 no endpoint at all. This was measured on a target rather than inferred (task

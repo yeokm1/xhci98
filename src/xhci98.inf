@@ -156,7 +156,7 @@ Inf.CopyFiles=17
 ; ------------------------------------------------------------------
 
 [Xhci.Dev]
-AddReg=Xhci.AddReg,Xhci.AddReg.Global
+AddReg=Xhci.AddReg
 CopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI
 
 ; The device's whole 9x registry footprint. NUSB's EHCI install adds a third,
@@ -182,79 +182,60 @@ HKR,,NTMPDriver,,xhci98.sys
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
 
-; This value lives in its own section because FOUR install paths must deliver
-; it, the device install and the right-click Install on each target; see the
-; block below for why the device install alone is not enough.
-[Xhci.AddReg.Global]
-HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1
-
 ; ------------------------------------------------------------------
-; DisableSelectiveSuspend - the only value here that is NOT ours
+; Idle suspend: this INF writes NO registry value for it any more
 ; ------------------------------------------------------------------
 ;
-; It is written from the device install AND the right-click Install on each
-; target. [Xhci.Dev] and [Xhci.Dev.NTx86] deliver it on a device install;
-; [DefaultInstall] and [DefaultInstall.NTx86] deliver it on a right-click
-; Install, which touches no device. The second route exists because on Windows
-; 98 with NUSB's usbport every update-over-an-existing-install bugchecks the
-; machine at 0028:C00312EE (stopping the running driver is that fault), so an
-; upgrade can abort before its registry phase, and a value carried only by the
-; device install would then never arrive on a machine that already had this
-; driver. The NT path carries the same two routes so that the two halves of
-; this file place the same value, which is the shape the INF gate checks.
+; Releases 1.0.0.0 to 1.0.2.0 wrote
+;   HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,...,1
+; from a [Xhci.AddReg.Global] section carried by all four install paths. Since
+; 1.1.0.0 the driver declares USB_MINIPORT_FLAGS_DISABLE_SS (0x20) in its
+; MiniPortFlags instead, and this file writes nothing outside the devnode.
 ;
-; Without it (or with it set to 0, which behaves the same; measured
-; 2026-09-06), a device attached after the bus goes quiet is detected by
-; nothing until the user presses Refresh in Device Manager: the Windows 98
-; usbport builds (NUSB's and SweetLow's alike) idle-suspend the controller
-; within about half a second of the last transfer, and Windows XP's within
-; about thirty seconds of start with nothing attached (measured 2026-09-03 in
-; a virtual machine: SuspendController, the xHC halted, a mouse hot-plugged
-; afterwards invisible), and a halted xHC cannot report a port change. The
-; spec gates Port Status Change Event generation on HCHalted = '0' (p.322)
-; and says EINT and PCD generate no interrupt (p.399), so unlike EHCI, which
-; re-arms USBINTR.PCD across its halt, there is no interrupt this driver could
-; leave enabled. The fix is therefore to stop the suspend happening, not to
-; wake from it. Every usbport build this driver has run under reads this
-; value itself, with RtlQueryRegistryValues(RelativeTo = Services, L"usb",
-; ...) alongside UsbBIOSx and DisableCcDetect; the XP-lineage builds
-; (SweetLow's, XP SP3's) carry the same query table as NUSB's.
+; The problem is unchanged: usbport idle-suspends the controller when the bus
+; goes quiet - the Windows 98 builds (NUSB's and SweetLow's alike) within about
+; half a second of the last transfer, Windows XP's within about thirty seconds
+; of a start with nothing attached, Windows 7's about nine seconds after the
+; start - and a halted xHC cannot report a port change, so a device attached
+; afterwards is seen by nothing until the user presses Refresh in Device
+; Manager. The spec gates Port Status Change Event generation on HCHalted = '0'
+; (p.322) and says EINT and PCD generate no interrupt (p.399), so unlike EHCI,
+; which re-arms USBINTR.PCD across its halt, there is no interrupt this driver
+; could leave enabled: the fix has to stop the suspend, not wake from it.
 ;
-; Three consequences, all stated in docs\using\release-notes.md:
+; Why the flag replaced the value. Three reasons, in the order they decided it:
 ;
-;  1. It is a global value under Services\USB, not a per-device one, so it
-;     changes behaviour for every controller that usbport drives on the
-;     machine, Microsoft's EHCI included. On xHCI-only machines, where this
-;     driver is the entire USB stack, that is the intent.
-;  2. The controller therefore never idles, which costs a little power. That
-;     is the same trade Microsoft's own HcDisableSelectiveSuspend exists to
-;     let an administrator make.
-;  3. It outlives the devnode, because it is outside the devnode's key, so
-;     removing the device does not take it with it, and this package cannot
-;     know whether something else wanted it.
+;  1. The value was machine-wide. Services\USB is not the devnode's key, so it
+;     changed behaviour for every controller usbport drives - Microsoft's EHCI
+;     included - and it outlived the devnode, so removing the device did not
+;     take it with it and this package could not know whether something else
+;     wanted it. The flag names this controller and nothing else.
+;  2. The per-controller registry values were the obvious replacement and they
+;     do not survive. HcDisableSelectiveSuspend (9x, NT 5.x) and Windows 7's
+;     HcDisableAllSelectiveSuspend both work when read, but usbport's own
+;     USBPORTBUSIF_ControllerSelectiveSuspend writes HcDisableSelectiveSuspend
+;     back, and Vista's usbhub calls it from a power-setting callback. Measured
+;     on a Vista x86 guest 2026-09-17: setting the Balanced plan's USB
+;     selective suspend to Enabled rewrote the value to 0 and suspended the
+;     controller at once. Balanced defaults that setting to Enabled on battery.
+;     The flag is outside that setter's reach.
+;  3. Vista and Windows 7 share [Xhci.Dev6.NTx86] but not the value's name, so
+;     the registry route needed two names on one path. The flag is one bit on
+;     all nine usbport builds this driver runs under.
 ;
-; Until release 1.0.1.0 the NT path omitted it, on the assumption that Windows
-; 2000's native usbport never idle-suspends this controller. That was never
-; measured (roadmap Phase 20, F18); what was measured is that Windows 98's
-; usbport idles the controller within about half a second of the last
-; transfer and Windows XP's within about thirty seconds of a start with
-; nothing attached (2026-09-03), and a halted xHC cannot report a hot-plug.
-; So the NT path writes it too: on Windows XP it is what makes hot-plug work,
-; and on Windows 2000 it is the same machine-wide value with the same three
-; consequences. Services\USB does not exist on a stock Windows XP install;
-; this AddReg creates it.
+; What it costs: the controller never idles, which costs a little power, and
+; unlike the value there is now no way for a user to turn it back on. The value
+; offered no such knob in practice either - usbport refuses the root hub's
+; "Allow the computer to turn off this device" while it is set, exactly as it
+; refuses it for the flag. src\xhci_dispatch.c carries the addresses the flag
+; was read at on each build, and
+; docs\issues\05-idle-suspend-and-disableselectivesuspend.md is the record.
 ;
-; The per-controller alternative, HcDisableSelectiveSuspend under the
-; device's own key, was considered for the NT path and not taken: usbport
-; reads both, and in one boot under NUSB's build the per-controller value
-; alone still idled the controller while the global value stopped it; the
-; global value is the one with a measured effect on every build, XP's
-; included, and one mechanism on both paths is one thing to check. The cost,
-; consequence 1, is the same on every target. That boot did not reproduce: on
-; 2026-09-16 the per-controller value alone stopped the idle in two boots
-; under NUSB's usbport and two under SweetLow's, and usbport's own flag logic
-; says either value alone suffices (docs\contributing\lessons.md, "And then
-; the whole framing turned out to be wrong", the correction).
+; Upgrades from 1.0.0.0 to 1.0.2.0 keep the old machine-wide value: it is
+; outside the devnode, so nothing here removes it, and no DelReg is written for
+; it on purpose - it would delete a value a user or another controller may want.
+; It is harmless beside the flag (both produce the same state) and
+; docs\using\release-notes.md says how to delete it by hand.
 
 ; ------------------------------------------------------------------
 ; The two log values, on both install paths
@@ -323,7 +304,7 @@ HKR,,XhciLogDebugView,0x00010001,0
 ; ------------------------------------------------------------------
 
 [Xhci.Dev.NTx86]
-AddReg=Xhci.AddReg.NT,Xhci.AddReg.Global
+AddReg=Xhci.AddReg.NT
 CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI
 
 [Xhci.Dev.NTx86.Services]
@@ -346,7 +327,7 @@ AddService=xhci98,0x00000002,Xhci.AddService
 ; engine would run, it carries the LayoutFile copies, and what it does on 6.x
 ; has not been read.
 [Xhci.Dev6.NTx86]
-AddReg=Xhci.AddReg.NT,Xhci.AddReg.Global
+AddReg=Xhci.AddReg.NT
 CopyFiles=Xhci.CopyFiles
 
 [Xhci.Dev6.NTx86.Services]
@@ -506,13 +487,11 @@ xhci98.inf
 
 [DefaultInstall]
 CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI
-AddReg=Xhci.AddReg.Global
 
 ; Win2000's setup engine keeps its own copy of an OEM INF as oemN.inf; copying
 ; this one into %17% as well would leave two INFs claiming PCI\CC_0C0330.
 [DefaultInstall.NTx86]
 CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI
-AddReg=Xhci.AddReg.Global
 
 ; ASCII only, and that is a parser requirement rather than a style note:
 ; [Strings] is read by both engines and this file is ANSI/CRLF for Win98's

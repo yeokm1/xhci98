@@ -55,13 +55,16 @@ What it checks, grouped by the failure each rule prevents:
            The 64-bit file's NT 6.x path is the exception and must name none
            of the four (OS-ONNT6): its file queue aborts on a LayoutFile copy,
            and all four are on disk after any Vista or Windows 7 install.
-  SUSP-*   The one machine-wide value, Services\USB\DisableSelectiveSuspend =
-           1: every install path (device and right-click, both targets) must
-           write it as a DWORD 1. Windows 98's usbport builds idle-suspend the
-           controller within half a second and Windows XP's within thirty
-           seconds, and a halted xHC cannot report a hot-plug. Until 1.0.1.0
-           the NT path omitted it and the self-tests pinned the asymmetry;
-           the XP reading of 2026-09-03 inverted that.
+  SUSP-*   Idle suspend is the driver's job, not this file's, since 1.1.0.0:
+           no section may write the machine-wide
+           Services\USB\DisableSelectiveSuspend (SUSP-GLOBAL) or a
+           per-controller HcDisableSelectiveSuspend /
+           HcDisableAllSelectiveSuspend (SUSP-HCVALUE). The driver declares
+           USB_MINIPORT_FLAGS_DISABLE_SS (0x20) in MiniPortFlags instead. From
+           1.0.1.0 to 1.0.2.0 these rules required the machine-wide value on
+           every route; they were inverted on 2026-09-17 and what inverted
+           them is in
+           docs\issues\05-idle-suspend-and-disableselectivesuspend.md.
   VAL-*    Per-device registry values the driver reads at run time. Each must
            be written by BOTH install paths, as the right type, with the right
            default - a value present on one path only is invisible on the other
@@ -1415,18 +1418,21 @@ if ($mfgDecoration -eq "") {
 
 #
 # **BOTH right-click sections must exist at all**, which is the 2026-09-07
-# audit's H8. The OS-* and SUSP-* rules below build their route list by
-# APPENDING a right-click route only when its section exists, so deleting both
+# audit's H8. The OS-* rules below build their route list by APPENDING a
+# right-click route only when its section exists, so deleting both
 # `[DefaultInstall]` and `[DefaultInstall.NTx86]` does not fail anything: it
 # silently halves the number of routes checked and the gate reports green over
 # an INF that has lost two of its four install paths. What goes with them is
-# the selective-suspend write on the Windows 98 update-over-install path, which
-# is the route a user who already has an earlier release takes and the one
-# issue 5 exists for. OS-DEFAULT above catches only the asymmetric case.
+# the file-staging every route shares - including the Windows 98
+# update-over-install path, the route a user who already has an earlier release
+# takes. OS-DEFAULT above catches only the asymmetric case. The SUSP-* rules
+# below used to share this plumbing and no longer do: since 1.1.0.0 they ask
+# whether a value appears anywhere in the file rather than whether each route
+# delivers it, so deleting a route cannot silently remove them.
 #
 foreach ($defaultSection in $rightClickSections) {
     if (-not (Test-SectionExists $inf $defaultSection)) {
-        Add-Failure "OS-DEFAULT" ("[{0}] is missing. This INF has {1} install routes - a device install on each of its {2}, and {3} right-click Install section(s) - and every OS-* and SUSP-* rule below is checked against the routes that exist, so removing this section removes the checks with it rather than failing them." -f $defaultSection, ($archPaths.Count + $rightClickSections.Count), (($archPaths | ForEach-Object { $_.Os }) -join ' and '), $rightClickSections.Count)
+        Add-Failure "OS-DEFAULT" ("[{0}] is missing. This INF has {1} install routes - a device install on each of its {2}, and {3} right-click Install section(s) - and every OS-* rule below is checked against the routes that exist, so removing this section removes the checks with it rather than failing them." -f $defaultSection, ($archPaths.Count + $rightClickSections.Count), (($archPaths | ForEach-Object { $_.Os }) -join ' and '), $rightClickSections.Count)
     }
 }
 
@@ -1526,68 +1532,57 @@ foreach ($m in $models) {
     }
 }
 
-# ---- SUSP-* : Services\USB\DisableSelectiveSuspend on every path ---------
+# ---- SUSP-* : this file writes NO idle-suspend registry value ------------
 #
-# The one machine-wide value this package writes, and the only registry value
-# it writes outside the device's own key. Every usbport build this driver has
-# run under reads it (RtlQueryRegistryValues, RelativeTo = Services, "usb"),
-# and two of them idle-suspend the controller without it: Windows 98's within
-# half a second of the last transfer, Windows XP's within thirty seconds of a
-# start with nothing attached; a halted xHC cannot report a port change, so a
-# device plugged in afterwards is invisible until Refresh. Windows 2000
-# SP4's native build was not seen idling this controller in the VM, with or
-# without the value (2026-09-06, bounded readings; roadmap Phase 20, F18), so
-# the value had no observed effect there and the NT path writes it for
-# XP's sake. Until 1.0.1.0 the NT path omitted the
-# value on that assumption and the self-tests pinned the omission; the XP
-# reading of 2026-09-03 made it an NT-path need, so now every route must
-# write it.
+# Inverted on 2026-09-17. From 1.0.1.0 to 1.0.2.0 these rules REQUIRED
+# HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend = 1 on
+# every install route, and the failure codes were SUSP-MISSING, SUSP-DUP and
+# SUSP-VALUE. Since 1.1.0.0 the driver declares USB_MINIPORT_FLAGS_DISABLE_SS
+# (0x20) in its MiniPortFlags and the INF writes nothing for idle suspend at
+# all, so the same rules now refuse what they used to demand.
 #
-# Four routes, not two: the device install and the right-click Install on
-# each target. The right-click route exists because on Windows 98 with NUSB an
-# update over an existing install bugchecks before its registry phase, so a
-# value carried only by the device install never reaches a machine that
-# already had this driver. The value is pinned at 1 as a DWORD: a 0 here is a
-# silently disabled fix that presence alone would pass.
+# The problem has not changed - usbport idle-suspends the controller when the
+# bus goes quiet and a halted xHC cannot report a port change, so a device
+# plugged in afterwards is invisible until Refresh. What changed is where the
+# fix lives, and both of the registry spellings it could live in are refused
+# here rather than merely unused:
+#
+#   SUSP-GLOBAL   the machine-wide value. It sat outside the devnode, so it
+#                 changed behaviour for every controller usbport drives and
+#                 outlived the device that installed it.
+#   SUSP-HCVALUE  the per-controller values, HcDisableSelectiveSuspend (9x,
+#                 NT 5.x) and Windows 7's HcDisableAllSelectiveSuspend. They
+#                 read correctly on every build, but usbport's own
+#                 USBPORTBUSIF_ControllerSelectiveSuspend writes the first one
+#                 back and Vista's usbhub calls it from a power-setting
+#                 callback: measured 2026-09-17 on a Vista x86 guest, setting
+#                 the Balanced plan's USB selective suspend to Enabled rewrote
+#                 the value to 0 and suspended the controller at once, and
+#                 Balanced defaults that setting to Enabled on battery. A
+#                 future edit re-adding either would be reverting that reading
+#                 in silence, which is what this rule is for.
+#
+# Whole-file, not per-route. The old rules walked the install routes because
+# they were asking whether each route delivered the value; the question now is
+# whether the value appears anywhere, and a section no route references is
+# still a section a later edit can wire up. The route-list plumbing itself is
+# untouched - the OS-* rules above share it.
 
 $suspValue = "DisableSelectiveSuspend"
 $suspKey = "System\CurrentControlSet\Services\USB"
-foreach ($m in $models) {
-    $base = $m.Section
-    $suspRoutes = @()
-    foreach ($p in @(Get-ModelPaths $m | ForEach-Object {
-        @{ Name = $_.Os; Install = ($base + $_.Suffix); Default = $_.Default }
-    })) {
-        if (Test-SectionExists $inf $p.Install) {
-            $suspRoutes += @{ Label = ("the {0} device install ([{1}])" -f $p.Name, $p.Install); Section = $p.Install }
-        }
-        if ($p.Default -ne "" -and (Test-SectionExists $inf $p.Default)) {
-            $suspRoutes += @{ Label = ("the {0} right-click Install ([{1}])" -f $p.Name, $p.Default); Section = $p.Default }
-        }
-    }
-    foreach ($route in $suspRoutes) {
-        $hits = @()
-        foreach ($ar in @(Get-Directive $inf $route.Section "AddReg")) {
-            $entries = Get-Section $inf $ar
-            if ($null -eq $entries) { continue }
-            foreach ($e in $entries) {
-                if ($e.Text -match ('^\s*HKLM\s*,\s*([^,]*)\s*,\s*{0}\s*,\s*([^,]*)\s*,\s*(.*)$' -f [regex]::Escape($suspValue))) {
-                    if ($matches[1].Trim() -ieq $suspKey) {
-                        $hits += @{ Section = $ar; Line = $e.Line; Flags = $matches[2].Trim(); Data = $matches[3].Trim() }
-                    }
-                }
+$suspHcValues = @("HcDisableSelectiveSuspend", "HcDisableAllSelectiveSuspend")
+foreach ($secName in @($inf.SectionOrder)) {
+    $entries = Get-Section $inf $secName
+    if ($null -eq $entries) { continue }
+    foreach ($e in $entries) {
+        if ($e.Text -match ('^\s*HKLM\s*,\s*([^,]*)\s*,\s*{0}\s*,' -f [regex]::Escape($suspValue))) {
+            if ($matches[1].Trim() -ieq $suspKey) {
+                Add-Failure "SUSP-GLOBAL" ("[{0}] line {1} writes HKLM,{2},{3}. This package stopped writing it at 1.1.0.0: it is machine-wide, so it reaches every controller usbport drives and outlives the devnode that installed it. The driver declares USB_MINIPORT_FLAGS_DISABLE_SS (0x20) in MiniPortFlags instead - src\xhci_dispatch.c, and docs\issues\05-idle-suspend-and-disableselectivesuspend.md for the readings." -f $secName, $e.Line, $suspKey, $suspValue)
             }
         }
-        if ($hits.Count -eq 0) {
-            Add-Failure "SUSP-MISSING" ("{0} does not write HKLM,{1},{2}. Windows 98's and Windows XP's usbport idle-suspend the controller without it and a halted xHC cannot report a hot-plug; since 1.0.1.0 every install route on both targets writes it." -f $route.Label, $suspKey, $suspValue)
-            continue
-        }
-        if ($hits.Count -gt 1) {
-            Add-Failure "SUSP-DUP" ("{0} writes {1} {2} times (lines {3}). Which one wins is engine-dependent; name it once per route." -f $route.Label, $suspValue, $hits.Count, (($hits | ForEach-Object { $_.Line }) -join ', '))
-        }
-        foreach ($hit in $hits) {
-            if ($hit.Flags.ToLowerInvariant() -ne "0x00010001" -or $hit.Data -ne "1") {
-                Add-Failure "SUSP-VALUE" ("[{0}] line {1} writes {2} as flags '{3}' data '{4}', not 0x00010001 (FLG_ADDREG_TYPE_DWORD) and 1. usbport reads four bytes and acts on nonzero; anything else is the fix silently switched off." -f $hit.Section, $hit.Line, $suspValue, $hit.Flags, $hit.Data)
+        foreach ($hcName in $suspHcValues) {
+            if ($e.Text -match ('^\s*HK[A-Z]+\s*,\s*[^,]*\s*,\s*{0}\s*,' -f [regex]::Escape($hcName))) {
+                Add-Failure "SUSP-HCVALUE" ("[{0}] line {1} writes {2}. The per-controller values are not this package's mechanism: usbport's own USBPORTBUSIF_ControllerSelectiveSuspend writes HcDisableSelectiveSuspend back, and on Vista usbhub calls it from a power-setting callback - measured 2026-09-17, the Balanced plan rewrote it to 0 and suspended the controller at once, and Balanced defaults that setting to Enabled on battery. The driver declares USB_MINIPORT_FLAGS_DISABLE_SS (0x20) instead." -f $secName, $e.Line, $hcName)
             }
         }
     }

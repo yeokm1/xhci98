@@ -512,8 +512,10 @@ Rules this earns:
   its own beyond Code 39 and an empty trace. Any NT-target install reading
   starts with a listing of `system32\drivers`.
 
-Affected: `src/xhci98.inf` (`[Xhci.CopyNT]`, `Xhci.AddReg.Global` on the
-NT routes), `scripts/inf-gate/check-inf.ps1` (`OS-ONWIN98`, `OS-NEVER`,
+Affected: `src/xhci98.inf` (`[Xhci.CopyNT]`, and `Xhci.AddReg.Global` on the
+NT routes - that section went at `1.1.0.0` with the mechanism; see "the value
+was right and still had to go" in the batch 11-V entry),
+`scripts/inf-gate/check-inf.ps1` (`OS-ONWIN98`, `OS-NEVER`,
 `SUSP-*`), `docs/contributing/build-and-test.md` ("The files the OS
 supplies", "Windows XP target VM"), `scripts/setup-qemu-winxp.ps1`,
 release 1.0.1.0 (roadmap Phase 19).
@@ -2711,7 +2713,9 @@ apart now.
 `SlotsEnabled` 1, `DevicesAddressed` 1, `OpensTotal` 2, wizard raised with no
 Refresh, and `CheckCallbacks` climbing continuously instead of freezing. So
 the defect is fixed by one `AddReg` line, on the Windows 98 path only, with
-no driver code at all.
+no driver code at all. (That held until `1.1.0.0`, which moved the fix into
+the driver as one miniport flag bit and took the `AddReg` line out of both
+INFs - the second postscript below.)
 
 Postscript, 2026-09-06 (roadmap Phase 20, F18): Windows 2000 SP4's own stack
 was not seen idling this controller in the VM, value or no value, in the
@@ -2727,6 +2731,54 @@ start routine of SP4's build defaults the global value to 1 when
 2000, so `0x800` is never set there unless `Services\usb` holds an explicit 0
 (`0x10890`); NUSB's build carries the same default at `0x1082B`, and
 SweetLow's has no such check.)
+
+### Postscript, 2026-09-17: the value was right and still had to go
+
+The owner asked on 2026-09-16 for the machine-wide value to be replaced. Not
+because it failed - nothing above it is withdrawn - but because of what it
+touched: `Services\USB` is not the devnode's key, so it reached every
+controller usbport drives on the machine and outlived the device that
+installed it. Three candidates, all read against each OS's own `usbport.sys`:
+
+The **per-controller values** were the obvious answer and they lose. They read
+correctly on all nine builds this driver runs under, and Windows 98 measured
+them working. But usbport's own `USBPORTBUSIF_ControllerSelectiveSuspend`
+writes `HcDisableSelectiveSuspend` back, and while the 9x, 2000 and XP hubs
+call it only from the root hub's "Allow the computer to turn off this device"
+checkbox, Vista's `usbhub` also registers a callback for
+`GUID_USB_SETTING_SELECTIVE_SUSPEND`. Measured on a Vista x86 guest,
+2026-09-17: setting the Balanced plan's USB selective suspend to Enabled
+rewrote the value to 0 and suspended the controller at once - and Balanced
+ships that setting Enabled on battery. Windows 7 also has no
+`HcDisableSelectiveSuspend` string at all; its name is
+`HcDisableAllSelectiveSuspend`, and Vista and Windows 7 share one INF install
+section.
+
+The **miniport flag** `USB_MINIPORT_FLAGS_DISABLE_SS` (0x20) was taken, and
+what made it takeable was a sweep rather than a guess. Every read of
+`MiniPortFlags` in each build's `.text` was enumerated (37 to 65 per build)
+and every test of bit 5 swept in reverse: the bit is tested exactly once per
+build, in the start routine, after the registry reads, and forces the same
+state the global value forces. It is `1.1.0.0`'s fix.
+
+- **A setting that works is not the same as a setting that holds.** The
+  per-controller value would have passed any install-time check ever written
+  for it. What disqualified it is a write nobody makes by hand, with a
+  default that differs on battery. "Does the OS honour this?" and "does the
+  OS leave it alone?" are two questions and only the first gets asked.
+- **"Does this bit do what its name says?" is the easy half.** The hard half
+  is "does it do anything else?", and the only honest answer to that comes
+  from enumerating every reader, not from reading the one that matters. The
+  sweep also corrected a `MiniPortFlags` claim the ABI document had carried
+  since 2026-09-10 - a `0x80000` test placed in
+  `USBPORT_SyncPowerAndChirpUsb2Ports` that turned out to be a port-status
+  bit sharing a constant - which is the sort of thing that only falls out of
+  checking all of them.
+- **Where a mechanism can live in the driver or in the registry, the driver
+  is the narrower place.** The value needed four install routes, had to
+  survive an upgrade that bugchecks mid-install, outlived everything, and
+  meant the same thing under two names on two OS families sharing one install
+  section. The flag is one bit in a structure this driver already fills in.
 
 ### Rules
 
