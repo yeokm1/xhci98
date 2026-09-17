@@ -1405,6 +1405,11 @@ static void test_multi_trb_packet_length(void)
     CHECK_EQ(iso_event(&fix, 1, WANT_CC_SHORT_PACKET, 100, &result),
              XHCI_XFER_OK, "the TD's own tail repeats it");
     CHECK_EQ(fix.transfers[0].BytesTransferred, 600UL, "adding nothing");
+    /* It names the packet's last TRB - the one carrying IOC - so it is the
+     * tail the spec promises, not a stray event, though it is not the
+     * request's last TRB. */
+    CHECK_EQ(fix.queue.IsoTailEvents, 1UL, "counted as a tail");
+    CHECK_EQ(fix.queue.UnmatchedEvents, 0UL, "and not as unmatched");
     CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "and ending nothing");
 
     /* A residual larger than the range summed so far is impossible and is

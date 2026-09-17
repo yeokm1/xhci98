@@ -3816,9 +3816,14 @@ typedef struct _XHCI_TRANSFER_QUEUE {
      *                       a controller dropping the tails this driver is
      *                       waiting for. One group can be counted more than once
      *                       if several intermediate events land on it.
-     *   `IsoTailEvents`     the tail event itself: one naming the group's last
-     *                       TRB for a packet an earlier, intermediate event has
-     *                       already answered (p.175, p.201). It resolves to a
+     *   `IsoTailEvents`     the tail event itself: one naming the last TRB of
+     *                       a multi-TRB packet that an earlier, intermediate
+     *                       event has already answered (p.175, p.201) - IOC
+     *                       sits on every packet's last TRB, so any packet can
+     *                       produce one, not only the request's last. A repeat
+     *                       on a single-TRB packet, or one naming a TRB that is
+     *                       not its packet's last, is a duplicate event and
+     *                       stays in `UnmatchedEvents`. It resolves to a
      *                       TRB this driver owns, so it is not an
      *                       `UnmatchedEvents` reading, and a conforming
      *                       controller raises one for every page-crossing isoch

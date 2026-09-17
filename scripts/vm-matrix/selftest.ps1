@@ -559,6 +559,28 @@ Assert "a paused VM is not"                            "not-executing" (Get-Live
 Assert "an unparseable info irq is unknown"            "unknown"       (Get-LivenessVerdict -Running $true -Parsed $false -IrqDelta 0).Verdict
 Assert "...even with the pump advancing"               "unknown"       (Get-LivenessVerdict -Running $true -Parsed $false -IrqDelta 0 -LifeDelta 3).Verdict
 
+Write-Host "--- ...and the sign of life is read off the snapshot the way Read-Counters returns it ---"
+#
+# Read-Counters returns { Values; Unread; Read } with Values keyed by the raw
+# field name (TransfersCompleted), not by the label.  The runner's callback
+# is `Get-KeepAliveTransfers -Snapshot (Read-Counters ...) -Table $table`, so
+# it is driven here against a snapshot shaped exactly like that return, with
+# the real table: a callback indexing the wrong object or the wrong key would
+# read $null, cast to 0, and every pumped row would read as a dead guest
+# (Codex review round 1 on the 2026-09-17 audit's D2).
+$lifeSnap = [pscustomobject]@{ Values = @{ 'TransfersCompleted' = [int64]7; 'TransfersSubmitted' = [int64]9 }; Unread = 0; Read = 2 }
+Assert "the field is read from .Values by its raw name" 7 (Get-KeepAliveTransfers -Snapshot $lifeSnap -Table $table)
+$lifeCb = { Get-KeepAliveTransfers -Table $table -Snapshot $lifeSnap }.GetNewClosure()
+Assert "...through a closure built as the runner builds it" 7 ([int64](& $lifeCb))
+$lifeSnap2 = [pscustomobject]@{ Values = @{ 'TransfersCompleted' = [int64]12 }; Unread = 0; Read = 1 }
+Assert "...and two snapshots give the pump's delta"     "alive" (Get-LivenessVerdict -Running $true -Parsed $true -IrqDelta 40 -LifeDelta ((Get-KeepAliveTransfers -Snapshot $lifeSnap2 -Table $table) - (Get-KeepAliveTransfers -Snapshot $lifeSnap -Table $table))).Verdict
+$lifeThrew = $false
+try { Get-KeepAliveTransfers -Snapshot ([pscustomobject]@{ Values = @{ 'transfers completed' = [int64]7 }; Unread = 1; Read = 1 }) -Table $table | Out-Null } catch { $lifeThrew = $true }
+Assert "a snapshot keyed by the label, not the field, is an error and not a zero" $true $lifeThrew
+$lifeThrew = $false
+try { Get-KeepAliveTransfers -Snapshot ([pscustomobject]@{ Values = @{}; Unread = 1; Read = 0 }) -Table $table | Out-Null } catch { $lifeThrew = $true }
+Assert "an unread field is an error and not a zero"    $true $lifeThrew
+
 Write-Host "--- the header carries every variable thing, and nothing else does ---"
 $hdr = New-PostReleaseHeader -TargetId '2a-fresh' -Version '1.0.0.0' -DriverLine '1.0.0.0 qemu, 1 B, sha256 0' -ImageLine 'vm\fresh-2a.img, stamp base-1.0.0.0-qemu, from win98.img post-nusb' `
            -QemuVersion '11.0.0' -Accel 'tcg' -Sizeof 12345 -Counters 7 -Started (Get-Date '2026-08-30 10:00:00') -Elapsed ([timespan]::FromMinutes(61)) `

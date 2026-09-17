@@ -594,7 +594,7 @@ function Invoke-AttachLeg {
         # also handed its `transfers completed` and the pump to drive it.
         $probeArgs = @{}
         if ($Pump) {
-            $probeArgs['SignOfLife'] = { (Read-Counters -Port $Port -BaseVa $Ident.Va -Table $Table -Process $Process)['transfers completed'] }.GetNewClosure()
+            $probeArgs['SignOfLife'] = { Get-KeepAliveTransfers -Table $Table -Snapshot (Read-Counters -Port $Port -BaseVa $Ident.Va -Table $Table -Process $Process) }.GetNewClosure()
             $probeArgs['Stimulus'] = { Invoke-Pump -Port $Port -Seconds 2 }.GetNewClosure()
         }
         $alive = Test-GuestAlive -Port $Port -Process $Process @probeArgs

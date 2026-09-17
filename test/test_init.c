@@ -6333,6 +6333,46 @@ static void test_disable_interrupts(void)
              "still not as a failure");
 
     /*
+     * **A reset in progress is not written into** (2026-09-17 audit B7, Codex
+     * round 1). HCRST reads 1 until the reset completes and CNR stays up
+     * until the controller is ready; 5.4.2 forbids every operational-register
+     * write but USBSTS meanwhile, and the reserved-preserving RMW would carry
+     * the write-1-to-reset bit it read straight back. The reset itself
+     * returns INTE and IE to 0, which is what the read back proves.
+     */
+    enable_start(0);
+    XhciEnableInterrupts(&ext);
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] = HC_USBCMD_RSVDP_SEED | XHCI_USBCMD_HCRST;
+    mmio[HC_IR0(XHCI_IR_IMAN) / 4] &= ~XHCI_IMAN_IE;
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_CNR;
+    writeCount = 0;
+    failures = ext.InterruptMaskFailures;
+    degraded = ext.InterruptMaskDegraded;
+    ext.InterruptDeliverySuppressed = 0;
+    XhciMaskInterrupts(&ext);
+    CHECK_EQ(writeCount, 0,
+             "a mask on a controller mid-reset writes no register at all");
+    CHECK_EQ(mmio[HC_OP(XHCI_OP_USBCMD) / 4] & XHCI_USBCMD_HCRST,
+             XHCI_USBCMD_HCRST, "so the reset it read is not re-issued");
+    CHECK_EQ(ext.InterruptDeliverySuppressed, 1,
+             "and delivery is proven suppressed from the reset's own defaults");
+    CHECK_EQ(ext.InterruptMaskFailures, failures, "not a failure");
+    CHECK_EQ(ext.InterruptMaskDegraded, degraded,
+             "and not degraded either - every operand was readable");
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] &= ~XHCI_USBSTS_CNR;
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] &= ~XHCI_USBCMD_HCRST;
+
+    /* CNR alone, with HCRST already reading 0, is the same refusal. */
+    enable_start(0);
+    XhciEnableInterrupts(&ext);
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] &= ~XHCI_USBCMD_INTE;
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_CNR;
+    writeCount = 0;
+    XhciMaskInterrupts(&ext);
+    CHECK_EQ(writeCount, 0, "CNR alone holds every write back too");
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] &= ~XHCI_USBSTS_CNR;
+
+    /*
      * **The one mask whose failure the ISR cannot cover for.** Everywhere else
      * an unproven mask leaves XhciIsr admitted so it can still acknowledge;
      * here usbport is about to stop calling it, because its ISR wrapper only
@@ -19317,6 +19357,89 @@ static void test_slot_enable_slot_failure_adopts_the_slot(void)
 }
 
 /*
+ * **A record failed while its Enable Slot is in flight** - the 2026-09-17
+ * audit's B4, and Codex's first-round finding on its fix. usbhub gives up on
+ * the device before the completion is drained and re-enumerates it, and the
+ * port now reads a speed this driver cannot address, so the re-entry fails the
+ * RESERVED record. Two things must then hold when the Enable Slot completes:
+ * the record is not resurrected (the first fix), and the slot it adopts is
+ * still *prepared* - EP0 ring and DCBAA entry - because the next valid
+ * re-entry addresses through them and nothing else ever carves them (the
+ * second). The first draft kept FAILED before the prepare, and the valid
+ * re-entry then built an Address Device naming a ring at physical address 0.
+ */
+static void test_slot_failed_during_enable_slot_keeps_a_usable_slot(void)
+{
+    PXHCI_DEVICE dev;
+    ULONG port;
+    ULONG failures;
+    ULONG refusals;
+    ULONG epOffset;
+    volatile ULONG *epContext;
+
+    hc_build();
+    enable_start(0);
+    deliver_events();
+    hwCmdSlotId = 5;
+
+    slot_attach(3, 3);
+    (void)slot_open(0, UsbHighSpeed, 64);
+    dev = &ext.Devices[0];
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_RESERVED, "(Enable Slot outstanding)");
+    CHECK_EQ(dev->ActiveOp, XHCI_DEV_OP_ENABLE_SLOT, "(on this record)");
+
+    /* The port comes out of its next resets at PSIV 4 - SuperSpeed in the
+     * model's table - before the Enable Slot completion is drained. Two
+     * resets, because task 7b-A.1.1 suppresses the first reset inside an
+     * enumeration bracket (usbhub's descriptor-read reset) and re-arms on the
+     * second: usbhub giving up and starting the device over. */
+    port = XhciRootHubPortOf(&ext.RootHub, 3);
+    mmio[HC_PORTSC(port) / 4] = (mmio[HC_PORTSC(port) / 4] &
+                                 ~XHCI_PORTSC_SPEED_MASK) |
+                                (4UL << XHCI_PORTSC_SPEED_SHIFT);
+    slot_reset_port(3);
+    slot_reset_port(3);
+    refusals = ext.OpenRefusals;
+    failures = ext.CommandFailures;
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_NO_RESOURCES,
+             "the re-entry at an unaddressable speed is refused");
+    CHECK_EQ(ext.OpenRefusals, refusals + 1, "and counted");
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_FAILED, "failing the record");
+    CHECK_EQ(dev->ActiveOp, XHCI_DEV_OP_ENABLE_SLOT,
+             "with its Enable Slot still outstanding");
+
+    deliver_events();
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_FAILED,
+             "the completion does not resurrect it");
+    CHECK_EQ((ULONG)dev->SlotId, 5UL, "the slot is adopted");
+    CHECK(dcbaa_entry(5) != 0, "and prepared - the DCBAA entry is published");
+    CHECK(XhciRingDequeuePA(&dev->Ep0Ring) != 0,
+          "with an EP0 ring a re-entry can address through");
+    CHECK_EQ(dev->PendingOp, XHCI_DEV_OP_NONE, "nothing is owed");
+    CHECK_EQ(ext.CommandFailures, failures,
+             "and no failure is charged for a command the controller answered");
+
+    /* The device comes back at a speed this driver addresses. */
+    mmio[HC_PORTSC(port) / 4] = (mmio[HC_PORTSC(port) / 4] &
+                                 ~XHCI_PORTSC_SPEED_MASK) |
+                                (3UL << XHCI_PORTSC_SPEED_SHIFT);
+    slot_reset_port(3);
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "a valid re-entry is accepted");
+    CHECK_EQ(dev->ActiveOp, XHCI_DEV_OP_ADDRESS_BSR,
+             "and re-enters the chain at Address Device (BSR = 1)");
+    CHECK_EQ(XhciInputEndpointContextOffset(&ext.Layout, 1, &epOffset),
+             XHCI_LAYOUT_OK, "(input EP0 context located)");
+    epContext = (volatile ULONG *)(ext.StartVA + epOffset);
+    CHECK((epContext[2] & ~0x0FUL) != 0,
+          "naming a nonzero TR Dequeue Pointer");
+    deliver_events();
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "which completes into Default");
+    CHECK_EQ(ext.CommandFailures, failures,
+             "with no command failed along the way");
+}
+
+/*
  * **An unmatched Command Completion Event carrying a slot-fatal code, and audit
  * round 10 asked which way this should go.**
  *
@@ -29500,10 +29623,14 @@ static void test_recovery_refuses_into_set_cnr(void)
     XhciRegPacket.EnableInterrupts(&ext);
     hw_events_reset();
 
-    /* The shape the previous attempt leaves: halted (R/S clear, HCH set),
-     * reset in progress. */
-    mmio[HC_OP(XHCI_OP_USBCMD) / 4] &= ~XHCI_USBCMD_RS;
-    mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_HCH | XHCI_USBSTS_CNR;
+    /*
+     * The shape the previous attempt leaves: a reset in progress. USBCMD reads
+     * HCRST = 1 with every other field at its reset default (so R/S and INTE
+     * clear), USBSTS reads HCH with CNR up. Placed in the registers directly
+     * rather than through the model's HCRST write, which completes at once.
+     */
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] = HC_USBCMD_RSVDP_SEED | XHCI_USBCMD_HCRST;
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] = XHCI_USBSTS_HCH | XHCI_USBSTS_CNR;
     ext.ControllerFailed = 1;
     ext.RecoveryRequested = 1;
     asyncRequests = 0;
@@ -29517,37 +29644,32 @@ static void test_recovery_refuses_into_set_cnr(void)
     CHECK_EQ(ext.RecoveryFailures, 1, "and refused");
     CHECK_EQ(ext.RecoveryFailuresConsecutive, 1, "charged to the budget");
     CHECK_EQ(ext.RecoveryLastStep, XHCI_INIT_STEP_RESET,
-             "at the reset step - the halt found HCH and wrote nothing");
+             "at the reset step, the one a CNR refusal is recorded at");
     CHECK_EQ(ext.InitStep, XHCI_INIT_STEP_RESET, "(the step record agrees)");
     CHECK_EQ(ext.RecoveryLastStatus & XHCI_USBSTS_CNR, XHCI_USBSTS_CNR,
              "with the refusing USBSTS reading carrying CNR - the reason");
     /*
-     * The only USBCMD write in the window is XhciControllerBeginQuiesce's
-     * INTE mask on the way into every attempt (a refusal restores nothing:
-     * the enables come back only past a completed sequence). It is not the
-     * sequence's: the halt found HCH and wrote nothing, and the reset step
-     * wrote no HCRST into a controller still resetting.
+     * **Not one register write of any kind** - Codex round 1 on the first
+     * form of this vector, which accepted the quiesce's INTE mask ahead of
+     * the CNR check: that mask is an operational-register write made while
+     * CNR is set, and as a read-modify-write of a USBCMD reading HCRST = 1 it
+     * carried the write-1-to-reset bit straight back, a second reset issued by
+     * the mask. The recovery now reads CNR before its quiesce and refuses on
+     * it, and the mask itself declines a controller mid-reset.
      */
-    CHECK_EQ(count_writes(HC_OP(XHCI_OP_USBCMD)), 1,
-             "one USBCMD write: the quiesce's INTE mask, nothing else");
-    CHECK_EQ(last_write_value(HC_OP(XHCI_OP_USBCMD)) &
-                 (XHCI_USBCMD_INTE | XHCI_USBCMD_HCRST | XHCI_USBCMD_RS),
-             0, "(INTE off, and neither HCRST nor R/S in it)");
-    hcrstWrites = 0;
-    for (i = 0; i < writeCount; i++) {
-        if (writeOffset[i] == HC_OP(XHCI_OP_USBCMD) &&
-            (writeValue[i] & (XHCI_USBCMD_HCRST | XHCI_USBCMD_RS)) != 0) {
-            hcrstWrites++;
-        }
-    }
-    CHECK_EQ(hcrstWrites, 0,
-             "no USBCMD write carries HCRST or R/S - no halt, no second "
-             "HCRST");
+    CHECK_EQ(writeCount, 0,
+             "and no MMIO write at all: not the quiesce's INTE mask, not a "
+             "halt, not a second HCRST into a controller still resetting");
+    CHECK_EQ(count_writes(HC_OP(XHCI_OP_USBCMD)), 0,
+             "(spelled out: zero USBCMD writes)");
+    CHECK_EQ(mmio[HC_OP(XHCI_OP_USBCMD) / 4] & XHCI_USBCMD_HCRST,
+             XHCI_USBCMD_HCRST, "the reset in progress was left in progress");
     CHECK_EQ(mmio[HC_OP(XHCI_OP_USBSTS) / 4] & XHCI_USBSTS_CNR, XHCI_USBSTS_CNR,
              "the controller is left exactly as found");
     CHECK_EQ(ext.ControllerFailed, 1, "and stays latched failed");
 
     /* The reset finishes; the next poll's attempt goes through. */
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] &= ~XHCI_USBCMD_HCRST;
     mmio[HC_OP(XHCI_OP_USBSTS) / 4] &= ~XHCI_USBSTS_CNR;
     XhciRegPacket.CheckController(&ext);
     CHECK_EQ(asyncRequests, 2, "the poll re-arms within the budget");
@@ -29899,6 +30021,7 @@ int main(void)
     test_slot_interrupt_configure_outcomes();
     test_slot_command_fatal_completion_codes();
     test_slot_enable_slot_failure_adopts_the_slot();
+    test_slot_failed_during_enable_slot_keeps_a_usable_slot();
     test_slot_unmatched_command_event_severity();
     test_slot_interrupt_open_refusals();
     test_slot_interrupt_does_not_displace_ep0();

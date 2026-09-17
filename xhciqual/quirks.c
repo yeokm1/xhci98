@@ -27,8 +27,13 @@ static const QUIRK quirk_table[] = {
     { 0x8086, 0xA2AF, QF_PME_STUCK, "Intel Union Point (200-series)" },
     { 0x8086, 0xA36D, QF_PME_STUCK, "Intel Cannon Point (300-series)" },
 
-    /* NEC / Renesas */
-    { 0x1033, 0x0194, QF_FW_SPI | QF_SPURIOUS | QF_CMD_RETRY,
+    /* NEC / Renesas. Linux's XHCI_NEC_HOST (every 0x1033 xHCI) does two
+     * things: it queues a vendor NEC Get Firmware command at start and logs
+     * the version the card's own firmware answers with, which is what QF_FW_SPI
+     * reports (nothing is uploaded), and it sets the chain bit on isoch link
+     * TRBs. It sets no spurious-success or command-retry quirk; the row
+     * carried QF_SPURIOUS | QF_CMD_RETRY until the 2026-09-17 audit. */
+    { 0x1033, 0x0194, QF_FW_SPI,
       "NEC uPD720200/200A (fw on card SPI flash)" },
     { 0x1912, 0x0014, QF_FW_UPLOAD | QF_CMD_RETRY,
       "Renesas uPD720201 (fw upload if ROM-less)" },
@@ -37,8 +42,12 @@ static const QUIRK quirk_table[] = {
 
     /* ASMedia. Linux's PCI_DEVICE_ID_ASMEDIA_* names: 0x1142 is the ASM1042A
      * and 0x1242 the ASM1142; the three newer parts carry only
-     * XHCI_NO_64BIT_SUPPORT, which cannot matter to a 32-bit-only driver. */
-    { 0x1B21, 0x1042, QF_BULK64K, "ASMedia ASM1042" },
+     * XHCI_NO_64BIT_SUPPORT, which cannot matter to a 32-bit-only driver.
+     * The ASM1042 gets XHCI_SPURIOUS_SUCCESS and XHCI_BROKEN_STREAMS (no
+     * flag here for streams). It carried QF_BULK64K instead until the
+     * 2026-09-17 audit; no source in this repository or in Linux supports a
+     * 64 KB bulk limit on it. */
+    { 0x1B21, 0x1042, QF_SPURIOUS, "ASMedia ASM1042" },
     { 0x1B21, 0x1142, 0,          "ASMedia ASM1042A" },
     { 0x1B21, 0x1242, 0,          "ASMedia ASM1142" },
     { 0x1B21, 0x2142, 0,          "ASMedia ASM2142" },

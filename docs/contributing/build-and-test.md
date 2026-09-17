@@ -1223,7 +1223,7 @@ QEMU is the right default for Phases 3-7 (enumeration, HID, basic transfers), bu
 Host controller models. QEMU emulates only two xHCI host models: `qemu-xhci` (generic, spec-clean, no vendor PCI ID) and `nec-usb-xhci` (NEC/Renesas-flavored PCI ID). Neither reproduces the real-silicon deviations Linux's `xhci-pci.c` and `pci-quirks.c` catalogue:
 
 - `nec-usb-xhci` advertises a NEC ID but involves no firmware, so the Renesas uPD720201/202 driver firmware-upload path cannot be exercised in QEMU (QEMU emulates neither that chip nor the uPD720200's on-card SPI flash).
-- Spurious-success (FL1000/VL800), Intel compliance-mode lockup, the ASM1042 64 KB bulk limit, AMD PLL re-lock, and BIOS/UEFI handoff contention are all absent from QEMU's emulation.
+- Spurious-success completions (ASM1042, the one part the Linux mirror flags for it; the table said FL1000/VL800 until 2026-09-17, which the mirror does not support), Intel compliance-mode lockup, AMD PLL re-lock, and BIOS/UEFI handoff contention are all absent from QEMU's emulation.
 
 The residual-length and quirk-handling code paths therefore can only be validated against physical controllers. `nec-usb-xhci` is still useful as a negative test: it confirms the driver does not misfire NEC quirks against a controller that advertises the ID but lacks the bug.
 
@@ -3727,7 +3727,7 @@ table for the exact mobile IDs.
 |---|---|---|---|
 | AMD mobile (Kaveri / Carrizo APU `1022:7814`, or Ryzen mobile) | Era AMD laptop | Second integrated vendor; PLL re-lock on power events and isoch scheduling quirks. AMD's USB IP is partly ASMedia-derived. Less common in the retro scene and harder to boot Win98 on. | Phase 13 |
 | NEC uPD720200 (`1033:0194`) + Renesas uPD720201/202 (`1912:0014`/`0015`) | PCIe add-in card (desktop bench) | ROM-less 720201/202 cards are the only test vehicle for the driver firmware-upload path; the 720200 boots from on-card SPI flash (no upload) and covers plain NEC-vendor behavior. Not found in laptops. | Phase 6-8 |
-| ASMedia ASM1142/ASM2142 (clean) + ASM1042 (`1B21:1042`, 64 KB bulk limit) | PCIe add-in card (desktop bench) | Clean baseline plus the bulk-chunking quirk. ASMedia behavior also surfaces indirectly under AMD integrated USB. | Phase 3-8 |
+| ASMedia ASM1142/ASM2142 (clean) + ASM1042 (`1B21:1042`, spurious-success completions and broken streams per Linux `xhci-pci.c`; the table carried an unsourced 64 KB bulk limit until 2026-09-17) | PCIe add-in card (desktop bench) | Clean baseline plus the spurious-success quirk. ASMedia behavior also surfaces indirectly under AMD integrated USB. | Phase 3-8 |
 
 #### Tier 3 - quirk completeness on a desktop bench (only if chasing specific bugs)
 
@@ -3743,8 +3743,8 @@ Practical notes:
   100/200-series). That is the bulk of "comprehensive" for this project.
 - The discrete add-in cards (Tier 2-3) only make sense on a desktop test bench
   with free PCIe slots, and only to exercise quirks your laptops will never
-  trigger (NEC firmware upload, FL1000/VL800 spurious success, ASM1042 64 KB
-  bulk). Skip them unless you are specifically validating that code path.
+  trigger (Renesas firmware upload, ASM1042 spurious success, Fresco Logic
+  broken MSI). Skip them unless you are specifically validating that code path.
 - A laptop with Thunderbolt/USB4 exposes an extra xHCI for USB tunneling
   alongside the native PCH xHCI; that path is more complex and out of scope
   (and such laptops usually cannot boot Win98 anyway).
@@ -5374,9 +5374,12 @@ powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavo
 
 It assembles `out\pkg-<flavor>-<arch>\` and runs the INF gate against the finished
 directory, so a package is never less gated than the binary in it. A copy
-taken from `releases\<version>\<flavor>-<arch>\` (`release-x86`, `debug-x86`,
-`release-x64`, `debug-x64` - the flavour-only directory name was the layout
-until the cut of 2026-09-09) is the same two files. The
+taken from a published release directory is the same two files. The packager
+has written `release-x86`, `debug-x86`, `release-x64` and `debug-x64` since
+the 2026-09-09 change (roadmap task 21.5, `runs\run-21.md`), and `1.1.0.0`
+will be the first cut to carry those names; the cuts up to `1.0.2.0` keep
+their flavour-only `release\` and `debug\` directories, as
+`releases\1.0.2.0\` shows. The
 reference copies of the two `usbd.sys` builds and Windows 98 SE's
 `usbhub.sys` are still staged under the git-ignored `tools\` by
 `scripts\package\extract-usbd-sources.ps1`, for the import gate's Windows 98

@@ -58,6 +58,26 @@ function Import-CounterTable {
     }
 }
 
+# The keep-alive pump's sign of life, read off a Read-Counters snapshot the
+# way every other reader here reads one: the label resolved to its field, the
+# field looked up in .Values.  Its own function because the first version of
+# the liveness callback (the 2026-09-17 audit's D2) indexed the snapshot
+# object itself with the label, which yields $null, casts to 0, and read every
+# pumped row as a dead guest; the self-test drives this against a snapshot
+# shaped like the real return so that mistake cannot come back.  A snapshot
+# that did not read the field is an error, never a zero.
+function Get-KeepAliveTransfers {
+    param(
+        [Parameter(Mandatory = $true)]$Snapshot,
+        [Parameter(Mandatory = $true)]$Table
+    )
+    $field = Resolve-CounterLabel -Table $Table -Label 'transfers completed'
+    if ($null -eq $Snapshot.Values -or -not $Snapshot.Values.ContainsKey($field)) {
+        throw ("the counter snapshot carries no 'transfers completed' ({0}); the read left it unread, so no sign of life can be taken from it" -f $field)
+    }
+    return [int64]$Snapshot.Values[$field]
+}
+
 # Resolve a human label - the form every result box in this repository quotes -
 # to the extension field it is printed from.  An unknown label is an ERROR and
 # never a zero: a matrix expectation naming a counter that no longer exists must

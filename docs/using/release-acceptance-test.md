@@ -494,22 +494,39 @@ Windows Vista and Windows 7, 32-bit and x64 (virtual machines only)
 | 7.19 | Disable the controller in Device Manager and re-enable it, five times, then uninstall it and Scan for hardware changes | It comes back each time, with no crash and no enable that hangs; the rescan reinstalls with no media prompt and, on x64, with no second F8. Record how long each enable took |
 | 7.20 | x64 only: restart without pressing F8, then restart again with Disable Driver Signature Enforcement chosen | On the ordinary boot the controller shows Code 39 and nothing on it works; on the F8 boot the two nodes of 4.3 are back and the mouse of step 5 works. Record both. 32-bit Vista and Windows 7 do not enforce kernel-mode signing and this clause is `SKIP - other target` there |
 
-7.17 to 7.19 were measured on the four virtual machines of 2026-09-13 - Vista
-Business SP2 and Windows 7 Professional SP1, each 32-bit and x64, four virtual
+Two runs stand behind this block, and each clause comes from one of them.
+7.19 is the run of 2026-09-13 on the four virtual machines - Vista Business
+SP2 and Windows 7 Professional SP1, each 32-bit and x64, four virtual
 processors, the `qemu` build installed from a staged copy of the INF's NT 6.x
-sections (`docs/issues/07-win7-x86-enable-arrest-usbport-done-dpc.md` section
-7.5; `docs/contributing/build-and-test.md`, "Windows Vista and Windows 7
-target VMs" and "Vista x64 and Windows 7 x64 target VMs"), and 7.17 and 7.18
-again on 2026-09-17 against a control that idles
-(`docs/issues/05-idle-suspend-and-disableselectivesuspend.md` section 5.5).
-7.19 is issue 7's clause: before the fix Windows 7's enable arrested inside
-`usbport`, and five cycles a guest is what the record rests on, which issue
-7 section 6 says is not a proof that it cannot recur. 7.20 is the F8
-requirement read from the other side: the package is not signed, and the
-Code 39 reading is Vista x64's (release notes, "Known limitations"). No
-published `release` directory had been installed on any of the four before
-roadmap task 22.10 read the `1.1.0.0` asset, so on a first run of this block
-say which build and which directory it was.
+sections: install, the three devices, five watched disable/enable cycles, a
+remove and a rescan on every guest
+(`docs/issues/07-win7-x86-enable-arrest-usbport-done-dpc.md` section 7.5;
+`docs/contributing/build-and-test.md`, "Windows Vista and Windows 7 target
+VMs" and "Vista x64 and Windows 7 x64 target VMs"). That run read no
+registry value and no idle: the package it installed still wrote the
+machine-wide value, and it did not wait on an empty bus. 7.19 is issue 7's
+clause - before the fix Windows 7's enable arrested inside `usbport` - and
+five cycles a guest is what the record rests on, which issue 7 section 6
+says is not a proof that it cannot recur. 7.17 and 7.18 are the run of
+2026-09-17 (`docs/issues/05-idle-suspend-and-disableselectivesuspend.md`
+section 5.5), one clean install of the `1.1.0.0` package per guest on all
+four, each beside a control leg of the previous build with its value
+deleted: the registry state read in-guest per leg (`Services\USB` absent on
+Windows 7 x86 and x64; `Services\usb` holding only `FastS4_OverrideBiosS4`
+on Vista x64, as on Vista x86), then five minutes on an empty bus, a
+keyboard hot-plugged and addressed (within 10 s on Windows 7 x86, 6 s on
+the two x64 guests), and no re-idle after its unplug. On 32-bit Vista the
+five idle minutes showed nothing either way and the discriminator was the
+power plan's selective-suspend flip, so 7.18 there is the weaker reading the
+row says it is. That day was also the first time Vista x64 and Windows 7
+x64 (with XP x64) were ever booted without the value; 32-bit Vista and
+Windows 7 had been read without it on 2026-09-16 (section 5.3). 7.20 is
+the F8 requirement read from the other side: the package is not signed, and
+the Code 39 reading is Vista x64's (release notes, "Known limitations",
+2026-09-10 to 2026-09-16). No published `release` directory had been
+installed on any of the four before roadmap task 22.10 read the `1.1.0.0`
+asset, so on a first run of this block say which build and which directory
+it was.
 
 Windows 2000's 7.5 has not been measured here and is `SKIP - other target`.
 

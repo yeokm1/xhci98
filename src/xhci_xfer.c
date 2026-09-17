@@ -3372,7 +3372,8 @@ static ULONG xhciXferIsoPacketAt(const XHCI_RING *ring,
                                  const XHCI_TRANSFER *transfer,
                                  ULONG index,
                                  ULONG *packetIndex,
-                                 ULONG *packetHead)
+                                 ULONG *packetHead,
+                                 ULONG *packetTail)
 {
     ULONG eventHead;
     ULONG eventTail;
@@ -3401,6 +3402,7 @@ static ULONG xhciXferIsoPacketAt(const XHCI_RING *ring,
         if (head == eventHead) {
             *packetIndex = i;
             *packetHead = eventHead;
+            *packetTail = eventTail;
             return 1;
         }
         cursor = XhciRingNextIndex(ring, tail);
@@ -3445,6 +3447,7 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
     ULONG reportedIndex;
     ULONG packetIndex;
     ULONG packetHead;
+    ULONG packetTail;
     ULONG ahead;
     ULONG packetLength;
     ULONG bytes;
@@ -3558,7 +3561,7 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
         return XHCI_XFER_OK;
     }
     if (!xhciXferIsoPacketAt(ring, owner, reportedIndex, &packetIndex,
-                             &packetHead)) {
+                             &packetHead, &packetTail)) {
         /*
          * **A record/ring divergence, not a stray event.** The caller has already
          * placed this index inside this transfer's range, so the walk failing
@@ -3664,14 +3667,23 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
          * counter folds into the total the mid-TD no-double-completion
          * argument rests on, which a conforming controller would otherwise
          * raise once per page-crossing short isoch IN packet (the 2026-09-17
-         * audit's B9). A re-measurement naming an *earlier* TRB is a genuine
-         * duplicate event and stays where it was.
+         * audit's B9). **Any packet's last TRB is a tail**, not only the
+         * request's: the builder puts IOC on every TD's last TRB, so a short
+         * packet on a split packet in the middle of a request produces one
+         * too (Codex round 1). A re-measurement naming a TRB that is not its
+         * packet's last is a genuine duplicate event and stays where it was -
+         * and so is a second event for a single-TRB packet: a TD of one TRB
+         * has no intermediate event for a tail to follow, so the only thing a
+         * repeat on it can be is a duplicate.
          */
-        if (reportedIndex != owner->LastIndex) {
+        if (reportedIndex != packetTail || packetHead == packetTail) {
             queue->UnmatchedEvents++;
             return XHCI_XFER_OK;
         }
         queue->IsoTailEvents++;
+        if (reportedIndex != owner->LastIndex) {
+            return XHCI_XFER_OK;
+        }
     } else {
         for (i = owner->IsoPacketsAnswered; i < packetIndex; i++) {
             iso->Packet[i].LengthTransferred = 0;

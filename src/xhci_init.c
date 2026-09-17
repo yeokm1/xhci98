@@ -75,6 +75,14 @@
  */
 #define XHCI_INTERRUPT_WRITE_ATTEMPTS   3UL
 
+/* The sequence's refusal record, defined with the sequence below; declared
+ * here because XhciRecoverController refuses through it ahead of entering
+ * the sequence. */
+static MPSTATUS xhciInitFailed(PXHCI_EXTENSION ext,
+                               ULONG step,
+                               ULONG status,
+                               MPSTATUS mpStatus);
+
 /* ------------------------------------------------------------------ */
 /* Common-buffer helpers                                               */
 /* ------------------------------------------------------------------ */
@@ -917,12 +925,15 @@ static ULONG xhciReset(PXHCI_EXTENSION ext)
     /*
      * A reset may already be in progress, and a second HCRST on top of it is
      * what 5.4.2 forbids ("software shall not write any Doorbell or
-     * Operational register ... until CNR = 0"). The path that gets here with
-     * CNR set is the in-place recovery: its waits are stall-only, so a
-     * controller whose HCRST takes longer than the 10 ms stall refuses at
-     * XHCI_INIT_STEP_RESET, and the next poll's attempt finds HCH = 1, skips
-     * the halt and arrives here with the previous reset possibly still
-     * running. Settled on the first read in the ordinary case.
+     * Operational register ... until CNR = 0"). The in-place recovery is the
+     * path that produces one - its waits are stall-only, so a controller
+     * whose HCRST takes longer than the 10 ms stall refuses at
+     * XHCI_INIT_STEP_RESET and the next poll's attempt finds the previous
+     * reset still running - and XhciRecoverController now refuses on that
+     * reading before it writes anything, so this wait is what covers the
+     * PASSIVE-level starts and resumes that can meet a reset firmware or a
+     * power transition left running. Settled on the first read in the
+     * ordinary case.
      */
     if (!XhciWaitForBits(ext,
                          ext->HcInfo.OperationalOffset + XHCI_OP_USBSTS,
@@ -1518,13 +1529,37 @@ VOID XhciMaskInterrupts(PXHCI_EXTENSION ext)
 {
     ULONG iman;
     ULONG usbcmd;
+    ULONG usbsts;
     ULONG attempt;
     ULONG degraded;
+    ULONG resetting;
 
     degraded = 0;
     for (attempt = 0; attempt < XHCI_INTERRUPT_WRITE_ATTEMPTS; attempt++) {
         usbcmd = XhciReadOp(ext, XHCI_OP_USBCMD);
         iman = XhciReadIr0(ext, XHCI_IR_IMAN);
+        usbsts = XhciReadOp(ext, XHCI_OP_USBSTS);
+        /*
+         * **A reset in progress masks nothing and is not written into.** HCRST
+         * reads 1 until the reset completes and CNR stays up until the
+         * controller is ready, and while either is set "software shall not
+         * write any Doorbell or Operational register of the xHC, other than
+         * the USBSTS register" (5.4.2) - nor the Runtime registers (4.2). The
+         * reserved-preserving RMW below would also carry the HCRST it read
+         * straight back, which is write-1-to-reset: a second reset issued by a
+         * function whose callers (quiesce, suspend, DisableInterrupts, the
+         * in-place recovery) never mean one. Nothing is lost by skipping: the
+         * reset itself returns USBCMD.INTE and every interrupter register to
+         * their defaults of 0, so the read back below proves the suppression
+         * from the hardware's own doing (2026-09-17 audit, B7, Codex round 1).
+         */
+        resetting = 0;
+        if ((usbcmd != 0xFFFFFFFFUL && (usbcmd & XHCI_USBCMD_HCRST) != 0) ||
+            (usbsts != 0xFFFFFFFFUL && (usbsts & XHCI_USBSTS_CNR) != 0)) {
+            resetting = 1;
+            XHCI_DBG_TEXT("interrupt mask: a reset is in progress - the "
+                          "enables are its to clear, nothing written");
+        }
         /*
          * An undecoding window reads as all ones. Feeding that through the
          * reserved-preserving RMW would assert HCRST, LHCRST, CSS and CRS together
@@ -1549,12 +1584,15 @@ VOID XhciMaskInterrupts(PXHCI_EXTENSION ext)
             degraded = 1;
             XHCI_DBG_TEXT("interrupt mask: a register window is not decoding");
         }
-        if (usbcmd != 0xFFFFFFFFUL) {
+        /* HCRST is stripped as well as INTE: a mask never resets, and the bit
+         * is write-1-to-reset, so carrying a read 1 back would. Unreachable
+         * behind the test above and kept for the race it closes. */
+        if (!resetting && usbcmd != 0xFFFFFFFFUL) {
             xhciWriteUsbCmdFrom(ext, usbcmd,
                                 (usbcmd & XHCI_USBCMD_DEFINED_MASK) &
-                                    ~XHCI_USBCMD_INTE);
+                                    ~(XHCI_USBCMD_INTE | XHCI_USBCMD_HCRST));
         }
-        if (iman != 0xFFFFFFFFUL) {
+        if (!resetting && iman != 0xFFFFFFFFUL) {
             XhciWriteIr0(ext, XHCI_IR_IMAN,
                          iman & ~(XHCI_IMAN_IE | XHCI_IMAN_IP));
         }
@@ -3841,6 +3879,33 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
 
     ext->RecoveryAttempts++;
     XhciLogNote(ext, "ctrl.recover.begin", ext->RecoveryAttempts);
+
+    /*
+     * **CNR first, before anything below writes a register.** A previous
+     * attempt's HCRST may still be running: on this path every wait is a
+     * 10 ms stall, so a slow reset refuses at XHCI_INIT_STEP_RESET and the
+     * next poll's attempt arrives here with CNR up. "Software shall not write
+     * any Doorbell or Operational register of the xHC, other than the USBSTS
+     * register, until CNR = '0'" (5.4.2), and the quiesce below writes USBCMD
+     * to mask INTE - so the check that xhciReset makes ahead of its HCRST is
+     * made here ahead of the quiesce, as the same refusal at the same step
+     * with the same evidence. Nothing is done and nothing is undone: the
+     * controller is left exactly as found, the latch stands, and the retry
+     * is the next poll's (2026-09-17 audit, B7, Codex round 1).
+     */
+    usbsts = XhciReadOp(ext, XHCI_OP_USBSTS);
+    if (usbsts != 0xFFFFFFFFUL && (usbsts & XHCI_USBSTS_CNR) != 0) {
+        (VOID)xhciInitFailed(ext, XHCI_INIT_STEP_RESET, usbsts,
+                             MP_STATUS_HW_ERROR);
+        ext->RecoveryFailures++;
+        ext->RecoveryFailuresConsecutive++;
+        ext->RecoveryLastStep = ext->InitStep;
+        ext->RecoveryLastStatus = ext->InitStatus;
+        XhciLogNote(ext, "ctrl.recover.refused", ext->InitStep);
+        XHCI_DBG_VALUE("recover: CNR still set from the previous reset - "
+                       "refusing before touching a register, USBSTS", usbsts);
+        return 0;
+    }
 
     /*
      * **The transition a stop/start would have provided, and the recovery is

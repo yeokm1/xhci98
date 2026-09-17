@@ -9337,22 +9337,6 @@ VOID XhciSlotCommandEvent(PXHCI_EXTENSION ext,
              */
             XhciLogNoteLocked(ext, "slot.enabled",
                               (slotId << 8) | dev->HubPort);
-            /*
-             * **A record failed while its Enable Slot was in flight stays
-             * failed.** A root-port re-entry at a speed this driver cannot
-             * address runs `xhciDevFailRecord` on the RESERVED record, and
-             * this arm used to write ENABLED and owe `ADDRESS_BSR` over it,
-             * so the pump built an Address Device with mps0 = 0, refused it
-             * and failed the record a second time with a `CommandFailures`
-             * the controller never earned (the 2026-09-17 audit's B4). The
-             * Slot ID is adopted above whatever the state, as it is for a
-             * failed Enable Slot: a FAILED record keeps its slot and the
-             * teardown's Disable Slot gives it back. No DCBAA entry is
-             * prepared, because nothing will be addressed through it.
-             */
-            if (dev->State == XHCI_DEV_STATE_FAILED) {
-                break;
-            }
             if (!xhciDevPrepareSlot(ext, dev)) {
                 /*
                  * **Torn down rather than left FAILED holding an owed Disable
@@ -9379,6 +9363,27 @@ VOID XhciSlotCommandEvent(PXHCI_EXTENSION ext,
             }
             if (dev->EndpointExtension != NULL) {
                 ((PXHCI_ENDPOINT)dev->EndpointExtension)->SlotId = slotId;
+            }
+            /*
+             * **A record failed while its Enable Slot was in flight stays
+             * failed - with its slot prepared.** A root-port re-entry at a
+             * speed this driver cannot address runs `xhciDevFailRecord` on the
+             * RESERVED record, and this arm used to write ENABLED and owe
+             * `ADDRESS_BSR` over it, so the pump built an Address Device with
+             * mps0 = 0, refused it and failed the record a second time with a
+             * `CommandFailures` the controller never earned (the 2026-09-17
+             * audit's B4). The slot is still prepared above, because a FAILED
+             * record is one `xhciDevByHubPort` admits: the next valid
+             * address-0 open re-enters through `xhciDevReenterAtDefault`,
+             * which reads the Output Slot Context and owes `ADDRESS_BSR`
+             * against `Ep0Ring` - and only this arm ever carves either (Codex
+             * round 1 on the first draft, which kept FAILED *before* the
+             * prepare and left a ring address of zero for that re-entry to
+             * fail on). The teardown's Disable Slot gives the slot back as it
+             * does for any FAILED record.
+             */
+            if (dev->State == XHCI_DEV_STATE_FAILED) {
+                break;
             }
             dev->State = XHCI_DEV_STATE_ENABLED;
             dev->PendingOp = XHCI_DEV_OP_ADDRESS_BSR;
