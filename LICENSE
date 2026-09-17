@@ -413,24 +413,36 @@ reader's records the Visual C++ runtime linkage and quotes none of its terms.
 Each of those two executables is therefore a single file combining this
 project's code with code under other licences, and
 docs/contributing/legal-provenance.md section 2a records what is in each.
-The driver itself - xhci98.sys - contains no such material.
+The driver itself - xhci98.sys - contains no runtime and no extender; the
+one compiler-supplied object in the 64-bit build is described next.
 
-xhci98.sys is linked by the Windows 2000 DDK against import libraries for
+xhci98.sys is linked by the Windows 2000 DDK (the 32-bit build) or by the
+Windows Driver Kit 7.1 (the amd64 build) against import libraries for
 ntoskrnl.exe, hal.dll and usbport.sys, and it runs only as a component loaded
 by those operating systems' kernels. Those import libraries contribute no code
 to the image - the import table names symbols and nothing more, which
-scripts\import-gate\check-imports.ps1 prints in full - and no third-party
-object, runtime or extender is linked in. It is distributed by itself and
-loaded by a kernel this project does not ship and could not ship;
-docs/contributing/legal-provenance.md section 2 records that boundary.
+scripts\import-gate\check-imports.ps1 prints in full. No runtime or extender
+is linked into either build. The 32-bit build links no third-party object at
+all. The amd64 build carries one object that is not this project's code: WDK
+7.1 compiles amd64 drivers with /GS stack-buffer checks, and its libraries
+supply the cookie check (__security_check_cookie) and the handler it jumps to
+on a mismatch (__report_gsfailure, which calls KeBugCheckEx and is that
+import's only call site in the image). Nothing in this project's source calls
+it, and it runs only on a stack-buffer overrun. Whether that object asks for a
+notice of its own has not been read; docs/contributing/legal-provenance.md
+section 2 records it as an open question, and records the boundary above.
+The driver is distributed by itself and loaded by a kernel this project does
+not ship and could not ship.
 
 The release download - as distinct from this repository - carries no Microsoft
 file. The usbd.sys and usbhub.sys the driver depends on, the usbui.dll that
-provides the USB Root Hub's property page, and on the Windows 2000 and
-Windows XP install path the usbport.sys it plugs into, are those systems'
-own files: the INF has Windows Setup copy them from the user's own
+provides the USB Root Hub's property page, and on the Windows 2000, Windows
+XP and Windows XP x64 install paths the usbport.sys it plugs into, are those
+systems' own files: the INF has Windows Setup copy them from the user's own
 installation source, never overwriting a file already present, and none of them
-is in the download or in this repository. Nothing here purports to license
+is in the download or in this repository. The Windows Vista and Windows 7
+install paths copy none of them, because every install of those systems
+already carries all four. Nothing here purports to license
 them to anyone. From release 0.0.0.4 to 1.0.0.0 the assembled download did
 carry three of them, renamed (usbd98.sys and usbd2k.sys, the two systems' own
 usbd.sys, and usbhub98.sys, Windows 98 SE's own usbhub.sys), because an

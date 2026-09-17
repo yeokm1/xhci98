@@ -114,6 +114,12 @@ function Invoke-NativeText {
 function Get-QemuVersion {
     param([Parameter(Mandatory = $true)][string]$Qemu)
     $text = Invoke-NativeText -Exe $Qemu -Arguments @("--version")
+    # A QEMU that cannot start is not a QEMU of unknown version (the
+    # 2026-09-17 audit's D10); $LASTEXITCODE is global, so the child's code is
+    # readable here.
+    if ($LASTEXITCODE -ne 0) {
+        throw ("{0} --version exited {1}, so this QEMU cannot start: {2}" -f $Qemu, $LASTEXITCODE, $text.Trim())
+    }
     foreach ($line in ($text -split "`r?`n")) {
         if ($line -match 'QEMU emulator version (.+)$') { return $Matches[1].Trim() }
     }
@@ -126,6 +132,11 @@ function Get-QemuVersion {
 function Get-QemuUsbModels {
     param([Parameter(Mandatory = $true)][string]$Qemu)
     $helpText = Invoke-NativeText -Exe $Qemu -Arguments @("-device", "help")
+    # Without this a QEMU that cannot start read as "this build has no device
+    # model X" for every row of the matrix.
+    if ($LASTEXITCODE -ne 0) {
+        throw ("{0} -device help exited {1}, so this QEMU cannot start and its device models are not known: {2}" -f $Qemu, $LASTEXITCODE, $helpText.Trim())
+    }
     $models = @()
     foreach ($line in ($helpText -split "`r?`n")) {
         if ($line -match '^\s*name\s+"([^"]+)",\s*bus usb-bus') { $models += $Matches[1] }
@@ -315,11 +326,48 @@ function Get-ProcessStateText {
 # already the right rule and the return value did not keep it: an unknown and an
 # absence both came out as death.  So the reason comes back with the verdict, and
 # the caller states the reason rather than assuming the commonest one.
+#
+# AND WHAT A TIMER INTERRUPT CANNOT SAY.  The PIT keeps raising IRQ0 whether or
+# not a halted kernel services it, so a BUGCHECKED guest reads `running` with
+# an `info irq` delta and came out of here alive; a crash mid-row was then
+# judged from its counters and could read NODRIVER, which an ExpectNoDriver
+# entry waives (the 2026-09-17 audit's D2).  A caller that has a keep-alive
+# pump passes -SignOfLife, a scriptblock returning a guest-side counter only a
+# running kernel advances (the pump's `transfers completed`), and -Stimulus,
+# what drives it across the sample; with both, the counter has to advance too.
+# Callers with no pump - the lifecycle, soak and wedge-observe drivers, and the
+# post-boot check before the pump is known to be bound - pass neither and get
+# the timer reading alone, as before.  The verdict itself is
+# Get-LivenessVerdict, so the self-test can drive it without a guest.
+function Get-LivenessVerdict {
+    param(
+        [Parameter(Mandatory = $true)][bool]$Running,
+        [Parameter(Mandatory = $true)][bool]$Parsed,
+        [Parameter(Mandatory = $true)][int64]$IrqDelta,
+        $LifeDelta = $null
+    )
+    if (-not $Parsed) {
+        return [pscustomobject]@{ Verdict = "unknown"; Why = "`info irq` did not answer in the form this probe reads, so whether the guest is executing was NOT established - this is an unknown, not a dead guest" }
+    }
+    if (-not $Running) {
+        return [pscustomobject]@{ Verdict = "not-executing"; Why = "QEMU reports the VM is not running - it is paused or stopped, not merely idle" }
+    }
+    if ($IrqDelta -le 0) {
+        return [pscustomobject]@{ Verdict = "not-executing"; Why = "the guest took no timer interrupts across the sample, which is the wedge shape batch 7b-V0 met - a stopped clock behind a healthy-looking trace" }
+    }
+    if ($null -ne $LifeDelta -and [int64]$LifeDelta -le 0) {
+        return [pscustomobject]@{ Verdict = "not-executing"; Why = "the guest takes timer interrupts but the keep-alive pump completed no transfer across the sample - the PIT raises IRQ0 at a halted kernel too, and this is the shape of a bugcheck or a wedge with the clock still ticking" }
+    }
+    return [pscustomobject]@{ Verdict = "alive"; Why = "the guest is executing and taking timer interrupts" }
+}
+
 function Test-GuestAlive {
     param(
         [Parameter(Mandatory = $true)][int]$Port,
         [int]$SampleMs = 1500,
-        $Process = $null
+        $Process = $null,
+        [scriptblock]$SignOfLife = $null,
+        [scriptblock]$Stimulus = $null
     )
     if (Test-MonitorPortFree -Port $Port) {
         return [pscustomobject]@{
@@ -347,10 +395,22 @@ function Test-GuestAlive {
         return @($sum, $lines)
     }
 
+    $lifeA = $null
+    if ($null -ne $SignOfLife) { $lifeA = [int64](& $SignOfLife) }
     $a = Get-IrqTotal -P $Port
-    Start-Sleep -Milliseconds $SampleMs
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    if ($null -ne $Stimulus) { & $Stimulus | Out-Null }
+    $left = $SampleMs - [int]$sw.ElapsedMilliseconds
+    if ($left -gt 0) { Start-Sleep -Milliseconds $left }
     $b = Get-IrqTotal -P $Port
     $delta = $b[0] - $a[0]
+    $lifeDelta = $null
+    $lifeDetail = ""
+    if ($null -ne $SignOfLife) {
+        $lifeB = [int64](& $SignOfLife)
+        $lifeDelta = $lifeB - $lifeA
+        $lifeDetail = ("; keep-alive transfers completed {0} -> {1} (delta {2})" -f $lifeA, $lifeB, $lifeDelta)
+    }
 
     # No parseable lines at all means `info irq` did not answer the way this
     # function expects - a QEMU that renamed it, a machine type with no PIC.
@@ -358,28 +418,18 @@ function Test-GuestAlive {
     $parsed = ($a[1] -gt 0 -and $b[1] -gt 0)
 
     # Three ways to not be alive, and they are three different findings.
-    $verdict = "alive"
-    $why = "the guest is executing and taking timer interrupts"
-    if (-not $parsed) {
-        $verdict = "unknown"
-        $why = "`info irq` did not answer in the form this probe reads, so whether the guest is executing was NOT established - this is an unknown, not a dead guest"
-    } elseif (-not $running) {
-        $verdict = "not-executing"
-        $why = "QEMU reports the VM is not running - it is paused or stopped, not merely idle"
-    } elseif ($delta -le 0) {
-        $verdict = "not-executing"
-        $why = "the guest took no timer interrupts across the sample, which is the wedge shape batch 7b-V0 met - a stopped clock behind a healthy-looking trace"
-    }
+    $v = Get-LivenessVerdict -Running $running -Parsed $parsed -IrqDelta $delta -LifeDelta $lifeDelta
 
     return [pscustomobject]@{
-        Alive     = ($verdict -eq "alive")
-        Verdict   = $verdict
-        Why       = $why
+        Alive     = ($v.Verdict -eq "alive")
+        Verdict   = $v.Verdict
+        Why       = $v.Why
         Running   = $running
         Parseable = $parsed
         IrqDelta  = $delta
-        Detail    = ("status: {0}; irq total {1} -> {2} (delta {3}) over {4} ms from {5} lines" -f `
-                     $status, $a[0], $b[0], $delta, $SampleMs, $b[1])
+        LifeDelta = $lifeDelta
+        Detail    = ("status: {0}; irq total {1} -> {2} (delta {3}) over {4} ms from {5} lines{6}" -f `
+                     $status, $a[0], $b[0], $delta, $SampleMs, $b[1], $lifeDetail)
     }
 }
 

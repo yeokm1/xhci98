@@ -304,6 +304,15 @@ static ULONG mfindexFrozen;
 static ULONG cnrHeld;
 
 /*
+ * Controller Not Ready, asserted by the next HCRST write and left in USBSTS
+ * until the vector clears it: a reset that has not finished. `cnrHeld` cannot
+ * stand in for this - it holds the bit before the HCRST too, and since the
+ * 2026-09-17 audit's B7 the reset step refuses ahead of a write into a set
+ * CNR rather than writing through it.
+ */
+static ULONG cnrHeldAfterHcrst;
+
+/*
  * A device that was already plugged in when the driver started. The connect is
  * reported the instant the controller runs - a port with a device attached
  * asserts PSCEG as HCH transitions to '0', "generating a respective Port Status
@@ -848,6 +857,7 @@ static void hc_build(void)
     hostMfindex = 0;
     mfindexFrozen = 0;
     cnrHeld = 0;
+    cnrHeldAfterHcrst = 0;
     hwSlotDoorbells = 0;
     hwLastSlotDoorbell = 0;
 
@@ -1249,6 +1259,9 @@ VOID XhciHostWriteRegister(PULONG address, ULONG value)
              * this controller implements in the RsvdP fields. */
             mmio[HC_OP(XHCI_OP_USBCMD) / 4] = HC_USBCMD_RSVDP_SEED;
             mmio[HC_OP(XHCI_OP_USBSTS) / 4] = XHCI_USBSTS_HCH;
+            if (cnrHeldAfterHcrst) {
+                mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_CNR;
+            }
             /* The interrupter is reset too, so IP, IE and Event Handler Busy
              * all come back at their defaults of '0'. Modelled because the
              * resume path reinitializes through here and then has to decide
@@ -6677,6 +6690,9 @@ static MPSTATUS NTAPI logRegistryValue(PVOID miniPortExtension,
 {
     const WCHAR *name;
 
+    /* The one service stub that did not report into the under-lock net until
+     * the 2026-09-17 audit (E1); the header above says every stub does. */
+    note_no_lock_here("UsbPortGetMiniportRegistryKeyValue");
     (VOID)miniPortExtension;
 
     /*
@@ -11981,6 +11997,96 @@ static void test_root_hub_resume(void)
     CHECK_EQ(ext.RootHub.Ports[0].Armed, XHCI_PORT_OP_RESUME,
              "the health poll's sweep finds the port by its link state");
     CHECK_EQ(asyncRequests, 1, "and arms the terminating write");
+}
+
+/*
+ * The 2026-09-17 audit's B5 and B6: a suspend/resume pair with **no status
+ * query between and no event mid-interval**.
+ *
+ * Software's own link-state writes raise no change bit (CONFIG.U3E is never
+ * set), so nothing refreshed the shadow between usbhub's last query and the
+ * Resume-to-U0 PLC; the shadow still read U0, xhciPortLeftSuspend saw U0 to
+ * U0, and usbhub never got its C_PORT_SUSPEND. test_root_hub_resume did not
+ * catch it because its mid-interval over-current event refreshed the shadow
+ * to Resume on the way past. The writers now fold their own reading in
+ * first, and the poll re-reads a shadow that says Resume before arming from
+ * it.
+ */
+static void test_root_hub_resume_unqueried(void)
+{
+    USBPORT_PORT_STATUS_AND_CHANGE status;
+    ULONG completed;
+    ULONG resumed;
+
+    enable_start(0);
+    hw_events_reset();
+    hw_attach_device(2);
+    mmio[HC_PORTSC(2) / 4] |= XHCI_PORTSC_PED;
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "(usbhub's last query, with the port in U0)");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(ext.RootHub.Ports[1].Portsc), XHCI_PLS_U0,
+             "(so the shadow reads U0)");
+
+    asyncRequests = 0;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "a suspend");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "then a resume, with no query between");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(ext.RootHub.Ports[1].Portsc), XHCI_PLS_U3,
+             "the resume folded the port's U3 into the shadow before writing");
+    CHECK_EQ(asyncRequests, 1, "(and armed its timer)");
+
+    completed = ext.RhResumesCompleted;
+    hw_fire_port_timer();
+    CHECK_EQ(ext.RhResumesCompleted, completed + 1, "the timer wrote U0");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(ext.RootHub.Ports[1].Portsc),
+             XHCI_PLS_RESUME,
+             "having folded Resume in first - the previous state the "
+             "derivation needs");
+    CHECK_EQ(ext.RootHub.Ports[1].Changes & XHCI_HUB_C_PORT_SUSPEND, 0,
+             "without latching the completion itself");
+
+    /* The PLC the U0 write provokes, drained by the event path. */
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, 2UL << 24, 0);
+    XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(ext.RootHub.Ports[1].Changes & XHCI_HUB_C_PORT_SUSPEND,
+             XHCI_HUB_C_PORT_SUSPEND,
+             "the PLC refresh derives C_PORT_SUSPEND from Resume to U0");
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "(the query usbhub then makes)");
+    CHECK_EQ(status.PortChange & XHCI_HUB_C_PORT_SUSPEND,
+             XHCI_HUB_C_PORT_SUSPEND, "reports it");
+    CHECK_EQ(status.PortStatus & XHCI_HUB_PORT_SUSPEND, 0,
+             "on a port that is no longer suspended");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspendChange(&ext, 2),
+             MP_STATUS_SUCCESS, "(cleared)");
+
+    /*
+     * B6: the same pair again, and this time the health poll lands between
+     * the U0 write and the event that reports it. The shadow still says
+     * Resume; the sweep used to arm a second resume from it.
+     */
+    asyncRequests = 0;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "(suspended again)");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "(resumed again)");
+    hw_fire_port_timer();
+    CHECK_EQ(ext.RhResumesCompleted, completed + 2, "(the timer wrote U0)");
+    resumed = ext.RhPortsResumed;
+    asyncRequests = 0;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(ext.RootHub.Ports[1].Armed, XHCI_PORT_OP_NONE,
+             "a poll before the PLC is drained arms no second resume");
+    CHECK_EQ(ext.RhPortsResumed, resumed, "and counts none");
+    CHECK_EQ(asyncRequests, 0, "and requests no timer");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(ext.RootHub.Ports[1].Portsc), XHCI_PLS_U0,
+             "because it re-read the port and found U0");
+    CHECK_EQ(ext.RootHub.Ports[1].Changes & XHCI_HUB_C_PORT_SUSPEND,
+             XHCI_HUB_C_PORT_SUSPEND,
+             "deriving the completion from that reading instead");
+    CHECK_EQ(mmio[HC_PORTSC(2) / 4] & XHCI_PORTSC_PLC, 0,
+             "with PLC acknowledged, so the port keeps reporting");
 }
 
 /*
@@ -29281,18 +29387,25 @@ static void test_fatal_after_recovery(void)
 
     /* A recovery that refuses AFTER its HCRST has completed but before the
      * latch clear: the reset has cleared HCE (the mock's HCRST leaves USBSTS
-     * at HCH, as hardware does) and CNR is held, so the post-reset wait
-     * times out. The latch still stands: it reopens at the clear, not at the
-     * reset. */
+     * at HCH, as hardware does) and CNR stays up from the HCRST on, so the
+     * post-reset wait times out. The latch still stands: it reopens at the
+     * clear, not at the reset. Held from the HCRST rather than throughout,
+     * because a CNR already set before it is a reset still in progress and
+     * the step now refuses ahead of writing a second one (audit B7) - that
+     * would be a refusal *before* the HCRST, which is the previous vector. */
     XhciRegPacket.CheckController(&ext);
     CHECK_EQ(asyncRequests, 2, "the poll re-arms after the first refusal");
-    cnrHeld = 1;
+    cnrHeldAfterHcrst = 1;
     fire_async_timer();
-    cnrHeld = 0;
+    cnrHeldAfterHcrst = 0;
     CHECK_EQ(ext.RecoveryFailures, 2, "the reinitialization refused at reset");
     CHECK_EQ(ext.InitStep, XHCI_INIT_STEP_RESET, "at the CNR wait");
     CHECK_EQ(mmio[HC_OP(XHCI_OP_USBSTS) / 4] & XHCI_USBSTS_HCE, 0,
              "HCRST did land and cleared HCE");
+    CHECK_EQ(mmio[HC_OP(XHCI_OP_USBSTS) / 4] & XHCI_USBSTS_CNR, XHCI_USBSTS_CNR,
+             "(and the reset it started is still running)");
+    /* The slow reset finishes before the next poll. */
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] &= ~XHCI_USBSTS_CNR;
     CHECK_EQ(ext.RecoveryFailuresConsecutive, 2, "the second failure in a row");
     CHECK_EQ(ext.ControllerFailed, 1, "the controller stays failed");
     CHECK_EQ(ext.ControllerFatal, 1,
@@ -29358,6 +29471,100 @@ static void test_fatal_after_recovery(void)
     CHECK_EQ(ext.RecoveryCompletions, 2, "and the next attempt completes");
     CHECK_EQ(ext.ControllerFailed, 0, "with the failed latch open");
     CHECK_EQ(ext.ControllerFatal, 0, "and the fatal latch still open");
+}
+
+/*
+ * **The 2026-09-17 audit's B7: a recovery attempt that arrives while the
+ * previous attempt's HCRST is still running.** On the recovery path every
+ * wait is a 10 ms stall, so a controller whose reset takes longer refuses at
+ * XHCI_INIT_STEP_RESET and the next poll's attempt finds HCH = 1 (the halt is
+ * skipped) with CNR still set. Before the fix that attempt wrote a second
+ * HCRST into a controller that was still resetting, which 5.4.2 forbids
+ * ("software shall not write any Doorbell or Operational register of the
+ * xHC, other than the USBSTS register, until CNR = '0'"). The reset step
+ * now waits for CNR to clear before writing, and on this path that wait is
+ * the same stall-only refusal - so the attempt costs one USBCMD write of
+ * nothing at all, and the retry comes from the next poll.
+ *
+ * Its own vector rather than a leg of test_fatal_after_recovery, because that
+ * test already spends two of the three attempts XHCI_RECOVERY_MAX_ATTEMPTS
+ * allows a run of failures and a third would close the budget on it.
+ */
+static void test_recovery_refuses_into_set_cnr(void)
+{
+    ULONG i;
+    ULONG hcrstWrites;
+
+    hc_build();
+    CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a controller that started)");
+    XhciRegPacket.EnableInterrupts(&ext);
+    hw_events_reset();
+
+    /* The shape the previous attempt leaves: halted (R/S clear, HCH set),
+     * reset in progress. */
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] &= ~XHCI_USBCMD_RS;
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_HCH | XHCI_USBSTS_CNR;
+    ext.ControllerFailed = 1;
+    ext.RecoveryRequested = 1;
+    asyncRequests = 0;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(asyncRequests, 1, "(the poll arms the recovery)");
+
+    writeCount = 0;
+    fire_async_timer();
+
+    CHECK_EQ(ext.RecoveryAttempts, 1, "the attempt ran");
+    CHECK_EQ(ext.RecoveryFailures, 1, "and refused");
+    CHECK_EQ(ext.RecoveryFailuresConsecutive, 1, "charged to the budget");
+    CHECK_EQ(ext.RecoveryLastStep, XHCI_INIT_STEP_RESET,
+             "at the reset step - the halt found HCH and wrote nothing");
+    CHECK_EQ(ext.InitStep, XHCI_INIT_STEP_RESET, "(the step record agrees)");
+    CHECK_EQ(ext.RecoveryLastStatus & XHCI_USBSTS_CNR, XHCI_USBSTS_CNR,
+             "with the refusing USBSTS reading carrying CNR - the reason");
+    /*
+     * The only USBCMD write in the window is XhciControllerBeginQuiesce's
+     * INTE mask on the way into every attempt (a refusal restores nothing:
+     * the enables come back only past a completed sequence). It is not the
+     * sequence's: the halt found HCH and wrote nothing, and the reset step
+     * wrote no HCRST into a controller still resetting.
+     */
+    CHECK_EQ(count_writes(HC_OP(XHCI_OP_USBCMD)), 1,
+             "one USBCMD write: the quiesce's INTE mask, nothing else");
+    CHECK_EQ(last_write_value(HC_OP(XHCI_OP_USBCMD)) &
+                 (XHCI_USBCMD_INTE | XHCI_USBCMD_HCRST | XHCI_USBCMD_RS),
+             0, "(INTE off, and neither HCRST nor R/S in it)");
+    hcrstWrites = 0;
+    for (i = 0; i < writeCount; i++) {
+        if (writeOffset[i] == HC_OP(XHCI_OP_USBCMD) &&
+            (writeValue[i] & (XHCI_USBCMD_HCRST | XHCI_USBCMD_RS)) != 0) {
+            hcrstWrites++;
+        }
+    }
+    CHECK_EQ(hcrstWrites, 0,
+             "no USBCMD write carries HCRST or R/S - no halt, no second "
+             "HCRST");
+    CHECK_EQ(mmio[HC_OP(XHCI_OP_USBSTS) / 4] & XHCI_USBSTS_CNR, XHCI_USBSTS_CNR,
+             "the controller is left exactly as found");
+    CHECK_EQ(ext.ControllerFailed, 1, "and stays latched failed");
+
+    /* The reset finishes; the next poll's attempt goes through. */
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] &= ~XHCI_USBSTS_CNR;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(asyncRequests, 2, "the poll re-arms within the budget");
+    writeCount = 0;
+    fire_async_timer();
+    CHECK_EQ(ext.RecoveryCompletions, 1, "and the attempt completes");
+    CHECK_EQ(ext.RecoveryFailuresConsecutive, 0, "ending the run of failures");
+    CHECK_EQ(ext.ControllerFailed, 0, "with the failed latch open");
+    hcrstWrites = 0;
+    for (i = 0; i < writeCount; i++) {
+        if (writeOffset[i] == HC_OP(XHCI_OP_USBCMD) &&
+            (writeValue[i] & XHCI_USBCMD_HCRST) != 0) {
+            hcrstWrites++;
+        }
+    }
+    CHECK_EQ(hcrstWrites, 1, "through exactly one HCRST, written once CNR "
+                             "read clear");
 }
 
 /*
@@ -29604,6 +29811,7 @@ int main(void)
     test_recovery_delivery_loss();
     test_controller_recovery();
     test_fatal_after_recovery();
+    test_recovery_refuses_into_set_cnr();
     test_bad_signature_bodies();
     test_registered_start_stop();
     test_registered_callbacks();
@@ -29622,6 +29830,7 @@ int main(void)
     test_root_hub_port_events();
     test_root_hub_reset();
     test_root_hub_resume();
+    test_root_hub_resume_unqueried();
     test_root_hub_conflicts();
     test_root_hub_port_power_confirmation();
     test_root_hub_announce();

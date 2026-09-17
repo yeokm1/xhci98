@@ -432,6 +432,10 @@ function Invoke-AttachLeg {
         [string]$DebugconLog = ""
     )
     $legError = ""
+    # "wedge" when the liveness probe found the guest gone or stopped - the one
+    # ERROR shape a MayWedgeGuest declaration may waive (lib\fresh.ps1,
+    # Test-RowCountsAgainst); "" for every other error.
+    $legKind = ""
     $attached = $false
     $before = $null
     $after = $null
@@ -454,7 +458,7 @@ function Invoke-AttachLeg {
     if ($DebugconLog -ne "") {
         $drift = Get-ExtensionIdentityDrift -Ident $Ident -DebugconLog $DebugconLog
         if ($drift -ne "") {
-            return [pscustomobject]@{ Error = $drift; Before = $null; After = $null; Attached = $false }
+            return [pscustomobject]@{ Error = $drift; ErrorKind = ""; Before = $null; After = $null; Attached = $false }
         }
     }
     $before = Read-Counters -Port $Port -BaseVa $Ident.Va -Table $Table -Process $Process
@@ -583,10 +587,21 @@ function Invoke-AttachLeg {
         # the probe had actually found - including the case where the
         # QEMU process had gone, where there is no guest to have
         # stopped.  Demonstrated by killing QEMU inside this window.
-        $alive = Test-GuestAlive -Port $Port -Process $Process
+        #
+        # WITH THE PUMP, THE GUEST HAS TO COMPLETE A TRANSFER TOO.  A
+        # bugchecked guest still takes timer interrupts (the 2026-09-17
+        # audit's D2), so on a group that has the keep-alive the probe is
+        # also handed its `transfers completed` and the pump to drive it.
+        $probeArgs = @{}
+        if ($Pump) {
+            $probeArgs['SignOfLife'] = { (Read-Counters -Port $Port -BaseVa $Ident.Va -Table $Table -Process $Process)['transfers completed'] }.GetNewClosure()
+            $probeArgs['Stimulus'] = { Invoke-Pump -Port $Port -Seconds 2 }.GetNewClosure()
+        }
+        $alive = Test-GuestAlive -Port $Port -Process $Process @probeArgs
         if (-not $alive.Alive) {
             $legError = ("the guest did not survive this device [{0}]: {1} ({2})" -f `
                          $alive.Verdict, $alive.Why, $alive.Detail)
+            if (Test-WedgeShape -LivenessVerdict $alive.Verdict) { $legKind = "wedge" }
         }
     }
 
@@ -656,10 +671,11 @@ function Invoke-AttachLeg {
     }
 
     return [pscustomobject]@{
-        Error    = $legError
-        Before   = $before
-        After    = $after
-        Attached = $attached
+        Error     = $legError
+        ErrorKind = $legKind
+        Before    = $before
+        After     = $after
+        Attached  = $attached
     }
 }
 
@@ -712,14 +728,18 @@ foreach ($tgt in $targetsToRun) {
         }
         Set-Content -LiteralPath $traceEvents -Value $cfg.TraceEvents -Encoding ascii
 
+        # THE SCRATCH DISKS ARE RECREATED AT EVERY GROUP START, not created
+        # only when absent.  QEMU's global `-snapshot` covers `-drive`-created
+        # backends and not `-blockdev` nodes, which is what these three are
+        # below, so a storage row writes persistent state - a partition table,
+        # a format - that every later group and every later run inherited, and
+        # a row was then measuring a disk a previous row had written (the
+        # 2026-09-17 audit's D3).  [IO.File]::Create truncates, so this is a
+        # fresh sparse 64 MB file each time.
         $scratchDrive = Join-Path $OutDir ("matrix-{0}-scratch.img" -f $tag)
-        if (-not (Test-Path -LiteralPath $scratchDrive)) {
-            $fs = [IO.File]::Create($scratchDrive); $fs.SetLength(64MB); $fs.Close()
-        }
+        $fs = [IO.File]::Create($scratchDrive); $fs.SetLength(64MB); $fs.Close()
         $scratchDrive2 = Join-Path $OutDir ("matrix-{0}-scratch2.img" -f $tag)
-        if (-not (Test-Path -LiteralPath $scratchDrive2)) {
-            $fs = [IO.File]::Create($scratchDrive2); $fs.SetLength(64MB); $fs.Close()
-        }
+        $fs = [IO.File]::Create($scratchDrive2); $fs.SetLength(64MB); $fs.Close()
         # A THIRD SCRATCH DISK, from when the backends were `-drive if=none`
         # and QEMU deleted one with the device that held it: once `usb-bot/fs`
         # had run and been torn down the id was gone, and `usb-uas/fs` died on
@@ -729,9 +749,7 @@ foreach ($tgt in $targetsToRun) {
         # post-release run's second leg can reference the same node; one disk
         # per consumer is kept so the rows stay independent of each other.
         $scratchDrive3 = Join-Path $OutDir ("matrix-{0}-scratch3.img" -f $tag)
-        if (-not (Test-Path -LiteralPath $scratchDrive3)) {
-            $fs = [IO.File]::Create($scratchDrive3); $fs.SetLength(64MB); $fs.Close()
-        }
+        $fs = [IO.File]::Create($scratchDrive3); $fs.SetLength(64MB); $fs.Close()
 
         $args = @(
             "-name", ("xhci98 device matrix - {0} {1}" -f $tgt.Id, $grp.Name),
@@ -880,7 +898,10 @@ foreach ($tgt in $targetsToRun) {
                 Start-Sleep -Seconds 3
             }
             if ($null -eq $ident -or $null -eq $ident.Va) {
-                throw ("no `cb ... a=<VA>` line in {0} after {1} s. Either the guest did not boot, or the driver did not load, or it is not the QEMU build - since task 13-L.1 the port-0xE9 trace exists only in that flavour, so a `debug` guest produces this exact silence. Build it with: scripts\build-driver.cmd qemu, then scripts\package\make-package.ps1 -Flavor qemu, then prepare-image.ps1 -Xfer." -f $dbgLog, $tgt.BootSeconds)
+                # The leaf name, not the absolute path: this reading reaches
+                # the diffable report body, where an absolute path is a
+                # per-host difference (the 2026-09-17 audit's D10).
+                throw ("no `cb ... a=<VA>` line in {0} after {1} s. Either the guest did not boot, or the driver did not load, or it is not the QEMU build - since task 13-L.1 the port-0xE9 trace exists only in that flavour, so a `debug` guest produces this exact silence. Build it with: scripts\build-driver.cmd qemu, then scripts\package\make-package.ps1 -Flavor qemu, then prepare-image.ps1 -Xfer." -f (Split-Path -Leaf $dbgLog), $tgt.BootSeconds)
             }
             Write-Host ("driver up: extension at 0x{0}, MiniPortExtensionSize={1}" -f $ident.Va, $ident.Size)
 
@@ -937,8 +958,9 @@ foreach ($tgt in $targetsToRun) {
                 } else {
                     $shot = Save-GuestScreenshot -Port $tgt.Monitor `
                         -Path (Join-Path $OutDir ("matrix-{0}-notready.ppm" -f $tag))
+                    $shotName = if ($null -ne $shot) { Split-Path -Leaf $shot } else { "none was taken" }
                     throw ("no function driver opened an endpoint on the keep-alive within {0} s. The device WAS enumerated by this driver, so this is the guest's PnP stack, not the miniport - on Windows 98 it is almost certainly the modal Add New Hardware Wizard, which blocks the bind until someone clicks it. Install the device class into the image once (with Snapshot = `$false) and re-run. Screenshot: {1}" -f `
-                        $readySeconds, $shot)
+                        $readySeconds, $shotName)
                 }
             }
 
@@ -1004,6 +1026,10 @@ foreach ($tgt in $targetsToRun) {
                 # the row, are Invoke-RowLegs in lib\fresh.ps1, which the
                 # self-test drives with stand-ins; the three blocks below are
                 # what this runner does on each leg.
+                # The kind of the leg error that ended the row, kept at script
+                # scope because the callbacks run in their own scope; read by
+                # the wedge waiver below.
+                $script:rowErrorKind = ""
                 $legRun = Invoke-RowLegs -RowName $row.Name -LegCount $(if ($PostRelease) { 2 } else { 1 }) -RunLeg {
                     param($Leg, $LegName)
                     if ($Leg -eq 2) {
@@ -1025,6 +1051,9 @@ foreach ($tgt in $targetsToRun) {
                     if ($null -ne $shot) { Write-Host ("  screenshot: {0}" -f $shot) }
                     Add-Result -TargetId $tgt.Id -Row $LegName -Outcome "ERROR" -Expectation "(row did not complete)" -Reading $LegResult.Error
                     Write-Host ("  ERROR: {0}" -f $LegResult.Error)
+                    if ($null -ne $LegResult -and $null -ne $LegResult.PSObject.Properties['ErrorKind']) {
+                        $script:rowErrorKind = [string]$LegResult.ErrorKind
+                    }
                 } -JudgeLeg {
                     param($Leg, $LegName, $LegResult)
                     $delta = Get-CounterDelta -Before $LegResult.Before -After $LegResult.After
@@ -1093,7 +1122,16 @@ foreach ($tgt in $targetsToRun) {
                     if ($row.ContainsKey('MayWedgeGuest')) {
                         $rowWedgeDeclared = Test-TargetInList -List $row.MayWedgeGuest -Target $tgt
                     }
-                    if (Test-RowCountsAgainst -Outcome $rowOutcome -NoDriverExpected ($null -ne $noDriverWhy) -WedgeDeclared $rowWedgeDeclared) {
+                    # ...and waived only when what happened IS a wedge (the
+                    # 2026-09-17 audit's D1).  A declared row whose ERROR is
+                    # something else is printed as such, so the diff shows
+                    # the declaration not applying, as an ExpectNoDriver entry
+                    # that did not apply is printed above.
+                    $rowWedgeShape = ($rowOutcome -eq "ERROR" -and $script:rowErrorKind -eq "wedge")
+                    if ($rowOutcome -eq "ERROR" -and $rowWedgeDeclared -and -not $rowWedgeShape) {
+                        Add-Result -TargetId $tgt.Id -Row $row.Name -Outcome "ERROR" -Expectation "(MayWedgeGuest entry did not apply)" -Reading "the row's ERROR is not a wedge - the guest was not found gone or stopped - so the declaration waives nothing and the row counts against the verdict"
+                    }
+                    if (Test-RowCountsAgainst -Outcome $rowOutcome -NoDriverExpected ($null -ne $noDriverWhy) -WedgeDeclared $rowWedgeDeclared -WedgeShape $rowWedgeShape) {
                         $script:tgtTally.Against++
                     }
                 }
@@ -1138,20 +1176,48 @@ foreach ($tgt in $targetsToRun) {
             if ($rowInFlight -ne "" -and $null -ne $rowObj -and $rowObj.ContainsKey('MayWedgeGuest')) {
                 $wedgeDeclared = Test-TargetInList -List $rowObj.MayWedgeGuest -Target $tgt
             }
+            # AND WHETHER WHAT HAPPENED IS A WEDGE, which the declaration alone
+            # cannot say (the 2026-09-17 audit's D1): the monitor gone with the
+            # row in flight is that shape, and so is a guest the liveness
+            # probe finds stopped; a guest still executing behind a thrown
+            # counter read or monitor timeout is not, and the declaration then
+            # waives nothing.
+            $wedgeShape = $false
+            $shapeText = ""
+            if ($rowInFlight -ne "") {
+                if (-not $listening) {
+                    $wedgeShape = $true
+                    $shapeText = "the monitor is gone with the row in flight, which is the wedge shape"
+                } else {
+                    try {
+                        $probe = Test-GuestAlive -Port $tgt.Monitor -Process $proc
+                        $wedgeShape = Test-WedgeShape -LivenessVerdict $probe.Verdict
+                        $shapeText = if ($wedgeShape) {
+                            ("the guest is in the wedge shape [{0}]: {1}" -f $probe.Verdict, $probe.Why)
+                        } else {
+                            ("the guest is NOT in the wedge shape [{0}]: {1}" -f $probe.Verdict, $probe.Why)
+                        }
+                    } catch {
+                        $shapeText = ("whether the guest is in the wedge shape could not be established: {0}" -f $_.Exception.Message)
+                    }
+                }
+            }
             $declared = if ($rowInFlight -eq "") {
                 "no row was in flight, so this is a group-level failure rather than a device's"
+            } elseif ($wedgeDeclared -and $wedgeShape) {
+                "the matrix declares this row may wedge this target, and " + $shapeText
             } elseif ($wedgeDeclared) {
-                "the matrix declares this row may wedge this target"
+                "the matrix declares this row may wedge this target, but " + $shapeText + ", so the declaration waives nothing"
             } else {
-                "NOTHING in this matrix declares this row may wedge this target"
+                "NOTHING in this matrix declares this row may wedge this target; " + $shapeText
             }
             # In the post-release run a declared wedge is the composite row's
             # pinned reading on Windows 98 (design record 09 section 4.1) and
-            # does not count against the target; an undeclared one does.  The
-            # outcome word stays ERROR either way, and the line is in the
-            # report, so a run that does NOT reproduce the wedge changes the
-            # diff.
-            if ($PostRelease -and (Test-RowCountsAgainst -Outcome "ERROR" -WedgeDeclared $wedgeDeclared)) {
+            # does not count against the target; an undeclared one does, and
+            # so does any other failure on the declared row.  The outcome word
+            # stays ERROR either way, and the line is in the report, so a run
+            # that does NOT reproduce the wedge changes the diff.
+            if ($PostRelease -and (Test-RowCountsAgainst -Outcome "ERROR" -WedgeDeclared $wedgeDeclared -WedgeShape $wedgeShape)) {
                 $script:tgtTally.Against++
             }
 

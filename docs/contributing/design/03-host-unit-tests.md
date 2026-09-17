@@ -498,7 +498,10 @@ accumulates the project's bug history.
 ### The second architecture
 
 `src/xhci_usbport.h` has a `_WIN64` half - three structures that change size
-and a registration packet that grows by 0x114 bytes - and until task 21.4 the
+and a registration packet that grows by 0x188 bytes (`sizeof` 0x1E0 on x86
+against 0x368 on amd64 since task 22.5 declared the Version 300 tail; it was
+0x13C against 0x250, a growth of 0x114, when the Version 200 copy was the
+whole declaration) - and until task 21.4 the
 only thing that ever compiled it was a driver build. `test_packet` and
 `test_membuf` are therefore built and run twice, the second time with WDK 7.1's
 amd64 cross compiler as `test_packet_amd64` and `test_membuf_amd64`. The two
@@ -721,9 +724,13 @@ than per-service: every service stub and wait hook (`UsbPortWait`, which is
 `KeDelayExecutionThread` on the target and so a hang under a DISPATCH-level
 spin lock, `UsbPortReadWriteConfigSpace`, `KeStallExecutionProcessor` and the
 rest) reports through one function whose never-reset total is asserted once at
-the end of the run, so a stub added later is covered by construction rather
-than by whoever adds it remembering. Same family as the no-touch checklist above: give a property
-several call sites share one mechanism, and route the sites into it.
+the end of the run. That is a convention, not a mechanism: each stub's first
+statement is its `note_no_lock_here` call, and a stub added later is covered
+only if whoever adds it writes that line - nothing checks that every stub
+reports, and the 2026-09-17 audit found one (`logRegistryValue`, the registry
+read) that did not, now fixed. Same family as the no-touch checklist above: give a property
+several call sites share one mechanism, and route the sites into it - and know
+that the routing is by hand.
 
 A vector's negative half is free unless its positive half is asserted. Phase
 5's mutation checks found this three times in one day, and each time the

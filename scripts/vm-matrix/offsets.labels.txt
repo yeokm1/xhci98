@@ -189,6 +189,7 @@ IsoRingUnderruns	iso ring underruns
 IsoSubmits	iso submits
 IsoSubmitsWrongType	iso submits on the wrong endpoint type
 IsoSubmitsWithFrameId	iso submits with a Frame ID
+IsoTailEventsTotal	iso tail events
 IsoTrbErrorRecoveries	iso TRB error recoveries
 IsoTrbErrorsUnarmable	iso TRB errors unarmable
 InterruptsClaimed	isr claimed

@@ -927,6 +927,15 @@ static VOID xhciLogStart(PXHCI_EXTENSION ext)
 /* ------------------------------------------------------------------ */
 
 /*
+ * The Version argument DriverEntry handed to usbport: 300 to an NT 6.x
+ * usbport, 200 to every other (task 22.5). Recorded so StartController can
+ * choose the completion route by tier, so xhciVerifyPacketAfterRegistration
+ * can hold usbport to the tier it was offered, and so the log says which one
+ * ran.
+ */
+static ULONG xhciInterfaceVersionPresented = USB20_MINIPORT_INTERFACE_VERSION;
+
+/*
  * StartController - the callback the whole gate turns on.
  *
  * usbport has already connected the interrupt, mapped BAR0, and allocated and
@@ -943,8 +952,6 @@ static VOID xhciLogStart(PXHCI_EXTENSION ext)
  * IRQL: PASSIVE_LEVEL (usbport calls it from its start-device path; UsbPortWait
  * is legal here and nowhere else in this file).
  */
-static ULONG xhciInterfaceVersionPresented;
-
 static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
                                           PUSBPORT_RESOURCES resources)
 {
@@ -2247,9 +2254,12 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
     XHCI_DBG_VALUE_CHANGED("deferred-work re-entries declined",
                            ext->DeferredReentries);
     /*
-     * Issue 7's delivery gate, Version 300 only (all of these stay 0 on the
-     * 200 tier but the last). Held-for-poll is expected nonzero and roughly
-     * tracks the event DPC's passes; delivered-locked is the ordinary
+     * Issue 7's delivery gate. It was Version 300 only until 2026-09-15; since
+     * issue 8 read the whole Version 200 tier onto the same route
+     * (xhciStartController), the gate is set on every tier and none of these
+     * is expected to read 0 on a 200-tier dump. Held-for-poll is expected
+     * nonzero and roughly tracks the event DPC's passes; delivered-locked is
+     * the ordinary
      * PollEndpoint route and should carry nearly every completion;
      * delivered-forced is the lifecycle drains plus the fallback, and
      * fallback polls climbing during ordinary traffic means usbport stopped
@@ -2720,6 +2730,7 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
                            ext->IsoMissedServiceTotal);
     XHCI_DBG_VALUE_CHANGED("iso groups awaiting a tail event",
                            ext->IsoGroupsAwaitingTailTotal);
+    XHCI_DBG_VALUE_CHANGED("iso tail events", ext->IsoTailEventsTotal);
     XHCI_DBG_VALUE_CHANGED("frame resync skew", ext->FrameResyncSkew);
     XHCI_DBG_VALUE_CHANGED("frame samples", ext->FrameSamples);
     XHCI_DBG_VALUE_CHANGED("frame samples stale at a claim",
@@ -4777,13 +4788,6 @@ static VOID xhciFillPacket(VOID)
 }
 
 /*
- * The Version argument DriverEntry handed to usbport: 300 to an NT 6.x
- * usbport, 200 to every other (task 22.5). Recorded so the verifier below can
- * hold usbport to the tier it was offered, and so the log says which one ran.
- */
-static ULONG xhciInterfaceVersionPresented = USB20_MINIPORT_INTERFACE_VERSION;
-
-/*
  * Check what registration did to the packet, and log the evidence.
  *
  * Returns 1 if everything is as the ABI record says it must be. A 0 is
@@ -4793,7 +4797,7 @@ static ULONG xhciInterfaceVersionPresented = USB20_MINIPORT_INTERFACE_VERSION;
  */
 static ULONG xhciVerifyPacketAfterRegistration(VOID)
 {
-    ULONG *word;
+    PVOID *service;
     ULONG serviceIndex;
     ULONG servicesPresent;
     ULONG ok;
@@ -4858,20 +4862,27 @@ static ULONG xhciVerifyPacketAfterRegistration(VOID)
     }
 
     /*
-     * The service block is 16 consecutive pointers at 0xE4-0x120. All 16 being
-     * non-NULL is the positive proof that the packet's in/out boundary sits
-     * where the layout says: one shifted field and either a service lands in a
-     * callback slot or a slot stays NULL.
+     * The service block is 16 consecutive pointers at 0xE4-0x120 (0x1A0-0x218
+     * on amd64). All 16 being non-NULL is the positive proof that the packet's
+     * in/out boundary sits where the layout says: one shifted field and either
+     * a service lands in a callback slot or a slot stays NULL.
+     *
+     * Walked as pointers, not ULONGs: until the 2026-09-17 audit (B1) the loop
+     * read 16 ULONGs, which on amd64 is the first eight pointers twice over,
+     * so the count reached 16 on eight services and the check below could not
+     * fire for the second half of the block. Every amd64 reading of "all
+     * sixteen service pointers written" before that date covered eight.
      */
-    word = (ULONG *)&XhciRegPacket.UsbPortDbgPrint;
+    service = (PVOID *)&XhciRegPacket.UsbPortDbgPrint;
     servicesPresent = 0;
     for (serviceIndex = 0; serviceIndex < 16; serviceIndex++) {
-        if (word[serviceIndex] != 0) {
+        if (service[serviceIndex] != NULL) {
             servicesPresent++;
         }
     }
     XHCI_DBG_VALUE("usbport services written", servicesPresent);
-    XHCI_DBG_WORDS("services", word, 16);
+    XHCI_DBG_WORDS("services", (const ULONG *)service,
+                   (16UL * sizeof(PVOID)) / sizeof(ULONG));
     if (servicesPresent != 16) {
         XHCI_DBG_TEXT("ABI-SUSPECT: usbport did not fill all 16 services");
         ok = 0;
@@ -5019,7 +5030,7 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT DriverObject,
      * address is outside a registered VxD's range, which made the task 8
      * disable bugcheck unattributable until this line existed.
      */
-    XHCI_DBG_VALUE("image base", (ULONG)DriverObject->DriverStart);
+    XHCI_DBG_VALUE("image base", (ULONG)(ULONG_PTR)DriverObject->DriverStart);
     XHCI_DBG_VALUE("image size", (ULONG)DriverObject->DriverSize);
 
     /* What the shipping usbehci.sys does immediately before registering:

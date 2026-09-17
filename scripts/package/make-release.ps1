@@ -1510,24 +1510,50 @@ pass -Force if this version was never published.
         Remove-Item -LiteralPath $destRoot -Recurse -Force
     }
 
-    # **A leftover `.replaced-<version>` is a previous release that was moved
-    # aside and never put back**, which means a run was interrupted between the
-    # two renames at the end of this script. It is not scratch and must not be
-    # cleared like the staging tree: it may be the only copy of a published
-    # version on this machine. Refuse, and say which way to resolve it - the
-    # decision is whose copy is authoritative, and that is not a script's to
-    # take. (Both working directories are git-ignored, so an interrupted run
-    # cannot leave a second copy of a release to be committed by accident.)
+    # **A leftover `.replaced-<version>` with no `releases\<version>\` beside it
+    # is a previous release that was moved aside and never put back**, which
+    # means a run was interrupted between the two renames at the end of this
+    # script. It is not scratch and must not be cleared like the staging tree:
+    # it may be the only copy of a published version on this machine. Refuse,
+    # and say which way to resolve it - the decision is whose copy is
+    # authoritative, and that is not a script's to take. (Both working
+    # directories are git-ignored, so an interrupted run cannot leave a second
+    # copy of a release to be committed by accident.)
+    #
+    # **With `releases\<version>\` beside it, the aside is the other case**: the
+    # swap completed and only the removal afterwards did not. On an
+    # OneDrive-hosted tree a sync handle inside the just-renamed aside makes
+    # that removal fail routinely, and until the 2026-09-17 audit's D4 this
+    # check then refused the next run with "a previous run was interrupted",
+    # which was false. The published tree is the authoritative copy by
+    # construction - the aside is what it replaced - so this is a warning and a
+    # second attempt at the removal, and a refusal only if the aside still
+    # cannot be removed, said as that.
     $asideCheck = Join-Path $ReleasesDir (".replaced-" + $Version)
     if (Test-Path -LiteralPath $asideCheck) {
-        throw @"
-'$asideCheck' exists, so a previous run was interrupted while publishing $Version.
-That directory is the release that was moved aside to make room, and it may be
-the only copy of it here. Resolve it by hand before cutting again:
-  - if '$finalRoot' is missing or wrong, rename the aside back to it;
-  - if '$finalRoot' is the release you want, delete the aside.
+        if (-not (Test-Path -LiteralPath $finalRoot)) {
+            throw @"
+'$asideCheck' exists and '$finalRoot' does not, so a previous run was
+interrupted while publishing $Version. That directory is the release that was
+moved aside to make room, and it may be the only copy of it here. Resolve it by
+hand before cutting again:
+  - if the aside is the release you want, rename it back to '$finalRoot';
+  - otherwise delete it.
 This script will not choose between two copies of a published version.
 "@
+        }
+        Write-Warn ("'{0}' is left over from a previous -Force cut of {1} whose publish completed but whose cleanup did not; it is superseded by '{2}' and is removed now" -f `
+            $asideCheck, $Version, $finalRoot)
+        Remove-Item -LiteralPath $asideCheck -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $asideCheck) {
+            throw @"
+'$asideCheck' could not be removed. It is the release '$finalRoot' replaced on a
+previous -Force cut of $Version, not a copy this run needs, but the publish
+swap at the end of this run moves the current tree aside under that same name.
+Something - a sync client, an open Explorer window - is holding it; delete it by
+hand and re-run.
+"@
+        }
     }
 
     # --- the changelog, checked before anything is built ---------------------
@@ -1824,9 +1850,19 @@ build you mean: scripts\build-driver.cmd $f
         }
 
         if (Test-Path -LiteralPath $stampScript) {
-            $stampOut = & powershell -NoProfile -ExecutionPolicy Bypass `
-                -File $stampScript -Check $objRoot 2>&1
-            $stampCode = $LASTEXITCODE
+            # Relaxed across the call for the H17 reason above: with stderr
+            # redirected, a `throw` on the stamp's hashing path would become a
+            # terminating NativeCommandError here before the exit code is read
+            # (the 2026-09-17 audit's D9).
+            $savedEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $stampOut = & powershell -NoProfile -ExecutionPolicy Bypass `
+                    -File $stampScript -Check $objRoot 2>&1
+                $stampCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $savedEap
+            }
             if ($stampCode -eq 1) {
                 throw @"
 the binary about to be published as $($leg.Dir)\ was built from sources this tree no
@@ -3784,10 +3820,50 @@ after checkout. Restore it with:  git checkout -- LICENSE
     Copy-Item -LiteralPath $licenseSrc -Destination (Join-Path $destRoot "LICENSE") -Force
     Write-Ok "LICENSE copied into the release root, CRLF throughout"
 
+    # --- the upload set: what actually goes to the GitHub release ------------
+    #
+    # `releases\<version>\` is the tracked half. The download a user gets is
+    # the same tree, zipped, with each flavour directory gated as install
+    # media on the way. Since 1.0.0.1 it carries no Microsoft file: the OS
+    # supplies usbd.sys, usbhub.sys and usbui.dll through the INF's
+    # LayoutFile. See docs\contributing\legal-provenance.md section 5.
+    #
+    # **Assembled from the staging tree, BEFORE the publish swap below.** It
+    # ran after the swap until the 2026-09-17 audit's D5, so a per-directory
+    # INF-gate refusal or a zip failure inside it fired with the old release
+    # already moved aside and the new one already under the real name - the
+    # written-once release with no asset that the ordering test in
+    # test-package.ps1 exists to prevent. Nothing in the set embeds the
+    # published path: the tree is copied whole under out\upload-<version>\,
+    # the zip entries are named relative to that copy, and the readme was
+    # rendered into the staging tree above with no path in it - so the bytes
+    # are the ones a post-swap run produced.
+    $uploadRoot = $null
+    $uploadZip = $null
+    if (-not $SkipUploadSet) {
+        # Keyed by published directory name, which is what New-UploadSet walks:
+        # to it a "flavour" is the name of a directory in the published tree,
+        # and since this task that name carries the architecture too.
+        $pkgDirs = @{}
+        $legDirs = @()
+        $legArches = @{}
+        foreach ($leg in $legs) {
+            $pkgDirs[$leg.Dir] = $staged[$leg.Id].PkgDir
+            $legDirs += $leg.Dir
+            $legArches[$leg.Dir] = $leg.PkgArch
+        }
+        $set = New-UploadSet -PublishedRoot $destRoot -Version $Version -Flavors $legDirs `
+                             -LegArches $legArches `
+                             -PkgDirs $pkgDirs -UploadDir $UploadDir -Repo $repo `
+                             -Publishable $publishable
+        $uploadRoot = $set.Root
+        $uploadZip = $set.Zip
+    }
+
     # --- publish: replace the destination only now ---------------------------
     #
-    # Everything above has passed. What follows is the first and only thing this
-    # script does to `releases\<version>\`.
+    # Everything above has passed, the upload set included. What follows is the
+    # first and only thing this script does to `releases\<version>\`.
     #
     # **The old release is moved aside, not deleted, and only removed once the
     # new one is in place.** A delete-then-move has two failure windows that
@@ -3825,38 +3901,21 @@ after checkout. Restore it with:  git checkout -- LICENSE
     }
 
     if ($null -ne $asideRoot) {
-        Remove-Item -LiteralPath $asideRoot -Recurse -Force
+        # The replacement is in place, so this is now only disk space - the
+        # make-package.ps1 rule for its retired package. A failure to remove it
+        # must not fail a cut whose publish is already correct, and on this
+        # OneDrive-hosted tree a sync handle inside the just-renamed aside made
+        # it fail under Stop: the cut reported as failed with the release
+        # published, and the next run refused on the aside (the 2026-09-17
+        # audit's D4). The early check at the top of this run removes a
+        # leftover aside beside a published tree for the same reason.
+        Remove-Item -LiteralPath $asideRoot -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $asideRoot) {
+            Write-Warn ("could not remove the replaced release, left at '{0}'; it is superseded by '{1}' and the next cut removes it" -f `
+                $asideRoot, $finalRoot)
+        }
     }
     $destRoot = $finalRoot
-
-    # --- the upload set: what actually goes to the GitHub release ------------
-    #
-    # `releases\<version>\` is the tracked half. The download a user gets is
-    # the same tree, zipped, with each flavour directory gated as install
-    # media on the way. Since 1.0.0.1 it carries no Microsoft file: the OS
-    # supplies usbd.sys, usbhub.sys and usbui.dll through the INF's
-    # LayoutFile. See docs\contributing\legal-provenance.md section 5.
-    $uploadRoot = $null
-    $uploadZip = $null
-    if (-not $SkipUploadSet) {
-        # Keyed by published directory name, which is what New-UploadSet walks:
-        # to it a "flavour" is the name of a directory in the published tree,
-        # and since this task that name carries the architecture too.
-        $pkgDirs = @{}
-        $legDirs = @()
-        $legArches = @{}
-        foreach ($leg in $legs) {
-            $pkgDirs[$leg.Dir] = $staged[$leg.Id].PkgDir
-            $legDirs += $leg.Dir
-            $legArches[$leg.Dir] = $leg.PkgArch
-        }
-        $set = New-UploadSet -PublishedRoot $destRoot -Version $Version -Flavors $legDirs `
-                             -LegArches $legArches `
-                             -PkgDirs $pkgDirs -UploadDir $UploadDir -Repo $repo `
-                             -Publishable $publishable
-        $uploadRoot = $set.Root
-        $uploadZip = $set.Zip
-    }
 
     # --- summary -------------------------------------------------------------
     Write-Host ""

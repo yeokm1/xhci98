@@ -358,8 +358,10 @@ set, the event DPC parks and requests a poll of the owing endpoint,
 the mode was compiled only under `_WIN64`, and with it off the drain selected
 the head as before. *That guard was lifted on 2026-09-15, after section 4d
 read the whole 32-bit tier as sharing the mover; the x86 build now sets the
-mode on its Version 200 tier too, and its first run is owed (issue 7 section
-7.9's leg).*
+mode on its Version 200 tier too, and ~~its first run is owed (issue 7 section
+7.9's leg)~~ its runs were taken on 2026-09-15 - XP SP3 x86 at four vCPUs
+(issue 7 section 7.9), then Windows 98, ME and 2000 on one core (section
+7.10) - all passing; the runtime entries at the end of section 4d have them.*
 
 **runtime** - 2026-09-14, tag `i8diag1`, snapshot `winxp64-smp4-issue8diag`
 (snapshot 3 plus the new amd64 `qemu` build copied over
@@ -395,12 +397,16 @@ drive and was taken again.
 
 **What this does not cover:**
 
-- **The 32-bit Version 200 targets** (Windows 98 SE, ME, 2000 SP4, XP SP3)
+- ~~**The 32-bit Version 200 targets** (Windows 98 SE, ME, 2000 SP4, XP SP3)
   still deliver from any context. Their services have not been read for this
   unlink; `src/xhci.h` already records, from design review A7, that SP4 and
   NUSB's completion path unlinks from the endpoint list "with no endpoint lock
   held", which would put Windows 2000's SMP environment in the same shape.
-  Not observed there, and not established.
+  Not observed there, and not established.~~ True as written on 2026-09-14;
+  section 4d's static read of 2026-09-15 found the same unlocked mover in
+  every 32-bit `usbport.sys`, the mode was lifted onto the whole 32-bit tier
+  that night, and the four targets passed their legs on 2026-09-15 (the
+  runtime entries at the end of section 4d).
 - **Vista and Windows 7** keep the issue 7 gate without per-endpoint matching.
   Issue 7 section 7.1 reads their lock as one per controller (the EpList
   lock), which would make cross-endpoint delivery safe there; whether every

@@ -1160,8 +1160,10 @@ static void test_group_waits_for_its_tail(void)
     CHECK_EQ(iso_event(&fix, 2, WANT_CC_MISSED_SERVICE, 0, &result),
              XHCI_XFER_OK, "the tail event arrives");
     CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "and ends the group");
-    CHECK_EQ(fix.queue.UnmatchedEvents, 1UL,
-             "counted as the duplicate measurement it also is");
+    CHECK_EQ(fix.queue.IsoTailEvents, 1UL,
+             "counted as the tail it is");
+    CHECK_EQ(fix.queue.UnmatchedEvents, 0UL,
+             "and not as unmatched - it resolved to a TRB this transfer owns");
     CHECK_EQ(fix.queue.IsoPacketsAnswered, 2UL,
              "with each packet answered exactly once");
     CHECK_EQ(fix.ring.Dequeue, 3UL,

@@ -38,18 +38,19 @@
 #      those three bytes as content; COMMAND.COM reads them as the first
 #      token of the first line.
 #
-# WHY RULE 3 IS NARROWER THAN THE OTHER TWO, measured 2026-09-12. Five tracked
-# files under the scanned trees carry a UTF-8 BOM today:
+# WHY RULE 3 IS NARROWER THAN THE OTHER TWO, measured 2026-09-12 and re-read
+# 2026-09-17. Three tracked files under the scanned trees carry a UTF-8 BOM
+# today (five did on 2026-09-12; scripts\inf-gate\check-inf.ps1 and
+# xhcisnap\README.md have since lost theirs):
 #
-#     scripts\inf-gate\check-inf.ps1          scripts\package\test-package.ps1
 #     scripts\inf-gate\test-inf-checks.ps1    scripts\vm-matrix\offsets.labels.txt
-#     xhcisnap\README.md
+#     scripts\package\test-package.ps1
 #
 # None is read by the 1998-era toolchain, and on a .ps1 a BOM is not a defect
 # at all: Windows PowerShell 5.1 reads a BOM-less script as the system ANSI
 # codepage, so the BOM is what makes a non-ASCII script read correctly. A rule
-# covering every kind would have failed the build on five files that work, so
-# it covers the kinds where the byte does damage. Rules 1 and 2 have no such
+# covering every kind would have failed the build on files that work, so it
+# covers the kinds where the byte does damage. Rules 1 and 2 have no such
 # carve-out and cover every kind.
 
 $ErrorActionPreference = "Stop"

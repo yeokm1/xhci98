@@ -566,7 +566,11 @@ NUSB's does. Two boots with no keep-alive pointer: value present, no
 addressed at once; value deleted, `SuspendController` once shortly after
 start and a keyboard hot-plugged afterwards never seen (QEMU shows it at the
 port with address 0, the driver's addressed count stays 0). The INF's global
-value stays, for both lineages.
+value stayed, for both lineages, until `1.0.2.0`; from `1.1.0.0` the INFs
+write nothing and the miniport flag `USB_MINIPORT_FLAGS_DISABLE_SS` reaches
+the same state, read on both stacks against a control that idles on
+2026-09-17 (the postscript of 2026-09-17 under the batch 11-V stage A lesson
+below; issue 5 section 5.5).
 
 Also measured the same day, from a `post-nusb` clone with the stack swapped
 and the driver installed from an INF stripped of its `usbd` and `usbhub`
@@ -830,7 +834,7 @@ exclusion exists because the DMA buffers require identity-mapped conventional
 memory. A prohibition stated by category will be applied to the wrong member
 of the category unless the exception is named beside it.
 
-Fixed in the six places the instruction appears: `xhciqual/HARDWARE-TESTING.md`
+Fixed in the six places the instruction appears: `xhciqual/hardware-testing.md`
 (the "Safety and preparation" step 1, which now carries the reasoning, and the
 Intel 7/8-series machine note), `xhciqual/README.md`,
 `docs/using/release-notes.md`, `docs/using/release-acceptance-test.md`,
@@ -1477,8 +1481,11 @@ an assumption that four documents then leaned on.
 
 A probe of an instrument must run the binary that uses the instrument. The
 handoff proposed one boot with the machine as it stood. The machine ran the
-standard build, whose trace channel is entirely inside `#if DBG`, so it makes
-no live `DbgPrint` call and the hypothesised mechanism is never entered. A
+standard build, whose per-event trace sites are all inside `#if DBG`, so the
+per-event `DbgPrint` calls the hypothesis needs are not in the binary and the
+mechanism is never entered (the one `DbgPrint` path the `0.0.0.4` release
+binary did carry, the `XhciLogDebugView` flush of the ring, is not the
+per-event stream). A
 pass there would have been a pass for a driver that emits nothing, and it
 would have been written down as evidence. Before testing whether a channel is
 safe, check that the binary under test can use the channel at all.
@@ -1775,7 +1782,7 @@ vehicle, HID at port 1 and storage at port 2 both at 480 Mb/s on `xhci.0`,
 The 12-against-122 gap is the wedge, not a dosing artefact. The churn kept
 attaching hubs at the same rate on both legs, and leg A' stopped enumerating
 them because the guest had already died at about twelve, so leg B absorbed
-roughly ten times leg A''s enumeration dose and stayed healthy. Leg A, the
+roughly ten times leg A's enumeration dose and stayed healthy. Leg A, the
 first xHCI leg on a two-controller vehicle, wedged too, at 18 enumerations;
 leg A' exists to close the confound that leg A ran without the UHCI controller
 present, and it does. The wedge is reproduced twice on `xhci.0` and absent
@@ -3364,8 +3371,13 @@ on `EndpointStoppedEvents` = 0.
 
 That is the wrong counter for the question. `EndpointStoppedEvents` counts
 the xHC's Stopped Transfer Event, the controller's reply to a Stop Endpoint
-command. `EndpointStops` counts this driver issuing one. Zero in the first
-does not imply zero in the second, and the discriminator was sitting in the
+command. `EndpointStops` counts a Stop Endpoint this driver issued whose
+completion left the ring stopped - Success, or a Context State Error whose
+endpoint then read Stopped (since 2026-09-17; before that every Context State
+Error counted, on the reading that any "not Running" state was what the
+caller wanted). A Context State Error that read Halted, Error or Disabled
+stopped nothing and lands in neither it nor `EndpointStopFailures`. Zero in
+the first does not imply zero in the second, and the discriminator was sitting in the
 evidence directories the whole time as `usb_xhci_ep_stop`:
 
 | leg | `usb_xhci_ep_stop` | `usb_xhci_ep_set_dequeue` |
@@ -5661,7 +5673,13 @@ change-gated witness suppressed.
 New binary in by disable -> overwrite -> enable (no reboot; the enable
 reloads the image). Witness fired on the start, and a plain plug/unplug pair
 produced both edges on port 5 with `port status change events` going 1 -> 2,
-no timing work at all, because native Win2000 usbport never idle-suspends.
+no timing work at all, because native Win2000 usbport did not idle-suspend
+in this run. (That was this run's observation, not a property of the stack:
+the generalisation "never idle-suspends" was withdrawn on 2026-09-05 under
+roadmap Phase 20, F18 - the qualification under "An NT install that never
+saw a USB controller has no `usbport.sys`" above and the 2026-09-06
+postscript under the batch 11-V stage A lesson, which bounds it by its
+conditions.)
 When a clause is hard to observe on one target, check whether another target
 makes it cheap before engineering around the hard one.
 
@@ -5763,9 +5781,13 @@ Two things were observed here that no host model could produce:
    controller raises no Port Status Change Events. A timer-driven plug test
    silently observes nothing; the sequence has to be driven off the trace
    (`init complete` -> plug within the same second). Win2000's native
-   usbport does not idle-suspend at all, so the same test needs no timing
-   care there. Expect this window to widen once Phase 6 makes a device
-   enumerable.
+   usbport did not idle-suspend in this run, so the same test needed no
+   timing care there (this run's observation only; "does not idle-suspend
+   at all" as a generalisation was withdrawn on 2026-09-05, roadmap Phase
+   20 F18 - see the qualification under "An NT install that never saw a USB
+   controller has no `usbport.sys`" and the 2026-09-06 postscript under the
+   batch 11-V stage A lesson). Expect this window to widen once Phase 6
+   makes a device enumerable.
 
 The Win98 run also caught a full `ResumeController` -> complete
 reinitialisation -> No Op -> `init complete` cycle, and the shutdown
@@ -7273,7 +7295,7 @@ board-specific half that was genuinely new here (subsystem `17AA:22B1`, BAR
 at `e33a0000`), so the PM decode is now independently confirmed on two
 machines rather than one, and the expected MSI-related differences (`MSI:
 Enable+`, `DisINTx+`, `pin A routed to IRQ 125` against the DOS `line=IRQ
-11`) showed up as `HARDWARE-TESTING.md` predicts.
+11`) showed up as `hardware-testing.md` predicts.
 
 Inferred: a uniform Win2000 resume path across recent Intel PCH xHCI is
 plausible, given identical PM content four years apart, but two data points
@@ -8380,7 +8402,7 @@ CPU.
 
 Related implementation: `xhciqual/irq.c`, `xhciqual/bringup.c`,
 `xhciqual/main.c`, and `xhciqual/report.c`. Related procedure and
-diagnosis: `xhciqual/HARDWARE-TESTING.md`, `xhciqual/README.md`, and
+diagnosis: `xhciqual/hardware-testing.md`, `xhciqual/README.md`, and
 `docs/contributing/failure-diagnosis.md`.
 
 ## QEMU USB placement follows speed, not xHCI port numbers

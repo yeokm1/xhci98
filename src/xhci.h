@@ -3387,10 +3387,14 @@ typedef struct _XHCI_TRANSFER {
      * field here is copied - a value read twice from memory another driver owns
      * is two values.
      *
-     * `IsoPacketsAnswered` is what makes the request finishable when its last
-     * TD's event does not name the group's last TRB, which an error or a Missed
-     * Service on a two-fragment final packet produces: the positional rule alone
-     * would leave the transfer queued for ever on a pipe that has moved on.
+     * `IsoPacketsAnswered` is the per-packet stamping cursor and the duplicate
+     * guard: events arrive in packet order, so it is both how many packets have
+     * a status and where the next one is written, and an event for a packet
+     * behind it re-measures nothing. **It does not end the request.** The
+     * request ends on one thing only, an event naming `LastIndex`; an earlier
+     * version of `XhciXferIsoEvent` retired the group when this reached
+     * `IsoPacketCount`, and that handed a mapped buffer back while the xHC
+     * still owned the tail TRB (p.188, p.201). Do not restore that exit.
      */
     PVOID IsoParams;
     ULONG IsoPacketCount;
@@ -3812,12 +3816,23 @@ typedef struct _XHCI_TRANSFER_QUEUE {
      *                       a controller dropping the tails this driver is
      *                       waiting for. One group can be counted more than once
      *                       if several intermediate events land on it.
+     *   `IsoTailEvents`     the tail event itself: one naming the group's last
+     *                       TRB for a packet an earlier, intermediate event has
+     *                       already answered (p.175, p.201). It resolves to a
+     *                       TRB this driver owns, so it is not an
+     *                       `UnmatchedEvents` reading, and a conforming
+     *                       controller raises one for every page-crossing isoch
+     *                       IN packet that ends short. Rises with
+     *                       `IsoGroupsAwaitingTail` on a controller that sends
+     *                       the tails; a gap between the two is one that drops
+     *                       them.
      */
     ULONG IsoPackets;
     ULONG IsoPacketsAnswered;
     ULONG IsoPacketErrors;
     ULONG IsoMissedService;
     ULONG IsoGroupsAwaitingTail;
+    ULONG IsoTailEvents;
 } XHCI_TRANSFER_QUEUE, *PXHCI_TRANSFER_QUEUE;
 
 /*
@@ -6904,8 +6919,12 @@ typedef struct _XHCI_EXTENSION {
      *
      * `EndpointStops` / `EndpointResets` / `EndpointDequeueSets` count
      * completions that proved what the command claims - and for Stop Endpoint
-     * that includes Context State Error, because the states it names ("not
-     * Running") are the ones the caller wanted. `EndpointResetsNotHalted` is the
+     * that is Success, or a Context State Error whose EP State then read
+     * Stopped: the two completions after which the ring is software's. A
+     * Context State Error that read Halted, Error or Disabled stopped nothing
+     * and is counted in neither this nor `EndpointStopFailures` (the
+     * "ep.recovery" log note carries it), so every count here is a stop this
+     * driver issued that left the ring stopped. `EndpointResetsNotHalted` is the
      * same code from a **Reset** Endpoint, which is a different fact: the
      * endpoint was not in the Halted state (4.6.8 p.117), so this driver's
      * `HALTED` bit was stale and the recovery converts to a Stop.
@@ -7356,6 +7375,7 @@ typedef struct _XHCI_EXTENSION {
     ULONG IsoPacketsAnsweredTotal;
     ULONG IsoPacketErrorsTotal;
     ULONG IsoMissedServiceTotal;
+    ULONG IsoTailEventsTotal;
     ULONG IsoGroupsAwaitingTailTotal;
     /* How far a resync had to advance the published number to restore
      * congruence, summed. Zero on a controller that never stalls; on Win98,
@@ -7779,6 +7799,19 @@ typedef struct _XHCI_EXTENSION {
      * both values are re-read at each start rather than cached across one.
      */
     XHCI_LOG Log;
+
+    /*
+     * Keeps `TrailingSignature` the **last word** of the amd64 layout, which
+     * `test_packet_amd64` asserts and which is what makes the signature pair
+     * bracket the whole extension. The structure holds pointers, so on amd64
+     * its size is rounded up to a multiple of 8, and whenever the ULONGs
+     * ahead of the trailing word add up to an offset that is 0 mod 8 the
+     * compiler puts 4 bytes of tail padding *after* it. This word absorbs
+     * that padding. Adding one ULONG counter anywhere above flips the parity:
+     * delete this word then, and put it back on the next single addition.
+     * On x86 it costs 4 bytes and changes nothing else.
+     */
+    ULONG TrailingPad;
 
     ULONG TrailingSignature;
 } XHCI_EXTENSION, *PXHCI_EXTENSION;

@@ -353,7 +353,10 @@ no-argument quick scan (`opt_quick = (argc == 1)` in `main.c`), so
   for explicitly. It looks at every family whatever selectors are given: a
   family word or `--scan` is accepted and then ignored, because the scan's
   question is what controllers the machine has. `--full` is the full active
-  run across all families.
+  run across all families. `--quick` is a mode, not a modifier: beside
+  `--probe-only`, `--poll-only`, `--irq-selftest` or `--set-intel-ports` it
+  is a usage error (exit 2), because the scan would otherwise run and the
+  other mode be dropped without a word.
 - `--no-active`: an alias of `--probe-only`.
 - `--done-flag FILE`, also spelled `--done-flag=FILE`: create FILE only on
   normal completion, which is what the QEMU smoke test and the field `.BAT`

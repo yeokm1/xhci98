@@ -2729,8 +2729,13 @@ nonzero-MPSTATUS-to-6 mapping, all behaving as read out of the 2002 binaries.
 
 What that is not. That host runs a modern descendant of usbport, not NUSB's
 5652 and not SP4's 6681, so it raises confidence in the derivation without
-being an observation on either target. Windows 2000 has still not run any of
-this; the same three clauses are still owed on the SP4 build.
+being an observation on either target. Windows 2000 has run it too: in the 2b
+guest, against SP4's own `usbport.sys` 6681, `\\.\HCD0` opens, the round trip
+completes, and `-probe`'s four controls return 6 / 2 / 4 / 7 - the same three
+fixed controls as the Windows 98 reading below, with the first at 6 because
+that guest's channel was off, the shipping default (`xhcisnap/README.md`,
+"What has been executed, and what has not"). So the route is an observation
+on both targets.
 
 Observed on Windows 98 itself, on the NUSB 5652 build this block was read
 out of, in the 2a guest (`run-13e.md` P10, step 3). `CreateFile("\\.\HCD0")`

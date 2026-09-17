@@ -250,23 +250,42 @@ function Get-ReplugOutcome {
 }
 
 # WHAT COUNTS AGAINST A TARGET'S VERDICT in the post-release run.  Design
-# record 09 sections 4.1, 4.2 and 5: FAIL counts; ERROR counts unless the
-# group ended on a row the matrix declared may wedge this target, which is the
-# composite row's pinned reading on Windows 98; NODRIVER counts unless the row
-# carries an ExpectNoDriver entry for the target; PASS, INERT and EXCLUDED do
-# not.  Returns $true when the row counts against the verdict.
+# record 09 sections 4.1, 4.2 and 5: FAIL counts; ERROR counts unless the row
+# is one the matrix declared may wedge this target AND what happened is a
+# wedge, which is the composite row's pinned reading on Windows 98; NODRIVER
+# counts unless the row carries an ExpectNoDriver entry for the target; PASS,
+# INERT and EXCLUDED do not.  Returns $true when the row counts against the
+# verdict.
+#
+# BOTH HALVES OF THE WEDGE WAIVER ARE REQUIRED.  Until the 2026-09-17 audit's
+# D1 the declaration alone waived any ERROR on the row - a refused device_add,
+# a device never on the bus, an unconfirmed device_del, identity drift, a
+# monitor timeout - all of them silent on the one row the declaration is keyed
+# to.  The declaration licenses one shape (design record 09 section 4.1: the
+# guest taken down), so $WedgeShape is what the runner measured: Test-WedgeShape
+# on the liveness probe, or the monitor gone with the row in flight.
 function Test-RowCountsAgainst {
     param(
         [Parameter(Mandatory = $true)][string]$Outcome,
         [bool]$NoDriverExpected = $false,
-        [bool]$WedgeDeclared = $false
+        [bool]$WedgeDeclared = $false,
+        [bool]$WedgeShape = $false
     )
     switch ($Outcome) {
         "FAIL"     { return $true }
-        "ERROR"    { return (-not $WedgeDeclared) }
+        "ERROR"    { return (-not ($WedgeDeclared -and $WedgeShape)) }
         "NODRIVER" { return (-not $NoDriverExpected) }
         default    { return $false }
     }
+}
+
+# Is a liveness verdict the shape a MayWedgeGuest declaration licenses?  A
+# guest that stopped executing, or a monitor that is gone, is; "alive" is not,
+# and neither is "unknown" - a probe that could not tell is not a wedge, and
+# waiving on it would waive the unmeasured.
+function Test-WedgeShape {
+    param([Parameter(Mandatory = $true)][string]$LivenessVerdict)
+    return ($LivenessVerdict -eq "not-executing" -or $LivenessVerdict -eq "unreachable")
 }
 
 # The header block that makes two releases' reports diffable against each

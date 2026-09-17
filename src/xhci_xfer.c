@@ -968,6 +968,7 @@ VOID XhciXferQueueInit(PXHCI_TRANSFER_QUEUE queue)
     queue->IsoPacketErrors = 0;
     queue->IsoMissedService = 0;
     queue->IsoGroupsAwaitingTail = 0;
+    queue->IsoTailEvents = 0;
 }
 
 /*
@@ -3657,11 +3658,20 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
          * packet - a second measurement of the same bytes would double the
          * total - but it is still the positional proof of ownership the retire
          * below waits for, so it falls through instead of returning.
+         *
+         * The tail is counted as what it is. It resolved to a TRB this
+         * transfer owns, so it is not an `UnmatchedEvents` reading - and that
+         * counter folds into the total the mid-TD no-double-completion
+         * argument rests on, which a conforming controller would otherwise
+         * raise once per page-crossing short isoch IN packet (the 2026-09-17
+         * audit's B9). A re-measurement naming an *earlier* TRB is a genuine
+         * duplicate event and stays where it was.
          */
-        queue->UnmatchedEvents++;
         if (reportedIndex != owner->LastIndex) {
+            queue->UnmatchedEvents++;
             return XHCI_XFER_OK;
         }
+        queue->IsoTailEvents++;
     } else {
         for (i = owner->IsoPacketsAnswered; i < packetIndex; i++) {
             iso->Packet[i].LengthTransferred = 0;
@@ -3761,8 +3771,14 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
          * may still be the controller's must not have its mapped buffer handed
          * back, and on an isoch endpoint there is no halt to make a
          * repositioning legal either.
+         *
+         * `OrphanedGroups`, as the bulk path's refused retire charges it: a
+         * group that ended with its TRBs unreclaimed is the state that counter
+         * names. `PlacementFailures` is the opposite diagnosis - a ring that
+         * refused an explicit dequeue position, which nothing here asked for
+         * (the 2026-09-17 audit's B9).
          */
-        queue->PlacementFailures++;
+        queue->OrphanedGroups++;
         result->RefusedRetire = 1;
         result->NeedsRecovery = 1;
         return XHCI_XFER_OK;

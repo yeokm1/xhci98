@@ -352,6 +352,15 @@ static int parse_args(int argc, char **argv)
         }
         opt_family_mask = HC_MASK_XHCI;
     }
+    /* The quick scan is a whole mode, not a modifier: main() takes its
+     * branch before any of these four is looked at, so a run that named one
+     * of them beside --quick used to get the scan and no word about the
+     * other (the 2026-09-17 audit's C5). */
+    if (opt_quick && (opt_probe_only || opt_poll_only || opt_irq_selftest ||
+                      opt_set_intel)) {
+        print_usage();
+        return 0;
+    }
     return 1;
 }
 

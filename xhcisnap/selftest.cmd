@@ -11,9 +11,11 @@ rem BASE.TXT through the same writers and the same finish as the dump, and the
 rem XHCISNAP_FAULT environment variable ("write" or "close") makes the named
 rem step fail deterministically. This script runs four cases - a clean report,
 rem a write fault, a close fault and a .TXT that cannot be created at all - and
-rem checks the exit codes and the summary lines.
+rem checks the exit codes and the summary lines. A fifth case checks that
+rem `-probe` beside an implied `-dump` is refused before any device is opened
+rem (the 2026-09-17 audit's C4), which needs no controller either.
 rem
-rem Exit code 0 = all four cases behaved. Run it after build.cmd.
+rem Exit code 0 = all five cases behaved. Run it after build.cmd.
 setlocal
 cd /d "%~dp0"
 
@@ -81,11 +83,28 @@ if errorlevel 1 (
 )
 attrib -R "%BASE%.TXT"
 
-del /q "%BASE%.TXT" "%BASE%.no-fault.log" "%BASE%.write-fault.log" "%BASE%.close-fault.log" "%BASE%.readonly.log" 2> nul
+rem -probe with an implied -dump: refused as a usage error, no device opened,
+rem no file named after the -o argument created.
+"%~dp0XHCISNAP.EXE" -probe -o "%BASE%-probe" > "%BASE%.probe-dump.log"
+if not "%errorlevel%"=="2" (
+    echo FAIL: -probe beside -o exited %errorlevel%, expected 2
+    set FAILED=1
+)
+findstr /C:"Run them as two commands" "%BASE%.probe-dump.log" > nul
+if errorlevel 1 (
+    echo FAIL: the -probe -o refusal does not say to run them as two commands
+    set FAILED=1
+)
+if exist "%BASE%-probe.TXT" (
+    echo FAIL: -probe beside -o created a .TXT
+    set FAILED=1
+)
+
+del /q "%BASE%.TXT" "%BASE%.no-fault.log" "%BASE%.write-fault.log" "%BASE%.close-fault.log" "%BASE%.readonly.log" "%BASE%.probe-dump.log" 2> nul
 
 if "%FAILED%"=="1" (
     echo xhcisnap selftest FAILED
     exit /b 1
 )
-echo xhcisnap selftest: 4 cases, all passed
+echo xhcisnap selftest: 5 cases, all passed
 exit /b 0

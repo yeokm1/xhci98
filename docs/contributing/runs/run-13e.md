@@ -706,9 +706,11 @@ So even a perfectly safe DebugView could not have captured Finding 3. An audio
 device that enumerates cleanly and stalls three seconds later emits nothing to
 capture. And on Windows 98 metal you cannot start a capture before the driver's
 only dense trace has already happened: the driver loads at boot, DebugView can
-only be started after the desktop. Task 12.2 retired `XhciLogDebugView` because
-Windows closes the capture before it stops the driver, the same ordering problem
-from the other end of the driver's life.
+only be started after the desktop. Task 12.2 published that the DebugView sink
+cannot deliver the flush on Windows 98, because Windows closes the capture
+before it stops the driver - the same ordering problem from the other end of
+the driver's life. (The sink itself, `XhciLogDebugView`, stayed; what 12.2
+withdrew was the serial sink.)
 
 ### What this means for task 12.2 and for Finding 3
 
@@ -3350,7 +3352,9 @@ than negative, which is what happened to stage E4.3 at bench session 2.
 The kit has a fifth file. P5's kit had four (`xhci98.sys`, `xhci98.inf`,
 `usbd98.sys`, `usbd2k.sys`); this one adds `usbhub98.sys`, Windows 98 SE's own
 composite parent driver, the file Finding D found missing and the shipping
-answer to task 13-E.1. The INF copies it to `usbhub.sys` with
+answer to task 13-E.1 from `0.0.0.4` to `1.0.0.0` (withdrawn from the media
+with the other two on 2026-09-02, `1.0.0.1` on; the INF now has the setup
+engine copy the OS's own `usbhub.sys`). The INF of this kit copies it to `usbhub.sys` with
 `COPYFLG_NO_OVERWRITE`, and the E460 already has that file by hand-copy since
 bench session 2, byte-identical to the kit's (`e898b75f...`, the same SE CD
 file), so the composite stays bound whatever route is taken.
@@ -3632,16 +3636,21 @@ on the controller devnode is what skipping this looks like.
 
 5. Install the driver by INF, not by copying the `.sys`. Every file of the
    flavour's directory in one directory, then Device Manager -> the yellow
-   `?` device -> Update Driver -> that directory. This step also supplies
-   `usbd.sys` (the INF copies `usbd98.sys` to it, no-overwrite):
+   `?` device -> Update Driver -> that directory. This step also supplied
+   `usbd.sys` (the INF of that day copied `usbd98.sys` to it, no-overwrite;
+   since `1.0.0.1` it has the setup engine copy the OS's own):
    `usbhub20.sys` imports it, NUSB does not ship it, and step 1 proved the OS
    did not install it either.
 
-   It was four files when this stage ran and it is five from `0.0.0.4` on:
-   `xhci98.inf`, `xhci98.sys`, `usbd98.sys`, `usbd2k.sys` and `usbhub98.sys`,
-   the last copied to `usbhub.sys`, also no-overwrite. That fifth file is
-   Finding D's fix and it is why a machine installed from current media binds
-   composites without anything being copied by hand. This applies to a first
+   It was four files when this stage ran and it was five from `0.0.0.4` to
+   `1.0.0.0`: `xhci98.inf`, `xhci98.sys`, `usbd98.sys`, `usbd2k.sys` and
+   `usbhub98.sys`, the last copied to `usbhub.sys`, also no-overwrite. That
+   fifth file was Finding D's fix and it was why a machine installed from
+   that media bound composites without anything being copied by hand. Since
+   `1.0.0.1` (the three Microsoft files withdrawn 2026-09-02) the media holds
+   `xhci98.sys` and `xhci98.inf` only, and the INF has the setup engine copy
+   `usbd.sys` and `usbhub.sys` from the OS's own install source
+   (`AGENTS.md`, "The INF and install media"). This applies to a first
    install only: an INF install over an existing one bugchecks Windows 98 at
    `0028:C00312EE`, so a later version reaches this machine by the
    `ren`+`copy` swap of item P14.
@@ -4626,9 +4635,9 @@ what blocks the ack for that same CSC.
 No teardown path arms `PpPending` at all. A repository-wide search finds the
 only runtime arm reached solely from
 `XhciRhSetFeaturePortPower` / `XhciRhClearFeaturePortPower`
-(`src\xhci_rh.c:1097`), a usbhub-initiated callback. `XhciPortShadowPpArm`
-(`src\xhci_port.c:607`) is the sole non-initialisation `PpPending = 1`.
-`xhciDevArmTeardownStops` (`src\xhci_slot.c:3364`) has no speed and no
+(`src\xhci_rh.c`), a usbhub-initiated callback. `XhciPortShadowPpArm`
+(`src\xhci_port.c`) is the sole non-initialisation `PpPending = 1`.
+`xhciDevArmTeardownStops` (`src\xhci_slot.c`) has no speed and no
 transfer-type branch; the only periodic distinction in it is
 `xhciEpArmIfBusy`'s "is the endpoint busy".
 
@@ -4681,14 +4690,15 @@ below was another.
 
 #### `XHCI_EXT_FLAG_RH_CLOSED`, traced
 
-Set only in `XhciStopController` (`src\xhci_init.c:3783`) and cleared only in
-the controller start sequence (`src\xhci_init.c:4241`, paired with
+Set only in `XhciStopController` (`src\xhci_init.c`, the
+`XhciControllerUpdateFlags` call that sets it) and cleared only in
+the controller start sequence (`src\xhci_init.c`, the call that clears it, paired with
 `XHCI_EXT_FLAG_INITIALIZED` going up). It is a controller-lifecycle admission
 gate, and no per-device teardown path sets or clears it. It cannot silence
 one port after an ordinary unplug.
 
 So the `xhciRhAdmitted` early return in `XhciRootHubPortEvent`
-(`src\xhci_rh.c:2711`) is a real latent defect and not this fault. It
+(`src\xhci_rh.c`) is a real latent defect and not this fault. It
 consumes a Port Status Change Event and returns without acknowledging the
 change bit, and the drop is uncounted (`PortEventsMapped` increments before
 it, `PortEventChanges` after). Worth fixing and counting on its own merits.
@@ -4819,7 +4829,9 @@ E5.3 composite re-presented at D:        binds / still Code 2:        photo y/n
 Task 13-E.3, the only genuine blocker left in batch 13-E. Clauses 1 and 2 need
 the composite device bound, and it is bound already: Finding D (bench session 2)
 has it binding on the plain-NUSB baseline with `usbhub.sys` in place, which is
-what the shipping package now carries. So this stage runs before stage E5, which
+what the shipping package carried from `0.0.0.4` to `1.0.0.0` (since
+`1.0.0.1` the INF has the setup engine copy the OS's own file instead; the
+result is the same file in place). So this stage runs before stage E5, which
 is one-way and optional (see "Stage order" above). Clause 3 is a different
 physical unit and is not gated on any of this; run E6.3 regardless.
 

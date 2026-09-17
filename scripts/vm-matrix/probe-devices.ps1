@@ -31,7 +31,7 @@ guessing it from the model name is how `usb-audio` would have been recorded as
 single-interface.
 
 .EXAMPLE
-powershell -File scripts\vm-matrix\probe-devices.ps1 -OutFile out\device-population.txt
+powershell -File scripts\vm-matrix\probe-devices.ps1 -OutFile out\phase10\device-population.txt
 #>
 [CmdletBinding()]
 param(

@@ -292,7 +292,9 @@ function Get-ExtensionIdentityDrift {
     )
     $fresh = Find-ExtensionIdentity -DebugconLog $DebugconLog
     if ($null -eq $fresh.Va) {
-        return ("the debug console log {0} no longer carries the driver's extension address, so no counter can be read against a known identity" -f $DebugconLog)
+        # The leaf name: this text reaches the diffable report body, where an
+        # absolute path is a per-host difference.
+        return ("the debug console log {0} no longer carries the driver's extension address, so no counter can be read against a known identity" -f (Split-Path -Leaf $DebugconLog))
     }
     if ($fresh.Spans) {
         return ("the debug console log now spans more than one driver load or binary (VAs: {0}; sizes: {1}); the driver reloaded inside this group, so this reading would decode freed memory" -f `

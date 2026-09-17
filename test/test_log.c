@@ -141,6 +141,7 @@ static void noteRingBytes(int line)
 
     live = (unsigned long)log.Used + log.BytesDropped + drained;
     ringConservationChecks++;
+    checks++;   /* it is a check: a failure below counts against it */
     if (live < ringBytesInLast) {
         ringConservationFailures++;
         printf("FAIL %s:%d: the ring lost %lu byte(s): %lu handed in, %lu "

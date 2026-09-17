@@ -24,9 +24,11 @@ published under a number is wrong, cut the next version through
 place leaves two different byte states answering to one version name, and
 nothing a user holds says which one they have.
 
-The one qualification is a version nobody holds. Until the first upload, a
-finding against the current version re-cuts it under the same number with
-`-Force`, because a number that was never given to anyone has not been spent;
+The one qualification is a version nobody holds through the public channel.
+Until the first public upload (no GitHub release exists), a finding against
+the current version re-cuts it under the same number with `-Force`, because
+a number that was never published has not been spent - a cut writes files
+here, a publish uploads one, and only the second spends the number;
 `1.0.0.0` was re-cut that way on 2026-08-30, and `1.0.2.0` three times on
 2026-09-07. Once a version has been uploaded, the rule above is absolute.
 
@@ -167,7 +169,17 @@ and the Windows setup engine copies each from the OS's own install source,
 the CABs on the hard disk or the Windows 98 CD, and the NT targets'
 `Driver Cache\i386`, never overwriting a file already there. On an xHCI-only
 Windows 98 machine the install therefore asks for the Windows 98 SE CD; the
-generated `readme.txt` says so in its section 3. Until 1.0.1.0 the NT path
+generated `readme.txt` says so in its section 3. That paragraph describes
+the four install paths of the 32-bit INF's NT 5.x era; since `1.1.0.0` the
+two INFs carry five install sections between them and not all of them copy.
+The 64-bit INF's `[Xhci.Dev.NTamd64]` fetches the same four files on Windows
+XP x64 from `Driver Cache\amd64`, where `usbd.sys` and `usbui.dll` come from
+`driver.cab` and `usbport.sys` and `usbhub.sys` from `sp2.cab`, with no
+prompt. The two `Xhci.Dev6` sections, `[Xhci.Dev6.NTx86]` in the 32-bit file
+and `[Xhci.Dev6.NTamd64]` in the 64-bit one, copy `xhci98.sys` alone: every
+install of Windows Vista and Windows 7 already carries all four files, and
+their file queue aborts on a `LayoutFile` copy (design record 11 section 12,
+decision 13). Until 1.0.1.0 the NT path
 copied `usbd.sys` only, and an NT install that had never seen a USB
 controller had no `usbport.sys` for the driver to load against (Code 39,
 measured on a Windows XP guest on 2026-09-03).
@@ -305,7 +317,8 @@ same `DriverVer`, so they cannot share a directory; and the x86 pair is named
 `-x86` rather than left bare, because the moment a second set exists an
 untagged `release/` would mean "x86" without saying so and the download's
 `readme.txt` would have no single "INSTALL THIS ONE" to point at. That rename
-was free: no release has been uploaded, so no user has ever seen `release/`,
+was free: no release has been uploaded publicly and no GitHub release exists,
+so no download has ever carried `release/`,
 and the write-once rule above leaves the four directories already cut exactly
 as they are. Their shape is what a cut produced on the day, which is what the
 "look in it rather than here" paragraph above is for.
@@ -327,11 +340,14 @@ cannot stand in for one that is. It defaulted to `x86` alone until that ran.
 `scripts\package\test-package.ps1` asserts the default, so changing it back is
 as deliberate an act as changing it forwards was.
 
-**Read the x64 half of a cut as narrowly as its evidence is**: one guest, one
-virtual machine, never real hardware, against the x86 half's four install legs
+**Read the x64 half of a cut as narrowly as its evidence is**: three guests
+(Windows XP x64, Vista x64 and Windows 7 x64), all virtual machines, never
+real hardware, the two NT 6.x ones loading the driver only on an F8 boot with
+driver signature enforcement disabled, against the x86 half's install legs
 (Windows 98 on both USB 2.0 stacks, Windows ME, Windows 2000, 32-bit Windows
-XP). Publishing it by default is what claiming the target means, not a claim
-that the two halves are equally attested.
+XP, and from `1.1.0.0` 32-bit Vista and Windows 7). Publishing it by default
+is what claiming the target means, not a claim that the two halves are
+equally attested.
 
 `-UploadSetOnly` is the one mode that does not follow the default: it derives
 the architectures from the published tree instead, because every version

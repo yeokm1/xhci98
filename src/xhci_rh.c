@@ -309,11 +309,18 @@ static ULONG xhciRhRefresh(PXHCI_EXTENSION ext,
      * What the shipping form does is discard the write's answer:
      * `xhciRhWritePortsc` refuses every write while a Port Power
      * change is in flight, `ackBits` is a stack local, and a refusal therefore
-     * *drops* the acknowledgement. Nothing retries it - the health poll's only
-     * refresh for this port is gated on `PpPending`, which `XhciPortShadowPpAge`
-     * clears on give-up - so the change bit stays set, and per `lessons.md`
-     * entry that suppresses the controller's next Port Status Change Event
-     * for this port. The port is out of service until the driver restarts.
+     * *drops* the acknowledgement for this refresh. Nothing carries it, but
+     * while `PpPending` is set the health poll refreshes this port every
+     * interval, and each of those re-reads the still-set bit, re-latches the
+     * hub-class change and re-runs `XhciSlotPortConnectChanged` for one
+     * physical event, until a reading confirms PP and the acknowledgement
+     * goes out with that refresh. What is dropped for good is the other
+     * ending: `XhciPortShadowPpAge` gives up first, `PpPending` clears, the
+     * poll stops re-reading the port, and the change bit stays set - which per
+     * the `lessons.md` entry suppresses the controller's next Port Status
+     * Change Event for this port. The port is then silent until something
+     * else - a status query prompted by another port, a stop/start - reads
+     * and acknowledges it (2026-09-17 audit, B12).
      *
      * So carry the debt instead of dropping it. **The retry is composed against
      * the fresh `portsc` of whichever refresh eventually succeeds**, never
@@ -430,6 +437,32 @@ static ULONG xhciRhRefresh(PXHCI_EXTENSION ext,
     }
 
     return latched;
+}
+
+/*
+ * The refresh for a path that is about to write, or has just decided from, a
+ * link state (2026-09-17 audit, B5 and B6).
+ *
+ * xhciPortLeftSuspend derives C_PORT_SUSPEND from the shadow's *previous* link
+ * state, and software's own link-state writes are the transitions the
+ * controller announces with no change bit (CONFIG.U3E is never set here, and
+ * the shipping builds refresh a port only from a status query, a port event
+ * or the Port Power poll). A writer that did not fold its own reading in
+ * first left the shadow reading whatever the last query saw - U0, on a
+ * suspend/resume pair with no query between - and the Resume-to-U0 PLC then
+ * found nothing to derive. Whatever this latches is owed to usbhub exactly as
+ * a poll's refresh is.
+ *
+ * IRQL: any. Caller holds the controller lock, and owes
+ * XhciRootHubDeferredWork after releasing it. Guest reading owed.
+ */
+static VOID xhciRhFoldReading(PXHCI_EXTENSION ext,
+                              ULONG hubPort,
+                              XHCI_PORT_SHADOW *shadow)
+{
+    if (xhciRhRefresh(ext, hubPort, shadow) != 0) {
+        ext->RootHubInvalidatesOwed++;
+    }
 }
 
 /*
@@ -829,6 +862,11 @@ static MPSTATUS xhciRhPortOperation(PXHCI_EXTENSION ext,
         return MP_STATUS_NOT_SUPPORTED;
     }
 
+    /* The link-state writer's fold - see xhciRhFoldReading. */
+    if (operation == XHCI_RH_OP_SUSPEND) {
+        xhciRhFoldReading(ext, (ULONG)port, shadow);
+    }
+
     /*
      * **What this port is already doing, before deciding what to do to it.**
      *
@@ -974,10 +1012,13 @@ static MPSTATUS xhciRhPortOperation(PXHCI_EXTENSION ext,
         /*
          * **The software half runs unconditionally**, and a Win98 run is why.
          * Gating it on the hardware left the address map stale on every path
-         * where the write did not land - declined by the "confirm before
-         * modifying again" holdback, refused because the controller was
-         * suspended, or simply never confirmed - which is the whole defect this
-         * trigger exists for, still open.
+         * where the write did not land. When that run was taken the write
+         * could still be declined here by the "confirm before modifying again"
+         * holdback; the Port Power refusal at the top of this function has
+         * since put that case before the write, so by this line
+         * xhciRhWritePortsc has issued it, and the path that remains is a
+         * write the port has not confirmed yet - which is the whole defect
+         * this trigger exists for, still open.
          */
         XhciSlotPortDisowned(ext, (ULONG)port);
 
@@ -1358,6 +1399,17 @@ static MPSTATUS xhciRhStartOperation(PXHCI_EXTENSION ext,
         return MP_STATUS_NOT_SUPPORTED;
     }
 
+    /*
+     * The link-state writer's fold - see xhciRhFoldReading. This is the one
+     * that matters most: it is what leaves the shadow reading U3 for the
+     * derivation the resume's end depends on. After the busy test, not before
+     * it: a refresh claims a reset whose PRC it finds, and run ahead of the
+     * test it would disarm the port a resume is then wrongly admitted to.
+     */
+    if (operation == XHCI_PORT_OP_RESUME) {
+        xhciRhFoldReading(ext, (ULONG)port, shadow);
+    }
+
     write = 1;
     value = 0;
     if (operation == XHCI_PORT_OP_RESET) {
@@ -1628,8 +1680,19 @@ static VOID NTAPI xhciRhPortTimeout(PVOID miniPortExtension, PVOID context)
         return;
     }
 
+    /*
+     * The link-state writer's fold - see xhciRhFoldReading. The write below
+     * moves the link from Resume to U0, and the PLC that reports the arrival
+     * is derived into C_PORT_SUSPEND against what the shadow held *before* it,
+     * which must therefore read Resume by then. Every exit past this point
+     * reaches XhciRootHubDeferredWork, so anything the fold latched is
+     * announced.
+     */
+    xhciRhFoldReading(ext, timeout->HubPort, shadow);
+
     portsc = XhciReadPortsc(ext, xhciPort);
-    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0) {
+    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0 ||
+        XHCI_PORTSC_GET_PLS(portsc) != XHCI_PLS_RESUME) {
         /*
          * The device left mid-interval - a plausible way for a resume to end,
          * since a user unplugging a sleeping device is exactly what produces
@@ -1638,13 +1701,20 @@ static VOID NTAPI xhciRhPortTimeout(PVOID miniPortExtension, PVOID context)
          * operation is abandoned rather than completed. The disconnect itself
          * arrives as CSC through the ordinary event path and needs nothing from
          * here.
+         *
+         * A port no longer in Resume is the same answer, and the gate is the
+         * one the age retire already had: a U0 written with LWS onto a link
+         * that has already left Resume - a second timer on a port the first
+         * one finished, or a port a disable or reset took over mid-interval -
+         * is a link-state write the port did not ask for.
          */
         (VOID)XhciPortShadowClaim(shadow, XHCI_PORT_OP_RESUME,
                                   timeout->Generation);
         ext->RhResumesAbandoned++;
         XhciControllerLockRelease(oldIrql);
-        XHCI_DBG_VALUE_CHANGED("RH resume: port went away mid-interval, PORTSC",
-                               portsc);
+        XHCI_DBG_VALUE_CHANGED("RH resume: port went away or left Resume "
+                               "mid-interval, PORTSC", portsc);
+        XhciRootHubDeferredWork(ext);
         return;
     }
 
@@ -1674,14 +1744,17 @@ static VOID NTAPI xhciRhPortTimeout(PVOID miniPortExtension, PVOID context)
     XhciControllerLockRelease(oldIrql);
 
     /*
-     * No announcement is queued here. The U3-to-U0 transition this write asks
-     * for reports itself through PLC when the link reaches U0, and the refresh
-     * that observes it derives C_PORT_SUSPEND - the hub class's "the resume you
-     * asked for has finished" - from the previous link state. Latching it here
-     * instead would report the resume complete at the instant it was requested.
+     * No announcement is queued here for the resume itself. The Resume-to-U0
+     * transition this write asks for reports itself through PLC when the link
+     * reaches U0, and the refresh that observes it derives C_PORT_SUSPEND -
+     * the hub class's "the resume you asked for has finished" - from the
+     * previous link state. Latching it here instead would report the resume
+     * complete at the instant it was requested. The deferred work is for what
+     * the fold above may have latched.
      */
     XHCI_DBG_VALUE_CHANGED("RH resume: T(DRSMDN) elapsed, driving hub port to "
                            "U0", timeout->HubPort);
+    XhciRootHubDeferredWork(ext);
 }
 
 /*
@@ -2482,7 +2555,21 @@ VOID XhciRootHubPoll(PXHCI_EXTENSION ext)
              * strength of a value known to be stale. This way the link is given
              * until the next poll to report the transition, which is what the
              * PLC event does anyway.
+             *
+             * **And the sweep does not arm from a stale shadow either.** The
+             * timer's terminating write leaves the shadow reading Resume until
+             * the PLC it provokes is drained, and a poll landing in that window
+             * would arm a second resume on a port already in U0 (2026-09-17
+             * audit, B6). So a shadow that says Resume with nothing armed is
+             * re-read first - through the refresh, so the reading is folded
+             * and acknowledged like any other - and only a port still
+             * signalling is armed. A port whose PLC has already reached U0
+             * gets its C_PORT_SUSPEND derived here instead.
              */
+            if (shadow->Armed == XHCI_PORT_OP_NONE &&
+                XHCI_PORTSC_GET_PLS(shadow->Portsc) == XHCI_PLS_RESUME) {
+                xhciRhFoldReading(ext, hubPort, shadow);
+            }
             xhciRhArmDeviceResume(ext, hubPort, shadow);
             if (XhciPortShadowAge(shadow, ext->PollClockMs,
                                   XHCI_PORT_AGE_MS)) {

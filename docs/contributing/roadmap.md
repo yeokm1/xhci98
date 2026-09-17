@@ -991,8 +991,11 @@ What shipped:
   `scripts\hub-characterise.ps1` extended.
 - `usbhub98.sys` (Finding D): the Windows 98 composite-device gap was one
   missing file - `usbhub.sys`, which Setup never copies on an xHCI-only
-  machine - now carried on the Win98 path only under `COPYFLG_NO_OVERWRITE`
-  with the same provenance and gate treatment as `usbd98.sys`.
+  machine - carried on the Win98 path only under `COPYFLG_NO_OVERWRITE`
+  with the same provenance and gate treatment as `usbd98.sys`, from
+  `0.0.0.4` to `1.0.0.0`. Withdrawn from the media on 2026-09-02 with the
+  other two: since `1.0.0.1` the media holds `xhci98.sys` and `xhci98.inf`
+  only, and the INF has the setup engine copy the OS's own file.
 - Bench results on real xHCI silicon under Windows 98 SE (E460): multi-TT
   and single-TT hub behaviour with five children identical either side of the
   one-variable hub swap; USB Audio plays clean at a root port and behind a
@@ -1722,7 +1725,12 @@ Owed:
       install legs - the four x86 ones with full device clauses, the amd64
       package on XP x64, Vista x64 and Windows 7 x64, and the x86 package on
       Vista x86 and Windows 7 x86, recording the unsigned-driver prompt - and
-      its file list checked against what the packager staged
+      its file list checked against what the packager staged. Of the 32-bit
+      pair, Vista x86 has since installed the `qemu` build through the
+      committed `src\xhci98.inf` (2026-09-17, 22.5's `InfSection` reading);
+      neither has run the `release` flavour, and Windows 7 x86 has not
+      installed through the committed INF, so the eighth and ninth legs
+      still take both
 
 Checkpoint, the guest half: on each of Vista x86 and Windows 7 x86 the package
 installed, the driver registered, started and passed its No Op self-test, the
@@ -1739,7 +1747,7 @@ for the published `release` binary, the acceptance test, or the upload.
 Records: `runs/run-22.md`; `design/11-x64-targets.md`;
 `usb-xhci-info/usbport-miniport-abi.md`; issues 05, 07 and 08;
 `build-and-test.md`; `lessons.md`; `releases/history.md`;
-`runs/run-22-post-release/`.
+`runs/run-22-post-release/` (written by 22.9).
 
 ## Post-Release - Run the Acceptance Test by Hand
 

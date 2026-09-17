@@ -571,7 +571,8 @@ int qual_irq(CTRL *c)
      */
     if (pci_read16(c->pci.bus, c->pci.dev, c->pci.fn, 0x04) &
         PCI_CMD_INTX_OFF) {
-        strcpy(c->irq_note, "PCI Interrupt Disable bit stuck set: INTx is "
+        /* irq_note is 80 bytes; this literal was 81 with its NUL. */
+        strcpy(c->irq_note, "PCI Interrupt Disable bit stuck set: INTx "
                "blocked at the device, not misrouted");
         c->v_irq = V_FAIL;
         return 0;

@@ -3019,7 +3019,13 @@ static VOID xhciEpQuiesceCompleted(PXHCI_EXTENSION ext,
             xhciEpQuiesceFail(ext, dev, binding, op);
             break;
         }
-        ext->EndpointStops++;
+        /*
+         * `EndpointStops` is counted only where the completion proved the ring
+         * is software's: Success above and the Stopped reading below. A
+         * Context State Error that reads Halted, Error or Disabled stopped
+         * nothing and Running contradicts the code, so none of those is a stop;
+         * the "ep.recovery" note above carries them (the 2026-09-17 audit's B8).
+         */
         if (hwState == XHCI_EP_STATE_HALTED) {
             /* The race the note above names: the endpoint halted while the stop
              * was in flight. A Set TR Dequeue Pointer would be refused from
@@ -3066,6 +3072,7 @@ static VOID xhciEpQuiesceCompleted(PXHCI_EXTENSION ext,
             break;
         }
         if (hwState == XHCI_EP_STATE_STOPPED) {
+            ext->EndpointStops++;
             quiesce->Flags &= ~XHCI_EPQ_HALTED;
             xhciEpStopped(ext, dev, binding, 1);
             break;
@@ -4129,7 +4136,15 @@ VOID XhciSlotInvalidateAll(PXHCI_EXTENSION ext, ULONG controllerStopped)
              * through that handle resolves to this record. (Completions
              * themselves are answered through each XHCI_TRANSFER's own
              * `EndpointExtension`, recorded at submit, not through this one.)
+             *
+             * The intercepted SET_ADDRESS is the one thing the DMA rule does
+             * not reach: it owns no TRBs, so it is answered here as the
+             * teardown and the failure path answer it. Left held on a GONE
+             * record nothing re-derives it, and usbport's enumeration thread
+             * sits on its infinite non-alertable wait until an HCRST that a
+             * stop never performs (the 2026-09-17 audit's B2).
              */
+            xhciDevCancelSetAddress(ext, dev, XHCI_USBD_STATUS_CANCELED);
             dev->State = XHCI_DEV_STATE_GONE;
             ext->DevicesAbandoned++;
             continue;
@@ -8240,6 +8255,7 @@ static ULONG xhciDevIsoTransferEvent(PXHCI_EXTENSION ext,
     ULONG errorsBefore;
     ULONG missedBefore;
     ULONG awaitingBefore;
+    ULONG tailBefore;
     ULONG unmatchedBefore;
 
     ring = binding->Ring;
@@ -8331,6 +8347,7 @@ static ULONG xhciDevIsoTransferEvent(PXHCI_EXTENSION ext,
     errorsBefore = queue->IsoPacketErrors;
     missedBefore = queue->IsoMissedService;
     awaitingBefore = queue->IsoGroupsAwaitingTail;
+    tailBefore = queue->IsoTailEvents;
     unmatchedBefore = queue->UnmatchedEvents;
 
     if (XhciXferIsoEvent(queue, ring, slotId, dci, event->Param0,
@@ -8345,6 +8362,7 @@ static ULONG xhciDevIsoTransferEvent(PXHCI_EXTENSION ext,
     ext->IsoMissedServiceTotal += queue->IsoMissedService - missedBefore;
     ext->IsoGroupsAwaitingTailTotal +=
         queue->IsoGroupsAwaitingTail - awaitingBefore;
+    ext->IsoTailEventsTotal += queue->IsoTailEvents - tailBefore;
     ext->UnmatchedEventsTotal += queue->UnmatchedEvents - unmatchedBefore;
 
     if (result.Action == XHCI_XFER_ACTION_COMPLETE) {
@@ -9319,6 +9337,22 @@ VOID XhciSlotCommandEvent(PXHCI_EXTENSION ext,
              */
             XhciLogNoteLocked(ext, "slot.enabled",
                               (slotId << 8) | dev->HubPort);
+            /*
+             * **A record failed while its Enable Slot was in flight stays
+             * failed.** A root-port re-entry at a speed this driver cannot
+             * address runs `xhciDevFailRecord` on the RESERVED record, and
+             * this arm used to write ENABLED and owe `ADDRESS_BSR` over it,
+             * so the pump built an Address Device with mps0 = 0, refused it
+             * and failed the record a second time with a `CommandFailures`
+             * the controller never earned (the 2026-09-17 audit's B4). The
+             * Slot ID is adopted above whatever the state, as it is for a
+             * failed Enable Slot: a FAILED record keeps its slot and the
+             * teardown's Disable Slot gives it back. No DCBAA entry is
+             * prepared, because nothing will be addressed through it.
+             */
+            if (dev->State == XHCI_DEV_STATE_FAILED) {
+                break;
+            }
             if (!xhciDevPrepareSlot(ext, dev)) {
                 /*
                  * **Torn down rather than left FAILED holding an owed Disable
@@ -10007,6 +10041,14 @@ static VOID xhciDevDisown(PXHCI_EXTENSION ext, PXHCI_DEVICE dev, ULONG hubPort)
     dev->EndpointExtension = NULL;
     /* The binding this debt would have been paid through has just gone. */
     xhciDevDropInvalidate(ext, &dev->Flags, XHCI_DEV_FLAG_INVALIDATE_EP0);
+    /*
+     * And so has the one an intercepted SET_ADDRESS would complete through.
+     * It owns no TRBs, so the DMA rule that keeps the queues standing does not
+     * apply; held, `xhciDevOwedOp` derives `ADDRESS_SET` from it above the
+     * DISOWNED gate, and the pump would address a device usbport has destroyed
+     * and then complete through its freed endpoint (the 2026-09-17 audit's B3).
+     */
+    xhciDevCancelSetAddress(ext, dev, XHCI_USBD_STATUS_CANCELED);
     ext->DevicesDisownedOut++;
     XHCI_DBG_VALUE_CHANGED("slot: port disowned a device, hub port << 8 | slot",
                            (hubPort << 8) | dev->SlotId);

@@ -148,14 +148,16 @@ body:
 
         If the probe does not crash the machine, the active runs come next.
         They TAKE OVER THE CONTROLLER - reset it, reset its ports - so use a
-        PS/2 keyboard. Run them from the five batch files that ship beside the
-        tool rather than as one long run, **cold-booting between each**:
+        PS/2 keyboard. Run them one at a time rather than as one long run,
+        **cold-booting between each** (the download carries no batch files;
+        these are the command lines, and the numbered .BAT wrappers in the
+        repository's xhciqual/ directory run the same ones):
 
-            1PROBE
-            2XPOLL
-            3XIRQ
-            4XEMPTY      (no external test device attached)
-            5XDEV        (one expendable USB 2.0 device attached directly)
+            XHCIQUAL --probe-only --no-page --log PROBE.LOG
+            XHCIQUAL xhci --poll-only --no-wait --no-devid --no-page --log XPOLL.LOG
+            XHCIQUAL xhci --irq-selftest --no-page --log XIRQ.LOG
+            XHCIQUAL xhci --no-wait --no-page --log XEMPTY.LOG   (no external test device attached)
+            XHCIQUAL xhci --no-page --log XDEV.LOG               (one expendable USB 2.0 device attached directly)
 
         Attach whichever of PROBE.LOG, XPOLL.LOG, XIRQ.LOG, XEMPTY.LOG and
         XDEV.LOG you got to this report, or paste them here. Getting only the

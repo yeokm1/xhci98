@@ -530,7 +530,34 @@ Assert "an expected NODRIVER does not"                 $false (Test-RowCountsAga
 # ExpectNoDriver entry can waive.
 Assert "a refusal is not waived by ExpectNoDriver"     $true  (Test-RowCountsAgainst -Outcome (Get-Outcome $mouseTexts (New-Delta $f3)) -NoDriverExpected $true)
 Assert "an undeclared wedge (ERROR) counts"            $true  (Test-RowCountsAgainst -Outcome "ERROR")
-Assert "a declared wedge (the pinned reading) does not" $false (Test-RowCountsAgainst -Outcome "ERROR" -WedgeDeclared $true)
+Assert "a declared wedge (the pinned reading) does not" $false (Test-RowCountsAgainst -Outcome "ERROR" -WedgeDeclared $true -WedgeShape $true)
+# The 2026-09-17 audit's D1: the declaration is keyed on the row, and it used
+# to waive ANY error on that row - a refused device_add, a device never on the
+# bus, an unconfirmed device_del, identity drift, a monitor timeout.  It
+# licenses one shape, and both halves are required.
+Assert "a declared row's non-wedge ERROR counts"       $true  (Test-RowCountsAgainst -Outcome "ERROR" -WedgeDeclared $true -WedgeShape $false)
+Assert "...and so does an undeclared row's wedge"      $true  (Test-RowCountsAgainst -Outcome "ERROR" -WedgeDeclared $false -WedgeShape $true)
+Assert "a stopped guest is the wedge shape"            $true  (Test-WedgeShape -LivenessVerdict "not-executing")
+Assert "a gone monitor is the wedge shape"             $true  (Test-WedgeShape -LivenessVerdict "unreachable")
+Assert "an alive guest is not"                         $false (Test-WedgeShape -LivenessVerdict "alive")
+Assert "an unknown is not either"                      $false (Test-WedgeShape -LivenessVerdict "unknown")
+
+Write-Host "--- the liveness verdict: a ticking PIT is not a running kernel ---"
+#
+# The 2026-09-17 audit's D2.  A bugchecked guest reads `running` with an
+# `info irq` delta, because the PIT raises IRQ0 whether or not a halted kernel
+# services it; with the keep-alive pump's `transfers completed` handed in as
+# the sign of life, that guest has to complete a transfer too.  Without a
+# sign of life the timer reading alone decides, as before, for the callers
+# that have no pump.
+Assert "running, parsed, ticking is alive"             "alive"         (Get-LivenessVerdict -Running $true -Parsed $true -IrqDelta 40).Verdict
+Assert "...with the pump advancing too"                "alive"         (Get-LivenessVerdict -Running $true -Parsed $true -IrqDelta 40 -LifeDelta 3).Verdict
+Assert "ticking but no transfer completed is not"      "not-executing" (Get-LivenessVerdict -Running $true -Parsed $true -IrqDelta 40 -LifeDelta 0).Verdict
+Assert "...and says why"                               $true           ((Get-LivenessVerdict -Running $true -Parsed $true -IrqDelta 40 -LifeDelta 0).Why -match 'completed no transfer')
+Assert "a stopped clock is not"                        "not-executing" (Get-LivenessVerdict -Running $true -Parsed $true -IrqDelta 0 -LifeDelta 3).Verdict
+Assert "a paused VM is not"                            "not-executing" (Get-LivenessVerdict -Running $false -Parsed $true -IrqDelta 40).Verdict
+Assert "an unparseable info irq is unknown"            "unknown"       (Get-LivenessVerdict -Running $true -Parsed $false -IrqDelta 0).Verdict
+Assert "...even with the pump advancing"               "unknown"       (Get-LivenessVerdict -Running $true -Parsed $false -IrqDelta 0 -LifeDelta 3).Verdict
 
 Write-Host "--- the header carries every variable thing, and nothing else does ---"
 $hdr = New-PostReleaseHeader -TargetId '2a-fresh' -Version '1.0.0.0' -DriverLine '1.0.0.0 qemu, 1 B, sha256 0' -ImageLine 'vm\fresh-2a.img, stamp base-1.0.0.0-qemu, from win98.img post-nusb' `

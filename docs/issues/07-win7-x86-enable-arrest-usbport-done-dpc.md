@@ -666,7 +666,9 @@ never-reset nets), built for both architectures, and **run on the four NT
    nonzero fallback count during ordinary traffic says usbport stopped
    polling an endpoint that owed work, and is the first thing to read.
 
-The 200 tier keeps delivering from the drain, as it always has, and the
+~~The 200 tier keeps delivering from the drain, as it always has~~ (true
+until 2026-09-15; item 2 above records the lift onto every Version 200 load
+that day, issue 8 section 4d), and the
 suite's existing nets (never under the controller lock, never inside a
 submit) hold unchanged.
 

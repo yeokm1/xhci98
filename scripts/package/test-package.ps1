@@ -1274,8 +1274,13 @@ try {
         @{ Name = "the containment assertion"; Find = 'Assert-UploadSetOutsideRelease -UploadRoot $early.Root' },
         @{ Name = "the make-package call";     Find = '& powershell.exe @pkgArgs' },
         @{ Name = "the declared-media check";  Find = 'Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected' },
-        @{ Name = "the publish swap";          Find = 'Move-Item -LiteralPath $destRoot -Destination $finalRoot' },
-        @{ Name = "the upload assembly";       Find = '$set = New-UploadSet -PublishedRoot $destRoot' }
+        # The upload assembly comes BEFORE the swap since the 2026-09-17
+        # audit's D5: it carries the per-directory INF gate and the zip, and
+        # either failing after the swap left a written-once release with no
+        # asset - the exact shape this list exists to prevent, one step later
+        # than it was looking.
+        @{ Name = "the upload assembly";       Find = '$set = New-UploadSet -PublishedRoot $destRoot' },
+        @{ Name = "the publish swap";          Find = 'Move-Item -LiteralPath $destRoot -Destination $finalRoot' }
     )
     # The qemu refusal is not in that list because it is not in that sequence:
     # it fires at parameter time, before the first thing the list names, and
@@ -1292,6 +1297,20 @@ try {
                 ("$($marks[$i - 1].Name) must come before $($marks[$i].Name) in make-release.ps1: a refusal that fires after the publish leaves a written-once release with no asset.")
         }
     }
+
+    # --- the aside's removal after a completed swap may not fail the cut -----
+    #
+    # The 2026-09-17 audit's D4, structural for the same reason as the list
+    # above. After both renames the replaced release is disk space, and on a
+    # OneDrive-hosted tree its removal fails routinely on a sync handle; under
+    # Stop that reported a published cut as failed and left the aside for the
+    # next run to refuse on as "interrupted". make-package.ps1 has the same
+    # rule for its retired package, and this holds make-release.ps1 to it.
+    Write-Step "the replaced release's removal is relaxed, and a leftover beside a published tree is not 'interrupted'"
+    Assert-True ($releaserText.Contains('Remove-Item -LiteralPath $asideRoot -Recurse -Force -ErrorAction SilentlyContinue')) `
+        "make-release.ps1 removes the replaced release under Stop after the swap, so a held handle in it fails a cut whose publish already completed."
+    Assert-True ($releaserText.Contains("'`$asideCheck' exists and '`$finalRoot' does not")) `
+        "make-release.ps1's leftover-aside check no longer asks whether the published tree is beside it before calling the previous run interrupted."
 
     # --- the readme template may not carry the two claims 1.0.1.0 shipped ----
     #

@@ -49,7 +49,7 @@ characterisation record for the hardware this project holds, and
 | # | What | The property that matters |
 |---|---|---|
 | 1 | An xHCI machine | PCI class code `0C0330`, at least one USB 2.0 port, a memory window below 4 GB, and a legacy interrupt pin. Step 3 confirms all four. A controller with no interrupt pin cannot be driven on either target, and there is no software workaround |
-| 2 | One target OS, already installed and working | Windows 98 SE (4.10.2222) with NUSB 3.3 already installed, or Windows 2000 SP4; for the VM-only rows, Windows ME (4.90.3000) with SweetLow's USB 2.0 stack installed (4.5, 7.7-7.8), 32-bit Windows XP SP3 (4.6, 7.9-7.12), or Windows XP Professional x64 / Windows Server 2003 x64 SP2 (4.8, 7.13-7.16). Do not install NUSB on the NT targets. The 64-bit row is the one target that takes a different package: a separate 64-bit build in its own directory, not the same file under another name (step 2). One OS per run: a dual-boot machine is two runs and two records |
+| 2 | One target OS, already installed and working | Windows 98 SE (4.10.2222) with NUSB 3.3 already installed, or Windows 2000 SP4; for the VM-only rows, Windows ME (4.90.3000) with SweetLow's USB 2.0 stack installed (4.5, 7.7-7.8), 32-bit Windows XP SP3 (4.6, 7.9-7.12), Windows XP Professional x64 / Windows Server 2003 x64 SP2 (4.8, 7.13-7.16), 32-bit Windows Vista SP2 or Windows 7 SP1 (4.9, 7.17-7.19), or Windows Vista x64 SP2 or Windows 7 x64 SP1 (4.10, 7.17-7.20). Do not install NUSB on the NT targets. The two 64-bit rows are the targets that take a different package: a separate 64-bit build in its own directory, not the same file under another name (step 2); and on Vista x64 and Windows 7 x64 the driver loads only on a boot where Disable Driver Signature Enforcement was chosen from the F8 menu, at every start (4.10). One OS per run: a dual-boot machine is two runs and two records |
 | 3 | A PS/2 or built-in keyboard and pointing device | A USB keyboard on the controller under test is unusable during the DOS pass and can stop responding mid-run. On a laptop the built-in keyboard is normally i8042-attached, but that is per machine; confirm it rather than assuming (`docs/contributing/build-and-test.md`, "Bootstrapping xHCI-only machines") |
 | 4 | A real-DOS boot medium, and a way to get a file off it | MS-DOS or FreeDOS on floppy, CD or USB key, booted without EMM386, a V86 monitor or a paging memory manager, but with `HIMEM.SYS` available, which is not one of those and which the qualifier may need (step 3). Not a DOS box inside Windows: the qualifier needs memory it can address one-to-one. Step 3 leaves `PROBE.LOG` on it, and that file is the run's first artefact |
 | 5 | A way to put the package on a machine whose USB does not work yet | Pull the disk and stage from another machine, burn a CD, or use a network share. On an xHCI-only machine there is no USB until this driver works; that is the chicken-and-egg this driver exists inside (`docs/contributing/build-and-test.md`, "Bootstrapping xHCI-only machines"). Pre-stage generously: every forgotten file is another disk swap |
@@ -110,7 +110,7 @@ failed" are different findings.
 |---|---|---|
 | 1.1 | Fill every field of "What to record for each machine" in `xhciqual/hardware-testing.md`: model, chipset, BIOS version and date, the DOS version and boot medium, and whether PS/2 or built-in input is available | Every field filled, or explicitly `n/a` with the reason |
 | 1.2 | Read every USB-related BIOS setting and write each one down, before anything else is done to the machine | Each setting with its value. A BIOS that offers no USB option at all is a result; write `NOT PRESENT` |
-| 1.3 | Record the target OS and its build, and whether any previous version of this package was ever installed here | Windows 98 SE (4.10.2222) or Windows 2000 SP4, or, for the VM-only rows, Windows ME (4.90.3000), 32-bit Windows XP SP3, or Windows XP x64 / Windows Server 2003 x64 SP2, with the architecture written down beside the build because it decides which package step 4 installs; and `none` or the version. A machine that had one produces an upgrade result, which is a different measurement and is not what this test measures (the release notes' "Known limitations", the Windows 2000 upgrade entry) |
+| 1.3 | Record the target OS and its build, and whether any previous version of this package was ever installed here | Windows 98 SE (4.10.2222) or Windows 2000 SP4, or, for the VM-only rows, Windows ME (4.90.3000), 32-bit Windows XP SP3, Windows XP x64 / Windows Server 2003 x64 SP2, Windows Vista SP2 or Windows 7 SP1 (32-bit or x64), with the architecture written down beside the build because it decides which package step 4 installs, and on Vista and Windows 7 whether it is x64, because that decides whether the driver loads without an F8 boot (4.10); and `none` or the version. A machine that had one produces an upgrade result, which is a different measurement and is not what this test measures (the release notes' "Known limitations", the Windows 2000 upgrade entry) |
 
 1.2 comes before anything else rather than as an afterthought because on Intel
 7- and 8-series chipsets a BIOS setting decides which controller owns the USB
@@ -167,7 +167,10 @@ from their driver cache with no prompt (`Driver Cache\i386`, and
 `Driver Cache\amd64` on Windows XP x64), and
 an xHCI-only Windows 98 machine may ask for the Windows 98 SE CD, so have it
 at hand for that step (`readme.txt` section 3; section 8 is the per-directory
-file list 2.3 checks).
+file list 2.3 checks). On Windows Vista and Windows 7, in either
+architecture, the install copies none of the four: every install of those
+systems already carries them, and both INFs' `Xhci.Dev6` sections copy
+`xhci98.sys` alone.
 
 If one directory nests another copy of the version inside itself (2.4): stop,
 and report the asset rather than the driver. That is a packaging defect and it
@@ -231,10 +234,10 @@ directory for the machine's architecture (step 2). Point at a directory, never
 at a loose `xhci98.sys`; nothing about a copied file says which flavour it is,
 and since `1.1.0.0` nothing about it says which architecture either.
 
-The rows are grouped by phase rather than by number: the five install rows
+The rows are grouped by phase rather than by number: the seven install rows
 first, one per target, then the three readings taken once the install is done.
-4.5, 4.6 and 4.8 were added after 4.3 and 4.4 and keep their ids, because the
-roadmap and the run sheets cite them.
+4.5, 4.6, 4.8, 4.9 and 4.10 were added after 4.3 and 4.4 and keep their ids,
+because the roadmap and the run sheets cite them.
 
 | # | Target | Do | Expected reading |
 |---|---|---|---|
@@ -243,7 +246,9 @@ roadmap and the run sheets cite them.
 | 4.5 | Windows ME | SweetLow's stack first (NUSB is a Windows 98 SE package), then the Windows 98 SE route of 4.1 | Completes. The virtual machine tried asked for no CD, its Setup having left the CABs on the hard disk; a machine without them may ask for the Windows ME CD, for `usbd.sys`, `usbhub.sys` and `usbui.dll`. Record which it was. This target is supported in virtual machines only |
 | 4.6 | Windows XP | Device Manager, the controller, Properties -> Driver -> Update Driver -> Have Disk -> `RELEASE-X86\`; Continue Anyway at the unsigned-driver warning | Completes with no other prompt; `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll` all come from the driver cache (`sp3.cab`). This target is supported in virtual machines only |
 | 4.8 | Windows XP x64, Windows Server 2003 x64 | The Windows 2000 route of 4.2, pointed at `RELEASE-X64\`; Continue Anyway at the unsigned-driver warning | Completes with no other prompt; `usbport.sys` and `usbhub.sys` come from `Driver Cache\amd64\sp2.cab` and `usbd.sys` and `usbui.dll` from `driver.cab` beside it, two cabinets in one pass. `RELEASE-X86\` offers this machine no driver at all, which is what a wrong pick looks like rather than a failed install. This target is supported in virtual machines only, and only Windows XP x64 has been tried |
-| 4.3 | All five | Look at Device Manager when the install is done | The two nodes below, and neither carries a warning mark |
+| 4.9 | Windows Vista, Windows 7 (32-bit) | Device Manager, the unrecognised xHCI device, Update Driver Software -> Browse my computer for driver software -> `RELEASE-X86\`. Use Device Manager rather than right-clicking `xhci98.inf`: the right-click Install route is not supported on these systems. If Windows warns that the driver is not signed or its publisher cannot be verified, choose to install it anyway, and write down the prompt's wording and when it appeared | Completes with no file prompt: the INF's `Xhci.Dev6` path copies `xhci98.sys` alone, because every install of these systems already carries `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll`. 32-bit Vista and Windows 7 do not enforce kernel-mode signing, so the driver starts on the ordinary boot. This target is supported in virtual machines only. Before the `1.1.0.0` asset was read (roadmap task 22.10), these two systems had run only the `qemu` flavour, never a published directory, so the unsigned-driver prompt above is a reading this test takes first |
+| 4.10 | Windows Vista x64, Windows 7 x64 | The route of 4.9, pointed at `RELEASE-X64\`. The install itself can be done on an ordinary boot. Then restart, press F8 before the Windows logo, and choose Disable Driver Signature Enforcement; that choice lasts one boot, and every later boot that is to have working USB needs it again | Completes with no file prompt, by the 64-bit INF's `Xhci.Dev6` path, which copies `xhci98.sys` alone. The driver starts only on the F8 boot; on any other boot Device Manager shows Code 39 on the controller and nothing on it works (Vista x64 was where that boot was looked at). `RELEASE-X86\` offers this machine no driver at all, which is a wrong pick rather than a failed install. This target is supported in virtual machines only, and the package is not signed (design record 11 section 12, decision 9) |
+| 4.3 | All seven | Look at Device Manager when the install is done | The two nodes below, and neither carries a warning mark. On Vista x64 and Windows 7 x64, on the F8 boot of 4.10 |
 | 4.4 | Windows 98 SE | Look for the two cosmetic readings and note them | `xhci98.tmp` left in `System32\Drivers` and listed in Driver File Details (cosmetic; the loaded binary is the real one), and the Driver tab showing a date but no version (release notes, "Known limitations"). Neither is a failure and neither should be reported as one |
 | 4.7 | Windows 2000, Windows XP, Windows XP x64 | The USB Root Hub of 4.3, Properties | A **Power** tab beside General and Driver, reading "The hub is self powered" and "Total power available: 500 mA per port", with the port count listed below. This is the reading that says `usbui.dll` arrived: Windows' own INF asks for that page and names that file as its provider, and on a machine that never had a USB controller the file is absent and the tab silently is too. Its absence is not a driver fault; record it. On Windows XP x64 the 64-bit INF copies the 64-bit `usbui.dll` by the same route, but the tab itself has not been read on that target here; whatever it shows is new information |
 
@@ -480,6 +485,34 @@ Windows Server 2003 x64 is the same operating system as Windows XP x64, NT
 been tried at all. A run of this block on one is new information rather than a
 repetition, so say in the record which of the two it was.
 
+Windows Vista and Windows 7, 32-bit and x64 (virtual machines only)
+
+| # | Do | Expected reading |
+|---|---|---|
+| 7.17 | Look in `HKLM\System\CurrentControlSet\Services\USB` for a DWORD `DisableSelectiveSuspend` | ABSENT: the `1.1.0.0` package writes no registry value on any target, and no earlier release carried an install path for these systems. On a clean Windows 7 install the `Services\USB` key does not exist at all; a clean Vista x64 install's `Services\usb` holds only `FastS4_OverrideBiosS4`, which is Windows' own |
+| 7.18 | Leave the machine idle for two minutes after boot with nothing plugged in, then plug in a Low-Speed HID | It enumerates and works with no Refresh. On 32-bit Windows 7 this is the sharpest form of the check on any target: without the fix its `usbport` halts the controller between 10 and 20 s after start. 32-bit Vista is the weak one: it was not seen idling the controller in five minutes either way, so a pass there says less |
+| 7.19 | Disable the controller in Device Manager and re-enable it, five times, then uninstall it and Scan for hardware changes | It comes back each time, with no crash and no enable that hangs; the rescan reinstalls with no media prompt and, on x64, with no second F8. Record how long each enable took |
+| 7.20 | x64 only: restart without pressing F8, then restart again with Disable Driver Signature Enforcement chosen | On the ordinary boot the controller shows Code 39 and nothing on it works; on the F8 boot the two nodes of 4.3 are back and the mouse of step 5 works. Record both. 32-bit Vista and Windows 7 do not enforce kernel-mode signing and this clause is `SKIP - other target` there |
+
+7.17 to 7.19 were measured on the four virtual machines of 2026-09-13 - Vista
+Business SP2 and Windows 7 Professional SP1, each 32-bit and x64, four virtual
+processors, the `qemu` build installed from a staged copy of the INF's NT 6.x
+sections (`docs/issues/07-win7-x86-enable-arrest-usbport-done-dpc.md` section
+7.5; `docs/contributing/build-and-test.md`, "Windows Vista and Windows 7
+target VMs" and "Vista x64 and Windows 7 x64 target VMs"), and 7.17 and 7.18
+again on 2026-09-17 against a control that idles
+(`docs/issues/05-idle-suspend-and-disableselectivesuspend.md` section 5.5).
+7.19 is issue 7's clause: before the fix Windows 7's enable arrested inside
+`usbport`, and five cycles a guest is what the record rests on, which issue
+7 section 6 says is not a proof that it cannot recur. 7.20 is the F8
+requirement read from the other side: the package is not signed, and the
+Code 39 reading is Vista x64's (release notes, "Known limitations"). No
+published `release` directory had been installed on any of the four before
+roadmap task 22.10 read the `1.1.0.0` asset, so on a first run of this block
+say which build and which directory it was.
+
+Windows 2000's 7.5 has not been measured here and is `SKIP - other target`.
+
 ### Step 8. Produce the log channel
 
 The point of a log channel is that a stranger can produce one. This step tests
@@ -544,8 +577,8 @@ fresh guest is the first thing that could, so the step asks.
 Observed: both the release and the debug build handed their log
 to `XHCISNAP` on the ThinkPad E460 under Windows 98 SE (task 13-L.3), and the
 same route was exercised in the Windows 2000 SP4 guest against SP4's own
-`usbport.sys` 6681 on the same day (`xhcisnap/README.md`, "What has actually
-been executed, and what has not"). An earlier ring-0 file sink, since retired,
+`usbport.sys` 6681 on the same day (`xhcisnap/README.md`, "What has been
+executed, and what has not"). An earlier ring-0 file sink, since retired,
 produced a 2,107-byte log at a user-chosen path on Windows 2000 (task 11-V.9);
 it is named here only so that its absence is not read as a regression. The
 DebugView bugchecks are `docs/contributing/build-and-test.md`, "Getting a

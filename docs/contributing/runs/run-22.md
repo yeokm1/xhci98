@@ -148,7 +148,9 @@ of the phase's risk:
   2026-09-09, and it did not change here.** The worry was real: the 5.0 -> 5.1
   step kept the registration packet byte-identical and *still* changed the
   value, and a fourth constant on 6.0 or 6.1 would have been a fourth arm on
-  the refusal at `src/xhci_dispatch.c:4640` - a code change to the **shipping
+  the refusal in `DriverEntry` (`src/xhci_dispatch.c`, the `USBPORT_GetHciMn`
+  test that traces `unknown usbport lineage - refusing to register`) - a code
+  change to the **shipping
   32-bit binary**, with all four existing install legs to re-validate behind
   it. Both 6.0 and 6.1 return `0x10000001`, which that refusal already
   accepts. Task 22.1 has the reading.
@@ -176,7 +178,8 @@ task 22.5 has no work from this task.
   version-stamped 6.0.6002.18005, and the six read
 - Windows 7 x86 - the same, 6.1.7601.17514
 - **M2 recorded: `USBPORT_GetHciMn` returns `0x10000001` on both** -
-  the XP-lineage value `src/xhci_dispatch.c:4640` already accepts. No
+  the XP-lineage value `DriverEntry`'s `USBPORT_GetHciMn` refusal
+  (`src/xhci_dispatch.c`) already accepts. No
   fourth constant, and no code change to the shipping binary
 - and the differences the pass did find, none of which reaches this
   driver as it is built today: a fourth export (`DllInitialize`) that
@@ -492,7 +495,7 @@ structures.
     transfer that is waited on (252 bytes) and usbport accepted the
     completion; the loss is entirely inside usbport, on a path guarded
     by a lock not exposed to miniports. **Written up as
-    [issue 7](../issues/07-win7-x86-enable-arrest-usbport-done-dpc.md),
+    [issue 7](../../issues/07-win7-x86-enable-arrest-usbport-done-dpc.md),
     which states plainly what is NOT established.** When this box was
     written the single-vCPU run was unrun and this was a reading of a
     binary rather than a result; **that run was taken on 2026-09-12
@@ -917,7 +920,10 @@ structures.
   that day: both architectures at once, nothing said about Vista x64's
   remove and rescan, and nothing about issue 7. Two gaps are stated
   rather than closed: the 32-bit pair ran only the `qemu` build from a
-  staged copy of the NT 6.x sections, and the 32-bit install prompt
+  staged copy of the NT 6.x sections (true until 2026-09-17, when Vista
+  x86 installed the `qemu` build through the committed `src\xhci98.inf`
+  for 22.5's `InfSection` reading; Windows 7 x86 still has not, and
+  neither has run the `release` flavour), and the 32-bit install prompt
   was never written down (`build-and-test.md`, step 4 of the 32-bit
   section). Both are task 22.10's eighth and ninth install legs, added
   the same day
@@ -938,7 +944,7 @@ reuses neither
 - **the Windows 7 disclosure - BOTH ARCHITECTURES - and it is not
   optional.** The `1.1.0.0` cut goes ahead over a known, open defect
   (the guest boxes in 22.5, and
-  [issue 7](../issues/07-win7-x86-enable-arrest-usbport-done-dpc.md)),
+  [issue 7](../../issues/07-win7-x86-enable-arrest-usbport-done-dpc.md)),
   so the release notes must say what a user meets - a disable/enable
   cycle can come back with a device missing, a restart recovers it and
   a rescan does not - **without** stating as settled what is only a
@@ -1145,7 +1151,8 @@ omissions:
 clones, against the Phase 20 reports. Both primary targets are 32-bit
 and neither is touched by anything in this release, so a difference
 here is a finding about the release rather than about the phase.
-Reports under `docs\contributing\runs\run-22-post-release\`.
+Reports under `docs\contributing\runs\run-22-post-release\` (written by 22.9;
+the directory does not exist until then).
 
 ## 22.10 - the cut itself, and the install route read from the asset
 
@@ -1197,9 +1204,12 @@ header change, both tools rebuilt, every gate green, then
   2026-09-16 on the owner's instruction, because the NT 6.x tier's
   32-bit half had no leg in the cut at all: every reading on those two
   guests was taken on the `qemu` build from a staged copy of the NT 6.x
-  sections, so **this is their first `release` flavour and their first
-  install through the committed `src\xhci98.inf`** (22.5's INF box,
-  `d165773`). Take the same clauses as the sixth and seventh legs,
+  sections, so **this is their first `release` flavour and, for Windows
+  7 x86, the first install through the committed `src\xhci98.inf`**
+  (22.5's INF box, `d165773`; Vista x86 installed the `qemu` build
+  through the committed INF on 2026-09-17 for 22.5's `InfSection`
+  reading, so for it only the flavour is new). Take the same clauses as
+  the sixth and seventh legs,
   read the same way, and `setupapi.log` for `XhciModels.NTx86.6.0` and
   `[Xhci.Dev6.NTx86]`. **Write down what the unsigned-driver prompt
   says and which choice took it** - no leg has recorded it on either
@@ -1317,4 +1327,4 @@ owner's, and the end of this file says so.
 Records: `usb-xhci-info/usbport-miniport-abi.md`; `build-and-test.md`;
 `usb-xhci-info/win98-wdm.md`; `lessons.md`; `releases/README.md` and
 `releases/history.md`; `docs/using/release-acceptance-test.md`;
-`docs/contributing/runs/run-22-post-release/`.
+`docs/contributing/runs/run-22-post-release/` (written by 22.9).

@@ -90,8 +90,11 @@
  * endpoint so the hub driver polls port status. Microsoft's own usbehci
  * returns 2 after a pass that saw a port with a connect, enable or
  * overcurrent change and 1 for a transfer interrupt with pending work; this
- * driver returns 2 after a pass that consumed a Port Status Change Event and
- * 0 otherwise. Read out of USBPORT_IsrDpc and EHCI_InterruptDpcEx, static.
+ * driver returns bit 1 after a pass that consumed a Port Status Change Event,
+ * ORs in bit 0 when the drain left a completion parked for PollEndpoint
+ * (issue 7's delivery gate, xhciInterruptDpc), and returns 0 after a pass
+ * that did neither. Read out of USBPORT_IsrDpc and EHCI_InterruptDpcEx,
+ * static.
  */
 #define USBPORT_DPC_EX_TRANSFER_WORK    0x00000001UL
 #define USBPORT_DPC_EX_PORT_CHANGE      0x00000002UL

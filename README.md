@@ -65,8 +65,8 @@ XHCIQUAL demo video: https://www.youtube.com/watch?v=Tv6blmBS6Do
 
 To submit logs with a [bug or hardware report](https://github.com/yeokm1/xhci98/issues/new/choose), run these from real DOS and attach whichever logs you got:
 
-1. `XHCIQUAL --probe-only --log PROBE.LOG` is read-only. It takes ownership of nothing and writes no PCI configuration register.
-2. If that does not crash the machine, continue with `XHCIQUAL --log FULL.LOG`. This one **takes over the controller**, resets it and resets its ports. Use a PS/2 keyboard and do not write the log to a drive on the controller being tested.
+1. `XHCIQUAL --probe-only --no-page --log PROBE.LOG` is read-only. It takes ownership of nothing and writes no PCI configuration register.
+2. If that does not crash the machine, continue with `XHCIQUAL --no-page --log FULL.LOG`. This one **takes over the controller**, resets it and resets its ports. Use a PS/2 keyboard and do not write the log to a drive on the controller being tested.
 
 ### Install
 
@@ -280,7 +280,7 @@ This project's own source is licensed under the GNU General Public License, vers
 
 The repository tracks no third-party binary on its own, although the two tool executables it tracks under `releases/` carry statically linked third-party runtimes.
 
-* `xhci98.sys` links no third-party object, runtime or extender.
+* `xhci98.sys` links no runtime or extender. The 32-bit build links no third-party object either; the 64-bit build, linked by WDK 7.1, carries that kit's `/GS` stack-cookie handler (`__security_check_cookie` / `__report_gsfailure`), which nothing in this project's source calls. Whether that object asks for a notice has not been read.
 
 * `XHCIQUAL.EXE` embeds the Open Watcom runtime and the DOS/32A extender. 
 

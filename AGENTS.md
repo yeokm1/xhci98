@@ -116,12 +116,13 @@ M11), so on NT 6.x both binaries present `Version = 300`, pass registration a
 fourth argument and return their interrupt DPC through a Version 300 slot,
 chosen at run time from `IoIsWdmVersionAvailable(6, 0)` (section 6.5,
 decisions 10 and 12). **Every clause was taken on the `qemu` build.** The
-`release` flavour is read on the two x64 guests from the published asset as
-roadmap task 22.10's sixth and seventh install legs, which is also Windows 7
-x64's first install through the committed INF; the two 32-bit guests have run
-neither the `release` flavour nor the committed `src/xhci98.inf`, only a
-staged copy of the NT 6.x sections it now carries, and the eighth and ninth
-legs of the same task are their first of both. **The x64 half loads only
+`release` flavour will be read on the two x64 guests from the published asset
+as roadmap task 22.10's sixth and seventh install legs (open on 2026-09-17),
+which is also Windows 7 x64's first install through the committed INF. Vista
+x86 has installed the `qemu` build through the committed `src/xhci98.inf`
+(2026-09-17, task 22.5's `InfSection` reading); neither 32-bit guest has run
+the `release` flavour, and Windows 7 x86 has not installed through the
+committed INF - the eighth and ninth legs of the same task take both. **The x64 half loads only
 on a boot with driver signature enforcement disabled**: the package is not
 signed (design record 11 section 12, decision 9), so the user presses F8 and
 chooses Disable Driver Signature Enforcement at every start, the machine can
@@ -216,8 +217,9 @@ Everything above is tracked except `tools/`, `external/`, the PDFs in
 `docs/references/`, `vm/`, `out/` and `scripts/local/`: third-party material,
 generated output, or host-specific tooling. Nothing under `tools/` goes into
 the release download since 1.0.0.1; "Third-Party Material and Provenance"
-below has the record. Nothing has been uploaded yet: the repository is
-private and no GitHub release exists. A clone therefore has every procedure
+below has the record. Nothing has been uploaded publicly yet: the repository
+is private and no GitHub release exists (which build the third-party testers
+in `README.md` ran is not recorded). A clone therefore has every procedure
 but not every input; see
 `docs/contributing/build-and-test.md` for what has to be fetched or rebuilt.
 

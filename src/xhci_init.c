@@ -539,7 +539,9 @@ ULONG XhciDeriveControllerInfo(PXHCI_EXTENSION ext, PXHCI_HC_INFO info)
  * refuse that the parser could not is a USBLEGSUP whose *second* DWORD lies
  * outside the mapping, since only this path writes it.
  *
- * IRQL: PASSIVE_LEVEL (the semaphore wait).
+ * IRQL: PASSIVE_LEVEL (the semaphore wait), or DISPATCH_LEVEL with
+ * `ext->InitBelowPassive` set (task 13-R.1), where the wait takes its
+ * stall-only path.
  */
 static ULONG xhciBiosHandoff(PXHCI_EXTENSION ext)
 {
@@ -696,7 +698,8 @@ static ULONG xhciPortMapRefused(PXHCI_EXTENSION ext,
  * (AGENTS.md) is a statement about exactly that. Guessing would mean powering
  * SuperSpeed ports.
  *
- * IRQL: PASSIVE_LEVEL (reached only from XhciInitController).
+ * IRQL: PASSIVE_LEVEL (reached only from XhciInitController), or
+ * DISPATCH_LEVEL with `ext->InitBelowPassive` set (task 13-R.1).
  */
 static ULONG xhciBuildPortMap(PXHCI_EXTENSION ext, ULONG afterReset)
 {
@@ -911,6 +914,24 @@ static ULONG xhciReset(PXHCI_EXTENSION ext)
 {
     ULONG value;
 
+    /*
+     * A reset may already be in progress, and a second HCRST on top of it is
+     * what 5.4.2 forbids ("software shall not write any Doorbell or
+     * Operational register ... until CNR = 0"). The path that gets here with
+     * CNR set is the in-place recovery: its waits are stall-only, so a
+     * controller whose HCRST takes longer than the 10 ms stall refuses at
+     * XHCI_INIT_STEP_RESET, and the next poll's attempt finds HCH = 1, skips
+     * the halt and arrives here with the previous reset possibly still
+     * running. Settled on the first read in the ordinary case.
+     */
+    if (!XhciWaitForBits(ext,
+                         ext->HcInfo.OperationalOffset + XHCI_OP_USBSTS,
+                         XHCI_USBSTS_CNR, 0,
+                         XHCI_RESET_TIMEOUT_MS, &value)) {
+        XHCI_DBG_VALUE("reset: CNR still set before HCRST, USBSTS", value);
+        return 0;
+    }
+
     /* HCRST alone. Every other *defined* bit is reset by the operation anyway,
      * and the read value came from firmware - but the write still goes through
      * xhciWriteUsbCmd, because RsvdP is a rule about the write rather than
@@ -918,6 +939,15 @@ static ULONG xhciReset(PXHCI_EXTENSION ext)
     if (!xhciWriteUsbCmd(ext, XHCI_USBCMD_HCRST)) {
         return 0;
     }
+
+    /*
+     * No register access for 1 ms after the HCRST write. Intel controllers -
+     * the whole measured fleet - carry the erratum Linux handles as
+     * XHCI_INTEL_HOST: any register access within 1 ms of HCRST "may result in
+     * a system hang very rarely". A stall rather than XhciDelayMs, because
+     * the bound is a hard floor and this runs from the recovery DPC too.
+     */
+    KeStallExecutionProcessor(1000);
 
     if (!XhciWaitForBits(ext,
                          ext->HcInfo.OperationalOffset + XHCI_OP_USBCMD,
@@ -1169,7 +1199,8 @@ static ULONG xhciProgramEventRing(PXHCI_EXTENSION ext)
  * "did the controller take that write at all", and the answer arrives at once
  * or not at all.
  *
- * IRQL: PASSIVE_LEVEL.
+ * IRQL: PASSIVE_LEVEL, or DISPATCH_LEVEL with `ext->InitBelowPassive` set
+ * (task 13-R.1), where the wait takes its stall-only path.
  */
 static ULONG xhciRunController(PXHCI_EXTENSION ext, ULONG *usbstsOut)
 {
@@ -1861,7 +1892,11 @@ static ULONG xhciDrivePortPower(PXHCI_EXTENSION ext, ULONG port, ULONG want)
  * as not connected - while refusing would decline a controller whose other
  * eleven ports work.
  *
- * IRQL: PASSIVE_LEVEL (the settle delay).
+ * The two helpers it is built from come first; the function itself is below
+ * them.
+ *
+ * IRQL: PASSIVE_LEVEL (the settle delay), or DISPATCH_LEVEL with
+ * `ext->InitBelowPassive` set (task 13-R.1), where the delay is a stall.
  */
 /* How many ports of one class this driver wants PP written to. */
 static ULONG xhciCountPortsWanting(const XHCI_PORT_MAP *map,
@@ -1905,7 +1940,8 @@ static ULONG xhciCountPortsWanting(const XHCI_PORT_MAP *map,
  * The loop costs nothing when there is nothing to wait for: a pass where every
  * port already reports the wanted state exits before its first delay.
  *
- * IRQL: PASSIVE_LEVEL.
+ * IRQL: PASSIVE_LEVEL, or DISPATCH_LEVEL with `ext->InitBelowPassive` set
+ * (task 13-R.1), where the delays are stalls.
  */
 static ULONG xhciSettlePortPower(PXHCI_EXTENSION ext,
                                  ULONG want,
@@ -2049,7 +2085,8 @@ static VOID xhciPowerPorts(PXHCI_EXTENSION ext)
  *
  * **No HCRST follows this, deliberately** - see XhciStopController.
  *
- * IRQL: PASSIVE_LEVEL (the confirmation polls).
+ * IRQL: PASSIVE_LEVEL (the confirmation polls), or DISPATCH_LEVEL with
+ * `ext->InitBelowPassive` set (task 13-R.1), where the polls are stalls.
  */
 static VOID xhciUnpowerPorts(PXHCI_EXTENSION ext)
 {
@@ -2161,7 +2198,8 @@ static VOID xhciUnpowerPorts(PXHCI_EXTENSION ext)
  * One attempt. xhciClearBusMaster wraps it in the retry, for the reason given
  * there.
  *
- * IRQL: PASSIVE_LEVEL.
+ * IRQL: PASSIVE_LEVEL, or DISPATCH_LEVEL with `ext->InitBelowPassive` set
+ * (task 13-R.1), where it declines before touching configuration space.
  */
 static ULONG xhciTryClearBusMaster(PXHCI_EXTENSION ext)
 {
@@ -2240,7 +2278,8 @@ static ULONG xhciTryClearBusMaster(PXHCI_EXTENSION ext)
  * turn a stuck bit into a proof - it only removes the single-sample flake from
  * the decision to bugcheck.
  *
- * IRQL: PASSIVE_LEVEL.
+ * IRQL: PASSIVE_LEVEL, or DISPATCH_LEVEL with `ext->InitBelowPassive` set
+ * (task 13-R.1), where every attempt declines.
  */
 static ULONG xhciClearBusMaster(PXHCI_EXTENSION ext)
 {

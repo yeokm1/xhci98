@@ -9,9 +9,13 @@ one that would build the driver for Windows XP, Server 2003, Vista and
 Windows 7 in both x86 and x64 - and then narrowed the question to 64-bit
 guests.
 
-No 64-bit binary of this driver has been produced yet. What has been produced
-is the static ABI evidence that one could work, and that evidence is section
-5.
+When this record was written, on 2026-09-08, no 64-bit binary of this driver
+had been produced; what had been produced was the static ABI evidence that
+one could work, and that evidence is section 5. The first amd64 binary was
+built and run on XP x64 the next day (roadmap task 21.5, 2026-09-09), and
+sections 6 to 12 carry what the build, the guests and the NT 6.x readings
+then added. Sections 1 to 5 and 7 to 11 keep the tense of the day they were
+written, with dated notes where a later reading overturned them.
 
 The project's rule is that miniport ABI facts are derived from the shipping
 binaries and never inferred (`AGENTS.md`, "What NOT to Do"). Everything in
@@ -971,7 +975,12 @@ positive identification of NT 5.2, not a fallback, and one answer can still
 drive both branches. Note also that the defect proved the claim the hedge
 rested on - a fourth argument on NT 5.2 really is inert, because XP x64 was
 sent down the four-argument arm by the bug and registration still returned
-`STATUS_SUCCESS` with all sixteen service pointers written.
+`STATUS_SUCCESS` with all sixteen service pointers written. *(Read as eight:
+until the 2026-09-17 audit's B1 the verifier walked the service block as
+sixteen `ULONG`s, which on amd64 is the first eight pointers, so this line
+and every other amd64 "all sixteen" reading before that date cover the first
+eight service pointers only. The verifier now walks sixteen `PVOID`s; that
+form has not been read in a guest.)*
 
 **Re-validated on XP x64 2026-09-11** with `built Sep 10 2026 23:40:38`, which
 closes box 5 and is the first execution of the three-argument arm anywhere:
@@ -993,7 +1002,9 @@ happened to answer the same way on 6.0, so until this boot the corrected
 constant had been observed selecting only the NT 5.x arm. It selects the NT
 6.x arm too: `wdm pre-6.00 (three-argument registration)=00000000`,
 `resource bits required=0000000C`, `resources+00: 0000000C`, registration
-status 0 with all sixteen service pointers written, `init complete,
+status 0 with all sixteen service pointers written (the first eight, by the
+same B1 qualification as section 6.3's XP x64 line - the corrected verifier
+is unmeasured in a guest), `init complete,
 USBSTS=00000008`, `init step=00000016 / init status=00000000` - and then
 section 6.4's wall exactly as before: `isr count == isr claimed` climbing with
 `dpc count=00000000`, no `cb InterruptDpc` line, and the `ResetController`
@@ -1230,7 +1241,9 @@ design needs it:
 packet declared at `0x1E0` / `0x368` with measured asserts on the count field,
 the first pointer, `InterruptDpcEx` and the two OUT slots; `xhciInterruptDpc`
 returning a `ULONG` (2 after a pass that consumed a port status change event,
-0 otherwise, keeping the `UsbPortInvalidateRootHub` call it makes today);
+0 otherwise, keeping the `UsbPortInvalidateRootHub` call it makes today - as
+built, it also ORs in bit 0 whenever the drain left a completion parked for
+`PollEndpoint`, issue 7's delivery gate; the 2026-09-17 audit's B11);
 the version argument selected from the same `IoIsWdmVersionAvailable(6, 0)`
 answer as the arity and the resource mask, now on both architectures; and the
 x86 four-argument call through a cast of the one import, with
@@ -1256,7 +1269,10 @@ exercised would be documentation of a contract this driver does not have.
 `PHCI_INTERRUPT_DPC` returns `ULONG`, and one `xhciInterruptDpc` serves both
 slots, returning the port bit after a pass that consumed a Port Status Change
 Event - derived from the event counter the drain already keeps - and zero
-otherwise. `DriverEntry`'s NT 6.x branch lost its `_WIN64` guard: the same
+otherwise (that evening; since issue 7's delivery gate it also ORs in the
+transfer-work bit 0 whenever the drain left a completion parked for
+`PollEndpoint` - the 2026-09-17 audit's B11). `DriverEntry`'s NT 6.x branch
+lost its `_WIN64` guard: the same
 `IoIsWdmVersionAvailable(6, 0)` answer now selects the registration arity,
 the resource mask and the interface version on both architectures, and on
 x86 the four-argument arm calls through a cast of the one import, which the
@@ -1288,7 +1304,7 @@ The gate as written before any measurement, with what actually happened:
 | M2 gives a third constant; M3-M6 correspond to the x86 record widened | Proceed | Better than this: M2 gave a value the driver already accepts, and M6 confirmed the widening across 50 slots |
 | M4 shows `StartPA` widened, or any field where the compiler's natural layout disagrees with the binary | Proceed, but the declaration needs explicit padding and the asserts must carry measured numbers | `StartPA` did **not** widen and `USBPORT_RESOURCES` agrees with the natural layout; the packet does not, and is `0x250` against a natural `0x248` |
 | M5 shows a 64-bit adapter | Proceed with a `StartPA` high-DWORD refusal added first, and keep the guest under 4 GB until it has been exercised | Did not happen; the adapter is created 32-bit, `DmaWidth = Width32Bits` |
-| Vista / Windows 7 differ from 5.2 | Claim Windows XP x64 and Server 2003 x64 only, and record what differs | Read 2026-09-09; all six pass on Vista x64 and Windows 7 x64, so the claim is not narrowed. Three differences recorded and none of them reaches a Version-200 miniport: a fourth export shifting the ordinals, two further packet version tiers, and - on 6.1 only - a second, 64-bit DMA adapter behind a `Version >= 310` gate. See section 6 |
+| Vista / Windows 7 differ from 5.2 | Claim Windows XP x64 and Server 2003 x64 only, and record what differs | ~~Read 2026-09-09; all six pass on Vista x64 and Windows 7 x64, so the claim is not narrowed. Three differences recorded and none of them reaches a Version-200 miniport: a fourth export shifting the ordinals, two further packet version tiers, and - on 6.1 only - a second, 64-bit DMA adapter behind a `Version >= 310` gate.~~ **Overturned 2026-09-10/11 by M9 to M11 (sections 6.1 to 6.4)**: the registration arity, the resource bits and the interrupt DPC slot all differ on NT 6.x, so no Version 200 miniport runs on Vista or Windows 7 and the driver presents Version 300 there (section 6.5, decisions 10 and 12). The claim was narrowed to XP x64 and Server 2003 x64 as this row's trigger says, then widened again by decision 1, taken 2026-09-16, once the Version 300 path had run. See section 6 |
 
 **All six measurements are taken and all six pass.** The static pass set out
 to find a reason this cannot work on Windows XP x64 and Server 2003 x64, and
@@ -1847,8 +1863,11 @@ dumper is `link /dump`; they are the same tool.
    architectures and usbport is asked for the same 101 pages on both. What
    the pass did turn up is the half that is not zero, and it is outside the
    buffer: the three extensions usbport allocates for the miniport grow -
-   `XHCI_EXTENSION` 91,612 -> 95,496, `XHCI_TRANSFER` 120 -> 152,
-   `XHCI_ENDPOINT` unchanged at 20 - which needs no code change, since
+   as measured on 2026-09-08, `XHCI_EXTENSION` 91,612 -> 95,496,
+   `XHCI_TRANSFER` 120 -> 152, `XHCI_ENDPOINT` unchanged at 20; both of the
+   first two have grown since, and section 8 of design record 04 owns the
+   current dated figures, which `scripts\vm-matrix\offsets.txt`'s `SIZEOF`
+   line must match - which needs no code change, since
    `DriverEntry` publishes each as a `sizeof` the same compiler evaluated,
    but does mean the snapshot channel's x86 offset table cannot decode an
    amd64 extension. Section 8 of design record 04 flags that for whoever
@@ -1915,7 +1934,9 @@ Modelled on Phase 19, which is the template for adding a VM-only target.
   the Device Manager disable, enable, remove and rescan sequence.
 - The two NT install-path fixes 32-bit XP needed are already in the INF since
   `1.0.1.0` - the OS supplying `usbport.sys`, and the
-  `DisableSelectiveSuspend` value - and NT 5.2's usbport is XP-lineage by
+  `DisableSelectiveSuspend` value (the value until `1.0.2.0`; from `1.1.0.0`
+  the miniport flag `USB_MINIPORT_FLAGS_DISABLE_SS`, read on XP x64 on
+  2026-09-17, issue 5 section 5.5) - and NT 5.2's usbport is XP-lineage by
   M2's reading, so both should apply unchanged. "Should" is doing work again;
   the guest settles it. **Half of it is now settled, statically, 2026-09-08.**
   An XP x64 install with no USB controller has no `usbport.sys`,
@@ -1928,7 +1949,10 @@ Modelled on Phase 19, which is the template for adding a VM-only target.
   not something the measurements themselves could say. Two details for whoever
   writes the `.NTamd64` copy section: `usbd.sys` comes from `driver.cab` and
   not `sp2.cab`, and unlike 32-bit XP it is not on disk in any form. The
-  second fix, `DisableSelectiveSuspend`, still needs the running guest.
+  second fix, `DisableSelectiveSuspend`, still needed the running guest on
+  2026-09-08; the guest read it on 2026-09-09 (no `SuspendController` on an
+  idle controller, `build-and-test.md`, "Windows XP x64 target VM"), and
+  its replacement was read there on 2026-09-17.
 - **The tier this earns is the Windows ME and 32-bit XP tier**: supported in
   virtual machines, never observed on real hardware, no checkpoint tax on any
   phase, accommodated where the change is small and low-risk and never at a
@@ -1946,8 +1970,11 @@ Modelled on Phase 19, which is the template for adding a VM-only target.
   anticipate, and it is said in every one of those places: **this is the only
   target that is not the same binary.** Two narrower qualifications travel
   with it - only XP x64 was booted, Server 2003 x64 rests on the NT 5.2.3790
-  identity; and Vista x64 and Windows 7 x64 are outside the tier pending task
-  21.8, which is the open half of decision 1 in section 12.
+  identity; and Vista x64 and Windows 7 x64 were outside the tier pending
+  task 21.8, the open half of decision 1 in section 12, until that decision
+  was taken on 2026-09-16 - they are now the sixth target of `AGENTS.md`,
+  reached through the Version 300 path of section 6.5 rather than this
+  tier's.
 
 What Phase 19 predicts about where the trouble comes from is worth stating in
 advance, because it is the calibration this record rests on. For 32-bit XP the
@@ -1961,18 +1988,25 @@ install-path. Expect the same shape here.
 
 ## 11. What this costs, and what it ends
 
-The static pass is the cheap part and half of it is done. M4 and M6 are the
-only real transcription work left, and they need no VM, no toolchain beyond
-what is now in `tools/`, and no code change.
+This section was the estimate of 2026-09-08 and is kept as it was made, in
+the past tense; sections 6 to 10 and the roadmap's Phase 21 record what
+each part cost.
 
-The build path is where the cost sits, and most of it is gates and packaging
+The static pass was the cheap part and half of it was done when this was
+written. M4 and M6 were the only real transcription work left, and they
+needed no VM, no toolchain beyond what was then in `tools/`, and no code
+change; both were read the same day (section 5).
+
+The build path was where the cost sat, and most of it was gates and packaging
 rather than driver code: an amd64 dimension in the import gate with NT 5.2
 baselines behind it, an arch-conditional import-library generator, an INF
-decision with either a gate extension or a second INF behind it, and a
-packager that can stage two architectures. On top of that sits one thing no
-measurement can shorten: **this source has never been compiled for x64 by any
-compiler**, and WDK 7.1's `cl` 15.00 is also the first non-MSVC-6 compiler to
-touch it. DDK builds run warnings as errors.
+decision with either a gate extension or a second INF behind it (decision 2:
+a second INF), and a packager that could stage two architectures. On top of
+that sat one thing no measurement could shorten: until 2026-09-09 this source
+had never been compiled for x64 by any compiler, and WDK 7.1's `cl` 15.00 was
+the first non-MSVC-6 compiler to touch it. DDK builds run warnings as errors.
+The first amd64 build came out on 2026-09-09 (task 21.5), and M7 and M8 are
+what it and the guest added.
 
 And one property ends, which should be stated rather than discovered: **the
 driver stops being one binary.** "A single `xhci98.sys` must install and work

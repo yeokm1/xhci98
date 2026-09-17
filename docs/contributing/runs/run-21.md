@@ -717,7 +717,10 @@ such checks earn their keep.
   the amd64 binary loads and runs on 6.0.** `DriverEntry` completes,
   `USBPORT_GetHciMn` returns `0x10000001` and the packet size is `0x250`
   - task 21.7 read both statically and both are now measured live - the
-  registration succeeds, usbport writes back its 16 service pointers and
+  registration succeeds, usbport writes back its 16 service pointers (read
+  as the first eight: the verifier walked the block as sixteen `ULONG`s
+  until the 2026-09-17 audit's B1, and the corrected form is unmeasured in
+  a guest) and
   calls `StartController`. **Box 3's decisive question is answered and
   boxes 4 to 6 are not foreclosed.** The cost is what the box predicted:
   the F8 menu item applies to exactly one boot, was re-chosen on every

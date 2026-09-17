@@ -360,10 +360,14 @@ because a user meets them through this driver.
   seconds of a start and again about half a minute after the last device is
   unplugged. (Any attached device keeps it awake, even one with no driver, so
   a laptop with internal USB devices never idles it and this changes nothing
-  visible there. 32-bit Windows Vista was not seen idling it in five minutes
-  either way, though its stack does read the setting; the x64 editions of
-  both were not measured. Windows 2000 SP4's own stack was never seen idling
-  it. All measured in virtual machines, 2026-09-06 and 2026-09-16.) The
+  visible there. Windows Vista, 32-bit and x64, does not idle it on its own
+  in five minutes, but the previous releases' controller halted within about
+  five seconds of switching on "USB selective suspend setting" in the power
+  plan, and this release's keeps running through that switch; 64-bit
+  Windows 7 idles it before the desktop appears, and 64-bit Windows XP right
+  after start. Windows 2000 SP4's own stack idles it only with a registry
+  value set that nothing normally sets. All measured in virtual machines,
+  2026-09-06, 2026-09-16 and 2026-09-17.) The
   driver tells Windows this as it registers, so **nothing outside the
   device's own settings is written and no other controller is affected**.
 - **Upgrading from 1.0.0.0, 1.0.1.0 or 1.0.2.0: one machine-wide setting of

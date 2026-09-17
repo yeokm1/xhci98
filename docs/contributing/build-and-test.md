@@ -15,8 +15,12 @@ repository, are used in place, and write no registry key: MSVC 6.0 runs from
 `tools\MSVC600\VC98\BIN`, and the DDK is reconstructed into `tools\ntddk`. Every
 script that compiles, links, or dumps a binary derives those paths from its own
 location, so a clone builds wherever it is unpacked and the whole project is
-self-contained apart from QEMU and Open Watcom. `DDKROOT` and `MSVC6` override
-each half for a host that has one installed elsewhere.
+self-contained apart from QEMU and Open Watcom. `DDKROOT` overrides where the
+DDK is found for a host that has one installed elsewhere, and because the DDK
+build takes its compiler from `setenv.bat`, that redirects the compiler the
+driver is built with. `MSVC6` does not: it redirects only the host-side tools
+that need a `cl` and `dumpbin` of their own (`test\run-host-tests.cmd`,
+`scripts\make-usbport-lib.cmd`, `scripts\vm-matrix\gen-offsets.ps1`).
 
 Open Watcom 2.0 is the exception: it is a real host install. The DOS qualifier
 is a 32-bit protected-mode DOS binary with the DOS/32A extender embedded as its
@@ -242,7 +246,10 @@ The DDK uses a `sources` file (no extension) instead of a Makefile. Alongside it
 !INCLUDE $(NTMAKEENV)\makefile.def
 ```
 
-`src/sources` has this shape (`SOURCES` grows as files are added):
+`src/sources` has this shape, abridged - the file's own comments and the
+flavour-conditional `C_DEFINES` blocks are left out, and `SOURCES` grows as
+files are added (eighteen `.c` files plus `xhci98.rc` on 2026-09-17; the
+file itself is the list):
 ```
 TARGETNAME=xhci98
 TARGETTYPE=DRIVER
@@ -250,20 +257,25 @@ TARGETPATH=obj
 
 INCLUDES=$(BASEDIR)\inc;$(BASEDIR)\inc\ddk
 
-SOURCES=xhci_mem.c       \
-        xhci_dispatch.c  \
-        xhci_pci.c       \
-        xhci_init.c      \
-        xhci_ring.c      \
-        xhci_port.c      \
-        xhci_slot.c      \
-        xhci_xfer.c      \
-        xhci_dbg.c
+SOURCES=xhci_mem.c    \
+        xhci_ring.c   \
+        ...           \
+        xhci_dispatch.c \
+        xhci98.rc
 
+!IF "$(_BUILDARCH)" == "AMD64"
+TARGETLIBS=.\usbport_amd64.lib
+!ELSE
 TARGETLIBS=.\usbport.lib
+!ENDIF
 
 LINKER_FLAGS=-merge:.rdata=.text
 ```
+
+`TARGETLIBS` is conditional because the two import libraries cannot be one
+file: amd64 has no `__stdcall` name decoration, so the x86 library's
+`_Name@N` symbols do not resolve an amd64 miniport's references.
+`_BUILDARCH` is `setenv.bat`'s own word for the target architecture.
 
 `build` appends the flavour to `TARGETPATH`, so the debug output lands in `src\objchk\i386\` and the release output in `src\objfre\i386\`, not `src\obj\`.
 
@@ -1081,9 +1093,11 @@ driver that serves usbport's root hub under NUSB, `usbhub20.sys`
 registry names. If that inference holds, nothing above usbport on SP4 asks
 for the idle and the value has no effect there. It is unconfirmed: a string
 absent from a binary does not prove the absence of every idle-request path.
-The value stays in the package either way, because the NT path also serves
-XP, whose stack does idle, and 32-bit Windows 7, whose stack idles it too
-("Windows Vista and Windows 7 target VMs", the idle-suspend reading).
+The value stayed in the package either way until `1.0.2.0`, because the NT
+path also serves XP, whose stack does idle, and 32-bit Windows 7, whose stack
+idles it too ("Windows Vista and Windows 7 target VMs", the idle-suspend
+reading); from `1.1.0.0` the same state is reached by the miniport flag
+(next paragraph), read at run time on every target on 2026-09-17.
 
 This is fixed (roadmap task 11-V.6, and `docs/using/release-notes.md` under
 "Known limitations", which documents the cost rather than the defect), and
@@ -2046,7 +2060,9 @@ time, so a guest installed under one rung must be booted under it too.
    USB2-only ports all powered, and **no `SuspendController` on an idle
    controller** - the NT half's `DisableSelectiveSuspend`, which is what that
    package wrote, works here as it does
-   on 32-bit XP. (`1.1.0.0` replaced it with the miniport flag, unread here.) A hot-plugged HID mouse, `usb-storage` and composite
+   on 32-bit XP. (`1.1.0.0` replaced it with the miniport flag, read on this
+   guest against a control leg that idles on 2026-09-17 - issue 5 section
+   5.5.) A hot-plugged HID mouse, `usb-storage` and composite
    `usb-audio` all bound (**USB Human Interface Device**, **USB Mass Storage
    Device**, **USB Composite Device** + **USB Audio Device**), and the Device
    Manager disable / enable / remove / rescan sequence survived, the rescan
@@ -2133,7 +2149,7 @@ difference belongs in a parameter, never in a second copy of the body.
 | Images | `vm\vista.img` and `vm\win7.img`, 32 GB qcow2 each (Windows 7 x86 wants 16 GB free, Vista 15 GB; qcow2 is sparse, so the file costs what the install writes) |
 | Monitor ports | **55565** (Vista) and **55566** (Windows 7) - *not* the next two free numbers; see the reservation above |
 | CPU | `-cpu qemu64`, **not** the 32-bit XP guest's `pentium3`. `pentium3` predates the NX bit and Windows 7 requires one: Setup refuses such a processor. A 32-bit guest wanting a 64-bit-era CPU *model* is not the same thing as a 64-bit guest, and this is the line most likely to be "corrected" back to the 32-bit recipe, so the shared body refuses such a `-Cpu` outright and the launcher gate asserts the generated text |
-| vCPUs | **4**, where every guest before this one takes the default 1. This is about the accelerator, not the guest: Vista must run under TCG here, and single-threaded TCG on this host's 2.0 GHz i7-9700T is painful. QEMU emulates x86-on-x86 with **multi-threaded TCG**, so vCPUs become host threads and the emulation parallelises - measured on the Vista guest 2026-09-10, all four vCPU threads busy and roughly even (35 / 31.5 / 30.4 / 28.3 CPU-seconds over ~200 s of wall clock). Four rather than the host's eight leaves room for QEMU's own I/O and display threads. `thread=multi` is derived for a `tcg` accelerator and **never handed to WHPX**, which refuses the whole `-accel` argument rather than ignoring an option it does not know |
+| vCPUs | **4**, where every guest before this one takes the default 1 except the Phase 2d Windows 2000 SMP rig's `-smp 2` ("Windows 2000 SMP Stress VM (Phase 2d)" below). This is about the accelerator, not the guest: Vista must run under TCG here, and single-threaded TCG on this host's 2.0 GHz i7-9700T is painful. QEMU emulates x86-on-x86 with **multi-threaded TCG**, so vCPUs become host threads and the emulation parallelises - measured on the Vista guest 2026-09-10, all four vCPU threads busy and roughly even (35 / 31.5 / 30.4 / 28.3 CPU-seconds over ~200 s of wall clock). Four rather than the host's eight leaves room for QEMU's own I/O and display threads. `thread=multi` is derived for a `tcg` accelerator and **never handed to WHPX**, which refuses the whole `-accel` argument rather than ignoring an option it does not know |
 | RAM | 2048 MB, not 512. Comfort - Windows 7's own floor is 1 GB. **More RAM is not a speed knob here**: what makes a TCG guest slow is instruction emulation, not memory. Nothing has been measured about what the 6.x `usbport` does with memory above 4 GB, and it does not arise: a 32-bit guest with 2048 MB has none. Do not raise it without reading measurement M5 of design record 11 first - on a **64-bit** guest, crossing 4 GB puts DMA above the line in play and is a change to the test surface, not a tuning choice |
 | Accelerator | **They differ**, and both are confirmed through a completed install. Vista is `-accel tcg` (WHPX wedges its Setup after the first reboot); Windows 7 is `-accel whpx,kernel-irqchip=off`. Host `minis-w11p-ykm`, 2026-09-10 |
 | Everything else | The 32-bit XP machine unchanged: `-machine pc` (ACPI on), `-vga std`, `-boot d` on every install boot, `qemu-xhci,p3=0` on the run launcher, no companion EHCI unless it is asked for, no USB device boot-attached, the VVFAT transfer drive, and the port-`0xE9` console rotated per boot |
@@ -2344,10 +2360,11 @@ not seen to.** Taken on 2026-09-16 at the owner's request, on both
 had asked whether these stacks idle the controller. (The value is what was
 present or deleted in every reading below; `1.1.0.0` replaced it with the
 driver's own `USB_MINIPORT_FLAGS_DISABLE_SS`, which reaches the same state in
-the same start routine, so the readings stand and only the lever changed - and
-the flag itself has not been read at run time on either guest;
+the same start routine, so the readings stand and only the lever changed. The
+flag itself was then read at run time on both guests on 2026-09-17, each
+against a control leg on the previous build with the value deleted;
 `docs/issues/05-idle-suspend-and-disableselectivesuspend.md` sections 5.3 and
-5.4 carry the reasoning for both.) The subject was the `qemu` build of that
+5.4 carry the reasoning and section 5.5 the readings.) The subject was the `qemu` build of that
 day (`built Sep 16 2026 20:16:51`) staged with the committed `src\xhci98.inf`
 into `vm\xfer-dss-x86`, installed from Device Manager by the owner. Each
 guest ran on a throw-away qcow2 overlay over `vm\vista.img` or
@@ -2382,10 +2399,13 @@ driver's `devices addressed`.
   the desktop, `USBCMD` `0x00000005`, a hot-plugged mouse addressed at once,
   and no suspend in the three minutes after it was unplugged.
 
-So the NT 6.x path keeps the value: on Windows 7 it is what makes hot-plug
-work, and on Vista it is harmless and the same machine-wide setting. Vista's
-"no idle" is a five-minute bound, not a never. The x64 pair was not read
-without the value; every run there installed a package that writes it.
+So the NT 6.x path kept the value through `1.0.2.0`: on Windows 7 it is what
+made hot-plug work, and on Vista it was harmless and the same machine-wide
+setting. From `1.1.0.0` neither INF writes it and the miniport flag reaches
+the same state, read on all four NT 6.x guests on 2026-09-17 (issue 5 section
+5.5). Vista's "no idle" is a five-minute bound, not a never. The x64 pair was
+not read without the value until 2026-09-17; every run there before that
+installed a package that writes it.
 
 One thing in that key is not ours and is worth knowing before anyone deletes
 it by mistake: on Vista, `Services\usb` also holds `FastS4_OverrideBiosS4 =
@@ -3582,12 +3602,16 @@ full-NUSB baseline the stack is present and `xhci98.inf` (binding
 
 Bundling `usbport.sys` + `usbhub20.sys` in `xhci98.inf`'s own `CopyFiles`
 would be an optional, defensive measure for a non-NUSB host, not a hard
-requirement, and the decision is not to. The media already carries a
-per-target `usbd.sys` for a reason the gate checks by hash, and adding two more
-third-party binaries under the same `CopyFiles` would double that surface for
-a host this project has never been asked to support: a machine with an
-xHCI-only chipset, no NUSB, and Windows 98. Installing NUSB is the documented
-prerequisite. If a real such host ever turns up, this is the option to reach
+requirement, and the decision is not to. The media carries no Microsoft file
+at all since `1.0.0.1` (the per-target `usbd98.sys` / `usbd2k.sys` builds and,
+from `0.0.0.4`, `usbhub98.sys` that it carried through `1.0.0.0` were withdrawn
+on 2026-09-02): the INF gate's
+`OS-*` rules refuse an INF that names one and `PKG-MSFILE` refuses a staged
+package holding one, `usbport.sys` and `usbhub20.sys` by name among them
+(`AGENTS.md`, "The INF and install media"), so those two binaries could not
+be put under `CopyFiles` for a host this project has never been asked to
+support: a machine with an xHCI-only chipset, no NUSB, and Windows 98.
+Installing NUSB is the documented prerequisite. If a real such host ever turns up, this is the option to reach
 for; it is written down here for that, not as an open task.
 
 What NUSB 3.3 does not ship, and the composite-device gap it leaves. The
@@ -5350,7 +5374,9 @@ powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavo
 
 It assembles `out\pkg-<flavor>-<arch>\` and runs the INF gate against the finished
 directory, so a package is never less gated than the binary in it. A copy
-taken from `releases\<version>\<flavor>\` is the same two files. The
+taken from `releases\<version>\<flavor>-<arch>\` (`release-x86`, `debug-x86`,
+`release-x64`, `debug-x64` - the flavour-only directory name was the layout
+until the cut of 2026-09-09) is the same two files. The
 reference copies of the two `usbd.sys` builds and Windows 98 SE's
 `usbhub.sys` are still staged under the git-ignored `tools\` by
 `scripts\package\extract-usbd-sources.ps1`, for the import gate's Windows 98

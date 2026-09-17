@@ -235,6 +235,11 @@ rem later. src\xhci_dispatch.c carries the same refusal as an #error, which is
 rem what binds a bare `build` from a DDK prompt.
 if defined XHCI_FAILSTART if /i not "%XHCI_EXTRA_DEFINES%"=="-DXHCI_FAIL_START_CONTROLLER" goto failstartmixed
 
+rem Two refusals, because the two legs want two different toolchains: on the
+rem -amd64 leg DDKROOT is tools\WinDDK71 (or WDKROOT), and a missing WDK used
+rem to be reported as a missing Windows 2000 DDK, naming tools\ntddk and the
+rem cab installer that cannot supply it (the 2026-09-17 audit's D6).
+if /i "%ARCH%"=="amd64" if not exist "%DDKROOT%\bin\setenv.bat" goto nowdk
 if not exist "%DDKROOT%\bin\setenv.bat" goto noddk
 
 rem setenv.bat takes BASEDIR verbatim, so DDKROOT is passed unquoted at the
@@ -286,6 +291,9 @@ if errorlevel 1 goto inftestfail
 
 echo.
 echo === INF gate (x86) ===
+rem INFFILE is what :inffail names; the two gate runs share the label and used
+rem to share the x86 file's name too (the 2026-09-17 audit's D7).
+set "INFFILE=src\xhci98.inf"
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\inf-gate\check-inf.ps1" -Arch x86
 if errorlevel 1 goto inffail
@@ -295,6 +303,7 @@ rem The two ship as one release, neither engine reports a mistake in either,
 rem and the cost of the second run is a second or two.
 echo.
 echo === INF gate (amd64) ===
+set "INFFILE=src\xhci98-amd64.inf"
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\inf-gate\check-inf.ps1" -Arch amd64
 if errorlevel 1 goto inffail
@@ -804,10 +813,22 @@ exit /b 1
 
 :inffail
 echo.
-echo ERROR: src\xhci98.inf failed the setup-engine gate. Do not install it -
+echo ERROR: %INFFILE% failed the setup-engine gate. Do not install it -
 echo Win98's setup engine has no log, and a Win2000 install that creates no
 echo service looks the same in Device Manager as a driver that loaded and
 echo failed.
+endlocal
+exit /b 1
+
+:nowdk
+echo.
+echo ERROR: %DDKROOT%\bin\setenv.bat not found.
+echo The -amd64 leg builds with WDK 7.1, expected inside this repository at
+echo tools\WinDDK71. Nothing is installed machine-wide - it is unpacked there
+echo with `msiexec /a` and installs nothing; see
+echo docs\contributing\design\11-x64-targets.md section 4.
+echo (or set WDKROOT to a WDK 7.1 installed elsewhere - the same variable the
+echo import gate and scripts\make-usbport-lib.cmd read).
 endlocal
 exit /b 1
 

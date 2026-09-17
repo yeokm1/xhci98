@@ -2857,6 +2857,16 @@ int main(int argc, char **argv)
                "Run them as two commands.\n");
         return 2;
     }
+    /*
+     * The same omission one branch later: `-probe` returns as soon as the
+     * route is checked, so `-probe -o X` or `-probe -c N` used to probe and
+     * silently take no dump (the 2026-09-17 audit's C4).
+     */
+    if (probeOnly && doDump) {
+        printf("-probe checks the route and returns; -dump, -c and -o ask "
+               "for a dump it never\ntakes. Run them as two commands.\n");
+        return 2;
+    }
 
     /*
      * The registry half runs without opening the device at all, and that is

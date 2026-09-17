@@ -487,7 +487,8 @@ What exists:
   checks every stamp before the first boot (`-ValidateOnly` runs the same
   checks and boots nothing), forces `-snapshot`, takes each row through two
   attach legs, honours `ExpectNoDriver`, treats a declared wedge as
-  non-counting, and writes one report per target under
+  non-counting when what happened is a wedge (since 2026-09-17; below), and
+  writes one report per target under
   `out/post-release/<DriverVer>/` with the header of section 9. A fresh
   target names the Phase 10 target it inherits from (`Like = '2a'`), so the
   tablet exclusion, the audio row's inert clauses and its `MayWedgeGuest` all
@@ -505,7 +506,19 @@ Choices the code made where this record was silent:
   `MayWedgeGuest` declaration: a group that ends on such a row is still
   `ERROR` in the report and does not count against the target. No new outcome
   word was added, and a run that does not reproduce the wedge shows in the
-  diff because the line changes.
+  diff because the line changes. Since 2026-09-17 the declaration waives only
+  an `ERROR` of the wedge shape - the liveness probe's verdict is
+  `not-executing` or `unreachable`, or the group ended with the row in flight
+  and the monitor gone. Until then the declaration alone waived any `ERROR`
+  on the row (a refused `device_add`, an unconfirmed `device_del`, identity
+  drift, a monitor timeout), silently, on the one row it was keyed to. Any
+  other `ERROR` on a declared row now counts against the target, and the
+  report prints a second line for it with the expectation
+  `(MayWedgeGuest entry did not apply)`, as it prints an `ExpectNoDriver`
+  entry that did not apply. An `unknown` verdict is not the wedge shape
+  either: a probe that could not tell is not a wedge, and waiving on it would
+  waive the unmeasured (`lib\fresh.ps1`, `Test-RowCountsAgainst` and
+  `Test-WedgeShape`).
 - Rows are still booted in Phase 10's groups. The group is the blast radius,
   and nothing here changed that argument.
 - The `ExpectNoDriver` entries in `matrix.psd1` were written from Phase 10's

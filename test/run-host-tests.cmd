@@ -101,8 +101,11 @@ rem
 rem Uses the same MSVC 6.0 the driver build uses, run in place out of
 rem tools\MSVC600 - found relative to this script, so a clone compiles wherever
 rem it is unpacked (docs\contributing\build-and-test.md "Automated Phase 1 Host
-rem Setup"). Set MSVC6 to override the location. Any C89 compiler works - having
-rem no DDK dependency in the core is the point.
+rem Setup"). Set MSVC6 to override the location. Having no DDK dependency in
+rem the core is the point, but "any C89 compiler" is not the claim: dozens of
+rem the suites' identifiers run past C89's 31 significant characters, so the
+rem compilers this runner is written for are MSVC 6.0 and WDK 7.1's cl, both
+rem of which keep 247.
 rem
 rem Exit code 0 = all checks passed. Run this before every VM deploy.
 

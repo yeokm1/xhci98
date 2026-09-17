@@ -146,8 +146,11 @@ xhci98.sys (usbport miniport)
 |       DbgPrint once by the PASSIVE-level flush in xhci_dispatch.c
 |
 `-- Debug Helpers                xhci_dbg.c
-    `-- The trace channel (guarded by #ifdef XHCI_DBG_TRACE, the qemu
-        flavour; never #if DBG)
+    `-- The trace channel (guarded by #ifdef XHCI_DBG_TRACE, which
+        xhci_dbg.h defines as DBG && XHCI_DBG_LIVE; src/sources and
+        failure-diagnosis.md name the XHCI_DBG_LIVE half, the define
+        src/sources sets for the qemu flavour only, so the two names are
+        one condition; never #if DBG)
 ```
 
 Compared with a monolithic HCD, three pieces shrink or move into `usbport.sys`. There is no `xhci_dispatch.c` IOCTL_INTERNAL_USB handler (usbport owns it). There is no root hub PDO creation or hub-descriptor construction (usbport owns that too; only the port callbacks remain, in `xhci_rh.c`, while `xhci_port.c` stays a pure core with no MMIO and no lock). And there is no URB-function dispatch table: `xhci_xfer.c` receives already-parsed transfer requests.

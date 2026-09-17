@@ -326,6 +326,11 @@ function New-Nt6QemuGuest {
                 Write-Warn "Skipping $diskImage because qemu-img.exe is not available."
             } else {
                 & $qemuImg create -f qcow2 $diskImage $DiskSize | Out-Host
+                # The exit code is read: this used to print "Created" whatever
+                # qemu-img had said (the 2026-09-17 audit's D8).
+                if ($LASTEXITCODE -ne 0) {
+                    throw "qemu-img create failed (exit code $LASTEXITCODE) for $diskImage, so no disk image was created."
+                }
                 Write-Ok "Created $diskImage ($DiskSize)"
             }
         } else {

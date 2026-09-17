@@ -122,8 +122,10 @@ the other ports say.
 The exit code says whether the `.TXT` is the report. There are four, not two.
 
 `1` is **anything the run attempted and could not finish**: `\\.\HCD0` would
-not open, `-probe` ran and published no dump, the driver refused the window or
-answered with a schema this build does not know, a publish rename failed, or a
+not open, `-probe` found that the request reached no miniport at all (a
+miniport that answered, or declined the request, is a route and exits 0;
+`-probe` never publishes a dump), the driver refused the window or answered
+with a schema this build does not know, a publish rename failed, or a
 `-verbosity` / `-disable` registry write failed.
 
 `2` is a usage error, and it covers more than the flag combinations: no
@@ -133,8 +135,9 @@ argument that is not a whole number, a `-verbosity` above the ladder's top, an
 `-selftest-report` basename too long, an unrecognised flag, `-force` with
 nothing to modify, and the refused combinations - `-verbosity` with `-disable`,
 which are opposites, or either of those with `-probe` or `-dump`, which read
-the driver rather than setting it. **`-dump` is implied by `-c` and by `-o`**,
-so those combinations are refused under the implied spelling too.
+the driver rather than setting it, or `-probe` with `-dump`, since the probe
+returns before a dump would be taken. **`-dump` is implied by `-c` and by
+`-o`**, so those combinations are refused under the implied spelling too.
 
 `0` means the file was
 created and every write and the close reached the volume. `3` means it was

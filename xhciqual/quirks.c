@@ -35,20 +35,31 @@ static const QUIRK quirk_table[] = {
     { 0x1912, 0x0015, QF_FW_UPLOAD | QF_CMD_RETRY,
       "Renesas uPD720202 (fw upload if ROM-less)" },
 
-    /* ASMedia */
+    /* ASMedia. Linux's PCI_DEVICE_ID_ASMEDIA_* names: 0x1142 is the ASM1042A
+     * and 0x1242 the ASM1142; the three newer parts carry only
+     * XHCI_NO_64BIT_SUPPORT, which cannot matter to a 32-bit-only driver. */
     { 0x1B21, 0x1042, QF_BULK64K, "ASMedia ASM1042" },
-    { 0x1B21, 0x1142, 0,          "ASMedia ASM1142" },
+    { 0x1B21, 0x1142, 0,          "ASMedia ASM1042A" },
+    { 0x1B21, 0x1242, 0,          "ASMedia ASM1142" },
     { 0x1B21, 0x2142, 0,          "ASMedia ASM2142" },
 
-    /* Fresco Logic */
-    { 0x1D5C, 0x1000, QF_SPURIOUS | QF_BROKEN_MSI, "Fresco Logic FL1000" },
-    { 0x1D5C, 0x1009, QF_BROKEN_MSI,               "Fresco Logic FL1009" },
-    { 0x1D5C, 0x1100, QF_BROKEN_MSI,               "Fresco Logic FL1100" },
+    /* Fresco Logic, PCI vendor 0x1B73. (The rows carried 0x1D5C, Fresco's
+     * USB-IF vendor ID, until the 2026-09-17 audit, so no Fresco controller
+     * ever matched.) Linux sets XHCI_BROKEN_MSI for the FL1000/PDK and the
+     * FL1400 only; the FL1009 and the FL1000 get XHCI_BROKEN_STREAMS, which
+     * this USB 2.0-only project has no flag for. */
+    { 0x1B73, 0x1000, QF_BROKEN_MSI, "Fresco Logic FL1000 (PDK)" },
+    { 0x1B73, 0x1009, 0,             "Fresco Logic FL1009" },
+    { 0x1B73, 0x1100, 0,             "Fresco Logic FL1100" },
+    { 0x1B73, 0x1400, QF_BROKEN_MSI, "Fresco Logic FL1400" },
 
-    /* VIA Labs */
-    { 0x2109, 0x0100, QF_SPURIOUS, "VIA Labs VL800" },
-    { 0x2109, 0x0812, 0,           "VIA Labs VL805" },
-    { 0x2109, 0x0813, 0,           "VIA Labs VL806" },
+    /* VIA Labs, PCI vendor 0x1106. (The rows carried 0x2109, VIA's USB-IF
+     * vendor ID, with the VL812/VL813 hub product IDs, until the 2026-09-17
+     * audit.) Linux gives every VIA xHCI XHCI_RESET_ON_RESUME, the VL800
+     * XHCI_BROKEN_STREAMS and the VL805 XHCI_TRB_OVERFETCH; none of those
+     * has a flag here. */
+    { 0x1106, 0x3432, 0, "VIA Labs VL800" },
+    { 0x1106, 0x3483, 0, "VIA Labs VL805" },
 
     /* Etron */
     { 0x1B6F, 0x7023, QF_AVOID, "Etron EJ168" },

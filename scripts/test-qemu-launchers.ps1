@@ -500,6 +500,42 @@ try {
             "$($nt6.Setup) refused -Cpu pentium3 but named the wrong missing feature; it must say '$($nt6.Missing)', or the next reader picks a model that fails the same way."
     }
 
+    # **A qemu-img that fails is a refusal, not an "OK: Created".** The shared
+    # NT 6.x body printed "Created <image>" whatever qemu-img create had
+    # returned (the 2026-09-17 audit's D8). Driven with a qemu-img.exe that is
+    # a copy of the system's find.exe, which exits 2 on these arguments and
+    # creates nothing: the one stand-in this suite can make that is a real
+    # executable with a deterministic nonzero exit code.
+    $badImgBin = Join-Path $work "bin-badimg"
+    $badImgDir = Join-Path $work "launchers-badimg"
+    $badImgVm = Join-Path $work "vm-badimg"
+    New-Item -ItemType Directory -Path $badImgBin | Out-Null
+    New-Item -ItemType Directory -Path $badImgDir | Out-Null
+    New-Item -ItemType Directory -Path $badImgVm | Out-Null
+    Copy-Item -LiteralPath (Join-Path $bin "qemu-system-x86_64.exe") -Destination (Join-Path $badImgBin "qemu-system-x86_64.exe")
+    Copy-Item -LiteralPath (Join-Path $env:SystemRoot "System32\find.exe") -Destination (Join-Path $badImgBin "qemu-img.exe")
+    $refusedImg = $false
+    $refusalImgText = ""
+    $imgOut = ""
+    # stdout only: merging the stand-in's stderr would make ITS line the
+    # terminating error under Stop, ahead of the generator's own refusal.
+    Write-Host "(the stand-in's 'FIND: Parameter format not correct' line below is expected)"
+    try {
+        $imgOut = & (Join-Path $PSScriptRoot "setup-qemu-vista.ps1") -VmDir $badImgVm `
+            -LocalScriptDir $badImgDir -QemuBinDir $badImgBin -CreateDisk | Out-String
+    } catch {
+        $refusedImg = $true
+        $refusalImgText = $_.Exception.Message
+    }
+    Assert-True $refusedImg `
+        "setup-qemu-vista.ps1 -CreateDisk carried on after qemu-img create failed; the launchers it wrote name an image that does not exist."
+    Assert-True ($refusalImgText.Contains("qemu-img create failed")) `
+        "setup-qemu-vista.ps1 refused a failed qemu-img create but did not say so; the message must name qemu-img and its exit code."
+    Assert-True (-not $imgOut.Contains("Created ")) `
+        "setup-qemu-vista.ps1 printed 'Created' for an image qemu-img did not create."
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $badImgVm "vista.img"))) `
+        "the failing qemu-img stand-in left a vista.img behind, so this case is not testing what it claims."
+
     # THE 64-BIT PAIR'S refuses-without-`-Accel` CHECK LIVED HERE AND WAS
     # DELETED ON 2026-09-10, WHICH IS WHAT IT WAS FOR. It held the line that an
     # accelerator may not be written down until an install has COMPLETED under

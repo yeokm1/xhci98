@@ -143,10 +143,15 @@ What differs from the ordinary matrix, all of it in code:
   `ExpectNoDriver` entry for it in `matrix.psd1`. Both cases are printed, and
   so is an entry that did not apply, because the entries are guesses the
   first fresh run exists to correct.
-- A group that ends on a row the matrix declares `MayWedgeGuest` for the
-  target is still `ERROR` in the report and does not count against the
+- A row the matrix declares `MayWedgeGuest` for the target, whose leg or
+  group ends with the guest gone or stopped (the liveness probe's
+  `not-executing` or `unreachable`, or the monitor gone with the row in
+  flight), is still `ERROR` in the report and does not count against the
   verdict. On Windows 98 that is the composite (`usb-audio`) row's pinned
-  reading.
+  reading. Any other `ERROR` on that row - a refused `device_add`, a device
+  never on the bus, an unconfirmed `device_del`, identity drift, a monitor
+  timeout with the guest still executing - counts, and is printed as the
+  declaration not applying.
 - It always boots with `-snapshot`, and refuses a config that turns that off.
 - Each target gets its own report, `out\post-release\<DriverVer>\post-release-<target>.txt`,
   with a header block (driver, image and stamp, QEMU, offsets, start and
@@ -289,7 +294,10 @@ Each is in `lib/qemu.ps1`, with the run that paid for it named there.
 3. A stale `offsets.txt`. `Assert-OffsetsFresh` compares `SIZEOF` against the
    running driver's reported size and voids the run.
 4. A healthy trace is not a living guest. `Test-GuestAlive` watches the
-   guest's own interrupt counters, and is shown to fail on a paused VM.
+   guest's own interrupt counters, and is shown to fail on a paused VM. And
+   a ticking PIT is not a running kernel: on a group with the keep-alive
+   pump, the row's liveness probe also requires the pump's `transfers
+   completed` to advance, because IRQ0 keeps arriving at a bugchecked guest.
 5. A pull is only a pull if the device left. Every `device_del` waits on
    `info usb`.
 6. A leftover guest from a previous run listens on the same monitor port, and
