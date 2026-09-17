@@ -1,6 +1,6 @@
 # xhci98
 
-This project xHCI98 is a WDM generic USB host controller driver for xHCI host controllers targeting. It supports Windows 98 SE, ME, 2000, XP (x86/x64), Vista (x86/x64) and 7 (x86/x64).
+This project xHCI98 is a WDM generic USB host controller driver for xHCI host controllers. It supports Windows 98 SE, ME, 2000, XP (x86/x64), Vista (x86/x64) and 7 (x86/x64).
 
 Although xHCI Controllers offer USB 3.0, this driver runs USB 2.0 on the controller only.
 
