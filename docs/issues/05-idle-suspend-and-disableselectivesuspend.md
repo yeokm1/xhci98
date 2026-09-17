@@ -378,8 +378,8 @@ on the machine.
 
 Section 5.4's case is static: nine disassemblies and a bit swept for every
 reader. On 2026-09-17 the flag was put in front of the operating systems
-themselves, one clean install at a time. Seven of the ten targets have been
-read; three have not (below), so this section is a record in progress and no
+themselves, one clean install at a time. Eight of the ten targets have been
+read; two have not (below), so this section is a record in progress and no
 roadmap box is ticked on it.
 
 **What a leg is.** Per target, one clean disk copy, two throw-away overlays
@@ -403,6 +403,7 @@ device and `Device 0.0` for one the stack never saw.
 | Windows XP SP3 x86 | no `Services\USB` key at all; running 5 min; addressed within 5 s; no re-idle 96 s | halts within about 45 s of launch; keyboard unseen at +5, +20 and +40 s |
 | Windows XP x64 SP2 | no such key; running 5 min; addressed within 6 s; no re-idle 96 s | suspends right after start, no resume; keyboard unseen at +5, +20 and +40 s |
 | Windows Vista SP2 x86 | no boot-time suspend/resume pair; running 5 min; addressed; **survives the Balanced plan flip** (below) | boot-time pair; **halts 4 s after the same flip**; keyboard unseen for 40 s |
+| Windows Vista SP2 x64 | `Services\usb` holds only `FastS4_OverrideBiosS4`; running 5 min; addressed within 6 s; no re-idle 98 s; **survives the Balanced plan flip for 3 min 55 s** and addresses a second keyboard within 6 s; no re-idle 102 s | boot-time pair; runs 5 min and addresses a keyboard before the flip; **halts within 5 s of the same flip**; keyboard unseen at +5, +20 and +40 s |
 | Windows 7 SP1 x86 | no `Services\USB` key at all; running 5 min, well past the 9 s mark; addressed within 10 s; no re-idle 101 s | halts between 10 and 20 s after start; keyboard unseen for 40 s |
 | Windows 7 SP1 x64 | no such key; running 5 min; addressed within 6 s; no re-idle 97 s | suspends before the desktop was reported, no resume; keyboard unseen at +5, +20 and +40 s |
 
@@ -418,17 +419,19 @@ Four of those readings are worth singling out.
   `HcDisableSelectiveSuspend` to 0 and killed the per-controller route. Under
   the flag the controller was still running 3 min 35 s after the flip and
   addressed a keyboard hot-plugged afterwards; the value-less control halted
-  4 s after the same `setactive` and never saw its keyboard. That is the
-  clearest evidence that the flag is not reachable from the power plan.
+  4 s after the same `setactive` and never saw its keyboard. Vista x64
+  repeated it: 3 min 55 s running under the flag, halted within 5 s on the
+  control. That is the clearest evidence that the flag is not reachable from
+  the power plan.
 - **Windows 2000 needed an explicit `DisableSelectiveSuspend = 0` on both
   legs** or the two could not differ, for the reason section 6 gives: its
   usbport defaults the absent value to 1. With that 0 in place the control
   idled - the first Windows 2000 idle observed in this project - and the flag
   build did not. That it is also the explanation of Phase 20's F18 remains the
   static reading's claim; these boots did not test it.
-- **Windows XP x64 and Windows 7 x64 had never been read without the value at
-  all** (section 6's fourth bullet). They have now, on the amd64 build, and
-  both controls idle. One binary difference separates each pair of legs, and
+- **Windows XP x64, Windows 7 x64 and Vista x64 had never been read without
+  the value at all** (section 6's fourth bullet). They have now, on the amd64
+  build, and all three controls idle (Vista x64's on the plan flip). One binary difference separates each pair of legs, and
   one INF difference: `[Xhci.AddReg.Global]`, referenced from both install
   routes in the previous INF and present only as a comment in the shipped one.
 
@@ -436,13 +439,67 @@ Two cautions for anyone repeating this. **A clean shutdown logs
 `SuspendController` and then `StopController`** - that pair is the shutdown
 path and is not an idle; on XP and XP x64, where the controller had already
 idled, the shutdown appended only the `StopController`, usbport not suspending
-an already-suspended controller twice. And on three controls a single
+an already-suspended controller twice. And on four controls a single
 `ResumeController` landed after the last hot-plug reading and before the
 shutdown, with no device addressed in between; whether the unplug or the
-power-down drew it was not separated, and nothing in these verdicts rests on
-it.
+power-down drew it was not separated on the first three, and nothing in these
+verdicts rests on it. On Vista x64 the unplug did not draw it within 42 s (the
+controller was still halted then), so there it came with or after the
+power-down.
 
-**Not yet read at run time:** Windows Vista x64, and the two SweetLow-stack
+**Windows Vista x64, the test leg (2026-09-17 evening).** The amd64 build of
+`457da8c` (`xhci98.sys` 277,504 bytes, SHA-256 `43C91FE5...BE78`), on a
+clean copy of the guest's clean-install snapshot, under F8 -> Disable Driver
+Signature Enforcement at both boots (`DriverEntry` in each log). After the
+install, `Services\usb` existed holding only `(Default)` and
+`FastS4_OverrideBiosS4` = 1, as on Vista x86. On the observation boot
+(`StartController` at log line 22, BAR0 `0xfebf0000`) `USBCMD`/`USBSTS` read
+`0x5`/`0x0` at twelve reads from 19:53:38 to 19:58:54; a keyboard
+hot-plugged at 19:59:05 was `Device 0.1` within 6 s (`devices
+addressed=00000001`, line 873), and seven reads over the 98 s after its
+unplug stayed `0x5`/`0x0`. Then the flip: Balanced
+(`381b4222-f694-41f0-9685-ff5bb260df2e`, the same GUID as x86) read AC 0 /
+DC 1 for USB selective suspend, `-setacvalueindex ... 1` and `-setactive`
+(Enter at 20:02:21) made it AC 1 / DC 1, and twenty-two reads from 6 s to
+3 min 55 s after the `setactive` stayed `0x5`/`0x0`. A second keyboard
+hot-plugged at 20:06:05 was addressed within 6 s (`devices
+addressed=00000002`, line 1437), and seven reads over the 102 s after its
+unplug stayed `0x5`/`0x0`. The log's only `SuspendController` (line 1606)
+sits directly before `StopController` (line 1611): the power-down, not an
+idle.
+
+**Windows Vista x64, the control leg (2026-09-17 evening).** The previous
+amd64 build (`19fc4c4`, SHA-256 `E2634A89...D11A`), on its own overlay over
+the same clean copy, F8 at both boots (`DriverEntry` shows its 18:26:46 build
+stamp, not the test leg's 18:15:39). After the install, an elevated
+`reg query` showed `DisableSelectiveSuspend` REG_DWORD `0x1` as the previous
+INF wrote it; `reg delete ... /v DisableSelectiveSuspend /f` reported success
+and a second query showed only `FastS4_OverrideBiosS4`. This was the first
+Vista x64 boot ever taken without the value. On the observation boot the
+value-less build showed the **boot-time pair** Vista x86 showed -
+`SuspendController` (line 614) and `ResumeController` (line 635) within
+seconds of `StartController` (line 22) - which the test leg did not. It then
+ran like the test leg until provoked: twelve reads of `0x5`/`0x0` from
+20:15:15 to 20:20:27, a keyboard hot-plugged at 20:20:37 addressed within 6 s
+(line 997), and four reads of `0x5`/`0x0` over the 63 s after its unplug.
+The flip, typed identically: AC 0 / DC 1 before, `-setacvalueindex ... 1`,
+`-setactive` with Enter at 20:24:08. The controller read `0x5`/`0x0` at
+20:24:09 and **`0x0`/`0x1` (halted) at 20:24:14**, with `SuspendController`
+at line 1449, and stayed halted at every read to 20:26:46. A second keyboard
+hot-plugged at 20:24:45 was `Device 0.0` at +5, +20 and +40 s with the
+controller still halted and no `devices addressed=00000002`; the after-query
+read AC 1 / DC 1. One `ResumeController` (line 1482) came after the 20:26:46
+read and before the power-down's `SuspendController` (1566) and
+`StopController` (1570).
+
+**Verdict: PASS.** On Vista x64 the flag removes the boot-time pair and keeps
+the controller running through the Balanced plan flip that halts the
+value-less previous build within 5 s. A caution for anyone typing into a
+guest from the QEMU monitor: while a hot-plugged `usb-kbd` is attached,
+`sendkey` goes to that keyboard, so on a halted control whose keyboard the
+stack never saw the keys are lost. Unplug it first.
+
+**Not yet read at run time:** the two SweetLow-stack
 9x targets (Windows 98 SE under SweetLow's USB 2.0 stack, and Windows ME).
 Until those are done, "read at run time on every target" is not a claim this
 repository can make. Every reading here is a virtual-machine reading; none of
@@ -464,20 +521,21 @@ this has been taken on real hardware.
   evaluated; the VM has no PCI Power Management capability to arm.
 - ~~Vista x64 and Windows 7 x64 were never read without the value.~~
   **Windows 7 x64 was read without it on 2026-09-17** (section 5.5): its
-  control leg idles. Vista x64 still has not been, and its leg is outstanding.
+  control leg idles. **So was Vista x64, the same evening** (section 5.5): its
+  control shows the boot-time pair and halts within 5 s of the plan flip.
 - ~~The flag of section 5.4 has not been read at run time on any target.~~
-  **Seven of the ten targets were read on 2026-09-17** (section 5.5), each
-  against a control leg that idles, Windows 7 x86's 9-second case included.
-  **Three remain: Vista x64, and the two SweetLow-stack targets** (Windows 98
+  **Eight of the ten targets were read on 2026-09-17** (section 5.5), each
+  against a control leg that idles, Windows 7 x86's 9-second case and Vista
+  x64 included. **Two remain: the two SweetLow-stack targets** (Windows 98
   SE under SweetLow, Windows ME), each of which needs its stack installed
   before the legs can run. Windows 2000's control leg needs an explicit
   `DisableSelectiveSuspend = 0`, because its usbport defaults the value to 1
   when the WDM version check says 1.10 but not 1.20 and so never idles
   otherwise (static: NUSB `0x1082B`, SP4 `0x10890`; this is also what
-  explains Phase 20's F18) - that is how its leg was run. On Vista x64 the
-  plan's USB selective suspend setting has to be flipped to Enabled during
-  the leg, as it was on Vista x86, since that is what broke the registry
-  route and it is the only discriminator Vista offers.
+  explains Phase 20's F18) - that is how its leg was run. On both Vista
+  guests the plan's USB selective suspend setting was flipped to Enabled
+  during each leg, since that is what broke the registry route and, beyond
+  the boot-time pair, it is the only discriminator Vista offers.
 - ~~`USBPORTBUSIF_UsbdQueryControllerType` hands the raw `MiniPortFlags` word
   to its callers on Vista and Windows 7, and those callers were not read.~~
   **Closed 2026-09-17** (section 5.4): no `usbhub.sys` on any of the four NT

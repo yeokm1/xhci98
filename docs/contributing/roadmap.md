@@ -2810,15 +2810,15 @@ and they are the phase's other half rather than a coda to the first.
         one that matters most** - it idles 9 s after the start.
         `out\post-release\issue5-ssflag\` holds the prepared harness (ten
         launchers on monitors 57110-57119, `prepare.ps1`, the per-OS plan).
-        **7 of 10 done, 2026-09-17, all PASS with a valid control**: Windows
+        **8 of 10 done, 2026-09-17, all PASS with a valid control**: Windows
         98 SE + NUSB, Windows 2000 SP4, Windows XP x86, Windows XP x64,
-        Vista x86 (on the plan flip), Windows 7 x86, Windows 7 x64. XP x64
-        and Windows 7 x64 were the first readings of those systems without
-        the value at all. **Outstanding: Vista x64, w98-sweetlow, me** - the
-        box stays unticked until all ten are read. The readings are written
-        up in issue 5 section 5.5 and their provenance row in
-        `legal-provenance.md` section 4; the per-run detail is in the
-        harness README, which is not tracked
+        Vista x86 and Vista x64 (both on the plan flip), Windows 7 x86,
+        Windows 7 x64. XP x64, Vista x64 and Windows 7 x64 were the first
+        readings of those systems without the value at all. **Outstanding:
+        w98-sweetlow, me** - the box stays unticked until all ten are read.
+        The readings are written up in issue 5 section 5.5 (Vista x64's
+        per-run detail included) and their provenance row in
+        `legal-provenance.md` section 4
   - [x] the last open static item, closed 2026-09-17: the callers of
         `USBPORTBUSIF_UsbdQueryControllerType`, the one route by which the raw
         `MiniPortFlags` word leaves usbport. There are none - no NT 6.x
