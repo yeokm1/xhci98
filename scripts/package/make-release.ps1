@@ -2259,8 +2259,8 @@ the tool (xhcisnap\build.cmd) - see docs\contributing\build-and-test.md,
         # 2026-09-16 audit's D5).
         $readmeDirList    = ("{0}\ and in {1}\" -f $readmeReleaseDir, $readmeDebugDir)
         $readmeTellApart  = @"
-The one thing that tells them apart is the "debug" flag shown
-on the Version tab of the file's properties.
+The one thing that tells them apart is the "debug" flag shown on the Version
+tab of the file's properties.
 "@
         # An x86-only cut carries no 64-bit driver, so its readme may not name
         # a 64-bit target. This is not hypothetical: -UploadSetOnly re-renders
@@ -2269,16 +2269,17 @@ on the Version tab of the file's properties.
         $readmeArchOs     = ""
         $readmeArchOsReq  = ""
         $readmeArchFiles  = ""
+        $readmeArchInstall = ""
     } else {
         $readmeReleaseDir = "RELEASE-X86 or RELEASE-X64"
         $readmeDebugDir   = "DEBUG-X86 or DEBUG-X64"
         $readmeDirList    = "RELEASE-X86\, DEBUG-X86\, RELEASE-X64\ and DEBUG-X64\"
         $readmeTellApart  = @"
-Nothing you can see in Explorer tells the two
-architectures apart: the "debug" flag on the Version tab separates RELEASE
-from DEBUG, and there is no equivalent for 32-bit against 64-bit. (The
-architecture IS in the file, in the PE header, but reading it takes a tool.)
-So the directory a copy came out of is what identifies it.
+Nothing you can see in Explorer tells the two architectures apart: the "debug"
+flag on the Version tab separates RELEASE from DEBUG, and there is no
+equivalent for 32-bit against 64-bit. (The architecture IS in the file, in
+the PE header, but reading it takes a tool.) So the directory a copy came out
+of is what identifies it.
 "@
         $readmeArchNote   = @"
 
@@ -2291,19 +2292,31 @@ other.
         $readmeArchOs = @"
 
 
-This download also carries a 64-bit driver, for Windows XP Professional x64
-and Windows Server 2003 x64. It is a separate build in its own directories
-with an INF of its own, not the same file renamed, and it has been validated
-in one virtual machine only - never on a real machine, and Windows XP x64 is
-the only one of the two that has been booted at all. No 64-bit Windows after
-those two is supported: Vista x64 and everything later require every driver
-to be signed, and this one carries no signature.
+This download also carries a 64-bit driver, for Windows XP Professional x64,
+Windows Server 2003 x64, Windows Vista x64 and Windows 7 x64. It is a
+separate build in its own directories with an INF of its own, not the same
+file renamed, and it has been validated in virtual machines only - never on
+a real machine, and Windows Server 2003 x64 has not been booted at all. It
+is not signed, so on Windows Vista x64 and Windows 7 x64 it runs only on a
+start where Disable Driver Signature Enforcement was chosen from the F8
+menu, every time (section 4).
 "@
         $readmeArchOsReq = @"
 
                      64-bit: Windows XP x64 or Windows Server 2003 x64 (SP2),
-                     in a virtual machine only as well. Nothing newer: Vista
-                     x64 and later will not load an unsigned driver.
+                     Windows Vista x64 (SP2) or Windows 7 x64 (SP1), in
+                     virtual machines only as well.
+"@
+        $readmeArchInstall = @"
+
+
+  64-BIT WINDOWS
+      The same route as the 32-bit edition of the same Windows, pointed at
+      RELEASE-X64\. On Windows Vista x64 and Windows 7 x64 the install works
+      on an ordinary start, but the driver runs only after a restart with
+      F8 -> Disable Driver Signature Enforcement, and only on such a start;
+      on any other start the controller shows Code 39. Windows XP x64 and
+      Server 2003 x64 need none of that.
 "@
         $readmeArchFiles = @"
 
@@ -2320,18 +2333,18 @@ to be signed, and this one carries no signature.
     $template = @'
 ==============================================================================
                               x h c i 9 8   {VERSION}
-    USB 2.0 for Windows 98 SE, ME, 2000 SP4 and XP on xHCI-only machines
+  USB 2.0 for Windows 98 SE, ME, 2000, XP, Vista and 7 on xHCI-only machines
 ==============================================================================
 
 Released {DATE}.{INCOMPLETE}
 
 Most x86 PCs made from around the mid 2010s onward have USB 3.0 (xHCI)
-controllers and nothing else. Windows 98 SE, Windows ME, Windows 2000 and
-32-bit Windows XP have no support for those, and this driver fills that gap
-on all four. Windows 98 SE and Windows 2000 SP4 are the two primary targets,
-and a release has to work on both. Only Windows 98 SE has been validated on
-real hardware; Windows 2000 SP4, Windows ME and 32-bit Windows XP have been
-validated in virtual machines only.{ARCHOS}
+controllers and nothing else. Windows 98 SE, Windows ME, Windows 2000,
+Windows XP, Windows Vista and Windows 7 have no support for those, and this
+driver fills that gap on their 32-bit editions. Windows 98 SE and Windows
+2000 SP4 are the two primary targets, and a release has to work on both.
+Only Windows 98 SE has been validated on real hardware; every other system
+named here has been validated in virtual machines only.{ARCHOS}
 
 It gives you USB 2.0 speeds: High Speed, Full Speed and Low Speed. USB 3.0
 SuperSpeed is out of scope. A USB 3.0 device still works, at USB 2.0 speed,
@@ -2542,8 +2555,9 @@ modern interrupt mechanism (MSI) that such a controller would require.
 ==============================================================================
 
   Operating system   Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows
-                     ME and 32-bit Windows XP (SP3) in virtual machines only
-                     (neither has been run on a real machine).{ARCHOSREQ}
+                     ME, 32-bit Windows XP (SP3), 32-bit Windows Vista (SP2)
+                     and 32-bit Windows 7 (SP1) in virtual machines only
+                     (none of them has been run on a real machine).{ARCHOSREQ}
 
   On Windows 98      NUSB 3.3 or the newer SweetLow USB 2.0 stack, your
                      choice, installed BEFORE this driver (section 4).
@@ -2559,6 +2573,9 @@ modern interrupt mechanism (MSI) that such a controller would require.
   On Windows XP      XP's own USB stack; nothing to install. DO NOT install
                      NUSB on Windows XP.
 
+  On Windows Vista   The system's own USB stack; nothing to install.
+  and Windows 7
+
   Controller         xHCI, PCI class code 0C0330, at least one USB 2.0 port,
                      a memory window below 4 GB, and a legacy interrupt pin.
 
@@ -2568,9 +2585,12 @@ modern interrupt mechanism (MSI) that such a controller would require.
 ==============================================================================
 
 xhci98.inf names two files of its own, xhci98.inf and xhci98.sys, and they
-are in {DIRLIST}. Nothing else is in the package, and there is
-nothing to complete: a copy taken from the project's source repository is
-the same two files.
+are in:
+
+      {DIRLIST}
+
+Nothing else is in the package, and there is nothing to complete: a copy
+taken from the project's source repository is the same two files.
 
 Four files the driver depends on are NOT in the package, because they are
 Windows' own, unmodified, and no Microsoft file is in this download:
@@ -2588,21 +2608,21 @@ Windows' own, unmodified, and no Microsoft file is in this download:
                its own composite driver). On Windows 2000 it is the USB hub
                driver.
 
-  usbport.sys  WINDOWS 2000 AND XP. The USB stack this driver plugs into.
-               Without it the controller shows Code 39 and the driver never
-               runs. On Windows 98 the USB 2.0 stack installed first (NUSB
-               or SweetLow's) supplies it.
+  usbport.sys  The USB stack this driver plugs into. Without it the
+               controller shows Code 39 and the driver never runs. On Windows
+               98 and ME the USB 2.0 stack installed first (NUSB or
+               SweetLow's) supplies it.
 
-  usbui.dll    NEW IN 1.0.2.0, and the one file here that is only cosmetic.
-               It adds an extra USB property page in Device Manager. It is
-               copied on every target this driver installs on.
+  usbui.dll    The one file here that is only cosmetic. It adds an extra USB
+               property page in Device Manager.
 
-WINDOWS ONLY INSTALLS ITS USB FILES WHEN SETUP FINDS A USB CONTROLLER IT
-RECOGNISES, and on an xHCI-only machine it never does, so on such a machine
-none of them is there. The install in step 4 therefore asks Windows to copy
-them from its own installation source. Each is copied only if it is absent,
-so a machine that already has them - one that ever had a USB controller
-Windows recognised - keeps its own files and is asked for nothing.
+UP TO WINDOWS XP, WINDOWS ONLY INSTALLS ITS USB FILES WHEN SETUP FINDS A USB
+CONTROLLER IT RECOGNISES, and on an xHCI-only machine it never does, so on
+such a machine none of them is there. The install in step 4 therefore asks
+Windows to copy them from its own installation source. Each is copied only
+if it is absent, so a machine that already has them - one that ever had a USB
+controller Windows recognised - keeps its own files and is asked for nothing.
+Windows Vista and Windows 7 always have all four.
 
   WINDOWS 98 SE   HAVE THE WINDOWS 98 SE INSTALLATION CD AT HAND. Unless the
                   Windows CABs are on the hard disk (C:\WINDOWS\OPTIONS\CABS,
@@ -2623,6 +2643,9 @@ Windows recognised - keeps its own files and is asked for nothing.
                   2000 three are in sp4.cab and usbui.dll in driver.cab
                   beside it, two cabinets in one pass and still no prompt.{ARCHFILES}
 
+  WINDOWS VISTA   Nothing to do: every installation already has all four,
+  AND 7           and the install copies none of them.
+
 If the prompt is cancelled the driver still installs, but the root hub fails
 as described above. That reads as a fault in this driver and is not one: put
 the CD in and install the driver again, or copy usbd.sys (and, on Windows 98
@@ -2634,15 +2657,19 @@ C:\WINDOWS\SYSTEM32\DRIVERS yourself.
  4. INSTALL
 ==============================================================================
 
-INSTALL FROM THE {RELEASEDIR}\ DIRECTORY. This package carries BOTH builds
-side by side - {RELEASEDIR}\ and {DEBUGDIR}\, each a complete set of files
-with the same names - so the directory you point Windows at is what decides
-which driver you get. {RELEASEDIR}\ is the one you want. {DEBUGDIR}\ is the
-same driver built so that a crash on it can be traced further back. It
-records nothing more than {RELEASEDIR}\ does, and it is there only for
-troubleshooting a machine that has already gone wrong. It prints nothing as
-it runs. Section 8 describes both, and nothing about a copied file says which
-one it is - so point at a directory, never at a loose xhci98.sys.{ARCHNOTE}
+INSTALL FROM THE RELEASE DIRECTORY:
+
+      {RELEASEDIR}\
+
+This package carries BOTH builds side by side, RELEASE and DEBUG, each a
+complete set of files with the same names, so the directory you point
+Windows at is what decides which driver you get. RELEASE is the one you
+want. DEBUG ({DEBUGDIR}\) is the same driver built so that a
+crash on it can be traced further back. It records nothing more than RELEASE
+does, and it is there only for troubleshooting a machine that has already
+gone wrong. It prints nothing as it runs. Section 8 describes both, and
+nothing about a copied file says which one it is - so point at a directory,
+never at a loose xhci98.sys.{ARCHNOTE}
 
 Put the whole unzipped package somewhere the machine can read - a floppy, a
 CD, a shared folder - then:
@@ -2671,17 +2698,14 @@ CD, a shared folder - then:
       it sits unclaimed with a yellow mark, usually under "Other devices".
       Then
           Properties -> Driver -> Update Driver -> Specify a location
-      and point it at the {RELEASEDIR}\ directory. During the copy, on a machine
-      that never had a USB controller Windows recognised, "Insert Disk"
-      asks for the Windows 98 Second Edition CD-ROM: that is Windows
-      fetching its own usbd.sys, usbhub.sys and usbui.dll (section 3).
-      Insert it and click OK. Reboot when asked. Upgrading from a release
-      before 1.0.2.0 can raise that prompt on a machine whose last install
-      did not, because usbui.dll is new here; it is on the same cabinet as
-      the other two, so the same CD answers it.
+      and point it at the RELEASE-X86\ directory.
+      During the copy, on a machine that never had a USB controller Windows
+      recognised, "Insert Disk" asks for the Windows 98 Second Edition
+      CD-ROM: that is Windows fetching its own usbd.sys, usbhub.sys and
+      usbui.dll (section 3). Insert it and click OK. Reboot when asked.
 
       (If Windows finds the controller for you first, the Add New Hardware
-      Wizard asks the same question - give it {RELEASEDIR}\ too.)
+      Wizard asks the same question - give it the same directory.)
 
   WINDOWS ME
       SweetLow's stack has to be there first, and only that one: NUSB is a
@@ -2690,23 +2714,34 @@ CD, a shared folder - then:
       right-click the USB2.INF at its root, choose Install, and reboot.
       Then the same Device Manager route as Windows 98 SE:
           Properties -> Driver -> Update Driver -> Specify a location
-      pointed at the {RELEASEDIR}\ directory. Without the stack the driver
-      installs and the controller shows Code 2. Windows ME has only been
-      run in a virtual machine.
+      pointed at the RELEASE-X86\ directory.
+      Without the stack the driver installs and the controller shows Code 2.
+      Windows ME has only been run in a virtual machine.
 
   WINDOWS 2000 SP4
       Open Device Manager and find the unrecognised xHCI controller, then
           Properties -> Driver -> Update Driver -> Have Disk
-      and point it at the {RELEASEDIR}\ directory. Nothing else is asked for;
-      usbport.sys, usbd.sys, usbhub.sys and usbui.dll come from the driver
-      cache every installation has.
+      and point it at the RELEASE-X86\ directory.
+      Nothing else is asked for; usbport.sys, usbd.sys, usbhub.sys and
+      usbui.dll come from the driver cache every installation has. If the
+      Found New Hardware wizard is used instead, it ends by asking for a
+      restart; No is fine, the driver is already running.
 
   WINDOWS XP (32-BIT)
       The same route as Windows 2000 SP4:
           Properties -> Driver -> Update Driver -> Have Disk
-      pointed at the {RELEASEDIR}\ directory; choose "Continue Anyway" at the
-      unsigned-driver warning. Nothing else is asked for. Windows XP has
-      only been run in a virtual machine.
+      pointed at the RELEASE-X86\ directory.
+      Choose "Continue Anyway" at the unsigned-driver warning. Nothing else
+      is asked for. Windows XP has only been run in a virtual machine.
+
+  WINDOWS VISTA AND WINDOWS 7 (32-BIT)
+      Open Device Manager and find the unrecognised xHCI controller, then
+          Update Driver Software -> Browse my computer for driver software
+      and point it at the RELEASE-X86\ directory.
+      If Windows warns that it cannot verify the publisher, install the
+      driver anyway. Do NOT right-click xhci98.inf and choose Install on
+      these systems: it asks for usbport.sys, which you cannot supply, and
+      installs no driver. Both have only been run in virtual machines.{ARCHINSTALL}
 
 It installs as "USB 2.0 eXtensible Host Controller (xhci98)", with a "USB
 Root Hub" underneath it. Neither should carry a warning mark.
@@ -2741,11 +2776,8 @@ Two things are specific to this driver and worth knowing in advance:
     ten seconds - and a sleeping controller of this kind cannot notice
     anything plugged in afterwards. The driver tells Windows not to, for this
     controller only. Nothing else in the machine is affected and nothing is
-    written outside the device's own settings. See section 9.
-
-    Upgrading from 1.0.2.0 or earlier? Those versions did it a different way,
-    with a machine-wide setting that an uninstall does not remove. Section 9
-    says where it is and how to delete it if you want to.
+    written outside the device's own settings. There is no switch to turn it
+    back on.
 
   WINDOWS 98 WITH NUSB: STOPPING A RUNNING USB CONTROLLER CRASHES THE MACHINE
   ..........................................................................
@@ -2804,8 +2836,6 @@ Two things are specific to this driver and worth knowing in advance:
   CD (section 3) and the setup engine's cached copy of xhci98.inf (under
   C:\WINDOWS\INF\OTHER) all stay behind. Delete them by hand if you want them
   gone; the three Windows files are Windows' own and harmless where they are.
-  If this machine ever had 1.0.2.0 or earlier, the machine-wide setting those
-  versions wrote stays behind too - section 9.
 
   AFTER AN UPGRADE ON WINDOWS 98, RUN THE INF ONCE BY HAND
   .......................................................
@@ -2820,13 +2850,20 @@ Two things are specific to this driver and worth knowing in advance:
  6. IF SOMETHING GOES WRONG
 ==============================================================================
 
-  RUN XHCISNAP. FOUR STEPS, AND NONE OF THEM IS REGEDIT
-  .....................................................
+  REPORT IT FIRST. XHCISNAP IS ONLY FOR WHEN THE MAINTAINER ASKS FOR IT
+  .....................................................................
+
+  Open an issue on the project's GitHub page (section 7) and describe what
+  happened. DO NOT RUN XHCISNAP UNLESS THE MAINTAINER ASKS YOU TO. Installing
+  and using the driver never needs it, and its first step changes one of the
+  driver's settings, so it is not something to try on your own.
 
   XHCISNAP.EXE is in the XHCISNAP directory of this package. It reads the
   driver's own log straight out of the running machine and writes a report
-  you can paste into a bug report. It works the same way on every target,
-  and on Windows 98 and Windows ME it is the ONLY way to get anything out.
+  you can attach to that issue. On Windows 98 and Windows ME it is the ONLY
+  way to get anything out. On Windows Vista and Windows 7 it finds and sets
+  the driver's setting, but reading the log back has not been tried there.
+  When you are asked, it is four steps, and none of them is REGEDIT:
 
       1. XHCISNAP -verbosity 2
       2. restart the machine
@@ -2867,28 +2904,21 @@ Two things are specific to this driver and worth knowing in advance:
   THE DRIVER WRITES NO LOG FILE ITSELF, and there is no registry value that
   makes it. XHCISNAP writes the file, and you name it on the command line.
   That is the arrangement because a driver on Windows 98 has no reliable way
-  to open a file at all: three path spellings were tried and none of them
-  produced a file on a real machine, on either system.
+  to open a file at all.
 
   DEBUGVIEW (Sysinternals), with "Capture Kernel" switched on, captures this
-  driver's stop-time dump if XhciLogDebugView is set. Windows 2000 runs any
+  driver's stop-time dump if XhciLogDebugView is set. LIKE XHCISNAP, USE IT
+  ONLY WHEN THE MAINTAINER ASKS FOR IT. Windows 2000 runs any
   current version. WINDOWS 98 NEEDS v4.64 - later versions do not run on it
   at all - and on Windows 98 it does not help anyway: the dump happens when
   the driver stops, the only stop on that system is the shutdown, and Windows
   closes the capture program before it gets there. Use XHCISNAP.
 
       !! Do not run DebugView on Windows 98 on real hardware while
-         capturing. Plugging in a device while it captures crashes the
-         machine - measured on three device classes. Inside a virtual
-         machine it is fine.
-
-         That was measured with earlier debug builds, which printed a line
-         per event as they ran. NEITHER BUILD IN THIS PACKAGE PRINTS
-         ANYTHING AS IT RUNS - and whether that makes DebugView safe on a
-         Windows 98 machine has NOT been tested, because the one boot that
-         would tell was never taken. Not tested is not cleared. Treat the
-         warning as standing for both builds; you do not need DebugView to
-         send a report.
+         capturing. Plugging in a device while it captures can crash the
+         machine, and neither build in this package has been shown safe
+         there. Inside a virtual machine it is fine. You do not need
+         DebugView to send a report.
 
 
 ==============================================================================
@@ -2949,7 +2979,8 @@ needed.
 {CONTENTS}
 Every driver binary in this download is called xhci98.sys and every one
 carries driver version {VERSION}, so a copy taken out of its directory cannot
-be identified by name or by version. {TELLAPART}
+be identified by name or by version.
+{TELLAPART}
 
 (In Windows driver-kit terms, RELEASE is what the DDK calls a "free" build
 and DEBUG is what it calls a "checked" build. This project says release and
@@ -2960,12 +2991,12 @@ debug throughout, in its build scripts and its documentation alike.)
  9. REGISTRY SETTINGS
 ==============================================================================
 
-Every registry value this driver reads or writes. There are three - two
-the driver reads, and one the installer writes machine-wide on every system.
+Every registry value this driver reads. There are two, and it writes none.
 
-  YOU SHOULD NOT NEED THIS SECTION. XHCISNAP -verbosity 2 sets the one that
-  matters, on every controller, and finds the key itself. It is here so you
-  can check what is in the key if you are asked to.
+  YOU SHOULD NOT NEED THIS SECTION. If the maintainer asks for a log,
+  XHCISNAP -verbosity 2 sets the one that matters, on every controller, and
+  finds the key itself. It is here so you can check what is in the key if you
+  are asked to.
 
   XhciLogVerbosity  -  the whole switch
   .....................................
@@ -2999,7 +3030,8 @@ the driver reads, and one the installer writes machine-wide on every system.
   useful on Windows 2000, where disabling the controller is a real stop with
   a capture program still running; on Windows 98 the only stop is the
   shutdown and Windows closes the capture first. It does not affect what
-  XHCISNAP reads, which is a different route entirely.
+  XHCISNAP reads, which is a different route entirely. Leave it at 0 unless
+  the maintainer asks for a DebugView capture.
 
   THOSE TWO ARE THE WHOLE LIST. This driver reads no other setting of its
   own, and no registry value makes it write a file.
@@ -3011,7 +3043,7 @@ the driver reads, and one the installer writes machine-wide on every system.
   or read a zero. They live in the device's own driver key, which is spelled
   one way on the NT targets and another on the 9x ones:
 
-    Windows 2000 and Windows XP
+    Windows 2000, XP, Vista and 7
       HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\
         {36FC9E60-C465-11CF-8056-444553540000}\0002
 
@@ -3035,6 +3067,7 @@ the driver reads, and one the installer writes machine-wide on every system.
 
     Windows 98    HKEY_LOCAL_MACHINE\Enum\PCI
     Windows 2000  HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\PCI
+    and later
 
   open the subkey for the slot it occupies, and read its Driver value. It
   names the key to edit - for example USB\0004 - and that is the key the
@@ -3048,8 +3081,9 @@ the driver reads, and one the installer writes machine-wide on every system.
   documents, no passwords, no other program's memory. But this driver cannot
   put a lock on that door - the door belongs to Windows' own USB port driver,
   which opens it to anyone - so the value you just set IS the lock. On
-  Windows 2000 you need administrator rights to set it; Windows 98 has no
-  such distinction.
+  Windows 2000 and later you need administrator rights to set it (on Vista
+  and 7, a Command Prompt started with "Run as administrator"); Windows 98
+  has no such distinction.
 
   The driver keeps a 16 KB buffer whether or not you set anything; what
   XhciLogVerbosity 2 and above adds is a small amount of work each time
@@ -3062,49 +3096,13 @@ the driver reads, and one the installer writes machine-wide on every system.
   machine produces a report - see section 6. On Windows 2000 both routes
   work.
 
-  SLEEP, AND A LEFTOVER SETTING FROM 1.0.2.0 AND EARLIER
-  ......................................................
+  SLEEP
+  .....
 
-  THERE IS NOTHING TO SET HERE. Since 1.1.0.0 the driver tells Windows, as
-  it registers, never to put THIS controller to sleep. It is part of the
-  driver, there is no registry value behind it, and nothing outside the
-  device's own settings is written.
-
-  The trade is the same as it always was: THE CONTROLLER NEVER IDLES, SO IT
-  DRAWS SLIGHTLY MORE POWER. There is no switch to turn it back on, and the
-  earlier versions offered none in practice either - Windows refused the USB
-  Root Hub's "Allow the computer to turn off this device" box while their
-  setting was in place, exactly as it does now.
-
-  IF THIS MACHINE RAN 1.0.0.0 TO 1.0.2.0, ONE SETTING OF THEIRS IS STILL
-  THERE. Those versions did the same job with a machine-wide value:
-
-      HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB
-          DisableSelectiveSuspend  (DWORD, 1)
-
-  It does not live with the device, so neither an uninstall nor this upgrade
-  removes it, and this package will not delete it for you - on a machine with
-  more than one USB controller it may be doing a job for another one. It is
-  harmless beside the new mechanism: both say the same thing. If you want it
-  gone, delete the value in Registry Editor and restart. This driver's own
-  controller is unaffected either way.
-
-  Why the change: the old value was machine-wide, so it reached every USB
-  controller in the machine, not just this one, and it outlived the device
-  that installed it. The obvious per-controller replacement was tried and
-  does not hold - on Windows Vista the power plan's "USB selective suspend
-  setting" rewrites it, and on battery the Balanced plan turns it back on by
-  default, which would have put the sleeping-controller fault back on any
-  laptop that unplugged.
-
-  Windows Vista and Windows 7 were measured on 2026-09-16, 32-bit only, in
-  virtual machines. Windows 7's USB stack puts this controller to sleep
-  within about ten seconds of a start with nothing attached, and again about
-  half a minute after the last device is unplugged, and a device plugged in
-  then is not seen until Refresh - the Windows XP behaviour. Windows Vista's
-  stack reads the value but was not seen putting the controller to sleep in
-  five minutes without it. The x64 editions of both were not measured
-  without it; the 64-bit install writes it all the same.
+  THERE IS NOTHING TO SET HERE. The driver tells Windows, as it registers,
+  never to put THIS controller to sleep. It is part of the driver and there
+  is no registry value behind it. THE CONTROLLER NEVER IDLES, SO IT DRAWS
+  SLIGHTLY MORE POWER, and there is no switch to turn it back on.
 
 
 ==============================================================================
@@ -3133,27 +3131,21 @@ repository rather than here.
     #
     # **Version literals in the perpetual template, each one a decision.**
     #
-    # The template above is written once and used by every cut, but two of its
-    # sentences are about a particular release - `usbui.dll` being new in
-    # 1.0.2.0, and an upgrade from before it raising a prompt a previous
-    # install did not. Both are still true at any later version, which is
-    # exactly why nobody would notice them going stale, and until the
-    # 2026-09-07 audit's H15 nothing made anyone look. Everything else in the
-    # template says {VERSION} and is substituted.
+    # The template above is written once and used by every cut. Sentences about
+    # a particular release - "new in 1.0.2.0", "since 1.1.0.0", what an
+    # upgrade from an older version leaves behind - stay true at every later
+    # version, which is exactly why nobody notices them going stale, and until
+    # the 2026-09-07 audit's H15 nothing made anyone look.
     #
-    # So: every four-part version written into the template by hand has to be
-    # listed here with the reason it is there. A new one fails the cut until
-    # somebody decides it belongs; a listed one that has stopped being worth
-    # saying is removed from both places together. This runs against the
-    # template BEFORE substitution, so {VERSION} and the embedded history.md -
-    # which legitimately names every release there has ever been - are not in
-    # scope.
+    # **The owner's rule since 2026-09-17: the readme states the current state
+    # only.** What changed between versions, and why, belongs in section 10,
+    # which is history.md embedded; the template itself names no release. So
+    # the list below is empty, and a four-part version written into the
+    # template by hand fails the cut. Write it with {VERSION}, or put the
+    # sentence in history.md. This runs against the template BEFORE
+    # substitution, so {VERSION} and the embedded history are not in scope.
     #
-    $allowedTemplateVersions = @{
-        "1.0.0.1" = "the release the media stopped carrying any Microsoft file"
-        "1.0.1.0" = "the release usbport.sys joined the NT install path"
-        "1.0.2.0" = "the release usbui.dll joined every install path; named in section 3's file list and in the Windows 98 install step, because an upgrade from before it can raise a CD prompt a previous install did not"
-    }
+    $allowedTemplateVersions = @{}
     $templateVersions = @([regex]::Matches($template, '\b\d+\.\d+\.\d+\.\d+\b') |
                           ForEach-Object { $_.Value } | Sort-Object -Unique)
     $unlisted = @($templateVersions | Where-Object { -not $allowedTemplateVersions.ContainsKey($_) })
@@ -3221,6 +3213,7 @@ $(($missingTools | ForEach-Object { "      " + $_ }) -join "`r`n")
         Replace("{ARCHOS}", $readmeArchOs).
         Replace("{ARCHOSREQ}", $readmeArchOsReq).
         Replace("{ARCHFILES}", $readmeArchFiles).
+        Replace("{ARCHINSTALL}", $readmeArchInstall).
         Replace("{INCOMPLETE}", $incomplete).
         Replace("{CONTENTS}", (($contents -join "`r`n").TrimEnd() + "`r`n")).
         Replace("{HISTORY}", (($historyText -join "`r`n").TrimEnd()))

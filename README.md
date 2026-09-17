@@ -1,6 +1,8 @@
 # xhci98
 
-This project xHCI98 is a WDM generic USB host controller driver for xHCI host controllers targeting Windows 98 SE, ME, 2000 SP4 and 32-bit XP, plus a separate 64-bit build for Windows XP x64 and Server 2003 x64. Although xHCI Controllers offer USB 3.0, this driver runs USB 2.0 on the controller only.
+This project xHCI98 is a WDM generic USB host controller driver for xHCI host controllers targeting. It supports Windows 98 SE, ME, 2000, XP (x86/x64), Vista (x86/x64) and 7 (x86/x64).
+
+Although xHCI Controllers offer USB 3.0, this driver runs USB 2.0 on the controller only.
 
 This driver is developed based on Intel's xHCI specification and tested mainly on Intel machines so far. No guarantees have been made on xHCI implementations from other vendors. [Omores](https://www.youtube.com/@O_mores) has also [tested it](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/).
 
@@ -36,12 +38,12 @@ Every USB 3.x connector (USB4/Thunderbolt included) also carries the USB 2.0 wir
 
 ## Installation Steps
 
-The driver needs a USB 2.0 stack (`usbport.sys` + `usbhub20.sys`) on the machine first:
+The driver needs a USB 2.0 stack on the machine first:
 
 - **Windows 98 SE**: Either install [NUSB 3.3 or 3.6](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) or the [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip). For SweetLow's stack, unzip, right-click the `USB2.INF` at its root then install. Reboot if requested after installing the USB 2.0 stack.
 - **Windows ME**: Use [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip) only.
-- **Windows 2000 SP4 and XP SP3 (32-bit)**: Nothing to install, both OSes at their service pack level already have the stack.
-- **Windows XP x64, Vista and 7 (32-bit or x64)**: Nothing to install either. On **Vista x64 and 7 x64**, driver signature enforcement has to be disabled as this driver is not signed.
+- **Windows 2000 SP4, XP SP3 x86**: Nothing to install, both OSes at their service pack level already have the stack.
+- **Windows XP SP2 x64, Vista SP2 and 7 SP1 (x86/x64)**: Nothing to install either. On **Vista x64 and 7 x64**, driver signature enforcement has to be disabled as this driver is not signed.
 
 On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand** or the contents on disk as the driver needs some files from there.
 
@@ -141,7 +143,6 @@ The important limitations. The full list is under "Known limitations" in [releas
 |---|---|
 | Disabling, uninstalling or upgrading an NUSB driver crashes the machine | A defect in NUSB's `usbport.sys` which cannot stop a running controller. Rename the existing `XHCI98.SYS`, reboot, then remove it. |
 | Every device on a root port is reported as High Speed | Reporting the true speed of a slower device crashes usbport as there is no companion controller. A mouse or keyboard on a root port therefore polls at 1, 2 or 4 ms only. If this is an issue for you, put your lower-speed device behind a hub to allow the true speed to be reported. |
-| The controller never idles, so it draws slightly more power | A suspended xHCI controller cannot see a newly plugged device, so the driver tells Windows not to suspend this one. There is no switch to turn it back on. Releases up to `1.0.2.0` did this with a machine-wide `DisableSelectiveSuspend = 1` instead; that value stays behind on an upgraded machine and nothing removes it. |
 | Fast, repeated plug and unplug can freeze Windows 98 | About twice a second sustained. Ordinary use is fine. |
 | Mass-storage throughput seems slow | About 18 MB/s read and write in the ATTO run above, below what USB 2.0 High Speed usually reaches. A likely but unmeasured cause is the controller's interrupt moderation, left at its 1 ms reset default. |
 
