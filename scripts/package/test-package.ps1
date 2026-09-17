@@ -1344,6 +1344,42 @@ try {
     Assert-True ($usoStart -ge 0 -and $usoEnd -gt $usoStart -and -not $releaserText.Substring($usoStart, $usoEnd - $usoStart).Contains('-Staged')) `
         "-UploadSetOnly assembles with -Staged, but nothing publishes a staged set in that mode, so it would leave .staging names and no asset."
 
+    # --- once the swap has succeeded, the cut is published, whatever out\ does
+    #
+    # Codex review round 3. Publish-UploadSet runs after the release swap, so
+    # a failure in it must not reach the outer catch as a failed cut (the
+    # release cannot be unpublished, and the "previous asset untouched" line
+    # would be false): it is caught locally, the staged pair is kept, the
+    # state of out\ is said, and -UploadSetOnly is named as the recovery. And
+    # the previous zip is renamed aside, not deleted, so no step leaves out\
+    # with no zip at all; the aside goes only after the staged zip is on.
+    Write-Step "a failed upload publish after the swap is a warning with a recovery, not a failed cut"
+    $pubAt = $releaserText.IndexOf('$final = Publish-UploadSet -Set $stagedUpload')
+    $pubCatchAt = $releaserText.IndexOf('} catch {', $pubAt)
+    $pubBlock = $releaserText.Substring($pubAt, $releaserText.IndexOf('# --- summary', $pubAt) - $pubAt)
+    Assert-True ($pubAt -ge 0 -and $pubCatchAt -gt $pubAt -and $pubCatchAt -lt ($pubAt + $pubBlock.Length)) `
+        "make-release.ps1 no longer catches a Publish-UploadSet failure locally, so a rename that fails in out\ reports a published cut as failed."
+    Assert-True ($pubBlock.Contains('make-release.ps1 -UploadSetOnly -Version') -and $pubBlock.Contains('The staged set has been left in place')) `
+        "make-release.ps1's upload-publish catch no longer keeps the staged set and names -UploadSetOnly as the way to rebuild the asset."
+    Assert-True (-not $pubBlock.Contains('Remove-StagedUploadSet')) `
+        "make-release.ps1's upload-publish catch discards the staged set, which after the swap is the only copy of the new asset."
+    $fnAt = $releaserText.IndexOf('function Publish-UploadSet')
+    $fnText = $releaserText.Substring($fnAt, $releaserText.IndexOf('function Remove-StagedUploadSet') - $fnAt)
+    $asideMove = $fnText.IndexOf('Move-Item -LiteralPath $Set.Final.Zip -Destination $zipAside')
+    $stagedMove = $fnText.IndexOf('Move-Item -LiteralPath $Set.Zip -Destination $Set.Final.Zip')
+    $asideDrop = $fnText.IndexOf('Remove-Item -LiteralPath $zipAside -Force -ErrorAction SilentlyContinue')
+    Assert-True ($asideMove -ge 0 -and $stagedMove -gt $asideMove -and $asideDrop -gt $stagedMove) `
+        "Publish-UploadSet no longer renames the previous zip aside, moves the staged zip on, and only then drops the aside - in that order - so a failure between the steps can leave out\ with no zip."
+    Assert-True (-not $fnText.Contains('Remove-Item -LiteralPath $Set.Final.Zip')) `
+        "Publish-UploadSet deletes the previous zip outright instead of renaming it aside."
+    Assert-True ($fnText.Contains('Move-Item -LiteralPath $zipAside -Destination $Set.Final.Zip')) `
+        "Publish-UploadSet no longer restores the aside when the final zip is missing after a failure."
+    $outerCatch = $releaserText.Substring($releaserText.LastIndexOf('} catch {'))
+    Assert-True ($outerCatch.Contains('-and -not $swapDone') -and $outerCatch.Contains('is untouched')) `
+        "make-release.ps1's outer catch prints 'the previous asset is untouched' without checking that the failure came before the swap."
+    Assert-True ($releaserText.IndexOf('$swapDone = $true') -gt $releaserText.IndexOf('Move-Item -LiteralPath $destRoot -Destination $finalRoot')) `
+        "make-release.ps1 no longer marks the swap done right after the release rename, so the outer catch cannot tell a pre-swap failure from a post-swap one."
+
     # --- the readme template may not carry the two claims 1.0.1.0 shipped ----
     #
     # roadmap Phase 20, F7. The rendered readme.txt is byte-identical to the

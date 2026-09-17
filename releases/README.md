@@ -215,6 +215,11 @@ does - `-Arch amd64` writes `out\pkg-release-amd64\`, around
   recognise afterwards; the directory is a workspace inside `out\`. The
   archive carries no top-level directory, so its name is all the download
   says about itself until it is unpacked.
+  Since 2026-09-17 the cut assembles both under `.staging` names before the
+  publish swap and moves them onto these names only after the swap has
+  succeeded (the old zip is renamed `.previous` for the moment of the move);
+  a failure in that last step leaves the release published and prints
+  `make-release.ps1 -UploadSetOnly -Version <version>` as the repair.
 
 The assembly gates each published directory as the install media it is
 (`check-inf.ps1 -PackageDir`, under the architecture that directory is for:

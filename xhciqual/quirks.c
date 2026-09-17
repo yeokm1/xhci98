@@ -1,10 +1,33 @@
 /*
  * quirks.c - VID/DID -> known-quirk lookup.
  *
- * Entries and flags come from Linux drivers/usb/host/xhci-pci.c and
- * pci-quirks.c directly. This project keeps no quirk catalogue of its own and
- * the driver acts on none of these; the tool reports them. Grow this table as
- * real controllers are tested.
+ * Entries come from Linux drivers/usb/host/xhci-pci.c and pci-quirks.c (the
+ * local mirror in external/linux, flat: its pci_ids.h vendor constants are
+ * not there, so the VIA 0x1106 and ASMedia 0x1B21 vendor IDs are from the
+ * 2026-09-17 audit, not re-read from the mirror). Flags are of two kinds:
+ *
+ *   Linux-derived, one QF_ per Linux quirk bit: QF_XUSB2PR (pci-quirks.c's
+ *   Intel port switchover), QF_COMPLIANCE (XHCI_COMP_MODE_QUIRK), QF_BEI
+ *   (XHCI_AVOID_BEI), QF_PME_STUCK (XHCI_PME_STUCK_QUIRK), QF_SPURIOUS
+ *   (XHCI_SPURIOUS_SUCCESS), QF_BROKEN_MSI (XHCI_BROKEN_MSI), QF_FW_UPLOAD
+ *   (xhci-pci-renesas.c's ROM-less firmware load).
+ *
+ *   This tool's own reading of a Linux mechanism, with no quirk bit of its
+ *   own: QF_FW_SPI is what XHCI_NEC_HOST's Get Firmware command implies for
+ *   the uPD720200 (the firmware is on the card and nothing is uploaded), and
+ *   QF_AVOID on Etron is this project's verdict on a part Linux gives four
+ *   quirk bits (XHCI_ETRON_HOST, XHCI_RESET_ON_RESUME, XHCI_BROKEN_STREAMS,
+ *   XHCI_NO_SOFT_RETRY), none of which this table has a flag for.
+ *
+ *   Defined and printed by report.c but set by no row since the 2026-09-17
+ *   audit: QF_BULK64K (an ASM1042 claim no source supported) and QF_CMD_RETRY
+ *   (a NEC/Renesas claim the mirror has no counterpart for).
+ *
+ * Linux quirk bits this table has no flag for (streams, reset-on-resume,
+ * 64-bit register zeroing, TRB overfetch) are named in the row comments. This
+ * project keeps no quirk catalogue of its own and the driver acts on none of
+ * these; the tool reports them. Grow this table as real controllers are
+ * tested.
  */
 
 #include <stddef.h>
@@ -35,9 +58,14 @@ static const QUIRK quirk_table[] = {
      * carried QF_SPURIOUS | QF_CMD_RETRY until the 2026-09-17 audit. */
     { 0x1033, 0x0194, QF_FW_SPI,
       "NEC uPD720200/200A (fw on card SPI flash)" },
-    { 0x1912, 0x0014, QF_FW_UPLOAD | QF_CMD_RETRY,
+    /* The two Renesas parts: xhci-pci-renesas.c loads firmware into a
+     * ROM-less card (QF_FW_UPLOAD); xhci-pci.c gives both XHCI_ZERO_64B_REGS
+     * and the uPD720202 XHCI_RESET_ON_RESUME as well, neither of which has a
+     * flag here. Both rows carried QF_CMD_RETRY until the 2026-09-17 audit;
+     * the mirror has no command-retry quirk. */
+    { 0x1912, 0x0014, QF_FW_UPLOAD,
       "Renesas uPD720201 (fw upload if ROM-less)" },
-    { 0x1912, 0x0015, QF_FW_UPLOAD | QF_CMD_RETRY,
+    { 0x1912, 0x0015, QF_FW_UPLOAD,
       "Renesas uPD720202 (fw upload if ROM-less)" },
 
     /* ASMedia. Linux's PCI_DEVICE_ID_ASMEDIA_* names: 0x1142 is the ASM1042A
