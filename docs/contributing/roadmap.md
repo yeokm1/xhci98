@@ -1714,24 +1714,26 @@ and every reading, box by box.
 | 22.9 | the primary targets unchanged - open |
 | 22.10 | the cut, and the install route read from the asset - open |
 | 22.11 | issue 5's mechanism replaced by `USB_MINIPORT_FLAGS_DISABLE_SS` |
-| 22.12 | the guest readings the 2026-09-17 audit fixes owe; (b) before the cut - open |
+| 22.12 | the guest readings the 2026-09-17 audit fixes owe; (b) done on Vista x86 - open |
 
 Owed:
 
-- [ ] 22.12, listed first because (b) comes before 22.10: the 2026-09-17
+- [ ] 22.12, listed first because (b) came before 22.10: the 2026-09-17
       audit (branch `audit-2026-09-17`, `188cb32` and the six Codex rounds
       after it) changed the driver in four places that
-      only a guest can read, and none has been read: (a) the post-registration
+      only a guest can read, and three are still unread: (a) the post-registration
       verifier walks the service block as pointers, so an amd64 guest's
       `usbport services written=16` line must be read again on XP x64 and
       Vista x64 - every earlier amd64 reading of that line covered eight;
       (b) the root-hub port shadow is folded before the SUSPEND and RESUME
-      writes and in the resume timer, so a SET_FEATURE(PORT_SUSPEND) /
-      CLEAR_FEATURE(PORT_SUSPEND) pair with no status query between must
-      show `C_PORT_SUSPEND` latched and `RhPortsResumed` moving once, on
-      XP under `usbhub.sys`'s selective suspend (port suspend has never
-      been measured on any target; the host vector
-      `test_root_hub_resume_unqueried` is all there is); (c) the recovery
+      writes and in the resume timer - **read on 2026-09-18, on Vista x86
+      rather than XP**, because under task 22.11's flag neither XP's nor
+      Windows 7's hub can suspend a root-hub port through selective
+      suspend; the first reading found a resume the audit's timer gate
+      abandoned on QEMU, which ignores a Resume write, and Vista bugchecked
+      0xFE 60 s later; the gate now owes the U0 write to a port still in
+      U3, and the re-read passed every clause (`runs/run-22.md`); (c) the
+      recovery
       path refuses at `XHCI_INIT_STEP_RESET` while USBSTS.CNR or
       USBCMD.HCRST reads set and `xhciReset` stalls 1 ms after HCRST - the
       SMP recovery injection through the gdbstub (Phase 20's HCE route) is
@@ -1742,10 +1744,8 @@ Owed:
       `UnmatchedEventsTotal` staying at zero across a split isoch packet,
       and, if a group is ever swept by the next group's tail
       (`SweptTransfers` moving on a normal short read), that is the
-      audit's B10 and wants the settle it describes. **(b) gates 22.10, as
-      22.11 did and for the same reason**: it changes root-hub behaviour on a
-      path no target has ever measured, and the cut would ship it unread.
-      (a) and (d) are read off 22.9's matrix and 22.10's own install legs
+      audit's B10 and wants the settle it describes. **(b) gated 22.10, as
+      22.11 did and for the same reason**, and is done. (a) and (d) are read off 22.9's matrix and 22.10's own install legs
       rather than as legs of their own; (c) may follow the cut, since a
       wrong reading there amends the release under Phase 15's rule
 - [ ] 22.8: `releases\history.md`'s entry; the release date in

@@ -466,6 +466,14 @@ static void hw_detach_while_unpowered(ULONG port)
 static ULONG portU3EntryAnnounces;
 
 /*
+ * A controller that ignores a PLS = 15 (Resume) write to a port in U3 and
+ * leaves the port in U3 - QEMU's xHCI, measured on a Vista guest (roadmap
+ * 22.12 (b), 2026-09-18). U3 -> U0 on the U0 write is unchanged. Set only by
+ * the vector that needs it.
+ */
+static ULONG portResumeIgnored;
+
+/*
  * VBus for a physical connector is the OR of its two logical ports' PP pins
  * (4.19.7 implementation note, p.303). This counts the times a USB 3.x port was
  * deasserted while its USB 2.0 companion was not yet reporting power - which is
@@ -873,6 +881,7 @@ static void hc_build(void)
     pciBmeStuckClear = 0;
     portPowerLagReads = 0;
     portU3EntryAnnounces = 0;
+    portResumeIgnored = 0;
     vbusDrops = 0;
     for (i = 0; i <= HC_MAX_PORTS; i++) {
         portPowerPending[i] = 0;
@@ -1675,8 +1684,12 @@ VOID XhciHostWriteRegister(PULONG address, ULONG value)
 
             wasPls = XHCI_PORTSC_GET_PLS(current);
             nowPls = (value & XHCI_PORTSC_PLS_MASK) >> XHCI_PORTSC_PLS_SHIFT;
+            if (portResumeIgnored && nowPls == (ULONG)XHCI_PLS_RESUME &&
+                wasPls == (ULONG)XHCI_PLS_U3) {
+                nowPls = wasPls;
+            }
             current = (current & ~XHCI_PORTSC_PLS_MASK) |
-                      (value & XHCI_PORTSC_PLS_MASK);
+                      (nowPls << XHCI_PORTSC_PLS_SHIFT);
             if (nowPls == (ULONG)XHCI_PLS_U0 &&
                 (wasPls == (ULONG)XHCI_PLS_RESUME ||
                  wasPls == (ULONG)XHCI_PLS_U3)) {
@@ -12127,6 +12140,115 @@ static void test_root_hub_resume_unqueried(void)
              "deriving the completion from that reading instead");
     CHECK_EQ(mmio[HC_PORTSC(2) / 4] & XHCI_PORTSC_PLC, 0,
              "with PLC acknowledged, so the port keeps reporting");
+}
+
+/*
+ * A Resume write the controller does not act on (roadmap 22.12 (b),
+ * 2026-09-18). QEMU's xHCI leaves a USB 2.0 port in U3 when PLS = 15 is
+ * written; the timer then found U3 rather than Resume, abandoned the resume
+ * with no U0 write and no C_PORT_SUSPEND, and Vista's hub, waiting on that
+ * change, bugchecked 0xFE (8, 6, 1) after 60 s. U3 at the end of the interval
+ * is now owed the U0 write, as Linux issues it unconditionally.
+ */
+static void test_root_hub_resume_write_ignored(void)
+{
+    USBPORT_PORT_STATUS_AND_CHANGE status;
+
+    enable_start(0);
+    hw_events_reset();
+    hw_attach_device(2);
+    mmio[HC_PORTSC(2) / 4] |= XHCI_PORTSC_PED;
+    portResumeIgnored = 1;
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "(usbhub's last query, with the port in U0)");
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "a suspend");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "then a resume, with no query between");
+    CHECK_EQ(last_write_value(HC_PORTSC(2)) & XHCI_PORTSC_PLS_MASK,
+             (XHCI_PLS_RESUME << XHCI_PORTSC_PLS_SHIFT),
+             "(the Resume write went out)");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(2) / 4]), XHCI_PLS_U3,
+             "(and the controller left the port in U3)");
+
+    writeCount = 0;
+    hw_fire_port_timer();
+    CHECK_EQ(ext.RhResumesAbandoned, 0,
+             "a port still in U3 at the end of the interval is not abandoned");
+    CHECK_EQ(ext.RhResumesCompleted, 1, "the timer completes the resume");
+    CHECK_EQ(count_writes(HC_PORTSC(2)), 1, "with exactly one write");
+    CHECK_EQ(last_write_value(HC_PORTSC(2)) &
+             (XHCI_PORTSC_PLS_MASK | XHCI_PORTSC_LWS),
+             (XHCI_PLS_U0 << XHCI_PORTSC_PLS_SHIFT) | XHCI_PORTSC_LWS,
+             "and that write is U0 with LWS");
+    CHECK_EQ(ext.RootHub.Ports[1].Armed, XHCI_PORT_OP_NONE,
+             "the port is disarmed");
+
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, 2UL << 24, 0);
+    XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "(the query usbhub makes on the change)");
+    CHECK_EQ(status.PortChange & XHCI_HUB_C_PORT_SUSPEND,
+             XHCI_HUB_C_PORT_SUSPEND,
+             "C_PORT_SUSPEND is derived from U3 to U0, so the hub's wait ends");
+    CHECK_EQ(status.PortStatus & XHCI_HUB_PORT_SUSPEND, 0,
+             "on a port that is no longer suspended");
+
+    /* The same port found in U0 by the timer - a second timer on a resume
+     * already finished - is still abandoned with no write. */
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspendChange(&ext, 2),
+             MP_STATUS_SUCCESS, "(cleared)");
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "(suspended again)");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "(resumed again)");
+    mmio[HC_PORTSC(2) / 4] = (mmio[HC_PORTSC(2) / 4] & ~XHCI_PORTSC_PLS_MASK) |
+                             (XHCI_PLS_U0 << XHCI_PORTSC_PLS_SHIFT);
+    writeCount = 0;
+    hw_fire_port_timer();
+    CHECK_EQ(ext.RhResumesAbandoned, 1, "a port found in U0 is abandoned");
+    CHECK_EQ(count_writes(HC_PORTSC(2)), 0, "with no link-state write");
+
+    /* The age retire shares the gate: a resume whose timer never fires on a
+     * port still in U3 is finished with the U0 write when it ages out. */
+    enable_start(0);
+    hw_events_reset();
+    hw_attach_device(1);
+    mmio[HC_PORTSC(1) / 4] |= XHCI_PORTSC_PED;
+    portResumeIgnored = 1;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortSuspend(&ext, 1),
+             MP_STATUS_SUCCESS, "(a suspended port)");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspend(&ext, 1),
+             MP_STATUS_SUCCESS, "(resumed, with a timer that never fires)");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(1) / 4]), XHCI_PLS_U3,
+             "(the Resume write did not take here either)");
+    writeCount = 0;
+    poll_clock_prime();
+    poll_after_ms(XHCI_PORT_AGE_MS);
+    CHECK_EQ(ext.RhAgeRetires, 1, "the resume ages out");
+    CHECK_EQ(ext.RhResumesCompleted, 1, "and is completed, not abandoned");
+    CHECK_EQ(count_writes(HC_PORTSC(1)), 1, "with exactly one write");
+    CHECK_EQ(last_write_value(HC_PORTSC(1)) &
+             (XHCI_PORTSC_PLS_MASK | XHCI_PORTSC_LWS),
+             (XHCI_PLS_U0 << XHCI_PORTSC_PLS_SHIFT) | XHCI_PORTSC_LWS,
+             "and that write is U0 with LWS");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(1) / 4]), XHCI_PLS_U0,
+             "(the port reached U0)");
+
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, 1UL << 24, 0);
+    XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 1, &status),
+             MP_STATUS_SUCCESS, "(the query usbhub makes on the change)");
+    CHECK_EQ(status.PortChange & XHCI_HUB_C_PORT_SUSPEND,
+             XHCI_HUB_C_PORT_SUSPEND,
+             "the aged-out resume is reported as C_PORT_SUSPEND too");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspendChange(&ext, 1),
+             MP_STATUS_SUCCESS, "(cleared)");
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 1, &status),
+             MP_STATUS_SUCCESS, "(queried again)");
+    CHECK_EQ(status.PortChange & XHCI_HUB_C_PORT_SUSPEND, 0,
+             "and reported once - the clear holds");
+    portResumeIgnored = 0;
 }
 
 /*
@@ -29247,6 +29369,7 @@ static void test_portsc_suspend_sets_no_plc(void)
     CHECK_EQ(mmio[HC_PORTSC(2) / 4] & XHCI_PORTSC_PLC, XHCI_PORTSC_PLC,
              "does set PLC - the row is conditional, not absent");
     portU3EntryAnnounces = 0;
+    portResumeIgnored = 0;
 }
 
 /*
@@ -30006,6 +30129,7 @@ int main(void)
     test_root_hub_reset();
     test_root_hub_resume();
     test_root_hub_resume_unqueried();
+    test_root_hub_resume_write_ignored();
     test_root_hub_conflicts();
     test_root_hub_port_power_confirmation();
     test_root_hub_announce();

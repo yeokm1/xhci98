@@ -466,6 +466,33 @@ static VOID xhciRhFoldReading(PXHCI_EXTENSION ext,
 }
 
 /*
+ * Whether a resume still owes its terminating U0 write on this reading.
+ *
+ * Resume is the state the PLS = 15 write asks for. U3 is a port that never
+ * entered it, and it is owed the write all the same: QEMU's xHCI ignores a
+ * Resume write to a USB 2.0 port and moves U3 to U0 only on the U0 write, and
+ * an abandon there left a Vista hub waiting 60 s for a C_PORT_SUSPEND that
+ * never came before it bugchecked 0xFE (roadmap 22.12 (b), 2026-09-18). Linux
+ * ends a host-initiated USB 2.0 resume with the same unconditional U0 write
+ * (`xhci-hub.c`, ClearPortFeature(USB_PORT_FEAT_SUSPEND)). Any other state is
+ * a port something else has taken over - a second timer on a resume already
+ * finished (U0), a disable or a reset mid-interval - and gets no link-state
+ * write, and neither does a port whose device has gone.
+ *
+ * IRQL: any.
+ */
+static ULONG xhciRhResumeOwesU0(ULONG portsc)
+{
+    ULONG pls;
+
+    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0) {
+        return 0;
+    }
+    pls = XHCI_PORTSC_GET_PLS(portsc);
+    return (pls == XHCI_PLS_RESUME || pls == XHCI_PLS_U3) ? 1UL : 0UL;
+}
+
+/*
  * A port that is signalling resume and has nothing timing the end of it.
  *
  * This is the **device-initiated** half of 4.15.2.1 (p.256): a suspended port
@@ -1682,17 +1709,16 @@ static VOID NTAPI xhciRhPortTimeout(PVOID miniPortExtension, PVOID context)
 
     /*
      * The link-state writer's fold - see xhciRhFoldReading. The write below
-     * moves the link from Resume to U0, and the PLC that reports the arrival
-     * is derived into C_PORT_SUSPEND against what the shadow held *before* it,
-     * which must therefore read Resume by then. Every exit past this point
-     * reaches XhciRootHubDeferredWork, so anything the fold latched is
-     * announced.
+     * moves the link from Resume (or U3, see xhciRhResumeOwesU0) to U0, and
+     * the PLC that reports the arrival is derived into C_PORT_SUSPEND against
+     * what the shadow held *before* it, which must therefore read Resume or U3
+     * by then. Every exit past this point reaches XhciRootHubDeferredWork, so
+     * anything the fold latched is announced.
      */
     xhciRhFoldReading(ext, timeout->HubPort, shadow);
 
     portsc = XhciReadPortsc(ext, xhciPort);
-    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0 ||
-        XHCI_PORTSC_GET_PLS(portsc) != XHCI_PLS_RESUME) {
+    if (!xhciRhResumeOwesU0(portsc)) {
         /*
          * The device left mid-interval - a plausible way for a resume to end,
          * since a user unplugging a sleeping device is exactly what produces
@@ -1702,11 +1728,11 @@ static VOID NTAPI xhciRhPortTimeout(PVOID miniPortExtension, PVOID context)
          * arrives as CSC through the ordinary event path and needs nothing from
          * here.
          *
-         * A port no longer in Resume is the same answer, and the gate is the
-         * one the age retire already had: a U0 written with LWS onto a link
-         * that has already left Resume - a second timer on a port the first
-         * one finished, or a port a disable or reset took over mid-interval -
-         * is a link-state write the port did not ask for.
+         * A port in neither Resume nor U3 is the same answer, and the age
+         * retire shares the gate: a U0 written with LWS onto a link that
+         * something else has taken - a second timer on a port the first one
+         * finished, or a port a disable or reset took over mid-interval - is a
+         * link-state write the port did not ask for.
          */
         (VOID)XhciPortShadowClaim(shadow, XHCI_PORT_OP_RESUME,
                                   timeout->Generation);
@@ -2391,8 +2417,7 @@ static VOID xhciRhRetireOperation(PXHCI_EXTENSION ext,
         return;
     }
     portsc = XhciReadPortsc(ext, xhciPort);
-    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0 ||
-        XHCI_PORTSC_GET_PLS(portsc) != XHCI_PLS_RESUME) {
+    if (!xhciRhResumeOwesU0(portsc)) {
         ext->RhResumesAbandoned++;
         return;
     }

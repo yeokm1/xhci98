@@ -8981,3 +8981,24 @@ ME guest (Windows 98's shut down cleanly the same night, and 2b's
 `acpi=off` machine ignores it). And a controller restart on 9x is not an image
 load, so per-image trace budgets do not reset across its disable/enable
 cycles - silence in a later cycle's trace is the budget, not the path.
+
+## QEMU's xHCI ignores a Resume write to a USB 2.0 port, and an abandoned resume is a bugcheck 60 s later
+
+Roadmap 22.12 (b) took the first port suspend and resume ever measured here,
+on a Vista x86 guest on 2026-09-18. The suspend landed (`PLS = 3` with LWS,
+QEMU's `port_link pls 3`). The resume's `PLS = 15` with LWS produced no
+`port_link` line at all: QEMU leaves the port in U3 and moves it only on the
+U0 write. The driver's timer, which the 2026-09-17 audit had made abandon
+any port not in Resume, abandoned it, so no U0 write and no `C_PORT_SUSPEND`
+followed - and Vista's `UsbhSyncResumePort` waits 60 s for that change and
+then bugchecks `0xFE (8, 6, 1)` on purpose. Nothing in the driver's log
+stood between the abandon and the reboot.
+
+Rules. **Read a link-state write in QEMU's own trace** (`usb_xhci_port_write`
+then `usb_xhci_port_link`) before trusting that the emulator did what the
+specification says; a write with no `port_link` after it was not acted on.
+**A port operation the hub is waiting on must end in something the hub can
+see** - an abandon that reports nothing is a hub timeout, and on NT 6.x a
+hub timeout is a bugcheck, not a stall. And on XP and Windows 7, with
+`USB_MINIPORT_FLAGS_DISABLE_SS`, no selective suspend reaches a root-hub
+port at all, so a suspend reading there is a Vista reading (run-22, 22.12).

@@ -1295,11 +1295,74 @@ read off 22.9 and 22.10's own legs; (c) may follow the cut.
       Vista x64 from the corrected verifier (`xhciVerifyPacketAfterRegistration`
       walks `PVOID`s; design 11 sections 6.3 and 6.5 carry the qualification
       that every earlier amd64 reading was eight)
-- [ ] (b) port suspend and resume: on the XP guest, a device usbhub
-      selectively suspends and resumes with no status query between the two
-      operations; expect `C_PORT_SUSPEND` reported once, `RhPortsResumed`
+- [x] (b) port suspend and resume, **taken on Vista x86 rather than XP,
+      2026-09-18, and passed after one driver fix.** Expected: a device
+      usbhub selectively suspends and resumes with no status query between
+      the two operations, `C_PORT_SUSPEND` reported once, `RhPortsResumed`
       +1, `RhResumesAbandoned` unchanged, and no second `U0|LWS` write
-      (`xhciRhFoldReading`, `src/xhci_rh.c`)
+      (`xhciRhFoldReading`, `src/xhci_rh.c`).
+
+      *Why not XP.* With `USB_MINIPORT_FLAGS_DISABLE_SS` (task 22.11) no
+      selective suspend can reach a root-hub port on XP. XP SP3's
+      `usbhub.sys` sends SET_FEATURE(PORT_SUSPEND) only from a child's D1,
+      D2 or D3, and calls a child's idle callback only from its own idle
+      callback, which runs only if usbport accepts the root hub's idle
+      request - and the flag makes XP's usbport refuse it (issue 5 section
+      5.4). Measured on an XP SP3 guest the same morning: the QEMU mouse
+      with HID selective suspend enabled (`SelectiveSuspendEnabled`, which
+      XP's `hidclass.sys` reads) raised the Power Management tab and never
+      suspended; a Device Manager disable goes out as
+      CLEAR_FEATURE(PORT_ENABLE), and Stand By was unavailable on the guest.
+      Windows 7's hub parks a child's idle request while the root hub's
+      selective-suspend state is the one the flag sets; Vista's does not
+      look at it. `legal-provenance.md` section 4 has the three static
+      readings. The owner chose Vista on 2026-09-18.
+
+      *First reading, `73fd505` (`qemu`, built 10:11:24), a Vista x86 guest
+      from `vista-clean-install`.* The QEMU mouse on hub port 1, with
+      `SelectiveSuspendEnabled` set, was idled at once: SET_FEATURE
+      (DEVICE_REMOTE_WAKEUP) to the device, then `RH_SetFeaturePortSuspend`
+      on port 1 and QEMU's `port_link pls 3`. `RhPortStatusQueries` held at
+      328 while it stayed suspended. Unticking "Allow the computer to turn
+      off this device" (keyboard only - any pointer movement makes the
+      mouse wake itself) sent `RH_ClearFeaturePortSuspend`: the driver wrote
+      `PLS = 15` with LWS and **QEMU did not act on it** - no `port_link` in
+      its trace, and the timer read PORTSC `0x00000E63`, still U3. The timer
+      abandons a port that is not in Resume (a gate the 2026-09-17 audit
+      added; before it only a disconnect abandoned), so no U0 write went out
+      and no `C_PORT_SUSPEND` was ever derived: `RhResumesAbandoned` 1. Sixty
+      seconds later Vista bugchecked **0xFE (8, 6, 1)** - `UsbhSyncResumePort`
+      waits 60 000 ms for the port's suspend change and traps rather than
+      hang a power IRP.
+
+      *The fix* (owner's decision, 2026-09-18): `xhciRhResumeOwesU0` owes
+      the terminating U0 write to a port in U3 as well as Resume, on both
+      the timer and the age-retire paths, as Linux's `xhci-hub.c` ends a
+      host-initiated USB 2.0 resume with an unconditional U0 write. A port
+      found in U0, disabled or resetting is still abandoned. Host vector
+      `test_root_hub_resume_write_ignored`, with a model knob for a
+      controller that ignores the Resume write; reverting the helper to
+      Resume-only fails nine of its checks.
+
+      *Second reading, the fix (`qemu`, built 12:20:51), the same guest.*
+      Suspend within seconds of the plug; `RhPortStatusQueries` 133 at
+      12:35:35 and at 12:36:55. The untick at 12:39:04:
+      `RH_ClearFeaturePortSuspend`, "T(DRSMDN) elapsed, driving hub port to
+      U0", the PLC event latching `C_PORT_SUSPEND` (`0x4`), one status query
+      (133 to 134), `RH_ClearFeaturePortSuspendChange` once, then
+      CLEAR_FEATURE(DEVICE_REMOTE_WAKEUP) to the mouse. QEMU's trace: the
+      suspend write (`0x00010e61`, `pls 3`), the ignored Resume write
+      (`0x00010fe1`), **one** `U0|LWS` write (`0x00010e01`, `pls 0`, PLC),
+      then a PLC acknowledgement with no LWS. At 12:41:05, past the 60 s
+      window: `RhPortsSuspended` 1, `RhPortsResumed` 1, `RhResumesCompleted`
+      1, `RhResumesAbandoned` 0, `RhAgeRetires` 0, the mouse still
+      addressed, no bugcheck. Harness `out\post-release\task22-12b\`
+      (git-ignored); logs `vm\t2212-vista-i1-*` and `vm\t2212-vista-i2-*`.
+
+      Not established: a device-initiated resume (the mouse waking itself)
+      was not taken, and a conforming xHC, which enters Resume on the write,
+      exercises the U0 write from Resume as before - this reading covers the
+      U3 arm.
 - [ ] (c) recovery under a reset in progress: inject a controller fault
       through the gdbstub as Phase 20's SMP recoveries were, with CNR or
       HCRST held; expect `RecoveryLastStep = XHCI_INIT_STEP_RESET`, zero
