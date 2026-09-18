@@ -1,72 +1,142 @@
-# Handoff - 2026-09-18, branch `1.1.0.0`
+# Handoff - 2026-09-18 (evening), branch `1.1.0.0`
 
 For the next session picking up Phase 22. Read `AGENTS.md` and
-`.claude/memory/MEMORY.md` first (the last four entries are this session's).
+`.claude/memory/MEMORY.md` first; the newest entry,
+`cut-1-1-0-0-2026-09-18.md`, is this session's and carries the owner's
+readme rules.
 
 ## Where things stand
 
+**`1.1.0.0` is cut and committed.** Nothing has been uploaded, so a finding
+can still re-cut it under the same number with `make-release.ps1 -Force`
+(`releases/README.md`). HEAD is `d1c9bca`; the working tree is clean.
+
 | Task | State |
 |---|---|
-| 22.12 (b) root-hub port suspend/resume | **Done**, commit `16d5ad2`. Read on Vista x86 (XP and Windows 7 cannot reach it under the 0x20 flag). Found and fixed a real defect: the resume timer abandoned a port still in U3, QEMU ignores a PLS=Resume write, and Vista's usbhub bugchecked 0xFE (8, 6, 1) after 60 s. Codex: 2 rounds, converged. `runs/run-22.md` 22.12 (b) is the record. |
-| 22.9 harness extension (XP x64 + Win7 x86 as post-release targets) | **Done and Codex-converged** (`fcbf9a1`, fixes `2dba77a`: an amd64 identity is the full high/low pair or nothing; ExpectNoDriver keys validate against `config.sample.psd1` too). Round 2: no findings. |
-| 22.9 the run itself | **Not run, and now ordered AFTER the cut** (owner, 2026-09-18). Roadmap, `run-22.md` and the cut checkpoint re-worded. |
-| 22.8 prose (history.md, release date in `xhci_version.h` and both INFs, release notes, README Install, issue forms) | **Done**, `26162ae`, date 09/18/2026. |
-| 22.10 the cut + nine install legs from the asset | **Cut done 2026-09-18 14:50** (re-cut twice with `-Force` for the owner's readme changes): `releases\1.1.0.0\`, `out\xhci98-1.1.0.0.zip` 396,894 B. **The nine install legs are NEXT and none is taken** (list in `run-22.md` 22.10). Gives 22.12 (a) (`usbport services written=16` on XP x64 and Vista x64). The Vista x86 leg also re-reads the (b) fix on the `release` flavour. |
-| 22.12 (c) recovery under CNR/HCRST, (d) iso counters | Open; both may follow the cut. (d) comes off 22.9's audio rows. |
+| 22.8 prose | **Done**, `26162ae`. Release date `09/18/2026` in `xhci_version.h` and both INFs; history entry, release notes, README Install, issue forms. |
+| 22.9 harness (XP x64 + Win7 x86 targets) | **Done, Codex-converged**: `fcbf9a1` and the round-1 fixes `2dba77a`; round 2 had no findings. Self-test 298 checks. |
+| 22.10 the cut | **Done**: cut at 14:50, then re-cut four times the same day with `-Force` for the owner's readme changes (`02f4ba1`, `681b707`). `releases\1.1.0.0\` holds `release-x86`, `debug-x86`, `release-x64`, `debug-x64`, the two tools, `LICENSE` and `readme.txt`. The asset is `out\xhci98-1.1.0.0.zip`, **396,894 B**, git-ignored, with no Microsoft file. |
+| 22.10 the nine install legs | **NEXT. None taken.** |
+| 22.12 (a) | Read during 22.10's XP x64 and Vista x64 legs: `usbport services written=16`. |
+| 22.12 (b) | Done (`16d5ad2`); the Vista x86 leg re-reads it on the `release` flavour. |
+| 22.9 the run | After the install legs (owner's decision: cut first). |
+| 22.12 (c) recovery refusal under CNR/HCRST, (d) iso counters | Open; both follow the cut. (d) comes off 22.9's audio rows. |
+| Acceptance test + upload | Not a roadmap task: `docs/using/release-acceptance-test.md`, run by hand twice (a fresh VM and a physical machine), then the owner uploads. |
 
-## Suggested order
+## Next: 22.10's nine install legs
 
-1. 22.10's nine install legs from the unzipped asset (the cut is done).
-2. 22.9 on the cut's tree: prepare all four fresh images, run
-   `run-matrix.ps1 -Config scripts\vm-matrix\matrix.config.psd1 -PostRelease`.
-3. 22.12 (c) whenever convenient.
+`docs/contributing/runs/run-22.md`, section 22.10, lists each leg and what it
+must read. Every leg installs from the **unzipped asset**
+(`out\xhci98-1.1.0.0.zip`), not from `src\obj*` or `out\pkg-*`.
 
-## What the harness change did (for the review and for 22.9)
+1-4. **x86 package (`RELEASE-X86\`), with the full device clauses:**
+   - Windows 98 SE, on NUSB and on SweetLow's stack.
+   - Windows ME.
+   - Windows 2000 SP4.
+   - 32-bit XP.
 
-- Driver: `src\xhci_dispatch.c` `xhciStartController` prints
-  `StartController extension VA high=` / `low=` under `#ifdef _WIN64`. Only the
-  amd64 `qemu` build carries it (the trace channel is qemu-only); x86 and the
-  shipping amd64 flavours are unaffected.
-- `gen-offsets.ps1 -Arch amd64` -> `offsets-amd64.txt` (SIZEOF 95,544; x86 92,304).
-- `lib\counters.ps1`: 64-bit guest addresses (`Format-GuestAddress`, no Double
-  arithmetic), `Import-CounterTable -Arch`, identity from the high/low pair.
-- `lib\fresh.ps1`: `Get-TargetFamily` (`win98`/`win2k` via `Like`/Id,
-  `winxp64`/`win7` via `Family`), `Get-TargetArch`, never-boot list + `winxp64.img`, `win7.img`.
-- `run-matrix.ps1` one table per arch; `prepare-image.ps1` per-arch package and
-  table, `-accel`/`-smp` in prep boots, NT 5.2/6.1 wizard text.
-- Targets `xp64-fresh` (port 56598, `Arch='amd64'`) and `win7-fresh` (56599) in
-  `config.sample.psd1` (sample ports 55610/55611) and the git-ignored
-  `matrix.config.psd1`; ExpectNoDriver guesses for uas/serial/braille.
-- Self-test: 292 checks, all pass. `-PostRelease -ValidateOnly` on this host
-  lists only the four expected prep gaps (2a/2b stamped 1.0.2.0; xp64/win7 not cloned).
-- Not yet measured on the new guests: the liveness probe (PIT IRQ0 on an MP
-  HAL), boot/ready deadlines under TCG (set to 600 s), whether the keep-alive
-  mouse binds before the ready poll.
+   For each: the three devices, and disable / enable / remove / rescan
+   wherever that target can take them. On the NT pair, read `setupapi.log`
+   for `Section: Xhci.Dev` and `[Xhci.Dev.NTx86]`.
+5. **XP x64, `RELEASE-X64\`.** This is the first XP x64 install through
+   `%Mfg%=XhciModels,NTamd64,NTamd64.6.0`. Read `setupapi.log` for
+   `XhciModels.NTamd64` and `[Xhci.Dev.NTamd64]` (not `Xhci.Dev6`), and
+   check the four OS files on disk. Also read 22.12 (a).
+6-7. **Vista x64 and Windows 7 x64, `RELEASE-X64\`**, each off its
+   clean-install snapshot with driver signature enforcement disabled.
+   - Take 21.5's clauses.
+   - Read `setupapi.log` for `XhciModels.NTamd64.6.0` and
+     `[Xhci.Dev6.NTamd64]`.
+   - Windows 7 x64: its first install through the committed INF.
+   - Vista x64: 22.12 (a).
+8-9. **Vista x86 and Windows 7 x86, `RELEASE-X86\`**, off
+   `vista-clean-install` / `win7-clean-install`.
+   - The first `release` flavour on either, and Windows 7 x86's first
+     install through the committed INF.
+   - Read `setupapi.log` for `XhciModels.NTx86.6.0` and `[Xhci.Dev6.NTx86]`.
+   - **Write down what the unsigned-driver prompt says and which choice
+     took it.**
+   - Vista x86 also re-reads 22.12 (b).
 
-Codex: drive it per `.claude/memory/codex-plugin-invocation-here.md` **from the
-PowerShell tool directly** - through `bash -> powershell -Command` the job was lost.
+Then check the asset's file list against what the packager staged, and record
+each leg in `run-22.md` 22.10. **The `release` flavour writes no
+port-`0xE9` trace.** Read it the way task 21.5 did (its entry in `run-21.md`):
+Device Manager state, devices bound, `setupapi.log`, and the
+monitor. Whether (a)'s line can be read at all on `release` needs checking
+first. If it cannot, it comes off a `qemu` reading or the debug flavour.
 
-## 22.9 preparation, per target (after the cut)
+## After that: 22.9 preparation, per target
 
-`scripts\vm-matrix\README.md`, "The post-release run", is the procedure; per
-target: `prepare-image.ps1 -Target <id> -Clone -FreshCopy`, `-Boot -Xfer`,
-install in the guest, `-Status`, (`-Attach` per class on 98), clean shutdown
-(`quit` at the monitor on the NT ones), `-Stamp`. Build first:
-`build-driver.cmd qemu`, `build-driver.cmd qemu -amd64`, `make-package.ps1
--Flavor qemu` and `-Arch amd64`, `gen-offsets.ps1` and `-Arch amd64`.
+`scripts\vm-matrix\README.md`, "The post-release run", is the procedure. Build
+first:
+- `build-driver.cmd qemu` and `build-driver.cmd qemu -amd64`
+- `make-package.ps1 -Flavor qemu`, with and without `-Arch amd64`
+- `gen-offsets.ps1`, with and without `-Arch amd64`
 
-**`vm\fresh-2b.img` was re-cloned today and booted once for prep, then quit
-unfinished - it is unstamped and half-prepared.** `-Clone -FreshCopy` again.
+Then for each target (`2a-fresh`, `2b-fresh`, `xp64-fresh`, `win7-fresh`):
+1. `prepare-image.ps1 -Target <id> -Clone -FreshCopy`
+2. `-Boot -Xfer`, then install in the guest
+3. `-Status`, and on Windows 98 `-Attach` per device class
+4. A clean shutdown (`quit` at the monitor on the NT guests)
+5. `-Stamp`
+
+Then run
+`run-matrix.ps1 -Config scripts\vm-matrix\matrix.config.psd1 -PostRelease`.
+
+- `vm\fresh-2a.img` and `fresh-2b.img` are stamped `1.0.2.0`, so both need
+  re-preparing. **`fresh-2b.img` was re-cloned, booted once and left
+  half-prepared**; run `-Clone -FreshCopy` on it again.
+- Not yet measured on the new guests:
+  - the liveness probe (PIT IRQ0 on an MP HAL);
+  - the boot/ready deadlines under TCG (600 s);
+  - whether the keep-alive mouse binds before the ready poll.
+- The `ExpectNoDriver` rows for uas, serial and braille on the two new targets
+  are guesses. The first run corrects them.
+
+## Owner's rules for the download readme (2026-09-18)
+
+These apply to the `make-release.ps1` template and to the `history.md` entry
+the readme embeds:
+- The top is a point-form OS list.
+- The log request asks for FULL.LOG, and for PROBE.LOG only if the full run
+  did not finish.
+- Reporting text goes in an unnumbered "ISSUE REPORTING" section; there is no
+  "what the version number means" section.
+- **Do not name Windows Server 2003.**
+- **Do not name F8.** Say "driver signature enforcement must be disabled".
+
+The release notes and README still name both, and the owner has not asked to
+change them. A readme change after the cut means a re-cut with `-Force`, and
+the recorded asset size in the roadmap, `run-22.md` and this file must follow.
+An editor tab left open on `releases\1.1.0.0\readme.txt` shows the old file
+after a re-cut: the cut replaces the directory, so reopen the tab.
+
+## Traps met this session
+
+- Driving Codex: see `.claude/memory/codex-plugin-invocation-here.md`.
+  **Launch it from the PowerShell tool directly**; through
+  `bash -> powershell -Command` the job was lost.
+- A PowerShell `ReadAllText`/`WriteAllText` edit must keep each file's
+  BOM and CRLF:
+  - `scripts\inf-gate\test-inf-checks.ps1` has a BOM.
+  - A LF-only search string misses a CRLF file.
+  - Normalise to LF, replace, then restore the line endings.
+- The INF gate's self-test had the release date typed in (now a regex).
+  If a gate self-test fails right after a date or version bump, look for a
+  hard-coded literal first.
 
 ## Guest-driving notes (see the memories for detail)
 
-- NT guests (XP x64, Vista, 7) and this session's XP x86: keyboard **US
-  Dvorak** - `sendkey` names QWERTY positions (Win+R is `meta_l-o`; Alt+C is
-  physical `i`). Login `test` / `test`.
-- XP and Vista apply pointer acceleration; relative moves in 3-5 unit steps
-  (~0.74-0.8 ratio). `mouse_move` goes to the newest QEMU mouse - never move
-  the pointer while a USB mouse under test is suspended; drive by keyboard.
-- UAC and the unsigned-driver prompts take a click (Vista/7) or the accelerator.
-- Harness for 22.12 (b): `out\post-release\task22-12b\` (git-ignored) - launchers
-  `xp-b.cmd`, `vista-b.cmd`, helpers `mon.ps1`, `type.ps1`, `goto.ps1`, `rel.ps1`;
-  overlays in `vm\t2212\` (throw-away, ~7 GB, safe to delete).
+- NT guests (XP x86 and x64, Vista, 7) use **US Dvorak**. `sendkey` names
+  QWERTY positions: Win+R is `meta_l-o`, and Alt+C is physical `i`. Log in
+  as `test` / `test`.
+- XP and Vista apply pointer acceleration. Make relative moves in 3-5 unit
+  steps (a ratio of about 0.74-0.8).
+- `mouse_move` goes to the newest QEMU mouse. Never move the pointer while a
+  USB mouse under test is suspended; drive by keyboard instead.
+- UAC and the unsigned-driver prompts take a click (Vista/7) or the
+  accelerator key.
+- The 22.12 (b) harness is in `out\post-release\task22-12b\` (git-ignored):
+  - launchers `xp-b.cmd` and `vista-b.cmd`;
+  - helpers `mon.ps1`, `type.ps1`, `goto.ps1` and `rel.ps1`;
+  - overlays in `vm\t2212\` (throw-away, about 7 GB, safe to delete).
