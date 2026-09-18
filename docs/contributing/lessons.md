@@ -285,13 +285,14 @@ usbport build called it.
 **Superseded in part on 2026-09-19 (roadmap task 22.9, `runs/run-22.md`):
 the row fails alone under QEMU 11.1.0.** On `fresh-2a.img` at
 `base-1.1.0.0-qemu`, with the `1.1.0.0` qemu build and no other guest or
-OneDrive process on the host, the replug read the same signature three
-times out of three under 11.1.0 (`v11.1.0-12130-ge470268ff4`) and passed
-both legs twice out of twice under 11.0.0 (`v11.0.0-12122-ga4bb4b10c9`),
-the audio group alone and the two versions alternated. So the emulator
-version is a variable this entry did not have, and "only with a second
-guest" is true of the QEMU it was measured on, not in general. What in
-11.1.0 changes it is not read. The rest of the entry stands as the record
+OneDrive process on the host, the replug read the same signature in four
+of five solo runs under 11.1.0 (`v11.1.0-12130-ge470268ff4`; the fifth
+passed both legs) and passed both legs in three of three under 11.0.0
+(`v11.0.0-12122-ga4bb4b10c9`), the audio group alone and the two versions
+alternated. So the emulator version is a variable this entry did not have
+- it makes the failure far more likely, it does not decide it - and "only
+with a second guest" is true of the QEMU it was measured on, not in
+general. What in 11.1.0 changes it is not read. The rest of the entry stands as the record
 of the earlier readings.
 
 Observed between 2026-09-06 and 2026-09-07 on the development host, QEMU

@@ -1769,7 +1769,8 @@ Owed:
       new targets' `ExpectNoDriver` entries are guesses the first run
       corrects. **First run 2026-09-19** (`runs/run-22.md` 22.9): Windows
       2000 PASS; XP x64 against only on `usb-net/fs`; Windows 98's audio
-      replug fails under QEMU 11.1.0 and passes under 11.0.0; **Windows 7
+      replug fails in four of five solo runs under QEMU 11.1.0 and passes in
+      three of three under 11.0.0; **Windows 7
       x86 bugchecks (`STOP 0x7E` in usbport's USB 2.0 budgeter) with a
       Full-Speed hub on a root port and a mouse behind it** - issue 6
       section 5's residual, the owner's to decide against `1.1.0.0`

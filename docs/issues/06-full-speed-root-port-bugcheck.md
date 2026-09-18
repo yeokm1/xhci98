@@ -236,9 +236,12 @@ what a function does with an empty list, not whether the list is empty.
   `usb-mouse` behind it stops the guest with `STOP 0x7E` in
   `usbport!Allocate_time_for_endpoint`, reached from
   `USBPORT_SelectConfiguration` through the USB 2.0 bus-time budgeter. The
-  same topology passed on Windows 2000 and XP x64 in the same run. Why the
-  budgeter's pointer is bad is not read; Vista and the x64 half were not
-  tried. Open, and the owner's to decide against release `1.1.0.0`.
+  same topology passed on Windows 2000 and XP x64 in the same run. The
+  pointer is a NULL transaction translator plus 4: the mouse behind the
+  believed-High-Speed 1.1 hub gets no TT, `USBPORT_AllocateBandwidthUSB20`
+  passes the NULL on, and the budgeter adds 4 to it (static, `runs/run-22.md`
+  22.9). Vista and the x64 half were not tried. Open, and the owner's to
+  decide against release `1.1.0.0`.
 
 ## 7. Lessons the record kept
 

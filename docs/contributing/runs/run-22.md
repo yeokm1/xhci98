@@ -1229,11 +1229,12 @@ TCG unless a line says otherwise. The four reports are in
   replug**, the second arrival never addressed - the 20.7 signature (connect
   change raised, no port reset asked for), every fault counter zero; 1:23:04,
   run alone. `lessons.md`'s entry for this row said it fails only with a
-  second guest beside it. **Here it failed alone, and the variable is the
-  emulator**: the audio group by itself, same image, stamp, binary and
-  host, alternating - QEMU 11.1.0 replug FAIL three times out of three, QEMU
-  11.0.0 (`v11.0.0-12122-ga4bb4b10c9`) PASS both legs twice out of twice.
-  `lessons.md` carries the new reading.
+  second guest beside it. **Here it failed alone, and the emulator version
+  is a variable**: the audio group by itself, same image, stamp, binary and
+  host, alternating - QEMU 11.1.0 replug FAIL in four of five runs (the
+  fifth, the owner's requested re-run, passed), QEMU 11.0.0
+  (`v11.0.0-12122-ga4bb4b10c9`) PASS both legs in three of three. It skews
+  the row; it does not decide it. `lessons.md` carries the new reading.
 - **`win7-fresh` (Windows 7 x86): FAIL**, 17 rows, 3 NODRIVER expected, 1
   not reached, 4 against, 1:32:00. HID, storage, bot, ccid, u2f and the plain
   hub rows PASS; uas, serial, braille NODRIVER as guessed; `usb-net/fs`
@@ -1276,10 +1277,23 @@ TCG unless a line says otherwise. The four reports are in
   is **issue 6 section 5's residual topology** - a hub with no transaction
   translator on a root port, with a Full-Speed device behind it - which
   batch 7b-V0 measured harmless on Windows 98 and 2000 and which the same
-  churn passed on 2000 and XP x64 in this run. Why the budgeter's pointer is
-  4 is not read; issue 6's open question (why a believed-High-Speed 1.1 hub
-  gets a TT record) is the nearest one. Vista, and Windows 7 and Vista x64,
-  were not tried. Evidence `out\post-release\1.1.0.0-win7-hub-diag\`: the
+  churn passed on 2000 and XP x64 in this run. **Why the pointer is 4**
+  (static, the public PDB, read after the owner chose to measure more):
+  `USBPORT_AllocateBandwidthUSB20` hands the budgeter the endpoint's
+  transaction translator as `[ep+1Ch] ? [[ep+1Ch]+38h] : 0` (`0x23b26`-`0x23b3f`)
+  - it sees a missing TT and passes NULL on; `USB2LIB_AllocUsb2BusTime`
+  takes the schedule pointer as `TT + 4` for a Full or Low Speed endpoint
+  and `bus + 414h` for High Speed, and `Set_endpoint` stores it at `+0Ch`;
+  so a NULL TT is exactly the `4` read at the fault, and the object's other
+  words are the mouse's endpoint (maximum packet 4, period 8). The mouse has
+  no TT because the driver reports every root-port device as High Speed
+  (issue 6's fix), which makes the Full-Speed hub look High Speed to usbport,
+  while that hub's own descriptor offers no TT and the mouse's speed comes
+  from the real hub. What this predicts and has not been measured: any Full
+  or Low Speed periodic endpoint behind a USB 1.1 hub faults on this usbport,
+  and a bulk-only device there may not reach the budgeter; a Full-Speed
+  device directly on a root port never needs a TT, which is why every HID row
+  passed. Vista, and Windows 7 and Vista x64, were not tried. Evidence `out\post-release\1.1.0.0-win7-hub-diag\`: the
   stop screen, the registers, the whole guest memory as ELF
   (`win7-bsod-mem.elf`, 2.16 GB), both logs.
 - **22.12 (d) cannot be read off these rows.** It needs isochronous
