@@ -1712,7 +1712,7 @@ and every reading, box by box.
 | 22.7 | the charset gate on tracked source |
 | 22.8 | what a cut needs that no gate supplies: the date 2026-09-18, the history entry, the release notes, README, the issue forms |
 | 22.9 | the primary targets unchanged, plus XP x64 and Windows 7 x86 - open |
-| 22.10 | the cut, and the install route read from the asset: cut 2026-09-18; leg 5 (XP x64) passed, the other eight open |
+| 22.10 | the cut, and the install route read from the asset: cut 2026-09-18; legs 5 (XP x64) and 7 (Windows 7 x64) passed, the other seven open |
 | 22.11 | issue 5's mechanism replaced by `USB_MINIPORT_FLAGS_DISABLE_SS` |
 | 22.12 | the guest readings the 2026-09-17 audit fixes owe; (b) done on Vista x86, (c) on the Windows 2000 SMP guest, (a) on XP x64 - open |
 
@@ -1773,7 +1773,11 @@ Owed:
       (the two-field line took `Xhci.Dev` on NT 5.2, the Logo prompt,
       every clause), **and again on the ProductName re-cut the same
       evening**, whose binaries were measured code-identical to every one
-      read before, so 22.12 (a) and (c) carry over (`runs/run-22.md`); what stays open is the rest - then the asset read on nine
+      read before, so 22.12 (a) and (c) carry over (`runs/run-22.md`); **leg 7, the
+      amd64 package on Windows 7 x64, passed the same evening** through the
+      committed INF (`XhciModels.NTamd64.6.0`, `[Xhci.Dev6.NTamd64]`), the
+      prompt recorded - "Windows can't verify the publisher of this driver
+      software", taken with "Install this driver software anyway"; what stays open is the rest - then the asset read on nine
       install legs - the four x86 ones with full device clauses, the amd64
       package on XP x64, Vista x64 and Windows 7 x64, and the x86 package on
       Vista x86 and Windows 7 x86, recording the unsigned-driver prompt - and

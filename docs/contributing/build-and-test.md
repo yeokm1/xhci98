@@ -2513,10 +2513,14 @@ as a surprise. **On 2026-09-13 issue 7's fix was run on both, and on both
 **F8 is what every run has used, and it is the only route.** `TESTSIGNING`
 was never tried on either guest and was removed from the roadmap by the owner
 on 2026-09-16: test-signing mode loads a test-signed driver, and this package
-is not signed. **Note that QEMU's
-monitor `sendkey f8` is ignored on these guests' boot path**: F8 has to be
-pressed at the console, and a `system_reset` reaches "Starting Windows" within
-about 25 seconds, so be at the keyboard before resetting.
+is not signed. **A single QEMU
+monitor `sendkey f8` is too late on these guests' boot path**, and a
+`system_reset` reaches "Starting Windows" within about 25 seconds. What does
+work, read on Windows 7 x64 on 2026-09-18 (roadmap 22.10, leg 7), is sending
+`sendkey f8` every 200 ms from the moment QEMU starts for about 30 seconds: the
+Advanced Boot Options menu comes up and waits, and `up` from *Start Windows
+Normally* reaches *Disable Driver Signature Enforcement*. Otherwise press F8
+at the console.
 
 **Getting files in and out.** The transfer drive is VVFAT `snapshot=on`, so the
 guest cannot write anything back to the host through it. Use the floppy:

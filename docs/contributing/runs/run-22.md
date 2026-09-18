@@ -1321,7 +1321,8 @@ Harness `out\post-release\task22-10\` (git-ignored: `xp64.cmd`, the unzipped
 asset, screenshots, the disk extract); disks `vm\t2210\`; logs
 `vm\t2210-xp64-l5-*`. 22.12 (a) was read on the same clean copy afterwards,
 from the `qemu` build, because `release` cannot show it (22.12 below).
-**Legs 6 to 9 and the four x86 legs have not been taken.**
+**Legs 6, 8 and 9 and the four x86 legs have not been taken**; leg 7 is
+below.
 
 Whether the cut needed a re-cut was checked the same evening, because the
 published binaries (14:33) predate the last `src\` commit (`26162ae`, 14:45).
@@ -1360,6 +1361,71 @@ disable / enable / uninstall / rescan all clean, the port-`0xE9` log 0 bytes,
 and QEMU's trace `slot_enable` 9, `slot_address` 20, `slot_configure` 12 - the
 first run's counts exactly. Logs `vm\t2210-xp64-l5b-*`.
 
+**Leg 7, Windows 7 x64, 2026-09-18 evening: passed every clause, no finding.**
+The guest was `vm\win7-x64.img` @ `win7-x64-clean-install`, copied read-only
+with `qemu-img convert -l` and booted through a throw-away overlay: `-smp 4`,
+`-accel tcg,thread=multi`, `qemu-xhci,p3=0`, the 22.11 Windows 7 x64 machine
+otherwise. The transfer drive was the unzipped asset's `release-x64\`
+(`xhci98.sys` `98A5A32A...`, 96,768 B, identical to `releases\1.1.0.0\release-x64`;
+its INF identical too). The boot took F8 -> Disable Driver Signature
+Enforcement. **`sendkey f8` over the monitor does reach the Advanced Boot
+Options menu** if it is sent every 200 ms from the moment QEMU starts;
+"Vista x64 and Windows 7 x64 target VMs" had recorded it as ignored, which is
+true of a single key sent too late.
+
+- the install: Device Manager -> *Universal Serial Bus (USB) Controller*
+  under *Other devices* -> *Update Driver Software* -> *Browse my computer
+  for driver software* -> `E:\` (`D:` is the DVD). **The prompt is a Windows
+  Security dialog headed "Windows can't verify the publisher of this driver
+  software"**, with two choices, "Don't install this driver software" (which
+  has the focus) and "Install this driver software anyway"; its details say
+  the software "does not have a valid digital signature that verifies who
+  published it". **Install this driver software anyway took it**:
+  `setupapi.dev.log` records `Driver package does not contain a catalog
+  file, but user wants to install anyway.`, publishes `oem2.inf`, and the
+  wizard ends "Windows has successfully updated your driver software". No CD
+  asked for, no restart asked for
+- **a second dialog follows on x64, and it is not a refusal**: a Program
+  Compatibility Assistant box, "Windows requires a digitally signed driver",
+  naming the driver, its service, the publisher and
+  `C:\Windows\System32\...\xhci98.sys`. It appeared on this boot with
+  enforcement disabled, after the root hub had already installed; Close
+  dismisses it and the driver runs
+- a first attempt on the same boot failed, and it was the operator's: the
+  answer to the Windows Security dialog was taken as "Don't install" (a
+  monitor pointer click that missed), which the log records as `...and user
+  does not want to install driver package` and the wizard reports as "A file
+  could not be verified because it does not have an associated catalog signed
+  via Authenticode(tm)" (`0xE000023F`). The retake above chose "Install
+  anyway" and went through. That wizard message is therefore what a user who
+  declines the dialog sees, not a property of the package
+- **the committed INF on Windows 7 x64**: the driver node is
+  `xhci98.inf:XhciModels.NTamd64.6.0:Xhci.Dev6:1.1.0.0:pci\cc_0c0330` and
+  the install runs `[Xhci.Dev6.NTAMD64]` and `[Xhci.Dev6.NTAMD64.Services]`,
+  copying `xhci98.sys` alone to `System32\drivers`. The four OS-supplied files
+  were already on disk before the install (`usbport.sys` 325,120 B,
+  `usbhub.sys` 343,040 B, `usbd.sys` 7,936 B, `usbui.dll` 101,376 B)
+- registered and started: **USB 2.0 eXtensible Host Controller (xhci98)**
+  and **USB Root Hub**, no bang
+- the three devices, hot-plugged over the monitor: **USB Input Device**
+  (Human Interface Devices), **USB Mass Storage Device**, **USB Composite
+  Device** and **Audio Device** (Sound, video and game controllers), no bang;
+  mouse and storage at 480 Mb/s, audio at 12 Mb/s
+- disable (every child gone, no restart prompt), enable (all back), uninstall
+  with the driver software kept (the USB class gone, no restart prompt),
+  rescan (reinstalled from the driver store in two seconds through the same
+  `Xhci.Dev6.NTAMD64`, **with no prompt**; all back, no bang). The device
+  sequence was driven by the owner at the console
+- the flavour, read 21.5's way: the port-`0xE9` log stayed at **0 bytes**,
+  and QEMU's trace shows `slot_enable` 9, `slot_address` 18,
+  `slot_configure` 10 - three enumerations of three devices (install,
+  enable, rescan)
+
+Harness `out\post-release\task22-10\` (`win764.cmd`, monitor 57131; the
+guest's logs came off on a FAT12 floppy image, `mkfloppy.py` and
+`getlog.cmd`, because the VVFAT transfer drive is read-only); disks
+`vm\t2210\`; logs `vm\t2210-win764-l7-*`.
+
 **The order the rest of the phase is taken in** (2026-09-18). Two rules shape
 it. Risk first: a finding re-cuts the release, and every leg already taken on
 the changed binary is taken again - so a reading that can amend the release
@@ -1373,7 +1439,7 @@ everything owed on it is taken in that session.
    engine; a finding there is an INF change, which leaves the `.sys` files
    but retakes every leg, since every leg installs through the INF. The NT
    6.x path of the same file already ran from a staged copy on 2026-09-13.
-2. Windows 7 x64 (leg 7).
+2. **Done 2026-09-18, no finding.** Windows 7 x64 (leg 7).
 3. Windows 7 x86 (leg 9).
 4. Vista x64 (leg 6), with 22.12 (a): the `release` flavour writes no trace,
    so revert to the clean snapshot, install the `qemu` package, and read
