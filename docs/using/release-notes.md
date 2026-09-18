@@ -23,9 +23,8 @@ x64. That one is a separate build and a separate pair of directories with an
 INF of its own; it is not the same file under another name, and the 32-bit
 driver will not install on a 64-bit Windows or the other way round. Picking
 the wrong one is harmless - Windows finds no driver in that directory and
-says so. **On Vista x64 and Windows 7 x64 it loads only if you press F8 and
-choose Disable Driver Signature Enforcement every time the machine starts**;
-see below.
+says so. **On Vista x64 and Windows 7 x64 it loads only while driver signature
+enforcement is disabled**; see below.
 
 It is a miniport for `usbport.sys`, not a whole USB stack. It plugs in
 underneath Microsoft's USB port driver the same way the in-box `usbehci.sys`
@@ -75,17 +74,14 @@ and a rescan survived. None of them has run on real hardware. These systems
 expect a newer interface from a USB host controller driver than Windows 2000
 and XP do, and the driver presents that interface on them and only on them.
 
-**On Windows Vista x64 and Windows 7 x64 the driver loads only on a boot with
-driver signature enforcement turned off, and it has to be turned off at every
-boot.** Those systems refuse to load a kernel-mode driver that is not signed,
-and this one is not. Press F8 as Windows starts, before its logo appears, and
-choose *Disable Driver Signature Enforcement*. That choice lasts for that one
-boot only: on the next start, unless you press F8 and choose it again, the
-driver does not load, the controller shows an error in Device Manager (Code
-39, on the Vista x64 machine where that boot was looked at), and
+**On Windows Vista x64 and Windows 7 x64 driver signature enforcement must be
+disabled for the driver to load.** Those systems refuse to load a kernel-mode
+driver that is not signed, and this one is not. On any start where enforcement
+is in force, the driver does not load, the controller shows an error in Device
+Manager (Code 39, on the Vista x64 machine where that boot was looked at), and
 nothing plugged into it works inside Windows, a USB keyboard or mouse
-included. The machine can never start unattended with working USB. 32-bit Windows Vista and Windows 7 do not
-refuse unsigned drivers, and ask none of this.
+included. 32-bit Windows Vista and Windows 7 do not refuse unsigned drivers,
+and ask none of this.
 
 ## What this is not
 
@@ -105,8 +101,8 @@ refuse unsigned drivers, and ask none of this.
   not require kernel-mode drivers to be signed. 32-bit Windows Vista and
   Windows 7 install and load it too. Every 64-bit Windows
   from Vista onward requires the signature before it loads a driver: on Vista
-  x64 and Windows 7 x64 this one loads only on a boot where signature
-  enforcement was turned off from the F8 menu, as "What this is" describes,
+  x64 and Windows 7 x64 this one loads only while driver signature
+  enforcement is disabled, as "What this is" describes,
   and no 64-bit Windows after Windows 7 is supported.
 - On Windows 98 it is not standalone. Windows 98 has no `usbport.sys` of its
   own. **A USB 2.0 stack must be installed first**, NUSB (the one this
@@ -128,7 +124,7 @@ refuse unsigned drivers, and ask none of this.
 
 | | |
 |---|---|
-| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000), 32-bit Windows XP (SP3), Windows XP x64 / Server 2003 x64 (SP2), and Windows Vista (SP2) and Windows 7 (SP1) in both architectures, in virtual machines only, see "What this is". Vista x64 and Windows 7 x64 load the driver only on a boot with signature enforcement disabled from the F8 menu. Nothing after Windows 7. |
+| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000), 32-bit Windows XP (SP3), Windows XP x64 / Server 2003 x64 (SP2), and Windows Vista (SP2) and Windows 7 (SP1) in both architectures, in virtual machines only, see "What this is". Vista x64 and Windows 7 x64 load the driver only while driver signature enforcement is disabled. Nothing after Windows 7. |
 | USB stack | Windows 98: NUSB 3.3, installed before this driver (NUSB 3.6 ships the identical USB 2.0 stack and has been observed working, in a virtual machine only; so has the SweetLow stack that Windows 98 QuickInstall 1.0.1 and later bundle, which also removes the first known limitation below; see the README's installation steps). Windows ME: SweetLow's stack only; its own USB stack has no `usbport.sys`, and on it the driver installs and shows Code 2. Do not install NUSB on Windows ME, it is a Windows 98 SE package. Windows 2000: SP4's native stack, or the standalone USB 2.0 update KB319973. **Do not install NUSB on Windows 2000.** Windows XP, 32-bit or x64: its own USB stack, nothing to install; NUSB is not for it either. Windows Vista and Windows 7, either architecture: their own USB stack, nothing to install. |
 | Controller | An xHCI controller presenting PCI class code `0C0330`, with at least one USB 2.0 protocol port, a BAR0 mapped below 4 GB, and a legacy interrupt pin. Neither target has an MSI path, so a controller reporting `Interrupt Pin = 0` cannot be driven at all. |
 | Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk (`C:\WINDOWS\OPTIONS\CABS`). The install copies Windows' own `usbd.sys`, `usbhub.sys` and `usbui.dll` from it. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the hard disk; the virtual machine tried asked for nothing. Windows XP: nothing; `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll` all come out of `sp3.cab` in the driver cache every install has. Windows XP x64: nothing either, and the guest asked for nothing; the same four come out of `Driver Cache\amd64`, `usbport.sys` and `usbhub.sys` from `sp2.cab` and `usbd.sys` and `usbui.dll` from `driver.cab` beside it. Windows 2000: nothing either; the same three out of `sp4.cab`, and `usbui.dll` out of `driver.cab` beside it in that cache. Windows Vista and Windows 7: nothing; every install already has all four files, and the package asks Windows to copy none of them there. |
@@ -191,9 +187,8 @@ The package is a directory holding two files, `xhci98.inf` and
   which you cannot supply, and cancelling ends it with no message and
   without installing the driver, although `xhci98.sys` is left in
   `System32\drivers`. On Vista x64 and Windows 7 x64 the install
-  can be done on an ordinary boot, but the driver starts only after a
-  restart with *Disable Driver Signature Enforcement* chosen from the F8
-  menu, and only on such a boot.
+  can be done on an ordinary boot, but the driver starts only while driver
+  signature enforcement is disabled.
 
 Four files the driver depends on are not in the package because they are
 Windows' own: `usbd.sys`, which the USB 2.0 root hub imports on both
@@ -341,9 +336,8 @@ because a user meets them through this driver.
   disable applies live, and Windows ME under SweetLow's stack, with the same
   audio device attached, disabled live in the same runs.
 - Windows Vista x64 and Windows 7 x64: the driver is not signed, so it loads
-  only on a boot where *Disable Driver Signature Enforcement* was chosen from
-  the F8 menu, and that choice has to be made again at every start. On any
-  other boot the driver is not loaded and nothing on the controller works
+  only while driver signature enforcement is disabled. On any other boot the
+  driver is not loaded and nothing on the controller works
   (Device Manager showed Code 39 on Vista x64). See "What this is". Measured
   in virtual machines, 2026-09-10 to 2026-09-16.
 - Windows 98: if the driver ever fails while starting the controller, the

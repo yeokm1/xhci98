@@ -73,7 +73,7 @@ To submit logs with a [bug or hardware report](https://github.com/yeokm1/xhci98/
 These steps describe the `1.1.0.0` download. It has four driver directories: `release-x86\` and `debug-x86\` for 32-bit Windows (98 SE, ME, 2000, XP, Vista, 7), and `release-x64\` and `debug-x64\` for 64-bit Windows (XP x64, Server 2003 x64, Vista x64, 7 x64). The readme inside the download says the same; read that rather than this if the two disagree.
 
 1. Put the unzipped package somewhere the machine can read: a floppy, a CD, a shared folder. `release-x86\` or `release-x64\` is the one to install. The `debug-` directories hold the same driver built for troubleshooting, only install if asked.
-2. On Windows 98 SE, install a USB 2.0 stack first (NUSB 3.3, or SweetLow's). On Vista x64 and 7 x64, start Windows with F8 -> Disable Driver Signature Enforcement, at every boot, as the driver is unsigned.
+2. On Windows 98 SE, install a USB 2.0 stack first (NUSB 3.3, or SweetLow's). On Vista x64 and 7 x64, driver signature enforcement must be disabled, as the driver is unsigned.
 3. In Device Manager, find the unrecognised xHCI controller. It sits unclaimed with a yellow mark, usually under "Other devices" such as "Universal Serial Bus Controller".
 4. Properties -> Driver -> Update Driver -> Specify a location/Have Disk -> the `release-x86\` or `release-x64\` directory.
 5. It installs as "USB 2.0 eXtensible Host Controller (xhci98)" with a "USB Root Hub" underneath it, and neither should carry a warning mark.
