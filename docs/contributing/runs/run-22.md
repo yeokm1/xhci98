@@ -1279,6 +1279,37 @@ section 5.4 is the reasoning and every address.
   drivers; a third-party holder of the USBDI interface is not something
   a reading here can enumerate
 
+## 22.12 - the guest readings the 2026-09-17 audit fixes owe
+
+**22.12 - the guest readings the 2026-09-17 audit fixes owe.** Written
+2026-09-18, open. The audit of 2026-09-17 (root `handoff.md`, deleted once
+answered; the memory `repo-audit-2026-09-17` and the commit messages from
+`188cb32` on branch `audit-2026-09-17` are the record) fixed the driver in
+four places whose effect only a guest shows. The roadmap's owed box names
+the four; this section takes their readings as they come.
+
+- [ ] (a) amd64 service block: `usbport services written=16` on XP x64 and
+      Vista x64 from the corrected verifier (`xhciVerifyPacketAfterRegistration`
+      walks `PVOID`s; design 11 sections 6.3 and 6.5 carry the qualification
+      that every earlier amd64 reading was eight)
+- [ ] (b) port suspend and resume: on the XP guest, a device usbhub
+      selectively suspends and resumes with no status query between the two
+      operations; expect `C_PORT_SUSPEND` reported once, `RhPortsResumed`
+      +1, `RhResumesAbandoned` unchanged, and no second `U0|LWS` write
+      (`xhciRhFoldReading`, `src/xhci_rh.c`)
+- [ ] (c) recovery under a reset in progress: inject a controller fault
+      through the gdbstub as Phase 20's SMP recoveries were, with CNR or
+      HCRST held; expect `RecoveryLastStep = XHCI_INIT_STEP_RESET`, zero
+      operational-register writes, and the next poll's retry completing
+      through one HCRST (`XhciRecoverController`, `xhciReset`,
+      `XhciMaskInterrupts`)
+- [ ] (d) isochronous counters on a QEMU audio row: `IsoTailEventsTotal`
+      moving with split packets, `UnmatchedEventsTotal` staying at zero,
+      `OrphanedGroups` at zero; a group swept by the next group's tail on a
+      normal short read is the audit's B10 (QEMU reporting one event per
+      TD) and would want a settle like `XhciXferDrainSettled` for an
+      all-answered group
+
 ## The checkpoint, as the roadmap carried it
 
 Checkpoint, the first half. Every clause, on **each** of the two guests, or

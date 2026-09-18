@@ -1714,6 +1714,7 @@ and every reading, box by box.
 | 22.9 | the primary targets unchanged - open |
 | 22.10 | the cut, and the install route read from the asset - open |
 | 22.11 | issue 5's mechanism replaced by `USB_MINIPORT_FLAGS_DISABLE_SS` |
+| 22.12 | the guest readings the 2026-09-17 audit fixes owe - open |
 
 Owed:
 
@@ -1731,6 +1732,32 @@ Owed:
       neither has run the `release` flavour, and Windows 7 x86 has not
       installed through the committed INF, so the eighth and ninth legs
       still take both
+- [ ] 22.12: the 2026-09-17 audit (branch `audit-2026-09-17`, `188cb32` and
+      the six Codex rounds after it) changed the driver in four places that
+      only a guest can read, and none has been read: (a) the post-registration
+      verifier walks the service block as pointers, so an amd64 guest's
+      `usbport services written=16` line must be read again on XP x64 and
+      Vista x64 - every earlier amd64 reading of that line covered eight;
+      (b) the root-hub port shadow is folded before the SUSPEND and RESUME
+      writes and in the resume timer, so a SET_FEATURE(PORT_SUSPEND) /
+      CLEAR_FEATURE(PORT_SUSPEND) pair with no status query between must
+      show `C_PORT_SUSPEND` latched and `RhPortsResumed` moving once, on
+      XP under `usbhub.sys`'s selective suspend (port suspend has never
+      been measured on any target; the host vector
+      `test_root_hub_resume_unqueried` is all there is); (c) the recovery
+      path refuses at `XHCI_INIT_STEP_RESET` while USBSTS.CNR or
+      USBCMD.HCRST reads set and `xhciReset` stalls 1 ms after HCRST - the
+      SMP recovery injection through the gdbstub (Phase 20's HCE route) is
+      the way to see the refusal and the counters `RecoveryLastStep` /
+      `RecoveryLastStatus`; (d) the isochronous counters `IsoTailEvents` and
+      `OrphanedGroups` replace what `UnmatchedEvents` and
+      `PlacementFailures` were charged, so a QEMU audio row must show
+      `UnmatchedEventsTotal` staying at zero across a split isoch packet,
+      and, if a group is ever swept by the next group's tail
+      (`SweptTransfers` moving on a normal short read), that is the
+      audit's B10 and wants the settle it describes. None of these gates
+      22.10: what they read is already in the tree the cut publishes, and
+      a wrong reading amends the release, as Phase 15's rule has it
 
 Checkpoint, the guest half: on each of Vista x86 and Windows 7 x86 the package
 installed, the driver registered, started and passed its No Op self-test, the
@@ -1744,7 +1771,7 @@ holding exactly what the packager staged, with no Microsoft file; and the
 prose no gate reaches bumped. Not a checkpoint: a `qemu` reading standing in
 for the published `release` binary, the acceptance test, or the upload.
 
-Records: `runs/run-22.md`; `design/11-x64-targets.md`;
+Records: `runs/run-22.md` (22.12's readings go there too); `design/11-x64-targets.md`;
 `usb-xhci-info/usbport-miniport-abi.md`; issues 05, 07 and 08;
 `build-and-test.md`; `lessons.md`; `releases/history.md`;
 `runs/run-22-post-release/` (written by 22.9).
