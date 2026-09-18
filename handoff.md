@@ -23,7 +23,47 @@ can still re-cut it under the same number with `make-release.ps1 -Force`
 | 22.12 (c) recovery refusal under CNR/HCRST, (d) iso counters | Open; both follow the cut. (d) comes off 22.9's audio rows. |
 | Acceptance test + upload | Not a roadmap task: `docs/using/release-acceptance-test.md`, run by hand twice (a fresh VM and a physical machine), then the owner uploads. |
 
-## Next: 22.10's nine install legs
+## Suggested order
+
+Two rules shape this order:
+- **Risk first.** A finding re-cuts the release, and every leg already taken
+  on the changed binary has to be taken again. So the legs that have never
+  been read go first, and the four legacy x86 legs, read many times already,
+  go last.
+- **One guest at a time.** Each guest is booted once and everything owed on
+  it is taken in that session.
+
+1. **Windows 7 x64** (leg 7). Its first install through the committed amd64
+   INF, and the first `release` flavour on it.
+2. **Windows 7 x86** (leg 9). Its first install through the committed x86
+   INF, and its first `release` flavour.
+3. **Vista x64** (leg 6), then in the same session **22.12 (a)**. The
+   `release` flavour writes no trace, so revert to the clean snapshot,
+   install the `qemu` package, and read `usbport services written=16` off the
+   port-`0xE9` log.
+4. **Vista x86** (leg 8), including the unsigned-driver prompt. Re-read
+   22.12 (b) in the same session, by the same `qemu`-package route if the
+   `release` flavour cannot show it.
+5. **XP x64** (leg 5). Its first install through the two-field `[Manufacturer]`
+   line; then 22.12 (a) by the same `qemu` route as step 3.
+6. **The four x86 legacy legs** (legs 1-4): Windows 98 SE on both stacks,
+   ME, 2000 SP4 and 32-bit XP. Then check the asset's file list against
+   what the packager staged. That closes 22.10.
+7. **22.12 (c)**, the recovery refusal under CNR/HCRST, through the gdbstub.
+   It needs no install leg, so it can fill a wait anywhere above (for
+   example while a guest installs). It must be done before the acceptance
+   test, because a wrong reading amends the release.
+8. **22.9**: prepare the four fresh images and run the matrix. Its audio rows
+   give **22.12 (d)**, so (d) needs no separate run.
+9. **The acceptance test by hand**, on a fresh VM and on a physical machine,
+   then the owner uploads.
+
+If any step finds a defect: fix it, re-cut with `-Force`, and retake from
+step 1 every leg whose binary changed. An INF-only change leaves the `.sys`
+files as they are, but every leg still installs through the new INF, so
+those are retaken too.
+
+## 22.10's nine install legs (numbered as in `run-22.md`)
 
 `docs/contributing/runs/run-22.md`, section 22.10, lists each leg and what it
 must read. Every leg installs from the **unzipped asset**
