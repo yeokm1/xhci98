@@ -44,8 +44,7 @@ result below comes from virtual machines.
   machines only. On each of four guests the package installed, the three
   devices above bound, and five disable and enable cycles, a remove and a
   rescan survived. **On Vista x64 and Windows 7 x64 the driver loads only
-  when the machine is started with F8 -> Disable Driver Signature
-  Enforcement, at every boot**, because it is not signed. Install it from
+  while driver signature enforcement is disabled**, because it is not signed. Install it from
   Device Manager; right-clicking `xhci98.inf` and choosing Install does not
   work on these systems.
 - The idle suspend fix no longer writes the registry. Until now the install

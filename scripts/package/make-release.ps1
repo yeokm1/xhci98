@@ -2462,14 +2462,9 @@ other.
 "@
         $readmeArchOs = @"
 
-
-This download also carries a 64-bit driver, for Windows XP Professional x64,
-Windows Vista x64 and Windows 7 x64. It is a separate build in its own
-directories with an INF of its own, not the same file renamed, and it has
-been validated in virtual machines only - never on a real machine. It is not
-signed, so on Windows Vista x64 and Windows 7 x64 it runs only on a
-start where Disable Driver Signature Enforcement was chosen from the F8
-menu, every time (section 4).
+  - Windows XP, Vista and 7, x64, through a separate 64-bit driver. On Vista
+    x64 and 7 x64 it is unsigned, so driver signature enforcement must be
+    disabled (section 4).
 "@
         $readmeArchOsReq = @"
 
@@ -2483,10 +2478,9 @@ menu, every time (section 4).
   64-BIT WINDOWS
       The same route as the 32-bit edition of the same Windows, pointed at
       RELEASE-X64\. On Windows Vista x64 and Windows 7 x64 the install works
-      on an ordinary start, but the driver runs only after a restart with
-      F8 -> Disable Driver Signature Enforcement, and only on such a start;
-      on any other start the controller shows Code 39. Windows XP x64 needs
-      none of that.
+      on an ordinary start, but the driver runs only while driver signature
+      enforcement is disabled, as it is unsigned; otherwise the controller
+      shows Code 39. Windows XP x64 needs none of that.
 "@
         $readmeArchFiles = @"
 
@@ -2508,17 +2502,14 @@ menu, every time (section 4).
 
 Released {DATE}.{INCOMPLETE}
 
-Most x86 PCs made from around the mid 2010s onward have USB 3.0 (xHCI)
-controllers and nothing else. Windows 98 SE, Windows ME, Windows 2000,
-Windows XP, Windows Vista and Windows 7 have no support for those, and this
-driver fills that gap on their 32-bit editions. Windows 98 SE and Windows
-2000 SP4 are the two primary targets, and a release has to work on both.
-Only Windows 98 SE has been validated on real hardware; every other system
-named here has been validated in virtual machines only.{ARCHOS}
+Most PCs made from the mid 2010s onward have only USB 3.0 (xHCI) controllers,
+which older Windows cannot use. This driver drives them as USB 2.0 on:
 
-It gives you USB 2.0 speeds: High Speed, Full Speed and Low Speed. USB 3.0
-SuperSpeed is out of scope. A USB 3.0 device still works, at USB 2.0 speed,
-through the same physical connector.
+  - Windows 98 SE, ME, 2000 SP4, XP, Vista and 7, 32-bit{ARCHOS}
+
+Only Windows 98 SE has been validated on real hardware; the rest in virtual
+machines only. Speeds are USB 2.0 (High, Full and Low Speed); a USB 3.0
+device still works, at USB 2.0 speed, through the same connector.
 
 
 WHY ONLY USB 2.0, WHEN THE CONTROLLER IS A USB 3.0 ONE
