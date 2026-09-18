@@ -105,8 +105,8 @@ the readme embeds:
 - **Do not name Windows Server 2003.**
 - **Do not name F8.** Say "driver signature enforcement must be disabled".
 
-The release notes and README still name both, and the owner has not asked to
-change them. A readme change after the cut means a re-cut with `-Force`, and
+The release notes and README follow the F8 rule too (`9483496`); they still name
+Server 2003 x64, which the owner has not asked to change. A readme change after the cut means a re-cut with `-Force`, and
 the recorded asset size in the roadmap, `run-22.md` and this file must follow.
 An editor tab left open on `releases\1.1.0.0\readme.txt` shows the old file
 after a re-cut: the cut replaces the directory, so reopen the tab.
