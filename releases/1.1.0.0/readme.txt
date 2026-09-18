@@ -665,9 +665,9 @@ needed.
   The normal driver. This is the one you want.
 
       xhci98.inf
-      xhci98.sys   85,611 bytes
+      xhci98.sys   85,579 bytes
       SHA-256
-      7D07B64CE572B596221B2005CFA1B961FEBF99A14C17F2CAC909D1EE7280CDDF
+      E97FA7810B1155F3862B4194C18FD9F4FE71C5974D390940C1DC2FB48213DC7D
 
   DEBUG-X86\  - only when diagnosing a problem
 
@@ -679,18 +679,18 @@ needed.
   XHCISNAP, so you do not need this one to send a report.
 
       xhci98.inf
-      xhci98.sys   86,251 bytes
+      xhci98.sys   86,219 bytes
       SHA-256
-      C8F83B9A431E1AA5AD33B8AA0F1D87A1A4BF48C0C6ABA617B419FD12CFDF7E99
+      A3B5521A70B5BB4B03D77EDA40E9D2D7D9CDA35747144713E2C4F5846A377C21
 
   RELEASE-X64\  - INSTALL THIS ONE, on 64-bit Windows
 
   The normal driver. This is the one you want.
 
       xhci98.inf
-      xhci98.sys   97,280 bytes
+      xhci98.sys   96,768 bytes
       SHA-256
-      AD73345A7C95D9E3223417AE64023E74C7F522D554FF6506F87EC9A3B9B4F894
+      98A5A32A1C88263CEF69DF5E081E3AD595D0AFBBE3770D71D451CEC2DEF00909
 
   DEBUG-X64\  - only when diagnosing a problem
 
@@ -702,9 +702,9 @@ needed.
   XHCISNAP, so you do not need this one to send a report.
 
       xhci98.inf
-      xhci98.sys   181,248 bytes
+      xhci98.sys   180,736 bytes
       SHA-256
-      D19A17087D75332C79202A68483202A4AD1E8CC3C2FAFD123A2CC92D33DEB683
+      8BE118B2565A2A4302AD755B3B564A7F3EBB2DD947310E6B0BA5DCD5C5C79545
 
   Which pair: the -X86 directories are for 32-bit Windows and the
   -X64 ones for 64-bit Windows. If you pick the wrong one nothing
