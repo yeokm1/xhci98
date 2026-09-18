@@ -8,20 +8,18 @@ For the next session picking up Phase 22. Read `AGENTS.md` and
 | Task | State |
 |---|---|
 | 22.12 (b) root-hub port suspend/resume | **Done**, commit `16d5ad2`. Read on Vista x86 (XP and Windows 7 cannot reach it under the 0x20 flag). Found and fixed a real defect: the resume timer abandoned a port still in U3, QEMU ignores a PLS=Resume write, and Vista's usbhub bugchecked 0xFE (8, 6, 1) after 60 s. Codex: 2 rounds, converged. `runs/run-22.md` 22.12 (b) is the record. |
-| 22.9 harness extension (XP x64 + Win7 x86 as post-release targets) | **Committed with this file, NOT yet reviewed by Codex** - the launch printed "started" but no job or log was ever created. Owed: one Codex round on that commit (prompt draft below). |
+| 22.9 harness extension (XP x64 + Win7 x86 as post-release targets) | **Done and Codex-converged** (`fcbf9a1`, fixes `2dba77a`: an amd64 identity is the full high/low pair or nothing; ExpectNoDriver keys validate against `config.sample.psd1` too). Round 2: no findings. |
 | 22.9 the run itself | **Not run, and now ordered AFTER the cut** (owner, 2026-09-18). Roadmap, `run-22.md` and the cut checkpoint re-worded. |
-| 22.8 prose (history.md, release date in `xhci_version.h` and both INFs, release notes, README Install, issue forms) | Open. |
-| 22.10 the cut + nine install legs from the asset | Open. Next after 22.8. Gives 22.12 (a) (`usbport services written=16` on XP x64 and Vista x64). The Vista x86 leg also re-reads the (b) fix on the `release` flavour. |
+| 22.8 prose (history.md, release date in `xhci_version.h` and both INFs, release notes, README Install, issue forms) | **Done**, `26162ae`, date 09/18/2026. |
+| 22.10 the cut + nine install legs from the asset | **Cut done 2026-09-18 14:50** (re-cut twice with `-Force` for the owner's readme changes): `releases\1.1.0.0\`, `out\xhci98-1.1.0.0.zip` 397,087 B. **The nine install legs are NEXT and none is taken** (list in `run-22.md` 22.10). Gives 22.12 (a) (`usbport services written=16` on XP x64 and Vista x64). The Vista x86 leg also re-reads the (b) fix on the `release` flavour. |
 | 22.12 (c) recovery under CNR/HCRST, (d) iso counters | Open; both may follow the cut. (d) comes off 22.9's audio rows. |
 
 ## Suggested order
 
-1. Codex round on the harness commit (below). Fix and re-review until a round
-   returns "No actionable findings."
-2. 22.8, then 22.10 (the cut, both architectures, nine install legs).
-3. 22.9 on the cut's tree: prepare all four fresh images, run
+1. 22.10's nine install legs from the unzipped asset (the cut is done).
+2. 22.9 on the cut's tree: prepare all four fresh images, run
    `run-matrix.ps1 -Config scripts\vm-matrix\matrix.config.psd1 -PostRelease`.
-4. 22.12 (c) whenever convenient.
+3. 22.12 (c) whenever convenient.
 
 ## What the harness change did (for the review and for 22.9)
 
@@ -45,13 +43,8 @@ For the next session picking up Phase 22. Read `AGENTS.md` and
   HAL), boot/ready deadlines under TCG (set to 600 s), whether the keep-alive
   mouse binds before the ready poll.
 
-Codex prompt draft: the file `codex-229-r1.txt` from this session was in the
-session scratchpad and is gone; re-describe the commit above and ask for the
-same five areas: amd64 reads through the x86 table or a truncated address,
-PowerShell 5.1 arithmetic/parsing, Phase 10 and 2d regressions, the driver
-line's compile/IRQL rules, doc consistency. Drive Codex per
-`.claude/memory/codex-plugin-invocation-here.md` **from the PowerShell tool
-directly** - launching it through `bash -> powershell -Command` is what lost the job.
+Codex: drive it per `.claude/memory/codex-plugin-invocation-here.md` **from the
+PowerShell tool directly** - through `bash -> powershell -Command` the job was lost.
 
 ## 22.9 preparation, per target (after the cut)
 

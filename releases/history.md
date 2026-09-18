@@ -16,8 +16,8 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
 Windows Vista and Windows 7 join the targets supported in virtual machines,
 in both architectures, and the download gains a 64-bit driver for them and
-for Windows XP x64 and Windows Server 2003 x64. The package no longer writes
-any machine-wide registry value. Windows 98 SE, Windows ME, Windows 2000 and
+for Windows XP x64. The package no longer writes any machine-wide registry
+value. Windows 98 SE, Windows ME, Windows 2000 and
 32-bit Windows XP install as they did in `1.0.2.0`, from a directory with a
 new name.
 
@@ -33,13 +33,12 @@ result below comes from virtual machines.
   32-bit driver does not install on a 64-bit Windows or the other way
   round; picking the wrong directory is harmless, Windows finds no driver
   there and says so.
-- Windows XP x64 and Windows Server 2003 x64 are supported through the
+- Windows XP x64 is supported through the
   64-bit driver, in virtual machines only. An XP Professional x64 SP2 guest
   whose only USB controller was the xHCI installed it with no prompt for
   media, and bound a HID mouse, a USB mass-storage device and a composite
   audio device; disable, enable, remove and rescan in Device Manager all
-  survived. Server 2003 x64 is the same operating system and has not been
-  tried on its own.
+  survived.
 - Windows Vista (SP2) and Windows 7 (SP1) are supported, 32-bit through the
   same driver as Windows 98 to XP and x64 through the 64-bit one, in virtual
   machines only. On each of four guests the package installed, the three

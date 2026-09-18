@@ -2464,18 +2464,17 @@ other.
 
 
 This download also carries a 64-bit driver, for Windows XP Professional x64,
-Windows Server 2003 x64, Windows Vista x64 and Windows 7 x64. It is a
-separate build in its own directories with an INF of its own, not the same
-file renamed, and it has been validated in virtual machines only - never on
-a real machine, and Windows Server 2003 x64 has not been booted at all. It
-is not signed, so on Windows Vista x64 and Windows 7 x64 it runs only on a
+Windows Vista x64 and Windows 7 x64. It is a separate build in its own
+directories with an INF of its own, not the same file renamed, and it has
+been validated in virtual machines only - never on a real machine. It is not
+signed, so on Windows Vista x64 and Windows 7 x64 it runs only on a
 start where Disable Driver Signature Enforcement was chosen from the F8
 menu, every time (section 4).
 "@
         $readmeArchOsReq = @"
 
-                     64-bit: Windows XP x64 or Windows Server 2003 x64 (SP2),
-                     Windows Vista x64 (SP2) or Windows 7 x64 (SP1), in
+                     64-bit: Windows XP x64 (SP2), Windows Vista x64 (SP2)
+                     or Windows 7 x64 (SP1), in
                      virtual machines only as well.
 "@
         $readmeArchInstall = @"
@@ -2486,8 +2485,8 @@ menu, every time (section 4).
       RELEASE-X64\. On Windows Vista x64 and Windows 7 x64 the install works
       on an ordinary start, but the driver runs only after a restart with
       F8 -> Disable Driver Signature Enforcement, and only on such a start;
-      on any other start the controller shows Code 39. Windows XP x64 and
-      Server 2003 x64 need none of that.
+      on any other start the controller shows Code 39. Windows XP x64 needs
+      none of that.
 "@
         $readmeArchFiles = @"
 
@@ -2545,13 +2544,11 @@ given port belongs to, so the machine may show more than one unrecognised USB
 controller - install on the one XHCIQUAL reports USB 2.0 ports for.
 
 
-WHAT THE VERSION NUMBER MEANS, AND WHAT IT DOES NOT
+ISSUE REPORTING
 ------------------------------------------------------------------------------
 
-It means the driver does what this file says it does and that its limits are
-written down in section 7. It does not mean nothing is left. This is a hobby
-driver for operating systems that left support two decades ago, it has run
-on a small number of machines, and BUGS ARE NOT UNEXPECTED.
+This is a hobby driver for operating systems that left support two decades
+ago, it has run on a small number of machines, and BUGS ARE NOT UNEXPECTED.
 
 Please report what you find, on the project's GitHub page:
 
@@ -2681,7 +2678,7 @@ being tested:
 
       XHCIQUAL --log FULL.LOG
 
-Send whichever of the two files you got.
+Send FULL.LOG if the full run finished; only if it did not, send PROBE.LOG.
 
 It returns 0 if the active tests passed, 1 if the machine is not qualified or
 the run was read-only - which cannot pass tests it does not run, so 1 is the
@@ -3576,8 +3573,9 @@ IF YOU ARE ASKED FOR LOGS
 
            XHCIQUAL --log FULL.LOG
 
-  Send whichever of the two files you got. Keep a note of the BIOS settings
-  you had, and of any device that was plugged in.
+  Send FULL.LOG if the full run finished; only if it did not, send
+  PROBE.LOG. Keep a note of the BIOS settings you had, and of any device that
+  was plugged in.
 
 
 WHAT IT RETURNS TO DOS

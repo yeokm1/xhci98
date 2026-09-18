@@ -1712,7 +1712,7 @@ and every reading, box by box.
 | 22.7 | the charset gate on tracked source |
 | 22.8 | what a cut needs that no gate supplies: the date 2026-09-18, the history entry, the release notes, README, the issue forms |
 | 22.9 | the primary targets unchanged, plus XP x64 and Windows 7 x86 - open |
-| 22.10 | the cut, and the install route read from the asset - open |
+| 22.10 | the cut, and the install route read from the asset: cut 2026-09-18; the nine install legs open |
 | 22.11 | issue 5's mechanism replaced by `USB_MINIPORT_FLAGS_DISABLE_SS` |
 | 22.12 | the guest readings the 2026-09-17 audit fixes owe; (b) done on Vista x86 - open |
 
@@ -1760,7 +1760,10 @@ Owed:
       tree, and a finding amends the release under Phase 15's rule. The two
       new targets' `ExpectNoDriver` entries are guesses the first run
       corrects
-- [ ] 22.10: both architectures built and cut, then the asset read on nine
+- [ ] 22.10: both architectures built and cut - **cut 2026-09-18 14:50**,
+      `releases\1.1.0.0\` with four flavour directories and
+      `out\xhci98-1.1.0.0.zip` (397,087 B after two same-day re-cuts for the readme, no Microsoft file), every gate
+      green; what stays open is the rest - then the asset read on nine
       install legs - the four x86 ones with full device clauses, the amd64
       package on XP x64, Vista x64 and Windows 7 x64, and the x86 package on
       Vista x86 and Windows 7 x86, recording the unsigned-driver prompt - and

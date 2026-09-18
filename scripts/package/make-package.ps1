@@ -817,20 +817,19 @@ that does not exist, or clear that one yourself.
         #
         Write-Host "  XP x64   Device Manager -> the xHCI device -> Update Driver -> Have Disk"
         Write-Host "  2003 x64 the same; both are NT 5.2.3790 and one binary serves them"
+        Write-Host "  Vista x64 / 7 x64  boot with F8 -> Disable Driver Signature Enforcement"
+        Write-Host "           (every boot), then Device Manager -> Update Driver -> this directory"
         Write-Host ""
         #
-        # This warning said "no amd64 build has ever been observed running"
-        # until 2026-09-10. Roadmap task 21.5 closed on 2026-09-09 and that
-        # sentence has been false since: it is one guest, not none. Say which
-        # guest, because the gap between XP x64 and the two systems below it is
-        # the whole of roadmap task 21.8.
+        # This warning named XP x64 as the only amd64 guest and Vista x64 /
+        # Windows 7 x64 as outside the tier until 2026-09-18; roadmap task 21.8
+        # closed on 2026-09-16 with both in it, on an F8 boot only.
         #
-        Write-Warn "ONE guest has ever been observed running an amd64 build: Windows XP x64 SP2,"
-        Write-Warn "on both shipping flavours (roadmap task 21.5, 2026-09-09). Windows Server"
-        Write-Warn "2003 x64 rests on being the same operating system, NT 5.2.3790, and was"
-        Write-Warn "never booted. Vista x64 and Windows 7 x64 are NOT in that tier: they enforce"
-        Write-Warn "kernel-mode code signing, and whether this binary can be made to load there"
-        Write-Warn "at all is roadmap task 21.8, open."
+        Write-Warn "Three guests have run an amd64 build: Windows XP x64 SP2 (both shipping"
+        Write-Warn "flavours, roadmap task 21.5), Vista x64 SP2 and Windows 7 x64 SP1 (the qemu"
+        Write-Warn "build, tasks 21.8 and 22.5). Windows Server 2003 x64 rests on being the same"
+        Write-Warn "operating system as XP x64 and was never booted. On Vista x64 and 7 x64 the"
+        Write-Warn "driver loads only on a boot with signature enforcement disabled from F8."
         Write-Warn "No amd64 build has ever run on real hardware. Treat a guest booted from this"
         Write-Warn "media as the experiment it is, and do not put it on a machine you need working."
     } else {
