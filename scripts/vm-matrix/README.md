@@ -214,6 +214,21 @@ image it is asked to stamp against it - so a `-Boot -WorkDir` followed by a
 not the one prepared. Pausing OneDrive for the duration is the alternative, and
 is what the recorded runs did.
 
+**`xp64-fresh` and `win7-fresh` (2026-09-18, design record 09 section 2.6)**
+are fresh targets of the same shape for Windows XP x64 SP2 and Windows 7 SP1
+x86, cloned from `winxp64.img @ winxp64-clean-install-smp4` and
+`win7.img @ win7-clean-install`. They name their OS with `Family`
+(`winxp64`, `win7`) rather than inheriting 2b's entries through `Like`,
+boot with `-smp 4` and `tcg,thread=multi` in the run and in the preparation,
+and XP x64 carries `Arch = 'amd64'`: it stages `out\pkg-qemu-amd64`, reads
+counters through `offsets-amd64.txt` (`gen-offsets.ps1 -Arch amd64`), and
+finds its extension from the `StartController extension VA high=` / `low=`
+pair the amd64 `qemu` build prints, because the callback line's `a=` is
+only the low half of a pointer there. Their preparation is the sequence
+above with the NT 5.2 / NT 6.1 wizard (the prep boot prints it); on both,
+QEMU stays up after Windows shuts down, so end with `quit` at the monitor
+before `-Stamp`.
+
 A third fresh-style target, `2a-sweetlow`, is a Windows 98 guest running
 SweetLow's XP-lineage USB 2.0 stack instead of NUSB's. It clones the stamped
 `fresh-2a.img` (driver already installed), is never stamped and never a

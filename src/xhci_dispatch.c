@@ -962,6 +962,18 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
     ext = (PXHCI_EXTENSION)miniPortExtension;
 
     XHCI_DBG_CB("StartController", miniPortExtension, resources, 0);
+#ifdef _WIN64
+    /*
+     * The callback line above carries only the low half of each argument, and
+     * the post-release harness reads every counter at this extension's
+     * address; on amd64 the extension lives in pool above 4 GB. One pair per
+     * start, unbounded, so the newest start is always the one it reads.
+     */
+    XHCI_DBG_VALUE("StartController extension VA high",
+                   (ULONG)((ULONG_PTR)miniPortExtension >> 32));
+    XHCI_DBG_VALUE("StartController extension VA low",
+                   (ULONG)(ULONG_PTR)miniPortExtension);
+#endif
 
     if (ext == NULL || resources == NULL) {
         XHCI_DBG_TEXT("StartController: NULL argument - refusing");

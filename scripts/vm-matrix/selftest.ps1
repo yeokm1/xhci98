@@ -879,6 +879,57 @@ if (Test-MonitorPortFree -Port $freePort) {
     Assert "no monitor answers null, not 'gone'"      $true ($null -eq $listed)
 }
 
+Write-Host "--- the XP x64 and Windows 7 targets: family, build, table and 64-bit addresses ---"
+Assert "2a-fresh is the Windows 98 family"      "win98"   (Get-TargetFamily -Target @{ Id = '2a-fresh'; Like = '2a' })
+Assert "2b-fresh is the Windows 2000 family"    "win2k"   (Get-TargetFamily -Target @{ Id = '2b-fresh'; Like = '2b' })
+Assert "an explicit Family wins"                "winxp64" (Get-TargetFamily -Target @{ Id = 'xp64-fresh'; Family = 'WinXP64' })
+$famThrew = $false
+try { Get-TargetFamily -Target @{ Id = '2d' } | Out-Null } catch { $famThrew = $true }
+Assert "the SMP guest has no family"            $true $famThrew
+$famThrew = $false
+try { Get-TargetFamily -Target @{ Id = 'x'; Family = 'winme' } | Out-Null } catch { $famThrew = $true }
+Assert "an unknown Family is refused"           $true $famThrew
+Assert "no Arch key is x86"                     "x86"   (Get-TargetArch -Target @{ Id = '2a' })
+Assert "Arch amd64 is read"                     "amd64" (Get-TargetArch -Target @{ Id = 'xp64-fresh'; Arch = 'amd64' })
+$archThrew = $false
+try { Get-TargetArch -Target @{ Id = 'x'; Arch = 'ia64' } | Out-Null } catch { $archThrew = $true }
+Assert "an unknown Arch is refused"             $true $archThrew
+Assert "winxp64.img is refused even when stamped" $true (@(Get-FreshImageProblems -ImagePath 'vm\winxp64.img' -Snapshots $ok -Version '1.0.0.0') -join ' ' -match 'carried-along')
+Assert "win7.img is refused even when stamped"  $true (@(Get-FreshImageProblems -ImagePath 'vm\win7.img' -Snapshots $ok -Version '1.0.0.0') -join ' ' -match 'carried-along')
+
+$table64 = Import-CounterTable -Arch amd64
+Assert "the amd64 table is its own file"        $true ($table64.OffsetsFile -like '*offsets-amd64.txt')
+Assert "...with a larger SIZEOF than x86"       $true ($table64.Sizeof -gt $table.Sizeof)
+Assert "...and the same counters"               $table.Offsets.Count $table64.Offsets.Count
+
+Assert "an x86 address keeps eight digits"      "0xC1468970"         (Format-GuestAddress -BaseVa 'C1468870' -Offset 0x100)
+Assert "an amd64 address keeps sixteen"         "0xFFFFFADFCE308830" (Format-GuestAddress -BaseVa 'FFFFFADFCE2F5DC8' -Offset 76392)
+Assert "the carry reaches the high half"        "0xFFFFFAE000000010" (Format-GuestAddress -BaseVa 'FFFFFADFFFFFFFF0' -Offset 0x20)
+Assert "a string address reaches the message"   $true ((New-CounterReadFailure -Addr '0xFFFFFADFCE308830' -Take 4 -Got 2 -Attempts 4 -MonitorListening $true) -match '0xFFFFFADFCE308830')
+
+$idLog = Join-Path $env:TEMP ("xhci98-selftest-ident-{0}.log" -f $PID)
+Set-Content -LiteralPath $idLog -Encoding ascii -Value @(
+    'xhci98: cb StartController irql=00 a=CE2F5DC8 b=0012F000 c=00000000'
+    'xhci98: StartController extension VA high=FFFFFADF'
+    'xhci98: StartController extension VA low=CE2F5DC8'
+    'xhci98: MiniPortExtensionSize=00017538'
+    'xhci98: cb StartController irql=00 a=CE2F5DC8 b=0012F000 c=00000000')
+$id64 = Find-ExtensionIdentity -DebugconLog $idLog
+Assert "an amd64 log is read from the full pair" "FFFFFADFCE2F5DC8" $id64.Va
+Assert "...and the truncated a= does not count"  $false $id64.Spans
+Set-Content -LiteralPath $idLog -Encoding ascii -Value @(
+    'xhci98: cb StartController irql=00 a=C14658C4 b=81F0437C c=00000000'
+    'xhci98: MiniPortExtensionSize=00016890')
+$id32 = Find-ExtensionIdentity -DebugconLog $idLog
+Assert "an x86 log is read from a= as before"   "C14658C4" $id32.Va
+Set-Content -LiteralPath $idLog -Encoding ascii -Value @(
+    'xhci98: StartController extension VA high=FFFFFADF'
+    'xhci98: StartController extension VA low=CE2F5DC8'
+    'xhci98: StartController extension VA high=FFFFFADF'
+    'xhci98: StartController extension VA low=CE31A008')
+Assert "two amd64 loads are a span"             $true (Find-ExtensionIdentity -DebugconLog $idLog).Spans
+Remove-Item -LiteralPath $idLog -Force -ErrorAction SilentlyContinue
+
 Write-Host ""
 if ($failures -eq 0) {
     Write-Host ("selftest: {0} checks, all passed" -f $checks)

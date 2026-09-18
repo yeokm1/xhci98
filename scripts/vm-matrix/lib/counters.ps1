@@ -20,9 +20,14 @@
 function Import-CounterTable {
     param(
         [string]$OffsetsFile = "",
-        [string]$LabelsFile = ""
+        [string]$LabelsFile = "",
+        # Which build's layout (gen-offsets.ps1 -Arch): offsets.txt for x86,
+        # offsets-amd64.txt for amd64. Ignored when -OffsetsFile names a file.
+        [ValidateSet('x86', 'amd64')][string]$Arch = 'x86'
     )
-    if ($OffsetsFile -eq "") { $OffsetsFile = Join-Path $PSScriptRoot "..\offsets.txt" }
+    if ($OffsetsFile -eq "") {
+        $OffsetsFile = Join-Path $PSScriptRoot $(if ($Arch -eq 'amd64') { "..\offsets-amd64.txt" } else { "..\offsets.txt" })
+    }
     if ($LabelsFile -eq "") { $LabelsFile = [IO.Path]::ChangeExtension($OffsetsFile, ".labels.txt") }
     if (-not (Test-Path -LiteralPath $OffsetsFile)) {
         throw ("offset table not found: {0}. Run scripts\vm-matrix\gen-offsets.ps1 first." -f $OffsetsFile)
@@ -51,6 +56,7 @@ function Import-CounterTable {
     }
 
     return [pscustomobject]@{
+        Arch        = $Arch
         Offsets     = $offsets
         FieldOfLabel = $fieldOf
         Sizeof      = $sizeof
@@ -122,21 +128,54 @@ function Resolve-CounterLabel {
 # the monitor port is one connect (`Test-MonitorPortFree`, monitor.ps1), and
 # whether the process is gone is `Get-ProcessStateText` (qemu.ps1) over the
 # handle the runner has been holding all along.
+# A guest address as the monitor's `x` command takes it: two 32-bit halves
+# with the carry done by hand. Windows PowerShell 5.1 evaluates a UInt64 plus
+# an Int32 as a Double, which cannot hold an amd64 kernel address above 2^53,
+# so the arithmetic never leaves UInt64-sized pieces that fit. An address with
+# a zero high half prints as the eight digits every x86 reading always has.
+function ConvertTo-GuestAddressParts {
+    param([Parameter(Mandatory = $true)][string]$Va)
+    $hex = ($Va -replace '^0x', '')
+    if ($hex -notmatch '^[0-9A-Fa-f]{1,16}$') { throw ("not a guest address: '{0}'" -f $Va) }
+    $hex = $hex.PadLeft(16, '0')
+    return [pscustomobject]@{
+        Hi = [Convert]::ToUInt32($hex.Substring(0, 8), 16)
+        Lo = [Convert]::ToUInt32($hex.Substring(8, 8), 16)
+    }
+}
+
+function Format-GuestAddress {
+    param(
+        [Parameter(Mandatory = $true)][string]$BaseVa,
+        [int]$Offset = 0
+    )
+    $parts = ConvertTo-GuestAddressParts -Va $BaseVa
+    $lo = [uint64]$parts.Lo + [uint64]$Offset
+    $hi = [uint64]$parts.Hi + ($lo -shr 32)
+    $lo = $lo -band [uint64]4294967295
+    if ($hi -gt [uint64]4294967295) { throw ("address overflow: {0} + {1}" -f $BaseVa, $Offset) }
+    if ($hi -eq 0) { return ("0x{0:X8}" -f [uint32]$lo) }
+    return ("0x{0:X8}{1:X8}" -f [uint32]$hi, [uint32]$lo)
+}
+
 function New-CounterReadFailure {
     param(
-        [Parameter(Mandatory = $true)][uint32]$Addr,
+        # A number (the x86 callers and the self-test) or an already formatted
+        # address (Format-GuestAddress, which is what an amd64 read has).
+        [Parameter(Mandatory = $true)]$Addr,
         [Parameter(Mandatory = $true)][int]$Take,
         [Parameter(Mandatory = $true)][int]$Got,
         [Parameter(Mandatory = $true)][int]$Attempts,
         [Parameter(Mandatory = $true)][bool]$MonitorListening,
         [string]$ProcessState = ""
     )
+    $addrText = if ($Addr -is [string]) { $Addr } else { "0x{0:X8}" -f [uint32]$Addr }
     if (-not $MonitorListening) {
-        return ("counter read at 0x{0:X8} got NO REPLY AT ALL after {1} attempts, because nothing is listening on the monitor port: there is no guest left to read. {2}. This is not a short reply from a busy guest and must not be read as one - whatever ended this group is upstream of the driver and of the counters." -f `
-            $Addr, $Attempts, $ProcessState)
+        return ("counter read at {0} got NO REPLY AT ALL after {1} attempts, because nothing is listening on the monitor port: there is no guest left to read. {2}. This is not a short reply from a busy guest and must not be read as one - whatever ended this group is upstream of the driver and of the counters." -f `
+            $addrText, $Attempts, $ProcessState)
     }
-    return ("counter read at 0x{0:X8} asked for {1} words and got {2} after {3} attempts, from a monitor that is still answering. A positional map of a short reply files every later counter under the wrong name, so this run is void rather than approximate." -f `
-        $Addr, $Take, $Got, $Attempts)
+    return ("counter read at {0} asked for {1} words and got {2} after {3} attempts, from a monitor that is still answering. A positional map of a short reply files every later counter under the wrong name, so this run is void rather than approximate." -f `
+        $addrText, $Take, $Got, $Attempts)
 }
 
 # Read every counter in one pass.  Contiguous runs are coalesced into single
@@ -155,7 +194,7 @@ function Read-Counters {
         [Parameter(Mandatory = $true)]$Table,
         $Process = $null
     )
-    $baseAddr = [Convert]::ToUInt32(($BaseVa -replace '^0x', ''), 16)
+    [void](ConvertTo-GuestAddressParts -Va $BaseVa)
 
     $sorted = $Table.Offsets.Values | Sort-Object -Unique
     $chunks = @()
@@ -174,7 +213,7 @@ function Read-Counters {
         $count = [int](($to - $from) / 4) + 1
         while ($count -gt 0) {
             $take = [Math]::Min($count, 32)
-            $addr = $baseAddr + $from
+            $addr = Format-GuestAddress -BaseVa $BaseVa -Offset $from
 
             # THE WORD COUNT IS CHECKED, AND A SHORT REPLY IS RETRIED THEN
             # FATAL.  The reply lists words in address order from the requested
@@ -196,7 +235,7 @@ function Read-Counters {
             $attempt = 0
             while ($true) {
                 $attempt++
-                $reply = Send-Mon -Port $Port -Command ("x/{0}wx 0x{1:X8}" -f $take, $addr) -Reply -IdleMs 1500 -HardMs 15000
+                $reply = Send-Mon -Port $Port -Command ("x/{0}wx {1}" -f $take, $addr) -Reply -IdleMs 1500 -HardMs 15000
                 $seq = @()
                 foreach ($line in (($reply -replace "\x1b\[[0-9;]*[A-Za-z]", "") -split "`r?`n")) {
                     if ($line -match '^[0-9a-fA-Fx]+:\s+(.*)$') {
@@ -332,8 +371,23 @@ function Find-ExtensionIdentity {
         return [pscustomobject]@{ Va = $null; Size = $null; AllVas = @(); AllSizes = @(); Spans = $false }
     }
     $vas = @()
+    $wideVas = @()
+    $pendingHigh = $null
     $sizes = @()
     foreach ($line in Get-Content -LiteralPath $DebugconLog) {
+        # The amd64 build's own pair (src\xhci_dispatch.c, xhciStartController):
+        # the `a=` below is only the low half of a pointer there, so a log that
+        # carries this pair is read from it and from nothing else. The high
+        # half of an amd64 kernel address has bit 31 set, as the x86 filter
+        # below asks of the whole address.
+        if ($line -match 'StartController extension VA high=([0-9A-Fa-f]{8})\b') { $pendingHigh = $Matches[1]; continue }
+        if ($line -match 'StartController extension VA low=([0-9A-Fa-f]{8})\b') {
+            if ($null -ne $pendingHigh -and ([Convert]::ToUInt32($pendingHigh, 16) -band [uint32]2147483648) -ne 0) {
+                $wideVas += ($pendingHigh + $Matches[1]).ToUpperInvariant()
+            }
+            $pendingHigh = $null
+            continue
+        }
         if ($line -match '\bcb\s+([A-Za-z_][A-Za-z0-9_]*)\s+irql=[0-9A-Fa-f]{2}\s+a=([0-9A-Fa-f]{8})\b') {
             $va = $Matches[2]
             # The mask is spelled in decimal: `0x80000000` is a negative Int32
@@ -343,6 +397,7 @@ function Find-ExtensionIdentity {
         }
         if ($line -match 'MiniPortExtensionSize=([0-9A-Fa-f]{8})') { $sizes += [Convert]::ToInt32($Matches[1], 16) }
     }
+    if ($wideVas.Count -gt 0) { $vas = $wideVas }
     $distinctVas = @($vas | Sort-Object -Unique)
     $distinctSizes = @($sizes | Sort-Object -Unique)
     return [pscustomobject]@{

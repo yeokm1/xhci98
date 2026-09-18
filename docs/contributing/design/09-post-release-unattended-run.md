@@ -33,7 +33,8 @@ and a script following it is not that reading.
 What is left in the middle is worth a script because nobody re-runs it by hand
 more than once per release: the install path, the first bind, and then the
 plug and unplug, on an operating system installed for the occasion. Two
-operating systems, on one CPU each, per section 2.4.
+operating systems, on one CPU each, per section 2.4 - and since 2026-09-18
+two more, XP x64 and Windows 7 x86, on four, per section 2.6.
 
 Where this overlaps Phase 10, it extends `scripts/vm-matrix/` rather than
 growing a second harness beside it. That directory already boots, stages,
@@ -133,6 +134,41 @@ No wall-clock budget is set before the first run. The run records its own
 elapsed time per target in the report header (section 9), and a budget, if one
 is ever wanted, is set from that measurement rather than guessed.
 
+### 2.6 XP x64 and Windows 7 x86 joined on 2026-09-18
+
+The owner's instruction for roadmap task 22.9, the `1.1.0.0` cut: the run
+covers Windows XP x64 SP2 and Windows 7 SP1 x86 as well as the two targets of
+section 2.4, as `xp64-fresh` and `win7-fresh`. Both are VM-supported tiers
+with no checkpoint tax, and `1.1.0.0` is the first release whose package
+reaches either; this run is the plug and unplug they would otherwise never
+get from a script. Five things differ from section 2.4, and the harness
+carries each of them in code:
+
+- **Four virtual CPUs, not one.** Both clean snapshots are multiprocessor
+  installs (XP x64's is `winxp64-clean-install-smp4`), so the targets pass
+  `-smp 4`, in the run and in the preparation. They are not stress vehicles
+  and the run takes no concurrency reading from them; section 2.4's reason for
+  leaving 2d out still stands for 2d.
+- **TCG with MTTCG** (`tcg,thread=multi`), the machine the issue 5 legs of
+  2026-09-17 used, and `qemu64` rather than `pentium3`, which Windows 7 cannot
+  boot on. Section 2.5's comparability argument is between a row here and the
+  same row in Phase 10, and Phase 10 has neither guest, so nothing is lost.
+- **A second build.** XP x64 runs the amd64 `xhci98.sys` from
+  `out\pkg-qemu-amd64`, and its extension has another layout, so the target
+  carries `Arch = 'amd64'`, which selects `offsets-amd64.txt` (from
+  `gen-offsets.ps1 -Arch amd64`); the SIZEOF checks of sections 3.3 and 6 then
+  tie the image to that build as they tie the others to theirs. The amd64
+  `qemu` build prints its extension's full address as a high/low pair at
+  `StartController`, because the callback line's `a=` carries only the low
+  half of a pointer there; nothing else in the driver changed for this.
+- **Their own matrix entries.** The targets carry `Family` rather than
+  `Like`: inheriting 2b's entries would give NT 5.2 and NT 6.1 Windows 2000's
+  `ExpectNoDriver` reasons, and some are false there. Their first entries are
+  guesses marked as such, which the first run corrects (section 4.2).
+- **Their base images join the never-boot list** of section 6.
+
+Nothing else in this record changes for them.
+
 ## 3. What "fresh" has to mean here
 
 Fresh is about history, not about the last five minutes. The guest is an OS
@@ -150,6 +186,8 @@ any build of this driver existed, one per target.
 | Target | Source image | Snapshot | Taken | State |
 |---|---|---|---|---|
 | `2a` | `vm/win98.img` | `post-nusb` | 2026-07-22 | Windows 98 SE, NUSB 3.3 installed, the xHCI controller unclaimed (`Code 28`), no `usbd.sys` |
+| `xp64-fresh` | `vm/winxp64.img` | `winxp64-clean-install-smp4` | 2026-09-14 | Windows XP Professional x64 SP2, multiprocessor HAL, no USB host controller driver claimed; added 2026-09-18 (section 2.6) |
+| `win7-fresh` | `vm/win7.img` | `win7-clean-install` | 2026-09-10 | Windows 7 Professional SP1 x86; added 2026-09-18 (section 2.6) |
 | `2b` | `vm/win2k-xonly.img` | `win2k-xonly-clean-install` | 2026-09-03 | Windows 2000 SP4 installed with no USB controller of any kind attached; read from the snapshot the same day: `system32\drivers` holds `usbcamd.sys` and `usbintel.sys` only, no `usbport.sys`, `usbhub.sys`, `usbhub20.sys` or `usbd.sys` |
 
 The Windows 2000 row changed on 2026-09-03 (roadmap task 19.5). Until then
@@ -338,8 +376,9 @@ of its own; these are this run's.
   `SIZEOF` against the running driver's `MiniPortExtensionSize`; the stamp is
   what stops a base image prepared for the last release being reported as
   this one.
-- Refuse to boot `vm/win98.img` or `vm/win2k.img`, or any image whose newest
-  snapshot is not a `base-` stamp. Phase 10's images are not fresh and the
+- Refuse to boot `vm/win98.img` or `vm/win2k.img` - and, since 2026-09-18,
+  `vm/winxp64.img` and `vm/win7.img`, which every other leg of this project
+  boots - or any image whose newest snapshot is not a `base-` stamp. Phase 10's images are not fresh and the
   run has no way to make them so.
 - Refuse to write to the image it booted.
 - Refuse to turn "this vehicle cannot present it" into a pass.
@@ -361,6 +400,7 @@ reopen them.
 | The storage row's file round-trip | Not taken; enumerate, detach, reattach | 4.3 |
 | The composite row on Windows 98 | Run, with INERT isochronous expectations - **not** pinned to the `USBAUDIO.VXD` fault, which section 4.1 supersedes and which `matrix.psd1` never carried | 4.1 |
 | Accelerator and time budget | TCG; no budget until one run has been measured | 2.5 |
+| XP x64 and Windows 7 x86 in the run (2026-09-18) | Yes, as `xp64-fresh` and `win7-fresh`, four vCPUs, MTTCG, XP x64 on the amd64 build and its own offset table | 2.6 |
 
 ## 8. The preparation
 
@@ -371,9 +411,12 @@ in step 5 is the rung section 2.1 allows.
 1. Build and package the `qemu` flavour of the version under test
    (`scripts\build-driver.cmd qemu`, then
    `scripts\package\make-package.ps1 -Flavor qemu`), and regenerate the offset
-   table (`gen-offsets.ps1`).
+   table (`gen-offsets.ps1`). For `xp64-fresh` also build and package the amd64
+   `qemu` flavour (`build-driver.cmd qemu -amd64`, `make-package.ps1 -Flavor
+   qemu -Arch amd64`) and regenerate its table (`gen-offsets.ps1 -Arch amd64`).
 2. Clone the source snapshot into a new image, without touching the source:
-   `prepare-image.ps1 -Target 2a-fresh -Clone`, and the same for `2b-fresh`.
+   `prepare-image.ps1 -Target 2a-fresh -Clone`, and the same for `2b-fresh`,
+   `xp64-fresh` and `win7-fresh`.
    Underneath it is `qemu-img convert -O qcow2 -l snapshot.name=<tag>`, which
    opens the source read-only; the target's `CloneFrom` names the image and
    the snapshot. The source images stay closed for the whole preparation.
@@ -386,7 +429,8 @@ in step 5 is the rung section 2.1 allows.
    `Win98Cd` is needed.
 5. Teach the Windows 98 image each device class the matrix will attach, using
    `prepare-image.ps1 -Attach` per class, so no wizard appears in the run.
-   Windows 2000 needs none of this for HID and storage.
+   Windows 2000 needs none of this for HID and storage; what XP x64 and
+   Windows 7 need is for the first run of them to show.
 6. Shut the guest down cleanly and take the stamp:
    `prepare-image.ps1 -Stamp`, which snapshots the image as
    `base-<DriverVer>-qemu` and is refused if the guest is still running.

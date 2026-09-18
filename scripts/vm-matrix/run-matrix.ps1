@@ -145,7 +145,16 @@ if ($PostRelease -and $PSBoundParameters.ContainsKey('ReportName')) {
 # Everything checkable without a boot is checked before one is spent.  A matrix
 # whose expectations do not resolve, a model this QEMU build does not have, or a
 # missing image are all one line here and a wasted twenty minutes otherwise.
-$table = Import-CounterTable
+# One offset table per build a configured target runs (lib\fresh.ps1,
+# Get-TargetArch): the amd64 extension's layout differs from the x86 one, so
+# an expectation is resolved, and every read decoded, against its own
+# target's table. $table is re-pointed at the top of each target's loop.
+$tables = @{}
+foreach ($t in $cfg.Targets) {
+    $a = Get-TargetArch -Target $t
+    if (-not $tables.ContainsKey($a)) { $tables[$a] = Import-CounterTable -Arch $a }
+}
+$table = if ($tables.ContainsKey('x86')) { $tables['x86'] } else { $tables['amd64'] }
 $available = Get-QemuUsbModels -Qemu $qemuBin
 $problems = @()
 $rowCount = 0
@@ -184,7 +193,7 @@ foreach ($g in $mx.Groups) {
             $parsed[$key] = @()
             foreach ($txt in ($texts + $per)) {
                 try {
-                    $parsed[$key] += (ConvertTo-Expectation -Text $txt -Table $table)
+                    $parsed[$key] += (ConvertTo-Expectation -Text $txt -Table $tables[(Get-TargetArch -Target $t)])
                 } catch {
                     $problems += ("row {0} [{1}]: {2}" -f $r.Name, $t.Id, $_.Exception.Message)
                 }
@@ -681,6 +690,7 @@ function Invoke-AttachLeg {
 
 $targetVerdicts = @{}
 foreach ($tgt in $targetsToRun) {
+    $table = $tables[(Get-TargetArch -Target $tgt)]
     $groupsToRun = $mx.Groups
     if ($Group.Count -gt 0) { $groupsToRun = $mx.Groups | Where-Object { $Group -contains $_.Name } }
 
@@ -1288,7 +1298,7 @@ foreach ($tgt in $targetsToRun) {
         # the preparation carried into the guest.  Absent, it says so; the stamp
         # and the identity line are the witnesses that a driver is installed,
         # and this line is only what it was built from.
-        $pkgSys = Join-Path (Get-QemuPackageDir -Repo $repo -Arch 'x86') "xhci98.sys"
+        $pkgSys = Join-Path (Get-QemuPackageDir -Repo $repo -Arch (Get-TargetArch -Target $tgt)) "xhci98.sys"
         $driverLine = if (Test-Path -LiteralPath $pkgSys) {
             $item = Get-Item -LiteralPath $pkgSys
             ("{0} qemu, {1} B, sha256 {2}" -f $version, $item.Length, (Get-FileHash -LiteralPath $pkgSys -Algorithm SHA256).Hash.Substring(0, 16).ToLowerInvariant())
@@ -1346,7 +1356,9 @@ $header = @()
 $header += "# xhci98 Phase 10 - automated VM device matrix"
 $header += ("# qemu   : {0}" -f $qemuVer)
 $header += ("# host   : {0}" -f $env:COMPUTERNAME)
-$header += ("# offsets: SIZEOF {0}, {1} counters" -f $table.Sizeof, $table.Offsets.Count)
+foreach ($a in ($tables.Keys | Sort-Object)) {
+    $header += ("# offsets: {0} SIZEOF {1}, {2} counters" -f $a, $tables[$a].Sizeof, $tables[$a].Offsets.Count)
+}
 $header += ("# matrix : {0} rows" -f $rowCount)
 $header += "#"
 $header += "# Outcomes: PASS FAIL NODRIVER INERT ERROR, plus EXCLUDED for a row not run on a target - see docs/contributing/design/06-device-matrix-verdict.md"

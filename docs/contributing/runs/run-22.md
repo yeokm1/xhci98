@@ -1152,7 +1152,10 @@ clones, against the Phase 20 reports. Both primary targets are 32-bit
 and neither is touched by anything in this release, so a difference
 here is a finding about the release rather than about the phase.
 Reports under `docs\contributing\runs\run-22-post-release\` (written by 22.9;
-the directory does not exist until then).
+the directory does not exist until then). **Since 2026-09-18 it follows the
+cut** (the owner's decision: cut first), and it covers XP x64 and Windows 7
+x86 as well (`xp64-fresh`, `win7-fresh`, design record 09 section 2.6); the
+harness learned both targets the same day.
 
 ## 22.10 - the cut itself, and the install route read from the asset
 
@@ -1288,8 +1291,9 @@ answered; the memory `repo-audit-2026-09-17` and the commit messages from
 four places whose effect only a guest shows. The roadmap's owed box names
 the four; this section takes their readings as they come. Ordered ahead of
 22.10 on 2026-09-18: (b) gates the cut as 22.11 did, because it changes
-root-hub suspend/resume on a path no target has measured; (a) and (d) are
-read off 22.9 and 22.10's own legs; (c) may follow the cut.
+root-hub suspend/resume on a path no target has measured; (a) is read off
+22.10's own legs, and (d) off 22.9's matrix, which since 2026-09-18 follows
+the cut; (c) and (d) may follow it.
 
 - [ ] (a) amd64 service block: `usbport services written=16` on XP x64 and
       Vista x64 from the corrected verifier (`xhciVerifyPacketAfterRegistration`
@@ -1402,8 +1406,9 @@ Checkpoint, the second half - the cut. All of it, or the phase is not closed:
 - [ ] every gate and self-test green on both architectures, and
       `make-release.ps1` exit 0 with `releases\1.1.0.0\` holding four flavour
       directories
-- [ ] the post-release matrix on both primary targets no worse than Phase
-      20's reports
+- [ ] ~~the post-release matrix on both primary targets no worse than Phase
+      20's reports~~ - moved after the cut by the owner on 2026-09-18; it is
+      task 22.9 and no longer part of this half
 - [ ] the install route read from the published asset on all nine legs -
       the four x86 ones every cut since `1.0.1.0` has taken, the amd64 ones
       on the XP x64, Vista x64 and Windows 7 x64 guests, and the x86 ones on

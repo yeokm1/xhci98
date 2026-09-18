@@ -357,6 +357,8 @@
                     ExpectNoDriver = @{
                         '2a' = 'measured NODRIVER on both legs of the second post-release run (2026-08-30, fresh Windows 98 SE guest, class taught): the adapter is addressed and neither Windows 98 SE nor NUSB 3.3 has a UAS class driver'
                         '2b' = 'measured NODRIVER on both legs of the first post-release run (2026-08-30, fresh Windows 2000 SP4 guest): the adapter is addressed, Windows raises a Found New Hardware wizard and has no UAS class driver to offer; the wizard does not block enumeration on Windows 2000'
+                        'xp64-fresh' = 'a guess taken 2026-09-18, not yet measured: the UAS class driver (uaspstor.sys) arrived with Windows 8, so XP x64 has none'
+                        'win7-fresh' = 'a guess taken 2026-09-18, not yet measured: the UAS class driver (uaspstor.sys) arrived with Windows 8, so Windows 7 has none'
                     }
                 }
             )
@@ -544,6 +546,8 @@
                     ExpectNoDriver = @{
                         '2a' = 'no class driver for a vendor-class serial adapter on Windows 98 SE or in NUSB 3.3'
                         '2b' = 'no class driver for a vendor-class serial adapter on Windows 2000 SP4'
+                        'xp64-fresh' = 'a guess taken 2026-09-18, not yet measured: QEMU usb-serial is an FTDI vendor-class device and XP x64 ships no FTDI driver'
+                        'win7-fresh' = 'a guess taken 2026-09-18, not yet measured: QEMU usb-serial is an FTDI vendor-class device and Windows 7 ships no FTDI driver in the box'
                     }
                 }
                 @{
@@ -556,6 +560,8 @@
                     ExpectNoDriver = @{
                         '2a' = 'no driver for a Baum braille display on Windows 98 SE or in NUSB 3.3'
                         '2b' = 'no driver for a Baum braille display on Windows 2000 SP4'
+                        'xp64-fresh' = 'a guess taken 2026-09-18, not yet measured: no driver for a Baum braille display on XP x64'
+                        'win7-fresh' = 'a guess taken 2026-09-18, not yet measured: no driver for a Baum braille display on Windows 7'
                     }
                 }
                 @{

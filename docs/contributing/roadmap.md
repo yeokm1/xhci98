@@ -1711,7 +1711,7 @@ and every reading, box by box.
 | 22.6 | the record: the tier in both architectures, nothing said of issue 7 |
 | 22.7 | the charset gate on tracked source |
 | 22.8 | what a cut needs that no gate supplies - open |
-| 22.9 | the primary targets unchanged - open |
+| 22.9 | the primary targets unchanged, plus XP x64 and Windows 7 x86 - open |
 | 22.10 | the cut, and the install route read from the asset - open |
 | 22.11 | issue 5's mechanism replaced by `USB_MINIPORT_FLAGS_DISABLE_SS` |
 | 22.12 | the guest readings the 2026-09-17 audit fixes owe; (b) done on Vista x86 - open |
@@ -1745,13 +1745,21 @@ Owed:
       and, if a group is ever swept by the next group's tail
       (`SweptTransfers` moving on a normal short read), that is the
       audit's B10 and wants the settle it describes. **(b) gated 22.10, as
-      22.11 did and for the same reason**, and is done. (a) and (d) are read off 22.9's matrix and 22.10's own install legs
-      rather than as legs of their own; (c) may follow the cut, since a
-      wrong reading there amends the release under Phase 15's rule
+      22.11 did and for the same reason**, and is done. (a) is read off
+      22.10's own install legs and (d) off 22.9's matrix, rather than as
+      legs of their own; (c) and (d) follow the cut, since a wrong reading
+      there amends the release under Phase 15's rule
 - [ ] 22.8: `releases\history.md`'s entry; the release date in
       `src\xhci_version.h` and both INFs; the release notes' opening line;
       `README.md`'s Install section; the issue forms' operating-system lists
-- [ ] 22.9: `run-matrix.ps1 -PostRelease` on fresh 2a and 2b clones
+- [ ] 22.9: `run-matrix.ps1 -PostRelease` on fresh 2a and 2b clones, and -
+      by the owner's instruction of 2026-09-18 - on fresh XP x64 and
+      Windows 7 x86 clones (`xp64-fresh`, `win7-fresh`; design record 09
+      section 2.6). **Taken after 22.10**, by the owner's decision of
+      2026-09-18 (cut first): the four images are prepared from the cut's
+      tree, and a finding amends the release under Phase 15's rule. The two
+      new targets' `ExpectNoDriver` entries are guesses the first run
+      corrects
 - [ ] 22.10: both architectures built and cut, then the asset read on nine
       install legs - the four x86 ones with full device clauses, the amd64
       package on XP x64, Vista x64 and Windows 7 x64, and the x86 package on
@@ -1769,11 +1777,12 @@ root-hub callbacks answered, the three devices bound, and the disable, enable,
 remove and rescan sequence survived. Taken on 2026-09-13 on the `qemu` build
 from a staged INF (issue 7 section 7.5), all but the unsigned-driver prompt,
 which is 22.10's. The cut half: every gate green on both architectures and
-four flavour directories cut; the post-release matrix on both primary targets
-no worse than Phase 20's; all nine install legs read from the asset; the asset
+four flavour directories cut; all nine install legs read from the asset; the asset
 holding exactly what the packager staged, with no Microsoft file; and the
 prose no gate reaches bumped. Not a checkpoint: a `qemu` reading standing in
-for the published `release` binary, the acceptance test, or the upload.
+for the published `release` binary, the acceptance test, or the upload. The
+post-release matrix (22.9) was a clause of this half until 2026-09-18, when the
+owner put it after the cut.
 
 Records: `runs/run-22.md` (22.12's readings go there too); `design/11-x64-targets.md`;
 `usb-xhci-info/usbport-miniport-abi.md`; issues 05, 07 and 08;

@@ -87,8 +87,11 @@ function ConvertFrom-BaseStampName {
 # The image names the run must never boot, whatever their snapshots say.
 # Design record 09 section 6: Phase 10's images are not fresh and the run has
 # no way to make them so.  Compared by leaf name, case-insensitively, because
-# that is how they are named in every config this project has had.
-$script:ForbiddenFreshImages = @('win98.img', 'win2k.img', 'win2k-smp.img')
+# that is how they are named in every config this project has had. The two
+# NT 5.2 / NT 6.1 bases joined on 2026-09-18 with the targets cloned from them:
+# every other leg of this project boots them, so their current state is not
+# a clean install either.
+$script:ForbiddenFreshImages = @('win98.img', 'win2k.img', 'win2k-smp.img', 'winxp64.img', 'win7.img')
 
 # THE STAMP CHECK.  Returns the list of reasons this image must not be booted
 # by the post-release run; an empty list means it may.  Every clause is one
@@ -173,6 +176,42 @@ function Test-TargetInList {
     $keys = Get-TargetKeys -Target $Target
     foreach ($k in ([string[]]$List)) { if ($keys -contains $k) { return $true } }
     return $false
+}
+
+# WHICH OPERATING SYSTEM A TARGET RUNS. The first two families are named by
+# their Phase 10 ids and reached through `Like` (or the id itself), as they
+# always were; the two added for task 22.9 on 2026-09-18 carry an explicit
+# `Family`, because inheriting 2b's entries through `Like` would hand an NT 5.2
+# or NT 6.1 guest Windows 2000's ExpectNoDriver reasons, some of them false
+# there (CCID "arrived with Windows XP"). Returns win98, win2k, winxp64 or
+# win7, or throws naming what the config said.
+$script:TargetFamilies = @('win98', 'win2k', 'winxp64', 'win7')
+function Get-TargetFamily {
+    param([Parameter(Mandatory = $true)]$Target)
+    if ($Target.ContainsKey('Family') -and -not [string]::IsNullOrWhiteSpace($Target.Family)) {
+        $f = ([string]$Target.Family).ToLowerInvariant()
+        if ($script:TargetFamilies -notcontains $f) {
+            throw ("target '{0}' names Family '{1}'; this harness knows {2}" -f $Target.Id, $Target.Family, ($script:TargetFamilies -join ", "))
+        }
+        return $f
+    }
+    $base = if ($Target.ContainsKey('Like') -and $Target.Like) { [string]$Target.Like } else { [string]$Target.Id }
+    if ($base -eq '2a') { return 'win98' }
+    if ($base -eq '2b') { return 'win2k' }
+    throw ("target '{0}' has no Family and is neither 2a nor 2b nor `Like` one of them" -f $Target.Id)
+}
+
+# Which build a target runs: `Arch = 'amd64'` on the XP x64 target, x86 on
+# every other. It picks the offset table (offsets-amd64.txt beside
+# offsets.txt) and the qemu package directory, and the two must agree with the
+# guest - an amd64 extension read through the x86 table is wrong values, not
+# an error, which is why Assert-OffsetsFresh and the stamp check SIZEOF.
+function Get-TargetArch {
+    param([Parameter(Mandatory = $true)]$Target)
+    if (-not $Target.ContainsKey('Arch') -or [string]::IsNullOrWhiteSpace($Target.Arch)) { return 'x86' }
+    $a = ([string]$Target.Arch).ToLowerInvariant()
+    if ($a -notin @('x86', 'amd64')) { throw ("target '{0}' names Arch '{1}'; x86 and amd64 are the two builds" -f $Target.Id, $Target.Arch) }
+    return $a
 }
 
 # A target is a post-release target when its config says where it was cloned
@@ -620,8 +659,8 @@ function Get-StampProblems {
 # name it in a post-release header.  They each read out\pkg-qemu until
 # 2026-09-16, a directory the packager had stopped writing, so a prep boot was
 # handed whatever that directory last held (a 1.0.2.0-era build, found that
-# day) and nothing said so.  Every matrix target is a 32-bit guest, so the
-# callers ask for x86.
+# day) and nothing said so.  The callers ask for the target's own
+# architecture (Get-TargetArch): x86 for every target but XP x64.
 function Get-QemuPackageDir {
     param(
         [Parameter(Mandatory = $true)][string]$Repo,

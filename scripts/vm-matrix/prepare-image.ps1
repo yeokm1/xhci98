@@ -155,14 +155,17 @@ if ($null -eq $tgt) { throw ("no target '{0}' in {1}" -f $Target, $Config) }
 # WHICH OPERATING SYSTEM, AND WHETHER THIS IS A FRESH TARGET.  The Windows 98
 # branches below (the CD, the drivers directory, the wizard advice) used to key
 # on `-Target 2a` literally.  A fresh target is the same OS under another id
-# and inherits them through `Like`; the SMP guest is refused here as it always
-# was, because a prep pass is a uniprocessor affair and 2d has never had one.
+# and inherits them through `Like`; the XP x64 and Windows 7 targets added for
+# task 22.9 name their `Family` outright (lib\fresh.ps1, Get-TargetFamily).
+# The SMP stress guest 2d has no family and is refused here as it always was.
+# The new two are multiprocessor installs, so a prep boot passes the target's
+# `Smp` and `Accel` exactly as a run does.
 $isFresh = Test-FreshTarget -Target $tgt
-$family  = if ($tgt.ContainsKey('Like') -and $tgt.Like) { [string]$tgt.Like } else { [string]$tgt.Id }
-if ($family -notin @('2a', '2b')) {
-    throw ("target '{0}' is neither 2a nor 2b nor a fresh target that names one of them in `Like`; this script prepares those and nothing else" -f $Target)
+try { $family = Get-TargetFamily -Target $tgt } catch {
+    throw ("{0}; this script prepares the Windows 98, Windows 2000, XP x64 and Windows 7 targets and nothing else" -f $_.Exception.Message)
 }
-$isWin98 = ($family -eq '2a')
+$arch    = Get-TargetArch -Target $tgt
+$isWin98 = ($family -eq 'win98')
 if (($Clone -or $Stamp) -and -not $isFresh) {
     throw ("-Clone and -Stamp are for a fresh target (one with `CloneFrom` in the config); '{0}' is not one, and Phase 10's images are never cloned over or stamped" -f $Target)
 }
@@ -331,7 +334,7 @@ if ($Stamp) {
         if ($pathLines.Count -ge 2) { $bootedImage = [string]$pathLines[1] }
     }
     $ident = Find-ExtensionIdentity -DebugconLog $dbg
-    $table = Import-CounterTable
+    $table = Import-CounterTable -Arch $arch
     $stampProblems = @(Get-StampProblems -Port $port -PortFree ([bool](Test-MonitorPortFree -Port $port)) -Image $image `
                            -ImageExists ([bool](Test-Path -LiteralPath $image)) -BootedImage $bootedImage `
                            -DebugconLog $dbg -IdentSize $ident.Size -TableSizeof $table.Sizeof)
@@ -523,8 +526,8 @@ if ($Boot) {
     if ($Xfer) {
         $xferDir = if ($WorkDir -ne "") { Join-Path $WorkDir "xfer" } else { Join-Path $vmDir "xfer-p10" }
         if (-not (Test-Path $xferDir)) { New-Item -ItemType Directory -Path $xferDir -Force | Out-Null }
-        $pkgDir = Get-QemuPackageDir -Repo $repo -Arch 'x86'
-        $pkgProblem = Get-QemuPackageProblem -Repo $repo -Arch 'x86'
+        $pkgDir = Get-QemuPackageDir -Repo $repo -Arch $arch
+        $pkgProblem = Get-QemuPackageProblem -Repo $repo -Arch $arch
         $qemuSys = Join-Path $pkgDir "xhci98.sys"
         $staged = Join-Path $xferDir "XHCI98.SYS"
         # A FRESH GUEST GETS THE WHOLE PACKAGE, NOT A LOOSE .SYS.  A Phase 10
@@ -681,6 +684,8 @@ if ($Boot) {
     if ($null -ne $xferDir) {
         $args += @("-drive", ("file=fat:{0},format=raw,if=ide,index=1,snapshot=on" -f $xferDir))
     }
+    if ($tgt.ContainsKey('Accel') -and -not [string]::IsNullOrWhiteSpace($tgt.Accel)) { $args += @("-accel", [string]$tgt.Accel) }
+    if ($tgt.ContainsKey('Smp') -and [int]$tgt.Smp -gt 1) { $args += @("-smp", ([int]$tgt.Smp).ToString()) }
     # NOTE: no -snapshot.  That is the entire point of this script.
     Assert-SingleTraceArg -QemuArgs $args
 
@@ -699,12 +704,20 @@ if ($Boot) {
             Write-Host "  Device Manager -> the unclaimed xHCI controller -> Properties -> Driver ->"
             Write-Host "  Update Driver -> Specify a location -> <xfer>:\   (the Windows CD is attached)"
             Write-Host "  then RESTART the guest when asked, and confirm with -Status after the restart."
+        } elseif ($family -eq 'winxp64') {
+            Write-Host "  Found New Hardware wizard (or Device Manager -> Update Driver) -> Install from a"
+            Write-Host "  list or specific location -> include <xfer>:\ ; at the unsigned-driver prompt"
+            Write-Host "  take Continue Anyway (Alt+C; the focused button is STOP Installation), then -Status."
+        } elseif ($family -eq 'win7') {
+            Write-Host "  Device Manager -> the controller -> Update Driver Software -> Browse my computer ->"
+            Write-Host "  <xfer>:\ ; at 'Windows can't verify the publisher' take Install this driver"
+            Write-Host "  software anyway, then -Status."
         } else {
             Write-Host "  Device Manager -> the controller -> Properties -> Driver -> Update Driver ->"
             Write-Host "  Have Disk -> <xfer>:\   then confirm with -Status."
         }
     } elseif ($null -ne $staged) {
-        $drivers = if ($isWin98) { "C:\WINDOWS\SYSTEM32\DRIVERS" } else { "C:\WINNT\SYSTEM32\DRIVERS" }
+        $drivers = if ($family -eq 'win2k') { "C:\WINNT\SYSTEM32\DRIVERS" } else { "C:\WINDOWS\SYSTEM32\DRIVERS" }
         Write-Host ""
         Write-Host ("transfer drive carries the QEMU build as XHCI98.SYS ({0:N0} bytes)" -f (Get-Item $staged).Length)
         Write-Host ("  in the guest, if you want to update the driver:")
@@ -842,6 +855,10 @@ if ($Boot) {
     Write-Host "  2. SHUT WINDOWS DOWN FROM THE START MENU. Do not kill the window."
     Write-Host "     Windows 98 writes SYSTEM.DAT lazily: a guest that is killed loses the"
     Write-Host "     driver database update and the whole pass with it. Measured."
+    if ($family -ne 'win98') {
+        Write-Host "     On the NT targets QEMU stays up after Windows has shut down (-no-shutdown):"
+        Write-Host "     type quit at the monitor then, because -Stamp refuses while it listens."
+    }
     if ($WorkDir -ne "") {
         Write-Host ("  3. then copy the prepared image back, which also records it for -Stamp:")
         Write-Host ("       powershell -File scripts\vm-matrix\prepare-image.ps1 -Target {0} -Config `"{1}`" -CopyBack" -f $Target, (Resolve-RepoPath $Config))
@@ -955,7 +972,7 @@ if ($Status) {
         Write-Host "the driver has not written to the debug console yet (still booting, or not the qemu build - since task 13-L.1 no other flavour writes to port 0xE9)."
         exit 0
     }
-    $table = Import-CounterTable
+    $table = Import-CounterTable -Arch $arch
     Write-Host ("extension 0x{0}, MiniPortExtensionSize={1}" -f $ident.Va, $ident.Size)
     if ($ident.Size -ne $table.Sizeof) {
         Write-Host ("*** the offset table says SIZEOF {0} - counters below would be WRONG. Regenerate or reinstall." -f $table.Sizeof)
