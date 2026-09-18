@@ -11,7 +11,7 @@ For the next session picking up Phase 22. Read `AGENTS.md` and
 | 22.9 harness extension (XP x64 + Win7 x86 as post-release targets) | **Done and Codex-converged** (`fcbf9a1`, fixes `2dba77a`: an amd64 identity is the full high/low pair or nothing; ExpectNoDriver keys validate against `config.sample.psd1` too). Round 2: no findings. |
 | 22.9 the run itself | **Not run, and now ordered AFTER the cut** (owner, 2026-09-18). Roadmap, `run-22.md` and the cut checkpoint re-worded. |
 | 22.8 prose (history.md, release date in `xhci_version.h` and both INFs, release notes, README Install, issue forms) | **Done**, `26162ae`, date 09/18/2026. |
-| 22.10 the cut + nine install legs from the asset | **Cut done 2026-09-18 14:50** (re-cut twice with `-Force` for the owner's readme changes): `releases\1.1.0.0\`, `out\xhci98-1.1.0.0.zip` 397,087 B. **The nine install legs are NEXT and none is taken** (list in `run-22.md` 22.10). Gives 22.12 (a) (`usbport services written=16` on XP x64 and Vista x64). The Vista x86 leg also re-reads the (b) fix on the `release` flavour. |
+| 22.10 the cut + nine install legs from the asset | **Cut done 2026-09-18 14:50** (re-cut twice with `-Force` for the owner's readme changes): `releases\1.1.0.0\`, `out\xhci98-1.1.0.0.zip` 396,894 B. **The nine install legs are NEXT and none is taken** (list in `run-22.md` 22.10). Gives 22.12 (a) (`usbport services written=16` on XP x64 and Vista x64). The Vista x86 leg also re-reads the (b) fix on the `release` flavour. |
 | 22.12 (c) recovery under CNR/HCRST, (d) iso counters | Open; both may follow the cut. (d) comes off 22.9's audio rows. |
 
 ## Suggested order

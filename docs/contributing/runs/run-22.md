@@ -1250,7 +1250,7 @@ request asks for `FULL.LOG` first and `PROBE.LOG` only if the full run did
 not finish; the "what the version number means" section became "ISSUE
 REPORTING"; and Windows Server 2003 x64 is no longer named in the readme or
 the history entry it embeds (it remains the same OS as XP x64, and the other
-documents still say so). Final asset `out\xhci98-1.1.0.0.zip`, 397,087 B.
+documents still say so). Final asset `out\xhci98-1.1.0.0.zip`, 396,894 B.
 The packager's closing amd64 warning, which still called Vista x64 and
 Windows 7 x64 outside the tier, was corrected in the same change; it is
 console output and reaches no published file. **None of the nine install legs
