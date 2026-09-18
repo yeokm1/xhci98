@@ -166,6 +166,18 @@ $targetIds = @()
 foreach ($t in $cfg.Targets) { $targetIds += (Get-TargetKeys -Target $t) }
 $targetIds = @($targetIds | Sort-Object -Unique)
 
+# An ExpectNoDriver key may name any target the harness supports, not only one
+# this configuration lists: a local config written before a target was added
+# (xp64-fresh and win7-fresh, 2026-09-18) must still validate a run of the
+# targets it does have. The tracked sample is the list of supported targets, so
+# a key in neither is still refused as a typo (Codex review of fcbf9a1).
+$noDriverKeys = @($targetIds)
+$samplePath = Join-Path $PSScriptRoot "config.sample.psd1"
+if (Test-Path -LiteralPath $samplePath) {
+    foreach ($t in (Import-PowerShellDataFile -LiteralPath $samplePath).Targets) { $noDriverKeys += (Get-TargetKeys -Target $t) }
+}
+$noDriverKeys = @($noDriverKeys | Sort-Object -Unique)
+
 foreach ($g in $mx.Groups) {
     foreach ($r in $g.Rows) {
         $rowCount++
@@ -179,7 +191,7 @@ foreach ($g in $mx.Groups) {
             $problems += ("row {0}: has no non-negative integer Settle, which the attach leg sleeps on" -f $r.Name)
         }
         $problems += (Get-RowWedgeProblems -Row $r -TargetIds $targetIds)
-        $problems += (Get-RowNoDriverProblems -Row $r -KnownKeys $targetIds)
+        $problems += (Get-RowNoDriverProblems -Row $r -KnownKeys $noDriverKeys)
         $texts = @()
         $texts += $mx.Always
         if ($r.ContainsKey('Expect')) { $texts += $r.Expect }
@@ -903,7 +915,7 @@ foreach ($tgt in $targetsToRun) {
             $sw = [Diagnostics.Stopwatch]::StartNew()
             $ident = $null
             while ($sw.Elapsed.TotalSeconds -lt $tgt.BootSeconds) {
-                $ident = Find-ExtensionIdentity -DebugconLog $dbgLog
+                $ident = Find-ExtensionIdentity -DebugconLog $dbgLog -Arch (Get-TargetArch -Target $tgt)
                 if ($null -ne $ident.Va) { break }
                 Start-Sleep -Seconds 3
             }

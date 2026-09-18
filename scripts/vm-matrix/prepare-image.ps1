@@ -333,7 +333,7 @@ if ($Stamp) {
         $pathLines = @(Get-Content -LiteralPath $pathsFile)
         if ($pathLines.Count -ge 2) { $bootedImage = [string]$pathLines[1] }
     }
-    $ident = Find-ExtensionIdentity -DebugconLog $dbg
+    $ident = Find-ExtensionIdentity -DebugconLog $dbg -Arch $arch
     $table = Import-CounterTable -Arch $arch
     $stampProblems = @(Get-StampProblems -Port $port -PortFree ([bool](Test-MonitorPortFree -Port $port)) -Image $image `
                            -ImageExists ([bool](Test-Path -LiteralPath $image)) -BootedImage $bootedImage `
@@ -967,7 +967,7 @@ if ($Shot) {
 }
 
 if ($Status) {
-    $ident = Find-ExtensionIdentity -DebugconLog $dbg
+    $ident = Find-ExtensionIdentity -DebugconLog $dbg -Arch $arch
     if ($null -eq $ident.Va) {
         Write-Host "the driver has not written to the debug console yet (still booting, or not the qemu build - since task 13-L.1 no other flavour writes to port 0xE9)."
         exit 0

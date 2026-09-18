@@ -927,7 +927,20 @@ Set-Content -LiteralPath $idLog -Encoding ascii -Value @(
     'xhci98: StartController extension VA low=CE2F5DC8'
     'xhci98: StartController extension VA high=FFFFFADF'
     'xhci98: StartController extension VA low=CE31A008')
-Assert "two amd64 loads are a span"             $true (Find-ExtensionIdentity -DebugconLog $idLog).Spans
+Assert "two amd64 loads are a span"             $true (Find-ExtensionIdentity -DebugconLog $idLog -Arch amd64).Spans
+# A boot poll that lands between the callback line and the low half: on amd64
+# the truncated a= must never become the identity (Codex review of fcbf9a1).
+Set-Content -LiteralPath $idLog -Encoding ascii -Value @(
+    'xhci98: cb StartController irql=00 a=CE2F5DC8 b=0012F000 c=00000000'
+    'xhci98: StartController extension VA high=FFFFFADF')
+Assert "amd64: a= alone is no identity"          $null (Find-ExtensionIdentity -DebugconLog $idLog -Arch amd64).Va
+Assert "x86 reading of the same log keeps a="    "CE2F5DC8" (Find-ExtensionIdentity -DebugconLog $idLog).Va
+Assert "the identity carries its architecture"   "amd64" (Find-ExtensionIdentity -DebugconLog $idLog -Arch amd64).Arch
+$partialIdent = [pscustomobject]@{ Va = 'FFFFFADFCE2F5DC8'; Arch = 'amd64' }
+Assert "amd64 drift sees the missing pair"       $true ((Get-ExtensionIdentityDrift -Ident $partialIdent -DebugconLog $idLog) -ne "")
+Add-Content -LiteralPath $idLog -Encoding ascii -Value 'xhci98: StartController extension VA low=CE2F5DC8'
+Assert "amd64: the completed pair is read"       "FFFFFADFCE2F5DC8" (Find-ExtensionIdentity -DebugconLog $idLog -Arch amd64).Va
+Assert "amd64 drift on the same pair is none"    "" (Get-ExtensionIdentityDrift -Ident $partialIdent -DebugconLog $idLog)
 Remove-Item -LiteralPath $idLog -Force -ErrorAction SilentlyContinue
 
 Write-Host ""

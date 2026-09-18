@@ -252,7 +252,7 @@ function Get-RowNoDriverProblems {
     if ($null -eq $Row -or -not $Row.ContainsKey('ExpectNoDriver')) { return $out }
     foreach ($k in @($Row.ExpectNoDriver.Keys)) {
         if ($KnownKeys -notcontains $k) {
-            $out += ("row {0}: ExpectNoDriver names '{1}', which is neither a target in this configuration nor one a target inherits from, so it declares nothing" -f $Row.Name, $k)
+            $out += ("row {0}: ExpectNoDriver names '{1}', which is neither a target the harness supports (config.sample.psd1) nor one this configuration lists or inherits from, so it declares nothing" -f $Row.Name, $k)
         }
         if ([string]::IsNullOrWhiteSpace([string]$Row.ExpectNoDriver[$k])) {
             $out += ("row {0}: ExpectNoDriver['{1}'] has no reason; the entry is printed in the report and an empty one reads as nothing" -f $Row.Name, $k)

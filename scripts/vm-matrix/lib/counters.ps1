@@ -349,7 +349,8 @@ function Get-ExtensionIdentityDrift {
         [Parameter(Mandatory = $true)]$Ident,
         [Parameter(Mandatory = $true)][string]$DebugconLog
     )
-    $fresh = Find-ExtensionIdentity -DebugconLog $DebugconLog
+    $identArch = if ($Ident.PSObject.Properties['Arch'] -and $Ident.Arch) { [string]$Ident.Arch } else { 'x86' }
+    $fresh = Find-ExtensionIdentity -DebugconLog $DebugconLog -Arch $identArch
     if ($null -eq $fresh.Va) {
         # The leaf name: this text reaches the diffable report body, where an
         # absolute path is a per-host difference.
@@ -366,9 +367,17 @@ function Get-ExtensionIdentityDrift {
 }
 
 function Find-ExtensionIdentity {
-    param([Parameter(Mandatory = $true)][string]$DebugconLog)
+    # -Arch is the TARGET's architecture, not the log's: on amd64 the `a=` on a
+    # callback line is the truncated low half of the pointer, and a boot poll
+    # can see a callback line (and even the high half) before the low half is
+    # written. So an amd64 identity is the complete high/low pair or nothing,
+    # and the `a=` fallback belongs to x86 alone (Codex review of fcbf9a1).
+    param(
+        [Parameter(Mandatory = $true)][string]$DebugconLog,
+        [ValidateSet('x86', 'amd64')][string]$Arch = 'x86'
+    )
     if (-not (Test-Path -LiteralPath $DebugconLog)) {
-        return [pscustomobject]@{ Va = $null; Size = $null; AllVas = @(); AllSizes = @(); Spans = $false }
+        return [pscustomobject]@{ Va = $null; Size = $null; AllVas = @(); AllSizes = @(); Spans = $false; Arch = $Arch }
     }
     $vas = @()
     $wideVas = @()
@@ -397,7 +406,7 @@ function Find-ExtensionIdentity {
         }
         if ($line -match 'MiniPortExtensionSize=([0-9A-Fa-f]{8})') { $sizes += [Convert]::ToInt32($Matches[1], 16) }
     }
-    if ($wideVas.Count -gt 0) { $vas = $wideVas }
+    if ($Arch -eq 'amd64' -or $wideVas.Count -gt 0) { $vas = $wideVas }
     $distinctVas = @($vas | Sort-Object -Unique)
     $distinctSizes = @($sizes | Sort-Object -Unique)
     return [pscustomobject]@{
@@ -411,6 +420,7 @@ function Find-ExtensionIdentity {
         # offset check and the second means a before/after pair may straddle a
         # restart, which Get-CounterDelta would then see as negative deltas.
         Spans    = (($distinctSizes.Count -gt 1) -or ($distinctVas.Count -gt 1))
+        Arch     = $Arch
     }
 }
 
