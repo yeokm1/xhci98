@@ -1268,7 +1268,8 @@ request asks for `FULL.LOG` first and `PROBE.LOG` only if the full run did
 not finish; the "what the version number means" section became "ISSUE
 REPORTING"; and Windows Server 2003 x64 is no longer named in the readme or
 the history entry it embeds (it remains the same OS as XP x64, and the other
-documents still say so). Final asset `out\xhci98-1.1.0.0.zip`, 396,894 B.
+documents still say so). Asset `out\xhci98-1.1.0.0.zip` then 396,894 B; after
+the ProductName re-cut below, **396,812 B**.
 The packager's closing amd64 warning, which still called Vista x64 and
 Windows 7 x64 outside the tier, was corrected in the same change; it is
 console output and reaches no published file.
@@ -1327,7 +1328,37 @@ published binaries (14:33) predate the last `src\` commit (`26162ae`, 14:45).
 That commit changed only `XHCI_DRIVERVER_DATE` and the two INFs' `DriverVer`.
 The date string appears in none of the four published `.sys` files - only
 the INF gate reads it - and all four published INFs, `readme.txt` and the
-`history.md` entry say 2026-09-18. No re-cut.
+`history.md` entry say 2026-09-18. No re-cut for that.
+
+**Re-cut for the ProductName, and leg 5 retaken, 2026-09-18 evening.** The
+binaries' version resource still read "xhci98 - USB 2.0 over xHCI for Windows
+98 SE and Windows 2000", short of the supported set since Windows ME and 32-bit
+XP. The owner chose a name that lists no system: "xhci98 - USB 2.0 host
+controller driver for xHCI" (`src\xhci98.rc`, `1a8970e`).
+`build-driver.cmd all` and `all -amd64`, every gate green, then
+`make-release.ps1 -Force`, nothing uploaded (`b4d3404`): the four `xhci98.sys`
+files and their size and SHA-256 lines in `readme.txt` changed, nothing else.
+
+*Why only leg 5 was retaken, and 22.12 (a) and (c) were not re-read.* Each
+new binary was compared section by section with the one read before it -
+the four published ones, 22.12 (c)'s `qemu` x86 build (`22344b2c...`) and
+22.12 (a)'s `qemu` amd64 build (`150C9F5B...`). Every section but `.rsrc` has
+the same layout, and `.data`, `INIT`, `.pdata` and `.reloc` are
+byte-identical. `.text` differs only in build metadata, which lives there
+because `.rdata` is merged into it: the debug directory's timestamp and
+debug-data file offset (x86), the timestamp and the 16-byte PDB GUID
+(amd64), and on the two `qemu` builds the `__TIME__` digits of the "built"
+line. No instruction byte moved, so (c)'s breakpoint site `0x843D` and both
+readings carry over as measured.
+
+*Leg 5 retaken* on a fresh overlay of the same clean copy, from the re-cut
+asset's `release-x64\` (`98A5A32A...`, 96,768 B), by the same route. Same
+Logo prompt, `Section name: "Xhci.Dev"` four times and `Xhci.Dev6` never, the
+four OS-supplied files with the same hashes, the installed `xhci98.sys`
+`98A5A32A...` with the new ProductName, the same five device entries,
+disable / enable / uninstall / rescan all clean, the port-`0xE9` log 0 bytes,
+and QEMU's trace `slot_enable` 9, `slot_address` 20, `slot_configure` 12 - the
+first run's counts exactly. Logs `vm\t2210-xp64-l5b-*`.
 
 **The order the rest of the phase is taken in** (2026-09-18). Two rules shape
 it. Risk first: a finding re-cuts the release, and every leg already taken on

@@ -1768,10 +1768,12 @@ Owed:
       corrects
 - [ ] 22.10: both architectures built and cut - **cut 2026-09-18 14:50**,
       `releases\1.1.0.0\` with four flavour directories and
-      `out\xhci98-1.1.0.0.zip` (396,894 B after four same-day re-cuts for the readme, no Microsoft file), every gate
+      `out\xhci98-1.1.0.0.zip` (396,812 B after four same-day re-cuts for the readme and a fifth, `b4d3404`, for the binaries' ProductName; no Microsoft file), every gate
       green; **leg 5, the amd64 package on XP x64, passed on 2026-09-18**
       (the two-field line took `Xhci.Dev` on NT 5.2, the Logo prompt,
-      every clause; `runs/run-22.md`); what stays open is the rest - then the asset read on nine
+      every clause), **and again on the ProductName re-cut the same
+      evening**, whose binaries were measured code-identical to every one
+      read before, so 22.12 (a) and (c) carry over (`runs/run-22.md`); what stays open is the rest - then the asset read on nine
       install legs - the four x86 ones with full device clauses, the amd64
       package on XP x64, Vista x64 and Windows 7 x64, and the x86 package on
       Vista x86 and Windows 7 x86, recording the unsigned-driver prompt - and
