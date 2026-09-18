@@ -1271,8 +1271,63 @@ the history entry it embeds (it remains the same OS as XP x64, and the other
 documents still say so). Final asset `out\xhci98-1.1.0.0.zip`, 396,894 B.
 The packager's closing amd64 warning, which still called Vista x64 and
 Windows 7 x64 outside the tier, was corrected in the same change; it is
-console output and reaches no published file. **None of the nine install legs
-has been taken yet.**
+console output and reaches no published file.
+
+**Leg 5, XP x64, 2026-09-18 evening: passed every clause, no finding.** The
+guest was `vm\winxp64.img` @ `winxp64-clean-install-smp4` (multiprocessor HAL),
+copied read-only with `qemu-img convert -l` and booted through a throw-away
+overlay: `-smp 4`, `-accel tcg,thread=multi`, `qemu-xhci,p3=0`, the 22.11 XP
+x64 machine otherwise. The transfer drive was the unzipped
+`out\xhci98-1.1.0.0.zip`'s `release-x64\` directory: `xhci98.sys` SHA-256
+`AD73345A...`, 97,280 B, identical to `releases\1.1.0.0\release-x64` and
+`src\objfre\amd64`, and its INF identical to `src\xhci98-amd64.inf`.
+
+- the install: Found New Hardware Wizard, "Install from a list or specific
+  location", the transfer drive (`E:` on this guest; `D:` is the CD). **The
+  prompt was XP's Windows Logo one** - "has not passed Windows Logo testing
+  to verify its compatibility with this version of Windows", taken with
+  Continue Anyway; `setupapi.log` logs it as `#W366 ... (Policy=Warn, user
+  said ok)`. No prompt for a CD, no restart asked for
+- **the two-field line on NT 5.2**: `setupapi.log` records `Found
+  "PCI\CC_0C0330" in ... Section name: "Xhci.Dev"` and installs
+  `[Xhci.Dev.NTAMD64]`; `Xhci.Dev6` appears nowhere. Only
+  `[XhciModels.NTamd64]` lists `Xhci.Dev` (`[XhciModels.NTamd64.6.0]` lists
+  `Xhci.Dev6`), so the engine took the `NTamd64` field and skipped
+  `NTamd64.6.0`. XP's default log level names the install section, not the
+  models section, so that is the reading's form
+- the four OS-supplied files on disk after it, read off the flattened
+  overlay with 7-Zip: `usbport.sys` (`6FC83F49...`, 212,480 B) and
+  `usbhub.sys` (`92B1744E...`, 102,400 B), the hashes "Windows XP x64
+  target VM" records, `usbd.sys` (7,552 B) in `System32\Drivers` and
+  `usbui.dll` (123,392 B) in `System32`; the same listing of the clean copy
+  finds none of the five, and the installed `xhci98.sys` is the asset's
+  `AD73345A...`
+- registered and started: Device Manager shows **USB 2.0 eXtensible Host
+  Controller (xhci98)** and **USB Root Hub**, no bang
+- the three devices, hot-plugged over the monitor: **USB Human Interface
+  Device**, **HID-compliant mouse**, **USB Mass Storage Device**, **USB
+  Composite Device**, **USB Audio Device** - the five names task 21.5 read
+- disable (children torn down, no restart prompt), enable (all five back),
+  uninstall (the USB class gone, no restart prompt), rescan (the server-side
+  install refused as unsigned, `#E358`, then the wizard reinstalled it from
+  `oem0.inf` behind the same Logo prompt; all five back, no bang)
+- the flavour, read 21.5's way: the port-`0xE9` log stayed at **0 bytes**
+  for the whole session, and QEMU's trace shows `slot_enable` 9,
+  `slot_configure` 12 - three full enumerations of three devices (install,
+  enable, rescan)
+
+Harness `out\post-release\task22-10\` (git-ignored: `xp64.cmd`, the unzipped
+asset, screenshots, the disk extract); disks `vm\t2210\`; logs
+`vm\t2210-xp64-l5-*`. 22.12 (a) was read on the same clean copy afterwards,
+from the `qemu` build, because `release` cannot show it (22.12 below).
+**Legs 6 to 9 and the four x86 legs have not been taken.**
+
+Whether the cut needed a re-cut was checked the same evening, because the
+published binaries (14:33) predate the last `src\` commit (`26162ae`, 14:45).
+That commit changed only `XHCI_DRIVERVER_DATE` and the two INFs' `DriverVer`.
+The date string appears in none of the four published `.sys` files - only
+the INF gate reads it - and all four published INFs, `readme.txt` and the
+`history.md` entry say 2026-09-18. No re-cut.
 
 **The order the rest of the phase is taken in** (2026-09-18). Two rules shape
 it. Risk first: a finding re-cuts the release, and every leg already taken on
@@ -1282,7 +1337,7 @@ the legs never read, and the four legacy x86 legs, read at every cut since
 `1.0.1.0`, last. And one guest at a time: each guest is booted once and
 everything owed on it is taken in that session.
 
-1. XP x64 (leg 5), with 22.12 (a). First of the legs because it carries the
+1. **Done 2026-09-18, no finding.** XP x64 (leg 5), with 22.12 (a). First of the legs because it carries the
    one INF shape no guest has parsed, the two-field line on an NT 5.2
    engine; a finding there is an INF change, which leaves the `.sys` files
    but retakes every leg, since every leg installs through the INF. The NT
@@ -1291,8 +1346,9 @@ everything owed on it is taken in that session.
 3. Windows 7 x86 (leg 9).
 4. Vista x64 (leg 6), with 22.12 (a): the `release` flavour writes no trace,
    so revert to the clean snapshot, install the `qemu` package, and read
-   `usbport services written=16` off the port-`0xE9` log. Whether (a)'s line
-   can be read on `release` at all is to be checked first on XP x64.
+   `usbport services written=16` off the port-`0xE9` log. `release` cannot
+   show (a)'s line at all (settled on XP x64, 22.12 (a) below), so this
+   route is the only one.
 5. Vista x86 (leg 8), re-reading 22.12 (b) on the `release` flavour, or by
    the same `qemu` route if `release` cannot show it.
 6. The four legacy x86 legs, then the asset's file list against what the
@@ -1391,7 +1447,25 @@ the cut; (c) and (d) may follow it.
 - [ ] (a) amd64 service block: `usbport services written=16` on XP x64 and
       Vista x64 from the corrected verifier (`xhciVerifyPacketAfterRegistration`
       walks `PVOID`s; design 11 sections 6.3 and 6.5 carry the qualification
-      that every earlier amd64 reading was eight)
+      that every earlier amd64 reading was eight). **XP x64 done
+      2026-09-18; Vista x64 open.**
+
+      *`release` cannot show it.* The count and the `ABI-SUSPECT` lines are
+      `XHCI_DBG_VALUE` / `XHCI_DBG_TEXT`, which compile only into `qemu`, and
+      the verifier runs in `DriverEntry`, before any extension exists, so its
+      result reaches no counter `xhcisnap` could read. Both halves are
+      therefore read on `qemu`.
+
+      *XP x64.* `build-driver.cmd qemu -amd64` on the cut's tree (every gate
+      green; `built Sep 18 2026 19:11:53`, SHA-256 `150C9F5B...`), staged by
+      `make-package.ps1 -Flavor qemu -Arch amd64`, installed on a fresh
+      overlay of leg 5's clean copy by the same wizard route. The log:
+      `interface version presented=000000C8`, `nt6 services written=0`,
+      **`usbport services written=00000010`**, and the 16-pointer dump with
+      every slot a full 64-bit pointer (high half `FFFFFADF`) - the first
+      three equal, one routine in three slots. No `ABI-SUSPECT` line anywhere
+      in the log; registered, No Op self-test completion code 1. Log
+      `vm\t2210-xp64-a-debugcon.log`
 - [x] (b) port suspend and resume, **taken on Vista x86 rather than XP,
       2026-09-18, and passed after one driver fix.** Expected: a device
       usbhub selectively suspends and resumes with no status query between

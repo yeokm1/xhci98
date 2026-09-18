@@ -1712,9 +1712,9 @@ and every reading, box by box.
 | 22.7 | the charset gate on tracked source |
 | 22.8 | what a cut needs that no gate supplies: the date 2026-09-18, the history entry, the release notes, README, the issue forms |
 | 22.9 | the primary targets unchanged, plus XP x64 and Windows 7 x86 - open |
-| 22.10 | the cut, and the install route read from the asset: cut 2026-09-18; the nine install legs open |
+| 22.10 | the cut, and the install route read from the asset: cut 2026-09-18; leg 5 (XP x64) passed, the other eight open |
 | 22.11 | issue 5's mechanism replaced by `USB_MINIPORT_FLAGS_DISABLE_SS` |
-| 22.12 | the guest readings the 2026-09-17 audit fixes owe; (b) done on Vista x86, (c) on the Windows 2000 SMP guest - open |
+| 22.12 | the guest readings the 2026-09-17 audit fixes owe; (b) done on Vista x86, (c) on the Windows 2000 SMP guest, (a) on XP x64 - open |
 
 Owed:
 
@@ -1724,7 +1724,10 @@ Owed:
       only a guest can read, and two are still unread: (a) the post-registration
       verifier walks the service block as pointers, so an amd64 guest's
       `usbport services written=16` line must be read again on XP x64 and
-      Vista x64 - every earlier amd64 reading of that line covered eight;
+      Vista x64 - every earlier amd64 reading of that line covered eight -
+      **read on XP x64 on 2026-09-18, 16 full 64-bit pointers and no
+      `ABI-SUSPECT`, on the `qemu` build because `release` cannot show the
+      line; Vista x64 open**;
       (b) the root-hub port shadow is folded before the SUSPEND and RESUME
       writes and in the resume timer - **read on 2026-09-18, on Vista x86
       rather than XP**, because under task 22.11's flag neither XP's nor
@@ -1766,7 +1769,9 @@ Owed:
 - [ ] 22.10: both architectures built and cut - **cut 2026-09-18 14:50**,
       `releases\1.1.0.0\` with four flavour directories and
       `out\xhci98-1.1.0.0.zip` (396,894 B after four same-day re-cuts for the readme, no Microsoft file), every gate
-      green; what stays open is the rest - then the asset read on nine
+      green; **leg 5, the amd64 package on XP x64, passed on 2026-09-18**
+      (the two-field line took `Xhci.Dev` on NT 5.2, the Logo prompt,
+      every clause; `runs/run-22.md`); what stays open is the rest - then the asset read on nine
       install legs - the four x86 ones with full device clauses, the amd64
       package on XP x64, Vista x64 and Windows 7 x64, and the x86 package on
       Vista x86 and Windows 7 x86, recording the unsigned-driver prompt - and
