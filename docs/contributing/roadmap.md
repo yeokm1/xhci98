@@ -1711,7 +1711,7 @@ and every reading, box by box.
 | 22.6 | the record: the tier in both architectures, nothing said of issue 7 |
 | 22.7 | the charset gate on tracked source |
 | 22.8 | what a cut needs that no gate supplies: the date 2026-09-18, the history entry, the release notes, README, the issue forms |
-| 22.9 | the primary targets unchanged, plus XP x64 and Windows 7 x86 - open |
+| 22.9 | the primary targets unchanged, plus XP x64 and Windows 7 x86: first run 2026-09-19, one finding (Windows 7 x86 bugchecks in usbport with a Full-Speed hub on a root port) - open |
 | 22.10 | the cut, and the install route read from the asset: cut 2026-09-18; all nine install legs passed, the asset's file list checked - done |
 | 22.11 | issue 5's mechanism replaced by `USB_MINIPORT_FLAGS_DISABLE_SS` |
 | 22.12 | the guest readings the 2026-09-17 audit fixes owe; (b) done on Vista x86, (c) on the Windows 2000 SMP guest, (a) on XP x64 and Vista x64; (d) open |
@@ -1767,7 +1767,12 @@ Owed:
       2026-09-18 (cut first): the four images are prepared from the cut's
       tree, and a finding amends the release under Phase 15's rule. The two
       new targets' `ExpectNoDriver` entries are guesses the first run
-      corrects
+      corrects. **First run 2026-09-19** (`runs/run-22.md` 22.9): Windows
+      2000 PASS; XP x64 against only on `usb-net/fs`; Windows 98's audio
+      replug fails under QEMU 11.1.0 and passes under 11.0.0; **Windows 7
+      x86 bugchecks (`STOP 0x7E` in usbport's USB 2.0 budgeter) with a
+      Full-Speed hub on a root port and a mouse behind it** - issue 6
+      section 5's residual, the owner's to decide against `1.1.0.0`
 - [x] 22.10: both architectures built and cut - **cut 2026-09-18 14:50**,
       `releases\1.1.0.0\` with four flavour directories and
       `out\xhci98-1.1.0.0.zip` (396,812 B after four same-day re-cuts for the readme and a fifth, `b4d3404`, for the binaries' ProductName; no Microsoft file), every gate

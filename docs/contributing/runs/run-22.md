@@ -1190,6 +1190,110 @@ deadlines under TCG, and whether the keep-alive mouse binds before the ready
 poll; and their `ExpectNoDriver` rows for uas, serial and braille are
 guesses the first run corrects. Its audio rows give 22.12 (d).
 
+*The first run, 2026-09-18 night to 2026-09-19, and it is open: one
+finding, and two readings that change earlier records.* Taken on the cut's
+tree (HEAD `8706468`), the `qemu` build `926846ec74bbd4fd` (164,016 B) and
+its amd64 twin, every gate green, the offset tables unchanged (`SIZEOF`
+92304 x86, 95544 amd64). QEMU 11.1.0 (`v11.1.0-12130-ge470268ff4`) under
+TCG unless a line says otherwise. The four reports are in
+`run-22-post-release/`; the evidence is in `out\post-release\1.1.0.0*\`.
+
+- **Preparation.** All four images re-cloned and stamped
+  `base-1.1.0.0-qemu`, each stamp its file's only snapshot; the owner drove
+  every in-guest install and wizard. Two corrections to how it was first
+  done, both mine. Windows 98 was first taught by `-Preload` across root
+  ports 2-8, but the matrix attaches every row to **root port 2** and Windows
+  98 keys a devnode by port, so a first run raised the audio wizard mid-row
+  and was stopped (partial output parked, not a reading); the image was
+  re-taught one class at a time with `-Attach <class> -AtPort 2` - wizards
+  for the High-Speed mouse, storage, uas, serial, braille, ccid, u2f and
+  audio, the rest bound silently, audio attached last and left attached
+  through the shutdown - and re-stamped. `-Preload` beyond port 8 is refused
+  by QEMU ("usb port 9 (bus xhci.0) not found") while the script still
+  counts the device as attached. And a tablet preload boot hung QEMU exactly
+  as `prepare-image.ps1`'s account of the tablet hangs describes; the matrix
+  excludes both tablet rows on Windows 98 for that reason, so it was never
+  needed. The NT guests sit at their login screen during a run; that costs
+  nothing (ready after 31 s on all three).
+- **`2b-fresh` (Windows 2000): PASS**, 17 rows, 6 NODRIVER expected, 0
+  against, 1:47:44. Against Phase 20's report the body differs only by the
+  three "ExpectNoDriver entry did not apply" notes, whose entries the
+  `1.0.2.0` release commit removed as that report asked, and the storage
+  row's transfer identity count.
+- **`xp64-fresh` (XP x64): FAIL on one row, `usb-net/fs` NODRIVER** on both
+  legs, every fault and refusal counter zero; there is no `ExpectNoDriver`
+  entry for it, and XP x64 has no in-box driver for QEMU's RNDIS device.
+  Everything else as expected (uas, serial, braille NODRIVER as guessed),
+  both hub rows including the churn PASS; 1:47:06.
+- **`2a-fresh` (Windows 98 SE): FAIL on one row, the `usb-audio/fs`
+  replug**, the second arrival never addressed - the 20.7 signature (connect
+  change raised, no port reset asked for), every fault counter zero; 1:23:04,
+  run alone. `lessons.md`'s entry for this row said it fails only with a
+  second guest beside it. **Here it failed alone, and the variable is the
+  emulator**: the audio group by itself, same image, stamp, binary and
+  host, alternating - QEMU 11.1.0 replug FAIL three times out of three, QEMU
+  11.0.0 (`v11.0.0-12122-ga4bb4b10c9`) PASS both legs twice out of twice.
+  `lessons.md` carries the new reading.
+- **`win7-fresh` (Windows 7 x86): FAIL**, 17 rows, 3 NODRIVER expected, 1
+  not reached, 4 against, 1:32:00. HID, storage, bot, ccid, u2f and the plain
+  hub rows PASS; uas, serial, braille NODRIVER as guessed; `usb-net/fs`
+  NODRIVER as on XP x64. Two rows need the paragraphs below.
+- **`usb-audio/fs` on Windows 7 reads NODRIVER, and the device is bound.**
+  Not the login (the row's own screenshot shows a logged-in desktop), not QEMU (the same
+  under 11.0.0), not install time (the same with the settle raised from 35
+  to 300 s through an untracked matrix copy). Booted read-only by hand with
+  the device attached, Device Manager shows "USB Composite Device" and
+  "Audio Device" under Sound, video and game controllers with no problem
+  code. QEMU's `usb-audio` has endpoints only in its streaming interface's
+  alternate setting 1, so "endpoints opened" moves only when something
+  streams; an attempt to play a system sound moved no isochronous counter,
+  and whether it reached the device is not established. The row's criterion
+  cannot see this bind on Windows 7; what XP x64 does differently to pass it
+  is not read.
+- **`usb-hub/churn` on Windows 7: the guest bugchecks - the finding.** The
+  row read ERROR "not-executing" on the run and again on a `-Group hub`
+  re-run; each time the group's debug console holds four `DriverEntry`
+  lines, three of them with no `StopController` or teardown before them,
+  where every other group on every target holds one: the guest was
+  restarting, and the harness went on reading the first boot's extension
+  address (`transfers completed` read `0x7D8306EB`, then
+  `0x8201A401` -> 0). A third run through an untracked copy of the runner
+  with `-action reboot=shutdown` held the guest on the stop screen:
+  **`STOP 0x0000007E (0xC0000005, 0x8EAEED30, 0x8A6D749C, 0x8A6D7080)`,
+  `USBPORT.SYS` base `8EAD0000`, DateStamp `4ce79c15`** (the
+  `tools/win7-x86-extracted` file). The exception record is a read of
+  `0x00000A04`; the faulting instruction, read statically with the public
+  PDB, is `usbport!Allocate_time_for_endpoint+0x15d`, `mov eax,[ecx+0A00h]`
+  with `ecx = [esi+0Ch] = 4`, and the stack walked from the context record
+  is usbport's alone, `USB2LIB_AllocUsb2BusTime`,
+  `USBPORT_AllocateBandwidthUSB20`, `MPx_AllocateBandwidth`,
+  `USBPORT_OpenEndpoint`, `USBPORT_InternalOpenInterface`,
+  `USBPORT_SelectConfiguration`, `USBPORT_ProcessURB`, down to
+  `USBPORT_Dispatch` - no `xhci98.sys` frame. The trigger is the churn's
+  first steps: QEMU's `usb-hub` (a Full-Speed hub) on root port 2 and a
+  `usb-mouse` behind it at `2.1`; the mouse's slot was addressed and its
+  configuration is what faults, in usbport's USB 2.0 bus-time budgeter. That
+  is **issue 6 section 5's residual topology** - a hub with no transaction
+  translator on a root port, with a Full-Speed device behind it - which
+  batch 7b-V0 measured harmless on Windows 98 and 2000 and which the same
+  churn passed on 2000 and XP x64 in this run. Why the budgeter's pointer is
+  4 is not read; issue 6's open question (why a believed-High-Speed 1.1 hub
+  gets a TT record) is the nearest one. Vista, and Windows 7 and Vista x64,
+  were not tried. Evidence `out\post-release\1.1.0.0-win7-hub-diag\`: the
+  stop screen, the registers, the whole guest memory as ELF
+  (`win7-bsod-mem.elf`, 2.16 GB), both logs.
+- **22.12 (d) cannot be read off these rows.** It needs isochronous
+  traffic, and the matrix's audio row plays nothing by design (its
+  expectations are inert for that reason); every report's isochronous
+  counters are zero. It needs a played stream, as batch 9-V had.
+
+What the owner has to decide, and nothing was changed for: whether the
+Windows 7 finding amends `1.1.0.0` under Phase 15's rule (a release-notes
+limitation for a USB 1.1 hub on Vista and Windows 7, a driver change, or
+both); the `usb-net/fs` `ExpectNoDriver` entries for `xp64-fresh` and
+`win7-fresh`; how the Windows 7 audio row should be judged; and the QEMU
+version the harness pins.
+
 ## 22.10 - the cut itself, and the install route read from the asset
 
 **22.10 - the cut itself, and the install route read from the asset.**

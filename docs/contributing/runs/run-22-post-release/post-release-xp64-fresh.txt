@@ -1,0 +1,627 @@
+﻿# post-release run
+# driver:    1.1.0.0 qemu, 278528 B, sha256 22cdd3eca561e664
+# image:     vm\fresh-xp64.img, stamp base-1.1.0.0-qemu, from winxp64.img winxp64-clean-install-smp4
+# qemu:      11.1.0 (v11.1.0-12130-ge470268ff4), accel tcg,thread=multi
+# offsets:   SIZEOF 95544, 401 counters
+# started:   2026-09-19 00:23:04, elapsed 1:47:06
+# verdict:   xp64-fresh FAIL, 17 rows, 3 NODRIVER expected, 0 not reached
+#
+# Outcomes: PASS FAIL NODRIVER INERT ERROR EXCLUDED - see docs/contributing/design/06-device-matrix-verdict.md
+# A '-> X' in the outcome column marks the expectation that did not hold.
+# A row name ending in '/replug' is the same device attached a second time - design record 09 section 5.
+#
+TARGET ROW                          OUTCOME   EXPECTATION                                                    READING
+xp64-fresh usb-audio/fs                 PASS      advance devices addressed                                      +2
+xp64-fresh usb-audio/fs                 PASS      advance slots enabled                                          +1
+xp64-fresh usb-audio/fs                 PASS      zero fatal controller status                                   0
+xp64-fresh usb-audio/fs                 PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-audio/fs                 PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-audio/fs                 PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-audio/fs                 PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-audio/fs                 PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-audio/fs                 PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-audio/fs                 PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-audio/fs                 PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-audio/fs                 PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-audio/fs                 PASS      zero endpoint configure failures                               0
+xp64-fresh usb-audio/fs                 PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-audio/fs                 PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-audio/fs                 PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 5 == 5
+xp64-fresh usb-audio/fs                 PASS      advance endpoints opened >= 1                                  +1
+xp64-fresh usb-audio/fs/replug          PASS      advance devices addressed                                      +1
+xp64-fresh usb-audio/fs/replug          PASS      advance slots enabled                                          +1
+xp64-fresh usb-audio/fs/replug          PASS      zero fatal controller status                                   0
+xp64-fresh usb-audio/fs/replug          PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-audio/fs/replug          PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-audio/fs/replug          PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-audio/fs/replug          PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-audio/fs/replug          PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-audio/fs/replug          PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-audio/fs/replug          PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-audio/fs/replug          PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-audio/fs/replug          PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-audio/fs/replug          PASS      zero endpoint configure failures                               0
+xp64-fresh usb-audio/fs/replug          PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-audio/fs/replug          PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-audio/fs/replug          PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+xp64-fresh usb-audio/fs/replug          PASS      advance endpoints opened >= 1                                  +1
+xp64-fresh usb-kbd/hs                   PASS      advance devices addressed                                      +1
+xp64-fresh usb-kbd/hs                   PASS      advance slots enabled                                          +1
+xp64-fresh usb-kbd/hs                   PASS      zero fatal controller status                                   0
+xp64-fresh usb-kbd/hs                   PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-kbd/hs                   PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-kbd/hs                   PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-kbd/hs                   PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-kbd/hs                   PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-kbd/hs                   PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-kbd/hs                   PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-kbd/hs                   PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-kbd/hs                   PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-kbd/hs                   PASS      zero endpoint configure failures                               0
+xp64-fresh usb-kbd/hs                   PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-kbd/hs                   PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-kbd/hs                   PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+xp64-fresh usb-kbd/hs                   PASS      advance endpoints opened >= 1                                  +1
+xp64-fresh usb-kbd/hs                   PASS      zero endpoint speed mismatches                                 0
+xp64-fresh usb-kbd/hs/replug            PASS      advance devices addressed                                      +1
+xp64-fresh usb-kbd/hs/replug            PASS      advance slots enabled                                          +1
+xp64-fresh usb-kbd/hs/replug            PASS      zero fatal controller status                                   0
+xp64-fresh usb-kbd/hs/replug            PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-kbd/hs/replug            PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-kbd/hs/replug            PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-kbd/hs/replug            PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-kbd/hs/replug            PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-kbd/hs/replug            PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-kbd/hs/replug            PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-kbd/hs/replug            PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-kbd/hs/replug            PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-kbd/hs/replug            PASS      zero endpoint configure failures                               0
+xp64-fresh usb-kbd/hs/replug            PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-kbd/hs/replug            PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-kbd/hs/replug            PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+xp64-fresh usb-kbd/hs/replug            PASS      advance endpoints opened >= 1                                  +1
+xp64-fresh usb-kbd/hs/replug            PASS      zero endpoint speed mismatches                                 0
+xp64-fresh usb-kbd/fs                   PASS      advance devices addressed                                      +1
+xp64-fresh usb-kbd/fs                   PASS      advance slots enabled                                          +1
+xp64-fresh usb-kbd/fs                   PASS      zero fatal controller status                                   0
+xp64-fresh usb-kbd/fs                   PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-kbd/fs                   PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-kbd/fs                   PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-kbd/fs                   PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-kbd/fs                   PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-kbd/fs                   PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-kbd/fs                   PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-kbd/fs                   PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-kbd/fs                   PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-kbd/fs                   PASS      zero endpoint configure failures                               0
+xp64-fresh usb-kbd/fs                   PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-kbd/fs                   PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-kbd/fs                   PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+xp64-fresh usb-kbd/fs                   PASS      advance endpoints opened >= 1                                  +1
+xp64-fresh usb-kbd/fs                   PASS      advance endpoint speed mismatches                              +1
+xp64-fresh usb-kbd/fs/replug            PASS      advance devices addressed                                      +1
+xp64-fresh usb-kbd/fs/replug            PASS      advance slots enabled                                          +1
+xp64-fresh usb-kbd/fs/replug            PASS      zero fatal controller status                                   0
+xp64-fresh usb-kbd/fs/replug            PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-kbd/fs/replug            PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-kbd/fs/replug            PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-kbd/fs/replug            PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-kbd/fs/replug            PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-kbd/fs/replug            PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-kbd/fs/replug            PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-kbd/fs/replug            PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-kbd/fs/replug            PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-kbd/fs/replug            PASS      zero endpoint configure failures                               0
+xp64-fresh usb-kbd/fs/replug            PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-kbd/fs/replug            PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-kbd/fs/replug            PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+xp64-fresh usb-kbd/fs/replug            PASS      advance endpoints opened >= 1                                  +1
+xp64-fresh usb-kbd/fs/replug            PASS      advance endpoint speed mismatches                              +1
+xp64-fresh usb-mouse/hs                 PASS      advance devices addressed                                      +1
+xp64-fresh usb-mouse/hs                 PASS      advance slots enabled                                          +1
+xp64-fresh usb-mouse/hs                 PASS      zero fatal controller status                                   0
+xp64-fresh usb-mouse/hs                 PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-mouse/hs                 PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-mouse/hs                 PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-mouse/hs                 PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-mouse/hs                 PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-mouse/hs                 PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-mouse/hs                 PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-mouse/hs                 PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-mouse/hs                 PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-mouse/hs                 PASS      zero endpoint configure failures                               0
+xp64-fresh usb-mouse/hs                 PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-mouse/hs                 PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-mouse/hs                 PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+xp64-fresh usb-mouse/hs                 PASS      advance endpoints opened >= 1                                  +1
+xp64-fresh usb-mouse/hs/replug          PASS      advance devices addressed                                      +1
+xp64-fresh usb-mouse/hs/replug          PASS      advance slots enabled                                          +1
+xp64-fresh usb-mouse/hs/replug          PASS      zero fatal controller status                                   0
+xp64-fresh usb-mouse/hs/replug          PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-mouse/hs/replug          PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-mouse/hs/replug          PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-mouse/hs/replug          PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-mouse/hs/replug          PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-mouse/hs/replug          PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-mouse/hs/replug          PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-mouse/hs/replug          PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-mouse/hs/replug          PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-mouse/hs/replug          PASS      zero endpoint configure failures                               0
+xp64-fresh usb-mouse/hs/replug          PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-mouse/hs/replug          PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-mouse/hs/replug          PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+xp64-fresh usb-mouse/hs/replug          PASS      advance endpoints opened >= 1                                  +1
+xp64-fresh usb-mouse/fs                 PASS      advance devices addressed                                      +1
+xp64-fresh usb-mouse/fs                 PASS      advance slots enabled                                          +1
+xp64-fresh usb-mouse/fs                 PASS      zero fatal controller status                                   0
+xp64-fresh usb-mouse/fs                 PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-mouse/fs                 PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-mouse/fs                 PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-mouse/fs                 PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-mouse/fs                 PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-mouse/fs                 PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-mouse/fs                 PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-mouse/fs                 PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-mouse/fs                 PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-mouse/fs                 PASS      zero endpoint configure failures                               0
+xp64-fresh usb-mouse/fs                 PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-mouse/fs                 PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-mouse/fs                 PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+xp64-fresh usb-mouse/fs                 PASS      advance endpoints opened >= 1                                  +1
+xp64-fresh usb-mouse/fs                 PASS      advance endpoint speed mismatches                              +1
+xp64-fresh usb-mouse/fs/replug          PASS      advance devices addressed                                      +1
+xp64-fresh usb-mouse/fs/replug          PASS      advance slots enabled                                          +1
+xp64-fresh usb-mouse/fs/replug          PASS      zero fatal controller status                                   0
+xp64-fresh usb-mouse/fs/replug          PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-mouse/fs/replug          PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-mouse/fs/replug          PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-mouse/fs/replug          PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-mouse/fs/replug          PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-mouse/fs/replug          PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-mouse/fs/replug          PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-mouse/fs/replug          PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-mouse/fs/replug          PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-mouse/fs/replug          PASS      zero endpoint configure failures                               0
+xp64-fresh usb-mouse/fs/replug          PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-mouse/fs/replug          PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-mouse/fs/replug          PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+xp64-fresh usb-mouse/fs/replug          PASS      advance endpoints opened >= 1                                  +1
+xp64-fresh usb-mouse/fs/replug          PASS      advance endpoint speed mismatches                              +1
+xp64-fresh usb-tablet/hs                PASS      advance devices addressed                                      +1
+xp64-fresh usb-tablet/hs                PASS      advance slots enabled                                          +1
+xp64-fresh usb-tablet/hs                PASS      zero fatal controller status                                   0
+xp64-fresh usb-tablet/hs                PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-tablet/hs                PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-tablet/hs                PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-tablet/hs                PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-tablet/hs                PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-tablet/hs                PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-tablet/hs                PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-tablet/hs                PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-tablet/hs                PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-tablet/hs                PASS      zero endpoint configure failures                               0
+xp64-fresh usb-tablet/hs                PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-tablet/hs                PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-tablet/hs                PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+xp64-fresh usb-tablet/hs                PASS      advance endpoints opened >= 1                                  +1
+xp64-fresh usb-tablet/hs/replug         PASS      advance devices addressed                                      +1
+xp64-fresh usb-tablet/hs/replug         PASS      advance slots enabled                                          +1
+xp64-fresh usb-tablet/hs/replug         PASS      zero fatal controller status                                   0
+xp64-fresh usb-tablet/hs/replug         PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-tablet/hs/replug         PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-tablet/hs/replug         PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-tablet/hs/replug         PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-tablet/hs/replug         PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-tablet/hs/replug         PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-tablet/hs/replug         PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-tablet/hs/replug         PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-tablet/hs/replug         PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-tablet/hs/replug         PASS      zero endpoint configure failures                               0
+xp64-fresh usb-tablet/hs/replug         PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-tablet/hs/replug         PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-tablet/hs/replug         PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+xp64-fresh usb-tablet/hs/replug         PASS      advance endpoints opened >= 1                                  +1
+xp64-fresh usb-wacom-tablet/fs          PASS      advance devices addressed                                      +2
+xp64-fresh usb-wacom-tablet/fs          PASS      advance slots enabled                                          +1
+xp64-fresh usb-wacom-tablet/fs          PASS      zero fatal controller status                                   0
+xp64-fresh usb-wacom-tablet/fs          PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-wacom-tablet/fs          PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-wacom-tablet/fs          PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-wacom-tablet/fs          PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-wacom-tablet/fs          PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-wacom-tablet/fs          PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-wacom-tablet/fs          PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-wacom-tablet/fs          PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-wacom-tablet/fs          PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-wacom-tablet/fs          PASS      zero endpoint configure failures                               0
+xp64-fresh usb-wacom-tablet/fs          PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-wacom-tablet/fs          PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-wacom-tablet/fs          PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 5 == 5
+xp64-fresh usb-wacom-tablet/fs          PASS      advance endpoints opened >= 1                                  +1
+xp64-fresh usb-wacom-tablet/fs/replug   PASS      advance devices addressed                                      +1
+xp64-fresh usb-wacom-tablet/fs/replug   PASS      advance slots enabled                                          +1
+xp64-fresh usb-wacom-tablet/fs/replug   PASS      zero fatal controller status                                   0
+xp64-fresh usb-wacom-tablet/fs/replug   PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-wacom-tablet/fs/replug   PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-wacom-tablet/fs/replug   PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoint configure failures                               0
+xp64-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-wacom-tablet/fs/replug   PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+xp64-fresh usb-wacom-tablet/fs/replug   PASS      advance endpoints opened >= 1                                  +1
+xp64-fresh usb-storage/hs               PASS      advance devices addressed                                      +2
+xp64-fresh usb-storage/hs               PASS      advance slots enabled                                          +1
+xp64-fresh usb-storage/hs               PASS      zero fatal controller status                                   0
+xp64-fresh usb-storage/hs               PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-storage/hs               PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-storage/hs               PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-storage/hs               PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-storage/hs               PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-storage/hs               PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-storage/hs               PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-storage/hs               PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-storage/hs               PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-storage/hs               PASS      zero endpoint configure failures                               0
+xp64-fresh usb-storage/hs               PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-storage/hs               PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-storage/hs               PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 8 == 8
+xp64-fresh usb-storage/hs               PASS      advance endpoints opened >= 2                                  +2
+xp64-fresh usb-storage/hs               PASS      identity transfers submitted == transfers completed + transfers cancelled 372 == 372
+xp64-fresh usb-storage/hs/replug        PASS      advance devices addressed                                      +1
+xp64-fresh usb-storage/hs/replug        PASS      advance slots enabled                                          +1
+xp64-fresh usb-storage/hs/replug        PASS      zero fatal controller status                                   0
+xp64-fresh usb-storage/hs/replug        PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-storage/hs/replug        PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-storage/hs/replug        PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-storage/hs/replug        PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-storage/hs/replug        PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-storage/hs/replug        PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-storage/hs/replug        PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-storage/hs/replug        PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-storage/hs/replug        PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-storage/hs/replug        PASS      zero endpoint configure failures                               0
+xp64-fresh usb-storage/hs/replug        PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-storage/hs/replug        PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-storage/hs/replug        PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 6 == 6
+xp64-fresh usb-storage/hs/replug        PASS      advance endpoints opened >= 2                                  +2
+xp64-fresh usb-storage/hs/replug        PASS      identity transfers submitted == transfers completed + transfers cancelled 324 == 324
+xp64-fresh usb-bot/fs                   PASS      advance devices addressed                                      +1
+xp64-fresh usb-bot/fs                   PASS      advance slots enabled                                          +1
+xp64-fresh usb-bot/fs                   PASS      zero fatal controller status                                   0
+xp64-fresh usb-bot/fs                   PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-bot/fs                   PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-bot/fs                   PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-bot/fs                   PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-bot/fs                   PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-bot/fs                   PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-bot/fs                   PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-bot/fs                   PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-bot/fs                   PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-bot/fs                   PASS      zero endpoint configure failures                               0
+xp64-fresh usb-bot/fs                   PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-bot/fs                   PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-bot/fs                   PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 6 == 6
+xp64-fresh usb-bot/fs                   PASS      advance endpoints opened >= 1                                  +2
+xp64-fresh usb-bot/fs/replug            PASS      advance devices addressed                                      +1
+xp64-fresh usb-bot/fs/replug            PASS      advance slots enabled                                          +1
+xp64-fresh usb-bot/fs/replug            PASS      zero fatal controller status                                   0
+xp64-fresh usb-bot/fs/replug            PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-bot/fs/replug            PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-bot/fs/replug            PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-bot/fs/replug            PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-bot/fs/replug            PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-bot/fs/replug            PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-bot/fs/replug            PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-bot/fs/replug            PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-bot/fs/replug            PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-bot/fs/replug            PASS      zero endpoint configure failures                               0
+xp64-fresh usb-bot/fs/replug            PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-bot/fs/replug            PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-bot/fs/replug            PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 6 == 6
+xp64-fresh usb-bot/fs/replug            PASS      advance endpoints opened >= 1                                  +2
+xp64-fresh usb-uas/fs                   NODRIVER  advance devices addressed                                      +2
+xp64-fresh usb-uas/fs                   NODRIVER  advance slots enabled                                          +1
+xp64-fresh usb-uas/fs                   NODRIVER  zero fatal controller status                                   0
+xp64-fresh usb-uas/fs                   NODRIVER  zero transfer events for no open endpoint                      0
+xp64-fresh usb-uas/fs                   NODRIVER  zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-uas/fs                   NODRIVER  zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-uas/fs                   NODRIVER  zero interrupt mask failures                                   0
+xp64-fresh usb-uas/fs                   NODRIVER  zero commands the engine gave up on                            0
+xp64-fresh usb-uas/fs                   NODRIVER  zero endpoint refusals - type                                  0
+xp64-fresh usb-uas/fs                   NODRIVER  zero endpoint refusals - no device                             0
+xp64-fresh usb-uas/fs                   NODRIVER  zero endpoint refusals - params                                0
+xp64-fresh usb-uas/fs                   NODRIVER  zero endpoint refusals - ring pool                             0
+xp64-fresh usb-uas/fs                   NODRIVER  zero endpoint configure failures                               0
+xp64-fresh usb-uas/fs                   NODRIVER  zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-uas/fs                   NODRIVER  zero endpoints refused - no resources                          0
+xp64-fresh usb-uas/fs                   NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 4 == 4
+xp64-fresh usb-uas/fs                   -> NODRIVER advance endpoints opened >= 1                                  +0
+xp64-fresh usb-uas/fs/replug            NODRIVER  advance devices addressed                                      +1
+xp64-fresh usb-uas/fs/replug            NODRIVER  advance slots enabled                                          +1
+xp64-fresh usb-uas/fs/replug            NODRIVER  zero fatal controller status                                   0
+xp64-fresh usb-uas/fs/replug            NODRIVER  zero transfer events for no open endpoint                      0
+xp64-fresh usb-uas/fs/replug            NODRIVER  zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-uas/fs/replug            NODRIVER  zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-uas/fs/replug            NODRIVER  zero interrupt mask failures                                   0
+xp64-fresh usb-uas/fs/replug            NODRIVER  zero commands the engine gave up on                            0
+xp64-fresh usb-uas/fs/replug            NODRIVER  zero endpoint refusals - type                                  0
+xp64-fresh usb-uas/fs/replug            NODRIVER  zero endpoint refusals - no device                             0
+xp64-fresh usb-uas/fs/replug            NODRIVER  zero endpoint refusals - params                                0
+xp64-fresh usb-uas/fs/replug            NODRIVER  zero endpoint refusals - ring pool                             0
+xp64-fresh usb-uas/fs/replug            NODRIVER  zero endpoint configure failures                               0
+xp64-fresh usb-uas/fs/replug            NODRIVER  zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-uas/fs/replug            NODRIVER  zero endpoints refused - no resources                          0
+xp64-fresh usb-uas/fs/replug            NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+xp64-fresh usb-uas/fs/replug            -> NODRIVER advance endpoints opened >= 1                                  +0
+xp64-fresh usb-uas/fs                   NODRIVER  (no class driver expected on this target)                      a guess taken 2026-09-18, not yet measured: the UAS class driver (uaspstor.sys) arrived with Windows 8, so XP x64 has none
+xp64-fresh usb-hub/fs                   PASS      advance devices addressed                                      +2
+xp64-fresh usb-hub/fs                   PASS      advance slots enabled                                          +1
+xp64-fresh usb-hub/fs                   PASS      zero fatal controller status                                   0
+xp64-fresh usb-hub/fs                   PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-hub/fs                   PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-hub/fs                   PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-hub/fs                   PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-hub/fs                   PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-hub/fs                   PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-hub/fs                   PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-hub/fs                   PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-hub/fs                   PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-hub/fs                   PASS      zero endpoint configure failures                               0
+xp64-fresh usb-hub/fs                   PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-hub/fs                   PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-hub/fs                   PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 5 == 5
+xp64-fresh usb-hub/fs                   PASS      advance endpoints opened >= 1                                  +1
+xp64-fresh usb-hub/fs                   PASS      advance topology: hub descriptors folded                       +1
+xp64-fresh usb-hub/fs                   PASS      advance topology: hub slots marked                             +1
+xp64-fresh usb-hub/fs                   PASS      zero topology: hub descriptors malformed                       0
+xp64-fresh usb-hub/fs                   PASS      zero topology: nodes dropped                                   0
+xp64-fresh usb-hub/fs                   PASS      zero topology: behind-hub refused - no record                  0
+xp64-fresh usb-hub/fs/replug            PASS      advance devices addressed                                      +1
+xp64-fresh usb-hub/fs/replug            PASS      advance slots enabled                                          +1
+xp64-fresh usb-hub/fs/replug            PASS      zero fatal controller status                                   0
+xp64-fresh usb-hub/fs/replug            PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-hub/fs/replug            PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-hub/fs/replug            PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-hub/fs/replug            PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-hub/fs/replug            PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-hub/fs/replug            PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-hub/fs/replug            PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-hub/fs/replug            PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-hub/fs/replug            PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-hub/fs/replug            PASS      zero endpoint configure failures                               0
+xp64-fresh usb-hub/fs/replug            PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-hub/fs/replug            PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-hub/fs/replug            PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+xp64-fresh usb-hub/fs/replug            PASS      advance endpoints opened >= 1                                  +1
+xp64-fresh usb-hub/fs/replug            PASS      advance topology: hub descriptors folded                       +1
+xp64-fresh usb-hub/fs/replug            PASS      advance topology: hub slots marked                             +1
+xp64-fresh usb-hub/fs/replug            PASS      zero topology: hub descriptors malformed                       0
+xp64-fresh usb-hub/fs/replug            PASS      zero topology: nodes dropped                                   0
+xp64-fresh usb-hub/fs/replug            PASS      zero topology: behind-hub refused - no record                  0
+xp64-fresh usb-hub/churn                PASS      advance devices addressed                                      +11
+xp64-fresh usb-hub/churn                PASS      advance slots enabled                                          +11
+xp64-fresh usb-hub/churn                PASS      zero fatal controller status                                   0
+xp64-fresh usb-hub/churn                PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-hub/churn                PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-hub/churn                PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-hub/churn                PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-hub/churn                PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-hub/churn                PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-hub/churn                PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-hub/churn                PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-hub/churn                PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-hub/churn                PASS      zero endpoint configure failures                               0
+xp64-fresh usb-hub/churn                PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-hub/churn                PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-hub/churn                PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 33 == 33
+xp64-fresh usb-hub/churn                PASS      advance topology: TT pairs disagreeing with usbport >= 10      +10
+xp64-fresh usb-hub/churn                PASS      advance topology: hub descriptors folded >= 2                  +6
+xp64-fresh usb-hub/churn                PASS      advance topology: behind-hub opens >= 2                        +10
+xp64-fresh usb-hub/churn                PASS      advance topology: behind-hub devices addressed >= 2            +10
+xp64-fresh usb-hub/churn                PASS      zero topology: hub descriptors malformed                       0
+xp64-fresh usb-hub/churn                PASS      zero topology: nodes dropped                                   0
+xp64-fresh usb-hub/churn                PASS      zero topology: behind-hub refused - no record                  0
+xp64-fresh usb-hub/churn                PASS      zero topology: behind-hub refused - too deep                   0
+xp64-fresh usb-hub/churn/replug         PASS      advance devices addressed                                      +11
+xp64-fresh usb-hub/churn/replug         PASS      advance slots enabled                                          +11
+xp64-fresh usb-hub/churn/replug         PASS      zero fatal controller status                                   0
+xp64-fresh usb-hub/churn/replug         PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-hub/churn/replug         PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-hub/churn/replug         PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-hub/churn/replug         PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-hub/churn/replug         PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-hub/churn/replug         PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-hub/churn/replug         PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-hub/churn/replug         PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-hub/churn/replug         PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-hub/churn/replug         PASS      zero endpoint configure failures                               0
+xp64-fresh usb-hub/churn/replug         PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-hub/churn/replug         PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-hub/churn/replug         PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 33 == 33
+xp64-fresh usb-hub/churn/replug         PASS      advance topology: TT pairs disagreeing with usbport >= 10      +10
+xp64-fresh usb-hub/churn/replug         PASS      advance topology: hub descriptors folded >= 2                  +6
+xp64-fresh usb-hub/churn/replug         PASS      advance topology: behind-hub opens >= 2                        +10
+xp64-fresh usb-hub/churn/replug         PASS      advance topology: behind-hub devices addressed >= 2            +10
+xp64-fresh usb-hub/churn/replug         PASS      zero topology: hub descriptors malformed                       0
+xp64-fresh usb-hub/churn/replug         PASS      zero topology: nodes dropped                                   0
+xp64-fresh usb-hub/churn/replug         PASS      zero topology: behind-hub refused - no record                  0
+xp64-fresh usb-hub/churn/replug         PASS      zero topology: behind-hub refused - too deep                   0
+xp64-fresh usb-net/fs                   NODRIVER  advance devices addressed                                      +2
+xp64-fresh usb-net/fs                   NODRIVER  advance slots enabled                                          +1
+xp64-fresh usb-net/fs                   NODRIVER  zero fatal controller status                                   0
+xp64-fresh usb-net/fs                   NODRIVER  zero transfer events for no open endpoint                      0
+xp64-fresh usb-net/fs                   NODRIVER  zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-net/fs                   NODRIVER  zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-net/fs                   NODRIVER  zero interrupt mask failures                                   0
+xp64-fresh usb-net/fs                   NODRIVER  zero commands the engine gave up on                            0
+xp64-fresh usb-net/fs                   NODRIVER  zero endpoint refusals - type                                  0
+xp64-fresh usb-net/fs                   NODRIVER  zero endpoint refusals - no device                             0
+xp64-fresh usb-net/fs                   NODRIVER  zero endpoint refusals - params                                0
+xp64-fresh usb-net/fs                   NODRIVER  zero endpoint refusals - ring pool                             0
+xp64-fresh usb-net/fs                   NODRIVER  zero endpoint configure failures                               0
+xp64-fresh usb-net/fs                   NODRIVER  zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-net/fs                   NODRIVER  zero endpoints refused - no resources                          0
+xp64-fresh usb-net/fs                   NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 4 == 4
+xp64-fresh usb-net/fs                   -> NODRIVER advance endpoints opened >= 1                                  +0
+xp64-fresh usb-net/fs/replug            NODRIVER  advance devices addressed                                      +1
+xp64-fresh usb-net/fs/replug            NODRIVER  advance slots enabled                                          +1
+xp64-fresh usb-net/fs/replug            NODRIVER  zero fatal controller status                                   0
+xp64-fresh usb-net/fs/replug            NODRIVER  zero transfer events for no open endpoint                      0
+xp64-fresh usb-net/fs/replug            NODRIVER  zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-net/fs/replug            NODRIVER  zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-net/fs/replug            NODRIVER  zero interrupt mask failures                                   0
+xp64-fresh usb-net/fs/replug            NODRIVER  zero commands the engine gave up on                            0
+xp64-fresh usb-net/fs/replug            NODRIVER  zero endpoint refusals - type                                  0
+xp64-fresh usb-net/fs/replug            NODRIVER  zero endpoint refusals - no device                             0
+xp64-fresh usb-net/fs/replug            NODRIVER  zero endpoint refusals - params                                0
+xp64-fresh usb-net/fs/replug            NODRIVER  zero endpoint refusals - ring pool                             0
+xp64-fresh usb-net/fs/replug            NODRIVER  zero endpoint configure failures                               0
+xp64-fresh usb-net/fs/replug            NODRIVER  zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-net/fs/replug            NODRIVER  zero endpoints refused - no resources                          0
+xp64-fresh usb-net/fs/replug            NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+xp64-fresh usb-net/fs/replug            -> NODRIVER advance endpoints opened >= 1                                  +0
+xp64-fresh usb-net/fs                   NODRIVER  (NO ExpectNoDriver entry for this target)                      a class this matrix said the OS would claim was not claimed; counts against the verdict
+xp64-fresh usb-serial/fs                NODRIVER  advance devices addressed                                      +2
+xp64-fresh usb-serial/fs                NODRIVER  advance slots enabled                                          +1
+xp64-fresh usb-serial/fs                NODRIVER  zero fatal controller status                                   0
+xp64-fresh usb-serial/fs                NODRIVER  zero transfer events for no open endpoint                      0
+xp64-fresh usb-serial/fs                NODRIVER  zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-serial/fs                NODRIVER  zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-serial/fs                NODRIVER  zero interrupt mask failures                                   0
+xp64-fresh usb-serial/fs                NODRIVER  zero commands the engine gave up on                            0
+xp64-fresh usb-serial/fs                NODRIVER  zero endpoint refusals - type                                  0
+xp64-fresh usb-serial/fs                NODRIVER  zero endpoint refusals - no device                             0
+xp64-fresh usb-serial/fs                NODRIVER  zero endpoint refusals - params                                0
+xp64-fresh usb-serial/fs                NODRIVER  zero endpoint refusals - ring pool                             0
+xp64-fresh usb-serial/fs                NODRIVER  zero endpoint configure failures                               0
+xp64-fresh usb-serial/fs                NODRIVER  zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-serial/fs                NODRIVER  zero endpoints refused - no resources                          0
+xp64-fresh usb-serial/fs                NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 4 == 4
+xp64-fresh usb-serial/fs                -> NODRIVER advance endpoints opened >= 1                                  +0
+xp64-fresh usb-serial/fs/replug         NODRIVER  advance devices addressed                                      +1
+xp64-fresh usb-serial/fs/replug         NODRIVER  advance slots enabled                                          +1
+xp64-fresh usb-serial/fs/replug         NODRIVER  zero fatal controller status                                   0
+xp64-fresh usb-serial/fs/replug         NODRIVER  zero transfer events for no open endpoint                      0
+xp64-fresh usb-serial/fs/replug         NODRIVER  zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-serial/fs/replug         NODRIVER  zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-serial/fs/replug         NODRIVER  zero interrupt mask failures                                   0
+xp64-fresh usb-serial/fs/replug         NODRIVER  zero commands the engine gave up on                            0
+xp64-fresh usb-serial/fs/replug         NODRIVER  zero endpoint refusals - type                                  0
+xp64-fresh usb-serial/fs/replug         NODRIVER  zero endpoint refusals - no device                             0
+xp64-fresh usb-serial/fs/replug         NODRIVER  zero endpoint refusals - params                                0
+xp64-fresh usb-serial/fs/replug         NODRIVER  zero endpoint refusals - ring pool                             0
+xp64-fresh usb-serial/fs/replug         NODRIVER  zero endpoint configure failures                               0
+xp64-fresh usb-serial/fs/replug         NODRIVER  zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-serial/fs/replug         NODRIVER  zero endpoints refused - no resources                          0
+xp64-fresh usb-serial/fs/replug         NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+xp64-fresh usb-serial/fs/replug         -> NODRIVER advance endpoints opened >= 1                                  +0
+xp64-fresh usb-serial/fs                NODRIVER  (no class driver expected on this target)                      a guess taken 2026-09-18, not yet measured: QEMU usb-serial is an FTDI vendor-class device and XP x64 ships no FTDI driver
+xp64-fresh usb-braille/fs               NODRIVER  advance devices addressed                                      +2
+xp64-fresh usb-braille/fs               NODRIVER  advance slots enabled                                          +1
+xp64-fresh usb-braille/fs               NODRIVER  zero fatal controller status                                   0
+xp64-fresh usb-braille/fs               NODRIVER  zero transfer events for no open endpoint                      0
+xp64-fresh usb-braille/fs               NODRIVER  zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-braille/fs               NODRIVER  zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-braille/fs               NODRIVER  zero interrupt mask failures                                   0
+xp64-fresh usb-braille/fs               NODRIVER  zero commands the engine gave up on                            0
+xp64-fresh usb-braille/fs               NODRIVER  zero endpoint refusals - type                                  0
+xp64-fresh usb-braille/fs               NODRIVER  zero endpoint refusals - no device                             0
+xp64-fresh usb-braille/fs               NODRIVER  zero endpoint refusals - params                                0
+xp64-fresh usb-braille/fs               NODRIVER  zero endpoint refusals - ring pool                             0
+xp64-fresh usb-braille/fs               NODRIVER  zero endpoint configure failures                               0
+xp64-fresh usb-braille/fs               NODRIVER  zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-braille/fs               NODRIVER  zero endpoints refused - no resources                          0
+xp64-fresh usb-braille/fs               NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 4 == 4
+xp64-fresh usb-braille/fs               -> NODRIVER advance endpoints opened >= 1                                  +0
+xp64-fresh usb-braille/fs/replug        NODRIVER  advance devices addressed                                      +1
+xp64-fresh usb-braille/fs/replug        NODRIVER  advance slots enabled                                          +1
+xp64-fresh usb-braille/fs/replug        NODRIVER  zero fatal controller status                                   0
+xp64-fresh usb-braille/fs/replug        NODRIVER  zero transfer events for no open endpoint                      0
+xp64-fresh usb-braille/fs/replug        NODRIVER  zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-braille/fs/replug        NODRIVER  zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-braille/fs/replug        NODRIVER  zero interrupt mask failures                                   0
+xp64-fresh usb-braille/fs/replug        NODRIVER  zero commands the engine gave up on                            0
+xp64-fresh usb-braille/fs/replug        NODRIVER  zero endpoint refusals - type                                  0
+xp64-fresh usb-braille/fs/replug        NODRIVER  zero endpoint refusals - no device                             0
+xp64-fresh usb-braille/fs/replug        NODRIVER  zero endpoint refusals - params                                0
+xp64-fresh usb-braille/fs/replug        NODRIVER  zero endpoint refusals - ring pool                             0
+xp64-fresh usb-braille/fs/replug        NODRIVER  zero endpoint configure failures                               0
+xp64-fresh usb-braille/fs/replug        NODRIVER  zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-braille/fs/replug        NODRIVER  zero endpoints refused - no resources                          0
+xp64-fresh usb-braille/fs/replug        NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+xp64-fresh usb-braille/fs/replug        -> NODRIVER advance endpoints opened >= 1                                  +0
+xp64-fresh usb-braille/fs               NODRIVER  (no class driver expected on this target)                      a guess taken 2026-09-18, not yet measured: no driver for a Baum braille display on XP x64
+xp64-fresh usb-ccid/fs                  PASS      advance devices addressed                                      +2
+xp64-fresh usb-ccid/fs                  PASS      advance slots enabled                                          +1
+xp64-fresh usb-ccid/fs                  PASS      zero fatal controller status                                   0
+xp64-fresh usb-ccid/fs                  PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-ccid/fs                  PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-ccid/fs                  PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-ccid/fs                  PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-ccid/fs                  PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-ccid/fs                  PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-ccid/fs                  PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-ccid/fs                  PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-ccid/fs                  PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-ccid/fs                  PASS      zero endpoint configure failures                               0
+xp64-fresh usb-ccid/fs                  PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-ccid/fs                  PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-ccid/fs                  PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 7 == 7
+xp64-fresh usb-ccid/fs                  PASS      advance endpoints opened >= 1                                  +3
+xp64-fresh usb-ccid/fs/replug           PASS      advance devices addressed                                      +1
+xp64-fresh usb-ccid/fs/replug           PASS      advance slots enabled                                          +1
+xp64-fresh usb-ccid/fs/replug           PASS      zero fatal controller status                                   0
+xp64-fresh usb-ccid/fs/replug           PASS      zero transfer events for no open endpoint                      0
+xp64-fresh usb-ccid/fs/replug           PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh usb-ccid/fs/replug           PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh usb-ccid/fs/replug           PASS      zero interrupt mask failures                                   0
+xp64-fresh usb-ccid/fs/replug           PASS      zero commands the engine gave up on                            0
+xp64-fresh usb-ccid/fs/replug           PASS      zero endpoint refusals - type                                  0
+xp64-fresh usb-ccid/fs/replug           PASS      zero endpoint refusals - no device                             0
+xp64-fresh usb-ccid/fs/replug           PASS      zero endpoint refusals - params                                0
+xp64-fresh usb-ccid/fs/replug           PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh usb-ccid/fs/replug           PASS      zero endpoint configure failures                               0
+xp64-fresh usb-ccid/fs/replug           PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh usb-ccid/fs/replug           PASS      zero endpoints refused - no resources                          0
+xp64-fresh usb-ccid/fs/replug           PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 5 == 5
+xp64-fresh usb-ccid/fs/replug           PASS      advance endpoints opened >= 1                                  +3
+xp64-fresh u2f-emulated/fs              PASS      advance devices addressed                                      +2
+xp64-fresh u2f-emulated/fs              PASS      advance slots enabled                                          +1
+xp64-fresh u2f-emulated/fs              PASS      zero fatal controller status                                   0
+xp64-fresh u2f-emulated/fs              PASS      zero transfer events for no open endpoint                      0
+xp64-fresh u2f-emulated/fs              PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh u2f-emulated/fs              PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh u2f-emulated/fs              PASS      zero interrupt mask failures                                   0
+xp64-fresh u2f-emulated/fs              PASS      zero commands the engine gave up on                            0
+xp64-fresh u2f-emulated/fs              PASS      zero endpoint refusals - type                                  0
+xp64-fresh u2f-emulated/fs              PASS      zero endpoint refusals - no device                             0
+xp64-fresh u2f-emulated/fs              PASS      zero endpoint refusals - params                                0
+xp64-fresh u2f-emulated/fs              PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh u2f-emulated/fs              PASS      zero endpoint configure failures                               0
+xp64-fresh u2f-emulated/fs              PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh u2f-emulated/fs              PASS      zero endpoints refused - no resources                          0
+xp64-fresh u2f-emulated/fs              PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 6 == 6
+xp64-fresh u2f-emulated/fs              PASS      advance endpoints opened >= 1                                  +2
+xp64-fresh u2f-emulated/fs/replug       PASS      advance devices addressed                                      +1
+xp64-fresh u2f-emulated/fs/replug       PASS      advance slots enabled                                          +1
+xp64-fresh u2f-emulated/fs/replug       PASS      zero fatal controller status                                   0
+xp64-fresh u2f-emulated/fs/replug       PASS      zero transfer events for no open endpoint                      0
+xp64-fresh u2f-emulated/fs/replug       PASS      zero endpoint opens refused - unusable buffer                  0
+xp64-fresh u2f-emulated/fs/replug       PASS      zero endpoint opens refused - malformed call                   0
+xp64-fresh u2f-emulated/fs/replug       PASS      zero interrupt mask failures                                   0
+xp64-fresh u2f-emulated/fs/replug       PASS      zero commands the engine gave up on                            0
+xp64-fresh u2f-emulated/fs/replug       PASS      zero endpoint refusals - type                                  0
+xp64-fresh u2f-emulated/fs/replug       PASS      zero endpoint refusals - no device                             0
+xp64-fresh u2f-emulated/fs/replug       PASS      zero endpoint refusals - params                                0
+xp64-fresh u2f-emulated/fs/replug       PASS      zero endpoint refusals - ring pool                             0
+xp64-fresh u2f-emulated/fs/replug       PASS      zero endpoint configure failures                               0
+xp64-fresh u2f-emulated/fs/replug       PASS      zero endpoints refused - no bandwidth                          0
+xp64-fresh u2f-emulated/fs/replug       PASS      zero endpoints refused - no resources                          0
+xp64-fresh u2f-emulated/fs/replug       PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 4 == 4
+xp64-fresh u2f-emulated/fs/replug       PASS      advance endpoints opened >= 1                                  +2

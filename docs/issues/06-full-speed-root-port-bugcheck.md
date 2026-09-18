@@ -231,6 +231,14 @@ what a function does with an empty list, not whether the list is empty.
 - **Why a believed-High-Speed 1.1 hub gets a TT record** is unconfirmed
   against the binaries. The driver no longer depends on the answer, and
   measures the disagreement instead.
+- **Section 5's residual bugchecks Windows 7 x86** (2026-09-19, roadmap
+  task 22.9, `runs/run-22.md`): QEMU's `usb-hub` on a root port with a
+  `usb-mouse` behind it stops the guest with `STOP 0x7E` in
+  `usbport!Allocate_time_for_endpoint`, reached from
+  `USBPORT_SelectConfiguration` through the USB 2.0 bus-time budgeter. The
+  same topology passed on Windows 2000 and XP x64 in the same run. Why the
+  budgeter's pointer is bad is not read; Vista and the x64 half were not
+  tried. Open, and the owner's to decide against release `1.1.0.0`.
 
 ## 7. Lessons the record kept
 
