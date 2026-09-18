@@ -1712,7 +1712,7 @@ and every reading, box by box.
 | 22.7 | the charset gate on tracked source |
 | 22.8 | what a cut needs that no gate supplies: the date 2026-09-18, the history entry, the release notes, README, the issue forms |
 | 22.9 | the primary targets unchanged, plus XP x64 and Windows 7 x86 - open |
-| 22.10 | the cut, and the install route read from the asset: cut 2026-09-18; legs 5 (XP x64), 6 (Vista x64), 7 (Windows 7 x64) and 9 (Windows 7 x86) passed, the other five open |
+| 22.10 | the cut, and the install route read from the asset: cut 2026-09-18; legs 5 (XP x64), 6 (Vista x64), 7 (Windows 7 x64), 8 (Vista x86) and 9 (Windows 7 x86) passed, the four x86 legs open |
 | 22.11 | issue 5's mechanism replaced by `USB_MINIPORT_FLAGS_DISABLE_SS` |
 | 22.12 | the guest readings the 2026-09-17 audit fixes owe; (b) done on Vista x86, (c) on the Windows 2000 SMP guest, (a) on XP x64 and Vista x64; (d) open |
 
@@ -1735,7 +1735,9 @@ Owed:
       suspend; the first reading found a resume the audit's timer gate
       abandoned on QEMU, which ignores a Resume write, and Vista bugchecked
       0xFE 60 s later; the gate now owes the U0 write to a port still in
-      U3, and the re-read passed every clause (`runs/run-22.md`); (c) the
+      U3, and the re-read passed every clause, **read again on the
+      `release` flavour on 22.10's leg 8** by QEMU's trace, with a
+      device-initiated resume taken as well (`runs/run-22.md`); (c) the
       recovery
       path refuses at `XHCI_INIT_STEP_RESET` while USBSTS.CNR or
       USBCMD.HCRST reads set and `xhciReset` stalls 1 ms after HCRST -
@@ -1784,15 +1786,18 @@ Owed:
       the USB audio device (gone with the service stopped); **leg 6, the amd64
       package on Vista x64, passed the same night** behind the same prompt and
       Windows 7 x64's Program Compatibility Assistant box, F8 reached through
-      the boot manager's menu; what stays open is the rest - then the asset read on nine
+      the boot manager's menu; **leg 8, the x86 package on Vista x86,
+      passed the same night** through `XhciModels.NTx86.6.0` /
+      `[Xhci.Dev6.NTx86]` behind the same prompt and no second box, 22.12
+      (b) re-read on it; what stays open is the rest - then the asset read on nine
       install legs - the four x86 ones with full device clauses, the amd64
       package on XP x64, Vista x64 and Windows 7 x64, and the x86 package on
       Vista x86 and Windows 7 x86, recording the unsigned-driver prompt - and
       its file list checked against what the packager staged. Of the 32-bit
       pair, Vista x86 has since installed the `qemu` build through the
       committed `src\xhci98.inf` (2026-09-17, 22.5's `InfSection` reading);
-      Windows 7 x86 has since done both (leg 9); Vista x86 has not run the
-      `release` flavour, which the eighth leg takes
+      Windows 7 x86 has since done both (leg 9), and Vista x86 has run the
+      `release` flavour (leg 8)
 
 Checkpoint, the guest half: on each of Vista x86 and Windows 7 x86 the package
 installed, the driver registered, started and passed its No Op self-test, the

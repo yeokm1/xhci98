@@ -122,7 +122,7 @@ also Windows 7 x64's first install through the committed INF. Vista
 x86 has installed the `qemu` build through the committed `src/xhci98.inf`
 (2026-09-17, task 22.5's `InfSection` reading), and Windows 7 x86 installed the
 published `release` package through it on 2026-09-18 (task 22.10's ninth leg);
-Vista x86 has not run the `release` flavour, which the eighth leg takes. **The x64 half loads only
+Vista x86 ran the `release` flavour the same night (the eighth leg). **The x64 half loads only
 on a boot with driver signature enforcement disabled**: the package is not
 signed (design record 11 section 12, decision 9), so the user presses F8 and
 chooses Disable Driver Signature Enforcement at every start, the machine can

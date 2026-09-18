@@ -2348,10 +2348,12 @@ The procedure:
    the guest*, because it is the one that would make the phase pointless if
    wrong. **The refusal half is confirmed**: both guests installed and loaded
    the unsigned driver on every leg of issue 7 section 7.5. **The prompt
-   itself was not written down** on any of those legs, so what the dialog
-   said, and which choice took it, is still unrecorded. Roadmap task 22.10's
-   eighth and ninth install legs read it, and until then the release notes do
-   not quote it.
+   itself was not written down** on any of those legs; roadmap task 22.10's
+   eighth and ninth install legs read it on 2026-09-18, and on both it is the
+   Windows Security dialog "Windows can't verify the publisher of this driver
+   software", the focus on "Don't install this driver software", taken with
+   "Install this driver software anyway", and nothing after it (the Program
+   Compatibility Assistant box the x64 guests add does not appear).
 
 **The idle-suspend reading: Windows 7 needs the idle stopped, and Vista was
 not seen to.** Taken on 2026-09-16 at the owner's request, on both

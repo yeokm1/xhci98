@@ -1323,8 +1323,8 @@ Harness `out\post-release\task22-10\` (git-ignored: `xp64.cmd`, the unzipped
 asset, screenshots, the disk extract); disks `vm\t2210\`; logs
 `vm\t2210-xp64-l5-*`. 22.12 (a) was read on the same clean copy afterwards,
 from the `qemu` build, because `release` cannot show it (22.12 below).
-**Leg 8 and the four x86 legs have not been taken**; legs 7, 9 and 6
-are below.
+**The four x86 legs have not been taken**; legs 7, 9, 6 and 8 are
+below.
 
 Whether the cut needed a re-cut was checked the same evening, because the
 published binaries (14:33) predate the last `src\` commit (`26162ae`, 14:45).
@@ -1578,6 +1578,62 @@ Signature Enforcement*. It changes the boot UI and nothing else.
 57133; `f8spam.ps1` and `waitbootmgr.ps1`; logs off by `getlog6.cmd`); disks
 `vm\t2210\`; logs `vm\t2210-vista64-l6-*`.
 
+**Leg 8, Vista x86, 2026-09-18 night: passed every clause, no finding.**
+The guest was `vm\vista.img` @ `vista-clean-install`, copied read-only with
+`qemu-img convert -l` and booted through a throw-away overlay: `-smp 4`,
+`-accel tcg,thread=multi`, `qemu-xhci,p3=0`, 22.12 (b)'s Vista x86 machine
+otherwise, the Vista DVD in the drive. The transfer drive was the unzipped
+asset's `release-x86\` (`xhci98.sys` `E97FA781...`, 85,579 B, identical to
+`releases\1.1.0.0\release-x86`; its INF identical to `src\xhci98.inf`). **It
+is Vista x86's first `release` flavour**; the committed INF it had installed
+before, on the `qemu` build (22.5).
+
+- the install: the Found New Hardware wizard dismissed with "Ask me again
+  later", then Device Manager -> *Universal Serial Bus (USB) Controller*
+  under *Other devices* -> *Update Driver Software* -> *Browse* -> `E:\`.
+  **The prompt is the same Windows Security dialog as the other three NT
+  6.x legs**: "Windows can't verify the publisher of this driver software",
+  "Don't install this driver software" with the focus, "Install this driver
+  software anyway" below it. It took it: `The Driver Package does not
+  contain a catalog file, but user wants to install anyway.`, `oem3.inf`
+  published, "Windows has successfully updated your driver software". **No
+  second box**: the Program Compatibility Assistant box is x64's alone, as
+  leg 9 found on Windows 7 x86
+- **the committed INF on Vista x86**: `DriverNodeName=xhci98.inf:XhciModels.NTx86.6.0:Xhci.Dev6:1.1.0.0:pci\cc_0c0330`,
+  `ModelsSec - XhciModels.NTx86.6.0`, `ActualSec - Xhci.Dev6.NTx86`,
+  `[Xhci.Dev6.NTx86]` and `[Xhci.Dev6.NTx86.Services]` each exiting `0`,
+  `Signer - Not digitally signed`. The store directory `xhci98.inf_2915841d`
+  holds `xhci98.inf`, `xhci98.PNF` and `xhci98.sys` alone, and **this log
+  has none of Vista x64's `CopyFile ... failed 2` lines**: no `failed` at all
+  from the install on. The four OS files are Vista's own (`usbport.sys`
+  226,304 B and `usbhub.sys` 196,096 B, the builds `legal-provenance.md`
+  section 4 reads; `usbd.sys` 5,888 B; `usbui.dll` 83,456 B)
+- registered and started: **USB 2.0 eXtensible Host Controller (xhci98)**
+  and **USB Root Hub**, no bang
+- the three devices, hot-plugged over the monitor: **USB Human Interface
+  Device** and **HID-compliant mouse**, **USB Mass Storage Device** (its
+  volume under *Portable Devices*), **USB Composite Device** and **Audio
+  Device**; "Your devices are ready to use", no bang
+- disable (every child gone, no restart prompt), enable (all back),
+  uninstall with the driver software kept (the USB class gone, **no restart
+  prompt**, eight `Query-and-Remove succeeded`, no veto), rescan
+  (reinstalled from the store through `Xhci.Dev6.NTx86` with no prompt; all
+  back, no bang). The pair was taken twice: the owner's first uninstall ran
+  straight into a rescan by a mis-click, so a second uninstall was read on
+  its own before the rescan; both logged the eight `Query-and-Remove
+  succeeded` and no veto. The mouse was unplugged across the second pair,
+  for the pointer reason leg 9 gives. The device sequence was driven by the
+  owner at the console
+- the flavour, read 21.5's way: the port-`0xE9` log stayed at **0 bytes**,
+  and QEMU's trace shows `slot_enable` 13 (the three devices at install,
+  enable and both rescans, the mouse's replug once) and, per controller
+  reset, QEMU's own sweep of all 64 slots (`slot_disable` 385 = six resets
+  and the mouse's unplug; leg 9's 513 is the same pattern)
+
+22.12 (b) was then re-read on the same boot (22.12 below). Harness
+`out\post-release\task22-10\` (`vista.cmd`, monitor 57134; logs off by
+`getlog8.cmd`); disks `vm\t2210\`; logs `vm\t2210-vista-l8-*`.
+
 **The order the rest of the phase is taken in** (2026-09-18). Two rules shape
 it. Risk first: a finding re-cuts the release, and every leg already taken on
 the changed binary is taken again - so a reading that can amend the release
@@ -1598,7 +1654,8 @@ everything owed on it is taken in that session.
    `usbport services written=16` off the port-`0xE9` log. `release` cannot
    show (a)'s line at all (settled on XP x64, 22.12 (a) below), so this
    route is the only one.
-5. Vista x86 (leg 8), re-reading 22.12 (b) on the `release` flavour, or by
+5. **Done 2026-09-18, no finding, and 22.12 (b) re-read on `release` with it.**
+   Vista x86 (leg 8), re-reading 22.12 (b) on the `release` flavour, or by
    the same `qemu` route if `release` cannot show it.
 6. The four legacy x86 legs, then the asset's file list against what the
    packager staged. That closes 22.10.
@@ -1792,10 +1849,34 @@ the cut; (c) and (d) may follow it.
       addressed, no bugcheck. Harness `out\post-release\task22-12b\`
       (git-ignored); logs `vm\t2212-vista-i1-*` and `vm\t2212-vista-i2-*`.
 
-      Not established: a device-initiated resume (the mouse waking itself)
-      was not taken, and a conforming xHC, which enters Resume on the write,
-      exercises the U0 write from Resume as before - this reading covers the
-      U3 arm.
+      *Third reading, the `release` flavour from the asset (22.10 leg 8,
+      2026-09-18 night), a fresh overlay of the same clean install.* The
+      flavour writes no port-`0xE9` trace and no counter is reachable
+      without it, so this reading is QEMU's trace, the guest and the clock.
+      `SelectiveSuspendEnabled` = `01` set on the mouse's device key
+      (`USB\VID_0627&PID_0001\89126-0000:00:03.0-1\Device Parameters`), the
+      mouse replugged on hub port 1: the suspend write `0x00010e61`, `pls 3`.
+      Then, before the untick, **the device-initiated resume** - the owner's
+      pointer crossed the QEMU window and the mouse woke itself, three times:
+      each time QEMU raised PLC with the port in Resume, the driver's PLC
+      acknowledgement (`0x00400fe1`), **one** `U0|LWS` write (`0x00010e01`,
+      `pls 0`, PLC), its acknowledgement (`0x00400e01`), and the mouse idled
+      back into U3 with a fresh `0x00010e61`. The untick, keyboard only:
+      the Resume write (`0x00010fe1`) with no `port_link`, **one** `U0|LWS`
+      write (`0x00010e01`, `pls 0`, PLC), the acknowledgement
+      (`0x00400e01`) - the second reading's sequence write for write - and
+      no port-1 write after it. Ninety seconds on, past the 60 s window: no
+      bugcheck, the mouse still addressed (`info usb`: `Device 0.3, Port 1,
+      480 Mb/s`), *HID-compliant mouse* in Device Manager, and the mouse
+      moving the guest pointer.
+
+      Not established: the counters on either resume under `release`
+      (`RhPortsResumed`, `RhResumesAbandoned`), which this flavour gives no
+      route to here - the second reading is where they were read, on
+      `qemu`; and a conforming xHC, which enters Resume on the write,
+      exercises the U0 write from Resume as before - these readings cover
+      the U3 arm. The device-initiated resume, unread at the second
+      reading, is now read, on `release` and by QEMU's trace alone.
 - [x] (c) recovery under a reset in progress, **taken 2026-09-18 on the
       Windows 2000 SMP guest under TCG, and passed with no finding.**
       Expected: with CNR or HCRST held, `RecoveryLastStep =
