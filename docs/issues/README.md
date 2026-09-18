@@ -9,11 +9,11 @@ each page.
 
 Dates are 2026 unless stated. Task ids are the roadmap's.
 
-**Issues 7 and 8 are both newer than every cut, and neither is a limitation of
-a published release.** Both were found while preparing `1.1.0.0`, which has not
-been cut: the newest published version is `1.0.2.0` and `releases/` holds no
-`1.1.0.0/` directory. Read any "at the cut" wording on those two pages as
-"before the cut"; what they record is work in progress on this branch.
+**Issues 7 and 8 were found and fixed before `1.1.0.0` was cut (2026-09-18),
+and neither is a limitation of a published release.** Issue 7 was seen only on
+Windows Vista and Windows 7, which no earlier release supported, and issue 8's
+fix reaches the 32-bit tier for the first time in the `1.1.0.0` binary. Read any "at the
+cut" wording on those two pages as "before the cut".
 
 Issue 8 is a bugcheck on the Windows XP x64 guest at four vCPUs, found on
 2026-09-13 while taking issue 7's fix across the NT 5.x legs. Its cause was

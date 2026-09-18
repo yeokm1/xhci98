@@ -1710,7 +1710,7 @@ and every reading, box by box.
 | 22.5 | Version 300 on NT 6.x, both architectures: issues 7 and 8, the `Xhci.Dev6` INF path, `xhcisnap`, Windows 2000's restart prompt, right-click Install |
 | 22.6 | the record: the tier in both architectures, nothing said of issue 7 |
 | 22.7 | the charset gate on tracked source |
-| 22.8 | what a cut needs that no gate supplies - open |
+| 22.8 | what a cut needs that no gate supplies: the date 2026-09-18, the history entry, the release notes, README, the issue forms |
 | 22.9 | the primary targets unchanged, plus XP x64 and Windows 7 x86 - open |
 | 22.10 | the cut, and the install route read from the asset - open |
 | 22.11 | issue 5's mechanism replaced by `USB_MINIPORT_FLAGS_DISABLE_SS` |
@@ -1749,7 +1749,7 @@ Owed:
       22.10's own install legs and (d) off 22.9's matrix, rather than as
       legs of their own; (c) and (d) follow the cut, since a wrong reading
       there amends the release under Phase 15's rule
-- [ ] 22.8: `releases\history.md`'s entry; the release date in
+- [x] 22.8: `releases\history.md`'s entry; the release date in
       `src\xhci_version.h` and both INFs; the release notes' opening line;
       `README.md`'s Install section; the issue forms' operating-system lists
 - [ ] 22.9: `run-matrix.ps1 -PostRelease` on fresh 2a and 2b clones, and -

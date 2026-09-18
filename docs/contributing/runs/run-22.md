@@ -1144,6 +1144,19 @@ omissions:
   while `1.1.0.0` moved the second; all four published numbers agree
   with the rule as now written
 
+**Done 2026-09-18**, the day of the cut. The date `09/18/2026` in
+`src\xhci_version.h` and both INFs' `DriverVer`; the `1.1.0.0` entry in
+`releases\history.md` (the new tiers, the four directories, the registry
+value replaced by the miniport flag, issue 8's delivery rule on the 32-bit
+tier, the two audits' driver and tool fixes, written for the installer);
+the release notes' opening line and their three "from `1.1.0.0`" forward
+references; `README.md`'s Install section rewritten for the four
+directories, with the NUSB and F8 prerequisites as a step; both issue
+forms' operating-system lists gaining Vista and Windows 7 in both
+architectures and their example number `1.1.0.0`; and the "has not been
+cut" sentences in `docs/issues/README.md` and `legal-provenance.md`
+section 5.
+
 ## 22.9 - the primary targets unchanged
 
 **22.9 - the primary targets unchanged**, the way task 19.8 and Phase

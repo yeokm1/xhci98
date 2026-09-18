@@ -120,7 +120,7 @@ LayoutFile=layout.inf
 ; Must equal src\xhci_version.h, exactly as src\xhci98.inf's line must - the
 ; two packages are one release and are cut from one version. The INF gate
 ; refuses either disagreeing with the header.
-DriverVer=09/09/2026,1.1.0.0
+DriverVer=09/18/2026,1.1.0.0
 
 ; The NTamd64 TargetOSVersion field is what makes this file 64-bit-only, where
 ; src\xhci98.inf's line carries only NTx86.6.0. It is also

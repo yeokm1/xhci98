@@ -55,6 +55,6 @@
 /* The release date, in the MM/DD/YYYY form `DriverVer` takes, zero-padded -
  * the INF gate refuses an unpadded one, because Windows 98's 16-bit parser is
  * the reason the padding rule exists. */
-#define XHCI_DRIVERVER_DATE     "09/09/2026"
+#define XHCI_DRIVERVER_DATE     "09/18/2026"
 
 #endif /* XHCI_VERSION_H */

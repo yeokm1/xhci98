@@ -4768,8 +4768,9 @@ powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavo
 
 It lands in `out\pkg-datefmt-<flavor>-<arch>\`, and its INF differs from
 `src\xhci98.inf` on exactly one line: a `DriverVer` date without its leading
-zeros - `9/9/2026` where the tree's own `DriverVer` reads `09/09/2026`, and
-both digits lose their zero rather than only the month. The variant is derived at
+zeros - `9/18/2026` where the tree's own `DriverVer` reads `09/18/2026`;
+every field that has a leading zero loses it, the day as well as the month
+when both have one. The variant is derived at
 staging time, never committed, so there is no second INF in the tree to drift;
 `xhci98.rc` is copied beside it so the DriverVer/FILEVERSION cross-check still
 runs; and the gate is invoked with `-AllowUnpaddedDriverVer`, which widens

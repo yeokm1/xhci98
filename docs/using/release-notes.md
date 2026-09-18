@@ -1,7 +1,7 @@
 # xhci98 - Release Notes
 
-This file describes package version `1.0.2.0`
-(`DriverVer=09/07/2026,1.0.2.0`), the fourth release. Where this file and
+This file describes package version `1.1.0.0`
+(`DriverVer=09/18/2026,1.1.0.0`), the fifth release. Where this file and
 `docs/contributing/roadmap.md`, `docs/contributing/build-and-test.md` or
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
@@ -14,10 +14,10 @@ copy to fix.
 Windows 2000 SP4, Windows ME and 32-bit Windows XP working USB on machines
 whose only USB controller is xHCI. One binary serves all four, and the INF
 carries both install paths (Windows ME reads the Windows 98 one, Windows XP
-the Windows 2000 one). From `1.1.0.0` the same binary also serves 32-bit
+the Windows 2000 one). Since `1.1.0.0` the same binary also serves 32-bit
 Windows Vista and Windows 7, through a third install path in the same INF.
 
-From `1.1.0.0` the download also carries a **64-bit** driver, for Windows XP
+Since `1.1.0.0` the download also carries a **64-bit** driver, for Windows XP
 Professional x64, Windows Server 2003 x64, Windows Vista x64 and Windows 7
 x64. That one is a separate build and a separate pair of directories with an
 INF of its own; it is not the same file under another name, and the 32-bit
@@ -128,7 +128,7 @@ refuse unsigned drivers, and ask none of this.
 
 | | |
 |---|---|
-| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000), 32-bit Windows XP (SP3) and, from `1.1.0.0`, Windows XP x64 / Server 2003 x64 (SP2), and Windows Vista (SP2) and Windows 7 (SP1) in both architectures, in virtual machines only, see "What this is". Vista x64 and Windows 7 x64 load the driver only on a boot with signature enforcement disabled from the F8 menu. Nothing after Windows 7. |
+| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000), 32-bit Windows XP (SP3), Windows XP x64 / Server 2003 x64 (SP2), and Windows Vista (SP2) and Windows 7 (SP1) in both architectures, in virtual machines only, see "What this is". Vista x64 and Windows 7 x64 load the driver only on a boot with signature enforcement disabled from the F8 menu. Nothing after Windows 7. |
 | USB stack | Windows 98: NUSB 3.3, installed before this driver (NUSB 3.6 ships the identical USB 2.0 stack and has been observed working, in a virtual machine only; so has the SweetLow stack that Windows 98 QuickInstall 1.0.1 and later bundle, which also removes the first known limitation below; see the README's installation steps). Windows ME: SweetLow's stack only; its own USB stack has no `usbport.sys`, and on it the driver installs and shows Code 2. Do not install NUSB on Windows ME, it is a Windows 98 SE package. Windows 2000: SP4's native stack, or the standalone USB 2.0 update KB319973. **Do not install NUSB on Windows 2000.** Windows XP, 32-bit or x64: its own USB stack, nothing to install; NUSB is not for it either. Windows Vista and Windows 7, either architecture: their own USB stack, nothing to install. |
 | Controller | An xHCI controller presenting PCI class code `0C0330`, with at least one USB 2.0 protocol port, a BAR0 mapped below 4 GB, and a legacy interrupt pin. Neither target has an MSI path, so a controller reporting `Interrupt Pin = 0` cannot be driven at all. |
 | Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk (`C:\WINDOWS\OPTIONS\CABS`). The install copies Windows' own `usbd.sys`, `usbhub.sys` and `usbui.dll` from it. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the hard disk; the virtual machine tried asked for nothing. Windows XP: nothing; `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll` all come out of `sp3.cab` in the driver cache every install has. Windows XP x64: nothing either, and the guest asked for nothing; the same four come out of `Driver Cache\amd64`, `usbport.sys` and `usbhub.sys` from `sp2.cab` and `usbd.sys` and `usbui.dll` from `driver.cab` beside it. Windows 2000: nothing either; the same three out of `sp4.cab`, and `usbui.dll` out of `driver.cab` beside it in that cache. Windows Vista and Windows 7: nothing; every install already has all four files, and the package asks Windows to copy none of them there. |
