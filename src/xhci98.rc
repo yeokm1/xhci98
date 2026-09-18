@@ -97,7 +97,7 @@ BEGIN
              * Kheng Meng. */
             VALUE "LegalCopyright",   "Copyright (c) 2026 Yeo Kheng Meng. GNU GPL v2.\0"
             VALUE "OriginalFilename", "xhci98.sys\0"
-            VALUE "ProductName",      "xhci98 - USB 2.0 over xHCI for Windows 98 SE and Windows 2000\0"
+            VALUE "ProductName",      "xhci98 - USB 2.0 host controller driver for xHCI\0"
             VALUE "ProductVersion",   XHCI_VER_STR "\0"
         END
     END
