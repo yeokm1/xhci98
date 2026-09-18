@@ -1323,8 +1323,8 @@ Harness `out\post-release\task22-10\` (git-ignored: `xp64.cmd`, the unzipped
 asset, screenshots, the disk extract); disks `vm\t2210\`; logs
 `vm\t2210-xp64-l5-*`. 22.12 (a) was read on the same clean copy afterwards,
 from the `qemu` build, because `release` cannot show it (22.12 below).
-**The four x86 legs have not been taken**; legs 7, 9, 6 and 8 are
-below.
+Legs 7, 9, 6 and 8 are below, and after them the four x86 legs, taken
+last.
 
 Whether the cut needed a re-cut was checked the same evening, because the
 published binaries (14:33) predate the last `src\` commit (`26162ae`, 14:45).
@@ -1634,6 +1634,95 @@ before, on the `qemu` build (22.5).
 `out\post-release\task22-10\` (`vista.cmd`, monitor 57134; logs off by
 `getlog8.cmd`); disks `vm\t2210\`; logs `vm\t2210-vista-l8-*`.
 
+**The four x86 legs, 2026-09-18 night: all passed, no finding.** Each off
+a read-only clean copy in `vm\t2210\` made with `qemu-img convert -l`, through a
+throw-away overlay, the transfer drive being the unzipped asset's
+`release-x86\` (`xhci98.sys` SHA-256 `E97FA781...`, 85,579 B, identical to
+`releases\1.1.0.0\release-x86` and `src\objfre\i386`; its INF identical to
+`src\xhci98.inf`). The machines are the 2026-09-16 INF readings' (`vm\inf60-*`)
+with USB audio added. The owner drove the GUI at the console; the harness
+booted, hot-plugged the mouse, the stick and the audio device over the monitor,
+and read the screen and QEMU's trace. On every leg the port-`0xE9` log stayed at
+**0 bytes**, as the `release` flavour should.
+
+- **Windows 98 SE under NUSB 3.3** (`win98.img @ post-nusb`): the Add New
+  Hardware wizard, "Specify a location" `D:\`, found **USB 2.0 eXtensible Host
+  Controller (xhci98)**, asked for the Windows 98 SE CD for `usbd.sys`
+  (answered from `E:\WIN98`) and a restart, taken as a shutdown and a cold
+  launch because this guest wedges on a warm one. Controller and **USB 2.0
+  Root Hub** clean; the mouse (its `hidclass.sys` from the CD), **USB Mass
+  Storage Device** and the audio device (**USB Composite Device**, **USB Audio
+  Device**) bound. Disable, enable, remove and rescan **not taken**: NUSB's
+  `usbport.sys` crashes on any controller stop, the release notes' first known
+  limitation. `slot_enable` 3
+- **Windows 98 SE under SweetLow's stack**: the same clean copy with one more
+  overlay, on which NUSB's own uninstall string
+  (`_USB2UN.INF,UNINSTALL`) and SweetLow's `USB2.INF` were run and the guest
+  shut down (`dir` showing his `usbport.sys` 134,912 B, `usbehci.sys`,
+  `usbhub20.sys`, `usbccgp.sys`). That overlay was flattened into
+  `vm\sweetlow-2a.img` (snapshot `sweetlow-stack-nodriver`, no driver), which
+  the owner keeps as a permanent image, replacing the one pruned on
+  2026-09-06. The install ran as under NUSB, CD prompt included; the three
+  devices bound, the audio one under **Composite Device** (his `usbccgp`);
+  **disable** applied live (the red X on the controller and every child, no
+  crash, no restart prompt), **enable** brought all back, **Remove** cleared
+  the USB class, and **Refresh** reinstalled it through the wizard and the
+  CD, all back. `slot_enable` 9, `slot_configure` 9: three full enumerations
+- **Windows ME under SweetLow's stack** (`winme.img @ winme-clean-install`,
+  with his `USB2.INF` installed on an intermediate overlay; ME keeps its own
+  18,288-byte `usbccgp.sys`): Advanced, Removable Media unticked, `D:\`;
+  **no CD prompt**, then the restart as a cold launch. The three devices
+  bound (the audio device through ME's `WDMA_USB.INF`, under **Composite
+  Device**); disable (Device Manager redrew by itself), enable, remove and
+  refresh all clean, the refresh running the audio device's wizard again.
+  `slot_enable` 9, `slot_configure` 9
+- **Windows 2000 SP4** (`win2k-xonly.img @ win2k-xonly-clean-install`):
+  Found New Hardware wizard, `E:\`, no media prompt, then the same "You must
+  restart" box 2026-09-16 recorded, answered No; the driver was already
+  running. `setupapi.log`, read off the flattened overlay: **`Found
+  PCI\CC_0C0330 in E:\xhci98.inf ... Section: Xhci.Dev`**, `Decorated section
+  name: Xhci.Dev.NTx86`, `Installing section Xhci.Dev.NTx86`; `Xhci.Dev6`
+  nowhere, and no `Device required reboot` after the install. `oem0.inf` is
+  the asset's INF byte for byte, the installed `xhci98.sys` the asset's, and
+  SP4's `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll` on disk. The
+  three devices bound silently. Disable, enable, uninstall and rescan were
+  taken **with the audio device unplugged**, which is the release notes'
+  documented way round Windows 2000's restart prompt on a disable with USB
+  audio attached, and it was replugged after each; all four applied live
+  with no restart prompt, the rescan reinstalling from `oem0.inf`.
+  `slot_enable` 9
+- **32-bit Windows XP SP3** (`winxp.img @ winxp-clean-install`): Update
+  Driver from `E:\`, behind **XP's Windows Logo prompt**, taken with Continue
+  Anyway (`#E366 ... (Policy=Warn, user said ok)`); nothing else asked for,
+  no restart. `setupapi.log`: **`#I022 Found "PCI\CC_0C0330" in
+  e:\xhci98.inf`**, **`#I023 Actual install section: [Xhci.Dev.NTx86]`**,
+  `#I063 ... from section [Xhci.Dev]`; `Xhci.Dev6` nowhere. `oem0.inf` and
+  `xhci98.sys` are the asset's; SP3's `usbport.sys`, `usbhub.sys`,
+  `usbui.dll` and XP's 4,736-byte `usbd.sys` on disk. The three devices
+  bound; nine "Unknown device" entries stood under Other devices while the
+  audio device's classes installed and were gone once it finished. Disable,
+  enable, uninstall and rescan with all three attached, no restart prompt;
+  the rescan's server-side install refused as unsigned (`#E358`) and the
+  wizard reinstalled from `oem0.inf`, as leg 5 read on XP x64. `slot_enable` 9
+
+Every trace also shows two `unimplemented cap read (0x1c)` per controller
+start, as on every NT 6.x leg - a capability register QEMU does not
+implement. Harness `out\post-release\task22-10\` (`win98.cmd` 57135,
+`winme.cmd` 57136, `win2k.cmd` 57137, `winxp.cmd` 57138; `type.ps1 -Qwerty`
+for the 9x guests; the NT pair's `setupapi.log` in `l4log\` and `l10log\`);
+logs `vm\t2210-win98-l1b-*`, `-l2b-*`, `vm\t2210-winme-l3b-*`,
+`vm\t2210-win2k-l4-*`, `vm\t2210-winxp-l10-*`.
+
+**The asset's file list, 2026-09-18 night.** `out\xhci98-1.1.0.0.zip`
+(396,812 B, SHA-256 `45FF2726...`) holds 17 files, and `releases\1.1.0.0\`,
+which the packager staged, holds the same 17; every pair is SHA-256
+identical, nothing on either side alone. No Microsoft file: the four
+`xhci98.sys` carry this project's version resource, and the only
+"Microsoft" in any binary is the statically linked C runtime's "Microsoft
+Visual C++ Runtime Library" error text inside `XHCISNAP.EXE`, part of that
+tool as compiled, not a file. **That closes 22.10: nine install legs, no
+finding, no re-cut.**
+
 **The order the rest of the phase is taken in** (2026-09-18). Two rules shape
 it. Risk first: a finding re-cuts the release, and every leg already taken on
 the changed binary is taken again - so a reading that can amend the release
@@ -1657,7 +1746,7 @@ everything owed on it is taken in that session.
 5. **Done 2026-09-18, no finding, and 22.12 (b) re-read on `release` with it.**
    Vista x86 (leg 8), re-reading 22.12 (b) on the `release` flavour, or by
    the same `qemu` route if `release` cannot show it.
-6. The four legacy x86 legs, then the asset's file list against what the
+6. **Done 2026-09-18, no finding.** The four legacy x86 legs, then the asset's file list against what the
    packager staged. That closes 22.10.
 7. 22.9, whose audio rows give 22.12 (d). (d) carries the same
    amend-the-release risk as (c) but cannot move earlier: it is read off

@@ -45,7 +45,7 @@ The driver needs a USB 2.0 stack on the machine first:
 - **Windows 2000 SP4, XP SP3 x86**: Nothing to install, both OSes at their service pack level already have the stack.
 - **Windows XP SP2 x64, Vista SP2 and 7 SP1 (x86/x64)**: Nothing to install either. On **Vista x64 and 7 x64**, driver signature enforcement has to be disabled as this driver is not signed.
 
-On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand** or the contents on disk as the driver needs some files from there.
+On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand** or its contents on disk. Windows may ask for files from it while installing the driver or the USB devices plugged in afterwards.
 
 Optional but recommended: boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from the `XHCIQUAL\` folder. A controller reporting no legacy interrupt pin cannot be driven on either system and there is no software workaround, so find out before you install anything.
 

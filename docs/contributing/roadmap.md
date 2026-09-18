@@ -1712,7 +1712,7 @@ and every reading, box by box.
 | 22.7 | the charset gate on tracked source |
 | 22.8 | what a cut needs that no gate supplies: the date 2026-09-18, the history entry, the release notes, README, the issue forms |
 | 22.9 | the primary targets unchanged, plus XP x64 and Windows 7 x86 - open |
-| 22.10 | the cut, and the install route read from the asset: cut 2026-09-18; legs 5 (XP x64), 6 (Vista x64), 7 (Windows 7 x64), 8 (Vista x86) and 9 (Windows 7 x86) passed, the four x86 legs open |
+| 22.10 | the cut, and the install route read from the asset: cut 2026-09-18; all nine install legs passed, the asset's file list checked - done |
 | 22.11 | issue 5's mechanism replaced by `USB_MINIPORT_FLAGS_DISABLE_SS` |
 | 22.12 | the guest readings the 2026-09-17 audit fixes owe; (b) done on Vista x86, (c) on the Windows 2000 SMP guest, (a) on XP x64 and Vista x64; (d) open |
 
@@ -1768,7 +1768,7 @@ Owed:
       tree, and a finding amends the release under Phase 15's rule. The two
       new targets' `ExpectNoDriver` entries are guesses the first run
       corrects
-- [ ] 22.10: both architectures built and cut - **cut 2026-09-18 14:50**,
+- [x] 22.10: both architectures built and cut - **cut 2026-09-18 14:50**,
       `releases\1.1.0.0\` with four flavour directories and
       `out\xhci98-1.1.0.0.zip` (396,812 B after four same-day re-cuts for the readme and a fifth, `b4d3404`, for the binaries' ProductName; no Microsoft file), every gate
       green; **leg 5, the amd64 package on XP x64, passed on 2026-09-18**
@@ -1789,7 +1789,13 @@ Owed:
       the boot manager's menu; **leg 8, the x86 package on Vista x86,
       passed the same night** through `XhciModels.NTx86.6.0` /
       `[Xhci.Dev6.NTx86]` behind the same prompt and no second box, 22.12
-      (b) re-read on it; what stays open is the rest - then the asset read on nine
+      (b) re-read on it; **the four x86 legs passed the same night** - Windows
+      98 SE under NUSB (install and devices; its teardown crashes, the known
+      limitation) and under SweetLow's stack, ME, 2000 and 32-bit XP with the
+      full device clauses, the NT pair's `setupapi.log` taking `Xhci.Dev` /
+      `[Xhci.Dev.NTx86]` - and **the asset's 17 files are exactly what the
+      packager staged**, no Microsoft file, **closing 22.10 with no finding
+      and no re-cut**. The task as written: the asset read on nine
       install legs - the four x86 ones with full device clauses, the amd64
       package on XP x64, Vista x64 and Windows 7 x64, and the x86 package on
       Vista x86 and Windows 7 x86, recording the unsigned-driver prompt - and
