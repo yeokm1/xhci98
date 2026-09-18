@@ -1714,26 +1714,13 @@ and every reading, box by box.
 | 22.9 | the primary targets unchanged - open |
 | 22.10 | the cut, and the install route read from the asset - open |
 | 22.11 | issue 5's mechanism replaced by `USB_MINIPORT_FLAGS_DISABLE_SS` |
-| 22.12 | the guest readings the 2026-09-17 audit fixes owe - open |
+| 22.12 | the guest readings the 2026-09-17 audit fixes owe; (b) before the cut - open |
 
 Owed:
 
-- [ ] 22.8: `releases\history.md`'s entry; the release date in
-      `src\xhci_version.h` and both INFs; the release notes' opening line;
-      `README.md`'s Install section; the issue forms' operating-system lists
-- [ ] 22.9: `run-matrix.ps1 -PostRelease` on fresh 2a and 2b clones
-- [ ] 22.10: both architectures built and cut, then the asset read on nine
-      install legs - the four x86 ones with full device clauses, the amd64
-      package on XP x64, Vista x64 and Windows 7 x64, and the x86 package on
-      Vista x86 and Windows 7 x86, recording the unsigned-driver prompt - and
-      its file list checked against what the packager staged. Of the 32-bit
-      pair, Vista x86 has since installed the `qemu` build through the
-      committed `src\xhci98.inf` (2026-09-17, 22.5's `InfSection` reading);
-      neither has run the `release` flavour, and Windows 7 x86 has not
-      installed through the committed INF, so the eighth and ninth legs
-      still take both
-- [ ] 22.12: the 2026-09-17 audit (branch `audit-2026-09-17`, `188cb32` and
-      the six Codex rounds after it) changed the driver in four places that
+- [ ] 22.12, listed first because (b) comes before 22.10: the 2026-09-17
+      audit (branch `audit-2026-09-17`, `188cb32` and the six Codex rounds
+      after it) changed the driver in four places that
       only a guest can read, and none has been read: (a) the post-registration
       verifier walks the service block as pointers, so an amd64 guest's
       `usbport services written=16` line must be read again on XP x64 and
@@ -1755,9 +1742,26 @@ Owed:
       `UnmatchedEventsTotal` staying at zero across a split isoch packet,
       and, if a group is ever swept by the next group's tail
       (`SweptTransfers` moving on a normal short read), that is the
-      audit's B10 and wants the settle it describes. None of these gates
-      22.10: what they read is already in the tree the cut publishes, and
-      a wrong reading amends the release, as Phase 15's rule has it
+      audit's B10 and wants the settle it describes. **(b) gates 22.10, as
+      22.11 did and for the same reason**: it changes root-hub behaviour on a
+      path no target has ever measured, and the cut would ship it unread.
+      (a) and (d) are read off 22.9's matrix and 22.10's own install legs
+      rather than as legs of their own; (c) may follow the cut, since a
+      wrong reading there amends the release under Phase 15's rule
+- [ ] 22.8: `releases\history.md`'s entry; the release date in
+      `src\xhci_version.h` and both INFs; the release notes' opening line;
+      `README.md`'s Install section; the issue forms' operating-system lists
+- [ ] 22.9: `run-matrix.ps1 -PostRelease` on fresh 2a and 2b clones
+- [ ] 22.10: both architectures built and cut, then the asset read on nine
+      install legs - the four x86 ones with full device clauses, the amd64
+      package on XP x64, Vista x64 and Windows 7 x64, and the x86 package on
+      Vista x86 and Windows 7 x86, recording the unsigned-driver prompt - and
+      its file list checked against what the packager staged. Of the 32-bit
+      pair, Vista x86 has since installed the `qemu` build through the
+      committed `src\xhci98.inf` (2026-09-17, 22.5's `InfSection` reading);
+      neither has run the `release` flavour, and Windows 7 x86 has not
+      installed through the committed INF, so the eighth and ninth legs
+      still take both
 
 Checkpoint, the guest half: on each of Vista x86 and Windows 7 x86 the package
 installed, the driver registered, started and passed its No Op self-test, the

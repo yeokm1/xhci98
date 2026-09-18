@@ -1286,7 +1286,10 @@ section 5.4 is the reasoning and every address.
 answered; the memory `repo-audit-2026-09-17` and the commit messages from
 `188cb32` on branch `audit-2026-09-17` are the record) fixed the driver in
 four places whose effect only a guest shows. The roadmap's owed box names
-the four; this section takes their readings as they come.
+the four; this section takes their readings as they come. Ordered ahead of
+22.10 on 2026-09-18: (b) gates the cut as 22.11 did, because it changes
+root-hub suspend/resume on a path no target has measured; (a) and (d) are
+read off 22.9 and 22.10's own legs; (c) may follow the cut.
 
 - [ ] (a) amd64 service block: `usbport services written=16` on XP x64 and
       Vista x64 from the corrected verifier (`xhciVerifyPacketAfterRegistration`
