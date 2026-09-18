@@ -1170,6 +1170,24 @@ cut** (the owner's decision: cut first), and it covers XP x64 and Windows 7
 x86 as well (`xp64-fresh`, `win7-fresh`, design record 09 section 2.6); the
 harness learned both targets the same day.
 
+*Preparation, not yet started (2026-09-18).* The procedure is
+`scripts\vm-matrix\README.md`, "The post-release run". Build first -
+`build-driver.cmd qemu` and `qemu -amd64`, `make-package.ps1 -Flavor qemu`
+with and without `-Arch amd64`, `gen-offsets.ps1` with and without
+`-Arch amd64` - then for each of `2a-fresh`, `2b-fresh`, `xp64-fresh` and
+`win7-fresh`: `prepare-image.ps1 -Target <id> -Clone -FreshCopy`; `-Boot
+-Xfer` and the install in the guest; `-Status`, and on Windows 98 `-Attach`
+per device class; a clean shutdown (`quit` at the monitor on the NT guests);
+`-Stamp`. Then `run-matrix.ps1 -Config scripts\vm-matrix\matrix.config.psd1
+-PostRelease`. The state it starts from: `vm\fresh-2a.img` and
+`fresh-2b.img` are stamped `1.0.2.0`, so both need re-preparing, and
+`fresh-2b.img` was re-cloned, booted once and left half-prepared - run
+`-Clone -FreshCopy` on it again. Not yet measured on the two new targets:
+the liveness probe (PIT IRQ0 on an MP HAL), the 600 s boot and ready
+deadlines under TCG, and whether the keep-alive mouse binds before the ready
+poll; and their `ExpectNoDriver` rows for uas, serial and braille are
+guesses the first run corrects. Its audio rows give 22.12 (d).
+
 ## 22.10 - the cut itself, and the install route read from the asset
 
 **22.10 - the cut itself, and the install route read from the asset.**
@@ -1255,6 +1273,51 @@ The packager's closing amd64 warning, which still called Vista x64 and
 Windows 7 x64 outside the tier, was corrected in the same change; it is
 console output and reaches no published file. **None of the nine install legs
 has been taken yet.**
+
+**The order the rest of the phase is taken in** (2026-09-18). Two rules shape
+it. Risk first: a finding re-cuts the release, and every leg already taken on
+the changed binary is taken again - so a reading that can amend the release
+and owes no leg goes before the legs (22.12 (b), then (c), both done), then
+the legs never read, and the four legacy x86 legs, read at every cut since
+`1.0.1.0`, last. And one guest at a time: each guest is booted once and
+everything owed on it is taken in that session.
+
+1. XP x64 (leg 5), with 22.12 (a). First of the legs because it carries the
+   one INF shape no guest has parsed, the two-field line on an NT 5.2
+   engine; a finding there is an INF change, which leaves the `.sys` files
+   but retakes every leg, since every leg installs through the INF. The NT
+   6.x path of the same file already ran from a staged copy on 2026-09-13.
+2. Windows 7 x64 (leg 7).
+3. Windows 7 x86 (leg 9).
+4. Vista x64 (leg 6), with 22.12 (a): the `release` flavour writes no trace,
+   so revert to the clean snapshot, install the `qemu` package, and read
+   `usbport services written=16` off the port-`0xE9` log. Whether (a)'s line
+   can be read on `release` at all is to be checked first on XP x64.
+5. Vista x86 (leg 8), re-reading 22.12 (b) on the `release` flavour, or by
+   the same `qemu` route if `release` cannot show it.
+6. The four legacy x86 legs, then the asset's file list against what the
+   packager staged. That closes 22.10.
+7. 22.9, whose audio rows give 22.12 (d). (d) carries the same
+   amend-the-release risk as (c) but cannot move earlier: it is read off
+   22.9's rows, and 22.9's images are prepared from the cut's tree.
+8. The acceptance test by hand (`docs/using/release-acceptance-test.md`),
+   on a fresh VM and on a physical machine; then the owner uploads.
+
+On a finding: fix it, re-cut with `-Force`, and retake from leg 5 every leg
+whose binary or INF changed. **A `.sys` change also re-reads 22.12 (c)**, ahead
+of the retaken legs, by its own recipe: rebuild the `qemu` flavour, take the
+new image stamp and the breakpoint site's RVA from `dumpbin /disasm`, and run
+the same five incidents (the harness is `vm\t2212c\`, git-ignored).
+
+*Driving the NT guests over the monitor.* XP (both), Vista and Windows 7 use
+US Dvorak, and `sendkey` names QWERTY positions: Win+R is `meta_l-o`, Alt+C is
+physical `i`; log in as `test` / `test`. XP and Vista accelerate the pointer,
+so relative moves go in 3-5 unit steps (a ratio of about 0.74-0.8).
+`mouse_move` goes to the newest QEMU mouse, so a USB mouse under test is never
+moved while it is suspended - drive by keyboard instead. UAC and the
+unsigned-driver prompts take a click on Vista and 7, or the accelerator key.
+An editor tab left open on `releases\1.1.0.0\readme.txt` across a re-cut
+shows the old file, because the cut replaces the directory.
 
 ## 22.11 - issue 5's mechanism replaced, and read on every target
 

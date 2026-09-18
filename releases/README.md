@@ -51,6 +51,20 @@ directory and nothing else. The same script generates it, and its procedure is
 transcribed from `docs/using/release-notes.md`; when that file changes, the
 template near the end of `make-release.ps1` has to change with it.
 
+The owner set the readme's shape on 2026-09-18, and the template holds to it:
+the top is two short paragraphs around a point-form list of the operating
+systems; the log request asks for `FULL.LOG`, and for `PROBE.LOG` only if the
+full run did not finish; the reporting text is an unnumbered "ISSUE REPORTING"
+section ahead of CONTENTS, and there is no section on what the version number
+means. **Windows Server 2003 is not named** in the readme or in the
+`history.md` entry it embeds, and **F8 is not named** either: the x64 NT 6.x
+requirement is written as "driver signature enforcement must be disabled",
+since F8 is not the only way to do it. The release notes and `README.md`
+follow the F8 rule too; they still name Server 2003 x64, which the owner has
+not asked to change. A change to the readme after a cut is a re-cut with
+`-Force`, and the asset size recorded in the roadmap and the run sheet
+follows it.
+
 `xhciqual/` carries the DOS qualifier and only its read-only path. The numbered
 `.BAT` wrappers stay in the repository, because they drive the staged active
 tests that take ownership of the controller and reset it. What a user needs is
