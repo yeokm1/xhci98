@@ -1712,7 +1712,7 @@ and every reading, box by box.
 | 22.7 | the charset gate on tracked source |
 | 22.8 | what a cut needs that no gate supplies: the date 2026-09-18, the history entry, the release notes, README, the issue forms |
 | 22.9 | the primary targets unchanged, plus XP x64 and Windows 7 x86 - open |
-| 22.10 | the cut, and the install route read from the asset: cut 2026-09-18; legs 5 (XP x64) and 7 (Windows 7 x64) passed, the other seven open |
+| 22.10 | the cut, and the install route read from the asset: cut 2026-09-18; legs 5 (XP x64), 7 (Windows 7 x64) and 9 (Windows 7 x86) passed, the other six open |
 | 22.11 | issue 5's mechanism replaced by `USB_MINIPORT_FLAGS_DISABLE_SS` |
 | 22.12 | the guest readings the 2026-09-17 audit fixes owe; (b) done on Vista x86, (c) on the Windows 2000 SMP guest, (a) on XP x64 - open |
 
@@ -1777,16 +1777,19 @@ Owed:
       amd64 package on Windows 7 x64, passed the same evening** through the
       committed INF (`XhciModels.NTamd64.6.0`, `[Xhci.Dev6.NTamd64]`), the
       prompt recorded - "Windows can't verify the publisher of this driver
-      software", taken with "Install this driver software anyway"; what stays open is the rest - then the asset read on nine
+      software", taken with "Install this driver software anyway"; **leg 9, the
+      x86 package on Windows 7 x86, passed that night** through
+      `XhciModels.NTx86.6.0` / `[Xhci.Dev6.NTx86]` behind the same prompt, a
+      first uninstall's restart prompt read as Windows Audio's open handle on
+      the USB audio device (gone with the service stopped); what stays open is the rest - then the asset read on nine
       install legs - the four x86 ones with full device clauses, the amd64
       package on XP x64, Vista x64 and Windows 7 x64, and the x86 package on
       Vista x86 and Windows 7 x86, recording the unsigned-driver prompt - and
       its file list checked against what the packager staged. Of the 32-bit
       pair, Vista x86 has since installed the `qemu` build through the
       committed `src\xhci98.inf` (2026-09-17, 22.5's `InfSection` reading);
-      neither has run the `release` flavour, and Windows 7 x86 has not
-      installed through the committed INF, so the eighth and ninth legs
-      still take both
+      Windows 7 x86 has since done both (leg 9); Vista x86 has not run the
+      `release` flavour, which the eighth leg takes
 
 Checkpoint, the guest half: on each of Vista x86 and Windows 7 x86 the package
 installed, the driver registered, started and passed its No Op self-test, the

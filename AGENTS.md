@@ -120,9 +120,9 @@ decisions 10 and 12). **Every clause was taken on the `qemu` build.** The
 as roadmap task 22.10's sixth and seventh install legs (open on 2026-09-17),
 which is also Windows 7 x64's first install through the committed INF. Vista
 x86 has installed the `qemu` build through the committed `src/xhci98.inf`
-(2026-09-17, task 22.5's `InfSection` reading); neither 32-bit guest has run
-the `release` flavour, and Windows 7 x86 has not installed through the
-committed INF - the eighth and ninth legs of the same task take both. **The x64 half loads only
+(2026-09-17, task 22.5's `InfSection` reading), and Windows 7 x86 installed the
+published `release` package through it on 2026-09-18 (task 22.10's ninth leg);
+Vista x86 has not run the `release` flavour, which the eighth leg takes. **The x64 half loads only
 on a boot with driver signature enforcement disabled**: the package is not
 signed (design record 11 section 12, decision 9), so the user presses F8 and
 chooses Disable Driver Signature Enforcement at every start, the machine can

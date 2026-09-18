@@ -671,7 +671,9 @@ structures.
       endpoint's stop and aborts and no `StopController`; with audio
       unplugged every disable applied live. What holds the stack was not
       read, and whether it is the OS audio stack or something this
-      driver answers is not established. No earlier Windows 2000 run had
+      driver answers is not established. (22.10 leg 9 later read the same
+      refusal on Windows 7 x86: a `PNP_VetoOutstandingOpen` veto by the
+      audio function, gone with Windows Audio stopped.) No earlier Windows 2000 run had
       audio attached for a disable. *2026-09-16: reproduced on the
       build before `413581c` (per-endpoint delivery compiled out, both
       mode flags 0) once USB Audio Device was bound, with this driver
@@ -1321,8 +1323,8 @@ Harness `out\post-release\task22-10\` (git-ignored: `xp64.cmd`, the unzipped
 asset, screenshots, the disk extract); disks `vm\t2210\`; logs
 `vm\t2210-xp64-l5-*`. 22.12 (a) was read on the same clean copy afterwards,
 from the `qemu` build, because `release` cannot show it (22.12 below).
-**Legs 6, 8 and 9 and the four x86 legs have not been taken**; leg 7 is
-below.
+**Legs 6 and 8 and the four x86 legs have not been taken**; legs 7 and 9
+are below.
 
 Whether the cut needed a re-cut was checked the same evening, because the
 published binaries (14:33) predate the last `src\` commit (`26162ae`, 14:45).
@@ -1426,6 +1428,88 @@ guest's logs came off on a FAT12 floppy image, `mkfloppy.py` and
 `getlog.cmd`, because the VVFAT transfer drive is read-only); disks
 `vm\t2210\`; logs `vm\t2210-win764-l7-*`.
 
+**Leg 9, Windows 7 x86, 2026-09-18 night: passed every clause, no finding.**
+The guest was `vm\win7.img` @ `win7-clean-install`, copied read-only with
+`qemu-img convert -l` and booted through a throw-away overlay: `-smp 4`,
+`-accel tcg,thread=multi`, `qemu-xhci,p3=0`, the 22.11 Windows 7 x86 machine
+otherwise (`ssflag-win7.cmd`'s line, not the WHPX one the guest was installed
+under). The transfer drive was the unzipped asset's `release-x86\`
+(`xhci98.sys` `E97FA781...`, 85,579 B, and its INF, both identical to
+`releases\1.1.0.0\release-x86`). No F8: 32-bit Windows 7 does not enforce
+kernel-mode signing. The clean image's first boot asked to restart for its own
+device installs (CPU, disk, IDE channel - `setupapi.dev.log` records their
+query-removes vetoed); that restart was taken before anything was installed.
+
+- the install: Device Manager -> *Universal Serial Bus (USB) Controller*
+  under *Other devices* -> *Update Driver Software* -> *Browse my computer
+  for driver software* -> `E:\`. **The prompt is the same Windows Security
+  dialog as on x64**, headed "Windows can't verify the publisher of this
+  driver software", "Don't install this driver software" with the focus,
+  and "Install this driver software anyway" ("Only install driver software
+  obtained from your manufacturer's website or disc. Unsigned software from
+  other sources may harm your computer or steal information."). **Install
+  this driver software anyway took it**: `Driver package does not contain a
+  catalog file, but user wants to install anyway.`, `oem2.inf` published,
+  and the wizard ends "Windows has successfully updated your driver
+  software", the tray "USB Root Hub - Device driver software installed
+  successfully". **No second box on x86** - no Program Compatibility
+  Assistant - and no CD or restart asked for
+- **the committed INF on Windows 7 x86**: the driver node is
+  `xhci98.inf:XhciModels.NTx86.6.0:Xhci.Dev6:1.1.0.0:pci\cc_0c0330`, the
+  install runs `[Xhci.Dev6.NTx86]` and `[Xhci.Dev6.NTx86.Services]`, and
+  `Xhci.Dev` without the `6` appears nowhere; `xhci98.sys` alone is copied to
+  `System32\drivers`. The four OS-supplied files were already on disk
+  (`usbport.sys` 284,672 B, `usbhub.sys` 258,560 B, `usbd.sys` 5,888 B,
+  `usbui.dll` 80,896 B, all dated 2009-2010)
+- registered and started: **USB 2.0 eXtensible Host Controller (xhci98)**
+  and **USB Root Hub**, no bang
+- the three devices, hot-plugged over the monitor: **USB Input Device**
+  (Human Interface Devices), **USB Mass Storage Device** (and its volume
+  under *Portable Devices*), **USB Composite Device** and **Audio Device**
+  (Sound, video and game controllers), no bang; mouse and storage at
+  480 Mb/s, audio at 12 Mb/s
+- disable (every child gone, no restart prompt) and enable (all back, no
+  bang)
+- **uninstall asked for a restart the first time, and the cause was read:
+  it is Windows' audio service, not this driver.** "System Settings Change:
+  To finish removing your hardware, you must restart your computer", answered
+  No. `setupapi.dev.log`'s uninstall section removes the HID mouse and the
+  mass-storage device live (`Query-and-Remove succeeded`), then records
+  `Query-removal was vetoed by USB\VID_46F4&PID_0002&MI_00\... (veto type 5:
+  PNP_VetoOutstandingOpen)` - the audio function, held open by a user-mode
+  handle - for it, the composite parent, the root hub and the controller,
+  each `Setting needs reboot`. QEMU's trace shows nothing reaching the
+  controller: no slot teardown, the ports still polled. **The control:**
+  `net stop audiosrv` (Windows Audio) from an elevated prompt, then the same
+  uninstall - every `Query-and-Remove succeeded`, the USB class gone, **no
+  restart prompt**, the trace going quiet. The audio function's veto sits
+  above usbport, where this driver is not consulted; a user with a USB audio
+  device in use would see the same on Microsoft's own host controller
+  drivers. The disable before it applied live with the same device attached,
+  so the handle is not always open - the service picks the endpoint up at
+  some point after arrival
+- rescan (Windows Audio started again first): reinstalled from the driver
+  store through the same `XhciModels.NTx86.6.0` / `[Xhci.Dev6.NTx86]`,
+  `Signer - Not digitally signed`, **with no prompt**; all back, no bang.
+  The device sequence was driven by the owner at the console
+- the flavour, read 21.5's way: the port-`0xE9` log stayed at **0 bytes**,
+  and QEMU's trace shows `slot_enable` 9, `slot_address` 19,
+  `slot_configure` 13 - three enumerations of three devices (install, enable,
+  rescan), the mouse unplugged and replugged once in between because QEMU
+  routes the host pointer to the newest mouse, which the uninstall had left
+  without a driver
+
+**This reading answers two refusals recorded as unexplained.** This guest's
+first disable on 2026-09-13 (issue 7 section 7.5, "Event Viewer was not read
+before the restart") and Windows 2000's refused disables with the USB audio
+device attached (2026-09-15, issue 7 section 7.10) both had the USB audio
+device plugged in and nothing reaching the driver. Neither was read at the
+time, so this is the likely cause for both, not a reading of either.
+
+Harness `out\post-release\task22-10\` (`win7.cmd`, monitor 57132; logs off
+the guest by `getlog9.cmd` on a floppy image); disks `vm\t2210\`; logs
+`vm\t2210-win7-l9-*`.
+
 **The order the rest of the phase is taken in** (2026-09-18). Two rules shape
 it. Risk first: a finding re-cuts the release, and every leg already taken on
 the changed binary is taken again - so a reading that can amend the release
@@ -1440,7 +1524,7 @@ everything owed on it is taken in that session.
    but retakes every leg, since every leg installs through the INF. The NT
    6.x path of the same file already ran from a staged copy on 2026-09-13.
 2. **Done 2026-09-18, no finding.** Windows 7 x64 (leg 7).
-3. Windows 7 x86 (leg 9).
+3. **Done 2026-09-18, no finding.** Windows 7 x86 (leg 9).
 4. Vista x64 (leg 6), with 22.12 (a): the `release` flavour writes no trace,
    so revert to the clean snapshot, install the `qemu` package, and read
    `usbport services written=16` off the port-`0xE9` log. `release` cannot

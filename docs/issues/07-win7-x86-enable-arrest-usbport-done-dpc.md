@@ -742,7 +742,12 @@ sample each time. On Vista x86, run afterwards with the same sequence, the
 first disable applied live. A disable that asks to restart never reaches this
 driver, so this is not evidence against the fix. It is still an unexplained
 refusal, and the next guest that shows one should have Kernel-PnP event 225
-read before anything else.
+read before anything else. *(2026-09-18: roadmap 22.10's ninth leg met the
+same refusal on this guest, on an uninstall, and read it:
+`setupapi.dev.log` names the USB audio function as the vetoer,
+`PNP_VetoOutstandingOpen`, and with Windows Audio stopped the uninstall
+applied live. `docs/contributing/runs/run-22.md`, leg 9. That is the likely
+cause here too; it was not read here.)*
 
 What this establishes: on each of the four NT 6.x guests, under four
 virtual processors, the sequence that arrested before the fix completed
