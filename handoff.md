@@ -9,7 +9,7 @@ readme rules.
 
 **`1.1.0.0` is cut and committed.** Nothing has been uploaded, so a finding
 can still re-cut it under the same number with `make-release.ps1 -Force`
-(`releases/README.md`). HEAD is `d1c9bca`; the working tree is clean.
+(`releases/README.md`). Everything is committed; the working tree is clean.
 
 | Task | State |
 |---|---|
