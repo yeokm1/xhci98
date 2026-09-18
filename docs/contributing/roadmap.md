@@ -1714,14 +1714,14 @@ and every reading, box by box.
 | 22.9 | the primary targets unchanged, plus XP x64 and Windows 7 x86 - open |
 | 22.10 | the cut, and the install route read from the asset: cut 2026-09-18; the nine install legs open |
 | 22.11 | issue 5's mechanism replaced by `USB_MINIPORT_FLAGS_DISABLE_SS` |
-| 22.12 | the guest readings the 2026-09-17 audit fixes owe; (b) done on Vista x86 - open |
+| 22.12 | the guest readings the 2026-09-17 audit fixes owe; (b) done on Vista x86, (c) on the Windows 2000 SMP guest - open |
 
 Owed:
 
 - [ ] 22.12, listed first because (b) came before 22.10: the 2026-09-17
       audit (branch `audit-2026-09-17`, `188cb32` and the six Codex rounds
       after it) changed the driver in four places that
-      only a guest can read, and three are still unread: (a) the post-registration
+      only a guest can read, and two are still unread: (a) the post-registration
       verifier walks the service block as pointers, so an amd64 guest's
       `usbport services written=16` line must be read again on XP x64 and
       Vista x64 - every earlier amd64 reading of that line covered eight;
@@ -1735,10 +1735,13 @@ Owed:
       U3, and the re-read passed every clause (`runs/run-22.md`); (c) the
       recovery
       path refuses at `XHCI_INIT_STEP_RESET` while USBSTS.CNR or
-      USBCMD.HCRST reads set and `xhciReset` stalls 1 ms after HCRST - the
-      SMP recovery injection through the gdbstub (Phase 20's HCE route) is
-      the way to see the refusal and the counters `RecoveryLastStep` /
-      `RecoveryLastStatus`; (d) the isochronous counters `IsoTailEvents` and
+      USBCMD.HCRST reads set and `xhciReset` stalls 1 ms after HCRST -
+      **read on 2026-09-18 on the Windows 2000 SMP guest under TCG, no
+      finding**: QEMU's xHC cannot hold either bit, so Phase 20's HCE route
+      read the ordinary recovery and a gdbstub breakpoint ORed CNR, HCRST
+      or both into the values the recovery read; each refused at step 9
+      with no operational-register write and the next poll's retry
+      completed through one HCRST (`runs/run-22.md`); (d) the isochronous counters `IsoTailEvents` and
       `OrphanedGroups` replace what `UnmatchedEvents` and
       `PlacementFailures` were charged, so a QEMU audio row must show
       `UnmatchedEventsTotal` staying at zero across a split isoch packet,

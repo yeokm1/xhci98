@@ -1397,12 +1397,74 @@ the cut; (c) and (d) may follow it.
       was not taken, and a conforming xHC, which enters Resume on the write,
       exercises the U0 write from Resume as before - this reading covers the
       U3 arm.
-- [ ] (c) recovery under a reset in progress: inject a controller fault
-      through the gdbstub as Phase 20's SMP recoveries were, with CNR or
-      HCRST held; expect `RecoveryLastStep = XHCI_INIT_STEP_RESET`, zero
-      operational-register writes, and the next poll's retry completing
-      through one HCRST (`XhciRecoverController`, `xhciReset`,
-      `XhciMaskInterrupts`)
+- [x] (c) recovery under a reset in progress, **taken 2026-09-18 on the
+      Windows 2000 SMP guest under TCG, and passed with no finding.**
+      Expected: with CNR or HCRST held, `RecoveryLastStep =
+      XHCI_INIT_STEP_RESET`, zero operational-register writes, and the next
+      poll's retry completing through one HCRST (`XhciRecoverController`,
+      `xhciReset`, `XhciMaskInterrupts`).
+
+      *No QEMU controller can hold either bit.* Measured the same afternoon
+      on a bare QEMU 11.1 `qemu-xhci` (TCG, no guest) written through the
+      gdbstub: a USBCMD write with HCRST runs the reset synchronously and
+      USBCMD reads `0` straight after, USBSTS reads `0x1` with CNR never
+      set, and a write of CNR to USBSTS is dropped. So the owner chose
+      (2026-09-18) to take the clause in two halves: Phase 20's HCE route
+      unchanged, which reads the ordinary path through the audit's new
+      check and its 1 ms post-HCRST stall; and the refusal by a **doctored
+      register read** - a gdbstub breakpoint in `xhci98.sys` at the
+      instruction after `XhciRecoverController`'s USBSTS and USBCMD reads
+      (image RVA `0x843D`, `cmp edi,0FFFFFFFFh`, with USBSTS in EDI and
+      USBCMD in EAX), ORing CNR (`0x800`) or HCRST (`0x2`) into the value
+      read, on one attempt. It is not a controller in reset: what it shows
+      is what the driver does with such a reading.
+
+      *The build and the guest.* `build-driver.cmd qemu` on the cut's tree
+      (`c5df75b`; `src\` unchanged since `26162ae`), built 18:19:15,
+      image stamp `6AAD1025`, SHA-256 `22344b2c...` - copied over
+      `xhci98.sys` in a throw-away overlay of `vm\win2k-smp.img` (ACPI
+      Multiprocessor HAL, `-smp 2`), restarted from the Start menu, and run
+      under `-accel tcg` because WHPX does not run on this host; the image
+      has booted under TCG before ("Phase 2d" in `build-and-test.md`), and
+      nothing here asks it to be the race detector. A QEMU USB mouse on hub
+      port 1. HCE by Phase 20's method: interrupter 0's `ERSTBA` (BAR0
+      `0xFEBF0000` + `0x1030`) written to `0xFFF00000`, then its high half.
+
+      *Five incidents, read by counters, the port-`0xE9` log and QEMU's
+      `usb_xhci_oper_*` trace:*
+
+      | Incident | Injected at the site | Attempts / completions / refusals after | Refused attempt | Retry |
+      |---|---|---|---|---|
+      | 1 | nothing | 1 / 1 / 0 | - | step 22, one `=== RESET ===` |
+      | 2 | nothing (a script fault; the attempt ran unmodified) | 2 / 2 / 0 | - | step 22, one reset |
+      | 3 | CNR and HCRST, one attempt | 4 / 3 / 1 | step 9, status `0x1800`, USBCMD `0x3` | step 22, one reset |
+      | 4 | CNR alone | 6 / 4 / 2 | step 9, status `0x1800`, USBCMD `0x1` | step 22, one reset |
+      | 5 | HCRST alone | 8 / 5 / 3 | step 9, status `0x1000`, USBCMD `0x3` | step 22, one reset |
+
+      On every refused attempt the driver logged "the previous reset is
+      still running - refusing before touching a register" with both
+      readings, `RecoveryFailuresConsecutive` went to 1 and back to 0 on the
+      retry, and the trace shows the refused attempt's USBSTS-then-USBCMD
+      read pair followed by **no operational-register write** before the
+      retry's own pair; the only writes ahead of it, the latch's INTE and
+      IMAN mask, are in incidents 1 and 2 too. Each retry is the ordinary
+      sequence: the quiesce's USBCMD write, the halt, the CNR wait's USBSTS
+      reads, one `USBCMD = 0x2`, one reset, the run. After the five:
+      `FatalStatusDetected` 5, `ResetControllerCalls` 5, `RecoveryAttempts`
+      8, `RecoveryCompletions` 5, `RecoveryFailures` 3,
+      `RecoveryDeliveriesLost` and `RecoveryCallbacksLate` 0,
+      `DevicesAddressed` 6 (the mouse re-addressed each time), the mouse
+      still moving the pointer, no bugcheck. The breakpoint is reported
+      again on continuing from it, so incident 3's second stop was the same
+      execution (EDI still `0x1800`, which QEMU cannot return); incidents 4
+      and 5 absorbed that re-report with a no-op. Harness and logs in
+      `vm\t2212c\` (git-ignored): `gdbinj.py`, `smp-c.cmd`,
+      `debugcon-tcg1.log`, `trace-{h1,h2,cnr,hcrst}.log`.
+
+      Not established: a controller that really holds CNR or HCRST, which
+      no VM here can supply; and the 1 ms post-HCRST stall has no
+      observable effect on QEMU, whose reset is synchronous - these
+      readings show only that the stall broke nothing.
 - [ ] (d) isochronous counters on a QEMU audio row: `IsoTailEventsTotal`
       moving with split packets, `UnmatchedEventsTotal` staying at zero,
       `OrphanedGroups` at zero; a group swept by the next group's tail on a

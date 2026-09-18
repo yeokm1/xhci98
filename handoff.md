@@ -16,52 +16,71 @@ can still re-cut it under the same number with `make-release.ps1 -Force`
 | 22.8 prose | **Done**, `26162ae`. Release date `09/18/2026` in `xhci_version.h` and both INFs; history entry, release notes, README Install, issue forms. |
 | 22.9 harness (XP x64 + Win7 x86 targets) | **Done, Codex-converged**: `fcbf9a1` and the round-1 fixes `2dba77a`; round 2 had no findings. Self-test 298 checks. |
 | 22.10 the cut | **Done**: cut at 14:50, then re-cut four times the same day with `-Force` for the owner's readme changes (`02f4ba1`, `681b707`). `releases\1.1.0.0\` holds `release-x86`, `debug-x86`, `release-x64`, `debug-x64`, the two tools, `LICENSE` and `readme.txt`. The asset is `out\xhci98-1.1.0.0.zip`, **396,894 B**, git-ignored, with no Microsoft file. |
-| 22.10 the nine install legs | **NEXT. None taken.** |
+| 22.10 the nine install legs | **NEXT, from step 1 (XP x64). None taken.** |
 | 22.12 (a) | Read during 22.10's XP x64 and Vista x64 legs: `usbport services written=16`. |
 | 22.12 (b) | Done (`16d5ad2`); the Vista x86 leg re-reads it on the `release` flavour. |
 | 22.9 the run | After the install legs (owner's decision: cut first). |
-| 22.12 (c) recovery refusal under CNR/HCRST, (d) iso counters | Open; both follow the cut. (d) comes off 22.9's audio rows. |
+| 22.12 (c) recovery refusal under CNR/HCRST | **Done 2026-09-18, no finding** (Windows 2000 SMP guest under TCG; `run-22.md`). QEMU cannot hold CNR/HCRST, so the refusal was read through a gdbstub breakpoint doctoring the recovery's register reads. |
+| 22.12 (d) iso counters | Open; comes off 22.9's audio rows, so it cannot precede the legs. |
 | Acceptance test + upload | Not a roadmap task: `docs/using/release-acceptance-test.md`, run by hand twice (a fresh VM and a physical machine), then the owner uploads. |
 
 ## Suggested order
 
 Two rules shape this order:
 - **Risk first.** A finding re-cuts the release, and every leg already taken
-  on the changed binary has to be taken again. So the legs that have never
-  been read go first, and the four legacy x86 legs, read many times already,
-  go last.
+  on the changed binary has to be taken again. So a reading that can amend
+  the release and owes no install leg goes before the legs; then the legs
+  that have never been read; and the four legacy x86 legs, read many times
+  already, go last.
 - **One guest at a time.** Each guest is booted once and everything owed on
   it is taken in that session.
 
-1. **Windows 7 x64** (leg 7). Its first install through the committed amd64
+0. ~~**22.12 (c)**~~ **Done 2026-09-18, no finding.** Read on an overlay of
+   `vm\win2k-smp.img` under `-accel tcg` (WHPX does not run on this host)
+   with the cut tree's `qemu` build; harness and logs in `vm\t2212c\`
+   (git-ignored; `gdbinj.py` finds the image by PE stamp, arms the
+   breakpoint at RVA `0x843D` and raises HCE). A later `.sys` change
+   re-reads it there: rebuild, re-derive the stamp and the site RVA from
+   `dumpbin /disasm`, and run the same five incidents.
+1. **XP x64** (leg 5), and in the same session **22.12 (a)** by the `qemu`
+   route step 4 describes. **First of the legs**, ahead of the NT 6.x ones, because
+   it carries the only INF shape no guest has ever parsed: the two-field
+   `%Mfg%=XhciModels,NTamd64,NTamd64.6.0` line on an NT 5.2 engine. Every
+   earlier XP x64 leg installed through the one-field line, and that NT 5.2
+   ignores the `6.0` field is documented behaviour, not this project's
+   reading (`run-22.md`, 22.5's INF box). A finding here is an INF change:
+   the `.sys` files stand, but every leg installs through the new INF, so
+   all of them are retaken. The NT 6.x path of the same file already ran
+   from a staged copy on 2026-09-13, so legs 6-9 are reading a shape that
+   has at least been seen once; this one has not.
+2. **Windows 7 x64** (leg 7). Its first install through the committed amd64
    INF, and the first `release` flavour on it.
-2. **Windows 7 x86** (leg 9). Its first install through the committed x86
+3. **Windows 7 x86** (leg 9). Its first install through the committed x86
    INF, and its first `release` flavour.
-3. **Vista x64** (leg 6), then in the same session **22.12 (a)**. The
+4. **Vista x64** (leg 6), then in the same session **22.12 (a)**. The
    `release` flavour writes no trace, so revert to the clean snapshot,
    install the `qemu` package, and read `usbport services written=16` off the
    port-`0xE9` log.
-4. **Vista x86** (leg 8), including the unsigned-driver prompt. Re-read
+5. **Vista x86** (leg 8), including the unsigned-driver prompt. Re-read
    22.12 (b) in the same session, by the same `qemu`-package route if the
    `release` flavour cannot show it.
-5. **XP x64** (leg 5). Its first install through the two-field `[Manufacturer]`
-   line; then 22.12 (a) by the same `qemu` route as step 3.
 6. **The four x86 legacy legs** (legs 1-4): Windows 98 SE on both stacks,
    ME, 2000 SP4 and 32-bit XP. Then check the asset's file list against
    what the packager staged. That closes 22.10.
-7. **22.12 (c)**, the recovery refusal under CNR/HCRST, through the gdbstub.
-   It needs no install leg, so it can fill a wait anywhere above (for
-   example while a guest installs). It must be done before the acceptance
-   test, because a wrong reading amends the release.
-8. **22.9**: prepare the four fresh images and run the matrix. Its audio rows
-   give **22.12 (d)**, so (d) needs no separate run.
-9. **The acceptance test by hand**, on a fresh VM and on a physical machine,
+7. **22.9**: prepare the four fresh images and run the matrix. Its audio rows
+   give **22.12 (d)**, so (d) needs no separate run. (d) carries the same
+   amend-the-release risk as (c), but it cannot move earlier: it is read off
+   22.9's rows, and 22.9's images are prepared from the cut's tree by the
+   owner's decision of 2026-09-18.
+8. **The acceptance test by hand**, on a fresh VM and on a physical machine,
    then the owner uploads.
 
 If any step finds a defect: fix it, re-cut with `-Force`, and retake from
 step 1 every leg whose binary changed. An INF-only change leaves the `.sys`
 files as they are, but every leg still installs through the new INF, so
-those are retaken too.
+those are retaken too. **A `.sys` change also invalidates step 0**: (c) was
+read on the old binary, so re-read it before the retaken legs, by the route
+step 0 names.
 
 ## 22.10's nine install legs (numbered as in `run-22.md`)
 
@@ -153,6 +172,12 @@ after a re-cut: the cut replaces the directory, so reopen the tab.
 
 ## Traps met this session
 
+- **WHPX does not run on this host.** Every guest here runs under
+  `-accel tcg`, the Windows 2000 SMP guest included.
+- `qemu-system-x86_64`'s gdbstub gives a 32-bit guest the **x86-64
+  register file**: 8-byte registers, RSI=4, RDI=5, RIP=16 (not EIP=8).
+  Continuing from a software breakpoint reports the same breakpoint again
+  once, so give that second stop a no-op.
 - Driving Codex: see `.claude/memory/codex-plugin-invocation-here.md`.
   **Launch it from the PowerShell tool directly**; through
   `bash -> powershell -Command` the job was lost.
