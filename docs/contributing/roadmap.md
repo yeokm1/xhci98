@@ -1712,22 +1712,22 @@ and every reading, box by box.
 | 22.7 | the charset gate on tracked source |
 | 22.8 | what a cut needs that no gate supplies: the date 2026-09-18, the history entry, the release notes, README, the issue forms |
 | 22.9 | the primary targets unchanged, plus XP x64 and Windows 7 x86 - open |
-| 22.10 | the cut, and the install route read from the asset: cut 2026-09-18; legs 5 (XP x64), 7 (Windows 7 x64) and 9 (Windows 7 x86) passed, the other six open |
+| 22.10 | the cut, and the install route read from the asset: cut 2026-09-18; legs 5 (XP x64), 6 (Vista x64), 7 (Windows 7 x64) and 9 (Windows 7 x86) passed, the other five open |
 | 22.11 | issue 5's mechanism replaced by `USB_MINIPORT_FLAGS_DISABLE_SS` |
-| 22.12 | the guest readings the 2026-09-17 audit fixes owe; (b) done on Vista x86, (c) on the Windows 2000 SMP guest, (a) on XP x64 - open |
+| 22.12 | the guest readings the 2026-09-17 audit fixes owe; (b) done on Vista x86, (c) on the Windows 2000 SMP guest, (a) on XP x64 and Vista x64; (d) open |
 
 Owed:
 
 - [ ] 22.12, listed first because (b) came before 22.10: the 2026-09-17
       audit (branch `audit-2026-09-17`, `188cb32` and the six Codex rounds
       after it) changed the driver in four places that
-      only a guest can read, and two are still unread: (a) the post-registration
+      only a guest can read, and one is still unread: (a) the post-registration
       verifier walks the service block as pointers, so an amd64 guest's
       `usbport services written=16` line must be read again on XP x64 and
       Vista x64 - every earlier amd64 reading of that line covered eight -
       **read on XP x64 on 2026-09-18, 16 full 64-bit pointers and no
       `ABI-SUSPECT`, on the `qemu` build because `release` cannot show the
-      line; Vista x64 open**;
+      line; and on Vista x64 the same night, the same result**;
       (b) the root-hub port shadow is folded before the SUSPEND and RESUME
       writes and in the resume timer - **read on 2026-09-18, on Vista x86
       rather than XP**, because under task 22.11's flag neither XP's nor
@@ -1781,7 +1781,10 @@ Owed:
       x86 package on Windows 7 x86, passed that night** through
       `XhciModels.NTx86.6.0` / `[Xhci.Dev6.NTx86]` behind the same prompt, a
       first uninstall's restart prompt read as Windows Audio's open handle on
-      the USB audio device (gone with the service stopped); what stays open is the rest - then the asset read on nine
+      the USB audio device (gone with the service stopped); **leg 6, the amd64
+      package on Vista x64, passed the same night** behind the same prompt and
+      Windows 7 x64's Program Compatibility Assistant box, F8 reached through
+      the boot manager's menu; what stays open is the rest - then the asset read on nine
       install legs - the four x86 ones with full device clauses, the amd64
       package on XP x64, Vista x64 and Windows 7 x64, and the x86 package on
       Vista x86 and Windows 7 x86, recording the unsigned-driver prompt - and

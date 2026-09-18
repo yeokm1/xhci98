@@ -1323,7 +1323,7 @@ Harness `out\post-release\task22-10\` (git-ignored: `xp64.cmd`, the unzipped
 asset, screenshots, the disk extract); disks `vm\t2210\`; logs
 `vm\t2210-xp64-l5-*`. 22.12 (a) was read on the same clean copy afterwards,
 from the `qemu` build, because `release` cannot show it (22.12 below).
-**Legs 6 and 8 and the four x86 legs have not been taken**; legs 7 and 9
+**Leg 8 and the four x86 legs have not been taken**; legs 7, 9 and 6
 are below.
 
 Whether the cut needed a re-cut was checked the same evening, because the
@@ -1510,6 +1510,74 @@ Harness `out\post-release\task22-10\` (`win7.cmd`, monitor 57132; logs off
 the guest by `getlog9.cmd` on a floppy image); disks `vm\t2210\`; logs
 `vm\t2210-win7-l9-*`.
 
+**Leg 6, Vista x64, 2026-09-18 night: passed every clause, no finding.**
+The guest was `vm\vista-x64.img` @ `vista-x64-clean-install`, copied read-only
+with `qemu-img convert -l` and booted through a throw-away overlay: `-smp 4`,
+`-accel tcg,thread=multi`, `qemu-xhci,p3=0`, the 22.11 Vista x64 machine
+otherwise, no CD. The transfer drive was the unzipped asset's `release-x64\`
+(`xhci98.sys` `98A5A32A...`, 96,768 B, the same bytes as leg 7).
+
+*Reaching F8 on Vista x64.* Leg 7's route does not work here: `sendkey f8`
+every 200 ms from QEMU's start for 40 s went unnoticed and the guest booted to
+the logon screen, and after a `system_reset` the Windows Error Recovery screen
+that follows ignores F8. What worked, on the overlay only, was making the boot
+manager show its menu: `bcdedit /set {bootmgr} displaybootmenu yes` and
+`bcdedit /timeout 30` from an elevated prompt, a clean ACPI power-off, then
+`system_reset` and `cont`. The Windows Boot Manager menu waits, F8 there opens
+Advanced Boot Options, and nine `down` from *Safe Mode* reach *Disable Driver
+Signature Enforcement*. It changes the boot UI and nothing else.
+
+- the install: Device Manager -> *Universal Serial Bus (USB) Controller*
+  under *Other devices* -> *Update Driver Software* -> *Browse* -> `E:\`
+  (no CD on this machine; the Found New Hardware wizard was dismissed with
+  "Ask me again later"). **The prompt is the Windows Security dialog of
+  Windows 7**: "Windows can't verify the publisher of this driver software",
+  "Don't install this driver software" with the focus, "Install this driver
+  software anyway" with the same text. It took it: `The Driver Package does
+  not contain a catalog file, but user wants to install anyway.`, `oem3.inf`
+  published, "Windows has successfully updated your driver software", the
+  tray "USB Root Hub - Device driver software installed successfully".
+  **Then the Program Compatibility Assistant box of Windows 7 x64**,
+  "Windows requires a digitally signed driver" ("The driver is unavailable
+  and the program that uses this driver might not work correctly"), naming
+  Driver *xHCI USB 2.0 Host Controller Miniport Driver (xhci98)*, the
+  service, Publisher *Yeo Kheng Meng* and `C:\Windows\System32\...\xhci98.sys`.
+  As on Windows 7 x64 it is wrong about the driver: the root hub had already
+  installed, and every clause below ran on that boot
+- **the committed INF on Vista x64**: `xhci98.inf:XhciModels.NTamd64.6.0:Xhci.Dev6:1.1.0.0:pci\cc_0c0330`,
+  `[Xhci.Dev6.NTAMD64]` and `[Xhci.Dev6.NTAMD64.Services]`. **One thing only
+  Vista logs**: its driver-store import tries to stage every file any
+  `CopyFiles` section names, and logs `CopyFile from ...\Package\usbport.sys
+  ... failed 2` for `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll`,
+  the four the XP x64 path takes from the OS media. It is not an error to the
+  install: the import registers `xhci98.inf_b354c29c`, whose store directory
+  holds `xhci98.inf`, `xhci98.PNF` and `xhci98.sys` alone, and the device
+  installs. Windows 7 (legs 7 and 9) logs no such attempt. The four files were
+  already on disk (`usbport.sys` 259,584 B, `usbhub.sys` 273,920 B,
+  `usbd.sys` 7,680 B, `usbui.dll` 104,960 B)
+- registered and started: **USB 2.0 eXtensible Host Controller (xhci98)**
+  and **USB Root Hub**, no bang
+- the three devices, hot-plugged over the monitor: **USB Human Interface
+  Device** (Human Interface Devices), **USB Mass Storage Device** (its
+  volume under *Portable Devices*), **USB Composite Device** and **Audio
+  Device** (Sound, video and game controllers); mouse and storage at
+  480 Mb/s, audio at 12 Mb/s. Audio Device sat under *Other devices* with a
+  bang for under a minute while Vista installed it, then moved, no bang
+- disable (every child gone, no restart prompt), enable (all back),
+  uninstall with the driver software kept (the USB class gone, **no restart
+  prompt** - eight `Query-and-Remove succeeded`, no veto; the audio device's
+  open handle of leg 9 did not occur here), rescan (reinstalled from the
+  store through `Xhci.Dev6.NTAMD64` with no prompt; all back, no bang). The
+  device sequence was driven by the owner at the console
+- the flavour, read 21.5's way: the port-`0xE9` log stayed at **0 bytes**,
+  and QEMU's trace shows `slot_enable` 9, `slot_address` 18,
+  `slot_configure` 11
+
+22.12 (a) was read on a fresh overlay of the same clean copy straight after
+(22.12 below). Harness `out\post-release\task22-10\` (`vista64.cmd`, monitor
+57133; `f8spam.ps1` and `waitbootmgr.ps1`; logs off by `getlog6.cmd`); disks
+`vm\t2210\`; logs `vm\t2210-vista64-l6-*`.
+
 **The order the rest of the phase is taken in** (2026-09-18). Two rules shape
 it. Risk first: a finding re-cuts the release, and every leg already taken on
 the changed binary is taken again - so a reading that can amend the release
@@ -1525,7 +1593,7 @@ everything owed on it is taken in that session.
    6.x path of the same file already ran from a staged copy on 2026-09-13.
 2. **Done 2026-09-18, no finding.** Windows 7 x64 (leg 7).
 3. **Done 2026-09-18, no finding.** Windows 7 x86 (leg 9).
-4. Vista x64 (leg 6), with 22.12 (a): the `release` flavour writes no trace,
+4. **Done 2026-09-18, no finding, and 22.12 (a) with it.** Vista x64 (leg 6), with 22.12 (a): the `release` flavour writes no trace,
    so revert to the clean snapshot, install the `qemu` package, and read
    `usbport services written=16` off the port-`0xE9` log. `release` cannot
    show (a)'s line at all (settled on XP x64, 22.12 (a) below), so this
@@ -1625,11 +1693,11 @@ root-hub suspend/resume on a path no target has measured; (a) is read off
 22.10's own legs, and (d) off 22.9's matrix, which since 2026-09-18 follows
 the cut; (c) and (d) may follow it.
 
-- [ ] (a) amd64 service block: `usbport services written=16` on XP x64 and
+- [x] (a) amd64 service block: `usbport services written=16` on XP x64 and
       Vista x64 from the corrected verifier (`xhciVerifyPacketAfterRegistration`
       walks `PVOID`s; design 11 sections 6.3 and 6.5 carry the qualification
-      that every earlier amd64 reading was eight). **XP x64 done
-      2026-09-18; Vista x64 open.**
+      that every earlier amd64 reading was eight). **XP x64 and Vista x64
+      done 2026-09-18.**
 
       *`release` cannot show it.* The count and the `ABI-SUSPECT` lines are
       `XHCI_DBG_VALUE` / `XHCI_DBG_TEXT`, which compile only into `qemu`, and
@@ -1647,6 +1715,19 @@ the cut; (c) and (d) may follow it.
       three equal, one routine in three slots. No `ABI-SUSPECT` line anywhere
       in the log; registered, No Op self-test completion code 1. Log
       `vm\t2210-xp64-a-debugcon.log`
+
+      *Vista x64, 2026-09-18 night.* The same `qemu -amd64` build on the
+      cut's tree (`built Sep 18 2026 21:42:23`, SHA-256 `D6D22BD9...`,
+      278,528 B; every gate green; `src\` unchanged since the re-cut),
+      staged by `make-package.ps1 -Flavor qemu -Arch amd64`, installed on a
+      fresh overlay of leg 6's clean copy by leg 6's route (the boot-manager
+      F8, the Windows Security prompt, the Program Compatibility Assistant
+      box). The log: `interface version presented=0000012C`, `nt6 services
+      written=00000002`, **`usbport services written=00000010`**, and the
+      16-pointer dump with every slot a full 64-bit pointer (high half
+      `FFFFFA60`) - the first two equal. No `ABI-SUSPECT` line anywhere in
+      the log; registered, No Op self-test completion code 1. Log
+      `vm\t2210-vista64-a-debugcon.log`. **(a) is done.**
 - [x] (b) port suspend and resume, **taken on Vista x86 rather than XP,
       2026-09-18, and passed after one driver fix.** Expected: a device
       usbhub selectively suspends and resumes with no status query between

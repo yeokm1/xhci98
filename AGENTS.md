@@ -116,9 +116,9 @@ M11), so on NT 6.x both binaries present `Version = 300`, pass registration a
 fourth argument and return their interrupt DPC through a Version 300 slot,
 chosen at run time from `IoIsWdmVersionAvailable(6, 0)` (section 6.5,
 decisions 10 and 12). **Every clause was taken on the `qemu` build.** The
-`release` flavour will be read on the two x64 guests from the published asset
-as roadmap task 22.10's sixth and seventh install legs (open on 2026-09-17),
-which is also Windows 7 x64's first install through the committed INF. Vista
+`release` flavour was then read on the two x64 guests from the published asset
+on 2026-09-18, roadmap task 22.10's sixth and seventh install legs, which were
+also Windows 7 x64's first install through the committed INF. Vista
 x86 has installed the `qemu` build through the committed `src/xhci98.inf`
 (2026-09-17, task 22.5's `InfSection` reading), and Windows 7 x86 installed the
 published `release` package through it on 2026-09-18 (task 22.10's ninth leg);

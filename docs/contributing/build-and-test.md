@@ -2519,8 +2519,15 @@ monitor `sendkey f8` is too late on these guests' boot path**, and a
 work, read on Windows 7 x64 on 2026-09-18 (roadmap 22.10, leg 7), is sending
 `sendkey f8` every 200 ms from the moment QEMU starts for about 30 seconds: the
 Advanced Boot Options menu comes up and waits, and `up` from *Start Windows
-Normally* reaches *Disable Driver Signature Enforcement*. Otherwise press F8
-at the console.
+Normally* reaches *Disable Driver Signature Enforcement*. **That does not
+work on Vista x64** (22.10 leg 6, the same night): the spam went unnoticed
+and the guest booted to logon, and the Windows Error Recovery screen a
+`system_reset` leads to ignores F8. There, on a throw-away overlay, run
+`bcdedit /set {bootmgr} displaybootmenu yes` and `bcdedit /timeout 30`
+elevated, power off cleanly, then `system_reset` and `cont`: the Windows Boot
+Manager menu waits, F8 opens Advanced Boot Options, and nine `down` from *Safe
+Mode* reach *Disable Driver Signature Enforcement*. Otherwise press F8 at the
+console.
 
 **Getting files in and out.** The transfer drive is VVFAT `snapshot=on`, so the
 guest cannot write anything back to the host through it. Use the floppy:
