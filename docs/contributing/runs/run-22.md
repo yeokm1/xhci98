@@ -12,8 +12,8 @@ was written rather than rewritten in the past tense. A sentence that says a
 box "stays open", or that something "is owed", describes the day it was
 written; the roadmap's task table says how each task closed. Tasks 22.8,
 22.9 and 22.10 were open when this file was made: their sections below are
-the full wording each was written with, and the roadmap's "Owed" list is
-where they are ticked.
+the full wording each was written with, and the roadmap's task table says
+how each closed.
 
 **On `out\...` and `vm\...` paths in this file.** They say where a reading was
 taken and what the file was called, on the host that ran it; they are not

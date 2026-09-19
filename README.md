@@ -106,7 +106,7 @@ Windows 98 SE is validated on real hardware. 32-bit Windows 7 has run on real ha
 | Windows ME | One virtual machine only, under SweetLow's USB 2.0 stack (the only stack it is supported with): the driver loads and starts, and a HID mouse, a USB mass-storage device and a composite audio device bind (2026-09-02). Never run on real hardware. |
 | 32-bit Windows XP | One virtual machine only (XP Professional SP3): the package installs on an xHCI-only machine with no prompt, the driver loads and starts under XP's own USB stack, and a HID mouse, a USB mass-storage device and a composite audio device bind; disable, enable, remove and rescan in Device Manager all survive. Never run on real hardware. |
 | Windows XP x64 / Server 2003 x64 | One virtual machine only (XP Professional x64 SP2), and **a separate 64-bit driver**, not the one above: the same clauses all pass, taken on the `qemu` build and then read again on the `release` flavour, from a package with its own INF. The `debug` build of it has never been run. Only XP x64 was booted; Server 2003 x64 is the same operating system and is covered by that identity, not by a run of its own. Never run on real hardware. |
-| Windows Vista SP2 and Windows 7 SP1, 32-bit and x64 | One virtual machine each (four in all). The 32-bit ones run the same driver as 98 to XP, the x64 ones the 64-bit driver. The package installs, the driver loads and starts, a HID mouse, a USB mass-storage device and a composite audio device bind, and five disable/enable cycles, remove and rescan in Device Manager all survive. Taken on the `qemu` build only. On Vista x64 and 7 x64, driver signature enforcement has to be disabled as this driver is not signed. 32-bit Windows 7 has run on real hardware once (a ThinkPad E460, 2026-09-19): the install, a mouse, a flash drive and USB audio at a root port and behind USB 2.0 hubs, reboot and shutdown all passed, but **the first disable of the controller hung** (Known limitations). Vista and 64-bit Windows 7 have never run on real hardware. |
+| Windows Vista SP2 and Windows 7 SP1, 32-bit and x64 | One virtual machine each (four in all). The 32-bit ones run the same driver as 98 to XP, the x64 ones the 64-bit driver. The package installs, the driver loads and starts, a HID mouse, a USB mass-storage device and a composite audio device bind, and five disable/enable cycles, remove and rescan in Device Manager all survive. Taken on the `qemu` build only. On Vista x64 and 7 x64, driver signature enforcement has to be disabled as this driver is not signed. 32-bit Windows 7 has run on real hardware once (a ThinkPad E460, 2026-09-19): the install, a mouse, a flash drive and USB audio at a root port and behind USB 2.0 hubs, reboot and shutdown all passed, but **the first disable of the controller hung** (Known limitations/issues). Vista and 64-bit Windows 7 have never run on real hardware. |
 | Intel 7/8-series (`XUSB2PR` mux) | Never run. Everything said about the `XUSB2PR` port mux comes from Intel's datasheet and Linux, not silicon. The driver does not touch it. |
 | Resume from standby (Windows 2000) | Never executed anywhere. No available VM offers a resumable power transition, and there is no Windows 2000 machine. |
 | Low Speed, USB Audio, hub topologies | Work on Windows 98 hardware in the configurations tried. Not covered: an audio device with `bInterval > 1`, a USB 1.1 hub under a multi-TT hub, and the Windows 2000 side on silicon. |
@@ -132,9 +132,7 @@ The devices checked so far, all on the E460 under Windows 98 SE. Each is charact
 
 ATTO Disk Benchmark on the P14s against the MSSU10-128GSR flash drive trasferring around 18 MB/s read and write from 32 KB transfers upward. The USB 3.0 drive runs at USB 2.0 speed on this driver.
 
-## Known limitations
-
-The important limitations. The full list is under "Known limitations" in [release-notes.md](docs/using/release-notes.md).
+## Known limitations/issues
 
 | Limitation | Detail |
 |---|---|

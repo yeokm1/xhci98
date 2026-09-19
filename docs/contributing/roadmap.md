@@ -1679,40 +1679,37 @@ Windows 7, settled from the shipping `usbport.sys` first and guests second,
 with its standing stated in every document that names the targets; and the
 tree cut as `1.1.0.0`, the first release to carry a 64-bit package.
 
-Status: closed on 2026-09-19 on the cut, its install legs and the
-post-release readings: every task below is done, with 22.12 (d) re-scoped
-by the owner. `1.1.0.0` was cut on 2026-09-18 and re-cut seven times, the
-last two for three known limitations found after the cut (the Vista/7
-1.1-hub bugcheck, the XP-on root-port audio silence, and the Windows 7
-controller-disable hang seen on the E460); every re-cut kept the binaries
-byte-identical. What is left is not a task: the owner's upload of
+Status: closed on 2026-09-19 on the cut, its nine install legs and the
+post-release readings, with 22.12 (d) re-scoped by the owner. It opened on
+2026-09-08, the cut added on 2026-09-09. The static pass found nothing
+against the 32-bit binary, but Phase 21's M9 to M11 found that no Version
+200 miniport can run on NT 6.x, so task 22.5 made both shipping binaries
+present `Version = 300` to an NT 6.x `usbport.sys` and `200` to everything
+else. Its guests found three defects, each fixed and re-read on every
+target: the Windows 7 enable arrest (issue 7), a Windows XP x64 SMP bugcheck
+(issue 8), and XP's three-argument `CloseEndpoint`. Vista and Windows 7 have
+been a VM-supported tier in both architectures since 2026-09-16. `1.1.0.0`
+was cut on 2026-09-18 and re-cut seven times, every binary byte-identical;
+the last two re-cuts recorded three known limitations found after the cut:
+the Vista/7 bugcheck with a Full-Speed hub on a root port, XP-onward silence
+on a root-port audio device, and the Windows 7 controller-disable hang seen
+on the E460. What is left is not a task: the owner's upload of
 `out\xhci98-1.1.0.0.zip` (397,437 B) and the push. Carried open past the
 phase: the disable hang's cause, the Sound Blaster Play! 2's Code 10 on
 Windows 7, and the split isochronous packet 22.12 (d) did not exercise.
 
-It opened on 2026-09-08, with the cut added on 2026-09-09. The phase
-began on the 32-bit binary as it stood, and the static pass found nothing
-against it, but Phase 21's measurements M9 to M11 found that no Version 200
-miniport can run on NT 6.x in either architecture. So task 22.5 changed both
-shipping binaries to present `Version = 300` to an NT 6.x `usbport.sys` and
-`200` to everything else. Its guests found three defects, each fixed and
-re-read on every target: the Windows 7 enable arrest (issue 7), a Windows XP
-x64 SMP bugcheck (issue 8), and XP's three-argument `CloseEndpoint`. Vista
-and Windows 7 have been a VM-supported tier in both architectures since
-2026-09-16, taken on the `qemu` build. Task 22.11 replaced the machine-wide
-`DisableSelectiveSuspend` value with a miniport flag, read on all ten targets
-on 2026-09-17. Its x64 half is exactly what tasks 21.5 and 22.5 observed:
-three guests, never real hardware, with Vista x64 and Windows 7 x64 loading
-the driver only on an F8 boot. On the x86 half, 32-bit Windows 7 ran once on
-real hardware after the cut (the E460, 2026-09-19).
+The x64 half is exactly what tasks 21.5 and 22.5 observed: three guests,
+never real hardware, with Vista x64 and Windows 7 x64 loading the driver
+only on an F8 boot. Of the x86 half, 32-bit Windows 7 ran once on real
+hardware after the cut (the E460, 2026-09-19).
 
 Why a phase: the 32-bit question asked nothing of the toolchain, only guests
 and readings, which is a different shape of work from Phase 21's. The cut
 lands here because Phase 21 closed on task 21.8's guests, and a cut should
 not wait on a leg whose answer changes nothing it publishes.
 
-Tasks. [`runs/run-22.md`](runs/run-22.md) is the record: what each task did
-and every reading, box by box.
+Tasks, all closed. [`runs/run-22.md`](runs/run-22.md) is the record: what
+each task did and every reading, box by box.
 
 | Task | Subject |
 |---|---|
@@ -1723,144 +1720,28 @@ and every reading, box by box.
 | 22.5 | Version 300 on NT 6.x, both architectures: issues 7 and 8, the `Xhci.Dev6` INF path, `xhcisnap`, Windows 2000's restart prompt, right-click Install |
 | 22.6 | the record: the tier in both architectures, nothing said of issue 7 |
 | 22.7 | the charset gate on tracked source |
-| 22.8 | what a cut needs that no gate supplies: the date 2026-09-18, the history entry, the release notes, README, the issue forms |
-| 22.9 | the primary targets unchanged, plus XP x64 and Windows 7 x86: run 2026-09-19; the Vista/7 1.1-hub bugcheck and the XP-on root-port audio silence are known limitations of `1.1.0.0`, and the Windows 7 real-hardware session added the disable hang as a third - done |
-| 22.10 | the cut, and the install route read from the asset: cut 2026-09-18; all nine install legs passed, the asset's file list checked - done |
-| 22.11 | issue 5's mechanism replaced by `USB_MINIPORT_FLAGS_DISABLE_SS` |
-| 22.12 | the guest readings the 2026-09-17 audit fixes owe; (b) done on Vista x86, (c) on the Windows 2000 SMP guest, (a) on XP x64 and Vista x64; (d) re-scoped to the played streams (Windows 2000 in QEMU, Windows 98 on the E460) - done |
+| 22.8 | what a cut needs that no gate supplies: the date 2026-09-18 in `xhci_version.h` and both INFs, the history entry, the release notes, README's Install section, the issue forms |
+| 22.9 | the post-release matrix on fresh Windows 98, 2000, XP x64 and Windows 7 x86 clones, taken after the cut by the owner's decision: run 2026-09-19; the Full-Speed-hub bugcheck (all four NT 6 targets) and the root-port audio silence (XP onward) became known limitations, and the Windows 7 real-hardware session on the E460 added the disable hang as a third |
+| 22.10 | the cut, 2026-09-18, four flavour directories and the asset; nine install legs read from it - the four x86 legs with full device clauses, the amd64 package on XP x64, Vista x64 and Windows 7 x64, the x86 package on Vista x86 and Windows 7 x86, the unsigned-driver prompt recorded - and the asset's 17 files exactly what the packager staged; no finding, no re-cut for it |
+| 22.11 | issue 5's mechanism replaced by `USB_MINIPORT_FLAGS_DISABLE_SS`, read on all ten targets 2026-09-17 |
+| 22.12 | the guest readings the 2026-09-17 audit fixes owe: (a) the 16-pointer service block on XP x64 and Vista x64; (b) the folded port shadow on Vista x86, gating the cut, re-read on the `release` flavour on leg 8; (c) the CNR/HCRST refusal on the Windows 2000 SMP guest under a gdbstub; (d) re-scoped by the owner to the played streams, Windows 2000 in QEMU and Windows 98 on the E460, since no matrix audio row plays and nothing after XP plays on a root port - the split isochronous packet and `SweptTransfers` were not exercised |
 
-Owed:
+Checkpoint, the guest half: on each of Vista x86 and Windows 7 x86 the
+package installed, the driver registered, started and passed its No Op
+self-test, the root-hub callbacks answered, the three devices bound, and the
+disable, enable, remove and rescan sequence survived. Taken on 2026-09-13 on
+the `qemu` build from a staged INF (issue 7 section 7.5), all but the
+unsigned-driver prompt, which 22.10 took. The cut half: every gate green on
+both architectures and four flavour directories cut; all nine install legs
+read from the asset; the asset holding exactly what the packager staged, with
+no Microsoft file; and the prose no gate reaches bumped. Not a checkpoint: a
+`qemu` reading standing in for the published `release` binary, the
+acceptance test, or the upload. The post-release matrix (22.9) was a clause
+of this half until 2026-09-18, when the owner put it after the cut.
 
-- [x] 22.12, listed first because (b) came before 22.10: the 2026-09-17
-      audit (branch `audit-2026-09-17`, `188cb32` and the six Codex rounds
-      after it) changed the driver in four places that
-      only a guest can read, and one is still unread: (a) the post-registration
-      verifier walks the service block as pointers, so an amd64 guest's
-      `usbport services written=16` line must be read again on XP x64 and
-      Vista x64 - every earlier amd64 reading of that line covered eight -
-      **read on XP x64 on 2026-09-18, 16 full 64-bit pointers and no
-      `ABI-SUSPECT`, on the `qemu` build because `release` cannot show the
-      line; and on Vista x64 the same night, the same result**;
-      (b) the root-hub port shadow is folded before the SUSPEND and RESUME
-      writes and in the resume timer - **read on 2026-09-18, on Vista x86
-      rather than XP**, because under task 22.11's flag neither XP's nor
-      Windows 7's hub can suspend a root-hub port through selective
-      suspend; the first reading found a resume the audit's timer gate
-      abandoned on QEMU, which ignores a Resume write, and Vista bugchecked
-      0xFE 60 s later; the gate now owes the U0 write to a port still in
-      U3, and the re-read passed every clause, **read again on the
-      `release` flavour on 22.10's leg 8** by QEMU's trace, with a
-      device-initiated resume taken as well (`runs/run-22.md`); (c) the
-      recovery
-      path refuses at `XHCI_INIT_STEP_RESET` while USBSTS.CNR or
-      USBCMD.HCRST reads set and `xhciReset` stalls 1 ms after HCRST -
-      **read on 2026-09-18 on the Windows 2000 SMP guest under TCG, no
-      finding**: QEMU's xHC cannot hold either bit, so Phase 20's HCE route
-      read the ordinary recovery and a gdbstub breakpoint ORed CNR, HCRST
-      or both into the values the recovery read; each refused at step 9
-      with no operational-register write and the next poll's retry
-      completed through one HCRST (`runs/run-22.md`); (d) the isochronous counters `IsoTailEvents` and
-      `OrphanedGroups` replace what `UnmatchedEvents` and
-      `PlacementFailures` were charged, so a QEMU audio row must show
-      `UnmatchedEventsTotal` staying at zero across a split isoch packet,
-      and, if a group is ever swept by the next group's tail
-      (`SweptTransfers` moving on a normal short read), that is the
-      audit's B10 and wants the settle it describes. **(b) gated 22.10, as
-      22.11 did and for the same reason**, and is done. (a) is read off
-      22.10's own install legs and (d) off 22.9's matrix, rather than as
-      legs of their own; (c) and (d) follow the cut, since a wrong reading
-      there amends the release under Phase 15's rule. **(d) re-scoped and
-      closed on 2026-09-19 by the owner's decision**, because 22.9's matrix
-      audio rows play nothing by design and nothing after XP plays on a root
-      port: the played-stream readings stand for it. Windows 2000 in QEMU,
-      2026-09-19: 376 isochronous submits, 3,760 packets, all answered,
-      `UnmatchedEventsTotal` 0, `played.wav` 659,456 B; and Windows 98 SE on
-      the E460 the same day, `release-x86`, a Sound Blaster Play! 2 on a root
-      port, heard by the owner, no counters read. **Not exercised: a split
-      isochronous packet**, the case the clause was written for, and
-      `SweptTransfers`; neither reading can say whether B10's settle is
-      wanted (`runs/run-22.md` 22.12)
-- [x] 22.8: `releases\history.md`'s entry; the release date in
-      `src\xhci_version.h` and both INFs; the release notes' opening line;
-      `README.md`'s Install section; the issue forms' operating-system lists
-- [x] 22.9: `run-matrix.ps1 -PostRelease` on fresh 2a and 2b clones, and -
-      by the owner's instruction of 2026-09-18 - on fresh XP x64 and
-      Windows 7 x86 clones (`xp64-fresh`, `win7-fresh`; design record 09
-      section 2.6). **Taken after 22.10**, by the owner's decision of
-      2026-09-18 (cut first): the four images are prepared from the cut's
-      tree, and a finding amends the release under Phase 15's rule. The two
-      new targets' `ExpectNoDriver` entries are guesses the first run
-      corrects. **First run 2026-09-19** (`runs/run-22.md` 22.9): Windows
-      2000 PASS; XP x64 against only on `usb-net/fs`; Windows 98's audio
-      replug fails in four of five solo runs under QEMU 11.1.0 and passes in
-      three of three under 11.0.0; **Windows 7
-      x86 bugchecks (`STOP 0x7E` in usbport's USB 2.0 budgeter) with a
-      Full-Speed hub on a root port and a mouse behind it** - issue 6
-      section 5's residual, the owner's to decide against `1.1.0.0`; the
-      same on Vista x86, Vista x64 and Windows 7 x64 when measured on the
-      owner's instruction. **Played audio reaches the device on Windows 2000
-      only**: XP, XP x64, Vista and Windows 7 submit no isochronous transfer
-      while playing, and Windows 98's own `USBAUDIO.VXD` faults after one
-      URB, as batch 9-V recorded. **Closed 2026-09-19**: both findings are
-      known limitations of `1.1.0.0` by the owner's decision (the sixth
-      re-cut); the owner's hand-tests then played audio on Windows 98 on the
-      E460, and ran 32-bit Windows 7 on the E460, where both USB 2.0 hub
-      workarounds held and the first controller Disable hung - a third known
-      limitation (the seventh re-cut). Carried open, not blocking: the hang's
-      cause, and the Sound Blaster Play! 2's Code 10 on Windows 7
-- [x] 22.10: both architectures built and cut - **cut 2026-09-18 14:50**,
-      `releases\1.1.0.0\` with four flavour directories and
-      `out\xhci98-1.1.0.0.zip` (396,812 B after four same-day re-cuts for the readme and a fifth, `b4d3404`, for the binaries' ProductName; 397,113 B after a sixth on 2026-09-19 for two known limitations 22.9 found, every binary byte-identical; 397,437 B after a seventh the same evening for the Windows 7 real-hardware session - the disable hang as a known limitation and the USB 2.0 hub workarounds as measured - every binary byte-identical again; no Microsoft file), every gate
-      green; **leg 5, the amd64 package on XP x64, passed on 2026-09-18**
-      (the two-field line took `Xhci.Dev` on NT 5.2, the Logo prompt,
-      every clause), **and again on the ProductName re-cut the same
-      evening**, whose binaries were measured code-identical to every one
-      read before, so 22.12 (a) and (c) carry over (`runs/run-22.md`); **leg 7, the
-      amd64 package on Windows 7 x64, passed the same evening** through the
-      committed INF (`XhciModels.NTamd64.6.0`, `[Xhci.Dev6.NTamd64]`), the
-      prompt recorded - "Windows can't verify the publisher of this driver
-      software", taken with "Install this driver software anyway"; **leg 9, the
-      x86 package on Windows 7 x86, passed that night** through
-      `XhciModels.NTx86.6.0` / `[Xhci.Dev6.NTx86]` behind the same prompt, a
-      first uninstall's restart prompt read as Windows Audio's open handle on
-      the USB audio device (gone with the service stopped); **leg 6, the amd64
-      package on Vista x64, passed the same night** behind the same prompt and
-      Windows 7 x64's Program Compatibility Assistant box, F8 reached through
-      the boot manager's menu; **leg 8, the x86 package on Vista x86,
-      passed the same night** through `XhciModels.NTx86.6.0` /
-      `[Xhci.Dev6.NTx86]` behind the same prompt and no second box, 22.12
-      (b) re-read on it; **the four x86 legs passed the same night** - Windows
-      98 SE under NUSB (install and devices; its teardown crashes, the known
-      limitation) and under SweetLow's stack, ME, 2000 and 32-bit XP with the
-      full device clauses, the NT pair's `setupapi.log` taking `Xhci.Dev` /
-      `[Xhci.Dev.NTx86]` - and **the asset's 17 files are exactly what the
-      packager staged**, no Microsoft file, **closing 22.10 with no finding
-      and no re-cut**. The task as written: the asset read on nine
-      install legs - the four x86 ones with full device clauses, the amd64
-      package on XP x64, Vista x64 and Windows 7 x64, and the x86 package on
-      Vista x86 and Windows 7 x86, recording the unsigned-driver prompt - and
-      its file list checked against what the packager staged. Of the 32-bit
-      pair, Vista x86 has since installed the `qemu` build through the
-      committed `src\xhci98.inf` (2026-09-17, 22.5's `InfSection` reading);
-      Windows 7 x86 has since done both (leg 9), and Vista x86 has run the
-      `release` flavour (leg 8)
-
-Checkpoint, the guest half: on each of Vista x86 and Windows 7 x86 the package
-installed, the driver registered, started and passed its No Op self-test, the
-root-hub callbacks answered, the three devices bound, and the disable, enable,
-remove and rescan sequence survived. Taken on 2026-09-13 on the `qemu` build
-from a staged INF (issue 7 section 7.5), all but the unsigned-driver prompt,
-which is 22.10's. The cut half: every gate green on both architectures and
-four flavour directories cut; all nine install legs read from the asset; the asset
-holding exactly what the packager staged, with no Microsoft file; and the
-prose no gate reaches bumped. Not a checkpoint: a `qemu` reading standing in
-for the published `release` binary, the acceptance test, or the upload. The
-post-release matrix (22.9) was a clause of this half until 2026-09-18, when the
-owner put it after the cut.
-
-Records: `runs/run-22.md` (22.12's readings go there too); `design/11-x64-targets.md`;
-`usb-xhci-info/usbport-miniport-abi.md`; issues 05, 07 and 08;
-`build-and-test.md`; `lessons.md`; `releases/history.md`;
+Records: `runs/run-22.md` (22.12's readings go there too);
+`design/11-x64-targets.md`; `usb-xhci-info/usbport-miniport-abi.md`; issues
+05, 07 and 08; `build-and-test.md`; `lessons.md`; `releases/history.md`;
 `runs/run-22-post-release/` (written by 22.9).
 
 ## Post-Release - Run the Acceptance Test by Hand
