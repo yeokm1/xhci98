@@ -146,8 +146,8 @@ claim that the two halves are equally attested.
 
 `-UploadSetOnly` is the one mode that does not follow the default: it derives
 the architectures from the published tree instead, because every version
-published so far is x86-only and re-assembling one must not fail for want of a
-64-bit directory that cut never wrote. An `-Arch` passed explicitly is held to
+published before 1.1.0.0 is x86-only and re-assembling one must not fail for
+want of a 64-bit directory that cut never wrote. An `-Arch` passed explicitly is held to
 exactly, in that mode as in every other.
 
 `scripts\package\test-package.ps1` asserts the default, so changing it back is
@@ -1541,7 +1541,7 @@ To cut one, run this script without it.
         #
         # AND THE ARCHITECTURE IS TAKEN FROM THE PUBLISHED TREE WHEN -Arch WAS
         # NOT ASKED FOR. Since 2026-09-09 -Arch defaults to both, which is right
-        # for a cut and wrong here: every already-published version is x86-only,
+        # for a cut and wrong here: every version published before 1.1.0.0 is x86-only,
         # and re-assembling one must not fail for want of a 64-bit directory
         # that version never had. An -Arch the caller actually passed is still
         # held to exactly - a missing directory is then the error it looks like.

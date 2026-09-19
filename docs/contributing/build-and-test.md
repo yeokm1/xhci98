@@ -2117,8 +2117,10 @@ task 22.5, design record 11 section 6.5), and `src\xhci98.inf` gained the
 **The tier, stated where Windows ME's and 32-bit XP's are stated** (roadmap
 tasks 21.8 and 22.5, the owner's decision of 2026-09-16): 32-bit Windows Vista
 and Windows 7 are supported in virtual machines, standing where Windows 2000,
-Windows ME and both Windows XPs stand, with no checkpoint tax and never run on
-real hardware. What settles it is issue 7 section 7.5, taken on these two
+Windows ME and both Windows XPs stand, with no checkpoint tax. Vista has
+never run on real hardware; 32-bit Windows 7 has once, on the E460 on
+2026-09-19 (`runs/run-22.md`, 22.9), which is a session and not a tier. What
+settles it is issue 7 section 7.5, taken on these two
 guests and their x64 siblings on 2026-09-13: one install each off a fresh
 revert, `-smp 4`, the three devices bound, five disable/enable cycles held to
 a ten-minute threshold, a remove and a rescan, with `read-v300.ps1 -Expect
@@ -2128,10 +2130,12 @@ it beside the other tiers; and `docs/using/release-notes.md` and `README.md`
 state it for the user. Two qualifications travel with it for this pair:
 **every clause was taken on the `qemu` build**, and **the install was a staged
 copy of the NT 6.x sections, not the committed `src\xhci98.inf`**, which took
-them on 2026-09-16 after those runs; neither the `release` flavour nor the
-committed file has been installed on either guest, and roadmap task 22.10's
-eighth and ninth install legs are where both are read, from the published
-asset. The x64 pair's tier, and its signing requirement, are the next section's.
+them on 2026-09-16 after those runs. Both were read afterwards: Vista x86
+installed the `qemu` build through the committed file on 2026-09-17 (task
+22.5's `InfSection` reading), and roadmap task 22.10's eighth and ninth
+install legs installed the published `release` package on Vista x86 and
+Windows 7 x86 on 2026-09-18, every clause passing (`runs/run-22.md`). The x64
+pair's tier, and its signing requirement, are the next section's.
 
 **They are one recipe, and they are written as one.** `scripts\setup-qemu-vista.ps1`
 and `scripts\setup-qemu-win7.ps1` are thin callers over a shared body,
@@ -2438,10 +2442,10 @@ only on a boot where F8 -> Disable Driver Signature Enforcement was chosen,
 the choice lasts that one boot, and without it the device sits at Code 39
 with nothing loaded (read on Vista x64, item 3 below) - so the machine can never boot unattended into working
 USB. The release notes carry that beside the tier. **Every clause was taken
-on the `qemu` build**; the `release` flavour is roadmap task 22.10's sixth
-and seventh install legs, from the published asset, and on Windows 7 x64 that
-leg is also the first install through the committed INF rather than a staged
-copy of the same sections.
+on the `qemu` build**; the `release` flavour was read on 2026-09-18 as
+roadmap task 22.10's sixth and seventh install legs, from the published asset,
+every clause passing, and on Windows 7 x64 that leg was also the first install
+through the committed INF rather than a staged copy of the same sections.
 
 | | Vista Business SP2 x64 | Windows 7 Professional SP1 x64 |
 |---|---|---|

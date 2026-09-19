@@ -523,10 +523,10 @@ x64 (with XP x64) were ever booted without the value; 32-bit Vista and
 Windows 7 had been read without it on 2026-09-16 (section 5.3). 7.20 is
 the F8 requirement read from the other side: the package is not signed, and
 the Code 39 reading is Vista x64's (release notes, "Known limitations",
-2026-09-10 to 2026-09-16). No published `release` directory has been
-installed on any of the four guests: roadmap task 22.10, still open, is what
-will read the `1.1.0.0` asset on them, so on a first run of this block
-record which build and which directory it was.
+2026-09-10 to 2026-09-16). The published `release` directories were
+installed on all four guests afterwards, from the `1.1.0.0` asset (roadmap
+task 22.10, legs 6 to 9, 2026-09-18); on a run of this block record which
+build and which directory it was.
 
 Windows 2000's 7.5 has not been measured here and is `SKIP - other target`.
 

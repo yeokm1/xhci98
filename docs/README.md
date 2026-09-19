@@ -51,12 +51,14 @@ source comments, scripts, and other docs use these same locations.
   the `1.1.0.0` cut: the static pass on 6.0 and 6.1, the 32-bit guests, the
   Version 300 path and the defects its guests found, the charset gate, issue
   5's miniport flag, and the cut's tasks, as the roadmap carried them.
-- The post-release matrix reports, one pair per release, produced by
+- The post-release matrix reports, one pair per release (four for `1.1.0.0`,
+  which added XP x64 and Windows 7 x86 clones), produced by
   `run-matrix.ps1 -PostRelease` on freshly installed guests and read against
   the previous release's pair:
   [Phase 16](contributing/runs/run-16-post-release/) (`1.0.0.0`),
-  [Phase 19](contributing/runs/run-19-post-release/) (`1.0.1.0`) and
-  [Phase 20](contributing/runs/run-20-post-release/) (`1.0.2.0`).
+  [Phase 19](contributing/runs/run-19-post-release/) (`1.0.1.0`),
+  [Phase 20](contributing/runs/run-20-post-release/) (`1.0.2.0`) and
+  [Phase 22](contributing/runs/run-22-post-release/) (`1.1.0.0`).
   `docs/contributing/design/09-post-release-unattended-run.md` is the design.
 - [Test equipment, as measured](contributing/test-equipment.md) - every hub and
   device held for the Phase 13 trips, characterised on the development host:

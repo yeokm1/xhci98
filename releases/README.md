@@ -370,8 +370,8 @@ equally attested.
 
 `-UploadSetOnly` is the one mode that does not follow the default: it derives
 the architectures from the published tree instead, because every version
-published so far is x86-only and re-assembling one must not fail for want of a
-64-bit directory that cut never wrote.
+published before `1.1.0.0` is x86-only and re-assembling one must not fail for
+want of a 64-bit directory that cut never wrote.
 
 There is a third flavour, and it is kept out of here by design. `qemu` is
 `debug` plus the port-`0xE9` trace mirror and the `HAL.dll!WRITE_PORT_UCHAR`

@@ -105,9 +105,13 @@ more remove/rescan cycles on 2026-09-16, installed through the committed
 `src/xhci98-amd64.inf`. The 32-bit guests run the one binary and the x64
 guests the second, both through the `Xhci.Dev6` install path, which copies
 `xhci98.sys` alone because every install of those systems already carries the
-four OS-supplied files. It carries no checkpoint tax, it has never run on
-real hardware, and the standing rule holds: accommodate them where the change
-is small and low-risk, never at a primary target's expense.
+four OS-supplied files. It carries no checkpoint tax, and the standing rule
+holds: accommodate them where the change is small and low-risk, never at a
+primary target's expense. Of the four, only 32-bit Windows 7 has run on real
+hardware, once (the E460, 2026-09-19, roadmap task 22.9: the install and
+devices at a root port and behind USB 2.0 hubs passed, and the first disable
+of the controller hung - release notes, "Known limitations"); Vista and 64-bit
+Windows 7 never have.
 
 Read that tier narrowly too, because four things about it are narrower than
 the XP tiers. **It is not the NT 5.x code path.** No Version 200 miniport can
@@ -149,7 +153,7 @@ stack natively in SP4. This driver fills the gap for both.
 | Item | Value |
 |---|---|
 | Primary targets | Windows 98 SE (4.10.2222) and Windows 2000 SP4 - one binary, both required |
-| Supported in VM | Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax. Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM". 32-bit Windows XP (SP3) - observed in one QEMU guest on 2026-09-03 (xHCI-only package install, HID, mass storage, composite audio, the disable/enable/remove/rescan sequence), never on metal, no checkpoint tax; the `.NTx86` INF half under XP's own `usbport.sys`. Accommodate it where the change is small and low-risk, never at a primary target's expense; see `docs/contributing/build-and-test.md`, "Windows XP target VM", and `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" Windows XP x64 / Server 2003 x64 (NT 5.2.3790) - observed in one QEMU guest on 2026-09-09 (the same clauses, on the `qemu` build and then the `release` flavour; `debug-x64` has never been read in a guest), never on metal, no checkpoint tax; the `.NTamd64` half of the *second* INF, and **a second binary, not this one** - see "Windows XP x64 target VM" and `docs/contributing/design/11-x64-targets.md`. Windows Vista (SP2) and Windows 7 (SP1), 32-bit and x64 - observed in four QEMU guests on 2026-09-13 (the same clauses plus five disable/enable cycles each, on the `qemu` build only), never on metal, no checkpoint tax; the `Xhci.Dev6` install path of both INFs and the Version 300 registration path of both binaries. **The x64 half loads only on an F8 boot with signature enforcement disabled, every boot**; see "Windows Vista and Windows 7 target VMs" and "Vista x64 and Windows 7 x64 target VMs" |
+| Supported in VM | Windows ME (4.90.3000), under SweetLow's USB 2.0 stack only - observed in one QEMU guest on 2026-09-02, never on metal, no checkpoint tax. Same 16-bit setup engine and undecorated INF half as Windows 98 SE; see `docs/contributing/build-and-test.md`, "Windows ME target VM". 32-bit Windows XP (SP3) - observed in one QEMU guest on 2026-09-03 (xHCI-only package install, HID, mass storage, composite audio, the disable/enable/remove/rescan sequence), never on metal, no checkpoint tax; the `.NTx86` INF half under XP's own `usbport.sys`. Accommodate it where the change is small and low-risk, never at a primary target's expense; see `docs/contributing/build-and-test.md`, "Windows XP target VM", and `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?" Windows XP x64 / Server 2003 x64 (NT 5.2.3790) - observed in one QEMU guest on 2026-09-09 (the same clauses, on the `qemu` build and then the `release` flavour; `debug-x64` has never been read in a guest), never on metal, no checkpoint tax; the `.NTamd64` half of the *second* INF, and **a second binary, not this one** - see "Windows XP x64 target VM" and `docs/contributing/design/11-x64-targets.md`. Windows Vista (SP2) and Windows 7 (SP1), 32-bit and x64 - observed in four QEMU guests on 2026-09-13 (the same clauses plus five disable/enable cycles each, on the `qemu` build; the published `release` package was then installed on all four on 2026-09-18, roadmap task 22.10), never on metal except one 32-bit Windows 7 session on the E460 (2026-09-19), no checkpoint tax; the `Xhci.Dev6` install path of both INFs and the Version 300 registration path of both binaries. **The x64 half loads only on an F8 boot with signature enforcement disabled, every boot**; see "Windows Vista and Windows 7 target VMs" and "Vista x64 and Windows 7 x64 target VMs" |
 | USB scope | USB 2.0 (HS/FS/LS) only; HID, mass storage, USB Ethernet, and USB Audio validation targets. USB 3.0 SuperSpeed is out of scope (see `docs/usb-xhci-info/xhci-programming.md`, "What SuperSpeed Support Would Require") |
 | Integration model | `usbport.sys` miniport (Option A) - reuse the USB 2.0 stack already on the target (NUSB's Win2000-derived build, SP4's native one, or SweetLow's XP-derived rebuild on Windows 98); do not re-implement the USB stack |
 | Compiler | MSVC 6.0, run in place from `tools/MSVC600` (unpacked from `tools/MSVC600.zip`). The amd64 build is the exception and cannot be otherwise: it is WDK 7.1's `cl` 15.00 from `tools/WinDDK71`, reached by `build-driver.cmd <flavour> -amd64`, because no compiler here older than that can target x64 |
@@ -442,7 +446,7 @@ exactly that standing: virtual machines only, never real hardware** - the XP
 x64 guest, and the Vista x64 and Windows 7 x64 guests from `1.1.0.0` - against
 the x86 half's four install legs. `-UploadSetOnly` is the one mode
 that does not follow the default - it derives the architectures from the
-published tree, since every version published so far is x86-only.
+published tree, since every version published before `1.1.0.0` is x86-only.
 
 See `docs/contributing/build-and-test.md` for environment setup, QEMU
 configuration, the install procedure, the two model INFs, and "The files the

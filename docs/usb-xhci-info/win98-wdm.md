@@ -553,8 +553,9 @@ own, below, on a different registration path.
 Position: supported in virtual machines, in both architectures, since the
 owner's decision of 2026-09-16 (roadmap tasks 21.8 and 22.5), standing where
 Windows 2000, Windows ME and both Windows XPs stand - no checkpoint waits on
-them, the accommodation rule above governs them, and they have never run on
-real hardware. The 32-bit pair run the one binary; the x64 pair run the
+them, the accommodation rule above governs them, and of the four only 32-bit
+Windows 7 has run on real hardware, once (the E460, 2026-09-19; release notes,
+"What this is"). The 32-bit pair run the one binary; the x64 pair run the
 second one, above.
 
 **What the static pass said, and why it was not enough.** Tasks 21.7 and
@@ -593,7 +594,8 @@ Version 300 services, the interrupt DPC ran in step with the ISR, the No Op
 self-test passed, a HID mouse, a mass-storage device and a composite audio
 device bound, and five disable/enable cycles, a remove and a rescan completed.
 Vista x64 took five more remove/rescan cycles on 2026-09-16. Every clause was
-taken on the `qemu` build.
+taken on the `qemu` build; the published `release` package was then installed
+on all four on 2026-09-18 (roadmap task 22.10, legs 6 to 9).
 
 **Two install-path facts are specific to these systems.** Every install
 already carries `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll`, so
