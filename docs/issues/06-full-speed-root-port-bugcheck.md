@@ -4,6 +4,10 @@ Status: fixed in roadmap Phase 5 task 7, before the first release. The
 driver reports every connected root port to usbport as High Speed and keeps
 the true speed for its own contexts. The cost, an interrupt interval usbport
 buckets on the wrong speed, is a documented limitation, not an open defect.
+**Two further costs were measured on 2026-09-19 and are known limitations of
+`1.1.0.0` (section 7):** a USB 1.1 hub on a root port bugchecks every Vista
+and Windows 7 build once a slower device behind it is configured, and a
+Full-Speed USB audio device on a root port plays nothing from Windows XP on.
 
 Targets affected: Windows 98 SE under the NUSB stack and Windows 2000 SP4,
 both bugchecked in the virtual machines; the same usbport logic is in both
@@ -231,28 +235,155 @@ what a function does with an empty list, not whether the list is empty.
 - **Why a believed-High-Speed 1.1 hub gets a TT record** is unconfirmed
   against the binaries. The driver no longer depends on the answer, and
   measures the disagreement instead.
-- **Section 5's residual bugchecks Windows 7 x86** (2026-09-19, roadmap
-  task 22.9, `runs/run-22.md`): QEMU's `usb-hub` on a root port with a
-  `usb-mouse` behind it stops the guest with `STOP 0x7E` in
-  `usbport!Allocate_time_for_endpoint`, reached from
-  `USBPORT_SelectConfiguration` through the USB 2.0 bus-time budgeter. The
-  same topology passed on Windows 2000 and XP x64 in the same run. The
-  pointer is a NULL transaction translator plus 4: the mouse behind the
-  believed-High-Speed 1.1 hub gets no TT, `USBPORT_AllocateBandwidthUSB20`
-  passes the NULL on, and the budgeter adds 4 to it (static, `runs/run-22.md`
-  22.9). Measured the same day on the other three NT 6.x targets - Vista
-  x86, Vista x64 and Windows 7 x64 all stop in the same function, the x64
-  pair reading `0xC08` (the NULL TT plus 8). The owner's decision
-  (2026-09-19): a known limitation of `1.1.0.0`, in the release notes.
-- **The High-Speed report also silences Full-Speed audio from XP on**
-  (2026-09-19, `runs/run-22.md` 22.9): XP's usbport schedules the stream on
-  its High-Speed isochronous branch and no transfer reaches the driver; the
-  same device behind a Full-Speed hub, reported at its true speed, played on
-  32-bit XP. Windows 2000 plays on a root port. A known limitation of
-  `1.1.0.0`; a fix would have to change what this page's fix reports, on
-  exactly the stacks that bugcheck without it.
+- **Section 5's residual bugchecks every Vista and Windows 7 build**
+  (2026-09-19): section 7.1.
+- **The High-Speed report silences Full-Speed audio on a root port from XP
+  on** (2026-09-19): section 7.2. Both are known limitations of `1.1.0.0`;
+  section 7.3 has what would fix them and what is still unmeasured.
 
-## 7. Lessons the record kept
+## 7. What the High-Speed report costs from Windows XP on (2026-09-19)
+
+Roadmap task 22.9, the post-release run of `1.1.0.0`, was the first time a
+hub was put on a Windows Vista or Windows 7 guest and the first time audio
+was played, rather than only bound, on any target after Windows 2000. Both
+met the fix this page describes. Neither is a defect in that fix on the
+systems it was made for: Windows 98 and 2000 behave as before. They are what
+the same report costs on the newer USB stacks, and both are known
+limitations of `1.1.0.0` by the owner's decision of 2026-09-19
+(`docs/using/release-notes.md`, "Known limitations"; the download readme,
+section 7; `README.md`, "Known limitations"). The run record is
+`docs/contributing/runs/run-22.md`, 22.9; every binary-derived fact below
+has its row in `legal-provenance.md` section 4.
+
+### 7.1 A USB 1.1 hub on a root port bugchecks Windows Vista and Windows 7
+
+**What happens.** A Full-Speed hub on a root port, and a Full or Low Speed
+device with a periodic endpoint behind it - a mouse was enough - stops the
+machine with `STOP 0x0000007E` (an access violation) in `USBPORT.SYS` the
+moment that device is configured. The hub alone enumerates and works. It is
+section 5's residual topology, which batch 7b-V0 measured harmless on
+Windows 98 and 2000; in the same 22.9 run the same steps passed on Windows
+2000 and XP x64.
+
+| Target | Stop parameters | Faulting instruction (public PDB) | Read of |
+|---|---|---|---|
+| Windows 7 SP1 x86, DateStamp `4CE79C15` | `0xC0000005, 0x8EAEED30, 0x8A6D749C, 0x8A6D7080` | `usbport!Allocate_time_for_endpoint+0x15d` | `0x00000A04` |
+| Vista SP2 x86, `49E01FCF` | `0xC0000005, 0x8E1A9E9C, 0x881C750C, 0x881C7208` | `Allocate_time_for_endpoint+0x162` | `0x00000A04` |
+| Windows 7 SP1 x64, `4CE7A670` | `0xFFFFFFFFC0000005, 0xFFFFF88002D96B4C, ...` | `Allocate_time_for_endpoint+0x19c` | `0x0000000000000C08` |
+| Vista SP2 x64, `49E02D1B` | `0xFFFFFFFFC0000005, 0xFFFFFA6002A72398, ...` | `Allocate_time_for_endpoint+0x194` | `0x0000000000000C08` |
+
+The stack walked from the Windows 7 x86 context record is usbport's alone,
+from `USBPORT_Dispatch` through `USBPORT_ProcessURB`,
+`USBPORT_SelectConfiguration`, `USBPORT_InternalOpenInterface`,
+`USBPORT_OpenEndpoint`, `MPx_AllocateBandwidth`,
+`USBPORT_AllocateBandwidthUSB20` and `USB2LIB_AllocUsb2BusTime` to the fault;
+no frame is in `xhci98.sys`.
+
+**Why (static, confirmed by the runtime values).** Opening the mouse's
+interrupt endpoint runs usbport's USB 2.0 bus-time budgeter.
+`USBPORT_AllocateBandwidthUSB20` passes it the endpoint's transaction
+translator as `[ep+1Ch] ? [[ep+1Ch]+38h] : 0` - it sees the missing TT and
+passes NULL on. `USB2LIB_AllocUsb2BusTime` takes the schedule to charge as
+`TT + 4` for a Full or Low Speed endpoint (`bus + 414h` for High Speed), and
+`Set_endpoint` stores it at `+0Ch` of the budget object; on x64 the fields are
+pointer-sized, so it is `TT + 8`. `Allocate_time_for_endpoint` then reads
+`[schedule + 0A00h]` (`0C00h` on x64): `0 + 4 + 0xA00 = 0xA04`,
+`0 + 8 + 0xC00 = 0xC08`, the addresses in the table. The budget object
+itself held the mouse's endpoint - maximum packet 4, period 8. The mouse has
+no TT because the driver reports the hub, as a root-port device, as High
+Speed; the hub's own descriptor offers no TT; and the mouse's speed comes
+from the real hub, Full. So the stack looks for a translator on a hub it
+believes is High Speed, finds none, and budgets against address 4.
+
+**What it predicts, not measured.** Any Full or Low Speed device with an
+interrupt or isochronous endpoint behind a USB 1.1 hub on a root port does
+the same - a keyboard, a mouse, an audio device, a keyboard with a built-in
+hub. A bulk-only device there may not reach the budgeter. A USB 2.0 hub has a
+real TT, so devices behind it should budget correctly; QEMU cannot show it,
+because its only hub, `usb-hub`, is a Full-Speed hub with no speed option (it
+enumerates at 12 Mb/s).
+
+**Workarounds** (in the release notes): plug Full and Low Speed devices into
+a root port directly, where the driver's report covers them, or behind a USB
+2.0 hub (unmeasured).
+
+**How it was found and read.** The harness reported the churn row's guest as
+"not executing": its debug console showed four `DriverEntry` lines in one
+group, three with no teardown before them - Windows 7 restarting after each
+bugcheck - and the harness went on reading the first boot's extension
+address. A run through an untracked copy of the runner with
+`-action reboot=shutdown` held the guest on the stop screen; the exception
+and context records and the stack were read from the halted guest's memory
+over QEMU's monitor, and the whole guest memory was saved
+(`out\post-release\1.1.0.0-win7-hub-diag\`). The other three builds were
+installed on fresh overlays and given only the hub and the mouse
+(`out\post-release\1.1.0.0-t229-{vista,vista64,win764}\`).
+
+### 7.2 A Full-Speed audio device on a root port plays nothing from Windows XP on
+
+**What happens.** The device installs, is the default playback device, and
+Windows shows it playing, but no sound reaches it: no isochronous transfer
+reaches the driver at all. Measured with QEMU's `usb-audio` and its `wav`
+backend as the oracle, the driver's counters read over the monitor while
+the guest played:
+
+| Target | Played with | Isochronous submits | Audio reaching the device |
+|---|---|---|---|
+| Windows 98 SE | the startup sound | 1 (10 packets, all answered), then the OS's own `USBAUDIO.VXD` faults | - (batch 9-V's known OS fault) |
+| Windows 2000 SP4 | Sounds and Multimedia | 376 (3,760 packets, all answered) | 659,456 B |
+| XP SP3 x86, on a root port | Sound Recorder, 1.93 s of 1.93 s | 0 | 0 B |
+| XP SP3 x86, **behind a Full-Speed hub** | Sound Recorder, the same file | **196 (1,960 packets, all answered)** | **344,064 B** |
+| XP x64 SP2 | Sounds tab | 0 | 0 B |
+| Vista x86 and x64 | Speakers Properties, Test showing Stop | 0 | 0 B |
+| Windows 7 x86 and x64 | Speakers Properties, Test showing Stop | 0 | 0 B |
+
+Nothing is refused on the driver's side: where every counter was dumped
+(Windows 7 x86, XP x64, Vista x86) every open usbport asked for was accepted
+and no refusal counter moved. On Vista x86 and Windows 7 x64 an endpoint was
+opened as playback began and nothing was ever submitted down it.
+
+**Why.** 32-bit XP runs the same binary through the same NT 5.x registration
+as Windows 2000, so the difference is the OS's own stack, and the hub row
+isolates it: behind a hub the device is reported at its true Full speed and
+plays; on a root port it is reported High Speed and does not. XP's
+`USBPORT_IsochTransfer` takes a separate branch for a High-Speed endpoint -
+`cmp dword ptr [eax+110h],2` - which allows up to 0x400 packets and counts
+them as microframes (`packets x period >> 3`), so a Full-Speed stream of one
+packet per frame is scheduled as a High-Speed one (static, the public PDB).
+How that branch then loses the stream is not read, and neither is why
+Windows 2000's usbport plays the same stream on a root port.
+
+**Workarounds** (in the release notes): put the audio device behind a hub.
+On XP that can be a USB 1.1 hub (measured on 32-bit XP only); on Vista and 7
+it must be a USB 2.0 hub, because of 7.1 (unmeasured).
+
+**Consequences for the record.** Every device-matrix audio row judged
+arrival, not playback: XP x64's row passed because its audio stack opens an
+endpoint on arrival, and Windows 7's read NODRIVER because it does not.
+Before 2026-09-19 the NT 5.2 and NT 6.x tiers were accepted on "the audio
+device bound"; this is a first measurement, not a regression. Roadmap task
+22.12 (d), which wants isochronous counters moving on a QEMU audio row, can
+only be read on Windows 2000 as things stand.
+
+### 7.3 What would fix both, and why neither was attempted for `1.1.0.0`
+
+Both follow from the one lever section 4 describes, and changing what the
+driver reports on a root port is exactly what bugchecks Windows 98 and 2000
+(sections 1 and 2) - the primary targets. The candidate that would remove
+both without reopening that is the idea in
+[`docs/future-plans/virtual-hub-per-root-port.md`](../future-plans/virtual-hub-per-root-port.md):
+a virtual USB 2.0 hub behind every root port, so that a slower device is
+reported at its true speed behind a hub that has a transaction translator.
+It is an idea only - nothing of it is built, and it is off by default by its
+own rules - and neither consequence above has been measured under it.
+
+**Open:** a USB 2.0 hub on Vista or Windows 7 with a Full-Speed mouse and a
+Full-Speed audio device behind it, on real hardware, which is what the
+workarounds rest on; why XP's High-Speed isochronous branch drops the
+stream; and whether a bulk-only device behind a USB 1.1 hub is safe on
+Vista and 7.
+
+## 8. Lessons the record kept
 
 - A healthy trace is not a living guest. Screenshot before calling a VM run
   a pass; the driver can be entirely right and the machine still dead.
@@ -271,6 +402,13 @@ what a function does with an empty list, not whether the list is empty.
   rather than by a run.
 - When one document hedges a claim and another asserts it, the hedge was
   the one thinking. Propagate the hedge, or measure it.
+- A fix that holds on the stacks it was made for is a new experiment on
+  every stack added after it. This one was made on Windows 98 and 2000 and
+  carried to XP, Vista and 7 unchanged; the hub and the audio playback that
+  found its cost there were simply never tried on them until section 7.
+- "Bound" is not "working". An audio device that installs, is the default
+  and shows as playing can move no data at all; the oracle is the stream
+  itself (QEMU's `wav` backend), not the device list.
 
 ## Sources
 

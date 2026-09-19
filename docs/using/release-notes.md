@@ -395,7 +395,8 @@ because a user meets them through this driver.
   and nothing faster than 1 ms is reachable there. Devices behind a hub
   report their true speed and poll at the interval they ask for, so a mouse
   on a hub polls at its own 8 ms and a polling-rate tool works as on any
-  controller. Measured in a virtual machine with SweetLow's hidusbf; the
+  controller - but on Windows Vista and 7 only behind a USB 2.0 hub, because
+  of the next entry. Measured in a virtual machine with SweetLow's hidusbf; the
   bands are documented in full in `docs/issues/06-full-speed-root-port-bugcheck.md`.
 - **Windows Vista and Windows 7, 32-bit and x64: a USB 1.1 hub on a root port
   crashes the machine** as soon as a mouse, keyboard or other Full or Low
