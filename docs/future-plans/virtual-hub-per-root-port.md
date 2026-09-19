@@ -53,7 +53,7 @@ it costs three things:
   High-Speed bus rather than a frame budget. The bandwidth half has no
   measurement either way.
 
-Issue 6 section 6 lists a true-speed report as an opt-in and says why it
+Issue 6 section 8 lists a true-speed report as an opt-in and says why it
 cannot be enabled under any shipping usbport: the fault is in usbport's list
 handling, and SweetLow's rebuild has the same branch. The lever has two
 positions and both have been taken. This page proposes a third: keep
@@ -347,7 +347,7 @@ on root ports, with the interval read from the snapshot instrument.
 - usbport still rounds a Full or Low Speed `bInterval` down to a power of
   two in frames, so `bInterval` 10 gives 8 ms, as it does behind a real hub.
 - It does not remove the override. Under a usbport that guarded the empty
-  list (issue 6 section 6) a truthful root port would be simpler than a
+  list (issue 6 section 8) a truthful root port would be simpler than a
   virtual hub, but no such usbport exists for these targets.
 - It does not interact with the SuperSpeed storage proposal except
   by composition: a SuperSpeed device reported as High-Speed sits behind

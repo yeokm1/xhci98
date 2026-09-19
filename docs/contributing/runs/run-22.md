@@ -1275,7 +1275,7 @@ TCG unless a line says otherwise. The four reports are in
   first steps: QEMU's `usb-hub` (a Full-Speed hub) on root port 2 and a
   `usb-mouse` behind it at `2.1`; the mouse's slot was addressed and its
   configuration is what faults, in usbport's USB 2.0 bus-time budgeter. That
-  is **issue 6 section 5's residual topology** - a hub with no transaction
+  is **issue 6 section 6.1's residual topology** (section 5 when this was written) - a hub with no transaction
   translator on a root port, with a Full-Speed device behind it - which
   batch 7b-V0 measured harmless on Windows 98 and 2000 and which the same
   churn passed on 2000 and XP x64 in this run. **Why the pointer is 4**
