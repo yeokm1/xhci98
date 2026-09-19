@@ -32,16 +32,36 @@ check only to select between behaviors whose referenced symbols all exist on
 every target (or build separate binaries, or supply a compatibility stub). Do
 not use `PsGetVersion` for the check; per Oney (p.437) it is itself not
 exported on Win98/Me. The version primitive present on all three targets is
-`IoIsWdmVersionAvailable`. Note that this driver imports it nowhere and the
-allowlist has no row for it, so the sketches below are what a driver that
-needed the distinction would write, not what this one does; a row plus its
-Windows 98 evidence would be needed first:
+`IoIsWdmVersionAvailable`. Since 2026-09-11 (roadmap task 22.5) this driver
+imports it on both architectures, from `DriverEntry` alone, to tell an NT 6.x
+`usbport.sys` from every other; both allowlists carry the row, the 32-bit one
+with NUSB's own `USBPORT.SYS` as the Windows 98 precedent and the name in
+`ntkern.vxd`'s table. The sketch below is the 9x-versus-NT distinction, which
+this driver still does not make:
 
 ```c
 /* IRQL: PASSIVE_LEVEL (call from DriverEntry). Win98 gold/SE report 1.0;
-   Me 1.05; Win2000 1.10; XP 1.20. */
+   Me 1.05; Win2000 1.10; XP 1.20; Server 2003 - and therefore Windows XP
+   x64, which is NT 5.2.3790 - 1.30; Vista 6.00; Windows 7 ALSO 6.00. */
 BOOLEAN isWin9x = !IoIsWdmVersionAvailable(1, 0x10);   /* 1.10 unavailable => 9x */
 ```
+
+**Two of those rows are traps, and one of them cost this project a broken
+target.** The table above used to stop at "XP 1.20", which reads as though
+1.30 were the NT 6.x threshold. It is not: **Server 2003 reports 1.30
+exactly**, so `IoIsWdmVersionAvailable(1, 0x30)` is TRUE on Windows XP x64 and
+cannot separate NT 5.2 from NT 6.x. The amd64 build used exactly that test to
+choose its `usbport` registration arity and resource mask, and the consequence
+was that XP x64 took the NT 6.x arm and refused to start its controller
+(roadmap task 21.8; `docs/contributing/design/11-x64-targets.md` section 6.3).
+**The NT 6.x test is `IoIsWdmVersionAvailable(6, 0)`.** And do not "improve"
+it to `(6, 1)` for Windows 7: 7 reports 6.00 as well, so `(6, 1)` is FALSE
+there.
+
+Both rows are read, not recalled - out of the shipping kernels, static:
+`winxp64` `ntoskrnl+0x28BDE0` compares `cmp cl,1 / jb / jne / cmp dl,30h / ja`,
+while `vista-x86` `ntoskrnl+0x1A876F` and `win7-x86` `ntoskrnl+0x1CAB9B` carry
+the identical `cmp maj,6 / jb / jne / cmp min,0 / ja`.
 
 `IoIsWdmVersionAvailable` cannot separate the original Win98 retail release
 from Win98 SE. Both report 1.0, yet they differ in what they export (the
@@ -64,10 +84,14 @@ do not re-read the field. The version predicates are essential:
 `ServiceKeyName` is also nonempty on Win2000, and WinMe is WDM 1.05, so the
 field test alone does not identify Win98 SE.
 
-This driver allocates no pool at all, so neither name is called: the import
-allowlist has no row for `ExAllocatePool` or for either tagged name, and a
-call to any of them fails the import gate as "not in the allowlist"
-(`AGENTS.md`, "Allocate no pool at all"). Option A needs no private pool -
+This driver allocates no pool at all, so neither name is called, and the import
+gate refuses all four - but by two different routes, which is worth knowing
+when you are reading a gate failure. `ExAllocatePoolWithTag` and
+`ExFreePoolWithTag` have **deny rows**, so they fail as `DENIED:` with the
+reason attached; `ExAllocatePool` and `ExFreePool` have **no row at all**, so
+they fail as `not in the allowlist` (`AGENTS.md`, "Allocate no pool at all").
+The table further down this page has this right; this paragraph said all four
+had no row until the 2026-09-16 audit's E9. Option A needs no private pool -
 fixed software metadata lives in the usbport-allocated miniport and
 common-buffer extensions. The local-DDK macro trap below still matters,
 because the compatibility header undoes the DDK's `POOL_TAGGING` rewrite so
@@ -384,8 +408,9 @@ Until that day it was best-effort and unrun, and the accommodation rule from
 then still governs the code: preserve XP compatibility when the
 accommodation is small, isolated, and low-risk; do not weaken Win98 SE or
 Win2000 behavior, add XP-only imports, or create a separate implementation
-to do so. This section exists so the boundary is not re-litigated. (32-bit
-XP only; XP x64 is a different build and has never been in scope.)
+to do so. This section exists so the boundary is not re-litigated. Everything
+above and below is about **32-bit** XP and the one binary; XP x64 is a
+different build and has its own tier, stated at the end of this section.
 
 Much of the compatibility comes for free. The driver codes to the Win98 export
 baseline and builds with the Win2K DDK; XP exports a strict superset of both,
@@ -429,9 +454,10 @@ callbacks, and bound a hot-plugged HID mouse with interrupt transfers
 flowing. Two things went wrong and neither was XP's runtime; both were the
 NT install path's. An xHCI-only NT install has no `usbport.sys` (Code 39
 until the INF copies it, which it does since 1.0.1.0), and XP's usbport
-idle-suspends the controller about thirty seconds after start unless
-`Services\USB\DisableSelectiveSuspend` is set, which the 1.0.1.0 INF writes
-on the NT path too. The same guest then bound a `usb-storage` device and a
+idle-suspends the controller about thirty seconds after start unless it is
+told not to - `Services\USB\DisableSelectiveSuspend`, which the 1.0.1.0 INF
+wrote on the NT path too, and since 1.1.0.0 the driver's own
+`USB_MINIPORT_FLAGS_DISABLE_SS` instead. The same guest then bound a `usb-storage` device and a
 `usb-audio` composite, survived the Device Manager disable, enable, remove
 and rescan sequence, and took the `1.0.1.0` package on an xHCI-only install
 with no prompt; the one XP-specific defect it showed, the hub re-creating a
@@ -475,6 +501,113 @@ nothing, but the result, including a negative one, goes in
 `docs/usb-xhci-info/usbport-miniport-interface.md` "Target ABI record" as a
 third column marked best-effort and static-only. The answer gets expensive to
 act on once Phase 4 onward has committed to the packet.
+
+### And Windows XP x64?
+
+Position: supported in virtual machines, since roadmap Phase 21 (task 21.6
+states the tier; task 21.5 is the observation), standing where Windows 2000,
+Windows ME and 32-bit Windows XP stand - no checkpoint waits on it, and it
+has never run on real hardware. What the paragraph above used to say - that
+XP x64 "is a different build and has never been in scope" - was true when it
+was written, and the first half of it is true still.
+
+**What is different from every other target here is that it is not the one
+binary.** Windows XP Professional x64 and Windows Server 2003 x64 are the
+same operating system, NT 5.2.3790, and Microsoft's own WDK says so by
+shipping `lib\wxp\i386` with no `amd64` counterpart - so `WNET` is the only
+route to a 64-bit XP driver and one build serves both. It is built with WDK
+7.1 rather than the Windows 2000 DDK, carried in its own package with its own
+INF (`src/xhci98-amd64.inf`, one `.NTamd64` install path), and it resolves
+against the NT 5.2 amd64 export tables directly, because the Windows 98
+export-baseline argument that protects the 32-bit binary has nothing to say
+about a kernel Windows 98 never had. The accommodation rule above is
+therefore not what governs it: this is a second target with its own gate
+inputs, not an accommodation inside the 32-bit one.
+
+What the static pass established, before any 64-bit binary existed: the same
+`>= 100` / `>= 200` registration-version tests, `USBPORT_GetHciMn` returning
+`0x10000001` exactly as 32-bit XP does, and a `0x250`-byte packet against
+x86's `0x13C`. Three structures change width and were measured rather than
+assumed - `USBPORT_RESOURCES`, `USBPORT_ENDPOINT_PROPERTIES`, and
+`USBPORT_SCATTER_GATHER_LIST`, the last of which was the one left to the
+compiler's guess and was wrong by four bytes. `usbport-miniport-abi.md` and
+`docs/contributing/design/11-x64-targets.md` section 5 carry all eight
+measurements; `docs/contributing/legal-provenance.md` section 3 carries their
+provenance, `static` throughout.
+
+What the guest measured (2026-09-09, roadmap task 21.5;
+`docs/contributing/build-and-test.md`, "Windows XP x64 target VM"): on XP
+Professional x64 SP2, in a virtual machine, the amd64 binary installed on an
+xHCI-only machine with no prompt, registered, started the controller, passed
+its No Op self-test, answered the root-hub family, bound a HID mouse, a
+mass-storage device and a composite audio device, and survived the Device
+Manager disable, enable, remove and rescan sequence - on the `qemu` flavour
+and then again on the `release` flavour. Real hardware remains unobserved,
+which is why the tier is virtual machines.
+
+Vista x64 and Windows 7 x64 are not in this tier. They have one of their
+own, below, on a different registration path.
+
+### And Windows Vista and Windows 7?
+
+Position: supported in virtual machines, in both architectures, since the
+owner's decision of 2026-09-16 (roadmap tasks 21.8 and 22.5), standing where
+Windows 2000, Windows ME and both Windows XPs stand - no checkpoint waits on
+them, the accommodation rule above governs them, and of the four only 32-bit
+Windows 7 has run on real hardware, once (the E460, 2026-09-19; release notes,
+"What this is"). The 32-bit pair run the one binary; the x64 pair run the
+second one, above.
+
+**What the static pass said, and why it was not enough.** Tasks 21.7 and
+22.1 read Vista SP2's and Windows 7 SP1's `usbport.sys` in both architectures
+by the method this section describes for XP, and all six measurements
+passed: the same exports, `USBPORT_GetHciMn` returning `0x10000001`, and the
+same `>= 200` packet size. The Vista x64 guest, and the static readings it
+sent the project back for, then found that **no Version 200 miniport can run
+on either system in either architecture**, for three reasons no measurement
+of the packet could see
+(`docs/contributing/design/11-x64-targets.md` sections 6.1 to 6.4):
+`USBPORT_RegisterUSBPortDriver` takes a fourth argument, and on x86 it is
+callee-cleaned, so a three-argument call unbalances the stack; the
+`USBPORT_RESOURCES.ResourcesTypes` bits moved, so a Version 200 mask refuses
+the controller's own resources; and the interrupt DPC is called through a
+Version 300 slot past the end of what a Version 200 packet copies, so the
+controller starts, the ISR claims its interrupts, and the DPC that services
+them never runs. The lesson is the one
+this document already states for imports, applied to behaviour: an interface
+that reads the same is not a caller that behaves the same, so disassemble the
+callers and not only the structures.
+
+**So on NT 6.x the driver is a Version 300 miniport**, in both binaries, and
+a Version 200 one everywhere else. The choice is made at run time from
+`IoIsWdmVersionAvailable(6, 0)` - Windows 7 reports WDM 6.00, not 6.01, and
+Server 2003 and XP x64 report 1.30, which is why the predicate is `(6, 0)` -
+and it keeps every NT 5.x and 9x system wire-identical to what it was observed
+with (design record 11 section 6.5, decision 12). The x86 import this needs,
+`IoIsWdmVersionAvailable`, carries Windows 98 evidence of its own in the
+import allowlist, as every row must.
+
+**What the guests measured** (2026-09-13, roadmap task 22.5; issue 7 section
+7.5): on all four, each under four virtual processors, the package installed,
+the driver registered presenting `Version = 300`, usbport wrote back the two
+Version 300 services, the interrupt DPC ran in step with the ISR, the No Op
+self-test passed, a HID mouse, a mass-storage device and a composite audio
+device bound, and five disable/enable cycles, a remove and a rescan completed.
+Vista x64 took five more remove/rescan cycles on 2026-09-16. Every clause was
+taken on the `qemu` build; the published `release` package was then installed
+on all four on 2026-09-18 (roadmap task 22.10, legs 6 to 9).
+
+**Two install-path facts are specific to these systems.** Every install
+already carries `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll`, so
+the Code 39 that an xHCI-only Windows 2000 or XP install meets does not
+arise - but the INF's `LayoutFile` copies abort Vista's file queue even so,
+because the queue resolves a source before it decides to skip. Both INFs
+therefore reach NT 6.x through a `.6.0`-decorated models section naming
+`Xhci.Dev6`, which copies `xhci98.sys` alone (design record 11 section 12,
+decision 13). And **the x64 pair enforce kernel-mode code signing**: the
+package is unsigned, so the driver loads only on a boot where the user has
+pressed F8 and chosen Disable Driver Signature Enforcement, at every start.
+32-bit Vista and Windows 7 do not enforce it.
 
 ## MSVC 6.0 / C89 Language Pitfalls
 

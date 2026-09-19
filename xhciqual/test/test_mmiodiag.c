@@ -445,6 +445,183 @@ static void test_dead_causes(void)
     reset_out();
     report_mmio_dead(&p);
     CHECK(has("undetermined"), "all checks clean reports undetermined");
+
+    /*
+     * **A reason the mapper recorded wins over every reconstruction below it**
+     * (the 2026-09-16 audit's C5). Three of the mapper's refusals - an
+     * I/O-space BAR, a CAPLENGTH of 0 or an HCIVERSION below 0.90, and a
+     * register block past the fixed 64 KB window - leave PCI state looking
+     * perfectly healthy, so every one of them used to print "undetermined" and
+     * be read as dead silicon. They are readings about the tool or about a
+     * controller misdescribing itself.
+     */
+    base_pci(&p);
+    p.mmio_reason = "the runtime registers sit outside the window this tool "
+                    "maps - a tool limit, not a controller fault";
+    reset_out();
+    report_mmio_dead(&p);
+    CHECK(has("a tool limit"), "a recorded reason is printed");
+    CHECK(!has("undetermined"), "and displaces the undetermined fallback");
+
+    /* And it is preferred even where a PCI-state cause could be reconstructed,
+     * because it is the reason the code actually took. */
+    base_pci(&p);
+    p.cmd_effective = 0;
+    p.mmio_reason = "BAR0 selects I/O space";
+    reset_out();
+    report_mmio_dead(&p);
+    CHECK(has("I/O space"), "the mapper's own reason is the proximate one");
+    CHECK(!has("Memory Space Enable is clear"),
+          "and the reconstructed cause is not printed beside it");
+}
+
+/*
+ * **A recorded TOOL limit must reach the verdict, not just the cause line.**
+ * The window-size refusal is about this tool mapping a fixed 64 KB, on a
+ * controller whose BAR is assigned below 4 GB, which is in D0 and has MSE
+ * set - so every reconstruction says "nothing wrong" and the fallback used to
+ * be DISQUALIFIED. Naming the cause while still disqualifying the part is the
+ * contradiction the cause line was added to remove, so the two are checked
+ * together here (Codex review of the 2026-09-16 audit's C5 fix).
+ */
+static void test_tool_limit_is_not_a_disqualification(void)
+{
+    PCIINFO p;
+
+    base_pci(&p);
+    p.mmio_tool_limit = 1;
+    p.mmio_reason = "the runtime registers sit outside the window this tool "
+                    "maps - a tool limit, not a controller fault";
+
+    CHECK(quick_classify_mmio(&p, 1) == QUICK_CANNOT_SAY,
+          "an active run cannot say, rather than disqualifying");
+    CHECK(quick_classify_mmio(&p, 0) == QUICK_CANNOT_SAY,
+          "and neither can a probe-only one");
+
+    reset_out();
+    CHECK(report_mmio_unavailable(&p, 1) == 0,
+          "so it is not reported as a hard disqualifier");
+    CHECK(has("NOT QUALIFIED"), "the verdict says NOT QUALIFIED");
+    CHECK(!has("DISQUALIFIED"), "and not DISQUALIFIED");
+    CHECK(has("No controller fault inferred"),
+          "with the same footnote the other tool-limited causes carry");
+
+    /* And the two refusals that ARE about the controller keep disqualifying,
+     * so the flag is not a way to soften every mapping failure. */
+    base_pci(&p);
+    p.mmio_reason = "BAR0 selects I/O space, and xHCI 5.2.1 requires a memory "
+                    "BAR";
+    CHECK(quick_classify_mmio(&p, 1) == QUICK_DISQUALIFIED,
+          "a controller misdescribing its own BAR is still disqualified");
+    reset_out();
+    CHECK(report_mmio_unavailable(&p, 1) == 1, "and reported as one");
+
+    /*
+     * **The quick scan's REASON has to agree with the quick scan's VERDICT.**
+     * `quick_reason` reconstructs from PCI state exactly as the classifier
+     * does, so it reached the same "MMIO is dead" fallback the classifier
+     * reached - and printed it beside a CANNOT SAY. Two answers to one
+     * question, in the one place a user reads both on the same line.
+     */
+    /* `ipin` non-zero, because Interrupt Pin = 0 is answered before the MMIO
+     * question and would mask what this is about. The mapper sets the reason
+     * and the flag together, so the vectors do too. */
+    base_pci(&p);
+    p.ipin = 1;
+    p.mmio_tool_limit = 1;
+    p.mmio_reason = "the registers sit outside the window this tool maps - a "
+                    "tool limit, not a controller fault";
+    CHECK(strstr(quick_reason(&p, 0, 4, 1), "tool limit") != 0,
+          "the quick reason names the tool limit");
+    CHECK(strstr(quick_reason(&p, 0, 4, 1), "dead") == 0,
+          "and does not call the window dead beside a CANNOT SAY");
+
+    /* A recorded reason that is about the CONTROLLER is carried through too.
+     * The verdict stays DISQUALIFIED, and "BAR0 MMIO is dead" would be the
+     * wrong reason for it: the window decoded and the registers in it are
+     * wrong, which is the distinction the reader needs. */
+    base_pci(&p);
+    p.ipin = 1;
+    p.mmio_reason = "RTSOFF or DBOFF is zero, which places the runtime or "
+                    "doorbell registers on top of the capability registers";
+    CHECK(strstr(quick_reason(&p, 0, 4, 1), "RTSOFF") != 0,
+          "a layout fault is named rather than called a dead window");
+    CHECK(quick_classify_mmio(&p, 1) == QUICK_DISQUALIFIED,
+          "and it is still a disqualification");
+
+    base_pci(&p);
+    p.ipin = 1;
+    CHECK(strstr(quick_reason(&p, 0, 4, 1), "dead") != 0,
+          "a window that really is dead, with no recorded reason, still says so");
+}
+
+/*
+ * **An I/O-space BAR0 outranks a temporary power or configuration state.**
+ * xHCI 5.2.1 requires a memory BAR and the mapper refuses one before it
+ * touches anything, so the refusal needs neither D0 nor MSE to be
+ * established - and it stays true when somebody powers the part up, which the
+ * D-state and MSE readings do not. Asked after them, a controller that is
+ * both in D3 and misdescribing its BAR type came back CANNOT SAY on the
+ * D-state and the definitive refusal was never reported (Codex review round
+ * 4 of the 2026-09-16 audit).
+ */
+static void test_io_bar_outranks_power_and_mse(void)
+{
+    PCIINFO p;
+
+    /* MSE clear, BAR0 = 0xE001: an I/O BAR on a controller whose memory
+     * decoding is off. Both readings are true; only one of them is final. */
+    base_pci(&p);
+    p.ipin = 1;
+    p.bar_lo = 0x0000E001UL;
+    p.bar_phys = 0x0000E000UL;
+    p.cmd_effective = 0;
+    CHECK(quick_classify_mmio(&p, 0) == QUICK_DISQUALIFIED,
+          "an I/O BAR disqualifies even with MSE clear on a probe-only run");
+    CHECK(strstr(quick_reason(&p, 0, 4, 0), "I/O space") != 0,
+          "and the reason names the BAR rather than the MSE bit");
+    reset_out();
+    CHECK(report_mmio_unavailable(&p, 0) == 1,
+          "the long-form verdict disqualifies it on a probe-only run too");
+    CHECK(!has("No controller fault inferred"),
+          "with no reassurance under a disqualification");
+
+    /* And out of D0, which is the other branch that used to mask it. */
+    base_pci(&p);
+    p.ipin = 1;
+    p.bar_lo = 0x0000E001UL;
+    p.bar_phys = 0x0000E000UL;
+    p.has_pm = 1;
+    p.pm_state = 3;
+    CHECK(quick_classify_mmio(&p, 1) == QUICK_DISQUALIFIED,
+          "an I/O BAR disqualifies even in D3");
+    CHECK(strstr(quick_reason(&p, 0, 4, 1), "I/O space") != 0,
+          "and the reason names the BAR rather than the D-state");
+    reset_out();
+    report_mmio_dead(&p);
+    CHECK(has("I/O space"), "the long-form cause agrees, with no reason recorded");
+
+    /* And the long-form VERDICT, which is the third function that asks this
+     * and the one the first cut of the fix missed: it returned 1 - a hard
+     * disqualifier - while printing the D-state reassurance and advice about
+     * powering the part up. */
+    reset_out();
+    CHECK(report_mmio_unavailable(&p, 1) == 1,
+          "the long-form verdict disqualifies an I/O BAR in D3");
+    CHECK(has("I/O space"), "and says so");
+    CHECK(!has("No controller fault inferred"),
+          "without the reassurance that contradicts its own return value");
+    CHECK(!has("transition it to D0"),
+          "and without advice that would not help");
+
+    /* A memory BAR with MSE clear is unchanged: that IS the MSE reading. */
+    base_pci(&p);
+    p.ipin = 1;
+    p.cmd_effective = 0;
+    CHECK(quick_classify_mmio(&p, 0) == QUICK_CANNOT_SAY,
+          "a memory BAR with MSE clear still cannot say on a probe-only run");
+    CHECK(strstr(quick_reason(&p, 0, 4, 0), "Memory Space Enable") != 0,
+          "and still names the MSE bit");
 }
 
 /* The verdict classifier: only genuine hardware/platform blockers may return
@@ -798,6 +975,8 @@ int main(void)
     test_status_ignores_non_error_bits();
     test_dead_bar_beats_power_state();
     test_dead_causes();
+    test_tool_limit_is_not_a_disqualification();
+    test_io_bar_outranks_power_and_mse();
     test_unavailable_hard_disqualifiers();
     test_unavailable_inconclusive();
     test_xusb2pr_routed_and_not();

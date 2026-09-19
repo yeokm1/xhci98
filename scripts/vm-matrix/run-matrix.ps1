@@ -145,7 +145,16 @@ if ($PostRelease -and $PSBoundParameters.ContainsKey('ReportName')) {
 # Everything checkable without a boot is checked before one is spent.  A matrix
 # whose expectations do not resolve, a model this QEMU build does not have, or a
 # missing image are all one line here and a wasted twenty minutes otherwise.
-$table = Import-CounterTable
+# One offset table per build a configured target runs (lib\fresh.ps1,
+# Get-TargetArch): the amd64 extension's layout differs from the x86 one, so
+# an expectation is resolved, and every read decoded, against its own
+# target's table. $table is re-pointed at the top of each target's loop.
+$tables = @{}
+foreach ($t in $cfg.Targets) {
+    $a = Get-TargetArch -Target $t
+    if (-not $tables.ContainsKey($a)) { $tables[$a] = Import-CounterTable -Arch $a }
+}
+$table = if ($tables.ContainsKey('x86')) { $tables['x86'] } else { $tables['amd64'] }
 $available = Get-QemuUsbModels -Qemu $qemuBin
 $problems = @()
 $rowCount = 0
@@ -156,6 +165,18 @@ $parsed = @{}
 $targetIds = @()
 foreach ($t in $cfg.Targets) { $targetIds += (Get-TargetKeys -Target $t) }
 $targetIds = @($targetIds | Sort-Object -Unique)
+
+# An ExpectNoDriver key may name any target the harness supports, not only one
+# this configuration lists: a local config written before a target was added
+# (xp64-fresh and win7-fresh, 2026-09-18) must still validate a run of the
+# targets it does have. The tracked sample is the list of supported targets, so
+# a key in neither is still refused as a typo (Codex review of fcbf9a1).
+$noDriverKeys = @($targetIds)
+$samplePath = Join-Path $PSScriptRoot "config.sample.psd1"
+if (Test-Path -LiteralPath $samplePath) {
+    foreach ($t in (Import-PowerShellDataFile -LiteralPath $samplePath).Targets) { $noDriverKeys += (Get-TargetKeys -Target $t) }
+}
+$noDriverKeys = @($noDriverKeys | Sort-Object -Unique)
 
 foreach ($g in $mx.Groups) {
     foreach ($r in $g.Rows) {
@@ -170,7 +191,7 @@ foreach ($g in $mx.Groups) {
             $problems += ("row {0}: has no non-negative integer Settle, which the attach leg sleeps on" -f $r.Name)
         }
         $problems += (Get-RowWedgeProblems -Row $r -TargetIds $targetIds)
-        $problems += (Get-RowNoDriverProblems -Row $r -KnownKeys $targetIds)
+        $problems += (Get-RowNoDriverProblems -Row $r -KnownKeys $noDriverKeys)
         $texts = @()
         $texts += $mx.Always
         if ($r.ContainsKey('Expect')) { $texts += $r.Expect }
@@ -184,7 +205,7 @@ foreach ($g in $mx.Groups) {
             $parsed[$key] = @()
             foreach ($txt in ($texts + $per)) {
                 try {
-                    $parsed[$key] += (ConvertTo-Expectation -Text $txt -Table $table)
+                    $parsed[$key] += (ConvertTo-Expectation -Text $txt -Table $tables[(Get-TargetArch -Target $t)])
                 } catch {
                     $problems += ("row {0} [{1}]: {2}" -f $r.Name, $t.Id, $_.Exception.Message)
                 }
@@ -432,6 +453,10 @@ function Invoke-AttachLeg {
         [string]$DebugconLog = ""
     )
     $legError = ""
+    # "wedge" when the liveness probe found the guest gone or stopped - the one
+    # ERROR shape a MayWedgeGuest declaration may waive (lib\fresh.ps1,
+    # Test-RowCountsAgainst); "" for every other error.
+    $legKind = ""
     $attached = $false
     $before = $null
     $after = $null
@@ -454,7 +479,7 @@ function Invoke-AttachLeg {
     if ($DebugconLog -ne "") {
         $drift = Get-ExtensionIdentityDrift -Ident $Ident -DebugconLog $DebugconLog
         if ($drift -ne "") {
-            return [pscustomobject]@{ Error = $drift; Before = $null; After = $null; Attached = $false }
+            return [pscustomobject]@{ Error = $drift; ErrorKind = ""; Before = $null; After = $null; Attached = $false }
         }
     }
     $before = Read-Counters -Port $Port -BaseVa $Ident.Va -Table $Table -Process $Process
@@ -583,10 +608,21 @@ function Invoke-AttachLeg {
         # the probe had actually found - including the case where the
         # QEMU process had gone, where there is no guest to have
         # stopped.  Demonstrated by killing QEMU inside this window.
-        $alive = Test-GuestAlive -Port $Port -Process $Process
+        #
+        # WITH THE PUMP, THE GUEST HAS TO COMPLETE A TRANSFER TOO.  A
+        # bugchecked guest still takes timer interrupts (the 2026-09-17
+        # audit's D2), so on a group that has the keep-alive the probe is
+        # also handed its `transfers completed` and the pump to drive it.
+        $probeArgs = @{}
+        if ($Pump) {
+            $probeArgs['SignOfLife'] = { Get-KeepAliveTransfers -Table $Table -Snapshot (Read-Counters -Port $Port -BaseVa $Ident.Va -Table $Table -Process $Process) }.GetNewClosure()
+            $probeArgs['Stimulus'] = { Invoke-Pump -Port $Port -Seconds 2 }.GetNewClosure()
+        }
+        $alive = Test-GuestAlive -Port $Port -Process $Process @probeArgs
         if (-not $alive.Alive) {
             $legError = ("the guest did not survive this device [{0}]: {1} ({2})" -f `
                          $alive.Verdict, $alive.Why, $alive.Detail)
+            if (Test-WedgeShape -LivenessVerdict $alive.Verdict) { $legKind = "wedge" }
         }
     }
 
@@ -656,15 +692,17 @@ function Invoke-AttachLeg {
     }
 
     return [pscustomobject]@{
-        Error    = $legError
-        Before   = $before
-        After    = $after
-        Attached = $attached
+        Error     = $legError
+        ErrorKind = $legKind
+        Before    = $before
+        After     = $after
+        Attached  = $attached
     }
 }
 
 $targetVerdicts = @{}
 foreach ($tgt in $targetsToRun) {
+    $table = $tables[(Get-TargetArch -Target $tgt)]
     $groupsToRun = $mx.Groups
     if ($Group.Count -gt 0) { $groupsToRun = $mx.Groups | Where-Object { $Group -contains $_.Name } }
 
@@ -712,14 +750,18 @@ foreach ($tgt in $targetsToRun) {
         }
         Set-Content -LiteralPath $traceEvents -Value $cfg.TraceEvents -Encoding ascii
 
+        # THE SCRATCH DISKS ARE RECREATED AT EVERY GROUP START, not created
+        # only when absent.  QEMU's global `-snapshot` covers `-drive`-created
+        # backends and not `-blockdev` nodes, which is what these three are
+        # below, so a storage row writes persistent state - a partition table,
+        # a format - that every later group and every later run inherited, and
+        # a row was then measuring a disk a previous row had written (the
+        # 2026-09-17 audit's D3).  [IO.File]::Create truncates, so this is a
+        # fresh sparse 64 MB file each time.
         $scratchDrive = Join-Path $OutDir ("matrix-{0}-scratch.img" -f $tag)
-        if (-not (Test-Path -LiteralPath $scratchDrive)) {
-            $fs = [IO.File]::Create($scratchDrive); $fs.SetLength(64MB); $fs.Close()
-        }
+        $fs = [IO.File]::Create($scratchDrive); $fs.SetLength(64MB); $fs.Close()
         $scratchDrive2 = Join-Path $OutDir ("matrix-{0}-scratch2.img" -f $tag)
-        if (-not (Test-Path -LiteralPath $scratchDrive2)) {
-            $fs = [IO.File]::Create($scratchDrive2); $fs.SetLength(64MB); $fs.Close()
-        }
+        $fs = [IO.File]::Create($scratchDrive2); $fs.SetLength(64MB); $fs.Close()
         # A THIRD SCRATCH DISK, from when the backends were `-drive if=none`
         # and QEMU deleted one with the device that held it: once `usb-bot/fs`
         # had run and been torn down the id was gone, and `usb-uas/fs` died on
@@ -729,9 +771,7 @@ foreach ($tgt in $targetsToRun) {
         # post-release run's second leg can reference the same node; one disk
         # per consumer is kept so the rows stay independent of each other.
         $scratchDrive3 = Join-Path $OutDir ("matrix-{0}-scratch3.img" -f $tag)
-        if (-not (Test-Path -LiteralPath $scratchDrive3)) {
-            $fs = [IO.File]::Create($scratchDrive3); $fs.SetLength(64MB); $fs.Close()
-        }
+        $fs = [IO.File]::Create($scratchDrive3); $fs.SetLength(64MB); $fs.Close()
 
         $args = @(
             "-name", ("xhci98 device matrix - {0} {1}" -f $tgt.Id, $grp.Name),
@@ -875,12 +915,15 @@ foreach ($tgt in $targetsToRun) {
             $sw = [Diagnostics.Stopwatch]::StartNew()
             $ident = $null
             while ($sw.Elapsed.TotalSeconds -lt $tgt.BootSeconds) {
-                $ident = Find-ExtensionIdentity -DebugconLog $dbgLog
+                $ident = Find-ExtensionIdentity -DebugconLog $dbgLog -Arch (Get-TargetArch -Target $tgt)
                 if ($null -ne $ident.Va) { break }
                 Start-Sleep -Seconds 3
             }
             if ($null -eq $ident -or $null -eq $ident.Va) {
-                throw ("no `cb ... a=<VA>` line in {0} after {1} s. Either the guest did not boot, or the driver did not load, or it is not the QEMU build - since task 13-L.1 the port-0xE9 trace exists only in that flavour, so a `debug` guest produces this exact silence. Build it with: scripts\build-driver.cmd qemu, then scripts\package\make-package.ps1 -Flavor qemu, then prepare-image.ps1 -Xfer." -f $dbgLog, $tgt.BootSeconds)
+                # The leaf name, not the absolute path: this reading reaches
+                # the diffable report body, where an absolute path is a
+                # per-host difference (the 2026-09-17 audit's D10).
+                throw ("no `cb ... a=<VA>` line in {0} after {1} s. Either the guest did not boot, or the driver did not load, or it is not the QEMU build - since task 13-L.1 the port-0xE9 trace exists only in that flavour, so a `debug` guest produces this exact silence. Build it with: scripts\build-driver.cmd qemu, then scripts\package\make-package.ps1 -Flavor qemu, then prepare-image.ps1 -Xfer." -f (Split-Path -Leaf $dbgLog), $tgt.BootSeconds)
             }
             Write-Host ("driver up: extension at 0x{0}, MiniPortExtensionSize={1}" -f $ident.Va, $ident.Size)
 
@@ -937,8 +980,9 @@ foreach ($tgt in $targetsToRun) {
                 } else {
                     $shot = Save-GuestScreenshot -Port $tgt.Monitor `
                         -Path (Join-Path $OutDir ("matrix-{0}-notready.ppm" -f $tag))
+                    $shotName = if ($null -ne $shot) { Split-Path -Leaf $shot } else { "none was taken" }
                     throw ("no function driver opened an endpoint on the keep-alive within {0} s. The device WAS enumerated by this driver, so this is the guest's PnP stack, not the miniport - on Windows 98 it is almost certainly the modal Add New Hardware Wizard, which blocks the bind until someone clicks it. Install the device class into the image once (with Snapshot = `$false) and re-run. Screenshot: {1}" -f `
-                        $readySeconds, $shot)
+                        $readySeconds, $shotName)
                 }
             }
 
@@ -1004,6 +1048,10 @@ foreach ($tgt in $targetsToRun) {
                 # the row, are Invoke-RowLegs in lib\fresh.ps1, which the
                 # self-test drives with stand-ins; the three blocks below are
                 # what this runner does on each leg.
+                # The kind of the leg error that ended the row, kept at script
+                # scope because the callbacks run in their own scope; read by
+                # the wedge waiver below.
+                $script:rowErrorKind = ""
                 $legRun = Invoke-RowLegs -RowName $row.Name -LegCount $(if ($PostRelease) { 2 } else { 1 }) -RunLeg {
                     param($Leg, $LegName)
                     if ($Leg -eq 2) {
@@ -1025,6 +1073,9 @@ foreach ($tgt in $targetsToRun) {
                     if ($null -ne $shot) { Write-Host ("  screenshot: {0}" -f $shot) }
                     Add-Result -TargetId $tgt.Id -Row $LegName -Outcome "ERROR" -Expectation "(row did not complete)" -Reading $LegResult.Error
                     Write-Host ("  ERROR: {0}" -f $LegResult.Error)
+                    if ($null -ne $LegResult -and $null -ne $LegResult.PSObject.Properties['ErrorKind']) {
+                        $script:rowErrorKind = [string]$LegResult.ErrorKind
+                    }
                 } -JudgeLeg {
                     param($Leg, $LegName, $LegResult)
                     $delta = Get-CounterDelta -Before $LegResult.Before -After $LegResult.After
@@ -1093,7 +1144,16 @@ foreach ($tgt in $targetsToRun) {
                     if ($row.ContainsKey('MayWedgeGuest')) {
                         $rowWedgeDeclared = Test-TargetInList -List $row.MayWedgeGuest -Target $tgt
                     }
-                    if (Test-RowCountsAgainst -Outcome $rowOutcome -NoDriverExpected ($null -ne $noDriverWhy) -WedgeDeclared $rowWedgeDeclared) {
+                    # ...and waived only when what happened IS a wedge (the
+                    # 2026-09-17 audit's D1).  A declared row whose ERROR is
+                    # something else is printed as such, so the diff shows
+                    # the declaration not applying, as an ExpectNoDriver entry
+                    # that did not apply is printed above.
+                    $rowWedgeShape = ($rowOutcome -eq "ERROR" -and $script:rowErrorKind -eq "wedge")
+                    if ($rowOutcome -eq "ERROR" -and $rowWedgeDeclared -and -not $rowWedgeShape) {
+                        Add-Result -TargetId $tgt.Id -Row $row.Name -Outcome "ERROR" -Expectation "(MayWedgeGuest entry did not apply)" -Reading "the row's ERROR is not a wedge - the guest was not found gone or stopped - so the declaration waives nothing and the row counts against the verdict"
+                    }
+                    if (Test-RowCountsAgainst -Outcome $rowOutcome -NoDriverExpected ($null -ne $noDriverWhy) -WedgeDeclared $rowWedgeDeclared -WedgeShape $rowWedgeShape) {
                         $script:tgtTally.Against++
                     }
                 }
@@ -1138,20 +1198,48 @@ foreach ($tgt in $targetsToRun) {
             if ($rowInFlight -ne "" -and $null -ne $rowObj -and $rowObj.ContainsKey('MayWedgeGuest')) {
                 $wedgeDeclared = Test-TargetInList -List $rowObj.MayWedgeGuest -Target $tgt
             }
+            # AND WHETHER WHAT HAPPENED IS A WEDGE, which the declaration alone
+            # cannot say (the 2026-09-17 audit's D1): the monitor gone with the
+            # row in flight is that shape, and so is a guest the liveness
+            # probe finds stopped; a guest still executing behind a thrown
+            # counter read or monitor timeout is not, and the declaration then
+            # waives nothing.
+            $wedgeShape = $false
+            $shapeText = ""
+            if ($rowInFlight -ne "") {
+                if (-not $listening) {
+                    $wedgeShape = $true
+                    $shapeText = "the monitor is gone with the row in flight, which is the wedge shape"
+                } else {
+                    try {
+                        $probe = Test-GuestAlive -Port $tgt.Monitor -Process $proc
+                        $wedgeShape = Test-WedgeShape -LivenessVerdict $probe.Verdict
+                        $shapeText = if ($wedgeShape) {
+                            ("the guest is in the wedge shape [{0}]: {1}" -f $probe.Verdict, $probe.Why)
+                        } else {
+                            ("the guest is NOT in the wedge shape [{0}]: {1}" -f $probe.Verdict, $probe.Why)
+                        }
+                    } catch {
+                        $shapeText = ("whether the guest is in the wedge shape could not be established: {0}" -f $_.Exception.Message)
+                    }
+                }
+            }
             $declared = if ($rowInFlight -eq "") {
                 "no row was in flight, so this is a group-level failure rather than a device's"
+            } elseif ($wedgeDeclared -and $wedgeShape) {
+                "the matrix declares this row may wedge this target, and " + $shapeText
             } elseif ($wedgeDeclared) {
-                "the matrix declares this row may wedge this target"
+                "the matrix declares this row may wedge this target, but " + $shapeText + ", so the declaration waives nothing"
             } else {
-                "NOTHING in this matrix declares this row may wedge this target"
+                "NOTHING in this matrix declares this row may wedge this target; " + $shapeText
             }
             # In the post-release run a declared wedge is the composite row's
             # pinned reading on Windows 98 (design record 09 section 4.1) and
-            # does not count against the target; an undeclared one does.  The
-            # outcome word stays ERROR either way, and the line is in the
-            # report, so a run that does NOT reproduce the wedge changes the
-            # diff.
-            if ($PostRelease -and (Test-RowCountsAgainst -Outcome "ERROR" -WedgeDeclared $wedgeDeclared)) {
+            # does not count against the target; an undeclared one does, and
+            # so does any other failure on the declared row.  The outcome word
+            # stays ERROR either way, and the line is in the report, so a run
+            # that does NOT reproduce the wedge changes the diff.
+            if ($PostRelease -and (Test-RowCountsAgainst -Outcome "ERROR" -WedgeDeclared $wedgeDeclared -WedgeShape $wedgeShape)) {
                 $script:tgtTally.Against++
             }
 
@@ -1222,15 +1310,24 @@ foreach ($tgt in $targetsToRun) {
         # the preparation carried into the guest.  Absent, it says so; the stamp
         # and the identity line are the witnesses that a driver is installed,
         # and this line is only what it was built from.
-        $pkgSys = Join-Path $repo "out\pkg-qemu\xhci98.sys"
+        $pkgSys = Join-Path (Get-QemuPackageDir -Repo $repo -Arch (Get-TargetArch -Target $tgt)) "xhci98.sys"
         $driverLine = if (Test-Path -LiteralPath $pkgSys) {
             $item = Get-Item -LiteralPath $pkgSys
             ("{0} qemu, {1} B, sha256 {2}" -f $version, $item.Length, (Get-FileHash -LiteralPath $pkgSys -Algorithm SHA256).Hash.Substring(0, 16).ToLowerInvariant())
         } else {
-            ("{0} qemu, out\pkg-qemu\xhci98.sys not present on this host" -f $version)
+            ("{0} qemu, {1} not present on this host" -f $version, $pkgSys)
         }
         $imageLine = ("{0}, stamp {1}, from {2} {3}" -f (Join-Path $cfg.VmDir $tgt.Image), $imageStampByTarget[$tgt.Id], $tgt.CloneFrom.Image, $tgt.CloneFrom.Snapshot)
-        $accel = if ($tgt.Accel -ne "") { $tgt.Accel } else { "tcg" }
+        # Same guard as the launch site, and here it is not about a dangling
+        # switch but about the report: `New-PostReleaseHeader -Accel` is a
+        # mandatory string, so a target with no `Accel` key reached it with
+        # $null and THREW - after the whole run, before the report was written,
+        # losing everything the run measured (the 2026-09-16 audit's D2).
+        $accel = if ($tgt.ContainsKey('Accel') -and $null -ne $tgt.Accel -and "$($tgt.Accel)" -ne "") {
+            "$($tgt.Accel)"
+        } else {
+            "tcg"
+        }
         $hdr = New-PostReleaseHeader -TargetId $tgt.Id -Version $version -DriverLine $driverLine -ImageLine $imageLine `
                    -QemuVersion $qemuVer -Accel $accel -Sizeof $table.Sizeof -Counters $table.Offsets.Count `
                    -Started $tgtStarted -Elapsed $tgtClock.Elapsed -Verdict $verdict -Rows $script:tgtTally.Rows `
@@ -1271,7 +1368,9 @@ $header = @()
 $header += "# xhci98 Phase 10 - automated VM device matrix"
 $header += ("# qemu   : {0}" -f $qemuVer)
 $header += ("# host   : {0}" -f $env:COMPUTERNAME)
-$header += ("# offsets: SIZEOF {0}, {1} counters" -f $table.Sizeof, $table.Offsets.Count)
+foreach ($a in ($tables.Keys | Sort-Object)) {
+    $header += ("# offsets: {0} SIZEOF {1}, {2} counters" -f $a, $tables[$a].Sizeof, $tables[$a].Offsets.Count)
+}
 $header += ("# matrix : {0} rows" -f $rowCount)
 $header += "#"
 $header += "# Outcomes: PASS FAIL NODRIVER INERT ERROR, plus EXCLUDED for a row not run on a target - see docs/contributing/design/06-device-matrix-verdict.md"
@@ -1303,5 +1402,27 @@ Write-Host ("report: {0}" -f $reportPath)
 $bad = 0
 foreach ($k in $rowSummary.Keys) { if ($k -match 'FAIL|ERROR') { $bad += $rowSummary[$k] } }
 if ($bad -gt 0) { exit 1 }
+
+# AND A RUN THAT REACHED NO ROW DID NOT PASS EITHER, WHICH IS THE SAME RULE THE
+# PER-TARGET VERDICT MAKES.
+#
+# The "no rows at all" guard above cannot fire when every row was EXCLUDED: an
+# excluded row is reported rather than skipped silently, so it adds a report
+# line and `$report.Count` is nonzero.  The F11 fix that closed this - and the
+# reasoning behind `Get-TargetVerdict`, which is where it lives - was applied
+# only on the -PostRelease path, while design record 06 and the README state
+# the rule generally (the 2026-09-16 audit's D1).
+#
+# Not reachable with the tracked `matrix.psd1`, where no target excludes every
+# row.  It is a property of the runner rather than of the configuration, and a
+# configuration is a thing an operator edits.
+$reached = 0
+foreach ($k in $rowSummary.Keys) { if ($k -ne "EXCLUDED") { $reached += $rowSummary[$k] } }
+if ($reached -le 0) {
+    Write-Host ""
+    Write-Host "*** every row this run evaluated was EXCLUDED, so nothing was measured."
+    Write-Host "    That is a failure, not an empty pass - see docs/contributing/design/06-device-matrix-verdict.md."
+    exit 2
+}
 exit 0
 

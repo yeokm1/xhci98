@@ -68,7 +68,21 @@ says so out loud.  Keep a label a single literal; if it will not fit, shorten
 the label rather than wrapping it.
 
 .PARAMETER OutFile
-Where to write the table. Defaults to scripts\vm-matrix\offsets.txt.
+Where to write the table. Defaults to scripts\vm-matrix\offsets.txt, or
+scripts\vm-matrix\offsets-amd64.txt with -Arch amd64.
+
+.PARAMETER Arch
+Which build's layout to measure. x86 (the default) compiles with MSVC 6.0,
+the compiler the 32-bit driver is built with. amd64 compiles with WDK 7.1's
+amd64 cross compiler - the driver's own amd64 compiler, and the one
+test\run-host-tests.cmd's amd64 legs use - and runs the result on this host.
+The two layouts differ (every pointer-sized member moves), so a post-release
+target running the amd64 driver needs its own table: its SIZEOF is what
+Assert-OffsetsFresh and the image stamp check against.
+
+.PARAMETER Wdk71
+Root of WDK 7.1, for -Arch amd64. Defaults to $env:WDK71, then the repo's
+tools\WinDDK71.
 
 .PARAMETER AllowRemovals
 Permit the new table to lack fields the existing one had. Off by default: see
@@ -82,20 +96,36 @@ tools\MSVC600.
 [CmdletBinding()]
 param(
     [string]$OutFile = "",
+    [ValidateSet('x86', 'amd64')][string]$Arch = 'x86',
     [string]$Msvc6 = "",
+    [string]$Wdk71 = "",
     [switch]$AllowRemovals,
     [switch]$Quiet
 )
 
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-if ($OutFile -eq "") { $OutFile = Join-Path $PSScriptRoot "offsets.txt" }
+if ($OutFile -eq "") {
+    $OutFile = Join-Path $PSScriptRoot $(if ($Arch -eq 'amd64') { "offsets-amd64.txt" } else { "offsets.txt" })
+}
 
-if ($Msvc6 -eq "") { $Msvc6 = $env:MSVC6 }
-if ([string]::IsNullOrWhiteSpace($Msvc6)) { $Msvc6 = Join-Path $repo "tools\MSVC600" }
-$cl = Join-Path $Msvc6 "VC98\BIN\cl.exe"
-if (-not (Test-Path -LiteralPath $cl)) {
-    throw ("missing {0} - set -Msvc6 or `$env:MSVC6 to the MSVC 6.0 root." -f $cl)
+if ($Arch -eq 'amd64') {
+    if ($Wdk71 -eq "") { $Wdk71 = $env:WDK71 }
+    if ([string]::IsNullOrWhiteSpace($Wdk71)) { $Wdk71 = Join-Path $repo "tools\WinDDK71" }
+    $cl = Join-Path $Wdk71 "bin\x86\amd64\cl.exe"
+    if (-not (Test-Path -LiteralPath $cl)) {
+        throw ("missing {0} - set -Wdk71 or `$env:WDK71 to the WDK 7.1 root." -f $cl)
+    }
+    if (-not [Environment]::Is64BitOperatingSystem) {
+        throw "-Arch amd64 runs the generated program, and this host cannot execute an amd64 binary."
+    }
+} else {
+    if ($Msvc6 -eq "") { $Msvc6 = $env:MSVC6 }
+    if ([string]::IsNullOrWhiteSpace($Msvc6)) { $Msvc6 = Join-Path $repo "tools\MSVC600" }
+    $cl = Join-Path $Msvc6 "VC98\BIN\cl.exe"
+    if (-not (Test-Path -LiteralPath $cl)) {
+        throw ("missing {0} - set -Msvc6 or `$env:MSVC6 to the MSVC 6.0 root." -f $cl)
+    }
 }
 
 # --------------------------------------------------- derive the field list ---
@@ -184,9 +214,17 @@ try {
     # where MSPDB60.DLL lives.  Without it cl.exe exits 0xC0000135 having
     # printed NOTHING AT ALL: no diagnostic, no .obj, no .exe.  Paid for on
     # in batch 8-A and recorded in scripts\local\regen-offsets.cmd.
-    $env:PATH = ("{0}\VC98\BIN;{0}\Common\MSDev98\Bin;{1}" -f $Msvc6, $env:PATH)
-    $env:INCLUDE = ("{0}\VC98\INCLUDE" -f $Msvc6)
-    $env:LIB = ("{0}\VC98\LIB" -f $Msvc6)
+    if ($Arch -eq 'amd64') {
+        # The same environment test\run-host-tests.cmd gives its amd64 legs:
+        # the WDK's own CRT headers and import libraries, nothing outside tools\.
+        $env:PATH = ("{0}\bin\x86\amd64;{0}\bin\x86;{1}" -f $Wdk71, $env:PATH)
+        $env:INCLUDE = ("{0}\inc\crt;{0}\inc\api" -f $Wdk71)
+        $env:LIB = ("{0}\lib\Crt\amd64;{0}\lib\wnet\amd64" -f $Wdk71)
+    } else {
+        $env:PATH = ("{0}\VC98\BIN;{0}\Common\MSDev98\Bin;{1}" -f $Msvc6, $env:PATH)
+        $env:INCLUDE = ("{0}\VC98\INCLUDE" -f $Msvc6)
+        $env:LIB = ("{0}\VC98\LIB" -f $Msvc6)
+    }
 
     $exe = Join-Path $work "offsets.exe"
     $obj = Join-Path $work "offsets.obj"
@@ -212,14 +250,22 @@ try {
     # command starts, so a generator that then crashes leaves a half-written
     # table behind while this script reports a failure - destroying the last
     # trustworthy reading on the failure path.
+    # Smart App Control blocks a freshly linked unsigned exe on some launches
+    # with a Device Guard message (test\run-host-tests.cmd, lessons.md); that
+    # one message is retried, anything else is the generator's own failure.
     $saved = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
-        $raw = & $exe 2>&1
+        for ($attempt = 1; $attempt -le 5; $attempt++) {
+            $raw = & $exe 2>&1
+            if ($LASTEXITCODE -eq 0) { break }
+            if ((($raw | Out-String) -notmatch 'Device Guard|blocked by')) { break }
+            Start-Sleep -Seconds 1
+        }
     } finally {
         $ErrorActionPreference = $saved
     }
-    if ($LASTEXITCODE -ne 0) { throw ("the generator exited {0}" -f $LASTEXITCODE) }
+    if ($LASTEXITCODE -ne 0) { throw ("the generator exited {0}: {1}" -f $LASTEXITCODE, ($raw | Out-String)) }
     $lines = @($raw | ForEach-Object { $_.ToString().TrimEnd() } | Where-Object { $_ -ne "" })
     $sizeofLine = $lines | Where-Object { $_ -like "SIZEOF *" }
     if (-not $sizeofLine) {

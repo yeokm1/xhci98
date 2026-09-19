@@ -121,7 +121,7 @@ param(
     # guest needs beside the driver and that the package must never carry -
     # the first use is SweetLow's USB 2.0 stack under test (tools\sweetlow-
     # extracted, issue #1), which a fresh 2a guest installs by right-clicking
-    # its USB2.INF. Third-party files stay out of out\pkg-qemu this way.
+    # its USB2.INF. Third-party files stay out of the qemu package this way.
     [string]$XferAdd = "",
     # Pin the device to a specific ROOT port - see the comment at the attach.
     [int]$AtPort = 0,
@@ -155,14 +155,17 @@ if ($null -eq $tgt) { throw ("no target '{0}' in {1}" -f $Target, $Config) }
 # WHICH OPERATING SYSTEM, AND WHETHER THIS IS A FRESH TARGET.  The Windows 98
 # branches below (the CD, the drivers directory, the wizard advice) used to key
 # on `-Target 2a` literally.  A fresh target is the same OS under another id
-# and inherits them through `Like`; the SMP guest is refused here as it always
-# was, because a prep pass is a uniprocessor affair and 2d has never had one.
+# and inherits them through `Like`; the XP x64 and Windows 7 targets added for
+# task 22.9 name their `Family` outright (lib\fresh.ps1, Get-TargetFamily).
+# The SMP stress guest 2d has no family and is refused here as it always was.
+# The new two are multiprocessor installs, so a prep boot passes the target's
+# `Smp` and `Accel` exactly as a run does.
 $isFresh = Test-FreshTarget -Target $tgt
-$family  = if ($tgt.ContainsKey('Like') -and $tgt.Like) { [string]$tgt.Like } else { [string]$tgt.Id }
-if ($family -notin @('2a', '2b')) {
-    throw ("target '{0}' is neither 2a nor 2b nor a fresh target that names one of them in `Like`; this script prepares those and nothing else" -f $Target)
+try { $family = Get-TargetFamily -Target $tgt } catch {
+    throw ("{0}; this script prepares the Windows 98, Windows 2000, XP x64 and Windows 7 targets and nothing else" -f $_.Exception.Message)
 }
-$isWin98 = ($family -eq '2a')
+$arch    = Get-TargetArch -Target $tgt
+$isWin98 = ($family -eq 'win98')
 if (($Clone -or $Stamp) -and -not $isFresh) {
     throw ("-Clone and -Stamp are for a fresh target (one with `CloneFrom` in the config); '{0}' is not one, and Phase 10's images are never cloned over or stamped" -f $Target)
 }
@@ -243,7 +246,7 @@ $specs['mouse'] = $specs['mouse-hs']
 # in run-matrix.ps1), so the prep pass presents what the run will present.
 $children = @{
     'bot' = 'scsi-hd,id=prep_bot_lun,bus=prep_bot.0,drive=prepdrv2'
-    'uas' = 'scsi-hd,id=prep_uas_lun,bus=prep_uas.0,drive=prepdrv2,scsi-id=0,lun=0'
+    'uas' = 'scsi-hd,id=prep_uas_lun,bus=prep_uas.0,drive=prepdrv3,scsi-id=0,lun=0'
 }
 
 # The QEMU id one of these rows will create, so `-Detach` can be given the same
@@ -330,8 +333,8 @@ if ($Stamp) {
         $pathLines = @(Get-Content -LiteralPath $pathsFile)
         if ($pathLines.Count -ge 2) { $bootedImage = [string]$pathLines[1] }
     }
-    $ident = Find-ExtensionIdentity -DebugconLog $dbg
-    $table = Import-CounterTable
+    $ident = Find-ExtensionIdentity -DebugconLog $dbg -Arch $arch
+    $table = Import-CounterTable -Arch $arch
     $stampProblems = @(Get-StampProblems -Port $port -PortFree ([bool](Test-MonitorPortFree -Port $port)) -Image $image `
                            -ImageExists ([bool](Test-Path -LiteralPath $image)) -BootedImage $bootedImage `
                            -DebugconLog $dbg -IdentSize $ident.Size -TableSizeof $table.Sizeof)
@@ -397,10 +400,12 @@ if ($Boot) {
     if ($syncedTree -and $WorkDir -eq "") {
         Write-Host ""
         Write-Host "*** WARNING: this image is inside a OneDrive-synced tree, and this is the"
-        Write-Host "    one boot that WRITES to it. A sync client touching the file under a"
-        Write-Host "    running QEMU blocks its main loop and the guest hangs with the monitor"
-        Write-Host "    dead - measured. Consider -WorkDir <local-path> to run the"
-        Write-Host "    pass on a local disk and copy the result back, or pause syncing first."
+        Write-Host "    one boot that WRITES to it. Nothing here has been measured to go wrong"
+        Write-Host "    because of that - the prep-boot hangs recorded below were traced to the"
+        Write-Host "    device being installed, not to the storage, and left 0 corruptions - so"
+        Write-Host "    this is a precaution rather than a known failure. Consider -WorkDir"
+        Write-Host "    <local-path> to run the pass on a local disk and copy the result back,"
+        Write-Host "    or pause syncing first."
         Write-Host ""
     }
 
@@ -468,10 +473,15 @@ if ($Boot) {
 
     $scratch = Join-Path $outDir ("prep-{0}-scratch.img" -f $Target)
     if (-not (Test-Path $scratch)) { $fs = [IO.File]::Create($scratch); $fs.SetLength(64MB); $fs.Close() }
-    # A second scratch for the SCSI children ($children): a drive node can back
-    # exactly one device at a time, and `storage` may still be on the first.
+    # A scratch per consumer: a block node can back exactly one device at a
+    # time, so `storage`, `bot` and `uas` need one each.  `bot` and `uas` shared
+    # `prepdrv2` until the 2026-09-16 audit's D3, which made `-Attach bot` then
+    # `-Attach uas` refuse loudly - and README trap 15 says "a second scratch
+    # drive" as though two were enough.
     $scratch2 = Join-Path $outDir ("prep-{0}-scratch2.img" -f $Target)
     if (-not (Test-Path $scratch2)) { $fs = [IO.File]::Create($scratch2); $fs.SetLength(64MB); $fs.Close() }
+    $scratch3 = Join-Path $outDir ("prep-{0}-scratch3.img" -f $Target)
+    if (-not (Test-Path $scratch3)) { $fs = [IO.File]::Create($scratch3); $fs.SetLength(64MB); $fs.Close() }
     if (Test-Path -LiteralPath $dbg) { Remove-Item -LiteralPath $dbg -Force }
     # Written where the DEFAULT OutDir is, so a later -Status finds it without
     # having to be told -WorkDir again.  The second line is the image this
@@ -516,7 +526,9 @@ if ($Boot) {
     if ($Xfer) {
         $xferDir = if ($WorkDir -ne "") { Join-Path $WorkDir "xfer" } else { Join-Path $vmDir "xfer-p10" }
         if (-not (Test-Path $xferDir)) { New-Item -ItemType Directory -Path $xferDir -Force | Out-Null }
-        $qemuSys = Join-Path $repo "out\pkg-qemu\xhci98.sys"
+        $pkgDir = Get-QemuPackageDir -Repo $repo -Arch $arch
+        $pkgProblem = Get-QemuPackageProblem -Repo $repo -Arch $arch
+        $qemuSys = Join-Path $pkgDir "xhci98.sys"
         $staged = Join-Path $xferDir "XHCI98.SYS"
         # A FRESH GUEST GETS THE WHOLE PACKAGE, NOT A LOOSE .SYS.  A Phase 10
         # image already has the driver installed and only needs the binary
@@ -527,16 +539,13 @@ if ($Boot) {
         # package directory is copied as make-package.ps1 laid it
         # out, and the guest is pointed at the directory, never at a file.
         if ($isFresh -or $XferPackage) {
-            $pkgDir = Join-Path $repo "out\pkg-qemu"
-            if (-not (Test-Path -LiteralPath (Join-Path $pkgDir "xhci98.inf"))) {
-                throw ("no qemu package at {0} (xhci98.inf missing). Build it with: scripts\build-driver.cmd qemu, then scripts\package\make-package.ps1 -Flavor qemu." -f $pkgDir)
-            }
+            if ($null -ne $pkgProblem) { throw $pkgProblem }
             Get-ChildItem -LiteralPath $xferDir -Force | Remove-Item -Recurse -Force
             Copy-Item -Path (Join-Path $pkgDir "*") -Destination $xferDir -Recurse -Force
             $staged = Join-Path $xferDir "xhci98.sys"
             Write-Host ("transfer drive carries the whole qemu package from {0}:" -f $pkgDir)
             foreach ($f in (Get-ChildItem -LiteralPath $xferDir -File)) { Write-Host ("  {0,-16} {1,9:N0} B" -f $f.Name, $f.Length) }
-        } elseif (Test-Path $qemuSys) {
+        } elseif ($null -eq $pkgProblem) {
             Copy-Item -LiteralPath $qemuSys -Destination $staged -Force
         } else {
             # **The stale file is DELETED, not left behind.** This directory
@@ -548,7 +557,7 @@ if ($Boot) {
             # it makes the guest's copy step fail loudly instead.
             if (Test-Path $staged) { Remove-Item -LiteralPath $staged -Force }
             $staged = $null
-            Write-Warning ("no qemu build at {0} - build it with: scripts\build-driver.cmd qemu, then scripts\package\make-package.ps1 -Flavor qemu. Any XHCI98.SYS left on the transfer drive by an earlier run has been removed, so the drive carries no driver." -f $qemuSys)
+            Write-Warning ("{0} Any XHCI98.SYS left on the transfer drive by an earlier run has been removed, so the drive carries no driver." -f $pkgProblem)
         }
         # The extra directory rides in a subdirectory so it can never shadow a
         # package file, and the 8.3 name is what the guest will see it as.
@@ -579,8 +588,22 @@ if ($Boot) {
         # first sweep: `Port 4.1` for the fifth attach.  p3=0 keeps every port
         # USB 2.0, since a Full Speed device cannot attach to a SuperSpeed one.
         "-device", "qemu-xhci,id=xhci,p2=8,p3=0",
-        "-drive", ("if=none,id=prepdrv,file={0},format=raw" -f $scratch),
-        "-drive", ("if=none,id=prepdrv2,file={0},format=raw" -f $scratch2),
+        # THE SCRATCH DISKS ARE -blockdev NODES, NOT -drive if=none, for the
+        # reason run-matrix.ps1 gives at its own declaration: QEMU auto-deletes
+        # a `-drive if=none` backend when the device holding it is unplugged, so
+        # an Attach / Detach / Attach of the same row answers
+        # `Property 'usb-storage.drive' can't find value 'prepdrv'` the second
+        # time.  A node name declared with -blockdev is accepted by `drive=` and
+        # survives the unplug.  The run path moved to -blockdev at repo audit
+        # S-1; the prep path did not, and it drives exactly the same devices
+        # through exactly the same monitor commands (the 2026-09-16 audit's D3).
+        #
+        # One node per consumer, because a node may back exactly one device at a
+        # time: `storage`, and then the SCSI children of `bot` and `uas`, which
+        # shared prepdrv2 and therefore could not both be presented.
+        "-blockdev", ("driver=raw,node-name=prepdrv,file.driver=file,file.filename={0}" -f $scratch),
+        "-blockdev", ("driver=raw,node-name=prepdrv2,file.driver=file,file.filename={0}" -f $scratch2),
+        "-blockdev", ("driver=raw,node-name=prepdrv3,file.driver=file,file.filename={0}" -f $scratch3),
         # The chardevs are declared up front - they create no PCI device, so
         # unlike `-netdev` they cannot disturb the guest's hardware layout.
         # FILE, NOT NULL: a `null` chardev is never open, and `usb-serial` and
@@ -661,6 +684,8 @@ if ($Boot) {
     if ($null -ne $xferDir) {
         $args += @("-drive", ("file=fat:{0},format=raw,if=ide,index=1,snapshot=on" -f $xferDir))
     }
+    if ($tgt.ContainsKey('Accel') -and -not [string]::IsNullOrWhiteSpace($tgt.Accel)) { $args += @("-accel", [string]$tgt.Accel) }
+    if ($tgt.ContainsKey('Smp') -and [int]$tgt.Smp -gt 1) { $args += @("-smp", ([int]$tgt.Smp).ToString()) }
     # NOTE: no -snapshot.  That is the entire point of this script.
     Assert-SingleTraceArg -QemuArgs $args
 
@@ -679,12 +704,20 @@ if ($Boot) {
             Write-Host "  Device Manager -> the unclaimed xHCI controller -> Properties -> Driver ->"
             Write-Host "  Update Driver -> Specify a location -> <xfer>:\   (the Windows CD is attached)"
             Write-Host "  then RESTART the guest when asked, and confirm with -Status after the restart."
+        } elseif ($family -eq 'winxp64') {
+            Write-Host "  Found New Hardware wizard (or Device Manager -> Update Driver) -> Install from a"
+            Write-Host "  list or specific location -> include <xfer>:\ ; at the unsigned-driver prompt"
+            Write-Host "  take Continue Anyway (Alt+C; the focused button is STOP Installation), then -Status."
+        } elseif ($family -eq 'win7') {
+            Write-Host "  Device Manager -> the controller -> Update Driver Software -> Browse my computer ->"
+            Write-Host "  <xfer>:\ ; at 'Windows can't verify the publisher' take Install this driver"
+            Write-Host "  software anyway, then -Status."
         } else {
             Write-Host "  Device Manager -> the controller -> Properties -> Driver -> Update Driver ->"
             Write-Host "  Have Disk -> <xfer>:\   then confirm with -Status."
         }
     } elseif ($null -ne $staged) {
-        $drivers = if ($isWin98) { "C:\WINDOWS\SYSTEM32\DRIVERS" } else { "C:\WINNT\SYSTEM32\DRIVERS" }
+        $drivers = if ($family -eq 'win2k') { "C:\WINNT\SYSTEM32\DRIVERS" } else { "C:\WINDOWS\SYSTEM32\DRIVERS" }
         Write-Host ""
         Write-Host ("transfer drive carries the QEMU build as XHCI98.SYS ({0:N0} bytes)" -f (Get-Item $staged).Length)
         Write-Host ("  in the guest, if you want to update the driver:")
@@ -822,6 +855,10 @@ if ($Boot) {
     Write-Host "  2. SHUT WINDOWS DOWN FROM THE START MENU. Do not kill the window."
     Write-Host "     Windows 98 writes SYSTEM.DAT lazily: a guest that is killed loses the"
     Write-Host "     driver database update and the whole pass with it. Measured."
+    if ($family -ne 'win98') {
+        Write-Host "     On the NT targets QEMU stays up after Windows has shut down (-no-shutdown):"
+        Write-Host "     type quit at the monitor then, because -Stamp refuses while it listens."
+    }
     if ($WorkDir -ne "") {
         Write-Host ("  3. then copy the prepared image back, which also records it for -Stamp:")
         Write-Host ("       powershell -File scripts\vm-matrix\prepare-image.ps1 -Target {0} -Config `"{1}`" -CopyBack" -f $Target, (Resolve-RepoPath $Config))
@@ -930,12 +967,12 @@ if ($Shot) {
 }
 
 if ($Status) {
-    $ident = Find-ExtensionIdentity -DebugconLog $dbg
+    $ident = Find-ExtensionIdentity -DebugconLog $dbg -Arch $arch
     if ($null -eq $ident.Va) {
         Write-Host "the driver has not written to the debug console yet (still booting, or not the qemu build - since task 13-L.1 no other flavour writes to port 0xE9)."
         exit 0
     }
-    $table = Import-CounterTable
+    $table = Import-CounterTable -Arch $arch
     Write-Host ("extension 0x{0}, MiniPortExtensionSize={1}" -f $ident.Va, $ident.Size)
     if ($ident.Size -ne $table.Sizeof) {
         Write-Host ("*** the offset table says SIZEOF {0} - counters below would be WRONG. Regenerate or reinstall." -f $table.Sizeof)

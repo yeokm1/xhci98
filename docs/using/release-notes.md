@@ -1,7 +1,7 @@
 # xhci98 - Release Notes
 
-This file describes package version `1.0.2.0`
-(`DriverVer=09/07/2026,1.0.2.0`), the fourth release. Where this file and
+This file describes package version `1.1.0.0`
+(`DriverVer=09/18/2026,1.1.0.0`), the fifth release. Where this file and
 `docs/contributing/roadmap.md`, `docs/contributing/build-and-test.md` or
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
@@ -14,7 +14,17 @@ copy to fix.
 Windows 2000 SP4, Windows ME and 32-bit Windows XP working USB on machines
 whose only USB controller is xHCI. One binary serves all four, and the INF
 carries both install paths (Windows ME reads the Windows 98 one, Windows XP
-the Windows 2000 one).
+the Windows 2000 one). Since `1.1.0.0` the same binary also serves 32-bit
+Windows Vista and Windows 7, through a third install path in the same INF.
+
+Since `1.1.0.0` the download also carries a **64-bit** driver, for Windows XP
+Professional x64, Windows Server 2003 x64, Windows Vista x64 and Windows 7
+x64. That one is a separate build and a separate pair of directories with an
+INF of its own; it is not the same file under another name, and the 32-bit
+driver will not install on a 64-bit Windows or the other way round. Picking
+the wrong one is harmless - Windows finds no driver in that directory and
+says so. **On Vista x64 and Windows 7 x64 it loads only while driver signature
+enforcement is disabled**; see below.
 
 It is a miniport for `usbport.sys`, not a whole USB stack. It plugs in
 underneath Microsoft's USB port driver the same way the in-box `usbehci.sys`
@@ -44,6 +54,38 @@ mouse, a mass-storage device and a composite audio device bound, and the
 disable, enable, remove and rescan sequence survived. It has never run on
 real hardware.
 
+Windows XP x64 stands there too, since `1.1.0.0`, and it is the thinnest
+record of the five: supported in virtual machines only, observed in one QEMU
+guest (XP Professional x64 SP2, 2026-09-09) on which the 64-bit package
+installed with the xHCI alone and no prompt, the driver started under that
+system's own USB stack, a HID mouse, a mass-storage device and a composite
+audio device bound, and the disable, enable, remove and rescan sequence
+survived. It has never run on real hardware. Windows Server 2003 x64 is the
+same operating system as Windows XP x64 and the same driver is meant for it,
+but no Server 2003 machine has been tried at all.
+
+Windows Vista and Windows 7 stand there too, since `1.1.0.0`, in both
+architectures: supported in virtual machines only, observed in four QEMU
+guests (Vista Business SP2 and Windows 7 Professional SP1, each 32-bit and
+64-bit, 2026-09-13) on which the package installed, the driver started under
+that system's own USB stack, a HID mouse, a mass-storage device and a
+composite audio device bound, and five disable and enable cycles, a remove
+and a rescan survived. One of them has since run on real hardware, once:
+32-bit Windows 7 on a ThinkPad E460 (2026-09-19), where the package
+installed, devices at a root port and behind USB 2.0 hubs worked, and **the
+first disable of the controller hung** (see "Known limitations"). These systems
+expect a newer interface from a USB host controller driver than Windows 2000
+and XP do, and the driver presents that interface on them and only on them.
+
+**On Windows Vista x64 and Windows 7 x64 driver signature enforcement must be
+disabled for the driver to load.** Those systems refuse to load a kernel-mode
+driver that is not signed, and this one is not. On any start where enforcement
+is in force, the driver does not load, the controller shows an error in Device
+Manager (Code 39, on the Vista x64 machine where that boot was looked at), and
+nothing plugged into it works inside Windows, a USB keyboard or mouse
+included. 32-bit Windows Vista and Windows 7 do not refuse unsigned drivers,
+and ask none of this.
+
 ## What this is not
 
 - It is not USB 3.0. SuperSpeed is out of scope and unreachable: the USB
@@ -57,7 +99,14 @@ real hardware.
   install on the one the qualifier reports USB 2.0 protocol ports for.
 - It is not signed. `xhci98.sys` carries no Authenticode signature. Windows 98
   SE does not check; Windows 2000 SP4 and Windows XP show an unsigned-driver
-  warning during install and then install it (on XP, choose Continue Anyway).
+  warning during install and then install it (on XP, choose Continue Anyway),
+  and Windows XP x64 installs it too, being the last 64-bit Windows that does
+  not require kernel-mode drivers to be signed. 32-bit Windows Vista and
+  Windows 7 install and load it too. Every 64-bit Windows
+  from Vista onward requires the signature before it loads a driver: on Vista
+  x64 and Windows 7 x64 this one loads only while driver signature
+  enforcement is disabled, as "What this is" describes,
+  and no 64-bit Windows after Windows 7 is supported.
 - On Windows 98 it is not standalone. Windows 98 has no `usbport.sys` of its
   own. **A USB 2.0 stack must be installed first**, NUSB (the one this
   project tests against) or SweetLow's; it is what places `usbport.sys` and
@@ -78,10 +127,10 @@ real hardware.
 
 | | |
 |---|---|
-| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000) and 32-bit Windows XP (SP3) in virtual machines only, see "What this is". |
-| USB stack | Windows 98: NUSB 3.3, installed before this driver (NUSB 3.6 ships the identical USB 2.0 stack and has been observed working, in a virtual machine only; so has the SweetLow stack that Windows 98 QuickInstall 1.0.1 and later bundle, which also removes the first known limitation below; see the README's installation steps). Windows ME: SweetLow's stack only; its own USB stack has no `usbport.sys`, and on it the driver installs and shows Code 2. Do not install NUSB on Windows ME, it is a Windows 98 SE package. Windows 2000: SP4's native stack, or the standalone USB 2.0 update KB319973. **Do not install NUSB on Windows 2000.** Windows XP: its own USB stack, nothing to install; NUSB is not for it either. |
+| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000), 32-bit Windows XP (SP3), Windows XP x64 / Server 2003 x64 (SP2), and Windows Vista (SP2) and Windows 7 (SP1) in both architectures, in virtual machines only (of these, only 32-bit Windows 7 has run on a real machine, once), see "What this is". Vista x64 and Windows 7 x64 load the driver only while driver signature enforcement is disabled. Nothing after Windows 7. |
+| USB stack | Windows 98: NUSB 3.3, installed before this driver (NUSB 3.6 ships the identical USB 2.0 stack and has been observed working, in a virtual machine only; so has the SweetLow stack that Windows 98 QuickInstall 1.0.1 and later bundle, which also removes the first known limitation below; see the README's installation steps). Windows ME: SweetLow's stack only; its own USB stack has no `usbport.sys`, and on it the driver installs and shows Code 2. Do not install NUSB on Windows ME, it is a Windows 98 SE package. Windows 2000: SP4's native stack, or the standalone USB 2.0 update KB319973. **Do not install NUSB on Windows 2000.** Windows XP, 32-bit or x64: its own USB stack, nothing to install; NUSB is not for it either. Windows Vista and Windows 7, either architecture: their own USB stack, nothing to install. |
 | Controller | An xHCI controller presenting PCI class code `0C0330`, with at least one USB 2.0 protocol port, a BAR0 mapped below 4 GB, and a legacy interrupt pin. Neither target has an MSI path, so a controller reporting `Interrupt Pin = 0` cannot be driven at all. |
-| Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk (`C:\WINDOWS\OPTIONS\CABS`). The install copies Windows' own `usbd.sys`, `usbhub.sys` and `usbui.dll` from it. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the hard disk; the virtual machine tried asked for nothing. Windows XP: nothing; `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll` all come out of `sp3.cab` in the driver cache every install has. Windows 2000: nothing either; the same three out of `sp4.cab`, and `usbui.dll` out of `driver.cab` beside it in that cache. |
+| Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk (`C:\WINDOWS\OPTIONS\CABS`). The install copies Windows' own `usbd.sys`, `usbhub.sys` and `usbui.dll` from it. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the hard disk; the virtual machine tried asked for nothing. Windows XP: nothing; `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll` all come out of `sp3.cab` in the driver cache every install has. Windows XP x64: nothing either, and the guest asked for nothing; the same four come out of `Driver Cache\amd64`, `usbport.sys` and `usbhub.sys` from `sp2.cab` and `usbd.sys` and `usbui.dll` from `driver.cab` beside it. Windows 2000: nothing either; the same three out of `sp4.cab`, and `usbui.dll` out of `driver.cab` beside it in that cache. Windows Vista and Windows 7: nothing; every install already has all four files, and the package asks Windows to copy none of them there. |
 
 Run the qualifier before installing anything; it answers all three of the
 controller conditions in a single read-only pass.
@@ -91,7 +140,7 @@ controller conditions in a single read-only pass.
 `XHCIQUAL.EXE` is a DOS tool that reads the machine's xHCI controller and says
 whether this driver can work on it. Run it with no arguments for a read-only
 quick scan. It writes no PCI configuration register and prints one of three
-verdicts, each ending with the next command to run:
+verdicts:
 
 | Verdict | Means |
 |---|---|
@@ -124,16 +173,30 @@ The package is a directory holding two files, `xhci98.inf` and
   location* -> the package directory.
 - Windows 2000 SP4 and Windows XP: Device Manager -> the unrecognised xHCI
   device -> *Update Driver* -> *Have Disk* -> the package directory. XP
-  shows its unsigned-driver warning; choose *Continue Anyway*.
+  shows its unsigned-driver warning; choose *Continue Anyway*. If Windows
+  2000's *Found New Hardware* wizard is used instead, it ends by asking for a
+  restart; *No* is fine, the driver is already running.
 - Windows ME: SweetLow's stack first, and only that one (NUSB is a Windows
   98 SE package): [usb20_win9x.zip](http://sweetlow.orgfree.com/download/usb20_win9x.zip)
   from SweetLow's site, unzipped; right-click the `USB2.INF` at its root,
   *Install*, reboot. Then the Windows 98 SE route above.
+- Windows Vista and Windows 7: Device Manager -> the unrecognised xHCI
+  device -> *Update Driver Software* -> *Browse my computer for driver
+  software* -> the package directory. If Windows warns that the driver is not
+  signed or its publisher cannot be verified, choose to install it anyway.
+  Use Device Manager rather
+  than right-clicking `xhci98.inf`: the right-click *Install* route is not
+  supported on these systems. On 32-bit Vista it asks for `usbport.sys`,
+  which you cannot supply, and cancelling ends it with no message and
+  without installing the driver, although `xhci98.sys` is left in
+  `System32\drivers`. On Vista x64 and Windows 7 x64 the install
+  can be done on an ordinary boot, but the driver starts only while driver
+  signature enforcement is disabled.
 
 Four files the driver depends on are not in the package because they are
 Windows' own: `usbd.sys`, which the USB 2.0 root hub imports on both
 targets; `usbhub.sys`, the driver for composite devices on Windows 98 and
-the hub driver on Windows 2000 and XP; on Windows 2000 and XP,
+the hub driver on the NT systems; on Windows 2000 and XP,
 `usbport.sys`, the
 USB stack this driver plugs into (on Windows 98 NUSB or SweetLow's package
 supplies it); and `usbui.dll`, the USB property-page DLL. Windows places its
@@ -141,7 +204,9 @@ USB files only when Setup finds a USB controller it recognises, and an
 xHCI-only machine has none of them, so the INF asks Windows to copy each from
 its own installation source, and only if it is absent; a machine that ever had
 a USB controller Windows recognised keeps its own files and is asked for
-nothing.
+nothing. Windows Vista and Windows 7 are different: every install of them has
+all four files whether or not it ever saw a USB controller, and on those
+systems the package asks Windows to copy none of them.
 
 `usbui.dll` is new in this release and is the one that is purely cosmetic. On
 Windows 2000 and Windows XP, Windows' own INF already asks for a Power tab on
@@ -167,11 +232,13 @@ already has `usbd.sys` and `usbhub.sys` from an earlier install may still not
 have it. It sits on the same cabinet as those two, so the same CD answers it.
 
 Windows 2000 and Windows XP take theirs from the driver cache
-every install has and ask for nothing: on Windows XP all four out of
+every install has and ask for nothing: on 32-bit Windows XP all four out of
 `sp3.cab`, on Windows 2000 three out of `sp4.cab` and `usbui.dll` out of
-`driver.cab` beside it. Measured on Windows 2000 on 2026-09-07, installing on
-a machine that had never had a USB controller: no prompt of any kind, and
-therefore nothing to cancel. Should the files be missing anyway, the failure
+`driver.cab` beside it, and on Windows XP x64 two out of `sp2.cab` and two out
+of `driver.cab` in `Driver Cache\amd64`. Measured twice, each time on a
+machine that had never had a USB controller: Windows 2000 on 2026-09-07 and
+Windows XP x64 on 2026-09-09, and neither raised a prompt of any kind, so
+there was nothing to cancel. Should the files be missing anyway, the failure
 looks the same as the cancelled 9x prompt above, spelled as a `0xc0000034`
 error naming `usbhub20.sys` rather than as Code 2.
 
@@ -261,26 +328,60 @@ because a user meets them through this driver.
   setup engine records no driver date for this unsigned package. Delete the
   cached `%SystemRoot%\inf\oemN.inf` and its `.pnf`, then install the new
   package; Setup picks it immediately.
+- Windows 2000: disabling the controller in Device Manager while a USB audio
+  device is attached and installed asks for a restart instead of applying.
+  Say *Yes*, or unplug the audio device first and the disable applies at
+  once. The refusal happens before anything reaches this driver: it has no
+  transfer outstanding and is asked nothing, and two builds with different
+  completion-delivery code behave the same. Which part of Windows holds the
+  device is not known. Measured with QEMU's emulated USB audio device in a
+  virtual machine on 2026-09-15/16; with mouse and storage devices alone the
+  disable applies live, and Windows ME under SweetLow's stack, with the same
+  audio device attached, disabled live in the same runs.
+- Windows Vista x64 and Windows 7 x64: the driver is not signed, so it loads
+  only while driver signature enforcement is disabled. On any other boot the
+  driver is not loaded and nothing on the controller works
+  (Device Manager showed Code 39 on Vista x64). See "What this is". Measured
+  in virtual machines, 2026-09-10 to 2026-09-16.
 - Windows 98: if the driver ever fails while starting the controller, the
   machine stops with `Windows protection error. You need to restart your
   computer.` (Windows 2000 simply reports Code 10.) Restart, press `F8`,
   choose Safe mode, put a working `XHCI98.SYS` back into
   `C:\WINDOWS\SYSTEM32\DRIVERS\` or remove the controller in Device Manager,
   then power-cycle. Recovery is complete and loses nothing.
-- The package writes `DisableSelectiveSuspend = 1` under
-  `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB`, a machine-wide
-  setting, on all four targets, because a sleeping xHCI controller cannot report
-  a newly plugged device and Windows 98 otherwise idles it within a second
-  once nothing at all is on the bus (any attached device keeps it awake,
-  even one with no driver, so a laptop with internal USB devices never idles
-  it and the value changes nothing visible there; Windows XP idles it within
-  about half a minute of a start with nothing attached;
-  Windows 2000 SP4's own stack was never seen idling it, with or without
-  the value, measured in a virtual machine on 2026-09-06). It also
-  stops any other USB controller
-  idling, it slightly raises power draw, and an uninstall does not remove
-  it; delete the value by hand (or set it to 0, which has the same effect)
-  if you want the previous behaviour back.
+- This controller never goes to sleep, so it draws slightly more power, and
+  there is no way to turn that off. A sleeping xHCI controller cannot report
+  a newly plugged device, and Windows otherwise idles it once nothing at all
+  is on the bus: Windows 98 within a second, Windows XP within about half a
+  minute of a start with nothing attached, 32-bit Windows 7 within about ten
+  seconds of a start and again about half a minute after the last device is
+  unplugged. (Any attached device keeps it awake, even one with no driver, so
+  a laptop with internal USB devices never idles it and this changes nothing
+  visible there. Windows Vista, 32-bit and x64, does not idle it on its own
+  in five minutes, but the previous releases' controller halted within about
+  five seconds of switching on "USB selective suspend setting" in the power
+  plan, and this release's keeps running through that switch; 64-bit
+  Windows 7 idles it before the desktop appears, and 64-bit Windows XP right
+  after start. Windows 2000 SP4's own stack idles it only with a registry
+  value set that nothing normally sets. All measured in virtual machines,
+  2026-09-06, 2026-09-16 and 2026-09-17.) The
+  driver tells Windows this as it registers, so **nothing outside the
+  device's own settings is written and no other controller is affected**.
+- **Upgrading from 1.0.0.0, 1.0.1.0 or 1.0.2.0: one machine-wide setting of
+  theirs stays behind.** Those releases did the same job by writing
+  `DisableSelectiveSuspend = 1` under
+  `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB`. It sits outside
+  the device's key, so neither an uninstall nor this upgrade removes it, and
+  this package deliberately does not delete it - on a machine with more than
+  one USB controller it may be doing a job for another one. It is harmless
+  beside the new mechanism; both say the same thing. Delete the value in
+  Registry Editor and restart if you want it gone. Why the change: it was
+  machine-wide, so it also stopped every other USB controller idling, and it
+  outlived the device that installed it. The obvious per-controller
+  replacement was tried and does not hold - on Windows Vista the power plan's
+  "USB selective suspend setting" rewrites it, and the Balanced plan enables
+  that on battery by default, which would have put the fault back on any
+  laptop that unplugged.
 - Every device plugged directly into a root port is reported to Windows as
   High Speed, whatever it is; Device Manager and USB tools show it so. This
   is deliberate: the USB stack this driver plugs into crashes the machine
@@ -297,8 +398,51 @@ because a user meets them through this driver.
   and nothing faster than 1 ms is reachable there. Devices behind a hub
   report their true speed and poll at the interval they ask for, so a mouse
   on a hub polls at its own 8 ms and a polling-rate tool works as on any
-  controller. Measured in a virtual machine with SweetLow's hidusbf; the
+  controller - but on Windows Vista and 7 only behind a USB 2.0 hub, because
+  of the next entry. Measured in a virtual machine with SweetLow's hidusbf; the
   bands are documented in full in `docs/issues/06-full-speed-root-port-bugcheck.md`.
+- **Windows Vista and Windows 7, 32-bit and x64: a USB 1.1 hub on a root port
+  crashes the machine** as soon as a mouse, keyboard or other Full or Low
+  Speed device with an interrupt or isochronous endpoint is used behind it
+  (`STOP 0x0000007E`, an access violation in `USBPORT.SYS`). It follows from
+  the High-Speed report above: the stack takes the 1.1 hub for a High-Speed
+  one, finds no transaction translator on it, and faults budgeting the
+  device behind it. Plug such devices into a root port directly, or behind a
+  USB 2.0 hub, which has a transaction translator. The USB 2.0 hub was
+  measured on real hardware, 32-bit Windows 7 on a ThinkPad E460
+  (2026-09-19): a Low-Speed mouse behind two different USB 2.0 hubs, with
+  audio playing and a file copying beside it, and no crash; Vista and 64-bit
+  Windows 7 were not measured on real hardware. The same 1.1 hub works on
+  Windows 98, 2000, XP and XP x64. The crash itself was measured in virtual
+  machines on all four Vista and Windows 7 builds, 2026-09-19; no USB 1.1
+  hub has been tried on real hardware.
+- **Windows XP and later, 32-bit and x64: a Full-Speed USB audio device on a
+  root port plays nothing.** It installs, shows as the default playback
+  device and appears to play, but no sound reaches it. The same High-Speed
+  report is the cause: from XP on, Windows schedules the device's audio
+  stream as a High-Speed one and never sends it. Behind a hub, where the
+  device's true speed is reported, it played on 32-bit XP; on Windows Vista
+  and 7 that must be a USB 2.0 hub, because of the entry above.
+  Windows 2000 plays on a root port. Measured in virtual machines,
+  2026-09-19: Windows 2000 and XP (behind a hub) played, XP, XP x64, Vista
+  and Windows 7 on a root port did not. Measured on real hardware the same
+  day, 32-bit Windows 7 on a ThinkPad E460: a USB audio adapter (C-Media
+  `0D8C:0014`) was silent on a root port and played behind a USB 2.0 hub.
+- **Windows 7 (32-bit, on real hardware): disabling the USB controller in
+  Device Manager can hang.** On the one real Windows 7 machine tried (a
+  ThinkPad E460, 2026-09-19), the first Disable never finished: Device
+  Manager stopped responding, the rest of Windows kept working, and the
+  next restart hung until the machine was switched off at the power button.
+  After that start the controller was disabled, and enabling it brought USB
+  back. Uninstalling or upgrading the driver also stops the controller and
+  was not tried; expect the same. The cause is not known yet - whether the
+  stop is stuck in this driver or in Windows' USB stack has not been read.
+  The Windows Vista and 7 virtual machines did not show it (five disable and
+  enable cycles each), and Vista and 64-bit Windows 7 have not been tried on
+  real hardware. Until it is understood: do not disable, uninstall or
+  upgrade the controller on Windows Vista or 7 with unsaved work open; to
+  remove or replace the driver, do it and then restart, and be ready to
+  switch the machine off if the restart does not finish.
 - Windows 98: plugging and unplugging a device very fast and repeatedly (one
   cycle every 0.6 s for minutes) can freeze the machine with no error. This
   one is this driver's own defect, with no explanation yet. Normal plugging

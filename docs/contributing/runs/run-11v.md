@@ -16,8 +16,9 @@ holds only the guest images and transfer disks the harness needs.
 
 The whole batch has run, stages A to H, and Phase 11's checkpoint was declared
 met on the last of those days. The clauses this vehicle could not reach are
-listed at the Phase 11 checkpoint in `docs/contributing/roadmap.md`, each with
-the Phase 12 or Phase 13 task that owns it; none of them is recorded here as
+listed at the Phase 11 checkpoint in `docs/contributing/roadmap.md` (the
+roadmap names an owning task for one of them, the failed-start rollback
+clause, task 12.3); none of them is recorded here as
 passed. A stage that turns out to cost three boots instead of one is worth
 more written down than the estimate it replaces, so the run sections record
 boot counts too.
@@ -296,7 +297,10 @@ no device, so it cannot hit the teardown fault, and it is what delivers
 `[Xhci.AddReg.Global]`. Verified: `Services\USB\DisableSelectiveSuspend = 1`
 appears, and the next boot reads `SuspendController: 0`, `USBCMD 0x00000005`,
 with a hot-plugged keyboard enumerating unaided. On Windows 2000 the same step
-must leave that value absent; the NT path does not carry it.
+must leave that value absent; the NT path did not carry it on this run's INF
+(it did from `1.0.1.0` to `1.0.2.0`, for XP; from `1.1.0.0` neither path
+writes it and the miniport flag `USB_MINIPORT_FLAGS_DISABLE_SS` replaces it,
+issue 5).
 
 The driver key on this run was
 `HKLM\System\CurrentControlSet\Services\Class\USB\0002`, with `XhciLogEnable`
@@ -2854,8 +2858,10 @@ H3's readings against the table above:
 
 The three root forms all resolve here, which is the other half of stage C's
 matrix and the mirror of 2a: `\??\`, `\DosDevices\` and `\SystemRoot\` each
-answered `C0000034` `STATUS_OBJECT_NAME_NOT_FOUND`, which `xhci_log.h:214`
-defines as the form resolving with only the file absent. The write mask was
+answered `C0000034` `STATUS_OBJECT_NAME_NOT_FOUND`, which the file sink's
+path-probe comment in `xhci_log.h` of that day defined as the form resolving
+with only the file absent (the sink and its probe statuses were retired in
+task 13-L.2, so the line is not in the header now). The write mask was
 asked for here and answered the same, the request 2a's interlock correctly
 never issued.
 
@@ -2885,7 +2891,8 @@ devnodes for `VEN_1B36&DEV_000D`, `2&ebb567f&0&18` and `2&ebb567f&0&20`
 `info pci` put `id "xhci"` at bus 0 device 3 function 0, and that devnode's
 own `Driver` value reads `{36FC9E60-C465-11CF-8056-444553540000}\0023`,
 cross-checked by that key also carrying this driver's `DriverDesc` and
-`InfSection`. `0023`, not `0002` as the release notes' example key says.
+`InfSection`. `0023` on this guest; the instance number is the guest's own
+and the release notes give no example key.
 
 The shutdown route is still dead here, replicated on the new binary. An
 ordinary shutdown taken between boots produced `flush create

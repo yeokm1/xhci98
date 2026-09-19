@@ -136,6 +136,12 @@ if ($CreateDisk) {
             Write-Warn "Skipping $diskImage because qemu-img.exe is not available."
         } else {
             & $qemuImg create -f qcow2 $diskImage $DiskSize | Out-Host
+            # Read as the winget exit code above is read: a failed create used
+            # to carry straight on to write launchers for an image that does
+            # not exist (the 2026-09-17 audit's D8).
+            if ($LASTEXITCODE -ne 0) {
+                throw "qemu-img create failed (exit code $LASTEXITCODE) for $diskImage, so no disk image was created."
+            }
         }
     } else {
         Write-Ok "Disk image already exists: $diskImage"
@@ -150,6 +156,9 @@ if ($CreateDisk) {
                 Write-Warn "Skipping $winMeImage because qemu-img.exe is not available."
             } else {
                 & $qemuImg create -f qcow2 $winMeImage $DiskSize | Out-Host
+                if ($LASTEXITCODE -ne 0) {
+                    throw "qemu-img create failed (exit code $LASTEXITCODE) for $winMeImage, so no disk image was created."
+                }
             }
         } else {
             Write-Ok "Disk image already exists: $winMeImage"

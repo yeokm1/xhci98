@@ -24,6 +24,224 @@ Do not turn a hypothesis into a settled hardware quirk. Move confirmed design
 rules into the appropriate normative document while keeping the debugging
 history here.
 
+## `open(path, 'wb')` empties the file before it evaluates what to write, and a Windows path in a Python literal is an escape sequence
+
+Environment: the Windows development host, 2026-09-12 evening, editing the
+untracked `HANDOFF.md` through short Python scripts run from the Bash tool.
+This is the sequel to the BEL entry below, from the same day and the same
+family - a string layer between the intent and the bytes - and it cost a whole
+file rather than one character.
+
+**The destroying line.**
+
+```
+open(p, 'wb').write(d.encode('ascii'))
+```
+
+`open(p, 'wb')` truncates the file the moment it is called. The argument
+`d.encode('ascii')` is evaluated **afterwards**, and it raised - so the write
+never happened and the file was left at **zero bytes**. `HANDOFF.md` is
+untracked by design, which is the whole point of it, so `git restore` had
+nothing to offer and no local backup existed. It was rebuilt by hand from the
+session's own reading of it, faithful in substance but not byte-identical.
+
+**What raised the exception, and it is the more insidious half.** The string
+being written contained a Windows path, in a **non-raw** Python literal:
+
+```
+"a re-staged `vm\xferwin7\` is needed"
+```
+
+`\xfe` is a **hex escape**, so `vm\xferwin7\` becomes `vm` + byte 0xFE + `rwin7` +
+a backslash. Earlier in the same session the same mistake with
+`docs\issues\07-` produced `\0` - a **BEL**, twice.
+
+**So a Windows path in a Python string literal manufactures, by itself,
+exactly the two byte classes roadmap task 22.7's charset gate exists to
+refuse**: a byte >= 0x80 and a control byte below 0x20. Five such bytes reached
+disk across two files in one session - two BELs in `HANDOFF.md`, and two 0xFE
+plus a BEL in `.claude\memory\MEMORY.md` - produced by an agent whose task
+that day had been to build that gate. A sixth never landed, because it is the
+one that raised the exception above.
+
+**What is proven, and what the gate does not cover.**
+`scripts\check-source-charset.ps1` scans `src\`, `test\`, `scripts\`,
+`xhcisnap\` and `xhciqual\`. It does **not** scan `docs\`, and it walks the
+filesystem rather than `git ls-files`, but it cannot see a file outside those
+five trees at all - so an untracked file at the repository root is invisible to
+it. All three bad bytes landed outside its reach. Each was caught by a hand
+byte-scan run after every edit, which is the habit the BEL entry below already
+asks for; the zeroed file was caught by the same scan reporting a length of 0.
+
+**The reusable rules.**
+
+- **Build the bytes, validate them, and only then open anything for writing.**
+  Opening for write is a destructive act on its own, independent of whether a
+  write ever follows. The safe shape is encode, assert, write to a temporary
+  file, then `os.replace` over the target - which is atomic, and leaves the
+  original intact if any step fails.
+- **Use raw strings for anything containing a backslash**, and remember that
+  the dangerous set in Python is wider than it looks: `\x` takes two hex
+  digits, `\0` through `\7` take octal, and `\N{...}` takes a Unicode name. A
+  path like `src\xhci.h` is already a hex escape waiting for two digits.
+- **Byte-scan every file edited through a shell or an interpreter**, whether or
+  not a gate covers it. Three numbers are enough: bytes >= 0x80, bytes below
+  0x20 outside TAB/CR/LF, and lone LFs in a CRLF document.
+- **For a whole file, prefer a direct file-write tool over a shell or
+  interpreter string layer**, and reserve scripted edits for surgical in-place
+  changes. This project already learned that the Bash tool could not write
+  `check-source-charset.ps1` at all, and that a Bash here-string silently ate a
+  probe script's regex escaping and returned a plausible wrong answer.
+- **An untracked file has no safety net.** Anything the repository
+  deliberately does not track - a handoff, `.claude\memory\`, `scripts\local\` -
+  should be written temp-then-rename every time, because there is nothing to
+  restore from.
+
+This is a cousin of 'Test the actual shell chain when a build loses a
+PowerShell command' below: in both, the command as typed and the command as
+executed differ, and only the bytes on disk say so.
+
+**Affected.** No source file and no binary: the damage was confined to
+`HANDOFF.md`, plus three bytes in one line of `.claude\memory\MEMORY.md` that
+the same scan found, repaired by rebuilding that line out of `chr(92)` and
+`chr(96)` rather than out of any escape at all.
+
+## A comment written through a PowerShell here-string put a BEL into `src\`, and every gate passed
+
+Environment: the Windows development host, 2026-09-12, adding a log-only
+diagnostic to `src\xhci_slot.c` and `src\xhci_dispatch.c`. The edit was applied
+with PowerShell `[IO.File]::WriteAllText` and a **double-quoted** here-string,
+which is the mechanism this project uses for source edits because the Bash tool
+mangles quotes.
+
+In a double-quoted PowerShell string the backtick is the escape character. The
+comment contained ``` `address << 16 | usbdStatus >> 16` ```, and ``` `a ``` is
+PowerShell's *alert* escape, so a literal **BEL (0x07)** was written into the
+C comment; the text rendered as "ddress". Every other backtick pair in the same
+comment silently lost its backticks, so the identifier quoting the surrounding
+comments use was stripped as well - visible only by reading the diff.
+
+**What is proven.** `scripts\build-driver.cmd all` then compiled all three x86
+flavours and **passed every gate** with the BEL present: import gate, INF
+self-tests, host tests, packager, launcher, matrix, EOL and flavour markers. A
+C compiler accepts a control character inside a comment, and nothing else in
+the chain looks. The defect was caught only because "ddress" is visibly wrong
+in `git diff`.
+
+**What that says about the gates.** There is **no byte-level check on `src\` at
+all**. The one line-ending guard in the build,
+`xhciqual\test\check-bat-eol.ps1`, scans `*.BAT` only - it exists because
+MS-DOS 7.1 `COMMAND.COM` parses batch lines on CR, so an LF-only `.BAT` dies
+with "Bad command or file name" and silently skips its `:logerr` branches. It
+never looks at C source. Every other gate reads `src\` through a compiler or a
+parser that tolerates a control character in a comment. **A control character
+in a string literal rather than a comment would have reached the shipping
+binary the same way, and nothing in the chain would have said so.**
+
+**Closed the same day.** Roadmap task 22.7 added
+`scripts\check-source-charset.ps1`, which `build-driver.cmd` runs beside the
+batch-file line-ending check: a control byte below 0x20 that is not TAB, CR or
+LF anywhere in tracked source, any byte >= 0x80 anywhere in tracked source,
+and a UTF-8 BOM at the head of any file the 1998-era toolchain reads (that
+last rule is narrower because five tracked files carry a BOM that does no
+harm, and on a `.ps1` it is the fix rather than the defect). The gate carries
+seven in-memory self-tests that run on
+every invocation, so its failure path is exercised on every build rather than
+only on the day something breaks - a gate that has only ever passed reports a
+pass it did not establish. **The non-ASCII half was weighed separately and
+then taken**, on its own argument rather than the control-character one: a
+high byte in a *string literal* reaches the debugcon channel and a Windows 98
+console, where the encoding is not UTF-8. It cost exactly one character - a
+UTF-8 section sign in an `src\xhci.h` comment, rewritten as "section", which
+is what the same file already said in plain ASCII 32 lines away. (A line
+number stood here; it has drifted, and the fact does not depend on it.)
+
+**The reusable rules.**
+
+- Use **single-quoted** here-strings for any content containing backticks, and
+  treat ``` `a `b `f `n `r `t `v `0 `e ``` as the dangerous set - the rest merely
+  drop the backtick, which corrupts prose quietly rather than loudly.
+- **Scan added source for bytes below 0x20 outside CR/LF/TAB before
+  committing.** A gate does this now - `scripts\check-source-charset.ps1`,
+  roadmap task 22.7, added the same day and run from `build-driver.cmd` - but
+  the habit is still the cheaper place to catch it, because the gate runs at
+  build time and `git diff` is where the damage is legible.
+- Read `git diff` as prose, not just as a shape. The rendering "ddress" was the
+  whole signal.
+
+This is a cousin of "A counter label that is legal C and correct on screen can
+still be invisible to the tool that makes it readable": both are cases where
+the artefact compiles, the tooling is content, and only a human reading the
+output notices.
+
+**A second thing the same session rediscovered rather than read.** It was
+asserted that a diagnostic confined to the `qemu` flavour would leave the
+`release` binary *byte-identical*, and the rebuild disproved it - all three x86
+binaries changed hash, release and debug at identical size with only the PE
+`TimeDateStamp` moved. **"Task 13-L.4 - a byte compare cannot show 'the
+published binary is the bench binary', because a re-link moves the PE
+timestamp" in this same file had already recorded exactly that**, and
+`make-release.ps1 -Force` already stages from `src\objfre` / `src\objchk`
+rather than rebuilding for the same reason. Identity across a re-link is a
+source-tree claim made from history and the gates, never a file-compare claim -
+and this file is where to check before promising one.
+## A structural coincidence is not a reading, and the writer is disassemblable even when it has no symbol
+
+Read 2026-09-10 (roadmap task 21.8, design record 11 section 6.2). The amd64
+driver, loaded on a Vista x64 guest under F8, refused at
+`XHCI_INIT_STEP_RESOURCES` with `ResourcesTypes = 0x0C` while every other field
+in usbport's resource block was sane and every interrupt field was populated.
+`0x0C` is exactly the NT 5.x `MEMORY|INTERRUPT` of `0x06` shifted one bit left,
+and the session that found it wrote down that the shift would follow from 6.x
+inserting a member at the bottom of the enum - **and refused to change the
+constant on it**.
+
+That refusal was right, and not because the guess was wrong. It was right.
+A coincidence of that shape is consistent with several causes - a widened mask,
+an unrelated flag, the MSI reading that was considered and dropped earlier the
+same evening - and a constant changed on the strength of one is a constant
+nobody can check later. What the disassembly added was the **cause**: NT 6.x
+splits the port bit in two, an I/O-space port against a memory-mapped one, and
+everything above it moves up one place. Same numbers, but now re-derivable by
+anyone with the binaries.
+
+**`uf` needs a symbol; a sweep needs only a section.** The function that writes
+the field, `USBPORT_ParseResources`, is not exported, so every previous static
+read here - which used `cdb -z` / `kd -z` plus `uf usbport!<name>` - had no way
+to reach it. The technique that does:
+
+```bat
+tools\WinDDK71\bin\x86\amd64\link.exe /dump /headers <image>   :: .text bounds
+tools\WinDDK71\Debuggers\kd.exe -z <image> -c "u 11000 4ab66;q" > listing.txt
+```
+
+`u <start> <end>` disassembles a whole section in one pass - 60,000 lines for a
+260 KB driver, seconds to produce - and the listing is then a text file to
+search. Here `grep "or      dword ptr \[r"` over five images found the three
+write sites in each on the first try. **The image loads at its preferred base
+`0x10000`, so kd's own `usbport+0x...` display is already the RVA**, which is
+what to quote. This works for any interior function, and it is how the
+*producer* of a value gets read rather than only its consumers.
+
+**Two identifications beat one.** Knowing that `or [rbx],8` sets "memory"
+needed the descriptor-scan loop above it (`Type` 1/2/3, stride `0x14`) to say
+which register held which descriptor. But each branch is *also* guarded by the
+miniport's own `USB_MINIPORT_FLAGS_*` bit - `INTERRUPT 0x01`, `PORT_IO 0x02`,
+`MEMORY_IO 0x04` - which this project already had transcribed. The two agreed
+on all five binaries. Look for the second witness; it is usually already in the
+listing.
+
+**And read the old lineage too.** One binary showing `0x08` says only that this
+build uses `0x08`. The XP x64 binary showing `0x04` at the same site in the
+same function is what says the value *moved*, which is the claim the fix rests
+on. The comparison cost one extra command.
+
+This is the second time in two days that a question about the usbport miniport
+interface was settled by disassembling a *caller or a writer* rather than a
+structure - the registration arity was the first. Task 21.7 passed six static
+reads of this interface's structures and neither of these two defects was
+visible in any of them.
+
 ## Proving a control-endpoint reopen on a RELEASE-flavour guest: the QEMU trace bounds it, and a debug-port target confirms the counter
 
 Observed on 2026-09-07 on the XP and Windows 2000 guests, `1.0.2.0` installed
@@ -63,6 +281,19 @@ cover a guard that reads only this driver's own record state, never which
 usbport build called it.
 
 ## The Windows 98 USB Audio replug row fails only with a second guest on the host, and four readings on one image, stamp and binary are what showed it
+
+**Superseded in part on 2026-09-19 (roadmap task 22.9, `runs/run-22.md`):
+the row fails alone under QEMU 11.1.0.** On `fresh-2a.img` at
+`base-1.1.0.0-qemu`, with the `1.1.0.0` qemu build and no other guest or
+OneDrive process on the host, the replug read the same signature in four
+of five solo runs under 11.1.0 (`v11.1.0-12130-ge470268ff4`; the fifth
+passed both legs) and passed both legs in three of three under 11.0.0
+(`v11.0.0-12122-ga4bb4b10c9`), the audio group alone and the two versions
+alternated. So the emulator version is a variable this entry did not have
+- it makes the failure far more likely, it does not decide it - and "only
+with a second guest" is true of the QEMU it was measured on, not in
+general. What in 11.1.0 changes it is not read. The rest of the entry stands as the record
+of the earlier readings.
 
 Observed between 2026-09-06 and 2026-09-07 on the development host, QEMU
 11.0.0 under TCG, `fresh-2a.img` at `base-1.0.1.0-qemu` and later
@@ -294,8 +525,10 @@ Rules this earns:
   its own beyond Code 39 and an empty trace. Any NT-target install reading
   starts with a listing of `system32\drivers`.
 
-Affected: `src/xhci98.inf` (`[Xhci.CopyNT]`, `Xhci.AddReg.Global` on the
-NT routes), `scripts/inf-gate/check-inf.ps1` (`OS-ONWIN98`, `OS-NEVER`,
+Affected: `src/xhci98.inf` (`[Xhci.CopyNT]`, and `Xhci.AddReg.Global` on the
+NT routes - that section went at `1.1.0.0` with the mechanism; see "the value
+was right and still had to go" in the batch 11-V entry),
+`scripts/inf-gate/check-inf.ps1` (`OS-ONWIN98`, `OS-NEVER`,
 `SUSP-*`), `docs/contributing/build-and-test.md` ("The files the OS
 supplies", "Windows XP target VM"), `scripts/setup-qemu-winxp.ps1`,
 release 1.0.1.0 (roadmap Phase 19).
@@ -346,7 +579,11 @@ NUSB's does. Two boots with no keep-alive pointer: value present, no
 addressed at once; value deleted, `SuspendController` once shortly after
 start and a keyboard hot-plugged afterwards never seen (QEMU shows it at the
 port with address 0, the driver's addressed count stays 0). The INF's global
-value stays, for both lineages.
+value stayed, for both lineages, until `1.0.2.0`; from `1.1.0.0` the INFs
+write nothing and the miniport flag `USB_MINIPORT_FLAGS_DISABLE_SS` reaches
+the same state, read on both stacks against a control that idles on
+2026-09-17 (the postscript of 2026-09-17 under the batch 11-V stage A lesson
+below; issue 5 section 5.5).
 
 Also measured the same day, from a `post-nusb` clone with the stack swapped
 and the driver installed from an INF stripped of its `usbd` and `usbhub`
@@ -424,8 +661,11 @@ they are re-run on this QEMU, or QEMU 11.0.0 is put back. Record the QEMU
 version in every run header, as the matrix already does; it is what made the
 change visible.
 
-Affected: `scripts/vm-matrix/matrix.config.psd1` (the `2a-sweetlow` entry's
-comment), `scripts/vm-matrix/prepare-image.ps1`.
+Affected: `scripts/vm-matrix/config.sample.psd1` (the `2a-sweetlow` entry's
+comment - the tracked file; `matrix.config.psd1` is the per-host copy an
+operator makes from it and is git-ignored, so naming it here pointed a reader
+at a file a clone does not have),
+`scripts/vm-matrix/prepare-image.ps1`.
 
 ## Windows ME on QEMU: the ME CD's own FORMAT never writes a sector, and its Setup restarts wedge like Windows 98's
 
@@ -607,7 +847,7 @@ exclusion exists because the DMA buffers require identity-mapped conventional
 memory. A prohibition stated by category will be applied to the wrong member
 of the category unless the exception is named beside it.
 
-Fixed in the six places the instruction appears: `xhciqual/HARDWARE-TESTING.md`
+Fixed in the six places the instruction appears: `xhciqual/hardware-testing.md`
 (the "Safety and preparation" step 1, which now carries the reasoning, and the
 Intel 7/8-series machine note), `xhciqual/README.md`,
 `docs/using/release-notes.md`, `docs/using/release-acceptance-test.md`,
@@ -1254,8 +1494,11 @@ an assumption that four documents then leaned on.
 
 A probe of an instrument must run the binary that uses the instrument. The
 handoff proposed one boot with the machine as it stood. The machine ran the
-standard build, whose trace channel is entirely inside `#if DBG`, so it makes
-no live `DbgPrint` call and the hypothesised mechanism is never entered. A
+standard build, whose per-event trace sites are all inside `#if DBG`, so the
+per-event `DbgPrint` calls the hypothesis needs are not in the binary and the
+mechanism is never entered (the one `DbgPrint` path the `0.0.0.4` release
+binary did carry, the `XhciLogDebugView` flush of the ring, is not the
+per-event stream). A
 pass there would have been a pass for a driver that emits nothing, and it
 would have been written down as evidence. Before testing whether a channel is
 safe, check that the binary under test can use the channel at all.
@@ -1401,7 +1644,10 @@ Rules this earns:
 
 Affected: `src/xhci98.inf` (`[Xhci.CopyW98]`, Win98 path only until
 1.0.1.0, then `[Xhci.CopyNT]` as well),
-`scripts/package/usbd-sources.expected`, `scripts/inf-gate/check-inf.ps1`
+`scripts/package/usbd-sources.expected` (**retired with release 1.0.0.1**,
+when the media stopped carrying Microsoft files and there was nothing left to
+authenticate - named here because it is what the lesson happened to, not
+because a clone will find it), `scripts/inf-gate/check-inf.ps1`
 (`W98-MISSING` / `W98-ONWIN2K` enforced the asymmetry in both directions;
 since 1.0.1.0 there is none to enforce for `usbhub.sys`, and `OS-ONWIN98`
 carries the one that remains, `usbport.sys` off the Windows 98 path),
@@ -1549,7 +1795,7 @@ vehicle, HID at port 1 and storage at port 2 both at 480 Mb/s on `xhci.0`,
 The 12-against-122 gap is the wedge, not a dosing artefact. The churn kept
 attaching hubs at the same rate on both legs, and leg A' stopped enumerating
 them because the guest had already died at about twelve, so leg B absorbed
-roughly ten times leg A''s enumeration dose and stayed healthy. Leg A, the
+roughly ten times leg A's enumeration dose and stayed healthy. Leg A, the
 first xHCI leg on a two-controller vehicle, wedged too, at 18 enumerations;
 leg A' exists to close the confound that leg A ran without the UHCI controller
 present, and it does. The wedge is reproduced twice on `xhci.0` and absent
@@ -2427,8 +2673,10 @@ the same binary the rest of this entry was derived from.
 `DisableSelectiveSuspend`. Both are live reads:
 
 - `HcDisableSelectiveSuspend` is read per controller from the driver key (VA
-  `0x11C10`; `push 1` = the driver/software key, `push 34h` = the name's 52
-  bytes), returning TRUE when the value is absent or zero.
+  `0x11C10`; the `push 1` there is the reader helper's BOOLEAN, which the
+  helper at `0x2D00A` turns into `IoOpenDeviceRegistryKey`'s
+  `PLUGPLAY_REGKEY_DRIVER` (2); `push 34h` = the name's 52 bytes), returning
+  TRUE when the value is absent or zero.
 - `DisableSelectiveSuspend` is read globally via
   `RtlQueryRegistryValues(RelativeTo = Services, L"usb", ...)` at VA
   `0x11DBE`, in a table beside `UsbBIOSx` and `DisableCcDetect`.
@@ -2439,19 +2687,55 @@ suspend still arrived), which falsified `0x800` as the gate and would have
 ended the investigation if the two values had been treated as one lever. But
 the global read sets a second flag (`0x08000000`) the per-controller one
 never touches, which made it a different experiment rather than a repeat.
+**That paragraph is wrong in its runtime claim and in its reading of the
+flags; see the correction below the table.**
 
 Measured on the 2a guest, one boot each:
 
 | | `SuspendController` | `USBCMD` | hot-plug while idle |
 |---|---|---|---|
 | neither value | 1, within seconds | `0x00000000` (halted) | invisible until Refresh |
-| `HcDisableSelectiveSuspend = 1` | 1, within seconds | `0x00000000` | (not retested) |
+| `HcDisableSelectiveSuspend = 1` | 1, within seconds (one boot; not reproduced, see below) | `0x00000000` | (not retested) |
 | `+ Services\USB\DisableSelectiveSuspend = 1` | 0 | `0x00000005` (R/S, INTE) | enumerates on its own |
+
+**Correction, 2026-09-16: the per-controller value alone does stop the
+idle.** The middle row was re-taken after SweetLow (LordOfMice on GitHub,
+issue #4) suggested `HKR,,HcDisableSelectiveSuspend,0x00010001,1` in
+`[Xhci.AddReg]`, on an
+overlay of `fresh-2a.img` with the value set by hand in
+`Services\Class\USB\0002` (the controller's software key, `NTMPDriver =
+xhci98.sys`) and the global value deleted, each boot against a same-overlay
+control with neither value (runtime, the owner at the console):
+
+| stack | per-controller value only | neither value (control) |
+|---|---|---|
+| NUSB 3.3 (`GetHciMn` `57324B30`) | 2 boots: no `SuspendController` in 150 s and 300 s, `USBCMD` `0x00000005`, a hot-plugged `usb-kbd` addressed at once, no re-idle 90 s after unplugging it | `SuspendController` within seconds, `USBCMD` `0x00000000` / `USBSTS` `0x00000001`, the keyboard at address 0 after 40 s, Refresh recovers |
+| SweetLow's (`GetHciMn` `10000001`), NUSB removed on the same overlay | 2 boots, the same: no suspend in 300 s, keyboard addressed within 20 s, no re-idle after unplugging | the same defect |
+
+The static reading agrees with the new rows and not with the old paragraph
+(re-derived in full on all three 32-bit builds, `legal-provenance.md`
+section 4). `0x800` is "selective suspend allowed", set once in the start
+routine (NUSB `0x10933`) only when the Hc read allows it AND the global is 0;
+either value nonzero leaves it clear. It is the only gate: the root hub's
+idle-notification IOCTL (`0x220027`, handler `0x1F13E`) tests it at `0x1F1BB`
+and completes the IRP `STATUS_NOT_SUPPORTED` when it is clear, so the hub
+never powers the root hub down and the miniport's `SuspendController` is
+never reached. `0x08000000` has no reader on that path at all; its one test
+is in the bus-interface setter (`0x13214`) that lets the hub turn selective
+suspend back on at run time, which it refuses while the global is set. So the
+two values are one lever for the idle and differ only there. Why the
+2026-08-13 boot suspended is not established: its evidence was discarded on
+2026-08-30, and the candidates (the value in a key other than the one
+`IoOpenDeviceRegistryKey(..., 2)` resolves to, written after the start
+routine had already read it, or rewritten to 0 by that setter) cannot be told
+apart now.
 
 `SlotsEnabled` 1, `DevicesAddressed` 1, `OpensTotal` 2, wizard raised with no
 Refresh, and `CheckCallbacks` climbing continuously instead of freezing. So
 the defect is fixed by one `AddReg` line, on the Windows 98 path only, with
-no driver code at all.
+no driver code at all. (That held until `1.1.0.0`, which moved the fix into
+the driver as one miniport flag bit and took the `AddReg` line out of both
+INFs - the second postscript below.)
 
 Postscript, 2026-09-06 (roadmap Phase 20, F18): Windows 2000 SP4's own stack
 was not seen idling this controller in the VM, value or no value, in the
@@ -2461,7 +2745,60 @@ driver, SP4's `usbhub.sys` carries no selective-suspend string, and the hub
 driver NUSB puts above this usbport, `usbhub20.sys` 5.00.2195.6891, does.
 The "never idles" sentence this project carried for weeks agreed with every
 run and was still unmeasured; the measurement now exists, and it is bounded
-by its conditions.
+by its conditions. (2026-09-16, static: usbport itself also explains it. The
+start routine of SP4's build defaults the global value to 1 when
+`IoIsWdmVersionAvailable` reports WDM 1.10 but not 1.20, which is Windows
+2000, so `0x800` is never set there unless `Services\usb` holds an explicit 0
+(`0x10890`); NUSB's build carries the same default at `0x1082B`, and
+SweetLow's has no such check.)
+
+### Postscript, 2026-09-17: the value was right and still had to go
+
+The owner asked on 2026-09-16 for the machine-wide value to be replaced. Not
+because it failed - nothing above it is withdrawn - but because of what it
+touched: `Services\USB` is not the devnode's key, so it reached every
+controller usbport drives on the machine and outlived the device that
+installed it. Three candidates, all read against each OS's own `usbport.sys`:
+
+The **per-controller values** were the obvious answer and they lose. They read
+correctly on all nine builds this driver runs under, and Windows 98 measured
+them working. But usbport's own `USBPORTBUSIF_ControllerSelectiveSuspend`
+writes `HcDisableSelectiveSuspend` back, and while the 9x, 2000 and XP hubs
+call it only from the root hub's "Allow the computer to turn off this device"
+checkbox, Vista's `usbhub` also registers a callback for
+`GUID_USB_SETTING_SELECTIVE_SUSPEND`. Measured on a Vista x86 guest,
+2026-09-17: setting the Balanced plan's USB selective suspend to Enabled
+rewrote the value to 0 and suspended the controller at once - and Balanced
+ships that setting Enabled on battery. Windows 7 also has no
+`HcDisableSelectiveSuspend` string at all; its name is
+`HcDisableAllSelectiveSuspend`, and Vista and Windows 7 share one INF install
+section.
+
+The **miniport flag** `USB_MINIPORT_FLAGS_DISABLE_SS` (0x20) was taken, and
+what made it takeable was a sweep rather than a guess. Every read of
+`MiniPortFlags` in each build's `.text` was enumerated (37 to 65 per build)
+and every test of bit 5 swept in reverse: the bit is tested exactly once per
+build, in the start routine, after the registry reads, and forces the same
+state the global value forces. It is `1.1.0.0`'s fix.
+
+- **A setting that works is not the same as a setting that holds.** The
+  per-controller value would have passed any install-time check ever written
+  for it. What disqualified it is a write nobody makes by hand, with a
+  default that differs on battery. "Does the OS honour this?" and "does the
+  OS leave it alone?" are two questions and only the first gets asked.
+- **"Does this bit do what its name says?" is the easy half.** The hard half
+  is "does it do anything else?", and the only honest answer to that comes
+  from enumerating every reader, not from reading the one that matters. The
+  sweep also corrected a `MiniPortFlags` claim the ABI document had carried
+  since 2026-09-10 - a `0x80000` test placed in
+  `USBPORT_SyncPowerAndChirpUsb2Ports` that turned out to be a port-status
+  bit sharing a constant - which is the sort of thing that only falls out of
+  checking all of them.
+- **Where a mechanism can live in the driver or in the registry, the driver
+  is the narrower place.** The value needed four install routes, had to
+  survive an upgrade that bugchecks mid-install, outlived everything, and
+  meant the same thing under two names on two OS families sharing one install
+  section. The flag is one bit in a structure this driver already fills in.
 
 ### Rules
 
@@ -2471,9 +2808,12 @@ by its conditions.
   cheaper question went unasked for the whole investigation. When a
   derivation keeps closing doors, check whether the room was the right one.
 - A pair of registry values with near-identical names is two experiments,
-  not one. The per-controller value failing is what looked like a refutation
-  of the whole idea; the global one differed in a flag bit, and that bit was
-  the reading.
+  not one. That rule survives, and the example it was written from does not:
+  the per-controller value did not fail (2026-09-16 correction above), and the
+  flag bit that "differed" gates nothing on the idle path. A single boot that
+  contradicts the binary's own logic is a reading to repeat, not a refutation;
+  the listing already said `0x800` was cleared by either value, and one more
+  boot would have said so too.
 - The strings were in a binary already disassembled twice in the same
   session. A `strings` pass over the other side is minutes of work and was
   not taken until prompted. It belongs beside "derive the mechanism from the
@@ -3044,8 +3384,13 @@ on `EndpointStoppedEvents` = 0.
 
 That is the wrong counter for the question. `EndpointStoppedEvents` counts
 the xHC's Stopped Transfer Event, the controller's reply to a Stop Endpoint
-command. `EndpointStops` counts this driver issuing one. Zero in the first
-does not imply zero in the second, and the discriminator was sitting in the
+command. `EndpointStops` counts a Stop Endpoint this driver issued whose
+completion left the ring stopped - Success, or a Context State Error whose
+endpoint then read Stopped (since 2026-09-17; before that every Context State
+Error counted, on the reading that any "not Running" state was what the
+caller wanted). A Context State Error that read Halted, Error or Disabled
+stopped nothing and lands in neither it nor `EndpointStopFailures`. Zero in
+the first does not imply zero in the second, and the discriminator was sitting in the
 evidence directories the whole time as `usb_xhci_ep_stop`:
 
 | leg | `usb_xhci_ep_stop` | `usb_xhci_ep_set_dequeue` |
@@ -4132,6 +4477,12 @@ workload, so `i386` is eliminated. Step 5 then changes only the accelerator
 on that same command line and the storm disappears, which makes the
 accelerator the discriminating variable on this host and this QEMU build.
 
+**Read this together with "The accelerator is the discriminating variable in
+both directions" below, and do not generalise this entry past the guest it was
+taken on.** On Windows XP x64 Setup the same two accelerators give the
+opposite answer: WHPX wedges and TCG runs. "WHPX, not TCG" is a fact about
+32-bit Windows 2000 Setup here, not a property of either accelerator.
+
 Not proven: the mechanism. An execution-rate explanation (WHPX drains the
 timer queue fast enough) remains the natural reading and remains untested;
 so does any explanation resting on how each accelerator delivers the
@@ -4165,6 +4516,157 @@ half on its own.
 solely to execute `ResumeController` on Windows 2000, which no other VM in
 the estate can do. 2b keeps its Standard-PC HAL flags unchanged and remains
 the Phase 3-5 evidence VM.
+
+## The accelerator is the discriminating variable in both directions: TCG wedges 32-bit Windows 2000 Setup, WHPX wedges Windows XP x64 Setup
+
+### Environment and operation
+
+Host `minis-w11p-ykm`, scoop QEMU 11.0.0, `qemu-system-x86_64`. Installing
+the roadmap Phase 21 guest, Windows XP Professional x64 SP2, from
+`D:\isos\Win XP SP2 VL x64.iso` onto a fresh 16 GB qcow2. Machine `-machine
+pc` (ACPI on), `-cpu qemu64`, `-m 2048`, `-vga std`, `-boot d`, no USB
+controller. One flag differed between the two runs.
+
+### What was read
+
+1. `-accel whpx,kernel-irqchip=off`, the value every other guest in this
+   project uses and the one the entry above argues for: Setup boots, paints
+   "Setup is starting Windows", and **stays there**. Six minutes. `RIP`
+   sampled five times four seconds apart is pinned at a single address, with
+   `CS64`, `CPL=0`, `IF` set and `HLT=0`; one earlier sample had been
+   elsewhere, so the guest is not dead, but it is not progressing either.
+2. `-accel tcg`, the identical command line with that one flag changed:
+   text-mode Setup reaches "Setup is copying files" in about three minutes,
+   `RIP` samples are varied (`fffffadfc85bd980`, `fffffadfc82508f1`,
+   `fffff800010449b3`), the copy runs to completion and the guest reboots into
+   graphical Setup.
+
+WHPX is not broken on this host: the throwaway `-M pc -accel
+whpx,kernel-irqchip=off -m 2048 -display none` probe that
+`build-and-test.md` asks for creates its partition and stays up. The failure
+is the guest under WHPX, not partition creation - which is the distinction
+the Phase 2d WHPX entry had to make in the other direction.
+
+### What this proves, and what it does not
+
+Proven: on this host the accelerator decides whether XP x64 Setup runs, and
+it decides the opposite way from the entry above. That entry is not wrong -
+it was 32-bit Windows 2000 Setup under the ACPI APIC HAL, and its step 5 is
+still the reading that got that guest installed. **What is wrong is treating
+either result as a property of the accelerator alone.** The project had
+generalised "WHPX, not TCG" into a default and written it into four
+generators and their documentation, and a fifth guest was one copied flag
+away from being unbuildable for a reason nobody would have looked for.
+
+Not proven: the mechanism, in either direction. Nothing here identifies what
+WHPX does differently on an NT 5.2 amd64 kernel, and the pinned `RIP` was not
+resolved to a symbol - there is no `ntoskrnl` for this guest on the host to
+disassemble against, and the address alone does not distinguish a spin from a
+starved idle loop the way the Windows 2000 idle-loop disassembly did. Also
+untouched: whether `-cpu core2duo` changes the WHPX result, and whether any
+of this survives a different QEMU build.
+
+### Consequences
+
+`scripts\setup-qemu-winxp64.ps1` defaults to `-Accel tcg`, and its parameter
+comment carries the measurement rather than the conclusion. The launcher gate
+asserts the TCG default **and** that the install and run launchers agree on
+it, because the HAL is fixed at install time: a guest installed under one rung
+must be booted under it too, and an edit towards "the proven WHPX rung" is the
+natural, wrong, well-meant change for someone who has read the rest of this
+repository.
+
+The general rule, which is the actual lesson: **probe the accelerator per
+host AND per guest.** Two accelerators, two guests, two opposite answers, all
+four on one machine.
+
+## The 64-bit Vista and Windows 7 guests: a slow failure reads as a disagreement, and a wedge does not always leave a resumable image
+
+### Environment and operation
+
+Host `minis-w11p-ykm`, QEMU 11.0.92. Installing roadmap task 21.8's two
+guests, Vista Business SP2 x64 and Windows 7 Professional SP1 x64, from the
+media task 21.7 read its measurements out of, onto fresh 32 GB qcow2 images.
+`-machine pc`, `-cpu qemu64`, `-smp 4`, `-m 2048`, `-boot d`, no USB
+controller. Both launchers were generated carrying `whpx,kernel-irqchip=off`
+as a probe, on the reasoning that it is the fast rung and that switching to
+TCG costs no reinstall. Both parts of that reasoning turned out to need
+qualifying.
+
+### What was read
+
+1. Vista x64 under `whpx,kernel-irqchip=off` bugchecks inside WinPE, before
+   Setup writes a single byte. STOP `0x0000000A`, `IRQL_NOT_LESS_OR_EQUAL`,
+   referenced address `0x10`, IRQL `0xC`, read, at `fffff800'0a4cb489`. The
+   image was still 0.2 MB afterwards, and both `ide0-hd0` and `ide1-cd0` had
+   been idle about 88 seconds. `VM status` stayed `running`: a bugcheck screen
+   is a live CPU, not a stopped one.
+2. Vista x64 under `tcg,thread=multi`, the same command line with that one
+   flag changed: WinPE comes up, Setup runs to the desktop, and the guest
+   shuts down clean at 8.45 GiB.
+3. Windows 7 x64 under `whpx,kernel-irqchip=off` clears WinPE, reaches
+   "Expanding Windows files", ticks Copying, Expanding and Installing
+   features, and writes 7.27 GB. Then it stops. Screen byte-identical across
+   eight minutes; `ide0-hd0` idle time climbing monotonically 89, 154, 218,
+   314, 388, 461, 537 seconds; `RIP` moving but revisiting `d2930c3`,
+   `d2935a0` and `d7fdf75` with `HLT=0` throughout.
+4. Windows 7 x64 under `tcg,thread=multi`: installs to the desktop.
+
+### What this proves, and what it does not
+
+Proven, and it is the useful half: **a failure that arrives late reads as a
+different answer.** Between readings 1 and 3 the pair looked like the 32-bit
+Vista and Windows 7 pair, which genuinely does disagree. It was not a
+disagreement. Windows 7 x64 simply failed more slowly, and the only thing that
+distinguished the two cases was refusing to record an accelerator until an
+install had finished. This project had already paid for that rule once, on the
+first 32-bit Vista probe, which stopped at Setup's language page and wrote
+down WHPX; this is the second time the same discipline was what stood between
+a probe and a wrong default.
+
+Proven, and it corrects something this repository had stated flatly:
+**"switching to TCG costs no reinstall" holds only where the guest already has
+a bootable disk.** `vm\vista.img` wedged on a boot after a completed phase, so
+its disk was bootable and the TCG relaunch resumed on the same image. Windows
+7 x64 wedged at the transition, before Setup laid its boot files down. The TCG
+relaunch fell through "Press any key to boot from CD or DVD" to the hard disk
+and got `BOOTMGR is missing`; that install had to be run again from the DVD.
+The cheap rescue is still usually right, but it is worth ten seconds to ask
+whether the guest ever became bootable.
+
+Also worth having: on a boot or progress screen the discriminator is not the
+CPU. `RIP` identical with `HLT=1` is an idle loop and means nothing is wrong;
+`RIP` moving among a handful of addresses with `HLT=0` and no disk I/O at all
+is a spin. The counter that settled reading 3 was `ide1-cd0`'s idle time going
+*backwards* between two samples earlier in the same install, which is positive
+proof of progress in a way no register sample is.
+
+Not proven: the mechanism, in either direction. Nothing here identifies what
+WHPX does differently on these kernels. The Vista x64 bugcheck is suggestive -
+a near-null read at device IRQL is an interrupt-delivery fault, and
+`kernel-irqchip=off` is exactly the interrupt path - but the address was not
+resolved to a symbol and the Windows 7 x64 spin was not resolved at all. Note
+also that `kernel-irqchip=off` is not a tuning choice on this host: plain
+`-accel whpx` cannot initialise ("Failed to enable nested virtualization,
+hr=80370302"), so it is the only WHPX available and the alternative to it is
+TCG rather than another WHPX rung.
+
+### Consequences
+
+`scripts\setup-qemu-vista-x64.ps1` and `scripts\setup-qemu-win7-x64.ps1` both
+default to `-Accel tcg`, each carrying its own measurement rather than the
+shared conclusion. Both generators previously refused to run without an
+explicit `-Accel`, and the launcher gate asserted that refusal; that check was
+deleted in the same change that added the defaults, which is what it existed
+for, and the gate went from 294 checks to 290. The gate's two 64-bit rows now
+pass no `-Accel`, so its accelerator assertions read the generators' defaults.
+
+One thing not to draw from this. The 64-bit pair agree where the 32-bit pair
+disagreed, and with XP x64 also on `tcg` every 64-bit guest in this project
+wants TCG. That is an observation about four guests, not a property of
+bitness, and the rule from the entry above is unchanged: probe the accelerator
+per host and per guest, and let the value belong to the guest rather than to
+the family.
 
 ## The Full-Speed bugcheck localized: a missing guard on the branch nobody takes
 
@@ -5184,7 +5686,13 @@ change-gated witness suppressed.
 New binary in by disable -> overwrite -> enable (no reboot; the enable
 reloads the image). Witness fired on the start, and a plain plug/unplug pair
 produced both edges on port 5 with `port status change events` going 1 -> 2,
-no timing work at all, because native Win2000 usbport never idle-suspends.
+no timing work at all, because native Win2000 usbport did not idle-suspend
+in this run. (That was this run's observation, not a property of the stack:
+the generalisation "never idle-suspends" was withdrawn on 2026-09-05 under
+roadmap Phase 20, F18 - the qualification under "An NT install that never
+saw a USB controller has no `usbport.sys`" above and the 2026-09-06
+postscript under the batch 11-V stage A lesson, which bounds it by its
+conditions.)
 When a clause is hard to observe on one target, check whether another target
 makes it cheap before engineering around the hard one.
 
@@ -5286,9 +5794,13 @@ Two things were observed here that no host model could produce:
    controller raises no Port Status Change Events. A timer-driven plug test
    silently observes nothing; the sequence has to be driven off the trace
    (`init complete` -> plug within the same second). Win2000's native
-   usbport does not idle-suspend at all, so the same test needs no timing
-   care there. Expect this window to widen once Phase 6 makes a device
-   enumerable.
+   usbport did not idle-suspend in this run, so the same test needed no
+   timing care there (this run's observation only; "does not idle-suspend
+   at all" as a generalisation was withdrawn on 2026-09-05, roadmap Phase
+   20 F18 - see the qualification under "An NT install that never saw a USB
+   controller has no `usbport.sys`" and the 2026-09-06 postscript under the
+   batch 11-V stage A lesson). Expect this window to widen once Phase 6
+   makes a device enumerable.
 
 The Win98 run also caught a full `ResumeController` -> complete
 reinitialisation -> No Op -> `init complete` cycle, and the shutdown
@@ -6402,7 +6914,10 @@ discriminating test.
 
 `src/xhci98.inf`, `scripts/package/*`, `scripts/inf-gate/check-inf.ps1`
 (`TGT-*`, `PKG-IDENTITY`), `scripts/inf-gate/test-inf-checks.ps1`;
-`docs/contributing/build-and-test.md` "Carrying a per-target `usbd.sys`".
+`docs/contributing/build-and-test.md`, "The files the OS supplies:
+`usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll`" - which is the
+section that replaced "Carrying a per-target `usbd.sys`" when release 1.0.0.1
+took the Microsoft files off the media.
 
 ## The import gate: Win2000 can be settled on the host, Win98 cannot, and `ExAllocatePoolWithTag` is not actually missing on 98 SE
 
@@ -6793,7 +7308,7 @@ board-specific half that was genuinely new here (subsystem `17AA:22B1`, BAR
 at `e33a0000`), so the PM decode is now independently confirmed on two
 machines rather than one, and the expected MSI-related differences (`MSI:
 Enable+`, `DisINTx+`, `pin A routed to IRQ 125` against the DOS `line=IRQ
-11`) showed up as `HARDWARE-TESTING.md` predicts.
+11`) showed up as `hardware-testing.md` predicts.
 
 Inferred: a uniform Win2000 resume path across recent Intel PCH xHCI is
 plausible, given identical PM content four years apart, but two data points
@@ -7370,7 +7885,9 @@ miniport didn't work", a false no-go on the architecture gate.
 
 Done (Phase 3 task 7). `xhci98.inf` carries both builds under distinct media
 names, selected by the install section each engine reads; see
-`docs/contributing/build-and-test.md`, "Carrying a per-target `usbd.sys`",
+`docs/contributing/build-and-test.md`, "The files the OS supplies:
+`usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll`" (which replaced
+"Carrying a per-target `usbd.sys`" at 1.0.0.1),
 and the `usbd.sys` authentication entry in this file for what re-verifying
 this diagnosis turned up.
 
@@ -7898,7 +8415,7 @@ CPU.
 
 Related implementation: `xhciqual/irq.c`, `xhciqual/bringup.c`,
 `xhciqual/main.c`, and `xhciqual/report.c`. Related procedure and
-diagnosis: `xhciqual/HARDWARE-TESTING.md`, `xhciqual/README.md`, and
+diagnosis: `xhciqual/hardware-testing.md`, `xhciqual/README.md`, and
 `docs/contributing/failure-diagnosis.md`.
 
 ## QEMU USB placement follows speed, not xHCI port numbers
@@ -7964,6 +8481,78 @@ Reusable rules:
 Normative detail: `docs/contributing/design/01-hardware-qualification-tool.md`,
 `docs/usb-xhci-info/xhci-data-structures.md`, and
 `docs/contributing/implementation-invariants.md`.
+
+## A matching `sizeof` proves nothing about a structure's fields
+
+Task 21.5's first amd64 run installed, started its controller, passed its No
+Op self-test and answered every root-hub callback - and then refused the first
+control transfer of every enumeration. The cause was
+`USBPORT_SCATTER_GATHER_LIST`, whose amd64 layout was the compiler's rather
+than a reading, and the two ways it was wrong are both invisible to the checks
+that were in place:
+
+- **The element is 24 bytes on x86 and 24 bytes on amd64, and two of its
+  fields still moved.** Its private address-like member widens from four bytes
+  to eight, so the length and the offset after it each sit four bytes higher
+  while the total stays the same. A size assert on such a structure is
+  reassurance, not coverage.
+- **The array's offset did not follow from the header's declared fields.** The
+  real element type is 8-aligned, its first member being a `PHYSICAL_ADDRESS`,
+  so the array starts at `0x20`. The declaration spells that address as two
+  `ULONG`s - which this project's C89 rules require - which makes the declared
+  element 4-aligned, and the compiler put the array at `0x1C`. `sizeof` came
+  out `0x50` either way, so the one number that had been asserted was the one
+  that had not moved.
+
+Reusable rules:
+
+- Assert **offsets**, not just sizes, on every structure the other side of an
+  ABI writes. A size is one equation over many unknowns.
+- When a declaration substitutes narrower members for a wider real field - a
+  Lo/Hi `ULONG` pair for a `PHYSICAL_ADDRESS`, say - it changes the
+  structure's *alignment* as well as its readability, and therefore the offset
+  of anything that follows it in an array or an enclosing structure. Pad
+  explicitly and assert the padding.
+- "This structure is all `ULONG`s, so both compilers lay it out the same" is
+  sound for the structure itself and says nothing about a structure that
+  *contains* it.
+- A check written for a condition that cannot arise can still be the thing
+  that catches you. The scatter-gather high-DWORD refusal guards against a
+  physical address above 4 GB, which measurement M5 says the 32-bit DMA
+  adapter cannot produce; what it actually caught was the miniport reading
+  four bytes off, on the first transfer, cleanly and with a counter. Keep
+  checks that test *the reading* rather than the hardware.
+
+Normative detail: `docs/contributing/design/11-x64-targets.md` section 5 M8;
+`docs/usb-xhci-info/usbport-miniport-abi.md`, "The amd64 scatter-gather layout
+(M8)".
+
+## Disassemble an amd64 image from `.pdata`, never by sweeping `.text`
+
+Reading the amd64 `usbport.sys` for M8 first went nowhere, and the reason was
+the method rather than the image. A linear disassembly from the start of
+`.text` desynchronises at the first jump table or data island and then emits
+plausible, wrong instructions for as long as it takes to resynchronise: over
+165 KB of code it reported 1,565 `call` instructions and not one of the
+indirect DMA-operations calls the search was for. Nothing announces this. The
+output looks like a disassembly.
+
+Every function in an amd64 PE is listed in `.pdata` as a `RUNTIME_FUNCTION` -
+`BeginAddress`, `EndAddress`, `UnwindInfo`, three DWORD RVAs - because the
+exception unwinder needs it. Parse that, and disassemble each function from
+its true entry point:
+
+- `!dh -s <module>` in `kd` gives `.pdata`'s file offset and size.
+- Each 12-byte entry gives one function's bounds; 653 of them in this image.
+- Feed `u <base+Begin> <base+End-1>` per function to `kd -cf <script>` with
+  `.logopen`, and the result is aligned throughout.
+
+Two notes on the tooling. `kd -z <image>` opens a plain PE as if it were a
+dump and resolves the image's own exports, which is enough to navigate by;
+this DDK's `dumpbin` has no amd64 disassembler (no `msdis160.dll`), so `kd` is
+the tool here whether or not you would have chosen it. And a live `kd -z`
+holds the file open, so never point one at a binary in `src\obj*` that a build
+is about to relink.
 
 ## Headless capture is display-mode specific
 
@@ -8078,3 +8667,351 @@ controller is unsupported for this Win98 design regardless of otherwise
 valid xHCI capabilities. Do not attempt to program MSI behind the OS's
 back; the kernel/HAL must allocate the vector and APIC message, and Win9x
 has no such infrastructure.
+
+## An interface's structures are not its call signature
+
+Task 21.7 read six measurements of the usbport miniport interface on Vista x64
+and Windows 7 x64 - the registration packet, the resources block, the endpoint
+properties, the scatter-gather list - and all six passed, so the ABI question
+was recorded as settled. It was not. `USBPORT_RegisterUSBPortDriver` gained a
+fourth parameter at the NT 5.x -> 6.x boundary, on both architectures, and a
+three-argument call bugchecks `0x7E` inside usbport before a single one of
+those six shapes is ever exercised. The method could not have found it: every
+one of the six was a static read of a *structure*, and none disassembled a
+*caller*.
+
+The crash names its own cause once read properly. The faulting instruction was
+inside a statically linked `memmove` - `cmp r9,2000h` with a `prefetchnta` /
+`movnti` large-block path is the CRT, not the surrounding symbol kd attributes
+it to - and the call site read a `USHORT` at `[reg]` and a pointer at
+`[reg+8]`, which is a `UNICODE_STRING`. A `UNICODE_STRING` whose `Length` and
+`Buffer` are both garbage, in a function taking a `DriverObject`, is a missing
+`RegistryPath` argument. Microsoft's own miniport for the same `usbport.sys`
+then confirmed it at its call site rather than leaving it inferred.
+
+Reusable rule: when a driver interface is being ported across an OS
+generation, disassemble the **prologue of every exported function you call**
+and count the argument registers it saves - `mov r1x,r9` on amd64, the `ret`
+immediate on stdcall x86 - not only the structures those functions carry. And
+when the fix is an extra argument, check the import library too: a decorated
+x86 stub name encodes the byte count (`_USBPORT_RegisterUSBPortDriver@12`), so
+changing arity there is a different job from changing it on amd64, where the
+name is bare and the convention is caller-cleaned.
+
+## A version-decorated install section is silently never read
+
+`[Manufacturer]`'s `TargetOSVersion` decoration selects the **models** section
+only. The install section named by that models entry takes the *platform*
+extension and nothing further, so `[Xhci.Dev.NTamd64.6.0]` is a section name
+setupapi never looks for. There is no error, no warning and no log line: the
+engine quietly runs `[Xhci.Dev.NTAMD64]` instead, and the resulting failure
+looks unrelated to the INF. The `setupapi.dev.log` says so in two lines twelve
+apart that disagree - a driver node of `xhci98.inf:XhciModels.NTamd64.6.0:...`
+and then `{Install Inf Section [Xhci.Dev.NTAMD64]}`.
+
+Reusable rule: to vary an install section by OS version, give the version's
+models section a **different install section name** and decorate that by
+platform - `%XhciDesc%=Xhci.Dev6,...` reaching `[Xhci.Dev6.NTamd64]`. And read
+`{Install Inf Section [...]}` in the log to see what actually ran, rather than
+`Selected driver installs from section [...]`, which prints the undecorated
+base name and cannot distinguish the two.
+
+## `COPYFLG_NO_OVERWRITE` does not save a source the queue cannot resolve
+
+An INF that reaches OS-supplied files through `LayoutFile=layout.inf` installs
+on NT 5.x and aborts on 6.x, because the file copy queue resolves each file's
+**source before** it decides whether to skip it. On Vista, `usbport.sys`
+resolved against the OS's own `usbport.inf_<hash>` driver-store package, the
+path came back unresolvable, and `SPFILENOTIFY_NEEDMEDIA` returned
+`FILEOP_ABORT`. Every file was already on disk and every copy would have been
+pruned - `usbui.dll`, which had no such mapping, pruned cleanly and proves the
+mechanism.
+
+Two further traps around it. The driver store *staged the package fine*, so
+"the install failed" is not evidence that the store rejected the file list -
+staging and copy-commit are separate steps with separate failure modes. And
+the wizard's error text is not the log's: the same fault reported
+`ERROR_INVALID_NAME` once and `ERROR_FILE_NOT_FOUND` twice, because the
+malformed source path contained uninitialised bytes that differed per attempt
+and were only sometimes syntactically invalid.
+
+Reusable rule: on 6.0 and later, omit the OS-supplied files from the copy list
+entirely rather than relying on a no-overwrite flag to skip them - but
+*measure* that they are on disk on that guest first, rather than carrying the
+reading over from an install image or another architecture.
+
+## An indirect-call scan does not find every x86 import call site
+
+Finding where NT 6.x x86 `usbport.sys` dispatches the miniport interrupt DPC
+meant finding which `KeInitializeDpc` call set up the DPC the ISR queues. On
+x86 an import call is `FF 15 <abs32>` against an IAT slot, so a byte scan for
+`FF 15` / `FF 25` resolved against a map built from `link /dump /imports`
+looks complete. It is not, and nothing tells you so.
+
+`usbport` loads the import into a register once and calls through the register
+for a whole run of initialisations - `mov ebx,[0x441AC]` at `vista-x86` RVA
+`0x1D8D5`, then `lea eax,[esi+0D08h] / push eax / call ebx` repeatedly. The
+scan found four `KeInitializeDpc` sites and **none of them was the one that
+mattered**; the site it could not see was the one initialising the ISR's own
+DPC.
+
+What worked instead was scanning `.text` for the raw displacement bytes of the
+structure offset already known from the queue site - `08 0D 00 00` for
+`devExt+0xD08` - and disassembling every hit. Six hits, one of them the answer.
+Prefer that whenever you already know an offset and want its users; it is
+blind to how the call is made.
+
+Corroborate the result with the surrounding layout rather than trusting a
+single hit. Here `devExt+0xD04` was a spin lock, `+0xD08` the DPC (0x20 bytes
+on x86), `+0xD28` another spin lock and `+0xD2C` the next DPC - consecutive and
+exactly sized, which is also why the two DPCs sit `0x24` apart and not `0x20`,
+a gap that would otherwise look like a misreading.
+
+## `kd`'s module-relative display is an RVA, but the address beside it is not
+
+Two `kd -z` display conventions cost time on the same afternoon, and they pull
+in opposite directions.
+
+A label printed as `usbport+0x1c0a` **is** an RVA: these images have base
+`0x10000`, so the instruction is at absolute `0x11c0a`. But the absolute
+address `kd` prints in parentheses beside an operand is base+RVA already. So a
+`push offset usbport!SomeExport+0x20d2 (0002ae54)` names RVA **`0x1AE54`**, not
+`0x2AE54` - and `uf usbport+2ae54` answers `No code found, aborting`, which
+reads like the function is missing rather than like the address is wrong.
+
+Separately, **`u <start> <end>` mis-displays RIP-relative targets** on amd64,
+printing `module+<raw disp32>` instead of the resolved address - so a call to
+`IoConnectInterrupt` reads as `usbport+0x261f5`, a plausible-looking offset
+that is not a code address at all. `uf` on a real function resolves them
+correctly; a `u` range does not. Compute `next_VA + disp32` from the bytes when
+working from a range. And `u <begin> <end>` driven per `.pdata` entry
+**silently truncates long functions**, so a sweep built that way has holes - it
+missed the `IoConnectInterrupt` call site entirely, which is what sent the
+search down the register-indirect path above in the first place.
+
+One more, for the IAT map those scans need: the address `link /dump /imports`
+prints for the Import Address Table is **base+RVA already** (`0x44000` on
+vista-x86, not `0x34000`), entries follow in listed order, and the four header
+lines - "Import Address Table", "Import Name Table", "time date stamp", "Index
+of first forwarder reference" - must be skipped or every index is wrong by
+four.
+
+## A healthy Device Manager node says nothing about which binary is loaded
+
+The Windows XP x64 re-validation that found the WDM-version defect nearly
+reported a pass before it started. Device Manager showed `USB 2.0 eXtensible
+Host Controller (xhci98)` with a `USB Root Hub` beneath it and no warning icon
+- exactly what a working install looks like - while the driver was in fact
+refusing to start its controller at init step 1 on every boot.
+
+Two things combined. The guest still had the **release**-flavour binary from an
+earlier task installed, and the release flavour writes nothing at all to the
+`0xE9` debug console; and a `StartController` refusal does not necessarily cost
+the device its node.
+
+So: **an empty debug-console log means "the wrong flavour is installed" at
+least as often as it means "the driver never loaded"**, and a device node's
+appearance is not evidence about the code in it. Read the
+`DriverEntry (built <date> <time>)` stamp before reading any result, and if
+there is no stamp, find out why before concluding anything. The existing rule
+that a stale log must never be read as this boot's is the same rule one step
+earlier.
+
+## A VVFAT floppy is the way out of a `snapshot=on` guest
+
+Guests here mount their package over VVFAT with `snapshot=on`, which is
+read-only host-side: anything the guest writes there lands in a throw-away
+overlay and never reaches the host. Screendumps get text out one screen at a
+time, which is fine for an error dialog and hopeless for a 1.1 MB
+`setupapi.dev.log` or a 264 KB minidump.
+
+The machines have an empty `floppy0`. `change floppy0 <path> raw` inserts a
+writable raw image the guest can format and write, and `eject floppy0` flushes
+it so 7-Zip can read it host-side; `change floppy0 fat:floppy:rw:<dir>` serves
+a host directory into the guest for the other direction. That is how a crash
+dump reached `kd.exe` on the host and how a corrected INF and a rebuilt `.sys`
+reached the guest, with no reboot and no restaging.
+
+Reusable rule: reach for the floppy before the screendump whenever the artefact
+is a file rather than a sentence. `qemu-img` and 7-Zip read the image directly,
+so the round trip costs one monitor command in each direction.
+## Microsoft's public symbols name every usbport-to-miniport call
+
+Every static reading of `usbport.sys` here through 2026-09-10 was taken
+without symbols: `.text` swept with `u`, call sites found by scanning for
+displacement bytes, functions named by what they did. The Version 300 reading
+of 2026-09-11 (roadmap task 22.5) was taken with Microsoft's public PDBs
+loaded, and the difference was the whole day. The symbol server carries a PDB
+for every NT 5.1 and later `usbport.sys` and `usbehci.sys` in `tools/` - the
+twelve `legal-provenance.md` section 2 lists - fetched by the GUID and
+age in the binary's own `RSDS` record. **Windows 2000 SP4's and NUSB's have
+none and were read without symbols**, which is where the address arithmetic
+still lives (the 2026-09-16 audit's E8: this said "every", and the two that
+matter most to this project are the exceptions). `kd -z <binary>
+-y srv*tools\symbols` loads them offline (`legal-provenance.md` section 2 has
+the twelve identifiers and the URL shape).
+
+What the names buy on NT 6.x is structural, not cosmetic: **every call from
+usbport into a miniport goes through a wrapper named `usbport!MPf_<Callback>`**
+- 48 of them on Vista x86, 51 on Windows 7 x86 - so `x usbport!MPf_*` is the
+complete list of what usbport can ask a miniport to do, and `uf` on each one
+gives the packet slot, the version gate, the NULL check and the argument list
+in a single command. The amd64 builds inline about two thirds of the wrappers,
+so read x86 first and confirm the offsets on amd64 by grepping a whole-`.text`
+listing for the interface-relative displacements. On the miniport side,
+`usbehci!RegistrationPacket` is a named global and its `DriverEntry` stores
+name every slot Microsoft fills. And the two Vista-era x86 `usbport.pdb`
+files are private PDBs - function names for statics as well, though still no
+types - which is why a `dt` still finds nothing.
+
+Two traps from the same session, both cheap. **A whole-`.text` `u` range ends
+at image base + section RVA + section size**, not at the RVA plus size: the
+XP SP3 control was first swept to `0x1DA00` instead of `0x2DA00`, produced
+18,070 lines that looked complete, and found nothing - which read as "no
+version tests" until the line count was compared with the section size.
+And **the PowerShell substring on `IndexOf("Reading initial command")` fails
+silently when `kd` prints nothing**, leaving the previous run's file in
+place; capture the raw output first and look at its head.
+
+Reusable rule: before disassembling a Microsoft binary by hand, dump its
+`RSDS` GUID and ask the symbol server. If a PDB exists, read the wrappers by
+name and spend the hand work on what the names do not settle.
+
+## A usbport service's lock assumptions are not in its signature
+
+Issue 7 cost four guest runs, two log rings, and a static read of three
+`usbport.sys` builds before the last hour of reading found that the
+defect was on this side of the boundary. The write-after-queue in
+`USBPORT_Xdpc_iSignal` is real, and it was correctly read as the place the
+wakeup is lost. What the reading stopped short of asking was **what makes
+that order safe for Microsoft's own miniport**, and the answer - usbport
+holds its EpList lock across the callbacks it makes through
+`iSetGlobalEndpointStateTx`, and `USBPORTSVC_CompleteTransfer` is written
+on the assumption that its caller is one of them - is not visible in the
+service's signature, its documentation, or ReactOS, which has no Xdpc state
+machine at all. It is visible in two places only: the `i` prefix on
+`Core_iCompleteTransfer`, and the fact that `usbehci.sys` calls the service
+from `PollEndpoint` and from nowhere else.
+
+Two things would have found it a day earlier. The driver's own callback log
+records the IRQL of every callback, and it had been saying
+`RH_GetPortStatus irql=00` on every NT 6.x run while the locking record
+said DISPATCH under `MiniportSpinLock`; a table that contradicts a
+measurement is the finding, not the measurement. And the healthy ring
+carried the control: for the same DPC object the order was always signal,
+store, ISR DPC exit, then the DPC firing, and a DPC that fires before the
+ISR DPC exits on a system that sets no target processor can only have been
+queued from below DISPATCH.
+
+Reusable rule: when a usbport path looks racy, read the vendor's miniport
+for the context it calls that path from before concluding the race is
+usbport's. A service with an `i`-prefixed body is a service with a lock
+assumption, and the miniport that ships with the OS is the specification of
+which callbacks satisfy it.
+
+## A parameter count read from one usbport build is a change to every target that reaches the slot
+
+On 2026-09-12 `CloseEndpoint` went from three parameters to two, because
+Vista x86 had bugchecked `0xD1` on the first device attach and its
+`MPf_CloseEndpoint` pushes exactly two. The reading was right and the fix
+was right for the tier it was read on. On 2026-09-14 Windows XP SP3 x86
+bugchecked `0xFC` on the first device attach, twice, with the mouse alone:
+its `MP_CloseEndpoint` pushes three (the third is ReactOS's
+`IsDoDisablePeriodic`, exactly as declared), and its epilogue is four pops
+and a `ret 8` with no frame-pointer restore, so a callee that cleans eight
+bytes leaves the third argument under every pop and `ret` takes the saved
+ebp - a stack address. The x86 stdcall contract is that the callee cleans
+what the caller pushed, so one callee cannot serve two callers that push
+different counts; the driver now registers a callee per arm
+(`src/xhci_usbport.h`, `PHCI_CLOSE_ENDPOINT`; issue 7 section 7.9).
+
+Two things made this cost two guest runs rather than none. The record said
+"NT 5.x never calls this slot", and that sentence was a census of the two
+shipping builds - Windows 2000 SP4 and NUSB - which had been generalised
+to the whole tier in the retelling; XP had been calling the slot on every
+device attach since its first run, with the three-parameter callee that
+happened to match. And the crash arrived on a new rung (`-smp 4`,
+`-cpu core2duo`) two days after the change, so it was read as the rung's
+for two runs; the XP x86 guest had last run on 2026-09-07, before the
+change, and nothing in either run distinguished "SMP" from "first run of
+this build on this target".
+
+Reusable rules. **A census is a statement about the images it swept**;
+write the image names into the sentence, not the tier. **A callee's
+parameter count on x86 is an ABI fact per usbport build**: before changing
+one, read the push sequence in every usbport that reaches the slot
+(`x usbport!MP*_<Name>` where symbols exist, a byte sweep for
+`call [reg+slot]` where they do not), and afterwards re-run every target
+that had passed on the old count before calling the change done. And **a
+bugcheck on a new rung is not evidence about the rung until the same build
+has run on the old one**. One incidental: `-cpu core2duo` carries NX, so
+XP loaded its PAE kernel and an execute-from-stack became a legible `0xFC`
+with a trap frame; on `-cpu pentium3` the same defect would have executed
+stack bytes and died somewhere else.
+
+## A guard compiled out on the host suite's architecture is a mode the suite has never run
+
+Issue 8's per-endpoint delivery was `_WIN64`-only from 2026-09-14 to
+2026-09-15, and the host suite builds x86: every one of its 12,695 checks ran
+with the mode off, except four vectors that set the flag by hand after
+`StartController`. When the guard was lifted for the whole 32-bit tier the
+suite did not fail - it hung, in a vector two thousand lines from the change,
+because the mode parks completions the suite's `deliver_events()` (the event
+DPC) had always delivered, and a global transfer record parked in one vector
+was reused by the next and appended to the completion list twice. Reading
+the spin under `cdb` (a `/Zi /Fm` rebuild of the suite in a scratch
+directory, `-pv` attach, `kb`, then `dt` on the list) named it in minutes;
+the build runner had sat on it for two hours, because the suite runs before
+the compiler and prints nothing until it ends.
+
+Two rules. **When a build flag selects behaviour by architecture, say in the
+same commit which suite exercises which arm**, and if the answer for one arm
+is "none", write the vector that sets the flag by hand before shipping the
+arm. And **a host stub that answers a service must answer it the way the
+target does**: `UsbPortInvalidateEndpoint` is not a counter to usbport, it is
+a request that usbport answers with a poll under the endpoint lock, and a
+harness that only counted it could not deliver a parked completion at all.
+The suite now has `usbport_worker()` for that, run after every DPC.
+
+## On Windows ME a new build is running only after a DriverEntry with its stamp, and three routes that look like one are not
+
+Taking issue 7 section 7.10's ME leg on a guest that already had the
+2026-09-02 build cost three boots, and each route looked finished. Update
+Driver from the new package asked for no restart and visibly reloaded the
+driver - a `StopController`, then a `DriverEntry` - with the **old** stamp:
+the installer kept the file already in `SYSTEM32\DRIVERS`. A disable and
+enable after copying the new file over it by hand restarted the controller
+with no `DriverEntry` at all, because Windows ME does not unload the image on
+a disable. And QEMU's `system_powerdown` does not shut ME down, it
+**hibernates** it: the relaunch's log began at `ResumeController`, the old
+image restored from disk. What loaded the new build was a Start-menu *Shut
+down* and a cold launch.
+
+Rules. **Read the stamp on the `DriverEntry` line, not the fact of a reload.**
+To replace a build on a 9x guest that already carries one, copy the file,
+shut down from the Start menu, and launch again; never `system_powerdown` an
+ME guest (Windows 98's shut down cleanly the same night, and 2b's
+`acpi=off` machine ignores it). And a controller restart on 9x is not an image
+load, so per-image trace budgets do not reset across its disable/enable
+cycles - silence in a later cycle's trace is the budget, not the path.
+
+## QEMU's xHCI ignores a Resume write to a USB 2.0 port, and an abandoned resume is a bugcheck 60 s later
+
+Roadmap 22.12 (b) took the first port suspend and resume ever measured here,
+on a Vista x86 guest on 2026-09-18. The suspend landed (`PLS = 3` with LWS,
+QEMU's `port_link pls 3`). The resume's `PLS = 15` with LWS produced no
+`port_link` line at all: QEMU leaves the port in U3 and moves it only on the
+U0 write. The driver's timer, which the 2026-09-17 audit had made abandon
+any port not in Resume, abandoned it, so no U0 write and no `C_PORT_SUSPEND`
+followed - and Vista's `UsbhSyncResumePort` waits 60 s for that change and
+then bugchecks `0xFE (8, 6, 1)` on purpose. Nothing in the driver's log
+stood between the abandon and the reboot.
+
+Rules. **Read a link-state write in QEMU's own trace** (`usb_xhci_port_write`
+then `usb_xhci_port_link`) before trusting that the emulator did what the
+specification says; a write with no `port_link` after it was not acted on.
+**A port operation the hub is waiting on must end in something the hub can
+see** - an abandon that reports nothing is a hub timeout, and on NT 6.x a
+hub timeout is a bugcheck, not a stall. And on XP and Windows 7, with
+`USB_MINIPORT_FLAGS_DISABLE_SS`, no selective suspend reaches a root-hub
+port at all, so a suspend reading there is a Vista reading (run-22, 22.12).

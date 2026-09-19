@@ -14,7 +14,8 @@ It is meant to orient a contributor. The detail lives in the other documents:
 - Numbered design records: [`design/`](design/README.md).
 - Measured behaviour, traps and refuted hypotheses: [`lessons.md`](lessons.md);
   the per-run evidence in the run sheets [`run-11v.md`](runs/run-11v.md),
-  [`run-13e.md`](runs/run-13e.md) and [`run-20.md`](runs/run-20.md).
+  [`run-13e.md`](runs/run-13e.md), [`run-20.md`](runs/run-20.md),
+  [`run-21.md`](runs/run-21.md) and [`run-22.md`](runs/run-22.md).
 - What a user is told (what the driver does, does not, and its known limitations):
   [`../using/release-notes.md`](../using/release-notes.md).
 
@@ -37,7 +38,7 @@ the port driver's role, was the documented fallback and was never needed. USB
 `docs/usb-xhci-info/win98-wdm.md` ("USB Stack Architecture and the Integration
 Decision") and `architecture.md`.
 
-Current status: Phases 0-20 are closed. `1.0.0.0`, `1.0.0.1`, `1.0.1.0` and
+Current status: Phases 0-21 are closed. `1.0.0.0`, `1.0.0.1`, `1.0.1.0` and
 `1.0.2.0` are cut, and none has been uploaded; Phase 15 moved the
 tree from revision 1.2 of the xHCI specification to revision 1.2c, the only
 revision Intel now serves, without a code change; Phase 16, the fully
@@ -57,12 +58,26 @@ Windows 2000 too. Phase 20, opened on 2026-09-05 on branch `phase-20` and
 closed on 2026-09-07, is release `1.0.2.0`: the fixes for the 2026-09-05
 repository audit (nineteen findings and six documentation groups), and the
 operating system supplying `usbui.dll` as well, which brings back the USB
-Root Hub's Power tab on the NT targets. Two acts sit outside the task list
+Root Hub's Power tab on the NT targets. Phase 21, opened on 2026-09-08 and
+closed on 2026-09-16, is the 64-bit question: one NT 5.2 amd64 binary from a
+second toolchain, observed on Windows XP x64, and then on Vista x64 and
+Windows 7 x64 through the Version 300 path Phase 22 built, with those two
+loading the unsigned driver only on an F8 boot. Two acts sit outside the task list
 and are the project owner's to take: uploading the asset, and running the
 release acceptance test by hand on a fresh VM and on a physical machine.
 The section this roadmap ends on is the reminder for the second, which runs
 before the upload: settled at `1.0.2.0`, and the order every release follows
 now.
+
+No phase is open. **Phase 22**, closed on 2026-09-19, began as the 32-bit
+question - whether the binary that already ships runs on Windows Vista and
+Windows 7 as it stands - and that premise fell with Phase 21's: measurements
+M9 to M11 of design record 11 found that no Version 200 miniport can run on
+Vista or Windows 7 in either architecture, so task 22.5's Version 300 path
+changed the shipping 32-bit binary as well as the amd64 one. Vista and
+Windows 7 are a VM-supported tier in both architectures, and 32-bit Windows 7
+has run once on real hardware. It cut `1.1.0.0`, the first release with a
+64-bit package, which waits only on the owner's upload.
 
 ---
 
@@ -73,7 +88,8 @@ work can be confirmed and has no checkpoint of its own. A VM boot or a bench
 trip is the expensive unit, and most tasks do not need one, so from Phase 6
 onward a phase whose tasks are confirmed in more than one place groups them
 into batches. Phases 6, 7a, 7b, 8, 9, 11 and 13 are of this shape; Phases 0-5,
-10, 12, 14, 15, 16, 17, 18, 19 and 20 have plain per-phase task numbers.
+10, 12, 14, 15, 16, 17, 18, 19, 20, 21 and 22 have plain per-phase task
+numbers.
 
 Task ids are `<batch>.<n>` in a batched phase (`6-B.4` is the fourth task of
 batch `6-B`) and plain `<phase>.<n>` otherwise (`12.3`, `14.1`). Phases 0-5
@@ -130,7 +146,15 @@ Phase 16 is the unattended post-release run on freshly installed guests. Phase
 17 has the OS supply `usbd.sys` and `usbhub.sys`, Phase 18 is release
 `1.0.0.1` with Windows ME, and Phase 19 is release `1.0.1.0` with Windows XP
 and the NT-side install fixes the XP guest found. Phase 20 is release
-`1.0.2.0`, the 2026-09-05 audit worked through and cut. Phase
+`1.0.2.0`, the 2026-09-05 audit worked through and cut. Phase 21 asked
+whether this driver can be a miniport on 64-bit Windows at all, taking
+Windows XP x64 and Server 2003 x64 - one target, both NT 5.2.3790 - as its
+subject and then Vista x64 and Windows 7 x64 in task 21.8, and closed with
+both as VM-supported tiers. Phase 22, closed on 2026-09-19, began by asking whether the 32-bit
+binary that already ships runs on Vista and Windows 7 as it stands, built the
+Version 300 path that both phases needed, and **carries the `1.1.0.0` cut** -
+the version Phase 21 bumped to and never published, and the first release to
+carry a 64-bit package. Phase
 14 waited on Phase 13's bench batches reporting. Accepting the published release, from the download on a
 freshly installed VM and on a physical machine, is not a phase and has no
 task: it is a hand-run procedure the project owner takes before the upload,
@@ -968,8 +992,11 @@ What shipped:
   `scripts\hub-characterise.ps1` extended.
 - `usbhub98.sys` (Finding D): the Windows 98 composite-device gap was one
   missing file - `usbhub.sys`, which Setup never copies on an xHCI-only
-  machine - now carried on the Win98 path only under `COPYFLG_NO_OVERWRITE`
-  with the same provenance and gate treatment as `usbd98.sys`.
+  machine - carried on the Win98 path only under `COPYFLG_NO_OVERWRITE`
+  with the same provenance and gate treatment as `usbd98.sys`, from
+  `0.0.0.4` to `1.0.0.0`. Withdrawn from the media on 2026-09-02 with the
+  other two: since `1.0.0.1` the media holds `xhci98.sys` and `xhci98.inf`
+  only, and the INF has the setup engine copy the OS's own file.
 - Bench results on real xHCI silicon under Windows 98 SE (E460): multi-TT
   and single-TT hub behaviour with five children identical either side of the
   one-variable hub swap; USB Audio plays clean at a root port and behind a
@@ -1419,7 +1446,10 @@ Tasks:
   written from `[Xhci.Dev.NTx86]` and `[DefaultInstall.NTx86]` as the 9x
   path has done since `1.0.0.0`, the gate requiring it once per route on
   both targets; `HcDisableSelectiveSuspend` considered and not taken (under
-  NUSB the per-controller value alone still idled the controller). Read
+  NUSB the per-controller value alone still idled the controller - a single
+  2026-08-13 boot that did not reproduce: on 2026-09-16 the value alone
+  stopped the idle in two boots under NUSB and two under SweetLow's stack, and
+  the binaries agree; issue 5 section 4). Read
   first with the value hand-set, then from the 19.4 package install: no
   `SuspendController` in two minutes idle, and a mouse hot-plugged after
   them bound.
@@ -1575,6 +1605,146 @@ in for a guest.
 
 Records: `runs/run-20.md`; design records 05, 06 and 07; `build-and-test.md`;
 `lessons.md`; `runs/run-20-post-release/`; `releases/history.md`.
+
+## Phase 21 - 64-bit Targets: Windows XP x64 and Server 2003 x64, then Vista x64 and Windows 7 x64
+
+Goal: whether this driver can be an Option A miniport on 64-bit Windows,
+settled from the shipping binaries first and guests second; if it can, one
+amd64 `xhci98.sys` observed on Windows XP x64 and then on Vista x64 and
+Windows 7 x64, with its standing stated in every document that names the
+targets.
+
+Status: closed on 2026-09-16 on the Vista x64 and Windows 7 x64 tier record.
+It opened on 2026-09-08. The Windows XP x64 checkpoint passed on 2026-09-09:
+an amd64 binary built with WDK 7.1 as `WNET`, in its own package with its own
+INF, passed every clause on an xHCI-only XP Professional x64 SP2 guest, on the
+`qemu` build and then the `release` flavour; the x86 binaries were held
+byte-identical while the amd64 build was added. It cost one defect, a
+`USBPORT_SCATTER_GATHER_LIST` offset the compiler had guessed four bytes wrong,
+now measurement M8. The Vista x64 and Windows 7 x64 leg found that no Version
+200 miniport can run on NT 6.x in either architecture (M9 to M11): the
+registration takes a fourth argument, the resource-type bits moved, and the
+interrupt DPC is called through a Version 300 slot. The Version 300 path that
+answers it is Phase 22's task 22.5, and the four NT 6.x guests there are the
+evidence this phase closed on.
+
+Both tiers are supported in virtual machines only and have never run on real
+hardware. Server 2003 x64 rests on its NT 5.2.3790 identity with XP x64, not a
+boot of its own. The package is not signed, so Vista x64 and Windows 7 x64
+load the driver only on a boot with driver signature enforcement disabled from
+the F8 menu, chosen again at every start. Their `release` flavour, and Windows
+7 x64's first install through the committed INF, were task 22.10's sixth and
+seventh install legs, read on 2026-09-18, and the `1.1.0.0` cut that first
+published the 64-bit package is Phase 22's.
+
+Why a phase: a target is not a build. The static pass settles the ABI before
+any code is written, a guest settles the runtime the static pass cannot, and
+the gates, the INF and the packager all have to learn a second architecture
+before anything ships. XP x64 and Server 2003 x64 are one target, and `WNET`
+is the only route to it; Vista x64 and Windows 7 x64 were a second leg because
+both enforce kernel-mode code signing and stage packages through a driver
+store.
+
+Tasks, all closed. [`runs/run-21.md`](runs/run-21.md) is the record: what each
+task did and every reading.
+
+| Task | Subject |
+|---|---|
+| 21.1 | the static ABI pass on NT 5.2 amd64: M1 to M6, all pass |
+| 21.2 | the x64 build path: WDK 7.1, all three flavours, no diagnostic |
+| 21.3 | the gates: the amd64 import gate, the import library, the second INF, both packagers |
+| 21.4 | the code the pass implies: the `_WIN64` packet, M7's `USBPORT_ENDPOINT_PROPERTIES`, `USBPORT_RESOURCES`, host tests for amd64 |
+| 21.5 | the Windows XP x64 guest: every checkpoint clause on both flavours, and M8 |
+| 21.6 | the record: the XP x64 and Server 2003 x64 tier in every document that names the targets |
+| 21.7 | the six measurements on Vista x64 and Windows 7 x64, all pass, and the `i386` halves for task 22.1 |
+| 21.8 | the Vista x64 and Windows 7 x64 guests: TCG, F8 as the only route, the file-queue abort and the `Xhci.Dev6` install path, M9 to M11, and the tier |
+
+Checkpoint (the Windows XP x64 guest), passed 2026-09-09: the static pass
+transcribed, eight measurements; the gates green on an amd64 binary; on an
+xHCI-only guest the package installed with no prompt, the driver registered
+and started and passed its No Op self-test, the root-hub callbacks answered, a
+HID mouse, a mass-storage device and a composite audio device bound, and the
+Device Manager disable, enable, remove and rescan sequence survived. Task 21.8
+was not a checkpoint clause. Not a checkpoint: a build that links, or a static
+reading standing in for a guest.
+
+Records: `runs/run-21.md`; `design/11-x64-targets.md`;
+`usb-xhci-info/usbport-miniport-abi.md`; `legal-provenance.md` section 4;
+`build-and-test.md`.
+
+## Phase 22 - Vista and Windows 7, and Release `1.1.0.0`
+
+Goal: whether this driver installs, loads and works on Windows Vista and
+Windows 7, settled from the shipping `usbport.sys` first and guests second,
+with its standing stated in every document that names the targets; and the
+tree cut as `1.1.0.0`, the first release to carry a 64-bit package.
+
+Status: closed on 2026-09-19 on the cut, its nine install legs and the
+post-release readings, with 22.12 (d) re-scoped by the owner. It opened on
+2026-09-08, the cut added on 2026-09-09. The static pass found nothing
+against the 32-bit binary, but Phase 21's M9 to M11 found that no Version
+200 miniport can run on NT 6.x, so task 22.5 made both shipping binaries
+present `Version = 300` to an NT 6.x `usbport.sys` and `200` to everything
+else. Its guests found three defects, each fixed and re-read on every
+target: the Windows 7 enable arrest (issue 7), a Windows XP x64 SMP bugcheck
+(issue 8), and XP's three-argument `CloseEndpoint`. Vista and Windows 7 have
+been a VM-supported tier in both architectures since 2026-09-16. `1.1.0.0`
+was cut on 2026-09-18 and re-cut eight times, every binary byte-identical;
+the sixth and seventh re-cuts recorded three known limitations found after
+the cut: the Vista/7 bugcheck with a Full-Speed hub on a root port,
+XP-onward silence on a root-port audio device, and the Windows 7
+controller-disable hang seen on the E460; the eighth brought the readme's
+embedded `history.md` entry into line with them. What is left is not a task:
+the owner's upload of `out\xhci98-1.1.0.0.zip` (397,765 B) and the push.
+Carried open past the
+phase: the disable hang's cause, the Sound Blaster Play! 2's Code 10 on
+Windows 7, and the split isochronous packet 22.12 (d) did not exercise.
+
+The x64 half is exactly what tasks 21.5 and 22.5 observed: three guests,
+never real hardware, with Vista x64 and Windows 7 x64 loading the driver
+only on an F8 boot. Of the x86 half, 32-bit Windows 7 ran once on real
+hardware after the cut (the E460, 2026-09-19).
+
+Why a phase: the 32-bit question asked nothing of the toolchain, only guests
+and readings, which is a different shape of work from Phase 21's. The cut
+lands here because Phase 21 closed on task 21.8's guests, and a cut should
+not wait on a leg whose answer changes nothing it publishes.
+
+Tasks, all closed. [`runs/run-22.md`](runs/run-22.md) is the record: what
+each task did and every reading, box by box.
+
+| Task | Subject |
+|---|---|
+| 22.1 | the static ABI pass on 6.0 and 6.1 x86: all six pass |
+| 22.2 | the imports: all ten pairs resolve on both systems |
+| 22.3 | the install path off clean guests: every OS-supplied file already on disk |
+| 22.4 | the Vista x86 and Windows 7 x86 guests, which do not share an accelerator |
+| 22.5 | Version 300 on NT 6.x, both architectures: issues 7 and 8, the `Xhci.Dev6` INF path, `xhcisnap`, Windows 2000's restart prompt, right-click Install |
+| 22.6 | the record: the tier in both architectures, nothing said of issue 7 |
+| 22.7 | the charset gate on tracked source |
+| 22.8 | what a cut needs that no gate supplies: the date 2026-09-18 in `xhci_version.h` and both INFs, the history entry, the release notes, README's Install section, the issue forms |
+| 22.9 | the post-release matrix on fresh Windows 98, 2000, XP x64 and Windows 7 x86 clones, taken after the cut by the owner's decision: run 2026-09-19; the Full-Speed-hub bugcheck (all four NT 6 targets) and the root-port audio silence (XP onward) became known limitations, and the Windows 7 real-hardware session on the E460 added the disable hang as a third |
+| 22.10 | the cut, 2026-09-18, four flavour directories and the asset; nine install legs read from it - the four x86 legs with full device clauses, the amd64 package on XP x64, Vista x64 and Windows 7 x64, the x86 package on Vista x86 and Windows 7 x86, the unsigned-driver prompt recorded - and the asset's 17 files exactly what the packager staged; no finding, no re-cut for it |
+| 22.11 | issue 5's mechanism replaced by `USB_MINIPORT_FLAGS_DISABLE_SS`, read on all ten targets 2026-09-17 |
+| 22.12 | the guest readings the 2026-09-17 audit fixes owe: (a) the 16-pointer service block on XP x64 and Vista x64; (b) the folded port shadow on Vista x86, gating the cut, re-read on the `release` flavour on leg 8; (c) the CNR/HCRST refusal on the Windows 2000 SMP guest under a gdbstub; (d) re-scoped by the owner to the played streams, Windows 2000 in QEMU and Windows 98 on the E460, since no matrix audio row plays and nothing after XP plays on a root port - the split isochronous packet and `SweptTransfers` were not exercised |
+
+Checkpoint, the guest half: on each of Vista x86 and Windows 7 x86 the
+package installed, the driver registered, started and passed its No Op
+self-test, the root-hub callbacks answered, the three devices bound, and the
+disable, enable, remove and rescan sequence survived. Taken on 2026-09-13 on
+the `qemu` build from a staged INF (issue 7 section 7.5), all but the
+unsigned-driver prompt, which 22.10 took. The cut half: every gate green on
+both architectures and four flavour directories cut; all nine install legs
+read from the asset; the asset holding exactly what the packager staged, with
+no Microsoft file; and the prose no gate reaches bumped. Not a checkpoint: a
+`qemu` reading standing in for the published `release` binary, the
+acceptance test, or the upload. The post-release matrix (22.9) was a clause
+of this half until 2026-09-18, when the owner put it after the cut.
+
+Records: `runs/run-22.md` (22.12's readings go there too);
+`design/11-x64-targets.md`; `usb-xhci-info/usbport-miniport-abi.md`; issues
+05, 07 and 08; `build-and-test.md`; `lessons.md`; `releases/history.md`;
+`runs/run-22-post-release/` (written by 22.9).
 
 ## Post-Release - Run the Acceptance Test by Hand
 

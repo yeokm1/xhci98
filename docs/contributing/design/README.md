@@ -12,7 +12,8 @@ A design record describes work that is scheduled or built. A proposal the
 project has not taken up lives in [`../../future-plans/`](../../future-plans/README.md)
 instead, and moves here with the next free number when its work is
 scheduled. Record 10, the SuperSpeed storage proposal, moved there on
-2026-09-07; its number is not reused, so the next record is 11.
+2026-09-07; its number is not reused. Record 11 came the other way, from
+`future-plans/x64-targets.md` on 2026-09-08. The next record is 12.
 
 ## Index
 
@@ -32,3 +33,10 @@ scheduled. Record 10, the SuperSpeed storage proposal, moved there on
   Section 13 is a later addendum (task 13-L.2): the PassThru read channel promoted into every shipping flavour, the verbosity ladder that replaced sink-gated recording, the file sink's retirement, and the security posture. `docs/contributing/passthru-snapshot-instrument.md` is its as-built companion; this record owns the "why" and that one the "what".
 
 - [09-post-release-unattended-run.md](09-post-release-unattended-run.md) - What an automated run on freshly installed Windows 98 SE and Windows 2000 SP4 guests has to do after a release (Phase 16, task 16.1, added after the cut as task 14.3): the decisions the project owner took (both targets single-processor, so Phase 2d's SMP guest is out; the single manual driver install against a base image cloned from the pre-driver snapshots and stamped with the version it carries; the `qemu` flavour only, the `release` binary being the physical machine's reading; the qualifier and log channel out of scope; the replug leg judged from counters; storage enumerated but not round-tripped; TCG with no time budget until one is measured), what separates this from Phase 10's matrix and from the hand-run acceptance of a published release, what this QEMU build cannot present and must therefore record as not reached, the refusals that belong in code, the preparation procedure, and the report header that makes two releases' runs diffable.
+
+- [11-x64-targets.md](11-x64-targets.md) - Whether this driver can be an Option A miniport on 64-bit Windows, and what it would take (Phase 21; it was `future-plans/x64-targets.md` on 2026-09-08 until that day's static pass scheduled it). Windows XP x64 and Server 2003 x64 are one target, both NT 5.2.3790, and the WDK's own `lib\wxp\i386`-with-no-`amd64` says so from Microsoft's side. It carries measurements M1 to M11 and thirteen decisions (ten taken, three - 3, 4 and 5 - still open on 2026-09-17); the six below are M1 to
+M6, read on 2026-09-08 and all six passing, and they are what scheduled the
+phase rather than the whole record - M7 and M8 came out of the build and the
+guest, and M9 to M11 are the NT 6.x readings that overturned the Vista/Windows 7
+premise (this row said "six measurements and five decisions" - the 2026-09-16
+audit's E4): the two private exports survive at the same ordinals; `USBPORT_GetHciMn` returns `0x10000001`, a value the driver already accepts, so the lineage refusal needs no change; the registration gate is unchanged with copy sizes `0x250`/`0x230`, the exact 64-bit widening of the x86 `0x13C`/`0x12C`; `USBPORT_RESOURCES` keeps `StartPA` a 4-byte `ULONG` so nothing after it shifts; the DMA adapter is still created 32-bit, so nothing lands above 4 GB whatever the guest's RAM; and all 50 packet slots the amd64 `usbehci.sys` fills land on the widening map. Also: what the tree assumes today that 64 bits touches, the `cdb -z` method that replaced a `dumpbin /disasm` that cannot run here, why a `#ifdef _WIN64` packet declaration written the obvious way cannot fail its own `C_ASSERT` and is still eight bytes short of what usbport copies, the build path and its three gates, the INF decision, the VM leg, and the thirteen decisions that are the owner's (section 12).

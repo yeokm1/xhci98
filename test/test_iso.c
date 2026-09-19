@@ -73,6 +73,8 @@
 #define WANT_CC_BANDWIDTH_OVERRUN  18UL
 #define WANT_CC_MISSED_SERVICE     23UL
 #define WANT_CC_STOPPED            26UL
+#define WANT_CC_STOPPED_LENGTH_INV 27UL
+#define WANT_CC_STOPPED_SHORT      28UL
 #define WANT_CC_ISOCH_BUFFER_OVER  31UL
 
 /* The Isoch TRB's own field positions, from docs/usb-xhci-info/xhci-data-structures.md
@@ -1158,8 +1160,10 @@ static void test_group_waits_for_its_tail(void)
     CHECK_EQ(iso_event(&fix, 2, WANT_CC_MISSED_SERVICE, 0, &result),
              XHCI_XFER_OK, "the tail event arrives");
     CHECK_EQ(result.Action, XHCI_XFER_ACTION_COMPLETE, "and ends the group");
-    CHECK_EQ(fix.queue.UnmatchedEvents, 1UL,
-             "counted as the duplicate measurement it also is");
+    CHECK_EQ(fix.queue.IsoTailEvents, 1UL,
+             "counted as the tail it is");
+    CHECK_EQ(fix.queue.UnmatchedEvents, 0UL,
+             "and not as unmatched - it resolved to a TRB this transfer owns");
     CHECK_EQ(fix.queue.IsoPacketsAnswered, 2UL,
              "with each packet answered exactly once");
     CHECK_EQ(fix.ring.Dequeue, 3UL,
@@ -1401,6 +1405,11 @@ static void test_multi_trb_packet_length(void)
     CHECK_EQ(iso_event(&fix, 1, WANT_CC_SHORT_PACKET, 100, &result),
              XHCI_XFER_OK, "the TD's own tail repeats it");
     CHECK_EQ(fix.transfers[0].BytesTransferred, 600UL, "adding nothing");
+    /* It names the packet's last TRB - the one carrying IOC - so it is the
+     * tail the spec promises, not a stray event, though it is not the
+     * request's last TRB. */
+    CHECK_EQ(fix.queue.IsoTailEvents, 1UL, "counted as a tail");
+    CHECK_EQ(fix.queue.UnmatchedEvents, 0UL, "and not as unmatched");
     CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE, "and ending nothing");
 
     /* A residual larger than the range summed so far is impossible and is
@@ -1725,6 +1734,46 @@ static void test_event_rejections(void)
              XHCI_XFER_BAD_PARAM, "and so is a NULL result");
 }
 
+/*
+ * The Stopped family (26-28) on an isochronous ring, which is the same refusal
+ * `test_xfer.c`'s `test_event_canceled` makes of the shared path.
+ *
+ * A Stopped code says software stopped the ring, and what that does to the
+ * queued transfers is the slot layer's decision - `XhciSlotTransferEvent`
+ * routes all three to `XhciXferQueueStopped` before this entry point is
+ * reached. `XhciXferIsoCodeInfo` decodes them successfully (the decoder vector
+ * above asserts that it does, and it must: `XhciXferQueueStopped` needs the
+ * decode), so without a refusal here one arriving would stamp the packet
+ * CANCELED and retire the whole group while a Stop Endpoint still owns the
+ * ring. Unreachable through the shipping caller, which is exactly why the
+ * contract is enforced at the layer rather than left to it.
+ */
+static void test_event_stopped_family_refused(void)
+{
+    ISO_FIXTURE fix;
+    XHCI_XFER_EVENT_RESULT result;
+    ULONG code;
+
+    iso_fixture_init(&fix, 32);
+    CHECK_EQ(iso_fixture_submit(&fix, 0, 3, 192), XHCI_XFER_OK, "placed");
+
+    for (code = WANT_CC_STOPPED; code <= WANT_CC_STOPPED_SHORT; code++) {
+        CHECK_EQ(iso_event(&fix, 0, code, 0, &result), XHCI_XFER_OK,
+                 "a Stopped code is accepted and dropped");
+        CHECK_EQ(result.Action, XHCI_XFER_ACTION_NONE,
+                 "it completes nothing here");
+        CHECK_EQ(result.CompletedCount, 0UL, "and lists nothing");
+        CHECK_EQ(result.NeedsRecovery, 0UL, "and asks for no recovery");
+        CHECK_EQ(fix.queue.StoppedRefused, code - WANT_CC_STOPPED + 1UL,
+                 "counted as refused, on the same counter the shared path uses");
+    }
+
+    CHECK_EQ(fix.queue.Count, 1UL, "the group is still outstanding");
+    CHECK_EQ(fix.transfers[0].IsoPacketsAnswered, 0UL,
+             "and not one of its packets was answered");
+    CHECK_EQ(fix.queue.Completed, 0UL, "nothing was completed");
+}
+
 static void test_submit_across_the_link(void)
 {
     ISO_FIXTURE fix;
@@ -1866,6 +1915,7 @@ int main(void)
     test_sweeps_and_finalise();
     test_submit_refusals();
     test_event_rejections();
+    test_event_stopped_family_refused();
     test_submit_across_the_link();
 
     printf("\n%d checks, %d failures\n", checks, failures);

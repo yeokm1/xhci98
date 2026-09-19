@@ -101,6 +101,32 @@ typedef struct {
     int status_rechecked;
     /* Intel 7/8-series port-routing config regs (valid if quirk QF_XUSB2PR) */
     u32 xusb2pr, xusb2prm, usb3_pssen, usb3prm;
+    /*
+     * **Why the mapper gave up, in its own words, or 0 if it did not.**
+     * `report_mmio_dead` reconstructs the cause from PCI state - BAR above
+     * 4 GB, unassigned BAR, D-state, MSE clear - and ends at "cause:
+     * undetermined" for anything else. Three of the mapper's refusals are
+     * "anything else": an I/O-space BAR, a CAPLENGTH of 0 or an HCIVERSION
+     * below 0.90, and a register block whose RTSOFF/DBOFF/PORTSC reach past
+     * the fixed 64 KB window this tool maps. All three are readings about the
+     * *tool* or about a controller misdescribing itself, and all three were
+     * being reported as "DISQUALIFIED: BAR0 MMIO not accessible ... cause:
+     * undetermined" - a tool limit read as dead silicon (the 2026-09-16
+     * audit's C5). Points at a string literal; never freed.
+     */
+    const char *mmio_reason;
+    /*
+     * **And whether that reason is about the TOOL rather than the
+     * controller.** Two of the three recorded refusals are about a controller
+     * misdescribing itself - an I/O-space BAR, a CAPLENGTH of 0 - and stay
+     * disqualifying. The third, a register block reaching past the fixed
+     * 64 KB window this tool maps, is a limit of this tool on a controller
+     * that may be perfectly sound, so it must reach the verdict as CANNOT SAY
+     * and not as a disqualification. Without this the reason string said "a
+     * tool limit, not a controller fault" while the verdict below it still
+     * disqualified the part.
+     */
+    int mmio_tool_limit;
 } PCIINFO;
 
 u32  pci_read32(u8 bus, u8 dev, u8 fn, u8 off);
@@ -122,9 +148,9 @@ const char *hc_name(int hctype);
 #define QF_XUSB2PR    0x0001  /* Intel 7/8-series EHCI<->xHCI port routing */
 #define QF_FW_UPLOAD  0x0002  /* Renesas uPD720201/202: fw upload on ROM-less cards */
 #define QF_FW_SPI     0x0004  /* NEC uPD720200: fw from on-card SPI flash */
-#define QF_SPURIOUS   0x0008  /* spurious-success: trust residual length only */
+#define QF_SPURIOUS   0x0008  /* spurious Success event after a short packet on the same TD (ignore it) */
 #define QF_BEI        0x0010  /* mishandles BEI in isoch TRBs */
-#define QF_COMPLIANCE 0x0020  /* SS compliance-mode lockup (USB3-only, FYI) */
+#define QF_COMPLIANCE 0x0020  /* SS compliance-mode lockup (USB3-only, FYI; DMI-keyed in Linux, no row sets it) */
 #define QF_PME_STUCK  0x0040  /* PME wake latch bug (bites Win2000 power mgmt) */
 #define QF_BULK64K    0x0080  /* keep bulk TRB chains under 64 KB */
 #define QF_AVOID      0x0100  /* known-unreliable silicon */
@@ -190,6 +216,7 @@ const QUIRK *quirk_find(u16 vid, u16 did);
 #define PSC_CCS   (1UL << 0)
 #define PSC_PED   (1UL << 1)    /* RW1C: writing 1 DISABLES the port */
 #define PSC_PR    (1UL << 4)    /* RW1S: write 1 starts reset */
+#define PSC_WPR   (1UL << 31)   /* RW1S: write 1 starts a WARM reset */
 #define PSC_PP    (1UL << 9)
 #define PSC_SPEED(v) (((v) >> 10) & 0xF)   /* 1=FS 2=LS 3=HS 4=SS */
 #define PSC_LWS   (1UL << 16)
@@ -202,6 +229,10 @@ const QUIRK *quirk_find(u16 vid, u16 did);
 #define PSC_CEC   (1UL << 23)   /* RW1C */
 #define PSC_CHANGE_BITS (PSC_CSC | PSC_PEC | PSC_WRC | PSC_OCC | \
                          PSC_PRC | PSC_PLC | PSC_CEC)
+/* Bits 2 and 29:28 - RsvdZ on the USB2 protocol ports this tool exercises, so
+ * a read-modify-write must not carry them back. Same value as the driver's
+ * XHCI_PORTSC_RSVDZ_MASK; see xhci-data-structures.md's safe-write rule. */
+#define PSC_RSVDZ 0x30000004UL
 
 /* Runtime registers, BAR0 + RTSOFF + offset (interrupter 0 only) */
 #define XRT_IMAN    0x20

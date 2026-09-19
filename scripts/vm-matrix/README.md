@@ -41,7 +41,7 @@ Useful narrowings:
 | `config.sample.psd1` | Per-host paths. Copy and edit; nothing committed knows where your QEMU or images are. |
 | `probe-devices.ps1` | Guestless population probe: what this QEMU build can present, and at what speed. |
 | `prepare-image.ps1` | One-off, operator-driven: boots a target image without `-snapshot` so a class's driver install is answered once and persisted, so the matrix run itself meets no wizard. On a fresh target it also clones the base image out of a pre-driver snapshot (`-Clone`) and takes the stamp the post-release run checks (`-Stamp`). |
-| `selftest.ps1` | Negative controls: drives `lib/verdict.ps1` with synthetic deltas, guestless, and asserts the cases whose answer must not be PASS; then drives the runner's own decisions (`lib/fresh.ps1`) the same way: the snapshot reader against a stand-in `qemu-img`, the target split, the writable-image refusal, the two-leg loop, the verdict, the report file, and `prepare-image.ps1`'s clone and stamp refusals. It prints its check count. |
+| `selftest.ps1` | Negative controls: drives `lib/verdict.ps1` with synthetic deltas, guestless, and asserts the cases whose answer must not be PASS; then drives the runner's own decisions (`lib/fresh.ps1`) the same way: the snapshot reader against a stand-in `qemu-img`, the target split, the writable-image refusal, the two-leg loop, the verdict, the report file, `prepare-image.ps1`'s clone and stamp refusals, and where the qemu package is read from (`out\pkg-qemu-<arch>`, never the untagged `out\pkg-qemu`). It prints its check count. |
 | `soak-11v.ps1` | Batch 11-V stage F: N unplug/replug cycles per class, then a sustained multi-class load, against an already-running guest whose monitor it is pointed at. |
 | `lifecycle-11v.ps1` | Batch 11-V stage G: an orderly guest shutdown with traffic in flight, a device churned across the whole teardown, and the stop-time counters read out of the stopped guest. Drives an already-running guest. |
 | `wedge-observe.ps1` | Finding 3's wedge as an observatory: the bench plug/pull recipes replayed in QEMU with every trace channel open. |
@@ -143,10 +143,15 @@ What differs from the ordinary matrix, all of it in code:
   `ExpectNoDriver` entry for it in `matrix.psd1`. Both cases are printed, and
   so is an entry that did not apply, because the entries are guesses the
   first fresh run exists to correct.
-- A group that ends on a row the matrix declares `MayWedgeGuest` for the
-  target is still `ERROR` in the report and does not count against the
+- A row the matrix declares `MayWedgeGuest` for the target, whose leg or
+  group ends with the guest gone or stopped (the liveness probe's
+  `not-executing` or `unreachable`, or the monitor gone with the row in
+  flight), is still `ERROR` in the report and does not count against the
   verdict. On Windows 98 that is the composite (`usb-audio`) row's pinned
-  reading.
+  reading. Any other `ERROR` on that row - a refused `device_add`, a device
+  never on the bus, an unconfirmed `device_del`, identity drift, a monitor
+  timeout with the guest still executing - counts, and is printed as the
+  declaration not applying.
 - It always boots with `-snapshot`, and refuses a config that turns that off.
 - Each target gets its own report, `out\post-release\<DriverVer>\post-release-<target>.txt`,
   with a header block (driver, image and stamp, QEMU, offsets, start and
@@ -188,6 +193,41 @@ showed the qemu build running with the offset table's `SIZEOF`, so a stamp is
 never written on an image that has not been seen to carry the driver.
 Anything persisted after the stamp fails the newest-snapshot check; re-stamp
 after any further preparation.
+
+**`-WorkDir` and `-CopyBack`, which the sequence above does not use and which
+the `-Stamp` refusal depends on.** `vm\` is inside OneDrive on the development
+host, and a prep boot is the one pass that WRITES to the image, so keeping a
+sync client off it while that runs is a precaution worth taking.
+
+**It is a precaution and not a diagnosis.** `prepare-image.ps1`'s own account
+of the four prep-boot hangs offers OneDrive as one of three explanations and
+then refutes all three - two of those hangs ran from a local disk - and every
+one of them left the image intact with **zero corruptions**. What correlates
+is the device being installed, not the storage. So do not read `-WorkDir` as
+the fix for a known failure; read it as not asking the question.
+
+`-WorkDir <dir>` copies the image somewhere outside the synced tree, boots the
+copy, and leaves it there; `-CopyBack` puts it back when the boot is done. The path the boot
+actually ran is the second line of the paths file, and `-Stamp` compares the
+image it is asked to stamp against it - so a `-Boot -WorkDir` followed by a
+`-Stamp` without `-CopyBack` is refused rather than stamping an image that was
+not the one prepared. Pausing OneDrive for the duration is the alternative, and
+is what the recorded runs did.
+
+**`xp64-fresh` and `win7-fresh` (2026-09-18, design record 09 section 2.6)**
+are fresh targets of the same shape for Windows XP x64 SP2 and Windows 7 SP1
+x86, cloned from `winxp64.img @ winxp64-clean-install-smp4` and
+`win7.img @ win7-clean-install`. They name their OS with `Family`
+(`winxp64`, `win7`) rather than inheriting 2b's entries through `Like`,
+boot with `-smp 4` and `tcg,thread=multi` in the run and in the preparation,
+and XP x64 carries `Arch = 'amd64'`: it stages `out\pkg-qemu-amd64`, reads
+counters through `offsets-amd64.txt` (`gen-offsets.ps1 -Arch amd64`), and
+finds its extension from the `StartController extension VA high=` / `low=`
+pair the amd64 `qemu` build prints, because the callback line's `a=` is
+only the low half of a pointer there. Their preparation is the sequence
+above with the NT 5.2 / NT 6.1 wizard (the prep boot prints it); on both,
+QEMU stays up after Windows shuts down, so end with `quit` at the monitor
+before `-Stamp`.
 
 A third fresh-style target, `2a-sweetlow`, is a Windows 98 guest running
 SweetLow's XP-lineage USB 2.0 stack instead of NUSB's. It clones the stamped
@@ -269,7 +309,10 @@ Each is in `lib/qemu.ps1`, with the run that paid for it named there.
 3. A stale `offsets.txt`. `Assert-OffsetsFresh` compares `SIZEOF` against the
    running driver's reported size and voids the run.
 4. A healthy trace is not a living guest. `Test-GuestAlive` watches the
-   guest's own interrupt counters, and is shown to fail on a paused VM.
+   guest's own interrupt counters, and is shown to fail on a paused VM. And
+   a ticking PIT is not a running kernel: on a group with the keep-alive
+   pump, the row's liveness probe also requires the pump's `transfers
+   completed` to advance, because IRQ0 keeps arriving at a bugchecked guest.
 5. A pull is only a pull if the device left. Every `device_del` waits on
    `info usb`.
 6. A leftover guest from a previous run listens on the same monitor port, and
@@ -332,8 +375,15 @@ Traps the harness paid for and documents rather than enforces:
 15. `prepare-image.ps1 -Attach uas` (and `bot`) taught nothing, because the
     bare adapter is never presented by QEMU without a LUN; the wizard the
     matrix then met unattended was the first anyone saw of the class. The
-    prep spec now adds the matrix row's `scsi-hd` child on a second scratch
-    drive and repairs `attached`, and `-Detach` removes the child first.
+    prep spec now adds the matrix row's `scsi-hd` child on a scratch drive of
+    its own and repairs `attached`, and `-Detach` removes the child first.
+    **One scratch per consumer, and they are `-blockdev` nodes**: `bot` and
+    `uas` shared `prepdrv2`, so presenting one after the other was refused,
+    and the whole set was declared with `-drive if=none`, which QEMU deletes
+    along with the device that held it - so an Attach / Detach / Attach of the
+    same row failed the second time with `can't find value 'prepdrv'`. The run
+    path moved to `-blockdev` at audit S-1; the prep path followed on
+    2026-09-16.
 16. The run declares `-audiodev none,id=matrixaud` and the `usb-audio` row
     names it. Without a backend named, `device_add usb-audio` opens QEMU's
     default host audio backend on its main loop, and on the first `1.0.1.0`

@@ -53,7 +53,7 @@ it costs three things:
   High-Speed bus rather than a frame budget. The bandwidth half has no
   measurement either way.
 
-Issue 6 section 6 lists a true-speed report as an opt-in and says why it
+Issue 6 section 8 lists a true-speed report as an opt-in and says why it
 cannot be enabled under any shipping usbport: the fault is in usbport's list
 handling, and SweetLow's rebuild has the same branch. The lever has two
 positions and both have been taken. This page proposes a third: keep
@@ -313,7 +313,8 @@ turn out to matter.
 - **Idle suspend.** usbport idle-suspends a quiet controller (issue 5). N
   permanently present hubs with pending interrupt transfers may keep it
   from ever going idle, or may not count; either reading changes what the
-  package's `DisableSelectiveSuspend` is for.
+  package's `USB_MINIPORT_FLAGS_DISABLE_SS` is for (the machine-wide
+  `DisableSelectiveSuspend`, until 1.0.2.0).
 - **Resume.** After a resume the virtual hubs already exist and usbhub does
   not rescan the root hub. A device plugged during the suspend has to be
   reported through the hub's pipe from the seed, and whether usbhub re-arms
@@ -346,7 +347,7 @@ on root ports, with the interval read from the snapshot instrument.
 - usbport still rounds a Full or Low Speed `bInterval` down to a power of
   two in frames, so `bInterval` 10 gives 8 ms, as it does behind a real hub.
 - It does not remove the override. Under a usbport that guarded the empty
-  list (issue 6 section 6) a truthful root port would be simpler than a
+  list (issue 6 section 8) a truthful root port would be simpler than a
   virtual hub, but no such usbport exists for these targets.
 - It does not interact with the SuperSpeed storage proposal except
   by composition: a SuperSpeed device reported as High-Speed sits behind

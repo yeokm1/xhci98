@@ -197,12 +197,21 @@ void report_pci_status(const PCIINFO *p)
  * name a cause that was never reached. */
 void report_mmio_dead(const PCIINFO *p)
 {
-    if (p->bar_hi != 0)
+    /* What the mapper actually refused on, when it recorded one. It is more
+     * proximate than anything derivable from PCI state below, because it is
+     * the reason the code took rather than a reason the reader reconstructs. */
+    if (p->mmio_reason != 0)
+        qprintf("    cause: %s\n", p->mmio_reason);
+    else if (p->bar_hi != 0)
         qprintf("    cause: BAR0 is above 4 GB and cannot be mapped by this "
                 "32-bit path\n");
     else if (p->bar_phys == 0)
         qprintf("    cause: BAR0 is unassigned - firmware allocated no MMIO "
                 "window\n");
+    else if ((p->bar_lo & 1) != 0)
+        qprintf("    cause: BAR0 selects I/O space, and xHCI 5.2.1 requires a "
+                "memory BAR - this is true whatever the power state and "
+                "Memory Space Enable say\n");
     else if (p->has_pm && p->pm_state != 0)
         qprintf("    cause: device is in D%d, not D0 - it decodes no MMIO "
                 "until powered up\n", p->pm_state);
@@ -240,6 +249,17 @@ int report_mmio_unavailable(const PCIINFO *p, int active_requested)
                 "address it)\n");
     } else if (p->bar_phys == 0) {
         qprintf("  DISQUALIFIED: BAR0 is unassigned\n");
+    } else if ((p->bar_lo & 1) != 0) {
+        /* The third function that has to ask this before the D-state and MSE
+         * branches, and the one the fix missed: `quick` above already answers
+         * DISQUALIFIED for it, so without this the run returned 1 - a hard
+         * disqualifier - while printing "No controller fault inferred" and
+         * advice about powering the part up or enabling MSE. The verdict and
+         * the words under it have to be one answer (Codex review round 5). */
+        qprintf("  DISQUALIFIED: BAR0 selects I/O space, and xHCI 5.2.1 "
+                "requires a memory BAR\n");
+        qprintf("      True whatever the power state and Memory Space Enable "
+                "say; powering it up will not change it.\n");
     } else if (p->has_pm && p->pm_state != 0) {
         qprintf("  NOT QUALIFIED: controller is in D%d, not D0; MMIO and "
                 "active tests are unavailable\n", p->pm_state);
@@ -255,6 +275,14 @@ int report_mmio_unavailable(const PCIINFO *p, int active_requested)
             qprintf("      No controller fault inferred; use an active mode "
                     "to test whether MSE can be enabled.\n");
         }
+    } else if (p->mmio_tool_limit) {
+        /* The mapper refused for a reason that is about this tool. Saying
+         * DISQUALIFIED here would name dead silicon for a controller that may
+         * be sound, which is what report_mmio_dead's recorded reason exists to
+         * prevent - and the two must agree. */
+        qprintf("  NOT QUALIFIED: this tool could not map the controller's "
+                "register block\n");
+        qprintf("      No controller fault inferred; see the cause above.\n");
     } else {
         qprintf("  DISQUALIFIED: BAR0 MMIO not accessible with MSE set, BAR "
                 "assigned below 4 GB, and device in D0\n");
@@ -284,10 +312,30 @@ int quick_classify_mmio(const PCIINFO *p, int active_requested)
         return QUICK_DISQUALIFIED;
     if (p->bar_phys == 0)
         return QUICK_DISQUALIFIED;
+    /*
+     * **An I/O-space BAR0 is disqualifying whatever the power state or MSE
+     * says, and it has to be asked before both of them.** xHCI 5.2.1 requires
+     * a memory BAR, and the mapper refuses this one before it touches
+     * anything - so it needs neither D0 nor MSE to be established. Asked after
+     * them, a controller that is both in D3 and misdescribing its BAR type
+     * came back CANNOT SAY on the D-state, and the definitive refusal - the
+     * one that stays true when somebody powers it up - was never reported.
+     * A PCI-state fact rather than a `mmio_reason` test, so it holds on a path
+     * where the mapper never ran.
+     */
+    if ((p->bar_lo & 1) != 0)
+        return QUICK_DISQUALIFIED;
     if (p->has_pm && p->pm_state != 0)
         return QUICK_CANNOT_SAY;
     if ((p->cmd_effective & PCI_CMD_MSE) == 0)
         return active_requested ? QUICK_DISQUALIFIED : QUICK_CANNOT_SAY;
+    /* A recorded tool limit is the last thing asked, because everything above
+     * it is a reading about the machine and this one is a reading about the
+     * tool: the window decoded, the device is in D0 with MSE set, and what
+     * failed is that this tool maps a fixed 64 KB. CANNOT SAY, not
+     * DISQUALIFIED - a verdict about silicon needs evidence about silicon. */
+    if (p->mmio_tool_limit)
+        return QUICK_CANNOT_SAY;
     return QUICK_DISQUALIFIED;
 }
 
@@ -321,11 +369,30 @@ const char *quick_reason(const PCIINFO *p, int mmio_ok, int usb2_ports,
             return "BAR0 is above 4 GB";
         if (p->bar_phys == 0)
             return "BAR0 is unassigned";
+        /* Before the power and MSE questions, for the reason
+         * quick_classify_mmio gives at the same position: this one is true
+         * whatever those two say, and the verdict is DISQUALIFIED. */
+        if ((p->bar_lo & 1) != 0)
+            return "BAR0 selects I/O space, and xHCI requires a memory BAR";
         if (p->has_pm && p->pm_state != 0)
             return "not in D0 - a driver must power it up first";
         if ((p->cmd_effective & PCI_CMD_MSE) == 0)
             return active_requested ? "Memory Space Enable could not be set"
                                     : "Memory Space Enable is clear";
+        /*
+         * **Whatever the mapper recorded beats the fallback below**, on the
+         * same terms report_mmio_dead takes it: it is the reason the code
+         * actually stopped on, where the fallback is a reconstruction from PCI
+         * state that by this point has ruled everything out. It matters for
+         * both kinds. A tool limit printed as "dead" contradicts the CANNOT
+         * SAY beside it. A controller misdescribing its own layout - a zero
+         * RTSOFF or DBOFF, a CAPLENGTH of 0 - is correctly DISQUALIFIED, but
+         * "BAR0 MMIO is dead" is the wrong reason for it: the window decoded
+         * perfectly and the registers in it are wrong, which is what the
+         * reader needs to be told apart.
+         */
+        if (p->mmio_reason != 0)
+            return p->mmio_reason;
         return "BAR0 MMIO is dead with MSE set and the device in D0";
     }
 

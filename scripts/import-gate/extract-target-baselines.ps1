@@ -55,7 +55,13 @@ manifest satisfies this script.
 param(
     [string]$Win2KIso = "",
     [string]$Win98Iso = "",
+    # The Windows XP Professional x64 / Server 2003 x64 media, for the NT 5.2
+    # amd64 kernel and HAL the 64-bit half of the import gate resolves against
+    # (roadmap task 21.3). Omitting it skips that block and leaves the gate
+    # warning that the resolution half of its amd64 rule did not run.
+    [string]$Amd64Iso = "",
     [string]$Win2kManifestPath = "",
+    [string]$Amd64ManifestPath = "",
     [switch]$Force
 )
 
@@ -66,9 +72,13 @@ $ErrorActionPreference = "Stop"
 $repo = Get-RepoRoot
 $w2kDir = Join-Path $repo "tools\win2ksp4-extracted"
 $w98Dir = Join-Path $repo "tools\win98se-extracted"
+$amd64Dir = Join-Path $repo "tools\winxp64-extracted"
 $work = Join-Path $env:TEMP ("xhci98-baselines-" + [System.IO.Path]::GetRandomFileName())
 if ($Win2kManifestPath -eq "") {
     $Win2kManifestPath = Join-Path $PSScriptRoot "win2k-baselines.expected"
+}
+if ($Amd64ManifestPath -eq "") {
+    $Amd64ManifestPath = Join-Path $PSScriptRoot "winxp64-baselines.expected"
 }
 
 $sevenZip = Find-Tool "7z"
@@ -135,6 +145,7 @@ try {
     Ensure-Directory $work
     Ensure-Directory $w2kDir
     Ensure-Directory $w98Dir
+    Ensure-Directory $amd64Dir
 
     # --- Windows 2000 SP4 kernel and HALs -----------------------------------
     Write-Step "Windows 2000 SP4 kernel and HAL export baselines"
@@ -233,6 +244,100 @@ $manifestFiles
 "@
         }
         Write-Ok "all Windows 2000 kernel/HAL files match the authenticated manifest"
+    }
+
+    # --- NT 5.2 amd64 kernel and HAL ----------------------------------------
+    #
+    # The same procedure as the SP4 block above, against AMD64\ instead of
+    # I386\, and it stages into tools\winxp64-extracted beside the usbport.sys
+    # and usbehci.sys the phase-21 ABI readings were taken from. Three files
+    # rather than ten: NT 5.2 amd64 ships one HAL, for the reason
+    # winxp64-baselines.expected records.
+    #
+    Write-Step "NT 5.2 amd64 kernel and HAL export baselines"
+
+    $amd64Wanted = @(Read-Win2kBaselineManifest -Path $Amd64ManifestPath)
+    $amd64Missing = @($amd64Wanted | Where-Object { $Force -or -not (Test-Path -LiteralPath (Join-Path $amd64Dir $_.Out)) })
+
+    if ($amd64Missing.Count -eq 0) {
+        Write-Ok "already staged (pass -Force to redo)"
+        foreach ($w in $amd64Wanted) { Report-File (Join-Path $amd64Dir $w.Out) }
+    } elseif ($Amd64Iso -eq "") {
+        Write-Warn "no -Amd64Iso given - skipping. The gate will warn that the resolution half of its amd64 rule did not run."
+    } elseif (-not (Test-Path -LiteralPath $Amd64Iso)) {
+        Write-Warn "Windows XP x64 ISO not found at '$Amd64Iso' - skipping. The gate will warn that the resolution half of its amd64 rule did not run."
+    } else {
+        Invoke-SevenZip (@("e", "-y", "-o$work", $Amd64Iso) + @($amd64Missing | ForEach-Object { "AMD64\" + $_.Packed }))
+
+        # Expanded and authenticated in the work directory before anything is
+        # copied into tools\, for the reason the SP4 block above gives at
+        # length: a run against the wrong media must not install the files it
+        # is about to condemn.
+        $expanded64 = Join-Path $work "amd64"
+        if (Test-Path -LiteralPath $expanded64) {
+            Remove-Item -LiteralPath $expanded64 -Recurse -Force
+        }
+        New-Item -ItemType Directory -Path $expanded64 | Out-Null
+
+        foreach ($w in $amd64Missing) {
+            $packed = Join-Path $work $w.Packed
+            if (-not (Test-Path -LiteralPath $packed)) {
+                throw "'$($w.Packed)' is not on '$Amd64Iso' under AMD64\"
+            }
+            if ($w.Packed.EndsWith("_")) {
+                & $expand $packed (Join-Path $expanded64 $w.Out) | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    throw "expand failed on '$packed' (exit $LASTEXITCODE)"
+                }
+            } else {
+                Copy-Item -LiteralPath $packed -Destination (Join-Path $expanded64 $w.Out) -Force
+            }
+        }
+
+        $fresh64 = @(Get-Win2kBaselineValidationErrors -Dir $expanded64 -Rows $amd64Missing)
+        if ($fresh64.Count -gt 0) {
+            throw @"
+the NT 5.2 amd64 kernel/HAL files extracted from '$Amd64Iso' are not the
+recorded builds:
+  - $($fresh64 -join "`n  - ")
+Nothing was staged. That media is a different NT 5.2 build from the one this
+project's baselines are recorded against. Either stage from the recorded
+media, or update scripts\import-gate\winxp64-baselines.expected deliberately -
+those files are what the gate reads to decide whether a kernel or HAL import
+resolves on the 64-bit target.
+"@
+        }
+
+        foreach ($w in $amd64Missing) {
+            Copy-Item -LiteralPath (Join-Path $expanded64 $w.Out) `
+                      -Destination (Join-Path $amd64Dir $w.Out) -Force
+        }
+        Write-Ok "staged into $amd64Dir and matched against winxp64-baselines.expected"
+        foreach ($w in $amd64Wanted) { Report-File (Join-Path $amd64Dir $w.Out) }
+    }
+
+    $amd64Present = @($amd64Wanted | Where-Object {
+        Test-Path -LiteralPath (Join-Path $amd64Dir $_.Out)
+    })
+    if ($amd64Present.Count -gt 0) {
+        $validation64 = @(Get-Win2kBaselineValidationErrors -Dir $amd64Dir -Rows $amd64Wanted)
+        if ($validation64.Count -gt 0) {
+            $manifest64 = (($amd64Wanted | Sort-Object Out | ForEach-Object {
+                "      $($_.Out)"
+            }) -join "`n")
+            throw @"
+staged NT 5.2 amd64 baseline does not match '$Amd64ManifestPath':
+  - $($validation64 -join "`n  - ")
+Fix it one of these ways:
+  - re-run this script with -Force and the recorded Windows XP x64 media
+  - without the media: delete only the manifest-owned files listed below from
+    '$amd64Dir'; keep the USBPORT/USBEHCI binaries and every other file there.
+    Removing the complete list returns the import gate to its "no baseline
+    present" warning:
+$manifest64
+"@
+        }
+        Write-Ok "all NT 5.2 amd64 kernel/HAL files match the authenticated manifest"
     }
 
     # --- Win98 SE ntkern.vxd ------------------------------------------------

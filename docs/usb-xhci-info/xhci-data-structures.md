@@ -17,7 +17,7 @@ Conventions:
 - Bit ranges are `high:low`, inclusive.
 - "RW1C" = write 1 to clear; writing 0 has no effect.
 - "RsvdZ" = reserved, software must write 0. "RsvdP" = reserved, software must preserve (read-modify-write).
-- The driver runs 32-bit only: every "Hi" DWORD of a 64-bit pointer field is written as 0, but it must still be written.
+- Every "Hi" DWORD of a 64-bit pointer field is written as 0, but it must still be written. That holds in the amd64 build too, and it is a measurement rather than an assumption: NT 5.2's `usbport.sys` creates its DMA adapter 32-bit on amd64 as well (`Dma32BitAddresses = 1`, `DmaWidth = Width32Bits`; design record 11, M5), so no address it hands this driver is above 4 GB, and the scatter-gather high-DWORD check refuses one that is.
 
 ---
 

@@ -117,7 +117,18 @@ static void test_declared_size(void)
  */
 static void test_allocation_cost(void)
 {
-    CHECK_EQ(XHCI_USBPORT_CB_HEADER_BYTES, 48, "usbport header size");
+    /*
+     * **48 is an x86 reading, and this runs on both architectures.** Design
+     * record 04 records the usbport common-buffer header as unread on amd64 -
+     * a private header holding a PHYSICAL_ADDRESS and pointers is exactly the
+     * kind of structure that widens - so on the amd64 leg this asserts the
+     * constant against a measurement nobody has taken (the 2026-09-16 audit's
+     * C6). The arithmetic is insensitive to it either way:
+     * ROUND_TO_PAGES(409600 + h) is 413,696 for every h up to 4,096, which is
+     * what the two checks below are really about.
+     */
+    CHECK_EQ(XHCI_USBPORT_CB_HEADER_BYTES, 48,
+             "usbport header size, as measured on x86 and assumed on amd64");
 
     CHECK_EQ(XhciCommonBufferAllocationBytes(XHCI_HC_RESOURCES_SIZE),
              413696UL, "bytes usbport asks the DMA adapter for");

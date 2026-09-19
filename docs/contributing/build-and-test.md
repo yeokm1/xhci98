@@ -15,8 +15,12 @@ repository, are used in place, and write no registry key: MSVC 6.0 runs from
 `tools\MSVC600\VC98\BIN`, and the DDK is reconstructed into `tools\ntddk`. Every
 script that compiles, links, or dumps a binary derives those paths from its own
 location, so a clone builds wherever it is unpacked and the whole project is
-self-contained apart from QEMU and Open Watcom. `DDKROOT` and `MSVC6` override
-each half for a host that has one installed elsewhere.
+self-contained apart from QEMU and Open Watcom. `DDKROOT` overrides where the
+DDK is found for a host that has one installed elsewhere, and because the DDK
+build takes its compiler from `setenv.bat`, that redirects the compiler the
+driver is built with. `MSVC6` does not: it redirects only the host-side tools
+that need a `cl` and `dumpbin` of their own (`test\run-host-tests.cmd`,
+`scripts\make-usbport-lib.cmd`, `scripts\vm-matrix\gen-offsets.ps1`).
 
 Open Watcom 2.0 is the exception: it is a real host install. The DOS qualifier
 is a 32-bit protected-mode DOS binary with the DOS/32A extender embedded as its
@@ -104,15 +108,19 @@ Setup scripts:
 | `scripts\install-w2kddk-cabs.ps1` | Unpacks the DDK build environment into `tools\ntddk` directly from the `WIN2KDDK.EXE` payload CABs: no GUI installer, no registry, nothing under `C:\`. `-DdkPath` puts it elsewhere (see notes below) |
 | `scripts\setup-qemu.ps1` | Checks/configures the Win98 SE (Phase 2a) QEMU launchers; use `-Install` to try Winget QEMU install; use `-CreateDisk` for VM images |
 | `scripts\check-flavour-marker.ps1` | Reads the flavour marker string out of a linked `.sys` and refuses anything but exactly one, matching the flavour asked for. `build-driver.cmd` runs it on each binary after the import gate; `make-release.ps1` reads the same marker to refuse publishing a `qemu` build as the debug download. It is what says a binary in `objfre` really is the release flavour, which `VS_FF_DEBUG` cannot, since `debug` and `qemu` are both checked builds |
+| `scripts\check-source-charset.ps1` | Refuses a byte inside tracked source that no part of this project's toolchain is meant to see: a **control byte below 0x20 other than TAB, CR and LF** anywhere in the file, **any byte >= 0x80** anywhere in the file, and a **UTF-8 BOM** at the head of a file the 1998-era toolchain reads (`.c .h .asm .rc .def .inf .bat .cmd`, `makefile`, `sources`). Covers `src\`, `test\`, `scripts\`, `xhcisnap\` and `xhciqual\` through an extension allowlist, so it never opens a binary, and skips four git-ignored paths by name. Run by `build-driver.cmd`. The BOM rule is deliberately narrower than the other two: five tracked files carry a BOM today and none is read by that toolchain, and on a `.ps1` the BOM is not a defect but the fix, since Windows PowerShell 5.1 reads a BOM-less script as the system ANSI codepage - so a BOM the rule permits is not then counted a second time as three non-ASCII bytes. The non-ASCII rule was taken on 2026-09-12 and cost one character, a UTF-8 section sign in an `src\xhci.h` comment. Seven in-memory self-tests run on **every** invocation and abort the gate if the detector is broken - a gate that has only ever passed reports a pass it did not establish. Roadmap task 22.7; it exists because a BEL written into `src\xhci_slot.c` by a PowerShell escape compiled all three x86 flavours and passed every other gate (`lessons.md`) |
 | `scripts\source-stamp.ps1` | `-Write <objdir>` hashes every file `src\sources` names plus every header in `src\`, and the built `xhci98.sys` itself, recording the list beside that binary; `-Check <objdir>` recomputes both. `build-driver.cmd` writes one after each successful build and `make-release.ps1` refuses to publish a `.sys` whose sources have changed since, one that is not the binary its stamp was written for, or one with no usable stamp at all (`-AllowUnstampedDriver` is the named way past that last case, and only that one) - the driver's equivalent of the "EXE newer than its own sources" refusals the release script already makes for the two DOS tools. Content, not timestamps: the script says why at length |
-| `scripts\test-qemu-launchers.ps1` | Generates all six VMs' launchers (2a, 2b, the SMP 2d, the xHCI-only Windows 2000, Windows ME and Windows XP) against stand-in QEMU files and verifies per-boot debug-console log rotation, the SMP default/fallback flags, and that no two launchers share a QEMU monitor port; run by `build-driver.cmd` |
+| `scripts\test-qemu-launchers.ps1` | Generates all eleven VMs' launchers (2a, 2b, the SMP 2d, the xHCI-only Windows 2000, Windows ME, Windows XP, Windows XP x64, Windows Vista, Windows 7, and - since roadmap task 21.8's generators were written on 2026-09-10 - Windows Vista x64 and Windows 7 x64) against stand-in QEMU files and verifies per-boot debug-console log rotation, the SMP default/fallback flags, that each of the four 6.x generators and the XP x64 one refuses `pentium3` **and names the feature that guest is missing** - long mode for the three 64-bit guests, the NX bit for the two 32-bit 6.x ones, so that nobody "fixes" a 64-bit refusal by reaching for a model with NX and no long mode - that no two launchers share a QEMU monitor port, that task 21.8's two guests still hold 55563 and 55564 (the assertion that replaced the one holding those ports for guests which did not exist yet), and that every launcher's run-time QEMU resolver announces which rung answered. Those last four read the preamble's **real output** rather than its source, because an `echo` that does not survive `cmd`'s parsing is worth nothing; run by `build-driver.cmd` |
 | `scripts\setup-qemu-win2k.ps1` | Same for the Win2000 SP4 (Phase 2b) VM, the second first-class target. Monitor port 55556, and it also stages `usbd.sys` (`-Win2KUsbdSys`) |
 | `scripts\setup-qemu-winxp.ps1` | The Windows XP SP3 guest of roadmap Phase 19 (`vm\winxp.img`, monitor 55559, transfer drive `vm\xferxp`): WHPX with `kernel-irqchip=off`, ACPI on, no companion EHCI unless the run launcher is given `ehci` as its second argument; see "Windows XP target VM" |
+| `scripts\setup-qemu-winxp64.ps1` | The Windows XP Professional x64 SP2 guest of roadmap Phase 21 (`vm\winxp64.img`, 16 GB, monitor 55562, transfer drive `vm\xferxp64`): the 32-bit XP recipe with five changes - `-cpu qemu64` (`pentium3` has no long mode), 2048 MB, a bigger disk, a free monitor port, and **`-accel tcg`, which on this guest is the one that works and not the fallback** (WHPX wedges XP x64 Setup); `-Accel` selects another rung; see "Windows XP x64 target VM" |
+| `scripts\setup-qemu-vista.ps1` and `scripts\setup-qemu-win7.ps1` | The two 32-bit guests of roadmap Phase 22 (`vm\vista.img` monitor 55565, `vm\win7.img` monitor 55566, 32 GB each, transfer drives `vm\xfervista` and `vm\xferwin7`). They are thin callers over one shared body, `scripts\qemu-nt6-common.ps1`, because they are one recipe: the 32-bit XP machine with `-cpu qemu64` (`pentium3` predates the NX bit and Windows 7 Setup refuses a processor without one), 2048 MB, a bigger disk, 4 vCPUs, and an accelerator **measured for each guest rather than inherited** - Vista `-accel tcg` (WHPX wedges its Setup after the first reboot), Windows 7 `-accel whpx,kernel-irqchip=off`, both confirmed by an install that COMPLETED under them (task 22.4, 2026-09-10); `-Accel` and `-Smp` select another rung. See "Windows Vista and Windows 7 target VMs" |
+| `scripts\setup-qemu-vista-x64.ps1` and `scripts\setup-qemu-win7-x64.ps1` | The two 64-bit guests of roadmap task 21.8 (`vm\vista-x64.img` monitor 55563, `vm\win7-x64.img` monitor 55564, 32 GB each, transfer drives `vm\xfervista-x64` and `vm\xferwin7-x64`, staged with `make-package.ps1 -Arch amd64`). **Not copies of `setup-qemu-winxp64.ps1`**: they are the 64-bit half of the row above and share the same `scripts\qemu-nt6-common.ps1` body through an `-Arch`, which selects four things - the CPU refusal's missing feature (long mode, not the NX bit; `qemu64` satisfies both, so one default serves four guests for two different reasons), which INF half and staging command the comments name, the memory note, and the code-signing paragraph. **That last one inverts rather than varies**, and it is the only one that would mislead an operator rather than break a boot: XP x64 does not enforce kernel-mode code signing and these two do, so an unsigned `xhci98.sys` loads there and does not load here. Both carry `-accel tcg,thread=multi` as a **measured** default - each confirmed by an install that COMPLETED under it on 2026-09-10, WHPX having failed both, Vista inside WinPE and Windows 7 only at the first restart after a whole finished phase. See "Vista x64 and Windows 7 x64 target VMs" |
 | `scripts\setup-qemu-win2k-smp.ps1` | The Phase 2d SMP stress VM (`vm\win2k-smp.img`, monitor 55557). Defaults to the checkpoint-proven `whpx,kernel-irqchip=off` rung; `-Accel`/`-AcpiOff`/`-Smp`/`-MemoryMb` select another Phase 2d task-2 rung so each is a regenerated launcher, not a hand-edited copy |
 | `scripts\check-smp-parallelism.ps1` | Host-side Phase 2d checkpoint check against the running 2d VM: a complete one-to-one vCPU/`thread_id` mapping from `info cpus`, plus a process affinity mask allowing 2+ logical processors. Guest-side "MP kernel landed" checks do not distinguish those host conditions; this script does. Run-time, so not part of `build-driver.cmd`; `-SelfTest` needs no VM |
 | `scripts\setup-all.ps1` | Runs MSVC, DDK, and both Phase 2a/2b QEMU setups; use `-RunInstallers` for MSVC/DDK and `-InstallQemu` for QEMU. Pass `-Win2KIso` or the Win2000 half is skipped with a warning |
 | `scripts\package\extract-usbd-sources.ps1` | Stages reference copies of each target's own `usbd.sys` (and Win98 SE's `usbhub.sys`, an import-gate precedent binary) from that OS's install media into the git-ignored `tools\`, then authenticates them. Packaged by nothing since 1.0.0.1; see "The files the OS supplies" |
-| `scripts\package\make-package.ps1` | Assembles the install media both targets are installed from (`out\pkg-<flavor>\`), staging against the layout `check-inf.ps1 -EmitMediaLayout` derives, and gates it |
+| `scripts\package\make-package.ps1` | Assembles the install media both targets are installed from (`out\pkg-<flavor>-<arch>\`), staging against the layout `check-inf.ps1 -EmitMediaLayout` derives, and gates it. `-Arch x86` (default) or `amd64` moves three things at once and they are not separable: the obj subdirectory, which of the two INFs is staged, and the architecture both gates run under |
 | `scripts\package\test-package.ps1` | The packager's regression tests; stand-ins only, run by `build-driver.cmd` |
 | `scripts\import-gate\test-flavour-rules.ps1` | Regression tests for the import allowlist's three-flavour `FLAVORS` grammar, on synthetic allowlists, including the row that keeps `HAL.dll!WRITE_PORT_UCHAR` out of every published binary. Run by `build-driver.cmd` |
 
@@ -178,6 +186,8 @@ Useful generated wrappers:
 | `scripts\local\qemu-win2k-install.cmd` | Start Win2000 SP4 setup from the configured ISO |
 | `scripts\local\qemu-win2k-prepare-usbd.cmd` | Controller-free boot used to stage `usbd.sys` before EHCI is attached (see "Windows 2000 SP4 Target VM") |
 | `scripts\local\qemu-win2k-run.cmd` | Boot the installed Win2000 VM with xHCI present |
+| `scripts\local\qemu-winxp64-install.cmd` | Start Windows XP x64 SP2 setup from the configured ISO (roadmap Phase 21) |
+| `scripts\local\qemu-winxp64-run.cmd` | Boot the installed XP x64 VM with xHCI present; `%2 = ehci` adds a companion EHCI |
 
 The generated wrappers and VM images are local machine artifacts and are ignored by git.
 
@@ -236,7 +246,10 @@ The DDK uses a `sources` file (no extension) instead of a Makefile. Alongside it
 !INCLUDE $(NTMAKEENV)\makefile.def
 ```
 
-`src/sources` has this shape (`SOURCES` grows as files are added):
+`src/sources` has this shape, abridged - the file's own comments and the
+flavour-conditional `C_DEFINES` blocks are left out, and `SOURCES` grows as
+files are added (eighteen `.c` files plus `xhci98.rc` on 2026-09-17; the
+file itself is the list):
 ```
 TARGETNAME=xhci98
 TARGETTYPE=DRIVER
@@ -244,20 +257,25 @@ TARGETPATH=obj
 
 INCLUDES=$(BASEDIR)\inc;$(BASEDIR)\inc\ddk
 
-SOURCES=xhci_mem.c       \
-        xhci_dispatch.c  \
-        xhci_pci.c       \
-        xhci_init.c      \
-        xhci_ring.c      \
-        xhci_port.c      \
-        xhci_slot.c      \
-        xhci_xfer.c      \
-        xhci_dbg.c
+SOURCES=xhci_mem.c    \
+        xhci_ring.c   \
+        ...           \
+        xhci_dispatch.c \
+        xhci98.rc
 
+!IF "$(_BUILDARCH)" == "AMD64"
+TARGETLIBS=.\usbport_amd64.lib
+!ELSE
 TARGETLIBS=.\usbport.lib
+!ENDIF
 
 LINKER_FLAGS=-merge:.rdata=.text
 ```
+
+`TARGETLIBS` is conditional because the two import libraries cannot be one
+file: amd64 has no `__stdcall` name decoration, so the x86 library's
+`_Name@N` symbols do not resolve an amd64 miniport's references.
+`_BUILDARCH` is `setenv.bat`'s own word for the target architecture.
 
 `build` appends the flavour to `TARGETPATH`, so the debug output lands in `src\objchk\i386\` and the release output in `src\objfre\i386\`, not `src\obj\`.
 
@@ -269,7 +287,7 @@ The version and the release date are edited in one place, `src\xhci_version.h`. 
 
 Four sites include it and cannot disagree: `FILEVERSION`, `PRODUCTVERSION`, `VALUE "FileVersion"` and `VALUE "ProductVersion"` in `src\xhci98.rc`. Two more include it across a directory boundary, by a path relative to the including file (which is what a quoted `#include` means to all three compilers): `TOOL_VERSION` in `xhciqual\qual.h` and `XHCISNAP_VERSION` in `xhcisnap\xhcisnap.c`. Both tools are published inside a release directory (`releases\<version>\xhciqual\`, `releases\<version>\xhcisnap\`) and print their number into every log a user saves and sends back, so a tool answering with a number that is not on the box ties a bug report to an artifact that does not exist.
 
-The seventh site cannot include anything. An INF is a data file Windows setup reads, not a compiled one, so `src\xhci98.inf`'s `DriverVer` keeps a literal and is checked against the header instead. Three gates cover what is left:
+The last two sites cannot include anything. An INF is a data file Windows setup reads, not a compiled one, so the `DriverVer` in `src\xhci98.inf` **and** the one in `src\xhci98-amd64.inf` each keep a literal and are checked against the header instead. There have been two since roadmap task 21.3, `check-inf.ps1 -Arch` cross-checks whichever file it is given against the `xhci_version.h` beside it, and `build-driver.cmd` runs it over both on every build - so a bumped header with a stale date in the 64-bit file fails the build rather than shipping. Three gates cover what is left:
 
 - `scripts\inf-gate\check-inf.ps1`, which every build runs, reads `src\xhci_version.h` as the authority and refuses four different disagreements: the header's two forms of the number differing from each other (nothing in any toolchain would notice, since `rc.exe` wants the integers and every other consumer wants the string), the header's version differing from `DriverVer`'s, the header's date differing from `DriverVer`'s, and a version literal appearing in `src\xhci98.rc` at all, or the include being dropped. That last rule is what keeps the header an authority rather than a suggestion.
 - `scripts\package\make-package.ps1` compares the built binary's own `FileVersion` with the `DriverVer` in the INF staged beside it. That is the copy a source-side gate cannot see and the only one an installed machine reads: bumping the source without rebuilding produces a package that installs cleanly, is accepted by Windows 2000 as an upgrade, and reports the older build for ever afterwards.
@@ -283,9 +301,20 @@ The build stamps are not in the header. `XHCIQUAL` and `XHCISNAP` each print a `
 
 A cut therefore has two toolchains as prerequisites beyond the DDK: Open Watcom for `XHCIQUAL.EXE` and the in-repo MSVC 6.0 for `XHCISNAP.EXE`. Neither is skippable on a real cut. `-SkipQualtool` and `-SkipSnapTool` exist for a host that cannot build one, and a release cut with the second publishes a read channel nobody can open.
 
-The scheme is one four-part version per released package: the last field moves for a release that changes only the install media or the documents (`1.0.0.1`), the third field for one that changes the driver's code (`1.0.1.0`, the owner's decision of 2026-09-03 when task 19.7 put a code change into Phase 19's release), with the date set to the release date and never moving backwards within a series. It is a package version rather than a build counter: the deploy loop overwrites `xhci98.sys` in place and never re-runs the INF (see "Deploying a build into the Win98 VM"), so a per-build number would churn with no observer.
+The scheme is one four-part version per released package, and all four fields have a meaning, settled by the project owner on 2026-09-10 after `1.1.0.0` moved the second one and nothing here said what that meant:
 
-The major version says whether this is a final release. It is `1`: task 14.2 cut `1.0.0.0`, the first one, and every package before it was a `0.x` pre-release that carried no claim of being finished. Those directories are gone; `releases\history.md` holds one entry per release since, newest first. The current number is in `src\xhci_version.h` and is not repeated here.
+| Field | Moves for | Cut that did it |
+|---|---|---|
+| First | A change really major enough to warrant it. It went `0` -> `1` for the first final release and has not moved since | `1.0.0.0` (task 14.2), the first release; everything before it was a `0.x` pre-release carrying no claim of being finished |
+| Second | A major change: a new architecture, or a new function | `1.1.0.0`, which adds the amd64 build and a second package (Phase 21; the cut is roadmap task 22.10) |
+| Third | A patch or a bug fix in the driver's code | `1.0.1.0`, the owner's decision of 2026-09-03 when task 19.7 put issue 4's fix into Phase 19's release |
+| Fourth | A release that changes only the install media or the documents | `1.0.0.1`, which moved `usbd.sys` and `usbhub.sys` onto the `LayoutFile` route and off the download |
+
+The date is set to the release date and never moves backwards within a series. Read the second and third fields as a pair rather than by size of diff: a bug fix is the third field however much code it touches, and a new architecture or capability is the second however little. `1.0.2.0` is the one number that predates the rule being written down, and it agrees with it - nineteen audit findings, code among them, and no new architecture or function.
+
+It is a package version rather than a build counter: the deploy loop overwrites `xhci98.sys` in place and never re-runs the INF (see "Deploying a build into the Win98 VM"), so a per-build number would churn with no observer.
+
+The major version also says whether this is a final release, which is the other half of the first field's meaning and the only reason it has ever moved. Those `0.x` directories are gone; `releases\history.md` holds one entry per release since, newest first. The current number is in `src\xhci_version.h` and is not repeated here.
 
 The numbering has been restarted once, at the project owner's direction: an earlier `1.0.0.x` series of development builds was removed from `releases\` and the version restarted at `0.0.0.1`, which is where the `0.x` pre-releases came from. Two consequences outlive it:
 
@@ -378,6 +407,23 @@ scripts\build-driver.cmd qemu       REM the emulator-only third flavour
 scripts\build-driver.cmd all        REM all three - what a release cut gates
 ```
 
+**`-amd64` is a second axis, not a fourth flavour**, and it goes after the
+flavour word:
+
+```
+scripts\build-driver.cmd both -amd64    REM the shipping pair, 64-bit
+scripts\build-driver.cmd all  -amd64    REM all three - what a release cut gates
+```
+
+It selects WDK 7.1 (`x64 WNET`) instead of the Windows 2000 DDK,
+`src\usbport_amd64.lib` instead of `src\usbport.lib`, and
+`src\obj<flavour>\amd64\` instead of `src\obj<flavour>\i386\`. A release cut
+runs both legs. `DDKROOT` overrides the 32-bit DDK only and is REFUSED on this
+leg - `WDKROOT` is the 64-bit override, and it is the one name the import gate
+and `make-usbport-lib.cmd` read too - because handing the Win2000 DDK's
+`setenv.bat` an `x64 WNET` argument fails with a message about the wrong thing
+entirely.
+
 There are three flavours, and only two of them are ever published. `release`
 and `debug` are the shipping pair and are what `-Flavor`, `out\pkg-*`,
 `releases\<version>\` and "both flavours" mean throughout these documents.
@@ -405,7 +451,7 @@ gate" below.
 The DDK calls `release` and `debug` free and checked, and those words survive
 only where it requires them: `setenv.bat`'s flavour argument, the
 `src\objfre` / `src\objchk` trees, and the `buildfre` / `buildchk` logs.
-`build-driver.cmd` translates once, in `:buildflavor`, which is also where
+`build-driver.cmd` translates once, in `:flavordirs`, which is also where
 `qemu` is mapped onto checked with its own `BUILD_ALT_DIR`, since `debug` and
 `qemu` are both checked builds and would otherwise collide in one output tree.
 Do not reintroduce the DDK vocabulary anywhere else: "free" reads as free of
@@ -414,9 +460,12 @@ charge to a user, so `releases\` never says it.
 In order: validate the flavour word and the optional `-NoTargetEvidence`,
 generate `src\usbport.lib` if it is missing, run the import gate's
 authenticated-baseline regression tests and its flavour-rules tests, run the
-INF gate's self-tests and then the gate on `src\xhci98.inf`, run the packager
-self-tests, the QEMU launcher self-tests, the vm-matrix verdict self-tests and
-the tracked batch files' line-ending check, run the XHCISNAP report self-test
+INF gate's self-tests and then the gate on **both** INFs - `src\xhci98.inf`
+under `-Arch x86` and `src\xhci98-amd64.inf` under `-Arch amd64`, two runs
+whatever architecture is being built - run the packager
+self-tests, the QEMU launcher self-tests, the vm-matrix verdict self-tests,
+the tracked batch files' line-ending check and the source charset check, run
+the XHCISNAP report self-test
 if `xhcisnap\XHCISNAP.EXE` has been built, run `test\run-host-tests.cmd`,
 `build` each requested flavour in its own child `cmd` (`setenv.bat` is not
 idempotent across flavours), fail on a build error or on the presence of
@@ -432,6 +481,18 @@ full builds first. Both it and the import gate run again in
 media a VM is installed from and a binary can reach `src\obj*` without having
 been built by this wrapper.
 
+Since task 21.4 the suite covers **two architectures**: `test_packet` and
+`test_membuf` are built and run a second time with WDK 7.1's amd64 cross
+compiler, as `test_packet_amd64` and `test_membuf_amd64`, so the `_WIN64` half
+of `src\xhci_usbport.h` is checked here rather than only inside an `-amd64`
+driver build. Set `WDK71` to point that leg at a WDK 7.1 elsewhere, the way
+`MSVC6` points the rest of the suite. On a host with no WDK 7.1 the leg is
+skipped by name and the run's final line reads "Host tests PASSED - x86 only"
+instead of "Host tests PASSED"; the unqualified line is what says both
+architectures were checked. Design record 03, "The second architecture", has
+the shape and the two limits - no `/Za` on that leg, and why the WDK's own CRT
+headers are the reason.
+
 `scripts\local\ddk-debug.cmd` / `ddk-release.cmd` still open an interactive DDK
 prompt for one-off experiments, where `cd src && build` works as before. A
 binary built that way has not been through the gates; do not deploy one.
@@ -443,7 +504,7 @@ parameter had been named `except`, which the DDK headers define as `__except`,
 so the DDK build had not compiled for a whole batch while the host suite stayed
 green throughout.
 
-Two `BUILD_ALT_DIR` facts the wrapper's `:buildflavor` depends on, verified
+Two `BUILD_ALT_DIR` facts the wrapper's `:flavordirs` depends on, verified
 against this DDK's own `build.exe`: the value may be at most 10 characters
 (`build.exe` says so itself; `chk_qemu` fits and yields `src\objchk_qemu\i386\`
 and `buildchk_qemu.log`), and it must be overridden after `setenv.bat`, so that
@@ -478,7 +539,7 @@ any binary:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\import-gate\check-imports.ps1
-powershell -File scripts\import-gate\check-imports.ps1 -Image out\pkg-debug\xhci98.sys -Flavor debug
+powershell -File scripts\import-gate\check-imports.ps1 -Image out\pkg-debug-x86\xhci98.sys -Flavor debug -Arch x86
 ```
 
 With no `-Image` it checks whichever of `src\objfre\i386\xhci98.sys`,
@@ -1032,16 +1093,30 @@ driver that serves usbport's root hub under NUSB, `usbhub20.sys`
 registry names. If that inference holds, nothing above usbport on SP4 asks
 for the idle and the value has no effect there. It is unconfirmed: a string
 absent from a binary does not prove the absence of every idle-request path.
-The value stays in the package either way, because the NT path also serves
-XP, whose stack does idle.
+The value stayed in the package either way until `1.0.2.0`, because the NT
+path also serves XP, whose stack does idle, and 32-bit Windows 7, whose stack
+idles it too ("Windows Vista and Windows 7 target VMs", the idle-suspend
+reading); from `1.1.0.0` the same state is reached by the miniport flag
+(next paragraph), read at run time on every target on 2026-09-17.
 
-This is fixed (roadmap task 11-V.6, and `docs/using/release-notes.md`,
-the `DisableSelectiveSuspend` entry under "Known limitations", which
-documents the setting rather than the defect). Both install paths write
+This is fixed (roadmap task 11-V.6, and `docs/using/release-notes.md` under
+"Known limitations", which documents the cost rather than the defect), and
+the fix has moved once. **From 1.1.0.0 the driver declares
+`USB_MINIPORT_FLAGS_DISABLE_SS` (0x20) in its `MiniPortFlags` and the INFs
+write nothing** (`docs/issues/05-idle-suspend-and-disableselectivesuspend.md`
+section 5.4). That replacement was itself read at run time on 2026-09-17, on
+all ten targets, each against a control leg on the previous build
+with the value deleted so that the OS is known to idle without it; section
+5.5 of the same document carries the per-target table. Every one of those
+readings is a virtual-machine reading. Releases 1.0.0.0 to
+1.0.2.0 did it with a registry value instead, and every reading in this
+section was taken against those: both
+install paths wrote
 `HKLM\System\CurrentControlSet\Services\USB\DisableSelectiveSuspend = 1`
 (the Windows 98 path since task 11-V.6, the NT path since 1.0.1.0, when the
 Windows XP guest showed XP's usbport idling the controller about thirty
-seconds after start), which stops NUSB's usbport idling the controller at
+seconds after start). Either way usbport reaches the same state, and what
+was measured is that it stops NUSB's usbport idling the controller at
 all: `SuspendController` never fires, `USBCMD` reads `0x00000005`, and a
 hot-plugged device enumerates with no Refresh. The value has to be 1: present
 and set to 0 it behaves exactly like absent, measured on 2026-09-06 on the
@@ -1132,7 +1207,7 @@ all), but the keep-alive is harmless, so use one script for all three.
   want `mouse_move` to generate bus traffic.
 - Win98 needs one Device Manager -> Refresh per boot to resume the
   idle-suspended controller before it will see a monitor-attached device,
-  unless `DisableSelectiveSuspend` is set as described above. Once HID traffic
+  unless the idle is switched off as described above. Once HID traffic
   flows the controller stays awake and everything else can be driven from the
   monitor.
 - Win98 has no HID driver on disk, so the first attach of each device class
@@ -1148,7 +1223,7 @@ QEMU is the right default for Phases 3-7 (enumeration, HID, basic transfers), bu
 Host controller models. QEMU emulates only two xHCI host models: `qemu-xhci` (generic, spec-clean, no vendor PCI ID) and `nec-usb-xhci` (NEC/Renesas-flavored PCI ID). Neither reproduces the real-silicon deviations Linux's `xhci-pci.c` and `pci-quirks.c` catalogue:
 
 - `nec-usb-xhci` advertises a NEC ID but involves no firmware, so the Renesas uPD720201/202 driver firmware-upload path cannot be exercised in QEMU (QEMU emulates neither that chip nor the uPD720200's on-card SPI flash).
-- Spurious-success (FL1000/VL800), Intel compliance-mode lockup, the ASM1042 64 KB bulk limit, AMD PLL re-lock, and BIOS/UEFI handoff contention are all absent from QEMU's emulation.
+- Spurious-success completions (ASM1042, the one part the Linux mirror flags for it; the table said FL1000/VL800 until 2026-09-17, which the mirror does not support), Intel compliance-mode lockup, AMD PLL re-lock, and BIOS/UEFI handoff contention are all absent from QEMU's emulation.
 
 The residual-length and quirk-handling code paths therefore can only be validated against physical controllers. `nec-usb-xhci` is still useful as a negative test: it confirms the driver does not misfire NEC quirks against a controller that advertises the ID but lacks the bug.
 
@@ -1445,8 +1520,48 @@ listen on monitor port 55561 (the 2a base plus 6), chosen clear of 2a/55555,
 the xHCI-only Windows 2000 machine's 55560; until the 2026-09-05 audit the ME
 launcher took 55558 and could not run beside the ACPI machine, and until the
 2026-09-07 audit it took 55560 and could not run beside the xHCI-only one.
+The XP x64 guest of Phase 21 took the next one clear of all of those, 55562.
 `scripts\test-qemu-launchers.ps1` asserts that no two generated launchers share
 a monitor port.
+
+**What that assertion cannot see is the host.** Windows reserves TCP ranges
+for dynamic use and reassigns them at every boot, and an explicit bind inside
+one fails with `AccessDenied` - so a port this project holds uniquely can
+still be unusable on the day. On 2026-09-13 the host's excluded ranges
+included 55527-55626, which swallowed **every** guest's monitor port from
+55555 to 55564; only 55465 and 55466 were left bindable. The XP x64 leg of
+issue 7 section 7.6 was run by regenerating its launchers with
+`setup-qemu-winxp64.ps1 -MonitorPort 55700`, which is the J3 rule (regenerate,
+never hand-edit `scripts\local`) and is local-only, `scripts\local\` being
+git-ignored and the launcher gate generating into a temp directory. **Re-probe
+before every run** - `netsh interface ipv4 show excludedportrange
+protocol=tcp`, or just try the bind - and treat a launcher that dies at startup
+with nothing on the monitor as this first.
+
+**And then the case that check cannot see: a port taken by a guest that does
+not exist yet.** Roadmap task 21.8 reserved **55563 and 55564** for the Vista
+x64 and Windows 7 x64 guests when it was written on 2026-09-09, with nothing
+yet generating them. Phase 22's 32-bit Vista and Windows 7 guests were drafted
+onto exactly that pair on 2026-09-10 and caught before they were generated -
+the launcher gate compares generated launchers against each other, so it would
+have stayed silent until 21.8's generators were written, with both records
+believed in the meantime. **That gap was expected to run to months and in the
+event ran to a day**, which is not a reason the check was unnecessary: the
+draft was caught by the assertion rather than by the calendar, and a
+reservation nobody can see is exactly as invisible on day one as on day ninety.
+The 32-bit pair took **55565 and 55566** instead, and the gate was given an
+assertion on the reservation itself rather than only on the collisions it can
+see.
+
+**That assertion was released the way it was meant to be, later the same day.**
+`setup-qemu-vista-x64.ps1` and `setup-qemu-win7-x64.ps1` now claim 55563 and
+55564, both are generated and scanned like every other guest, so the ordinary
+no-two-launchers-share-a-port check covers them and the reservation has nothing
+left to protect. What stands in its place is the mirror image: an assertion
+that those two guests **still hold** both ports, because a guest that quietly
+gives one up leaves it reserved for nothing. If a future task reserves a port
+the same way, re-add the original assertion with the same instruction to delete
+it on claiming.
 
 Why it is expected to be close. Windows ME is the same 16-bit setup engine
 and the same VxD-hosted WDM model as Windows 98 SE, one WDM revision newer
@@ -1582,8 +1697,9 @@ of 2026-09-03 night (roadmap task 19.6), standing where Windows 2000 and
 Windows ME stand and never run on real hardware. What follows is
 the recipe, what the first afternoon measured, and what the measurement
 changed: the two INF fixes release 1.0.1.0 carries ("The files the OS
-supplies" below, and the `DisableSelectiveSuspend` block in
-`src/xhci98.inf`).
+supplies" below, and the `DisableSelectiveSuspend` write that
+`src/xhci98.inf` carried until 1.0.2.0 - from 1.1.0.0 the driver's own
+`USB_MINIPORT_FLAGS_DISABLE_SS` does that job and the INF writes nothing).
 
 The recipe. `scripts\setup-qemu-winxp.ps1` writes both launchers into
 `scripts\local`; the hand-written ones that took the first readings are
@@ -1800,6 +1916,888 @@ to the door sequence was on the launcher's original 4+4 port layout, plain
   issue page's section 5 carries the correlation.
 
 Not done on XP: real hardware (nothing in the fleet runs it).
+
+### Windows XP x64 target VM (roadmap Phase 21)
+
+The 64-bit guest. Design record 11
+(`docs/contributing/design/11-x64-targets.md`) establishes that Windows XP
+Professional x64 and Windows Server 2003 x64 are the same operating system,
+NT 5.2.3790 - Microsoft's own WDK says so, since `lib\wxp\i386` exists and
+`lib\wxp\amd64` does not, making `WNET` the only route to a 64-bit XP driver.
+One `WNET` amd64 binary therefore serves both, and this one guest observes it.
+XP x64 is the target this phase takes because it does **not** enforce
+kernel-mode code signing, which Vista x64 and Windows 7 x64 both do.
+
+**The tier, stated where Windows ME's and 32-bit XP's are stated** (roadmap
+task 21.6): Windows XP x64 and Server 2003 x64 are supported in virtual
+machines, standing where Windows 2000, Windows ME and 32-bit Windows XP
+stand, with no checkpoint tax and never run on real hardware. What settles it
+is roadmap task 21.5, passed on this guest on 2026-09-09, and the owner's
+instruction the same day that `make-release.ps1 -Arch` default to both
+architectures - publishing the 64-bit package by default is what claiming the
+target means here. `AGENTS.md`, "Project Purpose", states it;
+`docs/usb-xhci-info/win98-wdm.md`, "And Windows XP x64?", states it beside
+the 32-bit half it sits under; and `docs/using/release-notes.md` and
+`README.md` state it for the user.
+
+Three qualifications travel with that tier and none of them is optional.
+**It is not the same binary**, unlike every other target in this project: it
+is a separate amd64 build from a separate toolchain in a separate package
+with its own INF, so nothing the Windows 98 export baseline buys the 32-bit
+binary is inherited here. **Only XP x64 has been booted**; Server 2003 x64 is
+covered by the NT 5.2.3790 identity above, not by an observation of its own.
+And **Vista x64 and Windows 7 x64 are outside it**: they have a tier of their
+own since 2026-09-16, stated in "Vista x64 and Windows 7 x64 target VMs"
+below, on the Version 300 registration path this guest never takes and with a
+signing requirement this guest does not have.
+
+`scripts\setup-qemu-winxp64.ps1` writes both launchers into `scripts\local`.
+It is the sibling of `setup-qemu-winxp.ps1` and most of the 32-bit XP recipe
+carries over unchanged; **four things differ**, and the first two fail
+silently or refuse to boot if the 32-bit launcher is copied across.
+
+| | 32-bit XP | XP x64 | Why |
+|---|---|---|---|
+| `-cpu` | `pentium3` | `qemu64` | `pentium3` has **no long mode**. The generator refuses any such `-Cpu` outright and the launcher gate asserts the generated text, because this is the one line of the 32-bit recipe that is actively wrong here |
+| RAM | 512 MB | 2048 MB | Comfort, **not correctness**: measurement M5 read the NT 5.2 amd64 usbport creating its DMA adapter 32-bit (`Dma32BitAddresses = 1`, `DmaWidth = Width32Bits`), so nothing lands above 4 GB whatever the guest has. The cap design record 11 originally called for is a convenience now, not a mitigation |
+| Disk | 8 GB | 16 GB | 8 GB is tight for XP x64 |
+| Monitor | 55559 | 55562 | 55555-55561 are taken (2a, 2b, the SMP 2d, the ACPI-HAL Windows 2000 machine, 32-bit XP, the xHCI-only Windows 2000 machine, Windows ME) |
+
+`qemu-system-x86_64.exe` is already what the 32-bit XP launcher uses, so that
+does not change. Everything else is the 32-bit recipe: `-machine pc` (ACPI
+on), `-vga std`, `-boot d` every boot (the CD's "Press any key" falls through
+to the hard disk, which is what Setup's own reboots need), `qemu-xhci,p3=0` on
+the run launcher, no USB device boot-attached, and the port-0xE9 debug console
+rotated per boot.
+
+**And then a fifth difference, which was not predicted and had to be measured:
+this guest wants TCG, and on it TCG is not a fallback - it is the one that
+works.** That is the reverse of every 32-bit guest in this project. Read on
+host `minis-w11p-ykm`, 2026-09-08, one flag apart:
+
+| `-accel` | Result |
+|---|---|
+| `whpx,kernel-irqchip=off` | XP x64 Setup **wedges** on "Setup is starting Windows" and stays there. Six minutes; `RIP` pinned at one address across five samples four seconds apart, `CS64`, `CPL=0`, `IF` set. WHPX itself initialises (the throwaway probe passes), so this is the guest and not partition creation |
+| `tcg` | The identical command line: text-mode Setup reaches "Setup is copying files" within about three minutes, `RIP` samples varied and productive, and it runs to the reboot into graphical Setup |
+
+So the accelerator is the discriminating variable here as it was for Windows
+2000, and it points the other way. `lessons.md`'s "The vector-0xD1 storm is
+the accelerator" reads TCG storming and WHPX running - but that was 32-bit
+Windows 2000 Setup under the ACPI APIC HAL, a different guest, a different
+bitness and a different workload. **Neither reading generalises to the other**,
+and on a new host both want probing. `-Accel` selects the rung, so it is a
+regenerated launcher rather than a hand edit, and the launcher gate asserts
+that the install and run launchers agree on it - the HAL is fixed at install
+time, so a guest installed under one rung must be booted under it too.
+
+1. `scripts\setup-qemu-winxp64.ps1 -WinXp64Iso <path> -CreateDisk`, then
+   `scripts\local\qemu-winxp64-install.cmd`. The owner drives Setup at the
+   console (the standing decision of 2026-09-03, taken for the 32-bit XP
+   guest). **This media is partly unattended, but not fully**, and the
+   distinction matters to whoever is waiting at the screen: on 2026-09-08 it
+   ran from boot through partitioning, formatting, the file copy and the
+   reboot into graphical Setup with no key pressed - and then stopped at
+   "Your Product Key" with only a partial volume-licence key pre-filled. So it
+   carries an answer file that does not carry a complete key, and the install
+   still needs the owner. Budget for an unattended stretch of roughly ten
+   minutes and then a prompt.
+2. Shut down from the Start menu and snapshot:
+   `qemu-img snapshot -c winxp64-clean-install vm\winxp64.img`.
+3. **Two cheap readings, neither needing a driver - both taken 2026-09-08,
+   both pass.** Read statically off the `winxp64-clean-install` snapshot with
+   the guest never booted here, and cheaper than the Phase 19 precedent: **7-Zip
+   26.00 lists straight through the qcow2's MBR and NTFS in one pass**, so
+   the `qemu-img convert -O raw` step that the Windows 2000 listing needed is
+   no longer required (`7z l vm\winxp64.img`, 11,767 files).
+
+   **Reading 1 - is the stack this guest will install the one M1-M6 was read
+   from?** Yes, byte for byte. `sha256` of the three files against
+   `tools\winxp64-extracted\`:
+
+   | File | sha256 | |
+   |---|---|---|
+   | `usbport.sys` | `6fc83f49...05e1d` | identical |
+   | `usbhub.sys` | `92b1744e...30198` | identical |
+   | `usbehci.sys` | `657daf4a...83d9a` | identical |
+
+   Taken from `WINDOWS\Driver Cache\amd64\sp2.cab` rather than from an
+   installed copy, because there is no installed copy - which is reading 2.
+
+   **Reading 2 - does an xHCI-only XP x64 install have `usbport.sys` on disk
+   at all?** **No, exactly as 32-bit XP.** No `usbport.sys`, `usbhub.sys`,
+   `usbehci.sys` or `usbd.sys` anywhere in the image, `dllcache` included; the
+   only `usb*.sys` present are `usb8023.sys` and `usbcamd2.sys`, with
+   `usbport.inf` there to bind the stack that is not. The files live in
+   `WINDOWS\Driver Cache\amd64\`: `usbport`/`usbhub`/`usbehci` in `sp2.cab`,
+   and `usbd.sys` (7,552 B, RTM-dated 2005-03-24) in `driver.cab`, *not* in
+   `sp2.cab`. So `Driver Cache\amd64` behaves like `Driver Cache\i386`, the
+   Code 39 that release 1.0.1.0's INF fix answers would recur here, and the
+   `LayoutFile` route is needed on the `.NTamd64` path too - which is now a
+   reading rather than the expectation it was.
+
+   **One difference from 32-bit XP worth carrying forward:** there, `usbd.sys`
+   was present on disk as a 4,736-byte stub. On x64 it is not on disk at all,
+   and it comes from a different cabinet than the other three.
+
+4. **The leg itself, taken 2026-09-09 with the `qemu`-flavour amd64 `1.1.0.0`
+   package staged to `vm\xferxp64`. Every checkpoint clause of roadmap task
+   21.5 passes.** The owner drove the GUI, per the standing 2026-09-03
+   decision; the hot-plugs and the readings were taken over the monitor on
+   port 55562 and the trace is the port-`0xE9` log.
+
+   The install went through the `.NTamd64` half with **no prompt for the CD**,
+   which settles what reading 2 left open: `Driver Cache\amd64` does behave
+   like `Driver Cache\i386` and the `LayoutFile` route places the stack there
+   too. The companion-EHCI escape hatch was not needed. Device Manager showed
+   **USB 2.0 eXtensible Host Controller (xhci98)** and **USB Root Hub** with no
+   yellow bang on a machine that had had no USB stack on disk at all.
+
+   What the trace read: `USBPORT_GetHciMn=10000001`,
+   `packet size=00000250`, `MiniPortExtensionSize=00017508`,
+   `MiniPortTransferSize=00000098`, `MiniPortResourcesSize=00064000`,
+   `common buffer usbport will request=00065000`, register status 0, `No Op
+   self-test completion code=00000001`, the whole `RH_*` family, 4 managed
+   USB2-only ports all powered, and **no `SuspendController` on an idle
+   controller** - the NT half's `DisableSelectiveSuspend`, which is what that
+   package wrote, works here as it does
+   on 32-bit XP. (`1.1.0.0` replaced it with the miniport flag, read on this
+   guest against a control leg that idles on 2026-09-17 - issue 5 section
+   5.5.) A hot-plugged HID mouse, `usb-storage` and composite
+   `usb-audio` all bound (**USB Human Interface Device**, **USB Mass Storage
+   Device**, **USB Composite Device** + **USB Audio Device**), and the Device
+   Manager disable / enable / remove / rescan sequence survived, the rescan
+   reinstalling from the driver store with no media prompt. 321 transfers
+   completed and every refusal and error counter zero.
+
+   **It cost one defect, and Phase 19 was the right thing to have expected.**
+   There the ABI was right and the static work was right and the guest still
+   produced three problems in an afternoon; here the first amd64 binary
+   installed, started, self-tested and answered the root hub, and then refused
+   every control transfer with `XHCI_XFER_SG_HIGH_ADDRESS` because
+   `USBPORT_SCATTER_GATHER_LIST`'s amd64 layout was the compiler's guess rather
+   than a reading - the one structure design record 11 had carried as owed. It
+   is now measurement M8, the fix is `_WIN64`-only, and the roadmap's 21.5
+   entry has the account.
+
+**What the guest is for now.** It is the vehicle for any future amd64
+observation, and the standing warning still applies to what it can settle: one
+guest, in a virtual machine, never on real hardware. Pass `ehci` as the run
+launcher's second argument to add a companion EHCI, which makes the in-box
+stack place `usbport.sys` itself - the same escape hatch the 32-bit launcher
+carries, and unnecessary in the leg above but worth knowing about.
+
+Status: **built, roadmap task 21.5's checkpoint passed on it 2026-09-09, and
+the tier stated with task 21.6.** It also carried issue 7's first NT 5.x leg
+on 2026-09-13 (issue section 7.6, roadmap 22.5), which is the reading this
+guest is uniquely placed to give - the `200` arm on amd64 - and which ran on
+one vCPU, this launcher carrying no `-smp`.
+The guest was created and installed on 2026-09-08 on host
+`minis-w11p-ykm` (`vm\winxp64.img`, 16 GB qcow2, 2.29 GB allocated after the
+install). Snapshot **`winxp64-clean-install`** taken the same evening with the
+guest shut down from inside and the image cold - `qemu-img check` reported no
+errors first, and the snapshot lists with `VM_SIZE` 0 B, which is what a
+powered-off snapshot should read. Revert with `qemu-img snapshot -a
+winxp64-clean-install vm\winxp64.img`, guest off. Media
+`D:\isos\Win XP SP2 VL x64.iso`
+(628,168,704 bytes), the owner's own XP x64 SP2 media, which is also where
+`tools\winxp64-extracted\` came from. WHPX with `kernel-irqchip=off` probed OK
+on this host as a partition - and then wedged the guest, which is how the TCG
+reading above came to be taken.
+
+### Windows Vista and Windows 7 target VMs (roadmap Phase 22)
+
+The two 32-bit guests Phase 22 asks for: whether the `xhci98.sys` this project
+already ships installs, loads and works on Windows Vista and Windows 7 as it
+stands. **That was the question, and the answer was no**: no Version 200
+miniport can run on either (design record 11 sections 6.1 to 6.4), so the one
+binary gained a Version 300 registration path it takes on NT 6.x only (roadmap
+task 22.5, design record 11 section 6.5), and `src\xhci98.inf` gained the
+`[Xhci.Dev6.NTx86]` install path (decision 13).
+
+**The tier, stated where Windows ME's and 32-bit XP's are stated** (roadmap
+tasks 21.8 and 22.5, the owner's decision of 2026-09-16): 32-bit Windows Vista
+and Windows 7 are supported in virtual machines, standing where Windows 2000,
+Windows ME and both Windows XPs stand, with no checkpoint tax. Vista has
+never run on real hardware; 32-bit Windows 7 has once, on the E460 on
+2026-09-19 (`runs/run-22.md`, 22.9), which is a session and not a tier. What
+settles it is issue 7 section 7.5, taken on these two
+guests and their x64 siblings on 2026-09-13: one install each off a fresh
+revert, `-smp 4`, the three devices bound, five disable/enable cycles held to
+a ten-minute threshold, a remove and a rescan, with `read-v300.ps1 -Expect
+nt6` ALL PASS on every load. `AGENTS.md`, "Project Purpose", states it;
+`docs/usb-xhci-info/win98-wdm.md`, "And Windows Vista and Windows 7?", states
+it beside the other tiers; and `docs/using/release-notes.md` and `README.md`
+state it for the user. Two qualifications travel with it for this pair:
+**every clause was taken on the `qemu` build**, and **the install was a staged
+copy of the NT 6.x sections, not the committed `src\xhci98.inf`**, which took
+them on 2026-09-16 after those runs. Both were read afterwards: Vista x86
+installed the `qemu` build through the committed file on 2026-09-17 (task
+22.5's `InfSection` reading), and roadmap task 22.10's eighth and ninth
+install legs installed the published `release` package on Vista x86 and
+Windows 7 x86 on 2026-09-18, every clause passing (`runs/run-22.md`). The x64
+pair's tier, and its signing requirement, are the next section's.
+
+**They are one recipe, and they are written as one.** `scripts\setup-qemu-vista.ps1`
+and `scripts\setup-qemu-win7.ps1` are thin callers over a shared body,
+`scripts\qemu-nt6-common.ps1`; everything about their machines is identical
+except the ISO, the image name and the monitor port. That is the one structural
+difference from the six generators before them, each of which carries its own
+copy of the text, and the reason is the 2026-09-07 audit's H28 and J6: five
+copies of the QEMU resolver had drifted apart unnoticed, and two guests born on
+the same day out of one recipe are the pair that would drift next. A per-guest
+difference belongs in a parameter, never in a second copy of the body.
+
+| | value |
+|---|---|
+| Media | `D:\isos\en_windows_vista_sp2_x86_dvd_342266.iso` (Vista SP2 x86, Business is image 1 of seven) and `D:\isos\en_windows_7_professional_with_sp1_vl_build_x86_dvd_u_677896.iso` (Windows 7 SP1 x86 VL, Professional, one image) - **the same media tasks 22.1 and 22.2 read their measurements out of** on 2026-09-09, so the stack a guest installs is the stack that was measured. `usbport.sys` is byte-identical across Vista editions, so that does not rest on the edition alone |
+| Images | `vm\vista.img` and `vm\win7.img`, 32 GB qcow2 each (Windows 7 x86 wants 16 GB free, Vista 15 GB; qcow2 is sparse, so the file costs what the install writes) |
+| Monitor ports | **55565** (Vista) and **55566** (Windows 7) - *not* the next two free numbers; see the reservation above |
+| CPU | `-cpu qemu64`, **not** the 32-bit XP guest's `pentium3`. `pentium3` predates the NX bit and Windows 7 requires one: Setup refuses such a processor. A 32-bit guest wanting a 64-bit-era CPU *model* is not the same thing as a 64-bit guest, and this is the line most likely to be "corrected" back to the 32-bit recipe, so the shared body refuses such a `-Cpu` outright and the launcher gate asserts the generated text |
+| vCPUs | **4**, where every guest before this one takes the default 1 except the Phase 2d Windows 2000 SMP rig's `-smp 2` ("Windows 2000 SMP Stress VM (Phase 2d)" below). This is about the accelerator, not the guest: Vista must run under TCG here, and single-threaded TCG on this host's 2.0 GHz i7-9700T is painful. QEMU emulates x86-on-x86 with **multi-threaded TCG**, so vCPUs become host threads and the emulation parallelises - measured on the Vista guest 2026-09-10, all four vCPU threads busy and roughly even (35 / 31.5 / 30.4 / 28.3 CPU-seconds over ~200 s of wall clock). Four rather than the host's eight leaves room for QEMU's own I/O and display threads. `thread=multi` is derived for a `tcg` accelerator and **never handed to WHPX**, which refuses the whole `-accel` argument rather than ignoring an option it does not know |
+| RAM | 2048 MB, not 512. Comfort - Windows 7's own floor is 1 GB. **More RAM is not a speed knob here**: what makes a TCG guest slow is instruction emulation, not memory. Nothing has been measured about what the 6.x `usbport` does with memory above 4 GB, and it does not arise: a 32-bit guest with 2048 MB has none. Do not raise it without reading measurement M5 of design record 11 first - on a **64-bit** guest, crossing 4 GB puts DMA above the line in play and is a change to the test surface, not a tuning choice |
+| Accelerator | **They differ**, and both are confirmed through a completed install. Vista is `-accel tcg` (WHPX wedges its Setup after the first reboot); Windows 7 is `-accel whpx,kernel-irqchip=off`. Host `minis-w11p-ykm`, 2026-09-10 |
+| Everything else | The 32-bit XP machine unchanged: `-machine pc` (ACPI on), `-vga std`, `-boot d` on every install boot, `qemu-xhci,p3=0` on the run launcher, no companion EHCI unless it is asked for, no USB device boot-attached, the VVFAT transfer drive, and the port-`0xE9` console rotated per boot |
+
+**The accelerator reading, and the probe that was too shallow to take it.**
+Roadmap task 22.4 says to probe the accelerator per host **and** per guest,
+because Phase 21 paid for that rule twice in opposite directions - every 32-bit
+guest here wants WHPX, and the XP x64 guest wants TCG because WHPX wedges its
+Setup. A 32-bit Vista or Windows 7 guest is covered by neither reading: it
+shares the bitness of one and the era of the other.
+
+The first probe, on 2026-09-10, ran each guest as far as its "Install Windows"
+language page - Vista under four minutes from launch, Windows 7 about two - and
+recorded WHPX for both. **That reading was wrong for Vista, and the way it was
+wrong is the part worth keeping.** Installing Vista the same day under
+`whpx,kernel-irqchip=off` ran the entire first phase - partitioning, the file
+copy, the reboot - and then wedged on the boot that follows it. At the wedge:
+`EIP` confined to two addresses 188 bytes apart, interrupts enabled (`EFL` `IF`
+set) at `CPL=0` with `HLT=0`, about half a core burning, and **`ide0-hd0` idle
+for twenty-two minutes**. A `system_reset` re-entered the same wedge. Relaunched
+on the same half-installed image under `-accel tcg`, Setup **resumed** at
+"Please wait while Windows sets up your computer" and ran to the desktop.
+
+So **Vista is `-accel tcg`**, for the same reason the XP x64 guest is - and
+**Windows 7 is not**. Windows 7 was then installed the same day under
+`whpx,kernel-irqchip=off` and ran the whole way through, first reboot
+included, to a finished desktop. So its value is confirmed the way Vista's now
+is: through a completed install, not a language page.
+
+**The pair disagrees, and that is the point.** Two guests one WDM revision
+apart, built from one recipe on one host in one afternoon, do not share an
+accelerator. Neither answer could have been inherited from the other, and
+neither could have been inherited from the 32-bit guests before them. This is
+the third time task 22.4's "probe per host **and** per guest" rule has paid
+for itself, and the first time it has done so *within* a single pair.
+
+**And there is no third rung to reach for, which is worth knowing before
+anyone goes looking.** The obvious next experiment when
+`whpx,kernel-irqchip=off` wedges a guest is to try WHPX with the in-kernel
+irqchip - the flag is, after all, exactly what the wedge's symptoms point at.
+It cannot be run on this host at all:
+
+```
+-accel whpx: WHPX: Failed to enable nested virtualization, hr=80370302
+-accel whpx: failed to initialize whpx: Invalid argument
+```
+
+The in-kernel irqchip wants nested virtualisation the host does not offer, and
+QEMU refuses to initialise rather than falling back. So `kernel-irqchip=off`
+throughout this project is **not a tuning choice - it is the only WHPX there
+is here**, and when it wedges a guest the alternative is TCG, not another WHPX
+rung. That is also why the 6.x pair runs four vCPUs: TCG is the fallback, and
+multi-threaded TCG is what makes the fallback usable.
+
+Two rules come out of this, and they are worth more than either value.
+
+**Reaching the first prompt is not a probe of the accelerator.** It proves only
+that Setup's WinPE phase runs. It exercises no ACPI bring-up of an installed
+kernel, and that is where Vista dies. An accelerator may not be written down
+until an install has *completed* under it.
+
+**And a pinned instruction pointer is read differently at a prompt and at a
+boot screen.** At the Windows 7 language page, `EIP` was identical across
+samples 36 seconds apart with `HLT=0` - precisely the XP x64 wedge signature -
+and it was not a wedge: a guest sitting at a Setup prompt spins in an input
+wait and looks exactly like one that has died in it, so **the screendump is
+what tells the two apart**. At a boot screen the screendump *cannot*: the
+marquee animates either way, and on Vista the two pinned addresses were the
+code painting it. What separates them there is **disk idle time**
+(`info blockstats`) and whether `EIP` moves at all - twenty-two minutes of zero
+I/O is not a guest that is working. Take both readings before calling either
+way.
+
+One practical consequence, since it saved a reinstall here: **switching between
+WHPX and TCG does not require rebuilding the guest.** Both present the same
+virtual machine (`-machine pc`, ACPI on) and differ only in the execution
+engine, so the HAL chosen at install time stays correct across the switch. The
+install launcher's `-boot d` falls through to the hard disk, which is how
+Setup's own reboots resume - so a wedged install can simply be relaunched under
+the other rung. That is not a licence to mix rungs *within* an install: the
+launcher gate still asserts that a guest's install and run launchers agree,
+because the HAL is fixed at install time.
+
+The procedure:
+
+1. `scripts\setup-qemu-vista.ps1 -VistaIso <path> -CreateDisk` and
+   `scripts\setup-qemu-win7.ps1 -Win7Iso <path> -CreateDisk`, then
+   `scripts\local\qemu-vista-install.cmd` and `qemu-win7-install.cmd`. **The
+   owner drives Setup at the console** - the standing decision of 2026-09-03,
+   taken for the 32-bit XP guest and unchanged here.
+2. Shut the guest down from the Start menu and snapshot:
+   `qemu-img snapshot -c vista-clean-install vm\vista.img`, and the same for
+   `win7`.
+
+   **What `vm\vista.img` actually is, since it is not what a clean run of the
+   recipe above would produce.** It was installed on 2026-09-10 across three
+   machines, because that is how the accelerator was found: the first phase
+   under `whpx,kernel-irqchip=off` up to the wedge, the rest under
+   single-vCPU `tcg` after the relaunch resumed it, and it has been booted
+   since under `tcg,thread=multi` with four vCPUs, which it uses (so Setup
+   chose the multiprocessor HAL). It works, and the `vista-clean-install`
+   snapshot is of that. A guest built by the recipe as it now stands would
+   take one rung throughout, and if anything ever turns on this image's
+   provenance the honest move is to reinstall rather than to argue from this
+   paragraph.
+3. **Roadmap task 22.3's two readings, off the snapshot, with the guest never
+   booted here** - the pair task 21.5 took for XP x64, and cheap the same way:
+   7-Zip lists straight through the qcow2's partitioning and file system in one
+   pass, so no `qemu-img convert -O raw` step is needed (`7z l vm\vista.img`).
+   Reading 1 is whether an xHCI-only Vista or Windows 7 install has
+   `usbport.sys`, `usbhub.sys`, `usbd.sys` or `usbehci.sys` on disk at all;
+   reading 2 is where the system keeps them if it does not, and whether the
+   INF's `LayoutFile` route can still reach them from a driver-store install.
+
+   **Vista's answer, read 2026-09-10 off `vista-clean-install`, is yes on
+   both counts.** `7z l vm\vista.img` listed 59,929 entries straight through
+   the qcow2, the MBR and NTFS in one pass. `Windows\System32\drivers` holds
+   `usbport.sys` (226,304 bytes), `usbhub.sys` (196,096), `usbehci.sys`
+   (39,936) and `usbd.sys` (5,888), plus `usbuhci.sys`, `usbohci.sys`,
+   `usbccgp.sys` and `hidusb.sys`. It is a stronger reading than the question
+   asks for, because this guest was installed with **no USB host controller at
+   all** rather than merely an xHCI-only one. And the driver store carries the
+   payload as well as the INFs: three generations of `usbport.inf_*` (RTM
+   `_4d107f9d`, SP1 `_dab84ba6`, SP2 `_2c537348`), each with all six `.sys`
+   files beside `usbport.inf`, `usbport.PNF`, `hccoin.dll` and `hcrstco.dll`.
+
+   **And `usbui.dll` is there too**, which matters because it is the fifth
+   file the install path needs and the one release `1.0.2.0` had to add to the
+   package for the four 9x and NT install sources: `Windows\System32\usbui.dll`,
+   83,456 bytes, version 6.0.6001.18000, with `en-US\usbui.dll.mui` beside it
+   and a WinSxS component backing both. It sits at the SP1 build while
+   `usbport.sys` is SP2 (2009-04-11), because SP2 did not revise it. So the
+   INF's copy of `usbui.dll` should skip here for the same reason the `.sys`
+   copies do.
+
+   **Windows 7's answer, read the same day off `win7-clean-install`, is the
+   same on every count.** `Windows\System32\drivers` holds `usbport.sys`
+   (284,672), `usbhub.sys` (258,560), `usbehci.sys` (42,496) and `usbd.sys`
+   (5,888), plus `usbuhci.sys`, `usbohci.sys`, `usbccgp.sys` and `hidusb.sys`;
+   the driver store stages `usbport.inf_x86_neutral_f9abf85fd00186bd` with
+   `usbport.sys`, `usbhub.sys`, `usbd.sys` and `usbehci.sys` in it; and
+   `Windows\System32\usbui.dll` is there at 80,896 bytes, 6.1.7600.16385, with
+   its WinSxS component. Note the store's naming changes between the two
+   systems - Vista's `<inf>_<hash>` becomes Windows 7's
+   `<inf>_<arch>_<lang>_<hash>` - so anything that matches those directory
+   names by pattern has to know which system it is looking at.
+
+   **And Windows 7 needs a different listing technique from every guest before
+   it, which is a trap rather than a detail.** Windows 7 Setup creates the
+   100 MB System Reserved partition that Vista and the NT 5.x guests do not,
+   so the one-pass trick task 21.5 found - `7z l vm\<stem>.img` straight
+   through the qcow2 - **stops at the MBR** and lists three volumes rather
+   than recursing into the file system, because 7-Zip only descends
+   automatically when there is a single nested stream. It does not error; it
+   just returns 32 lines instead of tens of thousands, which is easy to read
+   as an empty disk. Extract the Windows volume and list that instead:
+
+   ```
+   7z e vm\win7.img 1.ntfs -o<scratch>     # writes the full 32 GB volume
+   7z l <scratch>\1.ntfs                   # 57,664 entries
+   ```
+
+   Converting to a VHD (`qemu-img convert -O vpc -o subformat=dynamic`) and
+   mounting it read-only is tidier and needs no scratch space, but
+   `Mount-DiskImage` requires elevation, and the converted VHD comes out
+   sparse - which Windows refuses to mount until `fsutil sparse setflag <f> 0`
+   clears the flag.
+
+   So on Vista the Code 39 that XP and Windows 2000 suffer **does not arise**,
+   every `COPYFLG_NO_OVERWRITE` copy should skip with no source needed, and
+   **the `LayoutFile` route is not needed on this system at all** - the
+   condition it exists to answer, a file absent from the machine, is not the
+   condition here, and Windows 7's reading above agrees.
+
+   **The prior is strong and it is still not the reading, and the roadmap says
+   why in the task line itself.** All four files are in
+   `Windows\System32\drivers` inside the `install.wim` of both systems in both
+   architectures (read 2026-09-09 with task 22.1), and Vista and later apply a
+   whole image rather than copying drivers on demand the way XP Setup does - so
+   unlike XP and 2000 the Code 39 that release `1.0.1.0`'s INF fix answers
+   should not arise, and every `COPYFLG_NO_OVERWRITE` copy should skip without
+   needing a source. Two things keep that from closing the box. It is a reading
+   of the *media*: on the XP lineage the same four files were on the media the
+   whole time, in `Driver Cache\i386`, and an xHCI-only install still had none
+   of them on disk - the gap between what Setup carries and what Setup leaves
+   is precisely where that defect lived. And **the driver store does not exist
+   in a WIM at all**: `System32\DriverStore\FileRepository` is made by the
+   install, so whether the `LayoutFile` route reaches the operating system's
+   own copies from a driver-store install is not a question an image listing
+   can be asked.
+4. Stage the package (`make-package.ps1 -Flavor qemu -OutDir vm\xfervista`),
+   boot `qemu-vista-run.cmd <tag>`, and install from the transfer drive.
+   **Record what the unsigned-driver prompt actually did.** Kernel-mode code
+   signing enforcement is x64-only, so a prompt and not a refusal is the
+   expectation - and Phase 22 writes it down as the assumption to *confirm on
+   the guest*, because it is the one that would make the phase pointless if
+   wrong. **The refusal half is confirmed**: both guests installed and loaded
+   the unsigned driver on every leg of issue 7 section 7.5. **The prompt
+   itself was not written down** on any of those legs; roadmap task 22.10's
+   eighth and ninth install legs read it on 2026-09-18, and on both it is the
+   Windows Security dialog "Windows can't verify the publisher of this driver
+   software", the focus on "Don't install this driver software", taken with
+   "Install this driver software anyway", and nothing after it (the Program
+   Compatibility Assistant box the x64 guests add does not appear).
+
+**The idle-suspend reading: Windows 7 needs the idle stopped, and Vista was
+not seen to.** Taken on 2026-09-16 at the owner's request, on both
+32-bit guests, because the NT 6.x install path then wrote
+`DisableSelectiveSuspend` and nobody
+had asked whether these stacks idle the controller. (The value is what was
+present or deleted in every reading below; `1.1.0.0` replaced it with the
+driver's own `USB_MINIPORT_FLAGS_DISABLE_SS`, which reaches the same state in
+the same start routine, so the readings stand and only the lever changed. The
+flag itself was then read at run time on both guests on 2026-09-17, each
+against a control leg on the previous build with the value deleted;
+`docs/issues/05-idle-suspend-and-disableselectivesuspend.md` sections 5.3 and
+5.4 carry the reasoning and section 5.5 the readings.) The subject was the `qemu` build of that
+day (`built Sep 16 2026 20:16:51`) staged with the committed `src\xhci98.inf`
+into `vm\xfer-dss-x86`, installed from Device Manager by the owner. Each
+guest ran on a throw-away qcow2 overlay over `vm\vista.img` or
+`vm\win7.img` rather than on the image itself, through a copy of its run
+launcher pointed at the overlay, so neither image was written and nothing
+had to be reverted - a cheaper way to take a destructive reading than the
+snapshot revert, and the base image's mtime is the check that it held.
+`-smp 4`, TCG, nothing attached at boot, and the method of the idle-suspend
+paragraph above: `cb SuspendController` / `cb ResumeController` on the
+debug console, `USBCMD`/`USBSTS` read with `xp /2wx` at BAR0 + 0x40
+(`0xfebf0040` on both guests), then a hot-plugged `usb-mouse` and the
+driver's `devices addressed`.
+
+- **Windows 7, value present** (the install's start, then a boot): no
+  suspend in four and three and a half minutes, `USBCMD` `0x00000005`, the
+  mouse addressed at once.
+- **Windows 7, value deleted in regedit, guest restarted:**
+  `SuspendController` 9 s after `StartController`, nothing resuming it,
+  `USBCMD` `0x00000000` and `USBSTS` `0x00000001` (HCH) through the logon. A
+  mouse plugged in at the desktop was at address 0 after 60 s (`info usb`
+  showed `Device 0.0`), `devices addressed` 0. Device Manager's Scan for
+  hardware changes brought `ResumeController`, the mouse addressed and
+  `USBCMD` back to `0x00000005`. After the mouse was unplugged the
+  controller was suspended again about 30 s later.
+- **Vista, value present** (a boot): no suspend in five minutes, `USBCMD`
+  `0x00000005`.
+- **Vista, value deleted, guest restarted - taken twice, the second time on
+  a fresh overlay and a fresh install:** each boot showed
+  `SuspendController` 3 to 4 s after `StartController` and
+  `ResumeController` 2 to 3 s after that, which the boot with the value did
+  not show, so this stack does read it. Then no suspend in five minutes at
+  the desktop, `USBCMD` `0x00000005`, a hot-plugged mouse addressed at once,
+  and no suspend in the three minutes after it was unplugged.
+
+So the NT 6.x path kept the value through `1.0.2.0`: on Windows 7 it is what
+made hot-plug work, and on Vista it was harmless and the same machine-wide
+setting. From `1.1.0.0` neither INF writes it and the miniport flag reaches
+the same state, read on all four NT 6.x guests on 2026-09-17 (issue 5 section
+5.5). Vista's "no idle" is a five-minute bound, not a never. The x64 pair was
+not read without the value until 2026-09-17; every run there before that
+installed a package that writes it.
+
+One thing in that key is not ours and is worth knowing before anyone deletes
+it by mistake: on Vista, `Services\usb` also holds `FastS4_OverrideBiosS4 =
+1`. It is in the clean-install image's `SYSTEM` hive, neither of this
+project's INFs names it, and Vista's own `usbport.inf` has no `AddReg` that
+does; Vista's `usbport.sys` carries the name and Windows 7's does not
+(`legal-provenance.md` section 4). What it does was not read.
+
+### Vista x64 and Windows 7 x64 target VMs (roadmap task 21.8)
+
+Both installed 2026-09-10. Added to the roadmap on 2026-09-09 on the owner's
+instruction, after task 21.7 read both systems' `usbport.sys` statically and
+found nothing in the interface against them. The generators, launchers and disk
+images exist, both Setup runs have been taken by the owner at the console, and
+each guest carries one snapshot of its clean install.
+
+**The tier, and the signing requirement beside it** (roadmap tasks 21.8 and
+22.5, the owner's decision of 2026-09-16): Vista x64 and Windows 7 x64 are
+supported in virtual machines, standing where their 32-bit siblings in the
+section above stand, with no checkpoint tax and never run on real hardware,
+on the second, amd64 binary. What settles it is issue 7 section 7.5 on these
+two guests (`fix7vistax64`, `fix7win7x64`, 2026-09-13) and Vista x64's five
+further remove/rescan cycles of 2026-09-16 (`vm\vistax64-rr\`), which were
+also the first install of the committed `src\xhci98-amd64.inf`'s NT 6.x path.
+**It is weaker than every other tier here in one way that a user meets at
+every start**: the package is not signed (next sections), so the driver loads
+only on a boot where F8 -> Disable Driver Signature Enforcement was chosen,
+the choice lasts that one boot, and without it the device sits at Code 39
+with nothing loaded (read on Vista x64, item 3 below) - so the machine can never boot unattended into working
+USB. The release notes carry that beside the tier. **Every clause was taken
+on the `qemu` build**; the `release` flavour was read on 2026-09-18 as
+roadmap task 22.10's sixth and seventh install legs, from the published asset,
+every clause passing, and on Windows 7 x64 that leg was also the first install
+through the committed INF rather than a staged copy of the same sections.
+
+| | Vista Business SP2 x64 | Windows 7 Professional SP1 x64 |
+|---|---|---|
+| Media | `D:\isos\en_windows_vista_sp2_x64_dvd_342267.iso` | `D:\isos\en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso` |
+| Generator | `scripts\setup-qemu-vista-x64.ps1` | `scripts\setup-qemu-win7-x64.ps1` |
+| Image | `vm\vista-x64.img`, 32 GB | `vm\win7-x64.img`, 32 GB |
+| Monitor | 55563 | 55564 |
+| Accelerator | `tcg,thread=multi` | `tcg,thread=multi` |
+| Snapshot | `vista-x64-clean-install` | `win7-x64-clean-install` |
+| vCPUs / RAM | 4 / 2048 MB | 4 / 2048 MB |
+| CPU model | `qemu64` | `qemu64` |
+
+Both are the same media task 21.7 read its six measurements out of, so the
+stack a guest installs is the stack that was measured, and saying so is cheap.
+
+**WHAT THE VISTA X64 GUEST HAS ALREADY SHOWN, 2026-09-10, AND WHAT AN OPERATOR
+SHOULD EXPECT.** The amd64 driver **loads and runs on 6.0** with F8 / Disable
+Driver Signature Enforcement, and no signing of any kind was needed to get
+there. Getting a working install took three separate things, none of them a
+signing question, and an operator repeating this will meet them in this order:
+
+1. **The stock package does not install on 6.0.** The copy queue aborts on
+   `usbport.sys` because the `LayoutFile` route cannot resolve a source there,
+   with a wizard error - "The filename, directory name, or volume label syntax
+   is incorrect" - that names neither the file nor the cause. The driver store
+   itself is fine; it stages the package. **A staged INF whose 6.0 models
+   section names its own install section** (`%XhciDesc%=Xhci.Dev6,...` ->
+   `[Xhci.Dev6.NTamd64]`, copying `xhci98.sys` and nothing else) installs
+   cleanly. All four OS-supplied files are already on disk on this guest -
+   `usbd.sys` 7,680, `usbhub.sys` 273,920, `usbport.sys` 259,584, and
+   `usbui.dll` in `system32` - measured, not carried over. **That INF shape is
+   `src\xhci98-amd64.inf`'s own since 2026-09-16** (design record 11 section
+   12, decision 13), so the package built from the tree installs this way with
+   no staged copy. The 32-bit file carries it too, as `[Xhci.Dev6.NTx86]`, since
+   the same day - after its widened line was read on Windows 98 SE, ME, 2000
+   and 32-bit XP, because that line is the one Windows 98's engine parses.
+2. **A pre-fix binary bugchecks the guest at load** - `0x7E` inside usbport,
+   from the registration call. Fixed 2026-09-10; if you see it, you are running
+   a driver built before that. Check the `DriverEntry (built ...)` stamp on the
+   `0xE9` channel before reading anything into a result.
+3. **Booting without F8 is safe and useful.** Enforcement blocks the unsigned
+   driver, so the guest boots to a normal desktop with the device at Code 39
+   and nothing loaded. That is the state to install from, change the registry
+   from, or recover in - there is no boot loop to fear. Code 39 there is the
+   signature gate, not a defect; the `0xE9` log staying empty is what proves it.
+
+**Turn off "Automatically restart" first** (System Properties -> Advanced ->
+Startup and Recovery). You cannot pick two F8 items at once, so a bugcheck
+otherwise reboots before it can be read.
+
+**That 2026-09-10 reading is superseded twice over and is kept only so an
+operator meeting it knows what it was.** It read: the driver reaches
+`StartController` and refuses there, `init REFUSED at step=00000001`,
+`ResourcesTypes = 0x0C`, Code 10 - the driver declining deliberately, not a
+crash, and roadmap task 21.8's open question at the time. **The Version 300
+work of task 22.5 closed it**: both guests now start their controllers, and
+`scripts\local\read-v300.ps1 -Expect nt6` reads ALL PASS on each.
+
+**Both have since been booted with the driver, and both were re-taken on
+2026-09-12 against the current binary** (roadmap 22.5, guests
+`p225vistax64re1` and `p225win7x64re1`, each off a fresh revert of its
+clean-install snapshot). Install, the three devices and the Device Manager
+disable pass on both; Vista x64's enable passes; **Windows 7 x64's enable
+intermittently arrests** (issue 7, which that evening stopped being an x86-only
+page), and **Vista x64's remove/rescan did not complete**. Read those two
+boxes before running either sequence, so a known result is not re-discovered
+as a surprise. **On 2026-09-13 issue 7's fix was run on both, and on both
+32-bit guests too, and every clause passed on all four** (issue 7 section
+7.5): five disable/enable cycles each, and remove and rescan included.
+
+**F8 is what every run has used, and it is the only route.** `TESTSIGNING`
+was never tried on either guest and was removed from the roadmap by the owner
+on 2026-09-16: test-signing mode loads a test-signed driver, and this package
+is not signed. **A single QEMU
+monitor `sendkey f8` is too late on these guests' boot path**, and a
+`system_reset` reaches "Starting Windows" within about 25 seconds. What does
+work, read on Windows 7 x64 on 2026-09-18 (roadmap 22.10, leg 7), is sending
+`sendkey f8` every 200 ms from the moment QEMU starts for about 30 seconds: the
+Advanced Boot Options menu comes up and waits, and `up` from *Start Windows
+Normally* reaches *Disable Driver Signature Enforcement*. **That does not
+work on Vista x64** (22.10 leg 6, the same night): the spam went unnoticed
+and the guest booted to logon, and the Windows Error Recovery screen a
+`system_reset` leads to ignores F8. There, on a throw-away overlay, run
+`bcdedit /set {bootmgr} displaybootmenu yes` and `bcdedit /timeout 30`
+elevated, power off cleanly, then `system_reset` and `cont`: the Windows Boot
+Manager menu waits, F8 opens Advanced Boot Options, and nine `down` from *Safe
+Mode* reach *Disable Driver Signature Enforcement*. Otherwise press F8 at the
+console.
+
+**Getting files in and out.** The transfer drive is VVFAT `snapshot=on`, so the
+guest cannot write anything back to the host through it. Use the floppy:
+`change floppy0 <img> raw` for a writable disk the guest formats and writes
+(then `eject floppy0` to flush before reading it with 7-Zip), and
+`change floppy0 fat:floppy:rw:<dir>` to serve a host directory in. That is how
+`setupapi.dev.log` and the crash minidumps came out, and how a corrected INF
+and a rebuilt `.sys` went in without restaging or relaunching.
+**The machine is `scripts\qemu-nt6-common.ps1`, which these two share with the
+32-bit pair**; `-Arch amd64` is what makes it the 64-bit recipe. Four things
+turn on that switch and the third is the one that inverts rather than varies:
+the CPU refusal names long mode instead of the NX bit, the run launcher points
+at `.NTamd64` and `make-package.ps1 -Arch amd64`, the code-signing paragraph
+says enforcement is *on* rather than absent, and the memory note becomes the
+`>4 GB` experiment. The launcher gate asserts each of them per architecture.
+
+Two naming notes, so neither reads as drift. The generators are not called
+`setup-qemu-winvista64.ps1` and `setup-qemu-win7x64.ps1`, which is what this
+table carried from 2026-09-09: that pair disagreed with each other, and it was
+written when these guests were expected to be siblings of
+`setup-qemu-winxp64.ps1` rather than the 64-bit half of the Vista and Windows 7
+recipe. They take the 32-bit stems with an explicit `-x64`. And **monitor ports
+55563 and 55564 are now claimed rather than reserved**: the launcher gate's
+assertion that nothing took them is gone, replaced by one that these two still
+do.
+
+**The accelerator is measured on both and both want TCG**, 2026-09-10. Each
+generator carried no default and refused to run without an explicit `-Accel`
+until an install completed under one; both now carry `tcg`, and the launcher
+gate's refuses-without-`-Accel` check was deleted in the same change, which is
+what it was there for. The two rows in that gate pass no `-Accel` at all now, so
+its accelerator assertions read the generators' own defaults.
+
+**The two failed differently under WHPX, and the difference is the lesson.**
+
+| guest | under `whpx,kernel-irqchip=off` | under `tcg,thread=multi` |
+|---|---|---|
+| Vista x64 | STOP `0x0000000A` inside WinPE, address `0x10` at IRQL `0xC` on a read, **zero bytes written** | installs to the desktop |
+| Win7 x64 | clears WinPE, runs its **entire first phase**, writes 7.27 GB, then **wedges at the first restart** | installs to the desktop |
+
+Screens are kept at `out\task-21-8\`. A near-null dereference at device IRQL is
+an interrupt-delivery fault, which is the surface `kernel-irqchip=off` touches,
+and that rung is the only WHPX on this host - plain `-accel whpx` cannot
+initialise at all, so the alternative to it is TCG rather than another WHPX rung.
+
+For most of an afternoon the Windows 7 x64 reading looked like a *disagreement*
+with its sibling, because it got so much further. It was a slower failure. That
+is exactly what the rule exists to catch: **an accelerator may not be written
+down until an install has COMPLETED under it.** Reaching a prompt, a progress
+bar, or a whole finished phase proves only that the guest has not failed yet.
+The rule was paid for by the first 32-bit Vista probe, which stopped at Setup's
+language page, recorded WHPX, and was wrong; this pair nearly bought the same
+mistake a second time.
+
+**And a wedge does not always leave a resumable image.** "Switching to TCG costs
+no reinstall - same virtual machine, only the execution engine differs, so the
+install-time HAL stays correct" holds **only where the guest already has a
+bootable disk**. `vm\vista.img` wedged on a boot *after* a completed phase and
+resumed under TCG with no reinstall. Windows 7 x64 wedged *at* the transition,
+before Setup laid its boot files down; the TCG relaunch met `BOOTMGR is missing`
+and Setup had to be run again from the DVD. Check for a bootable disk before
+counting on the cheap rescue.
+
+**Note the shape of the result, but do not promote it to a rule.** The 64-bit
+pair agree with each other where the 32-bit pair disagreed, and with XP x64 also
+on `tcg`, every 64-bit guest in this project now wants TCG. That is an
+observation about four guests, not a property of bitness. The accelerator
+belongs to the guest, never to the family, and this project has now been paid
+twice for treating one guest's reading as another's.
+
+#### The gate that comes before any of it: kernel-mode code signing
+
+Windows XP x64 does not enforce it, which is the whole reason Phase 21 took
+that target first. Vista x64 and Windows 7 x64 both do, and the
+cross-certificate route that once made third-party Windows 7 x64 signing
+possible is no longer available in practice. So `xhci98.sys` loads on these
+systems only on a boot with driver signature enforcement disabled (F8).
+Test-signing mode is not a route for the published package: it loads a
+test-signed driver, and this package is not signed (next section). Design
+record 11 section 6 is the record; the requirement belongs in the release notes
+beside any tier that is claimed, not in a footnote.
+
+**F8 works on both guests** (roadmap tasks 21.8 and 22.5). It needs no
+certificate, no catalog and nothing staged. It applies to exactly one boot, by
+design, so what it establishes is that the user must press F8 and choose that
+option every time the machine starts. For a USB host controller driver that is
+a heavy cost rather than a footnote - the machine can never boot unattended
+into working USB - and it is materially weaker than what this project claims
+for XP x64 and Server 2003 x64, where the package installs and loads with
+nothing asked of the user. A tier claim has to say so.
+
+Two things F8 does not do, so neither reads as a failure when it happens:
+
+- **It does not silence the install-time publisher prompt.** "Windows can't
+  verify the publisher of this driver software" still appears during Update
+  Driver and still wants "Install this driver software anyway". That prompt is
+  the catalog's business, not the loader's - the same distinction the rest of
+  this section rests on - and it is a cost to record rather than a block.
+- **It says nothing about the driver store.** Whether these systems accept the
+  package's file list is a different mechanism with a different failure mode. A
+  clean load under F8 is not evidence about it in either direction.
+
+On the guests the F8 menu is reachable over the PS/2 keyboard, so there is no
+chicken-and-egg between the boot menu and the controller being installed.
+
+**A test-signed package was proved out host-side on 2026-09-10, before either
+guest existed, and it works end to end with no network and nothing installed.**
+It is kept as a record, not a step: the guest half of that route
+(`bcdedit -set TESTSIGNING ON`) was removed by the owner on 2026-09-16 without
+being tried, since no user of the unsigned download can take it without signing
+the driver themselves. The whole toolchain is already in this repository:
+
+| tool | where |
+|---|---|
+| `MakeCert.exe`, `SignTool.exe`, `CertMgr.exe` | `tools\WinDDK71\bin\x86` and `...\bin\amd64` |
+| `Inf2Cat.exe` | `tools\WinDDK71\bin\selfsign` - **needs the .NET 3.5 feature**, see below |
+
+The sequence, and **the order is not free - the catalog hashes the signed
+`.sys`, so signing has to come first**:
+
+```
+MakeCert -r -pe -ss PrivateCertStore -n "CN=<name>" <name>.cer
+SignTool sign /v /s PrivateCertStore /n "<name>" <staged>\xhci98.sys
+Inf2Cat /driver:<staged> /os:Vista_X64,7_X64
+SignTool sign /v /s PrivateCertStore /n "<name>" <staged>\xhci98.cat
+```
+
+Three things came out of running it, and the second is a decision rather than a
+step:
+
+- **`Inf2Cat` is a managed .NET 2.0 application, so the .NET 3.5 feature is a
+  prerequisite - and its absence is silent.** On a stock Windows 11 host, which
+  does not enable `NetFx3`, it exits `0x80131700` **printing absolutely
+  nothing**: no error, no usage, no exit message, which reads exactly like a
+  tool that did its job. It was hit on this host on 2026-09-10 and the owner
+  enabled .NET 3.5 the same day, so `Inf2Cat` now runs in place out of
+  `tools\WinDDK71\bin\selfsign` with nothing beside it; **the tool directory is
+  unmodified and must stay that way**. Where the feature cannot be enabled, an
+  `Inf2Cat.exe.config` next to a *copy* of the executable, declaring
+  `<supportedRuntime version="v4.0"/>` under a `<startup
+  useLegacyV2RuntimeActivationPolicy="true">`, runs it on .NET 4 instead - a
+  configuration file beside the tool, not a modification of it. Both routes
+  were run here and **their diagnostics are identical**, which is why the two
+  findings below are readings of the package rather than of the runtime.
+  Either way: check for the `.cat`, not the exit code.
+- **The amd64 INF as it stands cannot be catalogued at all, and that turns out
+  not to matter.** `Inf2Cat` refuses it with `22.9.4: Missing AMD64 CatalogFile
+  entry (CatalogFile.ntamd64, CatalogFile.nt, CatalogFile) from [Version]
+  section`. Adding one line - `CatalogFile.NTamd64=xhci98.cat` - makes the same
+  package pass with zero errors and generate its catalog. **That line has NOT
+  been added to `src\xhci98-amd64.inf` and is not owed**, because nothing this
+  project does needs the catalog. See the next section for why.
+- **The `LayoutFile` route survives Microsoft's own signability test, named
+  explicitly, targeted at these two systems.** Every one of the four
+  OS-supplied files produces the same warning and nothing else:
+
+  ```
+  22.9.10: usbport.sys in [xhci.copynt] is missing from [SourceDisksFiles]
+  section in \xhci98-amd64.inf; ok if file source is provided via LayoutFile
+  in [Version].
+  ```
+
+  and the same for `usbd.sys`, `usbhub.sys` and `usbui.dll`. That is a
+  meaningfully better prior than the "should" below, because it is the vendor's
+  package validator being asked about `Vista_X64` and `7_X64` specifically and
+  blessing the arrangement by name. **It is still not the reading**: a
+  signability test is not the driver store at install time, and only a guest
+  settles that.
+
+What the signature costs and what it does not: the embedded signature appends
+1,024 bytes to the amd64 `release` binary (94,720 to 95,744) and changes
+nothing else. `SignTool verify /pa` then **fails** on the host with "A
+certificate chain processed, but terminated in a root certificate which is not
+trusted by the trust provider" - which is the expected result and is precisely
+the guest-side cost: the test root has to be imported into the guest's
+**Trusted Root Certification Authorities and Trusted Publishers** stores, both,
+before `bcdedit -set TESTSIGNING ON` buys anything. Nothing from this probe was
+left behind: the certificate was removed from the host store afterwards, and no
+file in the repository was changed by it.
+
+#### This project does not sign its package, and does not need to
+
+**Decided by the owner on 2026-09-10.** Signing a release buys the claimed tier
+nothing. Windows XP x64 and Server 2003 x64 do not enforce kernel-mode code
+signing, which is the whole reason Phase 21 took that target first, and the
+published package installs and loads there unsigned today. When this was
+decided, Vista x64 and Windows 7 x64 sat outside the tier, so the decision
+cost the tier nothing. **Since 2026-09-16 they are inside it, and what the
+decision costs there is the F8 boot**: nothing about installing, and
+everything about starting unattended. The tier statement above says so.
+
+**Two things were being conflated, and separating them is what settles the
+INF question.** Signing a *release* is a shipping decision, and the answer is
+no. Signing on a *guest* is a measurement of what a user of an enforcing system
+would have to do to load an unsigned driver, and that measurement is worth
+taking whether or not anything is ever signed for publication.
+
+**The measurement needs no catalog, so it needs no INF change.** The service
+is `StartType=3` in `src\xhci98-amd64.inf`, demand-start rather than
+boot-start, and the load-time check accepts an embedded Authenticode signature
+on `xhci98.sys` directly. Sign the binary and stop:
+
+```
+MakeCert -r -pe -ss PrivateCertStore -n "CN=<name>" <name>.cer
+SignTool sign /v /s PrivateCertStore /n "<name>" <staged>\xhci98.sys
+```
+
+No `Inf2Cat`, no `.cat`, no `CatalogFile.NTamd64`, and `src\xhci98-amd64.inf`
+stays byte-identical. The catalog governs the install-time publisher prompt
+rather than the loader; an unsigned package there costs a "Windows can't verify
+the publisher" dialog and an "Install anyway" click, which is a cost to write
+down and not a block. Had the driver been boot-start the answer would have gone
+the other way round, since that case requires the embedded signature and admits
+no catalog at all.
+
+**This is a reading of the loader and not a measurement of one**, and it is
+flagged as such deliberately. Task 21.8 tries the embedded-only route first on
+each guest. If the driver loads, the INF line is never needed. If it does not,
+the catalog question reopens - and then the line is added to a *staged* copy of
+the INF and measured there, before anyone proposes it for the shipping package.
+
+#### And the install path is not the one the INF was written for
+
+The `LayoutFile=layout.inf` route that lets the media carry no Microsoft file is
+a Windows 2000 and XP mechanism; Vista and later stage a package into the driver
+store first and validate its file list more strictly. Two readings now make this
+look easier than it did. Both install images carry `usbport.sys`, `usbhub.sys`,
+`usbd.sys` and `usbehci.sys` in `Windows\System32\drivers` outright, in every
+architecture (task 21.7, 2026-09-09) - the opposite of an xHCI-only XP or 2000
+install - and the 32-bit guests of Phase 22 **confirmed on an installed system**
+that all four plus `usbui.dll` are on disk after an install with no USB host
+controller at all. So the Code 39 that Phase 19's fix answers should not arise
+and every `COPYFLG_NO_OVERWRITE` copy should skip without needing a source.
+
+**"Should" turned out to be wrong, and the paragraph above is kept for what it
+predicted.** Task 21.8 measured it on Vista x64: the queue resolves a source
+for each file *before* `COPYFLG_NO_OVERWRITE` skips the copy, the source it
+finds is the OS's own driver-store package, and the queue aborts
+(`lessons.md`, "`COPYFLG_NO_OVERWRITE` does not save a source the queue cannot
+resolve"). The answer is an NT 6.x install path that names none of the four
+files, and it was a decision per INF rather than an edit (design record 11
+section 12, decision 13): `src\xhci98-amd64.inf` carries it since 2026-09-16
+as an `NTamd64.6.0` models section naming `[Xhci.Dev6.NTamd64]`, which the INF
+gate now checks as a second path (`OS-ONNT6` refuses an OS file on it), and
+`src\xhci98.inf` carries the same path as `[Xhci.Dev6.NTx86]` behind
+`%Mfg%=XhciModels,NTx86.6.0`, taken the same day once that line had been read
+on every engine that parses the file: Windows 98 SE and ME installed from
+`[XhciModels]`, and Windows 2000 SP4 and 32-bit XP ran `[Xhci.Dev.NTx86]`
+(their `setupapi.log`: `Section: Xhci.Dev`, `Actual install section:
+[Xhci.Dev.NTx86]`), each off a snapshot that never had this driver.
+
+#### One trap this pair inherits from the 32-bit one
+
+Windows 7 Setup creates the 100 MB System Reserved partition Vista does not, so
+`7z l vm\win7-x64.img` **stops at the MBR** and lists three volumes instead of
+recursing - 7-Zip descends automatically only when there is a single nested
+stream. It does not error; it returns about thirty lines that read like an empty
+disk. Extract the Windows volume and list that, exactly as for the 32-bit
+guest:
+
+```
+7z e vm\win7-x64.img 1.ntfs -o<scratch>
+7z l <scratch>\1.ntfs
+```
 
 ### Windows 2000 SMP Stress VM (Phase 2d)
 
@@ -2198,7 +3196,7 @@ controller at all, and the bring-up order is:
    `C:\WINNT\system32\drivers\USBD.SYS`. Shut down cleanly.
 2. Install boot: `qemu-win2k-acpi-run.cmd`. Device Manager -> the
    unrecognised USB controller (`PCI\CC_0C0330`, Code 1) -> Update Driver ->
-   Have Disk -> `xhci98.inf` from `out\pkg-qemu\` (staged on the VVFAT share
+   Have Disk -> `xhci98.inf` from `out\pkg-qemu-x86\` (staged on the VVFAT share
    at `vm\xfer\pkg\`). Accept the unsigned-driver warning. Confirm
    `DriverEntry (built ...)` and a clean start in `vm\win2kacpi-debugcon.log`.
    That confirmation reads the port-`0xE9` log, and only the `qemu` flavour
@@ -2214,11 +3212,35 @@ controller at all, and the bring-up order is:
 ### QEMU monitor helpers (`scripts\local\`)
 
 All are host-agnostic and are candidates for promotion into `scripts\` proper.
-The launchers beside them are not: they hard-code the host's QEMU path and
-media paths, so a repo synced across machines needs them regenerated
-(`scripts\setup-qemu*.ps1 -QemuBinDir`) or the one path line patched. Observed
-paths so far: `C:\Program Files\qemu` on this development host, a scoop prefix
-on `minis-w11p-ykm` and `FW-W11P-YKM`.
+**The launchers beside them are half host-agnostic, and knowing which half is
+which matters when one is carried to another machine.** QEMU is resolved at RUN
+time, down four rungs - `%XHCI98_QEMU%`, the path the generator found,
+`C:\Program Files\qemu`, then `%USERPROFILE%\scoop\apps\qemu\current` - so a
+synced launcher finds a QEMU on a host its generator never saw. Media and
+image paths are NOT: they are absolute and baked in, so a repo synced across
+machines still needs the launchers regenerated (`scripts\setup-qemu*.ps1
+-QemuBinDir`, and each guest's own `-*Iso`) or those lines patched.
+
+**The resolver's convenience is also its hazard, which is why every launcher
+now announces the answer.** A host that LOSES a QEMU gets no error from that
+chain, it gets the next rung - and the run proceeds under a different emulator
+from the one a guest was installed and measured under, in silence. That
+happened on 2026-09-10: `C:\Program Files\qemu` was uninstalled between two
+sessions, leaving task 21.8's two 64-bit guests, installed under 11.0.92 and
+with their accelerator measured under it, one launch away from booting under
+an older scoop build with nothing on screen saying so. **No gate can catch
+this** - `test-qemu-launchers.ps1` reads generated text, and the host is
+precisely what it must not depend on - so the launcher says it instead: three
+lines at the top of every boot giving the version, the resolved path, and
+which rung answered. The version comes from running the resolved binary, so
+anything that is not a working `qemu-system-x86_64.exe` degrades to "version
+unreadable" rather than aborting. Quote those lines in any run sheet and the
+reading carries the emulator it was taken under instead of an assumption about
+it. **Only task 21.8's two x64 launchers have been regenerated since**, so
+every other guest's still carries the older silent preamble until it is next
+regenerated. Observed QEMU paths so far: `C:\Program Files\qemu` (a winget
+install, present on this development host until 2026-09-10 and now gone from
+it) and a scoop prefix on `minis-w11p-ykm` and `FW-W11P-YKM`.
 
 - `qmon.ps1`: `-Port <n> -Command "<monitor command>"`. Prompt-framed read
   with an idle timeout and a hard limit, and it strips QEMU's
@@ -2597,12 +3619,16 @@ full-NUSB baseline the stack is present and `xhci98.inf` (binding
 
 Bundling `usbport.sys` + `usbhub20.sys` in `xhci98.inf`'s own `CopyFiles`
 would be an optional, defensive measure for a non-NUSB host, not a hard
-requirement, and the decision is not to. The media already carries a
-per-target `usbd.sys` for a reason the gate checks by hash, and adding two more
-third-party binaries under the same `CopyFiles` would double that surface for
-a host this project has never been asked to support: a machine with an
-xHCI-only chipset, no NUSB, and Windows 98. Installing NUSB is the documented
-prerequisite. If a real such host ever turns up, this is the option to reach
+requirement, and the decision is not to. The media carries no Microsoft file
+at all since `1.0.0.1` (the per-target `usbd98.sys` / `usbd2k.sys` builds and,
+from `0.0.0.4`, `usbhub98.sys` that it carried through `1.0.0.0` were withdrawn
+on 2026-09-02): the INF gate's
+`OS-*` rules refuse an INF that names one and `PKG-MSFILE` refuses a staged
+package holding one, `usbport.sys` and `usbhub20.sys` by name among them
+(`AGENTS.md`, "The INF and install media"), so those two binaries could not
+be put under `CopyFiles` for a host this project has never been asked to
+support: a machine with an xHCI-only chipset, no NUSB, and Windows 98.
+Installing NUSB is the documented prerequisite. If a real such host ever turns up, this is the option to reach
 for; it is written down here for that, not as an open task.
 
 What NUSB 3.3 does not ship, and the composite-device gap it leaves. The
@@ -2718,7 +3744,7 @@ table for the exact mobile IDs.
 |---|---|---|---|
 | AMD mobile (Kaveri / Carrizo APU `1022:7814`, or Ryzen mobile) | Era AMD laptop | Second integrated vendor; PLL re-lock on power events and isoch scheduling quirks. AMD's USB IP is partly ASMedia-derived. Less common in the retro scene and harder to boot Win98 on. | Phase 13 |
 | NEC uPD720200 (`1033:0194`) + Renesas uPD720201/202 (`1912:0014`/`0015`) | PCIe add-in card (desktop bench) | ROM-less 720201/202 cards are the only test vehicle for the driver firmware-upload path; the 720200 boots from on-card SPI flash (no upload) and covers plain NEC-vendor behavior. Not found in laptops. | Phase 6-8 |
-| ASMedia ASM1142/ASM2142 (clean) + ASM1042 (`1B21:1042`, 64 KB bulk limit) | PCIe add-in card (desktop bench) | Clean baseline plus the bulk-chunking quirk. ASMedia behavior also surfaces indirectly under AMD integrated USB. | Phase 3-8 |
+| ASMedia ASM1142/ASM2142 (clean) + ASM1042 (`1B21:1042`, spurious-success completions and broken streams per Linux `xhci-pci.c`; the table carried an unsourced 64 KB bulk limit until 2026-09-17) | PCIe add-in card (desktop bench) | Clean baseline plus the spurious-success quirk. ASMedia behavior also surfaces indirectly under AMD integrated USB. | Phase 3-8 |
 
 #### Tier 3 - quirk completeness on a desktop bench (only if chasing specific bugs)
 
@@ -2734,8 +3760,8 @@ Practical notes:
   100/200-series). That is the bulk of "comprehensive" for this project.
 - The discrete add-in cards (Tier 2-3) only make sense on a desktop test bench
   with free PCIe slots, and only to exercise quirks your laptops will never
-  trigger (NEC firmware upload, FL1000/VL800 spurious success, ASM1042 64 KB
-  bulk). Skip them unless you are specifically validating that code path.
+  trigger (Renesas firmware upload, ASM1042 spurious success, Fresco Logic
+  broken MSI). Skip them unless you are specifically validating that code path.
 - A laptop with Thunderbolt/USB4 exposes an extra xHCI for USB tunneling
   alongside the native PCH xHCI; that path is more complex and out of scope
   (and such laptops usually cannot boot Win98 anyway).
@@ -3314,9 +4340,12 @@ archives) so Phase 2a does not depend on a live download.
    a relaunch), `SuspendController` fired once shortly after start and a
    keyboard hot-plugged afterwards was never seen (QEMU lists it at the port
    with address 0, the driver's addressed count stays 0). The same behaviour
-   as NUSB's build, so the INF's global value stays; and under NUSB's build
-   the value present but set to 0 behaves like the deleted case (2026-09-06,
-   three boots, the idle-suspend paragraph above). One QEMU trap on that
+   as NUSB's build, so the INF's global value stayed (until 1.1.0.0 moved the
+   whole mechanism into the driver as `USB_MINIPORT_FLAGS_DISABLE_SS`, which
+   SweetLow's build reads in the same start routine - the reading here is
+   unaffected, only the thing that sets the state changed); and under NUSB's
+   build the value present but set to 0 behaves like the deleted case
+   (2026-09-06, three boots, the idle-suspend paragraph above). One QEMU trap on that
    run: `sendkey` input follows the most recently added keyboard, so a USB
    keyboard hot-plugged onto a suspended controller silently swallows every
    keystroke until `device_del` removes it.
@@ -3484,7 +4513,7 @@ to learn.
   previous build while `vm\xfer\XHCI98.SYS` beside it had been refreshed, so
   a correct copy from the wrong source produced a banner indistinguishable
   from a copy that never happened. Refresh every staged copy of a binary, not
-  the one you happen to be thinking of: `Copy-Item out\pkg-qemu\* vm\xfer\pkg\
+  the one you happen to be thinking of: `Copy-Item out\pkg-qemu-x86\* vm\xfer\pkg\
   -Force` alongside the root-level file.
 
   A VM session that reads the trace or
@@ -3525,7 +4554,11 @@ to learn.
     witnesses agreed (`Services\USB` absent, `DriverDate` still the baseline
     file's, the cached INF the new one). The repair is the INF's right-click
     Install (`[DefaultInstall]` touches no device, so it cannot reach the
-    teardown), which is what delivers `[Xhci.AddReg.Global]`.
+    teardown), which is what delivered `[Xhci.AddReg.Global]`. From `1.1.0.0`
+    that section is gone and the right-click route carries `CopyFiles` only -
+    the reasoning it existed for is unchanged, but what a lost registry phase
+    now costs is the two per-device log values rather than the idle-suspend
+    fix, which the driver carries itself.
   - Rollback is not a separate case: Win98 has no Roll Back Driver, so a
     rollback is an uninstall plus a reinstall, two teardowns rather than one.
   - The uninstall route that costs no crash is to unload the driver first:
@@ -3537,7 +4570,10 @@ to learn.
     contaminates the rows being read. What the uninstall takes is the devnode
     and its driver key: `xhci98.sys`, `usbd.sys`,
     `C:\WINDOWS\INF\OTHER\XHCI98~1.INF` and `Services\USB\
-    DisableSelectiveSuspend` all survive it.
+    DisableSelectiveSuspend` all survive it. (The last of those is on a
+    machine that installed 1.0.0.0 to 1.0.2.0. From 1.1.0.0 no install writes
+    it, so a clean machine has nothing there to survive - and one upgraded
+    from an earlier release still does, because nothing removes it.)
 - This collides with the one procedure that can observe a description or
   identity change, and the collision is unavoidable. Both setup engines cache
   `DriverDesc` in the device's software key at install time, so a renamed
@@ -3631,8 +4667,8 @@ set "XHCI_EXTRA_DEFINES="
 scripts\build-driver.cmd both
 ```
 
-The package lands in `out\pkg-failstart-debug\`, a different directory from
-`out\pkg-debug\` on purpose, so it cannot quietly become the one a VM is
+The package lands in `out\pkg-failstart-debug-x86\`, a different directory from
+`out\pkg-debug-x86\` on purpose, so it cannot quietly become the one a VM is
 installed from.
 
 What it does on the target. The init sequence runs to the end (the controller
@@ -3747,9 +4783,11 @@ and nothing else:
 powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor debug -UnpaddedDriverVerExperiment
 ```
 
-It lands in `out\pkg-datefmt-<flavor>\`, and its INF differs from
+It lands in `out\pkg-datefmt-<flavor>-<arch>\`, and its INF differs from
 `src\xhci98.inf` on exactly one line: a `DriverVer` date without its leading
-zeros (`8/18/2026` rather than `08/18/2026`). The variant is derived at
+zeros - `9/18/2026` where the tree's own `DriverVer` reads `09/18/2026`;
+every field that has a leading zero loses it, the day as well as the month
+when both have one. The variant is derived at
 staging time, never committed, so there is no second INF in the tree to drift;
 `xhci98.rc` is copied beside it so the DriverVer/FILEVERSION cross-check still
 runs; and the gate is invoked with `-AllowUnpaddedDriverVer`, which widens
@@ -3799,7 +4837,7 @@ zero-padding is excluded, and the remaining named difference is that the
 package is unsigned (the same tab says `Digital Signer: Not digitally signed`).
 
 Recovery left 2b as it was found: uninstall, cached `oem0.inf`/`.pnf` deleted,
-`out\pkg-debug` installed and re-confirmed by a second `findstr` reading the
+`out\pkg-debug-x86` installed and re-confirmed by a second `findstr` reading the
 padded date, root hub back, a mass-storage device enumerated (`slots
 enabled=1`, `devices addressed=1`, `SET_ADDRESS interceptions=1`, speed decode
 `00010103`, `transfers submitted == completed == 0xAB`, `isr count == claimed
@@ -4010,16 +5048,16 @@ memory. Shape:
 |---|---|---|
 | Both | `[Version]` | `$CHICAGO$`, `Class=USB` + the existing USB ClassGUID, `LayoutFile=layout.inf` ("The files the OS supplies" below), `DriverVer` per "Versioning the driver" above (the number moves, so read it out of `src/xhci98.inf` rather than from this row) |
 | Both | `[XhciModels]` | `%XhciDesc%=Xhci.Dev,PCI\CC_0C0330`, one class-code entry, the analog of the references' `PCI\CC_0C0320` |
-| Win98 | `[Xhci.Dev]` | `AddReg=Xhci.AddReg,Xhci.AddReg.Global` (the second since 1.0.1.0, the 9x half of the `DisableSelectiveSuspend` write), `CopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI` (the third since 1.0.2.0) |
+| Win98 | `[Xhci.Dev]` | `AddReg=Xhci.AddReg`, `CopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI` (the third since 1.0.2.0). A second `AddReg` section, `Xhci.AddReg.Global`, carried the `DisableSelectiveSuspend` write from 1.0.1.0 to 1.0.2.0 and went at 1.1.0.0 with the mechanism |
 | Win98 | `[Xhci.AddReg]` | `HKR,,DevLoader,,*NTKERN` + `HKR,,NTMPDriver,,xhci98.sys` |
-| Win2000 | `[Xhci.Dev.NTx86]` | `AddReg=Xhci.AddReg.NT,Xhci.AddReg.Global` (the second since 1.0.1.0, the NT half of the `DisableSelectiveSuspend` write), `CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI` (the third since 1.0.2.0) |
+| Win2000 | `[Xhci.Dev.NTx86]` | `AddReg=Xhci.AddReg.NT`, `CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI` (the third since 1.0.2.0); the same `Xhci.AddReg.Global` history as the row above |
 | Win2000 | `[Xhci.Dev.NTx86.Services]` | `AddService=xhci98,0x00000002,Xhci.AddService` |
 | Win2000 | `[Xhci.AddService]` | `ServiceBinary=%12%\xhci98.sys`, type 1, start 3, error 1, `LoadOrderGroup=Base` |
 | Shared | `[Xhci.CopyFiles]` | `xhci98.sys,,xhci98.tmp` -> `10, System32\Drivers` |
 | Win98 | `[Xhci.CopyW98]` | `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, both fetched from the OS's own install source through `LayoutFile` (neither is in `[SourceDisksFiles]`). The second is Windows 98's composite parent; on the NT targets the same name is the OS's own hub driver, and the NT row copies it too. |
 | Win2000 | `[Xhci.CopyNT]` | `usbport.sys,,,16`, `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, from `Driver Cache\i386` through `LayoutFile`. `usbd.sys` alone until 1.0.1.0; an NT install that never had a USB controller has none of the three (the Windows XP guest of 2026-09-03) |
-| All four | `[Xhci.CopyUI]` | `usbui.dll,,,16` -> `11, System32`, the one OS-supplied row that does not go to dirid 10, on all four install paths since 1.0.2.0. It is the root hub's property-page provider, which the NT targets' own INFs already name; `[DestinationDirs]` carries `Xhci.CopyUI=11` for it |
-| Both | `[DefaultInstall]` / `[DefaultInstall.NTx86]` | right-click pre-stage; the 9x one also copies the INF to `%17%` |
+| All four | `[Xhci.CopyUI]` | `usbui.dll,,,16` -> dirid `11` (the system directory), the one OS-supplied row that does not go to dirid 10, on all four install paths since 1.0.2.0. It is the root hub's property-page provider, which the NT targets' own INFs already name; `[DestinationDirs]` carries `Xhci.CopyUI=11` for it - the bare number, which is what the gate requires and what the INF has |
+| Both | `[DefaultInstall]` / `[DefaultInstall.NTx86]` | right-click pre-stage; the 9x one also copies the INF to `%17%`. Not supported on Vista and Windows 7, where `.NTx86` is also what runs: on Vista x86 its `LayoutFile` copies ask for `usbport.sys` from "(Unknown)", and a Cancel aborts the queue silently with `xhci98.sys` left behind and no service (roadmap task 22.5, 2026-09-17) |
 
 Four decisions in it depart from the references, each for a reason that would
 otherwise cost a debug cycle:
@@ -4151,9 +5189,25 @@ Where each target's `usbui.dll` comes from, read statically on 2026-09-07
 | Windows ME | `usbui.dll=2,,147456` | disk 2, `BASE2.CAB` | 147,456 B, 4.90.3000 |
 | Windows 2000 SP4 | `usbui.dll = 1,,59664,,,,,2,1,3` | disk 1, the base CD `\i386`, out of `I386\DRIVER.CAB` | 59,664 B, 5.00.2134.1 |
 | Windows XP SP3 | `usbui.dll = 100,,74240,,,,,2,1,3` | disk 100, the SP source, out of `I386\SP3.CAB` | 74,240 B, 5.1.2600.5512 |
+| Windows XP x64 SP2 | `usbui.dll = 1,,222222,,,,,2,1,3` | disk 1, the base CD `\amd64`, out of `AMD64\DRIVER.CAB` | 123,392 B, 5.2.3790.1830 |
 
-Four distinct per-OS builds, each fetched from its own OS by construction, as
-with the three drivers. Windows 2000 was the one prompt risk, because there
+Five distinct per-OS builds, each fetched from its own OS by construction, as
+with the three drivers. The x64 row was read on 2026-09-09 for task 21.3, and
+its absence from a stock install was read the same day rather than inferred:
+`7z l vm\winxp64.img -r usbui.dll` on the task 21.5 guest's clean-install
+snapshot returns zero files, exactly as 32-bit XP did.
+
+**Vista and Windows 7 are a different shape, and the difference matters to
+Phase 22.** They have no `layout.inf` in this sense at all: `install.wim` *is*
+the applied image, and `usbui.dll` is already in it - Vista SP2 x86
+`Windows\System32\usbui.dll` 83,456 B 6.0.6001.18000; Vista SP2 x64
+`System32` 104,960 B 6.0.6000.16386 with a WOW64 copy at 83,456 B; Windows 7
+SP1 x86 80,896 B and x64 `System32` 101,376 B / `SysWOW64` 80,896 B, all
+6.1.7600.16385 (read 2026-09-09, 7-Zip on the owner's own mounted ISOs). So
+on those targets the file is present, flag 16 skips it, and the `LayoutFile`
+route is never consulted for it. Whether the other three OS-supplied files
+behave the same way there has **not** been read, and nothing should be
+written as though it had. Windows 2000 was the one prompt risk, because there
 `usbd.sys`, `usbhub.sys` and `usbport.sys` come from disk 2 (`sp4.cab`) but
 `usbui.dll` from disk 1, satisfied out of `driver.cab` - two different disks
 in one install. **It was read on 2026-09-07 and it is silent.** Two steps:
@@ -4189,14 +5243,26 @@ What the two NT CDs say, read statically on 2026-09-03 (7-Zip on the ISOs,
 `layout.inf` row are the text-mode Setup disposition: `,4,1,3` is "do not
 copy", `,4,0,0` is "copy":
 
-| File | Windows 2000 SP4 `layout.inf` | Windows XP SP3 `layout.inf` |
-|---|---|---|
-| `usbport.sys` | `= 2,,138288,,,,,4,1,3` (disk 2 = `sp4.cab`) | `= 100,,143872,,,,4_,4,1,3` (disk 100 = the service pack source) |
-| `usbhub.sys` | `= 2,,40176,,,,2_,4,1,3` | `= 100,,59520,,,,4_,4,1,3` |
-| `usbhub20.sys` | `= 2,,49776,,,,,4,1,3` | no row |
-| `usbd.sys` | `= 2,,20688,,,,2_,4,1,3` | `= 1,,4736,,,,4_,4,1,3` |
-| `usbehci.sys` | `= 2,,19728,,,,,4,1,3` | `= 100,,30208,,,,4_,4,1,3` |
-| `usbcamd.sys`, `usbintel.sys` | `,4,0,0` | `,4,0,0` |
+| File | Windows 2000 SP4 `layout.inf` | Windows XP SP3 `layout.inf` | Windows XP x64 SP2 `AMD64\LAYOUT.INF` |
+|---|---|---|---|
+| `usbport.sys` | `= 2,,138288,,,,,4,1,3` (disk 2 = `sp4.cab`) | `= 100,,143872,,,,4_,4,1,3` (disk 100 = the service pack source) | `= 100,,212480,,,,4_,4,1,3,,1,4` (disk 100 = `AMD64\SP2.CAB`) |
+| `usbhub.sys` | `= 2,,40176,,,,2_,4,1,3` | `= 100,,59520,,,,4_,4,1,3` | `= 100,,102400,,,,4_,4,1,3,,1,4` |
+| `usbhub20.sys` | `= 2,,49776,,,,,4,1,3` | no row | no row |
+| `usbd.sys` | `= 2,,20688,,,,2_,4,1,3` | `= 1,,4736,,,,4_,4,1,3` | `= 1,,222222,,,,4_,4,1,3,,1,4` (disk 1 = `AMD64\DRIVER.CAB`, 7,552 B) |
+| `usbehci.sys` | `= 2,,19728,,,,,4,1,3` | `= 100,,30208,,,,4_,4,1,3` | `= 100,,44160,,,,4_,4,1,3,,1,4` |
+| `usbcamd.sys`, `usbintel.sys` | `,4,0,0` | `,4,0,0` | not read |
+
+The x64 column was read on 2026-09-09 for roadmap task 21.3, the same way
+(7-Zip on the owner's own ISO and on its two cabinets; `LAYOUT.INF` is
+uncompressed on that medium, so no `expand`). `[SourceDisksNames.amd64]`
+gives disk 1 = `\amd64` on the base CD and disk 100 = `\amd64` on the
+service-pack source. The `222222` in the disk-1 rows is that medium's
+placeholder rather than a size; the cabinet's own sizes are what the
+parenthesised figures give, and the three that can be cross-checked match
+`tools/winxp64-extracted/` exactly, which is what authenticates the reading.
+Two differences from 32-bit XP: `usbd.sys` comes from `DRIVER.CAB` rather
+than the service-pack cabinet, and it is not on disk at all where 32-bit XP
+had a 4,736-byte stub.
 
 So on both NT targets `usbport.sys`, `usbhub.sys` and `usbd.sys` reach the
 disk only when a USB controller's own install pulls them from
@@ -4297,12 +5363,20 @@ and `usbhub.sys` on both device-install paths and both right-click paths,
 `usbport.sys` on the NT ones and not the Windows 98 ones, `usbui.dll` on all
 four, `usbhub20.sys` on none, each under its own name with flag 16 and no
 overwrite flag, and each to its own destination: the three drivers to
-`10, System32\Drivers` and `usbui.dll` alone to `11, System32`, which is the
-per-row destination `OS-DEST` grew in 1.0.2.0. `PKG-MSFILE` refuses a staged
+`10,System32\Drivers` and `usbui.dll` alone to **`11` and nothing after it**,
+which is the per-row destination `OS-DEST` grew in 1.0.2.0. Write the bare
+`11`: the gate requires exactly that, and `src\xhci98.inf` carries
+`Xhci.CopyUI=11`, so the `11, System32` this paragraph used to show is a
+spelling the INF gate FAILS (the 2026-09-16 audit's E5). `PKG-MSFILE` refuses a staged
 package holding any of them.
-The `SUSP-*` rules (`SUSP-MISSING`, `SUSP-DUP`, `SUSP-VALUE`) require each
-of the four install routes, device install and right-click Install on each
-target, to write `Services\USB\DisableSelectiveSuspend` once, as a DWORD 1.
+The `SUSP-*` rules (`SUSP-GLOBAL`, `SUSP-HCVALUE`) refuse an idle-suspend
+registry write anywhere in either file: the machine-wide
+`Services\USB\DisableSelectiveSuspend`, and the per-controller
+`HcDisableSelectiveSuspend` / `HcDisableAllSelectiveSuspend`. They REQUIRED
+the first of those on all four install routes from 1.0.1.0 to 1.0.2.0 and
+were inverted at 1.1.0.0, when the driver took the job over with
+`USB_MINIPORT_FLAGS_DISABLE_SS`; they are whole-file rather than per-route
+now, so a section no route references is refused too.
 `test-inf-checks.ps1` watches each fire.
 
 The package. One flat, 8.3-clean directory serves both targets, and it is
@@ -4316,9 +5390,14 @@ xhci98.inf   xhci98.sys
 powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor debug
 ```
 
-It assembles `out\pkg-<flavor>\` and runs the INF gate against the finished
+It assembles `out\pkg-<flavor>-<arch>\` and runs the INF gate against the finished
 directory, so a package is never less gated than the binary in it. A copy
-taken from `releases\<version>\<flavor>\` is the same two files. The
+taken from a published release directory is the same two files. The packager
+has written `release-x86`, `debug-x86`, `release-x64` and `debug-x64` since
+the 2026-09-09 change (roadmap task 21.5, `runs\run-21.md`), and `1.1.0.0`
+will be the first cut to carry those names; the cuts up to `1.0.2.0` keep
+their flavour-only `release\` and `debug\` directories, as
+`releases\1.0.2.0\` shows. The
 reference copies of the two `usbd.sys` builds and Windows 98 SE's
 `usbhub.sys` are still staged under the git-ignored `tools\` by
 `scripts\package\extract-usbd-sources.ps1`, for the import gate's Windows 98
@@ -4391,7 +5470,58 @@ Both setup engines fail quietly. Win98 has no log at all, and a Win2000
 install that creates no service looks the same in Device Manager as a driver
 that loaded and failed. So the parser restrictions below are enforced as a
 build-time check rather than trusted to review. `scripts\build-driver.cmd`
-runs it on every build, after `scripts\inf-gate\test-inf-checks.ps1`.
+runs it on every build, after `scripts\inf-gate\test-inf-checks.ps1` - and
+since roadmap task 21.3 it runs it **twice, over both INFs**, whichever
+architecture is being built:
+
+```
+scripts\inf-gate\check-inf.ps1 -Arch x86      src\xhci98.inf
+scripts\inf-gate\check-inf.ps1 -Arch amd64    src\xhci98-amd64.inf
+```
+
+`-Arch` selects which install paths the file must carry, and nothing else
+about the gate changes: the same 1800 lines of rules run either way, walking
+a per-architecture path table instead of naming `.NTx86` themselves. That is
+deliberately the opposite of the import allowlist's sibling-file arrangement
+next door, and for the opposite reason - there the data forked, here only the
+path list does, and two copies of these rules would be two gates free to
+drift while claiming to be one.
+
+| | `-Arch x86` (default) | `-Arch amd64` |
+|---|---|---|
+| file | `src\xhci98.inf` | `src\xhci98-amd64.inf` |
+| `[Manufacturer]` | `%Mfg%=XhciModels,NTx86.6.0` - the one field, read on all four engines that parse this file before it was taken | `%Mfg%=XhciModels,NTamd64,NTamd64.6.0` |
+| models sections | `[XhciModels]` and `[XhciModels.NTx86.6.0]` (Vista and Windows 7, since 2026-09-16) | `[XhciModels.NTamd64]` (NT 5.2) and `[XhciModels.NTamd64.6.0]` (Vista and Windows 7, since 2026-09-16) |
+| install paths | undecorated (Windows 98) + `.NTx86`, and `[Xhci.Dev6.NTx86]` (NT 6.x, `xhci98.sys` alone) | `[Xhci.Dev.NTamd64]` (NT 5.2, fetches the OS-supplied files) and `[Xhci.Dev6.NTamd64]` (NT 6.x, `xhci98.sys` alone) |
+| right-click | `[DefaultInstall]` + `[DefaultInstall.NTx86]` | `[DefaultInstall.NTamd64]`, and **no** undecorated one |
+| footprint | `expected-footprint.txt` | `expected-footprint-amd64.txt` |
+
+**The amd64 profile is not a relaxation of the x86 one.** It drops the
+Windows 98 rules because there is no Windows 98 path to break, and adds two
+refusals the 32-bit file has no need of. `PATH-NO9X` refuses an undecorated
+install section in the 64-bit file and the extended `OS-DEFAULT` refuses an
+undecorated `[DefaultInstall]` there; setupapi's decorated-section lookup
+falls back, so either is a section a 32-bit engine reaches, and reaching one
+copies an amd64 `xhci98.sys` into a 32-bit `System32\Drivers` and creates a
+service pointing at it. `PATH-MFGDEC` holds the `[Manufacturer]` decoration
+in both directions at once: `NTx86.6.0` and nothing else on the 32-bit file,
+`NTamd64` and `NTamd64.6.0` and nothing else on the 64-bit one. That first half
+is what pins design record 11's decision 2 in place - widening the 32-bit line
+towards `NTx86,NTamd64` is the single-INF route the owner declined, because
+that line is what Windows 98's 16-bit engine parses to find its models
+section, and it fails the build rather than passing every other rule
+silently. The one field it does carry was read on Windows 98 SE, ME, 2000 and
+32-bit XP before it was taken (roadmap task 22.5).
+
+**Two INFs can drift, and that is checked rather than promised.**
+`test-inf-checks.ps1` compares the two files directly and fails if they
+disagree about the hardware ID, the service name and its five values, both
+per-device log values and their defaults, the OS-supplied file lists and their copy
+flags, `[SourceDisksFiles]`, `[SourceDisksNames]`, the `[Version]` identity
+including `DriverVer`, or any `[Strings]` token they share. It also asserts
+that **each file is refused under the other's profile** - without that, the
+two profiles could accept everything and distinguish nothing, and gating
+either would say nothing about it.
 
 That self-test re-runs the gate against broken copies of the real INF (a
 `$Windows NT$` signature, a UTF-16 file, LF line endings, a 29-character
@@ -4412,25 +5542,37 @@ staged under the git-ignored `tools\`.
 Rule ids are grouped by the failure they prevent:
 
 - `FILE-*`: encoding and line endings.
-- `W98-*`: the Win98-parser traps listed below.
+- `W98-*`: the Win98-parser traps listed below. The section-name limit is
+  not applied under `-Arch amd64`: Windows 98's engine never reads that file
+  (design record 11, decision 11).
 - `BOTH-*`: the rules both engines share (signature, class, resolvable
   section cross-references, `DestinationDirs` coverage and driver-directory
   placement, `SourceDisksNames`/`SourceDisksFiles` coverage, defined
   `%strings%`).
-- `PATH-*`: the two install paths themselves, including the NT service's
-  required type/start/error values, and that each path's own `CopyFiles`
-  delivers the driver file its loader value names (`PATH-W98` for
-  `NTMPDriver` since the 2026-09-05 audit's F14, `PATH-NT` for
-  `ServiceBinary`).
+- `PATH-*`: the install paths themselves - the two of `-Arch x86` or the two
+  of `-Arch amd64`, each model checked against the paths of its own models
+  section - including the NT service's required type/start/error
+  values, and that each path's own `CopyFiles` delivers the driver file its
+  loader value names (`PATH-W98` for `NTMPDriver` since the 2026-09-05
+  audit's F14, `PATH-NT` for `ServiceBinary`). `PATH-MFGDEC` holds
+  `[Manufacturer]`'s TargetOSVersion field to the file's architecture in both
+  directions, and `PATH-NO9X` refuses an undecorated install section in the
+  64-bit file (both since task 21.3). Since 2026-09-16 `PATH-MFGDEC` also
+  requires the 64-bit file's `NTamd64.6.0` field and refuses any field the
+  profile has no path for: until then the gate read only the first models
+  section, so a second one passed unchecked.
 - `OS-*`: the `LayoutFile` route for the files the OS supplies (release
   1.0.0.1, then 1.0.1.0): the directive present, both device-install paths
   and both right-click paths copying `usbd.sys` and `usbhub.sys` under their
   own names with `COPYFLG_NO_OVERWRITE`, the NT paths alone copying
-  `usbport.sys`, and no Microsoft file named on the media (`OS-MEDIA`). The
+  `usbport.sys`, and no Microsoft file named on the media (`OS-MEDIA`).
+  `OS-ONNT6` is the one path that must name none of the four - the 64-bit
+  file's NT 6.x path, whose file queue aborts on a `LayoutFile` copy (task
+  21.8) and which finds all four on disk (task 22.3). The
   `TGT-*` family and the `usbd-sources.expected` manifest they checked went
   with the packaged Microsoft files in 1.0.0.1.
-- `SUSP-*`: `DisableSelectiveSuspend = 1` written by every install route on
-  both targets (the NT path since 1.0.1.0).
+- `SUSP-*`: no idle-suspend registry value anywhere in either file, machine-wide
+  or per-controller (inverted at 1.1.0.0; they required one from 1.0.1.0).
 - `VAL-*`: the per-device registry values the miniport reads, present on
   both paths with the required type and default.
 - `PKG-*`: the staged-package checks `-PackageDir` runs, below.
@@ -4628,7 +5770,7 @@ Analysis" below before reverting the snapshot that destroys it.
 There are three flavours, not two, and the per-line trace belongs to exactly one of them. `src/sources` sets `-DXHCI_DBG_LIVE -DXHCI_DBG_E9` for `chk_qemu` alone; `src/xhci_dbg.h` derives `XHCI_DBG_TRACE` from `DBG && defined(XHCI_DBG_LIVE)`, and every trace site is guarded on `XHCI_DBG_TRACE` rather than on `#if DBG`. So:
 
 - `release` (`fre`): no trace sites at all.
-- `debug` (`chk`): a checked build with assertions and the counter set, and **no per-line trace**. It prints nothing. This is the flavour the download ships beside `release`, and a user asked for "the debug build's output" has none to give.
+- `debug` (`chk`): a checked build with the counter set, and **no per-line trace**. It prints nothing. This is the flavour the download ships beside `release`, and a user asked for "the debug build's output" has none to give. **No runtime assertions**: every `XHCI_C_ASSERT` in this driver is compile-time and fires in every flavour alike, and `src\xhci_dbg.h` defines no runtime `ASSERT` at all - so "a checked build with assertions" was wrong twice over, and contradicted this page's own earlier statement of the same fact (the 2026-09-16 audit's E5).
 - `qemu` (`chk_qemu`): the only flavour with the per-line trace, written to the port-0xE9 debug console. It is never published.
 
 Do not write `#if DBG` around anything that touches this channel: an earlier cut of the split did, in `src/xhci_probe.c`, and left two sites calling functions the `debug` build no longer compiles. `src/xhci_dbg.h` states the rule at its head. `docs/contributing/design/08-build-flavours-and-the-log-channel.md` is why the split exists.
@@ -4920,7 +6062,9 @@ That leaves three channels, in the order worth trying:
    second hand-over site would have to run at PASSIVE_LEVEL, and on a Windows
    98 machine running this package there is no PASSIVE moment between
    `StartController` and the shutdown. The idle suspend is switched off by
-   `DisableSelectiveSuspend` (task 11-V.6), a disable bugchecks the target,
+   the package (task 11-V.6's `DisableSelectiveSuspend` until 1.0.2.0, the
+   driver's own `USB_MINIPORT_FLAGS_DISABLE_SS` since), a disable bugchecks
+   the target,
    and `CheckController` is DISPATCH_LEVEL under usbport's `MiniportSpinLock`.
 
 3. The snapshot read. `XHCISNAP` reads the counters and the stored log out of

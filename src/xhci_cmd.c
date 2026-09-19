@@ -127,11 +127,48 @@ static LONG xhciStartEpoch;
  */
 static KSPIN_LOCK xhciControllerLock;
 
+/*
+ * The second lock, and it protects no state at all: it is held across the
+ * `UsbPortCompleteTransfer` / `UsbPortCompleteIsoTransfer` call so that the
+ * call is made at DISPATCH_LEVEL from every context, which is what stops an
+ * NT 6.x usbport's done DPC - queued inside that service before its queued
+ * state is stored - from running on the same CPU before the store (issue 7;
+ * `XHCI_EXTENSION.DeliverUnderUsbportLockOnly`). A private lock rather than a
+ * raised IRQL because the import ceiling has spin locks and no
+ * `KeRaiseIrql`. Never held with the controller lock, and the service takes
+ * no usbport lock and re-enters no miniport slot, so it is innermost too.
+ *
+ * IRQL: DISPATCH_LEVEL while held.
+ */
+static KSPIN_LOCK xhciDeliveryLock;
+
 /* IRQL: PASSIVE_LEVEL (DriverEntry only). */
 VOID XhciControllerGlobalInit(VOID)
 {
     KeInitializeSpinLock(&xhciControllerLock);
+    KeInitializeSpinLock(&xhciDeliveryLock);
 }
+
+/* IRQL: <= DISPATCH_LEVEL on entry, DISPATCH_LEVEL while held. See the
+ * contract in src/xhci_hw.h. */
+VOID XhciDeliveryLockAcquire(PKIRQL oldIrql)
+{
+    KeAcquireSpinLock(&xhciDeliveryLock, oldIrql);
+}
+
+/* IRQL: DISPATCH_LEVEL (the lock is held). */
+VOID XhciDeliveryLockRelease(KIRQL oldIrql)
+{
+    KeReleaseSpinLock(&xhciDeliveryLock, oldIrql);
+}
+
+#ifdef XHCI_HOST_TEST
+/* The host model tells the two locks apart by address; nothing else may. */
+PKSPIN_LOCK XhciHostDeliveryLockWord(VOID)
+{
+    return &xhciDeliveryLock;
+}
+#endif
 
 /*
  * Functions rather than an exposed lock word: every user has one spelling for
@@ -178,6 +215,8 @@ ULONG XhciControllerUpdateFlags(PXHCI_EXTENSION ext,
  * host suite with no lock, no DDK and no IRQL (design doc 03 section 2).
  *
  * See the contracts in src/xhci_hw.h.
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock held.
  */
 VOID XhciLogNoteLocked(PXHCI_EXTENSION ext, const char *label, ULONG value)
 {
@@ -187,6 +226,7 @@ VOID XhciLogNoteLocked(PXHCI_EXTENSION ext, const char *label, ULONG value)
     XhciLogAppend(&ext->Log, label, value, 1);
 }
 
+/* IRQL: <= DISPATCH_LEVEL, controller lock **not** held - it takes it. */
 VOID XhciLogNote(PXHCI_EXTENSION ext, const char *label, ULONG value)
 {
     KIRQL oldIrql;
@@ -200,6 +240,7 @@ VOID XhciLogNote(PXHCI_EXTENSION ext, const char *label, ULONG value)
     XhciControllerLockRelease(oldIrql);
 }
 
+/* IRQL: <= DISPATCH_LEVEL, controller lock **not** held - it takes it. */
 VOID XhciLogNoteAddress(PXHCI_EXTENSION ext, const char *label, ULONG value)
 {
     KIRQL oldIrql;

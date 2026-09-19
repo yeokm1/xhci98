@@ -1,0 +1,41 @@
+# Authenticated NT 5.2 amd64 kernel/HAL export baselines.
+#
+# The amd64 counterpart of win2k-baselines.expected, and it exists for the same
+# reason: the PE import descriptor always names NTOSKRNL.EXE or HAL.DLL, but
+# Setup selects one of several source binaries for those loaded modules, and
+# the gate must resolve against every source image an in-scope target can run.
+# One target covers both Windows XP Professional x64 and Windows Server 2003
+# x64 - they are the same NT 5.2.3790 build.
+#
+# Source: D:\isos\Win XP SP2 VL x64.iso, AMD64\, measured 2026-09-09.
+#
+# **Three files, not ten, and the difference is real rather than an enumeration
+# gap.** win2k-baselines.expected lists eight HAL images; this media ships
+# exactly one. x64 dropped the uniprocessor, non-ACPI, MPS and Standard-PC HALs
+# that i386 had to carry, because every amd64 machine is ACPI multiprocessor by
+# construction. That was checked the way the HALBORG.DLL lesson in the other
+# manifest says to check it - by listing EVERY name on the media beginning
+# "HAL", not by matching the HAL*.DL_ pattern that missed halborg.dll. The full
+# set is HAL.DL_, HAL.IN_ (the INF), HALFTONE.HL_ (a printing halftone table)
+# and AMD64\COMPDATA\HALHOOK.HTM / .TXT (application-compatibility notes). Only
+# HAL.DL_ is a HAL. If a future reading ever finds a second amd64 HAL image on
+# some other NT 5.2 media, add it here and say so - a completeness claim that
+# rests on one media's directory listing is worth stating as exactly that.
+#
+# The two kernels are the uniprocessor and multiprocessor images, as on i386.
+#
+# Format, identical to win2k-baselines.expected:
+#   PACKED OUTPUT PROVIDER VERSION LENGTH SHA256
+#
+# PACKED names ending in "_" are cabinet-compressed and expanded with
+# expand.exe; a name that does not is copied verbatim off the media.
+#
+# VERSION is the version NUMBER only. All three files carry a build-lab tag in
+# their FileVersion resource - "5.2.3790.3959 (srv03_sp2_rtm.070216-1710)" -
+# which cannot live in a whitespace-split field, so the identity check matches
+# the leading token. SHA-256 and length are what actually authenticate the
+# file; the version is there to be read by a human.
+
+NTOSKRNL.EX_ ntoskrnl.exe ntoskrnl.exe 5.2.3790.3959 4496896 0415FA7F9319BB0C57BEA7D439A5B73244BB5838510631C18222FBD081C878C0
+NTKRNLMP.EX_ ntkrnlmp.exe ntoskrnl.exe 5.2.3790.3959 4566528 EAC3A1BEDADC4C7BEF6CB364F88AFA0018E5EFE04996B5800FA11B7851ECB2DE
+HAL.DL_ hal.dll hal.dll 5.2.3790.3959 279040 7B7671166CDE8CBB8AF9EDE79D0C4CD38208F77A5B59E7BA661D839A870A101E

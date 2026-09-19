@@ -3300,6 +3300,22 @@ typedef struct _XHCI_TRANSFER {
     ULONG TopoPort;
     ULONG_PTR TopoReplyVa;
     /*
+     * **And which record armed it**, on exactly the terms `DescDeviceRef` and
+     * `DescTenancy` below are kept on: `TopoAddress` is usbport's address,
+     * which is a recycled name, so a completion parked across a disown plus a
+     * re-enumeration would fold one hub's reply into whatever the graph now
+     * holds under that key. The fold had only the address to go on until the
+     * 2026-09-16 audit's B3, while the descriptor half beside it had been
+     * gated on identity since the first review round - one channel, two
+     * observers, and only one of them asking.
+     *
+     * Reachable only through that parked-completion window, which is why it
+     * survived: the ordinary path folds under the same lock the submit armed
+     * it under.
+     */
+    ULONG TopoDeviceRef;
+    ULONG TopoTenancy;
+    /*
      * Task 9-A.2's use of the same channel: a `GET_DESCRIPTOR(Configuration)`
      * whose reply carries the isochronous `bInterval` values, or a
      * `SET_CONFIGURATION`/`SET_INTERFACE` saying what the device is now running
@@ -3371,10 +3387,14 @@ typedef struct _XHCI_TRANSFER {
      * field here is copied - a value read twice from memory another driver owns
      * is two values.
      *
-     * `IsoPacketsAnswered` is what makes the request finishable when its last
-     * TD's event does not name the group's last TRB, which an error or a Missed
-     * Service on a two-fragment final packet produces: the positional rule alone
-     * would leave the transfer queued for ever on a pipe that has moved on.
+     * `IsoPacketsAnswered` is the per-packet stamping cursor and the duplicate
+     * guard: events arrive in packet order, so it is both how many packets have
+     * a status and where the next one is written, and an event for a packet
+     * behind it re-measures nothing. **It does not end the request.** The
+     * request ends on one thing only, an event naming `LastIndex`; an earlier
+     * version of `XhciXferIsoEvent` retired the group when this reached
+     * `IsoPacketCount`, and that handed a mapped buffer back while the xHC
+     * still owned the tail TRB (p.188, p.201). Do not restore that exit.
      */
     PVOID IsoParams;
     ULONG IsoPacketCount;
@@ -3796,12 +3816,35 @@ typedef struct _XHCI_TRANSFER_QUEUE {
      *                       a controller dropping the tails this driver is
      *                       waiting for. One group can be counted more than once
      *                       if several intermediate events land on it.
+     *   `IsoTailEvents`     the tail event itself: one naming the last TRB of
+     *                       a multi-TRB packet that an earlier, intermediate
+     *                       event has already answered (p.175, p.201) - IOC
+     *                       sits on every packet's last TRB, so any packet can
+     *                       produce one, not only the request's last. A repeat
+     *                       on a single-TRB packet, or one naming a TRB that is
+     *                       not its packet's last, is a duplicate event and
+     *                       stays in `UnmatchedEvents`. It resolves to a
+     *                       TRB this driver owns, so it is not an
+     *                       `UnmatchedEvents` reading, and a conforming
+     *                       controller raises one for every page-crossing isoch
+     *                       IN packet that ends short. **Not comparable with
+     *                       `IsoGroupsAwaitingTail`**: this counts every
+     *                       packet's tail, that counts only groups whose *last*
+     *                       packet was answered by an event short of
+     *                       `LastIndex`, so an interior short packet raises
+     *                       this by one and that by nothing (Codex round 2).
+     *                       The dropped-tail reading is the one above -
+     *                       `IsoGroupsAwaitingTail` rising while `Completed`
+     *                       does not; this counter only says the controller
+     *                       sends tails at all, and nothing about the ones it
+     *                       did not.
      */
     ULONG IsoPackets;
     ULONG IsoPacketsAnswered;
     ULONG IsoPacketErrors;
     ULONG IsoMissedService;
     ULONG IsoGroupsAwaitingTail;
+    ULONG IsoTailEvents;
 } XHCI_TRANSFER_QUEUE, *PXHCI_TRANSFER_QUEUE;
 
 /*
@@ -4359,6 +4402,14 @@ typedef struct _XHCI_ENDPOINT {
  * rule above XHCI_COMMAND_AGE_MS in src/xhci_hw.h.
  */
 #define XHCI_EP_RESTART_MS      1000UL
+/*
+ * How long a completion may wait on the list for a locked usbport callback
+ * before the health poll delivers it itself (XHCI_EXTENSION
+ * .DeliverUnderUsbportLockOnly). Two poll periods: one to arm, one to fire,
+ * which is long enough for the HcInt pass IsrDpc signals on every interrupt
+ * to have run several times if usbport was ever going to poll the endpoint.
+ */
+#define XHCI_COMPLETION_FALLBACK_MS 1000UL
 
 typedef struct _XHCI_EP_QUIESCE {
     ULONG Flags;                /* XHCI_EPQ_*                              */
@@ -5953,6 +6004,79 @@ typedef struct _XHCI_EXTENSION {
     PXHCI_TRANSFER CompletionTail;
     ULONG CompletionsOwed;
     /*
+     * **Where a completion may be handed to usbport** (issue 7, the cause read
+     * 2026-09-13). An NT 6.x usbport's `USBPORTSVC_CompleteTransfer` takes no
+     * lock of its own: it runs `USBPORT_Core_iCompleteTransfer`, whose `i`
+     * means "the caller holds the EpList lock", and that function signals the
+     * done DPC by queueing it BEFORE storing its queued state. The only thing
+     * that keeps the DPC's worker from reading the stale idle state and
+     * dropping the work is that lock, which usbport holds across the
+     * callbacks it reaches through `iSetGlobalEndpointStateTx` - PollEndpoint,
+     * SubmitTransfer, AbortTransfer, SetEndpointState - and Microsoft's own
+     * usbehci completes transfers from PollEndpoint alone. Delivered from
+     * anywhere else the state machine can be stranded: the r5 arrest was a
+     * completion delivered from `RH_GetPortStatus`, which usbport calls at
+     * PASSIVE with no lock, so the queued DPC ran on the same CPU before the
+     * store, saw idle, and the done list was marked queued for ever.
+     *
+     * `DeliverUnderUsbportLockOnly` is set on the Version 300 tier. While it
+     * is set, `XhciSlotDeferredWork` parks every completion, and only the two
+     * admitted entry points hand one over: `XhciSlotDeferredWorkForEndpoint`,
+     * called from inside the callbacks usbport makes under that lock, and
+     * `XhciSlotDeferredWorkForced`, the lifecycle paths' and the poll
+     * fallback's override. The admission travels with the call rather than
+     * sitting in a counter here, because a counter is per controller and on
+     * SMP would admit another CPU's drain for as long as one CPU sat inside
+     * an abort. usbport polls every active endpoint on every HcInt pass and
+     * IsrDpc signals that pass on every interrupt, so PollEndpoint is the
+     * ordinary deliverer; the fallback exists for an endpoint usbport has
+     * stopped polling. **That the Version 200 service is self-synchronising
+     * is wrong on every build of it** (issue 8): its done-list insert is
+     * interlocked, but the unlink from the endpoint's own list before it takes
+     * no endpoint lock - see `DeliverPerEndpointOnly` below, which is why the
+     * gate is set on the 200 tier too, on both architectures.
+     */
+    ULONG DeliverUnderUsbportLockOnly;
+    /* The poll's fallback: armed by the first poll that finds the list
+     * non-empty with nothing delivering, fired once XHCI_COMPLETION_FALLBACK_MS
+     * have passed on the poll clock, disarmed when the list empties. */
+    ULONG CompletionFallbackArmed;
+    ULONG CompletionFallbackStamp;
+    /* Once per pass, like the two holds above it. */
+    ULONG CompletionsHeldForPoll;
+    ULONG CompletionsDeliveredLocked;
+    ULONG CompletionsDeliveredForced;
+    ULONG CompletionFallbackPolls;
+    ULONG PollEndpointCalls;
+    /*
+     * **Issue 8: on XP x64 a completion is handed over only from a callback
+     * usbport made under the lock of the transfer's own endpoint.** XP x64's
+     * completion service (usbport+0xc060) unlinks the transfer from its
+     * endpoint's list at +0xc2f1 holding no endpoint lock, while usbport walks
+     * that list under the endpoint's own lock (endpoint+0x160, taken at
+     * +0xae01); a completion delivered from the event DPC on another CPU moved
+     * a transfer onto the done list under a walk, the walk took the done-list
+     * head for a transfer, and usbport's own `dword` store through it zeroed
+     * the low half of the device-handle list head (all static, and the store
+     * caught by a watchpoint). The gate above does not close that alone: that
+     * usbport's lock is one per endpoint, so PollEndpoint for one endpoint
+     * delivering another endpoint's completion is the same race.
+     *
+     * Set with the gate on every Version 200 tier since 2026-09-15: the amd64
+     * build's (XP x64, Server 2003 x64) from 2026-09-14, and the 32-bit one
+     * (XP SP3, NUSB, SweetLow's, Windows 2000 SP4) after XP SP3 x86 livelocked
+     * on the same race at four vCPUs and the other three builds were read to
+     * carry the same unlocked mover and locked reader (issue 8 section 4d,
+     * endpoint+0xD4 where XP has +0xC4). A completion for an endpoint other
+     * than the one the locked callback names stays parked and the pass asks
+     * usbport to poll that endpoint, which is what delivers it; the gate's
+     * fallback still fires after XHCI_COMPLETION_FALLBACK_MS, and counts, so a
+     * nonzero reading says an endpoint was not polled when asked.
+     */
+    ULONG DeliverPerEndpointOnly;
+    ULONG CompletionsHeldOtherEndpoint;
+    ULONG CompletionPollInvalidates;
+    /*
      * The transfer a `UsbPortCompleteTransfer` call is inside right now, or
      * NULL. It is off both the endpoint queue and the completion list for the
      * duration, which is the only interval in which an abort can find it
@@ -6807,8 +6931,12 @@ typedef struct _XHCI_EXTENSION {
      *
      * `EndpointStops` / `EndpointResets` / `EndpointDequeueSets` count
      * completions that proved what the command claims - and for Stop Endpoint
-     * that includes Context State Error, because the states it names ("not
-     * Running") are the ones the caller wanted. `EndpointResetsNotHalted` is the
+     * that is Success, or a Context State Error whose EP State then read
+     * Stopped: the two completions after which the ring is software's. A
+     * Context State Error that read Halted, Error or Disabled stopped nothing
+     * and is counted in neither this nor `EndpointStopFailures` (the
+     * "ep.recovery" log note carries it), so every count here is a stop this
+     * driver issued that left the ring stopped. `EndpointResetsNotHalted` is the
      * same code from a **Reset** Endpoint, which is a different fact: the
      * endpoint was not in the Halted state (4.6.8 p.117), so this driver's
      * `HALTED` bit was stale and the recovery converts to a Stop.
@@ -7259,6 +7387,7 @@ typedef struct _XHCI_EXTENSION {
     ULONG IsoPacketsAnsweredTotal;
     ULONG IsoPacketErrorsTotal;
     ULONG IsoMissedServiceTotal;
+    ULONG IsoTailEventsTotal;
     ULONG IsoGroupsAwaitingTailTotal;
     /* How far a resync had to advance the published number to restore
      * congruence, summed. Zero on a controller that never stalls; on Win98,
@@ -7683,6 +7812,19 @@ typedef struct _XHCI_EXTENSION {
      */
     XHCI_LOG Log;
 
+    /*
+     * Keeps `TrailingSignature` the **last word** of the amd64 layout, which
+     * `test_packet_amd64` asserts and which is what makes the signature pair
+     * bracket the whole extension. The structure holds pointers, so on amd64
+     * its size is rounded up to a multiple of 8, and whenever the ULONGs
+     * ahead of the trailing word add up to an offset that is 0 mod 8 the
+     * compiler puts 4 bytes of tail padding *after* it. This word absorbs
+     * that padding. Adding one ULONG counter anywhere above flips the parity:
+     * delete this word then, and put it back on the next single addition.
+     * On x86 it costs 4 bytes and changes nothing else.
+     */
+    ULONG TrailingPad;
+
     ULONG TrailingSignature;
 } XHCI_EXTENSION, *PXHCI_EXTENSION;
 
@@ -7753,11 +7895,12 @@ typedef struct _XHCI_EXTENSION {
  * *(A separate `XhciLogSnapshot` value held that consent until the merge, when
  * it merged into the ladder: it was a pure consent bit, the channel serves
  * everything or nothing, and consent nests inside depth. Design record 08
- * §13.2's dated amendment carries the reasoning and the security posture - of
- * which the load-bearing half is that **the enable step is the access control,
- * because this driver owns no other**: usbport hardcodes `\DosDevices\HCD<n>`,
- * completes `IRP_MJ_CREATE` with no work, and the IOCTL is `FILE_ANY_ACCESS`,
- * so Option A leaves the miniport no lever on the door itself.)*
+ * section 13.2's dated amendment carries the reasoning and the security
+ * posture - of which the load-bearing half is that **the enable step is the
+ * access control, because this driver owns no other**: usbport hardcodes
+ * `\DosDevices\HCD<n>`, completes `IRP_MJ_CREATE` with no work, and the IOCTL
+ * is `FILE_ANY_ACCESS`, so Option A leaves the miniport no lever on the door
+ * itself.)*
  *
  * **The release build's import profile must not move**, which is why the copy
  * below is a byte loop rather than `RtlCopyMemory`/`memcpy`: those resolve to a

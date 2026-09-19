@@ -365,18 +365,6 @@ if (Test-MonitorPortFree -Port $freePort) {
     Assert "...and says nothing was probed"           $true         ($probe.Detail -match 'no probe was taken')
 }
 
-Write-Host "--- MayWedgeGuest must be read, and a typo in it must not pass ---"
-#
-# It was set on the audio row and read by NOTHING for the life of the harness,
-# so when that group did end early the report could not say whether the matrix
-# had predicted it. A declaration nothing reads is not a declaration.
-$wedgeRow = @{ Name = 'usb-audio/fs'; MayWedgeGuest = @('2a') }
-Assert "a declared target is recognised"   $true  (Test-RowMayWedge -Row $wedgeRow -TargetId '2a')
-Assert "an undeclared target is not"       $false (Test-RowMayWedge -Row $wedgeRow -TargetId '2b')
-Assert "a row with no declaration is not"  $false (Test-RowMayWedge -Row @{ Name = 'x' } -TargetId '2a')
-Assert "a real target validates clean"     0 (@(Get-RowWedgeProblems -Row $wedgeRow -TargetIds @('2a','2b')).Count)
-Assert "a target that does not exist is a problem" 1 (@(Get-RowWedgeProblems -Row @{ Name = 'x'; MayWedgeGuest = @('2c') } -TargetIds @('2a','2b')).Count)
-
 Write-Host "--- stage G's teardown scanner must answer NO as readily as YES ---"
 #
 # Find-Teardown is the whole oracle for batch 11-V stage G's stop clause, and
@@ -440,6 +428,23 @@ Write-Host "--- the post-release run's refusals must fire, guestless (design rec
 # and one about a target's inherited keys.  Every one is a case here because
 # a refusal nobody has watched fire is the same untested guard as trap 4.
 . (Join-Path $PSScriptRoot "lib\fresh.ps1")
+
+Write-Host "--- MayWedgeGuest must be read, and a typo in it must not pass ---"
+#
+# It was set on the audio row and read by NOTHING for the life of the harness,
+# so when that group did end early the report could not say whether the matrix
+# had predicted it. A declaration nothing reads is not a declaration.
+#
+# Driven through `Test-TargetInList`, which is what run-matrix.ps1 calls - a
+# `Test-RowMayWedge` beside it answered the same question by exact Id only and
+# was called by this self-test and by nothing else, so the harness was checking
+# the answer it does not use (the 2026-09-16 audit's D4).
+$wedgeRow = @{ Name = 'usb-audio/fs'; MayWedgeGuest = @('2a') }
+Assert "a declared target is recognised"   $true  (Test-TargetInList -List $wedgeRow.MayWedgeGuest -Target @{ Id = '2a' })
+Assert "an undeclared target is not"       $false (Test-TargetInList -List $wedgeRow.MayWedgeGuest -Target @{ Id = '2b' })
+Assert "a row with no declaration is not"  $false (Test-TargetInList -List (@{ Name = 'x' }).MayWedgeGuest -Target @{ Id = '2a' })
+Assert "a real target validates clean"     0 (@(Get-RowWedgeProblems -Row $wedgeRow -TargetIds @('2a','2b')).Count)
+Assert "a target that does not exist is a problem" 1 (@(Get-RowWedgeProblems -Row @{ Name = 'x'; MayWedgeGuest = @('2c') } -TargetIds @('2a','2b')).Count)
 
 # The list parser, fed the exact shape qemu-img 11 prints.
 $snapText = @"
@@ -525,7 +530,56 @@ Assert "an expected NODRIVER does not"                 $false (Test-RowCountsAga
 # ExpectNoDriver entry can waive.
 Assert "a refusal is not waived by ExpectNoDriver"     $true  (Test-RowCountsAgainst -Outcome (Get-Outcome $mouseTexts (New-Delta $f3)) -NoDriverExpected $true)
 Assert "an undeclared wedge (ERROR) counts"            $true  (Test-RowCountsAgainst -Outcome "ERROR")
-Assert "a declared wedge (the pinned reading) does not" $false (Test-RowCountsAgainst -Outcome "ERROR" -WedgeDeclared $true)
+Assert "a declared wedge (the pinned reading) does not" $false (Test-RowCountsAgainst -Outcome "ERROR" -WedgeDeclared $true -WedgeShape $true)
+# The 2026-09-17 audit's D1: the declaration is keyed on the row, and it used
+# to waive ANY error on that row - a refused device_add, a device never on the
+# bus, an unconfirmed device_del, identity drift, a monitor timeout.  It
+# licenses one shape, and both halves are required.
+Assert "a declared row's non-wedge ERROR counts"       $true  (Test-RowCountsAgainst -Outcome "ERROR" -WedgeDeclared $true -WedgeShape $false)
+Assert "...and so does an undeclared row's wedge"      $true  (Test-RowCountsAgainst -Outcome "ERROR" -WedgeDeclared $false -WedgeShape $true)
+Assert "a stopped guest is the wedge shape"            $true  (Test-WedgeShape -LivenessVerdict "not-executing")
+Assert "a gone monitor is the wedge shape"             $true  (Test-WedgeShape -LivenessVerdict "unreachable")
+Assert "an alive guest is not"                         $false (Test-WedgeShape -LivenessVerdict "alive")
+Assert "an unknown is not either"                      $false (Test-WedgeShape -LivenessVerdict "unknown")
+
+Write-Host "--- the liveness verdict: a ticking PIT is not a running kernel ---"
+#
+# The 2026-09-17 audit's D2.  A bugchecked guest reads `running` with an
+# `info irq` delta, because the PIT raises IRQ0 whether or not a halted kernel
+# services it; with the keep-alive pump's `transfers completed` handed in as
+# the sign of life, that guest has to complete a transfer too.  Without a
+# sign of life the timer reading alone decides, as before, for the callers
+# that have no pump.
+Assert "running, parsed, ticking is alive"             "alive"         (Get-LivenessVerdict -Running $true -Parsed $true -IrqDelta 40).Verdict
+Assert "...with the pump advancing too"                "alive"         (Get-LivenessVerdict -Running $true -Parsed $true -IrqDelta 40 -LifeDelta 3).Verdict
+Assert "ticking but no transfer completed is not"      "not-executing" (Get-LivenessVerdict -Running $true -Parsed $true -IrqDelta 40 -LifeDelta 0).Verdict
+Assert "...and says why"                               $true           ((Get-LivenessVerdict -Running $true -Parsed $true -IrqDelta 40 -LifeDelta 0).Why -match 'completed no transfer')
+Assert "a stopped clock is not"                        "not-executing" (Get-LivenessVerdict -Running $true -Parsed $true -IrqDelta 0 -LifeDelta 3).Verdict
+Assert "a paused VM is not"                            "not-executing" (Get-LivenessVerdict -Running $false -Parsed $true -IrqDelta 40).Verdict
+Assert "an unparseable info irq is unknown"            "unknown"       (Get-LivenessVerdict -Running $true -Parsed $false -IrqDelta 0).Verdict
+Assert "...even with the pump advancing"               "unknown"       (Get-LivenessVerdict -Running $true -Parsed $false -IrqDelta 0 -LifeDelta 3).Verdict
+
+Write-Host "--- ...and the sign of life is read off the snapshot the way Read-Counters returns it ---"
+#
+# Read-Counters returns { Values; Unread; Read } with Values keyed by the raw
+# field name (TransfersCompleted), not by the label.  The runner's callback
+# is `Get-KeepAliveTransfers -Snapshot (Read-Counters ...) -Table $table`, so
+# it is driven here against a snapshot shaped exactly like that return, with
+# the real table: a callback indexing the wrong object or the wrong key would
+# read $null, cast to 0, and every pumped row would read as a dead guest
+# (Codex review round 1 on the 2026-09-17 audit's D2).
+$lifeSnap = [pscustomobject]@{ Values = @{ 'TransfersCompleted' = [int64]7; 'TransfersSubmitted' = [int64]9 }; Unread = 0; Read = 2 }
+Assert "the field is read from .Values by its raw name" 7 (Get-KeepAliveTransfers -Snapshot $lifeSnap -Table $table)
+$lifeCb = { Get-KeepAliveTransfers -Table $table -Snapshot $lifeSnap }.GetNewClosure()
+Assert "...through a closure built as the runner builds it" 7 ([int64](& $lifeCb))
+$lifeSnap2 = [pscustomobject]@{ Values = @{ 'TransfersCompleted' = [int64]12 }; Unread = 0; Read = 1 }
+Assert "...and two snapshots give the pump's delta"     "alive" (Get-LivenessVerdict -Running $true -Parsed $true -IrqDelta 40 -LifeDelta ((Get-KeepAliveTransfers -Snapshot $lifeSnap2 -Table $table) - (Get-KeepAliveTransfers -Snapshot $lifeSnap -Table $table))).Verdict
+$lifeThrew = $false
+try { Get-KeepAliveTransfers -Snapshot ([pscustomobject]@{ Values = @{ 'transfers completed' = [int64]7 }; Unread = 1; Read = 1 }) -Table $table | Out-Null } catch { $lifeThrew = $true }
+Assert "a snapshot keyed by the label, not the field, is an error and not a zero" $true $lifeThrew
+$lifeThrew = $false
+try { Get-KeepAliveTransfers -Snapshot ([pscustomobject]@{ Values = @{}; Unread = 1; Read = 0 }) -Table $table | Out-Null } catch { $lifeThrew = $true }
+Assert "an unread field is an error and not a zero"    $true $lifeThrew
 
 Write-Host "--- the header carries every variable thing, and nothing else does ---"
 $hdr = New-PostReleaseHeader -TargetId '2a-fresh' -Version '1.0.0.0' -DriverLine '1.0.0.0 qemu, 1 B, sha256 0' -ImageLine 'vm\fresh-2a.img, stamp base-1.0.0.0-qemu, from win98.img post-nusb' `
@@ -751,6 +805,35 @@ Assert "no MiniPortExtensionSize refuses the stamp"    $true (@(Get-StampProblem
 $stampWrong = $stampOk.Clone(); $stampWrong.IdentSize = 99999
 Assert "another binary's size refuses the stamp"       $true (@(Get-StampProblems @stampWrong) -join ' ' -match 'not the build under test')
 
+Write-Host "--- the qemu package: read from out\pkg-qemu-<arch>, and the untagged out\pkg-qemu is refused, not used ---"
+$pkgRepo = Join-Path ([IO.Path]::GetTempPath()) ("xhci98-selftest-pkg-" + [IO.Path]::GetRandomFileName())
+New-Item -ItemType Directory -Path $pkgRepo -Force | Out-Null
+try {
+    Assert "the x86 package directory is what make-package.ps1 writes" (Join-Path $pkgRepo 'out\pkg-qemu-x86') (Get-QemuPackageDir -Repo $pkgRepo)
+    Assert "...and amd64 names its own"                    (Join-Path $pkgRepo 'out\pkg-qemu-amd64') (Get-QemuPackageDir -Repo $pkgRepo -Arch 'amd64')
+    $msg = Get-QemuPackageProblem -Repo $pkgRepo
+    Assert "no package at all is a problem"                $true ($msg -match 'no qemu package at .*pkg-qemu-x86')
+    Assert "...that says how to build one"                 $true ($msg -match 'make-package\.ps1 -Flavor qemu -Arch x86')
+    Assert "...and names no stale directory that is not there" $false ($msg -match 'older build')
+    $legacyDir = Join-Path $pkgRepo 'out\pkg-qemu'
+    New-Item -ItemType Directory -Path $legacyDir -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $legacyDir 'xhci98.sys') -Value 'old' -Encoding ascii
+    Set-Content -LiteralPath (Join-Path $legacyDir 'xhci98.inf') -Value 'old' -Encoding ascii
+    $msg = Get-QemuPackageProblem -Repo $pkgRepo
+    Assert "a stale untagged out\pkg-qemu does not stand in for the package" $true ($null -ne $msg)
+    Assert "...and is named as the older build it is"      $true ($msg -match 'pkg-qemu holds a binary' -and $msg -match 'not used')
+    $newDir = Get-QemuPackageDir -Repo $pkgRepo
+    New-Item -ItemType Directory -Path $newDir -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $newDir 'xhci98.sys') -Value 'new' -Encoding ascii
+    Assert "a binary without its INF is not a package"     $true ($null -ne (Get-QemuPackageProblem -Repo $pkgRepo))
+    Set-Content -LiteralPath (Join-Path $newDir 'xhci98.inf') -Value 'new' -Encoding ascii
+    Assert "the INF and the binary together are"           $true ($null -eq (Get-QemuPackageProblem -Repo $pkgRepo))
+    Assert "...whatever the untagged directory still holds" $true (Test-Path -LiteralPath (Join-Path $legacyDir 'xhci98.sys'))
+    Assert "an x86 package does not satisfy amd64"         $true ($null -ne (Get-QemuPackageProblem -Repo $pkgRepo -Arch 'amd64'))
+} finally {
+    Remove-Item -LiteralPath $pkgRepo -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host "--- the monitor transport: a reply is complete only with its prompt, and a path with a space is quoted ---"
 Assert "a reply ending in the prompt is complete"     $true  (Test-MonitorReplyComplete -Raw "info usb`r`n(qemu) ")
 $esc = [string][char]27
@@ -795,6 +878,70 @@ if (Test-MonitorPortFree -Port $freePort) {
     Reset-MonitorErrors
     Assert "no monitor answers null, not 'gone'"      $true ($null -eq $listed)
 }
+
+Write-Host "--- the XP x64 and Windows 7 targets: family, build, table and 64-bit addresses ---"
+Assert "2a-fresh is the Windows 98 family"      "win98"   (Get-TargetFamily -Target @{ Id = '2a-fresh'; Like = '2a' })
+Assert "2b-fresh is the Windows 2000 family"    "win2k"   (Get-TargetFamily -Target @{ Id = '2b-fresh'; Like = '2b' })
+Assert "an explicit Family wins"                "winxp64" (Get-TargetFamily -Target @{ Id = 'xp64-fresh'; Family = 'WinXP64' })
+$famThrew = $false
+try { Get-TargetFamily -Target @{ Id = '2d' } | Out-Null } catch { $famThrew = $true }
+Assert "the SMP guest has no family"            $true $famThrew
+$famThrew = $false
+try { Get-TargetFamily -Target @{ Id = 'x'; Family = 'winme' } | Out-Null } catch { $famThrew = $true }
+Assert "an unknown Family is refused"           $true $famThrew
+Assert "no Arch key is x86"                     "x86"   (Get-TargetArch -Target @{ Id = '2a' })
+Assert "Arch amd64 is read"                     "amd64" (Get-TargetArch -Target @{ Id = 'xp64-fresh'; Arch = 'amd64' })
+$archThrew = $false
+try { Get-TargetArch -Target @{ Id = 'x'; Arch = 'ia64' } | Out-Null } catch { $archThrew = $true }
+Assert "an unknown Arch is refused"             $true $archThrew
+Assert "winxp64.img is refused even when stamped" $true (@(Get-FreshImageProblems -ImagePath 'vm\winxp64.img' -Snapshots $ok -Version '1.0.0.0') -join ' ' -match 'carried-along')
+Assert "win7.img is refused even when stamped"  $true (@(Get-FreshImageProblems -ImagePath 'vm\win7.img' -Snapshots $ok -Version '1.0.0.0') -join ' ' -match 'carried-along')
+
+$table64 = Import-CounterTable -Arch amd64
+Assert "the amd64 table is its own file"        $true ($table64.OffsetsFile -like '*offsets-amd64.txt')
+Assert "...with a larger SIZEOF than x86"       $true ($table64.Sizeof -gt $table.Sizeof)
+Assert "...and the same counters"               $table.Offsets.Count $table64.Offsets.Count
+
+Assert "an x86 address keeps eight digits"      "0xC1468970"         (Format-GuestAddress -BaseVa 'C1468870' -Offset 0x100)
+Assert "an amd64 address keeps sixteen"         "0xFFFFFADFCE308830" (Format-GuestAddress -BaseVa 'FFFFFADFCE2F5DC8' -Offset 76392)
+Assert "the carry reaches the high half"        "0xFFFFFAE000000010" (Format-GuestAddress -BaseVa 'FFFFFADFFFFFFFF0' -Offset 0x20)
+Assert "a string address reaches the message"   $true ((New-CounterReadFailure -Addr '0xFFFFFADFCE308830' -Take 4 -Got 2 -Attempts 4 -MonitorListening $true) -match '0xFFFFFADFCE308830')
+
+$idLog = Join-Path $env:TEMP ("xhci98-selftest-ident-{0}.log" -f $PID)
+Set-Content -LiteralPath $idLog -Encoding ascii -Value @(
+    'xhci98: cb StartController irql=00 a=CE2F5DC8 b=0012F000 c=00000000'
+    'xhci98: StartController extension VA high=FFFFFADF'
+    'xhci98: StartController extension VA low=CE2F5DC8'
+    'xhci98: MiniPortExtensionSize=00017538'
+    'xhci98: cb StartController irql=00 a=CE2F5DC8 b=0012F000 c=00000000')
+$id64 = Find-ExtensionIdentity -DebugconLog $idLog
+Assert "an amd64 log is read from the full pair" "FFFFFADFCE2F5DC8" $id64.Va
+Assert "...and the truncated a= does not count"  $false $id64.Spans
+Set-Content -LiteralPath $idLog -Encoding ascii -Value @(
+    'xhci98: cb StartController irql=00 a=C14658C4 b=81F0437C c=00000000'
+    'xhci98: MiniPortExtensionSize=00016890')
+$id32 = Find-ExtensionIdentity -DebugconLog $idLog
+Assert "an x86 log is read from a= as before"   "C14658C4" $id32.Va
+Set-Content -LiteralPath $idLog -Encoding ascii -Value @(
+    'xhci98: StartController extension VA high=FFFFFADF'
+    'xhci98: StartController extension VA low=CE2F5DC8'
+    'xhci98: StartController extension VA high=FFFFFADF'
+    'xhci98: StartController extension VA low=CE31A008')
+Assert "two amd64 loads are a span"             $true (Find-ExtensionIdentity -DebugconLog $idLog -Arch amd64).Spans
+# A boot poll that lands between the callback line and the low half: on amd64
+# the truncated a= must never become the identity (Codex review of fcbf9a1).
+Set-Content -LiteralPath $idLog -Encoding ascii -Value @(
+    'xhci98: cb StartController irql=00 a=CE2F5DC8 b=0012F000 c=00000000'
+    'xhci98: StartController extension VA high=FFFFFADF')
+Assert "amd64: a= alone is no identity"          $null (Find-ExtensionIdentity -DebugconLog $idLog -Arch amd64).Va
+Assert "x86 reading of the same log keeps a="    "CE2F5DC8" (Find-ExtensionIdentity -DebugconLog $idLog).Va
+Assert "the identity carries its architecture"   "amd64" (Find-ExtensionIdentity -DebugconLog $idLog -Arch amd64).Arch
+$partialIdent = [pscustomobject]@{ Va = 'FFFFFADFCE2F5DC8'; Arch = 'amd64' }
+Assert "amd64 drift sees the missing pair"       $true ((Get-ExtensionIdentityDrift -Ident $partialIdent -DebugconLog $idLog) -ne "")
+Add-Content -LiteralPath $idLog -Encoding ascii -Value 'xhci98: StartController extension VA low=CE2F5DC8'
+Assert "amd64: the completed pair is read"       "FFFFFADFCE2F5DC8" (Find-ExtensionIdentity -DebugconLog $idLog -Arch amd64).Va
+Assert "amd64 drift on the same pair is none"    "" (Get-ExtensionIdentityDrift -Ident $partialIdent -DebugconLog $idLog)
+Remove-Item -LiteralPath $idLog -Force -ErrorAction SilentlyContinue
 
 Write-Host ""
 if ($failures -eq 0) {

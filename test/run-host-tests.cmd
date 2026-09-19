@@ -14,7 +14,8 @@ rem   test_ring    - TRB encoding, ring wrap/cycle, ring-full detection, and
 rem                  the event-ring consumer (src\xhci_ring.c)
 rem   test_caps    - the extended-capability walk, port classification, and
 rem                  PSI speed decoding (src\xhci_caps.c)
-rem   test_port    - PORTSC write construction (src\xhci_port.c)
+rem   test_port    - PORTSC write construction, the logical-port map and the
+rem                  per-port shadow (src\xhci_port.c)
 rem   test_xfer    - the control-transfer engine (src\xhci_xfer.c): Setup/Data/
 rem                  Status TD construction, the scatter/gather walk and its
 rem                  64 KB splits, the pending-transfer queue, and what a
@@ -62,11 +63,49 @@ rem                  code: it redirects the DDK register, stall and spin-lock
 rem                  primitives at a model, which is what makes access *order*,
 rem                  lock scope, and a refusal writing nothing at all checkable.
 rem
+rem THE SECOND ARCHITECTURE (roadmap task 21.4). Two suites are compiled and run
+rem twice: once with MSVC 6.0 for x86, and once with WDK 7.1's amd64 cross
+rem compiler, as test_packet_amd64 and test_membuf_amd64.
+rem
+rem   test_packet_amd64  src\xhci_usbport.h declares three structures and a
+rem                      registration packet that change shape under _WIN64 -
+rem                      the packet by 0x114 bytes - and until this leg existed
+rem                      the only thing that ever compiled that half was a
+rem                      driver build, so an amd64 layout error was caught by
+rem                      scripts\build-driver.cmd -amd64 or not at all. It is a
+rem                      real second measurement rather than a compile check:
+rem                      every expectation in test_packet.c that differs between
+rem                      the two architectures carries both numbers, from design
+rem                      record 11's readings of the amd64 usbport.sys and
+rem                      usbehci.sys.
+rem   test_membuf_amd64  the controller common-buffer carve, whose numbers must
+rem                      NOT move with the pointer width and are checked here
+rem                      rather than argued: nothing in the layout is a sizeof
+rem                      (design record 04 section 8). A standing check, so the
+rem                      day a pointer-sized member reaches the region map the
+rem                      suite says so instead of a target doing it.
+rem
+rem The amd64 leg drops /Za, which the x86 leg keeps. The WDK's own CRT headers
+rem are not C89-clean (stdio.h reaches specstrings.h and driverspecs.h, which
+rem spells macro names with '$'), and nothing is lost: the x86 leg compiles the
+rem same two files under /Za, so the dialect gate still sees every line of them.
+rem Set WDK71 to override the WDK location.
+rem
+rem Neither of the two ways this leg can come up short is allowed to read as a
+rem clean run, because the thing it checks is invisible everywhere else. With no
+rem WDK 7.1 it is skipped by name and the verdict says "x86 only"; on a 32-bit
+rem host the binaries are built but not run - which still fails on the header's
+rem own _WIN64 asserts, and still is not the hand-typed offset table - and the
+rem verdict says that instead.
+rem
 rem Uses the same MSVC 6.0 the driver build uses, run in place out of
 rem tools\MSVC600 - found relative to this script, so a clone compiles wherever
 rem it is unpacked (docs\contributing\build-and-test.md "Automated Phase 1 Host
-rem Setup"). Set MSVC6 to override the location. Any C89 compiler works - having
-rem no DDK dependency in the core is the point.
+rem Setup"). Set MSVC6 to override the location. Having no DDK dependency in
+rem the core is the point, but "any C89 compiler" is not the claim: dozens of
+rem the suites' identifiers run past C89's 31 significant characters, so the
+rem compilers this runner is written for are MSVC 6.0 and WDK 7.1's cl, both
+rem of which keep 247.
 rem
 rem Exit code 0 = all checks passed. Run this before every VM deploy.
 
@@ -74,6 +113,7 @@ setlocal
 
 set REPO=%~dp0..
 if "%MSVC6%"=="" set MSVC6=%REPO%\tools\MSVC600
+if "%WDK71%"=="" set WDK71=%REPO%\tools\WinDDK71
 if not exist "%MSVC6%\VC98\BIN\cl.exe" goto nocompiler
 
 set PATH=%MSVC6%\VC98\BIN;%MSVC6%\Common\MSDev98\Bin;%PATH%
@@ -86,6 +126,8 @@ rem Every suite runs even after one fails: the whole point of the host suite is
 rem that a second failure costs milliseconds, not another build.
 set "SUITEFAILED="
 set "SUITEBLOCKED="
+set "SUITESKIPPED="
+set "SUITEPARTIAL="
 
 call :run test_membuf "test_membuf.c ..\src\xhci_mem.c"
 call :run test_packet "test_packet.c"
@@ -123,22 +165,48 @@ rem the number the hardware sees.
 call :run test_desc "test_desc.c ..\src\xhci_desc.c ..\src\xhci_ctx.c ..\src\xhci_mem.c"
 call :run test_init "test_init.c ..\src\xhci_init.c ..\src\xhci_evt.c ..\src\xhci_cmd.c ..\src\xhci_rh.c ..\src\xhci_slot.c ..\src\xhci_probe.c ..\src\xhci_topo.c ..\src\xhci_desc.c ..\src\xhci_log.c ..\src\xhci_pci.c ..\src\xhci_caps.c ..\src\xhci_mem.c ..\src\xhci_ring.c ..\src\xhci_port.c ..\src\xhci_ctx.c ..\src\xhci_xfer.c ..\src\xhci_dispatch.c"
 
+rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
+if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64
+if /i "%PROCESSOR_ARCHITECTURE%"=="x86" if not defined PROCESSOR_ARCHITEW6432 set "NORUN=1"
+call :run test_packet_amd64 "test_packet.c" amd64
+call :run test_membuf_amd64 "test_membuf.c ..\src\xhci_mem.c" amd64
+set "NORUN="
+goto amd64done
+
+:noamd64
+set "SUITESKIPPED=1"
+echo.
+echo === test_packet_amd64, test_membuf_amd64 === SKIPPED
+echo WDK 7.1 was not found at %WDK71%, and its amd64 compiler is the only thing
+echo here that compiles the _WIN64 half of src\xhci_usbport.h. That half is
+echo therefore unchecked in this run. Set WDK71 to a WDK 7.1 root, or read the
+echo verdict below as covering x86 alone.
+
+:amd64done
 if defined SUITEFAILED goto testfail
 if defined SUITEBLOCKED goto blocked
 
 echo.
-echo Host tests PASSED.
+if defined SUITESKIPPED echo Host tests PASSED - x86 only; see the SKIPPED notice above.
+if defined SUITEPARTIAL echo Host tests PASSED - the amd64 legs were built, not run; see above.
+if not defined SUITESKIPPED if not defined SUITEPARTIAL echo Host tests PASSED.
 endlocal
 exit /b 0
 
 rem ------------------------------------------------------------------
-rem :run <name> "<source list>" - run one suite and record its verdict.
+rem :run <name> "<source list>" [amd64] - run one suite and record its verdict.
 rem A blocked launch is not a failure, so the two are tracked separately.
 rem ------------------------------------------------------------------
 :run
-call :suite %1 %2
+call :suite %1 %2 %3
+rem Descending, because `if errorlevel N` is "N or higher".
+if errorlevel 3 goto runpartial
 if errorlevel 2 goto runblocked
 if errorlevel 1 goto runfailed
+goto :eof
+
+:runpartial
+set "SUITEPARTIAL=1"
 goto :eof
 
 :runfailed
@@ -150,15 +218,17 @@ set "SUITEBLOCKED=1"
 goto :eof
 
 rem ------------------------------------------------------------------
-rem :suite <name> "<source list>"
+rem :suite <name> "<source list>" [amd64]
 rem   0 = passed
 rem   1 = build failure, check failure, or a binary that ran and crashed
 rem   2 = the launch was blocked before the binary ran (see :blocked)
+rem   3 = built, deliberately not run (NORUN: an amd64 binary on a 32-bit host)
 rem ------------------------------------------------------------------
 :suite
 setlocal
 set NAME=%~1
 set SRC=%~2
+set ARCH=%~3
 echo.
 echo === %NAME% ===
 if exist %NAME%.exe del %NAME%.exe
@@ -176,9 +246,24 @@ rem candidate's define set, so an #ifdef'd repair can carry its own regression
 rem rather than being verified only by a bench plug. It is empty in every
 rem ordinary run and is NOT a way to ship behaviour: the DDK build's own
 rem XHCI_EXTRA_DEFINES is the one that decides what a binary contains.
+if /i "%ARCH%"=="amd64" goto suitebuild64
 cl /nologo /W3 /WX /Za /DXHCI_HOST_TEST %XHCI_HOST_TEST_DEFINES% /Fe%NAME%.exe %SRC%
+goto suitebuilt
+
+rem WDK 7.1's x86-hosted amd64 cross compiler, against the WDK's own CRT headers
+rem and import libraries, so nothing outside tools\ is needed for it either. No
+rem /Za: those headers are not C89-clean and the x86 leg is what gates the
+rem dialect.
+:suitebuild64
+set PATH=%WDK71%\bin\x86\amd64;%WDK71%\bin\x86;%PATH%
+set INCLUDE=%WDK71%\inc\crt;%WDK71%\inc\api
+set LIB=%WDK71%\lib\Crt\amd64;%WDK71%\lib\wnet\amd64
+cl /nologo /W3 /WX /DXHCI_HOST_TEST %XHCI_HOST_TEST_DEFINES% /Fe%NAME%.exe %SRC%
+
+:suitebuilt
 if errorlevel 1 goto suitebuilderr
 if not exist %NAME%.exe goto suitebuilderr
+if defined NORUN goto suitenotrun
 
 rem Absolute path: this host sets NoDefaultCurrentDirectoryInExePath, so a bare
 rem exe name in the working directory is not found.
@@ -229,6 +314,14 @@ if not "%RC%"=="0" goto suitefailed
 call :cleanup %NAME%
 endlocal
 exit /b 0
+
+:suitenotrun
+echo %NAME% was built but not run: this host cannot execute an amd64 binary.
+echo The compile checked the _WIN64 asserts in the headers it included, which
+echo fail a build; the suite's own hand-typed expectations were not checked.
+call :cleanup %NAME%
+endlocal
+exit /b 3
 
 :suitebuilderr
 echo ERROR: could not build %NAME%.

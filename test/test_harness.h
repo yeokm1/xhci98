@@ -48,6 +48,12 @@ static int checks;
  * passing a wider type would otherwise have it truncated at the call. The
  * comparison is made in the caller's own type, where it is exact.
  */
+/*
+ * **Both macros take a `what` the failure line prints**, and design record 03
+ * section 5 describes them as `CHECK(cond)` / `CHECK_EQ(got, want)`. The
+ * description is the one that is wrong; the third argument is what makes a
+ * failure readable without opening the file (the 2026-09-16 audit's C6).
+ */
 #define CHECK(cond, what) \
     check_impl(((cond) != 0), (what), __FILE__, __LINE__)
 
@@ -61,18 +67,33 @@ static void check_impl(int cond, const char *what, const char *file,
     }
 }
 
+/*
+ * `unsigned long` is 32 bits on both architectures MSVC targets, so on the
+ * amd64 leg a pointer-sized operand (a `sizeof`, an offset past 4 GB, a
+ * `ULONG_PTR`) would be truncated at the cast and two values differing only
+ * above bit 31 would compare equal (the 2026-09-17 audit's E2). The operand
+ * type follows the pointer width; the x86 leg's type and output are the ones
+ * it always had.
+ */
+#ifdef _WIN64
+typedef unsigned __int64 check_eq_t;
+#define CHECK_EQ_FMT "FAIL %s:%d: %s (got %I64u / 0x%I64X, want %I64u / 0x%I64X)\n"
+#else
+typedef unsigned long check_eq_t;
+#define CHECK_EQ_FMT "FAIL %s:%d: %s (got %lu / 0x%lX, want %lu / 0x%lX)\n"
+#endif
+
 #define CHECK_EQ(got, want, what) \
-    check_eq_impl((unsigned long)(got), (unsigned long)(want), (what), \
+    check_eq_impl((check_eq_t)(got), (check_eq_t)(want), (what), \
                   __FILE__, __LINE__)
 
-static void check_eq_impl(unsigned long got, unsigned long want,
+static void check_eq_impl(check_eq_t got, check_eq_t want,
                           const char *what, const char *file, int line)
 {
     checks++;
     if (got != want) {
         failures++;
-        printf("FAIL %s:%d: %s (got %lu / 0x%lX, want %lu / 0x%lX)\n",
-               file, line, what, got, got, want, want);
+        printf(CHECK_EQ_FMT, file, line, what, got, got, want, want);
     }
 }
 

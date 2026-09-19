@@ -1,8 +1,10 @@
 # xhci98
 
-This project xHCI98 is a WDM generic USB host controller driver for xHCI host controllers targeting Windows 98 SE, ME, 2000 SP4 and 32-bit XP. Although xHCI Controllers offer USB 3.0, this driver runs USB 2.0 on the controller only.
+This project xHCI98 is a WDM generic USB host controller driver for xHCI host controllers. It supports Windows 98 SE, ME, 2000, XP (x86/x64), Vista (x86/x64) and 7 (x86/x64).
 
-This driver is developed based on Intel's xHCI specification and tested only on Intel machines so far. No guarantees have been made on xHCI implementations from other vendors.
+Although xHCI Controllers offer USB 3.0, this driver runs USB 2.0 on the controller only.
+
+This driver is developed based on Intel's xHCI specification and tested mainly on Intel machines so far. No guarantees have been made on xHCI implementations from other vendors. [Omores](https://www.youtube.com/@O_mores) has also [tested it](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) on some AMD AM4 and AM5 platforms.
 
 This project is from a solo human with AI-assistance only so bugs are not unexpected. Feel free to report them if you encounter any issues.
 
@@ -10,7 +12,11 @@ This project is from a solo human with AI-assistance only so bugs are not unexpe
 
 This is my 2020 ThinkPad P14s Gen 1 (Comet Lake xHCI, no EHCI) on Windows 98 SE. Connected devices are 7-port hub, USB Ethernet, USB Audio, a USB-to-SATA bridge, two flash drives and a mouse all using the xHCI controller.
 
-Demo video: https://www.youtube.com/watch?v=AU77f9CSbYc
+Video by [Omores](https://www.youtube.com/@O_mores) featuring this driver:
+
+[![omores video](https://img.youtube.com/vi/7SOyvvC7P4E/hqdefault.jpg)](https://www.youtube.com/watch?v=7SOyvvC7P4E)
+
+My personal demo video: https://www.youtube.com/watch?v=AU77f9CSbYc
 
 Blog post of this project: https://yeokhengmeng.com/2026/08/xhci98-usb-host-driver/
 
@@ -32,13 +38,14 @@ Every USB 3.x connector (USB4/Thunderbolt included) also carries the USB 2.0 wir
 
 ## Installation Steps
 
-The driver needs a USB 2.0 stack (`usbport.sys` + `usbhub20.sys`) on the machine first:
+The driver needs a USB 2.0 stack on the machine first:
 
 - **Windows 98 SE**: Either install [NUSB 3.3 or 3.6](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) or the [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip). For SweetLow's stack, unzip, right-click the `USB2.INF` at its root then install. Reboot if requested after installing the USB 2.0 stack.
 - **Windows ME**: Use [SweetLow's stack](http://sweetlow.orgfree.com/download/usb20_win9x.zip) only.
-- **Windows 2000 SP4 and XP SP3 (32-bit)**: Nothing to install, both OSes at their service pack level already have the stack.
+- **Windows 2000 SP4, XP SP3 x86**: Nothing to install, both OSes at their service pack level already have the stack.
+- **Windows XP SP2 x64, Vista SP2 and 7 SP1 (x86/x64)**: Nothing to install either. On **Vista x64 and 7 x64**, driver signature enforcement has to be disabled as this driver is not signed.
 
-On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand** or the contents on disk as the driver needs some files from there.
+On an xHCI-only Windows 98 SE or ME machine, **have the Windows installation CD at hand** or its contents on disk. Windows may ask for files from it while installing the driver or the USB devices plugged in afterwards.
 
 Optional but recommended: boot real DOS (not a DOS box inside Windows) and run `XHCIQUAL` from the `XHCIQUAL\` folder. A controller reporting no legacy interrupt pin cannot be driven on either system and there is no software workaround, so find out before you install anything.
 
@@ -56,13 +63,21 @@ Controller qualified verdict.
 
 XHCIQUAL demo video: https://www.youtube.com/watch?v=Tv6blmBS6Do
 
+To submit logs with a [bug or hardware report](https://github.com/yeokm1/xhci98/issues/new/choose), run these from real DOS and attach `FULL.LOG` if the second run finished, or `PROBE.LOG` only if it did not:
+
+1. `XHCIQUAL --probe-only --no-page --log PROBE.LOG` is read-only. It takes ownership of nothing and writes no PCI configuration register.
+2. If that does not crash the machine, continue with `XHCIQUAL --no-page --log FULL.LOG`. This one **takes over the controller**, resets it and resets its ports. Use a PS/2 keyboard and do not write the log to a drive on the controller being tested.
+
 ### Install
 
-1. Put the unzipped package somewhere the machine can read: a floppy, a CD, a shared folder. `release\` is the one to install. `debug\` is the same driver built for troubleshooting, only install if asked.
-2. In Device Manager, find the unrecognised xHCI controller. It sits unclaimed with a yellow mark, usually under "Other devices" such as "Universal Serial Bus Controller".
-3. Properties -> Driver -> Update Driver -> Specify a location/Have Disk -> the `release\` directory.
-4. It installs as "USB 2.0 eXtensible Host Controller (xhci98)" with a "USB Root Hub" underneath it, and neither should carry a warning mark.
-5. Reboot if requested.
+These steps describe the `1.1.0.0` download. It has four driver directories: `release-x86\` and `debug-x86\` for 32-bit Windows (98 SE, ME, 2000, XP, Vista, 7), and `release-x64\` and `debug-x64\` for 64-bit Windows (XP x64, Server 2003 x64, Vista x64, 7 x64). The readme inside the download says the same; read that rather than this if the two disagree.
+
+1. Put the unzipped package somewhere the machine can read: a floppy, a CD, a shared folder. `release-x86\` or `release-x64\` is the one to install. The `debug-` directories hold the same driver built for troubleshooting, only install if asked.
+2. On Windows 98 SE, install a USB 2.0 stack first (NUSB 3.3, or SweetLow's). On Vista x64 and 7 x64, driver signature enforcement must be disabled, as the driver is unsigned.
+3. In Device Manager, find the unrecognised xHCI controller. It sits unclaimed with a yellow mark, usually under "Other devices" such as "Universal Serial Bus Controller".
+4. Properties -> Driver -> Update Driver -> Specify a location/Have Disk -> the `release-x86\` or `release-x64\` directory.
+5. It installs as "USB 2.0 eXtensible Host Controller (xhci98)" with a "USB Root Hub" underneath it, and neither should carry a warning mark.
+6. Reboot if requested.
 
 <img src="images/xhci98-driver-info.jpg" width="800">
 
@@ -72,12 +87,17 @@ The same driver on the same machine survives all three under SweetLow's build of
 
 ## What is tested, and what is not
 
-Windows 98 SE is validated on real hardware. Windows 2000 SP4, Windows ME and Windows XP have only ever run in QEMU virtual machines.
+Windows 98 SE is validated on real hardware. 32-bit Windows 7 has run on real hardware once (a ThinkPad E460, 2026-09-19). Windows 2000 SP4, Windows ME, Windows XP (x86/x64), Windows Vista (x86/x64) and 64-bit Windows 7 have only ever run in QEMU virtual machines.
 
-| Machine | Controller |
-|---|---|
-| ThinkPad E460 (2016) | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0, `8086:9D2F`, 18 ports (12 USB 2.0 managed, 6 USB 3.0 left unpowered), no EHCI. |
-| ThinkPad P14s Gen 1 (2020) | Intel Comet Lake PCH-LP (400-series). xHCI 1.1, `8086:02ED`, 18 ports (12 USB 2.0 managed, 6 USB 3.1 left unpowered), no EHCI. |
+| Machine | Controller | Result | Tested by |
+|---|---|---|---|
+| 2016 ThinkPad E460 | Intel Skylake, Sunrise Point-LP (100-series) PCH. xHCI 1.0. | OK | Me |
+| 2020 ThinkPad P14s Gen 1 | Intel Comet Lake PCH-LP (400-series). xHCI 1.1. | OK | Me |
+| Socket 1151 desktop (H110) | Intel 100-series PCH xHCI. | OK | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) |
+| Socket 1151 v2 desktop (B360) | Intel Cannon Lake PCH (300-series) xHCI. | OK | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) |
+| AM4 desktop (B550) | AMD 500-series chipset xHCI, plus the Ryzen CPU's own xHCI. | OK | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) |
+| AM4 desktop (X570) | AMD-designed X570 chipset xHCI, plus the Ryzen CPU's own xHCI. | Not OK | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) |
+| AM5 desktop (X670) | AMD 600-series chipset xHCI, plus the Ryzen CPU's own xHCIs. | OK | [Omores](https://www.reddit.com/r/windows98/comments/1whzyoa/xhci98_windows_98_gets_usb_3x_controller_support/) |
 
 | | State |
 |---|---|
@@ -85,7 +105,9 @@ Windows 98 SE is validated on real hardware. Windows 2000 SP4, Windows ME and Wi
 | Windows 2000 SP4 | Virtual machines only, including an SMP guest and Driver Verifier. It has never run on real hardware. |
 | Windows ME | One virtual machine only, under SweetLow's USB 2.0 stack (the only stack it is supported with): the driver loads and starts, and a HID mouse, a USB mass-storage device and a composite audio device bind (2026-09-02). Never run on real hardware. |
 | 32-bit Windows XP | One virtual machine only (XP Professional SP3): the package installs on an xHCI-only machine with no prompt, the driver loads and starts under XP's own USB stack, and a HID mouse, a USB mass-storage device and a composite audio device bind; disable, enable, remove and rescan in Device Manager all survive. Never run on real hardware. |
-| Intel 7/8-series (`XUSB2PR` mux), AMD | Never run on either. Everything said about the `XUSB2PR` port mux comes from Intel's datasheet and Linux, not silicon. The driver does not touch it. |
+| Windows XP x64 / Server 2003 x64 | One virtual machine only (XP Professional x64 SP2), and **a separate 64-bit driver**, not the one above: the same clauses all pass, taken on the `qemu` build and then read again on the `release` flavour, from a package with its own INF. The `debug` build of it has never been run. Only XP x64 was booted; Server 2003 x64 is the same operating system and is covered by that identity, not by a run of its own. Never run on real hardware. |
+| Windows Vista SP2 and Windows 7 SP1, 32-bit and x64 | One virtual machine each (four in all). The 32-bit ones run the same driver as 98 to XP, the x64 ones the 64-bit driver. The package installs, the driver loads and starts, a HID mouse, a USB mass-storage device and a composite audio device bind, and five disable/enable cycles, remove and rescan in Device Manager all survive. Taken on the `qemu` build; the published `release` package was then installed on all four (2026-09-18). On Vista x64 and 7 x64, driver signature enforcement has to be disabled as this driver is not signed. 32-bit Windows 7 has run on real hardware once (a ThinkPad E460, 2026-09-19): the install, a mouse, a flash drive and USB audio at a root port and behind USB 2.0 hubs, reboot and shutdown all passed, but **the first disable of the controller hung** (Known limitations/issues). Vista and 64-bit Windows 7 have never run on real hardware. |
+| Intel 7/8-series (`XUSB2PR` mux) | Never run. Everything said about the `XUSB2PR` port mux comes from Intel's datasheet and Linux, not silicon. The driver does not touch it. |
 | Resume from standby (Windows 2000) | Never executed anywhere. No available VM offers a resumable power transition, and there is no Windows 2000 machine. |
 | Low Speed, USB Audio, hub topologies | Work on Windows 98 hardware in the configurations tried. Not covered: an audio device with `bInterval > 1`, a USB 1.1 hub under a multi-TT hub, and the Windows 2000 side on silicon. |
 
@@ -110,16 +132,17 @@ The devices checked so far, all on the E460 under Windows 98 SE. Each is charact
 
 ATTO Disk Benchmark on the P14s against the MSSU10-128GSR flash drive trasferring around 18 MB/s read and write from 32 KB transfers upward. The USB 3.0 drive runs at USB 2.0 speed on this driver.
 
-## Known limitations
-
-The important limitations. The full list is under "Known limitations" in [release-notes.md](docs/using/release-notes.md).
+## Known limitations/issues
 
 | Limitation | Detail |
 |---|---|
 | Disabling, uninstalling or upgrading an NUSB driver crashes the machine | A defect in NUSB's `usbport.sys` which cannot stop a running controller. Rename the existing `XHCI98.SYS`, reboot, then remove it. |
-| Every device on a root port is reported as High Speed | Reporting the true speed of a slower device crashes usbport as there is no companion controller. A mouse or keyboard on a root port therefore polls at 1, 2 or 4 ms only. If this is an issue for you, put your lower-speed device behind a hub to allow the true speed to be reported. |
-| `DisableSelectiveSuspend = 1` is written machine-wide | A suspended xHCI controller cannot see a newly plugged device. A driver uninstall does not remove the value. |
+| Every device on a root port is reported as High Speed | Reporting the true speed of a slower device crashes usbport as there is no companion controller. A mouse or keyboard on a root port therefore polls at 1, 2 or 4 ms only. If this is an issue for you, put your lower-speed device behind a hub to allow the true speed to be reported - on Vista and 7, a USB 2.0 hub only (next row). |
+| A USB 1.1 hub on a root port crashes Windows Vista and 7 | 32-bit and x64 alike: `STOP 0x7E` in `USBPORT.SYS` as soon as a mouse, keyboard or other slower device behind the hub is used. Plug such devices into a root port directly, or behind a USB 2.0 hub. Windows 98, 2000, XP and XP x64 are unaffected. See [issue 6](docs/issues/06-full-speed-root-port-bugcheck.md), section 6.2. |
+| A Full-Speed USB audio device on a root port plays nothing on Windows XP and later | It installs and Windows shows it playing, but no sound reaches it. Behind a hub it plays (on Vista and 7 use a USB 2.0 hub). Windows 2000 plays on a root port. See [issue 6](docs/issues/06-full-speed-root-port-bugcheck.md), section 7. |
+| Disabling the USB controller can hang Windows 7 | On the one real Windows 7 machine tried, the first Disable in Device Manager never finished and the next restart hung until powered off; enabling it again afterwards worked. Uninstalling or upgrading stops the controller too. Cause not known yet. Do it with no unsaved work open, and expect to power off if the restart hangs. |
 | Fast, repeated plug and unplug can freeze Windows 98 | About twice a second sustained. Ordinary use is fine. |
+| Mass-storage throughput seems slow | About 18 MB/s read and write in the ATTO run above, below what USB 2.0 High Speed usually reaches. A likely but unmeasured cause is the controller's interrupt moderation, left at its 1 ms reset default. |
 
 ## Toolchain and building
 
@@ -131,6 +154,8 @@ The driver is C (C89/C90, no C++ or CRT), built and verified on Windows 11 x64. 
    |---|---|
    | `tools\MSVC600.zip` | MSVC 6.0 - [itsmattkc/MSVC600](https://github.com/itsmattkc/MSVC600) |
    | `tools\WIN2KDDK.EXE` | Windows 2000 DDK - [KunYi/WDK_DDKArchive](https://github.com/KunYi/WDK_DDKArchive/releases/tag/Win2K_DDK) |
+
+   The 64-bit build needs a third, unpacked to `tools\WinDDK71`: WDK 7.1 (7600.16385.1), because no compiler older than its `cl` 15.00 can target x64. It is needed only for the amd64 package; a clone without it builds every 32-bit flavour.
 
 2. Unpack them in place:
 
@@ -151,14 +176,26 @@ The driver is C (C89/C90, no C++ or CRT), built and verified on Windows 11 x64. 
    | `debug` | `src\objchk\i386\xhci98.sys` - the diagnostic build, also shipped |
    | `qemu` | `src\objchk_qemu\i386\xhci98.sys` - emulator-only, never published |
 
+   Add `-amd64` for the 64-bit build, which is a **separate binary from a separate toolchain in a separate package** - no statement about "one binary" reaches it:
+
+   ```
+   scripts\build-driver.cmd both -amd64
+   ```
+
+   | Flavour | Output |
+   |---|---|
+   | `release` | `src\objfre\amd64\xhci98.sys` |
+   | `debug` | `src\objchk\amd64\xhci98.sys` |
+   | `qemu` | `src\objchk_qemu\amd64\xhci98.sys` - emulator-only, never published |
+
 4. Build the two tools that ship beside the driver. `xhciqual\build.cmd` produces `XHCIQUAL.EXE`, the DOS qualifier, and needs [Open Watcom 2.0](https://github.com/open-watcom/open-watcom-v2/releases) at `C:\WATCOM` (or wherever `WATCOM` points). That is the only tool installed normally on the host, and the driver never uses it. `xhcisnap\build.cmd` produces `XHCISNAP.EXE`, the snapshot reader, with the in-repo MSVC 6.0.
 
 5. Make install media. A `.sys` on its own is not install media; the INF travels with it, and since 1.0.0.1 nothing else does, because the INF has Windows supply its own `usbd.sys` and `usbhub.sys` (since 1.0.1.0, `usbport.sys` on Windows 2000 and XP; since 1.0.2.0, `usbui.dll` on all four). For a Windows 98 SE target, first download NUSB 3.3 (`nusb33e.exe`) from [philscomputerlab.com](https://www.philscomputerlab.com/windows-98-usb-storage-driver.html) to `tools\nusb33e.exe`.
 
    | Script | Output |
    |---|---|
-   | `scripts\package\make-package.ps1` | `out\pkg-<flavour>\` - media a VM or a machine can be pointed at |
-   | `scripts\package\make-release.ps1` | `releases\<version>\` and `out\xhci98-<version>.zip` - the published cut |
+   | `scripts\package\make-package.ps1` | `out\pkg-<flavour>-<arch>\` - media a VM or a machine can be pointed at |
+   | `scripts\package\make-release.ps1` | `releases\<version>\` and `out\xhci98-<version>.zip` - the published cut, four directories since the `-Arch` default became both architectures |
 
 6. Test in QEMU with the `qemu-xhci` device: a Win98 SE guest, a Win2000 SP4 guest, and an SMP Win2000 guest for race detection.
 
@@ -241,7 +278,7 @@ This project's own source is licensed under the GNU General Public License, vers
 
 The repository tracks no third-party binary on its own, although the two tool executables it tracks under `releases/` carry statically linked third-party runtimes.
 
-* `xhci98.sys` links no third-party object, runtime or extender.
+* `xhci98.sys` links no runtime or extender. The 32-bit build links no third-party object either; the 64-bit build, linked by WDK 7.1, carries that kit's `/GS` stack-cookie handler (`__security_check_cookie` / `__report_gsfailure`), which nothing in this project's source calls. Whether that object asks for a notice has not been read.
 
 * `XHCIQUAL.EXE` embeds the Open Watcom runtime and the DOS/32A extender. 
 

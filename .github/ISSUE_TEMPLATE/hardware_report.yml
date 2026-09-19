@@ -37,6 +37,12 @@ body:
         - Windows 2000 SP4
         - Windows 2000, earlier than SP4
         - Windows XP, 32-bit
+        - Windows XP, 64-bit
+        - Windows Server 2003, 64-bit
+        - Windows Vista, 32-bit
+        - Windows Vista, 64-bit
+        - Windows 7, 32-bit
+        - Windows 7, 64-bit
         - Other / not sure
     validations:
       required: true
@@ -53,7 +59,7 @@ body:
     id: driver-version
     attributes:
       label: Driver version
-      placeholder: "the four-part number from readme.txt, e.g. 1.0.2.0"
+      placeholder: "the four-part number from readme.txt, e.g. 1.1.0.0"
     validations:
       required: true
 
@@ -62,14 +68,40 @@ body:
     attributes:
       label: XHCIQUAL report
       description: |
-        The single most useful thing you can attach, and it is read-only. From
-        **real DOS**, not a DOS box inside Windows:
+        The single most useful thing you can attach. Boot **real DOS** (not a
+        DOS box inside Windows), put XHCIQUAL.EXE on writable storage that is
+        NOT on the controller being tested, and start with the quick scan:
+
+            XHCIQUAL
+
+        With no arguments it is a read-only one-screen verdict: no log file,
+        no PCI configuration write, no ownership taken. A DISQUALIFIED here
+        ends it - nothing below can overturn that. Then the probe, still
+        read-only, which does write a log:
 
             XHCIQUAL --probe-only --no-page --log PROBE.LOG
 
-        Attach PROBE.LOG or paste it here. It identifies the controller, its
-        capabilities, its interrupt pin and its ports - which is most of what makes
-        one machine's result transferable to another.
+        (`--no-page` matters: without it the run stops every 23 rows waiting
+        for a key.)
+
+        If the probe does not crash the machine, the active runs come next.
+        They TAKE OVER THE CONTROLLER - reset it, reset its ports - so use a
+        PS/2 keyboard. Run them one at a time rather than as one long run,
+        **cold-booting between each** (the download carries no batch files;
+        these are the command lines, and the numbered .BAT wrappers in the
+        repository's xhciqual/ directory run the same ones):
+
+            XHCIQUAL --probe-only --no-page --log PROBE.LOG
+            XHCIQUAL xhci --poll-only --no-wait --no-devid --no-page --log XPOLL.LOG
+            XHCIQUAL xhci --irq-selftest --no-page --log XIRQ.LOG
+            XHCIQUAL xhci --no-wait --no-page --log XEMPTY.LOG   (no external test device attached)
+            XHCIQUAL xhci --no-page --log XDEV.LOG               (one expendable USB 2.0 device attached directly)
+
+        Attach whichever of PROBE.LOG, XPOLL.LOG, XIRQ.LOG, XEMPTY.LOG and
+        XDEV.LOG you got, or paste them here. Getting only the first one or
+        two is still worth reporting. They identify the controller, its
+        capabilities, its interrupt pin and its ports - which is most of what
+        makes one machine's result transferable to another.
       render: text
     validations:
       required: false

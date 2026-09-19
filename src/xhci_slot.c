@@ -3019,7 +3019,13 @@ static VOID xhciEpQuiesceCompleted(PXHCI_EXTENSION ext,
             xhciEpQuiesceFail(ext, dev, binding, op);
             break;
         }
-        ext->EndpointStops++;
+        /*
+         * `EndpointStops` is counted only where the completion proved the ring
+         * is software's: Success above and the Stopped reading below. A
+         * Context State Error that reads Halted, Error or Disabled stopped
+         * nothing and Running contradicts the code, so none of those is a stop;
+         * the "ep.recovery" note above carries them (the 2026-09-17 audit's B8).
+         */
         if (hwState == XHCI_EP_STATE_HALTED) {
             /* The race the note above names: the endpoint halted while the stop
              * was in flight. A Set TR Dequeue Pointer would be refused from
@@ -3066,6 +3072,7 @@ static VOID xhciEpQuiesceCompleted(PXHCI_EXTENSION ext,
             break;
         }
         if (hwState == XHCI_EP_STATE_STOPPED) {
+            ext->EndpointStops++;
             quiesce->Flags &= ~XHCI_EPQ_HALTED;
             xhciEpStopped(ext, dev, binding, 1);
             break;
@@ -3514,6 +3521,60 @@ static VOID xhciDevTopoDetach(PXHCI_EXTENSION ext, PXHCI_DEVICE dev)
     }
     XhciTopoDetach(&ext->Topology, dev->DeviceAddress);
     dev->TopoAddress = 0;
+}
+
+/*
+ * **Drop every other record's claim on a topology address that is about to be
+ * re-assigned.** `TopoAddress` is the key a record remembers so that a teardown
+ * arriving mid-re-enumeration can still find its node (see `xhciDevTopoDetach`
+ * above) - but the re-entry branches clear `DeviceAddress` and keep it, so a
+ * record can sit holding a key to a node that is no longer its own.
+ *
+ * The sequence that makes that a defect needs two hubs and address reuse across
+ * an address-0 window. Hub H at address 5 is destroyed and re-enumerated: the
+ * record is kept and `TopoAddress` stays 5. Hub D enumerates first and is given
+ * 5, whose stale node the migration below prunes, and D's own hub traffic then
+ * builds a fresh node under 5. When H is finally addressed - say 6 - its
+ * migration re-keys **D's** node from 5 to 6. D loses its node and its children
+ * are orphan-swept at the next fold, while H owns a node carrying D's Tier,
+ * Route String and RootPort, so every device behind H is programmed from D's
+ * position. `xhciDevHubMark` refuses on a position mismatch, but
+ * `XhciTopoChildOf`, `XhciTopoClaimChild` and `XhciTopoTtFor` do not - which is
+ * design record 02 section 3's named failure. H's later teardown then detaches
+ * D's node as well.
+ *
+ * Clearing here is what makes the record's key mean what it says: the node it
+ * named has just been pruned, so the claim is spent whether or not this record
+ * ever notices. Not observed, and reasoned from the two sides rather than
+ * measured (the 2026-09-16 audit's B2); the host vector for the H/D sequence is
+ * in `test/test_init.c`.
+ *
+ * Deliberately not counted. Every counter in `XHCI_EXTENSION` is part of the
+ * snapshot layout `scripts\vm-matrix\gen-offsets.ps1` pins and the matrix reads
+ * by offset, and a field added for a path with no measured occurrence is not
+ * worth re-cutting that table for; the host vector is where this is observable.
+ *
+ * Called with the lock held. IRQL: <= DISPATCH_LEVEL.
+ */
+static VOID xhciDevForgetTopoAddress(PXHCI_EXTENSION ext,
+                                     PXHCI_DEVICE keep,
+                                     ULONG address)
+{
+    ULONG i;
+
+    if (address == 0) {
+        return;
+    }
+    for (i = 0; i < XHCI_MAX_SLOTS; i++) {
+        PXHCI_DEVICE other = &ext->Devices[i];
+
+        if (other == keep) {
+            continue;
+        }
+        if (other->TopoAddress == address) {
+            other->TopoAddress = 0;
+        }
+    }
 }
 
 /*
@@ -4075,7 +4136,15 @@ VOID XhciSlotInvalidateAll(PXHCI_EXTENSION ext, ULONG controllerStopped)
              * through that handle resolves to this record. (Completions
              * themselves are answered through each XHCI_TRANSFER's own
              * `EndpointExtension`, recorded at submit, not through this one.)
+             *
+             * The intercepted SET_ADDRESS is the one thing the DMA rule does
+             * not reach: it owns no TRBs, so it is answered here as the
+             * teardown and the failure path answer it. Left held on a GONE
+             * record nothing re-derives it, and usbport's enumeration thread
+             * sits on its infinite non-alertable wait until an HCRST that a
+             * stop never performs (the 2026-09-17 audit's B2).
              */
+            xhciDevCancelSetAddress(ext, dev, XHCI_USBD_STATUS_CANCELED);
             dev->State = XHCI_DEV_STATE_GONE;
             ext->DevicesAbandoned++;
             continue;
@@ -4809,6 +4878,20 @@ static PXHCI_DEVICE xhciDevOpenOnRootPort(PXHCI_EXTENSION ext, ULONG hubPort)
          * not land on this one (review round 2). */
         xhciDevNewTenancy(ext, dev);
         /*
+         * **The intercepted SET_ADDRESS is held on the record and no drain can
+         * see it**, so a re-entry that resets everything around it has to ask
+         * for it by name, exactly as the teardown and an EP0 REMOVE do. Left
+         * held, it would sit against a record whose address has just been
+         * cleared: `xhciDevOwedOp` would derive `ADDRESS_SET` from it and the
+         * completion would stamp `ADDRESS_VALID` with `DeviceAddress == 0`.
+         * Practically unreachable - usbport waits on its SET_ADDRESS with an
+         * INFINITE, non-alertable timeout, so the thread that would have to
+         * re-open this port is parked inside the transfer this cancels - but
+         * the record is only unreachable by an argument made somewhere else
+         * (the 2026-09-16 audit's B4).
+         */
+        xhciDevCancelSetAddress(ext, dev, XHCI_USBD_STATUS_CANCELED);
+        /*
          * The speed is re-read with the Max Packet Size below, not just under
          * it. A device can come back on the same root port at a different speed
          * - a marginal HS link falling back to FS on the second reset is the
@@ -4988,6 +5071,9 @@ static PXHCI_DEVICE xhciDevOpenBehindHub(
          * held a moment ago, so an action armed under the old tenancy must
          * not land on this one (review round 2). */
         xhciDevNewTenancy(ext, dev);
+        /* And the held SET_ADDRESS, one tier down and for the reason the
+         * root-port branch gives at length. */
+        xhciDevCancelSetAddress(ext, dev, XHCI_USBD_STATUS_CANCELED);
     } else {
         dev = xhciDevAllocate(ext);
         if (dev == NULL) {
@@ -5767,7 +5853,7 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
         }
         XhciControllerLockRelease(oldIrql);
 
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWorkForEndpoint(ext, (PVOID)endpoint);
         return;
     }
     if (state != USBPORT_ENDPOINT_REMOVE) {
@@ -5823,7 +5909,7 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
                 ext->Ep0RemovesSuperseded++;
                 endpoint->Flags &= ~XHCI_ENDPOINT_FLAG_OPEN;
                 XhciControllerLockRelease(oldIrql);
-                XhciSlotDeferredWork(ext);
+                XhciSlotDeferredWorkForEndpoint(ext, (PVOID)endpoint);
                 return;
             }
             dev->Flags &= ~XHCI_DEV_FLAG_EP0_OPEN;
@@ -5838,7 +5924,7 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
             if (record == NULL) {
                 endpoint->Flags &= ~XHCI_ENDPOINT_FLAG_OPEN;
                 XhciControllerLockRelease(oldIrql);
-                XhciSlotDeferredWork(ext);
+                XhciSlotDeferredWorkForEndpoint(ext, (PVOID)endpoint);
                 return;
             }
             if (record->EndpointExtension != NULL &&
@@ -5855,7 +5941,7 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
                 ext->EndpointRemovesSuperseded++;
                 endpoint->Flags &= ~XHCI_ENDPOINT_FLAG_OPEN;
                 XhciControllerLockRelease(oldIrql);
-                XhciSlotDeferredWork(ext);
+                XhciSlotDeferredWorkForEndpoint(ext, (PVOID)endpoint);
                 return;
             }
             /*
@@ -5934,7 +6020,7 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
     endpoint->Flags &= ~XHCI_ENDPOINT_FLAG_OPEN;
     XhciControllerLockRelease(oldIrql);
 
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWorkForEndpoint(ext, (PVOID)endpoint);
 }
 
 /* ------------------------------------------------------------------ */
@@ -6393,6 +6479,11 @@ static VOID xhciDevTopoSnoopSubmit(PXHCI_EXTENSION ext,
     transfer->TopoAddress = snoop.Address;
     transfer->TopoPort = snoop.Port;
     transfer->TopoReplyVa = (ULONG_PTR)sgList->MappedSystemVa;
+    /* The record this reply belongs to, named by tenancy rather than by the
+     * address the graph is keyed on - see XHCI_TRANSFER, and the identical
+     * pair `xhciDevDescSnoopSubmit` has kept since the first review round. */
+    transfer->TopoDeviceRef = xhciDevRef(ext, dev);
+    transfer->TopoTenancy = dev->Tenancy;
 }
 
 /* ------------------------------------------------------------------ */
@@ -6786,6 +6877,34 @@ static VOID xhciDevTopoFoldReply(PXHCI_EXTENSION ext, PXHCI_TRANSFER transfer)
     if (transfer->UsbdStatus != XHCI_USBD_STATUS_SUCCESS ||
         transfer->BytesTransferred == 0 || transfer->TopoReplyVa == 0) {
         return;
+    }
+
+    /*
+     * **The record that armed this reply must still be the one holding the
+     * address the graph is keyed on**, which is the gate `xhciDevDescApply`
+     * makes of the descriptor half of this same channel and this half did not
+     * (the 2026-09-16 audit's B3).
+     *
+     * `TopoAddress` here is usbport's address, a recycled name. A completion
+     * parked across a disown plus a re-enumeration would arrive with its key
+     * naming whatever the graph now holds under it, and fold one hub's port
+     * status or hub descriptor into another hub's node. The reference is the
+     * record slot and the tenancy is which device has held it since, so a
+     * mismatch is the answer rather than a plausible wrong node. Counted on
+     * `DescRepliesOrphaned` because it is the same fact about the same
+     * channel - "a snooped reply outlived its record" - and a second counter
+     * would split one event across two readings.
+     */
+    {
+        PXHCI_DEVICE owner;
+
+        owner = xhciDevFromRef(ext, transfer->TopoDeviceRef);
+        if (owner == NULL || owner->Tenancy != transfer->TopoTenancy ||
+            owner->State == XHCI_DEV_STATE_FREE ||
+            owner->DeviceAddress != transfer->TopoAddress) {
+            ext->DescRepliesOrphaned++;
+            return;
+        }
     }
 
     snoop.Reply = transfer->TopoReply;
@@ -7802,6 +7921,11 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
          * leave the graph keyed on an address the record now holds.
          */
         XhciTopoMigrate(&ext->Topology, dev->TopoAddress, address);
+        /* The prune above spent every other record's claim on this key, and
+         * one of them may still be holding it across an address-0 window -
+         * see xhciDevForgetTopoAddress for the two-hub sequence that turns a
+         * kept claim into another hub's position. */
+        xhciDevForgetTopoAddress(ext, dev, address);
         if (dev->TopoAddress != 0) {
             dev->TopoAddress = address;
         }
@@ -8095,7 +8219,7 @@ VOID XhciSlotAbortTransfer(PXHCI_EXTENSION ext,
      * back. `SubmitTransfer` is the one that does, which is why the
      * `SubmitDepth` bracket exists and is confined to it.
      */
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWorkForEndpoint(ext, (PVOID)endpoint);
 }
 
 /* ------------------------------------------------------------------ */
@@ -8131,6 +8255,7 @@ static ULONG xhciDevIsoTransferEvent(PXHCI_EXTENSION ext,
     ULONG errorsBefore;
     ULONG missedBefore;
     ULONG awaitingBefore;
+    ULONG tailBefore;
     ULONG unmatchedBefore;
 
     ring = binding->Ring;
@@ -8222,6 +8347,7 @@ static ULONG xhciDevIsoTransferEvent(PXHCI_EXTENSION ext,
     errorsBefore = queue->IsoPacketErrors;
     missedBefore = queue->IsoMissedService;
     awaitingBefore = queue->IsoGroupsAwaitingTail;
+    tailBefore = queue->IsoTailEvents;
     unmatchedBefore = queue->UnmatchedEvents;
 
     if (XhciXferIsoEvent(queue, ring, slotId, dci, event->Param0,
@@ -8236,6 +8362,7 @@ static ULONG xhciDevIsoTransferEvent(PXHCI_EXTENSION ext,
     ext->IsoMissedServiceTotal += queue->IsoMissedService - missedBefore;
     ext->IsoGroupsAwaitingTailTotal +=
         queue->IsoGroupsAwaitingTail - awaitingBefore;
+    ext->IsoTailEventsTotal += queue->IsoTailEvents - tailBefore;
     ext->UnmatchedEventsTotal += queue->UnmatchedEvents - unmatchedBefore;
 
     if (result.Action == XHCI_XFER_ACTION_COMPLETE) {
@@ -8862,9 +8989,36 @@ static VOID xhciDevFinishSetAddress(PXHCI_EXTENSION ext,
         /* Aborted, or torn down, while the command was in flight. The command
          * still completed and its effect on the slot is real; there is simply
          * nobody left to tell. */
+        /*
+         * Logged, because "nobody left to tell" is itself a reading: usbport
+         * waits for this transfer on an INFINITE, non-alertable
+         * `KeWaitForSingleObject` - a NULL timeout in every usbport in
+         * `tools\` that resolves symbols (XP, Vista and Windows 7, both
+         * architectures), read 2026-09-12 - so a completion with nothing to
+         * complete means that wait was already
+         * answered by some other path. The durable witness is
+         * `SetAddressIntercepts` against `DevicesAddressed`.
+         */
+        XHCI_DBG_VALUE_LIMITED("slot: Address Device completed with no "
+                               "SET_ADDRESS to answer, device address",
+                               dev->DeviceAddress);
         return;
     }
     dev->PendingSetAddress = NULL;
+    /*
+     * **The status usbport actually receives for the intercepted SET_ADDRESS**,
+     * which is what decides whether `USBPORT_InitializeDevice` goes on to
+     * `USBPORT_PokeEndpoint` (the EP0 reopen) or frees the address and deletes
+     * the device handle: it tests the completion status and branches on
+     * negative. 2026-09-12 left this unreadable from our side - the value is
+     * `address << 16 | usbdStatus >> 16`, so 0x00030000 is address 3 completed
+     * SUCCESS and 0x0003C000 is address 3 completed with a failure class.
+     * Durable witness: `SetAddressIntercepts` and `DevicesAddressed`.
+     */
+    XHCI_DBG_VALUE_LIMITED("slot: SET_ADDRESS answered to usbport, "
+                           "address << 16 | usbd status >> 16",
+                           (((ULONG)dev->DeviceAddress) << 16) |
+                               (((ULONG)usbdStatus >> 16) & 0xFFFFUL));
     transfer->Next = NULL;
     transfer->UsbdStatus = usbdStatus;
     /* SET_ADDRESS has no data stage, so the byte count is zero by construction
@@ -9061,10 +9215,24 @@ VOID XhciSlotCommandEvent(PXHCI_EXTENSION ext,
      * usbport's EP0 pointing at something no lookup answers for. It is handled
      * below instead: the accounting and the DCBAA clear happen, and then the new
      * tenancy starts its chain over from `ENABLE_SLOT`, which is exactly what a
-     * re-entry that finds no slot already does. It is reachable through the one
-     * path that owes a Disable Slot from a record a reopen can still find: a
-     * failed `xhciDevPrepareSlot` leaves `FAILED`, and `xhciDevByHubPort`
-     * excludes only `FREE` and `GONE`.
+     * re-entry that finds no slot already does.
+     *
+     * **What made it reachable no longer does.** This used to say a failed
+     * `xhciDevPrepareSlot` leaves a `FAILED` record that `xhciDevByHubPort`
+     * still admits, since that lookup excludes only `FREE` and `GONE` - which
+     * was true until the 2026-09-16 audit's B5 routed that failure through
+     * `xhciDevTeardown`, so the record is `GONE` and no reopen finds it. The
+     * guard stays because it is about the shape - a Disable Slot completing
+     * into a record a new tenancy has taken over - rather than about the path
+     * that used to produce it. **No path is known to reach it now**, and that
+     * is the honest statement: the obvious candidate, a teardown racing a
+     * reopen, does not, because both run under the controller lock and
+     * whichever goes first settles it - a teardown marks the record GONE
+     * before it owes the Disable Slot, and both reopen lookups exclude GONE.
+     * Kept defensively, as a guard on a shape that costs one comparison, and
+     * NOT as a claim that something reaches it. *(An earlier version of this
+     * paragraph asserted the teardown race as the live path; Codex traced the
+     * transitions and it does not hold.)*
      *
      * `XhciSlotCommandLost` deliberately does **not** take this guard. There the
      * command's effect is unknown rather than known-stale, so it may have
@@ -9170,13 +9338,52 @@ VOID XhciSlotCommandEvent(PXHCI_EXTENSION ext,
             XhciLogNoteLocked(ext, "slot.enabled",
                               (slotId << 8) | dev->HubPort);
             if (!xhciDevPrepareSlot(ext, dev)) {
-                dev->PendingOp = XHCI_DEV_OP_DISABLE_SLOT;
-                dev->State = XHCI_DEV_STATE_FAILED;
+                /*
+                 * **Torn down rather than left FAILED holding an owed Disable
+                 * Slot.** A slot was granted and its carve could not be
+                 * prepared, so the slot has to go back - but a FAILED record is
+                 * still one `xhciDevByHubPort` admits, and the re-open that
+                 * finds it runs `xhciDevOweFromSlotState`, which re-derives
+                 * `PendingOp` from the hardware slot state and writes
+                 * `ADDRESS_BSR` over the Disable Slot. The command is then
+                 * never issued and the Slot ID leaks until an unplug. GONE is
+                 * the state that says "this record's device has left"; the
+                 * teardown owes the same Disable Slot behind the same
+                 * quiescence ordering, and the next open on this port
+                 * allocates a fresh record rather than inheriting this one's
+                 * slot (the 2026-09-16 audit's B5).
+                 *
+                 * Reachable only if `xhciDevPrepareSlot` fails after the
+                 * `MaxSlotsEn` check has passed, which is why it went
+                 * unnoticed.
+                 */
                 ext->CommandFailures++;
+                xhciDevTeardown(ext, dev);
                 break;
             }
             if (dev->EndpointExtension != NULL) {
                 ((PXHCI_ENDPOINT)dev->EndpointExtension)->SlotId = slotId;
+            }
+            /*
+             * **A record failed while its Enable Slot was in flight stays
+             * failed - with its slot prepared.** A root-port re-entry at a
+             * speed this driver cannot address runs `xhciDevFailRecord` on the
+             * RESERVED record, and this arm used to write ENABLED and owe
+             * `ADDRESS_BSR` over it, so the pump built an Address Device with
+             * mps0 = 0, refused it and failed the record a second time with a
+             * `CommandFailures` the controller never earned (the 2026-09-17
+             * audit's B4). The slot is still prepared above, because a FAILED
+             * record is one `xhciDevByHubPort` admits: the next valid
+             * address-0 open re-enters through `xhciDevReenterAtDefault`,
+             * which reads the Output Slot Context and owes `ADDRESS_BSR`
+             * against `Ep0Ring` - and only this arm ever carves either (Codex
+             * round 1 on the first draft, which kept FAILED *before* the
+             * prepare and left a ring address of zero for that re-entry to
+             * fail on). The teardown's Disable Slot gives the slot back as it
+             * does for any FAILED record.
+             */
+            if (dev->State == XHCI_DEV_STATE_FAILED) {
+                break;
             }
             dev->State = XHCI_DEV_STATE_ENABLED;
             dev->PendingOp = XHCI_DEV_OP_ADDRESS_BSR;
@@ -9839,6 +10046,14 @@ static VOID xhciDevDisown(PXHCI_EXTENSION ext, PXHCI_DEVICE dev, ULONG hubPort)
     dev->EndpointExtension = NULL;
     /* The binding this debt would have been paid through has just gone. */
     xhciDevDropInvalidate(ext, &dev->Flags, XHCI_DEV_FLAG_INVALIDATE_EP0);
+    /*
+     * And so has the one an intercepted SET_ADDRESS would complete through.
+     * It owns no TRBs, so the DMA rule that keeps the queues standing does not
+     * apply; held, `xhciDevOwedOp` derives `ADDRESS_SET` from it above the
+     * DISOWNED gate, and the pump would address a device usbport has destroyed
+     * and then complete through its freed endpoint (the 2026-09-17 audit's B3).
+     */
+    xhciDevCancelSetAddress(ext, dev, XHCI_USBD_STATUS_CANCELED);
     ext->DevicesDisownedOut++;
     XHCI_DBG_VALUE_CHANGED("slot: port disowned a device, hub port << 8 | slot",
                            (hubPort << 8) | dev->SlotId);
@@ -10515,21 +10730,62 @@ VOID XhciSlotLeaveSubmit(PXHCI_EXTENSION ext)
      */
 }
 
+/*
+ * The three entry points to the drain differ only in what they are allowed
+ * to hand to usbport on the Version 300 tier: nothing, everything because
+ * usbport's EpList lock is held, everything because a lifecycle path or the
+ * poll's fallback says so. The admission is an argument and not a field so
+ * that it belongs to this call on this CPU.
+ */
+#define XHCI_DELIVER_NONE   0UL
+#define XHCI_DELIVER_LOCKED 1UL
+#define XHCI_DELIVER_FORCED 2UL
+
+static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
+                                   PVOID lockedEndpoint);
+
 /* IRQL: <= DISPATCH_LEVEL, controller lock **not** held. */
 VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext)
 {
+    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_NONE, NULL);
+}
+
+VOID XhciSlotDeferredWorkForEndpoint(PXHCI_EXTENSION ext,
+                                     PVOID endpointExtension)
+{
+    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_LOCKED, endpointExtension);
+}
+
+VOID XhciSlotDeferredWorkForced(PXHCI_EXTENSION ext)
+{
+    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_FORCED, NULL);
+}
+
+static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
+                                   PVOID lockedEndpoint)
+{
     KIRQL oldIrql;
     PXHCI_TRANSFER transfer;
+    PXHCI_TRANSFER prev;
     PVOID endpointExtension;
+    PVOID pollEndpoint;
+    ULONG pollRequested;
+    ULONG heldOtherCounted;
     ULONG passEpoch;
     ULONG heldBySubmitCounted;
     ULONG heldByPassCounted;
+    ULONG heldForPollCounted;
+    ULONG deliveredLocked;
+    KIRQL deliveryIrql;
 
     if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
         return;
     }
     heldBySubmitCounted = 0;
     heldByPassCounted = 0;
+    heldForPollCounted = 0;
+    heldOtherCounted = 0;
+    pollRequested = 0;
 
     XhciControllerLockAcquire(&oldIrql);
     if (ext->DeferredBusy) {
@@ -10591,6 +10847,35 @@ VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext)
          * step off the 500 ms poll.
          */
         transfer = ext->CompletionHead;
+        prev = NULL;
+        pollEndpoint = NULL;
+        /*
+         * Issue 8 (XHCI_EXTENSION.DeliverPerEndpointOnly): a locked callback
+         * delivers only the oldest completion of the endpoint whose lock
+         * usbport holds. Anything else stays parked, and the pass asks
+         * usbport to poll the endpoint at the head, once, so that it is
+         * collected under its own lock rather than by the fallback.
+         */
+        if (transfer != NULL && ext->DeliverPerEndpointOnly) {
+            pollEndpoint = transfer->EndpointExtension;
+            if (admit == XHCI_DELIVER_LOCKED) {
+                while (transfer != NULL &&
+                       (lockedEndpoint == NULL ||
+                        transfer->EndpointExtension != lockedEndpoint)) {
+                    prev = transfer;
+                    transfer = transfer->Next;
+                }
+                if (transfer == NULL) {
+                    prev = NULL;
+                    if (!heldOtherCounted) {
+                        heldOtherCounted = 1;
+                        ext->CompletionsHeldOtherEndpoint++;
+                    }
+                } else if (transfer == ext->CompletionHead) {
+                    pollEndpoint = NULL;
+                }
+            }
+        }
         if (transfer != NULL && ext->SubmitDepth != 0) {
             /*
              * Latched once per pass (Phase 7 review, B5): this sits inside the
@@ -10622,10 +10907,45 @@ VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext)
             }
             transfer = NULL;
         }
+        /*
+         * The third hold, and unlike the two above it is about usbport's
+         * state rather than this driver's: on the Version 300 tier the
+         * completion service is safe only from a callback usbport made under
+         * its EpList lock (XHCI_EXTENSION.DeliverUnderUsbportLockOnly). A
+         * pass reached from anywhere else - the event DPC, a root-hub query,
+         * the health poll - leaves the completion for the next PollEndpoint,
+         * unless a lifecycle path or the poll's fallback has forced it.
+         */
+        deliveredLocked = 0;
+        if (transfer != NULL && ext->DeliverUnderUsbportLockOnly) {
+            if (admit == XHCI_DELIVER_LOCKED) {
+                deliveredLocked = 1;
+            } else if (admit == XHCI_DELIVER_NONE) {
+                if (!heldForPollCounted) {
+                    heldForPollCounted = 1;
+                    ext->CompletionsHeldForPoll++;
+                }
+                transfer = NULL;
+            }
+        }
         if (transfer != NULL) {
-            ext->CompletionHead = transfer->Next;
+            if (prev != NULL) {
+                prev->Next = transfer->Next;
+            } else {
+                ext->CompletionHead = transfer->Next;
+            }
+            if (ext->CompletionTail == transfer) {
+                ext->CompletionTail = prev;
+            }
             if (ext->CompletionHead == NULL) {
-                ext->CompletionTail = NULL;
+                ext->CompletionFallbackArmed = 0;
+            }
+            if (ext->DeliverUnderUsbportLockOnly) {
+                if (deliveredLocked) {
+                    ext->CompletionsDeliveredLocked++;
+                } else {
+                    ext->CompletionsDeliveredForced++;
+                }
             }
             transfer->Next = NULL;
             if (ext->CompletionsOwed != 0) {
@@ -10687,6 +11007,15 @@ VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext)
              * endpoint what kind it is would be a second statement of a fact
              * that can drift.
              */
+            /*
+             * **At DISPATCH_LEVEL, whatever the caller's IRQL** (issue 7).
+             * On the 300 tier the service queues usbport's done DPC before
+             * storing its queued state; below DISPATCH that DPC runs on
+             * this CPU inside the window and the work is dropped for ever.
+             * The delivery lock guards nothing - it is the raise, and it is
+             * never held together with the controller lock.
+             */
+            XhciDeliveryLockAcquire(&deliveryIrql);
             if ((transfer->Flags & XHCI_XFER_FLAG_ISOCH) != 0) {
                 if (XhciRegPacket.UsbPortCompleteIsoTransfer != NULL) {
                     (VOID)XhciRegPacket.UsbPortCompleteIsoTransfer(
@@ -10699,6 +11028,7 @@ VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext)
                     transfer->TransferParameters, transfer->UsbdStatus,
                     transfer->BytesTransferred);
             }
+            XhciDeliveryLockRelease(deliveryIrql);
             XhciControllerLockAcquire(&oldIrql);
             /* Only if it is still ours to clear. The binaries say the service
              * call re-enters no miniport slot (the corrected comment at the
@@ -10709,6 +11039,22 @@ VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext)
                 ext->CompletingTransfer = NULL;
             }
             XhciControllerLockRelease(oldIrql);
+            continue;
+        }
+
+        /*
+         * Issue 8: nothing this pass could hand over, so ask
+         * usbport to poll the endpoint whose completion is oldest. Once a
+         * pass, because the request is idempotent and the loop would
+         * otherwise repeat it for as long as the completion stays parked.
+         */
+        if (pollEndpoint != NULL && !pollRequested) {
+            pollRequested = 1;
+            if (XhciRegPacket.UsbPortInvalidateEndpoint != NULL) {
+                ext->CompletionPollInvalidates++;
+                (VOID)XhciRegPacket.UsbPortInvalidateEndpoint(ext,
+                                                              pollEndpoint);
+            }
             continue;
         }
 
@@ -10896,12 +11242,37 @@ VOID XhciSlotPoll(PXHCI_EXTENSION ext)
 {
     KIRQL oldIrql;
     ULONG i;
+    ULONG force;
 
     if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
         return;
     }
+    force = 0;
 
     XhciControllerLockAcquire(&oldIrql);
+    /*
+     * The delivery gate's safety net (XHCI_EXTENSION.DeliverUnderUsbportLockOnly):
+     * a completion usbport's own polling has not collected within
+     * XHCI_COMPLETION_FALLBACK_MS is delivered from here, at DISPATCH under
+     * the delivery lock but outside usbport's EpList lock. That is the
+     * contract's transient hazard rather than its permanent one, and it is
+     * taken only because the alternative is a request that never completes.
+     * Counted, because a nonzero reading says usbport stopped polling an
+     * endpoint that still owed work.
+     */
+    if (ext->DeliverUnderUsbportLockOnly) {
+        if (ext->CompletionHead == NULL) {
+            ext->CompletionFallbackArmed = 0;
+        } else if (!ext->CompletionFallbackArmed) {
+            ext->CompletionFallbackArmed = 1;
+            ext->CompletionFallbackStamp = ext->PollClockMs;
+        } else if ((ext->PollClockMs - ext->CompletionFallbackStamp) >=
+                   XHCI_COMPLETION_FALLBACK_MS) {
+            ext->CompletionFallbackArmed = 0;
+            ext->CompletionFallbackPolls++;
+            force = 1;
+        }
+    }
     for (i = 0; i < XHCI_MAX_SLOTS; i++) {
         PXHCI_DEVICE dev = &ext->Devices[i];
 
@@ -10943,5 +11314,9 @@ VOID XhciSlotPoll(PXHCI_EXTENSION ext)
     }
     XhciControllerLockRelease(oldIrql);
 
-    XhciSlotDeferredWork(ext);
+    if (force) {
+        XhciSlotDeferredWorkForced(ext);
+    } else {
+        XhciSlotDeferredWork(ext);
+    }
 }

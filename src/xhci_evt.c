@@ -88,12 +88,12 @@ static VOID xhciPublishErdp(PXHCI_EXTENSION ext, ULONG ehb)
  * MiniportInterruptsSpinLock and the driver-image controller lock - a handler
  * that could block or spin would hold both while it did.
  *
- * Exactly one arm acts - Command Completion, since task 7 - and every other one
- * says which task or phase owns acting on it. That is not a placeholder: the
- * only two events a controller can currently produce are a Port Status Change
- * and the completion of the No Op self-test, and the Phase 4 checkpoint asks
- * precisely that both be *observed*. Counting each type and naming the port is
- * exactly what that checkpoint reads.
+ * **Four arms act**: Command Completion (task 7), Port Status Change, Transfer
+ * Event and Host Controller Event. Every other one counts its type and says
+ * which task or phase owns acting on it. *(Command Completion was the only one
+ * that acted when this comment was written, and the sentence stayed as the
+ * other three were built out - the 2026-09-16 audit's B10. Counting each type
+ * and naming the port is still what the Phase 4 checkpoint reads.)*
  *
  * The command arm may read CRCR and request a controller reset. The read stays
  * inside the stable controller lock.
@@ -203,7 +203,7 @@ static ULONG xhciHandleEvent(PXHCI_EXTENSION ext, const XHCI_TRB *trb)
          * (**Not the only place Event Lost is reported**, which audit round 7
          * corrected elsewhere: a TD-related one also arrives as a Transfer Event
          * with code 32 and halts that endpoint, 4.10.1 p.173. Both routes
-         * escalate, from here and from `xhciXferCodeInfo`'s `Fatal`.)
+         * escalate, from here and from `XhciXferCodeInfo`'s `Fatal`.)
          *
          * Dropped events is what makes this fatal rather than a statistic. Every
          * completion this driver matches is matched by identity - a command by

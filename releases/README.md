@@ -24,9 +24,11 @@ published under a number is wrong, cut the next version through
 place leaves two different byte states answering to one version name, and
 nothing a user holds says which one they have.
 
-The one qualification is a version nobody holds. Until the first upload, a
-finding against the current version re-cuts it under the same number with
-`-Force`, because a number that was never given to anyone has not been spent;
+The one qualification is a version nobody holds through the public channel.
+Until the first public upload (no GitHub release exists), a finding against
+the current version re-cuts it under the same number with `-Force`, because
+a number that was never published has not been spent - a cut writes files
+here, a publish uploads one, and only the second spends the number;
 `1.0.0.0` was re-cut that way on 2026-08-30, and `1.0.2.0` three times on
 2026-09-07. Once a version has been uploaded, the rule above is absolute.
 
@@ -48,6 +50,20 @@ registry reference and the release history. It assumes the reader has the
 directory and nothing else. The same script generates it, and its procedure is
 transcribed from `docs/using/release-notes.md`; when that file changes, the
 template near the end of `make-release.ps1` has to change with it.
+
+The owner set the readme's shape on 2026-09-18, and the template holds to it:
+the top is two short paragraphs around a point-form list of the operating
+systems; the log request asks for `FULL.LOG`, and for `PROBE.LOG` only if the
+full run did not finish; the reporting text is an unnumbered "ISSUE REPORTING"
+section ahead of CONTENTS, and there is no section on what the version number
+means. **Windows Server 2003 is not named** in the readme or in the
+`history.md` entry it embeds, and **F8 is not named** either: the x64 NT 6.x
+requirement is written as "driver signature enforcement must be disabled",
+since F8 is not the only way to do it. The release notes and `README.md`
+follow the F8 rule too; they still name Server 2003 x64, which the owner has
+not asked to change. A change to the readme after a cut is a re-cut with
+`-Force`, and the asset size recorded in the roadmap and the run sheet
+follows it.
 
 `xhciqual/` carries the DOS qualifier and only its read-only path. The numbered
 `.BAT` wrappers stay in the repository, because they drive the staged active
@@ -82,13 +98,19 @@ releases/
   1.0.0.0/
     readme.txt           generated - the standalone install and usage guide
     LICENSE              copied from the repository root; the readme cites it
-    release/
+    release-x86/
       xhci98.inf
-      xhci98.sys         the build to install
-    debug/
+      xhci98.sys         the build to install, 32-bit Windows
+    debug-x86/
       xhci98.inf
       xhci98.sys         the same driver, for diagnosis only - it carries no
                          per-line trace either; that is the qemu flavour's
+    release-x64/         an ordinary cut publishes all four; see below
+      xhci98.inf         the .NTamd64 INF, from src\xhci98-amd64.inf
+      xhci98.sys         the amd64 build, 64-bit Windows
+    debug-x64/
+      xhci98.inf
+      xhci98.sys
     xhciqual/
       XHCIQUAL.EXE       the DOS "will this machine work" checker
       XHCIQUAL.MAP       turns a crash address back into a source location
@@ -138,7 +160,11 @@ stay markdown: they are read here, in the repository.
 
 `src\xhci98.inf` names two files in `[SourceDisksFiles]`, and both are this
 project's own work: `xhci98.sys` and `xhci98.inf`. A version directory
-carries exactly those two per flavour, and so does the release download.
+carries exactly those two per published directory, and so does the release
+download. `src\xhci98-amd64.inf` names the same two, and
+`scripts\inf-gate\test-inf-checks.ps1` compares the two files'
+`[SourceDisksFiles]` directly so that the 64-bit media cannot quietly grow a
+third.
 
 Four files the driver depends on are not on the media, because they are
 the operating system's own: `usbd.sys` (the USB 2.0 root hub imports it on
@@ -157,7 +183,17 @@ and the Windows setup engine copies each from the OS's own install source,
 the CABs on the hard disk or the Windows 98 CD, and the NT targets'
 `Driver Cache\i386`, never overwriting a file already there. On an xHCI-only
 Windows 98 machine the install therefore asks for the Windows 98 SE CD; the
-generated `readme.txt` says so in its section 3. Until 1.0.1.0 the NT path
+generated `readme.txt` says so in its section 3. That paragraph describes
+the four install paths of the 32-bit INF's NT 5.x era; since `1.1.0.0` the
+two INFs carry five install sections between them and not all of them copy.
+The 64-bit INF's `[Xhci.Dev.NTamd64]` fetches the same four files on Windows
+XP x64 from `Driver Cache\amd64`, where `usbd.sys` and `usbui.dll` come from
+`driver.cab` and `usbport.sys` and `usbhub.sys` from `sp2.cab`, with no
+prompt. The two `Xhci.Dev6` sections, `[Xhci.Dev6.NTx86]` in the 32-bit file
+and `[Xhci.Dev6.NTamd64]` in the 64-bit one, copy `xhci98.sys` alone: every
+install of Windows Vista and Windows 7 already carries all four files, and
+their file queue aborts on a `LayoutFile` copy (design record 11 section 12,
+decision 13). Until 1.0.1.0 the NT path
 copied `usbd.sys` only, and an NT install that had never seen a USB
 controller had no `usbport.sys` for the driver to load against (Code 39,
 measured on a Windows XP guest on 2026-09-03).
@@ -175,31 +211,46 @@ so the download cannot drift back.
 powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor release
 ```
 
-assembles the same two files under `out\pkg-release\` with every gate run
-against them; installing from a version directory here is the same thing.
+assembles the same two files under `out\pkg-release-x86\` with every gate run
+against them; installing from a version directory here is the same thing. The
+output directory carries the architecture for the same reason the published one
+does - `-Arch amd64` writes `out\pkg-release-amd64\`, around
+`src\xhci98-amd64.inf` and `src\objfre\amd64\xhci98.sys`.
 
 ### What actually gets uploaded
 
 `make-release.ps1` produces two things, and only one of them is committed:
 
-- `releases\<version>\`: tracked, two files per flavour, what you see here.
+- `releases\<version>\`: tracked, two files per published directory, what you
+  see here.
 - `out\upload-<version>\` and `out\xhci98-<version>.zip`: git-ignored, the
   same tree. The zip is the GitHub release asset. It is the one of the two
   named after the project because it is what a stranger downloads and has to
   recognise afterwards; the directory is a workspace inside `out\`. The
   archive carries no top-level directory, so its name is all the download
   says about itself until it is unpacked.
+  Since 2026-09-17 the cut assembles both under `.staging` names before the
+  publish swap and moves them onto these names only after the swap has
+  succeeded (the old zip is renamed `.previous` for the moment of the move);
+  a failure in that last step leaves the release published and prints
+  `make-release.ps1 -UploadSetOnly -Version <version>` as the repair.
 
-The assembly gates each flavour directory as the install media it is
-(`check-inf.ps1 -PackageDir`: every file the INF names present, and no
-Microsoft file beside them), refuses a file the INF does not name, and
+The assembly gates each published directory as the install media it is
+(`check-inf.ps1 -PackageDir`, under the architecture that directory is for:
+every file the INF names present, and no Microsoft file beside them), refuses
+a file the INF does not name, and
 writes the archive's entry names with forward slashes so that `unzip` on a
 Linux or macOS host unpacks it into directories. Do not hand-assemble the
 asset.
 
 ## release or debug
 
-`release/` is the build to install. No per-line tracing: none of the
+`release-x86/` is the build to install (`release-x64/` on 64-bit Windows, when
+a cut carries one). What this section is about is the flavour half of the name;
+the architecture half decides nothing else, and the paragraphs below are true of
+both.
+
+`release` is the build to install. No per-line tracing: none of the
 `XHCI_DBG_*` sites compile into it, so it does not carry the `0xE9` debug
 console and does not import `WRITE_PORT_UCHAR`. It does import `DbgPrint` and
 `KeGetCurrentIrql`, and neither is a leak:
@@ -221,7 +272,7 @@ however many times the code calls it, so the gate answers "may this binary
 import `DbgPrint` at all", not "how many call sites are there". Keeping the
 exception to one site is a review obligation on whoever adds the second one.
 
-`debug/` is for diagnosing a machine you cannot attach a debugger to. It
+`debug` is for diagnosing a machine you cannot attach a debugger to. It
 imports the same two symbols the release build does. What it adds over
 `release` is the DDK's own `DBG`: both flavours compile `/Oxs` and differ by
 `/Oy-` against `/Oy`, so the checked build keeps frame pointers, and it also
@@ -271,11 +322,56 @@ from.
 
 ### These are the names the whole repository uses
 
-| Published as | Build flavour | Built into |
-|---|---|---|
-| `release/` | `release` | `src\objfre\i386` |
-| `debug/` | `debug` | `src\objchk\i386` |
-| *(never published)* | `qemu` | `src\objchk_qemu\i386` |
+| Published as | Build flavour | Architecture | Built into |
+|---|---|---|---|
+| `release-x86/` | `release` | x86 | `src\objfre\i386` |
+| `debug-x86/` | `debug` | x86 | `src\objchk\i386` |
+| `release-x64/` | `release` | amd64 | `src\objfre\amd64` |
+| `debug-x64/` | `debug` | amd64 | `src\objchk\amd64` |
+| *(never published)* | `qemu` | either | `src\objchk_qemu\<arch>` |
+
+**A published directory is a flavour AND an architecture**, since roadmap task
+21.3. Both architectures' binaries are called `xhci98.sys` and both carry the
+same `DriverVer`, so they cannot share a directory; and the x86 pair is named
+`-x86` rather than left bare, because the moment a second set exists an
+untagged `release/` would mean "x86" without saying so and the download's
+`readme.txt` would have no single "INSTALL THIS ONE" to point at. That rename
+was free: no release has been uploaded publicly and no GitHub release exists,
+so no download has ever carried `release/`,
+and the write-once rule above leaves the four directories already cut exactly
+as they are. Their shape is what a cut produced on the day, which is what the
+"look in it rather than here" paragraph above is for.
+
+A wrong pick by a user is safe in both directions, which is what makes four
+flat siblings sound rather than a trap: the 64-bit setup engine ignores an
+undecorated models section outright and the 32-bit engines skip a
+`[Manufacturer]` line decorated `NTamd64`, so the wrong directory offers no
+driver at all rather than installing a binary that cannot load.
+
+**An ordinary cut publishes all four directories.** `make-release.ps1 -Arch`
+defaults to `x86,x64` since the owner's instruction of 2026-09-09, on the
+strength of roadmap task 21.5: the amd64 package installed through
+`src\xhci98-amd64.inf`'s `.NTamd64` half on a Windows XP Professional x64 SP2
+guest and passed every checkpoint clause on the `qemu` flavour, and then the
+`release` flavour - the one this publisher actually stages - was installed and
+read separately on the same guest, because a flavour that is never published
+cannot stand in for one that is. It defaulted to `x86` alone until that ran.
+`scripts\package\test-package.ps1` asserts the default, so changing it back is
+as deliberate an act as changing it forwards was.
+
+**Read the x64 half of a cut as narrowly as its evidence is**: three guests
+(Windows XP x64, Vista x64 and Windows 7 x64), all virtual machines, never
+real hardware, the two NT 6.x ones loading the driver only on an F8 boot with
+driver signature enforcement disabled, against the x86 half's install legs
+(Windows 98 on both USB 2.0 stacks, Windows ME, Windows 2000, 32-bit Windows
+XP, and from `1.1.0.0` 32-bit Vista and Windows 7). Publishing it by default
+is what claiming the target means, not a claim that the two halves are
+equally attested.
+
+`-UploadSetOnly` is the one mode that does not follow the default: it derives
+the architectures from the published tree instead, because every version
+published before `1.1.0.0` is x86-only and re-assembling one must not fail for
+want of a 64-bit directory that cut never wrote.
 
 There is a third flavour, and it is kept out of here by design. `qemu` is
 `debug` plus the port-`0xE9` trace mirror and the `HAL.dll!WRITE_PORT_UCHAR`
@@ -287,12 +383,19 @@ directory by nothing; `make-release.ps1` publishes the two rows above and no
 other.
 
 `-Flavor`, `out\pkg-*`, `build-driver.cmd` and all of `docs/contributing/` say
-`release` and `debug` too, so a release directory needs no translating. The
+`release` and `debug` too, so a published directory name is its flavour word
+plus its architecture and needs no other translating. The
 DDK's own words for the same two builds are free and checked. "Free" reads as
 free of charge to anyone who has not met that convention, and "checked" says
 nothing at all to a first-time reader, so they survive only where the DDK
 itself requires them: `setenv.bat`'s flavour argument, and the `objfre` /
-`objchk` directories it writes into. Both published names are 8.3-clean,
+`objchk` directories it writes into. **The published names are not 8.3-clean**
+- `release-x86` is eleven characters - which is a cost task 21.3 took
+deliberately, because the alternative is two architectures' `xhci98.sys` in one
+directory or names that do not say which is which, and because nothing in the
+install route resolves a directory by name: the user points Have Disk at
+whichever directory they opened. A Win98 setup engine reading this off media
+sees a short-name alias,
 because a release directory can end up on media a Windows 98 setup engine has
 to read.
 
@@ -307,17 +410,21 @@ Read it before installing anything.
 powershell -ExecutionPolicy Bypass -File scripts\package\make-release.ps1
 ```
 
-It takes the version from the INF's `DriverVer`, packages both flavours
-through `make-package.ps1` (the binaries come from a prior
-`scripts\build-driver.cmd all`) so every gate that protects an install runs, copies only
-the two publishable files out of each, and refuses if the two binaries are not
-actually distinct or are not actually the flavours they are being published
-as. An existing version directory is never overwritten without `-Force`.
+It takes the version from the INF's `DriverVer`, packages every
+flavour/architecture leg through `make-package.ps1` (the binaries come from a
+prior `scripts\build-driver.cmd all`, plus `scripts\build-driver.cmd all -amd64`
+for a 64-bit cut) so every gate that protects an install runs, copies only the
+two publishable files out of each, and refuses if a flavour pair's two binaries
+are not actually distinct - compared within an architecture, where a collision
+is the only kind that could happen - or are not actually the flavours they are
+being published as. An existing version directory is never overwritten without
+`-Force`.
 
 Bumping the version is a separate step. The number and the release date are
-edited in `src\xhci_version.h`, and `src\xhci98.inf`'s `DriverVer` is changed
-to match, since an INF cannot include a header; the INF gate checks the two
-agree on every build. `xhciqual/qual.h` and `xhcisnap/xhcisnap.c` expand the
+edited in `src\xhci_version.h`, and the `DriverVer` in **both**
+`src\xhci98.inf` and `src\xhci98-amd64.inf` is changed to match, since an INF
+cannot include a header; the INF gate checks each against the header on every
+build, and the self-tests check the two INFs against each other. `xhciqual/qual.h` and `xhcisnap/xhcisnap.c` expand the
 header's macro, because both tools are published inside the release directory
 and both print their version into what a user sends back, and
 `make-release.ps1` throws on a staged tool older than the header or on a tool

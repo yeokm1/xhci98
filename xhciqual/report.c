@@ -224,7 +224,8 @@ static void print_quirks(const QUIRK *q)
     if (q->flags & QF_FW_SPI)
         qprintf("    - firmware from on-card SPI flash (no upload)\n");
     if (q->flags & QF_SPURIOUS)
-        qprintf("    - spurious-success: always use residual length\n");
+        qprintf("    - spurious Success event after a short packet on the "
+                "same TD: ignore it\n");
     if (q->flags & QF_BEI)
         qprintf("    - never set BEI in isoch TRBs\n");
     if (q->flags & QF_PME_STUCK)

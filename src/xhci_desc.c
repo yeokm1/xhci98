@@ -275,7 +275,7 @@ ULONG XhciDescCommit(PXHCI_DESC_STATE state, const XHCI_DESC_ISO_TABLE *table)
      * rather than overlooked.** `xhci_caps.c` copies `XHCI_HC_INFO` field-wise
      * precisely to keep MSVC 6.0 from emitting a `memcpy` call, because this
      * driver decides its import list rather than letting codegen decide it.
-     * The same hazard exists here - `XHCI_DESC_TABLE` is 184 bytes - and the
+     * The same hazard exists here - `XHCI_DESC_ISO_TABLE` is 184 bytes - and the
      * trade is different: a field-wise copy of this structure would be a second
      * spelling of its layout that a future field could silently fall out of,
      * which is a worse failure than the one being avoided. **The backstop is

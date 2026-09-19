@@ -87,8 +87,11 @@ function ConvertFrom-BaseStampName {
 # The image names the run must never boot, whatever their snapshots say.
 # Design record 09 section 6: Phase 10's images are not fresh and the run has
 # no way to make them so.  Compared by leaf name, case-insensitively, because
-# that is how they are named in every config this project has had.
-$script:ForbiddenFreshImages = @('win98.img', 'win2k.img', 'win2k-smp.img')
+# that is how they are named in every config this project has had. The two
+# NT 5.2 / NT 6.1 bases joined on 2026-09-18 with the targets cloned from them:
+# every other leg of this project boots them, so their current state is not
+# a clean install either.
+$script:ForbiddenFreshImages = @('win98.img', 'win2k.img', 'win2k-smp.img', 'winxp64.img', 'win7.img')
 
 # THE STAMP CHECK.  Returns the list of reasons this image must not be booted
 # by the post-release run; an empty list means it may.  Every clause is one
@@ -175,6 +178,42 @@ function Test-TargetInList {
     return $false
 }
 
+# WHICH OPERATING SYSTEM A TARGET RUNS. The first two families are named by
+# their Phase 10 ids and reached through `Like` (or the id itself), as they
+# always were; the two added for task 22.9 on 2026-09-18 carry an explicit
+# `Family`, because inheriting 2b's entries through `Like` would hand an NT 5.2
+# or NT 6.1 guest Windows 2000's ExpectNoDriver reasons, some of them false
+# there (CCID "arrived with Windows XP"). Returns win98, win2k, winxp64 or
+# win7, or throws naming what the config said.
+$script:TargetFamilies = @('win98', 'win2k', 'winxp64', 'win7')
+function Get-TargetFamily {
+    param([Parameter(Mandatory = $true)]$Target)
+    if ($Target.ContainsKey('Family') -and -not [string]::IsNullOrWhiteSpace($Target.Family)) {
+        $f = ([string]$Target.Family).ToLowerInvariant()
+        if ($script:TargetFamilies -notcontains $f) {
+            throw ("target '{0}' names Family '{1}'; this harness knows {2}" -f $Target.Id, $Target.Family, ($script:TargetFamilies -join ", "))
+        }
+        return $f
+    }
+    $base = if ($Target.ContainsKey('Like') -and $Target.Like) { [string]$Target.Like } else { [string]$Target.Id }
+    if ($base -eq '2a') { return 'win98' }
+    if ($base -eq '2b') { return 'win2k' }
+    throw ("target '{0}' has no Family and is neither 2a nor 2b nor `Like` one of them" -f $Target.Id)
+}
+
+# Which build a target runs: `Arch = 'amd64'` on the XP x64 target, x86 on
+# every other. It picks the offset table (offsets-amd64.txt beside
+# offsets.txt) and the qemu package directory, and the two must agree with the
+# guest - an amd64 extension read through the x86 table is wrong values, not
+# an error, which is why Assert-OffsetsFresh and the stamp check SIZEOF.
+function Get-TargetArch {
+    param([Parameter(Mandatory = $true)]$Target)
+    if (-not $Target.ContainsKey('Arch') -or [string]::IsNullOrWhiteSpace($Target.Arch)) { return 'x86' }
+    $a = ([string]$Target.Arch).ToLowerInvariant()
+    if ($a -notin @('x86', 'amd64')) { throw ("target '{0}' names Arch '{1}'; x86 and amd64 are the two builds" -f $Target.Id, $Target.Arch) }
+    return $a
+}
+
 # A target is a post-release target when its config says where it was cloned
 # from.  That key is what separates the two kinds of run: the ordinary matrix
 # never boots one of these, and the post-release run boots nothing else.
@@ -213,7 +252,7 @@ function Get-RowNoDriverProblems {
     if ($null -eq $Row -or -not $Row.ContainsKey('ExpectNoDriver')) { return $out }
     foreach ($k in @($Row.ExpectNoDriver.Keys)) {
         if ($KnownKeys -notcontains $k) {
-            $out += ("row {0}: ExpectNoDriver names '{1}', which is neither a target in this configuration nor one a target inherits from, so it declares nothing" -f $Row.Name, $k)
+            $out += ("row {0}: ExpectNoDriver names '{1}', which is neither a target the harness supports (config.sample.psd1) nor one this configuration lists or inherits from, so it declares nothing" -f $Row.Name, $k)
         }
         if ([string]::IsNullOrWhiteSpace([string]$Row.ExpectNoDriver[$k])) {
             $out += ("row {0}: ExpectNoDriver['{1}'] has no reason; the entry is printed in the report and an empty one reads as nothing" -f $Row.Name, $k)
@@ -250,23 +289,42 @@ function Get-ReplugOutcome {
 }
 
 # WHAT COUNTS AGAINST A TARGET'S VERDICT in the post-release run.  Design
-# record 09 sections 4.1, 4.2 and 5: FAIL counts; ERROR counts unless the
-# group ended on a row the matrix declared may wedge this target, which is the
-# composite row's pinned reading on Windows 98; NODRIVER counts unless the row
-# carries an ExpectNoDriver entry for the target; PASS, INERT and EXCLUDED do
-# not.  Returns $true when the row counts against the verdict.
+# record 09 sections 4.1, 4.2 and 5: FAIL counts; ERROR counts unless the row
+# is one the matrix declared may wedge this target AND what happened is a
+# wedge, which is the composite row's pinned reading on Windows 98; NODRIVER
+# counts unless the row carries an ExpectNoDriver entry for the target; PASS,
+# INERT and EXCLUDED do not.  Returns $true when the row counts against the
+# verdict.
+#
+# BOTH HALVES OF THE WEDGE WAIVER ARE REQUIRED.  Until the 2026-09-17 audit's
+# D1 the declaration alone waived any ERROR on the row - a refused device_add,
+# a device never on the bus, an unconfirmed device_del, identity drift, a
+# monitor timeout - all of them silent on the one row the declaration is keyed
+# to.  The declaration licenses one shape (design record 09 section 4.1: the
+# guest taken down), so $WedgeShape is what the runner measured: Test-WedgeShape
+# on the liveness probe, or the monitor gone with the row in flight.
 function Test-RowCountsAgainst {
     param(
         [Parameter(Mandatory = $true)][string]$Outcome,
         [bool]$NoDriverExpected = $false,
-        [bool]$WedgeDeclared = $false
+        [bool]$WedgeDeclared = $false,
+        [bool]$WedgeShape = $false
     )
     switch ($Outcome) {
         "FAIL"     { return $true }
-        "ERROR"    { return (-not $WedgeDeclared) }
+        "ERROR"    { return (-not ($WedgeDeclared -and $WedgeShape)) }
         "NODRIVER" { return (-not $NoDriverExpected) }
         default    { return $false }
     }
+}
+
+# Is a liveness verdict the shape a MayWedgeGuest declaration licenses?  A
+# guest that stopped executing, or a monitor that is gone, is; "alive" is not,
+# and neither is "unknown" - a probe that could not tell is not a wedge, and
+# waiving on it would waive the unmeasured.
+function Test-WedgeShape {
+    param([Parameter(Mandatory = $true)][string]$LivenessVerdict)
+    return ($LivenessVerdict -eq "not-executing" -or $LivenessVerdict -eq "unreachable")
 }
 
 # The header block that makes two releases' reports diffable against each
@@ -593,4 +651,41 @@ function Get-StampProblems {
         $problems += ("the last prep boot ran a driver with MiniPortExtensionSize={0} and the offset table says SIZEOF {1}: that is not the build under test. Reinstall from a package built from this tree (or regenerate the offsets), and confirm with -Status before stamping." -f $IdentSize, $TableSizeof)
     }
     return $problems
+}
+
+# WHERE THE QEMU PACKAGE IS.  make-package.ps1 names its default output
+# out\pkg-<flavour>-<arch>, and both harness scripts read the package from
+# here - prepare-image.ps1 to stage it on a transfer drive, run-matrix.ps1 to
+# name it in a post-release header.  They each read out\pkg-qemu until
+# 2026-09-16, a directory the packager had stopped writing, so a prep boot was
+# handed whatever that directory last held (a 1.0.2.0-era build, found that
+# day) and nothing said so.  The callers ask for the target's own
+# architecture (Get-TargetArch): x86 for every target but XP x64.
+function Get-QemuPackageDir {
+    param(
+        [Parameter(Mandatory = $true)][string]$Repo,
+        [ValidateSet('x86', 'amd64')][string]$Arch = 'x86'
+    )
+    return (Join-Path $Repo ("out\pkg-qemu-{0}" -f $Arch))
+}
+
+# Why the package cannot be used, or $null when it can.  A package is the INF
+# and the binary together.  The untagged out\pkg-qemu is named when it holds a
+# binary, because that is the stale copy the old path read, and it is refused
+# rather than used: its presence says nothing about which build it is.
+function Get-QemuPackageProblem {
+    param(
+        [Parameter(Mandatory = $true)][string]$Repo,
+        [ValidateSet('x86', 'amd64')][string]$Arch = 'x86'
+    )
+    $dir = Get-QemuPackageDir -Repo $Repo -Arch $Arch
+    if ((Test-Path -LiteralPath (Join-Path $dir "xhci98.inf")) -and (Test-Path -LiteralPath (Join-Path $dir "xhci98.sys"))) {
+        return $null
+    }
+    $build = ("Build it with: scripts\build-driver.cmd qemu, then scripts\package\make-package.ps1 -Flavor qemu -Arch {0}." -f $Arch)
+    $legacy = Join-Path $Repo "out\pkg-qemu"
+    if (Test-Path -LiteralPath (Join-Path $legacy "xhci98.sys")) {
+        return ("no qemu package at {0} (it needs xhci98.inf and xhci98.sys). {1} holds a binary, but make-package.ps1 no longer writes that directory, so it is an older build of unknown origin and is not used. {2}" -f $dir, $legacy, $build)
+    }
+    return ("no qemu package at {0} (it needs xhci98.inf and xhci98.sys). {1}" -f $dir, $build)
 }

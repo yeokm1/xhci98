@@ -3,11 +3,16 @@
 #
 # Build from a DDK environment prompt (scripts\local\ddk-debug.cmd), then
 # `cd src && build`. Debug output: src\objchk\i386\xhci98.sys; release
-# output: src\objfre\i386\xhci98.sys.
+# output: src\objfre\i386\xhci98.sys. An amd64 build of the same flavours
+# lands beside them in src\objchk\amd64 and src\objfre\amd64, because
+# build.exe appends the target architecture and BUILD_ALT_DIR is overridden
+# back to the flavour name - so a second architecture needs no second obj root
+# and renames nothing (design record 11 section 8).
 #
-# Prerequisite: usbport.lib must exist in this directory. It is a generated
-# import library, not a checked-in one (*.lib is git-ignored) - run
-# scripts\make-usbport-lib.cmd after a fresh clone.
+# Prerequisite: usbport.lib must exist in this directory - usbport_amd64.lib
+# for an amd64 build. It is a generated import library, not a checked-in one
+# (*.lib is git-ignored) - run scripts\make-usbport-lib.cmd after a fresh
+# clone, and scripts\make-usbport-lib.cmd -amd64 for the 64-bit one.
 #
 
 TARGETNAME=xhci98
@@ -113,7 +118,19 @@ SOURCES=xhci_mem.c    \
 # generated from __stdcall stubs, not from `lib /def:` - see
 # docs\contributing\build-and-test.md "Build Files" for why that distinction matters.
 #
+# TWO libraries, one per architecture, and they cannot be one file: amd64 has
+# no __stdcall name decoration, so the x86 lib's _Name@N symbols do not resolve
+# an amd64 miniport's references and vice versa. scripts\make-usbport-lib.cmd
+# -amd64 generates the second one; both are build artifacts and both are
+# git-ignored. _BUILDARCH is setenv.bat's own word for the target and is the
+# right discriminator here, because BUILD_ALT_DIR is deliberately overridden
+# back to the flavour name by the build wrapper and so carries no architecture.
+#
+!IF "$(_BUILDARCH)" == "AMD64"
+TARGETLIBS=.\usbport_amd64.lib
+!ELSE
 TARGETLIBS=.\usbport.lib
+!ENDIF
 
 #
 # Diagnostic-only escape hatch, empty in every normal build. Set it in the

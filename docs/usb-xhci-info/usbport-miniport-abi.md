@@ -165,6 +165,608 @@ lose the service pointers when `DriverEntry` returns.
 `DriverEntry` (when loaded purely as an export provider) just returns success
 [usbport/usbport.c:2931-2937].
 
+### The NT 5.2 amd64 lineage: the same call, every pointer widened
+
+Read 2026-09-08 from `tools/winxp64-extracted/usbport.sys`, 5.2.3790.3959
+(`srv03_sp2_rtm.070216-1710`), the Windows XP Professional x64 / Windows
+Server 2003 x64 build - a fifth lineage and the first 64-bit one. Method
+**static**: `link /dump /exports` and `/headers`, then `cdb.exe -z` for the
+two function bodies. Neither MSVC 6.0's `dumpbin` nor WDK 7.1's `link /dump
+/disasm` can disassemble amd64 (the latter wants `msdis160.dll`, which is not
+on the WDK media), so the tool differs from the one this document names
+elsewhere; `docs/contributing/design/11-x64-targets.md` section 3 has the
+command and the four files' hashes. The image loads at its preferred base
+`0x10000`, so each RVA below is a listed address minus `0x10000`.
+
+**Exports.** `8664 machine (x64)`; three functions, three names, ordinal base
+1, time date stamp `45D6899F`. `DllUnload` at `0x21A00`, `USBPORT_GetHciMn`
+at `0x21A60`, `USBPORT_RegisterUSBPortDriver` at `0x22030` - the same three
+names at the same three ordinals as every 32-bit lineage, undecorated (amd64
+has no `__stdcall` decoration).
+
+**`USBPORT_GetHciMn` returns `0x10000001`**, the XP-lineage value, in the
+same two-instruction body:
+
+```
+usbport!USBPORT_GetHciMn:                      ; RVA 0x21A60
+  b8 01 00 00 10    mov     eax,10000001h
+  c3                ret
+```
+
+So the accommodation this section already recommends - accept `0x57324B30`
+and `0x10000001`, refuse anything else - covers NT 5.2 amd64 unchanged. It is
+not a fourth constant, and `src/xhci_dispatch.c`'s lineage refusal needs no
+edit for it.
+
+**The version gate is unchanged and the copied sizes are the widened pair.**
+In `USBPORT_RegisterUSBPortDriver` the arguments settle into `rbx` =
+DriverObject, `esi` = Version, `rbp` = RegistrationPacket:
+
+```
+  RVA 0x22176  83 fe 64            cmp     esi,64h          ; Version >= 100 ?
+  RVA 0x221D8  b8 01 00 00 c0      mov     eax,0C0000001h   ; else STATUS_UNSUCCESSFUL
+  RVA 0x221F3  ba 50 02 00 00      mov     edx,250h         ; 592
+  RVA 0x221F8  41 b8 30 02 00 00   mov     r8d,230h         ; 560
+  RVA 0x2220C  81 fe c8 00 00 00   cmp     esi,0C8h         ; Version >= 200 ?
+  RVA 0x22220  44 0f 43 c2         cmovae  r8d,edx
+  RVA 0x22232  48 8d 4f 28         lea     rcx,[rdi+28h]    ; destination
+  RVA 0x22244  48 8b d5            mov     rdx,rbp          ; source = caller's packet
+  RVA 0x222E8  e8 ...              call    (the copy)
+```
+
+The destination sits inside a `0x278`-byte `'usbp'`-tagged allocation made at
+RVA `0x2214B` and zeroed before the copy; allocation failure returns
+`0xC000009A` at RVA `0x221E2`, success returns `STATUS_SUCCESS`.
+
+| | x86 | amd64 | identity |
+|---|---|---|---|
+| USB2 (`Version >= 200`) | `0x13C` = 316 | `0x250` = 592 | 40 + 69 x 4 -> 40 + 69 x 8 |
+| USB1 (`100 <= V < 200`) | `0x12C` = 300 | `0x230` = 560 | 40 + 65 x 4 -> 40 + 65 x 8 |
+
+Both are the exact 64-bit widening of the x86 pair: the ten leading `ULONG`
+data fields (`0x00`-`0x27`, 40 bytes) unchanged, every function pointer
+doubled. The service-pointer block widens the same way, and usbport's
+behaviour around it does not change - it writes the same 16 pointers into the
+caller's packet before copying it, at `0x1A0`, `0x1A8` ... `0x218`, which is
+the x86 block `0xE4`-`0x120` under the map `f(X) = 0x28 + (X - 0x28) * 2`.
+This is the same C declaration compiled for a wider pointer, not a
+re-specified interface.
+
+**A consequence worth stating**, because it is invisible from the source
+side: a `_WIN64` declaration of this packet must be **`0x250` bytes**, and a
+compiler's natural widening of the x86 declaration is not guaranteed to reach
+it. A `_WIN64` declaration built that way comes out at `0x248` - eight bytes
+short, which would have usbport copy eight bytes past the end of the
+miniport's static packet. A `C_ASSERT` on what the compiler produced cannot
+catch that, because it would simply agree with the compiler; only this
+measurement can.
+
+The map was then checked across the whole packet from the other side. The
+amd64 `usbehci.sys` fills its own packet (base RVA `0x9C60`, fixed by its four
+size stores at `+0x10`, `+0x14`, `+0x18` and `+0x24`) in `DriverEntry` at RVA
+`0x6180`, and **all 50 pointer slots it writes land on `f(X)` of a field the
+x86 record names**, from `OpenEndpoint` at `0x28` to `RebalanceEndpoint` at
+`0x220` and the last callback at `0x238`. `0x238` is `f(0x130)`, the slot
+before the x86 record's two trailing `Reserved` fields at `0x134` and `0x138`;
+under the same map those sit at `0x240` and `0x248`, which puts the end of the
+structure at `0x250` and accounts for the eight bytes exactly. Which usbport
+service occupies each of the sixteen service slots is not individually read -
+the x86 identities plus this map carry them, and a future caller of a service
+this driver does not use today should read its slot rather than trust that.
+
+### `USBPORT_RESOURCES` on NT 5.2 amd64 (`StartPA` does not widen)
+
+Read from the amd64 `usbehci.sys`'s `StartController` - the function its packet
+names at slot `0x48`, at RVA `0x82D0` - which receives the structure in `rdx`
+(kept in `r12`). The load widths are the field widths:
+
+```
+  movzx eax,byte ptr [r12]        ; ResourcesTypes, then and al,6 / cmp al,6
+  mov   eax,dword ptr [rdx+4]     ; HcFlavor        dword at 0x04
+  mov   rdx,qword ptr [r12+28h]   ; ResourceBase    QWORD at 0x28
+  mov   rdx,qword ptr [r12+38h]   ; StartVA         QWORD at 0x38
+  mov   r8d,dword ptr [r12+40h]   ; StartPA         DWORD at 0x40
+  cmp   byte ptr [r12+45h],0      ; IsChirpHandled  byte  at 0x45
+```
+
+| Offset | Width | Field | vs x86 |
+|---|---|---|---|
+| `0x00` | 4 | `ResourcesTypes` | `0x00` |
+| `0x04` | 4 | `HcFlavor` | `0x04` |
+| `0x08` | 4 | `InterruptVector` | `0x08` |
+| `0x0C` | 1 + 3 pad | `InterruptLevel` | `0x0C` |
+| `0x10` | 8 | `InterruptAffinity` | `0x10`, widened (`KAFFINITY`) |
+| `0x18` | 1 + 3 pad | `ShareVector` | `0x14` |
+| `0x1C` | 4 | `InterruptMode` | `0x18` |
+| `0x20` | 4 + 4 pad | `Reserved` | `0x1C` |
+| `0x28` | 8 | `ResourceBase` | `0x20`, widened (`PVOID`) |
+| `0x30` | 4 + 4 pad | `IoSpaceLength` | `0x24` |
+| `0x38` | 8 | `StartVA` | `0x28`, widened |
+| `0x40` | **4** | `StartPA` | `0x2C`, **not widened** |
+| `0x44`-`0x47` | 1 each | `LegacySupport`, `IsChirpHandled`, `Reserved2`, `Reserved3` | `0x30`-`0x33` |
+
+`sizeof` is `0x48`. **`StartPA` stays a `ULONG`**, so the common-buffer
+physical address is 32-bit on amd64 as it is on x86 and nothing after it
+shifts. Unlike the registration packet, this structure's amd64 layout *is* what
+a compiler's natural widening of the x86 declaration produces - which is why
+both had to be measured rather than one inferred from the other.
+
+### `USBPORT_ENDPOINT_PROPERTIES` on NT 5.2 amd64 (`BufferVA` is the hinge)
+
+Read 2026-09-09 from the amd64 `usbehci.sys`, method `static`. This is the
+structure every endpoint callback receives, and until this reading none of the
+six phase-21 measurements covered it.
+
+**The size comes from a copy rather than from adding the fields up.**
+`OpenEndpoint` at RVA `0x7A40` - packet slot `0x28`, so identified by the map
+rather than by a symbol - tags its endpoint extension `'20ep'` and then copies
+the caller's structure into it as nine 8-byte moves, `[rdx+0x00]` through
+`[rdx+0x40]` inclusive, landing at `epExt+0x08`. Nine qwords is `0x48` bytes;
+eight would be `0x40` and ten `0x50`. The extension's own fields resume at
+`epExt+0x58`, immediately past where the copy ends at `+0x50`, which says the
+same thing a second way.
+
+| Offset (amd64) | Bytes | Field | x86 | Instruction it was read from |
+|---|---|---|---|---|
+| `0x00` | 2 | `DeviceAddress` | `0x00` | `mov al,byte ptr [r12]` + `and eax,7Fh` |
+| `0x02` | 2 | `EndpointAddress` | `0x02` | `movzx ecx,word ptr [r12+2]` |
+| `0x08` | 4 | `DeviceSpeed` | `0x08` | `cmp dword ptr [rdx+8],2` |
+| `0x14` | 4 | `TransferType` | `0x14` | `mov r9d,dword ptr [rdx+14h]` |
+| `0x1C` | 4 | *padding* | - | implied by `BufferVA`'s alignment |
+| `0x20` | 8 | `BufferVA` | `0x1C` | `mov r15,qword ptr [rdi+20h]` |
+| `0x28` | 4 | `BufferPA` | `0x20` | `mov r13d,dword ptr [rdi+28h]` |
+| `0x2C` | 4 | `BufferLength` | `0x24` | `mov r14d,dword ptr [rdi+2Ch]` |
+| `0x38` | 2 | `HubAddr` | `0x30` | `movzx eax,word ptr [r12+38h]` + `and eax,7F0000h` |
+| `0x3A` | 2 | `PortNumber` | `0x32` | `movzx ecx,word ptr [r12+3Ah]` |
+
+`sizeof` is `0x48`. **`BufferVA` is the only member that widens**, and the four
+bytes of padding it forces at `0x1C` are the whole of why the structure grows:
+everything below it keeps its x86 offset, everything above it sits exactly 8
+higher, and both runs are pinned at both ends rather than at one point.
+
+`BufferPA` staying 4 bytes is the DMA reading restated from the consumer's
+side, and the control/bulk path makes the intent explicit - it advances
+`BufferVA` and `BufferPA` together by `0x100` and reduces `BufferLength`, which
+is a common-buffer carve. Like `USBPORT_RESOURCES` and unlike the registration
+packet, this layout *is* the compiler's natural widening; that it had to be
+measured to know so is the point.
+
+One field is not covered: `Direction` (`0x18` on both) is read by no path
+disassembled here. It lies between two measured anchors with no room to move,
+which is weaker than a reading and is recorded as such.
+
+### The DMA adapter is created 32-bit on amd64 too
+
+`IoGetDmaAdapter` (IAT RVA `0x2A0D0`, confirmed through its import-name-table
+entry) has exactly one call site in the whole image, `.text` RVA `0x313E`,
+inside a function starting at RVA `0x2340` (`.pdata` chains `0x2929`-`0x34F1`
+-> `0x234E`-`0x2929` -> `0x2340`-`0x234E`). The `DEVICE_DESCRIPTION` it passes
+in `rdx` is zeroed and filled at RVA `0x269F`-`0x270B`:
+
+```
+  mov  byte  ptr [rsp+8Ch],1           ; +0x04 Master            = 1
+  mov  byte  ptr [rsp+8Dh],1           ; +0x05 ScatterGather     = 1
+  mov  byte  ptr [rsp+90h],1           ; +0x08 Dma32BitAddresses = 1
+  mov  dword ptr [rsp+9Ch],5           ; +0x14 InterfaceType     = PCIBus
+  mov  dword ptr [rsp+0A0h],2          ; +0x18 DmaWidth          = Width32Bits
+  mov  dword ptr [rsp+0A8h],0FFFFFFFFh ; +0x20 MaximumLength
+```
+
+`Dma64BitAddresses` (`+0x0B`) is left zero by the five zeroing stores and never
+written. So the sentence this document already carries for the 32-bit builds -
+the high DWORD of a mapped address is zero *because the adapter is created
+32-bit*, not because any element writer forces it - holds unchanged on NT 5.2
+amd64, and holds regardless of how much RAM the machine has. The miniport rule
+does not change with it: the high DWORD is a value to check, never to assume.
+
+### The 6.0 and 6.1 lineages: a fourth export, four packet tiers, and a second DMA adapter
+
+Read 2026-09-09 from `tools/vista-x86-extracted/`, `tools/vista-x64-extracted/`,
+`tools/win7-x86-extracted/` and `tools/win7-x64-extracted/`: `usbport.sys` and
+`usbehci.sys` 6.0.6002.18005 (`lh_sp2rtm.090410-1830`) and 6.1.7601.17514
+(`win7sp1_rtm.101119-1850`), in both architectures - a sixth and seventh
+lineage. Method **static** throughout: `link -dump -exports`/`-headers`/
+`-imports`, then `cdb.exe -z` for the function bodies; nothing was executed and
+no guest was booted. `docs/contributing/design/11-x64-targets.md` section 3
+records the extraction and every file's size and SHA-256. Each image loads at
+its preferred base `0x10000`, so an RVA below is a listed address minus
+`0x10000`. The Windows XP SP3 x86 numbers quoted for comparison were re-read in
+the same pass, by the same tool, from `tools/winxpsp3-extracted/usbehci.sys`.
+
+**The short of it: for a miniport that registers with `Version = 200`, nothing
+in this interface has moved.** Five things did change, and none of them reaches
+this driver as it is built today - but one of them, the second DMA adapter on
+6.1, is a condition rather than an absence, and is the one to remember.
+
+**Exports - there are now four, and the ordinals shift.** All four builds
+export `DllInitialize` at ordinal 1, which pushes `DllUnload` to 2,
+`USBPORT_GetHciMn` to 3 and `USBPORT_RegisterUSBPortDriver` to 4. Every 32-bit
+NT 5.x lineage this project has read - NUSB 3.3, NUSB 3.6, SweetLow, Windows
+2000 SP4, Windows XP SP3 - and NT 5.2 amd64 export three, at ordinals 1/2/3.
+The names are unchanged and undecorated, and the import library
+`scripts\make-usbport-lib.cmd` generates binds **by name** - a PE import
+descriptor records the name, not the ordinal - so the shift is inert: a binary built against the generated `usbport.lib` resolves on 6.0 and
+6.1 exactly as it does on 5.x, and that script's exact-name check passes when
+handed one of these binaries as its reference.
+
+| Build | Machine | Time date stamp | `DllInitialize` | `DllUnload` | `USBPORT_GetHciMn` | `USBPORT_RegisterUSBPortDriver` |
+|---|---|---|---|---|---|---|
+| Vista x86 | `14C` | `49E01FCF` | `0x1D3FF` | `0x3041B` | `0x1D2EA` | `0x1DCFD` |
+| Vista x64 | `8664` | `49E02D1B` | `0x32E94` | `0x32F60` | `0x33048` | `0x33344` |
+| Windows 7 x86 | `14C` | `4CE79C15` | `0x17206` | `0x24D81` | `0x170F1` | `0x17AEB` |
+| Windows 7 x64 | `8664` | `4CE7A670` | `0x28C2C` | `0x28D24` | `0x28DB4` | `0x29060` |
+
+**`USBPORT_GetHciMn` returns `0x10000001` on all four** - the XP-lineage value,
+in the same two-instruction body, `b8 01 00 00 10` / `c3`, at the RVAs above.
+This was the sharpest edge in both Phase 21 and Phase 22: the 5.0 -> 5.1 step
+changed this constant while leaving the packet byte-identical, so a fourth
+constant on 6.0 or 6.1 would have been a code change to the *shipping* 32-bit
+binary. There is no fourth constant. `src/xhci_dispatch.c`'s lineage refusal
+needs no edit for Vista or Windows 7 in either architecture.
+
+**The version gate is unchanged; the packet now has four tiers and the
+Version-200 tier is the same size as ever.** `USBPORT_RegisterUSBPortDriver`
+still refuses `Version < 100` with `STATUS_UNSUCCESSFUL` and then selects a
+copy size by threshold. NT 5.x has two thresholds; 6.0 and 6.1 have four:
+
+| | `>= 100` | `>= 200` | `>= 300` (`0x12C`) | `>= 310` (`0x136`) | `'usbp'` allocation |
+|---|---|---|---|---|---|
+| NT 5.x x86 | `0x12C` | `0x13C` | - | - | |
+| Vista x86 | `0x12C` | **`0x13C`** | `0x1E0` | `0x1EC` | `0x208` |
+| Windows 7 x86 | `0x12C` | **`0x13C`** | `0x1E0` | `0x1FC` | `0x218` |
+| NT 5.2 amd64 | `0x230` | `0x250` | - | - | `0x278` |
+| Vista x64 | `0x230` | **`0x250`** | `0x368` | `0x380` | `0x3B8` |
+| Windows 7 x64 | `0x230` | **`0x250`** | `0x368` | `0x3A0` | `0x3D8` |
+
+Vista x86: gate at RVA `0x1DDC1` (`cmp eax,64h`), refusal at `0x1DDD8`; sizes at
+`0x1DE8B` (`0x12C`), `0x1DEBB`/`0x1DEE8` (`>= 0C8h` -> `0x13C`),
+`0x1DEEF`/`0x1DF30` (`>= 12Ch` -> `0x1E0`), `0x1DF37`/`0x1DF5F` (`>= 136h` ->
+`0x1EC`); copy at `0x1DF78`. Windows 7 x86: gate at `0x17B70`, refusal
+`0x17B7B`, base `0x12C` at `0x17B8E`, then `0x17C3D` (`add ebx,10h`, reaching
+`0x13C`), `0x17C44`, `0x17C65`; copy at `0x17C84`. Vista x64: gate at `0x334D1`,
+refusal `0x33544`, `mov edi,230h` at `0x3355B` then `0x336B3`, `0x336EE`,
+`0x33740`; copy at `0x33757`. Windows 7 x64: gate at `0x29125`, refusal
+`0x29133`, `mov eax,230h` / `lea ecx,[rax+20h]` / `cmovae eax,ecx` at
+`0x2922A`-`0x29232` (the flags come from the `cmp r13d,0C8h` at `0x2914A`), then
+`0x29245` and `0x2926F`; copy at `0x29293`.
+
+**usbport writes into the caller's packet before copying it, and at
+`Version = 200` it writes exactly what it always did.** The sixteen service
+pointers go in unconditionally, at `0xE4`-`0x120` on x86 and `0x1A0`-`0x218` on
+amd64 - the same block, at the same offsets, as every earlier lineage. The
+higher tiers add more: two at `0x1B0`/`0x1B4` (x86) and `0x308`/`0x310` (amd64)
+for `Version >= 300`, and one or two more for `Version >= 310` (Vista x86
+`0x1E4`; Windows 7 x86 `0x1E4` and `0x1EC`; Vista x64 `0x370`; Windows 7 x64
+`0x370` and `0x380`). **Those stores sit behind the version tests**, so a
+`Version = 200` miniport's `0x13C`/`0x250` packet is never written past
+`0x120`/`0x218`. That is the property that matters here: not merely that the
+copy is the right size, but that usbport does not touch the tail of a structure
+the miniport did not declare.
+
+**The wrapper around the packet moved, which no miniport reads but this document
+names elsewhere.** The `USBPORT_MINIPORT_INTERFACE` this driver never sees puts
+the packet at `interface+0x1C` on 6.0 and 6.1 x86 (from the copy destinations
+`lea eax,[ebx+1Ch]` and `lea eax,[edi+1Ch]`) and at `interface+0x38` on 6.0 and
+6.1 amd64, with `Version` at `interface+0x10` and `interface+0x20`
+respectively. The x86 value is a third one after XP/2000's `+0x14` and NUSB's
+`+0x10`; NT 5.2 amd64's is `+0x28`. Nothing here reads it - it is recorded
+because section 3's note on that offset would otherwise be stale, and because
+the DMA reading below depends on it.
+
+**The miniport callback block is unchanged, on all four, across all 50 slots.**
+Each `usbehci.sys` fills a static packet - base RVA `0xB1A0` on both x86 builds
+and `0xD2A0` on both amd64 builds, fixed by the four size stores at `+0x10`,
+`+0x14`, `+0x18` and `+0x24` - from `DriverEntry` (RVAs `0x6724` Vista x86,
+`0x67B0` Windows 7 x86, `0x7728` Vista x64, `0x763C` Windows 7 x64). Taking
+every pointer store into that packet and keeping those below the USB2 packet
+size gives, on both x86 builds, **exactly the 50 slots Windows XP SP3's
+`usbehci.sys` fills, at exactly the same offsets** (`0x028`-`0x0E0` less
+`0x08C`, plus `0x124`, `0x128`, `0x12C`, `0x130`); and on both amd64 builds,
+**exactly those 50 under `f(X) = 0x28 + (X - 0x28) * 2`** (`0x028`-`0x198` less
+`0x0F0`, plus `0x220`, `0x228`, `0x230`, `0x238`). Both comparisons were made
+set against set rather than by eye.
+
+Above the USB2 packet the shipping miniports fill more - x86 `0x16C`, `0x170`,
+`0x174`, `0x178`, `0x17C`, `0x180`, `0x1CC`, `0x1D8`, and on Windows 7 also
+`0x1F8`; amd64 `0x280`, `0x288`, `0x290`, `0x298`, `0x2A0`, `0x2A8`, `0x340`,
+`0x358`, and on Windows 7 also `0x398` - and **those offsets do not follow
+`f(X)`** (x86 `0x16C` would map to `0x2B0`, not `0x280`). The widening map is
+established for the USB2 packet and stops there; do not extend it into the
+version-300 region by arithmetic.
+
+**`USBPORT_RESOURCES` keeps its prefix and grows a tail.** Read from each
+`usbehci.sys`'s `StartController` - the function its own packet names at slot
+`0x38` (x86) / `0x48` (amd64), at RVAs `0x8FE8` Vista x86, `0x95DA` Windows 7
+x86, `0x9A3C` Vista x64, `0x9A98` Windows 7 x64 - where the load offsets and
+widths are the field offsets and widths:
+
+```
+Vista x64  (structure in rdx, kept in rbp)   Windows 7 x64  (kept in r12)
+  mov al,byte ptr [rbp]        0x00           mov eax,dword ptr [r12]      0x00
+  mov eax,dword ptr [rdx+4]    0x04           mov eax,dword ptr [r12+4]    0x04
+  mov r14,qword ptr [rbp+28h]  0x28           mov rsi,qword ptr [r12+28h]  0x28
+  mov rdx,qword ptr [rbp+38h]  0x38           mov rdx,qword ptr [r12+38h]  0x38
+  mov r8d,dword ptr [rbp+40h]  0x40 DWORD     mov r8d,dword ptr [r12+40h]  0x40 DWORD
+  cmp byte ptr [rbp+45h],r13b  0x45           cmp byte ptr [r12+45h],r15b  0x45
+```
+
+**`StartPA` is still a 4-byte read at `0x40` on both**, so NT 5.2 amd64's M4
+result carries to 6.0 and 6.1 unchanged and `XhciCheckResourceBase(ULONG_PTR
+startVA, ULONG startPA)` still has the right signature. On x86 the fields this
+driver uses are at their NT 5.x offsets too: Windows XP SP3's `usbehci.sys`
+reads `0x00`, `0x04`, `0x20`, `0x28`, `0x2C` and `0x31` and nothing else, and
+Vista and Windows 7 read that same set (Windows 7 adds `0x1C`).
+
+What is new is past the end. Vista x86 also reads `0x3C`, `0x40`, `0x5C` and
+`0x60`; Windows 7 x86 reads `0x3C`, `0x5C` and `0x84`; Vista x64 reads `0x50`,
+`0x58`, `0x90` and `0x94`; Windows 7 x64 reads `0x50`, `0x90` and `0xC0`. So the
+structure is larger than the `0x34` / `0x48` this document records, in a
+version-dependent way. That costs a miniport nothing - usbport allocates it,
+fills it and hands over a pointer, and reading a prefix of a longer structure is
+safe - but it does mean **`sizeof(USBPORT_RESOURCES)` is not a fact about 6.0 or
+6.1**, and nothing here may treat this driver's own declaration's size as the
+operating system's.
+
+**The DMA adapter: still 32-bit on Vista, and on Windows 7 still 32-bit for this
+driver - by a condition rather than unconditionally.** `IoGetDmaAdapter` is
+imported by `usbport.sys` and not by `usbehci.sys`, in every lineage read here
+including Windows XP SP3 and NT 5.2 amd64.
+
+Vista has exactly one call site in each architecture - x86 IAT RVA `0x3404C`,
+call at `0x1ACBD`, `DEVICE_DESCRIPTION` zeroed and filled at
+`0x1AC79`-`0x1ACAC`; amd64 IAT RVA `0x3B038`, call at `0x4E23`, descriptor
+filled at `0x4DDB`-`0x4E11` - and both fill it the way NT 5.2 amd64 does:
+
+```
+  +0x00 Version           = 0        +0x14 InterfaceType     = 5 (PCIBus)
+  +0x04 Master            = 1        +0x18 DmaWidth          = 2 (Width32Bits)
+  +0x05 ScatterGather     = 1        +0x1C DmaSpeed          = 0
+  +0x08 Dma32BitAddresses = 1        +0x20 MaximumLength     = 0xFFFFFFFF
+  +0x0B Dma64BitAddresses left zero by the zeroing store and never written
+```
+
+(On Vista x64 the two constants arrive in registers: `mov r11d,2` at RVA
+`0x4B54` and `lea ebp,[r11+3]` at `0x4B61` supply `DmaWidth = 2` and
+`InterfaceType = 5`.)
+
+**Windows 7 has two call sites, and the second asks for a 64-bit adapter** - x86
+`0x1543E` and `0x155E8` (IAT RVA `0x28060`), amd64 `0x43ED` and `0x4670` (IAT
+RVA `0x30040`). The first is the Vista descriptor above, unchanged - x86
+`mov byte ptr [ebp-58h],1` at `0x1541B` is `Dma32BitAddresses` - and its adapter
+goes to `FdoExtension+0x5C4` (x86). The second sets **`Dma64BitAddresses` at
+`+0x0B`** and leaves `Dma32BitAddresses` zero: x86 `mov byte ptr [ebp-55h],1` at
+`0x155C5`, amd64 `mov byte ptr [rsp+9Bh],r14b` at `0x463D`, where `r14b` is the
+same register that supplies `Master` and `ScatterGather` two stores earlier.
+`InterfaceType = 5` and `DmaWidth = 2` as before, and the adapter goes to
+`FdoExtension+0x5CC` (x86).
+
+That second call is gated, and the gate is the miniport's own declared version.
+On x86 the test is a small routine at RVA `0x13200`:
+
+```
+  mov   eax,dword ptr [esi+328h]        ; the USBPORT_MINIPORT_INTERFACE
+  cmp   dword ptr [eax+10h],136h        ; interface Version >= 310 ?
+  jb    -> return 0xC0000002 (STATUS_NOT_IMPLEMENTED), flag left alone
+  add   eax,214h                        ; = packet + 0x1F8 (the packet is at +0x1C)
+  cmp   dword ptr [eax],0               ; is that callback slot filled ?
+  je    -> return 0xC0000002
+  call  dword ptr [eax]                 ; ask the miniport
+  ...   mov dword ptr [esi+628h],eax    ; FdoExtension+0x628 = the answer
+```
+
+and the caller reads `FdoExtension+0x628` at `0x1559C`: when it is zero it jumps
+to `0x15610` and **copies the 32-bit adapter and its map-register count into the
+64-bit slots** instead of creating a second adapter. The amd64 test is the same
+thing inlined: `cmp dword ptr [rax+20h],136h`, then `cmp qword ptr
+[rax+3D0h],r15` - interface `Version` at `+0x20` and packet at `+0x38`, so
+`+0x3D0` is packet `0x398`, which is exactly the extra slot Windows 7's own
+amd64 `usbehci.sys` fills. The flag lands in `FdoExtension+0x84C`.
+
+`xhci98.sys` registers with `USB20_MINIPORT_INTERFACE_VERSION` (200) and
+declares a `0x13C` packet with nothing at `0x1F8`, so **on Windows 7 the 64-bit
+adapter path is unreachable for it**: usbport creates the 32-bit adapter, finds
+the flag zero, and uses that one adapter for both roles. The sentence this
+document already carries therefore still holds on 6.1 - the high DWORD of a
+mapped address is zero because the adapter is created 32-bit - but it now holds
+*for this driver's declared version* rather than for every miniport on the
+system, which is a materially weaker statement than the one NT 5.x supports.
+The miniport rule is unchanged and is what covers the difference: the high DWORD
+is a value to check, never to assume (`src/xhci_xfer.c:542`).
+
+### The Version 300 tier, slot by slot - read 2026-09-11 for roadmap task 22.5
+
+Everything above reads the 6.0 and 6.1 packets from the outside: sizes,
+copy boundaries, which slots Microsoft's own `usbehci.sys` fills. This section
+reads them from the inside, because the owner's decision of 2026-09-11 (design
+record 11, decision 12) is to present `Version = 300` to NT 6.x, and the
+question that decides whether that is safe is not "what is the layout" but
+"what does usbport do with each slot when a miniport leaves it zero". All of
+it is `static`, all four NT 6.x binaries plus the four NT 5.x controls, and
+the method changed in one way that made it an afternoon rather than a week:
+**Microsoft publishes symbol files for all twelve binaries**, and with them
+loaded every call from usbport into the miniport goes through a named wrapper
+of the form `usbport!MPf_<CallbackName>` (48 on Vista x86, 51 on Windows 7
+x86; the amd64 builds inline about two thirds of them). `x usbport!MPf_*` is
+therefore the complete index of what NT 6.x usbport can ask a miniport to do,
+and `uf` on each wrapper gives the slot, the gate, and the arguments.
+`legal-provenance.md` section 2 identifies the symbol files and section 4
+carries the rows; `lessons.md` has the method note.
+
+**The shape of the tier.** Registration copies `0x1E0` (x86) / `0x368`
+(amd64) at `300 <= Version < 310`, against `0x13C` / `0x250` at 200. The
+difference is **twelve `ULONG` data fields followed by 29 pointer-sized
+callback slots**, and the arithmetic closes exactly on both architectures:
+x86 `0x13C + 12*4 = 0x16C`, `0x16C + 29*4 = 0x1E0`; amd64
+`0x250 + 12*4 = 0x280`, `0x280 + 29*8 = 0x368`. So the amd64 image of an x86
+300-tier slot is `0x250 + (X - 0x13C)` for the twelve data fields and
+`0x280 + (X - 0x16C) * 2` for the pointers - a different map from the USB2
+packet's `f(X)`, which is why the earlier note said not to extend `f(X)` by
+arithmetic. Every offset below was checked against both maps on both amd64
+builds rather than derived from them.
+
+**The twelve data fields** (x86 packet offset / amd64 packet offset):
+
+| x86 | amd64 | What usbport reads it as | Reader and gate | Vista usbehci / Win7 usbehci |
+|---|---|---|---|---|
+| `0x13C` | `0x250` | count of **additional common buffers** usbport allocates for the miniport before `StartController`, capped at 8 | `USBPORT_AllocateControllerCommonBuffers`, only when `MPx_MpRevision >= 300` (vista-x86 `0x2C4C3` / `0x2C4D4`, win7-x86 `0x25C1D` / `0x25C2E`, vista-x64 `0x13CED`, win7-x64 `0x137C1`); the count is also written to `USBPORT_RESOURCES+0x38` and each buffer's VA/PA to the pairs after it | 2 / 1 |
+| `0x140`-`0x15C` | `0x254`-`0x270` | the eight sizes, one per buffer | same function, the loop after the count | `0x40000`, `0x800` / `0x20000` |
+| `0x160` | `0x274` | a context size for the USBX bandwidth model | `MPx_HsbControllerContextSize` (x86); `USBPORT_InitializeHsbController` reads it inline on amd64 | 0 / 0 |
+| `0x164` | `0x278` | the same, per transaction translator | `MPx_HsbTtContextSize`; amd64 `USBPORT_InitializeTT` | 0 / 0 |
+| `0x168` | `0x27C` | the same, per endpoint | `MPx_HsbEndpointContextSize`; amd64 `USBPORT_OpenEndpoint` | 0 / 0 |
+
+All three context-size readers test `MiniPortFlags & 0x400` first and fall
+back to a usbport global when it is clear; this driver's flags are `0xB5`, so
+they are never read. **A zero count allocates nothing and writes
+`USBPORT_RESOURCES+0x38 = 0`; there is no division and no minimum.** Verdict
+for all twelve: zero is safe.
+
+**The 29 pointer slots.** Names are Microsoft's own, taken from the function
+`usbehci.sys` stores at the slot where it fills one and from the `MPf_`
+wrapper that reads it where it does not. "Gate" is what the wrapper tests
+before calling; every one of them NULL-checks the slot, and "`>= 300`" means
+it also tests the interface `Version` field first (x86 `interface+0x10`,
+amd64 `+0x20`). Slot `= interface+0x1C+X` on x86 and `interface+0x38+X` on
+amd64.
+
+| x86 | amd64 | Slot | Reached through | Gate | Verdict for this driver |
+|---|---|---|---|---|---|
+| `0x16C` | `0x280` | `ReleasePortControl` | `MPf_ReleasePortControl` (vista-x86 `0x3111D`, win7-x86 `0x2D0DE`; amd64 inline in `USBPORT_StopRootHubPdo` / `USBPORT_RestoreConfigFlag`) | `>= 300`, non-NULL | leave zero |
+| `0x170` | `0x288` | `ReadCfgFlag` (usbehci: `EHCI_ReadConfigFlag`) | `MPf_ReadCfgFlag` (`0x2631F` / `0x230F2`; amd64 inline in `ReadUsb2CfgFlag`) | `>= 300`, non-NULL, and `MiniPortFlags & 0x10` | leave zero |
+| `0x174` | `0x290` | `SetWakeOnConnect` (usbehci: `EHCI_RH_SetWakeConnect`) | `MPf_SetWakeOnConnect` (`0x3114F` / `0x1E6DC`; amd64 `MPf_SetWakeOnConnect`) | `>= 300`, non-NULL, else returns `STATUS_NOT_SUPPORTED` | leave zero |
+| **`0x178`** | **`0x298`** | **`InterruptDpcEx`** | `MPf_InterruptDpcEx` (`0x12C1E` / `0x1182D`), inline in `USBPORT_IsrDpc` on amd64 (`0x47742` / `0x3D548`) | non-NULL only - no version test, the copy length is the gate | **fill** - see the contract below |
+| `0x17C` | `0x2A0` | `NotifyTransferQueueState` | `MPf_NotifyTransferQueueState` (`0x1554A` / `0x18C4B`; amd64 `0x11223` / `0x111BB`) | `>= 300`, non-NULL; three arguments | leave zero |
+| `0x180` | `0x2A8` | `CheckHwSync` | `MPf_CheckHwSync` (`0x30E39` / `0x2CDFC`), from `USBPORT_ProcessNeoStateChangeList` and only for endpoints carrying flag `0x2000`, which `USBPORT_OpenEndpoint` sets only when `MiniPortFlags & 0x800` | `>= 300`, non-NULL | leave zero |
+| `0x184` | `0x2B0` | `UsbxInitHsbTransactionTranslator` | `MPf_Usbx...` from `MPx_InitializeHsbTt` | `>= 300`, non-NULL; the whole `Usbx` family is reached through `MPx_*` callers that test `MiniPortFlags & 0x400` | leave zero |
+| `0x188` | `0x2B8` | `UsbxInitHsbController` | `MPx_InitializeHsbController` | `>= 300`, non-NULL | leave zero |
+| `0x18C` | `0x2C0` | `UsbxInitHsbEndpoint` | `MPx_InitializeHsbEndpoint` | `>= 300`, non-NULL | leave zero |
+| `0x190` | `0x2C8` | `UsbxAllocateBandwidth` | `MPx_AllocateBandwidth` | non-NULL | leave zero |
+| `0x194` | `0x2D0` | `UsbxFreeBandwidth` | `MPx_FreeBandwidth` | non-NULL | leave zero |
+| `0x198` | `0x2D8` | no reader found in any of the four `.text` sections | - | - | leave zero |
+| `0x19C` | `0x2E0` | `UsbxPokeEndpoint` | `MPx_PokeEndpoint` | `>= 300`, non-NULL | leave zero |
+| `0x1A0` | `0x2E8` | `UsbxOpenEndpoint` | `MPx_OpenEndpoint` | `>= 300`, non-NULL | leave zero |
+| `0x1A4` | `0x2F0` | `UsbxQueryBandwidthData` | `MPx_QueryBandwidthData`; amd64 `USBPORT_ComputeAllocatedBandwidth` | `>= 300`, non-NULL | leave zero |
+| `0x1A8` | `0x2F8` | `UsbxQueryTtBandwidthData` | `MPx_QueryTtBandwidthData`; amd64 `USBPORT_ComputeAllocatedTtBandwidth` | `>= 300`, non-NULL | leave zero |
+| `0x1AC` | `0x300` | `UsbxQueryEpBandwidthData` | `MPx_QueryEpBandwidthData` | `>= 300`, non-NULL | leave zero |
+| `0x1B0` | `0x308` | **OUT** `UsbPortRequestAsyncCallbackEx` | written by `USBPORT_RegisterUSBPortDriver` at `>= 300` (vista-x86 `0x2DF17`, vista-x64 `0x436F3`) | - | declare as OUT, do not call |
+| `0x1B4` | `0x310` | **OUT** `UsbPortCancelAsyncCallback` | written at `>= 300` (`0x2DF21` / `0x43702`) | - | declare as OUT, do not call |
+| `0x1B8` | `0x318` | no reader found | - | - | leave zero |
+| `0x1BC` | `0x320` | no reader found | - | - | leave zero |
+| `0x1C0` | `0x328` | no reader found | - | - | leave zero |
+| `0x1C4` | `0x330` | `CreateDeviceData` | `MPf_CreateDeviceData` (`0x2D0FB` / `0x26F32`) from `USBPORT_PnPAddDevice`; amd64 inline (`0x2EDD9` / `0x27FA3`) | `>= 300`, non-NULL | leave zero |
+| `0x1C8` | `0x338` | `DeleteDeviceData` | `MPf_DeleteDeviceData` (`0x311D3` / `0x2D154`) from `USBPORT_FdoPnP`; amd64 inline (`0x3005D` / `0x28CE4`) | `>= 300`, non-NULL | leave zero |
+| `0x1CC` | `0x340` | `DbgFreeEndpoint` | `MPf_DbgFreeEndpoint` (`0x1F2BB` / `0x1C8DF`; amd64 `0x119A2` / `0x1193D`) | non-NULL, and a device-extension flag | leave zero |
+| `0x1D0` | `0x348` | no reader found | - | - | leave zero |
+| `0x1D4` | `0x350` | no reader found | - | - | leave zero |
+| `0x1D8` | `0x358` | `HaltController` | `MPf_HaltController` (`0x30AC7` / `0x2CADC`) from `USBPORT_Core_NukeAllEndpoints`; amd64 inline (`0x2DD57`, Win7 `USBPORT_Core_ZapAllEndpoints` `0x27265`) | non-NULL | leave zero |
+| `0x1DC` | `0x360` | `Get32BitMicroFrameNumber` | `MPf_Get32BitMicroFrameNumber` (`0x309DC` / `0x2CA01`) from `USBPORTBUSIF_UsbdBusQueryBusTimeEx`; amd64 inline (`0x21594` / `0x1D494`) | non-NULL, else the bus interface answers `-1` | leave zero |
+
+**Above the 300 copy, for completeness and because one of them has no NULL
+check.** `0x1E0` / `0x368` is the root-hub async command callback, called by
+`USBPORT_RootHub_AsyncCommand` (vista-x86 `0x3E241`, win7-x86 `0x32E6D`,
+amd64 `0x3BF5C` / `0x31904`) **without testing the slot**; its only caller,
+`USBPORT_RootHub_Endpoint0`, reaches it only when `MiniPortFlags & 0x4000`
+(vista-x86 `0x20836`, win7-x86 `0x1D29A`). A miniport that does not set
+`0x4000` never gets there, and this one does not; **do not set `0x4000`.**
+`0x1E4` / `0x370` is OUT `UsbPortRh_Complete` and `0x1E8` / `0x378` is
+`StopControllerWithInterrupts` (`MPf_StopControllerWithInterrupts`,
+`>= 310`, non-NULL); Vista's tier ends at `0x1EC` / `0x380`. Windows 7 adds
+OUT `UsbPortEtwWrite` at `0x1EC` / `0x380`, `GetContainerIdForPort` at
+`0x1F0` / `0x388` and `SetContainerIdForPort` at `0x1F4` / `0x390` (both
+`>= 310`, non-NULL), and `GetHcCapabilities` at `0x1F8` / `0x398` - the
+64-bit DMA gate already recorded above - ending at `0x1FC` / `0x3A0`. Nothing
+in this paragraph is reached at `Version = 300`.
+
+**What `300` turns on that `200` did not, among the slots this driver already
+fills.** Three wrappers test `>= 300` *before* reading a slot that exists in
+the 200 packet, so at 200 those callbacks were never called on NT 6.x at all:
+
+- **`CloseEndpoint` (`0x34`)** - `MPf_CloseEndpoint` (vista-x86 `0x1F330`,
+  win7-x86 `0x1C952`; the amd64 wrapper carries the same `cmp ...,12Ch`) is
+  the **only** call through that slot in either x86 binary. A Version 200
+  miniport on NT 6.x never has an endpoint closed. At 300 the call comes,
+  under the miniport spin lock unless `MiniPortFlags & 0x10000`, with the
+  endpoint context at `+0x194` as on NT 5.x.
+- **`RebalanceEndpoint` (`0x124`)** - `MPf_RebalanceEndpoint` (`0x31205` /
+  `0x2D186`): `>= 300`, non-NULL, arguments (extension, parameters at
+  `+0x118`, context at `+0x194`) as on NT 5.x.
+- **`TakePortControl` (`0x130`)** - `MPf_TakePortControl` (`0x262ED` /
+  `0x21010`): `>= 300`, non-NULL, one argument.
+
+All three are implemented and have run on the NT 5.x targets, so this is a
+note for the guest step rather than a design change: expect `cb CloseEndpoint`
+lines on Vista and Windows 7 that the 2026-09-10 logs could never show.
+
+**The `InterruptDpcEx` contract, both sides.** Consumer: `USBPORT_IsrDpc`
+(vista-x86 `0x11DFA`, win7-x86 `0x12D85` region) takes the device extension's
+DPC spin lock at DPC level, reads its own flags byte, shifts bit 5 down to make
+the `BOOLEAN enableInterrupts` argument, calls the slot with (extension,
+enableInterrupts), and keeps the `ULONG` result: `test al,3` (vista-x86
+`0x11FA0`, win7-x86 `0x12E1D`) clears device-extension flag `0x10000` when
+either bit is set, and after the lock is released the same two bits decide
+whether `USBPORT_Ev_Rh_IntrEp_Invalidate` is called (vista-x86 `0x1204C`,
+win7-x86 `0x12E96`) - the root-hub interrupt endpoint is invalidated so the
+hub driver polls port status. Bits 0 and 1 are treated identically; nothing
+else in the return value is read. Producer: Vista x86 `EHCI_InterruptDpcEx`
+(`0x16A44`) returns **2** when its port scan, taken on a port-change
+interrupt, found a port with `PORTSC & 0x2A` (connect, enable or overcurrent
+change), **1** when the transfer interrupt fired with a non-zero private
+counter at `extension+0xC`, and **0** otherwise; it re-enables the
+controller's interrupt mask at the end when `enableInterrupts` is TRUE,
+exactly as the NT 5.x contract has it. **Microsoft serves both slots with one
+function**: Vista's and Windows 7's `EHCI_InterruptDpc`, the `0x4C` slot, is a
+five-instruction thunk that jumps to `EHCI_InterruptDpcEx` (`0x16C0C` and
+`0x16D50`), so the NT 5.x caller receives a `ULONG` in `eax` it never reads.
+And **NT 6.x never reads the old slot**: no read of `interface+0x68` (x86) or
+`interface+0xA8` (amd64) follows an interface load anywhere in the four
+`.text` sections.
+
+**`MiniPortFlags` on NT 6.x.** Microsoft's own values, from each
+`usbehci.sys` `DriverEntry`: XP SP3 and XP x64 `0x295` with `Version = 200`;
+Vista x86 and x64 `0xA95` with `Version = 310` (`push 136h` / `mov edx,136h`);
+Windows 7 x86 and x64 `0x80A95`, also 310. The bits NT 6.x usbport tests on
+the interface's copy of the field, each with an else-path for a miniport that
+leaves it clear: `0x10` USB2 (many sites, set here), `0x40` do-not-lock-ISR
+(`USBPORT_MpInterrupts`), `0x400` the USBX bandwidth model (the `MPx_*`
+family and the three context sizes), `0x800` endpoint flag `0x2000` in place
+of `0x200` at `USBPORT_OpenEndpoint`, which routes state changes through
+`CheckHwSync`, `0x4000` the root-hub async command path, `0x10000`
+`CloseEndpoint` without the lock, `0x40000` an extra DPC signal in
+`USBPORT_Core_UsbHcIntDpc_Worker` and a second test in `USBPORT_DM_IoTimerDpc`
+(Windows 7 x86 `0x11564`, x64 `0x1F2C9`), and on Windows 7 `0x80000`, tested
+on a local copy in `MPf_SuspendController` (x86 `0x1E5D5`, x64 `0x112F6`).
+This driver's `0xB5` sets none of the opt-ins - `DISABLE_SS` (`0x20`) is not
+one of them, it is the start routine's selective-suspend switch above - which
+is the Vista-era default every one of those sites provides for.
+
+**Correction, 2026-09-17.** This paragraph also named
+`USBPORT_SyncPowerAndChirpUsb2Ports` (`0x2B118`) as a `0x80000` `MiniPortFlags`
+site. It is not one: that `0x80000` is a port-status bit out of
+`RH_GetPortStatus`, and the two happen to share a constant. The reading was
+re-taken during the issue 5 flag sweep, which had to enumerate every
+`MiniPortFlags` read in each build and so put every claimed site under the
+same test. `MPf_SuspendController` is the real `0x80000` flags site, and the
+amd64 address above is new with the correction.
+
+**The NT 5.x control.** Every `cmp` against `64h`, `0C8h`, `12Ch` or `136h`
+in the `.text` of XP SP3, XP x64, Windows 2000 SP4 and NUSB's `usbport.sys`:
+the registration gate and copy-size selection (`64h`, `0C8h`) and, on the
+three NT 5.x lineages, the `>= 200` chirp tests in the root-hub power path
+(`USBPORT_PoRequestCompletion`, `USBPORT_RootHub_PowerAndChirpAllCcPorts` or
+their unnamed Windows 2000 equivalents). **No NT 5.x or 9x-era usbport tests
+for 300 or 310 anywhere**, so a packet grown to the 300 tier and presented
+under `Version = 200` is copied to `0x13C` / `0x250` and treated exactly as
+before - by reading, not by hope.
+
+**What this settles for the design.** Declare the packet at `0x1E0` / `0x368`
+with the twelve `ULONG`s zero, `InterruptDpcEx` pointing at the same
+`ULONG`-returning DPC the `0x4C` slot points at, the two OUT service slots
+named, and every other 300-tier pointer NULL; present `300` to NT 6.x and
+`200` to everything else; leave `MiniPortFlags` as it is. Nothing in the
+tier requires a new callback, a new import, or a flag change. (The flag word
+did change later, at `1.1.0.0`, from `0x95` to `0xB5` - but for issue 5, not
+for this tier, and `DISABLE_SS` is read identically by every version.) Design
+record 11 section 6.5 carries the decision-side summary.
+
 ## 2. Constants
 
 ### Interface versions and packet version [usbmport.h:526-529, 636-637]
@@ -194,7 +796,7 @@ register call, since usbport replaces it.
 | `USB_MINIPORT_FLAGS_PORT_IO` | 0x0002 | I/O-port register space (UHCI); not xHCI |
 | `USB_MINIPORT_FLAGS_MEMORY_IO` | 0x0004 | MMIO register space (xHCI: set) |
 | `USB_MINIPORT_FLAGS_USB2` | 0x0010 | USB2-class miniport: enables the USB2 bandwidth budgeter, TT bookkeeping, `usbhub20` root hub |
-| `USB_MINIPORT_FLAGS_DISABLE_SS` | 0x0020 | (name per ReactOS; not set by usbehci) |
+| `USB_MINIPORT_FLAGS_DISABLE_SS` | 0x0020 | Name per ReactOS, and the name is exactly right: **it disables selective suspend for this controller and does nothing else**. Not set by usbehci; **set by `xhci98.sys` since 1.1.0.0**, and the whole of issue 5's fix. Measured on all nine usbport builds this driver runs under - see below |
 | `USB_MINIPORT_FLAGS_NOT_LOCK_INT` | 0x0040 | Skip `MiniportSpinLock` around Enable/DisableInterrupts [usbport.c:568-571] |
 | `USB_MINIPORT_FLAGS_POLLING` | 0x0080 | usbehci sets it alongside INTERRUPT [usbehci.c:3628-3632] |
 | `USB_MINIPORT_FLAGS_NO_DMA` | 0x0100 | Not for this project |
@@ -209,10 +811,58 @@ miniports differ as recorded below.
 Binary observation: the shipping 2195.x `usbehci.sys` builds set `0x95` =
 `INTERRUPT | MEMORY_IO | USB2 | POLLING`, without `WAKE_SUPPORT`; XP's sets
 `0x295`, i.e. ReactOS's set. The flag values decode cleanly against this table
-in both cases, so the table itself is corroborated. `xhci98.sys` uses the
-2195.x set (`0x95`): it is what both primary targets' own miniport declares,
-and it avoids committing the driver to real wake behaviour on Win2000 before
-any of it exists.
+in both cases, so the table itself is corroborated. `xhci98.sys` used the
+2195.x set (`0x95`) until `1.1.0.0` and now uses `0xB5`, that set plus
+`DISABLE_SS`: the 2195.x base is what both primary targets' own miniport
+declares and it avoids committing the driver to real wake behaviour on Win2000
+before any of it exists, and the one added bit is issue 5's fix.
+
+#### What `DISABLE_SS` does, on all nine builds (static)
+
+The question this answers is not "does the bit disable selective suspend" -
+the name says that - but "does it do anything ELSE", because a miniport flag
+is read by usbport in places a miniport cannot see. Every read of
+`MiniPortFlags` in each build's `.text` was enumerated from usbport's own copy
+of the registration packet (37 to 65 reads per build) and then swept in
+reverse for every test of bit 5.
+
+**Bit `0x20` is tested exactly once per build, in the start routine, after the
+registry reads, and does nothing but force the selective-suspend-disabled
+state.** On the NT 5.x-era builds it clears the FDO extension's "selective
+suspend allowed" flag `0x800` and sets `0x08000000` - NUSB `0x109BC`, SweetLow
+`0x11687`, Windows 2000 SP4 `0x10A2C`, XP x86 `0x11862`, XP x64 `0x129A5`. On
+NT 6.x it sets selective-suspend state 4 - Vista x86 `0x2AB35`, x64 `0x14C7A`,
+Windows 7 x86 `0x25308`, x64 `0x1427A`. Every reader treats that identically to
+the state the machine-wide `Services\USB\DisableSelectiveSuspend` produces
+(`0x08000000`, or state 3), which is what releases `1.0.0.0` to `1.0.2.0`
+shipped. Nothing tests the bit for S3/S4, D-state choice, wake, root-hub power
+or `EnIdleEndpointSupport`.
+
+Hand-verified on NUSB, because the sweep is only as good as its identification
+of which load is the flags word: `0x1094C mov ecx,[eax+14h]` loads packet+4
+(NUSB copies the packet to its record `+0x10` at `0x27836`), and its
+neighbours test `0x80`, `0x200` and `0x1` - POLLING, WAKE_SUPPORT and
+INTERRUPT, in a group that only the flags word can be.
+
+**The one route out of usbport, and it is unused.** On Vista and Windows 7 the
+bus-interface routine `USBPORTBUSIF_UsbdQueryControllerType` (Vista x86
+`0x2691D`, Windows 7 x86 `0x268F0`) hands the raw flags word to whoever holds
+the USBDI interface: `mov ecx,[fdo+310h]` / `mov ecx,[ecx+20h]` / store to the
+first output parameter (Vista x86 `0x26955`). `interface+0x20` is the flags
+word, confirmed by the identical addressing in `USBPORT_OpenEndpoint`'s `0x800`
+test at `0x1FB05`. Inside usbport nothing can tell state 4 from state 3; this
+is the only place above it that could.
+
+Nothing calls it. The slot is `interface+0x2C` on x86 (the table built in
+`USBPORT_GetBusInterfaceUSBDI`: Vista `0x227DE`, Windows 7 `0x21492`) and
+`interface+0x58` on amd64 (Vista x64 `0x212F7`, Windows 7 x64 `0x1D20D`). A
+byte sweep for every indirect call through that slot over all four NT 6.x
+`usbhub.sys` images returns zero; the adjacent slots `GetUSBDIVersion` and
+`QueryBusTime`, swept the same way as controls, return 4 and 5 per x86 build
+and 3 and 4 per x64 build. The few `mov reg,[reg+2Ch]` loads in the x86 hubs
+are unrelated and were each read. The claim is bounded by what is on the
+machine: the hub driver never asks, and a third-party holder of the interface
+is not something a reading here can enumerate.
 
 ### Bus bandwidth [usbmport.h:541-542]
 
@@ -313,7 +963,10 @@ rows in section 4.
 - `USBPORT_TRANSFER_DIRECTION_OUT 1` [usbmport.h:649].
 - Resources type bits (for `USBPORT_RESOURCES.ResourcesTypes`):
   `PORT 1, INTERRUPT 2, MEMORY 4` [usbmport.h:39-42]. EHCI refuses to start
-  unless the expected bits are present [usbehci.c:1176-1180].
+  unless the expected bits are present [usbehci.c:1176-1180]. **These are the
+  NT 5.x values and they do not hold on 6.0 or 6.1** - see "The 6.0 and 6.1
+  lineages" below, where a second port bit is inserted and interrupt and memory
+  each move up one place.
 - `USBPORT_INVALIDATE_CONTROLLER_RESET 1 / SURPRISE_REMOVE 2 /
   SOFT_INTERRUPT 3` - the `Type` argument of `UsbPortInvalidateController`
   [usbmport.h:489-491].
@@ -322,7 +975,12 @@ rows in section 4.
 
 Transcribed from [usbmport.h:544-634]. On x86 every field is 4 bytes
 (`ULONG`/`SIZE_T`/function pointer), so offsets are mechanical.
-`sizeof(USBPORT_REGISTRATION_PACKET) = 0x13C (316)`. The wrapper
+`sizeof(USBPORT_REGISTRATION_PACKET) = 0x13C (316)` in that header and in
+every NT 5.x and 9x usbport's copy; **since 2026-09-11 this driver's own
+declaration continues past `0x138` into the Version 300 tier and its
+`sizeof` is `0x1E0` (`0x368` on amd64)** - the table below is the 200 tier,
+unchanged, and section 1's "The Version 300 tier, slot by slot" is the rest.
+The wrapper
 `USBPORT_MINIPORT_INTERFACE` (usbport-internal: DriverObject 0x00,
 LIST_ENTRY 0x04, DriverUnload 0x0C, Version 0x10, Packet 0x14) is
 `C_ASSERT`ed at `32 + 76*sizeof(PVOID)` = 336 bytes on x86
@@ -331,7 +989,10 @@ when disassembling `USBPORT_RegisterUSBPortDriver`.
 
 That wrapper layout is not the same in every build, and only the wrapper
 differs. The ReactOS/Win2000/XP shape above puts the packet at +0x14; NUSB's
-`USBPORT.SYS` puts it at +0x10, having no `Version` field there. So an
+`USBPORT.SYS` puts it at +0x10, having no `Version` field there; Vista and
+Windows 7 x86 put it at +0x1C, and the two 64-bit lineages at +0x28 (NT 5.2
+amd64) and +0x38 (6.0 and 6.1 amd64) - see the 6.0/6.1 subsection in section
+1. So an
 indirect call read out of a disassembly must be converted to a packet offset
 per binary: `interface+0x13C` and `interface+0x138` are the same slot 0x128
 in different builds. Worked example, discriminators and evidence:
@@ -362,8 +1023,8 @@ writes back ("out"):
 | 0x3C | `StopController` | in | |
 | 0x40 | `SuspendController` | in | |
 | 0x44 | `ResumeController` | in | |
-| 0x48 | `InterruptService` | in | |
-| 0x4C | `InterruptDpc` | in | |
+| 0x48 | `InterruptService` | in | Same offset on every build read, NT 5.1 through 6.1, **within each architecture** - `0x48` on x86 and `0x68` on amd64, as the widening map further down gives it |
+| 0x4C | `InterruptDpc` | in | **This offset is NT 5.x/9x only.** NT 6.x moves the slot to `packet+0x178` (x86) / `packet+0x298` (amd64) - see the warning below the table |
 | 0x50 | `SubmitTransfer` | in | |
 | 0x54 | `SubmitIsoTransfer` | in | |
 | 0x58 | `AbortTransfer` | in | |
@@ -423,6 +1084,31 @@ writes back ("out"):
 | 0x130 | `TakePortControl` | in | |
 | 0x134 | `Reserved4` | - | sentinel-fill |
 | 0x138 | `Reserved5` | - | sentinel-fill |
+
+**THE TABLE ABOVE IS THE NT 5.x/9x PACKET, AND ONE FIELD IN IT DOES NOT SURVIVE
+NT 6.x.** Everything in this document is derived from the builds this driver
+targets - NUSB 5652, SP4 6681, XP SP3 5512 and their amd64 sibling - and those
+agree field for field. They are **not** a description of Vista or Windows 7. Of
+the divergences read so far (roadmap task 21.8;
+`contributing/design/11-x64-targets.md` sections 6.1-6.4), the one that changes
+this table is:
+
+| field | NT 5.x / 9x | NT 6.0 and 6.1 |
+|---|---|---|
+| `InterruptService` | `packet+0x48` (x86), `packet+0x68` (amd64) | unchanged |
+| **`InterruptDpc`** | **`packet+0x4C`** (x86), **`packet+0x70`** (amd64) | **`packet+0x178`** (x86), **`packet+0x298`** (amd64) |
+
+A member was inserted below `InterruptDpc` and everything after it moved. The
+slot only exists at interface `Version >= 300`, so at the Version 200 this
+driver sends it is past the end of what registration copies (316 bytes on x86,
+`0x250` on amd64) - and NT 6.x tests the slot for NULL and **skips the callback
+with no error and no bugcheck**, which is what a miniport sees as an ISR that
+claims interrupts and a DPC that never runs. The NT 6.x callback also **returns
+a `ULONG`** whose bits 0 and 1 usbport acts on, where the NT 5.x one is `VOID`.
+
+The same applies to anything below that says where usbport calls `InterruptDpc`
+from, or which lock it holds while doing so: those readings are off the NT 5.x
+binaries and have not been re-taken on NT 6.x.
 
 The tail group at 0x124-0x138 (`RebalanceEndpoint`..`Reserved5`) was the
 highest-risk region before the binaries were read: ReactOS documents the
@@ -495,7 +1181,7 @@ The opaque `PVOID` arguments follow one convention everywhere:
 | `SuspendController` | `VOID (ext)` [186-187] | Win98: minimal (no real power management). Win2000: actually invoked - implement and verify there |
 | `ResumeController` | `MPSTATUS (ext)` [189-190] | |
 | `InterruptService` | `BOOLEAN (ext)` [192-193] | Real DIRQL ISR body. usbport's ISR wrapper only calls it while its interrupt-enabled flags are set, and queues the DPC only on TRUE [usbport.c:1110-1142]. Claim only if USBSTS.EINT proves ownership |
-| `InterruptDpc` | `VOID (ext, BOOLEAN EnableInterrupts)` [195-198] | DISPATCH_LEVEL under `MiniportInterruptsSpinLock` [usbport.c:1089-1095]. The BOOLEAN is usbport's "interrupts should be enabled" flag - re-arm controller interrupt enables per it. This is where the event ring is drained; complete transfers with `UsbPortCompleteTransfer`, report port changes with `UsbPortInvalidateRootHub` (EHCI DPC does exactly this [usbehci.c:1426-1521]) |
+| `InterruptDpc` | `VOID (ext, BOOLEAN EnableInterrupts)` [195-198] | DISPATCH_LEVEL under `MiniportInterruptsSpinLock` [usbport.c:1089-1095]. The BOOLEAN is usbport's "interrupts should be enabled" flag - re-arm controller interrupt enables per it. This is where the event ring is drained; report port changes with `UsbPortInvalidateRootHub` (EHCI DPC does exactly this [usbehci.c:1426-1521]). **Completing transfers from here is safe on NT 5.x only** - on NT 6.x the completion service assumes usbport's EpList lock is held, which it is not here; see "Completion path" below and issue 7 |
 | `EnableInterrupts` / `DisableInterrupts` | `VOID (ext)` [248-252] | Under `MiniportSpinLock` unless `NOT_LOCK_INT` [usbport.c:553-586]. Called on success of `StartController` [pnp.c:876-878] and around the restart of a controller whose `ResumeController` failed [power.c:192, 212], and not after a successful resume, so the miniport's own resume has to restore the enables. xHCI: clear USBCMD.INTE then IMAN.IE on the way down; on the way up release `ERDP.EHB` first and then set IMAN.IE and USBCMD.INTE, acknowledging nothing (`docs/contributing/implementation-invariants.md`, "Interrupt Ordering") |
 | `CheckController` | `VOID (ext)` [239-240] | Periodic health check, called from the worker thread under `MiniportSpinLock` [usbport.c:1177-1184] and from timer/root-hub paths [usbport.c:1642, roothub.c:682]. Check USBSTS.HCE/HSE here; on fatal error call `UsbPortInvalidateController(ext, USBPORT_INVALIDATE_CONTROLLER_RESET)` |
 | `Get32BitFrameNumber` | `ULONG (ext)` [242-243] | Called frequently under `MiniportSpinLock` (state stamps [endpoint.c:410], iso bookkeeping [endpoint.c:1483], URB frame queries [urb.c:58]). xHCI: `MFINDEX >> 3` + software rollover extension. What this driver publishes is a delta, not the register. MFINDEX is eleven bits of frame and restarts at zero after HCRST, so an absolute reading goes backwards twice a second. usbport's post-open wait is uncapped and compares against a frame stamped before a suspend, so a reader that froze on a halted or suspended controller (Win98 idle-suspends within about half a second of every start, and MFINDEX stops on a halted xHC) would hang the enumerating thread. A controller that cannot be read is therefore answered with an increment, the safe direction since nothing is in flight on a halted xHC. The published number is also kept congruent to MFINDEX's Frame Index, because usbport stamps every isochronous packet from this callback and a Frame ID derived from a stamp is only legal if the two axes agree: the resync after a stall advances the number forward to the next value congruent to the register (at most 2,047 frames, never backwards, so monotonicity is untouched). `FrameCongruent` says when that holds and `FrameResyncSkew` measures how much axis the stall path invented |
@@ -982,7 +1668,7 @@ cannot support a negative.
 | `QueryEndpointRequirements` | `VOID (ext, PUSBPORT_ENDPOINT_PROPERTIES, PUSBPORT_ENDPOINT_REQUIREMENTS)` [164-168] | DISPATCH under `MiniportSpinLock` [endpoint.c:1049-1055]. Fill `HeaderBufferSize` (per-endpoint common-buffer bytes -> the xHCI transfer-ring segment) and `MaxTransferSize`. usbport adopts the returned `MaxTransferSize` as the endpoint's transfer-size cap for bulk/interrupt [endpoint.c:1057-1061] |
 | `OpenEndpoint` | `MPSTATUS (ext, PUSBPORT_ENDPOINT_PROPERTIES, PVOID epExt)` [152-156] | DISPATCH under `MiniportSpinLock` [endpoint.c:762-768]. Properties carry the common buffer allocated from `HeaderBufferSize` in `BufferVA/BufferPA/BufferLength` [endpoint.c:1063-1082]. This is the slot/endpoint pivot point (see `docs/usb-xhci-info/usbport-miniport-interface.md` section 3). Cannot sleep - command-ring waits must be event-driven, not blocking |
 | `ReopenEndpoint` | `MPSTATUS (ext, props, epExt)` [158-162] | Exists in the packet, but the enumeration-time EP0 rework does not use it: `USBPORT_ReopenPipe` instead does SetEndpointState(REMOVE) -> 2 ms wait -> zero the miniport endpoint extension -> free + reallocate the common buffer -> `QueryEndpointRequirements` -> `OpenEndpoint` [endpoint.c:1194-1306]. `Packet->ReopenEndpoint` is called on the device-restore path [device.c:1877]. Binary-confirmed, with one correction: there is no `CloseEndpoint` in that sequence; see "The endpoint and transfer paths in the shipping builds" below. See "Enumeration flow" below for why this matters to slot lifetime |
-| `CloseEndpoint` | `VOID (ext, epExt, BOOLEAN IsDoDisablePeriodic)` [170-174] | ReactOS calls it at DISPATCH under `MiniportSpinLock` [endpoint.c:589-603], the BOOLEAN named `IsDoDisablePeriodic` [endpoint.c:580]. Neither shipping build calls this slot at all (whole-image census below), so the rule "do not tie Disable Slot to EP0 close" is not advice, it is forced: there is no close notification to tie anything to. Keep the callback signature-correct and safe against a build that does call it |
+| `CloseEndpoint` | `VOID (ext, epExt)` on NT 6.x and `VOID (ext, epExt, BOOLEAN isDoDisablePeriodic)` on NT 5.x - **two shapes, one slot; the driver registers a different callee per arm since 2026-09-14** | ReactOS calls it at DISPATCH under `MiniportSpinLock` [endpoint.c:589-603] and declares a third argument, the BOOLEAN `IsDoDisablePeriodic` [endpoint.c:580]. **Windows XP SP3 x86 passes exactly that third argument**: `usbport!MP_CloseEndpoint` (5.1.2600.5512, RVA `0x1568A`, the only call through the slot in the image) does `cmp dword ptr [edi+114h],0` / `sete cl` / `push ecx` / `push` epExt (`lea ecx,[esi+178h]`) / `push dword ptr [edi+140h]` (ext) / `call dword ptr [eax+48h]` (`0x48 - 0x14` = `0x34`), from `USBPORT_InitializeDevice`'s EP0 close after SET_ADDRESS by way of `USBPORT_PokeEndpoint`, and its epilogue is `pop edi / pop esi / pop ebx / pop ebp / ret 8` with no `mov esp,ebp`. The whole-image census below covered Windows 2000 SP4 and NUSB only, and those two - and SweetLow's XP-derived 5.1.2600.2180 - have no call through the slot at all. **NT 6.x calls it at interface version 300 and above with two arguments**: `MPf_CloseEndpoint` returns at once below 300 (`cmp dword ptr [eax+10h],12Ch`), then `push edi` (epExt), `push dword ptr [esi+30Ch]` (ext), `call dword ptr [eax+50h]`; Vista x86 and Windows 7 x86 agree, the latter at `[esi+324h]`. Each shape was confirmed by the bugcheck the other produced: three parameters against NT 6.x's two made the callee `ret 0Ch` against 8 pushed and sent usbport's epilogue into data - **0xD1 on the first device attach, Vista x86, 2026-09-11**; two parameters against XP's three left the third argument under `MP_CloseEndpoint`'s pops, so its `ret` took the saved ebp - **0xFC on the first device attach, XP SP3 x86, 2026-09-14** (issue 7 section 7.9, matched register for register against the dump). amd64 is immune to both: register arguments, caller cleans. The rule "do not tie Disable Slot to EP0 close" still stands on the two shipping builds, where there is genuinely no close notification |
 | `GetEndpointState` | `ULONG (ext, epExt)` [223-226] | Returns a section-2 state value. Neither shipping build calls this slot at all (whole-image census below). What ReactOS polls up to 1000 x 1 ms after an open [endpoint.c:1104-1114] is `USBPORT_GetEndpointState`, usbport's *software* state, which is a different function - and in the shipping builds that poll has no retry cap. See "The endpoint and transfer paths in the shipping builds" below |
 | `SetEndpointState` | `VOID (ext, epExt, ULONG state)` [228-232] | DISPATCH under `MiniportSpinLock` [endpoint.c:401-405]. After calling, usbport stamps the frame number and queues the endpoint on a state-change list, confirming the transition later via `GetEndpointState` [endpoint.c:407-424]. For xHCI, transitions are effectively immediate (Stop Endpoint / doorbell); reflect the requested state promptly or enumeration stalls. Edge-triggered on usbport's own software state, binary-confirmed: `USBPORT_SetEndpointState` compares the requested state against its recorded one and skips the miniport call when they match (SP4 `00016D8A`, NUSB `000169D2`) - so a state the miniport moved by itself is never re-announced, and an `ACTIVE` that "should" follow a pause may never arrive if usbport believes the endpoint active already. The miniport must therefore restart a self-stopped endpoint from its own state (the health poll's net), not wait for a callback |
 | `PollEndpoint` | `VOID (ext, epExt)` [234-237] | Called from the endpoint worker [endpoint.c:1726]. xHCI: normally no-op |
@@ -998,12 +1684,36 @@ cannot support a negative.
 | `SubmitIsoTransfer` | `MPSTATUS (ext, epExt, params, transferExt, PVOID isoParams)` [208-214] | ReactOS's iso path is a stub (`iso.c` is 33 lines; the submit site passes NULL with a FIXME [endpoint.c:1570-1576]), so the layout could not come from there. Derived from both shipping binaries; see "Isochronous transfers" below. The declared signature is confirmed, and the fifth argument is a block usbport carves out of the transfer allocation |
 | `AbortTransfer` | `VOID (ext, epExt, transferExt, PULONG CompletedLength)` [216-221] | DISPATCH under `MiniportSpinLock`; write the bytes actually transferred through arg 4 [endpoint.c:1495-1511]. Arg 3 and arg 4 do not survive the return; see "`AbortTransfer`: what survives the return" below |
 
-Completion path: from `InterruptDpc`, call
+Completion path: call
 `UsbPortCompleteTransfer(ext, epExt, TransferParameters, USBD_STATUS, transferredBytes)`
 - the third argument is the same `PUSBPORT_TRANSFER_PARAMETERS` pointer that
 `SubmitTransfer` received (usbport recovers its transfer record from it), as
 EHCI does [usbehci.c:3041]. Keep that pointer in the miniport transfer
 extension.
+
+**From which context is a term of the ABI on NT 6.x, and it is not written
+down anywhere but in the binaries** (issue 7, read 2026-09-13, static on
+Windows 7 x86 and x64 with Microsoft's public PDBs). `USBPORTSVC_CompleteTransfer`
+acquires no lock and calls `USBPORT_Core_iCompleteTransfer`, whose `i`
+means the caller holds the FDO's EpList lock (`USBPORT_AcquireEpListLock`,
+x64 fdo+0xF88 - not `MiniportSpinLock` and not the `IsrDpc` lock); that
+function signals the done DPC by queueing it before storing its queued
+state, and the DPC's worker takes the same lock before reading the state.
+usbport holds the lock across `PollEndpoint`, `SubmitTransfer`,
+`AbortTransfer` and `SetEndpointState` (all reached through
+`iSetGlobalEndpointStateTx` or a caller that took it), and the shipping
+Windows 7 x64 `usbehci.sys` calls the completion slot (`RegistrationPacket+0x1D0`,
+x86 `+0xFC`) from `EHCI_ProcessDoneAsyncTd` and `EHCI_sMode_PollEndpointSlot`
+only - inside `PollEndpoint` - while `EHCI_InterruptDpcEx` calls
+`InvalidateEndpoint` (`+0x1C8`) and returns bit 0. `USBPORTSVC_InvalidateEndpoint`
+on Windows 7 is an `AssertSig`-only no-op; `USBPORT_Core_UsbHcIntDpc_Worker`,
+signalled from `IsrDpc` on every pass, polls every active endpoint under
+the lock instead. Called from anywhere else - the DPC, a root-hub
+callback, a passive path - the service can strand the done DPC: at PASSIVE
+the queued DPC runs on the same CPU before the store. On NT 5.x the same
+service is an interlocked insert and a plain DPC and any context is safe.
+This driver's rule is design record 05 section 7, "Where a completion may
+be handed over".
 
 usbport does not zero the miniport transfer extension between transfers
 (runtime observation): the extension is interior to a transfer allocation that
@@ -2019,8 +2729,13 @@ nonzero-MPSTATUS-to-6 mapping, all behaving as read out of the 2002 binaries.
 
 What that is not. That host runs a modern descendant of usbport, not NUSB's
 5652 and not SP4's 6681, so it raises confidence in the derivation without
-being an observation on either target. Windows 2000 has still not run any of
-this; the same three clauses are still owed on the SP4 build.
+being an observation on either target. Windows 2000 has run it too: in the 2b
+guest, against SP4's own `usbport.sys` 6681, `\\.\HCD0` opens, the round trip
+completes, and `-probe`'s four controls return 6 / 2 / 4 / 7 - the same three
+fixed controls as the Windows 98 reading below, with the first at 6 because
+that guest's channel was off, the shipping default (`xhcisnap/README.md`,
+"What has been executed, and what has not"). So the route is an observation
+on both targets.
 
 Observed on Windows 98 itself, on the NUSB 5652 build this block was read
 out of, in the 2a guest (`run-13e.md` P10, step 3). `CreateFile("\\.\HCD0")`
@@ -2056,7 +2771,7 @@ tool using this route should check the route before trusting its absence.
 
 | Offset | Field | Type | Meaning |
 |---|---|---|---|
-| 0x00 | `ResourcesTypes` | ULONG | Bitmask: PORT 1 / INTERRUPT 2 / MEMORY 4; check MEMORY+INTERRUPT before touching anything [usbehci.c:1176-1180] |
+| 0x00 | `ResourcesTypes` | ULONG | Bitmask: PORT 1 / INTERRUPT 2 / MEMORY 4 on NT 5.x, **PORT_IO 1 / PORT_MEM 2 / INTERRUPT 4 / MEMORY 8 on NT 6.x**; check MEMORY+INTERRUPT before touching anything [usbehci.c:1176-1180] |
 | 0x04 | `HcFlavor` | enum | `USB_CONTROLLER_FLAVOR` (NT header enum) |
 | 0x08 | `InterruptVector` | ULONG | Already used by usbport for `IoConnectInterrupt` [pnp.c:788-798] |
 | 0x0C | `InterruptLevel` | KIRQL + 3 pad | |
@@ -2114,7 +2829,7 @@ the design consequences are in `docs/contributing/design/04-controller-common-bu
 - `MiniPortFlags` bit `0x100` (`NO_DMA`) suppresses all of it:
   `StartDevice` skips `IoGetDmaAdapter` *and* overwrites its own copy of
   `MiniPortResourcesSize` with zero. No adapter, no buffer, no diagnostic.
-  `xhci98.sys`'s `0x95` does not set it; do not add it.
+  `xhci98.sys`'s `0xB5` does not set it; do not add it.
 - Incidental confirmations of section 3's packet offsets, from the same
   routine: `MiniPortResourcesSize` at packet `0x24`, `MiniPortExtensionSize`
   at `0x10` (used as the `rep stos` count that zeroes the miniport
@@ -2579,6 +3294,12 @@ List header (`C_ASSERT` 64 bytes with 2 elements): `Flags` (0x00),
 `SgElement[]` (0x10, variable length - the list is the last member of
 usbport's transfer record [usbport/usbport.h:270-271]).
 
+**Both structures move on amd64, and the element is the trap.** It is still
+24 bytes there, so its `sizeof` says nothing at all; the two DWORDs after the
+address move up by four, and the array starts at `0x20` rather than the `0x1C`
+an all-`ULONG` declaration produces. See "The amd64 scatter-gather layout
+(M8)" below.
+
 `SgElementCount == 0` is a legal, common input, and the pointer is never
 NULL (binary-confirmed; see "The endpoint and transfer paths in the shipping
 builds" in section 4). The
@@ -2661,6 +3382,53 @@ transfer-record offset. Extracts in
 - `SgList->Flags` bit 0 is set when `MapTransfer` returns the same base
   physical address for two successive map rounds - i.e. a map-register/bounce
   mapping. Informational only; the miniport programs the elements either way.
+
+#### The amd64 scatter-gather layout (M8)
+
+Read 2026-09-09 off NT 5.2 amd64 `usbport.sys` `5.2.3790.3959`
+(`tools/winxp64-extracted/`), method `static`, and it is the reading that
+design record 11 had carried as owed since the amd64 build existed. The
+producer is at RVA `0xF468`; `kd -z` with the function boundaries taken from
+`.pdata` is what makes an amd64 image legible here, since this DDK's
+`dumpbin` has no amd64 disassembler.
+
+| Field | Instruction (verbatim) | amd64 | x86 |
+|---|---|---|---|
+| the list itself | `lea rdi,[rsi+118h]` (`488dbe18010000`) | transfer record `+0x118` | `+0x98` NUSB / `+0xC0` SP4 |
+| `Flags` | `mov dword ptr [rdi],r12d` (`448927`) | `0x00`, DWORD | `0x00` |
+| `Flags` bit 0 | `or dword ptr [rdi],1` (`830f01`) | `0x00` | `0x00` |
+| `CurrentVa` | `mov qword ptr [rdi+8],rcx` (`48894f08`) | `0x08`, QWORD | `0x04` |
+| `MappedSystemVa` | `mov qword ptr [rdi+10h],rax` (`48894710`) | `0x10`, QWORD | `0x08` |
+| `SgElementCount` | `mov dword ptr [rdi+18h],r12d` (`44896718`), then `inc dword ptr [rdi+18h]` (`ff4718`) per element | `0x18`, DWORD | `0x0C` |
+| `SgElement[0]` | `lea rbx,[rdi+20h]` (`488d5f20`) | **`0x20`** | `0x10` |
+| element stride | `add rbx,18h` (`4883c318`) | 24 | 24 |
+| `SgPhysicalAddress` | `mov qword ptr [rbx],rax` (`488903`) | element `0x00`, QWORD | `0x00` |
+| `SgTransferLength` | `mov dword ptr [rbx-8],r8d` (`448943f8`), issued after the stride advance | element **`0x10`** | `0x0C` |
+| `SgOffset` | `mov dword ptr [rbx+14h],r11d` (`44895b14`) | element **`0x14`** | `0x10` |
+
+The 4 KB split survives verbatim into the 64-bit build - `and edx,0FFFh`,
+`mov r8d,1000h`, `sub r8d,edx`, then `cmova r8d,r9d` to clamp to what is left
+- so the worst-case element count for an N-byte transfer is still
+`ceil(N / 4096) + 1`.
+
+**Two things a miniport author has to take from this.** First, the element's
+`sizeof` is 24 on both architectures and is therefore worthless as a check:
+eight bytes separate the address from the length on amd64 where four do on
+x86, and every field after the address moves. Second, the array offset does
+not follow from the header's declared fields. The real element type is
+8-aligned, its first member being a `PHYSICAL_ADDRESS`, so the array starts at
+`0x20`; a declaration that spells the address as two `ULONG`s - which this
+project's C89 rules require - aligns to 4 and puts it at `0x1C`. The
+declaration needs explicit padding, and `src/xhci_usbport.h` carries it with
+these numbers asserted.
+
+This was not an academic reading. Until it was taken, the amd64 driver refused
+every control transfer on the Windows XP x64 guest of roadmap task 21.5 with
+`XHCI_XFER_SG_HIGH_ADDRESS`: reading four bytes low put the miniport's
+`SgPhysicalAddressHi` on the real element's low DWORD, which is never zero.
+The refusal is the "check the high DWORD, never assume it" rule above doing
+exactly what it is for - the alternative to a refusal was a TRB pointing at an
+address assembled from two unrelated halves.
 
 ### USBPORT_ROOT_HUB_DATA [usbmport.h:695-703]
 
@@ -2794,15 +3562,21 @@ key, which is what a plain `AddReg` under an INF's install section writes.
 The miniport needs no import of its own for any of this. The `Zw*` calls,
 the pool allocation and the string work are all inside `usbport.sys`. That is
 the property that makes this the only registry channel this project may use -
-`scripts/import-gate/xhci98-imports.allow` admits no `Zw*` name. The
-allowlist has no deny list: a name is refused by not being on it, which is
-why the file's remaining `Zw*` mentions are the removal note for task
-11-V.7's three file-sink imports rather than rules.
+`scripts/import-gate/xhci98-imports.allow` admits no `Zw*` name. **No `Zw*` name is admitted OR denied**: the allowlist has a `[deny]` section,
+with 25 rows, but no `Zw*` is among them, so such a name is refused by not
+being on the allow side rather than by a rule of its own - which is why the
+file's remaining `Zw*` mentions are the removal note for task 11-V.7's three
+file-sink imports rather than rules. (This said the allowlist "has no deny
+list" at all, which is not so and which matters to a reader diagnosing a
+failure: `check-imports.ps1` reports a deny hit as `DENIED: <reason>`, a
+distinct outcome from `not in the allowlist`. The 2026-09-16 audit's E9.)
 
 ## 7. Locking, IRQL, and threading summary
 
-These are the ABI *facts*. What this driver does about them - the single
-innermost driver-image lock, its order against the two below, the DIRQL
+These are the ABI *facts*. What this driver does about them - its two
+innermost driver-image locks (the controller lock, and since 2026-09-13 the
+delivery lock that is a raise rather than a guard; design record 05 sections 2
+and 11), their order against the two below, the DIRQL
 exception, the static review of every entry point, and where the driver's own
 state goes - is derived from this table in
 `docs/contributing/design/05-locking-model.md`.

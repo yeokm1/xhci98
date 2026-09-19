@@ -12,6 +12,97 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 1.1.0.0 - 2026-09-18
+
+Windows Vista and Windows 7 join the targets supported in virtual machines,
+in both architectures, and the download gains a 64-bit driver for them and
+for Windows XP x64. The package no longer writes any machine-wide registry
+value. Windows 98 SE, Windows ME, Windows 2000 and
+32-bit Windows XP install as they did in `1.0.2.0`, from a directory with a
+new name.
+
+Every 64-bit, Vista and Windows 7 result below comes from virtual machines.
+Of the new systems only 32-bit Windows 7 has run on real hardware, once, after
+this release was cut (a ThinkPad E460, 2026-09-19): the install and devices at
+a root port and behind USB 2.0 hubs worked, and the first disable of the
+controller hung. Three limitations were found after the cut and are listed in
+the last item below.
+
+### What changed
+
+- The download has four driver directories instead of two:
+  `release-x86\` and `debug-x86\` hold the 32-bit driver, the one earlier
+  releases carried in `release\` and `debug\`, and `release-x64\` and
+  `debug-x64\` hold a separate 64-bit driver with an INF of its own. The
+  32-bit driver does not install on a 64-bit Windows or the other way
+  round; picking the wrong directory is harmless, Windows finds no driver
+  there and says so.
+- Windows XP x64 is supported through the
+  64-bit driver, in virtual machines only. An XP Professional x64 SP2 guest
+  whose only USB controller was the xHCI installed it with no prompt for
+  media, and bound a HID mouse, a USB mass-storage device and a composite
+  audio device; disable, enable, remove and rescan in Device Manager all
+  survived.
+- Windows Vista (SP2) and Windows 7 (SP1) are supported, 32-bit through the
+  same driver as Windows 98 to XP and x64 through the 64-bit one, in virtual
+  machines only. On each of four guests the package installed, the three
+  devices above bound, and five disable and enable cycles, a remove and a
+  rescan survived. **On Vista x64 and Windows 7 x64 the driver loads only
+  while driver signature enforcement is disabled**, because it is not signed. Install it from
+  Device Manager; right-clicking `xhci98.inf` and choosing Install does not
+  work on these systems.
+- The idle suspend fix no longer writes the registry. Until now the install
+  set `DisableSelectiveSuspend = 1` under
+  `HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB`, which stopped
+  every USB controller on the machine idling and outlived an uninstall. The
+  driver now tells the USB stack itself, as it registers, that this
+  controller must not be idled, which affects no other controller and
+  leaves nothing behind. Read in virtual machines on all ten supported
+  systems against a build that does idle. An upgrade leaves the old value
+  in place on purpose; the release notes say how to delete it.
+- The driver: a finished transfer is handed back to Windows' USB stack only
+  in the context that stack expects, holding its lock for that endpoint.
+  Handing it back from anywhere else could corrupt the stack's own lists on
+  a machine with more than one processor; a four-processor XP x64 guest
+  crashed from it, and the 32-bit USB stacks on every target were read to
+  make the same assumption, so both drivers now do this. Read on a
+  four-processor 32-bit XP guest, and on Windows 98, ME and 2000.
+- The driver, from two audits: a device whose setup failed no longer keeps
+  a controller slot it can never use; a device being set up when the
+  controller is torn down no longer leaves Windows waiting for an address
+  that will not come; a hub reusing an address another device held no
+  longer confuses which device is behind which hub; a control transfer the
+  controller stopped at its last stage reports the data it did move; a
+  controller reset waits for the controller to be ready before and after,
+  as Intel's controllers require; and the root hub keeps its port state
+  current across a port suspend and resume, including a resume the
+  controller ignores. Covered by host tests; the last was also read on a
+  Vista guest, where Windows stopped with error 0xFE a minute after an
+  ignored resume before the fix.
+- The tools: `XHCIQUAL`'s quick scan ends on its verdict; its legacy
+  verdict can no longer print "NOT QUALIFIED" and "QUALIFIED (with
+  warnings)" for one run; and its controller quirk table follows Linux's
+  for ASMedia, NEC, VIA and Fresco. `XHCISNAP` finds the driver's settings
+  on Windows Vista and Windows 7, refuses switch combinations it used to
+  accept and then ignore, and deletes a report it could not finish
+  writing.
+- The download's `readme.txt` describes the current release only, and asks
+  that `XHCISNAP` and the DebugView log be used only when the maintainer
+  asks for them. The release notes add a Windows 2000 limitation: with a
+  USB audio device attached, disabling the controller asks for a restart.
+- Known limitations found after the cut, 2026-09-19, with the driver
+  unchanged. On Windows Vista and Windows 7, 32-bit and x64, a USB 1.1 hub
+  on a root port crashes the machine (`STOP 0x7E` in `USBPORT.SYS`) once a
+  mouse, keyboard or other slower device is used behind it; use a root port
+  directly, or a USB 2.0 hub. On Windows XP and later a Full-Speed USB audio
+  device on a root port plays nothing, though Windows shows it playing;
+  behind a hub it plays (on Vista and 7 a USB 2.0 hub), and Windows 2000
+  plays on a root port. Both were measured in virtual machines, and the USB
+  2.0 hub workaround on the one real 32-bit Windows 7 machine. On that same
+  machine, disabling the controller in Device Manager hung, and so did the
+  restart after it; the cause is not known yet. The readme's section 7 and
+  the release notes' "Known limitations" have all three.
+
 ## 1.0.2.0 - 2026-09-07
 
 A fix release. An audit found no critical defect and nineteen things worth

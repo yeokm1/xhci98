@@ -45,6 +45,20 @@
  */
 USBPORT_REGISTRATION_PACKET XhciRegPacket;
 
+/*
+ * The `ResourcesTypes` bits usbport must report before this driver will start
+ * a controller. This is the NT 5.x mask; DriverEntry raises it to the NT 6.x
+ * one, where the same two resources are named by different bits
+ * (src\xhci_usbport.h).
+ *
+ * A global settled once rather than a test at the check site, because that
+ * site is also reached from task 13-R.1's in-place recovery, which runs at
+ * DISPATCH_LEVEL, and `IoIsWdmVersionAvailable` is a PASSIVE_LEVEL call. It is
+ * written in DriverEntry and only read afterwards.
+ */
+ULONG XhciResourcesRequired =
+    USBPORT_RESOURCES_MEMORY | USBPORT_RESOURCES_INTERRUPT;
+
 /* Forward: task 13-R.1's in-place recovery is *requested* by ResetController and
  * *armed* by the health poll, which sits above it in this file. The two are a
  * long way apart on purpose - see xhciArmRecovery for why the arming may not
@@ -73,18 +87,71 @@ static VOID xhciArmRecovery(PXHCI_EXTENSION ext);
  *   consumed later than registration. Start with the combination the shipping
  *   binaries demonstrably accept; revisit once the spike passes.
  *
- *   MiniPortFlags 0x95 = INTERRUPT | MEMORY_IO | USB2 | POLLING, deliberately
- *   without WAKE_SUPPORT (0x200): Win2000 acts on that flag and this driver has
- *   no wake behaviour yet. NO_DMA (0x100) must never appear - it silently zeros
- *   MiniPortResourcesSize and skips the DMA adapter entirely.
+ *   MiniPortFlags 0xB5 = INTERRUPT | MEMORY_IO | USB2 | DISABLE_SS | POLLING,
+ *   deliberately without WAKE_SUPPORT (0x200): Win2000 acts on that flag and
+ *   this driver has no wake behaviour yet. NO_DMA (0x100) must never appear -
+ *   it silently zeros MiniPortResourcesSize and skips the DMA adapter
+ *   entirely. usbehci.sys declares 0x95; DISABLE_SS (0x20) is this driver's
+ *   one departure from it, and the block below is why.
+ *
+ * DISABLE_SS (USB_MINIPORT_FLAGS_DISABLE_SS, 0x20) tells usbport never to
+ * idle-suspend this controller. A halted xHC cannot report a port change -
+ * the spec gates Port Status Change Event generation on HCHalted = '0'
+ * (p.322) and says EINT and PCD generate no interrupt (p.399) - so unlike
+ * EHCI, which re-arms USBINTR.PCD across its halt, there is no interrupt this
+ * driver could leave enabled to wake it. The fix has to stop the suspend
+ * happening rather than wake from it; without it a device attached after the
+ * bus goes quiet is seen by nothing until the user presses Refresh in Device
+ * Manager (docs\issues\05-idle-suspend-and-disableselectivesuspend.md).
+ *
+ * Read static on all nine usbport builds this driver runs under (NUSB
+ * 5.00.2195.5652, SweetLow 5.1.2600.2180, Win2000 SP4 5.00.2195.6681, XP SP3
+ * x86, XP/2003 x64 5.2.3790.3959, Vista SP2 x86/x64, Win7 SP1 x86/x64): bit
+ * 0x20 is tested exactly once per build, in the start routine, AFTER the
+ * registry reads, and does nothing but force the selective-suspend-disabled
+ * state - NUSB 0x109BC, SweetLow 0x11687, SP4 0x10A2C, XP x86 0x11862, XP x64
+ * 0x129A5 clear the FDO's "SS allowed" flag 0x800 and set 0x08000000; Vista
+ * x86 0x2AB35, x64 0x14C7A, Win7 x86 0x25308, x64 0x1427A set SS state 4.
+ * Every reader treats that exactly as it treats the state the machine-wide
+ * Services\USB\DisableSelectiveSuspend produces, which is what releases
+ * 1.0.0.0 to 1.0.2.0 shipped instead (docs\contributing\legal-provenance.md
+ * section 4).
+ *
+ * Why the flag and not a registry value. The per-controller values work
+ * statically on every build (HcDisableSelectiveSuspend on 9x and NT 5.x,
+ * HcDisableAllSelectiveSuspend on Windows 7), but usbport's own
+ * USBPORTBUSIF_ControllerSelectiveSuspend WRITES HcDisableSelectiveSuspend =
+ * !Enable back to the software key, and on Vista usbhub calls it from a
+ * power-setting callback rather than only from the root hub's "Allow the
+ * computer to turn off this device" checkbox. Measured on a Vista x86 guest on
+ * 2026-09-17: setting the Balanced plan's USB selective suspend to Enabled
+ * rewrote the value to 0 and the controller suspended at once. Balanced
+ * defaults that setting to Enabled on battery, so the registry route loses
+ * the fix on any laptop that unplugs. The flag is outside that setter's
+ * reach: it refuses unless the state is 1 or 2, and the flag's state is 4.
+ *
+ * The one route by which the flags word leaves usbport is the bus-interface
+ * routine USBPORTBUSIF_UsbdQueryControllerType, which copies it to its
+ * caller. Nothing calls it: a sweep of every indirect call through that slot
+ * (interface+0x2C on x86, +0x58 on amd64) in all four NT 6.x usbhub.sys
+ * builds returns zero, against 3 to 5 on each of the two adjacent slots swept
+ * as controls. That is bounded to the OS's own drivers - a third-party holder
+ * of the USBDI interface could ask, and no static reading here can enumerate
+ * what is not on the machine.
  */
 #define XHCI_MINIPORT_VERSION USB_MINIPORT_VERSION_EHCI
-#define XHCI_MINIPORT_FLAGS                                     \
+#define XHCI_MINIPORT_FLAGS                                        \
     (USB_MINIPORT_FLAGS_INTERRUPT | USB_MINIPORT_FLAGS_MEMORY_IO | \
-     USB_MINIPORT_FLAGS_USB2 | USB_MINIPORT_FLAGS_POLLING)
+     USB_MINIPORT_FLAGS_USB2 | USB_MINIPORT_FLAGS_DISABLE_SS |     \
+     USB_MINIPORT_FLAGS_POLLING)
 
 XHCI_C_ASSERT(miniport_flags_have_no_dma_bit,
               (XHCI_MINIPORT_FLAGS & USB_MINIPORT_FLAGS_NO_DMA) == 0);
+
+/* Losing this bit costs hot-plug on every target and says nothing at build or
+ * load time; it is the whole of issue 5's fix since 1.1.0.0. */
+XHCI_C_ASSERT(miniport_flags_disable_selective_suspend,
+              (XHCI_MINIPORT_FLAGS & USB_MINIPORT_FLAGS_DISABLE_SS) != 0);
 
 /*
  * XHCI_PROBE_RESOURCES_SIZE - a diagnostic override for the declared controller
@@ -514,7 +581,8 @@ static VOID xhciLogReadValues(PXHCI_EXTENSION ext,
     value = 0;
     status = XhciRegPacket.UsbPortGetMiniportRegistryKeyValue(
         ext, TRUE, XHCI_LOG_VERBOSITY_VALUE_NAME,
-        XHCI_LOG_VERBOSITY_VALUE_BYTES, &value, sizeof(value));
+        (ULONG_PTR)XHCI_LOG_VERBOSITY_VALUE_BYTES, &value,
+        (ULONG_PTR)sizeof(value));
     ext->Log.SwitchStatusVerbosity = (ULONG)status;
     if (status == MP_STATUS_SUCCESS) {
         *verbosityValue = value;
@@ -522,8 +590,9 @@ static VOID xhciLogReadValues(PXHCI_EXTENSION ext,
 
     value = 0;
     status = XhciRegPacket.UsbPortGetMiniportRegistryKeyValue(
-        ext, TRUE, XHCI_LOG_DBGVIEW_VALUE_NAME, XHCI_LOG_DBGVIEW_VALUE_BYTES,
-        &value, sizeof(value));
+        ext, TRUE, XHCI_LOG_DBGVIEW_VALUE_NAME,
+        (ULONG_PTR)XHCI_LOG_DBGVIEW_VALUE_BYTES, &value,
+        (ULONG_PTR)sizeof(value));
     ext->Log.SwitchStatusDebugView = (ULONG)status;
     if (status == MP_STATUS_SUCCESS) {
         *debugViewValue = value;
@@ -858,6 +927,15 @@ static VOID xhciLogStart(PXHCI_EXTENSION ext)
 /* ------------------------------------------------------------------ */
 
 /*
+ * The Version argument DriverEntry handed to usbport: 300 to an NT 6.x
+ * usbport, 200 to every other (task 22.5). Recorded so StartController can
+ * choose the completion route by tier, so xhciVerifyPacketAfterRegistration
+ * can hold usbport to the tier it was offered, and so the log says which one
+ * ran.
+ */
+static ULONG xhciInterfaceVersionPresented = USB20_MINIPORT_INTERFACE_VERSION;
+
+/*
  * StartController - the callback the whole gate turns on.
  *
  * usbport has already connected the interrupt, mapped BAR0, and allocated and
@@ -884,6 +962,18 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
     ext = (PXHCI_EXTENSION)miniPortExtension;
 
     XHCI_DBG_CB("StartController", miniPortExtension, resources, 0);
+#ifdef _WIN64
+    /*
+     * The callback line above carries only the low half of each argument, and
+     * the post-release harness reads every counter at this extension's
+     * address; on amd64 the extension lives in pool above 4 GB. One pair per
+     * start, unbounded, so the newest start is always the one it reads.
+     */
+    XHCI_DBG_VALUE("StartController extension VA high",
+                   (ULONG)((ULONG_PTR)miniPortExtension >> 32));
+    XHCI_DBG_VALUE("StartController extension VA low",
+                   (ULONG)(ULONG_PTR)miniPortExtension);
+#endif
 
     if (ext == NULL || resources == NULL) {
         XHCI_DBG_TEXT("StartController: NULL argument - refusing");
@@ -893,9 +983,13 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
     /*
      * The one deliberate dereference of a usbport-owned structure in the spike.
      * docs/usb-xhci-info/usbport-miniport-abi.md section 9 item 4 asks for exactly this: the
-     * raw 52 bytes usbport actually passes, so USBPORT_RESOURCES' layout is
+     * raw bytes usbport actually passes, so USBPORT_RESOURCES' layout is
      * confirmed from the target rather than assumed from the transcription.
-     * 13 words is sizeof(USBPORT_RESOURCES) / 4, asserted in xhci_usbport.h.
+     * The count is `sizeof(USBPORT_RESOURCES) / 4`, which is **13 words on x86
+     * and 18 on amd64** - the structure is 0x34 bytes on one and 0x48 on the
+     * other, and the size is asserted per architecture in xhci_usbport.h.
+     * *(This named 52 bytes and 13 words as though they were the only answer;
+     * the 2026-09-16 audit's B10.)*
      */
     XHCI_DBG_WORDS("resources", (const ULONG *)resources,
                    sizeof(USBPORT_RESOURCES) / sizeof(ULONG));
@@ -923,6 +1017,31 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
      * guarantee if the epoch is ever stored earlier.
      */
     XhciCommandInit(ext);
+    /*
+     * The tier decides where a completion may be handed over (issue 7,
+     * XHCI_EXTENSION.DeliverUnderUsbportLockOnly): a Version 300 usbport's
+     * completion service assumes its EpList lock is held by the caller. XP
+     * x64's Version 200 service needs the transfer's own endpoint lock
+     * (issue 8, XHCI_EXTENSION.DeliverPerEndpointOnly). Set before the
+     * signatures so no callback can observe the extension without it.
+     */
+    ext->DeliverUnderUsbportLockOnly =
+        (xhciInterfaceVersionPresented >= USBPORT_NT6_MINIPORT_INTERFACE_VERSION)
+            ? 1UL : 0UL;
+    ext->DeliverPerEndpointOnly = 0;
+    /*
+     * Issue 8 (XHCI_EXTENSION.DeliverPerEndpointOnly): every Version 200
+     * usbport's completion service unlinks from the endpoint's list holding no
+     * endpoint lock, while usbport reads that list under one. Read out of XP
+     * x64 first and guarded `_WIN64` until 2026-09-15; then XP SP3 x86 livelocked
+     * on the same race (issue 7 section 7.9) and the other 32-bit builds -
+     * NUSB, SweetLow's, Windows 2000 SP4's - were read to share the mover and
+     * the locked reader (issue 8 section 4d), so the whole tier takes it.
+     */
+    if (!ext->DeliverUnderUsbportLockOnly) {
+        ext->DeliverUnderUsbportLockOnly = 1;
+        ext->DeliverPerEndpointOnly = 1;
+    }
 
     ext->Signature = XHCI_EXTENSION_SIGNATURE;
     ext->TrailingSignature = XHCI_EXTENSION_TRAILING;
@@ -997,8 +1116,18 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
     }
 
     (VOID)XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_STARTED);
-    /* The mapped register base - an address, for the reason above. */
-    XhciLogNoteAddress(ext, "start.ok", ext->ResourceBase);
+    /*
+     * The mapped register base - an address, for the reason above. The cast is
+     * written out for the same reason the one at the "start" site above is:
+     * `ResourceBase` is a `ULONG_PTR` and the log ring records a `ULONG`, so on
+     * amd64 this narrows. It is the only implicit narrowing in the driver that
+     * the x64 compiler objects to (C4242), and `/WX` is on in the free build,
+     * so left implicit it fails `release` while merely warning in `debug` and
+     * `qemu`. A register base is a mapped VA and the truncation loses real bits
+     * on a 64-bit host; what is logged is a low-half identifier for a human
+     * reading a trace, not an address anything dereferences.
+     */
+    XhciLogNoteAddress(ext, "start.ok", (ULONG)ext->ResourceBase);
     return MP_STATUS_SUCCESS;
 }
 
@@ -1178,18 +1307,66 @@ static BOOLEAN NTAPI xhciInterruptService(PVOID miniPortExtension)
  * bracket test - which the DIRQL path deliberately does not pay for - on the
  * DPC path.
  */
-static VOID NTAPI xhciInterruptDpc(PVOID miniPortExtension,
-                                   BOOLEAN enableInterrupts)
+static ULONG NTAPI xhciInterruptDpc(PVOID miniPortExtension,
+                                    BOOLEAN enableInterrupts)
 {
     PXHCI_EXTENSION ext;
+    ULONG portChangesBefore;
+    ULONG result;
 
     ext = (PXHCI_EXTENSION)miniPortExtension;
+    result = 0;
 
     XHCI_DBG_CB("InterruptDpc", miniPortExtension, enableInterrupts, 0);
 
     if (xhciExtensionValid(ext)) {
+        /*
+         * One function serves two slots since task 22.5: the NT 5.x
+         * InterruptDpc at packet+0x4C, whose caller declares it VOID and never
+         * reads eax, and the NT 6.x InterruptDpcEx at +0x178 / +0x298, whose
+         * caller reads bits 0 and 1 and invalidates the root-hub interrupt
+         * endpoint on either. Microsoft's own usbehci is built the same way -
+         * its 0x4C function is a thunk onto its InterruptDpcEx.
+         *
+         * The bit reported is the port one, and it is derived from the counter
+         * XhciEventDpc already keeps rather than from a new flag: a pass that
+         * consumed at least one Port Status Change Event is a pass after which
+         * the hub driver should look at the ports. The body still calls
+         * UsbPortInvalidateRootHub itself where it always did; on NT 6.x that
+         * and this bit reach the same place twice, which is harmless, and on
+         * NT 5.x the bit is simply not read.
+         *
+         * Bit 0 - usbehci's "transfer interrupt with pending work" - is
+         * reported on the Version 300 tier whenever the drain left a
+         * completion parked for PollEndpoint, which since issue 7's cause was
+         * read is every completion the event DPC retires: on that tier the
+         * completion service is safe only from a callback usbport makes under
+         * its EpList lock, so this DPC retires and PollEndpoint delivers.
+         * usbport's IsrDpc signals the HcInt pass on every return regardless;
+         * the bit is what usbehci returns, and reporting it keeps this
+         * miniport's shape the one that usbport was written against.
+         */
+        portChangesBefore = ext->EventCounts[XHCI_EVENT_TYPE_INDEX(
+            XHCI_TRB_TYPE_PORT_STATUS_CHANGE)];
+
         XhciEventDpc(ext, enableInterrupts);
+
+        if (ext->EventCounts[XHCI_EVENT_TYPE_INDEX(
+                XHCI_TRB_TYPE_PORT_STATUS_CHANGE)] != portChangesBefore) {
+            result = USBPORT_DPC_EX_PORT_CHANGE;
+        }
+        if (ext->DeliverUnderUsbportLockOnly) {
+            KIRQL oldIrql;
+
+            XhciControllerLockAcquire(&oldIrql);
+            if (ext->CompletionHead != NULL) {
+                result |= USBPORT_DPC_EX_TRANSFER_WORK;
+            }
+            XhciControllerLockRelease(oldIrql);
+        }
     }
+
+    return result;
 }
 
 /*
@@ -2088,6 +2265,39 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
                            ext->CompletionsHeldByPass);
     XHCI_DBG_VALUE_CHANGED("deferred-work re-entries declined",
                            ext->DeferredReentries);
+    /*
+     * Issue 7's delivery gate. It was Version 300 only until 2026-09-15; since
+     * issue 8 read the whole Version 200 tier onto the same route
+     * (xhciStartController), the gate is set on every tier and none of these
+     * is expected to read 0 on a 200-tier dump. Held-for-poll is expected
+     * nonzero and roughly tracks the event DPC's passes; delivered-locked is
+     * the ordinary
+     * PollEndpoint route and should carry nearly every completion;
+     * delivered-forced is the lifecycle drains plus the fallback, and
+     * fallback polls climbing during ordinary traffic means usbport stopped
+     * polling an endpoint that owed work.
+     */
+    XHCI_DBG_VALUE_CHANGED("completions delivered only under usbport's lock",
+                           ext->DeliverUnderUsbportLockOnly);
+    XHCI_DBG_VALUE_CHANGED("completions held for PollEndpoint",
+                           ext->CompletionsHeldForPoll);
+    XHCI_DBG_VALUE_CHANGED("completions delivered under usbport's lock",
+                           ext->CompletionsDeliveredLocked);
+    XHCI_DBG_VALUE_CHANGED("completions delivered forced",
+                           ext->CompletionsDeliveredForced);
+    XHCI_DBG_VALUE_CHANGED("completion fallback polls",
+                           ext->CompletionFallbackPolls);
+    XHCI_DBG_VALUE_CHANGED("PollEndpoint callbacks", ext->PollEndpointCalls);
+    /* Issue 8, amd64 Version 200 tier only (0 everywhere else). Held-for-
+     * another-endpoint and polls-requested climb with ordinary traffic;
+     * the fallback polls above are the reading that says a request was not
+     * answered. */
+    XHCI_DBG_VALUE_CHANGED("completions delivered per endpoint only",
+                           ext->DeliverPerEndpointOnly);
+    XHCI_DBG_VALUE_CHANGED("completions held for another endpoint's poll",
+                           ext->CompletionsHeldOtherEndpoint);
+    XHCI_DBG_VALUE_CHANGED("endpoint polls requested for a parked completion",
+                           ext->CompletionPollInvalidates);
     XHCI_DBG_VALUE_CHANGED("submit brackets closed with none open",
                            ext->SubmitUnderflows);
     /*
@@ -2532,6 +2742,7 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
                            ext->IsoMissedServiceTotal);
     XHCI_DBG_VALUE_CHANGED("iso groups awaiting a tail event",
                            ext->IsoGroupsAwaitingTailTotal);
+    XHCI_DBG_VALUE_CHANGED("iso tail events", ext->IsoTailEventsTotal);
     XHCI_DBG_VALUE_CHANGED("frame resync skew", ext->FrameResyncSkew);
     XHCI_DBG_VALUE_CHANGED("frame samples", ext->FrameSamples);
     XHCI_DBG_VALUE_CHANGED("frame samples stale at a claim",
@@ -3275,6 +3486,24 @@ static VOID NTAPI xhciQueryEndpointRequirements(
         return;
     }
     XhciProbeEndpoint(ext, XHCI_PROBE_EVENT_QUERY, properties, NULL, 0);
+    /*
+     * **Which device this query is for.** usbport calls this slot
+     * unconditionally inside `USBPORT_PokeEndpoint`, ahead of every failure
+     * path in it, and again on the `USBPORT_ReopenPipe` route - so a query
+     * that is never followed by an open means the reopen was attempted and
+     * failed inside usbport, and NO query for a device that was addressed
+     * means the reopen was never attempted at all. On 2026-09-12 that
+     * distinction had to be inferred from `ProbeEpEvents[QUERY]` equalling
+     * `[OPEN]` in aggregate; per device it is a reading. Value is
+     * `DeviceAddress << 16 | EndpointAddress`. Durable witnesses:
+     * `ProbeEpEvents[XHCI_PROBE_EVENT_QUERY]` and `[..._OPEN]`.
+     */
+    if (properties != NULL) {
+        XHCI_DBG_VALUE_LIMITED("cb QueryEndpointRequirements for "
+                               "address << 16 | endpoint",
+                               (((ULONG)properties->DeviceAddress) << 16) |
+                                   (ULONG)properties->EndpointAddress);
+    }
     XhciSlotQueryEndpointRequirements(ext, properties, requirements);
 }
 
@@ -3294,6 +3523,15 @@ static MPSTATUS NTAPI xhciOpenEndpoint(PVOID miniPortExtension,
         return MP_STATUS_NOT_SUPPORTED;
     }
     XhciProbeEndpoint(ext, XHCI_PROBE_EVENT_OPEN, properties, NULL, 0);
+    /* The other half of the pair above: an open names the device it is for, so
+     * the query/open sequence can be read per device rather than as two
+     * totals. A non-zero address here is the post-SET_ADDRESS EP0 reopen
+     * (`DevicesReopened`). */
+    if (properties != NULL) {
+        XHCI_DBG_VALUE_LIMITED("cb OpenEndpoint for address << 16 | endpoint",
+                               (((ULONG)properties->DeviceAddress) << 16) |
+                                   (ULONG)properties->EndpointAddress);
+    }
     return XhciSlotOpenEndpoint(ext, properties,
                                 (PXHCI_ENDPOINT)endpointExtension);
 }
@@ -3337,24 +3575,53 @@ static MPSTATUS NTAPI xhciReopenEndpoint(PVOID miniPortExtension,
 }
 
 /*
- * The probe call is the point of this stub now. Batch 6-0 established across
- * both whole images that no shipping build calls this, and the driver stubs it
- * on that strength; `ProbeEpEvents[XHCI_PROBE_EVENT_CLOSE]` is what a
- * *release* build would show if that static read were wrong on a target,
- * which no trace line can (task 6-V.1).
+ * **NT 6.x DOES call this, at interface version 300 and above.** Measured on
+ * Vista x86 on 2026-09-11: usbport!USBPORT_iSetGlobalEndpointStateTx calls
+ * MPf_CloseEndpoint during the post-SET_ADDRESS EP0 close, on the very first
+ * device attach. **And so does Windows XP SP3 x86**, at 200: usbport's
+ * USBPORT_InitializeDevice closes EP0 after SET_ADDRESS through
+ * USBPORT_PokeEndpoint and MP_CloseEndpoint - with THREE arguments where NT
+ * 6.x pushes two (the readings are above PHCI_CLOSE_ENDPOINT in
+ * src\xhci_usbport.h). Batch 6-0's census said no shipping build calls this
+ * slot, and that stays true of Windows 2000 SP4 and NUSB; it was never a
+ * statement about XP, Vista or Windows 7, none of which was in it. So this is
+ * a live callback on both tiers, not a defensive stub.
+ *
+ * Two callees for one body, because on x86 a stdcall callee's `ret` has to
+ * match what its caller pushed and the two tiers push differently: the
+ * two-parameter one is what the packet is filled with, and DriverEntry
+ * overwrites the slot with the three-parameter one on the NT 5.x arm. The
+ * third parameter exists for the stack contract only and is not read - XP x64
+ * takes the same arm, and whether its wrapper passes anything in r8 has not
+ * been read, so a value logged from it could be noise. The 2026-09-12 move to
+ * two parameters was measured on Vista x86 alone and cost XP x86 bugcheck
+ * 0xFC on its first device (issue 7 section 7.9).
+ * `ProbeEpEvents[XHCI_PROBE_EVENT_CLOSE]` remains what a *release* build
+ * shows, which no trace line can (task 6-V.1).
  *
  * IRQL: DISPATCH_LEVEL, under MiniportSpinLock.
  */
-static VOID NTAPI xhciCloseEndpoint(PVOID miniPortExtension,
-                                    PVOID endpointExtension,
-                                    BOOLEAN isDoDisablePeriodic)
+static VOID xhciCloseEndpointBody(PVOID miniPortExtension,
+                                  PVOID endpointExtension)
 {
-    XHCI_DBG_CB("CloseEndpoint", miniPortExtension, endpointExtension,
-                isDoDisablePeriodic);
+    XHCI_DBG_CB("CloseEndpoint", miniPortExtension, endpointExtension, 0);
     XhciProbeEndpoint((PXHCI_EXTENSION)miniPortExtension,
                       XHCI_PROBE_EVENT_CLOSE, NULL,
-                      (const XHCI_ENDPOINT *)endpointExtension,
-                      isDoDisablePeriodic);
+                      (const XHCI_ENDPOINT *)endpointExtension, 0);
+}
+
+static VOID NTAPI xhciCloseEndpoint(PVOID miniPortExtension,
+                                    PVOID endpointExtension)
+{
+    xhciCloseEndpointBody(miniPortExtension, endpointExtension);
+}
+
+static VOID NTAPI xhciCloseEndpointNt5(PVOID miniPortExtension,
+                                       PVOID endpointExtension,
+                                       BOOLEAN isDoDisablePeriodic)
+{
+    (VOID)isDoDisablePeriodic;
+    xhciCloseEndpointBody(miniPortExtension, endpointExtension);
 }
 
 /*
@@ -3397,14 +3664,42 @@ static VOID NTAPI xhciSetEndpointState(PVOID miniPortExtension,
     }
     XhciProbeEndpoint(ext, XHCI_PROBE_EVENT_SET_STATE, NULL,
                       (const XHCI_ENDPOINT *)endpointExtension, state);
+    /*
+     * Reached through `USBPORT_SetGlobalEndpointState`, which takes the
+     * EpList lock first (win7-x86 `+7a`, static), so the drains inside are
+     * `XhciSlotDeferredWorkForEndpoint` - one of the contexts the Version 300
+     * delivery gate admits.
+     */
     XhciSlotSetEndpointState(ext, (PXHCI_ENDPOINT)endpointExtension, state);
 }
 
-/* IRQL: DISPATCH_LEVEL. */
+/*
+ * **The ordinary deliverer on the Version 300 tier** (issue 7). An NT 6.x
+ * usbport's HcInt worker, signalled from `USBPORT_IsrDpc` on every pass,
+ * walks every active endpoint under its EpList lock and reaches this
+ * callback for each through `iSetGlobalEndpointStateTx`, which is the one
+ * context in which `USBPORTSVC_CompleteTransfer` is safe - Microsoft's usbehci
+ * completes transfers from here and nowhere else. The event DPC still
+ * retires the TDs; this is where their completions are handed over. On the
+ * 200 tier usbport reaches it after an `InvalidateEndpoint`, and draining
+ * here is harmless there too.
+ *
+ * IRQL: DISPATCH_LEVEL, under MiniportSpinLock and usbport's EpList lock.
+ */
 static VOID NTAPI xhciPollEndpoint(PVOID miniPortExtension,
                                    PVOID endpointExtension)
 {
+    PXHCI_EXTENSION ext;
+
+    ext = (PXHCI_EXTENSION)miniPortExtension;
+
     XHCI_DBG_CB("PollEndpoint", miniPortExtension, endpointExtension, 0);
+
+    if (!xhciExtensionValid(ext)) {
+        return;
+    }
+    ext->PollEndpointCalls++;
+    XhciSlotDeferredWorkForEndpoint(ext, endpointExtension);
 }
 
 /*
@@ -3631,6 +3926,8 @@ static VOID NTAPI xhciAbortTransfer(PVOID miniPortExtension,
      * rewritten as No Ops around any surviving work - and the deferred pass
      * drives it. (An earlier comment here called that half future work.)
      */
+    /* Under usbport's EpList lock (`Core_iAbortEndpoint`), so the drain
+     * inside is `XhciSlotDeferredWorkForEndpoint`. */
     XhciSlotAbortTransfer(ext, (PXHCI_ENDPOINT)endpointExtension,
                           (PXHCI_TRANSFER)transferExtension, completedLength);
 }
@@ -3659,7 +3956,12 @@ static VOID NTAPI xhciAbortTransfer(PVOID miniPortExtension,
  *   itself in the trace - which is the same reason they were separate in the
  *   Phase 3 spike, and it has not stopped being true now that they do work.
  *
- * IRQL: DISPATCH_LEVEL throughout.
+ * IRQL: <= DISPATCH_LEVEL throughout, and **the lock discipline is not one
+ * thing across this family**: NT 5.x usbport calls the status queries at
+ * DISPATCH under `MiniportSpinLock`, while issue 7 measured NT 6.x calling
+ * them at PASSIVE with no lock. Each wrapper below carries its own tag; this
+ * blanket said DISPATCH throughout and contradicted three of them (the
+ * 2026-09-16 audit's B11, completed after Codex round 3).
  */
 static VOID NTAPI xhciRhGetRootHubData(PVOID miniPortExtension, PVOID data)
 {
@@ -3694,7 +3996,9 @@ static VOID NTAPI xhciRhGetRootHubData(PVOID miniPortExtension, PVOID data)
     XhciRhGetRootHubData(ext, hubData);
 }
 
-/* IRQL: DISPATCH_LEVEL, under MiniportSpinLock. */
+/* IRQL: <= DISPATCH_LEVEL; under MiniportSpinLock on NT 5.x, PASSIVE and
+ * unlocked on NT 6.x (issue 7). The body depends on neither - it answers a
+ * constant. */
 static MPSTATUS NTAPI xhciRhGetStatus(PVOID miniPortExtension, PUSHORT status)
 {
     PXHCI_EXTENSION ext;
@@ -3713,8 +4017,8 @@ static MPSTATUS NTAPI xhciRhGetStatus(PVOID miniPortExtension, PUSHORT status)
     return XhciRhGetStatus(ext, status);
 }
 
-/* IRQL: DISPATCH_LEVEL, under MiniportSpinLock. */
-static MPSTATUS NTAPI xhciRhGetPortStatus(PVOID miniPortExtension,
+/* IRQL: <= DISPATCH_LEVEL; under MiniportSpinLock on NT 5.x, PASSIVE and
+ * unlocked on NT 6.x (issue 7). The body depends on neither. */static MPSTATUS NTAPI xhciRhGetPortStatus(PVOID miniPortExtension,
                                           USHORT port,
                                           PUSBPORT_PORT_STATUS_AND_CHANGE status)
 {
@@ -3735,8 +4039,8 @@ static MPSTATUS NTAPI xhciRhGetPortStatus(PVOID miniPortExtension,
     return XhciRhGetPortStatus(ext, port, status);
 }
 
-/* IRQL: DISPATCH_LEVEL, under MiniportSpinLock. */
-static MPSTATUS NTAPI xhciRhGetHubStatus(PVOID miniPortExtension,
+/* IRQL: <= DISPATCH_LEVEL; under MiniportSpinLock on NT 5.x, PASSIVE and
+ * unlocked on NT 6.x (issue 7). The body depends on neither. */static MPSTATUS NTAPI xhciRhGetHubStatus(PVOID miniPortExtension,
                                          PUSBPORT_HUB_STATUS_AND_CHANGE status)
 {
     PXHCI_EXTENSION ext;
@@ -4436,6 +4740,14 @@ static VOID xhciFillPacket(VOID)
     XhciRegPacket.ResumeController = xhciResumeController;
     XhciRegPacket.InterruptService = xhciInterruptService;
     XhciRegPacket.InterruptDpc = xhciInterruptDpc;
+    /*
+     * The one Version 300 slot this driver fills (task 22.5). An NT 6.x
+     * usbport takes the interrupt DPC from here and never from the slot
+     * above; every other 300-tier slot is NULL-checked by its reader and
+     * stays zero from xhciZeroPacket - see the tier's block in
+     * src\xhci_usbport.h.
+     */
+    XhciRegPacket.InterruptDpcEx = xhciInterruptDpc;
     XhciRegPacket.SubmitTransfer = xhciSubmitTransfer;
     XhciRegPacket.SubmitIsoTransfer = xhciSubmitIsoTransfer;
     XhciRegPacket.AbortTransfer = xhciAbortTransfer;
@@ -4497,12 +4809,55 @@ static VOID xhciFillPacket(VOID)
  */
 static ULONG xhciVerifyPacketAfterRegistration(VOID)
 {
-    ULONG *word;
+    PVOID *service;
     ULONG serviceIndex;
     ULONG servicesPresent;
     ULONG ok;
 
     ok = 1;
+
+    /*
+     * The Version 300 tier, both ways round. An NT 6.x usbport offered 300
+     * writes exactly two services into it - UsbPortRequestAsyncCallbackEx and
+     * UsbPortCancelAsyncCallback - and nothing else, so on that arm both must
+     * be present and every other slot this driver left zero must still be
+     * zero; on the 200 arm nothing past 0x13C / 0x250 is copied or written,
+     * so all of it must still be zero, the two services included. Either
+     * failure is the same kind of evidence the canaries give: a usbport whose
+     * idea of the tier differs from the reading it was declared from.
+     */
+    if (xhciInterfaceVersionPresented >= USBPORT_NT6_MINIPORT_INTERFACE_VERSION) {
+        if (XhciRegPacket.UsbPortRequestAsyncCallbackEx == NULL ||
+            XhciRegPacket.UsbPortCancelAsyncCallback == NULL) {
+            XHCI_DBG_TEXT("ABI-SUSPECT: usbport did not write the two "
+                          "Version 300 services");
+            ok = 0;
+        }
+    } else {
+        if (XhciRegPacket.UsbPortRequestAsyncCallbackEx != NULL ||
+            XhciRegPacket.UsbPortCancelAsyncCallback != NULL) {
+            XHCI_DBG_TEXT("ABI-SUSPECT: a Version 200 registration wrote "
+                          "into the Version 300 tier");
+            ok = 0;
+        }
+    }
+    XHCI_DBG_VALUE("nt6 services written",
+                   (XhciRegPacket.UsbPortRequestAsyncCallbackEx != NULL ? 1UL : 0UL) +
+                   (XhciRegPacket.UsbPortCancelAsyncCallback != NULL ? 1UL : 0UL));
+    if (XhciRegPacket.InterruptDpcEx != xhciInterruptDpc ||
+        XhciRegPacket.ExtraCommonBufferCount != 0 ||
+        XhciRegPacket.Unreferenced198 != NULL ||
+        XhciRegPacket.Unreferenced1B8 != NULL ||
+        XhciRegPacket.Unreferenced1BC != NULL ||
+        XhciRegPacket.Unreferenced1C0 != NULL ||
+        XhciRegPacket.Unreferenced1D0 != NULL ||
+        XhciRegPacket.Unreferenced1D4 != NULL ||
+        XhciRegPacket.HaltController != NULL ||
+        XhciRegPacket.Get32BitMicroFrameNumber != NULL) {
+        XHCI_DBG_TEXT("ABI-SUSPECT: a Version 300 slot this driver left "
+                      "alone was written");
+        ok = 0;
+    }
 
     if (XhciRegPacket.Reserved1 != XHCI_CANARY_1 ||
         XhciRegPacket.Reserved2 != XHCI_CANARY_2 ||
@@ -4519,20 +4874,27 @@ static ULONG xhciVerifyPacketAfterRegistration(VOID)
     }
 
     /*
-     * The service block is 16 consecutive pointers at 0xE4-0x120. All 16 being
-     * non-NULL is the positive proof that the packet's in/out boundary sits
-     * where the layout says: one shifted field and either a service lands in a
-     * callback slot or a slot stays NULL.
+     * The service block is 16 consecutive pointers at 0xE4-0x120 (0x1A0-0x218
+     * on amd64). All 16 being non-NULL is the positive proof that the packet's
+     * in/out boundary sits where the layout says: one shifted field and either
+     * a service lands in a callback slot or a slot stays NULL.
+     *
+     * Walked as pointers, not ULONGs: until the 2026-09-17 audit (B1) the loop
+     * read 16 ULONGs, which on amd64 is the first eight pointers twice over,
+     * so the count reached 16 on eight services and the check below could not
+     * fire for the second half of the block. Every amd64 reading of "all
+     * sixteen service pointers written" before that date covered eight.
      */
-    word = (ULONG *)&XhciRegPacket.UsbPortDbgPrint;
+    service = (PVOID *)&XhciRegPacket.UsbPortDbgPrint;
     servicesPresent = 0;
     for (serviceIndex = 0; serviceIndex < 16; serviceIndex++) {
-        if (word[serviceIndex] != 0) {
+        if (service[serviceIndex] != NULL) {
             servicesPresent++;
         }
     }
     XHCI_DBG_VALUE("usbport services written", servicesPresent);
-    XHCI_DBG_WORDS("services", word, 16);
+    XHCI_DBG_WORDS("services", (const ULONG *)service,
+                   (16UL * sizeof(PVOID)) / sizeof(ULONG));
     if (servicesPresent != 16) {
         XHCI_DBG_TEXT("ABI-SUSPECT: usbport did not fill all 16 services");
         ok = 0;
@@ -4574,6 +4936,27 @@ VOID XhciFillPacketForTest(VOID)
 #else
 
 /*
+ * The stack-delta check below is x86-only, and the guard is its own name
+ * because three separate regions have to agree about it - the two locals, the
+ * two `__asm` statements, and the comparison. MSVC's inline assembler does not
+ * exist on amd64 (`error C4235: nonstandard extension used : '__asm' keyword
+ * not supported on this architecture`), and it is the sole reason the `qemu`
+ * flavour would not compile there at all. The locals have to be inside the
+ * same guard rather than left declared: unreferenced locals are a warning, and
+ * `/WX` is on in the free build.
+ *
+ * Nothing is lost on amd64 that the check was protecting against. It exists to
+ * catch a calling-convention mismatch across `USBPORT_RegisterUSBPortDriver`,
+ * and the mismatch it watches for is a `__stdcall` decoration problem that
+ * only x86 has: amd64 has one calling convention and no name decoration, which
+ * is the same reason the import library's `_Name@N` check is x86-only by
+ * nature (design record 11 section 8).
+ */
+#if defined(XHCI_DBG_TRACE) && !defined(_WIN64)
+#define XHCI_CHECK_STACK_DELTA 1
+#endif
+
+/*
  * DriverEntry - the only entry point this driver has.
  *
  * On success usbport owns the driver object: it installs its own AddDevice and
@@ -4587,7 +4970,7 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT DriverObject,
 {
     NTSTATUS status;
     ULONG hciMn;
-#ifdef XHCI_DBG_TRACE
+#ifdef XHCI_CHECK_STACK_DELTA
     ULONG espBefore = 0;
     ULONG espAfter = 0;
 #endif
@@ -4659,22 +5042,137 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT DriverObject,
      * address is outside a registered VxD's range, which made the task 8
      * disable bugcheck unattributable until this line existed.
      */
-    XHCI_DBG_VALUE("image base", (ULONG)DriverObject->DriverStart);
+    XHCI_DBG_VALUE("image base", (ULONG)(ULONG_PTR)DriverObject->DriverStart);
     XHCI_DBG_VALUE("image size", (ULONG)DriverObject->DriverSize);
 
     /* What the shipping usbehci.sys does immediately before registering:
      * usbport saves this pointer and installs its own unload handler. */
     DriverObject->DriverUnload = NULL;
 
-#ifdef XHCI_DBG_TRACE
+#ifdef XHCI_CHECK_STACK_DELTA
     __asm mov espBefore, esp
 #endif
 
-    status = USBPORT_RegisterUSBPortDriver(DriverObject,
-                                           USB20_MINIPORT_INTERFACE_VERSION,
-                                           &XhciRegPacket);
+    /*
+     * The registration export takes FOUR arguments on NT 6.x and three on
+     * NT 5.x - see the block above its declaration in src\xhci_usbport.h for
+     * the evidence and for what a three-argument call does to Vista x64.
+     *
+     * The branch runs on both architectures since task 22.5 (it was amd64-only
+     * from task 21.8 until then). On x86 the arity is selected by calling
+     * through a cast of the one import - the import library binds by plain
+     * name, so no second stub is needed - and the same answer selects the
+     * interface version: 300 to an NT 6.x usbport, whose interrupt DPC lives
+     * in a slot that exists only at that tier, and 200 to every other, so
+     * that NT 5.x and 9x see exactly the call and the packet length they have
+     * always been observed with. The whole 300 tier was read slot by slot
+     * before this branch was widened (docs\usb-xhci-info\usbport-miniport-abi.md,
+     * "The Version 300 tier, slot by slot"), and every NT 5.x and 9x usbport
+     * was read to test the version at 100 and 200 only.
+     *
+     * `IoIsWdmVersionAvailable` is the version primitive rather than
+     * `PsGetVersion`, which is not exported on Windows 98 or Me
+     * (docs\usb-xhci-info\win98-wdm.md). Windows 98 reports WDM 1.0 from it,
+     * so the 9x targets take the NT 5.x arm. Both allowlists carry a row for
+     * it; the 32-bit row's Windows 98 evidence is NUSB's own USBPORT.SYS,
+     * which imports the same pair, and the name in ntkern.vxd's table.
+     *
+     * THE THRESHOLD IS WDM 6.00, NOT 1.30, AND THAT DIFFERENCE WAS A LIVE
+     * DEFECT HERE. `IoIsWdmVersionAvailable(1, 0x30)` reads like a pre-6.x
+     * test and is not one: **Windows Server 2003 reports WDM 1.30 exactly**,
+     * and Windows XP x64 IS Server 2003 (NT 5.2.3790), so that call answered
+     * TRUE there and this branch took the NT 6.x arm on an NT 5.x system.
+     * Observed on the XP x64 guest 2026-09-10 - `wdm pre-1.30 ...=00000000`,
+     * `resource bits required=0000000C`, usbport answering
+     * `ResourcesTypes=0x06`, `init REFUSED at step=00000001` - and then read
+     * out of the three kernels, static, which is what settles the constant:
+     *
+     *   NT 5.2  winxp64   ntoskrnl+0x28BDE0  cmp cl,1 / jb T / jne F /
+     *                                        cmp dl,30h / ja F   -> 1.30
+     *   NT 6.0  vista-x86 ntoskrnl+0x1A876F  cmp maj,6 / jb T / jne F /
+     *                                        cmp min,0 / ja F    -> 6.00
+     *   NT 6.1  win7-x86  ntoskrnl+0x1CAB9B  the same instructions -> 6.00
+     *
+     * (1,0x30) is therefore TRUE on all three; (6,0) is TRUE on exactly the
+     * two NT 6.x ones. Note Windows 7 reports 6.00 and NOT 6.01, so (6,1)
+     * would be wrong in the other direction.
+     *
+     * On x64 there is no Windows between 5.2 and 6.0, so `!(6,0)` is a
+     * POSITIVE identification of NT 5.2 rather than a fallback - which is
+     * what lets one answer still drive both decisions below. The old
+     * comment's "fails towards four" reasoning is retired with the constant
+     * it defended, and the fact it rested on is now observed rather than
+     * assumed: a fourth argument on NT 5.2 really is inert - the callee never
+     * reads r9, x64 is caller-cleaned so nothing unbalances - because the
+     * broken test sent XP x64 down the four-argument arm on 2026-09-10 and
+     * registration still returned STATUS_SUCCESS with all sixteen service
+     * pointers written.
+     */
+    {
+        BOOLEAN isNt5 = !IoIsWdmVersionAvailable(6, 0);
 
-#ifdef XHCI_DBG_TRACE
+        XHCI_DBG_VALUE("wdm pre-6.00 (three-argument registration)",
+                       (ULONG)isNt5);
+
+        /*
+         * The same boundary moves the `USBPORT_RESOURCES.ResourcesTypes`
+         * enumerators up one bit, so the mask XhciInitController requires at
+         * step 1 is settled here from the same answer rather than read at the
+         * check - see the block above the two families in
+         * src\xhci_usbport.h. This one does NOT fail towards NT 6.x: an
+         * unrecognised system keeps the mask four shipping targets have
+         * already been observed to satisfy, and the cost of being wrong is a
+         * legible refusal at step 1 rather than a bugcheck.
+         */
+        if (!isNt5) {
+            XhciResourcesRequired =
+                USBPORT6_RESOURCES_MEMORY | USBPORT6_RESOURCES_INTERRUPT;
+        }
+        XHCI_DBG_VALUE("resource bits required", XhciResourcesRequired);
+
+        /*
+         * The version is the third thing the one answer settles. 300 is
+         * what puts InterruptDpcEx inside the bytes an NT 6.x usbport copies
+         * (0x1E0 / 0x368 against 0x13C / 0x250 at 200); 200 everywhere else
+         * keeps the NT 5.x and 9x targets on the packet length they have been
+         * observed with, although each of their usbports was read to copy
+         * 0x13C / 0x250 for any version at or above 200.
+         */
+        xhciInterfaceVersionPresented =
+            isNt5 ? USB20_MINIPORT_INTERFACE_VERSION
+                  : USBPORT_NT6_MINIPORT_INTERFACE_VERSION;
+        XHCI_DBG_VALUE("interface version presented",
+                       xhciInterfaceVersionPresented);
+
+        /*
+         * The fourth thing, and the one slot whose x86 shape differs between
+         * the tiers: XP's MP_CloseEndpoint pushes a third argument that NT
+         * 6.x's MPf_CloseEndpoint does not, and a stdcall callee cleans one
+         * count or the other. The field is typed with the NT 6.x shape and
+         * filled with it; the cast is what puts the NT 5.x shape in - see
+         * PHCI_CLOSE_ENDPOINT in src\xhci_usbport.h for both readings.
+         */
+        if (isNt5) {
+            XhciRegPacket.CloseEndpoint =
+                (PHCI_CLOSE_ENDPOINT)xhciCloseEndpointNt5;
+        }
+
+        if (isNt5) {
+            status = USBPORT_RegisterUSBPortDriver(
+                         DriverObject,
+                         xhciInterfaceVersionPresented,
+                         &XhciRegPacket);
+        } else {
+            status = ((XHCI_REGISTER_USBPORT_NT6)
+                          USBPORT_RegisterUSBPortDriver)(
+                         DriverObject,
+                         xhciInterfaceVersionPresented,
+                         &XhciRegPacket,
+                         RegistryPath);
+        }
+    }
+
+#ifdef XHCI_CHECK_STACK_DELTA
     __asm mov espAfter, esp
 
     /*

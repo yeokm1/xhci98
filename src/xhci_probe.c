@@ -353,8 +353,17 @@ static VOID xhciProbeReportTransfer(
         return;
     }
 
-    /* The header is Flags, CurrentVa, MappedSystemVa, SgElementCount - four
-     * words, and the whole of what precedes the elements. */
+    /*
+     * The header is Flags, CurrentVa, MappedSystemVa, SgElementCount - the whole
+     * of what precedes the elements. **That is four words on x86 and eight on
+     * amd64**: `CurrentVa` and `MappedSystemVa` are pointer-sized, and M8 moved
+     * the element array to 0x20 there. The literal below is the x86 count and is
+     * left as one deliberately - this is the qemu-flavour probe, which has never
+     * been run on a 64-bit guest, and a dump that reads eight words on a build
+     * nothing has exercised would be a second unverified claim rather than a
+     * fix. Read a 64-bit trace of this line as the first half of the header
+     * only. *(The 2026-09-16 audit's B10.)*
+     */
     XHCI_DBG_WORDS("probe.xfer sg head", (const ULONG *)sgList, 4);
 
     if (report->DumpElements != 0) {
@@ -367,8 +376,12 @@ static VOID xhciProbeReportTransfer(
         }
         for (i = 0; i < count; i++) {
             /*
-             * Six words per element - PA low, PA high, reserved, length,
-             * offset, reserved - which is the raw evidence
+             * Six words per element on x86 - PA low, PA high, reserved, length,
+             * offset, reserved. The count below is a `sizeof`, so it follows the
+             * architecture on its own; what does not follow is the *reading* of
+             * those words, since M8 measured the amd64 element's length and
+             * offset at 0x10 and 0x14 rather than at the third and fourth word.
+             * This is the raw evidence
              * docs/usb-xhci-info/usbport-miniport-interface.md's "Phase 6 obligation" asks
              * for, printed rather than summarised so the ABI record can be
              * updated from the log itself.

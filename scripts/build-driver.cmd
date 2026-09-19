@@ -26,7 +26,10 @@ rem      everything else here)
 rem   9. test\run-host-tests.cmd - the pure-core suite. It runs before the DDK
 rem      builds, not after: it compiles the same core files in seconds, so a
 rem      bad carve, ring or PORTSC constant should not cost two full builds
-rem      first
+rem      first. Since task 21.4 it also builds and runs test_packet and
+rem      test_membuf a second time for amd64, whichever architecture this
+rem      wrapper was asked for, so the _WIN64 half of src\xhci_usbport.h is
+rem      checked on every build rather than only on an -amd64 one
 rem  10. `build` for each requested flavor, with the compile-time layout and
 rem      ABI asserts in src\xhci.h / src\xhci_usbport.h
 rem  11. scripts\import-gate\check-imports.ps1 on each linked binary, then
@@ -66,13 +69,14 @@ rem fed is assembled by a separate explicit step, which re-runs the INF gate
 rem against the finished directory so a package is never less gated than the
 rem binary in it:
 rem
-rem   scripts\package\make-package.ps1 [-Flavor release|debug]
+rem   scripts\package\make-package.ps1 [-Flavor release|debug] [-Arch x86|amd64]
 rem
 rem The media is this project's two files and nothing else since 1.0.0.1; the
-rem OS supplies usbd.sys and usbhub.sys (and, on the NT targets, usbport.sys)
-rem through the INF's LayoutFile.
+rem OS supplies usbd.sys and usbhub.sys, usbport.sys on the NT targets, and
+rem usbui.dll on every target since 1.0.2.0, through the INF's LayoutFile.
 rem
 rem Usage:  scripts\build-driver.cmd [release|debug|qemu|both|all]
+rem                                  [-amd64] [-NoTargetEvidence]
 rem                                                          (default: both)
 rem
 rem   "both" is the two SHIPPING flavors - release and debug - and it stays the
@@ -87,6 +91,31 @@ rem   clone builds wherever it is unpacked and nothing is installed under C:\.
 rem   Set DDKROOT to build against a DDK somewhere else.
 rem   Add -NoTargetEvidence after the flavor to skip the gate's target-file
 rem   evidence steps on a host that has none staged.
+rem
+rem SECOND ARCHITECTURE, since roadmap task 21.2. -amd64 builds the same three
+rem flavors for amd64 with WDK 7.1 (tools\WinDDK71) instead of the Windows 2000
+rem DDK, which cannot target it. The two toolchains are separate all the way
+rem down and the x86 path is untouched by the switch:
+rem
+rem   x86    tools\ntddk       setenv <root> <flavor> w2k x86
+rem                            src\usbport.lib          src\obj*\i386
+rem   amd64  tools\WinDDK71    setenv <root> <flavor> x64 WNET no_oacr
+rem                            src\usbport_amd64.lib    src\obj*\amd64
+rem
+rem BUILD_ALT_DIR is overridden back to fre/chk/chk_qemu after setenv.bat in
+rem BOTH cases. WDK 7.1's setenv sets it to fre_wnet_AMD64, which src\sources
+rem hard-errors on, and build.exe appends the architecture itself - so the
+rem override is what puts the output at src\objfre\amd64 beside src\objfre\i386
+rem with no second obj root and nothing renamed.
+rem
+rem WHAT AN amd64 BUILD IS GATED ON, since roadmap task 21.3 closed: the import
+rem gate enforces xhci98-imports-amd64.allow and resolves every pair against
+rem authenticated NT 5.2 amd64 baselines (winxp64-baselines.expected), and the
+rem INF gate runs over BOTH production INFs on every build - src\xhci98.inf
+rem under -Arch x86 and src\xhci98-amd64.inf under -Arch amd64 - whichever
+rem architecture is being built. Both, always, because the two are one release
+rem and either drifting from the other is silent on the target;
+rem scripts\inf-gate\test-inf-checks.ps1 also compares them directly.
 rem
 rem Exit codes: 0 = built and gated, 1 = failure, 2 = host tests inconclusive
 rem (a blocked exe launch, not a test failure - just run it again).
@@ -103,7 +132,15 @@ rem derived path: DDKROOT is one of them and reaches setenv.bat, whose own
 rem derived paths are printed in error messages a developer has to read.
 for %%I in ("%~dp0..") do set "REPO=%%~fI"
 set "FLAVORS=%~1"
-set "GATEOPT=%~2"
+rem Two optional switches in either order after the flavor, because -amd64 and
+rem -NoTargetEvidence are independent and a caller should not have to remember
+rem which comes first. :readopt leaves BADOPT set for anything else, which is
+rem refused below before a single self-test has run.
+set "GATEOPT="
+set "ARCH=x86"
+set "BADOPT="
+call :readopt "%~2"
+call :readopt "%~3"
 if "%FLAVORS%"=="" set "FLAVORS=both"
 if /i "%FLAVORS%"=="both" set "FLAVORS=debug release"
 if /i "%FLAVORS%"=="all" set "FLAVORS=debug release qemu"
@@ -118,13 +155,59 @@ rem parameter binding and reads as the binary failing the gate.
 set "FLAVOR="
 for %%F in (%FLAVORS%) do call :validateflavor %%F
 if defined FLAVOR goto badflavor
-if "%GATEOPT%"=="" goto gateoptok
-if /i "%GATEOPT%"=="-NoTargetEvidence" goto gateoptok
-goto badgateopt
-:gateoptok
+if defined BADOPT goto badgateopt
+rem The DDK output directory for the target architecture - build.exe's own
+rem <arch> component, and the one place this script turns ARCH into a path.
+set "ARCHDIR=i386"
+if /i "%ARCH%"=="amd64" set "ARCHDIR=amd64"
 rem The DDK is a repository directory, not a machine-wide install, so this
 rem default follows the clone. scripts\install-w2kddk-cabs.ps1 puts it there.
+rem
+rem An amd64 build takes WDK 7.1 instead, and the trailing setenv.bat arguments
+rem differ with it: the Windows 2000 DDK takes "w2k x86", WDK 7.1 takes
+rem "x64 WNET no_oacr" - WNET because NT 5.2 is the only lineage that ships an
+rem amd64 lib directory (there is no lib\wxp\amd64), which is what makes one
+rem binary serve Windows XP x64 and Server 2003 x64.
+set "SETENVARGS=w2k x86"
+set "LIBNAME=usbport.lib"
+set "LIBARG="
+if /i not "%ARCH%"=="amd64" goto ddkdefault
+set "SETENVARGS=x64 WNET no_oacr"
+set "LIBNAME=usbport_amd64.lib"
+set "LIBARG=-amd64"
+rem
+rem **DDKROOT NAMES THE WIN2000 DDK AND MUST NOT REACH THIS LEG.**  It is an
+rem override for the 32-bit build, and it reaches setenv.bat - so an exported
+rem DDKROOT pointing at tools\ntddk was being called with `x64 WNET`, which the
+rem Win2000 DDK does not have.  The run then died at :nooutput naming the wrong
+rem cause entirely (the 2026-09-16 audit's D7).  WDKROOT is this leg's own
+rem override - the SAME name the import gate and scripts\make-usbport-lib.cmd
+rem honour, so one variable redirects the whole 64-bit toolchain rather than
+rem three scripts each having their own.
+rem
+rem A LABEL RATHER THAN A PARENTHESISED BLOCK, which is this file's idiom for
+rem every other refusal and is not a style choice here: cmd ends an `if (`
+rem block at the first unescaped `)`, including one inside an `echo`, so a
+rem diagnostic that wants a bracketed aside cannot live in one.
+if defined DDKROOT goto ddkrootset
+set "DDKROOT=%REPO%\tools\WinDDK71"
+if not "%WDKROOT%"=="" set "DDKROOT=%WDKROOT%"
+goto ddkchosen
+:ddkrootset
+echo ERROR: DDKROOT is set, and it is the Windows 2000 DDK override.
+echo   DDKROOT=%DDKROOT%
+echo The -amd64 leg builds with WDK 7.1 and would call that DDK's setenv.bat
+echo with "x64 WNET", which it cannot do - and the failure would be reported
+echo as a missing output rather than as this.
+echo Clear DDKROOT, or set WDKROOT to redirect the 64-bit toolchain - the same
+echo variable the import gate and make-usbport-lib.cmd read:
+echo   set DDKROOT=
+echo   set WDKROOT=^<path to WDK 7.1^>
+endlocal
+exit /b 1
+:ddkdefault
 if "%DDKROOT%"=="" set "DDKROOT=%REPO%\tools\ntddk"
+:ddkchosen
 rem src\sources says XHCI_EXTRA_DEFINES is empty in every normal build and that a
 rem deploy build must be made with it unset, so any value at all means a probe.
 rem Do not narrow this to a substring test: `set VAR 2>nul | findstr` looks like
@@ -152,6 +235,11 @@ rem later. src\xhci_dispatch.c carries the same refusal as an #error, which is
 rem what binds a bare `build` from a DDK prompt.
 if defined XHCI_FAILSTART if /i not "%XHCI_EXTRA_DEFINES%"=="-DXHCI_FAIL_START_CONTROLLER" goto failstartmixed
 
+rem Two refusals, because the two legs want two different toolchains: on the
+rem -amd64 leg DDKROOT is tools\WinDDK71 (or WDKROOT), and a missing WDK used
+rem to be reported as a missing Windows 2000 DDK, naming tools\ntddk and the
+rem cab installer that cannot supply it (the 2026-09-17 audit's D6).
+if /i "%ARCH%"=="amd64" if not exist "%DDKROOT%\bin\setenv.bat" goto nowdk
 if not exist "%DDKROOT%\bin\setenv.bat" goto noddk
 
 rem setenv.bat takes BASEDIR verbatim, so DDKROOT is passed unquoted at the
@@ -175,10 +263,10 @@ echo DDK: %DDKROOT%
 
 rem The import library is a build artifact, not a checked-in file. Generating it
 rem here rather than failing keeps a fresh clone one command away from a build.
-if not exist "%REPO%\src\usbport.lib" (
+if not exist "%REPO%\src\%LIBNAME%" (
     echo.
-    echo src\usbport.lib is missing - generating it.
-    call "%REPO%\scripts\make-usbport-lib.cmd"
+    echo src\%LIBNAME% is missing - generating it.
+    call "%REPO%\scripts\make-usbport-lib.cmd" %LIBARG%
     if errorlevel 1 goto libfail
 )
 
@@ -202,9 +290,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
 if errorlevel 1 goto inftestfail
 
 echo.
-echo === INF gate ===
+echo === INF gate (x86) ===
+rem INFFILE is what :inffail names; the two gate runs share the label and used
+rem to share the x86 file's name too (the 2026-09-17 audit's D7).
+set "INFFILE=src\xhci98.inf"
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-inf.ps1"
+    "%REPO%\scripts\inf-gate\check-inf.ps1" -Arch x86
+if errorlevel 1 goto inffail
+
+rem The 64-bit package's INF, gated on every build and not only an -amd64 one.
+rem The two ship as one release, neither engine reports a mistake in either,
+rem and the cost of the second run is a second or two.
+echo.
+echo === INF gate (amd64) ===
+set "INFFILE=src\xhci98-amd64.inf"
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\inf-gate\check-inf.ps1" -Arch amd64
 if errorlevel 1 goto inffail
 
 rem Stand-ins only - no build, no staged media, no VM - so this runs here with
@@ -237,6 +338,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\xhciqual\test\check-bat-eol.ps1"
 if errorlevel 1 goto eoltestfail
 
+rem And the bytes INSIDE tracked source, which nothing checked until task
+rem 22.7: every other gate here reads src\ through a compiler or a parser
+rem that accepts any byte at all inside a comment or a string literal. A BEL
+rem written into src\xhci_slot.c by a PowerShell escape passed all three x86
+rem flavours and every gate on 2026-09-12.
+echo.
+echo === source charset ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-source-charset.ps1"
+if errorlevel 1 goto charsetfail
+
 rem The snapshot reader's report path, when its EXE has been built (it is a
 rem separate build.cmd, and a clone without Open Watcom still has this one).
 if exist "%REPO%\xhcisnap\XHCISNAP.EXE" (
@@ -263,7 +375,11 @@ echo.
 if defined XHCI_RESOURCE_PROBE goto probesuccess
 echo BUILD + GATES PASSED (%FLAVORS%)
 echo Next, to build the install media a VM can be pointed at:
-echo   powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1
+if /i "%ARCH%"=="amd64" (
+    echo   powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Arch amd64
+) else (
+    echo   powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1
+)
 endlocal
 exit /b 0
 
@@ -293,7 +409,11 @@ echo binary carries the marker make-package.ps1 rejects - this warning is a
 echo courtesy and the packaging gate is the enforcement.
 echo Clear XHCI_EXTRA_DEFINES and rebuild before packaging:
 echo   set XHCI_EXTRA_DEFINES=
-echo   scripts\build-driver.cmd both
+if /i "%ARCH%"=="amd64" (
+    echo   scripts\build-driver.cmd both -amd64
+) else (
+    echo   scripts\build-driver.cmd both
+)
 endlocal
 exit /b 0
 
@@ -308,12 +428,17 @@ echo   powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1
 echo Do not install it on a machine you are not prepared to recover. When you are
 echo done, clear XHCI_EXTRA_DEFINES and rebuild before packaging anything else:
 echo   set XHCI_EXTRA_DEFINES=
-echo   scripts\build-driver.cmd both
+if /i "%ARCH%"=="amd64" (
+    echo   scripts\build-driver.cmd both -amd64
+) else (
+    echo   scripts\build-driver.cmd both
+)
 endlocal
 exit /b 0
 
 rem ------------------------------------------------------------------
-rem :checkfailstart <release|debug>
+rem :checkfailstart <flavour>   (release, debug or qemu - the caller passes
+rem                              whichever it just built)
 rem
 rem Task 12.3's artifact must carry XHCI98_FAILSTART_ARTIFACT_TASK_12_3, which is
 rem the string the packager's narrow exception keys on. Read out of the image for
@@ -328,7 +453,7 @@ setlocal
 set "FLAVOR=%~1"
 call :flavordirs %FLAVOR%
 if "%OBJDIR%"=="" goto badflavor
-set "OUTSYS=%REPO%\src\%OBJDIR%\i386\xhci98.sys"
+set "OUTSYS=%REPO%\src\%OBJDIR%\%ARCHDIR%\xhci98.sys"
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$b=[System.IO.File]::ReadAllBytes('%OUTSYS%');" ^
     "$t=[System.Text.Encoding]::ASCII.GetString($b);" ^
@@ -362,7 +487,8 @@ endlocal
 exit /b 1
 
 rem ------------------------------------------------------------------
-rem :checkmarker <release|debug>
+rem :checkmarker <flavour>      (release, debug or qemu - the caller passes
+rem                              whichever it just built)
 rem
 rem A diagnostic build must carry XHCI98_PROBE_BUILD_DO_NOT_DEPLOY, because that
 rem string is the only thing make-package.ps1 can see. Read out of the image, so
@@ -374,7 +500,7 @@ setlocal
 set "FLAVOR=%~1"
 call :flavordirs %FLAVOR%
 if "%OBJDIR%"=="" goto badflavor
-set "OUTSYS=%REPO%\src\%OBJDIR%\i386\xhci98.sys"
+set "OUTSYS=%REPO%\src\%OBJDIR%\%ARCHDIR%\xhci98.sys"
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$b=[System.IO.File]::ReadAllBytes('%OUTSYS%');" ^
     "$t=[System.Text.Encoding]::ASCII.GetString($b);" ^
@@ -407,7 +533,7 @@ setlocal
 set "FLAVOR=%~1"
 call :flavordirs %FLAVOR%
 if "%OBJDIR%"=="" goto badflavor
-set "OUTSYS=%REPO%\src\%OBJDIR%\i386\xhci98.sys"
+set "OUTSYS=%REPO%\src\%OBJDIR%\%ARCHDIR%\xhci98.sys"
 rem In a script rather than inline, unlike :checkmarker next door. It needs a
 rem pipeline and a comparison, and a `powershell -Command` continuation is the
 rem wrong place for either: the first version compared $found[0] without
@@ -425,7 +551,7 @@ rem already makes for XHCIQUAL and XHCISNAP (the 2026-09-07 audit's H13). It is
 rem content rather than timestamps, because an mtime moves on a checkout or a
 rem comment-only commit; scripts\source-stamp.ps1 says why at length.
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\source-stamp.ps1" -Write "%REPO%\src\%OBJDIR%\i386"
+    "%REPO%\scripts\source-stamp.ps1" -Write "%REPO%\src\%OBJDIR%\%ARCHDIR%"
 if errorlevel 1 goto stampfailed
 endlocal
 exit /b 0
@@ -511,7 +637,7 @@ setlocal
 set "FLAVOR=%~1"
 call :flavordirs %FLAVOR%
 if "%OBJDIR%"=="" goto badflavor
-set "OUTSYS=%REPO%\src\%OBJDIR%\i386\xhci98.sys"
+set "OUTSYS=%REPO%\src\%OBJDIR%\%ARCHDIR%\xhci98.sys"
 rem objchk -> buildchk, objfre -> buildfre, objchk_qemu -> buildchk_qemu: the
 rem names build.exe writes its log and error file under, which are BUILD_ALT_DIR
 rem with "build" in front. The substitution below is the same rule spelled once.
@@ -533,7 +659,7 @@ rem possible at all: setenv.bat sets it to chk and derives the lib paths from it
 rem in the same breath, so overriding it here moves the OBJECT tree without
 rem moving the LIBRARY path. Overriding it before setenv.bat would do the
 rem opposite and look for a libchk_qemu that does not exist.
-cmd /c "call "%DDKROOT%\bin\setenv.bat" %DDKROOT% %DDKFLAVOR% w2k x86 && set "BUILD_ALT_DIR=%ALTDIR%" && cd /d "%REPO%\src" && build -cZ"
+cmd /c "call "%DDKROOT%\bin\setenv.bat" %DDKROOT% %DDKFLAVOR% %SETENVARGS% && set "BUILD_ALT_DIR=%ALTDIR%" && cd /d "%REPO%\src" && build -cZ"
 if errorlevel 1 goto buildfail
 
 rem build.exe's exit code is not sufficient on its own: it writes the errors it
@@ -544,7 +670,7 @@ if not exist "%OUTSYS%" goto nooutput
 echo.
 echo === import gate (%FLAVOR%) ===
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%OUTSYS%" -Flavor %FLAVOR% %GATEOPT%
+    "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%OUTSYS%" -Flavor %FLAVOR% -Arch %ARCH% %GATEOPT%
 if errorlevel 1 goto gatefail
 
 rem The image has to say which of the three it is, from an ASCII scan and with
@@ -575,11 +701,29 @@ endlocal
 exit /b 1
 
 :badgateopt
-echo ERROR: unknown second argument "%GATEOPT%". The only option after the
-echo flavor is -NoTargetEvidence, which skips the import gate's target-file
-echo evidence steps on a host with none staged.
+echo ERROR: unknown option "%BADOPT%". The options after the flavor are
+echo -NoTargetEvidence, which skips the import gate's target-file evidence
+echo steps on a host with none staged, and -amd64, which builds for amd64 with
+echo WDK 7.1 instead of x86 with the Windows 2000 DDK. Either order.
 endlocal
 exit /b 1
+
+rem ------------------------------------------------------------------
+rem :readopt <word>
+rem
+rem One optional switch, in either position. An empty argument is the ordinary
+rem case of a caller passing fewer than three. Anything unrecognised is left in
+rem BADOPT rather than refused here, so that the caller can refuse once, before
+rem any self-test has run - a mistyped switch used to reach check-imports.ps1
+rem verbatim and fail parameter binding, which reads as the binary failing the
+rem gate rather than as a typo.
+rem ------------------------------------------------------------------
+:readopt
+if "%~1"=="" exit /b 0
+if /i "%~1"=="-amd64" set "ARCH=amd64" & exit /b 0
+if /i "%~1"=="-NoTargetEvidence" set "GATEOPT=-NoTargetEvidence" & exit /b 0
+set "BADOPT=%~1"
+exit /b 0
 
 rem ------------------------------------------------------------------
 rem :validateflavor <word>
@@ -669,10 +813,22 @@ exit /b 1
 
 :inffail
 echo.
-echo ERROR: src\xhci98.inf failed the setup-engine gate. Do not install it -
+echo ERROR: %INFFILE% failed the setup-engine gate. Do not install it -
 echo Win98's setup engine has no log, and a Win2000 install that creates no
 echo service looks the same in Device Manager as a driver that loaded and
 echo failed.
+endlocal
+exit /b 1
+
+:nowdk
+echo.
+echo ERROR: %DDKROOT%\bin\setenv.bat not found.
+echo The -amd64 leg builds with WDK 7.1, expected inside this repository at
+echo tools\WinDDK71. Nothing is installed machine-wide - it is unpacked there
+echo with `msiexec /a` and installs nothing; see
+echo docs\contributing\design\11-x64-targets.md section 4.
+echo (or set WDKROOT to a WDK 7.1 installed elsewhere - the same variable the
+echo import gate and scripts\make-usbport-lib.cmd read).
 endlocal
 exit /b 1
 
@@ -695,6 +851,13 @@ exit /b 1
 echo.
 echo ERROR: a tracked batch file is not CRLF. MS-DOS 7.1 COMMAND.COM can fail
 echo to find goto labels in an LF-only file, silently breaking its error paths.
+endlocal
+exit /b 1
+
+:charsetfail
+echo.
+echo ERROR: tracked source carries a stray control byte or a UTF-8 BOM where the
+echo 1998-era toolchain cannot read one. See the check's output above.
 endlocal
 exit /b 1
 

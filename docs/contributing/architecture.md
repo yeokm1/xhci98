@@ -54,7 +54,7 @@ Everything xHCI-specific. The hardware model is unchanged from a monolithic desi
 - Slot/endpoint lifecycle: Enable Slot, Address Device, Configure Endpoint, Disable Slot, device/input contexts - including intercepting usbport's SET_ADDRESS control transfer and emulating it with Address Device (xHCI forbids software-issued SET_ADDRESS; see the enumeration data flow below).
 - Transfer encoding: usbport "submit transfer" calls -> TRBs on the right endpoint ring -> doorbell.
 - Root-hub callbacks: report port count/status, perform port reset, report speed (usbport builds the hub descriptor and PDO from these).
-- Interrupt handling: the miniport's ISR/DPC hooks drain the xHCI event ring and complete transfers back to usbport.
+- Interrupt handling: the miniport's ISR/DPC hooks drain the xHCI event ring and retire transfers. On an NT 5.x usbport the DPC's own drain hands the completions back; on NT 6.x they are handed back from `PollEndpoint`, the callback usbport makes under the lock its completion service assumes (issue 7, design record 05 section 7).
 
 ## Internal Components
 
@@ -146,8 +146,11 @@ xhci98.sys (usbport miniport)
 |       DbgPrint once by the PASSIVE-level flush in xhci_dispatch.c
 |
 `-- Debug Helpers                xhci_dbg.c
-    `-- The trace channel (guarded by #ifdef XHCI_DBG_TRACE, the qemu
-        flavour; never #if DBG)
+    `-- The trace channel (guarded by #ifdef XHCI_DBG_TRACE, which
+        xhci_dbg.h defines as DBG && XHCI_DBG_LIVE; src/sources and
+        failure-diagnosis.md name the XHCI_DBG_LIVE half, the define
+        src/sources sets for the qemu flavour only, so the two names are
+        one condition; never #if DBG)
 ```
 
 Compared with a monolithic HCD, three pieces shrink or move into `usbport.sys`. There is no `xhci_dispatch.c` IOCTL_INTERNAL_USB handler (usbport owns it). There is no root hub PDO creation or hub-descriptor construction (usbport owns that too; only the port callbacks remain, in `xhci_rh.c`, while `xhci_port.c` stays a pure core with no MMIO and no lock). And there is no URB-function dispatch table: `xhci_xfer.c` receives already-parsed transfer requests.
@@ -317,7 +320,7 @@ The device's driver is the miniport itself (`xhci98.sys`). On Win98 `usbport.sys
 - Win98 does it the 9x way: `DevLoader=*ntkern` + `NTMPDriver=xhci98.sys`, the same shape NUSB's `USB2.inf` uses for `usbehci.sys`; ntkern resolves the miniport's `usbport.sys` imports at load. The registry layout is mirrored from the installed NUSB EHCI device and was confirmed during the spike.
 - Win2000 uses a `.NTx86`-decorated service install (`AddService`/`ServiceBinary`). Here `usbport.sys` does have its own service, a native OS one that already exists; the miniport still reaches it as an import dependency rather than by creating it.
 
-The section shapes, the dirid-12 trap, and the parser limits that constrain the shared INF are in `docs/contributing/build-and-test.md`, "The INF must carry both install paths".
+The section shapes, the dirid-12 trap, and the parser limits that constrain the shared INF are in `docs/contributing/build-and-test.md`, "Why the INF must carry both install paths".
 
 - PnP hardware ID: `PCI\CC_0C0330` (USB class, xHCI prog-IF). The INF has matched on the class code alone since the Phase 3 spike; no vendor/device entries have been needed on any machine or guest since, and none are planned.
 - Prerequisite on the target machine: a Win2000-derived USB 2.0 stack (`usbport.sys` + `usbhub20.sys`). On Win98 it ships in NUSB 3.3 (the tested configuration; 3.6 carries the same stack) or in SweetLow's XP-derived rebuild; on Win2000 the same stack is native in SP4 (or KB319973) and NUSB must not be installed; on Windows ME only SweetLow's stack has been run; XP uses its own.

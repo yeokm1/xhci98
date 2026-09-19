@@ -304,7 +304,7 @@ ULONG XhciWaitForBits(PXHCI_EXTENSION ext,
      * its extra time from the recovery being retried at the next health poll
      * rather than from a spin here.
      */
-    if (timeoutMs <= stalledMs || ext == NULL || ext->InitBelowPassive ||
+    if (timeoutMs <= stalledMs || ext->InitBelowPassive ||
         XhciRegPacket.UsbPortWait == NULL) {
         if (lastValue != NULL) {
             *lastValue = value;

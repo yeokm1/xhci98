@@ -7,11 +7,25 @@ rem the Windows 2000 DDK ships no import library for them, so src\sources
 rem names this generated one in TARGETLIBS. It is a build artifact (*.lib is
 rem git-ignored) - regenerate it after a fresh clone, before `build`.
 rem
-rem Usage:  scripts\make-usbport-lib.cmd [reference-usbport.sys]
+rem Usage:  scripts\make-usbport-lib.cmd [-amd64] [reference-usbport.sys]
+rem
+rem -amd64 generates the NT 5.2 amd64 import library into src\usbport_amd64.lib
+rem instead of src\usbport.lib, using WDK 7.1's x64 compiler and linker rather
+rem than MSVC 6.0. The two libraries coexist; src\sources picks by _BUILDARCH.
+rem
+rem THE STEPS ARE THE SAME FIVE ON BOTH ARCHITECTURES, and only step 3 differs
+rem in kind. amd64 has no __stdcall name decoration, so the _Name@N symbols the
+rem x86 check requires do not exist there - that check is x86-only by nature
+rem rather than by oversight (design record 11 section 8, M1: the same three
+rem names at the same three ordinals, undecorated). On amd64 it becomes the
+rem mirror check - the plain names must be present AND the decorated forms must
+rem be absent - because a decorated symbol in an "amd64" lib would mean an x86
+rem lib had been published under the 64-bit name.
 rem
 rem No reference binary is required for a fresh checkout: the tracked
 rem usbport-imports.expected manifest records the exact two names verified
-rem against all three supported lineages.
+rem against all three supported lineages, and M1 adds NT 5.2 amd64 as a fourth
+rem reading of the same two names.
 rem
 rem A reference usbport.sys adds an independent exact-name check against that
 rem binary's own export table - real evidence rather than self-consistency
@@ -34,7 +48,6 @@ setlocal
 
 set "REPO=%~dp0.."
 set "STUBDIR=%~dp0usbport-lib"
-set "OUTLIB=%REPO%\src\usbport.lib"
 set "DEFFILE=%STUBDIR%\usbport-stub.def"
 set "EXPECTED=%STUBDIR%\usbport-imports.expected"
 set "VERIFY=%STUBDIR%\verify-exports.ps1"
@@ -51,8 +64,28 @@ set "LIBDUMP=%TEMP%\xhci98-usbport-lib-%TMPID%.txt"
 set "HEADERDUMP=%TEMP%\xhci98-usbport-hdr-%TMPID%.txt"
 set "IMPORTDUMP=%TEMP%\xhci98-linktest-%TMPID%.txt"
 
+rem The architecture is a leading switch rather than a trailing one so that the
+rem existing single-argument form keeps meaning exactly what it always did: a
+rem reference binary, for x86.
+set "ARCH=x86"
 set "REFSYS=%~1"
+if /i "%~1"=="-amd64" goto want64
+if /i "%~1"=="-x86" goto want32
+goto archdone
+:want64
+set "ARCH=amd64"
+set "REFSYS=%~2"
+goto archdone
+:want32
+set "REFSYS=%~2"
+:archdone
 
+if /i "%ARCH%"=="amd64" goto tools64
+
+set "OUTLIB=%REPO%\src\usbport.lib"
+set "LINKMACHINE=ix86"
+set "LINKENTRY=DriverEntry@8"
+set "DUMPBIN=dumpbin"
 if "%MSVC6%"=="" set "MSVC6=%REPO%\tools\MSVC600"
 if not exist "%MSVC6%\VC98\BIN\cl.exe" goto nocompiler
 
@@ -63,6 +96,34 @@ rem enclosing command line. Spaces alone are survivable; those are not.
 set "PATH=%MSVC6%\VC98\BIN;%MSVC6%\Common\MSDev98\Bin;%PATH%"
 set "INCLUDE=%MSVC6%\VC98\INCLUDE"
 set "LIB=%MSVC6%\VC98\LIB"
+goto toolsdone
+
+:tools64
+rem WDK 7.1's x64 compiler, used in place exactly as MSVC 6.0 is - nothing is
+rem installed and nothing machine-wide is consulted. INCLUDE and LIB are
+rem cleared rather than set: both inputs are header-free by design (see
+rem usbport-stub.c) and the link uses /NODEFAULTLIB, so an inherited INCLUDE
+rem from a surrounding DDK prompt is the only way this could pick up a header
+rem it was never meant to see. bin\x86 follows bin\x86\amd64 on PATH because
+rem the cross compiler's own support DLLs live there.
+rem Honours an inherited WDKROOT, which is the one name the whole 64-bit
+rem toolchain is redirected by - the import gate reads it too, and
+rem build-driver.cmd's -amd64 leg takes it in place of DDKROOT.
+if "%WDKROOT%"=="" set "WDKROOT=%REPO%\tools\WinDDK71"
+set "OUTLIB=%REPO%\src\usbport_amd64.lib"
+set "LINKMACHINE=x64"
+rem No __stdcall decoration on amd64, so the entry symbol is the bare name.
+set "LINKENTRY=DriverEntry"
+rem WDK 7.1 ships no dumpbin.exe. `link /dump` is the same dumper behind the
+rem same switches - dumpbin is a thin wrapper over it - so the four inspection
+rem steps below read identically on both architectures.
+set "DUMPBIN=link /dump"
+if not exist "%WDKROOT%\bin\x86\amd64\cl.exe" goto nocompiler64
+set "PATH=%WDKROOT%\bin\x86\amd64;%WDKROOT%\bin\x86;%PATH%"
+set "INCLUDE="
+set "LIB="
+
+:toolsdone
 
 if not exist "%DEFFILE%" goto missinginput
 if not exist "%EXPECTED%" goto missinginput
@@ -79,11 +140,21 @@ rem working copy happens to have one. Those live under tools\, which is
 rem git-ignored, so a fresh clone legitimately has none - that case falls back
 rem to the manifest and says so instead of failing.
 if not "%REFSYS%"=="" goto haveref
+rem An amd64 lib is checked against an amd64 usbport.sys. The 32-bit lineages
+rem carry the same two names, so they would "pass" while proving nothing about
+rem the architecture this lib is for.
+if /i "%ARCH%"=="amd64" goto autoref64
 for %%R in (
     "%REPO%\tools\nusb-extracted\USBPORT.SYS"
     "%REPO%\tools\win2ksp4-extracted\USBPORT.SYS"
     "%REPO%\tools\winxpsp3-extracted\usbport.sys"
 ) do if not defined REFSYS if exist %%R set "REFSYS=%%~R"
+goto autorefdone
+:autoref64
+for %%R in (
+    "%REPO%\tools\winxp64-extracted\usbport.sys"
+) do if not defined REFSYS if exist %%R set "REFSYS=%%~R"
+:autorefdone
 if not defined REFSYS goto verifytracked
 echo Checking exact exports against auto-discovered "%REFSYS%" ...
 goto dumpref
@@ -93,7 +164,7 @@ if not exist "%REFSYS%" goto norefsys
 echo Checking exact exports against "%REFSYS%" ...
 
 :dumpref
-dumpbin /exports "%REFSYS%" > "%EXPORTDUMP%" 2>&1
+%DUMPBIN% /exports "%REFSYS%" > "%EXPORTDUMP%" 2>&1
 if errorlevel 1 goto dumpfail
 powershell -NoProfile -ExecutionPolicy Bypass -File "%VERIFY%" ^
     -DefPath "%DEFFILE%" -ExpectedPath "%EXPECTED%" -DumpPath "%EXPORTDUMP%"
@@ -112,32 +183,61 @@ rem --- 2. Build the stub DLL and keep its import library.
 rem LNK4070 ("/OUT:USBPORT.SYS directive in .EXP differs from output filename")
 rem is expected and is the point: the .def's LIBRARY name is what gets baked
 rem into the import library, while the throwaway DLL is named otherwise.
+rem /Za (disable extensions) is x86-only here: WDK 7.1's compiler rejects the
+rem combination on amd64, and the stub uses no extension it would have caught.
+if /i "%ARCH%"=="amd64" goto compile64
 cl /nologo /c /W3 /Za /Fo"%STUBOBJ%" "%STUBDIR%\usbport-stub.c"
 if errorlevel 1 goto builderr
-link /nologo /DLL /NOENTRY /NODEFAULTLIB /machine:ix86 ^
+goto compiled
+:compile64
+cl /nologo /c /W3 /Fo"%STUBOBJ%" "%STUBDIR%\usbport-stub.c"
+if errorlevel 1 goto builderr
+:compiled
+link /nologo /DLL /NOENTRY /NODEFAULTLIB /machine:%LINKMACHINE% ^
      /def:"%DEFFILE%" "%STUBOBJ%" ^
      /out:"%STUBSYS%" /implib:"%TMPLIB%"
 if errorlevel 1 goto builderr
 if not exist "%TMPLIB%" goto builderr
 
-rem --- 3. The lib must carry the decorated stdcall symbols, not cdecl ones.
-dumpbin /linkermember:1 "%TMPLIB%" > "%LIBDUMP%" 2>&1
+rem --- 3. The symbol form. On x86 the lib must carry the decorated stdcall
+rem symbols and not cdecl ones; on amd64 there is no decoration at all, so the
+rem check is that the plain names are present and the decorated forms are
+rem absent - which is what separates a real amd64 lib from an x86 one published
+rem under the 64-bit name. The machine word is read too, because that is the
+rem one property neither name test can express.
+%DUMPBIN% /linkermember:1 "%TMPLIB%" > "%LIBDUMP%" 2>&1
+if /i "%ARCH%"=="amd64" goto decor64
 findstr /c:"_USBPORT_GetHciMn@0" "%LIBDUMP%" >nul || goto baddecoration
 findstr /c:"_USBPORT_RegisterUSBPortDriver@12" "%LIBDUMP%" >nul || goto baddecoration
+goto decordone
+:decor64
+findstr /c:"USBPORT_GetHciMn" "%LIBDUMP%" >nul || goto baddecoration
+findstr /c:"USBPORT_RegisterUSBPortDriver" "%LIBDUMP%" >nul || goto baddecoration
+findstr /c:"_USBPORT_GetHciMn@0" "%LIBDUMP%" >nul && goto baddecoration64
+findstr /c:"_USBPORT_RegisterUSBPortDriver@12" "%LIBDUMP%" >nul && goto baddecoration64
+%DUMPBIN% /headers "%TMPLIB%" > "%HEADERDUMP%" 2>&1
+findstr /c:"8664 machine (x64)" "%HEADERDUMP%" >nul || goto badmachine64
+:decordone
 
 rem --- 4. ...and must name USBPORT.SYS as the providing module. A matching
 rem symbol from the wrong module does not satisfy the PE import descriptor.
-dumpbin /headers "%TMPLIB%" > "%HEADERDUMP%" 2>&1
+%DUMPBIN% /headers "%TMPLIB%" > "%HEADERDUMP%" 2>&1
 findstr /c:"DLL name     : USBPORT.SYS" "%HEADERDUMP%" >nul || goto badmodule
 
 rem --- 5. Prove an NTAPI-prototyped caller actually links against it, and
 rem that the resulting image imports both names from USBPORT.SYS.
+if /i "%ARCH%"=="amd64" goto linktest64
 cl /nologo /c /W3 /Za /Fo"%LINKOBJ%" "%STUBDIR%\linktest.c"
 if errorlevel 1 goto linktesterr
-link /nologo /driver /subsystem:native /entry:DriverEntry@8 /NODEFAULTLIB ^
-     /machine:ix86 "%LINKOBJ%" "%TMPLIB%" /out:"%LINKSYS%"
+goto linktestbuilt
+:linktest64
+cl /nologo /c /W3 /Fo"%LINKOBJ%" "%STUBDIR%\linktest.c"
 if errorlevel 1 goto linktesterr
-dumpbin /imports "%LINKSYS%" > "%IMPORTDUMP%" 2>&1
+:linktestbuilt
+link /nologo /driver /subsystem:native /entry:%LINKENTRY% /NODEFAULTLIB ^
+     /machine:%LINKMACHINE% "%LINKOBJ%" "%TMPLIB%" /out:"%LINKSYS%"
+if errorlevel 1 goto linktesterr
+%DUMPBIN% /imports "%LINKSYS%" > "%IMPORTDUMP%" 2>&1
 findstr /c:"USBPORT.SYS" "%IMPORTDUMP%" >nul || goto linktesterr
 findstr /c:"USBPORT_GetHciMn" "%IMPORTDUMP%" >nul || goto linktesterr
 findstr /c:"USBPORT_RegisterUSBPortDriver" "%IMPORTDUMP%" >nul || goto linktesterr
@@ -149,7 +249,14 @@ if errorlevel 1 goto publisherr
 call :cleanup
 echo.
 echo Built and verified "%OUTLIB%"
-echo   decorated symbols  : _USBPORT_GetHciMn@0, _USBPORT_RegisterUSBPortDriver@12
+echo   architecture       : %ARCH%
+if /i "%ARCH%"=="amd64" (
+    echo   symbols            : USBPORT_GetHciMn, USBPORT_RegisterUSBPortDriver
+    echo                        undecorated, and the @N forms confirmed absent
+    echo   machine            : 8664 ^(x64^)
+) else (
+    echo   decorated symbols  : _USBPORT_GetHciMn@0, _USBPORT_RegisterUSBPortDriver@12
+)
 echo   providing module   : USBPORT.SYS
 echo   NTAPI link proof   : PASSED
 if defined REFSYS goto summaryref
@@ -212,10 +319,40 @@ exit /b 1
 
 :baddecoration
 echo.
-echo ERROR: the staged import library lacks the decorated stdcall symbols.
-echo That is the signature of a lib built with plain `lib /def:` - see
+echo ERROR: the staged import library lacks the expected symbols for %ARCH%.
+echo On x86 that is the signature of a lib built with plain `lib /def:` - see
 echo docs\contributing\build-and-test.md "Build Files".
 call :cleanup
+endlocal
+exit /b 1
+
+:baddecoration64
+echo.
+echo ERROR: the staged amd64 import library carries __stdcall-DECORATED
+echo symbols (_USBPORT_GetHciMn@0 / _USBPORT_RegisterUSBPortDriver@12). amd64
+echo has no name decoration, so this is an x86 import library about to be
+echo published as src\usbport_amd64.lib - which would fail the driver link
+echo with LNK2001 on symbols that look correct in the error text.
+call :cleanup
+endlocal
+exit /b 1
+
+:badmachine64
+echo.
+echo ERROR: the staged amd64 import library is not an x64 image - dumpbin does
+echo not report "8664 machine (x64)". Check that the x64 cl.exe and link.exe
+echo under tools\WinDDK71\bin\x86\amd64 are the ones on PATH.
+call :cleanup
+endlocal
+exit /b 1
+
+:nocompiler64
+echo.
+echo ERROR: the WDK 7.1 x64 compiler was not found at
+echo   %WDKROOT%\bin\x86\amd64\cl.exe
+echo The amd64 import library needs it; MSVC 6.0 cannot target amd64. WDK 7.1
+echo is unpacked into tools\WinDDK71 with `msiexec /a` and installs nothing -
+echo see docs\contributing\design\11-x64-targets.md section 4.
 endlocal
 exit /b 1
 

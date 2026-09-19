@@ -128,6 +128,28 @@ function Get-QemuTool {
 # path this host found, then the two ordinary install locations, then the bare
 # name for PATH. Written as .cmd lines because that is where it runs.
 #
+# **AND THEN IT SAYS WHICH RUNG ANSWERED AND WHAT THAT QEMU IS, because the
+# fall-through is silent and that is the whole point of it.** A rung exists so
+# a launcher survives being carried to another host; the same mechanism means
+# a host that *loses* a QEMU does not get an error, it gets the next rung. It
+# happened here on 2026-09-10: `C:\Program Files\qemu` was uninstalled between
+# two sessions, and the launchers for two 64-bit guests installed under 11.0.92
+# would have booted them under an older scoop 11.0.0 without a word. This
+# project has attributed QEMU behaviour to version more than once, so those are
+# not interchangeable.
+#
+# No gate can catch that - `test-qemu-launchers.ps1` reads generated text, and
+# the host is exactly what it must not depend on - so the launcher is where it
+# has to be said. Three lines at the top of every boot, which also means a run
+# sheet quoting the head of a run has the emulator its reading was taken under
+# rather than an assumption about it.
+#
+# The version is read by running the resolved binary, so it degrades rather
+# than fails: anything that is not a working qemu-system-x86_64.exe leaves
+# `QEMUVER` unset and the launcher says so instead of dying. That case is not
+# hypothetical here either - the launcher gate generates against stand-in files
+# and executes this preamble.
+#
 function Get-QemuLauncherResolver {
     param([string]$FoundPath)
 
@@ -137,18 +159,40 @@ function Get-QemuLauncherResolver {
         "rem   2. where the script that generated this launcher found it;",
         "rem   3. the two places this project has found QEMU on its hosts;",
         "rem   4. a message naming the override, and a nonzero exit.",
-        "if not defined QEMU set ""QEMU=%XHCI98_QEMU%"""
+        "rem Then SAY which rung answered and what it is: a QEMU that goes",
+        "rem missing does not fail this launcher, the next rung catches the fall",
+        "rem and the guest boots under a different emulator in silence.",
+        "set ""QEMUFROM=""",
+        "set ""QEMUVER=""",
+        "if not defined QEMU set ""QEMU=%XHCI98_QEMU%""",
+        "if exist ""%QEMU%"" set ""QEMUFROM=the XHCI98_QEMU or QEMU override"""
     )
     if (-not [string]::IsNullOrWhiteSpace($FoundPath)) {
-        $lines += ("if not exist ""%QEMU%"" set ""QEMU={0}""" -f $FoundPath)
+        $lines += @(
+            "if not exist ""%QEMU%"" (",
+            ("  set ""QEMU={0}""" -f $FoundPath),
+            "  set ""QEMUFROM=where this launcher was generated""",
+            ")"
+        )
     }
     $lines += @(
-        "if not exist ""%QEMU%"" set ""QEMU=C:\Program Files\qemu\qemu-system-x86_64.exe""",
-        "if not exist ""%QEMU%"" set ""QEMU=%USERPROFILE%\scoop\apps\qemu\current\qemu-system-x86_64.exe""",
+        "if not exist ""%QEMU%"" (",
+        "  set ""QEMU=C:\Program Files\qemu\qemu-system-x86_64.exe""",
+        "  set ""QEMUFROM=the ordinary Program Files install""",
+        ")",
+        "if not exist ""%QEMU%"" (",
+        "  set ""QEMU=%USERPROFILE%\scoop\apps\qemu\current\qemu-system-x86_64.exe""",
+        "  set ""QEMUFROM=the scoop package""",
+        ")",
         "if not exist ""%QEMU%"" (",
         "  echo Could not find qemu-system-x86_64.exe on this host - set XHCI98_QEMU or QEMU to its full path.",
         "  exit /b 1",
         ")",
+        'for /f "usebackq delims=" %%V in (`"%QEMU%" --version 2^>nul`) do if not defined QEMUVER set "QEMUVER=%%V"',
+        "if not defined QEMUVER set ""QEMUVER=version unreadable - this is not a working qemu-system-x86_64.exe""",
+        "echo QEMU: %QEMUVER%",
+        "echo QEMU: %QEMU%",
+        "echo QEMU: resolved from %QEMUFROM%.",
         ""
     )
     return $lines

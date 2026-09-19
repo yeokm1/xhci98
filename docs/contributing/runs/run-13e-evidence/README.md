@@ -47,9 +47,11 @@ Durable: the PORTSC table. `PORTSC` is an xHCI hardware register: `PP`,
 `CCS`, `PED`, `PR`, `PLS`, the speed field and the change bits are spec-defined
 rather than this project's format. Today's `XHCISNAP` prints the same table in
 the same shape, so a fresh dump can be compared against these directly. Fourteen
-of the files here carry the full 18-port table (the count predates the `l3*`
-files; it is `l3a1`, `l3a2`, `l3d2`, the four `p11*`/`p12*`/`p13*` healthy and
-wedged pairs and `wedge2`), where `run-13e.md` quotes only
+of the files here carry the full 18-port table (`l3a1`, `l3a2`, `l3d2`,
+`p11h`, `p11w`, `p12h`, `p12a3`, `p12a5`, `p12a10`, `p12a15`, `p13h`,
+`p13a3`, `p13a5` and `wedge2`; the other nineteen - `l3h`, `l3p0` to `l3p5`,
+`l3v0` to `l3v2`, `p11p1`, `p11p2`, `p12p1`, `p13p1`, `p13p2`, `probe4`,
+`probe5` and the two `*-notering` files - do not), where `run-13e.md` quotes only
 the interesting line or an abbreviated four-port form, so the healthy-against-
 wedged pair across every port exists here and nowhere else. "What does a wedged
 port look like" is a question that recurs, and these answer it without decoding

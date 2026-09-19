@@ -11,8 +11,10 @@ is this project's two files and nothing else:
     xhci98.sys     the built miniport (debug or release)
 
 The Microsoft files the driver depends on, usbd.sys and usbhub.sys (both
-targets) and usbport.sys (the NT targets; on Windows 98 the USB 2.0 stack
-places it), are not on the media: the INF names LayoutFile=layout.inf and
+targets), usbport.sys (the NT targets; on Windows 98 the USB 2.0 stack
+places it) and, since 1.0.2.0, usbui.dll (every target, the root hub's
+property-page provider, to dirid 11 rather than 10), are not on the media:
+the INF names LayoutFile=layout.inf and
 the Windows setup engine copies them from the operating system's own install
 source (docs\contributing\build-and-test.md, "The files the OS supplies"). Release 1.0.0.0 carried them here under
 per-target media names, authenticated against a manifest; that was withdrawn
@@ -26,21 +28,48 @@ the staged path and the gated path cannot drift apart. That call also gates
 the INF *before* anything is copied, which is the right order: there is no
 value in staging a package around an INF that will be rejected.
 
+.PARAMETER Arch
+x86 (default) or amd64 - which architecture's binary and INF to package. It
+selects three things together and they must not be mixed: the obj
+subdirectory (src\obj*\i386 or src\obj*\amd64), the INF (src\xhci98.inf or
+src\xhci98-amd64.inf), and the -Arch the INF and import gates are run under.
+A package staging an amd64 binary under the 32-bit INF would install on a
+32-bit machine and fail its load with no diagnostic, which is why one switch
+moves all three rather than three switches that can disagree.
+
+The two architectures' binaries share a filename, so they cannot share a
+directory: the default output is out\pkg-<flavor>-<arch>, and a release cuts
+them into release-x86, debug-x86, release-x64 and debug-x64 (roadmap task
+21.3, design record 11 section 8).
+
 .PARAMETER Flavor
-debug (default), release or qemu - which src\obj*\i386\xhci98.sys to package.
+debug (default), release or qemu - which src\obj*\<arch>\xhci98.sys to package.
 The DDK's own words for the two *checked* builds are both "checked" and for the
 free one "free", and they survive only in the obj directory names it writes.
 
 qemu is a first-class flavour and this script stages it, because that is how it
 reaches a guest at all - it is the emulator and bench build, carrying the
 port-0xE9 mirror and the live per-line trace. **It is NEVER PUBLISHED**: it
-stages to out\pkg-qemu with a banner saying so, and scripts\package\make-release.ps1
+stages to out\pkg-qemu-<arch> with a banner saying so, and scripts\package\make-release.ps1
 refuses it by reading the image's own flavour marker rather than by trusting a
 path. See docs\contributing\design\08-build-flavours-and-the-log-channel.md.
 
 .PARAMETER OutDir
 Where to build the package. A relative path is taken as relative to the current
-directory. Defaults to out\pkg-<flavor> in the repository.
+directory. Defaults to out\pkg-<flavor>-<arch> in the repository.
+
+.PARAMETER InfPath
+The INF to stage, overriding the one -Arch selects (`src\xhci98.inf` for x86,
+`src\xhci98-amd64.inf` for amd64). It is still gated under -Arch, so handing
+this the wrong architecture's file is refused rather than staged - which is the
+case that matters, because a caller who edited only -DriverPath produces
+exactly it. Exists for the packager's own self-tests, which stage mutated INFs.
+
+.PARAMETER DriverPath
+The binary to stage, overriding `src\obj<flavour>\<archdir>\xhci98.sys`. The
+flavour marker in the image is still checked against -Flavor, so this cannot be
+used to publish one flavour under another's name. Exists for the self-tests,
+which stage text stand-ins carrying a marker and nothing else.
 
 .PARAMETER SkipPackageGate
 Skip the post-staging check-inf.ps1 -PackageDir run only. The INF is gated
@@ -78,7 +107,7 @@ talked into passing a broken driver is worth less afterwards than the clause is
 worth").
 
 It is also loud: the run prints a banner, and the default output directory is
-out\pkg-failstart-<flavor> rather than out\pkg-<flavor>, so the artifact cannot
+out\pkg-failstart-<flavor>-<arch> rather than out\pkg-<flavor>-<arch>, so the artifact cannot
 quietly occupy the path a real package is copied from.
 
 The artifact must be built with XHCI_EXTRA_DEFINES holding that define and
@@ -111,7 +140,7 @@ second INF for src\xhci98.inf to drift from: the date is rewritten in place,
 xhci98.rc is copied beside it so the version cross-check still runs, and the
 gate is invoked with -AllowUnpaddedDriverVer, which relaxes the padding rule and
 nothing else. Like the artifact above it is loud and lands in its own directory,
-out\pkg-datefmt-<flavor>.
+out\pkg-datefmt-<flavor>-<arch>.
 
 Mutually exclusive with -FailStartArtifact: a package varying both the driver's
 behaviour and the INF's date answers neither question.
@@ -127,6 +156,8 @@ powershell -File scripts\package\make-package.ps1 -Flavor release -OutDir E:\xhc
 param(
     [ValidateSet("debug", "release", "qemu")]
     [string]$Flavor = "debug",
+    [ValidateSet("x86", "amd64")]
+    [string]$Arch = "x86",
     [string]$OutDir = "",
     [string]$InfPath = "",
     [string]$DriverPath = "",
@@ -142,7 +173,15 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "package-common.ps1")
 
 $repo = Get-RepoRoot
-if ($InfPath -eq "") { $InfPath = Join-Path $repo "src\xhci98.inf" }
+#
+# The three things -Arch moves, in one place. build-driver.cmd puts the amd64
+# output at src\obj<flavour>\amd64 beside i386 rather than in a second obj
+# root (roadmap task 21.2), so the only difference here is the last path
+# component - and the INF, which is a whole second file.
+#
+$archDir = if ($Arch -eq "amd64") { "amd64" } else { "i386" }
+$archInf = if ($Arch -eq "amd64") { "src\xhci98-amd64.inf" } else { "src\xhci98.inf" }
+if ($InfPath -eq "") { $InfPath = Join-Path $repo $archInf }
 if ($DriverPath -eq "") {
     # Three flavours, two of them checked: "objchk" alone stopped identifying a
     # build when task 13-L.1 added qemu, which is exactly why it has a tree of
@@ -152,17 +191,24 @@ if ($DriverPath -eq "") {
         "qemu"    { "objchk_qemu" }
         default   { "objfre" }
     }
-    $DriverPath = Join-Path $repo "src\$objDir\i386\xhci98.sys"
+    $DriverPath = Join-Path $repo "src\$objDir\$archDir\xhci98.sys"
 }
 if ($OutDir -eq "") {
     # A distinct default path for the artifact, so it cannot land where a real
     # package is copied to a VM from. Naming it is half of "narrow and loud".
+    #
+    # The architecture is in the directory name for both packages, x86
+    # included. The moment a second one exists an untagged out\pkg-release
+    # means "x86" without saying so, and the file inside it is called
+    # xhci98.sys either way - so what a stale directory holds cannot be read
+    # off its name. Free to do now: nothing under out\ is tracked or published.
+    #
     if ($FailStartArtifact) {
-        $OutDir = Join-Path $repo "out\pkg-failstart-$Flavor"
+        $OutDir = Join-Path $repo "out\pkg-failstart-$Flavor-$Arch"
     } elseif ($UnpaddedDriverVerExperiment) {
-        $OutDir = Join-Path $repo "out\pkg-datefmt-$Flavor"
+        $OutDir = Join-Path $repo "out\pkg-datefmt-$Flavor-$Arch"
     } else {
-        $OutDir = Join-Path $repo "out\pkg-$Flavor"
+        $OutDir = Join-Path $repo "out\pkg-$Flavor-$Arch"
     }
 }
 # Anchor a relative path to PowerShell's location, not the process directory.
@@ -257,7 +303,7 @@ $variantDir = ""
 $stageDir = ""
 
 try {
-    Write-Step ("Package ({0}) -> {1}" -f $Flavor, $OutDir)
+    Write-Step ("Package ({0}, {1}) -> {2}" -f $Flavor, $Arch, $OutDir)
 
     #
     # Review finding 4: the two special modes are not composable.
@@ -474,11 +520,18 @@ of those failures is silent on the target.
 "@
         }
 
-        Write-Step ("import gate ({0})" -f $Flavor)
+        Write-Step ("import gate ({0}, {1})" -f $Flavor, $Arch)
         $importGate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) `
             "import-gate") "check-imports.ps1"
+        # -Arch is what selects the amd64 allowlist and baselines - and, more
+        # to the point, what makes the gate read the image's own PE machine
+        # word and refuse a mismatch. MSVC 6.0's dumpbin reads an amd64 image,
+        # exits 0 and prints no import section at all, so without the arch the
+        # gate would enforce the allowlist against an empty set and pass
+        # (design record 11 section 8, "A dumper trap").
         $gateArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-                      $importGate, "-Image", $DriverPath, "-Flavor", $Flavor)
+                      $importGate, "-Image", $DriverPath, "-Flavor", $Flavor,
+                      "-Arch", $Arch)
         if ($NoTargetEvidence) { $gateArgs += "-NoTargetEvidence" }
         $savedEap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
@@ -507,7 +560,7 @@ looks exactly like a bad INF.
         $ErrorActionPreference = "Continue"
         try {
             & powershell -NoProfile -ExecutionPolicy Bypass -File $gate `
-                -InfPath $InfPath -EmitMediaLayout $layoutFile `
+                -InfPath $InfPath -Arch $Arch -EmitMediaLayout $layoutFile `
                 @gateExtra
         } finally {
             $ErrorActionPreference = $savedEap
@@ -638,7 +691,7 @@ a build that was never made.
         $ErrorActionPreference = "Continue"
         try {
             & powershell -NoProfile -ExecutionPolicy Bypass -File $gate `
-                -InfPath $rootInf -PackageDir $stageDir `
+                -InfPath $rootInf -Arch $Arch -PackageDir $stageDir `
                 @gateExtra
         } finally {
             $ErrorActionPreference = $savedEap
@@ -664,18 +717,18 @@ a build that was never made.
     # root holds xhci98.inf, an empty directory is fine, and a volume or
     # repository root is never either.
     #
+    # **The volume/repository-root half is settled before anything is built**,
+    # at the top of this script, so that a caller who names one is told before
+    # paying for a host suite and a link. What is left here is the
+    # foreign-directory question, which needs the staged package to exist.
+    # There was a second copy of the root refusal in this block, unreachable
+    # behind the early one and therefore untestable (the 2026-09-16 audit's
+    # D6); the file-not-directory check below is NOT a duplicate and stays.
+    #
     $retired = ""
     if (Test-Path -LiteralPath $OutDir) {
         if (-not (Test-Path -LiteralPath $OutDir -PathType Container)) {
             throw "'$OutDir' exists and is a file, not a directory."
-        }
-        $outRoot = [System.IO.Path]::GetPathRoot($OutDir)
-        if ($OutDir.TrimEnd('\') -eq $outRoot.TrimEnd('\') -or
-            $OutDir.TrimEnd('\') -eq $repo.TrimEnd('\')) {
-            throw @"
-refusing to package into '$OutDir': that is a volume or repository root, and
-this script replaces its output directory wholesale. Name a subdirectory.
-"@
         }
         #
         # **What counts as "a package this script made" is every entry, not one
@@ -754,8 +807,35 @@ that does not exist, or clear that one yourself.
         Write-Host ""
     }
     Write-Host "Copy '$OutDir' to the VM's transfer volume and install from it:"
-    Write-Host "  Win98    Device Manager -> the xHCI device -> Update Driver -> Specify a location"
-    Write-Host "  Win2000  Device Manager -> the xHCI device -> Update Driver -> Have Disk"
+    if ($Arch -eq "amd64") {
+        #
+        # The 32-bit targets are not offered here, and that is the point rather
+        # than an omission: this media's INF is decorated .NTamd64 throughout,
+        # so a 32-bit engine pointed at it finds no driver at all. Naming Win98
+        # and Win2000 under an amd64 package would send someone to spend an
+        # install cycle discovering that.
+        #
+        Write-Host "  XP x64   Device Manager -> the xHCI device -> Update Driver -> Have Disk"
+        Write-Host "  2003 x64 the same; both are NT 5.2.3790 and one binary serves them"
+        Write-Host "  Vista x64 / 7 x64  boot with F8 -> Disable Driver Signature Enforcement"
+        Write-Host "           (every boot), then Device Manager -> Update Driver -> this directory"
+        Write-Host ""
+        #
+        # This warning named XP x64 as the only amd64 guest and Vista x64 /
+        # Windows 7 x64 as outside the tier until 2026-09-18; roadmap task 21.8
+        # closed on 2026-09-16 with both in it, on an F8 boot only.
+        #
+        Write-Warn "Three guests have run an amd64 build: Windows XP x64 SP2 (both shipping"
+        Write-Warn "flavours, roadmap task 21.5), Vista x64 SP2 and Windows 7 x64 SP1 (the qemu"
+        Write-Warn "build, tasks 21.8 and 22.5). Windows Server 2003 x64 rests on being the same"
+        Write-Warn "operating system as XP x64 and was never booted. On Vista x64 and 7 x64 the"
+        Write-Warn "driver loads only on a boot with signature enforcement disabled from F8."
+        Write-Warn "No amd64 build has ever run on real hardware. Treat a guest booted from this"
+        Write-Warn "media as the experiment it is, and do not put it on a machine you need working."
+    } else {
+        Write-Host "  Win98    Device Manager -> the xHCI device -> Update Driver -> Specify a location"
+        Write-Host "  Win2000  Device Manager -> the xHCI device -> Update Driver -> Have Disk"
+    }
 } catch {
     Write-Err $_.Exception.Message
     exit 1

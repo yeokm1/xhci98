@@ -273,7 +273,18 @@ written in a comment. They live in `scripts/vm-matrix/lib/qemu.ps1`.
    `info rtc` does not exist in QEMU 11, which is the version this harness
    runs. The third state, no parseable `info irq` lines at all, is reported as
    unknown rather than as a dead guest, because a machine type with no PIC is
-   not a hang.
+   not a hang. And a moving interrupt total is not a living kernel either: the
+   PIT keeps raising IRQ0 at a halted kernel, so a bugchecked guest reads
+   `running` with an `info irq` delta, and until 2026-09-17 came out of the
+   probe alive, its counters then judged as if the driver had simply done
+   nothing. On a pumped group the per-row `Test-GuestAlive` is therefore also
+   handed the keep-alive pump's `transfers completed` and the pump to drive
+   it, and the guest has to have advanced that across the sample window too;
+   a timer that ticks while no transfer completes is reported as the
+   not-executing verdict with its own reason. Callers with no pump (the
+   lifecycle, soak and wedge-observe drivers, and the post-boot check before
+   the pump is bound) get the timer reading alone, as before, and `unknown`
+   is unchanged.
 
 A fifth, from batch 8-V.1, is a property of the stage rather than of QEMU and
 belongs in every row that unplugs: a pull is only a pull if the device left.

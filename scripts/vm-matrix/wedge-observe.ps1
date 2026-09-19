@@ -488,7 +488,14 @@ foreach ($armName in $Arm) {
         "-monitor", ("tcp:127.0.0.1:{0},server=on,wait=off" -f $tgt.Monitor)
     )
     $qargs += $driveArgs
-    if ($tgt.Accel -ne "") { $qargs += @("-accel", $tgt.Accel) }
+    # The line-800 guard of run-matrix.ps1, and for the reason recorded there:
+    # `$tgt.Accel` on a hashtable with no `Accel` key answers $null, and
+    # `$null -ne ""` is TRUE - so a target without the key got a bare `-accel`
+    # that ate the next argument (the 2026-09-07 audit's H25, whose fix reached
+    # the launch site and not this one; the 2026-09-16 audit's D2).
+    if ($tgt.ContainsKey('Accel') -and $null -ne $tgt.Accel -and "$($tgt.Accel)" -ne "") {
+        $qargs += @("-accel", "$($tgt.Accel)")
+    }
     if ($tgt.ContainsKey('Smp') -and [int]$tgt.Smp -gt 1) { $qargs += @("-smp", "$([int]$tgt.Smp)") }
     # Never write to the guest image.  These arms are expected to be able to
     # wedge the guest; that must cost an arm, not an image.

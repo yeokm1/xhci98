@@ -224,6 +224,49 @@
             # placed the file (build-and-test.md, "Windows 2000 xHCI-only VM").
             CloneFrom = @{ Image = 'win2k-xonly.img'; Snapshot = 'win2k-xonly-clean-install' }
         }
+        # THE XP x64 AND WINDOWS 7 x86 FRESH TARGETS (roadmap task 22.9,
+        # 2026-09-18). They carry `Family` instead of `Like`: inheriting 2b's
+        # entries would hand NT 5.2 and NT 6.1 Windows 2000's ExpectNoDriver
+        # reasons, and some are false there. `Arch = 'amd64'` makes the XP x64
+        # target read the amd64 offset table (offsets-amd64.txt) and stage
+        # out\pkg-qemu-amd64. Machine options are the issue 5 launchers' of
+        # 2026-09-17: TCG with MTTCG, qemu64, four vCPUs to match the
+        # multiprocessor clean snapshots, 2048 MB. Both boot slowly under
+        # TCG, hence the longer deadlines. The base images are on the
+        # never-boot list (lib\fresh.ps1) like the Phase 10 ones.
+        @{
+            Id       = 'xp64-fresh'
+            Name     = 'Windows XP Professional x64 SP2, fresh install'
+            Image    = 'fresh-xp64.img'
+            Format   = 'qcow2'
+            Machine  = 'pc'
+            Cpu      = 'qemu64'
+            Memory   = 2048
+            Smp      = 4
+            Accel    = 'tcg,thread=multi'
+            Monitor  = 55610
+            BootSeconds  = 600
+            ReadySeconds = 600
+            Family   = 'winxp64'
+            Arch     = 'amd64'
+            CloneFrom = @{ Image = 'winxp64.img'; Snapshot = 'winxp64-clean-install-smp4' }
+        }
+        @{
+            Id       = 'win7-fresh'
+            Name     = 'Windows 7 Professional SP1 x86, fresh install'
+            Image    = 'fresh-win7.img'
+            Format   = 'qcow2'
+            Machine  = 'pc'
+            Cpu      = 'qemu64'
+            Memory   = 2048
+            Smp      = 4
+            Accel    = 'tcg,thread=multi'
+            Monitor  = 55611
+            BootSeconds  = 600
+            ReadySeconds = 600
+            Family   = 'win7'
+            CloneFrom = @{ Image = 'win7.img'; Snapshot = 'win7-clean-install' }
+        }
         # THE WINDOWS ME TARGET (docs\contributing\build-and-test.md, "Windows
         # ME target VM"). Installed by hand from a Windows ME CD into a new
         # image, so it has no CloneFrom, and `PrepareOnly` keeps it out of both

@@ -25,6 +25,13 @@
  */
 extern USBPORT_REGISTRATION_PACKET XhciRegPacket;
 
+/*
+ * The ResourcesTypes mask XhciInitController's step 1 requires, defined and
+ * settled in src/xhci_dispatch.c. It is not a constant because NT 6.x numbers
+ * those bits differently (src/xhci_usbport.h).
+ */
+extern ULONG XhciResourcesRequired;
+
 /* ------------------------------------------------------------------ */
 /* MMIO                                                                */
 /* ------------------------------------------------------------------ */
@@ -303,10 +310,16 @@ ULONG XhciWriteCrcrAbort(PXHCI_EXTENSION ext, ULONG *crcrRead);
  * three, and Win98 idle-suspends within about a second of every start, so a
  * resume that reinitialised would drop every device context an enumerated bus
  * depends on. The suspend now attempts a Save State and the resume a Restore;
- * **the error path is the one the target VMs exercise** - QEMU implements CRS as
- * "set SRE" and nothing else - and it ends in XhciSlotInvalidateAll, which tells
- * usbport its addressed devices are gone rather than leaving the address map
- * pointing at slots the xHC no longer has.
+ * **neither runs on either target VM, and the reason is earlier than the
+ * restore** - `qemu-xhci` reads `HCCPARAMS2 = 0`, so FSC is absent and
+ * `xhciSaveState` declines before writing anything, counting
+ * `SavesDeclinedNoFsc`. The resume then has no saved state to restore from and
+ * reinitialises. (This said the restore's *error* path was the one the VMs
+ * exercised, which would need the save to have happened; `RestoreFailures`
+ * has never moved on a VM. The 2026-09-16 audit's B10.) The reinitialisation
+ * ends in XhciSlotInvalidateAll, which tells usbport its addressed devices are
+ * gone rather than leaving the address map pointing at slots the xHC no longer
+ * has.
  *
  * IRQL: PASSIVE_LEVEL.
  */
@@ -1196,6 +1209,34 @@ VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext);
  */
 VOID XhciSlotEnterSubmit(PXHCI_EXTENSION ext);
 VOID XhciSlotLeaveSubmit(PXHCI_EXTENSION ext);
+/*
+ * XhciSlotDeferredWork from inside a callback usbport makes under its EpList
+ * lock - PollEndpoint, AbortTransfer, SetEndpointState - which on the
+ * Version 300 tier are the only contexts a completion may be handed over
+ * from (`XHCI_EXTENSION.DeliverUnderUsbportLockOnly`), naming the endpoint
+ * whose lock usbport holds, so that under
+ * `XHCI_EXTENSION.DeliverPerEndpointOnly` only that endpoint's completions are
+ * handed over. `endpointExtension` is usbport's extension for it.
+ * SubmitTransfer is under that lock too and does not use this: its own hold
+ * parks every completion until the callback returns.
+ *
+ * *(There was an endpoint-less `XhciSlotDeferredWorkLocked` beside this until
+ * the 2026-09-16 audit's B9. Every caller passes an endpoint, so it had no
+ * call site; what it had was four comments and two documents naming it as
+ * though it were the one in use.)*
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock not held.
+ */
+VOID XhciSlotDeferredWorkForEndpoint(PXHCI_EXTENSION ext,
+                                     PVOID endpointExtension);
+/*
+ * XhciSlotDeferredWork with the tier's delivery gate overridden: for the
+ * lifecycle paths (suspend, stop, resume, recovery), where usbport's own
+ * deliverers are gated off and a completion left parked would sit until the
+ * far side, and for the poll's fallback. IRQL: <= DISPATCH_LEVEL, controller
+ * lock not held.
+ */
+VOID XhciSlotDeferredWorkForced(PXHCI_EXTENSION ext);
 
 /*
  * The device half of usbport's CheckController poll: age the outstanding command
@@ -1519,6 +1560,15 @@ VOID XhciControllerGlobalInit(VOID);
  * be called while held. IRQL: <= DISPATCH_LEVEL on acquire. */
 VOID XhciControllerLockAcquire(PKIRQL oldIrql);
 VOID XhciControllerLockRelease(KIRQL oldIrql);
+/*
+ * Held across the completion service call only (src/xhci_cmd.c says why).
+ * IRQL: <= DISPATCH_LEVEL on entry, DISPATCH_LEVEL while held.
+ */
+VOID XhciDeliveryLockAcquire(PKIRQL oldIrql);
+VOID XhciDeliveryLockRelease(KIRQL oldIrql);
+#ifdef XHCI_HOST_TEST
+PKSPIN_LOCK XhciHostDeliveryLockWord(VOID);
+#endif
 
 /*
  * Update the shared lifecycle word under the stable controller lock. Returns

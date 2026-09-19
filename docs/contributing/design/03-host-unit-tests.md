@@ -3,9 +3,11 @@
 Design doc 03. Applies from Phase 3/4 onward (the moment `src/` exists); this
 doc pins the design so the source files are structured to be testable.
 
-Status: built. Twelve suites, 20,325 checks at the `1.0.2.0` cut and 20,577
-after the 2026-09-07 audit's section G, run by
-`test\run-host-tests.cmd` on the Windows build host. A count written here goes
+Status: built. Twelve suites, run by
+`test\run-host-tests.cmd` on the Windows build host. Two of the twelve -
+`test_packet` and `test_membuf` - are compiled and run a second time for amd64
+since task 21.4, so the runner reports fourteen results from twelve files
+(section 5, "The second architecture"). A count written here goes
 stale silently, so take the current number from the runner's own output.
 Sections 3 and 5 below mark what exists and what is still owed. The suite runs before the
 DDK builds in `scripts\build-driver.cmd`, and again in
@@ -218,7 +220,7 @@ suite. It failed nothing when measured, too; see the row.
 | `RH_GetStatus`, `RH_GetHubStatus` | full bracket, and succeed with zeros | the guard | registered NULL, bad leading and trailing, each asserting `MP_STATUS_SUCCESS` with zeros - a nonzero return here abandons the whole status-change scan, so the refusal answer is the thing under test; NULL output buffer is the one nonzero either ever answers; forwarding: registered live answers self-powered, and `RhHubStatusQueries` advances |
 | `RH_GetPortStatus` | full bracket, and succeeds with zeros | the guard, and a port index outside the managed range | registered NULL, bad leading and trailing, all asserting no touch and success with zeros; an out-of-range and a zero port index likewise succeed having counted `RhInvalidPort`; forwarding: registered live on a quiet port `check_read_but_wrote_nothing`, on a connected port reports connection/power/High Speed with `C_PORT_CONNECTION`, acknowledges `CSC` in hardware, and keeps reporting the latched change across repeated polls until the clear-feature callback takes it down |
 | the twelve feature slots (`RH_Set/ClearFeature*`) | full bracket each | the guard, an unmanaged port, a controller not in service, and a port with an operation already armed | registered NULL, bad leading and trailing across the whole family asserting `MP_STATUS_NOT_SUPPORTED` and no touch; a USB 3.x port and a suspended controller refuse having touched nothing; forwarding: one golden written value per operation read out of the write log - `PP` as a written 1 and as a written 0, `PED` as a written 1, `PR` as a written 1 with no `LWS`, and `PLS = U3` with `LWS` on a port made enabled first (the spec's own precondition, refused when it does not hold) - plus `SetFeaturePortEnable`, which is a refusal rather than a gap because xHCI has no software enable, and a resume asked of a port that is not suspended, which succeeds having written nothing (the end state already holds) |
-| `RH_SetFeaturePortReset` / `RH_ClearFeaturePortSuspend` (the asynchronous pair) | full bracket each | as above, plus no async timer service | `test_root_hub_reset` and `test_root_hub_resume`. Shared: the context carries epoch, hub port, generation and operation; the timer is armed outside the lock; a second operation on an armed port refuses as busy; and with `UsbPortRequestAsyncCallback` NULL the operation is refused before the write. Reset: the deadline interval, PRC through the event path completing and disarming it, the status query then reporting `C_PORT_RESET` with an enabled port at the decoded speed, a hung reset whose watchdog reports `C_PORT_RESET` anyway beside a port that did not enable, and `PR` never written back (RW1S has no stop). Resume: `PLS = 15` with `LWS` and never U0-to-start, the interval strictly longer than T(DRSMDN), an event mid-interval that does not complete it (the vector a first draft of the roadmap entry would have failed), the timer alone writing U0, `C_PORT_SUSPEND` appearing only after the refresh that follows it, a port unplugged mid-interval abandoning with no write, the device-initiated arm from the event path, and the health poll's sweep arming one whose PLC a status query had already consumed |
+| `RH_SetFeaturePortReset` / `RH_ClearFeaturePortSuspend` (the asynchronous pair) | full bracket each | as above, plus no async timer service | `test_root_hub_reset` and `test_root_hub_resume`. Shared: the context carries epoch, hub port, generation and operation; the timer is armed outside the lock; a second operation on an armed port refuses as busy; and with `UsbPortRequestAsyncCallback` NULL the operation is refused before the write. Reset: the deadline interval, PRC through the event path completing and disarming it, the status query then reporting `C_PORT_RESET` with an enabled port at the decoded speed, a hung reset whose watchdog reports `C_PORT_RESET` anyway beside a port that did not enable, and `PR` never written back (RW1S has no stop). Resume: `PLS = 15` with `LWS` and never U0-to-start, the interval strictly longer than T(DRSMDN), an event mid-interval that does not complete it (the vector a first draft of the roadmap entry would have failed), the timer alone writing U0, `C_PORT_SUSPEND` appearing only after the refresh that follows it, a port unplugged mid-interval abandoning with no write, the device-initiated arm from the event path, and the health poll's sweep arming one whose PLC a status query had already consumed. `test_root_hub_resume_write_ignored` (roadmap 22.12 (b)): a controller that leaves the port in U3 on the Resume write, as QEMU does, still gets exactly one U0 write from the timer and from the age retire, with `C_PORT_SUSPEND` derived from U3, while a port the timer finds in U0 is abandoned with no write |
 | the four synchronous operations against an armed port | as above | - | `test_root_hub_conflicts`: a power-off and a disable each preempt the operation in flight and proceed, its timer then touching nothing, and the port accepts a fresh operation at once; a suspend refuses, with the register forced to satisfy the suspend precondition first so the refusal cannot be that rule answering by accident. For an interrupted reset: the write ends it and the controller says nothing (`PR` clear, `PRC` not set - the spec forbids one here), so the driver reports `C_PORT_RESET` itself, counted as a preemption rather than a timeout, and announced by the callback. Plus the ordering, which no register log can show and which the model's latch-at-write probe exists for: nothing was latched at the instant the write went out, so the report is of something done rather than intended. A preempted resume is abandoned with no link-state write of the driver's own |
 | the age detector (`XhciRootHubPoll`) | full bracket via `CheckController` | an unadmitted controller is not swept | `test_root_hub_conflicts`: an operation whose timer is never fired survives `XHCI_PORT_AGE_MS - 1` milliseconds and is retired on the crossing, a reset then reporting `C_PORT_RESET` and a resume getting its terminating U0 write; the port accepts operations again; and the operation armed since is not retired by the next poll. Plus: two thousand polls that cost no time retire nothing. Counted as sixteen polls this was 0.6-1.3 s on the E460, which polls at 36-80 ms (`run-13e.md`, Finding V), leaving 1.2-2.6x over the 500 ms deadline it exists to sit behind where 16x was intended. `test_port.c` carries the helper's own vectors, the clock wrap among them |
 | the port timeout (`UsbPortRequestAsyncCallback`, `src/xhci_rh.c`) | NULL pointers only, then the full bracket under the driver's lock | NULL extension, NULL context, bad signatures, an epoch from a previous start, a generation that has moved, a hub port that no longer exists, and a controller not admitted | fired through the pointer the model recorded, with the model's copy: after a completion, after a suspend, and after a resume that rebuilt the shadow - each asserting no touch. That last one is why the claim precedes the read: a first version refreshed before claiming, and the refresh completed a reset a fresh caller had just started (measured) |
@@ -443,8 +445,12 @@ accumulates the project's bug history.
 - `test/` directory beside `src/`, not referenced by the DDK `sources` file,
   so the driver build stays untouched. The dependency runs the other way:
   each suite compiles the `src/` file it covers.
-- One runner per pure-core module, plain C89, no framework: a `CHECK(cond)` /
-  `CHECK_EQ(got, want)` pair that prints file/line and counts failures;
+- One runner per pure-core module, plain C89, no framework: a
+  `CHECK(cond, what)` / `CHECK_EQ(got, want, what)` pair that prints
+  file/line, the `what`, and for `CHECK_EQ` both values in decimal and hex,
+  and counts failures. **The `what` is not optional** - it is what makes a
+  failure line readable without opening the file, and this entry described the
+  two-argument form the harness has never had (the 2026-09-16 audit's C6);
   process exit code = failure count.
 
   | Runner | Covers |
@@ -489,6 +495,33 @@ accumulates the project's bug history.
   the suite before the DDK builds, and `scripts\package\make-package.ps1` runs
   it again, with the import gate, before staging install media.
 
+### The second architecture
+
+`src/xhci_usbport.h` has a `_WIN64` half - three structures that change size
+and a registration packet that grows by 0x188 bytes (`sizeof` 0x1E0 on x86
+against 0x368 on amd64 since task 22.5 declared the Version 300 tail; it was
+0x13C against 0x250, a growth of 0x114, when the Version 200 copy was the
+whole declaration) - and until task 21.4 the
+only thing that ever compiled it was a driver build. `test_packet` and
+`test_membuf` are therefore built and run twice, the second time with WDK 7.1's
+amd64 cross compiler as `test_packet_amd64` and `test_membuf_amd64`. The two
+are chosen for opposite reasons: the ABI declaration is where the layout moves
+with the pointer width, and the common-buffer carve is where it must not
+(design record 04 section 8). Every expectation in `test_packet.c` that differs
+between the two carries both numbers, each from design record 11's readings of
+the amd64 binaries, so the second leg is a second measurement rather than a
+compile check.
+
+Two properties of that leg are worth knowing before reading a run:
+
+- **it drops `/Za`**, which the x86 leg keeps. The WDK's own CRT headers are
+  not C89-clean, and the x86 leg compiles the same files under `/Za`, so the
+  dialect gate loses nothing;
+- **it is skipped, by name, on a host with no WDK 7.1**, and the run's final
+  verdict then says "x86 only" rather than "PASSED". `tools/` is fetched per
+  host rather than cloned, so a clone with MSVC 6.0 alone still gets the whole
+  x86 suite; what it does not get is silence about the half it did not check.
+
 ### Two properties of the model itself that a vector must be written against
 
 The model stamps a command's completion code when the command is submitted,
@@ -511,6 +544,27 @@ state, the driver queued it against an Addressed or Configured one, and no
 vector could notice. A green vector over a command sequence is evidence about
 this driver, not about the sequence's legality; that has to come from the
 spec.
+
+The model carries usbport's worker as well as its services, since 2026-09-15.
+Every Version 200 load delivers completions per endpoint (issue 8 section
+4d): the event DPC parks a completion and asks `UsbPortInvalidateEndpoint`
+for that endpoint, and only a `PollEndpoint` for it - which usbport's worker
+makes under the endpoint's lock - hands it over. The stub therefore records
+the endpoint, and `usbport_worker()` polls every recorded one through the
+registered `PollEndpoint` after each DPC; `deliver_events()` and
+`deliver_after_submit()` both end in it. A vector that drives `XhciEventDpc`
+or `XhciSlotDeferredWork` directly and expects a completion to reach
+`hc_complete_transfer` has to call `usbport_worker()` itself, as the target
+would have usbport do; the four vectors that assert the *hold* (issue 7's and
+issue 8's, around `test_slot_completion_waits_for_poll_endpoint`) drive the
+DPC and the poll by hand for that reason, and count from a snapshot because
+`StartController` has already set the gate before they set it again. Counts
+of `UsbPortInvalidateEndpoint` calls that mean re-offers use `REOFFER_CALLS`,
+which subtracts the driver's own `CompletionPollInvalidates`. And the suite's
+global transfer records are not usbport's: a record parked in one vector and
+resubmitted by the next is a shape usbport never produces, and it was what
+turned the lifted `_WIN64` guard into a hang rather than a failure (a
+one-node cycle in the completion list; issue 8 section 4d).
 
 The driver side of that example is fixed: the re-enumeration reads the Output
 Slot Context's Slot State and issues Reset Device where that is the legal
@@ -670,9 +724,13 @@ than per-service: every service stub and wait hook (`UsbPortWait`, which is
 `KeDelayExecutionThread` on the target and so a hang under a DISPATCH-level
 spin lock, `UsbPortReadWriteConfigSpace`, `KeStallExecutionProcessor` and the
 rest) reports through one function whose never-reset total is asserted once at
-the end of the run, so a stub added later is covered by construction rather
-than by whoever adds it remembering. Same family as the no-touch checklist above: give a property
-several call sites share one mechanism, and route the sites into it.
+the end of the run. That is a convention, not a mechanism: each stub's first
+statement is its `note_no_lock_here` call, and a stub added later is covered
+only if whoever adds it writes that line - nothing checks that every stub
+reports, and the 2026-09-17 audit found one (`logRegistryValue`, the registry
+read) that did not, now fixed. Same family as the no-touch checklist above: give a property
+several call sites share one mechanism, and route the sites into it - and know
+that the routing is by hand.
 
 A vector's negative half is free unless its positive half is asserted. Phase
 5's mutation checks found this three times in one day, and each time the

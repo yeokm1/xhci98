@@ -1,5 +1,5 @@
 /*
- * xhci_xfer.h - the control-transfer engine (src/xhci_xfer.c), Phase 6 batch A.
+ * xhci_xfer.h - the transfer engine (src/xhci_xfer.c).
  *
  * This is pure core in the design doc 03 section 2 sense - computation plus
  * stores into caller-supplied common-buffer memory, no MMIO, no DDK, no IRQL -
@@ -8,17 +8,25 @@
  * the host), so the property that matters is preserved; what would break it is
  * putting these declarations in xhci.h, which every pure file includes.
  *
- * Three tasks live here:
+ * **It began as Phase 6 batch A's control engine and is no longer scoped that
+ * way** (the 2026-09-16 audit's B10): bulk and interrupt transfers arrived with
+ * `XhciXferSubmitNormal`, and isochronous with the `XhciXferSubmitIso` /
+ * `XhciXferIsoEvent` pair and the frame-policy helpers beside them. What is
+ * here now:
  *
- *   6-A.1  XhciXferBuildControl / XhciXferSubmitControl - the minimum complete
- *          control-transfer engine: the whole SG list in SgOffset order, split
- *          again at 64 KB physical boundaries, Setup + Data + Status published
- *          as one group.
+ *   6-A.1  XhciXferBuildControl / XhciXferSubmitControl - the control-transfer
+ *          engine: the whole SG list in SgOffset order, split again at 64 KB
+ *          physical boundaries, Setup + Data + Status published as one group.
+ *          XhciXferBuildNormal / XhciXferSubmitNormal are the same shape for a
+ *          single-TD Normal transfer.
  *   6-A.2  XhciXferQueue* / XhciXferEvent - per-transfer bookkeeping keyed on
- *          the TRB range, and the event that selects one transfer out of it.
+ *          the TRB range, and the event that selects one transfer out of it,
+ *          plus the deferral and stopped-event paths built on top of it.
  *   6-A.3  XhciXferCodeInfo - the completion-code mapping, with the residual
  *          arithmetic that rejects an impossible answer instead of reporting a
- *          plausible one.
+ *          plausible one. XhciXferIsoCodeInfo is its isochronous reading.
+ *   iso    XhciXferSubmitIso / XhciXferIsoEvent and the Frame ID policy, where
+ *          one submit is a group of TDs and the retire is positional across it.
  *
  * C89 only. IRQL: every function is callable at any IRQL. None of them rings a
  * doorbell or calls a usbport service; the caller does both, after the call.
@@ -613,6 +621,15 @@ ULONG XhciXferQueueOwnsIndex(const XHCI_TRANSFER_QUEUE *queue,
  *      (4.11.5.2 p.209-210). It is taken directly, with no sum and no
  *      subtraction. Batch 6-A had excluded it on the premise that nothing
  *      accumulates without Event Data TRBs, which that section refutes.
+ *
+ * **One TRB is answered ahead of all three of those: a control transfer's
+ * Status Stage.** It is the TD's last TRB and the xHC executes it only once
+ * every Data Stage TRB has completed, so the whole data stage moved - but it
+ * carries no length field and sits outside the data range, so 26's residual
+ * arithmetic answered zero and 27's walk answered nothing at all. The data
+ * range is summed instead. Stopped - Short Packet is not affected: its EDTLA is
+ * a measurement of this TD and a sum would be a derivation replacing it. (The
+ * 2026-09-16 audit's B7.)
  *
  * The number matters because `AbortTransfer` has to report the bytes the
  * cancelled transfer moved, and this is the only event that ever measures them:

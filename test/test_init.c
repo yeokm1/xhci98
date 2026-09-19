@@ -304,6 +304,15 @@ static ULONG mfindexFrozen;
 static ULONG cnrHeld;
 
 /*
+ * Controller Not Ready, asserted by the next HCRST write and left in USBSTS
+ * until the vector clears it: a reset that has not finished. `cnrHeld` cannot
+ * stand in for this - it holds the bit before the HCRST too, and since the
+ * 2026-09-17 audit's B7 the reset step refuses ahead of a write into a set
+ * CNR rather than writing through it.
+ */
+static ULONG cnrHeldAfterHcrst;
+
+/*
  * A device that was already plugged in when the driver started. The connect is
  * reported the instant the controller runs - a port with a device attached
  * asserts PSCEG as HCH transitions to '0', "generating a respective Port Status
@@ -455,6 +464,14 @@ static void hw_detach_while_unpowered(ULONG port)
  * other controller sets this; nothing else does, and it stays 0.
  */
 static ULONG portU3EntryAnnounces;
+
+/*
+ * A controller that ignores a PLS = 15 (Resume) write to a port in U3 and
+ * leaves the port in U3 - QEMU's xHCI, measured on a Vista guest (roadmap
+ * 22.12 (b), 2026-09-18). U3 -> U0 on the U0 write is unchanged. Set only by
+ * the vector that needs it.
+ */
+static ULONG portResumeIgnored;
 
 /*
  * VBus for a physical connector is the OR of its two logical ports' PP pins
@@ -848,6 +865,7 @@ static void hc_build(void)
     hostMfindex = 0;
     mfindexFrozen = 0;
     cnrHeld = 0;
+    cnrHeldAfterHcrst = 0;
     hwSlotDoorbells = 0;
     hwLastSlotDoorbell = 0;
 
@@ -863,6 +881,7 @@ static void hc_build(void)
     pciBmeStuckClear = 0;
     portPowerLagReads = 0;
     portU3EntryAnnounces = 0;
+    portResumeIgnored = 0;
     vbusDrops = 0;
     for (i = 0; i <= HC_MAX_PORTS; i++) {
         portPowerPending[i] = 0;
@@ -1249,6 +1268,9 @@ VOID XhciHostWriteRegister(PULONG address, ULONG value)
              * this controller implements in the RsvdP fields. */
             mmio[HC_OP(XHCI_OP_USBCMD) / 4] = HC_USBCMD_RSVDP_SEED;
             mmio[HC_OP(XHCI_OP_USBSTS) / 4] = XHCI_USBSTS_HCH;
+            if (cnrHeldAfterHcrst) {
+                mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_CNR;
+            }
             /* The interrupter is reset too, so IP, IE and Event Handler Busy
              * all come back at their defaults of '0'. Modelled because the
              * resume path reinitializes through here and then has to decide
@@ -1662,8 +1684,12 @@ VOID XhciHostWriteRegister(PULONG address, ULONG value)
 
             wasPls = XHCI_PORTSC_GET_PLS(current);
             nowPls = (value & XHCI_PORTSC_PLS_MASK) >> XHCI_PORTSC_PLS_SHIFT;
+            if (portResumeIgnored && nowPls == (ULONG)XHCI_PLS_RESUME &&
+                wasPls == (ULONG)XHCI_PLS_U3) {
+                nowPls = wasPls;
+            }
             current = (current & ~XHCI_PORTSC_PLS_MASK) |
-                      (value & XHCI_PORTSC_PLS_MASK);
+                      (nowPls << XHCI_PORTSC_PLS_SHIFT);
             if (nowPls == (ULONG)XHCI_PLS_U0 &&
                 (wasPls == (ULONG)XHCI_PLS_RESUME ||
                  wasPls == (ULONG)XHCI_PLS_U3)) {
@@ -1868,8 +1894,30 @@ VOID XhciHostInitSpinLock(PKSPIN_LOCK lock)
     *lock = 0;
 }
 
+/*
+ * The delivery lock (issue 7, `src/xhci_cmd.c`): held across the completion
+ * service call so it is made at DISPATCH from every context. Modelled apart
+ * from the controller lock because the two have an order - the controller
+ * lock may be taken inside it (the defensive re-entry vector does exactly
+ * that) and never the other way round - and because the "service under the
+ * controller lock" nets below must not fire on it.
+ */
+static ULONG deliveryLockDepth;
+static ULONG deliveryLockErrorsTotal;
+
 VOID XhciHostAcquireSpinLock(PKSPIN_LOCK lock, PKIRQL oldIrql)
 {
+    if (lock == XhciHostDeliveryLockWord()) {
+        /* Nested in itself is the hang; taken under the controller lock is
+         * the order inversion design record 05 section 3 forbids. */
+        if (deliveryLockDepth != 0 || commandLockDepth != 0) {
+            deliveryLockErrorsTotal++;
+        }
+        deliveryLockDepth++;
+        *lock = 1;
+        *oldIrql = 0;
+        return;
+    }
     commandLockAcquires++;
     if (commandLockDepth != 0) {
         /* On the target this is not a warning, it is a hang: a DISPATCH-level
@@ -1898,6 +1946,15 @@ VOID XhciHostReleaseSpinLock(PKSPIN_LOCK lock, KIRQL oldIrql)
     PVOID dpcExtension;
 
     (void)oldIrql;
+    if (lock == XhciHostDeliveryLockWord()) {
+        if (deliveryLockDepth == 0) {
+            deliveryLockErrorsTotal++;
+        } else {
+            deliveryLockDepth--;
+        }
+        *lock = 0;
+        return;
+    }
     resetExtension = NULL;
     dpcExtension = NULL;
     commandLockReleases++;
@@ -2175,6 +2232,13 @@ static ULONG completeTransferReentries;
  */
 static ULONG completeTransferInSubmit;
 static ULONG completeTransferInSubmitTotal;
+/*
+ * **And it must always be called under the delivery lock** (issue 7): the
+ * lock is the raise to DISPATCH that keeps an NT 6.x usbport's done DPC from
+ * running on this CPU between its `KeInsertQueueDpc` and its state store. A
+ * never-reset net over both services.
+ */
+static ULONG completeTransferOutsideDeliveryLockTotal;
 
 /*
  * "usbport's callback returned, and the next context that drains ran." Every
@@ -2212,6 +2276,9 @@ static VOID NTAPI hc_complete_transfer(PVOID extension,
     if (commandLockDepth != 0) {
         completeTransferUnderLock++;
         completeTransferUnderLockTotal++;
+    }
+    if (deliveryLockDepth == 0) {
+        completeTransferOutsideDeliveryLockTotal++;
     }
 
     if (completeTransferReenters) {
@@ -2288,6 +2355,9 @@ static ULONG NTAPI hc_complete_iso_transfer(PVOID extension,
         isoBlockNullBlocks++;
     }
     note_no_lock_here("UsbPortCompleteIsoTransfer");
+    if (deliveryLockDepth == 0) {
+        completeTransferOutsideDeliveryLockTotal++;
+    }
     if (commandLockDepth != 0) {
         completeTransferUnderLock++;
         completeTransferUnderLockTotal++;
@@ -2310,11 +2380,39 @@ static ULONG invalidateEndpointUnderLockTotal;
  * service stubs run with the controller lock dropped. */
 static ULONG invalidateLeavesSubmit;
 
+/*
+ * usbport's answer to UsbPortInvalidateEndpoint is to poll that endpoint from
+ * its worker, under the endpoint's lock - which, since the Version 200 tier
+ * delivers per endpoint (issue 8 section 4d, both architectures), is the only
+ * thing that hands a parked completion over. The stub records the request
+ * here and usbport_worker() below makes the polls after each DPC, the way the
+ * real worker runs after IsrDpc; polling synchronously from inside the
+ * service would find the drain busy and deliver nothing.
+ */
+#define PENDING_POLL_MAX 32
+static PVOID pendingPolls[PENDING_POLL_MAX];
+static ULONG pendingPollCount;
+static ULONG pendingPollOverflows;
+
 static ULONG NTAPI hc_invalidate_endpoint(PVOID extension,
                                           PVOID endpointExtension)
 {
+    ULONG i;
+
     invalidateEndpointCalls++;
     lastInvalidatedEndpoint = endpointExtension;
+    for (i = 0; i < pendingPollCount; i++) {
+        if (pendingPolls[i] == endpointExtension) {
+            break;
+        }
+    }
+    if (i == pendingPollCount) {
+        if (pendingPollCount < PENDING_POLL_MAX) {
+            pendingPolls[pendingPollCount++] = endpointExtension;
+        } else {
+            pendingPollOverflows++;
+        }
+    }
     note_no_lock_here("UsbPortInvalidateEndpoint");
     if (commandLockDepth != 0) {
         invalidateEndpointUnderLock++;
@@ -3245,15 +3343,21 @@ static void test_write_order(void)
 
     hc_build();
     /*
-     * USBLEGCTLSTS as firmware may leave it: every RsvdP field set (3:1, 12:5,
-     * 19:17), every SMI enable set, every RW1C status bit set. The handoff's
+     * USBLEGCTLSTS as firmware may leave it: **every bit set**. The handoff's
      * write must clear the five enables, acknowledge the three status bits,
-     * and carry the RsvdP fields back untouched - the 2026-09-05 audit's F13
-     * found a blanket 0xFFFF enable mask zeroing them.
+     * carry the RsvdP fields back untouched - the 2026-09-05 audit's F13
+     * found a blanket 0xFFFF enable mask zeroing them - and write zero to the
+     * RsvdZ 28:21 and the read-only status at 16 and 20.
+     *
+     * **The stimulus used to be `RSVDP | SMI_ENABLES | SMI_STATUS`, and that
+     * is why the last two assertions passed against a `& ~SMI_ENABLES` write
+     * that carried 28:21 and 16/20 straight back**: those bits were never set
+     * in what the driver read, so the two spellings could not be told apart
+     * (the 2026-09-16 audit's B8). 0xFFFFFFFF would be the not-decoding value
+     * and is refused, so the stimulus is everything below the top bit plus the
+     * status bits.
      */
-    mmio[HC_LEGACY_OFFSET / 4 + 1] = XHCI_USBLEGCTLSTS_RSVDP |
-                                     XHCI_USBLEGCTLSTS_SMI_ENABLES |
-                                     XHCI_USBLEGCTLSTS_SMI_STATUS;
+    mmio[HC_LEGACY_OFFSET / 4 + 1] = 0x7FFFFFFFUL;
     CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "the same start, re-run");
     {
         int legctl;
@@ -3269,8 +3373,8 @@ static void test_write_order(void)
             CHECK_EQ(writeValue[legctl] & XHCI_USBLEGCTLSTS_SMI_STATUS,
                      XHCI_USBLEGCTLSTS_SMI_STATUS,
                      "and acknowledging the three RW1C status bits");
-            CHECK_EQ(writeValue[legctl] & 0x1FF00000UL, 0,
-                     "with the RsvdZ 28:21 and read-only 20 left at zero");
+            CHECK_EQ(writeValue[legctl] & 0x1FF10000UL, 0,
+                     "with the RsvdZ 28:21 and the read-only 16 and 20 written as zero");
         }
     }
 
@@ -3448,6 +3552,36 @@ static void test_preflight_refusals(void)
     status = XhciInitController(&ext, &resources);
     check_refused(status, MP_STATUS_NO_RESOURCES, XHCI_INIT_STEP_RESOURCES,
                   USBPORT_RESOURCES_MEMORY, "no interrupt resource");
+
+    /*
+     * The same step under the NT 6.x numbering, which is the arm the amd64
+     * build selects in DriverEntry and which no host here can reach any other
+     * way. `0x0C` is what a Vista x64 guest reported on 2026-09-10 and was
+     * refused for; `0x06` is the NT 5.x value, and on NT 6.x it names a port
+     * and an interrupt rather than an interrupt and a memory window, so it
+     * must now be the one that is refused. The two cases together are what
+     * says the mask MOVED rather than widened.
+     */
+    XhciResourcesRequired =
+        USBPORT6_RESOURCES_MEMORY | USBPORT6_RESOURCES_INTERRUPT;
+    hc_build();
+    ext.ResourcesTypes = USBPORT_RESOURCES_MEMORY |
+                         USBPORT_RESOURCES_INTERRUPT;
+    resources.ResourcesTypes = ext.ResourcesTypes;
+    writeCount = 0;
+    check_refused(XhciInitController(&ext, &resources), MP_STATUS_NO_RESOURCES,
+                  XHCI_INIT_STEP_RESOURCES,
+                  USBPORT_RESOURCES_MEMORY | USBPORT_RESOURCES_INTERRUPT,
+                  "0x06 is refused under the NT 6.x numbering");
+    hc_build();
+    prepare_start_arguments();
+    resources.ResourcesTypes = USBPORT6_RESOURCES_MEMORY |
+                               USBPORT6_RESOURCES_INTERRUPT;
+    CHECK_EQ(XhciRegPacket.StartController(&ext, &resources),
+             MP_STATUS_SUCCESS,
+             "and 0x0C starts the controller that 0x06 used to");
+    XhciResourcesRequired =
+        USBPORT_RESOURCES_MEMORY | USBPORT_RESOURCES_INTERRUPT;
 
     /* Interrupt Pin 0 is MSI/MSI-X only, which neither target's usbport can
      * service. The gate runs before any MMIO precisely so this costs nothing. */
@@ -6212,6 +6346,46 @@ static void test_disable_interrupts(void)
              "still not as a failure");
 
     /*
+     * **A reset in progress is not written into** (2026-09-17 audit B7, Codex
+     * round 1). HCRST reads 1 until the reset completes and CNR stays up
+     * until the controller is ready; 5.4.2 forbids every operational-register
+     * write but USBSTS meanwhile, and the reserved-preserving RMW would carry
+     * the write-1-to-reset bit it read straight back. The reset itself
+     * returns INTE and IE to 0, which is what the read back proves.
+     */
+    enable_start(0);
+    XhciEnableInterrupts(&ext);
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] = HC_USBCMD_RSVDP_SEED | XHCI_USBCMD_HCRST;
+    mmio[HC_IR0(XHCI_IR_IMAN) / 4] &= ~XHCI_IMAN_IE;
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_CNR;
+    writeCount = 0;
+    failures = ext.InterruptMaskFailures;
+    degraded = ext.InterruptMaskDegraded;
+    ext.InterruptDeliverySuppressed = 0;
+    XhciMaskInterrupts(&ext);
+    CHECK_EQ(writeCount, 0,
+             "a mask on a controller mid-reset writes no register at all");
+    CHECK_EQ(mmio[HC_OP(XHCI_OP_USBCMD) / 4] & XHCI_USBCMD_HCRST,
+             XHCI_USBCMD_HCRST, "so the reset it read is not re-issued");
+    CHECK_EQ(ext.InterruptDeliverySuppressed, 1,
+             "and delivery is proven suppressed from the reset's own defaults");
+    CHECK_EQ(ext.InterruptMaskFailures, failures, "not a failure");
+    CHECK_EQ(ext.InterruptMaskDegraded, degraded,
+             "and not degraded either - every operand was readable");
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] &= ~XHCI_USBSTS_CNR;
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] &= ~XHCI_USBCMD_HCRST;
+
+    /* CNR alone, with HCRST already reading 0, is the same refusal. */
+    enable_start(0);
+    XhciEnableInterrupts(&ext);
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] &= ~XHCI_USBCMD_INTE;
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_CNR;
+    writeCount = 0;
+    XhciMaskInterrupts(&ext);
+    CHECK_EQ(writeCount, 0, "CNR alone holds every write back too");
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] &= ~XHCI_USBSTS_CNR;
+
+    /*
      * **The one mask whose failure the ISR cannot cover for.** Everywhere else
      * an unproven mask leaves XhciIsr admitted so it can still acknowledge;
      * here usbport is about to stop calling it, because its ISR wrapper only
@@ -6569,6 +6743,9 @@ static MPSTATUS NTAPI logRegistryValue(PVOID miniPortExtension,
 {
     const WCHAR *name;
 
+    /* The one service stub that did not report into the under-lock net until
+     * the 2026-09-17 audit (E1); the header above says every stub does. */
+    note_no_lock_here("UsbPortGetMiniportRegistryKeyValue");
     (VOID)miniPortExtension;
 
     /*
@@ -7146,18 +7323,56 @@ static void fire_async_timer(void)
 /* Drive one whole interrupt: the ISR acknowledges, the DPC drains. This is the
  * only way a command completion ever reaches the engine on the target, so it is
  * the only way these vectors deliver one. */
+/*
+ * The worker half of usbport (see hc_invalidate_endpoint): every endpoint the
+ * driver asked to have polled is polled, through the registered PollEndpoint,
+ * until a pass asks for nothing new. Bounded, because a driver that asked for
+ * the same poll for ever would otherwise hang the suite instead of failing it.
+ */
+/*
+ * The invalidates that are re-offers of a refused transfer, as opposed to the
+ * poll requests a parked completion makes on the per-endpoint tier, which the
+ * driver counts apart in CompletionPollInvalidates. Both reach the same
+ * service; the tests about re-offers count only the first.
+ */
+#define REOFFER_CALLS (invalidateEndpointCalls - ext.CompletionPollInvalidates)
+
+static void usbport_worker(void)
+{
+    ULONG rounds;
+    ULONG i;
+    PVOID batch[PENDING_POLL_MAX];
+    ULONG count;
+
+    for (rounds = 0; rounds < 16 && pendingPollCount != 0; rounds++) {
+        count = pendingPollCount;
+        for (i = 0; i < count; i++) {
+            batch[i] = pendingPolls[i];
+        }
+        pendingPollCount = 0;
+        for (i = 0; i < count; i++) {
+            if (XhciRegPacket.PollEndpoint != NULL) {
+                XhciRegPacket.PollEndpoint(&ext, batch[i]);
+            }
+        }
+    }
+}
+
 static void deliver_events(void)
 {
     (void)XhciIsr(&ext);
     XhciEventDpc(&ext, FALSE);
+    usbport_worker();
 }
 
 /* The completion half of that, for a transfer failed inside a SubmitTransfer
  * callback: no event is involved, so what delivers it on the target is the DPC's
- * drain or the CheckController poll's, and both are this one call. */
+ * drain or the CheckController poll's, and both are this one call - followed,
+ * as on the target, by usbport polling whatever the drain asked for. */
 static void deliver_after_submit(void)
 {
     XhciSlotDeferredWork(&ext);
+    usbport_worker();
 }
 
 /*
@@ -9422,7 +9637,6 @@ static void test_controller_recovery(void)
      * permanently dead controller on every real machine and a green suite on
      * both guests.
      */
-    saveRestoreShape = SR_CONFORMING;
     hc_build();
     saveRestoreShape = SR_CONFORMING;
     CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a conforming controller)");
@@ -9499,7 +9713,6 @@ static void test_controller_recovery(void)
      * second of every start, and almost none of those suspends meet a failed
      * controller.
      */
-    saveRestoreShape = SR_CONFORMING;
     hc_build();
     saveRestoreShape = SR_CONFORMING;
     CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a conforming controller)");
@@ -9727,6 +9940,10 @@ static void test_registered_callbacks(void)
 
     CHECK(XhciRegPacket.InterruptService != NULL, "the packet carries an ISR");
     CHECK(XhciRegPacket.InterruptDpc != NULL, "and a DPC");
+    /* Task 22.5: the NT 6.x slot is served by the same function, the way
+     * Vista's own usbehci serves both of its slots with one routine. */
+    CHECK(XhciRegPacket.InterruptDpcEx == XhciRegPacket.InterruptDpc,
+          "and the Version 300 InterruptDpcEx slot is that same DPC");
     CHECK(XhciRegPacket.EnableInterrupts != NULL, "and EnableInterrupts");
     CHECK(XhciRegPacket.DisableInterrupts != NULL, "and DisableInterrupts");
     CHECK(XhciRegPacket.FlushInterrupts != NULL, "and FlushInterrupts");
@@ -9759,7 +9976,9 @@ static void test_registered_callbacks(void)
           "signature only, by design");
 
     hw_access_snapshot(&before);
-    XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(XhciRegPacket.InterruptDpc(&ext, TRUE), 0,
+             "the registered DPC reports nothing to NT 6.x on a bad trailing "
+             "signature");
     check_touched_nothing(&before, "the registered DPC, bad trailing signature");
     CHECK_EQ(ext.DpcCount, 0, "and it does not count itself");
 
@@ -9831,7 +10050,9 @@ static void test_registered_callbacks(void)
 
     dpcs = ext.DpcCount;
     hw_access_snapshot(&before);
-    XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(XhciRegPacket.InterruptDpc(&ext, TRUE), 0,
+             "the registered DPC reports nothing to NT 6.x on a bad leading "
+             "signature");
     check_touched_nothing(&before,
                           "registered DPC, bad leading signature");
     CHECK_EQ(ext.DpcCount, dpcs, "and the DPC counts nothing");
@@ -9892,11 +10113,30 @@ static void test_registered_callbacks(void)
 
     ext.Signature = XHCI_EXTENSION_SIGNATURE;
 
+    /*
+     * Task 22.5: what the DPC hands back to an NT 6.x caller, through the
+     * registered pointer. usbport reads bits 0 and 1 and invalidates the
+     * root-hub interrupt endpoint on either; this driver reports the port bit
+     * after a pass that consumed a Port Status Change Event and nothing
+     * otherwise, derived from the counter the drain already keeps.
+     */
+    dpcs = ext.DpcCount;
+    CHECK_EQ(XhciRegPacket.InterruptDpc(&ext, TRUE), 0,
+             "a pass that consumed no port change reports nothing to NT 6.x");
+    CHECK_EQ(ext.DpcCount, dpcs + 1, "and it was a real pass");
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, 1UL << 24, 0);
+    CHECK_EQ(XhciRegPacket.InterruptDpc(&ext, TRUE), USBPORT_DPC_EX_PORT_CHANGE,
+             "a pass that consumed a Port Status Change Event reports the "
+             "port bit");
+    CHECK_EQ(XhciRegPacket.InterruptDpc(&ext, TRUE), 0,
+             "and the next quiet pass reports nothing again");
+
     /* And NULL, through the same pointers. */
     hw_access_snapshot(&before);
     CHECK_EQ(XhciRegPacket.InterruptService(NULL), FALSE,
              "the registered ISR declines NULL");
-    XhciRegPacket.InterruptDpc(NULL, TRUE);
+    CHECK_EQ(XhciRegPacket.InterruptDpc(NULL, TRUE), 0,
+             "the registered DPC reports nothing to NT 6.x on NULL");
     XhciRegPacket.EnableInterrupts(NULL);
     XhciRegPacket.DisableInterrupts(NULL);
     XhciRegPacket.FlushInterrupts(NULL);
@@ -10505,7 +10745,6 @@ static void test_poll_clock(void)
     CHECK_EQ(ext.PollClockMs, before + 12UL,
              "and the poll after that counts normally from the new axis");
 
-    saveRestoreShape = SR_CONFORMING;
     enable_start(0);
     saveRestoreShape = SR_CONFORMING;
     hostMfindex = 8UL * 1900UL;
@@ -11811,6 +12050,205 @@ static void test_root_hub_resume(void)
     CHECK_EQ(ext.RootHub.Ports[0].Armed, XHCI_PORT_OP_RESUME,
              "the health poll's sweep finds the port by its link state");
     CHECK_EQ(asyncRequests, 1, "and arms the terminating write");
+}
+
+/*
+ * The 2026-09-17 audit's B5 and B6: a suspend/resume pair with **no status
+ * query between and no event mid-interval**.
+ *
+ * Software's own link-state writes raise no change bit (CONFIG.U3E is never
+ * set), so nothing refreshed the shadow between usbhub's last query and the
+ * Resume-to-U0 PLC; the shadow still read U0, xhciPortLeftSuspend saw U0 to
+ * U0, and usbhub never got its C_PORT_SUSPEND. test_root_hub_resume did not
+ * catch it because its mid-interval over-current event refreshed the shadow
+ * to Resume on the way past. The writers now fold their own reading in
+ * first, and the poll re-reads a shadow that says Resume before arming from
+ * it.
+ */
+static void test_root_hub_resume_unqueried(void)
+{
+    USBPORT_PORT_STATUS_AND_CHANGE status;
+    ULONG completed;
+    ULONG resumed;
+
+    enable_start(0);
+    hw_events_reset();
+    hw_attach_device(2);
+    mmio[HC_PORTSC(2) / 4] |= XHCI_PORTSC_PED;
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "(usbhub's last query, with the port in U0)");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(ext.RootHub.Ports[1].Portsc), XHCI_PLS_U0,
+             "(so the shadow reads U0)");
+
+    asyncRequests = 0;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "a suspend");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "then a resume, with no query between");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(ext.RootHub.Ports[1].Portsc), XHCI_PLS_U3,
+             "the resume folded the port's U3 into the shadow before writing");
+    CHECK_EQ(asyncRequests, 1, "(and armed its timer)");
+
+    completed = ext.RhResumesCompleted;
+    hw_fire_port_timer();
+    CHECK_EQ(ext.RhResumesCompleted, completed + 1, "the timer wrote U0");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(ext.RootHub.Ports[1].Portsc),
+             XHCI_PLS_RESUME,
+             "having folded Resume in first - the previous state the "
+             "derivation needs");
+    CHECK_EQ(ext.RootHub.Ports[1].Changes & XHCI_HUB_C_PORT_SUSPEND, 0,
+             "without latching the completion itself");
+
+    /* The PLC the U0 write provokes, drained by the event path. */
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, 2UL << 24, 0);
+    XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(ext.RootHub.Ports[1].Changes & XHCI_HUB_C_PORT_SUSPEND,
+             XHCI_HUB_C_PORT_SUSPEND,
+             "the PLC refresh derives C_PORT_SUSPEND from Resume to U0");
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "(the query usbhub then makes)");
+    CHECK_EQ(status.PortChange & XHCI_HUB_C_PORT_SUSPEND,
+             XHCI_HUB_C_PORT_SUSPEND, "reports it");
+    CHECK_EQ(status.PortStatus & XHCI_HUB_PORT_SUSPEND, 0,
+             "on a port that is no longer suspended");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspendChange(&ext, 2),
+             MP_STATUS_SUCCESS, "(cleared)");
+
+    /*
+     * B6: the same pair again, and this time the health poll lands between
+     * the U0 write and the event that reports it. The shadow still says
+     * Resume; the sweep used to arm a second resume from it.
+     */
+    asyncRequests = 0;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "(suspended again)");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "(resumed again)");
+    hw_fire_port_timer();
+    CHECK_EQ(ext.RhResumesCompleted, completed + 2, "(the timer wrote U0)");
+    resumed = ext.RhPortsResumed;
+    asyncRequests = 0;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(ext.RootHub.Ports[1].Armed, XHCI_PORT_OP_NONE,
+             "a poll before the PLC is drained arms no second resume");
+    CHECK_EQ(ext.RhPortsResumed, resumed, "and counts none");
+    CHECK_EQ(asyncRequests, 0, "and requests no timer");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(ext.RootHub.Ports[1].Portsc), XHCI_PLS_U0,
+             "because it re-read the port and found U0");
+    CHECK_EQ(ext.RootHub.Ports[1].Changes & XHCI_HUB_C_PORT_SUSPEND,
+             XHCI_HUB_C_PORT_SUSPEND,
+             "deriving the completion from that reading instead");
+    CHECK_EQ(mmio[HC_PORTSC(2) / 4] & XHCI_PORTSC_PLC, 0,
+             "with PLC acknowledged, so the port keeps reporting");
+}
+
+/*
+ * A Resume write the controller does not act on (roadmap 22.12 (b),
+ * 2026-09-18). QEMU's xHCI leaves a USB 2.0 port in U3 when PLS = 15 is
+ * written; the timer then found U3 rather than Resume, abandoned the resume
+ * with no U0 write and no C_PORT_SUSPEND, and Vista's hub, waiting on that
+ * change, bugchecked 0xFE (8, 6, 1) after 60 s. U3 at the end of the interval
+ * is now owed the U0 write, as Linux issues it unconditionally.
+ */
+static void test_root_hub_resume_write_ignored(void)
+{
+    USBPORT_PORT_STATUS_AND_CHANGE status;
+
+    enable_start(0);
+    hw_events_reset();
+    hw_attach_device(2);
+    mmio[HC_PORTSC(2) / 4] |= XHCI_PORTSC_PED;
+    portResumeIgnored = 1;
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "(usbhub's last query, with the port in U0)");
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "a suspend");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "then a resume, with no query between");
+    CHECK_EQ(last_write_value(HC_PORTSC(2)) & XHCI_PORTSC_PLS_MASK,
+             (XHCI_PLS_RESUME << XHCI_PORTSC_PLS_SHIFT),
+             "(the Resume write went out)");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(2) / 4]), XHCI_PLS_U3,
+             "(and the controller left the port in U3)");
+
+    writeCount = 0;
+    hw_fire_port_timer();
+    CHECK_EQ(ext.RhResumesAbandoned, 0,
+             "a port still in U3 at the end of the interval is not abandoned");
+    CHECK_EQ(ext.RhResumesCompleted, 1, "the timer completes the resume");
+    CHECK_EQ(count_writes(HC_PORTSC(2)), 1, "with exactly one write");
+    CHECK_EQ(last_write_value(HC_PORTSC(2)) &
+             (XHCI_PORTSC_PLS_MASK | XHCI_PORTSC_LWS),
+             (XHCI_PLS_U0 << XHCI_PORTSC_PLS_SHIFT) | XHCI_PORTSC_LWS,
+             "and that write is U0 with LWS");
+    CHECK_EQ(ext.RootHub.Ports[1].Armed, XHCI_PORT_OP_NONE,
+             "the port is disarmed");
+
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, 2UL << 24, 0);
+    XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "(the query usbhub makes on the change)");
+    CHECK_EQ(status.PortChange & XHCI_HUB_C_PORT_SUSPEND,
+             XHCI_HUB_C_PORT_SUSPEND,
+             "C_PORT_SUSPEND is derived from U3 to U0, so the hub's wait ends");
+    CHECK_EQ(status.PortStatus & XHCI_HUB_PORT_SUSPEND, 0,
+             "on a port that is no longer suspended");
+
+    /* The same port found in U0 by the timer - a second timer on a resume
+     * already finished - is still abandoned with no write. */
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspendChange(&ext, 2),
+             MP_STATUS_SUCCESS, "(cleared)");
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "(suspended again)");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "(resumed again)");
+    mmio[HC_PORTSC(2) / 4] = (mmio[HC_PORTSC(2) / 4] & ~XHCI_PORTSC_PLS_MASK) |
+                             (XHCI_PLS_U0 << XHCI_PORTSC_PLS_SHIFT);
+    writeCount = 0;
+    hw_fire_port_timer();
+    CHECK_EQ(ext.RhResumesAbandoned, 1, "a port found in U0 is abandoned");
+    CHECK_EQ(count_writes(HC_PORTSC(2)), 0, "with no link-state write");
+
+    /* The age retire shares the gate: a resume whose timer never fires on a
+     * port still in U3 is finished with the U0 write when it ages out. */
+    enable_start(0);
+    hw_events_reset();
+    hw_attach_device(1);
+    mmio[HC_PORTSC(1) / 4] |= XHCI_PORTSC_PED;
+    portResumeIgnored = 1;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortSuspend(&ext, 1),
+             MP_STATUS_SUCCESS, "(a suspended port)");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspend(&ext, 1),
+             MP_STATUS_SUCCESS, "(resumed, with a timer that never fires)");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(1) / 4]), XHCI_PLS_U3,
+             "(the Resume write did not take here either)");
+    writeCount = 0;
+    poll_clock_prime();
+    poll_after_ms(XHCI_PORT_AGE_MS);
+    CHECK_EQ(ext.RhAgeRetires, 1, "the resume ages out");
+    CHECK_EQ(ext.RhResumesCompleted, 1, "and is completed, not abandoned");
+    CHECK_EQ(count_writes(HC_PORTSC(1)), 1, "with exactly one write");
+    CHECK_EQ(last_write_value(HC_PORTSC(1)) &
+             (XHCI_PORTSC_PLS_MASK | XHCI_PORTSC_LWS),
+             (XHCI_PLS_U0 << XHCI_PORTSC_PLS_SHIFT) | XHCI_PORTSC_LWS,
+             "and that write is U0 with LWS");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(1) / 4]), XHCI_PLS_U0,
+             "(the port reached U0)");
+
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, 1UL << 24, 0);
+    XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 1, &status),
+             MP_STATUS_SUCCESS, "(the query usbhub makes on the change)");
+    CHECK_EQ(status.PortChange & XHCI_HUB_C_PORT_SUSPEND,
+             XHCI_HUB_C_PORT_SUSPEND,
+             "the aged-out resume is reported as C_PORT_SUSPEND too");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspendChange(&ext, 1),
+             MP_STATUS_SUCCESS, "(cleared)");
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 1, &status),
+             MP_STATUS_SUCCESS, "(queried again)");
+    CHECK_EQ(status.PortChange & XHCI_HUB_C_PORT_SUSPEND, 0,
+             "and reported once - the clear holds");
+    portResumeIgnored = 0;
 }
 
 /*
@@ -15065,11 +15503,13 @@ static void test_slot_init_resets_the_table_in_one_hold(void)
              "(and nothing was completed under it)");
 
     /* The drainer returns from its service call and finishes; the cancelled
-     * transfer is what it delivers. */
+     * transfer is what it delivers - through the poll it asks usbport for,
+     * since the 200 tier delivers per endpoint (issue 8 section 4d). */
     ext.DeferredBusy = 0;
     XhciSlotDeferredWork(&ext);
+    usbport_worker();
     CHECK_EQ(completeTransferCalls, completions + 1,
-             "the work the reset cancelled is delivered by the drain");
+             "the work the reset cancelled is delivered by the drain's poll");
     CHECK(lastCompletedStatus != 0, "as cancelled");
     CHECK_EQ(ext.DeferredBusy, 0, "and the drain is free again");
 }
@@ -16225,7 +16665,7 @@ static void test_slot_iso_submit_refusals(void)
  * property of the gate, and an `if` written at one of them and forgotten at the
  * other is exactly the shape the vectors caught once already in this task.
  *
- * The second half is `xhciDevStampFailure`'s `Flags = 0`: usbport does **not**
+ * The second half is `xhciDevStampTransfer`'s `Flags = 0`: usbport does **not**
  * zero the transfer extension between transfers, so a record inheriting
  * `XHCI_XFER_FLAG_ISOCH` from a previous tenant would send an ordinary bulk
  * failure through `UsbPortCompleteIsoTransfer` with a block pointer belonging to
@@ -17368,6 +17808,9 @@ static void test_slot_bulk_short_packet_bound_and_empty_still_settles(void)
     XhciEventDpc(&ext, FALSE);
     refillOnErdp = 0;
     refillBudget = XHCI_MODEL_REFILL_UNLIMITED;
+    /* usbport's poll, which is what hands the settled transfer over on the
+     * per-endpoint tier; the DPC's own work is read before it below. */
+    usbport_worker();
 
     CHECK_EQ(ext.EventsTotal >= XHCI_DPC_MAX_EVENTS, 1,
              "(the pass reached the drain bound)");
@@ -17679,7 +18122,7 @@ static void test_slot_bulk_ring_full_retry(void)
 
     refusedRingFull = ext.TransfersRefusedRingFull;
     retriesAsked = ext.EndpointRetriesAsked;
-    invalidates = invalidateEndpointCalls;
+    invalidates = REOFFER_CALLS;
     enqueue = record->Ring.Enqueue;
     slot_setup_bulk_xfer(3, 16, 1);
     CHECK_EQ(slot_submit_bulk(&slotEndpoint2, 3),
@@ -17694,7 +18137,7 @@ static void test_slot_bulk_ring_full_retry(void)
              "against the free count that refused it");
     CHECK_EQ(ext.EndpointRetriesAsked, retriesAsked,
              "and no re-offer yet - nothing has freed a TRB");
-    CHECK_EQ(invalidateEndpointCalls, invalidates, "so usbport was not called");
+    CHECK_EQ(REOFFER_CALLS, invalidates, "so usbport was not called");
 
     /* The first transfer completes, which retires sixteen TRBs. */
     trbPA = XhciRingTrbPA(&record->Ring, bulkTransfer[0].LastIndex);
@@ -17706,8 +18149,9 @@ static void test_slot_bulk_ring_full_retry(void)
              "the completion released the latch");
     CHECK_EQ(record->Queue.RetryArmed, 0, "which is disarmed once spent");
     CHECK_EQ(record->Queue.RetriesAsked, 1, "and counted on the queue too");
-    CHECK_EQ(invalidateEndpointCalls, invalidates + 1,
-             "with UsbPortInvalidateEndpoint actually called");
+    CHECK_EQ(REOFFER_CALLS, invalidates + 1,
+             "with UsbPortInvalidateEndpoint actually called for it (the "
+             "poll requests a parked completion makes are counted apart)");
     CHECK(lastInvalidatedEndpoint == &slotEndpoint2,
           "naming the bulk endpoint, not EP0");
 
@@ -17715,7 +18159,7 @@ static void test_slot_bulk_ring_full_retry(void)
      * And it is one re-offer per refusal, not one per completion: the second
      * transfer completing with the latch already spent must ask for nothing.
      */
-    invalidates = invalidateEndpointCalls;
+    invalidates = REOFFER_CALLS;
     trbPA = XhciRingTrbPA(&record->Ring, bulkTransfer[1].LastIndex);
     hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT, trbPA, 0,
                      XHCI_CC_SUCCESS << 24,
@@ -17723,8 +18167,8 @@ static void test_slot_bulk_ring_full_retry(void)
     deliver_events();
     CHECK_EQ(ext.EndpointRetriesAsked, retriesAsked + 1,
              "a completion with nothing armed asks for no re-offer");
-    CHECK_EQ(invalidateEndpointCalls, invalidates,
-             "so a busy pipe does not call usbport once per transfer");
+    CHECK_EQ(REOFFER_CALLS, invalidates,
+             "so a busy pipe does not re-offer once per transfer");
 }
 
 /*
@@ -19035,6 +19479,89 @@ static void test_slot_enable_slot_failure_adopts_the_slot(void)
 }
 
 /*
+ * **A record failed while its Enable Slot is in flight** - the 2026-09-17
+ * audit's B4, and Codex's first-round finding on its fix. usbhub gives up on
+ * the device before the completion is drained and re-enumerates it, and the
+ * port now reads a speed this driver cannot address, so the re-entry fails the
+ * RESERVED record. Two things must then hold when the Enable Slot completes:
+ * the record is not resurrected (the first fix), and the slot it adopts is
+ * still *prepared* - EP0 ring and DCBAA entry - because the next valid
+ * re-entry addresses through them and nothing else ever carves them (the
+ * second). The first draft kept FAILED before the prepare, and the valid
+ * re-entry then built an Address Device naming a ring at physical address 0.
+ */
+static void test_slot_failed_during_enable_slot_keeps_a_usable_slot(void)
+{
+    PXHCI_DEVICE dev;
+    ULONG port;
+    ULONG failures;
+    ULONG refusals;
+    ULONG epOffset;
+    volatile ULONG *epContext;
+
+    hc_build();
+    enable_start(0);
+    deliver_events();
+    hwCmdSlotId = 5;
+
+    slot_attach(3, 3);
+    (void)slot_open(0, UsbHighSpeed, 64);
+    dev = &ext.Devices[0];
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_RESERVED, "(Enable Slot outstanding)");
+    CHECK_EQ(dev->ActiveOp, XHCI_DEV_OP_ENABLE_SLOT, "(on this record)");
+
+    /* The port comes out of its next resets at PSIV 4 - SuperSpeed in the
+     * model's table - before the Enable Slot completion is drained. Two
+     * resets, because task 7b-A.1.1 suppresses the first reset inside an
+     * enumeration bracket (usbhub's descriptor-read reset) and re-arms on the
+     * second: usbhub giving up and starting the device over. */
+    port = XhciRootHubPortOf(&ext.RootHub, 3);
+    mmio[HC_PORTSC(port) / 4] = (mmio[HC_PORTSC(port) / 4] &
+                                 ~XHCI_PORTSC_SPEED_MASK) |
+                                (4UL << XHCI_PORTSC_SPEED_SHIFT);
+    slot_reset_port(3);
+    slot_reset_port(3);
+    refusals = ext.OpenRefusals;
+    failures = ext.CommandFailures;
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_NO_RESOURCES,
+             "the re-entry at an unaddressable speed is refused");
+    CHECK_EQ(ext.OpenRefusals, refusals + 1, "and counted");
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_FAILED, "failing the record");
+    CHECK_EQ(dev->ActiveOp, XHCI_DEV_OP_ENABLE_SLOT,
+             "with its Enable Slot still outstanding");
+
+    deliver_events();
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_FAILED,
+             "the completion does not resurrect it");
+    CHECK_EQ((ULONG)dev->SlotId, 5UL, "the slot is adopted");
+    CHECK(dcbaa_entry(5) != 0, "and prepared - the DCBAA entry is published");
+    CHECK(XhciRingDequeuePA(&dev->Ep0Ring) != 0,
+          "with an EP0 ring a re-entry can address through");
+    CHECK_EQ(dev->PendingOp, XHCI_DEV_OP_NONE, "nothing is owed");
+    CHECK_EQ(ext.CommandFailures, failures,
+             "and no failure is charged for a command the controller answered");
+
+    /* The device comes back at a speed this driver addresses. */
+    mmio[HC_PORTSC(port) / 4] = (mmio[HC_PORTSC(port) / 4] &
+                                 ~XHCI_PORTSC_SPEED_MASK) |
+                                (3UL << XHCI_PORTSC_SPEED_SHIFT);
+    slot_reset_port(3);
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "a valid re-entry is accepted");
+    CHECK_EQ(dev->ActiveOp, XHCI_DEV_OP_ADDRESS_BSR,
+             "and re-enters the chain at Address Device (BSR = 1)");
+    CHECK_EQ(XhciInputEndpointContextOffset(&ext.Layout, 1, &epOffset),
+             XHCI_LAYOUT_OK, "(input EP0 context located)");
+    epContext = (volatile ULONG *)(ext.StartVA + epOffset);
+    CHECK((epContext[2] & ~0x0FUL) != 0,
+          "naming a nonzero TR Dequeue Pointer");
+    deliver_events();
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "which completes into Default");
+    CHECK_EQ(ext.CommandFailures, failures,
+             "with no command failed along the way");
+}
+
+/*
  * **An unmatched Command Completion Event carrying a slot-fatal code, and audit
  * round 10 asked which way this should go.**
  *
@@ -19489,7 +20016,6 @@ static void test_slot_interrupt_teardown_returns_rings(void)
      * Slot that has not disabled a thing.
      */
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -19529,7 +20055,6 @@ static void test_slot_interrupt_teardown_returns_rings(void)
      * postcondition reached differently. */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -19963,8 +20488,317 @@ static void test_slot_abort_takes_it_off_the_completion_list(void)
 
     ext.DeferredBusy = 0;
     XhciSlotDeferredWork(&ext);
+    usbport_worker();
     CHECK_EQ(completeTransferCalls, completions + 1,
-             "so exactly the one that was not aborted is completed");
+             "so exactly the one that was not aborted is completed, by the "
+             "poll the drain asks for");
+}
+
+/*
+ * **Issue 7: on the Version 300 tier a completion is handed over only from a
+ * callback usbport makes under its EpList lock.** An NT 6.x usbport's
+ * completion service queues its done DPC before storing the DPC's queued
+ * state and takes no lock of its own; the r5 arrest was a completion this
+ * driver delivered from `RH_GetPortStatus`, which usbport calls at PASSIVE
+ * with no lock, so the DPC ran first, read idle, and the done list was marked
+ * queued for ever. Microsoft's usbehci completes from PollEndpoint alone.
+ *
+ * So with the tier's gate set the event DPC retires the transfer, reports
+ * bit 0, and delivers nothing; the root-hub query, a bare drain and the
+ * health poll all leave it parked; PollEndpoint delivers it.
+ */
+static void test_slot_completion_waits_for_poll_endpoint(void)
+{
+    PXHCI_DEVICE dev;
+    PXHCI_ENDPOINT_RECORD record;
+    USBPORT_PORT_STATUS_AND_CHANGE portStatus;
+    ULONG completions;
+    ULONG result;
+    ULONG held;
+    ULONG locked;
+    ULONG polls;
+
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                       USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
+    deliver_events();
+    record = &dev->Endpoints[0];
+    (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
+                          &slotSgList);
+
+    /* Since issue 8 section 4d the gate is set by StartController on the 200
+     * tier too, so the enumeration above already held and polled; the counts
+     * below are deltas from here. */
+    ext.DeliverUnderUsbportLockOnly = 1;
+    held = ext.CompletionsHeldForPoll;
+    locked = ext.CompletionsDeliveredLocked;
+    polls = ext.PollEndpointCalls;
+    completions = completeTransferCalls;
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
+                     XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(5) | XHCI_TRB_EP_ID(3));
+    (void)XhciIsr(&ext);
+    result = XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(record->Queue.Count, 0, "the event took it off the queue");
+    CHECK_EQ(ext.CompletionsOwed, 1, "and onto the completion list");
+    CHECK_EQ(completeTransferCalls, completions,
+             "where the event DPC leaves it - it is not a locked context");
+    /* Once per pass, and the DPC makes two: the root hub's deferred work
+     * ends in the device layer's drain, then the DPC calls it again. */
+    CHECK_EQ(ext.CompletionsHeldForPoll, held + 2, "and says so, once per pass");
+    CHECK_EQ(result & USBPORT_DPC_EX_TRANSFER_WORK, USBPORT_DPC_EX_TRANSFER_WORK,
+             "and reports transfer work, as usbehci would");
+
+    /* The r5 context: a root-hub port query, PASSIVE and unlocked on the
+     * target. It drains (its refresh can tear a device down) but delivers
+     * nothing. */
+    (void)XhciRegPacket.RH_GetPortStatus(&ext, 3, &portStatus);
+    CHECK_EQ(completeTransferCalls, completions,
+             "RH_GetPortStatus does not deliver it");
+    XhciSlotDeferredWork(&ext);
+    CHECK_EQ(completeTransferCalls, completions, "nor a bare drain");
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(completeTransferCalls, completions,
+             "nor the first health poll, which only arms the fallback");
+    CHECK_EQ(ext.CompletionFallbackArmed, 1, "(armed)");
+    /* The query, the bare drain, and the poll's two (the root hub's sweep
+     * and the device layer's). */
+    CHECK_EQ(ext.CompletionsHeldForPoll, held + 6, "each pass counted once");
+
+    XhciRegPacket.PollEndpoint(&ext, &slotEndpoint2);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "PollEndpoint - usbport's HcInt pass, under its EpList lock - "
+             "delivers it");
+    CHECK_EQ(ext.CompletionsDeliveredLocked, locked + 1,
+             "counted as delivered locked");
+    CHECK_EQ(ext.CompletionsDeliveredForced, 0, "not forced");
+    CHECK_EQ(ext.CompletionsOwed, 0, "and the list is empty");
+    CHECK_EQ(ext.CompletionFallbackArmed, 0, "which disarms the fallback");
+    CHECK_EQ(ext.PollEndpointCalls, polls + 1, "(the callback counted)");
+    CHECK_EQ(XhciRegPacket.InterruptDpc(&ext, TRUE) &
+                 USBPORT_DPC_EX_TRANSFER_WORK, 0,
+             "and a DPC with nothing parked reports no transfer work");
+    ext.DeliverUnderUsbportLockOnly = 0;
+}
+
+/*
+ * The same tier, the safety net: an endpoint usbport stopped polling. The
+ * health poll arms on the first pass that finds the list non-empty, and after
+ * XHCI_COMPLETION_FALLBACK_MS on the poll clock delivers the completion
+ * itself - forced, at DISPATCH under the delivery lock, outside usbport's -
+ * and counts the poll that did so.
+ */
+static void test_slot_completion_fallback_poll(void)
+{
+    PXHCI_DEVICE dev;
+    PXHCI_ENDPOINT_RECORD record;
+    ULONG completions;
+    ULONG locked;
+
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                       USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
+    deliver_events();
+    record = &dev->Endpoints[0];
+    (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
+                          &slotSgList);
+
+    ext.DeliverUnderUsbportLockOnly = 1;
+    locked = ext.CompletionsDeliveredLocked;
+    completions = completeTransferCalls;
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
+                     XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(5) | XHCI_TRB_EP_ID(3));
+    (void)XhciIsr(&ext);
+    (void)XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(ext.CompletionsOwed, 1, "(parked)");
+
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(completeTransferCalls, completions, "the first poll arms");
+    poll_after_ms(XHCI_COMPLETION_FALLBACK_MS / 2UL);
+    CHECK_EQ(completeTransferCalls, completions, "half way is still waiting");
+    CHECK_EQ(ext.CompletionFallbackPolls, 0, "(not fired)");
+    poll_after_ms(XHCI_COMPLETION_FALLBACK_MS);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "past the threshold the poll delivers it");
+    CHECK_EQ(ext.CompletionFallbackPolls, 1, "and counts the poll that did");
+    CHECK_EQ(ext.CompletionsDeliveredForced, 1, "as a forced delivery");
+    CHECK_EQ(ext.CompletionsDeliveredLocked, locked, "not a locked one");
+    CHECK_EQ(ext.CompletionFallbackArmed, 0, "and the net disarmed");
+
+    /* One completion, one fallback: a later poll with nothing parked does not
+     * fire again. */
+    poll_after_ms(XHCI_COMPLETION_FALLBACK_MS * 2UL);
+    CHECK_EQ(ext.CompletionFallbackPolls, 1, "and only once");
+    ext.DeliverUnderUsbportLockOnly = 0;
+}
+
+/*
+ * **Issue 8: per endpoint, not merely under a lock.** With
+ * `DeliverPerEndpointOnly` set, PollEndpoint for one endpoint leaves another
+ * endpoint's completion parked - usbport holds only the polled endpoint's lock,
+ * and XP x64's completion service unlinks from the transfer's own endpoint
+ * list - and the pass asks usbport to poll the endpoint that owes it. A poll
+ * of that endpoint then delivers it.
+ */
+static void test_slot_completion_per_endpoint_only(void)
+{
+    PXHCI_DEVICE dev;
+    PXHCI_ENDPOINT_RECORD record;
+    ULONG completions;
+    ULONG invalidates;
+    ULONG locked;
+
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                       USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
+    deliver_events();
+    record = &dev->Endpoints[0];
+    (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
+                          &slotSgList);
+
+    ext.DeliverUnderUsbportLockOnly = 1;
+    ext.DeliverPerEndpointOnly = 1;
+    locked = ext.CompletionsDeliveredLocked;
+    completions = completeTransferCalls;
+    invalidates = invalidateEndpointCalls;
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
+                     XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(5) | XHCI_TRB_EP_ID(3));
+    (void)XhciIsr(&ext);
+    (void)XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(ext.CompletionsOwed, 1, "(parked by the event DPC)");
+    CHECK_EQ(completeTransferCalls, completions, "(not delivered there)");
+    CHECK(invalidateEndpointCalls > invalidates,
+          "the DPC's pass asks usbport to poll the endpoint that owes it");
+    CHECK(lastInvalidatedEndpoint == &slotEndpoint2, "- that one");
+    CHECK(ext.CompletionPollInvalidates != 0, "and counts the request");
+
+    XhciRegPacket.PollEndpoint(&ext, &slotEndpoint);
+    CHECK_EQ(completeTransferCalls, completions,
+             "PollEndpoint for EP0 does not deliver the interrupt pipe's");
+    CHECK_EQ(ext.CompletionsHeldOtherEndpoint, 1, "and says so, once per pass");
+    CHECK_EQ(ext.CompletionsOwed, 1, "(still parked)");
+
+    XhciRegPacket.PollEndpoint(&ext, &slotEndpoint2);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "PollEndpoint for its own endpoint delivers it");
+    CHECK_EQ(ext.CompletionsDeliveredLocked, locked + 1, "as a locked delivery");
+    CHECK_EQ(ext.CompletionsOwed, 0, "and the list is empty");
+    CHECK(ext.CompletionHead == NULL && ext.CompletionTail == NULL,
+          "head and tail both");
+    ext.DeliverPerEndpointOnly = 0;
+    ext.DeliverUnderUsbportLockOnly = 0;
+}
+
+/*
+ * The other two locked contexts, and the lifecycle override. `AbortTransfer`
+ * and `SetEndpointState` are reached through usbport's EpList lock too, so a
+ * completion parked when either arrives is delivered from inside it; and the
+ * suspend drain, where usbport's own deliverers are gated off, forces the
+ * hand-over rather than leaving a completion parked across the suspend.
+ */
+static void test_slot_completion_locked_contexts_and_forced(void)
+{
+    PXHCI_DEVICE dev;
+    PXHCI_ENDPOINT_RECORD record;
+    ULONG completions;
+    ULONG locked;
+    ULONG held;
+
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                       USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
+    deliver_events();
+    record = &dev->Endpoints[0];
+
+    /* SetEndpointState. Deltas from here: the gate has been on since
+     * StartController (issue 8 section 4d), so the enumeration above already
+     * held and delivered. */
+    (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
+                          &slotSgList);
+    ext.DeliverUnderUsbportLockOnly = 1;
+    locked = ext.CompletionsDeliveredLocked;
+    held = ext.CompletionsHeldForPoll;
+    completions = completeTransferCalls;
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
+                     XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(5) | XHCI_TRB_EP_ID(3));
+    (void)XhciIsr(&ext);
+    (void)XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(completeTransferCalls, completions, "(parked)");
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint2,
+                                   USBPORT_ENDPOINT_ACTIVE);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "SetEndpointState delivers what was parked");
+    CHECK_EQ(ext.CompletionsDeliveredLocked, locked + 1, "as a locked delivery");
+
+    /* The forced drain. */
+    (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
+                          &slotSgList);
+    completions = completeTransferCalls;
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
+                     XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(5) | XHCI_TRB_EP_ID(3));
+    (void)XhciIsr(&ext);
+    (void)XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(completeTransferCalls, completions, "(parked)");
+    XhciSlotDeferredWorkForced(&ext);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "a forced drain delivers it from an unlocked context");
+    CHECK_EQ(ext.CompletionsDeliveredForced, 1, "and counts it as forced");
+
+    /* And the tier's other half: with the gate off, the event DPC delivers
+     * as it always did and reports no transfer work. */
+    ext.DeliverUnderUsbportLockOnly = 0;
+    (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
+                          &slotSgList);
+    completions = completeTransferCalls;
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
+                     XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(5) | XHCI_TRB_EP_ID(3));
+    (void)XhciIsr(&ext);
+    CHECK_EQ(XhciRegPacket.InterruptDpc(&ext, TRUE) &
+                 USBPORT_DPC_EX_TRANSFER_WORK, 0,
+             "the 200 tier reports no transfer work");
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "because the event DPC delivered it");
+    CHECK_EQ(ext.CompletionsHeldForPoll, held + 4,
+             "(the two DPCs' holds above, two passes each, no more)");
+
+    /* AbortTransfer of a second transfer, with a third parked: the abort
+     * takes its own transfer off the list and delivers the other. Last,
+     * because its asynchronous half leaves the endpoint mid-stop. */
+    ext.DeliverUnderUsbportLockOnly = 1;
+    (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
+                          &slotSgList);
+    (void)slot_submit_int(&slotEndpoint2, &slotParams2, &slotTransfer2,
+                          &slotSgList2);
+    completions = completeTransferCalls;
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
+                     XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(5) | XHCI_TRB_EP_ID(3));
+    (void)XhciIsr(&ext);
+    (void)XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(ext.CompletionsOwed, 1, "(the first parked)");
+    {
+        ULONG length;
+
+        length = 0;
+        XhciRegPacket.AbortTransfer(&ext, &slotEndpoint2, &slotTransfer2,
+                                    &length);
+    }
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "AbortTransfer's pass delivers the parked one");
+    CHECK_EQ(ext.CompletionsDeliveredLocked, locked + 2, "locked again");
+    ext.DeliverUnderUsbportLockOnly = 0;
 }
 
 /*
@@ -20078,8 +20912,10 @@ static void test_slot_completion_holds_for_a_pass_after_the_bracket(void)
              "yet the pass delivers nothing - it began inside the bracket");
     CHECK(ext.CompletionsHeldByPass != 0, "and says why");
 
-    /* The next pass began after the close, so it may deliver. */
+    /* The next pass began after the close, so it may deliver - and on the
+     * per-endpoint tier what delivers is the poll that pass asks for. */
     XhciSlotDeferredWork(&ext);
+    usbport_worker();
     CHECK_EQ(completeTransferCalls, completions + 1,
              "the next pass delivers it");
     CHECK_EQ(ext.CompletionsOwed, 0, "and the list is empty");
@@ -20618,7 +21454,6 @@ static void test_slot_stop_reads_the_ep_state(void)
      * the ring is software's and the position may be programmed. */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -20654,7 +21489,6 @@ static void test_slot_stop_reads_the_ep_state(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -20716,7 +21550,6 @@ static void test_slot_stop_reads_the_ep_state(void)
      * this ring. */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -20944,7 +21777,6 @@ static void test_slot_ep0_address_device_clears_no_context(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate(3, 3, 5);          /* stops after BSR = 1: Default */
     CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "(the slot is in Default)");
 
@@ -21204,7 +22036,6 @@ static void test_slot_reconfigure_survives_failure_and_revert(void)
     /* --- B2: the revert reopen inside one command round. --- */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -21331,7 +22162,6 @@ static void test_slot_quiesce_refusals(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate(3, 3, 5);
     slot_setup(0x80, 0x06, 0x0100, 0);
     (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
@@ -21358,7 +22188,6 @@ static void test_slot_quiesce_refusals(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -21396,7 +22225,6 @@ static void test_slot_quiesce_refusals(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -21428,7 +22256,6 @@ static void test_slot_quiesce_refusals(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate(3, 3, 5);
     slot_setup(0x80, 0x06, 0x0100, 0);
     (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
@@ -21476,7 +22303,6 @@ static void test_slot_quiesce_refusals(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -21711,7 +22537,6 @@ static void test_slot_reenumeration_reset_still_arms(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate(3, 3, 5);
     dev->State = XHCI_DEV_STATE_FAILED;
     suppressed = ext.EnumResetsSuppressed;
@@ -21724,7 +22549,6 @@ static void test_slot_reenumeration_reset_still_arms(void)
      *    reopen is the enumeration that follows. */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate(3, 3, 5);
     dev->Flags &= ~XHCI_DEV_FLAG_EP0_OPEN;
     suppressed = ext.EnumResetsSuppressed;
@@ -21741,7 +22565,6 @@ static void test_slot_reenumeration_reset_still_arms(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate(3, 3, 5);
     CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "(mid-enumeration again)");
     suppressed = ext.EnumResetsSuppressed;
@@ -21760,7 +22583,6 @@ static void test_slot_reenumeration_reset_still_arms(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate(3, 3, 5);
     suppressed = ext.EnumResetsSuppressed;
     slot_attach(1, 3);
@@ -21929,7 +22751,6 @@ static void test_slot_refusal_is_bounded(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -22000,7 +22821,6 @@ static void test_slot_refusal_is_bounded(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
     stalled = ext.DevicesStalledOut;
@@ -22033,7 +22853,6 @@ static void test_slot_refusal_is_bounded(void)
      */
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     CHECK_EQ(slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x82,
                           USBPORT_TRANSFER_TYPE_BULK, 512, 0, 1),
@@ -23037,7 +23856,7 @@ static void test_probe_endpoint_contract(void)
              "nothing has called CloseEndpoint");
     CHECK_EQ(ext.ProbeEpEvents[XHCI_PROBE_EVENT_GET_STATE], 0,
              "nor GetEndpointState");
-    XhciRegPacket.CloseEndpoint(&ext, &slotEndpoint, FALSE);
+    XhciRegPacket.CloseEndpoint(&ext, &slotEndpoint);
     (void)XhciRegPacket.GetEndpointState(&ext, &slotEndpoint);
     CHECK_EQ(ext.ProbeEpEvents[XHCI_PROBE_EVENT_CLOSE], 1,
              "a build that did call CloseEndpoint would say so");
@@ -23729,7 +24548,7 @@ static void test_probe_surface_wiring(void)
           "the registered QueryEndpointRequirements");
     CHECK(ext.ProbeEpEvents[XHCI_PROBE_EVENT_OPEN] > 0,
           "the registered OpenEndpoint");
-    XhciRegPacket.CloseEndpoint(&ext, &slotEndpoint, FALSE);
+    XhciRegPacket.CloseEndpoint(&ext, &slotEndpoint);
     CHECK_EQ(ext.ProbeEpEvents[XHCI_PROBE_EVENT_CLOSE], 1,
              "the registered CloseEndpoint");
     (void)XhciRegPacket.GetEndpointState(&ext, &slotEndpoint);
@@ -23799,6 +24618,36 @@ static void topo_reply_buffer(const UCHAR *bytes, ULONG count)
  * `topoReplyBuffer` as the mapped buffer. Returns the bytes the completion
  * reported.
  */
+static void topo_submit_and_complete_slot(PXHCI_DEVICE dev,
+                                          ULONG slotId,
+                                          ULONG type,
+                                          ULONG request,
+                                          ULONG value,
+                                          ULONG index,
+                                          ULONG length)
+{
+    ULONG statusPA;
+
+    slot_setup(type, request, value, length);
+    slotParams.SetupPacket.wIndex = (USHORT)index;
+    slotParams.TransferFlags = 1;               /* IN */
+    slotParams.TransferBufferLength = length;
+    slotSgList.SgElementCount = 1;
+    slotSgList.SgElement[0].SgPhysicalAddressLo = 0x00100000UL;
+    slotSgList.SgElement[0].SgTransferLength = length;
+    slotSgList.SgElement[0].SgOffset = 0;
+    slotSgList.MappedSystemVa = topoReplyBuffer;
+
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    statusPA = XhciRingTrbPA(&dev->Ep0Ring, slotTransfer.LastIndex);
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT, statusPA, 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(slotId) | XHCI_TRB_EP_ID(1));
+    deliver_events();
+}
+
+/* Slot 5, which is the Slot ID every vector here but the two-hub one uses. */
 static void topo_submit_and_complete(PXHCI_DEVICE dev,
                                      ULONG type,
                                      ULONG request,
@@ -25638,6 +26487,84 @@ static void test_hub_marking_does_not_follow_a_reused_address(void)
 }
 
 /*
+ * **Two hubs and one reused address: the record that gave the address back must
+ * not keep a key to the node the new owner builds under it** (the 2026-09-16
+ * audit's B2).
+ *
+ * `TopoAddress` is the key a record remembers so a teardown arriving
+ * mid-re-enumeration can still find its node, and the re-entry branches keep it
+ * while clearing `DeviceAddress`. That leaves a window in which two records can
+ * name the same key, and only one of them owns the node:
+ *
+ *   - hub H is at address 2 with a node of its own, then re-enumerates, so its
+ *     address is 0 and `TopoAddress` is still 2;
+ *   - hub D enumerates first and usbport hands it 2. D's SET_ADDRESS
+ *     interception prunes whatever sat under 2 - H's node - and D's own hub
+ *     traffic then builds a fresh one there;
+ *   - H is finally addressed, say 9, and its migration re-keys the node under
+ *     its remembered 2 to 9. That node is D's.
+ *
+ * D then loses its node and its children are orphan-swept at the next fold,
+ * while H owns a node carrying D's Tier, Route String and RootPort - design
+ * record 02 section 3's named failure, reached without either hub doing
+ * anything unusual. `xhciDevHubMark` refuses on a position mismatch, but
+ * `XhciTopoChildOf`, `XhciTopoClaimChild` and `XhciTopoTtFor` do not.
+ *
+ * What is asserted here is the invariant the fix establishes - the claim is
+ * dropped when the address changes hands - because that is the fact the later
+ * migration reads. Against the unfixed driver H keeps the key and the first
+ * `CHECK_EQ` below fails.
+ */
+static void test_a_reused_address_drops_the_old_records_topo_claim(void)
+{
+    PXHCI_DEVICE first;
+    PXHCI_DEVICE second;
+
+    /* H: a hub on root port 3 at address 2, with a node and a marking. */
+    first = slot_enumerate_addressed(3, 3, 5, 2);
+    topo_reply_buffer(hubMarkDescriptor, 9);
+    topo_submit_and_complete(first, 0xA0, 0x06, 0x0000, 0, 9);
+    deliver_events();
+    CHECK_EQ(ext.HubSlotsMarked, 1, "(H is marked as a hub at address 2)");
+    CHECK_EQ(first->TopoAddress, 2, "(and its record remembers that key)");
+
+    /* H re-enumerates: the address goes back, the node is deliberately kept. */
+    slot_reset_port(3);
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "(H re-enters the chain)");
+    deliver_events();
+    CHECK_EQ(first->DeviceAddress, 0, "(H sits at address 0)");
+    CHECK_EQ(first->TopoAddress, 2, "(still holding the key, by design)");
+
+    /* D enumerates on another root port and is handed H's old address. */
+    hwCmdSlotId = 6;
+    slot_attach(1, 3);
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "(a second hub enumerates)");
+    deliver_events();
+    deliver_events();
+    second = &ext.Devices[1];
+    CHECK_EQ(second->HubPort, 1, "(on another root port)");
+    slot_setup(0x00, 0x05, 2, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    deliver_events();
+    CHECK_EQ(second->DeviceAddress, 2, "(D takes the address H gave back)");
+
+    /* The migration pruned the node under 2, so H's remembered key names
+     * nothing of H's any more - and must say so. */
+    CHECK_EQ(first->TopoAddress, 0,
+             "H's claim on address 2 is dropped when D takes it");
+
+    /* D becomes a hub, so the node now under 2 is D's own. */
+    topo_reply_buffer(hubMarkDescriptor, 9);
+    topo_submit_and_complete_slot(second, 6, 0xA0, 0x06, 0x0000, 0, 9);
+    deliver_events();
+    CHECK(XhciTopoFind(&ext.Topology, 2) != NULL, "D has a node at address 2");
+    CHECK_EQ(second->TopoAddress, 2, "and D is the record holding that key");
+}
+
+/*
  * **A hub torn down at address 0 must not leak its topology node** (Phase 7
  * review, finding A4). The address-0 open clears the record's address while
  * the graph deliberately keeps the node - and the stuck/recovering hub spends
@@ -26668,7 +27595,6 @@ static void test_save_restore(void)
 
     /* --- a controller that keeps nothing: the restore fails for a different
      * reason and must not present as a success --- */
-    saveRestoreShape = SR_NO_SAVE;
     dev = slot_enumerate(3, 3, 5);
     saveRestoreShape = SR_NO_SAVE;
     reinits = ext.ResumeReinits;
@@ -26679,7 +27605,6 @@ static void test_save_restore(void)
     CHECK_EQ(ext.Devices[0].State, XHCI_DEV_STATE_FREE, "and dropping devices");
 
     /* --- the conforming controller: state really is restored --- */
-    saveRestoreShape = SR_CONFORMING;
     enable_start(0);
     deliver_events();
     saveRestoreShape = SR_CONFORMING;
@@ -26741,7 +27666,6 @@ static void test_save_restore(void)
     /* --- a save the bus is not quiet enough for. The specification's procedure
      * begins with Stop Endpoint on every Running endpoint, which is task
      * 7a-B.1's command; declining to save is what makes its absence sound. --- */
-    saveRestoreShape = SR_CONFORMING;
     dev = slot_enumerate(3, 3, 5);
     saveRestoreShape = SR_CONFORMING;
     slot_setup(0x80, 0x06, 0x0100, 0);
@@ -26765,7 +27689,6 @@ static void test_save_restore(void)
     saveRestoreShape = SR_CONFORMING;
     enable_start(0);
     deliver_events();
-    hwCmdSlotId = 5;
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
                        USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
@@ -26783,7 +27706,6 @@ static void test_save_restore(void)
     CHECK_EQ(hostSaves, 0, "and CSS is still not written");
 
     /* --- and the third outcome: an operation that never finishes --- */
-    saveRestoreShape = SR_CONFORMING;
     enable_start(0);
     deliver_events();
     saveRestoreShape = SR_CONFORMING;
@@ -27100,10 +28022,20 @@ static void test_save_declines_while_a_stop_is_unproven(void)
 
     hc_build();
     CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a started controller)");
-    saveRestoreShape = SR_CONFORMING;
     deliver_events();
 
     dev = slot_enumerate_addressed(3, 3, 5, 7);
+    /*
+     * **The shape is selected here, after the enumerate, and it used to be
+     * selected before it - where the write was dead** (the 2026-09-16 audit's
+     * C2). `slot_enumerate_addressed` reaches `enable_start` and then
+     * `hc_build`, which puts the knob back to the measured QEMU shape; the
+     * second half of this vector already carried a comment saying exactly that.
+     * So the first half ran on `SR_QEMU`, where every restore sets SRE - which
+     * left the closing assertion below passing for the wrong reason, since a
+     * reinitialisation drops the devices whether or not the save was declined.
+     */
+    saveRestoreShape = SR_CONFORMING;
     CHECK_EQ(slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x82,
                           USBPORT_TRANSFER_TYPE_BULK, 512, 0, 1),
              MP_STATUS_SUCCESS, "(a bulk IN endpoint)");
@@ -27130,10 +28062,14 @@ static void test_save_declines_while_a_stop_is_unproven(void)
           "while the chain that would prove the endpoint stopped is still "
           "unfinished");
 
+    hostSaves = 0;
     XhciRegPacket.SuspendController(&ext);
     CHECK_EQ(ext.SavedStateValid, 0,
              "so the save is declined: a CSS taken here would capture a "
              "controller still executing a ring this driver has rewritten");
+    CHECK_EQ(hostSaves, 0,
+             "and CSS is not written at all - declined before the controller "
+             "is touched, not attempted and failed");
 
     /*
      * **And the gate is not simply stuck shut** - without this half the fix would
@@ -27154,6 +28090,12 @@ static void test_save_declines_while_a_stop_is_unproven(void)
     CHECK_EQ(dev->State, XHCI_DEV_STATE_FREE,
              "the declined save cost the bus: the resume reinitialised and every "
              "device went with it, which is the trade this gate makes");
+    /* And it cost the bus *because the save was declined*, which is only a
+     * statement about the gate on the conforming shape - on SR_QEMU the
+     * restore sets SRE and the reinitialisation follows whatever the save did,
+     * so the assertion above would hold against a gate that never ran. */
+    CHECK_EQ(saveRestoreShape, SR_CONFORMING,
+             "(and the shape it was measured on is still the conforming one)");
 
     dev = slot_enumerate_addressed(3, 3, 5, 7);
     /* `slot_enumerate` starts from `enable_start`, which rebuilds the model
@@ -27409,7 +28351,7 @@ static void test_restore_refuses_host_controller_event(void)
  * Event**.
  *
  * So the same loss can arrive on the ring wearing the type the drain was told to
- * discard, from an endpoint the controller has already halted. `xhciXferCodeInfo`
+ * discard, from an endpoint the controller has already halted. `XhciXferCodeInfo`
  * classes code 32 alone among the transfer codes as `Fatal` and the DPC's
  * transfer path escalates it to a controller invalidation; a restore that
  * dropped it would restart on top of a halted endpoint having consumed the only
@@ -28264,6 +29206,9 @@ static void test_lifecycle_release_evidence(void)
              "the resume reinitialises");
     CHECK_EQ(ext.Devices[0].State, XHCI_DEV_STATE_FREE,
              "and the record is released once the reset really happened");
+    /* The resume's drain parks it and asks for the poll; usbport's poll
+     * answers it, once. */
+    usbport_worker();
     CHECK_EQ(completeTransferCalls, completions + 1,
              "with the transfer the abandonment held back answered exactly "
              "once, on the far side of HCRST");
@@ -28282,7 +29227,6 @@ static void test_restore_preconditions(void)
 
     /* Bus mastering, and it is the one with no symptom: a controller restored
      * without it runs, takes doorbells, and delivers nothing at all. */
-    saveRestoreShape = SR_CONFORMING;
     enable_start(0);
     deliver_events();
     saveRestoreShape = SR_CONFORMING;
@@ -28299,7 +29243,6 @@ static void test_restore_preconditions(void)
 
     /* So drive the precondition directly: a valid save, then a Command register
      * that will not take BME back. */
-    saveRestoreShape = SR_CONFORMING;
     enable_start(0);
     deliver_events();
     saveRestoreShape = SR_CONFORMING;
@@ -28325,7 +29268,6 @@ static void test_restore_preconditions(void)
 
     /* CNR. Every register the restore writes is an operational or runtime one,
      * and a power transition is exactly when the bit is set. */
-    saveRestoreShape = SR_CONFORMING;
     enable_start(0);
     deliver_events();
     saveRestoreShape = SR_CONFORMING;
@@ -28341,7 +29283,6 @@ static void test_restore_preconditions(void)
 
     /* "Is this still the same controller", which the reinitialisation asks
      * twice and the first draft of the restore asked never. */
-    saveRestoreShape = SR_CONFORMING;
     enable_start(0);
     deliver_events();
     saveRestoreShape = SR_CONFORMING;
@@ -28428,6 +29369,7 @@ static void test_portsc_suspend_sets_no_plc(void)
     CHECK_EQ(mmio[HC_PORTSC(2) / 4] & XHCI_PORTSC_PLC, XHCI_PORTSC_PLC,
              "does set PLC - the row is conditional, not absent");
     portU3EntryAnnounces = 0;
+    portResumeIgnored = 0;
 }
 
 /*
@@ -28691,18 +29633,25 @@ static void test_fatal_after_recovery(void)
 
     /* A recovery that refuses AFTER its HCRST has completed but before the
      * latch clear: the reset has cleared HCE (the mock's HCRST leaves USBSTS
-     * at HCH, as hardware does) and CNR is held, so the post-reset wait
-     * times out. The latch still stands: it reopens at the clear, not at the
-     * reset. */
+     * at HCH, as hardware does) and CNR stays up from the HCRST on, so the
+     * post-reset wait times out. The latch still stands: it reopens at the
+     * clear, not at the reset. Held from the HCRST rather than throughout,
+     * because a CNR already set before it is a reset still in progress and
+     * the step now refuses ahead of writing a second one (audit B7) - that
+     * would be a refusal *before* the HCRST, which is the previous vector. */
     XhciRegPacket.CheckController(&ext);
     CHECK_EQ(asyncRequests, 2, "the poll re-arms after the first refusal");
-    cnrHeld = 1;
+    cnrHeldAfterHcrst = 1;
     fire_async_timer();
-    cnrHeld = 0;
+    cnrHeldAfterHcrst = 0;
     CHECK_EQ(ext.RecoveryFailures, 2, "the reinitialization refused at reset");
     CHECK_EQ(ext.InitStep, XHCI_INIT_STEP_RESET, "at the CNR wait");
     CHECK_EQ(mmio[HC_OP(XHCI_OP_USBSTS) / 4] & XHCI_USBSTS_HCE, 0,
              "HCRST did land and cleared HCE");
+    CHECK_EQ(mmio[HC_OP(XHCI_OP_USBSTS) / 4] & XHCI_USBSTS_CNR, XHCI_USBSTS_CNR,
+             "(and the reset it started is still running)");
+    /* The slow reset finishes before the next poll. */
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] &= ~XHCI_USBSTS_CNR;
     CHECK_EQ(ext.RecoveryFailuresConsecutive, 2, "the second failure in a row");
     CHECK_EQ(ext.ControllerFailed, 1, "the controller stays failed");
     CHECK_EQ(ext.ControllerFatal, 1,
@@ -28768,6 +29717,152 @@ static void test_fatal_after_recovery(void)
     CHECK_EQ(ext.RecoveryCompletions, 2, "and the next attempt completes");
     CHECK_EQ(ext.ControllerFailed, 0, "with the failed latch open");
     CHECK_EQ(ext.ControllerFatal, 0, "and the fatal latch still open");
+}
+
+/*
+ * **The 2026-09-17 audit's B7: a recovery attempt that arrives while the
+ * previous attempt's HCRST is still running.** On the recovery path every
+ * wait is a 10 ms stall, so a controller whose reset takes longer refuses at
+ * XHCI_INIT_STEP_RESET and the next poll's attempt finds HCH = 1 (the halt is
+ * skipped) with CNR still set. Before the fix that attempt wrote a second
+ * HCRST into a controller that was still resetting, which 5.4.2 forbids
+ * ("software shall not write any Doorbell or Operational register of the
+ * xHC, other than the USBSTS register, until CNR = '0'"). The reset step
+ * now waits for CNR to clear before writing, and on this path that wait is
+ * the same stall-only refusal - so the attempt costs one USBCMD write of
+ * nothing at all, and the retry comes from the next poll.
+ *
+ * Its own vector rather than a leg of test_fatal_after_recovery, because that
+ * test already spends two of the three attempts XHCI_RECOVERY_MAX_ATTEMPTS
+ * allows a run of failures and a third would close the budget on it.
+ */
+static void test_recovery_refuses_into_set_cnr(void)
+{
+    ULONG i;
+    ULONG hcrstWrites;
+
+    hc_build();
+    CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a controller that started)");
+    XhciRegPacket.EnableInterrupts(&ext);
+    hw_events_reset();
+
+    /*
+     * The shape the previous attempt leaves: a reset in progress. USBCMD reads
+     * HCRST = 1 with every other field at its reset default (so R/S and INTE
+     * clear), USBSTS reads HCH with CNR up. Placed in the registers directly
+     * rather than through the model's HCRST write, which completes at once.
+     */
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] = HC_USBCMD_RSVDP_SEED | XHCI_USBCMD_HCRST;
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] = XHCI_USBSTS_HCH | XHCI_USBSTS_CNR;
+    ext.ControllerFailed = 1;
+    ext.RecoveryRequested = 1;
+    asyncRequests = 0;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(asyncRequests, 1, "(the poll arms the recovery)");
+
+    writeCount = 0;
+    fire_async_timer();
+
+    CHECK_EQ(ext.RecoveryAttempts, 1, "the attempt ran");
+    CHECK_EQ(ext.RecoveryFailures, 1, "and refused");
+    CHECK_EQ(ext.RecoveryFailuresConsecutive, 1, "charged to the budget");
+    CHECK_EQ(ext.RecoveryLastStep, XHCI_INIT_STEP_RESET,
+             "at the reset step, the one a CNR refusal is recorded at");
+    CHECK_EQ(ext.InitStep, XHCI_INIT_STEP_RESET, "(the step record agrees)");
+    CHECK_EQ(ext.RecoveryLastStatus & XHCI_USBSTS_CNR, XHCI_USBSTS_CNR,
+             "with the refusing USBSTS reading carrying CNR - the reason");
+    /*
+     * **Not one register write of any kind** - Codex round 1 on the first
+     * form of this vector, which accepted the quiesce's INTE mask ahead of
+     * the CNR check: that mask is an operational-register write made while
+     * CNR is set, and as a read-modify-write of a USBCMD reading HCRST = 1 it
+     * carried the write-1-to-reset bit straight back, a second reset issued by
+     * the mask. The recovery now reads CNR before its quiesce and refuses on
+     * it, and the mask itself declines a controller mid-reset.
+     */
+    CHECK_EQ(writeCount, 0,
+             "and no MMIO write at all: not the quiesce's INTE mask, not a "
+             "halt, not a second HCRST into a controller still resetting");
+    CHECK_EQ(count_writes(HC_OP(XHCI_OP_USBCMD)), 0,
+             "(spelled out: zero USBCMD writes)");
+    CHECK_EQ(mmio[HC_OP(XHCI_OP_USBCMD) / 4] & XHCI_USBCMD_HCRST,
+             XHCI_USBCMD_HCRST, "the reset in progress was left in progress");
+    CHECK_EQ(mmio[HC_OP(XHCI_OP_USBSTS) / 4] & XHCI_USBSTS_CNR, XHCI_USBSTS_CNR,
+             "the controller is left exactly as found");
+    CHECK_EQ(ext.ControllerFailed, 1, "and stays latched failed");
+
+    /* The reset finishes; the next poll's attempt goes through. */
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] &= ~XHCI_USBCMD_HCRST;
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] &= ~XHCI_USBSTS_CNR;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(asyncRequests, 2, "the poll re-arms within the budget");
+    writeCount = 0;
+    fire_async_timer();
+    CHECK_EQ(ext.RecoveryCompletions, 1, "and the attempt completes");
+    CHECK_EQ(ext.RecoveryFailuresConsecutive, 0, "ending the run of failures");
+    CHECK_EQ(ext.ControllerFailed, 0, "with the failed latch open");
+    hcrstWrites = 0;
+    for (i = 0; i < writeCount; i++) {
+        if (writeOffset[i] == HC_OP(XHCI_OP_USBCMD) &&
+            (writeValue[i] & XHCI_USBCMD_HCRST) != 0) {
+            hcrstWrites++;
+        }
+    }
+    CHECK_EQ(hcrstWrites, 1, "through exactly one HCRST, written once CNR "
+                             "read clear");
+
+    /*
+     * **HCRST alone, with CNR already clear** (Codex round 2). CNR's clearing
+     * is not the reset ending - HCRST "is cleared to '0' by the Host
+     * Controller when the reset process is complete" (5.4.1) and step 3 of
+     * the sequence polls both bits - so a USBCMD reading HCRST = 1 is a reset
+     * in progress whatever USBSTS says, and the vector above, which set both,
+     * could not tell whether the preflight read HCRST at all.
+     */
+    XhciRegPacket.EnableInterrupts(&ext);
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] = HC_USBCMD_RSVDP_SEED | XHCI_USBCMD_HCRST;
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] = XHCI_USBSTS_HCH;
+    ext.ControllerFailed = 1;
+    ext.RecoveryRequested = 1;
+    asyncRequests = 0;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(asyncRequests, 1, "(the poll arms a recovery)");
+
+    writeCount = 0;
+    fire_async_timer();
+    CHECK_EQ(ext.RecoveryAttempts, 3, "the attempt ran");
+    CHECK_EQ(ext.RecoveryFailures, 2, "and refused");
+    CHECK_EQ(ext.RecoveryFailuresConsecutive, 1, "charged to a new run");
+    CHECK_EQ(ext.RecoveryLastStep, XHCI_INIT_STEP_RESET,
+             "at the reset step, on HCRST alone");
+    CHECK_EQ(ext.InitStep, XHCI_INIT_STEP_RESET, "(the step record agrees)");
+    CHECK_EQ(ext.RecoveryLastStatus & XHCI_USBSTS_CNR, 0,
+             "(with a USBSTS reading that shows CNR clear - HCRST was the "
+             "reason)");
+    CHECK_EQ(writeCount, 0,
+             "and no MMIO write at all - the reset it read is not re-issued");
+    CHECK_EQ(mmio[HC_OP(XHCI_OP_USBCMD) / 4] & XHCI_USBCMD_HCRST,
+             XHCI_USBCMD_HCRST, "the reset in progress is left in progress");
+    CHECK_EQ(ext.ControllerFailed, 1, "and the latch stands");
+
+    /* HCRST clears; the retry completes through exactly one HCRST. */
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] &= ~XHCI_USBCMD_HCRST;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(asyncRequests, 2, "the poll re-arms within the budget");
+    writeCount = 0;
+    fire_async_timer();
+    CHECK_EQ(ext.RecoveryCompletions, 2, "and the attempt completes");
+    CHECK_EQ(ext.RecoveryFailuresConsecutive, 0, "ending that run too");
+    CHECK_EQ(ext.ControllerFailed, 0, "with the failed latch open");
+    hcrstWrites = 0;
+    for (i = 0; i < writeCount; i++) {
+        if (writeOffset[i] == HC_OP(XHCI_OP_USBCMD) &&
+            (writeValue[i] & XHCI_USBCMD_HCRST) != 0) {
+            hcrstWrites++;
+        }
+    }
+    CHECK_EQ(hcrstWrites, 1, "through exactly one HCRST, written once HCRST "
+                             "read clear");
 }
 
 /*
@@ -29014,6 +30109,7 @@ int main(void)
     test_recovery_delivery_loss();
     test_controller_recovery();
     test_fatal_after_recovery();
+    test_recovery_refuses_into_set_cnr();
     test_bad_signature_bodies();
     test_registered_start_stop();
     test_registered_callbacks();
@@ -29032,6 +30128,8 @@ int main(void)
     test_root_hub_port_events();
     test_root_hub_reset();
     test_root_hub_resume();
+    test_root_hub_resume_unqueried();
+    test_root_hub_resume_write_ignored();
     test_root_hub_conflicts();
     test_root_hub_port_power_confirmation();
     test_root_hub_announce();
@@ -29100,6 +30198,7 @@ int main(void)
     test_slot_interrupt_configure_outcomes();
     test_slot_command_fatal_completion_codes();
     test_slot_enable_slot_failure_adopts_the_slot();
+    test_slot_failed_during_enable_slot_keeps_a_usable_slot();
     test_slot_unmatched_command_event_severity();
     test_slot_interrupt_open_refusals();
     test_slot_interrupt_does_not_displace_ep0();
@@ -29110,6 +30209,10 @@ int main(void)
     test_slot_paused_endpoint_is_restarted_by_the_poll();
     test_slot_abort_takes_it_off_the_completion_list();
     test_slot_abort_after_the_record_is_released();
+    test_slot_completion_waits_for_poll_endpoint();
+    test_slot_completion_fallback_poll();
+    test_slot_completion_locked_contexts_and_forced();
+    test_slot_completion_per_endpoint_only();
     test_slot_completion_holds_for_a_pass_after_the_bracket();
     test_slot_abort_before_the_stop_completes();
     test_slot_reconfigure_with_work();
@@ -29165,6 +30268,7 @@ int main(void)
     test_hub_marking_races_a_set_interface();
     test_hub_reenumeration_forgets_the_multi_tt_interface();
     test_hub_marking_does_not_follow_a_reused_address();
+    test_a_reused_address_drops_the_old_records_topo_claim();
     test_hub_unplugged_at_address_zero_frees_its_node();
     test_hub_with_no_ports_is_not_marked();
     test_behind_hub_device_is_addressed();
@@ -29283,6 +30387,12 @@ int main(void)
              "and never from inside a SubmitTransfer callback, anywhere in this "
              "suite - usbport writes to the transfer record after that call "
              "returns success");
+    CHECK_EQ(completeTransferOutsideDeliveryLockTotal, 0,
+             "and always under the delivery lock, anywhere in this suite - the "
+             "raise to DISPATCH that issue 7's lost wakeup needs");
+    CHECK_EQ(deliveryLockErrorsTotal, 0,
+             "and the delivery lock was never nested in itself or taken under "
+             "the controller lock");
 
     /*
      * The open path's accounting, as a net rather than as a vector (task

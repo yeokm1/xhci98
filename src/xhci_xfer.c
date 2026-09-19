@@ -968,6 +968,7 @@ VOID XhciXferQueueInit(PXHCI_TRANSFER_QUEUE queue)
     queue->IsoPacketErrors = 0;
     queue->IsoMissedService = 0;
     queue->IsoGroupsAwaitingTail = 0;
+    queue->IsoTailEvents = 0;
 }
 
 /*
@@ -1577,7 +1578,44 @@ ULONG XhciXferQueueStopped(PXHCI_TRANSFER_QUEUE queue,
         return 0;
     }
 
-    if (completionCode == XHCI_CC_STOPPED_LENGTH_INVALID) {
+    /*
+     * **A control transfer stopped on its Status Stage TRB moved its whole data
+     * stage, and neither arm below can say so** (the 2026-09-16 audit's B7).
+     *
+     * The Status Stage is the last TRB of the TD and the xHC executes it only
+     * once every Data Stage TRB has completed, so by the time an event can name
+     * it the bytes the caller asked for are on the wire. It carries no length
+     * field of its own, though, so it sits outside
+     * `DataFirstIndex`/`DataTrbCount` - and both arms below are written about
+     * TRBs inside that range. Code 26 reaches `xhciXferResidualBytes`, which
+     * counts the residual as ignored and answers zero; code 27's walk stays
+     * inside the data range, never finds the named TRB and returns without
+     * latching anything at all. `AbortTransfer` then reports nought bytes for a
+     * data stage that completed in full, which is an underreport of the whole
+     * transfer rather than of its tail.
+     *
+     * The sum runs over the data range alone, so the Setup Stage's 8 bytes are
+     * not in it - the same exclusion `xhciXferResidualBytes` makes, and the one
+     * ReactOS's EHCI miniport makes of the SETUP PID.
+     *
+     * Stopped - Short Packet is excluded: its EDTLA is the authoritative per-TD
+     * total and the arm below takes it directly, so summing here would
+     * overwrite a measurement with a derivation.
+     */
+    if (owner->DataTrbCount != 0 &&
+        completionCode != XHCI_CC_STOPPED_SHORT_PACKET &&
+        reportedIndex == owner->LastIndex &&
+        !xhciXferRangeContains(ring, owner->DataFirstIndex,
+                               owner->DataTrbCount, reportedIndex, NULL)) {
+        if (XhciRingSumTrbLengths(
+                ring, owner->DataFirstIndex,
+                xhciXferAdvance(ring, owner->DataFirstIndex,
+                                owner->DataTrbCount - 1),
+                &bytes) != XHCI_RING_OK) {
+            queue->SumFailures++;
+            return 0;
+        }
+    } else if (completionCode == XHCI_CC_STOPPED_LENGTH_INVALID) {
         /*
          * **The length field is invalid; the length is not.** 4.6.9 p.122 gives
          * this code its own arithmetic: "software shall ignore the TRB Transfer
@@ -3334,7 +3372,8 @@ static ULONG xhciXferIsoPacketAt(const XHCI_RING *ring,
                                  const XHCI_TRANSFER *transfer,
                                  ULONG index,
                                  ULONG *packetIndex,
-                                 ULONG *packetHead)
+                                 ULONG *packetHead,
+                                 ULONG *packetTail)
 {
     ULONG eventHead;
     ULONG eventTail;
@@ -3363,6 +3402,7 @@ static ULONG xhciXferIsoPacketAt(const XHCI_RING *ring,
         if (head == eventHead) {
             *packetIndex = i;
             *packetHead = eventHead;
+            *packetTail = eventTail;
             return 1;
         }
         cursor = XhciRingNextIndex(ring, tail);
@@ -3407,6 +3447,7 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
     ULONG reportedIndex;
     ULONG packetIndex;
     ULONG packetHead;
+    ULONG packetTail;
     ULONG ahead;
     ULONG packetLength;
     ULONG bytes;
@@ -3444,6 +3485,23 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
     }
     if (code.Fatal) {
         result->Fatal = 1;
+    }
+    /*
+     * The same refusal `XhciXferEvent` makes, for the same reason and with the
+     * same counter. A Stopped event (codes 26-28) says software stopped the
+     * ring, and what that does to the queued transfers is the slot layer's
+     * decision - `XhciSlotTransferEvent` routes the three codes to
+     * `XhciXferQueueStopped` before either of these is reached. The isochronous
+     * path had no guard: `XhciXferIsoCodeInfo` hands 26-28 to the shared
+     * decoder like any other code, so one arriving here would stamp the packet
+     * CANCELED and retire the whole group while a Stop Endpoint still owns the
+     * ring. That is unreachable today only because of where the interception
+     * sits, which is exactly the shape the non-iso comment calls "left to the
+     * one caller that keeps it".
+     */
+    if (code.Class == XHCI_XFER_CC_CANCELED) {
+        queue->StoppedRefused++;
+        return XHCI_XFER_OK;
     }
     if (completionCode == XHCI_CC_MISSED_SERVICE) {
         queue->IsoMissedService++;
@@ -3503,7 +3561,7 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
         return XHCI_XFER_OK;
     }
     if (!xhciXferIsoPacketAt(ring, owner, reportedIndex, &packetIndex,
-                             &packetHead)) {
+                             &packetHead, &packetTail)) {
         /*
          * **A record/ring divergence, not a stray event.** The caller has already
          * placed this index inside this transfer's range, so the walk failing
@@ -3603,8 +3661,26 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
          * packet - a second measurement of the same bytes would double the
          * total - but it is still the positional proof of ownership the retire
          * below waits for, so it falls through instead of returning.
+         *
+         * The tail is counted as what it is. It resolved to a TRB this
+         * transfer owns, so it is not an `UnmatchedEvents` reading - and that
+         * counter folds into the total the mid-TD no-double-completion
+         * argument rests on, which a conforming controller would otherwise
+         * raise once per page-crossing short isoch IN packet (the 2026-09-17
+         * audit's B9). **Any packet's last TRB is a tail**, not only the
+         * request's: the builder puts IOC on every TD's last TRB, so a short
+         * packet on a split packet in the middle of a request produces one
+         * too (Codex round 1). A re-measurement naming a TRB that is not its
+         * packet's last is a genuine duplicate event and stays where it was -
+         * and so is a second event for a single-TRB packet: a TD of one TRB
+         * has no intermediate event for a tail to follow, so the only thing a
+         * repeat on it can be is a duplicate.
          */
-        queue->UnmatchedEvents++;
+        if (reportedIndex != packetTail || packetHead == packetTail) {
+            queue->UnmatchedEvents++;
+            return XHCI_XFER_OK;
+        }
+        queue->IsoTailEvents++;
         if (reportedIndex != owner->LastIndex) {
             return XHCI_XFER_OK;
         }
@@ -3707,8 +3783,14 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
          * may still be the controller's must not have its mapped buffer handed
          * back, and on an isoch endpoint there is no halt to make a
          * repositioning legal either.
+         *
+         * `OrphanedGroups`, as the bulk path's refused retire charges it: a
+         * group that ended with its TRBs unreclaimed is the state that counter
+         * names. `PlacementFailures` is the opposite diagnosis - a ring that
+         * refused an explicit dequeue position, which nothing here asked for
+         * (the 2026-09-17 audit's B9).
          */
-        queue->PlacementFailures++;
+        queue->OrphanedGroups++;
         result->RefusedRetire = 1;
         result->NeedsRecovery = 1;
         return XHCI_XFER_OK;

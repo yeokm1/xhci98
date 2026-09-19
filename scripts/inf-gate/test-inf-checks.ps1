@@ -35,6 +35,7 @@ $ErrorActionPreference = "Stop"
 $repo = Get-RepoRoot
 $gate = Join-Path $PSScriptRoot "check-inf.ps1"
 $prodInf = Join-Path $repo "src\xhci98.inf"
+$prodInfAmd64 = Join-Path $repo "src\xhci98-amd64.inf"
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "test-harness.ps1")
 
@@ -62,9 +63,14 @@ function Invoke-Gate {
 
 function New-MutatedInf {
     # $Mutate takes the production text and returns the text to write.
+    # -Source names which production INF to mutate: the 32-bit file by default,
+    # or src\xhci98-amd64.inf for the -Arch amd64 cases at the foot of this
+    # file. One mutator rather than two, so the "the mutation has to actually
+    # mutate" guard below covers both files.
     param([string]$Name, [scriptblock]$Mutate, [switch]$Utf16, [switch]$LfOnly, [switch]$Latin1, [switch]$BareCr,
-          [switch]$Utf8Bom, [switch]$InfUnchanged)
-    $original = [System.IO.File]::ReadAllText($prodInf)
+          [switch]$Utf8Bom, [switch]$InfUnchanged, [string]$Source = "")
+    if ($Source -eq "") { $Source = $prodInf }
+    $original = [System.IO.File]::ReadAllText($Source)
     $text = & $Mutate $original
 
     # **The mutation has to actually mutate**, and this is where that is
@@ -86,7 +92,7 @@ function New-MutatedInf {
     # is mutated is the `xhci98.rc` staged beside the INF - those cases assert
     # their own mutation landed, one file over.
     if ($text -ceq $original -and -not ($Utf16 -or $LfOnly -or $BareCr -or $Utf8Bom -or $InfUnchanged)) {
-        Assert-True $false ("$Name : the mutation left src\xhci98.inf unchanged, so whatever this case asserts, it asserts it about the production INF. Its pattern no longer matches - fix the pattern, not the gate.")
+        Assert-True $false ("$Name : the mutation left " + (Split-Path -Leaf $Source) + " unchanged, so whatever this case asserts, it asserts it about the production INF. Its pattern no longer matches - fix the pattern, not the gate.")
     }
 
     $path = Join-Path $script:work ("$Name.inf")
@@ -124,9 +130,11 @@ function New-MutatedInf {
 
 function Assert-RuleFires {
     param([string]$Name, [string]$Rule, [scriptblock]$Mutate, [switch]$Utf16, [switch]$LfOnly, [switch]$Latin1, [switch]$BareCr,
-          [switch]$Utf8Bom)
-    $path = New-MutatedInf -Name $Name -Mutate $Mutate -Utf16:$Utf16 -LfOnly:$LfOnly -Latin1:$Latin1 -BareCr:$BareCr -Utf8Bom:$Utf8Bom
-    $r = Invoke-Gate -Path $path
+          [switch]$Utf8Bom, [string]$Source = "", [string]$Arch = "")
+    $path = New-MutatedInf -Name $Name -Mutate $Mutate -Utf16:$Utf16 -LfOnly:$LfOnly -Latin1:$Latin1 -BareCr:$BareCr -Utf8Bom:$Utf8Bom -Source $Source
+    $extra = @()
+    if ($Arch -ne "") { $extra = @("-Arch", $Arch) }
+    $r = Invoke-Gate -Path $path -Extra $extra
     Assert-True ($r.ExitCode -ne 0) ("$Name : the gate accepted a broken INF (exit 0).")
     # A WARN line carries the same [RULE] tag, and several rules have both
     # forms, so only a FAIL line counts as the rule firing.
@@ -144,6 +152,9 @@ try {
     Assert-True ($baseline.ExitCode -eq 0) ("src\xhci98.inf does not pass its own gate:`n" + $baseline.Output)
     Assert-True ($baseline.Output -notmatch "FAIL \[") "src\xhci98.inf produced a FAIL line."
     Assert-True ($baseline.Output -notmatch "WARN:") ("src\xhci98.inf produced a warning:`n" + $baseline.Output)
+    # Both models sections READ - the undecorated one and NT 6.x's - for the
+    # reason the 64-bit baseline below gives.
+    Assert-True ($baseline.Output -match "models: 2\b") ("src\xhci98.inf: expected the gate to gather two models (the undecorated one and NTx86.6.0). Output:`n" + $baseline.Output)
 
     Write-Step "file format"
     Assert-RuleFires "utf16" "FILE-ENCODING" { param($t) $t } -Utf16
@@ -443,9 +454,12 @@ try {
         param($t) $t.Replace("HKR,,NTMPDriver,,xhci98.sys`r`nHKR,,XhciLogVerbosity,0x00010001,0",
                              "HKR,,NTMPDriver,,xhci98.sys")
     }
+    # Anchored on NTMPDriver, which only the 9x section has, rather than on the
+    # comment that used to follow it: that comment introduced
+    # [Xhci.AddReg.Global] and went with the section in 1.1.0.0.
     Assert-RuleFires "logdbgview-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciLogDebugView,0x00010001,0`r`n`r`n; This value lives",
-                             "`r`n; This value lives")
+        param($t) $t.Replace("HKR,,NTMPDriver,,xhci98.sys`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,,XhciLogDebugView,0x00010001,0",
+                             "HKR,,NTMPDriver,,xhci98.sys`r`nHKR,,XhciLogVerbosity,0x00010001,0")
     }
 
     # And the NT path, the same two.
@@ -535,14 +549,14 @@ try {
     # clean Windows 98 install would write the loader value and copy no
     # driver. The OS-source list stays, so the OS-* rules are not what fires.
     Assert-RuleFires "w98-copyfiles-gap" "PATH-W98" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98",
-                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyW98")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98",
+                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyW98")
     }
     # The undecorated install section losing its AddReg: Windows 98 binds the
     # device and then loads nothing, because DevLoader and NTMPDriver are what
     # that section carries.
     Assert-RuleFires "w98-no-addreg" "PATH-W98" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles", "[Xhci.Dev]`r`nCopyFiles=Xhci.CopyFiles")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles", "[Xhci.Dev]`r`nCopyFiles=Xhci.CopyFiles")
     }
     #
     # **A genuinely NT-only INF** - the mistake this task exists to prevent. It
@@ -557,7 +571,7 @@ try {
     # the INF against Windows 2000 alone would produce.
     #
     Assert-RuleFires "nt-only" "PATH-W98" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`n", "")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`n", "")
     }
 
     # ---- the files the OS supplies (Phase 17, release 1.0.0.1; Phase 19) ----
@@ -590,8 +604,8 @@ try {
         param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16`r`n", "[Xhci.CopyW98]`r`n")
     }
     Assert-RuleFires "os-no-usbd-nt" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT",
-                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles")
+        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT",
+                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles")
     }
     Assert-RuleFires "os-default-no-usbd" "OS-MISSING" {
         param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT",
@@ -637,7 +651,7 @@ try {
     # No NT half at all: setupapi falls back to the undecorated section, and a
     # right-click Install on Windows 2000 runs the Windows 98 file list.
     Assert-RuleFires "no-defaultinstall-nt" "OS-DEFAULT" {
-        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n", "")
+        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n", "")
     }
     Assert-RuleFires "os-dup" "OS-DUP" {
         param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16`r`nusbd.sys,,,16")
@@ -683,12 +697,12 @@ try {
 
     # Gone from the 9x path, and from the NT path, one at a time.
     Assert-RuleFires "os-no-usbui-w98" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI",
-                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI",
+                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98")
     }
     Assert-RuleFires "os-no-usbui-nt" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI",
-                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT")
+        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI",
+                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT")
     }
     # And from a right-click route, which is the one a user with an earlier
     # release takes and the one no per-file rule would otherwise reach.
@@ -760,8 +774,8 @@ try {
     # of failing.
     Assert-RuleFires "no-default-sections-at-all" "OS-DEFAULT" {
         param($t)
-        $s = $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n", "")
-        $s.Replace("[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n", "")
+        $s = $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n", "")
+        $s.Replace("[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`n", "")
     }
 
     # COPYFLG_NO_VERSION_DIALOG (32), which the table in build-and-test.md
@@ -779,35 +793,56 @@ try {
         param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,80")
     }
 
-    # ---- SUSP-* : DisableSelectiveSuspend on every route (Phase 19) ---------
+    # ---- SUSP-* : no idle-suspend registry value, anywhere --------------
     #
-    # The machine-wide value, on four routes since 1.0.1.0. Each route losing
-    # it is a hot-plug that nothing notices on Windows 98 or Windows XP, and a
-    # 0 or a non-DWORD is the same defect with the value still "present".
-    Write-Step "DisableSelectiveSuspend on every route"
-    Assert-RuleFires "susp-no-9x-device" "SUSP-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg,Xhci.AddReg.Global", "[Xhci.Dev]`r`nAddReg=Xhci.AddReg")
+    # Inverted on 2026-09-17 with the rules themselves. From 1.0.1.0 to 1.0.2.0
+    # these cases asserted that removing the machine-wide value from any of the
+    # four routes failed the gate; the file wrote it and the driver did not.
+    # Since 1.1.0.0 the driver declares USB_MINIPORT_FLAGS_DISABLE_SS (0x20)
+    # and the file writes nothing, so the cases ADD a value back and assert
+    # the gate refuses it.
+    #
+    # Adding is the harder direction to test and the one that matters. A rule
+    # that merely stopped demanding the value would pass the production file
+    # while saying nothing about a later edit that puts it back - and putting
+    # it back is exactly what an editor reaching for the old fix would do.
+    Write-Step "no idle-suspend registry value on any route"
+    $suspRow = "HKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1"
+    # On the 9x device install's own AddReg section.
+    Assert-RuleFires "susp-global-9x" "SUSP-GLOBAL" {
+        param($t) $t.Replace("[Xhci.AddReg]`r`nHKR,,DevLoader,,*NTKERN",
+                             "[Xhci.AddReg]`r`n$suspRow`r`nHKR,,DevLoader,,*NTKERN")
     }
-    Assert-RuleFires "susp-no-nt-device" "SUSP-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT,Xhci.AddReg.Global", "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT")
+    # And on the NT one, which is where releases 1.0.1.0 to 1.0.2.0 had it.
+    Assert-RuleFires "susp-global-nt" "SUSP-GLOBAL" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`n$suspRow`r`nHKR,,XhciLogVerbosity")
     }
-    Assert-RuleFires "susp-no-9x-default" "SUSP-MISSING" {
-        param($t) $t.Replace("CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n",
-                             "CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`n")
+    # The whole-file check's own case: a section no install route references.
+    # The old route-walking rules would not have looked here, and a section
+    # sitting in the file is one line away from being wired up again.
+    Assert-RuleFires "susp-global-orphan" "SUSP-GLOBAL" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`n",
+                             "[Xhci.AddReg.Global]`r`n$suspRow`r`n`r`n[Xhci.AddReg.NT]`r`n")
     }
-    Assert-RuleFires "susp-no-nt-default" "SUSP-MISSING" {
-        param($t) $t.Replace("CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`nAddReg=Xhci.AddReg.Global`r`n",
-                             "CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n")
+    # The per-controller values, the replacement that was measured and refused:
+    # usbport writes the first one back, and on Vista from a power-setting
+    # callback (2026-09-17). Both spellings, because Windows 7 has only the
+    # second and the NT 6.x path serves Vista and Windows 7 together.
+    Assert-RuleFires "susp-hc-per-controller" "SUSP-HCVALUE" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`nHKR,,HcDisableSelectiveSuspend,0x00010001,1`r`nHKR,,XhciLogVerbosity")
     }
-    Assert-RuleFires "susp-value-zero" "SUSP-VALUE" {
-        param($t) $t.Replace("DisableSelectiveSuspend,0x00010001,1", "DisableSelectiveSuspend,0x00010001,0")
+    Assert-RuleFires "susp-hc-all-win7" "SUSP-HCVALUE" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`nHKR,,HcDisableAllSelectiveSuspend,0x00010001,1`r`nHKR,,XhciLogVerbosity")
     }
-    Assert-RuleFires "susp-not-dword" "SUSP-VALUE" {
-        param($t) $t.Replace("DisableSelectiveSuspend,0x00010001,1", "DisableSelectiveSuspend,,1")
-    }
-    Assert-RuleFires "susp-dup" "SUSP-DUP" {
-        param($t) $t.Replace("DisableSelectiveSuspend,0x00010001,1`r`n",
-                             "DisableSelectiveSuspend,0x00010001,1`r`nHKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,1`r`n")
+    # A 0 is refused too. The old SUSP-VALUE rule existed because present-and-0
+    # was a silently disabled fix; the same reasoning inverted says the value's
+    # data is not what makes it unwanted - its being here at all is.
+    Assert-RuleFires "susp-global-zero" "SUSP-GLOBAL" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`nHKLM,System\CurrentControlSet\Services\USB,DisableSelectiveSuspend,0x00010001,0`r`nHKR,,XhciLogVerbosity")
     }
 
     # ---- -EmitFootprint (roadmap tasks 11-B.3 and 11-V.3) ------------------
@@ -959,28 +994,26 @@ try {
     Assert-True (@($fp | Where-Object { $_ -eq "service|Windows 2000|xhci98|Xhci.AddService|0x00000002|remove" }).Count -eq 1) (
         "the service row must carry the AddService flags field. Rows:`n" + ($fp -join "`n"))
 
-    # Task 11-V.6's fix, asserted against the production INF by value on BOTH
-    # paths - an assertion, not a mutation control, and named as such. Until
-    # 1.0.1.0 this pinned the value's ABSENCE on the Windows 2000 path, on the
-    # assumption that that target's native usbport never idle-suspends this
-    # controller (an assumption, not a measurement; roadmap Phase 20, F18); the
-    # Windows XP reading of 2026-09-03 (roadmap task 19.2: usbport's
-    # SuspendController within thirty seconds, the hot-plugged mouse invisible)
-    # made it an NT-path need, so the pin inverted. Pinned as a whole row: the
-    # value 1 is what stops the idle suspend, and a 0 here would be a silently
-    # disabled fix that every VAL-* rule would pass. TWO rows per target, not
-    # one, and the count is the assertion: the value is delivered by the device
-    # install AND by right-click Install, because on Windows 98 an
-    # update-over-an-existing-install bugchecks before its registry phase, so a
-    # single-route value never reaches a machine that already had this driver.
-    # A drop to one row is that regression and must fail here. The SUSP-*
-    # rules in the gate say the same thing about a mutated INF; this is the
-    # production file.
-    foreach ($os in @("Windows 98", "Windows 2000")) {
-        $want11v6 = "reg|" + $os + "|Xhci.AddReg.Global|HKLM|System\CurrentControlSet\Services\USB|DisableSelectiveSuspend|0x00010001|1|remove"
-        Assert-True (@($fp | Where-Object { $_ -eq $want11v6 }).Count -eq 2) (
-            "on " + $os + " both the device install and right-click Install must write Services\USB\DisableSelectiveSuspend = 1 (task 11-V.6's fix, on the NT path since 1.0.1.0). Rows:`n" + ($fp -join "`n"))
-    }
+    # Task 11-V.6's fix, asserted against the production INF - and inverted
+    # twice now, which is worth saying because the direction is the whole
+    # assertion. Until 1.0.1.0 this pinned the value's ABSENCE on the Windows
+    # 2000 path, on the assumption that that target's native usbport never
+    # idle-suspends this controller (an assumption, not a measurement; roadmap
+    # Phase 20, F18). The Windows XP reading of 2026-09-03 (roadmap task 19.2:
+    # usbport's SuspendController within thirty seconds, the hot-plugged mouse
+    # invisible) made it an NT-path need and the pin became "two rows on every
+    # target". Since 1.1.0.0 the fix is not a registry value at all - the
+    # driver declares USB_MINIPORT_FLAGS_DISABLE_SS (0x20) - so the pin is
+    # ABSENCE again, and this time on every path of both files.
+    #
+    # The footprint is the right place for it. It is derived from the INF's
+    # own AddReg rows rather than from a rule's opinion of them, so a row
+    # reappearing under any section name, on any route, with any data, shows
+    # up here. The gate's SUSP-* rules say the same thing about a mutated INF;
+    # this is the production file.
+    $suspRows = @($fp | Where-Object { $_ -match "SelectiveSuspend" })
+    Assert-True ($suspRows.Count -eq 0) (
+        "src\xhci98.inf's footprint still carries a selective-suspend registry row. Since 1.1.0.0 this package writes none - the driver declares USB_MINIPORT_FLAGS_DISABLE_SS (0x20) instead, and the machine-wide value it used to write reached every controller usbport drives and outlived the devnode. Rows:`n" + ($suspRows -join "`n"))
 
     # The AddService flags field. Three cases are ways the service stops being
     # this package's to claim; two are cases that LOOK like one and are not -
@@ -1131,6 +1164,513 @@ try {
     $r = Invoke-Gate -Path $prodInf -PackageDir $subPkg
     Assert-True ($r.ExitCode -ne 0) "a package holding usbfiles\usbd2k.sys was accepted."
     Assert-True ($r.Output -match [regex]::Escape("[PKG-MSFILE]")) ("expected PKG-MSFILE to fire on a subdirectory copy. Output:`n" + $r.Output)
+
+
+    # ---- the 64-bit package's INF (roadmap task 21.3) -------------------
+    #
+    # src\xhci98-amd64.inf is a SECOND production INF, not a variant of the
+    # first, and design record 11's decision 2 accepted one cost for it: two
+    # files now carry one package's facts. Everything below is that cost being
+    # paid rather than promised - the file passing its own profile, each rule
+    # of that profile shown firing, each file shown FAILING under the other's
+    # profile, and the shared facts compared directly between the two.
+
+    Write-Step "the 64-bit INF must pass its own profile"
+
+    $baseline64 = Invoke-Gate -Path $prodInfAmd64 -Extra @("-Arch", "amd64")
+    Assert-True ($baseline64.ExitCode -eq 0) ("src\xhci98-amd64.inf does not pass its own gate:`n" + $baseline64.Output)
+    Assert-True ($baseline64.Output -notmatch "FAIL \[") "src\xhci98-amd64.inf produced a FAIL line."
+    Assert-True ($baseline64.Output -notmatch "WARN:") ("src\xhci98-amd64.inf produced a warning:`n" + $baseline64.Output)
+    #
+    # **Both models sections must be READ, not merely present.** Until
+    # 2026-09-16 the gate took one models section per [Manufacturer] line, so a
+    # staged INF carrying the NT 6.x section passed with that section - and the
+    # whole install path behind it - never checked: "models: 1" over a file with
+    # two. Passing says nothing about a path the rules did not walk.
+    #
+    Assert-True ($baseline64.Output -match "models: 2\b") ("src\xhci98-amd64.inf: expected the gate to gather two models (NT 5.2 and NT 6.x). Output:`n" + $baseline64.Output)
+
+    #
+    # **Each file must be REFUSED under the other's profile**, and this is the
+    # check that makes -Arch worth having at all. Without it the amd64 profile
+    # could be a set of rules that happens to accept anything the x86 one
+    # accepts - "coverage" that never distinguishes the two files - and the
+    # first sign would be a 64-bit package gated as though it were the 32-bit
+    # one. The interesting half is the second: src\xhci98.inf under -Arch
+    # amd64 must fail, because its [Manufacturer] line carries no NTamd64 field
+    # and its undecorated [Xhci.Dev] is exactly what PATH-NO9X exists to refuse.
+    #
+    $wrongProfile = Invoke-Gate -Path $prodInfAmd64
+    Assert-True ($wrongProfile.ExitCode -ne 0) ("the 64-bit INF passed the x86 profile. The two profiles do not distinguish the two files, so gating either says nothing about it.`n" + $wrongProfile.Output)
+    Assert-True ($wrongProfile.Output -match [regex]::Escape("FAIL [PATH-MFGDEC]")) ("expected PATH-MFGDEC on the 64-bit INF under -Arch x86. Output:`n" + $wrongProfile.Output)
+
+    #
+    # The 32-bit file is refused at its [Manufacturer] line, which is the FIRST
+    # thing wrong with it under this profile and the reason PATH-NO9X is not
+    # what to assert here: with no NTamd64 field there is no [XhciModels.NTamd64]
+    # to find, so no model is gathered, so the per-model loop PATH-NO9X lives in
+    # never runs. That rule's own case is `amd64-undecorated-dev` below, where
+    # the file is a valid 64-bit INF in every other respect. Asserting it here
+    # would have been asserting a rule that cannot reach this input.
+    #
+    $wrongProfile2 = Invoke-Gate -Path $prodInf -Extra @("-Arch", "amd64")
+    Assert-True ($wrongProfile2.ExitCode -ne 0) ("the 32-bit INF passed the amd64 profile.`n" + $wrongProfile2.Output)
+    Assert-True ($wrongProfile2.Output -match [regex]::Escape("FAIL [PATH-MFGDEC]")) ("expected PATH-MFGDEC on the 32-bit INF under -Arch amd64. Output:`n" + $wrongProfile2.Output)
+    Assert-True ($wrongProfile2.Output -match [regex]::Escape("FAIL [OS-DEFAULT]")) ("expected OS-DEFAULT to refuse the 32-bit file's undecorated [DefaultInstall] under -Arch amd64. Output:`n" + $wrongProfile2.Output)
+
+    Write-Step "the [Manufacturer] decoration, in both directions"
+
+    #
+    # **This is the rule that pins design record 11's decision 2**, and these
+    # are the cases whose subject is the 32-bit file. Widening its line towards
+    # `NTx86,NTamd64` is the single-INF route the owner declined on 2026-09-09,
+    # because that line is what Windows 98's 16-bit engine parses to find its
+    # models section. The ONE field it carries, `NTx86.6.0`, was read on all four
+    # engines that parse this file before it was taken (2026-09-16, roadmap
+    # task 22.5); anything beyond it is unread there. Nothing else in the tree
+    # would notice the edit: the widened file still passes every other rule.
+    #
+    Assert-RuleFires "x86-mfg-widened" "PATH-MFGDEC" {
+        param($t) $t.Replace("%Mfg%=XhciModels,NTx86.6.0`r`n", "%Mfg%=XhciModels,NTx86.6.0,NTx86,NTamd64`r`n")
+    }
+    # The measured field lost: Vista and Windows 7 x86 then match the
+    # undecorated models section and abort in the NT 5.x path's LayoutFile
+    # copies, and every other rule still passes.
+    Assert-RuleFires "x86-mfg-no-nt6" "PATH-MFGDEC" {
+        param($t) $t.Replace("%Mfg%=XhciModels,NTx86.6.0`r`n", "%Mfg%=XhciModels`r`n")
+    }
+    Assert-RuleFires "x86-nt6-models-missing" "BOTH-XREF" {
+        param($t) $t.Replace("[XhciModels.NTx86.6.0]", "[XhciModels.NTx86.6.1]")
+    }
+    # The 32-bit NT 6.x install path, checked the way the 64-bit one is below:
+    # a second path is a second place each rule can break.
+    Assert-RuleFires "x86-nt6-no-services" "PATH-NT" {
+        param($t) $t.Replace("[Xhci.Dev6.NTx86.Services]", "[Xhci.Dev6.NTx86.Svc]")
+    }
+    Assert-RuleFires "x86-nt6-no-driver-copy" "PATH-NT" {
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`n")
+    }
+    Assert-RuleFires "x86-nt6-copies-usbport" "OS-ONNT6" {
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT`r`n")
+    }
+    Assert-RuleFires "x86-nt6-copies-w98-list" "OS-ONNT6" {
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98`r`n")
+    }
+    # There is no NT 6.x SUSP case here any more, and its absence is the point.
+    # Until 1.0.2.0 "x86-nt6-no-susp" checked that [Xhci.Dev6.NTx86] delivered
+    # the machine-wide value, because the rules walked install routes and each
+    # route needed its own case. The inverted rules are whole-file: they ask
+    # whether the value appears at all, so a per-path case would exercise the
+    # same line of the gate as "susp-global-nt" above and prove nothing extra.
+    # The NT 6.x path keeps its own VAL-* case below, which is still per-route.
+    Assert-RuleFires "x86-nt6-no-logvalues" "VAL-MISSING" {
+        param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT",
+                             "[Xhci.Dev6.NTx86]")
+    }
+    # The other direction: the 64-bit file losing its decoration. The 64-bit
+    # setup engine then looks for an undecorated [XhciModels], ignores it, and
+    # the package installs nothing at all - which on the target is
+    # indistinguishable from media that was never copied.
+    Assert-RuleFires "amd64-mfg-undecorated" "PATH-MFGDEC" {
+        param($t) $t.Replace("%Mfg%=XhciModels,NTamd64", "%Mfg%=XhciModels")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    # The NT 6.x field lost. Nothing else breaks: [XhciModels.NTamd64.6.0] is
+    # still there, unreferenced, and every NT 5.2 rule passes - while Vista and
+    # Windows 7 x64 match the NT 5.2 models section and abort in its LayoutFile
+    # copies (roadmap task 21.8).
+    Assert-RuleFires "amd64-mfg-no-nt6" "PATH-MFGDEC" {
+        param($t) $t.Replace("%Mfg%=XhciModels,NTamd64,NTamd64.6.0", "%Mfg%=XhciModels,NTamd64")
+    } -Source $prodInfAmd64 -Arch amd64
+    # A field the profile has no path for, with its models section present, so
+    # the only thing wrong is that no rule would ever read that section.
+    Assert-RuleFires "amd64-mfg-unknown" "PATH-MFGDEC" {
+        param($t) $t.Replace("%Mfg%=XhciModels,NTamd64,NTamd64.6.0", "%Mfg%=XhciModels,NTamd64,NTamd64.6.0,NTamd64.6.1").Replace(
+                             "[XhciModels.NTamd64.6.0]`r`n", "[XhciModels.NTamd64.6.1]`r`n%XhciDesc%=Xhci.Dev6,PCI\CC_0C0330`r`n`r`n[XhciModels.NTamd64.6.0]`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt6-models-missing" "BOTH-XREF" {
+        param($t) $t.Replace("[XhciModels.NTamd64.6.0]", "[XhciModels.NTamd64.6.1]")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    # Decision 11 (design record 11 section 12): the 28-character section-name
+    # limit is Windows 98's, and Windows 98's engine never reads this file, so
+    # under -Arch amd64 W98-SECTLEN does not run. Raised by a real refusal - a
+    # staged [Xhci.Dev.NTamd64.6.0.Services] is 29 characters. The mutation
+    # renames one section at its header and at every reference, to 31
+    # characters, so length is the only thing that differs from the production
+    # file; the x86 "sectlen" case above is what proves the rule still fires
+    # where it applies. Both halves are asserted: the rule's own tag must be
+    # absent, and the file must pass outright.
+    $long64 = New-MutatedInf -Name "amd64-sectlen-ok" -Mutate {
+        param($t) $t.Replace("Xhci.AddReg.NT", "Xhci.AddReg.NTThirtyOneCharsXXX")
+    } -Source $prodInfAmd64
+    $r = Invoke-Gate -Path $long64 -Extra @("-Arch", "amd64")
+    Assert-True ($r.Output -notmatch [regex]::Escape("[W98-SECTLEN]")) ("amd64-sectlen-ok : W98-SECTLEN fired on the 64-bit file, which Windows 98's engine never reads. Output was:`n" + $r.Output)
+    Assert-True ($r.ExitCode -eq 0) ("amd64-sectlen-ok : the gate refused a 64-bit INF whose only change is a 31-character section name. Output was:`n" + $r.Output)
+
+    Write-Step "the 64-bit file's own install path"
+
+    #
+    # PATH-NO9X: an undecorated install section ADDED beside the decorated one,
+    # which is what an author merging the two files by hand would produce. It
+    # is not a missing section - everything the 64-bit engine needs is still
+    # there and the file installs correctly on x64. What it also does is offer
+    # an amd64 xhci98.sys to a 32-bit engine, which falls back to exactly this
+    # section, copies the binary, and creates a service pointing at it.
+    #
+    Assert-RuleFires "amd64-undecorated-dev" "PATH-NO9X" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=",
+                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    #
+    # **And the two DECORATED spellings a 32-bit engine reaches BEFORE the
+    # undecorated one** (the 2026-09-16 audit's D7). The fallback chain is
+    # .NTx86, then .NT, then the bare name, so `[Xhci.Dev.NTx86]` in the 64-bit
+    # file is not a fallback at all - it is the section that engine was looking
+    # for. Both were accepted while only the bare name was refused, which made
+    # the rule read as "do not rely on the fallback" when what it means is "a
+    # 32-bit engine must find nothing here".
+    #
+    Assert-RuleFires "amd64-ntx86-dev" "PATH-NO9X" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=",
+                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    Assert-RuleFires "amd64-nt-dev" "PATH-NO9X" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=",
+                             "[Xhci.Dev.NT]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    # The same hazard on the right-click route, which is the one a user takes
+    # with no device present - so nothing about the hardware stops it.
+    Assert-RuleFires "amd64-undecorated-default" "OS-DEFAULT" {
+        param($t) $t.Replace("[DefaultInstall.NTamd64]`r`nCopyFiles=",
+                             "[DefaultInstall]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    # ...and its two decorated siblings, for the reason the device-install pair
+    # above gives.
+    Assert-RuleFires "amd64-ntx86-default" "OS-DEFAULT" {
+        param($t) $t.Replace("[DefaultInstall.NTamd64]`r`nCopyFiles=",
+                             "[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    Assert-RuleFires "amd64-nt-default" "OS-DEFAULT" {
+        param($t) $t.Replace("[DefaultInstall.NTamd64]`r`nCopyFiles=",
+                             "[DefaultInstall.NT]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    # And the right-click section going missing altogether, which halves the
+    # routes every OS-* and SUSP-* rule below is checked against rather than
+    # failing anything - the 2026-09-07 audit's H8, in its 64-bit form.
+    Assert-RuleFires "amd64-no-default" "OS-DEFAULT" {
+        param($t) $t.Replace("[DefaultInstall.NTamd64]", "[DefaultInstall.NTamd65]")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    Assert-RuleFires "amd64-no-services" "PATH-NT" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64.Services]", "[Xhci.Dev.NTamd64.Svc]")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-no-install-section" "PATH-NT" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]", "[Xhci.Dev.NT]")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-svc-binary-gap" "PATH-NT" {
+        param($t) $t.Replace("ServiceBinary=%12%\xhci98.sys", "ServiceBinary=%12%\xhci99.sys")
+    } -Source $prodInfAmd64 -Arch amd64
+    # The NT 6.x install path gets the same checks, because a second path is a
+    # second place each of them can break.
+    Assert-RuleFires "amd64-nt6-undecorated-dev" "PATH-NO9X" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=",
+                             "[Xhci.Dev6]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n`r`n[Xhci.Dev6.NTamd64]`r`nAddReg=")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt6-no-services" "PATH-NT" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64.Services]", "[Xhci.Dev6.NTamd64.Svc]")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt6-no-install-section" "PATH-NT" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`n", "[Xhci.Dev6.NTamd65]`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt6-no-driver-copy" "PATH-NT" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-bad-starttype" "PATH-NT" {
+        param($t) $t.Replace("StartType=3                         ; SERVICE_DEMAND_START", "StartType=4                         ; SERVICE_DISABLED")
+    } -Source $prodInfAmd64 -Arch amd64
+
+    Write-Step "the 64-bit file's OS-supplied files and registry values"
+
+    # Every one of these is silent on the target in exactly the way its 32-bit
+    # counterpart is: a root hub that will not load, a property page that is
+    # dropped without a word, a controller that idle-suspends and stops seeing
+    # hot-plugs, or a log channel that cannot be turned on.
+    Assert-RuleFires "amd64-no-usbui" "OS-MISSING" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI",
+                             "[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-no-usbport" "OS-MISSING" {
+        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`n", "[Xhci.CopyNT]`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-usbport-no-flag" "OS-FLAGS" {
+        param($t) $t.Replace("usbport.sys,,,16", "usbport.sys")
+    } -Source $prodInfAmd64 -Arch amd64
+    # usbui.dll to the drivers directory: it is a user-mode property-page DLL,
+    # and dirid 11 is where all four operating systems' own USB INFs put it.
+    Assert-RuleFires "amd64-usbui-dest" "OS-DEST" {
+        param($t) $t.Replace("Xhci.CopyUI=11", "Xhci.CopyUI=10,System32\Drivers")
+    } -Source $prodInfAmd64 -Arch amd64
+    # The media carrying a Microsoft file again, on the 64-bit package this
+    # time: legal-provenance section 5's withdrawal is not per-architecture.
+    Assert-RuleFires "amd64-usbport-on-media" "OS-MEDIA" {
+        param($t) $t.Replace("[SourceDisksFiles]`r`nxhci98.sys=1", "[SourceDisksFiles]`r`nusbport.sys=1`r`nxhci98.sys=1")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-usbhub20" "OS-NEVER" {
+        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16", "[Xhci.CopyNT]`r`nusbhub20.sys,,,16`r`nusbport.sys,,,16")
+    } -Source $prodInfAmd64 -Arch amd64
+    # The 64-bit file must refuse the same two spellings. Both files carry the
+    # rules, but the accepted cost of two INFs is that they can drift, and this
+    # is the drift that would matter: the 64-bit half is the one whose targets
+    # (Vista x64, Windows 7 x64) were never read without the value at all.
+    Assert-RuleFires "amd64-susp-global" "SUSP-GLOBAL" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`n$suspRow`r`nHKR,,XhciLogVerbosity")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-susp-hc" "SUSP-HCVALUE" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity",
+                             "[Xhci.AddReg.NT]`r`nHKR,,HcDisableSelectiveSuspend,0x00010001,1`r`nHKR,,XhciLogVerbosity")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-no-logvalues" "VAL-MISSING" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT",
+                             "[Xhci.Dev.NTamd64]")
+    } -Source $prodInfAmd64 -Arch amd64
+    #
+    # **OS-ONNT6: the NT 6.x path naming an OS-supplied file.** This is the
+    # shape Vista's file queue aborts on (task 21.8), and it is the obvious
+    # "tidy-up" - making the two install paths copy the same list - so it is
+    # refused for the driver list and for usbui.dll separately, since they are
+    # two sections an editor could add one at a time.
+    #
+    Assert-RuleFires "amd64-nt6-copies-usbport" "OS-ONNT6" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt6-copies-usbui" "OS-ONNT6" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyUI`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    # No NT 6.x SUSP case, for the reason the 32-bit half gives: the inverted
+    # rules are whole-file and a per-path case would re-test one line.
+    Assert-RuleFires "amd64-nt6-no-logvalues" "VAL-MISSING" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT",
+                             "[Xhci.Dev6.NTamd64]")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-logverbosity-default" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciLogVerbosity,0x00010001,0", "HKR,,XhciLogVerbosity,0x00010001,1")
+    } -Source $prodInfAmd64 -Arch amd64
+    #
+    # **The version tie reaches the 64-bit file too**, and proving that needs
+    # the header staged beside the mutated copy: the cross-check skips silently
+    # when there is no xhci_version.h next to the INF, which is correct for the
+    # packager's staged media and would make this case pass vacuously. So the
+    # good case asserts the check RAN, exactly as the 32-bit block above does,
+    # and only then is the drift case worth anything. Both packages are cut
+    # from one header at one version; a 64-bit INF claiming a version nobody
+    # built would install as an upgrade and report it for ever afterwards.
+    #
+    {
+        $stagedHdr64 = Join-Path $script:work "xhci_version.h"
+        $stagedRc64  = Join-Path $script:work "xhci98.rc"
+        $ascii64 = New-Object System.Text.ASCIIEncoding
+        [System.IO.File]::WriteAllText($stagedHdr64, [System.IO.File]::ReadAllText((Join-Path $repo "src\xhci_version.h")), $ascii64)
+        [System.IO.File]::WriteAllText($stagedRc64,  [System.IO.File]::ReadAllText((Join-Path $repo "src\xhci98.rc")), $ascii64)
+
+        $good64 = New-MutatedInf -Name "amd64-vergood" -Mutate { param($t) $t } -InfUnchanged -Source $prodInfAmd64
+        $r = Invoke-Gate -Path $good64 -Extra @("-Arch", "amd64")
+        Assert-True ($r.ExitCode -eq 0) ("amd64-vergood : the 64-bit INF and src\xhci_version.h disagree:`n" + $r.Output)
+        Assert-True (-not ($r.Output -match "cross-check skipped")) `
+            ("amd64-vergood : the version cross-check SKIPPED, so the drift case below would pass vacuously. Output was:`n" + $r.Output)
+
+        Assert-RuleFires "amd64-driverver-drift" "BOTH-VERSION" {
+            param($t) $t -replace '(?m)^(DriverVer=\d{2}/\d{2}/\d{4}),1\.1\.0\.0', '$1,1.1.0.1'
+        } -Source $prodInfAmd64 -Arch amd64
+
+        Remove-Item -LiteralPath $stagedHdr64 -Force
+        Remove-Item -LiteralPath $stagedRc64 -Force
+    }.Invoke() | Out-Null
+
+    Write-Step "the two INFs must agree about the package"
+
+    #
+    # **The accepted cost of decision 2, mechanised.** Two files carry one
+    # package's facts, and the failure mode of that arrangement is not a
+    # crash - it is a 64-bit package that installs perfectly and behaves
+    # differently from the 32-bit one for a release or two before anybody
+    # notices. Nothing else in this tree compares them: each passes its own
+    # gate, each stages its own media, and the two are never read together.
+    #
+    # What is compared is what MUST be the same because it is one package:
+    # the hardware ID it binds to, the service it creates and every value of
+    # that service, the registry values the driver reads and their defaults,
+    # the machine-wide value, the OS-supplied file list and its flags, the
+    # media contents, the [Version] identity, and every [Strings] token the
+    # two share. What is deliberately NOT compared is what must differ - the
+    # decorations, the Windows 98 half, the temporary-name field, the INF
+    # copy - and that list is short enough to state, which is the argument
+    # for comparing the rest exactly rather than approximately.
+    #
+    function Get-InfSection {
+        # Section body with comments, blank lines and trailing whitespace
+        # removed, so a comment edit in one file is not a false disagreement.
+        param([string]$Path, [string]$Name)
+        $lines = [System.IO.File]::ReadAllText($Path) -split "`r`n"
+        $out = New-Object System.Collections.ArrayList
+        $inSection = $false
+        foreach ($raw in $lines) {
+            $line = $raw
+            $semi = $line.IndexOf(';')
+            if ($semi -ge 0) { $line = $line.Substring(0, $semi) }
+            $line = $line.Trim()
+            if ($line -match '^\[(.+)\]$') {
+                $inSection = ($matches[1] -ieq $Name)
+                continue
+            }
+            if ($inSection -and $line -ne "") { [void]$out.Add($line) }
+        }
+        return @($out)
+    }
+
+    function Assert-InfsAgree {
+        param([string]$Section, [string]$Why, [string[]]$Only = @())
+        $a = @(Get-InfSection -Path $prodInf -Name $Section)
+        $b = @(Get-InfSection -Path $prodInfAmd64 -Name $Section)
+        if ($Only.Count -gt 0) {
+            $keep = { param($rows) @($rows | Where-Object { $r = $_; @($Only | Where-Object { $r -imatch ('^\s*' + [regex]::Escape($_) + '\s*=') }).Count -gt 0 }) }
+            $a = & $keep $a
+            $b = & $keep $b
+        }
+        Assert-True ($a.Count -gt 0) ("INF-SYNC: [$Section] is empty or missing in src\xhci98.inf, so this comparison proves nothing.")
+        Assert-True ((($a -join "`n")) -eq (($b -join "`n"))) (
+            "INF-SYNC: src\xhci98.inf and src\xhci98-amd64.inf disagree in [$Section]." +
+            "`n$Why" +
+            "`nIf the change really belongs in one file only, say so here and exempt it - do not" +
+            "`nedit one file and leave the other behind." +
+            "`n`n--- src\xhci98.inf ---`n" + ($a -join "`n") +
+            "`n`n--- src\xhci98-amd64.inf ---`n" + ($b -join "`n"))
+    }
+
+    Assert-InfsAgree -Section "Version" -Only @("Signature", "Class", "ClassGUID", "Provider", "LayoutFile", "DriverVer") `
+        -Why "The two packages are one release cut from one src\xhci_version.h, and they install into the same device class through the same LayoutFile route."
+    Assert-InfsAgree -Section "Xhci.AddService" `
+        -Why "One package creates one service. A driver that is demand-start on one architecture and boot-start on the other is two products."
+    Assert-InfsAgree -Section "Xhci.AddReg.NT" `
+        -Why "These are the values the driver reads at run time through usbport. A default that drifted on one architecture is a diagnostic door open on machines whose owner never asked for one."
+    # [Xhci.AddReg.Global] was compared here until 1.1.0.0 removed it from both
+    # files. What replaced it is not comparable this way: the flag lives in
+    # src\xhci_dispatch.c, one definition both architectures compile, so the
+    # two packages cannot disagree about it the way two INF sections could.
+    # The footprint assertion above is what holds the value out of either file.
+    Assert-InfsAgree -Section "Xhci.CopyNT" `
+        -Why "The NT paths of both packages fetch the same three files from the OS by the same LayoutFile route with the same COPYFLG_NO_OVERWRITE."
+    Assert-InfsAgree -Section "Xhci.CopyUI" `
+        -Why "usbui.dll is on every install path of both packages since 1.0.2.0, to dirid 11, with flag 16."
+    Assert-InfsAgree -Section "SourceDisksFiles" `
+        -Why "Both media carry this project's two files and nothing else. A Microsoft file appearing on one of them is legal-provenance section 5's withdrawal being undone on one architecture."
+    Assert-InfsAgree -Section "SourceDisksNames" `
+        -Why "One disk, described the same way."
+
+    # The hardware ID: the two models lines are decorated differently and sit in
+    # differently named sections, so the sections cannot be compared whole. What
+    # must match is what the engine binds on.
+    $idX86 = @(Get-InfSection -Path $prodInf -Name "XhciModels")
+    $id64  = @(Get-InfSection -Path $prodInfAmd64 -Name "XhciModels.NTamd64")
+    Assert-True ($idX86.Count -eq 1 -and $id64.Count -eq 1) "INF-SYNC: each file must have exactly one models line."
+    Assert-True ($idX86[0] -eq $id64[0]) (
+        "INF-SYNC: the two INFs bind different hardware. One package, one compatible ID." +
+        "`n  src\xhci98.inf        $($idX86[0])" +
+        "`n  src\xhci98-amd64.inf  $($id64[0])")
+    # The NT 6.x models line names a different install section on purpose
+    # (Xhci.Dev6), so its hardware ID is compared on its own - and it must be
+    # the same one, or Vista and Windows 7 x64 bind something no other target
+    # does.
+    $id64nt6 = @(Get-InfSection -Path $prodInfAmd64 -Name "XhciModels.NTamd64.6.0")
+    Assert-True ($id64nt6.Count -eq 1) "INF-SYNC: src\xhci98-amd64.inf must have exactly one NT 6.x models line."
+    if ($id64nt6.Count -eq 1 -and $idX86.Count -eq 1) {
+        $hwX86 = (($idX86[0] -split '=', 2)[1] -split ',')[1].Trim()
+        $hwNt6 = (($id64nt6[0] -split '=', 2)[1] -split ',')[1].Trim()
+        Assert-True ($hwX86 -eq $hwNt6) (
+            "INF-SYNC: the NT 6.x models line binds different hardware from every other target." +
+            "`n  src\xhci98.inf                       $($idX86[0])" +
+            "`n  src\xhci98-amd64.inf (NTamd64.6.0)   $($id64nt6[0])")
+    }
+    # And the two NT 6.x models lines agree with each other whole - the same
+    # hardware ID and the same install section name - because they are one
+    # path on two architectures.
+    $idX86nt6 = @(Get-InfSection -Path $prodInf -Name "XhciModels.NTx86.6.0")
+    Assert-True ($idX86nt6.Count -eq 1) "INF-SYNC: src\xhci98.inf must have exactly one NT 6.x models line."
+    if ($idX86nt6.Count -eq 1 -and $id64nt6.Count -eq 1) {
+        Assert-True ($idX86nt6[0] -eq $id64nt6[0]) (
+            "INF-SYNC: the two INFs' NT 6.x models lines differ." +
+            "`n  src\xhci98.inf        (NTx86.6.0)     $($idX86nt6[0])" +
+            "`n  src\xhci98-amd64.inf  (NTamd64.6.0)   $($id64nt6[0])")
+    }
+
+    # [Strings]: every token the two share must have the same text, because
+    # only one of the two packages can ever install on a machine and a user
+    # reading Device Manager - or quoting it in a bug report - should see one
+    # product either way. Tokens present in one file only are not a
+    # disagreement; there are none today, and a 64-bit-only string would be.
+    $sX86 = @{}
+    foreach ($row in (Get-InfSection -Path $prodInf -Name "Strings")) {
+        if ($row -match '^\s*([^=]+?)\s*=\s*(.+)$') { $sX86[$matches[1].Trim()] = $matches[2].Trim() }
+    }
+    $s64 = @{}
+    foreach ($row in (Get-InfSection -Path $prodInfAmd64 -Name "Strings")) {
+        if ($row -match '^\s*([^=]+?)\s*=\s*(.+)$') { $s64[$matches[1].Trim()] = $matches[2].Trim() }
+    }
+    Assert-True ($sX86.Count -gt 0 -and $s64.Count -gt 0) "INF-SYNC: [Strings] parsed empty in one of the two INFs."
+    foreach ($tok in @($sX86.Keys | Sort-Object)) {
+        if (-not $s64.ContainsKey($tok)) { continue }
+        Assert-True ($sX86[$tok] -ceq $s64[$tok]) (
+            "INF-SYNC: [Strings] token %$tok% differs between the two INFs." +
+            "`n  src\xhci98.inf        $($sX86[$tok])" +
+            "`n  src\xhci98-amd64.inf  $($s64[$tok])" +
+            "`nOnly one of the two packages installs on a given machine; both should name one product.")
+    }
+
+    Write-Step "the 64-bit install footprint"
+
+    #
+    # A footprint file of its own, compared the same way and for the same
+    # reason (task 11-V.3): the 64-bit package places a different set of things
+    # on a different number of routes, so comparing it against the 32-bit file's
+    # footprint would mean nothing. Two claims, two files.
+    #
+    $tracked64 = Join-Path $repo "scripts\inf-gate\expected-footprint-amd64.txt"
+    Assert-True (Test-Path -LiteralPath $tracked64) "scripts\inf-gate\expected-footprint-amd64.txt is missing; regenerate it with -Arch amd64 -EmitFootprint."
+    if (Test-Path -LiteralPath $tracked64) {
+        $out64 = Join-Path $script:work ("fp64-" + [System.IO.Path]::GetRandomFileName() + ".txt")
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $gate `
+            -InfPath $prodInfAmd64 -Arch amd64 -EmitFootprint $out64 | Out-Null
+        Assert-True (Test-Path -LiteralPath $out64) "-EmitFootprint wrote no file for the 64-bit INF."
+        if (Test-Path -LiteralPath $out64) {
+            $actual64 = @(Get-Content -LiteralPath $out64 | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() -ne "" })
+            $expected64 = @(Get-Content -LiteralPath $tracked64 | Where-Object { $_ -notmatch '^\s*#' -and $_.Trim() -ne "" })
+            foreach ($row in $actual64) {
+                $kind = ($row -split '\|')[0]
+                Assert-True ($knownRowTypes -contains $kind) (
+                    "64-bit footprint line is neither a comment nor a known row type: '$row'")
+            }
+            Assert-True ((($actual64 -join "`n")) -eq (($expected64 -join "`n"))) (
+                "the 64-bit INF's footprint differs from scripts\inf-gate\expected-footprint-amd64.txt." +
+                "`nIf the INF's file or registry footprint really changed, task 11-V.3's uninstall" +
+                "`nexpectation changed with it - regenerate the file and say so in the commit:" +
+                "`n  powershell -File scripts\inf-gate\check-inf.ps1 -Arch amd64 -EmitFootprint scripts\inf-gate\expected-footprint-amd64.txt" +
+                "`n`n--- expected ---`n" + ($expected64 -join "`n") +
+                "`n`n--- actual ---`n" + ($actual64 -join "`n"))
+        }
+    }
 
 } finally {
     if (Test-Path -LiteralPath $script:work) {

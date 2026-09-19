@@ -297,15 +297,30 @@ static ULONG xhciRhRefresh(PXHCI_EXTENSION ext,
 
 #ifdef XHCI_FIX_ACK_OWED
     /*
-     * **Bench candidate W13 for Finding 3** (`run-13e.md` **Finding O**). The
-     * shipping form of these six lines discards the write's answer, and that is
-     * the defect: `xhciRhWritePortsc` refuses every write while a Port Power
+     * **Bench candidate W13 for Finding 3** (`run-13e.md` **Finding O**), and
+     * read the tense carefully: **W13ACK was retracted.** Finding O was refuted
+     * by its own repair - the debt-carrying form below was built, taken to the
+     * bench and did not fix the wedge (`docs/issues/02`, section 4, and
+     * `run-13e.md`), and issue 2's cause turned out to be a recovery step
+     * nobody was sending. So what follows is a real latent defect that is not
+     * *the* defect, kept compiled-out as the instrument it became. No shipping
+     * flavour defines `XHCI_FIX_ACK_OWED`.
+     *
+     * What the shipping form does is discard the write's answer:
+     * `xhciRhWritePortsc` refuses every write while a Port Power
      * change is in flight, `ackBits` is a stack local, and a refusal therefore
-     * *drops* the acknowledgement. Nothing retries it - the health poll's only
-     * refresh for this port is gated on `PpPending`, which `XhciPortShadowPpAge`
-     * clears on give-up - so the change bit stays set, and per `lessons.md`
-     * entry that suppresses the controller's next Port Status Change Event
-     * for this port. The port is out of service until the driver restarts.
+     * *drops* the acknowledgement for this refresh. Nothing carries it, but
+     * while `PpPending` is set the health poll refreshes this port every
+     * interval, and each of those re-reads the still-set bit, re-latches the
+     * hub-class change and re-runs `XhciSlotPortConnectChanged` for one
+     * physical event, until a reading confirms PP and the acknowledgement
+     * goes out with that refresh. What is dropped for good is the other
+     * ending: `XhciPortShadowPpAge` gives up first, `PpPending` clears, the
+     * poll stops re-reading the port, and the change bit stays set - which per
+     * the `lessons.md` entry suppresses the controller's next Port Status
+     * Change Event for this port. The port is then silent until something
+     * else - a status query prompted by another port, a stop/start - reads
+     * and acknowledges it (2026-09-17 audit, B12).
      *
      * So carry the debt instead of dropping it. **The retry is composed against
      * the fresh `portsc` of whichever refresh eventually succeeds**, never
@@ -422,6 +437,59 @@ static ULONG xhciRhRefresh(PXHCI_EXTENSION ext,
     }
 
     return latched;
+}
+
+/*
+ * The refresh for a path that is about to write, or has just decided from, a
+ * link state (2026-09-17 audit, B5 and B6).
+ *
+ * xhciPortLeftSuspend derives C_PORT_SUSPEND from the shadow's *previous* link
+ * state, and software's own link-state writes are the transitions the
+ * controller announces with no change bit (CONFIG.U3E is never set here, and
+ * the shipping builds refresh a port only from a status query, a port event
+ * or the Port Power poll). A writer that did not fold its own reading in
+ * first left the shadow reading whatever the last query saw - U0, on a
+ * suspend/resume pair with no query between - and the Resume-to-U0 PLC then
+ * found nothing to derive. Whatever this latches is owed to usbhub exactly as
+ * a poll's refresh is.
+ *
+ * IRQL: any. Caller holds the controller lock, and owes
+ * XhciRootHubDeferredWork after releasing it. Guest reading owed.
+ */
+static VOID xhciRhFoldReading(PXHCI_EXTENSION ext,
+                              ULONG hubPort,
+                              XHCI_PORT_SHADOW *shadow)
+{
+    if (xhciRhRefresh(ext, hubPort, shadow) != 0) {
+        ext->RootHubInvalidatesOwed++;
+    }
+}
+
+/*
+ * Whether a resume still owes its terminating U0 write on this reading.
+ *
+ * Resume is the state the PLS = 15 write asks for. U3 is a port that never
+ * entered it, and it is owed the write all the same: QEMU's xHCI ignores a
+ * Resume write to a USB 2.0 port and moves U3 to U0 only on the U0 write, and
+ * an abandon there left a Vista hub waiting 60 s for a C_PORT_SUSPEND that
+ * never came before it bugchecked 0xFE (roadmap 22.12 (b), 2026-09-18). Linux
+ * ends a host-initiated USB 2.0 resume with the same unconditional U0 write
+ * (`xhci-hub.c`, ClearPortFeature(USB_PORT_FEAT_SUSPEND)). Any other state is
+ * a port something else has taken over - a second timer on a resume already
+ * finished (U0), a disable or a reset mid-interval - and gets no link-state
+ * write, and neither does a port whose device has gone.
+ *
+ * IRQL: any.
+ */
+static ULONG xhciRhResumeOwesU0(ULONG portsc)
+{
+    ULONG pls;
+
+    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0) {
+        return 0;
+    }
+    pls = XHCI_PORTSC_GET_PLS(portsc);
+    return (pls == XHCI_PLS_RESUME || pls == XHCI_PLS_U3) ? 1UL : 0UL;
 }
 
 /*
@@ -543,8 +611,13 @@ VOID XhciRhGetRootHubData(PXHCI_EXTENSION ext, PUSBPORT_ROOT_HUB_DATA data)
  * standard command path rather than the class one. Self-powered, no remote
  * wakeup: the root hub is the machine.
  *
- * IRQL: DISPATCH_LEVEL, under MiniportSpinLock.
- */
+ * IRQL: <= DISPATCH_LEVEL. **The lock discipline differs by target and is not
+ * this driver's to choose**: NT 5.x usbport calls the root-hub status queries
+ * at DISPATCH under `MiniportSpinLock`, and issue 7 measured NT 6.x calling
+ * `RH_GetPortStatus` at PASSIVE with no lock at all. The body below is written
+ * not to depend on the answer, which is this file's standing rule; what was
+ * wrong was the tag, which named one of the two as though it were the contract
+ * (the 2026-09-16 audit's B11). */
 MPSTATUS XhciRhGetStatus(PXHCI_EXTENSION ext, PUSHORT status)
 {
     (VOID)ext;
@@ -567,8 +640,13 @@ MPSTATUS XhciRhGetStatus(PXHCI_EXTENSION ext, PUSHORT status)
  * Succeeds unconditionally: a nonzero return here abandons the entire
  * status-change scan, and there is no state this could fail on.
  *
- * IRQL: DISPATCH_LEVEL, under MiniportSpinLock.
- */
+ * IRQL: <= DISPATCH_LEVEL. **The lock discipline differs by target and is not
+ * this driver's to choose**: NT 5.x usbport calls the root-hub status queries
+ * at DISPATCH under `MiniportSpinLock`, and issue 7 measured NT 6.x calling
+ * `RH_GetPortStatus` at PASSIVE with no lock at all. The body below is written
+ * not to depend on the answer, which is this file's standing rule; what was
+ * wrong was the tag, which named one of the two as though it were the contract
+ * (the 2026-09-16 audit's B11). */
 MPSTATUS XhciRhGetHubStatus(PXHCI_EXTENSION ext,
                             PUSBPORT_HUB_STATUS_AND_CHANGE status)
 {
@@ -623,8 +701,13 @@ MPSTATUS XhciRhGetHubStatus(PXHCI_EXTENSION ext,
  * to report *into* - and usbport validates the buffer before the scan, so it is
  * unreachable from either shipping build.
  *
- * IRQL: DISPATCH_LEVEL, under MiniportSpinLock.
- */
+ * IRQL: <= DISPATCH_LEVEL. **The lock discipline differs by target and is not
+ * this driver's to choose**: NT 5.x usbport calls the root-hub status queries
+ * at DISPATCH under `MiniportSpinLock`, and issue 7 measured NT 6.x calling
+ * `RH_GetPortStatus` at PASSIVE with no lock at all. The body below is written
+ * not to depend on the answer, which is this file's standing rule; what was
+ * wrong was the tag, which named one of the two as though it were the contract
+ * (the 2026-09-16 audit's B11). */
 MPSTATUS XhciRhGetPortStatus(PXHCI_EXTENSION ext,
                              USHORT port,
                              PUSBPORT_PORT_STATUS_AND_CHANGE status)
@@ -806,6 +889,11 @@ static MPSTATUS xhciRhPortOperation(PXHCI_EXTENSION ext,
         return MP_STATUS_NOT_SUPPORTED;
     }
 
+    /* The link-state writer's fold - see xhciRhFoldReading. */
+    if (operation == XHCI_RH_OP_SUSPEND) {
+        xhciRhFoldReading(ext, (ULONG)port, shadow);
+    }
+
     /*
      * **What this port is already doing, before deciding what to do to it.**
      *
@@ -951,10 +1039,13 @@ static MPSTATUS xhciRhPortOperation(PXHCI_EXTENSION ext,
         /*
          * **The software half runs unconditionally**, and a Win98 run is why.
          * Gating it on the hardware left the address map stale on every path
-         * where the write did not land - declined by the "confirm before
-         * modifying again" holdback, refused because the controller was
-         * suspended, or simply never confirmed - which is the whole defect this
-         * trigger exists for, still open.
+         * where the write did not land. When that run was taken the write
+         * could still be declined here by the "confirm before modifying again"
+         * holdback; the Port Power refusal at the top of this function has
+         * since put that case before the write, so by this line
+         * xhciRhWritePortsc has issued it, and the path that remains is a
+         * write the port has not confirmed yet - which is the whole defect
+         * this trigger exists for, still open.
          */
         XhciSlotPortDisowned(ext, (ULONG)port);
 
@@ -1335,6 +1426,17 @@ static MPSTATUS xhciRhStartOperation(PXHCI_EXTENSION ext,
         return MP_STATUS_NOT_SUPPORTED;
     }
 
+    /*
+     * The link-state writer's fold - see xhciRhFoldReading. This is the one
+     * that matters most: it is what leaves the shadow reading U3 for the
+     * derivation the resume's end depends on. After the busy test, not before
+     * it: a refresh claims a reset whose PRC it finds, and run ahead of the
+     * test it would disarm the port a resume is then wrongly admitted to.
+     */
+    if (operation == XHCI_PORT_OP_RESUME) {
+        xhciRhFoldReading(ext, (ULONG)port, shadow);
+    }
+
     write = 1;
     value = 0;
     if (operation == XHCI_PORT_OP_RESET) {
@@ -1605,8 +1707,18 @@ static VOID NTAPI xhciRhPortTimeout(PVOID miniPortExtension, PVOID context)
         return;
     }
 
+    /*
+     * The link-state writer's fold - see xhciRhFoldReading. The write below
+     * moves the link from Resume (or U3, see xhciRhResumeOwesU0) to U0, and
+     * the PLC that reports the arrival is derived into C_PORT_SUSPEND against
+     * what the shadow held *before* it, which must therefore read Resume or U3
+     * by then. Every exit past this point reaches XhciRootHubDeferredWork, so
+     * anything the fold latched is announced.
+     */
+    xhciRhFoldReading(ext, timeout->HubPort, shadow);
+
     portsc = XhciReadPortsc(ext, xhciPort);
-    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0) {
+    if (!xhciRhResumeOwesU0(portsc)) {
         /*
          * The device left mid-interval - a plausible way for a resume to end,
          * since a user unplugging a sleeping device is exactly what produces
@@ -1615,13 +1727,20 @@ static VOID NTAPI xhciRhPortTimeout(PVOID miniPortExtension, PVOID context)
          * operation is abandoned rather than completed. The disconnect itself
          * arrives as CSC through the ordinary event path and needs nothing from
          * here.
+         *
+         * A port in neither Resume nor U3 is the same answer, and the age
+         * retire shares the gate: a U0 written with LWS onto a link that
+         * something else has taken - a second timer on a port the first one
+         * finished, or a port a disable or reset took over mid-interval - is a
+         * link-state write the port did not ask for.
          */
         (VOID)XhciPortShadowClaim(shadow, XHCI_PORT_OP_RESUME,
                                   timeout->Generation);
         ext->RhResumesAbandoned++;
         XhciControllerLockRelease(oldIrql);
-        XHCI_DBG_VALUE_CHANGED("RH resume: port went away mid-interval, PORTSC",
-                               portsc);
+        XHCI_DBG_VALUE_CHANGED("RH resume: port went away or left Resume "
+                               "mid-interval, PORTSC", portsc);
+        XhciRootHubDeferredWork(ext);
         return;
     }
 
@@ -1651,14 +1770,17 @@ static VOID NTAPI xhciRhPortTimeout(PVOID miniPortExtension, PVOID context)
     XhciControllerLockRelease(oldIrql);
 
     /*
-     * No announcement is queued here. The U3-to-U0 transition this write asks
-     * for reports itself through PLC when the link reaches U0, and the refresh
-     * that observes it derives C_PORT_SUSPEND - the hub class's "the resume you
-     * asked for has finished" - from the previous link state. Latching it here
-     * instead would report the resume complete at the instant it was requested.
+     * No announcement is queued here for the resume itself. The Resume-to-U0
+     * transition this write asks for reports itself through PLC when the link
+     * reaches U0, and the refresh that observes it derives C_PORT_SUSPEND -
+     * the hub class's "the resume you asked for has finished" - from the
+     * previous link state. Latching it here instead would report the resume
+     * complete at the instant it was requested. The deferred work is for what
+     * the fold above may have latched.
      */
     XHCI_DBG_VALUE_CHANGED("RH resume: T(DRSMDN) elapsed, driving hub port to "
                            "U0", timeout->HubPort);
+    XhciRootHubDeferredWork(ext);
 }
 
 /*
@@ -2295,8 +2417,7 @@ static VOID xhciRhRetireOperation(PXHCI_EXTENSION ext,
         return;
     }
     portsc = XhciReadPortsc(ext, xhciPort);
-    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0 ||
-        XHCI_PORTSC_GET_PLS(portsc) != XHCI_PLS_RESUME) {
+    if (!xhciRhResumeOwesU0(portsc)) {
         ext->RhResumesAbandoned++;
         return;
     }
@@ -2459,7 +2580,21 @@ VOID XhciRootHubPoll(PXHCI_EXTENSION ext)
              * strength of a value known to be stale. This way the link is given
              * until the next poll to report the transition, which is what the
              * PLC event does anyway.
+             *
+             * **And the sweep does not arm from a stale shadow either.** The
+             * timer's terminating write leaves the shadow reading Resume until
+             * the PLC it provokes is drained, and a poll landing in that window
+             * would arm a second resume on a port already in U0 (2026-09-17
+             * audit, B6). So a shadow that says Resume with nothing armed is
+             * re-read first - through the refresh, so the reading is folded
+             * and acknowledged like any other - and only a port still
+             * signalling is armed. A port whose PLC has already reached U0
+             * gets its C_PORT_SUSPEND derived here instead.
              */
+            if (shadow->Armed == XHCI_PORT_OP_NONE &&
+                XHCI_PORTSC_GET_PLS(shadow->Portsc) == XHCI_PLS_RESUME) {
+                xhciRhFoldReading(ext, hubPort, shadow);
+            }
             xhciRhArmDeviceResume(ext, hubPort, shadow);
             if (XhciPortShadowAge(shadow, ext->PollClockMs,
                                   XHCI_PORT_AGE_MS)) {
@@ -2733,10 +2868,16 @@ ULONG XhciRootHubInit(PXHCI_EXTENSION ext, ULONG afterRestore)
      * branch needs bare-metal FSC >= 1 - which is why it is closed here before a
      * machine makes it live rather than after.
      *
-     * A port left mid-Resume by a device-initiated remote wake is not lost with
-     * it: the shadow, the armed operation and the port's own generation all
-     * survive the suspend (usbport zeroes the extension only before a
-     * *StartController*), so the ordinary resume-completion path still owns it.
+     * A port left mid-Resume by a device-initiated remote wake is **not** owned
+     * by an armed operation on the other side of this: the suspend's quiesce
+     * runs `XhciRootHubRetireOperations` (`src/xhci_cmd.c`), which disarms every
+     * port and advances its generation so no uncancellable timer can fire into
+     * the new tenancy, and `XhciRootHubBuild` (`src/xhci_port.c`) zeroes `Armed`
+     * and `ArmPending` on the way back. What survives is the *record* usbport
+     * does not reclaim - the extension is zeroed only before a
+     * *StartController* - so the port is picked up by the next refresh reading
+     * hardware, not by a resume-completion path still holding it. (This said
+     * all three survived; two of them do not. The 2026-09-16 audit's B10.)
      */
     if (afterRestore) {
         ext->RhU3PassSkippedAfterRestore++;
