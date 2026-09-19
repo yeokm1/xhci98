@@ -59,7 +59,10 @@ F8 boot, against the x86 half's four install legs. `AGENTS.md` states it and
 the release notes state it for the user; do not let the act of publishing
 inflate it.
 
-Status: open, 2026-09-08, on the owner's instruction, with the `1.1.0.0` cut
+Status: **closed on 2026-09-19** (roadmap Phase 22): every task done, 22.12
+(d) re-scoped by the owner, `1.1.0.0` cut and re-cut seven times with the
+binaries byte-identical, waiting only on the owner's upload. It opened on
+2026-09-08, on the owner's instruction, with the `1.1.0.0` cut
 added 2026-09-09. Tasks 22.1 and 22.2
 are complete as of 2026-09-09, taken in one pass with 21.7 off the same
 media: the six measurements on 6.0 and 6.1 x86 all pass, `USBPORT_GetHciMn`
@@ -2370,12 +2373,21 @@ the cut; (c) and (d) may follow it.
       no VM here can supply; and the 1 ms post-HCRST stall has no
       observable effect on QEMU, whose reset is synchronous - these
       readings show only that the stall broke nothing.
-- [ ] (d) isochronous counters on a QEMU audio row: `IsoTailEventsTotal`
+- [x] (d) isochronous counters on a QEMU audio row: `IsoTailEventsTotal`
       moving with split packets, `UnmatchedEventsTotal` staying at zero,
       `OrphanedGroups` at zero; a group swept by the next group's tail on a
       normal short read is the audit's B10 (QEMU reporting one event per
       TD) and would want a settle like `XhciXferDrainSettled` for an
-      all-answered group
+      all-answered group. **Re-scoped and closed 2026-09-19 by the owner's
+      decision.** No matrix audio row can give it (22.9: they play nothing by
+      design, and nothing after XP plays on a root port), so the played
+      streams stand for it: Windows 2000 in QEMU (22.9) - 376 isochronous
+      submits, 3,760 packets, all answered, `UnmatchedEventsTotal` 0, no split
+      packets, `played.wav` 659,456 B; and Windows 98 SE on the E460
+      (22.9), `release-x86`, a Sound Blaster Play! 2 on a root port, played and
+      heard, no counters read. **What neither reading shows**: a split
+      isochronous packet, so `IsoTailEventsTotal` moving and `SweptTransfers`
+      were never exercised, and whether B10's settle is wanted is not known
 
 ## The checkpoint, as the roadmap carried it
 
