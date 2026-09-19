@@ -240,7 +240,9 @@ what a function does with an empty list, not whether the list is empty.
   pointer is a NULL transaction translator plus 4: the mouse behind the
   believed-High-Speed 1.1 hub gets no TT, `USBPORT_AllocateBandwidthUSB20`
   passes the NULL on, and the budgeter adds 4 to it (static, `runs/run-22.md`
-  22.9). Vista and the x64 half were not tried. Open, and the owner's to
+  22.9). Measured the same day on the other three NT 6.x targets - Vista
+  x86, Vista x64 and Windows 7 x64 all stop in the same function, the x64
+  pair reading `0xC08` (the NULL TT plus 8). Open, and the owner's to
   decide against release `1.1.0.0`.
 
 ## 7. Lessons the record kept

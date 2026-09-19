@@ -1248,9 +1248,10 @@ TCG unless a line says otherwise. The four reports are in
   code. QEMU's `usb-audio` has endpoints only in its streaming interface's
   alternate setting 1, so "endpoints opened" moves only when something
   streams; an attempt to play a system sound moved no isochronous counter,
-  and whether it reached the device is not established. The row's criterion
-  cannot see this bind on Windows 7; what XP x64 does differently to pass it
-  is not read.
+  and whether it reached the device is not established. The played-stream
+  readings below settle it: no target from XP on submits a single
+  isochronous transfer while playing, and XP x64 passes this row only
+  because its audio stack opens an endpoint on arrival.
 - **`usb-hub/churn` on Windows 7: the guest bugchecks - the finding.** The
   row read ERROR "not-executing" on the run and again on a `-Group hub`
   re-run; each time the group's debug console holds four `DriverEntry`
@@ -1307,6 +1308,74 @@ limitation for a USB 1.1 hub on Vista and Windows 7, a driver change, or
 both); the `usb-net/fs` `ExpectNoDriver` entries for `xp64-fresh` and
 `win7-fresh`; how the Windows 7 audio row should be judged; and the QEMU
 version the harness pins.
+
+*The owner's decisions of 2026-09-19, and what they measured.* Measure the
+hub finding on the other NT 6.x targets before deciding the release; check
+the net row on each OS before adding entries; take a played-stream audio
+reading, widened to every target; and re-run the Windows 98 audio group once
+more (the fifth 11.1.0 run above). All of it on the `1.1.0.0` qemu build.
+The Vista and Windows 7 x64 guests, and 32-bit XP, were installed on fresh
+overlays of their clean snapshots (`vm\t2210\<guest>-t229.qcow2`,
+`pnputil -i -a` from an elevated prompt on NT 6.x, the wizard on XP; the x64
+pair booted with signature enforcement disabled from F8), launched by
+`out\post-release\task22-10\t229.ps1` with a QEMU `wav` audio backend as the
+oracle and `-action reboot=shutdown` so a stop screen stays up; the stamped
+fresh images were booted with `-snapshot`. Evidence
+`out\post-release\1.1.0.0-t229-<guest>\` and `1.1.0.0-{win7,xp64,2b}-checks\`.
+
+- **The hub bugcheck is on every NT 6.x target.** A QEMU `usb-hub` on root
+  port 2 and a `usb-mouse` behind it at `2.1`, nothing else: Vista x86
+  `STOP 0x7E (0xC0000005, 0x8E1A9E9C, ...)`, `usbport!Allocate_time_for_endpoint+0x162`,
+  a read of `0xA04`; Windows 7 x64 `STOP 0x7E (0xFFFFFFFFC0000005,
+  0xFFFFF88002D96B4C, ...)`, `+0x19c`, a read of `0xC08`; Vista x64 `STOP
+  0x7E (0xFFFFFFFFC0000005, 0xFFFFFA6002A72398, ...)`, `+0x194`, a read of
+  `0xC08`. On x64 the field is a pointer further in (`mov rdi,[rcx+10h]`,
+  `mov rax,[rdi+0C00h]`), so the NULL translator plus 8 is `0xC08` where
+  x86 has 4 and `0xA04`: the same mechanism on all four usbport builds.
+  Each guest had been installed a minute earlier and bound nothing else.
+- **Played audio reaches the device on Windows 2000 and on no later
+  target.** The Sound panel's Test (or Sound Recorder, or a `bgsound`
+  page) played to the USB speakers, the only playback device and the
+  default on every guest, while the driver's counters were read over the
+  monitor:
+
+  | Target | Playing, per the guest | Iso submits | `played.wav` |
+  |---|---|---|---|
+  | Windows 98 SE | the startup sound | 1 (10 packets, all answered), then `USBAUDIO(01) + 00002ED4` fatal exception 00 | 0 B |
+  | Windows 2000 | Sounds and Multimedia | 376 (3,760 packets, all answered) | 659,456 B |
+  | XP SP3 x86 | Sound Recorder, 1.93 s of 1.93 s | 0 | 0 B |
+  | XP x64 | Sounds tab | 0 | 0 B |
+  | Vista x86 / x64 | Test showing Stop | 0 | 0 B |
+  | Windows 7 x86 / x64 | Test showing Stop | 0 | 0 B |
+
+  Where every counter was dumped (Windows 7 x86, XP x64, Vista x86) nothing
+  was refused - every open usbport asked for was accepted and no refusal
+  counter moved; on Vista x86 and Windows 7 x64 "endpoints opened" rose by
+  one as playback began, so the pipe opened and no transfer was ever
+  submitted down it. 32-bit XP runs the same binary
+  through the same NT 5.x registration as Windows 2000, so the line falls at
+  the OS's own stack from XP on; why is not read. Windows 98 is batch 9-V's
+  recorded reading, the OS's own `USBAUDIO.VXD` dividing by zero after one
+  URB. The records before this only ever said "bound" for audio on XP and
+  later, so this is a first measurement rather than a regression. Every
+  matrix audio row judges arrival, not playback, which is why XP x64's
+  passes. 22.12 (d) wants isochronous counters moving and so can only be
+  read on Windows 2000 as things stand; Windows 2000's reading above had
+  `UnmatchedEventsTotal` 0 and no split packets.
+- **The net row, checked on the OS.** On XP x64 and Windows 7 x86 the
+  device sits under Other devices as "RNDIS/QEMU USB Network Device", Code
+  28, hardware IDs `USB\VID_0525&PID_A4A2&REV_0000` and
+  `USB\VID_0525&PID_A4A2`: no in-box driver. `matrix.psd1` now carries
+  measured `ExpectNoDriver` entries for both (self-test 298 checks, every
+  one passing; `-PostRelease -ValidateOnly` 0 problems). The two reports
+  in `run-22-post-release/` were taken before them and still count the row
+  against.
+- **Two launch traps.** A guest booted without the harness's default
+  network card has its xHCI controller at another PCI slot, which XP x64
+  treats as new hardware and asks to install again (Windows 7 re-binds
+  silently); and a Windows 98 boot with a USB device on the command line
+  parks in the BIOS unless the machine is `pc,smm=off`, as `lessons.md`
+  already records for the prep boots.
 
 ## 22.10 - the cut itself, and the install route read from the asset
 

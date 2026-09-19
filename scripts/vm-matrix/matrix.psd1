@@ -534,6 +534,8 @@
                     ExpectNoDriver = @{
                         '2a' = 'measured NODRIVER on the carried-along 2a image; neither Windows 98 SE nor NUSB 3.3 ships a driver for a CDC/RNDIS Ethernet function'
                         '2b' = 'measured NODRIVER on the carried-along 2b image; Windows 2000 SP4 ships no RNDIS or CDC Ethernet class driver'
+                        'xp64-fresh' = 'measured 2026-09-19 (roadmap 22.9): Device Manager shows RNDIS/QEMU USB Network Device under Other devices, Code 28, no in-box INF matches USB\VID_0525&PID_A4A2'
+                        'win7-fresh' = 'measured 2026-09-19 (roadmap 22.9): Device Manager shows RNDIS/QEMU USB Network Device under Other devices, Code 28, no in-box INF matches USB\VID_0525&PID_A4A2'
                     }
                 }
                 @{

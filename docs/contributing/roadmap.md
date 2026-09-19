@@ -1773,7 +1773,11 @@ Owed:
       three of three under 11.0.0; **Windows 7
       x86 bugchecks (`STOP 0x7E` in usbport's USB 2.0 budgeter) with a
       Full-Speed hub on a root port and a mouse behind it** - issue 6
-      section 5's residual, the owner's to decide against `1.1.0.0`
+      section 5's residual, the owner's to decide against `1.1.0.0`; the
+      same on Vista x86, Vista x64 and Windows 7 x64 when measured on the
+      owner's instruction. **Played audio reaches the device on Windows 2000
+      only**: XP, XP x64, Vista and Windows 7 submit no isochronous transfer
+      while playing, and Windows 98's own `USBAUDIO.VXD` faults after one
 - [x] 22.10: both architectures built and cut - **cut 2026-09-18 14:50**,
       `releases\1.1.0.0\` with four flavour directories and
       `out\xhci98-1.1.0.0.zip` (396,812 B after four same-day re-cuts for the readme and a fifth, `b4d3404`, for the binaries' ProductName; no Microsoft file), every gate
