@@ -24,12 +24,14 @@ and every target added after Phase 5. What the workaround costs on each
 target is section 1's table.
 
 **Where each reading was taken matters on this page, and the table says
-so cell by cell.** Windows 98 SE is the only target that has ever run on
-real hardware (the ThinkPad E460 and P14s in batches 13-E and after, and
-users' desktops); every other target - Windows ME, 2000, XP, XP x64,
-Vista and 7 - has only ever run in QEMU. So every reading below for a
-target after Windows 98, including both `1.1.0.0` known limitations, is a
-virtual-machine reading, and QEMU's only hub is a Full-Speed one. On
+so cell by cell.** Windows 98 SE is the target with the long real-hardware
+record (the ThinkPad E460 and P14s in batches 13-E and after, and users'
+desktops). 32-bit Windows 7 SP1 has one real-hardware session, on the
+E460 on 2026-09-19 (`run-22.md` 22.9), which measured both of the
+limitation's workarounds and the audio limitation itself. Every other
+target - Windows ME, 2000, XP, XP x64, Vista and 64-bit Windows 7 - has
+only ever run in QEMU, whose only hub is a Full-Speed one; so the Vista
+and 7 hub bugcheck is still a virtual-machine reading everywhere. On
 Windows 98 the workaround's ordinary case has been on metal: a Low-Speed
 mouse and a Full-Speed audio device on a root port and behind High-Speed
 hubs on the E460 (batch 13-E), and the audio device again on `1.1.0.0`
@@ -71,7 +73,7 @@ Full-Speed audio device on a root port plays. Every cell names its
 measurement and where it was taken: **VM** is a QEMU guest, **metal** is a
 physical machine (the ThinkPad E460 unless another is named). "Never run"
 means exactly that, and "not read" means no static reading of that usbport
-either. Only the first row has any metal readings at all.
+either. Only the first row and 32-bit Windows 7's have any metal readings.
 
 | Target | Full-Speed device on a root port, true speed reported | Full or Low Speed device on a root port, reported High Speed (as shipped) | USB 1.1 hub on a root port, Full or Low Speed device behind it | Full-Speed audio device on a root port |
 |---|---|---|---|---|
@@ -83,7 +85,7 @@ either. Only the first row has any metal readings at all.
 | Windows XP x64 SP2 | Never run; not read | Works (VM: the 22.9 matrix; the 22.10 install leg). Never on metal | Works (VM: the 22.9 hub rows, churn included, PASS) | **Silent** (VM): 0 submits; an endpoint opens on arrival, nothing is ever sent (section 7) |
 | Windows Vista SP2 x86 | Never run; not read | Works (VM: the 22.10 install leg, three devices on a root port, disable / enable / remove / rescan). Never on metal | **Bugchecks** (VM): `STOP 0x0000007E` in `usbport!Allocate_time_for_endpoint` once a mouse behind it is configured (2026-09-19, section 6.2) | **Silent** (VM): 0 submits; the pipe opened as playback began (section 7) |
 | Windows Vista SP2 x64 | Never run; not read | Works (VM: the 22.10 install leg). Never on metal | **Bugchecks** (VM), the same function, the pointer-sized offset (section 6.2) | **Silent** (VM): 0 submits (section 7) |
-| Windows 7 SP1 x86 | Never run; not read | Works (VM: the 22.9 matrix, HID, storage, the hub alone; the 22.10 install leg). Never on metal | **Bugchecks** (VM: the 22.9 churn row; section 6.2) | **Silent** (VM): 0 submits; the isochronous pipe never opened (section 7) |
+| Windows 7 SP1 x86 | Never run; not read | Works, VM (the 22.9 matrix, HID, storage, the hub alone; the 22.10 install leg) and **metal** (E460, 2026-09-19: the Low-Speed mouse and a USB 2.0 stick at a root port) | **Bugchecks** (VM: the 22.9 churn row; section 6.2). On **metal** only the workaround was measured: behind USB 2.0 hubs (`1A40:0201` multi-TT, `1A40:0101` single-TT) the Low-Speed mouse ran with **no bugcheck** (2026-09-19) | **Silent**, VM (0 submits; the isochronous pipe never opened) and **metal** (E460, 2026-09-19: a C-Media `0D8C:0014` bound with no error and played nothing at a root port, and **played** behind the USB 2.0 hub) (section 7) |
 | Windows 7 SP1 x64 | Never run; not read | Works (VM: the 22.10 install leg). Never on metal | **Bugchecks** (VM, section 6.2) | **Silent** (VM): 0 submits; the pipe opened, nothing sent (section 7) |
 
 Read down the columns. The first is why the workaround exists and why it
@@ -94,10 +96,11 @@ never made for: Vista and 7 fault one level below a root port, and every
 stack from XP on schedules a Full-Speed isochronous stream on a root port
 as if it were High Speed. Windows 2000 is the only target on which
 everything works, and the reason its usbport plays the stream where XP's
-does not has not been read (section 9). And only the first row's second
-and fourth columns have been on real hardware: everything from Windows ME
-down is a QEMU reading, and so is every 1.1-hub cell, Windows 98's
-included.
+does not has not been read (section 9). And real hardware reaches only
+two rows: Windows 98's root-port and audio columns, and 32-bit Windows
+7's, where the one E460 session measured the audio limitation and both
+workarounds. Every other row is a QEMU reading, and so is every 1.1-hub
+bugcheck, because no USB 1.1 hub has ever been on metal.
 
 ## 2. How it was found, and pinned to speed (Windows 98 and 2000, Phase 5)
 
@@ -371,17 +374,24 @@ the same - a keyboard, a mouse, an audio device, a keyboard with a built-in
 hub. A bulk-only device there may not reach the budgeter. A USB 2.0 hub has a
 real TT, so devices behind it should budget correctly; QEMU cannot show it,
 because its only hub, `usb-hub`, is a Full-Speed hub with no speed option (it
-enumerates at 12 Mb/s). All four readings in the table are QEMU guests:
-no Vista or Windows 7 has ever run on real hardware, and no USB 1.1 hub has
-ever been on a root port on real hardware under any target (none was held,
-batch 13-E). The topology itself is real - any USB 1.1 hub, or a 2.0 hub
-declaring no TT, on a root port of a physical machine - and nothing about
-the fault depends on the emulator: the stack, the NULL translator and the
-budget object are usbport's own.
+enumerates at 12 Mb/s). All four readings in the table are QEMU guests,
+and no USB 1.1 hub has ever been on a root port on real hardware under any
+target (none was held, batch 13-E). The topology itself is real - any USB
+1.1 hub, or a 2.0 hub declaring no TT, on a root port of a physical machine
+- and nothing about the fault depends on the emulator: the stack, the NULL
+translator and the budget object are usbport's own.
 
 **Workarounds** (in the release notes): plug Full and Low Speed devices into
 a root port directly, where the driver's report covers them, or behind a USB
-2.0 hub (unmeasured).
+2.0 hub. **The USB 2.0 hub was measured on real hardware on 2026-09-19**:
+32-bit Windows 7 SP1 on the E460, a Low-Speed mouse behind the multi-TT
+Terminus `1A40:0201` at a root port, and again with a Full-Speed audio
+device playing and a flash drive copying beside it, and the same three
+behind the single-TT `1A40:0101` - no bugcheck, everything worked
+(`run-22.md` 22.9). The driver's dump shows the mouse addressed Low Speed
+behind the hub with its own route, so usbport budgeted it against the
+hub's real translator. One machine, two hubs, these devices; Vista and
+64-bit Windows 7 not measured on metal.
 
 **How it was found and read.** The harness reported the churn row's guest as
 "not executing": its debug console showed four `DriverEntry` lines in one
@@ -402,11 +412,12 @@ record is `docs/contributing/runs/run-22.md`, 22.9.
 **What happens.** The device installs, is the default playback device, and
 Windows shows it playing, but no sound reaches it: no isochronous transfer
 reaches the driver at all. Task 22.9 was the first time audio was played,
-rather than only bound, on any target after Windows 2000. Every row but
-the last is a QEMU guest, measured with QEMU's `usb-audio` and its `wav`
-backend as the oracle, the driver's counters read over the monitor while
-the guest played; the last is the one real-hardware playback reading this
-project has, on Windows 98:
+rather than only bound, on any target after Windows 2000. The rows not
+marked metal are QEMU guests, measured with QEMU's `usb-audio` and its
+`wav` backend as the oracle, the driver's counters read over the monitor
+while the guest played; the rows marked metal are the real-hardware
+playback readings this project has, on Windows 98 and on 32-bit Windows 7,
+all on the E460 and judged by ear:
 
 | Target | Played with | Isochronous submits | Audio reaching the device |
 |---|---|---|---|
@@ -419,6 +430,8 @@ project has, on Windows 98:
 | Windows 7 x86 and x64 | Speakers Properties, Test showing Stop | 0 | 0 B |
 | **Windows 98 SE on the E460 (metal)**, batch 13-E | a physical UAC 1.0 device, at a root port (E6.1) and behind the multi-TT hub (E6.2) | not read | **played clean** (Finding X: the first audio through this driver on real silicon, and the first split-transaction isochronous path in any vehicle) |
 | **Windows 98 SE on the E460 (metal)**, `1.1.0.0` `release-x86`, 2026-09-19 | a Sound Blaster Play! 2 (`041E:323D`, Full Speed, UAC 1.0) directly in a root port, NUSB 3.3; the owner's hand-test | not read (release flavour) | **played**, heard by the owner (`run-22.md` 22.9) |
+| **Windows 7 SP1 x86 on the E460 (metal)**, `1.1.0.0` `release-x86`, 2026-09-19, **on a root port** | a C-Media `0D8C:0014` (UAC 1.0), Sound Test and Windows Media Player | not read | **nothing heard**; no Device Manager error |
+| **Windows 7 SP1 x86 on the E460 (metal)**, the same, **behind a USB 2.0 hub** (`1A40:0201`, then `1A40:0101`) | the same | not read | **played**, heard by the owner |
 
 Nothing is refused on the driver's side: where every counter was dumped
 (Windows 7 x86, XP x64, Vista x86) every open usbport asked for was accepted
@@ -436,13 +449,25 @@ packet per frame is scheduled as a High-Speed one (static, the public PDB).
 How that branch then loses the stream is not read, and neither is why
 Windows 2000's usbport plays the same stream on a root port.
 
+**On real hardware.** The one physical NT 6.x reading so far, 32-bit
+Windows 7 on the E460 on 2026-09-19, agrees with the virtual machines: a
+C-Media `0D8C:0014` directly on a root port bound with no error, looked
+as if it was playing, and nothing was heard; behind a USB 2.0 hub the same
+device played. The driver's counters were not read for it. XP, XP x64,
+Vista and 64-bit Windows 7 have not been measured on metal.
+
+A second device from that session, the Sound Blaster Play! 2, is **not**
+this limitation and not evidence for it: on Windows 7 its audio function
+reads Code 10 both on a root port and behind the USB 2.0 hub, where it is
+reported at its true speed. The driver refused nothing; one class request
+stalled and `usbaudio.sys` never opened a stream. The control without
+this driver has not been run (`run-22.md` 22.9).
+
 **Workarounds** (in the release notes): put the audio device behind a hub.
 On XP that can be a USB 1.1 hub (measured on 32-bit XP only, in QEMU); on
-Vista and 7 it must be a USB 2.0 hub, because of section 6.2 (unmeasured:
-QEMU has no High-Speed hub, and none of these targets has run on metal).
-Nothing in this section has been on real hardware; whether a physical XP,
-Vista or 7 machine behaves the same way is the first thing a bare-metal run
-of any of them would tell.
+Vista and 7 it must be a USB 2.0 hub, because of section 6.2 - measured on
+real 32-bit Windows 7 on 2026-09-19 (above); Vista and 64-bit Windows 7
+not measured.
 
 **Consequences for the record.** Every device-matrix audio row judged
 arrival, not playback: XP x64's row passed because its audio stack opens an
@@ -472,9 +497,11 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
   only candidate that addresses all three, and it is an idea only - nothing
   of it is built, it is off by default by its own rules, and nothing above
   has been measured under it. Its free prototype is a real USB 2.0 hub on a
-  Vista or 7 machine with a Full-Speed mouse and a Full-Speed audio device
-  behind it (open, section 9): if that does not fix both, the virtual one
-  will not. Discussed 2026-09-19 and not decided; the suggested scope if
+  Vista or 7 machine with a slower mouse and a Full-Speed audio device
+  behind it: if that did not fix both, the virtual one would not. **It was
+  taken on 32-bit Windows 7 on the E460 on 2026-09-19 and fixed both** - no
+  bugcheck, and the audio played (6.2, 7) - so the proposal's premise holds
+  on the one machine measured. Discussed 2026-09-19 and not decided; the suggested scope if
   taken is XP and later only, Windows 98 and 2000 byte-for-byte unchanged.
 - **A true-speed report as an opt-in.** Under a usbport that guards the
   empty TT list, reporting the real speed would remove the interval bands
@@ -499,22 +526,26 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
 - **Metal never ran the truthful build**, so the bugcheck itself is a VM
   observation. Nothing suggests real hardware differs: the fault is in
   usbport's own list handling, not in anything the controller does.
-- **Nothing on this page after Windows 98 has been on real hardware.**
-  Windows ME, 2000, XP, XP x64, Vista and 7 have only ever run in QEMU, so
-  the Vista/7 hub bugcheck (6.2), the silent audio from XP on (7) and the
-  Windows 2000 and XP x64 hub passes (6.1) are all virtual-machine
-  readings. The mechanisms read are usbport's own and should carry, but
-  the readings do not exist. On Windows 98 the 1.1-hub topology has never
-  been on metal either (no USB 1.1 hub held).
+- **After Windows 98, real hardware has one session.** 32-bit Windows 7 on
+  the E460 (2026-09-19) measured the audio limitation at a root port and
+  both USB 2.0 hub workarounds. Windows ME, 2000, XP, XP x64, Vista and
+  64-bit Windows 7 have only ever run in QEMU, and the Vista/7 hub
+  bugcheck (6.2) and the Windows 2000 and XP x64 hub passes (6.1) are
+  virtual-machine readings on every target. The 1.1-hub topology has never
+  been on metal under any target (no USB 1.1 hub held).
 - **Why a believed-High-Speed 1.1 hub gets a TT record** on Windows 98 and
   2000 (6.1) is unconfirmed against the binaries. The driver no longer
   depends on the answer, and measures the disagreement instead.
 - **Why XP x64 survives the topology that bugchecks Vista and 7** (6.1) is
   not read, and a mouse behind a 1.1 hub on 32-bit XP has not been run.
-- **A USB 2.0 hub on Vista or Windows 7** with a Full-Speed mouse and a
-  Full-Speed audio device behind it, on real hardware: what the release
-  notes' workarounds rest on (both "not yet measured") and the free
-  prototype of the virtual hub (section 8). QEMU cannot take the reading.
+- **A USB 2.0 hub on Vista or Windows 7** with a slower mouse and a
+  Full-Speed audio device behind it, on real hardware: **taken on 32-bit
+  Windows 7 on 2026-09-19, and both workarounds held** (6.2, 7). It is also
+  the virtual hub's free prototype (section 8), and it came out the way
+  that proposal needs. Vista and 64-bit Windows 7 remain unmeasured on
+  metal. The release notes, README and the download's `readme.txt` were
+  changed the same day to say the workaround was measured on one real
+  32-bit Windows 7 machine.
 - **Whether a bulk-only device behind a USB 1.1 hub is safe on Vista and 7**
   (6.2's prediction).
 - **How XP's High-Speed isochronous branch loses the stream, and why

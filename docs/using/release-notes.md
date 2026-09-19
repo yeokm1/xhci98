@@ -70,7 +70,10 @@ guests (Vista Business SP2 and Windows 7 Professional SP1, each 32-bit and
 64-bit, 2026-09-13) on which the package installed, the driver started under
 that system's own USB stack, a HID mouse, a mass-storage device and a
 composite audio device bound, and five disable and enable cycles, a remove
-and a rescan survived. None of them has run on real hardware. These systems
+and a rescan survived. One of them has since run on real hardware, once:
+32-bit Windows 7 on a ThinkPad E460 (2026-09-19), where the package
+installed, devices at a root port and behind USB 2.0 hubs worked, and **the
+first disable of the controller hung** (see "Known limitations"). These systems
 expect a newer interface from a USB host controller driver than Windows 2000
 and XP do, and the driver presents that interface on them and only on them.
 
@@ -405,20 +408,41 @@ because a user meets them through this driver.
   the High-Speed report above: the stack takes the 1.1 hub for a High-Speed
   one, finds no transaction translator on it, and faults budgeting the
   device behind it. Plug such devices into a root port directly, or behind a
-  USB 2.0 hub, which has a transaction translator (not yet measured). The
-  same hub works on Windows 98, 2000, XP and XP x64. Measured in virtual
-  machines on all four Vista and Windows 7 builds, 2026-09-19.
+  USB 2.0 hub, which has a transaction translator. The USB 2.0 hub was
+  measured on real hardware, 32-bit Windows 7 on a ThinkPad E460
+  (2026-09-19): a Low-Speed mouse behind two different USB 2.0 hubs, with
+  audio playing and a file copying beside it, and no crash; Vista and 64-bit
+  Windows 7 were not measured on real hardware. The same 1.1 hub works on
+  Windows 98, 2000, XP and XP x64. The crash itself was measured in virtual
+  machines on all four Vista and Windows 7 builds, 2026-09-19; no USB 1.1
+  hub has been tried on real hardware.
 - **Windows XP and later, 32-bit and x64: a Full-Speed USB audio device on a
   root port plays nothing.** It installs, shows as the default playback
   device and appears to play, but no sound reaches it. The same High-Speed
   report is the cause: from XP on, Windows schedules the device's audio
   stream as a High-Speed one and never sends it. Behind a hub, where the
   device's true speed is reported, it played on 32-bit XP; on Windows Vista
-  and 7 that must be a USB 2.0 hub, because of the entry above (not yet
-  measured).
+  and 7 that must be a USB 2.0 hub, because of the entry above.
   Windows 2000 plays on a root port. Measured in virtual machines,
   2026-09-19: Windows 2000 and XP (behind a hub) played, XP, XP x64, Vista
-  and Windows 7 on a root port did not.
+  and Windows 7 on a root port did not. Measured on real hardware the same
+  day, 32-bit Windows 7 on a ThinkPad E460: a USB audio adapter (C-Media
+  `0D8C:0014`) was silent on a root port and played behind a USB 2.0 hub.
+- **Windows 7 (32-bit, on real hardware): disabling the USB controller in
+  Device Manager can hang.** On the one real Windows 7 machine tried (a
+  ThinkPad E460, 2026-09-19), the first Disable never finished: Device
+  Manager stopped responding, the rest of Windows kept working, and the
+  next restart hung until the machine was switched off at the power button.
+  After that start the controller was disabled, and enabling it brought USB
+  back. Uninstalling or upgrading the driver also stops the controller and
+  was not tried; expect the same. The cause is not known yet - whether the
+  stop is stuck in this driver or in Windows' USB stack has not been read.
+  The Windows Vista and 7 virtual machines did not show it (five disable and
+  enable cycles each), and Vista and 64-bit Windows 7 have not been tried on
+  real hardware. Until it is understood: do not disable, uninstall or
+  upgrade the controller on Windows Vista or 7 with unsaved work open; to
+  remove or replace the driver, do it and then restart, and be ready to
+  switch the machine off if the restart does not finish.
 - Windows 98: plugging and unplugging a device very fast and repeatedly (one
   cycle every 0.6 s for minutes) can freeze the machine with no error. This
   one is this driver's own defect, with no explanation yet. Normal plugging

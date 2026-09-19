@@ -222,7 +222,8 @@ modern interrupt mechanism (MSI) that such a controller would require.
   Operating system   Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows
                      ME, 32-bit Windows XP (SP3), 32-bit Windows Vista (SP2)
                      and 32-bit Windows 7 (SP1) in virtual machines only
-                     (none of them has been run on a real machine).
+                     (of these, only 32-bit Windows 7 has run on a real
+                     machine, once; see section 7).
                      64-bit: Windows XP x64 (SP2), Windows Vista x64 (SP2)
                      or Windows 7 x64 (SP1), in
                      virtual machines only as well.
@@ -645,13 +646,28 @@ two things follow, both measured in virtual machines:
   * WINDOWS VISTA AND 7, 32-BIT AND X64: A USB 1.1 HUB ON A ROOT PORT CRASHES
     THE MACHINE (STOP 0x7E in USBPORT.SYS) once a mouse, keyboard or other
     Full or Low Speed device is used behind it. Plug such devices into a
-    root port directly, or behind a USB 2.0 hub (not yet measured). The same
-    hub works on Windows 98, 2000, XP and XP x64.
+    root port directly, or behind a USB 2.0 hub (measured on one real
+    32-bit Windows 7 machine: no crash). The same hub works on Windows 98,
+    2000, XP and XP x64.
 
   * WINDOWS XP AND LATER: A FULL-SPEED USB AUDIO DEVICE ON A ROOT PORT PLAYS
     NOTHING, though Windows shows it playing. Behind a hub it played on
-    32-bit XP; on Vista and 7 use a USB 2.0 hub (not yet measured).
+    32-bit XP; on Vista and 7 use a USB 2.0 hub (measured on one real
+    32-bit Windows 7 machine: silent on a root port, plays behind the hub).
     Windows 2000 plays on a root port.
+
+ONE WHOSE CAUSE IS NOT KNOWN YET, found on the one real Windows 7 machine
+tried (32-bit, a ThinkPad E460):
+
+  * WINDOWS 7: DISABLING THE USB CONTROLLER IN DEVICE MANAGER CAN HANG. The
+    first Disable never finished, and the next restart hung until the
+    machine was switched off at the power button; after that the controller
+    started disabled, and enabling it brought USB back. Uninstalling or
+    upgrading the driver stops the controller too and was not tried; expect
+    the same. The Vista and 7 virtual machines did not show it. Until it is
+    understood, do not disable, uninstall or upgrade the controller on
+    Vista or 7 with unsaved work open, and be ready to power off if the
+    restart that follows does not finish.
 
 COMPOSITE DEVICES ON WINDOWS 98 - HANDLED BY THIS PACKAGE
 .........................................................

@@ -1416,6 +1416,116 @@ fresh images were booted with `-snapshot`. Evidence
   nothing from XP on (issue 6 sections 1 and 7). No counters were read; the
   oracle is the owner's ear. Not run behind a hub this time.
 
+*Windows 7 SP1 x86 on the E460, 2026-09-19: the first NT 6.x target on real
+hardware, and item 2 of the release's owner hand-tests.* The acceptance test
+(`docs/using/release-acceptance-test.md`) taken by the owner at the machine,
+Claude reading along and decoding the dumps. A fresh Windows 7 SP1 x86 install,
+no network throughout (so neither Windows Update nor Intel's USB 3.0 driver),
+Automatically restart off and a small memory dump set before anything was
+plugged. BIOS unchanged since batch 13-E; the DOS pass not re-run (on record
+from batch 13-E). The `1.1.0.0` asset (397,113 B) unzipped to `C:\XHCI98`,
+its layout as rows 2.1-2.4 want; the `release-x86` flavour. Every root-port
+reading is at position T, the right-hand socket nearer the screen, which
+batch 13-E mapped as controller port 1. Dumps in `temp\dump\` and
+`temp\dump2\` (git-ignored), decoded with `scripts/local/readsnap.py` against
+`scripts/vm-matrix/offsets.txt` (`SIZEOF` 92304 = the dumps'
+`ExtensionBytes`).
+
+- **Install (4.9, 4.3): passed.** Device Manager, Browse, `RELEASE-X86\`;
+  the prompt read "Windows can't verify the publisher of this driver
+  software", as in the virtual machines, and Install anyway completed it.
+  The controller and its root hub, no marks.
+- **On a root port: the mouse and the stick passed (5.1, 5.2).** The
+  Low-Speed Logitech `046D:C077` worked and survived a replug; a USB 2.0
+  flash stick took a drive letter, a file round-tripped, and it survived a
+  replug.
+- **Item 2, the USB 2.0 hub reading: both workarounds hold on real Windows
+  7.** The Low-Speed mouse behind the multi-TT Terminus `1A40:0201` at T
+  moved for 30 s and survived a replug, **no bugcheck**; the dump shows it
+  addressed Low Speed behind the hub with its own route (the TT path). A
+  C-Media `0D8C:0014` (UAC 1.0) behind the same hub **played**, heard by the
+  owner. The mouse, the C-Media playing and a 100 MB+ copy to the stick,
+  all behind `1A40:0201` at once, all fine and the copy read back; the same
+  three behind the single-TT `1A40:0101`, all fine. This is the reading
+  QEMU could not take (it has no High-Speed hub): the release notes' "behind
+  a USB 2.0 hub" for Vista and 7 holds on this machine, these two hubs and
+  these devices. The USB 1.1 hub crash itself remains a QEMU reading - no
+  USB 1.1 hub is held.
+- **The audio limitation, measured on real hardware for the first time.**
+  The same C-Media directly at T bound with no Device Manager error and
+  appeared to play, and **no sound came out**: issue 6 section 7's "a
+  Full-Speed audio device on a root port plays nothing from XP on", on
+  metal.
+- **Finding: the Sound Blaster Play! 2 (`041E:323D`) reads Code 10 on
+  Windows 7, and it is not the High-Speed report.** At T its first plug
+  asked for a restart; after it, the composite parent was fine and the
+  audio function read Code 10 ("This device cannot start"). Behind the
+  `1A40:0201` hub, where the driver reports it at its true Full speed, Code
+  10 again, with no restart asked. The two dumps agree: every endpoint open
+  Windows asked for was accepted (`OpensTotal` 27 = `OpensAccepted` 27 in
+  the first); the Play! 2's HID interrupt IN was opened; its EP0 answered
+  one control request with a Stall (completion code 6, recovered); **no
+  isochronous endpoint was ever opened for it**; the recovery ladder never
+  fired. So Windows 7's `usbaudio.sys` failed its start after a stalled
+  class request and before opening a stream, and nothing in this driver
+  refused anything. Which request stalled is not identified: the setup-key
+  probe (16 keys) had saturated at boot on the E460's internal devices
+  (`ProbeSetups.Overflows` 64). The same device plays on Windows 98 on this
+  machine (the bullet above) and the C-Media plays on Windows 7, so the
+  reading is that the Play! 2 and Windows 7's `usbaudio.sys` do not agree -
+  **not established**: the control, the Play! 2 on Windows 7 without this
+  driver (a Windows 7 EHCI machine, or a QEMU Windows 7 guest with the
+  device passed through to QEMU's EHCI), has not been run. The first dump
+  also has `TransfersRefused` 55 of 87 submitted, whose breakdown is not
+  read, and shows Windows re-enumerating the Play! 2 several times
+  (addressed as 1, later 5, on one slot).
+- **Windows 7's own rows: 7.17 and 7.18 passed.** No `Services\USB` key at
+  all; after two minutes idle with nothing plugged, the mouse at T worked
+  with no Refresh.
+- **Finding: disabling the controller hangs (7.19).** The **first** Disable
+  of the xHCI controller in Device Manager, with the mouse at T, never
+  finished: Device Manager stayed Not Responding for over five minutes
+  while the rest of the machine - the PS/2 touchpad and keyboard, the Start
+  menu, Task Manager - stayed alive. `XHCISNAP -o` during the hang returned
+  "cannot open `\\.\hcd0`, error 2": usbport had already deleted its host
+  controller symbolic link, so the stop of the controller had begun and was
+  stuck partway, and this driver could not be asked anything. Start >
+  Restart then hung too and the machine was forced off; after boot the
+  controller was disabled, as recorded, and Enable brought it and USB back.
+  **The QEMU Windows 7 guests passed five disable/enable cycles** (22.10's
+  legs), so this is new on real hardware, and whether the stop is stuck in
+  this driver or in usbport is not known. The capture that would say - a
+  kernel memory dump forced during a reproduced hang (`CrashOnCtrlScroll`
+  on the PS/2 keyboard) - was deferred by the owner to finish the run; the
+  rest of 7.19 (five cycles, uninstall and rescan) was not taken.
+- **Reboot and shutdown with devices attached: passed (steps 6 and 9).** The
+  `1A40:0201` hub at T with the mouse, the C-Media and the stick behind it:
+  a normal restart brought all three back with no prompt; a shutdown during
+  a several-hundred-MB Explorer copy to the stick completed by itself, and
+  all three came back at power-on.
+- **The log channel: passed (step 8).** `XHCISNAP -verbosity 2`, a restart,
+  three dumps (schema 3, release, `ExtensionBytes` 92304), and
+  `XHCISNAP -disable` reported the channel off.
+
+**The owner's decisions, the same evening: the disable hang is a known
+limitation of `1.1.0.0`, and the USB 2.0 hub workarounds are published as
+measured.** The release notes gained a Windows 7 disable-hang entry and their
+Vista/7 paragraph now records the real-hardware session; their two hub
+entries say the workaround was measured on one real 32-bit Windows 7
+machine. The README gained a known-limitations row for the hang, its
+real-hardware statements now include this session, and "not yet measured"
+was dropped from its two rows (without the "one machine" qualifier, on the
+owner's instruction). The readme template in `make-release.ps1` section 2
+says only 32-bit Windows 7 has run on a real machine, and section 7 carries
+the measured workarounds and the hang under "one whose cause is not known
+yet". **Re-cut a seventh time with `-Force`**: the four `xhci98.sys`
+byte-identical to what every leg installed (`E97FA781...`, `A3B5521A...`,
+`98A5A32A...`, `8BE118B2...`), only `readme.txt` changed; asset
+`out\xhci98-1.1.0.0.zip` 397,437 B, 17 files, each SHA-256 identical to
+`releases\1.1.0.0\`. Still open, and not blocking the upload: the hang's
+cause (a kernel dump of a reproduced hang), and the Play! 2 control without
+this driver, before anything is said about that device.
+
 ## 22.10 - the cut itself, and the install route read from the asset
 
 **22.10 - the cut itself, and the install route read from the asset.**
