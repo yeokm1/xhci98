@@ -21,8 +21,12 @@ value. Windows 98 SE, Windows ME, Windows 2000 and
 32-bit Windows XP install as they did in `1.0.2.0`, from a directory with a
 new name.
 
-Nothing new here has run on real hardware. Every 64-bit, Vista and Windows 7
-result below comes from virtual machines.
+Every 64-bit, Vista and Windows 7 result below comes from virtual machines.
+Of the new systems only 32-bit Windows 7 has run on real hardware, once, after
+this release was cut (a ThinkPad E460, 2026-09-19): the install and devices at
+a root port and behind USB 2.0 hubs worked, and the first disable of the
+controller hung. Three limitations were found after the cut and are listed in
+the last item below.
 
 ### What changed
 
@@ -86,6 +90,18 @@ result below comes from virtual machines.
   that `XHCISNAP` and the DebugView log be used only when the maintainer
   asks for them. The release notes add a Windows 2000 limitation: with a
   USB audio device attached, disabling the controller asks for a restart.
+- Known limitations found after the cut, 2026-09-19, with the driver
+  unchanged. On Windows Vista and Windows 7, 32-bit and x64, a USB 1.1 hub
+  on a root port crashes the machine (`STOP 0x7E` in `USBPORT.SYS`) once a
+  mouse, keyboard or other slower device is used behind it; use a root port
+  directly, or a USB 2.0 hub. On Windows XP and later a Full-Speed USB audio
+  device on a root port plays nothing, though Windows shows it playing;
+  behind a hub it plays (on Vista and 7 a USB 2.0 hub), and Windows 2000
+  plays on a root port. Both were measured in virtual machines, and the USB
+  2.0 hub workaround on the one real 32-bit Windows 7 machine. On that same
+  machine, disabling the controller in Device Manager hung, and so did the
+  restart after it; the cause is not known yet. The readme's section 7 and
+  the release notes' "Known limitations" have all three.
 
 ## 1.0.2.0 - 2026-09-07
 

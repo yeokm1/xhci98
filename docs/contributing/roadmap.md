@@ -1633,9 +1633,9 @@ hardware. Server 2003 x64 rests on its NT 5.2.3790 identity with XP x64, not a
 boot of its own. The package is not signed, so Vista x64 and Windows 7 x64
 load the driver only on a boot with driver signature enforcement disabled from
 the F8 menu, chosen again at every start. Their `release` flavour, and Windows
-7 x64's first install through the committed INF, are task 22.10's sixth and
-seventh install legs, and the `1.1.0.0` cut that first publishes the 64-bit
-package is Phase 22's.
+7 x64's first install through the committed INF, were task 22.10's sixth and
+seventh install legs, read on 2026-09-18, and the `1.1.0.0` cut that first
+published the 64-bit package is Phase 22's.
 
 Why a phase: a target is not a build. The static pass settles the ABI before
 any code is written, a guest settles the runtime the static pass cannot, and
@@ -1689,12 +1689,14 @@ else. Its guests found three defects, each fixed and re-read on every
 target: the Windows 7 enable arrest (issue 7), a Windows XP x64 SMP bugcheck
 (issue 8), and XP's three-argument `CloseEndpoint`. Vista and Windows 7 have
 been a VM-supported tier in both architectures since 2026-09-16. `1.1.0.0`
-was cut on 2026-09-18 and re-cut seven times, every binary byte-identical;
-the last two re-cuts recorded three known limitations found after the cut:
-the Vista/7 bugcheck with a Full-Speed hub on a root port, XP-onward silence
-on a root-port audio device, and the Windows 7 controller-disable hang seen
-on the E460. What is left is not a task: the owner's upload of
-`out\xhci98-1.1.0.0.zip` (397,437 B) and the push. Carried open past the
+was cut on 2026-09-18 and re-cut eight times, every binary byte-identical;
+the sixth and seventh re-cuts recorded three known limitations found after
+the cut: the Vista/7 bugcheck with a Full-Speed hub on a root port,
+XP-onward silence on a root-port audio device, and the Windows 7
+controller-disable hang seen on the E460; the eighth brought the readme's
+embedded `history.md` entry into line with them. What is left is not a task:
+the owner's upload of `out\xhci98-1.1.0.0.zip` (397,765 B) and the push.
+Carried open past the
 phase: the disable hang's cause, the Sound Blaster Play! 2's Code 10 on
 Windows 7, and the split isochronous packet 22.12 (d) did not exercise.
 

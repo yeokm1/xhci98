@@ -139,9 +139,10 @@ Which architectures to publish - `x86` or `x64`, which are `make-package.ps1`'s
 four directories. It defaulted to `x86` alone until then, because until then no
 amd64 binary of this driver had ever executed.
 
-Read the x64 half of a cut as narrowly as its evidence is: one Windows XP x64
-guest, one virtual machine, never real hardware, against the x86 half's four
-install legs. Publishing it by default is what claiming the target means, not a
+Read the x64 half of a cut as narrowly as its evidence is: three guests - one
+Windows XP x64 and, from 1.1.0.0, one Vista x64 and one Windows 7 x64 - virtual
+machines only, never real hardware, against the x86 half's install legs.
+Publishing it by default is what claiming the target means, not a
 claim that the two halves are equally attested.
 
 `-UploadSetOnly` is the one mode that does not follow the default: it derives

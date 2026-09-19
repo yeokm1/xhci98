@@ -60,7 +60,7 @@ the release notes state it for the user; do not let the act of publishing
 inflate it.
 
 Status: **closed on 2026-09-19** (roadmap Phase 22): every task done, 22.12
-(d) re-scoped by the owner, `1.1.0.0` cut and re-cut seven times with the
+(d) re-scoped by the owner, `1.1.0.0` cut and re-cut eight times with the
 binaries byte-identical, waiting only on the owner's upload. It opened on
 2026-09-08, on the owner's instruction, with the `1.1.0.0` cut
 added 2026-09-09. Tasks 22.1 and 22.2
@@ -1528,6 +1528,24 @@ byte-identical to what every leg installed (`E97FA781...`, `A3B5521A...`,
 `releases\1.1.0.0\`. Still open, and not blocking the upload: the hang's
 cause (a kernel dump of a reproduced hang), and the Play! 2 control without
 this driver, before anything is said about that device.
+
+**Re-cut an eighth time with `-Force`, 2026-09-19 evening, for the history
+entry.** A consistency check of the commits since 22.8 (`26162ae` to
+`c1a8fa6`) found that `releases\history.md`'s `1.1.0.0` entry, which the
+readme embeds as its section 10, still said "Nothing new here has run on real
+hardware" and named none of the three limitations above, so the download
+contradicted its own sections 2 and 7. The entry now says that of the new
+systems only 32-bit Windows 7 has run on real hardware, once, after the cut,
+and its last item lists the three limitations; by `releases\README.md`'s rule
+it names neither Server 2003 nor F8. Of the 17 files only `readme.txt`
+changed (SHA-256 of every file taken before and after); the four
+`xhci98.sys` are still `E97FA781...`, `A3B5521A...`, `98A5A32A...`,
+`8BE118B2...`. Asset `out\xhci98-1.1.0.0.zip` 397,765 B, 17 files, each
+SHA-256 identical to `releases\1.1.0.0\`. No build was run: `src\` is
+unchanged since the cut, and the script restaged what was already built and
+gated. The same check brought the secondary tier statements up to date
+(`59229f4`), added the Windows 7 exception to the release notes'
+Requirements row, and put the disable hang beside acceptance step 7.19.
 
 ## 22.10 - the cut itself, and the install route read from the asset
 
