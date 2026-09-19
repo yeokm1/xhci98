@@ -69,7 +69,11 @@ The section this roadmap ends on is the reminder for the second, which runs
 before the upload: settled at `1.0.2.0`, and the order every release follows
 now.
 
-No phase is open. **Phase 22**, closed on 2026-09-19, began as the 32-bit
+**Phase 23 is open**, since 2026-09-19: the requests of GitHub issue 4 that
+no release has answered yet (interrupt polling rates, true speeds on root
+ports, the controller's own Device Manager page), and one experiment of the
+owner's, a lower interrupt moderation interval for throughput, which becomes a
+registry value if it measures. No task of it has started. **Phase 22**, closed on 2026-09-19, began as the 32-bit
 question - whether the binary that already ships runs on Windows Vista and
 Windows 7 as it stands - and that premise fell with Phase 21's: measurements
 M9 to M11 of design record 11 found that no Version 200 miniport can run on
@@ -88,7 +92,7 @@ work can be confirmed and has no checkpoint of its own. A VM boot or a bench
 trip is the expensive unit, and most tasks do not need one, so from Phase 6
 onward a phase whose tasks are confirmed in more than one place groups them
 into batches. Phases 6, 7a, 7b, 8, 9, 11 and 13 are of this shape; Phases 0-5,
-10, 12, 14, 15, 16, 17, 18, 19, 20, 21 and 22 have plain per-phase task
+10, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22 and 23 have plain per-phase task
 numbers.
 
 Task ids are `<batch>.<n>` in a batched phase (`6-B.4` is the fourth task of
@@ -154,7 +158,8 @@ both as VM-supported tiers. Phase 22, closed on 2026-09-19, began by asking whet
 binary that already ships runs on Vista and Windows 7 as it stands, built the
 Version 300 path that both phases needed, and **carries the `1.1.0.0` cut** -
 the version Phase 21 bumped to and never published, and the first release to
-carry a 64-bit package. Phase
+carry a 64-bit package. Phase 23, opened on 2026-09-19, takes the open
+requests of GitHub issue 4 and the interrupt moderation experiment. Phase
 14 waited on Phase 13's bench batches reporting. Accepting the published release, from the download on a
 freshly installed VM and on a physical machine, is not a phase and has no
 task: it is a hand-run procedure the project owner takes before the upload,
@@ -1745,6 +1750,159 @@ Records: `runs/run-22.md` (22.12's readings go there too);
 `design/11-x64-targets.md`; `usb-xhci-info/usbport-miniport-abi.md`; issues
 05, 07 and 08; `build-and-test.md`; `lessons.md`; `releases/history.md`;
 `runs/run-22-post-release/` (written by 22.9).
+
+## Phase 23 - GitHub Issue 4's Open Requests, and the Interrupt Moderation Experiment
+
+Goal: the requests of GitHub issue 4 that no release has answered, each either
+fixed and read on both primary targets or recorded as a decision with its
+reason; and one measurement of the owner's, whether an interrupt moderation
+interval below the reset default raises throughput, which if it does becomes a
+registry value whose default changes nothing.
+
+Status: open since 2026-09-19 on branch `phase-23`; no task has started. Which version
+carries the result is not decided: 23.3, 23.4 and 23.5 are driver code, so the
+third field moves if any of them lands (`releases/README.md`). The owner's
+note on the issue (2026-09-19) is that the speed work may be spread over
+several releases to reduce risk, so this phase may close with 23.6 decided and
+not built.
+
+**"GitHub issue 4" is not `docs/issues/04`.** The numbers collide by accident:
+`docs/issues/04-xp-restore-device-ep0-remove.md` is the XP two-handle restore
+fixed in `1.0.1.0`; the GitHub issue is
+`https://github.com/yeokm1/xhci98/issues/4`, "USB bus internal requests
+handling (and more)", opened by LordOfMice on 2026-09-06 and still open. Its
+items, by the reporter's own numbering:
+
+| Item | Request | Standing |
+|---|---|---|
+| 1 | Root-port devices are reported High Speed whatever they are | Open: `docs/issues/06-full-speed-root-port-bugcheck.md`. Task 23.6 |
+| 2 | An interrupt polling rate chosen through the configuration request (HIDUSBF) is reported as applied and is not | Open, in two halves. Behind a hub a Full-Speed device follows the chosen rate and a Low-Speed device takes 125, 62 and 31 Hz but fails with Code 10 at 250 Hz and above (the reporter's test, 2026-09-12, SweetLow's stack): task 23.4. On a root port nothing changes: task 23.5. The reporter's advice, accepted on 2026-09-15, is the hub half first |
+| 3 | Install the user-mode component too (`usbui.dll`) | Done in `1.0.2.0` (task 20.9) |
+| 4 | `DisableSelectiveSuspend` had no effect for the reporter; then `HcDisableSelectiveSuspend` offered as the better switch | Done in `1.1.0.0` by the miniport flag instead (task 22.11, issue 5) |
+| 5 | The controller's own property page: `HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"` as `USB2.INF` and `USB.INF` carry it | Open; promised on the issue for the next release. Task 23.1 |
+
+Why a phase: items 1 and 2 are one cause seen from two sides (what usbport
+believes a device's speed is decides the `Period` it hands the miniport), so
+answering them piecemeal would repeat the drift Phase 20 was opened to stop;
+and the moderation experiment writes a register the start path has never
+written, which the isochronous builder's IOC-per-TD policy leans on
+(`src/xhci_xfer.c`, the comment above the IOC store), so it wants a
+measurement and a checkpoint rather than a changed constant.
+
+Tasks, ordered easiest first, not by the issue's numbering: an INF line
+whose Windows 98 half is already measured; a one-write experimental build and
+a bench session; the value that experiment may earn, mechanical and readable in
+a guest; a narrow code change that first needs a third usbport lineage read and
+a Low-Speed device on real hardware (no QEMU model declares Low Speed); a
+derivation that may end in "owned by 23.6"; and the architectural decision
+last. The reporter's advice holds in this order: the hub half of item 2 comes
+before the root-port half and before item 1.
+
+- [ ] 23.1 item 5, the controller's property page. On the Windows 98 path,
+  `HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"` in
+  `[Xhci.AddReg]`: measured on 2026-09-07 to draw an Advanced tab with no
+  file added, `sysclass.dll` being on every 9x machine
+  (`build-and-test.md`, the "No `EnumPropPages`" bullet). Owed before it
+  ships: what "Disable USB error detection" writes and whether this driver
+  can be harmed by it, what the Bandwidth Usage dialog shows for root-port
+  devices reported as High Speed, and the same line read on Windows ME. The
+  NT half, `EnumPropPages32` naming `usbui.dll`, is the decision that
+  bullet records as not taken; take it here or record why not. The INF gate
+  and the footprint learn whichever lines land.
+- [ ] 23.2 the moderation experiment. The register is IR0's IMOD: IMODI is
+  bits 15:0 in 250 ns units and resets to 4000, 1 ms
+  (`xhci-data-structures.md`, Table 5-39 p.392). The start never writes it
+  and `xhciRestoreState` writes back what the save read, so every run to date
+  has been at 4000. The hypothesis is that Bulk-Only Transport is strictly
+  serial (Phase 8), so each of a command's completions can wait out a
+  moderation interval before the next stage is submitted, and 1 ms per stage
+  bounds mass-storage throughput from above. Measure sustained mass-storage
+  read and write, and a USB Ethernet transfer, at 4000 and at several lower
+  values down to 10, with an experimental build that writes IMOD in the start
+  after the interrupter is programmed. **This is a real-hardware reading**:
+  the E460 under Windows 98 SE, and under 32-bit Windows 7 if to hand.
+  Whether QEMU's xHC models IMODI at all is read first; if it does not, a
+  guest shows only that the write lands and reads back, never a rate. Read
+  beside each throughput figure: interrupts per second, the ISR and DPC
+  counters, and an isochronous stream playing (1,000 events a second at Full
+  Speed, 8,000 at High Speed, and moderation is what absorbs them), because
+  per-interrupt cost at real rates is what has bugchecked Windows 98 on bare
+  metal before. Stop rule: if no value below 4000 measures faster outside
+  run-to-run noise, record the numbers in `lessons.md`, leave the start not
+  writing IMOD, and close 23.3 as not taken.
+- [ ] 23.3 the registry value, **only if 23.2 measures**. A `REG_DWORD` read
+  through `UsbPortGetMiniportRegistryKeyValue` beside the two log values in
+  `src/xhci_dispatch.c` (no new import), proposed name `XhciImodInterval`, in
+  IMODI's own 250 ns units. The owner's rule, 2026-09-19: the default is
+  4000; nothing below 10 is accepted; and 4000 is assumed when the value is
+  absent or invalid. Invalid means unreadable, below 10, or above 65535
+  (IMODI is 16 bits); an invalid value is replaced by 4000, not clamped to
+  the nearest bound, so a mistyped 0 cannot turn moderation off. Like the log
+  values, nothing in the read may fail a start. The start then writes the
+  value, the save and restore pair carries it across a resume unchanged, and
+  the value in force is readable from a release build (a counter and an
+  `XHCISNAP` line). Both INFs write the value as 4000 on all their install
+  paths, the INF gate's `VAL-*` rules and `expected-footprint.txt` learn it,
+  and host vectors pin the three fallbacks and the two bounds. If 23.2 finds
+  a better number, shipping it as the default is a separate decision of the
+  owner's; this task ships 4000. The release notes say what the value is,
+  its units, and that a low value raises the interrupt rate.
+- [ ] 23.4 item 2, behind a hub: Low-Speed rates of 250 Hz and above. Reproduce
+  first, with a Low-Speed mouse behind a USB 2.0 hub on Windows 98 SE under
+  SweetLow's stack with HIDUSBF, and read which refusal counter moves. The
+  candidate is `XhciIntervalFromPeriod` (`src/xhci_ctx.c`), which refuses a
+  Low-Speed `Period` under 8 because both disassembled usbport builds (SP4,
+  NUSB) floor it there; SweetLow's build is a third lineage and its Low-Speed
+  bucketing has not been read, so read it (`static`, a row in
+  `legal-provenance.md` section 4) before changing the rule. The xHCI side
+  allows it: Table 6-12 gives Full- and Low-Speed interrupt endpoints
+  Interval 3 to 10, and Interval 3 is 1 ms. The refuse-don't-repair rule of
+  that function stays: a widened Low-Speed range is a derived contract, not
+  a clamp.
+- [ ] 23.5 item 2, on a root port: derive, then decide. On a root port
+  usbport buckets `bInterval` as High Speed (`1 << min(bInterval-1, 5)`
+  microframes) and the driver floors the result at 1 ms, so every request
+  lands in a 1, 2 or 4 ms band (`virtual-hub-per-root-port.md` section 1).
+  Read what HIDUSBF's override changes in what usbport hands `OpenEndpoint`,
+  and whether any chosen rate can move an endpoint between bands; the snooped
+  configuration descriptor (`src/xhci_desc.c`) already recovers a true
+  `bInterval` for isochronous endpoints and is the candidate lever for
+  interrupt ones, but an override applied above usbport never reaches the
+  device's descriptor, so that lever may not see it. If no route exists short
+  of 23.6, say so in the release notes and close this as owned by 23.6.
+- [ ] 23.6 item 1, true speeds on root ports: the decision, and its first
+  slice if taken. `docs/future-plans/virtual-hub-per-root-port.md` is the
+  candidate and issue 6 section 8 the alternatives; the costs known since
+  2026-09-19 are the Vista and Windows 7 bugcheck with a Full-Speed hub on a
+  root port and the silent root-port audio device from XP on. What this task
+  owes is a design record with the decision, the split into releases, and
+  which slice if any this phase carries. **Never write "fixed" for issue 6
+  until the High-Speed report itself is gone.**
+- [ ] 23.7 the record: the release notes' known limitations brought into
+  line with whatever 23.1 and 23.4 to 23.6 change, and `docs/issues/06` and
+  `docs/issues/README.md` updated. Replying on the GitHub issue, and closing
+  it, are the owner's and not a task.
+
+Checkpoint (draft, tightened as 23.2 and 23.6 report): on Windows 98 SE and
+Windows 2000 SP4, a Low-Speed interrupt device behind a USB 2.0 hub works at
+every rate the stack in use can ask for, or the refusal that remains is
+derived and published; the root-port half of item 2 and item 1 each carry a
+recorded decision; the property page is in both halves of the 32-bit INF or
+recorded as not taken; if 23.3 landed, the value absent, invalid and at 4000
+all read the same IMOD of 4000 on both targets, a valid lower value reads
+back from the register, and a start is never failed by it; every gate green
+and the device matrix on both primary targets no worse than
+`runs/run-22-post-release/`. Not a checkpoint: a throughput figure taken in a
+guest, or the reporter's machine standing in for one of the project's.
+
+Records: GitHub issue 4 (the thread; nothing of it is copied here beyond the
+table above); `docs/issues/06-full-speed-root-port-bugcheck.md`;
+`docs/future-plans/virtual-hub-per-root-port.md`;
+`docs/usb-xhci-info/xhci-data-structures.md` (IMOD, Table 6-12);
+`docs/usb-xhci-info/usbport-miniport-abi.md` ("Periodic scheduling: what
+`Period` actually carries"); `build-and-test.md` (the INF's omitted
+directives); `runs/run-23.md` (to be opened by the first task that takes a
+reading).
 
 ## Post-Release - Run the Acceptance Test by Hand
 
