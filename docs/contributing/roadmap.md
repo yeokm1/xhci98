@@ -1781,7 +1781,7 @@ Owed:
       URB, as batch 9-V recorded
 - [x] 22.10: both architectures built and cut - **cut 2026-09-18 14:50**,
       `releases\1.1.0.0\` with four flavour directories and
-      `out\xhci98-1.1.0.0.zip` (396,812 B after four same-day re-cuts for the readme and a fifth, `b4d3404`, for the binaries' ProductName; no Microsoft file), every gate
+      `out\xhci98-1.1.0.0.zip` (396,812 B after four same-day re-cuts for the readme and a fifth, `b4d3404`, for the binaries' ProductName; 397,113 B after a sixth on 2026-09-19 for two known limitations 22.9 found, every binary byte-identical; no Microsoft file), every gate
       green; **leg 5, the amd64 package on XP x64, passed on 2026-09-18**
       (the two-field line took `Xhci.Dev` on NT 5.2, the Logo prompt,
       every clause), **and again on the ProductName re-cut the same

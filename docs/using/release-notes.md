@@ -397,6 +397,27 @@ because a user meets them through this driver.
   on a hub polls at its own 8 ms and a polling-rate tool works as on any
   controller. Measured in a virtual machine with SweetLow's hidusbf; the
   bands are documented in full in `docs/issues/06-full-speed-root-port-bugcheck.md`.
+- **Windows Vista and Windows 7, 32-bit and x64: a USB 1.1 hub on a root port
+  crashes the machine** as soon as a mouse, keyboard or other Full or Low
+  Speed device with an interrupt or isochronous endpoint is used behind it
+  (`STOP 0x0000007E`, an access violation in `USBPORT.SYS`). It follows from
+  the High-Speed report above: the stack takes the 1.1 hub for a High-Speed
+  one, finds no transaction translator on it, and faults budgeting the
+  device behind it. Plug such devices into a root port directly, or behind a
+  USB 2.0 hub, which has a transaction translator (not yet measured). The
+  same hub works on Windows 98, 2000, XP and XP x64. Measured in virtual
+  machines on all four Vista and Windows 7 builds, 2026-09-19.
+- **Windows XP and later, 32-bit and x64: a Full-Speed USB audio device on a
+  root port plays nothing.** It installs, shows as the default playback
+  device and appears to play, but no sound reaches it. The same High-Speed
+  report is the cause: from XP on, Windows schedules the device's audio
+  stream as a High-Speed one and never sends it. Behind a hub, where the
+  device's true speed is reported, it played on 32-bit XP; on Windows Vista
+  and 7 that must be a USB 2.0 hub, because of the entry above (not yet
+  measured).
+  Windows 2000 plays on a root port. Measured in virtual machines,
+  2026-09-19: Windows 2000 and XP (behind a hub) played, XP, XP x64, Vista
+  and Windows 7 on a root port did not.
 - Windows 98: plugging and unplugging a device very fast and repeatedly (one
   cycle every 0.6 s for minutes) can freeze the machine with no error. This
   one is this driver's own defect, with no explanation yet. Normal plugging

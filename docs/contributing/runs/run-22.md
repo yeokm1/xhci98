@@ -1370,6 +1370,34 @@ fresh images were booted with `-snapshot`. Evidence
   one passing; `-PostRelease -ValidateOnly` 0 problems). The two reports
   in `run-22-post-release/` were taken before them and still count the row
   against.
+- **Why nothing plays from XP on: the High-Speed root-port report.** On the
+  owner's instruction to look if it was quick. XP SP3's
+  `usbport!USBPORT_IsochTransfer` takes a separate branch when the
+  endpoint's device is High Speed (`cmp dword ptr [eax+110h],2`,
+  `0x243EF`): up to 0x400 packets instead of 0xFF, counted as microframes
+  (`packets x period >> 3`, `0x244EE`-`0x244F4`) - and every device on a
+  root port is reported High Speed (issue 6), so a Full-Speed audio stream
+  of one packet per frame is scheduled as a High-Speed one (static, the
+  public PDB). The runtime test: the same 32-bit XP guest, the same audio
+  device put behind QEMU's Full-Speed `usb-hub` at `2.1`, where the hub
+  reports its true speed - Sound Recorder played `tada.wav` and the driver
+  saw 196 isochronous submits, 1,960 packets, all answered, `played.wav`
+  344,064 B, where on the root port it saw none. How XP's High-Speed branch
+  then loses the stream is not read. Not fixable quickly: the report is
+  what keeps Windows 98 and 2000 from bugchecking. QEMU has no High-Speed
+  hub (`usb-hub` is its only hub, has no speed option and enumerates at
+  12 Mb/s), so the USB 2.0 hub workaround the release notes name for Vista
+  and 7 is unmeasured.
+- **Both are known limitations in `1.1.0.0`, by the owner's decision of
+  2026-09-19**, which re-cut it with `-Force` a sixth time: the release notes
+  and the readme's section 7 carry the USB 1.1 hub crash on Vista and 7 and
+  the silent Full-Speed audio on a root port from XP on. The four
+  `xhci98.sys` restaged from `src\objfre` / `src\objchk` are byte-identical
+  to the ones every leg installed (`E97FA781...`, `A3B5521A...`,
+  `98A5A32A...`, `8BE118B2...`); only `readme.txt` changed. Asset
+  `out\xhci98-1.1.0.0.zip` 397,113 B, 17 files, each SHA-256 identical to
+  `releases\1.1.0.0\`. The overlay guests and their clean copies
+  (`vm\t2210\`) were deleted on the owner's instruction.
 - **Two launch traps.** A guest booted without the harness's default
   network card has its xHCI controller at another PCI slot, which XP x64
   treats as new hardware and asks to install again (Windows 7 re-binds

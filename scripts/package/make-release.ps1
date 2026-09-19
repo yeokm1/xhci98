@@ -3113,6 +3113,21 @@ this driver involved, and the two you are likeliest to meet:
     clean on a real machine, on a root port and behind a hub, on clips of
     seconds. See the release notes' "Known limitations", the USB Audio entry.
 
+TWO THAT ARE THIS DRIVER'S, from how it reports speeds. Every device on a
+root port is reported to Windows as High Speed (the release notes say why);
+two things follow, both measured in virtual machines:
+
+  * WINDOWS VISTA AND 7, 32-BIT AND X64: A USB 1.1 HUB ON A ROOT PORT CRASHES
+    THE MACHINE (STOP 0x7E in USBPORT.SYS) once a mouse, keyboard or other
+    Full or Low Speed device is used behind it. Plug such devices into a
+    root port directly, or behind a USB 2.0 hub (not yet measured). The same
+    hub works on Windows 98, 2000, XP and XP x64.
+
+  * WINDOWS XP AND LATER: A FULL-SPEED USB AUDIO DEVICE ON A ROOT PORT PLAYS
+    NOTHING, though Windows shows it playing. Behind a hub it played on
+    32-bit XP; on Vista and 7 use a USB 2.0 hub (not yet measured).
+    Windows 2000 plays on a root port.
+
 COMPOSITE DEVICES ON WINDOWS 98 - HANDLED BY THIS PACKAGE
 .........................................................
 

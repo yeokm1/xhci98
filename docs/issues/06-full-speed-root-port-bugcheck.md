@@ -242,8 +242,15 @@ what a function does with an empty list, not whether the list is empty.
   passes the NULL on, and the budgeter adds 4 to it (static, `runs/run-22.md`
   22.9). Measured the same day on the other three NT 6.x targets - Vista
   x86, Vista x64 and Windows 7 x64 all stop in the same function, the x64
-  pair reading `0xC08` (the NULL TT plus 8). Open, and the owner's to
-  decide against release `1.1.0.0`.
+  pair reading `0xC08` (the NULL TT plus 8). The owner's decision
+  (2026-09-19): a known limitation of `1.1.0.0`, in the release notes.
+- **The High-Speed report also silences Full-Speed audio from XP on**
+  (2026-09-19, `runs/run-22.md` 22.9): XP's usbport schedules the stream on
+  its High-Speed isochronous branch and no transfer reaches the driver; the
+  same device behind a Full-Speed hub, reported at its true speed, played on
+  32-bit XP. Windows 2000 plays on a root port. A known limitation of
+  `1.1.0.0`; a fix would have to change what this page's fix reports, on
+  exactly the stacks that bugcheck without it.
 
 ## 7. Lessons the record kept
 
