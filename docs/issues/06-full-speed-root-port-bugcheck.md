@@ -16,13 +16,28 @@ for all of them, a virtual USB 2.0 hub per root port
 decided (section 8).
 
 Targets affected: all ten. The bugcheck itself was measured on Windows 98
-SE under the NUSB stack and on Windows 2000 SP4, in the virtual machines;
+SE under the NUSB stack and on Windows 2000 SP4, in QEMU virtual machines;
 the same usbport logic is in both binaries, and SweetLow's XP-lineage
 rebuild has the same unguarded branch (static). No other target ever ran
 the truthful-speed build: the workaround predates every bare-metal batch
-and every target added after Phase 5, and Low-Speed and Full-Speed devices
-have since run on the E460 under it without incident. What the workaround
-costs on each target is section 1's table.
+and every target added after Phase 5. What the workaround costs on each
+target is section 1's table.
+
+**Where each reading was taken matters on this page, and the table says
+so cell by cell.** Windows 98 SE is the only target that has ever run on
+real hardware (the ThinkPad E460 and P14s in batches 13-E and after, and
+users' desktops); every other target - Windows ME, 2000, XP, XP x64,
+Vista and 7 - has only ever run in QEMU. So every reading below for a
+target after Windows 98, including both `1.1.0.0` known limitations, is a
+virtual-machine reading, and QEMU's only hub is a Full-Speed one. On
+Windows 98 the workaround's ordinary case has been on metal: a Low-Speed
+mouse and a Full-Speed audio device on a root port and behind High-Speed
+hubs on the E460 (batch 13-E), and the audio device again on `1.1.0.0`
+itself, directly in a root port, on 2026-09-19. What has never been on metal, on any
+target, is the topology sections 6 and 7 turn on - a USB 1.1 hub on a root
+port with a slower device behind it - because no USB 1.1 hub was ever held
+(batch 13-E, decision P3); the E460's hubs are USB 2.0, single-TT and
+multi-TT.
 
 The short version: usbport applies the EHCI model to a USB 2.0 miniport. On
 EHCI a root port can only ever hold a High-Speed device, because Full and
@@ -53,21 +68,23 @@ targets only and never again); and, under the High-Speed report every
 release has shipped, what a slower device on a root port does, what a USB
 1.1 hub on a root port with a slower device behind it does, and whether a
 Full-Speed audio device on a root port plays. Every cell names its
-measurement; "never run" means exactly that, and "not read" means no static
-reading of that usbport either.
+measurement and where it was taken: **VM** is a QEMU guest, **metal** is a
+physical machine (the ThinkPad E460 unless another is named). "Never run"
+means exactly that, and "not read" means no static reading of that usbport
+either. Only the first row has any metal readings at all.
 
 | Target | Full-Speed device on a root port, true speed reported | Full or Low Speed device on a root port, reported High Speed (as shipped) | USB 1.1 hub on a root port, Full or Low Speed device behind it | Full-Speed audio device on a root port |
 |---|---|---|---|---|
-| Windows 98 SE, NUSB 3.3 | **Bugchecks**: `Windows protection error`, or `0028:C002F70E` in `NTKERN` (Phase 5, section 2) | Works; interrupt polling in 1, 2 or 4 ms bands (section 5; measured with hidusbf, Phase 20) | Works: a mouse behind QEMU's `usb-hub` bound and ran (batch 7b-V0, section 6.1); the 22.9 hub rows PASS, the churn row is excluded on this target | Bound; playback faults in the OS's own `USBAUDIO.VXD` after one URB (batch 9-V, again 2026-09-19) - an OS fault, not this issue |
-| Windows 98 SE, SweetLow's stack | Never run; static: its usbport's single-TT branch (`0x2667A`-`0x26686`) returns the same garbage pointer | Works (observed in a virtual machine); the bands not measured on this stack | Not measured | Not measured |
-| Windows ME, SweetLow's stack | Never run; static as the row above | A HID mouse binds (2026-09-02); the bands not measured | Never plugged | Bound (a composite audio device, 2026-09-02); playback not measured |
-| Windows 2000 SP4 | **Bugchecks**: `STOP 0x0000000A (0xFFFFFFFC, 0xFF, 0x00000000, 0x804006B2)` (Phase 5, sections 2 and 3) | Works; the same bands (usbport's bucketing rule is common to every build; the readings are Windows 98's) | Works (batch 7b-V0; the 22.9 churn row PASS) | **Plays**: 376 isochronous submits, 3,760 packets, `played.wav` 659,456 B (2026-09-19, section 7) |
-| Windows XP SP3 x86 | Never run; XP SP3's own `USBPORT_GetTt` not read (SweetLow's rebuild is XP-lineage and unguarded) | Works (issue 7's legs; the 22.10 install leg) | A Full-Speed audio device behind the hub enumerated and played (2026-09-19, section 7); a mouse behind it never run | **Silent**: 0 isochronous submits while Sound Recorder played 1.93 s; behind a Full-Speed hub 196 submits, 344,064 B (section 7) |
-| Windows XP x64 SP2 | Never run; not read | Works (the 22.9 matrix; the 22.10 install leg) | Works (the 22.9 hub rows, churn included, PASS) | **Silent**: 0 submits; an endpoint opens on arrival, nothing is ever sent (section 7) |
-| Windows Vista SP2 x86 | Never run; not read | Works (the 22.10 install leg: three devices on a root port, disable / enable / remove / rescan) | **Bugchecks**: `STOP 0x0000007E` in `usbport!Allocate_time_for_endpoint` once a mouse behind it is configured (2026-09-19, section 6.2) | **Silent**: 0 submits; the pipe opened as playback began (section 7) |
-| Windows Vista SP2 x64 | Never run; not read | Works (the 22.10 install leg) | **Bugchecks**, the same function, the pointer-sized offset (section 6.2) | **Silent**: 0 submits (section 7) |
-| Windows 7 SP1 x86 | Never run; not read | Works (the 22.9 matrix: HID, storage, the hub alone; the 22.10 install leg) | **Bugchecks** (the 22.9 churn row; section 6.2) | **Silent**: 0 submits; the isochronous pipe never opened (section 7) |
-| Windows 7 SP1 x64 | Never run; not read | Works (the 22.10 install leg) | **Bugchecks** (section 6.2) | **Silent**: 0 submits; the pipe opened, nothing sent (section 7) |
+| Windows 98 SE, NUSB 3.3 | **Bugchecks** (VM): `Windows protection error`, or `0028:C002F70E` in `NTKERN` (Phase 5, section 2). Never on metal: the workaround predates every bare-metal batch | Works, VM and **metal**: a Low-Speed mouse at a root port on the E460 (batch 13-E, stage E4.1) and a Full-Speed audio device there (E6.1); interrupt polling in 1, 2 or 4 ms bands (section 5; measured with hidusbf in the VM, Phase 20 - not measured on metal) | Works (VM): a mouse behind QEMU's `usb-hub` bound and ran (batch 7b-V0, section 6.1); the 22.9 hub rows PASS, the churn row is excluded on this target. Never on metal: no USB 1.1 hub was held (batch 13-E, P3). On metal the mouse and the audio device ran behind USB 2.0 hubs, single-TT and multi-TT (E4, E6.2), which is not this topology | **Plays on metal**: a physical UAC 1.0 device played clean at a root port on the E460 (batch 13-E, E6.1, and behind the multi-TT hub, E6.2), and again on `1.1.0.0` `release-x86` on 2026-09-19 - a Sound Blaster Play! 2 (`041E:323D`) directly in a root port, NUSB 3.3, heard by the owner. In the VM the OS's own `USBAUDIO.VXD` faults after one URB (batch 9-V, again 2026-09-19) - a vehicle artefact, not this issue |
+| Windows 98 SE, SweetLow's stack | Never run; static: its usbport's single-TT branch (`0x2667A`-`0x26686`) returns the same garbage pointer | Works (VM, observed); the bands not measured on this stack | Not measured | Not measured |
+| Windows ME, SweetLow's stack | Never run; static as the row above | A HID mouse binds (VM, 2026-09-02); the bands not measured. Never on metal | Never plugged | Bound (VM, a composite audio device, 2026-09-02); playback not measured |
+| Windows 2000 SP4 | **Bugchecks** (VM): `STOP 0x0000000A (0xFFFFFFFC, 0xFF, 0x00000000, 0x804006B2)` (Phase 5, sections 2 and 3) | Works (VM); the same bands (usbport's bucketing rule is common to every build; the readings are Windows 98's). Never on metal | Works (VM: batch 7b-V0; the 22.9 churn row PASS) | **Plays** (VM): 376 isochronous submits, 3,760 packets, `played.wav` 659,456 B (2026-09-19, section 7) |
+| Windows XP SP3 x86 | Never run; XP SP3's own `USBPORT_GetTt` not read (SweetLow's rebuild is XP-lineage and unguarded) | Works (VM: issue 7's legs; the 22.10 install leg). Never on metal | A Full-Speed audio device behind the hub enumerated and played (VM, 2026-09-19, section 7); a mouse behind it never run | **Silent** (VM): 0 isochronous submits while Sound Recorder played 1.93 s; behind a Full-Speed hub 196 submits, 344,064 B (section 7) |
+| Windows XP x64 SP2 | Never run; not read | Works (VM: the 22.9 matrix; the 22.10 install leg). Never on metal | Works (VM: the 22.9 hub rows, churn included, PASS) | **Silent** (VM): 0 submits; an endpoint opens on arrival, nothing is ever sent (section 7) |
+| Windows Vista SP2 x86 | Never run; not read | Works (VM: the 22.10 install leg, three devices on a root port, disable / enable / remove / rescan). Never on metal | **Bugchecks** (VM): `STOP 0x0000007E` in `usbport!Allocate_time_for_endpoint` once a mouse behind it is configured (2026-09-19, section 6.2) | **Silent** (VM): 0 submits; the pipe opened as playback began (section 7) |
+| Windows Vista SP2 x64 | Never run; not read | Works (VM: the 22.10 install leg). Never on metal | **Bugchecks** (VM), the same function, the pointer-sized offset (section 6.2) | **Silent** (VM): 0 submits (section 7) |
+| Windows 7 SP1 x86 | Never run; not read | Works (VM: the 22.9 matrix, HID, storage, the hub alone; the 22.10 install leg). Never on metal | **Bugchecks** (VM: the 22.9 churn row; section 6.2) | **Silent** (VM): 0 submits; the isochronous pipe never opened (section 7) |
+| Windows 7 SP1 x64 | Never run; not read | Works (VM: the 22.10 install leg). Never on metal | **Bugchecks** (VM, section 6.2) | **Silent** (VM): 0 submits; the pipe opened, nothing sent (section 7) |
 
 Read down the columns. The first is why the workaround exists and why it
 cannot simply be removed: the two primary targets die without it. The
@@ -77,7 +94,10 @@ never made for: Vista and 7 fault one level below a root port, and every
 stack from XP on schedules a Full-Speed isochronous stream on a root port
 as if it were High Speed. Windows 2000 is the only target on which
 everything works, and the reason its usbport plays the stream where XP's
-does not has not been read (section 9).
+does not has not been read (section 9). And only the first row's second
+and fourth columns have been on real hardware: everything from Windows ME
+down is a QEMU reading, and so is every 1.1-hub cell, Windows 98's
+included.
 
 ## 2. How it was found, and pinned to speed (Windows 98 and 2000, Phase 5)
 
@@ -200,7 +220,9 @@ is what happens to each:
   the decoded speed the driver keeps in the port shadow; usbport's
   `DeviceSpeed` is never used for them. This is what makes the devices
   work at all, and Low-Speed HID and Full-Speed audio have both run on
-  real silicon under it.
+  real silicon under it (Windows 98 SE on the E460, batch 13-E: the mouse
+  at a root port and behind the hubs, the audio device playing at a root
+  port and behind the multi-TT hub).
 - **The TT fields for devices behind a hub on a root port: corrected**, in
   Phase 7b, by deriving them from the driver's own topology graph (section
   6.1). Corrected for the driver's contexts, that is; usbport's own use of
@@ -349,7 +371,13 @@ the same - a keyboard, a mouse, an audio device, a keyboard with a built-in
 hub. A bulk-only device there may not reach the budgeter. A USB 2.0 hub has a
 real TT, so devices behind it should budget correctly; QEMU cannot show it,
 because its only hub, `usb-hub`, is a Full-Speed hub with no speed option (it
-enumerates at 12 Mb/s).
+enumerates at 12 Mb/s). All four readings in the table are QEMU guests:
+no Vista or Windows 7 has ever run on real hardware, and no USB 1.1 hub has
+ever been on a root port on real hardware under any target (none was held,
+batch 13-E). The topology itself is real - any USB 1.1 hub, or a 2.0 hub
+declaring no TT, on a root port of a physical machine - and nothing about
+the fault depends on the emulator: the stack, the NULL translator and the
+budget object are usbport's own.
 
 **Workarounds** (in the release notes): plug Full and Low Speed devices into
 a root port directly, where the driver's report covers them, or behind a USB
@@ -374,19 +402,23 @@ record is `docs/contributing/runs/run-22.md`, 22.9.
 **What happens.** The device installs, is the default playback device, and
 Windows shows it playing, but no sound reaches it: no isochronous transfer
 reaches the driver at all. Task 22.9 was the first time audio was played,
-rather than only bound, on any target after Windows 2000. Measured with
-QEMU's `usb-audio` and its `wav` backend as the oracle, the driver's
-counters read over the monitor while the guest played:
+rather than only bound, on any target after Windows 2000. Every row but
+the last is a QEMU guest, measured with QEMU's `usb-audio` and its `wav`
+backend as the oracle, the driver's counters read over the monitor while
+the guest played; the last is the one real-hardware playback reading this
+project has, on Windows 98:
 
 | Target | Played with | Isochronous submits | Audio reaching the device |
 |---|---|---|---|
-| Windows 98 SE | the startup sound | 1 (10 packets, all answered), then the OS's own `USBAUDIO.VXD` faults | - (batch 9-V's known OS fault) |
+| Windows 98 SE (VM) | the startup sound | 1 (10 packets, all answered), then the OS's own `USBAUDIO.VXD` faults | - (batch 9-V's known VM artefact) |
 | Windows 2000 SP4 | Sounds and Multimedia | 376 (3,760 packets, all answered) | 659,456 B |
 | XP SP3 x86, on a root port | Sound Recorder, 1.93 s of 1.93 s | 0 | 0 B |
 | XP SP3 x86, **behind a Full-Speed hub** | Sound Recorder, the same file | **196 (1,960 packets, all answered)** | **344,064 B** |
 | XP x64 SP2 | Sounds tab | 0 | 0 B |
 | Vista x86 and x64 | Speakers Properties, Test showing Stop | 0 | 0 B |
 | Windows 7 x86 and x64 | Speakers Properties, Test showing Stop | 0 | 0 B |
+| **Windows 98 SE on the E460 (metal)**, batch 13-E | a physical UAC 1.0 device, at a root port (E6.1) and behind the multi-TT hub (E6.2) | not read | **played clean** (Finding X: the first audio through this driver on real silicon, and the first split-transaction isochronous path in any vehicle) |
+| **Windows 98 SE on the E460 (metal)**, `1.1.0.0` `release-x86`, 2026-09-19 | a Sound Blaster Play! 2 (`041E:323D`, Full Speed, UAC 1.0) directly in a root port, NUSB 3.3; the owner's hand-test | not read (release flavour) | **played**, heard by the owner (`run-22.md` 22.9) |
 
 Nothing is refused on the driver's side: where every counter was dumped
 (Windows 7 x86, XP x64, Vista x86) every open usbport asked for was accepted
@@ -405,8 +437,12 @@ How that branch then loses the stream is not read, and neither is why
 Windows 2000's usbport plays the same stream on a root port.
 
 **Workarounds** (in the release notes): put the audio device behind a hub.
-On XP that can be a USB 1.1 hub (measured on 32-bit XP only); on Vista and 7
-it must be a USB 2.0 hub, because of section 6.2 (unmeasured).
+On XP that can be a USB 1.1 hub (measured on 32-bit XP only, in QEMU); on
+Vista and 7 it must be a USB 2.0 hub, because of section 6.2 (unmeasured:
+QEMU has no High-Speed hub, and none of these targets has run on metal).
+Nothing in this section has been on real hardware; whether a physical XP,
+Vista or 7 machine behaves the same way is the first thing a bare-metal run
+of any of them would tell.
 
 **Consequences for the record.** Every device-matrix audio row judged
 arrival, not playback: XP x64's row passed because its audio stack opens an
@@ -463,6 +499,13 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
 - **Metal never ran the truthful build**, so the bugcheck itself is a VM
   observation. Nothing suggests real hardware differs: the fault is in
   usbport's own list handling, not in anything the controller does.
+- **Nothing on this page after Windows 98 has been on real hardware.**
+  Windows ME, 2000, XP, XP x64, Vista and 7 have only ever run in QEMU, so
+  the Vista/7 hub bugcheck (6.2), the silent audio from XP on (7) and the
+  Windows 2000 and XP x64 hub passes (6.1) are all virtual-machine
+  readings. The mechanisms read are usbport's own and should carry, but
+  the readings do not exist. On Windows 98 the 1.1-hub topology has never
+  been on metal either (no USB 1.1 hub held).
 - **Why a believed-High-Speed 1.1 hub gets a TT record** on Windows 98 and
   2000 (6.1) is unconfirmed against the binaries. The driver no longer
   depends on the answer, and measures the disagreement instead.

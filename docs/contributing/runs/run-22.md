@@ -1404,6 +1404,17 @@ fresh images were booted with `-snapshot`. Evidence
   silently); and a Windows 98 boot with a USB device on the command line
   parks in the BIOS unless the machine is `pc,smm=off`, as `lessons.md`
   already records for the prep boots.
+- **Windows 98 audio on real hardware, the owner's hand-test (2026-09-19).**
+  The ThinkPad E460, Windows 98 SE under NUSB 3.3, the `1.1.0.0` package's
+  `release-x86` flavour: a
+  Sound Blaster Play! 2 (`041E:323D`, Full Speed, composite, UAC 1.0)
+  plugged directly into a root port played, and the owner heard the audio.
+  It is the reading the played-stream table above could not take on Windows
+  98 - the VM's own `USBAUDIO.VXD` faults after one URB - and it repeats
+  batch 13-E's Finding X on the released binary: a Full-Speed audio device
+  on a root port, reported High Speed, plays on Windows 98 where it plays
+  nothing from XP on (issue 6 sections 1 and 7). No counters were read; the
+  oracle is the owner's ear. Not run behind a hub this time.
 
 ## 22.10 - the cut itself, and the install route read from the asset
 
