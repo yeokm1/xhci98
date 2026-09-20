@@ -1186,6 +1186,41 @@ static ULONG xhciProgramEventRing(PXHCI_EXTENSION ext)
         return XHCI_INIT_NO_RMW_OPERAND;
     }
 
+#ifdef XHCI_IMOD_EXPERIMENT
+    /*
+     * Task 23.2's moderation experiment, and **the only IMOD write in a start
+     * that any build has ever done**. In a shipping build this block is not
+     * compiled and the start still leaves IMOD at its reset value, which on
+     * hardware is 4000 - 1 ms (Table 5-39, p.392).
+     *
+     * Here rather than anywhere else because here is "after the interrupter is
+     * programmed": ERSTSZ, ERDP and ERSTBA are written above, and R/S is not
+     * set until xhciRunController, so the interval is in force from the first
+     * event the controller ever posts. IMOD is not in 4.2 p.69's list of what
+     * must precede R/S, so this is not a spec ordering requirement - it is the
+     * ordering that makes the measurement mean one thing for the whole run.
+     *
+     * A plain write, with no read-modify-write and no operand check, and that
+     * is a reading rather than an oversight: IMOD is IMODI 15:0 and IMODC
+     * 31:16, both RW, with no reserved field to preserve (Table 5-39, p.392 -
+     * the same reading the header states where it says why IMOD is absent from
+     * the RsvdP mask block). Writing the value whole therefore leaves IMODC 0,
+     * which is what an interval-only experiment wants.
+     *
+     * **It cannot fail the start**, like everything else on this value's path.
+     * The read-back is taken for the record, not as a gate: a controller that
+     * ignored the write is a finding for the run sheet, and refusing a start
+     * over it would cost the bench the very session that found it. On QEMU the
+     * read-back is guaranteed to agree and means nothing - hw/usb/hcd-xhci.c
+     * stores `intr->imod` and no code path ever consults it.
+     */
+    if (XhciImodExperimentWanted(ext)) {
+        XhciWriteIr0(ext, XHCI_IR_IMOD, ext->ImodExperimentValue);
+        ext->ImodExperimentReadback = XhciReadIr0(ext, XHCI_IR_IMOD);
+        ext->ImodExperimentWritten = 1;
+    }
+#endif
+
     return XHCI_RING_OK;
 }
 

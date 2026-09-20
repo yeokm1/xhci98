@@ -396,6 +396,27 @@ XHCI_C_ASSERT(packet_is_whole_words,
 #define XHCI_LOG_DBGVIEW_VALUE_NAME    L"XhciLogDebugView"
 #define XHCI_LOG_DBGVIEW_VALUE_BYTES   (17 * 2)
 
+#ifdef XHCI_IMOD_EXPERIMENT
+/*
+ * Task 23.2's third value, in the same key and read by the same service, and
+ * **only in an experimental build**.
+ *
+ * **The name is deliberately not 23.3's.** 23.3 proposes `XhciImodInterval`
+ * for a value that would ship, with a contract this one does not have - a
+ * default of 4000, a floor of 10, and 4000 substituted for anything invalid.
+ * This value has no default at all: absent means the start does not write IMOD,
+ * which is what every build before this one did. If the two shared a name, a
+ * bench machine left carrying an experimental setting would have it become
+ * load-bearing the moment a 23.3 build was installed over the top. Under a
+ * separate name a leftover is inert, and 23.3 is free to choose its own.
+ *
+ * 18 characters, so (18 + 1) * 2 - the length rule is the one above: bytes
+ * including the terminating NUL, and the service does not clamp its own copy.
+ */
+#define XHCI_IMOD_EXPERIMENT_VALUE_NAME  L"XhciImodExperiment"
+#define XHCI_IMOD_EXPERIMENT_VALUE_BYTES (19 * 2)
+#endif
+
 /*
  * How much of the ring one DebugView emit carries. Small and a loop, not one
  * buffer the size of the ring: MSVC emits a `__chkstk` probe for a local of a
@@ -599,6 +620,88 @@ static VOID xhciLogReadValues(PXHCI_EXTENSION ext,
     }
 }
 
+#ifdef XHCI_IMOD_EXPERIMENT
+/*
+ * Read the interval task 23.2 is sweeping. Experimental builds only.
+ *
+ * A separate routine rather than a third read inside `xhciLogReadValues`,
+ * because that one is about the log and this is not - and because keeping the
+ * `#ifdef` around a whole function rather than around three statements inside
+ * a shipping one is what makes "the shipping build is unchanged" a thing a
+ * reader can check by eye.
+ *
+ * It borrows every property of the function above and none of them are
+ * incidental: the same PASSIVE-only service, the same key (`BOOL = TRUE`, the
+ * driver's own software key), the same re-read-per-start because usbport zeroes
+ * the extension, and above all the same rule that **nothing here may fail a
+ * start**. A missing value, a failed read and a NULL service all leave
+ * `ImodExperimentWritten` at 0 and the start writes no IMOD at all, which is
+ * precisely the driver as it shipped. That is what makes the experimental
+ * binary its own control: the same .sys with the value unset is the 4000 arm
+ * of the sweep, so no rebuild separates the baseline from the readings.
+ *
+ * **The refusal is a refusal, not a clamp**, and the reason is the measurement
+ * rather than safety. IMODI is bits 15:0 and IMODC is 31:16 (Table 5-39
+ * p.392), so a value above 0xFFFF written whole would set an interrupt
+ * *counter* - a different mechanism - while the run sheet recorded it as an
+ * interval. Masking would be worse: it would write 4464 for a typed 70000 and
+ * look like it worked. So a value IMODI cannot carry is refused, counted, and
+ * the start leaves the register alone; the reading is then visibly absent
+ * instead of quietly wrong.
+ *
+ * Zero is **not** refused. It is moderation off, the far end of the sweep, and
+ * the roadmap's warning about per-interrupt cost at real rates is a thing to
+ * measure on the bench rather than to forbid here. `ImodExperimentStatus` is
+ * what tells that deliberate 0 from a machine that has no value set.
+ *
+ * IRQL: PASSIVE_LEVEL.
+ */
+static VOID xhciImodExperimentRead(PXHCI_EXTENSION ext)
+{
+    ULONG value;
+    MPSTATUS status;
+
+    ext->ImodExperimentRead = 1;
+
+    if (XhciRegPacket.UsbPortGetMiniportRegistryKeyValue == NULL) {
+        ext->ImodExperimentStatus = MP_STATUS_FAILURE;
+        return;
+    }
+
+    value = 0;
+    status = XhciRegPacket.UsbPortGetMiniportRegistryKeyValue(
+        ext, TRUE, XHCI_IMOD_EXPERIMENT_VALUE_NAME,
+        (ULONG_PTR)XHCI_IMOD_EXPERIMENT_VALUE_BYTES, &value,
+        (ULONG_PTR)sizeof(value));
+    ext->ImodExperimentStatus = (ULONG)status;
+    if (status != MP_STATUS_SUCCESS) {
+        return;
+    }
+
+    ext->ImodExperimentValue = value;
+    if (value > XHCI_IMOD_IMODI_MAX) {
+        ext->ImodExperimentRefused = 1;
+    }
+}
+
+/*
+ * Whether the start should write IMOD, asked in one place so that the write
+ * site in src/xhci_init.c does not spell out three conditions and get one of
+ * them wrong later. All three have to hold: the read ran, it succeeded (0 is a
+ * legitimate value, so the status is the only thing that separates a read 0
+ * from an extension usbport merely zeroed), and the value fitted IMODI.
+ *
+ * IRQL: any. It reads fields written once, at PASSIVE, earlier in the same
+ * start.
+ */
+ULONG XhciImodExperimentWanted(PXHCI_EXTENSION ext)
+{
+    return (ext->ImodExperimentRead != 0 &&
+            ext->ImodExperimentStatus == MP_STATUS_SUCCESS &&
+            ext->ImodExperimentRefused == 0) ? 1 : 0;
+}
+#endif
+
 
 /*
  * The counter block, appended at flush time.
@@ -635,6 +738,15 @@ static VOID xhciLogCountersLocked(PXHCI_EXTENSION ext)
     XhciLogAppend(&ext->Log, "isr.entries", ext->InterruptCount, 1);
     XhciLogAppend(&ext->Log, "isr.claimed", ext->InterruptsClaimed, 1);
     XhciLogAppend(&ext->Log, "dpc.count", ext->DpcCount, 1);
+#ifdef XHCI_IMOD_EXPERIMENT
+    /* Task 23.2, next to the two counters the interval is supposed to move, so
+     * that one flush carries the arm of the sweep and its effect together. Two
+     * XHCISNAP dumps a known time apart give the rate; without the interval in
+     * the same block a reader has to trust the operator's note of which binary
+     * and which registry value were in force. */
+    XhciLogAppend(&ext->Log, "imod.exp.readback", ext->ImodExperimentReadback, 1);
+    XhciLogAppend(&ext->Log, "imod.exp.written", ext->ImodExperimentWritten, 1);
+#endif
     XhciLogAppend(&ext->Log, "events.total", ext->EventsTotal, 1);
     XhciLogAppend(&ext->Log, "psc.events",
                   ext->EventCounts[XHCI_EVENT_TYPE_INDEX(
@@ -1057,6 +1169,21 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
      * for the driver to name any more.)*
      */
     xhciLogStart(ext);
+#ifdef XHCI_IMOD_EXPERIMENT
+    /*
+     * Task 23.2's interval, read here because `XhciInitController` below is
+     * what writes it and this is the last PASSIVE point before that call. The
+     * notes go in straight away rather than beside the write, so that a start
+     * that then *refuses* still says what interval it had been asked for - the
+     * refusal path a dozen lines down flushes the ring, and an experimental run
+     * that died before the interrupter was programmed is exactly when knowing
+     * the requested value matters.
+     */
+    xhciImodExperimentRead(ext);
+    XhciLogNote(ext, "imod.exp.status", ext->ImodExperimentStatus);
+    XhciLogNote(ext, "imod.exp.value", ext->ImodExperimentValue);
+    XhciLogNote(ext, "imod.exp.refused", ext->ImodExperimentRefused);
+#endif
     /*
      * **`XhciLogNoteAddress`, because that value is a kernel pointer.** It is
      * usbport's own `USBPORT_RESOURCES` block, and the ladder's boundary
@@ -1116,6 +1243,16 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
     }
 
     (VOID)XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_STARTED);
+#ifdef XHCI_IMOD_EXPERIMENT
+    /*
+     * The other half of the pair above, and it has to be here because the write
+     * is inside the init sequence: what the register actually took. A run sheet
+     * figure is only attributable to an interval if these two agree, so they
+     * travel together in every snapshot the bench takes.
+     */
+    XhciLogNote(ext, "imod.exp.written", ext->ImodExperimentWritten);
+    XhciLogNote(ext, "imod.exp.readback", ext->ImodExperimentReadback);
+#endif
     /*
      * The mapped register base - an address, for the reason above. The cast is
      * written out for the same reason the one at the "start" site above is:

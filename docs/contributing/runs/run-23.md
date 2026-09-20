@@ -1253,3 +1253,237 @@ false - which is why none of them waited:
   `docs/issues/README.md`'s issue 6 row moved with it.
 
 23.7 therefore inherits nothing from 23.1.5.
+
+---
+
+## 23.2 - the moderation experiment (the owner's measurement)
+
+Status as of 2026-09-20: **the host side is done and the reading is owed.**
+The roadmap's read-first question has been answered - QEMU does not model
+IMODI, so no rate can come out of a guest - and the experimental build the
+task calls for exists and compiles. What is not here is the only thing that
+can close the task: sustained throughput figures from real hardware. Nothing
+below is a reading.
+
+### The read-first question: does QEMU's xHC model IMODI at all?
+
+**No. It stores the register, returns it, migrates it, and never consults
+it.** That was the roadmap's gate on whether a guest leg is worth taking, and
+it fails it.
+
+Read in QEMU's own source at tag `v11.1.0`, and again at `master`
+`c1c18d1e640b64292859ce9f30f3c344edfb0294` (2026-09-19) - identical, to the
+line number. `imod` appears in exactly five places in the whole of `hw/usb/`:
+
+| Site | What it is |
+|---|---|
+| `hw/usb/hcd-xhci.h:154` | `uint32_t imod;` - the field, in `XHCIInterrupter` |
+| `hw/usb/hcd-xhci.c:2730` | `xhci->intr[i].imod = 0;` - controller reset |
+| `hw/usb/hcd-xhci.c:3063` | `ret = intr->imod;` - the runtime-register read |
+| `hw/usb/hcd-xhci.c:3120` | `intr->imod = val;` - the runtime-register write |
+| `hw/usb/hcd-xhci.c:3597` | `VMSTATE_UINT32(imod, XHCIInterrupter)` - migration |
+
+Nothing else in `hw/usb/` names it, and the string `moderat` appears in
+neither file. There is no timer, no comparison, no deferral: an event that
+would raise an interrupt raises it, whatever IMODI says. Re-derive with a
+blobless sparse clone of `hw/usb` and `grep -n imod hw/usb/hcd-xhci.c
+hw/usb/hcd-xhci.h`; `external/README.md` carries the row.
+
+**Two things fall out of that reading which the task did not go looking for.**
+
+**QEMU resets IMOD to 0, where hardware resets it to 4000.** The spec's reset
+default is 4000, 1 ms (Table 5-39, p.392), and `hcd-xhci.c:2730` writes 0. The
+start has never written the register, so this is not a divergence the driver
+causes or can see - but it does mean **every guest run this project has ever
+taken ran with IMOD 0 and every bare-metal run with 4000**, which are the two
+ends of the interval this task is about. That is worth holding onto beyond
+this task: wherever a guest reading and a metal reading of the same workload
+have disagreed about interrupt or DPC counts, moderation is a difference
+between them that no run sheet has named.
+
+**It also means the save/restore path's IMOD write has only ever been
+exercised with 0.** `xhciRestoreState` writes back what the save read
+(`src/xhci_init.c`), which the 2026-09-05 audit's F10 changed from a literal
+0 precisely so that moderation survives a resume. The fix is right and it is
+still unverified against a nonzero IMOD, because no guest can supply one: in
+QEMU the saved value is 0 and the corrected code writes 0, which is what the
+defect did. An experimental build with a value set is the first thing that
+can tell those two apart, and a suspend/resume cycle is worth adding to the
+bench sheet for that reason alone.
+
+**And the guest read-back proves less than it looks.** `intr->imod = val;`
+stores the whole 32-bit word with no mask - IMODI is not separated from IMODC
+- so a write-then-read agreeing in a guest says the value reached a variable
+and nothing more. It is still worth one guest leg as a smoke test of the
+experimental build's path end to end (does the value arrive from the registry,
+does the start write it, do the notes come out of `XHCISNAP`), and it is worth
+nothing at all as evidence about an interval.
+
+### What landed: the experimental build
+
+The roadmap asked for "an experimental build that writes IMOD in the start
+after the interrupter is programmed". It is built, and the owner's decision of
+2026-09-20 settled the one open question in how: **the value comes from the
+registry, not from a compile-time constant**, so that one binary sweeps the
+whole ladder. The alternative was a `-D` per value, which is seven rebuilds
+and seven copies onto a Windows 98 machine for a sweep that otherwise takes
+seven `regedit` edits and seven controller restarts.
+
+**Nothing of it is in a shipping binary.** The whole change is behind
+`XHCI_IMOD_EXPERIMENT`, which only `XHCI_EXTRA_DEFINES` sets, and `src/sources`
+turns any nonempty `XHCI_EXTRA_DEFINES` into `XHCI_DIAGNOSTIC_BUILD` - the
+marker `make-package.ps1` refuses to package. Built both ways on 2026-09-20:
+`scripts\build-driver.cmd both` reports `BUILD + GATES PASSED`, and with the
+define set it reports `PROBE BUILD + GATES PASSED` and the do-not-deploy
+warning. **The import gate lists the same twelve pairs either way**, which is
+the "no new import" clause 23.3 also has to keep: the registry read goes
+through `UsbPortGetMiniportRegistryKeyValue` in usbport's own packet, not
+through an import of ours.
+
+The pieces, all `#ifdef`-ed:
+
+- **`XhciImodExperiment`**, a `REG_DWORD` in the driver's own software key -
+  the same key and the same service as `XhciLogVerbosity`, read once per start
+  at PASSIVE from `xhciStartController`, immediately after `xhciLogStart`.
+- **The write**, at the end of `xhciProgramEventRing` in `src/xhci_init.c`:
+  after ERSTSZ, ERDP and ERSTBA, and before R/S is set in `xhciRunController`,
+  so the interval is in force from the first event the controller posts. A
+  plain `XhciWriteIr0` with no read-modify-write, because IMOD has no reserved
+  field (Table 5-39, p.392), and writing the word whole leaves IMODC 0.
+- **Six fields** at the end of `XHCI_EXTENSION`, after `Log` and before the
+  trailing pair, so an experimental build moves no existing field's offset and
+  a `scripts\local\offsets.txt` taken from a shipping build still reads every
+  counter out of an experimental one.
+- **Five `XHCISNAP` notes**, and `imod.exp.readback` and `imod.exp.written`
+  also in the always-on counter block beside `isr.entries` and `dpc.count`, so
+  one flush carries the arm of the sweep and its effect together.
+
+Three decisions in it that are the measurement's rather than taste:
+
+**The name is deliberately not 23.3's.** 23.3 proposes `XhciImodInterval` for
+a value that would ship, with a contract this one has not got - default 4000,
+floor 10, 4000 substituted for anything invalid. If the two shared a name, a
+bench machine left carrying an experimental setting would have it become
+load-bearing the moment a 23.3 build was installed over the top. Under a
+separate name a leftover is inert.
+
+**Absent means the start writes no IMOD at all** - which is exactly the driver
+as it shipped. So the experimental binary is its own control: the same `.sys`
+with the value unset is the 4000 arm of the sweep, and no rebuild separates
+the baseline from the readings. A missing value, a failed read and a NULL
+service in the packet all land there, and none of them can fail a start.
+
+**A value IMODI cannot carry is refused, not clamped.** IMODI is bits 15:0
+and IMODC is 31:16, so writing a larger value whole would set an interrupt
+*counter* while the run sheet recorded an interval, and masking would write
+4464 for a typed 70000 and look like it worked. Refusing leaves the register
+alone and `imod.exp.refused` at 1, so the reading is visibly absent instead of
+quietly wrong. **Zero is not refused**: it is moderation off, the far end of
+the sweep, and `imod.exp.status` is what tells a deliberate 0 from a machine
+that has no value set.
+
+### The sweep, when the bench is to hand
+
+Not taken. This is the procedure it is waiting for.
+
+Build once: `set XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT` then
+`scripts\build-driver.cmd release`. The `release` flavour, not `qemu` - this is
+bare metal, and `qemu`'s port-`0xE9` mirror must never leave the emulator. Put
+that one `.sys` on the machine.
+
+Per value, in the driver's own software key - the same key `XhciLogVerbosity`
+goes in, whose instance number is fixed by nothing on either target and has to
+be found by content:
+
+1. Set `XhciImodExperiment` (`REG_DWORD`, 250 ns units). `scripts/bench/`
+   carries a helper per target: `IMOD.BAT` on the NT side, which finds the key
+   itself through `reg.exe`, and `IMOD98.BAT` on Windows 98 and ME, which has
+   a `FIND` step for the instance number and takes the ladder steps by name
+   because COMMAND.COM cannot convert a decimal to the hex a `REGEDIT4` dword
+   needs. `scripts/bench/README.md` says why that is two files.
+2. **Reboot**, and confirm it took: `XHCISNAP -verbosity 2`, then
+   `imod.exp.written` 1 and `imod.exp.readback` equal to what was asked. A
+   figure taken without that check is not attributable to an interval.
+
+   A reboot rather than a Device Manager disable and re-enable, on **both**
+   targets and for two different measured reasons. On Windows 98, disabling any
+   USB host controller devnode bugchecks the machine before the teardown
+   completes (`build-and-test.md`, "Do not disable the controller in Device
+   Manager"). On the E460 under 32-bit Windows 7, the first Disable of this
+   controller never finished (`runs/run-22.md`, task 22.9). The sweep is nine
+   reboots on either target; plan it that way rather than discovering it.
+3. Run the workload. Take `XHCISNAP` at the start and at the end, noting the
+   wall-clock gap, so `isr.entries` and `dpc.count` give a rate rather than a
+   total.
+
+The ladder: **unset** (the control - no IMOD write, hardware's own 4000),
+then 4000, 2000, 1000, 500, 200, 100, 40, 10. Take the control first and
+again last; a machine that has drifted between them has invalidated the run,
+and that is the cheapest way to find out.
+
+**Unset and 0 are different arms and neither substitutes for the other.**
+Unset means the start writes no IMOD at all, which is the shipping driver, so
+the same binary with nothing set is the baseline and no rebuild separates it
+from the readings. 0 is moderation off. The driver tells them apart by
+`imod.exp.status`, not by the value, which is why the read's status is a note
+of its own.
+
+The workloads, per the roadmap: sustained mass-storage **read** and sustained
+mass-storage **write**, and a USB Ethernet transfer. Each long enough that the
+figure is a rate and not a burst.
+
+**And an isochronous stream playing throughout at least one pass**, which the
+roadmap asks for and which is the half most likely to be skipped: 1,000 events
+a second at Full Speed and 8,000 at High Speed is what moderation exists to
+absorb, and per-interrupt cost at real rates is what has bugchecked Windows 98
+on bare metal before. A throughput number taken with the bus otherwise idle
+does not answer the question the register is for.
+
+Targets, in the roadmap's order: the E460 under **Windows 98 SE** first, and
+under **32-bit Windows 7** if to hand.
+
+Worth adding while the rig is set up, because nothing else can take it: **one
+suspend/resume cycle with a nonzero value set**, reading `imod.exp.readback`
+against IMOD after the resume. That is the only way to exercise the F10 fix
+above against a value that is not 0.
+
+### Results
+
+Blank until the bench runs. Two `XHCISNAP` dumps a known time apart per cell;
+`isr/s` and `dpc/s` are derived, not read.
+
+| Value | Workload | MB/s | isr/s | dpc/s | Notes |
+|---|---|---|---|---|---|
+| unset (control) | | | | | |
+| 4000 | | | | | |
+| 2000 | | | | | |
+| 1000 | | | | | |
+| 500 | | | | | |
+| 200 | | | | | |
+| 100 | | | | | |
+| 40 | | | | | |
+| 10 | | | | | |
+| unset (repeat) | | | | | |
+
+### The stop rule, as the roadmap set it
+
+If no value below 4000 measures faster outside run-to-run noise: record the
+numbers in `lessons.md`, leave the start not writing IMOD - which is where it
+already is, since the write is behind a define that no shipping build sets -
+and **close 23.3 as not taken**. That outcome costs no revert: the shipping
+binary never changed.
+
+If a value does measure, 23.3 builds the registry value that ships, and which
+number becomes the default is the owner's decision and not this task's.
+
+### What 23.2 owes
+
+- The reading. Everything else here is preparation for it.
+- `lessons.md`, either way: the stop rule names it for a negative result, and
+  a positive one is a finding about the driver's interrupt path.
+- A line in `build-and-test.md` for the experimental build and its value, once
+  the procedure above has actually been run rather than written.
+- The two QEMU findings above are this task's to hand on even if the sweep
+  never happens, because they are about every reading this project has taken
+  in a guest and not about moderation: guests run at IMOD 0, metal at 4000,
+  and the save/restore path has never carried a nonzero value.

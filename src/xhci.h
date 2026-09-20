@@ -549,6 +549,17 @@ XHCI_C_ASSERT(config_maxslotsen_is_defined,
 #define XHCI_ERSTBA_RSVDP_MASK   0x0000003FUL
 #define XHCI_ERSTBA_ADDR_MASK    0xFFFFFFC0UL
 
+/*
+ * The widest interval IMODI can carry, for the one caller that has to refuse a
+ * value rather than truncate it (task 23.2's experimental build). It is a
+ * bound, not a mask, and the difference is the point: masking a value that
+ * overflows IMODI writes a *different interval* and hides the mistake, while
+ * writing the whole word would set IMODC, which is a counter and not an
+ * interval at all. Bits 15:0, in 250 ns units (Table 5-39, p.392), so the
+ * widest interval this register expresses is 65535 * 250 ns, about 16.4 ms.
+ */
+#define XHCI_IMOD_IMODI_MAX      0x0000FFFFUL
+
 XHCI_C_ASSERT(erstsz_masks_partition_the_register,
               (XHCI_ERSTSZ_RSVDP_MASK & XHCI_ERSTSZ_DEFINED_MASK) == 0 &&
               (XHCI_ERSTSZ_RSVDP_MASK | XHCI_ERSTSZ_DEFINED_MASK) ==
@@ -7812,6 +7823,36 @@ typedef struct _XHCI_EXTENSION {
      */
     XHCI_LOG Log;
 
+#ifdef XHCI_IMOD_EXPERIMENT
+    /*
+     * Roadmap task 23.2's moderation experiment, and **nothing here is in a
+     * shipping binary**: the whole block is behind a define only
+     * `XHCI_EXTRA_DEFINES` sets, which `src/sources` turns into
+     * `XHCI_DIAGNOSTIC_BUILD`, which is the marker `make-package.ps1` refuses
+     * to package. A build without the define is byte-for-byte the driver that
+     * was there before, IMOD included - the start still never writes it.
+     *
+     * It sits **after** `Log` and before the trailing pair on purpose, so that
+     * an experimental build perturbs no existing field's offset and
+     * `scripts\local\offsets.txt` taken from a shipping build still reads every
+     * counter out of an experimental one. Six ULONGs, an even number, so the
+     * amd64 parity `TrailingPad` exists to hold is unchanged too.
+     *
+     * What each one is for is the same thing the log switches learned: the
+     * registry service collapses "value absent", "buffer too small" and "key
+     * would not open" into one code, so the value alone cannot say whether
+     * anybody asked for anything. `ImodExperimentStatus` beside
+     * `ImodExperimentValue` is what tells a deliberate 0 - moderation off, the
+     * sweep's far end - from a machine where the value was never set.
+     */
+    ULONG ImodExperimentRead;       /* 1 = the read routine ran at all      */
+    ULONG ImodExperimentStatus;     /* MPSTATUS the registry service gave   */
+    ULONG ImodExperimentValue;      /* IMODI the registry asked for         */
+    ULONG ImodExperimentRefused;    /* asked for what IMODI cannot carry    */
+    ULONG ImodExperimentWritten;    /* 1 = the start wrote IMOD             */
+    ULONG ImodExperimentReadback;   /* IMOD as it read straight after       */
+#endif
+
     /*
      * Keeps `TrailingSignature` the **last word** of the amd64 layout, which
      * `test_packet_amd64` asserts and which is what makes the signature pair
@@ -7827,6 +7868,13 @@ typedef struct _XHCI_EXTENSION {
 
     ULONG TrailingSignature;
 } XHCI_EXTENSION, *PXHCI_EXTENSION;
+
+#ifdef XHCI_IMOD_EXPERIMENT
+/* Task 23.2, experimental builds only. Defined in src/xhci_dispatch.c beside
+ * the read that fills the fields it tests; called from the start sequence in
+ * src/xhci_init.c, which is the only thing that writes IMOD. */
+ULONG XhciImodExperimentWanted(PXHCI_EXTENSION ext);
+#endif
 
 /*
  * ==================================================================

@@ -514,7 +514,11 @@ registry value whose default changes nothing.
 
 Status: open since 2026-09-19; **23.1 and 23.1.5 are both done** - the
 controller's property page is complete, 9x half and NT half, read on three 9x
-stacks and seven NT guests, and both INFs carry their line. 23.2 runs next.
+stacks and seven NT guests, and both INFs carry their line. **23.2 is open and
+half-taken**: its read-first question is settled (QEMU does not model IMODI,
+so the experiment is bare-metal or nothing), the experimental build and the
+bench helpers exist, and what it waits on is the reading itself, which needs
+the E460.
 23.1 was started and finished on
 2026-09-20 on branch `23.1`, its host side, **all three guest legs** (Windows
 98 SE under NUSB and under SweetLow, and Windows ME) and the three documents
@@ -681,7 +685,29 @@ the hub half of item 2 before the root-port half, and both before item 1.
   now current, `docs/issues/README.md` moved with issue 6, and `lessons.md`
   carries the NT 6.x by-hand trap. **23.7 inherits nothing from this task.**
 
-- [ ] 23.2 the moderation experiment. The register is IR0's IMOD: IMODI is
+- [ ] 23.2 the moderation experiment. **The read-first question is answered
+  and the host side is built; the reading is what remains** (2026-09-20,
+  branch `23.2`; `runs/run-23.md` has the detail). **QEMU does not model
+  IMODI**: `hw/usb/hcd-xhci.c` at `v11.1.0` stores `imod`, returns it, resets
+  it and migrates it, and no code path consults it, so no rate can come out of
+  a guest and this stays a real-hardware reading. Two findings fell out of
+  that which are not about moderation: the model **resets IMOD to 0 where
+  hardware resets it to 4000**, so every guest reading this project has taken
+  ran unmoderated and every metal reading at 1 ms; and `xhciRestoreState`'s
+  IMOD write - the 2026-09-05 audit's F10 fix - has therefore only ever been
+  exercised with 0, which an experimental build is the first thing that can
+  change. The experimental build exists, behind `XHCI_IMOD_EXPERIMENT` via
+  `XHCI_EXTRA_DEFINES`, so no shipping binary changed (the `release` `.sys`
+  links at the same size as `HEAD`'s) and the import gate lists the same
+  twelve pairs. **The owner chose the registry route over a compile-time
+  constant** on 2026-09-20, so one binary sweeps the ladder: the value is
+  `XhciImodExperiment`, read beside the two log values through
+  `UsbPortGetMiniportRegistryKeyValue` with no new import, **deliberately not
+  23.3's `XhciImodInterval`** so a setting left on a bench machine stays inert
+  under a later shipping build. Absent means the start writes no IMOD at all,
+  which makes the experimental binary its own control. `scripts/bench/`
+  carries `IMOD.BAT` and `IMOD98.BAT` for setting it on either target.
+  The register is IR0's IMOD: IMODI is
   bits 15:0 in 250 ns units and resets to 4000, 1 ms
   (`xhci-data-structures.md`, Table 5-39 p.392). The start never writes it
   and `xhciRestoreState` writes back what the save read, so every run to date
