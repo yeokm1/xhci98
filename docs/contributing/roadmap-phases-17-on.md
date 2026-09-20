@@ -515,7 +515,7 @@ registry value whose default changes nothing.
 Status: open since 2026-09-19; 23.1 started 2026-09-20 on branch `23.1`, its
 host side done and **all three guest legs taken** the same day - Windows 98 SE
 under NUSB and under SweetLow, and Windows ME - leaving only the documents
-owed to 23.7 and the NT half, which 23.8 carries. `1.1.0.0` was uploaded on
+owed to 23.7 and the NT half, which 23.6.5 carries. `1.1.0.0` was uploaded on
 2026-09-20, so the hold on merging this branch is lifted. Which version
 carries the result is not decided: 23.3, 23.4 and 23.5 are driver code, so the
 third field moves if any of them lands (`releases/README.md`). The owner's
@@ -541,7 +541,7 @@ the hub half of item 2 before the root-port half, and both before item 1.
   (owner, 2026-09-20): the pair it takes is known and all three NT references
   write it, but one `[Xhci.AddReg.NT]` serves four install paths and the page
   has been opened in none of their guests, so `PROP-NTHALF` refuses it until
-  those readings exist. **23.8 carries it**, and the route there is to take
+  those readings exist. **23.6.5 carries it**, and the route there is to take
   the reading by hand in regedit before any INF changes. Of the three things
   owed before the line ships, two
   are answered `static`: "Disable USB error detection" names
@@ -670,17 +670,15 @@ the hub half of item 2 before the root-port half, and both before item 1.
   owes is a design record with the decision, the split into releases, and
   which slice if any this phase carries. **Never write "fixed" for issue 6
   until the High-Speed report itself is gone.**
-- [ ] 23.7 the record: the release notes' known limitations brought into
-  line with whatever 23.1 and 23.4 to 23.6 change, and `docs/issues/06` and
-  `docs/issues/README.md` updated. Replying on the GitHub issue, and closing
-  it, are the owner's and not a task. **Run this after 23.8**, which either
-  adds the NT half or closes it with evidence, since this task records the
-  outcome either way.
-- [ ] 23.8 the NT half of the property page, **deferred by the owner on
-  2026-09-20 and to be settled rather than left open**. It is numbered last
-  because it follows 23.1, not because it runs last; it should run **before**
-  23.7. Windows 2000 is a co-primary target, so the tab shipping on 9x alone
-  is an asymmetry between primaries and not a cosmetic gap. What the line
+- [ ] 23.6.5 the NT half of the property page, **deferred by the owner on
+  2026-09-20 and to be settled rather than left open**. It follows 23.1, whose
+  9x half shipped, and runs before 23.7, which records its outcome either way.
+  **The fractional id is deliberate**: it is inserted between two existing
+  tasks, and `roadmap.md` holds that such a task takes a fractional id and
+  nothing is renumbered, because ids are cited from `docs/` and the evidence
+  logs - 23.7 is already cited in `runs/run-23.md` and in this branch's commit
+  messages. Windows 2000 is a co-primary target, so the tab shipping on 9x
+  alone is an asymmetry between primaries and not a cosmetic gap. What the line
   would be is already recorded in `src/xhci98.inf`, together with its
   evidence: `HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"`
   plus `HKR,,Controller,1,01`, which is what all three NT references write for
@@ -713,6 +711,13 @@ the hub half of item 2 before the root-port half, and both before item 1.
   buttons as on 9x, because `sysclass.dll` is 16-bit and 9x-only - so a
   provider failure there loses the entire tab instead of degrading to "Data
   Access Error".
+
+- [ ] 23.7 the record: the release notes' known limitations brought into
+  line with whatever 23.1 and 23.4 to 23.6.5 change, and `docs/issues/06` and
+  `docs/issues/README.md` updated. Replying on the GitHub issue, and closing
+  it, are the owner's and not a task. It runs last: 23.6.5 either adds the NT
+  half or closes it with evidence, and this task records that outcome along
+  with the rest.
 
 Checkpoint (draft, tightened as 23.2 and 23.6 report): on Windows 98 SE and
 Windows 2000 SP4, a Low-Speed interrupt device behind a USB 2.0 hub works at
