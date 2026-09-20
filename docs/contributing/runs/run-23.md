@@ -405,14 +405,189 @@ SweetLow guest had both, at `C:\WINDOWS\SYSTEM\USBUI.DLL`, 147,456 B,
 `04-23-99 10:22p` - byte-identical in size to Leg A's. It is recorded under
 Leg C, A4, and its result is that **the exports win**.
 
-### Leg B - Windows ME (target `2e`, `vm/winme.img`, monitor 56597): OWED
+### Leg B - Windows ME under SweetLow's stack: TAKEN 2026-09-20
 
-SweetLow's stack only (`build-and-test.md`, "Windows ME target VM"), from the
-`winme-sweetlow-driver` snapshot. As Leg A's A0/A2/A3. The static reading says
-Windows ME's `sysclass.dll` is the same module string for string, so this is a
-confirmation rather than an open question - but Windows ME's `SYSTRAY.EXE`
-lacks `USBErrorMessagesEnable`, so whether the box has any visible effect
-there is genuinely open; the registry write is what B3 reads.
+**The vehicle is not the one planned.** The plan named the
+`winme-sweetlow-driver` snapshot; the owner stopped the first launch on the
+ground that it already carries an xhci98 driver and so cannot produce a clean
+`BEFORE`. A new base was built instead - the ME analogue of
+`sweetlow-2a.img`'s `sweetlow-stack-nodriver`, by the same recipe:
+`vm/winme.img` reverted to `winme-clean-install` (stock ME: no USB 2.0 stack,
+no driver), SweetLow's `USB2.INF` installed by hand from `vm\T231\SWEETLOW`,
+a Start-menu shutdown, and the result snapshotted as
+**`winme-sweetlow-nodriver`**, which the owner asked to keep permanently.
+Everything below therefore rests on a genuine **fresh first install** of
+`BEFORE`, as Leg C's did, rather than on an upgrade over something. The leg
+ran on a local work copy (`-WorkDir`), `vm/winme.img` being in a synced tree,
+and was copied back after a clean shutdown.
+
+**A second reason this vehicle is the right one, not known when the leg was
+planned.** SweetLow's `USB2.INF` writes, in `[EHCI.AddReg]`, the line
+
+    HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"
+
+character for character the line this task adds, for SweetLow's own EHCI
+controller; `[Usb2Hub.AddReg]` writes the hub's
+`"sysclass.dll,USBHubPropPage"`, and `[Composite.AddReg]` writes a bare
+`HKR,,EnumPropPages` clearing it for composite devices. So the directive under
+test is the one both back-ported stacks already use for their own controllers,
+and the root hub's page is a control this leg did not have to construct.
+
+**B1, the `BEFORE` install.** From `D:\T231\BEFORE` onto the undriven
+`PCI Universal Serial Bus` node. It asked to restart; the answer was No,
+followed by a Start-menu shutdown and a cold launch - the only route
+`lessons.md` records as working on an ME guest, since a warm restart wedges
+the 9x splash and `system_powerdown` hibernates ME rather than shutting it
+down.
+
+**B2, the baseline, and it is clean.** `USB 2.0 eXtensible Host Controller
+(xhci98)`, Manufacturer `xHCI98 Project`, Hardware version 001, tab strip
+**General, Driver, Resources and no Advanced**. General reports "This device
+is working properly", which is also the first observation of this driver
+registering and starting under SweetLow's stack on Windows ME from a fresh
+install rather than from the 2026-09-02 image.
+
+**B2c, the control, taken before the change.** The `USB 2.0 Root Hub` sheet
+reads **General, Power, Driver** - no Resources - and **Power properties**
+opens a working dialog: "The hub is self powered", "Total power available:
+500 mA per port", one row "8 port(s) available" at 0 mA. The 8 matches QEMU's
+`p2=8`.
+
+**That dialog also answers a question A4 left open for this target.** A4
+established that on 9x `sysclass.dll` draws the tabs and `usbui.dll` the
+dialogs behind their buttons, so a missing `usbui.dll` would make Bandwidth
+Usage raise "Data Access Error" for a reason having nothing to do with this
+change. The hub's Power dialog rendering means **Windows ME has a working
+`usbui.dll`**, and it means it on a page this project did not add.
+
+**B3, the in-place upgrade, and it behaves as SweetLow does on 98 SE.** Update
+Driver to `D:\T231\AFTER`, run in place over the running driver - the route
+that is fatal on NUSB - **completed with no crash and did not ask for a
+restart at all**.
+
+**B4, the tab arrives on the same boot, with no reboot.** The strip becomes
+**General, Advanced, Driver, Resources**; the Advanced tab carries "USB
+Settings:" with a `Disable USB error detection` checkbox and a `Bandwidth
+Usage` button. So Windows ME keeps the upgrade's registry phase exactly as
+Windows 98 SE under SweetLow does, and the tab needs the registry write rather
+than a driver reload. Both 9x targets now show that, and both show it only
+under SweetLow's stack; NUSB is the one that loses the phase.
+
+**B5, the bandwidth ladder, and it repeats to the digit.** Bandwidth Usage
+read **System reserved 10 %** with no device, **11 %** with a Full-Speed mouse
+on a root port (QEMU `usb_version=1`, port 2, reported by the monitor at
+12 Mb/s), and **12 %** with a High-Speed mouse added (`usb_version=2`, port 3,
+480 Mb/s). **Both devices cost the same 1 %.** That is the 10 / 11 / 12 ladder
+Legs A and C produced, so it is now three USB 2.0 stacks across two operating
+systems, and **issue 6 visible in the user interface is neither an NUSB
+artifact nor a Windows 98 shell artifact**. Its limits are Leg A's: the
+Bandwidth dialog never itemises devices, so this is a delta measurement, and
+the behind-a-hub contrast was not taken here either.
+
+**B6, the checkbox writes what the static reading said.** With the box
+**ticked**, `ErrorCheckingEnabled` under
+`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Usb` reads REG_DWORD
+**0x00000000 (0)**; **unticked**, **0x00000001 (1)**. A persisting 0/1 toggle,
+not a create/delete, and the same inversion Leg A measured. Windows ME's
+`SYSTRAY.EXE` lacks `USBErrorMessagesEnable`, so whether the box has any
+visible effect on this target is **not established** - the write is what was
+read, and the write is what this task cares about, the value being
+machine-wide and this package writing nothing there.
+
+**B7, the control re-read, and it did not move.** The hub still reads
+**General, Power, Driver** with a working Power dialog, so the change touched
+only the controller's devnode. With both mice attached the dialog now
+itemises them: two rows of `USB Human Interface Device` at **100 mA** each and
+`6 port(s) available` at 0 mA, 8 - 2 = 6. Worth keeping on its own: **the
+hub's Power dialog itemises devices where the controller's Bandwidth dialog
+only ever shows "System reserved"**. Leg A recorded the Bandwidth page as a
+delta measurement only; that is a property of that dialog, not of `usbui.dll`.
+If issue 6 ever needs a per-device witness in the user interface, the hub's
+Power page is the one that gives it.
+
+**B9, the Windows CD: never asked for, at any point.** Three data points now:
+
+| Leg | OS | Stack | Install | CD asked |
+|---|---|---|---|---|
+| A | 98 SE | NUSB | upgrade | yes, for `usbui.dll`, already at dirid 11 |
+| C | 98 SE | SweetLow | fresh, then in-place upgrade | no |
+| B | ME | SweetLow | fresh, then in-place upgrade | no |
+
+A and C hold the operating system constant and differ in the stack, so the
+stack correlates and the OS does not. **That is a correlation across three
+runs with install type confounded alongside it, and nothing here establishes a
+mechanism.** It is a lead for the `COPYFLG_NO_OVERWRITE` finding owed to 23.7,
+not a conclusion.
+
+#### B8, read off the disk afterwards, and it found something the leg did not go looking for
+
+The guest `dir` was skipped on the argument that the stack's provenance was
+established by construction - stock ME ships no `usbport.sys`, this driver is
+a `usbport.sys` miniport, and it started. The files were then read out of the
+image with `7z e` instead, which costs no guest time, and the argument was
+right about what it would confirm and blind to what it would reveal.
+
+Stock `winme-clean-install` carries **no `USBPORT.SYS` at all** (the extract
+returned only the other file asked for), which verifies that documented claim
+directly rather than by inference, and `USBCCGP.SYS` at **18,288** bytes.
+After SweetLow's install the image carries `USBPORT.SYS` **134,912**,
+`USBEHCI.SYS` **20,224** and `USBHUB20.SYS` **50,560** - SweetLow's, matching
+the staged `vm\T231\SWEETLOW` sizes - and `USBCCGP.SYS` still at **18,288**,
+unchanged.
+
+**So the three files Windows ME never had were placed, and the one it already
+had was not overwritten.** That is not the INF declining to: `USB2.INF`'s
+`[Composite.CopyFiles]` is a bare `usbccgp.sys` with no copy flags, reached
+from `DefaultInstall`, so an unconditional overwrite was asked for.
+
+Two ordinary explanations were tested and both fail.
+
+**It is not a replacement queued for a restart that never came** (the
+operator's hypothesis, and the right one to test first). The snapshot taken
+immediately after the SweetLow install and shutdown, before any further boot,
+already carries `USBPORT.SYS` at 134,912 dated 23 Apr 2024 - SweetLow's file,
+placed - and `USBCCGP.SYS` at 18,288 dated **8 Jun 2000**, which is Windows
+ME's own; and the image carries **no `WININIT.INI`**, so nothing was queued
+for the next boot. The copy operation ran in that same install. The guest then
+cold booted several times before the file was read.
+
+**It is not the setup engine refusing to replace a newer file with an older
+one.** SweetLow's staged `usbccgp.sys` is **5.1.2600.2180** against Windows
+ME's **4.90.3000.1**, so the incoming file is the higher version and a version
+comparison would have permitted the overwrite.
+
+**The mechanism is therefore not established, and one candidate remains.**
+Windows ME's System File Protection fits the pattern exactly - ME is the 9x
+release that introduced it, and what survived is precisely the file ME itself
+ships while the three it never shipped were placed - but nothing here tested
+it, and it should not be written down as if it had been.
+
+It reaches past this leg: **a Windows ME composite-device observation rests on
+Windows ME's own `usbccgp.sys`, not on SweetLow's**, the composite audio
+device of roadmap task 18.4 included. `build-and-test.md`'s "Windows ME target
+VM" section describes the stack as SweetLow's without that qualification and
+is owed the correction.
+
+#### Two operating notes
+
+The Add New Hardware wizard does not appear, and Bandwidth Usage does not
+change, while a modal property sheet is open: the wizard is the shell's, and
+the shell is the process holding the sheet. Close the dialog and the sheet,
+let the wizard run, then re-open to read. Not a defect, and not C4's wedge -
+the ordinary 9x shell - though it happens to point the same way C4's
+operational rule does.
+
+`device_add usb-mouse` moves QEMU's host pointer to the new mouse (`info mice`
+shows the `*` move), and the guest has no driver for it until its wizard has
+run, so the operator's mouse appears to die. `mouse_set 2` pins it back to the
+PS/2 mouse. Host-side, nothing to do with the driver.
+
+#### What the leg left on the image
+
+Snapshots on `vm/winme.img`, in order: **`winme-sweetlow-nodriver`** (the
+permanent clean base), `winme-before-installed` (the `BEFORE` baseline, kept
+as the leg's fallback point), and `winme-23-1-after-tab` (the finished state,
+both mice attached). No device was ever detached, per C4.
 
 ### Leg C - Windows 98 SE under SweetLow's stack: TAKEN 2026-09-20
 
@@ -585,7 +760,15 @@ leg started. A future leg gets a fresh copy of it.
   should replace it. Until then a Windows 98 + NUSB user upgrading into the
   release that carries this line does not get the tab.
 - `docs/issues/06-full-speed-root-port-bugcheck.md`: the A5 reading - issue 6
-  is now visible in the UI, in a dialog this task adds the button for.
+  is now visible in the UI, in a dialog this task adds the button for, and
+  B5 makes it three stacks across two operating systems rather than one
+  reading. B7 adds that the hub's Power page, unlike the Bandwidth page,
+  itemises devices, so it is the place a per-device witness would come from.
 - `docs/contributing/build-and-test.md`: the 9x root hub has a Power tab from
-  NUSB's own INF (A0b), which the `usbui.dll` sections do not say; and the
-  `COPYFLG_NO_OVERWRITE` prompt finding.
+  NUSB's own INF (A0b), which the `usbui.dll` sections do not say; the
+  `COPYFLG_NO_OVERWRITE` prompt finding; and **the "Windows ME target VM"
+  section describes the guest as running SweetLow's stack without saying that
+  `usbccgp.sys` is Windows ME's own** (B8). Three of the four files are
+  SweetLow's and the composite driver is not, so a Windows ME composite-device
+  observation - task 18.4's composite audio device included - rests on Windows
+  ME's `usbccgp.sys`. The mechanism that preserved it is not established.

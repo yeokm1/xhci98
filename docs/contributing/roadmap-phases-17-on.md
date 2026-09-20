@@ -567,7 +567,29 @@ the hub half of item 2 before the root-port half, and both before item 1.
   dialogs - and every place saying otherwise (this file's item 3 note,
   `src/xhci98.inf`'s comment, `build-and-test.md`) needs correcting; the
   decision to copy it since `1.0.2.0` stands and only its stated reason
-  changes. **Still owed**: Windows ME (Leg B). Two consequences for the owner:
+  changes. **Leg B, Windows ME, was taken the same day and every guest leg is
+  now in.** It ran on a base built for it - the owner refused the planned
+  `winme-sweetlow-driver` snapshot because it already carries a driver, so
+  stock `winme-clean-install` plus SweetLow's `USB2.INF` was snapshotted as
+  **`winme-sweetlow-nodriver`** and kept permanently, giving a fresh first
+  install as Leg C had. Windows ME reproduced every clause: the baseline with
+  no Advanced tab, an **in-place Update Driver that completed with no crash
+  and asked for no restart**, the tab present **on the same boot**, the
+  10 / 11 / 12 % ladder to the digit, and `ErrorCheckingEnabled` 0 ticked /
+  1 unticked. So the registry phase survives an in-place upgrade on **both**
+  9x targets under SweetLow's stack and on neither under NUSB, and **issue 6
+  in the user interface is now three stacks across two operating systems** -
+  neither an NUSB nor a Windows 98 shell artifact. The root hub's page was
+  the control throughout and did not move; its rendering also proves Windows
+  ME has a working `usbui.dll`, which A4 made a precondition for reading the
+  Bandwidth dialog at all. **One finding outside this task's subject** (B8):
+  SweetLow's install places `usbport.sys`, `usbehci.sys` and `usbhub20.sys`
+  but leaves Windows ME's own `usbccgp.sys` in place, although the INF asks
+  to overwrite it unconditionally - not a queued replacement and not a
+  version refusal, both tested and eliminated; the mechanism is **not
+  established**, and a Windows ME composite-device observation therefore
+  rests on Windows ME's composite driver, task 18.4's audio device included.
+  Two consequences for the owner:
   `PROP-MISSING` now fails every already-published INF, `1.1.0.0`'s included,
   so assembling its upload set after this refuses where it passed before -
   **decided 2026-09-20, upload `1.1.0.0` first, so nothing here merges until
