@@ -30,7 +30,7 @@ and the Bandwidth Usage dialog have all been read in a guest on every stack.
 Leg C also settled the `usbui.dll` conflict (A4) and showed that an in-place
 Update Driver, which NUSB cannot survive, delivers the line cleanly on
 SweetLow's stack; Leg B repeated that on Windows ME. The NT half is not this
-task's: it is deferred to roadmap task 23.6.5. What remains of task 23.1 is
+task's: it is deferred to roadmap task 23.1.5. What remains of task 23.1 is
 the merge.
 
 ### What landed

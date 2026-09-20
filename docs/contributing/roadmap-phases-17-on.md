@@ -515,8 +515,9 @@ registry value whose default changes nothing.
 Status: open since 2026-09-19; **23.1 is done** - started and finished on
 2026-09-20 on branch `23.1`, its host side, **all three guest legs** (Windows
 98 SE under NUSB and under SweetLow, and Windows ME) and the three documents
-it owed, all the same day, leaving only the merge. The NT half is 23.6.5's.
-`1.1.0.0` was uploaded on
+it owed, all the same day, leaving only the merge. **The NT half is 23.1.5's,
+and the owner moved it there from 23.6.5 on 2026-09-20 so that it runs next**,
+beside the 9x half rather than after the speed work. `1.1.0.0` was uploaded on
 2026-09-20, so the hold on merging this branch is lifted. Which version
 carries the result is not decided: 23.3, 23.4 and 23.5 are driver code, so the
 third field moves if any of them lands (`releases/README.md`). The owner's
@@ -542,7 +543,7 @@ the hub half of item 2 before the root-port half, and both before item 1.
   (owner, 2026-09-20): the pair it takes is known and all three NT references
   write it, but one `[Xhci.AddReg.NT]` serves four install paths and the page
   has been opened in none of their guests, so `PROP-NTHALF` refuses it until
-  those readings exist. **23.6.5 carries it**, and the route there is to take
+  those readings exist. **23.1.5 carries it**, and the route there is to take
   the reading by hand in regedit before any INF changes. Of the three things
   owed before the line ships, two
   are answered `static`: "Disable USB error detection" names
@@ -612,7 +613,62 @@ the hub half of item 2 before the root-port half, and both before item 1.
   `COPYFLG_NO_OVERWRITE` prompt finding with its three-leg tally, and B8's
   `usbccgp.sys` qualification of "Windows ME runs SweetLow's stack".
   `runs/run-23.md`'s "What 23.1 still owes the documents" lists what each one
-  gained. 23.7 keeps the rest of its brief: whatever 23.4 to 23.6.5 change.
+  gained. 23.7 keeps the rest of its brief: whatever 23.1.5 and 23.4 to 23.6
+  change.
+- [ ] 23.1.5 the NT half of the property page, **deferred by the owner on
+  2026-09-20 and to be settled rather than left open**. It follows 23.1
+  directly, whose 9x half shipped, and its outcome is recorded by 23.7 either
+  way. **The fractional id is deliberate**: it is inserted between two
+  existing tasks, and `roadmap.md` holds that such a task takes a fractional
+  id and nothing is renumbered, because ids are cited from `docs/` and the
+  evidence logs; `.5` means "between these two" and is not a sub-task, so this
+  is a task between 23.1 and 23.2 rather than a piece of 23.1.
+
+  **It was `23.6.5` for one day and the owner moved it here on 2026-09-20**,
+  to sit beside the 9x half it is the counterpart of rather than after the
+  speed work, and this phase's tasks are in the order they are meant to run -
+  so it now runs **next**, before 23.2. Every tracked citation moved with it
+  in the same change (`roadmap.md`'s rule: no tracked file cites a
+  pre-renumbering id). Two places keep the old number and cannot be edited:
+  the messages of commits `57f7b95` and `80a296f`, which is why this
+  paragraph names it. No published `readme.txt` ever carried either id - the
+  task postdates the `1.1.0.0` cut.
+
+  Windows 2000 is a co-primary target, so the tab shipping on 9x
+  alone is an asymmetry between primaries and not a cosmetic gap. What the line
+  would be is already recorded in `src/xhci98.inf`, together with its
+  evidence: `HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"`
+  plus `HKR,,Controller,1,01`, which is what all three NT references write for
+  their own EHCI controller (Windows 2000 SP4 `USB.INF`, Windows XP SP3
+  `usbport.inf`, Windows Vista SP2 `usbport.inf`), and the provider is present
+  on every NT path this package installs on. **What holds it back is neither
+  the evidence nor the file**: one `[Xhci.AddReg.NT]` serves four install
+  paths - Windows 2000, 32-bit XP, and Vista and Windows 7 x86 through
+  `[Xhci.Dev6.NTx86]` - and the page has been opened against this controller
+  in none of their guests, which is what `PROP-NTHALF` refuses on.
+
+  **Take the reading before touching the INF, the way the 9x line was taken.**
+  The 9x directive was measured on 2026-09-07 by writing it **by hand in
+  regedit** on a guest and looking, months before it landed in a file. Do the
+  same here: on the xHCI-only Windows 2000 guest (`vm/win2k-xonly.img`) and on
+  Vista x86 (`vm/vista.img`), add the two values by hand to the controller's
+  driver key, re-open Device Manager, and record whether the tab appears and
+  whether its dialogs work. That is evidence with **no INF edit, no gate
+  change and no rebuild**, and if it fails nothing was spent. 32-bit XP is
+  nearly free if a guest is already warm and is the middle case between the
+  two. Only a passing reading makes the INF work worth doing.
+
+  **Two things to get right when it does land.** It must go into
+  `src/xhci98-amd64.inf` in the same change or the two files drift, which is
+  the gate's rule and not a preference - that couples the INF work to both
+  packages, though it does not require an x64 reading. And `PROP-NTHALF` has
+  to be relaxed deliberately, with the guest readings named, rather than
+  deleted. **Read A4 carefully when interpreting the result**: on NT,
+  `usbui.dll` provides the *whole* page, not merely the dialogs behind its
+  buttons as on 9x, because `sysclass.dll` is 16-bit and 9x-only - so a
+  provider failure there loses the entire tab instead of degrading to "Data
+  Access Error".
+
 - [ ] 23.2 the moderation experiment. The register is IR0's IMOD: IMODI is
   bits 15:0 in 250 ns units and resets to 4000, 1 ms
   (`xhci-data-structures.md`, Table 5-39 p.392). The start never writes it
@@ -682,55 +738,13 @@ the hub half of item 2 before the root-port half, and both before item 1.
   owes is a design record with the decision, the split into releases, and
   which slice if any this phase carries. **Never write "fixed" for issue 6
   until the High-Speed report itself is gone.**
-- [ ] 23.6.5 the NT half of the property page, **deferred by the owner on
-  2026-09-20 and to be settled rather than left open**. It follows 23.1, whose
-  9x half shipped, and runs before 23.7, which records its outcome either way.
-  **The fractional id is deliberate**: it is inserted between two existing
-  tasks, and `roadmap.md` holds that such a task takes a fractional id and
-  nothing is renumbered, because ids are cited from `docs/` and the evidence
-  logs - 23.7 is already cited in `runs/run-23.md` and in this branch's commit
-  messages. Windows 2000 is a co-primary target, so the tab shipping on 9x
-  alone is an asymmetry between primaries and not a cosmetic gap. What the line
-  would be is already recorded in `src/xhci98.inf`, together with its
-  evidence: `HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"`
-  plus `HKR,,Controller,1,01`, which is what all three NT references write for
-  their own EHCI controller (Windows 2000 SP4 `USB.INF`, Windows XP SP3
-  `usbport.inf`, Windows Vista SP2 `usbport.inf`), and the provider is present
-  on every NT path this package installs on. **What holds it back is neither
-  the evidence nor the file**: one `[Xhci.AddReg.NT]` serves four install
-  paths - Windows 2000, 32-bit XP, and Vista and Windows 7 x86 through
-  `[Xhci.Dev6.NTx86]` - and the page has been opened against this controller
-  in none of their guests, which is what `PROP-NTHALF` refuses on.
-
-  **Take the reading before touching the INF, the way the 9x line was taken.**
-  The 9x directive was measured on 2026-09-07 by writing it **by hand in
-  regedit** on a guest and looking, months before it landed in a file. Do the
-  same here: on the xHCI-only Windows 2000 guest (`vm/win2k-xonly.img`) and on
-  Vista x86 (`vm/vista.img`), add the two values by hand to the controller's
-  driver key, re-open Device Manager, and record whether the tab appears and
-  whether its dialogs work. That is evidence with **no INF edit, no gate
-  change and no rebuild**, and if it fails nothing was spent. 32-bit XP is
-  nearly free if a guest is already warm and is the middle case between the
-  two. Only a passing reading makes the INF work worth doing.
-
-  **Two things to get right when it does land.** It must go into
-  `src/xhci98-amd64.inf` in the same change or the two files drift, which is
-  the gate's rule and not a preference - that couples the INF work to both
-  packages, though it does not require an x64 reading. And `PROP-NTHALF` has
-  to be relaxed deliberately, with the guest readings named, rather than
-  deleted. **Read A4 carefully when interpreting the result**: on NT,
-  `usbui.dll` provides the *whole* page, not merely the dialogs behind its
-  buttons as on 9x, because `sysclass.dll` is 16-bit and 9x-only - so a
-  provider failure there loses the entire tab instead of degrading to "Data
-  Access Error".
-
 - [ ] 23.7 the record: the release notes' known limitations brought into
-  line with whatever 23.4 to 23.6.5 change, and `docs/issues/06` and
+  line with whatever 23.1.5 and 23.4 to 23.6 change, and `docs/issues/06` and
   `docs/issues/README.md` updated. **23.1's share of this is already done**,
   on branch `23.1` on 2026-09-20 and not left here: the three documents it
   found work for, listed in its entry above and in `runs/run-23.md`. Replying
   on the GitHub issue, and closing
-  it, are the owner's and not a task. It runs last: 23.6.5 either adds the NT
+  it, are the owner's and not a task. It runs last: 23.1.5 either adds the NT
   half or closes it with evidence, and this task records that outcome along
   with the rest.
 

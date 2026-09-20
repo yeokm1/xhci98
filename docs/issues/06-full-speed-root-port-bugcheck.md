@@ -341,7 +341,7 @@ release after it (`../using/release-notes.md`, "Not in this release"). And
 this package registers no controller property page on Windows 2000, XP,
 Vista or Windows 7, so there is no equivalent dialog to open on any NT
 target: `PROP-NTHALF` holds that half until those guest readings exist
-(roadmap task 23.6.5).
+(roadmap task 23.1.5).
 
 ## 6. A USB 1.1 hub on a root port: harmless on Windows 98 and 2000, fatal on Vista and 7
 
