@@ -1,7 +1,10 @@
 # xhci98 - Release Notes
 
 This file describes package version `1.1.0.0`
-(`DriverVer=09/18/2026,1.1.0.0`), the fifth release. Where this file and
+(`DriverVer=09/18/2026,1.1.0.0`), the fifth release. One section below, "Not
+in this release: the controller's Advanced tab", describes something the
+release *after* this one adds, and says so in its heading; everything else
+here is `1.1.0.0`. Where this file and
 `docs/contributing/roadmap.md`, `docs/contributing/build-and-test.md` or
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
@@ -123,6 +126,57 @@ and ask none of this.
   out of the running driver by `XHCISNAP.EXE` when you ask for a report; see
   "The log, and how to send one".
 
+## Not in this release: the controller's Advanced tab
+
+The release **after** `1.1.0.0` adds an **Advanced** tab to the xHCI
+controller's own properties in Device Manager on Windows 98 SE and Windows
+ME. `1.1.0.0` does not have it: its INF does not name that page, so a
+`1.1.0.0` install shows the controller's usual General, Driver and Resources
+and nothing else. It is described here because this is the file that says
+what each release gives you, and because the upgrade note at the end of this
+section decides whether you get it at all.
+
+What appears on it is Windows' own, and is what Windows' own USB controllers
+have carried since Windows 98: a **Disable USB error detection** checkbox and
+a **Bandwidth Usage** button. This package adds no code for it. It adds one
+line to its INF naming the page Windows already has - the same line both USB
+2.0 stacks write for their own EHCI controller.
+
+- **Disable USB error detection** is a Windows system-tray setting, not a
+  setting of this driver's. Ticking it writes `ErrorCheckingEnabled = 0`
+  under `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Usb`,
+  and unticking it writes `1` rather than deleting the value. That key is
+  machine-wide rather than this controller's, so it covers every USB
+  controller on the machine and it outlives this driver's removal. The
+  package never writes there itself; the box only quiets reporting the
+  machine already does.
+- **Bandwidth Usage** shows what the bus has reserved. Its figures are
+  computed from the speed Windows was told, so a Full-Speed device in a root
+  port is costed as a High-Speed one: a Full-Speed mouse and a High-Speed
+  mouse each added the same 1 % on all three stacks, where on a real
+  Full-Speed bus the first would cost far more. Low-Speed devices are
+  reported the same way and not separately measured. That is the High Speed
+  report under "Known limitations" becoming visible for the first time, not a
+  second fault. The
+  dialog itself is `usbui.dll`'s, which this package has placed since
+  `1.0.2.0`; see "Installing".
+
+Windows 2000, Windows XP, Windows Vista and Windows 7 are not included. Those
+systems draw the same page through a different provider, and it has not been
+opened against this controller on any of them yet.
+
+**On Windows 98 with NUSB, upgrading into that release does not give you the
+tab.** An upgrade over a running xhci98 crashes that stack and loses the step
+that writes the line (see "Known limitations"), so the file is replaced and
+the tab is absent. The rename-and-restart route in that same entry is what
+delivers it. With SweetLow's stack, on Windows 98 SE or Windows ME, an
+ordinary *Update Driver* is enough: no crash, no restart asked for, and the
+tab is there the moment the properties are re-opened.
+
+All of this was measured in virtual machines on 2026-09-20, on the three 9x
+stacks this project runs - Windows 98 SE under NUSB 3.3 and under SweetLow's,
+and Windows ME under SweetLow's - and never on real hardware.
+
 ## Requirements
 
 | | |
@@ -222,9 +276,12 @@ have, so they appear either way. But the buttons on them - the controller's
 pages that `usbui.dll` draws, and without the file both answer "Data Access
 Error" instead. `sysclass.dll` reaches across to it by name, so the tab works
 and the button does not. Installing this package places the file, so on a
-machine that has installed `1.0.2.0` or later both buttons work. (Measured on
-Windows 98 SE; Windows ME carries the same `sysclass.dll` module but was not
-itself read.)
+machine that has installed `1.0.2.0` or later both buttons work. (The error
+was measured on Windows 98 SE, by renaming the file away. Windows ME carries
+the same `sysclass.dll` module and was read with the file present on
+2026-09-20, where both dialogs opened; the rename was not repeated there. The
+controller's **Bandwidth Usage** button is the one the next release adds - see
+"Not in this release".)
 
 On an xHCI-only Windows 98 machine that means an "Insert Disk" prompt naming
 the Windows 98 Second Edition CD-ROM during the copy, unless the Windows
@@ -239,6 +296,11 @@ previous install did not, and that is expected rather than a fault.
 `usbui.dll` is new in `1.0.2.0`, so a Windows 98 or Windows ME machine that
 already has `usbd.sys` and `usbhub.sys` from an earlier install may still not
 have it. It sits on the same cabinet as those two, so the same CD answers it.
+And a machine that *does* have the file can be asked for it anyway: a Windows
+98 upgrade asked for `usbui.dll` although the copy was already in
+`C:\WINDOWS\SYSTEM` (measured 2026-09-20). Nothing is wrong, and the CD is not
+needed for it - giving the prompt `C:\WINDOWS\SYSTEM`, the folder the file is
+already in, satisfies it at once.
 
 Windows 2000 and Windows XP take theirs from the driver cache
 every install has and ask for nothing: on 32-bit Windows XP all four out of
@@ -325,13 +387,30 @@ because a user meets them through this driver.
   loses its registry phase. To remove the driver without a crash, rename
   `C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS` to `XHCI98.SAV` from an MS-DOS
   prompt, reboot, rename it back inside Windows without pressing *Refresh*,
-  then use *Remove*. After an upgrade, right-click `xhci98.inf` -> *Install*
-  to deliver the registry values the crashed phase did not. Windows 2000
-  disables, re-enables, uninstalls and upgrades the same binary cleanly.
+  then use *Remove*. **To upgrade without a crash, start with the same
+  rename**: rename `XHCI98.SYS` to `XHCI98.SAV` from an MS-DOS prompt, shut
+  the machine down and start it again (a warm restart wedges Windows 98 at
+  its splash screen), then *Update Driver* onto the new package - with no
+  driver loaded there is no controller to stop, so it finishes normally and
+  its registry step runs - and shut down and start again. That is the only
+  route measured to deliver a new package's registry settings on this stack,
+  and those settings are what the next release's Advanced tab needs.
+  **Do not rely on right-click `xhci98.inf` -> *Install* for this.** These
+  notes and the download's `readme.txt` have said to, `1.1.0.0`'s included,
+  and it does not do the job: that route copies files and writes no registry
+  value at all since `1.1.0.0`, when the machine-wide selective-suspend
+  setting went; and in no release could it write a setting that belongs to
+  the device itself, which is the kind the crashed step loses. The file it
+  would copy is already in place anyway - the crashed upgrade copies that
+  much. Windows 2000 disables, re-enables, uninstalls and upgrades the same
+  binary cleanly.
   The crash belongs to NUSB's `usbport.sys`, the Windows 2000 build: with
   SweetLow's XP-lineage build of the same stack (bundled in Windows 98
   QuickInstall 1.0.1 and later) the same Windows 98 system disables,
-  re-enables, removes and reinstalls this driver without crashing.
+  re-enables, removes and reinstalls this driver without crashing. An
+  in-place *Update Driver* over the running driver joined that list on
+  2026-09-20, measured on Windows 98 SE and on Windows ME: no crash, no
+  restart asked for, and the new package's registry settings delivered.
 - Windows 2000: installing a newer package over an older one is refused
   ("A suitable driver for this device is already installed") because the
   setup engine records no driver date for this unsigned package. Delete the
@@ -489,9 +568,12 @@ because a user meets them through this driver.
   Edition CD-ROM) unless the Windows CABs are on the hard disk. That is
   Windows fetching its own `usbd.sys`, `usbhub.sys` and `usbui.dll`, which the
   package does not carry; see "Installing". An upgrade can raise it where the
-  previous install did not, because `usbui.dll` is new in `1.0.2.0`. Cancelling the prompt leaves the USB 2.0
+  previous install did not, because `usbui.dll` is new in `1.0.2.0`, and it can
+  raise it for a file the machine already has, which the same section covers.
+  Cancelling the prompt leaves the USB 2.0
   Root Hub at Code 2 until the driver is installed again with the CD at
-  hand. Measured on 2026-09-02 in a virtual machine with no CABs on disk.
+  hand. Measured on 2026-09-02 in a virtual machine with no CABs on disk, and
+  again on 2026-09-20 for the already-present file.
 
 ## Licensing
 

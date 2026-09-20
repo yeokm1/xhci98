@@ -1677,6 +1677,45 @@ at the console, the host side through `prepare-image.ps1`):
   under Sound, video and game controllers; the controller and "USB 2.0 Root
   Hub" clean, no refusal counter moved.
 
+**"SweetLow's stack" on this guest is three files out of four, and
+`usbccgp.sys` is not one of them.** Read on 2026-09-20, statically, with
+`7z e` off the image (roadmap task 23.1, leg B8; `runs/run-23.md`). After
+SweetLow's `USB2.INF` `DefaultInstall` on a stock Windows ME guest the image
+carries `USBPORT.SYS` 134,912, `USBEHCI.SYS` 20,224 and `USBHUB20.SYS` 50,560
+- all SweetLow's, matching the staged files - and `USBCCGP.SYS` at **18,288**
+bytes, which is Windows ME's own (4.90.3000.1, 8 Jun 2000) and is what the
+stock `winme-clean-install` snapshot already carried. The same extract
+returned **no `USBPORT.SYS` at all** from that stock snapshot, which verifies
+directly, rather than by inference, this section's claim that the Windows ME
+CD ships none.
+
+So the three files Windows ME never had were placed and the one it already
+had was not replaced - and that is not the INF declining to. SweetLow's
+`[Composite.CopyFiles]` is a bare `usbccgp.sys` with **no copy flags**,
+reached from `DefaultInstall`, so an unconditional overwrite was asked for.
+Two ordinary explanations were tested and both fail. It is **not a
+replacement queued for a restart that never came**: the snapshot taken
+immediately after the install and the shutdown, before any further boot,
+already holds SweetLow's `usbport.sys`, holds `usbccgp.sys` at Windows ME's
+own size and date, and the image carries no `WININIT.INI`, so nothing was
+queued for the next boot. And it is **not the setup engine refusing to
+replace a newer file with an older one**: the incoming file is 5.1.2600.2180
+against Windows ME's 4.90.3000.1, so a version comparison would have
+permitted the copy. **The mechanism is not established.** Windows ME's System
+File Protection fits the pattern exactly - ME is the 9x release that
+introduced it, and what survived is precisely the file ME itself ships - but
+nothing here tested it, and it must not be written down as the cause.
+
+**What that means for every Windows ME reading here.** A Windows ME
+composite-device observation rests on **Windows ME's own** composite driver,
+not on SweetLow's - the composite audio device of the run above, roadmap task
+18.4's, included; it bound under `usbccgp` and that is the file the OS
+shipped. Where this section and the documents that follow it say the Windows
+ME guest runs SweetLow's stack, read that as the port driver, the EHCI
+miniport and the USB 2.0 hub driver. The composite parent is the operating
+system's, and the `usbhub.sys` the Windows 98 install path copies is inert
+there for the reason the CD bullet above gives.
+
 What Windows ME became was settled by the owner as roadmap task 18.4: not a
 third first-class target with the full checkpoint tax `AGENTS.md` describes,
 but a supported-in-VM target stated the way Windows 2000's status is stated,
@@ -5234,14 +5273,45 @@ changing nothing else:
 The Power tab renders live data on both: "The hub is self-powered", "Total
 power available: 500 mA per port", and an attached-device list reading
 "4 port(s) available". No error box appears in the without case; the page is
-simply absent. Our own controller's tab row is unchanged either way, since
-this package registers no provider for it.
+simply absent. On those two targets our own controller's tab row is unchanged
+either way, since this package registers no provider for it there and
+`PROP-NTHALF` holds that half shut; the 9x half does register one since task
+23.1, and the next paragraphs are what that means.
 
-On Windows 98 and Windows ME the copy buys no tab at all, for the reason in
-the `EnumPropPages` bullet above: the 9x provider is `sysclass.dll`. It goes
-on the 9x paths by the owner's decision of 2026-09-07, because it is what
+On Windows 98 and Windows ME the copy buys **no tab** - the tabs there are
+`sysclass.dll`'s and both systems already have that file, for the reason in
+the `EnumPropPages` bullet above - but it does buy **the dialogs behind their
+buttons** (A4, 2026-09-20). Two 9x pages carry such a button, and only one of
+them is this package's:
+
+| page | registered by | what a missing `usbui.dll` costs |
+|---|---|---|
+| the USB 2.0 Root Hub's **Power** tab | the USB 2.0 stack's own `USB2.INF`, `[Usb2Hub.AddReg]`: `HKR,,EnumPropPages,,"sysclass.dll,USBHubPropPage"` - NUSB's and SweetLow's alike | the tab still renders; **Power properties** raises "Data Access Error" instead of the dialog |
+| the controller's **Advanced** tab | this package, since task 23.1 | the tab and its checkbox still render; **Bandwidth Usage** raises the same error |
+
+**The 9x root hub has had that Power tab all along, and nothing here said
+so** until 2026-09-20. The 2026-09-07 readings found the page on Windows 2000
+and Windows XP and filed it as an NT finding; the 9x root hub was evidently
+never opened. It was read twice on 2026-09-20: on Windows 98 SE under NUSB -
+General, Power, Driver, the dialog live with "The hub is self powered",
+"Total power available: 500 mA per port" and a device list reading
+"HID-compliant mouse 100 mA" and "7 port(s) available" (`runs/run-23.md`, leg
+A0b) - and on Windows ME under SweetLow's stack, the same three tabs and
+eight ports (leg B2c), itemising both attached mice at 100 mA each once they
+were bound (leg B7). Because the stack registers it and this package does
+not, it is the **control** every 23.1 leg used: task 23.1 writes to the
+controller's devnode key, so the hub's page must not move, and on all three
+legs it did not. It is also the cheapest way to tell whether a 9x guest has a
+working `usbui.dll` before reading anything of ours through it.
+
+It goes on the 9x paths by the owner's decision of 2026-09-07, because it is what
 Windows 98 SE's and Windows ME's own `USB.INF` place (`USBUI.CopyFiles=11`)
-and because one dirid-11 section then serves all four paths.
+and because one dirid-11 section then serves all four paths. That decision
+needs no revisiting and the INF does not change; what A4 changed is that
+those two reasons are no longer the only ones. A 9x machine that never had a
+USB controller - the owner's E460 is one - has `sysclass.dll` and no
+`usbui.dll`, so before `1.0.2.0` both buttons above were dead there, and
+installing this package is what makes them work.
 
 Where each target's `usbui.dll` comes from, read statically on 2026-09-07
 (7-Zip on the ISOs, `expand` on the `.IN_` files; nothing executed):
@@ -5416,6 +5486,43 @@ something:
 | `32` `COPYFLG_NO_VERSION_DIALOG` | do not copy if target is newer | Still replaces an equal-or-older file for no benefit, and asks for the CD to do it |
 | `64` `COPYFLG_OVERWRITE_OLDER_ONLY` | same, by version equality | Same objection |
 | `16` `COPYFLG_NO_OVERWRITE` | skip if present | Chosen |
+
+**Flag 16 skips the copy; it does not prevent the prompt.** The 9x file queue
+resolves a source for a file *before* `COPYFLG_NO_OVERWRITE` gets to skip it,
+so a machine that already has the file can still be asked for the CD.
+Measured on 2026-09-20 (`runs/run-23.md`, leg A2): an upgrade on a Windows 98
+SE guest under NUSB raised an Insert Disk prompt for `usbui.dll` although
+`C:\WINDOWS\SYSTEM\USBUI.DLL` was already there at 147,456 bytes - dirid 11,
+the exact destination this INF copies it to. Answering the prompt with
+`C:\WINDOWS\SYSTEM`, the folder the file is already in, satisfied it at once,
+and nothing was overwritten: the flag did its job one step after the ask. So
+"a machine that ever had a USB controller is asked for nothing" is a
+statement about the copy, not about the prompt, and the release notes'
+Insert Disk entry now says so too.
+
+**It is the same shape as the NT 6.x behaviour**, one step less severe. There
+the source the queue resolves is the OS's own driver-store package and the
+queue aborts rather than asking (`lessons.md`, "`COPYFLG_NO_OVERWRITE` does
+not save a source the queue cannot resolve"), which is what forced an NT 6.x
+install path naming none of the four files. On 9x the queue can resolve a
+source, so it asks and the install completes either way.
+
+**Three legs have now been read, and the stack is what correlates - with
+install type confounded alongside it:**
+
+| leg | OS | stack | install | source asked for |
+|---|---|---|---|---|
+| A | Windows 98 SE | NUSB 3.3 | in-place upgrade | **yes**, for `usbui.dll`, already at dirid 11 |
+| C | Windows 98 SE | SweetLow | fresh install, then an in-place upgrade | no |
+| B | Windows ME | SweetLow | fresh install, then an in-place upgrade | no |
+
+A and C hold the operating system constant and differ in the stack, so the
+stack correlates and the OS does not - but the install type differs in the
+same place, and three runs cannot separate two variables. **No mechanism is
+established, and none should be written down as if it were**; this is a lead
+for whoever takes the finding further. Leg C had the CD attached throughout,
+so that row says the queue was satisfied without asking rather than that an
+ask was answered.
 
 The gate enforces the wiring, because every way of breaking it is silent:
 `scripts/inf-gate/check-inf.ps1`'s `OS-*` family (`OS-LAYOUT`, `OS-MEDIA`,

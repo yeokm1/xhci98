@@ -512,10 +512,11 @@ reason; and one measurement of the owner's, whether an interrupt moderation
 interval below the reset default raises throughput, which if it does becomes a
 registry value whose default changes nothing.
 
-Status: open since 2026-09-19; 23.1 started 2026-09-20 on branch `23.1`, its
-host side done and **all three guest legs taken** the same day - Windows 98 SE
-under NUSB and under SweetLow, and Windows ME - leaving only the documents
-owed to 23.7 and the NT half, which 23.6.5 carries. `1.1.0.0` was uploaded on
+Status: open since 2026-09-19; **23.1 is done** - started and finished on
+2026-09-20 on branch `23.1`, its host side, **all three guest legs** (Windows
+98 SE under NUSB and under SweetLow, and Windows ME) and the three documents
+it owed, all the same day, leaving only the merge. The NT half is 23.6.5's.
+`1.1.0.0` was uploaded on
 2026-09-20, so the hold on merging this branch is lifted. Which version
 carries the result is not decided: 23.3, 23.4 and 23.5 are driver code, so the
 third field moves if any of them lands (`releases/README.md`). The owner's
@@ -534,7 +535,7 @@ item it answers. They are ordered easiest first rather than by the issue's
 numbering, and that order also keeps the reporter's advice of 2026-09-15:
 the hub half of item 2 before the root-port half, and both before item 1.
 
-- [ ] 23.1 item 5, the controller's property page. `runs/run-23.md` has the
+- [x] 23.1 item 5, the controller's property page. `runs/run-23.md` has the
   detail. **The line is in `[Xhci.AddReg]`** since 2026-09-20, the INF gate
   holds it there with a `PROP-*` family (seven rules, eight self-test cases),
   and the footprint has learned it. **The NT half is deferred, not refused**
@@ -599,8 +600,19 @@ the hub half of item 2 before the root-port half, and both before item 1.
   **decided 2026-09-20, upload `1.1.0.0` first, so nothing here merges until
   that upload has happened**; and on Windows 98 + NUSB an in-place upgrade
   loses its registry phase, so an upgrading user does not get the tab - the
-  release notes' documented remedy for that has been empty since `1.1.0.0`
-  and 23.7 must replace it.
+  release notes' documented remedy for that had been empty since `1.1.0.0`.
+  **The three documents this task found work for were taken on the same
+  branch on 2026-09-20 rather than left to 23.7**, since 23.1 is what read
+  them: the release notes carry the Advanced tab as the **next** version's
+  feature (`1.1.0.0` is uploaded without it) and the rename-and-cold-boot
+  upgrade route in place of the empty remedy; `docs/issues/06` carries the
+  A5/C3/B5 ladder as a new section 5.1, with what the reading is not and
+  where a per-device witness would come from; and `build-and-test.md` carries
+  the 9x root hub's Power tab and which INF registers it, the
+  `COPYFLG_NO_OVERWRITE` prompt finding with its three-leg tally, and B8's
+  `usbccgp.sys` qualification of "Windows ME runs SweetLow's stack".
+  `runs/run-23.md`'s "What 23.1 still owes the documents" lists what each one
+  gained. 23.7 keeps the rest of its brief: whatever 23.4 to 23.6.5 change.
 - [ ] 23.2 the moderation experiment. The register is IR0's IMOD: IMODI is
   bits 15:0 in 250 ns units and resets to 4000, 1 ms
   (`xhci-data-structures.md`, Table 5-39 p.392). The start never writes it
@@ -713,8 +725,11 @@ the hub half of item 2 before the root-port half, and both before item 1.
   Access Error".
 
 - [ ] 23.7 the record: the release notes' known limitations brought into
-  line with whatever 23.1 and 23.4 to 23.6.5 change, and `docs/issues/06` and
-  `docs/issues/README.md` updated. Replying on the GitHub issue, and closing
+  line with whatever 23.4 to 23.6.5 change, and `docs/issues/06` and
+  `docs/issues/README.md` updated. **23.1's share of this is already done**,
+  on branch `23.1` on 2026-09-20 and not left here: the three documents it
+  found work for, listed in its entry above and in `runs/run-23.md`. Replying
+  on the GitHub issue, and closing
   it, are the owner's and not a task. It runs last: 23.6.5 either adds the NT
   half or closes it with evidence, and this task records that outcome along
   with the rest.

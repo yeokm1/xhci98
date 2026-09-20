@@ -21,14 +21,17 @@ a reading.
 
 ## 23.1 - the controller's property page (GitHub issue 4 item 5)
 
-Status: **the host side is done, and both Windows 98 SE legs are read - NUSB
-(Leg A) and SweetLow (Leg C), both on 2026-09-20. Windows ME (Leg B) is the
-only guest leg still owed.** The Windows 98 line is in `src/xhci98.inf`, the
-INF gate has a `PROP-*` family holding it in place, the footprint has learned
-it, and the tab, the checkbox and the Bandwidth Usage dialog have all been
-read in a guest on both stacks. Leg C also settled the `usbui.dll` conflict
-(A4) and showed that an in-place Update Driver, which NUSB cannot survive,
-delivers the line cleanly on SweetLow's stack.
+Status: **done. The host side, all three guest legs and the documents were
+taken on 2026-09-20**, the legs being Windows 98 SE under NUSB (A), Windows
+98 SE under SweetLow's stack (C) and Windows ME under SweetLow's (B). The
+Windows 98 line is in `src/xhci98.inf`, the INF gate has a `PROP-*` family
+holding it in place, the footprint has learned it, and the tab, the checkbox
+and the Bandwidth Usage dialog have all been read in a guest on every stack.
+Leg C also settled the `usbui.dll` conflict (A4) and showed that an in-place
+Update Driver, which NUSB cannot survive, delivers the line cleanly on
+SweetLow's stack; Leg B repeated that on Windows ME. The NT half is not this
+task's: it is deferred to roadmap task 23.6.5. What remains of task 23.1 is
+the merge.
 
 ### What landed
 
@@ -748,6 +751,45 @@ copied back - so the copy carrying `USBUI.SAV` is discarded whole, and the
 leg started. A future leg gets a fresh copy of it.
 
 ### What 23.1 still owes the documents
+
+**All three were taken on 2026-09-20, on this branch, in one commit.** The
+list below is kept as it was written, because it is what was owed; what each
+document now carries is:
+
+- `docs/using/release-notes.md`: a new section, "Not in this release: the
+  controller's Advanced tab", which describes the tab as the **next**
+  release's and says `1.1.0.0` does not have it - the checkbox as a
+  machine-wide shell setting this package never writes, the Bandwidth Usage
+  figures as issue 6 arriving in the user interface, the NT half as not
+  included, and the NUSB upgrade as the case that does not get the tab. The
+  Known limitations entry for the Windows 98 controller-stop crash now
+  carries the rename-and-cold-boot upgrade route in place of the
+  right-click-`Install` remedy, and says why that remedy delivers nothing
+  (`[DefaultInstall]` writes no registry value since `1.1.0.0`, and never
+  wrote a devnode one); it also records that SweetLow's stack takes an
+  in-place upgrade. The Insert Disk material gained leg A2's finding: a
+  machine that already has the file can still be asked for it, and
+  `C:\WINDOWS\SYSTEM` answers the prompt.
+- `docs/issues/06-full-speed-root-port-bugcheck.md`: a new **section 5.1**,
+  carrying the A5/C3/B5 ladder as one table across the three stacks, what the
+  reading is not (the page's own arithmetic, not usbport's budget; deltas,
+  not attributions; no behind-a-hub contrast), and B7's point that the hub's
+  Power page is where a per-device witness would come from. The status
+  paragraph, section 5's cosmetic-effect note, three cells of the section 1
+  table, section 9's accounting item and the Sources list all point at it.
+  A new section number rather than an insertion: nothing was renumbered,
+  because other documents cite sections 6 and 7 by number.
+- `docs/contributing/build-and-test.md`: the 9x root hub's Power tab (A0b,
+  B2c, B7) and which INF registers it, as a table of the two 9x pages and
+  what a missing `usbui.dll` costs each, in "The files the OS supplies";
+  the `COPYFLG_NO_OVERWRITE` prompt finding with the three-leg tally, beside
+  the copy-flag table; and, in "Windows ME target VM", B8 - three of the four
+  files are SweetLow's and `usbccgp.sys` is Windows ME's own, both ordinary
+  explanations eliminated, the mechanism not established, and what that means
+  for task 18.4's composite reading.
+
+`docs/issues/README.md`'s issue 6 row gained a clause for section 5.1, so the
+index and the page agree.
 
 - `docs/using/release-notes.md`: the Advanced tab as a feature; **and two
   corrections**. The NUSB upgrade note's remedy - "right-click `xhci98.inf` ->
