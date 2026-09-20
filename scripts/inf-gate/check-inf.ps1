@@ -1090,11 +1090,45 @@ foreach ($m in $models) {
 # **No flags field.** FLG_ADDREG_TYPE_SZ is 0 and is spelled as an empty
 # field, which is how both reference INFs write it; a numeric flags field here
 # would be some other type for a value the shell reads as a string.
-$propPage = @{
-    Name     = "EnumPropPages"
-    Provider = '"sysclass.dll,USBControllerPropPage"'
-    Kind     = "9x"
-    Why      = "the 9x shell reads it to find the 16-bit class installer that draws the controller's Advanced tab (the 'Disable USB error detection' box and the Bandwidth Usage dialog). sysclass.dll is on every Windows 98 and Windows ME machine and this INF does not copy it"
+# Both halves are written now. The 9x half landed in roadmap task 23.1 and the
+# NT half in 23.1.5, after the guest readings the deferral was waiting for:
+# Windows 2000 SP4 and Windows XP SP3 both draw the Advanced tab from the NT
+# pair with no restart, and Windows Vista SP2 x86 draws nothing from it at all
+# while Microsoft's own EHCI controller, carrying the identical pair on the
+# same guest and boot, draws its own. So the NT pair reaches NT 5.x and is
+# inert on NT 6.x; it ships because Windows 2000 is a co-primary target and
+# because an inert value there costs nothing. PROP-NTHALF, which refused the
+# NT value outright, is gone - inverted into PROP-MISSING covering both halves,
+# which is what "taking it" was defined to look like.
+$propPages = @{
+    "9x" = @{
+        Name     = "EnumPropPages"
+        Provider = '"sysclass.dll,USBControllerPropPage"'
+        Stray    = "EnumPropPages32"
+        Why      = "the 9x shell reads it to find the 16-bit class installer that draws the controller's Advanced tab (the 'Disable USB error detection' box and the Bandwidth Usage dialog). sysclass.dll is on every Windows 98 and Windows ME machine and this INF does not copy it. It is the third value NUSB's own [EHCI.AddReg] writes, and GitHub issue 4 item 5 asked for it"
+        Wrong    = "On Windows 98 and Windows ME the provider is sysclass.dll, NOT the usbui.dll this INF copies: the tab and its dialog rendered identically with usbui.dll renamed away (measured 2026-09-07, roadmap task 23.1 leg A4)."
+        StrayWhy = "That value is the NT engine's; the 16-bit engine reads EnumPropPages."
+    }
+    "nt" = @{
+        Name     = "EnumPropPages32"
+        Provider = '"usbui.dll,USBControllerPropPageProvider"'
+        Stray    = "EnumPropPages"
+        Why      = "an NT shell reads it to find the provider that draws the controller's Advanced tab. All three NT references write it for their own EHCI controller (Windows 2000 SP4 USB.INF, Windows XP SP3 usbport.inf, Windows Vista SP2 usbport.inf), and Windows 2000 and Windows XP were both measured drawing the tab from it on 2026-09-20"
+        Wrong    = "On NT the provider is usbui.dll: sysclass.dll is 16-bit and 9x-only and is not even present. And usbui.dll draws the WHOLE page on NT rather than only the dialogs behind its buttons as on 9x, so a wrong provider loses the entire tab with no error box to say so."
+        StrayWhy = "That value is the 16-bit engine's; an NT engine reads EnumPropPages32."
+    }
+}
+
+# The NT half's companion. REG_BINARY 01, flags field 1, written by all three
+# NT references beside EnumPropPages32. Windows 2000 showed the tab with this
+# value DELETED and EnumPropPages32 left alone (23.1.5 leg W8), so it is not
+# what makes the page appear - it is here because the references write it and
+# this INF follows them, and because a value that is present must at least be
+# the right shape.
+$propController = @{
+    Name  = "Controller"
+    Flags = "1"
+    Data  = "01"
 }
 
 foreach ($m in $models) {
@@ -1102,44 +1136,52 @@ foreach ($m in $models) {
         $install = $m.Section + $p.Suffix
         if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
         $addRegs = @(Get-Directive $inf $install "AddReg")
+        $propPage = $propPages[$p.Kind]
 
-        # The NT half, deferred rather than refused on the evidence: see the
-        # block above [Xhci.AddReg.NT] in src\xhci98.inf. This fires on every
-        # NT path of both files, which is the point - one AddReg section
-        # serves four of them.
-        $nt32 = @(Get-AddRegValues $inf $addRegs "EnumPropPages32")
-        if ($nt32.Count -gt 0) {
-            Add-Failure "PROP-NTHALF" ("[{0}] line {1} writes 'EnumPropPages32' on the {2} install path. The NT half of the property page is deferred (owner, 2026-09-20): the pair it takes is known and all three NT references write it, but one AddReg section serves four NT install paths and the page it draws has been opened in none of their guests. Taking it means inverting this rule, adding the pair to BOTH INFs, and the guest readings on Windows 2000 and Vista - not adding a line here." -f $nt32[0].Section, $nt32[0].Line, $p.Os)
-        }
-
-        if ($p.Kind -ne $propPage.Kind) {
-            # A 9x-only value on an NT path is a value nothing reads, and on
-            # the amd64 file there is no 9x path at all, so this is also what
-            # keeps PROP-MISSING from firing over there.
-            $stray = @(Get-AddRegValues $inf $addRegs $propPage.Name)
-            if ($stray.Count -gt 0) {
-                Add-Failure "PROP-STRAY" ("[{0}] line {1} writes '{2}' on the {3} install path. That value is the 16-bit engine's; an NT engine reads EnumPropPages32 instead, and this one is deferred." -f $stray[0].Section, $stray[0].Line, $propPage.Name, $p.Os)
-            }
-            continue
+        # The other engine's spelling on this path is a value nothing reads.
+        $stray = @(Get-AddRegValues $inf $addRegs $propPage.Stray)
+        if ($stray.Count -gt 0) {
+            Add-Failure "PROP-STRAY" ("[{0}] line {1} writes '{2}' on the {3} install path. {4}" -f $stray[0].Section, $stray[0].Line, $propPage.Stray, $p.Os, $propPage.StrayWhy)
         }
 
         $hits = @(Get-AddRegValues $inf $addRegs $propPage.Name)
         if ($hits.Count -eq 0) {
-            Add-Failure "PROP-MISSING" ("the {0} install path ([{1}]) writes no '{2}' value, so the controller has no Advanced tab: {3}. It is the third value NUSB's own [EHCI.AddReg] writes, and GitHub issue 4 item 5 asked for it." -f $p.Os, $install, $propPage.Name, $propPage.Why)
-            continue
+            Add-Failure "PROP-MISSING" ("the {0} install path ([{1}]) writes no '{2}' value, so the controller has no Advanced tab: {3}." -f $p.Os, $install, $propPage.Name, $propPage.Why)
+        } else {
+            if ($hits.Count -gt 1) {
+                Add-Failure "PROP-DUP" ("the {0} install path writes '{1}' {2} times (lines {3}). Which one wins is engine-dependent." -f $p.Os, $propPage.Name, $hits.Count, (($hits | ForEach-Object { $_.Line }) -join ', '))
+            }
+            $hit = $hits[0]
+            if ($hit.Subkey -ne "") {
+                Add-Failure "PROP-SUBKEY" ("[{0}] line {1} writes '{2}' under subkey '{3}'. The shell reads it on the device's own key, not a subkey of it." -f $hit.Section, $hit.Line, $propPage.Name, $hit.Subkey)
+            }
+            if ($hit.Flags -ne "") {
+                Add-Failure "PROP-FLAGS" ("[{0}] line {1} writes '{2}' with flags '{3}'. It is a REG_SZ, which is FLG_ADDREG_TYPE_SZ = 0 and is spelled as an EMPTY flags field - the way every reference INF writes it." -f $hit.Section, $hit.Line, $propPage.Name, $hit.Flags)
+            }
+            if ($hit.Data -ne $propPage.Provider) {
+                Add-Failure "PROP-PROVIDER" ("[{0}] line {1} points '{2}' at {3}, not {4}. {5} A wrong provider draws no tab and reports nothing." -f $hit.Section, $hit.Line, $propPage.Name, $hit.Data, $propPage.Provider, $propPage.Wrong)
+            }
         }
-        if ($hits.Count -gt 1) {
-            Add-Failure "PROP-DUP" ("the {0} install path writes '{1}' {2} times (lines {3}). Which one wins is engine-dependent." -f $p.Os, $propPage.Name, $hits.Count, (($hits | ForEach-Object { $_.Line }) -join ', '))
-        }
-        $hit = $hits[0]
-        if ($hit.Subkey -ne "") {
-            Add-Failure "PROP-SUBKEY" ("[{0}] line {1} writes '{2}' under subkey '{3}'. The shell reads it on the device's own key, not a subkey of it." -f $hit.Section, $hit.Line, $propPage.Name, $hit.Subkey)
-        }
-        if ($hit.Flags -ne "") {
-            Add-Failure "PROP-FLAGS" ("[{0}] line {1} writes '{2}' with flags '{3}'. It is a REG_SZ, which is FLG_ADDREG_TYPE_SZ = 0 and is spelled as an EMPTY flags field - the way both reference INFs write it." -f $hit.Section, $hit.Line, $propPage.Name, $hit.Flags)
-        }
-        if ($hit.Data -ne $propPage.Provider) {
-            Add-Failure "PROP-PROVIDER" ("[{0}] line {1} points '{2}' at {3}, not {4}. On Windows 98 and Windows ME the provider is sysclass.dll, NOT the usbui.dll this INF copies: the tab and its dialog rendered identically with usbui.dll renamed away (measured 2026-09-07). A wrong provider draws no tab and reports nothing." -f $hit.Section, $hit.Line, $propPage.Name, $hit.Data, $propPage.Provider)
+
+        if ($p.Kind -ne "nt") { continue }
+
+        $ctrl = @(Get-AddRegValues $inf $addRegs $propController.Name)
+        if ($ctrl.Count -eq 0) {
+            Add-Failure "PROP-CTRLMISSING" ("the {0} install path ([{1}]) writes 'EnumPropPages32' but no '{2}' value. All three NT references write the pair together, and this INF follows them rather than deciding which half a future Windows reads." -f $p.Os, $install, $propController.Name)
+        } else {
+            if ($ctrl.Count -gt 1) {
+                Add-Failure "PROP-CTRLDUP" ("the {0} install path writes '{1}' {2} times (lines {3})." -f $p.Os, $propController.Name, $ctrl.Count, (($ctrl | ForEach-Object { $_.Line }) -join ', '))
+            }
+            $c = $ctrl[0]
+            if ($c.Subkey -ne "") {
+                Add-Failure "PROP-CTRLSUBKEY" ("[{0}] line {1} writes '{2}' under subkey '{3}'. It belongs on the device's own key." -f $c.Section, $c.Line, $propController.Name, $c.Subkey)
+            }
+            if ($c.Flags -ne $propController.Flags) {
+                Add-Failure "PROP-CTRLFLAGS" ("[{0}] line {1} writes '{2}' with flags '{3}', not '{4}'. It is a REG_BINARY, which is FLG_ADDREG_TYPE_BINARY and is spelled 1 - the way all three NT references write it." -f $c.Section, $c.Line, $propController.Name, $c.Flags, $propController.Flags)
+            }
+            if ($c.Data -ne $propController.Data) {
+                Add-Failure "PROP-CTRLDATA" ("[{0}] line {1} writes '{2}' as '{3}', not '{4}' - one byte, 01, as all three NT references write it." -f $c.Section, $c.Line, $propController.Name, $c.Data, $propController.Data)
+            }
         }
     }
 }

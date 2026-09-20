@@ -230,9 +230,31 @@ LoadOrderGroup=Base
 ; default to 0: the safe configuration is the default and the convenience is
 ; the thing asked for by name. src\xhci98.inf carries the full description of
 ; what each rung does and why the door ships shut.
+; The controller's property page, the NT half, added with the 32-bit file's in
+; roadmap task 23.1.5 (2026-09-20) because the gate refuses the two files
+; drifting apart on it. The pair is what all three NT references write for
+; their own EHCI controller, and src\xhci98.inf carries the full record of the
+; three guest readings behind it.
+;
+; THIS FILE'S NT 5.2 PATH WAS READ. Windows XP Professional x64 SP2 installed
+; the amd64 package through [Xhci.Dev.NTamd64] on 2026-09-20 and the
+; controller's Properties carried General, **Advanced**, Driver, Details,
+; Resources, the page reading "System reserved 10%" with a Refresh button and
+; a "Don't tell me about USB errors" box - the same page the 32-bit NT 5.x
+; guests showed, from the INF rather than by hand. Server 2003 x64 rests on
+; its identity with XP x64 as everything else in this file does.
+;
+; Read the NT 6.x x64 paths' standing off runs\run-23.md rather than guessing
+; from the 32-bit legs: on 32-bit, Vista and Windows 7 BOTH show the tab when
+; the INF writes the pair, and the one Vista failure in that task came from
+; writing the value by hand onto an existing devnode, which NT 6.x never
+; re-reads (src\xhci98.inf's block above [Xhci.AddReg.NT] has it in full).
+
 [Xhci.AddReg.NT]
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
+HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
+HKR,,Controller,1,01
 
 ; This file writes nothing outside the device's own key. Until 1.0.2.0 a
 ; [Xhci.AddReg.Global] section here wrote the machine-wide

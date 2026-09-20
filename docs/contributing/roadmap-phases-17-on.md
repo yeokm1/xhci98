@@ -512,7 +512,10 @@ reason; and one measurement of the owner's, whether an interrupt moderation
 interval below the reset default raises throughput, which if it does becomes a
 registry value whose default changes nothing.
 
-Status: open since 2026-09-19; **23.1 is done** - started and finished on
+Status: open since 2026-09-19; **23.1 and 23.1.5 are both done** - the
+controller's property page is complete, 9x half and NT half, read on three 9x
+stacks and seven NT guests, and both INFs carry their line. 23.2 runs next.
+23.1 was started and finished on
 2026-09-20 on branch `23.1`, its host side, **all three guest legs** (Windows
 98 SE under NUSB and under SweetLow, and Windows ME) and the three documents
 it owed, all the same day, leaving only the merge. **The NT half is 23.1.5's,
@@ -615,59 +618,63 @@ the hub half of item 2 before the root-port half, and both before item 1.
   `runs/run-23.md`'s "What 23.1 still owes the documents" lists what each one
   gained. 23.7 keeps the rest of its brief: whatever 23.1.5 and 23.4 to 23.6
   change.
-- [ ] 23.1.5 the NT half of the property page, **deferred by the owner on
-  2026-09-20 and to be settled rather than left open**. It follows 23.1
-  directly, whose 9x half shipped, and its outcome is recorded by 23.7 either
-  way. **The fractional id is deliberate**: it is inserted between two
-  existing tasks, and `roadmap.md` holds that such a task takes a fractional
-  id and nothing is renumbered, because ids are cited from `docs/` and the
-  evidence logs; `.5` means "between these two" and is not a sub-task, so this
-  is a task between 23.1 and 23.2 rather than a piece of 23.1.
+- [x] 23.1.5 the NT half of the property page. **Settled AND shipped on
+  2026-09-20**, which is more than the owner's deferral of that morning asked
+  for: it asked for the question to be settled either way, and the reading
+  passed, so the INF work it made conditional was done on the same branch.
+  `runs/run-23.md` has the detail. **The fractional id is deliberate**: it is
+  inserted between two existing tasks, and `roadmap.md` holds that such a task
+  takes a fractional id and nothing is renumbered, because ids are cited from
+  `docs/` and the evidence logs; `.5` means "between these two" and is not a
+  sub-task. **It was `23.6.5` for one day** and the owner moved it here on
+  2026-09-20 so it ran next; two commit messages (`57f7b95`, `80a296f`) keep
+  the old number and cannot be edited.
 
-  **It was `23.6.5` for one day and the owner moved it here on 2026-09-20**,
-  to sit beside the 9x half it is the counterpart of rather than after the
-  speed work, and this phase's tasks are in the order they are meant to run -
-  so it now runs **next**, before 23.2. Every tracked citation moved with it
-  in the same change (`roadmap.md`'s rule: no tracked file cites a
-  pre-renumbering id). Two places keep the old number and cannot be edited:
-  the messages of commits `57f7b95` and `80a296f`, which is why this
-  paragraph names it. No published `readme.txt` ever carried either id - the
-  task postdates the `1.1.0.0` cut.
+  **Seven guests, not the two `PROP-NTHALF` required**, because the owner
+  widened the task mid-run to Windows 7 x86 and every 64-bit target. Windows
+  2000 SP4, Windows XP SP3, Windows XP x64 SP2, Vista SP2 x86, Vista SP2 x64,
+  Windows 7 x86 and Windows 7 x64 **all show the Advanced tab**, and between
+  them they exercise all four install sections that carry
+  `AddReg=Xhci.AddReg.NT` - `[Xhci.Dev.NTx86]`, `[Xhci.Dev6.NTx86]`,
+  `[Xhci.Dev.NTamd64]` and `[Xhci.Dev6.NTamd64]`. The pair is
+  `HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"` plus
+  `HKR,,Controller,1,01`, and `EnumPropPages32` alone was shown to be
+  load-bearing (Windows 2000 kept the tab with `Controller` deleted); both ship
+  because all three NT references write both. The amd64 file, which had no x64
+  reading of its own when the line was first written into it, now has three.
 
-  Windows 2000 is a co-primary target, so the tab shipping on 9x
-  alone is an asymmetry between primaries and not a cosmetic gap. What the line
-  would be is already recorded in `src/xhci98.inf`, together with its
-  evidence: `HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"`
-  plus `HKR,,Controller,1,01`, which is what all three NT references write for
-  their own EHCI controller (Windows 2000 SP4 `USB.INF`, Windows XP SP3
-  `usbport.inf`, Windows Vista SP2 `usbport.inf`), and the provider is present
-  on every NT path this package installs on. **What holds it back is neither
-  the evidence nor the file**: one `[Xhci.AddReg.NT]` serves four install
-  paths - Windows 2000, 32-bit XP, and Vista and Windows 7 x86 through
-  `[Xhci.Dev6.NTx86]` - and the page has been opened against this controller
-  in none of their guests, which is what `PROP-NTHALF` refuses on.
+  **The finding worth carrying out of this task is about the method, not the
+  line.** The roadmap told this task to take the reading **by hand in regedit
+  before touching the INF**, the way the 9x line was taken. On Windows 2000 and
+  XP that works. **On NT 6.x it does not**: a hand-written `EnumPropPages32` on
+  an already-installed devnode produces no tab and no diagnostic, because the
+  provider list is consulted when the devnode is built. Vista was therefore
+  recorded as a genuine negative - with a control that was sound and a
+  conclusion that was wrong - and the INF comment asserting "its reach is
+  NT 5.x" was written, gated and committed before Windows 7 x86, which shares
+  Vista's install section and registration path, showed the tab and broke the
+  account open. Re-installing Vista from its clean snapshot with the INF-written
+  pair gave the tab at once. `lessons.md` carries it; `src/xhci98.inf` warns
+  against re-verifying the line by hand on NT 6.x.
 
-  **Take the reading before touching the INF, the way the 9x line was taken.**
-  The 9x directive was measured on 2026-09-07 by writing it **by hand in
-  regedit** on a guest and looking, months before it landed in a file. Do the
-  same here: on the xHCI-only Windows 2000 guest (`vm/win2k-xonly.img`) and on
-  Vista x86 (`vm/vista.img`), add the two values by hand to the controller's
-  driver key, re-open Device Manager, and record whether the tab appears and
-  whether its dialogs work. That is evidence with **no INF edit, no gate
-  change and no rebuild**, and if it fails nothing was spent. 32-bit XP is
-  nearly free if a guest is already warm and is the middle case between the
-  two. Only a passing reading makes the INF work worth doing.
+  **Two things the reading gave that the task did not need.** The bandwidth
+  ladder came out 10 / 11 / 12 % on both NT 5.x 32-bit guests, digit for digit
+  what all three 9x legs gave - and Windows 2000's is Microsoft's own native
+  NT 5.0 stack, so issue 6 in the user interface can no longer be explained as
+  an artifact of a back-ported one; it is now five stacks across four operating
+  systems. And both NT 5.x guests logged `endpoint speed mismatches=00000001`
+  with an identical encoding, the driver's own witness beside the page's, which
+  the 9x legs had no equivalent of.
 
-  **Two things to get right when it does land.** It must go into
-  `src/xhci98-amd64.inf` in the same change or the two files drift, which is
-  the gate's rule and not a preference - that couples the INF work to both
-  packages, though it does not require an x64 reading. And `PROP-NTHALF` has
-  to be relaxed deliberately, with the guest readings named, rather than
-  deleted. **Read A4 carefully when interpreting the result**: on NT,
-  `usbui.dll` provides the *whole* page, not merely the dialogs behind its
-  buttons as on 9x, because `sysclass.dll` is 16-bit and 9x-only - so a
-  provider failure there loses the entire tab instead of degrading to "Data
-  Access Error".
+  `PROP-NTHALF` was **inverted rather than deleted**, as required: the refusal
+  is gone, the existing `PROP-*` shape checks now run over both halves through
+  a kind-keyed table, and a new `PROP-CTRL*` family holds `Controller` to
+  REG_BINARY / flags 1 / data 01. Six self-test cases replaced the one, both
+  footprints were regenerated, and `build-driver.cmd` was re-run. **23.7 still
+  owes the documents**: the release notes' "Not in this release" section says
+  the NT systems are not included and is now false on every target, and
+  `build-and-test.md` and `docs/issues/06` section 5.1 have the additions
+  `runs/run-23.md` lists.
 
 - [ ] 23.2 the moderation experiment. The register is IR0's IMOD: IMODI is
   bits 15:0 in 250 ns units and resets to 4000, 1 ms

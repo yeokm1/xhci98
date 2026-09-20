@@ -9094,3 +9094,61 @@ cold boot. That is the opposite of the `SYSTEM.DAT` rollback a killed 9x guest
 usually costs, and the difference is timing - the registry phase had completed
 and been flushed long before the removal - not luck. Do not read it as licence
 to kill a 9x guest after an install.
+
+## On NT 6.x a devnode registry value written by hand is not the value the INF writes
+
+Roadmap task 23.1.5, 2026-09-20. The controller's property page is registered
+by one REG_SZ on the device's driver key -
+`EnumPropPages32 = "usbui.dll,USBControllerPropPageProvider"` - and the task's
+method, inherited from the 9x half, was to **write it by hand in regedit on a
+guest and look**, before touching the INF at all. The point of that method is
+that a failure costs nothing.
+
+It costs something. **On Windows Vista the hand-written value does nothing at
+all**, and the nothing is indistinguishable from the line being wrong: no
+error, no log line, no "Data Access Error" - just a property sheet with one
+fewer tab. It was read at three points and failed at all three: the sheet
+re-opened, Device Manager closed and restarted, and the machine fully
+restarted with the value confirmed still present afterwards. The same pair,
+written by the **INF at install time** on the same guest reverted to the same
+clean snapshot, produces the tab immediately. On Windows 2000 and Windows XP
+the hand-written value works on the first re-open of the sheet, which is
+exactly what makes the trap dangerous: the cheap targets agree with the method
+and the expensive one does not.
+
+The mechanism is that NT 6.x consults the property-page provider list when the
+devnode is built, not when the sheet is opened.
+
+**What made the false negative survive as long as it did was a control that
+was sound.** Microsoft's own EHCI controller, hot-plugged into the same guest
+on the same boot, carrying the identical pair from its own `usbport.inf`, drew
+its page while ours did not - and Vista's `usbport.inf` was opened in the guest
+and confirmed to write exactly the pair we had written. Every one of those
+readings was true. None of them could see the variable that mattered, because
+the in-box driver's pair had been written by its INF at install time and ours
+by hand. A control tells you the mechanism works; it does not tell you that
+your subject differs from it in only the way you think it does.
+
+So:
+
+- **Do not verify a devnode registry value by hand on NT 6.x.** Put it in the
+  INF and re-install. If the by-hand route is taken anyway - it is still the
+  cheap way to fail fast on NT 5.x - a negative from it is **not** a reading
+  that the value does not work, and must not be recorded as one.
+- **A negative on one target is not a property of that target** until a
+  sibling target that shares its install path has been read. Here Windows 7
+  x86 shares Vista's INF section, its Version 300 registration path and its
+  generation; it showed the tab, and that is what broke the account open. The
+  first draft of the INF change had already been written, gated and committed
+  to the claim "its reach is NT 5.x".
+- The same task produced a smaller instance of the same class: a value typed
+  as `usbui.dll` **`.`** `USBControllerPropPageProvider`, whose full stop is
+  one pixel from a comma at the guest's 800x600, and which was read off a
+  screendump as correct. **A value read off a screen at guest resolution has
+  not been read.** Write it with `reg.exe` and query it back - a console font
+  separates the two characters plainly - or crop the row out of the screendump
+  and magnify it before believing it.
+
+`docs/contributing/runs/run-23.md`, task 23.1.5 leg V, has both readings and
+the control; `src/xhci98.inf`'s block above `[Xhci.AddReg.NT]` carries the
+warning beside the line itself.

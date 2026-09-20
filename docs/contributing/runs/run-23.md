@@ -814,3 +814,417 @@ index and the page agree.
   SweetLow's and the composite driver is not, so a Windows ME composite-device
   observation - task 18.4's composite audio device included - rests on Windows
   ME's `usbccgp.sys`. The mechanism that preserved it is not established.
+
+---
+
+## 23.1.5 - the NT half of the controller's property page
+
+Status: **settled on 2026-09-20, and the line shipped.** The task was deferred
+by the owner "to be settled rather than left open", and what settled it is
+seven guest readings, not the two `PROP-NTHALF` asked for: the owner widened
+the task mid-run to Windows 7 x86 and every 64-bit target.
+
+| guest | NT | install section | miniport version | Advanced tab | pair written by |
+|---|---|---|---|---|---|
+| Windows 2000 SP4, xHCI-only | 5.0 | `[Xhci.Dev.NTx86]` | 200 | **yes** | hand |
+| Windows XP SP3, 32-bit | 5.1 | `[Xhci.Dev.NTx86]` | 200 | **yes** | hand |
+| Windows XP x64 SP2 | 5.2 | `[Xhci.Dev.NTamd64]` | 200 | **yes** | the INF |
+| Windows Vista SP2 x86 | 6.0 | `[Xhci.Dev6.NTx86]` | 300 | **yes** | the INF |
+| Windows Vista SP2 x64 | 6.0 | `[Xhci.Dev6.NTamd64]` | 300 | **yes** | the INF |
+| Windows 7 x86 | 6.1 | `[Xhci.Dev6.NTx86]` | 300 | **yes** | the INF |
+| Windows 7 x64 | 6.1 | `[Xhci.Dev6.NTamd64]` | 300 | **yes** | the INF |
+
+**Every NT target this project has shows the tab, and all four install
+sections of both INFs were read.** `[Xhci.AddReg.NT]` is reached through
+`[Xhci.Dev.NTx86]` and `[Xhci.Dev6.NTx86]` in `src/xhci98.inf` and through
+`[Xhci.Dev.NTamd64]` and `[Xhci.Dev6.NTamd64]` in `src/xhci98-amd64.inf`; each
+of the four was exercised by at least one guest. The amd64 file, which the
+first draft of this change shipped with a comment saying no x64 reading stood
+behind it, now has three.
+
+### The finding that matters beyond this task
+
+**On NT 6.x, writing `EnumPropPages32` by hand into an existing devnode does
+nothing, and looks exactly like the line not working.**
+
+The roadmap's method for this task was the one that took the 9x line on
+2026-09-07: write the value by hand in regedit first, look, and only touch the
+INF if it passes. On Windows 2000 and Windows XP that works - the tab appears
+the moment the property sheet is re-opened, with Device Manager still running
+and no restart. **On Windows Vista it does not.** A hand-written pair on an
+already-installed devnode produced no tab at all: not on re-opening the sheet,
+not with Device Manager closed and restarted, not after a full reboot with the
+values confirmed still present. The same pair, written by the INF at install
+time on the same guest from the same clean snapshot, produces the tab.
+
+So NT 6.x consults the provider list when the devnode is built, and a value
+added afterwards is never read. Nothing reports this: there is no error, no
+log line and no "Data Access Error" - just a sheet with one fewer tab, which
+is indistinguishable from a line that does not work.
+
+**This task nearly shipped the wrong conclusion on it.** Vista was recorded as
+a genuine negative, with a control that made it look airtight - Microsoft's own
+EHCI controller, hot-plugged into the same guest on the same boot, carrying the
+identical pair from its own `usbport.inf`, drew its page while ours did not.
+That control was sound and its reading was true; it simply could not see the
+variable that mattered, because the in-box EHCI driver had its pair written by
+`usbport.inf` **at install time** and ours did not. The INF change had already
+been written, gated and committed to a comment block asserting "its reach is
+NT 5.x" before the owner asked for Windows 7 and the 64-bit targets, and
+Windows 7 x86 - same install section as Vista, same Version 300 path - showed
+the tab, which is what broke the false conclusion open.
+
+`docs/contributing/lessons.md` carries this; `src/xhci98.inf`'s block above
+`[Xhci.AddReg.NT]` warns against re-verifying the line by hand on NT 6.x.
+
+### What the page is, per generation
+
+Two shapes, and nothing in this package depends on either:
+
+- **NT 5.x** (Windows 2000, XP, XP x64): bandwidth text, a
+  "Bandwidth-consuming devices" list reading **System reserved 10%**, a
+  Refresh button, and ONE checkbox - "Disable USB error detection" on Windows
+  2000, renamed "Don't tell me about USB errors" from XP on.
+- **NT 6.x** (Vista, Vista x64, Windows 7, Windows 7 x64): the same, reading
+  **System reserved 20%**, and TWO checkboxes - "Tell me if my device can
+  perform faster" (ticked by default) above "Don't tell me about USB errors".
+
+The 9x page is a third shape again: there the Advanced tab carried a
+**Bandwidth Usage button** opening a separate dialog, because `sysclass.dll`
+drew the tab and `usbui.dll` only the dialog behind it (23.1 leg A4). On NT
+`usbui.dll` draws the whole page, so there is no button and the list is inline.
+
+The checkbox writes `ErrorCheckingEnabled` REG_DWORD under
+`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Usb` - **0** ticked, **1**
+unticked, persisting either way rather than deleting the value - the same name,
+key and polarity the three 9x legs recorded. Read on Windows 2000 (both
+directions) and Windows XP (ticked only).
+
+### Issue 6 in the user interface, on Microsoft's own stacks
+
+The bandwidth ladder was taken on the two NT 5.x 32-bit guests, by adding
+devices from the monitor onto root ports and pressing Refresh:
+
+| bus | Windows 2000 | Windows XP |
+|---|---|---|
+| no USB devices | 10 % | 10 % |
+| + `usb-mouse,usb_version=1` (12 Mb/s) on root port 2 | 11 % | 11 % |
+| + `usb-mouse,usb_version=2` (480 Mb/s) on root port 3 | 12 % | 12 % |
+
+Digit for digit the ladder all three 9x legs gave. **A Full-Speed device and a
+High-Speed device on root ports cost the same 1 %**, and Windows 2000 SP4's is
+Microsoft's own native NT 5.0 `usbport.sys` and `usbui.dll` - so the reading
+can no longer be explained as an artifact of a back-ported stack (NUSB's
+Win2000-derived build or SweetLow's XP-derived rebuild). Issue 6 in the user
+interface is now **five stacks across four operating systems**.
+
+Both NT 5.x guests also logged the driver's own witness to the same event,
+which the 9x legs had no equivalent of:
+
+```
+xhci98: slot: endpoint speed differs from the port's, usbport << 8 | decoded=00000302
+xhci98: endpoint speed mismatches=00000001
+```
+
+usbport reporting speed 3 where the driver decoded 2, **exactly one mismatch**,
+for the Full-Speed mouse and not the High-Speed one, with the identical
+encoding on both guests. A `runtime` reading.
+
+The same two limits hold as on 9x: the page **never itemises** - only the
+"System reserved" row exists and only its percentage moves, so the per-device
+figure is a delta across three readings and not an attribution the page makes -
+and the behind-a-hub contrast was not taken.
+
+### Which of the two values does the work
+
+**`EnumPropPages32` alone is load-bearing.** On Windows 2000, with the guest
+snapshotted, `Controller` was deleted and the sheet re-opened: the Advanced tab
+survived and still read its bandwidth figure live. Both lines ship because all
+three NT references write both and this INF follows them, not because the pair
+is indivisible.
+
+### The vehicles, and one correction to the handoff
+
+All seven guests were reverted to their clean-install snapshots first. The
+package is the **`qemu`** flavour throughout - the leg is not an
+install-fidelity reading, so the debug console costs nothing and buys a
+witness, which is the other half of C4's lesson.
+
+| guest | image | launcher | monitor |
+|---|---|---|---|
+| Windows 2000 SP4, xHCI-only | `vm\win2k-xonly.img` | `qemu-win2k-xonly-run.cmd` | 55560 |
+| Windows XP SP3 | `vm\winxp.img` | `qemu-winxp-run.cmd` | 55559 |
+| Windows XP x64 SP2 | `vm\winxp64.img` | `qemu-winxp64-run.cmd` | 55700 |
+| Windows Vista SP2 x86 | `vm\vista.img` | `qemu-vista-run.cmd` | **55465** |
+| Windows Vista SP2 x64 | `vm\vista-x64.img` | `qemu-vista-x64-run.cmd` | 55563 |
+| Windows 7 x86 | `vm\win7.img` | `qemu-win7-run.cmd` | 55466 |
+| Windows 7 x64 | `vm\win7-x64.img` | `qemu-win7-x64-run.cmd` | 55564 |
+
+**The handoff written for this task gave Vista's monitor as 55565; it is
+55465.** The launcher is the authority, not the handoff.
+
+Two mechanics worth carrying forward:
+
+- **`savevm` is refused on the WHPX guests** - "State blocked due to missing
+  dirty memory tracking support" - which is why every pre-existing snapshot on
+  `vm\winxp.img` has `VM_SIZE 0`. Those guests take a disk-only
+  `qemu-img snapshot -c` after a clean shutdown instead.
+- **The x64 NT 6.x guests need the signature-enforcement boot every time.**
+  F8 spam is unreliable; what works is an elevated
+  `bcdedit /set {current} advancedoptions true` followed by a reboot, which
+  puts the boot menu up on every start. Before that boot both guests install
+  the package and then refuse to load it - **Vista x64 shows Code 39** with a
+  Program Compatibility Assistant box saying "Windows requires a digitally
+  signed driver", **Windows 7 x64 shows Code 52** from the wizard itself. The
+  install still writes the devnode values, which is why the reading afterwards
+  is of an INF-written pair.
+
+### Leg W - Windows 2000 SP4, xHCI-only: PASSES
+
+Unlike every 23.1 leg this one needed an **install leg first**, because the
+driver key the experiment writes into does not exist until the controller is
+bound. The guest auto-logged in with the Found New Hardware Wizard already up,
+and the driver installed from the transfer drive: `DriverEntry (built Sep 20
+2026 10:33:35)`, `USBPORT_RegisterUSBPortDriver status=00000000`,
+`cb StartController`, `No Op submit status=00000000`,
+`root hub: managed ports=00000004`, and the `RH_*` family answered.
+
+**One difference from task 19.5 worth stating rather than smoothing over.**
+19.5's install (2026-09-03, Have Disk from the same transfer drive) asked for
+no reboot. This one raised Windows 2000's "System Settings Change" box,
+although the driver was already registered, started and polling when it
+appeared. The two installs differed in route - the wizard's search path here,
+Have Disk there - and which fact explains the box was **not** established. The
+restart was taken and the driver came up again on the boot path, so nothing
+rests on it; it is recorded because "no reboot" is a claim a release note could
+inherit.
+
+**W1, the baseline.** The controller's Properties carried **General, Driver,
+Resources** and no Advanced tab; "This device is working properly",
+Manufacturer "xHCI98 Project", Location 2 (PCI bus 0, device 3, function 0).
+Snapshotted as `win2k-xonly-before-installed`.
+
+**W2, the control.** The USB 2.0 Root Hub carried **General, Power, Driver,
+Power Management**, and the Power tab rendered live: "The hub is self powered",
+"Total power available: 500 mA per port", "4 port(s) available. 0 mA" - four,
+matching the driver's own `root hub: managed ports=00000004`. Windows' own
+`USB.INF` registers `usbui.dll,USBHubPropPageProvider` there and this package
+registers nothing, so the control says what it is meant to: `usbui.dll` is
+present and its provider mechanism works here. Green **before** the experiment,
+which is the order A4's lesson asks for.
+
+**The driver key.** `HKLM\SYSTEM\CurrentControlSet\Control\Class\`
+`{36FC9E60-C465-11CF-8056-444553540000}\0000`, holding `DriverDesc` = "USB 2.0
+eXtensible Host Controller (xhci98)", `DriverVersion` 1.1.0.0, `InfPath`
+`oem0.inf`, `InfSection` `Xhci.Dev`, **`InfSectionExt` `.NTx86`**,
+`MatchingDeviceId` `pci\cc_0c0330`, `ProviderName` "Yeo Kheng Meng", and this
+package's three DWORDs. `0001` is the root hub.
+
+**W3, the reading.** The pair was written by hand and, with Device Manager
+still running and no restart, re-opening the sheet gave **General, Advanced,
+Driver, Resources**.
+
+**A trap in the writing, caught by the operator and not by the agent.** The
+string value was first created as `EnumPropPages` - the 9x name, without the
+`32` - which would have produced a false negative. See leg V for the second,
+worse instance of the same class of error.
+
+**W4, every control pressed** (A4's lesson - a control called unaffected
+without being operated cost four documents two weeks):
+
+- **Refresh** with nothing changed: no visible change, no error. With a device
+  newly attached the figure moves, so the button works and the page is live.
+- **Selecting the "System reserved" row**: the row highlights and the Bandwidth
+  indicator bar does **not** visibly respond, though it carries one segment
+  throughout. With a single row there is nothing to distinguish; recorded as
+  read, not as a defect.
+- **The checkbox**: ticked wrote `ErrorCheckingEnabled` 0, re-opening showed it
+  still ticked, unticking wrote 1.
+
+**W5, the bandwidth ladder and the driver's witness**: see the shared sections
+above. **W6:** `Controller` deleted, tab survived.
+
+Snapshots left: `win2k-xonly-before-installed` and
+`win2k-xonly-23-1-5-after-tab`.
+
+### Leg X - Windows XP SP3, 32-bit: PASSES
+
+The roadmap called this one "nearly free if a guest is already warm ... the
+middle case between the two"; no guest was warm and it was taken anyway,
+because Vista's apparent failure made it the leg that placed the boundary.
+Installed from `E:\` through *Install from a list or specific location*, XP's
+"has not passed Windows Logo testing" warning answered Continue Anyway, **no
+restart asked for**, `interface version presented=000000C8` - 200, the NT 5.x
+path.
+
+Baseline **General, Driver, Details, Resources**; after the write, **General,
+Advanced, Driver, Details, Resources** at the first re-open with Device Manager
+still running. Page as the NT 5.x shape above. Ladder 10 / 11 / 12 %.
+`ErrorCheckingEnabled` 0 after ticking; the untick-writes-1 half was not taken
+here.
+
+**How this leg was driven, because it changes what a reading costs.** The pair
+was written with `reg.exe` from a command prompt and read back with
+`reg query`. A value written and then queried back **in a console font** cannot
+hide a comma that is really a full stop, and it needs no magnification step.
+Prefer it on any guest that has `reg.exe`, which is every NT target here.
+
+No live snapshot: `savevm` is refused under WHPX. Disk-only
+`winxp-23-1-5-after-tab` taken after a clean shutdown.
+
+### Leg V - Windows Vista SP2 x86: the leg that was wrong, then right
+
+**This leg was taken twice and only the second reading counts.**
+
+**V-first, the hand-written pass, which FAILED.** From `vista-clean-install`,
+the old package installed (no `EnumPropPages32` in it), **no restart asked
+for**, `interface version presented=0000012C` - 300, the NT 6.x path.
+Baseline: **General, Driver, Details, Resources**. The control was green: the
+root hub - Vista names it plainly "USB Root Hub" - carried **General, Power,
+Advanced, Driver, Details, Power Management**, its Power tab reading "The hub
+is self-powered", "Total power available: 500 mA per port", "4 port(s)
+available / 0 mA", and its Advanced tab **"Hub is operating at high-speed"**
+with a Reset Hub button (not pressed: resetting the hub is a live operation).
+That high-speed line is worth keeping beside issue 6.
+
+The pair was then written by hand into
+`...{36FC9E60-...}\0000` (`InfPath` `oem3.inf`, **`InfSection` `Xhci.Dev6`**,
+`InfSectionExt` `.NTx86`) and read at three points - sheet re-opened, Device
+Manager restarted, machine restarted with the values confirmed still present.
+**No tab at any of them.**
+
+**The control that made it look airtight.** An EHCI controller was hot-plugged
+from the monitor (`device_add usb-ehci`, Intel 8086:24cd). Vista installed its
+own in-box driver and the resulting "Intel(R) 82801DB/DBM USB 2.0 Enhanced Host
+Controller" **did** get its Advanced tab, reading "System reserved 20 %". And
+Vista's own `C:\Windows\inf\usbport.inf`, opened in the guest, reads verbatim:
+
+```ini
+[EHCI.Dev.NT]
+AddReg=EHCI.AddReg.NT
+...
+[EHCI.AddReg.NT]
+HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
+HKR,,Controller,1,01
+```
+
+which upgrades the one reference this project had read only statically - and
+flagged as uncertain, the file being UTF-16 - to a `runtime` reading of the
+shipped file on the running system. So the pair was right, the provider worked,
+and ours was refused.
+
+**V-first also carried a typo, and the typo was real.** The first write was
+`usbui.dll` **`.`** `USBControllerPropPageProvider` - a full stop where the
+separator must be a comma - and steps (a), (b) and (c) including a restart were
+all run against it before the operator caught it. Those readings are void. The
+re-run with a verified comma still showed no tab, which is what made the
+negative look solid. The verification method that settles this class of error:
+crop the value row out of the screendump and magnify it, or - better - write it
+with `reg.exe` and query it back. At the guest's 800x600 a comma and a full
+stop differ by one pixel below the baseline, and **a value read off a screen at
+guest resolution has not been read**.
+
+**V-second, the INF-written pass, which SUCCEEDED.** After Windows 7 x86 showed
+the tab from the same install section and the same Version 300 path, the guest
+was reverted to `vista-clean-install` and the **new** package installed -
+identical pair, written by the INF. The controller's Properties then carried
+**General, Advanced, Driver, Details, Resources**, the page reading "System
+reserved 20 %" with both NT 6.x checkboxes.
+
+One variable changed between the two readings: **who wrote the value.** See
+"The finding that matters beyond this task" above.
+
+Snapshots left: `vista-before-installed`, `vista-23-1-5-no-tab` (the
+hand-written state, kept because it is the evidence for the finding) and
+`vista-23-1-5-inf-written-tab`.
+
+### Leg XP64 - Windows XP x64 SP2: PASSES
+
+The first reading ever taken behind the amd64 INF's property-page line.
+Installed the amd64 package from `E:\` through `[Xhci.Dev.NTamd64]`, Continue
+Anyway at the Logo warning, no restart, `interface version presented=000000C8`
+- 200. Properties carried **General, Advanced, Driver, Details, Resources**,
+the page reading **System reserved 10%** with a Refresh button and the single
+"Don't tell me about USB errors" box - the NT 5.x shape, from the INF rather
+than by hand. Disk-only snapshot `winxp64-23-1-5-after-tab`.
+
+Server 2003 x64 rests on its identity with XP x64, as everything else about
+that tier does.
+
+### Leg W7 - Windows 7 x86: PASSES, and it is the leg that broke the false conclusion
+
+Installed through Device Manager's Update Driver Software from `E:\`, "Windows
+can't verify the publisher" answered Install anyway, root hub installed in the
+same pass, **no restart asked for**, `interface version presented=0000012C` -
+300, the same NT 6.x path Vista takes and reached through the same
+`[Xhci.Dev6.NTx86]` section. Properties carried **General, Advanced, Driver,
+Details, Resources**, the page reading **System reserved 20%** with both NT 6.x
+checkboxes.
+
+At the time this was taken, Vista was on record as a negative and the INF
+comment asserted the line's reach was NT 5.x. Windows 7 shares Vista's install
+section, its registration path and its generation, so the tab appearing here
+made that account impossible and sent leg V back to the guest.
+
+Disk-only snapshot `win7-23-1-5-after-tab`.
+
+### Legs V64 and W764 - Vista x64 and Windows 7 x64: both PASS
+
+Both installed the amd64 package through `[Xhci.Dev6.NTamd64]`, both refused to
+load it until the signature-enforcement boot (Code 39 with a PCA box on Vista
+x64, Code 52 from the wizard on Windows 7 x64), and both came up on the
+`bcdedit advancedoptions` boot with `DriverEntry`, `interface version
+presented=0000012C`, registration status 0, `No Op submit status=00000000` and
+`root hub: managed ports=00000004`.
+
+Both then carried **General, Advanced, Driver, Details, Resources** with
+**System reserved 20%** and both NT 6.x checkboxes - the NT 6.x shape, on the
+second binary, through the second INF.
+
+### What landed, and what it owes
+
+The INF work the roadmap made conditional on a passing reading was done on the
+same day and on the same branch:
+
+- **Both INFs carry the pair**, in `[Xhci.AddReg.NT]`, added in one change
+  because the gate's rule is that they may not drift. `src/xhci98.inf`'s block
+  above that section carries the seven readings, the NT 5.x / NT 6.x page
+  shapes, the `EnumPropPages32`-alone finding, and the warning against
+  re-verifying the line by hand on NT 6.x. `src/xhci98-amd64.inf` carries its
+  own x64 readings in place of the "no x64 reading stands behind this file"
+  caveat the first draft of this change shipped with.
+- **`PROP-NTHALF` was inverted rather than deleted**, which is what "taking
+  it" was defined to look like. The rule that refused `EnumPropPages32` is
+  gone; in its place `$propPages` is a table keyed by install-path kind, so
+  the existing `PROP-MISSING` / `PROP-DUP` / `PROP-SUBKEY` / `PROP-FLAGS` /
+  `PROP-PROVIDER` / `PROP-STRAY` checks run over the NT half exactly as they
+  ran over the 9x half, and a new `PROP-CTRL*` family holds `Controller` to
+  REG_BINARY, flags 1, data 01.
+- **Six self-test cases replaced the one** `proppage-nt-half-taken` case:
+  `proppage-missing-nt`, `proppage-sysclass-provider-on-nt`,
+  `proppage-nt-hub-entrypoint`, `proppage-controller-missing`,
+  `proppage-controller-flags`, `proppage-controller-data`. The suite is 546
+  checks and green.
+- **Both footprints were regenerated** (`expected-footprint.txt`,
+  `expected-footprint-amd64.txt`), which is the uninstall expectation task
+  11-V.3 keeps, and `build-driver.cmd` was re-run: both 32-bit flavours build,
+  the import gate passes, both INF gates pass.
+
+Still owed, and 23.7's to carry unless taken sooner:
+
+- **`docs/using/release-notes.md`.** The "Not in this release: the controller's
+  Advanced tab" section 23.1 wrote says the NT systems are not included. That
+  is now false: the tab is the next release's on **every** target this package
+  installs on, 9x and NT alike. The x64 half needs its usual qualification -
+  the tab is there, but so is the F8 boot.
+- **`docs/contributing/lessons.md`**, the NT 6.x by-hand trap, which is the
+  reusable part of this task.
+- **`docs/contributing/build-and-test.md`**: the NT root hub's own pages (the
+  Vista hub's Power AND Advanced tabs) beside the 9x ones 23.1 added, and the
+  two mechanics above - `savevm` under WHPX, and the `bcdedit advancedoptions`
+  route to the x64 signature boot, which is better than the F8 spam the
+  existing text implies.
+- **`docs/issues/06`** section 5.1's ladder table, which currently reads three
+  stacks across two operating systems and is now five across four, with
+  Windows 2000's being Microsoft's own native stack - the clause that removes
+  the back-ported-stack explanation.

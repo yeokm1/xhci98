@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
 Regression tests for the INF gate (roadmap Phase 3 task 6).
 
@@ -567,12 +567,42 @@ try {
                              "HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,EnumPropPages,,`"usbui.dll,USBControllerPropPageProvider`"")
     }
 
-    # **The NT half arriving without its guest readings**, which is the whole
-    # of PROP-NTHALF. [Xhci.AddReg.NT] serves Windows 2000, 32-bit XP, and
-    # Vista and Windows 7 x86, so one added line is four unread install paths.
-    Assert-RuleFires "proppage-nt-half-taken" "PROP-NTHALF" {
-        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0",
-                             "[Xhci.AddReg.NT]`r`nHKR,,EnumPropPages32,,`"usbui.dll,USBControllerPropPageProvider`"`r`nHKR,,XhciLogVerbosity,0x00010001,0")
+    # **The NT half, which roadmap task 23.1.5 took on 2026-09-20.** What used
+    # to be PROP-NTHALF - a rule refusing the NT value until guests had been
+    # read - is now the ordinary requirement, so the cases below are the NT
+    # mirror of the 9x ones above. The readings behind it: Windows 2000 SP4
+    # and Windows XP SP3 draw the tab from this pair, Windows Vista SP2 x86
+    # draws nothing from it, and it ships for the two that do.
+    Assert-RuleFires "proppage-missing-nt" "PROP-MISSING" {
+        param($t) $t.Replace("HKR,,EnumPropPages32,,`"usbui.dll,USBControllerPropPageProvider`"`r`n", "")
+    }
+
+    # The mirror of proppage-usbui-provider, and the mistake waiting to be made
+    # in this direction: sysclass.dll is 16-bit and is not on an NT machine at
+    # all, and on NT usbui.dll draws the WHOLE page, so this one loses the tab
+    # entirely rather than degrading to a "Data Access Error" as on 9x.
+    Assert-RuleFires "proppage-sysclass-provider-on-nt" "PROP-PROVIDER" {
+        param($t) $t.Replace("HKR,,EnumPropPages32,,`"usbui.dll,USBControllerPropPageProvider`"",
+                             "HKR,,EnumPropPages32,,`"sysclass.dll,USBControllerPropPage`"")
+    }
+    # Right file, wrong entry point - the hub's provider, which usbui.dll also
+    # exports and which Windows' own INFs register against the root hub.
+    Assert-RuleFires "proppage-nt-hub-entrypoint" "PROP-PROVIDER" {
+        param($t) $t.Replace("HKR,,EnumPropPages32,,`"usbui.dll,USBControllerPropPageProvider`"",
+                             "HKR,,EnumPropPages32,,`"usbui.dll,USBHubPropPageProvider`"")
+    }
+
+    # The Controller companion, which all three NT references write beside it.
+    Assert-RuleFires "proppage-controller-missing" "PROP-CTRLMISSING" {
+        param($t) $t.Replace("`r`nHKR,,Controller,1,01", "")
+    }
+    # REG_BINARY is flags field 1. An empty field is REG_SZ, so this would
+    # write the shell the two characters "01" to read as a binary byte.
+    Assert-RuleFires "proppage-controller-flags" "PROP-CTRLFLAGS" {
+        param($t) $t.Replace("HKR,,Controller,1,01", "HKR,,Controller,,01")
+    }
+    Assert-RuleFires "proppage-controller-data" "PROP-CTRLDATA" {
+        param($t) $t.Replace("HKR,,Controller,1,01", "HKR,,Controller,1,00")
     }
     # And the 9x value on an NT path, which is the same line in the wrong
     # place: no NT engine reads it, so it is a value nothing anywhere reads.

@@ -162,8 +162,9 @@ CopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI
 ; The device's whole 9x registry footprint. The EnumPropPages value is the
 ; third one NUSB's [EHCI.AddReg] writes, transcribed from it like the two
 ; above; it is cosmetic, affecting no binding and no load, and it is the 9x
-; half alone. The Win2000 EnumPropPages32/Controller counterparts are still
-; NOT written - the block above [Xhci.AddReg.NT] says why.
+; half alone. The NT counterparts, EnumPropPages32 and Controller, are written
+; too since roadmap task 23.1.5 - in [Xhci.AddReg.NT], where the block above
+; that section records what each NT guest showed.
 ;
 ; What it buys was MEASURED on 2026-09-07 in a Windows 98 guest rather than
 ; assumed: an Advanced tab appears between General and Driver, carrying a
@@ -341,36 +342,69 @@ HKR,,XhciLogDebugView,0x00010001,0
 ; not asked for a log has no channel open at all.
 
 ; ------------------------------------------------------------------
-; The NT half of the property page: NOT taken, and what it would be
+; The NT half of the property page: TAKEN 2026-09-20, on every NT target
 ; ------------------------------------------------------------------
 ;
-; The counterpart of the 9x EnumPropPages line above is a PAIR -
-;   HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
-;   HKR,,Controller,1,01
-; - and all three NT references this project reads write exactly it for their
-; own EHCI controller: Windows 2000 SP4's USB.INF [EHCI.AddReg.NT], Windows
-; XP SP3's usbport.inf, and Windows Vista SP2's usbport.inf. The last was
-; read statically on 2026-09-20 out of vm\vista.img, where the file is UTF-16
-; and a byte grep for the name finds nothing. Windows 7's own copy has NOT
-; been read: 7-Zip sees vm\win7.img as a qcow2 whose live state is in a
-; snapshot and will not walk its NTFS.
+; The counterpart of the 9x EnumPropPages line above is a PAIR, and it is the
+; pair all three NT references write for their own EHCI controller: Windows
+; 2000 SP4's USB.INF [EHCI.AddReg.NT], Windows XP SP3's usbport.inf, and
+; Windows Vista SP2's usbport.inf. The Vista reference was read statically on
+; 2026-09-20 and then read AGAIN the same day as runtime, out of the running
+; guest's own C:\Windows\inf\usbport.inf, which settles the one reference this
+; file used to flag as uncertain. Windows 7's own copy has still NOT been read.
 ;
-; The provider is present on every NT path this package installs on, since
-; this file already copies usbui.dll on the NT 5.x ones and Vista ships it in
-; System32 (Windows\System32\usbui.dll, 83,456 B, read the same day). So what
-; holds the NT half back is neither the evidence nor the file.
+; Roadmap task 23.1.5 read it on FIVE guests, covering both install paths that
+; carry this section and both architectures:
 ;
-; It is not taken (owner, 2026-09-20) because this ONE section is shared by
-; four install paths - Windows 2000, 32-bit XP, and Vista and Windows 7 x86
-; through [Xhci.Dev6.NTx86] - and the page it would draw has never been
-; opened in any of those guests against this controller. The 9x half ships
-; first, with a before-and-after reading behind it; the NT half is owed the
-; same reading, on Windows 2000 and on Vista, and it lands in
-; src\xhci98-amd64.inf at the same time or the two files drift.
+;   Windows 2000 SP4   NT 5.0  [Xhci.Dev.NTx86]    tab APPEARS
+;   Windows XP SP3     NT 5.1  [Xhci.Dev.NTx86]    tab APPEARS
+;   Windows XP x64     NT 5.2  [Xhci.Dev.NTamd64]  tab APPEARS  (amd64 file)
+;   Windows Vista SP2  NT 6.0  [Xhci.Dev6.NTx86]   tab APPEARS
+;   Windows 7 x86      NT 6.1  [Xhci.Dev6.NTx86]   tab APPEARS
+;
+; The page carries a bandwidth list, a Refresh button and an error-detection
+; checkbox that writes ErrorCheckingEnabled 0/1 under HKLM\SOFTWARE\Microsoft\
+; Windows\CurrentVersion\Usb, exactly as the 9x half's does. The baseline
+; figure differs by generation and nothing here depends on it: NT 5.x reads
+; "System reserved 10%", NT 6.x reads 20%.
+;
+; **THE ONE TRAP, AND IT COST THIS TASK A WHOLE FALSE NEGATIVE.** The roadmap's
+; method was to write the pair BY HAND in regedit first and only then touch
+; this file, the way the 9x line was taken in 2026-09-07. On Windows 2000 and
+; Windows XP that works - the tab appears the moment the property sheet is
+; re-opened. ON VISTA IT DOES NOT. A hand-written EnumPropPages32 on an
+; already-installed devnode produced NO tab at all: not on re-opening the
+; sheet, not with Device Manager restarted, not after a full reboot, while
+; Microsoft's own EHCI controller on the same guest and boot showed its page
+; from the identical pair. The SAME pair, written by THIS FILE at install
+; time, gives Vista the tab. So on NT 6.x the provider list is consulted when
+; the devnode is built and a value added afterwards is never read.
+;
+; Do not "verify" this line by adding it to a devnode by hand on NT 6.x, and
+; do not read such a result as the line failing. Re-install the package.
+; docs\contributing\lessons.md carries this; runs\run-23.md leg V has the
+; readings on both sides of it.
+;
+; usbui.dll is the provider here and sysclass.dll is NOT: sysclass.dll is
+; 16-bit and 9x-only. This INF already copies usbui.dll on the NT 5.x paths
+; (Xhci.CopyUI) and NT 6.x ships it in System32, so the provider is present on
+; every NT path this package installs on.
+;
+; EnumPropPages32 ALONE IS LOAD-BEARING. With Controller deleted and
+; EnumPropPages32 left in place, the Windows 2000 tab still rendered and still
+; read its bandwidth figure live (23.1.5, leg W8). Both lines ship because all
+; three references write both and this file follows them, not because the pair
+; is indivisible.
+;
+; No flags field on EnumPropPages32: FLG_ADDREG_TYPE_SZ is 0 and is spelled as
+; an EMPTY field, which is how all three references write it. Controller is
+; REG_BINARY, flags 1, one byte 01.
 
 [Xhci.AddReg.NT]
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
+HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
+HKR,,Controller,1,01
 
 ; ------------------------------------------------------------------
 ; Windows 2000 SP4 (.NTx86 - most specific match wins on NT)
