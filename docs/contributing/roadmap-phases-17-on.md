@@ -513,7 +513,7 @@ interval below the reset default raises throughput, which if it does becomes a
 registry value whose default changes nothing.
 
 Status: open since 2026-09-19; 23.1 started 2026-09-20 on branch `23.1`, its
-host side done and its guest readings owed. Which version
+host side done and its Windows 98 SE reading taken. Which version
 carries the result is not decided: 23.3, 23.4 and 23.5 are driver code, so the
 third field moves if any of them lands (`releases/README.md`). The owner's
 note on the issue (2026-09-19) is that the speed work may be spread over
@@ -545,15 +545,20 @@ the hub half of item 2 before the root-port half, and both before item 1.
   in six extracted trees is `SYSTRAY.EXE` and not any USB driver, so it can
   only quiet traffic this controller already sees; and Windows ME's
   `sysclass.dll` is the same module as Windows 98 SE's, string for string bar
-  the version resource. **Still owed, and all of it guest work**: the
-  before/after pair read on Windows 98 SE and Windows ME (staged at
-  `vm/T231`, identical binary, one directive apart), the checkbox's registry
-  write confirmed by read-back, what the Bandwidth Usage dialog charges a
-  root-port device reported High Speed, and whether that dialog needs
-  `usbui.dll` - which the exports say it does and the 2026-09-07 note says it
-  does not. One consequence for the owner to weigh: `PROP-MISSING` now fails
-  every already-published INF, `1.1.0.0`'s included, so assembling its upload
-  set after this refuses where it passed before.
+  the version resource. **Windows 98 SE was read on 2026-09-20** and the tab
+  arrives: the Advanced tab appears through the real install path, the
+  checkbox writes `ErrorCheckingEnabled` 0/1 as a machine-wide DWORD, and
+  Bandwidth Usage charges a Full-Speed and a High-Speed root-port device the
+  same 1 % - issue 6, visible in the UI for the first time, in the dialog this
+  task adds the button for. **Still owed**: the `usbui.dll` rename control
+  (A4), Windows ME, and the SweetLow leg, which is the only clean
+  before/after because its snapshot carries no driver. Two consequences for
+  the owner to weigh: `PROP-MISSING` now fails every already-published INF,
+  `1.1.0.0`'s included, so assembling its upload set after this refuses where
+  it passed before; and on Windows 98 + NUSB an in-place upgrade loses its
+  registry phase, so an upgrading user does not get the tab - the release
+  notes' documented remedy for that has been empty since `1.1.0.0` and 23.7
+  must replace it.
 - [ ] 23.2 the moderation experiment. The register is IR0's IMOD: IMODI is
   bits 15:0 in 250 ns units and resets to 4000, 1 ms
   (`xhci-data-structures.md`, Table 5-39 p.392). The start never writes it

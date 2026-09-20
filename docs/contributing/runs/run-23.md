@@ -21,10 +21,11 @@ a reading.
 
 ## 23.1 - the controller's property page (GitHub issue 4 item 5)
 
-Status: **the host side is done and the guest readings are owed.** The
-Windows 98 line is in `src/xhci98.inf`, the INF gate has a `PROP-*` family
-holding it in place, the footprint has learned it, and a before/after package
-pair is staged. Nothing here has been read in a guest yet.
+Status: **the host side is done; Windows 98 SE under NUSB is read; Windows ME
+and the SweetLow install-path leg are owed.** The Windows 98 line is in
+`src/xhci98.inf`, the INF gate has a `PROP-*` family holding it in place, the
+footprint has learned it, and the tab, the checkbox and the Bandwidth Usage
+dialog have all been read in a guest on 2026-09-20.
 
 ### What landed
 
@@ -248,96 +249,179 @@ Staged for the guests at `vm/T231/BEFORE` and `vm/T231/AFTER`, reachable with
 
 ---
 
-## 23.1 guest legs - OWED
+## 23.1 guest legs
 
-Not run. The operator drives the GUI and the agent keeps the host side
-(monitor, `device_add`/`device_del`, `screendump`), per
-`build-and-test.md`, "Who drives the GUI".
+### Leg A - Windows 98 SE under NUSB: TAKEN 2026-09-20
 
-Every step names the observation it should produce, so no clause can end up
-satisfied by inference.
+Vehicle: `vm/fresh-2a.img` at its only snapshot, `base-1.1.0.0-qemu` - a clean
+install of the published `1.1.0.0`, which **is** the before state (the shipped
+INF writes no `EnumPropPages`). Run on a local work copy so the
+OneDrive-synced `vm/fresh-2a.img` was never written; the driver reported
+`DriverEntry (built Sep 18 2026 23:47:30)` and eight USB2-only root ports.
+The operator drove the GUI, the agent the monitor and the screendumps.
 
-### Leg A - Windows 98 SE (target `2a`, `vm/win98.img`, monitor 56591)
+**A0, the baseline.** The controller's Properties carried **General, Driver,
+Resources** and no Advanced tab. A shipped `1.1.0.0` install behaving as
+released.
 
-The post-NUSB guest, which is the one the 2026-09-07 readings were taken on.
+**A0b, the root hub - and it corrects something this repository says.** The
+USB 2.0 Root Hub carried **General, Power, Driver**, and the Power dialog
+rendered live: "The hub is self powered", "Total power available: 500 mA per
+port", and a device list reading "HID-compliant mouse 100 mA" and "7 port(s)
+available 0 mA". That is the same page, with the same strings, that the
+2026-09-07 readings found on Windows 2000 and Windows XP and recorded as an
+**NT** finding; the 9x root hub was evidently never opened. It is **not**
+ours: NUSB's own `USB2.INF` registers it -
 
-**A1. Before.** Install from `E:\T231\BEFORE` (Device Manager -> the xHCI
-device -> Update Driver -> Specify a location). Open the controller's
-Properties.
-*Observation:* the list of tabs, in order. Expected: General, Driver,
-Resources - and **no Advanced**. This is the baseline the whole leg is
-measured against; if an Advanced tab is already there, stop, because the guest
-is not in the state this reading assumes.
+```ini
+[Usb2Hub.AddReg]
+HKR,,DevLoader,,*NTKERN
+HKR,,NTMPDriver,,usbhub20.sys
+HKR,,EnumPropPages,,"sysclass.dll,USBHubPropPage"
+```
 
-**A2. After.** Update Driver again, from `E:\T231\AFTER`. Reboot if the engine
-asks. Open the controller's Properties.
-*Observation:* the tab list again. Expected: General, **Advanced**, Driver,
-Resources, with Advanced between General and Driver. A1 and A2 differ by one
-INF line and nothing else, so whatever moves is that line's doing.
+so on Windows 98 the hub's page comes from the USB 2.0 stack's own INF
+through `sysclass.dll`, with nothing from this package. It is therefore the
+**control** for this task: task 23.1 writes to the controller's devnode key,
+so the hub's page must not move, and it did not.
 
-**A3. What the checkbox writes.** On the Advanced tab, tick "Disable USB error
-detection" and press OK. Then in `REGEDIT`, open
-`HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Usb`.
-*Observation:* whether the key exists, which values are under it, and the
-exact data of `ErrorCheckingEnabled` if it is there. Then reopen the tab,
-**untick** the box, OK, and read the same value again.
-*What this settles:* the static reading says the name and the key live in
-`sysclass.dll` beside the caption. It does not prove the checkbox writes them.
-Two read-backs do. Record the value's type as well as its data - if it is a
-string rather than a DWORD that is worth knowing.
+**A2, the line.** Taken through the real install path rather than by merging
+the value by hand. Result: the controller's Properties now carries **General,
+Advanced, Driver, Resources**, with the Advanced tab between General and
+Driver, holding an unticked "Disable USB error detection" box and a
+"Bandwidth Usage" button. The INF delivered the value.
 
-**A4. Bandwidth Usage, and the `usbui.dll` question.** With the Advanced tab
-open, press "Bandwidth Usage".
-*Observation:* every line the dialog renders, verbatim - the reserved
-percentage, and each device row with whatever speed or bandwidth it is
-charged. Then rename `C:\WINDOWS\SYSTEM\USBUI.DLL` in MS-DOS mode, restart
-Windows, and press the button again.
-*Observation:* whether the dialog still renders, or whether a "Data Access
-Error" box appears instead. **Rename it back afterwards.**
-*What this settles:* whether `usbui.dll` draws this dialog. The exports and
-the adjacent strings say it does; the 2026-09-07 note says it does not. Also
-read the Advanced tab itself in the renamed state - the tab is sysclass.dll's
-on both accounts and should be unaffected, which is the control.
+**How A2 had to be sequenced, and why an in-place upgrade was not used.**
+This is the NUSB teardown fault (`0028:C00312EE`,
+`usbport-miniport-interface.md` section 8): disable, uninstall, in-place
+upgrade and rollback all reach it, and **an upgrade commits its file copy and
+loses its registry phase**. An Update Driver over the running install would
+therefore have copied the binary, dropped the `AddReg`, and read as the line
+not working - a false negative, on top of the crash. The operator's route
+avoided both:
 
-**A5. The issue 6 clause: root port versus behind a hub.** This is what the
-roadmap asked for by name - what the dialog shows for root-port devices
-reported as High Speed. Agent drives the monitor.
-With a device on a **root port**, read Bandwidth Usage. Then with the **same
-device behind a USB 2.0 hub**, read it again.
-*Observation:* the reserved percentage and the device's row in each case.
-*What this settles:* a Full-Speed device on a root port is reported High Speed
-(`docs/issues/06-full-speed-root-port-bugcheck.md`), and `usbui.dll` computes
-bandwidth from the speed it is told. So the root-port reading should charge
-the device far less than the hub reading charges the same device. If it does,
-this dialog is the first place in the UI where issue 6 is visible to a user,
-and that belongs in issue 6's record and in the release notes' known
-limitations, not just here.
+1. `ren C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS XHCI98.SAV`
+2. shut down and **cold** boot (a warm restart wedges Windows 98 at the splash)
+3. with no driver loaded there is no controller to stop, so Update Driver from
+   `D:\T231\AFTER` ran to "Windows has finished installing an updated driver"
+   with no crash
+4. shut down and cold boot again
 
-### Leg B - Windows ME (target `2e`, `vm/winme.img`, monitor 56597)
+**So the lost registry phase is a consequence of the crash, not an independent
+defect**: remove the crash and the `AddReg` commits normally. That is new, and
+it is the first recorded way to upgrade this driver on NUSB without losing the
+registry phase.
 
-SweetLow's stack only - Windows ME has no other supported configuration here
-(`build-and-test.md`, "Windows ME target VM"). Start from the
-`winme-sweetlow-driver` snapshot.
+**A2 raised an Insert Disk prompt for `usbui.dll`, and that is a finding.**
+The image already holds `C:\WINDOWS\SYSTEM\USBUI.DLL` (147,456 B), which is
+dirid 11 - the destination this INF copies it to, with flag 16,
+`COPYFLG_NO_OVERWRITE`. The copy should have been skipped. Windows 98 asked
+for a source anyway, so **the 9x file queue resolves a source before
+`COPYFLG_NO_OVERWRITE` can skip it** - the same shape as the NT 6.x file-queue
+behaviour that forced `[Xhci.Dev6.NTx86]` to copy nothing (roadmap task 21.8).
+Answering the prompt with `C:\WINDOWS\SYSTEM` satisfied it immediately. The
+release notes already warn that the Windows 98 CD may be asked for; what is
+new is that having the file does not prevent the ask.
 
-**B1. Before / B2. After.** As A1 and A2.
-*Observation:* the tab lists. Expected: identical behaviour to Windows 98 SE,
-because the module is the same one - see the table above.
+**A3, what the checkbox writes. The static reading was right.** Ticking
+"Disable USB error detection" and reading
+`HKEY_LOCAL_MACHINE\Software\Microsoft\Windows\CurrentVersion\Usb`:
 
-**B3. The checkbox.** As A3.
-*Observation:* the same key and value. Windows ME's `SYSTRAY.EXE` lacks
-`USBErrorMessagesEnable`, so whether the box has any visible effect there is
-genuinely open; the registry write is what this step reads.
+| box | value | type | data |
+|---|---|---|---|
+| ticked | `ErrorCheckingEnabled` | `REG_DWORD` | `0x00000000 (0)` |
+| unticked | `ErrorCheckingEnabled` | `REG_DWORD` | `0x00000001 (1)` |
 
-**B4. Bandwidth Usage.** As A4's first half only - render the dialog and
-record it. The rename control is Leg A's; repeating it here buys nothing,
-since the two `sysclass.dll` builds agree string for string.
+A straight 0/1 toggle that **persists either way** - unticking writes 1 rather
+than deleting the value, so a user undoing it by hand sets it to 1. The key is
+machine-wide, not the devnode's, and the name appears in no USB driver in any
+of the six `tools/*-extracted` trees and in exactly one file, `SYSTRAY.EXE`.
+**This closes the roadmap's "what does it write and whether this driver can be
+harmed by it"**: it is a shell switch over a key this package never writes,
+and it can only quiet reporting that already runs on every 9x machine.
 
-### What closes 23.1
+**A5, Bandwidth Usage and issue 6.** The dialog rendered, and with no USB
+device attached read "System reserved 10 %" - the same figure the 2026-09-07
+reading recorded. Devices were then added from the monitor onto root ports:
 
-A2 and B2 showing the tab, A3 and B3 naming what the checkbox writes, A4
-resolving the `usbui.dll` question, and A5 recording what the dialog says
-about a root-port device. Then: the `build-and-test.md` `EnumPropPages`
-bullet finished (it was rewritten on 2026-09-20 and carries the guest legs as
-owed),
-`release-notes.md` gaining the tab, and issue 6 gaining A5 if A5 finds what it
-predicts.
+| bus | System reserved |
+|---|---|
+| no USB devices | 10 % |
+| + `usb-mouse,usb_version=1` (12 Mb/s) on root port 2 | 11 % |
+| + `usb-mouse,usb_version=2` (480 Mb/s) on root port 3 | 12 % |
+
+**A Full-Speed device and a High-Speed device on root ports cost the same
+1 %.** That can only hold if the Full-Speed device is budgeted as High Speed,
+which is exactly what `docs/issues/06-full-speed-root-port-bugcheck.md`
+describes: `usbui.dll` computes from the speed it is told
+(`CalculateTotalBandwidth(ULONG, UCHAR, PUSB_PIPE_INFO)` takes a speed byte),
+and every root-port device is reported High Speed. On a true Full-Speed bus
+that mouse's interrupt endpoint is a far larger slice. **So this dialog is the
+first place in the user interface where issue 6 is visible to a user** - which
+matters, because task 23.1 is what puts the button there.
+
+Two limits on that reading, stated rather than left implied. The dialog
+**never itemises devices**: only the "System reserved" row exists and only its
+percentage moves, so the per-device figure is a delta across three readings,
+not an attribution the dialog makes. (The root hub's Power dialog does itemise,
+so this is the Bandwidth page's behaviour, not a failure to enumerate.) And the
+contrast case - the same Full-Speed device behind a hub, where its true speed
+is reported - was **not** taken: QEMU's `usb-hub` is Full Speed, so it would put
+a Full-Speed hub on a root port, which is the topology that bugchecked Windows 7
+in task 22.9 (`STOP 0x7E` in `USBPORT`, issue 6's residual) and is unread on
+Windows 98.
+
+**Owed on Leg A: A4**, the `usbui.dll` rename control - see the conflict
+above. It now has **two** dialogs to kill or spare rather than one, because
+the root hub's Power dialog is the same shape (`USBHubPowerPage` is a
+`usbui.dll` export and a `sysclass.dll` string, exactly as
+`USBControllerBandwidthPage` is). The image carries `usbui.dll`, so the test
+discriminates. Rename `C:\WINDOWS\SYSTEM\USBUI.DLL` away in MS-DOS mode, cold
+boot, and press both **Bandwidth Usage** and the root hub's **Power
+properties**: if either raises "Data Access Error" instead of its dialog, the
+exports win and the 2026-09-07 note is wrong about the dialog. Rename it back
+afterwards. The Advanced tab itself is the control and should be unaffected.
+
+### Leg B - Windows ME (target `2e`, `vm/winme.img`, monitor 56597): OWED
+
+SweetLow's stack only (`build-and-test.md`, "Windows ME target VM"), from the
+`winme-sweetlow-driver` snapshot. As Leg A's A0/A2/A3. The static reading says
+Windows ME's `sysclass.dll` is the same module string for string, so this is a
+confirmation rather than an open question - but Windows ME's `SYSTRAY.EXE`
+lacks `USBErrorMessagesEnable`, so whether the box has any visible effect
+there is genuinely open; the registry write is what B3 reads.
+
+### Leg C - Windows 98 SE under SweetLow's stack: OWED, and it is the install-path leg
+
+`vm/sweetlow-2a.img` at `sweetlow-stack-nodriver`, which carries **no xhci98
+driver**, so both legs are a **fresh first install** and no upgrade is
+involved anywhere:
+
+1. revert to the snapshot, install `D:\T231\BEFORE`, read the tabs
+2. revert again, install `D:\T231\AFTER`, read the tabs
+
+That is the clean before/after Leg A could not give, because Leg A's before
+was the pre-installed state rather than an install of the `BEFORE` package.
+SweetLow's stack is also where the teardown completes cleanly - disable,
+re-enable, Remove and reinstall were all read on `2a-sweetlow` on 2026-09-02
+(`usbport-miniport-interface.md`, the runtime row) - and it is the stack the
+reporter of GitHub issue 4 actually runs, which is the right place to show
+item 5 answered.
+
+### What 23.1 still owes the documents
+
+- `docs/using/release-notes.md`: the Advanced tab as a feature; **and two
+  corrections**. The NUSB upgrade note's remedy - "right-click `xhci98.inf` ->
+  *Install* to deliver the registry values the crashed phase did not" - has
+  been **empty since `1.1.0.0`**, when `[DefaultInstall]` lost its only
+  `AddReg` (`Xhci.AddReg.Global`) along with the selective-suspend mechanism.
+  It could never have delivered a devnode value such as `EnumPropPages`
+  anyway: those live in `Xhci.AddReg`, which only a device install runs. The
+  remedy that does work is Leg A's rename-and-cold-boot sequence, and it
+  should replace it. Until then a Windows 98 + NUSB user upgrading into the
+  release that carries this line does not get the tab.
+- `docs/issues/06-full-speed-root-port-bugcheck.md`: the A5 reading - issue 6
+  is now visible in the UI, in a dialog this task adds the button for.
+- `docs/contributing/build-and-test.md`: the 9x root hub has a Power tab from
+  NUSB's own INF (A0b), which the `usbui.dll` sections do not say; and the
+  `COPYFLG_NO_OVERWRITE` prompt finding.
