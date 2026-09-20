@@ -960,8 +960,16 @@ witness, which is the other half of C4's lesson.
 | Windows 7 x86 | `vm\win7.img` | `qemu-win7-run.cmd` | 55466 |
 | Windows 7 x64 | `vm\win7-x64.img` | `qemu-win7-x64-run.cmd` | 55564 |
 
-**The handoff written for this task gave Vista's monitor as 55565; it is
-55465.** The launcher is the authority, not the handoff.
+**Vista's monitor is 55465 on this host, not the 55565 the handoff and
+`build-and-test.md` both give.** That is not an error in either: 55565/55566 is
+what `setup-qemu-vista.ps1` generates by default, and `build-and-test.md`'s own
+monitor-port section records why this host differs - on 2026-09-13 the excluded
+ranges swallowed every port from 55555 to 55564 and only 55465 and 55466 were
+left bindable, so these launchers were regenerated onto them. `scripts\local\`
+is git-ignored per-host tooling and the J3 rule is to regenerate rather than
+hand-edit, so a host's launcher legitimately differs from the generated
+default. **Read the port out of the launcher you are about to run**, not out of
+a document.
 
 Two mechanics worth carrying forward:
 
@@ -970,9 +978,14 @@ Two mechanics worth carrying forward:
   `vm\winxp.img` has `VM_SIZE 0`. Those guests take a disk-only
   `qemu-img snapshot -c` after a clean shutdown instead.
 - **The x64 NT 6.x guests need the signature-enforcement boot every time.**
-  F8 spam is unreliable; what works is an elevated
-  `bcdedit /set {current} advancedoptions true` followed by a reboot, which
-  puts the boot menu up on every start. Before that boot both guests install
+  `build-and-test.md` records F8 as the route and `sendkey f8` every 200 ms for
+  about 30 seconds as what works (Windows 7 x64, 2026-09-18), with a single
+  late `sendkey f8` too late; Vista x64 is separately recorded as not yielding
+  to the spam at all. **This task used a third route on both guests and it
+  needed no timing**: an elevated `bcdedit /set {current} advancedoptions true`
+  and a reboot, after which the Advanced Boot Options menu comes up on every
+  start and waits. It is an addition to F8, not a replacement for it, and it
+  costs one reboot to set up. Before that boot both guests install
   the package and then refuse to load it - **Vista x64 shows Code 39** with a
   Program Compatibility Assistant box saying "Windows requires a digitally
   signed driver", **Windows 7 x64 shows Code 52** from the wizard itself. The
