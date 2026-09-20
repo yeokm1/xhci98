@@ -129,10 +129,12 @@ and ask none of this.
 ## Not in this release: the controller's Advanced tab
 
 The release **after** `1.1.0.0` adds an **Advanced** tab to the xHCI
-controller's own properties in Device Manager on Windows 98 SE and Windows
-ME. `1.1.0.0` does not have it: its INF does not name that page, so a
-`1.1.0.0` install shows the controller's usual General, Driver and Resources
-and nothing else. It is described here because this is the file that says
+controller's own properties in Device Manager, on **every** system this
+package supports - Windows 98 SE and Windows ME, and Windows 2000, Windows XP
+in both architectures, and Windows Vista and Windows 7 in both architectures.
+`1.1.0.0` does not have it: its INF does not name that page, so a `1.1.0.0`
+install shows the controller's usual General, Driver and Resources and
+nothing else. It is described here because this is the file that says
 what each release gives you, and because the upgrade note at the end of this
 section decides whether you get it at all.
 
@@ -153,7 +155,7 @@ line to its INF naming the page Windows already has - the same line both USB
 - **Bandwidth Usage** shows what the bus has reserved. Its figures are
   computed from the speed Windows was told, so a Full-Speed device in a root
   port is costed as a High-Speed one: a Full-Speed mouse and a High-Speed
-  mouse each added the same 1 % on all three stacks, where on a real
+  mouse each added the same 1 % on all five stacks measured, where on a real
   Full-Speed bus the first would cost far more. Low-Speed devices are
   reported the same way and not separately measured. That is the High Speed
   report under "Known limitations" becoming visible for the first time, not a
@@ -161,9 +163,16 @@ line to its INF naming the page Windows already has - the same line both USB
   dialog itself is `usbui.dll`'s, which this package has placed since
   `1.0.2.0`; see "Installing".
 
-Windows 2000, Windows XP, Windows Vista and Windows 7 are not included. Those
-systems draw the same page through a different provider, and it has not been
-opened against this controller on any of them yet.
+**The NT systems get the tab too, and their page is laid out differently.**
+They draw it through a different provider - `usbui.dll`, which this package
+has placed since `1.0.2.0` - and there the bandwidth list is on the tab
+itself rather than behind a **Bandwidth Usage** button. Windows 2000 calls
+the checkbox **Disable USB error detection** as Windows 98 does; Windows XP
+and later rename it **Don't tell me about USB errors** and add a second box,
+**Tell me if my device can perform faster**, which is Windows' own and not
+this driver's either. The reserved figure a bus with nothing attached shows
+differs by system and means nothing here: Windows 2000 and Windows XP read
+10 %, Windows Vista and Windows 7 read 20 %.
 
 **On Windows 98 with NUSB, upgrading into that release does not give you the
 tab.** An upgrade over a running xhci98 crashes that stack and loses the step
@@ -173,9 +182,13 @@ delivers it. With SweetLow's stack, on Windows 98 SE or Windows ME, an
 ordinary *Update Driver* is enough: no crash, no restart asked for, and the
 tab is there the moment the properties are re-opened.
 
-All of this was measured in virtual machines on 2026-09-20, on the three 9x
-stacks this project runs - Windows 98 SE under NUSB 3.3 and under SweetLow's,
-and Windows ME under SweetLow's - and never on real hardware.
+All of this was measured in virtual machines on 2026-09-20 and never on real
+hardware: the three 9x stacks this project runs - Windows 98 SE under NUSB 3.3
+and under SweetLow's, and Windows ME under SweetLow's - and seven NT guests,
+Windows 2000 SP4, Windows XP SP3, Windows XP x64 SP2, Windows Vista SP2 and
+Windows 7 in both architectures. On the two 64-bit NT 6.x systems the tab is
+there like anywhere else, but so is the requirement above it: they load this
+driver at all only on a boot with driver signature enforcement disabled.
 
 ## Requirements
 
