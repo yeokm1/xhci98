@@ -2197,10 +2197,10 @@ publishes:
 - `docs/usb-xhci-info/win98-wdm.md`, "What about Windows XP?": the tier
   wording, the `GetHciMn` lineage difference, and the vendor xHCI driver
   survey.
-- `docs/contributing/roadmap.md` Phase 19 (the template for adding a
-  VM-supported target), Phase 21 (this record's tasks) and Phase 22, whose
-  tasks 22.1 and 22.2 were taken in the same pass as 21.7 off the same media
-  and whose static half section 6 therefore also settles.
+- `docs/contributing/roadmap-phases-17-on.md` Phase 19 (the template for
+  adding a VM-supported target), Phase 21 (this record's tasks) and Phase
+  22, whose tasks 22.1 and 22.2 were taken in the same pass as 21.7 off the
+  same media and whose static half section 6 therefore also settles.
 - `docs/contributing/legal-provenance.md` sections 1 and 4: routine
   unpacking, and the static tagging every fact here carries.
 - `docs/contributing/design/04-controller-common-buffer.md`: the arithmetic

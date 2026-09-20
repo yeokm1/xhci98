@@ -1,7 +1,7 @@
 # Phase 22 Record - Vista and Windows 7 on both architectures, and release `1.1.0.0`
 
-The detail behind `docs/contributing/roadmap.md`, "Phase 22 - Vista and
-Windows 7, and Release `1.1.0.0`". The roadmap entry carries the goal, the
+The detail behind `docs/contributing/roadmap-phases-17-on.md`, "Phase 22 -
+Vista and Windows 7, and Release `1.1.0.0`". The roadmap entry carries the goal, the
 status, the task table, what is still owed and the checkpoint; this file
 carries what each task did and what each reading said, moved here out of the
 roadmap on 2026-09-17 while the phase was still open. Where the two disagree

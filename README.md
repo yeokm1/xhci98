@@ -240,7 +240,7 @@ Using the driver:
 Working on the driver:
 
 - [Build and test](docs/contributing/build-and-test.md) - toolchain setup, builds, VMs, install, debugging, packaging, recovery
-- [Roadmap](docs/contributing/roadmap.md) - project status: what each phase was for, its status, and the two acts left to the owner (the upload, the hand-run acceptance)
+- [Roadmap](docs/contributing/roadmap.md) - project status: what each phase was for, its status, and the two acts left to the owner (the upload, the hand-run acceptance); Phases 0-16 are the initial release, and [Phase 17 onward](docs/contributing/roadmap-phases-17-on.md) is its second half
 - [Architecture](docs/contributing/architecture.md) and [implementation invariants](docs/contributing/implementation-invariants.md)
 - [Source files](docs/contributing/source-files.md) - what every file in `src/` is for
 - [Failure diagnosis](docs/contributing/failure-diagnosis.md) and [measured lessons](docs/contributing/lessons.md) - read these before theorising about a failure

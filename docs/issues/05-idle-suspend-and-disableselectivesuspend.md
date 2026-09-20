@@ -679,8 +679,9 @@ reading, and none of this has been taken on real hardware.
   and what upgraders keep).
 - [release-notes.md](../using/release-notes.md), "Known limitations", the
   `DisableSelectiveSuspend` entry.
-- [roadmap.md](../contributing/roadmap.md): task 11-V.6, task 19.2 (the NT
-  path), Phase 20 finding F18.
+- [roadmap.md](../contributing/roadmap.md): task 11-V.6.
+- [roadmap-phases-17-on.md](../contributing/roadmap-phases-17-on.md): task
+  19.2 (the NT path), Phase 20 finding F18.
 - [legal-provenance.md](../contributing/legal-provenance.md) section 4: the
   static rows for `usbehci.sys` `SuspendController`, the usbport registry
   reads, the NT 6.x usbport strings, and - for section 5.4 - the selective

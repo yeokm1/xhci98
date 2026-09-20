@@ -230,6 +230,9 @@ but not every input; see
 ### Where to start
 
 Read `docs/contributing/roadmap.md` for the current phase and its checkpoint.
+The roadmap is two files: that one has the status, the conventions and Phases
+0-16 (the initial release), and `docs/contributing/roadmap-phases-17-on.md`
+has the entry of every later phase, the open one included.
 **Do not advance past a phase whose checkpoint has not been observed to pass.**
 Then use the "What to read for each phase" table in `docs/README.md` for the
 documents that phase needs.
