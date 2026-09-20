@@ -9015,3 +9015,82 @@ see** - an abandon that reports nothing is a hub timeout, and on NT 6.x a
 hub timeout is a bugcheck, not a stall. And on XP and Windows 7, with
 `USB_MINIPORT_FLAGS_DISABLE_SS`, no selective suspend reaches a root-hub
 port at all, so a suspend reading there is a Vista reading (run-22, 22.12).
+
+## Press the control before calling it unaffected
+
+On 2026-09-07 a `usbui.dll` rename control on a Windows 98 guest was written
+up as "the tab and the dialog render identically with `usbui.dll` renamed
+away", and that reading propagated into four places as the statement that
+copying `usbui.dll` on 9x buys nothing: `src/xhci98.inf`'s comment,
+`build-and-test.md`, `docs/using/release-notes.md` and `run-20.md`.
+
+Roadmap 23.1 re-ran the control (run-23, leg A4, 2026-09-20) only because the
+export tables predicted otherwise. `usbui.dll` exports
+`USBControllerBandwidthPage` and `USBHubPowerPage`; the 16-bit NE
+`sysclass.dll` carries both of those export names adjacent to the string
+`usbui.dll` and to a "Data Access Error" message - the documented 9x
+`LoadLibrary32W` / `GetProcAddress32W` shape by which a 16-bit module calls a
+32-bit one. The exports won. With `USBUI.DLL` renamed away and the guest cold
+booted, the controller's Advanced tab and its checkbox still render exactly as
+before, but pressing **Bandwidth Usage** raises "Data Access Error", and so
+does the USB 2.0 Root Hub's **Power properties** - a second, independent
+witness on a page this project did not add. So on 9x `sysclass.dll` draws the
+tabs and `usbui.dll` draws the dialogs behind their buttons, and `usbui.dll`
+does not buy nothing there: it buys both dialogs. The decision to copy it
+since `1.0.2.0` was unaffected; only its stated reason changed.
+
+The 2026-09-07 reading had looked at the property sheet and not pressed the
+buttons on it. Nothing about it was careless except its scope, and it read as
+settled for two weeks.
+
+Rules. **A control is "unaffected" only after someone operated it.** A dialog
+that renders is a window that opened, not a dialog that works, and a tab is
+not its contents - when a rename or removal control is run over a UI surface,
+enumerate every button on that surface and press each one. **When an export
+table and a rendered screen disagree, re-run the screen**: here the static
+reading was right and the observation was wrong, which is the opposite of the
+usual direction and the reason the error survived. And a reading that four
+documents come to rest on is worth one cheap repeat before the fifth.
+
+## A `release`-flavour guest cannot explain its own hang
+
+Roadmap 23.1's SweetLow leg (run-23, C4, 2026-09-20) ended with the guest
+spinning in ring 0 after two `device_del`s removed two bound HID devices from
+root ports with Device Manager open and the controller's property sheet on the
+Advanced tab. QEMU burned a full core (10.09 s of CPU in 10 s of wall clock),
+the framebuffer was byte-identical across 70 s with the taskbar clock stopped,
+and `sendkey esc` did nothing.
+
+Everything needed to call it a finding was there except a witness. Both
+packages on that guest were the `release` flavour, which writes nothing to the
+debug console by design, so the only evidence obtainable after the fact was
+`info registers`: five samples gave EIP `c002f692`, `ff084439`, `ff03ed9f`,
+`ff041952` and `c0015284`, which is enough to say varied ring-0 code was
+executing - a storm rather than a spinlock stall - and nothing more. Three
+candidates stayed open and the leg separates none of them: the 9x shell
+re-enumerating with Device Manager open, SweetLow's `usbport.sys` /
+`usbhub20.sys` removal path, and this miniport's. The flavour was chosen
+correctly: the leg was a property-page reading through the real install path,
+which is what a user runs. The cost of that choice was invisible until
+something went wrong, and by then the guest could not be returned to the state
+that produced it.
+
+Rules. **A guest that may be asked to explain a hang must be running the
+`qemu` flavour.** A `release` package's silent debug console is correct
+behaviour and not a failure ("the debugcon log is 0 bytes and that is right"),
+and it is simultaneously a permanently missing witness; the register file is
+not a substitute, because it dates a storm without naming the code. When a leg
+has to run the shipping flavour to mean anything, plan the anomaly repeat on
+the `qemu` flavour instead of reasoning from what survived. **Do not promote an
+untraced hang to a finding** - name the candidates, name the experiment that
+would split them, and leave it unattributed. And the operational rule stands
+whichever candidate is right: **on a 9x guest, close Device Manager before
+detaching a USB device from the monitor.**
+
+One side reading from the same kill is worth keeping, because it contradicts a
+trap recorded elsewhere in this file: the guest was `quit` while spinning,
+never shut down, and the upgrade's registry write was still there on the next
+cold boot. That is the opposite of the `SYSTEM.DAT` rollback a killed 9x guest
+usually costs, and the difference is timing - the registry phase had completed
+and been flushed long before the removal - not luck. Do not read it as licence
+to kill a 9x guest after an install.
