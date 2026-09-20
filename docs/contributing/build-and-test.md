@@ -5083,9 +5083,10 @@ omits:
   `[Xhci.AddReg]` produces an Advanced tab carrying a "Disable USB error
   detection" box and a Bandwidth Usage dialog that enumerates the bus -
   measured on 2026-09-07 by merging the value by hand, and shipped in the INF
-  since task 23.1. The tab rendered identically with `usbui.dll` renamed away
-  in MS-DOS mode and Windows restarted, so the 9x tab is a registry line and
-  not a file. `sysclass.dll` is a 16-bit NE module carrying the string
+  since task 23.1. The **tab** rendered identically with `usbui.dll` renamed
+  away in MS-DOS mode and Windows restarted, so the 9x tab is a registry line
+  and not a file. **The dialogs behind its buttons are a different matter -
+  see below.** `sysclass.dll` is a 16-bit NE module carrying the string
   `usbui.dll` (read statically), and it is on every 9x machine already,
   including the owner's E460, which has `sysclass.dll` and no `usbui.dll`.
   Its cab is not one this INF fetches from (Windows 98 disk 42 =
@@ -5093,16 +5094,35 @@ omits:
   and Windows ME's copy is the same module string for string, bar one code
   fragment and the version resource (read statically 2026-09-20).
 
-  **One part of the 2026-09-07 reading is now in doubt and is owed a guest**:
-  that the *dialog* also rendered with `usbui.dll` renamed away. `usbui.dll`
-  exports `USBControllerBandwidthPage`, `sysclass.dll` carries that export
-  name beside the string `usbui.dll` and a "Data Access Error" message, and a
-  16-bit module reaching a 32-bit export that way is the documented 9x
-  `LoadLibrary32W` route. So the exports predict the button needs the file
-  even though the tab does not. `runs/run-23.md` leg A4 settles it. Nothing
-  about the shipped line depends on the answer - this INF has copied
-  `usbui.dll` on all four paths since 1.0.2.0 - but the repository describes
-  that copy as buying nothing on 9x, and it may turn out to buy the dialog.
+  **One part of the 2026-09-07 reading was wrong, and was corrected on
+  2026-09-20**: it recorded that the *dialog* also rendered with `usbui.dll`
+  renamed away. It does not. Measured on a Windows 98 SE guest under
+  SweetLow's stack (`runs/run-23.md`, Leg C, A4), with
+  `C:\WINDOWS\SYSTEM\USBUI.DLL` (147,456 B) renamed away in MS-DOS mode and
+  the machine cold booted:
+
+  | pressed | `usbui.dll` present | renamed away |
+  |---|---|---|
+  | controller -> Advanced -> **Bandwidth Usage** | the Bandwidth dialog | **"Data Access Error"** |
+  | USB 2.0 Root Hub -> Power -> **Power properties** | the Power dialog | **"Data Access Error"** |
+  | the **Advanced tab** itself | renders | renders unchanged |
+
+  The root hub's button is registered by the USB 2.0 stack's own INF, not by
+  this package, so the two witnesses are independent. The mechanism is the one
+  the strings predict: `usbui.dll` exports `USBControllerBandwidthPage` and
+  `USBHubPowerPage`, and `sysclass.dll` carries both export names beside the
+  string `usbui.dll` and the message "An error occurred while trying to access
+  the requested data." - a 16-bit module reaching a 32-bit export through the
+  documented 9x `LoadLibrary32W` / `GetProcAddress32W` route, with its failure
+  message.
+
+  **So `usbui.dll` does not buy nothing on 9x: it buys both dialogs.** Nothing
+  about the shipped line or the copy changes - this INF has copied `usbui.dll`
+  on all four paths since 1.0.2.0 - but the *reason* recorded for that copy
+  does, and any text here or elsewhere calling the 9x copy cosmetic is wrong.
+  A 9x machine with `sysclass.dll` and no `usbui.dll` gets the tab and the
+  checkbox, and an error from either button; installing this package is what
+  puts the file there.
 
   The checkbox is a **shell** switch, not a stack one, which is what task
   23.1 owed before shipping the line. `sysclass.dll` carries the value name

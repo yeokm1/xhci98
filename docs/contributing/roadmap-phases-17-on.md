@@ -513,7 +513,8 @@ interval below the reset default raises throughput, which if it does becomes a
 registry value whose default changes nothing.
 
 Status: open since 2026-09-19; 23.1 started 2026-09-20 on branch `23.1`, its
-host side done and its Windows 98 SE reading taken. Which version
+host side done and both Windows 98 SE readings taken (NUSB and SweetLow),
+leaving only the Windows ME leg. Which version
 carries the result is not decided: 23.3, 23.4 and 23.5 are driver code, so the
 third field moves if any of them lands (`releases/README.md`). The owner's
 note on the issue (2026-09-19) is that the speed work may be spread over
@@ -550,15 +551,30 @@ the hub half of item 2 before the root-port half, and both before item 1.
   checkbox writes `ErrorCheckingEnabled` 0/1 as a machine-wide DWORD, and
   Bandwidth Usage charges a Full-Speed and a High-Speed root-port device the
   same 1 % - issue 6, visible in the UI for the first time, in the dialog this
-  task adds the button for. **Still owed**: the `usbui.dll` rename control
-  (A4), Windows ME, and the SweetLow leg, which is the only clean
-  before/after because its snapshot carries no driver. Two consequences for
-  the owner to weigh: `PROP-MISSING` now fails every already-published INF,
-  `1.1.0.0`'s included, so assembling its upload set after this refuses where
-  it passed before; and on Windows 98 + NUSB an in-place upgrade loses its
-  registry phase, so an upgrading user does not get the tab - the release
-  notes' documented remedy for that has been empty since `1.1.0.0` and 23.7
-  must replace it.
+  task adds the button for. **The SweetLow leg (C) and the `usbui.dll` rename
+  control (A4) were both taken the same day**, on
+  `vm/sweetlow-2a.img`'s driverless snapshot. Leg C gave the clean
+  before/after - a fresh `BEFORE` install with no Advanced tab, then an
+  **in-place Update Driver to `AFTER` that completed with no crash at all and
+  produced the tab on the same boot with no reboot**, which is the direct
+  contrast with NUSB, where that route loses its registry phase; and it
+  repeated the 10 / 11 / 12 % bandwidth ladder, so issue 6 in the UI is not an
+  NUSB artifact. A4 **refuted the 2026-09-07 reading**: with `usbui.dll`
+  renamed away the Advanced tab and its checkbox still render, but *both*
+  `Bandwidth Usage` and the root hub's `Power properties` raise "Data Access
+  Error", so the tab is `sysclass.dll`'s and the dialogs are `usbui.dll`'s.
+  **`usbui.dll` on 9x therefore does not "buy nothing"** - it buys both
+  dialogs - and every place saying otherwise (this file's item 3 note,
+  `src/xhci98.inf`'s comment, `build-and-test.md`) needs correcting; the
+  decision to copy it since `1.0.2.0` stands and only its stated reason
+  changes. **Still owed**: Windows ME (Leg B). Two consequences for the owner:
+  `PROP-MISSING` now fails every already-published INF, `1.1.0.0`'s included,
+  so assembling its upload set after this refuses where it passed before -
+  **decided 2026-09-20, upload `1.1.0.0` first, so nothing here merges until
+  that upload has happened**; and on Windows 98 + NUSB an in-place upgrade
+  loses its registry phase, so an upgrading user does not get the tab - the
+  release notes' documented remedy for that has been empty since `1.1.0.0`
+  and 23.7 must replace it.
 - [ ] 23.2 the moderation experiment. The register is IR0's IMOD: IMODI is
   bits 15:0 in 250 ns units and resets to 4000, 1 ms
   (`xhci-data-structures.md`, Table 5-39 p.392). The start never writes it

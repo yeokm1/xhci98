@@ -21,11 +21,14 @@ a reading.
 
 ## 23.1 - the controller's property page (GitHub issue 4 item 5)
 
-Status: **the host side is done; Windows 98 SE under NUSB is read; Windows ME
-and the SweetLow install-path leg are owed.** The Windows 98 line is in
-`src/xhci98.inf`, the INF gate has a `PROP-*` family holding it in place, the
-footprint has learned it, and the tab, the checkbox and the Bandwidth Usage
-dialog have all been read in a guest on 2026-09-20.
+Status: **the host side is done, and both Windows 98 SE legs are read - NUSB
+(Leg A) and SweetLow (Leg C), both on 2026-09-20. Windows ME (Leg B) is the
+only guest leg still owed.** The Windows 98 line is in `src/xhci98.inf`, the
+INF gate has a `PROP-*` family holding it in place, the footprint has learned
+it, and the tab, the checkbox and the Bandwidth Usage dialog have all been
+read in a guest on both stacks. Leg C also settled the `usbui.dll` conflict
+(A4) and showed that an in-place Update Driver, which NUSB cannot survive,
+delivers the line cleanly on SweetLow's stack.
 
 ### What landed
 
@@ -114,6 +117,11 @@ Read out of `vm/winme.img` and `vm/win98.img` with 7-Zip (`7z e <img> -r
 sysclass.dll`), which does not write to the image.
 
 #### The Bandwidth Usage dialog, and a conflict worth resolving
+
+**RESOLVED 2026-09-20 by A4, taken on the Leg C guest: the static prediction
+was right and the 2026-09-07 reading was wrong. See "A4" below.** The section
+that follows is kept as it was written, because it is what the prediction
+rested on before it was measured.
 
 This one is **not** settled, and the static reading puts it in tension with
 the 2026-09-07 measurement rather than confirming it.
@@ -226,6 +234,15 @@ So assembling `1.1.0.0`'s upload set after this change refuses on
 `PROP-MISSING`, where it passed before. That is the owner's call, and the two
 ways out are to upload `1.1.0.0` before this lands or to re-cut it with the
 line in.
+
+**Decided 2026-09-20 (owner): upload `1.1.0.0` first.** Its upload set is
+assembled and uploaded before branch `23.1` merges, so `-UploadSetOnly` never
+re-gates a published tree against a rule written after the cut, and `1.1.0.0`
+is not re-cut a ninth time for a cosmetic INF line. The consequence is
+deliberate and belongs in the next version's notes rather than this one's:
+**`1.1.0.0` ships without the Advanced tab**, so a Windows 98 user gets the
+page only by installing the version that follows it. Nothing in this branch
+may be merged to `phase-23` until that upload has happened.
 
 ### The before/after pair, staged and not yet read
 
@@ -382,6 +399,12 @@ properties**: if either raises "Data Access Error" instead of its dialog, the
 exports win and the 2026-09-07 note is wrong about the dialog. Rename it back
 afterwards. The Advanced tab itself is the control and should be unaffected.
 
+**A4 was taken on 2026-09-20, on the Leg C guest rather than Leg A's** - it
+needed a 9x machine carrying `usbui.dll` and an Advanced tab, and by then the
+SweetLow guest had both, at `C:\WINDOWS\SYSTEM\USBUI.DLL`, 147,456 B,
+`04-23-99 10:22p` - byte-identical in size to Leg A's. It is recorded under
+Leg C, A4, and its result is that **the exports win**.
+
 ### Leg B - Windows ME (target `2e`, `vm/winme.img`, monitor 56597): OWED
 
 SweetLow's stack only (`build-and-test.md`, "Windows ME target VM"), from the
@@ -391,22 +414,163 @@ confirmation rather than an open question - but Windows ME's `SYSTRAY.EXE`
 lacks `USBErrorMessagesEnable`, so whether the box has any visible effect
 there is genuinely open; the registry write is what B3 reads.
 
-### Leg C - Windows 98 SE under SweetLow's stack: OWED, and it is the install-path leg
+### Leg C - Windows 98 SE under SweetLow's stack: TAKEN 2026-09-20
 
-`vm/sweetlow-2a.img` at `sweetlow-stack-nodriver`, which carries **no xhci98
-driver**, so both legs are a **fresh first install** and no upgrade is
-involved anywhere:
+Vehicle: `vm/sweetlow-2a.img` at `sweetlow-stack-nodriver`, which carries **no
+xhci98 driver**, so the `BEFORE` install is a genuine **fresh first install** -
+the clean before/after Leg A could not give, because Leg A's before was a
+pre-installed `1.1.0.0` rather than an install of the `BEFORE` package. Run on
+a local work copy; the OneDrive-synced `vm/sweetlow-2a.img` was never written
+and nothing was copied back. The operator drove the GUI, the agent the monitor
+and the screendumps. Both packages are the `release` flavour, so the debug
+console stayed 0 bytes throughout and **Device Manager is the only witness** -
+that is correct, not a failure.
 
-1. revert to the snapshot, install `D:\T231\BEFORE`, read the tabs
-2. revert again, install `D:\T231\AFTER`, read the tabs
+The target had to be re-added to this host's `matrix.config.psd1` first; it is
+git-ignored, so that was a per-host repair and not a tracked change. The same
+pass corrected `Win98Cd`, which named a file that does not exist on this host.
 
-That is the clean before/after Leg A could not give, because Leg A's before
-was the pre-installed state rather than an install of the `BEFORE` package.
-SweetLow's stack is also where the teardown completes cleanly - disable,
-re-enable, Remove and reinstall were all read on `2a-sweetlow` on 2026-09-02
-(`usbport-miniport-interface.md`, the runtime row) - and it is the stack the
-reporter of GitHub issue 4 actually runs, which is the right place to show
-item 5 answered.
+**C1, the fresh `BEFORE` install.** The wizard bound the devnode as **USB 2.0
+eXtensible Host Controller (xhci98)** and, after a cold boot, Device Manager
+showed it with a **USB 2.0 Root Hub** beneath it and no yellow bang. The
+controller's Properties carried **General, Driver, Resources**, General
+reading "This device is working properly", Manufacturer "xHCI98 Project",
+Hardware version 001. No Advanced tab - the published `1.1.0.0` INF behaving
+as released, this time reached by installing it rather than by inheriting it.
+
+**It never asked for the Windows 98 CD.** Leg A's `usbui.dll` prompt (A2a,
+`COPYFLG_NO_OVERWRITE` resolving a source before the skip applies) did not
+recur here. The CD was attached throughout, so this says the queue was
+satisfied without asking, not that an ask was answered. Why the two guests
+differ is **not** established and should not be written down as if it were.
+
+**C2, the in-place upgrade to `AFTER` - and it is the contrast this leg
+existed for.** Update Driver over the *running* `BEFORE` install, pointed at
+`D:\T231\AFTER`, on the same boot. On NUSB that route is fatal: the teardown
+fault `0028:C00312EE` takes the upgrade's registry phase with it and the
+`AddReg` is silently dropped (Leg A, A2). On SweetLow's stack it was **clean -
+no crash, no error dialog, nothing unusual on screen** - and the controller's
+Properties then carried **General, Advanced, Driver, Resources**, with the
+Advanced tab holding an unticked "Disable USB error detection" box and a
+"Bandwidth Usage" button.
+
+**So SweetLow's stack keeps the registry phase that NUSB loses**, and on it the
+line arrives through an ordinary Update Driver. That is the route the reporter
+of GitHub issue 4 - who runs this stack - would actually take.
+
+**And the tab appeared with no reboot at all.** The upgrade was not followed by
+a restart; the Advanced tab was there the moment the property sheet was
+re-opened on the same boot. The page is drawn from `EnumPropPages` on the
+devnode key when Device Manager builds the sheet, so it needs the registry
+write and not a driver reload. Nothing in this task's design depended on that,
+but it is worth knowing before anyone writes "restart required" into the
+release notes.
+
+**C3, Bandwidth Usage, and issue 6 again.** Read on the same boot, with devices
+added from the monitor onto root ports. **Each mouse was installed, not merely
+attached**: the Add New Hardware wizard ran for both, so the operator closed
+the property sheet each time to let it complete and re-opened it to press
+Refresh. The figures below are therefore taken against bound HID devices, the
+same condition as Leg A's A5.
+
+| bus | System reserved |
+|---|---|
+| no USB devices | 10 % |
+| + `usb-mouse,usb_version=1` (12 Mb/s) on root port 2 | 11 % |
+| + `usb-mouse,usb_version=2` (480 Mb/s) on root port 3 | 12 % |
+
+The same 10 / 11 / 12 ladder Leg A read on NUSB, and the same conclusion: **a
+Full-Speed and a High-Speed root-port device cost the same 1 %**, which is
+issue 6 visible in the user interface. It is not an NUSB artifact - it
+reproduces on SweetLow's stack, under the same `usbui.dll`-computed page.
+
+**C4, the guest wedged on removal. Recorded as unattributed.** Both mice were
+removed with two `device_del`s, with **System Properties -> Device Manager open
+and the controller's property sheet open on the Advanced tab** (the Bandwidth
+dialog had been closed). The guest then spun in ring 0: QEMU burning a full
+core (10.09 s of CPU in 10 s of wall clock), the framebuffer byte-identical
+across 70 s with the taskbar clock stopped at 4:05, and `sendkey esc` having no
+effect. It is **not a spinlock deadlock** - five `info registers` samples gave
+EIP `c002f692`, `ff084439`, `ff03ed9f`, `ff041952`, `c0015284`, so varied
+ring-0 code was executing, which reads as a storm rather than a stall.
+
+What was removed were **two bound HID devices**, since the wizard had installed
+both (C3). So this is a surprise removal of installed devices at root ports,
+which does reach this driver, and the honest statement is that **the cause is
+not established**. Three candidates are open and this leg separates none of
+them: the 9x shell re-enumerating with Device Manager open, SweetLow's
+`usbport.sys`/`usbhub20.sys` removal path, and this miniport's. The operator's
+reading is the first, and Leg A is weak negative support for it - Leg A
+attached the same two devices with the same window open, never removed them,
+and did not wedge - but "never removed them" is exactly the untested half, so
+that is a hypothesis and not a control.
+
+**Both packages were the `release` flavour, so there is no trace of any kind
+behind this**, which is why nothing above is written as a finding. What would
+settle it is a `qemu`-flavour reproduction with the log channel live, once with
+Device Manager open and once with it closed; that is the cheapest experiment
+that splits candidate one from the other two. Until then the operational rule
+stands on its own: on a 9x guest, close Device Manager before detaching a USB
+device from the monitor.
+
+The wedged guest was quit rather than shut down, which costs the image state
+but nothing else - every C reading above was already captured.
+
+**A side reading worth keeping: the `AFTER` registry write survived that
+kill.** The guest was quit while spinning, never shut down, and on the next
+cold boot the Advanced tab was still there. That is the opposite of the
+`SYSTEM.DAT`-rollback trap `lessons.md` records for a killed 9x guest, and the
+difference is timing rather than luck - the upgrade's registry phase had
+completed minutes earlier and a boot had not intervened. Do not read it as
+"killing a 9x guest is safe".
+
+**A4, the `usbui.dll` rename control. The exports win, and the 2026-09-07
+reading was wrong.** Taken here because this guest had what the test needs: an
+Advanced tab and `C:\WINDOWS\SYSTEM\USBUI.DLL`, 147,456 B, `04-23-99 10:22p`.
+Renamed to `USBUI.SAV` from "Restart in MS-DOS mode", cold booted, and both
+buttons pressed:
+
+| pressed | with `usbui.dll` present | renamed away |
+|---|---|---|
+| controller -> Advanced -> **Bandwidth Usage** | the Bandwidth dialog, "System reserved 10 %" | **"Data Access Error - An error occurred while trying to access the requested data."** |
+| USB 2.0 Root Hub -> Power -> **Power properties** | the Power dialog | **the same "Data Access Error"** |
+| the **Advanced tab** itself (the control) | General, Advanced, Driver, Resources | unchanged - tab, caption and checkbox all render |
+
+Two independent witnesses, one of them (the root hub's) registered by
+SweetLow's own `USB2.INF` and nothing to do with this package. **So the tab is
+`sysclass.dll`'s and the dialogs behind the buttons are `usbui.dll`'s**,
+exactly as the export and string layout predicted: `sysclass.dll` carries
+`usbui.dll`, `USBControllerBandwidthPage`, `USBHubPowerPage` and the "Data
+Access Error" text adjacent, which is the `LoadLibrary32W` /
+`GetProcAddress32W` shape with its failure message, and the failure message is
+what a missing `usbui.dll` produces.
+
+**What this corrects.** The 2026-09-07 note recorded "the tab **and the
+dialog** render identically with `usbui.dll` renamed away"; the tab half is
+right and the dialog half is wrong, and the likeliest explanation is that the
+button was never pressed in that session. More broadly, **this repository says
+in several places that copying `usbui.dll` on 9x buys nothing, and that is now
+false**: it buys both dialogs. Everything that says otherwise has to be
+corrected - `src/xhci98.inf`'s own comment block above `[Xhci.AddReg]` says it
+(it is quoted in "The before/after pair" above), and
+`build-and-test.md`'s `usbui.dll` sections say it.
+
+**What it does not change.** Since `1.0.2.0` the INF copies `usbui.dll` on all
+four install paths, to dirid 11, so any machine that installs this package has
+it and gets working dialogs. The decision needs no revisiting; what changes is
+the reason recorded for it, which until now was "consistency, since it buys
+nothing on 9x". It also settles the E460 question raised when the conflict was
+opened: a 9x machine with `sysclass.dll` and no `usbui.dll` gets the tab and
+the checkbox, and "Data Access Error" from either button - and this package's
+own install is what puts `usbui.dll` there.
+
+**`usbui.dll` was left renamed.** The standing instruction for this test is to
+rename it back, and on a guest that is kept that is right; here it would have
+been theatre. Every boot of this leg ran on a local work copy under the
+session scratchpad, `vm/sweetlow-2a.img` was never written, and nothing was
+copied back - so the copy carrying `USBUI.SAV` is discarded whole, and the
+`sweetlow-stack-nodriver` snapshot in `vm/` is exactly as it was before this
+leg started. A future leg gets a fresh copy of it.
 
 ### What 23.1 still owes the documents
 

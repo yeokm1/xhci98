@@ -208,14 +208,23 @@ nothing. Windows Vista and Windows 7 are different: every install of them has
 all four files whether or not it ever saw a USB controller, and on those
 systems the package asks Windows to copy none of them.
 
-`usbui.dll` is new in this release and is the one that is purely cosmetic. On
-Windows 2000 and Windows XP, Windows' own INF already asks for a Power tab on
-the USB Root Hub's properties and names that DLL as the page's provider; on a
-machine that never had a USB controller the file is missing, so the tab is
-silently absent. Copying it back gives you the tab, showing the hub's power
-budget and what is attached. On Windows 98 and Windows ME it changes nothing
-visible: that page comes from `sysclass.dll` there, which those systems
-already have.
+`usbui.dll` is new in this release and is the one that changes only what you
+see, never what works. On Windows 2000 and Windows XP, Windows' own INF
+already asks for a Power tab on the USB Root Hub's properties and names that
+DLL as the page's provider; on a machine that never had a USB controller the
+file is missing, so the tab is silently absent. Copying it back gives you the
+tab, showing the hub's power budget and what is attached.
+
+On Windows 98 and Windows ME it is the **dialogs** that need it, not the tabs.
+The tabs themselves come from `sysclass.dll`, which those systems already
+have, so they appear either way. But the buttons on them - the controller's
+**Bandwidth Usage**, and the USB 2.0 Root Hub's **Power properties** - open
+pages that `usbui.dll` draws, and without the file both answer "Data Access
+Error" instead. `sysclass.dll` reaches across to it by name, so the tab works
+and the button does not. Installing this package places the file, so on a
+machine that has installed `1.0.2.0` or later both buttons work. (Measured on
+Windows 98 SE; Windows ME carries the same `sysclass.dll` module but was not
+itself read.)
 
 On an xHCI-only Windows 98 machine that means an "Insert Disk" prompt naming
 the Windows 98 Second Edition CD-ROM during the copy, unless the Windows

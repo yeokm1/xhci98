@@ -348,6 +348,17 @@ renders identically with `usbui.dll` renamed away in MS-DOS mode. The owner's
 E460 fits, carrying `sysclass.dll`, no `usbui.dll` and no tab, because this
 INF registers no property page at all; it still does not.
 
+> **Correction, 2026-09-20 (roadmap task 23.1, Leg C, A4).** "On Windows 98 it
+> buys nothing" is wrong, and the reading behind it was incomplete: the tab was
+> checked with `usbui.dll` renamed away, the **buttons on it** were not. They
+> need the file. With it renamed away the controller's Bandwidth Usage and the
+> root hub's Power properties both raise "Data Access Error" while the tabs
+> render unchanged, so on 9x `usbui.dll` supplies the dialogs and
+> `sysclass.dll` only the tabs. The last sentence is also overtaken: this INF
+> has registered the 9x controller property page since task 23.1.
+> `runs/run-23.md`, Leg C, A4 is the measurement. Left in place above rather
+> than rewritten, because this file records what Phase 20 read on the day.
+
 The Windows 2000 prompt risk the file introduced was read and is silent: on
 a clone of `win2k-xonly.img` rolled back to
 `win2k-xonly-clean-install` and verified to hold none of the four files, the

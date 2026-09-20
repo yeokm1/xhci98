@@ -168,12 +168,30 @@ CopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI
 ; What it buys was MEASURED on 2026-09-07 in a Windows 98 guest rather than
 ; assumed: an Advanced tab appears between General and Driver, carrying a
 ; "Disable USB error detection" box and a Bandwidth Usage dialog that
-; enumerates the bus. The provider that draws it is sysclass.dll - which this
-; INF does not copy and which every 9x machine already has, the owner's E460
-; included - and NOT the usbui.dll copied below: the tab rendered identically
-; with usbui.dll renamed away in MS-DOS mode and Windows restarted. So the 9x
-; tab is one registry line and not a file question at all. GitHub issue 4
-; item 5 asked for the line; roadmap task 23.1 is where it landed.
+; enumerates the bus. The provider that draws the TAB is sysclass.dll - which
+; this INF does not copy and which every 9x machine already has, the owner's
+; E460 included - so the 9x tab is one registry line and not a file question.
+; GitHub issue 4 item 5 asked for the line; roadmap task 23.1 is where it
+; landed.
+;
+; The DIALOG behind the button is a different matter, and an earlier version
+; of this comment had it wrong. It said the tab and the dialog both rendered
+; with usbui.dll renamed away. The tab does; the dialog does NOT. Measured
+; 2026-09-20 on a Windows 98 SE guest under SweetLow's stack (roadmap task
+; 23.1, Leg C, A4): with C:\WINDOWS\SYSTEM\USBUI.DLL renamed away in MS-DOS
+; mode and the machine cold booted, the Advanced tab and its checkbox render
+; unchanged, while Bandwidth Usage raises "Data Access Error - An error
+; occurred while trying to access the requested data." So does the USB 2.0
+; Root Hub's own Power properties button, which SweetLow's USB2.INF registers
+; and which has nothing to do with this package - two independent witnesses.
+; That is the shape sysclass.dll's strings predict: it is a 16-bit NE module
+; carrying usbui.dll, USBControllerBandwidthPage, USBHubPowerPage and that
+; error text adjacent, the LoadLibrary32W/GetProcAddress32W route by which a
+; 16-bit module calls a 32-bit one, with its failure message.
+;
+; So usbui.dll, copied below, is NOT cosmetic on 9x: without it the tab has a
+; button that cannot open. It has been copied on every install path since
+; 1.0.2.0 and that does not change - only the reason does.
 ;
 ; What the checkbox WRITES, and why this driver cannot be harmed by it. Read
 ; STATICALLY on 2026-09-20 (strings out of the shipping binaries; nothing
