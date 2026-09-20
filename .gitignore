@@ -201,6 +201,20 @@ temp/*
 .claude/*
 !.claude/settings.json
 
+# The root handoff: one session's working notes for the next, at the repo root
+# where the owner wants to find it, and ignored so that it stays what it says
+# it is. A root handoff.md existed before and was deleted on 2026-09-18, its
+# content redistributed into `runs/run-22.md` and `releases/README.md`, because
+# a handoff that accumulates procedure becomes a second, drifting copy of the
+# run sheet. This line is not a reversal of that: the file is ignored, so what
+# it holds can never become part of the record by accident, and anything in it
+# that deserves to be tracked has to be *moved* into a document to survive.
+#
+# Ignored rather than tracked for the ordinary reason too - it is volatile
+# per-session state, like `.claude/` above - and by NAME rather than by
+# extension, so no other Markdown file is caught by it.
+handoff.md
+
 # Phase 10: the per-host device-matrix config (copy of config.sample.psd1 beside
 # it). Lives with the harness, not at the repo root; the loaders look only here.
 scripts/vm-matrix/matrix.config.psd1
