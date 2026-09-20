@@ -1223,21 +1223,33 @@ same day and on the same branch:
   11-V.3 keeps, and `build-driver.cmd` was re-run: both 32-bit flavours build,
   the import gate passes, both INF gates pass.
 
-Still owed, and 23.7's to carry unless taken sooner:
+**The documents were all taken on this branch rather than left to 23.7**, in
+the order the list below was written. Three of the four were corrections
+rather than additions - 23.1.5 turned statements in each from incomplete into
+false - which is why none of them waited:
 
-- **`docs/using/release-notes.md`.** The "Not in this release: the controller's
-  Advanced tab" section 23.1 wrote says the NT systems are not included. That
-  is now false: the tab is the next release's on **every** target this package
-  installs on, 9x and NT alike. The x64 half needs its usual qualification -
-  the tab is there, but so is the F8 boot.
-- **`docs/contributing/lessons.md`**, the NT 6.x by-hand trap, which is the
-  reusable part of this task.
-- **`docs/contributing/build-and-test.md`**: the NT root hub's own pages (the
-  Vista hub's Power AND Advanced tabs) beside the 9x ones 23.1 added, and the
-  two mechanics above - `savevm` under WHPX, and the `bcdedit advancedoptions`
-  route to the x64 signature boot, which is better than the F8 spam the
-  existing text implies.
-- **`docs/issues/06`** section 5.1's ladder table, which currently reads three
-  stacks across two operating systems and is now five across four, with
-  Windows 2000's being Microsoft's own native stack - the clause that removes
-  the back-ported-stack explanation.
+- **`docs/using/release-notes.md`** said "Windows 2000, Windows XP, Windows
+  Vista and Windows 7 are not included. Those systems draw the same page
+  through a different provider, and it has not been opened against this
+  controller on any of them yet." Both sentences were false. It now describes
+  the tab as the next release's on **every** target, gives the NT page's
+  different layout and its two generations of checkbox, and keeps the x64
+  qualification: the tab is there, and so is the signature boot.
+- **`docs/contributing/lessons.md`** gained the NT 6.x by-hand trap, which is
+  the reusable part of this task.
+- **`docs/contributing/build-and-test.md`** said the NT half was "not taken"
+  and that `PROP-NTHALF` "holds that half shut", and that F8 "is the only
+  route". It now carries the seven readings, the NT root hub's own pages
+  (Vista's hub has an Advanced tab of its own, "Hub is operating at
+  high-speed"), the `savevm`-under-WHPX refusal, and
+  `bcdedit /set {current} advancedoptions true` as a third signature-boot
+  route needing no timing - an addition to F8, not a replacement.
+- **`docs/issues/06` section 5.1** read "Three legs, three USB 2.0 stacks, two
+  operating systems" and said this package "registers no controller property
+  page" on any NT target. It now carries the five-column ladder, the argument
+  Windows 2000 closes (the three 9x stacks are all back-ported; NT 5.x is
+  Microsoft's own native one, so no back-ported-stack explanation survives),
+  and the `endpoint speed mismatches=00000001` counter as a second witness.
+  `docs/issues/README.md`'s issue 6 row moved with it.
+
+23.7 therefore inherits nothing from 23.1.5.

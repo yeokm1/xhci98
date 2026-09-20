@@ -670,11 +670,16 @@ the hub half of item 2 before the root-port half, and both before item 1.
   is gone, the existing `PROP-*` shape checks now run over both halves through
   a kind-keyed table, and a new `PROP-CTRL*` family holds `Controller` to
   REG_BINARY / flags 1 / data 01. Six self-test cases replaced the one, both
-  footprints were regenerated, and `build-driver.cmd` was re-run. **23.7 still
-  owes the documents**: the release notes' "Not in this release" section says
-  the NT systems are not included and is now false on every target, and
-  `build-and-test.md` and `docs/issues/06` section 5.1 have the additions
-  `runs/run-23.md` lists.
+  footprints were regenerated, and `build-driver.cmd` was re-run.
+
+  **All four documents were taken on this branch rather than left to 23.7**,
+  because three of them were corrections and not additions: the release notes
+  said the NT systems "are not included", `build-and-test.md` said the NT half
+  was "not taken" and that F8 "is the only route", and `docs/issues/06`
+  section 5.1 read "three USB 2.0 stacks, two operating systems" and said this
+  package registers no controller property page on any NT target. All four are
+  now current, `docs/issues/README.md` moved with issue 6, and `lessons.md`
+  carries the NT 6.x by-hand trap. **23.7 inherits nothing from this task.**
 
 - [ ] 23.2 the moderation experiment. The register is IR0's IMOD: IMODI is
   bits 15:0 in 250 ns units and resets to 4000, 1 ms

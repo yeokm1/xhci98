@@ -290,30 +290,54 @@ information is gone before the miniport sees it.
 
 Until roadmap task 23.1 the report was visible only in the speed Device
 Manager prints and in this driver's own trace. It is now visible in a dialog
-Windows draws, and this task is what puts the button there: the controller's
-**Advanced** tab on Windows 98 SE and Windows ME carries a **Bandwidth
-Usage** button, whose dialog is `usbui.dll`'s `USBControllerBandwidthPage`
-and whose figures are computed from the speed usbport was told
-(`CalculateTotalBandwidth(ULONG, UCHAR, PUSB_PIPE_INFO)` takes a speed byte).
+Windows draws, and tasks 23.1 and 23.1.5 are what put it there: the
+controller's **Advanced** tab, whose figures are computed from the speed
+usbport was told (`CalculateTotalBandwidth(ULONG, UCHAR, PUSB_PIPE_INFO)`
+takes a speed byte). On Windows 98 SE and Windows ME it sits behind a
+**Bandwidth Usage** button and the dialog is `usbui.dll`'s
+`USBControllerBandwidthPage`; on the NT targets `usbui.dll` draws the whole
+page and the same list is inline on the tab, with no button.
 
-Three legs, three USB 2.0 stacks, two operating systems, all on 2026-09-20,
-in QEMU guests running the `release` flavour, devices added from the monitor
-onto root ports and installed by the guest's own wizard
-(`../contributing/runs/run-23.md`, legs A5, C3 and B5):
+Five legs, five USB 2.0 stacks, four operating systems, all on 2026-09-20,
+in QEMU guests - the three 9x legs on the `release` flavour and the two NT
+legs on `qemu` - devices added from the monitor onto root ports and installed
+by the guest's own wizard (`../contributing/runs/run-23.md`, legs A5, C3, B5
+and 23.1.5's legs W and X):
 
-| bus | 98 SE, NUSB 3.3 | 98 SE, SweetLow | ME, SweetLow |
-|---|---|---|---|
-| no USB device attached | System reserved 10 % | 10 % | 10 % |
-| + a Full-Speed mouse on a root port (`usb-mouse,usb_version=1`, 12 Mb/s) | 11 % | 11 % | 11 % |
-| + a High-Speed mouse on a root port (`usb-mouse,usb_version=2`, 480 Mb/s) | 12 % | 12 % | 12 % |
+| bus | 98 SE, NUSB 3.3 | 98 SE, SweetLow | ME, SweetLow | 2000 SP4 | XP SP3 |
+|---|---|---|---|---|---|
+| no USB device attached | System reserved 10 % | 10 % | 10 % | 10 % | 10 % |
+| + a Full-Speed mouse on a root port (`usb-mouse,usb_version=1`, 12 Mb/s) | 11 % | 11 % | 11 % | 11 % | 11 % |
+| + a High-Speed mouse on a root port (`usb-mouse,usb_version=2`, 480 Mb/s) | 12 % | 12 % | 12 % | 12 % | 12 % |
 
 **A Full-Speed device and a High-Speed device on a root port cost the same
-1 %**, to the digit, on all three. That can only hold if the Full-Speed
+1 %**, to the digit, on all five. That can only hold if the Full-Speed
 device is budgeted as a High-Speed one, which is this page's subject: on a
 true Full-Speed bus that mouse's interrupt endpoint is a far larger slice.
-Reproducing the ladder on NUSB's Windows 2000-lineage stack, on SweetLow's
-XP-lineage rebuild and on a second operating system is what settles that it
-is neither an NUSB artifact nor a Windows 98 shell artifact.
+
+**Windows 2000 is what closes the argument.** The three 9x legs ruled out an
+NUSB artifact and a Windows 98 shell artifact by reproducing the ladder on
+NUSB's Windows 2000-lineage stack, on SweetLow's XP-lineage rebuild and on a
+second operating system - but all three are *back-ported* stacks, and a
+sceptic could still have hung the miscount on the back-porting. Windows 2000
+SP4 and Windows XP run **Microsoft's own native `usbport.sys` and
+`usbui.dll`, on the operating systems they shipped with**, and they produce
+the identical ladder. There is no back-ported-stack explanation left.
+
+**The driver's own counter agrees, which no 9x leg could show.** The two NT
+legs ran the `qemu` flavour, so the same attaches are in the debug console:
+
+```
+xhci98: slot: endpoint speed differs from the port's, usbport << 8 | decoded=00000302
+xhci98: endpoint speed mismatches=00000001
+```
+
+usbport reporting speed 3 where the driver decoded 2 - **exactly one
+mismatch**, for the Full-Speed mouse and not the High-Speed one, with the
+same encoding on both guests. So the 11 % the page showed and the driver's
+own counter are two witnesses to one event, in one run, on one machine. A
+`runtime` reading. The 9x legs read the page alone, because they were taken
+on the `release` flavour, which has no console.
 
 Read it for what it is, and not for more. **It is a reading of that page's
 own arithmetic, not of usbport's periodic budget.** The figure is the report
@@ -321,7 +345,7 @@ arriving in the user interface; what the schedule is actually charged is
 still unmeasured, and section 9's open item on the accounting stands
 unchanged. **And the per-device figures are deltas rather than
 attributions**: the dialog carries one row, "System reserved", and only its
-percentage moves - it never itemises devices, on any of the three legs.
+percentage moves - it never itemises devices, on any of the five legs.
 The contrast case, the same Full-Speed device behind a hub where its true
 speed is reported, was taken on no leg: QEMU's only hub is a Full-Speed one,
 so putting it on a root port is section 6's topology rather than this one's.
@@ -336,12 +360,17 @@ listed a mouse at 100 mA on Windows 98 SE under NUSB (leg A0b). It is
 and it was the control both legs used. It reports power rather than
 bandwidth - but naming devices is exactly the half the Bandwidth page lacks.
 
-Two limits on availability. The tab is **not** in `1.1.0.0`; it ships in the
-release after it (`../using/release-notes.md`, "Not in this release"). And
-this package registers no controller property page on Windows 2000, XP,
-Vista or Windows 7, so there is no equivalent dialog to open on any NT
-target: `PROP-NTHALF` holds that half until those guest readings exist
-(roadmap task 23.1.5).
+One limit on availability, and it is only a version. The tab is **not** in
+`1.1.0.0`; it ships in the release after it (`../using/release-notes.md`,
+"Not in this release"). **The second limit that used to stand here is gone**:
+this package registered no controller property page on the NT targets until
+roadmap task 23.1.5 took that half on 2026-09-20, and the page now opens on
+every one of them - Windows 2000, Windows XP in both architectures, and
+Windows Vista and Windows 7 in both. `PROP-NTHALF`, which refused the value
+until those readings existed, was inverted in the same change. Only the two
+NT 5.x 32-bit guests were walked up the ladder above; the other five were
+read for the tab's presence and its idle figure, which is 10 % on NT 5.x and
+20 % on NT 6.x.
 
 ## 6. A USB 1.1 hub on a root port: harmless on Windows 98 and 2000, fatal on Vista and 7
 
