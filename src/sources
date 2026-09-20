@@ -178,6 +178,19 @@ TARGETLIBS=.\usbport.lib
 !ERROR XHCI_EXTRA_DEFINES names XHCI_FAIL_START_CONTROLLER alongside something else. Task 12.3's failed-start artifact must be built alone - set XHCI_EXTRA_DEFINES to exactly -DXHCI_FAIL_START_CONTROLLER - because any build carrying that define is staged as the artifact by make-package.ps1 -FailStartArtifact.
 !ENDIF
 !ENDIF
+#
+# The same rule for task 23.2's moderation artifact, and for the same reason:
+# make-package.ps1 -ImodExperimentArtifact keys on a marker that any build
+# merely INCLUDING -DXHCI_IMOD_EXPERIMENT emits, so a mixed build would be
+# staged as the artifact while behaving like neither. xhci_dispatch.c refuses
+# the two combinations it can name with #error; C cannot ask what else was
+# defined, so the general rule is here, where the value is a string.
+#
+!IF [echo $(XHCI_EXTRA_DEFINES)| findstr /c:"XHCI_IMOD_EXPERIMENT" >nul]==0
+!IF "$(XHCI_EXTRA_DEFINES)" != "-DXHCI_IMOD_EXPERIMENT"
+!ERROR XHCI_EXTRA_DEFINES names XHCI_IMOD_EXPERIMENT alongside something else. Task 23.2's moderation artifact must be built alone - set XHCI_EXTRA_DEFINES to exactly -DXHCI_IMOD_EXPERIMENT - because any build carrying that define is staged as the artifact by make-package.ps1 -ImodExperimentArtifact.
+!ENDIF
+!ENDIF
 C_DEFINES=$(C_DEFINES) $(XHCI_EXTRA_DEFINES) -DXHCI_DIAGNOSTIC_BUILD
 !ELSE
 C_DEFINES=$(C_DEFINES)

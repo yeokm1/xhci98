@@ -1386,10 +1386,54 @@ that has no value set.
 
 Not taken. This is the procedure it is waiting for.
 
-Build once: `set XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT` then
-`scripts\build-driver.cmd release`. The `release` flavour, not `qemu` - this is
-bare metal, and `qemu`'s port-`0xE9` mirror must never leave the emulator. Put
-that one `.sys` on the machine.
+Build and package once:
+
+```
+set XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT
+scripts\build-driver.cmd release
+powershell -File scripts\package\make-package.ps1 -Flavor release -Arch x86 -ImodExperimentArtifact
+```
+
+The `release` flavour, not `qemu` - this is bare metal, and `qemu`'s
+port-`0xE9` mirror must never leave the emulator.
+
+**`-ImodExperimentArtifact` is new, and it is the second exception to the
+packager's do-not-deploy rule.** It exists because the experiment's machine is
+a **clean** Windows 98 SE install: there is no driver on it for a `ren` +
+`copy` binary swap to replace, and an INF install is the only thing that
+creates the devnode and the software key the value is read out of. The switch
+is narrow the same way task 12.3's is, by construction rather than by
+intention - it admits only an image carrying
+`XHCI98_IMOD_EXPERIMENT_ARTIFACT_TASK_23_2`, which only `-DXHCI_IMOD_EXPERIMENT`
+emits, **and** the do-not-deploy marker, so an artifact that had lost the
+second one could not sneak in behind the first. The two switches key on
+different markers and neither stages the other's build, which the packager's
+self-tests drive as five cases. `make-release.ps1` is unchanged and still
+refuses this binary on the do-not-deploy marker, as it always did.
+
+Built alone, and refused in the three places 12.3's is: `scripts\build-driver.cmd`
+before the DDK is even located, `src\sources` as a string comparison that binds
+a bare `build` from a DDK prompt, and `src\xhci_dispatch.c` as an `#error` for
+the two combinations this tree can name.
+
+**Unlike 12.3's artifact this one is not a broken driver.** With the value
+unset it writes no IMOD and behaves exactly as the shipping build, so the one
+install is both the control and every arm of the sweep. It is still a bench
+instrument and must never be published.
+
+**A clean Windows 98 SE needs NUSB 3.3 (or SweetLow's stack) installed first**,
+because it has no `usbport.sys` of its own; without it this package installs
+and the device shows `Code 2`. Then Device Manager, the unclaimed xHCI
+controller, Update Driver, Specify a location, the package directory. On an
+xHCI-only machine the copy phase asks for the Windows 98 SE CD, since
+`usbd.sys`, `usbhub.sys` and `usbui.dll` come from the OS's own source through
+`LayoutFile` and nothing on that machine ever placed them.
+
+**Install once, then only reboots.** Under NUSB, disabling, removing or
+upgrading this driver in Device Manager blue-screens the machine at
+`0028:C00312EE` (release acceptance test, 7.1). The sweep needs none of the
+three: it changes a registry value and reboots, which is exactly why the value
+was put in the registry rather than in a compile-time constant.
 
 Per value, in the driver's own software key - the same key `XhciLogVerbosity`
 goes in, whose instance number is fixed by nothing on either target and has to

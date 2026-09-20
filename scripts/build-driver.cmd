@@ -235,6 +235,16 @@ rem later. src\xhci_dispatch.c carries the same refusal as an #error, which is
 rem what binds a bare `build` from a DDK prompt.
 if defined XHCI_FAILSTART if /i not "%XHCI_EXTRA_DEFINES%"=="-DXHCI_FAIL_START_CONTROLLER" goto failstartmixed
 
+rem The same refusal for task 23.2's moderation artifact, which has its own
+rem marker and its own packaging switch and therefore its own way of being
+rem talked into staging a mixed image. Kept as a separate variable and label
+rem rather than a shared "is this a diagnostic artifact" test, because the two
+rem messages have to name different defines and different switches to be worth
+rem anything to the person who hit them.
+set "XHCI_IMODEXP="
+if defined XHCI_EXTRA_DEFINES echo %XHCI_EXTRA_DEFINES% | findstr /c:"XHCI_IMOD_EXPERIMENT" >nul && set "XHCI_IMODEXP=1"
+if defined XHCI_IMODEXP if /i not "%XHCI_EXTRA_DEFINES%"=="-DXHCI_IMOD_EXPERIMENT" goto imodmixed
+
 rem Two refusals, because the two legs want two different toolchains: on the
 rem -amd64 leg DDKROOT is tools\WinDDK71 (or WDKROOT), and a missing WDK used
 rem to be reported as a missing Windows 2000 DDK, naming tools\ntddk and the
@@ -474,6 +484,21 @@ echo string - so a mixed build is staged as the artifact and then behaves like
 echo neither, which is a wasted guest boot at best. Build it on its own:
 echo   set "XHCI_EXTRA_DEFINES=-DXHCI_FAIL_START_CONTROLLER"
 echo   scripts\build-driver.cmd debug
+endlocal
+exit /b 1
+
+:imodmixed
+echo.
+echo ERROR: XHCI_EXTRA_DEFINES names XHCI_IMOD_EXPERIMENT alongside
+echo something else:
+echo   XHCI_EXTRA_DEFINES=%XHCI_EXTRA_DEFINES%
+echo Task 23.2's artifact must be built alone. Every build carrying that define
+echo emits XHCI98_IMOD_EXPERIMENT_ARTIFACT_TASK_23_2, and make-package.ps1
+echo -ImodExperimentArtifact keys its exception to the do-not-deploy rule on
+echo that string - so a mixed build is staged as the artifact and then measures
+echo something nobody asked for. Build it on its own:
+echo   set "XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT"
+echo   scripts\build-driver.cmd release
 endlocal
 exit /b 1
 

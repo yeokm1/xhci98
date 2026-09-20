@@ -121,7 +121,39 @@ a bare `build` from a DDK prompt), scripts\build-driver.cmd refuses it earlier
 with a fuller message, and src\xhci_dispatch.c carries an #error for the one
 other define this tree documents. Review finding 2, round 2 finding 4.
 
-Mutually exclusive with -UnpaddedDriverVerExperiment.
+Mutually exclusive with -ImodExperimentArtifact and
+-UnpaddedDriverVerExperiment.
+
+.PARAMETER ImodExperimentArtifact
+Stage roadmap task 23.2's moderation artifact: a package whose driver reads
+XhciImodExperiment from its own software key and writes it to IR0's IMOD in the
+start. Build it first with
+
+    set XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT
+    scripts\build-driver.cmd release
+
+This is the second exception to the do-not-deploy rule and it is narrow the
+same way the first one is, by construction: the image must carry
+XHCI98_IMOD_EXPERIMENT_ARTIFACT_TASK_23_2, which only that define emits. The
+two switches key on different markers, so neither can stage the other's build,
+and a resource-size probe carries neither.
+
+Why it needs to be a package at all, where 12.3's needed one for a different
+reason: the experiment runs on a clean Windows 98 SE install with no driver on
+it, so there is nothing for a `ren` + `copy` binary swap to replace, and an INF
+install is the only thing that creates the devnode and the software key the
+value is read from.
+
+Unlike 12.3's artifact this one is not a broken driver. With the value unset it
+writes no IMOD and behaves exactly as the shipping build, which is what makes
+one binary serve as both the control and every arm of the sweep. It is still a
+bench instrument and must never be published: it carries the do-not-deploy
+marker, and make-release.ps1 refuses it on that marker as it always did.
+
+Loud in the same two ways: a banner, and out\pkg-imod-<flavor>-<arch> rather
+than out\pkg-<flavor>-<arch>.
+
+Mutually exclusive with -FailStartArtifact and -UnpaddedDriverVerExperiment.
 
 .PARAMETER UnpaddedDriverVerExperiment
 Stage roadmap task 12.4's experiment package: identical to the ordinary package
@@ -165,6 +197,7 @@ param(
     [switch]$SkipBinaryGates,
     [switch]$NoTargetEvidence,
     [switch]$FailStartArtifact,
+    [switch]$ImodExperimentArtifact,
     [switch]$UnpaddedDriverVerExperiment
 )
 
@@ -205,6 +238,8 @@ if ($OutDir -eq "") {
     #
     if ($FailStartArtifact) {
         $OutDir = Join-Path $repo "out\pkg-failstart-$Flavor-$Arch"
+    } elseif ($ImodExperimentArtifact) {
+        $OutDir = Join-Path $repo "out\pkg-imod-$Flavor-$Arch"
     } elseif ($UnpaddedDriverVerExperiment) {
         $OutDir = Join-Path $repo "out\pkg-datefmt-$Flavor-$Arch"
     } else {
@@ -286,6 +321,11 @@ function Test-FailStartMarker {
     return Test-ImageMarker -Path $Path -Marker "XHCI98_FAILSTART_ARTIFACT_TASK_12_3"
 }
 
+function Test-ImodArtifactMarker {
+    param([string]$Path)
+    return Test-ImageMarker -Path $Path -Marker "XHCI98_IMOD_EXPERIMENT_ARTIFACT_TASK_23_2"
+}
+
 
 $gateExtra = @()
 $variantDir = ""
@@ -313,12 +353,25 @@ try {
     # They also disagree about where to land, so the combination silently used
     # the artifact's directory.
     #
-    if ($FailStartArtifact -and $UnpaddedDriverVerExperiment) {
+    #
+    # Three switches now, so the test is "more than one" rather than a pair.
+    # The argument is unchanged and applies to every combination: each varies
+    # ONE thing against the ordinary package - a driver that fails inside
+    # StartController (12.3), a driver that writes IMOD from the registry
+    # (23.2), or an unpadded DriverVer date (12.4) - and a package carrying two
+    # varies two, which measures neither.
+    #
+    $variantSwitches = @()
+    if ($FailStartArtifact)            { $variantSwitches += "-FailStartArtifact" }
+    if ($ImodExperimentArtifact)       { $variantSwitches += "-ImodExperimentArtifact" }
+    if ($UnpaddedDriverVerExperiment)  { $variantSwitches += "-UnpaddedDriverVerExperiment" }
+    if ($variantSwitches.Count -gt 1) {
         throw @"
--FailStartArtifact and -UnpaddedDriverVerExperiment are mutually exclusive.
+$($variantSwitches -join ", ") are mutually exclusive.
 Each varies one thing against the ordinary package - a driver that fails inside
-StartController (task 12.3), or an unpadded DriverVer date (task 12.4) - and a
-package carrying both varies two, which measures neither. Build them one at a
+StartController (task 12.3), a driver that writes IMOD from the registry (task
+23.2), or an unpadded DriverVer date (task 12.4) - and a package carrying more
+than one varies more than one, which measures neither. Build them one at a
 time; they land in different directories on purpose.
 "@
     }
@@ -469,6 +522,40 @@ gate could not refuse if the switch were absent, so it is refused here instead.
         Write-Warn "This package installs and loads and then FAILS inside StartController,"
         Write-Warn "deliberately. It is for exercising start-time cleanup and recovery on a"
         Write-Warn "guest you are prepared to recover - never on a machine you need working."
+        Write-Warn ("Staging to: {0}" -f $OutDir)
+        Write-Host ""
+    } elseif ($ImodExperimentArtifact) {
+        #
+        # Task 23.2's moderation artifact. The same shape as the block above,
+        # and deliberately a separate branch rather than a second flag on it:
+        # each switch admits the image carrying ITS marker, so neither can
+        # stage the other's build.
+        #
+        if (-not (Test-ImodArtifactMarker -Path $DriverPath)) {
+            throw @"
+-ImodExperimentArtifact was passed, but '$DriverPath' does not carry
+XHCI98_IMOD_EXPERIMENT_ARTIFACT_TASK_23_2, so it is not roadmap task 23.2's
+artifact. This switch admits that one artifact and nothing else - it is not a
+general "package a diagnostic build" flag. Build the artifact:
+  set XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT
+  scripts\build-driver.cmd $Flavor
+"@
+        }
+        if (-not (Test-ProbeBuildMarker -Path $DriverPath)) {
+            throw @"
+'$DriverPath' carries the moderation artifact's marker but not
+XHCI98_PROBE_BUILD_DO_NOT_DEPLOY, which every diagnostic build must have
+(src\sources). An artifact that has lost the do-not-deploy marker is one this
+gate could not refuse if the switch were absent, so it is refused here instead.
+"@
+        }
+        Write-Host ""
+        Write-Warn "MODERATION EXPERIMENT ARTIFACT - roadmap task 23.2, not install media."
+        Write-Warn "This package installs and runs normally, and additionally reads"
+        Write-Warn "XhciImodExperiment from the driver's software key and writes it to IR0's"
+        Write-Warn "IMOD in the start. With that value unset it behaves exactly as the"
+        Write-Warn "shipping driver does, which is what makes it its own control."
+        Write-Warn "It is a bench instrument and must never be published or given to a user."
         Write-Warn ("Staging to: {0}" -f $OutDir)
         Write-Host ""
     } elseif (Test-ProbeBuildMarker -Path $DriverPath) {

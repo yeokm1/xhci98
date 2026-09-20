@@ -41,9 +41,18 @@ cosmetic.
 `IMOD.BAT` and `IMOD98.BAT` only mean anything to an **experimental build**,
 one built with `XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT`. A shipping binary
 does not read the value and never will: the read and the IMOD write are both
-behind that define, and `src/sources` turns any nonempty `XHCI_EXTRA_DEFINES`
-into `XHCI_DIAGNOSTIC_BUILD`, the marker `make-package.ps1` refuses to package.
-A value set against a shipping `.sys` correctly does nothing.
+behind that define. A value set against a shipping `.sys` correctly does
+nothing.
+
+That build is packaged with `make-package.ps1 -ImodExperimentArtifact`, the
+second of the packager's two narrow exceptions to the do-not-deploy rule. It
+needs to be installable because the machine it runs on is a clean Windows 98 SE
+install with no driver on it, so there is nothing for a binary swap to replace.
+The exception admits only an image carrying
+`XHCI98_IMOD_EXPERIMENT_ARTIFACT_TASK_23_2` **and** the do-not-deploy marker;
+it cannot stage task 12.3's artifact and `-FailStartArtifact` cannot stage this
+one. `make-release.ps1` still refuses the binary, so it can be installed at a
+bench and never published.
 
 Neither file restarts the controller, and neither pretends to. The value is
 read once per start, so nothing is in force until the machine is restarted -

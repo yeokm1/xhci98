@@ -707,6 +707,13 @@ the hub half of item 2 before the root-port half, and both before item 1.
   under a later shipping build. Absent means the start writes no IMOD at all,
   which makes the experimental binary its own control. `scripts/bench/`
   carries `IMOD.BAT` and `IMOD98.BAT` for setting it on either target.
+  **The artifact is installable**, through a second narrow packaging exception
+  (`make-package.ps1 -ImodExperimentArtifact`), added 2026-09-20 when the owner
+  reinstalled Windows 98 SE clean on the E460: with no driver on the machine
+  there is nothing for a binary swap to replace, and only an INF install
+  creates the devnode and software key the value is read from. It is keyed on
+  its own marker, so neither packaging exception can stage the other's build,
+  and `make-release.ps1` still refuses it on the do-not-deploy marker.
   The register is IR0's IMOD: IMODI is
   bits 15:0 in 250 ns units and resets to 4000, 1 ms
   (`xhci-data-structures.md`, Table 5-39 p.392). The start never writes it

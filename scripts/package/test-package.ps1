@@ -268,6 +268,77 @@ try {
             "'$f' is missing from the failed-start package; it has to be installable to be worth anything."
     }
 
+    # --- task 23.2's exception admits one artifact, and only one ------------
+    #
+    # The same four cases as task 12.3's above, plus the one that only exists
+    # once there are two exceptions: that neither switch stages the other's
+    # artifact. That is the property the second marker was added for, so it is
+    # the one most worth a test.
+    #
+    Write-Step "the moderation artifact is admitted only by name"
+    $imodDriver = Join-Path $srcDir "xhci98-imod.sys"
+    Set-Content -LiteralPath $imodDriver -Encoding ASCII -Value `
+        ("stand-in XHCI98_PROBE_BUILD_DO_NOT_DEPLOY " +
+         "XHCI98_IMOD_EXPERIMENT_ARTIFACT_TASK_23_2 XHCI98_FLAVOUR_DEBUG driver")
+
+    # 1. Without the switch it is a diagnostic build like any other.
+    $imRefusedOut = Join-Path $script:work "pkg-imod-refused"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $imodDriver,
+        "-OutDir", $imRefusedOut)
+    Assert-True ($r.ExitCode -ne 0) `
+        "the moderation artifact was packaged without -ImodExperimentArtifact."
+    Assert-True (-not (Test-Path -LiteralPath $imRefusedOut)) `
+        "the output directory was created for an artifact refused before staging."
+
+    # 2. The switch does not widen to a probe build that is not the artifact.
+    $imWrongOut = Join-Path $script:work "pkg-imod-wrong"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $probeDriver,
+        "-OutDir", $imWrongOut, "-ImodExperimentArtifact")
+    Assert-True ($r.ExitCode -ne 0) `
+        "-ImodExperimentArtifact packaged a probe build that is not task 23.2's artifact."
+    Assert-True ($r.Output -match "XHCI98_IMOD_EXPERIMENT_ARTIFACT_TASK_23_2") `
+        ("expected the refusal to name the marker it wanted. Output:`n" + $r.Output)
+
+    # 3. An artifact that has lost the do-not-deploy marker is refused too.
+    $imBareDriver = Join-Path $srcDir "xhci98-imod-bare.sys"
+    Set-Content -LiteralPath $imBareDriver -Encoding ASCII -Value `
+        ("stand-in XHCI98_IMOD_EXPERIMENT_ARTIFACT_TASK_23_2 XHCI98_FLAVOUR_DEBUG " +
+         "driver with no probe marker")
+    $imBareOut = Join-Path $script:work "pkg-imod-bare"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $imBareDriver,
+        "-OutDir", $imBareOut, "-ImodExperimentArtifact")
+    Assert-True ($r.ExitCode -ne 0) `
+        "an artifact with no do-not-deploy marker was staged."
+    Assert-True ($r.Output -match "XHCI98_PROBE_BUILD_DO_NOT_DEPLOY") `
+        ("expected the refusal to name the missing marker. Output:`n" + $r.Output)
+
+    # 4. NEITHER SWITCH STAGES THE OTHER'S ARTIFACT. This is why the marker is
+    #    a third string rather than a reuse of task 12.3's: without it, one
+    #    escape hatch would admit both artifacts, which is the "general
+    #    package-a-diagnostic-build flag" both exceptions exist not to be.
+    $xOut1 = Join-Path $script:work "pkg-imod-cross1"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $failStartDriver,
+        "-OutDir", $xOut1, "-ImodExperimentArtifact")
+    Assert-True ($r.ExitCode -ne 0) `
+        "-ImodExperimentArtifact staged task 12.3's failed-start artifact."
+    $xOut2 = Join-Path $script:work "pkg-imod-cross2"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $imodDriver,
+        "-OutDir", $xOut2, "-FailStartArtifact")
+    Assert-True ($r.ExitCode -ne 0) `
+        "-FailStartArtifact staged task 23.2's moderation artifact."
+
+    # 5. And with both markers and the switch it stages, loudly and installably.
+    $imOut = Join-Path $script:work "pkg-imod"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $imodDriver,
+        "-OutDir", $imOut, "-ImodExperimentArtifact")
+    Assert-True ($r.ExitCode -eq 0) ("the moderation artifact was rejected:`n" + $r.Output)
+    Assert-True ($r.Output -match "MODERATION EXPERIMENT ARTIFACT") `
+        ("expected a banner naming the artifact. Output:`n" + $r.Output)
+    foreach ($f in @("xhci98.inf", "xhci98.sys")) {
+        Assert-True (Test-Path -LiteralPath (Join-Path $imOut $f)) `
+            "'$f' is missing from the moderation package; it has to be installable to be worth anything."
+    }
+
     # --- task 12.4's experiment package -------------------------------------
     #
     # One variable: the DriverVer date's leading zeros. The cases below are the
@@ -341,6 +412,22 @@ try {
         ("expected the refusal to say why. Output:`n" + $r.Output)
     Assert-True (-not (Test-Path -LiteralPath $bothOut)) `
         "the output directory was created for a refused mode combination."
+
+    # The exclusion is over all three switches now, not a pair, so the two
+    # combinations the third one added are driven too. A test that only knew
+    # about the original pair would pass while the new switch combined freely.
+    Write-Step "-ImodExperimentArtifact excludes the other two modes"
+    foreach ($pair in @(
+            @("-ImodExperimentArtifact", "-UnpaddedDriverVerExperiment"),
+            @("-ImodExperimentArtifact", "-FailStartArtifact"))) {
+        $exOut = Join-Path $script:work ("pkg-excl-" + ($pair -join "") -replace "-", "")
+        $r = Invoke-Packager (@("-InfPath", $plainInf, "-DriverPath", $imodDriver,
+            "-OutDir", $exOut) + $pair)
+        Assert-True ($r.ExitCode -ne 0) `
+            ("the packager accepted " + ($pair -join " with ") + ".")
+        Assert-True ($r.Output -match "mutually exclusive") `
+            ("expected the refusal to say why. Output:`n" + $r.Output)
+    }
 
     # --- a failure after staging leaves the previous package alone ----------
     #

@@ -237,6 +237,47 @@ static volatile const char XhciFailStartMarker[] =
 #endif
 
 /*
+ * Task 23.2's moderation artifact, and it is a *third* string for exactly the
+ * reason the second one exists.
+ *
+ * The experiment needs a package that **installs**, because the machine it
+ * runs on is a clean Windows 98 SE install with no driver on it at all: there
+ * is nothing for a `ren` + `copy` binary swap to replace, and an INF install is
+ * the only way a devnode and a software key come into being. So this build has
+ * the same need task 12.3 had, and it is given the same escape hatch rather
+ * than a wider one.
+ *
+ * **What keeps it narrow is that the switch is keyed on this marker and not on
+ * the diagnostic one.** `make-package.ps1 -ImodExperimentArtifact` requires
+ * both: the do-not-deploy marker says "this is diagnostic", and this one says
+ * "and it is the artifact that was asked for". A resource-size probe carries
+ * only the first and is still refused, with or without the switch - and so is
+ * task 12.3's artifact, which carries a different second marker. Neither
+ * switch can be talked into staging the other's build.
+ *
+ * Volatile-read in DriverEntry with its neighbours, for the same reason.
+ */
+#ifdef XHCI_IMOD_EXPERIMENT
+/*
+ * Built alone, on the rule the block above established: an image carrying two
+ * diagnostic defines carries two artifact markers and would satisfy whichever
+ * switch was passed while behaving like neither artifact. C can ask what is
+ * defined and never what else was, so this covers the two combinations this
+ * tree can name and `src/sources` carries the general rule as a string
+ * comparison - which also binds a bare `build` from a DDK prompt.
+ */
+#ifdef XHCI_PROBE_RESOURCES_SIZE
+#error "task 23.2's moderation artifact must be built alone: set XHCI_EXTRA_DEFINES to -DXHCI_IMOD_EXPERIMENT and nothing else. Combining it with XHCI_PROBE_RESOURCES_SIZE produces an image carrying both markers, which make-package.ps1 -ImodExperimentArtifact would stage as the artifact."
+#endif
+#ifdef XHCI_FAIL_START_CONTROLLER
+#error "task 23.2's moderation artifact and task 12.3's failed-start artifact cannot be the same image: a build carrying both defines satisfies either packaging switch while behaving like neither artifact. Build one at a time."
+#endif
+#define XHCI_EMITS_IMOD_MARKER 1
+static volatile const char XhciImodArtifactMarker[] =
+    "XHCI98_IMOD_EXPERIMENT_ARTIFACT_TASK_23_2";
+#endif
+
+/*
  * ------------------------------------------------------------------
  * The flavour marker (roadmap task 13-L.1)
  * ------------------------------------------------------------------
@@ -5126,6 +5167,15 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT DriverObject,
      * string, so it has to survive the linker for exactly as long as the
      * behaviour it names does. */
     if (XhciFailStartMarker[0] != 'X') {
+        return STATUS_UNSUCCESSFUL;
+    }
+#endif
+
+#ifdef XHCI_EMITS_IMOD_MARKER
+    /* And again for task 23.2's artifact. A marker the linker dropped is a
+     * packaging switch that refuses the build it was added for, which is the
+     * failure this read exists to prevent in all three cases. */
+    if (XhciImodArtifactMarker[0] != 'X') {
         return STATUS_UNSUCCESSFUL;
     }
 #endif
