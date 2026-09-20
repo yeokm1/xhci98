@@ -86,6 +86,7 @@ file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbhub.sys|usbhub.sys||16|keep
 file|Windows 98|Xhci.CopyUI|11||usbui.dll|usbui.dll||16|keep
 reg|Windows 98|Xhci.AddReg|HKR||DevLoader||*NTKERN|remove
 reg|Windows 98|Xhci.AddReg|HKR||NTMPDriver||xhci98.sys|remove
+reg|Windows 98|Xhci.AddReg|HKR||EnumPropPages||"sysclass.dll,USBControllerPropPage"|remove
 reg|Windows 98|Xhci.AddReg|HKR||XhciLogVerbosity|0x00010001|0|remove
 reg|Windows 98|Xhci.AddReg|HKR||XhciLogDebugView|0x00010001|0|remove
 path|Windows 2000|device install|Xhci.Dev.NTx86

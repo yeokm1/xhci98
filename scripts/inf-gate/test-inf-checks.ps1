@@ -451,15 +451,19 @@ try {
     # deleted it from both would pass just as loudly while proving nothing
     # about the half that matters.
     Assert-RuleFires "logverbosity-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,NTMPDriver,,xhci98.sys`r`nHKR,,XhciLogVerbosity,0x00010001,0",
-                             "HKR,,NTMPDriver,,xhci98.sys")
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010001,0",
+                             "HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"")
     }
-    # Anchored on NTMPDriver, which only the 9x section has, rather than on the
-    # comment that used to follow it: that comment introduced
-    # [Xhci.AddReg.Global] and went with the section in 1.1.0.0.
+    # **Re-anchored on the EnumPropPages line at roadmap task 23.1**, which is
+    # what now sits between NTMPDriver and the two log values. These two were
+    # anchored on NTMPDriver, and that anchor broke the moment a line landed
+    # after it - both cases reported PASS-shaped nothing until
+    # Assert-RuleFires' unchanged-mutation guard called it, which is the guard
+    # earning its keep for the second time. EnumPropPages is 9x-only, like
+    # NTMPDriver, so the cases still cannot drift onto an NT path.
     Assert-RuleFires "logdbgview-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,NTMPDriver,,xhci98.sys`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,,XhciLogDebugView,0x00010001,0",
-                             "HKR,,NTMPDriver,,xhci98.sys`r`nHKR,,XhciLogVerbosity,0x00010001,0")
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,,XhciLogDebugView,0x00010001,0",
+                             "HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010001,0")
     }
 
     # And the NT path, the same two.
@@ -509,6 +513,72 @@ try {
     Assert-RuleFires "logverbosity-default" "VAL-DEFAULT" {
         param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0",
                              "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,1")
+    }
+
+    # ---- PROP-* : the controller's own property page ---------------
+    #
+    # Roadmap task 23.1. Every one of these is a literal .Replace() over the
+    # INF's own text, so Assert-RuleFires' "the mutation has to actually
+    # mutate" guard is what keeps a renamed value from turning a case into a
+    # silent PASS - the VAL-MISSING defect this suite found in itself.
+    Write-Step "the controller's property page"
+
+    # The line gone altogether, which is what the file looked like from
+    # 1.0.0.0 to 1.1.0.0. Anchored on NTMPDriver, which only the 9x section
+    # has, so the case cannot drift onto an NT path.
+    Assert-RuleFires "proppage-missing-9x" "PROP-MISSING" {
+        param($t) $t.Replace("HKR,,NTMPDriver,,xhci98.sys`r`nHKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`n",
+                             "HKR,,NTMPDriver,,xhci98.sys`r`n")
+    }
+
+    # **The provider, which is the mistake actually waiting to be made**: the
+    # NT provider is usbui.dll, this INF copies usbui.dll on all four paths,
+    # and on 9x usbui.dll draws nothing at all (measured 2026-09-07). A file
+    # that named it here would install cleanly and show no tab.
+    Assert-RuleFires "proppage-usbui-provider" "PROP-PROVIDER" {
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"",
+                             "HKR,,EnumPropPages,,`"usbui.dll,USBControllerPropPageProvider`"")
+    }
+    # The same rule for the other half of the string: right file, wrong entry
+    # point. sysclass.dll exports USBControllerPropPage and USBHubPropPage as
+    # separate names.
+    Assert-RuleFires "proppage-hub-entrypoint" "PROP-PROVIDER" {
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"",
+                             "HKR,,EnumPropPages,,`"sysclass.dll,USBHubPropPage`"")
+    }
+
+    # A numeric flags field. FLG_ADDREG_TYPE_SZ is 0 and is spelled empty;
+    # 0x00010001 here would write the shell a DWORD to read as a string.
+    Assert-RuleFires "proppage-flags" "PROP-FLAGS" {
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"",
+                             "HKR,,EnumPropPages,0x00010001,`"sysclass.dll,USBControllerPropPage`"")
+    }
+
+    Assert-RuleFires "proppage-subkey" "PROP-SUBKEY" {
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"",
+                             "HKR,Parameters,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"")
+    }
+
+    # PROP-DUP gets a case for the reason VAL-DUP does: the checker reads
+    # $hits[0] and the engine picks whichever it likes, so the second line
+    # carries a DIFFERENT provider - the shape that actually costs something.
+    Assert-RuleFires "proppage-duplicated" "PROP-DUP" {
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"",
+                             "HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,EnumPropPages,,`"usbui.dll,USBControllerPropPageProvider`"")
+    }
+
+    # **The NT half arriving without its guest readings**, which is the whole
+    # of PROP-NTHALF. [Xhci.AddReg.NT] serves Windows 2000, 32-bit XP, and
+    # Vista and Windows 7 x86, so one added line is four unread install paths.
+    Assert-RuleFires "proppage-nt-half-taken" "PROP-NTHALF" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0",
+                             "[Xhci.AddReg.NT]`r`nHKR,,EnumPropPages32,,`"usbui.dll,USBControllerPropPageProvider`"`r`nHKR,,XhciLogVerbosity,0x00010001,0")
+    }
+    # And the 9x value on an NT path, which is the same line in the wrong
+    # place: no NT engine reads it, so it is a value nothing anywhere reads.
+    Assert-RuleFires "proppage-9x-value-on-nt" "PROP-STRAY" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0",
+                             "[Xhci.AddReg.NT]`r`nHKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010001,0")
     }
 
     Write-Step "the two install paths"

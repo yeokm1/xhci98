@@ -159,26 +159,53 @@ Inf.CopyFiles=17
 AddReg=Xhci.AddReg
 CopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI
 
-; The device's whole 9x registry footprint. NUSB's EHCI install adds a third,
-; cosmetic EnumPropPages value; this file deliberately omits it, and its
-; Win2000 EnumPropPages32/Controller counterparts. They affect no binding and
-; no load, and this package registers no property page of its own on either
-; target.
+; The device's whole 9x registry footprint. The EnumPropPages value is the
+; third one NUSB's [EHCI.AddReg] writes, transcribed from it like the two
+; above; it is cosmetic, affecting no binding and no load, and it is the 9x
+; half alone. The Win2000 EnumPropPages32/Controller counterparts are still
+; NOT written - the block above [Xhci.AddReg.NT] says why.
 ;
-; What omitting it costs was MEASURED on 2026-09-07 in a Windows 98 guest
-; rather than left as an assumption. Adding
-;   HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"
-; here does give the controller an Advanced tab, carrying a "Disable USB
-; error detection" box and a Bandwidth Usage dialog that enumerates the bus.
-; The provider that draws it is sysclass.dll - which this INF does not copy
-; and which every 9x machine already has, the owner's E460 included - and
-; NOT the usbui.dll copied below: the tab and the dialog render identically
-; with usbui.dll renamed away in MS-DOS mode and Windows restarted. So the
-; 9x tab is one registry line away and is not a file question at all.
-; Whether to add that line is a separate decision, not taken.
+; What it buys was MEASURED on 2026-09-07 in a Windows 98 guest rather than
+; assumed: an Advanced tab appears between General and Driver, carrying a
+; "Disable USB error detection" box and a Bandwidth Usage dialog that
+; enumerates the bus. The provider that draws it is sysclass.dll - which this
+; INF does not copy and which every 9x machine already has, the owner's E460
+; included - and NOT the usbui.dll copied below: the tab rendered identically
+; with usbui.dll renamed away in MS-DOS mode and Windows restarted. So the 9x
+; tab is one registry line and not a file question at all. GitHub issue 4
+; item 5 asked for the line; roadmap task 23.1 is where it landed.
+;
+; What the checkbox WRITES, and why this driver cannot be harmed by it. Read
+; STATICALLY on 2026-09-20 (strings out of the shipping binaries; nothing
+; executed): sysclass.dll is a 16-bit NE module carrying the value name
+; ErrorCheckingEnabled beside the key
+; SOFTWARE\Microsoft\Windows\CurrentVersion\Usb and the string
+; SystemTray_Main. That name is in NO USB driver this repository has
+; extracted - not NUSB 3.3's or 3.6's usbport.sys/usbhub20.sys, not
+; SweetLow's, not Windows 98 SE's own usbd.sys/usbhub.sys, not Windows 2000
+; SP4's or Windows XP SP3's - and in exactly one file: SYSTRAY.EXE, the
+; shell's system tray, which carries it beside usbui.dll,
+; USBErrorMessagesEnable and \\.\HCD%d. So the box is a SHELL switch and not
+; a stack one: it turns off the tray's own USB error reporting, which runs on
+; every 9x machine with or without this value and with or without this tab.
+; It can only quiet what already touches this controller, never add to it;
+; and if any of that traffic does reach the miniport it arrives through
+; usbport's PassThru, which xhciPassThru GUID-matches and answers
+; MP_STATUS_NOT_SUPPORTED (src\xhci_dispatch.c). Two things about it are
+; worth knowing anyway: the key is machine-wide, so a user who ticks the box
+; changes every usbport controller and the value outlives this devnode -
+; exactly the shape that got DisableSelectiveSuspend removed at 1.1.0.0, the
+; difference being that this package writes nothing there and only exposes a
+; box Windows already has.
+;
+; Windows ME reads this same undecorated section and its sysclass.dll is the
+; same module: 27,408 B against Windows 98 SE's 27,184 B, and every extracted
+; string identical bar one code fragment and the version resource (read
+; statically the same day out of vm\winme.img and vm\win98.img).
 [Xhci.AddReg]
 HKR,,DevLoader,,*NTKERN
 HKR,,NTMPDriver,,xhci98.sys
+HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
 
@@ -294,6 +321,34 @@ HKR,,XhciLogDebugView,0x00010001,0
 ; whatever this says; what the default saves is the append sites' cost at real
 ; interrupt rates on Windows 98 metal, which is unmeasured. An end user who has
 ; not asked for a log has no channel open at all.
+
+; ------------------------------------------------------------------
+; The NT half of the property page: NOT taken, and what it would be
+; ------------------------------------------------------------------
+;
+; The counterpart of the 9x EnumPropPages line above is a PAIR -
+;   HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
+;   HKR,,Controller,1,01
+; - and all three NT references this project reads write exactly it for their
+; own EHCI controller: Windows 2000 SP4's USB.INF [EHCI.AddReg.NT], Windows
+; XP SP3's usbport.inf, and Windows Vista SP2's usbport.inf. The last was
+; read statically on 2026-09-20 out of vm\vista.img, where the file is UTF-16
+; and a byte grep for the name finds nothing. Windows 7's own copy has NOT
+; been read: 7-Zip sees vm\win7.img as a qcow2 whose live state is in a
+; snapshot and will not walk its NTFS.
+;
+; The provider is present on every NT path this package installs on, since
+; this file already copies usbui.dll on the NT 5.x ones and Vista ships it in
+; System32 (Windows\System32\usbui.dll, 83,456 B, read the same day). So what
+; holds the NT half back is neither the evidence nor the file.
+;
+; It is not taken (owner, 2026-09-20) because this ONE section is shared by
+; four install paths - Windows 2000, 32-bit XP, and Vista and Windows 7 x86
+; through [Xhci.Dev6.NTx86] - and the page it would draw has never been
+; opened in any of those guests against this controller. The 9x half ships
+; first, with a before-and-after reading behind it; the NT half is owed the
+; same reading, on Windows 2000 and on Vista, and it lands in
+; src\xhci98-amd64.inf at the same time or the two files drift.
 
 [Xhci.AddReg.NT]
 HKR,,XhciLogVerbosity,0x00010001,0

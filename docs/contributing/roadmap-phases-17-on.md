@@ -512,7 +512,8 @@ reason; and one measurement of the owner's, whether an interrupt moderation
 interval below the reset default raises throughput, which if it does becomes a
 registry value whose default changes nothing.
 
-Status: open since 2026-09-19 on branch `phase-23`; no task has started. Which version
+Status: open since 2026-09-19; 23.1 started 2026-09-20 on branch `23.1`, its
+host side done and its guest readings owed. Which version
 carries the result is not decided: 23.3, 23.4 and 23.5 are driver code, so the
 third field moves if any of them lands (`releases/README.md`). The owner's
 note on the issue (2026-09-19) is that the speed work may be spread over
@@ -524,44 +525,35 @@ not built.
 fixed in `1.0.1.0`; the GitHub issue is
 `https://github.com/yeokm1/xhci98/issues/4`, "USB bus internal requests
 handling (and more)", opened by LordOfMice on 2026-09-06 and still open. Its
-items, by the reporter's own numbering:
+items 3 (`usbui.dll`) and 4 (selective suspend) are already answered, in
+`1.0.2.0` and `1.1.0.0`; the tasks below carry the rest and each names the
+item it answers. They are ordered easiest first rather than by the issue's
+numbering, and that order also keeps the reporter's advice of 2026-09-15:
+the hub half of item 2 before the root-port half, and both before item 1.
 
-| Item | Request | Standing |
-|---|---|---|
-| 1 | Root-port devices are reported High Speed whatever they are | Open: `docs/issues/06-full-speed-root-port-bugcheck.md`. Task 23.6 |
-| 2 | An interrupt polling rate chosen through the configuration request (HIDUSBF) is reported as applied and is not | Open, in two halves. Behind a hub a Full-Speed device follows the chosen rate and a Low-Speed device takes 125, 62 and 31 Hz but fails with Code 10 at 250 Hz and above (the reporter's test, 2026-09-12, SweetLow's stack): task 23.4. On a root port nothing changes: task 23.5. The reporter's advice, accepted on 2026-09-15, is the hub half first |
-| 3 | Install the user-mode component too (`usbui.dll`) | Done in `1.0.2.0` (task 20.9) |
-| 4 | `DisableSelectiveSuspend` had no effect for the reporter; then `HcDisableSelectiveSuspend` offered as the better switch | Done in `1.1.0.0` by the miniport flag instead (task 22.11, issue 5) |
-| 5 | The controller's own property page: `HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"` as `USB2.INF` and `USB.INF` carry it | Open; promised on the issue for the next release. Task 23.1 |
-
-Why a phase: items 1 and 2 are one cause seen from two sides (what usbport
-believes a device's speed is decides the `Period` it hands the miniport), so
-answering them piecemeal would repeat the drift Phase 20 was opened to stop;
-and the moderation experiment writes a register the start path has never
-written, which the isochronous builder's IOC-per-TD policy leans on
-(`src/xhci_xfer.c`, the comment above the IOC store), so it wants a
-measurement and a checkpoint rather than a changed constant.
-
-Tasks, ordered easiest first, not by the issue's numbering: an INF line
-whose Windows 98 half is already measured; a one-write experimental build and
-a bench session; the value that experiment may earn, mechanical and readable in
-a guest; a narrow code change that first needs a third usbport lineage read and
-a Low-Speed device on real hardware (no QEMU model declares Low Speed); a
-derivation that may end in "owned by 23.6"; and the architectural decision
-last. The reporter's advice holds in this order: the hub half of item 2 comes
-before the root-port half and before item 1.
-
-- [ ] 23.1 item 5, the controller's property page. On the Windows 98 path,
-  `HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"` in
-  `[Xhci.AddReg]`: measured on 2026-09-07 to draw an Advanced tab with no
-  file added, `sysclass.dll` being on every 9x machine
-  (`build-and-test.md`, the "No `EnumPropPages`" bullet). Owed before it
-  ships: what "Disable USB error detection" writes and whether this driver
-  can be harmed by it, what the Bandwidth Usage dialog shows for root-port
-  devices reported as High Speed, and the same line read on Windows ME. The
-  NT half, `EnumPropPages32` naming `usbui.dll`, is the decision that
-  bullet records as not taken; take it here or record why not. The INF gate
-  and the footprint learn whichever lines land.
+- [ ] 23.1 item 5, the controller's property page. `runs/run-23.md` has the
+  detail. **The line is in `[Xhci.AddReg]`** since 2026-09-20, the INF gate
+  holds it there with a `PROP-*` family (seven rules, eight self-test cases),
+  and the footprint has learned it. **The NT half is deferred, not refused**
+  (owner, 2026-09-20): the pair it takes is known and all three NT references
+  write it, but one `[Xhci.AddReg.NT]` serves four install paths and the page
+  has been opened in none of their guests, so `PROP-NTHALF` refuses it until
+  those readings exist. Of the three things owed before the line ships, two
+  are answered `static`: "Disable USB error detection" names
+  `ErrorCheckingEnabled` under
+  `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Usb`, whose only consumer
+  in six extracted trees is `SYSTRAY.EXE` and not any USB driver, so it can
+  only quiet traffic this controller already sees; and Windows ME's
+  `sysclass.dll` is the same module as Windows 98 SE's, string for string bar
+  the version resource. **Still owed, and all of it guest work**: the
+  before/after pair read on Windows 98 SE and Windows ME (staged at
+  `vm/T231`, identical binary, one directive apart), the checkbox's registry
+  write confirmed by read-back, what the Bandwidth Usage dialog charges a
+  root-port device reported High Speed, and whether that dialog needs
+  `usbui.dll` - which the exports say it does and the 2026-09-07 note says it
+  does not. One consequence for the owner to weigh: `PROP-MISSING` now fails
+  every already-published INF, `1.1.0.0`'s included, so assembling its upload
+  set after this refuses where it passed before.
 - [ ] 23.2 the moderation experiment. The register is IR0's IMOD: IMODI is
   bits 15:0 in 250 ns units and resets to 4000, 1 ms
   (`xhci-data-structures.md`, Table 5-39 p.392). The start never writes it

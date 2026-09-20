@@ -5049,7 +5049,7 @@ memory. Shape:
 | Both | `[Version]` | `$CHICAGO$`, `Class=USB` + the existing USB ClassGUID, `LayoutFile=layout.inf` ("The files the OS supplies" below), `DriverVer` per "Versioning the driver" above (the number moves, so read it out of `src/xhci98.inf` rather than from this row) |
 | Both | `[XhciModels]` | `%XhciDesc%=Xhci.Dev,PCI\CC_0C0330`, one class-code entry, the analog of the references' `PCI\CC_0C0320` |
 | Win98 | `[Xhci.Dev]` | `AddReg=Xhci.AddReg`, `CopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI` (the third since 1.0.2.0). A second `AddReg` section, `Xhci.AddReg.Global`, carried the `DisableSelectiveSuspend` write from 1.0.1.0 to 1.0.2.0 and went at 1.1.0.0 with the mechanism |
-| Win98 | `[Xhci.AddReg]` | `HKR,,DevLoader,,*NTKERN` + `HKR,,NTMPDriver,,xhci98.sys` |
+| Win98 | `[Xhci.AddReg]` | `HKR,,DevLoader,,*NTKERN`, `HKR,,NTMPDriver,,xhci98.sys`, and since roadmap task 23.1 `HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"` (the bullet below) |
 | Win2000 | `[Xhci.Dev.NTx86]` | `AddReg=Xhci.AddReg.NT`, `CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI` (the third since 1.0.2.0); the same `Xhci.AddReg.Global` history as the row above |
 | Win2000 | `[Xhci.Dev.NTx86.Services]` | `AddService=xhci98,0x00000002,Xhci.AddService` |
 | Win2000 | `[Xhci.AddService]` | `ServiceBinary=%12%\xhci98.sys`, type 1, start 3, error 1, `LoadOrderGroup=Base` |
@@ -5059,8 +5059,10 @@ memory. Shape:
 | All four | `[Xhci.CopyUI]` | `usbui.dll,,,16` -> dirid `11` (the system directory), the one OS-supplied row that does not go to dirid 10, on all four install paths since 1.0.2.0. It is the root hub's property-page provider, which the NT targets' own INFs already name; `[DestinationDirs]` carries `Xhci.CopyUI=11` for it - the bare number, which is what the gate requires and what the INF has |
 | Both | `[DefaultInstall]` / `[DefaultInstall.NTx86]` | right-click pre-stage; the 9x one also copies the INF to `%17%`. Not supported on Vista and Windows 7, where `.NTx86` is also what runs: on Vista x86 its `LayoutFile` copies ask for `usbport.sys` from "(Unknown)", and a Cancel aborts the queue silently with `xhci98.sys` left behind and no service (roadmap task 22.5, 2026-09-17) |
 
-Four decisions in it depart from the references, each for a reason that would
-otherwise cost a debug cycle:
+Three decisions in it depart from the references, each for a reason that would
+otherwise cost a debug cycle - a fourth did until roadmap task 23.1 closed it,
+and its bullet below now records what the file carries rather than what it
+omits:
 
 - No `[ControlFlags] ExcludeFromSelect`, which both references set. It only
   hides a model from the manual device-selection list, and the documented
@@ -5068,28 +5070,69 @@ otherwise cost a debug cycle:
   Disk", Win98 "Specify a location"). It cannot affect whether `usbport.sys`
   binds, so the risk of it suppressing the install path is all cost and no
   benefit.
-- No `EnumPropPages` / `EnumPropPages32` / `Controller`. Those name the
-  property-page providers for the *controller's* own Device Manager tab, and
-  this package still registers none. What that costs was measured on
-  2026-09-07 rather than assumed, and the measurement corrected the old
-  reasoning in two ways.
+- `EnumPropPages` on the Windows 98 path and **no** `EnumPropPages32` /
+  `Controller` on the NT ones. These name the property-page providers for the
+  *controller's* own Device Manager tab. This package registered none until
+  roadmap task 23.1 (2026-09-20, GitHub issue 4 item 5) added the 9x half; the
+  NT half is deferred. `runs/run-23.md` carries task 23.1 and the guest
+  readings it still owes, and `scripts\inf-gate\check-inf.ps1`'s `PROP-*`
+  family holds both halves where they are.
 
-  On Windows 98 the provider is `sysclass.dll`, **not** `usbui.dll`. Adding
-  `HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"` to
-  `[Xhci.AddReg]` does produce an Advanced tab, carrying a "Disable USB error
-  detection" box and a Bandwidth Usage dialog that enumerates the bus. The
-  tab and the dialog render identically with `usbui.dll` renamed away in
-  MS-DOS mode and Windows restarted, so the 9x tab is a registry line and not
-  a file. `sysclass.dll` is a 16-bit NE module carrying the string
+  On Windows 98 the provider is `sysclass.dll`, **not** `usbui.dll`.
+  `HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"` in
+  `[Xhci.AddReg]` produces an Advanced tab carrying a "Disable USB error
+  detection" box and a Bandwidth Usage dialog that enumerates the bus -
+  measured on 2026-09-07 by merging the value by hand, and shipped in the INF
+  since task 23.1. The tab rendered identically with `usbui.dll` renamed away
+  in MS-DOS mode and Windows restarted, so the 9x tab is a registry line and
+  not a file. `sysclass.dll` is a 16-bit NE module carrying the string
   `usbui.dll` (read statically), and it is on every 9x machine already,
   including the owner's E460, which has `sysclass.dll` and no `usbui.dll`.
   Its cab is not one this INF fetches from (Windows 98 disk 42 =
-  `WIN98_42.CAB`, 27,184 B; Windows ME disk 15 = `WIN_15.CAB`, 27,408 B).
+  `WIN98_42.CAB`, 27,184 B; Windows ME disk 15 = `WIN_15.CAB`, 27,408 B) -
+  and Windows ME's copy is the same module string for string, bar one code
+  fragment and the version resource (read statically 2026-09-20).
+
+  **One part of the 2026-09-07 reading is now in doubt and is owed a guest**:
+  that the *dialog* also rendered with `usbui.dll` renamed away. `usbui.dll`
+  exports `USBControllerBandwidthPage`, `sysclass.dll` carries that export
+  name beside the string `usbui.dll` and a "Data Access Error" message, and a
+  16-bit module reaching a 32-bit export that way is the documented 9x
+  `LoadLibrary32W` route. So the exports predict the button needs the file
+  even though the tab does not. `runs/run-23.md` leg A4 settles it. Nothing
+  about the shipped line depends on the answer - this INF has copied
+  `usbui.dll` on all four paths since 1.0.2.0 - but the repository describes
+  that copy as buying nothing on 9x, and it may turn out to buy the dialog.
+
+  The checkbox is a **shell** switch, not a stack one, which is what task
+  23.1 owed before shipping the line. `sysclass.dll` carries the value name
+  `ErrorCheckingEnabled` beside the key
+  `SOFTWARE\Microsoft\Windows\CurrentVersion\Usb`, and that name appears in
+  no USB driver in `tools\*-extracted` - NUSB 3.3 and 3.6, SweetLow's,
+  Windows 98 SE's own, Windows 2000 SP4's, Windows XP SP3's - but does appear
+  in `SYSTRAY.EXE`, beside `usbui.dll`, `USBErrorMessagesEnable` and
+  `\\.\HCD%d` (all read statically 2026-09-20). It turns off the tray's own
+  USB error reporting, which runs on a 9x machine whether or not this tab
+  exists, so it can only quiet traffic this controller already sees; and
+  anything that did reach the miniport would arrive through usbport's
+  PassThru, which `xhciPassThru` GUID-matches and answers
+  `MP_STATUS_NOT_SUPPORTED`. The key is machine-wide, so a user who ticks the
+  box changes every controller usbport drives - but this package writes
+  nothing there, it only exposes a box Windows already has.
 
   On the NT targets `usbui.dll` genuinely is the provider, and since 1.0.2.0
   the INF copies it - for the root hub's page, not the controller's; see
-  "The files the OS supplies" below. Adding the controller's own
-  `EnumPropPages32` remains a separate decision that has not been taken.
+  "The files the OS supplies" below. The controller's own pair,
+  `HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"` with
+  `HKR,,Controller,1,01`, is what Windows 2000 SP4's `USB.INF`, Windows XP
+  SP3's `usbport.inf` and Windows Vista SP2's `usbport.inf` all write for
+  their own EHCI controller (the last two read statically 2026-09-20 out of
+  `vm\winxp.img` and `vm\vista.img`; Vista's file is UTF-16, so a byte grep
+  for the name finds nothing in it, and Windows 7's has not been read). It is
+  **not taken** (owner, 2026-09-20) because one `[Xhci.AddReg.NT]` serves
+  Windows 2000, 32-bit XP, and Vista and Windows 7 x86, and the page has been
+  opened in none of those guests against this controller. `PROP-NTHALF`
+  refuses it until they have been.
 
   So the old "absent-dependency shape" framing was half right: the file was
   indeed absent, but on 9x it was never the one that draws the tab.

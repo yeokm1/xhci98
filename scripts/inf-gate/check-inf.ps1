@@ -79,6 +79,17 @@ What it checks, grouped by the failure each rule prevents:
            once found in VAL-MISSING. The caution it encoded is not lost: it is
            written into src\xhci98.inf beside the values, and a future REG_SZ
            value here must bring the rule back with it.)
+  PROP-*   The controller's own Device Manager property page, since roadmap
+           task 23.1 (GitHub issue 4 item 5). The Windows 98 path must write
+           EnumPropPages naming sysclass.dll's USBControllerPropPage, once, on
+           the devnode key, with no flags field - it is a REG_SZ and the 9x
+           engine is the only one that reads it. **No NT path may write
+           EnumPropPages32** (PROP-NTHALF): the pair that would go there is
+           known and is what all three NT references write, but one
+           [Xhci.AddReg.NT] serves four install paths and the page has been
+           opened in none of their guests, so the owner deferred it on
+           2026-09-20. Inverting that rule is what taking the NT half looks
+           like, the way SUSP-* was inverted on 2026-09-17.
   PKG-*    A staged package (-PackageDir): every [SourceDisksFiles] entry is
            present, and no Microsoft file is in it under any name.
 
@@ -1057,6 +1068,78 @@ foreach ($m in $models) {
             # quote, a %token%, surrounding whitespace, and an empty flags
             # field. src\xhci98.inf carries the same reasoning beside the
             # values themselves.
+        }
+    }
+}
+
+# ---- PROP-* : the controller's own property page -------------------
+#
+# Roadmap task 23.1, GitHub issue 4 item 5. Unlike VAL-*, this value is read
+# by nobody in this project: it is a REG_SZ the 9x shell reads to find the
+# 16-bit class installer that draws the controller's Advanced tab, and it is
+# the third value NUSB's own [EHCI.AddReg] writes. It gets a rule anyway for
+# the reason every cosmetic line here gets one - the provider string is not
+# checked by anything at install time, and a typo in it is invisible: the tab
+# simply does not appear, on a target where nothing reports why.
+#
+# The checks are the shape of the value, not the fact of it. sysclass.dll is
+# the provider and usbui.dll is NOT (measured 2026-09-07; the tab renders with
+# usbui.dll renamed away), which is the single most likely thing to be got
+# wrong here, since usbui.dll is the NT provider AND is copied by this INF.
+#
+# **No flags field.** FLG_ADDREG_TYPE_SZ is 0 and is spelled as an empty
+# field, which is how both reference INFs write it; a numeric flags field here
+# would be some other type for a value the shell reads as a string.
+$propPage = @{
+    Name     = "EnumPropPages"
+    Provider = '"sysclass.dll,USBControllerPropPage"'
+    Kind     = "9x"
+    Why      = "the 9x shell reads it to find the 16-bit class installer that draws the controller's Advanced tab (the 'Disable USB error detection' box and the Bandwidth Usage dialog). sysclass.dll is on every Windows 98 and Windows ME machine and this INF does not copy it"
+}
+
+foreach ($m in $models) {
+    foreach ($p in @(Get-ModelPaths $m)) {
+        $install = $m.Section + $p.Suffix
+        if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
+        $addRegs = @(Get-Directive $inf $install "AddReg")
+
+        # The NT half, deferred rather than refused on the evidence: see the
+        # block above [Xhci.AddReg.NT] in src\xhci98.inf. This fires on every
+        # NT path of both files, which is the point - one AddReg section
+        # serves four of them.
+        $nt32 = @(Get-AddRegValues $inf $addRegs "EnumPropPages32")
+        if ($nt32.Count -gt 0) {
+            Add-Failure "PROP-NTHALF" ("[{0}] line {1} writes 'EnumPropPages32' on the {2} install path. The NT half of the property page is deferred (owner, 2026-09-20): the pair it takes is known and all three NT references write it, but one AddReg section serves four NT install paths and the page it draws has been opened in none of their guests. Taking it means inverting this rule, adding the pair to BOTH INFs, and the guest readings on Windows 2000 and Vista - not adding a line here." -f $nt32[0].Section, $nt32[0].Line, $p.Os)
+        }
+
+        if ($p.Kind -ne $propPage.Kind) {
+            # A 9x-only value on an NT path is a value nothing reads, and on
+            # the amd64 file there is no 9x path at all, so this is also what
+            # keeps PROP-MISSING from firing over there.
+            $stray = @(Get-AddRegValues $inf $addRegs $propPage.Name)
+            if ($stray.Count -gt 0) {
+                Add-Failure "PROP-STRAY" ("[{0}] line {1} writes '{2}' on the {3} install path. That value is the 16-bit engine's; an NT engine reads EnumPropPages32 instead, and this one is deferred." -f $stray[0].Section, $stray[0].Line, $propPage.Name, $p.Os)
+            }
+            continue
+        }
+
+        $hits = @(Get-AddRegValues $inf $addRegs $propPage.Name)
+        if ($hits.Count -eq 0) {
+            Add-Failure "PROP-MISSING" ("the {0} install path ([{1}]) writes no '{2}' value, so the controller has no Advanced tab: {3}. It is the third value NUSB's own [EHCI.AddReg] writes, and GitHub issue 4 item 5 asked for it." -f $p.Os, $install, $propPage.Name, $propPage.Why)
+            continue
+        }
+        if ($hits.Count -gt 1) {
+            Add-Failure "PROP-DUP" ("the {0} install path writes '{1}' {2} times (lines {3}). Which one wins is engine-dependent." -f $p.Os, $propPage.Name, $hits.Count, (($hits | ForEach-Object { $_.Line }) -join ', '))
+        }
+        $hit = $hits[0]
+        if ($hit.Subkey -ne "") {
+            Add-Failure "PROP-SUBKEY" ("[{0}] line {1} writes '{2}' under subkey '{3}'. The shell reads it on the device's own key, not a subkey of it." -f $hit.Section, $hit.Line, $propPage.Name, $hit.Subkey)
+        }
+        if ($hit.Flags -ne "") {
+            Add-Failure "PROP-FLAGS" ("[{0}] line {1} writes '{2}' with flags '{3}'. It is a REG_SZ, which is FLG_ADDREG_TYPE_SZ = 0 and is spelled as an EMPTY flags field - the way both reference INFs write it." -f $hit.Section, $hit.Line, $propPage.Name, $hit.Flags)
+        }
+        if ($hit.Data -ne $propPage.Provider) {
+            Add-Failure "PROP-PROVIDER" ("[{0}] line {1} points '{2}' at {3}, not {4}. On Windows 98 and Windows ME the provider is sysclass.dll, NOT the usbui.dll this INF copies: the tab and its dialog rendered identically with usbui.dll renamed away (measured 2026-09-07). A wrong provider draws no tab and reports nothing." -f $hit.Section, $hit.Line, $propPage.Name, $hit.Data, $propPage.Provider)
         }
     }
 }
