@@ -926,6 +926,28 @@ from a boot-crashing driver. `-snapshot` on the QEMU command line gives a
 throwaway boot (all writes discarded on exit), useful for risky experiments,
 but remember nothing is saved, including files you copied in.
 
+**A live snapshot - `savevm` at the monitor, which saves RAM as well as disk
+and so restores a *running* guest - is not available on every guest here.** It
+is refused under WHPX with
+
+```
+Error: State blocked due to missing dirty memory tracking support
+```
+
+so `vm\winxp.img`, `vm\win7.img` and the other WHPX guests take a powered-off
+`qemu-img snapshot -c` and nothing else; that is why every pre-existing
+snapshot on `vm\winxp.img` lists `VM_SIZE 0`. The TCG guests -
+`vm\win2k-xonly.img`, `vm\vista.img`, `vm\vista-x64.img` and the 9x images -
+take `savevm` normally, and a live snapshot of a mid-experiment state is
+usually worth far more than a clean-boot one: roadmap task 23.1.5 used them to
+keep a guest at the exact point a reading was taken. Read the guest's
+accelerator off its launcher before planning a run around a live snapshot
+(measured per guest and recorded in each "target VM" section below), and note
+that `info snapshots` lists a disk-only snapshot under "partial
+(non-loadable)" once any live one exists on the same image - that is a
+statement about VM state, not a damaged snapshot, and
+`qemu-img snapshot -a` still reverts it.
+
 The two Win98 snapshots on `vm\win98.img` are not interchangeable.
 `post-nusb` is the Phase 2a checkpoint state without `usbd.sys`. It is kept
 because it is the only state that can test the INF's own `usbd.sys` delivery;
@@ -2555,7 +2577,8 @@ as a surprise. **On 2026-09-13 issue 7's fix was run on both, and on both
 32-bit guests too, and every clause passed on all four** (issue 7 section
 7.5): five disable/enable cycles each, and remove and rescan included.
 
-**F8 is what every run has used, and it is the only route.** `TESTSIGNING`
+**F8 was the only route until 2026-09-20**, and `TESTSIGNING` is still not
+one. `TESTSIGNING`
 was never tried on either guest and was removed from the roadmap by the owner
 on 2026-09-16: test-signing mode loads a test-signed driver, and this package
 is not signed. **A single QEMU
@@ -2573,6 +2596,34 @@ elevated, power off cleanly, then `system_reset` and `cont`: the Windows Boot
 Manager menu waits, F8 opens Advanced Boot Options, and nine `down` from *Safe
 Mode* reach *Disable Driver Signature Enforcement*. Otherwise press F8 at the
 console.
+
+**A third route, simpler than either, and it needs no keypress and no
+timing** (roadmap task 23.1.5, 2026-09-20, used on both x64 guests). From an
+elevated command prompt in the guest:
+
+```
+bcdedit /set {current} advancedoptions true
+shutdown -r -t 0
+```
+
+The Advanced Boot Options menu then comes up **on every boot** and waits, with
+no F8 at all, and *Disable Driver Signature Enforcement* is picked from it as
+usual. It differs from the Vista x64 recipe above in three ways worth knowing:
+it sets one value rather than two, it is on `{current}` rather than
+`{bootmgr}` so it raises Advanced Boot Options directly instead of the Boot
+Manager menu that then needs F8, and it survives in the image rather than
+living on a throw-away overlay - which is a reason to undo it
+(`bcdedit /deletevalue {current} advancedoptions`) on an image whose ordinary
+boot is meant to be unattended.
+
+Getting the elevated prompt is itself worth writing down, because the guests
+are US Dvorak and the accelerators follow the layout: open the Start menu with
+`sendkey ctrl-esc`, type `cmd`, `sendkey ctrl-shift-ret`, and answer the UAC
+box with `sendkey alt-i` on Vista (Continue, accelerator C, physical `i`) or
+`sendkey alt-t` on Windows 7 (Yes, accelerator Y, physical `t`). A prompt
+whose title bar does not start "Administrator:" is not elevated and `bcdedit`
+will answer "The boot configuration data store could not be opened. Access is
+denied."
 
 **Getting files in and out.** The transfer drive is VVFAT `snapshot=on`, so the
 guest cannot write anything back to the host through it. Use the floppy:
@@ -5185,13 +5236,23 @@ omits:
   `HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"` with
   `HKR,,Controller,1,01`, is what Windows 2000 SP4's `USB.INF`, Windows XP
   SP3's `usbport.inf` and Windows Vista SP2's `usbport.inf` all write for
-  their own EHCI controller (the last two read statically 2026-09-20 out of
-  `vm\winxp.img` and `vm\vista.img`; Vista's file is UTF-16, so a byte grep
-  for the name finds nothing in it, and Windows 7's has not been read). It is
-  **not taken** (owner, 2026-09-20) because one `[Xhci.AddReg.NT]` serves
-  Windows 2000, 32-bit XP, and Vista and Windows 7 x86, and the page has been
-  opened in none of those guests against this controller. `PROP-NTHALF`
-  refuses it until they have been.
+  their own EHCI controller (XP's read statically 2026-09-20 out of
+  `vm\winxp.img`; Vista's read statically the same day out of `vm\vista.img`,
+  where the file is UTF-16 so a byte grep for the name finds nothing in it,
+  and then read again as `runtime` out of the running guest's own
+  `C:\Windows\inf\usbport.inf`; Windows 7's has still not been read). **It was
+  taken on 2026-09-20** by roadmap task 23.1.5, which read the page on seven
+  NT guests - Windows 2000 SP4, Windows XP SP3, Windows XP x64 SP2, Vista SP2
+  in both architectures and Windows 7 in both - covering all four install
+  sections that reach `[Xhci.AddReg.NT]` across the two INFs. All seven show
+  the tab. `PROP-NTHALF`, which refused the value until those readings
+  existed, was inverted into an ordinary requirement in the same change.
+
+  **Do not re-verify that line by hand on NT 6.x.** A hand-written
+  `EnumPropPages32` on an already-installed devnode does nothing there and
+  says nothing about it - no tab, no error, no log line - because the provider
+  list is consulted when the devnode is built. It works on NT 5.x, which is
+  what makes it a trap. `docs/contributing/lessons.md` has the full account.
 
   So the old "absent-dependency shape" framing was half right: the file was
   indeed absent, but on 9x it was never the one that draws the tab.
@@ -5273,10 +5334,29 @@ changing nothing else:
 The Power tab renders live data on both: "The hub is self-powered", "Total
 power available: 500 mA per port", and an attached-device list reading
 "4 port(s) available". No error box appears in the without case; the page is
-simply absent. On those two targets our own controller's tab row is unchanged
-either way, since this package registers no provider for it there and
-`PROP-NTHALF` holds that half shut; the 9x half does register one since task
-23.1, and the next paragraphs are what that means.
+simply absent.
+
+**Since roadmap task 23.1.5 this package registers a provider for its own
+controller on the NT targets too**, so the sentence that used to stand here -
+that the controller's tab row is unchanged on NT because `PROP-NTHALF` held
+that half shut - no longer applies. That rule was inverted on 2026-09-20 and
+`[Xhci.AddReg.NT]` now writes the pair in both INFs; the controller carries an
+**Advanced** tab on every NT target, read on seven guests. The NT 6.x guests
+add a page of their own on the hub as well:
+
+| Target | USB Root Hub tabs | the hub's own Advanced tab |
+|---|---|---|
+| Windows 2000 SP4 | General, **Power**, Driver, Power Management | - |
+| Windows XP SP3 | General, **Power**, Driver, Details | - |
+| Windows Vista SP2 x86 | General, **Power**, **Advanced**, Driver, Details, Power Management | "Hub is operating at high-speed", with a **Reset Hub** button |
+
+That last line is worth keeping beside `docs/issues/06`: the root hub reports
+**high speed**, which is the report the Full-Speed-costed-as-High-Speed
+arithmetic turns on. The Reset Hub button was not pressed - resetting the hub
+is a live operation and the hub's page is a control here, not a subject.
+
+The 9x half has registered a provider since task 23.1, and the next paragraphs
+are what that means.
 
 On Windows 98 and Windows ME the copy buys **no tab** - the tabs there are
 `sysclass.dll`'s and both systems already have that file, for the reason in
