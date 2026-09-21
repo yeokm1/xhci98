@@ -70,7 +70,7 @@ To submit logs with a [bug or hardware report](https://github.com/yeokm1/xhci98/
 
 ### Install
 
-These steps describe the `1.1.0.0` download. It has four driver directories: `release-x86\` and `debug-x86\` for 32-bit Windows (98 SE, ME, 2000, XP, Vista, 7), and `release-x64\` and `debug-x64\` for 64-bit Windows (XP x64, Server 2003 x64, Vista x64, 7 x64). The readme inside the download says the same; read that rather than this if the two disagree.
+It has four driver directories: `release-x86\` and `debug-x86\` for 32-bit Windows (98 SE, ME, 2000, XP, Vista, 7), and `release-x64\` and `debug-x64\` for 64-bit Windows (XP x64, Server 2003 x64, Vista x64, 7 x64).
 
 1. Put the unzipped package somewhere the machine can read: a floppy, a CD, a shared folder. `release-x86\` or `release-x64\` is the one to install. The `debug-` directories hold the same driver built for troubleshooting, only install if asked.
 2. On Windows 98 SE, install a USB 2.0 stack first (NUSB 3.3, or SweetLow's). On Vista x64 and 7 x64, driver signature enforcement must be disabled, as the driver is unsigned.
@@ -278,7 +278,7 @@ This project's own source is licensed under the GNU General Public License, vers
 
 The repository tracks no third-party binary on its own, although the two tool executables it tracks under `releases/` carry statically linked third-party runtimes.
 
-* `xhci98.sys` links no runtime or extender. The 32-bit build links no third-party object either; the 64-bit build, linked by WDK 7.1, carries that kit's `/GS` stack-cookie handler (`__security_check_cookie` / `__report_gsfailure`), which nothing in this project's source calls. Whether that object asks for a notice has not been read.
+* `xhci98.sys` links no runtime or extender. The 32-bit build links no third-party object either; the 64-bit build, linked by WDK 7.1, carries that kit's `/GS` stack-cookie handler (`__security_check_cookie` / `__report_gsfailure`), which nothing in this project's source calls.
 
 * `XHCIQUAL.EXE` embeds the Open Watcom runtime and the DOS/32A extender. 
 
