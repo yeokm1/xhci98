@@ -60,8 +60,8 @@ means. **Windows Server 2003 is not named** in the readme or in the
 `history.md` entry it embeds, and **F8 is not named** either: the x64 NT 6.x
 requirement is written as "driver signature enforcement must be disabled",
 since F8 is not the only way to do it. The release notes and `README.md`
-follow the F8 rule too; they still name Server 2003 x64, which the owner has
-not asked to change. A change to the readme after a cut is a re-cut with
+follow both rules too: the owner had Server 2003 x64 taken out of them, and
+out of the two issue templates, on 2026-09-21. A change to the readme after a cut is a re-cut with
 `-Force`, and the asset size recorded in the roadmap and the run sheet
 follows it.
 

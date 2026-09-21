@@ -38,7 +38,6 @@ body:
         - Windows 2000, earlier than SP4
         - Windows XP, 32-bit
         - Windows XP, 64-bit
-        - Windows Server 2003, 64-bit
         - Windows Vista, 32-bit
         - Windows Vista, 64-bit
         - Windows 7, 32-bit
