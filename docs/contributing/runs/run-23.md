@@ -1682,7 +1682,8 @@ section for the experimental build, written after the procedure was run; and
 the two QEMU findings, the first now confirmed on hardware. Still open, and
 none of it this task's to close:
 
-- The isochronous clause - 23.3's release gate.
+- The isochronous clause - roadmap task 23.3.5, the audio test, which gates
+  23.3's release.
 - Writes below 1000, on a target that does not degrade under the benchmark
   (an SSD in a USB enclosure).
 - One suspend/resume with a nonzero value, which is still the only way to

@@ -518,8 +518,9 @@ stacks and seven NT guests, and both INFs carry their line. **23.2 is done and
 it measured** (2026-09-22, on the P14s Gen 1): mass-storage reads ran 88%
 faster at an interval of 50 us than at the hardware's 1 ms, so **23.3 is
 taken, and runs next**, in the shape the owner set that night - the INF writes
-1000, the driver falls back to 4000, and an isochronous pass gates its
-release.
+1000 and the driver falls back to 4000. **23.3.5, the audio test, gates its
+release**, and its read-first half - the same pass on the 23.2 experimental
+build, which needs no new code - is best taken before 23.3 is written.
 23.1 was started and finished on
 2026-09-20 on branch `23.1`, its host side, **all three guest legs** (Windows
 98 SE under NUSB and under SweetLow, and Windows ME) and the three documents
@@ -759,10 +760,9 @@ the hub half of item 2 before the root-port half, and both before item 1.
   unreadable, or outside 10 to 4000 still means 4000, substituted rather than
   clamped. So an install through the INF runs at 1000, and a machine whose
   value is missing or mistyped runs exactly as every release to date. **Its
-  release is gated on one isochronous pass at 1000 on bare-metal Windows 98**
-  - a USB audio stream playing through a mass-storage transfer - because 23.2
-  was read with no stream playing and the roadmap's reason for asking for one
-  still stands. Where the text below says the INFs write 4000 or that this
+  release is gated on 23.3.5**, an isochronous pass at 1000 on bare-metal
+  Windows 98, because 23.2 was read with no stream playing and the roadmap's
+  reason for asking for one still stands. Where the text below says the INFs write 4000 or that this
   task ships 4000, read 1000; the rest stands as written. A `REG_DWORD` read
   through `UsbPortGetMiniportRegistryKeyValue` beside the two log values in
   `src/xhci_dispatch.c` (no new import), named `XhciImodInterval250ns` (the
@@ -784,6 +784,43 @@ the hub half of item 2 before the root-port half, and both before item 1.
   a better number, shipping it as the default is a separate decision of the
   owner's; this task ships 4000. The release notes say what the value is,
   its units, and that a low value raises the interrupt rate.
+- [ ] 23.3.5 the audio test: 23.3's release gate. Added by the owner on
+  2026-09-22, because 23.2 measured mass storage alone and the question the
+  register exists for is the other half: an isochronous endpoint posts 1,000
+  events a second at Full Speed and 8,000 at High Speed, moderation is what
+  absorbs them, and per-interrupt cost at real rates is what has bugchecked
+  Windows 98 on bare metal before. A shorter interval lets more of them
+  through.
+  **Where**: the P14s Gen 1 under Windows 98 SE and NUSB 3.3, the machine 23.2
+  was read on, so the two readings compare; the E460 as a second machine if
+  to hand. **What**: a USB audio device playing a WAV on repeat (Media
+  Player, Auto Repeat) through one full ATTO Disk Benchmark 2.41 pass on the
+  23.2 stick, same settings as 23.2, with the audio device and the stick on
+  different ports. Record the audio device's speed and whether it sits on a
+  root port or behind a hub, since issue 6 makes those two different
+  questions. **Arms**: the control (value absent, so 4000) first and last,
+  and 1000 between; 200 as well if the time is there, since it was the read
+  optimum and would be the next default asked about. **Read per arm**: a
+  `SWEEP98.BAT` dump before and after, decoded as in `build-and-test.md`'s
+  23.2 staging section - interrupts per pass, and the isochronous error
+  counters (`IsoPacketErrorsTotal`, `IsoMissedServiceTotal`,
+  `IsoRingUnderruns`, `IsoRingOverruns`, `IsoTrbErrorRecoveries`,
+  `IsoCadenceMismatches`); ATTO's read and write figures beside 23.2's, which
+  price the stream; and the listener's note of every audible dropout, click
+  or stall, with the time. **Passes** when at 1000 the stream plays through
+  the whole pass with no dropout and no error-counter movement that the
+  control does not also show, and the machine finishes the pass. **A failure
+  sends the INF default back to the owner** - it does not quietly revert to
+  4000. **Read first, before 23.3 is written**: the same pass on the 23.2
+  experimental build with the value at 1000, which is the same register write
+  and needs no new code, so a problem is found before the code that ships it.
+  The gate itself is then re-read on the 23.3 build. If Windows 98's audio
+  stack will not play on the machine at all, even at the control - the Phase 9
+  vehicle failed five of five, and whether that was the VM or Windows 98 is
+  not settled (`LOAD98.BAT`'s header) - that is itself the reading, recorded
+  as such, and the owner decides whether 32-bit Windows 7 on the E460 stands
+  in, where the first controller Disable is a known hang (`runs/run-22.md`,
+  22.9), so plan that leg around reboots.
 - [ ] 23.4 item 2, behind a hub: Low-Speed rates of 250 Hz and above. Reproduce
   first, with a Low-Speed mouse behind a USB 2.0 hub on Windows 98 SE under
   SweetLow's stack with HIDUSBF, and read which refusal counter moves. The
@@ -833,8 +870,8 @@ recorded decision; the property page is in both halves of the 32-bit INF or
 recorded as not taken; 23.3 landed (23.2 measured): the value absent, invalid
 and at 4000 all read the same IMOD of 4000 on both targets, the INF's 1000
 and any other valid value read back from the register, a start is never failed
-by it, and a USB audio stream played through a mass-storage transfer at 1000
-on bare-metal Windows 98; every gate green
+by it, and 23.3.5's audio test passed at 1000 on bare-metal Windows 98;
+every gate green
 and the device matrix on both primary targets no worse than
 `runs/run-22-post-release/`. Not a checkpoint: a throughput figure taken in a
 guest, or the reporter's machine standing in for one of the project's.
