@@ -1691,3 +1691,86 @@ none of it this task's to close:
 - The E460 and 32-bit Windows 7, neither measured. The E460's row in
   `build-and-test.md` still says "Windows 98 only" against the Windows 7 run
   of 2026-09-19 (`run-22.md`, 22.9); unresolved.
+
+## 23.3.5 - the audio test, read first on the 23.2 build
+
+Status as of 2026-09-22: **the read-first half is taken, and 1000 passes it.**
+The gate proper is re-read on the 23.3 build once that exists, so the roadmap
+box stays open.
+
+### How it was run
+
+2026-09-22, the P14s Gen 1 under Windows 98 SE and NUSB 3.3, the 23.2
+experimental driver still installed (key `...\Class\USB\0010`), logging at
+level 2. A Full-Speed USB audio device on one root port and the 23.2 stick on
+another; Windows 98's own USB audio driver; Media Player looping a WAV. Per
+boot: the WAV started first, then `SWEEP98 ARM A`, one ATTO 2.41 pass at the
+23.2 settings, `SWEEP98 ARM B`, the audio stopped last, so both dumps and the
+whole pass include the stream. The owner listened throughout. Arms: control,
+1000, control. 200 was offered and not taken.
+
+**The first 1000 boot read `imod.exp.status=00000008`** - the value was absent
+- and was not run: the `IMOD98 1000 0010` before its reboot had not been
+typed. Set again, rebooted, and the boot that counts read status 0, value
+1000, written 1, readback 1000. The on-machine `find "imod"` check before
+starting the benchmark is what caught it; without it a control would have
+been recorded as 1000.
+
+### What it read
+
+**Audio plays on bare-metal Windows 98.** That settles what `LOAD98.BAT`'s
+header left open: Windows 98's audio stack failed five of five in the Phase 9
+vehicle, and whether that was the VM or Windows 98 was not known. It was the
+vehicle.
+
+| Boot | Status | Readback | Iso packets | Interrupts | Interrupts/s | `IsoRingUnderruns` | `IsoPacketErrorsTotal` / `IsoMissedServiceTotal` / overruns / TRB error recoveries |
+|---|---|---|---|---|---|---|---|
+| CTL1 | 8 (absent) | - | 602,570 in 603 s | 568,269 | 942 | 1 | 0 / 0 / 0 / 0 |
+| 1000 | 0 | `03e8` | 509,710 in 512 s | 745,703 | 1,457 | 2 | 0 / 0 / 0 / 0 |
+| CTL2 | 8 (absent) | - | 661,420 in 665 s | 624,787 | 939 | 3 | 0 / 0 / 0 / 0 |
+
+Deltas between each boot's two dumps; every dump coherent. Isochronous
+packets ran at 1,000 a second throughout, as a Full-Speed stream should.
+`IsoCadenceMismatches` was 10.0% of packets on every row, the same ratio at
+both intervals, and `IsoEventsUnattributed` tracked the underruns. Here the
+window is nearly all benchmark, and the stream sets a floor of about 1,000
+events a second, so interrupts per second is a fair figure: the control sits
+just under the 1,000-a-second ceiling a 1 ms interval allows, and 1000 at
+about 1,460, far below its ceiling of 4,000.
+
+By ear, per the owner:
+
+- **CTL1**: a dropout and repeated sound as ATTO started, then clean, then
+  stutter and repeats on reads from 2048 KB up. Writes clean.
+- **1000**: stutter on reads from 1024 KB up. Writes clean.
+- **CTL2**: stutter on reads from 1024 KB up, as at 1000. Writes clean.
+
+ATTO with the stream playing, KB/s at 8 MB, beside 23.2's figures without it:
+
+| | Read with stream | Read, 23.2 | Write with stream |
+|---|---|---|---|
+| CTL2 | 15,055 | 17,637 | 6,342 |
+| 1000 | 29,051 | 29,793 | 6,746 |
+
+(CTL1's screenshot was not saved. Writes are the degraded stick's, as in 23.2.)
+
+### The verdict against 23.3.5's rule
+
+**Passes.** At 1000 the stream played through the whole pass, the machine
+finished it, and nothing moved that the controls do not also show: the same
+stutter on large reads - the two controls themselves differed by one row,
+2048 against 1024 KB, and 1000 matched the second - and ring underruns of 2
+against the controls' 1 and 3, with every isochronous error counter at 0 on
+every boot. And the stream costs 1000 less than it costs the control: reads
+fell 15% under the stream at 4000 and 2.5% at 1000.
+
+**What it does not settle, and is not IMOD's:** Windows 98 stutters on this
+machine during large sustained reads **at the hardware default**, with this
+driver as it has always shipped. It is audible, it starts at 1 or 2 MB
+transfers, and it is not carried by a driver error counter - one to three ring
+underruns a pass do not account for repeated stutter across several rows. So
+the cause is not located: the audio stack's own buffering under CPU or DPC
+load is as plausible as this driver's ring refill. It is recorded here as a
+finding for later and does not block 23.3.
+
+Owed: the same pass on the 23.3 build, which is the gate proper.

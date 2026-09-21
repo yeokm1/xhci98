@@ -519,8 +519,8 @@ it measured** (2026-09-22, on the P14s Gen 1): mass-storage reads ran 88%
 faster at an interval of 50 us than at the hardware's 1 ms, so **23.3 is
 taken, and runs next**, in the shape the owner set that night - the INF writes
 1000 and the driver falls back to 4000. **23.3.5, the audio test, gates its
-release**, and its read-first half - the same pass on the 23.2 experimental
-build, which needs no new code - is best taken before 23.3 is written.
+release**; its read-first half, on the 23.2 experimental build, was taken the
+same day and 1000 passed it, so 23.3 can be written.
 23.1 was started and finished on
 2026-09-20 on branch `23.1`, its host side, **all three guest legs** (Windows
 98 SE under NUSB and under SweetLow, and Windows ME) and the three documents
@@ -784,7 +784,17 @@ the hub half of item 2 before the root-port half, and both before item 1.
   a better number, shipping it as the default is a separate decision of the
   owner's; this task ships 4000. The release notes say what the value is,
   its units, and that a low value raises the interrupt rate.
-- [ ] 23.3.5 the audio test: 23.3's release gate. Added by the owner on
+- [ ] 23.3.5 the audio test: 23.3's release gate. **Read-first half taken
+  2026-09-22 on the 23.2 build, and 1000 passes it** (`runs/run-23.md`,
+  23.3.5): a Full-Speed audio stream on a root port played through a full
+  ATTO pass at control, 1000, control; every isochronous error counter 0 on
+  every boot, ring underruns 2 at 1000 against the controls' 1 and 3, and the
+  same audible stutter on reads of 1 MB and up at 1000 as at the second
+  control. The stream cost reads 15% at 4000 and 2.5% at 1000. Windows 98
+  audio plays on bare metal, so Phase 9's five-of-five failure was the VM. Not
+  IMOD's and not blocking: Windows 98 stutters under large sustained reads at
+  the hardware default too, cause not located. **Open: the same pass on the
+  23.3 build.** Added by the owner on
   2026-09-22, because 23.2 measured mass storage alone and the question the
   register exists for is the other half: an isochronous endpoint posts 1,000
   events a second at Full Speed and 8,000 at High Speed, moderation is what
