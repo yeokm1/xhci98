@@ -27,27 +27,36 @@ rem   IF HAS NO /I.  That switch is cmd.exe's.  `if /i "%1"=="FIND"` does not
 rem   compare case-insensitively here, it fails to parse - so every keyword is
 rem   tested in the three spellings a person actually types.
 rem
-rem   ^ IS NOT AN ESCAPE CHARACTER.  It is cmd.exe's.  So the angle brackets
-rem   that would mark a placeholder in a usage line cannot be escaped, and an
-rem   unescaped one IS a redirection - `echo Usage: IMOD98 <step>` tries to
-rem   read a file called step.  There is not a single angle bracket in this
-rem   file's output for that reason.  LOAD98.BAT's usage line is written the
-rem   same way, beside a LOAD.BAT that can afford them.
+rem   THE CARET IS NOT AN ESCAPE CHARACTER.  It is cmd.exe's.  So the angle
+rem   brackets that would mark a placeholder in a usage line cannot be
+rem   escaped, and an unescaped one IS a redirection: a usage line that puts
+rem   the word step between angle brackets tries to read a file called step.
+rem   There is not a single angle bracket in this file's output for that
+rem   reason.  LOAD98.BAT's usage line is written the same way, beside a
+rem   LOAD.BAT that can afford them.
 rem
-rem   THERE IS NO NUMBERED-HANDLE REDIRECTION.  `2>nul` does nothing useful
-rem   here - that is cmd.exe's too - so nothing below tries to suppress an
-rem   error stream, and every failure is caught with `if exist` or `if not
-rem   exist` on the thing that was supposed to be produced.
+rem   AND NOT IN ITS COMMENTS EITHER.  COMMAND.COM performs redirection on a
+rem   REM line: the angle brackets and pipes quoted in this header until
+rem   2026-09-22 created junk files named after their targets in the current
+rem   folder, and printed File not found for the input one, on every run
+rem   (runs/run-23.md, task 23.2, measured on the P14s Gen 1).  So the
+rem   redirection syntax below is spelled out in words, never written.
 rem
-rem   *(An earlier draft of this header claimed the trailing digit in
-rem   `dword:00000fa0>>C:\IMODSET.REG` would be read as a handle number by
-rem   cmd.exe and was safe only because COMMAND.COM cannot parse one.  That is
-rem   wrong, and it was measured wrong rather than reasoned wrong: cmd.exe
-rem   treats a digit before `>` as a handle only when the digit is its own
-rem   token, so `echo val=0>>f` and `echo x 0>>f` both redirect stdin and write
-rem   an empty file, while all nine of the values this file writes come through
-rem   intact.  The writes are safe on both shells; only the reasons above make
-rem   this file 9x-only.)*
+rem   THERE IS NO NUMBERED-HANDLE REDIRECTION.  Sending handle 2 to NUL does
+rem   nothing useful here - that is cmd.exe's too - so nothing below tries to
+rem   suppress an error stream, and every failure is caught with `if exist` or
+rem   `if not exist` on the thing that was supposed to be produced.
+rem
+rem   *(An earlier draft of this header claimed the trailing digit of a dword
+rem   written with an append-redirection straight after it would be read as a
+rem   handle number by cmd.exe, and was safe only because COMMAND.COM cannot
+rem   parse one.  That is wrong, and it was measured wrong rather than
+rem   reasoned wrong: cmd.exe treats a digit before the redirection as a handle
+rem   only when the digit is its own token, so a value ending in 0 appended
+rem   straight to a file comes through intact, while the same 0 standing
+rem   alone redirects stdin and writes an empty file.  All nine of the values
+rem   this file writes come through intact.  The writes are safe on both
+rem   shells; only the reasons above make this file 9x-only.)*
 rem
 rem This is the same reason LOAD98.BAT exists beside LOAD.BAT rather than one
 rem file serving both targets: see its header.

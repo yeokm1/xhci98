@@ -8,7 +8,7 @@ if exist XIRQ.LOG goto logerr
 if exist XIRQ.FLG del XIRQ.FLG
 XHCIQUAL xhci --irq-selftest --no-page --log XIRQ.LOG --done-flag XIRQ.FLG
 rem MS-DOS 7.1 (Win98) COMMAND.COM has no %ERRORLEVEL% variable; bucket the
-rem exit code with IF ERRORLEVEL (true when the code is >= n) before any
+rem exit code with IF ERRORLEVEL (true when the code is n or more) before any
 rem other command runs. The completion flag is checked with IF EXIST, so no
 rem FIND.EXE is needed on the boot medium.
 set XQRC=0

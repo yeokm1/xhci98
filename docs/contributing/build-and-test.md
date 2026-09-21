@@ -4934,6 +4934,51 @@ enabled=1`, `devices addressed=1`, `SET_ADDRESS interceptions=1`, speed decode
 == 0x9C`, `commands issued == completed == 6`, every one of the 80+ error and
 failure counters zero).
 
+#### Staging the moderation experiment package (task 23.2)
+
+The second package that may carry the do-not-deploy marker. It reads
+`XhciImodInterval250ns` from the driver's software key and, when the value is
+present, writes it to interrupter 0's IMOD in the start; absent, it writes
+nothing and is the shipping driver, so one install serves as the control and
+every arm of the sweep. Run on the P14s Gen 1 under Windows 98 SE on
+2026-09-21 and 2026-09-22; `runs/run-23.md` has the procedure and the reading.
+
+```
+set XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT
+scripts\build-driver.cmd release
+powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor release -Arch x86 -ImodExperimentArtifact
+xhcisnap\build.cmd
+set "XHCI_EXTRA_DEFINES="
+scripts\build-driver.cmd both
+```
+
+The package lands in `out\pkg-imod-release-x86\`. Carry it with
+`XHCISNAP.EXE` and `scripts\bench\IMOD98.BAT` and `SWEEP98.BAT`. Install it
+once through Device Manager, after NUSB 3.3 on a clean Windows 98 SE, and from
+then on change only the registry value and reboot: under NUSB, disabling,
+removing or upgrading the driver blue-screens the machine.
+
+**The experimental binary is the same size whichever value name it reads.**
+The builds before and after the 2026-09-21 rename are both 86,187 bytes, and
+the name is stored UTF-16, so `FIND` on the target cannot see it either. Tell
+them apart by hash on the host and by the file date on the target.
+
+**Reading a sweep's dumps needs an offsets table of its own.** The interrupt
+and DPC counts and `ImodExperimentWritten` / `ImodExperimentReadback` are
+counter-block fields; with `XHCISNAP` alone they never reach the note ring, so
+they are read out of each dump's `.BIN`. The experiment adds six `ULONG`s to
+`XHCI_EXTENSION` (92,328 bytes against the shipping 92,304), and
+`readsnap.py` refuses a table whose `SIZEOF` differs, so a table regenerated
+from a shipping tree cannot decode these dumps. Build one from
+`scripts\local\offsets.c` with `/DXHCI_IMOD_EXPERIMENT` on the `cl` line and
+the six `P(ImodExperiment...)` rows under the same `#ifdef`, into a separate
+file, and pass it with `--offsets`. `regen-offsets.cmd` takes no defines and
+must not be pointed at this.
+
+Clear the value when a session ends (`IMOD98 CLEAR NNNN`, then `XHCISNAP
+-disable`). It is the name a 23.3 build reads, so anything from 10 to 4000
+left behind stays in force under a shipping driver.
+
 ### Manual Installation on Windows 2000 SP4 (Development)
 
 1. Copy `xhci98.inf` and `xhci98.sys` together into a working directory (the

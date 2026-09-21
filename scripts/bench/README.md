@@ -17,6 +17,16 @@ ASCII.
 |---|---|---|
 | `IMOD.BAT` | Windows 2000 and later (needs `reg.exe`, so XP and later in practice) | Sets, shows or clears `XhciImodInterval250ns`, the interrupt-moderation interval roadmap task 23.2 sweeps |
 | `IMOD98.BAT` | Windows 98 SE and Windows ME | The same, through `regedit /s` and a generated `REGEDIT4` file |
+| `SWEEP98.BAT` | Windows 98 SE and Windows ME | One boot of the sweep: a timed `XHCISNAP` dump before a benchmark run (`SWEEP98 ARM A`) and one after (`SWEEP98 ARM B`) |
+
+**Nothing in a 9x batch file may put `<`, `>` or `|` in a `REM` line.**
+COMMAND.COM performs redirection on a comment: until 2026-09-22 the header of
+`IMOD98.BAT` quoted examples of the very syntax it warned about, and every run
+left files named after their targets in the current folder and printed `File
+not found` for the input one. It was found on the P14s Gen 1 during task
+23.2's sweep, and `LOAD98.BAT`, `STGF98.BAT` and three `xhciqual` DOS batch
+files were fixed with it. cmd.exe ignores redirection on a `REM`, so
+`IMOD.BAT`'s usage comment is safe as it stands.
 
 ### Why the moderation helper is two files
 

@@ -514,11 +514,12 @@ registry value whose default changes nothing.
 
 Status: open since 2026-09-19; **23.1 and 23.1.5 are both done** - the
 controller's property page is complete, 9x half and NT half, read on three 9x
-stacks and seven NT guests, and both INFs carry their line. **23.2 is open and
-half-taken**: its read-first question is settled (QEMU does not model IMODI,
-so the experiment is bare-metal or nothing), the experimental build and the
-bench helpers exist, and what it waits on is the reading itself, which needs
-the E460.
+stacks and seven NT guests, and both INFs carry their line. **23.2 is done and
+it measured** (2026-09-22, on the P14s Gen 1): mass-storage reads ran 88%
+faster at an interval of 50 us than at the hardware's 1 ms, so **23.3 is
+taken, and runs next**, in the shape the owner set that night - the INF writes
+1000, the driver falls back to 4000, and an isochronous pass gates its
+release.
 23.1 was started and finished on
 2026-09-20 on branch `23.1`, its host side, **all three guest legs** (Windows
 98 SE under NUSB and under SweetLow, and Windows ME) and the three documents
@@ -685,7 +686,20 @@ the hub half of item 2 before the root-port half, and both before item 1.
   now current, `docs/issues/README.md` moved with issue 6, and `lessons.md`
   carries the NT 6.x by-hand trap. **23.7 inherits nothing from this task.**
 
-- [ ] 23.2 the moderation experiment. **The read-first question is answered
+- [x] 23.2 the moderation experiment. **Done 2026-09-22, and it measured**
+  (`runs/run-23.md`, "How it was actually run" and "Results"). Taken on the
+  **P14s Gen 1** under Windows 98 SE rather than the E460, by the owner's
+  choice, with ATTO Disk Benchmark 2.41 on a USB 3 stick at High Speed, mass
+  storage only. Reads at 8 MB: **17.6 MB/s at 4000, 29.8 at 1000, 33.1 at 200
+  and at 160**, the two controls 0.4% apart; 4 KB reads four times faster.
+  Writes: 21.5 against 15.7 MB/s at 1000, and nothing trustworthy below it,
+  because the stick degraded and the second control fell with it. About a
+  quarter more interrupts per pass below 1000; no fault at any value. 4000
+  read identical to the control, which confirms the hardware reset value.
+  **Not answered, by the owner's scope**: the isochronous clause and the USB
+  Ethernet transfer, and the suspend/resume cycle was not taken. The stop
+  rule therefore does not fire and 23.3 is taken. The rest of this entry is
+  as written before the bench. **The read-first question is answered
   and the host side is built; the reading is what remains** (2026-09-20,
   branch `23.2`; `runs/run-23.md` has the detail). **QEMU does not model
   IMODI**: `hw/usb/hcd-xhci.c` at `v11.1.0` stores `imod`, returns it, resets
@@ -737,7 +751,19 @@ the hub half of item 2 before the root-port half, and both before item 1.
   metal before. Stop rule: if no value below 4000 measures faster outside
   run-to-run noise, record the numbers in `lessons.md`, leave the start not
   writing IMOD, and close 23.3 as not taken.
-- [ ] 23.3 the registry value, **only if 23.2 measures**. A `REG_DWORD` read
+- [ ] 23.3 the registry value. **23.2 measured, so this is taken, and the
+  owner changed what it ships on 2026-09-22**: the INF writes the value as
+  **1000** (250 us), not 4000. The owner's first choice was 200, the read
+  optimum, moved to 1000 for most of the read gain at a quarter of 200's
+  worst-case interrupt rate. The driver's fallback does not change: absent,
+  unreadable, or outside 10 to 4000 still means 4000, substituted rather than
+  clamped. So an install through the INF runs at 1000, and a machine whose
+  value is missing or mistyped runs exactly as every release to date. **Its
+  release is gated on one isochronous pass at 1000 on bare-metal Windows 98**
+  - a USB audio stream playing through a mass-storage transfer - because 23.2
+  was read with no stream playing and the roadmap's reason for asking for one
+  still stands. Where the text below says the INFs write 4000 or that this
+  task ships 4000, read 1000; the rest stands as written. A `REG_DWORD` read
   through `UsbPortGetMiniportRegistryKeyValue` beside the two log values in
   `src/xhci_dispatch.c` (no new import), named `XhciImodInterval250ns` (the
   owner, 2026-09-21; the experiment reads the same name), in IMODI's own
@@ -804,9 +830,11 @@ Windows 2000 SP4, a Low-Speed interrupt device behind a USB 2.0 hub works at
 every rate the stack in use can ask for, or the refusal that remains is
 derived and published; the root-port half of item 2 and item 1 each carry a
 recorded decision; the property page is in both halves of the 32-bit INF or
-recorded as not taken; if 23.3 landed, the value absent, invalid and at 4000
-all read the same IMOD of 4000 on both targets, a valid lower value reads
-back from the register, and a start is never failed by it; every gate green
+recorded as not taken; 23.3 landed (23.2 measured): the value absent, invalid
+and at 4000 all read the same IMOD of 4000 on both targets, the INF's 1000
+and any other valid value read back from the register, a start is never failed
+by it, and a USB audio stream played through a mass-storage transfer at 1000
+on bare-metal Windows 98; every gate green
 and the device matrix on both primary targets no worse than
 `runs/run-22-post-release/`. Not a checkpoint: a throughput figure taken in a
 guest, or the reporter's machine standing in for one of the project's.

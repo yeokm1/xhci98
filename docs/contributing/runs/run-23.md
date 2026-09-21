@@ -1258,12 +1258,19 @@ false - which is why none of them waited:
 
 ## 23.2 - the moderation experiment (the owner's measurement)
 
-Status as of 2026-09-20: **the host side is done and the reading is owed.**
-The roadmap's read-first question has been answered - QEMU does not model
-IMODI, so no rate can come out of a guest - and the experimental build the
-task calls for exists and compiles. What is not here is the only thing that
-can close the task: sustained throughput figures from real hardware. Nothing
-below is a reading.
+Status as of 2026-09-22: **DONE, and it measured.** The reading was taken on
+the night of 2026-09-21 on the ThinkPad P14s Gen 1 under Windows 98 SE, not on
+the E460 the roadmap named (the owner's call, after one E460 control boot). At
+IMODI 200 or 160, mass-storage reads ran at 33.1 MB/s against 17.6 at the
+hardware default of 4000, with the two control boots 0.4% apart; 1000 gave
+29.8. So the stop rule does not fire and 23.3 is taken. The owner set its
+shape the same night: the INF writes **1000**, the driver falls back to 4000,
+and one isochronous pass at 1000 on bare metal gates the release. The reading
+and its limits are under "Results" below.
+
+Until 2026-09-21 this section said the host side was done and the reading
+owed; the paragraphs from here to "Results" were written then, and are
+corrected in place where the bench proved them wrong.
 
 ### The read-first question: does QEMU's xHC model IMODI at all?
 
@@ -1355,9 +1362,25 @@ The pieces, all `#ifdef`-ed:
   trailing pair, so an experimental build moves no existing field's offset and
   a `scripts\local\offsets.txt` taken from a shipping build still reads every
   counter out of an experimental one.
+
+  *(True of the offsets and false of the tool, found on the bench on
+  2026-09-21. `readsnap.py` checks the dump's size against the table's
+  `SIZEOF` and refuses a mismatch - 92,328 against 92,304 - so a shipping
+  table decodes nothing out of these dumps, and it lists no `ImodExperiment`
+  field to read even if it did. The sweep was decoded against a table built
+  with the define; `build-and-test.md`, the 23.2 staging section, has how.)*
 - **Five `XHCISNAP` notes**, and `imod.exp.readback` and `imod.exp.written`
   also in the always-on counter block beside `isr.entries` and `dpc.count`, so
   one flush carries the arm of the sweep and its effect together.
+
+  *(Only on a DebugView flush. The counter block is composed into the ring by
+  the flush, and the flush returns early unless `XhciLogDebugView` selects the
+  sink, so a machine read with `XHCISNAP` alone never has these four lines in
+  its `.TXT` - the first E460 control dump had none, and looked broken for
+  it. They are in the `.BIN`, as `InterruptCount`, `DpcCount`,
+  `ImodExperimentWritten` and `ImodExperimentReadback`. The `.TXT` does carry
+  `imod.exp.status` and `imod.exp.value`, which are start notes, and those
+  are what the operator checks on the machine.)*
 
 Three decisions in it that are the measurement's rather than taste:
 
@@ -1395,7 +1418,9 @@ that has no value set.
 
 ### The sweep, when the bench is to hand
 
-Not taken. This is the procedure it is waiting for.
+Written before the bench and left as written; **"How it was actually run",
+after it, says what the night changed**, and where the two disagree that
+section is the one that was measured.
 
 Build and package once:
 
@@ -1502,23 +1527,131 @@ suspend/resume cycle with a nonzero value set**, reading `imod.exp.readback`
 against IMOD after the resume. That is the only way to exercise the F10 fix
 above against a value that is not 0.
 
+### How it was actually run
+
+2026-09-21, 23:47, to 2026-09-22, 01:05, by the owner at the machine, with
+the procedure relayed step by step.
+
+- **The machine was the P14s Gen 1, not the E460.** Windows 98 SE with nothing
+  USB on it; NUSB 3.3 installed first, then the package from
+  `out\bench-23.2\` (`xhci98.sys` SHA-256 `274d04a2...`, built at `863d537`,
+  checked on the target by date because Windows 98 has no hash tool and the
+  pre-rename build is the same 86,187 bytes). The kit went on through DOS and
+  the BIOS's legacy USB support, since Windows 98 has no USB before the
+  driver. The driver's software key was `...\Class\USB\0010`. The E460 took
+  one control boot first (key `0000`, control notes read correctly) before the
+  owner moved the session; it was left with no value set and logging at
+  level 2.
+- **Mass storage only, by the owner's decision.** No USB Ethernet transfer
+  and **no isochronous stream**, so the roadmap's clause that a stream play
+  during at least one pass is not answered by this reading. It is carried
+  into 23.3's release gate rather than dropped.
+- **The workload was ATTO Disk Benchmark 2.41, not a file copy**, at its
+  defaults: transfer sizes 0.5 to 8192 KB, total length 256 MB, Direct I/O,
+  neither overlapped I/O nor comparison. The internal disk runs through CSM
+  compatibility mode on this machine and is slow, so a copy from `C:` would
+  have measured `C:`. The target was a USB 3 stick enumerated at High Speed.
+  One ATTO pass per arm.
+- **The ladder was shortened by the owner**, and 160 added as Linux's own
+  default of 40 us: control, 4000, 1000, 200, 160, control. 160 is not one of
+  `IMOD98.BAT`'s named steps and went in as `IMOD98 HEX 000000a0 0010`. The
+  owner stopped at 160 because reads had levelled off (below), and 40 and 10
+  were not taken. The second control was taken, at the cost of one more boot,
+  and it is what saved the write figures from being misread.
+- **Per boot**: `SWEEP98 ARM A` (a dump and a time), `find "imod"` on the new
+  `.TXT` to see `imod.exp.status=00000000` and the value asked for before
+  running anything, ATTO, a screenshot of its result, `SWEEP98 ARM B`, the
+  next `IMOD98`, a reboot. `SWEEP98.BAT` was written during the session and is
+  now in `scripts/bench/`.
+- **The suspend/resume cycle was not taken**, so `xhciRestoreState`'s IMOD
+  write has still only ever carried 0 (the second finding above stands).
+
+Three things the bench found wrong with its own tools, all fixed in the same
+commit as this record:
+
+1. **COMMAND.COM performs redirection on a `REM` line.** `IMOD98.BAT`'s header
+   quoted the redirection syntax it warned about, so every run left files
+   named after the targets in the current folder and printed `File not
+   found` for an input redirection. The value writes were unaffected - the
+   junk targets carried a trailing backtick and the real `.REG` is rebuilt
+   from its first line - and every arm's value read back right. `LOAD98.BAT`,
+   `STGF98.BAT` and three `xhciqual` DOS batch files had the same pattern.
+   `lessons.md` has it.
+2. **`PAUSE` did not return** in the Windows 98 DOS box once ATTO had run in
+   the GUI, focused and with a key pressed, so `SWEEP98.BAT` takes its two
+   dumps in two calls.
+3. **The counters are not in the `.TXT`, and the stock offsets table cannot
+   read the `.BIN`.** Both corrected in place above.
+
 ### Results
 
-Blank until the bench runs. Two `XHCISNAP` dumps a known time apart per cell;
-`isr/s` and `dpc/s` are derived, not read.
+Every arm was verified in its own dumps before its figures were used, and
+every dump reported its tear detector unchanged across every window:
 
-| Value | Workload | MB/s | isr/s | dpc/s | Notes |
-|---|---|---|---|---|---|
-| unset (control) | | | | | |
-| 4000 | | | | | |
-| 2000 | | | | | |
-| 1000 | | | | | |
-| 500 | | | | | |
-| 200 | | | | | |
-| 100 | | | | | |
-| 40 | | | | | |
-| 10 | | | | | |
-| unset (repeat) | | | | | |
+| Boot | `ImodExperimentStatus` | Value | Written | Readback | Interrupts in the run | DPCs | Window |
+|---|---|---|---|---|---|---|---|
+| CTL1 | 8 (absent) | - | 0 | - | 274,315 | 274,314 | 568 s |
+| 4000 | 0 | 4000 | 1 | `0fa0` | 274,367 | 274,366 | 583 s |
+| 1000 | 0 | 1000 | 1 | `03e8` | 337,307 | 337,306 | 376 s |
+| 200 | 0 | 200 | 1 | `00c8` | 346,301 | 346,300 | 491 s |
+| 160 | 0 | 160 | 1 | `00a0` | 334,465 | 334,380 | 520 s |
+| CTL2 | 8 (absent) | - | 0 | - | 268,375 | 268,374 | 627 s |
+
+"Interrupts in the run" is `InterruptCount` in dump B less dump A, and
+`InterruptsClaimed` equals it on every row, so none was spurious. The window
+is the operator's time between the dumps and includes the screenshot, so it
+is not a rate; **interrupts per ATTO pass is the comparable figure**, because
+the pass is the same work every time.
+
+ATTO's own table, KB/s, write / read:
+
+| Size (KB) | CTL1 | 4000 | 1000 | 200 | 160 | CTL2 |
+|---|---|---|---|---|---|---|
+| 0.5 | 62 / 161 | 61 / 161 | 71 / 400 | 80 / 440 | 79 / 442 | 71 / 161 |
+| 1 | 182 / 321 | 183 / 318 | 179 / 1077 | 153 / 1528 | 184 / 1509 | 179 / 323 |
+| 2 | 475 / 646 | 451 / 645 | 480 / 2178 | 400 / 2989 | 424 / 2982 | 438 / 648 |
+| 4 | 1252 / 1290 | 1230 / 1288 | 2748 / 4366 | 2837 / 5342 | 1492 / 5285 | 1025 / 1290 |
+| 8 | 2524 / 2580 | 2584 / 2572 | 5636 / 8641 | 5401 / 9592 | 1945 / 9729 | 1710 / 2588 |
+| 16 | 5048 / 5152 | 4833 / 5184 | 9488 / 14727 | 9969 / 16181 | 7585 / 16221 | 4783 / 5176 |
+| 32 | 9752 / 10113 | 10066 / 10369 | 15678 / 22392 | 15566 / 23976 | 11872 / 24094 | 7858 / 10304 |
+| 64 | 16262 / 18029 | 15566 / 17979 | 21312 / 29654 | 20480 / 31736 | 15887 / 31659 | 14124 / 18029 |
+| 128 | 11270 / 12603 | 11527 / 12459 | 17736 / 24918 | 6570 / 26804 | 5128 / 28743 | 4912 / 12554 |
+| 256 | 13443 / 14735 | 13395 / 14727 | 19190 / 27478 | 5563 / 30588 | 5550 / 30768 | 5455 / 14785 |
+| 512 | 14455 / 16278 | 14573 / 16268 | 20062 / 28957 | 5571 / 32147 | 5508 / 32147 | 5729 / 16268 |
+| 1024 | 15286 / 17086 | 15226 / 17076 | 21086 / 29793 | 6584 / 32419 | 6584 / 32419 | 6449 / 17076 |
+| 2048 | 15679 / 17521 | 15818 / 17567 | 21338 / 29925 | 6714 / 32656 | 6778 / 32896 | 6614 / 17556 |
+| 4096 | 15679 / 17453 | 15615 / 17442 | 21389 / 29661 | 6780 / 32896 | 6837 / 33140 | 6568 / 17476 |
+| 8192 | 15679 / 17706 | 15670 / 17567 | 21474 / 29793 | 6858 / 33140 | 6753 / 33140 | 6766 / 17637 |
+
+Transcribed from the six ATTO screenshots (the first a photograph), which the
+owner holds; they are not committed.
+
+What it says:
+
+- **Reads: 17.6 MB/s at 1 ms, 29.8 at 250 us, 33.1 at 50 us and at 40 us.**
+  The two controls are 0.4% apart at 8 MB and identical at 4 KB, so +69% and
+  +88% are not noise. Small transfers gain most - a 4 KB read goes from 1.29
+  to 5.3 MB/s, a factor of four - which is the hypothesis's own shape: a
+  Bulk-Only command waits out the interval at each of its completions, and a
+  small transfer is all completions. Reads level off between 200 and 160 at
+  about 33 MB/s, and nothing below 160 was needed to answer the question.
+- **4000 is the control, to the kilobyte.** Writing 4000 changes nothing, so
+  this Comet Lake xHC resets IMODI to 4000 as the spec says, and every bare-
+  metal reading this project has taken ran at 1 ms. The first of the two QEMU
+  findings above is now confirmed from the hardware side.
+- **Writes from 200 on are not a reading.** At 128 KB and above, writes fell
+  to about 6.7 MB/s at 200 and stayed there at 160 - and **the second control
+  fell with them**, to 6.8, with no IMOD write at all. So that is the stick,
+  degrading under several passes of ATTO writes, and not the interval.
+  The one clean write comparison is 1000 against the first control: 21.5
+  against 15.7 MB/s at 8 MB, +37%.
+- **The cost is about a quarter more interrupts for the same work**: 274,000
+  a pass at 1 ms, 334,000 to 346,000 below it. The machine stayed up through
+  every pass, including 40 us, with no refusal and no fault in either dump.
+
+The limits, which 23.3 inherits: one pass per arm, one stick, High Speed only,
+one machine, and no isochronous stream and no Ethernet. The write gain below
+1000 is unmeasured, not absent.
 
 ### The stop rule, as the roadmap set it
 
@@ -1531,14 +1664,29 @@ binary never changed.
 If a value does measure, 23.3 builds the registry value that ships, and which
 number becomes the default is the owner's decision and not this task's.
 
-### What 23.2 owes
+**Applied, 2026-09-22: a value measured, so 23.3 is taken.** The owner then
+made the decision this task left to them. The first choice was 200, the read
+optimum; it was moved to **1000** after the trade was set out - most of the
+read gain (29.8 against 33.1 MB/s) and the only clean write gain, for a
+worst-case rate of 4,000 interrupts a second where 200 allows 20,000, on
+Windows 98, where per-interrupt cost at real rates is what has bugchecked
+bare metal before. So the INF writes `XhciImodInterval250ns` = 1000; a value
+that is absent, unreadable or outside 10 to 4000 falls back to 4000, the
+hardware's own; and because this reading had no stream playing, **one
+isochronous pass at 1000 on bare-metal Windows 98 gates 23.3's release**.
 
-- The reading. Everything else here is preparation for it.
-- `lessons.md`, either way: the stop rule names it for a negative result, and
-  a positive one is a finding about the driver's interrupt path.
-- A line in `build-and-test.md` for the experimental build and its value, once
-  the procedure above has actually been run rather than written.
-- The two QEMU findings above are this task's to hand on even if the sweep
-  never happens, because they are about every reading this project has taken
-  in a guest and not about moderation: guests run at IMOD 0, metal at 4000,
-  and the save/restore path has never carried a nonzero value.
+### What 23.2 leaves
+
+Done: the reading, above; `lessons.md`; `build-and-test.md`'s staging
+section for the experimental build, written after the procedure was run; and
+the two QEMU findings, the first now confirmed on hardware. Still open, and
+none of it this task's to close:
+
+- The isochronous clause - 23.3's release gate.
+- Writes below 1000, on a target that does not degrade under the benchmark
+  (an SSD in a USB enclosure).
+- One suspend/resume with a nonzero value, which is still the only way to
+  exercise `xhciRestoreState`'s IMOD write against anything but 0.
+- The E460 and 32-bit Windows 7, neither measured. The E460's row in
+  `build-and-test.md` still says "Windows 98 only" against the Windows 7 run
+  of 2026-09-19 (`run-22.md`, 22.9); unresolved.

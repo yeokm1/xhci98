@@ -9152,3 +9152,75 @@ So:
 `docs/contributing/runs/run-23.md`, task 23.1.5 leg V, has both readings and
 the control; `src/xhci98.inf`'s block above `[Xhci.AddReg.NT]` carries the
 warning beside the line itself.
+
+## Interrupt moderation at the reset default halves Bulk-Only read throughput
+
+Roadmap task 23.2, the ThinkPad P14s Gen 1 (Comet Lake xHC, `8086:02ED`)
+under Windows 98 SE and NUSB 3.3, 2026-09-21 into 2026-09-22. The start had
+never written interrupter 0's IMOD, so every bare-metal run this project had
+taken ran at the reset value of 4000, 1 ms. An experimental build wrote a
+registry-supplied interval instead, and ATTO Disk Benchmark 2.41 measured a USB
+3 stick at High Speed once per value, with a control boot, no value set, first
+and last.
+
+Proven, by readback of the register in each boot's own dump and by two
+controls 0.4% apart: sequential reads at 8 MB ran **17.6 MB/s at 4000, 29.8 at
+1000 and 33.1 at 200 and at 160**; 4 KB reads went from 1.29 to 5.3 MB/s. The
+shape is the hypothesis's: Bulk-Only Transport is strictly serial, each stage
+of a command waits for the previous one's completion, and each completion can
+wait out the interval before its interrupt is raised - so the smaller the
+transfer, the larger its share of waiting. Writing 4000 read identical to the
+control to the kilobyte, which is the hardware side of the QEMU finding that
+guests have always run at 0 and metal at 4000. About a quarter more interrupts
+per pass below 1000, and no fault at any value down to 160.
+
+Not proven: any write gain below 1000, and anything about an isochronous
+stream, which was not played. **The second control is what kept a false
+result out of this entry.** Writes at 128 KB and above fell from 21 MB/s at
+1000 to 6.7 at 200 and stayed there at 160, which reads as "a short interval
+hurts writes" - until the closing control, with no IMOD write at all, measured
+6.8 as well. The stick had degraded under the benchmark's own writes. A
+single control taken first would have been compared against a machine that
+no longer existed.
+
+Rules. **Take the control last as well as first, and read the ladder against
+the later one when they differ.** A flash target degrades under a write
+benchmark within one session, and a drop that begins mid-ladder and persists
+is a drift until the closing control says otherwise. And when a throughput
+reading on this driver disagrees between a guest and metal, moderation is a
+difference between them: the guest runs unmoderated.
+
+`runs/run-23.md`, task 23.2, has the full ATTO tables and the decoded counters;
+roadmap task 23.3 carries the owner's decision that followed.
+
+## COMMAND.COM performs redirection on a `REM` line
+
+Windows 98 SE's COMMAND.COM, on the P14s Gen 1, 2026-09-21, running
+`scripts/bench/IMOD98.BAT`. Every run left files in the current folder named
+things like `nul` and ` f` with a trailing backtick, and printed `File not
+found` once, while the value it wrote read back correctly every time.
+
+The header of that file warned, correctly, that an unescaped angle bracket in
+an `echo` is a redirection on this shell - and quoted the syntax it was
+warning about, in `REM` lines: `` `2>nul` ``, `` `echo x 0>>f` ``, a usage
+line with a placeholder in angle brackets. COMMAND.COM parses redirection
+before it looks at the command, so each of those lines opened its target: the
+output ones created an empty file named for everything up to the next space,
+backtick included, and the input one failed to find a file and said so.
+cmd.exe does not do this, which is why the same text in NT-side batch files
+had never shown anything.
+
+It had run unnoticed in a QEMU guest, where a stray file on a scratch volume
+draws no attention. The operator on real hardware asked what the files were.
+
+Rules. **In a batch file COMMAND.COM runs, no `<`, `>` or `|` anywhere, not
+even in a comment** - spell the syntax out in words. That covers every
+Windows 98 and ME batch file here and the `xhciqual` DOS batch files, which
+had one each (`>= n` in a comment would create a file named `=`). A file
+that did nothing but create junk is a lucky case: a comment that quoted an
+append to a real file would have appended to it.
+
+Fixed on 2026-09-22 in `scripts/bench/IMOD98.BAT`,
+`scripts/vm-matrix/guest/LOAD98.BAT`, `scripts/vm-matrix/guest/STGF98.BAT`
+and `xhciqual/3XIRQ.BAT`, `4XEMPTY.BAT`, `5XDEV.BAT`; `scripts/bench/README.md`
+states the rule.
