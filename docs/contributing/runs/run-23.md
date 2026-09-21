@@ -1342,7 +1342,8 @@ through an import of ours.
 
 The pieces, all `#ifdef`-ed:
 
-- **`XhciImodExperiment`**, a `REG_DWORD` in the driver's own software key -
+- **`XhciImodInterval250ns`** (named `XhciImodExperiment` until 2026-09-21;
+  see below), a `REG_DWORD` in the driver's own software key -
   the same key and the same service as `XhciLogVerbosity`, read once per start
   at PASSIVE from `xhciStartController`, immediately after `xhciLogStart`.
 - **The write**, at the end of `xhciProgramEventRing` in `src/xhci_init.c`:
@@ -1366,6 +1367,16 @@ floor 10, 4000 substituted for anything invalid. If the two shared a name, a
 bench machine left carrying an experimental setting would have it become
 load-bearing the moment a 23.3 build was installed over the top. Under a
 separate name a leftover is inert.
+
+*(Reversed by the owner on 2026-09-21. The experiment now reads
+`XhciImodInterval250ns`, which is also the name 23.3 will ship if it is taken,
+with the unit in the name so 4000 cannot be misread as microseconds. The same
+day the owner set 23.3's accepted range to 10 to 4000, with 4000 substituted
+for anything outside it, in place of 10 to 65535. The cost is the inertness
+argued above: under a 23.3 build a leftover 0 falls back to 4000, but a
+leftover 10 to 4000 stays in force, so the bench helpers now say to clear the
+value when a session ends. The experimental build itself still accepts 0 to
+65535, because the sweep has to reach 0 and 10.)*
 
 **Absent means the start writes no IMOD at all** - which is exactly the driver
 as it shipped. So the experimental binary is its own control: the same `.sys`
@@ -1439,7 +1450,7 @@ Per value, in the driver's own software key - the same key `XhciLogVerbosity`
 goes in, whose instance number is fixed by nothing on either target and has to
 be found by content:
 
-1. Set `XhciImodExperiment` (`REG_DWORD`, 250 ns units). `scripts/bench/`
+1. Set `XhciImodInterval250ns` (`REG_DWORD`, 250 ns units). `scripts/bench/`
    carries a helper per target: `IMOD.BAT` on the NT side, which finds the key
    itself through `reg.exe`, and `IMOD98.BAT` on Windows 98 and ME, which has
    a `FIND` step for the instance number and takes the ladder steps by name

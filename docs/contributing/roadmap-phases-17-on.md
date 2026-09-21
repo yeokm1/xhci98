@@ -701,10 +701,12 @@ the hub half of item 2 before the root-port half, and both before item 1.
   links at the same size as `HEAD`'s) and the import gate lists the same
   twelve pairs. **The owner chose the registry route over a compile-time
   constant** on 2026-09-20, so one binary sweeps the ladder: the value is
-  `XhciImodExperiment`, read beside the two log values through
-  `UsbPortGetMiniportRegistryKeyValue` with no new import, **deliberately not
-  23.3's `XhciImodInterval`** so a setting left on a bench machine stays inert
-  under a later shipping build. Absent means the start writes no IMOD at all,
+  `XhciImodInterval250ns`, read beside the two log values through
+  `UsbPortGetMiniportRegistryKeyValue` with no new import. **The owner made it
+  23.3's name too** on 2026-09-21, reversing the separate
+  `XhciImodExperiment` of the day before: the unit is in the name, and a bench
+  setting left behind is no longer inert under a 23.3 build, so the bench
+  helpers say to clear it when a session ends. Absent means the start writes no IMOD at all,
   which makes the experimental binary its own control. `scripts/bench/`
   carries `IMOD.BAT` and `IMOD98.BAT` for setting it on either target.
   **The artifact is installable**, through a second narrow packaging exception
@@ -737,12 +739,16 @@ the hub half of item 2 before the root-port half, and both before item 1.
   writing IMOD, and close 23.3 as not taken.
 - [ ] 23.3 the registry value, **only if 23.2 measures**. A `REG_DWORD` read
   through `UsbPortGetMiniportRegistryKeyValue` beside the two log values in
-  `src/xhci_dispatch.c` (no new import), proposed name `XhciImodInterval`, in
-  IMODI's own 250 ns units. The owner's rule, 2026-09-19: the default is
-  4000; nothing below 10 is accepted; and 4000 is assumed when the value is
-  absent or invalid. Invalid means unreadable, below 10, or above 65535
-  (IMODI is 16 bits); an invalid value is replaced by 4000, not clamped to
-  the nearest bound, so a mistyped 0 cannot turn moderation off. Like the log
+  `src/xhci_dispatch.c` (no new import), named `XhciImodInterval250ns` (the
+  owner, 2026-09-21; the experiment reads the same name), in IMODI's own
+  250 ns units. The owner's rule, 2026-09-19 and narrowed 2026-09-21: the
+  default is 4000; nothing below 10 or above 4000 is accepted; and 4000 is
+  assumed when the value is absent or invalid. Invalid means unreadable,
+  below 10, or above 4000: the floor is kept at 10 so users can customise down
+  to it, and nothing above 4000 is accepted because a longer interval only
+  adds latency and 4000 already caps the rate at 1,000 interrupts a second.
+  An invalid value is replaced by 4000, not clamped to the nearest bound, so
+  a mistyped 0 cannot turn moderation off. Like the log
   values, nothing in the read may fail a start. The start then writes the
   value, the save and restore pair carries it across a resume unchanged, and
   the value in force is readable from a release build (a counter and an

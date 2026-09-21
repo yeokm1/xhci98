@@ -15,7 +15,7 @@ ASCII.
 
 | File | Target | What it does |
 |---|---|---|
-| `IMOD.BAT` | Windows 2000 and later (needs `reg.exe`, so XP and later in practice) | Sets, shows or clears `XhciImodExperiment`, the interrupt-moderation interval roadmap task 23.2 sweeps |
+| `IMOD.BAT` | Windows 2000 and later (needs `reg.exe`, so XP and later in practice) | Sets, shows or clears `XhciImodInterval250ns`, the interrupt-moderation interval roadmap task 23.2 sweeps |
 | `IMOD98.BAT` | Windows 98 SE and Windows ME | The same, through `regedit /s` and a generated `REGEDIT4` file |
 
 ### Why the moderation helper is two files

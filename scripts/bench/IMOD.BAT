@@ -4,7 +4,7 @@ rem task 23.2's EXPERIMENTAL build reads, on an NT target.  Run it IN THE GUEST
 rem or on the bench machine, not on the build host.
 rem
 rem   IMOD SHOW              print the value in force, and the key it is in
-rem   IMOD <0-65535>         set XhciImodExperiment to that many 250 ns units
+rem   IMOD <0-65535>         set XhciImodInterval250ns to that many 250 ns units
 rem   IMOD CLEAR             delete the value - the CONTROL arm of the sweep
 rem
 rem THE LADDER task 23.2 sweeps: CLEAR (control), 4000, 2000, 1000, 500, 200,
@@ -28,11 +28,13 @@ rem what makes the experiment safe to leave in the tree.  So a value set here
 rem against a shipping .sys reads back as "no effect", correctly, and is not a
 rem fault to chase.
 rem
-rem THE NAME IS DELIBERATELY NOT 23.3's.  If task 23.3 ever ships a value it is
-rem XhciImodInterval, with a different contract (default 4000, floor 10, 4000
-rem substituted for anything invalid).  Under a separate name a setting left on
-rem a bench machine stays inert when a shipping build is installed over the top
-rem instead of silently becoming load-bearing.
+rem THE NAME IS 23.3's, AND SO CLEAR THE VALUE WHEN THE SESSION ENDS.  If task
+rem 23.3 ships, it reads this same value under its own contract: default 4000,
+rem 10 to 4000 accepted, 4000 substituted for anything outside that.  A 0 left
+rem behind falls back to 4000, but 10 to 4000 left behind stays in force under
+rem the shipping build.  (Until 2026-09-21 the experiment read
+rem XhciImodExperiment, named apart so a leftover was inert.  That name is no
+rem longer read by anything.)
 rem
 rem REQUIRES REG.EXE, which is in the base install from Windows XP onwards.
 rem Windows 2000 SP4 carries it only with the Support Tools; on a plain Win2000
@@ -47,7 +49,7 @@ rem package writes, which carries "xhci98" - and never by the number.
 
 setlocal
 set CLASSKEY=HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}
-set VALNAME=XhciImodExperiment
+set VALNAME=XhciImodInterval250ns
 set DEVKEY=
 set MULTI=
 

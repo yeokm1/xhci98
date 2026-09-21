@@ -126,8 +126,8 @@ Mutually exclusive with -ImodExperimentArtifact and
 
 .PARAMETER ImodExperimentArtifact
 Stage roadmap task 23.2's moderation artifact: a package whose driver reads
-XhciImodExperiment from its own software key and writes it to IR0's IMOD in the
-start. Build it first with
+XhciImodInterval250ns from its own software key and writes it to IR0's IMOD in
+the start. Build it first with
 
     set XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT
     scripts\build-driver.cmd release
@@ -552,7 +552,7 @@ gate could not refuse if the switch were absent, so it is refused here instead.
         Write-Host ""
         Write-Warn "MODERATION EXPERIMENT ARTIFACT - roadmap task 23.2, not install media."
         Write-Warn "This package installs and runs normally, and additionally reads"
-        Write-Warn "XhciImodExperiment from the driver's software key and writes it to IR0's"
+        Write-Warn "XhciImodInterval250ns from the driver's software key and writes it to IR0's"
         Write-Warn "IMOD in the start. With that value unset it behaves exactly as the"
         Write-Warn "shipping driver does, which is what makes it its own control."
         Write-Warn "It is a bench instrument and must never be published or given to a user."

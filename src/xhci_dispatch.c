@@ -442,20 +442,26 @@ XHCI_C_ASSERT(packet_is_whole_words,
  * Task 23.2's third value, in the same key and read by the same service, and
  * **only in an experimental build**.
  *
- * **The name is deliberately not 23.3's.** 23.3 proposes `XhciImodInterval`
- * for a value that would ship, with a contract this one does not have - a
- * default of 4000, a floor of 10, and 4000 substituted for anything invalid.
- * This value has no default at all: absent means the start does not write IMOD,
- * which is what every build before this one did. If the two shared a name, a
- * bench machine left carrying an experimental setting would have it become
- * load-bearing the moment a 23.3 build was installed over the top. Under a
- * separate name a leftover is inert, and 23.3 is free to choose its own.
+ * **The name is 23.3's, on purpose.** The owner chose `XhciImodInterval250ns`
+ * on 2026-09-21 as the name the value keeps if 23.3 ships it, the unit in the
+ * name so nobody reading the key takes 4000 for microseconds. The two builds
+ * read it under different contracts. This one has no default and no bounds
+ * short of IMODI's width: absent means the start does not write IMOD, which is
+ * what every build before this one did, and 0 and 10 are arms of the sweep.
+ * 23.3's defaults to 4000 and accepts 10 to 4000, substituting 4000 for
+ * anything outside it. So a leftover bench setting is **not** inert under a
+ * 23.3 build: 0 falls back to 4000, but every other arm stays in force.
+ * Clear the value when a bench session ends.
  *
- * 18 characters, so (18 + 1) * 2 - the length rule is the one above: bytes
+ * *(Until 2026-09-21 this value was `XhciImodExperiment`, named apart from
+ * 23.3's so that a leftover stayed inert. A machine still carrying that name
+ * is one this build no longer reads, which leaves it at the control arm.)*
+ *
+ * 21 characters, so (21 + 1) * 2 - the length rule is the one above: bytes
  * including the terminating NUL, and the service does not clamp its own copy.
  */
-#define XHCI_IMOD_EXPERIMENT_VALUE_NAME  L"XhciImodExperiment"
-#define XHCI_IMOD_EXPERIMENT_VALUE_BYTES (19 * 2)
+#define XHCI_IMOD_EXPERIMENT_VALUE_NAME  L"XhciImodInterval250ns"
+#define XHCI_IMOD_EXPERIMENT_VALUE_BYTES (22 * 2)
 #endif
 
 /*

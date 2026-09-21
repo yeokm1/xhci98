@@ -65,11 +65,13 @@ rem value completely and always will - that is what makes the experiment safe
 rem to leave in the tree.  So a value set here against a shipping .sys reads
 rem back as "no effect", correctly, and is not a fault to chase.
 rem
-rem THE NAME IS DELIBERATELY NOT 23.3's.  If task 23.3 ever ships a value it is
-rem XhciImodInterval, with a different contract (default 4000, floor 10, 4000
-rem substituted for anything invalid).  Under a separate name a setting left on
-rem a bench machine stays inert when a shipping build is installed over the top
-rem instead of silently becoming load-bearing.
+rem THE NAME IS 23.3's, AND SO CLEAR THE VALUE WHEN THE SESSION ENDS.  If task
+rem 23.3 ships, it reads this same value under its own contract: default 4000,
+rem 10 to 4000 accepted, 4000 substituted for anything outside that.  A 0 left
+rem behind falls back to 4000, but 10 to 4000 left behind stays in force under
+rem the shipping build.  (Until 2026-09-21 the experiment read
+rem XhciImodExperiment, named apart so a leftover was inert.  That name is no
+rem longer read by anything.)
 rem
 rem THE INSTANCE NUMBER IS NOT FIXED by anything on this target - it was 0002
 rem on the 2a machine (runs/run-11v.md) - and COMMAND.COM cannot search for it,
@@ -119,11 +121,11 @@ if "%IMODHEX%"=="" goto badstep
 echo REGEDIT4>C:\IMODSET.REG
 echo.>>C:\IMODSET.REG
 echo [HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\Class\USB\%2]>>C:\IMODSET.REG
-echo "XhciImodExperiment"=dword:%IMODHEX%>>C:\IMODSET.REG
+echo "XhciImodInterval250ns"=dword:%IMODHEX%>>C:\IMODSET.REG
 echo.>>C:\IMODSET.REG
 regedit /s C:\IMODSET.REG
 echo.
-echo Set XhciImodExperiment = %1  (250 ns units, written as dword:%IMODHEX%)
+echo Set XhciImodInterval250ns = %1  (250 ns units, written as dword:%IMODHEX%)
 echo   under ...\Services\Class\USB\%2
 if "%1"=="0" echo   NOTE: 0 is moderation OFF, not the control arm.  See CLEAR.
 goto restart
@@ -135,11 +137,11 @@ set IMODHEX=%2
 echo REGEDIT4>C:\IMODSET.REG
 echo.>>C:\IMODSET.REG
 echo [HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\Class\USB\%3]>>C:\IMODSET.REG
-echo "XhciImodExperiment"=dword:%IMODHEX%>>C:\IMODSET.REG
+echo "XhciImodInterval250ns"=dword:%IMODHEX%>>C:\IMODSET.REG
 echo.>>C:\IMODSET.REG
 regedit /s C:\IMODSET.REG
 echo.
-echo Set XhciImodExperiment = dword:%IMODHEX%
+echo Set XhciImodInterval250ns = dword:%IMODHEX%
 echo   under ...\Services\Class\USB\%3
 echo.
 echo NOT CHECKED HERE: that those are eight hex digits, and that the value fits
@@ -154,11 +156,11 @@ if "%2"=="" goto usage
 echo REGEDIT4>C:\IMODSET.REG
 echo.>>C:\IMODSET.REG
 echo [HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\Class\USB\%2]>>C:\IMODSET.REG
-echo "XhciImodExperiment"=->>C:\IMODSET.REG
+echo "XhciImodInterval250ns"=->>C:\IMODSET.REG
 echo.>>C:\IMODSET.REG
 regedit /s C:\IMODSET.REG
 echo.
-echo Cleared XhciImodExperiment under ...\Services\Class\USB\%2
+echo Cleared XhciImodInterval250ns under ...\Services\Class\USB\%2
 echo The start will write no IMOD at all - the driver exactly as it ships.
 echo This is the CONTROL arm of the sweep.
 goto restart
