@@ -335,11 +335,12 @@ from.
 same `DriverVer`, so they cannot share a directory; and the x86 pair is named
 `-x86` rather than left bare, because the moment a second set exists an
 untagged `release/` would mean "x86" without saying so and the download's
-`readme.txt` would have no single "INSTALL THIS ONE" to point at. That rename
-was free: no release had been uploaded publicly and no GitHub release existed,
-so no download has ever carried `release/`,
-and the write-once rule above leaves the four directories already cut exactly
-as they are. Their shape is what a cut produced on the day, which is what the
+`readme.txt` would have no single "INSTALL THIS ONE" to point at. The rename
+was free when it was made, because no release had yet been uploaded. The
+versions cut before it (`1.0.0.0` to `1.0.2.0`) keep their bare `release/`
+and `debug/`, in the tree and in their uploaded downloads alike, because the
+write-once rule above leaves the four directories already cut exactly as
+they are. Their shape is what a cut produced on the day, which is what the
 "look in it rather than here" paragraph above is for.
 
 A wrong pick by a user is safe in both directions, which is what makes four

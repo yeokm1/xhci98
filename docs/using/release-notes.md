@@ -314,7 +314,7 @@ nothing. Windows Vista and Windows 7 are different: every install of them has
 all four files whether or not it ever saw a USB controller, and on those
 systems the package asks Windows to copy none of them.
 
-`usbui.dll` is new in this release and is the one that changes only what you
+`usbui.dll`, copied since `1.0.2.0`, is the one that changes only what you
 see, never what works. On Windows 2000 and Windows XP, Windows' own INF
 already asks for a Power tab on the USB Root Hub's properties and names that
 DLL as the page's provider; on a machine that never had a USB controller the

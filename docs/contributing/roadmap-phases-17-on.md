@@ -547,12 +547,15 @@ polling rates and true speeds.
 - [x] 23.1 the controller's property page. `runs/run-23.md` has the
   detail. **The line is in `[Xhci.AddReg]`** since 2026-09-20, the INF gate
   holds it there with a `PROP-*` family (seven rules, eight self-test cases),
-  and the footprint has learned it. **The NT half is deferred, not refused**
-  (owner, 2026-09-20): the pair it takes is known and all three NT references
-  write it, but one `[Xhci.AddReg.NT]` serves four install paths and the page
-  has been opened in none of their guests, so `PROP-NTHALF` refuses it until
-  those readings exist. **23.2 carries it**, and the route there is to take
-  the reading by hand in regedit before any INF changes. Of the three things
+  and the footprint has learned it. **The NT half was deferred, not refused**
+  (owner, 2026-09-20), and as written here it was still open: the pair it
+  takes is known and all three NT references write it, but one
+  `[Xhci.AddReg.NT]` serves four install paths and the page had been opened in
+  none of their guests, so `PROP-NTHALF` refused it until those readings
+  existed. **23.2 carried it and closed it the same day** (below): all seven
+  NT guests draw the tab from the INF-written pair, `PROP-NTHALF` is inverted
+  into `PROP-MISSING`, and the by-hand-in-regedit route this entry prescribed
+  proved inert on NT 6.x. Of the three things
   owed before the line ships, two
   are answered `static`: "Disable USB error detection" names
   `ErrorCheckingEnabled` under

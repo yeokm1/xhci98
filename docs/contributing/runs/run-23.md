@@ -1843,8 +1843,9 @@ open.
 
 - **Every build reads `XhciImodInterval250ns`** beside the two log values,
   through the same `UsbPortGetMiniportRegistryKeyValue` service and key, with
-  no new import (the binary imports twelve pairs on `release` and `debug`,
-  thirteen on `qemu`, and the allowlist holds thirteen, as before). The read
+  no new import (on x86 the binary imports twelve pairs on `release` and
+  `debug`, thirteen on `qemu`, and the allowlist holds thirteen, as before;
+  the amd64 import set is unchanged too). The read
   only records what the registry said (`ImodStatus`, `ImodRequested`); the
   choice is `XhciImodIntervalChoose`'s, a pure function in `src/xhci_init.c`:
   10 to 4000 as given, anything else - a failed read, 0, 9, 4001, 70000 -

@@ -125,8 +125,12 @@ A task inserted between two existing ones takes a fractional id (`13-R.3.5`,
 `test/`, `scripts/` and evidence logs, and a published `readme.txt` is never
 edited in place. A `.5` id means "between these two" and is not a sub-task. A
 sub-task is `<task>.<n>`: `7b-A.1.2` is sub-task 2 of task `7b-A.1`, and
-`14.1.1` to `14.1.11` are the clauses of task `14.1`. No tracked file cites a
-pre-renumbering id; task 14.1.9 checks that.
+`14.1.1` to `14.1.11` are the clauses of task `14.1`. The one exception is
+Phases 23 and 24, renumbered in order on 2026-09-22 (`7488f13`) while no id
+of theirs was in a published `readme.txt`. No tracked file cites a
+pre-renumbering id as a task id; task 14.1.9 checks that. What keeps an old
+id is an artifact name - a snapshot, a marker, an `out\` directory - and
+`runs/run-23.md` lists those under "On task ids inside artifact names".
 
 Three rules the batching exists to enforce:
 
