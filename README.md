@@ -85,6 +85,24 @@ It has four driver directories: `release-x86\` and `debug-x86\` for 32-bit Windo
 
 The same driver on the same machine survives all three under SweetLow's build of that stack.
 
+### Tuning: the interrupt moderation interval (from 1.1.1.0)
+
+`XhciImodInterval250ns` is a `DWORD` in the controller's driver (software) key, in **units of 250 ns**. It sets how long the controller waits after one interrupt before raising the next. A shorter interval makes USB mass storage faster, at the cost of more interrupts.
+
+| | Value | Interval | Interrupts per second, at most |
+|---|---|---|---|
+| Written by the install | `500` | 0.125 ms | 8,000 |
+| Used when the value is missing, unreadable, or outside `10`-`4000` | `4000` | 1 ms | 1,000 |
+| Lowest accepted | `10` | 2.5 us | 400,000 |
+
+A value outside `10`-`4000` is replaced by `4000`, not rounded to the nearest limit, so a mistyped `0` cannot turn moderation off. `4000` is the controller's own power-on value and what every earlier release ran at.
+
+On the P14s under Windows 98 SE, large reads from a USB 3 stick went from 17.6 MB/s at `4000` to 32.5 MB/s at `500`, and USB audio played through the same test cleanly. Linux's xHCI driver defaults to `160` (40 us), which read 33.1 MB/s here. This package ships `500` to be more conservative, because interrupt load at real rates is what has crashed Windows 98 on real hardware before.
+
+Feel free to tune it: lower towards `160` for the last few percent of storage speed, or raise it towards `4000` (or delete it) if you get audio stutter or instability under load. The driver reads it at start, so restart after a change. `XHCISNAP` shows the value read, the interval in force and what the controller took, under "registry values". The readme's "Registry settings" section says how to find the right key.
+
+On Windows 98 with NUSB, an upgrade over an existing install crashes before the value is written, so the driver runs at `4000` until you set it by hand.
+
 ## What is tested, and what is not
 
 Windows 98 SE is validated on real hardware. 32-bit Windows 7 has run on real hardware once (a ThinkPad E460, 2026-09-19). Windows 2000 SP4, Windows ME, Windows XP (x86/x64), Windows Vista (x86/x64) and 64-bit Windows 7 have only ever run in QEMU virtual machines.

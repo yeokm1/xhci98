@@ -3182,12 +3182,14 @@ debug throughout, in its build scripts and its documentation alike.)
  9. REGISTRY SETTINGS
 ==============================================================================
 
-Every registry value this driver reads. There are two, and it writes none.
+Every registry value this driver reads. There are three, and the driver
+writes none of them: the installer creates all three.
 
-  YOU SHOULD NOT NEED THIS SECTION. If the maintainer asks for a log,
-  XHCISNAP -verbosity 2 sets the one that matters, on every controller, and
-  finds the key itself. It is here so you can check what is in the key if you
-  are asked to.
+  YOU SHOULD NOT NEED THIS SECTION FOR A LOG. If the maintainer asks for one,
+  XHCISNAP -verbosity 2 sets the value that matters, on every controller, and
+  finds the key itself. The first two values below are here so you can check
+  what is in the key if you are asked to. The third, XhciImodInterval250ns,
+  is the one setting here you may want to change yourself.
 
   XhciLogVerbosity  -  the whole switch
   .....................................
@@ -3224,14 +3226,58 @@ Every registry value this driver reads. There are two, and it writes none.
   XHCISNAP reads, which is a different route entirely. Leave it at 0 unless
   the maintainer asks for a DebugView capture.
 
-  THOSE TWO ARE THE WHOLE LIST. This driver reads no other setting of its
+  XhciImodInterval250ns  -  how long the controller holds back an interrupt
+  .........................................................................
+
+  DWORD, counted in UNITS OF 250 NANOSECONDS. It is the controller's
+  interrupt moderation interval: after raising an interrupt, the controller
+  waits at least this long before raising the next one.
+
+      500    what the installer writes: 0.125 ms, at most 8,000 interrupts
+             a second.
+      4000   what the driver uses when the value is MISSING, UNREADABLE, OR
+             OUTSIDE 10-4000: 1 ms, at most 1,000 a second. This is the
+             controller's own power-on value and what every release before
+             1.1.1.0 ran at.
+      10     the lowest accepted: 2.5 microseconds.
+
+  A value outside 10-4000 is REPLACED BY 4000, not rounded to the nearest
+  limit, so a mistyped 0 cannot turn moderation off. The driver reads it
+  when it starts, so a change takes effect after a restart.
+
+  WHY 500. A shorter interval makes USB mass storage faster, because each
+  step of a transfer waits for an interrupt before the next is sent. On a
+  ThinkPad P14s Gen 1 under Windows 98 SE, large reads from a USB 3 stick
+  went from 17.6 MB/s at 4000 to 32.5 MB/s at 500, and a USB audio device
+  played through the same test with no error the driver could count. Going
+  lower gained little: 33.1 MB/s at 200 and at 160. Linux's own xHCI driver
+  uses 160 (40 microseconds); this package ships 500 to be more
+  conservative, since every interrupt costs Windows 98 time, and more of
+  them at real rates is what has crashed it on real hardware before.
+
+  YOU ARE FREE TO TUNE IT. Lower it towards 160 if you want the last few
+  percent of storage speed and the machine stays stable; raise it towards
+  4000 if you see stutter, dropouts or instability under load, or delete it
+  to get exactly the behaviour of earlier releases. Enter it as a decimal
+  DWORD (500), or in hexadecimal (1f4) - Registry Editor lets you choose.
+  After the restart, XHCISNAP's report shows under "registry values" the
+  value it read, the interval in force, and what the controller took.
+
+  ON WINDOWS 98 WITH NUSB, AN UPGRADE DOES NOT SET IT. An upgrade over a
+  running xhci98 crashes before the installer's settings are written (see
+  section 5), so the value is absent and the driver runs at 4000, exactly as
+  earlier releases did, until you set it by hand here - or remove the driver
+  the crash-free way in section 5 and install this package fresh.
+
+  THOSE THREE ARE THE WHOLE LIST. This driver reads no other setting of its
   own, and no registry value makes it write a file.
 
-  BOTH ARE DWORDS AND BOTH DEFAULT TO 0. Both are created by
-  the installer, so both are already there and only their data changes.
-  A value that is missing entirely is not an error either - the driver starts
-  normally with everything off, and the report says whether it read nothing
-  or read a zero. They live in the device's own driver key, which is spelled
+  ALL THREE ARE DWORDS. The two log values default to 0, the moderation
+  interval to 500, and all three are created by the installer, so they are
+  already there and only their data changes. A value that is missing
+  entirely is not an error either - the driver starts normally, with the log
+  off and the interval at 4000, and the report says whether it read nothing
+  or read a value. They live in the device's own driver key, which is spelled
   one way on the NT targets and another on the 9x ones:
 
     Windows 2000, XP, Vista and 7
@@ -3264,10 +3310,11 @@ Every registry value this driver reads. There are two, and it writes none.
   names the key to edit - for example USB\0004 - and that is the key the
   driver will actually read, by definition.
 
-  SET THEM ONLY WHILE DIAGNOSING SOMETHING, AND RUN XHCISNAP -DISABLE WHEN
-  YOU HAVE SENT THE CAPTURE. That is not housekeeping. While the channel is
-  enabled, anyone using this machine can read the driver's own diagnostic
-  state through it - counters, the log, the port table, and at level 4
+  SET THE TWO LOG VALUES ONLY WHILE DIAGNOSING SOMETHING, AND RUN
+  XHCISNAP -DISABLE WHEN YOU HAVE SENT THE CAPTURE. That is not
+  housekeeping. While the channel is enabled, anyone using this machine can
+  read the driver's own diagnostic state through it - counters, the log, the
+  port table, and at level 4
   internal addresses. It is this driver's own state and nothing else: no
   documents, no passwords, no other program's memory. But this driver cannot
   put a lock on that door - the door belongs to Windows' own USB port driver,

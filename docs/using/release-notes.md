@@ -209,7 +209,15 @@ It is counted in **units of 250 ns**, so `4000` is 1 ms and `500` is 0.125 ms.
   not rounded to the nearest limit, so `0` does not turn moderation off.
 - **A lower value means more interrupts.** At `500` the controller can raise
   up to 8,000 a second; at `4000`, 1,000. Below `500` the measurement above
-  gained little: 33.1 MB/s at `200`.
+  gained little: 33.1 MB/s at `200` and at `160`.
+- **`500` is the conservative choice.** Linux's own xHCI driver uses `160`
+  (40 us). This package ships `500` because interrupt load at real rates is
+  what has crashed Windows 98 on real hardware before, and `500` already
+  takes 98% of the read gain.
+- **You are free to tune it.** Lower it towards `160` for the last few
+  percent of storage speed; raise it towards `4000`, or delete it, if you
+  hear audio stutter or see instability under load. "Registry settings" in
+  the package's `readme.txt` says how to find the right key.
 - The driver reads it when it starts, so a change takes effect after a
   restart. `XHCISNAP`'s report shows the value read, the interval in force and
   what the controller took, under "registry values".
