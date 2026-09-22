@@ -521,7 +521,9 @@ taken, and runs next** - the INF writes **500** (the owner moved it from 1000
 on 2026-09-22 after 500 was measured) and the driver falls back to 4000.
 **23.5, the audio test, gates its release**; its read-first half, on the
 23.3 experimental build, was taken the same day and both 1000 and 500 passed
-it, so 23.4 can be written.
+it, so 23.4 can be written. **23.5 is closed on that half** (owner,
+2026-09-22): the gate proper is read once, at 500 on the cut's own `release`
+binary, inside 23.6, and not also on a pre-cut 23.4 build.
 23.1 was started and finished on
 2026-09-20 on branch `23.1`, its host side, **all three guest legs** (Windows
 98 SE under NUSB and under SweetLow, and Windows ME) and the three documents
@@ -793,7 +795,12 @@ polling rates and true speeds.
   a better number, shipping it as the default is a separate decision of the
   owner's; this task ships 4000. The release notes say what the value is,
   its units, and that a low value raises the interrupt rate.
-- [ ] 23.5 the audio test: 23.4's release gate. **Read-first half taken
+- [x] 23.5 the audio test: 23.4's release gate. **Closed into 23.6 by the
+  owner on 2026-09-22**: the read-first half below is this task's reading,
+  and the gate proper - the pass at 500 that the checkpoint names - is read
+  once, on the cut's own `release` binary, as 23.6's clause. The separate
+  pre-cut pass on the 23.4 build that the text below calls open is not taken,
+  so one bare-metal session remains rather than two. **Read-first half taken
   2026-09-22 on the 23.3 build, and 1000 passes it** (`runs/run-23.md`,
   23.5): a Full-Speed audio stream on a root port played through a full
   ATTO pass at control, 1000, control; every isochronous error counter 0 on
