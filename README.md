@@ -99,6 +99,12 @@ A value outside `10`-`4000` is replaced by `4000`, not rounded to the nearest li
 
 On the P14s under Windows 98 SE, large reads from a USB 3 stick went from 17.6 MB/s at `4000` to 32.5 MB/s at `500`, and USB audio played through the same test with no error counted by the driver and one ring underrun, against one and three on two passes at `4000`. Linux's xHCI driver defaults to `160` (40 us), which read 33.1 MB/s here. This package ships `500` to be more conservative, because interrupt load at real rates is what has crashed Windows 98 on real hardware before.
 
+<img src="images/xhci98-flash-speed-test.jpg" width="800">
+
+ATTO Disk Benchmark on the P14s under Windows 98 SE against the MSSU10-128GSR flash drive, on the 1.1.1.0 build at new default interruption moderation interval of `500` (0.125 ms).
+
+About 33 to 34.6 MB/s read and write from 64 KB transfers upward. The same drive gave about 18 MB/s at the 1 ms default of every release before 1.1.1.0. 
+
 Feel free to tune it: lower towards `160` for the last few percent of storage speed, or raise it towards `4000` (or delete it) if you get audio stutter or instability under load. The driver reads it at start, so restart after a change. `XHCISNAP` shows the value read, the interval in force and what the controller took, under "registry values". The readme's "Registry settings" section says how to find the right key.
 
 On Windows 98 with NUSB, an upgrade over an existing install crashes before the value is written, so the driver runs at `4000` until you set it by hand.
@@ -146,12 +152,6 @@ The devices checked so far, all on the E460 under Windows 98 SE. Each is charact
 | Sound Blaster Play! 3, C-Media USB Audio Device (UAC 1.0) | `041E:324D`, `0D8C:0014` | Full | Enumerate and are named by the wizard. Found the Full-Speed `bMaxPacketSize0` bug. |
 | Sound Blaster X4 (UAC 2.0, `bInterval` 3 and 4) | `041E:3278` | High | Enumerates but does not bind on Windows 98 (one HID devnode at Code 10, no composite parent), so its `bInterval > 1` endpoints were never exercised. |
 
-<img src="images/xhci98-flash-speed-test.jpg" width="800">
-
-ATTO Disk Benchmark on the P14s under Windows 98 SE against the MSSU10-128GSR flash drive, on the 1.1.1.0 build at new default interruption moderation interval of `500` (0.125 ms).
-
-About 33 to 34.6 MB/s read and write from 64 KB transfers upward. The same drive gave about 18 MB/s at the 1 ms default of every release before 1.1.1.0. 
-
 ## Known limitations/issues
 
 | Limitation | Detail |
@@ -162,7 +162,7 @@ About 33 to 34.6 MB/s read and write from 64 KB transfers upward. The same drive
 | A Full-Speed USB audio device on a root port plays nothing on Windows XP and later | It installs and Windows shows it playing, but no sound reaches it. Behind a hub it plays (on Vista and 7 use a USB 2.0 hub). Windows 2000 plays on a root port. See [issue 6](docs/issues/06-full-speed-root-port-bugcheck.md), section 7. |
 | Disabling the USB controller can hang Windows 7 | On the one real Windows 7 machine tried, the first Disable in Device Manager never finished and the next restart hung until powered off; enabling it again afterwards worked. Uninstalling or upgrading stops the controller too. Cause not known yet. Do it with no unsaved work open, and expect to power off if the restart hangs. |
 | Fast, repeated plug and unplug can freeze Windows 98 | About twice a second sustained. Ordinary use is fine. |
-| Mass-storage throughput seems slow before 1.1.1.0 | About 18 MB/s read and write on the P14s, below what USB 2.0 High Speed usually reaches. The cause was measured (roadmap task 23.3): the controller's interrupt moderation, left at its 1 ms reset default. From 1.1.1.0 the install sets it to `500` (0.125 ms), at which large reads from a USB 3 stick on the P14s went from 17.6 to 32.5 MB/s, and the ATTO run above read and wrote about 34 MB/s; see Tuning above. An upgrade over a running driver on Windows 98 with NUSB keeps the old 1 ms until the value is set by hand. |
+| Mass-storage throughput seems slow before 1.1.1.0 | About 18 MB/s read and write on the P14s, below what USB 2.0 High Speed usually reaches. The cause was measured (roadmap task 23.3): the controller's interrupt moderation, left at its 1 ms reset default. From 1.1.1.0 the install sets it to `500` (0.125 ms), at which large reads from a USB 3 stick on the P14s went from 17.6 to 32.5 MB/s, and the ATTO run in Tuning above read and wrote about 34 MB/s. An upgrade over a running driver on Windows 98 with NUSB keeps the old 1 ms until the value is set by hand. |
 
 ## Toolchain and building
 
