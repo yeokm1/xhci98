@@ -100,7 +100,7 @@ Here is where to find the key:
 
 | | Value | Interval | Interrupts per second, at most |
 |---|---|---|---|
-| Written by the install | `500` | 0.125 ms | 8,000 |
+| Written by the install | `500` | 125us | 8,000 |
 | Used when the value is missing, unreadable, or outside `10`-`4000` | `4000` | 1 ms | 1,000 |
 | Lowest accepted | `10` | 2.5 us | 400,000 |
 
