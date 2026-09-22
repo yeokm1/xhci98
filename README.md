@@ -89,6 +89,13 @@ The same driver on the same machine survives all three under SweetLow's build of
 
 `XhciImodInterval250ns` is a `DWORD` in the controller's driver (software) key, in **units of 250 ns**. It sets how long the controller waits after one interrupt before raising the next. A shorter interval makes USB mass storage faster, at the cost of more interrupts.
 
+| Windows | Key |
+|---|---|
+| 98 SE, ME | `HKLM\System\CurrentControlSet\Services\Class\USB\NNNN` |
+| 2000, XP, Vista, 7 (x86/x64) | `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN` |
+
+`NNNN` is the subkey whose `DriverDesc` is "USB 2.0 eXtensible Host Controller (xhci98)". The number varies from machine to machine.
+
 | | Value | Interval | Interrupts per second, at most |
 |---|---|---|---|
 | Written by the install | `500` | 0.125 ms | 8,000 |
@@ -97,13 +104,13 @@ The same driver on the same machine survives all three under SweetLow's build of
 
 A value outside `10`-`4000` is replaced by `4000`, not rounded to the nearest limit, so a mistyped `0` cannot turn moderation off. `4000` is the controller's own power-on value and what every earlier release ran at.
 
-On the P14s under Windows 98 SE, large reads from a USB 3 stick went from 17.6 MB/s at `4000` to 32.5 MB/s at `500`, and USB audio played through the same test with no error counted by the driver and one ring underrun, against one and three on two passes at `4000`. Linux's xHCI driver defaults to `160` (40 us), which read 33.1 MB/s here. This package ships `500` to be more conservative, because interrupt load at real rates is what has crashed Windows 98 on real hardware before.
-
 <img src="images/xhci98-flash-speed-test.jpg" width="800">
 
-ATTO Disk Benchmark with an MSSU10-128GSR flash drive at `500`: about 33 to 34.6 MB/s read and write from 64 KB transfers upward, where `4000` gave about 18 MB/s.
+ATTO Disk Benchmark with an MSSU10-128GSR flash drive at `500` (125us). This gives about 33 to 34.6 MB/s read and write from 64 KB transfers upward where the previous default `4000` gave about 18 MB/s.
 
-Feel free to tune it: lower towards `160` for the last few percent of storage speed, or raise it towards `4000` (or delete it) if you get audio stutter or instability under load. The driver reads it at start, so restart after a change. `XHCISNAP` shows the value read, the interval in force and what the controller took, under "registry values". The readme's "Registry settings" section says how to find the right key.
+Linux's xHCI driver defaults to `160` (40 us), which read 33.1 MB/s here. This package ships `500` to be more conservative, because interrupt load at real rates is what has crashed Windows 98 on real hardware before.
+
+Feel free to tune it. Lower towards `160` for the last few percent of storage speed, or raise it towards `4000` (or delete it) if you get audio stutter or instability under load. 
 
 On Windows 98 with NUSB, an upgrade over an existing install crashes before the value is written, so the driver runs at `4000` until you set it by hand.
 
