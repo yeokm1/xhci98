@@ -101,9 +101,7 @@ On the P14s under Windows 98 SE, large reads from a USB 3 stick went from 17.6 M
 
 <img src="images/xhci98-flash-speed-test.jpg" width="800">
 
-ATTO Disk Benchmark on the P14s under Windows 98 SE against the MSSU10-128GSR flash drive, on the 1.1.1.0 build at new default interruption moderation interval of `500` (0.125 ms).
-
-About 33 to 34.6 MB/s read and write from 64 KB transfers upward. The same drive gave about 18 MB/s at the 1 ms default of every release before 1.1.1.0. 
+ATTO Disk Benchmark with an MSSU10-128GSR flash drive at `500`: about 33 to 34.6 MB/s read and write from 64 KB transfers upward, where `4000` gave about 18 MB/s.
 
 Feel free to tune it: lower towards `160` for the last few percent of storage speed, or raise it towards `4000` (or delete it) if you get audio stutter or instability under load. The driver reads it at start, so restart after a change. `XHCISNAP` shows the value read, the interval in force and what the controller took, under "registry values". The readme's "Registry settings" section says how to find the right key.
 
