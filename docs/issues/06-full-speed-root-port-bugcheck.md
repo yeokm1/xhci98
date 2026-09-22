@@ -8,8 +8,9 @@ not a fix, and it has costs, which have grown with every Windows added
 after the two it was made on. Usbport buckets interrupt intervals on the
 wrong speed everywhere (section 5), and since 2026-09-20 one cost is visible
 to a user rather than only in a trace: the controller's own **Bandwidth
-Usage** dialog on Windows 98 and Windows ME charges a Full-Speed and a
-High-Speed root-port device the same 1 % (section 5.1). **Two further costs
+Usage** figures charge a Full-Speed and a High-Speed root-port device the
+same 1 %, on five USB 2.0 stacks across four operating systems - Windows 98
+SE, ME, 2000 and XP (section 5.1). **Two further costs
 were measured on
 2026-09-19 and are known limitations of `1.1.0.0`:** a USB 1.1 hub on a
 root port bugchecks every Vista and Windows 7 build once a slower device
@@ -616,8 +617,9 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
 - **The bandwidth accounting on Windows 98 and 2000** (section 5) has no
   measurement either way. The Bandwidth Usage readings of 2026-09-20
   (section 5.1) are not one: they are what `usbui.dll` computes from the
-  speed that was reported, on the three 9x legs, and Windows 2000 gets no
-  such page from this package at all.
+  speed that was reported, on the five legs (the three 9x ones, Windows 2000
+  SP4 and Windows XP SP3); on the NT targets the same list is inline on the
+  tab rather than behind a button.
 - **Metal never ran the truthful build**, so the bugcheck itself is a VM
   observation. Nothing suggests real hardware differs: the fault is in
   usbport's own list handling, not in anything the controller does.

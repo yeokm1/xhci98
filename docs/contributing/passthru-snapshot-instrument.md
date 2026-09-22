@@ -204,10 +204,10 @@ order they bite:
    intrinsic or an `ntoskrnl` import depending on build flags, and this
    driver decides its import list on purpose rather than by build-flag
    accident, the same reason `xhciZeroPacket` exists. A full window is bounded by the
-   0x10000 usbport refuses above, less the 88-byte header: 65,448 iterations
+   0x10000 usbport refuses above, less the 104-byte header: 65,432 iterations
    under the controller lock, and the host tool asks for 0xF000 = 61,440 at a
    time (`SNAP_PARAM_BYTES` in `xhcisnap/xhcisnap.c`), which is the whole
-   parameter block and so carries the header too - 61,352 payload bytes, and
+   parameter block and so carries the header too - 61,336 payload bytes, and
    that is what is actually reached. (`xhcisnap.c` bounds its own reads by
    `SNAP_PARAM_BYTES - sizeof(SNAP_HEADER)`, the same arithmetic.) On the order of 100 us at DISPATCH. That is the right trade: the instrument runs on a wedged, idle
    machine and is in no hot path, and the ISR does not take this lock, so

@@ -4945,7 +4945,8 @@ wrote nothing when the value was absent, so one install was the control and
 every arm. It ran on the P14s Gen 1 under Windows 98 SE on 2026-09-21 and
 2026-09-22; `runs/run-23.md`, 23.3 and 23.5, has the procedure and the
 reading, and its build numbers (an extension of 92,328 bytes against the
-shipping 92,304) belong to that build alone.
+92,304 shipping at the time; the 23.4 build is 92,320) belong to that build
+alone.
 
 Since `1.1.1.0` **every build reads the value** (roadmap task 23.4), so the
 define, the packaging switch and its three build-time refusals are gone, and
@@ -4958,6 +4959,7 @@ register read back, are in every `XHCISNAP` `.TXT` under "registry values"
 `.BIN` against an offsets table from the same tree. The INF writes 500, so a
 bench machine goes back to the package's own setting with `IMOD98 500 NNNN`,
 not with `CLEAR`, which leaves the driver at 4000.
+
 ### Manual Installation on Windows 2000 SP4 (Development)
 
 1. Copy `xhci98.inf` and `xhci98.sys` together into a working directory (the
@@ -5170,13 +5172,13 @@ memory. Shape:
 | Shared | `[Xhci.CopyFiles]` | `xhci98.sys,,xhci98.tmp` -> `10, System32\Drivers` |
 | Win98 | `[Xhci.CopyW98]` | `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, both fetched from the OS's own install source through `LayoutFile` (neither is in `[SourceDisksFiles]`). The second is Windows 98's composite parent; on the NT targets the same name is the OS's own hub driver, and the NT row copies it too. |
 | Win2000 | `[Xhci.CopyNT]` | `usbport.sys,,,16`, `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, from `Driver Cache\i386` through `LayoutFile`. `usbd.sys` alone until 1.0.1.0; an NT install that never had a USB controller has none of the three (the Windows XP guest of 2026-09-03) |
-| All four | `[Xhci.CopyUI]` | `usbui.dll,,,16` -> dirid `11` (the system directory), the one OS-supplied row that does not go to dirid 10, on all four install paths since 1.0.2.0. It is the root hub's property-page provider, which the NT targets' own INFs already name; `[DestinationDirs]` carries `Xhci.CopyUI=11` for it - the bare number, which is what the gate requires and what the INF has |
+| All four | `[Xhci.CopyUI]` | `usbui.dll,,,16` -> dirid `11` (the system directory), the one OS-supplied row that does not go to dirid 10, on all four install paths since 1.0.2.0. It is the root hub's property-page provider, which the NT targets' own INFs already name, and since roadmap task 23.2 the controller's too on every NT path; on 9x `sysclass.dll` draws the controller's tab and `usbui.dll` the dialogs behind its buttons (the `EnumPropPages` bullet below); `[DestinationDirs]` carries `Xhci.CopyUI=11` for it - the bare number, which is what the gate requires and what the INF has |
 | Both | `[DefaultInstall]` / `[DefaultInstall.NTx86]` | right-click pre-stage; the 9x one also copies the INF to `%17%`. Not supported on Vista and Windows 7, where `.NTx86` is also what runs: on Vista x86 its `LayoutFile` copies ask for `usbport.sys` from "(Unknown)", and a Cancel aborts the queue silently with `xhci98.sys` left behind and no service (roadmap task 22.5, 2026-09-17) |
 
 Three decisions in it depart from the references, each for a reason that would
-otherwise cost a debug cycle - a fourth did until roadmap task 23.1 closed it,
-and its bullet below now records what the file carries rather than what it
-omits:
+otherwise cost a debug cycle - a fourth did until roadmap tasks 23.1 and 23.2
+closed it, and its bullet below now records what the file carries rather than
+what it omits:
 
 - No `[ControlFlags] ExcludeFromSelect`, which both references set. It only
   hides a model from the manual device-selection list, and the documented
@@ -5184,13 +5186,14 @@ omits:
   Disk", Win98 "Specify a location"). It cannot affect whether `usbport.sys`
   binds, so the risk of it suppressing the install path is all cost and no
   benefit.
-- `EnumPropPages` on the Windows 98 path and **no** `EnumPropPages32` /
+- `EnumPropPages` on the Windows 98 path and `EnumPropPages32` +
   `Controller` on the NT ones. These name the property-page providers for the
   *controller's* own Device Manager tab. This package registered none until
-  roadmap task 23.1 (2026-09-20, GitHub issue 4 item 5) added the 9x half; the
-  NT half is deferred. `runs/run-23.md` carries task 23.1 and the guest
-  readings it still owes, and `scripts\inf-gate\check-inf.ps1`'s `PROP-*`
-  family holds both halves where they are.
+  roadmap task 23.1 (2026-09-20, GitHub issue 4 item 5) added the 9x half and
+  task 23.2 (the same day) the NT half, in both INFs. `runs/run-23.md`
+  carries both tasks and their guest readings, and
+  `scripts\inf-gate\check-inf.ps1`'s `PROP-*` family holds both halves where
+  they are.
 
   On Windows 98 the provider is `sysclass.dll`, **not** `usbui.dll`.
   `HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"` in
