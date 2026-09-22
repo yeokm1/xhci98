@@ -15,8 +15,8 @@ ASCII.
 
 | File | Target | What it does |
 |---|---|---|
-| `IMOD.BAT` | Windows 2000 and later (needs `reg.exe`, so XP and later in practice) | Sets, shows or clears `XhciImodInterval250ns`, the interrupt-moderation interval the driver reads at every start (roadmap task 23.4; task 23.3 swept it) |
-| `IMOD98.BAT` | Windows 98 SE and Windows ME | The same, through `regedit /s` and a generated `REGEDIT4` file |
+| `IMOD.BAT` | Windows 2000 and later (needs `reg.exe`: in the base install from XP, on Windows 2000 SP4 only with the Support Tools; without it the file prints the class key to set the value in by hand with regedit) | Sets, shows or clears `XhciImodInterval250ns`, the interrupt-moderation interval the driver reads at every start (roadmap task 23.4; task 23.3 swept it) |
+| `IMOD98.BAT` | Windows 98 SE and Windows ME only | The same, through `regedit /s` and a generated `REGEDIT4` file. It writes the 9x software key, `...\Services\Class\USB\NNNN`, which no NT target reads, so it is no fallback for a Windows 2000 machine without `reg.exe` |
 | `SWEEP98.BAT` | Windows 98 SE and Windows ME | One boot of the sweep: a timed `XHCISNAP` dump before a benchmark run (`SWEEP98 ARM A`) and one after (`SWEEP98 ARM B`) |
 
 **Nothing in a 9x batch file may put `<`, `>` or `|` in a `REM` line.**

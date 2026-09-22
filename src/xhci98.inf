@@ -94,7 +94,8 @@ HKR,,XhciImodInterval250ns,0x00010001,500
 ;   XhciLogVerbosity       0 off (the default), 1 counters, 2 adds the log,
 ;                          3 adds the port table, 4 adds kernel addresses.
 ;                          Out of range means 0. XHCISNAP sets it.
-;   XhciLogDebugView       1 hands the log to DbgPrint when the driver stops.
+;   XhciLogDebugView       1 hands the log to DbgPrint when the driver stops
+;                          or a start is refused.
 ;   XhciImodInterval250ns  the interrupt moderation interval, in 250 ns units
 ;                          (IMODI). 500 is 125 us. Absent, unreadable, or
 ;                          outside 10-4000 means 4000 (1 ms, the hardware

@@ -81,17 +81,22 @@ What it checks, grouped by the failure each rule prevents:
            once found in VAL-MISSING. The caution it encoded is not lost: it is
            written into src\xhci98.inf beside the values, and a future REG_SZ
            value here must bring the rule back with it.)
-  PROP-*   The controller's own Device Manager property page, since roadmap
-           task 23.1 (GitHub issue 4 item 5). The Windows 98 path must write
-           EnumPropPages naming sysclass.dll's USBControllerPropPage, once, on
-           the devnode key, with no flags field - it is a REG_SZ and the 9x
-           engine is the only one that reads it. **No NT path may write
-           EnumPropPages32** (PROP-NTHALF): the pair that would go there is
-           known and is what all three NT references write, but one
-           [Xhci.AddReg.NT] serves four install paths and the page has been
-           opened in none of their guests, so the owner deferred it on
-           2026-09-20. Inverting that rule is what taking the NT half looks
-           like, the way SUSP-* was inverted on 2026-09-17.
+  PROP-*   The controller's own Device Manager property page (GitHub issue 4
+           item 5): the 9x half since roadmap task 23.1, the NT half since
+           task 23.2, both 2026-09-20. Every install path must write its own
+           engine's value, once, on the devnode key, with no flags field - it
+           is a REG_SZ - through a table keyed by path kind: EnumPropPages
+           naming sysclass.dll's USBControllerPropPage on the Windows 98
+           path, EnumPropPages32 naming usbui.dll's
+           USBControllerPropPageProvider on every NT one (PROP-MISSING,
+           PROP-DUP, PROP-SUBKEY, PROP-FLAGS, PROP-PROVIDER). The other
+           engine's spelling on a path is refused (PROP-STRAY), and each NT
+           path must also write Controller as REG_BINARY 01, flags 1, as all
+           three NT references do (PROP-CTRLMISSING, PROP-CTRLDUP,
+           PROP-CTRLSUBKEY, PROP-CTRLFLAGS, PROP-CTRLDATA). PROP-NTHALF, which
+           refused any NT value while the NT half was deferred, lived for ten
+           hours on 2026-09-20 and was inverted into PROP-MISSING when 23.2's
+           guests showed the tab, the way SUSP-* was inverted on 2026-09-17.
   PKG-*    A staged package (-PackageDir): every [SourceDisksFiles] entry is
            present, and no Microsoft file is in it under any name.
 
@@ -1100,21 +1105,24 @@ foreach ($m in $models) {
 # simply does not appear, on a target where nothing reports why.
 #
 # The checks are the shape of the value, not the fact of it. sysclass.dll is
-# the provider and usbui.dll is NOT (measured 2026-09-07; the tab renders with
-# usbui.dll renamed away), which is the single most likely thing to be got
-# wrong here, since usbui.dll is the NT provider AND is copied by this INF.
+# the provider and usbui.dll is NOT (the tab renders with usbui.dll renamed
+# away; the Bandwidth Usage dialog behind its button does not, it raises "Data
+# Access Error" - roadmap task 23.1 leg A4, 2026-09-20), which is the single
+# most likely thing to be got wrong here, since usbui.dll is the NT provider
+# AND is copied by this INF.
 #
 # **No flags field.** FLG_ADDREG_TYPE_SZ is 0 and is spelled as an empty
 # field, which is how both reference INFs write it; a numeric flags field here
 # would be some other type for a value the shell reads as a string.
 # Both halves are written now. The 9x half landed in roadmap task 23.1 and the
 # NT half in 23.2, after the guest readings the deferral was waiting for:
-# Windows 2000 SP4 and Windows XP SP3 both draw the Advanced tab from the NT
-# pair with no restart, and Windows Vista SP2 x86 draws nothing from it at all
-# while Microsoft's own EHCI controller, carrying the identical pair on the
-# same guest and boot, draws its own. So the NT pair reaches NT 5.x and is
-# inert on NT 6.x; it ships because Windows 2000 is a co-primary target and
-# because an inert value there costs nothing. PROP-NTHALF, which refused the
+# all seven NT guests - Windows 2000 SP4, Windows XP SP3, Windows XP x64 SP2,
+# Vista SP2 x86 and x64, Windows 7 x86 and x64 - draw the Advanced tab from
+# the INF-written pair, across all four install sections that carry
+# Xhci.AddReg.NT. A value written by hand on an existing NT 6.x devnode is
+# inert, because the provider list is read when the devnode is built; that is
+# why a by-hand Vista reading was first recorded as a negative, and why the
+# line is not to be re-verified that way there. PROP-NTHALF, which refused the
 # NT value outright, is gone - inverted into PROP-MISSING covering both halves,
 # which is what "taking it" was defined to look like.
 $propPages = @{
@@ -1123,7 +1131,7 @@ $propPages = @{
         Provider = '"sysclass.dll,USBControllerPropPage"'
         Stray    = "EnumPropPages32"
         Why      = "the 9x shell reads it to find the 16-bit class installer that draws the controller's Advanced tab (the 'Disable USB error detection' box and the Bandwidth Usage dialog). sysclass.dll is on every Windows 98 and Windows ME machine and this INF does not copy it. It is the third value NUSB's own [EHCI.AddReg] writes, and GitHub issue 4 item 5 asked for it"
-        Wrong    = "On Windows 98 and Windows ME the provider is sysclass.dll, NOT the usbui.dll this INF copies: the tab and its dialog rendered identically with usbui.dll renamed away (measured 2026-09-07, roadmap task 23.1 leg A4)."
+        Wrong    = "On Windows 98 and Windows ME the provider is sysclass.dll, NOT the usbui.dll this INF copies: the tab rendered identically with usbui.dll renamed away, and only the Bandwidth Usage dialog behind its button did not (Data Access Error) - roadmap task 23.1 leg A4, 2026-09-20."
         StrayWhy = "That value is the NT engine's; the 16-bit engine reads EnumPropPages."
     }
     "nt" = @{
@@ -1294,7 +1302,7 @@ $osSupplied = @(
     @{ File = "usbui.dll";   On = @("Win98", "Win2000", "WinXP64"); Off = @();
        Dest = @{ Dirid = "11"; Subdir = ""; Spelling = "11";
                  Why = "dirid 11 is the system directory, where all four operating systems' own USB INFs put it; System32\Drivers is for drivers and this is a user-mode property-page DLL" };
-       Why = "the NT targets' own INF has already registered it against the root hub usbport creates (Windows 2000's USB.INF [ROOTHUB2.NT] and Windows XP's usbport.inf [ROOTHUB.Dev.NT] both write EnumPropPages32 = 'usbui.dll,USBHubPropPageProvider'), and on an xHCI-only machine the file was never placed, so the page is dropped silently: measured 2026-09-07 in both NT guests, the USB Root Hub gains a working Power tab as soon as the file is present, with no registry change. On the 9x paths it places what Windows 98 SE's and Windows ME's own USB.INF place (USBUI.CopyFiles=11); the 9x controller page comes from sysclass.dll instead and is unaffected either way, measured the same day" }
+       Why = "the NT targets' own INF has already registered it against the root hub usbport creates (Windows 2000's USB.INF [ROOTHUB2.NT] and Windows XP's usbport.inf [ROOTHUB.Dev.NT] both write EnumPropPages32 = 'usbui.dll,USBHubPropPageProvider'), and on an xHCI-only machine the file was never placed, so the page is dropped silently: measured 2026-09-07 in both NT guests, the USB Root Hub gains a working Power tab as soon as the file is present, with no registry change. On the 9x paths it places what Windows 98 SE's and Windows ME's own USB.INF place (USBUI.CopyFiles=11); the 9x controller tab comes from sysclass.dll instead, and the Bandwidth Usage dialog behind its button and the root hub's Power properties dialog are usbui.dll's (Data Access Error without it, roadmap task 23.1 leg A4, 2026-09-20)" }
 )
 $osSuppliedNames = @($osSupplied | ForEach-Object { $_.File.ToLowerInvariant() })
 # Files the OS places by itself when this driver's root hub appears, which

@@ -563,8 +563,9 @@ XHCI_C_ASSERT(config_maxslotsen_is_defined,
  *
  * The default is the hardware's own reset value, 4000 (1 ms), so a machine
  * whose value is absent runs exactly as every release before 23.4 did. The
- * INFs write 500 (125 us) on every install path: 23.3 measured reads at 98% of
- * their plateau there and 23.5 played a Full-Speed audio stream through it
+ * INFs write 500 (125 us) on every install path: 23.5's silent pass there,
+ * which fills the rung 23.3's ladder lacked, read at 98% of the read plateau
+ * 23.3 measured, and 23.5 played a Full-Speed audio stream through it
  * (docs/contributing/runs/run-23.md).
  *
  * 10 is the floor so a user can go no lower than 2.5 us; nothing above 4000 is

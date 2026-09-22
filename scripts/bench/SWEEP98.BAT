@@ -19,9 +19,12 @@ rem
 rem WHAT THE DUMPS ARE FOR.  isr.entries and dpc.count are NOT in the .TXT.
 rem They are counter-block fields, and the counter block reaches the note ring
 rem only on a DebugView flush, so with XHCISNAP alone they exist only in the
-rem .BIN extension image.  Bring the .BIN back and decode it with
-rem scripts\local\readsnap.py against an offsets table from the same tree;
-rem build-and-test.md, the 23.3 staging section, has the recipe.  The .TXT
+rem .BIN extension image.  Bring the .BIN back and decode it against an
+rem offsets table from the same tree (scripts\vm-matrix\gen-offsets.ps1).
+rem No committed decoder takes a .BIN as a file:
+rem passthru-snapshot-instrument.md section 7 says what the .BIN is and that
+rem the off-line decode, scripts\local\readsnap.py on the host that ran 23.3,
+rem is per-host tooling a fresh clone does not have.  The .TXT
 rem carries the interval itself since 1.1.1.0 - the XhciImodInterval250ns
 rem lines under registry values - which is enough to check on the machine
 rem that a value took.  (Task 23.3 ran this on its experimental build, whose

@@ -564,8 +564,9 @@ try {
 
     # **The provider, which is the mistake actually waiting to be made**: the
     # NT provider is usbui.dll, this INF copies usbui.dll on all four paths,
-    # and on 9x usbui.dll draws nothing at all (measured 2026-09-07). A file
-    # that named it here would install cleanly and show no tab.
+    # and on 9x usbui.dll draws no tab, only the dialogs behind the tab's
+    # buttons (roadmap task 23.1 leg A4, 2026-09-20). A file that named it
+    # here would install cleanly and show no tab.
     Assert-RuleFires "proppage-usbui-provider" "PROP-PROVIDER" {
         param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"",
                              "HKR,,EnumPropPages,,`"usbui.dll,USBControllerPropPageProvider`"")
@@ -601,9 +602,10 @@ try {
     # **The NT half, which roadmap task 23.2 took on 2026-09-20.** What used
     # to be PROP-NTHALF - a rule refusing the NT value until guests had been
     # read - is now the ordinary requirement, so the cases below are the NT
-    # mirror of the 9x ones above. The readings behind it: Windows 2000 SP4
-    # and Windows XP SP3 draw the tab from this pair, Windows Vista SP2 x86
-    # draws nothing from it, and it ships for the two that do.
+    # mirror of the 9x ones above. The readings behind it: all seven NT
+    # guests, Windows 2000 SP4 to Windows 7 x64, draw the tab from the
+    # INF-written pair. A value written by hand on an existing NT 6.x devnode
+    # is inert, because the provider list is read when the devnode is built.
     Assert-RuleFires "proppage-missing-nt" "PROP-MISSING" {
         param($t) $t.Replace("HKR,,EnumPropPages32,,`"usbui.dll,USBControllerPropPageProvider`"`r`n", "")
     }

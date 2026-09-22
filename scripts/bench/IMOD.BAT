@@ -25,9 +25,12 @@ rem XhciImodExperiment.  That name is not read by anything.)
 rem
 rem REQUIRES REG.EXE, which is in the base install from Windows XP onwards.
 rem Windows 2000 SP4 carries it only with the Support Tools; on a plain Win2000
-rem use IMOD98.BAT's regedit route, which needs nothing extra.  Windows 2000 is
-rem a VM-only target for this project anyway, so it cannot take this task's
-rem reading - see AGENTS.md, "Project Purpose".
+rem this file stops at :noreg, which prints the class key to set the value in
+rem by hand with regedit.  NOT IMOD98.BAT: it writes the 9x software key,
+rem ...\Services\Class\USB\NNNN, which no NT target reads, and regedit /s
+rem creates that key without complaint.  Windows 2000 is a VM-only target for
+rem this project anyway, so it cannot take this task's reading - see
+rem AGENTS.md, "Project Purpose".
 rem
 rem THE INSTANCE NUMBER UNDER THE CLASS KEY IS NOT FIXED by anything on either
 rem target (run-11v.md, run 2b: it was 0002 there and 0000 on the NT guests of
@@ -159,8 +162,18 @@ goto end
 echo.
 echo ERROR: reg.exe is not on this machine.  It is in the base install from
 echo        Windows XP onwards; Windows 2000 SP4 has it only with the Support
-echo        Tools.  Use IMOD98.BAT, which goes through regedit and needs
-echo        nothing extra, or set the value by hand.
+echo        Tools.  Set the value by hand in regedit instead, under the
+echo        instance of this key whose DriverDesc names xhci98 (HKLM is
+echo        HKEY_LOCAL_MACHINE in regedit):
+echo.
+echo        %CLASSKEY%\NNNN
+echo.
+echo        The value is %VALNAME%, REG_DWORD, in 250 ns units - enter it
+echo        with Base set to Decimal.  The INF installs 500.
+echo.
+echo        Do NOT use IMOD98.BAT here: it writes the Windows 98 key,
+echo        ...\Services\Class\USB\NNNN, which this system does not read.
+echo        Then reboot - the value is read once per start.
 goto end
 
 :writefail
