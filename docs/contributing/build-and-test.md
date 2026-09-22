@@ -318,7 +318,7 @@ The major version also says whether this is a final release, which is the other 
 
 The numbering has been restarted once, at the project owner's direction: an earlier `1.0.0.x` series of development builds was removed from `releases\` and the version restarted at `0.0.0.1`, which is where the `0.x` pre-releases came from. Two consequences outlive it:
 
-- A machine can be carrying a package this repository no longer publishes, and a `1.0.0.x` development build ranks at or above today's `1.0.0.0` to the Windows 2000 setup engine, which will then decline the release as not-better. The remedy is the one task 11-V.3 established: uninstall, and delete the cached `%SystemRoot%\inf\oemN.inf` and `.pnf`. Do not choose a version to beat it. Nothing here was ever uploaded, so the only machines that can be in this state are this project's own.
+- A machine can be carrying a package this repository no longer publishes, and a `1.0.0.x` development build ranked at or above the `1.0.0.0` release to the Windows 2000 setup engine, which then declined that release as not-better; every release from `1.0.1.0` on outranks the whole series. The remedy is the one task 11-V.3 established: uninstall, and delete the cached `%SystemRoot%\inf\oemN.inf` and `.pnf`. Do not choose a version to beat it. None of those development builds was ever uploaded, so the only machines that can be in this state are this project's own.
 - `scripts\package\make-11v-media.ps1` takes its baseline from a git commit rather than from `releases\`. `-BaselineVersion` defaults to the version cut before the current one, `-BaselineCommit` is a commit the caller names (the last one whose `src\xhci98.inf` reads that version), and the script refuses when the baseline is not older than the INF's. Both move together at each bump, and a rewritten history moves the commit again. The check runs ahead of the first build, so the refusal is immediate.
 
   Two of its other checks a caller should know exist: the staged baseline binary is not trusted by directory name (its own version resource is checked against both the expected baseline and the current version through `Test-DriverVersionMatches`, so a stale binary under `old-<baseline>-debug` cannot satisfy the prerequisite silently), and `New-DatedInf`, which rewrites the INF's date for the upgrade experiment, refuses a non-ASCII byte, an LF-only source or a mixed-EOL source rather than claiming a byte-faithful rewrite it would have silently transformed.
@@ -3833,7 +3833,7 @@ table for the exact mobile IDs.
 | Controller | How to get it | Why it matters | Maps to phase |
 |---|---|---|---|
 | AMD mobile (Kaveri / Carrizo APU `1022:7814`, or Ryzen mobile) | Era AMD laptop | Second integrated vendor; PLL re-lock on power events and isoch scheduling quirks. AMD's USB IP is partly ASMedia-derived. Less common in the retro scene and harder to boot Win98 on. | Phase 13 |
-| NEC uPD720200 (`1033:0194`) + Renesas uPD720201/202 (`1912:0014`/`0015`) | PCIe add-in card (desktop bench) | ROM-less 720201/202 cards are the only test vehicle for the driver firmware-upload path; the 720200 boots from on-card SPI flash (no upload) and covers plain NEC-vendor behavior. Not found in laptops. | Phase 6-8 |
+| NEC uPD720200 (`1033:0194`) + Renesas uPD720201/202 (`1912:0014`/`0015`) | PCIe add-in card (desktop bench) | ROM-less 720201/202 cards need a firmware upload by the host driver, which this driver does not implement, so they are not a vehicle for it; the 720200 boots from on-card SPI flash (no upload) and covers plain NEC-vendor behavior. Not found in laptops. | Phase 6-8 |
 | ASMedia ASM1142/ASM2142 (clean) + ASM1042 (`1B21:1042`, spurious-success completions and broken streams per Linux `xhci-pci.c`; the table carried an unsourced 64 KB bulk limit until 2026-09-17) | PCIe add-in card (desktop bench) | Clean baseline plus the spurious-success quirk. ASMedia behavior also surfaces indirectly under AMD integrated USB. | Phase 3-8 |
 
 #### Tier 3 - quirk completeness on a desktop bench (only if chasing specific bugs)
@@ -3850,22 +3850,23 @@ Practical notes:
   100/200-series). That is the bulk of "comprehensive" for this project.
 - The discrete add-in cards (Tier 2-3) only make sense on a desktop test bench
   with free PCIe slots, and only to exercise quirks your laptops will never
-  trigger (Renesas firmware upload, ASM1042 spurious success, Fresco Logic
-  broken MSI). Skip them unless you are specifically validating that code path.
+  trigger (ASM1042 spurious success, Fresco Logic broken MSI). Skip them
+  unless you are specifically validating that code path.
 - A laptop with Thunderbolt/USB4 exposes an extra xHCI for USB tunneling
   alongside the native PCH xHCI; that path is more complex and out of scope
   (and such laptops usually cannot boot Win98 anyway).
 - When buying NEC/Renesas cards, check the chip marking and whether an SPI
   flash chip is fitted: the uPD720200 always boots from on-card flash (no
   driver-upload path), while ROM-less uPD720201/202 cards are the ones that
-  exercise the driver firmware upload (Linux `xhci-pci-renesas.c` is the only
+  need a driver firmware upload (Linux `xhci-pci-renesas.c` is the only
   open implementation of it, and this driver has none).
 
 ### Available Test Hardware
 
 The current physical test fleet, and what each machine is for. The fleet is
 two machines: the E460 and the P14s Gen 1, two Intel xHCI-only laptops,
-Windows 98 only, single-controller. A third, an AMD desktop, left the project;
+single-controller, both Windows 98 machines (the E460 also ran 32-bit
+Windows 7 once, 2026-09-19, roadmap task 22.9). A third, an AMD desktop, left the project;
 its row is kept because clauses lost their vehicle with it.
 
 The key axis is whether the platform still has an EHCI controller. Intel
@@ -3882,7 +3883,7 @@ all. See "Bootstrapping xHCI-only machines".
 
 | Machine | PCH / SoC | USB 2.0 EHCI? | xHCI quirk class | Role |
 |---|---|---|---|---|
-| ThinkPad E460 | Intel Skylake / Sunrise Point-LP (100-series) | no, removed | Clean | xHCI-only deployment validation, and the project's primary bench machine. Windows 98 only; Win2000 Setup bugchecks here. Machine state after batch 13-L: it carries `L3DBG.SYS`, the DEBUG candidate (82,811 bytes, sha256 `84708F2C...`), with the channel switched off (`XhciLogVerbosity` 0, `XhciLogDebugView` 0), at the project owner's direction. A later session must not assume this machine carries a release build; the acceptance run installs from scratch |
+| ThinkPad E460 | Intel Skylake / Sunrise Point-LP (100-series) | no, removed | Clean | xHCI-only deployment validation, and the project's primary bench machine. Windows 98, and one 32-bit Windows 7 session (2026-09-19, roadmap task 22.9: the install and devices passed, the first controller disable hung); Win2000 Setup bugchecks here. Machine state after batch 13-L: it carries `L3DBG.SYS`, the DEBUG candidate (82,811 bytes, sha256 `84708F2C...`), with the channel switched off (`XhciLogVerbosity` 0, `XhciLogDebugView` 0), at the project owner's direction. A later session must not assume this machine carries a release build; the acceptance run installs from scratch |
 | ThinkPad P14s Gen 1 (Intel) | Intel Comet Lake (400-series) | no, removed | Clean | xHCI-only deployment validation (newer Intel gen). Windows 98 only; Win2000 Setup bugchecks here too. Windows 98 SE is installed on it (project owner): it postdates the 2012-2018 window above and boots anyway. The working configuration is the owner's `retro-configs` record for this machine, not anything derived here |
 | B650M desktop | AMD Zen 4 (Raphael SoC + Promontory 21 chipset USB) | no, xHCI-only | Clean; chipset USB is ASMedia-derived | No longer available to this project. It was to be the xHCI-only AMD validation machine and it never ran the qualifier or the driver, so no AMD silicon has ever been tested and none remains that could. It was also the last candidate for the multi-controller console reading, its ASMedia-derived chipset USB plausibly being a second xHCI function |
 

@@ -1692,7 +1692,7 @@ bare metal before. So the INF writes `XhciImodInterval250ns` = 1000; a value
 that is absent, unreadable or outside 10 to 4000 falls back to 4000, the
 hardware's own; and because this reading had no stream playing, **one
 isochronous pass at 1000 on bare-metal Windows 98 gates 23.4's release**.
-*(Superseded the next day: 23.5 measured 500 at 32.5 MB/s with a clean
+*(Superseded later the same day: 23.5 measured 500 at 32.5 MB/s with a clean
 audio pass, and the owner moved the INF's value to **500**; see 23.5
 below.)*
 
@@ -1793,7 +1793,7 @@ it:
 29.8 at 1000, **32.5 at 500**, 33.1 at 200 and 160. So 500 takes 98% of the
 plateau, and almost all of the gain between 1000 and the plateau lies between
 1000 and 500. Its interrupts per silent pass, 334,344, are the same as 160's
-(334,465) and within 4% of 200's (346,301). It was taken a day after the 23.3 controls and with no control of
+(334,465) and within 4% of 200's (346,301). It was taken later on 2026-09-22, hours after the overnight 23.3 sweep, with no control of
 its own that morning; reads were stable across 23.3's two controls and the
 two audio controls, which is the ground for comparing it.
 
