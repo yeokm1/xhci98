@@ -1,0 +1,129 @@
+; xhci98-amd64.inf - xHCI USB host controller miniport, the 64-bit package
+;
+; A separate package from src\xhci98.inf, not a third path inside it, so
+; that file's [Manufacturer] line, which Windows 98's engine parses, never
+; changes for it (design record 11 section 12, decision 2). It installs the
+; amd64 xhci98.sys on Windows XP x64 / Server 2003 x64 (NT 5.2) and, through
+; the NT 6.x models section, on Vista x64 and Windows 7 x64, which load it
+; only with driver signature enforcement disabled.
+;
+; Every section is decorated, and there is no undecorated [Xhci.Dev] and no
+; [DefaultInstall]: a 32-bit engine falls back to those, and would put an
+; amd64 binary on a 32-bit machine. The gate refuses both (PATH-NO9X,
+; OS-DEFAULT).
+;
+; scripts\inf-gate\test-inf-checks.ps1 compares this file with
+; src\xhci98.inf: IDs, service, registry values and defaults, OS-supplied
+; files and flags, and shared [Strings] must agree. ASCII only, CRLF.
+
+[Version]
+Signature="$CHICAGO$"
+Class=USB
+ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
+Provider=%Provider%
+LayoutFile=layout.inf
+; Must equal src\xhci_version.h, as src\xhci98.inf's does.
+DriverVer=09/22/2026,1.1.1.0
+
+; NTamd64 makes this file 64-bit only. NTamd64.6.0 sends Vista x64 and
+; Windows 7 x64 to [XhciModels.NTamd64.6.0]; NT 5.2 takes the first.
+[Manufacturer]
+%Mfg%=XhciModels,NTamd64,NTamd64.6.0
+
+[XhciModels.NTamd64]
+%XhciDesc%=Xhci.Dev,PCI\CC_0C0330
+
+; A different install section name, not a .6.0 decoration on Xhci.Dev: the
+; version decoration selects the models section only.
+[XhciModels.NTamd64.6.0]
+%XhciDesc%=Xhci.Dev6,PCI\CC_0C0330
+
+[SourceDisksNames]
+1=%DiskName%,xhci98.sys,,
+
+[SourceDisksFiles]
+xhci98.sys=1
+xhci98.inf=1
+
+; Dirid 11 is the 64-bit system directory, for usbui.dll. No Inf.CopyFiles:
+; the NT engine keeps its own oemN.inf copy.
+[DestinationDirs]
+DefaultDestDir=10
+Xhci.CopyFiles=10,System32\Drivers
+Xhci.CopyNT=10,System32\Drivers
+Xhci.CopyUI=11
+
+; ------------------------------------------------------------------
+; NT 5.2 amd64 - Windows XP x64 and Server 2003 x64
+; ------------------------------------------------------------------
+
+[Xhci.Dev.NTamd64]
+AddReg=Xhci.AddReg.NT
+CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI
+
+[Xhci.Dev.NTamd64.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+; ------------------------------------------------------------------
+; NT 6.x amd64 - Windows Vista x64 and Windows 7 x64
+; ------------------------------------------------------------------
+;
+; xhci98.sys alone. The OS-supplied files are already on every install, and a
+; LayoutFile copy aborts the NT 6.x file queue even with flag 16 (the gate
+; refuses one here, OS-ONNT6). Use the device install, not right-click
+; Install.
+[Xhci.Dev6.NTamd64]
+AddReg=Xhci.AddReg.NT
+CopyFiles=Xhci.CopyFiles
+
+[Xhci.Dev6.NTamd64.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+[Xhci.AddService]
+DisplayName=%XhciSvcDesc%
+ServiceType=1                       ; SERVICE_KERNEL_DRIVER
+StartType=3                         ; SERVICE_DEMAND_START
+ErrorControl=1                      ; SERVICE_ERROR_NORMAL
+ServiceBinary=%12%\xhci98.sys
+LoadOrderGroup=Base
+
+; The same values as src\xhci98.inf's [Xhci.AddReg.NT], which describes each.
+; In short: the two log values default to 0 (off); XhciImodInterval250ns is
+; the interrupt moderation interval in 250 ns units, 500 here, and 4000 when
+; absent or outside 10-4000; EnumPropPages32 and Controller give the
+; controller its Advanced tab.
+[Xhci.AddReg.NT]
+HKR,,XhciLogVerbosity,0x00010001,0
+HKR,,XhciLogDebugView,0x00010001,0
+HKR,,XhciImodInterval250ns,0x00010001,500
+HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
+HKR,,Controller,1,01
+
+; No temporary-name field: the NT copy queue replaces a file in use itself.
+[Xhci.CopyFiles]
+xhci98.sys
+
+; OS-supplied files, fetched through LayoutFile from Driver Cache\amd64 with
+; no prompt; flag 16 leaves a file already present alone. src\xhci98.inf says
+; why each is needed.
+[Xhci.CopyNT]
+usbport.sys,,,16
+usbd.sys,,,16
+usbhub.sys,,,16
+
+[Xhci.CopyUI]
+usbui.dll,,,16
+
+; Right-click Install - pre-stages the files with no device present. NT 5.2
+; only.
+[DefaultInstall.NTamd64]
+CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI
+
+; The same strings as src\xhci98.inf, so Device Manager reads the same on
+; either architecture.
+[Strings]
+Provider="Yeo Kheng Meng"
+Mfg="xHCI98 Project"
+DiskName="xhci98 xHCI Miniport Disk"
+XhciDesc="USB 2.0 eXtensible Host Controller (xhci98)"
+XhciSvcDesc="xHCI USB 2.0 Host Controller Miniport (xhci98)"
