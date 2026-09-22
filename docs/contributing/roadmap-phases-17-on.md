@@ -504,13 +504,23 @@ Records: `runs/run-22.md` (22.12's readings go there too);
 05, 07 and 08; `build-and-test.md`; `lessons.md`; `releases/history.md`;
 `runs/run-22-post-release/` (written by 22.9).
 
-## Phase 23 - GitHub Issue 4's Open Requests, and the Interrupt Moderation Experiment
+## Phase 23 - Release `1.1.1.0`: GitHub Issue 4's Property Page and Polling Rates, and Interrupt Moderation
 
-Goal: the requests of GitHub issue 4 that no release has answered, each either
-fixed and read on both primary targets or recorded as a decision with its
-reason; and one measurement of the owner's, whether an interrupt moderation
-interval below the reset default raises throughput, which if it does becomes a
-registry value whose default changes nothing.
+Goal: GitHub issue 4's items 5 and 2 - the controller's property page, and
+Low-Speed and root-port polling rates - each either fixed and read on both
+primary targets or recorded as a decision with its reason; one measurement of
+the owner's, whether an interrupt moderation interval below the reset default
+raises throughput, which if it does becomes a registry value; and the result
+cut as `1.1.1.0`. Item 1, true speeds on root ports, is Phase 24's.
+
+**Re-scoped by the owner on 2026-09-22.** The phase stops at 23.5 and cuts
+`1.1.1.0`; the true-speeds decision that was 23.6 moved to Phase 24 as 24.1,
+so the speed work the owner's note of 2026-09-19 said might be spread over
+several releases is spread this way. 23.7 stays here as the record and the
+cut. Branch `phase-23` was renamed `1.1.1.0` the same day, as `phase-20`
+became `1.0.2.0`. Before that day the phase's goal also named item 1, and its
+title was "GitHub Issue 4's Open Requests, and the Interrupt Moderation
+Experiment".
 
 Status: open since 2026-09-19; **23.1 and 23.1.5 are both done** - the
 controller's property page is complete, 9x half and NT half, read on three 9x
@@ -528,12 +538,14 @@ it, so 23.3 can be written.
 it owed, all the same day, leaving only the merge. **The NT half is 23.1.5's,
 and the owner moved it there from 23.6.5 on 2026-09-20 so that it runs next**,
 beside the 9x half rather than after the speed work. `1.1.0.0` was uploaded on
-2026-09-20, so the hold on merging this branch is lifted. Which version
-carries the result is not decided: 23.3, 23.4 and 23.5 are driver code, so the
-third field moves if any of them lands (`releases/README.md`). The owner's
-note on the issue (2026-09-19) is that the speed work may be spread over
-several releases to reduce risk, so this phase may close with 23.6 decided and
-not built.
+2026-09-20, so the hold on merging this branch is lifted. The version is
+**`1.1.1.0`** (the owner, 2026-09-22): 23.3 at least is driver code, so the
+third field moves (`releases/README.md`). The owner's note on the issue
+(2026-09-19) was that the speed work may be spread over several releases to
+reduce risk, and that is the split taken: this release carries the
+moderation value and whatever 23.4 and 23.5 land, and Phase 24 carries item
+1. *(Until 2026-09-22 this paragraph said the version was undecided and that
+the phase might close with 23.6 decided and not built.)*
 
 **"GitHub issue 4" is not `docs/issues/04`.** The numbers collide by accident:
 `docs/issues/04-xp-restore-device-ep0-remove.md` is the XP two-handle restore
@@ -541,10 +553,11 @@ fixed in `1.0.1.0`; the GitHub issue is
 `https://github.com/yeokm1/xhci98/issues/4`, "USB bus internal requests
 handling (and more)", opened by LordOfMice on 2026-09-06 and still open. Its
 items 3 (`usbui.dll`) and 4 (selective suspend) are already answered, in
-`1.0.2.0` and `1.1.0.0`; the tasks below carry the rest and each names the
-item it answers. They are ordered easiest first rather than by the issue's
-numbering, and that order also keeps the reporter's advice of 2026-09-15:
-the hub half of item 2 before the root-port half, and both before item 1.
+`1.0.2.0` and `1.1.0.0`; the tasks below carry items 5 and 2, Phase 24
+carries item 1, and each task names the item it answers. They are ordered
+easiest first rather than by the issue's numbering, and that order also keeps
+the reporter's advice of 2026-09-15: the hub half of item 2 before the
+root-port half, and both before item 1.
 
 - [x] 23.1 item 5, the controller's property page. `runs/run-23.md` has the
   detail. **The line is in `[Xhci.AddReg]`** since 2026-09-20, the INF gate
@@ -862,38 +875,43 @@ the hub half of item 2 before the root-port half, and both before item 1.
   `bInterval` for isochronous endpoints and is the candidate lever for
   interrupt ones, but an override applied above usbport never reaches the
   device's descriptor, so that lever may not see it. If no route exists short
-  of 23.6, say so in the release notes and close this as owned by 23.6.
-- [ ] 23.6 item 1, true speeds on root ports: the decision, and its first
-  slice if taken. `docs/future-plans/virtual-hub-per-root-port.md` is the
-  candidate and issue 6 section 8 the alternatives; the costs known since
-  2026-09-19 are the Vista and Windows 7 bugcheck with a Full-Speed hub on a
-  root port and the silent root-port audio device from XP on. What this task
-  owes is a design record with the decision, the split into releases, and
-  which slice if any this phase carries. **Never write "fixed" for issue 6
-  until the High-Speed report itself is gone.**
-- [ ] 23.7 the record: the release notes' known limitations brought into
-  line with whatever 23.1.5 and 23.4 to 23.6 change, and `docs/issues/06` and
-  `docs/issues/README.md` updated. **23.1's share of this is already done**,
-  on branch `23.1` on 2026-09-20 and not left here: the three documents it
-  found work for, listed in its entry above and in `runs/run-23.md`. Replying
-  on the GitHub issue, and closing
-  it, are the owner's and not a task. It runs last: 23.1.5 either adds the NT
-  half or closes it with evidence, and this task records that outcome along
-  with the rest.
+  of true speeds on root ports, say so in the release notes and close this as
+  owned by Phase 24's 24.1 (it said 23.6 until the 2026-09-22 re-scope).
+- 23.6 **moved to Phase 24 as 24.1 on 2026-09-22** (item 1, true speeds on
+  root ports: the decision, and its first slice). The number is not reused.
+- [ ] 23.7 the record and the cut, `1.1.1.0`. The record: the release notes'
+  known limitations brought into line with whatever 23.1.5 and 23.3 to 23.5
+  change - 23.3's value, its units, its default of 500 and its fallback of
+  4000, and that a lower value raises the interrupt rate - and
+  `docs/issues/06` and `docs/issues/README.md` updated for 23.4 and 23.5,
+  saying plainly that item 1 is Phase 24's and not answered by this release.
+  **23.1's share of this is already done**, on branch `23.1` on 2026-09-20 and
+  not left here: the three documents it found work for, listed in its entry
+  above and in `runs/run-23.md`. The cut, on the pattern of Phase 22's 22.8
+  to 22.10: what no gate supplies (the version and date in `xhci_version.h`
+  and both INFs, the `releases/history.md` entry, the release notes,
+  README's Install section if 23.3 changes it, the issue forms); every gate
+  green on both architectures; the flavour directories and the asset cut, with
+  no Microsoft file in it; the install legs read from the asset; and 23.3.5's
+  gate on the cut's own `release` binary. The post-release matrix follows the
+  cut, as 22.9 did. Replying on the GitHub issue, and closing it, are the
+  owner's and not a task - and item 1 keeps it open. It runs last.
 
-Checkpoint (draft, tightened as 23.2 and 23.6 report): on Windows 98 SE and
-Windows 2000 SP4, a Low-Speed interrupt device behind a USB 2.0 hub works at
-every rate the stack in use can ask for, or the refusal that remains is
-derived and published; the root-port half of item 2 and item 1 each carry a
+Checkpoint (tightened 2026-09-22 when the phase was re-scoped to the cut): on
+Windows 98 SE and Windows 2000 SP4, a Low-Speed interrupt device behind a USB
+2.0 hub works at every rate the stack in use can ask for, or the refusal that
+remains is derived and published; the root-port half of item 2 carries a
 recorded decision; the property page is in both halves of the 32-bit INF or
 recorded as not taken; 23.3 landed (23.2 measured): the value absent, invalid
 and at 4000 all read the same IMOD of 4000 on both targets, the INF's 500
 and any other valid value read back from the register, a start is never failed
-by it, and 23.3.5's audio test passed at 500 on bare-metal Windows 98;
-every gate green
-and the device matrix on both primary targets no worse than
-`runs/run-22-post-release/`. Not a checkpoint: a throughput figure taken in a
-guest, or the reporter's machine standing in for one of the project's.
+by it, and 23.3.5's audio test passed at 500 on bare-metal Windows 98 on the
+cut's own `release` binary; every gate green on both architectures,
+`1.1.1.0` cut, and its install legs read from the asset; and the device matrix
+on both primary targets no worse than `runs/run-22-post-release/`. Not a
+checkpoint: a throughput figure taken in a guest, the reporter's machine
+standing in for one of the project's, a decision on item 1 (Phase 24's), the
+acceptance test, or the upload.
 
 Records: GitHub issue 4 (the thread; nothing of it is copied here beyond the
 table above); `docs/issues/06-full-speed-root-port-bugcheck.md`;
@@ -902,4 +920,38 @@ table above); `docs/issues/06-full-speed-root-port-bugcheck.md`;
 `docs/usb-xhci-info/usbport-miniport-abi.md` ("Periodic scheduling: what
 `Period` actually carries"); `build-and-test.md` (the INF's omitted
 directives); `runs/run-23.md` (to be opened by the first task that takes a
-reading).
+reading); `releases/history.md`; `runs/run-23-post-release/` (written after
+the cut).
+
+## Phase 24 - GitHub Issue 4 Item 1: True Speeds on Root Ports
+
+Goal: the last open request of GitHub issue 4 - devices on a root port
+reported at their true speed rather than as High Speed - decided with its
+reason, split into releases if taken, and its first slice carried if the
+decision says so. Split out of Phase 23 by the owner on 2026-09-22, so that
+`1.1.1.0` could ship without it.
+
+Status: not opened. It follows the `1.1.1.0` cut.
+
+- [ ] 24.1 item 1, true speeds on root ports: the decision, and its first
+  slice if taken. **Was 23.6 until 2026-09-22.**
+  `docs/future-plans/virtual-hub-per-root-port.md` is the candidate and issue
+  6 section 8 the alternatives; the costs known since 2026-09-19 are the Vista
+  and Windows 7 bugcheck with a Full-Speed hub on a root port and the silent
+  root-port audio device from XP on. What this task owes is a design record
+  with the decision, the split into releases, and which slice if any this
+  phase carries. If 23.5 closed as owned here, its root-port polling rates are
+  this task's too. **Never write "fixed" for issue 6 until the High-Speed
+  report itself is gone.**
+- [ ] 24.2 the record: `docs/issues/06`, `docs/issues/README.md` and the
+  release notes' known limitations brought into line with 24.1's decision, and
+  a cut if 24.1 carries a slice. Replying on GitHub issue 4, and closing it,
+  are the owner's.
+
+Checkpoint (draft, tightened as 24.1 reports): item 1 carries a recorded
+decision and its reason; if a slice is taken, it is read on both primary
+targets with the device matrix no worse than `1.1.1.0`'s post-release
+readings, and every gate green.
+
+Records: `docs/future-plans/virtual-hub-per-root-port.md`;
+`docs/issues/06-full-speed-root-port-bugcheck.md`; GitHub issue 4.
