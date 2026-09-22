@@ -2199,8 +2199,7 @@ and the x86 legs with none. All six binaries carry file version `1.1.1.0`:
 edited file kept its CRLF endings.
 ## 23.8 - the cut, and the install legs read from the asset
 
-**Cut 2026-09-22, nine of the ten install vehicles read 2026-09-22/23. Leg 5
-(Windows XP x64) is not taken and is the only clause outstanding.** One
+**Cut 2026-09-22, all ten install vehicles read 2026-09-22/23.** One
 finding, and it is not against this release: `docs/contributing/lessons.md`,
 "Windows 98 wedges when a USB audio device is replugged after a cold boot".
 
@@ -2252,7 +2251,7 @@ installed `xhci98.sys` was SHA-256 identical to the asset's.
 | 9 | Windows 7 SP1 x86 | pass, full teardown |
 | 6 | Windows Vista SP2 x64 | pass, full teardown |
 | 7 | Windows 7 SP1 x64 | pass, full teardown |
-| 5 | Windows XP x64 SP2 | **not taken** - see below |
+| 5 | Windows XP x64 SP2 | pass, full teardown; the NT 5.2 half |
 
 **Leg 4, Windows 2000 SP4** (`win2k-xonly-clean-install`). Found New Hardware
 wizard at `E:\release-x86`, no media prompt, no restart prompt - unlike 23.2's
@@ -2366,18 +2365,43 @@ every child gone and no restart prompt. 22.10 read that veto on this guest's
 Vista x86 were driven with the service already stopped, so their clean
 disables do not speak to it.
 
-### Leg 5, Windows XP x64: not taken
+### Leg 5, Windows XP x64: taken 2026-09-23, and it is the NT 5.2 reading
 
-The guest is `vm\winxp64.img @ winxp64-clean-install-smp4` and it stops at its
-own logon screen: **the Administrator account has a password the owner set at
-install, and it is recorded nowhere** (`phase21-task-215-guest-2026-09-09`
-memory, 2026-09-09). The VM was shut down rather than guessed at. Everything
-else that leg would read is attested elsewhere in this cut - the amd64 package
-installs and runs on two other 64-bit guests - but **the NT 5.2 half of
-`src\xhci98-amd64.inf` has no reading in this release**: only legs 6 and 7 ran,
-and both take `[Xhci.Dev6.NTAMD64]`, not `[Xhci.Dev.NTAMD64]`. That is the
-clause 23.8 still owes.
+Held up overnight because that guest's Administrator account has a password -
+**`test`, which the owner supplied on 2026-09-23; the
+`phase21-task-215-guest-2026-09-09` memory had recorded it as written down
+nowhere.** `winxp64-clean-install-smp4`, four processors under TCG, the amd64
+package from the asset's `release-x64\`.
 
+- the install: Found New Hardware Wizard, "No, not this time", "Install from
+  a list or specific location", `E:\release-x64` with removable media
+  unticked. **XP's Windows Logo prompt**, taken with Continue Anyway. No CD
+  prompt and no restart, as 22.10 read
+- **the clause no other leg in this cut covers**: `setupapi.log` records
+  `#I022 Found "PCI\CC_0C0330" in e:\release-x64\xhci98.inf ... Section name:
+  "Xhci.Dev"` and `#I023 Actual install section: [Xhci.Dev.NTAMD64]. Rank:
+  0x0000a005. Driver date: 09/22/2026. Version: 1.1.1.0`, then
+  `[Xhci.Dev.NTAMD64.Interfaces]`. **`Xhci.Dev6` appears zero times**, so the
+  NT 5.2 engine took the `NTamd64` field of
+  `%Mfg%=XhciModels,NTamd64,NTamd64.6.0` and skipped `NTamd64.6.0` - 22.10's
+  reading of that line, repeated on this release
+- the installed `xhci98.sys` is the asset's amd64 binary (97,280 B) and
+  `oem0.inf` the asset's amd64 INF (4,659 B), both SHA-256 identical. The four
+  OS-supplied files came off `Driver Cache\amd64` with no prompt, at 22.10's
+  sizes: `usbport.sys` 212,480, `usbhub.sys` 102,400, `usbd.sys` 7,552 and
+  `usbui.dll` 123,392
+- the three devices bound (**USB 2.0 eXtensible Host Controller (xhci98)**,
+  **USB Root Hub**, **USB Composite Device**, **USB Mass Storage Device**,
+  **USB Human Interface Device** and **USB Audio Device**), no bang
+- disable (children gone, no restart prompt), enable (all back), uninstall
+  (the USB class gone, no restart prompt), rescan - **the server-side install
+  refused as unsigned, `#E358`**, then the wizard reinstalled from `oem0.inf`
+  behind the same Logo prompt, and every device came back. That is leg 10's
+  shape on 32-bit XP and 22.10's on this guest
+- the flavour: the port-`0xE9` log stayed at **0 bytes**; QEMU's trace shows
+  `slot_enable` 9, `slot_address` 20, `slot_configure` 12
+
+Evidence `out\post-release\task23-8\l5log\setupapi.log`.
 ### What the finding cost, and why the cut stands
 
 Leg 1's first vehicle wedged after a cold-boot replug, and the investigation
