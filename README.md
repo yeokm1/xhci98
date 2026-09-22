@@ -148,7 +148,9 @@ The devices checked so far, all on the E460 under Windows 98 SE. Each is charact
 
 <img src="images/xhci98-flash-speed-test.jpg" width="800">
 
-ATTO Disk Benchmark on the P14s under Windows 98 SE against the MSSU10-128GSR flash drive, on the 1.1.1.0 build at the moderation interval its install writes, `500` (0.125 ms; see Tuning above): about 33 to 34.6 MB/s read and write from 64 KB transfers upward. The same drive gave about 18 MB/s at the 1 ms default of every release before 1.1.1.0. The USB 3.0 drive runs at USB 2.0 speed on this driver.
+ATTO Disk Benchmark on the P14s under Windows 98 SE against the MSSU10-128GSR flash drive, on the 1.1.1.0 build at new default interruption moderation interval of `500` (0.125 ms).
+
+About 33 to 34.6 MB/s read and write from 64 KB transfers upward. The same drive gave about 18 MB/s at the 1 ms default of every release before 1.1.1.0. 
 
 ## Known limitations/issues
 
