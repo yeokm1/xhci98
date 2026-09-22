@@ -1707,7 +1707,9 @@ another; Windows 98's own USB audio driver; Media Player looping a WAV. Per
 boot: the WAV started first, then `SWEEP98 ARM A`, one ATTO 2.41 pass at the
 23.2 settings, `SWEEP98 ARM B`, the audio stopped last, so both dumps and the
 whole pass include the stream. The owner listened throughout. Arms: control,
-1000, control. 200 was offered and not taken.
+1000, control. 200 was offered and not taken. The owner then added **500**,
+later the same morning, as one boot carrying two passes: a silent one first,
+which puts 500 into 23.2's read ladder, then one with the stream.
 
 **The first 1000 boot read `imod.exp.status=00000008`** - the value was absent
 - and was not run: the `IMOD98 1000 0010` before its reboot had not been
@@ -1728,8 +1730,16 @@ vehicle.
 | CTL1 | 8 (absent) | - | 602,570 in 603 s | 568,269 | 942 | 1 | 0 / 0 / 0 / 0 |
 | 1000 | 0 | `03e8` | 509,710 in 512 s | 745,703 | 1,457 | 2 | 0 / 0 / 0 / 0 |
 | CTL2 | 8 (absent) | - | 661,420 in 665 s | 624,787 | 939 | 3 | 0 / 0 / 0 / 0 |
+| 500 | 0 | `01f4` | 504,500 in 506 s | 778,481 | 1,540 | 1 | 0 / 0 / 0 / 0 |
 
-Deltas between each boot's two dumps; every dump coherent. Isochronous
+Deltas between each boot's two dumps. **Every dump taken with the stream
+playing is torn** - its tear detector moved by 6 to 170 between the first and
+last window, because the stream posts about a thousand events a second while a
+dump is read out - against passes of half a million interrupts and more, so
+under 0.05% of any delta and no figure above changes. The silent 500 pass's
+two dumps are coherent. *(This paragraph first said every dump was coherent.
+It was written from the 23.2 dumps and not checked against these; corrected
+the same day.)* Isochronous
 packets ran at 1,000 a second throughout, as a Full-Speed stream should.
 `IsoCadenceMismatches` was 10.0% of packets on every row, the same ratio at
 both intervals, and `IsoEventsUnattributed` tracked the underruns. Here the
@@ -1744,15 +1754,31 @@ By ear, per the owner:
   stutter and repeats on reads from 2048 KB up. Writes clean.
 - **1000**: stutter on reads from 1024 KB up. Writes clean.
 - **CTL2**: stutter on reads from 1024 KB up, as at 1000. Writes clean.
+- **500**: better than 1000 and both controls - the owner's word, one pass.
 
-ATTO with the stream playing, KB/s at 8 MB, beside 23.2's figures without it:
+ATTO with the stream playing, KB/s at 8 MB, beside the same interval without
+it:
 
-| | Read with stream | Read, 23.2 | Write with stream |
+| | Read with stream | Read without | Write with stream |
 |---|---|---|---|
-| CTL2 | 15,055 | 17,637 | 6,342 |
-| 1000 | 29,051 | 29,793 | 6,746 |
+| CTL2 | 15,055 | 17,637 (23.2) | 6,342 |
+| 1000 | 29,051 | 29,793 (23.2) | 6,746 |
+| 500 | 31,655 | 32,537 (this boot) | 6,717 |
 
 (CTL1's screenshot was not saved. Writes are the degraded stick's, as in 23.2.)
+
+**The silent 500 pass is 23.2's missing rung.** Reads at 8 MB: 17.6 at 4000,
+29.8 at 1000, **32.5 at 500**, 33.1 at 200 and 160. So 500 takes 98% of the
+plateau, and almost all of the gain between 1000 and the plateau lies between
+1000 and 500. Its interrupts per silent pass, 334,344, are the same as 200's
+and 160's. It was taken a day after the 23.2 controls and with no control of
+its own that morning; reads were stable across 23.2's two controls and the
+two audio controls, which is the ground for comparing it.
+
+500 at 8 KB to 64 KB, silent, against 1000 and 200 (reads, KB/s): 9,525 /
+16,141 / 23,350 / 31,133 at 500; 8,641 / 14,727 / 22,392 / 29,654 at 1000;
+9,592 / 16,181 / 23,976 / 31,736 at 200. At small transfers too, 500 is
+within a few percent of 200.
 
 ### The verdict against 23.3.5's rule
 
@@ -1762,7 +1788,10 @@ stutter on large reads - the two controls themselves differed by one row,
 2048 against 1024 KB, and 1000 matched the second - and ring underruns of 2
 against the controls' 1 and 3, with every isochronous error counter at 0 on
 every boot. And the stream costs 1000 less than it costs the control: reads
-fell 15% under the stream at 4000 and 2.5% at 1000.
+fell 15% under the stream at 4000, 2.5% at 1000 and 2.7% at 500. **500 passes
+the same rule**, with one underrun and every error counter 0, and sounded
+better than 1000 by ear. Whether that moves the default is the owner's
+decision.
 
 **What it does not settle, and is not IMOD's:** Windows 98 stutters on this
 machine during large sustained reads **at the hardware default**, with this

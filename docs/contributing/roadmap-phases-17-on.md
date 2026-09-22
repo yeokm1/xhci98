@@ -790,7 +790,10 @@ the hub half of item 2 before the root-port half, and both before item 1.
   ATTO pass at control, 1000, control; every isochronous error counter 0 on
   every boot, ring underruns 2 at 1000 against the controls' 1 and 3, and the
   same audible stutter on reads of 1 MB and up at 1000 as at the second
-  control. The stream cost reads 15% at 4000 and 2.5% at 1000. Windows 98
+  control. The stream cost reads 15% at 4000 and 2.5% at 1000. A later boot
+  at **500** also passed (one underrun, errors 0, better by ear), and its
+  silent pass filled 23.2's missing rung: reads 32.5 MB/s at 500, 98% of the
+  33.1 plateau. Windows 98
   audio plays on bare metal, so Phase 9's five-of-five failure was the VM. Not
   IMOD's and not blocking: Windows 98 stutters under large sustained reads at
   the hardware default too, cause not located. **Open: the same pass on the
