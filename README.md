@@ -87,7 +87,9 @@ The same driver on the same machine survives all three under SweetLow's build of
 
 ### Tuning: the interrupt moderation interval (from 1.1.1.0)
 
-`XhciImodInterval250ns` is a `DWORD` in the controller's driver (software) key, in **units of 250 ns**. It sets how long the controller waits after one interrupt before raising the next. A shorter interval makes USB mass storage faster, at the cost of more interrupts.
+`XhciImodInterval250ns` is a `DWORD` in the controller's driver (software) key, in **units of 250 ns**. It sets how long the controller waits after one interrupt before raising the next. A shorter interval makes USB mass storage faster at the cost of more interrupts.
+
+Here is where to find the key:
 
 | Windows | Key |
 |---|---|
@@ -108,7 +110,7 @@ A value outside `10`-`4000` is replaced by `4000`, not rounded to the nearest li
 
 ATTO Disk Benchmark with an MSSU10-128GSR flash drive at `500` (125us). This gives about 33 to 34.6 MB/s read and write from 64 KB transfers upward where the previous default `4000` gave about 18 MB/s.
 
-Linux's xHCI driver defaults to `160` (40 us), which read 33.1 MB/s here. This package ships `500` to be more conservative, because interrupt load at real rates is what has crashed Windows 98 on real hardware before.
+Linux's xHCI driver defaults to `160` (40 us), which read 33.1 MB/s here. This package ships `500` to be more conservative since this is a generic driver.
 
 Feel free to tune it. Lower towards `160` for the last few percent of storage speed, or raise it towards `4000` (or delete it) if you get audio stutter or instability under load. 
 
