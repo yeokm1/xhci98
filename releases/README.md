@@ -25,8 +25,8 @@ place leaves two different byte states answering to one version name, and
 nothing a user holds says which one they have.
 
 The one qualification is a version nobody holds through the public channel.
-Until the first public upload (no GitHub release exists), a finding against
-the current version re-cuts it under the same number with `-Force`, because
+Until a version is uploaded (every version cut here so far has been), a
+finding against it re-cuts it under the same number with `-Force`, because
 a number that was never published has not been spent - a cut writes files
 here, a publish uploads one, and only the second spends the number;
 `1.0.0.0` was re-cut that way on 2026-08-30, and `1.0.2.0` three times on
@@ -336,7 +336,7 @@ same `DriverVer`, so they cannot share a directory; and the x86 pair is named
 `-x86` rather than left bare, because the moment a second set exists an
 untagged `release/` would mean "x86" without saying so and the download's
 `readme.txt` would have no single "INSTALL THIS ONE" to point at. That rename
-was free: no release has been uploaded publicly and no GitHub release exists,
+was free: no release had been uploaded publicly and no GitHub release existed,
 so no download has ever carried `release/`,
 and the write-once rule above leaves the four directories already cut exactly
 as they are. Their shape is what a cut produced on the day, which is what the

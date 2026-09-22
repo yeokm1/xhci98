@@ -702,17 +702,14 @@ Two channels have to be kept apart here. This project distributes through the
 git repository and, separately, through the GitHub release download, and a
 sentence that is true of one is false of the other.
 
-A third distinction sits underneath those two, and everything below is
-written in the tense it creates. This section describes a decided channel,
-not a channel that has carried anything. No GitHub release has been published
-and this repository is still private (see the status note at the end of this
-section). So "the release download carries X" throughout means that the asset
-`make-release.ps1` assembles carries X and that asset is what will be
-uploaded, not that anyone has downloaded anything. The same reading applies to
-`releases/README.md`, which describes the same asset in the same tense. A cut
-writes files in this working
-tree; a publish uploads one of them. This project has cut a release and
-uploaded nothing.
+A third distinction sits underneath those two. This section was first
+written for a decided channel that had carried nothing; every version under
+`releases/` has since been uploaded to a GitHub release and this repository
+is public (see the status note at the end of this section). "The release
+download carries X" throughout means that the asset `make-release.ps1`
+assembles carries X, and that asset is what is uploaded. The same reading
+applies to `releases/README.md`, which describes the same asset. A cut writes
+files in this working tree; a publish uploads one of them.
 
 This repository also uses "published" in two senses, so that word alone
 settles nothing. The INF, `releases/history.md` and `releases/README.md`
@@ -824,24 +821,19 @@ every install carries. No file was added to the media and none of the gate
 rules above was relaxed; roadmap Phase 19 has the tasks.
 
 Status: the exception was never used. No asset of any version was uploaded
-while it stood; this repository was private throughout, and the first upload
-is intended to be the newest cut (1.1.0.0 as of 2026-09-18; `releases/history.md`
-names it first), every cut since 1.0.0.1 carrying nothing under it. "The
-release download carries three of them" was true of the assembled asset from
-0.0.0.4 to 1.0.0.0 and of no download anyone made.
+while it stood. Every version under `releases/` (`1.0.0.0` to `1.1.0.0`) has
+since been uploaded to a GitHub release, and this repository is public; the
+uploaded `1.0.0.0` asset holds no Microsoft file (the owner, 2026-09-22), and
+every cut since 1.0.0.1 carries nothing under the exception. "The release
+download carries three of them" was true of the assembled asset from 0.0.0.4
+to 1.0.0.0 and of no download anyone made.
 
-This note can look stale and is not. Version directories exist under
-`releases/`, the issue-form configuration and the generated `readme.txt` link a
-releases page, and this repository's prose
-calls a cut asset "published". None of the three is a distribution: a cut
-writes `releases/<version>/` and `out/xhci98-<version>.zip` in this working
-tree, a publish uploads that zip to a GitHub release, and this project has
-done the first and never the second. "Published" in that usage names which
-asset filename was in use at a cut, and `README.md`'s link is written for the
-repository as it will be. The roadmap carries no clause for the upload at
-all: Phase 14 closed on the cut, and the upload is one act of
-the project owner's rather than work this repository can do or close. When
-it happens, this note is the sentence that moves.
+This repository's prose calls a cut asset "published" in the INF's sense as
+well: a cut writes `releases/<version>/` and `out/xhci98-<version>.zip` in
+this working tree, and a publish uploads that zip to a GitHub release.
+"Published" in that usage names which asset filename was in use at a cut.
+The roadmap carries no clause for an upload: the upload is one act of the
+project owner's rather than work this repository can do or close.
 
 ---
 

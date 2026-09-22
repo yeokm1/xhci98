@@ -20,7 +20,8 @@ the other documents:
 - Measured behaviour, traps and refuted hypotheses: [`lessons.md`](lessons.md);
   the per-run evidence in the run sheets [`run-11v.md`](runs/run-11v.md),
   [`run-13e.md`](runs/run-13e.md), [`run-20.md`](runs/run-20.md),
-  [`run-21.md`](runs/run-21.md) and [`run-22.md`](runs/run-22.md).
+  [`run-21.md`](runs/run-21.md), [`run-22.md`](runs/run-22.md) and
+  [`run-23.md`](runs/run-23.md).
 - What a user is told (what the driver does, does not, and its known limitations):
   [`../using/release-notes.md`](../using/release-notes.md).
 
@@ -43,8 +44,9 @@ the port driver's role, was the documented fallback and was never needed. USB
 `docs/usb-xhci-info/win98-wdm.md` ("USB Stack Architecture and the Integration
 Decision") and `architecture.md`.
 
-Current status: Phases 0-21 are closed. `1.0.0.0`, `1.0.0.1`, `1.0.1.0` and
-`1.0.2.0` are cut, and none has been uploaded; Phase 15 moved the
+Current status: Phases 0-22 are closed. `1.0.0.0`, `1.0.0.1`, `1.0.1.0`,
+`1.0.2.0` and `1.1.0.0` are cut, and all five have been uploaded to GitHub
+releases (`1.1.0.0` on 2026-09-20); Phase 15 moved the
 tree from revision 1.2 of the xHCI specification to revision 1.2c, the only
 revision Intel now serves, without a code change; Phase 16, the fully
 automated run on freshly installed guests of both targets, closed on
@@ -89,7 +91,7 @@ Vista or Windows 7 in either architecture, so task 22.5's Version 300 path
 changed the shipping 32-bit binary as well as the amd64 one. Vista and
 Windows 7 are a VM-supported tier in both architectures, and 32-bit Windows 7
 has run once on real hardware. It cut `1.1.0.0`, the first release with a
-64-bit package, which waits only on the owner's upload.
+64-bit package, which the owner uploaded on 2026-09-20.
 
 ---
 
@@ -1311,7 +1313,7 @@ Nothing is reported back into this repository. What comes back is a defect
 against the driver, as an issue, and a defect against the procedure, as an
 edit to `release-acceptance-test.md`. A driver defect found this way is
 fixed before the upload by a re-cut under the same number, which
-`releases/README.md` permits while nothing has been uploaded. If the finding
+`releases/README.md` permits for a version not yet uploaded. If the finding
 arrives after the upload instead, the same README's rule binds and the fix
 opens a new version number, with its own `history.md` entry; it is not a
 reason to withdraw the release. The one thing a
