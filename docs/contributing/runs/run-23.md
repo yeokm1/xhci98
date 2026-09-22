@@ -1265,7 +1265,9 @@ IMODI 200 or 160, mass-storage reads ran at 33.1 MB/s against 17.6 at the
 hardware default of 4000, with the two control boots 0.4% apart; 1000 gave
 29.8. So the stop rule does not fire and 23.3 is taken. The owner set its
 shape the same night: the INF writes **1000**, the driver falls back to 4000,
-and one isochronous pass at 1000 on bare metal gates the release. The reading
+and one isochronous pass at 1000 on bare metal gates the release. *(The next
+day, after 23.3.5 measured 500, the owner moved the INF's value to **500**;
+the fallback and the gate are unchanged, the gate now read at 500.)* The reading
 and its limits are under "Results" below.
 
 Until 2026-09-21 this section said the host side was done and the reading
@@ -1674,6 +1676,9 @@ bare metal before. So the INF writes `XhciImodInterval250ns` = 1000; a value
 that is absent, unreadable or outside 10 to 4000 falls back to 4000, the
 hardware's own; and because this reading had no stream playing, **one
 isochronous pass at 1000 on bare-metal Windows 98 gates 23.3's release**.
+*(Superseded the next day: 23.3.5 measured 500 at 32.5 MB/s with a clean
+audio pass, and the owner moved the INF's value to **500**; see 23.3.5
+below.)*
 
 ### What 23.2 leaves
 
@@ -1791,7 +1796,9 @@ every boot. And the stream costs 1000 less than it costs the control: reads
 fell 15% under the stream at 4000, 2.5% at 1000 and 2.7% at 500. **500 passes
 the same rule**, with one underrun and every error counter 0, and sounded
 better than 1000 by ear. Whether that moves the default is the owner's
-decision.
+decision - **and it did**: on 2026-09-22 the owner moved the INF's value from
+1000 to **500**, keeping 4000 as the fallback. The gate proper on the 23.3
+build is therefore read at 500.
 
 **What it does not settle, and is not IMOD's:** Windows 98 stutters on this
 machine during large sustained reads **at the hardware default**, with this

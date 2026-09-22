@@ -517,10 +517,11 @@ controller's property page is complete, 9x half and NT half, read on three 9x
 stacks and seven NT guests, and both INFs carry their line. **23.2 is done and
 it measured** (2026-09-22, on the P14s Gen 1): mass-storage reads ran 88%
 faster at an interval of 50 us than at the hardware's 1 ms, so **23.3 is
-taken, and runs next**, in the shape the owner set that night - the INF writes
-1000 and the driver falls back to 4000. **23.3.5, the audio test, gates its
-release**; its read-first half, on the 23.2 experimental build, was taken the
-same day and 1000 passed it, so 23.3 can be written.
+taken, and runs next** - the INF writes **500** (the owner moved it from 1000
+on 2026-09-22 after 500 was measured) and the driver falls back to 4000.
+**23.3.5, the audio test, gates its release**; its read-first half, on the
+23.2 experimental build, was taken the same day and both 1000 and 500 passed
+it, so 23.3 can be written.
 23.1 was started and finished on
 2026-09-20 on branch `23.1`, its host side, **all three guest legs** (Windows
 98 SE under NUSB and under SweetLow, and Windows ME) and the three documents
@@ -754,16 +755,20 @@ the hub half of item 2 before the root-port half, and both before item 1.
   writing IMOD, and close 23.3 as not taken.
 - [ ] 23.3 the registry value. **23.2 measured, so this is taken, and the
   owner changed what it ships on 2026-09-22**: the INF writes the value as
-  **1000** (250 us), not 4000. The owner's first choice was 200, the read
+  **500** (125 us), not 4000. The owner's first choice was 200, the read
   optimum, moved to 1000 for most of the read gain at a quarter of 200's
-  worst-case interrupt rate. The driver's fallback does not change: absent,
-  unreadable, or outside 10 to 4000 still means 4000, substituted rather than
-  clamped. So an install through the INF runs at 1000, and a machine whose
-  value is missing or mistyped runs exactly as every release to date. **Its
-  release is gated on 23.3.5**, an isochronous pass at 1000 on bare-metal
-  Windows 98, because 23.2 was read with no stream playing and the roadmap's
-  reason for asking for one still stands. Where the text below says the INFs write 4000 or that this
-  task ships 4000, read 1000; the rest stands as written. A `REG_DWORD` read
+  worst-case interrupt rate, and then to **500** the same day, once 500 was
+  measured: reads at 98% of the plateau (32.5 against 33.1 MB/s; 1000 gave
+  29.8), a pass of 23.3.5's audio test that sounded better than 1000, and a
+  worst-case rate of 8,000 interrupts a second against 200's 20,000. The
+  driver's fallback does not change: absent, unreadable, or outside 10 to 4000
+  still means 4000, substituted rather than clamped. So an install through the
+  INF runs at 500, and a machine whose value is missing or mistyped runs
+  exactly as every release to date. **Its release is gated on 23.3.5**, an
+  isochronous pass at 500 on bare-metal Windows 98, because 23.2 was read with
+  no stream playing and the roadmap's reason for asking for one still stands.
+  Where the text below says the INFs write 4000 or that this task ships 4000,
+  read 500; the rest stands as written. A `REG_DWORD` read
   through `UsbPortGetMiniportRegistryKeyValue` beside the two log values in
   `src/xhci_dispatch.c` (no new import), named `XhciImodInterval250ns` (the
   owner, 2026-09-21; the experiment reads the same name), in IMODI's own
@@ -797,7 +802,8 @@ the hub half of item 2 before the root-port half, and both before item 1.
   audio plays on bare metal, so Phase 9's five-of-five failure was the VM. Not
   IMOD's and not blocking: Windows 98 stutters under large sustained reads at
   the hardware default too, cause not located. **Open: the same pass on the
-  23.3 build.** Added by the owner on
+  23.3 build, at 500**, the default the owner moved to after these readings;
+  where the text below says 1000, the gate now reads 500. Added by the owner on
   2026-09-22, because 23.2 measured mass storage alone and the question the
   register exists for is the other half: an isochronous endpoint posts 1,000
   events a second at Full Speed and 8,000 at High Speed, moderation is what
@@ -881,9 +887,9 @@ every rate the stack in use can ask for, or the refusal that remains is
 derived and published; the root-port half of item 2 and item 1 each carry a
 recorded decision; the property page is in both halves of the 32-bit INF or
 recorded as not taken; 23.3 landed (23.2 measured): the value absent, invalid
-and at 4000 all read the same IMOD of 4000 on both targets, the INF's 1000
+and at 4000 all read the same IMOD of 4000 on both targets, the INF's 500
 and any other valid value read back from the register, a start is never failed
-by it, and 23.3.5's audio test passed at 1000 on bare-metal Windows 98;
+by it, and 23.3.5's audio test passed at 500 on bare-metal Windows 98;
 every gate green
 and the device matrix on both primary targets no worse than
 `runs/run-22-post-release/`. Not a checkpoint: a throughput figure taken in a
