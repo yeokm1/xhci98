@@ -14,11 +14,10 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
 ## 1.1.1.0 - 2026-09-22
 
-Two things you can see, and faster USB mass storage. The xHCI controller's
-properties in Device Manager gain an Advanced tab, and the install sets a
-shorter interrupt moderation interval, which on the one machine measured
-nearly doubled large reads from a USB stick. Every system `1.1.0.0` supports
-installs as it did, from the same four directories.
+The xHCI controller's properties in Device Manager gain an Advanced tab, and
+the install sets a shorter interrupt moderation interval, which on the one
+machine measured nearly doubled large reads from a USB stick. Every system
+`1.1.0.0` supports installs as it did, from the same four directories.
 
 ### What changed
 
