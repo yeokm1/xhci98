@@ -2197,3 +2197,199 @@ and the x86 legs with none. All six binaries carry file version `1.1.1.0`:
 `release-x86` 86,059 bytes, `debug-x86` 86,699, `release-x64` 97,280,
 `debug-x64` 181,760. `make-release.ps1` parses with the new check. Every
 edited file kept its CRLF endings.
+## 23.8 - the cut, and the install legs read from the asset
+
+**Cut 2026-09-22, nine of the ten install vehicles read 2026-09-22/23. Leg 5
+(Windows XP x64) is not taken and is the only clause outstanding.** One
+finding, and it is not against this release: `docs/contributing/lessons.md`,
+"Windows 98 wedges when a USB audio device is replugged after a cold boot".
+
+### The cut
+
+`build-driver.cmd all` and `all -amd64` from `c1ec345`, every gate green.
+`XHCIQUAL.EXE` and `XHCISNAP.EXE` were rebuilt first: `make-release.ps1`
+refuses a qualifier older than its own sources and the 23.7 header bump had
+made it so. `make-release.ps1` with its default `-Arch` then wrote
+`releases\1.1.1.0\` with the four flavour directories, the two tools, the
+`LICENSE` and the generated `readme.txt`, and `out\xhci98-1.1.1.0.zip`
+(committed as `7236636`).
+
+**Re-cut the same night with `-Force`, nothing uploaded** (`5799ca2`): the
+owner read the download's readme and struck the `history.md` entry's opening
+sentence, "Two things you can see, and faster USB mass storage." Only
+`readme.txt` changed among the published files; the asset went from
+377,516 B to **377,497 B**.
+
+The asset holds **17 files and so does `releases\1.1.1.0\`**, every pair
+SHA-256 identical, nothing on either side alone. No Microsoft file: the four
+`xhci98.sys` carry this project's version resource, and the only "Microsoft"
+string in any published binary is the statically linked C runtime's error text
+inside `XHCISNAP.EXE`. The published x86 binary is `15C99E9F...` (86,059 B) and
+the amd64 one `3C597BE3...` (97,280 B), each identical to its `src\objfre`
+build, and each published INF identical to its source.
+
+**The asset is about 20 KB smaller than `1.1.0.0`'s** and the reason is not a
+missing file: `74c35c7` trimmed the INF comments, so `xhci98.inf` went from
+29,554 to 8,280 bytes and the amd64 file from 15,258 to 4,659.
+
+### The legs
+
+Each leg ran off a read-only clean copy in `vm\t238\` through a throw-away
+overlay, with the unzipped asset as the transfer drive, so the wizard was
+pointed at `E:\release-x86` (`D:\RELEASE-X86` on the 9x guests, where the
+transfer drive is `D:` and the CD `E:`) or `E:\release-x64`. **On every leg the
+port-`0xE9` log stayed at 0 bytes**, as the `release` flavour should, and each
+installed `xhci98.sys` was SHA-256 identical to the asset's.
+
+| Leg | Target | Result |
+|---|---|---|
+| 1 | Windows 98 SE, NUSB 3.3 | pass, with the 500 readback |
+| 2 | Windows 98 SE, SweetLow | pass, full teardown |
+| 3 | Windows ME, SweetLow | pass, full teardown |
+| 4 | Windows 2000 SP4 | pass, with the 500 readback |
+| 10 | Windows XP SP3, 32-bit | pass, full teardown |
+| 8 | Windows Vista SP2 x86 | pass, full teardown |
+| 9 | Windows 7 SP1 x86 | pass, full teardown |
+| 6 | Windows Vista SP2 x64 | pass, full teardown |
+| 7 | Windows 7 SP1 x64 | pass, full teardown |
+| 5 | Windows XP x64 SP2 | **not taken** - see below |
+
+**Leg 4, Windows 2000 SP4** (`win2k-xonly-clean-install`). Found New Hardware
+wizard at `E:\release-x86`, no media prompt, no restart prompt - unlike 23.2's
+leg W, which raised one. `setupapi.log`: `Found PCI\CC_0C0330 in
+e:\release-x86\xhci98.inf ... Section: Xhci.Dev`, `Decorated section name:
+Xhci.Dev.NTx86`, `Installing section Xhci.Dev.NTx86`, and **`Xhci.Dev6`
+nowhere**. `oem0.inf` is the asset's INF byte for byte. The three devices
+bound; disable, enable, uninstall and rescan were taken with the audio device
+unplugged, the release notes' documented way round Windows 2000's restart
+prompt, and all four applied live. **23.4's clause on the `release` flavour**:
+`XHCISNAP` reported build flavour `release`, snapshot schema 4,
+`XhciImodInterval250ns   read, value 500` and `interval in force 500 x 250 ns
+= 125.00 us; register reads 500`. `slot_enable` 14.
+
+**Leg 1, Windows 98 SE under NUSB.** The Add New Hardware wizard found
+`D:\RELEAS~2\XHCI98.INF` - the 8.3 alias a Windows 98 engine reads a
+`release-x86` directory by - asked for the CD for `usbd.sys` (answered
+`E:\WIN98`) and then for a restart, taken as a shutdown and a cold launch.
+The controller, **USB 2.0 Root Hub**, the HID mouse (its `hidclass.sys` from
+the CD), **USB Mass Storage Device** with its **USB Disk**, and **USB
+Composite Device** with **USB Audio Device** and the Kernel Audio Mixer all
+bound, read from a `regedit /e` export of `HKLM\Enum` off the disk afterwards.
+Disable, enable, remove and rescan are **not taken on this leg**: NUSB's
+`usbport.sys` crashes on any controller stop, the release notes' first known
+limitation. `XHCISNAP` on the install's own value: `read, value 500`,
+`register reads 500`, flavour `release`, schema 4. `slot_enable` 3.
+
+*This leg was taken twice.* The first vehicle hit the wedge the lessons entry
+above describes and was set aside once the investigation was done; the reading
+recorded here is a second, clean install on a fresh overlay of the same clean
+copy (`vm\t238\win98-l1b.qcow2`).
+
+**Leg 2, Windows 98 SE under SweetLow's stack** (`vm\sweetlow-2a.img @
+sweetlow-stack-nodriver`, copied into `vm\t238\win98-sl.qcow2`). Same install
+route and CD prompt. The three devices bound, the audio one under **Composite
+Device** - SweetLow's `usbccgp`, as 22.10 recorded. **The teardown this stack
+allows**: the controller's properties showed the Advanced tab this release
+ships and "This device is working properly"; ticking "Disable in this hardware
+profile" gave **Code 22** with no crash and no restart prompt; unticking it
+brought every device back; **Remove** cleared the USB class; and **Refresh**
+reinstalled it through the wizard from the cached
+`C:\WINDOWS\INF\OTHER\YEOKHE~1.INF` and brought all three devices back. The
+`HKLM\Enum` export afterwards holds the same device set as before.
+`slot_enable` 9, `slot_configure` 9.
+
+**Leg 3, Windows ME under SweetLow's stack** (`winme-sweetlow-nodriver`).
+Advanced route, Removable Media unticked, `D:\RELEASE-X86`, **no CD prompt**,
+restart taken as a cold launch. Mouse and stick bound silently; the audio
+device came up through ME's own `WDMA_USB.INF` with the Kernel Audio
+Mixer, Renderer and Splitter behind it. Disable gave Code 22 - and the mass
+storage device's own property page said so in words, "a device it depends on,
+USB 2.0 eXtensible Host Controller (xhci98), has been dynamically disabled" -
+enable restored it, Remove cleared the class and Refresh reinstalled it, the
+audio device's wizard running again as 22.10 saw. Two `HKLM\Enum` exports,
+before the teardown and after the rescan, hold the same device set.
+`slot_enable` 9.
+
+**Leg 10, 32-bit Windows XP SP3** (`winxp-clean-install`). Update Driver from
+`E:\release-x86` behind **XP's Windows Logo prompt**, taken with Continue
+Anyway (`#E366 ... (Policy=Warn, user said ok)`); no CD, no restart.
+`setupapi.log`: `#I022 Found "PCI\CC_0C0330" in e:\release-x86\xhci98.inf ...
+Section name: "Xhci.Dev"`, `#I063 Selected driver installs from section
+[Xhci.Dev]`, `[Xhci.Dev.NTx86.Interfaces]` installed, and **`Xhci.Dev6` appears
+zero times**. The three devices bound (USB Composite Device, USB Mass Storage
+Device, USB Root Hub, USB Audio Device, HID-compliant mouse). Disable, enable,
+uninstall and rescan with all three attached, no restart prompt; the rescan's
+server-side install was refused as unsigned (`#E358`) and the wizard
+reinstalled from `oem0.inf`, exactly as 22.10 read it. `slot_enable` 9.
+
+**Legs 8 and 9, Vista x86 and Windows 7 x86.** Device Manager -> Update Driver
+Software -> Browse -> `E:\release-x86`, behind the **Windows Security dialog**
+("Windows can't verify the publisher of this driver software", with "Don't
+install" holding the focus); **Install this driver software anyway** took it
+on both, logged as `Driver package does not contain a catalog file, but user
+wants to install anyway`, and **neither x86 guest showed a second box**. The
+driver node is `xhci98.inf:XhciModels.NTx86.6.0:Xhci.Dev6:1.1.1.0:pci\cc_0c0330`
+on both and the install runs `[Xhci.Dev6.NTx86]`; each store directory holds
+`xhci98.inf`, `xhci98.PNF` and `xhci98.sys` alone, and the four OS-supplied
+files were already on disk at the sizes 22.10 recorded (Vista 226,304 /
+196,096 / 5,888 / 83,456; Windows 7 284,672 / 258,560 / 5,888 / 80,896).
+Three devices on each, then disable, enable, uninstall with the driver kept,
+and rescan - the rescan reinstalling from the store with no prompt.
+`slot_enable` 9 on both.
+
+**Legs 6 and 7, Vista x64 and Windows 7 x64**, from `E:\release-x64`, each off
+its clean snapshot on a boot with driver signature enforcement disabled.
+Windows 7 x64 reaches Advanced Boot Options from `sendkey f8` every 200 ms
+from QEMU's start; **Vista x64 still does not** - it took 22.10's route,
+`bcdedit /set {bootmgr} displaybootmenu yes` and `/timeout 30` from an
+elevated prompt, then a reset, F8 at the boot manager menu and nine `down` to
+*Disable Driver Signature Enforcement*. Both showed the same Windows Security
+dialog and then **the Program Compatibility Assistant box that is x64's
+alone** ("Windows requires a digitally signed driver", naming the service and
+`C:\Windows\System32\...\xhci98.sys`); as 22.10 found, it is wrong - the root
+hub had already installed and every clause below ran on that boot. The node is
+`xhci98.inf:XhciModels.NTamd64.6.0:Xhci.Dev6:1.1.1.0:pci\cc_0c0330` and the
+install runs `[Xhci.Dev6.NTAMD64]`, with the asset's amd64 INF (4,659 B) and
+binary (97,280 B) in the store. **Vista x64 alone logs the driver-store import
+trying to stage the four OS files** (`CopyFile ... usbport.sys ... failed 2`,
+and the same for `usbd.sys`, `usbhub.sys` and `usbui.dll`), which is 22.10's
+finding repeated and is not an error to the install. Three devices on each,
+then the full teardown; `slot_enable` 9 on both.
+
+*One reading about the teardown that is new, and it is not this driver.* On
+Windows 7 x86 the **disable** raised "You must restart your computer" and did
+not apply - the tree was unchanged and the devices stayed enumerated. `net
+stop audiosrv` from an elevated prompt and the same disable applied live, with
+every child gone and no restart prompt. 22.10 read that veto on this guest's
+*uninstall* and traced it to the audio function's open user-mode handle
+(`PNP_VetoOutstandingOpen`); it reaches the disable too. The x64 legs and
+Vista x86 were driven with the service already stopped, so their clean
+disables do not speak to it.
+
+### Leg 5, Windows XP x64: not taken
+
+The guest is `vm\winxp64.img @ winxp64-clean-install-smp4` and it stops at its
+own logon screen: **the Administrator account has a password the owner set at
+install, and it is recorded nowhere** (`phase21-task-215-guest-2026-09-09`
+memory, 2026-09-09). The VM was shut down rather than guessed at. Everything
+else that leg would read is attested elsewhere in this cut - the amd64 package
+installs and runs on two other 64-bit guests - but **the NT 5.2 half of
+`src\xhci98-amd64.inf` has no reading in this release**: only legs 6 and 7 ran,
+and both take `[Xhci.Dev6.NTAMD64]`, not `[Xhci.Dev.NTAMD64]`. That is the
+clause 23.8 still owes.
+
+### What the finding cost, and why the cut stands
+
+Leg 1's first vehicle wedged after a cold-boot replug, and the investigation
+that followed is the lessons entry above: 24 guest boots across `1.1.1.0` at
+three IMOD values, a diagnostic build with the IMOD write compiled out, and
+`1.1.0.0` as a control. It is intermittent, it predates this release, and no
+guest can implicate the moderation value because QEMU never consults IMOD.
+**No re-cut for it**; the release notes gain nothing here, and whether it
+becomes a known limitation is the owner's call.
+
+Harness `out\post-release\task23-8\` (git-ignored: the 22.10 scripts with
+their paths moved, `cycle.ps1` which drives one boot/set/plug/check cycle
+unattended, `win98t.cmd` which adds `-msg timestamp=on` and the interrupt
+trace events, the unzipped asset, the per-leg log directories and the
+screenshots); disks `vm\t238\`; traces `vm\t238-*-qemu-trace*.log`.

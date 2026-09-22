@@ -9224,3 +9224,44 @@ Fixed on 2026-09-22 in `scripts/bench/IMOD98.BAT`,
 `scripts/vm-matrix/guest/LOAD98.BAT`, `scripts/vm-matrix/guest/STGF98.BAT`
 and `xhciqual/3XIRQ.BAT`, `4XEMPTY.BAT`, `5XDEV.BAT`; `scripts/bench/README.md`
 states the rule.
+
+## Windows 98 wedges when a USB audio device is replugged after a cold boot, and it is not this release's doing
+
+Roadmap task 23.8's leg 1, 2026-09-22/23, on the `win98.img @ post-nusb`
+guest under NUSB 3.3, with `1.1.1.0`'s published `release-x86`. Install, three
+devices, shut down, cold boot, plug the mouse, the stick and a `usb-audio`
+again - and about a third of the time the shell dies: the taskbar clock stops,
+no key reaches the guest, and the Start menu will not open.
+
+**What is still alive matters more than what is dead.** The kernel runs: QEMU's
+trace shows something reading MFINDEX twice every ~515 ms for as long as the
+guest is left, which is the timer path through usbport, and on one hang the
+mouse's interrupt transfers kept completing. The driver had finished with the
+event that preceded the wedge: it cleared IP in IMAN, advanced ERDP with EHB
+written back, and re-enabled the interrupter. Nothing is pending at the
+controller. **Two symptoms that look like life are worthless here**: the
+pointer still moves (the host draws it), and QEMU burns 100% of a core in
+ring 0 (Windows 98 does not HLT when idle, so a healthy guest looks the same).
+
+**Where it stops is exact.** Every hang stops after event idx 122, the audio
+device's EP0 completion; a clean run issues one more EP0 request 400 ms later
+and settles at 134 events. So the guest's software stops between that
+completion and the audio class stack's next request, above usbport, where this
+driver is not consulted.
+
+**It is not new and it is not the moderation value**, which is what the
+investigation was for. On the same guest and sequence: `1.1.0.0` hung 2 of 10;
+`1.1.1.0` 3 of 3 at `XhciImodInterval250ns` 500, 1 of 3 at 4000, and 1 of 4
+with a diagnostic build whose IMOD write was compiled out. 2 of 10 against
+5 of 10 is not a difference at these numbers, and QEMU stores IMOD without
+ever consulting it (task 23.3), so no guest reading can turn on that value.
+
+Why no earlier cut saw it: every install leg since `1.0.1.0` plugged its
+devices on the install boot and never replugged them after a restart.
+
+Rules. **Do not read a Windows 98 guest wedge as a regression without a
+control on the previous release**, and take enough runs to see an
+intermittent one - three clean runs would have "proved" the wrong thing twice
+over here. And when a guest stops, say which layer stopped: a trace that still
+shows timer reads and completed transfers has already exonerated the driver's
+interrupt path.

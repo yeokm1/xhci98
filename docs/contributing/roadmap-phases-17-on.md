@@ -927,7 +927,23 @@ task - and its polling-rate and true-speed requests keep it open.
   audit fix pass.) Then `build-driver.cmd all`
   and `all -amd64` rebuilt from that tree, since `7488f13` onward was never
   rebuilt.
-- [ ] 23.8 the cut, `1.1.1.0`, as 22.10 was: every gate green on both
+- [ ] 23.8 the cut, `1.1.1.0`, as 22.10 was. **Cut 2026-09-22 (`7236636`) and
+  re-cut the same night with `-Force` (`5799ca2`) for the owner's edit to the
+  `history.md` entry the download readme embeds; asset 377,497 B, 17 files,
+  every one SHA-256 identical to `releases\1.1.1.0\`, no Microsoft file.**
+  **Nine of the ten install vehicles passed on 2026-09-22/23** - Windows 98 SE
+  under NUSB and under SweetLow, Windows ME, Windows 2000 SP4, 32-bit XP,
+  Vista x86, Windows 7 x86, Vista x64 and Windows 7 x64, each from the asset,
+  each with the port-`0xE9` log at 0 bytes and the installed `.sys` the
+  asset's, and the two 9x/NT 5.0 legs reading `XHCISNAP`'s `register reads
+  500`. **Still open: leg 5, Windows XP x64** - that guest's Administrator
+  password is the owner's and is recorded nowhere, so the NT 5.2 half of the
+  amd64 INF (`[Xhci.Dev.NTAMD64]`) has no reading in this release. **One
+  finding, and it is not against this release**: Windows 98 wedges
+  intermittently when a USB audio device is replugged after a cold boot, on
+  `1.1.0.0` as well as on `1.1.1.0` and at any moderation value, so no re-cut
+  (`lessons.md`; `runs/run-23.md`, 23.8). The brief as written: every gate
+  green on both
   architectures; the four flavour directories and the asset, holding exactly
   what the packager staged and no Microsoft file; and the install legs read
   from the asset - the four x86 legs with full device clauses, the amd64
