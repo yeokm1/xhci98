@@ -565,7 +565,7 @@ for, not read by the tester.
 | 8.4 | `XHCISNAP -o C:\MYDUMP` | It writes `C:\MYDUMP.TXT` and prints the resolved absolute path it wrote it to |
 | 8.5 | Read that file's header | The tool's version and build stamp, the driver's counters, and at level 2 the driver's own note ring below them. A report whose version is not this release's is a report from the wrong build, which is what the tool's version check exists to make visible |
 | 8.6 | `XHCISNAP -disable` | It reports the channel off again. A machine left with the channel on is a machine whose diagnostic state anyone using it can read |
-| 8.7 | Record only: look at the driver's own key for `XhciLogVerbosity` and `XhciLogDebugView` | Write down whether each is there and what its data is. There are two values and both are DWORDs. This is not a pass criterion; do not fail the step on it |
+| 8.7 | Record only: look at the driver's own key for `XhciLogVerbosity`, `XhciLogDebugView` and `XhciImodInterval250ns`, then read the 8.4 report's "registry values" block | Write down whether each value is there and what its data is. There are three values and all three are `REG_DWORD`s; on a fresh install `XhciImodInterval250ns` holds `500`. In the report, the `XhciImodInterval250ns` line should read `read, value 500`, and the `interval in force` line under it `500 x 250 ns = 125.00 us; register reads 500`, with no `^` line below them. This is not a pass criterion; do not fail the step on it |
 
 If nothing comes back (8.4): run `XHCISNAP -probe`, which answers whether the
 route to a driver exists at all separately from whether this driver answered on
@@ -587,9 +587,17 @@ target and `XHCISNAP` is what replaced it.
 8.7 is record-only for a reason. A key still holding `XhciLogFile` or
 `XhciLogSnapshot` is a leftover from something other than this package, which
 places neither, and is worth writing down as one. That the
-installer writes the two values has never been observed on either system; no
+installer writes the two log values has never been observed on either system; no
 task before the release takes the reading. An acceptance run on a
 fresh guest is the first thing that could, so the step asks.
+`XhciImodInterval250ns` is the one of the three whose installed data the
+report can confirm on its own: the driver prints what it read and what it
+programmed, so a `500` in the key and a `500` in force say the installer's
+value reached the controller. A missing value reads `NOT read, value 0` with
+an interval of `4000` and a line saying the default was used, which is what
+an upgrade over a running driver on Windows 98 with NUSB leaves behind
+(`docs/using/release-notes.md`, "Known limitations"), so record which kind of
+install the machine had.
 
 Observed: both the release and the debug build handed their log
 to `XHCISNAP` on the ThinkPad E460 under Windows 98 SE (task 13-L.3), and the

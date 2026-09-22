@@ -203,7 +203,8 @@ It is counted in **units of 250 ns**, so `4000` is 1 ms and `500` is 0.125 ms.
 - **The package's INF sets it to `500`.** Measured on one laptop (a ThinkPad
   P14s Gen 1) under Windows 98 SE, large reads from a USB 3 stick went from
   17.6 MB/s at `4000` to 32.5 MB/s at `500`, and a Full-Speed USB audio device
-  played through the same benchmark with no error the driver could count.
+  played through the same benchmark with no error counted by the driver and
+  one ring underrun, against one and three on the two passes at `4000`.
 - **Accepted values are `10` to `4000`.** Anything else - the value missing,
   `0`, `5000` - makes the driver use `4000`, the old behaviour. It is replaced,
   not rounded to the nearest limit, so `0` does not turn moderation off.
@@ -213,7 +214,7 @@ It is counted in **units of 250 ns**, so `4000` is 1 ms and `500` is 0.125 ms.
 - **`500` is the conservative choice.** Linux's own xHCI driver uses `160`
   (40 us). This package ships `500` because interrupt load at real rates is
   what has crashed Windows 98 on real hardware before, and `500` already
-  takes 98% of the read gain.
+  reads at 98% of the plateau (32.5 against 33.1 MB/s).
 - **You are free to tune it.** Lower it towards `160` for the last few
   percent of storage speed; raise it towards `4000`, or delete it, if you
   hear audio stutter or see instability under load. "Registry settings" in

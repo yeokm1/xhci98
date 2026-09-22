@@ -2969,7 +2969,7 @@ Two things are specific to this driver and worth knowing in advance:
     (installing  new driver does load afterwards - but nothing after that
     over an      copy runs, so the machine still reports the OLD version
     existing     and any registry setting the new package introduces is
-    install)     never written. See "after an upgrade" below.
+    install)     never written. See "TO UPGRADE WITHOUT CRASHING" below.
 
   There is no Roll Back Driver on Windows 98, so a rollback is an uninstall
   followed by a reinstall - two of the above.
@@ -2998,13 +2998,34 @@ Two things are specific to this driver and worth knowing in advance:
   C:\WINDOWS\INF\OTHER) all stay behind. Delete them by hand if you want them
   gone; the three Windows files are Windows' own and harmless where they are.
 
-  AFTER AN UPGRADE ON WINDOWS 98, RUN THE INF ONCE BY HAND
-  .......................................................
+  TO UPGRADE WITHOUT CRASHING, OR AFTER AN UPGRADE THAT CRASHED
+  .............................................................
 
-  Right-click xhci98.inf in the package directory and choose Install. That
-  puts the driver file in place even though the upgrade crashed before it
-  could. It touches no device, so it cannot hit the crash. Then restart, and
-  the controller picks up the new file.
+  Start with the same rename, so that nothing is running to be stopped:
+
+    1. From an MS-DOS Prompt:
+           ren C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS XHCI98.SAV
+    2. Shut the machine down and switch it on again - not Restart: a warm
+       restart leaves Windows 98 stuck at its starting screen. The
+       controller comes up with a yellow mark, as above.
+    3. Device Manager -> the controller ->
+           Properties -> Driver -> Update Driver -> Specify a location
+       and point it at the new package's RELEASE-X86\ directory. With no
+       driver loaded there is no controller to stop, so it finishes
+       normally and writes the new package's settings.
+    4. Shut down and switch on again.
+
+  That is the only route measured to deliver a new package's registry
+  settings on this stack. If an upgrade has already crashed, take the same
+  four steps: the crashed upgrade did copy the new xhci98.sys, so the file
+  is already in place, and what it lost is the settings, which step 3
+  writes.
+
+  DO NOT RELY ON RIGHT-CLICKING xhci98.inf AND CHOOSING INSTALL FOR THIS.
+  Earlier copies of this file said to, and it does not do the job: it
+  copies files and writes no registry value at all, and it could never
+  write a setting that belongs to the device itself, which is the kind the
+  crash loses.
 
 
 ==============================================================================
@@ -3249,7 +3270,8 @@ writes none of them: the installer creates all three.
   step of a transfer waits for an interrupt before the next is sent. On a
   ThinkPad P14s Gen 1 under Windows 98 SE, large reads from a USB 3 stick
   went from 17.6 MB/s at 4000 to 32.5 MB/s at 500, and a USB audio device
-  played through the same test with no error the driver could count. Going
+  played through the same test with no error counted by the driver and one
+  ring underrun, against one and three on two passes at 4000. Going
   lower gained little: 33.1 MB/s at 200 and at 160. Linux's own xHCI driver
   uses 160 (40 microseconds); this package ships 500 to be more
   conservative, since every interrupt costs Windows 98 time, and more of
@@ -3266,8 +3288,9 @@ writes none of them: the installer creates all three.
   ON WINDOWS 98 WITH NUSB, AN UPGRADE DOES NOT SET IT. An upgrade over a
   running xhci98 crashes before the installer's settings are written (see
   section 5), so the value is absent and the driver runs at 4000, exactly as
-  earlier releases did, until you set it by hand here - or remove the driver
-  the crash-free way in section 5 and install this package fresh.
+  earlier releases did, until you set it by hand here - or take section 5's
+  "TO UPGRADE WITHOUT CRASHING" steps, which write it, even after an upgrade
+  that has already crashed.
 
   THOSE THREE ARE THE WHOLE LIST. This driver reads no other setting of its
   own, and no registry value makes it write a file.
