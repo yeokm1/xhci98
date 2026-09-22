@@ -1,7 +1,9 @@
 # Phase 23 Record - GitHub issue 4's open requests, and the moderation experiment
 
 The detail behind `docs/contributing/roadmap-phases-17-on.md`, "Phase 23 -
-GitHub Issue 4's Open Requests, and the Interrupt Moderation Experiment". The
+Controller Property Page and Interrupt Moderation" (titled "GitHub Issue 4's
+Open Requests, and the Interrupt Moderation Experiment" until the owner moved
+the issue's polling rates and true speeds to Phase 24 on 2026-09-22). The
 roadmap entry carries the goal, the status, the task table and the checkpoint;
 this file carries what each task did and what each reading said. Where the two
 disagree about a clause, the roadmap wins.
@@ -13,6 +15,13 @@ was written; the roadmap's task table says how each task closed.
 **On `out\...` and `vm\...` paths in this file.** They say where a reading was
 taken and what the file was called, on the host that ran it; they are not
 files a clone has.
+
+**On task ids inside artifact names.** The phase's tasks were renumbered on
+2026-09-22 (`7488f13`): 23.1.5 became 23.2, 23.2 became 23.3, 23.3 became
+23.4 and 23.3.5 became 23.5. This file cites every task by its new id, but the
+snapshots, markers, branches and `out\` directories named at the time keep
+the old one - `*-23-1-5-*` is a 23.2 snapshot, `..._TASK_23_2` is 23.3's
+marker, `out\bench-23.2\` is 23.3's package and branch `23.3` carried 23.4.
 
 Opened 2026-09-20 by task 23.1, which is the first task of this phase to take
 a reading.
@@ -1344,7 +1353,9 @@ turns any nonempty `XHCI_EXTRA_DEFINES` into `XHCI_DIAGNOSTIC_BUILD` - the
 marker `make-package.ps1` refuses to package. Built both ways on 2026-09-20:
 `scripts\build-driver.cmd both` reports `BUILD + GATES PASSED`, and with the
 define set it reports `PROBE BUILD + GATES PASSED` and the do-not-deploy
-warning. **The import gate lists the same twelve pairs either way**, which is
+warning. **The import gate lists the same twelve pairs in the binary either
+way** (of the allowlist's thirteen; the thirteenth, `HAL.dll!WRITE_PORT_UCHAR`,
+is the `qemu` flavour's alone), which is
 the "no new import" clause 23.4 also has to keep: the registry read goes
 through `UsbPortGetMiniportRegistryKeyValue` in usbport's own packet, not
 through an import of ours.
@@ -1370,7 +1381,12 @@ The pieces, all `#ifdef`-ed:
   `SIZEOF` and refuses a mismatch - 92,328 against 92,304 - so a shipping
   table decodes nothing out of these dumps, and it lists no `ImodExperiment`
   field to read even if it did. The sweep was decoded against a table built
-  with the define; `build-and-test.md`, the 23.3 staging section, has how.)*
+  with the define: `scripts\local\offsets.c` compiled with
+  `/DXHCI_IMOD_EXPERIMENT` on the `cl` line and the six `ImodExperiment` rows
+  under the same `#ifdef`, into a separate file passed with `--offsets`.
+  `build-and-test.md` carried that recipe in a staging section until the
+  experimental build was retired on 2026-09-22; what stands there now is "The
+  moderation experiment package (task 23.3) - retired".)*
 - **Five `XHCISNAP` notes**, and `imod.exp.readback` and `imod.exp.written`
   also in the always-on counter block beside `isr.entries` and `dpc.count`, so
   one flush carries the arm of the sweep and its effect together.
@@ -1776,8 +1792,8 @@ it:
 **The silent 500 pass is 23.3's missing rung.** Reads at 8 MB: 17.6 at 4000,
 29.8 at 1000, **32.5 at 500**, 33.1 at 200 and 160. So 500 takes 98% of the
 plateau, and almost all of the gain between 1000 and the plateau lies between
-1000 and 500. Its interrupts per silent pass, 334,344, are the same as 200's
-and 160's. It was taken a day after the 23.3 controls and with no control of
+1000 and 500. Its interrupts per silent pass, 334,344, are the same as 160's
+(334,465) and within 4% of 200's (346,301). It was taken a day after the 23.3 controls and with no control of
 its own that morning; reads were stable across 23.3's two controls and the
 two audio controls, which is the ground for comparing it.
 
@@ -1798,8 +1814,9 @@ fell 15% under the stream at 4000, 2.5% at 1000 and 2.7% at 500. **500 passes
 the same rule**, with one underrun and every error counter 0, and sounded
 better than 1000 by ear. Whether that moves the default is the owner's
 decision - **and it did**: on 2026-09-22 the owner moved the INF's value from
-1000 to **500**, keeping 4000 as the fallback. The gate proper on the 23.4
-build is therefore read at 500.
+1000 to **500**, keeping 4000 as the fallback. The gate proper is therefore
+read at 500 - on the cut's own `release` binary, as roadmap 23.9, and not
+also on a pre-cut 23.4 build.
 
 **What it does not settle, and is not IMOD's:** Windows 98 stutters on this
 machine during large sustained reads **at the hardware default**, with this
@@ -1810,10 +1827,11 @@ the cause is not located: the audio stack's own buffering under CPU or DPC
 load is as plausible as this driver's ring refill. It is recorded here as a
 finding for later and does not block 23.4.
 
-Owed: the same pass on the 23.4 build, which is the gate proper.
-*(Superseded the same day: the owner closed 23.5 on this read-first half and
-moved the gate proper to the cut's own `release` binary, read once as roadmap
-23.9, with no separate pre-cut pass.)*
+**Superseded (2026-09-22):** this section first ended "Owed: the same pass
+on the 23.4 build, which is the gate proper". The same day the owner closed
+23.5 on this read-first half and moved the gate proper to the cut's own
+`release` binary, read once as roadmap 23.9, with no separate pre-cut pass,
+so nothing is owed here.
 
 ## 23.4 - the registry value
 
@@ -1825,7 +1843,8 @@ open.
 
 - **Every build reads `XhciImodInterval250ns`** beside the two log values,
   through the same `UsbPortGetMiniportRegistryKeyValue` service and key, with
-  no new import (13 allowlist pairs on every flavour, as before). The read
+  no new import (the binary imports twelve pairs on `release` and `debug`,
+  thirteen on `qemu`, and the allowlist holds thirteen, as before). The read
   only records what the registry said (`ImodStatus`, `ImodRequested`); the
   choice is `XhciImodIntervalChoose`'s, a pure function in `src/xhci_init.c`:
   10 to 4000 as given, anything else - a failed read, 0, 9, 4001, 70000 -

@@ -452,9 +452,9 @@ the sixth and seventh re-cuts recorded three known limitations found after
 the cut: the Vista/7 bugcheck with a Full-Speed hub on a root port,
 XP-onward silence on a root-port audio device, and the Windows 7
 controller-disable hang seen on the E460; the eighth brought the readme's
-embedded `history.md` entry into line with them. What is left is not a task:
-the owner's upload of `out\xhci98-1.1.0.0.zip` (397,765 B) and the push.
-Carried open past the
+embedded `history.md` entry into line with them. What was left was not a
+task: the owner's upload of `out\xhci98-1.1.0.0.zip` (397,765 B) and the push,
+and the owner uploaded it on 2026-09-20 (Phase 23's status). Carried open past the
 phase: the disable hang's cause, the Sound Blaster Play! 2's Code 10 on
 Windows 7, and the split isochronous packet 22.12 (d) did not exercise.
 
@@ -512,27 +512,23 @@ interrupt moderation interval below the reset default raises throughput, which
 if it does becomes a registry value; and the result cut as `1.1.1.0`. The
 issue's polling rates and true speeds on root ports are Phase 24's.
 
-Status: open since 2026-09-19; **23.1 and 23.2 are both done** - the
-controller's property page is complete, 9x half and NT half, read on three 9x
-stacks and seven NT guests, and both INFs carry their line. **23.3 is done and
-it measured** (2026-09-22, on the P14s Gen 1): mass-storage reads ran 88%
-faster at an interval of 50 us than at the hardware's 1 ms, so **23.4 is
-taken, and runs next** - the INF writes **500** (the owner moved it from 1000
-on 2026-09-22 after 500 was measured) and the driver falls back to 4000.
-**23.5, the audio test, gates its release**; its read-first half, on the
-23.3 experimental build, was taken the same day and both 1000 and 500 passed
-it, so 23.4 can be written. **23.5 is closed on that half** (owner,
-2026-09-22): the gate proper is read once, at 500 on the cut's own `release`
-binary, as 23.9, and not also on a pre-cut 23.4 build. The record and the cut
-that were one task, 23.6, are now 23.6 to 23.10, split by the owner the same
-day.
-23.1 was started and finished on
-2026-09-20 on branch `23.1`, its host side, **all three guest legs** (Windows
-98 SE under NUSB and under SweetLow, and Windows ME) and the three documents
-it owed, all the same day, leaving only the merge. **The NT half is
-23.2's**, beside the 9x half. `1.1.0.0` was uploaded on
-2026-09-20, so the hold on merging this branch is lifted. The version is
-**`1.1.1.0`** (the owner, 2026-09-22): 23.4 at least is driver code, so the
+Status: open since 2026-09-19. **23.1 and 23.2 are done**: the controller's
+property page is complete, 9x half (23.1) and NT half (23.2), both taken on
+2026-09-20, read on three 9x stacks and seven NT guests, and both INFs carry
+their line; 23.1 took its host side, all three guest legs (Windows 98 SE
+under NUSB and under SweetLow, and Windows ME) and the three documents it owed
+in that one day, on branch `23.1`. **23.3 is done and it measured**
+(2026-09-22, on the P14s Gen 1): mass-storage reads ran 88% faster at an
+interval of 50 us than at the hardware's 1 ms. **23.4 is therefore taken and written**, host side green,
+with its guest readings still owed: the INF writes **500** (the owner moved it
+from 1000 on 2026-09-22 after 500 was measured) and the driver falls back to
+4000. **23.5, the audio test, is closed on its read-first half** (owner,
+2026-09-22): on the 23.3 experimental build both 1000 and 500 passed it, and
+the gate proper is read once, at 500 on the cut's own `release` binary, as
+23.9, not also on a pre-cut 23.4 build. The record and the cut, once one task,
+are 23.6 to 23.10, split by the owner the same day, and all five boxes are
+open. `1.1.0.0` was uploaded on 2026-09-20, so the hold on merging this branch
+is lifted. The version is **`1.1.1.0`** (the owner, 2026-09-22): 23.4 at least is driver code, so the
 third field moves (`releases/README.md`). The owner's note on the issue
 (2026-09-19) was that the speed work may be spread over several releases to
 reduce risk, and that is the split taken: this release carries the property
@@ -710,15 +706,18 @@ polling rates and true speeds.
   change. The experimental build exists, behind `XHCI_IMOD_EXPERIMENT` via
   `XHCI_EXTRA_DEFINES`, so no shipping binary changed (the `release` `.sys`
   links at the same size as `HEAD`'s) and the import gate lists the same
-  twelve pairs. **The owner chose the registry route over a compile-time
+  twelve pairs in the binary (the allowlist holds thirteen; the thirteenth is
+  `qemu`'s `HAL.dll!WRITE_PORT_UCHAR`). **The owner chose the registry route over a compile-time
   constant** on 2026-09-20, so one binary sweeps the ladder: the value is
   `XhciImodInterval250ns`, read beside the two log values through
   `UsbPortGetMiniportRegistryKeyValue` with no new import. **The owner made it
   23.4's name too** on 2026-09-21, reversing the separate
   `XhciImodExperiment` of the day before: the unit is in the name, and a bench
   setting left behind is no longer inert under a 23.4 build, so the bench
-  helpers say to clear it when a session ends. Absent means the start writes no IMOD at all,
-  which makes the experimental binary its own control. `scripts/bench/`
+  helpers say to clear it when a session ends. Absent means the experimental
+  build's start writes no IMOD at all, which makes that binary its own control
+  (of the experimental build only, as the caveat above says: since 23.4 every
+  start writes IMOD). `scripts/bench/`
   carries `IMOD.BAT` and `IMOD98.BAT` for setting it on either target.
   **The artifact is installable**, through a second narrow packaging exception
   (`make-package.ps1 -ImodExperimentArtifact`), added 2026-09-20 when the owner
@@ -731,7 +730,8 @@ polling rates and true speeds.
   bits 15:0 in 250 ns units and resets to 4000, 1 ms
   (`xhci-data-structures.md`, Table 5-39 p.392). The start never writes it
   and `xhciRestoreState` writes back what the save read, so every run to date
-  has been at 4000. The hypothesis is that Bulk-Only Transport is strictly
+  has been at 4000 (true when written, before the bench; 23.4's start writes
+  it on every build). The hypothesis is that Bulk-Only Transport is strictly
   serial (Phase 8), so each of a command's completions can wait out a
   moderation interval before the next stage is submitted, and 1 ms per stage
   bounds mass-storage throughput from above. Measure sustained mass-storage
@@ -772,9 +772,10 @@ polling rates and true speeds.
   driver's fallback does not change: absent, unreadable, or outside 10 to 4000
   still means 4000, substituted rather than clamped. So an install through the
   INF runs at 500, and a machine whose value is missing or mistyped runs
-  exactly as every release to date. **Its release is gated on 23.5**, an
-  isochronous pass at 500 on bare-metal Windows 98, because 23.3 was read with
-  no stream playing and the roadmap's reason for asking for one still stands.
+  exactly as every release to date. **Its release is gated on 23.9**, 23.5's
+  gate proper: an isochronous pass at 500 on bare-metal Windows 98, read on
+  the cut's own `release` binary, because 23.3 was read with no stream playing
+  and the roadmap's reason for asking for one still stands.
   Where the text below says the INFs write 4000 or that this task ships 4000,
   read 500; the rest stands as written. A `REG_DWORD` read
   through `UsbPortGetMiniportRegistryKeyValue` beside the two log values in
@@ -801,7 +802,7 @@ polling rates and true speeds.
   owner on 2026-09-22**: the read-first half below is this task's reading,
   and the gate proper - the pass at 500 that the checkpoint names - is read
   once, on the cut's own `release` binary, as 23.9. The separate
-  pre-cut pass on the 23.4 build that the text below calls open is not taken,
+  pre-cut pass on the 23.4 build that the text below first carried as open is not taken,
   so one bare-metal session remains rather than two. **Read-first half taken
   2026-09-22 on the 23.3 build, and 1000 passes it** (`runs/run-23.md`,
   23.5): a Full-Speed audio stream on a root port played through a full
@@ -814,9 +815,10 @@ polling rates and true speeds.
   33.1 plateau. Windows 98
   audio plays on bare metal, so Phase 9's five-of-five failure was the VM. Not
   IMOD's and not blocking: Windows 98 stutters under large sustained reads at
-  the hardware default too, cause not located. **Open: the same pass on the
-  23.4 build, at 500**, the default the owner moved to after these readings;
-  where the text below says 1000, the gate now reads 500. Added by the owner on
+  the hardware default too, cause not located. **Superseded (2026-09-22):**
+  this entry first carried "the same pass on the 23.4 build, at 500" as open;
+  the note at the head of this entry moved that pass to the cut's `release`
+  binary as 23.9. Where the text below says 1000, the gate now reads 500. Added by the owner on
   2026-09-22, because 23.3 measured mass storage alone and the question the
   register exists for is the other half: an isochronous endpoint posts 1,000
   events a second at Full Speed and 8,000 at High Speed, moderation is what
@@ -833,8 +835,11 @@ polling rates and true speeds.
   questions. **Arms**: the control (value absent, so 4000) first and last,
   and 1000 between; 200 as well if the time is there, since it was the read
   optimum and would be the next default asked about. **Read per arm**: a
-  `SWEEP98.BAT` dump before and after, decoded as in `build-and-test.md`'s
-  23.3 staging section - interrupts per pass, and the isochronous error
+  `SWEEP98.BAT` dump before and after, the `.BIN` decoded against an offsets
+  table from the same tree (`runs/run-23.md`, 23.3, says how the experimental
+  build's dumps were read; `build-and-test.md`, "The moderation experiment
+  package (task 23.3) - retired", is what stands of its staging section) -
+  interrupts per pass, and the isochronous error
   counters (`IsoPacketErrorsTotal`, `IsoMissedServiceTotal`,
   `IsoRingUnderruns`, `IsoRingOverruns`, `IsoTrbErrorRecoveries`,
   `IsoCadenceMismatches`); ATTO's read and write figures beside 23.3's, which
@@ -846,7 +851,8 @@ polling rates and true speeds.
   4000. **Read first, before 23.4 is written**: the same pass on the 23.3
   experimental build with the value at 1000, which is the same register write
   and needs no new code, so a problem is found before the code that ships it.
-  The gate itself is then re-read on the 23.4 build. If Windows 98's audio
+  The gate itself was then to be re-read on the 23.4 build; superseded
+  (2026-09-22) by 23.9, on the cut's own `release` binary. If Windows 98's audio
   stack will not play on the machine at all, even at the control - the Phase 9
   vehicle failed five of five, and whether that was the VM or Windows 98 is
   not settled (`LOAD98.BAT`'s header) - that is itself the reading, recorded
@@ -874,10 +880,12 @@ task - and Phase 24's requests keep it open.
   `1.1.1.0` and its date in `xhci_version.h` and both INFs; the
   `releases/history.md` entry; the release notes' version; README's Install
   section if 23.4 changes it; the issue forms; and `make-release.ps1`'s
-  `readme.txt` template, whose registry section says the driver reads two
-  values and writes none - it now reads three, and the INF writes
-  `XhciImodInterval250ns` - and which should say that `XHCISNAP` moved to
-  schema 4, so an older copy refuses this driver. Then `build-driver.cmd all`
+  `readme.txt` template, which should say that `XHCISNAP` moved to schema 4,
+  so an older copy refuses this driver. (The template's registry section was
+  brought to three values, and to the INF writing `XhciImodInterval250ns`, by
+  `aa9d402`; its Windows 98 upgrade subsection's remedy, and release
+  acceptance test step 8.7's third value, were taken on 2026-09-22 by the
+  audit fix pass.) Then `build-driver.cmd all`
   and `all -amd64` rebuilt from that tree, since `7488f13` onward was never
   rebuilt.
 - [ ] 23.8 the cut, `1.1.1.0`, as 22.10 was: every gate green on both
@@ -920,11 +928,11 @@ true speeds (both Phase 24's), the acceptance test, or the upload.
 Records: GitHub issue 4 (the thread; nothing of it is copied here beyond the
 table above); `docs/issues/06-full-speed-root-port-bugcheck.md`;
 `docs/future-plans/virtual-hub-per-root-port.md`;
-`docs/usb-xhci-info/xhci-data-structures.md` (IMOD, Table 6-12);
+`docs/usb-xhci-info/xhci-data-structures.md` (IMOD, Table 5-39);
 `docs/usb-xhci-info/usbport-miniport-abi.md` ("Periodic scheduling: what
 `Period` actually carries"); `build-and-test.md` (the INF's omitted
-directives); `runs/run-23.md` (to be opened by the first task that takes a
-reading); `releases/history.md`; `runs/run-23-post-release/` (written after
+directives); `runs/run-23.md` (opened on 2026-09-20 by task 23.1, the first
+task to take a reading); `releases/history.md`; `runs/run-23-post-release/` (written after
 the cut).
 
 ## Phase 24 - Polling Rates, and True Speeds on Root Ports

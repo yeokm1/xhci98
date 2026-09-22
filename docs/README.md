@@ -53,10 +53,14 @@ source comments, scripts, and other docs use these same locations.
   the `1.1.0.0` cut: the static pass on 6.0 and 6.1, the 32-bit guests, the
   Version 300 path and the defects its guests found, the charset gate, issue
   5's miniport flag, and the cut's tasks, as the roadmap carried them.
-- [Phase 23 run sheet](contributing/runs/run-23.md) - GitHub issue 4's open
-  requests and the moderation experiment, open: task 23.1's static readings of
-  `sysclass.dll`, `usbui.dll` and three NT `usbport.inf` files, the `PROP-*`
-  gate family, and the guest legs each task still owes.
+- [Phase 23 run sheet](contributing/runs/run-23.md) - the controller's
+  property page and the interrupt moderation value, open: the property page's
+  two halves, done (task 23.1's static readings of `sysclass.dll`, `usbui.dll`
+  and the three NT references - Windows 2000's `USB.INF` and the `usbport.inf`
+  of XP and Vista - the `PROP-*` gate family, and its three 9x legs; task
+  23.2's seven NT guests); the moderation experiment on bare metal (23.3) and
+  the audio test's read-first half (23.5), both done; and the registry value
+  (23.4), host side in and its guest readings still owed.
 - The post-release matrix reports, one pair per release (four for `1.1.0.0`,
   which added XP x64 and Windows 7 x86 clones), produced by
   `run-matrix.ps1 -PostRelease` on freshly installed guests and read against
