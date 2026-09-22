@@ -1,40 +1,27 @@
 @echo off
-rem IMOD.BAT - set, show or clear the interrupt-moderation interval that roadmap
-rem task 23.2's EXPERIMENTAL build reads, on an NT target.  Run it IN THE GUEST
-rem or on the bench machine, not on the build host.
+rem IMOD.BAT - set, show or clear XhciImodInterval250ns, the interrupt
+rem moderation interval the driver reads at every start (roadmap task 23.3;
+rem task 23.2 swept it), on an NT target.  Run it IN THE GUEST or on the bench
+rem machine, not on the build host.
 rem
 rem   IMOD SHOW              print the value in force, and the key it is in
 rem   IMOD <0-65535>         set XhciImodInterval250ns to that many 250 ns units
-rem   IMOD CLEAR             delete the value - the CONTROL arm of the sweep
+rem   IMOD CLEAR             delete the value - the driver then runs at 4000
 rem
-rem THE LADDER task 23.2 sweeps: CLEAR (control), 4000, 2000, 1000, 500, 200,
-rem 100, 40, 10.  4000 is the hardware reset default, 1 ms.  Take the control
-rem first and again last; a machine that has drifted between them has
-rem invalidated the run, and that is the cheapest way to find out.
+rem THE CONTRACT IS THE DRIVER'S, NOT THIS FILE'S.  Since 1.1.1.0 every build
+rem reads this value at every start and writes the result to IMOD: 10 to 4000
+rem is used as given, and anything else - absent, 0, 5000 - is REPLACED by
+rem 4000, the hardware reset value (1 ms) and what every release before 1.1.1.0
+rem ran at.  Not clamped, so 0 is not moderation off.  An INF install writes
+rem 500.  This file still accepts 0 to 65535, so the fallback can be set on
+rem purpose and read back.
 rem
-rem CLEAR IS NOT "SET IT TO ZERO".  With the value absent the start writes no
-rem IMOD at all, which is the driver exactly as it ships, so the same .sys with
-rem nothing set IS the baseline and no rebuild separates it from the readings.
-rem Zero is a real and different arm of the sweep - moderation OFF - and the
-rem driver tells the two apart by the read's status, not by the value.  Do not
-rem use one where the run sheet says the other.
-rem
-rem IT ONLY DOES ANYTHING IN AN EXPERIMENTAL BUILD.  The value is read behind
-rem XHCI_IMOD_EXPERIMENT, which only XHCI_EXTRA_DEFINES sets:
-rem     set XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT
-rem     scripts\build-driver.cmd release
-rem A shipping binary ignores this value completely and always will - that is
-rem what makes the experiment safe to leave in the tree.  So a value set here
-rem against a shipping .sys reads back as "no effect", correctly, and is not a
-rem fault to chase.
-rem
-rem THE NAME IS 23.3's, AND SO CLEAR THE VALUE WHEN THE SESSION ENDS.  If task
-rem 23.3 ships, it reads this same value under its own contract: default 4000,
-rem 10 to 4000 accepted, 4000 substituted for anything outside that.  A 0 left
-rem behind falls back to 4000, but 10 to 4000 left behind stays in force under
-rem the shipping build.  (Until 2026-09-21 the experiment read
-rem XhciImodExperiment, named apart so a leftover was inert.  That name is no
-rem longer read by anything.)
+rem SO CLEAR IS NOT "PUT THE PACKAGE BACK".  It deletes the value, and the
+rem driver then runs at 4000 - the control arm of a sweep, and NOT what the
+rem package installs.  To go back to the package's own setting, set 500.
+rem Leave a bench machine at 500 when the session ends, or say in the run
+rem sheet that it was not.  (Until 2026-09-21 the experiment read
+rem XhciImodExperiment.  That name is not read by anything.)
 rem
 rem REQUIRES REG.EXE, which is in the base install from Windows XP onwards.
 rem Windows 2000 SP4 carries it only with the Support Tools; on a plain Win2000
@@ -92,28 +79,28 @@ reg add "%DEVKEY%" /v %VALNAME% /t REG_DWORD /d %1 /f >nul
 if errorlevel 1 goto writefail
 echo.
 echo Set %VALNAME% = %1  (250 ns units)
-if "%1"=="0" echo   NOTE: 0 is moderation OFF, not the control arm.  See CLEAR.
+if %1 LSS 10 echo   NOTE: below 10, so the driver will use 4000 instead - not 10.
+if %1 GTR 4000 echo   NOTE: above 4000, so the driver will use 4000.
+if "%1"=="500" echo   500 is what the package's INF installs.
 goto restart
 
 :clear
 reg delete "%DEVKEY%" /v %VALNAME% /f >nul 2>&1
 echo.
-echo Cleared %VALNAME% - the start will write no IMOD at all.
-echo This is the CONTROL arm: the driver exactly as it ships.
+echo Cleared %VALNAME% - the driver will run at its own default, 4000.
+echo That is the CONTROL arm of a sweep, NOT the package's setting: the INF
+echo installs 500.
 goto restart
 
 :show
 echo.
 echo Key: %DEVKEY%
 reg query "%DEVKEY%" /v %VALNAME% 2>nul
-if errorlevel 1 echo   %VALNAME% is not set - the start writes no IMOD (control arm).
+if errorlevel 1 echo   %VALNAME% is not set - the driver runs at 4000.
 echo.
-echo What the driver actually did with it is in XHCISNAP, not here:
-echo   imod.exp.status    0 = the value was read
-echo   imod.exp.value     what was asked for
-echo   imod.exp.refused   1 = too large for IMODI, and NOTHING was written
-echo   imod.exp.written   1 = the start wrote IMOD
-echo   imod.exp.readback  what the register read straight after the write
+echo What the driver actually did with it is in XHCISNAP's .TXT, not here: the
+echo XhciImodInterval250ns lines under "registry values" give the value read,
+echo the interval in force and what the register read straight after the write.
 goto end
 
 :restart
@@ -126,10 +113,13 @@ echo re-enable in Device Manager: on the E460 under 32-bit Windows 7 the FIRST
 echo Disable of this controller never finished (runs/run-22.md, task 22.9), and
 echo a sweep that restarts the controller once per value will meet it.
 echo.
-echo After the reboot, confirm it took before running any workload:
-echo   XHCISNAP -verbosity 2
-echo then check imod.exp.written = 1 and imod.exp.readback = what you asked for.
-echo A figure taken without that check is not attributable to an interval.
+echo If the log channel is off, run XHCISNAP -verbosity 1 before the reboot as
+echo well: it is read once per start too, and without it no dump is answered.
+echo.
+echo After the reboot, confirm it took before running any workload: run XHCISNAP
+echo and read "interval in force" and "register reads" in the .TXT.  A figure
+echo taken without that check is not attributable to an interval.  XHCISNAP
+echo -disable when the session ends.
 goto end
 
 :probe
@@ -189,24 +179,18 @@ goto usage
 echo.
 echo ERROR: %1 is outside 0-65535.
 echo.
-echo        IMODI is bits 15:0 of IMOD (xHCI 1.2c Table 5-39, p.392); bits
-echo        31:16 are IMODC, an interrupt COUNTER and not an interval.  The
-echo        driver refuses a larger value rather than masking it, so a typed
-echo        70000 would leave the register alone rather than quietly writing
-echo        4464 - but there is no reason to make it prove that here.
+echo        IMODI is bits 15:0 of IMOD (xHCI 1.2c Table 5-39, p.392).  The
+echo        driver would use 4000 for any such value anyway - it accepts 10 to
+echo        4000 only - so there is nothing to test above 65535.
 goto usage
 
 :usage
 echo.
 echo Usage:  IMOD SHOW ^| IMOD ^<0-65535^> ^| IMOD CLEAR
 echo.
-echo   Task 23.2's sweep: CLEAR (control), 4000, 2000, 1000, 500, 200, 100, 40, 10
 echo   Units are 250 ns, so 4000 = 1 ms = the hardware reset default.
-echo   CLEAR is the control arm; 0 is moderation off.  They are not the same.
-echo.
-echo   Only an experimental build reads this value:
-echo     set XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT
-echo     scripts\build-driver.cmd release
+echo   The INF installs 500.  CLEAR deletes the value, and the driver then runs
+echo   at 4000.  Outside 10 to 4000 the driver uses 4000 instead, not clamped.
 echo.
 echo   Windows 98 and ME: use IMOD98.BAT instead.
 :end

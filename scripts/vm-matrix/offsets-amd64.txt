@@ -1,4 +1,4 @@
-SIZEOF 95544
+SIZEOF 95560
 AbortsBeforeStopped 76392
 AbortsDuringCompletion 76388
 AbortsFromCompletionList 76384
@@ -151,6 +151,10 @@ HubMarkFailures 76008
 HubMarksLostToAddress 76004
 HubRootPortsFromGraph 75960
 HubSlotsMarked 75996
+ImodInterval 95544
+ImodReadback 95548
+ImodRequested 95540
+ImodStatus 95536
 IncompatibleDeviceTeardowns 76432
 InitStatus 10388
 InitStep 10384

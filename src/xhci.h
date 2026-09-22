@@ -550,16 +550,37 @@ XHCI_C_ASSERT(config_maxslotsen_is_defined,
 #define XHCI_ERSTBA_ADDR_MASK    0xFFFFFFC0UL
 
 /*
- * The widest interval IMODI can carry, for the one caller that has to refuse a
- * value rather than truncate it (task 23.2's experimental build). It is a
- * bound, not a mask, and the difference is the point: masking a value that
- * overflows IMODI writes a *different interval* and hides the mistake, while
- * writing the whole word would set IMODC, which is a counter and not an
- * interval at all. Bits 15:0, in 250 ns units (Table 5-39, p.392), so the
- * widest interval this register expresses is 65535 * 250 ns, about 16.4 ms.
+ * The widest interval IMODI can carry: bits 15:0, in 250 ns units (Table 5-39,
+ * p.392), so 65535 * 250 ns, about 16.4 ms. Bits 31:16 are IMODC, a counter and
+ * not an interval, so a value written whole must fit here or it sets IMODC.
  */
 #define XHCI_IMOD_IMODI_MAX      0x0000FFFFUL
 
+/*
+ * Roadmap task 23.3's moderation interval, `XhciImodInterval250ns` in the
+ * driver's software key, in IMODI's own 250 ns units (the owner's rule,
+ * 2026-09-19, narrowed 2026-09-21).
+ *
+ * The default is the hardware's own reset value, 4000 (1 ms), so a machine
+ * whose value is absent runs exactly as every release before 23.3 did. The
+ * INFs write 500 (125 us) on every install path: 23.2 measured reads at 98% of
+ * their plateau there and 23.3.5 played a Full-Speed audio stream through it
+ * (docs/contributing/runs/run-23.md).
+ *
+ * 10 is the floor so a user can go no lower than 2.5 us; nothing above 4000 is
+ * accepted because a longer interval only adds latency. **Anything outside the
+ * range is replaced by the default, not clamped to the nearer bound**, so a
+ * mistyped 0 cannot turn moderation off - see XhciImodIntervalChoose.
+ */
+#define XHCI_IMOD_INTERVAL_DEFAULT   4000UL
+#define XHCI_IMOD_INTERVAL_MIN       10UL
+#define XHCI_IMOD_INTERVAL_MAX       4000UL
+
+XHCI_C_ASSERT(imod_interval_range_fits_imodi,
+              XHCI_IMOD_INTERVAL_MIN > 0 &&
+              XHCI_IMOD_INTERVAL_MIN <= XHCI_IMOD_INTERVAL_DEFAULT &&
+              XHCI_IMOD_INTERVAL_DEFAULT <= XHCI_IMOD_INTERVAL_MAX &&
+              XHCI_IMOD_INTERVAL_MAX <= XHCI_IMOD_IMODI_MAX);
 XHCI_C_ASSERT(erstsz_masks_partition_the_register,
               (XHCI_ERSTSZ_RSVDP_MASK & XHCI_ERSTSZ_DEFINED_MASK) == 0 &&
               (XHCI_ERSTSZ_RSVDP_MASK | XHCI_ERSTSZ_DEFINED_MASK) ==
@@ -7693,11 +7714,11 @@ typedef struct _XHCI_EXTENSION {
      * IMOD as it read at the save, written back by the restore (4.23.2 p.314
      * lists IMOD among the registers software writes before CRS, and "the
      * Restore operation overwrites internal default values asserted by a xHC
-     * reset"). The start never writes IMOD, so on every path but this one the
-     * interrupter runs at the reset default of 4000 (1 ms), which is what the
-     * isochronous builder's IOC-per-TD policy leans on; the restore used to
-     * write 0 here, so a successful restore silently removed that moderation
-     * (the 2026-09-05 audit's F10). Meaningful only while `SavedStateValid`.
+     * reset"). Since task 23.3 that is the interval the start wrote
+     * (`ImodInterval`), which is what the isochronous builder's IOC-per-TD
+     * policy leans on; the restore used to write 0 here, so a successful
+     * restore silently removed that moderation (the 2026-09-05 audit's F10).
+     * Meaningful only while `SavedStateValid`.
      */
     ULONG SavedImod;
 
@@ -7823,35 +7844,27 @@ typedef struct _XHCI_EXTENSION {
      */
     XHCI_LOG Log;
 
-#ifdef XHCI_IMOD_EXPERIMENT
     /*
-     * Roadmap task 23.2's moderation experiment, and **nothing here is in a
-     * shipping binary**: the whole block is behind a define only
-     * `XHCI_EXTRA_DEFINES` sets, which `src/sources` turns into
-     * `XHCI_DIAGNOSTIC_BUILD`, which is the marker `make-package.ps1` refuses
-     * to package. A build without the define is byte-for-byte the driver that
-     * was there before, IMOD included - the start still never writes it.
+     * Roadmap task 23.3's moderation interval (XHCI_IMOD_INTERVAL_*), in every
+     * build. Read at PASSIVE beside the log's two values, written to IR0's IMOD
+     * at the end of xhciProgramEventRing, carried across a resume by
+     * `SavedImod`.
      *
-     * It sits **after** `Log` and before the trailing pair on purpose, so that
-     * an experimental build perturbs no existing field's offset and
-     * `scripts\local\offsets.txt` taken from a shipping build still reads every
-     * counter out of an experimental one. Six ULONGs, an even number, so the
-     * amd64 parity `TrailingPad` exists to hold is unchanged too.
+     * After `Log` on purpose, where 23.2's experimental fields stood, so no
+     * counter an older offset table names moves. Four ULONGs, an even number,
+     * so the amd64 parity `TrailingPad` holds is unchanged.
      *
-     * What each one is for is the same thing the log switches learned: the
-     * registry service collapses "value absent", "buffer too small" and "key
-     * would not open" into one code, so the value alone cannot say whether
-     * anybody asked for anything. `ImodExperimentStatus` beside
-     * `ImodExperimentValue` is what tells a deliberate 0 - moderation off, the
-     * sweep's far end - from a machine where the value was never set.
+     * `ImodStatus` beside `ImodRequested` is what the log switches learned: the
+     * registry service collapses "absent", "buffer too small" and "key would
+     * not open" into one code, so a 0 alone cannot say whether anybody set it.
+     * `ImodInterval` is what the start chose from the two and wrote, and it is
+     * 0 only if no start has reached the write; `ImodReadback` is the register
+     * straight after, for the record rather than as a gate.
      */
-    ULONG ImodExperimentRead;       /* 1 = the read routine ran at all      */
-    ULONG ImodExperimentStatus;     /* MPSTATUS the registry service gave   */
-    ULONG ImodExperimentValue;      /* IMODI the registry asked for         */
-    ULONG ImodExperimentRefused;    /* asked for what IMODI cannot carry    */
-    ULONG ImodExperimentWritten;    /* 1 = the start wrote IMOD             */
-    ULONG ImodExperimentReadback;   /* IMOD as it read straight after       */
-#endif
+    ULONG ImodStatus;       /* MPSTATUS the registry service gave, or FAILURE */
+    ULONG ImodRequested;    /* the value read; 0 when the read failed         */
+    ULONG ImodInterval;     /* what the start wrote to IMOD                   */
+    ULONG ImodReadback;     /* IMOD as it read straight after the write       */
 
     /*
      * Keeps `TrailingSignature` the **last word** of the amd64 layout, which
@@ -7869,12 +7882,17 @@ typedef struct _XHCI_EXTENSION {
     ULONG TrailingSignature;
 } XHCI_EXTENSION, *PXHCI_EXTENSION;
 
-#ifdef XHCI_IMOD_EXPERIMENT
-/* Task 23.2, experimental builds only. Defined in src/xhci_dispatch.c beside
- * the read that fills the fields it tests; called from the start sequence in
- * src/xhci_init.c, which is the only thing that writes IMOD. */
-ULONG XhciImodExperimentWanted(PXHCI_EXTENSION ext);
-#endif
+/*
+ * Task 23.3: the interval a start writes, from what the registry read gave.
+ * The value itself when the read succeeded and it is within
+ * XHCI_IMOD_INTERVAL_MIN..MAX; XHCI_IMOD_INTERVAL_DEFAULT otherwise - absent,
+ * unreadable, below the floor or above the ceiling - **substituted, not
+ * clamped**. A pure function in src/xhci_init.c so the host suite can pin the
+ * fallbacks and the bounds without a start.
+ *
+ * IRQL: any.
+ */
+ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 
 /*
  * ==================================================================
@@ -8008,8 +8026,13 @@ ULONG XhciImodExperimentWanted(PXHCI_EXTENSION ext);
  * happened before the cut that first published any of this, so no field reading
  * in the wild was invalidated by it. `0.0.0.6` is the release schema 3 goes out
  * in, and from here a bump is a promise to a stranger's dump.
+ *
+ * **Schema 4 is task 23.3's**, and the first bump a published tool meets: four
+ * moderation fields appended after `RingUsed`. An `XHCISNAP` from `0.0.0.6` to
+ * `1.1.0.0` refuses a `1.1.1.0` driver and says to rebuild, which is correct -
+ * the tool ships in the same package as the driver it reads.
  */
-#define XHCI_SNAPSHOT_SCHEMA            3UL
+#define XHCI_SNAPSHOT_SCHEMA            4UL
 
 /* Which region a window is cut from. */
 #define XHCI_SNAPSHOT_REGION_EXTENSION  0UL
@@ -8165,6 +8188,17 @@ typedef struct _XHCI_SNAPSHOT_HEADER {
     ULONG RingBytes;        /* the ring's capacity                          */
     ULONG RingHead;         /* next byte to write; the wrap point           */
     ULONG RingUsed;         /* bytes held, <= RingBytes                     */
+    /*
+     * ---- schema 4 (task 23.3) ---------------------------------
+     *
+     * The moderation interval, so a release build answers "which interval is
+     * this machine running" with no offset table: the four XHCI_EXTENSION
+     * fields of the same names, copied under the lock with the rest.
+     */
+    ULONG ImodStatus;
+    ULONG ImodRequested;
+    ULONG ImodInterval;
+    ULONG ImodReadback;
 } XHCI_SNAPSHOT_HEADER;
 
 /*

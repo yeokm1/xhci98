@@ -294,8 +294,18 @@ static const unsigned long snap_guid[4] = {
  * the whole reason the number exists: a dump decoded against the wrong shape is
  * a WRONG reading, not a failed one - and a shrinking header is exactly as much
  * of a decode hazard as a growing one.
+ *
+ * **Schema 4** is roadmap task 23.3's: the moderation interval's four fields
+ * appended after `RingUsed`. A tool from `1.1.0.0` or earlier refuses a
+ * `1.1.1.0` driver, and this one refuses theirs.
  */
-#define SNAP_SCHEMA                 3UL
+#define SNAP_SCHEMA                 4UL
+
+/* The driver's XHCI_IMOD_INTERVAL_* range, duplicated for the reason the
+ * ladder below is. */
+#define SNAP_IMOD_MIN               10UL
+#define SNAP_IMOD_MAX               4000UL
+#define SNAP_IMOD_DEFAULT           4000UL
 
 #define SNAP_REGION_EXTENSION       0UL
 #define SNAP_REGION_PORTSC          1UL
@@ -388,6 +398,11 @@ typedef struct _SNAP_HEADER {
     unsigned long RingBytes;
     unsigned long RingHead;
     unsigned long RingUsed;
+    /* ---- schema 4 (task 23.3): the moderation interval ---- */
+    unsigned long ImodStatus;
+    unsigned long ImodRequested;
+    unsigned long ImodInterval;
+    unsigned long ImodReadback;
 } SNAP_HEADER;
 
 /*
@@ -888,6 +903,41 @@ static const char *mpstatus_text(unsigned long s)
     return (s == 0) ? "read" : "NOT read";
 }
 
+/*
+ * Roadmap task 23.3's moderation interval: what the registry gave, what the
+ * start wrote, and what the register read straight after. The driver never
+ * clamps - a value outside 10-4000, or none at all, is replaced by 4000 - so
+ * the reason for a default is said in words, because "I set 0 and it runs at
+ * 4000" is the report this line exists to answer before it is filed.
+ */
+static void write_companion_imod(const SNAP_HEADER *h)
+{
+    comp("    XhciImodInterval250ns  %s, value %lu\n",
+         mpstatus_text(h->ImodStatus), h->ImodRequested);
+    if (h->ImodInterval == 0) {
+        comp("        ^ no start has written the interval yet.\n");
+        return;
+    }
+    comp("      interval in force  %lu x 250 ns = %lu.%02lu us; "
+         "register reads %lu\n",
+         h->ImodInterval, h->ImodInterval / 4, (h->ImodInterval % 4) * 25,
+         h->ImodReadback);
+    if (h->ImodStatus != 0) {
+        comp("        ^ not read, so the driver used its default, %lu.\n",
+             SNAP_IMOD_DEFAULT);
+    } else if (h->ImodRequested < SNAP_IMOD_MIN ||
+               h->ImodRequested > SNAP_IMOD_MAX) {
+        comp("        ^ %lu is outside %lu-%lu, so the driver used its "
+             "default, %lu -\n"
+             "          substituted, not clamped.\n",
+             h->ImodRequested, SNAP_IMOD_MIN, SNAP_IMOD_MAX,
+             SNAP_IMOD_DEFAULT);
+    }
+    if (h->ImodReadback != h->ImodInterval) {
+        comp("        ^ the register did NOT read back what was written.\n");
+    }
+}
+
 static void write_companion_header(const SNAP_HEADER *h)
 {
     comp("\nxhci98 snapshot - the part a maintainer can read without an offset "
@@ -949,6 +999,7 @@ static void write_companion_header(const SNAP_HEADER *h)
                  "          the value is absent, or usbport refused the "
                  "read.\n");
         }
+        write_companion_imod(h);
     }
 
     comp("\n  verbosity tier     read %lu, APPLIED %lu\n",
@@ -1283,9 +1334,11 @@ static int probe_route(HANDLE device)
 /*
  * **WHY THE TOOL WRITES THE REGISTRY AT ALL, and why the driver does not.**
  *
- * The driver reads two values at `StartController` - `XhciLogVerbosity` and
+ * The driver reads two log values at `StartController` - `XhciLogVerbosity` and
  * `XhciLogDebugView` - through usbport's
- * `UsbPortGetMiniportRegistryKeyValue`. *(Three until the snapshot-value merge, when
+ * `UsbPortGetMiniportRegistryKeyValue`, and since task 23.3 a third that is not
+ * the log's, `XhciImodInterval250ns`, which this tool reports and never sets.
+ * *(Three log values until the snapshot-value merge, when
  * `XhciLogSnapshot` became rung 0 of the verbosity ladder.)* usbport's sixteen-service table has
  * exactly one registry entry and it is a READ - there is no `Set` counterpart
  * at any offset in any shipping build - so a driver-side write would have to be

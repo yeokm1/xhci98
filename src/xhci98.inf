@@ -227,6 +227,7 @@ HKR,,NTMPDriver,,xhci98.sys
 HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
+HKR,,XhciImodInterval250ns,0x00010001,500
 
 ; ------------------------------------------------------------------
 ; Idle suspend: this INF writes NO registry value for it any more
@@ -342,6 +343,35 @@ HKR,,XhciLogDebugView,0x00010001,0
 ; not asked for a log has no channel open at all.
 
 ; ------------------------------------------------------------------
+; The interrupt moderation interval, on both install paths (task 23.3)
+; ------------------------------------------------------------------
+;
+;   XhciImodInterval250ns  how long the controller holds an interrupt back
+;                          after the last one, in 250 ns units: IR0's IMODI
+;                          (xHCI 1.2c Table 5-39, p.392). The driver writes it
+;                          at every start and a resume carries it.
+;
+; Written as 500 (125 us). The driver's own default, used when the value is
+; absent, unreadable, below 10 or above 4000, is 4000 (1 ms) - the hardware's
+; reset value, and what every release before 1.1.1.0 ran at. An out-of-range
+; value is REPLACED by 4000, not clamped, so a mistyped 0 cannot turn
+; moderation off.
+;
+; Why 500 and not the default: roadmap task 23.2 measured mass-storage reads
+; at 17.6 MB/s at 4000 and 32.5 MB/s at 500, 98% of the 33.1 plateau at 200,
+; on the P14s Gen 1 under Windows 98 SE; task 23.3.5 played a Full-Speed audio
+; stream through a full benchmark pass at 500 with every isochronous error
+; counter at 0 (docs\contributing\runs\run-23.md). A lower value raises the
+; worst-case interrupt rate - 8,000 a second at 500, against 1,000 at 4000 -
+; and per-interrupt cost at real rates is what has bugchecked Windows 98 on
+; bare metal before, so the floor is 10 and not 0.
+;
+; A DWORD like the log values, written in decimal. NUSB's own USBSTOR.INF
+; writes "HKR,,SampleFilterParam,0x00010001,512" the same way; that Windows
+; 98's 16-bit engine stores 500 as 500 is read by the install legs, which see
+; it come back from the register through XHCISNAP.
+
+; ------------------------------------------------------------------
 ; The NT half of the property page: TAKEN 2026-09-20, on every NT target
 ; ------------------------------------------------------------------
 ;
@@ -403,6 +433,7 @@ HKR,,XhciLogDebugView,0x00010001,0
 [Xhci.AddReg.NT]
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
+HKR,,XhciImodInterval250ns,0x00010001,500
 HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
 HKR,,Controller,1,01
 

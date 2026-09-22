@@ -3038,10 +3038,10 @@ static ULONG xhciXferBuildIsoPacket(XHCI_ISO_BUILD_STATE *state,
      * is many TDs and usbport wants a length and a status **per packet** - so
      * every TD has to produce an event, and the cost is one interrupt per
      * interval: 1,000 a second on a Full-Speed audio stream, 8,000 on a
-     * High-Speed one. The interrupter's own moderation (IMOD, left at its 1 ms
-     * reset default by the start and written back to its saved value by the
-     * restore - `xhciRestoreState` is the driver's only IMOD write) is what
-     * absorbs that.
+     * High-Speed one. The interrupter's own moderation (IMOD, written by the
+     * start from `XhciImodInterval250ns` - 4000, 1 ms, unless the registry
+     * says otherwise, 500 as the INFs ship - and written back to its saved
+     * value by the restore) is what absorbs that.
      *
      * BEI suppresses the interrupt while keeping the event, which is exactly
      * what this wants and is **not available**: `docs/usb-xhci-info/xhci-programming.md`

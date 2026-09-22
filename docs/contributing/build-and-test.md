@@ -4934,51 +4934,30 @@ enabled=1`, `devices addressed=1`, `SET_ADDRESS interceptions=1`, speed decode
 == 0x9C`, `commands issued == completed == 6`, every one of the 80+ error and
 failure counters zero).
 
-#### Staging the moderation experiment package (task 23.2)
+#### The moderation experiment package (task 23.2) - retired
 
-The second package that may carry the do-not-deploy marker. It reads
-`XhciImodInterval250ns` from the driver's software key and, when the value is
-present, writes it to interrupter 0's IMOD in the start; absent, it writes
-nothing and is the shipping driver, so one install serves as the control and
-every arm of the sweep. Run on the P14s Gen 1 under Windows 98 SE on
-2026-09-21 and 2026-09-22; `runs/run-23.md` has the procedure and the reading.
+**Retired on 2026-09-22 by the owner, with task 23.3.** Task 23.2 swept the
+interrupter's moderation interval with an experimental build
+(`XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT`) staged through a second narrow
+exception to the do-not-deploy rule, `make-package.ps1
+-ImodExperimentArtifact`: it read `XhciImodInterval250ns` as 0 to 65535 and
+wrote nothing when the value was absent, so one install was the control and
+every arm. It ran on the P14s Gen 1 under Windows 98 SE on 2026-09-21 and
+2026-09-22; `runs/run-23.md`, 23.2 and 23.3.5, has the procedure and the
+reading, and its build numbers (an extension of 92,328 bytes against the
+shipping 92,304) belong to that build alone.
 
-```
-set XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT
-scripts\build-driver.cmd release
-powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor release -Arch x86 -ImodExperimentArtifact
-xhcisnap\build.cmd
-set "XHCI_EXTRA_DEFINES="
-scripts\build-driver.cmd both
-```
-
-The package lands in `out\pkg-imod-release-x86\`. Carry it with
-`XHCISNAP.EXE` and `scripts\bench\IMOD98.BAT` and `SWEEP98.BAT`. Install it
-once through Device Manager, after NUSB 3.3 on a clean Windows 98 SE, and from
-then on change only the registry value and reboot: under NUSB, disabling,
-removing or upgrading the driver blue-screens the machine.
-
-**The experimental binary is the same size whichever value name it reads.**
-The builds before and after the 2026-09-21 rename are both 86,187 bytes, and
-the name is stored UTF-16, so `FIND` on the target cannot see it either. Tell
-them apart by hash on the host and by the file date on the target.
-
-**Reading a sweep's dumps needs an offsets table of its own.** The interrupt
-and DPC counts and `ImodExperimentWritten` / `ImodExperimentReadback` are
-counter-block fields; with `XHCISNAP` alone they never reach the note ring, so
-they are read out of each dump's `.BIN`. The experiment adds six `ULONG`s to
-`XHCI_EXTENSION` (92,328 bytes against the shipping 92,304), and
-`readsnap.py` refuses a table whose `SIZEOF` differs, so a table regenerated
-from a shipping tree cannot decode these dumps. Build one from
-`scripts\local\offsets.c` with `/DXHCI_IMOD_EXPERIMENT` on the `cl` line and
-the six `P(ImodExperiment...)` rows under the same `#ifdef`, into a separate
-file, and pass it with `--offsets`. `regen-offsets.cmd` takes no defines and
-must not be pointed at this.
-
-Clear the value when a session ends (`IMOD98 CLEAR NNNN`, then `XHCISNAP
--disable`). It is the name a 23.3 build reads, so anything from 10 to 4000
-left behind stays in force under a shipping driver.
-
+Since `1.1.1.0` **every build reads the value** (roadmap task 23.3), so the
+define, the packaging switch and its three build-time refusals are gone, and
+a sweep uses an ordinary package: install it once, then change only the value
+and reboot (`scripts\bench\IMOD98.BAT` or `IMOD.BAT`). The contract is the
+shipping one - 10 to 4000 used as given, anything else replaced by 4000 - so a
+sweep can no longer reach 0. The interval the driver chose, and what the
+register read back, are in every `XHCISNAP` `.TXT` under "registry values"
+(snapshot schema 4), and the interrupt and DPC counts still come out of the
+`.BIN` against an offsets table from the same tree. The INF writes 500, so a
+bench machine goes back to the package's own setting with `IMOD98 500 NNNN`,
+not with `CLEAR`, which leaves the driver at 4000.
 ### Manual Installation on Windows 2000 SP4 (Development)
 
 1. Copy `xhci98.inf` and `xhci98.sys` together into a working directory (the

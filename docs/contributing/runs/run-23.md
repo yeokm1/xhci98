@@ -1810,3 +1810,85 @@ load is as plausible as this driver's ring refill. It is recorded here as a
 finding for later and does not block 23.3.
 
 Owed: the same pass on the 23.3 build, which is the gate proper.
+
+## 23.3 - the registry value
+
+Status as of 2026-09-22: **written on branch `23.3` and green on the host;
+the guest readings the checkpoint names are owed**, so the roadmap box stays
+open.
+
+### What landed
+
+- **Every build reads `XhciImodInterval250ns`** beside the two log values,
+  through the same `UsbPortGetMiniportRegistryKeyValue` service and key, with
+  no new import (13 allowlist pairs on every flavour, as before). The read
+  only records what the registry said (`ImodStatus`, `ImodRequested`); the
+  choice is `XhciImodIntervalChoose`'s, a pure function in `src/xhci_init.c`:
+  10 to 4000 as given, anything else - a failed read, 0, 9, 4001, 70000 -
+  replaced by 4000. Because the chooser also sees a zeroed extension as
+  "nothing read", a start that somehow skipped the read still writes 4000.
+- **Every start writes IMOD**, the default included, at the end of
+  `xhciProgramEventRing` after ERSTBA and before R/S, and reads it back
+  (`ImodInterval`, `ImodReadback`). A recovery's reinitialisation passes
+  through the same function after HCRST, so it rewrites the interval. The
+  restore path is unchanged and now carries a nonzero interval across a
+  resume.
+- **The four fields sit after `Log`**, where 23.2's six experimental fields
+  stood, so no existing counter moved: `SIZEOF` 92,304 to 92,320 on x86, and
+  the trailing pair shifted by 16. `scripts/vm-matrix/offsets*.txt` were
+  regenerated and have the four new rows, through new
+  `XHCI_DBG_VALUE_CHANGED` sites.
+- **The snapshot header carries them, schema 3 to 4**, 88 to 104 bytes.
+  `XHCISNAP` prints them under "registry values": the value and whether it
+  was read, the interval in force in 250 ns units and microseconds, what the
+  register read back, and in words why a default was used. The counter block
+  carries `imod.interval` and `imod.readback`, and the start notes
+  `imod.status`, `imod.requested`, `imod.interval` and `imod.readback`.
+- **Both INFs write 500** on all install paths (`[Xhci.AddReg]` and
+  `[Xhci.AddReg.NT]`, which the NT 5.x and NT 6.x paths of both files share).
+  The INF gate's `VAL-*` table has a third row with its own reason for the
+  default, since "must ship off" is false of this one, and both footprints
+  learned the rows (three x86, two amd64).
+- **23.2's experimental build is retired**, by the owner's decision at the
+  start of this task: the define, its marker, `make-package.ps1
+  -ImodExperimentArtifact` and the refusals in `src/sources`,
+  `build-driver.cmd` and `xhci_dispatch.c` are gone, the two packaging
+  scripts restored to their state before `e2aa325`. `IMOD.BAT`, `IMOD98.BAT`,
+  `SWEEP98.BAT` and `scripts/bench/README.md` describe the shipping contract;
+  `IMOD98.BAT` lost its 0 step, which the driver now refuses.
+
+### Host readings
+
+- The host suite: two new vectors. `test_imod_choose` pins the three
+  fallbacks and both bounds (11 checks); `test_imod_start` drives six values
+  through the registered start and checks status, value, interval, register
+  and read-back for each, the re-read at a second start, and a packet with no
+  registry service. The conforming save/restore vector now starts at 500 and
+  resets the register to 4000 between suspend and resume, so the value the
+  restore writes back can be neither the model's 0 nor the reset value by
+  coincidence. `test_init` 16,782 checks, every binary 0 failures.
+- **A clamping mutant fails five checks**, all below the floor (0 and 9 come
+  back as 10). Above the ceiling a clamp and a substitution give the same
+  4000, because the default is the maximum, so no vector can tell them apart
+  there and none claims to.
+- The INF gate's self-tests: seven new cases (`imod-no-9x`, `imod-no-nt`,
+  `imod-default-is-fallback`, `imod-default-hex-9x`, `imod-type`,
+  `amd64-imod-missing`, `amd64-imod-default`), 565 checks passed.
+- `build-driver.cmd all`: every flavour built, every gate green, the packager
+  self-tests 307 checks with the experiment's cases gone. `release` x86 links
+  at 86,059 bytes.
+
+### What 23.3 still owes
+
+- **The checkpoint's 23.3 clause, read in guests**: on a Windows 98 SE and a
+  Windows 2000 SP4 guest, an INF install reading 500 back from the register,
+  and the value deleted, 0, 5000 and 4000 each reading 4000, with the start
+  never failed. QEMU stores IMOD and returns it (`hw/usb/hcd-xhci.c`, 23.2),
+  so the register value is observable there even though no rate is. This is
+  also the first reading of Windows 98's 16-bit engine storing a nonzero
+  decimal DWORD from this INF.
+- **One suspend/resume with 500 in force** - the first exercise of
+  `xhciRestoreState`'s IMOD write with anything but 0 or 4000 outside the
+  host model.
+- **23.3.5's gate proper**, the audio pass at 500 on bare-metal Windows 98,
+  now read on the cut's own `release` binary (roadmap 23.7).

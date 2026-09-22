@@ -69,8 +69,10 @@ What it checks, grouped by the failure each rule prevents:
            be written by BOTH install paths, as the right type, with the right
            default - a value present on one path only is invisible on the other
            target and neither engine reports it (roadmap tasks 11-V.7, 11-V.9
-           and 13-L.2). There are two of them and both are DWORDs - three until
-           at the snapshot-value merge, when XhciLogSnapshot joined the ladder.
+           and 13-L.2). There are three and all are DWORDs: the two log
+           switches, which ship at 0 (three until the snapshot-value merge,
+           when XhciLogSnapshot joined the ladder), and since roadmap task 23.3
+           XhciImodInterval250ns, the moderation interval, which ships at 500.
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -978,6 +980,14 @@ foreach ($m in $models) {
 # inside depth, so `XhciLogVerbosity = 0` is now the shut door. The rule this
 # family enforces is untouched by that - both survivors are still written on
 # both install paths and still checked for their default here.
+#
+# **Roadmap task 23.3 added a third, and the first whose default is not 0.**
+# `XhciImodInterval250ns` is not a switch: it is the interval the driver writes
+# to IMOD, and the INF ships 500 where the driver's own fallback is 4000. The
+# risk is the same shape, a path that lacks it silently running another
+# interval, and so is the default check - the number is an owner's decision on
+# bare-metal readings, and `DefaultWhy` says so where "must ship off" would be
+# false.
 
 $requiredValues = @(
     @{
@@ -991,6 +1001,13 @@ $requiredValues = @(
         Type    = "0x00010001"
         Default = "0"
         Why     = "task 11-V.9's DebugView sink, read from the same key, and an EMISSION switch only since task 13-L.2. It hands the ring over from the PASSIVE flush - never live mirroring, which is what bugchecks Windows 98 on metal"
+    },
+    @{
+        Name    = "XhciImodInterval250ns"
+        Type    = "0x00010001"
+        Default = "500"
+        Why     = "task 23.3's interrupt moderation interval, in 250 ns units, written to IR0's IMOD at every start. Absent, the driver runs at its own default of 4000 (1 ms), so a path missing it runs a different interval from the other paths and nothing says so"
+        DefaultWhy = "The owner set the shipped interval to 500 on 2026-09-22 from roadmap tasks 23.2 and 23.3.5's bare-metal readings; any other number is a new decision and needs a new reading, not an INF edit"
     }
 )
 
@@ -1050,7 +1067,8 @@ foreach ($m in $models) {
                 Add-Failure "VAL-TYPE" ("[{0}] line {1} writes '{2}' with flags '{3}', not {4} (FLG_ADDREG_TYPE_DWORD). The miniport asks usbport for four bytes; a string would be handed over as its characters." -f $hit.Section, $hit.Line, $req.Name, $hit.Flags, $req.Type)
             }
             if ($hit.Data -ne $req.Default) {
-                Add-Failure "VAL-DEFAULT" ("[{0}] line {1} defaults '{2}' to '{3}', not '{4}'. {5} must ship off." -f $hit.Section, $hit.Line, $req.Name, $hit.Data, $req.Default, $req.Name)
+                $defaultWhy = if ($req.ContainsKey("DefaultWhy")) { $req.DefaultWhy } else { "{0} must ship off" -f $req.Name }
+                Add-Failure "VAL-DEFAULT" ("[{0}] line {1} defaults '{2}' to '{3}', not '{4}'. {5}." -f $hit.Section, $hit.Line, $req.Name, $hit.Data, $req.Default, $defaultWhy)
             }
             #
             # **VAL-SZ stood here and was removed with

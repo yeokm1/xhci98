@@ -15,7 +15,7 @@ ASCII.
 
 | File | Target | What it does |
 |---|---|---|
-| `IMOD.BAT` | Windows 2000 and later (needs `reg.exe`, so XP and later in practice) | Sets, shows or clears `XhciImodInterval250ns`, the interrupt-moderation interval roadmap task 23.2 sweeps |
+| `IMOD.BAT` | Windows 2000 and later (needs `reg.exe`, so XP and later in practice) | Sets, shows or clears `XhciImodInterval250ns`, the interrupt-moderation interval the driver reads at every start (roadmap task 23.3; task 23.2 swept it) |
 | `IMOD98.BAT` | Windows 98 SE and Windows ME | The same, through `regedit /s` and a generated `REGEDIT4` file |
 | `SWEEP98.BAT` | Windows 98 SE and Windows ME | One boot of the sweep: a timed `XHCISNAP` dump before a benchmark run (`SWEEP98 ARM A`) and one after (`SWEEP98 ARM B`) |
 
@@ -48,21 +48,19 @@ cosmetic.
 
 ### What they need, and what they do not do
 
-`IMOD.BAT` and `IMOD98.BAT` only mean anything to an **experimental build**,
-one built with `XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT`. A shipping binary
-does not read the value and never will: the read and the IMOD write are both
-behind that define. A value set against a shipping `.sys` correctly does
-nothing.
+Since `1.1.1.0` **every build reads the value** at every start and writes the
+result to IR0's IMOD (roadmap task 23.3). The contract is the driver's: 10 to
+4000 is used as given, and anything else - absent, 0, 5000 - is replaced by
+4000, the hardware reset value, not clamped. An INF install writes 500. So
+`CLEAR` is the control arm of a sweep and **not** what the package installs;
+set 500 to put a machine back, and leave a bench machine at 500 when a session
+ends or say in the run sheet that it was not.
 
-That build is packaged with `make-package.ps1 -ImodExperimentArtifact`, the
-second of the packager's two narrow exceptions to the do-not-deploy rule. It
-needs to be installable because the machine it runs on is a clean Windows 98 SE
-install with no driver on it, so there is nothing for a binary swap to replace.
-The exception admits only an image carrying
-`XHCI98_IMOD_EXPERIMENT_ARTIFACT_TASK_23_2` **and** the do-not-deploy marker;
-it cannot stage task 12.3's artifact and `-FailStartArtifact` cannot stage this
-one. `make-release.ps1` still refuses the binary, so it can be installed at a
-bench and never published.
+*(Task 23.2 used an experimental build, `XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT`,
+packaged through a `make-package.ps1 -ImodExperimentArtifact` exception. It
+took 0 to 65535 and wrote nothing when the value was absent. The owner retired
+both on 2026-09-22 when 23.3 folded the read into every build; the shipping
+range still reaches down to 10.)*
 
 Neither file restarts the controller, and neither pretends to. The value is
 read once per start, so nothing is in force until the machine is restarted -
@@ -72,9 +70,12 @@ any USB host controller devnode bugchecks the machine before the teardown
 completes (`build-and-test.md`). On the E460 under 32-bit Windows 7 the first
 Disable of this controller never finished (`runs/run-22.md`, task 22.9).
 
-Confirm what the driver actually did with `XHCISNAP -verbosity 2` rather than
-with either script's own output: `imod.exp.written` and `imod.exp.readback` are
-what make a throughput figure attributable to an interval.
+Confirm what the driver actually did with an `XHCISNAP` dump rather than with
+either script's own output: the `XhciImodInterval250ns` lines of its `.TXT`
+give the value read, the interval in force and what the register read back,
+and those are what make a throughput figure attributable to an interval. The
+channel has to be engaged (`XHCISNAP -verbosity 1` or higher) at the start the
+dump is taken in, so set it before the same reboot.
 
-The procedure these serve is `docs/contributing/runs/run-23.md`, "23.2 - the
-moderation experiment".
+The procedures these serve are `docs/contributing/runs/run-23.md`, "23.2 - the
+moderation experiment" and 23.3.5, the audio test.

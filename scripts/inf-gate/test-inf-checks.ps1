@@ -515,6 +515,37 @@ try {
                              "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,1")
     }
 
+    # Roadmap task 23.3's moderation interval: one path at a time, for the
+    # asymmetry reason above, anchored on the log value that precedes it on
+    # each path - DebugView then EnumPropPages on 9x, then EnumPropPages32 on
+    # NT - so neither case can drift onto the other path.
+    Write-Step "the moderation interval, on both paths"
+    Assert-RuleFires "imod-no-9x" "VAL-MISSING" {
+        param($t) $t.Replace("HKR,,XhciLogDebugView,0x00010001,0`r`nHKR,,XhciImodInterval250ns,0x00010001,500`r`n`r`n",
+                             "HKR,,XhciLogDebugView,0x00010001,0`r`n`r`n")
+    }
+    Assert-RuleFires "imod-no-nt" "VAL-MISSING" {
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,EnumPropPages32",
+                             "HKR,,EnumPropPages32")
+    }
+    # **The default is the driver's fallback, not the shipped value**, and
+    # this is the edit that looks harmless: 4000 is what every release before
+    # 1.1.1.0 ran at, and it is a VAL-DEFAULT because the owner's number is 500.
+    Assert-RuleFires "imod-default-is-fallback" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,EnumPropPages32",
+                             "HKR,,XhciImodInterval250ns,0x00010001,4000`r`nHKR,,EnumPropPages32")
+    }
+    # Hex spells the same number and is still refused: the gate compares text,
+    # and one spelling on every path is what the install legs have read.
+    Assert-RuleFires "imod-default-hex-9x" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`n`r`n",
+                             "HKR,,XhciImodInterval250ns,0x00010001,0x000001f4`r`n`r`n")
+    }
+    Assert-RuleFires "imod-type" "VAL-TYPE" {
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,EnumPropPages32",
+                             "HKR,,XhciImodInterval250ns,,500`r`nHKR,,EnumPropPages32")
+    }
+
     # ---- PROP-* : the controller's own property page ---------------
     #
     # Roadmap task 23.1. Every one of these is a literal .Replace() over the
@@ -1568,6 +1599,12 @@ try {
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-logverbosity-default" "VAL-DEFAULT" {
         param($t) $t.Replace("HKR,,XhciLogVerbosity,0x00010001,0", "HKR,,XhciLogVerbosity,0x00010001,1")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-imod-missing" "VAL-MISSING" {
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`n", "")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-imod-default" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500", "HKR,,XhciImodInterval250ns,0x00010001,4000")
     } -Source $prodInfAmd64 -Arch amd64
     #
     # **The version tie reaches the 64-bit file too**, and proving that needs

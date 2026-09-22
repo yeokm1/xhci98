@@ -59,7 +59,8 @@ things a reader should know before decoding a dump:
   user boundary. The derivation and the posture are design record 08 §13.2's
   amendment; the door itself is `docs/usb-xhci-info/usbport-miniport-abi.md`,
   "Reachability from user mode".
-- The wire format is at schema 3, with a 22-ULONG, 88-byte header, and
+- The wire format is at schema 4 since `1.1.1.0` (roadmap task 23.3 appended
+  the moderation interval's four fields), with a 26-ULONG, 104-byte header, and
   `sizeof(XHCI_EXTENSION)` is the `SIZEOF` line of the `offsets.txt`
   regenerated from the tree (over 90,000 bytes). A dump decodes only against
   an `offsets.txt` regenerated from the same tree (section 7).
@@ -123,17 +124,20 @@ whatever set you build, which is the check section 11 ends on.
 
 ## 4. The wire format
 
-`src/xhci.h` is the wire format's owner. It carries schema 3, an 88-byte,
-22-ULONG header, and the field-by-field reasons for each field. Read it, not
-this, before writing a decoder.
+`src/xhci.h` is the wire format's owner. It carries schema 4, a 104-byte,
+26-ULONG header, and the field-by-field reasons for each field. Read it, not
+this, before writing a decoder. Schema 3 (88 bytes, 22 ULONGs) was the format
+from `0.0.0.6` to `1.1.0.0`; schema 4 appends four fields and changes none, and
+a tool of either schema refuses a driver of the other.
 
 The header names the signature, schema and header size; the status bits; the
 region, offset, region size and payload size of the window;
 `ExtensionBytes`, the layout key (section 7); the port count; the tear
 detector (section 6); the build flags; and a block a reader can print with no
 offset table at all: `Flavour`, `VerbosityRead`/`VerbosityApplied`, each
-switch's `MPSTATUS`, `SwitchRead`, and the note ring's offset, capacity, head
-and fill.
+switch's `MPSTATUS`, `SwitchRead`, the note ring's offset, capacity, head
+and fill, and since schema 4 the moderation interval: the value's read status,
+the value read, the interval the start wrote, and what IMOD read back.
 
 That last block is what
 the plain-text companion is built out of. It is not the gather table design

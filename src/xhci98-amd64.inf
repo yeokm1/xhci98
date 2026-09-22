@@ -230,6 +230,10 @@ LoadOrderGroup=Base
 ; default to 0: the safe configuration is the default and the convenience is
 ; the thing asked for by name. src\xhci98.inf carries the full description of
 ; what each rung does and why the door ships shut.
+; The moderation interval, XhciImodInterval250ns, is written as 500 (125 us)
+; like the 32-bit file's: the driver's own default when it is absent or outside
+; 10-4000 is 4000, substituted rather than clamped (task 23.3). src\xhci98.inf
+; carries why 500, and the measurements behind it.
 ; The controller's property page, the NT half, added with the 32-bit file's in
 ; roadmap task 23.1.5 (2026-09-20) because the gate refuses the two files
 ; drifting apart on it. The pair is what all three NT references write for
@@ -253,6 +257,7 @@ LoadOrderGroup=Base
 [Xhci.AddReg.NT]
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
+HKR,,XhciImodInterval250ns,0x00010001,500
 HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
 HKR,,Controller,1,01
 

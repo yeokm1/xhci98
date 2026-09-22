@@ -1,10 +1,11 @@
 # xhci98 - Release Notes
 
 This file describes package version `1.1.0.0`
-(`DriverVer=09/18/2026,1.1.0.0`), the fifth release. One section below, "Not
-in this release: the controller's Advanced tab", describes something the
-release *after* this one adds, and says so in its heading; everything else
-here is `1.1.0.0`. Where this file and
+(`DriverVer=09/18/2026,1.1.0.0`), the fifth release. Two sections below, "Not
+in this release: the controller's Advanced tab" and "Not in this release: the
+interrupt moderation setting", describe things the release *after* this one
+adds, and say so in their headings; everything else here is `1.1.0.0`. Where
+this file and
 `docs/contributing/roadmap.md`, `docs/contributing/build-and-test.md` or
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
@@ -186,6 +187,38 @@ Windows 2000 SP4, Windows XP SP3, Windows XP x64 SP2, Windows Vista SP2 and
 Windows 7 in both architectures. On the two 64-bit NT 6.x systems the tab is
 there like anywhere else, but so is the requirement above it: they load this
 driver at all only on a boot with driver signature enforcement disabled.
+
+## Not in this release: the interrupt moderation setting
+
+The release **after** `1.1.0.0` adds a setting for how long the controller
+holds an interrupt back after the last one - the xHCI **interrupt moderation
+interval** - and ships it shorter than before, which makes USB mass storage
+faster. `1.1.0.0` has no such setting and always runs at the controller's own
+reset value, 1 ms.
+
+It is a `DWORD` value, `XhciImodInterval250ns`, in the controller's driver
+(software) key, beside the log values under "The log, and how to send one".
+It is counted in **units of 250 ns**, so `4000` is 1 ms and `500` is 0.125 ms.
+
+- **The package's INF sets it to `500`.** Measured on one laptop (a ThinkPad
+  P14s Gen 1) under Windows 98 SE, large reads from a USB 3 stick went from
+  17.6 MB/s at `4000` to 32.5 MB/s at `500`, and a Full-Speed USB audio device
+  played through the same benchmark with no error the driver could count.
+- **Accepted values are `10` to `4000`.** Anything else - the value missing,
+  `0`, `5000` - makes the driver use `4000`, the old behaviour. It is replaced,
+  not rounded to the nearest limit, so `0` does not turn moderation off.
+- **A lower value means more interrupts.** At `500` the controller can raise
+  up to 8,000 a second; at `4000`, 1,000. Below `500` the measurement above
+  gained little: 33.1 MB/s at `200`.
+- The driver reads it when it starts, so a change takes effect after a
+  restart. `XHCISNAP`'s report shows the value read, the interval in force and
+  what the controller took, under "registry values".
+
+**On Windows 98 with NUSB, upgrading into that release does not set it**, for
+the same reason it does not give you the Advanced tab above: the step that
+writes the INF's settings is lost. The driver then runs at `4000`, exactly as
+`1.1.0.0` does, until the value is set by hand or the rename-and-restart route
+under "Known limitations" is taken.
 
 ## Requirements
 

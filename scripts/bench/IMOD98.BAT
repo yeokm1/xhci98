@@ -1,22 +1,23 @@
 @echo off
-rem IMOD98.BAT - the WINDOWS 98 SE / WINDOWS ME variant of IMOD.BAT (roadmap
-rem task 23.2's moderation sweep).  Sets the interval the EXPERIMENTAL build
-rem reads.  Run it on the bench machine, not on the build host.
+rem IMOD98.BAT - the WINDOWS 98 SE / WINDOWS ME variant of IMOD.BAT.  Sets
+rem XhciImodInterval250ns, the interrupt moderation interval the driver reads
+rem at every start (roadmap task 23.3; task 23.2 swept it).  Run it on the
+rem bench machine, not on the build host.
 rem
 rem   IMOD98 FIND                   find the instance number, and print it
 rem   IMOD98 step NNNN              set the value under that instance
-rem   IMOD98 CLEAR NNNN             delete the value - the CONTROL arm
+rem   IMOD98 CLEAR NNNN             delete the value - the driver's 4000
 rem   IMOD98 HEX xxxxxxxx NNNN      set any value, as eight hex digits
 rem
 rem   step is one of the ladder steps, by its DECIMAL name:
-rem       0   10   40   100   200   500   1000   2000   4000
+rem       10   40   100   200   500   1000   2000   4000
 rem   NNNN is the instance under ...\Services\Class\USB.  Run FIND to get it.
 rem
 rem WHY THE STEPS ARE A FIXED LIST AND NOT ANY NUMBER.  Windows 98's shell is
 rem COMMAND.COM, which has no reg.exe, no `for /f` and no `set /a`, so the only
 rem route to the registry is to write a REGEDIT4 file and import it - and a
 rem REGEDIT4 dword is written in HEX.  Nothing here can convert 4000 into 0fa0.
-rem The ladder task 23.2 actually sweeps is nine values, so they are tabulated
+rem The ladder task 23.2 swept is eight values here, so they are tabulated
 rem below, and HEX takes the digits as their own argument because COMMAND.COM
 rem has no substring syntax either and so cannot strip a prefix off one.
 rem
@@ -55,32 +56,30 @@ rem   reasoned wrong: cmd.exe treats a digit before the redirection as a handle
 rem   only when the digit is its own token, so a value ending in 0 appended
 rem   straight to a file comes through intact, while the same 0 standing
 rem   alone redirects stdin and writes an empty file.  All nine of the values
-rem   this file writes come through intact.  The writes are safe on both
-rem   shells; only the reasons above make this file 9x-only.)*
+rem   this file wrote then, 0 included, came through intact.  The writes are
+rem   safe on both shells; only the reasons above make this file 9x-only.)*
 rem
 rem This is the same reason LOAD98.BAT exists beside LOAD.BAT rather than one
 rem file serving both targets: see its header.
 rem
-rem CLEAR IS NOT "SET IT TO ZERO".  With the value absent the start writes no
-rem IMOD at all, which is the driver exactly as it ships, so the same .sys with
-rem nothing set IS the baseline and no rebuild separates it from the readings.
-rem Zero is a real and different arm - moderation OFF - and the driver tells
-rem them apart by the read's status, not by the value.  Do not use one where
-rem the run sheet says the other.
+rem THE CONTRACT IS THE DRIVER'S, NOT THIS FILE'S.  Since 1.1.1.0 every build
+rem reads this value at every start and writes the result to IMOD: 10 to 4000
+rem is used as given, and anything else - absent, 0, 5000 - is REPLACED by
+rem 4000, the hardware reset value and what every release before 1.1.1.0 ran
+rem at.  Not clamped, so 0 is not moderation off and 5000 is not 4000 by
+rem rounding.  An INF install writes 500.
 rem
-rem IT ONLY DOES ANYTHING IN AN EXPERIMENTAL BUILD, one built with
-rem XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT.  A shipping binary ignores this
-rem value completely and always will - that is what makes the experiment safe
-rem to leave in the tree.  So a value set here against a shipping .sys reads
-rem back as "no effect", correctly, and is not a fault to chase.
+rem SO CLEAR IS NOT "PUT THE PACKAGE BACK".  It deletes the value, and the
+rem driver then runs at 4000 - the control arm of a sweep, and NOT what the
+rem package installs.  To go back to the package's own setting, set 500.
+rem Leave a bench machine at 500 when the session ends, or say in the run
+rem sheet that it was not.
 rem
-rem THE NAME IS 23.3's, AND SO CLEAR THE VALUE WHEN THE SESSION ENDS.  If task
-rem 23.3 ships, it reads this same value under its own contract: default 4000,
-rem 10 to 4000 accepted, 4000 substituted for anything outside that.  A 0 left
-rem behind falls back to 4000, but 10 to 4000 left behind stays in force under
-rem the shipping build.  (Until 2026-09-21 the experiment read
-rem XhciImodExperiment, named apart so a leftover was inert.  That name is no
-rem longer read by anything.)
+rem 0 IS NOT ON THE LADDER ANY MORE.  Task 23.2's experimental build took 0 as
+rem moderation off; the shipping driver refuses it and runs at 4000.  To check
+rem that fallback, write it with HEX 00000000 and read 4000 back.  (Until
+rem 2026-09-21 the experiment read XhciImodExperiment.  That name is not read
+rem by anything.)
 rem
 rem THE INSTANCE NUMBER IS NOT FIXED by anything on this target - it was 0002
 rem on the 2a machine (runs/run-11v.md) - and COMMAND.COM cannot search for it,
@@ -116,7 +115,6 @@ if "%1"=="Clear" goto clear
 if "%2"=="" goto usage
 
 set IMODHEX=
-if "%1"=="0" set IMODHEX=00000000
 if "%1"=="10" set IMODHEX=0000000a
 if "%1"=="40" set IMODHEX=00000028
 if "%1"=="100" set IMODHEX=00000064
@@ -136,7 +134,7 @@ regedit /s C:\IMODSET.REG
 echo.
 echo Set XhciImodInterval250ns = %1  (250 ns units, written as dword:%IMODHEX%)
 echo   under ...\Services\Class\USB\%2
-if "%1"=="0" echo   NOTE: 0 is moderation OFF, not the control arm.  See CLEAR.
+if "%1"=="500" echo   500 is what the package's INF installs.
 goto restart
 
 :hex
@@ -153,11 +151,10 @@ echo.
 echo Set XhciImodInterval250ns = dword:%IMODHEX%
 echo   under ...\Services\Class\USB\%3
 echo.
-echo NOT CHECKED HERE: that those are eight hex digits, and that the value fits
-echo IMODI.  regedit takes a short or malformed dword quietly, so read the
-echo value back in XHCISNAP rather than trusting this line.  A value above
-echo ffff is REFUSED by the driver, not masked - imod.exp.refused goes to 1
-echo and nothing at all is written to the register.
+echo NOT CHECKED HERE: that those are eight hex digits.  regedit takes a short
+echo or malformed dword quietly, so read the value back in XHCISNAP rather
+echo than trusting this line.  Anything outside 10 to 4000 (0000000a to
+echo 00000fa0) is REPLACED by the driver with 4000, not clamped.
 goto restart
 
 :clear
@@ -170,22 +167,25 @@ echo.>>C:\IMODSET.REG
 regedit /s C:\IMODSET.REG
 echo.
 echo Cleared XhciImodInterval250ns under ...\Services\Class\USB\%2
-echo The start will write no IMOD at all - the driver exactly as it ships.
-echo This is the CONTROL arm of the sweep.
+echo The driver will run at its own default, 4000 - the CONTROL arm of a
+echo sweep.  That is NOT the package's setting: the INF installs 500.
 goto restart
 
 :restart
 echo.
 echo NOT IN FORCE YET.  The value is read once per start.
 echo.
+echo If the log channel is off, run XHCISNAP -verbosity 1 now as well: it is
+echo read once per start too, and without it the driver answers no dump.
+echo.
 echo REBOOT.  Do NOT disable the controller in Device Manager to restart it -
 echo on this target that bugchecks the machine before the teardown completes.
 echo.
-echo After the reboot, confirm it took before running any workload:
-echo   XHCISNAP -verbosity 2
-echo then check imod.exp.written = 1 and imod.exp.readback = what you asked
+echo After the reboot, confirm it took before running any workload: run
+echo XHCISNAP and read the XhciImodInterval250ns lines in the .TXT.
+echo "interval in force" and "register reads" should both be what you asked
 echo for.  A figure taken without that check is not attributable to an
-echo interval.
+echo interval.  XHCISNAP -disable when the session ends.
 goto end
 
 :find
@@ -207,7 +207,7 @@ echo.
 echo     edit C:\USBCLASS.REG
 echo.
 echo Then use that NNNN in every later call, for example:
-echo     IMOD98 4000 0002
+echo     IMOD98 500 0002
 echo.
 echo The number is not fixed by anything - it was 0002 on the 2a machine - so
 echo read it once per machine rather than assuming it.
@@ -233,17 +233,13 @@ echo         IMOD98 step NNNN
 echo         IMOD98 CLEAR NNNN
 echo         IMOD98 HEX xxxxxxxx NNNN
 echo.
-echo   step: 0  10  40  100  200  500  1000  2000  4000
+echo   step: 10  40  100  200  500  1000  2000  4000
 echo   NNNN: the instance under ...\Services\Class\USB.  Run FIND once per
 echo         machine to get it - it is not fixed.
 echo.
 echo   Units are 250 ns, so 4000 = 1 ms = the hardware reset default.
-echo   Task 23.2's sweep: CLEAR, 4000, 2000, 1000, 500, 200, 100, 40, 10,
-echo   taking CLEAR first and again last.
-echo   CLEAR is the control arm; 0 is moderation off.  Not the same thing.
-echo.
-echo   Only an experimental build reads this value - one built with
-echo   XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT.
+echo   The INF installs 500.  CLEAR deletes the value, and the driver then
+echo   runs at 4000.  Outside 10 to 4000 the driver uses 4000 instead.
 echo.
 echo   Windows 2000 and later: use IMOD.BAT instead.
 :end
