@@ -504,72 +504,54 @@ Records: `runs/run-22.md` (22.12's readings go there too);
 05, 07 and 08; `build-and-test.md`; `lessons.md`; `releases/history.md`;
 `runs/run-22-post-release/` (written by 22.9).
 
-## Phase 23 - Release `1.1.1.0`: GitHub Issue 4's Property Page, and Interrupt Moderation
+## Phase 23 - Controller Property Page and Interrupt Moderation
 
-Goal: GitHub issue 4's item 5, the controller's property page, fixed and read
-on both primary targets; one measurement of the owner's, whether an interrupt
-moderation interval below the reset default raises throughput, which if it
-does becomes a registry value; and the result cut as `1.1.1.0`. Items 2 and 1,
-polling rates and true speeds on root ports, are Phase 24's.
+Goal: GitHub issue 4's request for the controller's property page, fixed and
+read on both primary targets; one measurement of the owner's, whether an
+interrupt moderation interval below the reset default raises throughput, which
+if it does becomes a registry value; and the result cut as `1.1.1.0`. The
+issue's polling rates and true speeds on root ports are Phase 24's.
 
-**Re-scoped by the owner twice on 2026-09-22.** First the phase stopped at
-23.5 and cut `1.1.1.0`, and the true-speeds decision that was 23.6 moved to
-Phase 24 as 24.1. Later the same day the owner moved item 2 as well: 23.4
-(Low-Speed rates behind a hub) and 23.5 (root-port rates) are Phase 24's
-24.2 and 24.3, so this release carries the property page and the moderation
-value and no polling-rate work. The speed work the owner's note of 2026-09-19
-said might be spread over several releases is spread this way. 23.7 stays
-here as the record and the cut. Branch `phase-23` was renamed `1.1.1.0` the
-same day, as `phase-20` became `1.0.2.0`. Before that day the phase's goal
-also named items 1 and 2, and its title was "GitHub Issue 4's Open Requests,
-and the Interrupt Moderation Experiment"; between the two re-scopes it was
-"GitHub Issue 4's Property Page and Polling Rates, and Interrupt Moderation".
-
-Status: open since 2026-09-19; **23.1 and 23.1.5 are both done** - the
+Status: open since 2026-09-19; **23.1 and 23.2 are both done** - the
 controller's property page is complete, 9x half and NT half, read on three 9x
-stacks and seven NT guests, and both INFs carry their line. **23.2 is done and
+stacks and seven NT guests, and both INFs carry their line. **23.3 is done and
 it measured** (2026-09-22, on the P14s Gen 1): mass-storage reads ran 88%
-faster at an interval of 50 us than at the hardware's 1 ms, so **23.3 is
+faster at an interval of 50 us than at the hardware's 1 ms, so **23.4 is
 taken, and runs next** - the INF writes **500** (the owner moved it from 1000
 on 2026-09-22 after 500 was measured) and the driver falls back to 4000.
-**23.3.5, the audio test, gates its release**; its read-first half, on the
-23.2 experimental build, was taken the same day and both 1000 and 500 passed
-it, so 23.3 can be written.
+**23.5, the audio test, gates its release**; its read-first half, on the
+23.3 experimental build, was taken the same day and both 1000 and 500 passed
+it, so 23.4 can be written.
 23.1 was started and finished on
 2026-09-20 on branch `23.1`, its host side, **all three guest legs** (Windows
 98 SE under NUSB and under SweetLow, and Windows ME) and the three documents
-it owed, all the same day, leaving only the merge. **The NT half is 23.1.5's,
-and the owner moved it there from 23.6.5 on 2026-09-20 so that it runs next**,
-beside the 9x half rather than after the speed work. `1.1.0.0` was uploaded on
+it owed, all the same day, leaving only the merge. **The NT half is
+23.2's**, beside the 9x half. `1.1.0.0` was uploaded on
 2026-09-20, so the hold on merging this branch is lifted. The version is
-**`1.1.1.0`** (the owner, 2026-09-22): 23.3 at least is driver code, so the
+**`1.1.1.0`** (the owner, 2026-09-22): 23.4 at least is driver code, so the
 third field moves (`releases/README.md`). The owner's note on the issue
 (2026-09-19) was that the speed work may be spread over several releases to
 reduce risk, and that is the split taken: this release carries the property
-page and the moderation value, and Phase 24 carries items 2 and 1. *(Until
-2026-09-22 this paragraph said the version was undecided and that the phase
-might close with 23.6 decided and not built; between that day's two re-scopes
-it said this release also carried whatever 23.4 and 23.5 landed.)*
+page and the moderation value, and Phase 24 carries polling rates and true
+speeds.
 
 **"GitHub issue 4" is not `docs/issues/04`.** The numbers collide by accident:
 `docs/issues/04-xp-restore-device-ep0-remove.md` is the XP two-handle restore
 fixed in `1.0.1.0`; the GitHub issue is
 `https://github.com/yeokm1/xhci98/issues/4`, "USB bus internal requests
 handling (and more)", opened by LordOfMice on 2026-09-06 and still open. Its
-items 3 (`usbui.dll`) and 4 (selective suspend) are already answered, in
-`1.0.2.0` and `1.1.0.0`; the tasks below carry item 5, Phase 24 carries
-items 2 and 1, and each task names the item it answers. Phase 24 keeps the
-reporter's advice of 2026-09-15 in its own order: the hub half of item 2
-before the root-port half, and both before item 1.
+`usbui.dll` and selective-suspend requests are already answered, in `1.0.2.0`
+and `1.1.0.0`; the tasks below carry the property page, and Phase 24 carries
+polling rates and true speeds.
 
-- [x] 23.1 item 5, the controller's property page. `runs/run-23.md` has the
+- [x] 23.1 the controller's property page. `runs/run-23.md` has the
   detail. **The line is in `[Xhci.AddReg]`** since 2026-09-20, the INF gate
   holds it there with a `PROP-*` family (seven rules, eight self-test cases),
   and the footprint has learned it. **The NT half is deferred, not refused**
   (owner, 2026-09-20): the pair it takes is known and all three NT references
   write it, but one `[Xhci.AddReg.NT]` serves four install paths and the page
   has been opened in none of their guests, so `PROP-NTHALF` refuses it until
-  those readings exist. **23.1.5 carries it**, and the route there is to take
+  those readings exist. **23.2 carries it**, and the route there is to take
   the reading by hand in regedit before any INF changes. Of the three things
   owed before the line ships, two
   are answered `static`: "Disable USB error detection" names
@@ -596,7 +578,7 @@ before the root-port half, and both before item 1.
   `Bandwidth Usage` and the root hub's `Power properties` raise "Data Access
   Error", so the tab is `sysclass.dll`'s and the dialogs are `usbui.dll`'s.
   **`usbui.dll` on 9x therefore does not "buy nothing"** - it buys both
-  dialogs - and every place saying otherwise (this file's item 3 note,
+  dialogs - and every place saying otherwise (this file's `usbui.dll` note,
   `src/xhci98.inf`'s comment, `build-and-test.md`) needs correcting; the
   decision to copy it since `1.0.2.0` stands and only its stated reason
   changes. **Leg B, Windows ME, was taken the same day and every guest leg is
@@ -629,7 +611,7 @@ before the root-port half, and both before item 1.
   loses its registry phase, so an upgrading user does not get the tab - the
   release notes' documented remedy for that had been empty since `1.1.0.0`.
   **The three documents this task found work for were taken on the same
-  branch on 2026-09-20 rather than left to 23.7**, since 23.1 is what read
+  branch on 2026-09-20 rather than left to 23.6**, since 23.1 is what read
   them: the release notes carry the Advanced tab as the **next** version's
   feature (`1.1.0.0` is uploaded without it) and the rename-and-cold-boot
   upgrade route in place of the empty remedy; `docs/issues/06` carries the
@@ -639,20 +621,12 @@ before the root-port half, and both before item 1.
   `COPYFLG_NO_OVERWRITE` prompt finding with its three-leg tally, and B8's
   `usbccgp.sys` qualification of "Windows ME runs SweetLow's stack".
   `runs/run-23.md`'s "What 23.1 still owes the documents" lists what each one
-  gained. 23.7 keeps the rest of its brief: whatever 23.1.5 and 23.3 change.
-  *(It said 23.4 to 23.6 before the 2026-09-22 re-scopes moved those to Phase
-  24.)*
-- [x] 23.1.5 the NT half of the property page. **Settled AND shipped on
+  gained. 23.6 keeps the rest of its brief: whatever 23.2 and 23.4 change.
+- [x] 23.2 the NT half of the property page. **Settled AND shipped on
   2026-09-20**, which is more than the owner's deferral of that morning asked
   for: it asked for the question to be settled either way, and the reading
   passed, so the INF work it made conditional was done on the same branch.
-  `runs/run-23.md` has the detail. **The fractional id is deliberate**: it is
-  inserted between two existing tasks, and `roadmap.md` holds that such a task
-  takes a fractional id and nothing is renumbered, because ids are cited from
-  `docs/` and the evidence logs; `.5` means "between these two" and is not a
-  sub-task. **It was `23.6.5` for one day** and the owner moved it here on
-  2026-09-20 so it ran next; two commit messages (`57f7b95`, `80a296f`) keep
-  the old number and cannot be edited.
+  `runs/run-23.md` has the detail.
 
   **Seven guests, not the two `PROP-NTHALF` required**, because the owner
   widened the task mid-run to Windows 7 x86 and every 64-bit target. Windows
@@ -696,16 +670,16 @@ before the root-port half, and both before item 1.
   REG_BINARY / flags 1 / data 01. Six self-test cases replaced the one, both
   footprints were regenerated, and `build-driver.cmd` was re-run.
 
-  **All four documents were taken on this branch rather than left to 23.7**,
+  **All four documents were taken on this branch rather than left to 23.6**,
   because three of them were corrections and not additions: the release notes
   said the NT systems "are not included", `build-and-test.md` said the NT half
   was "not taken" and that F8 "is the only route", and `docs/issues/06`
   section 5.1 read "three USB 2.0 stacks, two operating systems" and said this
   package registers no controller property page on any NT target. All four are
   now current, `docs/issues/README.md` moved with issue 6, and `lessons.md`
-  carries the NT 6.x by-hand trap. **23.7 inherits nothing from this task.**
+  carries the NT 6.x by-hand trap. **23.6 inherits nothing from this task.**
 
-- [x] 23.2 the moderation experiment. **Done 2026-09-22, and it measured**
+- [x] 23.3 the moderation experiment. **Done 2026-09-22, and it measured**
   (`runs/run-23.md`, "How it was actually run" and "Results"). Taken on the
   **P14s Gen 1** under Windows 98 SE rather than the E460, by the owner's
   choice, with ATTO Disk Benchmark 2.41 on a USB 3 stick at High Speed, mass
@@ -717,7 +691,7 @@ before the root-port half, and both before item 1.
   read identical to the control, which confirms the hardware reset value.
   **Not answered, by the owner's scope**: the isochronous clause and the USB
   Ethernet transfer, and the suspend/resume cycle was not taken. The stop
-  rule therefore does not fire and 23.3 is taken. The rest of this entry is
+  rule therefore does not fire and 23.4 is taken. The rest of this entry is
   as written before the bench. **The read-first question is answered
   and the host side is built; the reading is what remains** (2026-09-20,
   branch `23.2`; `runs/run-23.md` has the detail). **QEMU does not model
@@ -736,9 +710,9 @@ before the root-port half, and both before item 1.
   constant** on 2026-09-20, so one binary sweeps the ladder: the value is
   `XhciImodInterval250ns`, read beside the two log values through
   `UsbPortGetMiniportRegistryKeyValue` with no new import. **The owner made it
-  23.3's name too** on 2026-09-21, reversing the separate
+  23.4's name too** on 2026-09-21, reversing the separate
   `XhciImodExperiment` of the day before: the unit is in the name, and a bench
-  setting left behind is no longer inert under a 23.3 build, so the bench
+  setting left behind is no longer inert under a 23.4 build, so the bench
   helpers say to clear it when a session ends. Absent means the start writes no IMOD at all,
   which makes the experimental binary its own control. `scripts/bench/`
   carries `IMOD.BAT` and `IMOD98.BAT` for setting it on either target.
@@ -769,30 +743,30 @@ before the root-port half, and both before item 1.
   per-interrupt cost at real rates is what has bugchecked Windows 98 on bare
   metal before. Stop rule: if no value below 4000 measures faster outside
   run-to-run noise, record the numbers in `lessons.md`, leave the start not
-  writing IMOD, and close 23.3 as not taken.
-- [ ] 23.3 the registry value. **Written 2026-09-22 on branch `23.3`, host
-  side green; the guest readings are what remain** (`runs/run-23.md`, 23.3).
-  The owner retired 23.2's experimental build the same day rather than keep
+  writing IMOD, and close 23.4 as not taken.
+- [ ] 23.4 the registry value. **Written 2026-09-22 on branch `23.3`, host
+  side green; the guest readings are what remain** (`runs/run-23.md`, 23.4).
+  The owner retired 23.3's experimental build the same day rather than keep
   it as a bench build: `XHCI_IMOD_EXPERIMENT`, its marker, `make-package.ps1
   -ImodExperimentArtifact` and its three build-time refusals are gone, and the
   bench helpers now describe the shipping contract. The value in force travels
   in the snapshot header, so `XHCISNAP`'s schema moved from 3 to 4 - the first
   bump a published tool meets. Owed before the box closes: this checkpoint's
-  23.3 clause read in a Windows 98 SE and a Windows 2000 guest (QEMU stores IMOD
+  23.4 clause read in a Windows 98 SE and a Windows 2000 guest (QEMU stores IMOD
   and reads it back, so the register value is observable there though no rate
-  is), and one suspend/resume with 500 in force. **23.2 measured, so this is
+  is), and one suspend/resume with 500 in force. **23.3 measured, so this is
   taken, and the owner changed what it ships on 2026-09-22**: the INF writes the value as
   **500** (125 us), not 4000. The owner's first choice was 200, the read
   optimum, moved to 1000 for most of the read gain at a quarter of 200's
   worst-case interrupt rate, and then to **500** the same day, once 500 was
   measured: reads at 98% of the plateau (32.5 against 33.1 MB/s; 1000 gave
-  29.8), a pass of 23.3.5's audio test that sounded better than 1000, and a
+  29.8), a pass of 23.5's audio test that sounded better than 1000, and a
   worst-case rate of 8,000 interrupts a second against 200's 20,000. The
   driver's fallback does not change: absent, unreadable, or outside 10 to 4000
   still means 4000, substituted rather than clamped. So an install through the
   INF runs at 500, and a machine whose value is missing or mistyped runs
-  exactly as every release to date. **Its release is gated on 23.3.5**, an
-  isochronous pass at 500 on bare-metal Windows 98, because 23.2 was read with
+  exactly as every release to date. **Its release is gated on 23.5**, an
+  isochronous pass at 500 on bare-metal Windows 98, because 23.3 was read with
   no stream playing and the roadmap's reason for asking for one still stands.
   Where the text below says the INFs write 4000 or that this task ships 4000,
   read 500; the rest stands as written. A `REG_DWORD` read
@@ -812,98 +786,92 @@ before the root-port half, and both before item 1.
   the value in force is readable from a release build (a counter and an
   `XHCISNAP` line). Both INFs write the value as 4000 on all their install
   paths, the INF gate's `VAL-*` rules and `expected-footprint.txt` learn it,
-  and host vectors pin the three fallbacks and the two bounds. If 23.2 finds
+  and host vectors pin the three fallbacks and the two bounds. If 23.3 finds
   a better number, shipping it as the default is a separate decision of the
   owner's; this task ships 4000. The release notes say what the value is,
   its units, and that a low value raises the interrupt rate.
-- [ ] 23.3.5 the audio test: 23.3's release gate. **Read-first half taken
-  2026-09-22 on the 23.2 build, and 1000 passes it** (`runs/run-23.md`,
-  23.3.5): a Full-Speed audio stream on a root port played through a full
+- [ ] 23.5 the audio test: 23.4's release gate. **Read-first half taken
+  2026-09-22 on the 23.3 build, and 1000 passes it** (`runs/run-23.md`,
+  23.5): a Full-Speed audio stream on a root port played through a full
   ATTO pass at control, 1000, control; every isochronous error counter 0 on
   every boot, ring underruns 2 at 1000 against the controls' 1 and 3, and the
   same audible stutter on reads of 1 MB and up at 1000 as at the second
   control. The stream cost reads 15% at 4000 and 2.5% at 1000. A later boot
   at **500** also passed (one underrun, errors 0, better by ear), and its
-  silent pass filled 23.2's missing rung: reads 32.5 MB/s at 500, 98% of the
+  silent pass filled 23.3's missing rung: reads 32.5 MB/s at 500, 98% of the
   33.1 plateau. Windows 98
   audio plays on bare metal, so Phase 9's five-of-five failure was the VM. Not
   IMOD's and not blocking: Windows 98 stutters under large sustained reads at
   the hardware default too, cause not located. **Open: the same pass on the
-  23.3 build, at 500**, the default the owner moved to after these readings;
+  23.4 build, at 500**, the default the owner moved to after these readings;
   where the text below says 1000, the gate now reads 500. Added by the owner on
-  2026-09-22, because 23.2 measured mass storage alone and the question the
+  2026-09-22, because 23.3 measured mass storage alone and the question the
   register exists for is the other half: an isochronous endpoint posts 1,000
   events a second at Full Speed and 8,000 at High Speed, moderation is what
   absorbs them, and per-interrupt cost at real rates is what has bugchecked
   Windows 98 on bare metal before. A shorter interval lets more of them
   through.
-  **Where**: the P14s Gen 1 under Windows 98 SE and NUSB 3.3, the machine 23.2
+  **Where**: the P14s Gen 1 under Windows 98 SE and NUSB 3.3, the machine 23.3
   was read on, so the two readings compare; the E460 as a second machine if
   to hand. **What**: a USB audio device playing a WAV on repeat (Media
   Player, Auto Repeat) through one full ATTO Disk Benchmark 2.41 pass on the
-  23.2 stick, same settings as 23.2, with the audio device and the stick on
+  23.3 stick, same settings as 23.3, with the audio device and the stick on
   different ports. Record the audio device's speed and whether it sits on a
   root port or behind a hub, since issue 6 makes those two different
   questions. **Arms**: the control (value absent, so 4000) first and last,
   and 1000 between; 200 as well if the time is there, since it was the read
   optimum and would be the next default asked about. **Read per arm**: a
   `SWEEP98.BAT` dump before and after, decoded as in `build-and-test.md`'s
-  23.2 staging section - interrupts per pass, and the isochronous error
+  23.3 staging section - interrupts per pass, and the isochronous error
   counters (`IsoPacketErrorsTotal`, `IsoMissedServiceTotal`,
   `IsoRingUnderruns`, `IsoRingOverruns`, `IsoTrbErrorRecoveries`,
-  `IsoCadenceMismatches`); ATTO's read and write figures beside 23.2's, which
+  `IsoCadenceMismatches`); ATTO's read and write figures beside 23.3's, which
   price the stream; and the listener's note of every audible dropout, click
   or stall, with the time. **Passes** when at 1000 the stream plays through
   the whole pass with no dropout and no error-counter movement that the
   control does not also show, and the machine finishes the pass. **A failure
   sends the INF default back to the owner** - it does not quietly revert to
-  4000. **Read first, before 23.3 is written**: the same pass on the 23.2
+  4000. **Read first, before 23.4 is written**: the same pass on the 23.3
   experimental build with the value at 1000, which is the same register write
   and needs no new code, so a problem is found before the code that ships it.
-  The gate itself is then re-read on the 23.3 build. If Windows 98's audio
+  The gate itself is then re-read on the 23.4 build. If Windows 98's audio
   stack will not play on the machine at all, even at the control - the Phase 9
   vehicle failed five of five, and whether that was the VM or Windows 98 is
   not settled (`LOAD98.BAT`'s header) - that is itself the reading, recorded
   as such, and the owner decides whether 32-bit Windows 7 on the E460 stands
   in, where the first controller Disable is a known hang (`runs/run-22.md`,
   22.9), so plan that leg around reboots.
-- 23.4 **moved to Phase 24 as 24.2 on 2026-09-22** (item 2, behind a hub:
-  Low-Speed rates of 250 Hz and above). The number is not reused.
-- 23.5 **moved to Phase 24 as 24.3 on 2026-09-22** (item 2, on a root port:
-  derive, then decide). The number is not reused.
-- 23.6 **moved to Phase 24 as 24.1 on 2026-09-22** (item 1, true speeds on
-  root ports: the decision, and its first slice). The number is not reused.
-- [ ] 23.7 the record and the cut, `1.1.1.0`. The record: the release notes'
-  known limitations brought into line with whatever 23.1.5 and 23.3 change -
-  23.3's value, its units, its default of 500 and its fallback of 4000, and
+- [ ] 23.6 the record and the cut, `1.1.1.0`. The record: the release notes'
+  known limitations brought into line with whatever 23.2 and 23.4 change -
+  23.4's value, its units, its default of 500 and its fallback of 4000, and
   that a lower value raises the interrupt rate - and `docs/issues/06` and
-  `docs/issues/README.md` saying plainly that items 2 and 1 are Phase 24's and
-  not answered by this release.
+  `docs/issues/README.md` saying plainly that polling rates and true speeds
+  are Phase 24's and not answered by this release.
   **23.1's share of this is already done**, on branch `23.1` on 2026-09-20 and
   not left here: the three documents it found work for, listed in its entry
   above and in `runs/run-23.md`. The cut, on the pattern of Phase 22's 22.8
   to 22.10: what no gate supplies (the version and date in `xhci_version.h`
   and both INFs, the `releases/history.md` entry, the release notes,
-  README's Install section if 23.3 changes it, the issue forms); every gate
+  README's Install section if 23.4 changes it, the issue forms); every gate
   green on both architectures; the flavour directories and the asset cut, with
-  no Microsoft file in it; the install legs read from the asset; and 23.3.5's
+  no Microsoft file in it; the install legs read from the asset; and 23.5's
   gate on the cut's own `release` binary. The post-release matrix follows the
   cut, as 22.9 did. Replying on the GitHub issue, and closing it, are the
-  owner's and not a task - and items 2 and 1 keep it open. It runs last.
+  owner's and not a task - and Phase 24's requests keep it open. It runs
+  last.
 
-Checkpoint (tightened 2026-09-22 when the phase was re-scoped to the cut, and
-again the same day when item 2 moved to Phase 24): the property page is in
-both halves of the 32-bit INF or recorded as not taken; 23.3 landed (23.2
+Checkpoint: the property page is in
+both halves of the 32-bit INF or recorded as not taken; 23.4 landed (23.3
 measured): the value absent, invalid
 and at 4000 all read the same IMOD of 4000 on both targets, the INF's 500
 and any other valid value read back from the register, a start is never failed
-by it, and 23.3.5's audio test passed at 500 on bare-metal Windows 98 on the
+by it, and 23.5's audio test passed at 500 on bare-metal Windows 98 on the
 cut's own `release` binary; every gate green on both architectures,
 `1.1.1.0` cut, and its install legs read from the asset; and the device matrix
 on both primary targets no worse than `runs/run-22-post-release/`. Not a
 checkpoint: a throughput figure taken in a guest, the reporter's machine
 standing in for one of the project's, any polling-rate work or a decision on
-item 1 (both Phase 24's), the acceptance test, or the upload.
+true speeds (both Phase 24's), the acceptance test, or the upload.
 
 Records: GitHub issue 4 (the thread; nothing of it is copied here beyond the
 table above); `docs/issues/06-full-speed-root-port-bugcheck.md`;
@@ -915,30 +883,24 @@ directives); `runs/run-23.md` (to be opened by the first task that takes a
 reading); `releases/history.md`; `runs/run-23-post-release/` (written after
 the cut).
 
-## Phase 24 - GitHub Issue 4 Items 2 and 1: Polling Rates, and True Speeds on Root Ports
+## Phase 24 - Polling Rates, and True Speeds on Root Ports
 
-Goal: the last two open requests of GitHub issue 4. Item 2, Low-Speed and
-root-port polling rates, each either fixed and read on both primary targets or
-recorded as a decision with its reason; and item 1, devices on a root port
-reported at their true speed rather than as High Speed, decided with its
-reason, split into releases if taken, and its first slice carried if the
-decision says so. Split out of Phase 23 by the owner on 2026-09-22, item 1
-first and item 2 later the same day, so that `1.1.1.0` could ship with the
-property page and the moderation value alone. *(Its title was "GitHub Issue 4
-Item 1: True Speeds on Root Ports" until item 2 joined it.)*
+Goal: the last two open requests of GitHub issue 4. Low-Speed and root-port
+polling rates, each either fixed and read on both primary targets or recorded
+as a decision with its reason; and devices on a root port reported at their
+true speed rather than as High Speed, decided with its reason, split into
+releases if taken, and its first slice carried if the decision says so. Split
+out of Phase 23 by the owner on 2026-09-22, so that `1.1.1.0` could ship with
+the property page and the moderation value alone.
 
 Status: not opened. It follows the `1.1.1.0` cut.
 
-**The order is 24.2, 24.3, 24.1, 24.4, not the numbers'.** The ids are what
-the tasks were given as they arrived - 24.1 was 23.6 and is already cited, so
-it is not renumbered (`roadmap.md`) - and the order is the reporter's advice of
-2026-09-15, kept from Phase 23: the hub half of item 2 before the root-port
-half, and both before item 1, because 24.3 may close as owned by 24.1 and
-24.1 then inherits it.
+The order is the reporter's advice of 2026-09-15: polling rates behind a hub
+before those on a root port, and both before true speeds, because 24.2 may
+close as owned by 24.3 and 24.3 then inherits it.
 
-- [ ] 24.2 item 2, behind a hub: Low-Speed rates of 250 Hz and above. **Was
-  23.4 until 2026-09-22.** Reproduce
-  first, with a Low-Speed mouse behind a USB 2.0 hub on Windows 98 SE under
+- [ ] 24.1 polling rates behind a hub: Low-Speed rates of 250 Hz and above.
+  Reproduce first, with a Low-Speed mouse behind a USB 2.0 hub on Windows 98 SE under
   SweetLow's stack with HIDUSBF, and read which refusal counter moves. The
   candidate is `XhciIntervalFromPeriod` (`src/xhci_ctx.c`), which refuses a
   Low-Speed `Period` under 8 because both disassembled usbport builds (SP4,
@@ -949,8 +911,7 @@ half, and both before item 1, because 24.3 may close as owned by 24.1 and
   Interval 3 to 10, and Interval 3 is 1 ms. The refuse-don't-repair rule of
   that function stays: a widened Low-Speed range is a derived contract, not
   a clamp.
-- [ ] 24.3 item 2, on a root port: derive, then decide. **Was 23.5 until
-  2026-09-22.** On a root port
+- [ ] 24.2 polling rates on a root port: derive, then decide. On a root port
   usbport buckets `bInterval` as High Speed (`1 << min(bInterval-1, 5)`
   microframes) and the driver floors the result at 1 ms, so every request
   lands in a 1, 2 or 4 ms band (`virtual-hub-per-root-port.md` section 1).
@@ -961,28 +922,26 @@ half, and both before item 1, because 24.3 may close as owned by 24.1 and
   interrupt ones, but an override applied above usbport never reaches the
   device's descriptor, so that lever may not see it. If no route exists short
   of true speeds on root ports, say so in the release notes and close this as
-  owned by 24.1 (it said 23.6 until the first 2026-09-22 re-scope).
-- [ ] 24.1 item 1, true speeds on root ports: the decision, and its first
-  slice if taken. **Was 23.6 until 2026-09-22.**
-  `docs/future-plans/virtual-hub-per-root-port.md` is the candidate and issue
+  owned by 24.3.
+- [ ] 24.3 true speeds on root ports: the decision, and its first slice if
+  taken. `docs/future-plans/virtual-hub-per-root-port.md` is the candidate and issue
   6 section 8 the alternatives; the costs known since 2026-09-19 are the Vista
   and Windows 7 bugcheck with a Full-Speed hub on a root port and the silent
   root-port audio device from XP on. What this task owes is a design record
   with the decision, the split into releases, and which slice if any this
-  phase carries. If 24.3 closed as owned here, its root-port polling rates are
+  phase carries. If 24.2 closed as owned here, its root-port polling rates are
   this task's too. **Never write "fixed" for issue 6 until the High-Speed
   report itself is gone.**
 - [ ] 24.4 the record: `docs/issues/06`, `docs/issues/README.md` and the
-  release notes' known limitations brought into line with 24.2, 24.3 and
-  24.1, and a cut if any of them changes the driver. Replying on GitHub issue
-  4, and closing it, are the owner's. **Was 24.2 until 2026-09-22**, when
-  item 2's tasks arrived; the number was never cited outside this file.
+  release notes' known limitations brought into line with 24.1, 24.2 and
+  24.3, and a cut if any of them changes the driver. Replying on GitHub issue
+  4, and closing it, are the owner's.
 
-Checkpoint (draft, tightened as 24.2, 24.3 and 24.1 report): on Windows 98 SE
+Checkpoint (draft, tightened as 24.1, 24.2 and 24.3 report): on Windows 98 SE
 and Windows 2000 SP4, a Low-Speed interrupt device behind a USB 2.0 hub works
 at every rate the stack in use can ask for, or the refusal that remains is
-derived and published; the root-port half of item 2 carries a recorded
-decision; item 1 carries a recorded decision and its reason; whatever changes
+derived and published; root-port polling rates carry a recorded decision; true
+speeds on root ports carry a recorded decision and its reason; whatever changes
 the driver is read on both primary targets with the device matrix no worse
 than `1.1.1.0`'s post-release readings, and every gate green.
 
@@ -990,4 +949,4 @@ Records: `docs/future-plans/virtual-hub-per-root-port.md`;
 `docs/issues/06-full-speed-root-port-bugcheck.md`; GitHub issue 4;
 `docs/usb-xhci-info/usbport-miniport-abi.md` ("Periodic scheduling: what
 `Period` actually carries") and `xhci-data-structures.md` (Table 6-12) for
-item 2.
+the polling rates.

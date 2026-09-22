@@ -1,7 +1,7 @@
 @echo off
 rem IMOD98.BAT - the WINDOWS 98 SE / WINDOWS ME variant of IMOD.BAT.  Sets
 rem XhciImodInterval250ns, the interrupt moderation interval the driver reads
-rem at every start (roadmap task 23.3; task 23.2 swept it).  Run it on the
+rem at every start (roadmap task 23.4; task 23.3 swept it).  Run it on the
 rem bench machine, not on the build host.
 rem
 rem   IMOD98 FIND                   find the instance number, and print it
@@ -17,7 +17,7 @@ rem WHY THE STEPS ARE A FIXED LIST AND NOT ANY NUMBER.  Windows 98's shell is
 rem COMMAND.COM, which has no reg.exe, no `for /f` and no `set /a`, so the only
 rem route to the registry is to write a REGEDIT4 file and import it - and a
 rem REGEDIT4 dword is written in HEX.  Nothing here can convert 4000 into 0fa0.
-rem The ladder task 23.2 swept is eight values here, so they are tabulated
+rem The ladder task 23.3 swept is eight values here, so they are tabulated
 rem below, and HEX takes the digits as their own argument because COMMAND.COM
 rem has no substring syntax either and so cannot strip a prefix off one.
 rem
@@ -40,7 +40,7 @@ rem   AND NOT IN ITS COMMENTS EITHER.  COMMAND.COM performs redirection on a
 rem   REM line: the angle brackets and pipes quoted in this header until
 rem   2026-09-22 created junk files named after their targets in the current
 rem   folder, and printed File not found for the input one, on every run
-rem   (runs/run-23.md, task 23.2, measured on the P14s Gen 1).  So the
+rem   (runs/run-23.md, task 23.3, measured on the P14s Gen 1).  So the
 rem   redirection syntax below is spelled out in words, never written.
 rem
 rem   THERE IS NO NUMBERED-HANDLE REDIRECTION.  Sending handle 2 to NUL does
@@ -75,7 +75,7 @@ rem package installs.  To go back to the package's own setting, set 500.
 rem Leave a bench machine at 500 when the session ends, or say in the run
 rem sheet that it was not.
 rem
-rem 0 IS NOT ON THE LADDER ANY MORE.  Task 23.2's experimental build took 0 as
+rem 0 IS NOT ON THE LADDER ANY MORE.  Task 23.3's experimental build took 0 as
 rem moderation off; the shipping driver refuses it and runs at 4000.  To check
 rem that fallback, write it with HEX 00000000 and read 4000 back.  (Until
 rem 2026-09-21 the experiment read XhciImodExperiment.  That name is not read

@@ -59,7 +59,7 @@ things a reader should know before decoding a dump:
   user boundary. The derivation and the posture are design record 08 §13.2's
   amendment; the door itself is `docs/usb-xhci-info/usbport-miniport-abi.md`,
   "Reachability from user mode".
-- The wire format is at schema 4 since `1.1.1.0` (roadmap task 23.3 appended
+- The wire format is at schema 4 since `1.1.1.0` (roadmap task 23.4 appended
   the moderation interval's four fields), with a 26-ULONG, 104-byte header, and
   `sizeof(XHCI_EXTENSION)` is the `SIZEOF` line of the `offsets.txt`
   regenerated from the tree (over 90,000 bytes). A dump decodes only against

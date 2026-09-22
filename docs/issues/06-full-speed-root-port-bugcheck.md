@@ -290,7 +290,7 @@ information is gone before the miniport sees it.
 
 Until roadmap task 23.1 the report was visible only in the speed Device
 Manager prints and in this driver's own trace. It is now visible in a dialog
-Windows draws, and tasks 23.1 and 23.1.5 are what put it there: the
+Windows draws, and tasks 23.1 and 23.2 are what put it there: the
 controller's **Advanced** tab, whose figures are computed from the speed
 usbport was told (`CalculateTotalBandwidth(ULONG, UCHAR, PUSB_PIPE_INFO)`
 takes a speed byte). On Windows 98 SE and Windows ME it sits behind a
@@ -302,7 +302,7 @@ Five legs, five USB 2.0 stacks, four operating systems, all on 2026-09-20,
 in QEMU guests - the three 9x legs on the `release` flavour and the two NT
 legs on `qemu` - devices added from the monitor onto root ports and installed
 by the guest's own wizard (`../contributing/runs/run-23.md`, legs A5, C3, B5
-and 23.1.5's legs W and X):
+and 23.2's legs W and X):
 
 | bus | 98 SE, NUSB 3.3 | 98 SE, SweetLow | ME, SweetLow | 2000 SP4 | XP SP3 |
 |---|---|---|---|---|---|
@@ -364,7 +364,7 @@ One limit on availability, and it is only a version. The tab is **not** in
 `1.1.0.0`; it ships in the release after it (`../using/release-notes.md`,
 "Not in this release"). **The second limit that used to stand here is gone**:
 this package registered no controller property page on the NT targets until
-roadmap task 23.1.5 took that half on 2026-09-20, and the page now opens on
+roadmap task 23.2 took that half on 2026-09-20, and the page now opens on
 every one of them - Windows 2000, Windows XP in both architectures, and
 Windows Vista and Windows 7 in both. `PROP-NTHALF`, which refused the value
 until those readings existed, was inverted in the same change. Only the two

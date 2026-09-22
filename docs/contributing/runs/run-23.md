@@ -30,7 +30,7 @@ and the Bandwidth Usage dialog have all been read in a guest on every stack.
 Leg C also settled the `usbui.dll` conflict (A4) and showed that an in-place
 Update Driver, which NUSB cannot survive, delivers the line cleanly on
 SweetLow's stack; Leg B repeated that on Windows ME. The NT half is not this
-task's: it is deferred to roadmap task 23.1.5. What remains of task 23.1 is
+task's: it is deferred to roadmap task 23.2. What remains of task 23.1 is
 the merge.
 
 ### What landed
@@ -519,7 +519,7 @@ Power page is the one that gives it.
 A and C hold the operating system constant and differ in the stack, so the
 stack correlates and the OS does not. **That is a correlation across three
 runs with install type confounded alongside it, and nothing here establishes a
-mechanism.** It is a lead for the `COPYFLG_NO_OVERWRITE` finding owed to 23.7,
+mechanism.** It is a lead for the `COPYFLG_NO_OVERWRITE` finding owed to 23.6,
 not a conclusion.
 
 #### B8, read off the disk afterwards, and it found something the leg did not go looking for
@@ -817,7 +817,7 @@ index and the page agree.
 
 ---
 
-## 23.1.5 - the NT half of the controller's property page
+## 23.2 - the NT half of the controller's property page
 
 Status: **settled on 2026-09-20, and the line shipped.** The task was deferred
 by the owner "to be settled rather than left open", and what settled it is
@@ -1223,9 +1223,9 @@ same day and on the same branch:
   11-V.3 keeps, and `build-driver.cmd` was re-run: both 32-bit flavours build,
   the import gate passes, both INF gates pass.
 
-**The documents were all taken on this branch rather than left to 23.7**, in
+**The documents were all taken on this branch rather than left to 23.6**, in
 the order the list below was written. Three of the four were corrections
-rather than additions - 23.1.5 turned statements in each from incomplete into
+rather than additions - 23.2 turned statements in each from incomplete into
 false - which is why none of them waited:
 
 - **`docs/using/release-notes.md`** said "Windows 2000, Windows XP, Windows
@@ -1252,21 +1252,21 @@ false - which is why none of them waited:
   and the `endpoint speed mismatches=00000001` counter as a second witness.
   `docs/issues/README.md`'s issue 6 row moved with it.
 
-23.7 therefore inherits nothing from 23.1.5.
+23.6 therefore inherits nothing from 23.2.
 
 ---
 
-## 23.2 - the moderation experiment (the owner's measurement)
+## 23.3 - the moderation experiment (the owner's measurement)
 
 Status as of 2026-09-22: **DONE, and it measured.** The reading was taken on
 the night of 2026-09-21 on the ThinkPad P14s Gen 1 under Windows 98 SE, not on
 the E460 the roadmap named (the owner's call, after one E460 control boot). At
 IMODI 200 or 160, mass-storage reads ran at 33.1 MB/s against 17.6 at the
 hardware default of 4000, with the two control boots 0.4% apart; 1000 gave
-29.8. So the stop rule does not fire and 23.3 is taken. The owner set its
+29.8. So the stop rule does not fire and 23.4 is taken. The owner set its
 shape the same night: the INF writes **1000**, the driver falls back to 4000,
 and one isochronous pass at 1000 on bare metal gates the release. *(The next
-day, after 23.3.5 measured 500, the owner moved the INF's value to **500**;
+day, after 23.5 measured 500, the owner moved the INF's value to **500**;
 the fallback and the gate are unchanged, the gate now read at 500.)* The reading
 and its limits are under "Results" below.
 
@@ -1345,7 +1345,7 @@ marker `make-package.ps1` refuses to package. Built both ways on 2026-09-20:
 `scripts\build-driver.cmd both` reports `BUILD + GATES PASSED`, and with the
 define set it reports `PROBE BUILD + GATES PASSED` and the do-not-deploy
 warning. **The import gate lists the same twelve pairs either way**, which is
-the "no new import" clause 23.3 also has to keep: the registry read goes
+the "no new import" clause 23.4 also has to keep: the registry read goes
 through `UsbPortGetMiniportRegistryKeyValue` in usbport's own packet, not
 through an import of ours.
 
@@ -1370,7 +1370,7 @@ The pieces, all `#ifdef`-ed:
   `SIZEOF` and refuses a mismatch - 92,328 against 92,304 - so a shipping
   table decodes nothing out of these dumps, and it lists no `ImodExperiment`
   field to read even if it did. The sweep was decoded against a table built
-  with the define; `build-and-test.md`, the 23.2 staging section, has how.)*
+  with the define; `build-and-test.md`, the 23.3 staging section, has how.)*
 - **Five `XHCISNAP` notes**, and `imod.exp.readback` and `imod.exp.written`
   also in the always-on counter block beside `isr.entries` and `dpc.count`, so
   one flush carries the arm of the sweep and its effect together.
@@ -1386,19 +1386,19 @@ The pieces, all `#ifdef`-ed:
 
 Three decisions in it that are the measurement's rather than taste:
 
-**The name is deliberately not 23.3's.** 23.3 proposes `XhciImodInterval` for
+**The name is deliberately not 23.4's.** 23.4 proposes `XhciImodInterval` for
 a value that would ship, with a contract this one has not got - default 4000,
 floor 10, 4000 substituted for anything invalid. If the two shared a name, a
 bench machine left carrying an experimental setting would have it become
-load-bearing the moment a 23.3 build was installed over the top. Under a
+load-bearing the moment a 23.4 build was installed over the top. Under a
 separate name a leftover is inert.
 
 *(Reversed by the owner on 2026-09-21. The experiment now reads
-`XhciImodInterval250ns`, which is also the name 23.3 will ship if it is taken,
+`XhciImodInterval250ns`, which is also the name 23.4 will ship if it is taken,
 with the unit in the name so 4000 cannot be misread as microseconds. The same
-day the owner set 23.3's accepted range to 10 to 4000, with 4000 substituted
+day the owner set 23.4's accepted range to 10 to 4000, with 4000 substituted
 for anything outside it, in place of 10 to 65535. The cost is the inertness
-argued above: under a 23.3 build a leftover 0 falls back to 4000, but a
+argued above: under a 23.4 build a leftover 0 falls back to 4000, but a
 leftover 10 to 4000 stays in force, so the bench helpers now say to clear the
 value when a session ends. The experimental build itself still accepts 0 to
 65535, because the sweep has to reach 0 and 10.)*
@@ -1547,7 +1547,7 @@ the procedure relayed step by step.
 - **Mass storage only, by the owner's decision.** No USB Ethernet transfer
   and **no isochronous stream**, so the roadmap's clause that a stream play
   during at least one pass is not answered by this reading. It is carried
-  into 23.3's release gate rather than dropped.
+  into 23.4's release gate rather than dropped.
 - **The workload was ATTO Disk Benchmark 2.41, not a file copy**, at its
   defaults: transfer sizes 0.5 to 8192 KB, total length 256 MB, Direct I/O,
   neither overlapped I/O nor comparison. The internal disk runs through CSM
@@ -1651,7 +1651,7 @@ What it says:
   a pass at 1 ms, 334,000 to 346,000 below it. The machine stayed up through
   every pass, including 40 us, with no refusal and no fault in either dump.
 
-The limits, which 23.3 inherits: one pass per arm, one stick, High Speed only,
+The limits, which 23.4 inherits: one pass per arm, one stick, High Speed only,
 one machine, and no isochronous stream and no Ethernet. The write gain below
 1000 is unmeasured, not absent.
 
@@ -1660,13 +1660,13 @@ one machine, and no isochronous stream and no Ethernet. The write gain below
 If no value below 4000 measures faster outside run-to-run noise: record the
 numbers in `lessons.md`, leave the start not writing IMOD - which is where it
 already is, since the write is behind a define that no shipping build sets -
-and **close 23.3 as not taken**. That outcome costs no revert: the shipping
+and **close 23.4 as not taken**. That outcome costs no revert: the shipping
 binary never changed.
 
-If a value does measure, 23.3 builds the registry value that ships, and which
+If a value does measure, 23.4 builds the registry value that ships, and which
 number becomes the default is the owner's decision and not this task's.
 
-**Applied, 2026-09-22: a value measured, so 23.3 is taken.** The owner then
+**Applied, 2026-09-22: a value measured, so 23.4 is taken.** The owner then
 made the decision this task left to them. The first choice was 200, the read
 optimum; it was moved to **1000** after the trade was set out - most of the
 read gain (29.8 against 33.1 MB/s) and the only clean write gain, for a
@@ -1675,20 +1675,20 @@ Windows 98, where per-interrupt cost at real rates is what has bugchecked
 bare metal before. So the INF writes `XhciImodInterval250ns` = 1000; a value
 that is absent, unreadable or outside 10 to 4000 falls back to 4000, the
 hardware's own; and because this reading had no stream playing, **one
-isochronous pass at 1000 on bare-metal Windows 98 gates 23.3's release**.
-*(Superseded the next day: 23.3.5 measured 500 at 32.5 MB/s with a clean
-audio pass, and the owner moved the INF's value to **500**; see 23.3.5
+isochronous pass at 1000 on bare-metal Windows 98 gates 23.4's release**.
+*(Superseded the next day: 23.5 measured 500 at 32.5 MB/s with a clean
+audio pass, and the owner moved the INF's value to **500**; see 23.5
 below.)*
 
-### What 23.2 leaves
+### What 23.3 leaves
 
 Done: the reading, above; `lessons.md`; `build-and-test.md`'s staging
 section for the experimental build, written after the procedure was run; and
 the two QEMU findings, the first now confirmed on hardware. Still open, and
 none of it this task's to close:
 
-- The isochronous clause - roadmap task 23.3.5, the audio test, which gates
-  23.3's release.
+- The isochronous clause - roadmap task 23.5, the audio test, which gates
+  23.4's release.
 - Writes below 1000, on a target that does not degrade under the benchmark
   (an SSD in a USB enclosure).
 - One suspend/resume with a nonzero value, which is still the only way to
@@ -1697,24 +1697,24 @@ none of it this task's to close:
   `build-and-test.md` still says "Windows 98 only" against the Windows 7 run
   of 2026-09-19 (`run-22.md`, 22.9); unresolved.
 
-## 23.3.5 - the audio test, read first on the 23.2 build
+## 23.5 - the audio test, read first on the 23.3 build
 
 Status as of 2026-09-22: **the read-first half is taken, and 1000 passes it.**
-The gate proper is re-read on the 23.3 build once that exists, so the roadmap
+The gate proper is re-read on the 23.4 build once that exists, so the roadmap
 box stays open.
 
 ### How it was run
 
-2026-09-22, the P14s Gen 1 under Windows 98 SE and NUSB 3.3, the 23.2
+2026-09-22, the P14s Gen 1 under Windows 98 SE and NUSB 3.3, the 23.3
 experimental driver still installed (key `...\Class\USB\0010`), logging at
-level 2. A Full-Speed USB audio device on one root port and the 23.2 stick on
+level 2. A Full-Speed USB audio device on one root port and the 23.3 stick on
 another; Windows 98's own USB audio driver; Media Player looping a WAV. Per
 boot: the WAV started first, then `SWEEP98 ARM A`, one ATTO 2.41 pass at the
-23.2 settings, `SWEEP98 ARM B`, the audio stopped last, so both dumps and the
+23.3 settings, `SWEEP98 ARM B`, the audio stopped last, so both dumps and the
 whole pass include the stream. The owner listened throughout. Arms: control,
 1000, control. 200 was offered and not taken. The owner then added **500**,
 later the same morning, as one boot carrying two passes: a silent one first,
-which puts 500 into 23.2's read ladder, then one with the stream.
+which puts 500 into 23.3's read ladder, then one with the stream.
 
 **The first 1000 boot read `imod.exp.status=00000008`** - the value was absent
 - and was not run: the `IMOD98 1000 0010` before its reboot had not been
@@ -1743,7 +1743,7 @@ last window, because the stream posts about a thousand events a second while a
 dump is read out - against passes of half a million interrupts and more, so
 under 0.05% of any delta and no figure above changes. The silent 500 pass's
 two dumps are coherent. *(This paragraph first said every dump was coherent.
-It was written from the 23.2 dumps and not checked against these; corrected
+It was written from the 23.3 dumps and not checked against these; corrected
 the same day.)* Isochronous
 packets ran at 1,000 a second throughout, as a Full-Speed stream should.
 `IsoCadenceMismatches` was 10.0% of packets on every row, the same ratio at
@@ -1766,18 +1766,18 @@ it:
 
 | | Read with stream | Read without | Write with stream |
 |---|---|---|---|
-| CTL2 | 15,055 | 17,637 (23.2) | 6,342 |
-| 1000 | 29,051 | 29,793 (23.2) | 6,746 |
+| CTL2 | 15,055 | 17,637 (23.3) | 6,342 |
+| 1000 | 29,051 | 29,793 (23.3) | 6,746 |
 | 500 | 31,655 | 32,537 (this boot) | 6,717 |
 
-(CTL1's screenshot was not saved. Writes are the degraded stick's, as in 23.2.)
+(CTL1's screenshot was not saved. Writes are the degraded stick's, as in 23.3.)
 
-**The silent 500 pass is 23.2's missing rung.** Reads at 8 MB: 17.6 at 4000,
+**The silent 500 pass is 23.3's missing rung.** Reads at 8 MB: 17.6 at 4000,
 29.8 at 1000, **32.5 at 500**, 33.1 at 200 and 160. So 500 takes 98% of the
 plateau, and almost all of the gain between 1000 and the plateau lies between
 1000 and 500. Its interrupts per silent pass, 334,344, are the same as 200's
-and 160's. It was taken a day after the 23.2 controls and with no control of
-its own that morning; reads were stable across 23.2's two controls and the
+and 160's. It was taken a day after the 23.3 controls and with no control of
+its own that morning; reads were stable across 23.3's two controls and the
 two audio controls, which is the ground for comparing it.
 
 500 at 8 KB to 64 KB, silent, against 1000 and 200 (reads, KB/s): 9,525 /
@@ -1785,7 +1785,7 @@ two audio controls, which is the ground for comparing it.
 9,592 / 16,181 / 23,976 / 31,736 at 200. At small transfers too, 500 is
 within a few percent of 200.
 
-### The verdict against 23.3.5's rule
+### The verdict against 23.5's rule
 
 **Passes.** At 1000 the stream played through the whole pass, the machine
 finished it, and nothing moved that the controls do not also show: the same
@@ -1797,7 +1797,7 @@ fell 15% under the stream at 4000, 2.5% at 1000 and 2.7% at 500. **500 passes
 the same rule**, with one underrun and every error counter 0, and sounded
 better than 1000 by ear. Whether that moves the default is the owner's
 decision - **and it did**: on 2026-09-22 the owner moved the INF's value from
-1000 to **500**, keeping 4000 as the fallback. The gate proper on the 23.3
+1000 to **500**, keeping 4000 as the fallback. The gate proper on the 23.4
 build is therefore read at 500.
 
 **What it does not settle, and is not IMOD's:** Windows 98 stutters on this
@@ -1807,11 +1807,11 @@ transfers, and it is not carried by a driver error counter - one to three ring
 underruns a pass do not account for repeated stutter across several rows. So
 the cause is not located: the audio stack's own buffering under CPU or DPC
 load is as plausible as this driver's ring refill. It is recorded here as a
-finding for later and does not block 23.3.
+finding for later and does not block 23.4.
 
-Owed: the same pass on the 23.3 build, which is the gate proper.
+Owed: the same pass on the 23.4 build, which is the gate proper.
 
-## 23.3 - the registry value
+## 23.4 - the registry value
 
 Status as of 2026-09-22: **written on branch `23.3` and green on the host;
 the guest readings the checkpoint names are owed**, so the roadmap box stays
@@ -1833,7 +1833,7 @@ open.
   through the same function after HCRST, so it rewrites the interval. The
   restore path is unchanged and now carries a nonzero interval across a
   resume.
-- **The four fields sit after `Log`**, where 23.2's six experimental fields
+- **The four fields sit after `Log`**, where 23.3's six experimental fields
   stood, so no existing counter moved: `SIZEOF` 92,304 to 92,320 on x86, and
   the trailing pair shifted by 16. `scripts/vm-matrix/offsets*.txt` were
   regenerated and have the four new rows, through new
@@ -1849,7 +1849,7 @@ open.
   The INF gate's `VAL-*` table has a third row with its own reason for the
   default, since "must ship off" is false of this one, and both footprints
   learned the rows (three x86, two amd64).
-- **23.2's experimental build is retired**, by the owner's decision at the
+- **23.3's experimental build is retired**, by the owner's decision at the
   start of this task: the define, its marker, `make-package.ps1
   -ImodExperimentArtifact` and the refusals in `src/sources`,
   `build-driver.cmd` and `xhci_dispatch.c` are gone, the two packaging
@@ -1878,17 +1878,17 @@ open.
   self-tests 307 checks with the experiment's cases gone. `release` x86 links
   at 86,059 bytes.
 
-### What 23.3 still owes
+### What 23.4 still owes
 
-- **The checkpoint's 23.3 clause, read in guests**: on a Windows 98 SE and a
+- **The checkpoint's 23.4 clause, read in guests**: on a Windows 98 SE and a
   Windows 2000 SP4 guest, an INF install reading 500 back from the register,
   and the value deleted, 0, 5000 and 4000 each reading 4000, with the start
-  never failed. QEMU stores IMOD and returns it (`hw/usb/hcd-xhci.c`, 23.2),
+  never failed. QEMU stores IMOD and returns it (`hw/usb/hcd-xhci.c`, 23.3),
   so the register value is observable there even though no rate is. This is
   also the first reading of Windows 98's 16-bit engine storing a nonzero
   decimal DWORD from this INF.
 - **One suspend/resume with 500 in force** - the first exercise of
   `xhciRestoreState`'s IMOD write with anything but 0 or 4000 outside the
   host model.
-- **23.3.5's gate proper**, the audio pass at 500 on bare-metal Windows 98,
-  now read on the cut's own `release` binary (roadmap 23.7).
+- **23.5's gate proper**, the audio pass at 500 on bare-metal Windows 98,
+  now read on the cut's own `release` binary (roadmap 23.6).

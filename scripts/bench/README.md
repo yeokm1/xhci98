@@ -15,7 +15,7 @@ ASCII.
 
 | File | Target | What it does |
 |---|---|---|
-| `IMOD.BAT` | Windows 2000 and later (needs `reg.exe`, so XP and later in practice) | Sets, shows or clears `XhciImodInterval250ns`, the interrupt-moderation interval the driver reads at every start (roadmap task 23.3; task 23.2 swept it) |
+| `IMOD.BAT` | Windows 2000 and later (needs `reg.exe`, so XP and later in practice) | Sets, shows or clears `XhciImodInterval250ns`, the interrupt-moderation interval the driver reads at every start (roadmap task 23.4; task 23.3 swept it) |
 | `IMOD98.BAT` | Windows 98 SE and Windows ME | The same, through `regedit /s` and a generated `REGEDIT4` file |
 | `SWEEP98.BAT` | Windows 98 SE and Windows ME | One boot of the sweep: a timed `XHCISNAP` dump before a benchmark run (`SWEEP98 ARM A`) and one after (`SWEEP98 ARM B`) |
 
@@ -24,7 +24,7 @@ COMMAND.COM performs redirection on a comment: until 2026-09-22 the header of
 `IMOD98.BAT` quoted examples of the very syntax it warned about, and every run
 left files named after their targets in the current folder and printed `File
 not found` for the input one. It was found on the P14s Gen 1 during task
-23.2's sweep, and `LOAD98.BAT`, `STGF98.BAT` and three `xhciqual` DOS batch
+23.3's sweep, and `LOAD98.BAT`, `STGF98.BAT` and three `xhciqual` DOS batch
 files were fixed with it. cmd.exe ignores redirection on a `REM`, so
 `IMOD.BAT`'s usage comment is safe as it stands.
 
@@ -49,17 +49,17 @@ cosmetic.
 ### What they need, and what they do not do
 
 Since `1.1.1.0` **every build reads the value** at every start and writes the
-result to IR0's IMOD (roadmap task 23.3). The contract is the driver's: 10 to
+result to IR0's IMOD (roadmap task 23.4). The contract is the driver's: 10 to
 4000 is used as given, and anything else - absent, 0, 5000 - is replaced by
 4000, the hardware reset value, not clamped. An INF install writes 500. So
 `CLEAR` is the control arm of a sweep and **not** what the package installs;
 set 500 to put a machine back, and leave a bench machine at 500 when a session
 ends or say in the run sheet that it was not.
 
-*(Task 23.2 used an experimental build, `XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT`,
+*(Task 23.3 used an experimental build, `XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT`,
 packaged through a `make-package.ps1 -ImodExperimentArtifact` exception. It
 took 0 to 65535 and wrote nothing when the value was absent. The owner retired
-both on 2026-09-22 when 23.3 folded the read into every build; the shipping
+both on 2026-09-22 when 23.4 folded the read into every build; the shipping
 range still reaches down to 10.)*
 
 Neither file restarts the controller, and neither pretends to. The value is
@@ -77,5 +77,5 @@ and those are what make a throughput figure attributable to an interval. The
 channel has to be engaged (`XHCISNAP -verbosity 1` or higher) at the start the
 dump is taken in, so set it before the same reboot.
 
-The procedures these serve are `docs/contributing/runs/run-23.md`, "23.2 - the
-moderation experiment" and 23.3.5, the audio test.
+The procedures these serve are `docs/contributing/runs/run-23.md`, "23.3 - the
+moderation experiment" and 23.5, the audio test.

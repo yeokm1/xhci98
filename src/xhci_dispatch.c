@@ -397,10 +397,10 @@ XHCI_C_ASSERT(packet_is_whole_words,
 #define XHCI_LOG_DBGVIEW_VALUE_BYTES   (17 * 2)
 
 /*
- * Task 23.3's value, in the same key and read by the same service: the
+ * Task 23.4's value, in the same key and read by the same service: the
  * moderation interval, in IMODI's 250 ns units (XHCI_IMOD_INTERVAL_* in
  * src/xhci.h has the contract). The owner named it on 2026-09-21, the unit in
- * the name so nobody reading the key takes 4000 for microseconds; 23.2's
+ * the name so nobody reading the key takes 4000 for microseconds; 23.3's
  * experimental build read the same name, so a value left from that bench is
  * read by this driver too - under this contract, not that one.
  *
@@ -613,7 +613,7 @@ static VOID xhciLogReadValues(PXHCI_EXTENSION ext,
 }
 
 /*
- * Read task 23.3's moderation interval. A separate routine rather than a third
+ * Read task 23.4's moderation interval. A separate routine rather than a third
  * read inside `xhciLogReadValues`, because that one is about the log and this
  * is not.
  *
@@ -684,7 +684,7 @@ static VOID xhciLogCountersLocked(PXHCI_EXTENSION ext)
     XhciLogAppend(&ext->Log, "isr.entries", ext->InterruptCount, 1);
     XhciLogAppend(&ext->Log, "isr.claimed", ext->InterruptsClaimed, 1);
     XhciLogAppend(&ext->Log, "dpc.count", ext->DpcCount, 1);
-    /* Task 23.3, next to the two counters the interval moves, so one flush
+    /* Task 23.4, next to the two counters the interval moves, so one flush
      * carries the interval and its effect together. */
     XhciLogAppend(&ext->Log, "imod.interval", ext->ImodInterval, 1);
     XhciLogAppend(&ext->Log, "imod.readback", ext->ImodReadback, 1);
@@ -1111,7 +1111,7 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
      */
     xhciLogStart(ext);
     /*
-     * Task 23.3's interval, read here because `XhciInitController` below is
+     * Task 23.4's interval, read here because `XhciInitController` below is
      * what writes it and this is the last PASSIVE point before that call. The
      * notes go in now rather than beside the write, so a start that then
      * refuses still says what it was asked for - the refusal path below

@@ -2495,7 +2495,7 @@ static ULONG logVerbosityReads;
 static ULONG logDebugViewReads;
 static ULONG logSwitchAbsent;
 /*
- * Task 23.3's moderation value, through the same stub: not the log's, but the
+ * Task 23.4's moderation value, through the same stub: not the log's, but the
  * same service, the same key and the same "one status per value" shape. Absent
  * by default after log_reset_host, which is a machine whose INF never ran.
  */
@@ -6785,7 +6785,7 @@ static MPSTATUS NTAPI logRegistryValue(PVOID miniPortExtension,
 
     name = (const WCHAR *)valueName;
 
-    /* Task 23.3's value: `XhciImod...` against the log's `XhciLog...`, so
+    /* Task 23.4's value: `XhciImod...` against the log's `XhciLog...`, so
      * character 4 separates the two families. */
     if (name[4] == 'I') {
         imodReads++;
@@ -6912,7 +6912,7 @@ static void test_log_two_values(void)
 }
 
 /*
- * Task 23.3's chooser, without a start: the three fallbacks (absent or
+ * Task 23.4's chooser, without a start: the three fallbacks (absent or
  * unreadable, below the floor, above the ceiling) and the two bounds. The
  * owner's rule is **substituted, not clamped**, so 9 and 4001 both land on
  * 4000 - a clamp would give 10 and 4000, and 0 would turn moderation off.
@@ -27749,7 +27749,7 @@ static void test_save_restore(void)
     CHECK_EQ(ext.Devices[0].State, XHCI_DEV_STATE_FREE, "and dropping devices");
 
     /* --- the conforming controller: state really is restored. Started at
-     * task 23.3's 500, so the IMOD the restore writes back can be neither the
+     * task 23.4's 500, so the IMOD the restore writes back can be neither the
      * model's 0 nor the hardware's reset 4000 by coincidence. --- */
     imodStatus = MP_STATUS_SUCCESS;
     imodValue = 500;
@@ -27790,7 +27790,7 @@ static void test_save_restore(void)
      * The 2026-09-05 audit's F10: the restore wrote IMOD as 0, so a controller
      * that restored successfully ran with no interrupt moderation while the
      * isochronous builder's IOC-per-TD policy assumed moderation. The value the
-     * save read is what the restore has to write back - since task 23.3 the
+     * save read is what the restore has to write back - since task 23.4 the
      * start's interval, the one path xhciRestoreState's write matters on.
      */
     CHECK_EQ(mmio[HC_IR0(XHCI_IR_IMOD) / 4], 500UL,
@@ -29073,7 +29073,7 @@ static void test_passthru_snapshot(void)
     CHECK_EQ(snapCall(sizeof(snapBlock)), MP_STATUS_SUCCESS, "(a window)");
     CHECK_EQ(h->SchemaVersion, XHCI_SNAPSHOT_SCHEMA,
              "the schema is the one the tool refuses a mismatch of");
-    /* Schema 4, task 23.3: an out-of-range value, so requested and in force
+    /* Schema 4, task 23.4: an out-of-range value, so requested and in force
      * differ and a header that copied one field into another would show. */
     CHECK_EQ(h->ImodStatus, MP_STATUS_SUCCESS, "the moderation read's status");
     CHECK_EQ(h->ImodRequested, 5000UL, "what the registry gave");

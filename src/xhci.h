@@ -557,14 +557,14 @@ XHCI_C_ASSERT(config_maxslotsen_is_defined,
 #define XHCI_IMOD_IMODI_MAX      0x0000FFFFUL
 
 /*
- * Roadmap task 23.3's moderation interval, `XhciImodInterval250ns` in the
+ * Roadmap task 23.4's moderation interval, `XhciImodInterval250ns` in the
  * driver's software key, in IMODI's own 250 ns units (the owner's rule,
  * 2026-09-19, narrowed 2026-09-21).
  *
  * The default is the hardware's own reset value, 4000 (1 ms), so a machine
- * whose value is absent runs exactly as every release before 23.3 did. The
- * INFs write 500 (125 us) on every install path: 23.2 measured reads at 98% of
- * their plateau there and 23.3.5 played a Full-Speed audio stream through it
+ * whose value is absent runs exactly as every release before 23.4 did. The
+ * INFs write 500 (125 us) on every install path: 23.3 measured reads at 98% of
+ * their plateau there and 23.5 played a Full-Speed audio stream through it
  * (docs/contributing/runs/run-23.md).
  *
  * 10 is the floor so a user can go no lower than 2.5 us; nothing above 4000 is
@@ -7714,7 +7714,7 @@ typedef struct _XHCI_EXTENSION {
      * IMOD as it read at the save, written back by the restore (4.23.2 p.314
      * lists IMOD among the registers software writes before CRS, and "the
      * Restore operation overwrites internal default values asserted by a xHC
-     * reset"). Since task 23.3 that is the interval the start wrote
+     * reset"). Since task 23.4 that is the interval the start wrote
      * (`ImodInterval`), which is what the isochronous builder's IOC-per-TD
      * policy leans on; the restore used to write 0 here, so a successful
      * restore silently removed that moderation (the 2026-09-05 audit's F10).
@@ -7845,12 +7845,12 @@ typedef struct _XHCI_EXTENSION {
     XHCI_LOG Log;
 
     /*
-     * Roadmap task 23.3's moderation interval (XHCI_IMOD_INTERVAL_*), in every
+     * Roadmap task 23.4's moderation interval (XHCI_IMOD_INTERVAL_*), in every
      * build. Read at PASSIVE beside the log's two values, written to IR0's IMOD
      * at the end of xhciProgramEventRing, carried across a resume by
      * `SavedImod`.
      *
-     * After `Log` on purpose, where 23.2's experimental fields stood, so no
+     * After `Log` on purpose, where 23.3's experimental fields stood, so no
      * counter an older offset table names moves. Four ULONGs, an even number,
      * so the amd64 parity `TrailingPad` holds is unchanged.
      *
@@ -7883,7 +7883,7 @@ typedef struct _XHCI_EXTENSION {
 } XHCI_EXTENSION, *PXHCI_EXTENSION;
 
 /*
- * Task 23.3: the interval a start writes, from what the registry read gave.
+ * Task 23.4: the interval a start writes, from what the registry read gave.
  * The value itself when the read succeeded and it is within
  * XHCI_IMOD_INTERVAL_MIN..MAX; XHCI_IMOD_INTERVAL_DEFAULT otherwise - absent,
  * unreadable, below the floor or above the ceiling - **substituted, not
@@ -8027,7 +8027,7 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
  * in the wild was invalidated by it. `0.0.0.6` is the release schema 3 goes out
  * in, and from here a bump is a promise to a stranger's dump.
  *
- * **Schema 4 is task 23.3's**, and the first bump a published tool meets: four
+ * **Schema 4 is task 23.4's**, and the first bump a published tool meets: four
  * moderation fields appended after `RingUsed`. An `XHCISNAP` from `0.0.0.6` to
  * `1.1.0.0` refuses a `1.1.1.0` driver and says to rebuild, which is correct -
  * the tool ships in the same package as the driver it reads.
@@ -8189,7 +8189,7 @@ typedef struct _XHCI_SNAPSHOT_HEADER {
     ULONG RingHead;         /* next byte to write; the wrap point           */
     ULONG RingUsed;         /* bytes held, <= RingBytes                     */
     /*
-     * ---- schema 4 (task 23.3) ---------------------------------
+     * ---- schema 4 (task 23.4) ---------------------------------
      *
      * The moderation interval, so a release build answers "which interval is
      * this machine running" with no offset table: the four XHCI_EXTENSION

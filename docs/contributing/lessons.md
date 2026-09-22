@@ -9097,7 +9097,7 @@ to kill a 9x guest after an install.
 
 ## On NT 6.x a devnode registry value written by hand is not the value the INF writes
 
-Roadmap task 23.1.5, 2026-09-20. The controller's property page is registered
+Roadmap task 23.2, 2026-09-20. The controller's property page is registered
 by one REG_SZ on the device's driver key -
 `EnumPropPages32 = "usbui.dll,USBControllerPropPageProvider"` - and the task's
 method, inherited from the 9x half, was to **write it by hand in regedit on a
@@ -9149,13 +9149,13 @@ So:
   separates the two characters plainly - or crop the row out of the screendump
   and magnify it before believing it.
 
-`docs/contributing/runs/run-23.md`, task 23.1.5 leg V, has both readings and
+`docs/contributing/runs/run-23.md`, task 23.2 leg V, has both readings and
 the control; `src/xhci98.inf`'s block above `[Xhci.AddReg.NT]` carries the
 warning beside the line itself.
 
 ## Interrupt moderation at the reset default halves Bulk-Only read throughput
 
-Roadmap task 23.2, the ThinkPad P14s Gen 1 (Comet Lake xHC, `8086:02ED`)
+Roadmap task 23.3, the ThinkPad P14s Gen 1 (Comet Lake xHC, `8086:02ED`)
 under Windows 98 SE and NUSB 3.3, 2026-09-21 into 2026-09-22. The start had
 never written interrupter 0's IMOD, so every bare-metal run this project had
 taken ran at the reset value of 4000, 1 ms. An experimental build wrote a
@@ -9190,8 +9190,8 @@ is a drift until the closing control says otherwise. And when a throughput
 reading on this driver disagrees between a guest and metal, moderation is a
 difference between them: the guest runs unmoderated.
 
-`runs/run-23.md`, task 23.2, has the full ATTO tables and the decoded counters;
-roadmap task 23.3 carries the owner's decision that followed.
+`runs/run-23.md`, task 23.3, has the full ATTO tables and the decoded counters;
+roadmap task 23.4 carries the owner's decision that followed.
 
 ## COMMAND.COM performs redirection on a `REM` line
 

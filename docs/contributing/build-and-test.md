@@ -939,7 +939,7 @@ so `vm\winxp.img`, `vm\win7.img` and the other WHPX guests take a powered-off
 snapshot on `vm\winxp.img` lists `VM_SIZE 0`. The TCG guests -
 `vm\win2k-xonly.img`, `vm\vista.img`, `vm\vista-x64.img` and the 9x images -
 take `savevm` normally, and a live snapshot of a mid-experiment state is
-usually worth far more than a clean-boot one: roadmap task 23.1.5 used them to
+usually worth far more than a clean-boot one: roadmap task 23.2 used them to
 keep a guest at the exact point a reading was taken. Read the guest's
 accelerator off its launcher before planning a run around a live snapshot
 (measured per guest and recorded in each "target VM" section below), and note
@@ -2598,7 +2598,7 @@ Mode* reach *Disable Driver Signature Enforcement*. Otherwise press F8 at the
 console.
 
 **A third route, simpler than either, and it needs no keypress and no
-timing** (roadmap task 23.1.5, 2026-09-20, used on both x64 guests). From an
+timing** (roadmap task 23.2, 2026-09-20, used on both x64 guests). From an
 elevated command prompt in the guest:
 
 ```
@@ -4934,20 +4934,20 @@ enabled=1`, `devices addressed=1`, `SET_ADDRESS interceptions=1`, speed decode
 == 0x9C`, `commands issued == completed == 6`, every one of the 80+ error and
 failure counters zero).
 
-#### The moderation experiment package (task 23.2) - retired
+#### The moderation experiment package (task 23.3) - retired
 
-**Retired on 2026-09-22 by the owner, with task 23.3.** Task 23.2 swept the
+**Retired on 2026-09-22 by the owner, with task 23.4.** Task 23.3 swept the
 interrupter's moderation interval with an experimental build
 (`XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT`) staged through a second narrow
 exception to the do-not-deploy rule, `make-package.ps1
 -ImodExperimentArtifact`: it read `XhciImodInterval250ns` as 0 to 65535 and
 wrote nothing when the value was absent, so one install was the control and
 every arm. It ran on the P14s Gen 1 under Windows 98 SE on 2026-09-21 and
-2026-09-22; `runs/run-23.md`, 23.2 and 23.3.5, has the procedure and the
+2026-09-22; `runs/run-23.md`, 23.3 and 23.5, has the procedure and the
 reading, and its build numbers (an extension of 92,328 bytes against the
 shipping 92,304) belong to that build alone.
 
-Since `1.1.1.0` **every build reads the value** (roadmap task 23.3), so the
+Since `1.1.1.0` **every build reads the value** (roadmap task 23.4), so the
 define, the packaging switch and its three build-time refusals are gone, and
 a sweep uses an ordinary package: install it once, then change only the value
 and reboot (`scripts\bench\IMOD98.BAT` or `IMOD.BAT`). The contract is the
@@ -5265,7 +5265,7 @@ omits:
   where the file is UTF-16 so a byte grep for the name finds nothing in it,
   and then read again as `runtime` out of the running guest's own
   `C:\Windows\inf\usbport.inf`; Windows 7's has still not been read). **It was
-  taken on 2026-09-20** by roadmap task 23.1.5, which read the page on seven
+  taken on 2026-09-20** by roadmap task 23.2, which read the page on seven
   NT guests - Windows 2000 SP4, Windows XP SP3, Windows XP x64 SP2, Vista SP2
   in both architectures and Windows 7 in both - covering all four install
   sections that reach `[Xhci.AddReg.NT]` across the two INFs. All seven show
@@ -5360,7 +5360,7 @@ power available: 500 mA per port", and an attached-device list reading
 "4 port(s) available". No error box appears in the without case; the page is
 simply absent.
 
-**Since roadmap task 23.1.5 this package registers a provider for its own
+**Since roadmap task 23.2 this package registers a provider for its own
 controller on the NT targets too**, so the sentence that used to stand here -
 that the controller's tab row is unchanged on NT because `PROP-NTHALF` held
 that half shut - no longer applies. That rule was inverted on 2026-09-20 and

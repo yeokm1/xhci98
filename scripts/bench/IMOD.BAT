@@ -1,7 +1,7 @@
 @echo off
 rem IMOD.BAT - set, show or clear XhciImodInterval250ns, the interrupt
-rem moderation interval the driver reads at every start (roadmap task 23.3;
-rem task 23.2 swept it), on an NT target.  Run it IN THE GUEST or on the bench
+rem moderation interval the driver reads at every start (roadmap task 23.4;
+rem task 23.3 swept it), on an NT target.  Run it IN THE GUEST or on the bench
 rem machine, not on the build host.
 rem
 rem   IMOD SHOW              print the value in force, and the key it is in
@@ -31,7 +31,7 @@ rem reading - see AGENTS.md, "Project Purpose".
 rem
 rem THE INSTANCE NUMBER UNDER THE CLASS KEY IS NOT FIXED by anything on either
 rem target (run-11v.md, run 2b: it was 0002 there and 0000 on the NT guests of
-rem task 23.1.5).  So this file finds the key by CONTENT - the DriverDesc this
+rem task 23.2).  So this file finds the key by CONTENT - the DriverDesc this
 rem package writes, which carries "xhci98" - and never by the number.
 
 setlocal

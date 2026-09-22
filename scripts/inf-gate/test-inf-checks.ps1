@@ -515,7 +515,7 @@ try {
                              "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,1")
     }
 
-    # Roadmap task 23.3's moderation interval: one path at a time, for the
+    # Roadmap task 23.4's moderation interval: one path at a time, for the
     # asymmetry reason above, anchored on the log value that precedes it on
     # each path - DebugView then EnumPropPages on 9x, then EnumPropPages32 on
     # NT - so neither case can drift onto the other path.
@@ -598,7 +598,7 @@ try {
                              "HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,EnumPropPages,,`"usbui.dll,USBControllerPropPageProvider`"")
     }
 
-    # **The NT half, which roadmap task 23.1.5 took on 2026-09-20.** What used
+    # **The NT half, which roadmap task 23.2 took on 2026-09-20.** What used
     # to be PROP-NTHALF - a rule refusing the NT value until guests had been
     # read - is now the ordinary requirement, so the cases below are the NT
     # mirror of the 9x ones above. The readings behind it: Windows 2000 SP4

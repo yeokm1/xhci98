@@ -17,7 +17,7 @@ $repo = Split-Path -Parent $qualDir
 # those are generated per run and are not what ships to the field.
 #
 # `out\` is skipped for the same reason, and the reason it was not until
-# 2026-09-20 is that nothing had ever staged a .BAT there. Task 23.2's bench
+# 2026-09-20 is that nothing had ever staged a .BAT there. Task 23.3's bench
 # kit does (scripts\bench\IMOD*.BAT are copied into out\bench-23.2\), and the
 # count this script printed went from 12 to 14 while the word in the message
 # stayed "tracked" - so the check was reporting a number that was not the

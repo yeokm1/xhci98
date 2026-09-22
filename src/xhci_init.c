@@ -1187,11 +1187,11 @@ static ULONG xhciProgramEventRing(PXHCI_EXTENSION ext)
     }
 
     /*
-     * Task 23.3's moderation interval (XHCI_IMOD_INTERVAL_* in src/xhci.h),
+     * Task 23.4's moderation interval (XHCI_IMOD_INTERVAL_* in src/xhci.h),
      * chosen from what the start's registry read recorded. Every start writes
      * it, the default included, so the interval in force never rests on the
      * reset value - which QEMU gets wrong (it resets IMOD to 0, where hardware
-     * resets it to 4000; roadmap task 23.2).
+     * resets it to 4000; roadmap task 23.3).
      *
      * Here because here is "after the interrupter is programmed": ERSTSZ, ERDP
      * and ERSTBA are written above and R/S is not set until xhciRunController,
@@ -3362,7 +3362,7 @@ static ULONG xhciRestoreState(PXHCI_EXTENSION ext)
         return 0;
     }
     /*
-     * IMOD is written back as the save read it, not as 0. Since task 23.3
+     * IMOD is written back as the save read it, not as 0. Since task 23.4
      * that is the interval the start wrote (xhciProgramEventRing), which the
      * isochronous builder's IOC-per-TD policy relies on to absorb up to 8,000
      * events a second; the 0 this site used to write removed that moderation

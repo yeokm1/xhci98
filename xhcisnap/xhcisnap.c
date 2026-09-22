@@ -295,7 +295,7 @@ static const unsigned long snap_guid[4] = {
  * a WRONG reading, not a failed one - and a shrinking header is exactly as much
  * of a decode hazard as a growing one.
  *
- * **Schema 4** is roadmap task 23.3's: the moderation interval's four fields
+ * **Schema 4** is roadmap task 23.4's: the moderation interval's four fields
  * appended after `RingUsed`. A tool from `1.1.0.0` or earlier refuses a
  * `1.1.1.0` driver, and this one refuses theirs.
  */
@@ -398,7 +398,7 @@ typedef struct _SNAP_HEADER {
     unsigned long RingBytes;
     unsigned long RingHead;
     unsigned long RingUsed;
-    /* ---- schema 4 (task 23.3): the moderation interval ---- */
+    /* ---- schema 4 (task 23.4): the moderation interval ---- */
     unsigned long ImodStatus;
     unsigned long ImodRequested;
     unsigned long ImodInterval;
@@ -904,7 +904,7 @@ static const char *mpstatus_text(unsigned long s)
 }
 
 /*
- * Roadmap task 23.3's moderation interval: what the registry gave, what the
+ * Roadmap task 23.4's moderation interval: what the registry gave, what the
  * start wrote, and what the register read straight after. The driver never
  * clamps - a value outside 10-4000, or none at all, is replaced by 4000 - so
  * the reason for a default is said in words, because "I set 0 and it runs at
@@ -1336,7 +1336,7 @@ static int probe_route(HANDLE device)
  *
  * The driver reads two log values at `StartController` - `XhciLogVerbosity` and
  * `XhciLogDebugView` - through usbport's
- * `UsbPortGetMiniportRegistryKeyValue`, and since task 23.3 a third that is not
+ * `UsbPortGetMiniportRegistryKeyValue`, and since task 23.4 a third that is not
  * the log's, `XhciImodInterval250ns`, which this tool reports and never sets.
  * *(Three log values until the snapshot-value merge, when
  * `XhciLogSnapshot` became rung 0 of the verbosity ladder.)* usbport's sixteen-service table has

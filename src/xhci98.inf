@@ -163,7 +163,7 @@ CopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI
 ; third one NUSB's [EHCI.AddReg] writes, transcribed from it like the two
 ; above; it is cosmetic, affecting no binding and no load, and it is the 9x
 ; half alone. The NT counterparts, EnumPropPages32 and Controller, are written
-; too since roadmap task 23.1.5 - in [Xhci.AddReg.NT], where the block above
+; too since roadmap task 23.2 - in [Xhci.AddReg.NT], where the block above
 ; that section records what each NT guest showed.
 ;
 ; What it buys was MEASURED on 2026-09-07 in a Windows 98 guest rather than
@@ -343,7 +343,7 @@ HKR,,XhciImodInterval250ns,0x00010001,500
 ; not asked for a log has no channel open at all.
 
 ; ------------------------------------------------------------------
-; The interrupt moderation interval, on both install paths (task 23.3)
+; The interrupt moderation interval, on both install paths (task 23.4)
 ; ------------------------------------------------------------------
 ;
 ;   XhciImodInterval250ns  how long the controller holds an interrupt back
@@ -357,9 +357,9 @@ HKR,,XhciImodInterval250ns,0x00010001,500
 ; value is REPLACED by 4000, not clamped, so a mistyped 0 cannot turn
 ; moderation off.
 ;
-; Why 500 and not the default: roadmap task 23.2 measured mass-storage reads
+; Why 500 and not the default: roadmap task 23.3 measured mass-storage reads
 ; at 17.6 MB/s at 4000 and 32.5 MB/s at 500, 98% of the 33.1 plateau at 200,
-; on the P14s Gen 1 under Windows 98 SE; task 23.3.5 played a Full-Speed audio
+; on the P14s Gen 1 under Windows 98 SE; task 23.5 played a Full-Speed audio
 ; stream through a full benchmark pass at 500 with every isochronous error
 ; counter at 0 (docs\contributing\runs\run-23.md). A lower value raises the
 ; worst-case interrupt rate - 8,000 a second at 500, against 1,000 at 4000 -
@@ -383,7 +383,7 @@ HKR,,XhciImodInterval250ns,0x00010001,500
 ; guest's own C:\Windows\inf\usbport.inf, which settles the one reference this
 ; file used to flag as uncertain. Windows 7's own copy has still NOT been read.
 ;
-; Roadmap task 23.1.5 read it on FIVE guests, covering both install paths that
+; Roadmap task 23.2 read it on FIVE guests, covering both install paths that
 ; carry this section and both architectures:
 ;
 ;   Windows 2000 SP4   NT 5.0  [Xhci.Dev.NTx86]    tab APPEARS
@@ -422,7 +422,7 @@ HKR,,XhciImodInterval250ns,0x00010001,500
 ;
 ; EnumPropPages32 ALONE IS LOAD-BEARING. With Controller deleted and
 ; EnumPropPages32 left in place, the Windows 2000 tab still rendered and still
-; read its bandwidth figure live (23.1.5, leg W8). Both lines ship because all
+; read its bandwidth figure live (23.2, leg W8). Both lines ship because all
 ; three references write both and this file follows them, not because the pair
 ; is indivisible.
 ;

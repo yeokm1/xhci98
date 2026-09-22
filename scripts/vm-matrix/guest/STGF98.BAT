@@ -22,7 +22,7 @@ rem   set /a        becomes  nothing; the disk stream is unbounded instead
 rem   if /i         becomes  both spellings tested explicitly
 rem
 rem (No arrows in that table.  COMMAND.COM performs redirection on a REM line,
-rem so an arrow there wrote a junk file on every run - runs/run-23.md, 23.2.)
+rem so an arrow there wrote a junk file on every run - runs/run-23.md, 23.3.)
 rem
 rem AND ONE THING THE VOLUME DOES NOT HAVE.  Windows 98's COMMAND.COM can `dir`
 rem and `type` a batch file on the QEMU `fat:` transfer volume but CANNOT EXECUTE

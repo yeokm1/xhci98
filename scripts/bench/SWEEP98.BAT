@@ -1,6 +1,6 @@
 @echo off
 rem SWEEP98.BAT - one boot of a moderation sweep on Windows 98 SE (roadmap
-rem tasks 23.2 and 23.3.5): a timed XHCISNAP dump either side of a benchmark
+rem tasks 23.3 and 23.5): a timed XHCISNAP dump either side of a benchmark
 rem run.  Run it from the
 rem folder holding XHCISNAP.EXE, on the bench machine.
 rem
@@ -14,17 +14,17 @@ rem WHY TWO CALLS AND NOT ONE WITH A PAUSE.  The first version took dump A,
 rem waited on PAUSE while ATTO Disk Benchmark ran in the GUI, and took dump B.
 rem On the P14s Gen 1 the PAUSE never returned once ATTO had run, with the DOS
 rem box focused and a key pressed.  Two calls cost one more line typed per boot
-rem and cannot hang.  (runs/run-23.md, task 23.2.)
+rem and cannot hang.  (runs/run-23.md, task 23.3.)
 rem
 rem WHAT THE DUMPS ARE FOR.  isr.entries and dpc.count are NOT in the .TXT.
 rem They are counter-block fields, and the counter block reaches the note ring
 rem only on a DebugView flush, so with XHCISNAP alone they exist only in the
 rem .BIN extension image.  Bring the .BIN back and decode it with
 rem scripts\local\readsnap.py against an offsets table from the same tree;
-rem build-and-test.md, the 23.2 staging section, has the recipe.  The .TXT
+rem build-and-test.md, the 23.3 staging section, has the recipe.  The .TXT
 rem carries the interval itself since 1.1.1.0 - the XhciImodInterval250ns
 rem lines under registry values - which is enough to check on the machine
-rem that a value took.  (Task 23.2 ran this on its experimental build, whose
+rem that a value took.  (Task 23.3 ran this on its experimental build, whose
 rem interval fields were in the .BIN only.)
 rem
 rem The times in the log come from TIME fed an empty line, so the gap between

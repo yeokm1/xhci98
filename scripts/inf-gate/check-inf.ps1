@@ -71,7 +71,7 @@ What it checks, grouped by the failure each rule prevents:
            target and neither engine reports it (roadmap tasks 11-V.7, 11-V.9
            and 13-L.2). There are three and all are DWORDs: the two log
            switches, which ship at 0 (three until the snapshot-value merge,
-           when XhciLogSnapshot joined the ladder), and since roadmap task 23.3
+           when XhciLogSnapshot joined the ladder), and since roadmap task 23.4
            XhciImodInterval250ns, the moderation interval, which ships at 500.
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
@@ -981,7 +981,7 @@ foreach ($m in $models) {
 # family enforces is untouched by that - both survivors are still written on
 # both install paths and still checked for their default here.
 #
-# **Roadmap task 23.3 added a third, and the first whose default is not 0.**
+# **Roadmap task 23.4 added a third, and the first whose default is not 0.**
 # `XhciImodInterval250ns` is not a switch: it is the interval the driver writes
 # to IMOD, and the INF ships 500 where the driver's own fallback is 4000. The
 # risk is the same shape, a path that lacks it silently running another
@@ -1006,8 +1006,8 @@ $requiredValues = @(
         Name    = "XhciImodInterval250ns"
         Type    = "0x00010001"
         Default = "500"
-        Why     = "task 23.3's interrupt moderation interval, in 250 ns units, written to IR0's IMOD at every start. Absent, the driver runs at its own default of 4000 (1 ms), so a path missing it runs a different interval from the other paths and nothing says so"
-        DefaultWhy = "The owner set the shipped interval to 500 on 2026-09-22 from roadmap tasks 23.2 and 23.3.5's bare-metal readings; any other number is a new decision and needs a new reading, not an INF edit"
+        Why     = "task 23.4's interrupt moderation interval, in 250 ns units, written to IR0's IMOD at every start. Absent, the driver runs at its own default of 4000 (1 ms), so a path missing it runs a different interval from the other paths and nothing says so"
+        DefaultWhy = "The owner set the shipped interval to 500 on 2026-09-22 from roadmap tasks 23.3 and 23.5's bare-metal readings; any other number is a new decision and needs a new reading, not an INF edit"
     }
 )
 
@@ -1109,7 +1109,7 @@ foreach ($m in $models) {
 # field, which is how both reference INFs write it; a numeric flags field here
 # would be some other type for a value the shell reads as a string.
 # Both halves are written now. The 9x half landed in roadmap task 23.1 and the
-# NT half in 23.1.5, after the guest readings the deferral was waiting for:
+# NT half in 23.2, after the guest readings the deferral was waiting for:
 # Windows 2000 SP4 and Windows XP SP3 both draw the Advanced tab from the NT
 # pair with no restart, and Windows Vista SP2 x86 draws nothing from it at all
 # while Microsoft's own EHCI controller, carrying the identical pair on the
@@ -1139,7 +1139,7 @@ $propPages = @{
 
 # The NT half's companion. REG_BINARY 01, flags field 1, written by all three
 # NT references beside EnumPropPages32. Windows 2000 showed the tab with this
-# value DELETED and EnumPropPages32 left alone (23.1.5 leg W8), so it is not
+# value DELETED and EnumPropPages32 left alone (23.2 leg W8), so it is not
 # what makes the page appear - it is here because the references write it and
 # this INF follows them, and because a value that is present must at least be
 # the right shape.
