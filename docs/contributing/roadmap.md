@@ -76,11 +76,11 @@ now.
 
 **Phase 23 is open**, since 2026-09-19, and **carries the `1.1.1.0` cut**
 (branch `1.1.1.0`, renamed from `phase-23` on 2026-09-22): GitHub issue 4's
-controller Device Manager page (done, both halves) and interrupt polling
-rates, and the owner's interrupt moderation experiment, which measured - reads
-nearly doubled - and so becomes a registry value, shipped at 500. On
-2026-09-22 the owner stopped the phase at 23.5 and moved the issue's last
-request, true speeds on root ports, to **Phase 24**, not yet opened.
+controller Device Manager page (done, both halves), and the owner's interrupt
+moderation experiment, which measured - reads nearly doubled - and so becomes
+a registry value, shipped at 500. On 2026-09-22 the owner moved the issue's
+other two requests, interrupt polling rates and true speeds on root ports, to
+**Phase 24**, not yet opened.
 **Phase 22**, closed on 2026-09-19, began as the 32-bit
 question - whether the binary that already ships runs on Windows Vista and
 Windows 7 as it stands - and that premise fell with Phase 21's: measurements
@@ -167,9 +167,9 @@ binary that already ships runs on Vista and Windows 7 as it stands, built the
 Version 300 path that both phases needed, and **carries the `1.1.0.0` cut** -
 the version Phase 21 bumped to and never published, and the first release to
 carry a 64-bit package. Phase 23, opened on 2026-09-19, takes GitHub issue
-4's property page and polling rates and the interrupt moderation experiment,
-and carries the `1.1.1.0` cut; Phase 24 takes the issue's last request, true
-speeds on root ports, split out of Phase 23 on 2026-09-22. Phase
+4's property page and the interrupt moderation experiment, and carries the
+`1.1.1.0` cut; Phase 24 takes the issue's other two requests, polling rates
+and true speeds on root ports, split out of Phase 23 on 2026-09-22. Phase
 14 waited on Phase 13's bench batches reporting. Accepting the published release, from the download on a
 freshly installed VM and on a physical machine, is not a phase and has no
 task: it is a hand-run procedure the project owner takes before the upload,
