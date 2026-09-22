@@ -754,7 +754,10 @@ polling rates and true speeds.
   bump a published tool meets. Owed before the box closes: this checkpoint's
   23.4 clause read in a Windows 98 SE and a Windows 2000 guest (QEMU stores IMOD
   and reads it back, so the register value is observable there though no rate
-  is), and one suspend/resume with 500 in force. **23.3 measured, so this is
+  is). The suspend/resume with 500 in force that was also owed here was
+  dropped by the owner on 2026-09-22: no guest can witness it (`XHCISNAP`'s
+  readback is the start's, and QEMU models no rate), and the host's
+  save/restore vector already pins it (`runs/run-23.md`, 23.4). **23.3 measured, so this is
   taken, and the owner changed what it ships on 2026-09-22**: the INF writes the value as
   **500** (125 us), not 4000. The owner's first choice was 200, the read
   optimum, moved to 1000 for most of the read gain at a quarter of 200's

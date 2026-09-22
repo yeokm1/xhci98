@@ -1889,6 +1889,12 @@ open.
   decimal DWORD from this INF.
 - **One suspend/resume with 500 in force** - the first exercise of
   `xhciRestoreState`'s IMOD write with anything but 0 or 4000 outside the
-  host model.
+  host model. **Dropped by the owner on 2026-09-22**, because a guest could
+  not witness it: `ImodReadback` is taken only at the start
+  (`xhciProgramEventRing`), so `XHCISNAP` after a resume repeats the start's
+  reading whatever the restore wrote; QEMU does not model IMODI, so no rate
+  shows it either; and the restore path is unchanged by 23.4 and
+  value-agnostic, and the host's save/restore vector already pins it with
+  500 against a register reset to 4000.
 - **23.5's gate proper**, the audio pass at 500 on bare-metal Windows 98,
   now read on the cut's own `release` binary (roadmap 23.6).
