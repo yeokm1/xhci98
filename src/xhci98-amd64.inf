@@ -23,7 +23,7 @@ ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
 LayoutFile=layout.inf
 ; Must equal src\xhci_version.h, as src\xhci98.inf's does.
-DriverVer=09/18/2026,1.1.0.0
+DriverVer=09/22/2026,1.1.1.0
 
 ; NTamd64 makes this file 64-bit only. NTamd64.6.0 sends Vista x64 and
 ; Windows 7 x64 to [XhciModels.NTamd64.6.0]; NT 5.2 takes the first.

@@ -1,7 +1,7 @@
 # xhci98 - Release Notes
 
-This file describes package version `1.1.0.0`
-(`DriverVer=09/18/2026,1.1.0.0`), the fifth release. Where this file and
+This file describes package version `1.1.1.0`
+(`DriverVer=09/22/2026,1.1.1.0`), the sixth release. Where this file and
 `docs/contributing/roadmap.md`, `docs/contributing/build-and-test.md` or
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
@@ -25,7 +25,7 @@ the wrong one is harmless - Windows finds no driver in that directory and
 says so. **On Vista x64 and Windows 7 x64 it loads only while driver signature
 enforcement is disabled**; see below.
 
-From `1.1.1.0` the driver has two things a user can see that earlier releases
+Since `1.1.1.0` the driver has two things a user can see that earlier releases
 did not: the xHCI controller's own properties in Device Manager carry an
 **Advanced** tab, on every system above, and the install sets the controller's
 **interrupt moderation interval** to an eighth of the value every earlier
@@ -127,9 +127,9 @@ and ask none of this.
   out of the running driver by `XHCISNAP.EXE` when you ask for a report; see
   "The log, and how to send one".
 
-## The controller's Advanced tab (from `1.1.1.0`)
+## The controller's Advanced tab (since `1.1.1.0`)
 
-From `1.1.1.0` the xHCI controller's own properties in Device Manager carry an
+Since `1.1.1.0` the xHCI controller's own properties in Device Manager carry an
 **Advanced** tab, on **every** system this package supports - Windows 98 SE
 and Windows ME, and Windows 2000, Windows XP in both architectures, and
 Windows Vista and Windows 7 in both architectures. `1.1.0.0` and the releases
@@ -190,7 +190,7 @@ Windows 7 in both architectures. On the two 64-bit NT 6.x systems the tab is
 there like anywhere else, but so is the requirement above it: they load this
 driver at all only on a boot with driver signature enforcement disabled.
 
-## The interrupt moderation setting (from `1.1.1.0`)
+## The interrupt moderation setting (since `1.1.1.0`)
 
 `XhciImodInterval250ns` is a `DWORD` in the controller's driver (software)
 key, in **units of 250 ns**. It sets how long the controller waits after one
@@ -409,7 +409,7 @@ reason a log appears to do nothing. Step 2 is not optional: the driver reads
 these settings once, when it starts.
 
 The two values, both `DWORD`s in the device's driver (software) key, both
-default `0` (from `1.1.1.0` a third `DWORD`, `XhciImodInterval250ns`, sits in
+default `0` (since `1.1.1.0` a third `DWORD`, `XhciImodInterval250ns`, sits in
 the same key; it is not a log setting, and "The interrupt moderation setting"
 above describes it):
 
@@ -463,7 +463,7 @@ because a user meets them through this driver.
   driver loaded there is no controller to stop, so it finishes normally and
   its registry step runs - and shut down and start again. That is the only
   route measured to deliver a new package's registry settings on this stack,
-  and from `1.1.1.0` those settings are the Advanced tab's line and the
+  and since `1.1.1.0` those settings are the Advanced tab's line and the
   interrupt moderation value (their two sections above).
   **Do not rely on right-click `xhci98.inf` -> *Install* for this.** These
   notes and the download's `readme.txt` have said to, `1.1.0.0`'s included,
@@ -560,7 +560,7 @@ because a user meets them through this driver.
   of the next entry. Measured in a virtual machine with SweetLow's hidusbf; the
   bands are documented in full in `docs/issues/06-full-speed-root-port-bugcheck.md`.
   `1.1.1.0` changes none of this: the polling rates and the High Speed report
-  itself are the subject of the work after that release, not answered by it.
+  itself are unchanged, and no work on them is scheduled.
 - **Windows Vista and Windows 7, 32-bit and x64: a USB 1.1 hub on a root port
   crashes the machine** as soon as a mouse, keyboard or other Full or Low
   Speed device with an interrupt or isochronous endpoint is used behind it
@@ -617,7 +617,7 @@ because a user meets them through this driver.
   A real standby and wake has not been run anywhere, and the other half
   of the same path is unobserved too: on a controller whose restore does
   succeed, the driver now restores the interrupt moderation interval it
-  saved - from `1.1.1.0` the setting's own value, `500` by default - rather
+  saved - since `1.1.1.0` the setting's own value, `500` by default - rather
   than leaving it at zero, and that has been read only through a host
   model, because the virtual machines fail every restore and rebuild the
   bus instead.

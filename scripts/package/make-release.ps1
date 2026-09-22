@@ -3065,6 +3065,12 @@ Two things are specific to this driver and worth knowing in advance:
   If nothing comes back at all, run XHCISNAP -probe. It checks the route to
   the driver separately from whether this driver answers on it.
 
+  USE THE XHCISNAP.EXE FROM THIS PACKAGE, not a copy kept from an earlier
+  release. This driver's report is snapshot schema 4, which grew by the
+  interrupt moderation setting (section 9), so an older XHCISNAP refuses it
+  with "schema mismatch" and reports nothing, and this one refuses an older
+  driver the same way.
+
   XHCISNAP.EXE changes nothing about how the driver behaves on the bus, and
   writes no file it was not asked to. It does READ the controller's port
   registers, which is a hardware access - it just does not write one, and it
@@ -3263,8 +3269,7 @@ writes none of them: the installer creates all three.
 
   A value outside 10-4000 is REPLACED BY 4000, not rounded to the nearest
   limit, so a mistyped 0 cannot turn moderation off. 4000 is the
-  controller's own power-on value and what every release before 1.1.1.0
-  ran at.
+  controller's own power-on value and what every earlier release ran at.
 
   ATTO Disk Benchmark with an MSSU10-128GSR flash drive at 500 (125
   microseconds), on a ThinkPad P14s Gen 1 under Windows 98 SE, gives about
@@ -3415,6 +3420,21 @@ perpetual file, which is how a readme goes quietly stale. Either write it with
 {VERSION}, or add it to `$allowedTemplateVersions` above with the reason it has
 to be spelled out - and check the others there are still worth saying while you
 are in it.
+"@
+    }
+
+    # **The schema number section 6 names is the driver's, or the cut fails.**
+    # It is the one number in the template that is neither a version nor
+    # substituted, and a user reads it to tell a stale XHCISNAP from this one.
+    $templateSchemas = @([regex]::Matches($template, 'snapshot schema (\d+)') |
+                         ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object -Unique)
+    $driverSchema = Get-SnapSchema -Path (Join-Path $repo "src\xhci.h") -Macro "XHCI_SNAPSHOT_SCHEMA"
+    $staleSchemas = @($templateSchemas | Where-Object { $_ -ne $driverSchema })
+    if ($staleSchemas.Count -gt 0) {
+        throw @"
+the readme template names snapshot schema $($staleSchemas -join ', '), and
+src\xhci.h declares XHCI_SNAPSHOT_SCHEMA $driverSchema. Section 6 tells the user
+which XHCISNAP matches this driver by that number; correct the sentence.
 "@
     }
 

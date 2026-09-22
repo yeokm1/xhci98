@@ -12,6 +12,55 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 1.1.1.0 - 2026-09-22
+
+Two things you can see, and faster USB mass storage. The xHCI controller's
+properties in Device Manager gain an Advanced tab, and the install sets a
+shorter interrupt moderation interval, which on the one machine measured
+nearly doubled large reads from a USB stick. Every system `1.1.0.0` supports
+installs as it did, from the same four directories.
+
+### What changed
+
+- The controller's Advanced tab. Its properties in Device Manager now carry
+  the tab Windows' own USB controllers have: a "Disable USB error
+  detection" checkbox and a "Bandwidth Usage" button. Both are Windows' own;
+  the package adds one line to its INF naming the page. Read in virtual
+  machines on every supported system: Windows 98 SE under NUSB 3.3 and under
+  SweetLow's stack, Windows ME, Windows 2000, Windows XP in both
+  architectures, and Windows Vista and Windows 7 in both. The bandwidth
+  figures cost a Full-Speed device on a root port as a High-Speed one; the
+  release notes' "Known limitations" say why.
+- The interrupt moderation interval. `XhciImodInterval250ns`, a `DWORD` in
+  the controller's driver key in units of 250 ns, sets how long the
+  controller waits after one interrupt before raising the next. The install
+  writes `500` (125 microseconds, at most 8,000 interrupts a second). A
+  missing value, one the driver cannot read, or one outside `10` to `4000`
+  means `4000` (1 ms, the controller's own power-on value and what every
+  earlier release ran at); an out-of-range value is replaced, not rounded,
+  so a mistyped `0` cannot turn moderation off. A lower value raises the
+  interrupt rate. On a ThinkPad P14s Gen 1 under Windows 98 SE, ATTO Disk
+  Benchmark read and wrote about 33 to 34.6 MB/s at `500` from 64 KB
+  transfers upward, where `4000` gave about 18 MB/s. The value in force was
+  read back from the controller in Windows 98 SE and Windows 2000 virtual
+  machines. The release notes' "The interrupt moderation setting" and the
+  readme's section 9 say where the key is and how to change it.
+- On Windows 98 with NUSB, upgrading over an installed xhci98 still crashes
+  that stack before the install's registry step, so an upgrade gets neither
+  the tab nor the moderation value. The readme's section 5 has the route that
+  delivers both, even after an upgrade that has already crashed; with
+  SweetLow's stack an ordinary Update Driver is enough. Right-clicking
+  `xhci98.inf` and choosing Install, which earlier readmes suggested, copies
+  the files and writes no registry value at all.
+- `XHCISNAP` reports the moderation value it read, the interval in force and
+  what the controller took. Its snapshot format moved to schema 4 for that,
+  so an `XHCISNAP` from an earlier release refuses this driver with "schema
+  mismatch", and this one refuses an earlier driver. Use the copy in this
+  package.
+- Not changed: the polling rates of Full- and Low-Speed devices, and every
+  device on a root port being reported to Windows as High Speed. The known
+  limitations `1.1.0.0` listed all still apply.
+
 ## 1.1.0.0 - 2026-09-18
 
 Windows Vista and Windows 7 join the targets supported in virtual machines,

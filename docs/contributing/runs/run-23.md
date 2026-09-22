@@ -2131,3 +2131,69 @@ No build, since no build input changed. `scripts\check-source-charset.ps1`:
 errors), and `scripts\package\test-package.ps1` passed its 307 checks with
 the template edit in place. Every edited file kept its CRLF endings and
 carries no byte above 0x7F.
+
+## 23.7 - what the cut needs that no gate supplies
+
+**Done 2026-09-22**, the day of the cut, on branch `1.1.1.0` after
+`23.6-the-record` was fast-forwarded into it (the owner, the same day).
+
+### The version and the date
+
+`1.1.1.0`, dated `09/22/2026`: `XHCI_VER_CSV`, `XHCI_VER_STR` and
+`XHCI_DRIVERVER_DATE` in `src\xhci_version.h`, and `DriverVer` in both
+INFs. The INF gate's `amd64-driverver-drift` self-test matched the literal
+version `1.1.0.0`, so this bump would have turned it vacuous as 22.8's date
+bump did; it now matches any version and writes `9.9.9.9`, so the next bump
+cannot. `build-and-test.md`'s unpadded-date example follows the new date.
+
+### What each document gained
+
+- **`releases\history.md`**: the `1.1.1.0` entry, written for the
+  installer - the Advanced tab on every supported system, the moderation
+  value (units, the install's 500, the 4000 fallback and the replacement
+  rule, that a lower value raises the interrupt rate, and README's ATTO
+  figures), the NUSB upgrade that gets neither, `XHCISNAP`'s schema 4, and
+  what did not change.
+- **`docs\using\release-notes.md`**: the opening line names `1.1.1.0`, the
+  sixth release, and its `DriverVer`; every "from `1.1.1.0`" that 23.6 wrote
+  forward-dated reads "since `1.1.1.0`", the two section headings included.
+- **`make-release.ps1`'s `readme.txt` template**, two changes. Section 6
+  gained the paragraph this task was owed: use the `XHCISNAP.EXE` from the
+  package, because the report is snapshot schema 4 and an older tool
+  refuses this driver with "schema mismatch". A literal schema number in a
+  perpetual template would go stale unseen the next time the schema moved,
+  so the script now refuses a cut whose template names a snapshot schema
+  other than `src\xhci.h`'s `XHCI_SNAPSHOT_SCHEMA`. And section 9 said "what
+  every release before 1.1.1.0 ran at" - **a four-part version written by
+  hand, which the template's own version-literal check refuses, so the cut
+  would have failed on it**; it now reads "every earlier release", which is
+  README's own wording.
+- **Both issue forms**: the example version is `1.1.1.0`. Their
+  operating-system lists already carried every supported system.
+- **`README.md`: checked, not changed.** The Install section does not move
+  with 23.4: the install writes the value itself, and the Tuning section is
+  the owner's.
+
+### Phase 24 removed
+
+The owner removed roadmap Phase 24 on 2026-09-22, while this task ran.
+Its section is gone from `roadmap-phases-17-on.md`, its row from
+`docs/README.md`'s phase table, and every current-state sentence that
+named it - Phase 23's goal, status and checkpoint, `roadmap.md`'s status
+and the renumbering note, `docs/issues/06` (status and section 9),
+`docs/issues/README.md`, and the release notes' High Speed entry - now
+says polling rates and true speeds on root ports are **not scheduled**.
+Issue 6 section 9 keeps the reporter's order for whoever takes them up.
+Entries that record what a task wrote on its own day (23.6's, above and in
+the roadmap) still name Phase 24, as the record of that day.
+
+### What was run
+
+`build-driver.cmd all` and `build-driver.cmd all -amd64` from this tree:
+both passed every gate (host tests, the import gate, the INF gate and its
+565 self-test checks over both INFs, the packager's 307, the launchers'
+336, `xhcisnap`'s 5), the amd64 legs with their 5 known compiler warnings
+and the x86 legs with none. All six binaries carry file version `1.1.1.0`:
+`release-x86` 86,059 bytes, `debug-x86` 86,699, `release-x64` 97,280,
+`debug-x64` 181,760. `make-release.ps1` parses with the new check. Every
+edited file kept its CRLF endings.

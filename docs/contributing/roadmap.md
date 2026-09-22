@@ -81,8 +81,9 @@ now.
 controller Device Manager page (done, both halves), and the owner's interrupt
 moderation experiment, which measured - reads nearly doubled - and so becomes
 a registry value, shipped at 500. On 2026-09-22 the owner moved the issue's
-other two requests, interrupt polling rates and true speeds on root ports, to
-**Phase 24**, not yet opened.
+other two requests, interrupt polling rates and true speeds on root ports, out
+of Phase 23 into a Phase 24, and then removed that phase the same day: they
+are **not scheduled**.
 **Phase 22**, closed on 2026-09-19, began as the 32-bit
 question - whether the binary that already ships runs on Windows Vista and
 Windows 7 as it stands - and that premise fell with Phase 21's: measurements
@@ -127,7 +128,7 @@ edited in place. A `.5` id means "between these two" and is not a sub-task. A
 sub-task is `<task>.<n>`: `7b-A.1.2` is sub-task 2 of task `7b-A.1`, and
 `14.1.1` to `14.1.11` are the clauses of task `14.1`. The one exception is
 Phases 23 and 24, renumbered in order on 2026-09-22 (`7488f13`) while no id
-of theirs was in a published `readme.txt`. No tracked file cites a
+of theirs was in a published `readme.txt`; Phase 24 was removed the same day. No tracked file cites a
 pre-renumbering id as a task id; task 14.1.9 checks that. What keeps an old
 id is an artifact name - a snapshot, a marker, an `out\` directory - and
 `runs/run-23.md` lists those under "On task ids inside artifact names".
@@ -174,8 +175,8 @@ Version 300 path that both phases needed, and **carries the `1.1.0.0` cut** -
 the version Phase 21 bumped to and never published, and the first release to
 carry a 64-bit package. Phase 23, opened on 2026-09-19, takes GitHub issue
 4's property page and the interrupt moderation experiment, and carries the
-`1.1.1.0` cut; Phase 24 takes the issue's other two requests, polling rates
-and true speeds on root ports, split out of Phase 23 on 2026-09-22. Phase
+`1.1.1.0` cut; the issue's other two requests, polling rates and true speeds
+on root ports, were split out of Phase 23 on 2026-09-22 and are not scheduled. Phase
 14 waited on Phase 13's bench batches reporting. Accepting the published release, from the download on a
 freshly installed VM and on a physical machine, is not a phase and has no
 task: it is a hand-run procedure the project owner takes before the upload,

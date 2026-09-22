@@ -1632,7 +1632,7 @@ try {
             ("amd64-vergood : the version cross-check SKIPPED, so the drift case below would pass vacuously. Output was:`n" + $r.Output)
 
         Assert-RuleFires "amd64-driverver-drift" "BOTH-VERSION" {
-            param($t) $t -replace '(?m)^(DriverVer=\d{2}/\d{2}/\d{4}),1\.1\.0\.0', '$1,1.1.0.1'
+            param($t) $t -replace '(?m)^(DriverVer=\d{2}/\d{2}/\d{4}),[\d.]+', '$1,9.9.9.9'
         } -Source $prodInfAmd64 -Arch amd64
 
         Remove-Item -LiteralPath $stagedHdr64 -Force
