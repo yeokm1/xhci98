@@ -526,7 +526,8 @@ readings passed on Windows 98 SE and Windows 2000 the same day. **23.5, the audi
 2026-09-22): on the 23.3 experimental build both 1000 and 500 passed it, and
 the gate proper is read once, at 500 on the cut's own `release` binary, as
 23.9, not also on a pre-cut 23.4 build. The record and the cut, once one task,
-are 23.6 to 23.10, split by the owner the same day, and all five boxes are
+are 23.6 to 23.10, split by the owner the same day. **23.6 is done**
+(2026-09-22, documents only, `runs/run-23.md` 23.6); 23.7 to 23.10 are
 open. `1.1.0.0` was uploaded on 2026-09-20, so the hold on merging this branch
 is lifted. The version is **`1.1.1.0`** (the owner, 2026-09-22): 23.4 at least is driver code, so the
 third field moves (`releases/README.md`). The owner's note on the issue
@@ -876,7 +877,23 @@ in the order numbered, and 23.6 does not start until 23.4's box is closed.
 Replying on the GitHub issue, and closing it, are the owner's and not a
 task - and Phase 24's requests keep it open.
 
-- [ ] 23.6 the record. The release notes' known limitations brought into
+- [x] 23.6 the record. **Done 2026-09-22, documents only** (`runs/run-23.md`,
+  23.6). The release notes' two "Not in this release" sections are now "The
+  controller's Advanced tab (from `1.1.1.0`)" and "The interrupt moderation
+  setting (from `1.1.1.0`)", written forward-dated as 22.6 wrote `1.1.0.0`'s
+  and left for 23.7 to make current with the version line; the moderation
+  section is written the way README's "Tuning" section is (the owner,
+  2026-09-22), as is the `readme.txt` template's moderation subsection in
+  `make-release.ps1`, and it carries the `XHCISNAP` schema move; the log
+  section names the third value, the two known-limitations entries that
+  pointed at "the next release" point at those sections, and the High Speed
+  entry says `1.1.1.0` changes nothing there. `docs/issues/06` (status,
+  section 5.1's pointer, section 7's close, a first item in section 9) and
+  `docs/issues/README.md` (the issue 6 paragraph and row) say polling rates
+  and true speeds are Phase 24's and that `1.1.1.0` answers nothing on that
+  page. README was checked, not changed: `2e69e4e` and the owner's edits
+  after it already carry the Tuning section and the throughput row.
+  The brief as written: the release notes' known limitations brought into
   line with whatever 23.2 and 23.4 change - 23.4's value, its units, its
   default of 500 and its fallback of 4000, and that a lower value raises the
   interrupt rate - and their two "Not in this release" sections, the

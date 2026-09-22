@@ -2023,3 +2023,111 @@ shut down cleanly. The work copies are throwaway.
   search, so leg W's box stays unexplained. Explorer did raise "E:\ is not
   accessible" after Finish, although `dir E:\` read the drive at once. It is
   recorded, not explained.
+
+---
+
+## 23.6 - the record
+
+Status as of 2026-09-22: **done, on branch `23.6-the-record` off `1.1.1.0`
+@ `44b3837`.** Documents, plus one prose subsection of `make-release.ps1`'s
+`readme.txt` template on the owner's instruction (below). No version or date
+moved, no build input changed, and no build was run: nothing under `src/` or
+`xhcisnap/` is touched, and the one script touched changed only text inside
+a single-quoted here-string. What the task owed was set by the roadmap's 23.6
+entry, and 23.1 and 23.2 had already taken their own shares on their
+branches (above), so this task inherited 23.4's changes and the two
+"Not in this release" sections alone.
+
+### The version line stays at `1.1.0.0`, and the new text says `1.1.1.0`
+
+The release notes' opening line still names `1.1.0.0` and its `DriverVer`,
+because 23.7 owns "the release notes' version" and this task moves none.
+The sections this task brought in are therefore written **forward-dated** -
+"From `1.1.1.0` ..." - which is the 22.6 precedent exactly: 22.6 wrote the
+`1.1.0.0` tier into a file whose opening line still said `1.1.0.0`'s
+predecessor, and 22.8 (`26162ae`) turned "From" into "Since" and moved the
+opening line in the same commit as the date. 23.7 does the same here. Until
+then the file is in the state the audit's item L10 describes, and that is
+deliberate.
+
+### What each document gained
+
+- **`docs/using/release-notes.md`.** The opening paragraph lost its
+  sentence about the two sections describing "the release after this one".
+  "What this is" gained one paragraph naming the two things a user can see
+  from `1.1.1.0`. "Not in this release: the controller's Advanced tab" is
+  now "The controller's Advanced tab (from `1.1.1.0`)", its first paragraph
+  rewritten as this release's and the rest as 23.1 and 23.2 left it; the
+  NUSB upgrade paragraph names `1.1.1.0`. "Not in this release: the
+  interrupt moderation setting" is now "The interrupt moderation setting
+  (from `1.1.1.0`)", **written the way README's "Tuning" section is, on the
+  owner's instruction of 2026-09-22 given while this task ran**: the same
+  sequence and wording as README at `44b3837` - the one-paragraph
+  definition, the key table and `NNNN`, the three-row value table, the
+  replacement rule, the ATTO sentence (about 33 to 34.6 MB/s read and write
+  at 500 against about 18 at 4000, pointing at README for the screenshot),
+  the Linux 160 comparison with "more conservative since this is a generic
+  driver", "Feel free to tune it" and the NUSB upgrade sentence. README is
+  the source and the section follows it, so 23.3's 17.6-to-32.5 figures,
+  23.5's audio pass and the "crashed Windows 98 before" reason are no longer
+  in the release notes; `run-23.md` 23.3 and 23.5 keep them. Two things from
+  23.4 are kept at the end of the tuning paragraph, since README has no
+  place for them: that the read never fails a start, and that `XHCISNAP`
+  from this download must be used because the snapshot schema moved (3 to
+  4) and an older tool refuses the driver. 23.4's guest readings are this
+  file's, not the notes'.
+  **The same instruction covered the download's `readme.txt`**, so
+  `make-release.ps1`'s template, section 9, "XhciImodInterval250ns", was
+  rewritten to the same sequence and wording in that file's plain-text
+  conventions, keeping its own two operating sentences (decimal or
+  hexadecimal entry, and what `XHCISNAP` shows after the restart) and its
+  pointer at section 5's upgrade steps; the key paths stay where that
+  section already had them, shared by all three values. That template is
+  otherwise 23.7's, and its `XHCISNAP` schema line is still 23.7's to write.
+  The two pointers at "the next release" - the `usbui.dll` paragraph under
+  "Installing" and the NUSB controller-stop entry under "Known limitations" -
+  point at the two sections by name. The log section says a third `DWORD`
+  now sits in the same key and where it is described. The High Speed entry
+  under "Known limitations" says `1.1.1.0` changes none of it, and the FSC
+  entry says the interval the restore path carries is the setting's own
+  value from `1.1.1.0`.
+- **`docs/issues/06-full-speed-root-port-bugcheck.md`.** The status
+  paragraph says the two XP-and-later costs are known limitations of
+  `1.1.1.0` as well, and that `1.1.1.0` answers nothing on the page: polling
+  rates and true speeds are Phase 24's, split out by the owner on 2026-09-22
+  to run after the cut. Section 5.1's pointer at "Not in this release" names
+  the new section. Section 7's closing paragraph says both findings stay
+  known limitations of `1.1.1.0`. Section 9 gained a first item saying the
+  same, with Phase 24's order (24.1 to 24.3) and that section 8's virtual hub
+  is 24.3's candidate. Section 8's heading, which names `1.1.0.0`, is
+  unchanged, since the section is about that release's decision.
+- **`docs/issues/README.md`.** The "Issue 6 is open" paragraph and the
+  issue 6 row say `1.1.1.0` answers none of it and that polling rates and
+  true speeds are Phase 24's.
+- **`README.md`: checked, not changed.** `2e69e4e` and the owner's three
+  edits after it (`18a6d55`, `37cfa70`, `44b3837`) already carry the Tuning
+  section and the throughput row the handoff said this task would otherwise
+  have owed.
+
+### What this task did not do, and why
+
+- The version and date, the history entry and the issue forms are 23.7's,
+  by the roadmap's split, and were not touched; of the `readme.txt`
+  template only the moderation subsection moved, on the owner's
+  instruction above.
+- The ATTO figures at 500 (about 33 to 34.6 MB/s read and write) now stand
+  in the release notes and the `readme.txt` template as README states them,
+  on the owner's instruction. They are the owner's reading from the README
+  photo, and the photo's write figure has not been written into this file
+  as a reading (the handoff's open item on clean write figures).
+- The release notes say nothing of Phase 24 by number; a user reads "the
+  work after this release". The issue pages, which name roadmap tasks
+  throughout, name the phase.
+
+### What was run
+
+No build, since no build input changed. `scripts\check-source-charset.ps1`:
+166 files clean. `make-release.ps1` parses (the PowerShell parser, no
+errors), and `scripts\package\test-package.ps1` passed its 307 checks with
+the template edit in place. Every edited file kept its CRLF endings and
+carries no byte above 0x7F.

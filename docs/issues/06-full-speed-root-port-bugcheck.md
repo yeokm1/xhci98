@@ -12,13 +12,19 @@ Usage** figures charge a Full-Speed and a High-Speed root-port device the
 same 1 %, on five USB 2.0 stacks across four operating systems - Windows 98
 SE, ME, 2000 and XP (section 5.1). **Two further costs
 were measured on
-2026-09-19 and are known limitations of `1.1.0.0`:** a USB 1.1 hub on a
+2026-09-19 and are known limitations of `1.1.0.0`, and of `1.1.1.0` after
+it:** a USB 1.1 hub on a
 root port bugchecks every Vista and Windows 7 build once a slower device
 behind it is configured (section 6), and a Full-Speed USB audio device on a
 root port plays nothing from Windows XP on (section 7). The candidate fix
 for all of them, a virtual USB 2.0 hub per root port
 ([proposal](../future-plans/virtual-hub-per-root-port.md)), is not yet
-decided (section 8).
+decided (section 8). **`1.1.1.0` answers nothing on this page.** That
+release carries the controller's property page and the interrupt moderation
+value alone; the polling rates (section 5) and true speeds on root ports are
+roadmap Phase 24's, split out of Phase 23 by the owner on 2026-09-22 to run
+after the cut, and the speed report, its bands and both costs are the same
+in `1.1.1.0` as in `1.1.0.0`.
 
 Targets affected: all ten. The bugcheck itself was measured on Windows 98
 SE under the NUSB stack and on Windows 2000 SP4, in QEMU virtual machines;
@@ -362,8 +368,8 @@ and it was the control both legs used. It reports power rather than
 bandwidth - but naming devices is exactly the half the Bandwidth page lacks.
 
 One limit on availability, and it is only a version. The tab is **not** in
-`1.1.0.0`; it ships in the release after it (`../using/release-notes.md`,
-"Not in this release"). **The second limit that used to stand here is gone**:
+`1.1.0.0`; it ships in `1.1.1.0` (`../using/release-notes.md`, "The
+controller's Advanced tab"). **The second limit that used to stand here is gone**:
 this package registered no controller property page on the NT targets until
 roadmap task 23.2 took that half on 2026-09-20, and the page now opens on
 every one of them - Windows 2000, Windows XP in both architectures, and
@@ -574,7 +580,9 @@ Both findings in sections 6.2 and 7 are known limitations of `1.1.0.0` by
 the owner's decision of 2026-09-19 (`docs/using/release-notes.md`, "Known
 limitations"; the download readme, section 7; `README.md`, "Known
 limitations"). Neither is a defect in the workaround on the systems it was
-made for: Windows 98 and 2000 behave as before.
+made for: Windows 98 and 2000 behave as before. Both stay known limitations
+of `1.1.1.0`, which changes nothing about the speed report (the status
+paragraph at the head of this page).
 
 ## 8. What would fix it, and why nothing was attempted for `1.1.0.0`
 
@@ -614,6 +622,14 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
 
 ## 9. What is still open
 
+- **Polling rates and true speeds on root ports are roadmap Phase 24's,
+  and `1.1.1.0` does not answer them.** The owner split them out of Phase 23
+  on 2026-09-22 so that release could ship the property page and the
+  moderation value alone. Phase 24 takes them in the reporter's order:
+  Low-Speed rates behind a hub first (24.1), then rates on a root port,
+  which may close as owned by true speeds (24.2), then true speeds on root
+  ports as a decision with its reason (24.3), and the virtual hub in section
+  8 is that decision's candidate. Nothing in this section moves before then.
 - **The bandwidth accounting on Windows 98 and 2000** (section 5) has no
   measurement either way. The Bandwidth Usage readings of 2026-09-20
   (section 5.1) are not one: they are what `usbui.dll` computes from the

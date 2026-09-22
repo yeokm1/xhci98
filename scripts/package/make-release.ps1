@@ -3250,47 +3250,43 @@ writes none of them: the installer creates all three.
   XhciImodInterval250ns  -  how long the controller holds back an interrupt
   .........................................................................
 
-  DWORD, counted in UNITS OF 250 NANOSECONDS. It is the controller's
-  interrupt moderation interval: after raising an interrupt, the controller
-  waits at least this long before raising the next one.
+  DWORD, counted in UNITS OF 250 NANOSECONDS. It sets how long the
+  controller waits after one interrupt before raising the next. A shorter
+  interval makes USB mass storage faster at the cost of more interrupts.
 
-      500    what the installer writes: 0.125 ms, at most 8,000 interrupts
-             a second.
-      4000   what the driver uses when the value is MISSING, UNREADABLE, OR
-             OUTSIDE 10-4000: 1 ms, at most 1,000 a second. This is the
-             controller's own power-on value and what every release before
-             1.1.1.0 ran at.
-      10     the lowest accepted: 2.5 microseconds.
+      500    written by the install: 125 microseconds, at most 8,000
+             interrupts a second.
+      4000   used when the value is MISSING, UNREADABLE, OR OUTSIDE
+             10-4000: 1 ms, at most 1,000 a second.
+      10     the lowest accepted: 2.5 microseconds, at most 400,000 a
+             second.
 
   A value outside 10-4000 is REPLACED BY 4000, not rounded to the nearest
-  limit, so a mistyped 0 cannot turn moderation off. The driver reads it
-  when it starts, so a change takes effect after a restart.
+  limit, so a mistyped 0 cannot turn moderation off. 4000 is the
+  controller's own power-on value and what every release before 1.1.1.0
+  ran at.
 
-  WHY 500. A shorter interval makes USB mass storage faster, because each
-  step of a transfer waits for an interrupt before the next is sent. On a
-  ThinkPad P14s Gen 1 under Windows 98 SE, large reads from a USB 3 stick
-  went from 17.6 MB/s at 4000 to 32.5 MB/s at 500, and a USB audio device
-  played through the same test with no error counted by the driver and one
-  ring underrun, against one and three on two passes at 4000. Going
-  lower gained little: 33.1 MB/s at 200 and at 160. Linux's own xHCI driver
-  uses 160 (40 microseconds); this package ships 500 to be more
-  conservative, since every interrupt costs Windows 98 time, and more of
-  them at real rates is what has crashed it on real hardware before.
+  ATTO Disk Benchmark with an MSSU10-128GSR flash drive at 500 (125
+  microseconds), on a ThinkPad P14s Gen 1 under Windows 98 SE, gives about
+  33 to 34.6 MB/s read and write from 64 KB transfers upward where the
+  previous default 4000 gave about 18 MB/s.
 
-  YOU ARE FREE TO TUNE IT. Lower it towards 160 if you want the last few
-  percent of storage speed and the machine stays stable; raise it towards
-  4000 if you see stutter, dropouts or instability under load, or delete it
-  to get exactly the behaviour of earlier releases. Enter it as a decimal
-  DWORD (500), or in hexadecimal (1f4) - Registry Editor lets you choose.
-  After the restart, XHCISNAP's report shows under "registry values" the
-  value it read, the interval in force, and what the controller took.
+  Linux's xHCI driver defaults to 160 (40 microseconds). This package ships
+  500 to be more conservative since this is a generic driver.
 
-  ON WINDOWS 98 WITH NUSB, AN UPGRADE DOES NOT SET IT. An upgrade over a
-  running xhci98 crashes before the installer's settings are written (see
-  section 5), so the value is absent and the driver runs at 4000, exactly as
-  earlier releases did, until you set it by hand here - or take section 5's
-  "TO UPGRADE WITHOUT CRASHING" steps, which write it, even after an upgrade
-  that has already crashed.
+  FEEL FREE TO TUNE IT. Lower towards 160 for the last few percent of
+  storage speed, or raise it towards 4000 (or delete it) if you get audio
+  stutter or instability under load. Enter it as a decimal DWORD (500), or
+  in hexadecimal (1f4) - Registry Editor lets you choose. The driver reads
+  it when it starts, so a change takes effect after a restart; after the
+  restart, XHCISNAP's report shows under "registry values" the value it
+  read, the interval in force, and what the controller took.
+
+  ON WINDOWS 98 WITH NUSB, AN UPGRADE DOES NOT SET IT. An upgrade over an
+  existing install crashes before the value is written (see section 5), so
+  the driver runs at 4000 until you set it by hand here - or take section
+  5's "TO UPGRADE WITHOUT CRASHING" steps, which write it, even after an
+  upgrade that has already crashed.
 
   THOSE THREE ARE THE WHOLE LIST. This driver reads no other setting of its
   own, and no registry value makes it write a file.

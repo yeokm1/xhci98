@@ -1,11 +1,7 @@
 # xhci98 - Release Notes
 
 This file describes package version `1.1.0.0`
-(`DriverVer=09/18/2026,1.1.0.0`), the fifth release. Two sections below, "Not
-in this release: the controller's Advanced tab" and "Not in this release: the
-interrupt moderation setting", describe things the release *after* this one
-adds, and say so in their headings; everything else here is `1.1.0.0`. Where
-this file and
+(`DriverVer=09/18/2026,1.1.0.0`), the fifth release. Where this file and
 `docs/contributing/roadmap.md`, `docs/contributing/build-and-test.md` or
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
@@ -28,6 +24,13 @@ driver will not install on a 64-bit Windows or the other way round. Picking
 the wrong one is harmless - Windows finds no driver in that directory and
 says so. **On Vista x64 and Windows 7 x64 it loads only while driver signature
 enforcement is disabled**; see below.
+
+From `1.1.1.0` the driver has two things a user can see that earlier releases
+did not: the xHCI controller's own properties in Device Manager carry an
+**Advanced** tab, on every system above, and the install sets the controller's
+**interrupt moderation interval** to an eighth of the value every earlier
+release ran at, which makes USB mass storage faster. Each has a section of its
+own below. Nothing else about what the driver does changed with them.
 
 It is a miniport for `usbport.sys`, not a whole USB stack. It plugs in
 underneath Microsoft's USB port driver the same way the in-box `usbehci.sys`
@@ -124,17 +127,16 @@ and ask none of this.
   out of the running driver by `XHCISNAP.EXE` when you ask for a report; see
   "The log, and how to send one".
 
-## Not in this release: the controller's Advanced tab
+## The controller's Advanced tab (from `1.1.1.0`)
 
-The release **after** `1.1.0.0` adds an **Advanced** tab to the xHCI
-controller's own properties in Device Manager, on **every** system this
-package supports - Windows 98 SE and Windows ME, and Windows 2000, Windows XP
-in both architectures, and Windows Vista and Windows 7 in both architectures.
-`1.1.0.0` does not have it: its INF does not name that page, so a `1.1.0.0`
-install shows the controller's usual General, Driver and Resources and
-nothing else. It is described here because this is the file that says
-what each release gives you, and because the upgrade note at the end of this
-section decides whether you get it at all.
+From `1.1.1.0` the xHCI controller's own properties in Device Manager carry an
+**Advanced** tab, on **every** system this package supports - Windows 98 SE
+and Windows ME, and Windows 2000, Windows XP in both architectures, and
+Windows Vista and Windows 7 in both architectures. `1.1.0.0` and the releases
+before it do not have it: their INF does not name that page, so an install of
+one of them shows the controller's usual General, Driver and Resources and
+nothing else. The upgrade note at the end of this section decides whether an
+upgrade gives you it at all.
 
 What appears on it is Windows' own, and is what Windows' own USB controllers
 have carried since Windows 98: a **Disable USB error detection** checkbox and
@@ -172,7 +174,7 @@ this driver's either. The reserved figure a bus with nothing attached shows
 differs by system and means nothing here: Windows 2000 and Windows XP read
 10 %, Windows Vista and Windows 7 read 20 %.
 
-**On Windows 98 with NUSB, upgrading into that release does not give you the
+**On Windows 98 with NUSB, upgrading into `1.1.1.0` does not give you the
 tab.** An upgrade over a running xhci98 crashes that stack and loses the step
 that writes the line (see "Known limitations"), so the file is replaced and
 the tab is absent. The rename-and-restart route in that same entry is what
@@ -188,46 +190,59 @@ Windows 7 in both architectures. On the two 64-bit NT 6.x systems the tab is
 there like anywhere else, but so is the requirement above it: they load this
 driver at all only on a boot with driver signature enforcement disabled.
 
-## Not in this release: the interrupt moderation setting
+## The interrupt moderation setting (from `1.1.1.0`)
 
-The release **after** `1.1.0.0` adds a setting for how long the controller
-holds an interrupt back after the last one - the xHCI **interrupt moderation
-interval** - and ships it shorter than before, which makes USB mass storage
-faster. `1.1.0.0` has no such setting and always runs at the controller's own
-reset value, 1 ms.
+`XhciImodInterval250ns` is a `DWORD` in the controller's driver (software)
+key, in **units of 250 ns**. It sets how long the controller waits after one
+interrupt before raising the next. A shorter interval makes USB mass storage
+faster at the cost of more interrupts. `1.1.0.0` and the releases before it
+have no such setting and always run at the controller's own power-on value,
+1 ms.
 
-It is a `DWORD` value, `XhciImodInterval250ns`, in the controller's driver
-(software) key, beside the log values under "The log, and how to send one".
-It is counted in **units of 250 ns**, so `4000` is 1 ms and `500` is 0.125 ms.
+Here is where to find the key:
 
-- **The package's INF sets it to `500`.** Measured on one laptop (a ThinkPad
-  P14s Gen 1) under Windows 98 SE, large reads from a USB 3 stick went from
-  17.6 MB/s at `4000` to 32.5 MB/s at `500`, and a Full-Speed USB audio device
-  played through the same benchmark with no error counted by the driver and
-  one ring underrun, against one and three on the two passes at `4000`.
-- **Accepted values are `10` to `4000`.** Anything else - the value missing,
-  `0`, `5000` - makes the driver use `4000`, the old behaviour. It is replaced,
-  not rounded to the nearest limit, so `0` does not turn moderation off.
-- **A lower value means more interrupts.** At `500` the controller can raise
-  up to 8,000 a second; at `4000`, 1,000. Below `500` the measurement above
-  gained little: 33.1 MB/s at `200` and at `160`.
-- **`500` is the conservative choice.** Linux's own xHCI driver uses `160`
-  (40 us). This package ships `500` because interrupt load at real rates is
-  what has crashed Windows 98 on real hardware before, and `500` already
-  reads at 98% of the plateau (32.5 against 33.1 MB/s).
-- **You are free to tune it.** Lower it towards `160` for the last few
-  percent of storage speed; raise it towards `4000`, or delete it, if you
-  hear audio stutter or see instability under load. "Registry settings" in
-  the package's `readme.txt` says how to find the right key.
-- The driver reads it when it starts, so a change takes effect after a
-  restart. `XHCISNAP`'s report shows the value read, the interval in force and
-  what the controller took, under "registry values".
+| Windows | Key |
+|---|---|
+| 98 SE, ME | `HKLM\System\CurrentControlSet\Services\Class\USB\NNNN` |
+| 2000, XP, Vista, 7 (x86/x64) | `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN` |
 
-**On Windows 98 with NUSB, upgrading into that release does not set it**, for
-the same reason it does not give you the Advanced tab above: the step that
-writes the INF's settings is lost. The driver then runs at `4000`, exactly as
-`1.1.0.0` does, until the value is set by hand or the rename-and-restart route
-under "Known limitations" is taken.
+`NNNN` is the subkey whose `DriverDesc` is "USB 2.0 eXtensible Host
+Controller (xhci98)". The number varies from machine to machine, and the
+package's `readme.txt`, "Registry settings", says how to read it off the
+device itself when there is more than one such key.
+
+| | Value | Interval | Interrupts per second, at most |
+|---|---|---|---|
+| Written by the install | `500` | 125us | 8,000 |
+| Used when the value is missing, unreadable, or outside `10`-`4000` | `4000` | 1 ms | 1,000 |
+| Lowest accepted | `10` | 2.5 us | 400,000 |
+
+A value outside `10`-`4000` is replaced by `4000`, not rounded to the nearest
+limit, so a mistyped `0` cannot turn moderation off. `4000` is the
+controller's own power-on value and what every earlier release ran at.
+
+ATTO Disk Benchmark with an MSSU10-128GSR flash drive at `500` (125us), on a
+ThinkPad P14s Gen 1 under Windows 98 SE, gives about 33 to 34.6 MB/s read and
+write from 64 KB transfers upward where the previous default `4000` gave
+about 18 MB/s (the README has the screenshot).
+
+Linux's xHCI driver defaults to `160` (40 us). This package ships `500` to be
+more conservative since this is a generic driver.
+
+Feel free to tune it. Lower towards `160` for the last few percent of storage
+speed, or raise it towards `4000` (or delete it) if you get audio stutter or
+instability under load. The driver reads the value when it starts, so a
+change takes effect after a restart, and it never fails a start: a value it
+cannot use is replaced by `4000`. `XHCISNAP`'s report shows the value read,
+the interval in force and what the controller took, under "registry values".
+**Use the `XHCISNAP.EXE` from this download**: the report grew with the
+setting, and the copy in an earlier download refuses this driver rather than
+misread it.
+
+On Windows 98 with NUSB, an upgrade over an existing install crashes before
+the value is written, so the driver runs at `4000` until you set it by hand,
+or until the rename-and-restart route under "Known limitations" is taken,
+which writes it.
 
 ## Requirements
 
@@ -332,8 +347,8 @@ machine that has installed `1.0.2.0` or later both buttons work. (The error
 was measured on Windows 98 SE, by renaming the file away. Windows ME carries
 the same `sysclass.dll` module and was read with the file present on
 2026-09-20, where both dialogs opened; the rename was not repeated there. The
-controller's **Bandwidth Usage** button is the one the next release adds - see
-"Not in this release".)
+controller's **Bandwidth Usage** button is the one `1.1.1.0` adds - see "The
+controller's Advanced tab".)
 
 On an xHCI-only Windows 98 machine that means an "Insert Disk" prompt naming
 the Windows 98 Second Edition CD-ROM during the copy, unless the Windows
@@ -394,7 +409,9 @@ reason a log appears to do nothing. Step 2 is not optional: the driver reads
 these settings once, when it starts.
 
 The two values, both `DWORD`s in the device's driver (software) key, both
-default `0`:
+default `0` (from `1.1.1.0` a third `DWORD`, `XhciImodInterval250ns`, sits in
+the same key; it is not a log setting, and "The interrupt moderation setting"
+above describes it):
 
 | Value | What it does |
 |---|---|
@@ -446,7 +463,8 @@ because a user meets them through this driver.
   driver loaded there is no controller to stop, so it finishes normally and
   its registry step runs - and shut down and start again. That is the only
   route measured to deliver a new package's registry settings on this stack,
-  and those settings are what the next release's Advanced tab needs.
+  and from `1.1.1.0` those settings are the Advanced tab's line and the
+  interrupt moderation value (their two sections above).
   **Do not rely on right-click `xhci98.inf` -> *Install* for this.** These
   notes and the download's `readme.txt` have said to, `1.1.0.0`'s included,
   and it does not do the job: that route copies files and writes no registry
@@ -541,6 +559,8 @@ because a user meets them through this driver.
   controller - but on Windows Vista and 7 only behind a USB 2.0 hub, because
   of the next entry. Measured in a virtual machine with SweetLow's hidusbf; the
   bands are documented in full in `docs/issues/06-full-speed-root-port-bugcheck.md`.
+  `1.1.1.0` changes none of this: the polling rates and the High Speed report
+  itself are the subject of the work after that release, not answered by it.
 - **Windows Vista and Windows 7, 32-bit and x64: a USB 1.1 hub on a root port
   crashes the machine** as soon as a mouse, keyboard or other Full or Low
   Speed device with an interrupt or isochronous endpoint is used behind it
@@ -596,10 +616,11 @@ because a user meets them through this driver.
   and visible but with nothing lost. The counter is `SavesDeclinedNoFsc`.
   A real standby and wake has not been run anywhere, and the other half
   of the same path is unobserved too: on a controller whose restore does
-  succeed, the driver now restores the interrupt moderation it saved
-  rather than leaving it at zero, and that has been read only through a
-  host model, because the virtual machines fail every restore and rebuild
-  the bus instead.
+  succeed, the driver now restores the interrupt moderation interval it
+  saved - from `1.1.1.0` the setting's own value, `500` by default - rather
+  than leaving it at zero, and that has been read only through a host
+  model, because the virtual machines fail every restore and rebuild the
+  bus instead.
 - Windows 98 shows no driver version on the Driver tab, only the file date;
   the four-part version is under *Driver File Details*.
 - USB Audio on Windows 98 is uneven with the emulated device. The fresh-guest
