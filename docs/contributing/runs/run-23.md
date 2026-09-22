@@ -1701,8 +1701,8 @@ none of it this task's to close:
 
 Status as of 2026-09-22: **the read-first half is taken, and 1000 passes it.**
 The owner closed the roadmap box on this half the same day: the gate proper
-is read once, at 500 on the cut's own `release` binary, as roadmap 23.6's
-clause, and not also on a pre-cut 23.4 build.
+is read once, at 500 on the cut's own `release` binary, as roadmap 23.9,
+and not also on a pre-cut 23.4 build.
 
 ### How it was run
 
@@ -1813,7 +1813,7 @@ finding for later and does not block 23.4.
 Owed: the same pass on the 23.4 build, which is the gate proper.
 *(Superseded the same day: the owner closed 23.5 on this read-first half and
 moved the gate proper to the cut's own `release` binary, read once as roadmap
-23.6's clause, with no separate pre-cut pass.)*
+23.9, with no separate pre-cut pass.)*
 
 ## 23.4 - the registry value
 
@@ -1901,4 +1901,4 @@ open.
   value-agnostic, and the host's save/restore vector already pins it with
   500 against a register reset to 4000.
 - **23.5's gate proper**, the audio pass at 500 on bare-metal Windows 98,
-  now read on the cut's own `release` binary (roadmap 23.6).
+  now read on the cut's own `release` binary (roadmap 23.9).

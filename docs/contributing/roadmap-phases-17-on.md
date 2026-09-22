@@ -523,7 +523,9 @@ on 2026-09-22 after 500 was measured) and the driver falls back to 4000.
 23.3 experimental build, was taken the same day and both 1000 and 500 passed
 it, so 23.4 can be written. **23.5 is closed on that half** (owner,
 2026-09-22): the gate proper is read once, at 500 on the cut's own `release`
-binary, inside 23.6, and not also on a pre-cut 23.4 build.
+binary, as 23.9, and not also on a pre-cut 23.4 build. The record and the cut
+that were one task, 23.6, are now 23.6 to 23.10, split by the owner the same
+day.
 23.1 was started and finished on
 2026-09-20 on branch `23.1`, its host side, **all three guest legs** (Windows
 98 SE under NUSB and under SweetLow, and Windows ME) and the three documents
@@ -795,10 +797,10 @@ polling rates and true speeds.
   a better number, shipping it as the default is a separate decision of the
   owner's; this task ships 4000. The release notes say what the value is,
   its units, and that a low value raises the interrupt rate.
-- [x] 23.5 the audio test: 23.4's release gate. **Closed into 23.6 by the
+- [x] 23.5 the audio test: 23.4's release gate. **Closed into 23.9 by the
   owner on 2026-09-22**: the read-first half below is this task's reading,
   and the gate proper - the pass at 500 that the checkpoint names - is read
-  once, on the cut's own `release` binary, as 23.6's clause. The separate
+  once, on the cut's own `release` binary, as 23.9. The separate
   pre-cut pass on the 23.4 build that the text below calls open is not taken,
   so one bare-metal session remains rather than two. **Read-first half taken
   2026-09-22 on the 23.3 build, and 1000 passes it** (`runs/run-23.md`,
@@ -851,24 +853,56 @@ polling rates and true speeds.
   as such, and the owner decides whether 32-bit Windows 7 on the E460 stands
   in, where the first controller Disable is a known hang (`runs/run-22.md`,
   22.9), so plan that leg around reboots.
-- [ ] 23.6 the record and the cut, `1.1.1.0`. The record: the release notes'
-  known limitations brought into line with whatever 23.2 and 23.4 change -
-  23.4's value, its units, its default of 500 and its fallback of 4000, and
-  that a lower value raises the interrupt rate - and `docs/issues/06` and
-  `docs/issues/README.md` saying plainly that polling rates and true speeds
-  are Phase 24's and not answered by this release.
-  **23.1's share of this is already done**, on branch `23.1` on 2026-09-20 and
-  not left here: the three documents it found work for, listed in its entry
-  above and in `runs/run-23.md`. The cut, on the pattern of Phase 22's 22.8
-  to 22.10: what no gate supplies (the version and date in `xhci_version.h`
-  and both INFs, the `releases/history.md` entry, the release notes,
-  README's Install section if 23.4 changes it, the issue forms); every gate
-  green on both architectures; the flavour directories and the asset cut, with
-  no Microsoft file in it; the install legs read from the asset; and 23.5's
-  gate on the cut's own `release` binary. The post-release matrix follows the
-  cut, as 22.9 did. Replying on the GitHub issue, and closing it, are the
-  owner's and not a task - and Phase 24's requests keep it open. It runs
-  last.
+Tasks 23.6 to 23.10 were one task, "the record and the cut", until the owner
+split it on 2026-09-22 on the pattern of Phase 22's 22.8 to 22.10. They run
+in the order numbered, and 23.6 does not start until 23.4's box is closed.
+Replying on the GitHub issue, and closing it, are the owner's and not a
+task - and Phase 24's requests keep it open.
+
+- [ ] 23.6 the record. The release notes' known limitations brought into
+  line with whatever 23.2 and 23.4 change - 23.4's value, its units, its
+  default of 500 and its fallback of 4000, and that a lower value raises the
+  interrupt rate - and their two "Not in this release" sections, the
+  controller's Advanced tab and the interrupt moderation setting, moved into
+  this release's text; and `docs/issues/06` and `docs/issues/README.md`
+  saying plainly that polling rates and true speeds are Phase 24's and not
+  answered by this release. **23.1's share of this is already done**, on
+  branch `23.1` on 2026-09-20 and not left here: the three documents it found
+  work for, listed in its entry above and in `runs/run-23.md`; 23.2 left
+  nothing. No version or date moves in this task.
+- [ ] 23.7 what the cut needs that no gate supplies, as 22.8 was: the version
+  `1.1.1.0` and its date in `xhci_version.h` and both INFs; the
+  `releases/history.md` entry; the release notes' version; README's Install
+  section if 23.4 changes it; the issue forms; and `make-release.ps1`'s
+  `readme.txt` template, whose registry section says the driver reads two
+  values and writes none - it now reads three, and the INF writes
+  `XhciImodInterval250ns` - and which should say that `XHCISNAP` moved to
+  schema 4, so an older copy refuses this driver. Then `build-driver.cmd all`
+  and `all -amd64` rebuilt from that tree, since `7488f13` onward was never
+  rebuilt.
+- [ ] 23.8 the cut, `1.1.1.0`, as 22.10 was: every gate green on both
+  architectures; the four flavour directories and the asset, holding exactly
+  what the packager staged and no Microsoft file; and the install legs read
+  from the asset - the four x86 legs with full device clauses, the amd64
+  package on XP x64, Vista x64 and Windows 7 x64, and the x86 package on
+  Vista x86 and Windows 7 x86. On the Windows 98 SE and Windows 2000 legs,
+  `XHCISNAP` reads the INF's 500 back from the register, which is 23.4's
+  clause read on the `release` flavour rather than the `qemu` build. A
+  finding re-cuts under the same number with `-Force`, since nothing is
+  uploaded (`releases/README.md`).
+- [ ] 23.9 23.5's gate proper, on the cut's own `release` binary: the P14s
+  Gen 1 under Windows 98 SE and NUSB 3.3, the value at the INF's 500, a
+  Full-Speed audio device on one root port looping a WAV through one full
+  ATTO 2.41 pass on the 23.3 stick, with the control (value deleted, so 4000)
+  before and after; read and passed by 23.5's rule above. This is the one
+  bare-metal leg left in the phase. A failure sends the INF default back to
+  the owner rather than reverting it quietly, and any change it causes is a
+  re-cut of 23.8 under the same number.
+- [ ] 23.10 the post-release matrix, after the cut, as 22.9 was: fresh clones
+  prepared and stamped for `1.1.1.0`, `run-matrix.ps1 -PostRelease`, and the
+  device matrix on both primary targets no worse than
+  `runs/run-22-post-release/`; written to `runs/run-23-post-release/`. It
+  runs last.
 
 Checkpoint: the property page is in
 both halves of the 32-bit INF or recorded as not taken; 23.4 landed (23.3
