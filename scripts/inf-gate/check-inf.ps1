@@ -1084,8 +1084,7 @@ foreach ($m in $models) {
             # engine and Windows 2000's setupapi may quote, trim or tokenise
             # differently - and this project has measured neither. It refused a
             # quote, a %token%, surrounding whitespace, and an empty flags
-            # field. src\xhci98.inf carries the same reasoning beside the
-            # values themselves.
+            # field.
         }
     }
 }
