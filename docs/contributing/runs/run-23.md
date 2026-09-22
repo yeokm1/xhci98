@@ -1837,7 +1837,9 @@ so nothing is owed here.
 
 Status as of 2026-09-22: **written on branch `23.3` and green on the host;
 the guest readings the checkpoint names are owed**, so the roadmap box stays
-open.
+open. **Later the same day the guest readings were taken on branch
+`23.4-guest-readings` and both targets pass** ("Guest readings" below), so
+the box closes.
 
 ### What landed
 
@@ -1910,7 +1912,8 @@ open.
   never failed. QEMU stores IMOD and returns it (`hw/usb/hcd-xhci.c`, 23.3),
   so the register value is observable there even though no rate is. This is
   also the first reading of Windows 98's 16-bit engine storing a nonzero
-  decimal DWORD from this INF.
+  decimal DWORD from this INF. **Taken 2026-09-22 and passed on both; see
+  "Guest readings" below.**
 - **One suspend/resume with 500 in force** - the first exercise of
   `xhciRestoreState`'s IMOD write with anything but 0 or 4000 outside the
   host model. **Dropped by the owner on 2026-09-22**, because a guest could
@@ -1922,3 +1925,101 @@ open.
   500 against a register reset to 4000.
 - **23.5's gate proper**, the audio pass at 500 on bare-metal Windows 98,
   now read on the cut's own `release` binary (roadmap 23.9).
+
+### Guest readings, 2026-09-22: both targets pass
+
+Taken on branch `23.4-guest-readings` off `1.1.1.0` @ `2197d51`, after
+`build-driver.cmd all` and `all -amd64` had both passed every gate on that
+tree (the first build since `7488f13`). Both guests ran the same `qemu`
+package, `out\pkg-qemu-x86`, `xhci98.sys` SHA-256 `7f3102342e3bf525...`,
+reporting `DriverEntry (built Sep 22 2026 19:58:00)`, and `XHCISNAP` rebuilt
+from the same tree. The `qemu` flavour was chosen so each start had two
+witnesses: the debug console's four `imod` lines and `XHCISNAP`'s
+"registry values" section. The agent drove both GUIs through the monitor.
+
+**The vehicles.** Windows 98 SE was `vm\sweetlow-2a.img` at
+`sweetlow-stack-nodriver` (SweetLow's stack, no xhci98), so the first arm is a
+genuine first install through the INF. The owner chose it over the NUSB image
+because the value is stack-independent and a fresh install needs no upgrade
+route. Windows 2000 SP4 was `vm\win2k-xonly.img` reverted to
+`win2k-xonly-clean-install`. Both ran on local work copies (`C:\work\t234`,
+`C:\work\w2k`), and neither OneDrive image was written or copied back: the
+Windows 2000 image's live state is newer than its last snapshot, so reverting
+it in place would have lost it. Windows 2000 ran from a scratch copy of
+`qemu-win2k-xonly-run.cmd` repointed at the work copy and a local transfer
+directory.
+
+**How each arm was set.** On Windows 98, `IMOD98.BAT` under instance `0002`:
+`CLEAR`, `HEX 00000000`, `HEX 00001388` (5000), `4000`. On Windows 2000,
+where there is no `reg.exe`, a REGEDIT4 file was written with `echo` in `cmd`
+and imported with `regedit /s`, under
+`Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\0000`: `=-` to delete,
+then `dword:00000000`, `dword:00001388` and `dword:00000fa0`. Each arm was
+one restart. On Windows 98 that was a cold one: shut down, let QEMU exit,
+relaunch, because a guest-initiated restart wedged at the splash as
+`lessons.md` records.
+
+| Arm | Status | Requested | In force | Readback | `XHCISNAP` |
+|---|---|---|---|---|---|
+| INF install | 0 | 500 | 500 | 500 | `read, value 500`; `500 x 250 ns = 125.00 us; register reads 500` |
+| value deleted | 8 | 0 | 4000 | 4000 | `NOT read, value 0`; `4000 x 250 ns = 1000.00 us; register reads 4000` |
+| 0 | 0 | 0 | 4000 | 4000 | `read, value 0`; 4000; register 4000 |
+| 5000 | 0 | 5000 | 4000 | 4000 | `read, value 5000`; 4000; register 4000 |
+| 4000 | 0 | 4000 | 4000 | 4000 | `read, value 4000`; 4000; register 4000 |
+
+The table is both targets: **Windows 98 SE and Windows 2000 SP4 gave the same
+row, digit for digit, at every arm**, on both witnesses. Status 8 is
+`MP_STATUS_UNSUCCESSFUL`, what usbport answers for an absent value; the
+driver then substitutes 4000, as it does for the out-of-range 0 and 5000.
+
+**No start failed.** Every start on both targets - seven on Windows 98 (the
+install boot, the five arms and a final check boot) and six on Windows 2000 -
+reached `DriverEntry`, completed the No Op self-test with one witness,
+answered `RH_GetRootHubData`, and logged the four `imod` lines. On Windows
+2000 the driver started on the install boot itself.
+
+**What Windows 98's 16-bit engine wrote.** Before any arm, a `regedit /e`
+export of `Services\Class\USB\0002` read
+`"XhciImodInterval250ns"=dword:000001f4`: the engine stored the INF's decimal
+500 as a proper `REG_DWORD`. That is the first observation of it doing so
+from this INF.
+
+**Left behind.** Both guests set back to 500 and `XHCISNAP -disable`d, then
+shut down cleanly. The work copies are throwaway.
+
+#### Two defects in `IMOD98.BAT`, found by this leg and fixed on its branch
+
+- **`IMOD98 FIND` reported a failure for an export that succeeded.** In an
+  MS-DOS Prompt window, COMMAND.COM does not wait for a Windows program, so
+  `if not exist C:\USBCLASS.REG` ran before regedit had written it. The file
+  was there a moment later (1,775 bytes, read by hand to find `0002`). Fixed
+  with `start /w regedit /e ...`, after deleting any old export so a stale one
+  cannot pass the check. **Re-read on the same guest: `FIND` now lists the
+  xhci98 lines.** The `/s` imports in the same file were not changed: each is
+  followed by a restart, and none was seen to lose a value.
+- **One line of its REBOOT advice never printed.** A line beginning
+  `echo on this target...` is taken by COMMAND.COM as the `ECHO ON` command,
+  so the sentence was replaced by `ON`. Reworded, and re-read on the guest.
+  `scripts/vm-matrix/guest/LOAD98.BAT` had the same shape (`echo On a disk
+  error box...`) and is reworded the same way. It was not re-run, and its
+  cmd.exe twin `LOAD.BAT` is unaffected.
+
+#### Operating notes
+
+- **This host's monitor ports moved.** On 2026-09-22, Windows' excluded TCP
+  range 56646-56745 swallowed the prep port of `2a-sweetlow` (56596 + 100), so
+  QEMU could not bind it. The git-ignored `matrix.config.psd1` now gives that
+  target 56790. Read the port from the config you are about to use, as the
+  23.2 vehicles table says.
+- **`prepare-image.ps1 -Boot` passes `-no-shutdown`**, so a Windows 98 shut
+  down from inside stays at `paused (shutdown)` and must be `quit` at the
+  monitor. Waiting for QEMU to exit waits forever.
+- **The Windows 2000 xHCI-only guest sees the CD as `D:` and the transfer
+  drive as `E:`.** A wizard pointed at `D:\` says the location "does not
+  contain information about your hardware". Like the 2b and 2d guests, its
+  keyboard is US-Dvorak (`build-and-test.md`).
+- **No restart prompt followed this Windows 2000 install**, unlike 23.2's leg
+  W, which raised "System Settings Change". Both went through the wizard's
+  search, so leg W's box stays unexplained. Explorer did raise "E:\ is not
+  accessible" after Finish, although `dir E:\` read the drive at once. It is
+  recorded, not explained.

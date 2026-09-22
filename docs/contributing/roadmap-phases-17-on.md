@@ -519,10 +519,10 @@ their line; 23.1 took its host side, all three guest legs (Windows 98 SE
 under NUSB and under SweetLow, and Windows ME) and the three documents it owed
 in that one day, on branch `23.1`. **23.3 is done and it measured**
 (2026-09-22, on the P14s Gen 1): mass-storage reads ran 88% faster at an
-interval of 50 us than at the hardware's 1 ms. **23.4 is therefore taken and written**, host side green,
-with its guest readings still owed: the INF writes **500** (the owner moved it
-from 1000 on 2026-09-22 after 500 was measured) and the driver falls back to
-4000. **23.5, the audio test, is closed on its read-first half** (owner,
+interval of 50 us than at the hardware's 1 ms. **23.4 is therefore taken, and
+done**: the INF writes **500** (the owner moved it from 1000 on 2026-09-22
+after 500 was measured) and the driver falls back to 4000, and its guest
+readings passed on Windows 98 SE and Windows 2000 the same day. **23.5, the audio test, is closed on its read-first half** (owner,
 2026-09-22): on the 23.3 experimental build both 1000 and 500 passed it, and
 the gate proper is read once, at 500 on the cut's own `release` binary, as
 23.9, not also on a pre-cut 23.4 build. The record and the cut, once one task,
@@ -751,8 +751,16 @@ polling rates and true speeds.
   metal before. Stop rule: if no value below 4000 measures faster outside
   run-to-run noise, record the numbers in `lessons.md`, leave the start not
   writing IMOD, and close 23.4 as not taken.
-- [ ] 23.4 the registry value. **Written 2026-09-22 on branch `23.3`, host
+- [x] 23.4 the registry value. **Written 2026-09-22 on branch `23.3`, host
   side green; the guest readings are what remain** (`runs/run-23.md`, 23.4).
+  **Done 2026-09-22: the guest readings passed on both targets**, on branch
+  `23.4-guest-readings`, `qemu` build, two witnesses each. On a Windows 98 SE
+  guest (SweetLow's stack, first install) and a Windows 2000 SP4 guest
+  (xHCI-only, first install), the INF's 500 reads back as 500 from the
+  register. Deleted, 0, 5000 and 4000 each read 4000. All thirteen starts
+  completed. Windows 98's 16-bit engine stored the value as
+  `dword:000001f4`. The leg also found and fixed two `IMOD98.BAT` defects
+  (`runs/run-23.md`, 23.4, "Guest readings").
   The owner retired 23.3's experimental build the same day rather than keep
   it as a bench build: `XHCI_IMOD_EXPERIMENT`, its marker, `make-package.ps1
   -ImodExperimentArtifact` and its three build-time refusals are gone, and the

@@ -60,7 +60,7 @@ source comments, scripts, and other docs use these same locations.
   of XP and Vista - the `PROP-*` gate family, and its three 9x legs; task
   23.2's seven NT guests); the moderation experiment on bare metal (23.3) and
   the audio test's read-first half (23.5), both done; and the registry value
-  (23.4), host side in and its guest readings still owed.
+  (23.4), done, with its guest readings on Windows 98 SE and Windows 2000.
 - The post-release matrix reports, one pair per release (four for `1.1.0.0`,
   which added XP x64 and Windows 7 x86 clones), produced by
   `run-matrix.ps1 -PostRelease` on freshly installed guests and read against

@@ -179,7 +179,7 @@ echo If the log channel is off, run XHCISNAP -verbosity 1 now as well: it is
 echo read once per start too, and without it the driver answers no dump.
 echo.
 echo REBOOT.  Do NOT disable the controller in Device Manager to restart it -
-echo on this target that bugchecks the machine before the teardown completes.
+echo doing that bugchecks this target before the teardown completes.
 echo.
 echo After the reboot, confirm it took before running any workload: run
 echo XHCISNAP and read the XhciImodInterval250ns lines in the .TXT.
@@ -191,7 +191,13 @@ goto end
 :find
 echo.
 echo Exporting the USB class key to C:\USBCLASS.REG ...
-regedit /e C:\USBCLASS.REG HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\Class\USB
+rem START /W, because from an MS-DOS Prompt window COMMAND.COM does not wait
+rem for a Windows program: a bare regedit returned before the export existed
+rem and the check below reported a failure for an export that then succeeded
+rem (runs/run-23.md, task 23.4).  The old file goes first so a stale export
+rem cannot pass the check either.
+if exist C:\USBCLASS.REG del C:\USBCLASS.REG
+start /w regedit /e C:\USBCLASS.REG HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\Class\USB
 if not exist C:\USBCLASS.REG goto noexport
 echo.
 echo Looking for this package in it:

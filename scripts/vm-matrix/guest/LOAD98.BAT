@@ -108,7 +108,7 @@ echo.
 call C:\STGF98.BAT %1 %2 %3
 echo.
 echo Tell the agent the load is running.
-echo On a disk error box when the device is pulled, press A for Abort -
+echo At a disk error box when the device is pulled, press A for Abort -
 echo that error IS the test.
 goto end
 
