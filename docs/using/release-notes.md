@@ -1,7 +1,7 @@
 # xhci98 - Release Notes
 
-This file describes package version `1.1.0.0`
-(`DriverVer=09/18/2026,1.1.0.0`), the fifth release. Where this file and
+This file describes package version `1.1.1.0`
+(`DriverVer=09/24/2026,1.1.1.0`), the sixth release. Where this file and
 `docs/contributing/roadmap.md`, `docs/contributing/build-and-test.md` or
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
@@ -18,13 +18,19 @@ the Windows 2000 one). Since `1.1.0.0` the same binary also serves 32-bit
 Windows Vista and Windows 7, through a third install path in the same INF.
 
 Since `1.1.0.0` the download also carries a **64-bit** driver, for Windows XP
-Professional x64, Windows Server 2003 x64, Windows Vista x64 and Windows 7
-x64. That one is a separate build and a separate pair of directories with an
+Professional x64, Windows Vista x64 and Windows 7 x64. That one is a separate build and a separate pair of directories with an
 INF of its own; it is not the same file under another name, and the 32-bit
 driver will not install on a 64-bit Windows or the other way round. Picking
 the wrong one is harmless - Windows finds no driver in that directory and
 says so. **On Vista x64 and Windows 7 x64 it loads only while driver signature
 enforcement is disabled**; see below.
+
+Since `1.1.1.0` the driver has two things a user can see that earlier releases
+did not: the xHCI controller's own properties in Device Manager carry an
+**Advanced** tab, on every system above, and the install sets the controller's
+**interrupt moderation interval** to an eighth of the value every earlier
+release ran at, which makes USB mass storage faster. Each has a section of its
+own below. Nothing else about what the driver does changed with them.
 
 It is a miniport for `usbport.sys`, not a whole USB stack. It plugs in
 underneath Microsoft's USB port driver the same way the in-box `usbehci.sys`
@@ -60,9 +66,7 @@ guest (XP Professional x64 SP2, 2026-09-09) on which the 64-bit package
 installed with the xHCI alone and no prompt, the driver started under that
 system's own USB stack, a HID mouse, a mass-storage device and a composite
 audio device bound, and the disable, enable, remove and rescan sequence
-survived. It has never run on real hardware. Windows Server 2003 x64 is the
-same operating system as Windows XP x64 and the same driver is meant for it,
-but no Server 2003 machine has been tried at all.
+survived. It has never run on real hardware.
 
 Windows Vista and Windows 7 stand there too, since `1.1.0.0`, in both
 architectures: supported in virtual machines only, observed in four QEMU
@@ -123,11 +127,130 @@ and ask none of this.
   out of the running driver by `XHCISNAP.EXE` when you ask for a report; see
   "The log, and how to send one".
 
+## The controller's Advanced tab (since `1.1.1.0`)
+
+Since `1.1.1.0` the xHCI controller's own properties in Device Manager carry an
+**Advanced** tab, on **every** system this package supports - Windows 98 SE
+and Windows ME, and Windows 2000, Windows XP in both architectures, and
+Windows Vista and Windows 7 in both architectures. `1.1.0.0` and the releases
+before it do not have it: their INF does not name that page, so an install of
+one of them shows the controller's usual General, Driver and Resources and
+nothing else. The upgrade note at the end of this section decides whether an
+upgrade gives you it at all.
+
+What appears on it is Windows' own, and is what Windows' own USB controllers
+have carried since Windows 98: a **Disable USB error detection** checkbox and
+a **Bandwidth Usage** button. This package adds no code for it. It adds one
+line to its INF naming the page Windows already has - the same line both USB
+2.0 stacks write for their own EHCI controller.
+
+- **Disable USB error detection** is a Windows system-tray setting, not a
+  setting of this driver's. Ticking it writes `ErrorCheckingEnabled = 0`
+  under `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\Usb`,
+  and unticking it writes `1` rather than deleting the value. That key is
+  machine-wide rather than this controller's, so it covers every USB
+  controller on the machine and it outlives this driver's removal. The
+  package never writes there itself; the box only quiets reporting the
+  machine already does.
+- **Bandwidth Usage** shows what the bus has reserved. Its figures are
+  computed from the speed Windows was told, so a Full-Speed device in a root
+  port is costed as a High-Speed one: a Full-Speed mouse and a High-Speed
+  mouse each added the same 1 % on all five stacks measured, where on a real
+  Full-Speed bus the first would cost far more. Low-Speed devices are
+  reported the same way and not separately measured. That is the High Speed
+  report under "Known limitations" becoming visible for the first time, not a
+  second fault. The
+  dialog itself is `usbui.dll`'s, which this package has placed since
+  `1.0.2.0`; see "Installing".
+
+**The NT systems get the tab too, and their page is laid out differently.**
+They draw it through a different provider - `usbui.dll`, which this package
+has placed since `1.0.2.0` - and there the bandwidth list is on the tab
+itself rather than behind a **Bandwidth Usage** button. Windows 2000 calls
+the checkbox **Disable USB error detection** as Windows 98 does; Windows XP
+and later rename it **Don't tell me about USB errors** and add a second box,
+**Tell me if my device can perform faster**, which is Windows' own and not
+this driver's either. The reserved figure a bus with nothing attached shows
+differs by system and means nothing here: Windows 2000 and Windows XP read
+10 %, Windows Vista and Windows 7 read 20 %.
+
+**On Windows 98 with NUSB, upgrading into `1.1.1.0` does not give you the
+tab.** An upgrade over a running xhci98 crashes that stack and loses the step
+that writes the line (see "Known limitations"), so the file is replaced and
+the tab is absent. The rename-and-restart route in that same entry is what
+delivers it. With SweetLow's stack, on Windows 98 SE or Windows ME, an
+ordinary *Update Driver* is enough: no crash, no restart asked for, and the
+tab is there the moment the properties are re-opened.
+
+All of this was measured in virtual machines on 2026-09-20 and never on real
+hardware: the three 9x stacks this project runs - Windows 98 SE under NUSB 3.3
+and under SweetLow's, and Windows ME under SweetLow's - and seven NT guests,
+Windows 2000 SP4, Windows XP SP3, Windows XP x64 SP2, Windows Vista SP2 and
+Windows 7 in both architectures. On the two 64-bit NT 6.x systems the tab is
+there like anywhere else, but so is the requirement above it: they load this
+driver at all only on a boot with driver signature enforcement disabled.
+
+## The interrupt moderation setting (since `1.1.1.0`)
+
+`XhciImodInterval250ns` is a `DWORD` in the controller's driver (software)
+key, in **units of 250 ns**. It sets how long the controller waits after one
+interrupt before raising the next. A shorter interval makes USB mass storage
+faster at the cost of more interrupts. `1.1.0.0` and the releases before it
+have no such setting and always run at the controller's own power-on value,
+1 ms.
+
+Here is where to find the key:
+
+| Windows | Key |
+|---|---|
+| 98 SE, ME | `HKLM\System\CurrentControlSet\Services\Class\USB\NNNN` |
+| 2000, XP, Vista, 7 (x86/x64) | `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN` |
+
+`NNNN` is the subkey whose `DriverDesc` is "USB 2.0 eXtensible Host
+Controller (xhci98)". The number varies from machine to machine, and the
+package's `readme.txt`, "Registry settings", says how to read it off the
+device itself when there is more than one such key.
+
+| | Value | Interval | Interrupts per second, at most |
+|---|---|---|---|
+| Written by the install | `500` | 125us | 8,000 |
+| Used when the value is missing, unreadable, or outside `10`-`4000` | `4000` | 1 ms | 1,000 |
+| Lowest accepted | `10` | 2.5 us | 400,000 |
+
+A value outside `10`-`4000` is replaced by `4000`, not rounded to the nearest
+limit, so a mistyped `0` cannot turn moderation off. `4000` is the
+controller's own power-on value and what every earlier release ran at.
+
+ATTO Disk Benchmark with an MSSU10-128GSR flash drive at `500` (125us), on a
+ThinkPad P14s Gen 1 under Windows 98 SE, gives about 33 to 34.6 MB/s read and
+write from 64 KB transfers upward where the previous default `4000` gave
+about 18 MB/s (the README has the screenshot).
+
+Linux's xHCI driver defaults to `160` (40 us). This package ships `500` to be
+more conservative since this is a generic driver.
+
+Feel free to tune it. Lower towards `160` for the last few percent of storage
+speed, or raise it towards `4000` (or delete it) if you get audio stutter or
+instability under load. `500` may produce audio stuttering while a USB drive
+is being read at full speed, so if you want to prioritise audio over
+bandwidth, raise the value (see "Known limitations"). The driver reads the
+value when it starts, so a change takes effect after a restart, and it never
+fails a start: a value it cannot use is replaced by `4000`. `XHCISNAP`'s
+report shows the value read, the interval in force and what the controller
+took, under "registry values". **Use the `XHCISNAP.EXE` from this download**:
+the report grew with the setting, and the copy in an earlier download refuses
+this driver rather than misread it.
+
+On Windows 98 with NUSB, an upgrade over an existing install crashes before
+the value is written, so the driver runs at `4000` until you set it by hand,
+or until the rename-and-restart route under "Known limitations" is taken,
+which writes it.
+
 ## Requirements
 
 | | |
 |---|---|
-| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000), 32-bit Windows XP (SP3), Windows XP x64 / Server 2003 x64 (SP2), and Windows Vista (SP2) and Windows 7 (SP1) in both architectures, in virtual machines only (of these, only 32-bit Windows 7 has run on a real machine, once), see "What this is". Vista x64 and Windows 7 x64 load the driver only while driver signature enforcement is disabled. Nothing after Windows 7. |
+| Operating system | Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows ME (4.90.3000), 32-bit Windows XP (SP3), Windows XP x64 (SP2), and Windows Vista (SP2) and Windows 7 (SP1) in both architectures, in virtual machines only (of these, only 32-bit Windows 7 has run on a real machine, once), see "What this is". Vista x64 and Windows 7 x64 load the driver only while driver signature enforcement is disabled. Nothing after Windows 7. |
 | USB stack | Windows 98: NUSB 3.3, installed before this driver (NUSB 3.6 ships the identical USB 2.0 stack and has been observed working, in a virtual machine only; so has the SweetLow stack that Windows 98 QuickInstall 1.0.1 and later bundle, which also removes the first known limitation below; see the README's installation steps). Windows ME: SweetLow's stack only; its own USB stack has no `usbport.sys`, and on it the driver installs and shows Code 2. Do not install NUSB on Windows ME, it is a Windows 98 SE package. Windows 2000: SP4's native stack, or the standalone USB 2.0 update KB319973. **Do not install NUSB on Windows 2000.** Windows XP, 32-bit or x64: its own USB stack, nothing to install; NUSB is not for it either. Windows Vista and Windows 7, either architecture: their own USB stack, nothing to install. |
 | Controller | An xHCI controller presenting PCI class code `0C0330`, with at least one USB 2.0 protocol port, a BAR0 mapped below 4 GB, and a legacy interrupt pin. Neither target has an MSI path, so a controller reporting `Interrupt Pin = 0` cannot be driven at all. |
 | Install media | Windows 98 SE on an xHCI-only machine: the Windows 98 SE installation CD at hand, or the Windows CABs on the hard disk (`C:\WINDOWS\OPTIONS\CABS`). The install copies Windows' own `usbd.sys`, `usbhub.sys` and `usbui.dll` from it. Windows ME: the same, from the Windows ME CD or the CABs its Setup leaves on the hard disk; the virtual machine tried asked for nothing. Windows XP: nothing; `usbport.sys`, `usbd.sys`, `usbhub.sys` and `usbui.dll` all come out of `sp3.cab` in the driver cache every install has. Windows XP x64: nothing either, and the guest asked for nothing; the same four come out of `Driver Cache\amd64`, `usbport.sys` and `usbhub.sys` from `sp2.cab` and `usbd.sys` and `usbui.dll` from `driver.cab` beside it. Windows 2000: nothing either; the same three out of `sp4.cab`, and `usbui.dll` out of `driver.cab` beside it in that cache. Windows Vista and Windows 7: nothing; every install already has all four files, and the package asks Windows to copy none of them there. |
@@ -208,14 +331,26 @@ nothing. Windows Vista and Windows 7 are different: every install of them has
 all four files whether or not it ever saw a USB controller, and on those
 systems the package asks Windows to copy none of them.
 
-`usbui.dll` is new in this release and is the one that is purely cosmetic. On
-Windows 2000 and Windows XP, Windows' own INF already asks for a Power tab on
-the USB Root Hub's properties and names that DLL as the page's provider; on a
-machine that never had a USB controller the file is missing, so the tab is
-silently absent. Copying it back gives you the tab, showing the hub's power
-budget and what is attached. On Windows 98 and Windows ME it changes nothing
-visible: that page comes from `sysclass.dll` there, which those systems
-already have.
+`usbui.dll`, copied since `1.0.2.0`, is the one that changes only what you
+see, never what works. On Windows 2000 and Windows XP, Windows' own INF
+already asks for a Power tab on the USB Root Hub's properties and names that
+DLL as the page's provider; on a machine that never had a USB controller the
+file is missing, so the tab is silently absent. Copying it back gives you the
+tab, showing the hub's power budget and what is attached.
+
+On Windows 98 and Windows ME it is the **dialogs** that need it, not the tabs.
+The tabs themselves come from `sysclass.dll`, which those systems already
+have, so they appear either way. But the buttons on them - the controller's
+**Bandwidth Usage**, and the USB 2.0 Root Hub's **Power properties** - open
+pages that `usbui.dll` draws, and without the file both answer "Data Access
+Error" instead. `sysclass.dll` reaches across to it by name, so the tab works
+and the button does not. Installing this package places the file, so on a
+machine that has installed `1.0.2.0` or later both buttons work. (The error
+was measured on Windows 98 SE, by renaming the file away. Windows ME carries
+the same `sysclass.dll` module and was read with the file present on
+2026-09-20, where both dialogs opened; the rename was not repeated there. The
+controller's **Bandwidth Usage** button is the one `1.1.1.0` adds - see "The
+controller's Advanced tab".)
 
 On an xHCI-only Windows 98 machine that means an "Insert Disk" prompt naming
 the Windows 98 Second Edition CD-ROM during the copy, unless the Windows
@@ -230,6 +365,11 @@ previous install did not, and that is expected rather than a fault.
 `usbui.dll` is new in `1.0.2.0`, so a Windows 98 or Windows ME machine that
 already has `usbd.sys` and `usbhub.sys` from an earlier install may still not
 have it. It sits on the same cabinet as those two, so the same CD answers it.
+And a machine that *does* have the file can be asked for it anyway: a Windows
+98 upgrade asked for `usbui.dll` although the copy was already in
+`C:\WINDOWS\SYSTEM` (measured 2026-09-20). Nothing is wrong, and the CD is not
+needed for it - giving the prompt `C:\WINDOWS\SYSTEM`, the folder the file is
+already in, satisfies it at once.
 
 Windows 2000 and Windows XP take theirs from the driver cache
 every install has and ask for nothing: on 32-bit Windows XP all four out of
@@ -271,7 +411,9 @@ reason a log appears to do nothing. Step 2 is not optional: the driver reads
 these settings once, when it starts.
 
 The two values, both `DWORD`s in the device's driver (software) key, both
-default `0`:
+default `0` (since `1.1.1.0` a third `DWORD`, `XhciImodInterval250ns`, sits in
+the same key; it is not a log setting, and "The interrupt moderation setting"
+above describes it):
 
 | Value | What it does |
 |---|---|
@@ -316,13 +458,31 @@ because a user meets them through this driver.
   loses its registry phase. To remove the driver without a crash, rename
   `C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS` to `XHCI98.SAV` from an MS-DOS
   prompt, reboot, rename it back inside Windows without pressing *Refresh*,
-  then use *Remove*. After an upgrade, right-click `xhci98.inf` -> *Install*
-  to deliver the registry values the crashed phase did not. Windows 2000
-  disables, re-enables, uninstalls and upgrades the same binary cleanly.
+  then use *Remove*. **To upgrade without a crash, start with the same
+  rename**: rename `XHCI98.SYS` to `XHCI98.SAV` from an MS-DOS prompt, shut
+  the machine down and start it again (a warm restart wedges Windows 98 at
+  its splash screen), then *Update Driver* onto the new package - with no
+  driver loaded there is no controller to stop, so it finishes normally and
+  its registry step runs - and shut down and start again. That is the only
+  route measured to deliver a new package's registry settings on this stack,
+  and since `1.1.1.0` those settings are the Advanced tab's line and the
+  interrupt moderation value (their two sections above).
+  **Do not rely on right-click `xhci98.inf` -> *Install* for this.** These
+  notes and the download's `readme.txt` have said to, `1.1.0.0`'s included,
+  and it does not do the job: that route copies files and writes no registry
+  value at all since `1.1.0.0`, when the machine-wide selective-suspend
+  setting went; and in no release could it write a setting that belongs to
+  the device itself, which is the kind the crashed step loses. The file it
+  would copy is already in place anyway - the crashed upgrade copies that
+  much. Windows 2000 disables, re-enables, uninstalls and upgrades the same
+  binary cleanly.
   The crash belongs to NUSB's `usbport.sys`, the Windows 2000 build: with
   SweetLow's XP-lineage build of the same stack (bundled in Windows 98
   QuickInstall 1.0.1 and later) the same Windows 98 system disables,
-  re-enables, removes and reinstalls this driver without crashing.
+  re-enables, removes and reinstalls this driver without crashing. An
+  in-place *Update Driver* over the running driver joined that list on
+  2026-09-20, measured on Windows 98 SE and on Windows ME: no crash, no
+  restart asked for, and the new package's registry settings delivered.
 - Windows 2000: installing a newer package over an older one is refused
   ("A suitable driver for this device is already installed") because the
   setup engine records no driver date for this unsigned package. Delete the
@@ -401,6 +561,8 @@ because a user meets them through this driver.
   controller - but on Windows Vista and 7 only behind a USB 2.0 hub, because
   of the next entry. Measured in a virtual machine with SweetLow's hidusbf; the
   bands are documented in full in `docs/issues/06-full-speed-root-port-bugcheck.md`.
+  `1.1.1.0` changes none of this: the polling rates and the High Speed report
+  itself are unchanged, and no work on them is scheduled.
 - **Windows Vista and Windows 7, 32-bit and x64: a USB 1.1 hub on a root port
   crashes the machine** as soon as a mouse, keyboard or other Full or Low
   Speed device with an interrupt or isochronous endpoint is used behind it
@@ -456,10 +618,11 @@ because a user meets them through this driver.
   and visible but with nothing lost. The counter is `SavesDeclinedNoFsc`.
   A real standby and wake has not been run anywhere, and the other half
   of the same path is unobserved too: on a controller whose restore does
-  succeed, the driver now restores the interrupt moderation it saved
-  rather than leaving it at zero, and that has been read only through a
-  host model, because the virtual machines fail every restore and rebuild
-  the bus instead.
+  succeed, the driver now restores the interrupt moderation interval it
+  saved - since `1.1.1.0` the setting's own value, `500` by default - rather
+  than leaving it at zero, and that has been read only through a host
+  model, because the virtual machines fail every restore and rebuild the
+  bus instead.
 - Windows 98 shows no driver version on the Driver tab, only the file date;
   the four-part version is under *Driver File Details*.
 - USB Audio on Windows 98 is uneven with the emulated device. The fresh-guest
@@ -475,14 +638,31 @@ because a user meets them through this driver.
   a High-Speed hub. Roadmap task 19.8 and `docs/contributing/runs/run-20.md`
   retain the run details; `docs/contributing/lessons.md` has what the Phase 20
   failures were isolated to.
+- **Windows 98: USB audio can stutter while a USB drive is read at full
+  speed.** Measured on real hardware, a ThinkPad P14s Gen 1 under Windows 98
+  SE and NUSB 3.3 (2026-09-23): a Full-Speed USB audio device on a root port
+  looping a WAV through an ATTO Disk Benchmark pass stuttered from the
+  2048 KB reads onwards at the install's `500`, and the same at `1000`. At
+  `4000` it stuttered only on the last, 8192 KB write. The stutter follows
+  the read speed rather than the value: the shorter interval is what doubles
+  reads (about 31 MB/s at `500` against 15 MB/s at `4000` in those passes),
+  and the audio stream was still delivered at its full rate in all but one of
+  the three passes at `500` and `1000`. Where audio matters more than read
+  speed, raise the value towards `4000` or delete it (see "The interrupt
+  moderation setting"). An earlier Windows 98 install on the same machine
+  stuttered on large reads at `4000` too, so how much of this depends on the
+  installation is not known.
 - Windows 98 on an xHCI-only machine: the driver install asks for the
   Windows 98 SE CD (an "Insert Disk" prompt naming the Windows 98 Second
   Edition CD-ROM) unless the Windows CABs are on the hard disk. That is
   Windows fetching its own `usbd.sys`, `usbhub.sys` and `usbui.dll`, which the
   package does not carry; see "Installing". An upgrade can raise it where the
-  previous install did not, because `usbui.dll` is new in `1.0.2.0`. Cancelling the prompt leaves the USB 2.0
+  previous install did not, because `usbui.dll` is new in `1.0.2.0`, and it can
+  raise it for a file the machine already has, which the same section covers.
+  Cancelling the prompt leaves the USB 2.0
   Root Hub at Code 2 until the driver is installed again with the CD at
-  hand. Measured on 2026-09-02 in a virtual machine with no CABs on disk.
+  hand. Measured on 2026-09-02 in a virtual machine with no CABs on disk, and
+  again on 2026-09-20 for the already-present file.
 
 ## Licensing
 

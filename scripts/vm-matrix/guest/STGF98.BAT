@@ -15,11 +15,14 @@ rem target.
 rem
 rem THE FOUR THINGS COMMAND.COM DOES NOT HAVE, and what replaces each:
 rem
-rem   cmd /c        ->  command /c        (COMMAND.COM is the shell here)
-rem   %~f0          ->  an explicit C:\ path, hard-coded below
-rem   for /L        ->  not needed; 2a runs no isochronous half (see LOAD98.BAT)
-rem   set /a        ->  not used at all; the disk stream is unbounded instead
-rem   if /i         ->  both spellings tested explicitly
+rem   cmd /c        becomes  command /c   (COMMAND.COM is the shell here)
+rem   %~f0          becomes  an explicit C:\ path, hard-coded below
+rem   for /L        becomes  nothing; 2a runs no isochronous half (see LOAD98.BAT)
+rem   set /a        becomes  nothing; the disk stream is unbounded instead
+rem   if /i         becomes  both spellings tested explicitly
+rem
+rem (No arrows in that table.  COMMAND.COM performs redirection on a REM line,
+rem so an arrow there wrote a junk file on every run - runs/run-23.md, 23.3.)
 rem
 rem AND ONE THING THE VOLUME DOES NOT HAVE.  Windows 98's COMMAND.COM can `dir`
 rem and `type` a batch file on the QEMU `fat:` transfer volume but CANNOT EXECUTE

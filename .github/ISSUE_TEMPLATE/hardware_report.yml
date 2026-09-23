@@ -38,7 +38,6 @@ body:
         - Windows 2000, earlier than SP4
         - Windows XP, 32-bit
         - Windows XP, 64-bit
-        - Windows Server 2003, 64-bit
         - Windows Vista, 32-bit
         - Windows Vista, 64-bit
         - Windows 7, 32-bit
@@ -59,7 +58,7 @@ body:
     id: driver-version
     attributes:
       label: Driver version
-      placeholder: "the four-part number from readme.txt, e.g. 1.1.0.0"
+      placeholder: "the four-part number from readme.txt, e.g. 1.1.1.0"
     validations:
       required: true
 

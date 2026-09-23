@@ -59,7 +59,8 @@ things a reader should know before decoding a dump:
   user boundary. The derivation and the posture are design record 08 §13.2's
   amendment; the door itself is `docs/usb-xhci-info/usbport-miniport-abi.md`,
   "Reachability from user mode".
-- The wire format is at schema 3, with a 22-ULONG, 88-byte header, and
+- The wire format is at schema 4 since `1.1.1.0` (roadmap task 23.4 appended
+  the moderation interval's four fields), with a 26-ULONG, 104-byte header, and
   `sizeof(XHCI_EXTENSION)` is the `SIZEOF` line of the `offsets.txt`
   regenerated from the tree (over 90,000 bytes). A dump decodes only against
   an `offsets.txt` regenerated from the same tree (section 7).
@@ -123,17 +124,20 @@ whatever set you build, which is the check section 11 ends on.
 
 ## 4. The wire format
 
-`src/xhci.h` is the wire format's owner. It carries schema 3, an 88-byte,
-22-ULONG header, and the field-by-field reasons for each field. Read it, not
-this, before writing a decoder.
+`src/xhci.h` is the wire format's owner. It carries schema 4, a 104-byte,
+26-ULONG header, and the field-by-field reasons for each field. Read it, not
+this, before writing a decoder. Schema 3 (88 bytes, 22 ULONGs) was the format
+from `0.0.0.6` to `1.1.0.0`; schema 4 appends four fields and changes none, and
+a tool of either schema refuses a driver of the other.
 
 The header names the signature, schema and header size; the status bits; the
 region, offset, region size and payload size of the window;
 `ExtensionBytes`, the layout key (section 7); the port count; the tear
 detector (section 6); the build flags; and a block a reader can print with no
 offset table at all: `Flavour`, `VerbosityRead`/`VerbosityApplied`, each
-switch's `MPSTATUS`, `SwitchRead`, and the note ring's offset, capacity, head
-and fill.
+switch's `MPSTATUS`, `SwitchRead`, the note ring's offset, capacity, head
+and fill, and since schema 4 the moderation interval: the value's read status,
+the value read, the interval the start wrote, and what IMOD read back.
 
 That last block is what
 the plain-text companion is built out of. It is not the gather table design
@@ -200,10 +204,10 @@ order they bite:
    intrinsic or an `ntoskrnl` import depending on build flags, and this
    driver decides its import list on purpose rather than by build-flag
    accident, the same reason `xhciZeroPacket` exists. A full window is bounded by the
-   0x10000 usbport refuses above, less the 88-byte header: 65,448 iterations
+   0x10000 usbport refuses above, less the 104-byte header: 65,432 iterations
    under the controller lock, and the host tool asks for 0xF000 = 61,440 at a
    time (`SNAP_PARAM_BYTES` in `xhcisnap/xhcisnap.c`), which is the whole
-   parameter block and so carries the header too - 61,352 payload bytes, and
+   parameter block and so carries the header too - 61,336 payload bytes, and
    that is what is actually reached. (`xhcisnap.c` bounds its own reads by
    `SNAP_PARAM_BYTES - sizeof(SNAP_HEADER)`, the same arithmetic.) On the order of 100 us at DISPATCH. That is the right trade: the instrument runs on a wedged, idle
    machine and is in no hot path, and the ISR does not take this lock, so

@@ -55,7 +55,7 @@ rem discovered by five ping windows opening and closing again.
 if not exist C:\STGF98.BAT goto nostgf
 
 rem The payload the disk stream reads.  It has gone missing before:
-rem a mistyped `del *.bin` at an E:\> prompt removed BIG8MB.BIN from the guest's
+rem a mistyped `del *.bin` at the E: prompt removed BIG8MB.BIN from the guest's
 rem view of the transfer volume mid-run.
 if not exist %2:\BIG8MB.BIN goto nosrc
 
@@ -108,7 +108,7 @@ echo.
 call C:\STGF98.BAT %1 %2 %3
 echo.
 echo Tell the agent the load is running.
-echo On a disk error box when the device is pulled, press A for Abort -
+echo At a disk error box when the device is pulled, press A for Abort -
 echo that error IS the test.
 goto end
 

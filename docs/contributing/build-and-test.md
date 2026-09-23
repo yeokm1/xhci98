@@ -318,7 +318,7 @@ The major version also says whether this is a final release, which is the other 
 
 The numbering has been restarted once, at the project owner's direction: an earlier `1.0.0.x` series of development builds was removed from `releases\` and the version restarted at `0.0.0.1`, which is where the `0.x` pre-releases came from. Two consequences outlive it:
 
-- A machine can be carrying a package this repository no longer publishes, and a `1.0.0.x` development build ranks at or above today's `1.0.0.0` to the Windows 2000 setup engine, which will then decline the release as not-better. The remedy is the one task 11-V.3 established: uninstall, and delete the cached `%SystemRoot%\inf\oemN.inf` and `.pnf`. Do not choose a version to beat it. Nothing here was ever uploaded, so the only machines that can be in this state are this project's own.
+- A machine can be carrying a package this repository no longer publishes, and a `1.0.0.x` development build ranked at or above the `1.0.0.0` release to the Windows 2000 setup engine, which then declined that release as not-better; every release from `1.0.1.0` on outranks the whole series. The remedy is the one task 11-V.3 established: uninstall, and delete the cached `%SystemRoot%\inf\oemN.inf` and `.pnf`. Do not choose a version to beat it. None of those development builds was ever uploaded, so the only machines that can be in this state are this project's own.
 - `scripts\package\make-11v-media.ps1` takes its baseline from a git commit rather than from `releases\`. `-BaselineVersion` defaults to the version cut before the current one, `-BaselineCommit` is a commit the caller names (the last one whose `src\xhci98.inf` reads that version), and the script refuses when the baseline is not older than the INF's. Both move together at each bump, and a rewritten history moves the commit again. The check runs ahead of the first build, so the refusal is immediate.
 
   Two of its other checks a caller should know exist: the staged baseline binary is not trusted by directory name (its own version resource is checked against both the expected baseline and the current version through `Test-DriverVersionMatches`, so a stale binary under `old-<baseline>-debug` cannot satisfy the prerequisite silently), and `New-DatedInf`, which rewrites the INF's date for the upgrade experiment, refuses a non-ASCII byte, an LF-only source or a mixed-EOL source rather than claiming a byte-faithful rewrite it would have silently transformed.
@@ -925,6 +925,28 @@ of a new driver build. Reverting a snapshot is by far the fastest recovery
 from a boot-crashing driver. `-snapshot` on the QEMU command line gives a
 throwaway boot (all writes discarded on exit), useful for risky experiments,
 but remember nothing is saved, including files you copied in.
+
+**A live snapshot - `savevm` at the monitor, which saves RAM as well as disk
+and so restores a *running* guest - is not available on every guest here.** It
+is refused under WHPX with
+
+```
+Error: State blocked due to missing dirty memory tracking support
+```
+
+so `vm\winxp.img`, `vm\win7.img` and the other WHPX guests take a powered-off
+`qemu-img snapshot -c` and nothing else; that is why every pre-existing
+snapshot on `vm\winxp.img` lists `VM_SIZE 0`. The TCG guests -
+`vm\win2k-xonly.img`, `vm\vista.img`, `vm\vista-x64.img` and the 9x images -
+take `savevm` normally, and a live snapshot of a mid-experiment state is
+usually worth far more than a clean-boot one: roadmap task 23.2 used them to
+keep a guest at the exact point a reading was taken. Read the guest's
+accelerator off its launcher before planning a run around a live snapshot
+(measured per guest and recorded in each "target VM" section below), and note
+that `info snapshots` lists a disk-only snapshot under "partial
+(non-loadable)" once any live one exists on the same image - that is a
+statement about VM state, not a damaged snapshot, and
+`qemu-img snapshot -a` still reverts it.
 
 The two Win98 snapshots on `vm\win98.img` are not interchangeable.
 `post-nusb` is the Phase 2a checkpoint state without `usbd.sys`. It is kept
@@ -1676,6 +1698,45 @@ at the console, the host side through `prepare-image.ps1`):
   controllers, Windows ME's own `usbccgp` parent, with "USB Audio Device"
   under Sound, video and game controllers; the controller and "USB 2.0 Root
   Hub" clean, no refusal counter moved.
+
+**"SweetLow's stack" on this guest is three files out of four, and
+`usbccgp.sys` is not one of them.** Read on 2026-09-20, statically, with
+`7z e` off the image (roadmap task 23.1, leg B8; `runs/run-23.md`). After
+SweetLow's `USB2.INF` `DefaultInstall` on a stock Windows ME guest the image
+carries `USBPORT.SYS` 134,912, `USBEHCI.SYS` 20,224 and `USBHUB20.SYS` 50,560
+- all SweetLow's, matching the staged files - and `USBCCGP.SYS` at **18,288**
+bytes, which is Windows ME's own (4.90.3000.1, 8 Jun 2000) and is what the
+stock `winme-clean-install` snapshot already carried. The same extract
+returned **no `USBPORT.SYS` at all** from that stock snapshot, which verifies
+directly, rather than by inference, this section's claim that the Windows ME
+CD ships none.
+
+So the three files Windows ME never had were placed and the one it already
+had was not replaced - and that is not the INF declining to. SweetLow's
+`[Composite.CopyFiles]` is a bare `usbccgp.sys` with **no copy flags**,
+reached from `DefaultInstall`, so an unconditional overwrite was asked for.
+Two ordinary explanations were tested and both fail. It is **not a
+replacement queued for a restart that never came**: the snapshot taken
+immediately after the install and the shutdown, before any further boot,
+already holds SweetLow's `usbport.sys`, holds `usbccgp.sys` at Windows ME's
+own size and date, and the image carries no `WININIT.INI`, so nothing was
+queued for the next boot. And it is **not the setup engine refusing to
+replace a newer file with an older one**: the incoming file is 5.1.2600.2180
+against Windows ME's 4.90.3000.1, so a version comparison would have
+permitted the copy. **The mechanism is not established.** Windows ME's System
+File Protection fits the pattern exactly - ME is the 9x release that
+introduced it, and what survived is precisely the file ME itself ships - but
+nothing here tested it, and it must not be written down as the cause.
+
+**What that means for every Windows ME reading here.** A Windows ME
+composite-device observation rests on **Windows ME's own** composite driver,
+not on SweetLow's - the composite audio device of the run above, roadmap task
+18.4's, included; it bound under `usbccgp` and that is the file the OS
+shipped. Where this section and the documents that follow it say the Windows
+ME guest runs SweetLow's stack, read that as the port driver, the EHCI
+miniport and the USB 2.0 hub driver. The composite parent is the operating
+system's, and the `usbhub.sys` the Windows 98 install path copies is inert
+there for the reason the CD bullet above gives.
 
 What Windows ME became was settled by the owner as roadmap task 18.4: not a
 third first-class target with the full checkpoint tax `AGENTS.md` describes,
@@ -2516,7 +2577,8 @@ as a surprise. **On 2026-09-13 issue 7's fix was run on both, and on both
 32-bit guests too, and every clause passed on all four** (issue 7 section
 7.5): five disable/enable cycles each, and remove and rescan included.
 
-**F8 is what every run has used, and it is the only route.** `TESTSIGNING`
+**F8 was the only route until 2026-09-20**, and `TESTSIGNING` is still not
+one. `TESTSIGNING`
 was never tried on either guest and was removed from the roadmap by the owner
 on 2026-09-16: test-signing mode loads a test-signed driver, and this package
 is not signed. **A single QEMU
@@ -2534,6 +2596,34 @@ elevated, power off cleanly, then `system_reset` and `cont`: the Windows Boot
 Manager menu waits, F8 opens Advanced Boot Options, and nine `down` from *Safe
 Mode* reach *Disable Driver Signature Enforcement*. Otherwise press F8 at the
 console.
+
+**A third route, simpler than either, and it needs no keypress and no
+timing** (roadmap task 23.2, 2026-09-20, used on both x64 guests). From an
+elevated command prompt in the guest:
+
+```
+bcdedit /set {current} advancedoptions true
+shutdown -r -t 0
+```
+
+The Advanced Boot Options menu then comes up **on every boot** and waits, with
+no F8 at all, and *Disable Driver Signature Enforcement* is picked from it as
+usual. It differs from the Vista x64 recipe above in three ways worth knowing:
+it sets one value rather than two, it is on `{current}` rather than
+`{bootmgr}` so it raises Advanced Boot Options directly instead of the Boot
+Manager menu that then needs F8, and it survives in the image rather than
+living on a throw-away overlay - which is a reason to undo it
+(`bcdedit /deletevalue {current} advancedoptions`) on an image whose ordinary
+boot is meant to be unattended.
+
+Getting the elevated prompt is itself worth writing down, because the guests
+are US Dvorak and the accelerators follow the layout: open the Start menu with
+`sendkey ctrl-esc`, type `cmd`, `sendkey ctrl-shift-ret`, and answer the UAC
+box with `sendkey alt-i` on Vista (Continue, accelerator C, physical `i`) or
+`sendkey alt-t` on Windows 7 (Yes, accelerator Y, physical `t`). A prompt
+whose title bar does not start "Administrator:" is not elevated and `bcdedit`
+will answer "The boot configuration data store could not be opened. Access is
+denied."
 
 **Getting files in and out.** The transfer drive is VVFAT `snapshot=on`, so the
 guest cannot write anything back to the host through it. Use the floppy:
@@ -3743,7 +3833,7 @@ table for the exact mobile IDs.
 | Controller | How to get it | Why it matters | Maps to phase |
 |---|---|---|---|
 | AMD mobile (Kaveri / Carrizo APU `1022:7814`, or Ryzen mobile) | Era AMD laptop | Second integrated vendor; PLL re-lock on power events and isoch scheduling quirks. AMD's USB IP is partly ASMedia-derived. Less common in the retro scene and harder to boot Win98 on. | Phase 13 |
-| NEC uPD720200 (`1033:0194`) + Renesas uPD720201/202 (`1912:0014`/`0015`) | PCIe add-in card (desktop bench) | ROM-less 720201/202 cards are the only test vehicle for the driver firmware-upload path; the 720200 boots from on-card SPI flash (no upload) and covers plain NEC-vendor behavior. Not found in laptops. | Phase 6-8 |
+| NEC uPD720200 (`1033:0194`) + Renesas uPD720201/202 (`1912:0014`/`0015`) | PCIe add-in card (desktop bench) | ROM-less 720201/202 cards need a firmware upload by the host driver, which this driver does not implement, so they are not a vehicle for it; the 720200 boots from on-card SPI flash (no upload) and covers plain NEC-vendor behavior. Not found in laptops. | Phase 6-8 |
 | ASMedia ASM1142/ASM2142 (clean) + ASM1042 (`1B21:1042`, spurious-success completions and broken streams per Linux `xhci-pci.c`; the table carried an unsourced 64 KB bulk limit until 2026-09-17) | PCIe add-in card (desktop bench) | Clean baseline plus the spurious-success quirk. ASMedia behavior also surfaces indirectly under AMD integrated USB. | Phase 3-8 |
 
 #### Tier 3 - quirk completeness on a desktop bench (only if chasing specific bugs)
@@ -3760,22 +3850,23 @@ Practical notes:
   100/200-series). That is the bulk of "comprehensive" for this project.
 - The discrete add-in cards (Tier 2-3) only make sense on a desktop test bench
   with free PCIe slots, and only to exercise quirks your laptops will never
-  trigger (Renesas firmware upload, ASM1042 spurious success, Fresco Logic
-  broken MSI). Skip them unless you are specifically validating that code path.
+  trigger (ASM1042 spurious success, Fresco Logic broken MSI). Skip them
+  unless you are specifically validating that code path.
 - A laptop with Thunderbolt/USB4 exposes an extra xHCI for USB tunneling
   alongside the native PCH xHCI; that path is more complex and out of scope
   (and such laptops usually cannot boot Win98 anyway).
 - When buying NEC/Renesas cards, check the chip marking and whether an SPI
   flash chip is fitted: the uPD720200 always boots from on-card flash (no
   driver-upload path), while ROM-less uPD720201/202 cards are the ones that
-  exercise the driver firmware upload (Linux `xhci-pci-renesas.c` is the only
+  need a driver firmware upload (Linux `xhci-pci-renesas.c` is the only
   open implementation of it, and this driver has none).
 
 ### Available Test Hardware
 
 The current physical test fleet, and what each machine is for. The fleet is
 two machines: the E460 and the P14s Gen 1, two Intel xHCI-only laptops,
-Windows 98 only, single-controller. A third, an AMD desktop, left the project;
+single-controller, both Windows 98 machines (the E460 also ran 32-bit
+Windows 7 once, 2026-09-19, roadmap task 22.9). A third, an AMD desktop, left the project;
 its row is kept because clauses lost their vehicle with it.
 
 The key axis is whether the platform still has an EHCI controller. Intel
@@ -3792,7 +3883,7 @@ all. See "Bootstrapping xHCI-only machines".
 
 | Machine | PCH / SoC | USB 2.0 EHCI? | xHCI quirk class | Role |
 |---|---|---|---|---|
-| ThinkPad E460 | Intel Skylake / Sunrise Point-LP (100-series) | no, removed | Clean | xHCI-only deployment validation, and the project's primary bench machine. Windows 98 only; Win2000 Setup bugchecks here. Machine state after batch 13-L: it carries `L3DBG.SYS`, the DEBUG candidate (82,811 bytes, sha256 `84708F2C...`), with the channel switched off (`XhciLogVerbosity` 0, `XhciLogDebugView` 0), at the project owner's direction. A later session must not assume this machine carries a release build; the acceptance run installs from scratch |
+| ThinkPad E460 | Intel Skylake / Sunrise Point-LP (100-series) | no, removed | Clean | xHCI-only deployment validation, and the project's primary bench machine. Windows 98, and one 32-bit Windows 7 session (2026-09-19, roadmap task 22.9: the install and devices passed, the first controller disable hung); Win2000 Setup bugchecks here. Machine state after batch 13-L: it carries `L3DBG.SYS`, the DEBUG candidate (82,811 bytes, sha256 `84708F2C...`), with the channel switched off (`XhciLogVerbosity` 0, `XhciLogDebugView` 0), at the project owner's direction. A later session must not assume this machine carries a release build; the acceptance run installs from scratch |
 | ThinkPad P14s Gen 1 (Intel) | Intel Comet Lake (400-series) | no, removed | Clean | xHCI-only deployment validation (newer Intel gen). Windows 98 only; Win2000 Setup bugchecks here too. Windows 98 SE is installed on it (project owner): it postdates the 2012-2018 window above and boots anyway. The working configuration is the owner's `retro-configs` record for this machine, not anything derived here |
 | B650M desktop | AMD Zen 4 (Raphael SoC + Promontory 21 chipset USB) | no, xHCI-only | Clean; chipset USB is ASMedia-derived | No longer available to this project. It was to be the xHCI-only AMD validation machine and it never ran the qualifier or the driver, so no AMD silicon has ever been tested and none remains that could. It was also the last candidate for the multi-controller console reading, its ASMedia-derived chipset USB plausibly being a second xHCI function |
 
@@ -4785,7 +4876,7 @@ powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavo
 
 It lands in `out\pkg-datefmt-<flavor>-<arch>\`, and its INF differs from
 `src\xhci98.inf` on exactly one line: a `DriverVer` date without its leading
-zeros - `9/18/2026` where the tree's own `DriverVer` reads `09/18/2026`;
+zeros - `9/24/2026` where the tree's own `DriverVer` reads `09/24/2026`;
 every field that has a leading zero loses it, the day as well as the month
 when both have one. The variant is derived at
 staging time, never committed, so there is no second INF in the tree to drift;
@@ -4843,6 +4934,32 @@ enabled=1`, `devices addressed=1`, `SET_ADDRESS interceptions=1`, speed decode
 `00010103`, `transfers submitted == completed == 0xAB`, `isr count == claimed
 == 0x9C`, `commands issued == completed == 6`, every one of the 80+ error and
 failure counters zero).
+
+#### The moderation experiment package (task 23.3) - retired
+
+**Retired on 2026-09-22 by the owner, with task 23.4.** Task 23.3 swept the
+interrupter's moderation interval with an experimental build
+(`XHCI_EXTRA_DEFINES=-DXHCI_IMOD_EXPERIMENT`) staged through a second narrow
+exception to the do-not-deploy rule, `make-package.ps1
+-ImodExperimentArtifact`: it read `XhciImodInterval250ns` as 0 to 65535 and
+wrote nothing when the value was absent, so one install was the control and
+every arm. It ran on the P14s Gen 1 under Windows 98 SE on 2026-09-21 and
+2026-09-22; `runs/run-23.md`, 23.3 and 23.5, has the procedure and the
+reading, and its build numbers (an extension of 92,328 bytes against the
+92,304 shipping at the time; the 23.4 build is 92,320) belong to that build
+alone.
+
+Since `1.1.1.0` **every build reads the value** (roadmap task 23.4), so the
+define, the packaging switch and its three build-time refusals are gone, and
+a sweep uses an ordinary package: install it once, then change only the value
+and reboot (`scripts\bench\IMOD98.BAT` or `IMOD.BAT`). The contract is the
+shipping one - 10 to 4000 used as given, anything else replaced by 4000 - so a
+sweep can no longer reach 0. The interval the driver chose, and what the
+register read back, are in every `XHCISNAP` `.TXT` under "registry values"
+(snapshot schema 4), and the interrupt and DPC counts still come out of the
+`.BIN` against an offsets table from the same tree. The INF writes 500, so a
+bench machine goes back to the package's own setting with `IMOD98 500 NNNN`,
+not with `CLEAR`, which leaves the driver at 4000.
 
 ### Manual Installation on Windows 2000 SP4 (Development)
 
@@ -5049,18 +5166,20 @@ memory. Shape:
 | Both | `[Version]` | `$CHICAGO$`, `Class=USB` + the existing USB ClassGUID, `LayoutFile=layout.inf` ("The files the OS supplies" below), `DriverVer` per "Versioning the driver" above (the number moves, so read it out of `src/xhci98.inf` rather than from this row) |
 | Both | `[XhciModels]` | `%XhciDesc%=Xhci.Dev,PCI\CC_0C0330`, one class-code entry, the analog of the references' `PCI\CC_0C0320` |
 | Win98 | `[Xhci.Dev]` | `AddReg=Xhci.AddReg`, `CopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI` (the third since 1.0.2.0). A second `AddReg` section, `Xhci.AddReg.Global`, carried the `DisableSelectiveSuspend` write from 1.0.1.0 to 1.0.2.0 and went at 1.1.0.0 with the mechanism |
-| Win98 | `[Xhci.AddReg]` | `HKR,,DevLoader,,*NTKERN` + `HKR,,NTMPDriver,,xhci98.sys` |
+| Win98 | `[Xhci.AddReg]` | `HKR,,DevLoader,,*NTKERN`, `HKR,,NTMPDriver,,xhci98.sys`, and since roadmap task 23.1 `HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"` (the bullet below) |
 | Win2000 | `[Xhci.Dev.NTx86]` | `AddReg=Xhci.AddReg.NT`, `CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI` (the third since 1.0.2.0); the same `Xhci.AddReg.Global` history as the row above |
 | Win2000 | `[Xhci.Dev.NTx86.Services]` | `AddService=xhci98,0x00000002,Xhci.AddService` |
 | Win2000 | `[Xhci.AddService]` | `ServiceBinary=%12%\xhci98.sys`, type 1, start 3, error 1, `LoadOrderGroup=Base` |
 | Shared | `[Xhci.CopyFiles]` | `xhci98.sys,,xhci98.tmp` -> `10, System32\Drivers` |
 | Win98 | `[Xhci.CopyW98]` | `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, both fetched from the OS's own install source through `LayoutFile` (neither is in `[SourceDisksFiles]`). The second is Windows 98's composite parent; on the NT targets the same name is the OS's own hub driver, and the NT row copies it too. |
 | Win2000 | `[Xhci.CopyNT]` | `usbport.sys,,,16`, `usbd.sys,,,16` and `usbhub.sys,,,16` -> `10, System32\Drivers`, from `Driver Cache\i386` through `LayoutFile`. `usbd.sys` alone until 1.0.1.0; an NT install that never had a USB controller has none of the three (the Windows XP guest of 2026-09-03) |
-| All four | `[Xhci.CopyUI]` | `usbui.dll,,,16` -> dirid `11` (the system directory), the one OS-supplied row that does not go to dirid 10, on all four install paths since 1.0.2.0. It is the root hub's property-page provider, which the NT targets' own INFs already name; `[DestinationDirs]` carries `Xhci.CopyUI=11` for it - the bare number, which is what the gate requires and what the INF has |
+| All four | `[Xhci.CopyUI]` | `usbui.dll,,,16` -> dirid `11` (the system directory), the one OS-supplied row that does not go to dirid 10, on all four install paths since 1.0.2.0. It is the root hub's property-page provider, which the NT targets' own INFs already name, and since roadmap task 23.2 the controller's too on every NT path; on 9x `sysclass.dll` draws the controller's tab and `usbui.dll` the dialogs behind its buttons (the `EnumPropPages` bullet below); `[DestinationDirs]` carries `Xhci.CopyUI=11` for it - the bare number, which is what the gate requires and what the INF has |
 | Both | `[DefaultInstall]` / `[DefaultInstall.NTx86]` | right-click pre-stage; the 9x one also copies the INF to `%17%`. Not supported on Vista and Windows 7, where `.NTx86` is also what runs: on Vista x86 its `LayoutFile` copies ask for `usbport.sys` from "(Unknown)", and a Cancel aborts the queue silently with `xhci98.sys` left behind and no service (roadmap task 22.5, 2026-09-17) |
 
-Four decisions in it depart from the references, each for a reason that would
-otherwise cost a debug cycle:
+Three decisions in it depart from the references, each for a reason that would
+otherwise cost a debug cycle - a fourth did until roadmap tasks 23.1 and 23.2
+closed it, and its bullet below now records what the file carries rather than
+what it omits:
 
 - No `[ControlFlags] ExcludeFromSelect`, which both references set. It only
   hides a model from the manual device-selection list, and the documented
@@ -5068,28 +5187,100 @@ otherwise cost a debug cycle:
   Disk", Win98 "Specify a location"). It cannot affect whether `usbport.sys`
   binds, so the risk of it suppressing the install path is all cost and no
   benefit.
-- No `EnumPropPages` / `EnumPropPages32` / `Controller`. Those name the
-  property-page providers for the *controller's* own Device Manager tab, and
-  this package still registers none. What that costs was measured on
-  2026-09-07 rather than assumed, and the measurement corrected the old
-  reasoning in two ways.
+- `EnumPropPages` on the Windows 98 path and `EnumPropPages32` +
+  `Controller` on the NT ones. These name the property-page providers for the
+  *controller's* own Device Manager tab. This package registered none until
+  roadmap task 23.1 (2026-09-20, GitHub issue 4 item 5) added the 9x half and
+  task 23.2 (the same day) the NT half, in both INFs. `runs/run-23.md`
+  carries both tasks and their guest readings, and
+  `scripts\inf-gate\check-inf.ps1`'s `PROP-*` family holds both halves where
+  they are.
 
-  On Windows 98 the provider is `sysclass.dll`, **not** `usbui.dll`. Adding
-  `HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"` to
-  `[Xhci.AddReg]` does produce an Advanced tab, carrying a "Disable USB error
-  detection" box and a Bandwidth Usage dialog that enumerates the bus. The
-  tab and the dialog render identically with `usbui.dll` renamed away in
-  MS-DOS mode and Windows restarted, so the 9x tab is a registry line and not
-  a file. `sysclass.dll` is a 16-bit NE module carrying the string
+  On Windows 98 the provider is `sysclass.dll`, **not** `usbui.dll`.
+  `HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"` in
+  `[Xhci.AddReg]` produces an Advanced tab carrying a "Disable USB error
+  detection" box and a Bandwidth Usage dialog that enumerates the bus -
+  measured on 2026-09-07 by merging the value by hand, and shipped in the INF
+  since task 23.1. The **tab** rendered identically with `usbui.dll` renamed
+  away in MS-DOS mode and Windows restarted, so the 9x tab is a registry line
+  and not a file. **The dialogs behind its buttons are a different matter -
+  see below.** `sysclass.dll` is a 16-bit NE module carrying the string
   `usbui.dll` (read statically), and it is on every 9x machine already,
   including the owner's E460, which has `sysclass.dll` and no `usbui.dll`.
   Its cab is not one this INF fetches from (Windows 98 disk 42 =
-  `WIN98_42.CAB`, 27,184 B; Windows ME disk 15 = `WIN_15.CAB`, 27,408 B).
+  `WIN98_42.CAB`, 27,184 B; Windows ME disk 15 = `WIN_15.CAB`, 27,408 B) -
+  and Windows ME's copy is the same module string for string, bar one code
+  fragment and the version resource (read statically 2026-09-20).
+
+  **One part of the 2026-09-07 reading was wrong, and was corrected on
+  2026-09-20**: it recorded that the *dialog* also rendered with `usbui.dll`
+  renamed away. It does not. Measured on a Windows 98 SE guest under
+  SweetLow's stack (`runs/run-23.md`, Leg C, A4), with
+  `C:\WINDOWS\SYSTEM\USBUI.DLL` (147,456 B) renamed away in MS-DOS mode and
+  the machine cold booted:
+
+  | pressed | `usbui.dll` present | renamed away |
+  |---|---|---|
+  | controller -> Advanced -> **Bandwidth Usage** | the Bandwidth dialog | **"Data Access Error"** |
+  | USB 2.0 Root Hub -> Power -> **Power properties** | the Power dialog | **"Data Access Error"** |
+  | the **Advanced tab** itself | renders | renders unchanged |
+
+  The root hub's button is registered by the USB 2.0 stack's own INF, not by
+  this package, so the two witnesses are independent. The mechanism is the one
+  the strings predict: `usbui.dll` exports `USBControllerBandwidthPage` and
+  `USBHubPowerPage`, and `sysclass.dll` carries both export names beside the
+  string `usbui.dll` and the message "An error occurred while trying to access
+  the requested data." - a 16-bit module reaching a 32-bit export through the
+  documented 9x `LoadLibrary32W` / `GetProcAddress32W` route, with its failure
+  message.
+
+  **So `usbui.dll` does not buy nothing on 9x: it buys both dialogs.** Nothing
+  about the shipped line or the copy changes - this INF has copied `usbui.dll`
+  on all four paths since 1.0.2.0 - but the *reason* recorded for that copy
+  does, and any text here or elsewhere calling the 9x copy cosmetic is wrong.
+  A 9x machine with `sysclass.dll` and no `usbui.dll` gets the tab and the
+  checkbox, and an error from either button; installing this package is what
+  puts the file there.
+
+  The checkbox is a **shell** switch, not a stack one, which is what task
+  23.1 owed before shipping the line. `sysclass.dll` carries the value name
+  `ErrorCheckingEnabled` beside the key
+  `SOFTWARE\Microsoft\Windows\CurrentVersion\Usb`, and that name appears in
+  no USB driver in `tools\*-extracted` - NUSB 3.3 and 3.6, SweetLow's,
+  Windows 98 SE's own, Windows 2000 SP4's, Windows XP SP3's - but does appear
+  in `SYSTRAY.EXE`, beside `usbui.dll`, `USBErrorMessagesEnable` and
+  `\\.\HCD%d` (all read statically 2026-09-20). It turns off the tray's own
+  USB error reporting, which runs on a 9x machine whether or not this tab
+  exists, so it can only quiet traffic this controller already sees; and
+  anything that did reach the miniport would arrive through usbport's
+  PassThru, which `xhciPassThru` GUID-matches and answers
+  `MP_STATUS_NOT_SUPPORTED`. The key is machine-wide, so a user who ticks the
+  box changes every controller usbport drives - but this package writes
+  nothing there, it only exposes a box Windows already has.
 
   On the NT targets `usbui.dll` genuinely is the provider, and since 1.0.2.0
   the INF copies it - for the root hub's page, not the controller's; see
-  "The files the OS supplies" below. Adding the controller's own
-  `EnumPropPages32` remains a separate decision that has not been taken.
+  "The files the OS supplies" below. The controller's own pair,
+  `HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"` with
+  `HKR,,Controller,1,01`, is what Windows 2000 SP4's `USB.INF`, Windows XP
+  SP3's `usbport.inf` and Windows Vista SP2's `usbport.inf` all write for
+  their own EHCI controller (XP's read statically 2026-09-20 out of
+  `vm\winxp.img`; Vista's read statically the same day out of `vm\vista.img`,
+  where the file is UTF-16 so a byte grep for the name finds nothing in it,
+  and then read again as `runtime` out of the running guest's own
+  `C:\Windows\inf\usbport.inf`; Windows 7's has still not been read). **It was
+  taken on 2026-09-20** by roadmap task 23.2, which read the page on seven
+  NT guests - Windows 2000 SP4, Windows XP SP3, Windows XP x64 SP2, Vista SP2
+  in both architectures and Windows 7 in both - covering all four install
+  sections that reach `[Xhci.AddReg.NT]` across the two INFs. All seven show
+  the tab. `PROP-NTHALF`, which refused the value until those readings
+  existed, was inverted into an ordinary requirement in the same change.
+
+  **Do not re-verify that line by hand on NT 6.x.** A hand-written
+  `EnumPropPages32` on an already-installed devnode does nothing there and
+  says nothing about it - no tab, no error, no log line - because the provider
+  list is consulted when the devnode is built. It works on NT 5.x, which is
+  what makes it a trap. `docs/contributing/lessons.md` has the full account.
 
   So the old "absent-dependency shape" framing was half right: the file was
   indeed absent, but on 9x it was never the one that draws the tab.
@@ -5171,14 +5362,64 @@ changing nothing else:
 The Power tab renders live data on both: "The hub is self-powered", "Total
 power available: 500 mA per port", and an attached-device list reading
 "4 port(s) available". No error box appears in the without case; the page is
-simply absent. Our own controller's tab row is unchanged either way, since
-this package registers no provider for it.
+simply absent.
 
-On Windows 98 and Windows ME the copy buys no tab at all, for the reason in
-the `EnumPropPages` bullet above: the 9x provider is `sysclass.dll`. It goes
-on the 9x paths by the owner's decision of 2026-09-07, because it is what
+**Since roadmap task 23.2 this package registers a provider for its own
+controller on the NT targets too**, so the sentence that used to stand here -
+that the controller's tab row is unchanged on NT because `PROP-NTHALF` held
+that half shut - no longer applies. That rule was inverted on 2026-09-20 and
+`[Xhci.AddReg.NT]` now writes the pair in both INFs; the controller carries an
+**Advanced** tab on every NT target, read on seven guests. The NT 6.x guests
+add a page of their own on the hub as well:
+
+| Target | USB Root Hub tabs | the hub's own Advanced tab |
+|---|---|---|
+| Windows 2000 SP4 | General, **Power**, Driver, Power Management | - |
+| Windows XP SP3 | General, **Power**, Driver, Details | - |
+| Windows Vista SP2 x86 | General, **Power**, **Advanced**, Driver, Details, Power Management | "Hub is operating at high-speed", with a **Reset Hub** button |
+
+That last line is worth keeping beside `docs/issues/06`: the root hub reports
+**high speed**, which is the report the Full-Speed-costed-as-High-Speed
+arithmetic turns on. The Reset Hub button was not pressed - resetting the hub
+is a live operation and the hub's page is a control here, not a subject.
+
+The 9x half has registered a provider since task 23.1, and the next paragraphs
+are what that means.
+
+On Windows 98 and Windows ME the copy buys **no tab** - the tabs there are
+`sysclass.dll`'s and both systems already have that file, for the reason in
+the `EnumPropPages` bullet above - but it does buy **the dialogs behind their
+buttons** (A4, 2026-09-20). Two 9x pages carry such a button, and only one of
+them is this package's:
+
+| page | registered by | what a missing `usbui.dll` costs |
+|---|---|---|
+| the USB 2.0 Root Hub's **Power** tab | the USB 2.0 stack's own `USB2.INF`, `[Usb2Hub.AddReg]`: `HKR,,EnumPropPages,,"sysclass.dll,USBHubPropPage"` - NUSB's and SweetLow's alike | the tab still renders; **Power properties** raises "Data Access Error" instead of the dialog |
+| the controller's **Advanced** tab | this package, since task 23.1 | the tab and its checkbox still render; **Bandwidth Usage** raises the same error |
+
+**The 9x root hub has had that Power tab all along, and nothing here said
+so** until 2026-09-20. The 2026-09-07 readings found the page on Windows 2000
+and Windows XP and filed it as an NT finding; the 9x root hub was evidently
+never opened. It was read twice on 2026-09-20: on Windows 98 SE under NUSB -
+General, Power, Driver, the dialog live with "The hub is self powered",
+"Total power available: 500 mA per port" and a device list reading
+"HID-compliant mouse 100 mA" and "7 port(s) available" (`runs/run-23.md`, leg
+A0b) - and on Windows ME under SweetLow's stack, the same three tabs and
+eight ports (leg B2c), itemising both attached mice at 100 mA each once they
+were bound (leg B7). Because the stack registers it and this package does
+not, it is the **control** every 23.1 leg used: task 23.1 writes to the
+controller's devnode key, so the hub's page must not move, and on all three
+legs it did not. It is also the cheapest way to tell whether a 9x guest has a
+working `usbui.dll` before reading anything of ours through it.
+
+It goes on the 9x paths by the owner's decision of 2026-09-07, because it is what
 Windows 98 SE's and Windows ME's own `USB.INF` place (`USBUI.CopyFiles=11`)
-and because one dirid-11 section then serves all four paths.
+and because one dirid-11 section then serves all four paths. That decision
+needs no revisiting and the INF does not change; what A4 changed is that
+those two reasons are no longer the only ones. A 9x machine that never had a
+USB controller - the owner's E460 is one - has `sysclass.dll` and no
+`usbui.dll`, so before `1.0.2.0` both buttons above were dead there, and
+installing this package is what makes them work.
 
 Where each target's `usbui.dll` comes from, read statically on 2026-09-07
 (7-Zip on the ISOs, `expand` on the `.IN_` files; nothing executed):
@@ -5353,6 +5594,43 @@ something:
 | `32` `COPYFLG_NO_VERSION_DIALOG` | do not copy if target is newer | Still replaces an equal-or-older file for no benefit, and asks for the CD to do it |
 | `64` `COPYFLG_OVERWRITE_OLDER_ONLY` | same, by version equality | Same objection |
 | `16` `COPYFLG_NO_OVERWRITE` | skip if present | Chosen |
+
+**Flag 16 skips the copy; it does not prevent the prompt.** The 9x file queue
+resolves a source for a file *before* `COPYFLG_NO_OVERWRITE` gets to skip it,
+so a machine that already has the file can still be asked for the CD.
+Measured on 2026-09-20 (`runs/run-23.md`, leg A2): an upgrade on a Windows 98
+SE guest under NUSB raised an Insert Disk prompt for `usbui.dll` although
+`C:\WINDOWS\SYSTEM\USBUI.DLL` was already there at 147,456 bytes - dirid 11,
+the exact destination this INF copies it to. Answering the prompt with
+`C:\WINDOWS\SYSTEM`, the folder the file is already in, satisfied it at once,
+and nothing was overwritten: the flag did its job one step after the ask. So
+"a machine that ever had a USB controller is asked for nothing" is a
+statement about the copy, not about the prompt, and the release notes'
+Insert Disk entry now says so too.
+
+**It is the same shape as the NT 6.x behaviour**, one step less severe. There
+the source the queue resolves is the OS's own driver-store package and the
+queue aborts rather than asking (`lessons.md`, "`COPYFLG_NO_OVERWRITE` does
+not save a source the queue cannot resolve"), which is what forced an NT 6.x
+install path naming none of the four files. On 9x the queue can resolve a
+source, so it asks and the install completes either way.
+
+**Three legs have now been read, and the stack is what correlates - with
+install type confounded alongside it:**
+
+| leg | OS | stack | install | source asked for |
+|---|---|---|---|---|
+| A | Windows 98 SE | NUSB 3.3 | in-place upgrade | **yes**, for `usbui.dll`, already at dirid 11 |
+| C | Windows 98 SE | SweetLow | fresh install, then an in-place upgrade | no |
+| B | Windows ME | SweetLow | fresh install, then an in-place upgrade | no |
+
+A and C hold the operating system constant and differ in the stack, so the
+stack correlates and the OS does not - but the install type differs in the
+same place, and three runs cannot separate two variables. **No mechanism is
+established, and none should be written down as if it were**; this is a lead
+for whoever takes the finding further. Leg C had the CD attached throughout,
+so that row says the queue was satisfied without asking rather than that an
+ask was answered.
 
 The gate enforces the wiring, because every way of breaking it is silent:
 `scripts/inf-gate/check-inf.ps1`'s `OS-*` family (`OS-LAYOUT`, `OS-MEDIA`,

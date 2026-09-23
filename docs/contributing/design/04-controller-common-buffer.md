@@ -684,19 +684,22 @@ misplace a region. It is recorded as unread rather than assumed to be 48.
 and none of them is in this buffer:**
 
 **These four numbers move with the source and are dated.** Measured
-2026-09-17, on the tree carrying the 2026-09-17 audit's fixes. The x86 column
+2026-09-17, on the tree carrying the 2026-09-17 audit's fixes, and the
+extension row re-read on 2026-09-22 after roadmap task 23.4. The x86 column
 is MSVC 6.0's, from `scripts\vm-matrix\gen-offsets.ps1` (the `SIZEOF` line)
 and `test/test_membuf.c`; the amd64 extension size is WDK 7.1's cross
-compiler's, taken the same day by the same `sizeof` print to a scratch file.
+compiler's, taken on 2026-09-17 by the same `sizeof` print to a scratch file
+and on 2026-09-22 from the `SIZEOF` line of `offsets-amd64.txt`.
 That is the pair that lays the structures out for the shipping binaries. The
-table was stale twice before (91,612 / 95,496 from 2026-09-09, then 91,656 /
-95,536 from 2026-09-16), and it will go stale again: a field added to
+table was stale three times before (91,612 / 95,496 from 2026-09-09, then
+91,656 / 95,536 from 2026-09-16, then 92,304 / 95,544 from 2026-09-17), and
+it will go stale again: a field added to
 `XHCI_DEVICE` moves the extension by 32 times its cost. Re-measure rather
 than adjust the arithmetic here.
 
 | Quantity | x86 | amd64 | delta |
 |---|---|---|---|
-| `sizeof(XHCI_EXTENSION)` | 92,304 | 95,544 | +3,240 |
+| `sizeof(XHCI_EXTENSION)` | 92,320 | 95,560 | +3,240 |
 | `sizeof(XHCI_ENDPOINT)` | 20 | 20 | - |
 | `sizeof(XHCI_TRANSFER)` | 128 | 160 | +32 |
 | `sizeof(XHCI_DEVICE)` | 1,924 | 2,024 (not re-read 2026-09-17; see below) | +100 |
@@ -716,7 +719,10 @@ from the slot array, because `XHCI_TRANSFER_QUEUE` holds pointers and is
 already had. The amd64 `XHCI_DEVICE` figure is carried from 2026-09-16 on
 that arithmetic rather than re-read; the 32 x 100 = 3,200 bytes of the 3,240
 delta being the slot array is the same 40-byte remainder as before, which is
-the check on it.
+the check on it. Task 23.4 (2026-09-22) then added four extension-level
+fields after `Log`, 16 bytes on both architectures - 92,304 -> 92,320 and
+95,544 -> 95,560 - which leaves the delta and the other three rows where
+they were.
 
 `XHCI_DEVICE` is the reason the extension grows across architectures: it is
 32 slots of it inside `XHCI_EXTENSION`, so 3,200 of those 3,240 bytes are the

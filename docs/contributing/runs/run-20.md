@@ -1,7 +1,7 @@
 # Phase 20 Record - the 2026-09-05 audit fixes and the `1.0.2.0` readings
 
-The detail behind `docs/contributing/roadmap.md`, "Phase 20 - Release
-`1.0.2.0`: The 2026-09-05 Audit Fixes". The roadmap entry carries the goal,
+The detail behind `docs/contributing/roadmap-phases-17-on.md`, "Phase 20 -
+Release `1.0.2.0`: The 2026-09-05 Audit Fixes". The roadmap entry carries the goal,
 the status, the findings and the task list; this file carries what each task
 changed and what each reading said. Where the two disagree about a clause,
 the roadmap wins.
@@ -347,6 +347,17 @@ measured: the 9x controller page comes from `sysclass.dll`, and the tab
 renders identically with `usbui.dll` renamed away in MS-DOS mode. The owner's
 E460 fits, carrying `sysclass.dll`, no `usbui.dll` and no tab, because this
 INF registers no property page at all; it still does not.
+
+> **Correction, 2026-09-20 (roadmap task 23.1, Leg C, A4).** "On Windows 98 it
+> buys nothing" is wrong, and the reading behind it was incomplete: the tab was
+> checked with `usbui.dll` renamed away, the **buttons on it** were not. They
+> need the file. With it renamed away the controller's Bandwidth Usage and the
+> root hub's Power properties both raise "Data Access Error" while the tabs
+> render unchanged, so on 9x `usbui.dll` supplies the dialogs and
+> `sysclass.dll` only the tabs. The last sentence is also overtaken: this INF
+> has registered the 9x controller property page since task 23.1.
+> `runs/run-23.md`, Leg C, A4 is the measurement. Left in place above rather
+> than rewritten, because this file records what Phase 20 read on the day.
 
 The Windows 2000 prompt risk the file introduced was read and is silent: on
 a clone of `win2k-xonly.img` rolled back to

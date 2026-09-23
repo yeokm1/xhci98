@@ -295,6 +295,13 @@ with a second guest" is true of the QEMU it was measured on, not in
 general. What in 11.1.0 changes it is not read. The rest of the entry stands as the record
 of the earlier readings.
 
+**And on 2026-09-23 (roadmap task 23.10, `runs/run-23.md`) it passed under
+11.1.0.** `1.1.1.0`'s qemu build on `fresh-2a.img` at `base-1.1.1.0-qemu`,
+the same 11.1.0 build and the audio group alone on the host: both legs PASS
+in the full run. A partial run the same afternoon under 11.0.92 (rc2) on
+another host passed it too, beside a Windows 7 run. One full run is not a
+rate: 11.1.0 still makes the failure likely, not certain.
+
 Observed between 2026-09-06 and 2026-09-07 on the development host, QEMU
 11.0.0 under TCG, `fresh-2a.img` at `base-1.0.1.0-qemu` and later
 `base-1.0.2.0-qemu`, `run-matrix.ps1 -PostRelease` (roadmap tasks 20.7,
@@ -9015,3 +9022,301 @@ see** - an abandon that reports nothing is a hub timeout, and on NT 6.x a
 hub timeout is a bugcheck, not a stall. And on XP and Windows 7, with
 `USB_MINIPORT_FLAGS_DISABLE_SS`, no selective suspend reaches a root-hub
 port at all, so a suspend reading there is a Vista reading (run-22, 22.12).
+
+## Press the control before calling it unaffected
+
+On 2026-09-07 a `usbui.dll` rename control on a Windows 98 guest was written
+up as "the tab and the dialog render identically with `usbui.dll` renamed
+away", and that reading propagated into four places as the statement that
+copying `usbui.dll` on 9x buys nothing: `src/xhci98.inf`'s comment,
+`build-and-test.md`, `docs/using/release-notes.md` and `run-20.md`.
+
+Roadmap 23.1 re-ran the control (run-23, leg A4, 2026-09-20) only because the
+export tables predicted otherwise. `usbui.dll` exports
+`USBControllerBandwidthPage` and `USBHubPowerPage`; the 16-bit NE
+`sysclass.dll` carries both of those export names adjacent to the string
+`usbui.dll` and to a "Data Access Error" message - the documented 9x
+`LoadLibrary32W` / `GetProcAddress32W` shape by which a 16-bit module calls a
+32-bit one. The exports won. With `USBUI.DLL` renamed away and the guest cold
+booted, the controller's Advanced tab and its checkbox still render exactly as
+before, but pressing **Bandwidth Usage** raises "Data Access Error", and so
+does the USB 2.0 Root Hub's **Power properties** - a second, independent
+witness on a page this project did not add. So on 9x `sysclass.dll` draws the
+tabs and `usbui.dll` draws the dialogs behind their buttons, and `usbui.dll`
+does not buy nothing there: it buys both dialogs. The decision to copy it
+since `1.0.2.0` was unaffected; only its stated reason changed.
+
+The 2026-09-07 reading had looked at the property sheet and not pressed the
+buttons on it. Nothing about it was careless except its scope, and it read as
+settled for two weeks.
+
+Rules. **A control is "unaffected" only after someone operated it.** A dialog
+that renders is a window that opened, not a dialog that works, and a tab is
+not its contents - when a rename or removal control is run over a UI surface,
+enumerate every button on that surface and press each one. **When an export
+table and a rendered screen disagree, re-run the screen**: here the static
+reading was right and the observation was wrong, which is the opposite of the
+usual direction and the reason the error survived. And a reading that four
+documents come to rest on is worth one cheap repeat before the fifth.
+
+## A `release`-flavour guest cannot explain its own hang
+
+Roadmap 23.1's SweetLow leg (run-23, C4, 2026-09-20) ended with the guest
+spinning in ring 0 after two `device_del`s removed two bound HID devices from
+root ports with Device Manager open and the controller's property sheet on the
+Advanced tab. QEMU burned a full core (10.09 s of CPU in 10 s of wall clock),
+the framebuffer was byte-identical across 70 s with the taskbar clock stopped,
+and `sendkey esc` did nothing.
+
+Everything needed to call it a finding was there except a witness. Both
+packages on that guest were the `release` flavour, which writes nothing to the
+debug console by design, so the only evidence obtainable after the fact was
+`info registers`: five samples gave EIP `c002f692`, `ff084439`, `ff03ed9f`,
+`ff041952` and `c0015284`, which is enough to say varied ring-0 code was
+executing - a storm rather than a spinlock stall - and nothing more. Three
+candidates stayed open and the leg separates none of them: the 9x shell
+re-enumerating with Device Manager open, SweetLow's `usbport.sys` /
+`usbhub20.sys` removal path, and this miniport's. The flavour was chosen
+correctly: the leg was a property-page reading through the real install path,
+which is what a user runs. The cost of that choice was invisible until
+something went wrong, and by then the guest could not be returned to the state
+that produced it.
+
+Rules. **A guest that may be asked to explain a hang must be running the
+`qemu` flavour.** A `release` package's silent debug console is correct
+behaviour and not a failure ("the debugcon log is 0 bytes and that is right"),
+and it is simultaneously a permanently missing witness; the register file is
+not a substitute, because it dates a storm without naming the code. When a leg
+has to run the shipping flavour to mean anything, plan the anomaly repeat on
+the `qemu` flavour instead of reasoning from what survived. **Do not promote an
+untraced hang to a finding** - name the candidates, name the experiment that
+would split them, and leave it unattributed. And the operational rule stands
+whichever candidate is right: **on a 9x guest, close Device Manager before
+detaching a USB device from the monitor.**
+
+One side reading from the same kill is worth keeping, because it contradicts a
+trap recorded elsewhere in this file: the guest was `quit` while spinning,
+never shut down, and the upgrade's registry write was still there on the next
+cold boot. That is the opposite of the `SYSTEM.DAT` rollback a killed 9x guest
+usually costs, and the difference is timing - the registry phase had completed
+and been flushed long before the removal - not luck. Do not read it as licence
+to kill a 9x guest after an install.
+
+## On NT 6.x a devnode registry value written by hand is not the value the INF writes
+
+Roadmap task 23.2, 2026-09-20. The controller's property page is registered
+by one REG_SZ on the device's driver key -
+`EnumPropPages32 = "usbui.dll,USBControllerPropPageProvider"` - and the task's
+method, inherited from the 9x half, was to **write it by hand in regedit on a
+guest and look**, before touching the INF at all. The point of that method is
+that a failure costs nothing.
+
+It costs something. **On Windows Vista the hand-written value does nothing at
+all**, and the nothing is indistinguishable from the line being wrong: no
+error, no log line, no "Data Access Error" - just a property sheet with one
+fewer tab. It was read at three points and failed at all three: the sheet
+re-opened, Device Manager closed and restarted, and the machine fully
+restarted with the value confirmed still present afterwards. The same pair,
+written by the **INF at install time** on the same guest reverted to the same
+clean snapshot, produces the tab immediately. On Windows 2000 and Windows XP
+the hand-written value works on the first re-open of the sheet, which is
+exactly what makes the trap dangerous: the cheap targets agree with the method
+and the expensive one does not.
+
+The mechanism is that NT 6.x consults the property-page provider list when the
+devnode is built, not when the sheet is opened.
+
+**What made the false negative survive as long as it did was a control that
+was sound.** Microsoft's own EHCI controller, hot-plugged into the same guest
+on the same boot, carrying the identical pair from its own `usbport.inf`, drew
+its page while ours did not - and Vista's `usbport.inf` was opened in the guest
+and confirmed to write exactly the pair we had written. Every one of those
+readings was true. None of them could see the variable that mattered, because
+the in-box driver's pair had been written by its INF at install time and ours
+by hand. A control tells you the mechanism works; it does not tell you that
+your subject differs from it in only the way you think it does.
+
+So:
+
+- **Do not verify a devnode registry value by hand on NT 6.x.** Put it in the
+  INF and re-install. If the by-hand route is taken anyway - it is still the
+  cheap way to fail fast on NT 5.x - a negative from it is **not** a reading
+  that the value does not work, and must not be recorded as one.
+- **A negative on one target is not a property of that target** until a
+  sibling target that shares its install path has been read. Here Windows 7
+  x86 shares Vista's INF section, its Version 300 registration path and its
+  generation; it showed the tab, and that is what broke the account open. The
+  first draft of the INF change had already been written, gated and committed
+  to the claim "its reach is NT 5.x".
+- The same task produced a smaller instance of the same class: a value typed
+  as `usbui.dll` **`.`** `USBControllerPropPageProvider`, whose full stop is
+  one pixel from a comma at the guest's 800x600, and which was read off a
+  screendump as correct. **A value read off a screen at guest resolution has
+  not been read.** Write it with `reg.exe` and query it back - a console font
+  separates the two characters plainly - or crop the row out of the screendump
+  and magnify it before believing it.
+
+`docs/contributing/runs/run-23.md`, task 23.2 leg V, has both readings and
+the control; `src/xhci98.inf`'s block above `[Xhci.AddReg.NT]` carries the
+warning beside the line itself.
+
+## Interrupt moderation at the reset default halves Bulk-Only read throughput
+
+Roadmap task 23.3, the ThinkPad P14s Gen 1 (Comet Lake xHC, `8086:02ED`)
+under Windows 98 SE and NUSB 3.3, 2026-09-21 into 2026-09-22. The start had
+never written interrupter 0's IMOD, so every bare-metal run this project had
+taken ran at the reset value of 4000, 1 ms. An experimental build wrote a
+registry-supplied interval instead, and ATTO Disk Benchmark 2.41 measured a USB
+3 stick at High Speed once per value, with a control boot, no value set, first
+and last.
+
+Proven, by readback of the register in each boot's own dump and by two
+controls 0.4% apart: sequential reads at 8 MB ran **17.6 MB/s at 4000, 29.8 at
+1000 and 33.1 at 200 and at 160**; 4 KB reads went from 1.29 to 5.3 MB/s. The
+shape is the hypothesis's: Bulk-Only Transport is strictly serial, each stage
+of a command waits for the previous one's completion, and each completion can
+wait out the interval before its interrupt is raised - so the smaller the
+transfer, the larger its share of waiting. Writing 4000 read identical to the
+control to the kilobyte, which is the hardware side of the QEMU finding that
+guests have always run at 0 and metal at 4000. About a quarter more interrupts
+per pass below 1000, and no fault at any value down to 160.
+
+Not proven: any write gain below 1000, and anything about an isochronous
+stream, which was not played. **The second control is what kept a false
+result out of this entry.** Writes at 128 KB and above fell from 21 MB/s at
+1000 to 6.7 at 200 and stayed there at 160, which reads as "a short interval
+hurts writes" - until the closing control, with no IMOD write at all, measured
+6.8 as well. The stick had degraded under the benchmark's own writes. A
+single control taken first would have been compared against a machine that
+no longer existed.
+
+Rules. **Take the control last as well as first, and read the ladder against
+the later one when they differ.** A flash target degrades under a write
+benchmark within one session, and a drop that begins mid-ladder and persists
+is a drift until the closing control says otherwise. And when a throughput
+reading on this driver disagrees between a guest and metal, moderation is a
+difference between them: the guest runs unmoderated.
+
+`runs/run-23.md`, task 23.3, has the full ATTO tables and the decoded counters;
+roadmap task 23.4 carries the owner's decision that followed.
+
+## COMMAND.COM performs redirection on a `REM` line
+
+Windows 98 SE's COMMAND.COM, on the P14s Gen 1, 2026-09-21, running
+`scripts/bench/IMOD98.BAT`. Every run left files in the current folder named
+things like `nul` and ` f` with a trailing backtick, and printed `File not
+found` once, while the value it wrote read back correctly every time.
+
+The header of that file warned, correctly, that an unescaped angle bracket in
+an `echo` is a redirection on this shell - and quoted the syntax it was
+warning about, in `REM` lines: `` `2>nul` ``, `` `echo x 0>>f` ``, a usage
+line with a placeholder in angle brackets. COMMAND.COM parses redirection
+before it looks at the command, so each of those lines opened its target: the
+output ones created an empty file named for everything up to the next space,
+backtick included, and the input one failed to find a file and said so.
+cmd.exe does not do this, which is why the same text in NT-side batch files
+had never shown anything.
+
+It had run unnoticed in a QEMU guest, where a stray file on a scratch volume
+draws no attention. The operator on real hardware asked what the files were.
+
+Rules. **In a batch file COMMAND.COM runs, no `<`, `>` or `|` anywhere, not
+even in a comment** - spell the syntax out in words. That covers every
+Windows 98 and ME batch file here and the `xhciqual` DOS batch files, which
+had one each (`>= n` in a comment would create a file named `=`). A file
+that did nothing but create junk is a lucky case: a comment that quoted an
+append to a real file would have appended to it.
+
+Fixed on 2026-09-22 in `scripts/bench/IMOD98.BAT`,
+`scripts/vm-matrix/guest/LOAD98.BAT`, `scripts/vm-matrix/guest/STGF98.BAT`
+and `xhciqual/3XIRQ.BAT`, `4XEMPTY.BAT`, `5XDEV.BAT`; `scripts/bench/README.md`
+states the rule.
+
+## Windows 98 wedges when a USB audio device is replugged after a cold boot, and it is not this release's doing
+
+Roadmap task 23.8's leg 1, 2026-09-22/23, on the `win98.img @ post-nusb`
+guest under NUSB 3.3, with `1.1.1.0`'s published `release-x86`. Install, three
+devices, shut down, cold boot, plug the mouse, the stick and a `usb-audio`
+again - and about a third of the time the shell dies: the taskbar clock stops,
+no key reaches the guest, and the Start menu will not open.
+
+**What is still alive matters more than what is dead.** The kernel runs: QEMU's
+trace shows something reading MFINDEX twice every ~515 ms for as long as the
+guest is left, which is the timer path through usbport, and on one hang the
+mouse's interrupt transfers kept completing. The driver had finished with the
+event that preceded the wedge: it cleared IP in IMAN, advanced ERDP with EHB
+written back, and re-enabled the interrupter. Nothing is pending at the
+controller. **Two symptoms that look like life are worthless here**: the
+pointer still moves (the host draws it), and QEMU burns 100% of a core in
+ring 0 (Windows 98 does not HLT when idle, so a healthy guest looks the same).
+
+**Where it stops is exact.** Every hang stops after event idx 122, the audio
+device's EP0 completion; a clean run issues one more EP0 request 400 ms later
+and settles at 134 events. So the guest's software stops between that
+completion and the audio class stack's next request, above usbport, where this
+driver is not consulted.
+
+**It is not new and it is not the moderation value**, which is what the
+investigation was for. On the same guest and sequence: `1.1.0.0` hung 2 of 10;
+`1.1.1.0` 3 of 3 at `XhciImodInterval250ns` 500, 1 of 3 at 4000, and 1 of 4
+with a diagnostic build whose IMOD write was compiled out. 2 of 10 against
+5 of 10 is not a difference at these numbers, and QEMU stores IMOD without
+ever consulting it (task 23.3), so no guest reading can turn on that value.
+
+Why no earlier cut saw it: every install leg since `1.0.1.0` plugged its
+devices on the install boot and never replugged them after a restart.
+
+Rules. **Do not read a Windows 98 guest wedge as a regression without a
+control on the previous release**, and take enough runs to see an
+intermittent one - three clean runs would have "proved" the wrong thing twice
+over here. And when a guest stops, say which layer stopped: a trace that still
+shows timer reads and completed transfers has already exonerated the driver's
+interrupt path.
+
+## A logged-in NT guest changes what the device matrix reads, in both directions
+
+Roadmap task 23.10, 2026-09-23, `xp64-fresh` and `win7-fresh` under
+`1.1.1.0`'s qemu build. The matrix's prep leaves NT guests at the login
+screen (design record 09, `scripts\vm-matrix\README.md`), and this is the
+first run where one was not.
+
+**XP x64 opens the `usb-audio` isochronous endpoint only with a user
+session.** At the login screen the device was addressed and nothing opened
+for 105 s; logged in, it opened on arrival, and logging back in opened it at
+once. So the row read NODRIVER at the login screen, where `1.1.0.0`'s run on
+another host had passed it there. With autologin it passed both legs.
+
+**With a session, a device that has no driver blocks every later install.**
+XP raises a modal Found New Hardware wizard for `usb-net` (RNDIS), the first
+driverless device in the `other` group; it stays up, and `usb-ccid` and
+`u2f-emulated`, which bind silently at the login screen, read NODRIVER queued
+behind it. Cancelled by a watcher sending Esc, both bound. The wizard can open
+cascaded from its usual place, so a watcher looking at one position misses it.
+It is the same mechanism as Windows 2000's prep wizards (Video Controller,
+PCI Ethernet), which come back at every boot if cancelled and void a run
+unless they are finished with "Disable the device".
+
+**Windows 7 is not moved by it**: its audio row read NODRIVER logged in and
+logged out, as 22.9 found.
+
+Rules. **Say whether an NT guest was logged in when a row reads NODRIVER**,
+because on XP x64 it decides the audio row. And **when a guest has a desktop,
+look at the screen before believing a NODRIVER**: one open wizard turns every
+later row in the group into a reading of the wizard.
+
+## A re-cut restages whatever is in `src\obj*`, including a diagnostic build
+
+Roadmap task 23.9's re-cut, 2026-09-24. `make-release.ps1 -Force` copies the
+drivers from `src\objfre` and `src\objchk`; it does not rebuild them. Before
+it ran, `src\objfre\i386\xhci98.sys` was `915C53EB...` where the published
+file was `15C99E9F...` - the same 86,059 bytes, built two hours after the cut:
+23.8's wedge investigation had built a diagnostic `release` flavour with the
+IMOD write compiled out (`XHCI_EXTRA_DEFINES`) and left it there. Size and
+flavour marker both match a shipping build; only the hash does not.
+
+Rules. **Before any re-cut, compare every `src\obj*\xhci98.sys` with the
+published one by hash, or rebuild with `build-driver.cmd all` and `all -amd64`
+and no extra defines** - which is what a re-cut that changes a date needs
+anyway. And after an experiment that builds into `src\obj*`, rebuild the
+shipping flavours before the session ends, or say in the handoff that the
+tree holds an experiment.

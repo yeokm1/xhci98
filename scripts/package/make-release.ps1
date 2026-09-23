@@ -2969,7 +2969,7 @@ Two things are specific to this driver and worth knowing in advance:
     (installing  new driver does load afterwards - but nothing after that
     over an      copy runs, so the machine still reports the OLD version
     existing     and any registry setting the new package introduces is
-    install)     never written. See "after an upgrade" below.
+    install)     never written. See "TO UPGRADE WITHOUT CRASHING" below.
 
   There is no Roll Back Driver on Windows 98, so a rollback is an uninstall
   followed by a reinstall - two of the above.
@@ -2998,13 +2998,34 @@ Two things are specific to this driver and worth knowing in advance:
   C:\WINDOWS\INF\OTHER) all stay behind. Delete them by hand if you want them
   gone; the three Windows files are Windows' own and harmless where they are.
 
-  AFTER AN UPGRADE ON WINDOWS 98, RUN THE INF ONCE BY HAND
-  .......................................................
+  TO UPGRADE WITHOUT CRASHING, OR AFTER AN UPGRADE THAT CRASHED
+  .............................................................
 
-  Right-click xhci98.inf in the package directory and choose Install. That
-  puts the driver file in place even though the upgrade crashed before it
-  could. It touches no device, so it cannot hit the crash. Then restart, and
-  the controller picks up the new file.
+  Start with the same rename, so that nothing is running to be stopped:
+
+    1. From an MS-DOS Prompt:
+           ren C:\WINDOWS\SYSTEM32\DRIVERS\XHCI98.SYS XHCI98.SAV
+    2. Shut the machine down and switch it on again - not Restart: a warm
+       restart leaves Windows 98 stuck at its starting screen. The
+       controller comes up with a yellow mark, as above.
+    3. Device Manager -> the controller ->
+           Properties -> Driver -> Update Driver -> Specify a location
+       and point it at the new package's RELEASE-X86\ directory. With no
+       driver loaded there is no controller to stop, so it finishes
+       normally and writes the new package's settings.
+    4. Shut down and switch on again.
+
+  That is the only route measured to deliver a new package's registry
+  settings on this stack. If an upgrade has already crashed, take the same
+  four steps: the crashed upgrade did copy the new xhci98.sys, so the file
+  is already in place, and what it lost is the settings, which step 3
+  writes.
+
+  DO NOT RELY ON RIGHT-CLICKING xhci98.inf AND CHOOSING INSTALL FOR THIS.
+  Earlier copies of this file said to, and it does not do the job: it
+  copies files and writes no registry value at all, and it could never
+  write a setting that belongs to the device itself, which is the kind the
+  crash loses.
 
 
 ==============================================================================
@@ -3043,6 +3064,12 @@ Two things are specific to this driver and worth knowing in advance:
 
   If nothing comes back at all, run XHCISNAP -probe. It checks the route to
   the driver separately from whether this driver answers on it.
+
+  USE THE XHCISNAP.EXE FROM THIS PACKAGE, not a copy kept from an earlier
+  release. This driver's report is snapshot schema 4, which grew by the
+  interrupt moderation setting (section 9), so an older XHCISNAP refuses it
+  with "schema mismatch" and reports nothing, and this one refuses an older
+  driver the same way.
 
   XHCISNAP.EXE changes nothing about how the driver behaves on the bus, and
   writes no file it was not asked to. It does READ the controller's port
@@ -3145,6 +3172,16 @@ tried (32-bit, a ThinkPad E460):
     Vista or 7 with unsaved work open, and be ready to power off if the
     restart that follows does not finish.
 
+ONE THAT COMES WITH THE MODERATION SETTING, found on one real Windows 98 SE
+machine (a ThinkPad P14s Gen 1, NUSB 3.3):
+
+  * WINDOWS 98: USB AUDIO CAN STUTTER WHILE A USB DRIVE IS READ AT FULL
+    SPEED. A Full-Speed audio device on a root port stuttered from the
+    2048 KB reads onwards in a disk benchmark at the install's 500, and the
+    same at 1000; at 4000 only on the last, 8192 KB write. It follows the
+    doubled read speed that 500 brings. If audio matters more than read
+    speed, raise the value towards 4000 or delete it (section 9).
+
 COMPOSITE DEVICES ON WINDOWS 98 - HANDLED BY THIS PACKAGE
 .........................................................
 
@@ -3182,12 +3219,14 @@ debug throughout, in its build scripts and its documentation alike.)
  9. REGISTRY SETTINGS
 ==============================================================================
 
-Every registry value this driver reads. There are two, and it writes none.
+Every registry value this driver reads. There are three, and the driver
+writes none of them: the installer creates all three.
 
-  YOU SHOULD NOT NEED THIS SECTION. If the maintainer asks for a log,
-  XHCISNAP -verbosity 2 sets the one that matters, on every controller, and
-  finds the key itself. It is here so you can check what is in the key if you
-  are asked to.
+  YOU SHOULD NOT NEED THIS SECTION FOR A LOG. If the maintainer asks for one,
+  XHCISNAP -verbosity 2 sets the value that matters, on every controller, and
+  finds the key itself. The first two values below are here so you can check
+  what is in the key if you are asked to. The third, XhciImodInterval250ns,
+  is the one setting here you may want to change yourself.
 
   XhciLogVerbosity  -  the whole switch
   .....................................
@@ -3224,14 +3263,58 @@ Every registry value this driver reads. There are two, and it writes none.
   XHCISNAP reads, which is a different route entirely. Leave it at 0 unless
   the maintainer asks for a DebugView capture.
 
-  THOSE TWO ARE THE WHOLE LIST. This driver reads no other setting of its
+  XhciImodInterval250ns  -  how long the controller holds back an interrupt
+  .........................................................................
+
+  DWORD, counted in UNITS OF 250 NANOSECONDS. It sets how long the
+  controller waits after one interrupt before raising the next. A shorter
+  interval makes USB mass storage faster at the cost of more interrupts.
+
+      500    written by the install: 125 microseconds, at most 8,000
+             interrupts a second.
+      4000   used when the value is MISSING, UNREADABLE, OR OUTSIDE
+             10-4000: 1 ms, at most 1,000 a second.
+      10     the lowest accepted: 2.5 microseconds, at most 400,000 a
+             second.
+
+  A value outside 10-4000 is REPLACED BY 4000, not rounded to the nearest
+  limit, so a mistyped 0 cannot turn moderation off. 4000 is the
+  controller's own power-on value and what every earlier release ran at.
+
+  ATTO Disk Benchmark with an MSSU10-128GSR flash drive at 500 (125
+  microseconds), on a ThinkPad P14s Gen 1 under Windows 98 SE, gives about
+  33 to 34.6 MB/s read and write from 64 KB transfers upward where the
+  previous default 4000 gave about 18 MB/s.
+
+  Linux's xHCI driver defaults to 160 (40 microseconds). This package ships
+  500 to be more conservative since this is a generic driver.
+
+  FEEL FREE TO TUNE IT. Lower towards 160 for the last few percent of
+  storage speed, or raise it towards 4000 (or delete it) if you get audio
+  stutter or instability under load. 500 may produce audio stuttering while
+  a USB drive is being read at full speed, so if you want to prioritise
+  audio over bandwidth, raise the value (section 7). Enter it as a decimal
+  DWORD (500), or in hexadecimal (1f4) - Registry Editor lets you choose.
+  The driver reads it when it starts, so a change takes effect after a
+  restart; after the restart, XHCISNAP's report shows under "registry
+  values" the value it read, the interval in force, and what the controller
+  took.
+
+  ON WINDOWS 98 WITH NUSB, AN UPGRADE DOES NOT SET IT. An upgrade over an
+  existing install crashes before the value is written (see section 5), so
+  the driver runs at 4000 until you set it by hand here - or take section
+  5's "TO UPGRADE WITHOUT CRASHING" steps, which write it, even after an
+  upgrade that has already crashed.
+
+  THOSE THREE ARE THE WHOLE LIST. This driver reads no other setting of its
   own, and no registry value makes it write a file.
 
-  BOTH ARE DWORDS AND BOTH DEFAULT TO 0. Both are created by
-  the installer, so both are already there and only their data changes.
-  A value that is missing entirely is not an error either - the driver starts
-  normally with everything off, and the report says whether it read nothing
-  or read a zero. They live in the device's own driver key, which is spelled
+  ALL THREE ARE DWORDS. The two log values default to 0, the moderation
+  interval to 500, and all three are created by the installer, so they are
+  already there and only their data changes. A value that is missing
+  entirely is not an error either - the driver starts normally, with the log
+  off and the interval at 4000, and the report says whether it read nothing
+  or read a value. They live in the device's own driver key, which is spelled
   one way on the NT targets and another on the 9x ones:
 
     Windows 2000, XP, Vista and 7
@@ -3264,10 +3347,11 @@ Every registry value this driver reads. There are two, and it writes none.
   names the key to edit - for example USB\0004 - and that is the key the
   driver will actually read, by definition.
 
-  SET THEM ONLY WHILE DIAGNOSING SOMETHING, AND RUN XHCISNAP -DISABLE WHEN
-  YOU HAVE SENT THE CAPTURE. That is not housekeeping. While the channel is
-  enabled, anyone using this machine can read the driver's own diagnostic
-  state through it - counters, the log, the port table, and at level 4
+  SET THE TWO LOG VALUES ONLY WHILE DIAGNOSING SOMETHING, AND RUN
+  XHCISNAP -DISABLE WHEN YOU HAVE SENT THE CAPTURE. That is not
+  housekeeping. While the channel is enabled, anyone using this machine can
+  read the driver's own diagnostic state through it - counters, the log, the
+  port table, and at level 4
   internal addresses. It is this driver's own state and nothing else: no
   documents, no passwords, no other program's memory. But this driver cannot
   put a lock on that door - the door belongs to Windows' own USB port driver,
@@ -3349,6 +3433,21 @@ perpetual file, which is how a readme goes quietly stale. Either write it with
 {VERSION}, or add it to `$allowedTemplateVersions` above with the reason it has
 to be spelled out - and check the others there are still worth saying while you
 are in it.
+"@
+    }
+
+    # **The schema number section 6 names is the driver's, or the cut fails.**
+    # It is the one number in the template that is neither a version nor
+    # substituted, and a user reads it to tell a stale XHCISNAP from this one.
+    $templateSchemas = @([regex]::Matches($template, 'snapshot schema (\d+)') |
+                         ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object -Unique)
+    $driverSchema = Get-SnapSchema -Path (Join-Path $repo "src\xhci.h") -Macro "XHCI_SNAPSHOT_SCHEMA"
+    $staleSchemas = @($templateSchemas | Where-Object { $_ -ne $driverSchema })
+    if ($staleSchemas.Count -gt 0) {
+        throw @"
+the readme template names snapshot schema $($staleSchemas -join ', '), and
+src\xhci.h declares XHCI_SNAPSHOT_SCHEMA $driverSchema. Section 6 tells the user
+which XHCISNAP matches this driver by that number; correct the sentence.
 "@
     }
 

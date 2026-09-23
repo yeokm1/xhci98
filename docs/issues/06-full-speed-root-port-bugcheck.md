@@ -6,14 +6,25 @@ first release: the driver reports every connected root port to usbport as
 High Speed and keeps the true speed for its own contexts. That workaround is
 not a fix, and it has costs, which have grown with every Windows added
 after the two it was made on. Usbport buckets interrupt intervals on the
-wrong speed everywhere (section 5). **Two further costs were measured on
-2026-09-19 and are known limitations of `1.1.0.0`:** a USB 1.1 hub on a
+wrong speed everywhere (section 5), and since 2026-09-20 one cost is visible
+to a user rather than only in a trace: the controller's own **Bandwidth
+Usage** figures charge a Full-Speed and a High-Speed root-port device the
+same 1 %, on five USB 2.0 stacks across four operating systems - Windows 98
+SE, ME, 2000 and XP (section 5.1). **Two further costs
+were measured on
+2026-09-19 and are known limitations of `1.1.0.0`, and of `1.1.1.0` after
+it:** a USB 1.1 hub on a
 root port bugchecks every Vista and Windows 7 build once a slower device
 behind it is configured (section 6), and a Full-Speed USB audio device on a
 root port plays nothing from Windows XP on (section 7). The candidate fix
 for all of them, a virtual USB 2.0 hub per root port
 ([proposal](../future-plans/virtual-hub-per-root-port.md)), is not yet
-decided (section 8).
+decided (section 8). **`1.1.1.0` answers nothing on this page.** That
+release carries the controller's property page and the interrupt moderation
+value alone; the polling rates (section 5) and true speeds on root ports were
+split out of Phase 23 by the owner on 2026-09-22 and are not scheduled, and
+the speed report, its bands and both costs are the same
+in `1.1.1.0` as in `1.1.0.0`.
 
 Targets affected: all ten. The bugcheck itself was measured on Windows 98
 SE under the NUSB stack and on Windows 2000 SP4, in QEMU virtual machines;
@@ -77,9 +88,9 @@ either. Only the first row and 32-bit Windows 7's have any metal readings.
 
 | Target | Full-Speed device on a root port, true speed reported | Full or Low Speed device on a root port, reported High Speed (as shipped) | USB 1.1 hub on a root port, Full or Low Speed device behind it | Full-Speed audio device on a root port |
 |---|---|---|---|---|
-| Windows 98 SE, NUSB 3.3 | **Bugchecks** (VM): `Windows protection error`, or `0028:C002F70E` in `NTKERN` (Phase 5, section 2). Never on metal: the workaround predates every bare-metal batch | Works, VM and **metal**: a Low-Speed mouse at a root port on the E460 (batch 13-E, stage E4.1) and a Full-Speed audio device there (E6.1); interrupt polling in 1, 2 or 4 ms bands (section 5; measured with hidusbf in the VM, Phase 20 - not measured on metal) | Works (VM): a mouse behind QEMU's `usb-hub` bound and ran (batch 7b-V0, section 6.1); the 22.9 hub rows PASS, the churn row is excluded on this target. Never on metal: no USB 1.1 hub was held (batch 13-E, P3). On metal the mouse and the audio device ran behind USB 2.0 hubs, single-TT and multi-TT (E4, E6.2), which is not this topology | **Plays on metal**: a physical UAC 1.0 device played clean at a root port on the E460 (batch 13-E, E6.1, and behind the multi-TT hub, E6.2), and again on `1.1.0.0` `release-x86` on 2026-09-19 - a Sound Blaster Play! 2 (`041E:323D`) directly in a root port, NUSB 3.3, heard by the owner. In the VM the OS's own `USBAUDIO.VXD` faults after one URB (batch 9-V, again 2026-09-19) - a vehicle artefact, not this issue |
-| Windows 98 SE, SweetLow's stack | Never run; static: its usbport's single-TT branch (`0x2667A`-`0x26686`) returns the same garbage pointer | Works (VM, observed); the bands not measured on this stack | Not measured | Not measured |
-| Windows ME, SweetLow's stack | Never run; static as the row above | A HID mouse binds (VM, 2026-09-02); the bands not measured. Never on metal | Never plugged | Bound (VM, a composite audio device, 2026-09-02); playback not measured |
+| Windows 98 SE, NUSB 3.3 | **Bugchecks** (VM): `Windows protection error`, or `0028:C002F70E` in `NTKERN` (Phase 5, section 2). Never on metal: the workaround predates every bare-metal batch | Works, VM and **metal**: a Low-Speed mouse at a root port on the E460 (batch 13-E, stage E4.1) and a Full-Speed audio device there (E6.1); interrupt polling in 1, 2 or 4 ms bands (section 5; measured with hidusbf in the VM, Phase 20 - not measured on metal); the Bandwidth Usage dialog charges it the same 1 % as a High-Speed device (VM, 2026-09-20, section 5.1) | Works (VM): a mouse behind QEMU's `usb-hub` bound and ran (batch 7b-V0, section 6.1); the 22.9 hub rows PASS, the churn row is excluded on this target. Never on metal: no USB 1.1 hub was held (batch 13-E, P3). On metal the mouse and the audio device ran behind USB 2.0 hubs, single-TT and multi-TT (E4, E6.2), which is not this topology | **Plays on metal**: a physical UAC 1.0 device played clean at a root port on the E460 (batch 13-E, E6.1, and behind the multi-TT hub, E6.2), and again on `1.1.0.0` `release-x86` on 2026-09-19 - a Sound Blaster Play! 2 (`041E:323D`) directly in a root port, NUSB 3.3, heard by the owner. In the VM the OS's own `USBAUDIO.VXD` faults after one URB (batch 9-V, again 2026-09-19) - a vehicle artefact, not this issue |
+| Windows 98 SE, SweetLow's stack | Never run; static: its usbport's single-TT branch (`0x2667A`-`0x26686`) returns the same garbage pointer | Works (VM, observed); the bands not measured on this stack; the same 1 % in the Bandwidth Usage dialog (VM, 2026-09-20, section 5.1) | Not measured | Not measured |
+| Windows ME, SweetLow's stack | Never run; static as the row above | A HID mouse binds (VM, 2026-09-02); the bands not measured; the same 1 % in the Bandwidth Usage dialog (VM, 2026-09-20, section 5.1). Never on metal | Never plugged | Bound (VM, a composite audio device, 2026-09-02); playback not measured |
 | Windows 2000 SP4 | **Bugchecks** (VM): `STOP 0x0000000A (0xFFFFFFFC, 0xFF, 0x00000000, 0x804006B2)` (Phase 5, sections 2 and 3) | Works (VM); the same bands (usbport's bucketing rule is common to every build; the readings are Windows 98's). Never on metal | Works (VM: batch 7b-V0; the 22.9 churn row PASS) | **Plays** (VM): 376 isochronous submits, 3,760 packets, `played.wav` 659,456 B (2026-09-19, section 7) |
 | Windows XP SP3 x86 | Never run; XP SP3's own `USBPORT_GetTt` not read (SweetLow's rebuild is XP-lineage and unguarded) | Works (VM: issue 7's legs; the 22.10 install leg). Never on metal | A Full-Speed audio device behind the hub enumerated and played (VM, 2026-09-19, section 7); a mouse behind it never run | **Silent** (VM): 0 isochronous submits while Sound Recorder played 1.93 s; behind a Full-Speed hub 196 submits, 344,064 B (section 7) |
 | Windows XP x64 SP2 | Never run; not read | Works (VM: the 22.9 matrix; the 22.10 install leg). Never on metal | Works (VM: the 22.9 hub rows, churn included, PASS) | **Silent** (VM): 0 submits; an endpoint opens on arrival, nothing is ever sent (section 7) |
@@ -244,7 +255,9 @@ is what happens to each:
 
 And one cosmetic effect: Device Manager and any tool that asks usbport
 report every root-port device as High Speed, whatever it is. The true
-speed is visible only in this driver's own trace and counters.
+speed is visible only in this driver's own trace and counters. Since
+2026-09-20 the report has a second place it shows, and a user can open it:
+section 5.1.
 
 A stop-time review found that the first draft of the override destroyed the
 checkpoint's own evidence: the decoded speed had only ever been visible in
@@ -279,6 +292,92 @@ common to every build this project targets, so the bands hold on every
 target; only Windows 98 has the readings. The prohibition on
 "reconstructing" `bInterval` from `Period` is in the invariants: the
 information is gone before the miniport sees it.
+
+### 5.1 The cosmetic effect became a dialog a user can open (2026-09-20)
+
+Until roadmap task 23.1 the report was visible only in the speed Device
+Manager prints and in this driver's own trace. It is now visible in a dialog
+Windows draws, and tasks 23.1 and 23.2 are what put it there: the
+controller's **Advanced** tab, whose figures are computed from the speed
+usbport was told (`CalculateTotalBandwidth(ULONG, UCHAR, PUSB_PIPE_INFO)`
+takes a speed byte). On Windows 98 SE and Windows ME it sits behind a
+**Bandwidth Usage** button and the dialog is `usbui.dll`'s
+`USBControllerBandwidthPage`; on the NT targets `usbui.dll` draws the whole
+page and the same list is inline on the tab, with no button.
+
+Five legs, five USB 2.0 stacks, four operating systems, all on 2026-09-20,
+in QEMU guests - the three 9x legs on the `release` flavour and the two NT
+legs on `qemu` - devices added from the monitor onto root ports and installed
+by the guest's own wizard (`../contributing/runs/run-23.md`, legs A5, C3, B5
+and 23.2's legs W and X):
+
+| bus | 98 SE, NUSB 3.3 | 98 SE, SweetLow | ME, SweetLow | 2000 SP4 | XP SP3 |
+|---|---|---|---|---|---|
+| no USB device attached | System reserved 10 % | 10 % | 10 % | 10 % | 10 % |
+| + a Full-Speed mouse on a root port (`usb-mouse,usb_version=1`, 12 Mb/s) | 11 % | 11 % | 11 % | 11 % | 11 % |
+| + a High-Speed mouse on a root port (`usb-mouse,usb_version=2`, 480 Mb/s) | 12 % | 12 % | 12 % | 12 % | 12 % |
+
+**A Full-Speed device and a High-Speed device on a root port cost the same
+1 %**, to the digit, on all five. That can only hold if the Full-Speed
+device is budgeted as a High-Speed one, which is this page's subject: on a
+true Full-Speed bus that mouse's interrupt endpoint is a far larger slice.
+
+**Windows 2000 is what closes the argument.** The three 9x legs ruled out an
+NUSB artifact and a Windows 98 shell artifact by reproducing the ladder on
+NUSB's Windows 2000-lineage stack, on SweetLow's XP-lineage rebuild and on a
+second operating system - but all three are *back-ported* stacks, and a
+sceptic could still have hung the miscount on the back-porting. Windows 2000
+SP4 and Windows XP run **Microsoft's own native `usbport.sys` and
+`usbui.dll`, on the operating systems they shipped with**, and they produce
+the identical ladder. There is no back-ported-stack explanation left.
+
+**The driver's own counter agrees, which no 9x leg could show.** The two NT
+legs ran the `qemu` flavour, so the same attaches are in the debug console:
+
+```
+xhci98: slot: endpoint speed differs from the port's, usbport << 8 | decoded=00000302
+xhci98: endpoint speed mismatches=00000001
+```
+
+usbport reporting speed 3 where the driver decoded 2 - **exactly one
+mismatch**, for the Full-Speed mouse and not the High-Speed one, with the
+same encoding on both guests. So the 11 % the page showed and the driver's
+own counter are two witnesses to one event, in one run, on one machine. A
+`runtime` reading. The 9x legs read the page alone, because they were taken
+on the `release` flavour, which has no console.
+
+Read it for what it is, and not for more. **It is a reading of that page's
+own arithmetic, not of usbport's periodic budget.** The figure is the report
+arriving in the user interface; what the schedule is actually charged is
+still unmeasured, and section 9's open item on the accounting stands
+unchanged. **And the per-device figures are deltas rather than
+attributions**: the dialog carries one row, "System reserved", and only its
+percentage moves - it never itemises devices, on any of the five legs.
+The contrast case, the same Full-Speed device behind a hub where its true
+speed is reported, was taken on no leg: QEMU's only hub is a Full-Speed one,
+so putting it on a root port is section 6's topology rather than this one's.
+
+**Where a per-device witness would come from, if one is wanted.** The USB 2.0
+Root Hub's **Power** page does itemise. On Windows ME with both mice attached
+it listed two rows of `USB Human Interface Device` at 100 mA each and
+`6 port(s) available` against QEMU's eight ports (leg B7), and the same page
+listed a mouse at 100 mA on Windows 98 SE under NUSB (leg A0b). It is
+`usbui.dll`'s `USBHubPowerPage`, registered on 9x by the USB 2.0 stack's own
+`USB2.INF` and not by this package, so it needs nothing this project ships
+and it was the control both legs used. It reports power rather than
+bandwidth - but naming devices is exactly the half the Bandwidth page lacks.
+
+One limit on availability, and it is only a version. The tab is **not** in
+`1.1.0.0`; it ships in `1.1.1.0` (`../using/release-notes.md`, "The
+controller's Advanced tab"). **The second limit that used to stand here is gone**:
+this package registered no controller property page on the NT targets until
+roadmap task 23.2 took that half on 2026-09-20, and the page now opens on
+every one of them - Windows 2000, Windows XP in both architectures, and
+Windows Vista and Windows 7 in both. `PROP-NTHALF`, which refused the value
+until those readings existed, was inverted in the same change. Only the two
+NT 5.x 32-bit guests were walked up the ladder above; the other five were
+read for the tab's presence and its idle figure, which is 10 % on NT 5.x and
+20 % on NT 6.x.
 
 ## 6. A USB 1.1 hub on a root port: harmless on Windows 98 and 2000, fatal on Vista and 7
 
@@ -481,7 +580,9 @@ Both findings in sections 6.2 and 7 are known limitations of `1.1.0.0` by
 the owner's decision of 2026-09-19 (`docs/using/release-notes.md`, "Known
 limitations"; the download readme, section 7; `README.md`, "Known
 limitations"). Neither is a defect in the workaround on the systems it was
-made for: Windows 98 and 2000 behave as before.
+made for: Windows 98 and 2000 behave as before. Both stay known limitations
+of `1.1.1.0`, which changes nothing about the speed report (the status
+paragraph at the head of this page).
 
 ## 8. What would fix it, and why nothing was attempted for `1.1.0.0`
 
@@ -521,8 +622,20 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
 
 ## 9. What is still open
 
+- **Polling rates and true speeds on root ports are not scheduled, and
+  `1.1.1.0` does not answer them.** The owner split them out of Phase 23
+  on 2026-09-22 so that release could ship the property page and the
+  moderation value alone, and no roadmap phase carries them. The reporter's
+  order still stands for whoever takes them up: Low-Speed rates behind a hub
+  first, then rates on a root port, which may close as owned by true speeds,
+  then true speeds on root ports as a decision with its reason, for which the
+  virtual hub in section 8 is the candidate.
 - **The bandwidth accounting on Windows 98 and 2000** (section 5) has no
-  measurement either way.
+  measurement either way. The Bandwidth Usage readings of 2026-09-20
+  (section 5.1) are not one: they are what `usbui.dll` computes from the
+  speed that was reported, on the five legs (the three 9x ones, Windows 2000
+  SP4 and Windows XP SP3); on the NT targets the same list is inline on the
+  tab rather than behind a button.
 - **Metal never ran the truthful build**, so the bugcheck itself is a VM
   observation. Nothing suggests real hardware differs: the fault is in
   usbport's own list handling, not in anything the controller does.
@@ -604,6 +717,10 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
   (the bucketing contract and the floor).
 - [roadmap.md](../contributing/roadmap.md), Phase 5 status and task 7; task
   22.9.
+- [run-23.md](../contributing/runs/run-23.md), 23.1 legs A, B and C: the
+  Bandwidth Usage ladder on three 9x stacks, the root hub's Power page as
+  the control, and the `usbui.dll` rename control that established which
+  module draws the dialog (section 5.1).
 - [run-22.md](../contributing/runs/run-22.md), 22.9: the hub bugcheck on
   all four NT 6.x builds, the played-stream table, the XP behind-a-hub
   reading, the owner's decisions; the reports in

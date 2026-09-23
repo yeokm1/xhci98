@@ -1,0 +1,581 @@
+﻿# post-release run
+# driver:    1.1.1.0 qemu, 164880 B, sha256 cf00ced51460cf10
+# image:     vm\fresh-win7.img, stamp base-1.1.1.0-qemu, from win7.img win7-clean-install
+# qemu:      11.1.0 (v11.1.0-12130-ge470268ff4), accel tcg,thread=multi
+# offsets:   SIZEOF 92320, 405 counters
+# started:   2026-09-23 19:43:05, elapsed 1:43:23
+# verdict:   win7-fresh FAIL, 17 rows, 4 NODRIVER expected, 0 not reached
+#
+# Outcomes: PASS FAIL NODRIVER INERT ERROR EXCLUDED - see docs/contributing/design/06-device-matrix-verdict.md
+# A '-> X' in the outcome column marks the expectation that did not hold.
+# A row name ending in '/replug' is the same device attached a second time - design record 09 section 5.
+#
+TARGET ROW                          OUTCOME   EXPECTATION                                                    READING
+win7-fresh usb-audio/fs                 NODRIVER  advance devices addressed                                      +1
+win7-fresh usb-audio/fs                 NODRIVER  advance slots enabled                                          +1
+win7-fresh usb-audio/fs                 NODRIVER  zero fatal controller status                                   0
+win7-fresh usb-audio/fs                 NODRIVER  zero transfer events for no open endpoint                      0
+win7-fresh usb-audio/fs                 NODRIVER  zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-audio/fs                 NODRIVER  zero endpoint opens refused - malformed call                   0
+win7-fresh usb-audio/fs                 NODRIVER  zero interrupt mask failures                                   0
+win7-fresh usb-audio/fs                 NODRIVER  zero commands the engine gave up on                            0
+win7-fresh usb-audio/fs                 NODRIVER  zero endpoint refusals - type                                  0
+win7-fresh usb-audio/fs                 NODRIVER  zero endpoint refusals - no device                             0
+win7-fresh usb-audio/fs                 NODRIVER  zero endpoint refusals - params                                0
+win7-fresh usb-audio/fs                 NODRIVER  zero endpoint refusals - ring pool                             0
+win7-fresh usb-audio/fs                 NODRIVER  zero endpoint configure failures                               0
+win7-fresh usb-audio/fs                 NODRIVER  zero endpoints refused - no bandwidth                          0
+win7-fresh usb-audio/fs                 NODRIVER  zero endpoints refused - no resources                          0
+win7-fresh usb-audio/fs                 NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+win7-fresh usb-audio/fs                 -> NODRIVER advance endpoints opened >= 1                                  +0
+win7-fresh usb-audio/fs/replug          NODRIVER  advance devices addressed                                      +1
+win7-fresh usb-audio/fs/replug          NODRIVER  advance slots enabled                                          +1
+win7-fresh usb-audio/fs/replug          NODRIVER  zero fatal controller status                                   0
+win7-fresh usb-audio/fs/replug          NODRIVER  zero transfer events for no open endpoint                      0
+win7-fresh usb-audio/fs/replug          NODRIVER  zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-audio/fs/replug          NODRIVER  zero endpoint opens refused - malformed call                   0
+win7-fresh usb-audio/fs/replug          NODRIVER  zero interrupt mask failures                                   0
+win7-fresh usb-audio/fs/replug          NODRIVER  zero commands the engine gave up on                            0
+win7-fresh usb-audio/fs/replug          NODRIVER  zero endpoint refusals - type                                  0
+win7-fresh usb-audio/fs/replug          NODRIVER  zero endpoint refusals - no device                             0
+win7-fresh usb-audio/fs/replug          NODRIVER  zero endpoint refusals - params                                0
+win7-fresh usb-audio/fs/replug          NODRIVER  zero endpoint refusals - ring pool                             0
+win7-fresh usb-audio/fs/replug          NODRIVER  zero endpoint configure failures                               0
+win7-fresh usb-audio/fs/replug          NODRIVER  zero endpoints refused - no bandwidth                          0
+win7-fresh usb-audio/fs/replug          NODRIVER  zero endpoints refused - no resources                          0
+win7-fresh usb-audio/fs/replug          NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+win7-fresh usb-audio/fs/replug          -> NODRIVER advance endpoints opened >= 1                                  +0
+win7-fresh usb-audio/fs                 NODRIVER  (NO ExpectNoDriver entry for this target)                      a class this matrix said the OS would claim was not claimed; counts against the verdict
+win7-fresh usb-kbd/hs                   PASS      advance devices addressed                                      +1
+win7-fresh usb-kbd/hs                   PASS      advance slots enabled                                          +1
+win7-fresh usb-kbd/hs                   PASS      zero fatal controller status                                   0
+win7-fresh usb-kbd/hs                   PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-kbd/hs                   PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-kbd/hs                   PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-kbd/hs                   PASS      zero interrupt mask failures                                   0
+win7-fresh usb-kbd/hs                   PASS      zero commands the engine gave up on                            0
+win7-fresh usb-kbd/hs                   PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-kbd/hs                   PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-kbd/hs                   PASS      zero endpoint refusals - params                                0
+win7-fresh usb-kbd/hs                   PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-kbd/hs                   PASS      zero endpoint configure failures                               0
+win7-fresh usb-kbd/hs                   PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-kbd/hs                   PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-kbd/hs                   PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+win7-fresh usb-kbd/hs                   PASS      advance endpoints opened >= 1                                  +1
+win7-fresh usb-kbd/hs                   PASS      zero endpoint speed mismatches                                 0
+win7-fresh usb-kbd/hs/replug            PASS      advance devices addressed                                      +1
+win7-fresh usb-kbd/hs/replug            PASS      advance slots enabled                                          +1
+win7-fresh usb-kbd/hs/replug            PASS      zero fatal controller status                                   0
+win7-fresh usb-kbd/hs/replug            PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-kbd/hs/replug            PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-kbd/hs/replug            PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-kbd/hs/replug            PASS      zero interrupt mask failures                                   0
+win7-fresh usb-kbd/hs/replug            PASS      zero commands the engine gave up on                            0
+win7-fresh usb-kbd/hs/replug            PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-kbd/hs/replug            PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-kbd/hs/replug            PASS      zero endpoint refusals - params                                0
+win7-fresh usb-kbd/hs/replug            PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-kbd/hs/replug            PASS      zero endpoint configure failures                               0
+win7-fresh usb-kbd/hs/replug            PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-kbd/hs/replug            PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-kbd/hs/replug            PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+win7-fresh usb-kbd/hs/replug            PASS      advance endpoints opened >= 1                                  +1
+win7-fresh usb-kbd/hs/replug            PASS      zero endpoint speed mismatches                                 0
+win7-fresh usb-kbd/fs                   PASS      advance devices addressed                                      +1
+win7-fresh usb-kbd/fs                   PASS      advance slots enabled                                          +1
+win7-fresh usb-kbd/fs                   PASS      zero fatal controller status                                   0
+win7-fresh usb-kbd/fs                   PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-kbd/fs                   PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-kbd/fs                   PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-kbd/fs                   PASS      zero interrupt mask failures                                   0
+win7-fresh usb-kbd/fs                   PASS      zero commands the engine gave up on                            0
+win7-fresh usb-kbd/fs                   PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-kbd/fs                   PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-kbd/fs                   PASS      zero endpoint refusals - params                                0
+win7-fresh usb-kbd/fs                   PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-kbd/fs                   PASS      zero endpoint configure failures                               0
+win7-fresh usb-kbd/fs                   PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-kbd/fs                   PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-kbd/fs                   PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+win7-fresh usb-kbd/fs                   PASS      advance endpoints opened >= 1                                  +1
+win7-fresh usb-kbd/fs                   PASS      advance endpoint speed mismatches                              +1
+win7-fresh usb-kbd/fs/replug            PASS      advance devices addressed                                      +1
+win7-fresh usb-kbd/fs/replug            PASS      advance slots enabled                                          +1
+win7-fresh usb-kbd/fs/replug            PASS      zero fatal controller status                                   0
+win7-fresh usb-kbd/fs/replug            PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-kbd/fs/replug            PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-kbd/fs/replug            PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-kbd/fs/replug            PASS      zero interrupt mask failures                                   0
+win7-fresh usb-kbd/fs/replug            PASS      zero commands the engine gave up on                            0
+win7-fresh usb-kbd/fs/replug            PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-kbd/fs/replug            PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-kbd/fs/replug            PASS      zero endpoint refusals - params                                0
+win7-fresh usb-kbd/fs/replug            PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-kbd/fs/replug            PASS      zero endpoint configure failures                               0
+win7-fresh usb-kbd/fs/replug            PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-kbd/fs/replug            PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-kbd/fs/replug            PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+win7-fresh usb-kbd/fs/replug            PASS      advance endpoints opened >= 1                                  +1
+win7-fresh usb-kbd/fs/replug            PASS      advance endpoint speed mismatches                              +1
+win7-fresh usb-mouse/hs                 PASS      advance devices addressed                                      +1
+win7-fresh usb-mouse/hs                 PASS      advance slots enabled                                          +1
+win7-fresh usb-mouse/hs                 PASS      zero fatal controller status                                   0
+win7-fresh usb-mouse/hs                 PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-mouse/hs                 PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-mouse/hs                 PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-mouse/hs                 PASS      zero interrupt mask failures                                   0
+win7-fresh usb-mouse/hs                 PASS      zero commands the engine gave up on                            0
+win7-fresh usb-mouse/hs                 PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-mouse/hs                 PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-mouse/hs                 PASS      zero endpoint refusals - params                                0
+win7-fresh usb-mouse/hs                 PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-mouse/hs                 PASS      zero endpoint configure failures                               0
+win7-fresh usb-mouse/hs                 PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-mouse/hs                 PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-mouse/hs                 PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+win7-fresh usb-mouse/hs                 PASS      advance endpoints opened >= 1                                  +1
+win7-fresh usb-mouse/hs/replug          PASS      advance devices addressed                                      +1
+win7-fresh usb-mouse/hs/replug          PASS      advance slots enabled                                          +1
+win7-fresh usb-mouse/hs/replug          PASS      zero fatal controller status                                   0
+win7-fresh usb-mouse/hs/replug          PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-mouse/hs/replug          PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-mouse/hs/replug          PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-mouse/hs/replug          PASS      zero interrupt mask failures                                   0
+win7-fresh usb-mouse/hs/replug          PASS      zero commands the engine gave up on                            0
+win7-fresh usb-mouse/hs/replug          PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-mouse/hs/replug          PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-mouse/hs/replug          PASS      zero endpoint refusals - params                                0
+win7-fresh usb-mouse/hs/replug          PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-mouse/hs/replug          PASS      zero endpoint configure failures                               0
+win7-fresh usb-mouse/hs/replug          PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-mouse/hs/replug          PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-mouse/hs/replug          PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+win7-fresh usb-mouse/hs/replug          PASS      advance endpoints opened >= 1                                  +1
+win7-fresh usb-mouse/fs                 PASS      advance devices addressed                                      +1
+win7-fresh usb-mouse/fs                 PASS      advance slots enabled                                          +1
+win7-fresh usb-mouse/fs                 PASS      zero fatal controller status                                   0
+win7-fresh usb-mouse/fs                 PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-mouse/fs                 PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-mouse/fs                 PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-mouse/fs                 PASS      zero interrupt mask failures                                   0
+win7-fresh usb-mouse/fs                 PASS      zero commands the engine gave up on                            0
+win7-fresh usb-mouse/fs                 PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-mouse/fs                 PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-mouse/fs                 PASS      zero endpoint refusals - params                                0
+win7-fresh usb-mouse/fs                 PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-mouse/fs                 PASS      zero endpoint configure failures                               0
+win7-fresh usb-mouse/fs                 PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-mouse/fs                 PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-mouse/fs                 PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+win7-fresh usb-mouse/fs                 PASS      advance endpoints opened >= 1                                  +1
+win7-fresh usb-mouse/fs                 PASS      advance endpoint speed mismatches                              +1
+win7-fresh usb-mouse/fs/replug          PASS      advance devices addressed                                      +1
+win7-fresh usb-mouse/fs/replug          PASS      advance slots enabled                                          +1
+win7-fresh usb-mouse/fs/replug          PASS      zero fatal controller status                                   0
+win7-fresh usb-mouse/fs/replug          PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-mouse/fs/replug          PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-mouse/fs/replug          PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-mouse/fs/replug          PASS      zero interrupt mask failures                                   0
+win7-fresh usb-mouse/fs/replug          PASS      zero commands the engine gave up on                            0
+win7-fresh usb-mouse/fs/replug          PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-mouse/fs/replug          PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-mouse/fs/replug          PASS      zero endpoint refusals - params                                0
+win7-fresh usb-mouse/fs/replug          PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-mouse/fs/replug          PASS      zero endpoint configure failures                               0
+win7-fresh usb-mouse/fs/replug          PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-mouse/fs/replug          PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-mouse/fs/replug          PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+win7-fresh usb-mouse/fs/replug          PASS      advance endpoints opened >= 1                                  +1
+win7-fresh usb-mouse/fs/replug          PASS      advance endpoint speed mismatches                              +1
+win7-fresh usb-tablet/hs                PASS      advance devices addressed                                      +1
+win7-fresh usb-tablet/hs                PASS      advance slots enabled                                          +1
+win7-fresh usb-tablet/hs                PASS      zero fatal controller status                                   0
+win7-fresh usb-tablet/hs                PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-tablet/hs                PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-tablet/hs                PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-tablet/hs                PASS      zero interrupt mask failures                                   0
+win7-fresh usb-tablet/hs                PASS      zero commands the engine gave up on                            0
+win7-fresh usb-tablet/hs                PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-tablet/hs                PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-tablet/hs                PASS      zero endpoint refusals - params                                0
+win7-fresh usb-tablet/hs                PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-tablet/hs                PASS      zero endpoint configure failures                               0
+win7-fresh usb-tablet/hs                PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-tablet/hs                PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-tablet/hs                PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+win7-fresh usb-tablet/hs                PASS      advance endpoints opened >= 1                                  +1
+win7-fresh usb-tablet/hs/replug         PASS      advance devices addressed                                      +1
+win7-fresh usb-tablet/hs/replug         PASS      advance slots enabled                                          +1
+win7-fresh usb-tablet/hs/replug         PASS      zero fatal controller status                                   0
+win7-fresh usb-tablet/hs/replug         PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-tablet/hs/replug         PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-tablet/hs/replug         PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-tablet/hs/replug         PASS      zero interrupt mask failures                                   0
+win7-fresh usb-tablet/hs/replug         PASS      zero commands the engine gave up on                            0
+win7-fresh usb-tablet/hs/replug         PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-tablet/hs/replug         PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-tablet/hs/replug         PASS      zero endpoint refusals - params                                0
+win7-fresh usb-tablet/hs/replug         PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-tablet/hs/replug         PASS      zero endpoint configure failures                               0
+win7-fresh usb-tablet/hs/replug         PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-tablet/hs/replug         PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-tablet/hs/replug         PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+win7-fresh usb-tablet/hs/replug         PASS      advance endpoints opened >= 1                                  +1
+win7-fresh usb-wacom-tablet/fs          PASS      advance devices addressed                                      +1
+win7-fresh usb-wacom-tablet/fs          PASS      advance slots enabled                                          +1
+win7-fresh usb-wacom-tablet/fs          PASS      zero fatal controller status                                   0
+win7-fresh usb-wacom-tablet/fs          PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-wacom-tablet/fs          PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-wacom-tablet/fs          PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-wacom-tablet/fs          PASS      zero interrupt mask failures                                   0
+win7-fresh usb-wacom-tablet/fs          PASS      zero commands the engine gave up on                            0
+win7-fresh usb-wacom-tablet/fs          PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-wacom-tablet/fs          PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-wacom-tablet/fs          PASS      zero endpoint refusals - params                                0
+win7-fresh usb-wacom-tablet/fs          PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-wacom-tablet/fs          PASS      zero endpoint configure failures                               0
+win7-fresh usb-wacom-tablet/fs          PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-wacom-tablet/fs          PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-wacom-tablet/fs          PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+win7-fresh usb-wacom-tablet/fs          PASS      advance endpoints opened >= 1                                  +1
+win7-fresh usb-wacom-tablet/fs/replug   PASS      advance devices addressed                                      +1
+win7-fresh usb-wacom-tablet/fs/replug   PASS      advance slots enabled                                          +1
+win7-fresh usb-wacom-tablet/fs/replug   PASS      zero fatal controller status                                   0
+win7-fresh usb-wacom-tablet/fs/replug   PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-wacom-tablet/fs/replug   PASS      zero interrupt mask failures                                   0
+win7-fresh usb-wacom-tablet/fs/replug   PASS      zero commands the engine gave up on                            0
+win7-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoint refusals - params                                0
+win7-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoint configure failures                               0
+win7-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-wacom-tablet/fs/replug   PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-wacom-tablet/fs/replug   PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+win7-fresh usb-wacom-tablet/fs/replug   PASS      advance endpoints opened >= 1                                  +1
+win7-fresh usb-storage/hs               PASS      advance devices addressed                                      +1
+win7-fresh usb-storage/hs               PASS      advance slots enabled                                          +1
+win7-fresh usb-storage/hs               PASS      zero fatal controller status                                   0
+win7-fresh usb-storage/hs               PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-storage/hs               PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-storage/hs               PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-storage/hs               PASS      zero interrupt mask failures                                   0
+win7-fresh usb-storage/hs               PASS      zero commands the engine gave up on                            0
+win7-fresh usb-storage/hs               PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-storage/hs               PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-storage/hs               PASS      zero endpoint refusals - params                                0
+win7-fresh usb-storage/hs               PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-storage/hs               PASS      zero endpoint configure failures                               0
+win7-fresh usb-storage/hs               PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-storage/hs               PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-storage/hs               PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 6 == 6
+win7-fresh usb-storage/hs               PASS      advance endpoints opened >= 2                                  +2
+win7-fresh usb-storage/hs               PASS      identity transfers submitted == transfers completed + transfers cancelled 3018 == 3018
+win7-fresh usb-storage/hs/replug        PASS      advance devices addressed                                      +1
+win7-fresh usb-storage/hs/replug        PASS      advance slots enabled                                          +1
+win7-fresh usb-storage/hs/replug        PASS      zero fatal controller status                                   0
+win7-fresh usb-storage/hs/replug        PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-storage/hs/replug        PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-storage/hs/replug        PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-storage/hs/replug        PASS      zero interrupt mask failures                                   0
+win7-fresh usb-storage/hs/replug        PASS      zero commands the engine gave up on                            0
+win7-fresh usb-storage/hs/replug        PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-storage/hs/replug        PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-storage/hs/replug        PASS      zero endpoint refusals - params                                0
+win7-fresh usb-storage/hs/replug        PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-storage/hs/replug        PASS      zero endpoint configure failures                               0
+win7-fresh usb-storage/hs/replug        PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-storage/hs/replug        PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-storage/hs/replug        PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 6 == 6
+win7-fresh usb-storage/hs/replug        PASS      advance endpoints opened >= 2                                  +2
+win7-fresh usb-storage/hs/replug        PASS      identity transfers submitted == transfers completed + transfers cancelled 1716 == 1716
+win7-fresh usb-bot/fs                   PASS      advance devices addressed                                      +1
+win7-fresh usb-bot/fs                   PASS      advance slots enabled                                          +1
+win7-fresh usb-bot/fs                   PASS      zero fatal controller status                                   0
+win7-fresh usb-bot/fs                   PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-bot/fs                   PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-bot/fs                   PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-bot/fs                   PASS      zero interrupt mask failures                                   0
+win7-fresh usb-bot/fs                   PASS      zero commands the engine gave up on                            0
+win7-fresh usb-bot/fs                   PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-bot/fs                   PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-bot/fs                   PASS      zero endpoint refusals - params                                0
+win7-fresh usb-bot/fs                   PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-bot/fs                   PASS      zero endpoint configure failures                               0
+win7-fresh usb-bot/fs                   PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-bot/fs                   PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-bot/fs                   PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 6 == 6
+win7-fresh usb-bot/fs                   PASS      advance endpoints opened >= 1                                  +2
+win7-fresh usb-bot/fs/replug            PASS      advance devices addressed                                      +1
+win7-fresh usb-bot/fs/replug            PASS      advance slots enabled                                          +1
+win7-fresh usb-bot/fs/replug            PASS      zero fatal controller status                                   0
+win7-fresh usb-bot/fs/replug            PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-bot/fs/replug            PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-bot/fs/replug            PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-bot/fs/replug            PASS      zero interrupt mask failures                                   0
+win7-fresh usb-bot/fs/replug            PASS      zero commands the engine gave up on                            0
+win7-fresh usb-bot/fs/replug            PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-bot/fs/replug            PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-bot/fs/replug            PASS      zero endpoint refusals - params                                0
+win7-fresh usb-bot/fs/replug            PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-bot/fs/replug            PASS      zero endpoint configure failures                               0
+win7-fresh usb-bot/fs/replug            PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-bot/fs/replug            PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-bot/fs/replug            PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 6 == 6
+win7-fresh usb-bot/fs/replug            PASS      advance endpoints opened >= 1                                  +2
+win7-fresh usb-uas/fs                   NODRIVER  advance devices addressed                                      +1
+win7-fresh usb-uas/fs                   NODRIVER  advance slots enabled                                          +1
+win7-fresh usb-uas/fs                   NODRIVER  zero fatal controller status                                   0
+win7-fresh usb-uas/fs                   NODRIVER  zero transfer events for no open endpoint                      0
+win7-fresh usb-uas/fs                   NODRIVER  zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-uas/fs                   NODRIVER  zero endpoint opens refused - malformed call                   0
+win7-fresh usb-uas/fs                   NODRIVER  zero interrupt mask failures                                   0
+win7-fresh usb-uas/fs                   NODRIVER  zero commands the engine gave up on                            0
+win7-fresh usb-uas/fs                   NODRIVER  zero endpoint refusals - type                                  0
+win7-fresh usb-uas/fs                   NODRIVER  zero endpoint refusals - no device                             0
+win7-fresh usb-uas/fs                   NODRIVER  zero endpoint refusals - params                                0
+win7-fresh usb-uas/fs                   NODRIVER  zero endpoint refusals - ring pool                             0
+win7-fresh usb-uas/fs                   NODRIVER  zero endpoint configure failures                               0
+win7-fresh usb-uas/fs                   NODRIVER  zero endpoints refused - no bandwidth                          0
+win7-fresh usb-uas/fs                   NODRIVER  zero endpoints refused - no resources                          0
+win7-fresh usb-uas/fs                   NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+win7-fresh usb-uas/fs                   -> NODRIVER advance endpoints opened >= 1                                  +0
+win7-fresh usb-uas/fs/replug            NODRIVER  advance devices addressed                                      +1
+win7-fresh usb-uas/fs/replug            NODRIVER  advance slots enabled                                          +1
+win7-fresh usb-uas/fs/replug            NODRIVER  zero fatal controller status                                   0
+win7-fresh usb-uas/fs/replug            NODRIVER  zero transfer events for no open endpoint                      0
+win7-fresh usb-uas/fs/replug            NODRIVER  zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-uas/fs/replug            NODRIVER  zero endpoint opens refused - malformed call                   0
+win7-fresh usb-uas/fs/replug            NODRIVER  zero interrupt mask failures                                   0
+win7-fresh usb-uas/fs/replug            NODRIVER  zero commands the engine gave up on                            0
+win7-fresh usb-uas/fs/replug            NODRIVER  zero endpoint refusals - type                                  0
+win7-fresh usb-uas/fs/replug            NODRIVER  zero endpoint refusals - no device                             0
+win7-fresh usb-uas/fs/replug            NODRIVER  zero endpoint refusals - params                                0
+win7-fresh usb-uas/fs/replug            NODRIVER  zero endpoint refusals - ring pool                             0
+win7-fresh usb-uas/fs/replug            NODRIVER  zero endpoint configure failures                               0
+win7-fresh usb-uas/fs/replug            NODRIVER  zero endpoints refused - no bandwidth                          0
+win7-fresh usb-uas/fs/replug            NODRIVER  zero endpoints refused - no resources                          0
+win7-fresh usb-uas/fs/replug            NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+win7-fresh usb-uas/fs/replug            -> NODRIVER advance endpoints opened >= 1                                  +0
+win7-fresh usb-uas/fs                   NODRIVER  (no class driver expected on this target)                      a guess taken 2026-09-18, not yet measured: the UAS class driver (uaspstor.sys) arrived with Windows 8, so Windows 7 has none
+win7-fresh usb-hub/fs                   PASS      advance devices addressed                                      +1
+win7-fresh usb-hub/fs                   PASS      advance slots enabled                                          +1
+win7-fresh usb-hub/fs                   PASS      zero fatal controller status                                   0
+win7-fresh usb-hub/fs                   PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-hub/fs                   PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-hub/fs                   PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-hub/fs                   PASS      zero interrupt mask failures                                   0
+win7-fresh usb-hub/fs                   PASS      zero commands the engine gave up on                            0
+win7-fresh usb-hub/fs                   PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-hub/fs                   PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-hub/fs                   PASS      zero endpoint refusals - params                                0
+win7-fresh usb-hub/fs                   PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-hub/fs                   PASS      zero endpoint configure failures                               0
+win7-fresh usb-hub/fs                   PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-hub/fs                   PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-hub/fs                   PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+win7-fresh usb-hub/fs                   PASS      advance endpoints opened >= 1                                  +1
+win7-fresh usb-hub/fs                   PASS      advance topology: hub descriptors folded                       +1
+win7-fresh usb-hub/fs                   PASS      advance topology: hub slots marked                             +1
+win7-fresh usb-hub/fs                   PASS      zero topology: hub descriptors malformed                       0
+win7-fresh usb-hub/fs                   PASS      zero topology: nodes dropped                                   0
+win7-fresh usb-hub/fs                   PASS      zero topology: behind-hub refused - no record                  0
+win7-fresh usb-hub/fs/replug            PASS      advance devices addressed                                      +1
+win7-fresh usb-hub/fs/replug            PASS      advance slots enabled                                          +1
+win7-fresh usb-hub/fs/replug            PASS      zero fatal controller status                                   0
+win7-fresh usb-hub/fs/replug            PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-hub/fs/replug            PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-hub/fs/replug            PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-hub/fs/replug            PASS      zero interrupt mask failures                                   0
+win7-fresh usb-hub/fs/replug            PASS      zero commands the engine gave up on                            0
+win7-fresh usb-hub/fs/replug            PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-hub/fs/replug            PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-hub/fs/replug            PASS      zero endpoint refusals - params                                0
+win7-fresh usb-hub/fs/replug            PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-hub/fs/replug            PASS      zero endpoint configure failures                               0
+win7-fresh usb-hub/fs/replug            PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-hub/fs/replug            PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-hub/fs/replug            PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 3 == 3
+win7-fresh usb-hub/fs/replug            PASS      advance endpoints opened >= 1                                  +1
+win7-fresh usb-hub/fs/replug            PASS      advance topology: hub descriptors folded                       +1
+win7-fresh usb-hub/fs/replug            PASS      advance topology: hub slots marked                             +1
+win7-fresh usb-hub/fs/replug            PASS      zero topology: hub descriptors malformed                       0
+win7-fresh usb-hub/fs/replug            PASS      zero topology: nodes dropped                                   0
+win7-fresh usb-hub/fs/replug            PASS      zero topology: behind-hub refused - no record                  0
+win7-fresh (group hub, row usb-hub/churn) ERROR     (group did not complete)                                       counter read at 0x854B300C asked for 1 words and got 0 after 4 attempts, from a monitor that is still answering. A positional map of a short reply files every later counter under the wrong name, so this run is void rather than approximate. | the monitor still answers, so the guest is there to be looked at | NOTHING in this matrix declares this row may wedge this target; the guest is NOT in the wedge shape [alive]: the guest is executing and taking timer interrupts
+win7-fresh usb-net/fs                   NODRIVER  advance devices addressed                                      +1
+win7-fresh usb-net/fs                   NODRIVER  advance slots enabled                                          +1
+win7-fresh usb-net/fs                   NODRIVER  zero fatal controller status                                   0
+win7-fresh usb-net/fs                   NODRIVER  zero transfer events for no open endpoint                      0
+win7-fresh usb-net/fs                   NODRIVER  zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-net/fs                   NODRIVER  zero endpoint opens refused - malformed call                   0
+win7-fresh usb-net/fs                   NODRIVER  zero interrupt mask failures                                   0
+win7-fresh usb-net/fs                   NODRIVER  zero commands the engine gave up on                            0
+win7-fresh usb-net/fs                   NODRIVER  zero endpoint refusals - type                                  0
+win7-fresh usb-net/fs                   NODRIVER  zero endpoint refusals - no device                             0
+win7-fresh usb-net/fs                   NODRIVER  zero endpoint refusals - params                                0
+win7-fresh usb-net/fs                   NODRIVER  zero endpoint refusals - ring pool                             0
+win7-fresh usb-net/fs                   NODRIVER  zero endpoint configure failures                               0
+win7-fresh usb-net/fs                   NODRIVER  zero endpoints refused - no bandwidth                          0
+win7-fresh usb-net/fs                   NODRIVER  zero endpoints refused - no resources                          0
+win7-fresh usb-net/fs                   NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+win7-fresh usb-net/fs                   -> NODRIVER advance endpoints opened >= 1                                  +0
+win7-fresh usb-net/fs/replug            NODRIVER  advance devices addressed                                      +1
+win7-fresh usb-net/fs/replug            NODRIVER  advance slots enabled                                          +1
+win7-fresh usb-net/fs/replug            NODRIVER  zero fatal controller status                                   0
+win7-fresh usb-net/fs/replug            NODRIVER  zero transfer events for no open endpoint                      0
+win7-fresh usb-net/fs/replug            NODRIVER  zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-net/fs/replug            NODRIVER  zero endpoint opens refused - malformed call                   0
+win7-fresh usb-net/fs/replug            NODRIVER  zero interrupt mask failures                                   0
+win7-fresh usb-net/fs/replug            NODRIVER  zero commands the engine gave up on                            0
+win7-fresh usb-net/fs/replug            NODRIVER  zero endpoint refusals - type                                  0
+win7-fresh usb-net/fs/replug            NODRIVER  zero endpoint refusals - no device                             0
+win7-fresh usb-net/fs/replug            NODRIVER  zero endpoint refusals - params                                0
+win7-fresh usb-net/fs/replug            NODRIVER  zero endpoint refusals - ring pool                             0
+win7-fresh usb-net/fs/replug            NODRIVER  zero endpoint configure failures                               0
+win7-fresh usb-net/fs/replug            NODRIVER  zero endpoints refused - no bandwidth                          0
+win7-fresh usb-net/fs/replug            NODRIVER  zero endpoints refused - no resources                          0
+win7-fresh usb-net/fs/replug            NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+win7-fresh usb-net/fs/replug            -> NODRIVER advance endpoints opened >= 1                                  +0
+win7-fresh usb-net/fs                   NODRIVER  (no class driver expected on this target)                      measured 2026-09-19 (roadmap 22.9): Device Manager shows RNDIS/QEMU USB Network Device under Other devices, Code 28, no in-box INF matches USB\VID_0525&PID_A4A2
+win7-fresh usb-serial/fs                NODRIVER  advance devices addressed                                      +1
+win7-fresh usb-serial/fs                NODRIVER  advance slots enabled                                          +1
+win7-fresh usb-serial/fs                NODRIVER  zero fatal controller status                                   0
+win7-fresh usb-serial/fs                NODRIVER  zero transfer events for no open endpoint                      0
+win7-fresh usb-serial/fs                NODRIVER  zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-serial/fs                NODRIVER  zero endpoint opens refused - malformed call                   0
+win7-fresh usb-serial/fs                NODRIVER  zero interrupt mask failures                                   0
+win7-fresh usb-serial/fs                NODRIVER  zero commands the engine gave up on                            0
+win7-fresh usb-serial/fs                NODRIVER  zero endpoint refusals - type                                  0
+win7-fresh usb-serial/fs                NODRIVER  zero endpoint refusals - no device                             0
+win7-fresh usb-serial/fs                NODRIVER  zero endpoint refusals - params                                0
+win7-fresh usb-serial/fs                NODRIVER  zero endpoint refusals - ring pool                             0
+win7-fresh usb-serial/fs                NODRIVER  zero endpoint configure failures                               0
+win7-fresh usb-serial/fs                NODRIVER  zero endpoints refused - no bandwidth                          0
+win7-fresh usb-serial/fs                NODRIVER  zero endpoints refused - no resources                          0
+win7-fresh usb-serial/fs                NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+win7-fresh usb-serial/fs                -> NODRIVER advance endpoints opened >= 1                                  +0
+win7-fresh usb-serial/fs/replug         NODRIVER  advance devices addressed                                      +1
+win7-fresh usb-serial/fs/replug         NODRIVER  advance slots enabled                                          +1
+win7-fresh usb-serial/fs/replug         NODRIVER  zero fatal controller status                                   0
+win7-fresh usb-serial/fs/replug         NODRIVER  zero transfer events for no open endpoint                      0
+win7-fresh usb-serial/fs/replug         NODRIVER  zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-serial/fs/replug         NODRIVER  zero endpoint opens refused - malformed call                   0
+win7-fresh usb-serial/fs/replug         NODRIVER  zero interrupt mask failures                                   0
+win7-fresh usb-serial/fs/replug         NODRIVER  zero commands the engine gave up on                            0
+win7-fresh usb-serial/fs/replug         NODRIVER  zero endpoint refusals - type                                  0
+win7-fresh usb-serial/fs/replug         NODRIVER  zero endpoint refusals - no device                             0
+win7-fresh usb-serial/fs/replug         NODRIVER  zero endpoint refusals - params                                0
+win7-fresh usb-serial/fs/replug         NODRIVER  zero endpoint refusals - ring pool                             0
+win7-fresh usb-serial/fs/replug         NODRIVER  zero endpoint configure failures                               0
+win7-fresh usb-serial/fs/replug         NODRIVER  zero endpoints refused - no bandwidth                          0
+win7-fresh usb-serial/fs/replug         NODRIVER  zero endpoints refused - no resources                          0
+win7-fresh usb-serial/fs/replug         NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+win7-fresh usb-serial/fs/replug         -> NODRIVER advance endpoints opened >= 1                                  +0
+win7-fresh usb-serial/fs                NODRIVER  (no class driver expected on this target)                      a guess taken 2026-09-18, not yet measured: QEMU usb-serial is an FTDI vendor-class device and Windows 7 ships no FTDI driver in the box
+win7-fresh usb-braille/fs               NODRIVER  advance devices addressed                                      +1
+win7-fresh usb-braille/fs               NODRIVER  advance slots enabled                                          +1
+win7-fresh usb-braille/fs               NODRIVER  zero fatal controller status                                   0
+win7-fresh usb-braille/fs               NODRIVER  zero transfer events for no open endpoint                      0
+win7-fresh usb-braille/fs               NODRIVER  zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-braille/fs               NODRIVER  zero endpoint opens refused - malformed call                   0
+win7-fresh usb-braille/fs               NODRIVER  zero interrupt mask failures                                   0
+win7-fresh usb-braille/fs               NODRIVER  zero commands the engine gave up on                            0
+win7-fresh usb-braille/fs               NODRIVER  zero endpoint refusals - type                                  0
+win7-fresh usb-braille/fs               NODRIVER  zero endpoint refusals - no device                             0
+win7-fresh usb-braille/fs               NODRIVER  zero endpoint refusals - params                                0
+win7-fresh usb-braille/fs               NODRIVER  zero endpoint refusals - ring pool                             0
+win7-fresh usb-braille/fs               NODRIVER  zero endpoint configure failures                               0
+win7-fresh usb-braille/fs               NODRIVER  zero endpoints refused - no bandwidth                          0
+win7-fresh usb-braille/fs               NODRIVER  zero endpoints refused - no resources                          0
+win7-fresh usb-braille/fs               NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+win7-fresh usb-braille/fs               -> NODRIVER advance endpoints opened >= 1                                  +0
+win7-fresh usb-braille/fs/replug        NODRIVER  advance devices addressed                                      +1
+win7-fresh usb-braille/fs/replug        NODRIVER  advance slots enabled                                          +1
+win7-fresh usb-braille/fs/replug        NODRIVER  zero fatal controller status                                   0
+win7-fresh usb-braille/fs/replug        NODRIVER  zero transfer events for no open endpoint                      0
+win7-fresh usb-braille/fs/replug        NODRIVER  zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-braille/fs/replug        NODRIVER  zero endpoint opens refused - malformed call                   0
+win7-fresh usb-braille/fs/replug        NODRIVER  zero interrupt mask failures                                   0
+win7-fresh usb-braille/fs/replug        NODRIVER  zero commands the engine gave up on                            0
+win7-fresh usb-braille/fs/replug        NODRIVER  zero endpoint refusals - type                                  0
+win7-fresh usb-braille/fs/replug        NODRIVER  zero endpoint refusals - no device                             0
+win7-fresh usb-braille/fs/replug        NODRIVER  zero endpoint refusals - params                                0
+win7-fresh usb-braille/fs/replug        NODRIVER  zero endpoint refusals - ring pool                             0
+win7-fresh usb-braille/fs/replug        NODRIVER  zero endpoint configure failures                               0
+win7-fresh usb-braille/fs/replug        NODRIVER  zero endpoints refused - no bandwidth                          0
+win7-fresh usb-braille/fs/replug        NODRIVER  zero endpoints refused - no resources                          0
+win7-fresh usb-braille/fs/replug        NODRIVER  identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 2 == 2
+win7-fresh usb-braille/fs/replug        -> NODRIVER advance endpoints opened >= 1                                  +0
+win7-fresh usb-braille/fs               NODRIVER  (no class driver expected on this target)                      a guess taken 2026-09-18, not yet measured: no driver for a Baum braille display on Windows 7
+win7-fresh usb-ccid/fs                  PASS      advance devices addressed                                      +1
+win7-fresh usb-ccid/fs                  PASS      advance slots enabled                                          +1
+win7-fresh usb-ccid/fs                  PASS      zero fatal controller status                                   0
+win7-fresh usb-ccid/fs                  PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-ccid/fs                  PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-ccid/fs                  PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-ccid/fs                  PASS      zero interrupt mask failures                                   0
+win7-fresh usb-ccid/fs                  PASS      zero commands the engine gave up on                            0
+win7-fresh usb-ccid/fs                  PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-ccid/fs                  PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-ccid/fs                  PASS      zero endpoint refusals - params                                0
+win7-fresh usb-ccid/fs                  PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-ccid/fs                  PASS      zero endpoint configure failures                               0
+win7-fresh usb-ccid/fs                  PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-ccid/fs                  PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-ccid/fs                  PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 5 == 5
+win7-fresh usb-ccid/fs                  PASS      advance endpoints opened >= 1                                  +3
+win7-fresh usb-ccid/fs/replug           PASS      advance devices addressed                                      +1
+win7-fresh usb-ccid/fs/replug           PASS      advance slots enabled                                          +1
+win7-fresh usb-ccid/fs/replug           PASS      zero fatal controller status                                   0
+win7-fresh usb-ccid/fs/replug           PASS      zero transfer events for no open endpoint                      0
+win7-fresh usb-ccid/fs/replug           PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh usb-ccid/fs/replug           PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh usb-ccid/fs/replug           PASS      zero interrupt mask failures                                   0
+win7-fresh usb-ccid/fs/replug           PASS      zero commands the engine gave up on                            0
+win7-fresh usb-ccid/fs/replug           PASS      zero endpoint refusals - type                                  0
+win7-fresh usb-ccid/fs/replug           PASS      zero endpoint refusals - no device                             0
+win7-fresh usb-ccid/fs/replug           PASS      zero endpoint refusals - params                                0
+win7-fresh usb-ccid/fs/replug           PASS      zero endpoint refusals - ring pool                             0
+win7-fresh usb-ccid/fs/replug           PASS      zero endpoint configure failures                               0
+win7-fresh usb-ccid/fs/replug           PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh usb-ccid/fs/replug           PASS      zero endpoints refused - no resources                          0
+win7-fresh usb-ccid/fs/replug           PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 5 == 5
+win7-fresh usb-ccid/fs/replug           PASS      advance endpoints opened >= 1                                  +3
+win7-fresh u2f-emulated/fs              PASS      advance devices addressed                                      +1
+win7-fresh u2f-emulated/fs              PASS      advance slots enabled                                          +1
+win7-fresh u2f-emulated/fs              PASS      zero fatal controller status                                   0
+win7-fresh u2f-emulated/fs              PASS      zero transfer events for no open endpoint                      0
+win7-fresh u2f-emulated/fs              PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh u2f-emulated/fs              PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh u2f-emulated/fs              PASS      zero interrupt mask failures                                   0
+win7-fresh u2f-emulated/fs              PASS      zero commands the engine gave up on                            0
+win7-fresh u2f-emulated/fs              PASS      zero endpoint refusals - type                                  0
+win7-fresh u2f-emulated/fs              PASS      zero endpoint refusals - no device                             0
+win7-fresh u2f-emulated/fs              PASS      zero endpoint refusals - params                                0
+win7-fresh u2f-emulated/fs              PASS      zero endpoint refusals - ring pool                             0
+win7-fresh u2f-emulated/fs              PASS      zero endpoint configure failures                               0
+win7-fresh u2f-emulated/fs              PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh u2f-emulated/fs              PASS      zero endpoints refused - no resources                          0
+win7-fresh u2f-emulated/fs              PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 4 == 4
+win7-fresh u2f-emulated/fs              PASS      advance endpoints opened >= 1                                  +2
+win7-fresh u2f-emulated/fs/replug       PASS      advance devices addressed                                      +1
+win7-fresh u2f-emulated/fs/replug       PASS      advance slots enabled                                          +1
+win7-fresh u2f-emulated/fs/replug       PASS      zero fatal controller status                                   0
+win7-fresh u2f-emulated/fs/replug       PASS      zero transfer events for no open endpoint                      0
+win7-fresh u2f-emulated/fs/replug       PASS      zero endpoint opens refused - unusable buffer                  0
+win7-fresh u2f-emulated/fs/replug       PASS      zero endpoint opens refused - malformed call                   0
+win7-fresh u2f-emulated/fs/replug       PASS      zero interrupt mask failures                                   0
+win7-fresh u2f-emulated/fs/replug       PASS      zero commands the engine gave up on                            0
+win7-fresh u2f-emulated/fs/replug       PASS      zero endpoint refusals - type                                  0
+win7-fresh u2f-emulated/fs/replug       PASS      zero endpoint refusals - no device                             0
+win7-fresh u2f-emulated/fs/replug       PASS      zero endpoint refusals - params                                0
+win7-fresh u2f-emulated/fs/replug       PASS      zero endpoint refusals - ring pool                             0
+win7-fresh u2f-emulated/fs/replug       PASS      zero endpoint configure failures                               0
+win7-fresh u2f-emulated/fs/replug       PASS      zero endpoints refused - no bandwidth                          0
+win7-fresh u2f-emulated/fs/replug       PASS      zero endpoints refused - no resources                          0
+win7-fresh u2f-emulated/fs/replug       PASS      identity endpoint opens seen == endpoint opens accepted + EP0 opens refused + endpoint opens refused - unusable buffer + endpoint opens refused - malformed call + endpoint refusals - type + endpoint refusals - no device + endpoint refusals - not ready + endpoint refusals - params + endpoint refusals - ring pool 4 == 4
+win7-fresh u2f-emulated/fs/replug       PASS      advance endpoints opened >= 1                                  +2

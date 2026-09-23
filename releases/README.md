@@ -25,8 +25,8 @@ place leaves two different byte states answering to one version name, and
 nothing a user holds says which one they have.
 
 The one qualification is a version nobody holds through the public channel.
-Until the first public upload (no GitHub release exists), a finding against
-the current version re-cuts it under the same number with `-Force`, because
+Until a version is uploaded (every version cut here so far has been), a
+finding against it re-cuts it under the same number with `-Force`, because
 a number that was never published has not been spent - a cut writes files
 here, a publish uploads one, and only the second spends the number;
 `1.0.0.0` was re-cut that way on 2026-08-30, and `1.0.2.0` three times on
@@ -60,8 +60,8 @@ means. **Windows Server 2003 is not named** in the readme or in the
 `history.md` entry it embeds, and **F8 is not named** either: the x64 NT 6.x
 requirement is written as "driver signature enforcement must be disabled",
 since F8 is not the only way to do it. The release notes and `README.md`
-follow the F8 rule too; they still name Server 2003 x64, which the owner has
-not asked to change. A change to the readme after a cut is a re-cut with
+follow both rules too: the owner had Server 2003 x64 taken out of them, and
+out of the two issue templates, on 2026-09-21. A change to the readme after a cut is a re-cut with
 `-Force`, and the asset size recorded in the roadmap and the run sheet
 follows it.
 
@@ -335,11 +335,12 @@ from.
 same `DriverVer`, so they cannot share a directory; and the x86 pair is named
 `-x86` rather than left bare, because the moment a second set exists an
 untagged `release/` would mean "x86" without saying so and the download's
-`readme.txt` would have no single "INSTALL THIS ONE" to point at. That rename
-was free: no release has been uploaded publicly and no GitHub release exists,
-so no download has ever carried `release/`,
-and the write-once rule above leaves the four directories already cut exactly
-as they are. Their shape is what a cut produced on the day, which is what the
+`readme.txt` would have no single "INSTALL THIS ONE" to point at. The rename
+was free when it was made, because no release had yet been uploaded. The
+versions cut before it (`1.0.0.0` to `1.0.2.0`) keep their bare `release/`
+and `debug/`, in the tree and in their uploaded downloads alike, because the
+write-once rule above leaves the four directories already cut exactly as
+they are. Their shape is what a cut produced on the day, which is what the
 "look in it rather than here" paragraph above is for.
 
 A wrong pick by a user is safe in both directions, which is what makes four

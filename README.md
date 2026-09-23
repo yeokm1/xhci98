@@ -70,7 +70,7 @@ To submit logs with a [bug or hardware report](https://github.com/yeokm1/xhci98/
 
 ### Install
 
-It has four driver directories: `release-x86\` and `debug-x86\` for 32-bit Windows (98 SE, ME, 2000, XP, Vista, 7), and `release-x64\` and `debug-x64\` for 64-bit Windows (XP x64, Server 2003 x64, Vista x64, 7 x64).
+It has four driver directories: `release-x86\` and `debug-x86\` for 32-bit Windows (98 SE, ME, 2000, XP, Vista, 7), and `release-x64\` and `debug-x64\` for 64-bit Windows (XP x64, Vista x64, 7 x64).
 
 1. Put the unzipped package somewhere the machine can read: a floppy, a CD, a shared folder. `release-x86\` or `release-x64\` is the one to install. The `debug-` directories hold the same driver built for troubleshooting, only install if asked.
 2. On Windows 98 SE, install a USB 2.0 stack first (NUSB 3.3, or SweetLow's). On Vista x64 and 7 x64, driver signature enforcement must be disabled, as the driver is unsigned.
@@ -84,6 +84,37 @@ It has four driver directories: `release-x86\` and `debug-x86\` for 32-bit Windo
 **On Windows 98 with NUSB, do not disable, remove or upgrade this driver in Device Manager**. Each of those blue-screens that system. The fault is in NUSB's `usbport.sys`, the Windows 2000 build of the USB 2.0 stack, not this driver. Microsoft's own USB drivers do the same thing on the same machine. The readme has the way round it for NUSB systems.
 
 The same driver on the same machine survives all three under SweetLow's build of that stack.
+
+### Tuning: the interrupt moderation interval (from 1.1.1.0)
+
+`XhciImodInterval250ns` is a `DWORD` in the controller's driver (software) key, in **units of 250 ns**. It sets how long the controller waits after one interrupt before raising the next. A shorter interval makes USB mass storage faster at the cost of more interrupts.
+
+Here is where to find the key:
+
+| Windows | Key |
+|---|---|
+| 98 SE, ME | `HKLM\System\CurrentControlSet\Services\Class\USB\NNNN` |
+| 2000, XP, Vista, 7 (x86/x64) | `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN` |
+
+`NNNN` is the subkey whose `DriverDesc` is "USB 2.0 eXtensible Host Controller (xhci98)". The number varies from machine to machine.
+
+| | Value | Interval | Interrupts per second, at most |
+|---|---|---|---|
+| Written by the install | `500` | 125us | 8,000 |
+| Used when the value is missing, unreadable, or outside `10`-`4000` | `4000` | 1 ms | 1,000 |
+| Lowest accepted | `10` | 2.5 us | 400,000 |
+
+A value outside `10`-`4000` is replaced by `4000`, not rounded to the nearest limit, so a mistyped `0` cannot turn moderation off. `4000` is the controller's own power-on value and what every earlier release ran at.
+
+<img src="images/xhci98-flash-speed-test.jpg" width="800">
+
+ATTO Disk Benchmark with an MSSU10-128GSR flash drive at `500` (125us). This gives about 33 to 34.6 MB/s read and write from 64 KB transfers upward where the previous default `4000` gave about 18 MB/s.
+
+Linux's xHCI driver defaults to `160` (40 us). This package ships `500` to be more conservative since this is a generic driver.
+
+Feel free to tune it. Lower towards `160` for the last few percent of storage speed, or raise it towards `4000` (or delete it) if you get audio stutter or instability under load. `500` may produce audio stuttering while a USB drive is being read at full speed, so if you want to prioritise audio over bandwidth, raise the value. 
+
+On Windows 98 with NUSB, an upgrade over an existing install crashes before the value is written, so the driver runs at `4000` until you set it by hand.
 
 ## What is tested, and what is not
 
@@ -105,7 +136,7 @@ Windows 98 SE is validated on real hardware. 32-bit Windows 7 has run on real ha
 | Windows 2000 SP4 | Virtual machines only, including an SMP guest and Driver Verifier. It has never run on real hardware. |
 | Windows ME | One virtual machine only, under SweetLow's USB 2.0 stack (the only stack it is supported with): the driver loads and starts, and a HID mouse, a USB mass-storage device and a composite audio device bind (2026-09-02). Never run on real hardware. |
 | 32-bit Windows XP | One virtual machine only (XP Professional SP3): the package installs on an xHCI-only machine with no prompt, the driver loads and starts under XP's own USB stack, and a HID mouse, a USB mass-storage device and a composite audio device bind; disable, enable, remove and rescan in Device Manager all survive. Never run on real hardware. |
-| Windows XP x64 / Server 2003 x64 | One virtual machine only (XP Professional x64 SP2), and **a separate 64-bit driver**, not the one above: the same clauses all pass, taken on the `qemu` build and then read again on the `release` flavour, from a package with its own INF. The `debug` build of it has never been run. Only XP x64 was booted; Server 2003 x64 is the same operating system and is covered by that identity, not by a run of its own. Never run on real hardware. |
+| Windows XP x64 | One virtual machine only (XP Professional x64 SP2), and **a separate 64-bit driver**, not the one above: the same clauses all pass, taken on the `qemu` build and then read again on the `release` flavour, from a package with its own INF. The `debug` build of it has never been run. Never run on real hardware. |
 | Windows Vista SP2 and Windows 7 SP1, 32-bit and x64 | One virtual machine each (four in all). The 32-bit ones run the same driver as 98 to XP, the x64 ones the 64-bit driver. The package installs, the driver loads and starts, a HID mouse, a USB mass-storage device and a composite audio device bind, and five disable/enable cycles, remove and rescan in Device Manager all survive. Taken on the `qemu` build; the published `release` package was then installed on all four (2026-09-18). On Vista x64 and 7 x64, driver signature enforcement has to be disabled as this driver is not signed. 32-bit Windows 7 has run on real hardware once (a ThinkPad E460, 2026-09-19): the install, a mouse, a flash drive and USB audio at a root port and behind USB 2.0 hubs, reboot and shutdown all passed, but **the first disable of the controller hung** (Known limitations/issues). Vista and 64-bit Windows 7 have never run on real hardware. |
 | Intel 7/8-series (`XUSB2PR` mux) | Never run. Everything said about the `XUSB2PR` port mux comes from Intel's datasheet and Linux, not silicon. The driver does not touch it. |
 | Resume from standby (Windows 2000) | Never executed anywhere. No available VM offers a resumable power transition, and there is no Windows 2000 machine. |
@@ -128,10 +159,6 @@ The devices checked so far, all on the E460 under Windows 98 SE. Each is charact
 | Sound Blaster Play! 3, C-Media USB Audio Device (UAC 1.0) | `041E:324D`, `0D8C:0014` | Full | Enumerate and are named by the wizard. Found the Full-Speed `bMaxPacketSize0` bug. |
 | Sound Blaster X4 (UAC 2.0, `bInterval` 3 and 4) | `041E:3278` | High | Enumerates but does not bind on Windows 98 (one HID devnode at Code 10, no composite parent), so its `bInterval > 1` endpoints were never exercised. |
 
-<img src="images/xhci98-flash-speed-test.jpg" width="800">
-
-ATTO Disk Benchmark on the P14s against the MSSU10-128GSR flash drive trasferring around 18 MB/s read and write from 32 KB transfers upward. The USB 3.0 drive runs at USB 2.0 speed on this driver.
-
 ## Known limitations/issues
 
 | Limitation | Detail |
@@ -142,7 +169,7 @@ ATTO Disk Benchmark on the P14s against the MSSU10-128GSR flash drive trasferrin
 | A Full-Speed USB audio device on a root port plays nothing on Windows XP and later | It installs and Windows shows it playing, but no sound reaches it. Behind a hub it plays (on Vista and 7 use a USB 2.0 hub). Windows 2000 plays on a root port. See [issue 6](docs/issues/06-full-speed-root-port-bugcheck.md), section 7. |
 | Disabling the USB controller can hang Windows 7 | On the one real Windows 7 machine tried, the first Disable in Device Manager never finished and the next restart hung until powered off; enabling it again afterwards worked. Uninstalling or upgrading stops the controller too. Cause not known yet. Do it with no unsaved work open, and expect to power off if the restart hangs. |
 | Fast, repeated plug and unplug can freeze Windows 98 | About twice a second sustained. Ordinary use is fine. |
-| Mass-storage throughput seems slow | About 18 MB/s read and write in the ATTO run above, below what USB 2.0 High Speed usually reaches. A likely but unmeasured cause is the controller's interrupt moderation, left at its 1 ms reset default. |
+| USB audio can stutter on Windows 98 while a USB drive is read at full speed | Measured on the P14s: at the install's `500` (and at `1000`) a Full-Speed audio device on a root port stuttered from ATTO's 2048 KB reads onwards; at `4000` only on the last 8192 KB write. It follows the doubled read speed. If audio matters more, raise the value towards `4000` or delete it (see "Tuning" above). |
 
 ## Toolchain and building
 
@@ -240,7 +267,7 @@ Using the driver:
 Working on the driver:
 
 - [Build and test](docs/contributing/build-and-test.md) - toolchain setup, builds, VMs, install, debugging, packaging, recovery
-- [Roadmap](docs/contributing/roadmap.md) - project status: what each phase was for, its status, and the two acts left to the owner (the upload, the hand-run acceptance)
+- [Roadmap](docs/contributing/roadmap.md) - project status: what each phase was for, its status, and the two acts left to the owner (the upload, the hand-run acceptance); Phases 0-16 are the initial release, and [Phase 17 onward](docs/contributing/roadmap-phases-17-on.md) is its second half
 - [Architecture](docs/contributing/architecture.md) and [implementation invariants](docs/contributing/implementation-invariants.md)
 - [Source files](docs/contributing/source-files.md) - what every file in `src/` is for
 - [Failure diagnosis](docs/contributing/failure-diagnosis.md) and [measured lessons](docs/contributing/lessons.md) - read these before theorising about a failure

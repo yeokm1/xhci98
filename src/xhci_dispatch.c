@@ -397,6 +397,19 @@ XHCI_C_ASSERT(packet_is_whole_words,
 #define XHCI_LOG_DBGVIEW_VALUE_BYTES   (17 * 2)
 
 /*
+ * Task 23.4's value, in the same key and read by the same service: the
+ * moderation interval, in IMODI's 250 ns units (XHCI_IMOD_INTERVAL_* in
+ * src/xhci.h has the contract). The owner named it on 2026-09-21, the unit in
+ * the name so nobody reading the key takes 4000 for microseconds; 23.3's
+ * experimental build read the same name, so a value left from that bench is
+ * read by this driver too - under this contract, not that one.
+ *
+ * 21 characters, so (21 + 1) * 2 - the length rule is the one above.
+ */
+#define XHCI_IMOD_VALUE_NAME  L"XhciImodInterval250ns"
+#define XHCI_IMOD_VALUE_BYTES (22 * 2)
+
+/*
  * How much of the ring one DebugView emit carries. Small and a loop, not one
  * buffer the size of the ring: MSVC emits a `__chkstk` probe for a local of a
  * page or more and the Win2000 DDK's driver libraries do not provide one -
@@ -599,6 +612,42 @@ static VOID xhciLogReadValues(PXHCI_EXTENSION ext,
     }
 }
 
+/*
+ * Read task 23.4's moderation interval. A separate routine rather than a third
+ * read inside `xhciLogReadValues`, because that one is about the log and this
+ * is not.
+ *
+ * It borrows every property of the function above: the same PASSIVE-only
+ * service, the same key, the same re-read per start, and above all **nothing
+ * here may fail a start**. It only records what the registry said; the choice
+ * of interval is XhciImodIntervalChoose's, at the write, so a missing value, a
+ * failed read and a NULL service all reach the same default by one route.
+ *
+ * IRQL: PASSIVE_LEVEL.
+ */
+static VOID xhciImodRead(PXHCI_EXTENSION ext)
+{
+    ULONG value;
+    MPSTATUS status;
+
+    ext->ImodRequested = 0;
+
+    if (XhciRegPacket.UsbPortGetMiniportRegistryKeyValue == NULL) {
+        ext->ImodStatus = MP_STATUS_FAILURE;
+        return;
+    }
+
+    value = 0;
+    status = XhciRegPacket.UsbPortGetMiniportRegistryKeyValue(
+        ext, TRUE, XHCI_IMOD_VALUE_NAME,
+        (ULONG_PTR)XHCI_IMOD_VALUE_BYTES, &value,
+        (ULONG_PTR)sizeof(value));
+    ext->ImodStatus = (ULONG)status;
+    if (status == MP_STATUS_SUCCESS) {
+        ext->ImodRequested = value;
+    }
+}
+
 
 /*
  * The counter block, appended at flush time.
@@ -635,6 +684,10 @@ static VOID xhciLogCountersLocked(PXHCI_EXTENSION ext)
     XhciLogAppend(&ext->Log, "isr.entries", ext->InterruptCount, 1);
     XhciLogAppend(&ext->Log, "isr.claimed", ext->InterruptsClaimed, 1);
     XhciLogAppend(&ext->Log, "dpc.count", ext->DpcCount, 1);
+    /* Task 23.4, next to the two counters the interval moves, so one flush
+     * carries the interval and its effect together. */
+    XhciLogAppend(&ext->Log, "imod.interval", ext->ImodInterval, 1);
+    XhciLogAppend(&ext->Log, "imod.readback", ext->ImodReadback, 1);
     XhciLogAppend(&ext->Log, "events.total", ext->EventsTotal, 1);
     XhciLogAppend(&ext->Log, "psc.events",
                   ext->EventCounts[XHCI_EVENT_TYPE_INDEX(
@@ -1058,6 +1111,16 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
      */
     xhciLogStart(ext);
     /*
+     * Task 23.4's interval, read here because `XhciInitController` below is
+     * what writes it and this is the last PASSIVE point before that call. The
+     * notes go in now rather than beside the write, so a start that then
+     * refuses still says what it was asked for - the refusal path below
+     * flushes the ring.
+     */
+    xhciImodRead(ext);
+    XhciLogNote(ext, "imod.status", ext->ImodStatus);
+    XhciLogNote(ext, "imod.requested", ext->ImodRequested);
+    /*
      * **`XhciLogNoteAddress`, because that value is a kernel pointer.** It is
      * usbport's own `USBPORT_RESOURCES` block, and the ladder's boundary
      * between levels 3 and 4 is exactly this: what a maintainer may reasonably
@@ -1116,6 +1179,10 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
     }
 
     (VOID)XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_STARTED);
+    /* The other half of the pair above: what the start chose and what the
+     * register took. */
+    XhciLogNote(ext, "imod.interval", ext->ImodInterval);
+    XhciLogNote(ext, "imod.readback", ext->ImodReadback);
     /*
      * The mapped register base - an address, for the reason above. The cast is
      * written out for the same reason the one at the "start" site above is:
@@ -2909,6 +2976,10 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
     XHCI_DBG_VALUE_CHANGED("log verbosity applied", ext->Log.Verbosity);
     XHCI_DBG_VALUE_CHANGED("log verbosity read", ext->Log.VerbosityRead);
     XHCI_DBG_VALUE_CHANGED("log verbosity refused", ext->Log.VerbosityRefused);
+    XHCI_DBG_VALUE_CHANGED("imod value status", ext->ImodStatus);
+    XHCI_DBG_VALUE_CHANGED("imod value requested", ext->ImodRequested);
+    XHCI_DBG_VALUE_CHANGED("imod interval in force", ext->ImodInterval);
+    XHCI_DBG_VALUE_CHANGED("imod readback", ext->ImodReadback);
     XHCI_DBG_VALUE_CHANGED("log enabled", ext->Log.Enabled);
     XHCI_DBG_VALUE_CHANGED("log records appended", ext->Log.Appends);
     XHCI_DBG_VALUE_CHANGED("log records suppressed", ext->Log.Suppressed);
@@ -4560,6 +4631,10 @@ static MPSTATUS NTAPI xhciPassThru(PVOID miniPortExtension,
     header->RingBytes = XHCI_LOG_RING_BYTES;
     header->RingHead = 0;
     header->RingUsed = 0;
+    header->ImodStatus = 0;
+    header->ImodRequested = 0;
+    header->ImodInterval = 0;
+    header->ImodReadback = 0;
 
     if (requestSignature != XHCI_SNAPSHOT_REQUEST_SIGNATURE) {
         header->Status |= XHCI_SNAPSHOT_S_BAD_REQUEST;
@@ -4586,6 +4661,10 @@ static MPSTATUS NTAPI xhciPassThru(PVOID miniPortExtension,
     header->SwitchRead = ext->Log.SwitchRead;
     header->RingHead = ext->Log.Head;
     header->RingUsed = ext->Log.Used;
+    header->ImodStatus = ext->ImodStatus;
+    header->ImodRequested = ext->ImodRequested;
+    header->ImodInterval = ext->ImodInterval;
+    header->ImodReadback = ext->ImodReadback;
 
     /*
      * **The tear detector, and it is a SUM of four counters rather than one.**

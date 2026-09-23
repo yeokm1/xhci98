@@ -9,7 +9,7 @@ if exist XEMPTY.LOG goto logerr
 if exist XEMPTY.FLG del XEMPTY.FLG
 XHCIQUAL xhci --no-wait --no-page --log XEMPTY.LOG --done-flag XEMPTY.FLG
 rem MS-DOS 7.1 (Win98) COMMAND.COM has no %ERRORLEVEL% variable; bucket the
-rem exit code with IF ERRORLEVEL (true when the code is >= n) before any
+rem exit code with IF ERRORLEVEL (true when the code is n or more) before any
 rem other command runs. The completion flag is checked with IF EXIST, so no
 rem FIND.EXE is needed on the boot medium.
 set XQRC=0

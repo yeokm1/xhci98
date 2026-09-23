@@ -147,6 +147,10 @@ HealthPolls	health polls
 HealthPollsDead	health polls - controller dead
 HostControllerEventResets	host controller event resets
 HubRootPortsFromGraph	hub root ports resolved from the graph
+ImodInterval	imod interval in force
+ImodReadback	imod readback
+ImodRequested	imod value requested
+ImodStatus	imod value status
 IncompatibleDeviceTeardowns	incompatible devices, slot disabled
 InitStatus	init status
 InitStep	init step

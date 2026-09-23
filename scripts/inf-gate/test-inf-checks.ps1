@@ -1,4 +1,4 @@
-﻿<#
+<#
 .SYNOPSIS
 Regression tests for the INF gate (roadmap Phase 3 task 6).
 
@@ -451,15 +451,19 @@ try {
     # deleted it from both would pass just as loudly while proving nothing
     # about the half that matters.
     Assert-RuleFires "logverbosity-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,NTMPDriver,,xhci98.sys`r`nHKR,,XhciLogVerbosity,0x00010001,0",
-                             "HKR,,NTMPDriver,,xhci98.sys")
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010001,0",
+                             "HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"")
     }
-    # Anchored on NTMPDriver, which only the 9x section has, rather than on the
-    # comment that used to follow it: that comment introduced
-    # [Xhci.AddReg.Global] and went with the section in 1.1.0.0.
+    # **Re-anchored on the EnumPropPages line at roadmap task 23.1**, which is
+    # what now sits between NTMPDriver and the two log values. These two were
+    # anchored on NTMPDriver, and that anchor broke the moment a line landed
+    # after it - both cases reported PASS-shaped nothing until
+    # Assert-RuleFires' unchanged-mutation guard called it, which is the guard
+    # earning its keep for the second time. EnumPropPages is 9x-only, like
+    # NTMPDriver, so the cases still cannot drift onto an NT path.
     Assert-RuleFires "logdbgview-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,NTMPDriver,,xhci98.sys`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,,XhciLogDebugView,0x00010001,0",
-                             "HKR,,NTMPDriver,,xhci98.sys`r`nHKR,,XhciLogVerbosity,0x00010001,0")
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010001,0`r`nHKR,,XhciLogDebugView,0x00010001,0",
+                             "HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010001,0")
     }
 
     # And the NT path, the same two.
@@ -509,6 +513,135 @@ try {
     Assert-RuleFires "logverbosity-default" "VAL-DEFAULT" {
         param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0",
                              "[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,1")
+    }
+
+    # Roadmap task 23.4's moderation interval: one path at a time, for the
+    # asymmetry reason above, anchored on the log value that precedes it on
+    # each path - DebugView then EnumPropPages on 9x, then EnumPropPages32 on
+    # NT - so neither case can drift onto the other path.
+    Write-Step "the moderation interval, on both paths"
+    Assert-RuleFires "imod-no-9x" "VAL-MISSING" {
+        param($t) $t.Replace("HKR,,XhciLogDebugView,0x00010001,0`r`nHKR,,XhciImodInterval250ns,0x00010001,500`r`n`r`n",
+                             "HKR,,XhciLogDebugView,0x00010001,0`r`n`r`n")
+    }
+    Assert-RuleFires "imod-no-nt" "VAL-MISSING" {
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,EnumPropPages32",
+                             "HKR,,EnumPropPages32")
+    }
+    # **The default is the driver's fallback, not the shipped value**, and
+    # this is the edit that looks harmless: 4000 is what every release before
+    # 1.1.1.0 ran at, and it is a VAL-DEFAULT because the owner's number is 500.
+    Assert-RuleFires "imod-default-is-fallback" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,EnumPropPages32",
+                             "HKR,,XhciImodInterval250ns,0x00010001,4000`r`nHKR,,EnumPropPages32")
+    }
+    # Hex spells the same number and is still refused: the gate compares text,
+    # and one spelling on every path is what the install legs have read.
+    Assert-RuleFires "imod-default-hex-9x" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`n`r`n",
+                             "HKR,,XhciImodInterval250ns,0x00010001,0x000001f4`r`n`r`n")
+    }
+    Assert-RuleFires "imod-type" "VAL-TYPE" {
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,EnumPropPages32",
+                             "HKR,,XhciImodInterval250ns,,500`r`nHKR,,EnumPropPages32")
+    }
+
+    # ---- PROP-* : the controller's own property page ---------------
+    #
+    # Roadmap task 23.1. Every one of these is a literal .Replace() over the
+    # INF's own text, so Assert-RuleFires' "the mutation has to actually
+    # mutate" guard is what keeps a renamed value from turning a case into a
+    # silent PASS - the VAL-MISSING defect this suite found in itself.
+    Write-Step "the controller's property page"
+
+    # The line gone altogether, which is what the file looked like from
+    # 1.0.0.0 to 1.1.0.0. Anchored on NTMPDriver, which only the 9x section
+    # has, so the case cannot drift onto an NT path.
+    Assert-RuleFires "proppage-missing-9x" "PROP-MISSING" {
+        param($t) $t.Replace("HKR,,NTMPDriver,,xhci98.sys`r`nHKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`n",
+                             "HKR,,NTMPDriver,,xhci98.sys`r`n")
+    }
+
+    # **The provider, which is the mistake actually waiting to be made**: the
+    # NT provider is usbui.dll, this INF copies usbui.dll on all four paths,
+    # and on 9x usbui.dll draws no tab, only the dialogs behind the tab's
+    # buttons (roadmap task 23.1 leg A4, 2026-09-20). A file that named it
+    # here would install cleanly and show no tab.
+    Assert-RuleFires "proppage-usbui-provider" "PROP-PROVIDER" {
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"",
+                             "HKR,,EnumPropPages,,`"usbui.dll,USBControllerPropPageProvider`"")
+    }
+    # The same rule for the other half of the string: right file, wrong entry
+    # point. sysclass.dll exports USBControllerPropPage and USBHubPropPage as
+    # separate names.
+    Assert-RuleFires "proppage-hub-entrypoint" "PROP-PROVIDER" {
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"",
+                             "HKR,,EnumPropPages,,`"sysclass.dll,USBHubPropPage`"")
+    }
+
+    # A numeric flags field. FLG_ADDREG_TYPE_SZ is 0 and is spelled empty;
+    # 0x00010001 here would write the shell a DWORD to read as a string.
+    Assert-RuleFires "proppage-flags" "PROP-FLAGS" {
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"",
+                             "HKR,,EnumPropPages,0x00010001,`"sysclass.dll,USBControllerPropPage`"")
+    }
+
+    Assert-RuleFires "proppage-subkey" "PROP-SUBKEY" {
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"",
+                             "HKR,Parameters,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"")
+    }
+
+    # PROP-DUP gets a case for the reason VAL-DUP does: the checker reads
+    # $hits[0] and the engine picks whichever it likes, so the second line
+    # carries a DIFFERENT provider - the shape that actually costs something.
+    Assert-RuleFires "proppage-duplicated" "PROP-DUP" {
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"",
+                             "HKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,EnumPropPages,,`"usbui.dll,USBControllerPropPageProvider`"")
+    }
+
+    # **The NT half, which roadmap task 23.2 took on 2026-09-20.** What used
+    # to be PROP-NTHALF - a rule refusing the NT value until guests had been
+    # read - is now the ordinary requirement, so the cases below are the NT
+    # mirror of the 9x ones above. The readings behind it: all seven NT
+    # guests, Windows 2000 SP4 to Windows 7 x64, draw the tab from the
+    # INF-written pair. A value written by hand on an existing NT 6.x devnode
+    # is inert, because the provider list is read when the devnode is built.
+    Assert-RuleFires "proppage-missing-nt" "PROP-MISSING" {
+        param($t) $t.Replace("HKR,,EnumPropPages32,,`"usbui.dll,USBControllerPropPageProvider`"`r`n", "")
+    }
+
+    # The mirror of proppage-usbui-provider, and the mistake waiting to be made
+    # in this direction: sysclass.dll is 16-bit and is not on an NT machine at
+    # all, and on NT usbui.dll draws the WHOLE page, so this one loses the tab
+    # entirely rather than degrading to a "Data Access Error" as on 9x.
+    Assert-RuleFires "proppage-sysclass-provider-on-nt" "PROP-PROVIDER" {
+        param($t) $t.Replace("HKR,,EnumPropPages32,,`"usbui.dll,USBControllerPropPageProvider`"",
+                             "HKR,,EnumPropPages32,,`"sysclass.dll,USBControllerPropPage`"")
+    }
+    # Right file, wrong entry point - the hub's provider, which usbui.dll also
+    # exports and which Windows' own INFs register against the root hub.
+    Assert-RuleFires "proppage-nt-hub-entrypoint" "PROP-PROVIDER" {
+        param($t) $t.Replace("HKR,,EnumPropPages32,,`"usbui.dll,USBControllerPropPageProvider`"",
+                             "HKR,,EnumPropPages32,,`"usbui.dll,USBHubPropPageProvider`"")
+    }
+
+    # The Controller companion, which all three NT references write beside it.
+    Assert-RuleFires "proppage-controller-missing" "PROP-CTRLMISSING" {
+        param($t) $t.Replace("`r`nHKR,,Controller,1,01", "")
+    }
+    # REG_BINARY is flags field 1. An empty field is REG_SZ, so this would
+    # write the shell the two characters "01" to read as a binary byte.
+    Assert-RuleFires "proppage-controller-flags" "PROP-CTRLFLAGS" {
+        param($t) $t.Replace("HKR,,Controller,1,01", "HKR,,Controller,,01")
+    }
+    Assert-RuleFires "proppage-controller-data" "PROP-CTRLDATA" {
+        param($t) $t.Replace("HKR,,Controller,1,01", "HKR,,Controller,1,00")
+    }
+    # And the 9x value on an NT path, which is the same line in the wrong
+    # place: no NT engine reads it, so it is a value nothing anywhere reads.
+    Assert-RuleFires "proppage-9x-value-on-nt" "PROP-STRAY" {
+        param($t) $t.Replace("[Xhci.AddReg.NT]`r`nHKR,,XhciLogVerbosity,0x00010001,0",
+                             "[Xhci.AddReg.NT]`r`nHKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010001,0")
     }
 
     Write-Step "the two install paths"
@@ -1469,6 +1602,12 @@ try {
     Assert-RuleFires "amd64-logverbosity-default" "VAL-DEFAULT" {
         param($t) $t.Replace("HKR,,XhciLogVerbosity,0x00010001,0", "HKR,,XhciLogVerbosity,0x00010001,1")
     } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-imod-missing" "VAL-MISSING" {
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`n", "")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-imod-default" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500", "HKR,,XhciImodInterval250ns,0x00010001,4000")
+    } -Source $prodInfAmd64 -Arch amd64
     #
     # **The version tie reaches the 64-bit file too**, and proving that needs
     # the header staged beside the mutated copy: the cross-check skips silently
@@ -1493,7 +1632,7 @@ try {
             ("amd64-vergood : the version cross-check SKIPPED, so the drift case below would pass vacuously. Output was:`n" + $r.Output)
 
         Assert-RuleFires "amd64-driverver-drift" "BOTH-VERSION" {
-            param($t) $t -replace '(?m)^(DriverVer=\d{2}/\d{2}/\d{4}),1\.1\.0\.0', '$1,1.1.0.1'
+            param($t) $t -replace '(?m)^(DriverVer=\d{2}/\d{2}/\d{4}),[\d.]+', '$1,9.9.9.9'
         } -Source $prodInfAmd64 -Arch amd64
 
         Remove-Item -LiteralPath $stagedHdr64 -Force

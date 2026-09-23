@@ -1186,7 +1186,53 @@ static ULONG xhciProgramEventRing(PXHCI_EXTENSION ext)
         return XHCI_INIT_NO_RMW_OPERAND;
     }
 
+    /*
+     * Task 23.4's moderation interval (XHCI_IMOD_INTERVAL_* in src/xhci.h),
+     * chosen from what the start's registry read recorded. Every start writes
+     * it, the default included, so the interval in force never rests on the
+     * reset value - which QEMU gets wrong (it resets IMOD to 0, where hardware
+     * resets it to 4000; roadmap task 23.3).
+     *
+     * Here because here is "after the interrupter is programmed": ERSTSZ, ERDP
+     * and ERSTBA are written above and R/S is not set until xhciRunController,
+     * so the interval is in force from the first event. IMOD is not in 4.2
+     * p.69's list of what must precede R/S; this is the ordering that makes the
+     * interval one thing for the whole run. A recovery's reinitialisation comes
+     * through here too, after HCRST reset the register.
+     *
+     * A plain write, with no read-modify-write: IMOD is IMODI 15:0 and IMODC
+     * 31:16, both RW, with no reserved field (Table 5-39, p.392). The chooser
+     * never returns more than 4000, so IMODC is written 0.
+     *
+     * **It cannot fail the start.** The read-back is for the record, not a
+     * gate. On QEMU it is guaranteed to agree and means nothing -
+     * hw/usb/hcd-xhci.c stores `intr->imod` and no code path consults it.
+     */
+    ext->ImodInterval = XhciImodIntervalChoose(ext->ImodStatus,
+                                               ext->ImodRequested);
+    XhciWriteIr0(ext, XHCI_IR_IMOD, ext->ImodInterval);
+    ext->ImodReadback = XhciReadIr0(ext, XHCI_IR_IMOD);
+
     return XHCI_RING_OK;
+}
+
+/*
+ * See src/xhci.h. `status` is the MPSTATUS the registry service returned; any
+ * value but MP_STATUS_SUCCESS means nothing was read, and `requested` is then
+ * ignored whatever it holds.
+ *
+ * IRQL: any.
+ */
+ULONG XhciImodIntervalChoose(ULONG status, ULONG requested)
+{
+    if (status != (ULONG)MP_STATUS_SUCCESS) {
+        return XHCI_IMOD_INTERVAL_DEFAULT;
+    }
+    if (requested < XHCI_IMOD_INTERVAL_MIN ||
+        requested > XHCI_IMOD_INTERVAL_MAX) {
+        return XHCI_IMOD_INTERVAL_DEFAULT;
+    }
+    return requested;
 }
 
 /* ------------------------------------------------------------------ */
@@ -3316,15 +3362,14 @@ static ULONG xhciRestoreState(PXHCI_EXTENSION ext)
         return 0;
     }
     /*
-     * IMOD is written back as the save read it, not as 0. This is the only
-     * IMOD write in the driver: the start leaves the reset default (4000, 1 ms
-     * of moderation), which the isochronous builder's IOC-per-TD policy relies
-     * on to absorb up to 8,000 events a second, and the 0 this site used to
-     * write removed that moderation after every successful restore while a
-     * comment beside it claimed 0 was "the value this driver programs
-     * everywhere" (the 2026-09-05 audit's F10). The spec's restore list wants
-     * the register written before CRS (4.23.2 p.314), so it is written - with
-     * its pre-suspend value.
+     * IMOD is written back as the save read it, not as 0. Since task 23.4
+     * that is the interval the start wrote (xhciProgramEventRing), which the
+     * isochronous builder's IOC-per-TD policy relies on to absorb up to 8,000
+     * events a second; the 0 this site used to write removed that moderation
+     * after every successful restore while a comment beside it claimed 0 was
+     * "the value this driver programs everywhere" (the 2026-09-05 audit's
+     * F10). The spec's restore list wants the register written before CRS
+     * (4.23.2 p.314), so it is written - with its pre-suspend value.
      */
     XhciWriteIr0(ext, XHCI_IR_IMOD, ext->SavedImod);
 

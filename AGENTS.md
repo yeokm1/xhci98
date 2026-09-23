@@ -221,15 +221,18 @@ Everything above is tracked except `tools/`, `external/`, the PDFs in
 `docs/references/`, `vm/`, `out/` and `scripts/local/`: third-party material,
 generated output, or host-specific tooling. Nothing under `tools/` goes into
 the release download since 1.0.0.1; "Third-Party Material and Provenance"
-below has the record. Nothing has been uploaded publicly yet: the repository
-is private and no GitHub release exists (which build the third-party testers
-in `README.md` ran is not recorded). A clone therefore has every procedure
+below has the record. Every version under `releases/` has been uploaded to a
+GitHub release, and the repository is public (which build the third-party
+testers in `README.md` ran is not recorded). A clone therefore has every procedure
 but not every input; see
 `docs/contributing/build-and-test.md` for what has to be fetched or rebuilt.
 
 ### Where to start
 
 Read `docs/contributing/roadmap.md` for the current phase and its checkpoint.
+The roadmap is two files: that one has the status, the conventions and Phases
+0-16 (the initial release), and `docs/contributing/roadmap-phases-17-on.md`
+has the entry of every later phase, the open one included.
 **Do not advance past a phase whose checkpoint has not been observed to pass.**
 Then use the "What to read for each phase" table in `docs/README.md` for the
 documents that phase needs.
@@ -414,8 +417,9 @@ binary on a 32-bit machine, and the gate refuses it by name (`PATH-NO9X`,
 
 The media carries no Microsoft file. `usbd.sys` and `usbhub.sys` (both
 targets), `usbport.sys` (the NT targets; on Windows 98 the USB 2.0 stack
-places it) and, since 1.0.2.0, `usbui.dll` (every target, the root hub's
-property-page provider) are the OS's own, and nothing on an xHCI-only machine
+places it) and, since 1.0.2.0, `usbui.dll` (every target: the root hub's
+property-page provider, since task 23.2 the controller's on NT too, and on 9x
+the drawer of the controller tab's dialogs) are the OS's own, and nothing on an xHCI-only machine
 ever placed them, so the INF has the setup engine copy them from the OS's own
 install source through `LayoutFile=layout.inf`, never overwriting a file
 already there; on an xHCI-only Windows 98 machine that means the Windows 98 CD

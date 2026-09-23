@@ -431,6 +431,17 @@ in step 5 is the rung section 2.1 allows.
    `prepare-image.ps1 -Attach` per class, so no wizard appears in the run.
    Windows 2000 needs none of this for HID and storage; what XP x64 and
    Windows 7 need is for the first run of them to show.
+   **The NT guests may log in by themselves** (the owner, 2026-09-24, after
+   roadmap task 23.10): under `HKLM\SOFTWARE\Microsoft\Windows
+   NT\CurrentVersion\Winlogon`, `AutoAdminLogon` = `1` and `DefaultUserName`
+   / `DefaultPassword` as REG_SZ, set before the shutdown in step 6. XP x64
+   opens the `usb-audio` streaming endpoint only with a user session, so its
+   audio row reads NODRIVER at the login screen. The cost is a desktop:
+   there a device with no driver raises a modal Found New Hardware wizard that
+   queues every later install in its group, which in 23.10 turned XP x64's
+   `usb-ccid` and `u2f-emulated` rows into readings of the wizard. Read a
+   NODRIVER on an autologin guest against its screenshot, and say in the
+   record which way each NT guest was prepared.
 6. Shut the guest down cleanly and take the stamp:
    `prepare-image.ps1 -Stamp`, which snapshots the image as
    `base-<DriverVer>-qemu` and is refused if the guest is still running.

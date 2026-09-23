@@ -69,8 +69,10 @@ What it checks, grouped by the failure each rule prevents:
            be written by BOTH install paths, as the right type, with the right
            default - a value present on one path only is invisible on the other
            target and neither engine reports it (roadmap tasks 11-V.7, 11-V.9
-           and 13-L.2). There are two of them and both are DWORDs - three until
-           at the snapshot-value merge, when XhciLogSnapshot joined the ladder.
+           and 13-L.2). There are three and all are DWORDs: the two log
+           switches, which ship at 0 (three until the snapshot-value merge,
+           when XhciLogSnapshot joined the ladder), and since roadmap task 23.4
+           XhciImodInterval250ns, the moderation interval, which ships at 500.
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -79,6 +81,22 @@ What it checks, grouped by the failure each rule prevents:
            once found in VAL-MISSING. The caution it encoded is not lost: it is
            written into src\xhci98.inf beside the values, and a future REG_SZ
            value here must bring the rule back with it.)
+  PROP-*   The controller's own Device Manager property page (GitHub issue 4
+           item 5): the 9x half since roadmap task 23.1, the NT half since
+           task 23.2, both 2026-09-20. Every install path must write its own
+           engine's value, once, on the devnode key, with no flags field - it
+           is a REG_SZ - through a table keyed by path kind: EnumPropPages
+           naming sysclass.dll's USBControllerPropPage on the Windows 98
+           path, EnumPropPages32 naming usbui.dll's
+           USBControllerPropPageProvider on every NT one (PROP-MISSING,
+           PROP-DUP, PROP-SUBKEY, PROP-FLAGS, PROP-PROVIDER). The other
+           engine's spelling on a path is refused (PROP-STRAY), and each NT
+           path must also write Controller as REG_BINARY 01, flags 1, as all
+           three NT references do (PROP-CTRLMISSING, PROP-CTRLDUP,
+           PROP-CTRLSUBKEY, PROP-CTRLFLAGS, PROP-CTRLDATA). PROP-NTHALF, which
+           refused any NT value while the NT half was deferred, lived for ten
+           hours on 2026-09-20 and was inverted into PROP-MISSING when 23.2's
+           guests showed the tab, the way SUSP-* was inverted on 2026-09-17.
   PKG-*    A staged package (-PackageDir): every [SourceDisksFiles] entry is
            present, and no Microsoft file is in it under any name.
 
@@ -967,6 +985,14 @@ foreach ($m in $models) {
 # inside depth, so `XhciLogVerbosity = 0` is now the shut door. The rule this
 # family enforces is untouched by that - both survivors are still written on
 # both install paths and still checked for their default here.
+#
+# **Roadmap task 23.4 added a third, and the first whose default is not 0.**
+# `XhciImodInterval250ns` is not a switch: it is the interval the driver writes
+# to IMOD, and the INF ships 500 where the driver's own fallback is 4000. The
+# risk is the same shape, a path that lacks it silently running another
+# interval, and so is the default check - the number is an owner's decision on
+# bare-metal readings, and `DefaultWhy` says so where "must ship off" would be
+# false.
 
 $requiredValues = @(
     @{
@@ -980,6 +1006,13 @@ $requiredValues = @(
         Type    = "0x00010001"
         Default = "0"
         Why     = "task 11-V.9's DebugView sink, read from the same key, and an EMISSION switch only since task 13-L.2. It hands the ring over from the PASSIVE flush - never live mirroring, which is what bugchecks Windows 98 on metal"
+    },
+    @{
+        Name    = "XhciImodInterval250ns"
+        Type    = "0x00010001"
+        Default = "500"
+        Why     = "task 23.4's interrupt moderation interval, in 250 ns units, written to IR0's IMOD at every start. Absent, the driver runs at its own default of 4000 (1 ms), so a path missing it runs a different interval from the other paths and nothing says so"
+        DefaultWhy = "The owner set the shipped interval to 500 on 2026-09-22 from roadmap tasks 23.3 and 23.5's bare-metal readings; any other number is a new decision and needs a new reading, not an INF edit"
     }
 )
 
@@ -1039,7 +1072,8 @@ foreach ($m in $models) {
                 Add-Failure "VAL-TYPE" ("[{0}] line {1} writes '{2}' with flags '{3}', not {4} (FLG_ADDREG_TYPE_DWORD). The miniport asks usbport for four bytes; a string would be handed over as its characters." -f $hit.Section, $hit.Line, $req.Name, $hit.Flags, $req.Type)
             }
             if ($hit.Data -ne $req.Default) {
-                Add-Failure "VAL-DEFAULT" ("[{0}] line {1} defaults '{2}' to '{3}', not '{4}'. {5} must ship off." -f $hit.Section, $hit.Line, $req.Name, $hit.Data, $req.Default, $req.Name)
+                $defaultWhy = if ($req.ContainsKey("DefaultWhy")) { $req.DefaultWhy } else { "{0} must ship off" -f $req.Name }
+                Add-Failure "VAL-DEFAULT" ("[{0}] line {1} defaults '{2}' to '{3}', not '{4}'. {5}." -f $hit.Section, $hit.Line, $req.Name, $hit.Data, $req.Default, $defaultWhy)
             }
             #
             # **VAL-SZ stood here and was removed with
@@ -1055,8 +1089,124 @@ foreach ($m in $models) {
             # engine and Windows 2000's setupapi may quote, trim or tokenise
             # differently - and this project has measured neither. It refused a
             # quote, a %token%, surrounding whitespace, and an empty flags
-            # field. src\xhci98.inf carries the same reasoning beside the
-            # values themselves.
+            # field.
+        }
+    }
+}
+
+# ---- PROP-* : the controller's own property page -------------------
+#
+# Roadmap task 23.1, GitHub issue 4 item 5. Unlike VAL-*, this value is read
+# by nobody in this project: it is a REG_SZ the 9x shell reads to find the
+# 16-bit class installer that draws the controller's Advanced tab, and it is
+# the third value NUSB's own [EHCI.AddReg] writes. It gets a rule anyway for
+# the reason every cosmetic line here gets one - the provider string is not
+# checked by anything at install time, and a typo in it is invisible: the tab
+# simply does not appear, on a target where nothing reports why.
+#
+# The checks are the shape of the value, not the fact of it. sysclass.dll is
+# the provider and usbui.dll is NOT (the tab renders with usbui.dll renamed
+# away; the Bandwidth Usage dialog behind its button does not, it raises "Data
+# Access Error" - roadmap task 23.1 leg A4, 2026-09-20), which is the single
+# most likely thing to be got wrong here, since usbui.dll is the NT provider
+# AND is copied by this INF.
+#
+# **No flags field.** FLG_ADDREG_TYPE_SZ is 0 and is spelled as an empty
+# field, which is how both reference INFs write it; a numeric flags field here
+# would be some other type for a value the shell reads as a string.
+# Both halves are written now. The 9x half landed in roadmap task 23.1 and the
+# NT half in 23.2, after the guest readings the deferral was waiting for:
+# all seven NT guests - Windows 2000 SP4, Windows XP SP3, Windows XP x64 SP2,
+# Vista SP2 x86 and x64, Windows 7 x86 and x64 - draw the Advanced tab from
+# the INF-written pair, across all four install sections that carry
+# Xhci.AddReg.NT. A value written by hand on an existing NT 6.x devnode is
+# inert, because the provider list is read when the devnode is built; that is
+# why a by-hand Vista reading was first recorded as a negative, and why the
+# line is not to be re-verified that way there. PROP-NTHALF, which refused the
+# NT value outright, is gone - inverted into PROP-MISSING covering both halves,
+# which is what "taking it" was defined to look like.
+$propPages = @{
+    "9x" = @{
+        Name     = "EnumPropPages"
+        Provider = '"sysclass.dll,USBControllerPropPage"'
+        Stray    = "EnumPropPages32"
+        Why      = "the 9x shell reads it to find the 16-bit class installer that draws the controller's Advanced tab (the 'Disable USB error detection' box and the Bandwidth Usage dialog). sysclass.dll is on every Windows 98 and Windows ME machine and this INF does not copy it. It is the third value NUSB's own [EHCI.AddReg] writes, and GitHub issue 4 item 5 asked for it"
+        Wrong    = "On Windows 98 and Windows ME the provider is sysclass.dll, NOT the usbui.dll this INF copies: the tab rendered identically with usbui.dll renamed away, and only the Bandwidth Usage dialog behind its button did not (Data Access Error) - roadmap task 23.1 leg A4, 2026-09-20."
+        StrayWhy = "That value is the NT engine's; the 16-bit engine reads EnumPropPages."
+    }
+    "nt" = @{
+        Name     = "EnumPropPages32"
+        Provider = '"usbui.dll,USBControllerPropPageProvider"'
+        Stray    = "EnumPropPages"
+        Why      = "an NT shell reads it to find the provider that draws the controller's Advanced tab. All three NT references write it for their own EHCI controller (Windows 2000 SP4 USB.INF, Windows XP SP3 usbport.inf, Windows Vista SP2 usbport.inf), and Windows 2000 and Windows XP were both measured drawing the tab from it on 2026-09-20"
+        Wrong    = "On NT the provider is usbui.dll: sysclass.dll is 16-bit and 9x-only and is not even present. And usbui.dll draws the WHOLE page on NT rather than only the dialogs behind its buttons as on 9x, so a wrong provider loses the entire tab with no error box to say so."
+        StrayWhy = "That value is the 16-bit engine's; an NT engine reads EnumPropPages32."
+    }
+}
+
+# The NT half's companion. REG_BINARY 01, flags field 1, written by all three
+# NT references beside EnumPropPages32. Windows 2000 showed the tab with this
+# value DELETED and EnumPropPages32 left alone (23.2 leg W8), so it is not
+# what makes the page appear - it is here because the references write it and
+# this INF follows them, and because a value that is present must at least be
+# the right shape.
+$propController = @{
+    Name  = "Controller"
+    Flags = "1"
+    Data  = "01"
+}
+
+foreach ($m in $models) {
+    foreach ($p in @(Get-ModelPaths $m)) {
+        $install = $m.Section + $p.Suffix
+        if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
+        $addRegs = @(Get-Directive $inf $install "AddReg")
+        $propPage = $propPages[$p.Kind]
+
+        # The other engine's spelling on this path is a value nothing reads.
+        $stray = @(Get-AddRegValues $inf $addRegs $propPage.Stray)
+        if ($stray.Count -gt 0) {
+            Add-Failure "PROP-STRAY" ("[{0}] line {1} writes '{2}' on the {3} install path. {4}" -f $stray[0].Section, $stray[0].Line, $propPage.Stray, $p.Os, $propPage.StrayWhy)
+        }
+
+        $hits = @(Get-AddRegValues $inf $addRegs $propPage.Name)
+        if ($hits.Count -eq 0) {
+            Add-Failure "PROP-MISSING" ("the {0} install path ([{1}]) writes no '{2}' value, so the controller has no Advanced tab: {3}." -f $p.Os, $install, $propPage.Name, $propPage.Why)
+        } else {
+            if ($hits.Count -gt 1) {
+                Add-Failure "PROP-DUP" ("the {0} install path writes '{1}' {2} times (lines {3}). Which one wins is engine-dependent." -f $p.Os, $propPage.Name, $hits.Count, (($hits | ForEach-Object { $_.Line }) -join ', '))
+            }
+            $hit = $hits[0]
+            if ($hit.Subkey -ne "") {
+                Add-Failure "PROP-SUBKEY" ("[{0}] line {1} writes '{2}' under subkey '{3}'. The shell reads it on the device's own key, not a subkey of it." -f $hit.Section, $hit.Line, $propPage.Name, $hit.Subkey)
+            }
+            if ($hit.Flags -ne "") {
+                Add-Failure "PROP-FLAGS" ("[{0}] line {1} writes '{2}' with flags '{3}'. It is a REG_SZ, which is FLG_ADDREG_TYPE_SZ = 0 and is spelled as an EMPTY flags field - the way every reference INF writes it." -f $hit.Section, $hit.Line, $propPage.Name, $hit.Flags)
+            }
+            if ($hit.Data -ne $propPage.Provider) {
+                Add-Failure "PROP-PROVIDER" ("[{0}] line {1} points '{2}' at {3}, not {4}. {5} A wrong provider draws no tab and reports nothing." -f $hit.Section, $hit.Line, $propPage.Name, $hit.Data, $propPage.Provider, $propPage.Wrong)
+            }
+        }
+
+        if ($p.Kind -ne "nt") { continue }
+
+        $ctrl = @(Get-AddRegValues $inf $addRegs $propController.Name)
+        if ($ctrl.Count -eq 0) {
+            Add-Failure "PROP-CTRLMISSING" ("the {0} install path ([{1}]) writes 'EnumPropPages32' but no '{2}' value. All three NT references write the pair together, and this INF follows them rather than deciding which half a future Windows reads." -f $p.Os, $install, $propController.Name)
+        } else {
+            if ($ctrl.Count -gt 1) {
+                Add-Failure "PROP-CTRLDUP" ("the {0} install path writes '{1}' {2} times (lines {3})." -f $p.Os, $propController.Name, $ctrl.Count, (($ctrl | ForEach-Object { $_.Line }) -join ', '))
+            }
+            $c = $ctrl[0]
+            if ($c.Subkey -ne "") {
+                Add-Failure "PROP-CTRLSUBKEY" ("[{0}] line {1} writes '{2}' under subkey '{3}'. It belongs on the device's own key." -f $c.Section, $c.Line, $propController.Name, $c.Subkey)
+            }
+            if ($c.Flags -ne $propController.Flags) {
+                Add-Failure "PROP-CTRLFLAGS" ("[{0}] line {1} writes '{2}' with flags '{3}', not '{4}'. It is a REG_BINARY, which is FLG_ADDREG_TYPE_BINARY and is spelled 1 - the way all three NT references write it." -f $c.Section, $c.Line, $propController.Name, $c.Flags, $propController.Flags)
+            }
+            if ($c.Data -ne $propController.Data) {
+                Add-Failure "PROP-CTRLDATA" ("[{0}] line {1} writes '{2}' as '{3}', not '{4}' - one byte, 01, as all three NT references write it." -f $c.Section, $c.Line, $propController.Name, $c.Data, $propController.Data)
+            }
         }
     }
 }
@@ -1152,7 +1302,7 @@ $osSupplied = @(
     @{ File = "usbui.dll";   On = @("Win98", "Win2000", "WinXP64"); Off = @();
        Dest = @{ Dirid = "11"; Subdir = ""; Spelling = "11";
                  Why = "dirid 11 is the system directory, where all four operating systems' own USB INFs put it; System32\Drivers is for drivers and this is a user-mode property-page DLL" };
-       Why = "the NT targets' own INF has already registered it against the root hub usbport creates (Windows 2000's USB.INF [ROOTHUB2.NT] and Windows XP's usbport.inf [ROOTHUB.Dev.NT] both write EnumPropPages32 = 'usbui.dll,USBHubPropPageProvider'), and on an xHCI-only machine the file was never placed, so the page is dropped silently: measured 2026-09-07 in both NT guests, the USB Root Hub gains a working Power tab as soon as the file is present, with no registry change. On the 9x paths it places what Windows 98 SE's and Windows ME's own USB.INF place (USBUI.CopyFiles=11); the 9x controller page comes from sysclass.dll instead and is unaffected either way, measured the same day" }
+       Why = "the NT targets' own INF has already registered it against the root hub usbport creates (Windows 2000's USB.INF [ROOTHUB2.NT] and Windows XP's usbport.inf [ROOTHUB.Dev.NT] both write EnumPropPages32 = 'usbui.dll,USBHubPropPageProvider'), and on an xHCI-only machine the file was never placed, so the page is dropped silently: measured 2026-09-07 in both NT guests, the USB Root Hub gains a working Power tab as soon as the file is present, with no registry change. On the 9x paths it places what Windows 98 SE's and Windows ME's own USB.INF place (USBUI.CopyFiles=11); the 9x controller tab comes from sysclass.dll instead, and the Bandwidth Usage dialog behind its button and the root hub's Power properties dialog are usbui.dll's (Data Access Error without it, roadmap task 23.1 leg A4, 2026-09-20)" }
 )
 $osSuppliedNames = @($osSupplied | ForEach-Object { $_.File.ToLowerInvariant() })
 # Files the OS places by itself when this driver's root hub appears, which

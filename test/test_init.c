@@ -2494,6 +2494,14 @@ static ULONG logSnapshotReads;
 static ULONG logVerbosityReads;
 static ULONG logDebugViewReads;
 static ULONG logSwitchAbsent;
+/*
+ * Task 23.4's moderation value, through the same stub: not the log's, but the
+ * same service, the same key and the same "one status per value" shape. Absent
+ * by default after log_reset_host, which is a machine whose INF never ran.
+ */
+static ULONG imodValue;
+static MPSTATUS imodStatus;
+static ULONG imodReads;
 
 static MPSTATUS NTAPI logRegistryValue(PVOID miniPortExtension,
                                        ULONG softwareKey,
@@ -6734,6 +6742,19 @@ static ULONG log_capture_contains(const char *needle)
     return 0;
 }
 
+/* A wide registry name against an ASCII literal, NUL included. */
+static ULONG wide_equals(const WCHAR *wide, const char *ascii)
+{
+    ULONG i;
+
+    for (i = 0; ascii[i] != '\0'; i++) {
+        if (wide[i] != (WCHAR)(UCHAR)ascii[i]) {
+            return 0;
+        }
+    }
+    return (wide[i] == 0) ? 1UL : 0UL;
+}
+
 static MPSTATUS NTAPI logRegistryValue(PVOID miniPortExtension,
                                        ULONG softwareKey,
                                        PVOID valueName,
@@ -6760,9 +6781,24 @@ static MPSTATUS NTAPI logRegistryValue(PVOID miniPortExtension,
     CHECK_EQ(softwareKey, 1,
              "the log's values are read with BOOL = TRUE, i.e. the driver's "
              "own software key");
-    CHECK_EQ(outBytes, 4, "both values are REG_DWORDs");
+    CHECK_EQ(outBytes, 4, "every value is a REG_DWORD");
 
     name = (const WCHAR *)valueName;
+
+    /* Task 23.4's value: `XhciImod...` against the log's `XhciLog...`, so
+     * character 4 separates the two families. */
+    if (name[4] == 'I') {
+        imodReads++;
+        CHECK(wide_equals(name, "XhciImodInterval250ns"),
+              "the moderation value's name");
+        CHECK_EQ(nameBytes, 44,
+                 "XhciImodInterval250ns's name length is its bytes including "
+                 "the NUL");
+        if (imodStatus == MP_STATUS_SUCCESS) {
+            *(ULONG *)out = imodValue;
+        }
+        return imodStatus;
+    }
 
     /*
      * `XhciLog` is the common prefix of both, so character 7 is what
@@ -6793,7 +6829,7 @@ static MPSTATUS NTAPI logRegistryValue(PVOID miniPortExtension,
         return logVerbosityStatus;
     }
 
-    CHECK_EQ(name[7], 'D', "the only two values this driver reads");
+    CHECK_EQ(name[7], 'D', "the only two log values this driver reads");
     logDebugViewReads++;
     CHECK_EQ(nameBytes, 34,
              "XhciLogDebugView's name length is its bytes including the NUL");
@@ -6820,6 +6856,9 @@ static void log_reset_host(void)
     logVerbosityReads = 0;
     logDebugViewReads = 0;
     logSwitchAbsent = 0;
+    imodValue = 0;
+    imodStatus = MP_STATUS_FAILURE;
+    imodReads = 0;
     XhciLogHostAtPassive = 1;
     XhciLogHostDebugViewCalls = 0;
     XhciLogHostDebugViewTotal = 0;
@@ -6868,6 +6907,111 @@ static void test_log_two_values(void)
     CHECK_EQ(ext.Log.Verbosity, XHCI_LOG_VERBOSITY_OFF,
              "the new answer is applied - and rung 0 shuts the channel too");
     CHECK_EQ(ext.Log.Enabled, 0, "so recording goes off again");
+
+    log_reset_host();
+}
+
+/*
+ * Task 23.4's chooser, without a start: the three fallbacks (absent or
+ * unreadable, below the floor, above the ceiling) and the two bounds. The
+ * owner's rule is **substituted, not clamped**, so 9 and 4001 both land on
+ * 4000 - a clamp would give 10 and 4000, and 0 would turn moderation off.
+ */
+static void test_imod_choose(void)
+{
+    CHECK_EQ(XhciImodIntervalChoose(MP_STATUS_FAILURE, 500), 4000UL,
+             "a failed read is the default, whatever the value slot holds");
+    CHECK_EQ(XhciImodIntervalChoose(MP_STATUS_FAILURE, 0), 4000UL,
+             "an absent value is the default");
+    CHECK_EQ(XhciImodIntervalChoose(MP_STATUS_SUCCESS, 0), 4000UL,
+             "a set 0 is refused - moderation cannot be turned off");
+    CHECK_EQ(XhciImodIntervalChoose(MP_STATUS_SUCCESS, 9), 4000UL,
+             "one below the floor is replaced by the default, not clamped to 10");
+    CHECK_EQ(XhciImodIntervalChoose(MP_STATUS_SUCCESS, 10), 10UL,
+             "the floor itself is accepted");
+    CHECK_EQ(XhciImodIntervalChoose(MP_STATUS_SUCCESS, 500), 500UL,
+             "the INFs' 500 is accepted");
+    CHECK_EQ(XhciImodIntervalChoose(MP_STATUS_SUCCESS, 4000), 4000UL,
+             "the ceiling itself is accepted");
+    CHECK_EQ(XhciImodIntervalChoose(MP_STATUS_SUCCESS, 4001), 4000UL,
+             "one above the ceiling is replaced by the default");
+    CHECK_EQ(XhciImodIntervalChoose(MP_STATUS_SUCCESS, 5000), 4000UL,
+             "and so is 5000, a value IMODI could carry");
+    CHECK_EQ(XhciImodIntervalChoose(MP_STATUS_SUCCESS, 70000UL), 4000UL,
+             "and 70000, which masked to IMODI would have read as 4464");
+    CHECK_EQ(XhciImodIntervalChoose(MP_STATUS_SUCCESS, 0xFFFFFFFFUL), 4000UL,
+             "and every bit set, which written whole would set IMODC");
+}
+
+/*
+ * The same contract through the registered surface: read once per start with
+ * its own name length, written to IR0's IMOD, and never a reason to fail the
+ * start - including a packet with no registry service at all.
+ */
+static void test_imod_start(void)
+{
+    static const struct {
+        MPSTATUS Status;
+        ULONG Value;
+        ULONG Expected;
+        const char *Why;
+    } cases[] = {
+        { MP_STATUS_SUCCESS, 500, 500, "the INFs' 500 is written" },
+        { MP_STATUS_SUCCESS, 10, 10, "the floor is written" },
+        { MP_STATUS_SUCCESS, 4000, 4000, "the ceiling is written" },
+        { MP_STATUS_FAILURE, 0, 4000, "an absent value writes the default" },
+        { MP_STATUS_SUCCESS, 0, 4000, "a set 0 writes the default" },
+        { MP_STATUS_SUCCESS, 5000, 4000, "5000 writes the default" }
+    };
+    ULONG i;
+
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        log_reset_host();
+        imodStatus = cases[i].Status;
+        imodValue = cases[i].Value;
+        mmio[HC_IR0(XHCI_IR_IMOD) / 4] = 0x12345678UL;
+        enable_start(1);
+        CHECK_EQ(ext.HcInfoStatus, XHCI_HC_OK, "the start succeeds");
+        CHECK_EQ(imodReads, 1, "the value is read once per start");
+        CHECK_EQ(ext.ImodStatus, (ULONG)cases[i].Status,
+                 "with the read's own status kept");
+        CHECK_EQ(ext.ImodRequested,
+                 (cases[i].Status == MP_STATUS_SUCCESS) ? cases[i].Value : 0,
+                 "and what it gave, or 0 when it gave nothing");
+        CHECK_EQ(ext.ImodInterval, cases[i].Expected, cases[i].Why);
+        CHECK_EQ(mmio[HC_IR0(XHCI_IR_IMOD) / 4], cases[i].Expected,
+                 "the register holds it - written whole, so IMODC is 0");
+        CHECK_EQ(ext.ImodReadback, cases[i].Expected,
+                 "and the read-back says so");
+        XhciRegPacket.StopController(&ext, TRUE);
+    }
+
+    /* The value is re-read at every start: usbport zeroed the extension. */
+    log_reset_host();
+    imodStatus = MP_STATUS_SUCCESS;
+    imodValue = 500;
+    enable_start(1);
+    XhciRegPacket.StopController(&ext, TRUE);
+    imodValue = 200;
+    enable_start(1);
+    CHECK_EQ(imodReads, 2, "re-read at the second start");
+    CHECK_EQ(ext.ImodInterval, 200UL, "and the new value applied");
+    XhciRegPacket.StopController(&ext, TRUE);
+
+    /* No registry service in the packet: the default, and a normal start. */
+    log_reset_host();
+    logSwitchAbsent = 1;
+    imodStatus = MP_STATUS_SUCCESS;
+    imodValue = 500;
+    enable_start(1);
+    CHECK_EQ(ext.HcInfoStatus, XHCI_HC_OK,
+             "a packet with no registry service does not fail the start");
+    CHECK_EQ(imodReads, 0, "(there was no service to reach the stub through)");
+    CHECK_EQ(ext.ImodStatus, (ULONG)MP_STATUS_FAILURE,
+             "recorded as a failed read");
+    CHECK_EQ(ext.ImodInterval, 4000UL, "so the default is written");
+    CHECK_EQ(mmio[HC_IR0(XHCI_IR_IMOD) / 4], 4000UL, "to the register");
+    XhciRegPacket.StopController(&ext, TRUE);
 
     log_reset_host();
 }
@@ -27604,7 +27748,11 @@ static void test_save_restore(void)
     CHECK_EQ(ext.ResumeReinits, reinits + 1, "by reinitialising");
     CHECK_EQ(ext.Devices[0].State, XHCI_DEV_STATE_FREE, "and dropping devices");
 
-    /* --- the conforming controller: state really is restored --- */
+    /* --- the conforming controller: state really is restored. Started at
+     * task 23.4's 500, so the IMOD the restore writes back can be neither the
+     * model's 0 nor the hardware's reset 4000 by coincidence. --- */
+    imodStatus = MP_STATUS_SUCCESS;
+    imodValue = 500;
     enable_start(0);
     deliver_events();
     saveRestoreShape = SR_CONFORMING;
@@ -27618,12 +27766,13 @@ static void test_save_restore(void)
     CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "(a device in Default)");
 
     reinits = ext.ResumeReinits;
-    mmio[HC_IR0(XHCI_IR_IMOD) / 4] = 4000UL;   /* the reset default, F10 below */
+    CHECK_EQ(mmio[HC_IR0(XHCI_IR_IMOD) / 4], 500UL,
+             "(the start wrote the registry's interval)");
     XhciRegPacket.SuspendController(&ext);
     CHECK_EQ(ext.SavedStateValid, 1, "the save succeeded");
     CHECK_EQ(ext.SaveFailures, 0, "with no failure recorded");
-    CHECK_EQ(ext.SavedImod, 4000UL, "and captured IMOD as it read");
-    mmio[HC_IR0(XHCI_IR_IMOD) / 4] = 0;        /* what a restore has to undo */
+    CHECK_EQ(ext.SavedImod, 500UL, "and captured IMOD as it read");
+    mmio[HC_IR0(XHCI_IR_IMOD) / 4] = 4000UL;   /* the reset value, to undo */
 
     CHECK_EQ(XhciRegPacket.ResumeController(&ext), MP_STATUS_SUCCESS,
              "and the resume restores");
@@ -27640,13 +27789,15 @@ static void test_save_restore(void)
     /*
      * The 2026-09-05 audit's F10: the restore wrote IMOD as 0, so a controller
      * that restored successfully ran with no interrupt moderation while the
-     * isochronous builder's IOC-per-TD policy assumed the 1 ms default. The
-     * value the save read (set to the reset default here, because the model's
-     * IMOD is otherwise 0 and a check against 0 would pass for the wrong
-     * reason) is what the restore has to write back.
+     * isochronous builder's IOC-per-TD policy assumed moderation. The value the
+     * save read is what the restore has to write back - since task 23.4 the
+     * start's interval, the one path xhciRestoreState's write matters on.
      */
-    CHECK_EQ(mmio[HC_IR0(XHCI_IR_IMOD) / 4], 4000UL,
-             "the restore writes IMOD back as the save read it, not as 0");
+    CHECK_EQ(mmio[HC_IR0(XHCI_IR_IMOD) / 4], 500UL,
+             "the restore writes IMOD back as the save read it, not as 0 and "
+             "not as the reset value");
+    imodStatus = MP_STATUS_FAILURE;
+    imodValue = 0;
 
     /* --- restored, but the controller will not start. A restore that
 
@@ -28914,12 +29065,20 @@ static void test_passthru_snapshot(void)
     log_reset_host();
     logVerbosityValue = XHCI_LOG_VERBOSITY_RING;
     logDebugViewValue = 1;
+    imodStatus = MP_STATUS_SUCCESS;
+    imodValue = 5000;
     enable_start(0);
 
     snapRequest(XHCI_SNAPSHOT_REGION_EXTENSION, 0);
     CHECK_EQ(snapCall(sizeof(snapBlock)), MP_STATUS_SUCCESS, "(a window)");
     CHECK_EQ(h->SchemaVersion, XHCI_SNAPSHOT_SCHEMA,
              "the schema is the one the tool refuses a mismatch of");
+    /* Schema 4, task 23.4: an out-of-range value, so requested and in force
+     * differ and a header that copied one field into another would show. */
+    CHECK_EQ(h->ImodStatus, MP_STATUS_SUCCESS, "the moderation read's status");
+    CHECK_EQ(h->ImodRequested, 5000UL, "what the registry gave");
+    CHECK_EQ(h->ImodInterval, 4000UL, "what the start wrote instead");
+    CHECK_EQ(h->ImodReadback, 4000UL, "and what the register read back");
     CHECK_EQ(h->HeaderBytes, (ULONG)sizeof(XHCI_SNAPSHOT_HEADER),
              "and so is the header size");
     CHECK_EQ(h->Flavour, XHCI_SNAPSHOT_FLAVOUR_HOSTTEST,
@@ -30087,6 +30246,8 @@ int main(void)
     test_decline_gates_need_masked_enables();
     test_unmask_retry_and_escalation();
     test_log_two_values();
+    test_imod_choose();
+    test_imod_start();
     test_log_absent_values_start_normally();
     test_log_records_without_a_sink();
     test_log_counter_rung_publishes_the_counter_block();
