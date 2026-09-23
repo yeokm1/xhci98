@@ -902,11 +902,14 @@ writes none of them: the installer creates all three.
 
   FEEL FREE TO TUNE IT. Lower towards 160 for the last few percent of
   storage speed, or raise it towards 4000 (or delete it) if you get audio
-  stutter or instability under load. Enter it as a decimal DWORD (500), or
-  in hexadecimal (1f4) - Registry Editor lets you choose. The driver reads
-  it when it starts, so a change takes effect after a restart; after the
-  restart, XHCISNAP's report shows under "registry values" the value it
-  read, the interval in force, and what the controller took.
+  stutter or instability under load. 500 may produce audio stuttering while
+  a USB drive is being read at full speed, so if you want to prioritise
+  audio over bandwidth, raise the value (section 7). Enter it as a decimal
+  DWORD (500), or in hexadecimal (1f4) - Registry Editor lets you choose.
+  The driver reads it when it starts, so a change takes effect after a
+  restart; after the restart, XHCISNAP's report shows under "registry
+  values" the value it read, the interval in force, and what the controller
+  took.
 
   ON WINDOWS 98 WITH NUSB, AN UPGRADE DOES NOT SET IT. An upgrade over an
   existing install crashes before the value is written (see section 5), so

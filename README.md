@@ -112,7 +112,7 @@ ATTO Disk Benchmark with an MSSU10-128GSR flash drive at `500` (125us). This giv
 
 Linux's xHCI driver defaults to `160` (40 us). This package ships `500` to be more conservative since this is a generic driver.
 
-Feel free to tune it. Lower towards `160` for the last few percent of storage speed, or raise it towards `4000` (or delete it) if you get audio stutter or instability under load. 
+Feel free to tune it. Lower towards `160` for the last few percent of storage speed, or raise it towards `4000` (or delete it) if you get audio stutter or instability under load. `500` may produce audio stuttering while a USB drive is being read at full speed, so if you want to prioritise audio over bandwidth, raise the value. 
 
 On Windows 98 with NUSB, an upgrade over an existing install crashes before the value is written, so the driver runs at `4000` until you set it by hand.
 
@@ -170,7 +170,6 @@ The devices checked so far, all on the E460 under Windows 98 SE. Each is charact
 | Disabling the USB controller can hang Windows 7 | On the one real Windows 7 machine tried, the first Disable in Device Manager never finished and the next restart hung until powered off; enabling it again afterwards worked. Uninstalling or upgrading stops the controller too. Cause not known yet. Do it with no unsaved work open, and expect to power off if the restart hangs. |
 | Fast, repeated plug and unplug can freeze Windows 98 | About twice a second sustained. Ordinary use is fine. |
 | USB audio can stutter on Windows 98 while a USB drive is read at full speed | Measured on the P14s: at the install's `500` (and at `1000`) a Full-Speed audio device on a root port stuttered from ATTO's 2048 KB reads onwards; at `4000` only on the last 8192 KB write. It follows the doubled read speed. If audio matters more, raise the value towards `4000` or delete it (see "Tuning" above). |
-| Mass-storage throughput seems slow before 1.1.1.0 | About 18 MB/s read and write on the P14s, below what USB 2.0 High Speed usually reaches. The cause was measured (roadmap task 23.3): the controller's interrupt moderation, left at its 1 ms reset default. From 1.1.1.0 the install sets it to `500` (0.125 ms), at which large reads from a USB 3 stick on the P14s went from 17.6 to 32.5 MB/s, and the ATTO run in Tuning above read and wrote about 34 MB/s. An upgrade over a running driver on Windows 98 with NUSB keeps the old 1 ms until the value is set by hand. |
 
 ## Toolchain and building
 

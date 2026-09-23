@@ -231,13 +231,15 @@ more conservative since this is a generic driver.
 
 Feel free to tune it. Lower towards `160` for the last few percent of storage
 speed, or raise it towards `4000` (or delete it) if you get audio stutter or
-instability under load. The driver reads the value when it starts, so a
-change takes effect after a restart, and it never fails a start: a value it
-cannot use is replaced by `4000`. `XHCISNAP`'s report shows the value read,
-the interval in force and what the controller took, under "registry values".
-**Use the `XHCISNAP.EXE` from this download**: the report grew with the
-setting, and the copy in an earlier download refuses this driver rather than
-misread it.
+instability under load. `500` may produce audio stuttering while a USB drive
+is being read at full speed, so if you want to prioritise audio over
+bandwidth, raise the value (see "Known limitations"). The driver reads the
+value when it starts, so a change takes effect after a restart, and it never
+fails a start: a value it cannot use is replaced by `4000`. `XHCISNAP`'s
+report shows the value read, the interval in force and what the controller
+took, under "registry values". **Use the `XHCISNAP.EXE` from this download**:
+the report grew with the setting, and the copy in an earlier download refuses
+this driver rather than misread it.
 
 On Windows 98 with NUSB, an upgrade over an existing install crashes before
 the value is written, so the driver runs at `4000` until you set it by hand,

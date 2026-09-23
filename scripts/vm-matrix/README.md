@@ -175,6 +175,16 @@ powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-fresh -Attach kb
 powershell -File scripts\vm-matrix\prepare-image.ps1 -Target 2a-fresh -Stamp        # base-<DriverVer>-qemu, taken last
 ```
 
+**The NT guests may be prepared to log in automatically** (the owner,
+2026-09-24): before the shutdown, `AutoAdminLogon` = `1`, `DefaultUserName`
+and `DefaultPassword` (REG_SZ) under `HKLM\SOFTWARE\Microsoft\Windows
+NT\CurrentVersion\Winlogon`, read back, and a boot to the desktop with no key
+sent checked on a throwaway copy before the stamp. XP x64's audio row needs it
+(its audio stack opens the streaming endpoint only with a user session). What
+it costs: with a desktop, a device that has no driver raises a Found New
+Hardware wizard that queues later installs, so check a NODRIVER against its
+screenshot. Design record 09 section 8 has the reasoning.
+
 Then the same for `2b-fresh` (`win2k-xonly.img @ win2k-xonly-clean-install`
 -> `vm\fresh-2b.img`; until 2026-09-03 it was `win2k.img @ phase2b-clean`, an
 install that had booted with an EHCI, see `build-and-test.md`, "Windows 2000

@@ -2552,6 +2552,10 @@ two rows to a wizard the login screen never shows); and whether XP x64's
 `usb-ccid` first attach is worth a clean reading. Neither blocks 23.10, whose
 clause is the two primary targets.
 
+**Decided 2026-09-24: later post-release runs may use autologin NT
+guests** (the owner). Design record 09 section 8 and `scripts\vm-matrix\README.md`
+carry it, with the wizard cost.
+
 ## 23.9 - 23.5's gate proper, on bare metal
 
 Status as of 2026-09-24: **read, and passed by the owner's ruling**: the
@@ -2678,3 +2682,11 @@ signature: 18, 24, 19 and 24 bytes, every run of them in a header or debug
 record. The date is not compiled into the binaries. Code and data are
 byte-identical, so no reading here or in 23.8 is re-taken. Nothing has been
 uploaded.
+
+**Re-cut once more the same night, for the tuning text** (the owner): the
+README's "Tuning", the release notes' moderation section and the readme's
+section 9 now say that `500` may produce audio stuttering while a USB drive
+is read at full speed, and to raise the value to prioritise audio over
+bandwidth; the README's "slow before 1.1.1.0" row was removed. `src\obj*`
+was checked identical to the published drivers first. Only `readme.txt`
+changed; asset 377,889 B, 17 files, each identical to `releases\1.1.1.0\`.
