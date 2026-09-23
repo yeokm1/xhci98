@@ -5,8 +5,9 @@ Controller Property Page and Interrupt Moderation" (titled "GitHub Issue 4's
 Open Requests, and the Interrupt Moderation Experiment" until the owner moved
 the issue's polling rates and true speeds to Phase 24 on 2026-09-22). The
 roadmap entry carries the goal, the status, the task table and the checkpoint;
-this file carries what each task did and what each reading said. Where the two
-disagree about a clause, the roadmap wins.
+this file carries what each task did and what each reading said, and, since
+the phase closed on 2026-09-24, the entry as the roadmap carried it while
+open. Where the two disagree about a clause, the roadmap wins.
 
 **Written while the phase is open**, and kept as written rather than rewritten
 in the past tense. A sentence saying something "is owed" describes the day it
@@ -25,6 +26,525 @@ marker, `out\bench-23.2\` is 23.3's package and branch `23.3` carried 23.4.
 
 Opened 2026-09-20 by task 23.1, which is the first task of this phase to take
 a reading.
+
+---
+
+## The phase narrative, as the roadmap carried it
+
+Moved here on 2026-09-24, when the phase closed and its roadmap entry was
+condensed to the shape of Phases 20 to 22. It is kept as written: its status
+paragraph says the phase is open, and each task entry carries the wording of
+the day it was written. The roadmap's task table says how each task closed.
+
+Goal: GitHub issue 4's request for the controller's property page, fixed and
+read on both primary targets; one measurement of the owner's, whether an
+interrupt moderation interval below the reset default raises throughput, which
+if it does becomes a registry value; and the result cut as `1.1.1.0`. The
+issue's polling rates and true speeds on root ports are not scheduled: Phase 24,
+which carried them, was removed by the owner on 2026-09-22.
+
+Status: open since 2026-09-19. **23.1 and 23.2 are done**: the controller's
+property page is complete, 9x half (23.1) and NT half (23.2), both taken on
+2026-09-20, read on three 9x stacks and seven NT guests, and both INFs carry
+their line; 23.1 took its host side, all three guest legs (Windows 98 SE
+under NUSB and under SweetLow, and Windows ME) and the three documents it owed
+in that one day, on branch `23.1`. **23.3 is done and it measured**
+(2026-09-22, on the P14s Gen 1): mass-storage reads ran 88% faster at an
+interval of 50 us than at the hardware's 1 ms. **23.4 is therefore taken, and
+done**: the INF writes **500** (the owner moved it from 1000 on 2026-09-22
+after 500 was measured) and the driver falls back to 4000, and its guest
+readings passed on Windows 98 SE and Windows 2000 the same day. **23.5, the audio test, is closed on its read-first half** (owner,
+2026-09-22): on the 23.3 experimental build both 1000 and 500 passed it, and
+the gate proper is read once, at 500 on the cut's own `release` binary, as
+23.9, not also on a pre-cut 23.4 build. The record and the cut, once one task,
+are 23.6 to 23.10, split by the owner the same day. **23.6 is done**
+(2026-09-22, documents only, `runs/run-23.md` 23.6), and so is **23.7**
+(2026-09-22: `1.1.1.0` dated `09/22/2026`, both architectures rebuilt green);
+**23.8 is done** (`1.1.1.0` cut 2026-09-22 and re-cut the same night for the
+owner's readme edit; all ten install vehicles read from the asset by
+2026-09-23, one finding and no re-cut); **23.10 is done** (2026-09-23, run
+before 23.9 by the owner's choice: both primary targets pass, Windows 98 SE
+one row better than `1.1.0.0` and Windows 2000 unchanged); **23.9 is done**
+(the P14s, 2026-09-23 night: the stream played through every pass with no
+dropout, and 500 stuttered by ear where neither control did; the owner ruled
+the gate passed, kept 500 and published the stutter as a known limitation,
+re-cutting `1.1.1.0` dated `09/24/2026`, the drivers' code and data
+unchanged).
+`1.1.0.0` was uploaded on 2026-09-20, so the hold on merging this branch
+is lifted. The version is **`1.1.1.0`** (the owner, 2026-09-22): 23.4 at least is driver code, so the
+third field moves (`releases/README.md`). The owner's note on the issue
+(2026-09-19) was that the speed work may be spread over several releases to
+reduce risk, and that is the split taken: this release carries the property
+page and the moderation value, and polling rates and true speeds are not
+scheduled.
+
+**"GitHub issue 4" is not `docs/issues/04`.** The numbers collide by accident:
+`docs/issues/04-xp-restore-device-ep0-remove.md` is the XP two-handle restore
+fixed in `1.0.1.0`; the GitHub issue is
+`https://github.com/yeokm1/xhci98/issues/4`, "USB bus internal requests
+handling (and more)", opened by LordOfMice on 2026-09-06 and still open. Its
+`usbui.dll` and selective-suspend requests are already answered, in `1.0.2.0`
+and `1.1.0.0`; the tasks below carry the property page, and polling rates and
+true speeds are not scheduled.
+
+- [x] 23.1 the controller's property page. `runs/run-23.md` has the
+  detail. **The line is in `[Xhci.AddReg]`** since 2026-09-20, the INF gate
+  holds it there with a `PROP-*` family (seven rules, eight self-test cases),
+  and the footprint has learned it. **The NT half was deferred, not refused**
+  (owner, 2026-09-20), and as written here it was still open: the pair it
+  takes is known and all three NT references write it, but one
+  `[Xhci.AddReg.NT]` serves four install paths and the page had been opened in
+  none of their guests, so `PROP-NTHALF` refused it until those readings
+  existed. **23.2 carried it and closed it the same day** (below): all seven
+  NT guests draw the tab from the INF-written pair, `PROP-NTHALF` is inverted
+  into `PROP-MISSING`, and the by-hand-in-regedit route this entry prescribed
+  proved inert on NT 6.x. Of the three things
+  owed before the line ships, two
+  are answered `static`: "Disable USB error detection" names
+  `ErrorCheckingEnabled` under
+  `HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Usb`, whose only consumer
+  in six extracted trees is `SYSTRAY.EXE` and not any USB driver, so it can
+  only quiet traffic this controller already sees; and Windows ME's
+  `sysclass.dll` is the same module as Windows 98 SE's, string for string bar
+  the version resource. **Windows 98 SE was read on 2026-09-20** and the tab
+  arrives: the Advanced tab appears through the real install path, the
+  checkbox writes `ErrorCheckingEnabled` 0/1 as a machine-wide DWORD, and
+  Bandwidth Usage charges a Full-Speed and a High-Speed root-port device the
+  same 1 % - issue 6, visible in the UI for the first time, in the dialog this
+  task adds the button for. **The SweetLow leg (C) and the `usbui.dll` rename
+  control (A4) were both taken the same day**, on
+  `vm/sweetlow-2a.img`'s driverless snapshot. Leg C gave the clean
+  before/after - a fresh `BEFORE` install with no Advanced tab, then an
+  **in-place Update Driver to `AFTER` that completed with no crash at all and
+  produced the tab on the same boot with no reboot**, which is the direct
+  contrast with NUSB, where that route loses its registry phase; and it
+  repeated the 10 / 11 / 12 % bandwidth ladder, so issue 6 in the UI is not an
+  NUSB artifact. A4 **refuted the 2026-09-07 reading**: with `usbui.dll`
+  renamed away the Advanced tab and its checkbox still render, but *both*
+  `Bandwidth Usage` and the root hub's `Power properties` raise "Data Access
+  Error", so the tab is `sysclass.dll`'s and the dialogs are `usbui.dll`'s.
+  **`usbui.dll` on 9x therefore does not "buy nothing"** - it buys both
+  dialogs - and every place saying otherwise (this file's `usbui.dll` note,
+  `src/xhci98.inf`'s comment, `build-and-test.md`) needs correcting; the
+  decision to copy it since `1.0.2.0` stands and only its stated reason
+  changes. **Leg B, Windows ME, was taken the same day and every guest leg is
+  now in.** It ran on a base built for it - the owner refused the planned
+  `winme-sweetlow-driver` snapshot because it already carries a driver, so
+  stock `winme-clean-install` plus SweetLow's `USB2.INF` was snapshotted as
+  **`winme-sweetlow-nodriver`** and kept permanently, giving a fresh first
+  install as Leg C had. Windows ME reproduced every clause: the baseline with
+  no Advanced tab, an **in-place Update Driver that completed with no crash
+  and asked for no restart**, the tab present **on the same boot**, the
+  10 / 11 / 12 % ladder to the digit, and `ErrorCheckingEnabled` 0 ticked /
+  1 unticked. So the registry phase survives an in-place upgrade on **both**
+  9x targets under SweetLow's stack and on neither under NUSB, and **issue 6
+  in the user interface is now three stacks across two operating systems** -
+  neither an NUSB nor a Windows 98 shell artifact. The root hub's page was
+  the control throughout and did not move; its rendering also proves Windows
+  ME has a working `usbui.dll`, which A4 made a precondition for reading the
+  Bandwidth dialog at all. **One finding outside this task's subject** (B8):
+  SweetLow's install places `usbport.sys`, `usbehci.sys` and `usbhub20.sys`
+  but leaves Windows ME's own `usbccgp.sys` in place, although the INF asks
+  to overwrite it unconditionally - not a queued replacement and not a
+  version refusal, both tested and eliminated; the mechanism is **not
+  established**, and a Windows ME composite-device observation therefore
+  rests on Windows ME's composite driver, task 18.4's audio device included.
+  Two consequences for the owner:
+  `PROP-MISSING` now fails every already-published INF, `1.1.0.0`'s included,
+  so assembling its upload set after this refuses where it passed before -
+  **decided 2026-09-20, upload `1.1.0.0` first, so nothing here merges until
+  that upload has happened**; and on Windows 98 + NUSB an in-place upgrade
+  loses its registry phase, so an upgrading user does not get the tab - the
+  release notes' documented remedy for that had been empty since `1.1.0.0`.
+  **The three documents this task found work for were taken on the same
+  branch on 2026-09-20 rather than left to 23.6**, since 23.1 is what read
+  them: the release notes carry the Advanced tab as the **next** version's
+  feature (`1.1.0.0` is uploaded without it) and the rename-and-cold-boot
+  upgrade route in place of the empty remedy; `docs/issues/06` carries the
+  A5/C3/B5 ladder as a new section 5.1, with what the reading is not and
+  where a per-device witness would come from; and `build-and-test.md` carries
+  the 9x root hub's Power tab and which INF registers it, the
+  `COPYFLG_NO_OVERWRITE` prompt finding with its three-leg tally, and B8's
+  `usbccgp.sys` qualification of "Windows ME runs SweetLow's stack".
+  `runs/run-23.md`'s "What 23.1 still owes the documents" lists what each one
+  gained. 23.6 keeps the rest of its brief: whatever 23.2 and 23.4 change.
+- [x] 23.2 the NT half of the property page. **Settled AND shipped on
+  2026-09-20**, which is more than the owner's deferral of that morning asked
+  for: it asked for the question to be settled either way, and the reading
+  passed, so the INF work it made conditional was done on the same branch.
+  `runs/run-23.md` has the detail.
+
+  **Seven guests, not the two `PROP-NTHALF` required**, because the owner
+  widened the task mid-run to Windows 7 x86 and every 64-bit target. Windows
+  2000 SP4, Windows XP SP3, Windows XP x64 SP2, Vista SP2 x86, Vista SP2 x64,
+  Windows 7 x86 and Windows 7 x64 **all show the Advanced tab**, and between
+  them they exercise all four install sections that carry
+  `AddReg=Xhci.AddReg.NT` - `[Xhci.Dev.NTx86]`, `[Xhci.Dev6.NTx86]`,
+  `[Xhci.Dev.NTamd64]` and `[Xhci.Dev6.NTamd64]`. The pair is
+  `HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"` plus
+  `HKR,,Controller,1,01`, and `EnumPropPages32` alone was shown to be
+  load-bearing (Windows 2000 kept the tab with `Controller` deleted); both ship
+  because all three NT references write both. The amd64 file, which had no x64
+  reading of its own when the line was first written into it, now has three.
+
+  **The finding worth carrying out of this task is about the method, not the
+  line.** The roadmap told this task to take the reading **by hand in regedit
+  before touching the INF**, the way the 9x line was taken. On Windows 2000 and
+  XP that works. **On NT 6.x it does not**: a hand-written `EnumPropPages32` on
+  an already-installed devnode produces no tab and no diagnostic, because the
+  provider list is consulted when the devnode is built. Vista was therefore
+  recorded as a genuine negative - with a control that was sound and a
+  conclusion that was wrong - and the INF comment asserting "its reach is
+  NT 5.x" was written, gated and committed before Windows 7 x86, which shares
+  Vista's install section and registration path, showed the tab and broke the
+  account open. Re-installing Vista from its clean snapshot with the INF-written
+  pair gave the tab at once. `lessons.md` carries it; `src/xhci98.inf` warns
+  against re-verifying the line by hand on NT 6.x.
+
+  **Two things the reading gave that the task did not need.** The bandwidth
+  ladder came out 10 / 11 / 12 % on both NT 5.x 32-bit guests, digit for digit
+  what all three 9x legs gave - and Windows 2000's is Microsoft's own native
+  NT 5.0 stack, so issue 6 in the user interface can no longer be explained as
+  an artifact of a back-ported one; it is now five stacks across four operating
+  systems. And both NT 5.x guests logged `endpoint speed mismatches=00000001`
+  with an identical encoding, the driver's own witness beside the page's, which
+  the 9x legs had no equivalent of.
+
+  `PROP-NTHALF` was **inverted rather than deleted**, as required: the refusal
+  is gone, the existing `PROP-*` shape checks now run over both halves through
+  a kind-keyed table, and a new `PROP-CTRL*` family holds `Controller` to
+  REG_BINARY / flags 1 / data 01. Six self-test cases replaced the one, both
+  footprints were regenerated, and `build-driver.cmd` was re-run.
+
+  **All four documents were taken on this branch rather than left to 23.6**,
+  because three of them were corrections and not additions: the release notes
+  said the NT systems "are not included", `build-and-test.md` said the NT half
+  was "not taken" and that F8 "is the only route", and `docs/issues/06`
+  section 5.1 read "three USB 2.0 stacks, two operating systems" and said this
+  package registers no controller property page on any NT target. All four are
+  now current, `docs/issues/README.md` moved with issue 6, and `lessons.md`
+  carries the NT 6.x by-hand trap. **23.6 inherits nothing from this task.**
+
+- [x] 23.3 the moderation experiment. **Done 2026-09-22, and it measured**
+  (`runs/run-23.md`, "How it was actually run" and "Results"). Taken on the
+  **P14s Gen 1** under Windows 98 SE rather than the E460, by the owner's
+  choice, with ATTO Disk Benchmark 2.41 on a USB 3 stick at High Speed, mass
+  storage only. Reads at 8 MB: **17.6 MB/s at 4000, 29.8 at 1000, 33.1 at 200
+  and at 160**, the two controls 0.4% apart; 4 KB reads four times faster.
+  Writes: 21.5 against 15.7 MB/s at 1000, and nothing trustworthy below it,
+  because the stick degraded and the second control fell with it. About a
+  quarter more interrupts per pass below 1000; no fault at any value. 4000
+  read identical to the control, which confirms the hardware reset value.
+  **Not answered, by the owner's scope**: the isochronous clause and the USB
+  Ethernet transfer, and the suspend/resume cycle was not taken. The stop
+  rule therefore does not fire and 23.4 is taken. The rest of this entry is
+  as written before the bench. **The read-first question is answered
+  and the host side is built; the reading is what remains** (2026-09-20,
+  branch `23.2`; `runs/run-23.md` has the detail). **QEMU does not model
+  IMODI**: `hw/usb/hcd-xhci.c` at `v11.1.0` stores `imod`, returns it, resets
+  it and migrates it, and no code path consults it, so no rate can come out of
+  a guest and this stays a real-hardware reading. Two findings fell out of
+  that which are not about moderation: the model **resets IMOD to 0 where
+  hardware resets it to 4000**, so every guest reading this project has taken
+  ran unmoderated and every metal reading at 1 ms; and `xhciRestoreState`'s
+  IMOD write - the 2026-09-05 audit's F10 fix - has therefore only ever been
+  exercised with 0, which an experimental build is the first thing that can
+  change. The experimental build exists, behind `XHCI_IMOD_EXPERIMENT` via
+  `XHCI_EXTRA_DEFINES`, so no shipping binary changed (the `release` `.sys`
+  links at the same size as `HEAD`'s) and the import gate lists the same
+  twelve pairs in the binary (the allowlist holds thirteen; the thirteenth is
+  `qemu`'s `HAL.dll!WRITE_PORT_UCHAR`). **The owner chose the registry route over a compile-time
+  constant** on 2026-09-20, so one binary sweeps the ladder: the value is
+  `XhciImodInterval250ns`, read beside the two log values through
+  `UsbPortGetMiniportRegistryKeyValue` with no new import. **The owner made it
+  23.4's name too** on 2026-09-21, reversing the separate
+  `XhciImodExperiment` of the day before: the unit is in the name, and a bench
+  setting left behind is no longer inert under a 23.4 build, so the bench
+  helpers say to clear it when a session ends. Absent means the experimental
+  build's start writes no IMOD at all, which makes that binary its own control
+  (of the experimental build only, as the caveat above says: since 23.4 every
+  start writes IMOD). `scripts/bench/`
+  carries `IMOD.BAT` and `IMOD98.BAT` for setting it on either target.
+  **The artifact is installable**, through a second narrow packaging exception
+  (`make-package.ps1 -ImodExperimentArtifact`), added 2026-09-20 when the owner
+  reinstalled Windows 98 SE clean on the E460: with no driver on the machine
+  there is nothing for a binary swap to replace, and only an INF install
+  creates the devnode and software key the value is read from. It is keyed on
+  its own marker, so neither packaging exception can stage the other's build,
+  and `make-release.ps1` still refuses it on the do-not-deploy marker.
+  The register is IR0's IMOD: IMODI is
+  bits 15:0 in 250 ns units and resets to 4000, 1 ms
+  (`xhci-data-structures.md`, Table 5-39 p.392). The start never writes it
+  and `xhciRestoreState` writes back what the save read, so every run to date
+  has been at 4000 (true when written, before the bench; 23.4's start writes
+  it on every build). The hypothesis is that Bulk-Only Transport is strictly
+  serial (Phase 8), so each of a command's completions can wait out a
+  moderation interval before the next stage is submitted, and 1 ms per stage
+  bounds mass-storage throughput from above. Measure sustained mass-storage
+  read and write, and a USB Ethernet transfer, at 4000 and at several lower
+  values down to 10, with an experimental build that writes IMOD in the start
+  after the interrupter is programmed. **This is a real-hardware reading**:
+  the E460 under Windows 98 SE, and under 32-bit Windows 7 if to hand.
+  Whether QEMU's xHC models IMODI at all is read first; if it does not, a
+  guest shows only that the write lands and reads back, never a rate. Read
+  beside each throughput figure: interrupts per second, the ISR and DPC
+  counters, and an isochronous stream playing (1,000 events a second at Full
+  Speed, 8,000 at High Speed, and moderation is what absorbs them), because
+  per-interrupt cost at real rates is what has bugchecked Windows 98 on bare
+  metal before. Stop rule: if no value below 4000 measures faster outside
+  run-to-run noise, record the numbers in `lessons.md`, leave the start not
+  writing IMOD, and close 23.4 as not taken.
+- [x] 23.4 the registry value. **Written 2026-09-22 on branch `23.3`, host
+  side green; the guest readings are what remain** (`runs/run-23.md`, 23.4).
+  **Done 2026-09-22: the guest readings passed on both targets**, on branch
+  `23.4-guest-readings`, `qemu` build, two witnesses each. On a Windows 98 SE
+  guest (SweetLow's stack, first install) and a Windows 2000 SP4 guest
+  (xHCI-only, first install), the INF's 500 reads back as 500 from the
+  register. Deleted, 0, 5000 and 4000 each read 4000. All thirteen starts
+  completed. Windows 98's 16-bit engine stored the value as
+  `dword:000001f4`. The leg also found and fixed two `IMOD98.BAT` defects
+  (`runs/run-23.md`, 23.4, "Guest readings").
+  The owner retired 23.3's experimental build the same day rather than keep
+  it as a bench build: `XHCI_IMOD_EXPERIMENT`, its marker, `make-package.ps1
+  -ImodExperimentArtifact` and its three build-time refusals are gone, and the
+  bench helpers now describe the shipping contract. The value in force travels
+  in the snapshot header, so `XHCISNAP`'s schema moved from 3 to 4 - the first
+  bump a published tool meets. Owed before the box closes: this checkpoint's
+  23.4 clause read in a Windows 98 SE and a Windows 2000 guest (QEMU stores IMOD
+  and reads it back, so the register value is observable there though no rate
+  is). The suspend/resume with 500 in force that was also owed here was
+  dropped by the owner on 2026-09-22: no guest can witness it (`XHCISNAP`'s
+  readback is the start's, and QEMU models no rate), and the host's
+  save/restore vector already pins it (`runs/run-23.md`, 23.4). **23.3 measured, so this is
+  taken, and the owner changed what it ships on 2026-09-22**: the INF writes the value as
+  **500** (125 us), not 4000. The owner's first choice was 200, the read
+  optimum, moved to 1000 for most of the read gain at a quarter of 200's
+  worst-case interrupt rate, and then to **500** the same day, once 500 was
+  measured: reads at 98% of the plateau (32.5 against 33.1 MB/s; 1000 gave
+  29.8), a pass of 23.5's audio test that sounded better than 1000, and a
+  worst-case rate of 8,000 interrupts a second against 200's 20,000. The
+  driver's fallback does not change: absent, unreadable, or outside 10 to 4000
+  still means 4000, substituted rather than clamped. So an install through the
+  INF runs at 500, and a machine whose value is missing or mistyped runs
+  exactly as every release to date. **Its release is gated on 23.9**, 23.5's
+  gate proper: an isochronous pass at 500 on bare-metal Windows 98, read on
+  the cut's own `release` binary, because 23.3 was read with no stream playing
+  and the roadmap's reason for asking for one still stands.
+  Where the text below says the INFs write 4000 or that this task ships 4000,
+  read 500; the rest stands as written. A `REG_DWORD` read
+  through `UsbPortGetMiniportRegistryKeyValue` beside the two log values in
+  `src/xhci_dispatch.c` (no new import), named `XhciImodInterval250ns` (the
+  owner, 2026-09-21; the experiment reads the same name), in IMODI's own
+  250 ns units. The owner's rule, 2026-09-19 and narrowed 2026-09-21: the
+  default is 4000; nothing below 10 or above 4000 is accepted; and 4000 is
+  assumed when the value is absent or invalid. Invalid means unreadable,
+  below 10, or above 4000: the floor is kept at 10 so users can customise down
+  to it, and nothing above 4000 is accepted because a longer interval only
+  adds latency and 4000 already caps the rate at 1,000 interrupts a second.
+  An invalid value is replaced by 4000, not clamped to the nearest bound, so
+  a mistyped 0 cannot turn moderation off. Like the log
+  values, nothing in the read may fail a start. The start then writes the
+  value, the save and restore pair carries it across a resume unchanged, and
+  the value in force is readable from a release build (a counter and an
+  `XHCISNAP` line). Both INFs write the value as 4000 on all their install
+  paths, the INF gate's `VAL-*` rules and `expected-footprint.txt` learn it,
+  and host vectors pin the three fallbacks and the two bounds. If 23.3 finds
+  a better number, shipping it as the default is a separate decision of the
+  owner's; this task ships 4000. The release notes say what the value is,
+  its units, and that a low value raises the interrupt rate.
+- [x] 23.5 the audio test: 23.4's release gate. **Closed into 23.9 by the
+  owner on 2026-09-22**: the read-first half below is this task's reading,
+  and the gate proper - the pass at 500 that the checkpoint names - is read
+  once, on the cut's own `release` binary, as 23.9. The separate
+  pre-cut pass on the 23.4 build that the text below first carried as open is not taken,
+  so one bare-metal session remains rather than two. **Read-first half taken
+  2026-09-22 on the 23.3 build, and 1000 passes it** (`runs/run-23.md`,
+  23.5): a Full-Speed audio stream on a root port played through a full
+  ATTO pass at control, 1000, control; every isochronous error counter 0 on
+  every boot, ring underruns 2 at 1000 against the controls' 1 and 3, and the
+  same audible stutter on reads of 1 MB and up at 1000 as at the second
+  control. The stream cost reads 15% at 4000 and 2.5% at 1000. A later boot
+  at **500** also passed (one underrun, errors 0, better by ear), and its
+  silent pass filled 23.3's missing rung: reads 32.5 MB/s at 500, 98% of the
+  33.1 plateau. Windows 98
+  audio plays on bare metal, so Phase 9's five-of-five failure was the VM. Not
+  IMOD's and not blocking: Windows 98 stutters under large sustained reads at
+  the hardware default too, cause not located. **Superseded (2026-09-22):**
+  this entry first carried "the same pass on the 23.4 build, at 500" as open;
+  the note at the head of this entry moved that pass to the cut's `release`
+  binary as 23.9. Where the text below says 1000, the gate now reads 500. Added by the owner on
+  2026-09-22, because 23.3 measured mass storage alone and the question the
+  register exists for is the other half: an isochronous endpoint posts 1,000
+  events a second at Full Speed and 8,000 at High Speed, moderation is what
+  absorbs them, and per-interrupt cost at real rates is what has bugchecked
+  Windows 98 on bare metal before. A shorter interval lets more of them
+  through.
+  **Where**: the P14s Gen 1 under Windows 98 SE and NUSB 3.3, the machine 23.3
+  was read on, so the two readings compare; the E460 as a second machine if
+  to hand. **What**: a USB audio device playing a WAV on repeat (Media
+  Player, Auto Repeat) through one full ATTO Disk Benchmark 2.41 pass on the
+  23.3 stick, same settings as 23.3, with the audio device and the stick on
+  different ports. Record the audio device's speed and whether it sits on a
+  root port or behind a hub, since issue 6 makes those two different
+  questions. **Arms**: the control (value absent, so 4000) first and last,
+  and 1000 between; 200 as well if the time is there, since it was the read
+  optimum and would be the next default asked about. **Read per arm**: a
+  `SWEEP98.BAT` dump before and after, the `.BIN` decoded against an offsets
+  table from the same tree (`runs/run-23.md`, 23.3, says how the experimental
+  build's dumps were read; `build-and-test.md`, "The moderation experiment
+  package (task 23.3) - retired", is what stands of its staging section) -
+  interrupts per pass, and the isochronous error
+  counters (`IsoPacketErrorsTotal`, `IsoMissedServiceTotal`,
+  `IsoRingUnderruns`, `IsoRingOverruns`, `IsoTrbErrorRecoveries`,
+  `IsoCadenceMismatches`); ATTO's read and write figures beside 23.3's, which
+  price the stream; and the listener's note of every audible dropout, click
+  or stall, with the time. **Passes** when at 1000 the stream plays through
+  the whole pass with no dropout and no error-counter movement that the
+  control does not also show, and the machine finishes the pass. **A failure
+  sends the INF default back to the owner** - it does not quietly revert to
+  4000. **Read first, before 23.4 is written**: the same pass on the 23.3
+  experimental build with the value at 1000, which is the same register write
+  and needs no new code, so a problem is found before the code that ships it.
+  The gate itself was then to be re-read on the 23.4 build; superseded
+  (2026-09-22) by 23.9, on the cut's own `release` binary. If Windows 98's audio
+  stack will not play on the machine at all, even at the control - the Phase 9
+  vehicle failed five of five, and whether that was the VM or Windows 98 is
+  not settled (`LOAD98.BAT`'s header) - that is itself the reading, recorded
+  as such, and the owner decides whether 32-bit Windows 7 on the E460 stands
+  in, where the first controller Disable is a known hang (`runs/run-22.md`,
+  22.9), so plan that leg around reboots.
+Tasks 23.6 to 23.10 were one task, "the record and the cut", until the owner
+split it on 2026-09-22 on the pattern of Phase 22's 22.8 to 22.10. They run
+in the order numbered, and 23.6 does not start until 23.4's box is closed.
+Replying on the GitHub issue, and closing it, are the owner's and not a
+task - and its polling-rate and true-speed requests keep it open.
+
+- [x] 23.6 the record. **Done 2026-09-22, documents only** (`runs/run-23.md`,
+  23.6). The release notes' two "Not in this release" sections are now "The
+  controller's Advanced tab (from `1.1.1.0`)" and "The interrupt moderation
+  setting (from `1.1.1.0`)", written forward-dated as 22.6 wrote `1.1.0.0`'s
+  and left for 23.7 to make current with the version line; the moderation
+  section is written the way README's "Tuning" section is (the owner,
+  2026-09-22), as is the `readme.txt` template's moderation subsection in
+  `make-release.ps1`, and it carries the `XHCISNAP` schema move; the log
+  section names the third value, the two known-limitations entries that
+  pointed at "the next release" point at those sections, and the High Speed
+  entry says `1.1.1.0` changes nothing there. `docs/issues/06` (status,
+  section 5.1's pointer, section 7's close, a first item in section 9) and
+  `docs/issues/README.md` (the issue 6 paragraph and row) say polling rates
+  and true speeds are Phase 24's and that `1.1.1.0` answers nothing on that
+  page. README was checked, not changed: `2e69e4e` and the owner's edits
+  after it already carry the Tuning section and the throughput row.
+  The brief as written: the release notes' known limitations brought into
+  line with whatever 23.2 and 23.4 change - 23.4's value, its units, its
+  default of 500 and its fallback of 4000, and that a lower value raises the
+  interrupt rate - and their two "Not in this release" sections, the
+  controller's Advanced tab and the interrupt moderation setting, moved into
+  this release's text; and `docs/issues/06` and `docs/issues/README.md`
+  saying plainly that polling rates and true speeds are Phase 24's and not
+  answered by this release. **23.1's share of this is already done**, on
+  branch `23.1` on 2026-09-20 and not left here: the three documents it found
+  work for, listed in its entry above and in `runs/run-23.md`; 23.2 left
+  nothing. No version or date moves in this task.
+- [x] 23.7 what the cut needs that no gate supplies. **Done 2026-09-22**
+  (`runs/run-23.md`, 23.7): `1.1.1.0` dated `09/22/2026` in
+  `xhci_version.h` and both INFs, the history entry, the release notes'
+  version line and "since `1.1.1.0`", the issue forms, and the `readme.txt`
+  template's `XHCISNAP` schema-4 paragraph, which the script now holds to
+  `src\xhci.h`. It also found the template's section 9 naming `1.1.1.0` by
+  hand, which the template's own check refuses at the cut, and reworded it.
+  README's Install section did not need to change. `build-driver.cmd all` and
+  `all -amd64` passed every gate. The INF gate's amd64 drift self-test no longer
+  matches a literal version. The brief as written, as 22.8 was: the version
+  `1.1.1.0` and its date in `xhci_version.h` and both INFs; the
+  `releases/history.md` entry; the release notes' version; README's Install
+  section if 23.4 changes it; the issue forms; and `make-release.ps1`'s
+  `readme.txt` template, which should say that `XHCISNAP` moved to schema 4,
+  so an older copy refuses this driver. (The template's registry section was
+  brought to three values, and to the INF writing `XhciImodInterval250ns`, by
+  `aa9d402`; its Windows 98 upgrade subsection's remedy, and release
+  acceptance test step 8.7's third value, were taken on 2026-09-22 by the
+  audit fix pass.) Then `build-driver.cmd all`
+  and `all -amd64` rebuilt from that tree, since `7488f13` onward was never
+  rebuilt.
+- [x] 23.8 the cut, `1.1.1.0`, as 22.10 was. **Cut 2026-09-22 (`7236636`) and
+  re-cut the same night with `-Force` (`5799ca2`) for the owner's edit to the
+  `history.md` entry the download readme embeds; asset 377,497 B, 17 files,
+  every one SHA-256 identical to `releases\1.1.1.0\`, no Microsoft file.**
+  **All ten install vehicles passed on 2026-09-22/23** - Windows 98 SE under
+  NUSB and under SweetLow, Windows ME, Windows 2000 SP4, 32-bit XP, Vista x86,
+  Windows 7 x86, XP x64, Vista x64 and Windows 7 x64, each from the asset,
+  each with the port-`0xE9` log at 0 bytes and the installed `.sys` the
+  asset's, and the two 9x/NT 5.0 legs reading `XHCISNAP`'s `register reads
+  500`. **Leg 5 (XP x64) was taken last, on 2026-09-23**, once the owner
+  supplied that guest's Administrator password, and it is the release's only
+  reading of the amd64 INF's NT 5.2 half: `[Xhci.Dev.NTAMD64]` with
+  `Xhci.Dev6` nowhere. **One
+  finding, and it is not against this release**: Windows 98 wedges
+  intermittently when a USB audio device is replugged after a cold boot, on
+  `1.1.0.0` as well as on `1.1.1.0` and at any moderation value, so no re-cut
+  (`lessons.md`; `runs/run-23.md`, 23.8). The brief as written: every gate
+  green on both
+  architectures; the four flavour directories and the asset, holding exactly
+  what the packager staged and no Microsoft file; and the install legs read
+  from the asset - the four x86 legs with full device clauses, the amd64
+  package on XP x64, Vista x64 and Windows 7 x64, and the x86 package on
+  Vista x86 and Windows 7 x86. On the Windows 98 SE and Windows 2000 legs,
+  `XHCISNAP` reads the INF's 500 back from the register, which is 23.4's
+  clause read on the `release` flavour rather than the `qemu` build. A
+  finding re-cuts under the same number with `-Force`, since nothing is
+  uploaded (`releases/README.md`).
+- [x] 23.9 23.5's gate proper, on the cut's own `release` binary: the P14s
+  Gen 1 under Windows 98 SE and NUSB 3.3, the value at the INF's 500, a
+  Full-Speed audio device on one root port looping a WAV through one full
+  ATTO 2.41 pass on the 23.3 stick, with the control (value deleted, so 4000)
+  before and after; read and passed by 23.5's rule above. This is the one
+  bare-metal leg left in the phase. A failure sends the INF default back to
+  the owner rather than reverting it quietly, and any change it causes is a
+  re-cut of 23.8 under the same number. **Done 2026-09-23 night, passed by
+  the owner's ruling**: on a fresh Windows 98 SE install the stream played
+  through every pass with no dropout, but 500 (twice) and 1000 stuttered
+  from ATTO's 2048 KB reads where both controls stuttered only on the last
+  write, and one of the two passes at 500 moved stream-reset counters the
+  controls did not. The owner ruled that a limitation, not a failure: the
+  INF keeps 500 and the stutter is published as a known limitation; `1.1.1.0` was re-cut with `-Force`, dated `09/24/2026`,
+  its drivers' code and data byte-identical to what the legs ran.
+  `runs/run-23.md` 23.9.
+- [x] 23.10 the post-release matrix, after the cut, as 22.9 was: fresh clones
+  prepared and stamped for `1.1.1.0`, `run-matrix.ps1 -PostRelease`, and the
+  device matrix on both primary targets no worse than
+  `runs/run-22-post-release/`; written to `runs/run-23-post-release/`. It
+  runs last. **Done 2026-09-23, and run before 23.9 by the owner's choice**:
+  `2a-fresh` PASS (22.9's audio replug failure did not recur) and `2b-fresh`
+  PASS, identical to 22.9 row for row. Across two hosts and two QEMU builds
+  (11.0.92 rc2 and 11.1.0), which the reports name. XP x64 and Windows 7
+  carry no tax: XP x64's audio row reads only with a user session, which the
+  owner took by autologin at the cost of two rows to a Found New Hardware
+  wizard; Windows 7 reads as 22.9, audio NODRIVER logged in or not and the
+  USB 1.1 hub churn bugcheck. `runs/run-23.md` 23.10.
+
+Checkpoint: the property page is in
+both halves of the 32-bit INF or recorded as not taken; 23.4 landed (23.3
+measured): the value absent, invalid
+and at 4000 all read the same IMOD of 4000 on both targets, the INF's 500
+and any other valid value read back from the register, a start is never failed
+by it, and 23.5's audio test passed at 500 on bare-metal Windows 98 on the
+cut's own `release` binary; every gate green on both architectures,
+`1.1.1.0` cut, and its install legs read from the asset; and the device matrix
+on both primary targets no worse than `runs/run-22-post-release/`. Not a
+checkpoint: a throughput figure taken in a guest, the reporter's machine
+standing in for one of the project's, any polling-rate work or a decision on
+true speeds (neither scheduled), the acceptance test, or the upload.
+
+Records: GitHub issue 4 (the thread; nothing of it is copied here beyond the
+table above); `docs/issues/06-full-speed-root-port-bugcheck.md`;
+`docs/future-plans/virtual-hub-per-root-port.md`;
+`docs/usb-xhci-info/xhci-data-structures.md` (IMOD, Table 5-39);
+`docs/usb-xhci-info/usbport-miniport-abi.md` ("Periodic scheduling: what
+`Period` actually carries"); `build-and-test.md` (the INF's omitted
+directives); `runs/run-23.md` (opened on 2026-09-20 by task 23.1, the first
+task to take a reading); `releases/history.md`; `runs/run-23-post-release/` (written after
+the cut).
 
 ---
 
