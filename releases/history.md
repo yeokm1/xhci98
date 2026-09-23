@@ -12,7 +12,7 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
-## 1.1.1.0 - 2026-09-22
+## 1.1.1.0 - 2026-09-24
 
 The xHCI controller's properties in Device Manager gain an Advanced tab, and
 the install sets a shorter interrupt moderation interval, which on the one
@@ -59,6 +59,13 @@ machine measured nearly doubled large reads from a USB stick. Every system
 - Not changed: the polling rates of Full- and Low-Speed devices, and every
   device on a root port being reported to Windows as High Speed. The known
   limitations `1.1.0.0` listed all still apply.
+- A known limitation, found on real hardware on 2026-09-23. On Windows 98, a USB audio device can stutter while a USB drive
+  is read at full speed: on the P14s, a Full-Speed audio device on a root
+  port stuttered from the 2048 KB reads of a disk benchmark onwards at `500`
+  and at `1000`, and only on the last write at `4000`. It follows the
+  doubled read speed. If audio matters more than read speed, raise the value
+  towards `4000` or delete it. The readme's section 7 and the release notes'
+  "Known limitations" have it.
 
 ## 1.1.0.0 - 2026-09-18
 

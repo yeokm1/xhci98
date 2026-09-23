@@ -3172,6 +3172,16 @@ tried (32-bit, a ThinkPad E460):
     Vista or 7 with unsaved work open, and be ready to power off if the
     restart that follows does not finish.
 
+ONE THAT COMES WITH THE MODERATION SETTING, found on one real Windows 98 SE
+machine (a ThinkPad P14s Gen 1, NUSB 3.3):
+
+  * WINDOWS 98: USB AUDIO CAN STUTTER WHILE A USB DRIVE IS READ AT FULL
+    SPEED. A Full-Speed audio device on a root port stuttered from the
+    2048 KB reads onwards in a disk benchmark at the install's 500, and the
+    same at 1000; at 4000 only on the last, 8192 KB write. It follows the
+    doubled read speed that 500 brings. If audio matters more than read
+    speed, raise the value towards 4000 or delete it (section 9).
+
 COMPOSITE DEVICES ON WINDOWS 98 - HANDLED BY THIS PACKAGE
 .........................................................
 

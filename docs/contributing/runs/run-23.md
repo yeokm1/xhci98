@@ -2417,3 +2417,264 @@ their paths moved, `cycle.ps1` which drives one boot/set/plug/check cycle
 unattended, `win98t.cmd` which adds `-msg timestamp=on` and the interrupt
 trace events, the unzipped asset, the per-leg log directories and the
 screenshots); disks `vm\t238\`; traces `vm\t238-*-qemu-trace*.log`.
+
+## 23.10 - the post-release matrix
+
+Status as of 2026-09-23: **taken, and the primary targets are no worse than
+`runs/run-22-post-release/`** - Windows 98 SE is better by one row and Windows
+2000 is unchanged, row for row. Run before 23.9 by the owner's choice (the
+roadmap says "runs last"), driven by Claude, with the owner deciding each open
+question. The four reports are in `run-23-post-release/`; the evidence is in
+`out\post-release\1.1.1.0*\`.
+
+### What was run, and on what
+
+`build-driver.cmd qemu` and `qemu -amd64` at `157cb18`, both packages, both
+`gen-offsets` runs, every gate green, the offset tables unchanged (`SIZEOF`
+92320 x86, 95560 amd64; the 16 bytes since `1.1.0.0` were already
+committed). Every report on both hosts names the same two builds: x86
+`cf00ced51460cf10` (164,880 B) and amd64 `c5c3ec47df2142b9` (280,064 B). All
+four images re-cloned with `-Clone -FreshCopy` and stamped
+`base-1.1.1.0-qemu`, each stamp its file's only snapshot.
+
+**Two hosts and two QEMU builds, which is a variable 22.9 did not have.**
+`2b-fresh` and the first `xp64-fresh` and `win7-fresh` runs were taken on host
+`XT-F80DAC37B29E` under QEMU 11.0.92 (`v11.1.0-rc2-12128-gc65ddfcd01`); the
+`2a-fresh` run and the two reruns on host `MINIS-W11P-YKM` under 11.1.0
+(`v11.1.0-12130-ge470268ff4`), the build 22.9 read. Each report's header
+names its own.
+
+| Target | Host / QEMU | Verdict | Against 22.9 |
+|---|---|---|---|
+| `2a-fresh` (Windows 98 SE) | MINIS / 11.1.0 | **PASS**, 17 rows, 5 NODRIVER expected, 3 not reached, 0 against, 1:26:18 | FAIL on the audio replug then; every other row identical |
+| `2b-fresh` (Windows 2000) | XT / 11.0.92 | **PASS**, 17 rows, 6 NODRIVER expected, 0 not reached, 1:51:10 | identical, row for row |
+| `xp64-fresh` (XP x64) | MINIS / 11.1.0 | FAIL, 4 NODRIVER expected, 2 against (`usb-ccid`, `u2f-emulated`), 1:50:51 | 22.9: 1 against (`usb-net`, since made expected) |
+| `win7-fresh` (Windows 7 x86) | MINIS / 11.1.0 | FAIL, 4 NODRIVER expected, 0 not reached, 2 against (`usb-audio`, `usb-hub/churn`), 1:43:23 | 22.9: 3 expected, 1 not reached, 4 against |
+
+The XP x64 and Windows 7 rows carry no checkpoint tax; the paragraphs below
+say what each against-row is.
+
+### Preparation, and one void run
+
+As 22.9, with the harness's `-Attach <class> -AtPort 2` teaching on Windows 98
+(drivers for four HID classes, storage, hub and audio, the composite then
+`WDMA_USB.INF`, audio left attached through the shutdown; no driver for uas,
+serial, braille, ccid, net; `-Status` 15 addressed, 13 endpoints opened).
+Windows 7 took the package by `pnputil -i -a e:\xhci98.inf` from an elevated
+prompt, not through Device Manager; the INF and the device are the same.
+
+**The first `2b-fresh` run is void, and the mistake was Claude's.** It read
+NODRIVER on audio and the keyboards because two Found New Hardware wizards
+cancelled in prep (Video Controller, PCI Ethernet) came back at every boot and
+queued every later install behind them. Both were finished with "Disable the
+device" and the image re-stamped; the rerun is the PASS above. The void output
+is `out\post-release\1.1.1.0-aborted-2b-wizard\`.
+
+### Windows 98 SE: the audio replug passes
+
+22.9's one against-row, the `usb-audio/fs` replug, passed both legs in the
+full run, on the same QEMU build under which 22.9 saw it fail four times in
+five. The audio group ran with no other guest on the host (the two NT reruns
+were started once it finished). A partial run on the other host the same
+afternoon, stopped by the owner after its audio group, passed it too, beside
+the Windows 7 run (`out\post-release\1.1.1.0-2a-audio-partial\`). One full run
+and one partial is not a rate; `lessons.md`'s entry for the row carries it.
+
+### XP x64: the audio row needs a session, and a session costs two rows
+
+The first run, at the login screen as design record 09 and
+`scripts\vm-matrix\README.md` prepare it, read **`usb-audio/fs` NODRIVER on
+both legs**, where `1.1.0.0` passed it; `-Group audio` alone read it again
+(`1.1.1.0-xp64-audio-recheck\`). On a `-WorkDir` scratch copy, never copied
+back: logged in, the device's isochronous endpoint opened on arrival
+("endpoints opened" +1) and Windows said the device was ready; logged off and
+replugged at the login screen, it was addressed and nothing opened in 105 s;
+logged back in, it opened at once. Every fault and refusal counter zero. The
+owner then logged in to a second copy by hand while Claude attached the device
+at port 2 - opened 1 to 2, replug 2 to 3 - and **passed the row on that
+check** ("if it works, can pass it"; `1.1.1.0-xp64-audio-loggedin\`). The
+first run's own report still reads FAIL and was not edited. Whether the
+difference from 22.9 is QEMU rc2 against final, the host, or session timing
+was not attributed.
+
+**The owner then had `xp64-fresh` log in by itself** (2026-09-23 16:40): on a
+`-WorkDir` copy, `AutoAdminLogon=1`, `DefaultUserName=administrator`,
+`DefaultPassword=test` under `HKLM\SOFTWARE\Microsoft\Windows
+NT\CurrentVersion\Winlogon`, a clean shutdown, `-CopyBack`, re-stamped
+`base-1.1.1.0-qemu` (still the only snapshot), verified to boot to the desktop
+with no key sent. **This departs from the documented prep**, which leaves NT
+guests at the login screen.
+
+On that image the rerun **passed `usb-audio/fs` on both legs by itself**, and
+read two new against-rows, `usb-ccid/fs` and `u2f-emulated/fs` NODRIVER, both
+of which passed in the first run and in 22.9. The screenshots show why: with a
+desktop, the first device XP has no driver for, `usb-net` (RNDIS), raises a
+modal Found New Hardware wizard, which stays up and queues every later install
+behind it - the mechanism of the void 2b run. At the login screen no wizard is
+shown, which is why the first run and 22.9 passed those rows.
+
+`-Group other` was rerun into `1.1.1.0-xp64-other-wizards-cancelled\` with a
+scratch watcher that took a `screendump` every few seconds, looked for the
+wizard's panel and sent Esc: `u2f-emulated` **PASS both legs**, `usb-ccid`
+**PASS on the replug**. Its first attach read NODRIVER because the wizard had
+opened cascaded, at a position the watcher's first version did not look at;
+cancelling that one by hand let XP install "QEMU USB CCID" at once. So on
+XP x64 both rows bind whenever nothing is queued ahead of them; `usb-ccid`'s
+first attach was not read clean on the autologin image. The watcher and its
+frames are evidence, not a harness change.
+
+### Windows 7: the login hypothesis refuted, and the churn bugcheck again
+
+The first run, at the login screen: `usb-audio/fs` NODRIVER both legs (as
+22.9) and `usb-hub/churn` ERROR, the group not completed. The owner's
+hypothesis was that the audio row fails because nobody is logged in, as XP
+x64's does. `win7-fresh` was re-stamped with autologin the same way
+(`DefaultUserName=test`, 17:07) and rerun: **the same two rows against, digit
+for digit in the verdict line.** The audio row's screenshot shows a logged-in
+desktop with the speaker marked unavailable, as 22.9's did. So the session is
+not it on Windows 7, and 22.9's reading stands: QEMU's `usb-audio` has
+endpoints only in alternate setting 1, and Windows 7 opens nothing until
+something streams (and from XP on nothing plays on a root port, a known
+limitation of `1.1.0.0`).
+
+`usb-hub/churn` is 22.9's bugcheck, not a new one: both runs lost the guest
+mid-row to a restart, one captured at Windows Error Recovery and the other a
+few seconds later inside Startup Repair (`matrix-win7-fresh-hub-groupfail.png`
+in each directory). That is issue 6 section 6.1's residual topology, a
+known limitation since `1.1.0.0`; the stop code was not re-captured.
+`usb-net` is now expected (22.9's measured entry), and the HID group, which
+did not complete in 22.9, completed: the tablet rows passed.
+
+### What is left for the owner
+
+Whether the autologin images stay (they read XP x64's audio row and cost it
+two rows to a wizard the login screen never shows); and whether XP x64's
+`usb-ccid` first attach is worth a clean reading. Neither blocks 23.10, whose
+clause is the two primary targets.
+
+## 23.9 - 23.5's gate proper, on bare metal
+
+Status as of 2026-09-24: **read, and passed by the owner's ruling**: the
+stream played through every pass with no dropout, and 500 stuttered where
+neither control did, which the owner published as a known limitation. That
+re-cut `1.1.1.0` under the same number, dated `09/24/2026`. Taken on the night
+of 2026-09-23 by the owner at the machine, Claude reading the dumps. The
+evidence is in `temp\rel\` and `temp\rel2\` (git-ignored).
+
+### How it was run
+
+The P14s Gen 1, and **a fresh Windows 98 SE install**: the owner reinstalled
+it rather than take the rename-and-restart route off 23.3's experimental
+build. Then NUSB 3.3, `1.1.1.0`'s `release-x86` from the published asset
+(86,059 B, `15C99E9F...`), `XHCISNAP -verbosity 2` and a cold boot. The first
+dump read `XhciImodInterval250ns` read, value 500, register reads 500, status
+0: the INF's value in force on the `release` binary on metal. The kit was
+`out\bench-23.9\`; every boot as its `README.TXT` and 23.5 say (the WAV
+looping on a Full-Speed audio device at a root port, `SWEEP98 <arm> A`, the
+value checked with `find`, one ATTO 2.41 pass at 23.3's settings on the 23.3
+stick, the screenshot, `SWEEP98 <arm> B`, the audio stopped last). The owner
+listened throughout.
+
+**The instance, and a void first boot.** `IMOD98 FIND` exports the class key
+and lists the lines naming xhci98; the instance is read by eye off the key
+line above. It was read as `0002`, and `IMOD98 CLEAR 0002` went there - a
+"USB Root Hub" key (`usbhub.sys`) that never held the value, so the delete
+did nothing. The first control boot read 500 and was not run; its dumps were
+kept as `XCTL1A.*`. The driver's key is **`0010`**, the same number as the old
+install. CTL1's value was deleted there by hand in RegEdit; the later arms
+used `IMOD98` against `0010`, and `CLEAR 0010` worked for CTL2.
+
+### What it read
+
+Five passes. Deltas between each boot's two dumps, decoded against
+`scripts/vm-matrix/offsets.txt` (`SIZEOF` 92320 = the dumps); ATTO read and
+write at 8 MB from the screenshots.
+
+| Arm | In force | By ear (owner) | Read / write, KB/s | Pass | Iso packets/s | `IsoRingUnderruns` | Stops / aborts / ring-full | Interrupts/s |
+|---|---|---|---|---|---|---|---|---|
+| CTL1 | 4000 | from the 8192 KB write | 15,080 / 6,249 | 725 s | 999 | 2 | 0 / 0 / 0 | 942 |
+| 500 | 500 | from the 2048 KB read onwards | 31,469 / 6,705 | 575 s | 926 | 28 | 98 / 165 / 32 | 1,397 |
+| CTL2 | 4000 | from the 8192 KB write | 15,038 / 6,339 | 672 s | 998 | 3 | 0 / 0 / 0 | 941 |
+| 500 again (`5002`) | 500 | from the 2048 KB read onwards | 31,543 / 6,739 | 510 s | 997 | 1 | 0 / 0 / 0 | 1,528 |
+| 1000 | 1000 | from the 2048 KB read onwards | 29,114 / 6,712 | 557 s | 999 | 2 | 0 / 0 / 0 | 1,431 |
+
+`IsoPacketErrorsTotal`, `IsoMissedServiceTotal`, `IsoRingOverruns` and
+`IsoTrbErrorRecoveries` were 0 on every pass, and no command or endpoint
+stop failed on any.
+
+**The first 500 pass is the only one with driver-side activity.** Besides the
+28 underruns, usbport stopped an endpoint 98 times, 165 transfers were
+aborted, 32 were refused ring-full and retried, and an interface was selected
+twice (a stream closed and reopened). The driver logged
+`ep.recovery=00020713` 66 times - DCI 2 (endpoint 1 OUT), Stop Endpoint,
+Context State Error: the endpoint was no longer Running when the stop
+arrived, which the quiescence path handles by reading the endpoint state.
+Every one completed; nothing failed or was given up. Which device's endpoint 1
+OUT it was is not matched, and the audio device's streaming endpoint is the
+likely one. It did not recur in the repeat at 500 or at 1000.
+
+**The stutter reproduced and follows the read speed, not the value.** Both
+controls stuttered only on the last row; 500 twice and 1000 once stuttered
+from the 2048 KB read, where reads pass about 29 MB/s. In the repeat at 500
+and at 1000 the stream was delivered at its full rate (997 and 999 packets a
+second) with underruns no higher than the controls', so what was heard there
+went wrong above this driver - the packets arrived, their content did not
+keep up. Windows 98's own audio mixing falling behind while reads run twice
+as fast fits, and is not measured.
+
+Throughput is 23.5's: 500 reads at 31.5 MB/s with the stream against its
+31.7, the controls at 15.0 to 15.1 against its 15.1.
+
+**Against 23.5 the audio verdict reversed.** On the old install, with the
+experimental build, 500 had one underrun and sounded better than both
+controls, and the controls themselves stuttered on large reads. This install's
+controls stutter only at the end. What differs is the installation and the
+binary (`release` against the experimental build); which one matters is not
+known.
+
+### The verdict, and the owner's decision
+
+**What the rule met and what it did not.** The stream played through the
+whole pass at every arm, the machine finished every pass, and nothing dropped
+out; no isochronous error counter moved on any pass. But at 500 it stuttered
+on rows where neither control did, and in one pass of two the driver's
+counters moved where the controls' did not. Claude first read that as a fail
+of 23.5's clause "nothing the control does not also show". 1000 behaved the
+same by ear, with clean counters in its one pass. Asked whether the data
+favours 1000: no - the two are the same by ear and by counter, 500 reads 8%
+faster and 1000 takes 6% fewer interrupts, and the only bad pass was one of
+two at 500 against one pass at 1000.
+
+**The owner's ruling (2026-09-24): 23.5's gate passes** - the audio works,
+nothing dropped out, and the stutter is a limitation rather than a failure.
+**The owner kept 500 and made the stutter a known limitation** (2026-09-23): the
+release notes, the README's table, the readme template's section 7 and the
+`history.md` entry say that on Windows 98 USB audio can stutter while a USB
+drive is read at full speed, that it follows the doubled read speed, and that
+raising the value towards `4000` or deleting it is the remedy where audio
+matters more. The INF's value is unchanged.
+
+### The re-cut
+
+**Dated `09/24/2026` at the owner's instruction** (`XHCI_DRIVERVER_DATE` and
+both INFs' `DriverVer`; `build-and-test.md`'s unpadded-date example follows).
+Before it, `src\objfre\i386\xhci98.sys` was found to be **not the published
+binary**: `915C53EB...`, the same 86,059 bytes, built at 01:00 on 2026-09-23 -
+23.8's diagnostic build with the IMOD write compiled out, left there by the
+wedge investigation. A `-Force` re-cut restages from `src\obj*`, so it would
+have been published. `build-driver.cmd all` and `all -amd64` rebuilt every
+flavour, every gate green (the same 5 amd64 compiler warnings as 23.10's
+build); `XHCIQUAL.EXE` and `XHCISNAP.EXE` were rebuilt because
+`make-release.ps1` refuses tools older than `xhci_version.h`.
+
+`make-release.ps1 -Force`: `releases\1.1.1.0\` and `out\xhci98-1.1.1.0.zip`
+(377,827 B), **17 files, each SHA-256 identical to the tracked tree**, no
+Microsoft file. The four drivers now read `90DD7823...` (release x86),
+`4D8A1A57...` (release x64), `26CE8CDD...` (debug x86) and `FA0E6D16...`
+(debug x64), each identical to its fresh `src\obj*` build. **Against the
+binaries 23.8's legs and these passes ran, only link metadata differs** - the
+PE timestamps, checksums, debug-directory records and, on x64, the PDB
+signature: 18, 24, 19 and 24 bytes, every run of them in a header or debug
+record. The date is not compiled into the binaries. Code and data are
+byte-identical, so no reading here or in 23.8 is re-taken. Nothing has been
+uploaded.

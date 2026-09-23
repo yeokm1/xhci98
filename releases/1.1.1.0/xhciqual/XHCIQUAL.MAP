@@ -1,7 +1,7 @@
 Open Watcom Linker Version 2.0 beta Jun  1 2026 05:47:47 (64-bit)
 Copyright (c) 2002-2026 The Open Watcom Contributors. All Rights Reserved.
 Portions Copyright (c) 1985-2002 Sybase, Inc. All Rights Reserved.
-Created on:       26/09/22 22:59:16
+Created on:       26/09/23 23:54:41
 Executable Image: xhciqual.exe
 creating a DOS/32 Advanced DOS Extender (LE-style) executable
 
@@ -472,4 +472,4 @@ Stack size:  00010000 (65536.)
 Memory size:  00037fd1 (229329.)
 Entry point address: 0001:00008758
 Stub file: C:\WATCOM\BINW\dos32a.exe
-Link time: 00:00.16
+Link time: 00:00.24

@@ -3,7 +3,7 @@
   USB 2.0 for Windows 98 SE, ME, 2000, XP, Vista and 7 on xHCI-only machines
 ==============================================================================
 
-Released 2026-09-22.
+Released 2026-09-24.
 
 Most PCs made from the mid 2010s onward have only USB 3.0 (xHCI) controllers,
 which older Windows cannot use. This driver drives them as USB 2.0 on:
@@ -696,6 +696,16 @@ tried (32-bit, a ThinkPad E460):
     Vista or 7 with unsaved work open, and be ready to power off if the
     restart that follows does not finish.
 
+ONE THAT COMES WITH THE MODERATION SETTING, found on one real Windows 98 SE
+machine (a ThinkPad P14s Gen 1, NUSB 3.3):
+
+  * WINDOWS 98: USB AUDIO CAN STUTTER WHILE A USB DRIVE IS READ AT FULL
+    SPEED. A Full-Speed audio device on a root port stuttered from the
+    2048 KB reads onwards in a disk benchmark at the install's 500, and the
+    same at 1000; at 4000 only on the last, 8192 KB write. It follows the
+    doubled read speed that 500 brings. If audio matters more than read
+    speed, raise the value towards 4000 or delete it (section 9).
+
 COMPOSITE DEVICES ON WINDOWS 98 - HANDLED BY THIS PACKAGE
 .........................................................
 
@@ -725,7 +735,7 @@ needed.
       xhci98.inf
       xhci98.sys   86,059 bytes
       SHA-256
-      15C99E9F1C325FF4CDDB2E969AF7614DB5619141D3AFC4D7346BDE3A5FD628CE
+      90DD7823C0C60EBE612F56421B26C73F7F7F9A7F86ED0C96CD42BED82CC27847
 
   DEBUG-X86\  - only when diagnosing a problem
 
@@ -739,7 +749,7 @@ needed.
       xhci98.inf
       xhci98.sys   86,699 bytes
       SHA-256
-      34807949C2B0ED3F1FED4767C3D6A668F4AEAFB81E05179864B66BB14347CEBF
+      26CE8CDD982423C8CF9B165BF294E7699E3DB6D1C23326619229035251B7294D
 
   RELEASE-X64\  - INSTALL THIS ONE, on 64-bit Windows
 
@@ -748,7 +758,7 @@ needed.
       xhci98.inf
       xhci98.sys   97,280 bytes
       SHA-256
-      3C597BE3F4F12D4A330AA8E9495A01C4E0F852DC2B7CF76FE047EC8A6277CF57
+      4D8A1A57B8244428C1CB427B397D36541FB2C74BBDD86F5924CD6B7184233ADB
 
   DEBUG-X64\  - only when diagnosing a problem
 
@@ -762,7 +772,7 @@ needed.
       xhci98.inf
       xhci98.sys   181,760 bytes
       SHA-256
-      774675D9795B26038E6B067DACA8DFD49D7CE4EC259394B138E34A80D534177B
+      FA0E6D16DCAC287FD47B76EC1DECBD1F7A712D7409637B5F0E3ECF691134C35F
 
   Which pair: the -X86 directories are for 32-bit Windows and the
   -X64 ones for 64-bit Windows. If you pick the wrong one nothing
@@ -982,7 +992,7 @@ writes none of them: the installer creates all three.
  10. RELEASE HISTORY
 ==============================================================================
 
-  1.1.1.0 - 2026-09-22
+  1.1.1.0 - 2026-09-24
 
   The xHCI controller's properties in Device Manager gain an Advanced tab, and
   the install sets a shorter interrupt moderation interval, which on the one
@@ -1029,6 +1039,14 @@ writes none of them: the installer creates all three.
     * Not changed: the polling rates of Full- and Low-Speed devices, and every
       device on a root port being reported to Windows as High Speed. The known
       limitations 1.1.0.0 listed all still apply.
+    * A known limitation, found on real hardware on 2026-09-23. On Windows 98,
+      a USB audio device can stutter while a USB drive is read at full speed:
+      on the P14s, a Full-Speed audio device on a root port stuttered from the
+      2048 KB reads of a disk benchmark onwards at 500 and at 1000, and only
+      on the last write at 4000. It follows the doubled read speed. If audio
+      matters more than read speed, raise the value towards 4000 or delete it.
+      The readme's section 7 and the release notes' "Known limitations" have
+      it.
 
   1.1.0.0 - 2026-09-18
 

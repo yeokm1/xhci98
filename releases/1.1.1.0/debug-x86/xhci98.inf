@@ -26,7 +26,7 @@ LayoutFile=layout.inf
 ; Must equal src\xhci_version.h, where the version and date are edited. The
 ; INF gate and make-package.ps1 both check it. Windows 2000 ranks drivers by
 ; date then version, so an upgrade must move this forward.
-DriverVer=09/22/2026,1.1.1.0
+DriverVer=09/24/2026,1.1.1.0
 
 ; NTx86.6.0 selects [XhciModels.NTx86.6.0] on Vista and Windows 7 only. This
 ; is the line Windows 98's engine parses to find [XhciModels]; add no other

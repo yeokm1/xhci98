@@ -532,7 +532,14 @@ are 23.6 to 23.10, split by the owner the same day. **23.6 is done**
 (2026-09-22: `1.1.1.0` dated `09/22/2026`, both architectures rebuilt green);
 **23.8 is done** (`1.1.1.0` cut 2026-09-22 and re-cut the same night for the
 owner's readme edit; all ten install vehicles read from the asset by
-2026-09-23, one finding and no re-cut); 23.9 and 23.10 are open.
+2026-09-23, one finding and no re-cut); **23.10 is done** (2026-09-23, run
+before 23.9 by the owner's choice: both primary targets pass, Windows 98 SE
+one row better than `1.1.0.0` and Windows 2000 unchanged); **23.9 is done**
+(the P14s, 2026-09-23 night: the stream played through every pass with no
+dropout, and 500 stuttered by ear where neither control did; the owner ruled
+the gate passed, kept 500 and published the stutter as a known limitation,
+re-cutting `1.1.1.0` dated `09/24/2026`, the drivers' code and data
+unchanged).
 `1.1.0.0` was uploaded on 2026-09-20, so the hold on merging this branch
 is lifted. The version is **`1.1.1.0`** (the owner, 2026-09-22): 23.4 at least is driver code, so the
 third field moves (`releases/README.md`). The owner's note on the issue
@@ -957,19 +964,34 @@ task - and its polling-rate and true-speed requests keep it open.
   clause read on the `release` flavour rather than the `qemu` build. A
   finding re-cuts under the same number with `-Force`, since nothing is
   uploaded (`releases/README.md`).
-- [ ] 23.9 23.5's gate proper, on the cut's own `release` binary: the P14s
+- [x] 23.9 23.5's gate proper, on the cut's own `release` binary: the P14s
   Gen 1 under Windows 98 SE and NUSB 3.3, the value at the INF's 500, a
   Full-Speed audio device on one root port looping a WAV through one full
   ATTO 2.41 pass on the 23.3 stick, with the control (value deleted, so 4000)
   before and after; read and passed by 23.5's rule above. This is the one
   bare-metal leg left in the phase. A failure sends the INF default back to
   the owner rather than reverting it quietly, and any change it causes is a
-  re-cut of 23.8 under the same number.
-- [ ] 23.10 the post-release matrix, after the cut, as 22.9 was: fresh clones
+  re-cut of 23.8 under the same number. **Done 2026-09-23 night, passed by
+  the owner's ruling**: on a fresh Windows 98 SE install the stream played
+  through every pass with no dropout, but 500 (twice) and 1000 stuttered
+  from ATTO's 2048 KB reads where both controls stuttered only on the last
+  write, and one of the two passes at 500 moved stream-reset counters the
+  controls did not. The owner ruled that a limitation, not a failure: the
+  INF keeps 500 and the stutter is published as a known limitation; `1.1.1.0` was re-cut with `-Force`, dated `09/24/2026`,
+  its drivers' code and data byte-identical to what the legs ran.
+  `runs/run-23.md` 23.9.
+- [x] 23.10 the post-release matrix, after the cut, as 22.9 was: fresh clones
   prepared and stamped for `1.1.1.0`, `run-matrix.ps1 -PostRelease`, and the
   device matrix on both primary targets no worse than
   `runs/run-22-post-release/`; written to `runs/run-23-post-release/`. It
-  runs last.
+  runs last. **Done 2026-09-23, and run before 23.9 by the owner's choice**:
+  `2a-fresh` PASS (22.9's audio replug failure did not recur) and `2b-fresh`
+  PASS, identical to 22.9 row for row. Across two hosts and two QEMU builds
+  (11.0.92 rc2 and 11.1.0), which the reports name. XP x64 and Windows 7
+  carry no tax: XP x64's audio row reads only with a user session, which the
+  owner took by autologin at the cost of two rows to a Found New Hardware
+  wizard; Windows 7 reads as 22.9, audio NODRIVER logged in or not and the
+  USB 1.1 hub churn bugcheck. `runs/run-23.md` 23.10.
 
 Checkpoint: the property page is in
 both halves of the 32-bit INF or recorded as not taken; 23.4 landed (23.3

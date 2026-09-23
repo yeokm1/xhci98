@@ -1,7 +1,7 @@
 # xhci98 - Release Notes
 
 This file describes package version `1.1.1.0`
-(`DriverVer=09/22/2026,1.1.1.0`), the sixth release. Where this file and
+(`DriverVer=09/24/2026,1.1.1.0`), the sixth release. Where this file and
 `docs/contributing/roadmap.md`, `docs/contributing/build-and-test.md` or
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
@@ -636,6 +636,20 @@ because a user meets them through this driver.
   a High-Speed hub. Roadmap task 19.8 and `docs/contributing/runs/run-20.md`
   retain the run details; `docs/contributing/lessons.md` has what the Phase 20
   failures were isolated to.
+- **Windows 98: USB audio can stutter while a USB drive is read at full
+  speed.** Measured on real hardware, a ThinkPad P14s Gen 1 under Windows 98
+  SE and NUSB 3.3 (2026-09-23): a Full-Speed USB audio device on a root port
+  looping a WAV through an ATTO Disk Benchmark pass stuttered from the
+  2048 KB reads onwards at the install's `500`, and the same at `1000`. At
+  `4000` it stuttered only on the last, 8192 KB write. The stutter follows
+  the read speed rather than the value: the shorter interval is what doubles
+  reads (about 31 MB/s at `500` against 15 MB/s at `4000` in those passes),
+  and the audio stream was still delivered at its full rate in all but one of
+  the three passes at `500` and `1000`. Where audio matters more than read
+  speed, raise the value towards `4000` or delete it (see "The interrupt
+  moderation setting"). An earlier Windows 98 install on the same machine
+  stuttered on large reads at `4000` too, so how much of this depends on the
+  installation is not known.
 - Windows 98 on an xHCI-only machine: the driver install asks for the
   Windows 98 SE CD (an "Insert Disk" prompt naming the Windows 98 Second
   Edition CD-ROM) unless the Windows CABs are on the hard disk. That is

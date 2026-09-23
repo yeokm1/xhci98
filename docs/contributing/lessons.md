@@ -295,6 +295,13 @@ with a second guest" is true of the QEMU it was measured on, not in
 general. What in 11.1.0 changes it is not read. The rest of the entry stands as the record
 of the earlier readings.
 
+**And on 2026-09-23 (roadmap task 23.10, `runs/run-23.md`) it passed under
+11.1.0.** `1.1.1.0`'s qemu build on `fresh-2a.img` at `base-1.1.1.0-qemu`,
+the same 11.1.0 build and the audio group alone on the host: both legs PASS
+in the full run. A partial run the same afternoon under 11.0.92 (rc2) on
+another host passed it too, beside a Windows 7 run. One full run is not a
+rate: 11.1.0 still makes the failure likely, not certain.
+
 Observed between 2026-09-06 and 2026-09-07 on the development host, QEMU
 11.0.0 under TCG, `fresh-2a.img` at `base-1.0.1.0-qemu` and later
 `base-1.0.2.0-qemu`, `run-matrix.ps1 -PostRelease` (roadmap tasks 20.7,
@@ -9265,3 +9272,51 @@ intermittent one - three clean runs would have "proved" the wrong thing twice
 over here. And when a guest stops, say which layer stopped: a trace that still
 shows timer reads and completed transfers has already exonerated the driver's
 interrupt path.
+
+## A logged-in NT guest changes what the device matrix reads, in both directions
+
+Roadmap task 23.10, 2026-09-23, `xp64-fresh` and `win7-fresh` under
+`1.1.1.0`'s qemu build. The matrix's prep leaves NT guests at the login
+screen (design record 09, `scripts\vm-matrix\README.md`), and this is the
+first run where one was not.
+
+**XP x64 opens the `usb-audio` isochronous endpoint only with a user
+session.** At the login screen the device was addressed and nothing opened
+for 105 s; logged in, it opened on arrival, and logging back in opened it at
+once. So the row read NODRIVER at the login screen, where `1.1.0.0`'s run on
+another host had passed it there. With autologin it passed both legs.
+
+**With a session, a device that has no driver blocks every later install.**
+XP raises a modal Found New Hardware wizard for `usb-net` (RNDIS), the first
+driverless device in the `other` group; it stays up, and `usb-ccid` and
+`u2f-emulated`, which bind silently at the login screen, read NODRIVER queued
+behind it. Cancelled by a watcher sending Esc, both bound. The wizard can open
+cascaded from its usual place, so a watcher looking at one position misses it.
+It is the same mechanism as Windows 2000's prep wizards (Video Controller,
+PCI Ethernet), which come back at every boot if cancelled and void a run
+unless they are finished with "Disable the device".
+
+**Windows 7 is not moved by it**: its audio row read NODRIVER logged in and
+logged out, as 22.9 found.
+
+Rules. **Say whether an NT guest was logged in when a row reads NODRIVER**,
+because on XP x64 it decides the audio row. And **when a guest has a desktop,
+look at the screen before believing a NODRIVER**: one open wizard turns every
+later row in the group into a reading of the wizard.
+
+## A re-cut restages whatever is in `src\obj*`, including a diagnostic build
+
+Roadmap task 23.9's re-cut, 2026-09-24. `make-release.ps1 -Force` copies the
+drivers from `src\objfre` and `src\objchk`; it does not rebuild them. Before
+it ran, `src\objfre\i386\xhci98.sys` was `915C53EB...` where the published
+file was `15C99E9F...` - the same 86,059 bytes, built two hours after the cut:
+23.8's wedge investigation had built a diagnostic `release` flavour with the
+IMOD write compiled out (`XHCI_EXTRA_DEFINES`) and left it there. Size and
+flavour marker both match a shipping build; only the hash does not.
+
+Rules. **Before any re-cut, compare every `src\obj*\xhci98.sys` with the
+published one by hash, or rebuild with `build-driver.cmd all` and `all -amd64`
+and no extra defines** - which is what a re-cut that changes a date needs
+anyway. And after an experiment that builds into `src\obj*`, rebuild the
+shipping flavours before the session ends, or say in the handoff that the
+tree holds an experiment.
