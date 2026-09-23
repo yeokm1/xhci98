@@ -114,8 +114,6 @@ Linux's xHCI driver defaults to `160` (40 us). This package ships `500` to be mo
 
 Feel free to tune it. Lower towards `160` for the last few percent of storage speed, or raise it towards `4000` (or delete it) if you get audio stutter or instability under load. `500` may produce audio stuttering while a USB drive is being read at full speed, so if you want to prioritise audio over bandwidth, raise the value. 
 
-On Windows 98 with NUSB, an upgrade over an existing install crashes before the value is written, so the driver runs at `4000` until you set it by hand.
-
 ## What is tested, and what is not
 
 Windows 98 SE is validated on real hardware. 32-bit Windows 7 has run on real hardware once (a ThinkPad E460, 2026-09-19). Windows 2000 SP4, Windows ME, Windows XP (x86/x64), Windows Vista (x86/x64) and 64-bit Windows 7 have only ever run in QEMU virtual machines.
