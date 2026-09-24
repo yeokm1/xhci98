@@ -633,20 +633,96 @@ release-per-risk rule says so.
 
 Tasks. `runs/run-24.md` is the record once a task runs.
 
-| Task | Subject | Where it is read |
-|---|---|---|
-| 24.1 | Low-Speed polling rates behind a hub. Reproduce the reporter's Code 10 first: a Low-Speed mouse behind a hub, SweetLow's hidusbf setting 250, 500 and 1000 Hz, under SweetLow's stack (the reporter's) and NUSB 3.3 on Windows 98 SE, and on Windows 2000. The candidate is `XhciIntervalFromPeriod` in `src/xhci_ctx.c`, which refuses a Low-Speed `Period` under 8 on the strength of the SP4 and NUSB floors alone; xHCI Table 6-12 allows Interval 3 to 10 (1 ms to 128 ms) for a Low-Speed interrupt endpoint, so the bound is this driver's, not the hardware's. If confirmed: accept `Period` 1, 2 and 4 at Low Speed, host vectors for the new rows, `XHCISNAP` showing the programmed Interval, and the same three rates read back on both primary targets; a `Period` that no shipping usbport can send stays refused | Host tests; QEMU `usb-hub` plus `usb-mouse` on the three guests; the E460 with the Low-Speed mouse behind a USB 2.0 hub if a metal reading is wanted |
-| 24.2 | Polling rates on a root port: a decision, with its reason, whether they close as owned by 24.3. The bands are usbport's bucketing on the speed it was told (issue 6 section 5), `bInterval` is gone before the miniport sees it, and the invariants forbid reconstructing it; if no narrower change exists, this task records why and points the reporter at 24.3, and if one does, it is measured with hidusbf on a root port as section 5's reading was | A reading of the tree and the ABI document; a boot only if a change is found |
-| 24.3 | True speeds on root ports: the owner's decision on `docs/future-plans/virtual-hub-per-root-port.md` - taken, refused or deferred, with the reason recorded on issue 6 section 8. Taken means the page becomes a numbered design record, its section 5 measurements become the checkpoint of a new phase, and its section 9 decisions are answered (name, permanent or on demand, ids, default). Not taken means issue 6 section 9's first item says so and why. The reporter's alternative, a patched usbport that guards the empty TT list, is not this project's to ship and is recorded as such | A decision; no boot |
-| 24.4 | The reporter's pointer for the missing USB 1.1 hub, once a part is to hand: read whether a board built on an Analog Devices ADuM3160 or ADuM4160 USB isolator enumerates as a hub or is transparent to the host, and what it does to a High-Speed device behind it. If it presents as a hub, it is the first way to put issue 6 section 6's topology on metal (`test-equipment.md` gains its row); if it is transparent, the pointer closes on that reading. The datasheet can be read before the part arrives, and the phase does not wait on it | The datasheet, then the part on the E460 |
-| 24.5 | The record and the cut of what 24.1 and 24.2 changed, as `1.1.2.0` if 24.1 landed driver code (the third field moves): issue 6 section 5's bands and section 9's first item, the release notes' High Speed entry, `releases/history.md`, `xhci_version.h` and both INFs, the install legs from the asset, and the post-release matrix on both primary targets read against `runs/run-23-post-release/`. If 24.1 changed nothing, the phase closes on the two decisions with no cut | The cut's gates; the ten install vehicles; the matrix |
+- [ ] **24.1 - Low-Speed polling rates behind a hub.**
+
+  Reproduce the reporter's Code 10 first, in the reporter's own
+  configuration. The reporter is SweetLow, who runs his own stack on Windows
+  98 and not on Windows 2000, so the reproduction is a Low-Speed mouse behind
+  a hub, his hidusbf setting 250, 500 and 1000 Hz, under his stack on Windows
+  98 SE. That guest is where the task is developed.
+
+  Once the change holds there, the same hidusbf reading is repeated on every
+  other guest the project holds: Windows 98 SE under NUSB 3.3, Windows ME,
+  Windows 2000, XP x86 and x64, and Vista and 7 in both architectures (the
+  x64 guests taking hidusbf's signed build or test signing). Each takes the
+  mouse behind the hub at the same three rates. The point is to show the
+  change affects none of them and to record what each system's usbport
+  passes down.
+
+  The candidate is `XhciIntervalFromPeriod` in `src/xhci_ctx.c`, which
+  refuses a Low-Speed `Period` under 8 on the strength of the SP4 and NUSB
+  floors alone. xHCI Table 6-12 allows Interval 3 to 10 (1 ms to 128 ms) for
+  a Low-Speed interrupt endpoint, so the bound is this driver's, not the
+  hardware's.
+
+  If confirmed: accept `Period` 1, 2 and 4 at Low Speed, host vectors for
+  the new rows, `XHCISNAP` showing the programmed Interval, the three rates
+  read back on Windows 98 SE under SweetLow's stack, and the same hidusbf
+  reading on every other guest held. A `Period` that no shipping usbport can
+  send stays refused.
+
+  Where it is read: host tests; QEMU `usb-hub` plus `usb-mouse` on the
+  SweetLow guest for the reproduction and the development, then hidusbf on
+  every other guest held for the read; the E460 with the Low-Speed mouse
+  behind a USB 2.0 hub if a metal reading is wanted.
+
+- [ ] **24.2 - Polling rates on a root port.**
+
+  A decision, with its reason, whether they close as owned by 24.3. The
+  bands are usbport's bucketing on the speed it was told (issue 6 section
+  5), `bInterval` is gone before the miniport sees it, and the invariants
+  forbid reconstructing it. If no narrower change exists, this task records
+  why and points the reporter at 24.3; if one does, it is measured with
+  hidusbf on a root port as section 5's reading was.
+
+  Where it is read: a reading of the tree and the ABI document; a boot only
+  if a change is found.
+
+- [ ] **24.3 - True speeds on root ports.**
+
+  The owner's decision on `docs/future-plans/virtual-hub-per-root-port.md` -
+  taken, refused or deferred, with the reason recorded on issue 6 section 8.
+  Taken means the page becomes a numbered design record, its section 5
+  measurements become the checkpoint of a new phase, and its section 9
+  decisions are answered (name, permanent or on demand, ids, default). Not
+  taken means issue 6 section 9's first item says so and why.
+
+  The reporter's alternative, a patched usbport that guards the empty TT
+  list, is not this project's to ship and is recorded as such.
+
+  Where it is read: a decision; no boot.
+
+- [ ] **24.4 - The reporter's pointer for the missing USB 1.1 hub.**
+
+  Once a part is to hand: read whether a board built on an Analog Devices
+  ADuM3160 or ADuM4160 USB isolator enumerates as a hub or is transparent to
+  the host, and what it does to a High-Speed device behind it. If it
+  presents as a hub, it is the first way to put issue 6 section 6's topology
+  on metal (`test-equipment.md` gains its row); if it is transparent, the
+  pointer closes on that reading. The datasheet can be read before the part
+  arrives, and the phase does not wait on it.
+
+  Where it is read: the datasheet, then the part on the E460.
+
+- [ ] **24.5 - The record and the cut.**
+
+  The record and the cut of what 24.1 and 24.2 changed, as `1.1.2.0` if 24.1
+  landed driver code (the third field moves): issue 6 section 5's bands and
+  section 9's first item, the release notes' High Speed entry,
+  `releases/history.md`, `xhci_version.h` and both INFs, the install legs
+  from the asset, and the post-release matrix on both primary targets read
+  against `runs/run-23-post-release/`. If 24.1 changed nothing, the phase
+  closes on the two decisions with no cut.
+
+  Where it is read: the cut's gates; the ten install vehicles; the matrix.
 
 Checkpoint: 24.1 either refuted (the Code 10 reproduced and traced to
 something other than the bound, recorded) or landed and read: a Low-Speed
 device behind a hub polling at 250, 500 and 1000 Hz on Windows 98 SE under
-both stacks and on Windows 2000, with the Interval read from the snapshot and
-no Code 10; the device matrix on both primary targets no worse than
-`runs/run-23-post-release/`; 24.2 and 24.3 each a recorded decision with its
+SweetLow's stack, with the Interval read from the snapshot and no Code 10;
+the same hidusbf reading taken and recorded on every other guest the project
+holds, none of them worse for the change; and the device matrix on both
+primary targets no worse than `runs/run-23-post-release/`; 24.2 and 24.3 each a recorded decision with its
 reason, on issue 6; 24.4 a recorded reading, or recorded as waiting on the
 part if the phase closes first; and, if driver code changed, `1.1.2.0` cut
 with its install legs read from the asset. Not a checkpoint: a root-port
