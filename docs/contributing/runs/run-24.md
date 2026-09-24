@@ -385,9 +385,15 @@ one; on 9x it patches nothing anyway, and the `bInterval` rewrite in the
   `d:\` becomes `eS\`. It reads exactly like a flaky emulator dropping
   characters - it was diagnosed that way first, and a longer key hold was
   added to chase it, which could never have helped because nothing was ever
-  dropped. The owner named the layout. `scripts\local\phase24\type24d.ps1`
-  types through the inverse map; the 9x guests are QWERTY and keep
-  `type24.ps1`.
+  dropped. The owner named the layout.
+  **`build-and-test.md` already said so** - "the guests are US Dvorak and
+  the accelerators follow the layout", with the two UAC accelerators spelled
+  out as physical keys - but it says it inside the x64
+  signature-enforcement recipe, which is not where anyone looks before
+  typing a path into a Run box. What this cost was not discovering the fact;
+  it was not having read it first.
+  `scripts/local/phase24/type24d.ps1` types through the inverse map; the 9x
+  guests are QWERTY and keep `type24.ps1`.
 - **The guest pointer cannot be driven by one computed delta.** QEMU's
   `mouse_move` is relative and Windows applies pointer acceleration on top:
   a 137-pixel move travelled 274 on Windows 98, a 250-pixel move travelled
@@ -579,3 +585,44 @@ guests. The difference is the topology and not a defect: on those five the
 only mismatch is the root-port hub, while here every open of the mouse is one
 too, because the mouse itself is the root-port device being reported High
 Speed.
+
+### Windows XP Professional x64 SP2 - done, behind the hub, and the first amd64 reading
+
+`vm\winxp64.img` overlay, monitor 56807, `built Sep 24 2026 11:30:29` - the
+**amd64** binary, seven minutes after the x86 one in the same build run.
+`USBPORT_GetHciMn=10000001`, `MiniPortExtensionSize=00017548` = 95560, which
+is `offsets-amd64.txt`'s SIZEOF against x86's 92320.
+
+The mouse is **behind the hub** here, not on a root port. Issue 6 section
+6.2 names XP x64 and Windows 2000 as the two targets that survive that
+topology, and this run is that prediction holding: the hub and the mouse
+behind it enumerated and stayed up through four rate changes and twelve
+behind-hub opens.
+
+| hidusbf | `bInterval` | `ep.open.rate` | Period | speed | floored | Interval | ms | Hz |
+|---|---|---|---|---|---|---|---|---|
+| Default | 10 | `00080004` | 8 | Full | no | 6 | 8 | 125 |
+| 250 | 4 | `00040004` | 4 | Full | no | 5 | 4 | 250 |
+| 500 | 2 | `00020004` | 2 | Full | no | 4 | 2 | 500 |
+| 1000 | 1 | `00010004` | 1 | Full | no | 3 | 1 | 1000 |
+
+`OpensTotal` 37, `OpensAccepted` 37, every `EndpointRefusals*` 0,
+`EndpointIntervalsFloored` 0, `BehindHubOpens` 12,
+`EndpointSpeedMismatches` 1 - the root-port hub, as on every behind-hub
+guest.
+
+**The ladder is identical to the five 32-bit behind-hub guests**, which is
+the point worth having: the two builds come from one source tree through two
+toolchains, and this is the first evidence in this task that the amd64 one
+buckets and programs intervals the same way. Nothing in `xhci_ctx.c` is
+architecture-dependent, so that was expected; it had not been read.
+
+**Reading an amd64 guest needs three things changed together**, and any one
+alone fails: the offset table (`-Arch amd64`), the identity line (the
+debugcon carries a high/low PAIR, `FFFFFADF` + `CE6A3DC8`, not one 32-bit
+value), and the address width - `0xFFFFFADFCE6A3DC8` does not fit
+`ToUInt32` and `{0:X8}` would print it truncated with no error at all.
+`readring24.ps1` and `readctr.ps1` both take `-Arch` now; `readctr` also
+picks `offsets-amd64.labels.txt`. The SIZEOF check is what caught it -
+"guest SIZEOF 95560 != table 92320" - which is that check doing exactly the
+job it was written for.
