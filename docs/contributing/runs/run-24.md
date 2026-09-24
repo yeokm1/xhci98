@@ -534,3 +534,48 @@ so it exercises the High-Speed bucketing and not the behind-hub path.
 
 It was the owner who named the cause, from the symptom alone, while the
 control was still booting.
+
+### Windows Vista SP2 x86 and Windows 7 SP1 x86 - done, on a ROOT PORT
+
+Both carry `built Sep 24 2026 11:23:51`; both took the driver only through
+**Have Disk**, because Windows refuses the identical `DriverVer` as an
+upgrade and answers "the best driver software for your device is already
+installed". The mouse is on **root port 1**, not behind the hub, for the
+reason in the section above.
+
+Identical readings on the two systems, to the record:
+
+| hidusbf | `bInterval` | `ep.open.rate` | Period | speed | floored | Interval | ms | Hz |
+|---|---|---|---|---|---|---|---|---|
+| Default | 10 -> 6 | `00200004` | 32 | High | no | 5 | 4 | 250 |
+| 250 | 6 | `00200004` | 32 | High | no | 5 | 4 | 250 |
+| 500 | 5 | `00100004` | 16 | High | no | 4 | 2 | 500 |
+| 1000 | 4 | `00080004` | 8 | High | no | 3 | 1 | 1000 |
+
+Vista `OpensTotal` 30 / `OpensAccepted` 30; Windows 7 27 / 27. Every
+`EndpointRefusals*` 0 and `EndpointIntervalsFloored` 0 on both.
+
+**Read this table differently from the other five.** The device is on a root
+port, so the driver reports it **High Speed** (issue 6's item 1) and usbport
+buckets it with the High-Speed arm, where `bInterval` is a log2 exponent
+rather than a frame count. hidusbf writes the exponent accordingly - the
+`bInterval` column in its own window reads **6** for 250 Hz, not 4 - and
+`1 << min(bInterval - 1, 5)` gives the Periods above. So this is a reading of
+the **High-Speed** bucketing, not of the behind-hub path the other five
+exercise, and it cannot say anything about the Low-Speed arm 24.1 changed.
+
+What it does do is reproduce `docs/issues/06-full-speed-root-port-bugcheck.md`
+section 5's three bands on the 24.1 build: "`bInterval` 1 to 4 gives 1 ms, 5
+gives 2 ms, 6 and above gives 4 ms. A stock mouse at `bInterval` 10 runs at
+4 ms; nothing slower is reachable, nothing faster than 1 ms either, and two
+values inside one band are indistinguishable." Stock and 250 Hz land on the
+same `Period` 32 for exactly that reason - both are in the 4 ms band - and a
+root-port device cannot reach the 8 ms that every behind-hub guest shows at
+default. That is corroboration of a measured result, not a new one, and it
+is data 24.2 will want.
+
+`EndpointSpeedMismatches` is 12 and 11 here against 1 on the five behind-hub
+guests. The difference is the topology and not a defect: on those five the
+only mismatch is the root-port hub, while here every open of the mouse is one
+too, because the mouse itself is the root-port device being reported High
+Speed.
