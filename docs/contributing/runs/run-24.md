@@ -626,3 +626,75 @@ value), and the address width - `0xFFFFFADFCE6A3DC8` does not fit
 picks `offsets-amd64.labels.txt`. The SIZEOF check is what caught it -
 "guest SIZEOF 95560 != table 92320" - which is that check doing exactly the
 job it was written for.
+
+### Windows Vista SP2 x64 and Windows 7 SP1 x64 - done, on a root port
+
+Both `built Sep 24 2026 11:30:29`, `MiniPortExtensionSize=00017548` = 95560.
+Both took the driver through **Have Disk**, both need
+`bcdedit /set {current} advancedoptions true` and *Disable Driver Signature
+Enforcement* on every boot because the package is unsigned, and both are run
+with **no `usb-hub` on the machine at all** (`run-guest.ps1 -NoHub`). The hub
+alone is harmless - issue 6 section 6.2 says so - so the switch is not what
+keeps these guests up; the mouse being on a root port is. It exists so the
+fatal topology cannot be reached by a mistyped `port=`, which is how it was
+reached the first time.
+
+Identical on both, and identical to Vista and Windows 7 x86:
+
+| hidusbf | `bInterval` | `ep.open.rate` | Period | speed | floored | Interval | ms | Hz |
+|---|---|---|---|---|---|---|---|---|
+| Default | 10 -> 6 | `00200004` | 32 | High | no | 5 | 4 | 250 |
+| 250 | 6 | `00200004` | 32 | High | no | 5 | 4 | 250 |
+| 500 | 5 | `00100004` | 16 | High | no | 4 | 2 | 500 |
+| 1000 | 4 | `00080004` | 8 | High | no | 3 | 1 | 1000 |
+
+Vista x64 `OpensTotal` 24 / `OpensAccepted` 24; Windows 7 x64 25 / 25. Every
+`EndpointRefusals*` 0 and `EndpointIntervalsFloored` 0 on both.
+`EndpointSpeedMismatches` 10 on each, all of them the root-port mouse.
+
+**A step that is easy to skip and silently wastes a boot:** `XHCISNAP
+-verbosity 2` is read once per driver start and never re-read, so it needs a
+restart - and on these two that means the F8 menu again. Both were first read
+with `Log.Enabled` 0, `Head` 0, `Used` 0, `Appends` 0, which is what the ring
+looks like when the value was never applied rather than when nothing has
+happened.
+
+---
+
+## 24.1 - what all ten guests say
+
+| Guest | usbport | `GetHciMn` | Topology | Stock | 250 | 500 | 1000 | Opens |
+|---|---|---|---|---|---|---|---|---|
+| 98 SE, SweetLow | his XP rebuild | `10000001` | behind hub, **Low Speed** | 8 ms | **4 ms** | **2 ms** | **1 ms** | 24/24 |
+| 98 SE, NUSB 3.3 | Win2000 | `57324B30` | behind hub, Full | 8 ms | 4 ms | 2 ms | 1 ms | 15/15 |
+| Windows ME | SweetLow's | `10000001` | behind hub, Full | 8 ms | 4 ms | 2 ms | 1 ms | 15/15 |
+| Windows 2000 SP4 | Win2000 | `57324B30` | behind hub, Full | 8 ms | 4 ms | 2 ms | 1 ms | 15/15 |
+| Windows XP SP3 | XP's own | `10000001` | behind hub, Full | 8 ms | 4 ms | 2 ms | 1 ms | 18/18 |
+| XP x64 SP2 | XP x64's | `10000001` | behind hub, Full | 8 ms | 4 ms | 2 ms | 1 ms | 37/37 |
+| Vista SP2 x86 | Vista's | `10000001` | root port, High | 4 ms | 4 ms | 2 ms | 1 ms | 30/30 |
+| Vista SP2 x64 | Vista x64's | `10000001` | root port, High | 4 ms | 4 ms | 2 ms | 1 ms | 24/24 |
+| Windows 7 SP1 x86 | 7's own | `10000001` | root port, High | 4 ms | 4 ms | 2 ms | 1 ms | 27/27 |
+| Windows 7 SP1 x64 | 7 x64's | `10000001` | root port, High | 4 ms | 4 ms | 2 ms | 1 ms | 25/25 |
+
+**230 endpoint opens across ten guests, 230 accepted, not one refusal of any
+kind and not one interval floored.** Both usbport lineages, both
+architectures, both builds of this driver, and the one guest that matters
+most - the reporter's own stack - reading the Low-Speed arm the task
+changed.
+
+The six behind-hub guests all walk 8, 4, 2 and 1 ms. The four root-port ones
+walk 4, 4, 2 and 1, and the doubled first entry is not a fault: a root-port
+device is reported High Speed, so stock and 250 Hz are two values inside one
+band and 8 ms is not reachable at all. That is issue 6 section 5's bands,
+reproduced here on the 24.1 build.
+
+**What the task set out to show, and what it actually established.** The
+checkpoint asked for the reporter's three rates on his own stack and no
+regression anywhere else. Both are read. But the no-regression half turned
+out to carry the stronger evidence for the change itself: every Full-Speed
+guest was already being handed `Period` 4, 2 and 1 by its usbport and this
+driver was already programming Intervals 5, 4 and 3 for them. The three
+values 24.1 newly accepts at Low Speed are not new values - they are the
+values the driver has always accepted one speed up. The refusal removed in
+`XhciIntervalFromPeriod` was the only thing that made Low Speed different,
+and nothing else in the driver treated it differently at all.

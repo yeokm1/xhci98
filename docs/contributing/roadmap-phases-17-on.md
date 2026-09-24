@@ -617,9 +617,14 @@ through** with `usb-host` (a 1.5 Mb/s mouse bound to WinUSB), behind a
 `usb-hub`, on Windows 98 SE under SweetLow's stack, driven with his own
 `Setup.exe`: all three rates now open, at Interval 5, 4 and 3 - 4, 2 and
 1 ms - none floored, 24 of 24 endpoint opens accepted, no refusal of any
-kind, and no Code 10. **Owed: the no-regression hidusbf reading on every
-other guest**, which is takeable in QEMU on the Full-Speed mouse and shows
-only that. It is the second Phase 24: the first, split out of Phase 23 on
+kind, and no Code 10. **The no-regression reading is taken on all nine other
+guests** (2026-09-24/25): 230 endpoint opens across the ten, 230 accepted,
+not one refusal and not one interval floored, on both usbport lineages and
+both architectures. Vista and Windows 7, in both architectures, are read on a
+**root port** rather than behind the hub, because behind the hub is the
+topology issue 6 section 6.2 bugchecks them in - confirmed here against the
+`1.1.1.0` binary as well, so it is that known limitation and not this task.
+**24.1 is read out.** It is the second Phase 24: the first, split out of Phase 23 on
 2026-09-22 with these same three subjects as 24.1 to 24.3, was removed the
 same day before any task ran, and `runs/run-23.md` names its ids as the
 record of that day. The ids below keep those three meanings, so nothing that
@@ -646,7 +651,7 @@ release-per-risk rule says so.
 
 Tasks. `runs/run-24.md` is the record once a task runs.
 
-- [ ] **24.1 - Low-Speed polling rates behind a hub.**
+- [x] **24.1 - Low-Speed polling rates behind a hub.** *(read out 2026-09-25; `runs/run-24.md`)*
 
   Reproduce the reporter's Code 10 first, in the reporter's own
   configuration. The reporter is SweetLow, who runs his own stack on Windows
