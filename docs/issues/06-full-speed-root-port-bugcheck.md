@@ -22,9 +22,9 @@ for all of them, a virtual USB 2.0 hub per root port
 decided (section 8). **`1.1.1.0` answers nothing on this page.** That
 release carries the controller's property page and the interrupt moderation
 value alone; the polling rates (section 5) and true speeds on root ports were
-split out of Phase 23 by the owner on 2026-09-22 and are not scheduled, and
-the speed report, its bands and both costs are the same
-in `1.1.1.0` as in `1.1.0.0`.
+split out of Phase 23 by the owner on 2026-09-22 and are roadmap Phase 24's,
+added on 2026-09-24 and open, and the speed report, its bands and both costs
+are the same in `1.1.1.0` as in `1.1.0.0`.
 
 Targets affected: all ten. The bugcheck itself was measured on Windows 98
 SE under the NUSB stack and on Windows 2000 SP4, in QEMU virtual machines;
@@ -622,14 +622,19 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
 
 ## 9. What is still open
 
-- **Polling rates and true speeds on root ports are not scheduled, and
-  `1.1.1.0` does not answer them.** The owner split them out of Phase 23
+- **Polling rates and true speeds on root ports are roadmap Phase 24's,
+  and `1.1.1.0` does not answer them.** The owner split them out of Phase 23
   on 2026-09-22 so that release could ship the property page and the
-  moderation value alone, and no roadmap phase carries them. The reporter's
-  order still stands for whoever takes them up: Low-Speed rates behind a hub
-  first, then rates on a root port, which may close as owned by true speeds,
-  then true speeds on root ports as a decision with its reason, for which the
-  virtual hub in section 8 is the candidate.
+  moderation value alone, and Phase 24, added on 2026-09-24, carries them in
+  the reporter's order, which is also the order of ease: the Low-Speed rates
+  behind a hub first (task 24.1: the reporter's Code 10 at 250 Hz and above,
+  with the Low-Speed `Period` bound in `XhciIntervalFromPeriod` as the
+  candidate - not this section's bands, which are a root-port matter), then
+  rates on a root port as a decision that may close as owned by true speeds
+  (24.2), then true speeds on root ports as a decision with its reason, for
+  which the virtual hub in section 8 is the candidate (24.3). Task 24.4
+  reads the reporter's pointer for the USB 1.1 hub this project never held,
+  once the part is to hand.
 - **The bandwidth accounting on Windows 98 and 2000** (section 5) has no
   measurement either way. The Bandwidth Usage readings of 2026-09-20
   (section 5.1) are not one: they are what `usbui.dll` computes from the

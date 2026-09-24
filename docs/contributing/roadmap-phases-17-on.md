@@ -510,8 +510,9 @@ Goal: GitHub issue 4's request for the controller's property page, fixed and
 read on both primary targets; one measurement of the owner's, whether an
 interrupt moderation interval below the reset default raises throughput, which
 if it does becomes a registry value; and the result cut as `1.1.1.0`. The
-issue's polling rates and true speeds on root ports are not scheduled: Phase
-24, which carried them, was removed by the owner on 2026-09-22.
+issue's polling rates and true speeds on root ports are Phase 24's: the
+Phase 24 that first carried them was removed by the owner on 2026-09-22, and
+a second was added on 2026-09-24, after this phase closed.
 
 Status: closed on 2026-09-24 on the re-cut, its ten install legs, the audio
 gate and the post-release matrix. It opened on 2026-09-19 on branch
@@ -531,7 +532,7 @@ out, but ATTO's large reads stuttered by ear at 500 where the controls at
 intermittent Windows 98 shell wedge when a USB audio device is replugged
 after a cold boot, present on `1.1.0.0` too and at every moderation value,
 so not this release's; and the polling-rate and true-speed requests, which
-keep the GitHub issue open. What was left was not a task: the owner's upload
+keep the GitHub issue open and are Phase 24's. What was left was not a task: the owner's upload
 of `out\xhci98-1.1.1.0.zip` (377,889 B) and the push.
 
 "GitHub issue 4" is not `docs/issues/04`. The numbers collide by accident:
@@ -541,7 +542,7 @@ fixed in `1.0.1.0`; the GitHub issue is
 handling (and more)", opened by LordOfMice on 2026-09-06 and still open. Its
 `usbui.dll` and selective-suspend requests were answered in `1.0.2.0` and
 `1.1.0.0`, this phase answers the property page, and polling rates and true
-speeds are not scheduled. Replying on the issue, and closing it, are the
+speeds are Phase 24's. Replying on the issue, and closing it, are the
 owner's and not a task.
 
 Why a phase: the owner's note on the issue (2026-09-19) was that the speed
@@ -578,7 +579,7 @@ green on both architectures, `1.1.1.0` cut, and its install legs read from
 the asset; and the device matrix on both primary targets no worse than
 `runs/run-22-post-release/`. Not a checkpoint: a throughput figure taken in
 a guest, the reporter's machine standing in for one of the project's, any
-polling-rate work or a decision on true speeds (neither scheduled), the
+polling-rate work or a decision on true speeds (Phase 24's), the
 acceptance test, or the upload.
 
 Records: GitHub issue 4 (the thread; nothing of it is copied here beyond the
@@ -589,3 +590,77 @@ table above); `docs/issues/06-full-speed-root-port-bugcheck.md`;
 `Period` actually carries"); `build-and-test.md` (the INF's omitted
 directives); `lessons.md`; `runs/run-23.md`; `releases/history.md`;
 `runs/run-23-post-release/` (written after the cut).
+
+## Phase 24 - GitHub Issue 4's Remaining Requests: Polling Rates and True Speeds
+
+Goal: what GitHub issue 4 still asks for after `1.1.1.0`, taken in the order
+that costs least to build and to read. Two of its five items are open, and
+one of them has two halves: a Low-Speed device behind a hub refuses the
+polling rates the reporter's stack offers it (item 2, the reporter's Code 10
+at 250 Hz and above); a Full or Low Speed device on a root port polls in the
+1, 2 and 4 ms bands (item 2's other half, issue 6 section 5); and every
+root-port device is reported High Speed (item 1, issue 6 itself). Items 3
+(`usbui.dll`, `1.0.2.0`), 4 (idle suspend, `1.1.0.0`'s miniport flag) and
+5 (the property page, `1.1.1.0`) are answered and stay closed. The reporter's
+last pointer, "ADuM3160 / 4160" for the USB 1.1 hub this project has never
+held, is a reading the phase takes once the part is to hand.
+
+Status: **open**, added on 2026-09-24 at the owner's request, no task
+started. It is the second Phase 24: the first, split out of Phase 23 on
+2026-09-22 with these same three subjects as 24.1 to 24.3, was removed the
+same day before any task ran, and `runs/run-23.md` names its ids as the
+record of that day. The ids below keep those three meanings, so nothing that
+cites them changes sense; 24.4 and 24.5 are new.
+
+"GitHub issue 4" is not `docs/issues/04`; Phase 23's entry has the
+collision. Replying on the issue, and closing it, are the owner's and not a
+task. The two items carried open past Phase 23 that are not the issue's -
+the 500 stutter's cause and the Windows 98 audio replug wedge - are not this
+phase's either.
+
+Why a phase, and why this order: the owner's note on the issue (2026-09-19)
+was that the speed work may be spread over several releases to reduce risk,
+and the reporter's advice (2026-09-14) was Low-Speed devices behind a hub
+first, then root ports, "as I expected different complexity". The tasks are
+in order of how cheaply each can be built and read: one bound in one
+function with a virtual-machine reproduction, then a decision that may need
+no code, then a decision on the largest change the driver has asked for,
+then the reporter's hub pointer, which waits on a part the owner does not
+yet hold (2026-09-24) and so sits second last. The phase ends on the cut of
+whatever 24.1 and 24.2 change; if 24.3 is taken, what it builds is a phase
+of its own, since the proposal's batches are a phase's worth and the
+release-per-risk rule says so.
+
+Tasks. `runs/run-24.md` is the record once a task runs.
+
+| Task | Subject | Where it is read |
+|---|---|---|
+| 24.1 | Low-Speed polling rates behind a hub. Reproduce the reporter's Code 10 first: a Low-Speed mouse behind a hub, SweetLow's hidusbf setting 250, 500 and 1000 Hz, under SweetLow's stack (the reporter's) and NUSB 3.3 on Windows 98 SE, and on Windows 2000. The candidate is `XhciIntervalFromPeriod` in `src/xhci_ctx.c`, which refuses a Low-Speed `Period` under 8 on the strength of the SP4 and NUSB floors alone; xHCI Table 6-12 allows Interval 3 to 10 (1 ms to 128 ms) for a Low-Speed interrupt endpoint, so the bound is this driver's, not the hardware's. If confirmed: accept `Period` 1, 2 and 4 at Low Speed, host vectors for the new rows, `XHCISNAP` showing the programmed Interval, and the same three rates read back on both primary targets; a `Period` that no shipping usbport can send stays refused | Host tests; QEMU `usb-hub` plus `usb-mouse` on the three guests; the E460 with the Low-Speed mouse behind a USB 2.0 hub if a metal reading is wanted |
+| 24.2 | Polling rates on a root port: a decision, with its reason, whether they close as owned by 24.3. The bands are usbport's bucketing on the speed it was told (issue 6 section 5), `bInterval` is gone before the miniport sees it, and the invariants forbid reconstructing it; if no narrower change exists, this task records why and points the reporter at 24.3, and if one does, it is measured with hidusbf on a root port as section 5's reading was | A reading of the tree and the ABI document; a boot only if a change is found |
+| 24.3 | True speeds on root ports: the owner's decision on `docs/future-plans/virtual-hub-per-root-port.md` - taken, refused or deferred, with the reason recorded on issue 6 section 8. Taken means the page becomes a numbered design record, its section 5 measurements become the checkpoint of a new phase, and its section 9 decisions are answered (name, permanent or on demand, ids, default). Not taken means issue 6 section 9's first item says so and why. The reporter's alternative, a patched usbport that guards the empty TT list, is not this project's to ship and is recorded as such | A decision; no boot |
+| 24.4 | The reporter's pointer for the missing USB 1.1 hub, once a part is to hand: read whether a board built on an Analog Devices ADuM3160 or ADuM4160 USB isolator enumerates as a hub or is transparent to the host, and what it does to a High-Speed device behind it. If it presents as a hub, it is the first way to put issue 6 section 6's topology on metal (`test-equipment.md` gains its row); if it is transparent, the pointer closes on that reading. The datasheet can be read before the part arrives, and the phase does not wait on it | The datasheet, then the part on the E460 |
+| 24.5 | The record and the cut of what 24.1 and 24.2 changed, as `1.1.2.0` if 24.1 landed driver code (the third field moves): issue 6 section 5's bands and section 9's first item, the release notes' High Speed entry, `releases/history.md`, `xhci_version.h` and both INFs, the install legs from the asset, and the post-release matrix on both primary targets read against `runs/run-23-post-release/`. If 24.1 changed nothing, the phase closes on the two decisions with no cut | The cut's gates; the ten install vehicles; the matrix |
+
+Checkpoint: 24.1 either refuted (the Code 10 reproduced and traced to
+something other than the bound, recorded) or landed and read: a Low-Speed
+device behind a hub polling at 250, 500 and 1000 Hz on Windows 98 SE under
+both stacks and on Windows 2000, with the Interval read from the snapshot and
+no Code 10; the device matrix on both primary targets no worse than
+`runs/run-23-post-release/`; 24.2 and 24.3 each a recorded decision with its
+reason, on issue 6; 24.4 a recorded reading, or recorded as waiting on the
+part if the phase closes first; and, if driver code changed, `1.1.2.0` cut
+with its install legs read from the asset. Not a checkpoint: a root-port
+polling rate outside the bands, a truthful root-port speed report, anything
+the virtual hub would measure, a metal reading of 24.1, the part itself, the
+acceptance test, the upload, or the reply on the issue.
+
+Records: GitHub issue 4 (the thread; the reporter's Code 10 reading of
+2026-09-12, his order of 2026-09-14 and his pointer of 2026-09-19);
+`docs/issues/06-full-speed-root-port-bugcheck.md` sections 5, 8 and 9;
+`docs/future-plans/virtual-hub-per-root-port.md`;
+`docs/usb-xhci-info/usbport-miniport-abi.md` ("Periodic scheduling: what
+`Period` actually carries"); `docs/usb-xhci-info/xhci-data-structures.md`
+(Table 6-12); `src/xhci_ctx.c` (`XhciIntervalFromPeriod`,
+`XhciIntervalForSpeed`); `docs/contributing/implementation-invariants.md`
+("Root Hub Reporting"); `docs/contributing/test-equipment.md`;
+`runs/run-24.md` (written by the first task that runs).

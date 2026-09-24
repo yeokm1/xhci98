@@ -562,7 +562,8 @@ because a user meets them through this driver.
   of the next entry. Measured in a virtual machine with SweetLow's hidusbf; the
   bands are documented in full in `docs/issues/06-full-speed-root-port-bugcheck.md`.
   `1.1.1.0` changes none of this: the polling rates and the High Speed report
-  itself are unchanged, and no work on them is scheduled.
+  itself are unchanged. The work after this release takes them up, starting
+  with the polling rates of Low-Speed devices behind a hub.
 - **Windows Vista and Windows 7, 32-bit and x64: a USB 1.1 hub on a root port
   crashes the machine** as soon as a mouse, keyboard or other Full or Low
   Speed device with an interrupt or isochronous endpoint is used behind it
