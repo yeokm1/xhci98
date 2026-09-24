@@ -24,6 +24,41 @@ Do not turn a hypothesis into a settled hardware quirk. Move confirmed design
 rules into the appropriate normative document while keeping the debugging
 history here.
 
+## A contract derived from two usbport builds was enforced against a third, and the refusal was a user's Code 10
+
+Roadmap task 24.1, 2026-09-24, static. `XhciIntervalFromPeriod` refused a
+Low-Speed `Period` below 8 because Windows 2000 SP4's and NUSB's
+`USBPORT_OpenPipe` raise one to 8 before the miniport sees it, so a smaller
+value "could only be a misread field". The refusal was deliberate, reviewed,
+and pinned by three host vectors. It was also the reporter's Code 10 on
+GitHub issue 4: SweetLow's Windows 9x rebuild of usbport (5.1.2600.2180) has
+no such floor - its non-High-Speed arm takes the descriptor's `bInterval`
+straight into the power-of-two rounding at `0x24A5B` - so a Low-Speed mouse
+behind a hub with hidusbf at 250, 500 or 1000 Hz arrived as `Period` 4, 2 or
+1, was refused, and failed the pipe open. Windows XP SP3's build has the
+floor (`0x25A69`), so three of four builds agree and the fourth is the one
+the reporter runs.
+
+- Proven (static): the four producers' bucketing, address by address
+  (`usbport-miniport-abi.md`, "Periodic scheduling", the floor table;
+  `legal-provenance.md` section 4). Inferred: that this is the reporter's
+  Code 10 - the chain from `Period` 4 to `MP_STATUS_NO_RESOURCES` to a failed
+  `SELECT_CONFIGURATION` is code, but no Low-Speed device has been put behind
+  a hub under that stack by this project, and QEMU cannot present one.
+- The rule: **refuse-don't-repair guards against a misread field, not against
+  a build that was never read.** A bound that says "no shipping usbport sends
+  this" is a claim about the builds that were disassembled, and the driver
+  runs under at least five. Before refusing a value on the strength of a
+  producer's clamp, either read every producer the project supports for that
+  clamp or bound the value by what the *hardware* allows (here Table 6-12,
+  Interval 3 to 10 at Low Speed) and let the producer's clamp be the
+  producer's. The 1..32 power-of-two contract survives because all four
+  builds share it; the floor did not because only three do.
+- Where the fix lives: `src/xhci_ctx.c` `XhciIntervalFromPeriod`, the
+  `test_ctx.c` vectors, and the `ep.open.ival` ring record that lets the
+  programmed Interval be read on a machine with no emulator monitor.
+  `runs/run-24.md` 24.1 has the reading.
+
 ## `open(path, 'wb')` empties the file before it evaluates what to write, and a Windows path in a Python literal is an escape sequence
 
 Environment: the Windows development host, 2026-09-12 evening, editing the

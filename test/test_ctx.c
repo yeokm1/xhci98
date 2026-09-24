@@ -778,41 +778,41 @@ static void test_interval_from_period(void)
     CHECK_EQ(iv, 8UL, "FS period 32 -> Interval 8 (32 ms)");
 
     /*
-     * Low Speed shares Full Speed's frame unit but **not** its range: usbport
-     * floors an LS Period at 8, so 1/2/4 are outside the contract at this speed
-     * and are refused below rather than translated.
-     *
-     * An earlier version of this file accepted them, on the argument that the
-     * floor was usbport's and this code should translate rather than repair.
-     * That confused two things - *repairing* would be silently raising a small
-     * Period to 8, which hides a misread field; refusing surfaces one.
+     * Low Speed shares Full Speed's frame unit **and**, since roadmap task
+     * 24.1, its range. Windows 2000 SP4, NUSB and XP SP3 floor a Low-Speed
+     * Period at 8 before the miniport sees it, and until 24.1 this suite
+     * pinned 1, 2 and 4 as refusals on that strength. SweetLow's usbport
+     * rebuild has no floor and sends 4, 2 and 1 for a Low-Speed mouse a
+     * polling-rate tool set to 250, 500 and 1000 Hz, and the refusal was that
+     * mouse's Code 10. The three sub-8 buckets are pinned as accepted values,
+     * each with its Interval, so that a floor cannot come back by mutation.
      */
     CHECK_EQ(XhciIntervalFromPeriod(8UL, XHCI_SPEED_LOW, &iv), XHCI_CTX_OK,
              "LS period 8 accepted");
-    CHECK_EQ(iv, 6UL, "LS period 8 -> Interval 6 (8 ms), usbport's LS floor");
+    CHECK_EQ(iv, 6UL, "LS period 8 -> Interval 6 (8 ms), the SP4/NUSB/XP floor");
     CHECK_EQ(XhciIntervalFromPeriod(16UL, XHCI_SPEED_LOW, &iv), XHCI_CTX_OK,
              "LS period 16 accepted");
     CHECK_EQ(iv, 7UL, "LS period 16 -> Interval 7 (16 ms)");
     CHECK_EQ(XhciIntervalFromPeriod(32UL, XHCI_SPEED_LOW, &iv), XHCI_CTX_OK,
              "LS period 32 accepted");
     CHECK_EQ(iv, 8UL, "LS period 32 -> Interval 8 (32 ms)");
-    /*
-     * **All three** of the sub-floor buckets, because the refusal is a range and
-     * a range needs its interior tested: the ninth review's mutation replaced
-     * `period < 8` with `period == 1 || period == 4` and the suite stayed green
-     * while LS Period 2 was accepted and encoded as Interval 4.
-     */
-    CHECK_EQ(XhciIntervalFromPeriod(1UL, XHCI_SPEED_LOW, &iv),
-             XHCI_CTX_BAD_PARAM,
-             "LS period 1 refused - below usbport's own floor of 8");
-    CHECK_EQ(XhciIntervalFromPeriod(2UL, XHCI_SPEED_LOW, &iv),
-             XHCI_CTX_BAD_PARAM, "LS period 2 refused for the same reason");
-    CHECK_EQ(XhciIntervalFromPeriod(4UL, XHCI_SPEED_LOW, &iv),
-             XHCI_CTX_BAD_PARAM, "LS period 4 refused for the same reason");
-    /* The same values are legal at Full Speed, so the refusal is speed-specific
-     * rather than a blanket lower bound. */
+    CHECK_EQ(XhciIntervalFromPeriod(4UL, XHCI_SPEED_LOW, &iv), XHCI_CTX_OK,
+             "LS period 4 accepted - SweetLow's usbport sends it (250 Hz)");
+    CHECK_EQ(iv, 5UL, "LS period 4 -> Interval 5 (4 ms)");
+    CHECK_EQ(XhciIntervalFromPeriod(2UL, XHCI_SPEED_LOW, &iv), XHCI_CTX_OK,
+             "LS period 2 accepted (500 Hz)");
+    CHECK_EQ(iv, 4UL, "LS period 2 -> Interval 4 (2 ms)");
+    CHECK_EQ(XhciIntervalFromPeriod(1UL, XHCI_SPEED_LOW, &iv), XHCI_CTX_OK,
+             "LS period 1 accepted (1000 Hz)");
+    CHECK_EQ(iv, 3UL, "LS period 1 -> Interval 3 (1 ms), Table 6-12's LS "
+                      "minimum");
+    /* A non-power-of-two stays refused at Low Speed as at every other speed:
+     * the floor went, the contract did not. */
+    CHECK_EQ(XhciIntervalFromPeriod(3UL, XHCI_SPEED_LOW, &iv),
+             XHCI_CTX_BAD_PARAM, "LS period 3 refused - not a power of two");
     CHECK_EQ(XhciIntervalFromPeriod(4UL, XHCI_SPEED_FULL, &iv), XHCI_CTX_OK,
-             "FS period 4 still accepted - the floor is Low Speed's alone");
+             "FS period 4 accepted");
+    CHECK_EQ(iv, 5UL, "FS period 4 -> Interval 5, the same as Low Speed's");
 
     /*
      * The same Period means different intervals at different speeds, which is
@@ -933,12 +933,18 @@ static void test_endpoint_params(void)
     CHECK_EQ(ep.Interval, 6UL, "LS period 8 frames -> Interval 6");
     CHECK_EQ(ep.MaxBurstSize, 0UL, "Low Speed never bursts");
     CHECK_EQ(ep.MaxEsitPayload, 8UL, "LS Max ESIT Payload is one packet");
-    /* An LS Period below usbport's floor must not become an endpoint either -
-     * the refusal has to survive the builder, not only the converter. */
+    /*
+     * The shape of the reporter's Code 10 (roadmap task 24.1): the same
+     * Low-Speed endpoint after a polling-rate tool set bInterval 4 under a
+     * usbport with no Low-Speed floor. Until 24.1 this was pinned as a refusal
+     * "through the builder too"; it is now pinned as the endpoint it becomes.
+     */
     CHECK_EQ(XhciBuildEndpointParams(USBPORT_TRANSFER_TYPE_INTERRUPT, 1UL, 8UL,
                                      4UL, XHCI_SPEED_LOW, XHCI_SPEED_LOW, 1UL,
                                      0UL, 0x00301800UL, 1UL, &ep, NULL, NULL),
-             XHCI_CTX_BAD_PARAM, "LS period 4 refused through the builder too");
+             XHCI_CTX_OK, "LS period 4 accepted through the builder (250 Hz)");
+    CHECK_EQ(ep.Interval, 5UL, "LS period 4 frames -> Interval 5 (4 ms)");
+    CHECK_EQ(ep.MaxBurstSize, 0UL, "still no burst at Low Speed");
 
     /* Bulk: no interval, no Max ESIT Payload, and the Period is not read. */
     CHECK_EQ(XhciBuildEndpointParams(USBPORT_TRANSFER_TYPE_BULK, 1UL, 512UL,

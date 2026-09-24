@@ -5688,6 +5688,18 @@ static MPSTATUS xhciSlotOpenNonDefault(
         XhciLogNoteLocked(ext, "ep.open.rate",
                           ((ULONG)properties->Period << 16) |
                               (ULONG)properties->MaxPacketSize);
+        /*
+         * Task 24.1's third record: what the Endpoint Context was actually
+         * given, beside what usbport asked for. `Period` alone cannot say,
+         * because the same value means different intervals at different
+         * speeds and the floor above may have moved it; and reading the
+         * context back through the DCBAA needs the emulator's monitor, which
+         * a guest without one - or a bare-metal machine - does not have. The
+         * speed usbport bucketed with sits above the floor bit so a reader
+         * can tell a root-port High-Speed reading from a behind-hub one.
+         */
+        XhciLogNoteLocked(ext, "ep.open.ival",
+                          (speed << 16) | (floored << 8) | params.Interval);
     }
 
     endpoint->Signature = XHCI_ENDPOINT_SIGNATURE;

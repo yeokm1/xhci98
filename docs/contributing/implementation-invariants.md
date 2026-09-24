@@ -1135,7 +1135,9 @@ must therefore do.
     `EndpointProperties->Period`: a device it believes is High Speed goes
     through `USBPORT_NormalizeHsInterval`, which is `1 << min(bInterval-1, 5)`,
     measured in microframes; the truthful Full/Low Speed path buckets in
-    frames, to powers of two in 1..32 with Low Speed floored at 8.
+    frames, to powers of two in 1..32, Low Speed floored at 8 on Windows 2000
+    SP4, NUSB and XP SP3 and not floored on SweetLow's rebuild (roadmap task
+    24.1; the driver accepts either).
     `USBPORT_ENDPOINT_PROPERTIES` carries no raw
     `bInterval`, so the miniport receives only the result - and the result is
     lossy, because every true `bInterval >= 6` collapses onto the same clamped

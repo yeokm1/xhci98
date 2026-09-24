@@ -403,11 +403,11 @@ ULONG XhciIntervalFromPeriod(ULONG period, ULONG speedClass, ULONG *interval)
         return XHCI_CTX_BAD_PARAM;
     }
     /*
-     * The contract's own bounds, refused rather than clamped. usbport buckets to
-     * a power of two in 1..32 and floors Low Speed at 8; anything else is either
-     * a field this driver read from the wrong offset or a usbport build whose
-     * bucketing differs from the two that were disassembled. Both are reasons to
-     * refuse an endpoint, not to invent an interval for it.
+     * The contract's own bounds, refused rather than clamped. Every usbport
+     * build read buckets to a power of two in 1..32; anything else is either a
+     * field this driver read from the wrong offset or a usbport build whose
+     * bucketing differs from the four that were disassembled. Both are reasons
+     * to refuse an endpoint, not to invent an interval for it.
      */
     if (period == 0 || period > 32 || (period & (period - 1)) != 0) {
         return XHCI_CTX_BAD_PARAM;
@@ -419,22 +419,20 @@ ULONG XhciIntervalFromPeriod(ULONG period, ULONG speedClass, ULONG *interval)
         shift = 3;              /* Period counts frames; 1 frame = 8 microframes */
     } else if (speedClass == XHCI_SPEED_LOW) {
         /*
-         * Both shipping usbport builds floor a Low-Speed Period at 8 frames
-         * (SP4 0x2520E-0x2521D, NUSB 0x24B90-0x24B9F), so 1/2/4 are **outside
-         * the contract** at this speed and are refused like every other value
-         * the derivation does not predict.
-         *
-         * An earlier version accepted them, reasoning that the floor was
-         * usbport's and this function should translate rather than repair.
-         * That confused two different things: repairing would be silently
-         * *raising* a small Period to 8, which would indeed hide a misread
-         * field - refusing it does the opposite and surfaces one. The rule
-         * everywhere else in this function is refuse-don't-repair, and Low
-         * Speed was the one place it was not applied.
+         * Frames, as at Full Speed, and **no floor of this function's own**.
+         * Windows 2000 SP4, NUSB and XP SP3 raise a Low-Speed Period below 8
+         * to 8 before the miniport sees it (SP4 0x2520E-0x2521D, NUSB
+         * 0x24B90-0x24B9F, XP SP3 0x25A6D-0x25A78), so 1, 2 and 4 never
+         * arrive from those builds - and until roadmap task 24.1 this branch
+         * refused them on that strength. SweetLow's 5.1.2600.2180 rebuild has
+         * no such step (0x24A5B-0x24A8F): a Low-Speed interrupt endpoint
+         * whose bInterval a polling-rate tool set to 4, 2 or 1 arrives as
+         * Period 4, 2 or 1, the refusal failed usbport's OpenPipe, and Device
+         * Manager showed the mouse as Code 10 at 250 Hz and above behind a
+         * hub. Table 6-12 allows Interval 3 to 10 at Low Speed, so the floor
+         * was this driver's and not the hardware's; it is gone, and what
+         * arrives is translated like a Full-Speed value.
          */
-        if (period < 8) {
-            return XHCI_CTX_BAD_PARAM;
-        }
         shift = 3;
     } else {
         return XHCI_CTX_BAD_PARAM;

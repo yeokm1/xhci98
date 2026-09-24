@@ -1480,10 +1480,15 @@ ULONG XhciInitialMps0(ULONG speedClass);
  *
  * xHCI's field counts microframes (period = 2^Interval * 125 us), so this is
  * `log2(Period) + (High Speed ? 0 : 3)`. The reachable results are **0-5 High
- * Speed, 3-8 Full Speed, 6-8 Low Speed** - Low Speed is not 3-8 because usbport
- * floors its `Period` at 8 upstream. That floor is *usbport's*, and this
- * function deliberately does not know about it: if it did, an LS endpoint that
- * legitimately arrived at 8 could not be told from one this code had repaired.
+ * Speed and 3-8 Full or Low Speed**. Windows 2000 SP4, NUSB and XP SP3 floor a
+ * Low-Speed `Period` at 8 upstream, so from them Low Speed reaches only 6-8;
+ * SweetLow's usbport rebuild has no floor and sends 1, 2 and 4 for a Low-Speed
+ * mouse a polling-rate tool has set to 1000, 500 or 250 Hz (roadmap task 24.1,
+ * whose Code 10 was this function refusing them). Any floor is *usbport's*,
+ * and this function deliberately has none of its own: if it did, an LS
+ * endpoint that legitimately arrived at 8 could not be told from one this code
+ * had repaired, and one that arrived at 1 would be refused for a value the
+ * hardware allows (Table 6-12: Interval 3-10 at Low Speed).
  *
  * Returns XHCI_CTX_OK and writes *interval, or XHCI_CTX_BAD_PARAM. It
  * **refuses rather than repairs** a Period outside the derived contract - not a

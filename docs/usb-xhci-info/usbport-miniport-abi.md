@@ -3151,6 +3151,31 @@ into properties `+0x08`:
 - Then `raw` is rounded down to a power of two by shifting 32 rightwards
   until a bit matches (SP4 `0x25223`-`0x25231`), and anything `>= 32` stays 32.
 
+**The Low-Speed floor is not in every build**, and that is roadmap task 24.1's
+finding (2026-09-24, static, `dumpbin /disasm` from `tools/MSVC600`). Two more
+`USBPORT_OpenPipe` producers were read against the sequence above:
+
+| Build | The bucketing | The Low-Speed floor |
+|---|---|---|
+| Windows XP SP3 x86 `usbport.sys` 5.1.2600.5512 (`tools/winxpsp3-extracted/`) | `0x25A34`-`0x25A9C`: `cmp edx,2` on `DeviceSpeed` (`[esi+0x110]`), the High-Speed `raw` through a helper at `0x255EE`, `Period` at `Endpoint+0x10E` preloaded 32, the same shift-right loop (`0x25A7E`-`0x25A8A`) | **Present**: `test edx,edx` (Low Speed is 0) / `cmp al,8` / `jae` / `mov byte ptr [esi+10Eh],8` at `0x25A69`-`0x25A78` |
+| SweetLow's Windows 9x rebuild `USBPORT.SYS` 5.1.2600.2180 (`tools/sweetlow-extracted/`) | `0x24A31`-`0x24A8F`: `cmp dword ptr [esi+104h],2`, the High-Speed `raw` inline (`0x24A45`-`0x24A57`, `dec` then `min 5` then `shl`), `Period` at `Endpoint+0x102` preloaded 32, the same shift-right loop (`0x24A71`-`0x24A7D`) | **Absent**: the non-High-Speed arm is `mov al,byte ptr [edx+0Ah]` at `0x24A5B` straight into the rounding, with no compare against 8 anywhere between `0x24A5E` and the store at `0x24A83` |
+
+So under SweetLow's stack a Low-Speed interrupt endpoint arrives with `Period`
+= `bInterval` rounded down to a power of two, 1 to 32, and a polling-rate tool
+that sets a Low-Speed mouse's `bInterval` to 4, 2 or 1 behind a hub (where the
+device is at its true speed) delivers `Period` 4, 2 or 1 at Low Speed. Until
+task 24.1 `XhciIntervalFromPeriod` refused a Low-Speed `Period` below 8 on the
+strength of the SP4 and NUSB floors, so `OpenEndpoint` failed, usbport failed
+the pipe open, and the mouse showed Code 10 at 250 Hz and above - GitHub issue
+4's item 2 as the reporter, who runs this stack, saw it. The driver now
+translates those values as it does Full Speed's (Table 6-12 allows Interval 3
+to 10 at Low Speed), and a build that floors goes on sending 8 as before. The
+XP SP3 isochronous arm differs from SP4's unconditional 1 as well: a
+High-Speed isoch `Period` goes through the same `0x255EE` helper
+(`0x25AA0`-`0x25AB4`), Full and Low Speed keep 1 (`0x25ABC`); SweetLow's
+build keeps SP4's unconditional 1 (`0x24A93`). Neither changes what this
+driver does, which takes the isoch interval from the descriptor.
+
 So `Period` is a power of two in 1..32 - but its unit is not the same for all
 speeds. For High Speed it counts microframes; for Full and Low Speed it
 counts frames. That asymmetry is the whole trap: a driver that treats it as
@@ -3228,11 +3253,12 @@ HS gives `log2(Period) = min(bInterval - 1, 5)`, which is the table's
 `floor(log2(bInterval)) + 3` once the `+ 3` above is applied.
 
 The reachable ranges are therefore `Interval` 0-5 High Speed, 3-8 Full Speed,
-and 6-8 Low Speed. Low Speed is not 3-8, because usbport floors its `Period`
-at 8 before the miniport ever sees it. That is a far smaller space than "every
-LS/FS/HS bucket" suggests, and the clamps are usbport's, so a device asking
-for a 125 us HS period gets one, while one asking for faster than 32
-microframes is already slowed down before the miniport sees it.
+and 3-8 Low Speed - 6-8 from the three builds that floor a Low-Speed `Period`
+at 8 (SP4, NUSB, XP SP3), 3-8 from SweetLow's, which does not (the table
+above). That is a far smaller space than "every LS/FS/HS bucket" suggests, and
+the clamps are usbport's, so a device asking for a 125 us HS period gets one,
+while one asking for faster than 32 microframes is already slowed down before
+the miniport sees it.
 
 The two clamps are usbport's policy, not the hardware's, so they must not be
 re-applied or "corrected" here: xHCI's `Interval` field is 8 bits and would
