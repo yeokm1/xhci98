@@ -485,3 +485,52 @@ The root-port hub is reported **High Speed** on all five
 That is issue 6's item 1, unchanged by this task and 24.3's subject.
 `EndpointSpeedMismatches` is 1 on every guest and it is the hub, never the
 mouse.
+
+### The NT 6.x guests cannot take this reading behind a hub, and that is issue 6's fault, not 24.1's
+
+**What happened.** Windows Vista SP2 x86, with the 24.1 build installed and
+the Full-Speed `usb-mouse` hot-plugged behind the `usb-hub` on root port 2,
+bugchecked the moment the mouse was configured, and went on bugchecking: five
+`DriverEntry` lines in one QEMU run, each cycle ending on the same three
+records -
+
+```
+xhci98: descriptor replies folded=00000005
+xhci98: descriptor configs committed=00000004
+xhci98: DriverEntry (built Sep 24 2026 11:23:51)      <- the restart
+```
+
+**It is `docs/issues/06-full-speed-root-port-bugcheck.md` section 6.2**, which
+measured it on 2026-09-19 against `1.1.0.0`, five days before this task
+existed: "A Full-Speed hub on a root port, and a Full or Low Speed device
+with a periodic endpoint behind it - a mouse was enough - stops the machine
+with `STOP 0x0000007E` in `USBPORT.SYS` the moment that device is
+configured. All four NT 6.x builds do it; the same steps passed on Windows
+2000 and XP x64." QEMU's `usb-hub` is a Full-Speed USB 1.1 hub with no
+transaction translator, the driver reports it as High Speed because it is on
+a root port, and usbport's USB 2.0 budgeter then charges a NULL TT at
+`0xA04`. The stack in that section is usbport's alone; **no frame is in
+`xhci98.sys`**.
+
+**The control, taken rather than assumed.** A second overlay was cut from the
+untouched `vm\vista.img`, which still carries the `1.1.1.0` release binary
+(`built Sep 20 2026 10:33:35`), and the same mouse was hot-plugged behind the
+same hub. It crashed at the **identical point**: the same
+`descriptor configs committed=00000004` followed by a fresh `DriverEntry`,
+at line 1615 against 1604. So the fault is unchanged by 24.1, and this run
+reproduces a known limitation of the shipped release rather than finding a
+new one. Both logs are kept: `out\t24-1\vista-24.1-crash-debugcon.log` and
+`out\t24-1\vista-control-prev-build-debugcon.log`.
+
+**So the sweep's topology was wrong for four of the nine guests**, and the
+roadmap's "Each takes the mouse behind the hub" cannot be met on Vista or
+Windows 7 in either architecture. That sentence was written for the 9x and
+Windows 2000 guests, where behind-a-hub is the reporter's own configuration
+and the only place the Low-Speed arm can be reached; on the NT 6.x guests it
+names the one topology issue 6 says stops the machine. The reading there is
+taken on a **root port** instead, and what it shows is narrower and must be
+read as such: a root-port device is reported High Speed (issue 6's item 1),
+so it exercises the High-Speed bucketing and not the behind-hub path.
+
+It was the owner who named the cause, from the symptom alone, while the
+control was still booting.
