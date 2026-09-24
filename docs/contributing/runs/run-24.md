@@ -333,3 +333,155 @@ floored. `EndpointSpeedMismatches` 1 is the root-port hub and not the mouse.
   them. It does **not** touch SweetLow's `usbport.sys`: `[Xhci.CopyW98]` does
   not list that file at all, and every line it does list carries flag 16,
   `COPYFLG_NO_OVERWRITE`. Answer the prompt with `e:\win98`.
+
+## 24.1 - the no-regression reading on the other guests
+
+The roadmap asks for the same hidusbf reading on every other guest the
+project holds, "to show the change affects none of them and to record what
+each system's usbport passes down". It is a **regression read, not a
+Low-Speed one**: QEMU models no Low-Speed peripheral, so the mouse here is
+`usb-mouse,usb_version=1` - Full Speed - behind a `usb-hub` on root port 2.
+It cannot exercise the arm 24.1 changed and must not be recorded as doing so.
+
+Vehicle: `scripts\local\phase24\run-guest.ps1`, one launcher for every guest,
+each on a qcow2 **overlay** of the owner's matrix image so a reading cannot
+alter it. `qemu-xhci,p2=8,p3=0` and a `usb-hub` at launch on every guest, so
+the topology is the same one the SweetLow reading used. Artifacts in
+`out\t24-1\`.
+
+### Windows 98 SE under NUSB 3.3 - done
+
+`vm\win98.img` overlay, monitor 56801. The driver on it was the
+`Sep 3 2026` build; the 24.1 package was pre-staged with
+`rundll32 setupx.dll,InstallHinfSection DefaultInstall 132 d:\xhci98\xhci98.inf`
+and picked up on the next boot: `DriverEntry (built Sep 24 2026 11:23:51)`,
+`USBPORT_GetHciMn=57324B30` - the Win2000-lineage value, against SweetLow's
+`10000001`, which is the two stacks telling themselves apart in one line.
+
+| hidusbf | `bInterval` | Period | speed | floored | Interval | ms | Hz |
+|---|---|---|---|---|---|---|---|
+| Default | 10 | 8 | Full | no | 6 | 8 | 125 |
+| 250 | 4 | 4 | Full | no | 5 | 4 | 250 |
+| 500 | 2 | 2 | Full | no | 4 | 2 | 500 |
+| 1000 | 1 | 1 | Full | no | 3 | 1 | 1000 |
+
+`OpensTotal` 15, `OpensAccepted` 15, every `EndpointRefusals*` 0,
+`EndpointIntervalsFloored` 0, `BehindHubOpens` 4,
+`EndpointSpeedMismatches` 1 (the root-port hub). The same Interval ladder as
+the SweetLow guest produced at Low Speed - 6, 5, 4, 3 - reached here at Full
+Speed, which is the point: these Full-Speed values were accepted before 24.1
+as well, so the path is untouched.
+
+hidusbf's `Setup.exe` warned that `Controller Driver "xhci98.sys" is unknown,
+some overclocking (to higher USB Speed Class) is probably impossible`. That
+is the tool looking for a `usbport.sys` it knows how to patch and not finding
+one; on 9x it patches nothing anyway, and the `bInterval` rewrite in the
+`SELECT_CONFIGURATION` URB is all it needs. Answering Yes is correct.
+
+### What the other guests cost, before any of them gave a reading
+
+- **The NT guests are set to DVORAK, and `sendkey` names keys by their
+  QWERTY POSITION.** Every keystroke arrives, mapped: `cmd` becomes `jme`,
+  `d:\` becomes `eS\`. It reads exactly like a flaky emulator dropping
+  characters - it was diagnosed that way first, and a longer key hold was
+  added to chase it, which could never have helped because nothing was ever
+  dropped. The owner named the layout. `scripts\local\phase24\type24d.ps1`
+  types through the inverse map; the 9x guests are QWERTY and keep
+  `type24.ps1`.
+- **The guest pointer cannot be driven by one computed delta.** QEMU's
+  `mouse_move` is relative and Windows applies pointer acceleration on top:
+  a 137-pixel move travelled 274 on Windows 98, a 250-pixel move travelled
+  515 on XP, and small steps travel *less* than asked because "enhance
+  pointer precision" shrinks them - a walk to 220,294 in steps of 4 arrived
+  at 175,237. `scripts\local\phase24\clickat.ps1` homes the pointer into the
+  top-left corner first, where the clamp is exact, then walks in small steps
+  with a per-guest `-Scale`. Even that is only good to a few pixels over a
+  long walk, so prefer a keyboard accelerator where the dialog has one.
+- **A CD is not needed on a 9x guest that has its CABs.** The INF's
+  `LayoutFile` route wants `usbd.sys`, `usbhub.sys` and `usbui.dll`; on the
+  NUSB guest `C:\WINDOWS\OPTIONS\CABS` answered the prompt where the CD
+  drive letter did not.
+- **The transfer drive is `D:` on the 9x guests and `E:` on the NT ones**,
+  because the NT guests have a CD-ROM ahead of it.
+
+### Windows 2000 SP4 - done
+
+`vm\win2k-xonly.img` overlay, monitor 56803. The 24.1 package was installed
+through the Found New Hardware wizard from the transfer drive (`E:` here, not
+`D:` - the NT guests have a CD-ROM ahead of it), and the binary that loaded is
+`built Sep 24 2026 11:23:51` with `USBPORT_GetHciMn=57324B30`.
+
+| hidusbf | `bInterval` | Period | speed | floored | Interval | ms | Hz |
+|---|---|---|---|---|---|---|---|
+| Default | 10 | 8 | Full | no | 6 | 8 | 125 |
+| 250 | 4 | 4 | Full | no | 5 | 4 | 250 |
+| 500 | 2 | 2 | Full | no | 4 | 2 | 500 |
+| 1000 | 1 | 1 | Full | no | 3 | 1 | 1000 |
+
+`OpensTotal` 15, `OpensAccepted` 15, every `EndpointRefusals*` 0,
+`EndpointIntervalsFloored` 0, `BehindHubOpens` 4.
+
+### Windows XP SP3 - done
+
+`vm\winxp.img` overlay, monitor 56804. `built Sep 24 2026 11:23:51`,
+`USBPORT_GetHciMn=10000001` - the same value SweetLow's rebuild gives, which
+is what it should be: his is a rebuild of XP's own usbport.
+
+| hidusbf | `bInterval` | Period | speed | floored | Interval | ms | Hz |
+|---|---|---|---|---|---|---|---|
+| Default | 10 | 8 | Full | no | 6 | 8 | 125 |
+| 250 | 4 | 4 | Full | no | 5 | 4 | 250 |
+| 500 | 2 | 2 | Full | no | 4 | 2 | 500 |
+| 1000 | 1 | 1 | Full | no | 3 | 1 | 1000 |
+
+`OpensTotal` 18, `OpensAccepted` 18, every `EndpointRefusals*` 0,
+`EndpointIntervalsFloored` 0, `BehindHubOpens` 5. (18 rather than 15 because
+the 250 Hz row was read twice - the first attempt to step the rate combo by
+keyboard did not reach it and the replug repeated 250. The duplicate is in
+the ring and is left there.)
+
+### Windows ME - done
+
+`vm\winme.img` overlay, monitor 56802. `built Sep 24 2026 11:23:51`,
+`USBPORT_GetHciMn=10000001`. **That value is the XP lineage, not the Windows
+2000 one**, and this guest's Documents list names `USB2.INF` under
+`D:\T231\SWEETLOW`: the ME guest is running SweetLow's stack too. So of the
+five guests read so far, three are on his usbport (98 SE under his stack, ME,
+and XP's own) and two on NUSB's Win2000-lineage build (98 SE under NUSB 3.3,
+Windows 2000).
+
+| hidusbf | `bInterval` | Period | speed | floored | Interval | ms | Hz |
+|---|---|---|---|---|---|---|---|
+| Default | 10 | 8 | Full | no | 6 | 8 | 125 |
+| 250 | 4 | 4 | Full | no | 5 | 4 | 250 |
+| 500 | 2 | 2 | Full | no | 4 | 2 | 500 |
+| 1000 | 1 | 1 | Full | no | 3 | 1 | 1000 |
+
+`OpensTotal` 15, `OpensAccepted` 15, every `EndpointRefusals*` 0,
+`EndpointIntervalsFloored` 0, `BehindHubOpens` 4.
+
+### What the five agree on
+
+Every guest read so far produces the **same ladder** - `bInterval` 10, 4, 2, 1
+-> `Period` 8, 4, 2, 1 -> Interval 6, 5, 4, 3 - and on every one of them the
+mouse is bucketed **Full Speed** and nothing is floored. Two things follow.
+
+The first is the answer the task wanted: the Full-Speed path is untouched by
+24.1, on both usbport lineages and on four operating systems, with not one
+refusal of any kind in 63 endpoint opens.
+
+The second is worth more than it looks. The Interval ladder is identical to
+the one the SweetLow guest produced at **Low** Speed, because
+`XhciIntervalFromPeriod` now treats a Low-Speed `Period` exactly as it treats
+a Full-Speed one. These readings are therefore the control for that change:
+they show the values 24.1 newly accepts at Low Speed are the values every
+shipping usbport has been sending at Full Speed all along, and that this
+driver has always programmed them correctly.
+
+### Also true of every guest, and not a reading
+
+The root-port hub is reported **High Speed** on all five
+(`ep.open.ival=00030005`), against the mouse behind it at its true speed.
+That is issue 6's item 1, unchanged by this task and 24.3's subject.
+`EndpointSpeedMismatches` is 1 on every guest and it is the hub, never the
+mouse.
