@@ -605,18 +605,21 @@ root-port device is reported High Speed (item 1, issue 6 itself). Items 3
 last pointer, "ADuM3160 / 4160" for the USB 1.1 hub this project has never
 held, is a reading the phase takes once the part is to hand.
 
-Status: **open**, added on 2026-09-24 at the owner's request. **24.1 started
-the same day** (`runs/run-24.md`): the cause is read statically, not yet
-reproduced - SweetLow's usbport rebuild has no Low-Speed floor where SP4,
-NUSB and XP SP3 have one, so it
-sends `Period` 4, 2 and 1 for a Low-Speed mouse behind a hub at 250, 500 and
-1000 Hz, and the driver refused them. The refusal is gone, the host vectors
-are in, and `ep.open.ival` puts the programmed Interval in the ring. **Owed:
-the runtime readings.** QEMU presents no Low-Speed device, so the Low-Speed
-clause of the checkpoint is a bare-metal reading (the E460, a Low-Speed mouse
-behind a USB 2.0 hub, SweetLow's stack) or a `usb-host` passthrough, the
-owner's call; the no-regression hidusbf reading on every guest is takeable in
-QEMU on the Full-Speed mouse and shows only that. It is the second Phase 24: the first, split out of Phase 23 on
+Status: **open**, added on 2026-09-24 at the owner's request. **24.1's
+Low-Speed clause is read** (`runs/run-24.md`), the same day it started.
+SweetLow's usbport rebuild has no Low-Speed floor where SP4, NUSB and XP SP3
+have one, so it sends `Period` 4, 2 and 1 for a Low-Speed mouse behind a hub
+at 250, 500 and 1000 Hz, and the driver refused them; his own
+`README.ENG.TXT` says the same thing in words. The refusal is gone, the host
+vectors are in, and `ep.open.ival` puts the programmed Interval in the ring.
+QEMU presents no Low-Speed peripheral, so the device is a **real one passed
+through** with `usb-host` (a 1.5 Mb/s mouse bound to WinUSB), behind a
+`usb-hub`, on Windows 98 SE under SweetLow's stack, driven with his own
+`Setup.exe`: all three rates now open, at Interval 5, 4 and 3 - 4, 2 and
+1 ms - none floored, 24 of 24 endpoint opens accepted, no refusal of any
+kind, and no Code 10. **Owed: the no-regression hidusbf reading on every
+other guest**, which is takeable in QEMU on the Full-Speed mouse and shows
+only that. It is the second Phase 24: the first, split out of Phase 23 on
 2026-09-22 with these same three subjects as 24.1 to 24.3, was removed the
 same day before any task ran, and `runs/run-23.md` names its ids as the
 record of that day. The ids below keep those three meanings, so nothing that
@@ -671,10 +674,14 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   reading on every other guest held. A `Period` that no shipping usbport can
   send stays refused.
 
-  Where it is read: host tests; QEMU `usb-hub` plus `usb-mouse` on the
-  SweetLow guest for the reproduction and the development, then hidusbf on
-  every other guest held for the read; the E460 with the Low-Speed mouse
-  behind a USB 2.0 hub if a metal reading is wanted.
+  Where it is read: host tests; then, on the SweetLow guest, a `usb-hub`
+  with a **real Low-Speed mouse passed through by `usb-host`** - QEMU models
+  no Low-Speed peripheral, so the `usb-mouse` this line named until
+  2026-09-24 is Full Speed and cannot exercise the arm; then hidusbf on every
+  other guest held for the no-regression read, where the Full-Speed
+  `usb-mouse` is the right device because that read is a regression read and
+  not a Low-Speed one; the E460 with the Low-Speed mouse behind a USB 2.0 hub
+  if a metal reading is wanted.
 
 - [ ] **24.2 - Polling rates on a root port.**
 

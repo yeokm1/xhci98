@@ -126,3 +126,210 @@ derivation.
   way `tools/sweetlow-extracted/README.md` does.
 - The device matrix on both primary targets against
   `runs/run-23-post-release/`, and the cut, are 24.5's.
+
+### What arrived, and what it settled (later the same day)
+
+**hidusbf is in hand.** The owner downloaded both archives by hand at 19:37.
+`tools\hidusbf.zip`, 616,467 bytes, sha256
+`bd8d1fb0545d8df88d9cef0c67682daef7d304561bc64acfee5c0d8c12d0f797` - the
+**same hash Phase 20 recorded**, and `DRIVER\98ME\hidusbf.sys` still hashes
+`b14d9d49...` at 3,648 bytes and version 1.2.0.10. So the tool Phase 20 read
+statically and the tool this task will run are one file, and Phase 20's
+account of the 9x filter carries over without re-reading it. A second archive
+came with it, `tools\hidusbfn.zip`, 89,053 bytes, sha256 `19da9ed6...`: an
+addendum for Intel's `IUSB3XHC.SYS` on Windows 7 and Microsoft's
+`USBXHCI.SYS` on Windows 8 and later, neither of which this project targets.
+Both are extracted beside their zips under the git-ignored `tools/`, and
+`tools/hidusbf-extracted/README.md` carries the hashes, the version
+resources, the directory layout and the traps, the way
+`tools/sweetlow-extracted/README.md` does.
+
+**The author's own manual corroborates the disassembly.** `README.ENG.TXT`
+section 2, unprompted and predating every reading here, says the polling-rate
+restriction is an NT-side one: "Windows 2000 doesn't have restrictions for
+overclocking Low Speed USB devices in driver code for OHCI and UHCI
+controllers... **Windows 98 and ME also don't have such restrictions, so
+there is no patch version of driver for these OSes at all**", and he offers
+"a special unofficial version of `USBPORT.SYS` for Windows 98 and ME without
+any restrictions of polling rate". The archive's shape says the same thing
+twice over: every NT build ships in a **patching** form, which edits
+Microsoft's `usbport.sys` in memory to remove the floor, and a **NOPATCH**
+form which cannot raise a Low-Speed rate at all - and there is no such pair
+for 9x, because on 9x there is nothing to patch. That is the author's account
+of exactly what the `0x24A5B` arm shows. It is independent of the
+disassembly, it agrees with it, and it is still not a runtime reading.
+
+**QEMU's lack of a Low-Speed device re-measured, not recalled.** On QEMU
+11.1.0 (`v11.1.0-12130-ge470268ff4`), `usb-mouse` and `usb-kbd` expose
+`usb_version` alone (1 Full, 2 High) and `usb-wacom-tablet` and `usb-braille`
+expose no speed property at all. That is Phase 5's finding
+(`build-and-test.md`) holding on the build actually installed.
+
+**So the Low-Speed reading is `usb-host` passthrough, and the owner chose
+it.** The roadmap lists "a metal reading of 24.1" under *Not a checkpoint*,
+which leaves passthrough as the only route that answers the checkpoint as
+written. `info usbhost` on this host - QEMU's own libusb enumeration, run
+against a throwaway machine with no disk - reports a **`046d:c077` "USB
+Optical Mouse" at Speed 1.5 Mb/s**: a genuine Low-Speed device, already
+attached, and not the owner's working pointer (a `046d:c099` G502 X at
+12 Mb/s, left alone). It is bound to WinUSB with `tools\zadig-2.9.exe`
+because Windows' HID driver holds it exclusively and libusb cannot detach a
+kernel driver on Windows.
+
+### The vehicle
+
+- **The binary.** The owner built all six flavours at 11:23-11:30; the
+  `qemu` x86 one's `srcstamp` matches `HEAD` (`4e52964`), so the binary under
+  test is the committed 24.1 source and not a stale object. The host suites
+  were re-run against it: 16,782 + 234 + 2,027 checks, 0 failures.
+- **The package.** `make-package.ps1 -Flavor qemu -Arch x86` staged
+  `out\pkg-qemu-x86` (`xhci98.sys` 164,944 B, 1.1.1.0 - 24.1 does not bump
+  the version, 24.5 does), copied to `vm\xfer98\XHCI98\` and verified
+  byte-identical to `src\objchk_qemu\i386\xhci98.sys`.
+- **The guest.** `vm\t24-sweetlow.img`, a copy of `vm\sweetlow-2a.img`
+  reverted to its one snapshot, `sweetlow-stack-nodriver`: SweetLow's stack
+  installed, no xhci98 driver of any version. A clean install rather than an
+  upgrade, which also steps around the trap that 24.1 ships the same
+  `DriverVer` as `1.1.1.0`.
+- **The transfer drive.** `vm\xfer98` already carried, from Phase 20 and
+  unchanged since, `HIDUSBF\` (98ME filter + INFs + Setup.exe), `USBD36\`
+  (NUSB 3.6's Windows ME `usbd.sys`, which the filter's
+  `USBD_ParseDescriptors` import needs), `XHCISNAP.EXE` and the `*.REG`
+  files. All three staged copies were re-hashed against the freshly extracted
+  archive and match.
+- **The launcher.** `scripts\local\phase24\qemu-sweetlow-24-1.cmd`
+  (per-host, git-ignored): `pc,smm=off`, `pentium3`, 256 MB,
+  `qemu-xhci,p2=8,p3=0`, a `usb-hub` given at launch on root port 2, the
+  passthrough mouse hot-plugged from the monitor onto `port=2.1`,
+  isa-debugcon, a QEMU trace (`ls-trace-events.txt`, Phase 20's list plus
+  `usb_host_*`), read-only VVFAT `vm\xfer98`, monitor 56890.
+
+### The readings, 2026-09-24 evening
+
+Taken on `vm\t24-sweetlow.img` through `qemu-sweetlow-24-1.cmd`, monitor
+56890, four boots (`b1` the pre-stage, `b2` the driver and tooling install,
+`b3` the hub, `b4` the rates). The owner drove the guest's GUI from `b3`
+onward; the monitor, the ring and the counters are this side.
+
+**The Low-Speed device is real and it is behind the hub.** `info usb` in the
+guest:
+
+```
+Device 0.1, Port 2,   Speed 12 Mb/s,  Product QEMU USB Hub,      ID: hub1
+Device 0.2, Port 2.1, Speed 1.5 Mb/s, Product USB Optical Mouse, ID: lsm
+```
+
+1.5 Mb/s is Low Speed, on a port behind a hub, which is what this task needed
+and what no emulated QEMU peripheral can present. Device Manager, by
+connection, shows the whole chain: `USB 2.0 eXtensible Host Controller
+(xhci98)` -> `USB 2.0 Root Hub` -> `Generic USB Hub (EHCI)` -> `USB Human
+Interface Device`. The hub's name is SweetLow's own string
+(`USB\HubClass.DeviceDesc="Generic USB Hub (EHCI)"` in his `USB2.INF`), which
+is how that screenshot also says the guest is on his stack and not
+Microsoft's - his `usbhub20.sys` bound it.
+
+**The guest.** `xhci98.sys` built `Sep 24 2026 11:23:51`,
+`USBPORT_GetHciMn=10000001` (the XP-lineage value, so SweetLow's usbport and
+not NUSB's), `MiniPortExtensionSize=000168A0` = 92320, matching
+`offsets.txt`'s SIZEOF. `XhciLogVerbosity` 2, `Log.Enabled` 1.
+
+**The tool.** hidusbf's own `Setup.exe`, driven by the owner rather than
+Phase 20's hand-written registry keys - a better reading, because it is the
+reporter's configuration rather than a reconstruction of it. It listed the
+device as `Filter? Yes`, `bInterval 10`, `Controller Name: USB 2.0
+eXtensible Host Controller (xhci98)`. `Filter? Yes` is also the proof that
+Phase 20's Code 2 trap was paid: the 98 SE `usbd.sys` was replaced by NUSB
+3.6's Windows ME build (22,928 bytes) before the filter would load.
+
+#### The four readings
+
+Each row is one `ep.open` / `ep.open.rate` / `ep.open.ival` triple out of the
+ring, decoded by `scripts\local\phase24\decode-ival.py`. `speed` is the class
+usbport bucketed the device with, `floored` is whether the Low-Speed floor
+moved the value, and `Interval` is what went into the Endpoint Context.
+
+| hidusbf setting | `bInterval` | `ep.open.rate` | Period | `ep.open.ival` | speed | floored | Interval | ms | Hz |
+|---|---|---|---|---|---|---|---|---|---|
+| Default | 10 | `00080004` | 8 | `00010006` | Low | no | 6 | 8 | 125 |
+| 250 | 4 | `00040004` | 4 | `00010005` | Low | no | 5 | 4 | 250 |
+| 500 | 2 | `00020004` | 2 | `00010004` | Low | no | 4 | 2 | 500 |
+| 1000 | 1 | `00010004` | 1 | `00010003` | Low | no | 3 | 1 | 1000 |
+
+**This is the task's whole claim, measured.** `Period` 4, 2 and 1 at Low
+Speed are the three values `XhciIntervalFromPeriod` refused before this task,
+and that refusal is what returned `XHCI_CTX_BAD_PARAM` -> `OpenEndpoint`
+`MP_STATUS_NO_RESOURCES` -> a failed pipe open -> the reporter's **Code 10 at
+250 Hz and above**. All three now open. Their Intervals are 5, 4 and 3, all
+inside Table 6-12's Low-Speed range of 3 to 10, and the mouse carries no
+Code 10 - Device Manager shows no exclamation on it, in a screenshot where
+the unrelated `PCI Ethernet Controller` does carry one, which is the control
+that makes the absence mean something.
+
+The stock row is worth as much as the other three. `bInterval` 10 buckets to
+`Period` 8 with **no floor applied** (`floored` no, `EndpointIntervalsFloored`
+0), which is SweetLow's usbport having no Low-Speed floor - read at runtime
+rather than out of the disassembly. It is also the reporter's own boundary:
+125 Hz was the one rate that always worked.
+
+**usbport passes the true speed down behind a hub.** Every mouse row reads
+`speed` Low, against the hub's own root-port row of High - so the miniport is
+told Low Speed for the device and High for the hub, and the bucketing this
+task turns on is genuinely the Low-Speed arm. The hub's row also puts issue
+6's item 1 on the record in one line: a root-port device reported High Speed,
+`ep.open.ival=00030005`, `speed` High, `Period` 32, Interval 5. That is the
+known reporting limitation 24.3 is about, and `ep.open.ival` is now the
+cheapest way to see it.
+
+#### Counters at the end of the run
+
+```
+DevicesAddressed             8      OpensTotal                  24
+OpensAccepted               24      BehindHubOpens               7
+EndpointRefusalsParams       0      EndpointRefusalsPool         0
+EndpointRefusalsType         0      EndpointRefusalsNotReady     0
+EndpointIntervalsFloored     0      EndpointsNoResources         0
+EndpointsNoBandwidth         0      EndpointSpeedMismatches      1
+```
+
+24 opens seen, 24 accepted, nothing refused for any reason and nothing
+floored. `EndpointSpeedMismatches` 1 is the root-port hub and not the mouse.
+
+#### What this run cost, and what the next one should not pay again
+
+- **Phase 20's `readring.ps1` reads the wrong memory now.** It hardcoded the
+  `1.0.1.0` extension layout - `Log.Enabled 75072`, `Head 75116`,
+  `Used 75120`, `ErrorRecords 75160`, `Ring 75224`. On this build
+  `Log.Enabled` is 75760 and `Ring` is 75912, so those constants are 688
+  bytes short and would have reported unrelated memory as the ring.
+  `readring24.ps1` now derives them from `scripts\vm-matrix\offsets.txt` -
+  `Head = Log.Appends - 8`, `Used = Log.Appends - 4`,
+  `Ring = Log.FlushFailures + 4 + 64` - because `gen-offsets.ps1` names only
+  counters and those four fields are not counters. **Any other Phase 20
+  reader reused later needs the same check.**
+- **`readring.ps1` also carried a latent bug**: `$tmp -replace '\', '/'` is
+  an invalid regular expression and throws on every invocation. Replaced with
+  a literal `.Replace()`. It cannot have worked as written, so the Phase 20
+  copy was evidently edited after its run.
+- **hidusbf's `[Restart]` only half-cycles the device.** After each rate
+  change the slot was re-addressed but no pipe was reopened, so the ring did
+  not move and the reading looked like a refusal when the counters said
+  nothing had been refused. `device_del lsm` + `device_add ...` from the
+  monitor forces the full re-enumeration, and every row above was taken
+  through it. Do not read a missing `ep.open` as a Code 10 without checking
+  `EndpointRefusalsParams` first.
+- **`info usbhost` is the cheap way to find a Low-Speed device on the host.**
+  `qemu-system-x86_64 -machine pc -m 64 -display none -nodefaults -monitor
+  stdio`, then `info usbhost`, prints every host device with its speed; feed
+  the monitor a leading newline or it eats the first character. Windows
+  exposes no USB speed through `Get-PnpDeviceProperty`, and the DDK's
+  `usbview.exe` is GUI-only.
+- **IDE will not hotplug a CD, but the `pc` machine already has one.**
+  `device_add ide-cd,bus=ide.1` is refused ("Bus 'ide.1' does not support
+  hotplugging"); `change ide1-cd0 <iso>` inserts media into the drive that is
+  already there. The launcher now carries the CD from the start.
+- **The INF wants the Windows CD, and that is safe on this guest.** The
+  `LayoutFile` route fetches `usbd.sys`, `usbhub.sys` and `usbui.dll` from
+  the OS's own source, and the `sweetlow-stack-nodriver` snapshot has none of
+  them. It does **not** touch SweetLow's `usbport.sys`: `[Xhci.CopyW98]` does
+  not list that file at all, and every line it does list carries flag 16,
+  `COPYFLG_NO_OVERWRITE`. Answer the prompt with `e:\win98`.
