@@ -1823,6 +1823,50 @@ static void testRootResetOverPort1Reset(void)
                                PS_EN),
              XHCI_VHUB_DO_PIPE, "and port 1's reset ends as its own");
     CHECK_EQ(h.P1Enabled, 1, "port 1 enabled by it");
+
+    /* A second reset of the same view while the first runs: asked for
+     * untaken, so the busy port refuses it, and the first keeps its
+     * ownership - its end is where the decision is taken. (A first build
+     * overwrote the ownership before the refusal, and the first reset's
+     * end then decided nothing.) */
+    XhciVhubStart(&h, ON_DEMAND, 0);
+    gen++;
+    first = gen;
+    CHECK_EQ(XhciVhubRootReset(&h, ON_DEMAND, gen, 0, PS_CONN),
+             XHCI_VHUB_DO_PHYS_RESET, "(a device's first root reset)");
+    gen++;
+    CHECK_EQ(XhciVhubRootReset(&h, ON_DEMAND, gen, 0, PS_RESETTING),
+             XHCI_VHUB_DO_PHYS_RESET,
+             "a second root reset while it runs is asked for untaken");
+    CHECK_EQ(h.ResetGeneration, first, "the first keeps its ownership");
+    CHECK_EQ(XhciVhubResetDone(&h, ON_DEMAND, gen, 1, XHCI_SPEED_UNKNOWN,
+                               PS_RESETTING),
+             XHCI_VHUB_DO_NONE, "the refusal's end matches nothing");
+    CHECK_EQ(h.ResetOwner, XHCI_VHUB_OWNER_ROOT, "(still owned)");
+    v = XhciVhubResetDone(&h, ON_DEMAND, first, 0, XHCI_SPEED_FULL, PS_EN);
+    CHECK_EQ(v & XHCI_VHUB_DO_ARM_HUB, XHCI_VHUB_DO_ARM_HUB,
+             "and the first reset's end stands the hub up");
+    CHECK_EQ(h.Present, 1, "(present)");
+
+    readyHub(&h, ON_DEMAND);
+    gen++;
+    first = gen;
+    XhciVhubPort1Feature(&h, 1, XHCI_VHUB_SEL_PORT_RESET, gen, 0, PS_EN);
+    gen++;
+    CHECK_EQ(XhciVhubPort1Feature(&h, 1, XHCI_VHUB_SEL_PORT_RESET, gen, 0,
+                                  PS_RESETTING),
+             XHCI_VHUB_DO_PHYS_RESET,
+             "a second port-1 reset while the first runs, untaken too");
+    CHECK_EQ(h.ResetGeneration, first, "the first keeps its ownership");
+    CHECK_EQ(h.ResetOwner, XHCI_VHUB_OWNER_PORT1, "(port 1's)");
+    CHECK_EQ(h.P1Resetting, 1, "(running)");
+    CHECK_EQ(XhciVhubResetDone(&h, ON_DEMAND, gen, 1, XHCI_SPEED_UNKNOWN,
+                               PS_RESETTING),
+             XHCI_VHUB_DO_NONE, "the refusal's end matches nothing");
+    CHECK_EQ(XhciVhubResetDone(&h, ON_DEMAND, first, 0, XHCI_SPEED_FULL,
+                               PS_EN),
+             XHCI_VHUB_DO_PIPE, "and the first ends as port 1's");
+    CHECK_EQ(h.P1Enabled, 1, "port 1 enabled by it");
 }
 
 /*

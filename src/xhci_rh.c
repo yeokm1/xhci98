@@ -1835,6 +1835,14 @@ static MPSTATUS xhciRhVhubCarry(PXHCI_EXTENSION ext,
                 hub->ResetGeneration = shadow->Generation;
             }
         } else {
+            /*
+             * Refused before the write. The reset the core just took under
+             * `generation` ends here as one that timed out; a reset the
+             * core declined to take because another is running (its
+             * generation is that one's, not this) is left exactly as it was,
+             * since the refusal is the busy port's and the running reset
+             * ends as its own.
+             */
             owner = hub->ResetOwner;
             if (owner == XHCI_VHUB_OWNER_PORT1) {
                 (VOID)xhciRhVhubCarry(
@@ -1843,7 +1851,8 @@ static MPSTATUS xhciRhVhubCarry(PXHCI_EXTENSION ext,
                                       generation, 1, shadow->Speed,
                                       xhciRhVhubPhys(shadow)),
                     generation);
-            } else if (owner == XHCI_VHUB_OWNER_ROOT) {
+            } else if (owner == XHCI_VHUB_OWNER_ROOT &&
+                       hub->ResetGeneration == generation) {
                 hub->ResetOwner = (UCHAR)XHCI_VHUB_OWNER_NONE;
                 hub->UpResetting = 0;
             }
@@ -2232,9 +2241,12 @@ static MPSTATUS xhciRhVhubRootOp(PXHCI_EXTENSION ext, USHORT port, ULONG which)
  * that can never come. Whether usbhub asks again is its own (Vista's
  * UsbhResumeSuspendedPort reports the failure and signals its resume event,
  * with no retry of its own); a request that follows is served as any
- * other. A refused reset is not a refusal here: the core is
- * told the reset ended with the port disabled, and usbhub reads that end
- * from port 1 as it reads a reset that timed out. A refused disable or
+ * other. A reset the core took and the port then refused is not a refusal
+ * here: the core is told the reset ended with the port disabled, and usbhub
+ * reads that end from port 1 as it reads a reset that timed out. A reset
+ * the core declined because one already runs on the port is: the busy port
+ * refuses the write, nothing changed hands, and the request stalls as a
+ * root port's second reset is refused today. A refused disable or
  * power-off is today's disable body declining, with port 1's view already
  * changed, and completes as it did.
  *
@@ -2267,6 +2279,17 @@ MPSTATUS XhciRhVhubPort1Feature(PXHCI_EXTENSION ext,
                                    shadow->DisownPending,
                                    xhciRhVhubPhys(shadow));
     status = xhciRhVhubCarry(ext, hubPort, shadow, verdict, generation);
+    if ((verdict & XHCI_VHUB_DO_PHYS_RESET) != 0 &&
+        status != MP_STATUS_SUCCESS &&
+        (hub->ResetOwner == XHCI_VHUB_OWNER_NONE ||
+         hub->ResetGeneration != generation)) {
+        /* The core took no reset under this generation - one already runs
+         * on the port - and the busy port refused the write: the request
+         * fails having changed nothing. (A reset the core took and the port
+         * refused was ended above as one that timed out, and its request
+         * completes.) */
+        return status;
+    }
     if ((verdict & XHCI_VHUB_DO_SUSPEND) != 0 && status != MP_STATUS_SUCCESS) {
         /* The port refused the link write: port 1 is not suspended, and the
          * request fails having changed nothing. */

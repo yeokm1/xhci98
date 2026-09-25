@@ -725,6 +725,18 @@ ULONG XhciVhubRootReset(PXHCI_VHUB hub,
         return XHCI_VHUB_DO_PHYS_RESET;
     }
     if (applied == XHCI_VHUB_MODE_ON_DEMAND) {
+        if (hub->ResetOwner != XHCI_VHUB_OWNER_NONE) {
+            /*
+             * A reset is running on the physical port - the root's or port
+             * 1's - and the port is armed with it: the write asked for here
+             * is refused as busy, as a root port's second reset is today,
+             * and usbport gets the refusal. Nothing here changes hands, so
+             * the running reset ends as its own, with its decision or its
+             * port-1 change; the refusal's own end, carried under the
+             * generation named for it, matches no reset and does nothing.
+             */
+            return XHCI_VHUB_DO_PHYS_RESET;
+        }
         if (!hub->Present) {
             /*
              * Today's reset, unheld as today. It is still owned, because its
@@ -733,17 +745,6 @@ ULONG XhciVhubRootReset(PXHCI_VHUB hub,
             hub->ResetOwner = (UCHAR)XHCI_VHUB_OWNER_ROOT;
             hub->ResetGeneration = generation;
             hub->ResetKeeps = 0;
-            return XHCI_VHUB_DO_PHYS_RESET;
-        }
-        if (hub->P1Resetting) {
-            /*
-             * Port 1's reset is running on the physical port, which is armed
-             * with it: the write asked for here is refused as busy, as a
-             * root port's second reset is today, and usbport gets the
-             * refusal. Nothing here changes hands, so port 1's reset ends as
-             * its own; the refusal's own end, carried under the generation
-             * named for it, matches no reset and does nothing.
-             */
             return XHCI_VHUB_DO_PHYS_RESET;
         }
         if (disownPending) {
@@ -1144,6 +1145,13 @@ ULONG XhciVhubPort1Feature(PXHCI_VHUB hub,
         case XHCI_VHUB_SEL_PORT_RESET:
             if (!hub->P1Power) {
                 return XHCI_VHUB_DO_NONE;
+            }
+            if (hub->ResetOwner != XHCI_VHUB_OWNER_NONE) {
+                /* A reset already runs on the port: asked for untaken, so
+                 * the busy port refuses it and the caller stalls the
+                 * request; the running reset keeps its owner and ends as
+                 * its own (the root reset rule above). */
+                return XHCI_VHUB_DO_PHYS_RESET;
             }
             if (disownPending) {
                 hub->ResetHeld = (UCHAR)XHCI_VHUB_OWNER_PORT1;

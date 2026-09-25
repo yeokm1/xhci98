@@ -1174,3 +1174,15 @@ two of them corners of the overtaken reset and one of recovery at 1:
 New vectors: the overtaken reset through its deadline and a late PRC, with
 the disown the reset swallowed written again and the next port-1 reset not
 held; the recovery at 1 with the device gone. `test_init` 20,535.
+
+**Codex's fourth round** (the same thread, 6 minutes) found one: a second
+reset asked for while the first still ran took the ownership before the
+port refused it as busy, so the first reset's end - the one that decides,
+at 1 - decided nothing, and a Full-Speed device's root reset ended as
+today's: the device opened direct, which is issue 6's bugcheck. The same
+for a second port-1 reset over a running one. The core now takes no reset
+while one runs on the port (the request is asked for untaken, refused as
+busy, and stalled for port 1 as a root port's second reset is refused
+today), the refusal's own end is matched by generation so it changes
+nothing, and the running reset keeps its owner. Vectors in the core and
+through the driver, both views. `test_vhub` 1279, `test_init` 20,552.

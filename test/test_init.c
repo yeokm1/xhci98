@@ -31111,6 +31111,7 @@ static void test_vhub_root_reset_over_a_port1_reset(void)
     ULONG refusals;
     ULONG held;
     ULONG resets;
+    ULONG stalls;
 
     vhub_start(2);
     hwCmdSlotId = 6;
@@ -31220,6 +31221,58 @@ static void test_vhub_root_reset_over_a_port1_reset(void)
     vhub_root_status(2, &status, &change);
     CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, 0,
              "and the root port latches nothing");
+
+    /*
+     * A second reset of the same view while the first runs. The root's on
+     * a port with no hub yet: refused as busy, and the first's end still
+     * decides. Port 1's: the request stalls, and the first ends as port
+     * 1's. (A first build overwrote the running reset's ownership before
+     * the refusal, so the first root reset's end decided nothing and a
+     * Full-Speed device was opened as today's - the bugcheck of issue 6.)
+     */
+    xport = vhub_xport(3);
+    vhub_plug(3, 1);                                /* Full Speed */
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 3);
+    portResetHangs = 1;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 3), MP_STATUS_SUCCESS,
+             "a Full-Speed device's first root reset starts");
+    portResetHangs = 0;
+    refusals = ext.RhPortsBusy;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 3),
+             MP_STATUS_NOT_SUPPORTED, "a second while it runs is refused as busy");
+    CHECK_EQ(ext.RhPortsBusy, refusals + 1, "(counted)");
+    CHECK_EQ(ext.Vhub[2].ResetOwner, XHCI_VHUB_OWNER_ROOT,
+             "and the first keeps its ownership");
+    mmio[HC_PORTSC(xport) / 4] =
+        (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_PR) |
+        XHCI_PORTSC_PRC | XHCI_PORTSC_PED;
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.Vhub[2].Present, 1, "so its end stands the hub up");
+    CHECK_EQ(ext.Vhub[2].Decision, XHCI_VHUB_DECIDED_HUB, "(virtual-hub mode)");
+    CHECK_EQ(ext.VhubArmedPort, 3, "with the hub's open armed");
+
+    xport = vhub_xport(2);
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 20, 1, 0);
+    portResetHangs = 1;
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    portResetHangs = 0;
+    CHECK_EQ(ext.Vhub[1].P1Resetting, 1, "(port 1's reset running again)");
+    stalls = ext.VhubStalls;
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(lastCompletedStatus, (LONG)XHCI_USBD_STATUS_STALL_PID,
+             "a second port-1 reset while the first runs stalls");
+    CHECK_EQ(ext.VhubStalls, stalls + 1, "(counted)");
+    CHECK_EQ(ext.Vhub[1].P1Resetting, 1, "the first still running");
+    CHECK_EQ(ext.Vhub[1].ResetOwner, XHCI_VHUB_OWNER_PORT1,
+             "with its ownership kept");
+    mmio[HC_PORTSC(xport) / 4] =
+        (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_PR) |
+        XHCI_PORTSC_PRC | XHCI_PORTSC_PED;
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.Vhub[1].P1Resetting, 0, "and it ends as port 1's");
+    CHECK_EQ(ext.Vhub[1].P1Enabled, 1, "enabling port 1");
     vhub_reset_registry();
 }
 
