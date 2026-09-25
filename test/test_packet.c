@@ -692,7 +692,24 @@ static void test_extensions(void)
               XHCI_EXTENSION_SIGNATURE != XHCI_TRANSFER_SIGNATURE &&
               XHCI_ENDPOINT_SIGNATURE != XHCI_TRANSFER_SIGNATURE,
           "the three extension signatures are distinct");
+
+    /*
+     * The snapshot header leaves the driver as raw bytes for XHCISNAP, whose
+     * own twin of it is 38 unsigned longs since schema 5 and which refuses a
+     * header of any other size as a schema mismatch. Its amd64 layout rests
+     * on every field being a ULONG - nothing to widen, nothing for an
+     * alignment rule to move - and that is what the count pins, on both
+     * architectures. The compile-time twin below holds it on the amd64 leg
+     * too, which this host builds and cannot run.
+     */
+    CHECK_EQ(sizeof(XHCI_SNAPSHOT_HEADER), 38 * 4,
+             "snapshot header is 38 ULONGs on either architecture");
+    CHECK_EQ(XHCI_OFFSET_OF(XHCI_SNAPSHOT_HEADER, VhubPid), 37 * 4,
+             "and its last field is the 38th");
 }
+
+XHCI_C_ASSERT(snapshot_header_is_38_ulongs,
+              sizeof(XHCI_SNAPSHOT_HEADER) == 38 * 4);
 
 int main(void)
 {

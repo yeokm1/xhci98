@@ -422,7 +422,7 @@ ULONG XhciIntervalFromPeriod(ULONG period, ULONG speedClass, ULONG *interval)
          * Frames, as at Full Speed, and **no floor of this function's own**.
          * Windows 2000 SP4, NUSB and XP SP3 raise a Low-Speed Period below 8
          * to 8 before the miniport sees it (SP4 0x2520E-0x2521D, NUSB
-         * 0x24B90-0x24B9F, XP SP3 0x25A6D-0x25A78), so 1, 2 and 4 never
+         * 0x24B90-0x24B9F, XP SP3 0x25A69-0x25A78), so 1, 2 and 4 never
          * arrive from those builds - and until roadmap task 24.1 this branch
          * refused them on that strength. SweetLow's 5.1.2600.2180 rebuild has
          * no such step (0x24A5B-0x24A8F): a Low-Speed interrupt endpoint

@@ -727,10 +727,11 @@ static void test_both_strides(void)
  * is spelled the same way twice.
  *
  * usbport's own clamps mean the reachable set is small: HS 0-5, FS 3-8, and
- * **LS 6-8** - usbport raises an LS Period below 8 to 8 before it ever arrives,
- * so 3-5 are unreachable at that speed and this function refuses them. The
- * "LS 3-8" this comment used to say was the Full-Speed range copied across, and
- * it survived the eighth review's own correction to the code below it.
+ * **LS 3-8** - 6-8 from the three usbport builds that raise a Low-Speed
+ * Period below 8 to 8 before it arrives (SP4, NUSB, XP SP3), and 3-8 from
+ * SweetLow's rebuild, which has no such floor (roadmap task 24.1). Until 24.1
+ * this comment and the code below it refused Low-Speed 3-5 on the strength
+ * of the first three builds alone.
  */
 static void test_interval_from_period(void)
 {

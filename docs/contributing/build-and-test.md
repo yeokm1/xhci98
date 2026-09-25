@@ -1299,7 +1299,7 @@ Hub trees have two further ceilings, both measured and neither obvious from the 
 Four clauses the emulated bus cannot present at all, each measured rather than assumed, so that nobody spends a boot on them again:
 
 - A disconnect during a data transfer is not producible. `transfers cancelled` stayed 0 across monitor-driven unplug gaps from 8 ms to 450 ms, because an emulated bus completes control transfers effectively instantaneously and there is no window to hit. Only the mid-command-chain half (a device removed after Enable Slot and before SET_ADDRESS) can be driven, and it unwound cleanly on 2b. The cancel path's evidence for the in-flight case is the host vectors; interrupt endpoints (Phase 7a onward) do have traffic genuinely in flight between events.
-- Low Speed is unreachable. No QEMU peripheral model declares it: `usb-mouse`, `usb-tablet`, `usb-wacom-tablet`, `u2f-emulated` and `usb-kbd,usb_version=1` attached together all report 12 Mb/s under `info usb`, and `usb_version=0` is refused outright (`Invalid usb version 0 for usb hid device`). That measurement struck the LS leg from the VM checkpoint. LS therefore survives host-side, in the `test_ctx` vectors (a slot context built with `XHCI_SPEED_LOW`, EP0 `MaxPacketSize` 8, the LS MPS0 correction), until a bare-metal run.
+- Low Speed is unreachable. No QEMU peripheral model declares it: `usb-mouse`, `usb-tablet`, `usb-wacom-tablet`, `u2f-emulated` and `usb-kbd,usb_version=1` attached together all report 12 Mb/s under `info usb`, and `usb_version=0` is refused outright (`Invalid usb version 0 for usb hid device`). That measurement struck the LS leg from the VM checkpoint. LS therefore survives host-side, in the `test_ctx` vectors (a slot context built with `XHCI_SPEED_LOW`, EP0 `MaxPacketSize` 8, the LS MPS0 correction), until a bare-metal run - or, since roadmap task 24.1 (2026-09-24), a `usb-host` passthrough of a real Low-Speed mouse from the host, bound to WinUSB with Zadig and found through `info usbhost`, which is how `runs/run-24.md` 24.1 reached Low Speed in a guest; no emulated peripheral declares it.
 - Alternate-interface change and reset-pipe-after-stall are unavailable: no QEMU HID device has a second interface setting, and nothing in one produces a STALL on demand, so Reset Endpoint never runs and `endpoint resets` stays 0. This is distinct from the abort path, which is exercised.
 - The two `TT pairs disagreeing with usbport` readings are a matched pair, and neither alone is evidence. A nonzero reading is QEMU-only: it is the phantom-translator case, usbport claiming a TT for a hub that physically has none, which no real hub can produce; the negative control. A zero reading with the DW2 pair naming the real translator is metal-only: there is no TT in QEMU for the graph and usbport to agree about. The QEMU row is the metal row's control, so both are printed.
 
@@ -3262,7 +3262,9 @@ built for is unreachable on it. The full investigation is
   `_S1_`, so a Stand by here would be S3, the deep state that needs the display
   driver to restore, so cirrus vetoes.
 - `ResumeController` on Win2000 was therefore owed to bare metal, alongside the
-  Low-Speed leg. Do not spend another session on QEMU configurations for it.
+  Low-Speed leg. Do not spend another session on QEMU configurations for it
+  (Low Speed itself has since been reached by `usb-host` passthrough,
+  `runs/run-24.md` 24.1; emulated peripherals still cannot declare it).
   No bare-metal Windows 2000 vehicle ever existed, so the clause is published
   as a limitation rather than pending (roadmap Phase 13).
 
@@ -4996,7 +4998,7 @@ and reboot (`scripts\bench\IMOD98.BAT` or `IMOD.BAT`). The contract is the
 shipping one - 10 to 4000 used as given, anything else replaced by 4000 - so a
 sweep can no longer reach 0. The interval the driver chose, and what the
 register read back, are in every `XHCISNAP` `.TXT` under "registry values"
-(snapshot schema 4), and the interrupt and DPC counts still come out of the
+(since snapshot schema 4), and the interrupt and DPC counts still come out of the
 `.BIN` against an offsets table from the same tree. The INF writes 500, so a
 bench machine goes back to the package's own setting with `IMOD98 500 NNNN`,
 not with `CLEAR`, which leaves the driver at 4000.

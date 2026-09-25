@@ -776,7 +776,7 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     class, as the 9x ones do (`USB\HubClass`, `USB\CLASS_09`).
   - [x] **24.3.2 - Host vectors** (`test/`), the page's `-0`. *(done
     2026-09-25: scoped by the owner as a DDK-free pure core,
-    `src/xhci_vhub.c`/`.h`, called by nothing and not in `src/sources`, with
+    `src/xhci_vhub.c`/`.h`, then called by nothing and not yet in `src/sources`, with
     its own suite `test/test_vhub.c` - 1036 checks, every host suite green;
     the vectors below that need the driver around the core moved to 24.3.3,
     which names them. Writing them found value 1's root report leaking port
@@ -823,9 +823,10 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     schema 5 and `XHCISNAP`; six vectors in `test/test_init.c`, caught by
     eleven driver mutations; host tests, all three x86 flavours and the amd64
     build green through every gate. Record 12 section 10 is what the wiring
-    decided, and `runs/run-24.md` the record. Owed by 24.5: the download's
-    readme template still names snapshot schema 4, which `make-release.ps1`
-    refuses.)* The virtual device records, in
+    decided, and `runs/run-24.md` the record. The download's readme
+    template now names snapshot schema 5, taken in the audit of 2026-09-25
+    rather than left to 24.5's cut, which would have refused it.)* The
+    virtual device records, in
     a fixed per-root-port array of their own outside the topology graph, the
     decision point, the synthetic completion path through the deferred
     completion list, the status-change pipe, the suspend merge, value 2's
@@ -839,11 +840,20 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     finding the device's root-port record across a re-open, a repeated reset
     and an address reused after a disown; the hub's and the device's
     address-0 opens told apart in `OpenEndpoint`; a virtual address never
-    reaching either EP0 snoop, and `TtPairsAgreed` counting a `HubAddr` that
-    names one; the synthetic completions through the deferred list,
-    `AbortTransfer` finding a held status-change transfer; hub-path removal
-    at 2; and rule 2 over the driver, the switch absent and 0. Host tests and
-    every gate green on all three x86 flavours and the amd64 build.
+    reaching the topology snoop, and `TtPairsAgreed` counting a `HubAddr`
+    that names one (the virtual record written by hand there, since the
+    real hub's enumeration in the model owns no reset a virtual hub could);
+    the synthetic completions through the deferred list, `AbortTransfer`
+    finding a held status-change transfer; at 2 a cancelled hub install, a
+    root-port power-off and power-on and the hub enumerated again without
+    a restart; suspend and resume through the callbacks for both views; and
+    rule 2 over the driver, the switch absent and 0. Hub-path removal at 2
+    is 24.3.4's, a guest reading. Host tests and every gate green on all
+    three x86 flavours and the amd64 build. The audit of 2026-09-25 found
+    a direct port at 1 keeping its decision across an unplug, so a
+    Full-Speed device following a High-Speed one cost a forced connect
+    change; fixed, with the vector that had pinned the defect as intended
+    rewritten to pin the rule of 3.2.
   - [ ] **24.3.4 - The readings on every guest held**, the page's `-V`, each
     with the switch at 0, then 1, then 2. First, on Windows 98 SE under both
     stacks and on ME: which encoding a `REG_SZ` arrives in through

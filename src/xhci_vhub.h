@@ -369,7 +369,10 @@ typedef struct _XHCI_VHUB {
 /*
  * StartController. Clears the record; at value 2 stands the hub up - powered,
  * not enabled, port 1 powered - and latches the root port's one
- * C_PORT_CONNECTION (3.8), with port 1's if `connected`.
+ * C_PORT_CONNECTION (3.8), with port 1's if `connected`. The driver passes 0
+ * and leaves port 1's to the root hub's seed reading, whose CSC reaches it
+ * through XhciVhubAbsorb; the argument is for a caller that has read the
+ * port first.
  */
 ULONG XhciVhubStart(PXHCI_VHUB hub, ULONG applied, ULONG connected);
 

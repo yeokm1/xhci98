@@ -89,9 +89,11 @@ day. The upload of `1.1.1.0` is the owner's. **Phase 24**, added on
 of that number and carries what GitHub issue 4 still asks for, in order of
 how cheaply each can be built and read: the Low-Speed polling rates behind
 a hub (the reporter's Code 10 at 250 Hz and above), a decision on root-port
-polling rates, a decision on true speeds on root ports, the reporter's USB
-1.1 hub pointer once the part is to hand, and the cut of whatever changed.
-Open, no task started.
+polling rates, true speeds on root ports through the virtual USB 2.0 hub of
+design record 12, the reporter's USB 1.1 hub pointer once the part is to
+hand, and the cut of whatever changed. Open: 24.1 read out and 24.2
+decided on 2026-09-25, and 24.3 built through its driver sub-task the same
+day, with its guest readings still owed.
 **Phase 22**, closed on 2026-09-19, began as the 32-bit
 question - whether the binary that already ships runs on Windows Vista and
 Windows 7 as it stands - and that premise fell with Phase 21's: measurements

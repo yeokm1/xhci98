@@ -1779,6 +1779,16 @@ static MPSTATUS xhciRhVhubCarry(PXHCI_EXTENSION ext,
         XhciTopoDropPending(&ext->Topology);
         ext->VhubArmedPort = hubPort;
     }
+    if ((verdict & XHCI_VHUB_DO_ARM_DEVICE) != 0 &&
+        ext->VhubArmedPort == hubPort) {
+        /*
+         * A port-1 reset is the device's, and the two claims are exclusive
+         * (3.6): the hub's arm is spent the moment its port 1 is reset,
+         * whether or not that reset ends in a PRC - the end, when there is
+         * one, is where XhciSlotPortReset arms the device's own claim.
+         */
+        ext->VhubArmedPort = 0;
+    }
     if ((verdict & XHCI_VHUB_DO_FORCE_CONNECT) != 0) {
         /*
          * A decision that flipped (3.2): the root port latches the connect
@@ -2128,10 +2138,20 @@ static MPSTATUS xhciRhVhubRootOp(PXHCI_EXTENSION ext, USHORT port, ULONG which)
                                                 XHCI_PORT_OP_RESUME, &armed);
             break;
         }
-        status = xhciRhVhubCarry(ext, (ULONG)port, shadow,
-                                 XhciVhubRootSuspend(hub, applied, 0,
-                                                     xhciRhVhubPhys(shadow)),
+        verdict = XhciVhubRootSuspend(hub, applied, 0,
+                                      xhciRhVhubPhys(shadow));
+        status = xhciRhVhubCarry(ext, (ULONG)port, shadow, verdict,
                                  generation);
+        if ((verdict & XHCI_VHUB_DO_RESUME) != 0 &&
+            status != MP_STATUS_SUCCESS) {
+            /* The port refused the resume, so the physical port is still
+             * suspended and the view stays so with it: usbhub gets the
+             * refusal, and its retry asks for the resume again rather than
+             * finding a view that already believes it running. */
+            hub->UpSuspend = 1;
+            hub->UpResumeOwed = 0;
+            hub->PhysSuspended = 1;
+        }
         break;
     }
 
@@ -2179,6 +2199,13 @@ VOID XhciRhVhubPort1Feature(PXHCI_EXTENSION ext,
          * request completes having changed nothing. */
         hub->P1Suspend = 0;
         hub->PhysSuspended = 0;
+    }
+    if ((verdict & XHCI_VHUB_DO_RESUME) != 0 && status != MP_STATUS_SUCCESS) {
+        /* The port refused the resume: port 1 stays suspended with the
+         * physical port, so usbhub's next CLEAR_PORT_FEATURE asks again. */
+        hub->P1Suspend = 1;
+        hub->P1ResumeOwed = 0;
+        hub->PhysSuspended = 1;
     }
 }
 

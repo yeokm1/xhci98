@@ -1031,5 +1031,49 @@ checks; `XHCISNAP`'s self-test.
 
 **Owed.** 24.3.4's readings, the first being which encoding a `REG_SZ`
 arrives in on Windows 98 SE and ME (`XHCISNAP` now prints it). 24.5's cut
-has to rewrite the download's readme sentence that names snapshot schema 4,
-which `make-release.ps1` refuses as stale.
+had to rewrite the download's readme sentence that names snapshot schema 4,
+which `make-release.ps1` refuses as stale; the audit below took it.
+
+### 24.3.3, audited (2026-09-25)
+
+A code and document audit of the branch, with a second opinion from Codex,
+after the wiring. What it found in the driver:
+
+- **A direct port at 1 kept its decision across an unplug.** `XhciVhubAbsorb`
+  returned before reading anything on a port with no hub, so a High-Speed
+  device unplugged and a Full-Speed one plugged into the same port met a
+  `DIRECT` decision at its first reset, and the core forced the connect
+  change of 3.2 - one spurious re-enumeration per such swap, counted in
+  `VhubForcedConnects`, where record 12 says "a disconnect forgets the
+  decision". The integration vector had pinned the defect as intended. The
+  core now forgets a direct port's decision on a disconnect, a lost supply,
+  a connect change and usbport's disable or power-off of the port; the
+  vectors pin the swap standing a hub up at the first reset with no forced
+  change.
+- **A refused resume left the view running while the port stayed in U3.**
+  The suspend refusal was undone in the root-hub half; the resume refusal
+  was not, so usbhub's retry of `CLEAR_PORT_FEATURE(PORT_SUSPEND)` would
+  have met a view that already believed itself resumed and done nothing.
+  Both views now go back to suspended on a refused resume.
+- **`XHCI_VHUB_DO_ARM_DEVICE` was returned and never carried out.** The
+  header names it a caller action; the root-hub half now spends the hub's
+  arm at a port-1 reset's start as the core does, rather than only at the
+  end the PRC path reaches.
+
+And in the vectors: the snapshot header's twelve schema-5 fields read back
+through `PassThru`; the disown vector continued through the next port-1
+reset, re-open and `SET_ADDRESS` to the same record with its address back;
+value 2's cancelled hub install, power-off and power-on through the
+callbacks with the hub enumerated again; suspend and resume through the
+callbacks for both views, the completed resume stripped from the shadow;
+the two suspend orders the core suite had not pinned, remote wake with the
+upstream alone and with neither, and `XhciVhubConfigIds` after a refused
+switch; the request table's corners (a port request naming port 2 or 0,
+the device feature requests, `GET_INTERFACE`, `SET_INTERFACE` on
+interface 1, a hub descriptor asked for at `wLength` 0, a NULL reply
+length or argument) and the id parser's (the encoding still recorded on a
+refusal, "0x" and three digits, four digits with no terminator inside a
+four-byte length); and `test_packet` pins the snapshot header at 38
+`ULONG`s on both architectures, with a compile-time twin for the amd64
+leg, since its layout rests on every field being one. `test_vhub` 1202
+checks, `test_init` 20,196, `test_packet` 236.

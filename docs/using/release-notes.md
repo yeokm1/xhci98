@@ -559,7 +559,12 @@ because a user meets them through this driver.
   report their true speed and poll at the interval they ask for, so a mouse
   on a hub polls at its own 8 ms and a polling-rate tool works as on any
   controller - but on Windows Vista and 7 only behind a USB 2.0 hub, because
-  of the next entry. Measured in a virtual machine with SweetLow's hidusbf; the
+  of the next entry, and with one exception found after this release: under
+  SweetLow's USB 2.0 stack on Windows 98, a Low-Speed device behind a hub
+  that a polling-rate tool has set to 250 Hz or faster shows Code 10 in
+  `1.1.1.0` (GitHub issue 4), because that stack alone sends the interval
+  the tool asked for and this release refused it; fixed after `1.1.1.0`
+  (roadmap task 24.1). Measured in a virtual machine with SweetLow's hidusbf; the
   bands are documented in full in `docs/issues/06-full-speed-root-port-bugcheck.md`.
   `1.1.1.0` changes none of this: the polling rates and the High Speed report
   itself are unchanged. The work after this release takes them up, starting

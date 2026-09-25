@@ -235,8 +235,47 @@ static void testIdRefused(void)
 
     CHECK_EQ(XhciVhubParseId(NULL, 14, 1, &id, &enc), XHCI_VHUB_ID_NO_NUL,
              "NULL buffer");
+    CHECK_EQ(enc, XHCI_VHUB_ENC_NONE, "and no encoding decided");
     CHECK_EQ(XhciVhubParseId(buf, 1, 1, &id, &enc), XHCI_VHUB_ID_NO_NUL,
              "a one-byte buffer");
+    CHECK_EQ(enc, XHCI_VHUB_ENC_NONE, "no encoding from one byte either");
+
+    /*
+     * The encoding is decided from byte 1 before anything is refused, so a
+     * refusal still says which encoding the value arrived in - the reading
+     * XHCISNAP prints for 24.3.4's first question, which a refused id must
+     * not hide. The prefix is not a digit: "0x" plus three is three.
+     */
+    for (utf16 = 0; utf16 <= 1; utf16++) {
+        CHECK_EQ(parse("120", utf16, 1, &id, &enc), XHCI_VHUB_ID_DIGITS,
+                 "three digits");
+        CHECK_EQ(enc, utf16 ? XHCI_VHUB_ENC_UTF16 : XHCI_VHUB_ENC_BYTE,
+                 "the encoding is recorded on a refusal");
+        CHECK_EQ(parse("0x120", utf16, 1, &id, &enc), XHCI_VHUB_ID_DIGITS,
+                 "a prefix and three digits");
+        CHECK_EQ(parse("12G9", utf16, 1, &id, &enc), XHCI_VHUB_ID_CHAR,
+                 "a bad character");
+        CHECK_EQ(enc, utf16 ? XHCI_VHUB_ENC_UTF16 : XHCI_VHUB_ENC_BYTE,
+                 "recorded on that refusal too");
+    }
+
+    /*
+     * Four digits inside a four-byte length, with no terminator in reach:
+     * every digit is there and the string is still refused, since nothing
+     * in the bytes given says where it ends. One more byte, and it is an id.
+     */
+    idBuffer(buf, "1209", 0, 0xCC);
+    CHECK_EQ(XhciVhubParseId(buf, 4, 1, &id, &enc), XHCI_VHUB_ID_NO_NUL,
+             "four single-byte digits in four bytes");
+    CHECK_EQ(id, 0, "no id from them");
+    CHECK_EQ(XhciVhubParseId(buf, 5, 1, &id, &enc), XHCI_VHUB_ID_OK,
+             "the same digits with the terminator in reach");
+    CHECK_EQ(id, 0x1209, "are the id");
+    idBuffer(buf, "12", 1, 0xCC);
+    CHECK_EQ(XhciVhubParseId(buf, 4, 1, &id, &enc), XHCI_VHUB_ID_NO_NUL,
+             "two UTF-16 digits in four bytes");
+    CHECK_EQ(XhciVhubParseId(buf, 6, 1, &id, &enc), XHCI_VHUB_ID_DIGITS,
+             "and a short string once the terminator is in reach");
 }
 
 static void testConfig(void)
@@ -278,6 +317,11 @@ static void testConfig(void)
         CHECK_EQ(c.Applied, XHCI_VHUB_MODE_OFF, "applied as 0");
         CHECK_EQ(c.Refused, XHCI_VHUB_WHY_SWITCH, "recorded as refused");
         CHECK_EQ(c.SwitchValue, v, "with the value read");
+        CHECK_EQ(XhciVhubConfigIds(&c, MP_STATUS_SUCCESS, vid,
+                                   MP_STATUS_SUCCESS, pid, sizeof(vid)),
+                 XHCI_VHUB_MODE_OFF, "and the ids cannot apply it");
+        CHECK_EQ(c.VidResult, XHCI_VHUB_ID_UNREAD, "nor are they consulted");
+        CHECK_EQ(c.Refused, XHCI_VHUB_WHY_SWITCH, "(the refusal stands)");
     }
     CHECK_EQ(XhciVhubConfigSwitch(&c, MP_STATUS_SUCCESS, 0xFFFFFFFFUL), 0,
              "all ones refused");
@@ -313,6 +357,11 @@ static void testConfig(void)
     CHECK_EQ(c.VidStatus, MP_STATUS_FAILURE, "with the service's status");
     CHECK_EQ(c.PidResult, XHCI_VHUB_ID_OK, "the product id still parsed");
     CHECK_EQ(c.SwitchValue, 1, "the switch's read kept");
+    CHECK_EQ(XhciVhubConfigIds(&c, MP_STATUS_SUCCESS, vid,
+                               MP_STATUS_SUCCESS, pid, sizeof(vid)),
+             XHCI_VHUB_MODE_OFF, "a second read after a refusal");
+    CHECK_EQ(c.VidResult, XHCI_VHUB_ID_MISSING, "changes nothing");
+    CHECK_EQ(c.Refused, XHCI_VHUB_WHY_VID, "(the refusal stands)");
 
     XhciVhubConfigSwitch(&c, MP_STATUS_SUCCESS, 2);
     idBuffer(pid, "00001", 0, 0);
@@ -621,6 +670,26 @@ static void testStandardAndClassVerdicts(void)
     CHECK_EQ(verdictOf(0xC0, 0x01, 0, 0, 4, &arg), XHCI_VHUB_REQ_STALL,
              "a vendor request");
 
+    /*
+     * The corners of the table's own rows. A port request names port 1 or
+     * nothing; the device feature requests are not in the table, and the
+     * configuration descriptor says no remote wakeup, so usbhub has no
+     * reason to send one; the one interface has no GET_INTERFACE row and
+     * SET_INTERFACE reaches only interface 0.
+     */
+    CHECK_EQ(verdictOf(0x23, 1, 16, 2, 0, &arg), XHCI_VHUB_REQ_STALL,
+             "CLEAR_FEATURE(C_PORT_CONNECTION) on port 2");
+    CHECK_EQ(verdictOf(0x23, 1, 1, 0, 0, &arg), XHCI_VHUB_REQ_STALL,
+             "CLEAR_FEATURE(PORT_ENABLE) on port 0");
+    CHECK_EQ(verdictOf(0x00, 3, 1, 0, 0, &arg), XHCI_VHUB_REQ_STALL,
+             "SET_FEATURE(DEVICE_REMOTE_WAKEUP)");
+    CHECK_EQ(verdictOf(0x00, 1, 1, 0, 0, &arg), XHCI_VHUB_REQ_STALL,
+             "CLEAR_FEATURE(DEVICE_REMOTE_WAKEUP)");
+    CHECK_EQ(verdictOf(0x81, 10, 0, 0, 1, &arg), XHCI_VHUB_REQ_STALL,
+             "GET_INTERFACE is not in the table");
+    CHECK_EQ(verdictOf(0x01, 11, 0, 1, 0, &arg), XHCI_VHUB_REQ_STALL,
+             "SET_INTERFACE on interface 1");
+
     {
         XHCI_VHUB_IDENTITY id;
         XHCI_SETUP_PACKET s;
@@ -635,6 +704,20 @@ static void testStandardAndClassVerdicts(void)
                  XHCI_VHUB_REQ_STALL, "NULL setup");
         CHECK_EQ(XhciVhubRequest(&id, &s, NULL, &len, &arg),
                  XHCI_VHUB_REQ_STALL, "NULL reply");
+        CHECK_EQ(XhciVhubRequest(&id, &s, reply, NULL, &arg),
+                 XHCI_VHUB_REQ_STALL, "NULL reply length");
+        CHECK_EQ(XhciVhubRequest(&id, &s, reply, &len, NULL),
+                 XHCI_VHUB_REQ_STALL, "NULL arg");
+        CHECK_EQ(len, 0, "a refusal leaves no length");
+
+        /* A descriptor asked for at wLength 0 is answered with nothing,
+         * as a real device's empty data stage is: not a stall. */
+        s = setupOf(0xA0, 6, 0, 0, 0);
+        fill(reply, sizeof(reply), 0xEE);
+        CHECK_EQ(XhciVhubRequest(&id, &s, reply, &len, &arg),
+                 XHCI_VHUB_REQ_DATA, "GET_DESCRIPTOR(Hub) at wLength 0");
+        CHECK_EQ(len, 0, "answers zero bytes");
+        CHECK_EQ(reply[0], 0xEE, "and writes none");
     }
 }
 
@@ -934,6 +1017,65 @@ static void testRedecision(void)
     XhciVhubRootReset(&h, ON_DEMAND, gen, 0, PS_CONN);
     CHECK_EQ(XhciVhubResetDone(&h, ON_DEMAND, gen, 0, XHCI_SPEED_HIGH, PS_EN),
              XHCI_VHUB_DO_NONE, "a High-Speed device after it: direct");
+
+    /*
+     * The same rule on a direct port, which holds nothing but its decision:
+     * a High-Speed device unplugged and a slower one plugged into the same
+     * port is the ordinary swap, not a flip, so no connect change is forced
+     * and the first reset stands the hub up. (Until this vector the decision
+     * survived the unplug and the swap cost usbhub a forced re-enumeration.)
+     */
+    v1Plug(&h, XHCI_SPEED_HIGH);
+    CHECK_EQ(h.Decision, XHCI_VHUB_DECIDED_DIRECT, "(direct, no hub)");
+    CHECK_EQ(XhciVhubAbsorb(&h, ON_DEMAND, XHCI_HUB_C_PORT_CONNECTION,
+                            PS_EMPTY, &strip),
+             XHCI_VHUB_DO_NONE, "an unplug on a direct port");
+    CHECK_EQ(strip, 0, "strips nothing");
+    CHECK_EQ(h.Decision, XHCI_VHUB_DECIDED_NONE, "and forgets the decision");
+    CHECK_EQ(XhciVhubRootDisable(&h, ON_DEMAND, PS_EMPTY), XHCI_VHUB_DO_NONE,
+             "usbport's disable of a direct port is today's alone");
+    gen++;
+    XhciVhubRootReset(&h, ON_DEMAND, gen, 0, PS_CONN);
+    CHECK_EQ(XhciVhubResetDone(&h, ON_DEMAND, gen, 0, XHCI_SPEED_FULL, PS_EN),
+             XHCI_VHUB_DO_ROOT_CHANGE | XHCI_VHUB_DO_ARM_HUB,
+             "a Full-Speed device next gets its hub at the first reset");
+
+    /* A connect change with the port still connected is a device that may
+     * have been swapped between two readings: forgotten on the same terms. */
+    v1Plug(&h, XHCI_SPEED_HIGH);
+    CHECK_EQ(XhciVhubAbsorb(&h, ON_DEMAND, XHCI_HUB_C_PORT_CONNECTION,
+                            PS_CONN, &strip),
+             XHCI_VHUB_DO_NONE, "a connect change, still connected");
+    CHECK_EQ(h.Decision, XHCI_VHUB_DECIDED_NONE, "forgets it too");
+    v1Plug(&h, XHCI_SPEED_HIGH);
+    CHECK_EQ(XhciVhubAbsorb(&h, ON_DEMAND, XHCI_HUB_C_PORT_OVER_CURRENT,
+                            PS_EN, &strip),
+             XHCI_VHUB_DO_NONE, "any other change on a direct port");
+    CHECK_EQ(h.Decision, XHCI_VHUB_DECIDED_DIRECT, "keeps the decision");
+
+    /* usbport's disable and power-off of a direct port forget it as well; a
+     * power-on changes nothing at 1; and with a hub, a power-off is the drop
+     * a disable is. */
+    v1Plug(&h, XHCI_SPEED_HIGH);
+    CHECK_EQ(XhciVhubRootDisable(&h, ON_DEMAND, PS_EN), XHCI_VHUB_DO_NONE,
+             "a direct port's disable");
+    CHECK_EQ(h.Decision, XHCI_VHUB_DECIDED_NONE, "forgets the decision");
+    v1Plug(&h, XHCI_SPEED_HIGH);
+    CHECK_EQ(XhciVhubRootPower(&h, ON_DEMAND, 0, PS_EN), XHCI_VHUB_DO_NONE,
+             "a direct port's power-off");
+    CHECK_EQ(h.Decision, XHCI_VHUB_DECIDED_NONE, "forgets the decision");
+    v1Plug(&h, XHCI_SPEED_HIGH);
+    CHECK_EQ(XhciVhubRootPower(&h, ON_DEMAND, 1, PS_EN), XHCI_VHUB_DO_NONE,
+             "a power-on at 1 is today's alone");
+    CHECK_EQ(h.Decision, XHCI_VHUB_DECIDED_DIRECT, "and forgets nothing");
+    v1Plug(&h, XHCI_SPEED_FULL);
+    CHECK_EQ(XhciVhubRootPower(&h, ON_DEMAND, 0, PS_EN), XHCI_VHUB_DO_DROP,
+             "with a hub, a power-off drops it");
+    CHECK(recordIsZero(&h), "(gone)");
+    v1Plug(&h, XHCI_SPEED_FULL);
+    CHECK_EQ(XhciVhubRootPower(&h, ON_DEMAND, 1, PS_EN), XHCI_VHUB_DO_NONE,
+             "and a power-on leaves it");
+    CHECK_EQ(h.Present, 1, "(still there)");
 }
 
 /*
@@ -1211,6 +1353,61 @@ static void testSuspendMerge(void)
                              PS_SUSP);
         XhciVhubRootSuspend(&h, applied, 0, PS_SUSP);
         XhciVhubResumeDone(&h);
+        XhciVhubRootClearChange(&h, applied, XHCI_HUB_C_PORT_SUSPEND);
+
+        /* The other two orders: both suspended, and the view that did not
+         * suspend the port resuming first. Port 1 first, port 1 resumes
+         * first: its resume is software alone, and the root's is what resumes
+         * the port. */
+        CHECK_EQ(p1Suspend(&h, 1, PS_EN), XHCI_VHUB_DO_SUSPEND, "(port 1)");
+        CHECK_EQ(XhciVhubRootSuspend(&h, applied, 1, PS_SUSP),
+                 XHCI_VHUB_DO_NONE, "(then the root)");
+        CHECK_EQ(p1Suspend(&h, 0, PS_SUSP), XHCI_VHUB_DO_PIPE,
+                 "port 1 resuming first completes at once");
+        checkViews(&h, applied, 1, 0, 0, 1, "upstream still suspended");
+        CHECK_EQ(h.PhysSuspended, 1, "and so is the port");
+        XhciVhubPort1Feature(&h, 0, XHCI_VHUB_SEL_C_PORT_SUSPEND, 0, 0,
+                             PS_SUSP);
+        CHECK_EQ(XhciVhubRootSuspend(&h, applied, 0, PS_SUSP),
+                 XHCI_VHUB_DO_RESUME, "the root's resume resumes the port");
+        CHECK_EQ(XhciVhubResumeDone(&h), XHCI_VHUB_DO_ROOT_CHANGE,
+                 "(finished)");
+        checkViews(&h, applied, 0, 1, 0, 0, "the root's change only");
+        XhciVhubRootClearChange(&h, applied, XHCI_HUB_C_PORT_SUSPEND);
+
+        /* The root first, then port 1, and the root resuming first. */
+        CHECK_EQ(XhciVhubRootSuspend(&h, applied, 1, PS_EN),
+                 XHCI_VHUB_DO_SUSPEND, "(the root)");
+        CHECK_EQ(p1Suspend(&h, 1, PS_SUSP), XHCI_VHUB_DO_NONE, "(then port 1)");
+        CHECK_EQ(XhciVhubRootSuspend(&h, applied, 0, PS_SUSP),
+                 XHCI_VHUB_DO_ROOT_CHANGE,
+                 "the root resuming first completes at once");
+        checkViews(&h, applied, 0, 1, 1, 0, "port 1 still suspended");
+        CHECK_EQ(h.PhysSuspended, 1, "and so is the port");
+        XhciVhubRootClearChange(&h, applied, XHCI_HUB_C_PORT_SUSPEND);
+        CHECK_EQ(p1Suspend(&h, 0, PS_SUSP), XHCI_VHUB_DO_RESUME,
+                 "port 1's resume resumes the port");
+        CHECK_EQ(XhciVhubResumeDone(&h), XHCI_VHUB_DO_PIPE, "(finished)");
+        checkViews(&h, applied, 0, 0, 0, 1, "port 1's change only");
+        XhciVhubPort1Feature(&h, 0, XHCI_VHUB_SEL_C_PORT_SUSPEND, 0, 0, PS_EN);
+
+        /* A remote wake with the upstream alone suspended, and with neither;
+         * and one that arrives while a resume is already owed. */
+        XhciVhubRootSuspend(&h, applied, 1, PS_EN);
+        CHECK_EQ(XhciVhubRemoteWake(&h), XHCI_VHUB_DO_ROOT_CHANGE,
+                 "a remote wake with the upstream alone suspended");
+        checkViews(&h, applied, 0, 1, 0, 0, "only the root latches");
+        XhciVhubRootClearChange(&h, applied, XHCI_HUB_C_PORT_SUSPEND);
+        CHECK_EQ(XhciVhubRemoteWake(&h), XHCI_VHUB_DO_NONE,
+                 "with neither suspended, nothing");
+        checkViews(&h, applied, 0, 0, 0, 0, "(nothing latched)");
+        XhciVhubRootSuspend(&h, applied, 1, PS_EN);
+        CHECK_EQ(XhciVhubRootSuspend(&h, applied, 0, PS_SUSP),
+                 XHCI_VHUB_DO_RESUME, "(a resume in flight)");
+        CHECK_EQ(XhciVhubRemoteWake(&h), XHCI_VHUB_DO_ROOT_CHANGE,
+                 "a wake read while it is owed completes it once");
+        checkViews(&h, applied, 0, 1, 0, 0, "one change");
+        CHECK_EQ(h.UpResumeOwed, 0, "(nothing owed)");
         XhciVhubRootClearChange(&h, applied, XHCI_HUB_C_PORT_SUSPEND);
 
         /* A remote wake: both bits clear, a change in each view that was

@@ -3120,8 +3120,8 @@ still required for everything else, including the rest of DW2.
 
 ### Periodic scheduling: what `Period` actually carries
 
-Static, from both `usbport.sys` builds and both shipping `usbehci.sys`
-builds.
+Static, from four `usbport.sys` builds (SP4, NUSB, and since roadmap task
+24.1 XP SP3 and SweetLow's rebuild) and both shipping `usbehci.sys` builds.
 
 The miniport never sees `bInterval`. usbport decodes the endpoint
 descriptor itself and delivers a single pre-bucketed `Period`, so the per-speed

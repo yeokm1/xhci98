@@ -842,8 +842,24 @@ ULONG XhciVhubAbsorb(PXHCI_VHUB hub,
     if (strip != NULL) {
         *strip = 0;
     }
-    if (hub == NULL || strip == NULL || applied == XHCI_VHUB_MODE_OFF ||
-        !hub->Present) {
+    if (hub == NULL || strip == NULL || applied == XHCI_VHUB_MODE_OFF) {
+        return XHCI_VHUB_DO_NONE;
+    }
+    if (!hub->Present) {
+        /*
+         * A direct port at 1 holds nothing but its decision, and a disconnect
+         * forgets that (3.2), so the next device decides afresh with no
+         * forced change: a Full-Speed device following a High-Speed one on
+         * the same port is the ordinary case, not a flip. A connect change
+         * with the port still connected is a device that may have been
+         * swapped between two readings, and is forgotten on the same terms.
+         */
+        if (applied == XHCI_VHUB_MODE_ON_DEMAND &&
+            ((latched & XHCI_HUB_C_PORT_CONNECTION) != 0 ||
+             (physStatus & XHCI_HUB_PORT_CONNECTION) == 0 ||
+             (physStatus & XHCI_HUB_PORT_POWER) == 0)) {
+            hub->Decision = (UCHAR)XHCI_VHUB_DECIDED_NONE;
+        }
         return XHCI_VHUB_DO_NONE;
     }
 
@@ -965,12 +981,22 @@ static ULONG xhciVhubAbandon(PXHCI_VHUB hub, ULONG physStatus)
 
 ULONG XhciVhubRootDisable(PXHCI_VHUB hub, ULONG applied, ULONG physStatus)
 {
-    if (hub == NULL || applied == XHCI_VHUB_MODE_OFF || !hub->Present) {
+    if (hub == NULL || applied == XHCI_VHUB_MODE_OFF) {
         return XHCI_VHUB_DO_NONE;
     }
     if (applied == XHCI_VHUB_MODE_ON_DEMAND) {
+        /* usbport has let go of the port (3.2): with a hub that is the drop,
+         * and on a direct port it is the decision forgotten, since the next
+         * reset opens a new enumeration whichever device it finds. */
+        if (!hub->Present) {
+            hub->Decision = (UCHAR)XHCI_VHUB_DECIDED_NONE;
+            return XHCI_VHUB_DO_NONE;
+        }
         xhciVhubClear(hub);
         return XHCI_VHUB_DO_DROP;
+    }
+    if (!hub->Present) {
+        return XHCI_VHUB_DO_NONE;
     }
     return xhciVhubAbandon(hub, physStatus) | xhciVhubDisable(0, physStatus);
 }
@@ -984,9 +1010,14 @@ ULONG XhciVhubRootPower(PXHCI_VHUB hub,
         return XHCI_VHUB_DO_NONE;
     }
     if (applied == XHCI_VHUB_MODE_ON_DEMAND) {
-        if (!on && hub->Present) {
-            xhciVhubClear(hub);
-            return XHCI_VHUB_DO_DROP;
+        if (!on) {
+            if (hub->Present) {
+                xhciVhubClear(hub);
+                return XHCI_VHUB_DO_DROP;
+            }
+            /* A power-off forgets a direct port's decision, as a disable
+             * does: the port is out of usbport's hands either way. */
+            hub->Decision = (UCHAR)XHCI_VHUB_DECIDED_NONE;
         }
         return XHCI_VHUB_DO_NONE;
     }

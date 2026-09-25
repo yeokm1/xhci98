@@ -3066,8 +3066,9 @@ Two things are specific to this driver and worth knowing in advance:
   the driver separately from whether this driver answers on it.
 
   USE THE XHCISNAP.EXE FROM THIS PACKAGE, not a copy kept from an earlier
-  release. This driver's report is snapshot schema 4, which grew by the
-  interrupt moderation setting (section 9), so an older XHCISNAP refuses it
+  release. This driver's report is snapshot schema 5, which grew by the
+  interrupt moderation setting and the virtual hub's switch and ids
+  (section 9), so an older XHCISNAP refuses it
   with "schema mismatch" and reports nothing, and this one refuses an older
   driver the same way.
 

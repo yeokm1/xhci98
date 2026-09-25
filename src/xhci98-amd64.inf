@@ -92,7 +92,8 @@ LoadOrderGroup=Base
 ; the interrupt moderation interval in 250 ns units, 500 here, and 4000 when
 ; absent or outside 10-4000; EnumPropPages32 and Controller give the
 ; controller its Advanced tab; the three XhciVirtualHSHub values are the
-; experimental virtual hub's, off, with pid.codes' shared test id.
+; virtual hub's - EXPERIMENTAL, FOR PRIVATE TESTING ONLY - off, with
+; pid.codes' shared test id, not one allocated to this project.
 [Xhci.AddReg.NT]
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
