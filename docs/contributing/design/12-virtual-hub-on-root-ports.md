@@ -3,7 +3,9 @@
 Design record for roadmap task 24.3. It was
 `docs/future-plans/virtual-hub-per-root-port.md` from 2026-09-07 until
 2026-09-25, when the owner took the work up as task 24.3 in the on-demand
-shape (section 4) and answered every decision it asked for (section 9);
+shape (section 4), made the permanent shape a second setting of the same
+switch rather than a fallback (3.1, 3.8), and answered every decision it
+asked for (section 9);
 sub-task 24.3.1 moved it here, the next free number, and the future-plans
 page is gone. Sections 1 to 8 keep the proposal's wording where it still
 holds, and a sentence that says what the driver "would" do now says what
@@ -83,8 +85,10 @@ transaction translator, `bDeviceProtocol` 1. The real device becomes that
 hub's port 1. When the device is unplugged, the root port reports the
 disconnect exactly as it does today, and usbhub removes the hub and the
 device behind it the way it removes any hub. A High-Speed device on a root
-port gets no hub and takes today's path unchanged, with the switch on or
-off.
+port gets no hub and takes today's path unchanged, with the switch at 0 or
+1. That is the on-demand shape, the switch's value 1. Its value 2 puts the
+same hub on every USB 2.0 port from start to stop instead, so every
+root-port device, High Speed included, sits behind one (3.8).
 
 In usbport's view a slower device on a root port gains one tier; in the
 xHC's view nothing changes, because the controller keeps driving the device
@@ -122,7 +126,7 @@ translates is what usbport is told.
 | Name | `XhciVirtualHSHub` (the owner's, 2026-09-25) |
 | Type | `REG_DWORD` |
 | Where | The controller's driver (software) key: the key a plain `AddReg` under an INF install section writes, and the key `XhciLogVerbosity` and the SuperSpeed storage proposal's `XhciSuperSpeed` live in |
-| Values | `0` off, the default. `1` on, the on-demand shape of section 4. `2` is reserved for the permanent shape, section 4's fallback, and is refused like any other value unless that shape is built. A refused value is not clamped: the driver applies 0 and records that it refused, on the rule the INF states for `XhciLogVerbosity` |
+| Values | `0` off, the default. `1` on demand: a virtual hub only on a root port whose reset decodes a Full or Low Speed device, section 4's on-demand shape. `2` always on: a virtual hub on every USB 2.0 port the driver manages, from start to stop, plugged or not and whatever the speed, section 4's permanent shape (3.8). Any other value is refused, and a refused value is not clamped: the driver applies 0 and records that it refused, on the rule the INF states for `XhciLogVerbosity` |
 | Absent | 0, and not an error |
 | Set by | The user, by hand, in Registry Editor. The INF's `AddReg` writes the 0 so the value is visible where the user looks for it; `XHCISNAP` does not set it |
 
@@ -156,8 +160,8 @@ and written by the INF:
 | Written by the INF | `"1209"` | `"0001"` |
 | Set by | the INF's `AddReg` (a plain string line, which both setup engines write as `REG_SZ`), in both INFs and on every install path, beside the switch's 0; the user may change it by hand in Registry Editor | the same |
 
-**With the switch on, both ids must be present and valid, or the feature is
-off.** A missing value, a failed read, a value that is not a string of the
+**With the switch at 1 or 2, both ids must be present and valid, or the
+feature is off.** A missing value, a failed read, a value that is not a string of the
 accepted form, or a vendor id of `0000` makes the driver apply the switch as
 0 for that start and record which value failed and why, beside the switch's
 own read status in the snapshot header. A value a user created as a DWORD
@@ -256,30 +260,38 @@ USB vendor, and Intel's `0x8086` and `0x8087` are USB vendor ids of real
 hubs too), and `0x1D6B`, the Linux Foundation's id for Linux's own root
 hubs.
 
-Rule 2 is held at one divergence point, the decision of 3.2, and in the
-on-demand shape that point is reached only after a root-port reset has
-decoded a Full or Low Speed device. With the switch applied as 0 the
-decision is never taken: no virtual record is ever created, the address map
-never holds an address without a Slot ID, and the topology graph never sees
-a hub it has to fold out. The only new code that runs in the off state is
-the read and one test of the applied value at the decision point. The
-root-hub report itself does not change in either state (3.2). Host vectors
-run the affected paths in both states, and the device matrix runs with the
-switch off in both the value-absent and the INF-installed setups, as the
-SuperSpeed storage proposal's plan does, so that "today's driver" is a
-measured reading rather than a claim.
+Rule 2 is held at two divergence points, one per shape, and each tests the
+applied value before it does anything new. At 1 it is the decision of 3.2,
+reached only after a root-port reset has decoded a Full or Low Speed
+device. At 2 it is the start of the controller and the root-hub callbacks
+of 3.8, which create the virtual hubs and answer for them. With the switch
+applied as 0 neither is taken: no virtual record is ever created, the
+address map never holds an address without a Slot ID, and the topology
+graph never sees a hub it has to fold out. The only new code that runs in
+the off state is the read and the test of the applied value at each
+divergence point. The root-hub report itself does not change at 0 or 1
+(3.2); at 2 it does (3.8). Host vectors run the affected paths in all three
+states, and the device matrix runs with the switch off in both the
+value-absent and the INF-installed setups, as the SuperSpeed storage
+proposal's plan does, so that "today's driver" is a measured reading rather
+than a claim.
 
-The gate is there for two reasons. With the switch on, every slower device
-plugged into a root port brings a "Generic USB Hub" devnode with it, and
-one more enumeration before it works: a visible change a user who is happy
-with the 4 ms mouse should not have to take. And the reading section 5
+The gate is there for two reasons. At 1, every slower device plugged into a
+root port brings a "Generic USB Hub" devnode with it, and one more
+enumeration before it works; at 2, every USB 2.0 port carries one from
+start, and every device on a root port, High Speed included, reaches
+usbport through the new path. Either is a visible change a user who is
+happy with the 4 ms mouse should not have to take. And the reading section 5
 rests on, that each hub driver gives the virtual hub a TT record, has not
 been taken; until it has on both primary targets, the default cannot move.
 
 ### 3.2 The root port, and the decision
 
+This section is the on-demand shape, value 1. At 2 there is no decision;
+3.8 says what replaces it.
+
 The root hub keeps its descriptor, its port count and **every report it
-makes today**, in both states of the switch. A connected root port already
+makes today**, with the switch at 0 or 1. A connected root port already
 reports connected and High Speed before any reset (the override in
 `XhciPortShadowReport`), usbhub already resets it before it creates a
 device there, and the reset is a physical one, as now. Nothing about the
@@ -288,7 +300,7 @@ root port tells usbport whether a virtual hub is coming.
 The decision is taken when a root-port reset completes. The Port Speed
 field is valid only once the port is enabled (Table 5-27, which is why the
 shadow keeps the decoded speed from the reset), so this is the first moment
-the driver knows what it has. With the switch on, a decoded Full or Low
+the driver knows what it has. With the switch at 1, a decoded Full or Low
 Speed puts the port in **virtual-hub mode**; High Speed, or the switch off,
 leaves it **direct**, which is today's path. The mode is recorded in the
 same shadow update that latches `C_PORT_RESET`, and usbhub learns that the
@@ -343,7 +355,7 @@ table is the whole device:
 | `GET_DESCRIPTOR(Hub)` | `bNbrPorts` 1, `wHubCharacteristics` individual port power and over-current, `TTT` 0, `bPwrOn2PwrGood` from the root hub's own value (a smaller one would shorten every plug, since the physical port is already powered, but is only worth taking if every hub driver is measured to accept it), `bHubContrCurrent` 0, port 1 removable |
 | `SET_CONFIGURATION`, `SET_INTERFACE` (alt 0), `GET_STATUS` (device, interface, endpoint), `CLEAR_FEATURE(ENDPOINT_HALT)` | success, no data |
 | `GET_HUB_STATUS` | zero |
-| `GET_PORT_STATUS(1)` | the real port's shadow reported truthfully: the connect, enable, suspend, over-current, reset and power bits as today, and the Low-Speed or High-Speed bit from the decoded speed, neither for Full Speed. `C_PORT_CONNECTION` is latched once when the hub is created, since the device was already there |
+| `GET_PORT_STATUS(1)` | the real port's shadow reported truthfully: the connect, enable, suspend, over-current, reset and power bits as today, and the Low-Speed or High-Speed bit from the decoded speed, neither for Full Speed. At 1, `C_PORT_CONNECTION` is latched once when the hub is created, since the device was already there; at 2 it is latched at creation only if a device is there, and afterwards on every physical connect change (3.8) |
 | `SET_PORT_FEATURE(1, PORT_RESET)` | a second physical reset through the existing path: PORTSC.PR, the asynchronous timeout, a reset generation, `C_PORT_RESET` on completion, reported through 3.4. It is physical, not synthesised, so usbhub's enumeration retries reach the device the way they would behind a real hub |
 | `SET_PORT_FEATURE(1, PORT_POWER)` | success; the physical port is powered and stays so |
 | `SET_PORT_FEATURE(1, PORT_SUSPEND)`, `CLEAR_PORT_FEATURE(1, PORT_SUSPEND)` | through 3.5's merge with the root port's own suspend state, then the existing `RH_SetFeature...` and resume bodies for the underlying port |
@@ -378,11 +390,12 @@ usbhub opens the hub's interrupt IN pipe and keeps one transfer pending on
 it. The driver holds that transfer on the virtual device's queue and
 completes it with a one-byte bitmap (bit 1 set) when the virtual port
 latches a change; between changes the transfer stays pending, which is what
-a real hub's pipe does. In this shape the pipe carries few changes: the
-connect latched at creation, the completion of each port-1 reset, a suspend
-change and an over-current. An unplug is **not** one of them; it is the
-root port's connect change (3.2), and it removes the hub along with the
-device. A change latched with no transfer pending is held until the next
+a real hub's pipe does. At 1 the pipe carries few changes: the connect
+latched at creation, the completion of each port-1 reset, a suspend change
+and an over-current. An unplug is **not** one of them; it is the root
+port's connect change (3.2), and it removes the hub along with the device.
+At 2 the pipe carries those and every plug and unplug as well, because the
+root port never reports a disconnect (3.8). A change latched with no transfer pending is held until the next
 transfer arrives and completed into it at once. The controller has still
 acknowledged the PORTSC bit the moment it was read, so nothing here loosens
 the "latch until asked" half of the rule. Because one PORTSC now feeds two
@@ -403,8 +416,8 @@ port. The physical port is suspended while either view has it suspended,
 and resumed only when both have asked; each view's resume completes with
 its own `C_PORT_SUSPEND`, immediately if the physical port is already
 running. A remote wake from the device resumes the physical port and
-latches the change in both views. The permanent shape needs the same rule,
-so it is not a cost of choosing on demand.
+latches the change in both views. The rule is the same at 1 and 2, so it
+is not a cost of either shape.
 
 ### 3.6 The topology graph
 
@@ -430,29 +443,80 @@ xHC's. Four rules in the graph and the device records change meaning:
   above it and, in usbport's view, a TT from it; the xHC needs none, which
   is already what the graph derives for a Full-Speed hub on a root port.
   This is the topology that bugchecks Vista and 7 today (issue 6 section
-  6.2), and the virtual hub is what takes it off the NULL-TT path. A
-  High-Speed hub on a root port decodes High Speed and stays direct.
+  6.2), and the virtual hub is what takes it off the NULL-TT path. At 1 a
+  High-Speed hub on a root port decodes High Speed and stays direct; at 2
+  it sits behind the virtual hub like any root-port device, and the fold
+  makes it a hub on root port N in the xHC's view, as it is today.
 
-Device removal keeps its route: an unplug is the root-port disconnect it is
-today, and the virtual record goes in the same teardown. The hub-path
+At 1, device removal keeps its route: an unplug is the root-port disconnect
+it is today, and the virtual record goes in the same teardown. The hub-path
 removal (the `GET_STATUS(port)` reply fold that tears down a behind-hub
-device and its subtree) is not involved.
+device and its subtree) is not involved. At 2 it is the only route: an
+unplug is a disconnect on the virtual hub's port 1, and that fold has to
+recognise the virtual hub and release the device's slot through the
+root-port disown path rather than the behind-hub teardown (3.8).
 
 ### 3.7 What stays as it is
 
-Everything below the usbport-facing surface, and the root-hub report above
-it. Port speed decoding, the Slot Context and EP0 programming from the
+Everything below the usbport-facing surface, and, at 0 and 1, the
+root-hub report above it. Port speed decoding, the Slot Context and EP0 programming from the
 decoded speed, the interval floor at Table 6-12's minimum, the reset
 generations, the disown and disable split, the failure counters, the log
 channel, the PORTSC watchdog and the recovery latch are untouched. The
 High-Speed override in `XhciPortShadowReport` stays where it is, and in
 virtual-hub mode what it describes is the virtual hub. A High-Speed device
-on a root port takes today's path, byte for byte, whatever the switch says.
+on a root port takes today's path, byte for byte, with the switch at 0 or
+1; at 2 it is below the xHC-facing surface that nothing changes for it.
 
-## 4. Two shapes, and which to build
+### 3.8 Value 2: a virtual hub on every USB 2.0 port
 
-**On demand (the proposed shape, the owner's choice of 2026-09-25; value
-1).** A virtual hub exists only while a Full or Low Speed device is on that
+At 2 the decision of 3.2 is never taken. Every USB 2.0 protocol port the
+driver manages carries a virtual hub from `StartController` to
+`StopController`, plugged or not and whatever speed the device decodes.
+USB 3.x logical ports stay unpowered and unmanaged, as at every other value,
+and carry none. What changes against 3.2:
+
+- **The root port reports the hub, not the device.** Each managed root port
+  reports connected, enabled, powered and High Speed from start to stop,
+  whatever PORTSC says, and latches `C_PORT_CONNECTION` once at start and
+  once at each resume or recovery seed, so usbhub enumerates one hub per
+  port. The physical connect, enable, over-current and speed state goes to
+  the virtual hub's port 1 (3.3's `GET_PORT_STATUS(1)` row) and its change
+  bits to the status-change pipe (3.4). The override in
+  `XhciPortShadowReport` is not what produces this report: at 2 the report
+  is the virtual hub's, whatever the device's speed.
+- **A root-port reset is synthetic.** What usbhub is resetting is the
+  virtual hub, so `RH_SetFeaturePortReset` completes with `C_PORT_RESET`
+  without touching PORTSC.PR. The hub goes back to its Default state, and
+  its port 1 to disabled with the device's slot released through the
+  existing disown path, as a real hub's downstream port is after the hub is
+  reset. The device is reached again only through a port-1 reset, which is
+  physical (3.3).
+- **Plug and unplug go through the hub.** A physical connect or disconnect
+  is a change on the virtual port 1, never on the root port; usbhub removes
+  an unplugged device through the hub path, and the slot is released as
+  3.6's last paragraph says. The forced connect change of 3.2 never arises:
+  a device swapped across a suspend is a device change behind a hub that is
+  still there.
+- **High Speed is behind the hub too.** A High-Speed device, and a
+  High-Speed hub, sit on port 1 at their decoded speed. usbport needs no TT
+  for them and the xHC is programmed for them as today, but every request
+  they send now reaches the driver through the virtual hub's records.
+- **`RH_ClearFeaturePortEnable` and `RH_ClearFeaturePortPower`** on the root
+  port mean that usbport has let go of the virtual hub. The driver drops the
+  virtual record and disowns the device as at 1, and a cleared power is
+  applied to the physical port as today.
+
+The costs of this shape are section 4's; the readings it needs besides the
+on-demand ones are in section 5.
+
+## 4. Two shapes, both built
+
+Both shapes are built, as the switch's two "on" values (the owner,
+2026-09-25): the user chooses between them, and neither waits on the other's
+readings.
+
+**On demand (value 1, the owner's first choice of 2026-09-25).** A virtual hub exists only while a Full or Low Speed device is on that
 root port, created at the reset that decodes it and removed with it. What
 decides it over the permanent shape is how much the new code touches: it
 runs only for the devices that are broken today - the polling bands, the
@@ -460,7 +524,7 @@ silent audio from XP on, the Vista/7 bugcheck behind a USB 1.1 hub - and
 never for a High-Speed device, which is most of what gets plugged in and
 all of what works now. Three things follow:
 
-- The root-hub report is unchanged in both states of the switch (3.2), so
+- The root-hub report is unchanged at 0 and 1 (3.2), so
   the divergence point is one decision after a reset, not a rewrite of the
   root port.
 - An unplug is a root-port disconnect, the removal path that exists today;
@@ -477,16 +541,16 @@ than today; the two views of one port have to merge their suspend states
 (3.5); and a "Generic USB Hub" devnode appears and disappears with every
 plug and unplug. On Windows 98 its first appearance on each port is a hub
 install, which may show the New Hardware wizard once per port; and the hub
-removal path in every hub driver runs on every unplug, which is why section
-5's churn reading decides between the shapes.
+removal path in every hub driver runs on every unplug, which is what
+section 5's churn reading at 1 measures.
 
-**Permanent (the fallback; value 2 if it is ever built).** Every managed
-port carries a virtual hub from start to stop, plugged or not, and every
-root-port device, High Speed included, sits behind one. It is one state
+**Permanent (value 2, always on; the owner, 2026-09-25).** Every managed
+USB 2.0 port carries a virtual hub from start to stop, plugged or not, and
+every root-port device, High Speed included, sits behind one (3.8). It is one state
 machine per port with no decision point, a device swap across a suspend is
 just a device change behind a hub that already exists, a plug costs no hub
 enumeration, and nothing appears or disappears in Device Manager. Its costs
-are the reason it is not proposed: every root-port device reaches usbport
+are why it is not value 1: every root-port device reaches usbport
 through the new path, so a defect in it reaches the USB stick as well as
 the mouse, and the whole device matrix has to be re-read under it; one
 "Generic USB Hub" devnode and one USB address per managed port; N hub
@@ -495,8 +559,11 @@ boots slowly; pending interrupt transfers on N hubs that may hold off
 usbport's idle suspend permanently; a root port that must report connected,
 enabled and High Speed whether or not anything is plugged in, with
 synthetic resets; and removal that goes through the hub path instead of the
-root port. Build it only if the churn reading of section 5 fails on a
-target under the on-demand shape.
+root port. Until the owner's word of 2026-09-25 it was a fallback, to be
+built only if the churn reading of section 5 failed on a target at 1. It
+is built now, beside 1, for a target where that reading fails and for a
+user who would rather have a fixed hub per port than a hub that comes and
+goes with every slower device.
 
 This page recommended the permanent shape until 2026-09-25, on the grounds
 of one state machine and no decision point, and called on demand "the
@@ -519,13 +586,21 @@ shape rewrites both.
   SweetLow's and XP's.
 - **What a one-port hub does to each hub driver.** `bNbrPorts` 1 is legal
   and unusual. usbhub20, Windows 2000's `usbhub.sys`, Windows ME's and XP's
-  each need one boot with the switch on.
-- **Churn, the reading that decides between the shapes.** A Full-Speed
-  device plugged and unplugged a few dozen times on a root port, on every
-  target, the switch on: each cycle creates and removes a hub. A target
-  whose hub driver or usbport does not survive it is the case for the
-  permanent fallback. It is the test issue 6 section 6.2's Vista and 7
-  bugcheck already needed, and the matrix's churn row is the vehicle.
+  each need one boot at 1 and one at 2.
+- **Churn, at both values.** A Full-Speed device plugged and unplugged a
+  few dozen times on a root port, on every target. At 1 each cycle creates
+  and removes a hub; at 2 each is a plug and unplug behind a hub that stays.
+  A target that fails at 1 and passes at 2 is one whose documented setting
+  is 2. It is the test issue 6 section 6.2's Vista and 7 bugcheck already
+  needed, and the matrix's churn row is the vehicle.
+- **Value 2's own readings.** The whole device matrix at 2, High-Speed rows
+  included, since every root-port device takes the new path there; a hub
+  on every USB 2.0 port at start, with nothing plugged in; the first hub
+  install on Windows 98 and ME on every port at once; the synthetic
+  root-port reset; plug and unplug through port 1; and whether each hub
+  driver counts the virtual hub against USB's five hub tiers, which would
+  cost every chain of real hubs one tier (at 1, only a Full-Speed hub on a
+  root port pays it).
 - **Plug latency.** From plug to device usable, against today, with a
   mouse and an audio device; `bPwrOn2PwrGood` is the lever if it matters.
 - **The first hub install on Windows 98 and ME.** Whether the hub's first
@@ -533,15 +608,18 @@ shape rewrites both.
   under NUSB's stack and SweetLow's.
 - **Idle suspend.** usbport idle-suspends a quiet controller (issue 5).
   Whether a virtual hub's pending interrupt transfer holds that off while a
-  slower device is attached, which changes what the package's
+  slower device is attached at 1, and at all times at 2, where every USB
+  2.0 port holds one; either changes what the package's
   `USB_MINIPORT_FLAGS_DISABLE_SS` is for.
-- **Resume.** The decision re-taken at the resume reset: the same device
-  back in virtual-hub mode, and a device swapped for a High-Speed one while
-  suspended, which must force the connect change of 3.2.
+- **Resume.** At 1, the decision re-taken at the resume reset: the same
+  device back in virtual-hub mode, and a device swapped for a High-Speed
+  one while suspended, which must force the connect change of 3.2. At 2,
+  the same swap read as a change on port 1 with the hub left in place.
 - **The product string.** Which hub drivers ask for the language table and
   index 1 unprompted, that each accepts the answer, and where the name shows:
   USBView, and the bus-reported description on Vista and 7.
-- **Boot time.** One extra enumeration per slower device attached at boot.
+- **Boot time.** One extra enumeration per slower device attached at boot
+  at 1, and one per USB 2.0 port at 2.
 - **The interval.** The measurement issue 6 took with a `bInterval`
   override tool, repeated on a root port with the switch on: `bInterval`
   10 should arrive as `Period` 8 and program Interval 6.
@@ -556,16 +634,18 @@ section 5 except boot time and Low Speed, on every guest the project holds;
 QEMU models no Low-Speed peripheral, so Low Speed takes the `usb-host`
 passthrough of a real mouse that roadmap task 24.1 built. Churn is
 scriptable from the monitor (`device_add` / `device_del`). The device
-matrix's Full-Speed rows run unchanged with the switch on and are the
-regression half, and its High-Speed rows must read exactly as with the
-switch off. What QEMU cannot show is a real Windows 98 machine's hub driver
+matrix's Full-Speed rows run unchanged at 1 and 2 and are the regression
+half. Its High-Speed rows must read exactly as with the switch off at 1,
+and must pass behind the virtual hub at 2. What QEMU cannot show is a real Windows 98 machine's hub driver
 under this, and that is the E460's reading: the Low-Speed mouse and the
 Full-Speed audio device from `docs/contributing/test-equipment.md` on root
 ports, with the interval read from the snapshot instrument.
 
 ## 7. What it does not do
 
-- High-Speed devices see no change, with the switch on or off.
+- High-Speed devices see no change with the switch at 0 or 1. At 2 they
+  sit behind a virtual hub at the same speed, with the same interval and
+  one more devnode above them.
 - The 1 ms floor stays, since the xHCI specification allows nothing less at
   Full and Low Speed. What goes away is the bucketing above it.
 - usbport still rounds a Full or Low Speed `bInterval` down to a power of
@@ -574,8 +654,10 @@ ports, with the interval read from the snapshot instrument.
   list (issue 6 section 8) a truthful root port would be simpler than a
   virtual hub, but no such usbport exists for these targets.
 - It does not interact with the SuperSpeed storage proposal except by
-  composition: a SuperSpeed device reported as High-Speed takes the direct
-  path, since High Speed is what the decision sees.
+  composition: at 1 a SuperSpeed device reported as High-Speed takes the
+  direct path, since High Speed is what the decision sees. At 2 the hubs
+  are on USB 2.0 protocol ports only, so a SuperSpeed port that proposal
+  manages carries none.
 
 ## 8. Batches (roadmap sub-tasks 24.3.2 to 24.3.5)
 
@@ -584,17 +666,19 @@ ports, with the interval read from the snapshot instrument.
   design record 02 (`wValue` 0 on `GET_DESCRIPTOR(Hub)`, `wLength` 71); the
   decision of 3.2 (mode by decoded speed, the timeout path, the re-taken
   decision and its forced connect change); the suspend merge of 3.5; the
-  graph fold of 3.6 as vectors over the existing topology tests; the
-  switch of 3.1, its refusal of unknown values (2 included until the
-  permanent shape exists), its snapshot header fields, and the off-state
-  vectors that hold rule 2.
+  graph fold of 3.6 as vectors over the existing topology tests; value 2's
+  root-port report, synthetic root-port reset, plug and unplug through port
+  1 and hub-path removal (3.8); the switch of 3.1, its refusal of any value
+  but 0, 1 and 2, its snapshot header fields, and the off-state vectors that
+  hold rule 2.
 - `-A`: the virtual device record, the decision point, the synthetic
-  completion path, the status-change pipe, the suspend merge.
+  completion path, the status-change pipe, the suspend merge, and value 2's
+  hub on every USB 2.0 port.
 - `-V`: section 6 on every guest held - Windows 98 SE under NUSB and under
   SweetLow's stack, ME, 2000, XP in both architectures, Vista and 7 in both
-  - switch off then on, the device matrix in both states, and the churn
-  reading.
-- `-E`: the E460 reading.
+  - the switch at 0, then 1, then 2, the device matrix in all three states,
+  and the churn reading at 1 and 2.
+- `-E`: the E460 reading, at 1 and at 2.
 
 ## 9. Decisions
 
@@ -613,7 +697,11 @@ section 3.1's INF table; it needed no decision.
    - rather than XP and later only.
 2. Permanent or on demand. **Answered 2026-09-25: on demand, with the
    permanent shape kept as the fallback if the churn reading fails on a
-   target.**
+   target. Changed the same day: both, as the switch's values** - 0
+   disabled, 1 on demand (a hub only when a Full or Low Speed device is
+   plugged into a root port), 2 always on (a hub on every USB 2.0 port).
+   The permanent shape no longer waits on the churn reading (3.1, 3.8,
+   section 4).
 3. The virtual hub's vendor and product id and whether it carries strings.
    **Ids answered 2026-09-25:** user-settable through
    `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid`, hexadecimal strings
@@ -625,8 +713,8 @@ section 3.1's INF table; it needed no decision.
    serial number (3.3).
 4. The switch's name. **Answered 2026-09-25: `XhciVirtualHSHub`.**
 5. Whether the switch defaults to on in a later release once section 5 is
-   read on both primary targets, or stays an opt-in like the SuperSpeed
-   storage proposal's. It is off in the Phase 24 cut; the later release is
+   read on both primary targets, and to which value, or stays an opt-in
+   like the SuperSpeed storage proposal's. It is off in the Phase 24 cut; the later release is
    still open.
 
 ## Sources

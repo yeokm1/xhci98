@@ -624,8 +624,9 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
   taken is XP and later only, Windows 98 and 2000 byte-for-byte unchanged.
   **On 2026-09-25 the owner took it** as roadmap task 24.3, in the shape of
   a hub only while a Full or Low Speed device is on the root port, removed
-  when it is unplugged (a hub on every port kept as the fallback), behind a
-  switch that is off by default, and on **every target** with the switch on
+  when it is unplugged (a hub on every port kept as the fallback, and made
+  the same day a second setting of the switch, value 2), behind a switch
+  that is off by default, and on **every target** with the switch on
   rather than XP and later only - the reporter runs Windows 98 under
   SweetLow's stack, where a truthful report is now measured fatal too. It
   ships in one cut with task 24.1. Nothing in this page is measured under it
@@ -663,7 +664,8 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
   rates on a root port as a decision (24.2: closed 2026-09-25 as owned by
   true speeds, section 5), then true speeds on root ports (24.3), a
   decision until 2026-09-25 and since then the build of section 8's
-  virtual hub, on demand, on every target, off by default. Task 24.4
+  virtual hub, on demand (switch value 1) or on every USB 2.0 port (value
+  2), on every target, off by default. Task 24.4
   reads the reporter's pointer for the USB 1.1 hub this project never held,
   once the part is to hand.
 - **The bandwidth accounting on Windows 98 and 2000** (section 5) has no
