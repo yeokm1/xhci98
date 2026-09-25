@@ -784,7 +784,10 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     status and change bits read back; the virtual hub's own two-reset
     enumeration with `SET_ADDRESS` through the first pipe and no claim left
     armed; port 1's power cycle with PORTSC.PP untouched and the device
-    enumerated again; eight virtual hubs plus a real hub and its child
+    enumerated again, and at both values with the PED confirmation delayed
+    and the next reset held until it is collected; at 1, the root port's
+    suspend pair on a port in virtual-hub mode read from the upstream view
+    at every step of section 3.5's orders; eight virtual hubs plus a real hub and its child
     still given a graph node; the topology fold of
     section 3.6 over the existing topology tests, including the device's
     root-port record found across re-open, repeated reset and address
