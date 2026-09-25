@@ -750,10 +750,11 @@ Tasks. `runs/run-24.md` is the record once a task runs.
 
   The sub-tasks, in the page's batch order (section 8):
 
-  - **24.3.1 - The design record.** *(done 2026-09-25: moved, decisions
+  - [x] **24.3.1 - The design record.** *(done 2026-09-25: moved, decisions
     recorded in its section 9, and every target's hub INF read to bind by
     class, none naming `VID_1209` - its section 3.1 and
-    `legal-provenance.md` section 4.)* The page moves to
+    `legal-provenance.md` section 4; amended the same day for the switch's
+    value 2, its section 3.8, over four review rounds.)* The page moves to
     `docs/contributing/design/12-virtual-hub-on-root-ports.md`, the next
     free number, and the future-plans index and every link follow it. It
     stops being an idea and records its decisions: the shape (on demand,
@@ -773,7 +774,7 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     for private testing only**, and that the id is pid.codes' shared test
     id. The record also confirms that each NT target's hub INF binds by
     class, as the 9x ones do (`USB\HubClass`, `USB\CLASS_09`).
-  - **24.3.2 - Host vectors** (`test/`), the page's `-0`: the request table
+  - [ ] **24.3.2 - Host vectors** (`test/`), the page's `-0`: the request table
     of section 3.3 fed the setup packets the shipping hub drivers send
     (design record 02), the string requests included - the language table,
     index 1 byte for byte, both truncated to a short `wLength`, and any
@@ -806,7 +807,7 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     vendor id of `0000`; each refusal applying the switch as 0 and recording
     why; the switch off never consulting them; and a valid pair reaching
     the device descriptor and nothing else; and the off-state vectors that hold the page's rule 2.
-  - **24.3.3 - The driver**, the page's `-A`: the virtual device records, in
+  - [ ] **24.3.3 - The driver**, the page's `-A`: the virtual device records, in
     a fixed per-root-port array of their own outside the topology graph, the
     decision point, the synthetic completion path through the deferred
     completion list, the status-change pipe, the suspend merge, value 2's
@@ -815,7 +816,7 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     `"1209"` and `"0001"` on every install path, and `XHCISNAP` showing the
     mode, the ids applied and any refusal. Host tests and
     every gate green on all three x86 flavours and the amd64 build.
-  - **24.3.4 - The readings on every guest held**, the page's `-V`, each
+  - [ ] **24.3.4 - The readings on every guest held**, the page's `-V`, each
     with the switch at 0, then 1, then 2. First, on Windows 98 SE under both
     stacks and on ME: which encoding a `REG_SZ` arrives in through
     usbport's service, which no reading has ever taken (the parser accepts
@@ -843,7 +844,7 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     driver counts the virtual hub against USB's five hub tiers. Low Speed is
     read on Windows 98 SE under SweetLow's stack with 24.1's `usb-host`
     passthrough mouse, since QEMU presents no Low-Speed device.
-  - **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the
+  - [ ] **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the
     switch at 1 and at 2, the Low-Speed mouse and the Full-Speed audio device from
     `test-equipment.md` on root ports, the interval read from the snapshot;
     and at 2 the USB 2.0 hub on a root port with the Low-Speed mouse behind
