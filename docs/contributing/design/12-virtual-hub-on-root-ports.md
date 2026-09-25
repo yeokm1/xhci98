@@ -357,12 +357,13 @@ table is the whole device:
 | `GET_STATUS(Device)` | two bytes, `0x0001`: self-powered, as the configuration descriptor says, and remote wakeup off. Truncated to `wLength` |
 | `GET_STATUS(Interface)`, `GET_STATUS(Endpoint)` | two bytes, `0x0000` (an endpoint is never halted, since it has no hardware behind it). Truncated to `wLength` |
 | `GET_HUB_STATUS` | zero |
-| `GET_PORT_STATUS(1)` | the virtual port's own state (3.8), which follows the real port's shadow except where the virtual hub itself was reset or disabled: the connect, enable, suspend, over-current, reset and power bits as today, and the Low-Speed or High-Speed bit from the decoded speed, neither for Full Speed. At 1, `C_PORT_CONNECTION` is latched once when the hub is created, since the device was already there; at 2 it is latched at creation only if a device is there, and afterwards on every physical connect change (3.8) |
+| `GET_PORT_STATUS(1)` | the virtual port's own state (3.8), which follows the real port's shadow except where the virtual hub itself was reset or disabled, or port 1's power bit is clear: the connect, enable, over-current and reset bits as today, the power bit from port 1's own, the suspend bit from port 1's view (3.5), and the Low-Speed or High-Speed bit from the decoded speed, neither for Full Speed. At 1, `C_PORT_CONNECTION` is latched once when the hub is created, since the device was already there; at 2 it is latched at creation only if a device is there, and afterwards on every physical connect change (3.8) |
 | `SET_PORT_FEATURE(1, PORT_RESET)` | a second physical reset through the existing path: PORTSC.PR, the asynchronous timeout, a reset generation, `C_PORT_RESET` on completion, reported through 3.4. It is physical, not synthesised, so usbhub's enumeration retries reach the device the way they would behind a real hub |
-| `SET_PORT_FEATURE(1, PORT_POWER)` | success; the physical port is powered and stays so |
+| `SET_PORT_FEATURE(1, PORT_POWER)` | sets port 1's power bit, which is the virtual port's own and not PORTSC.PP (the next rows). If it was clear and a device is physically connected, `C_PORT_CONNECTION` is latched, so usbhub resets and enumerates it again |
 | `SET_PORT_FEATURE(1, PORT_SUSPEND)`, `CLEAR_PORT_FEATURE(1, PORT_SUSPEND)` | through 3.5's merge with the root port's own suspend state, then the existing `RH_SetFeature...` and resume bodies for the underlying port |
 | `CLEAR_PORT_FEATURE(1, C_PORT_*)` | clear the virtual port's change bit, as `RH_ClearFeaturePortXChange` does for a root port |
-| `CLEAR_PORT_FEATURE(1, PORT_ENABLE)`, `PORT_POWER` | the existing disown and disable bodies (`XhciSlotPortDisowned` and the confirmed half) for the device, which leaves the virtual hub in place with an empty port until usbhub resets it again or the root port goes |
+| `CLEAR_PORT_FEATURE(1, PORT_ENABLE)` | the existing disable body on the physical port - the PED write, `XhciSlotPortDisowned` at once and the confirmed half (`XhciSlotPortDisabled`) once the port is observed down - which leaves the virtual hub in place with port 1 disabled until usbhub resets it again or the root port goes |
+| `CLEAR_PORT_FEATURE(1, PORT_POWER)` | clears port 1's power bit and runs the same disable body, **not** the power-off body: PORTSC.PP stays set, because at 1 the root port reports that same PP and clearing it would take the virtual hub down with its port, and at 2 the virtual upstream is powered. While the bit is clear, port 1 reports no power, no connection and not enabled, whatever PORTSC says. The device keeps VBus, so a device that needs a real power cycle to recover does not get one here; it gets one from a root-port power-off (3.8) |
 | `CLEAR_TT_BUFFER`, `RESET_TT`, `GET_TT_STATE`, `STOP_TT` | success. The xHC has no translator on a root port to clear |
 | anything else | a stall, counted |
 
@@ -383,8 +384,16 @@ The two EP0 snoops share this channel. The hub-topology graph
 placement and from the reply bytes it reads at completion; the descriptor
 snoop (`src/xhci_desc.c`) reads configuration descriptors the same way. A
 virtual hub's traffic must either go through both folds and be recognised
-there, or be diverted before them. Going through is the smaller change and
-the graph then sees the virtual hub as a hub, which 3.6 has to correct.
+there, or be diverted before them. **It is diverted.** The graph has eight
+hub nodes (`XHCI_TOPO_NODES`), and at 2 a virtual hub on every managed
+port would spend them before a real hub arrived, leaving `xhciTopoNodeAdd`
+nothing for the hub the graph exists for. So the virtual records live in
+their own fixed array, one per root port, indexed as `RootHub.Ports` is
+and embedded in the extension like everything else (no pool), and a
+transfer to a virtual hub's address is answered from that array and never
+reaches either snoop. The graph never holds a virtual hub, and its eight
+nodes stay the real hubs' at every value; 3.6 says how it places what is
+behind one.
 
 ### 3.4 The status-change pipe
 
@@ -418,9 +427,14 @@ port. Each view keeps its own suspend bit, and the physical port is
 suspended while either bit is set and resumed when both are clear.
 
 **Neither view's request waits on the other.** A suspend or resume of
-either view completes on its own, with its own `C_PORT_SUSPEND`, as soon as
-the physical port has done whatever the merged state asks of it - which may
-be nothing. The order that matters is the ordinary one, both suspended and
+either view completes on its own as soon as the physical port has done
+whatever the merged state asks of it - which may be nothing. Entering
+suspend sets the view's `PORT_SUSPEND` status and latches no change bit.
+`C_PORT_SUSPEND` means a completed resume (the invariant in
+`implementation-invariants.md`, "Root Hub Reporting"), so a view latches
+it only when that view was suspended and its resume has finished, and a
+redundant request - a suspend of a suspended view, a resume of a running
+one - changes nothing and latches nothing. The order that matters is the ordinary one, both suspended and
 usbhub resuming the root port first: that resume clears the upstream bit
 and completes at once, the physical port stays suspended because port 1
 still is, and the virtual hub is running again as far as usbhub can tell,
@@ -428,9 +442,13 @@ so it can send the `CLEAR_PORT_FEATURE(1, PORT_SUSPEND)` that then resumes
 the physical port. A rule that held the upstream resume until the physical
 port ran would wait on a request that cannot be sent until it completes.
 
-A suspend of either view with no device on the port (value 2's empty hub,
-3.8) is the bit alone: the physical port is not enabled, so there is
-nothing to suspend and the existing suspend body is not called. A remote
+With no device enabled on the physical port (value 2's empty hub, 3.8)
+the two views differ. The upstream is enabled whatever the physical port
+is doing, so a root-port suspend is taken in software alone: the bit is
+set, and the existing suspend body is not called because there is nothing
+enabled to suspend. Port 1 is disabled, and USB 2.0 section 11.24.2.7.1.3
+lets `PORT_SUSPEND` be set only on an enabled port, so a port-1 suspend
+there completes and leaves the bit clear. A remote
 wake from the device resumes the physical port, clears both bits and
 latches `C_PORT_SUSPEND` in each view that had its bit set. The rule is the
 same at 1 and 2, so it is not a cost of either shape.
@@ -438,7 +456,7 @@ same at 1 and 2, so it is not a cost of either shape.
 ### 3.6 The topology graph
 
 The virtual hub is a hub in usbport's view and must not be one in the
-xHC's. Four rules in the graph and the device records change meaning:
+xHC's. These rules in the graph and the device records change meaning:
 
 - A device behind virtual hub port 1 on root port N is a root-port device,
   and its record is **the record a device on root port N has today**, made
@@ -458,11 +476,23 @@ xHC's. Four rules in the graph and the device records change meaning:
 - `SET_FEATURE(PORT_RESET)` on a virtual hub arms the root-port
   enumeration claim for the device, not a hub-port claim. The two claims
   stay mutually exclusive.
-- `XhciTopoTtFor` must return "no TT" for a device whose nearest High-Speed
-  ancestor is a virtual hub. usbport's `HubAddr`/`PortNumber` will name the
-  virtual hub for every Full and Low Speed root-port device, so the
-  comparison that feeds `TtPairsAgreed`/`TtPairsDisagreed` has to know the
-  virtual address, or every such device counts as a disagreement.
+- `XhciTopoTtFor` returns "no TT" for a device behind a virtual hub
+  without being taught anything, because the graph never holds the virtual
+  hub (3.3) and the device is a root-port device to it. What has to learn
+  is the comparison that feeds `TtPairsAgreed`/`TtPairsDisagreed`:
+  usbport's `HubAddr`/`PortNumber` will name the virtual hub for every Full
+  and Low Speed root-port device, so the comparison has to recognise a
+  virtual address from the virtual array and count the pair as agreed, or
+  every such device counts as a disagreement.
+- The second reset of the virtual hub's **own** enumeration bracket arms
+  nothing. usbhub enumerates the hub as it does any device - reset, the
+  address-0 EP0 open, `GET_DESCRIPTOR(Device)`, reset again, then
+  `SET_ADDRESS` through the pipe it already opened (design record 02) -
+  and `XhciSlotPortReset` suppresses the second reset's claim for exactly
+  that reason, with `EnumResetSuppressed` as its one-per-claim bound. The
+  same rule, with the same bound, is asked of the virtual record: a
+  root-port reset while the virtual hub has EP0 open at address 0 and no
+  address yet keeps that binding and arms no new open.
 - A device behind a real hub behind a virtual hub is one tier behind a real
   hub, and its TT fields come from that hub as they do today. A Full-Speed
   hub plugged into a root port decodes Full Speed, so it gets a virtual hub
@@ -471,8 +501,8 @@ xHC's. Four rules in the graph and the device records change meaning:
   This is the topology that bugchecks Vista and 7 today (issue 6 section
   6.2), and the virtual hub is what takes it off the NULL-TT path. At 1 a
   High-Speed hub on a root port decodes High Speed and stays direct; at 2
-  it sits behind the virtual hub like any root-port device, and the fold
-  makes it a hub on root port N in the xHC's view, as it is today. A Full
+  it sits behind the virtual hub like any root-port device, and the graph
+  places it as a hub on root port N, as it does today. A Full
   or Low Speed device behind that real hub takes its TT from it - the real
   hub's Slot ID and port, single or multi TT - exactly as today: its
   nearest High-Speed ancestor is the real hub, so the virtual tier above is
@@ -484,11 +514,14 @@ xHC's. Four rules in the graph and the device records change meaning:
 At 1, device removal keeps its route: an unplug is the root-port disconnect
 it is today, and the virtual record goes in the same teardown. The hub-path
 removal (the `GET_STATUS(port)` reply fold that tears down a behind-hub
-device and its subtree) is not involved. At 2 it is the only route: an
-unplug is a disconnect on the virtual hub's port 1, and that fold has to
-recognise the virtual hub and release the device's slot through the
-root-port disown path rather than the behind-hub teardown, since the
-device's record is a root-port record (the first rule above; 3.8).
+device and its subtree) is not involved. At 2 the physical disconnect is
+still a connect change in root port N's PORTSC, and the device's record,
+a root-port record (the first rule above), is released by the
+connect-change path that releases it today. What changes is only where
+the change is reported: on the virtual hub's port 1 rather than the root
+port, after which usbhub removes the device through its own hub path. The
+hub-path reply fold is not involved at either value, because a virtual
+hub's traffic never reaches it (3.3).
 
 ### 3.7 What stays as it is
 
@@ -520,8 +553,9 @@ and carry none. What changes against 3.2:
   state is what `GET_PORT_STATUS(1)` reports: it follows the physical
   port's shadow, except that it reads disabled while the virtual hub itself
   is unconfigured or has been reset, since a real hub's downstream port is
-  disabled then whatever the device behind it is doing. Each set keeps its
-  own change bits (3.4).
+  disabled then whatever the device behind it is doing, and reads
+  unpowered and empty while port 1's own power bit is clear (3.3). Each
+  set keeps its own change bits and its own suspend bit (3.4, 3.5).
 - **The root port reports the hub, not the device.** Each managed root port
   reports connected and High Speed while its virtual upstream is powered,
   whatever PORTSC says, and enabled once a root-port reset has completed
@@ -535,8 +569,13 @@ and carry none. What changes against 3.2:
 - **A root-port reset resets the virtual hub, and takes the physical port
   out of service through the existing path.** `RH_SetFeaturePortReset`
   does not set PORTSC.PR: what usbhub is resetting is the virtual hub. The
-  hub goes back to its Default state with no address and no bindings, and
-  its port 1 reads disabled. If a device is enabled on the physical port,
+  hub goes back to its Default state - address 0, unconfigured - and its
+  port 1 reads disabled. **Its EP0 binding is kept**, as a real device's
+  default pipe outlives a reset on the host side: usbhub's own enumeration
+  of the hub resets it twice and sends `SET_ADDRESS` through the pipe it
+  opened before the second reset, and that reset arms no new open (3.6).
+  A held status-change transfer stays pending and carries nothing until
+  the hub is configured again. If a device is enabled on the physical port,
   the driver then runs **the disable body `RH_ClearFeaturePortEnable` runs
   today** on it: the PED write, `XhciSlotPortDisowned` at once for the
   software half, and the confirmed half (`XhciSlotPortDisabled`) only once
@@ -566,7 +605,8 @@ and carry none. What changes against 3.2:
   through its hub path.
 - **`RH_ClearFeaturePortEnable`** on the root port means usbport has let go
   of the virtual hub, as a cancelled hub install does. The virtual record
-  stays; its upstream goes to disabled with no address and no bindings,
+  stays; its upstream goes to disabled with no address and no bindings
+  (unlike a reset, because here usbport has abandoned the hub's pipes),
   its held status-change transfer is completed as cancelled, and the
   physical port is taken out of service exactly as by the reset above. The
   root port then reports connected and not enabled, and the next root-port
@@ -645,8 +685,8 @@ are why it is not value 1: every root-port device reaches usbport
 through the new path, so a defect in it reaches the USB stick as well as
 the mouse, and the whole device matrix has to be re-read under it; one
 "Generic USB Hub" devnode and one USB address per managed port; N hub
-enumerations at every start and resume, on a Windows 98 machine that already
-boots slowly; pending interrupt transfers on N hubs that may hold off
+enumerations at every controller start (a resume or a recovery keeps the
+hubs, 3.8), on a Windows 98 machine that already boots slowly; pending interrupt transfers on N hubs that may hold off
 usbport's idle suspend permanently; a root port that must report connected,
 enabled and High Speed whether or not anything is plugged in, with
 synthetic resets; and removal that goes through the hub path instead of the
@@ -769,7 +809,15 @@ ports, with the interval read from the snapshot instrument.
   design record 02 (`wValue` 0 on `GET_DESCRIPTOR(Hub)`, `wLength` 71); the
   decision of 3.2 (mode by decoded speed, the timeout path, the re-taken
   decision and its forced connect change); the suspend merge of 3.5 in
-  every order it lists, the empty port included; the graph fold of 3.6 as
+  every order it lists, the empty port included, reading back each view's
+  status and change bits (no `C_PORT_SUSPEND` on entry, one per completed
+  resume, none for a redundant request); the virtual hub's own measured
+  enumeration - reset, address-0 open, `GET_DESCRIPTOR`, reset,
+  `SET_ADDRESS` through the first pipe - with no claim left armed; port 1's
+  power cycle, `CLEAR` then `SET PORT_POWER`, with the hub kept, PORTSC.PP
+  untouched, the status read back and the device enumerated again; eight
+  virtual hubs, and more managed ports than eight, with a real hub and its
+  child still given a graph node; the graph rules of 3.6 as
   vectors over the existing topology tests, including the device's record
   found by `xhciDevByHubPort` across a re-open, a repeated reset and an
   address reused after a disown, the hub's and the device's address-0
@@ -783,7 +831,8 @@ ports, with the interval read from the snapshot instrument.
   3.8; the `GET_STATUS` byte counts and contents; the switch of 3.1, its refusal of any value
   but 0, 1 and 2, its snapshot header fields, and the off-state vectors that
   hold rule 2.
-- `-A`: the virtual device record, the decision point, the synthetic
+- `-A`: the virtual device records in their own per-root-port array (3.3),
+  the decision point, the synthetic
   completion path, the status-change pipe, the suspend merge, and value 2's
   hub on every USB 2.0 port.
 - `-V`: section 6 on every guest held - Windows 98 SE under NUSB and under

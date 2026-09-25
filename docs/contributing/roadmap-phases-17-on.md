@@ -780,7 +780,12 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     other index stalled; the decision of section 3.2 (mode by decoded speed,
     the reset timeout, the decision re-taken at every root-port reset and the
     forced connect change when it flips); the suspend merge of section 3.5
-    in every order it lists, the empty port included; the topology fold of
+    in every order it lists, the empty port included, with each view's
+    status and change bits read back; the virtual hub's own two-reset
+    enumeration with `SET_ADDRESS` through the first pipe and no claim left
+    armed; port 1's power cycle with PORTSC.PP untouched and the device
+    enumerated again; eight virtual hubs plus a real hub and its child
+    still given a graph node; the topology fold of
     section 3.6 over the existing topology tests, including the device's
     root-port record found across re-open, repeated reset and address
     reuse, and a real High-Speed hub behind the virtual one with Full and
@@ -798,7 +803,8 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     vendor id of `0000`; each refusal applying the switch as 0 and recording
     why; the switch off never consulting them; and a valid pair reaching
     the device descriptor and nothing else; and the off-state vectors that hold the page's rule 2.
-  - **24.3.3 - The driver**, the page's `-A`: the virtual device record, the
+  - **24.3.3 - The driver**, the page's `-A`: the virtual device records, in
+    a fixed per-root-port array of their own outside the topology graph, the
     decision point, the synthetic completion path through the deferred
     completion list, the status-change pipe, the suspend merge, value 2's
     hub on every USB 2.0 port, both INFs'
