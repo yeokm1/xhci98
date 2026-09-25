@@ -139,25 +139,47 @@ stranger's machine states which mode the driver was in.
 
 The virtual hub's vendor and product id are **user-settable, and the
 binary carries no default** (the owner, 2026-09-25). They come from two more
-values beside the switch, read in the same routine, at the same time and
-under the same rules, and written by the INF:
+values beside the switch, read in the same routine and at the same time,
+and written by the INF:
 
 | | `XhciVirtualHSHubVid` | `XhciVirtualHSHubPid` |
 |---|---|---|
-| Type | `REG_DWORD` | `REG_DWORD` |
-| Accepted | `0x0001`-`0xFFFF` | `0x0000`-`0xFFFF` |
-| Written by the INF | `0x1209` | `0x0001` |
-| Set by | the INF's `AddReg`, in both INFs and on every install path, beside the switch's 0; the user may change it by hand in Registry Editor | the same |
+| Type | `REG_SZ`: a hexadecimal string, the form a user reads in Device Manager's `USB\VID_1209&PID_0001` and types into Registry Editor as a String Value | the same |
+| Accepted | exactly four hexadecimal digits, either case, optionally prefixed `0x` or `0X`, and nothing else - no spaces, no sign, no fifth digit - with a vendor id of `0000` refused | the same, `0000` accepted |
+| Written by the INF | `"1209"` | `"0001"` |
+| Set by | the INF's `AddReg` (a plain string line, which both setup engines write as `REG_SZ`), in both INFs and on every install path, beside the switch's 0; the user may change it by hand in Registry Editor | the same |
 
 **With the switch on, both ids must be present and valid, or the feature is
-off.** A missing value, a failed read, a vendor id of 0, or anything above
-`0xFFFF` in either makes the driver apply the switch as 0 for that start and
-record which value failed and why, beside the switch's own read status in
-the snapshot header. The driver never invents an id: there is no id in the
-binary to fall back to, so a machine where the INF's values have been
+off.** A missing value, a failed read, a value that is not a string of the
+accepted form, or a vendor id of `0000` makes the driver apply the switch as
+0 for that start and record which value failed and why, beside the switch's
+own read status in the snapshot header. A value a user created as a DWORD
+instead of a String Value fails the same way, because its bytes are not
+hexadecimal characters. The driver never invents an id: there is no id in
+the binary to fall back to, so a machine where the INF's values have been
 deleted runs today's driver, not a hub with a made-up identity. With the
 switch off the two values are not consulted at all, so their state cannot
 affect rule 2.
+
+**Reading a string through usbport's service** needs three things the
+DWORD values never did, all from what `UsbPortGetMiniportRegistryKeyValue`
+is measured to do (ABI document, "`UsbPortGetMiniportRegistryKeyValue` -
+read out of both binaries"). It returns neither the value's type nor its
+length, and copies exactly the byte count asked for, whatever the value
+holds; and anything but a clean `STATUS_SUCCESS` - a value too long for the
+buffer included - comes back as the one failure code. So the driver asks
+for a fixed buffer sized for the longest accepted form and its terminator
+(`0x` plus four digits plus a NUL), treats a failure as "missing or too
+long", and parses only up to the first NUL, refusing a buffer with none;
+bytes after the terminator are whatever the service's scratch buffer held
+and are never looked at. And the character encoding it hands back is
+known on NT by construction (the NT registry stores `REG_SZ` as UTF-16)
+and **not measured on Windows 98 or ME**, where the value comes
+through NTKERN's registry layer. The accepted form makes that decidable
+from the bytes alone: every accepted string is at least four characters of
+ASCII, so as UTF-16 its second byte is 0 and as a single-byte string it is
+not. The parser takes whichever the bytes show, host vectors run both, and
+the 9x encoding is the first thing 24.3.4 reads on Windows 98 SE and ME.
 
 The ids reach `GET_DESCRIPTOR(Device)` (3.3) and nothing else. Neither
 decides which driver binds the hub: every hub INF this project has read
@@ -277,7 +299,7 @@ table is the whole device:
 
 | Request | Answer |
 |---|---|
-| `GET_DESCRIPTOR(Device)` | `bcdUSB` 0x0200, class 9, subclass 0, `bDeviceProtocol` 1 (single TT), `bMaxPacketSize0` 64, the vendor and product id applied from `XhciVirtualHSHubVid` / `XhciVirtualHSHubPid` or their defaults (3.1), `bcdDevice` carrying the driver version, no string indices |
+| `GET_DESCRIPTOR(Device)` | `bcdUSB` 0x0200, class 9, subclass 0, `bDeviceProtocol` 1 (single TT), `bMaxPacketSize0` 64, the vendor and product id parsed from `XhciVirtualHSHubVid` / `XhciVirtualHSHubPid` (3.1; the hub does not exist without both), `bcdDevice` carrying the driver version, no string indices |
 | `GET_DESCRIPTOR(Configuration)` | one configuration, one interface of class 9 with one interrupt IN endpoint (`bInterval` 12, `wMaxPacketSize` 1), `bmAttributes` self-powered, `bMaxPower` 0 |
 | `GET_DESCRIPTOR(String)` | a stall. No string index is advertised, so a caller asking is off the descriptor; the language table (index 0) can be answered if a shipping hub driver turns out to ask for it unprompted |
 | `GET_DESCRIPTOR(Hub)` | `bNbrPorts` 1, `wHubCharacteristics` individual port power and over-current, `TTT` 0, `bPwrOn2PwrGood` from the root hub's own value (a smaller one would shorten every plug, since the physical port is already powered, but is only worth taking if every hub driver is measured to accept it), `bHubContrCurrent` 0, port 1 removable |
@@ -549,8 +571,9 @@ ports, with the interval read from the snapshot instrument.
    target.**
 3. The virtual hub's vendor and product id and whether it carries strings.
    **Ids answered 2026-09-25:** user-settable through
-   `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid`, written by the INF as
-   pid.codes' test id `1209:0001`, no id in the binary, and the feature off
+   `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid`, hexadecimal strings
+   (`REG_SZ`) the INF writes as pid.codes' test id, `"1209"` and `"0001"`,
+   no id in the binary, and the feature off
    if either is missing or invalid (3.1); documented as experimental, for
    private testing only. Still open: the strings (proposed: none).
 4. The switch's name. **Answered 2026-09-25: `XhciVirtualHSHub`.**

@@ -746,8 +746,9 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     phase's cut; whether a later release turns it on is still the owner's),
     the switch's name (`XhciVirtualHSHub`, answered), the hub's vendor and
     product id (answered: `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid`,
-    written by both INFs as pid.codes' test id `1209:0001`, no id in the
-    binary, and the feature off for that start if the switch is on and
+    hexadecimal strings (`REG_SZ`, four digits, optional `0x`) that both
+    INFs write as pid.codes' test id, `"1209"` and `"0001"`; no id in the
+    binary; and the feature off for that start if the switch is on and
     either value is missing or invalid), and whether it carries strings
     (proposed: none; the owner's, answered here before any code). Because
     pid.codes reserves that id "for use in private testing", every document
@@ -762,20 +763,26 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     forced connect change when it flips); the suspend merge of section 3.5;
     the topology fold of section 3.6 over the existing topology tests; the
     switch's read, its refusal of any value but 0 and 1, and its snapshot
-    header fields; the two id values - the switch on with either missing,
-    unreadable, a vendor id of 0 or anything above `0xFFFF` applying the
-    switch as 0 and recording why, the switch off never consulting them,
-    and a valid pair reaching the device descriptor and nothing else; and the off-state vectors that hold the page's rule 2.
+    header fields; the two id strings - parsed from both a UTF-16 and a
+    single-byte buffer, with and without `0x`, in either case; refused when
+    missing or unreadable (the service's one failure code, too-long values
+    included), with no terminator in the buffer, with fewer or more than
+    four digits, with any other character, as a DWORD's bytes, or as a
+    vendor id of `0000`; each refusal applying the switch as 0 and recording
+    why; the switch off never consulting them; and a valid pair reaching
+    the device descriptor and nothing else; and the off-state vectors that hold the page's rule 2.
   - **24.3.3 - The driver**, the page's `-A`: the virtual device record, the
     decision point, the synthetic completion path through the deferred
     completion list, the status-change pipe, the suspend merge, both INFs'
-    `AddReg` writing the switch's 0 and the ids `0x1209` and `0x0001` on
-    every install path (in a form both setup engines parse, as
-    `XhciImodInterval250ns`'s is), and `XHCISNAP` showing the mode and the
-    ids applied. Host tests and
+    `AddReg` writing the switch's 0 as a DWORD and the ids as the strings
+    `"1209"` and `"0001"` on every install path, and `XHCISNAP` showing the
+    mode, the ids applied and any refusal. Host tests and
     every gate green on all three x86 flavours and the amd64 build.
   - **24.3.4 - The readings on every guest held**, the page's `-V`, each
-    with the switch off and then on. Off: nothing differs from the 24.1
+    with the switch off and then on. First, on Windows 98 SE under both
+    stacks and on ME: which encoding a `REG_SZ` arrives in through
+    usbport's service, which no reading has ever taken (the parser accepts
+    either). Off: nothing differs from the 24.1
     build. On: section 5's list - the TT record on the first Full-Speed
     device (`HubAddr != 0xFFFF`), a one-port hub on each hub driver, the
     interval (a stock `bInterval` 10 arriving as `Period` 8 and programming
