@@ -956,6 +956,43 @@ on a guest that already has the file, that install path is never exercised.
 is the baseline every later Win98 phase starts from. Revert to `post-nusb` only
 when the question is whether the package carries the file.
 
+**The six NT 5.1-6.1 guests boot unattended from a `*-clean-autologon`
+snapshot** (the owner, 2026-09-25). Each was reverted to its clean-install
+snapshot, given `AutoAdminLogon` = `1` with `DefaultUserName`,
+`DefaultPassword` and `DefaultDomainName` (REG_SZ) under
+`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon`, powered off and
+snapshotted, and each was then booted on a throwaway overlay and seen to reach
+the desktop with no key sent. Start new work from these; the
+`*-clean-install` snapshots the sections below name are kept and unchanged,
+and each image's pre-2026-09-25 live state was discarded by the revert.
+
+| Image | Taken from | New snapshot | Logs on as |
+|---|---|---|---|
+| `vm\winxp.img` | `winxp-clean-install-smp4` | `winxp-clean-autologon` | `test`, empty password |
+| `vm\winxp64.img` | `winxp64-clean-install-smp4` | `winxp64-clean-autologon` | `Administrator` / `test` |
+| `vm\vista.img` | `vista-clean-install` | `vista-clean-autologon` | `test` / `test` |
+| `vm\vista-x64.img` | `vista-x64-clean-install` | `vista-x64-clean-autologon` | `test` / `test`, plus `advancedoptions` |
+| `vm\win7.img` | `win7-clean-install` | `win7-clean-autologon` | `test` / `test` |
+| `vm\win7-x64.img` | `win7-x64-clean-install` | `win7-x64-clean-autologon` | `test` / `test`, plus `advancedoptions` |
+
+**Driver signature enforcement is not off on the two x64 NT 6.x snapshots,
+because it cannot be for an unsigned package** (see "Vista x64 and Windows 7
+x64 target VMs"). What they carry instead is
+`bcdedit /set {current} advancedoptions true`: the Advanced Boot Options menu
+comes up on every boot and waits with no timeout. **The highlight starts on
+the first entry** (*Repair Your Computer* on Windows 7, *Safe Mode* on Vista),
+not on *Start Windows Normally*, and `up` wraps to the bottom, so the monitor
+sequence `sendkey up`, `sendkey up`, `sendkey ret` selects *Disable Driver
+Signature Enforcement* on both - read on both guests 2026-09-25 - and the
+guest then logs on by itself. A clone that must boot with enforcement ON
+(the Code 39 question) removes the value with
+`bcdedit /deletevalue {current} advancedoptions` or picks *Start Windows
+Normally* (`up`, `ret`).
+
+The same caveat as the matrix images applies (design record 09 section 8): with
+a desktop up, a device that has no driver raises a Found New Hardware wizard
+that queues later installs, so check a missing driver against a screenshot.
+
 ### QEMU monitor - hot-plug USB devices without rebooting
 
 Phase 4+ needs plug/unplug events on demand (Port Status Change testing, the
@@ -2608,7 +2645,10 @@ shutdown -r -t 0
 
 The Advanced Boot Options menu then comes up **on every boot** and waits, with
 no F8 at all, and *Disable Driver Signature Enforcement* is picked from it as
-usual. It differs from the Vista x64 recipe above in three ways worth knowing:
+usual - except that this menu's highlight starts on the first entry rather than
+on *Start Windows Normally*, so the pick is `up`, `up`, `ret` (the first `up`
+wraps). The `vista-x64-clean-autologon` and `win7-x64-clean-autologon`
+snapshots carry this value ("VM snapshots - iterate without fear"). It differs from the Vista x64 recipe above in three ways worth knowing:
 it sets one value rather than two, it is on `{current}` rather than
 `{bootmgr}` so it raises Advanced Boot Options directly instead of the Boot
 Manager menu that then needs F8, and it survives in the image rather than
