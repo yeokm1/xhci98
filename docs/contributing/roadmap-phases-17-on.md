@@ -779,10 +779,17 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     index 1 byte for byte, both truncated to a short `wLength`, and any
     other index stalled; the decision of section 3.2 (mode by decoded speed,
     the reset timeout, the decision re-taken at every root-port reset and the
-    forced connect change when it flips); the suspend merge of section 3.5;
-    the topology fold of section 3.6 over the existing topology tests;
-    value 2's root-port report, synthetic root-port reset, plug and unplug
-    on port 1 and hub-path removal (section 3.8); the switch's read, its
+    forced connect change when it flips); the suspend merge of section 3.5
+    in every order it lists, the empty port included; the topology fold of
+    section 3.6 over the existing topology tests, including the device's
+    root-port record found across re-open, repeated reset and address
+    reuse, and a real High-Speed hub behind the virtual one with Full and
+    Low Speed devices behind it in single and multi TT; the `GET_STATUS`
+    byte counts and contents; value 2's root-port report, the root-port
+    reset with transfers in flight (slot and buffers held until the PED
+    confirmation), root-port disable and power-off/on with the hub
+    enumerated again, plug and unplug on port 1, hub-path removal, and
+    resume and recovery keeping the hubs (section 3.8); the switch's read, its
     refusal of any value but 0, 1 and 2, and its snapshot header fields; the two id strings - parsed from both a UTF-16 and a
     single-byte buffer, with and without `0x`, in either case; refused when
     missing or unreadable (the service's one failure code, too-long values
@@ -819,14 +826,20 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     passes at 2 is one whose documented setting is 2. At 2 also: the whole
     device matrix, High-Speed rows included, since every root-port device
     takes the new path; a hub on every USB 2.0 port at start with nothing
-    plugged in; the synthetic root-port reset; and whether any hub driver
-    counts the virtual hub against USB's five hub tiers. Low Speed is
+    plugged in; the root-port reset with a device attached; a cancelled hub
+    install, a root-port disable and a power-off/on, each ending with the
+    hub enumerated again without a controller restart; a resume that
+    reinitialises the controller and a forced recovery in place, the hubs
+    kept and the devices re-enumerated behind them; and whether any hub
+    driver counts the virtual hub against USB's five hub tiers. Low Speed is
     read on Windows 98 SE under SweetLow's stack with 24.1's `usb-host`
     passthrough mouse, since QEMU presents no Low-Speed device.
   - **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the
     switch at 1 and at 2, the Low-Speed mouse and the Full-Speed audio device from
-    `test-equipment.md` on root ports, the interval read from the snapshot.
-    Wanted before the cut; not a checkpoint clause, as a metal reading of
+    `test-equipment.md` on root ports, the interval read from the snapshot;
+    and at 2 the USB 2.0 hub on a root port with the Low-Speed mouse behind
+    it, the one place a real High-Speed hub behind the virtual one is read
+    (QEMU models none). Wanted before the cut; not a checkpoint clause, as a metal reading of
     24.1 is not.
 
   If 24.3.1's record, or any reading in 24.3.4, contradicts the page - a
