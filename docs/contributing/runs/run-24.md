@@ -1194,3 +1194,15 @@ took and the port then refused (busy with a resume) - so that one, meant
 to complete with port 1's reset change and the port disabled, stalled too.
 Decided before the carry now; vector for the taken-and-refused shape.
 `test_init` 20,561.
+
+**Codex's sixth round** (2 minutes): no findings, over the commit and over
+the whole of the loop's diff read as one body - the second clean
+independent pass in a row, which is where the loop ends. Six rounds over
+six commits; every finding of the first five was real on inspection, and
+each of rounds two to five found a defect inside the round before it -
+the shape every review loop in this repository has had, and the reason a
+round without a MAJOR is not taken as convergence. What the loop leaves:
+`test_vhub` 1279 checks, `test_init` 20,561, `test_packet` 236; the
+three log notes `vhub.prc.late`, `vhub.redisable` and `vhub.lost` beside
+the wiring's `vhub.create`, `vhub.drop`, `vhub.flip`, `vhub.open` and
+`vhub.address`; and 24.3.4's readings still owed on every guest.

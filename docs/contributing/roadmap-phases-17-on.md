@@ -853,7 +853,13 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     a direct port at 1 keeping its decision across an unplug, so a
     Full-Speed device following a High-Speed one cost a forced connect
     change; fixed, with the vector that had pinned the defect as intended
-    rewritten to pin the rule of 3.2.
+    rewritten to pin the rule of 3.2. A Codex review loop over the audit's
+    fixes then ran six rounds to a clean one and found ten more defects
+    in the wiring and inside its own earlier fixes - a refused resume
+    completed with success, a reset overtaking or overtaken by another,
+    a disable swallowed by a port in reset, a recovery at 1 telling usbhub
+    nothing of a device gone - each with its vector (`runs/run-24.md`,
+    "24.3.3, audited").
   - [ ] **24.3.4 - The readings on every guest held**, the page's `-V`, each
     with the switch at 0, then 1, then 2. First, on Windows 98 SE under both
     stacks and on ME: which encoding a `REG_SZ` arrives in through
