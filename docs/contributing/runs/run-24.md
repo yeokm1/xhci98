@@ -1147,3 +1147,30 @@ New vectors: the direct decision standing under a connect change and the
 flip forced by the next speed-changing reset; the root reset over a running
 port-1 reset at both values, the hub's open surviving the stale end at 2 and
 the busy refusal at 1. `test_vhub` 1255, `test_init` 20,479.
+
+**Codex's third round** (the same thread, 6 minutes) found three more,
+two of them corners of the overtaken reset and one of recovery at 1:
+
+- The overtaken reset's end was nobody's only while its deadline had not
+  passed: the deadline cleared its ownership, and a PRC arriving after it -
+  a reset nothing armed any more - took today's path, arming a device claim
+  for a reset usbhub had given up on and spending the hub's open. A PRC
+  nothing armed on a port carrying a hub is now nobody's (`vhub.prc.late`).
+- The value-2 root reset's disable wrote PED into a port in reset, where PED
+  is already 0 and a '1' clears nothing; when that reset finished before
+  the confirmation read, the debt stood against a port that had enabled
+  itself again, the poll waits only for a clear, and the next port-1 reset
+  was held behind it for good. A reset that ends and leaves the port
+  enabled with a disown owed has the disable written again
+  (`vhub.redisable`).
+- A recovery at 1 with a configured hub whose device had gone: HCRST took
+  the disconnect's CSC, an empty port raises none, and the hub stayed with
+  its bindings and held transfer while usbhub was never told. The lost
+  bitmap now covers value 1 (a hub present is a device that was there), and
+  the seed latches the root port's connect change for such a port itself
+  (`vhub.lost`), so usbhub removes the hub as on any unplug and usbport's
+  disable drops it; record 12 section 3.2 says so.
+
+New vectors: the overtaken reset through its deadline and a late PRC, with
+the disown the reset swallowed written again and the next port-1 reset not
+held; the recovery at 1 with the device gone. `test_init` 20,535.

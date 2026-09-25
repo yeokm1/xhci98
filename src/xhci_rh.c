@@ -1976,6 +1976,33 @@ static ULONG xhciRhVhubRefreshed(PXHCI_EXTENSION ext,
         slotReset = ((xhciRhVhubResetEnded(ext, hubPort, shadow,
                                            endedGeneration, 0) &
                       XHCI_RH_VHUB_END_SLOT) != 0) ? 1UL : 0UL;
+    } else if (slotReset && hub->Present &&
+               hub->ResetOwner == XHCI_VHUB_OWNER_NONE) {
+        /*
+         * A PRC nothing armed, on a port carrying a hub: the late end of a
+         * port-1 reset whose deadline passed - reported to usbhub then, as
+         * port 1's, with the port disabled - or of one a root reset overtook
+         * and whose deadline then passed. Nobody's, as its deadline was:
+         * today's path would arm a device claim for a reset usbhub has
+         * already given up on, and spend a hub's open armed since.
+         */
+        slotReset = 0;
+        XhciLogNoteLocked(ext, "vhub.prc.late", hubPort);
+    }
+    if ((latched & XHCI_HUB_C_PORT_RESET) != 0 && hub->Present &&
+        shadow->DisownPending != 0 &&
+        (xhciRhVhubPhys(shadow) & XHCI_HUB_PORT_ENABLE) != 0) {
+        /*
+         * A reset ended and left the port enabled while a disable is still
+         * owed on it: the PED write went into a port in reset, where PED is
+         * already 0 and a '1' clears nothing (Table 5-27), and the debt
+         * would wait for a clear that never comes on its own - with the
+         * next port-1 reset held behind it (3.3). Written again now that
+         * it can land; the body's software half is idempotent.
+         */
+        (VOID)xhciRhPortOperationLocked(ext, (USHORT)hubPort,
+                                        XHCI_RH_OP_DISABLE);
+        XhciLogNoteLocked(ext, "vhub.redisable", hubPort);
     }
     if ((latched & XHCI_HUB_C_PORT_SUSPEND) != 0 && hub->Present) {
         verdict = (hub->UpResumeOwed || hub->P1ResumeOwed)
@@ -3573,13 +3600,21 @@ ULONG XhciRootHubInit(PXHCI_EXTENSION ext, ULONG afterRestore)
         for (hubPort = 0; hubPort < sizeof(lost); hubPort++) {
             lost[hubPort] = 0;
         }
-        if (ext->VhubConfig.Applied == XHCI_VHUB_MODE_ALWAYS &&
-            ext->VhubStarted && !afterRestore) {
+        if (ext->VhubStarted && !afterRestore) {
             for (hubPort = 1; hubPort <= ext->RootHub.PortCount &&
                               hubPort <= XHCI_MAX_ROOT_PORTS; hubPort++) {
-                if ((ext->RootHub.Ports[hubPort - 1].Portsc &
-                     XHCI_PORTSC_CCS) != 0 ||
-                    ext->Vhub[hubPort - 1].P1Enabled) {
+                ULONG had;
+
+                if (ext->VhubConfig.Applied == XHCI_VHUB_MODE_ALWAYS) {
+                    had = ((ext->RootHub.Ports[hubPort - 1].Portsc &
+                            XHCI_PORTSC_CCS) != 0) ||
+                          ext->Vhub[hubPort - 1].P1Enabled;
+                } else {
+                    /* At 1 the hub stands for its device: a hub present is
+                     * a device that was there. */
+                    had = ext->Vhub[hubPort - 1].Present;
+                }
+                if (had) {
                     lost[(hubPort - 1) >> 3] |=
                         (UCHAR)(1U << ((hubPort - 1) & 7));
                 }
@@ -3635,6 +3670,27 @@ ULONG XhciRootHubInit(PXHCI_EXTENSION ext, ULONG afterRestore)
 
         portLatched = xhciRhRefresh(ext, hubPort,
                                     &ext->RootHub.Ports[hubPort - 1]);
+        if (ext->VhubConfig.Applied == XHCI_VHUB_MODE_ON_DEMAND &&
+            hubPort <= XHCI_MAX_ROOT_PORTS &&
+            ((lost[(hubPort - 1) >> 3] >> ((hubPort - 1) & 7)) & 1U) != 0 &&
+            ext->Vhub[hubPort - 1].Present &&
+            (portLatched & XHCI_HUB_C_PORT_CONNECTION) == 0 &&
+            (ext->RootHub.Ports[hubPort - 1].Portsc & XHCI_PORTSC_CCS) == 0) {
+            /*
+             * At 1 a hub whose device went away before the reinitialisation
+             * (design record 12 section 3.2's removal route): HCRST took the
+             * CSC that would have said so, and an empty port raises no new
+             * one, so the root port's connect change is latched here - the
+             * disconnect usbhub needs to remove the hub, whose drop then
+             * comes through usbport's disable of the port as on any unplug.
+             * The device layer is told as the refresh would have told it.
+             */
+            XhciPortShadowLatchChange(&ext->RootHub.Ports[hubPort - 1],
+                                      XHCI_HUB_C_PORT_CONNECTION);
+            XhciSlotPortConnectChanged(ext, hubPort);
+            XhciLogNoteLocked(ext, "vhub.lost", hubPort);
+            portLatched |= XHCI_HUB_C_PORT_CONNECTION;
+        }
         if (portLatched != 0) {
             /*
              * **Queued, exactly as the event path queues.** This reading is the

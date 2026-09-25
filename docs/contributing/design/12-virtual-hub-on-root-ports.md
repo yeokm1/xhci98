@@ -364,7 +364,12 @@ one was - the driver latches
 `C_PORT_CONNECTION` on the root port so usbhub tears down what it believes
 is there and enumerates the port again, drops the virtual record if there
 was one, and the next reset decides afresh. A disconnect forgets the
-decision, so the next device on the port decides with no forced change.
+decision, so the next device on the port decides with no forced change. A
+reinitialisation - a recovery in place, or a resume that had to
+reinitialise - that finds the port empty behind a hub latches the root
+port's connect change itself, since HCRST took the disconnect's CSC and an
+empty port raises none: the removal route below then runs as on any unplug
+(24.3.3's audit).
 
 `RH_ClearFeaturePortEnable` and `RH_ClearFeaturePortPower` on a port in
 virtual-hub mode mean what they mean today: usbport has let go of the port.

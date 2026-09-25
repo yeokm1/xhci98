@@ -31109,6 +31109,8 @@ static void test_vhub_root_reset_over_a_port1_reset(void)
     ULONG change;
     ULONG xport;
     ULONG refusals;
+    ULONG held;
+    ULONG resets;
 
     vhub_start(2);
     hwCmdSlotId = 6;
@@ -31118,29 +31120,60 @@ static void test_vhub_root_reset_over_a_port1_reset(void)
     vhub_enumerate_hub(3, 3);
     (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
     (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 3);
+    /* Port 1's first reset completes and enables the port. */
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PED, XHCI_PORTSC_PED,
+             "(the port enabled by port 1's first reset)");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 20, 1, 0);
 
+    /*
+     * Its second reset hangs. The model keeps PED set through a hung reset,
+     * which here stands for the reset finishing between the disable's PED
+     * write below and the read that confirms it: the write went into a
+     * port in reset, where it lands on nothing, and the read then finds the
+     * port enabled again, so the disown stays owed.
+     */
     portResetHangs = 1;
     (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
     portResetHangs = 0;
     CHECK_EQ(ext.Vhub[2].P1Resetting, 1, "(port 1's reset running)");
+    stuckPortPed = xport;
+    held = ext.VhubResetsHeld;
     CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 3), MP_STATUS_SUCCESS,
              "usbhub resets the hub while port 1's reset runs");
     CHECK_EQ(ext.VhubArmedPort, 3, "which arms the hub's open");
     CHECK_EQ(ext.Vhub[2].ResetOwner, XHCI_VHUB_OWNER_SUPERSEDED,
              "and overtakes the running reset");
     CHECK_EQ(ext.Vhub[2].Address, 0, "(the hub back in Default)");
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 1,
+             "(the disable's write swallowed by the reset: a disown owed)");
 
-    /* The physical reset ends now. */
+    /* Its deadline passes first, with the reset still running. */
+    hw_fire_port_timer();
+    CHECK_EQ(ext.Vhub[2].P1Resetting, 0, "the deadline ends it for the hub");
+    CHECK_EQ(ext.VhubArmedPort, 3, "spending nothing");
+    CHECK_EQ(ext.Vhub[2].P1Changes & XHCI_HUB_C_PORT_RESET, 0,
+             "and latching nothing on port 1");
+
+    /* Then the physical reset ends, late: a PRC nothing armed. */
+    stuckPortPed = 0;
     mmio[HC_PORTSC(xport) / 4] =
         (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_PR) |
         XHCI_PORTSC_PRC | XHCI_PORTSC_PED;
     hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
     deliver_events();
-    CHECK_EQ(ext.Vhub[2].P1Resetting, 0, "its end frees the port");
-    CHECK_EQ(ext.VhubArmedPort, 3, "and spends nothing: the hub's open stands");
+    CHECK_EQ(ext.VhubArmedPort, 3,
+             "its late end spends nothing either: the hub's open stands");
     CHECK_EQ(ext.EnumClaimSpent, 1, "with no device claim armed beside it");
     CHECK_EQ(ext.Vhub[2].P1Changes & XHCI_HUB_C_PORT_RESET, 0,
              "and no reset change on port 1");
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 0,
+             "the disable is written again now that it can land, and "
+             "confirmed");
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PED, 0,
+             "(the port disabled)");
     vhub_root_status(3, &status, &change);
     CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
              "the root port reports the hub's reset alone");
@@ -31148,6 +31181,12 @@ static void test_vhub_root_reset_over_a_port1_reset(void)
              "the address-0 open");
     CHECK_EQ(vhubEp0.Flags & XHCI_ENDPOINT_FLAG_VHUB, XHCI_ENDPOINT_FLAG_VHUB,
              "is the hub's");
+    resets = portResets;
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(ext.VhubResetsHeld, held, "and the next port-1 reset is not held");
+    CHECK_EQ(portResets, resets + 1, "but runs");
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
 
     /* Value 1: the root reset is physical and the port is busy. */
     vhub_start(1);
@@ -31181,6 +31220,68 @@ static void test_vhub_root_reset_over_a_port1_reset(void)
     vhub_root_status(2, &status, &change);
     CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, 0,
              "and the root port latches nothing");
+    vhub_reset_registry();
+}
+
+/*
+ * **A recovery at 1 with the device gone** (design record 12 sections 3.2
+ * and 3.8): a hub stands for its device, and a device that went away
+ * before the reinitialisation left no connect change for the seed to find
+ * - HCRST took it, and an empty port raises none. The root port latches the
+ * disconnect itself, so usbhub removes the hub as on any unplug, and the
+ * drop comes through usbport's disable of the port. (A first build kept the
+ * hub, its bindings and its held transfer, with usbhub never told.)
+ */
+static void test_vhub_on_demand_recovery_with_the_device_gone(void)
+{
+    ULONG status;
+    ULONG change;
+    ULONG xport;
+    ULONG announced;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_plug(2, 1);                                /* Full Speed */
+    vhub_enumerate_hub(2, 5);
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 2);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe)");
+    deliver_after_submit();
+    CHECK(ext.VhubBind[1].Held == &vhubPipeTransfer, "(held)");
+
+    /* The device goes away and the controller faults before anything reads
+     * the CSC; the recovery's HCRST clears it. */
+    mmio[HC_PORTSC(xport) / 4] &=
+        ~(XHCI_PORTSC_CCS | XHCI_PORTSC_PED | XHCI_PORTSC_SPEED_MASK);
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_HCE;
+    XhciRegPacket.CheckController(&ext);
+    asyncCallback = NULL;
+    asyncRequests = 0;
+    XhciRegPacket.ResetController(&ext);
+    XhciRegPacket.CheckController(&ext);
+    announced = ext.RootHubInvalidates;
+    fire_async_timer();
+    CHECK_EQ(ext.RecoveryCompletions, 1, "(the recovery completed)");
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & (XHCI_PORTSC_CCS | XHCI_PORTSC_CSC),
+             0, "(the port empty, with no connect change of the hardware's)");
+
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, XHCI_HUB_C_PORT_CONNECTION,
+             "the root port reports the disconnect the reinitialisation "
+             "swallowed");
+    CHECK_EQ(status & XHCI_HUB_PORT_CONNECTION, 0, "on an empty port");
+    CHECK(ext.RootHubInvalidates > announced || ext.RootHubInvalidatesOwed != 0,
+          "and the root hub's invalidation announced, or owed to the gate");
+    CHECK_EQ(ext.Vhub[1].Present, 1,
+             "the hub stays until usbport lets go of the port");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 2),
+             MP_STATUS_SUCCESS, "which it does on the removal");
+    CHECK_EQ(ext.Vhub[1].Present, 0, "dropping the hub");
+    CHECK(ext.VhubBind[1].Ep0 == NULL && ext.VhubBind[1].Pipe == NULL,
+          "and its bindings");
+    CHECK(ext.VhubBind[1].Held == NULL, "and the held transfer");
     vhub_reset_registry();
 }
 
@@ -32062,6 +32163,7 @@ int main(void)
     test_vhub_on_demand_high_speed_is_direct();
     test_vhub_on_demand_swap_inside_a_reset();
     test_vhub_root_reset_over_a_port1_reset();
+    test_vhub_on_demand_recovery_with_the_device_gone();
     test_vhub_always_root_reset_holds_the_slot();
     test_vhub_abort_finds_the_held_pipe();
     test_vhub_always_disable_and_power_cycle();
