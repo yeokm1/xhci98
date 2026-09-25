@@ -606,7 +606,7 @@ Everything above follows from the one lever section 4 describes, and
 changing what the driver reports on a root port is exactly what bugchecks
 Windows 98 and 2000 - the primary targets. The options, as they stand:
 
-- **A virtual USB 2.0 hub behind every root port**, the idea in
+- **A virtual USB 2.0 hub above each slower root-port device**, the idea in
   [`docs/future-plans/virtual-hub-per-root-port.md`](../future-plans/virtual-hub-per-root-port.md):
   a slower device is then reported at its true speed behind a hub that has a
   transaction translator, which removes the interval bands (section 5), the
@@ -620,6 +620,12 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
   bugcheck, and the audio played (6.2, 7) - so the proposal's premise holds
   on the one machine measured. Discussed 2026-09-19 and not decided; the suggested scope if
   taken is XP and later only, Windows 98 and 2000 byte-for-byte unchanged.
+  On 2026-09-25 the owner chose its shape - a hub only while a Full or Low
+  Speed device is on the root port, removed when it is unplugged, with a
+  hub on every port kept as the fallback - but not whether to take it
+  (roadmap 24.3). The reporter runs Windows 98 under SweetLow's stack, where
+  a truthful report is now measured fatal too, so the scope is part of that
+  decision.
 - **A true-speed report as an opt-in.** Under a usbport that guards the
   empty TT list, reporting the real speed would remove the interval bands
   as well, because usbport would then bucket `Period` in frames, which

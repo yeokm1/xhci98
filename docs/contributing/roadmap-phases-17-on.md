@@ -707,7 +707,12 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   Taken means the page becomes a numbered design record, its section 5
   measurements become the checkpoint of a new phase, and its section 9
   decisions are answered (name, permanent or on demand, ids, default). Not
-  taken means issue 6 section 9's first item says so and why.
+  taken means issue 6 section 9's first item says so and why. The shape was
+  answered ahead of the decision, on 2026-09-25: **on demand** - a hub only
+  while a Full or Low Speed device is on the root port, removed on unplug -
+  with the permanent shape as the fallback if a target fails the page's
+  churn reading. The page was revised around it the same day; whether to
+  take it, and on which targets, is still this task.
 
   The reporter offered no fix to take. His remarks on the thread - that the
   High-Speed report is "only default behaviour" because usbport and usbhub

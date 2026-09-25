@@ -114,7 +114,7 @@ source comments, scripts, and other docs use these same locations.
 
 - [Future plans](future-plans/README.md) - ideas and proposals the project
   has not taken up, none with a phase or task id: real speeds on root ports
-  through a virtual USB 2.0 hub behind every managed port, SuperSpeed mass
+  through a virtual USB 2.0 hub placed above each slower device, SuperSpeed mass
   storage on root ports behind a registry switch, and what general
   SuperSpeed support would take. A page moves to a numbered design record
   when its work is scheduled.
