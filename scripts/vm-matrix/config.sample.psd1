@@ -249,7 +249,7 @@
             ReadySeconds = 600
             Family   = 'winxp64'
             Arch     = 'amd64'
-            CloneFrom = @{ Image = 'winxp64.img'; Snapshot = 'winxp64-clean-install-smp4' }
+            CloneFrom = @{ Image = 'winxp64.img'; Snapshot = 'winxp64-clean-autologon' }
         }
         @{
             Id       = 'win7-fresh'
@@ -265,7 +265,7 @@
             BootSeconds  = 600
             ReadySeconds = 600
             Family   = 'win7'
-            CloneFrom = @{ Image = 'win7.img'; Snapshot = 'win7-clean-install' }
+            CloneFrom = @{ Image = 'win7.img'; Snapshot = 'win7-clean-autologon' }
         }
         # THE WINDOWS ME TARGET (docs\contributing\build-and-test.md, "Windows
         # ME target VM"). Installed by hand from a Windows ME CD into a new

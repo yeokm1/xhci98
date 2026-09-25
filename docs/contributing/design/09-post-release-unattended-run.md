@@ -186,9 +186,16 @@ any build of this driver existed, one per target.
 | Target | Source image | Snapshot | Taken | State |
 |---|---|---|---|---|
 | `2a` | `vm/win98.img` | `post-nusb` | 2026-07-22 | Windows 98 SE, NUSB 3.3 installed, the xHCI controller unclaimed (`Code 28`), no `usbd.sys` |
-| `xp64-fresh` | `vm/winxp64.img` | `winxp64-clean-install-smp4` | 2026-09-14 | Windows XP Professional x64 SP2, multiprocessor HAL, no USB host controller driver claimed; added 2026-09-18 (section 2.6) |
-| `win7-fresh` | `vm/win7.img` | `win7-clean-install` | 2026-09-10 | Windows 7 Professional SP1 x86; added 2026-09-18 (section 2.6) |
+| `xp64-fresh` | `vm/winxp64.img` | `winxp64-clean-autologon` | 2026-09-25 | Windows XP Professional x64 SP2, multiprocessor HAL, no USB host controller driver claimed, logs on automatically; added 2026-09-18 (section 2.6) |
+| `win7-fresh` | `vm/win7.img` | `win7-clean-autologon` | 2026-09-25 | Windows 7 Professional SP1 x86, logs on automatically; added 2026-09-18 (section 2.6) |
 | `2b` | `vm/win2k-xonly.img` | `win2k-xonly-clean-install` | 2026-09-03 | Windows 2000 SP4 installed with no USB controller of any kind attached; read from the snapshot the same day: `system32\drivers` holds `usbcamd.sys` and `usbintel.sys` only, no `usbport.sys`, `usbhub.sys`, `usbhub20.sys` or `usbd.sys` |
+
+The `xp64-fresh` and `win7-fresh` rows changed on 2026-09-25. Until then they
+were `winxp64-clean-install-smp4` (2026-09-14) and `win7-clean-install`
+(2026-09-10); each new snapshot is its old one after one logged-on boot, with
+no xHCI controller attached, that set section 8's automatic logon
+(`build-and-test.md`, "VM snapshots - iterate
+without fear"), so a clone no longer needs that step done by hand.
 
 The Windows 2000 row changed on 2026-09-03 (roadmap task 19.5). Until then
 it was `vm/win2k.img @ phase2b-clean` (2026-07-24, the xHCI unclaimed,
