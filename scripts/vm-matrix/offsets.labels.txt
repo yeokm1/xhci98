@@ -405,3 +405,16 @@ SweptTransfersTotal	transfers swept without an event
 SumFailuresTotal	TRB length sum failures
 BadCodesTotal	unassigned completion codes
 UnmaskEscalations	unmask escalations
+VhubArmedPort	vhub armed port
+VhubOpens	vhub endpoint opens
+VhubForcedConnects	vhub forced connects
+VhubCreated	vhub hubs created
+VhubDropped	vhub hubs dropped
+VhubPipeCancels	vhub pipe cancels
+VhubPipeCompletions	vhub pipe completions
+VhubRequests	vhub requests answered
+VhubStalls	vhub requests stalled
+VhubResetsHeld	vhub resets held
+VhubStarted	vhub started
+VhubTransfersFailed	vhub transfers failed
+VhubTtNamed	vhub TT pairs naming a hub

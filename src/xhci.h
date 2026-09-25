@@ -33,6 +33,9 @@
 /* ...and the task 11-V.7 log ring, which lives in the extension for the same
  * reason everything else here does: this driver allocates no pool. */
 #include "xhci_log.h"
+/* ...and task 24.3's virtual hubs, one record per root port (design record
+ * 12 section 3.3), embedded for the same reason. */
+#include "xhci_vhub.h"
 
 /* ------------------------------------------------------------------ */
 /* Hardware structures referenced by the layout                        */
@@ -2404,6 +2407,10 @@ VOID XhciPortShadowLatchChange(XHCI_PORT_SHADOW *shadow, ULONG changeBits);
  */
 ULONG XhciPortShadowArm(XHCI_PORT_SHADOW *shadow, ULONG operation);
 
+/* The generation the next XhciPortShadowArm on this shadow will return, with
+ * nothing armed (task 24.3). IRQL: any. Caller holds the controller lock. */
+ULONG XhciPortShadowNextGeneration(const XHCI_PORT_SHADOW *shadow);
+
 /*
  * Claim the armed operation, if it is still the one the caller was armed with.
  *
@@ -3898,8 +3905,16 @@ typedef struct _XHCI_TRANSFER_QUEUE {
  * What is left is a back-reference plus its own validity check. `DeviceIndex` is
  * an index into XHCI_EXTENSION.Devices **plus one**, so that the zeroed state
  * usbport leaves behind names no device rather than device 0.
+ *
+ * **An endpoint of a virtual hub (task 24.3, design record 12) has no device
+ * record at all**: `XHCI_ENDPOINT_FLAG_VHUB` is set, `DeviceIndex` stays 0 so
+ * that no lookup in src/xhci_slot.c can resolve it to a real record, and
+ * `VhubPort` names the root-hub port whose `XHCI_EXTENSION.Vhub` entry it
+ * belongs to. Every open of a real endpoint writes `VhubPort` 0, because the
+ * extension is not assumed zeroed between tenants.
  */
 #define XHCI_ENDPOINT_FLAG_OPEN     0x00000001UL
+#define XHCI_ENDPOINT_FLAG_VHUB     0x00000002UL
 
 typedef struct _XHCI_ENDPOINT {
     ULONG Signature;
@@ -3907,7 +3922,31 @@ typedef struct _XHCI_ENDPOINT {
     ULONG SlotId;           /* diagnostic copy - Devices[] is authoritative   */
     ULONG Dci;
     ULONG Flags;
+    ULONG VhubPort;         /* root-hub port of a virtual hub's endpoint, or 0 */
 } XHCI_ENDPOINT, *PXHCI_ENDPOINT;
+
+/*
+ * What usbport has bound to one root port's virtual hub (task 24.3), beside
+ * the pure core's `XHCI_VHUB` record rather than inside it, because the core
+ * holds no pointer and is 32 bytes by assertion.
+ *
+ * `Ep0` and `Pipe` are the endpoint extensions usbport opened for the hub's
+ * default pipe and its status-change endpoint. A submit or a REMOVE through
+ * any other extension is a handle a newer open displaced, as `EndpointExtension`
+ * is for a real device, and touches nothing here.
+ *
+ * `Held` is the status-change transfer usbport keeps pending (design record 12
+ * section 3.4), and `HeldVa` its buffer's `MappedSystemVa`, which usbport keeps
+ * mapped until the transfer is completed - the one window the change byte may
+ * be written in. The transfer owns no TRB, so nothing about the controller
+ * can end it: only a change, a cancel or an abort.
+ */
+typedef struct _XHCI_VHUB_BINDING {
+    PVOID Ep0;
+    PVOID Pipe;
+    PXHCI_TRANSFER Held;
+    PVOID HeldVa;
+} XHCI_VHUB_BINDING, *PXHCI_VHUB_BINDING;
 
 /* ------------------------------------------------------------------ */
 /* One addressed device (Phase 6 batch B, src/xhci_slot.c)             */
@@ -7873,6 +7912,49 @@ typedef struct _XHCI_EXTENSION {
     ULONG ImodReadback;     /* IMOD as it read straight after the write       */
 
     /*
+     * Roadmap task 24.3, design record 12: the virtual USB 2.0 hubs on root
+     * ports. After `ImodReadback` for the reason that block gives - no counter
+     * an older offset table names moves.
+     *
+     * `VhubConfig` is the switch `XhciVirtualHSHub` and the two id strings as
+     * read at this start (section 3.1), and `VhubConfig.Applied` is the one
+     * value every divergence point tests: with it OFF no record below is ever
+     * made present, which is rule 2 (section 3.1, "Rule 2 is held at two
+     * divergence points"). `Vhub` is the pure core's per-port record and
+     * `VhubBind` what usbport has bound to it, both indexed as
+     * `RootHub.Ports` is and both outside the topology graph (section 3.3).
+     * `VhubStarted` is nonzero once this start has stood the records up, so a
+     * resume or a recovery, which rebuild the root hub without a start, keep
+     * the hubs rather than making them again (section 3.8).
+     *
+     * The counters are the release build's reading of the feature, taken from
+     * a live guest by name through `offsets.txt` like the rest.
+     */
+    ULONG VhubStarted;
+    /*
+     * The hub port whose reset last armed a virtual hub's address-0 open, or
+     * 0. The third entitlement beside `EnumHubPort`'s root-port claim and the
+     * graph's hub-port claim, and kept exclusive with both the same way: the
+     * reset that arms one spends the others, so an address-0 open is the
+     * hub's only when the hub's reset was the last one (section 3.6).
+     */
+    ULONG VhubArmedPort;
+    ULONG VhubCreated;          /* hubs stood up: value 1 per decision, 2 per port */
+    ULONG VhubDropped;          /* value 1 hubs removed with their device       */
+    ULONG VhubOpens;            /* endpoint opens bound to a virtual hub        */
+    ULONG VhubRequests;         /* setup packets the request table answered     */
+    ULONG VhubStalls;           /* ...of which answered with a stall            */
+    ULONG VhubTransfersFailed;  /* a displaced handle, or a hub no longer there */
+    ULONG VhubPipeCompletions;  /* status-change transfers completed with a byte */
+    ULONG VhubPipeCancels;      /* ...and completed as cancelled                */
+    ULONG VhubResetsHeld;       /* resets held while a disable was owed (3.3)   */
+    ULONG VhubForcedConnects;   /* value 1 decisions that flipped (3.2)         */
+    ULONG VhubTtNamed;          /* behind-hub TT claims naming a virtual hub    */
+    XHCI_VHUB_CONFIG VhubConfig;
+    XHCI_VHUB Vhub[XHCI_MAX_ROOT_PORTS];
+    XHCI_VHUB_BINDING VhubBind[XHCI_MAX_ROOT_PORTS];
+
+    /*
      * Keeps `TrailingSignature` the **last word** of the amd64 layout, which
      * `test_packet_amd64` asserts and which is what makes the signature pair
      * bracket the whole extension. The structure holds pointers, so on amd64
@@ -8037,8 +8119,12 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
  * moderation fields appended after `RingUsed`. An `XHCISNAP` from `0.0.0.6` to
  * `1.1.0.0` refuses a `1.1.1.0` driver and says to rebuild, which is correct -
  * the tool ships in the same package as the driver it reads.
+ *
+ * **Schema 5 is task 24.3's**: the virtual hub's switch and id reads, twelve
+ * fields appended after `ImodReadback`. A `1.1.1.0` `XHCISNAP` refuses a
+ * `1.1.2.0` driver on the same terms.
  */
-#define XHCI_SNAPSHOT_SCHEMA            4UL
+#define XHCI_SNAPSHOT_SCHEMA            5UL
 
 /* Which region a window is cut from. */
 #define XHCI_SNAPSHOT_REGION_EXTENSION  0UL
@@ -8205,6 +8291,30 @@ typedef struct _XHCI_SNAPSHOT_HEADER {
     ULONG ImodRequested;
     ULONG ImodInterval;
     ULONG ImodReadback;
+    /*
+     * ---- schema 5 (task 24.3) ---------------------------------
+     *
+     * The virtual hub's switch and ids as this start read them (design record
+     * 12 section 3.1: "what was read, what was applied and the status go into
+     * the snapshot header"), so a dump from a stranger's machine says which
+     * mode the driver was in with no offset table. `XHCI_VHUB_CONFIG` widened
+     * to one ULONG per field, since every field here is one. An id's status,
+     * result and encoding mean something only when its result is not 0
+     * (XHCI_VHUB_ID_UNREAD, "not consulted") - which is every start with the
+     * switch at 0.
+     */
+    ULONG VhubSwitchStatus;
+    ULONG VhubSwitchValue;
+    ULONG VhubApplied;      /* XHCI_VHUB_MODE_*                             */
+    ULONG VhubRefused;      /* XHCI_VHUB_WHY_*                              */
+    ULONG VhubVidStatus;
+    ULONG VhubVidResult;    /* XHCI_VHUB_ID_*                               */
+    ULONG VhubVidEncoding;  /* XHCI_VHUB_ENC_*                              */
+    ULONG VhubVid;
+    ULONG VhubPidStatus;
+    ULONG VhubPidResult;
+    ULONG VhubPidEncoding;
+    ULONG VhubPid;
 } XHCI_SNAPSHOT_HEADER;
 
 /*

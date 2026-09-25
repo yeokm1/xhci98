@@ -1,4 +1,4 @@
-SIZEOF 92320
+SIZEOF 104644
 AbortsBeforeStopped 73152
 AbortsDuringCompletion 73148
 AbortsFromCompletionList 73144
@@ -404,3 +404,16 @@ TtProgrammed 72796
 TtUnresolved 72800
 UnmaskEscalations 10568
 UnmatchedEventsTotal 72948
+VhubArmedPort 92316
+VhubCreated 92320
+VhubDropped 92324
+VhubForcedConnects 92356
+VhubOpens 92328
+VhubPipeCancels 92348
+VhubPipeCompletions 92344
+VhubRequests 92332
+VhubResetsHeld 92352
+VhubStalls 92336
+VhubStarted 92312
+VhubTransfersFailed 92340
+VhubTtNamed 92360

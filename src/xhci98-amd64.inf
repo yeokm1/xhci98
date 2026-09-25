@@ -91,13 +91,17 @@ LoadOrderGroup=Base
 ; In short: the two log values default to 0 (off); XhciImodInterval250ns is
 ; the interrupt moderation interval in 250 ns units, 500 here, and 4000 when
 ; absent or outside 10-4000; EnumPropPages32 and Controller give the
-; controller its Advanced tab.
+; controller its Advanced tab; the three XhciVirtualHSHub values are the
+; experimental virtual hub's, off, with pid.codes' shared test id.
 [Xhci.AddReg.NT]
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
 HKR,,XhciImodInterval250ns,0x00010001,500
 HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
 HKR,,Controller,1,01
+HKR,,XhciVirtualHSHub,0x00010001,0
+HKR,,XhciVirtualHSHubVid,,"1209"
+HKR,,XhciVirtualHSHubPid,,"0001"
 
 ; No temporary-name field: the NT copy queue replaces a file in use itself.
 [Xhci.CopyFiles]

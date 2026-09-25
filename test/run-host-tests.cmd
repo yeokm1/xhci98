@@ -55,8 +55,8 @@ rem                  fed the measured setup packets, value 1's decision, the
 rem                  two views of one port and their suspend merge, value 2's
 rem                  hub from start to stop, and rule 2's off state. It links
 rem                  xhci_topo.c for the vectors that put a real hub behind a
-rem                  virtual one. Nothing in the driver calls it until 24.3.3
-rem                  wires it in, and src\sources does not build it until then.
+rem                  virtual one. Sub-task 24.3.3 wired it into the driver, so
+rem                  test_init links it too and src\sources builds it.
 rem   test_init    - the driver's MMIO-facing code against a synthetic
 rem                  controller: the init sequence (src\xhci_init.c), the
 rem                  interrupt path (src\xhci_evt.c), the asynchronous command
@@ -173,7 +173,7 @@ rem are one subject and a vector that stopped at the table would not have tested
 rem the number the hardware sees.
 call :run test_desc "test_desc.c ..\src\xhci_desc.c ..\src\xhci_ctx.c ..\src\xhci_mem.c"
 call :run test_vhub "test_vhub.c ..\src\xhci_vhub.c ..\src\xhci_topo.c"
-call :run test_init "test_init.c ..\src\xhci_init.c ..\src\xhci_evt.c ..\src\xhci_cmd.c ..\src\xhci_rh.c ..\src\xhci_slot.c ..\src\xhci_probe.c ..\src\xhci_topo.c ..\src\xhci_desc.c ..\src\xhci_log.c ..\src\xhci_pci.c ..\src\xhci_caps.c ..\src\xhci_mem.c ..\src\xhci_ring.c ..\src\xhci_port.c ..\src\xhci_ctx.c ..\src\xhci_xfer.c ..\src\xhci_dispatch.c"
+call :run test_init "test_init.c ..\src\xhci_init.c ..\src\xhci_evt.c ..\src\xhci_cmd.c ..\src\xhci_rh.c ..\src\xhci_slot.c ..\src\xhci_probe.c ..\src\xhci_topo.c ..\src\xhci_desc.c ..\src\xhci_vhub.c ..\src\xhci_log.c ..\src\xhci_pci.c ..\src\xhci_caps.c ..\src\xhci_mem.c ..\src\xhci_ring.c ..\src\xhci_port.c ..\src\xhci_ctx.c ..\src\xhci_xfer.c ..\src\xhci_dispatch.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

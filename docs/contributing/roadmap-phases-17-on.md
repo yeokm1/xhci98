@@ -816,7 +816,16 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     vendor id of `0000`; each refusal applying the switch as 0 and recording
     why; the switch off never consulting them; and a valid pair reaching
     the device descriptor and nothing else; and the off-state vectors that hold the page's rule 2.
-  - [ ] **24.3.3 - The driver**, the page's `-A`: the virtual device records, in
+  - [x] **24.3.3 - The driver**, the page's `-A`. *(done 2026-09-25: the
+    root-hub half in `src/xhci_rh.c` and the device half in
+    `src/xhci_slot.c`, both carrying out the core's verdicts;
+    `src/xhci_vhub.c` in `src/sources`; both INFs and the INF gate; snapshot
+    schema 5 and `XHCISNAP`; six vectors in `test/test_init.c`, caught by
+    eleven driver mutations; host tests, all three x86 flavours and the amd64
+    build green through every gate. Record 12 section 10 is what the wiring
+    decided, and `runs/run-24.md` the record. Owed by 24.5: the download's
+    readme template still names snapshot schema 4, which `make-release.ps1`
+    refuses.)* The virtual device records, in
     a fixed per-root-port array of their own outside the topology graph, the
     decision point, the synthetic completion path through the deferred
     completion list, the status-change pipe, the suspend merge, value 2's

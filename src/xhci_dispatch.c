@@ -410,6 +410,20 @@ XHCI_C_ASSERT(packet_is_whole_words,
 #define XHCI_IMOD_VALUE_BYTES (22 * 2)
 
 /*
+ * Task 24.3's three values (design record 12 section 3.1), in the same key and
+ * read by the same service. The switch is a DWORD like the two above; the ids
+ * are strings, read into a fixed buffer the pure core parses
+ * (`XhciVhubParseId`). 16 characters and 19, so (16 + 1) * 2 and (19 + 1) * 2
+ * by the length rule above.
+ */
+#define XHCI_VHUB_VALUE_NAME        L"XhciVirtualHSHub"
+#define XHCI_VHUB_VALUE_BYTES       (17 * 2)
+#define XHCI_VHUB_VID_VALUE_NAME    L"XhciVirtualHSHubVid"
+#define XHCI_VHUB_VID_VALUE_BYTES   (20 * 2)
+#define XHCI_VHUB_PID_VALUE_NAME    L"XhciVirtualHSHubPid"
+#define XHCI_VHUB_PID_VALUE_BYTES   (20 * 2)
+
+/*
  * How much of the ring one DebugView emit carries. Small and a loop, not one
  * buffer the size of the ring: MSVC emits a `__chkstk` probe for a local of a
  * page or more and the Win2000 DDK's driver libraries do not provide one -
@@ -646,6 +660,62 @@ static VOID xhciImodRead(PXHCI_EXTENSION ext)
     if (status == MP_STATUS_SUCCESS) {
         ext->ImodRequested = value;
     }
+}
+
+/*
+ * Read task 24.3's switch and, only when it asks for a hub, the two id strings
+ * (design record 12 section 3.1). A routine of its own for the reason the
+ * moderation read has one, and with every property of both: the PASSIVE-only
+ * service, the same key, a re-read at every start, and **nothing here may fail
+ * a start** - a missing value, a failed read and a NULL service all leave the
+ * feature off and the driver starting as the 24.1 build does.
+ *
+ * What to apply is the pure core's decision, not this function's: it records
+ * the switch read, answers whether the ids are to be consulted at all - so
+ * "never with the switch off" is the core's return and nothing else - and
+ * applies the mode only when both parse. The ids are read into zeroed buffers
+ * sized for the longest accepted form (`XHCI_VHUB_ID_BUF_BYTES`); the service
+ * copies exactly that many bytes whatever the value holds, and fails a value
+ * longer, and the core reads only up to the first terminator.
+ *
+ * IRQL: PASSIVE_LEVEL.
+ */
+static VOID xhciVhubRead(PXHCI_EXTENSION ext)
+{
+    UCHAR vid[XHCI_VHUB_ID_BUF_BYTES];
+    UCHAR pid[XHCI_VHUB_ID_BUF_BYTES];
+    ULONG value;
+    ULONG i;
+    MPSTATUS status;
+    MPSTATUS vidStatus;
+    MPSTATUS pidStatus;
+
+    if (XhciRegPacket.UsbPortGetMiniportRegistryKeyValue == NULL) {
+        (VOID)XhciVhubConfigSwitch(&ext->VhubConfig, MP_STATUS_FAILURE, 0);
+        return;
+    }
+
+    value = 0;
+    status = XhciRegPacket.UsbPortGetMiniportRegistryKeyValue(
+        ext, TRUE, XHCI_VHUB_VALUE_NAME,
+        (ULONG_PTR)XHCI_VHUB_VALUE_BYTES, &value,
+        (ULONG_PTR)sizeof(value));
+    if (!XhciVhubConfigSwitch(&ext->VhubConfig, (ULONG)status, value)) {
+        return;
+    }
+
+    for (i = 0; i < XHCI_VHUB_ID_BUF_BYTES; i++) {
+        vid[i] = 0;
+        pid[i] = 0;
+    }
+    vidStatus = XhciRegPacket.UsbPortGetMiniportRegistryKeyValue(
+        ext, TRUE, XHCI_VHUB_VID_VALUE_NAME,
+        (ULONG_PTR)XHCI_VHUB_VID_VALUE_BYTES, vid, (ULONG_PTR)sizeof(vid));
+    pidStatus = XhciRegPacket.UsbPortGetMiniportRegistryKeyValue(
+        ext, TRUE, XHCI_VHUB_PID_VALUE_NAME,
+        (ULONG_PTR)XHCI_VHUB_PID_VALUE_BYTES, pid, (ULONG_PTR)sizeof(pid));
+    (VOID)XhciVhubConfigIds(&ext->VhubConfig, (ULONG)vidStatus, vid,
+                            (ULONG)pidStatus, pid, XHCI_VHUB_ID_BUF_BYTES);
 }
 
 
@@ -1120,6 +1190,21 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
     xhciImodRead(ext);
     XhciLogNote(ext, "imod.status", ext->ImodStatus);
     XhciLogNote(ext, "imod.requested", ext->ImodRequested);
+    /*
+     * Task 24.3's switch, here for the same reason: `XhciInitController` builds
+     * the root hub, and the root hub is where a hub at value 2 is stood up. The
+     * notes say what was asked for and what was applied, and why not, beside
+     * the snapshot header that carries the same numbers.
+     */
+    xhciVhubRead(ext);
+    XhciLogNote(ext, "vhub.switch",
+                (ext->VhubConfig.SwitchStatus << 16) |
+                    (ext->VhubConfig.SwitchValue & 0xFFFFUL));
+    XhciLogNote(ext, "vhub.applied",
+                ((ULONG)ext->VhubConfig.Refused << 8) |
+                    (ULONG)ext->VhubConfig.Applied);
+    XhciLogNote(ext, "vhub.ids",
+                ((ULONG)ext->VhubConfig.Vid << 16) | (ULONG)ext->VhubConfig.Pid);
     /*
      * **`XhciLogNoteAddress`, because that value is a kernel pointer.** It is
      * usbport's own `USBPORT_RESOURCES` block, and the ladder's boundary
@@ -2980,6 +3065,24 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
     XHCI_DBG_VALUE_CHANGED("imod value requested", ext->ImodRequested);
     XHCI_DBG_VALUE_CHANGED("imod interval in force", ext->ImodInterval);
     XHCI_DBG_VALUE_CHANGED("imod readback", ext->ImodReadback);
+    /*
+     * Task 24.3's virtual hubs (design record 12), one site per counter so the
+     * offset table carries each: every one stays 0 with the switch off, which
+     * is the reading rule 2 is checked against in a guest.
+     */
+    XHCI_DBG_VALUE_CHANGED("vhub started", ext->VhubStarted);
+    XHCI_DBG_VALUE_CHANGED("vhub armed port", ext->VhubArmedPort);
+    XHCI_DBG_VALUE_CHANGED("vhub hubs created", ext->VhubCreated);
+    XHCI_DBG_VALUE_CHANGED("vhub hubs dropped", ext->VhubDropped);
+    XHCI_DBG_VALUE_CHANGED("vhub endpoint opens", ext->VhubOpens);
+    XHCI_DBG_VALUE_CHANGED("vhub requests answered", ext->VhubRequests);
+    XHCI_DBG_VALUE_CHANGED("vhub requests stalled", ext->VhubStalls);
+    XHCI_DBG_VALUE_CHANGED("vhub transfers failed", ext->VhubTransfersFailed);
+    XHCI_DBG_VALUE_CHANGED("vhub pipe completions", ext->VhubPipeCompletions);
+    XHCI_DBG_VALUE_CHANGED("vhub pipe cancels", ext->VhubPipeCancels);
+    XHCI_DBG_VALUE_CHANGED("vhub resets held", ext->VhubResetsHeld);
+    XHCI_DBG_VALUE_CHANGED("vhub forced connects", ext->VhubForcedConnects);
+    XHCI_DBG_VALUE_CHANGED("vhub TT pairs naming a hub", ext->VhubTtNamed);
     XHCI_DBG_VALUE_CHANGED("log enabled", ext->Log.Enabled);
     XHCI_DBG_VALUE_CHANGED("log records appended", ext->Log.Appends);
     XHCI_DBG_VALUE_CHANGED("log records suppressed", ext->Log.Suppressed);
@@ -4635,6 +4738,18 @@ static MPSTATUS NTAPI xhciPassThru(PVOID miniPortExtension,
     header->ImodRequested = 0;
     header->ImodInterval = 0;
     header->ImodReadback = 0;
+    header->VhubSwitchStatus = 0;
+    header->VhubSwitchValue = 0;
+    header->VhubApplied = 0;
+    header->VhubRefused = 0;
+    header->VhubVidStatus = 0;
+    header->VhubVidResult = 0;
+    header->VhubVidEncoding = 0;
+    header->VhubVid = 0;
+    header->VhubPidStatus = 0;
+    header->VhubPidResult = 0;
+    header->VhubPidEncoding = 0;
+    header->VhubPid = 0;
 
     if (requestSignature != XHCI_SNAPSHOT_REQUEST_SIGNATURE) {
         header->Status |= XHCI_SNAPSHOT_S_BAD_REQUEST;
@@ -4665,6 +4780,18 @@ static MPSTATUS NTAPI xhciPassThru(PVOID miniPortExtension,
     header->ImodRequested = ext->ImodRequested;
     header->ImodInterval = ext->ImodInterval;
     header->ImodReadback = ext->ImodReadback;
+    header->VhubSwitchStatus = ext->VhubConfig.SwitchStatus;
+    header->VhubSwitchValue = ext->VhubConfig.SwitchValue;
+    header->VhubApplied = ext->VhubConfig.Applied;
+    header->VhubRefused = ext->VhubConfig.Refused;
+    header->VhubVidStatus = ext->VhubConfig.VidStatus;
+    header->VhubVidResult = ext->VhubConfig.VidResult;
+    header->VhubVidEncoding = ext->VhubConfig.VidEncoding;
+    header->VhubVid = ext->VhubConfig.Vid;
+    header->VhubPidStatus = ext->VhubConfig.PidStatus;
+    header->VhubPidResult = ext->VhubConfig.PidResult;
+    header->VhubPidEncoding = ext->VhubConfig.PidEncoding;
+    header->VhubPid = ext->VhubConfig.Pid;
 
     /*
      * **The tear detector, and it is a SUM of four counters rather than one.**

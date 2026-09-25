@@ -59,10 +59,12 @@ things a reader should know before decoding a dump:
   user boundary. The derivation and the posture are design record 08 §13.2's
   amendment; the door itself is `docs/usb-xhci-info/usbport-miniport-abi.md`,
   "Reachability from user mode".
-- The wire format is at schema 4 since `1.1.1.0` (roadmap task 23.4 appended
-  the moderation interval's four fields), with a 26-ULONG, 104-byte header, and
+- The wire format is at schema 5 in the tree since roadmap task 24.3.3
+  (2026-09-25), which appended the virtual hub's switch and id reads - twelve
+  fields - to schema 4's header; schema 4 (roadmap task 23.4's moderation
+  interval) is what `1.1.1.0` shipped. The header is 38 ULONGs, 152 bytes, and
   `sizeof(XHCI_EXTENSION)` is the `SIZEOF` line of the `offsets.txt`
-  regenerated from the tree (over 90,000 bytes). A dump decodes only against
+  regenerated from the tree (over 100,000 bytes since the same task). A dump decodes only against
   an `offsets.txt` regenerated from the same tree (section 7).
 
 The tool refuses any driver whose reply signature, schema version or header
@@ -124,11 +126,12 @@ whatever set you build, which is the check section 11 ends on.
 
 ## 4. The wire format
 
-`src/xhci.h` is the wire format's owner. It carries schema 4, a 104-byte,
-26-ULONG header, and the field-by-field reasons for each field. Read it, not
+`src/xhci.h` is the wire format's owner. It carries schema 5, a 152-byte,
+38-ULONG header, and the field-by-field reasons for each field. Read it, not
 this, before writing a decoder. Schema 3 (88 bytes, 22 ULONGs) was the format
-from `0.0.0.6` to `1.1.0.0`; schema 4 appends four fields and changes none, and
-a tool of either schema refuses a driver of the other.
+from `0.0.0.6` to `1.1.0.0`, and schema 4 (104 bytes, 26 ULONGs) `1.1.1.0`'s;
+each later schema appends fields and changes none, and a tool of one schema
+refuses a driver of another.
 
 The header names the signature, schema and header size; the status bits; the
 region, offset, region size and payload size of the window;
@@ -136,8 +139,11 @@ region, offset, region size and payload size of the window;
 detector (section 6); the build flags; and a block a reader can print with no
 offset table at all: `Flavour`, `VerbosityRead`/`VerbosityApplied`, each
 switch's `MPSTATUS`, `SwitchRead`, the note ring's offset, capacity, head
-and fill, and since schema 4 the moderation interval: the value's read status,
-the value read, the interval the start wrote, and what IMOD read back.
+and fill, since schema 4 the moderation interval: the value's read status,
+the value read, the interval the start wrote, and what IMOD read back; and
+since schema 5 the virtual hub (design record 12 section 3.1): the switch's
+read status and value, the mode applied and why a value was refused, and
+each id's read status, verdict, encoding and value.
 
 That last block is what
 the plain-text companion is built out of. It is not the gather table design

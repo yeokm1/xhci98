@@ -50,6 +50,12 @@ INCLUDES=$(BASEDIR)\inc;$(BASEDIR)\inc\ddk
 # dereferences a pointer usbport owns. The caller holds the controller lock
 # across every call; nothing in this file takes one.
 #
+# xhci_vhub.c is task 24.3's virtual USB 2.0 hub (design record 12), pure on
+# the same terms: the switch and id parsing, the request table and the
+# per-port state, each call returning a verdict the root-hub and device layers
+# carry out. It joined this list in sub-task 24.3.3, when those layers were
+# wired to it; until then only its host suite built it.
+#
 # xhci_pci.c is the other side of that split and the only file that touches
 # BAR0 or PCI config space; xhci_init.c is the controller start-up sequence
 # written against it, xhci_evt.c is the interrupt path (ISR body and event-
@@ -100,6 +106,7 @@ SOURCES=xhci_mem.c    \
         xhci_xfer.c   \
         xhci_topo.c   \
         xhci_desc.c   \
+        xhci_vhub.c   \
         xhci_log.c    \
         xhci_dbg.c    \
         xhci_pci.c    \

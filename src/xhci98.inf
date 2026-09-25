@@ -83,13 +83,17 @@ HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
 HKR,,XhciImodInterval250ns,0x00010001,500
+HKR,,XhciVirtualHSHub,0x00010001,0
+HKR,,XhciVirtualHSHubVid,,"1209"
+HKR,,XhciVirtualHSHubPid,,"0001"
 
 ; ------------------------------------------------------------------
 ; Registry values, written on every install path
 ; ------------------------------------------------------------------
 ;
-; All are DWORDs (0x00010001) in the device's software key, read by the driver
-; at start through usbport's UsbPortGetMiniportRegistryKeyValue.
+; All are in the device's software key, read by the driver at start through
+; usbport's UsbPortGetMiniportRegistryKeyValue. All are DWORDs (0x00010001) but
+; the virtual hub's two ids, which are strings.
 ;
 ;   XhciLogVerbosity       0 off (the default), 1 counters, 2 adds the log,
 ;                          3 adds the port table, 4 adds kernel addresses.
@@ -100,6 +104,14 @@ HKR,,XhciImodInterval250ns,0x00010001,500
 ;                          (IMODI). 500 is 125 us. Absent, unreadable, or
 ;                          outside 10-4000 means 4000 (1 ms, the hardware
 ;                          reset value), substituted rather than clamped.
+;   XhciVirtualHSHub       EXPERIMENTAL, FOR PRIVATE TESTING ONLY. 0 off (the
+;                          default); 1 puts a virtual USB 2.0 hub above a Full
+;                          or Low Speed device on a root port; 2 puts one on
+;                          every USB 2.0 port. Any other value means 0.
+;   XhciVirtualHSHubVid    the virtual hub's vendor and product id, as four
+;   XhciVirtualHSHubPid    hexadecimal digits. 1209:0001 is pid.codes' shared
+;                          test id, not one allocated to this project. With
+;                          either missing or invalid the hub is off.
 ;
 ; EnumPropPages32 and Controller give the NT controller its Advanced tab,
 ; drawn by usbui.dll, as the NT references write them for EHCI. On Vista and
@@ -111,6 +123,9 @@ HKR,,XhciLogDebugView,0x00010001,0
 HKR,,XhciImodInterval250ns,0x00010001,500
 HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
 HKR,,Controller,1,01
+HKR,,XhciVirtualHSHub,0x00010001,0
+HKR,,XhciVirtualHSHubVid,,"1209"
+HKR,,XhciVirtualHSHubPid,,"0001"
 
 ; ------------------------------------------------------------------
 ; Windows 2000 and 32-bit Windows XP (.NTx86)

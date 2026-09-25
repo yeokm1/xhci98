@@ -90,6 +90,9 @@ reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010001|0|remove
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010001|500|remove
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBControllerPropPageProvider"|remove
 reg|Windows XP x64|Xhci.AddReg.NT|HKR||Controller|1|01|remove
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciVirtualHSHub|0x00010001|0|remove
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciVirtualHSHubVid||"1209"|remove
+reg|Windows XP x64|Xhci.AddReg.NT|HKR||XhciVirtualHSHubPid||"0001"|remove
 service|Windows XP x64|xhci98|Xhci.AddService|0x00000002|remove
 servicevalue|Windows XP x64|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
 servicevalue|Windows XP x64|xhci98|Xhci.AddService|ServiceType|1
@@ -104,6 +107,9 @@ reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010001|0|re
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010001|500|remove
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBControllerPropPageProvider"|remove
 reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||Controller|1|01|remove
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciVirtualHSHub|0x00010001|0|remove
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciVirtualHSHubVid||"1209"|remove
+reg|Windows Vista and 7 x64|Xhci.AddReg.NT|HKR||XhciVirtualHSHubPid||"0001"|remove
 service|Windows Vista and 7 x64|xhci98|Xhci.AddService|0x00000002|remove
 servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
 servicevalue|Windows Vista and 7 x64|xhci98|Xhci.AddService|ServiceType|1

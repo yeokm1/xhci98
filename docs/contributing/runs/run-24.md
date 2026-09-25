@@ -953,3 +953,83 @@ today's, over-current latches in both views, every root reset owns its own
 completion by owner and generation, a timed-out re-decision on a hub-mode
 port forces the connect change, and `SET_CONFIGURATION` sets the hub's
 state. Record 12 sections 3.1 to 3.7, 4, 5 and 8 carry it.
+
+## 24.3.3 - The driver
+
+Done 2026-09-25, on branch `24.3`. No boot; host tests and the build gates
+only. Design record 12 section 10 is what the wiring decided and why; this is
+what was built and how it was checked.
+
+**What was built.** The pure core joined `src/sources`. The extension gained
+the per-port records (`Vhub`), what usbport has bound to each
+(`VhubBind`), the switch and ids as read (`VhubConfig`) and thirteen
+counters, all after `ImodReadback`; `XHCI_ENDPOINT` gained `VhubPort`. The
+root-hub half (`src/xhci_rh.c`) carries out the core's verdicts under the
+lock that decided them: the refresh routes a reset's end by its owner and
+generation and lets the views absorb what it latched, `RH_GetPortStatus`
+reports the upstream view, the six feature callbacks and the change clear
+go through the core with the switch applied, the root hub's build stands
+the hubs up once per start and keeps them across a resume or a recovery,
+and a reset held for a disable starts when the disable is collected. To
+carry a verdict out in one lock hold, `xhciRhPortOperation` and
+`xhciRhStartOperation` were split into lock-held bodies with the callbacks
+wrapped round them, the deferred work still run only where it ran before.
+The device half (`src/xhci_slot.c`) takes a hub's endpoint opens before
+either opener sees them, answers its default pipe from the request table,
+holds its status-change transfer, and handles the abort and the REMOVE of
+both; every answer is completed through the ordinary completion list. The
+registry read is `xhciVhubRead` in `src/xhci_dispatch.c`, beside the
+moderation read, with three start notes; the snapshot header is schema 5,
+and `XHCISNAP` was rebuilt to print it. Both INFs write
+`XhciVirtualHSHub` as DWORD 0 and the ids as the quoted strings `"1209"`
+and `"0001"` on every install path; the INF gate's `VAL-*` rules require
+them, with eight new self-test cases, and both footprints were regenerated.
+The matrix's offset tables were regenerated with a print site for each new
+counter: `SIZEOF` 104,644 on x86 and 111,968 on amd64 (92,320 and 95,560
+before), and design record 04's size table follows.
+
+**The vectors.** Six functions at the end of `test/test_init.c`, every
+reset in them driven through `RH_SetFeaturePortReset` and the model's own
+completion so a virtual hub owns it: rule 2 over the driver (the switch
+absent and at 0 give today's report, claim and record, and never read the
+ids; a value of 3, a missing vendor id and a five-digit product id each
+leave the feature off and say why; a single-byte `0x` pair is accepted);
+value 1 end to end on a Full-Speed device (the hub's open told apart from
+the device's, the hub's traffic reaching neither snoop, the descriptor
+bytes, a serial number stalled, port 1's resets physical with the root port
+quiet, the device on today's root-port record, found again across a
+repeated reset and a re-open, and a port-1 disable leaving the upstream
+enabled); value 1 with a High-Speed device on today's path; value 2's
+root-port reset with a transfer in flight on a port that will not drop PED
+(the slot, the ring and the transfer kept until the confirmation, a port-1
+reset held meanwhile and started when it is collected); the held
+status-change transfer found by an abort, answered on a REMOVE, and the
+hub dropped with its device at 1 with nothing of its views left latched on
+the root port; and a TT pair naming a virtual hub counted as agreed. The
+model gained one knob for them, `stuckPortPed`, a port that ignores a
+disabling PED write. `test_init` now runs 20,028 checks.
+
+**Mutations.** Eleven driver mutations, each run against the whole suite:
+the hub's open never claimed (89 failures), the refresh ignoring a hub's
+reset routing (68), the root report not the upstream view (5), value 2's
+reset running no disable (7), a held reset never collected (1), the pipe
+never completing (16), an abort not finding the held pipe (4), a TT pair
+naming a virtual hub counted as a disagreement (3), the ids read with the
+switch at 0 (3), the shadow's strip removed (1, after a vector was added
+for it: the first run of that mutation passed, because the report masks
+those bits while the hub stands, and nothing looked after it was dropped),
+and a hub's answer delivered from inside `SubmitTransfer` (32). A first
+form of the last - zeroing `SubmitDepth` - also passed, and was not a real
+test: the completion list's second gate, the pass epoch, still holds such a
+completion, so that mutation removed one of two protections.
+
+**Result.** Host tests PASSED, the amd64 legs included; `build-driver.cmd
+all` and `release -amd64` green through every gate with no new import
+(the amd64 build's five warnings are `build.exe`'s own notice, as
+`run-21.md` records); the INF gate on both files and its 596 self-test
+checks; `XHCISNAP`'s self-test.
+
+**Owed.** 24.3.4's readings, the first being which encoding a `REG_SZ`
+arrives in on Windows 98 SE and ME (`XHCISNAP` now prints it). 24.5's cut
+has to rewrite the download's readme sentence that names snapshot schema 4,
+which `make-release.ps1` refuses as stale.

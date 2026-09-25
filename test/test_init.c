@@ -39,6 +39,7 @@
  * engine's vocabulary, not the DDK's (batch 6-A: the Win2000 DDK does not
  * define three of the names ReactOS's usbehci uses). */
 #include "../src/xhci_xfer.h"
+#include "../src/xhci_version.h"
 #include "test_harness.h"
 
 /* ------------------------------------------------------------------ */
@@ -222,7 +223,9 @@ static ULONG flushedAtEvents;
  * between the assert and deassert passes observable, because it is the only one
  * where both passes write.
  *
- * `stuckPortPp` is a port that ignores writes to PP; `refuseRun` a controller
+ * `stuckPortPp` is a port that ignores writes to PP, and `stuckPortPed` one
+ * that ignores a disabling write to PED (task 24.3's held-disable vectors);
+ * `refuseRun` a controller
  * whose HCHalted does not follow R/S; `hchClearAfterReset` one that comes out
  * of HCRST not halted.
  */
@@ -232,6 +235,7 @@ static ULONG flushedAtEvents;
 
 static ULONG resetPortPower;
 static ULONG stuckPortPp;
+static ULONG stuckPortPed;
 static ULONG refuseRun;
 static ULONG hchClearAfterReset;
 
@@ -839,6 +843,7 @@ static void hc_build(void)
 
     resetPortPower = PP_ALL;
     stuckPortPp = 0;
+    stuckPortPed = 0;
     refuseRun = 0;
     hchClearAfterReset = 0;
     deviceAttachedAtRun = 0;
@@ -1612,7 +1617,7 @@ VOID XhciHostWriteRegister(PULONG address, ULONG value)
          * is what a first version assumed - and which made a disable look able
          * to terminate a reset.
          */
-        if ((value & XHCI_PORTSC_PED) != 0) {
+        if ((value & XHCI_PORTSC_PED) != 0 && (ULONG)port != stuckPortPed) {
             current &= ~XHCI_PORTSC_PED;
         }
 
@@ -2502,6 +2507,22 @@ static ULONG logSwitchAbsent;
 static ULONG imodValue;
 static MPSTATUS imodStatus;
 static ULONG imodReads;
+/*
+ * Task 24.3's switch and its two id strings, through the same stub. The switch
+ * is absent by default after log_reset_host, which is a machine whose INF never
+ * ran and so the feature off (design record 12 section 3.1). The ids are the
+ * service's raw copy: `vhubVidBytes` is what a read hands back, exactly
+ * XHCI_VHUB_ID_BUF_BYTES of it whatever the string holds, since the service
+ * copies the byte count asked for (the ABI document).
+ */
+static ULONG vhubSwitchValue;
+static MPSTATUS vhubSwitchStatus;
+static ULONG vhubSwitchReads;
+static UCHAR vhubVidBytes[XHCI_VHUB_ID_BUF_BYTES];
+static UCHAR vhubPidBytes[XHCI_VHUB_ID_BUF_BYTES];
+static MPSTATUS vhubVidStatus;
+static MPSTATUS vhubPidStatus;
+static ULONG vhubIdReads;
 
 static MPSTATUS NTAPI logRegistryValue(PVOID miniPortExtension,
                                        ULONG softwareKey,
@@ -6755,6 +6776,63 @@ static ULONG wide_equals(const WCHAR *wide, const char *ascii)
     return (wide[i] == 0) ? 1UL : 0UL;
 }
 
+/*
+ * The virtual hub's three values back to a machine whose INF never ran: the
+ * switch absent, and the ids absent too, so a vector that turns the switch on
+ * says which ids it means. `vhub_set_ids` is the INF's pair, in whichever
+ * encoding the vector names - the NT registry's UTF-16, or a single-byte form,
+ * since which one Windows 98's NTKERN hands over is 24.3.4's first reading.
+ */
+static void vhub_reset_registry(void)
+{
+    ULONG i;
+
+    vhubSwitchValue = 0;
+    vhubSwitchStatus = MP_STATUS_FAILURE;
+    vhubSwitchReads = 0;
+    vhubVidStatus = MP_STATUS_FAILURE;
+    vhubPidStatus = MP_STATUS_FAILURE;
+    vhubIdReads = 0;
+    for (i = 0; i < XHCI_VHUB_ID_BUF_BYTES; i++) {
+        vhubVidBytes[i] = 0xCC;
+        vhubPidBytes[i] = 0xCC;
+    }
+}
+
+static void vhub_put_id(UCHAR *bytes, const char *text, ULONG wide)
+{
+    ULONG i;
+
+    for (i = 0; i < XHCI_VHUB_ID_BUF_BYTES; i++) {
+        bytes[i] = 0xCC;
+    }
+    for (i = 0; ; i++) {
+        if (wide) {
+            if ((i + 1) * 2 > XHCI_VHUB_ID_BUF_BYTES) {
+                break;
+            }
+            bytes[i * 2] = (UCHAR)text[i];
+            bytes[i * 2 + 1] = 0;
+        } else {
+            if (i + 1 > XHCI_VHUB_ID_BUF_BYTES) {
+                break;
+            }
+            bytes[i] = (UCHAR)text[i];
+        }
+        if (text[i] == '\0') {
+            break;
+        }
+    }
+}
+
+static void vhub_set_ids(const char *vid, const char *pid, ULONG wide)
+{
+    vhub_put_id(vhubVidBytes, vid, wide);
+    vhub_put_id(vhubPidBytes, pid, wide);
+    vhubVidStatus = MP_STATUS_SUCCESS;
+    vhubPidStatus = MP_STATUS_SUCCESS;
+}
+
 static MPSTATUS NTAPI logRegistryValue(PVOID miniPortExtension,
                                        ULONG softwareKey,
                                        PVOID valueName,
@@ -6781,9 +6859,52 @@ static MPSTATUS NTAPI logRegistryValue(PVOID miniPortExtension,
     CHECK_EQ(softwareKey, 1,
              "the log's values are read with BOOL = TRUE, i.e. the driver's "
              "own software key");
-    CHECK_EQ(outBytes, 4, "every value is a REG_DWORD");
 
     name = (const WCHAR *)valueName;
+
+    /*
+     * Task 24.3's three: `XhciVirtualHSHub` and its two ids, character 4
+     * separating them from the log's and the moderation value. The switch is
+     * a DWORD; the ids are strings read into the parser's fixed buffer.
+     */
+    if (name[4] == 'V') {
+        ULONG i;
+
+        if (wide_equals(name, "XhciVirtualHSHub")) {
+            vhubSwitchReads++;
+            CHECK_EQ(nameBytes, 34,
+                     "XhciVirtualHSHub's name length is its bytes including "
+                     "the NUL");
+            CHECK_EQ(outBytes, 4, "the virtual hub's switch is a REG_DWORD");
+            if (vhubSwitchStatus == MP_STATUS_SUCCESS) {
+                *(ULONG *)out = vhubSwitchValue;
+            }
+            return vhubSwitchStatus;
+        }
+        vhubIdReads++;
+        CHECK_EQ(nameBytes, 40,
+                 "each id's name length is its bytes including the NUL");
+        CHECK_EQ(outBytes, XHCI_VHUB_ID_BUF_BYTES,
+                 "an id is read into the parser's whole buffer");
+        if (wide_equals(name, "XhciVirtualHSHubVid")) {
+            if (vhubVidStatus == MP_STATUS_SUCCESS) {
+                for (i = 0; i < XHCI_VHUB_ID_BUF_BYTES; i++) {
+                    ((UCHAR *)out)[i] = vhubVidBytes[i];
+                }
+            }
+            return vhubVidStatus;
+        }
+        CHECK(wide_equals(name, "XhciVirtualHSHubPid"),
+              "the only three virtual hub values this driver reads");
+        if (vhubPidStatus == MP_STATUS_SUCCESS) {
+            for (i = 0; i < XHCI_VHUB_ID_BUF_BYTES; i++) {
+                ((UCHAR *)out)[i] = vhubPidBytes[i];
+            }
+        }
+        return vhubPidStatus;
+    }
+
+    CHECK_EQ(outBytes, 4, "every other value is a REG_DWORD");
 
     /* Task 23.4's value: `XhciImod...` against the log's `XhciLog...`, so
      * character 4 separates the two families. */
@@ -6859,6 +6980,7 @@ static void log_reset_host(void)
     imodValue = 0;
     imodStatus = MP_STATUS_FAILURE;
     imodReads = 0;
+    vhub_reset_registry();
     XhciLogHostAtPassive = 1;
     XhciLogHostDebugViewCalls = 0;
     XhciLogHostDebugViewTotal = 0;
@@ -30210,6 +30332,800 @@ static void test_recovery_delivery_loss(void)
     deliver_events();
 }
 
+/* ------------------------------------------------------------------ */
+/* Task 24.3.3: the virtual hub wired into the driver (design record 12) */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The vectors roadmap task 24.3.2 handed on because they need the driver
+ * around the pure core: the hub's and the device's address-0 opens told apart,
+ * the root-port record found again across a re-open, a repeated reset and an
+ * address reused after a disown, the snoops never seeing a virtual address,
+ * the synthetic completions delivered through the deferred list and never from
+ * inside SubmitTransfer, the held status-change transfer found by an abort, the
+ * root-port reset at value 2 holding the slot and its buffers until the PED
+ * confirmation, and rule 2 - the switch absent or 0 is today's driver.
+ *
+ * Every reset here goes through `RH_SetFeaturePortReset` and the model's own
+ * completion, not `slot_reset_port`'s synthetic PRC (whose MODEL SEAM note
+ * says why that matters): a virtual hub routes a reset's end by the generation
+ * it was armed under, so a PRC nothing armed is, correctly, nobody's.
+ */
+static XHCI_ENDPOINT vhubEp0;
+static XHCI_ENDPOINT vhubPipe;
+static XHCI_TRANSFER vhubPipeTransfer;
+static USBPORT_TRANSFER_PARAMETERS vhubPipeParams;
+static USBPORT_SCATTER_GATHER_LIST vhubPipeSg;
+static UCHAR vhubData[64];
+static UCHAR vhubPipeData[4];
+
+/* A start with the switch at `value` and the INF's ids, as the NT registry
+ * hands them over. */
+static void vhub_start(ULONG value)
+{
+    vhub_reset_registry();
+    vhubSwitchStatus = MP_STATUS_SUCCESS;
+    vhubSwitchValue = value;
+    vhub_set_ids("1209", "0001", 1);
+    enable_start(0);
+    deliver_events();               /* the No Op self-test */
+}
+
+static ULONG vhub_xport(ULONG hubPort)
+{
+    return XhciRootHubPortOf(&ext.RootHub, hubPort);
+}
+
+/* A device arriving on a root port: connected, not enabled, CSC raised, and
+ * the Port Status Change Event that announces it. */
+static void vhub_plug(ULONG hubPort, ULONG psiv)
+{
+    mmio[HC_PORTSC(vhub_xport(hubPort)) / 4] =
+        XHCI_PORTSC_PP | XHCI_PORTSC_CCS | XHCI_PORTSC_CSC |
+        (psiv << XHCI_PORTSC_SPEED_SHIFT);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE,
+                  vhub_xport(hubPort) << 24, 0);
+    deliver_events();
+}
+
+static void vhub_unplug(ULONG hubPort)
+{
+    mmio[HC_PORTSC(vhub_xport(hubPort)) / 4] &=
+        ~(XHCI_PORTSC_CCS | XHCI_PORTSC_PED | XHCI_PORTSC_SPEED_MASK);
+    mmio[HC_PORTSC(vhub_xport(hubPort)) / 4] |= XHCI_PORTSC_CSC;
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE,
+                  vhub_xport(hubPort) << 24, 0);
+    deliver_events();
+}
+
+/* usbhub's RH_SetFeaturePortReset, then the event a completed physical reset
+ * raises. A synthetic one (value 2) raises nothing, and the event finds
+ * nothing new. */
+static MPSTATUS vhub_root_reset(ULONG hubPort)
+{
+    MPSTATUS status;
+
+    status = XhciRegPacket.RH_SetFeaturePortReset(&ext, (USHORT)hubPort);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE,
+                  vhub_xport(hubPort) << 24, 0);
+    deliver_events();
+    return status;
+}
+
+static void vhub_root_status(ULONG hubPort, ULONG *status, ULONG *change)
+{
+    USBPORT_PORT_STATUS_AND_CHANGE s;
+
+    XhciRegPacket.RH_GetPortStatus(&ext, (USHORT)hubPort, &s);
+    *status = s.PortStatus;
+    *change = s.PortChange;
+}
+
+/* An EP0 open for the hub, as usbport sends it - believing a High-Speed
+ * device, because that is what the root port says. */
+static MPSTATUS vhub_open_ep0(PXHCI_ENDPOINT endpoint, ULONG address)
+{
+    ULONG i;
+
+    slot_properties(address, UsbHighSpeed, 64);
+    for (i = 0; i < sizeof(XHCI_ENDPOINT) / sizeof(ULONG); i++) {
+        ((ULONG *)endpoint)[i] = 0;
+    }
+    return open_endpoint_raw(&slotProperties, endpoint);
+}
+
+static MPSTATUS vhub_open_pipe(ULONG address)
+{
+    ULONG i;
+
+    slot_properties_ep(address, UsbHighSpeed, 0x81,
+                       USBPORT_TRANSFER_TYPE_INTERRUPT, 1, 32, 1);
+    for (i = 0; i < sizeof(XHCI_ENDPOINT) / sizeof(ULONG); i++) {
+        ((ULONG *)&vhubPipe)[i] = 0;
+    }
+    return open_endpoint_raw(&slotProperties, &vhubPipe);
+}
+
+/*
+ * One control request to a virtual hub, and its delivery. Asserts the rule
+ * the design leans on hardest (design record 05 section 7): nothing is
+ * completed from inside SubmitTransfer, whatever answered it.
+ */
+static MPSTATUS vhub_control(PXHCI_ENDPOINT endpoint,
+                             ULONG type,
+                             ULONG request,
+                             ULONG value,
+                             ULONG index,
+                             ULONG length)
+{
+    MPSTATUS status;
+    ULONG completions;
+    ULONG i;
+
+    slot_setup(type, request, value, length);
+    slotParams.SetupPacket.wIndex = (USHORT)index;
+    slotParams.TransferBufferLength = length;
+    slotParams.TransferFlags = ((type & 0x80) != 0) ? 1UL : 0UL;
+    for (i = 0; i < sizeof(vhubData); i++) {
+        vhubData[i] = 0xEE;
+    }
+    if (length != 0) {
+        slotSgList.SgElementCount = 1;
+        slotSgList.SgElement[0].SgPhysicalAddressLo = 0x00100000UL;
+        slotSgList.SgElement[0].SgTransferLength = length;
+        slotSgList.MappedSystemVa = vhubData;
+    }
+    completions = completeTransferCalls;
+    status = XhciRegPacket.SubmitTransfer(&ext, endpoint, &slotParams,
+                                          &slotTransfer, &slotSgList);
+    CHECK_EQ(completeTransferCalls, completions,
+             "(nothing a virtual hub answers is completed inside "
+             "SubmitTransfer)");
+    deliver_after_submit();
+    return status;
+}
+
+/* The status-change transfer usbhub keeps pending: one byte, IN. */
+static MPSTATUS vhub_pipe_submit(void)
+{
+    ULONG i;
+
+    for (i = 0; i < sizeof(vhubPipeParams) / sizeof(ULONG); i++) {
+        ((ULONG *)&vhubPipeParams)[i] = 0;
+    }
+    for (i = 0; i < sizeof(vhubPipeTransfer) / sizeof(ULONG); i++) {
+        ((ULONG *)&vhubPipeTransfer)[i] = 0;
+    }
+    for (i = 0; i < sizeof(vhubPipeSg) / sizeof(ULONG); i++) {
+        ((ULONG *)&vhubPipeSg)[i] = 0;
+    }
+    vhubPipeParams.TransferFlags = 1;
+    vhubPipeParams.TransferBufferLength = 1;
+    vhubPipeSg.SgElementCount = 1;
+    vhubPipeSg.SgElement[0].SgPhysicalAddressLo = 0x00200000UL;
+    vhubPipeSg.SgElement[0].SgTransferLength = 1;
+    vhubPipeSg.MappedSystemVa = vhubPipeData;
+    vhubPipeData[0] = 0;
+    return XhciRegPacket.SubmitTransfer(&ext, &vhubPipe, &vhubPipeParams,
+                                        &vhubPipeTransfer, &vhubPipeSg);
+}
+
+/* The driver version as the hub's bcdDevice should carry it, read off the
+ * version STRING - a second derivation beside the driver's, which reads the
+ * comma list. */
+static ULONG vhub_expected_bcd(void)
+{
+    static const char version[] = XHCI_VER_STR;
+
+    return ((ULONG)(version[0] - '0') << 8) |
+           ((ULONG)(version[2] - '0') << 4) | (ULONG)(version[4] - '0');
+}
+
+/*
+ * The virtual hub's own enumeration on `hubPort`, as usbhub drives it (design
+ * record 02's measured bracket): reset, EP0 at 0, GET_DESCRIPTOR(Device),
+ * reset again, SET_ADDRESS through the first pipe, EP0 reopened at the new
+ * address, SET_CONFIGURATION(1), and the status-change endpoint opened.
+ */
+static void vhub_enumerate_hub(ULONG hubPort, ULONG address)
+{
+    CHECK_EQ(vhub_root_reset(hubPort), MP_STATUS_SUCCESS,
+             "(the hub's first reset)");
+    CHECK_EQ(vhub_open_ep0(&vhubEp0, 0), MP_STATUS_SUCCESS,
+             "(the hub's EP0 at address 0)");
+    (void)vhub_control(&vhubEp0, 0x80, 0x06, 0x0100, 0, 64);
+    CHECK_EQ(vhub_root_reset(hubPort), MP_STATUS_SUCCESS,
+             "(the hub's second reset)");
+    (void)vhub_control(&vhubEp0, 0x00, 0x05, address, 0, 0);
+    XhciRegPacket.SetEndpointState(&ext, &vhubEp0, USBPORT_ENDPOINT_REMOVE);
+    CHECK_EQ(vhub_open_ep0(&vhubEp0, address), MP_STATUS_SUCCESS,
+             "(the hub's EP0 reopened at its address)");
+    (void)vhub_control(&vhubEp0, 0x80, 0x06, 0x0200, 0, 25);
+    (void)vhub_control(&vhubEp0, 0x00, 0x09, 1, 0, 0);
+    (void)vhub_control(&vhubEp0, 0xA0, 0x06, 0x0000, 0, 71);
+    CHECK_EQ(vhub_open_pipe(address), MP_STATUS_SUCCESS,
+             "(the status-change endpoint)");
+}
+
+/*
+ * **Rule 2 over the driver** (design record 12 section 3.1): the switch absent,
+ * and the switch at 0 as the INF writes it, are today's driver - the same
+ * root-port report, the same claim, the same device record - and the two ids
+ * are never consulted. Then each way the switch can be refused, and the one
+ * that is not.
+ */
+static void test_vhub_off_is_todays_driver(void)
+{
+    ULONG status;
+    ULONG change;
+    ULONG i;
+
+    vhub_reset_registry();
+    enable_start(0);
+    deliver_events();
+    CHECK_EQ(vhubSwitchReads, 1, "the switch is read once per start");
+    CHECK_EQ(vhubIdReads, 0, "and, absent, the ids are never consulted");
+    CHECK_EQ(ext.VhubConfig.Applied, XHCI_VHUB_MODE_OFF, "off");
+    CHECK_EQ(ext.VhubConfig.Refused, XHCI_VHUB_WHY_NONE,
+             "and absent is not a refusal");
+    CHECK_EQ(ext.VhubStarted, 0, "nothing was stood up");
+
+    vhub_plug(2, 1);                                /* Full Speed */
+    CHECK_EQ(vhub_root_reset(2), MP_STATUS_SUCCESS, "the reset runs");
+    CHECK_EQ(ext.EnumHubPort, 2, "today's root-port claim names the port");
+    CHECK_EQ(ext.EnumClaimSpent, 0, "and is armed");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(status & (XHCI_HUB_PORT_HIGH_SPEED | XHCI_HUB_PORT_LOW_SPEED),
+             XHCI_HUB_PORT_HIGH_SPEED,
+             "a Full-Speed device is reported High Speed, as today");
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "and the root port reports its own reset's end");
+    for (i = 0; i < ext.RootHub.PortCount; i++) {
+        CHECK_EQ(ext.Vhub[i].Present, 0, "no virtual hub on any port");
+    }
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "the address-0 open is a device's");
+    CHECK_EQ(slotEndpoint.Flags, XHCI_ENDPOINT_FLAG_OPEN,
+             "bound to a real record, with no virtual-hub flag");
+    CHECK_EQ(slotEndpoint.DeviceIndex, 1, "the first record");
+    CHECK_EQ(ext.Devices[0].HubPort, 2, "on the port that reset");
+    CHECK_EQ(ext.VhubOpens, 0, "and no open was the hub's");
+
+    /* The INF's 0, the ids present: still never consulted. */
+    vhub_start(0);
+    CHECK_EQ(vhubIdReads, 0, "the INF's 0: the ids are not read");
+    CHECK_EQ(ext.VhubConfig.SwitchStatus, MP_STATUS_SUCCESS,
+             "a 0 somebody set, read successfully");
+    CHECK_EQ(ext.VhubConfig.Applied, XHCI_VHUB_MODE_OFF, "and applied as off");
+
+    /* A value but 0, 1 or 2 is refused and applied as 0, never clamped. */
+    vhub_start(3);
+    CHECK_EQ(ext.VhubConfig.Applied, XHCI_VHUB_MODE_OFF, "3 is applied as 0");
+    CHECK_EQ(ext.VhubConfig.Refused, XHCI_VHUB_WHY_SWITCH, "recorded as refused");
+    CHECK_EQ(vhubIdReads, 0, "and the ids are not consulted for it");
+    CHECK_EQ(ext.VhubStarted, 0, "and nothing stood up");
+
+    /* The switch on and the vendor id missing: off, and why. */
+    vhub_reset_registry();
+    vhubSwitchStatus = MP_STATUS_SUCCESS;
+    vhubSwitchValue = 1;
+    vhub_put_id(vhubPidBytes, "0001", 1);
+    vhubPidStatus = MP_STATUS_SUCCESS;
+    enable_start(0);
+    deliver_events();
+    CHECK_EQ(vhubIdReads, 2, "with the switch on, both ids are read");
+    CHECK_EQ(ext.VhubConfig.Applied, XHCI_VHUB_MODE_OFF,
+             "no vendor id, no hub: the binary carries none to fall back to");
+    CHECK_EQ(ext.VhubConfig.Refused, XHCI_VHUB_WHY_VID, "the vendor id failed");
+    CHECK_EQ(ext.VhubConfig.VidResult, XHCI_VHUB_ID_MISSING, "as missing");
+    CHECK_EQ(ext.VhubConfig.PidResult, XHCI_VHUB_ID_OK,
+             "with the product id still parsed and recorded");
+
+    /* At 2 with a product id of five digits: off. */
+    vhub_reset_registry();
+    vhubSwitchStatus = MP_STATUS_SUCCESS;
+    vhubSwitchValue = 2;
+    vhub_set_ids("1209", "12345", 1);
+    enable_start(0);
+    deliver_events();
+    CHECK_EQ(ext.VhubConfig.Refused, XHCI_VHUB_WHY_PID, "the product id failed");
+    CHECK_EQ(ext.VhubConfig.PidResult, XHCI_VHUB_ID_DIGITS,
+             "for its digit count");
+    for (i = 0; i < ext.RootHub.PortCount; i++) {
+        CHECK_EQ(ext.Vhub[i].Present, 0, "and value 2 stood nothing up");
+    }
+
+    /* Single-byte strings, `0x` and lower case: accepted. */
+    vhub_reset_registry();
+    vhubSwitchStatus = MP_STATUS_SUCCESS;
+    vhubSwitchValue = 1;
+    vhub_set_ids("0x12ab", "0001", 0);
+    enable_start(0);
+    deliver_events();
+    CHECK_EQ(ext.VhubConfig.Applied, XHCI_VHUB_MODE_ON_DEMAND,
+             "a single-byte pair is accepted");
+    CHECK_EQ(ext.VhubConfig.Vid, 0x12AB, "with the 0x form and lower case");
+    CHECK_EQ(ext.VhubConfig.VidEncoding, XHCI_VHUB_ENC_BYTE,
+             "and the encoding recorded for 24.3.4's first reading");
+    CHECK_EQ(ext.VhubStarted, 1, "and at 1 the start marks the records up");
+
+    vhub_reset_registry();
+}
+
+/*
+ * **Value 1, end to end, on a Full-Speed device** (design record 12 sections
+ * 3.2 to 3.6): the reset that decodes it stands a hub up and arms the hub's
+ * open, not a device's; the hub enumerates entirely in software, its traffic
+ * never reaching either snoop; port 1's reset arms the device's root-port
+ * claim and leaves the root port quiet; the device gets today's root-port
+ * record; and the record is found again across a re-open, a repeated reset
+ * and its address reused after a disown.
+ */
+static void test_vhub_on_demand_full_speed(void)
+{
+    PXHCI_DEVICE dev;
+    ULONG status;
+    ULONG change;
+    ULONG resets;
+    ULONG slotsEnabled;
+    ULONG pipeCompletions;
+
+    vhub_start(1);
+    CHECK_EQ(ext.VhubConfig.Applied, XHCI_VHUB_MODE_ON_DEMAND, "(value 1)");
+    hwCmdSlotId = 4;
+
+    vhub_plug(2, 1);                                /* Full Speed */
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(ext.Vhub[1].Present, 0, "no hub before a reset has decided");
+    CHECK_EQ(status & XHCI_HUB_PORT_HIGH_SPEED, XHCI_HUB_PORT_HIGH_SPEED,
+             "and the root port says High Speed before the reset, as today");
+
+    resets = portResets;
+    CHECK_EQ(vhub_root_reset(2), MP_STATUS_SUCCESS, "the root reset runs");
+    CHECK_EQ(portResets, resets + 1, "as a physical reset");
+    CHECK_EQ(ext.Vhub[1].Present, 1, "decoding Full Speed stood a hub up");
+    CHECK_EQ(ext.Vhub[1].Decision, XHCI_VHUB_DECIDED_HUB, "virtual-hub mode");
+    CHECK_EQ(ext.VhubCreated, 1, "counted");
+    CHECK_EQ(ext.VhubArmedPort, 2, "the hub's address-0 open is armed");
+    CHECK_EQ(ext.EnumClaimSpent, 1, "and no device claim beside it");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(status & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE |
+                       XHCI_HUB_PORT_HIGH_SPEED | XHCI_HUB_PORT_LOW_SPEED),
+             XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE |
+                 XHCI_HUB_PORT_HIGH_SPEED,
+             "the root port reports the hub: connected, enabled, High Speed");
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "with its reset's end latched in the upstream view");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2),
+             MP_STATUS_SUCCESS, "(usbhub clears it)");
+
+    /* The hub's own enumeration. */
+    slotsEnabled = ext.SlotsEnabled;
+    CHECK_EQ(vhub_open_ep0(&vhubEp0, 0), MP_STATUS_SUCCESS,
+             "the address-0 open is served");
+    CHECK_EQ(vhubEp0.Flags, XHCI_ENDPOINT_FLAG_OPEN | XHCI_ENDPOINT_FLAG_VHUB,
+             "as the hub's");
+    CHECK_EQ(vhubEp0.VhubPort, 2, "on root port 2");
+    CHECK_EQ(vhubEp0.DeviceIndex, 0, "bound to no device record");
+    CHECK_EQ(ext.Devices[0].State, XHCI_DEV_STATE_FREE,
+             "none was allocated");
+    deliver_events();
+    CHECK_EQ(ext.SlotsEnabled, slotsEnabled, "and no Enable Slot was issued");
+
+    (void)vhub_control(&vhubEp0, 0x80, 0x06, 0x0100, 0, 64);
+    CHECK_EQ(lastCompletedLength, 18, "the device descriptor, 18 bytes");
+    CHECK_EQ(lastCompletedStatus, 0, "successfully");
+    CHECK(lastCompletedEndpoint == &vhubEp0, "through the hub's EP0");
+    CHECK_EQ(vhubData[4], 0x09, "class 9");
+    CHECK_EQ(vhubData[6], 0x01, "single TT");
+    CHECK_EQ(vhubData[8] | ((ULONG)vhubData[9] << 8), 0x1209,
+             "the INF's vendor id");
+    CHECK_EQ(vhubData[10] | ((ULONG)vhubData[11] << 8), 0x0001,
+             "and product id");
+    CHECK_EQ(vhubData[12] | ((ULONG)vhubData[13] << 8), vhub_expected_bcd(),
+             "and bcdDevice carrying the driver version");
+    CHECK_EQ(vhubData[18], 0xEE, "and not a byte past the descriptor");
+
+    /* The second reset of the bracket keeps the binding and arms nothing. */
+    resets = portResets;
+    CHECK_EQ(vhub_root_reset(2), MP_STATUS_SUCCESS, "the second reset");
+    CHECK_EQ(portResets, resets + 1, "is physical at 1");
+    CHECK_EQ(ext.VhubArmedPort, 0, "and arms no new open");
+    CHECK_EQ(ext.EnumClaimSpent, 1, "nor a device claim");
+    CHECK_EQ(ext.Vhub[1].Ep0Bound, 1, "the hub keeps its EP0 binding");
+
+    (void)vhub_control(&vhubEp0, 0x00, 0x05, 7, 0, 0);
+    CHECK_EQ(ext.Vhub[1].Address, 7, "SET_ADDRESS gives the hub its address");
+    CHECK_EQ(ext.SetAddressIntercepts, 0,
+             "and is not the interception a real device's takes");
+    XhciRegPacket.SetEndpointState(&ext, &vhubEp0, USBPORT_ENDPOINT_REMOVE);
+    CHECK_EQ(vhub_open_ep0(&vhubEp0, 7), MP_STATUS_SUCCESS,
+             "EP0 reopened at the hub's address resolves to the hub");
+    CHECK_EQ(vhubEp0.VhubPort, 2, "on the same port");
+    (void)vhub_control(&vhubEp0, 0x80, 0x06, 0x0200, 0, 9);
+    CHECK_EQ(lastCompletedLength, 9, "a configuration read truncated to 9");
+    (void)vhub_control(&vhubEp0, 0x00, 0x09, 1, 0, 0);
+    CHECK_EQ(ext.Vhub[1].DevState, XHCI_VHUB_DEV_CONFIGURED, "configured");
+    (void)vhub_control(&vhubEp0, 0xA0, 0x06, 0x0000, 0, 71);
+    CHECK_EQ(lastCompletedLength, 9, "the hub descriptor");
+    CHECK_EQ(vhubData[2], 1, "one port");
+    (void)vhub_control(&vhubEp0, 0x80, 0x06, 0x0301, 0x0409, 255);
+    CHECK_EQ(lastCompletedLength, 44, "the product string");
+    (void)vhub_control(&vhubEp0, 0x80, 0x06, 0x0303, 0x0409, 255);
+    CHECK_EQ(lastCompletedStatus, (LONG)XHCI_USBD_STATUS_STALL_PID,
+             "a serial number is asked for and stalled - there is never one");
+    CHECK_EQ(ext.VhubStalls, 1, "counted");
+
+    /* Rule: the hub's traffic reaches neither snoop (3.3). */
+    CHECK_EQ(ext.Topology.Descriptors, 0,
+             "the hub descriptor never reached the topology graph");
+    CHECK_EQ(ext.Topology.Count, 0, "which holds no hub at all");
+
+    /* The status-change pipe: the connect latched at creation completes the
+     * first transfer at once (3.3's GET_PORT_STATUS row, 3.4). */
+    CHECK_EQ(vhub_open_pipe(7), MP_STATUS_SUCCESS, "the status-change pipe");
+    CHECK_EQ(vhubPipe.Dci, 3, "on EP 1 IN");
+    pipeCompletions = ext.VhubPipeCompletions;
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "submitted");
+    deliver_after_submit();
+    CHECK_EQ(ext.VhubPipeCompletions, pipeCompletions + 1,
+             "and completed at once: port 1 has a change");
+    CHECK(lastCompletedEndpoint == &vhubPipe, "on the pipe");
+    CHECK_EQ(lastCompletedLength, 1, "with one byte");
+    CHECK_EQ(vhubPipeData[0], 0x02, "bit 1: port 1");
+
+    (void)vhub_control(&vhubEp0, 0xA3, 0x00, 0, 1, 4);
+    CHECK_EQ(lastCompletedLength, 4, "GET_PORT_STATUS(1), four bytes");
+    CHECK_EQ(vhubData[0] & XHCI_HUB_PORT_CONNECTION, XHCI_HUB_PORT_CONNECTION,
+             "port 1 connected");
+    CHECK_EQ(((ULONG)vhubData[1] << 8) &
+                 (XHCI_HUB_PORT_LOW_SPEED | XHCI_HUB_PORT_HIGH_SPEED),
+             0, "at Full Speed - neither speed bit, the device's true speed");
+    CHECK_EQ(vhubData[2] & XHCI_HUB_C_PORT_CONNECTION,
+             XHCI_HUB_C_PORT_CONNECTION, "with the connect change");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+
+    /* Port 1's reset: physical, and the root port stays quiet (3.2). The
+     * hub's second reset latched the upstream's C_PORT_RESET, as every root
+     * reset does; usbhub has cleared it by now. */
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2),
+             MP_STATUS_SUCCESS, "(usbhub clears the second reset's change)");
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe re-armed)");
+    resets = portResets;
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(portResets, resets + 1, "SET_PORT_FEATURE(1, PORT_RESET) is physical");
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(2) << 24, 0);
+    deliver_events();
+    CHECK_EQ(lastCompletedLength, 1, "the pipe completes with port 1's change");
+    CHECK_EQ(ext.Vhub[1].P1Enabled, 1, "port 1 enabled by its own reset");
+    CHECK_EQ(ext.EnumHubPort, 2, "and the device's root-port claim names port 2");
+    CHECK_EQ(ext.EnumClaimSpent, 0, "armed");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, 0,
+             "the root port latched no C_PORT_RESET for port 1's reset");
+    CHECK_EQ(status & (XHCI_HUB_PORT_ENABLE | XHCI_HUB_PORT_RESET),
+             XHCI_HUB_PORT_ENABLE, "and stays enabled, not resetting");
+
+    /* The device's address-0 open is the device's. */
+    CHECK_EQ(slot_open(0, UsbFullSpeed, 64), MP_STATUS_SUCCESS,
+             "the device's address-0 open");
+    CHECK_EQ(slotEndpoint.Flags, XHCI_ENDPOINT_FLAG_OPEN,
+             "binds a real record");
+    dev = &ext.Devices[0];
+    CHECK_EQ(dev->HubPort, 2, "today's root-port record, HubPort 2 (3.6)");
+    CHECK_EQ(dev->Speed, XHCI_SPEED_FULL, "at its decoded speed");
+    CHECK_EQ(dev->RouteString, 0, "with Route String 0");
+    deliver_events();
+    deliver_events();
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "(the chain reached Default)");
+    CHECK_EQ(dev->SlotId, 4, "(in slot 4)");
+    slot_setup(0x00, 0x05, 8, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    deliver_events();
+    CHECK_EQ(dev->DeviceAddress, 8, "the device is addressed at 8");
+
+    /* A repeated port-1 reset and a re-open find the same record. */
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(2) << 24, 0);
+    deliver_events();
+    CHECK_EQ(slot_open(0, UsbFullSpeed, 64), MP_STATUS_SUCCESS,
+             "a re-enumeration behind the hub");
+    CHECK_EQ(slotEndpoint.DeviceIndex, 1, "finds the same record");
+    CHECK_EQ(ext.Devices[0].SlotId, 4, "keeping its slot");
+
+    /* Port 1 disabled: a disown, the address given back, and the same record
+     * found again at the next reset with that address reused. */
+    deliver_events();
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 1, 1, 0);
+    CHECK_EQ(ext.Devices[0].Flags & XHCI_DEV_FLAG_ADDRESS_VALID, 0,
+             "CLEAR_PORT_FEATURE(1, PORT_ENABLE) disowns the device");
+    CHECK_EQ(ext.DevicesDisownedOut, 1, "counted as a disown");
+    CHECK_EQ(ext.Vhub[1].P1Enabled, 0, "port 1 reads disabled");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(status & XHCI_HUB_PORT_ENABLE, XHCI_HUB_PORT_ENABLE,
+             "and the root port - the hub's upstream - stays enabled");
+    CHECK_EQ(ext.Vhub[1].Present, 1, "with the hub in place");
+
+    vhub_reset_registry();
+}
+
+/* At 1 a High-Speed device takes today's path, byte for byte (3.2, 3.7). */
+static void test_vhub_on_demand_high_speed_is_direct(void)
+{
+    ULONG status;
+    ULONG change;
+
+    vhub_start(1);
+    vhub_plug(3, 3);                                /* High Speed */
+    CHECK_EQ(vhub_root_reset(3), MP_STATUS_SUCCESS, "the reset runs");
+    CHECK_EQ(ext.Vhub[2].Present, 0, "no hub for a High-Speed device");
+    CHECK_EQ(ext.Vhub[2].Decision, XHCI_VHUB_DECIDED_DIRECT, "direct");
+    CHECK_EQ(ext.EnumClaimSpent, 0, "today's device claim is armed");
+    CHECK_EQ(ext.VhubArmedPort, 0, "and no hub's");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "the root port reports its reset as today");
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "the address-0 open");
+    CHECK_EQ(slotEndpoint.Flags, XHCI_ENDPOINT_FLAG_OPEN, "is the device's");
+    CHECK_EQ(ext.Devices[0].HubPort, 3, "on port 3");
+
+    /* An unplug forgets the decision: a slower device next decides afresh. */
+    vhub_unplug(3);
+    CHECK_EQ(ext.Vhub[2].Decision, XHCI_VHUB_DECIDED_DIRECT,
+             "(a port with no hub keeps the record untouched until a reset)");
+    vhub_reset_registry();
+}
+
+/*
+ * **Value 2: a root-port reset takes the device out of service through the
+ * existing disable body, and nothing is released until the port confirms it**
+ * (design record 12 section 3.8). A transfer is in flight on the device when
+ * usbhub resets the hub; the port will not drop PED; the slot, its ring and
+ * that transfer must all survive until it does - and a port-1 reset asked for
+ * meanwhile is held until the confirmation has been collected (3.3's gate).
+ */
+static void test_vhub_always_root_reset_holds_the_slot(void)
+{
+    PXHCI_DEVICE dev;
+    ULONG status;
+    ULONG change;
+    ULONG resets;
+    ULONG completions;
+    ULONG i;
+
+    vhub_start(2);
+    CHECK_EQ(ext.VhubConfig.Applied, XHCI_VHUB_MODE_ALWAYS, "(value 2)");
+    for (i = 0; i < ext.RootHub.PortCount; i++) {
+        CHECK_EQ(ext.Vhub[i].Present, 1, "a hub on every USB 2.0 port");
+    }
+    CHECK_EQ(ext.VhubCreated, ext.RootHub.PortCount, "each counted");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(status & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_POWER |
+                       XHCI_HUB_PORT_HIGH_SPEED | XHCI_HUB_PORT_ENABLE),
+             XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_POWER |
+                 XHCI_HUB_PORT_HIGH_SPEED,
+             "an empty port reports its hub connected, not yet enabled");
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, XHCI_HUB_C_PORT_CONNECTION,
+             "with the one connect change a start latches");
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 3);
+
+    hwCmdSlotId = 6;
+    vhub_plug(3, 3);                                /* High Speed */
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, 0,
+             "a physical connect is port 1's change, not the root port's");
+
+    resets = portResets;
+    vhub_enumerate_hub(3, 3);
+    CHECK_EQ(portResets, resets, "the hub's resets are synthetic at 2");
+    CHECK_EQ(ext.Vhub[2].DevState, XHCI_VHUB_DEV_CONFIGURED,
+             "(the hub is configured)");
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe)");
+    deliver_after_submit();
+    CHECK_EQ(vhubPipeData[0], 0x02, "the plug is a change on port 1");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe re-armed)");
+
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(portResets, resets + 1, "port 1's reset is the physical one");
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(3) << 24, 0);
+    deliver_events();
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "the device behind port 1 opens");
+    dev = &ext.Devices[0];
+    CHECK_EQ(dev->HubPort, 3, "on today's root-port record, High Speed too");
+    deliver_events();
+    deliver_events();
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "(Default)");
+
+    /* A transfer in flight on the device. */
+    slot_setup(0x80, 0x06, 0x0100, 18);
+    slotParams.TransferFlags = 1;
+    slotParams.TransferBufferLength = 18;
+    slotSgList.SgElementCount = 1;
+    slotSgList.SgElement[0].SgPhysicalAddressLo = 0x00100000UL;
+    slotSgList.SgElement[0].SgTransferLength = 18;
+    slotSgList.MappedSystemVa = vhubData;
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    CHECK_EQ(dev->Ep0Queue.Count, 1, "(a transfer is on the device's ring)");
+
+    /* usbhub resets the hub; the port will not drop PED. */
+    stuckPortPed = vhub_xport(3);
+    completions = completeTransferCalls;
+    resets = portResets;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 3), MP_STATUS_SUCCESS,
+             "the root-port reset");
+    deliver_after_submit();
+    CHECK_EQ(portResets, resets, "is the hub's, synthetic: no PR written");
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 1,
+             "the disable body ran and its confirmation is owed");
+    CHECK_EQ(dev->Flags & XHCI_DEV_FLAG_DISOWNED, XHCI_DEV_FLAG_DISOWNED,
+             "the software half ran at once");
+    CHECK(dev->State != XHCI_DEV_STATE_GONE && dev->State !=
+              XHCI_DEV_STATE_FREE,
+          "but the record is not torn down");
+    CHECK_EQ(dev->Ep0Queue.Count, 1, "its transfer is still queued");
+    CHECK_EQ(completeTransferCalls, completions,
+             "and nothing was completed: its buffer is not handed back while "
+             "the port may still be reading it");
+    CHECK_EQ(ext.Vhub[2].DevState, XHCI_VHUB_DEV_DEFAULT,
+             "the hub is back in its Default state");
+    CHECK(ext.VhubBind[2].Ep0 == &vhubEp0, "with its EP0 binding kept");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "and its reset's end reported without waiting on the port");
+
+    /* A port-1 reset asked for now is held. */
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(portResets, resets, "a port-1 reset while the disable is owed");
+    CHECK_EQ(ext.VhubResetsHeld, 1, "is held");
+
+    /* The port finally goes down; the poll collects it. */
+    stuckPortPed = 0;
+    mmio[HC_PORTSC(vhub_xport(3)) / 4] &= ~XHCI_PORTSC_PED;
+    poll_clock_prime();
+    poll_after_ms(1);
+    deliver_after_submit();
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 0, "the confirmation arrived");
+    CHECK_EQ(ext.DevicesDisabledOut, 1, "and only now is the teardown run");
+    CHECK_EQ(portResets, resets + 1,
+             "and the held port-1 reset started once it was collected");
+    /* The teardown's Stop Endpoint, Set TR Dequeue Pointer and Disable Slot,
+     * one command round each. */
+    deliver_events();
+    deliver_events();
+    deliver_events();
+    deliver_after_submit();
+    CHECK(completeTransferCalls > completions,
+          "the transfer in flight is answered after the port went down");
+    CHECK_EQ(lastCompletedStatus, (LONG)XHCI_USBD_STATUS_CANCELED,
+             "as cancelled");
+
+    stuckPortPed = 0;
+    vhub_reset_registry();
+}
+
+/*
+ * The held status-change transfer owns no TRB, so an abort finds it in the
+ * binding and nothing later completes it (3.4); and a REMOVE of the pipe with
+ * one held answers it as cancelled.
+ */
+static void test_vhub_abort_finds_the_held_pipe(void)
+{
+    ULONG completions;
+    ULONG aborted;
+    ULONG moved;
+
+    vhub_start(1);
+    vhub_plug(2, 1);
+    vhub_enumerate_hub(2, 5);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe)");
+    deliver_after_submit();
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "the pipe is held");
+    deliver_after_submit();
+    CHECK(ext.VhubBind[1].Held == &vhubPipeTransfer, "with no change to carry");
+
+    completions = completeTransferCalls;
+    aborted = ext.TransfersAborted;
+    moved = 99;
+    XhciRegPacket.AbortTransfer(&ext, &vhubPipe, &vhubPipeTransfer, &moved);
+    CHECK_EQ(ext.TransfersAborted, aborted + 1, "the abort finds it");
+    CHECK_EQ(moved, 0, "having moved nothing");
+    CHECK(ext.VhubBind[1].Held == NULL, "and it is no longer held");
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(2) << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.Vhub[1].P1Changes & XHCI_HUB_C_PORT_RESET,
+             XHCI_HUB_C_PORT_RESET, "a later change is latched");
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "and only the port request completes - never the aborted pipe");
+    CHECK(lastCompletedEndpoint == &vhubEp0, "(that one)");
+
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "a new pipe transfer");
+    deliver_after_submit();
+    CHECK_EQ(vhubPipeData[0], 0x02, "carries the change at once");
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "and the next one");
+    deliver_after_submit();
+    CHECK_EQ(vhubPipeData[0], 0x02,
+             "(completes too: the change stays until usbhub clears it)");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 20, 1, 0);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "held again");
+    deliver_after_submit();
+    completions = completeTransferCalls;
+    XhciRegPacket.SetEndpointState(&ext, &vhubPipe, USBPORT_ENDPOINT_REMOVE);
+    deliver_after_submit();
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "a REMOVE of the pipe answers the held transfer");
+    CHECK_EQ(lastCompletedStatus, (LONG)XHCI_USBD_STATUS_CANCELED,
+             "as cancelled");
+
+    /* And the hub goes with its device at 1: an unplug, then usbhub's
+     * disable. */
+    vhub_unplug(2);
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 2),
+             MP_STATUS_SUCCESS, "usbhub disables the port");
+    CHECK_EQ(ext.Vhub[1].Present, 0, "the virtual hub is dropped");
+    CHECK_EQ(ext.VhubDropped, 1, "counted");
+    {
+        ULONG status;
+        ULONG change;
+
+        vhub_root_status(2, &status, &change);
+        CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, 0,
+                 "with the hub gone the root port reports today's shadow, and "
+                 "no reset the hub's views owned was left latched in it");
+        CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION,
+                 XHCI_HUB_C_PORT_CONNECTION, "only the unplug");
+    }
+    CHECK_EQ(vhub_control(&vhubEp0, 0x80, 0x06, 0x0100, 0, 18),
+             MP_STATUS_SUCCESS, "a transfer through its old EP0");
+    CHECK_EQ(lastCompletedStatus, (LONG)XHCI_USBD_STATUS_CANCELED,
+             "is failed, never left queued for retry");
+    vhub_reset_registry();
+}
+
+/*
+ * A Full-Speed hub on a root port, behind a virtual one: usbport names the
+ * virtual hub as the transaction translator for a device behind the real hub,
+ * the graph (which never holds a virtual hub) expects none, and the pair is
+ * counted as agreed rather than as the disagreement the same claim is at 0
+ * (design record 12 section 3.6).
+ *
+ * MODEL SEAM: the real hub is enumerated through `slot_attach`'s synthetic
+ * PRC, which no virtual hub owns, so the virtual record above it is written
+ * here rather than stood up by a reset - the one field the comparison reads,
+ * the virtual hub's address, is what usbport would have given it first.
+ */
+static void test_vhub_tt_pair_naming_a_virtual_hub_agrees(void)
+{
+    PXHCI_DEVICE hub;
+
+    vhub_reset_registry();
+    vhubSwitchStatus = MP_STATUS_SUCCESS;
+    vhubSwitchValue = 1;
+    vhub_set_ids("1209", "0001", 1);
+    hub = behind_hub_parent(1);
+    ext.Vhub[2].Present = 1;
+    ext.Vhub[2].Decision = XHCI_VHUB_DECIDED_HUB;
+    ext.Vhub[2].Address = 1;
+    ext.Vhub[2].DevState = XHCI_VHUB_DEV_CONFIGURED;
+
+    CHECK_EQ(behind_hub_open(hub, &slotEndpoint, 4, UsbFullSpeed, 1, 1, 6,
+                             &slotEndpoint2),
+             MP_STATUS_SUCCESS, "a device behind the Full-Speed hub opens");
+    CHECK_EQ(ext.TtPairsAgreed, 1,
+             "usbport's TT hub is the virtual one: agreed");
+    CHECK_EQ(ext.TtPairsDisagreed, 0, "not a disagreement");
+    CHECK_EQ(ext.VhubTtNamed, 1, "and counted as naming a virtual hub");
+    vhub_reset_registry();
+}
+
 int main(void)
 {
     /*
@@ -30458,6 +31374,12 @@ int main(void)
     test_lifecycle_release_evidence();
     test_passthru_snapshot();
     test_passthru_snapshot_disabled();
+    test_vhub_off_is_todays_driver();
+    test_vhub_on_demand_full_speed();
+    test_vhub_on_demand_high_speed_is_direct();
+    test_vhub_always_root_reset_holds_the_slot();
+    test_vhub_abort_finds_the_held_pipe();
+    test_vhub_tt_pair_naming_a_virtual_hub_agrees();
 
     /*
      * The net under every test above, and the reason it is here rather than in

@@ -90,6 +90,9 @@ reg|Windows 98|Xhci.AddReg|HKR||EnumPropPages||"sysclass.dll,USBControllerPropPa
 reg|Windows 98|Xhci.AddReg|HKR||XhciLogVerbosity|0x00010001|0|remove
 reg|Windows 98|Xhci.AddReg|HKR||XhciLogDebugView|0x00010001|0|remove
 reg|Windows 98|Xhci.AddReg|HKR||XhciImodInterval250ns|0x00010001|500|remove
+reg|Windows 98|Xhci.AddReg|HKR||XhciVirtualHSHub|0x00010001|0|remove
+reg|Windows 98|Xhci.AddReg|HKR||XhciVirtualHSHubVid||"1209"|remove
+reg|Windows 98|Xhci.AddReg|HKR||XhciVirtualHSHubPid||"0001"|remove
 path|Windows 2000|device install|Xhci.Dev.NTx86
 file|Windows 2000|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
 file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbport.sys|usbport.sys||16|keep
@@ -101,6 +104,9 @@ reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010001|0|remove
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010001|500|remove
 reg|Windows 2000|Xhci.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBControllerPropPageProvider"|remove
 reg|Windows 2000|Xhci.AddReg.NT|HKR||Controller|1|01|remove
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciVirtualHSHub|0x00010001|0|remove
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciVirtualHSHubVid||"1209"|remove
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciVirtualHSHubPid||"0001"|remove
 service|Windows 2000|xhci98|Xhci.AddService|0x00000002|remove
 servicevalue|Windows 2000|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
 servicevalue|Windows 2000|xhci98|Xhci.AddService|ServiceType|1
@@ -115,6 +121,9 @@ reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010001|0|re
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010001|500|remove
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBControllerPropPageProvider"|remove
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||Controller|1|01|remove
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciVirtualHSHub|0x00010001|0|remove
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciVirtualHSHubVid||"1209"|remove
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciVirtualHSHubPid||"0001"|remove
 service|Windows Vista and 7 x86|xhci98|Xhci.AddService|0x00000002|remove
 servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
 servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|ServiceType|1

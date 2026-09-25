@@ -1185,6 +1185,34 @@ VOID XhciSlotPortDisabled(PXHCI_EXTENSION ext, ULONG hubPort);
 VOID XhciSlotPortReset(PXHCI_EXTENSION ext, ULONG hubPort);
 
 /*
+ * Task 24.3's virtual hubs (design record 12), where the root-hub half
+ * (src/xhci_rh.c) and the device half (src/xhci_slot.c) meet. Every one is
+ * called with the controller lock held, and the caller owes
+ * XhciRootHubDeferredWork after releasing it - which reaches
+ * XhciSlotDeferredWork, where any completion these owe is delivered.
+ *
+ * `XhciSlotVhubPipe` completes `hubPort`'s held status-change transfer: with
+ * `cancel`, as cancelled; without, with its one change byte if port 1 has a
+ * change and the hub is configured, and not at all otherwise (section 3.4).
+ * `XhciSlotVhubUnbind` is usbport letting go of the hub's pipes - the held
+ * transfer cancelled and both bindings dropped. `XhciRhVhubPort1Feature` and
+ * `XhciRhVhubPort1Status` are the device half's two ways into the physical
+ * port, for the port-1 rows of section 3.3.
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock held.
+ */
+VOID XhciSlotVhubPipe(PXHCI_EXTENSION ext, ULONG hubPort, ULONG cancel);
+VOID XhciSlotVhubUnbind(PXHCI_EXTENSION ext, ULONG hubPort);
+VOID XhciRhVhubPort1Feature(PXHCI_EXTENSION ext,
+                            ULONG hubPort,
+                            ULONG set,
+                            ULONG selector);
+VOID XhciRhVhubPort1Status(PXHCI_EXTENSION ext,
+                           ULONG hubPort,
+                           ULONG *status,
+                           ULONG *change);
+
+/*
  * Drive the command chain and pay usbport what the lock-held paths decided:
  * issue the next owed command, complete retired transfers, and ask for the
  * endpoint retries that are owed.

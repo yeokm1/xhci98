@@ -64,6 +64,29 @@ static VOID xhciRhRetireOperation(PXHCI_EXTENSION ext,
                                   XHCI_PORT_SHADOW *shadow,
                                   ULONG reason);
 
+/* Forward: task 24.3's virtual hubs (design record 12), whose section is
+ * after the port operations it carries out; the refresh and the retire both
+ * route a reset's end through it. */
+static ULONG xhciRhVhubRefreshed(PXHCI_EXTENSION ext,
+                                 ULONG hubPort,
+                                 XHCI_PORT_SHADOW *shadow,
+                                 ULONG latched,
+                                 ULONG endedGeneration);
+static ULONG xhciRhVhubResetLost(PXHCI_EXTENSION ext,
+                                 ULONG hubPort,
+                                 XHCI_PORT_SHADOW *shadow,
+                                 ULONG generation);
+static VOID xhciRhVhubDisownSettled(PXHCI_EXTENSION ext,
+                                    ULONG hubPort,
+                                    XHCI_PORT_SHADOW *shadow);
+#define XHCI_RH_VHUB_RESET      0
+#define XHCI_RH_VHUB_POWER_ON   1
+#define XHCI_RH_VHUB_POWER_OFF  2
+#define XHCI_RH_VHUB_DISABLE    3
+#define XHCI_RH_VHUB_SUSPEND    4
+#define XHCI_RH_VHUB_RESUME     5
+static MPSTATUS xhciRhVhubRootOp(PXHCI_EXTENSION ext, USHORT port, ULONG which);
+
 /* ------------------------------------------------------------------ */
 /* Admission                                                           */
 /* ------------------------------------------------------------------ */
@@ -191,18 +214,26 @@ static XHCI_PORT_SHADOW *xhciRhShadow(PXHCI_EXTENSION ext, ULONG hubPort)
  *
  * Returns the hub-class change bits this refresh newly latched.
  *
+ * `claimedGeneration` is for the one caller that has already claimed the reset
+ * before reading - the watchdog - so that a PRC it finds late can still be
+ * routed to the virtual hub that owns that reset (task 24.3); every other
+ * caller passes 0 through xhciRhRefresh below.
+ *
  * IRQL: any (no wait). Caller holds the controller lock and has established
  * admission.
  */
-static ULONG xhciRhRefresh(PXHCI_EXTENSION ext,
-                           ULONG hubPort,
-                           XHCI_PORT_SHADOW *shadow)
+static ULONG xhciRhRefreshEx(PXHCI_EXTENSION ext,
+                             ULONG hubPort,
+                             XHCI_PORT_SHADOW *shadow,
+                             ULONG claimedGeneration)
 {
     ULONG port;
     ULONG portsc;
     ULONG ackBits;
     ULONG speedClass;
     ULONG latched;
+    ULONG endedGeneration;
+    ULONG slotReset;
     UCHAR prevSpeed;
 
     port = XhciRootHubPortOf(&ext->RootHub, hubPort);
@@ -353,8 +384,10 @@ static ULONG xhciRhRefresh(PXHCI_EXTENSION ext,
      * second opinion. The hub-class C_PORT_RESET it implies was latched by the
      * update above; all that is left is to stop timing it.
      */
+    endedGeneration = claimedGeneration;
     if ((latched & XHCI_HUB_C_PORT_RESET) != 0 &&
         shadow->Armed == XHCI_PORT_OP_RESET) {
+        endedGeneration = shadow->Generation;
         (VOID)XhciPortShadowClaim(shadow, XHCI_PORT_OP_RESET,
                                   shadow->Generation);
         ext->RhResetsCompleted++;
@@ -428,15 +461,35 @@ static ULONG xhciRhRefresh(PXHCI_EXTENSION ext,
      * the outgoing device's record and decline to arm a claim the incoming one
      * needs. Nothing else depends on the order: the teardown does not touch the
      * enumeration hint, and the reset touches nothing else.
+     *
+     * **Task 24.3 sits between the reading and the announcements**, and only
+     * with the switch applied (design record 12's rule 2: at 0 this is one
+     * test). A virtual hub decides whose reset this was and which view's
+     * changes these are; a reset that armed the hub's own address-0 open arms
+     * no device claim, which is the one announcement it can withhold.
      */
+    slotReset = ((latched & XHCI_HUB_C_PORT_RESET) != 0) ? 1UL : 0UL;
+    if (ext->VhubConfig.Applied != XHCI_VHUB_MODE_OFF) {
+        slotReset = xhciRhVhubRefreshed(ext, hubPort, shadow, latched,
+                                        endedGeneration);
+    }
     if ((latched & XHCI_HUB_C_PORT_CONNECTION) != 0) {
         XhciSlotPortConnectChanged(ext, hubPort);
     }
-    if ((latched & XHCI_HUB_C_PORT_RESET) != 0) {
+    if (slotReset) {
         XhciSlotPortReset(ext, hubPort);
     }
 
     return latched;
+}
+
+/* The refresh every caller but the watchdog makes. IRQL: any (no wait).
+ * Caller holds the controller lock and has established admission. */
+static ULONG xhciRhRefresh(PXHCI_EXTENSION ext,
+                           ULONG hubPort,
+                           XHCI_PORT_SHADOW *shadow)
+{
+    return xhciRhRefreshEx(ext, hubPort, shadow, 0);
 }
 
 /*
@@ -750,6 +803,17 @@ MPSTATUS XhciRhGetPortStatus(PXHCI_EXTENSION ext,
         (VOID)xhciRhRefresh(ext, (ULONG)port, shadow);
     }
     XhciPortShadowReport(shadow, &portStatus, &portChange);
+    /*
+     * Task 24.3: on a port carrying a virtual hub the root port reports the
+     * hub's upstream view - at 1 its enable, reset and suspend groups, at 2
+     * the whole of it (design record 12 sections 3.2 and 3.8). With the switch
+     * off there is no record to ask and the report is today's.
+     */
+    if (ext->VhubConfig.Applied != XHCI_VHUB_MODE_OFF &&
+        (ULONG)port <= ext->RootHub.PortCount) {
+        XhciVhubRootReport(&ext->Vhub[port - 1], ext->VhubConfig.Applied,
+                           portStatus, portChange, &portStatus, &portChange);
+    }
     XhciControllerLockRelease(oldIrql);
 
     status->PortStatus = (USHORT)portStatus;
@@ -814,8 +878,11 @@ static ULONG xhciRhPortIsDisowned(PXHCI_EXTENSION ext, ULONG xhciPort,
 }
 
 /*
- * The shape every feature callback shares: validate the port, take the lock,
- * check admission, read PORTSC, write one composed value, release.
+ * The shape every feature callback shares: validate the port, check
+ * admission, read PORTSC, write one composed value. The caller holds the
+ * controller lock and owes XhciRootHubDeferredWork after releasing it - the
+ * wrapper below for today's callbacks, and task 24.3's virtual-hub paths,
+ * which carry out a hub's verdict under the same hold that decided it.
  *
  * `operation` is one of the XHCI_RH_OP_* below and decides only which builder
  * runs; keeping them in one function is what keeps "clearing power" and
@@ -827,14 +894,12 @@ static ULONG xhciRhPortIsDisowned(PXHCI_EXTENSION ext, ULONG xhciPort,
  * window that has stopped decoding, and composing a write from it would send a
  * neutral value to a register that is not there while reporting success.
  *
- * IRQL: DISPATCH_LEVEL. Calls usbport services only through
- * XhciRootHubDeferredWork, after releasing the controller lock.
+ * IRQL: DISPATCH_LEVEL, controller lock held.
  */
-static MPSTATUS xhciRhPortOperation(PXHCI_EXTENSION ext,
-                                    USHORT port,
-                                    ULONG operation)
+static MPSTATUS xhciRhPortOperationLocked(PXHCI_EXTENSION ext,
+                                          USHORT port,
+                                          ULONG operation)
 {
-    KIRQL oldIrql;
     XHCI_PORT_SHADOW *shadow;
     ULONG xhciPort;
     ULONG portsc;
@@ -842,14 +907,12 @@ static MPSTATUS xhciRhPortOperation(PXHCI_EXTENSION ext,
     ULONG preempt;
 
     preempt = 0;
-    XhciControllerLockAcquire(&oldIrql);
 
     shadow = xhciRhShadow(ext, (ULONG)port);
     xhciPort = XhciRootHubPortOf(&ext->RootHub, (ULONG)port);
     if (shadow == NULL || xhciPort == 0) {
         ext->RhInvalidPort++;
         ext->RhRefusals++;
-        XhciControllerLockRelease(oldIrql);
         XHCI_DBG_VALUE_CHANGED("RH port operation: no such managed port",
                                (ULONG)port);
         return MP_STATUS_NOT_SUPPORTED;
@@ -857,7 +920,6 @@ static MPSTATUS xhciRhPortOperation(PXHCI_EXTENSION ext,
 
     if (!xhciRhAdmitted(ext)) {
         ext->RhRefusals++;
-        XhciControllerLockRelease(oldIrql);
         XHCI_DBG_VALUE_CHANGED("RH port operation: controller not in service, "
                                "operation", operation);
         return MP_STATUS_NOT_SUPPORTED;
@@ -866,7 +928,6 @@ static MPSTATUS xhciRhPortOperation(PXHCI_EXTENSION ext,
     portsc = XhciReadPortsc(ext, xhciPort);
     if (portsc == 0xFFFFFFFFUL) {
         ext->RhRefusals++;
-        XhciControllerLockRelease(oldIrql);
         XHCI_DBG_VALUE_CHANGED("RH port operation: PORTSC reads all ones on "
                                "port", xhciPort);
         return MP_STATUS_NOT_SUPPORTED;
@@ -883,7 +944,6 @@ static MPSTATUS xhciRhPortOperation(PXHCI_EXTENSION ext,
     if (!XhciPortShadowPpSettled(shadow, portsc)) {
         ext->RhPortPowerPending++;
         ext->RhRefusals++;
-        XhciControllerLockRelease(oldIrql);
         XHCI_DBG_VALUE_CHANGED("RH: refusing - a Port Power change is still in "
                                "flight on hub port", (ULONG)port);
         return MP_STATUS_NOT_SUPPORTED;
@@ -930,7 +990,6 @@ static MPSTATUS xhciRhPortOperation(PXHCI_EXTENSION ext,
         if (operation == XHCI_RH_OP_SUSPEND) {
             ext->RhPortsBusy++;
             ext->RhRefusals++;
-            XhciControllerLockRelease(oldIrql);
             XHCI_DBG_VALUE_CHANGED("RH_SetFeaturePortSuspend: an operation is "
                                    "already armed on hub port", (ULONG)port);
             return MP_STATUS_NOT_SUPPORTED;
@@ -968,7 +1027,6 @@ static MPSTATUS xhciRhPortOperation(PXHCI_EXTENSION ext,
         ((portsc & XHCI_PORTSC_PED) == 0 ||
          XHCI_PORTSC_GET_PLS(portsc) >= XHCI_PLS_U3)) {
         ext->RhRefusals++;
-        XhciControllerLockRelease(oldIrql);
         XHCI_DBG_VALUE_CHANGED("RH_SetFeaturePortSuspend: port is not enabled "
                                "and in a link state below U3, PORTSC", portsc);
         return MP_STATUS_NOT_SUPPORTED;
@@ -1062,6 +1120,7 @@ static MPSTATUS xhciRhPortOperation(PXHCI_EXTENSION ext,
             shadow->DisownPending = 0;
             shadow->DisownWantsPp = 0;
             XhciSlotPortDisabled(ext, (ULONG)port);
+            xhciRhVhubDisownSettled(ext, (ULONG)port, shadow);
         } else {
             shadow->DisownPending = 1;
             shadow->DisownWantsPp = (UCHAR)disownWantsPp;
@@ -1230,28 +1289,56 @@ static MPSTATUS xhciRhPortOperation(PXHCI_EXTENSION ext,
      * shadow from hardware, and the change bits that arrive with it are what
      * usbhub is waiting for.
      */
+    return MP_STATUS_SUCCESS;
+}
+
+/*
+ * The unlocked form: the body above under the controller lock, then the
+ * deferred work.
+ *
+ * The deferred work runs on every operation that was performed, rather than
+ * only on the path that preempted something - one rule for the whole family is
+ * easier to keep true than "the site that happened to need it remembers". It
+ * costs one uncontended acquire when there is nothing owed, and it is what gets
+ * a preempted reset's C_PORT_RESET announced now instead of at the next health
+ * poll. A refusal performed nothing and reaches none of it, as before the body
+ * was split out for task 24.3.
+ *
+ * IRQL: DISPATCH_LEVEL. Calls usbport services only through
+ * XhciRootHubDeferredWork, after releasing the controller lock.
+ */
+static MPSTATUS xhciRhPortOperation(PXHCI_EXTENSION ext,
+                                    USHORT port,
+                                    ULONG operation)
+{
+    KIRQL oldIrql;
+    MPSTATUS status;
+
+    XhciControllerLockAcquire(&oldIrql);
+    status = xhciRhPortOperationLocked(ext, port, operation);
     XhciControllerLockRelease(oldIrql);
 
-    /*
-     * Unconditionally, rather than only on the path that preempted something -
-     * one rule for the whole family is easier to keep true than "the site that
-     * happened to need it remembers". It costs one uncontended acquire when
-     * there is nothing owed, and it is what gets a preempted reset's
-     * C_PORT_RESET announced now instead of at the next health poll.
-     */
-    XhciRootHubDeferredWork(ext);
-    return MP_STATUS_SUCCESS;
+    if (status == MP_STATUS_SUCCESS) {
+        XhciRootHubDeferredWork(ext);
+    }
+    return status;
 }
 
 /* IRQL: DISPATCH_LEVEL. */
 MPSTATUS XhciRhSetFeaturePortPower(PXHCI_EXTENSION ext, USHORT port)
 {
+    if (ext->VhubConfig.Applied != XHCI_VHUB_MODE_OFF) {
+        return xhciRhVhubRootOp(ext, port, XHCI_RH_VHUB_POWER_ON);
+    }
     return xhciRhPortOperation(ext, port, XHCI_RH_OP_POWER_ON);
 }
 
 /* IRQL: DISPATCH_LEVEL. */
 MPSTATUS XhciRhClearFeaturePortPower(PXHCI_EXTENSION ext, USHORT port)
 {
+    if (ext->VhubConfig.Applied != XHCI_VHUB_MODE_OFF) {
+        return xhciRhVhubRootOp(ext, port, XHCI_RH_VHUB_POWER_OFF);
+    }
     return xhciRhPortOperation(ext, port, XHCI_RH_OP_POWER_OFF);
 }
 
@@ -1287,12 +1374,18 @@ MPSTATUS XhciRhSetFeaturePortEnable(PXHCI_EXTENSION ext, USHORT port)
 /* IRQL: DISPATCH_LEVEL. */
 MPSTATUS XhciRhClearFeaturePortEnable(PXHCI_EXTENSION ext, USHORT port)
 {
+    if (ext->VhubConfig.Applied != XHCI_VHUB_MODE_OFF) {
+        return xhciRhVhubRootOp(ext, port, XHCI_RH_VHUB_DISABLE);
+    }
     return xhciRhPortOperation(ext, port, XHCI_RH_OP_DISABLE);
 }
 
 /* IRQL: DISPATCH_LEVEL. */
 MPSTATUS XhciRhSetFeaturePortSuspend(PXHCI_EXTENSION ext, USHORT port)
 {
+    if (ext->VhubConfig.Applied != XHCI_VHUB_MODE_OFF) {
+        return xhciRhVhubRootOp(ext, port, XHCI_RH_VHUB_SUSPEND);
+    }
     return xhciRhPortOperation(ext, port, XHCI_RH_OP_SUSPEND);
 }
 
@@ -1333,41 +1426,36 @@ MPSTATUS XhciRhSetFeaturePortSuspend(PXHCI_EXTENSION ext, USHORT port)
  * timers would then both believe they own the port - usbport should never
  * produce that, which is why it is counted separately from an ordinary refusal.
  *
- * IRQL: DISPATCH_LEVEL. Takes and releases the controller lock; no wait, and
- * usbport services only through XhciRootHubDeferredWork, after the release.
+ * IRQL: DISPATCH_LEVEL, controller lock held; the caller owes
+ * XhciRootHubDeferredWork after releasing it, which is what gets the timer
+ * onto the port.
  */
-static MPSTATUS xhciRhStartOperation(PXHCI_EXTENSION ext,
-                                     USHORT port,
-                                     ULONG operation)
+static MPSTATUS xhciRhStartOperationLocked(PXHCI_EXTENSION ext,
+                                           USHORT port,
+                                           ULONG operation,
+                                           ULONG *armed)
 {
-    KIRQL oldIrql;
     XHCI_PORT_SHADOW *shadow;
     ULONG xhciPort;
     ULONG portsc;
     ULONG pls;
     ULONG value;
     ULONG write;
-    MPSTATUS status;
 
+    *armed = 0;
     if (!XhciAsyncTimerAvailable()) {
-        XhciControllerLockAcquire(&oldIrql);
         ext->RhTimerFailures++;
         ext->RhRefusals++;
-        XhciControllerLockRelease(oldIrql);
         XHCI_DBG_VALUE_CHANGED("RH async operation: no timer service to time "
                                "it with - refusing, operation", operation);
         return MP_STATUS_NOT_SUPPORTED;
     }
-
-    status = MP_STATUS_NOT_SUPPORTED;
-    XhciControllerLockAcquire(&oldIrql);
 
     shadow = xhciRhShadow(ext, (ULONG)port);
     xhciPort = XhciRootHubPortOf(&ext->RootHub, (ULONG)port);
     if (shadow == NULL || xhciPort == 0) {
         ext->RhInvalidPort++;
         ext->RhRefusals++;
-        XhciControllerLockRelease(oldIrql);
         XHCI_DBG_VALUE_CHANGED("RH async operation: no such managed port",
                                (ULONG)port);
         return MP_STATUS_NOT_SUPPORTED;
@@ -1375,7 +1463,6 @@ static MPSTATUS xhciRhStartOperation(PXHCI_EXTENSION ext,
 
     if (!xhciRhAdmitted(ext)) {
         ext->RhRefusals++;
-        XhciControllerLockRelease(oldIrql);
         XHCI_DBG_VALUE_CHANGED("RH async operation: controller not in service, "
                                "operation", operation);
         return MP_STATUS_NOT_SUPPORTED;
@@ -1384,7 +1471,6 @@ static MPSTATUS xhciRhStartOperation(PXHCI_EXTENSION ext,
     portsc = XhciReadPortsc(ext, xhciPort);
     if (portsc == 0xFFFFFFFFUL) {
         ext->RhRefusals++;
-        XhciControllerLockRelease(oldIrql);
         XHCI_DBG_VALUE_CHANGED("RH async operation: PORTSC reads all ones on "
                                "port", xhciPort);
         return MP_STATUS_NOT_SUPPORTED;
@@ -1401,7 +1487,6 @@ static MPSTATUS xhciRhStartOperation(PXHCI_EXTENSION ext,
     if (!XhciPortShadowPpSettled(shadow, portsc)) {
         ext->RhPortPowerPending++;
         ext->RhRefusals++;
-        XhciControllerLockRelease(oldIrql);
         XHCI_DBG_VALUE_CHANGED("RH: refusing - a Port Power change is still in "
                                "flight on hub port", (ULONG)port);
         return MP_STATUS_NOT_SUPPORTED;
@@ -1420,7 +1505,6 @@ static MPSTATUS xhciRhStartOperation(PXHCI_EXTENSION ext,
     if (shadow->Armed != XHCI_PORT_OP_NONE) {
         ext->RhPortsBusy++;
         ext->RhRefusals++;
-        XhciControllerLockRelease(oldIrql);
         XHCI_DBG_VALUE_CHANGED("RH async operation: an operation is already "
                                "armed on hub port", (ULONG)port);
         return MP_STATUS_NOT_SUPPORTED;
@@ -1452,7 +1536,6 @@ static MPSTATUS xhciRhStartOperation(PXHCI_EXTENSION ext,
              * asks for. Answering NOT_SUPPORTED would make usbhub treat an
              * already-running port as a failure.
              */
-            XhciControllerLockRelease(oldIrql);
             XHCI_DBG_VALUE_CHANGED("RH_ClearFeaturePortSuspend: port is not "
                                    "suspended, PORTSC", portsc);
             return MP_STATUS_SUCCESS;
@@ -1477,7 +1560,6 @@ static MPSTATUS xhciRhStartOperation(PXHCI_EXTENSION ext,
          * reaches it by another route. */
         ext->RhPortsBusy++;
         ext->RhRefusals++;
-        XhciControllerLockRelease(oldIrql);
         return MP_STATUS_NOT_SUPPORTED;
     }
 
@@ -1499,13 +1581,35 @@ static MPSTATUS xhciRhStartOperation(PXHCI_EXTENSION ext,
     } else {
         ext->RhPortsResumed++;
     }
-    status = MP_STATUS_SUCCESS;
+    *armed = 1;
+    return MP_STATUS_SUCCESS;
+}
 
+/*
+ * The unlocked form: the body under the controller lock, then - for an
+ * operation that was armed - the timer and any announcement this or another
+ * context has queued. Both are usbport services, so neither could happen under
+ * the lock. A refusal, and a resume of a port that is not suspended, armed
+ * nothing and reach none of it, as before the body was split out for task
+ * 24.3.
+ *
+ * IRQL: DISPATCH_LEVEL. Takes and releases the controller lock; no wait.
+ */
+static MPSTATUS xhciRhStartOperation(PXHCI_EXTENSION ext,
+                                     USHORT port,
+                                     ULONG operation)
+{
+    KIRQL oldIrql;
+    MPSTATUS status;
+    ULONG armed;
+
+    XhciControllerLockAcquire(&oldIrql);
+    status = xhciRhStartOperationLocked(ext, port, operation, &armed);
     XhciControllerLockRelease(oldIrql);
 
-    /* The timer, and any announcement this or another context has queued. Both
-     * are usbport services, so neither could happen above. */
-    XhciRootHubDeferredWork(ext);
+    if (armed) {
+        XhciRootHubDeferredWork(ext);
+    }
     return status;
 }
 
@@ -1527,6 +1631,9 @@ static MPSTATUS xhciRhStartOperation(PXHCI_EXTENSION ext,
  */
 MPSTATUS XhciRhSetFeaturePortReset(PXHCI_EXTENSION ext, USHORT port)
 {
+    if (ext->VhubConfig.Applied != XHCI_VHUB_MODE_OFF) {
+        return xhciRhVhubRootOp(ext, port, XHCI_RH_VHUB_RESET);
+    }
     return xhciRhStartOperation(ext, port, XHCI_PORT_OP_RESET);
 }
 
@@ -1555,7 +1662,553 @@ MPSTATUS XhciRhSetFeaturePortReset(PXHCI_EXTENSION ext, USHORT port)
  */
 MPSTATUS XhciRhClearFeaturePortSuspend(PXHCI_EXTENSION ext, USHORT port)
 {
+    if (ext->VhubConfig.Applied != XHCI_VHUB_MODE_OFF) {
+        return xhciRhVhubRootOp(ext, port, XHCI_RH_VHUB_RESUME);
+    }
     return xhciRhStartOperation(ext, port, XHCI_PORT_OP_RESUME);
+}
+
+/* ------------------------------------------------------------------ */
+/* Task 24.3: the virtual hubs (design record 12)                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The root-hub half of the virtual USB 2.0 hub on a root port. The pure core
+ * (src/xhci_vhub.c) decides every state change and answers what to do as a
+ * verdict; what lives here is carrying the verdict out on the physical port,
+ * through the port bodies above, under the same hold of the controller lock
+ * that took the decision. The device half - the hub's endpoints, its request
+ * table and its status-change transfer - is in src/xhci_slot.c.
+ *
+ * **Rule 2 (design record 12 section 3.1) is held by one test.** Every entry
+ * below asks `VhubConfig.Applied` first, and with the switch applied as off
+ * returns before it has read anything else: no record is made present, no
+ * report changes, and the callers above take today's path unchanged.
+ */
+
+/*
+ * One port's record, or NULL whenever the switch is applied as off or the port
+ * is not one this root hub has.
+ *
+ * IRQL: any. Caller holds the controller lock.
+ */
+static PXHCI_VHUB xhciRhVhub(PXHCI_EXTENSION ext, ULONG hubPort)
+{
+    if (ext->VhubConfig.Applied == XHCI_VHUB_MODE_OFF) {
+        return NULL;
+    }
+    if (hubPort == 0 || hubPort > ext->RootHub.PortCount ||
+        hubPort > XHCI_MAX_ROOT_PORTS) {
+        return NULL;
+    }
+    return &ext->Vhub[hubPort - 1];
+}
+
+/*
+ * The physical port as the hub class reads it - today's report of the shadow,
+ * which is what every `physStatus` the core takes means. IRQL: any.
+ */
+static ULONG xhciRhVhubPhys(const XHCI_PORT_SHADOW *shadow)
+{
+    ULONG status;
+    ULONG change;
+
+    XhciPortShadowReport(shadow, &status, &change);
+    return status;
+}
+
+/*
+ * Carry out one verdict on `hubPort`'s physical port and on the device layer.
+ *
+ * Each bit names a body that exists today (src/xhci_vhub.h lists them), and
+ * each is run through the lock-held form of the callback that would run it -
+ * so a disable the hub asks for is the PED write, the disown and the confirmed
+ * half exactly as `RH_ClearFeaturePortEnable` performs them, and a reset is
+ * PORTSC.PR with its generation and its watchdog.
+ *
+ * `generation` is the one the core recorded for a PHYS_RESET, taken from
+ * XhciPortShadowNextGeneration before the call, which is what the arm then
+ * hands out. A reset the port refuses - busy, a Port Power change in flight,
+ * no timer - ended before it began: a port-1 reset is reported to port 1 as
+ * one whose deadline passed (the request that asked for it has already been
+ * answered), and a root reset is returned to usbport as the refusal it is
+ * today, with the upstream view left not resetting.
+ *
+ * Returns the status of the physical operation the verdict named, or
+ * MP_STATUS_SUCCESS when it named none.
+ *
+ * IRQL: DISPATCH_LEVEL. Caller holds the controller lock and owes
+ * XhciRootHubDeferredWork after releasing it.
+ */
+static MPSTATUS xhciRhVhubCarry(PXHCI_EXTENSION ext,
+                                ULONG hubPort,
+                                XHCI_PORT_SHADOW *shadow,
+                                ULONG verdict,
+                                ULONG generation)
+{
+    PXHCI_VHUB hub;
+    MPSTATUS status;
+    ULONG armed;
+    ULONG owner;
+
+    status = MP_STATUS_SUCCESS;
+    hub = &ext->Vhub[hubPort - 1];
+
+    if ((verdict & (XHCI_VHUB_DO_DROP | XHCI_VHUB_DO_CANCEL_PIPE)) != 0) {
+        /* usbport has let go of the hub's pipes, or the hub is gone: the held
+         * status-change transfer is answered as cancelled and nothing stays
+         * bound (3.4, 3.8). */
+        XhciSlotVhubUnbind(ext, hubPort);
+        if (ext->VhubArmedPort == hubPort) {
+            ext->VhubArmedPort = 0;
+        }
+    }
+    if ((verdict & XHCI_VHUB_DO_DROP) != 0) {
+        ext->VhubDropped++;
+        XhciLogNoteLocked(ext, "vhub.drop", hubPort);
+    }
+    if ((verdict & XHCI_VHUB_DO_ARM_HUB) != 0) {
+        /*
+         * The next address-0 open is the hub's, so no device claim may be left
+         * standing beside it: a root-port claim armed by an earlier reset, or
+         * a pending hub-port claim from an abandoned bracket (3.2, "has to
+         * learn that difference"). The same rule XhciSlotPortReset keeps for
+         * the two real entitlements.
+         */
+        ext->EnumClaimSpent = 1;
+        XhciTopoDropPending(&ext->Topology);
+        ext->VhubArmedPort = hubPort;
+    }
+    if ((verdict & XHCI_VHUB_DO_FORCE_CONNECT) != 0) {
+        /*
+         * A decision that flipped (3.2): the root port latches the connect
+         * change usbhub needs to tear down what it believes is there, and the
+         * device layer tears down the record exactly as for a physical one.
+         */
+        XhciPortShadowLatchChange(shadow, XHCI_HUB_C_PORT_CONNECTION);
+        ext->VhubForcedConnects++;
+        ext->RootHubInvalidatesOwed++;
+        XhciSlotPortConnectChanged(ext, hubPort);
+        XhciLogNoteLocked(ext, "vhub.flip", hubPort);
+    }
+    if ((verdict & XHCI_VHUB_DO_DISABLE) != 0) {
+        status = xhciRhPortOperationLocked(ext, (USHORT)hubPort,
+                                           XHCI_RH_OP_DISABLE);
+    }
+    if ((verdict & XHCI_VHUB_DO_POWER_OFF) != 0) {
+        status = xhciRhPortOperationLocked(ext, (USHORT)hubPort,
+                                           XHCI_RH_OP_POWER_OFF);
+    }
+    if ((verdict & XHCI_VHUB_DO_POWER_ON) != 0) {
+        status = xhciRhPortOperationLocked(ext, (USHORT)hubPort,
+                                           XHCI_RH_OP_POWER_ON);
+    }
+    if ((verdict & XHCI_VHUB_DO_SUSPEND) != 0) {
+        status = xhciRhPortOperationLocked(ext, (USHORT)hubPort,
+                                           XHCI_RH_OP_SUSPEND);
+    }
+    if ((verdict & XHCI_VHUB_DO_RESUME) != 0) {
+        status = xhciRhStartOperationLocked(ext, (USHORT)hubPort,
+                                            XHCI_PORT_OP_RESUME, &armed);
+    }
+    if ((verdict & XHCI_VHUB_DO_PHYS_RESET) != 0) {
+        status = xhciRhStartOperationLocked(ext, (USHORT)hubPort,
+                                            XHCI_PORT_OP_RESET, &armed);
+        if (armed) {
+            /* The arm hands out the generation named in advance; this is the
+             * primitive's promise, restated where it is relied on. */
+            if (hub->ResetOwner != XHCI_VHUB_OWNER_NONE &&
+                hub->ResetGeneration != shadow->Generation) {
+                hub->ResetGeneration = shadow->Generation;
+            }
+        } else {
+            owner = hub->ResetOwner;
+            if (owner == XHCI_VHUB_OWNER_PORT1) {
+                (VOID)xhciRhVhubCarry(
+                    ext, hubPort, shadow,
+                    XhciVhubResetDone(hub, ext->VhubConfig.Applied,
+                                      generation, 1, shadow->Speed,
+                                      xhciRhVhubPhys(shadow)),
+                    generation);
+            } else if (owner == XHCI_VHUB_OWNER_ROOT) {
+                hub->ResetOwner = (UCHAR)XHCI_VHUB_OWNER_NONE;
+                hub->UpResetting = 0;
+            }
+        }
+    }
+    if ((verdict & XHCI_VHUB_DO_RESET_HELD) != 0) {
+        ext->VhubResetsHeld++;
+    }
+    if ((verdict & XHCI_VHUB_DO_ROOT_CHANGE) != 0) {
+        ext->RootHubInvalidatesOwed++;
+    }
+    if ((verdict & XHCI_VHUB_DO_PIPE) != 0) {
+        XhciSlotVhubPipe(ext, hubPort, 0);
+    }
+    return status;
+}
+
+/*
+ * A physical reset on `hubPort` ended - its PRC, or the deadline with
+ * `timedOut` - and this is whose it was.
+ *
+ * The core takes it only if it owns that reset under that generation (3.2:
+ * routed "by which view started it and under which reset generation, never by
+ * the port's mode when it ends"); anything else is today's, and the caller's
+ * XhciSlotPortReset runs as it always has. Returns XHCI_RH_VHUB_END_* bits:
+ * SLOT when today's device claim is owed - a direct decision, or the end of a
+ * port-1 reset, which arms the claim for the device behind port 1 (3.6) - and
+ * PORT1 when the reset was port 1's, so the root port latches no C_PORT_RESET
+ * of its own.
+ *
+ * IRQL: DISPATCH_LEVEL. Caller holds the controller lock.
+ */
+#define XHCI_RH_VHUB_END_SLOT   0x1UL
+#define XHCI_RH_VHUB_END_PORT1  0x2UL
+
+static ULONG xhciRhVhubResetEnded(PXHCI_EXTENSION ext,
+                                  ULONG hubPort,
+                                  XHCI_PORT_SHADOW *shadow,
+                                  ULONG generation,
+                                  ULONG timedOut)
+{
+    PXHCI_VHUB hub;
+    ULONG owner;
+    ULONG wasPresent;
+    ULONG verdict;
+
+    hub = xhciRhVhub(ext, hubPort);
+    if (hub == NULL || hub->ResetOwner == XHCI_VHUB_OWNER_NONE ||
+        hub->ResetGeneration != generation) {
+        return XHCI_RH_VHUB_END_SLOT;
+    }
+    owner = hub->ResetOwner;
+    wasPresent = hub->Present;
+
+    verdict = XhciVhubResetDone(hub, ext->VhubConfig.Applied, generation,
+                                timedOut, shadow->Speed,
+                                xhciRhVhubPhys(shadow));
+    if (!wasPresent && hub->Present) {
+        /*
+         * Value 1's decision stood a hub up (3.2). Whatever an earlier hub on
+         * this port left bound is a displaced handle's, and the log says which
+         * port and which decoded speed made it.
+         */
+        XhciSlotVhubUnbind(ext, hubPort);
+        ext->VhubCreated++;
+        XhciLogNoteLocked(ext, "vhub.create",
+                          (hubPort << 8) | (ULONG)shadow->Speed);
+    }
+    (VOID)xhciRhVhubCarry(ext, hubPort, shadow, verdict, generation);
+
+    if (owner == XHCI_VHUB_OWNER_PORT1) {
+        return XHCI_RH_VHUB_END_SLOT | XHCI_RH_VHUB_END_PORT1;
+    }
+    return (verdict == XHCI_VHUB_DO_NONE) ? XHCI_RH_VHUB_END_SLOT : 0;
+}
+
+/*
+ * The refresh's half (xhciRhRefreshEx), with the switch applied: route a
+ * reset that ended, then hand the core the changes this reading latched so
+ * each lands in the view that owns it, and strip from the shadow the ones the
+ * root port no longer reports from there (3.4: "each view keeps its own change
+ * bits"). A completed resume is the view's that asked for it, or a remote wake
+ * when neither did (3.5).
+ *
+ * Returns whether today's XhciSlotPortReset is owed.
+ *
+ * IRQL: any (no wait). Caller holds the controller lock.
+ */
+static ULONG xhciRhVhubRefreshed(PXHCI_EXTENSION ext,
+                                 ULONG hubPort,
+                                 XHCI_PORT_SHADOW *shadow,
+                                 ULONG latched,
+                                 ULONG endedGeneration)
+{
+    PXHCI_VHUB hub;
+    ULONG slotReset;
+    ULONG verdict;
+    ULONG strip;
+
+    slotReset = ((latched & XHCI_HUB_C_PORT_RESET) != 0) ? 1UL : 0UL;
+    hub = xhciRhVhub(ext, hubPort);
+    if (hub == NULL) {
+        return slotReset;
+    }
+    if (slotReset && endedGeneration != 0) {
+        slotReset = ((xhciRhVhubResetEnded(ext, hubPort, shadow,
+                                           endedGeneration, 0) &
+                      XHCI_RH_VHUB_END_SLOT) != 0) ? 1UL : 0UL;
+    }
+    if ((latched & XHCI_HUB_C_PORT_SUSPEND) != 0 && hub->Present) {
+        verdict = (hub->UpResumeOwed || hub->P1ResumeOwed)
+                      ? XhciVhubResumeDone(hub)
+                      : XhciVhubRemoteWake(hub);
+        (VOID)xhciRhVhubCarry(ext, hubPort, shadow, verdict, 0);
+    }
+    verdict = XhciVhubAbsorb(hub, ext->VhubConfig.Applied, latched,
+                             xhciRhVhubPhys(shadow), &strip);
+    shadow->Changes = (UCHAR)((ULONG)shadow->Changes & ~strip);
+    (VOID)xhciRhVhubCarry(ext, hubPort, shadow, verdict, 0);
+    return slotReset;
+}
+
+/*
+ * A physical reset ended with no PRC - the watchdog's deadline, or the health
+ * poll's age retire. Returns 1 when it was port 1's, so the caller latches no
+ * root-port C_PORT_RESET for it. IRQL: DISPATCH_LEVEL, controller lock held.
+ */
+static ULONG xhciRhVhubResetLost(PXHCI_EXTENSION ext,
+                                 ULONG hubPort,
+                                 XHCI_PORT_SHADOW *shadow,
+                                 ULONG generation)
+{
+    if (ext->VhubConfig.Applied == XHCI_VHUB_MODE_OFF) {
+        return 0;
+    }
+    return ((xhciRhVhubResetEnded(ext, hubPort, shadow, generation, 1) &
+             XHCI_RH_VHUB_END_PORT1) != 0) ? 1UL : 0UL;
+}
+
+/*
+ * The disable owed on `hubPort` has just been confirmed, so a reset the hub
+ * held for it starts now (3.3's gate). IRQL: DISPATCH_LEVEL, controller lock
+ * held; the caller owes XhciRootHubDeferredWork, which arms the timer.
+ */
+static VOID xhciRhVhubDisownSettled(PXHCI_EXTENSION ext,
+                                    ULONG hubPort,
+                                    XHCI_PORT_SHADOW *shadow)
+{
+    PXHCI_VHUB hub;
+    ULONG generation;
+
+    hub = xhciRhVhub(ext, hubPort);
+    if (hub == NULL || hub->ResetHeld == XHCI_VHUB_OWNER_NONE) {
+        return;
+    }
+    generation = XhciPortShadowNextGeneration(shadow);
+    (VOID)xhciRhVhubCarry(ext, hubPort, shadow,
+                          XhciVhubDisownCollected(hub,
+                                                  ext->VhubConfig.Applied,
+                                                  generation),
+                          generation);
+}
+
+/*
+ * The six root-port feature requests with the switch applied.
+ *
+ * Each is one lock hold: the reading folded in where the request acts on a
+ * link or a reset (as the resume and suspend paths above do), the core's
+ * verdict, and the verdict carried out through the same bodies today's
+ * callbacks use. At 1 a port with no hub, and a power or disable request on
+ * any port, still performs today's operation - the hub's part at 1 is only
+ * dropping itself (3.2) - and at 2 the verdict says everything (3.8).
+ *
+ * IRQL: DISPATCH_LEVEL. Takes and releases the controller lock; calls usbport
+ * services only through XhciRootHubDeferredWork, after the release.
+ */
+static MPSTATUS xhciRhVhubRootOp(PXHCI_EXTENSION ext, USHORT port, ULONG which)
+{
+    KIRQL oldIrql;
+    XHCI_PORT_SHADOW *shadow;
+    PXHCI_VHUB hub;
+    MPSTATUS status;
+    ULONG applied;
+    ULONG generation;
+    ULONG verdict;
+    ULONG armed;
+
+    applied = ext->VhubConfig.Applied;
+    XhciControllerLockAcquire(&oldIrql);
+
+    shadow = xhciRhShadow(ext, (ULONG)port);
+    hub = xhciRhVhub(ext, (ULONG)port);
+    if (shadow == NULL || hub == NULL) {
+        /* No such port: today's refusal, counted by today's body. */
+        switch (which) {
+        case XHCI_RH_VHUB_RESET:
+            status = xhciRhStartOperationLocked(ext, port, XHCI_PORT_OP_RESET,
+                                                &armed);
+            break;
+        case XHCI_RH_VHUB_RESUME:
+            status = xhciRhStartOperationLocked(ext, port,
+                                                XHCI_PORT_OP_RESUME, &armed);
+            break;
+        case XHCI_RH_VHUB_POWER_ON:
+            status = xhciRhPortOperationLocked(ext, port, XHCI_RH_OP_POWER_ON);
+            break;
+        case XHCI_RH_VHUB_POWER_OFF:
+            status = xhciRhPortOperationLocked(ext, port,
+                                               XHCI_RH_OP_POWER_OFF);
+            break;
+        case XHCI_RH_VHUB_SUSPEND:
+            status = xhciRhPortOperationLocked(ext, port, XHCI_RH_OP_SUSPEND);
+            break;
+        default:
+            status = xhciRhPortOperationLocked(ext, port, XHCI_RH_OP_DISABLE);
+            break;
+        }
+        XhciControllerLockRelease(oldIrql);
+        return status;
+    }
+
+    /*
+     * The fold is taken only on a port with nothing armed, for the reason the
+     * resume path above gives: a refresh claims a reset whose PRC it finds,
+     * and run ahead of the busy test it would admit a request to a port
+     * another operation still owns.
+     */
+    if ((which == XHCI_RH_VHUB_RESET || which == XHCI_RH_VHUB_SUSPEND ||
+         which == XHCI_RH_VHUB_RESUME) && xhciRhAdmitted(ext) &&
+        shadow->Armed == XHCI_PORT_OP_NONE) {
+        xhciRhFoldReading(ext, (ULONG)port, shadow);
+    }
+    generation = XhciPortShadowNextGeneration(shadow);
+    status = MP_STATUS_SUCCESS;
+
+    switch (which) {
+    case XHCI_RH_VHUB_RESET:
+        verdict = XhciVhubRootReset(hub, applied, generation,
+                                    shadow->DisownPending,
+                                    xhciRhVhubPhys(shadow));
+        status = xhciRhVhubCarry(ext, (ULONG)port, shadow, verdict,
+                                 generation);
+        break;
+
+    case XHCI_RH_VHUB_POWER_ON:
+        if (applied == XHCI_VHUB_MODE_ALWAYS) {
+            status = xhciRhVhubCarry(ext, (ULONG)port, shadow,
+                                     XhciVhubRootPower(hub, applied, 1,
+                                                       xhciRhVhubPhys(shadow)),
+                                     generation);
+        } else {
+            status = xhciRhPortOperationLocked(ext, port,
+                                               XHCI_RH_OP_POWER_ON);
+        }
+        break;
+
+    case XHCI_RH_VHUB_POWER_OFF:
+    case XHCI_RH_VHUB_DISABLE:
+        verdict = (which == XHCI_RH_VHUB_POWER_OFF)
+                      ? XhciVhubRootPower(hub, applied, 0,
+                                          xhciRhVhubPhys(shadow))
+                      : XhciVhubRootDisable(hub, applied,
+                                            xhciRhVhubPhys(shadow));
+        status = xhciRhVhubCarry(ext, (ULONG)port, shadow, verdict,
+                                 generation);
+        if (applied == XHCI_VHUB_MODE_ON_DEMAND) {
+            status = xhciRhPortOperationLocked(
+                ext, port,
+                (which == XHCI_RH_VHUB_POWER_OFF) ? XHCI_RH_OP_POWER_OFF
+                                                  : XHCI_RH_OP_DISABLE);
+        }
+        break;
+
+    case XHCI_RH_VHUB_SUSPEND:
+        if (!hub->Present) {
+            status = xhciRhPortOperationLocked(ext, port, XHCI_RH_OP_SUSPEND);
+            break;
+        }
+        verdict = XhciVhubRootSuspend(hub, applied, 1,
+                                      xhciRhVhubPhys(shadow));
+        status = xhciRhVhubCarry(ext, (ULONG)port, shadow, verdict,
+                                 generation);
+        if ((verdict & XHCI_VHUB_DO_SUSPEND) != 0 &&
+            status != MP_STATUS_SUCCESS) {
+            /* The port refused the link write, so neither the view nor the
+             * port is suspended, and usbhub is told so by the refusal. */
+            hub->UpSuspend = 0;
+            hub->PhysSuspended = 0;
+        }
+        break;
+
+    default:
+        if (!hub->Present) {
+            status = xhciRhStartOperationLocked(ext, port,
+                                                XHCI_PORT_OP_RESUME, &armed);
+            break;
+        }
+        status = xhciRhVhubCarry(ext, (ULONG)port, shadow,
+                                 XhciVhubRootSuspend(hub, applied, 0,
+                                                     xhciRhVhubPhys(shadow)),
+                                 generation);
+        break;
+    }
+
+    XhciControllerLockRelease(oldIrql);
+    XhciRootHubDeferredWork(ext);
+    return status;
+}
+
+/*
+ * SET_PORT_FEATURE or CLEAR_PORT_FEATURE on a virtual hub's port 1, the
+ * selector already accepted by the request table - the device half's one way
+ * into the physical port (3.3's port-1 rows).
+ *
+ * IRQL: DISPATCH_LEVEL. Caller holds the controller lock and owes
+ * XhciRootHubDeferredWork after releasing it.
+ */
+VOID XhciRhVhubPort1Feature(PXHCI_EXTENSION ext,
+                            ULONG hubPort,
+                            ULONG set,
+                            ULONG selector)
+{
+    XHCI_PORT_SHADOW *shadow;
+    PXHCI_VHUB hub;
+    MPSTATUS status;
+    ULONG generation;
+    ULONG verdict;
+
+    shadow = xhciRhShadow(ext, hubPort);
+    hub = xhciRhVhub(ext, hubPort);
+    if (shadow == NULL || hub == NULL || !hub->Present) {
+        return;
+    }
+    if ((selector == XHCI_VHUB_SEL_PORT_RESET ||
+         selector == XHCI_VHUB_SEL_PORT_SUSPEND) && xhciRhAdmitted(ext) &&
+        shadow->Armed == XHCI_PORT_OP_NONE) {
+        xhciRhFoldReading(ext, hubPort, shadow);
+    }
+    generation = XhciPortShadowNextGeneration(shadow);
+    verdict = XhciVhubPort1Feature(hub, set, selector, generation,
+                                   shadow->DisownPending,
+                                   xhciRhVhubPhys(shadow));
+    status = xhciRhVhubCarry(ext, hubPort, shadow, verdict, generation);
+    if ((verdict & XHCI_VHUB_DO_SUSPEND) != 0 && status != MP_STATUS_SUCCESS) {
+        /* The port refused the link write: port 1 is not suspended, and the
+         * request completes having changed nothing. */
+        hub->P1Suspend = 0;
+        hub->PhysSuspended = 0;
+    }
+}
+
+/*
+ * GET_PORT_STATUS(1): the port read afresh, as RH_GetPortStatus reads the root
+ * port, and answered from port 1's view (3.3).
+ *
+ * IRQL: DISPATCH_LEVEL. Caller holds the controller lock and owes
+ * XhciRootHubDeferredWork after releasing it.
+ */
+VOID XhciRhVhubPort1Status(PXHCI_EXTENSION ext,
+                           ULONG hubPort,
+                           ULONG *status,
+                           ULONG *change)
+{
+    XHCI_PORT_SHADOW *shadow;
+    PXHCI_VHUB hub;
+
+    *status = 0;
+    *change = 0;
+    shadow = xhciRhShadow(ext, hubPort);
+    hub = xhciRhVhub(ext, hubPort);
+    if (shadow == NULL || hub == NULL) {
+        return;
+    }
+    if (xhciRhAdmitted(ext) && shadow->Armed == XHCI_PORT_OP_NONE) {
+        xhciRhFoldReading(ext, hubPort, shadow);
+    }
+    XhciVhubPort1Report(hub, xhciRhVhubPhys(shadow), (ULONG)shadow->Speed,
+                        status, change);
 }
 
 /*
@@ -1641,7 +2294,8 @@ static VOID NTAPI xhciRhPortTimeout(PVOID miniPortExtension, PVOID context)
          */
         latched = 0;
         if (xhciRhAdmitted(ext)) {
-            latched = xhciRhRefresh(ext, timeout->HubPort, shadow);
+            latched = xhciRhRefreshEx(ext, timeout->HubPort, shadow,
+                                      timeout->Generation);
         }
 
         if ((latched & XHCI_HUB_C_PORT_RESET) != 0) {
@@ -1664,7 +2318,12 @@ static VOID NTAPI xhciRhPortTimeout(PVOID miniPortExtension, PVOID context)
              * reset that has not ended except say so.
              */
             ext->RhResetTimeouts++;
-            XhciPortShadowLatchChange(shadow, XHCI_HUB_C_PORT_RESET);
+            /* Task 24.3: a port-1 reset's deadline is port 1's to report,
+             * never the root port's (design record 12 section 3.3). */
+            if (!xhciRhVhubResetLost(ext, timeout->HubPort, shadow,
+                                     timeout->Generation)) {
+                XhciPortShadowLatchChange(shadow, XHCI_HUB_C_PORT_RESET);
+            }
             XHCI_DBG_VALUE("RH reset: no PRC within the deadline, PORTSC",
                            shadow->Portsc);
         }
@@ -1829,6 +2488,13 @@ MPSTATUS XhciRhClearFeaturePortChange(PXHCI_EXTENSION ext,
     cleared = XhciPortShadowClearChange(shadow, changeBit);
     if (cleared) {
         ext->RhChangesCleared++;
+    }
+    /* Task 24.3: the upstream view keeps change bits of its own, and a clear
+     * of the root port is a clear of that view (design record 12 section
+     * 3.4); the shadow's copy is cleared above as today either way. */
+    if (ext->VhubConfig.Applied != XHCI_VHUB_MODE_OFF) {
+        XhciVhubRootClearChange(&ext->Vhub[port - 1], ext->VhubConfig.Applied,
+                                changeBit);
     }
     XhciControllerLockRelease(oldIrql);
 
@@ -2379,6 +3045,7 @@ static VOID xhciRhRetireOperation(PXHCI_EXTENSION ext,
                                   ULONG reason)
 {
     ULONG operation;
+    ULONG generation;
     ULONG xhciPort;
     ULONG portsc;
 
@@ -2386,6 +3053,7 @@ static VOID xhciRhRetireOperation(PXHCI_EXTENSION ext,
     if (operation == XHCI_PORT_OP_NONE) {
         return;
     }
+    generation = shadow->Generation;
     xhciPort = XhciRootHubPortOf(&ext->RootHub, hubPort);
 
     (VOID)XhciPortShadowDisarm(shadow);
@@ -2407,7 +3075,11 @@ static VOID xhciRhRetireOperation(PXHCI_EXTENSION ext,
         if (reason == XHCI_RH_RETIRE_AGED) {
             ext->RhResetTimeouts++;
         }
-        XhciPortShadowLatchChange(shadow, XHCI_HUB_C_PORT_RESET);
+        /* Task 24.3: routed by the owner it was started under, as the
+         * watchdog's deadline is. */
+        if (!xhciRhVhubResetLost(ext, hubPort, shadow, generation)) {
+            XhciPortShadowLatchChange(shadow, XHCI_HUB_C_PORT_RESET);
+        }
         ext->RootHubInvalidatesOwed++;
         return;
     }
@@ -2566,6 +3238,9 @@ VOID XhciRootHubPoll(PXHCI_EXTENSION ext)
                                          (ULONG)shadow->DisownWantsPp)) {
                     shadow->DisownPending = 0;
                     XhciSlotPortDisabled(ext, hubPort);
+                    /* Task 24.3: a reset a virtual hub held for this
+                     * confirmation starts now (design record 12 3.3). */
+                    xhciRhVhubDisownSettled(ext, hubPort, shadow);
                 }
             }
 
@@ -2801,6 +3476,7 @@ ULONG XhciRootHubInit(PXHCI_EXTENSION ext, ULONG afterRestore)
     ULONG connected;
     ULONG latched;
     ULONG owed;
+    UCHAR lost[(XHCI_MAX_ROOT_PORTS + 7) / 8];
 
     if (ext->PortMapStatus != XHCI_CAPS_OK) {
         ext->RootHub.Status = XHCI_RH_BAD_PARAM;
@@ -2809,11 +3485,69 @@ ULONG XhciRootHubInit(PXHCI_EXTENSION ext, ULONG afterRestore)
 
     XhciControllerLockAcquire(&oldIrql);
 
+    /*
+     * Task 24.3, value 2: which ports had a device behind their virtual hub
+     * before the rebuild throws the shadows away (design record 12 section
+     * 3.8, "resume and recovery keep the hubs"). A reinitialisation took every
+     * slot, so such a device is a connect change on port 1 even if nothing is
+     * plugged in any more - which no CSC will ever say.
+     */
+    if (ext->VhubConfig.Applied != XHCI_VHUB_MODE_OFF) {
+        for (hubPort = 0; hubPort < sizeof(lost); hubPort++) {
+            lost[hubPort] = 0;
+        }
+        if (ext->VhubConfig.Applied == XHCI_VHUB_MODE_ALWAYS &&
+            ext->VhubStarted && !afterRestore) {
+            for (hubPort = 1; hubPort <= ext->RootHub.PortCount &&
+                              hubPort <= XHCI_MAX_ROOT_PORTS; hubPort++) {
+                if ((ext->RootHub.Ports[hubPort - 1].Portsc &
+                     XHCI_PORTSC_CCS) != 0 ||
+                    ext->Vhub[hubPort - 1].P1Enabled) {
+                    lost[(hubPort - 1) >> 3] |=
+                        (UCHAR)(1U << ((hubPort - 1) & 7));
+                }
+            }
+        }
+    }
+
     status = XhciRootHubBuild(&ext->PortMap, &ext->RootHub);
     if (status != XHCI_RH_OK) {
         XhciControllerLockRelease(oldIrql);
         XHCI_DBG_VALUE("root hub: refusing, build status", status);
         return status;
+    }
+
+    /*
+     * Task 24.3: the virtual hubs, before the seed below reads the ports - so
+     * the seed's connect changes land in port 1's view at value 2 rather than
+     * on a root port that reports the hub. Once per start, which usbport marks
+     * by zeroing the extension: `VhubStarted` is 0 exactly then. A resume or a
+     * recovery rebuilds the root hub without a start and keeps the hubs, their
+     * addresses, bindings and held transfers (3.8).
+     */
+    if (ext->VhubConfig.Applied != XHCI_VHUB_MODE_OFF) {
+        for (hubPort = 1; hubPort <= ext->RootHub.PortCount; hubPort++) {
+            ULONG verdict;
+
+            if (!ext->VhubStarted) {
+                verdict = XhciVhubStart(&ext->Vhub[hubPort - 1],
+                                        ext->VhubConfig.Applied, 0);
+                if (ext->Vhub[hubPort - 1].Present) {
+                    ext->VhubCreated++;
+                }
+            } else {
+                verdict = XhciVhubReinit(
+                    &ext->Vhub[hubPort - 1], ext->VhubConfig.Applied,
+                    (lost[(hubPort - 1) >> 3] >> ((hubPort - 1) & 7)) & 1U);
+            }
+            if ((verdict & XHCI_VHUB_DO_ROOT_CHANGE) != 0) {
+                ext->RootHubInvalidatesOwed++;
+            }
+            if ((verdict & XHCI_VHUB_DO_PIPE) != 0) {
+                XhciSlotVhubPipe(ext, hubPort, 0);
+            }
+        }
+        ext->VhubStarted = 1;
     }
 
     connected = 0;

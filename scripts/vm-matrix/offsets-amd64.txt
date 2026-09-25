@@ -1,4 +1,4 @@
-SIZEOF 95560
+SIZEOF 111968
 AbortsBeforeStopped 76392
 AbortsDuringCompletion 76388
 AbortsFromCompletionList 76384
@@ -404,3 +404,16 @@ TtProgrammed 76036
 TtUnresolved 76040
 UnmaskEscalations 10596
 UnmatchedEventsTotal 76188
+VhubArmedPort 95556
+VhubCreated 95560
+VhubDropped 95564
+VhubForcedConnects 95596
+VhubOpens 95568
+VhubPipeCancels 95588
+VhubPipeCompletions 95584
+VhubRequests 95572
+VhubResetsHeld 95592
+VhubStalls 95576
+VhubStarted 95552
+VhubTransfersFailed 95580
+VhubTtNamed 95600

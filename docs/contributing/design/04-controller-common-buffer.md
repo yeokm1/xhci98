@@ -684,23 +684,25 @@ misplace a region. It is recorded as unread rather than assumed to be 48.
 and none of them is in this buffer:**
 
 **These four numbers move with the source and are dated.** Measured
-2026-09-17, on the tree carrying the 2026-09-17 audit's fixes, and the
-extension row re-read on 2026-09-22 after roadmap task 23.4. The x86 column
+2026-09-17, on the tree carrying the 2026-09-17 audit's fixes, the
+extension row re-read on 2026-09-22 after roadmap task 23.4, and the extension
+and endpoint rows re-read on 2026-09-25 after roadmap task 24.3.3. The x86 column
 is MSVC 6.0's, from `scripts\vm-matrix\gen-offsets.ps1` (the `SIZEOF` line)
 and `test/test_membuf.c`; the amd64 extension size is WDK 7.1's cross
 compiler's, taken on 2026-09-17 by the same `sizeof` print to a scratch file
 and on 2026-09-22 from the `SIZEOF` line of `offsets-amd64.txt`.
 That is the pair that lays the structures out for the shipping binaries. The
 table was stale three times before (91,612 / 95,496 from 2026-09-09, then
-91,656 / 95,536 from 2026-09-16, then 92,304 / 95,544 from 2026-09-17), and
+91,656 / 95,536 from 2026-09-16, then 92,304 / 95,544 from 2026-09-17, then
+92,320 / 95,560 from 2026-09-22), and
 it will go stale again: a field added to
 `XHCI_DEVICE` moves the extension by 32 times its cost. Re-measure rather
 than adjust the arithmetic here.
 
 | Quantity | x86 | amd64 | delta |
 |---|---|---|---|
-| `sizeof(XHCI_EXTENSION)` | 92,320 | 95,560 | +3,240 |
-| `sizeof(XHCI_ENDPOINT)` | 20 | 20 | - |
+| `sizeof(XHCI_EXTENSION)` | 104,644 | 111,968 | +7,324 |
+| `sizeof(XHCI_ENDPOINT)` | 24 | 24 | - |
 | `sizeof(XHCI_TRANSFER)` | 128 | 160 | +32 |
 | `sizeof(XHCI_DEVICE)` | 1,924 | 2,024 (not re-read 2026-09-17; see below) | +100 |
 
@@ -724,6 +726,17 @@ fields after `Log`, 16 bytes on both architectures - 92,304 -> 92,320 and
 95,544 -> 95,560 - which leaves the delta and the other three rows where
 they were.
 
+Task 24.3.3 (2026-09-25) added the virtual hubs (design record 12): one
+32-byte `XHCI_VHUB` record per root-hub port (255 x 32 = 8,160 bytes on both
+architectures), one `XHCI_VHUB_BINDING` beside it holding four pointers (16
+bytes x 255 = 4,080 on x86, 32 x 255 = 8,160 on amd64), the 32-byte
+`XHCI_VHUB_CONFIG`, and thirteen `ULONG`s, all after `ImodReadback`. That is
+12,324 bytes on x86, 92,320 -> 104,644, and 16,408 on amd64, 95,560 ->
+111,968, the four more than the fields' sum being alignment for the pointer
+array; the cross-architecture delta grows by the 4,080 the bindings differ by,
+and 4 of padding. `XHCI_ENDPOINT` gained one `ULONG` (`VhubPort`), 20 -> 24 on
+both. The slot array and the transfer are unchanged.
+
 `XHCI_DEVICE` is the reason the extension grows across architectures: it is
 32 slots of it inside `XHCI_EXTENSION`, so 3,200 of those 3,240 bytes are the
 slot array. These are `sizeof`s `DriverEntry` publishes in
@@ -731,7 +744,8 @@ slot array. These are `sizeof`s `DriverEntry` publishes in
 evaluated by the same compiler that laid the structures out, so usbport
 allocates the right size on each architecture with no change here. Stated
 plainly: an amd64 `xhci98.sys` asks usbport for 3,240 more bytes of miniport
-extension per controller and 32 more per outstanding transfer, and for
+extension per controller (as of 2026-09-17; see the table for today's delta)
+and 32 more per outstanding transfer, and for
 exactly the same 409,600-byte common buffer.
 
 The x86 `XHCI_EXTENSION` figure is the one `scripts\vm-matrix\gen-offsets.ps1`

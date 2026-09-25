@@ -11,13 +11,15 @@ page is gone. Sections 1 to 8 keep the proposal's wording where it still
 holds, and a sentence that says what the driver "would" do now says what
 24.3.3 builds. No boot has been taken for it: the host vectors are 24.3.2
 (done 2026-09-25, a pure core and its suite, section 8), the driver
-24.3.3, and the readings of section 5 are 24.3.4 and 24.3.5. 24.3.2 also
-widened value 1's root-report exception from the suspend pair to the
-enable, reset and suspend groups (3.2), the owner's call of that day.
+24.3.3 (done 2026-09-25, section 8 and section 10), and the readings of
+section 5 are 24.3.4 and 24.3.5. 24.3.2 also widened value 1's root-report
+exception from the suspend pair to the enable, reset and suspend groups
+(3.2), the owner's call of that day.
 
 What 24.3.1 added besides the move: the confirmation that every NT target's
 hub INF binds by class, as the 9x ones do (section 3.1, "Which INF binds
-the hub"). Everything the record decides is in section 9.
+the hub"). Everything the record decides is in section 9; what the driver
+had to settle that the record left open is in section 10.
 
 The evidence it rests on is the tree as it stands, issue 6
 (`docs/issues/06-full-speed-root-port-bugcheck.md`), design record 02
@@ -903,6 +905,14 @@ ports, with the interval read from the snapshot instrument.
   completion path, the status-change pipe, the suspend merge, and value 2's
   hub on every USB 2.0 port, wired to the core `-0` built, with the
   integration vectors `-0` handed on.
+  **Taken 2026-09-25.** The root-hub half is in `src/xhci_rh.c` and the
+  device half in `src/xhci_slot.c`, both carrying out the core's verdicts;
+  `src/xhci_vhub.c` joined `src/sources`; both INFs write the three values
+  on every install path and the INF gate requires them; the snapshot header
+  is schema 5 and `XHCISNAP` prints the mode, the ids and any refusal. The
+  handed-on vectors are six functions at the end of `test/test_init.c`, and
+  eleven driver mutations each failed at least one of them. Section 10
+  records what the wiring had to decide.
 - `-V`: section 6 on every guest held - Windows 98 SE under NUSB and under
   SweetLow's stack, ME, 2000, XP in both architectures, Vista and 7 in both
   - the switch at 0, then 1, then 2, the device matrix in all three states,
@@ -946,6 +956,99 @@ section 3.1's INF table; it needed no decision.
    read on both primary targets, and to which value, or stays an opt-in
    like the SuperSpeed storage proposal's. It is off in the Phase 24 cut; the later release is
    still open.
+
+## 10. What the driver settled (24.3.3)
+
+Sub-task 24.3.3 wired the core into the driver on 2026-09-25. Nothing here
+changes a decision of section 9; these are the points the record left to
+the build, each with the reason it went the way it did.
+
+- **Where a verdict is carried out.** Every core call returns what to do,
+  and the root-hub half carries it out under the same hold of the
+  controller lock that took the decision, through the bodies today's
+  callbacks run: `RH_ClearFeaturePortEnable`'s PED write, disown and
+  confirmed half; the Port Power bodies; the suspend write; the reset and
+  resume with their generations and watchdogs. To make that possible the
+  two callback bodies were split into lock-held forms
+  (`xhciRhPortOperationLocked`, `xhciRhStartOperationLocked`) with the
+  unlocked callbacks wrapped around them unchanged, the deferred work
+  still run exactly where it ran before, so with the switch off nothing
+  about them differs.
+- **Rule 2 is one test per divergence point.** `VhubConfig.Applied` is
+  asked first at every site - the refresh, the status query, the change
+  clear, the six feature callbacks, the root hub's build, the held-reset
+  collection, the open, the submit, the abort, the REMOVE - and at 0 each
+  returns to today's path before reading anything else. The host suite
+  runs its twenty thousand checks with the switch absent, which is the
+  standing reading that it holds.
+- **A reset's generation is named before it is armed.**
+  `XhciPortShadowNextGeneration` (`src/xhci_port.c`) is the arithmetic the
+  arm uses, so the core records the generation the reset will carry and
+  its end - a PRC, the watchdog's deadline or the health poll's age retire
+  - is routed by that, never by the port's mode when it ends (3.2).
+- **A reset or a suspend the port refuses.** A physical reset that cannot
+  start - an operation armed, a Port Power change in flight, no timer - is,
+  for port 1, reported to port 1 as a reset whose deadline passed, since
+  the request that asked for it has already been answered; for the root
+  port at 1 it is the refusal usbport gets today, with the upstream view
+  left not resetting. A suspend the port refuses clears the view's bit it
+  had just set, so no view reads suspended while the port does not.
+- **The reading is folded in before a reset, suspend or resume decision**,
+  as the resume path already did, so the core decides from the port as it
+  is; only on a port with nothing armed, because a fold claims a reset
+  whose PRC it finds and must not run ahead of the busy test.
+- **The third entitlement.** `VhubArmedPort` is the port whose reset last
+  armed a virtual hub's address-0 open, and it is kept exclusive with the
+  two real claims the way they are kept with each other (3.6): the reset
+  that arms a hub's open spends the root-port claim and drops a pending
+  hub-port claim, and a root-port device claim (`XhciSlotPortReset`) or a
+  snooped hub-port reset spends it. An address-0 open is therefore the
+  hub's only when the hub's reset was the last one, which is how the hub's
+  and the device's opens on one port are told apart.
+- **How an endpoint is bound to a hub.** `XHCI_ENDPOINT` gained `VhubPort`
+  and `XHCI_ENDPOINT_FLAG_VHUB`, and a virtual hub's endpoint keeps
+  `DeviceIndex` 0 so that no lookup in the device layer can resolve it to
+  a record; `MiniPortEndpointSize` is 24 bytes where it was 20. What
+  usbport has bound per port - the EP0 and status-change extensions, the
+  held transfer and its mapped buffer - is `XHCI_VHUB_BINDING`, beside the
+  core's record rather than in it, because the core holds no pointer and
+  is 32 bytes by assertion. A submit or a REMOVE through an extension that
+  is not the bound one is a displaced handle and touches nothing.
+- **Answers are written at submission and delivered later.** A request's
+  reply is written through the scatter/gather list's `MappedSystemVa`
+  inside `SubmitTransfer`, which is inside usbport's mapping window, and
+  the completion goes onto the ordinary completion list; the vectors assert
+  that nothing a virtual hub answers is completed from inside
+  `SubmitTransfer`.
+- **One status-change transfer is held at a time.** A second submitted
+  while one is held is refused for retry, which ends when the first is
+  completed or aborted. A completed pipe transfer is followed, if port 1's
+  change is still uncleared, by the next one completing at once too, which
+  is the core's rule (a change is reported until usbhub clears it).
+- **The hub's `bcdDevice`** is the driver version's first three fields as
+  one BCD digit each, taken from `XHCI_VER_CSV` in `src/xhci_version.h`, the
+  version's one editable source.
+- **Resume and recovery.** The root hub's build stands the hubs up once per
+  start (`VhubStarted`, zero exactly when usbport has just zeroed the
+  extension); a resume or a recovery rebuilds the root hub without a start
+  and keeps them, and at 2 a port whose device the reinitialisation took is
+  a connect change on port 1 even with nothing plugged in any more, since
+  no CSC will say so (3.8).
+- **The INF lines.** `XhciVirtualHSHub` is a DWORD written as 0; the two
+  ids are `REG_SZ` with an empty flags field and quoted data, `"1209"` and
+  `"0001"`, the form the property-page strings already use, so a
+  numeric-looking id stays a string on both setup engines. They sit after
+  the moderation interval on the 9x path and after `Controller` on the NT
+  paths, and the INF gate's `VAL-*` rules require all three on every path
+  with those defaults.
+- **What a dump says.** Snapshot schema 5 appends the switch's status and
+  value, the applied mode and refusal, and each id's status, verdict,
+  encoding and value; `XHCISNAP` prints them in words. The log ring notes
+  `vhub.switch`, `vhub.applied` and `vhub.ids` at every start, and
+  `vhub.create`, `vhub.drop`, `vhub.flip`, `vhub.open` and `vhub.address`
+  as they happen; the extension counts hubs stood up and dropped, opens,
+  requests, stalls, failed transfers, pipe completions and cancels, held
+  resets, flipped decisions, and TT pairs that named a virtual hub.
 
 ## Sources
 

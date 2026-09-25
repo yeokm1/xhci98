@@ -8,11 +8,12 @@
  * It is the **pure core** of the virtual hub in the design record 03 section 2
  * sense: computation over caller-supplied state, no MMIO, no DDK, no IRQL, no
  * usbport service, no lock. Sub-task 24.3.2 wrote it with its host vectors
- * (test/test_vhub.c) and nothing calls it yet; 24.3.3 embeds the per-port
- * records in the extension and wires the root-hub callbacks, the address-0
- * open, `SubmitTransfer` and the deferred-completion list to it. Until then no
- * shipping binary contains a byte of it, which is what keeps record 12's rule
- * 2 (off means today's driver) trivially true for this batch.
+ * (test/test_vhub.c); 24.3.3 embedded the per-port records in the extension
+ * (`XHCI_EXTENSION.Vhub`) and wired the root-hub half (src/xhci_rh.c) and the
+ * device half - the address-0 open, `SubmitTransfer` and the completion list
+ * (src/xhci_slot.c) - to it. Record 12's rule 2 (off means today's driver) is
+ * held there, by testing the applied mode before any call into this file;
+ * record 12 section 10 says where each verdict is carried out.
  *
  * Everything here is one of four things, each a section below:
  *
