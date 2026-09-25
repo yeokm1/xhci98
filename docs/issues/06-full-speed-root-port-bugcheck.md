@@ -293,6 +293,20 @@ target; only Windows 98 has the readings. The prohibition on
 "reconstructing" `bInterval` from `Period` is in the invariants: the
 information is gone before the miniport sees it.
 
+**Roadmap task 24.2 (2026-09-25) found no narrower remedy for the bands,
+and they stay 24.3's.** The owner decided it with no code change and no
+boot. On a root port, hidusbf's 1000, 500 and 250 Hz already land exactly:
+it treats the device as High Speed and writes `bInterval` 4, 5 and 6, and
+24.1 read those rates on all four Vista and 7 guests. What is lost is 125 Hz
+and slower, a stock rate slower than 4 ms, and any difference inside one
+band. The one mechanism that could recover any of that is the driver's own
+snoop of `GET_DESCRIPTOR(Configuration)` (`src/xhci_desc.h`). It was
+rejected because it reads the device's `bInterval` from below the filter and
+never sees the override. Using it would slow every stock root-port device
+on every target to its declared rate, and telling an override from a stock
+value would be the forbidden reconstruction. `docs/contributing/runs/run-24.md`,
+"24.2", has the reasoning.
+
 ### 5.1 The cosmetic effect became a dialog a user can open (2026-09-20)
 
 Until roadmap task 23.1 the report was visible only in the speed Device
@@ -630,8 +644,8 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
   behind a hub first (task 24.1: the reporter's Code 10 at 250 Hz and above,
   with the Low-Speed `Period` bound in `XhciIntervalFromPeriod` as the
   candidate - not this section's bands, which are a root-port matter), then
-  rates on a root port as a decision that may close as owned by true speeds
-  (24.2), then true speeds on root ports as a decision with its reason, for
+  rates on a root port as a decision (24.2: closed 2026-09-25 as owned by
+  true speeds, section 5), then true speeds on root ports as a decision with its reason, for
   which the virtual hub in section 8 is the candidate (24.3). Task 24.4
   reads the reporter's pointer for the USB 1.1 hub this project never held,
   once the part is to hand.

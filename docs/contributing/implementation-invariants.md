@@ -1158,7 +1158,7 @@ must therefore do.
     32 ms. The override polls at the same or a shorter interval; changes
     within a band cannot change the programmed interval. Periodic bandwidth
     accounting under the believed speed remains unmeasured, so this is not
-    evidence that usbport's bandwidth budget is correct. Issue 06 section 4
+    evidence that usbport's bandwidth budget is correct. Issue 06 section 5
     records the measured bands. Do not reconstruct `bInterval` from `Period`.
   - **It is gated on a connection**, because the speed bits mean nothing without
     one and an empty port claiming High Speed would be a second untruth rather

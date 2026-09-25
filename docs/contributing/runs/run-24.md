@@ -698,3 +698,79 @@ values 24.1 newly accepts at Low Speed are not new values - they are the
 values the driver has always accepted one speed up. The refusal removed in
 `XhciIntervalFromPeriod` was the only thing that made Low Speed different,
 and nothing else in the driver treated it differently at all.
+
+---
+
+## 24.2 - Polling rates on a root port
+
+Decided 2026-09-25, on branch `issue4`: **closed as owned by 24.3.** No
+narrower change exists. No code changed and no guest was booted; the roadmap
+asked for a boot only if a change was found. The owner chose this from two
+options (the other is below, under "The one candidate").
+
+### What the reporter asked, and what a root port already gives
+
+GitHub issue 4's item 2 (2026-09-06) was that overriding an interrupt
+endpoint's polling rate "is successfully reported back as applied but really
+is not applied". Behind a hub that was 24.1's Code 10, and 24.1 fixed it. On
+a root port the answer is issue 6 section 5's three bands. Phase 20 measured
+them, and 24.1 read them again on the four NT 6.x guests above:
+
+| hidusbf | `bInterval` it writes | `Period` from usbport | Interval | Service |
+|---|---|---|---|---|
+| 1000 Hz | 4 | 8 | 3 | 1 ms |
+| 500 Hz | 5 | 16 | 4 | 2 ms |
+| 250 Hz | 6 | 32 | 5 | 4 ms |
+| stock, or anything slower | 6 and up | 32 | 5 | 4 ms |
+
+The `bInterval` column is what hidusbf wrote on those guests. hidusbf sees a
+root-port device reported as High Speed and uses High-Speed arithmetic for
+it, and so **every rate hidusbf offers above the stock one lands exactly on
+a root port today.** What cannot be reached is 125 Hz and anything slower,
+the device's own stock rate when that is slower than 4 ms, and any
+difference between two values in the same band. All of it runs faster than
+asked, never slower.
+
+### Why nothing narrower than 24.3 recovers the rest
+
+- **The information is gone before the miniport sees it.** usbport buckets
+  a device it believes is High Speed as `1 << min(bInterval - 1, 5)`
+  microframes, so every `bInterval` from 6 up arrives as the same `Period`
+  32. `USBPORT_ENDPOINT_PROPERTIES` carries no raw `bInterval`
+  (`docs/usb-xhci-info/usbport-miniport-abi.md`, "Periodic scheduling: what
+  `Period` actually carries"). This holds for every usbport build the
+  project targets, SweetLow's included: his rebuild's High-Speed arm is the
+  same `dec`, `min 5`, `shl` sequence.
+- **The invariants forbid working it back out of `Period`**
+  (`docs/contributing/implementation-invariants.md`, the root-port speed
+  report). That would be a guess, and the guess is ambiguous by
+  construction.
+- **The one candidate: the descriptor snoop.** The driver already reads
+  each device's `GET_DESCRIPTOR(Configuration)` reply on EP0 to get
+  isochronous `bInterval` (`src/xhci_desc.h`), and it could record interrupt
+  endpoints the same way. It was rejected for three reasons. First, that
+  reply is read below hidusbf, so the snoop sees the **device's own**
+  `bInterval` and never the override, which means it cannot deliver what the
+  reporter asked for. Second, it would change the other thing: every
+  stock Full- and Low-Speed device on a root port, on every target, would go
+  from 4 ms to its declared rate (8 ms for a stock mouse). That is the
+  slower direction, and nobody asked for it. Third, telling an override
+  apart from a stock value would mean comparing the snoop with `Period`,
+  and that comparison is the reconstruction the invariants forbid. It also
+  fails whenever the override and the stock value share a band. And
+  `xhci_desc.h` chose on purpose not to record interrupt intervals, because
+  usbport already hands the miniport those.
+- **Everything else is 24.3.** A root-port device reported at its true
+  speed gets usbport's frame bucketing, which is what the six behind-hub
+  guests in 24.1 show: 8, 4, 2 and 1 ms, every rate reachable. Doing that
+  without usbport's missing-TT bugcheck (issue 6 sections 3 and 4) is the
+  virtual hub proposal, `docs/future-plans/virtual-hub-per-root-port.md`,
+  and that is 24.3's decision. A patched usbport is not this project's to
+  ship (24.3).
+
+### For the reporter
+
+On a root port, 1000, 500 and 250 Hz work now, and 1.1.1.0 already behaved
+this way. Slower rates and the device's own stock rate need a hub, or 24.3.
+Behind a hub, every rate works, Low Speed included, from the 24.1 build on.
+Replying on the issue is the owner's.

@@ -688,7 +688,7 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   not a Low-Speed one; the E460 with the Low-Speed mouse behind a USB 2.0 hub
   if a metal reading is wanted.
 
-- [ ] **24.2 - Polling rates on a root port.**
+- [x] **24.2 - Polling rates on a root port.** *(decided 2026-09-25: owned by 24.3, no narrower change; `runs/run-24.md`)*
 
   A decision, with its reason, whether they close as owned by 24.3. The
   bands are usbport's bucketing on the speed it was told (issue 6 section
