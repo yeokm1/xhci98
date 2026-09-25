@@ -906,3 +906,50 @@ hub INFs on the project's targets names `VID_1209`, so the INF's test id
 collides with nothing the targets carry. Method static, a text search
 (`legal-provenance.md` section 4); design record 12 section 3.1 carries the
 sizes and hashes.
+
+## 24.3.2 - Host vectors
+
+Done 2026-09-25, on branch `24.3`. No boot; host tests only.
+
+**Scope, the owner's.** The roadmap called this batch `-0`, which the batch
+table defines as static work producing no driver code, yet its list was
+host vectors, and vectors need code to run against. The owner chose a pure
+core with its own suite: `src/xhci_vhub.c` and `src/xhci_vhub.h`, DDK-free,
+called by nothing, and kept out of `src/sources`, so no binary changes and
+rule 2 holds by construction; and `test/test_vhub.c`, registered in
+`test\run-host-tests.cmd`, linking `src/xhci_topo.c` for the graph cases.
+The vectors that need the driver around the core moved to 24.3.3, whose
+roadmap entry now lists them.
+
+**What the core is.** The switch and the two id strings (parsed from
+either encoding, with the encoding recorded for 24.3.4's first reading on
+Windows 98 and ME); the request table as one function from a SETUP packet
+to an answer or a verdict; one 32-byte record per root port holding value
+1's decision, the hub's device state and the two views; and every root-hub
+event as a function that returns what the caller must do (the existing
+reset, disable, power, suspend and resume bodies, an announce, the pipe)
+rather than doing it. Setup packets are record 02's measured ones; the
+standard `GET_DESCRIPTOR(Device)` length usbport sends has no measurement
+in the tree, so it is fed 8, 18, 64 and 255.
+
+**Result.** `test_vhub` 1036 checks, 0 failures; every host suite green,
+both amd64 legs included ("Host tests PASSED."); the charset gate clean.
+Five mutations of the core - the value-1 root report keeping PORTSC's
+enable and reset, a port-1 reset not held while a disable is owed, the
+second enumeration reset not suppressed, no forced connect change, a vendor
+id of `0000` accepted - failed 3, 12, 71, 3 and 6 checks.
+
+**What writing it found.** Record 12 kept value 1's root report "today's,
+bit for bit" but for the suspend pair. Port 1 is the same physical port, so
+each port-1 reset - two per device enumeration behind the hub - would have
+shown the root port in reset and latched an unsolicited `C_PORT_RESET`, and
+each port-1 disable would have left the hub's upstream reading disabled.
+Value 2 never had the problem, since its root report is the upstream
+view's. A second opinion (Codex) agreed the gap was real and proposed the
+bit ownership; the owner took it on 2026-09-25: at 1, on a port in
+virtual-hub mode, the enable, reset and suspend groups come from the
+upstream view, connection, power, over-current and the High-Speed bit stay
+today's, over-current latches in both views, every root reset owns its own
+completion by owner and generation, a timed-out re-decision on a hub-mode
+port forces the connect change, and `SET_CONFIGURATION` sets the hub's
+state. Record 12 sections 3.1 to 3.7, 4, 5 and 8 carry it.

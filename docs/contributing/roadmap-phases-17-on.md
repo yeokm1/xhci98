@@ -774,7 +774,15 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     for private testing only**, and that the id is pid.codes' shared test
     id. The record also confirms that each NT target's hub INF binds by
     class, as the 9x ones do (`USB\HubClass`, `USB\CLASS_09`).
-  - [ ] **24.3.2 - Host vectors** (`test/`), the page's `-0`: the request table
+  - [x] **24.3.2 - Host vectors** (`test/`), the page's `-0`. *(done
+    2026-09-25: scoped by the owner as a DDK-free pure core,
+    `src/xhci_vhub.c`/`.h`, called by nothing and not in `src/sources`, with
+    its own suite `test/test_vhub.c` - 1036 checks, every host suite green;
+    the vectors below that need the driver around the core moved to 24.3.3,
+    which names them. Writing them found value 1's root report leaking port
+    1's resets and disables onto the root port; the owner widened the
+    exception to the enable, reset and suspend groups, record 12 section
+    3.2, after a second opinion agreed.)* The request table
     of section 3.3 fed the setup packets the shipping hub drivers send
     (design record 02), the string requests included - the language table,
     index 1 byte for byte, both truncated to a short `wLength`, and any
@@ -788,7 +796,8 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     enumerated again, and at both values with the PED confirmation delayed
     and the next reset held until it is collected; at 1, the root port's
     suspend pair on a port in virtual-hub mode read from the upstream view
-    at every step of section 3.5's orders; eight virtual hubs plus a real hub and its child
+    at every step of section 3.5's orders, and its enable and reset groups
+    through port-1 resets and disables; eight virtual hubs plus a real hub and its child
     still given a graph node; the topology fold of
     section 3.6 over the existing topology tests, including the device's
     root-port record found across re-open, repeated reset and address
@@ -814,7 +823,17 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     hub on every USB 2.0 port, both INFs'
     `AddReg` writing the switch's 0 as a DWORD and the ids as the strings
     `"1209"` and `"0001"` on every install path, and `XHCISNAP` showing the
-    mode, the ids applied and any refusal. Host tests and
+    mode, the ids applied and any refusal, all wired to 24.3.2's core. With
+    it, in `test/test_init.c`, the vectors 24.3.2 handed on because they
+    need the driver: the root-port reset at 2 with transfers in flight, the
+    slot and its buffers held until the PED confirmation; `xhciDevByHubPort`
+    finding the device's root-port record across a re-open, a repeated reset
+    and an address reused after a disown; the hub's and the device's
+    address-0 opens told apart in `OpenEndpoint`; a virtual address never
+    reaching either EP0 snoop, and `TtPairsAgreed` counting a `HubAddr` that
+    names one; the synthetic completions through the deferred list,
+    `AbortTransfer` finding a held status-change transfer; hub-path removal
+    at 2; and rule 2 over the driver, the switch absent and 0. Host tests and
     every gate green on all three x86 flavours and the amd64 build.
   - [ ] **24.3.4 - The readings on every guest held**, the page's `-V`, each
     with the switch at 0, then 1, then 2. First, on Windows 98 SE under both
