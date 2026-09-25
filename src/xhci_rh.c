@@ -1779,13 +1779,16 @@ static MPSTATUS xhciRhVhubCarry(PXHCI_EXTENSION ext,
         XhciTopoDropPending(&ext->Topology);
         ext->VhubArmedPort = hubPort;
     }
-    if ((verdict & XHCI_VHUB_DO_ARM_DEVICE) != 0 &&
-        ext->VhubArmedPort == hubPort) {
+    if ((verdict & XHCI_VHUB_DO_ARM_DEVICE) != 0) {
         /*
          * A port-1 reset is the device's, and the two claims are exclusive
          * (3.6): the hub's arm is spent the moment its port 1 is reset,
          * whether or not that reset ends in a PRC - the end, when there is
-         * one, is where XhciSlotPortReset arms the device's own claim.
+         * one, is where XhciSlotPortReset arms the device's own claim. Spent
+         * whichever port's hub held it, as XhciSlotPortReset spends it at
+         * the end: the last reset owns the next address-0 open, so an arm
+         * left standing on another port by an abandoned enumeration is
+         * spent by this reset too, and a timed-out reset leaves no arm.
          */
         ext->VhubArmedPort = 0;
     }
@@ -1944,6 +1947,19 @@ static ULONG xhciRhVhubRefreshed(PXHCI_EXTENSION ext,
     hub = xhciRhVhub(ext, hubPort);
     if (hub == NULL) {
         return slotReset;
+    }
+    if (!hub->Present) {
+        /*
+         * A direct port holds nothing but its decision, and this reading's
+         * connect evidence forgets it (3.2) - before a reset that ended in
+         * the same reading decides, since a connect change beside a PRC says
+         * the device that reset is not the one decided on, and the old
+         * decision would otherwise force a connect change the port already
+         * carries. With no hub the core absorbs nothing else, so the second
+         * call below finds this one's work done or a hub to feed.
+         */
+        (VOID)XhciVhubAbsorb(hub, ext->VhubConfig.Applied, latched,
+                             xhciRhVhubPhys(shadow), &strip);
     }
     if (slotReset && endedGeneration != 0) {
         slotReset = ((xhciRhVhubResetEnded(ext, hubPort, shadow,
@@ -2165,13 +2181,24 @@ static MPSTATUS xhciRhVhubRootOp(PXHCI_EXTENSION ext, USHORT port, ULONG which)
  * selector already accepted by the request table - the device half's one way
  * into the physical port (3.3's port-1 rows).
  *
+ * Returns MP_STATUS_SUCCESS, or the physical port's refusal of a suspend or
+ * a resume: port 1's view is put back as it was, nothing was performed, and
+ * the caller stalls the request so usbhub gets the failure the root port's
+ * own callbacks return for the same refusal - a resume answered with
+ * success and never completed would leave usbhub waiting on a C_PORT_SUSPEND
+ * that can never come. A refused reset is not a refusal here: the core is
+ * told the reset ended with the port disabled, and usbhub reads that end
+ * from port 1 as it reads a reset that timed out. A refused disable or
+ * power-off is today's disable body declining, with port 1's view already
+ * changed, and completes as it did.
+ *
  * IRQL: DISPATCH_LEVEL. Caller holds the controller lock and owes
  * XhciRootHubDeferredWork after releasing it.
  */
-VOID XhciRhVhubPort1Feature(PXHCI_EXTENSION ext,
-                            ULONG hubPort,
-                            ULONG set,
-                            ULONG selector)
+MPSTATUS XhciRhVhubPort1Feature(PXHCI_EXTENSION ext,
+                                ULONG hubPort,
+                                ULONG set,
+                                ULONG selector)
 {
     XHCI_PORT_SHADOW *shadow;
     PXHCI_VHUB hub;
@@ -2182,7 +2209,7 @@ VOID XhciRhVhubPort1Feature(PXHCI_EXTENSION ext,
     shadow = xhciRhShadow(ext, hubPort);
     hub = xhciRhVhub(ext, hubPort);
     if (shadow == NULL || hub == NULL || !hub->Present) {
-        return;
+        return MP_STATUS_SUCCESS;
     }
     if ((selector == XHCI_VHUB_SEL_PORT_RESET ||
          selector == XHCI_VHUB_SEL_PORT_SUSPEND) && xhciRhAdmitted(ext) &&
@@ -2196,17 +2223,21 @@ VOID XhciRhVhubPort1Feature(PXHCI_EXTENSION ext,
     status = xhciRhVhubCarry(ext, hubPort, shadow, verdict, generation);
     if ((verdict & XHCI_VHUB_DO_SUSPEND) != 0 && status != MP_STATUS_SUCCESS) {
         /* The port refused the link write: port 1 is not suspended, and the
-         * request completes having changed nothing. */
+         * request fails having changed nothing. */
         hub->P1Suspend = 0;
         hub->PhysSuspended = 0;
+        return status;
     }
     if ((verdict & XHCI_VHUB_DO_RESUME) != 0 && status != MP_STATUS_SUCCESS) {
         /* The port refused the resume: port 1 stays suspended with the
-         * physical port, so usbhub's next CLEAR_PORT_FEATURE asks again. */
+         * physical port, and the request fails, so usbhub's retry asks
+         * again rather than waiting on a completion nothing will send. */
         hub->P1Suspend = 1;
         hub->P1ResumeOwed = 0;
         hub->PhysSuspended = 1;
+        return status;
     }
+    return MP_STATUS_SUCCESS;
 }
 
 /*

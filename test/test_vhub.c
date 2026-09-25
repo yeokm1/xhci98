@@ -1111,8 +1111,11 @@ static void testHubEnumeration(void)
     XhciVhubStart(&h, ALWAYS, 0);
     gen++;
     v = XhciVhubRootReset(&h, ALWAYS, gen, 0, PS_EMPTY);
-    CHECK_EQ(v, XHCI_VHUB_DO_ROOT_CHANGE | XHCI_VHUB_DO_ARM_HUB,
-             "the first reset arms the hub's open");
+    CHECK_EQ(v, XHCI_VHUB_DO_ROOT_CHANGE | XHCI_VHUB_DO_ARM_HUB |
+                    XHCI_VHUB_DO_DISABLE,
+             "the first reset arms the hub's open, and asks for the disable "
+             "body whether or not the port reads enabled - its software "
+             "half is what gives a child's address back");
     enumerateHub(&h, ALWAYS, 3);
 
     /* EP0 closed and re-opened across a re-enumeration. */
@@ -1188,6 +1191,14 @@ static void testRootReportV1(void)
     CHECK_EQ(XhciVhubPort1Feature(&h, 0, XHCI_VHUB_SEL_PORT_ENABLE, 0, 0,
                                   PS_EN),
              XHCI_VHUB_DO_DISABLE, "port 1's disable is the disable body");
+    CHECK_EQ(XhciVhubPort1Feature(&h, 0, XHCI_VHUB_SEL_PORT_ENABLE, 0, 0,
+                                  PS_CONN),
+             XHCI_VHUB_DO_DISABLE,
+             "asked for on a port PED already left too, for the body's "
+             "software half");
+    CHECK_EQ(XhciVhubPort1Feature(&h, 0, XHCI_VHUB_SEL_PORT_ENABLE, 0, 1,
+                                  PS_EN),
+             XHCI_VHUB_DO_NONE, "unless a disable is already owed");
     rootReport(&h, ON_DEMAND, PS_CONN, 0, &s, &c);
     CHECK_EQ(s, PS_EN, "and the root port still reads enabled");
     CHECK_EQ(p1Status(&h, PS_CONN, XHCI_SPEED_FULL) & XHCI_HUB_PORT_ENABLE,
@@ -1688,7 +1699,9 @@ static void testValue2Lifecycle(void)
              "the next root reset enumerates the hub again, no restart");
     enumerateHub(&h, ALWAYS, 7);
     CHECK_EQ(XhciVhubRootDisable(&h, ALWAYS, PS_CONN),
-             XHCI_VHUB_DO_CANCEL_PIPE, "nothing enabled: no disable body");
+             XHCI_VHUB_DO_CANCEL_PIPE | XHCI_VHUB_DO_DISABLE,
+             "nothing enabled: the disable body still, for a child the port "
+             "left enabled without letting go of");
 
     /* Power off and on: the hub gone from usbport's view and back. */
     readyHub(&h, ALWAYS);
@@ -1724,10 +1737,19 @@ static void testValue2Lifecycle(void)
     CHECK_EQ(c, 0, "and nothing but the start latches a root connect");
     CHECK_EQ(XhciVhubPipeByte(&h), 0x02, "the held transfer completes");
 
-    /* Value 1 has no reinit rule of its own: today's path. */
+    /* Value 1 latches nothing across a reinit - today's path - but a reset
+     * in flight or held is over at either value, since the shadows a held
+     * one waited on are rebuilt and nothing else would ever release it. */
     readyHub(&h, ON_DEMAND);
+    h.ResetOwner = (UCHAR)XHCI_VHUB_OWNER_ROOT;
+    h.UpResetting = 1;
+    h.ResetHeld = (UCHAR)XHCI_VHUB_OWNER_PORT1;
     CHECK_EQ(XhciVhubReinit(&h, ON_DEMAND, 1), XHCI_VHUB_DO_NONE,
-             "at 1 a reinit is today's");
+             "at 1 a reinit latches nothing");
+    CHECK_EQ(h.Present, 1, "and keeps the hub");
+    CHECK_EQ(h.ResetHeld, XHCI_VHUB_OWNER_NONE, "but releases a held reset");
+    CHECK_EQ(h.ResetOwner, XHCI_VHUB_OWNER_NONE, "and ends one in flight");
+    CHECK_EQ(h.UpResetting, 0, "(the upstream no longer resetting)");
 }
 
 /*

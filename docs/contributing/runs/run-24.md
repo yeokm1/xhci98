@@ -1077,3 +1077,42 @@ four-byte length); and `test_packet` pins the snapshot header at 38
 `ULONG`s on both architectures, with a compile-time twin for the amd64
 leg, since its layout rests on every field being one. `test_vhub` 1202
 checks, `test_init` 20,196, `test_packet` 236.
+
+**Codex's first round over those fixes** (fresh thread, 7 minutes) found an
+edge on each of the three driver fixes and two defects beside them, every
+one real on inspection:
+
+- The forgotten decision came one reading too late: `xhciRhVhubRefreshed`
+  routed a reset's end before absorbing the reading's connect change, so a
+  device swapped *inside* a reset (CSC beside PRC, Full Speed decoded on a
+  port decided direct) still met the old decision and forced a connect
+  change the port already carried. A direct port now absorbs the reading
+  first.
+- The refused resume was put back and hidden: `XhciRhVhubPort1Feature`
+  returned nothing, so the slot half completed `CLEAR_PORT_FEATURE(1,
+  PORT_SUSPEND)` with success while port 1 stayed suspended, and usbhub
+  would have waited on a `C_PORT_SUSPEND` nothing would send - the wait
+  that, on a root port, ended in Vista's 60 s `0xFE` trap in
+  `runs/run-22.md` 22.12 (b). A refused suspend or resume now stalls the
+  request (record 12 section 3.3), as the root port's own callback returns
+  the refusal.
+- The hub's arm was spent only on the hub whose port 1 reset; an arm left
+  standing on another port by an abandoned enumeration survived the reset
+  and its timeout. Spent for whichever port held it, as `XhciSlotPortReset`
+  spends it at the end.
+- A port-1 disable, a value-2 root disable and a value-2 root reset asked
+  for no disable body when PED already read clear - a hardware disable, a
+  reset that timed out - so an addressed child kept its address. The body
+  is asked for regardless; its software half is the disown.
+- `XhciVhubReinit` ended a held reset at value 2 only, while the root hub's
+  rebuild clears the shadows at either value, so a reset held at 1 across a
+  recovery would have waited for ever. Ended at both.
+
+And three vectors that could not tell: the address-reuse vector disowned a
+record the re-open had already put back to address 0 (addressed again
+first now); the snapshot vector's twelve fields all held accepted values (a
+second window with the switch refused, `test_passthru_snapshot_vhub_refused`);
+and a comment in `test_packet` said this host cannot run the amd64 leg,
+which it can. New vectors: the swap inside a reset, the refused resume of
+each view, the arm spent across ports through a timed-out reset, the
+disable after a hardware disable. `test_vhub` 1208, `test_init` 20,381.

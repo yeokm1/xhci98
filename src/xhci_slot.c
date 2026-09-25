@@ -8047,10 +8047,14 @@ static MPSTATUS xhciVhubSubmit(PXHCI_EXTENSION ext,
         break;
     case XHCI_VHUB_REQ_PORT_SET:
     case XHCI_VHUB_REQ_PORT_CLEAR:
-        XhciRhVhubPort1Feature(ext, hubPort,
-                               (verdict == XHCI_VHUB_REQ_PORT_SET) ? 1UL : 0UL,
-                               arg);
-        verdict = XHCI_VHUB_REQ_OK;
+        /* A suspend or resume the physical port refused is the request's
+         * stall: port 1 is as it was, and usbhub asks again, as it does
+         * when a root port's own callback returns the refusal. */
+        verdict = (XhciRhVhubPort1Feature(
+                       ext, hubPort,
+                       (verdict == XHCI_VHUB_REQ_PORT_SET) ? 1UL : 0UL,
+                       arg) == MP_STATUS_SUCCESS)
+                      ? XHCI_VHUB_REQ_OK : XHCI_VHUB_REQ_STALL;
         break;
     default:
         break;

@@ -700,7 +700,7 @@ static void test_extensions(void)
      * on every field being a ULONG - nothing to widen, nothing for an
      * alignment rule to move - and that is what the count pins, on both
      * architectures. The compile-time twin below holds it on the amd64 leg
-     * too, which this host builds and cannot run.
+     * even on a host that can build that binary and not run it.
      */
     CHECK_EQ(sizeof(XHCI_SNAPSHOT_HEADER), 38 * 4,
              "snapshot header is 38 ULONGs on either architecture");

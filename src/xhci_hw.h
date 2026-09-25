@@ -1203,10 +1203,10 @@ VOID XhciSlotPortReset(PXHCI_EXTENSION ext, ULONG hubPort);
  */
 VOID XhciSlotVhubPipe(PXHCI_EXTENSION ext, ULONG hubPort, ULONG cancel);
 VOID XhciSlotVhubUnbind(PXHCI_EXTENSION ext, ULONG hubPort);
-VOID XhciRhVhubPort1Feature(PXHCI_EXTENSION ext,
-                            ULONG hubPort,
-                            ULONG set,
-                            ULONG selector);
+MPSTATUS XhciRhVhubPort1Feature(PXHCI_EXTENSION ext,
+                                ULONG hubPort,
+                                ULONG set,
+                                ULONG selector);
 VOID XhciRhVhubPort1Status(PXHCI_EXTENSION ext,
                            ULONG hubPort,
                            ULONG *status,

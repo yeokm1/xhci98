@@ -626,10 +626,18 @@ static ULONG xhciVhubSuspendPhys(PXHCI_VHUB hub, ULONG physStatus)
     return XHCI_VHUB_DO_SUSPEND;
 }
 
-/* The existing disable body, unless one is already owed on the port. */
+/*
+ * The existing disable body, unless one is already owed on the port. Asked
+ * for whether or not the port still reads enabled: the body's software half -
+ * the disown that gives a child's address back - runs unconditionally there
+ * for the same reason, since a port that PED already left (a hardware
+ * disable, a reset that timed out) has not taken its device out of the
+ * address map, and a redundant PED write costs nothing.
+ */
 static ULONG xhciVhubDisable(ULONG disownPending, ULONG physStatus)
 {
-    if (disownPending || (physStatus & XHCI_HUB_PORT_ENABLE) == 0) {
+    (void)physStatus;
+    if (disownPending) {
         return XHCI_VHUB_DO_NONE;
     }
     return XHCI_VHUB_DO_DISABLE;
@@ -1288,15 +1296,21 @@ VOID XhciVhubSetConfig(PXHCI_VHUB hub, ULONG value)
 
 ULONG XhciVhubReinit(PXHCI_VHUB hub, ULONG applied, ULONG deviceLost)
 {
-    if (hub == NULL || applied != XHCI_VHUB_MODE_ALWAYS || !hub->Present) {
+    if (hub == NULL || applied == XHCI_VHUB_MODE_OFF || !hub->Present) {
         return XHCI_VHUB_DO_NONE;
     }
-    /* A reinitialisation ends every physical operation in flight; the hub's
-     * address, bindings and held transfer are software and stay (3.8). */
+    /*
+     * A reinitialisation ends every physical operation in flight, at either
+     * value: the root hub is rebuilt with its shadows cleared, so a reset
+     * held for a disown confirmation (3.3) has nothing left to wait on and
+     * would otherwise be held for ever. At 2 the hub's address, bindings and
+     * held transfer are software and stay (3.8); at 1 the rest is today's.
+     */
     hub->ResetOwner = (UCHAR)XHCI_VHUB_OWNER_NONE;
     hub->ResetHeld = (UCHAR)XHCI_VHUB_OWNER_NONE;
+    hub->UpResetting = 0;
     hub->P1Resetting = 0;
-    if (!deviceLost) {
+    if (!deviceLost || applied != XHCI_VHUB_MODE_ALWAYS) {
         return XHCI_VHUB_DO_NONE;
     }
     hub->P1Enabled = 0;
