@@ -1914,6 +1914,12 @@ static ULONG xhciRhVhubResetEnded(PXHCI_EXTENSION ext,
     }
     (VOID)xhciRhVhubCarry(ext, hubPort, shadow, verdict, generation);
 
+    if (owner == XHCI_VHUB_OWNER_SUPERSEDED) {
+        /* A port-1 reset a value-2 root reset overtook (3.8): its end is
+         * nobody's - not the root port's to latch, not the device's to
+         * claim, since the hub's own open is what the root reset armed. */
+        return XHCI_RH_VHUB_END_PORT1;
+    }
     if (owner == XHCI_VHUB_OWNER_PORT1) {
         return XHCI_RH_VHUB_END_SLOT | XHCI_RH_VHUB_END_PORT1;
     }
@@ -1942,21 +1948,26 @@ static ULONG xhciRhVhubRefreshed(PXHCI_EXTENSION ext,
     ULONG slotReset;
     ULONG verdict;
     ULONG strip;
+    ULONG wasAbsent;
 
     slotReset = ((latched & XHCI_HUB_C_PORT_RESET) != 0) ? 1UL : 0UL;
     hub = xhciRhVhub(ext, hubPort);
     if (hub == NULL) {
         return slotReset;
     }
-    if (!hub->Present) {
+    wasAbsent = !hub->Present;
+    if (wasAbsent) {
         /*
          * A direct port holds nothing but its decision, and this reading's
          * connect evidence forgets it (3.2) - before a reset that ended in
          * the same reading decides, since a connect change beside a PRC says
          * the device that reset is not the one decided on, and the old
          * decision would otherwise force a connect change the port already
-         * carries. With no hub the core absorbs nothing else, so the second
-         * call below finds this one's work done or a hub to feed.
+         * carries. With no hub the core absorbs nothing else, and the
+         * reading is spent by this call: fed again after the reset had
+         * decided, the same connect change would forget the decision just
+         * taken, and the next reset to decode another speed would find
+         * nothing to flip from and force nothing.
          */
         (VOID)XhciVhubAbsorb(hub, ext->VhubConfig.Applied, latched,
                              xhciRhVhubPhys(shadow), &strip);
@@ -1972,6 +1983,11 @@ static ULONG xhciRhVhubRefreshed(PXHCI_EXTENSION ext,
                       : XhciVhubRemoteWake(hub);
         (VOID)xhciRhVhubCarry(ext, hubPort, shadow, verdict, 0);
     }
+    if (wasAbsent && !hub->Present) {
+        return slotReset;
+    }
+    /* A hub that was there, or that the reset above stood up, takes the
+     * reading: its changes land in the view that owns each. */
     verdict = XhciVhubAbsorb(hub, ext->VhubConfig.Applied, latched,
                              xhciRhVhubPhys(shadow), &strip);
     shadow->Changes = (UCHAR)((ULONG)shadow->Changes & ~strip);
@@ -2186,7 +2202,10 @@ static MPSTATUS xhciRhVhubRootOp(PXHCI_EXTENSION ext, USHORT port, ULONG which)
  * the caller stalls the request so usbhub gets the failure the root port's
  * own callbacks return for the same refusal - a resume answered with
  * success and never completed would leave usbhub waiting on a C_PORT_SUSPEND
- * that can never come. A refused reset is not a refusal here: the core is
+ * that can never come. Whether usbhub asks again is its own (Vista's
+ * UsbhResumeSuspendedPort reports the failure and signals its resume event,
+ * with no retry of its own); a request that follows is served as any
+ * other. A refused reset is not a refusal here: the core is
  * told the reset ended with the port disabled, and usbhub reads that end
  * from port 1 as it reads a reset that timed out. A refused disable or
  * power-off is today's disable body declining, with port 1's view already
@@ -2230,8 +2249,8 @@ MPSTATUS XhciRhVhubPort1Feature(PXHCI_EXTENSION ext,
     }
     if ((verdict & XHCI_VHUB_DO_RESUME) != 0 && status != MP_STATUS_SUCCESS) {
         /* The port refused the resume: port 1 stays suspended with the
-         * physical port, and the request fails, so usbhub's retry asks
-         * again rather than waiting on a completion nothing will send. */
+         * physical port, and the request fails, so usbhub learns it rather
+         * than waiting on a completion nothing will send. */
         hub->P1Suspend = 1;
         hub->P1ResumeOwed = 0;
         hub->PhysSuspended = 1;

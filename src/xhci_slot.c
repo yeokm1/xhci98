@@ -8048,8 +8048,8 @@ static MPSTATUS xhciVhubSubmit(PXHCI_EXTENSION ext,
     case XHCI_VHUB_REQ_PORT_SET:
     case XHCI_VHUB_REQ_PORT_CLEAR:
         /* A suspend or resume the physical port refused is the request's
-         * stall: port 1 is as it was, and usbhub asks again, as it does
-         * when a root port's own callback returns the refusal. */
+         * stall: port 1 is as it was, and usbhub gets the failure, as it
+         * does when a root port's own callback returns the refusal. */
         verdict = (XhciRhVhubPort1Feature(
                        ext, hubPort,
                        (verdict == XHCI_VHUB_REQ_PORT_SET) ? 1UL : 0UL,

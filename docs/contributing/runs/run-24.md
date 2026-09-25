@@ -1116,3 +1116,34 @@ and a comment in `test_packet` said this host cannot run the amd64 leg,
 which it can. New vectors: the swap inside a reset, the refused resume of
 each view, the arm spent across ports through a timed-out reset, the
 disable after a hardware disable. `test_vhub` 1208, `test_init` 20,381.
+
+**Codex's second round** (the same thread, 10 minutes) found two defects
+inside the first round's fixes and one claim too strong:
+
+- The direct port absorbed the reading twice, and the second time forgot
+  the decision the reset in between had just taken: a High-Speed device
+  decided direct again under a connect change was left with no decision,
+  so a later reset decoding Full Speed with no connect evidence would have
+  stood a hub up with nothing to flip from and forced nothing, leaving
+  usbhub's direct device in place. The reading is spent by the first call
+  when the port had no hub.
+- A port-1 reset still running when a value-2 root reset (synthetic)
+  overtook it ended as port 1's: its PRC armed today's device claim and
+  spent the hub's open the root reset had just armed, so the hub's next
+  address-0 open would have been served as a device's. The overtaken reset
+  is now owned by nobody (`XHCI_VHUB_OWNER_SUPERSEDED`): its end frees the
+  port and does nothing else. At 1, where the root reset is physical, the
+  same case had the root reset overwrite port 1's ownership before the port
+  refused it as busy; the write is now asked for with nothing changing
+  hands, and usbport gets the busy refusal as for a root port's second
+  reset today.
+- "usbhub asks again" after a stalled resume was more than the stall
+  guarantees: Vista's `UsbhResumeSuspendedPort` reports the failure and
+  signals its resume event with no retry of its own (static, over the local
+  hub binary). The record, the comments and the vector now say a request
+  that follows is served.
+
+New vectors: the direct decision standing under a connect change and the
+flip forced by the next speed-changing reset; the root reset over a running
+port-1 reset at both values, the hub's open surviving the stale end at 2 and
+the busy refusal at 1. `test_vhub` 1255, `test_init` 20,479.

@@ -1753,6 +1753,79 @@ static void testValue2Lifecycle(void)
 }
 
 /*
+ * A root reset while port 1's is still running on the physical port. At 2
+ * the root reset is synthetic and overtakes it: the running reset's end is
+ * then nobody's - not the device's claim, which would spend the hub's open
+ * the root reset armed, and not port 1's change on a hub back in Default.
+ * At 1 the root reset is physical and the port is armed with port 1's, so
+ * the write is asked for and refused as busy, with nothing changing hands.
+ */
+static void testRootResetOverPort1Reset(void)
+{
+    XHCI_VHUB h;
+    ULONG first;
+    ULONG v;
+
+    readyHub(&h, ALWAYS);
+    gen++;
+    first = gen;
+    CHECK_EQ(XhciVhubPort1Feature(&h, 1, XHCI_VHUB_SEL_PORT_RESET, gen, 0,
+                                  PS_EN),
+             XHCI_VHUB_DO_PHYS_RESET | XHCI_VHUB_DO_ARM_DEVICE,
+             "(port 1's reset starts)");
+    gen++;
+    v = XhciVhubRootReset(&h, ALWAYS, gen, 0, PS_RESETTING);
+    CHECK_EQ(v & XHCI_VHUB_DO_ARM_HUB, XHCI_VHUB_DO_ARM_HUB,
+             "a root reset at 2 arms the hub's open");
+    CHECK_EQ(h.ResetOwner, XHCI_VHUB_OWNER_SUPERSEDED,
+             "and overtakes the running reset");
+    CHECK_EQ(h.ResetGeneration, first, "under its own generation still");
+    CHECK_EQ(h.P1Resetting, 1, "(still running)");
+    CHECK_EQ(XhciVhubResetDone(&h, ALWAYS, first, 0, XHCI_SPEED_FULL, PS_EN),
+             XHCI_VHUB_DO_NONE, "its end is nobody's");
+    CHECK_EQ(h.P1Resetting, 0, "the port free again");
+    CHECK_EQ(h.ResetOwner, XHCI_VHUB_OWNER_NONE, "(no reset owned)");
+    CHECK_EQ(p1Change(&h) & XHCI_HUB_C_PORT_RESET, 0,
+             "and no reset change on port 1");
+    CHECK_EQ(XhciVhubClaimOpen(&h), 1, "the hub's open still armed");
+
+    /* The same end as a deadline. */
+    readyHub(&h, ALWAYS);
+    gen++;
+    first = gen;
+    XhciVhubPort1Feature(&h, 1, XHCI_VHUB_SEL_PORT_RESET, gen, 0, PS_EN);
+    gen++;
+    XhciVhubRootReset(&h, ALWAYS, gen, 0, PS_RESETTING);
+    CHECK_EQ(XhciVhubResetDone(&h, ALWAYS, first, 1, XHCI_SPEED_UNKNOWN,
+                               PS_CONN),
+             XHCI_VHUB_DO_NONE, "a deadline on the overtaken reset: nothing");
+    CHECK_EQ(h.P1Resetting, 0, "(ended)");
+
+    readyHub(&h, ON_DEMAND);
+    gen++;
+    first = gen;
+    CHECK_EQ(XhciVhubPort1Feature(&h, 1, XHCI_VHUB_SEL_PORT_RESET, gen, 0,
+                                  PS_EN),
+             XHCI_VHUB_DO_PHYS_RESET | XHCI_VHUB_DO_ARM_DEVICE,
+             "(port 1's reset starts at 1)");
+    gen++;
+    CHECK_EQ(XhciVhubRootReset(&h, ON_DEMAND, gen, 0, PS_RESETTING),
+             XHCI_VHUB_DO_PHYS_RESET,
+             "a root reset at 1 is asked for, so the busy port refuses it");
+    CHECK_EQ(h.ResetOwner, XHCI_VHUB_OWNER_PORT1, "with nothing changing hands");
+    CHECK_EQ(h.ResetGeneration, first, "(port 1's generation)");
+    CHECK_EQ(h.UpResetting, 0, "(the upstream not resetting)");
+    CHECK_EQ(XhciVhubResetDone(&h, ON_DEMAND, gen, 1, XHCI_SPEED_UNKNOWN,
+                               PS_RESETTING),
+             XHCI_VHUB_DO_NONE, "the refusal's own end matches no reset");
+    CHECK_EQ(h.ResetOwner, XHCI_VHUB_OWNER_PORT1, "(port 1's still owned)");
+    CHECK_EQ(XhciVhubResetDone(&h, ON_DEMAND, first, 0, XHCI_SPEED_FULL,
+                               PS_EN),
+             XHCI_VHUB_DO_PIPE, "and port 1's reset ends as its own");
+    CHECK_EQ(h.P1Enabled, 1, "port 1 enabled by it");
+}
+
+/*
  * The virtual records live outside the graph (3.3): more than eight of them
  * cost the graph no node, a real hub still gets one, and the TT a device
  * behind a real hub behind a virtual one is given is the real hub's (3.6).
@@ -1857,6 +1930,7 @@ int main(void)
     testPort1Power();
     testRootResetHeldV1();
     testValue2Lifecycle();
+    testRootResetOverPort1Reset();
     testArrayAndGraph();
     testPipeByte();
 

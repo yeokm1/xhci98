@@ -695,6 +695,17 @@ static ULONG xhciVhubRootResetStart(PXHCI_VHUB hub,
      */
     verdict = XHCI_VHUB_DO_ROOT_CHANGE |
               xhciVhubDisable(disownPending, physStatus);
+    if (hub->ResetOwner == XHCI_VHUB_OWNER_PORT1) {
+        /*
+         * A port-1 reset is still running on the physical port, and the
+         * disable above leaves it to run (a reset is the one operation the
+         * disable body does not end). Its end, or its deadline, is then
+         * nobody's: not the device's claim, which would spend the hub's
+         * open armed below, and not port 1's change on a hub back in
+         * Default. The generation stays, so the end is still recognised.
+         */
+        hub->ResetOwner = (UCHAR)XHCI_VHUB_OWNER_SUPERSEDED;
+    }
     xhciVhubToDefault(hub, !keeps, physStatus);
     if (!keeps) {
         verdict |= XHCI_VHUB_DO_ARM_HUB;
@@ -722,6 +733,17 @@ ULONG XhciVhubRootReset(PXHCI_VHUB hub,
             hub->ResetOwner = (UCHAR)XHCI_VHUB_OWNER_ROOT;
             hub->ResetGeneration = generation;
             hub->ResetKeeps = 0;
+            return XHCI_VHUB_DO_PHYS_RESET;
+        }
+        if (hub->P1Resetting) {
+            /*
+             * Port 1's reset is running on the physical port, which is armed
+             * with it: the write asked for here is refused as busy, as a
+             * root port's second reset is today, and usbport gets the
+             * refusal. Nothing here changes hands, so port 1's reset ends as
+             * its own; the refusal's own end, carried under the generation
+             * named for it, matches no reset and does nothing.
+             */
             return XHCI_VHUB_DO_PHYS_RESET;
         }
         if (disownPending) {
@@ -762,6 +784,12 @@ ULONG XhciVhubResetDone(PXHCI_VHUB hub,
     owner = hub->ResetOwner;
     hub->ResetOwner = (UCHAR)XHCI_VHUB_OWNER_NONE;
 
+    if (owner == XHCI_VHUB_OWNER_SUPERSEDED) {
+        /* The end of a port-1 reset a root reset overtook: the port is
+         * free again, and nothing else follows from it. */
+        hub->P1Resetting = 0;
+        return XHCI_VHUB_DO_NONE;
+    }
     if (owner == XHCI_VHUB_OWNER_PORT1) {
         hub->P1Resetting = 0;
         hub->P1Enabled = (UCHAR)(!timedOut && hub->P1Power &&

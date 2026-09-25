@@ -322,6 +322,11 @@ ULONG XhciVhubStatusBytes(ULONG status,
 #define XHCI_VHUB_OWNER_NONE        0U
 #define XHCI_VHUB_OWNER_ROOT        1U
 #define XHCI_VHUB_OWNER_PORT1       2U
+/* A port-1 reset still running on the port when a value-2 root reset, which
+ * is synthetic, overtook it (3.8): its end is neither the device's claim
+ * nor the root port's change, and the hub's open the root reset armed
+ * stands. */
+#define XHCI_VHUB_OWNER_SUPERSEDED  3U
 
 /*
  * One root port's virtual hub. Indexed as `RootHub.Ports` is, one per managed
