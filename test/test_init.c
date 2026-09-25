@@ -31273,6 +31273,34 @@ static void test_vhub_root_reset_over_a_port1_reset(void)
     deliver_events();
     CHECK_EQ(ext.Vhub[1].P1Resetting, 0, "and it ends as port 1's");
     CHECK_EQ(ext.Vhub[1].P1Enabled, 1, "enabling port 1");
+
+    /*
+     * The other refusal: a reset the core took, with nothing owned, that
+     * the port then refused - busy with a resume. That one is not a stall:
+     * the carry ends it as a reset that timed out, port 1 reports the end
+     * with the port disabled, and the request completes. (A first fix
+     * stalled this one too, reading the ownership after the carry had
+     * ended it.)
+     */
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 20, 1, 0);
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "(the hub suspended)");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "(and resuming: the port armed with it)");
+    stalls = ext.VhubStalls;
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(lastCompletedStatus, 0,
+             "a port-1 reset the core took and the resuming port refused "
+             "completes");
+    CHECK_EQ(ext.VhubStalls, stalls, "not as a stall");
+    CHECK_EQ(ext.Vhub[1].ResetOwner, XHCI_VHUB_OWNER_NONE,
+             "ended by the refusal");
+    CHECK_EQ(ext.Vhub[1].P1Enabled, 0, "with port 1 disabled");
+    CHECK_EQ(ext.Vhub[1].P1Changes & XHCI_HUB_C_PORT_RESET,
+             XHCI_HUB_C_PORT_RESET, "and its end latched, as a timeout's");
+    hw_fire_port_timer();
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
     vhub_reset_registry();
 }
 

@@ -1186,3 +1186,11 @@ busy, and stalled for port 1 as a root port's second reset is refused
 today), the refusal's own end is matched by generation so it changes
 nothing, and the running reset keeps its owner. Vectors in the core and
 through the driver, both views. `test_vhub` 1279, `test_init` 20,552.
+
+**Codex's fifth round** (the same thread, 4 minutes) found one inside the
+fourth's fix and nothing beside it: the stall for a port-1 reset the core
+declined was decided after the carry, which also ends a reset the core
+took and the port then refused (busy with a resume) - so that one, meant
+to complete with port 1's reset change and the port disabled, stalled too.
+Decided before the carry now; vector for the taken-and-refused shape.
+`test_init` 20,561.

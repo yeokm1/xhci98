@@ -2263,6 +2263,7 @@ MPSTATUS XhciRhVhubPort1Feature(PXHCI_EXTENSION ext,
     MPSTATUS status;
     ULONG generation;
     ULONG verdict;
+    ULONG taken;
 
     shadow = xhciRhShadow(ext, hubPort);
     hub = xhciRhVhub(ext, hubPort);
@@ -2278,16 +2279,20 @@ MPSTATUS XhciRhVhubPort1Feature(PXHCI_EXTENSION ext,
     verdict = XhciVhubPort1Feature(hub, set, selector, generation,
                                    shadow->DisownPending,
                                    xhciRhVhubPhys(shadow));
+    /* Decided before the carry, which ends a reset the core took and the
+     * port then refused - leaving no owner, as a declined one leaves the
+     * running reset's. */
+    taken = ((verdict & XHCI_VHUB_DO_PHYS_RESET) != 0 &&
+             hub->ResetOwner != XHCI_VHUB_OWNER_NONE &&
+             hub->ResetGeneration == generation) ? 1UL : 0UL;
     status = xhciRhVhubCarry(ext, hubPort, shadow, verdict, generation);
     if ((verdict & XHCI_VHUB_DO_PHYS_RESET) != 0 &&
-        status != MP_STATUS_SUCCESS &&
-        (hub->ResetOwner == XHCI_VHUB_OWNER_NONE ||
-         hub->ResetGeneration != generation)) {
+        status != MP_STATUS_SUCCESS && !taken) {
         /* The core took no reset under this generation - one already runs
          * on the port - and the busy port refused the write: the request
          * fails having changed nothing. (A reset the core took and the port
-         * refused was ended above as one that timed out, and its request
-         * completes.) */
+         * refused was ended by the carry as one that timed out, and its
+         * request completes.) */
         return status;
     }
     if ((verdict & XHCI_VHUB_DO_SUSPEND) != 0 && status != MP_STATUS_SUCCESS) {
