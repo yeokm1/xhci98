@@ -745,15 +745,16 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     answered), the targets (all, answered), the default (off in this
     phase's cut; whether a later release turns it on is still the owner's),
     the switch's name (`XhciVirtualHSHub`, answered), the hub's vendor and
-    product id - user-settable through `XhciVirtualHSHubVid` and
-    `XhciVirtualHSHubPid` (answered), with the built-in default still open
-    (proposed: a pid.codes allocation under `0x1209`, the owner's to apply
-    for; development builds may use the test id `1209:0001`, which no
-    published build may carry) - and whether it carries strings (proposed:
-    none). The default and the strings are the owner's and are answered
-    here, before any code; the cut cannot ship without the default. The
-    record also confirms that each NT target's hub INF binds by class, as
-    the 9x ones do (`USB\HubClass`, `USB\CLASS_09`).
+    product id (answered: `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid`,
+    written by both INFs as pid.codes' test id `1209:0001`, no id in the
+    binary, and the feature off for that start if the switch is on and
+    either value is missing or invalid), and whether it carries strings
+    (proposed: none; the owner's, answered here before any code). Because
+    pid.codes reserves that id "for use in private testing", every document
+    that tells a user how to turn the feature on says it is **experimental,
+    for private testing only**, and that the id is pid.codes' shared test
+    id. The record also confirms that each NT target's hub INF binds by
+    class, as the 9x ones do (`USB\HubClass`, `USB\CLASS_09`).
   - **24.3.2 - Host vectors** (`test/`), the page's `-0`: the request table
     of section 3.3 fed the setup packets the shipping hub drivers send
     (design record 02); the decision of section 3.2 (mode by decoded speed,
@@ -761,13 +762,17 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     forced connect change when it flips); the suspend merge of section 3.5;
     the topology fold of section 3.6 over the existing topology tests; the
     switch's read, its refusal of any value but 0 and 1, and its snapshot
-    header fields; the two id values, their defaults and their refusals
-    (a vendor id of 0, anything above `0xFFFF`), reaching the device
-    descriptor and nothing else; and the off-state vectors that hold the page's rule 2.
+    header fields; the two id values - the switch on with either missing,
+    unreadable, a vendor id of 0 or anything above `0xFFFF` applying the
+    switch as 0 and recording why, the switch off never consulting them,
+    and a valid pair reaching the device descriptor and nothing else; and the off-state vectors that hold the page's rule 2.
   - **24.3.3 - The driver**, the page's `-A`: the virtual device record, the
     decision point, the synthetic completion path through the deferred
-    completion list, the status-change pipe, the suspend merge, the INF's
-    `AddReg` writing the 0, and `XHCISNAP` showing the mode. Host tests and
+    completion list, the status-change pipe, the suspend merge, both INFs'
+    `AddReg` writing the switch's 0 and the ids `0x1209` and `0x0001` on
+    every install path (in a form both setup engines parse, as
+    `XhciImodInterval250ns`'s is), and `XHCISNAP` showing the mode and the
+    ids applied. Host tests and
     every gate green on all three x86 flavours and the amd64 build.
   - **24.3.4 - The readings on every guest held**, the page's `-V`, each
     with the switch off and then on. Off: nothing differs from the 24.1
@@ -837,8 +842,10 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   (the third field moves): issue 6 - section 5's bands as what the switch
   off still gives, sections 6.2 and 7 with what the switch on changes, and
   section 9's first item; the release notes' High Speed entry and a new
-  entry for the switch, saying it is off by default, what turning it on
-  does, and the extra hub a slower device brings with it; the download's
+  entry for the switch, saying it is off by default, that it is
+  experimental and for private testing only, that the hub's id is
+  pid.codes' shared test id `1209:0001` and user-settable, what turning it
+  on does, and the extra hub a slower device brings with it; the download's
   `readme.txt`; `releases/history.md`, `xhci_version.h` and both INFs; the
   install legs from the asset; and the post-release matrix on both primary
   targets, read against `runs/run-23-post-release/` with the switch off and

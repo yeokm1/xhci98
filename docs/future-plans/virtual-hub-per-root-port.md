@@ -137,49 +137,64 @@ what was applied and the status go into the snapshot header
 (`docs/contributing/passthru-snapshot-instrument.md`), so a dump from a
 stranger's machine states which mode the driver was in.
 
-The virtual hub's vendor and product id are **user-settable** (the owner,
-2026-09-25), through two more values beside the switch, read in the same
-routine, at the same time and under the same rules:
+The virtual hub's vendor and product id are **user-settable, and the
+binary carries no default** (the owner, 2026-09-25). They come from two more
+values beside the switch, read in the same routine, at the same time and
+under the same rules, and written by the INF:
 
 | | `XhciVirtualHSHubVid` | `XhciVirtualHSHubPid` |
 |---|---|---|
 | Type | `REG_DWORD` | `REG_DWORD` |
 | Accepted | `0x0001`-`0xFFFF` | `0x0000`-`0xFFFF` |
-| Absent | the built-in default | the built-in default |
-| Refused | `0`, or anything above `0xFFFF`: the default is applied and the refusal recorded | anything above `0xFFFF`, the same way |
-| Set by | the user, by hand; the INF does **not** write them, so an absent value always means the default and an upgrade never pins an old one | the same |
+| Written by the INF | `0x1209` | `0x0001` |
+| Set by | the INF's `AddReg`, in both INFs and on every install path, beside the switch's 0; the user may change it by hand in Registry Editor | the same |
 
-They reach `GET_DESCRIPTOR(Device)` (3.3) and nothing else, and the snapshot
-header carries what was read and what was applied, as for the switch.
-Neither decides which driver binds the hub: every hub INF this project has
-read binds by class - `USB\HubClass` in NUSB's and SweetLow's `USB2.INF`,
+**With the switch on, both ids must be present and valid, or the feature is
+off.** A missing value, a failed read, a vendor id of 0, or anything above
+`0xFFFF` in either makes the driver apply the switch as 0 for that start and
+record which value failed and why, beside the switch's own read status in
+the snapshot header. The driver never invents an id: there is no id in the
+binary to fall back to, so a machine where the INF's values have been
+deleted runs today's driver, not a hub with a made-up identity. With the
+switch off the two values are not consulted at all, so their state cannot
+affect rule 2.
+
+The ids reach `GET_DESCRIPTOR(Device)` (3.3) and nothing else. Neither
+decides which driver binds the hub: every hub INF this project has read
+binds by class - `USB\HubClass` in NUSB's and SweetLow's `USB2.INF`,
 `USB\CLASS_09` in NUSB 3.6's `USB.INF` - and 24.3.1 confirms the NT
 targets' own. What an id does decide is the hub's hardware id,
 `USB\VID_xxxx&PID_yyyy`, which Windows matches **before** the class, so an
 id that some vendor INF on the machine names would bind that vendor's
-driver to the virtual hub. That is what the default has to avoid and what
-the values exist to get a user out of. Changing either one gives the hub a
-new hardware id, so Windows treats it as a new device and installs the hub
-again on each port it appears on.
+driver to the virtual hub; the values exist so that a user who meets that
+can move off it. Changing either one gives the hub a new hardware id, so
+Windows treats it as a new device and installs the hub again on each port
+it appears on. And since the INF writes all three values on every install,
+as it does `XhciLogVerbosity`, a reinstall turns the feature off and puts
+the ids back to the INF's.
 
-The built-in default is **not decided**. The proposal (24.3.1) is an id
-allocated to this project by pid.codes under its open-source vendor id
-`0x1209`: free, granted by a pull request on the pid.codes repository to a
-public, OSI-licensed project, and unique by construction. It is the
-owner's to apply for, since it is published under the project's name.
-pid.codes' eligibility wording is about "a device with a USB interface",
-and it says a software-only project may face "additional scrutiny regarding
-necessity"; the virtual hub is a USB device that exists only in software,
-so the application has to make that case. Until an id is granted,
-development builds may use pid.codes' test id `1209:0001`, which "MUST NOT
-be used on any device that will be redistributed", so no published build
-may carry it; a cut without an allocation needs the owner's choice of
-another default first. The ids to avoid regardless are other vendors'
-ids, which is the collision above. Two look convenient and are exactly
-that: the host controller's PCI vendor id (PCI-SIG and USB-IF assign vendor
-ids separately, so the same number can belong to an unrelated USB vendor,
-and Intel's `0x8086` and `0x8087` are USB vendor ids of real hubs too), and
-`0x1D6B`, the Linux Foundation's id for Linux's own root hubs.
+**Why `1209:0001`, and what it is.** `0x1209` is pid.codes' open-source
+vendor id, and `0x0001` is the first of its sixteen test product ids
+(`0x0001`-`0x0010`), which pid.codes reserves "for use in private testing"
+and says "MUST NOT be used on any device that will be redistributed, sold,
+or manufactured", adding that software naming one should warn that it is
+not unique and not for use outside testing. The owner chose it on
+2026-09-25 because the feature is off by default and is documented as
+**experimental, for private testing only** - pid.codes' own wording - and
+because the id lives in the INF as a setting the user can change rather
+than in the binary. Every
+document that tells a user how to turn the feature on carries that warning
+and says the id is pid.codes' shared test id, not one allocated to this
+project. A project-allocated id from pid.codes (a pull request on its
+repository, published under the project's name) remains the route if the
+feature ever stops being experimental; that is the owner's to apply for.
+
+The ids to avoid in the INF are other vendors'. Two look convenient and are
+exactly that: the host controller's PCI vendor id (PCI-SIG and USB-IF
+assign vendor ids separately, so the same number can belong to an unrelated
+USB vendor, and Intel's `0x8086` and `0x8087` are USB vendor ids of real
+hubs too), and `0x1D6B`, the Linux Foundation's id for Linux's own root
+hubs.
 
 Rule 2 is held at one divergence point, the decision of 3.2, and in the
 on-demand shape that point is reached only after a root-port reset has
@@ -533,10 +548,11 @@ ports, with the interval read from the snapshot instrument.
    permanent shape kept as the fallback if the churn reading fails on a
    target.**
 3. The virtual hub's vendor and product id and whether it carries strings.
-   **Partly answered 2026-09-25: the ids are user-settable**
-   (`XhciVirtualHSHubVid`, `XhciVirtualHSHubPid`, 3.1). Still open: the
-   built-in default (proposed: a pid.codes allocation under `0x1209`, which
-   the owner would apply for) and the strings (proposed: none).
+   **Ids answered 2026-09-25:** user-settable through
+   `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid`, written by the INF as
+   pid.codes' test id `1209:0001`, no id in the binary, and the feature off
+   if either is missing or invalid (3.1); documented as experimental, for
+   private testing only. Still open: the strings (proposed: none).
 4. The switch's name. **Answered 2026-09-25: `XhciVirtualHSHub`.**
 5. Whether the switch defaults to on in a later release once section 5 is
    read on both primary targets, or stays an opt-in like the SuperSpeed
