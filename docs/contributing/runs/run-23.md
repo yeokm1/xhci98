@@ -538,7 +538,7 @@ true speeds (neither scheduled), the acceptance test, or the upload.
 
 Records: GitHub issue 4 (the thread; nothing of it is copied here beyond the
 table above); `docs/issues/06-full-speed-root-port-bugcheck.md`;
-`docs/future-plans/virtual-hub-per-root-port.md`;
+`docs/contributing/design/12-virtual-hub-on-root-ports.md`;
 `docs/usb-xhci-info/xhci-data-structures.md` (IMOD, Table 5-39);
 `docs/usb-xhci-info/usbport-miniport-abi.md` ("Periodic scheduling: what
 `Period` actually carries"); `build-and-test.md` (the INF's omitted

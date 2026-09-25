@@ -584,7 +584,7 @@ acceptance test, or the upload.
 
 Records: GitHub issue 4 (the thread; nothing of it is copied here beyond the
 table above); `docs/issues/06-full-speed-root-port-bugcheck.md`;
-`docs/future-plans/virtual-hub-per-root-port.md`;
+`docs/contributing/design/12-virtual-hub-on-root-ports.md`;
 `docs/usb-xhci-info/xhci-data-structures.md` (IMOD, Table 5-39);
 `docs/usb-xhci-info/usbport-miniport-abi.md` ("Periodic scheduling: what
 `Period` actually carries"); `build-and-test.md` (the INF's omitted
@@ -715,8 +715,9 @@ Tasks. `runs/run-24.md` is the record once a task runs.
 
 - [ ] **24.3 - True speeds on root ports: the on-demand virtual hub.** *(taken 2026-09-25; a decision until then)*
 
-  Build `docs/future-plans/virtual-hub-per-root-port.md` in the shape the
-  owner chose on 2026-09-25. When a root-port reset decodes a Full or Low
+  Build design record 12,
+  `docs/contributing/design/12-virtual-hub-on-root-ports.md`, in the shape
+  the owner chose on 2026-09-25. When a root-port reset decodes a Full or Low
   Speed device, the driver presents a virtual High-Speed, single-TT, one-port
   hub in that device's place, and the device becomes the hub's port 1; when
   the device is unplugged the root port reports the disconnect as today and
@@ -738,7 +739,10 @@ Tasks. `runs/run-24.md` is the record once a task runs.
 
   The sub-tasks, in the page's batch order (section 8):
 
-  - **24.3.1 - The design record.** The page moves to
+  - **24.3.1 - The design record.** *(done 2026-09-25: moved, decisions
+    recorded in its section 9, and every target's hub INF read to bind by
+    class, none naming `VID_1209` - its section 3.1 and
+    `legal-provenance.md` section 4.)* The page moves to
     `docs/contributing/design/12-virtual-hub-on-root-ports.md`, the next
     free number, and the future-plans index and every link follow it. It
     stops being an idea and records its decisions: the shape (on demand,
@@ -891,8 +895,8 @@ acceptance test, the upload, or the reply on the issue.
 Records: GitHub issue 4 (the thread; the reporter's Code 10 reading of
 2026-09-12, his order of 2026-09-14 and his pointer of 2026-09-19);
 `docs/issues/06-full-speed-root-port-bugcheck.md` sections 5, 8 and 9;
-`docs/future-plans/virtual-hub-per-root-port.md` (design record 12 from
-24.3.1); `docs/usb-xhci-info/usbport-miniport-abi.md` ("Periodic scheduling:
+`docs/contributing/design/12-virtual-hub-on-root-ports.md`
+(design record 12; the future-plans page until 24.3.1); `docs/usb-xhci-info/usbport-miniport-abi.md` ("Periodic scheduling:
 what `Period` actually carries", section 4's root-hub contracts and section
 8's TT lookup); `docs/usb-xhci-info/xhci-data-structures.md` (Tables 5-27,
 6-6 and 6-12); `docs/contributing/design/02-hub-topology-route-string.md`

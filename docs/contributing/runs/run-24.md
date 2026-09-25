@@ -764,7 +764,7 @@ asked, never slower.
   speed gets usbport's frame bucketing, which is what the six behind-hub
   guests in 24.1 show: 8, 4, 2 and 1 ms, every rate reachable. Doing that
   without usbport's missing-TT bugcheck (issue 6 sections 3 and 4) is the
-  virtual hub proposal, `docs/future-plans/virtual-hub-per-root-port.md`,
+  virtual hub proposal, `docs/contributing/design/12-virtual-hub-on-root-ports.md`,
   and that is 24.3's decision. A patched usbport is not this project's to
   ship (24.3).
 
@@ -879,6 +879,30 @@ says, and the entry was corrected the same day.
 A truthful report is now measured fatal on both usbport lineages Windows 98
 runs, NUSB's in Phase 5 and SweetLow's here, and on Windows 2000. The report
 cannot be made truthful at the root hub on any stack this project holds; the
-virtual hub (`docs/future-plans/virtual-hub-per-root-port.md`), which keeps
-the root port reporting High Speed and gives usbport a TT above the slower
+virtual hub (`docs/contributing/design/12-virtual-hub-on-root-ports.md`,
+then still a future-plans page), which keeps the root port reporting High Speed and gives usbport a TT above the slower
 device, stays the only candidate.
+
+## 24.3.1 - The design record
+
+Done 2026-09-25, on branch `24.3`. The future-plans page moved to
+`docs/contributing/design/12-virtual-hub-on-root-ports.md`, the next free
+number (record 10's is not reused), and every link followed it; the
+future-plans index keeps one sentence saying where it went. Its section 9
+now records the owner's decisions of the same day - the shape, the targets,
+the default, the switch's name, the ids and the string - as decisions, and
+its header says what 24.3.2 to 24.3.5 build and read.
+
+The one open point the record owned was whether each NT target's hub INF
+binds by class, as the 9x ones were already known to. It does, on all of
+them. `usb.inf` was taken from each install medium the project holds - the
+Windows 2000 SP4 CD's and both XP media's compressed `USB.IN_`, and
+`Windows\inf\usb.inf` out of each Vista and Windows 7 `install.wim` - and
+kept git-ignored under `tools/<os>-extracted/`. Windows 2000 matches
+`USB\HubClass` and `USB\CLASS_09&SUBCLASS_01` / `USB\CLASS_09`; XP in both
+architectures, Vista and 7 match the class pair under
+`[GenericHub.Section]` with its architecture decoration. None of the eleven
+hub INFs on the project's targets names `VID_1209`, so the INF's test id
+collides with nothing the targets carry. Method static, a text search
+(`legal-provenance.md` section 4); design record 12 section 3.1 carries the
+sizes and hashes.

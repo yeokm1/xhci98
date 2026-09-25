@@ -16,10 +16,11 @@ were measured on
 it:** a USB 1.1 hub on a
 root port bugchecks every Vista and Windows 7 build once a slower device
 behind it is configured (section 6), and a Full-Speed USB audio device on a
-root port plays nothing from Windows XP on (section 7). The candidate fix
-for all of them, a virtual USB 2.0 hub per root port
-([proposal](../future-plans/virtual-hub-per-root-port.md)), is not yet
-decided (section 8). **`1.1.1.0` answers nothing on this page.** That
+root port plays nothing from Windows XP on (section 7). The fix for all of
+them, a virtual USB 2.0 hub above each slower root-port device
+([design record 12](../contributing/design/12-virtual-hub-on-root-ports.md)),
+is being built as roadmap task 24.3, off by default (section 8).
+**`1.1.1.0` answers nothing on this page.** That
 release carries the controller's property page and the interrupt moderation
 value alone; the polling rates (section 5) and true speeds on root ports were
 split out of Phase 23 by the owner on 2026-09-22 and are roadmap Phase 24's,
@@ -607,7 +608,8 @@ changing what the driver reports on a root port is exactly what bugchecks
 Windows 98 and 2000 - the primary targets. The options, as they stand:
 
 - **A virtual USB 2.0 hub above each slower root-port device**, the idea in
-  [`docs/future-plans/virtual-hub-per-root-port.md`](../future-plans/virtual-hub-per-root-port.md):
+  [`docs/contributing/design/12-virtual-hub-on-root-ports.md`](../contributing/design/12-virtual-hub-on-root-ports.md)
+  (design record 12 since 2026-09-25):
   a slower device is then reported at its true speed behind a hub that has a
   transaction translator, which removes the interval bands (section 5), the
   Vista and 7 bugcheck (6.2) and the silent audio (7) together. It is the
@@ -765,5 +767,5 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
   static rows for `USBPORT_GetTt`, `USBPORT_CreateDevice`,
   `USBPORT_RootHubCreateDevice` and the descriptor templates; the Windows 7
   x86 budgeter row and the XP `USBPORT_IsochTransfer` row; the hidusbf rows.
-- [virtual-hub-per-root-port.md](../future-plans/virtual-hub-per-root-port.md):
-  the candidate fix.
+- [12-virtual-hub-on-root-ports.md](../contributing/design/12-virtual-hub-on-root-ports.md):
+  the fix roadmap task 24.3 builds, design record 12.

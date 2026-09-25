@@ -1,13 +1,20 @@
 # Real speeds on root ports: a virtual USB 2.0 hub for each slower device on a root port
 
-Written 2026-09-07; revised 2026-09-25, when the owner chose the on-demand
-shape over the permanent one this page first proposed (section 4). **Taken
-up the same day as roadmap task 24.3**, whose first sub-task, 24.3.1, moves
-this page to `docs/contributing/design/12-virtual-hub-on-root-ports.md`;
-until that move it stays here and is still worded as an idea. Nothing in it
-has been built and no boot has been taken for it. Where it says what a
-batch would do, it is naming work, not reporting it. The evidence it rests
-on is the tree as it stands, issue 6
+Design record for roadmap task 24.3. It was
+`docs/future-plans/virtual-hub-per-root-port.md` from 2026-09-07 until
+2026-09-25, when the owner took the work up as task 24.3 in the on-demand
+shape (section 4) and answered every decision it asked for (section 9);
+sub-task 24.3.1 moved it here, the next free number, and the future-plans
+page is gone. Sections 1 to 8 keep the proposal's wording where it still
+holds, and a sentence that says what the driver "would" do now says what
+24.3.3 builds. No boot has been taken for it: the host vectors are 24.3.2,
+the driver 24.3.3, and the readings of section 5 are 24.3.4 and 24.3.5.
+
+What 24.3.1 added besides the move: the confirmation that every NT target's
+hub INF binds by class, as the 9x ones do (section 3.1, "Which INF binds
+the hub"). Everything the record decides is in section 9.
+
+The evidence it rests on is the tree as it stands, issue 6
 (`docs/issues/06-full-speed-root-port-bugcheck.md`), design record 02
 (`docs/contributing/design/02-hub-topology-route-string.md`) and the
 root-hub contracts in `docs/usb-xhci-info/usbport-miniport-abi.md`
@@ -25,7 +32,7 @@ proposal was written under:
 
 Section 3.1 says what the value is, how it is read, and what holds rule 2.
 
-## 1. The problem it would solve
+## 1. The problem it solves
 
 The driver reports every connected root port to `usbport.sys` as High Speed
 whatever the device's decoded speed, and keeps the true speed for its own
@@ -106,7 +113,7 @@ usbport names (design record 02, step 3). The virtual hub is a device that
 lives entirely in the miniport, answered in software, and the only thing it
 translates is what usbport is told.
 
-## 3. What the driver would have to do
+## 3. What the driver does
 
 ### 3.1 The switch, and what off means
 
@@ -182,10 +189,9 @@ not. The parser takes whichever the bytes show, host vectors run both, and
 the 9x encoding is the first thing 24.3.4 reads on Windows 98 SE and ME.
 
 The ids reach `GET_DESCRIPTOR(Device)` (3.3) and nothing else. Neither
-decides which driver binds the hub: every hub INF this project has read
-binds by class - `USB\HubClass` in NUSB's and SweetLow's `USB2.INF`,
-`USB\CLASS_09` in NUSB 3.6's `USB.INF` - and 24.3.1 confirms the NT
-targets' own. What an id does decide is the hub's hardware id,
+decides which driver binds the hub: every hub INF on every target binds by
+class (the next table), and none names vendor id `0x1209`. What an id does
+decide is the hub's hardware id,
 `USB\VID_xxxx&PID_yyyy`, which Windows matches **before** the class, so an
 id that some vendor INF on the machine names would bind that vendor's
 driver to the virtual hub; the values exist so that a user who meets that
@@ -194,6 +200,38 @@ Windows treats it as a new device and installs the hub again on each port
 it appears on. And since the INF writes all three values on every install,
 as it does `XhciLogVerbosity`, a reinstall turns the feature off and puts
 the ids back to the INF's.
+
+**Which INF binds the hub** (read 2026-09-25, 24.3.1; method static, a
+text search over each file, nothing executed; `legal-provenance.md`
+section 4). Every hub INF on every target matches a generic hub by a
+compatible id, never by vendor, and none of the eleven names `VID_1209`,
+so with the INF's id the hub takes the target's own generic hub driver:
+
+| Target | File, and where it came from | Bytes | SHA-256 | Generic hub match |
+|---|---|---|---|---|
+| Windows 98 SE, NUSB 3.3 | `USB2.INF`, `tools/nusb-extracted/` | 7,738 | `8A583C40A063E9CF39F920D1DF4D5288AAB5D0B6F4AA276C93073F9C2D4EA10E` | `USB\HubClass` |
+| Windows 98 SE, NUSB 3.6 | `USB2.INF`, `tools/nusb36-extracted/` | 14,543 | `A9C75950F2805A1F00EB1222DE525BEE8EAF0689D88143A9C8078208AF7F1F06` | `USB\HubClass` |
+| | `USB.INF`, the same | 31,279 | `F67BA17B96E557CA206523303335BB66A6F255E08A7997B16930D455EE197839` | `USB\CLASS_09&SUBCLASS_01`, `USB\CLASS_09` |
+| Windows 98 SE and ME, SweetLow | `USB2.INF`, `tools/sweetlow-extracted/` | 4,146 | `A3D2B895A3A776576C0ACC2CE48DD2D61DCA77C7C9FD0DF79EC94105FEAB057A` | `USB\HubClass` |
+| Windows 2000 SP4 | `usb.inf`, `I386\USB.IN_` on the SP4 CD | 32,543 | `1B2F63A2F526C7678ECFD0F68C991E9094C5ADAA6D266CA9DF0EF6953049C917`[^cd] | `USB\HubClass`, and `USB\CLASS_09&SUBCLASS_01`, `USB\CLASS_09` under `[GenericHub.Section]` |
+| Windows XP SP3 x86 | `usb.inf`, `I386\USB.IN_` | 20,623 | `364F86B157BA808C3AA21B8B8946783FCFB35245155C49DDA0F23C809FBAC418`[^cd] | the class pair, `[GenericHub.Section]` |
+| Windows XP x64 SP2 | `usb.inf`, `AMD64\USB.IN_` | 21,580 | `99DE5A2FB199B483D3EFF256E0A45F7A8CA2246E0EF406FB32BC95E23D1D2B7F`[^cd] | the class pair, `[GenericHub.Section.NTamd64]` |
+| Vista SP2 x86 | `usb.inf`, `Windows\inf\` in `sources\install.wim` image 1 | 40,740 | `D9F64E8A451838E2A1F78F0F397A987126D9B04D854228379F451BCBD40E25A7` | the class pair, `[GenericHub.Section.NTx86]` |
+| Vista SP2 x64 | the same | 41,060 | `6838C76CAF1976D46066510F85D0F241E2723AFFADE7BF133CD67CD0C9610C63` | the class pair, `[GenericHub.Section.NTamd64]` |
+| Windows 7 SP1 x86 | `usb.inf`, `Windows\inf\` in `sources\install.wim` | 42,216 | `571CDF50837F269699EF7B54B53550DF18140DA41666196C407F0E584C87E19A` | the class pair, `[GenericHub.Section.NTx86]` |
+| Windows 7 SP1 x64 | the same | 42,536 | `6F9EBC72711E3730463B682190E33F61FCAB5ACAD3C4A5D43EA0BDDB0789297D` | the class pair, `[GenericHub.Section.NTamd64]` |
+
+[^cd]: The hash is of the file after `expand.exe`; the Windows 2000 and
+both XP media carry it compressed as `USB.IN_`. Every row's hash is
+recomputed with `Get-FileHash` over the git-ignored copy under `tools/`.
+
+The virtual hub's compatible ids, which usbhub builds from the device
+descriptor, are `USB\Class_09&SubClass_00&Prot_01`,
+`USB\Class_09&SubClass_00` and `USB\Class_09` on every target, and
+`USB\HubClass` on the ones whose hub driver adds it; one of those is what
+each row matches. A vendor INF naming `USB\VID_1209&PID_0001` - another
+project's test device, since the id is shared - would outrank them all,
+which is the collision section 3.1's user-settable ids exist to step off.
 
 **Why `1209:0001`, and what it is.** `0x1209` is pid.codes' open-source
 vendor id, and `0x0001` is the first of its sixteen test product ids
@@ -558,7 +596,11 @@ ports, with the interval read from the snapshot instrument.
   reading.
 - `-E`: the E460 reading.
 
-## 9. Decisions the owner would take
+## 9. Decisions
+
+All the owner's, all taken on 2026-09-25 except the fifth, which does not
+bind this phase. What 24.3.1 read to settle the record's own open point is
+section 3.1's INF table; it needed no decision.
 
 1. Whether it is wanted at all, against the cost in section 4: a hub
    devnode and a longer enumeration for each slower device, for the
