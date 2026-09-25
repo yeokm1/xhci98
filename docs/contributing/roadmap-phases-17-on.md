@@ -709,10 +709,26 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   decisions are answered (name, permanent or on demand, ids, default). Not
   taken means issue 6 section 9's first item says so and why.
 
-  The reporter's alternative, a patched usbport that guards the empty TT
-  list, is not this project's to ship and is recorded as such.
+  The reporter offered no fix to take. His remarks on the thread - that the
+  High-Speed report is "only default behaviour" because usbport and usbhub
+  handle slower devices on UHCI and OHCI root hubs (2026-09-07), and "EHCI
+  with right USBPORT, of course" (2026-09-19) - are answered by issue 6
+  section 4 (those miniports never declare the USB2 flag, and dropping it
+  loses High Speed on Windows 98) and by the rule that a usbport other than
+  the target's own is not this project's to ship. This paragraph said until
+  2026-09-25 that he had proposed a patched usbport; the thread does not say
+  so (`runs/run-24.md`, 24.3).
 
-  Where it is read: a decision; no boot.
+  An experiment was taken before the decision, at the owner's request
+  (2026-09-25, `runs/run-24.md`, 24.3): an uncommitted build reporting the
+  true speed, on Windows 98 SE under SweetLow's stack, with a Full-Speed
+  mouse on a root port. It took the fatal exception at `0028:C002F70E` in
+  `NTKERN`, NUSB's address from Phase 5, so a truthful root-hub report is now
+  measured fatal on both Windows 98 lineages and on Windows 2000. It is
+  evidence for the decision, not the decision.
+
+  Where it is read: a decision; no boot (the experiment above was one, and
+  is not this task's reading).
 
 - [ ] **24.4 - The reporter's pointer for the missing USB 1.1 hub.**
 

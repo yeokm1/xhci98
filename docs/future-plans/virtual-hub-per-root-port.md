@@ -55,7 +55,9 @@ it costs three things:
 
 Issue 6 section 8 lists a true-speed report as an opt-in and says why it
 cannot be enabled under any shipping usbport: the fault is in usbport's list
-handling, and SweetLow's rebuild has the same branch. The lever has two
+handling, and SweetLow's rebuild has the same branch - read statically, and
+on 2026-09-25 run: a truthful build took Windows 98 SE under his stack down
+at NUSB's `NTKERN` address (roadmap 24.3, `runs/run-24.md`). The lever has two
 positions and both have been taken. This page proposes a third: keep
 reporting High Speed on every root port, and give usbport the hub its model
 is looking for.

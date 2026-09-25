@@ -76,8 +76,9 @@ instruction-level chain is in
 ## 1. The problem, on every target
 
 Four questions per target: what a Full-Speed device on a root port does
-when its true speed is reported (the pre-Phase-5-task-7 build, run on two
-targets only and never again); and, under the High-Speed report every
+when its true speed is reported (the pre-Phase-5-task-7 build, run on the
+two primary targets, and once more on 2026-09-25 as an uncommitted
+experiment under SweetLow's stack); and, under the High-Speed report every
 release has shipped, what a slower device on a root port does, what a USB
 1.1 hub on a root port with a slower device behind it does, and whether a
 Full-Speed audio device on a root port plays. Every cell names its
@@ -89,8 +90,8 @@ either. Only the first row and 32-bit Windows 7's have any metal readings.
 | Target | Full-Speed device on a root port, true speed reported | Full or Low Speed device on a root port, reported High Speed (as shipped) | USB 1.1 hub on a root port, Full or Low Speed device behind it | Full-Speed audio device on a root port |
 |---|---|---|---|---|
 | Windows 98 SE, NUSB 3.3 | **Bugchecks** (VM): `Windows protection error`, or `0028:C002F70E` in `NTKERN` (Phase 5, section 2). Never on metal: the workaround predates every bare-metal batch | Works, VM and **metal**: a Low-Speed mouse at a root port on the E460 (batch 13-E, stage E4.1) and a Full-Speed audio device there (E6.1); interrupt polling in 1, 2 or 4 ms bands (section 5; measured with hidusbf in the VM, Phase 20 - not measured on metal); the Bandwidth Usage dialog charges it the same 1 % as a High-Speed device (VM, 2026-09-20, section 5.1) | Works (VM): a mouse behind QEMU's `usb-hub` bound and ran (batch 7b-V0, section 6.1); the 22.9 hub rows PASS, the churn row is excluded on this target. Never on metal: no USB 1.1 hub was held (batch 13-E, P3). On metal the mouse and the audio device ran behind USB 2.0 hubs, single-TT and multi-TT (E4, E6.2), which is not this topology | **Plays on metal**: a physical UAC 1.0 device played clean at a root port on the E460 (batch 13-E, E6.1, and behind the multi-TT hub, E6.2), and again on `1.1.0.0` `release-x86` on 2026-09-19 - a Sound Blaster Play! 2 (`041E:323D`) directly in a root port, NUSB 3.3, heard by the owner. In the VM the OS's own `USBAUDIO.VXD` faults after one URB (batch 9-V, again 2026-09-19) - a vehicle artefact, not this issue |
-| Windows 98 SE, SweetLow's stack | Never run; static: its usbport's single-TT branch (`0x2667A`-`0x26686`) returns the same garbage pointer | Works (VM, observed); the bands not measured on this stack; the same 1 % in the Bandwidth Usage dialog (VM, 2026-09-20, section 5.1) | Not measured | Not measured |
-| Windows ME, SweetLow's stack | Never run; static as the row above | A HID mouse binds (VM, 2026-09-02); the bands not measured; the same 1 % in the Bandwidth Usage dialog (VM, 2026-09-20, section 5.1). Never on metal | Never plugged | Bound (VM, a composite audio device, 2026-09-02); playback not measured |
+| Windows 98 SE, SweetLow's stack | **Bugchecks** (VM, 2026-09-25): a fatal exception 0E at `0028:C002F70E` in `NTKERN`, the NUSB row's address, once a Full-Speed mouse on a root port was reset (an uncommitted truthful build, roadmap 24.3, `runs/run-24.md`). Static: its usbport's single-TT branch (`0x2667A`-`0x26686`) returns the same garbage pointer. Never on metal | Works (VM, observed); the bands not measured on this stack; the same 1 % in the Bandwidth Usage dialog (VM, 2026-09-20, section 5.1) | Not measured | Not measured |
+| Windows ME, SweetLow's stack | Never run on ME; the same usbport as the row above, whose branch is read statically and whose crash was run on Windows 98 SE only | A HID mouse binds (VM, 2026-09-02); the bands not measured; the same 1 % in the Bandwidth Usage dialog (VM, 2026-09-20, section 5.1). Never on metal | Never plugged | Bound (VM, a composite audio device, 2026-09-02); playback not measured |
 | Windows 2000 SP4 | **Bugchecks** (VM): `STOP 0x0000000A (0xFFFFFFFC, 0xFF, 0x00000000, 0x804006B2)` (Phase 5, sections 2 and 3) | Works (VM); the same bands (usbport's bucketing rule is common to every build; the readings are Windows 98's). Never on metal | Works (VM: batch 7b-V0; the 22.9 churn row PASS) | **Plays** (VM): 376 isochronous submits, 3,760 packets, `played.wav` 659,456 B (2026-09-19, section 7) |
 | Windows XP SP3 x86 | Never run; XP SP3's own `USBPORT_GetTt` not read (SweetLow's rebuild is XP-lineage and unguarded) | Works (VM: issue 7's legs; the 22.10 install leg). Never on metal | A Full-Speed audio device behind the hub enumerated and played (VM, 2026-09-19, section 7); a mouse behind it never run | **Silent** (VM): 0 isochronous submits while Sound Recorder played 1.93 s; behind a Full-Speed hub 196 submits, 344,064 B (section 7) |
 | Windows XP x64 SP2 | Never run; not read | Works (VM: the 22.9 matrix; the 22.10 install leg). Never on metal | Works (VM: the 22.9 hub rows, churn included, PASS) | **Silent** (VM): 0 submits; an endpoint opens on arrival, nothing is ever sent (section 7) |
@@ -100,7 +101,8 @@ either. Only the first row and 32-bit Windows 7's have any metal readings.
 | Windows 7 SP1 x64 | Never run; not read | Works (VM: the 22.10 install leg). Never on metal | **Bugchecks** (VM, section 6.2) | **Silent** (VM): 0 submits; the pipe opened, nothing sent (section 7) |
 
 Read down the columns. The first is why the workaround exists and why it
-cannot simply be removed: the two primary targets die without it. The
+cannot simply be removed: the two primary targets die without it, and so
+does Windows 98 under the reporter's own stack. The
 second is the workaround doing its job on every target, at the cost of the
 bands. The third and fourth are what the same report costs on stacks it was
 never made for: Vista and 7 fault one level below a root port, and every
@@ -623,12 +625,16 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
   as well, because usbport would then bucket `Period` in frames, which
   `XhciIntervalFromPeriod` already handles. It must never be enabled by
   build detection: under NUSB's and SP4's usbport it bugchecks the machine,
-  and SweetLow's XP-lineage rebuild does not guard it either (its single-TT
-  branch at `0x2667A`-`0x26686` returns the same `0xFFFFFFEC` for an empty
-  list; static, ABI document section 8). No truthful-speed run has been
-  made on that rebuild or on any NT 5.1+ usbport; a lineage is not a basis
-  for enabling an option, and on Vista and 7 it would meet the same
-  budgeter that faults in 6.2.
+  and under SweetLow's XP-lineage rebuild it does too. His single-TT branch
+  at `0x2667A`-`0x26686` returns the same `0xFFFFFFEC` for an empty list
+  (static, ABI document section 8), and on 2026-09-25 an uncommitted
+  truthful build on Windows 98 SE under his stack took a fatal exception at
+  `0028:C002F70E` in `NTKERN` - the address NUSB gave in section 2 - after
+  usbhub reset a root port holding a Full-Speed mouse and before usbport
+  opened its default pipe (roadmap 24.3, `runs/run-24.md`; VM only). No
+  truthful-speed run has been made on any NT 5.1+ usbport; a lineage is
+  not a basis for enabling an option, and on Vista and 7 it would meet the
+  same budgeter that faults in 6.2.
 - **Dropping the USB2 flag** loses High Speed on Windows 98 (section 4).
 - **Patching a real 1.1 hub's descriptor to claim a TT** would address the
   Vista and 7 bugcheck only, and the hub would then stall the TT requests

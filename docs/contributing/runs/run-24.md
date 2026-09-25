@@ -774,3 +774,111 @@ On a root port, 1000, 500 and 250 Hz work now, and 1.1.1.0 already behaved
 this way. Slower rates and the device's own stock rate need a hub, or 24.3.
 Behind a hub, every rate works, Low Speed included, from the 24.1 build on.
 Replying on the issue is the owner's.
+
+## 24.3 - a truthful root-port report on SweetLow's stack (an experiment)
+
+Taken 2026-09-25 at the owner's request, before 24.3's decision and as
+evidence for it, not as the decision. The question: does the reporter's own
+stack survive a true-speed report on a root port, which is the one thing
+issue 6 had never run? Issue 6 section 8 carried it as a static reading only
+- his `USBPORT.SYS`'s single-TT branch at `0x2667A`-`0x26686` returns the
+same `0xFFFFFFEC` for an empty list (ABI document section 8) - with "no
+truthful-speed run has been made on that rebuild".
+
+**Answer: it does not. Windows 98 SE under SweetLow's stack goes down exactly
+as it does under NUSB.**
+
+### The build, and why it is not in the tree
+
+One change, in `XhciPortShadowReport` (`src/xhci_port.c`): the High-Speed
+status bit only for a decoded High-Speed device, the Low-Speed bit for a
+decoded Low-Speed one, neither for Full Speed - the Phase 5 override removed
+and nothing else touched. The host suite then fails on exactly the eight
+vectors that pin the override (five in `test_port.c`, three in
+`test_init.c`) and on nothing else, which is the suite confirming the change
+is confined to that one layer. Those eight were flipped to the truthful
+values so the binary could go through every remaining gate:
+`build-driver.cmd qemu`, host tests PASSED, the import gate PASSED. The
+`qemu` flavour, `xhci98.sys` 164,944 bytes, SHA-256 `28217287...`, staged by
+`make-package.ps1 -Flavor qemu -Arch x86 -OutDir out\t24-3\pkg`. The three
+source files were then restored to `HEAD` and the `qemu` flavour rebuilt from
+them, so no tree and no output directory holds the experiment except
+`out\t24-3\`. **That binary must never be published.**
+
+### The vehicle
+
+- `vm\t24-3-sweetlow.img`: a copy of `vm\sweetlow-2a.img` reverted to
+  `sweetlow-stack-nodriver` - SweetLow's stack, no xhci98 of any version.
+- `scripts\local\phase24\qemu-sweetlow-24-3.cmd` (per-host, git-ignored):
+  24.1's machine (`pc,smm=off`, `pentium3`, 256 MB, `qemu-xhci,p2=8,p3=0`,
+  isa-debugcon) with **no hub**, because the topology under test is a device
+  directly on a root port; transfer drive `vm\xfer24-3` (24.1's `vm\xfer98`
+  with the experimental package in `XHCI98\`), monitor 56891.
+- Install through Device Manager -> the controller's Driver tab -> Update
+  Driver -> `D:\XHCI98`. The INF's `LayoutFile` route asked for the Windows
+  98 SE CD; `C:\WINDOWS\OPTIONS\CABS` on this guest does not carry
+  `usbd.sys`, so the CD was inserted (`change ide1-cd0`) and answered with
+  `E:\WIN98`, as in 24.1.
+- Cold start after the install (the guest hangs on a warm reboot).
+
+### The reading
+
+`xhci98: DriverEntry (built Sep 25 2026 12:43:51)`,
+`USBPORT_GetHciMn=10000001` (the XP-lineage value: his usbport, not NUSB's),
+`MiniPortExtensionSize=000168A0`, the No Op self-test matched.
+
+| Step | Device | What the driver reported and saw | Result |
+|---|---|---|---|
+| Control | `usb-kbd` (High Speed, 480 Mb/s), root port 1 | `RH_GetPortStatus` `0x0503` (connected, enabled, powered, High Speed); `QueryEndpointRequirements` and `OpenEndpoint` for address 0, `SET_ADDRESS` answered, the configuration descriptor read | Enumerated; the HID wizard opened for it |
+| Under test | `usb-mouse,usb_version=1` (Full Speed, 12 Mb/s), root port 2 | First decode `00010202` (hub port 2, Full Speed); usbhub reset the port (`RH_SetFeaturePortReset` port 2, reset completed, `RH_ClearFeaturePortResetChange` port 2); then **no** `QueryEndpointRequirements` and **no** `OpenEndpoint` for the new device's EP0 | **"A fatal exception 0E has occurred at 0028:C002F70E in VXD NTKERN(01) + 0000E32E"** |
+
+The address is the one issue 6 section 2 records for Windows 98 under NUSB
+in Phase 5, `0028:C002F70E` in `NTKERN`. The trace stops where issue 6's
+mechanism says it should: after the reset that makes the device creatable,
+before usbport opens its default pipe, which is where `USBPORT_CreateDevice`
+runs the TT lookup and `OpenPipe` inserts at the garbage pointer. The port
+events that followed were latched and announced with nobody servicing them
+(`root hub invalidates owed=00000001`), the dead system's signature in this
+driver's own counters. Screenshots and both debugcon logs are in
+`out\t24-3\` (`b2-fs2.png` is the fatal exception).
+
+What it does not show, stated so it is not read in:
+
+- **The status word usbport read for port 2 is inferred, not read.** The
+  per-line trace suppressed those records and the log ring was off (a fresh
+  guest, `XhciLogVerbosity` never set), so no `RH_GetPortStatus` value for
+  port 2 survives. That the report carried neither speed bit rests on the
+  build's own host vectors, which assert exactly that for a Full-Speed port.
+- **The branch itself was not observed.** No debugger was attached. The run
+  is consistent with the static reading of `0x2667A`-`0x26686` and adds a
+  runtime crash at the NUSB address; it does not show which instruction
+  produced the pointer.
+- **Low Speed was not run.** The lookup is gated on "not High Speed", so a
+  Low-Speed device reaches the same branch; the passed-through mouse from
+  24.1 would only repeat this.
+- **Windows ME**, which runs the same usbport, was not run.
+
+### What the reporter said about a fix
+
+Nothing in the thread is a fix this project can take. His words on GitHub
+issue 4: on 2026-09-07, that the High-Speed report "is only default
+behaviour", because "USBPORT + USBHUB pair definitely supports Low- and
+Full-Speed Devices on Root Hubs for UHCI and OHCI"; on 2026-09-19, "what I
+meant when said 'EHCI with right USBPORT, of course'", where the remark it
+quotes is in neither issue 4 nor issue 1. The first is true and is issue 6
+section 4's other lever: UHCI and OHCI miniports never declare
+`USB_MINIPORT_FLAGS_USB2`, so usbport never runs the TT lookup for them, and
+dropping the flag costs High Speed on Windows 98 because the root hub then
+binds the USB 1.1 hub driver. The second names no usbport and offers none.
+The roadmap's 24.3 entry called "a patched usbport that guards the empty TT
+list" the reporter's alternative; that reads more into the thread than it
+says, and the entry was corrected the same day.
+
+### What it settles for 24.3
+
+A truthful report is now measured fatal on both usbport lineages Windows 98
+runs, NUSB's in Phase 5 and SweetLow's here, and on Windows 2000. The report
+cannot be made truthful at the root hub on any stack this project holds; the
+virtual hub (`docs/future-plans/virtual-hub-per-root-port.md`), which keeps
+the root port reporting High Speed and gives usbport a TT above the slower
+device, stays the only candidate.

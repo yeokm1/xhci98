@@ -3719,9 +3719,18 @@ are the dumper's addresses, as in `usbport-disasm.txt` beside it:
   empty-list exits at `0x26658` and `0x2665E` do not guard this branch.
 
 Thus this rebuild supplies no empty-list guard on which to base a truthful
-root-port speed option. No truthful-speed guest run was made on it; this
-is a static result, not a newly observed bugcheck. Its source package is
-the SweetLow `usb20_win9x.zip` recorded in `legal-provenance.md` section 4.
+root-port speed option. Its source package is the SweetLow
+`usb20_win9x.zip` recorded in `legal-provenance.md` section 4.
+
+A truthful-speed guest run was then made on it (2026-09-25, an uncommitted
+build, roadmap task 24.3, `docs/contributing/runs/run-24.md`): Windows 98 SE
+under this usbport took a fatal exception 0E at `0028:C002F70E` in
+`NTKERN`, the address NUSB's build gives, after usbhub reset a root port
+holding a Full-Speed device and before usbport opened that device's EP0.
+The run is consistent with the branch above and does not observe it: no
+debugger was attached, so which instruction produced the pointer was not
+read at run time. The branch stays a static reading; the crash is a runtime
+one.
 
 `USBPORT_OpenPipe` (SP4 `0x24EBC`) then null-checks `TtExtension` at `0x24FC6`,
 which `0xFFFFFFEC` passes, and inserts at `TtExtension + 0xC`:
