@@ -299,9 +299,9 @@ table is the whole device:
 
 | Request | Answer |
 |---|---|
-| `GET_DESCRIPTOR(Device)` | `bcdUSB` 0x0200, class 9, subclass 0, `bDeviceProtocol` 1 (single TT), `bMaxPacketSize0` 64, the vendor and product id parsed from `XhciVirtualHSHubVid` / `XhciVirtualHSHubPid` (3.1; the hub does not exist without both), `bcdDevice` carrying the driver version, no string indices |
+| `GET_DESCRIPTOR(Device)` | `bcdUSB` 0x0200, class 9, subclass 0, `bDeviceProtocol` 1 (single TT), `bMaxPacketSize0` 64, the vendor and product id parsed from `XhciVirtualHSHubVid` / `XhciVirtualHSHubPid` (3.1; the hub does not exist without both), `bcdDevice` carrying the driver version, `iManufacturer` 0, `iProduct` 1, `iSerialNumber` 0 |
 | `GET_DESCRIPTOR(Configuration)` | one configuration, one interface of class 9 with one interrupt IN endpoint (`bInterval` 12, `wMaxPacketSize` 1), `bmAttributes` self-powered, `bMaxPower` 0 |
-| `GET_DESCRIPTOR(String)` | a stall. No string index is advertised, so a caller asking is off the descriptor; the language table (index 0) can be answered if a shipping hub driver turns out to ask for it unprompted |
+| `GET_DESCRIPTOR(String)` | index 0: the language table, one LANGID, `0x0409` (English, United States). Index 1: the product string **"xhci98 virtual HS hub"** (the owner's, 2026-09-25), 21 characters, so `bLength` 44, UTF-16LE built from an ASCII literal, answered whatever LANGID `wIndex` names. Both truncated to `wLength`, as a device does when asked for the first two bytes. Any other index: a stall. There is deliberately no manufacturer string and **never a serial number**: with a serial, Windows keys the hub's instance on the serial rather than the port, so one hub instance would follow a device from port to port |
 | `GET_DESCRIPTOR(Hub)` | `bNbrPorts` 1, `wHubCharacteristics` individual port power and over-current, `TTT` 0, `bPwrOn2PwrGood` from the root hub's own value (a smaller one would shorten every plug, since the physical port is already powered, but is only worth taking if every hub driver is measured to accept it), `bHubContrCurrent` 0, port 1 removable |
 | `SET_CONFIGURATION`, `SET_INTERFACE` (alt 0), `GET_STATUS` (device, interface, endpoint), `CLEAR_FEATURE(ENDPOINT_HALT)` | success, no data |
 | `GET_HUB_STATUS` | zero |
@@ -500,6 +500,9 @@ shape rewrites both.
 - **Resume.** The decision re-taken at the resume reset: the same device
   back in virtual-hub mode, and a device swapped for a High-Speed one while
   suspended, which must force the connect change of 3.2.
+- **The product string.** Which hub drivers ask for the language table and
+  index 1 unprompted, that each accepts the answer, and where the name shows:
+  USBView, and the bus-reported description on Vista and 7.
 - **Boot time.** One extra enumeration per slower device attached at boot.
 - **The interval.** The measurement issue 6 took with a `bInterval`
   override tool, repeated on a root port with the switch on: `bInterval`
@@ -575,7 +578,9 @@ ports, with the interval read from the snapshot instrument.
    (`REG_SZ`) the INF writes as pid.codes' test id, `"1209"` and `"0001"`,
    no id in the binary, and the feature off
    if either is missing or invalid (3.1); documented as experimental, for
-   private testing only. Still open: the strings (proposed: none).
+   private testing only. **Strings answered the same day:** a product
+   string only, "xhci98 virtual HS hub"; no manufacturer string, never a
+   serial number (3.3).
 4. The switch's name. **Answered 2026-09-25: `XhciVirtualHSHub`.**
 5. Whether the switch defaults to on in a later release once section 5 is
    read on both primary targets, or stays an opt-in like the SuperSpeed

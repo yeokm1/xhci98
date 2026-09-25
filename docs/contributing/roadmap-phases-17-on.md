@@ -749,8 +749,9 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     hexadecimal strings (`REG_SZ`, four digits, optional `0x`) that both
     INFs write as pid.codes' test id, `"1209"` and `"0001"`; no id in the
     binary; and the feature off for that start if the switch is on and
-    either value is missing or invalid), and whether it carries strings
-    (proposed: none; the owner's, answered here before any code). Because
+    either value is missing or invalid), and its strings (answered: a
+    product string only, "xhci98 virtual HS hub", no manufacturer string
+    and never a serial number). Because
     pid.codes reserves that id "for use in private testing", every document
     that tells a user how to turn the feature on says it is **experimental,
     for private testing only**, and that the id is pid.codes' shared test
@@ -758,7 +759,9 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     class, as the 9x ones do (`USB\HubClass`, `USB\CLASS_09`).
   - **24.3.2 - Host vectors** (`test/`), the page's `-0`: the request table
     of section 3.3 fed the setup packets the shipping hub drivers send
-    (design record 02); the decision of section 3.2 (mode by decoded speed,
+    (design record 02), the string requests included - the language table,
+    index 1 byte for byte, both truncated to a short `wLength`, and any
+    other index stalled; the decision of section 3.2 (mode by decoded speed,
     the reset timeout, the decision re-taken at every root-port reset and the
     forced connect change when it flips); the suspend merge of section 3.5;
     the topology fold of section 3.6 over the existing topology tests; the
