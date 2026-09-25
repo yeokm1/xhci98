@@ -112,7 +112,7 @@ translates is what usbport is told.
 
 | | |
 |---|---|
-| Name | `XhciVirtualHub` (proposed; the owner settles the name) |
+| Name | `XhciVirtualHSHub` (the owner's, 2026-09-25) |
 | Type | `REG_DWORD` |
 | Where | The controller's driver (software) key: the key a plain `AddReg` under an INF install section writes, and the key `XhciLogVerbosity` and the SuperSpeed storage proposal's `XhciSuperSpeed` live in |
 | Values | `0` off, the default. `1` on, the on-demand shape of section 4. `2` is reserved for the permanent shape, section 4's fallback, and is refused like any other value unless that shape is built. A refused value is not clamped: the driver applies 0 and records that it refused, on the rule the INF states for `XhciLogVerbosity` |
@@ -136,6 +136,50 @@ takes a disable and enable of the controller or a reboot. What was read,
 what was applied and the status go into the snapshot header
 (`docs/contributing/passthru-snapshot-instrument.md`), so a dump from a
 stranger's machine states which mode the driver was in.
+
+The virtual hub's vendor and product id are **user-settable** (the owner,
+2026-09-25), through two more values beside the switch, read in the same
+routine, at the same time and under the same rules:
+
+| | `XhciVirtualHSHubVid` | `XhciVirtualHSHubPid` |
+|---|---|---|
+| Type | `REG_DWORD` | `REG_DWORD` |
+| Accepted | `0x0001`-`0xFFFF` | `0x0000`-`0xFFFF` |
+| Absent | the built-in default | the built-in default |
+| Refused | `0`, or anything above `0xFFFF`: the default is applied and the refusal recorded | anything above `0xFFFF`, the same way |
+| Set by | the user, by hand; the INF does **not** write them, so an absent value always means the default and an upgrade never pins an old one | the same |
+
+They reach `GET_DESCRIPTOR(Device)` (3.3) and nothing else, and the snapshot
+header carries what was read and what was applied, as for the switch.
+Neither decides which driver binds the hub: every hub INF this project has
+read binds by class - `USB\HubClass` in NUSB's and SweetLow's `USB2.INF`,
+`USB\CLASS_09` in NUSB 3.6's `USB.INF` - and 24.3.1 confirms the NT
+targets' own. What an id does decide is the hub's hardware id,
+`USB\VID_xxxx&PID_yyyy`, which Windows matches **before** the class, so an
+id that some vendor INF on the machine names would bind that vendor's
+driver to the virtual hub. That is what the default has to avoid and what
+the values exist to get a user out of. Changing either one gives the hub a
+new hardware id, so Windows treats it as a new device and installs the hub
+again on each port it appears on.
+
+The built-in default is **not decided**. The proposal (24.3.1) is an id
+allocated to this project by pid.codes under its open-source vendor id
+`0x1209`: free, granted by a pull request on the pid.codes repository to a
+public, OSI-licensed project, and unique by construction. It is the
+owner's to apply for, since it is published under the project's name.
+pid.codes' eligibility wording is about "a device with a USB interface",
+and it says a software-only project may face "additional scrutiny regarding
+necessity"; the virtual hub is a USB device that exists only in software,
+so the application has to make that case. Until an id is granted,
+development builds may use pid.codes' test id `1209:0001`, which "MUST NOT
+be used on any device that will be redistributed", so no published build
+may carry it; a cut without an allocation needs the owner's choice of
+another default first. The ids to avoid regardless are other vendors'
+ids, which is the collision above. Two look convenient and are exactly
+that: the host controller's PCI vendor id (PCI-SIG and USB-IF assign vendor
+ids separately, so the same number can belong to an unrelated USB vendor,
+and Intel's `0x8086` and `0x8087` are USB vendor ids of real hubs too), and
+`0x1D6B`, the Linux Foundation's id for Linux's own root hubs.
 
 Rule 2 is held at one divergence point, the decision of 3.2, and in the
 on-demand shape that point is reached only after a root-port reset has
@@ -218,7 +262,7 @@ table is the whole device:
 
 | Request | Answer |
 |---|---|
-| `GET_DESCRIPTOR(Device)` | `bcdUSB` 0x0200, class 9, subclass 0, `bDeviceProtocol` 1 (single TT), `bMaxPacketSize0` 64, a vendor and product id of the project's choosing, `bcdDevice` carrying the driver version, no string indices |
+| `GET_DESCRIPTOR(Device)` | `bcdUSB` 0x0200, class 9, subclass 0, `bDeviceProtocol` 1 (single TT), `bMaxPacketSize0` 64, the vendor and product id applied from `XhciVirtualHSHubVid` / `XhciVirtualHSHubPid` or their defaults (3.1), `bcdDevice` carrying the driver version, no string indices |
 | `GET_DESCRIPTOR(Configuration)` | one configuration, one interface of class 9 with one interrupt IN endpoint (`bInterval` 12, `wMaxPacketSize` 1), `bmAttributes` self-powered, `bMaxPower` 0 |
 | `GET_DESCRIPTOR(String)` | a stall. No string index is advertised, so a caller asking is off the descriptor; the language table (index 0) can be answered if a shipping hub driver turns out to ask for it unprompted |
 | `GET_DESCRIPTOR(Hub)` | `bNbrPorts` 1, `wHubCharacteristics` individual port power and over-current, `TTT` 0, `bPwrOn2PwrGood` from the root hub's own value (a smaller one would shorten every plug, since the physical port is already powered, but is only worth taking if every hub driver is measured to accept it), `bHubContrCurrent` 0, port 1 removable |
@@ -489,7 +533,11 @@ ports, with the interval read from the snapshot instrument.
    permanent shape kept as the fallback if the churn reading fails on a
    target.**
 3. The virtual hub's vendor and product id and whether it carries strings.
-4. The switch's name, `XhciVirtualHub` being the proposal.
+   **Partly answered 2026-09-25: the ids are user-settable**
+   (`XhciVirtualHSHubVid`, `XhciVirtualHSHubPid`, 3.1). Still open: the
+   built-in default (proposed: a pid.codes allocation under `0x1209`, which
+   the owner would apply for) and the strings (proposed: none).
+4. The switch's name. **Answered 2026-09-25: `XhciVirtualHSHub`.**
 5. Whether the switch defaults to on in a later release once section 5 is
    read on both primary targets, or stays an opt-in like the SuperSpeed
    storage proposal's. It is off in the Phase 24 cut; the later release is

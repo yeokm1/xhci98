@@ -744,9 +744,16 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     stops being an idea and records its decisions: the shape (on demand,
     answered), the targets (all, answered), the default (off in this
     phase's cut; whether a later release turns it on is still the owner's),
-    the switch's name, and the virtual hub's vendor and product id and
-    whether it carries strings. The name, the ids and the strings are the
-    owner's and are answered here, before any code.
+    the switch's name (`XhciVirtualHSHub`, answered), the hub's vendor and
+    product id - user-settable through `XhciVirtualHSHubVid` and
+    `XhciVirtualHSHubPid` (answered), with the built-in default still open
+    (proposed: a pid.codes allocation under `0x1209`, the owner's to apply
+    for; development builds may use the test id `1209:0001`, which no
+    published build may carry) - and whether it carries strings (proposed:
+    none). The default and the strings are the owner's and are answered
+    here, before any code; the cut cannot ship without the default. The
+    record also confirms that each NT target's hub INF binds by class, as
+    the 9x ones do (`USB\HubClass`, `USB\CLASS_09`).
   - **24.3.2 - Host vectors** (`test/`), the page's `-0`: the request table
     of section 3.3 fed the setup packets the shipping hub drivers send
     (design record 02); the decision of section 3.2 (mode by decoded speed,
@@ -754,7 +761,9 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     forced connect change when it flips); the suspend merge of section 3.5;
     the topology fold of section 3.6 over the existing topology tests; the
     switch's read, its refusal of any value but 0 and 1, and its snapshot
-    header fields; and the off-state vectors that hold the page's rule 2.
+    header fields; the two id values, their defaults and their refusals
+    (a vendor id of 0, anything above `0xFFFF`), reaching the device
+    descriptor and nothing else; and the off-state vectors that hold the page's rule 2.
   - **24.3.3 - The driver**, the page's `-A`: the virtual device record, the
     decision point, the synthetic completion path through the deferred
     completion list, the status-change pipe, the suspend merge, the INF's
