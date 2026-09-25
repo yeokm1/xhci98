@@ -628,7 +628,11 @@ topology issue 6 section 6.2 bugchecks them in - confirmed here against the
 2026-09-22 with these same three subjects as 24.1 to 24.3, was removed the
 same day before any task ran, and `runs/run-23.md` names its ids as the
 record of that day. The ids below keep those three meanings, so nothing that
-cites them changes sense; 24.4 and 24.5 are new.
+cites them changes sense; 24.4 and 24.5 are new. **24.2 is decided**
+(2026-09-25: owned by 24.3). **24.3 became a build the same day**: the owner
+took the virtual hub inside this phase, in its on-demand shape, on every
+target with the switch on and off by default, and the phase now ends on one
+cut carrying 24.1 and 24.3 ("24.3 is a build" below, and 24.3's entry).
 
 "GitHub issue 4" is not `docs/issues/04`; Phase 23's entry has the
 collision. Replying on the issue, and closing it, are the owner's and not a
@@ -642,12 +646,21 @@ and the reporter's advice (2026-09-14) was Low-Speed devices behind a hub
 first, then root ports, "as I expected different complexity". The tasks are
 in order of how cheaply each can be built and read: one bound in one
 function with a virtual-machine reproduction, then a decision that may need
-no code, then a decision on the largest change the driver has asked for,
-then the reporter's hub pointer, which waits on a part the owner does not
-yet hold (2026-09-24) and so sits second last. The phase ends on the cut of
-whatever 24.1 and 24.2 change; if 24.3 is taken, what it builds is a phase
-of its own, since the proposal's batches are a phase's worth and the
-release-per-risk rule says so.
+no code, then the largest change the driver has asked for, then the
+reporter's hub pointer, which waits on a part the owner does not yet hold
+(2026-09-24) and so sits second last.
+
+**24.3 is a build, not a decision, since 2026-09-25.** Until then this
+paragraph said that if 24.3 were taken, what it built would be a phase of
+its own and the phase would end on the cut of 24.1 and 24.2 alone. The
+owner took it that day, inside this phase: 24.3 builds the on-demand virtual
+hub, and the phase ends on **one cut carrying both 24.1 and 24.3**, chosen
+over a separate earlier cut of 24.1. That is the owner's call against their
+own note of 2026-09-19, and it has a price the checkpoint pays: 24.1's
+small, already-read change waits for the large one, and the cut's matrix
+has to show both, the switch off and on. The switch is off by default, so
+with the value absent the release behaves as `1.1.1.0` plus 24.1 and
+nothing else.
 
 Tasks. `runs/run-24.md` is the record once a task runs.
 
@@ -700,19 +713,79 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   Where it is read: a reading of the tree and the ABI document; a boot only
   if a change is found.
 
-- [ ] **24.3 - True speeds on root ports.**
+- [ ] **24.3 - True speeds on root ports: the on-demand virtual hub.** *(taken 2026-09-25; a decision until then)*
 
-  The owner's decision on `docs/future-plans/virtual-hub-per-root-port.md` -
-  taken, refused or deferred, with the reason recorded on issue 6 section 8.
-  Taken means the page becomes a numbered design record, its section 5
-  measurements become the checkpoint of a new phase, and its section 9
-  decisions are answered (name, permanent or on demand, ids, default). Not
-  taken means issue 6 section 9's first item says so and why. The shape was
-  answered ahead of the decision, on 2026-09-25: **on demand** - a hub only
-  while a Full or Low Speed device is on the root port, removed on unplug -
-  with the permanent shape as the fallback if a target fails the page's
-  churn reading. The page was revised around it the same day; whether to
-  take it, and on which targets, is still this task.
+  Build `docs/future-plans/virtual-hub-per-root-port.md` in the shape the
+  owner chose on 2026-09-25. When a root-port reset decodes a Full or Low
+  Speed device, the driver presents a virtual High-Speed, single-TT, one-port
+  hub in that device's place, and the device becomes the hub's port 1; when
+  the device is unplugged the root port reports the disconnect as today and
+  usbhub removes both. High-Speed devices take today's path with the switch
+  on or off. Everything is behind the page's `REG_DWORD` switch (section
+  3.1), **off by default**; with the value absent or 0 the driver behaves
+  exactly as the 24.1 build does. With the switch on it covers **every
+  target** (owner, 2026-09-25): Windows 98 SE under NUSB and under
+  SweetLow's stack, ME, 2000, XP in both architectures, and Vista and 7 in
+  both. The permanent shape - a hub on every port, reserved as switch value
+  2 - is not built unless 24.3.4's churn reading fails on a target, and then
+  only on the owner's word.
+
+  Why it is the lever: a truthful root-hub report is measured fatal on both
+  Windows 98 lineages and on Windows 2000 (issue 6 sections 2 and 8, and the
+  experiment below), and a real USB 2.0 hub above a slower device fixed the
+  Vista/7 bugcheck and the silent audio on the E460 (issue 6 section 8). The
+  virtual hub is that hub, answered in software.
+
+  The sub-tasks, in the page's batch order (section 8):
+
+  - **24.3.1 - The design record.** The page moves to
+    `docs/contributing/design/12-virtual-hub-on-root-ports.md`, the next
+    free number, and the future-plans index and every link follow it. It
+    stops being an idea and records its decisions: the shape (on demand,
+    answered), the targets (all, answered), the default (off in this
+    phase's cut; whether a later release turns it on is still the owner's),
+    the switch's name, and the virtual hub's vendor and product id and
+    whether it carries strings. The name, the ids and the strings are the
+    owner's and are answered here, before any code.
+  - **24.3.2 - Host vectors** (`test/`), the page's `-0`: the request table
+    of section 3.3 fed the setup packets the shipping hub drivers send
+    (design record 02); the decision of section 3.2 (mode by decoded speed,
+    the reset timeout, the decision re-taken at every root-port reset and the
+    forced connect change when it flips); the suspend merge of section 3.5;
+    the topology fold of section 3.6 over the existing topology tests; the
+    switch's read, its refusal of any value but 0 and 1, and its snapshot
+    header fields; and the off-state vectors that hold the page's rule 2.
+  - **24.3.3 - The driver**, the page's `-A`: the virtual device record, the
+    decision point, the synthetic completion path through the deferred
+    completion list, the status-change pipe, the suspend merge, the INF's
+    `AddReg` writing the 0, and `XHCISNAP` showing the mode. Host tests and
+    every gate green on all three x86 flavours and the amd64 build.
+  - **24.3.4 - The readings on every guest held**, the page's `-V`, each
+    with the switch off and then on. Off: nothing differs from the 24.1
+    build. On: section 5's list - the TT record on the first Full-Speed
+    device (`HubAddr != 0xFFFF`), a one-port hub on each hub driver, the
+    interval (a stock `bInterval` 10 arriving as `Period` 8 and programming
+    Interval 6, read with `ep.open.ival`, and the hidusbf rates on a root
+    port), a Full-Speed audio device on a root port playing from XP on (the
+    `wav` backend is the oracle, issue 6 section 7), a Full-Speed hub on a
+    root port with a mouse behind it no longer bugchecking Vista and 7
+    (issue 6 section 6.2), a High-Speed device unchanged, plug latency, the
+    first hub install on Windows 98 and ME, idle suspend, resume with the
+    same device and with a swapped one, and **churn: 25 plug/unplug cycles
+    of a Full-Speed device on a root port, per target** - the reading that
+    decides whether the permanent fallback is ever needed. Low Speed is
+    read on Windows 98 SE under SweetLow's stack with 24.1's `usb-host`
+    passthrough mouse, since QEMU presents no Low-Speed device.
+  - **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the
+    switch on, the Low-Speed mouse and the Full-Speed audio device from
+    `test-equipment.md` on root ports, the interval read from the snapshot.
+    Wanted before the cut; not a checkpoint clause, as a metal reading of
+    24.1 is not.
+
+  If 24.3.1's record, or any reading in 24.3.4, contradicts the page - a
+  hub driver that gives the virtual hub no TT record, a stack that refuses a
+  one-port hub, a target that fails churn - the task stops there and the
+  finding goes to the owner before the build goes further.
 
   The reporter offered no fix to take. His remarks on the thread - that the
   High-Speed report is "only default behaviour" because usbport and usbhub
@@ -729,11 +802,13 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   true speed, on Windows 98 SE under SweetLow's stack, with a Full-Speed
   mouse on a root port. It took the fatal exception at `0028:C002F70E` in
   `NTKERN`, NUSB's address from Phase 5, so a truthful root-hub report is now
-  measured fatal on both Windows 98 lineages and on Windows 2000. It is
-  evidence for the decision, not the decision.
+  measured fatal on both Windows 98 lineages and on Windows 2000. It was
+  evidence for the decision, and is not one of this task's readings.
 
-  Where it is read: a decision; no boot (the experiment above was one, and
-  is not this task's reading).
+  Where it is read: host tests and the gates; every guest held, the switch
+  off then on, including the passthrough Low-Speed mouse on the SweetLow
+  guest; the device matrix on both primary targets in both states; the
+  E460.
 
 - [ ] **24.4 - The reporter's pointer for the missing USB 1.1 hub.**
 
@@ -749,15 +824,19 @@ Tasks. `runs/run-24.md` is the record once a task runs.
 
 - [ ] **24.5 - The record and the cut.**
 
-  The record and the cut of what 24.1 and 24.2 changed, as `1.1.2.0` if 24.1
-  landed driver code (the third field moves): issue 6 section 5's bands and
-  section 9's first item, the release notes' High Speed entry,
-  `releases/history.md`, `xhci_version.h` and both INFs, the install legs
-  from the asset, and the post-release matrix on both primary targets read
-  against `runs/run-23-post-release/`. If 24.1 changed nothing, the phase
-  closes on the two decisions with no cut.
+  One cut carrying 24.1 and 24.3 together (owner, 2026-09-25), as `1.1.2.0`
+  (the third field moves): issue 6 - section 5's bands as what the switch
+  off still gives, sections 6.2 and 7 with what the switch on changes, and
+  section 9's first item; the release notes' High Speed entry and a new
+  entry for the switch, saying it is off by default, what turning it on
+  does, and the extra hub a slower device brings with it; the download's
+  `readme.txt`; `releases/history.md`, `xhci_version.h` and both INFs; the
+  install legs from the asset; and the post-release matrix on both primary
+  targets, read against `runs/run-23-post-release/` with the switch off and
+  read again with it on.
 
-  Where it is read: the cut's gates; the ten install vehicles; the matrix.
+  Where it is read: the cut's gates; the ten install vehicles; the matrix in
+  both states.
 
 Checkpoint: 24.1 either refuted (the Code 10 reproduced and traced to
 something other than the bound, recorded) or landed and read: a Low-Speed
@@ -765,21 +844,35 @@ device behind a hub polling at 250, 500 and 1000 Hz on Windows 98 SE under
 SweetLow's stack, with the Interval read from the snapshot and no Code 10;
 the same hidusbf reading taken and recorded on every other guest the project
 holds, none of them worse for the change; and the device matrix on both
-primary targets no worse than `runs/run-23-post-release/`; 24.2 and 24.3 each a recorded decision with its
-reason, on issue 6; 24.4 a recorded reading, or recorded as waiting on the
-part if the phase closes first; and, if driver code changed, `1.1.2.0` cut
-with its install legs read from the asset. Not a checkpoint: a root-port
-polling rate outside the bands, a truthful root-port speed report, anything
-the virtual hub would measure, a metal reading of 24.1, the part itself, the
+primary targets no worse than `runs/run-23-post-release/`; 24.2 a recorded
+decision with its reason, on issue 6; 24.3 built as design record 12 says,
+with the switch off indistinguishable from the 24.1 build on every guest
+held, and with it on, on every guest held: a Full-Speed device on a root
+port enumerating behind the virtual hub at its true speed (read from
+`ep.open.ival`), its stock interval and the hidusbf rates programmed as
+behind a real hub, a Full-Speed audio device on a root port playing from XP
+on, a Full-Speed hub with a mouse behind it on a root port surviving on
+Vista and 7 in both architectures, a High-Speed device on the direct path,
+25 plug/unplug cycles survived per target, and a Low-Speed device on the
+SweetLow guest at its true speed; 24.4 a recorded reading, or recorded as
+waiting on the part if the phase closes first; and `1.1.2.0` cut with its
+install legs read from the asset and the matrix on both primary targets in
+both states. Not a checkpoint: a truthful root-hub report (measured fatal,
+and not what 24.3 builds), the permanent shape, the bandwidth half of issue
+6 section 5, a metal reading of 24.1 or 24.3, the part itself, the
 acceptance test, the upload, or the reply on the issue.
 
 Records: GitHub issue 4 (the thread; the reporter's Code 10 reading of
 2026-09-12, his order of 2026-09-14 and his pointer of 2026-09-19);
 `docs/issues/06-full-speed-root-port-bugcheck.md` sections 5, 8 and 9;
-`docs/future-plans/virtual-hub-per-root-port.md`;
-`docs/usb-xhci-info/usbport-miniport-abi.md` ("Periodic scheduling: what
-`Period` actually carries"); `docs/usb-xhci-info/xhci-data-structures.md`
-(Table 6-12); `src/xhci_ctx.c` (`XhciIntervalFromPeriod`,
-`XhciIntervalForSpeed`); `docs/contributing/implementation-invariants.md`
-("Root Hub Reporting"); `docs/contributing/test-equipment.md`;
-`runs/run-24.md` (written by the first task that runs).
+`docs/future-plans/virtual-hub-per-root-port.md` (design record 12 from
+24.3.1); `docs/usb-xhci-info/usbport-miniport-abi.md` ("Periodic scheduling:
+what `Period` actually carries", section 4's root-hub contracts and section
+8's TT lookup); `docs/usb-xhci-info/xhci-data-structures.md` (Tables 5-27,
+6-6 and 6-12); `docs/contributing/design/02-hub-topology-route-string.md`
+and `05-locking-model.md` section 7; `src/xhci_ctx.c`
+(`XhciIntervalFromPeriod`, `XhciIntervalForSpeed`), `src/xhci_port.c`
+(`XhciPortShadowReport`) and `src/xhci_topo.c`;
+`docs/contributing/implementation-invariants.md` ("Root Hub Reporting");
+`docs/contributing/test-equipment.md`; `runs/run-24.md` (written by the
+first task that runs).

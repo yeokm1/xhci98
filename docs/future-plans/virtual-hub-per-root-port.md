@@ -1,9 +1,11 @@
 # Real speeds on root ports: a virtual USB 2.0 hub for each slower device on a root port
 
 Written 2026-09-07; revised 2026-09-25, when the owner chose the on-demand
-shape over the permanent one this page first proposed (section 4). It is an
-**idea**, not a design record: nothing in it has been built, no boot has
-been taken for it, and it has no phase or task ids. Where it says what a
+shape over the permanent one this page first proposed (section 4). **Taken
+up the same day as roadmap task 24.3**, whose first sub-task, 24.3.1, moves
+this page to `docs/contributing/design/12-virtual-hub-on-root-ports.md`;
+until that move it stays here and is still worded as an idea. Nothing in it
+has been built and no boot has been taken for it. Where it says what a
 batch would do, it is naming work, not reporting it. The evidence it rests
 on is the tree as it stands, issue 6
 (`docs/issues/06-full-speed-root-port-bugcheck.md`), design record 02
@@ -453,7 +455,7 @@ ports, with the interval read from the snapshot instrument.
   composition: a SuperSpeed device reported as High-Speed takes the direct
   path, since High Speed is what the decision sees.
 
-## 8. Batches, if it is taken up
+## 8. Batches (roadmap sub-tasks 24.3.2 to 24.3.5)
 
 - `-0`: the request table of 3.3 as host vectors (`test/`), fed the
   setup packets both shipping hub drivers send, from the measurements in
@@ -478,7 +480,11 @@ ports, with the interval read from the snapshot instrument.
    devnode and a longer enumeration for each slower device, for the
    device's own interval (a stock mouse at its declared 8 ms rather than
    today's 4 ms band, and every rate hidusbf offers), Full-Speed audio from
-   XP on, and the Vista/7 hub bugcheck. This is roadmap task 24.3.
+   XP on, and the Vista/7 hub bugcheck. **Answered 2026-09-25: taken, as
+   roadmap task 24.3, inside Phase 24, shipping in one cut with task
+   24.1.** And on which targets: **all of them** with the switch on -
+   Windows 98 SE under NUSB and SweetLow's stack, ME, 2000, XP, Vista and 7
+   - rather than XP and later only.
 2. Permanent or on demand. **Answered 2026-09-25: on demand, with the
    permanent shape kept as the fallback if the churn reading fails on a
    target.**
@@ -486,7 +492,8 @@ ports, with the interval read from the snapshot instrument.
 4. The switch's name, `XhciVirtualHub` being the proposal.
 5. Whether the switch defaults to on in a later release once section 5 is
    read on both primary targets, or stays an opt-in like the SuperSpeed
-   storage proposal's.
+   storage proposal's. It is off in the Phase 24 cut; the later release is
+   still open.
 
 ## Sources
 

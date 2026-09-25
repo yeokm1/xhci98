@@ -32,7 +32,9 @@ tree wins.
   pipe, suspend across the two views of one port, how the topology graph
   folds the hub out, the on-demand shape the owner chose on 2026-09-25 and
   the permanent one kept as its fallback, what has to be measured first,
-  and the owner's decisions.
+  and the owner's decisions. **Scheduled 2026-09-25 as roadmap task 24.3**,
+  whose first sub-task moves it to design record 12; it is the one page
+  here with a task id, until that move.
 - [superspeed-storage-behind-a-switch.md](superspeed-storage-behind-a-switch.md) -
   Proposal, written 2026-09-04 and not yet built (it was design record 10
   until 2026-09-07): SuperSpeed mass storage on root ports without leaving

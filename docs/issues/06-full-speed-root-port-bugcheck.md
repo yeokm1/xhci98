@@ -620,12 +620,14 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
   bugcheck, and the audio played (6.2, 7) - so the proposal's premise holds
   on the one machine measured. Discussed 2026-09-19 and not decided; the suggested scope if
   taken is XP and later only, Windows 98 and 2000 byte-for-byte unchanged.
-  On 2026-09-25 the owner chose its shape - a hub only while a Full or Low
-  Speed device is on the root port, removed when it is unplugged, with a
-  hub on every port kept as the fallback - but not whether to take it
-  (roadmap 24.3). The reporter runs Windows 98 under SweetLow's stack, where
-  a truthful report is now measured fatal too, so the scope is part of that
-  decision.
+  **On 2026-09-25 the owner took it** as roadmap task 24.3, in the shape of
+  a hub only while a Full or Low Speed device is on the root port, removed
+  when it is unplugged (a hub on every port kept as the fallback), behind a
+  switch that is off by default, and on **every target** with the switch on
+  rather than XP and later only - the reporter runs Windows 98 under
+  SweetLow's stack, where a truthful report is now measured fatal too. It
+  ships in one cut with task 24.1. Nothing in this page is measured under it
+  yet.
 - **A true-speed report as an opt-in.** Under a usbport that guards the
   empty TT list, reporting the real speed would remove the interval bands
   as well, because usbport would then bucket `Period` in frames, which
@@ -657,8 +659,9 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
   with the Low-Speed `Period` bound in `XhciIntervalFromPeriod` as the
   candidate - not this section's bands, which are a root-port matter), then
   rates on a root port as a decision (24.2: closed 2026-09-25 as owned by
-  true speeds, section 5), then true speeds on root ports as a decision with its reason, for
-  which the virtual hub in section 8 is the candidate (24.3). Task 24.4
+  true speeds, section 5), then true speeds on root ports (24.3), a
+  decision until 2026-09-25 and since then the build of section 8's
+  virtual hub, on demand, on every target, off by default. Task 24.4
   reads the reporter's pointer for the USB 1.1 hub this project never held,
   once the part is to hand.
 - **The bandwidth accounting on Windows 98 and 2000** (section 5) has no
