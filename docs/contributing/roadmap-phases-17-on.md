@@ -628,7 +628,7 @@ topology issue 6 section 6.2 bugchecks them in - confirmed here against the
 2026-09-22 with these same three subjects as 24.1 to 24.3, was removed the
 same day before any task ran, and `runs/run-23.md` names its ids as the
 record of that day. The ids below keep those three meanings, so nothing that
-cites them changes sense; 24.4 and 24.5 are new. **24.2 is decided**
+cites them changes sense; 24.4 to 24.6 are new. **24.2 is decided**
 (2026-09-25: owned by 24.3). **24.3 became a build the same day**: the owner
 took the virtual hub inside this phase, in its on-demand shape and in its
 permanent one as a second value of the same switch, on every target with
@@ -825,7 +825,7 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     build green through every gate. Record 12 section 10 is what the wiring
     decided, and `runs/run-24.md` the record. The download's readme
     template now names snapshot schema 5, taken in the audit of 2026-09-25
-    rather than left to 24.5's cut, which would have refused it.)* The
+    rather than left to 24.6's cut, which would have refused it.)* The
     virtual device records, in
     a fixed per-root-port array of their own outside the topology graph, the
     decision point, the synthetic completion path through the deferred
@@ -907,14 +907,36 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     chose to fix the two driver defects in a separate batch before the
     Vista and 7 readings are taken again. A held port-1 reset that never clears
     in any reading goes to the owner: record 12 section 3.3 gives it no
-    deadline of its own by decision (2026-09-27).
+    deadline of its own by decision (2026-09-27). **The fix batch is in**
+    (2026-09-27, `runs/run-24.md`, "The fix batch"; record 12 section 11),
+    and the owner decided its three open items the same day: the NT 6.x
+    timer-arm race is recorded and taken as its own task (24.5); a port-1
+    disable's debt lost across a successful restore on a port whose hub
+    stays is the per-tenancy rule working as written, and stays; and QEMU's
+    missing port disable is accepted as a gap, so Full- and Low-Speed
+    devices behind a virtual hub on NT 6.x are read on the E460 (24.3.5),
+    not in QEMU. **Read again on the fixed build** (2026-09-27/28,
+    `runs/run-24.md`, "The readings on the fixed build"): Windows 98 SE and
+    2000 pass at 1 and 2; Vista and 7 in both architectures neither hang
+    nor bugcheck, the hub retires with its device, a High-Speed mouse after
+    it opens as a mouse, issue 6 section 6.2's topology no longer
+    bugchecks, and churn of 25 passes at 1 and 2 - with nothing behind a
+    virtual hub enumerating there (the gap; at 2 High Speed too), and at 1
+    a hub create/drop loop that is the same gap, disposed of with Codex's
+    review and one vector, no driver change. **Still owed before this is
+    ticked:** the hidusbf rates on a root port at 1 and 2, idle suspend,
+    plug latency, at 2 a cancelled hub install and a root-port power-off
+    and on, and the device matrix at 2 with its High-Speed rows.
   - [ ] **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the
     switch at 1 and at 2, the Low-Speed mouse and the Full-Speed audio device from
     `test-equipment.md` on root ports, the interval read from the snapshot;
     and at 2 the USB 2.0 hub on a root port with the Low-Speed mouse behind
     it, the one place a real High-Speed hub behind the virtual one is read
     (QEMU models none). Wanted before the cut; not a checkpoint clause, as a metal reading of
-    24.1 is not.
+    24.1 is not. Also Windows 7 x86 on the E460 at 1 and at 2 with a
+    Full-Speed device on a root port, since QEMU's `qemu-xhci` ignores a
+    port-disable write and so cannot show a Full- or Low-Speed device behind
+    a virtual hub on NT 6.x (owner, 2026-09-27; record 12 section 11).
 
   If 24.3.1's record, or any reading in 24.3.4, contradicts the page - a
   hub driver that gives the virtual hub no TT record, a stack that refuses a
@@ -956,10 +978,44 @@ Tasks. `runs/run-24.md` is the record once a task runs.
 
   Where it is read: the datasheet, then the part on the E460.
 
-- [ ] **24.5 - The record and the cut.**
+- [ ] **24.5 - The NT 6.x timer-arm race.** *(added 2026-09-27 by the owner's
+  decision, and taken before the cut; older than 24.3 and not part of
+  issue 4)*
 
-  One cut carrying 24.1 and 24.3 together (owner, 2026-09-25), as `1.1.2.0`
-  (the third field moves): issue 6 - section 5's bands as what the switch
+  On Vista and Windows 7 the legacy `UsbPortRequestAsyncCallback` enters
+  `RequestAsyncCallbackEx` on the branch that skips usbport's timer-list
+  lock, which assumes its caller holds it; usbport does so only around its
+  root-hub feature callbacks and its timer DPC. Every other arm this driver
+  makes - the command watchdog from the submit pump, the event DPC and the
+  health poll; the device-initiated resume; the health poll's own arms; the
+  virtual hub's submit - can race the timer DPC's unlink and free on
+  another CPU (static, `kd`, all four NT 6.x builds; never observed;
+  `runs/run-24.md`, "The fix batch", Codex round 1 item 1). NT 5.x is not
+  affected. The locking branch cannot simply be called from
+  `SubmitTransfer`: it would add EpList -> timer lock against the timer
+  DPC's timer lock -> EpList.
+
+  First a static read, with `kd` on the four NT 6.x `usbport.sys` builds, of
+  which usbport locks the event DPC, `CheckController` and the timer DPC hold
+  when they reach this driver, and in which order. Then the choice between
+  arming only from contexts that hold the timer lock and deferring the rest
+  (which moves the command watchdog's home, a change every target shares),
+  and calling the locking `UsbPortRequestAsyncCallbackEx` (`0x1B0`) from the
+  contexts the read shows hold neither EpList nor anything the timer DPC
+  takes under its lock, deferring only `SubmitTransfer`'s arms. Whichever it
+  is changes nothing on NT 5.x, since the tier rule (AGENTS.md) forbids
+  spending a primary target's safety on a VM-tier one.
+
+  Where it is read: the static read; host vectors for the arm's context on
+  each path; Vista and 7 in both architectures under 4 vCPUs; the
+  primary targets no worse. Before the `1.1.2.0` cut (owner, 2026-09-27),
+  so the cut's install legs and matrix read the build that carries it.
+
+- [ ] **24.6 - The record and the cut.**
+
+  One cut carrying 24.1 and 24.3 together (owner, 2026-09-25), and 24.5
+  (owner, 2026-09-27), as `1.1.2.0` (the third field moves): issue 6 -
+  section 5's bands as what the switch
   off still gives, sections 6.2 and 7 with what the switch on changes, and
   section 9's first item; the release notes' High Speed entry and a new
   entry for the switch, saying it is off by default, that it is

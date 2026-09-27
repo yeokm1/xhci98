@@ -141,8 +141,11 @@ Phases 23 and 24, renumbered in order on 2026-09-22 (`7488f13`) while no id
 of theirs was in a published `readme.txt`; Phase 24 was removed the same day. No tracked file cites a
 pre-renumbering id as a task id; task 14.1.9 checks that. The Phase 24 added
 on 2026-09-24 keeps the removed one's meanings for 24.1 to 24.3, which
-`runs/run-23.md` cites, and adds 24.4 and 24.5 after them. What keeps an old
-id is an artifact name - a snapshot, a marker, an `out\` directory - and
+`runs/run-23.md` cites, and adds 24.4 and 24.5 after them. On 2026-09-27,
+while only the roadmap and `runs/run-24.md` cited the cut as a task id, a
+new 24.5 (the NT 6.x timer-arm race) went in before it and the cut became
+24.6. What keeps an old id is an artifact name - a snapshot, a marker, an
+`out\` directory - and
 `runs/run-23.md` lists those under "On task ids inside artifact names".
 
 Three rules the batching exists to enforce:

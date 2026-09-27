@@ -33123,6 +33123,90 @@ static void test_vhub_replacement_after_a_late_end_keeps_its_port(void)
     vhub_reset_registry();
 }
 
+/*
+ * **A root disable whose PED clears late, then usbport's next root reset**
+ * (task 24.3.4, Codex's review of the round-2 readings). usbhub's recovery at 1
+ * disables the root port - retiring the hub, its device still plugged in - and
+ * resets it. On a port whose PED reflects the write only after the read-back,
+ * the disable's debt is still standing when the reset is asked for, and nothing
+ * has collected it: the absent-hub path accepts the reset, its end stands up a
+ * replacement hub, and the redisable runs under it. On a port that honours the
+ * write, that redisable is what collects the debt; the hub and its upstream
+ * enable stay, and the hub's second enumeration reset is not held. (In QEMU,
+ * which ignores the write, the debt is never collected and the second reset
+ * is held - the loop the Vista and 7 readings showed.)
+ */
+static void test_vhub_root_disable_confirmed_late_then_reset(void)
+{
+    ULONG xport;
+    ULONG dropped;
+    ULONG created;
+    ULONG resets;
+    ULONG held;
+    ULONG status;
+    ULONG change;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_plug(2, 1);                                /* Full Speed */
+    vhub_enumerate_hub(2, 1);
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 2);
+    CHECK_EQ(ext.Vhub[1].Present, 1, "(a configured hub on port 2)");
+
+    /* usbport disables the root port; PED has not cleared at the read-back. */
+    dropped = ext.VhubDropped;
+    stuckPortPed = xport;
+    (void)XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 2);
+    deliver_after_submit();
+    CHECK_EQ(ext.Vhub[1].Present, 0, "the root disable retires the hub");
+    CHECK_EQ(ext.VhubDropped, dropped + 1, "(counted)");
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 1,
+             "and its confirmation is owed");
+
+    /* The port clears PED a moment later; no health poll runs before usbport
+     * asks for the next reset. */
+    stuckPortPed = 0;
+    mmio[HC_PORTSC(xport) / 4] &= ~XHCI_PORTSC_PED;
+    created = ext.VhubCreated;
+    resets = portResets;
+    CHECK_EQ(vhub_root_reset(2), MP_STATUS_SUCCESS,
+             "the next root reset is accepted on the hub-less port");
+    CHECK_EQ(portResets, resets + 1, "and written to the port");
+    CHECK_EQ(ext.VhubCreated, created + 1,
+             "its end stands up a replacement hub");
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 0,
+             "the redisable under it lands, and the debt is collected");
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PED, 0,
+             "(the physical port disabled)");
+    CHECK_EQ(ext.Vhub[1].Present, 1, "the replacement hub stays");
+    CHECK_EQ(ext.Vhub[1].UpEnabled, 1, "with its upstream enabled");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(status & XHCI_HUB_PORT_ENABLE, XHCI_HUB_PORT_ENABLE,
+             "which is what the root port reports");
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "with the reset's end");
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2);
+
+    /* The replacement's enumeration goes on: its second reset is not held. */
+    CHECK_EQ(vhub_open_ep0(&vhubEp0B, 0), MP_STATUS_SUCCESS,
+             "(the replacement's EP0 at address 0)");
+    CHECK_EQ(vhubEp0B.Flags, XHCI_ENDPOINT_FLAG_OPEN | XHCI_ENDPOINT_FLAG_VHUB,
+             "(the hub's)");
+    (void)vhub_control(&vhubEp0B, 0x80, 0x06, 0x0100, 0, 64);
+    held = ext.VhubResetsHeld;
+    CHECK_EQ(vhub_root_reset(2), MP_STATUS_SUCCESS, "its second reset");
+    CHECK_EQ(ext.VhubResetsHeld, held, "is not held");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "and ends");
+    CHECK_EQ(status & XHCI_HUB_PORT_ENABLE, XHCI_HUB_PORT_ENABLE,
+             "with the port enabled");
+    CHECK_EQ(ext.Vhub[1].Present, 1, "(the hub in place)");
+    vhub_reset_registry();
+}
+
 int main(void)
 {
     /*
@@ -33403,6 +33487,7 @@ int main(void)
     test_vhub_restore_keeps_a_late_end();
     test_vhub_restore_between_disable_and_reset_end();
     test_vhub_replacement_after_a_late_end_keeps_its_port();
+    test_vhub_root_disable_confirmed_late_then_reset();
 
     /*
      * The net under every test above, and the reason it is here rather than in
