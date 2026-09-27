@@ -1246,3 +1246,262 @@ the absorb's strip from the root shadow dropped, is caught by existing
 ones. `test_init` 20,700 checks; host tests, all three x86 flavours and
 the amd64 build green, the offset tables unchanged (SIZEOF 104,644 x86,
 111,968 amd64).
+
+### The vehicle (2026-09-27, host `minis-w11p-ykm`)
+
+The `qemu` flavour of `078a0dc` (`DriverEntry (built Sep 27 2026
+11:12:13)`), staged by `make-package.ps1 -Flavor qemu` for both
+architectures and installed on **fresh images only**, by the owner's word
+that day: `win98.img` reverted to `post-nusb` (NUSB 3.3, no xhci98),
+`sweetlow-2a.img` to `sweetlow-stack-nodriver`, `winme.img` to
+`winme-sweetlow-nodriver`, `win2k-xonly.img` to `win2k-xonly-clean-install`,
+and the XP, Vista and 7 guests as overlays on their `*-clean-autologon`
+state. Every install was the INF's own device install (the Update Driver or
+Found New Hardware wizard, or `pnputil -i -a` on Windows 7), so the three
+values reached the registry through `AddReg` as a user's would. A first
+attempt on `win98.img`'s current state, whose `Sep 3` build was replaced
+with Update Driver in place, took a fatal exception 0E at `0028:C0031B0A`
+as the running controller was restarted; that is the known Windows 98 limit
+(`build-and-test.md`, "Do not disable the controller in Device Manager"),
+not a reading of this build, and the overlay was discarded.
+
+`qemu-xhci,p2=8,p3=0`, no QEMU hub unless a reading says so, devices
+hot-plugged from the monitor: `usb-mouse,usb_version=1` (Full Speed),
+`usb_version=2` (High Speed), `usb-audio` with the `wav` backend, and the
+owner's Low-Speed `046d:c077` by `usb-host` passthrough. Every value was
+read from its own cold boot, the switch set with a REGEDIT4 import into the
+driver's class key (instance `0002` on the two 98 SE images, `0000`
+elsewhere). The readings come from the note ring and counters through the
+monitor, the probe's TT pair table, `XHCISNAP` dumps, and screenshots.
+Churn is 25 cycles of `device_add`/`device_del` of a Full-Speed mouse on
+one root port.
+
+### The first reading: how a `REG_SZ` arrives through usbport's service
+
+**UTF-16, on every stack read.** `XHCISNAP` at 1 printed
+`XhciVirtualHSHubVid read, accepted, arrived as UTF-16, 1209` and the same
+for `0001` on Windows 98 SE under NUSB 3.3, under SweetLow's stack, on
+Windows ME, and on Windows 2000; `vhub.ids=12090001` in each ring. The
+parser's single-byte arm is therefore not exercised by any target read,
+and the question record 12 section 3.1 left open for 9x is answered: the
+9x path through NTKERN hands usbport's `GetMiniportRegistryKeyValue` the
+same wide string the NT path does. (runtime)
+
+### Windows 98 SE, NUSB 3.3 (`USBPORT_GetHciMn=57324B30`)
+
+| Value | Reading | Result |
+|---|---|---|
+| 0 | switch notes | `vhub.switch=0`, `applied=0`, `ids=0` (never consulted) |
+| 0 | FS mouse, root port 1 | High Speed, Interval 5 (`ep.open.ival=00030005`), as 24.1; pointer moves |
+| 1 | first hub install | Add New Hardware wizard, "Generic USB Hub", bound from NUSB's `USB2.INF` by class; no CD asked |
+| 1 | FS mouse behind the hub | Full Speed, `Period` 8, Interval 6 (8 ms, `00020006`); pointer moves |
+| 1 | TT record | pair `HubAddr 1, port 1` for the mouse (addresses 0 and 2); the hub's own opens `0xFFFF` |
+| 1 | High Speed | direct, no hub, Interval 5 |
+| 1 | churn | 26 hubs stood up and 26 dropped, 26 slots enabled and disabled, 156/156 opens, no refusal, stall, held reset or forced connect |
+| 2 | start | 8 hubs, addresses 1-8, each configured (24 hub opens); one wizard per new port, no CD |
+| 2 | FS mouse behind hub 1 | Interval 6, no wizard, pointer moves |
+| 2 | HS mouse behind hub 2 | works; **`Period` 1, Interval 0** (see the findings) |
+| 2 | churn | 25 slots in and out, 8 hubs throughout, 105/105 opens, 107 pipe completions |
+| 2 | hub disabled and enabled in Device Manager | the held status-change transfer aborted; on enable the hub enumerated again (3 opens) with no controller restart |
+| 2 | Power tab | "The hub is self powered", 500 mA per port, "1 port(s) available" |
+
+### Windows 98 SE, SweetLow's stack (`USBPORT_GetHciMn=10000001`)
+
+The same table, reading for reading, with the hub installed as "Generic USB
+Hub (EHCI)" from SweetLow's INF. The line that matters on this stack: **a
+Full-Speed mouse on a root port at 1 enumerates behind the virtual hub and
+works**, where a truthful root-port report took the fatal exception at
+`0028:C002F70E` (24.3's experiment, above). Churn at 1: 26/26 hubs, 26/26
+slots, 156/156 opens; at 2: 26/26 slots, 8 hubs, 102/102. The TT table at 2
+shows all eight hubs on their root ports at `0xFFFF` and the mouse under
+`HubAddr 1`.
+
+**Low Speed, by passthrough** (the owner attached the `046d:c077` that
+afternoon): at 1 the port decoded Low (`port.connect=00000101`), the reset
+stood a hub up (`vhub.create`), and the mouse opened behind it at Low
+Speed, `Period` 8, Interval 6 (`ep.open.ival=00010006`), TT `HubAddr 1,
+port 1`; at 2 the same behind hub 1. The HID class driver then failed its
+`SET_IDLE` (`0x210A`): QEMU's `usb-host` got status `-1` from libusb, the
+guest saw a Transaction Error on EP0, and the HID driver unconfigured the
+mouse. On this host the mouse is bound to Windows' `HidUsb`/`mouhid`, not
+to WinUSB as on 24.1's host, where the same request completed with status
+0. So the pointer was not moved by it; the speed, interval and TT
+readings stand, and a pointer reading wants the device bound to WinUSB
+(Zadig) first.
+
+### Windows ME, SweetLow's stack
+
+The same readings; the hub installs silently on the first plug, and at 2
+all eight at boot with no user action. 0: High, Interval 5. 1: UTF-16,
+Interval 6, TT `HubAddr 1`, churn 26/26 hubs, 156/156 opens. 2: 8 hubs,
+Interval 6, High-Speed behind a hub `Period` 1, churn 26/26 slots, 105/105.
+
+### Windows 2000 SP4
+
+The same again, the hub bound silently by SP4's own `usbhub.sys`: 0 High,
+Interval 5; 1 UTF-16, Interval 6, TT `HubAddr 1`, churn 26/26, 156/156;
+2 eight hubs at boot, Interval 6, High-Speed behind a hub `Period` 1, churn
+25 slots in and out, 105/105.
+
+**Hub tiers.** At 2, four QEMU hubs chained behind the virtual hub on root
+port 3 with a mouse at the end (route `0x1111`) enumerated; a fifth hub
+enumerated too, but a mouse behind it - tier 8 if the virtual hub counts -
+never reached slot enable. At 0 the same chain enumerated that mouse
+(route `0x12111`, Interval 6). **SP4's usbhub counts the virtual hub as a
+tier**, so at 2 a chain of five real hubs loses its last level, the cost
+record 12 section 5 named. Tearing the chain down released all six
+records (`BehindHubGone` 5).
+
+### Windows XP SP3 x86 (`USBPORT_GetHciMn=10000001`)
+
+WHPX on this host boots XP to a black screen that never draws a desktop
+(one run's QEMU exited); XP was read under TCG. 0: High, Interval 5. 1: the
+hub is enumerated twice (addresses 1 then 2, XP's re-create), installs
+silently ("Found New Hardware: Generic USB Hub"), mouse Interval 6, TT
+`HubAddr 2`; churn at 1 gave 26 hubs but 24 slots at a 12-second pace -
+two cycles unplugged before XP's double hub enumeration finished; five
+more at 25 seconds all reached a slot (163/163 opens overall, no refusal).
+
+**Full-Speed audio on a root port plays.** At 1, a `usb-audio` on root port
+1 behind its virtual hub: the isochronous endpoint opened at Full Speed,
+Interval 3, and a `sndrec32 /play` of "Windows XP Startup.wav" drove 82
+submits, 820 packets, the `wav` oracle growing to 102,400 bytes. Issue 6
+section 7's reading on a root port was 0 submits and 0 bytes. At 2, on one
+vCPU: 568 submits, 5,680 packets, all answered, 2 ring underruns, the
+`wav` file growing steadily. At 2 also: the High-Speed mouse behind hub 4
+`Period` 1, Interval 0; churn 25 slots in and out, 8 hubs, 114/114 opens.
+
+The first boot at 2 ran on four TCG vCPUs, the configuration the owner
+ruled unrepresentative for 32-bit XP on 2026-09-15, and on it the
+controller failed during playback: `interrupter re-arm: IE did not come
+back up`, a re-arm escalation, usbport's `ResetController`, and three
+recovery deliveries lost, leaving the controller down (244 transfers
+failed "endpoint gone"). The same boot's first plug of the audio device
+was reset four times and never opened; a replug enumerated it. Neither
+recurred on one vCPU. They are recorded, not read as evidence either way
+(see the findings).
+
+### Windows XP Professional x64 SP2 (TCG, four vCPUs)
+
+0: High, Interval 5, pointer moves. 1: the hub enumerated twice as on XP
+x86, mouse Full Speed Interval 6 behind `HubAddr 2`, dropped on unplug; a
+High-Speed mouse direct at Interval 5; **audio plays** (usb-audio on port 3
+behind its hub: 482 submits, 4,820 packets, all answered, the `wav` oracle
++675,840 bytes). Churn at 1: 26 hubs stood up and dropped, 144/144 opens,
+no refusal or controller reset, but **23 of 25 cycles reached a slot** and
+6 of those were never addressed; a recheck at 30 seconds a cycle gave 4 of
+5. In each miss the hub stood up, was addressed and opened its pipe, and
+XP's hub driver then reset port 1 four times and never opened the device's
+address 0 - no transfer error, no refusal; the next plug enumerated. XP
+x86 showed the same shape twice (two churn cycles, and the first audio
+plug at 2 on its four-vCPU boot), which reads less like a pace too fast
+for XP and more like an intermittent enumeration failure behind an
+on-demand hub on NT 5.x; not diagnosed. At 2: 8 hubs at boot; Full-Speed
+mouse behind hub 1 at Interval 6; High-Speed behind hub 4 `Period` 1,
+Interval 0; audio +712,704 bytes (482 submits, 4,820 packets); churn 25 of
+25, 161/161 opens.
+
+### Windows Vista and 7, both architectures: stopped
+
+The four NT 6.x guests installed, and read correctly at 0 (Full-Speed mouse
+on a root port, all opens accepted, pointer moves). At 1 and 2 they did not
+get far, for three reasons, and the task stopped there for the owner.
+
+1. **QEMU does not disable a port.** Vista's and 7's hub drivers clear
+   `PORT_ENABLE` on port 1 after its first reset. The driver writes PED=1
+   (`usb_xhci_port_write port 1 ... val 0x00000603`) and QEMU reads back
+   `0x603`: its model has no PED write-to-disable (xHCI 1.2 Table 5-27;
+   upstream `xhci_port_write` omits PED, per the review below). The disable
+   is never confirmed, and every later port-1 reset is held (record 12
+   section 3.3's gate, which has no deadline by the owner's decision of
+   2026-09-27): "USB Device Not Recognized", Code 43. It stops every
+   Full-Speed device behind a hub at 1 on all four, and at 2 a High-Speed
+   one behind hub 4 on Windows 7 x86. Windows 98, ME, 2000 and XP never
+   disable a connected port mid-enumeration and never met it.
+2. **A virtual hub outlives its device on NT 6.x.** After the stuck mouse
+   was unplugged, Windows 7's hub driver removed the hub (its held
+   status-change transfer was aborted) but never called
+   `RH_ClearFeaturePortEnable` for the root port - the one path that drops
+   a hub at 1 (record 12 section 3.2). The record stayed with address 1;
+   usbport gave address 1 to a High-Speed mouse on root port 2, whose EP0
+   was then bound to the stale hub, and Windows installed a "Generic USB
+   Hub" `USB\VID_1209&PID_0001` there instead of the mouse (Windows 7 x86
+   and x64 alike). On 98, ME, 2000 and XP every unplug brought the disable.
+3. **A deadlock, in 24.3.3's code.** Windows 7 x64 at 2 hung when a
+   High-Speed mouse was plugged behind hub 4, and Vista x64 at 1 on an
+   unplug: two CPUs spinning on a lock in usbport's FDO extension. The
+   symbolised stack (amd64 `qemu` PDB) is `XhciSlotSubmitTransfer+0x15c` ->
+   `XhciRootHubDeferredWork+0x81` -> `xhciRhAnnounce+0xba` -> usbport ->
+   spin: the virtual hub's branch of `SubmitTransfer`
+   (`src/xhci_slot.c`, the `XHCI_ENDPOINT_FLAG_VHUB` test), which usbport
+   calls under its miniport spin lock, runs the root hub's deferred work,
+   and that calls `USBPORT_InvalidateRootHub`, which on NT 6.x takes the
+   lock again. NT 5.x's usbport evidently does not. This is not a QEMU
+   artefact and would hang Vista and 7 at 1 or 2 on metal.
+
+### Resume and recovery: not reachable here
+
+Windows 98 SE under NUSB at 2, with a Full-Speed mouse behind hub 1 and a
+High-Speed one behind hub 2, refused Stand by ("Your computer cannot go on
+standby because a device driver or program won't allow it"). That is the
+QEMU limit `lessons.md` already records - no guest here produces a
+suspend/resume pair, because the display driver vetoes S3 - and nothing in
+the guest can raise a host controller error to force a recovery in place.
+The resume and recovery clauses at 1 and 2 (the hubs kept, the devices
+re-enumerated behind them, a swapped device's forced connect change) rest
+on the host vectors - 24.3.3's and the two taken above - and on 24.3.5's
+E460.
+
+### Findings the readings leave for the owner
+
+In the order of severity on real hardware (the first two confirmed by a
+Codex review of 2026-09-27, `.claude/codex-2434-heldreset-r2-result.txt`,
+with static reads of Vista x64's and Windows 7's `usbport.sys` and
+`usbhub.sys`):
+
+A. **The deadlock** (Vista and 7 section, item 3). The chain is
+   `SubmitTransfer` -> `xhciVhubSubmit` -> `XhciRhVhubPort1Feature` ->
+   carry -> `XhciRootHubDeferredWork` -> `xhciRhAnnounce`; on Vista x64
+   `USBPORTSVC_InvalidateRootHub` (`0x2990C`) reaches
+   `USBPORT_AcquireEpListLock` (`0x7050`), the lock at FDO `+0x1160` that
+   `SubmitTransfer` runs under - the captured address. Windows 7 x64 the
+   same at FDO `+0xF88`. The repository's safety argument for calling the
+   service there was ReactOS-derived (`usbport-miniport-abi.md`), not read
+   against these binaries. (static; the stack runtime)
+B. **The stale hub** (item 2). A disconnect clears the hub's upstream state
+   and decision but keeps `Present` and `Address` (`src/xhci_vhub.c`
+   `XhciVhubAbsorb`), and `XhciVhubFindAddress` tests only those; Windows
+   7 x86 `usbhub!UsbhPortDisconnect` (`0x29967`) and Vista x64's
+   (`0x2A5D8`) remove the device without a port disable, so an ordinary
+   unplug of a working device reaches it on metal. (static; runtime)
+C. Two orderings the review found by reading, not observed: a held port-1
+   reset survives a later port-1 disable and can undo usbhub's decision to
+   abandon the device; and a disable landing during a real asynchronous
+   reset is taken as confirmed (PED 0 without PR excluded).
+D. **The QEMU disable gap** (item 1), with the owner's no-deadline hold:
+   an emulator artefact, but record 12 section 3.3's "revisited only if a
+   24.3.4 reading shows a hold that never clears" is met.
+E. **An intermittent enumeration miss behind an on-demand hub on NT 5.x**
+   (XP x86 and x64, about one plug in ten at 1): usbhub resets port 1
+   four times and never opens the device. Not diagnosed.
+
+Then, from the earlier guests:
+
+1. **A High-Speed interrupt endpoint behind a virtual hub gets `Period` 1,
+   programmed as Interval 0 (125 us).** Seen at 2 on NUSB, SweetLow's,
+   ME's, SP4's and XP's usbport; the same device directly on a root port at
+   1 gets `Period` 32, Interval 5. Record 12 section 7 says High-Speed
+   devices at 2 keep "the same interval". Likely mechanism, read in ReactOS
+   only (static): usbport's USB 2.0 budgeter overwrites `Period` with the
+   budget's `ActualPeriod` and carries the microframe choice in
+   `InterruptScheduleMask`, which an EHCI miniport uses and this driver
+   does not. If so, a High-Speed device behind any real USB 2.0 hub is
+   polled at the same rate today. The devices work; nothing was changed.
+2. **`XhciRearmInterrupter`'s read-back can lose to an ISR on another
+   CPU.** The four-vCPU XP boot above: IE written, and cleared again by a
+   concurrently claimed interrupt before the read-back, three times; the
+   escalation ended in a controller the recovery could not bring back.
+   Under TCG, on a configuration the owner has ruled out; whether real SMP
+   hardware can reach it is not read.
+3. **The passthrough Low-Speed mouse's pointer reading** needs the device
+   on WinUSB on this host.

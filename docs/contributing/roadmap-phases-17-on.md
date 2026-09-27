@@ -894,7 +894,18 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     released by the connect-change path), and a recovery with a hub
     configured at 2 (the `lost[]` bitmap, `XhciVhubReinit`, a held transfer
     completed for a lost device), which only the core suite pinned before
-    (`runs/run-24.md`, "24.3.4"). A held port-1 reset that never clears
+    (`runs/run-24.md`, "24.3.4"). **Readings taken 2026-09-27 and stopped
+    for the owner** (`runs/run-24.md`, "24.3.4"): Windows 98 SE under both
+    stacks, ME, 2000 and XP x86 read at 0, 1 and 2 (the ids arrive as
+    UTF-16 on every stack; TT records, Interval 6, churn, the first hub
+    install, Full-Speed audio playing from XP; SP4's usbhub counts the
+    virtual hub as a tier), XP x64 likewise with an intermittent
+    enumeration miss at 1; Vista and 7 in both architectures read at 0
+    only - at 1 and 2 they met a deadlock in 24.3.3's virtual-hub
+    `SubmitTransfer` branch, a hub that outlives its device's unplug and
+    captures a reused address, and QEMU's missing port disable. The owner
+    chose to fix the two driver defects in a separate batch before the
+    Vista and 7 readings are taken again. A held port-1 reset that never clears
     in any reading goes to the owner: record 12 section 3.3 gives it no
     deadline of its own by decision (2026-09-27).
   - [ ] **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the
