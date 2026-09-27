@@ -27,7 +27,7 @@ same thing:
 | Root-hub status queries (`RH_GetRootHubData`, `RH_GetStatus`, `RH_GetPortStatus`, `RH_GetHubStatus`) | **PASSIVE on NT 6.x**, DISPATCH on NT 5.x | **none on NT 6.x**, `MiniportSpinLock` on NT 5.x | port shadow, `PORTSC` |
 | `InterruptDpc` | DISPATCH | `MiniportInterruptsSpinLock` | event ring, command completion, ERDP, IMAN |
 | `InterruptService` (ISR) | DIRQL | none; usbport's own ISR gate only | USBSTS, IMAN |
-| Async timer callbacks (`UsbPortRequestAsyncCallback`) | DISPATCH | neither | command state, CRCR |
+| Async timer callbacks (`UsbPortRequestAsyncCallback`) | DISPATCH | neither (on NT 6.x usbport holds its own timer-list lock across the call - FDO+0xFE0 on Windows 7 x64, static, task 24.3.4) | command state, CRCR |
 | Root-hub `RH_Set/ClearFeature*` | DISPATCH | none (ReactOS `roothub.c:170-285`) | port state (Phase 5) |
 | `FlushInterrupts` | <= DISPATCH | none, arbitrary thread | nothing today |
 

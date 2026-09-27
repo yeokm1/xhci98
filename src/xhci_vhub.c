@@ -676,6 +676,7 @@ static ULONG xhciVhubRootResetStart(PXHCI_VHUB hub,
     if (keeps) {
         hub->ResetSuppressed = 1;
     }
+    hub->LateEnd = 0;
 
     if (applied == XHCI_VHUB_MODE_ON_DEMAND) {
         hub->ResetOwner = (UCHAR)XHCI_VHUB_OWNER_ROOT;
@@ -742,6 +743,7 @@ ULONG XhciVhubRootReset(PXHCI_VHUB hub,
              * Today's reset, unheld as today. It is still owned, because its
              * end is where the decision is taken.
              */
+            hub->LateEnd = 0;
             hub->ResetOwner = (UCHAR)XHCI_VHUB_OWNER_ROOT;
             hub->ResetGeneration = generation;
             hub->ResetKeeps = 0;
@@ -758,6 +760,7 @@ ULONG XhciVhubRootReset(PXHCI_VHUB hub,
 
 static ULONG xhciVhubPort1ResetStart(PXHCI_VHUB hub, ULONG generation)
 {
+    hub->LateEnd = 0;
     hub->ResetOwner = (UCHAR)XHCI_VHUB_OWNER_PORT1;
     hub->ResetGeneration = generation;
     hub->P1Resetting = 1;
@@ -786,13 +789,20 @@ ULONG XhciVhubResetDone(PXHCI_VHUB hub,
     hub->ResetOwner = (UCHAR)XHCI_VHUB_OWNER_NONE;
 
     if (owner == XHCI_VHUB_OWNER_SUPERSEDED) {
-        /* The end of a port-1 reset a root reset overtook: the port is
-         * free again, and nothing else follows from it. */
+        /* The end of a port-1 reset a root reset overtook, or whose hub
+         * retired: the port is free again, and nothing else follows from
+         * it - including from a PRC after its deadline. */
         hub->P1Resetting = 0;
+        if (timedOut) {
+            hub->LateEnd = 1;
+        }
         return XHCI_VHUB_DO_NONE;
     }
     if (owner == XHCI_VHUB_OWNER_PORT1) {
         hub->P1Resetting = 0;
+        if (timedOut) {
+            hub->LateEnd = 1;
+        }
         hub->P1Enabled = (UCHAR)(!timedOut && hub->P1Power &&
                                  (physStatus & XHCI_HUB_PORT_ENABLE) != 0 &&
                                  hub->DevState == XHCI_VHUB_DEV_CONFIGURED);
@@ -868,6 +878,40 @@ ULONG XhciVhubDisownCollected(PXHCI_VHUB hub,
     return XHCI_VHUB_DO_NONE;
 }
 
+/*
+ * At 1, the device behind the hub has left the port, and the hub with it
+ * (task 24.3.4). The record is cleared as usbport's disable clears it (3.2),
+ * because on NT 6.x that disable never comes: usbhub removes a disconnected
+ * device without one (Windows 7 x86 `usbhub!UsbhPortDisconnect` 0x29967,
+ * Vista x64 0x2A5D8, static), and a hub left Present keeps its address after
+ * usbport has freed it - the next device given that address on another port
+ * opened as this hub. A port-1 reset still running on the port stays
+ * recognised, as one nobody owns, so its end claims nothing for the device
+ * that has gone and latches nothing on the root port - and so does one whose
+ * deadline has already passed (`LateEnd`); a root reset's end is today's, the
+ * port having no hub. usbport's disable and power-off of the root port retire
+ * the hub the same way, since a disable does not end a reset in flight.
+ */
+static ULONG xhciVhubRetire(PXHCI_VHUB hub)
+{
+    ULONG owner;
+    ULONG generation;
+
+    ULONG lateEnd;
+
+    owner = hub->ResetOwner;
+    generation = hub->ResetGeneration;
+    lateEnd = hub->LateEnd;
+    xhciVhubClear(hub);
+    hub->LateEnd = (UCHAR)lateEnd;
+    if (owner == XHCI_VHUB_OWNER_PORT1 ||
+        owner == XHCI_VHUB_OWNER_SUPERSEDED) {
+        hub->ResetOwner = (UCHAR)XHCI_VHUB_OWNER_SUPERSEDED;
+        hub->ResetGeneration = generation;
+    }
+    return XHCI_VHUB_DO_DROP;
+}
+
 ULONG XhciVhubAbsorb(PXHCI_VHUB hub,
                      ULONG applied,
                      ULONG latched,
@@ -903,14 +947,23 @@ ULONG XhciVhubAbsorb(PXHCI_VHUB hub,
     p1 = 0;
     if (applied == XHCI_VHUB_MODE_ON_DEMAND) {
         /*
+         * The device gone, or swapped between two readings: the hub goes
+         * with it, and the root port reports the reading as today - the
+         * connect change usbhub removes the hub for included. Not waiting on
+         * the change bit either: an earlier reading may have taken it.
+         */
+        if ((physStatus & XHCI_HUB_PORT_CONNECTION) == 0 ||
+            (latched & XHCI_HUB_C_PORT_CONNECTION) != 0) {
+            return xhciVhubRetire(hub);
+        }
+        /*
          * Connection, power and over-current stay the root port's, as today;
          * the enable, reset and suspend changes are the views' to latch. A
-         * disconnect or a lost supply takes the upstream down with it, which
-         * is what the physical port reads today.
+         * lost supply takes the upstream down with it, which is what the
+         * physical port reads today.
          */
         *strip = latched & XHCI_VHUB_UP_CHANGE_V1;
-        if ((physStatus & XHCI_HUB_PORT_CONNECTION) == 0 ||
-            (physStatus & XHCI_HUB_PORT_POWER) == 0) {
+        if ((physStatus & XHCI_HUB_PORT_POWER) == 0) {
             hub->UpEnabled = 0;
             hub->UpSuspend = 0;
             hub->Decision = (UCHAR)XHCI_VHUB_DECIDED_NONE;
@@ -1029,8 +1082,7 @@ ULONG XhciVhubRootDisable(PXHCI_VHUB hub, ULONG applied, ULONG physStatus)
             hub->Decision = (UCHAR)XHCI_VHUB_DECIDED_NONE;
             return XHCI_VHUB_DO_NONE;
         }
-        xhciVhubClear(hub);
-        return XHCI_VHUB_DO_DROP;
+        return xhciVhubRetire(hub);
     }
     if (!hub->Present) {
         return XHCI_VHUB_DO_NONE;
@@ -1049,8 +1101,7 @@ ULONG XhciVhubRootPower(PXHCI_VHUB hub,
     if (applied == XHCI_VHUB_MODE_ON_DEMAND) {
         if (!on) {
             if (hub->Present) {
-                xhciVhubClear(hub);
-                return XHCI_VHUB_DO_DROP;
+                return xhciVhubRetire(hub);
             }
             /* A power-off forgets a direct port's decision, as a disable
              * does: the port is out of usbport's hands either way. */
@@ -1186,6 +1237,19 @@ ULONG XhciVhubPort1Feature(PXHCI_VHUB hub,
         hub->P1ResumeOwed = 0;
         if (!hub->UpSuspend) {
             hub->PhysSuspended = 0;
+        }
+        if (hub->ResetHeld == XHCI_VHUB_OWNER_PORT1) {
+            /*
+             * usbhub has abandoned the reset it asked for and the owed
+             * disable is still holding (task 24.3.4): started at the
+             * confirmation, it would undo the abandonment. It ends here, as
+             * a preempted root-port reset does - reported, since usbhub may
+             * still be waiting on its change, with port 1 disabled.
+             */
+            hub->ResetHeld = (UCHAR)XHCI_VHUB_OWNER_NONE;
+            hub->P1Changes |= (UCHAR)XHCI_HUB_C_PORT_RESET;
+            return xhciVhubDisable(disownPending, physStatus) |
+                   XHCI_VHUB_DO_PIPE;
         }
         return xhciVhubDisable(disownPending, physStatus);
     case XHCI_VHUB_SEL_PORT_SUSPEND:
@@ -1330,9 +1394,39 @@ VOID XhciVhubSetConfig(PXHCI_VHUB hub, ULONG value)
     hub->P1Enabled = 0;
 }
 
-ULONG XhciVhubReinit(PXHCI_VHUB hub, ULONG applied, ULONG deviceLost)
+/*
+ * The rebuilt shadow times no reset any more, so the record owns none either:
+ * left owned, a reset would take the next one on the port for its own - that
+ * reset's end deciding nothing and its C_PORT_RESET stripped (task 24.3.4).
+ * A hub-less record is included, since a direct port's root reset at 1 and a
+ * retired hub's port-1 reset are both owned. After HCRST no PRC can follow;
+ * after a restore the registers survived, and a port-1 or nobody's reset may
+ * still end - or already have, its PRC pending for the seed - so it becomes a
+ * late end rather than being forgotten.
+ */
+static VOID xhciVhubEndResets(PXHCI_VHUB hub, ULONG restored)
 {
-    if (hub == NULL || applied == XHCI_VHUB_MODE_OFF || !hub->Present) {
+    ULONG owner;
+
+    owner = hub->ResetOwner;
+    hub->ResetOwner = (UCHAR)XHCI_VHUB_OWNER_NONE;
+    hub->ResetHeld = (UCHAR)XHCI_VHUB_OWNER_NONE;
+    hub->UpResetting = 0;
+    hub->P1Resetting = 0;
+    if (!restored) {
+        hub->LateEnd = 0;
+    } else if (owner == XHCI_VHUB_OWNER_PORT1 ||
+               owner == XHCI_VHUB_OWNER_SUPERSEDED) {
+        hub->LateEnd = 1;
+    }
+}
+
+ULONG XhciVhubReinit(PXHCI_VHUB hub,
+                     ULONG applied,
+                     ULONG deviceLost,
+                     ULONG restored)
+{
+    if (hub == NULL || applied == XHCI_VHUB_MODE_OFF) {
         return XHCI_VHUB_DO_NONE;
     }
     /*
@@ -1342,10 +1436,10 @@ ULONG XhciVhubReinit(PXHCI_VHUB hub, ULONG applied, ULONG deviceLost)
      * would otherwise be held for ever. At 2 the hub's address, bindings and
      * held transfer are software and stay (3.8); at 1 the rest is today's.
      */
-    hub->ResetOwner = (UCHAR)XHCI_VHUB_OWNER_NONE;
-    hub->ResetHeld = (UCHAR)XHCI_VHUB_OWNER_NONE;
-    hub->UpResetting = 0;
-    hub->P1Resetting = 0;
+    xhciVhubEndResets(hub, restored);
+    if (!hub->Present) {
+        return XHCI_VHUB_DO_NONE;
+    }
     if (!deviceLost || applied != XHCI_VHUB_MODE_ALWAYS) {
         return XHCI_VHUB_DO_NONE;
     }

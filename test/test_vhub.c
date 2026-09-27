@@ -873,7 +873,7 @@ static void testOffState(void)
              XHCI_VHUB_DO_NONE, "suspend is today's");
     CHECK_EQ(XhciVhubDisownCollected(&h, XHCI_VHUB_MODE_OFF, 3),
              XHCI_VHUB_DO_NONE, "nothing held");
-    CHECK_EQ(XhciVhubReinit(&h, XHCI_VHUB_MODE_OFF, 1), XHCI_VHUB_DO_NONE,
+    CHECK_EQ(XhciVhubReinit(&h, XHCI_VHUB_MODE_OFF, 1, 0), XHCI_VHUB_DO_NONE,
              "reinit is today's");
     XhciVhubRootClearChange(&h, XHCI_VHUB_MODE_OFF, 0x1F);
     CHECK_EQ(XhciVhubClaimOpen(&h), 0, "no address-0 open is the hub's");
@@ -1002,17 +1002,19 @@ static void testRedecision(void)
              XHCI_VHUB_DO_FORCE_CONNECT | XHCI_VHUB_DO_DROP,
              "a timed-out re-decision tears the hub down");
 
-    /* A disconnect forgets the decision: the next device decides afresh
-     * with no forced change. */
+    /*
+     * A disconnect retires the hub with its device (task 24.3.4: an NT 6.x
+     * usbhub removes it without the disable 3.2 waited for), forgets the
+     * decision, and the next device decides afresh with no forced change.
+     */
     v1Plug(&h, XHCI_SPEED_FULL);
     CHECK_EQ(XhciVhubAbsorb(&h, ON_DEMAND, XHCI_HUB_C_PORT_CONNECTION,
                             PS_EMPTY, &strip),
-             XHCI_VHUB_DO_NONE, "an unplug is the root port's own change");
-    CHECK_EQ(strip, 0, "C_PORT_CONNECTION stays in the shadow at 1");
-    CHECK_EQ(h.Decision, XHCI_VHUB_DECIDED_NONE, "the decision forgotten");
-    CHECK_EQ(XhciVhubRootDisable(&h, ON_DEMAND, PS_EMPTY), XHCI_VHUB_DO_DROP,
-             "usbport's disable drops the record");
-    CHECK(recordIsZero(&h), "(gone)");
+             XHCI_VHUB_DO_DROP, "an unplug retires the hub");
+    CHECK_EQ(strip, 0, "and the root port reports the whole reading");
+    CHECK(recordIsZero(&h), "(gone, its address and decision with it)");
+    CHECK_EQ(XhciVhubRootDisable(&h, ON_DEMAND, PS_EMPTY), XHCI_VHUB_DO_NONE,
+             "a disable that follows finds no hub");
     gen++;
     XhciVhubRootReset(&h, ON_DEMAND, gen, 0, PS_CONN);
     CHECK_EQ(XhciVhubResetDone(&h, ON_DEMAND, gen, 0, XHCI_SPEED_HIGH, PS_EN),
@@ -1509,11 +1511,6 @@ static void testPort1Power(void)
                                       PS_CONN),
                  XHCI_VHUB_DO_RESET_HELD, "the reset is held while owed");
         CHECK_EQ(h.P1Resetting, 0, "nothing started");
-        CHECK_EQ(XhciVhubPort1Feature(&h, 0, XHCI_VHUB_SEL_PORT_ENABLE, 0, 1,
-                                      PS_EN),
-                 XHCI_VHUB_DO_NONE, "no second disable while one is owed");
-        CHECK_EQ(h.Address, 2, "nothing about the hub torn down");
-        CHECK_EQ(h.DevState, XHCI_VHUB_DEV_CONFIGURED, "(still configured)");
         gen++;
         CHECK_EQ(XhciVhubDisownCollected(&h, applied, gen),
                  XHCI_VHUB_DO_PHYS_RESET | XHCI_VHUB_DO_ARM_DEVICE,
@@ -1548,6 +1545,109 @@ static void testPort1Power(void)
              "and port 1 is not enabled");
     CHECK_EQ(h.Decision, XHCI_VHUB_DECIDED_HUB,
              "the root port's decision untouched by port 1's reset");
+}
+
+/*
+ * A port-1 reset held for an owed disable, then port 1 disabled or powered
+ * off before the confirmation (task 24.3.4, Codex's first round): usbhub has
+ * abandoned the reset, so the confirmation must not start it. It ends at the
+ * disable, reported as a preempted root-port reset is, with no second
+ * disable issued while one is owed and nothing about the hub torn down.
+ */
+static void testHeldResetEndsAtPort1Disable(void)
+{
+    static const ULONG selectors[2] = { XHCI_VHUB_SEL_PORT_ENABLE,
+                                        XHCI_VHUB_SEL_PORT_POWER };
+    XHCI_VHUB h;
+    ULONG applied;
+    ULONG selector;
+    ULONG i;
+
+    for (applied = ON_DEMAND; applied <= ALWAYS; applied++) {
+        for (i = 0; i < 2; i++) {
+            selector = selectors[i];
+            readyHub(&h, applied);
+            XhciVhubPort1Feature(&h, 0, XHCI_VHUB_SEL_PORT_ENABLE, 0, 0, PS_EN);
+            gen++;
+            CHECK_EQ(XhciVhubPort1Feature(&h, 1, XHCI_VHUB_SEL_PORT_RESET, gen,
+                                          1, PS_EN),
+                     XHCI_VHUB_DO_RESET_HELD, "(the reset held while owed)");
+            h.P1Changes = 0;
+            CHECK_EQ(XhciVhubPort1Feature(&h, 0, selector, 0, 1, PS_EN),
+                     XHCI_VHUB_DO_PIPE,
+                     "the disable ends the held reset, and issues no second "
+                     "disable while one is owed");
+            CHECK_EQ(h.ResetHeld, XHCI_VHUB_OWNER_NONE, "nothing held");
+            CHECK_EQ(p1Change(&h), XHCI_HUB_C_PORT_RESET,
+                     "port 1's C_PORT_RESET reports the reset ended");
+            CHECK_EQ(p1Status(&h, PS_EN, XHCI_SPEED_FULL) &
+                         (XHCI_HUB_PORT_ENABLE | XHCI_HUB_PORT_RESET),
+                     0, "with port 1 disabled and not resetting");
+            gen++;
+            CHECK_EQ(XhciVhubDisownCollected(&h, applied, gen),
+                     XHCI_VHUB_DO_NONE,
+                     "the confirmation starts nothing usbhub abandoned");
+            CHECK_EQ(h.Address, 2, "nothing about the hub torn down");
+            CHECK_EQ(h.DevState, XHCI_VHUB_DEV_CONFIGURED,
+                     "(still configured)");
+            if (selector == XHCI_VHUB_SEL_PORT_POWER) {
+                XhciVhubPort1Feature(&h, 1, XHCI_VHUB_SEL_PORT_POWER, 0, 0,
+                                     PS_CONN);
+            }
+            gen++;
+            CHECK_EQ(XhciVhubPort1Feature(&h, 1, XHCI_VHUB_SEL_PORT_RESET, gen,
+                                          0, PS_CONN),
+                     XHCI_VHUB_DO_PHYS_RESET | XHCI_VHUB_DO_ARM_DEVICE,
+                     "and a reset asked for afterwards runs");
+        }
+    }
+}
+
+/*
+ * At 1 the hub is retired by any reading that says its device is gone (task
+ * 24.3.4): a connect change with the port still connected is a device swapped
+ * between two readings, and the hub belonged to the one that left. A port-1
+ * reset running when the device goes stays recognised, owned by nobody, so
+ * its end claims nothing; at 2 the hub stays and the change is port 1's.
+ */
+static void testUnplugRetiresV1(void)
+{
+    XHCI_VHUB h;
+    ULONG strip;
+    ULONG resetGen;
+
+    v1Plug(&h, XHCI_SPEED_FULL);
+    enumerateHub(&h, ON_DEMAND, 6);
+    CHECK_EQ(XhciVhubAbsorb(&h, ON_DEMAND, XHCI_HUB_C_PORT_CONNECTION,
+                            PS_CONN, &strip),
+             XHCI_VHUB_DO_DROP, "a swap between readings retires the hub");
+    CHECK(recordIsZero(&h), "(its address with it)");
+
+    readyHub(&h, ON_DEMAND);
+    gen++;
+    resetGen = gen;
+    CHECK_EQ(XhciVhubPort1Feature(&h, 1, XHCI_VHUB_SEL_PORT_RESET, resetGen, 0,
+                                  PS_EN),
+             XHCI_VHUB_DO_PHYS_RESET | XHCI_VHUB_DO_ARM_DEVICE,
+             "(a port-1 reset running)");
+    CHECK_EQ(XhciVhubAbsorb(&h, ON_DEMAND, XHCI_HUB_C_PORT_CONNECTION,
+                            PS_EMPTY, &strip),
+             XHCI_VHUB_DO_DROP, "the device leaves mid-reset");
+    CHECK_EQ(h.Present, 0, "the hub retired");
+    CHECK_EQ(h.Address, 0, "with its address");
+    CHECK_EQ(h.ResetOwner, XHCI_VHUB_OWNER_SUPERSEDED,
+             "the running reset owned by nobody");
+    CHECK_EQ(h.ResetGeneration, resetGen, "and still recognised");
+    CHECK_EQ(XhciVhubResetDone(&h, ON_DEMAND, resetGen, 0, XHCI_SPEED_FULL,
+                               PS_EMPTY),
+             XHCI_VHUB_DO_NONE, "its end decides nothing");
+    CHECK_EQ(h.ResetOwner, XHCI_VHUB_OWNER_NONE, "and frees the port");
+
+    readyHub(&h, ALWAYS);
+    CHECK_EQ(XhciVhubAbsorb(&h, ALWAYS, XHCI_HUB_C_PORT_CONNECTION, PS_EMPTY,
+                            &strip),
+             XHCI_VHUB_DO_PIPE, "at 2 an unplug is port 1's change");
+    CHECK_EQ(h.Present, 1, "and the hub stays");
 }
 
 /* At 1, a root reset on a port holding a hub is held while a disable is owed
@@ -1725,9 +1825,9 @@ static void testValue2Lifecycle(void)
 
     /* Resume and recovery keep the hubs. */
     readyHub(&h, ALWAYS);
-    CHECK_EQ(XhciVhubReinit(&h, ALWAYS, 0), XHCI_VHUB_DO_NONE,
+    CHECK_EQ(XhciVhubReinit(&h, ALWAYS, 0, 0), XHCI_VHUB_DO_NONE,
              "a restoring resume with the device still there: nothing");
-    CHECK_EQ(XhciVhubReinit(&h, ALWAYS, 1), XHCI_VHUB_DO_PIPE,
+    CHECK_EQ(XhciVhubReinit(&h, ALWAYS, 1, 0), XHCI_VHUB_DO_PIPE,
              "a reinitialisation that took the device");
     CHECK_EQ(h.Address, 2, "the hub keeps its address");
     CHECK_EQ(h.DevState, XHCI_VHUB_DEV_CONFIGURED, "and its configuration");
@@ -1744,7 +1844,7 @@ static void testValue2Lifecycle(void)
     h.ResetOwner = (UCHAR)XHCI_VHUB_OWNER_ROOT;
     h.UpResetting = 1;
     h.ResetHeld = (UCHAR)XHCI_VHUB_OWNER_PORT1;
-    CHECK_EQ(XhciVhubReinit(&h, ON_DEMAND, 1), XHCI_VHUB_DO_NONE,
+    CHECK_EQ(XhciVhubReinit(&h, ON_DEMAND, 1, 0), XHCI_VHUB_DO_NONE,
              "at 1 a reinit latches nothing");
     CHECK_EQ(h.Present, 1, "and keeps the hub");
     CHECK_EQ(h.ResetHeld, XHCI_VHUB_OWNER_NONE, "but releases a held reset");
@@ -1972,6 +2072,8 @@ int main(void)
     testRootReportV1();
     testSuspendMerge();
     testPort1Power();
+    testHeldResetEndsAtPort1Disable();
+    testUnplugRetiresV1();
     testRootResetHeldV1();
     testValue2Lifecycle();
     testRootResetOverPort1Reset();

@@ -945,9 +945,41 @@ VOID XhciRootHubPortEvent(PXHCI_EXTENSION ext, ULONG portId);
  * Idempotent and cheap when there is nothing owed, which is what lets every
  * caller that *might* have decided something just call it.
  *
+ * **Never from a callback usbport makes under its EpList lock** -
+ * `SubmitTransfer`, `AbortTransfer`, `PollEndpoint`, `SetEndpointState`. On
+ * NT 6.x `USBPORTSVC_InvalidateRootHub` takes that lock itself (Vista x64
+ * FDO+0x1160, Windows 7 x64 FDO+0xF88, static), so the announcement
+ * self-deadlocks there on usbport's lock rather than this driver's: task
+ * 24.3.4's Vista and Windows 7 hangs. Those callbacks use
+ * XhciRootHubDeferredArms.
+ *
  * IRQL: <= DISPATCH_LEVEL.
  */
 VOID XhciRootHubDeferredWork(PXHCI_EXTENSION ext);
+
+/*
+ * XhciRootHubDeferredWork less the announcement, for a callback usbport makes
+ * under its EpList lock: arm the timers ports are owed and drain the device
+ * layer, and leave any latched change in `RootHubInvalidatesOwed` for the next
+ * XhciRootHubDeferredWork - the event DPC, the health poll, a root-hub callback
+ * or a port timer. The arm is owed promptly, because a resume's timer is what
+ * ends the resume signalling, and it cannot deadlock here: on NT 6.x the
+ * legacy `UsbPortRequestAsyncCallback` enters `RequestAsyncCallbackEx` on the
+ * branch that takes neither usbport's timer-list lock nor EpList - only the
+ * I/O-count lock `USBPORT_Core_IncIoRequestCount` takes (static,
+ * legal-provenance.md section 4).
+ * **That is also why it is not safe**, and not only here: that branch assumes
+ * its caller holds usbport's timer lock (Vista x64 FDO+0x11C0, Windows 7 x64
+ * FDO+0xFE0), which usbport holds only around its root-hub feature callbacks
+ * and its timer DPC, so an arm from here - or from the command pump, the
+ * event DPC or the health poll, as this driver has always armed - races the
+ * timer DPC's removal from the same list on another CPU. Recorded as an open
+ * finding for the owner (task 24.3.4, run-24.md); this function adds no new
+ * kind of arm.
+ *
+ * IRQL: <= DISPATCH_LEVEL, controller lock released.
+ */
+VOID XhciRootHubDeferredArms(PXHCI_EXTENSION ext);
 
 /*
  * The root-hub half of usbport's `CheckController` poll (Phase 5 task 6): find a
@@ -1188,7 +1220,8 @@ VOID XhciSlotPortReset(PXHCI_EXTENSION ext, ULONG hubPort);
  * Task 24.3's virtual hubs (design record 12), where the root-hub half
  * (src/xhci_rh.c) and the device half (src/xhci_slot.c) meet. Every one is
  * called with the controller lock held, and the caller owes
- * XhciRootHubDeferredWork after releasing it - which reaches
+ * XhciRootHubDeferredWork after releasing it - or, inside a callback usbport
+ * makes under its EpList lock, XhciRootHubDeferredArms - both of which reach
  * XhciSlotDeferredWork, where any completion these owe is delivered.
  *
  * `XhciSlotVhubPipe` completes `hubPort`'s held status-change transfer: with

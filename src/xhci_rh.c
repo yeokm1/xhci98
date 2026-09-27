@@ -79,6 +79,7 @@ static ULONG xhciRhVhubResetLost(PXHCI_EXTENSION ext,
 static VOID xhciRhVhubDisownSettled(PXHCI_EXTENSION ext,
                                     ULONG hubPort,
                                     XHCI_PORT_SHADOW *shadow);
+static PXHCI_VHUB xhciRhVhub(PXHCI_EXTENSION ext, ULONG hubPort);
 #define XHCI_RH_VHUB_RESET      0
 #define XHCI_RH_VHUB_POWER_ON   1
 #define XHCI_RH_VHUB_POWER_OFF  2
@@ -860,11 +861,24 @@ MPSTATUS XhciRhGetPortStatus(PXHCI_EXTENSION ext,
  * decoding says nothing about the port, and treating it as confirmation would
  * be the "all-ones is not a status report" mistake this driver has made before.
  *
+ * **Nor does PED = 0 with PR = 1 on a port carrying a virtual hub** (task
+ * 24.3.4). That is a port in reset - PED clears when PR is set (p.372) - and
+ * the disable written into it cleared nothing; the reset's end sets PED again.
+ * Taken as confirmed, the debt was gone before the reset ended, the redisable
+ * that collects exactly this case (xhciRhVhubRefreshed) never ran, and the
+ * reset's end enabled port 1 again under a disable usbhub had asked for. The
+ * same holds after a root disable has retired the hub at 1, while the record
+ * still knows a port-1 reset of its own is out - whose end the redisable
+ * collects as nobody's. With no hub on the port and no such reset - a direct
+ * port's own root reset included, whose end nothing would redisable - the
+ * answer is today's.
+ *
  * IRQL: <= DISPATCH_LEVEL, controller lock held.
  */
-static ULONG xhciRhPortIsDisowned(PXHCI_EXTENSION ext, ULONG xhciPort,
-                                  ULONG wantsPp)
+static ULONG xhciRhPortIsDisowned(PXHCI_EXTENSION ext, ULONG hubPort,
+                                  ULONG xhciPort, ULONG wantsPp)
 {
+    PXHCI_VHUB hub;
     ULONG portsc;
 
     portsc = XhciReadPortsc(ext, xhciPort);
@@ -873,6 +887,12 @@ static ULONG xhciRhPortIsDisowned(PXHCI_EXTENSION ext, ULONG xhciPort,
     }
     if (wantsPp) {
         return ((portsc & XHCI_PORTSC_PP) == 0) ? 1UL : 0UL;
+    }
+    hub = xhciRhVhub(ext, hubPort);
+    if (hub != NULL && (portsc & XHCI_PORTSC_PR) != 0 &&
+        (hub->Present || hub->ResetOwner == XHCI_VHUB_OWNER_PORT1 ||
+         hub->ResetOwner == XHCI_VHUB_OWNER_SUPERSEDED || hub->LateEnd)) {
+        return 0;
     }
     return ((portsc & XHCI_PORTSC_PED) == 0) ? 1UL : 0UL;
 }
@@ -1108,7 +1128,8 @@ static MPSTATUS xhciRhPortOperationLocked(PXHCI_EXTENSION ext,
         XhciSlotPortDisowned(ext, (ULONG)port);
 
         disownWantsPp = (operation == XHCI_RH_OP_POWER_OFF) ? 1UL : 0UL;
-        if (xhciRhPortIsDisowned(ext, xhciPort, disownWantsPp)) {
+        if (xhciRhPortIsDisowned(ext, (ULONG)port, xhciPort,
+                                 disownWantsPp)) {
             /* Clearing a debt this port may already have been carrying, not
              * just recording that this one needs none. A power-off whose `PP`
              * never confirmed leaves the obligation set; a later disable that
@@ -1958,6 +1979,8 @@ static ULONG xhciRhVhubRefreshed(PXHCI_EXTENSION ext,
     ULONG verdict;
     ULONG strip;
     ULONG wasAbsent;
+    ULONG ended;
+    ULONG nobodys;
 
     slotReset = ((latched & XHCI_HUB_C_PORT_RESET) != 0) ? 1UL : 0UL;
     hub = xhciRhVhub(ext, hubPort);
@@ -1965,6 +1988,9 @@ static ULONG xhciRhVhubRefreshed(PXHCI_EXTENSION ext,
         return slotReset;
     }
     wasAbsent = !hub->Present;
+    /* This reading ended a reset that was port 1's or nobody's, which the
+     * root port must not report as its own whatever becomes of the hub. */
+    nobodys = 0;
     if (wasAbsent) {
         /*
          * A direct port holds nothing but its decision, and this reading's
@@ -1982,35 +2008,50 @@ static ULONG xhciRhVhubRefreshed(PXHCI_EXTENSION ext,
                              xhciRhVhubPhys(shadow), &strip);
     }
     if (slotReset && endedGeneration != 0) {
-        slotReset = ((xhciRhVhubResetEnded(ext, hubPort, shadow,
-                                           endedGeneration, 0) &
-                      XHCI_RH_VHUB_END_SLOT) != 0) ? 1UL : 0UL;
-    } else if (slotReset && hub->Present &&
+        ended = xhciRhVhubResetEnded(ext, hubPort, shadow, endedGeneration, 0);
+        slotReset = ((ended & XHCI_RH_VHUB_END_SLOT) != 0) ? 1UL : 0UL;
+        nobodys = ((ended & XHCI_RH_VHUB_END_PORT1) != 0) ? 1UL : 0UL;
+    } else if (slotReset && (hub->Present || hub->LateEnd) &&
                hub->ResetOwner == XHCI_VHUB_OWNER_NONE) {
         /*
-         * A PRC nothing armed, on a port carrying a hub: the late end of a
-         * port-1 reset whose deadline passed - reported to usbhub then, as
-         * port 1's, with the port disabled - or of one a root reset overtook
-         * and whose deadline then passed. Nobody's, as its deadline was:
-         * today's path would arm a device claim for a reset usbhub has
-         * already given up on, and spend a hub's open armed since.
+         * A PRC nothing armed, on a port carrying a hub or one whose hub
+         * retired after a port-1 reset's deadline (`LateEnd`): the late end
+         * of a port-1 reset whose deadline passed - reported to usbhub then,
+         * as port 1's, with the port disabled - or of one a root reset
+         * overtook, or whose hub retired, and whose deadline then passed.
+         * Nobody's, as its deadline was: today's path would arm a device
+         * claim for a reset usbhub has already given up on, spend a hub's
+         * open armed since on any port, and drop a real hub's pending claim.
          */
         slotReset = 0;
+        nobodys = 1;
+        hub->LateEnd = 0;
         XhciLogNoteLocked(ext, "vhub.prc.late", hubPort);
     }
-    if ((latched & XHCI_HUB_C_PORT_RESET) != 0 && hub->Present &&
-        shadow->DisownPending != 0 &&
-        (xhciRhVhubPhys(shadow) & XHCI_HUB_PORT_ENABLE) != 0) {
+    if ((latched & XHCI_HUB_C_PORT_RESET) != 0 &&
+        (xhciRhVhubPhys(shadow) & XHCI_HUB_PORT_ENABLE) != 0 &&
+        ((shadow->DisownPending != 0 && (hub->Present || nobodys)) ||
+         (nobodys && !hub->Present))) {
         /*
          * A reset ended and left the port enabled while a disable is still
          * owed on it: the PED write went into a port in reset, where PED is
          * already 0 and a '1' clears nothing (Table 5-27), and the debt
          * would wait for a clear that never comes on its own - with the
          * next port-1 reset held behind it (3.3). Written again now that
-         * it can land; the body's software half is idempotent.
+         * it can land; the body's software half is idempotent. On a port
+         * whose hub has retired it is written for a nobody's reset whether
+         * or not the debt survived: nothing on that port asked for it to be
+         * enabled, and a successful restore rebuilds the shadow without the
+         * debt (the per-tenancy rule in XhciRootHubBuild), which left the
+         * port enabled under usbport's own disable. And port 1's
+         * view is the disable's, not the reset's: a port-1 reset the disable
+         * landed inside has just ended and enabled it above, and arms no
+         * claim for a device usbhub has given up on (task 24.3.4).
          */
         (VOID)xhciRhPortOperationLocked(ext, (USHORT)hubPort,
                                         XHCI_RH_OP_DISABLE);
+        hub->P1Enabled = 0;
+        slotReset = 0;
         XhciLogNoteLocked(ext, "vhub.redisable", hubPort);
     }
     if ((latched & XHCI_HUB_C_PORT_SUSPEND) != 0 && hub->Present) {
@@ -2019,15 +2060,36 @@ static ULONG xhciRhVhubRefreshed(PXHCI_EXTENSION ext,
                       : XhciVhubRemoteWake(hub);
         (VOID)xhciRhVhubCarry(ext, hubPort, shadow, verdict, 0);
     }
-    if (wasAbsent && !hub->Present) {
-        return slotReset;
+    if (!wasAbsent || hub->Present) {
+        /* A hub that was there, or that the reset above stood up, takes the
+         * reading: its changes land in the view that owns each. A hub the
+         * reset stood up is not fed the connect change the absent port
+         * already spent above - it would retire the hub that change decided
+         * on. */
+        verdict = XhciVhubAbsorb(hub, ext->VhubConfig.Applied,
+                                 wasAbsent
+                                     ? (latched &
+                                        ~(ULONG)XHCI_HUB_C_PORT_CONNECTION)
+                                     : latched,
+                                 xhciRhVhubPhys(shadow), &strip);
+        shadow->Changes = (UCHAR)((ULONG)shadow->Changes & ~strip);
+        if ((verdict & XHCI_VHUB_DO_DROP) != 0) {
+            XhciLogNoteLocked(ext, "vhub.gone", hubPort);
+        }
+        (VOID)xhciRhVhubCarry(ext, hubPort, shadow, verdict, 0);
     }
-    /* A hub that was there, or that the reset above stood up, takes the
-     * reading: its changes land in the view that owns each. */
-    verdict = XhciVhubAbsorb(hub, ext->VhubConfig.Applied, latched,
-                             xhciRhVhubPhys(shadow), &strip);
-    shadow->Changes = (UCHAR)((ULONG)shadow->Changes & ~strip);
-    (VOID)xhciRhVhubCarry(ext, hubPort, shadow, verdict, 0);
+    if (nobodys && !hub->Present) {
+        /*
+         * A port-1 reset's end, or a nobody's one, on a port whose hub has
+         * gone - retired before this reading or by it, the device having
+         * left mid-reset (task 24.3.4). Not the root port's reset, and with
+         * no hub left to take the reading the root port would report it; nor
+         * a claim for a device that is not there.
+         */
+        shadow->Changes = (UCHAR)((ULONG)shadow->Changes &
+                                  ~(ULONG)XHCI_HUB_C_PORT_RESET);
+        slotReset = 0;
+    }
     return slotReset;
 }
 
@@ -2251,7 +2313,8 @@ static MPSTATUS xhciRhVhubRootOp(PXHCI_EXTENSION ext, USHORT port, ULONG which)
  * changed, and completes as it did.
  *
  * IRQL: DISPATCH_LEVEL. Caller holds the controller lock and owes
- * XhciRootHubDeferredWork after releasing it.
+ * XhciRootHubDeferredArms after releasing it: its caller is inside
+ * SubmitTransfer, where the announcement may not be made (src/xhci_hw.h).
  */
 MPSTATUS XhciRhVhubPort1Feature(PXHCI_EXTENSION ext,
                                 ULONG hubPort,
@@ -2319,7 +2382,7 @@ MPSTATUS XhciRhVhubPort1Feature(PXHCI_EXTENSION ext,
  * port, and answered from port 1's view (3.3).
  *
  * IRQL: DISPATCH_LEVEL. Caller holds the controller lock and owes
- * XhciRootHubDeferredWork after releasing it.
+ * XhciRootHubDeferredArms after releasing it, as above.
  */
 VOID XhciRhVhubPort1Status(PXHCI_EXTENSION ext,
                            ULONG hubPort,
@@ -2348,14 +2411,17 @@ VOID XhciRhVhubPort1Status(PXHCI_EXTENSION ext,
  * because they are one mechanism, and two branches, because the rules differ.
  *
  * usbport invokes this from its async timer DPC holding neither miniport lock
- * (docs/usb-xhci-info/usbport-miniport-abi.md section 6), so everything it reads or writes is
+ * (docs/usb-xhci-info/usbport-miniport-abi.md section 6) - on NT 6.x holding
+ * its own timer-list lock across the call instead (Windows 7 x64 FDO+0xFE0,
+ * static; task 24.3.4), which this callback's announcement then nests EpList
+ * inside - so everything it reads or writes is
  * under the controller lock and every decision is made from the copied
  * generation rather than from anything it could re-read. The timer cannot be
  * cancelled - every armed callback *will* fire - so arriving with nothing to do
  * is ordinary input rather than an error: the operation completed, a stop or a
  * suspend retired it, or the extension has been zeroed and restarted since.
  *
- * IRQL: DISPATCH_LEVEL, no usbport lock held.
+ * IRQL: DISPATCH_LEVEL, no miniport lock held (NT 6.x: usbport's timer lock).
  */
 static VOID NTAPI xhciRhPortTimeout(PVOID miniPortExtension, PVOID context)
 {
@@ -3066,16 +3132,11 @@ VOID XhciRhGateWatchdog(PXHCI_EXTENSION ext)
 }
 #endif
 
-/* See the contract in src/xhci_hw.h. IRQL: <= DISPATCH_LEVEL, controller lock
- * released. */
-VOID XhciRootHubDeferredWork(PXHCI_EXTENSION ext)
+/* The owed timer arms. IRQL: <= DISPATCH_LEVEL, controller lock released. */
+static VOID xhciRhDrainArms(PXHCI_EXTENSION ext)
 {
     XHCI_PORT_TIMEOUT armed;
     ULONG guard;
-
-    if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
-        return;
-    }
 
     /*
      * Bounded by the number of ports rather than by "until none are pending":
@@ -3092,7 +3153,28 @@ VOID XhciRootHubDeferredWork(PXHCI_EXTENSION ext)
             xhciRhDisarmPort(ext, armed.HubPort);
         }
     }
+}
 
+/* See the contract in src/xhci_hw.h. IRQL: <= DISPATCH_LEVEL, controller lock
+ * released. */
+VOID XhciRootHubDeferredArms(PXHCI_EXTENSION ext)
+{
+    if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
+        return;
+    }
+    xhciRhDrainArms(ext);
+    XhciSlotDeferredWork(ext);
+}
+
+/* See the contract in src/xhci_hw.h. IRQL: <= DISPATCH_LEVEL, controller lock
+ * released. */
+VOID XhciRootHubDeferredWork(PXHCI_EXTENSION ext)
+{
+    if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
+        return;
+    }
+
+    xhciRhDrainArms(ext);
     xhciRhAnnounce(ext);
 
     /*
@@ -3366,7 +3448,7 @@ VOID XhciRootHubPoll(PXHCI_EXTENSION ext)
 
                 disownPort = XhciRootHubPortOf(&ext->RootHub, hubPort);
                 if (disownPort != 0 &&
-                    xhciRhPortIsDisowned(ext, disownPort,
+                    xhciRhPortIsDisowned(ext, hubPort, disownPort,
                                          (ULONG)shadow->DisownWantsPp)) {
                     shadow->DisownPending = 0;
                     XhciSlotPortDisabled(ext, hubPort);
@@ -3678,7 +3760,8 @@ ULONG XhciRootHubInit(PXHCI_EXTENSION ext, ULONG afterRestore)
             } else {
                 verdict = XhciVhubReinit(
                     &ext->Vhub[hubPort - 1], ext->VhubConfig.Applied,
-                    (lost[(hubPort - 1) >> 3] >> ((hubPort - 1) & 7)) & 1U);
+                    (lost[(hubPort - 1) >> 3] >> ((hubPort - 1) & 7)) & 1U,
+                    afterRestore ? 1UL : 0UL);
             }
             if ((verdict & XHCI_VHUB_DO_ROOT_CHANGE) != 0) {
                 ext->RootHubInvalidatesOwed++;
@@ -3695,13 +3778,20 @@ ULONG XhciRootHubInit(PXHCI_EXTENSION ext, ULONG afterRestore)
     owed = 0;
     for (hubPort = 1; hubPort <= ext->RootHub.PortCount; hubPort++) {
         ULONG portLatched;
+        ULONG hubWasPresent;
 
+        /* Sampled first: the refresh's reading of an empty port retires the
+         * hub at 1 (task 24.3.4), which is this case, not a reason to skip
+         * it. */
+        hubWasPresent = (ext->VhubConfig.Applied != XHCI_VHUB_MODE_OFF &&
+                         hubPort <= XHCI_MAX_ROOT_PORTS &&
+                         ext->Vhub[hubPort - 1].Present) ? 1UL : 0UL;
         portLatched = xhciRhRefresh(ext, hubPort,
                                     &ext->RootHub.Ports[hubPort - 1]);
         if (ext->VhubConfig.Applied == XHCI_VHUB_MODE_ON_DEMAND &&
             hubPort <= XHCI_MAX_ROOT_PORTS &&
             ((lost[(hubPort - 1) >> 3] >> ((hubPort - 1) & 7)) & 1U) != 0 &&
-            ext->Vhub[hubPort - 1].Present &&
+            hubWasPresent &&
             (portLatched & XHCI_HUB_C_PORT_CONNECTION) == 0 &&
             (ext->RootHub.Ports[hubPort - 1].Portsc & XHCI_PORTSC_CCS) == 0) {
             /*
@@ -3709,8 +3799,8 @@ ULONG XhciRootHubInit(PXHCI_EXTENSION ext, ULONG afterRestore)
              * (design record 12 section 3.2's removal route): HCRST took the
              * CSC that would have said so, and an empty port raises no new
              * one, so the root port's connect change is latched here - the
-             * disconnect usbhub needs to remove the hub, whose drop then
-             * comes through usbport's disable of the port as on any unplug.
+             * disconnect usbhub needs to remove the hub, which the refresh
+             * above has already retired, its reading being of an empty port.
              * The device layer is told as the refresh would have told it.
              */
             XhciPortShadowLatchChange(&ext->RootHub.Ports[hubPort - 1],

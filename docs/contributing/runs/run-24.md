@@ -1505,3 +1505,170 @@ Then, from the earlier guests:
    hardware can reach it is not read.
 3. **The passthrough Low-Speed mouse's pointer reading** needs the device
    on WinUSB on this host.
+
+### The fix batch: findings A, B and C (2026-09-27, owner: "fix 1+2 now")
+
+Driver changes, all in the virtual hub's paths; with the switch at 0 the
+driver is unchanged (rule 2). Design record 12 section 11 carries the
+rules; the static facts are in `legal-provenance.md` section 4.
+
+- **A.** The virtual hub's `SubmitTransfer` branch runs
+  `XhciRootHubDeferredArms` instead of `XhciRootHubDeferredWork`: owed port
+  timers are armed at once and the announcement is left owed for the event
+  DPC, the health poll, a root-hub callback or a port timer. It was the
+  only route from an EpList-held callback to root-hub code. (The first
+  draft justified the arm by the Ex service's own lock; Codex's review
+  below showed the legacy service skips it.) A first cut that also deferred the arms failed 14 checks: a resume
+  through port 1 is ended by its timer, so deferring that arm stretched it
+  to the next health poll.
+- **B.** At 1, `XhciVhubAbsorb` retires the hub on a reading with no
+  connection or with a connect change, clearing it as usbport's disable
+  did and carrying `DROP` (bindings, held transfer); a port-1 reset in
+  flight stays recognised as nobody's, and its end is stripped from the
+  root port's shadow. usbport's root disable and power-off at 1 retire the
+  same way. The recovery seed samples `Present` before its
+  refresh, which now retires the hub itself.
+- **C.** A port-1 disable or power-off ends a held port-1 reset (port 1's
+  `C_PORT_RESET`); and on a port carrying a hub the disable confirmation
+  refuses PED 0 with PR 1, the redisable at the reset's end then leaving
+  port 1 disabled and arming no claim.
+
+Vectors: `test_vhub` 1279 -> 1381 (`testHeldResetEndsAtPort1Disable`,
+`testUnplugRetiresV1`, and the unplug and held-reset rows rewritten - the
+second had pinned finding C's first ordering as intended); `test_init`
+20,700 -> 20,906 (`test_vhub_submit_never_announces`,
+`test_vhub_on_demand_unplug_retires_the_hub` - address 1 reused by a
+High-Speed mouse on another port, then a replacement hub and the old
+hub's late transfer, abort and REMOVEs -
+`test_vhub_disable_inside_a_port1_reset`,
+`test_vhub_unplug_inside_a_port1_reset`, a model knob for a reset that
+clears PED as the specification says, and a never-reset net:
+`UsbPortInvalidateRootHub` never with `SubmitDepth` nonzero). Two older
+vectors were corrected where they described the removal route as
+usbport's disable. Nine mutations, one per rule, each fail at least one
+check (the retire on a connect change alone, and the retire keeping a
+running reset as nobody's, needed the last two vectors to be caught).
+Host tests and `build-driver.cmd all`, `qemu -amd64` and `release -amd64`
+passed with every gate.
+
+**Codex, round 1** (`--fresh`, `.claude/codex-2434-fix-r1.txt`, result
+beside it): A's announcement separation sound, with no other route from
+the five EpList callbacks to an EpList-taking service (`InvalidateEndpoint`
+is assertion-only on all four NT 6.x builds); B's ordinary lifetime and the
+replacement-hub isolation sound; C's two port-1 cases sound; switch 0
+unchanged. Four findings, all real:
+
+1. **MAJOR, older than 24.3 - open for the owner.** NT 6.x's legacy
+   `UsbPortRequestAsyncCallback` calls `RequestAsyncCallbackEx` with its
+   seventh argument 1, which skips the timer-list lock; the service assumes
+   its caller holds it, as usbport does only around its root-hub feature
+   callbacks and its timer DPC (which holds it across the miniport's
+   callback). Every arm this driver makes elsewhere - the command watchdog
+   from the submit pump, the DPC and the poll; the DPC's device-initiated
+   resume; the health poll's arms; now the virtual hub's submit, as before
+   the batch - races the DPC's unlink and free on another CPU. Re-read on
+   Windows 7 x64 with `kd` (static). Switching to the locking Ex branch
+   from `SubmitTransfer` would add EpList -> timer lock against the timer
+   DPC's timer lock -> EpList (a callback that announces), so the fix is a
+   design decision about where the driver may arm on NT 6.x, not a
+   one-line change. Not changed.
+2. **MAJOR, new.** A retired port-1 reset whose deadline passed before its
+   PRC: the late PRC became a root reset and a device claim, spending
+   another port's armed hub open. Fixed: `XHCI_VHUB.LateEnd` (a reserved
+   byte) marks a port-1 or nobody's reset that timed out, survives the
+   retirement, and makes the late PRC nobody's.
+3. **MINOR, new.** The unplug and the port-1 reset's end in one reading
+   leaked `C_PORT_RESET` to the root port and armed a claim. Fixed: the
+   strip and the claim suppression moved to the end of the refresh, after
+   the retirement.
+4. **MINOR, older.** A root disable inside a port-1 reset at 1 cleared the
+   record before the confirmation, so the PR rule did not apply. Fixed:
+   the root disable and power-off retire through `xhciVhubRetire`, and the
+   PR rule and the redisable also cover a record that still owns a reset
+   or a late end.
+
+Vectors added for all three fixes and for Codex's two coverage asks (the PR
+rule at 2 through the driver; a retirement inside a SET_PORT_FEATURE with a
+held status-change transfer): `test_init` 21,170. Sixteen mutations now,
+each failing at least one check.
+
+**Codex, round 2** (`--resume`, `.claude/codex-2434-fix-r2.txt`, result
+beside it): the three round-1 fixes sound, finding 1's corrected text right
+but for one word. Two more, both real:
+
+1. **MAJOR.** A recovery or a reinitialising resume while a retired hub's
+   port-1 reset was out left the absent record owning it:
+   `XhciVhubReinit` returned early for a record with no hub. The next
+   device's root reset was taken for the old one - no decision, its
+   `C_PORT_RESET` stripped. Fixed: the reinitialisation lets go of every
+   reset a hub-less record owns, and of `LateEnd` (which also closes the
+   older case of a direct port's root reset surviving a recovery).
+2. **MINOR.** The widened PR rule held a debt on a direct port whose own
+   root reset a root disable landed in, and nothing would redisable it.
+   Fixed: the rule covers a hub, a port-1 or nobody's reset, or a late end;
+   a direct port's own reset is today's.
+
+And two notes, taken: the legacy timer service does take one lock, the
+I/O-count lock at FDO+0x200, so "no lock at all" became "neither the
+timer-list lock nor EpList"; and the retirement-inside-a-request vector now
+counts both completions and checks each status. New vectors for both
+fixes and for a root power-off inside a port-1 reset followed by a new
+device: `test_init` 21,291. Nineteen mutations, each caught.
+
+**Codex, round 3** (`--resume`, `.claude/codex-2434-fix-r3.txt`, result
+beside it): round 2's fixes sound, and an independent pass over the whole
+diff found nothing further - except one defect inside round 2's own fix:
+
+1. **MAJOR.** A successful Controller Restore State keeps PORTSC, so a
+   retired hub's port-1 reset may already have ended, its PRC waiting for
+   the seed, or may end afterwards; clearing `LateEnd` at every
+   reinitialisation made that PRC a root reset and a claim. Fixed:
+   `XhciVhubReinit` takes `restored` (from `XhciRootHubInit`'s
+   `afterRestore`): after HCRST every reset and late end is forgotten; after
+   a restore a port-1 or nobody's reset becomes a late end.
+
+The vector for it exposed a **model seam**: the model's event producer went
+back to ERST[0] on the ERSTBA write the restore makes before CRS, where a
+conforming controller's CRS restores its saved internal enqueue - so every
+event after a restore was lost in the model, and a check that the restored
+controller ignored a PRC passed for the wrong reason. The model now saves
+the cursor at CSS and restores it at a successful CRS; every existing
+restore vector still passes. `test_init` 21,388; twenty-one mutations, each
+caught.
+
+**Codex, round 4** (`--resume`, `.claude/codex-2434-fix-r4.txt`, result
+beside it): round 3's fix and the model correction sound - the
+specification's event-ring note says CRS overwrites ERSTBA's initialisation
+with the saved enqueue state - and the independent pass found nothing else.
+One MINOR interaction with the older per-tenancy rule, which clears every
+disown debt when a restore rebuilds the shadows (`XhciRootHubBuild`): a root
+disable inside a port-1 reset, then a restore, and the reset's end left the
+hub-less port enabled under usbport's disable. Fixed narrowly: on a port
+whose hub has retired, a nobody's reset that ends with the port enabled is
+disabled again whether or not the debt survived. Vector
+`test_vhub_restore_between_disable_and_reset_end` (the PRC after the seed,
+and pending at it); `test_init` 21,480; twenty-two mutations.
+
+**Left for the owner, with the timer-lock finding above:** the same
+per-tenancy clear also drops a port-1 disable's debt across a restore on a
+port whose hub stays; the reset's late end then leaves the physical port
+enabled while port 1 reads disabled, and the record behind it keeps its
+slot until the port's next reset or connect change. It is the older rule
+working as written for every port at every value, and reconciling it would
+mean carrying a debt into the next tenancy, which that rule exists to
+prevent. Codex also suggested a model vector for an event-ring wrap with a
+saved PCS of 0 across a restore; not written.
+
+**Codex, round 5** (`--resume`, `.claude/codex-2434-fix-r5.txt`, result
+beside it): **clean** - no MAJOR or MINOR finding; the hub-less redisable
+cannot reach a port a replacement device's accepted reset enabled (that end
+is the root's own), a swapped device's reset is refused busy while the old
+one is armed, and switch 2 and direct ports are untouched. Its one note, a
+negative vector for exactly that replacement case, was taken
+(`test_vhub_replacement_after_a_late_end_keeps_its_port`): `test_init`
+21,523. The review loop over the fix batch converged at round 5, with the
+two items above left for the owner.
+
+Not yet read in a guest: the Vista and 7 readings are owed again on this
+build, with the spot re-checks on 98 SE and 2000 (the handoff's list), and
+finding D still stands in QEMU.

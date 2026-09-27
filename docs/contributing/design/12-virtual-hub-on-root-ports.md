@@ -364,7 +364,8 @@ one was - the driver latches
 `C_PORT_CONNECTION` on the root port so usbhub tears down what it believes
 is there and enumerates the port again, drops the virtual record if there
 was one, and the next reset decides afresh. A disconnect forgets the
-decision, so the next device on the port decides with no forced change. A
+decision, so the next device on the port decides with no forced change -
+and takes the hub with it (section 11). A
 reinitialisation - a recovery in place, or a resume that had to
 reinitialise - that finds the port empty behind a hub latches the root
 port's connect change itself, since HCRST took the disconnect's CSC and an
@@ -374,12 +375,15 @@ empty port raises none: the removal route below then runs as on any unplug
 `RH_ClearFeaturePortEnable` and `RH_ClearFeaturePortPower` on a port in
 virtual-hub mode mean what they mean today: usbport has let go of the port.
 The driver drops the virtual record and, through the existing disown path
-(`XhciSlotPortDisowned` and the confirmed half), the device's slot. This is
-the ordinary removal route in this shape, because an unplug is a root-port
-disconnect: the Port Status Change Event path and the start/resume seed
-keep every latch rule in `docs/contributing/implementation-invariants.md`,
-"Root Hub Reporting", and announce through `UsbPortInvalidateRootHub` as
-they do now.
+(`XhciSlotPortDisowned` and the confirmed half), the device's slot.
+**That is not the removal route, as this record first said** (section 11):
+an NT 6.x usbhub removes a disconnected device without disabling the port,
+so the hub is retired by the reading that sees its device gone - no
+connection, or a connect change - and the root port reports that reading as
+today. The Port Status Change Event path and the start/resume seed keep
+every latch rule in `docs/contributing/implementation-invariants.md`, "Root
+Hub Reporting", and announce through `UsbPortInvalidateRootHub` as they do
+now, except from inside `SubmitTransfer` (section 11).
 
 ### 3.3 The virtual hub as a device
 
@@ -404,11 +408,11 @@ table is the whole device:
 | `GET_STATUS(Interface)`, `GET_STATUS(Endpoint)` | two bytes, `0x0000` (an endpoint is never halted, since it has no hardware behind it). Truncated to `wLength` |
 | `GET_HUB_STATUS` | zero |
 | `GET_PORT_STATUS(1)` | the virtual port's own state (3.8), which follows the real port's shadow except where the virtual hub itself was reset or disabled, or port 1's power bit is clear: the connect and over-current bits as today, the enable and reset bits from port 1's own view (a root-port reset never shows on port 1), the power bit from port 1's own, the suspend bit from port 1's view (3.5), and the Low-Speed or High-Speed bit from the decoded speed, neither for Full Speed. The enable bit reads set only while the hub is configured and port 1 has been enabled by its own completed reset. At 1, `C_PORT_CONNECTION` is latched when the hub is created, since the device was already there; at 2 it is latched at creation only if a device is there, and afterwards on every physical connect change (3.8). At both, a root-port reset that re-arms the hub latches it again for a device that is there, as a real hub's reset power-cycles its ports; port 1 latches `C_PORT_RESET` at the end of its own reset, `C_PORT_ENABLE` on a PEC the hardware raises while it reads enabled, and `C_PORT_OVER_CURRENT` on every over-current change |
-| `SET_PORT_FEATURE(1, PORT_RESET)` | a second physical reset through the existing path: PORTSC.PR, the asynchronous timeout, a reset generation, `C_PORT_RESET` on completion, reported through 3.4. Its PR and its end reach port 1's view only: the root port neither shows the reset nor latches its completion (3.2), the end is routed by the view and generation it was started under, and a deadline that passes latches `C_PORT_RESET` as a root-port reset's does today, with port 1 left disabled. It is physical, not synthesised, so usbhub's enumeration retries reach the device the way they would behind a real hub. **It is held while a disable of the physical port is owed** (`DisownPending` set, from any of this table's disables or 3.8's): the request completes, and the PR write waits until the health poll has collected the PED confirmation and the confirmed half has run, so PR never overlaps an unfinished PED write and the poll never reads the reset's own PED clear as that confirmation. If the confirmation never comes the reset stays held, because the disown wait it is gated on is unbounded on purpose (`XhciRootHubPoll`): port 1 reports neither a reset nor its end, usbhub's own enumeration timeout is what gives up, and the hold is cleared by a root-port disable or power-off, a reinitialisation or a recovery (24.3.3; the owner decided on 2026-09-27 against a deadline of its own, since usbhub already gives up and new timing in the reset path is where the audit's review loop found its defects - revisited only if a 24.3.4 reading shows a hold that never clears). The existing holdback covers Port Power only, so this gate is new, at 1 and 2 alike. **Asked for while a reset already runs on the physical port** - the root's at 1, or an earlier port-1 reset - it is the request's stall: the running reset keeps its owner and ends as its own, as a root port's second reset is refused as busy today (24.3.3's audit) |
+| `SET_PORT_FEATURE(1, PORT_RESET)` | a second physical reset through the existing path: PORTSC.PR, the asynchronous timeout, a reset generation, `C_PORT_RESET` on completion, reported through 3.4. Its PR and its end reach port 1's view only: the root port neither shows the reset nor latches its completion (3.2), the end is routed by the view and generation it was started under, and a deadline that passes latches `C_PORT_RESET` as a root-port reset's does today, with port 1 left disabled. It is physical, not synthesised, so usbhub's enumeration retries reach the device the way they would behind a real hub. **It is held while a disable of the physical port is owed** (`DisownPending` set, from any of this table's disables or 3.8's): the request completes, and the PR write waits until the health poll has collected the PED confirmation and the confirmed half has run, so PR never overlaps an unfinished PED write and the poll never reads the reset's own PED clear as that confirmation. If the confirmation never comes the reset stays held, because the disown wait it is gated on is unbounded on purpose (`XhciRootHubPoll`): port 1 reports neither a reset nor its end, usbhub's own enumeration timeout is what gives up, and the hold is cleared by a root-port disable or power-off, a reinitialisation or a recovery (24.3.3; the owner decided on 2026-09-27 against a deadline of its own, since usbhub already gives up and new timing in the reset path is where the audit's review loop found its defects - revisited only if a 24.3.4 reading shows a hold that never clears). The existing holdback covers Port Power only, so this gate is new, at 1 and 2 alike. A port-1 disable or power-off that arrives while a reset is held ends it, reported with port 1's `C_PORT_RESET`, rather than leaving the confirmation to start a reset usbhub has abandoned (section 11). **Asked for while a reset already runs on the physical port** - the root's at 1, or an earlier port-1 reset - it is the request's stall: the running reset keeps its owner and ends as its own, as a root port's second reset is refused as busy today (24.3.3's audit) |
 | `SET_PORT_FEATURE(1, PORT_POWER)` | sets port 1's power bit, which is the virtual port's own and not PORTSC.PP (the next rows). If it was clear and a device is physically connected, `C_PORT_CONNECTION` is latched, so usbhub resets and enumerates it again |
 | `SET_PORT_FEATURE(1, PORT_SUSPEND)`, `CLEAR_PORT_FEATURE(1, PORT_SUSPEND)` | through 3.5's merge with the root port's own suspend state, then the existing `RH_SetFeature...` and resume bodies for the underlying port. A suspend or resume those bodies refuse (a Port Power change in flight, an operation already armed, no timer service) is the request's stall, with port 1's view put back as it was: usbhub gets the failure the root port's own callback returns for the same refusal, where a request completed with success would have left it waiting on a `C_PORT_SUSPEND` nothing would send. Whether it asks again is the hub driver's own - Vista's `UsbhResumeSuspendedPort` reports the failure and signals its resume event, with no retry of its own (static, 24.3.3's audit) - and a request that follows is served as any other |
 | `CLEAR_PORT_FEATURE(1, C_PORT_*)` | clear the virtual port's change bit, as `RH_ClearFeaturePortXChange` does for a root port |
-| `CLEAR_PORT_FEATURE(1, PORT_ENABLE)` | the existing disable body on the physical port - the PED write, `XhciSlotPortDisowned` at once and the confirmed half (`XhciSlotPortDisabled`) once the port is observed down - which leaves the virtual hub in place with port 1 disabled until usbhub resets it again or the root port goes. The root port, the hub's upstream, stays enabled: at 1 its enable group is the upstream view's (3.2), at 2 the whole report is |
+| `CLEAR_PORT_FEATURE(1, PORT_ENABLE)` | the existing disable body on the physical port - the PED write, `XhciSlotPortDisowned` at once and the confirmed half (`XhciSlotPortDisabled`) once the port is observed down - which leaves the virtual hub in place with port 1 disabled until usbhub resets it again or the root port goes. Landing inside a port-1 reset, the PED write clears nothing: the confirmation waits for PR to clear, and the reset's end has the disable written again (section 11). The root port, the hub's upstream, stays enabled: at 1 its enable group is the upstream view's (3.2), at 2 the whole report is |
 | `CLEAR_PORT_FEATURE(1, PORT_POWER)` | clears port 1's power bit and runs the same disable body, **not** the power-off body: PORTSC.PP stays set, because at 1 the root port reports that same PP and clearing it would take the virtual hub down with its port, and at 2 the virtual upstream is powered. While the bit is clear, port 1 reports no power, no connection and not enabled, whatever PORTSC says. The device keeps VBus, so a device that needs a real power cycle to recover does not get one here; it gets one from a root-port power-off (3.8) |
 | `CLEAR_TT_BUFFER`, `RESET_TT`, `GET_TT_STATE`, `STOP_TT` | success. The xHC has no translator on a root port to clear |
 | anything else | a stall, counted |
@@ -1055,6 +1059,87 @@ the build, each with the reason it went the way it did.
   as they happen; the extension counts hubs stood up and dropped, opens,
   requests, stalls, failed transfers, pipe completions and cancels, held
   resets, flipped decisions, and TT pairs that named a virtual hub.
+
+## 11. What 24.3.4's readings changed
+
+The guest readings of 2026-09-27 (`docs/contributing/runs/run-24.md`,
+"24.3.4") found two defects that only NT 6.x shows, both of which would hit
+metal, and Codex's two rounds over them found two orderings the vectors had
+not reached. Fixed together; the host vectors and their mutations are in
+run-24.md.
+
+- **No root-hub announcement from inside `SubmitTransfer`.** A request to
+  a virtual hub reached `XhciRootHubDeferredWork`, which ends in
+  `UsbPortInvalidateRootHub`. usbport holds its EpList lock across
+  `SubmitTransfer` (and `AbortTransfer`, `PollEndpoint`,
+  `SetEndpointState`), and on NT 6.x that service takes the same lock
+  (Vista x64 `USBPORTSVC_InvalidateRootHub` -> `USBPORT_Ev_Rh_IntrEp_Invalidate`
+  -> `USBPORT_ReferenceEndpoint` -> `USBPORT_AcquireEpListLock`, FDO+0x1160;
+  Windows 7 x64 FDO+0xF88; static), so Windows 7 x64 at 2 and Vista x64 at
+  1 hung (runtime: the stacks in run-24.md). The virtual-hub submit now
+  runs `XhciRootHubDeferredArms`: the timers a reset or resume armed are
+  armed at once, since a resume through port 1 is ended by its timer, and
+  a latched change is left in `RootHubInvalidatesOwed` for the event DPC,
+  the health poll, a root-hub callback or a port timer. The endpoint
+  callbacks reach no other root-hub code. The arm takes no EpList, but it
+  is **not synchronised either**: NT 6.x's legacy timer service skips its
+  own lock and assumes the caller holds usbport's timer-list lock, which
+  only its root-hub feature callbacks and timer DPC do (static), so this
+  arm - like every arm the driver makes from the command pump, the event
+  DPC and the health poll - races the timer DPC on another CPU. That is
+  older than this task, and open for the owner (run-24.md). The ReactOS-derived note
+  that the service is safe under `MiniportSpinLock`
+  (`docs/usb-xhci-info/usbport-miniport-abi.md`) holds for NT 5.x only.
+- **At 1 the hub retires with its device.** Section 3.2 had the hub
+  dropped by usbport's disable of the root port, which 98, ME, 2000 and XP
+  always sent. Vista's and Windows 7's usbhub do not
+  (`usbhub!UsbhPortDisconnect`, Windows 7 x86 0x29967, Vista x64 0x2A5D8,
+  static), so the hub stayed Present at its address after usbport freed
+  it, and the next device given that address on another port opened as
+  the hub - Windows installed "Generic USB Hub" for a High-Speed mouse
+  (runtime, Windows 7 x86 and x64 at 1). The refresh now retires the hub
+  on any reading that says its device is gone - no connection, or a
+  connect change with the port still connected (a swap between two
+  readings) - without waiting for the change bit, which an earlier reading
+  may have taken. The record is cleared as the disable cleared it, the
+  bindings and held transfer go through the existing `DROP` carry, and the
+  root port reports the reading as today. A port-1 reset still running is
+  kept recognised as nobody's, so its end latches nothing on the root port
+  and arms no claim - and so is one whose deadline passed, through
+  `LateEnd`, since its PRC may still come after the hub has gone. usbport's
+  own root disable and power-off at 1 retire the hub the same way, because a
+  disable does not end a reset in flight. A connect change the absent port already spent is not
+  fed again to a hub the same reading's reset stood up. A late REMOVE, abort
+  or transfer through the old hub's handles touches nothing of a
+  replacement hub on the port, since a binding is matched by extension. At
+  2 nothing changes: the hub stays and the unplug is port 1's (3.8).
+- **A held port-1 reset ends at a port-1 disable.** `CLEAR_PORT_FEATURE(1,
+  PORT_ENABLE or PORT_POWER)` left `ResetHeld`, so the confirmation started
+  a reset usbhub had abandoned. It now ends there with port 1's
+  `C_PORT_RESET`, as a preempted root-port reset is reported.
+- **PED = 0 with PR = 1 is not a disable confirmed.** On a port carrying a
+  virtual hub, a disable written inside a real reset cleared nothing - PED
+  clears when PR is set (Table 5-27, p.372) - and the confirmation took the
+  reset's own PED clear as the disable, clearing the debt before the
+  reset's end enabled the port again. The confirmation now waits for PR to
+  clear there, so the existing redisable runs at the reset's end; that
+  redisable also leaves port 1's view disabled and arms no claim for the
+  device. The rule also covers a record whose hub has retired while its
+  port-1 reset is out, and the redisable collects that reset's end as
+  nobody's; a direct port's own root reset is today's, since nothing would
+  collect it.
+- **A reinitialisation lets go of every reset a record owns**, a hub-less
+  record's included: the rebuilt shadow no longer times it, and left owned
+  it would take the next reset on the port for its own. After HCRST no PRC
+  can follow and the late end goes too; after a successful restore PORTSC
+  survived, so a port-1 or nobody's reset becomes a late end instead, its
+  PRC - pending for the seed or still to come - nobody's.
+
+Not changed, and recorded in run-24.md for the owner: QEMU's `qemu-xhci`
+ignores a PED write, so on Vista and Windows 7 every port-1 reset after
+usbhub's first port-1 disable is held for ever by 3.3's gate, which is the
+no-deadline rule working as decided; Full- and Low-Speed devices behind a
+virtual hub on NT 6.x cannot be read in QEMU without a patched emulator.
 
 ## Sources
 

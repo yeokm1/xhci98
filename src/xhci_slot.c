@@ -7953,7 +7953,8 @@ static ULONG xhciVhubOpen(PXHCI_EXTENSION ext,
  * one is held, are refused for retry: both end.
  *
  * Called with the lock held; the caller releases it and owes
- * XhciRootHubDeferredWork. IRQL: DISPATCH_LEVEL.
+ * XhciRootHubDeferredArms - never the announcement, from inside
+ * SubmitTransfer. IRQL: DISPATCH_LEVEL.
  */
 static MPSTATUS xhciVhubSubmit(PXHCI_EXTENSION ext,
                                PXHCI_ENDPOINT endpoint,
@@ -8131,15 +8132,24 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
 
     /*
      * Task 24.3: a virtual hub's endpoint has no device record behind it, and
-     * every answer comes from the request table rather than a ring. Its port
-     * requests reach the root hub, so the deferred work owed is the root
-     * hub's, which drains the device layer's as well.
+     * every answer comes from the request table rather than a ring.
+     *
+     * Its port requests owe the root hub's deferred work, **all of it but the
+     * announcement** (task 24.3.4's Vista and Windows 7 hangs). usbport holds
+     * its EpList lock across SubmitTransfer, and on NT 6.x
+     * `USBPORTSVC_InvalidateRootHub` takes that same lock (Vista x64
+     * `USBPORT_Ev_Rh_IntrEp_Invalidate` -> `USBPORT_ReferenceEndpoint` ->
+     * `USBPORT_AcquireEpListLock`, static), so announcing from here
+     * self-deadlocks on usbport's lock, however this driver's own is held. A
+     * change a request latched waits in `RootHubInvalidatesOwed` for the next
+     * context that may announce; the timer a reset or resume armed is armed
+     * now (src/xhci_hw.h, XhciRootHubDeferredArms).
      */
     if ((endpoint->Flags & XHCI_ENDPOINT_FLAG_VHUB) != 0) {
         status = xhciVhubSubmit(ext, endpoint, parameters, transfer, sgList,
                                 isoParams);
         XhciControllerLockRelease(oldIrql);
-        XhciRootHubDeferredWork(ext);
+        XhciRootHubDeferredArms(ext);
         return status;
     }
 

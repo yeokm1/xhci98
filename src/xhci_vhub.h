@@ -368,7 +368,9 @@ typedef struct _XHCI_VHUB {
     UCHAR P1Suspend;
     UCHAR P1ResumeOwed;
     UCHAR P1Changes;
-    UCHAR Reserved[5];
+    UCHAR LateEnd;          /* a port-1 reset's deadline passed: its PRC,
+                             * if one comes, is nobody's (task 24.3.4)    */
+    UCHAR Reserved[4];
 } XHCI_VHUB, *PXHCI_VHUB;
 
 /*
@@ -409,7 +411,10 @@ ULONG XhciVhubRootReset(PXHCI_VHUB hub,
  * decoded Full or Low `speed` is HUB, anything else or a timeout is DIRECT -
  * and a decision that changes one already taken asks FORCE_CONNECT and drops
  * the hub. A port-1 reset latches port 1's C_PORT_RESET, the timeout included,
- * as the root port's does today.
+ * as the root port's does today. A port-1 reset whose deadline passes, or one
+ * owned by nobody, leaves `LateEnd` set until the next reset on the port or a
+ * reinitialisation: its PRC may still come, and is nobody's even after the
+ * hub has gone.
  */
 ULONG XhciVhubResetDone(PXHCI_VHUB hub,
                         ULONG applied,
@@ -431,7 +436,11 @@ ULONG XhciVhubDisownCollected(PXHCI_VHUB hub,
  * given the physical status after it (XhciPortShadowReport's). Routes each to
  * the view that owns it and returns in `*strip` the bits the caller removes
  * from the shadow's `Changes`, since the root report no longer reads them
- * there. Call it after XhciVhubResetDone for the same refresh.
+ * there. Call it after XhciVhubResetDone for the same refresh, and do not
+ * feed it again a connect change a caller already spent on a hub that reset
+ * stood up. At 1 a reading with no device, or with a connect change, retires
+ * the hub (DROP) and strips nothing: usbhub removes the hub it believes is
+ * there, on NT 6.x without disabling the port (task 24.3.4).
  */
 ULONG XhciVhubAbsorb(PXHCI_VHUB hub,
                      ULONG applied,
@@ -478,7 +487,8 @@ ULONG XhciVhubRootSuspend(PXHCI_VHUB hub,
 /*
  * SET_PORT_FEATURE (`set` 1) or CLEAR_PORT_FEATURE (`set` 0) on port 1, the
  * selector already checked by XhciVhubRequest. `generation` is what a reset
- * started here is owned under.
+ * started here is owned under. A port-1 disable or power-off ends a port-1
+ * reset the owed disable was holding, with port 1's C_PORT_RESET.
  */
 ULONG XhciVhubPort1Feature(PXHCI_VHUB hub,
                            ULONG set,
@@ -510,10 +520,16 @@ VOID XhciVhubEp0Closed(PXHCI_VHUB hub);
 VOID XhciVhubSetAddress(PXHCI_VHUB hub, ULONG address);
 VOID XhciVhubSetConfig(PXHCI_VHUB hub, ULONG value);
 
-/* A resume that reinitialised the controller, or a recovery in place, at 2:
+/* The root hub rebuilt without a start - a resume, restored (`restored`) or
+ * reinitialised, or a recovery in place. Every reset the record owns ends, a
+ * hub-less record's too; after a restore a port-1 or nobody's reset leaves
+ * `LateEnd`, since the registers survived and its PRC may still come. At 2
  * the hub is kept and a device the reinitialisation took (`deviceLost`) is a
  * connect change on port 1 (3.8). */
-ULONG XhciVhubReinit(PXHCI_VHUB hub, ULONG applied, ULONG deviceLost);
+ULONG XhciVhubReinit(PXHCI_VHUB hub,
+                     ULONG applied,
+                     ULONG deviceLost,
+                     ULONG restored);
 
 /* The status-change pipe's byte (3.4): 0x02 while port 1 has a change and the
  * hub is configured, else 0, which means "keep the transfer pending". */
