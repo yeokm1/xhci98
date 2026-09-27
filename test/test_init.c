@@ -1863,6 +1863,13 @@ VOID XhciHostWriteRegister(PULONG address, ULONG value)
     if (offset == HC_IR0(XHCI_IR_ERSTBA)) {
         mmio[offset / 4] = (value & ~XHCI_ERSTBA_RSVDP_MASK) |
                            HC_ERSTBA_RSVDP_SEED;
+        /* "When the ERST Base Address (ERSTBA) register is initially written
+         * ... The xHC initializes its internal PCS flag to '1'" and its
+         * Enqueue Pointer to ERST[0]'s base (4.9.4, p.167). A start's cursor
+         * is already there; a recovery's re-initialisation is where it was
+         * not, and the model went on producing where the old ring stopped. */
+        hwEnqueue = 0;
+        hwCycle = 1;
         return;
     }
 
@@ -31990,6 +31997,234 @@ static void test_vhub_tt_pair_naming_a_virtual_hub_agrees(void)
     vhub_reset_registry();
 }
 
+/*
+ * Value 2's device behind port 1, enumerated and addressed at 8 on root port
+ * `hubPort`, with the status-change transfer held and nothing left for it to
+ * carry. The shared start of the two vectors below.
+ */
+static void vhub_always_device_behind(ULONG hubPort, ULONG hubAddress)
+{
+    ULONG xport;
+
+    xport = vhub_xport(hubPort);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext,
+                                                         (USHORT)hubPort);
+    vhub_plug(hubPort, 1);                          /* Full Speed */
+    vhub_enumerate_hub(hubPort, hubAddress);
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 20, 1, 0);
+    CHECK_EQ(slot_open(0, UsbFullSpeed, 64), MP_STATUS_SUCCESS,
+             "(the device behind port 1 opens)");
+    deliver_events();
+    deliver_events();
+    slot_setup(0x00, 0x05, 8, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    deliver_events();
+    CHECK_EQ(ext.Devices[0].DeviceAddress, 8, "(addressed at 8)");
+    CHECK_EQ(ext.Devices[0].HubPort, hubPort, "(on today's root-port record)");
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe)");
+    deliver_after_submit();
+    CHECK(ext.VhubBind[hubPort - 1].Held == &vhubPipeTransfer,
+          "(held, with nothing to carry)");
+}
+
+/*
+ * **Hub-path removal at 2** (design record 12 section 3.8): an unplug behind
+ * a hub that stays is port 1's change and never the root port's. The
+ * device's record is released by the connect-change path as on any unplug,
+ * the held status-change transfer carries the change to usbhub, which
+ * removes the device through the hub; the hub keeps its address, bindings
+ * and configuration, and the next device on the port enumerates behind it
+ * in a record of its own, taking the released address again.
+ */
+static void test_vhub_always_unplug_is_port1s_change(void)
+{
+    ULONG status;
+    ULONG change;
+    ULONG pipeCompletions;
+    ULONG dropped;
+    ULONG created;
+    ULONG i;
+
+    vhub_start(2);
+    hwCmdSlotId = 6;
+    vhub_always_device_behind(3, 3);
+
+    pipeCompletions = ext.VhubPipeCompletions;
+    dropped = ext.VhubDropped;
+    created = ext.VhubCreated;
+    vhub_unplug(3);
+    deliver_after_submit();
+    CHECK_EQ(ext.VhubPipeCompletions, pipeCompletions + 1,
+             "the unplug completes the held status-change transfer");
+    CHECK(lastCompletedEndpoint == &vhubPipe, "on the pipe");
+    CHECK_EQ(vhubPipeData[0], 0x02, "with port 1's bit");
+    CHECK_EQ(ext.Vhub[2].P1Changes & XHCI_HUB_C_PORT_CONNECTION,
+             XHCI_HUB_C_PORT_CONNECTION, "a connect change on port 1");
+    CHECK_EQ(ext.Vhub[2].P1Enabled, 0, "and port 1 no longer enabled");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, 0,
+             "the root port latched nothing: the hub was not unplugged");
+    CHECK_EQ(status & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE |
+                       XHCI_HUB_PORT_HIGH_SPEED),
+             XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE |
+                 XHCI_HUB_PORT_HIGH_SPEED,
+             "and still reports its hub connected, enabled, High Speed");
+    CHECK(ext.Devices[0].State == XHCI_DEV_STATE_GONE ||
+              ext.Devices[0].State == XHCI_DEV_STATE_FREE,
+          "the connect-change path tore the device's record down");
+    for (i = 0; i < 8 && ext.Devices[0].State != XHCI_DEV_STATE_FREE; i++) {
+        deliver_events();
+    }
+    CHECK_EQ(ext.Devices[0].State, XHCI_DEV_STATE_FREE,
+             "and released it once its slot was disabled");
+
+    (void)vhub_control(&vhubEp0, 0xA3, 0x00, 0, 1, 4);
+    CHECK_EQ(vhubData[0] & XHCI_HUB_PORT_CONNECTION, 0,
+             "GET_PORT_STATUS(1): nothing connected");
+    CHECK_EQ(vhubData[2] & XHCI_HUB_C_PORT_CONNECTION,
+             XHCI_HUB_C_PORT_CONNECTION, "with the connect change");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    CHECK_EQ(ext.Vhub[2].Present, 1, "the hub stays");
+    CHECK_EQ(ext.Vhub[2].Address, 3, "at its address");
+    CHECK_EQ(ext.Vhub[2].DevState, XHCI_VHUB_DEV_CONFIGURED, "configured");
+    CHECK(ext.VhubBind[2].Ep0 == &vhubEp0 && ext.VhubBind[2].Pipe == &vhubPipe,
+          "with both bindings");
+    CHECK_EQ(ext.VhubDropped, dropped, "none dropped");
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "the pipe re-armed");
+    deliver_after_submit();
+    CHECK(ext.VhubBind[2].Held == &vhubPipeTransfer, "and held again");
+
+    /* The next device on the port. */
+    hwCmdSlotId = 7;
+    pipeCompletions = ext.VhubPipeCompletions;
+    vhub_plug(3, 1);
+    deliver_after_submit();
+    CHECK_EQ(ext.VhubPipeCompletions, pipeCompletions + 1,
+             "a replug is port 1's change too");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, 0,
+             "and not the root port's");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(3) << 24, 0);
+    deliver_events();
+    CHECK_EQ(slot_open(0, UsbFullSpeed, 64), MP_STATUS_SUCCESS,
+             "the next device's address-0 open");
+    CHECK_EQ(slotEndpoint.Flags, XHCI_ENDPOINT_FLAG_OPEN, "is a device's");
+    CHECK_EQ(ext.Devices[slotEndpoint.DeviceIndex - 1].HubPort, 3,
+             "on the port's root-port record");
+    deliver_events();
+    deliver_events();
+    CHECK_EQ(ext.Devices[slotEndpoint.DeviceIndex - 1].SlotId, 7,
+             "in a slot of its own");
+    slot_setup(0x00, 0x05, 8, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    deliver_events();
+    CHECK_EQ(ext.Devices[slotEndpoint.DeviceIndex - 1].DeviceAddress, 8,
+             "the released address is taken again");
+    CHECK_EQ(ext.VhubCreated, created, "and no hub was stood up for it");
+    vhub_reset_registry();
+}
+
+/*
+ * **A recovery at 2 with a hub configured** (design record 12 section 3.8,
+ * "resume and recovery keep the hubs"; section 10's `lost[]`): the
+ * reinitialisation took the slot of the device behind port 1, and HCRST left
+ * the port with no CSC to say so. The hub is kept - address, bindings,
+ * configuration - the root port latches nothing, and the device's loss is a
+ * connect change on port 1, carried by completing the status-change transfer
+ * the hub held across the recovery. A hub with nothing behind it gains no
+ * change. The device then enumerates again behind the kept hub.
+ */
+static void test_vhub_always_recovery_keeps_the_hub(void)
+{
+    ULONG status;
+    ULONG change;
+    ULONG pipeCompletions;
+    ULONG dropped;
+    ULONG created;
+
+    vhub_start(2);
+    hwCmdSlotId = 6;
+    vhub_always_device_behind(3, 3);
+    CHECK_EQ(ext.Vhub[1].P1Changes & XHCI_HUB_C_PORT_CONNECTION, 0,
+             "(port 2's hub has nothing behind it)");
+
+    pipeCompletions = ext.VhubPipeCompletions;
+    dropped = ext.VhubDropped;
+    created = ext.VhubCreated;
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_HCE;
+    XhciRegPacket.CheckController(&ext);
+    asyncCallback = NULL;
+    asyncRequests = 0;
+    XhciRegPacket.ResetController(&ext);
+    XhciRegPacket.CheckController(&ext);
+    fire_async_timer();
+    CHECK_EQ(ext.RecoveryCompletions, 1, "(the recovery completed)");
+    CHECK_EQ(mmio[HC_PORTSC(vhub_xport(3)) / 4] &
+                 (XHCI_PORTSC_CCS | XHCI_PORTSC_CSC),
+             0, "(HCRST left the port with no connect change to find)");
+    deliver_after_submit();
+
+    CHECK_EQ(ext.VhubPipeCompletions, pipeCompletions + 1,
+             "the held status-change transfer is completed for the device "
+             "the recovery took");
+    CHECK(lastCompletedEndpoint == &vhubPipe, "on the pipe");
+    CHECK_EQ(vhubPipeData[0], 0x02, "with port 1's bit");
+    CHECK(ext.VhubBind[2].Held == NULL, "and is no longer held");
+    CHECK_EQ(ext.Vhub[2].P1Changes & XHCI_HUB_C_PORT_CONNECTION,
+             XHCI_HUB_C_PORT_CONNECTION, "a connect change on port 1");
+    CHECK_EQ(ext.Vhub[2].P1Enabled, 0, "with port 1 disabled");
+    CHECK_EQ(ext.Vhub[1].P1Changes & XHCI_HUB_C_PORT_CONNECTION, 0,
+             "port 2's empty hub gains none");
+    CHECK_EQ(ext.Vhub[2].Present, 1, "the hub is kept");
+    CHECK_EQ(ext.Vhub[2].Address, 3, "at its address");
+    CHECK_EQ(ext.Vhub[2].DevState, XHCI_VHUB_DEV_CONFIGURED, "configured");
+    CHECK(ext.VhubBind[2].Ep0 == &vhubEp0 && ext.VhubBind[2].Pipe == &vhubPipe,
+          "with both bindings");
+    CHECK_EQ(ext.VhubCreated, created, "none stood up anew");
+    CHECK_EQ(ext.VhubDropped, dropped, "none dropped");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, 0,
+             "the root port latched no connect change for its hub");
+    CHECK_EQ(status & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE),
+             XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE,
+             "and reports it connected and enabled");
+
+    (void)vhub_control(&vhubEp0, 0xA3, 0x00, 0, 1, 4);
+    CHECK_EQ(vhubData[0] & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE),
+             0, "GET_PORT_STATUS(1): nothing connected, not enabled");
+    CHECK_EQ(vhubData[2] & XHCI_HUB_C_PORT_CONNECTION,
+             XHCI_HUB_C_PORT_CONNECTION, "with the connect change");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+
+    /* The device, still attached in fact, is found again by the port. */
+    hwCmdSlotId = 7;
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe re-armed)");
+    deliver_after_submit();
+    pipeCompletions = ext.VhubPipeCompletions;
+    vhub_plug(3, 1);
+    deliver_after_submit();
+    CHECK_EQ(ext.VhubPipeCompletions, pipeCompletions + 1,
+             "its connect is port 1's change");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(3) << 24, 0);
+    deliver_events();
+    CHECK_EQ(slot_open(0, UsbFullSpeed, 64), MP_STATUS_SUCCESS,
+             "and it enumerates again behind the kept hub");
+    CHECK_EQ(slotEndpoint.Flags, XHCI_ENDPOINT_FLAG_OPEN, "as a device");
+    CHECK_EQ(ext.Devices[slotEndpoint.DeviceIndex - 1].HubPort, 3,
+             "on the port's root-port record");
+    vhub_reset_registry();
+}
+
 int main(void)
 {
     /*
@@ -32252,6 +32487,8 @@ int main(void)
     test_vhub_port1_reset_spends_every_hub_arm();
     test_vhub_port1_disable_after_a_hardware_disable();
     test_vhub_tt_pair_naming_a_virtual_hub_agrees();
+    test_vhub_always_unplug_is_port1s_change();
+    test_vhub_always_recovery_keeps_the_hub();
 
     /*
      * The net under every test above, and the reason it is here rather than in

@@ -889,11 +889,12 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     read on Windows 98 SE under SweetLow's stack with 24.1's `usb-host`
     passthrough mouse, since QEMU presents no Low-Speed device.
     Owed to `test/test_init.c` beside the readings, from the audit of
-    2026-09-25: a model vector for hub-path removal at 2 (an unplug at 2
-    raising port 1's change, the record released by the connect-change
-    path), and a recovery with a hub configured at 2 (the `lost[]` bitmap,
-    `XhciVhubReinit`, a held transfer completed for a lost device), which
-    only the core suite pins today. A held port-1 reset that never clears
+    2026-09-25, and taken on 2026-09-27: a model vector for hub-path
+    removal at 2 (an unplug at 2 raising port 1's change, the record
+    released by the connect-change path), and a recovery with a hub
+    configured at 2 (the `lost[]` bitmap, `XhciVhubReinit`, a held transfer
+    completed for a lost device), which only the core suite pinned before
+    (`runs/run-24.md`, "24.3.4"). A held port-1 reset that never clears
     in any reading goes to the owner: record 12 section 3.3 gives it no
     deadline of its own by decision (2026-09-27).
   - [ ] **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the

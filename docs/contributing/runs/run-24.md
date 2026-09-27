@@ -1206,3 +1206,43 @@ round without a MAJOR is not taken as convergence. What the loop leaves:
 three log notes `vhub.prc.late`, `vhub.redisable` and `vhub.lost` beside
 the wiring's `vhub.create`, `vhub.drop`, `vhub.flip`, `vhub.open` and
 `vhub.address`; and 24.3.4's readings still owed on every guest.
+
+## 24.3.4 - The readings on every guest held
+
+### The two vectors the audit owed (2026-09-27)
+
+Before any guest: the two `test/test_init.c` vectors the audit of
+2026-09-25 left under this task, since only the core suite pinned what
+they read.
+
+- `test_vhub_always_unplug_is_port1s_change` - hub-path removal at 2. A
+  Full-Speed device behind port 1, addressed, the status-change transfer
+  held; the unplug completes it with port 1's bit, latches port 1's
+  connect change and nothing on the root port, which still reports its
+  hub connected, enabled and High Speed; the device's record is torn down
+  by the connect-change path and released once its slot is disabled; the
+  hub keeps its address, bindings and configuration; and the next device
+  on the port enumerates behind it in a slot of its own, at the address
+  the first one gave back.
+- `test_vhub_always_recovery_keeps_the_hub` - a recovery at 2 with that
+  hub configured. HCRST leaves the port with no CSC; the held transfer is
+  completed for the device the reinitialisation took, port 1 carries the
+  connect change and reads disabled, an empty hub on another port gains
+  none, the hub is kept whole and none is stood up or dropped, the root
+  port latches nothing, and the device enumerates again behind the kept
+  hub.
+
+Writing the second found a seam in the model rather than the driver: its
+event producer kept its enqueue index and cycle across the recovery's
+re-initialisation of the event ring, so every event after a recovery was
+written where the driver was not reading. The model now does what an
+ERSTBA write does - "The xHC initializes its internal PCS flag to '1'"
+and its enqueue pointer to the first segment (4.9.4, p.167) - and no
+other vector's outcome moved. Five driver mutations were each caught by
+the new vectors: the reinitialisation's port-1 connect change dropped, its
+pipe verdict dropped, `lost[]` never set at 2, the pipe verdict not
+carried at start, and the connect-change teardown skipped at 2; a sixth,
+the absorb's strip from the root shadow dropped, is caught by existing
+ones. `test_init` 20,700 checks; host tests, all three x86 flavours and
+the amd64 build green, the offset tables unchanged (SIZEOF 104,644 x86,
+111,968 amd64).
