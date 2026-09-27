@@ -888,6 +888,14 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     driver counts the virtual hub against USB's five hub tiers. Low Speed is
     read on Windows 98 SE under SweetLow's stack with 24.1's `usb-host`
     passthrough mouse, since QEMU presents no Low-Speed device.
+    Owed to `test/test_init.c` beside the readings, from the audit of
+    2026-09-25: a model vector for hub-path removal at 2 (an unplug at 2
+    raising port 1's change, the record released by the connect-change
+    path), and a recovery with a hub configured at 2 (the `lost[]` bitmap,
+    `XhciVhubReinit`, a held transfer completed for a lost device), which
+    only the core suite pins today. A held port-1 reset that never clears
+    in any reading goes to the owner: record 12 section 3.3 gives it no
+    deadline of its own by decision (2026-09-27).
   - [ ] **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the
     switch at 1 and at 2, the Low-Speed mouse and the Full-Speed audio device from
     `test-equipment.md` on root ports, the interval read from the snapshot;
@@ -951,6 +959,20 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   install legs from the asset; and the post-release matrix on both primary
   targets, read against `runs/run-23-post-release/` with the switch off and
   read again at 1 and at 2.
+
+  Named so the cut does not miss them (audit of 2026-09-25): the three
+  values the INFs now write on every path, `XhciVirtualHSHub` and the
+  strings `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid`, are in neither
+  `README.md` "Tuning", the readme template's section 9
+  (`make-release.ps1`, whose "THOSE THREE ARE THE WHOLE LIST" and "ALL
+  THREE ARE DWORDS" stop being true), nor the release notes, and no gate
+  checks for them. Also for the record: a table of the tier-2 log-note
+  names (`ep.open`, `ep.open.rate`, `ep.open.ival`, `slot.parenthub`, the
+  `vhub.*` family), which no document lists today (`xhcisnap/README.md`
+  or design record 08); and 24.1's checkpoint, whose Interval run-24 read
+  out of the note ring over the QEMU monitor (`readring24.ps1`), with
+  `XHCISNAP` level 2 showing the same record, rather than from the
+  snapshot the clause names.
 
   Where it is read: the cut's gates; the ten install vehicles; the matrix in
   all three states.
