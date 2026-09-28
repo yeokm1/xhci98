@@ -46,7 +46,7 @@ powershell -ExecutionPolicy Bypass -File scripts\import-gate\extract-target-base
 
 The paths are examples and differ per host - name your own. The baselines in
 scripts\import-gate\win2k-baselines.expected were measured from
-D:\isos\win2ksp4-retail.ISO on the host `fw-w11p-ykm`, which is a provenance
+D:\isos\win2ksp4-retail.ISO on development host B, which is a provenance
 record rather than a path to type: any SP4 media whose files match the
 manifest satisfies this script.
 #>

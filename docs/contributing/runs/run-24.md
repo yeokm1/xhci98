@@ -1247,7 +1247,7 @@ ones. `test_init` 20,700 checks; host tests, all three x86 flavours and
 the amd64 build green, the offset tables unchanged (SIZEOF 104,644 x86,
 111,968 amd64).
 
-### The vehicle (2026-09-27, host `minis-w11p-ykm`)
+### The vehicle (2026-09-27, development host A)
 
 The `qemu` flavour of `078a0dc` (`DriverEntry (built Sep 27 2026
 11:12:13)`), staged by `make-package.ps1 -Flavor qemu` for both
@@ -1878,8 +1878,8 @@ and again on a local build with `USB_MINIPORT_FLAGS_DISABLE_SS` cleared (a
 control, never in the tree, on 98 SE and 2000 only); plug latency at 0, 1
 and 2; the power-off probed once and then recorded; the cancelled hub
 install on Windows 98 SE under SweetLow's stack at 2; and the device matrix
-at 2 now rather than at the cut. Two guests at a time, on a second
-development host (QEMU 11.0.92). The two primary targets were read first,
+at 2 now rather than at the cut. Two guests at a time, on development host
+C (QEMU 11.0.92). The two primary targets were read first,
 on the same disks and build as the readings above (`DriverEntry (built Sep
 27 2026 22:21:42)`, `xhci98.sys` `1d8ec911...`), each value from its own
 cold boot. Per-guest reports: `out\t24-3-4\r4-<guest>-report.md`

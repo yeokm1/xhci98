@@ -236,7 +236,7 @@ primary targets on the same binary with the reading that nothing changed.
 
 ## 5. What is still open
 
-- The closing run, taken 2026-09-03 night (run `i4b`, host `FW-W11P-YKM`;
+- The closing run, taken 2026-09-03 night (run `i4b`, development host B;
   `vm\winxp.img` reverted to `winxp-clean-install`, the `1.0.1.0` package
   from `vm\xferxp` installed by the owner through Have Disk, the binary
   built 20:24 with the fix, `FileVersion` 1.0.1.0), read from

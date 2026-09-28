@@ -1137,14 +1137,14 @@ staged at the transfer root. Every load read `completions delivered per
 endpoint only` 1 and `completions delivered only under usbport's lock` 1 -
 the x86 tier's expected values from this build on, replacing the 0 the r3
 row above carries - and the stamp matched the root. r1 to r4 ran on the
-owner's other host; r5 and r6 on `fw-w11p-ykm` (i5-1240P). Every reading
+owner's other host; r5 and r6 on development host B (i5-1240P). Every reading
 below is **runtime**, from this driver's own log and counters.
 
 | run | host, accelerator | reading |
 |---|---|---|
 | r4 (`i7xp32smp4r4`) | other host, `-accel tcg,thread=multi` (the section's launcher, unchanged) | settled read ALL PASS, 3 slots / 5 addressed / iso 2 / `forced` 0 / `fallback polls` 0; alive more than six minutes past where r3 livelocked, CPU samples in idle and HAL, never usbport. Cycles 1 and 2 clean. **Cycle 3's disable hung in PnP**: the log stops after usbhub's port-3 and port-2 disables, before the mouse endpoint's Stop Endpoint and aborts that cycle 2 showed at the same point; three CPUs halted in the idle driver, the guest clock running, IRQ 5 static, `USBSTS` 0; live counters read twice 20 s apart moved only on `CheckController`, health polls and frame samples - no `PollEndpoint`, no invalidate, no command, `transfers submitted` = `completed` |
-| r5 (`i7xp32smp4r5`) | `fw-w11p-ykm`, `-accel whpx,kernel-irqchip=off`, otherwise r4's command line | settled read ALL PASS, 3 slots / 5 addressed / iso 2 / 0 / 0; **five disable/enable cycles, cycle 3 included**, every disable the full sequence (ports 3 and 2, Stop Endpoint on the mouse's DCI 3, two `AbortTransfer`, port 1, `DisableInterrupts`, `StopController`, 4 ports unpowered, halted), every enable ALL PASS with 3 slots / 3 addressed / iso 2 / `forced` 0 / `fallback polls` 0; **remove and rescan** clean, the reload's stamp and the binary's hash unchanged, ALL PASS, tree back; `system_powerdown` clean |
-| r6 (`i7xp32smp4r6`) | `fw-w11p-ykm`, `-accel tcg,thread=multi` (r4's launcher) | laggy from boot; load and first plug ALL PASS, all three devices on the bus; then **Device Manager stalled at least nine minutes** on the "Disk drive" install during the settle, before any cycle, while the driver's counters kept moving (transfers, interrupts, DPCs, `PollEndpoint`, health polls; commands 17/17; `forced` 0) and the QEMU trace showed the mass-storage device's CBW/CSW polling pair about twice a second. Stopped. Physical memory saved, not analysed |
+| r5 (`i7xp32smp4r5`) | Development host B, `-accel whpx,kernel-irqchip=off`, otherwise r4's command line | settled read ALL PASS, 3 slots / 5 addressed / iso 2 / 0 / 0; **five disable/enable cycles, cycle 3 included**, every disable the full sequence (ports 3 and 2, Stop Endpoint on the mouse's DCI 3, two `AbortTransfer`, port 1, `DisableInterrupts`, `StopController`, 4 ports unpowered, halted), every enable ALL PASS with 3 slots / 3 addressed / iso 2 / `forced` 0 / `fallback polls` 0; **remove and rescan** clean, the reload's stamp and the binary's hash unchanged, ALL PASS, tree back; `system_powerdown` clean |
+| r6 (`i7xp32smp4r6`) | Development host B, `-accel tcg,thread=multi` (r4's launcher) | laggy from boot; load and first plug ALL PASS, all three devices on the bus; then **Device Manager stalled at least nine minutes** on the "Disk drive" install during the settle, before any cycle, while the driver's counters kept moving (transfers, interrupts, DPCs, `PollEndpoint`, health polls; commands 17/17; `forced` 0) and the QEMU trace showed the mass-storage device's CBW/CSW polling pair about twice a second. Stopped. Physical memory saved, not analysed |
 
 **The owner's decision, 2026-09-15**: multi-core 32-bit XP under TCG does not
 work well enough to be a representative system, so this guest's SMP legs run
@@ -1177,8 +1177,8 @@ not tests of issue 8's race. They were taken the same night: section 7.10.
 ### 7.10 Windows 98, ME and 2000 on one core, 2026-09-15: the per-endpoint build on the older stacks, PASSED with two recorded departures
 
 Section 7.9's build (`B410BA07`, the x86 `qemu` flavour of `413581c`), from
-`vm\xferxp`, on each guest's ordinary machine under TCG with one CPU, host
-`minis-w11p-ykm`. Each guest ran from a local qcow2 converted out of a
+`vm\xferxp`, on each guest's ordinary machine under TCG with one CPU, on
+development host A. Each guest ran from a local qcow2 converted out of a
 snapshot, so no image under `vm\` was written: Windows 98 SE from
 `win98.img` at `post-nusb` (NUSB 3.3, no driver), Windows 2000 SP4 from
 `win2k-xonly.img` at `win2k-xonly-clean-install` (no driver), and Windows ME
@@ -1276,7 +1276,7 @@ Evidence, all under `vm\`:
   `readings.md`, full debug log, QEMU trace, `read-v300` verdicts, live
   counter reads per stage and screenshots; `winme-r1\` also keeps the two
   old-build logs. The work images are under
-  `C:\Users\yeokm1\xhci98-work\i8tier\` on `minis-w11p-ykm`
+  `C:\Users\yeokm1\xhci98-work\i8tier\` on development host A
 - `vm\issue8-kd\i7smp4b\` - the 2026-09-14 retake (section 7.8): `part1\`
   (launcher tag `i7smp4b`: the debug log of the swap boot, the five cycles,
   the remove, the wrong-binary rescan and the restart; `gdb-load1..8-*.log`;

@@ -314,7 +314,7 @@ recording what the unsigned-driver prompt did.
   launcher that installs nothing; and the install and run launchers must
   agree on the accelerator, since the HAL is fixed at install time.
   209 checks, 9 monitor ports, none shared
-- **the accelerator probed on each, 2026-09-10, host `minis-w11p-ykm` -
+- **the accelerator probed on each, 2026-09-10, development host A -
   and the first probe was WRONG, which is the useful part.** It ran each
   guest to its "Install Windows" language page (Vista under four
   minutes, Windows 7 about two) and recorded WHPX for both. Installing
@@ -649,7 +649,7 @@ structures.
       the unlocked mover (issue 8 section 4d) and the `_WIN64` guard was
       lifted, so the 32-bit binary now delivers per endpoint on its 200
       tier.* *2026-09-15: on that build (`B410BA07`) the leg PASSED
-      under `-accel whpx,kernel-irqchip=off` (r5, host `fw-w11p-ykm`) -
+      under `-accel whpx,kernel-irqchip=off` (r5, development host B) -
       settled read, five live cycles, remove, rescan, `forced` 0 and
       `fallback polls` 0 on every load; one run. Two TCG runs of the
       same build stalled in PnP (r4 on the third disable, r6 on a

@@ -1078,7 +1078,10 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   no speed test on NT 5.x, Full and Low Speed only on NT 6.x. The
   descriptor never reaches the miniport and the schedule mask says which
   microframe, not how often, so the source chosen is the fourth the read
-  found: byte 0x07 (`PipePeriod`) for interrupt endpoints. Design record 12
+  found: byte 0x07 (`PipePeriod`) for interrupt endpoints - accepted by the
+  owner on 2026-09-28 over reading the device's own `bInterval` from the
+  configuration descriptor, which stays a possible later refinement for a
+  device that asks for slower polling than usbport's 32-unit cap. Design record 12
   section 7 corrected; `runs/run-24.md`, "24.5"; `legal-provenance.md`
   section 4. Not ticked until the guests at 2 have read a High-Speed
   device behind a virtual hub on the rebuilt package.

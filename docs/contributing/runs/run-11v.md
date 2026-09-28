@@ -1506,7 +1506,7 @@ Four findings from that run that outlast it:
 
 ### Run, 2d: HID cycles on both CPU counts
 
-On host FW-W11P-YKM the same image was reverted to `stagef-2d-prepared` and
+On development host B the same image was reverted to `stagef-2d-prepared` and
 soaked twice with `-Classes hid -Cycles 20 -ReadEvery 1`, changing only the
 CPU count (`qemu-win2k-smp-run-11v.cmd` unmodified, then the same file with
 `-smp 2` changed to `-smp 1`). Both legs: 20/20 cycles, 0 failed, `EP0 opens
@@ -1532,7 +1532,7 @@ aborted` with every health counter 0. QEMU 11.0.0, WHPX. Record:
 
 ### Run, 2d: storage and net cycles
 
-Host FW-W11P-YKM, scoop QEMU 11.0.0, WHPX, the stage launcher unmodified,
+Development host B, scoop QEMU 11.0.0, WHPX, the stage launcher unmodified,
 image reverted to `stagef-2d-prepared`, one continuous driver load. `-Classes
 storage,net -Cycles 20 -ReadEvery 1`. Record:
 `vm\11v-stageF\README-2d-cycles.txt`.
@@ -1592,7 +1592,7 @@ teed to a console log. Every report written before stage E has the hole, the
 
 ### Run, 2d: the concurrent load
 
-Host FW-W11P-YKM, scoop QEMU 11.0.0, WHPX, the stage launcher unmodified,
+Development host B, scoop QEMU 11.0.0, WHPX, the stage launcher unmodified,
 image reverted to `stagef-2d-prepared`, one continuous driver load, Driver
 Verifier live (`Level: 0000001B`, `xhci98.sys` loads 1 / unloads 0). `-Classes
 "hid,storage,net" -Cycles 0 -LoadSeconds 600 -NoRepin`. Record:
@@ -1714,8 +1714,8 @@ window:
 ### Run, 2a: the cycle clauses
 
 All three cycle clauses pass; the concurrent load was blocked on guest-side
-tooling on this run, not on this driver, and passed on the next (below). Host
-minis-w11p-ykm (a third machine; the repo is on `D:` there, so the hard-coded
+tooling on this run, not on this driver, and passed on the next (below). On
+development host A (a third machine; the repo is on `D:` there, so the hard-coded
 launchers work unedited), scoop QEMU, `qemu-win98-run-11v.cmd` unmodified,
 one continuous driver load per run, `MiniPortExtensionSize` `0001243C` =
 offsets `SIZEOF` 74,812 on every boot. Record: `vm\11v-stageF\f-2a-*`.
@@ -1845,8 +1845,8 @@ must drop the floppy or accept counter-dump evidence.
 
 ### Run, 2a: the concurrent load
 
-Passes at gap zero, and with it stage F is complete on all three targets. Host
-minis-w11p-ykm, scoop QEMU, `qemu-win98-run-11v.cmd` unmodified, one
+Passes at gap zero, and with it stage F is complete on all three targets. On
+development host A, scoop QEMU, `qemu-win98-run-11v.cmd` unmodified, one
 continuous driver load, `MiniPortExtensionSize` `0001243C` = 74,812 = offsets
 `SIZEOF`, one `DriverEntry` and one `cb StartController` (extension
 `C14658C4`, unmoved). The image was not reverted: the state the cycle legs
@@ -2094,7 +2094,7 @@ rather than negative.
 ### Run, 2b
 
 Both clauses this stage owes pass on Windows 2000: the orderly shutdown with
-traffic in flight, and the restart after it. Host minis-w11p-ykm, scoop QEMU
+traffic in flight, and the restart after it. Development host A, scoop QEMU
 11.0.0, `qemu-win2k-run-11v.cmd` unmodified, debug build, built `Aug 14 2026
 00:36:27`, `MiniPortExtensionSize` `0001243C` = 74,812 = offsets `SIZEOF` on
 both boots, extension VA `8184292C`. Driver Verifier confirmed live:
@@ -2244,7 +2244,7 @@ settled read needs a `drive_add` first; documented in both launchers.
 
 Both clauses this stage owes pass on Windows 98: the orderly shutdown with
 traffic in flight, and the restart after it. The shutdown is replicated on
-two runs an order of magnitude apart in traffic. Host minis-w11p-ykm, scoop
+two runs an order of magnitude apart in traffic. Development host A, scoop
 QEMU 11.0.0, `qemu-win98-run-11v.cmd` unmodified, debug build, built `Aug 14
 2026 00:36:27`, `MiniPortExtensionSize` `0001243C` = 74,812 = offsets
 `SIZEOF` on every boot. Extension VA `C14668C4` on boot 1, `C14658C4` on
@@ -2608,7 +2608,7 @@ can recognise and "16 KB" is not.
 
 H1 passes on every clause it can reach, H2's control is spent and comes back
 positive, and H1 step 8 turns out to be unobtainable on this vehicle for a
-reason worth more than the tick. Host minis-w11p-ykm, QEMU 11.0.0
+reason worth more than the tick. Development host A, QEMU 11.0.0
 (`v11.0.0-12122-ga4bb4b10c9`), launcher `scripts\local\qemu-win98-run-11v.cmd`,
 monitor 55555, flavour debug, `built Aug 16 2026 16:13:43`,
 `MiniPortExtensionSize=000155C0` = 87,488, equal to both offset tables'
@@ -2824,8 +2824,8 @@ rather than detail:
 
 ### Run, 2b (four boots)
 
-H3 passes every clause including step 8, and H4 fires the stop rule. Host
-minis-w11p-ykm, QEMU 11.0.0 (`v11.0.0-12122-ga4bb4b10c9`), launcher
+H3 passes every clause including step 8, and H4 fires the stop rule. On
+development host A, QEMU 11.0.0 (`v11.0.0-12122-ga4bb4b10c9`), launcher
 `scripts\local\qemu-win2k-run-11v.cmd`, monitor 55556, flavour debug, `built
 Aug 16 2026 18:01:46`, `MiniPortExtensionSize=000155C0` = 87,488, equal to
 both offset tables' `SIZEOF`, checked before a counter was read. Driver

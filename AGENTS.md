@@ -589,3 +589,4 @@ UTF-8.
 - Do not commit a third-party document, binary, or disassembly listing. Record where to fetch it and what it hashes to instead. See "Third-Party Material and Provenance".
 - Do not describe a fact as runtime-observed when it was read out of a disassembly. Tag the method you actually used.
 - Do not write a legal conclusion into any file in this repository. `docs/contributing/legal-provenance.md` records facts, not verdicts.
+- Do not write a development machine's name (its `hostname`) into any tracked file, commit message or report. Name the host by its alias - "development host A", "B", "C" - as every run record here does; the key from name to alias is kept out of the repository (owner, 2026-09-28). Logs that print `$env:COMPUTERNAME` are git-ignored; do not transcribe that field.

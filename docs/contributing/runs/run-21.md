@@ -419,7 +419,7 @@ here, because what makes it worth reading is how it was found.
 
 **21.5 - the Windows XP x64 guest. COMPLETE 2026-09-09, and it cost one
 defect.** Every checkpoint clause below was taken on the guest that
-evening, on host `minis-w11p-ykm`, with the `qemu`-flavour amd64
+evening, on development host A, with the `qemu`-flavour amd64
 `1.1.0.0` package staged to `vm\xferxp64`. The guest was a vehicle and
 building it was preparation; this is the leg.
 

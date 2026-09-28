@@ -1313,7 +1313,7 @@ These devices exercise the host-controller transfer paths only if a function dri
 
 Bridging emulation and real hardware. `-device usb-host,hostbus=N,hostaddr=M` passes a real USB peripheral from the host through to the guest's xHCI bus. This runs the driver against genuine peripheral adapters while still inside the VM, a useful step between pure emulation and bare-metal testing. It does not help with host-controller quirks, which depend on the emulated/physical xHCI chip, not the peripheral.
 
-Use `hostbus`/`hostaddr`, never `vendorid`/`productid`. Measured on host `MINIS-W11P-YKM`, scoop QEMU 11.0.0, against an ASIX AX88772 (`0b95:7720`) that `info usbhost` was listing at that very moment as `Bus 1, Addr 7, Speed 480 Mb/s`:
+Use `hostbus`/`hostaddr`, never `vendorid`/`productid`. Measured on development host A, scoop QEMU 11.0.0, against an ASIX AX88772 (`0b95:7720`) that `info usbhost` was listing at that very moment as `Bus 1, Addr 7, Speed 480 Mb/s`:
 
 | Form | Result |
 |---|---|
@@ -2071,7 +2071,7 @@ rotated per boot.
 **And then a fifth difference, which was not predicted and had to be measured:
 this guest wants TCG, and on it TCG is not a fallback - it is the one that
 works.** That is the reverse of every 32-bit guest in this project. Read on
-host `minis-w11p-ykm`, 2026-09-08, one flag apart:
+development host A, 2026-09-08, one flag apart:
 
 | `-accel` | Result |
 |---|---|
@@ -2189,8 +2189,8 @@ the tier stated with task 21.6.** It also carried issue 7's first NT 5.x leg
 on 2026-09-13 (issue section 7.6, roadmap 22.5), which is the reading this
 guest is uniquely placed to give - the `200` arm on amd64 - and which ran on
 one vCPU, this launcher carrying no `-smp`.
-The guest was created and installed on 2026-09-08 on host
-`minis-w11p-ykm` (`vm\winxp64.img`, 16 GB qcow2, 2.29 GB allocated after the
+The guest was created and installed on 2026-09-08 on
+development host A (`vm\winxp64.img`, 16 GB qcow2, 2.29 GB allocated after the
 install). Snapshot **`winxp64-clean-install`** taken the same evening with the
 guest shut down from inside and the image cold - `qemu-img check` reported no
 errors first, and the snapshot lists with `VM_SIZE` 0 B, which is what a
@@ -2253,7 +2253,7 @@ difference belongs in a parameter, never in a second copy of the body.
 | CPU | `-cpu qemu64`, **not** the 32-bit XP guest's `pentium3`. `pentium3` predates the NX bit and Windows 7 requires one: Setup refuses such a processor. A 32-bit guest wanting a 64-bit-era CPU *model* is not the same thing as a 64-bit guest, and this is the line most likely to be "corrected" back to the 32-bit recipe, so the shared body refuses such a `-Cpu` outright and the launcher gate asserts the generated text |
 | vCPUs | **4**, where every guest before this one takes the default 1 except the Phase 2d Windows 2000 SMP rig's `-smp 2` ("Windows 2000 SMP Stress VM (Phase 2d)" below). This is about the accelerator, not the guest: Vista must run under TCG here, and single-threaded TCG on this host's 2.0 GHz i7-9700T is painful. QEMU emulates x86-on-x86 with **multi-threaded TCG**, so vCPUs become host threads and the emulation parallelises - measured on the Vista guest 2026-09-10, all four vCPU threads busy and roughly even (35 / 31.5 / 30.4 / 28.3 CPU-seconds over ~200 s of wall clock). Four rather than the host's eight leaves room for QEMU's own I/O and display threads. `thread=multi` is derived for a `tcg` accelerator and **never handed to WHPX**, which refuses the whole `-accel` argument rather than ignoring an option it does not know |
 | RAM | 2048 MB, not 512. Comfort - Windows 7's own floor is 1 GB. **More RAM is not a speed knob here**: what makes a TCG guest slow is instruction emulation, not memory. Nothing has been measured about what the 6.x `usbport` does with memory above 4 GB, and it does not arise: a 32-bit guest with 2048 MB has none. Do not raise it without reading measurement M5 of design record 11 first - on a **64-bit** guest, crossing 4 GB puts DMA above the line in play and is a change to the test surface, not a tuning choice |
-| Accelerator | **They differ**, and both are confirmed through a completed install. Vista is `-accel tcg` (WHPX wedges its Setup after the first reboot); Windows 7 is `-accel whpx,kernel-irqchip=off`. Host `minis-w11p-ykm`, 2026-09-10 |
+| Accelerator | **They differ**, and both are confirmed through a completed install. Vista is `-accel tcg` (WHPX wedges its Setup after the first reboot); Windows 7 is `-accel whpx,kernel-irqchip=off`. Development host A, 2026-09-10 |
 | Everything else | The 32-bit XP machine unchanged: `-machine pc` (ACPI on), `-vga std`, `-boot d` on every install boot, `qemu-xhci,p3=0` on the run launcher, no companion EHCI unless it is asked for, no USB device boot-attached, the VVFAT transfer drive, and the port-`0xE9` console rotated per boot |
 
 **The accelerator reading, and the probe that was too shallow to take it.**
@@ -3237,14 +3237,14 @@ not Win98: the ordinary 2b preemption/IRQL/native-usbport analysis applies.
 ### Windows 2000 ACPI VM (`vm\win2k-acpi.img`) - built, and it does NOT deliver sleep
 
 A fourth VM: uniprocessor Windows 2000 SP4 installed with a real ACPI HAL
-(`ACPI Uniprocessor PC`, chosen by Setup), built on host `fw-w11p-ykm` to make
+(`ACPI Uniprocessor PC`, chosen by Setup), built on development host B to make
 `ResumeController` execute on Windows 2000. That is the one miniport lifecycle
 callback that has never run there, because 2b runs the Standard-PC HAL with
 `acpi=off` and has no D-state machinery at all.
 
 Read this before rebuilding or reusing it: the VM works, and the goal it was
 built for is unreachable on it. The full investigation is
-`docs/contributing/lessons.md`, "On host `fw-w11p-ykm`". The short form:
+`docs/contributing/lessons.md`, "On development host B". The short form:
 
 - The HAL is not the blocker; the display adapter is, and the two available
   choices fail in opposite ways. `-vga std` leaves a yellow-banged
@@ -3309,11 +3309,11 @@ further use.
 
 Two host-specific traps in those launchers, both of which cost time:
 
-- The QEMU path is hard-coded. It happens to be identical on `minis-w11p-ykm`
-  and `fw-w11p-ykm`, so it has not bitten yet, but it is the standing trap
+- The QEMU path is hard-coded. It happens to be identical on development host A
+  and development host B, so it has not bitten yet, but it is the standing trap
   when moving hosts.
-- The ISO path differs per host: `D:\isos\win2ksp4.ISO` on `minis-w11p-ykm`,
-  `D:\isos\win2ksp4-retail.ISO` on `fw-w11p-ykm`.
+- The ISO path differs per host: `D:\isos\win2ksp4.ISO` on development host A,
+  `D:\isos\win2ksp4-retail.ISO` on development host B.
   `qemu-win2k-acpi-whpx-continue.cmd` probes a candidate list instead of
   hard-coding one; do the same in any new launcher.
 
@@ -3372,7 +3372,7 @@ it. **Only task 21.8's two x64 launchers have been regenerated since**, so
 every other guest's still carries the older silent preamble until it is next
 regenerated. Observed QEMU paths so far: `C:\Program Files\qemu` (a winget
 install, present on this development host until 2026-09-10 and now gone from
-it) and a scoop prefix on `minis-w11p-ykm` and `FW-W11P-YKM`.
+it) and a scoop prefix on development host A and development host B.
 
 - `qmon.ps1`: `-Port <n> -Command "<monitor command>"`. Prompt-framed read
   with an idle timeout and a hard limit, and it strips QEMU's

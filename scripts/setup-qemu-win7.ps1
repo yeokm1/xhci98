@@ -22,7 +22,7 @@ generated text.
 
 WHPX, measured rather than inherited (roadmap task 22.4 asks for the
 accelerator to be probed per host AND per guest). Under
--accel whpx,kernel-irqchip=off on host minis-w11p-ykm, 2026-09-10, Windows 7
+-accel whpx,kernel-irqchip=off on development host A, 2026-09-10, Windows 7
 Setup reached its "Install Windows" language page about two minutes from
 launch AND RAN THE WHOLE INSTALL THROUGH TO A FINISHED DESKTOP, first reboot
 included. That second half is what makes the value usable: the language page
@@ -84,7 +84,7 @@ New-Nt6QemuGuest `
     -IsoParamName "Win7Iso" `
     -Accel $Accel `
     -AccelNote @(
-        "Measured on host minis-w11p-ykm, 2026-09-10, rather than inherited:",
+        "Measured on development host A, 2026-09-10, rather than inherited:",
         "under whpx,kernel-irqchip=off Windows 7 Setup reached its ""Install",
         "Windows"" language page about two minutes from launch. TCG was not",
         "needed and was not tried. At that page EIP was IDENTICAL across samples",

@@ -15,7 +15,7 @@ each line differs from the 32-bit XP one for. docs\contributing\build-and-test.m
 "Windows Vista and Windows 7 target VMs", is the procedure.
 
 TCG, NOT WHPX, AND THAT IS THE OPPOSITE OF WHAT THE FIRST PROBE SAID. Under
--accel whpx,kernel-irqchip=off on host minis-w11p-ykm, 2026-09-10, Vista Setup
+-accel whpx,kernel-irqchip=off on development host A, 2026-09-10, Vista Setup
 reached its "Install Windows" language page under four minutes from launch and
 ran the whole first phase - partitioning, the file copy, the reboot - and then
 WEDGED on the boot that follows it. Measured at the wedge: EIP confined to two
@@ -80,7 +80,7 @@ New-Nt6QemuGuest `
     -IsoParamName "VistaIso" `
     -Accel $Accel `
     -AccelNote @(
-        "Measured on host minis-w11p-ykm, 2026-09-10, and TCG is what this",
+        "Measured on development host A, 2026-09-10, and TCG is what this",
         "guest needs - the opposite of every other 32-bit guest here. Under",
         "whpx,kernel-irqchip=off Vista Setup reached its language page in under",
         "four minutes and ran the whole first phase, then WEDGED on the boot",

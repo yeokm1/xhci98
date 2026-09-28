@@ -425,7 +425,7 @@ does not inherit the failing environment.
 
 ## The host's sound card reached into an unattended run through an unnamed audio backend
 
-Environment: host `FW-W11P-YKM`, QEMU 11.0.0 (scoop), the `1.0.1.0`
+Environment: development host B, QEMU 11.0.0 (scoop), the `1.0.1.0`
 post-release run of roadmap task 19.8 on the fresh Windows 98 SE and Windows
 2000 clones, 2026-09-04 between 00:50 and 02:03, both targets running side
 by side and then, for the second target's last group, alone.
@@ -1806,7 +1806,7 @@ Affected: `scripts\vm-matrix\gen-offsets.ps1`, `src\xhci_dispatch.c` and
 
 ## Task 12.5's control: the hub churn wedges Windows 98 only when this driver carries it, and two symptoms this project had been reading as liveness are frozen on healthy guests too
 
-Environment: a second development host, QEMU 11.0.92 (batch 11-V ran 11.0.0),
+Environment: development host C, QEMU 11.0.92 (batch 11-V ran 11.0.0),
 guest 2a (Windows 98 SE + NUSB), launcher
 `scripts\local\qemu-win98-run-12v5.cmd` carrying `qemu-xhci` + `usb-ehci` +
 `piix3-usb-uhci`, debug build `Aug 18 2026 11:58:03`,
@@ -1954,7 +1954,7 @@ for it. Neither outcome was reachable by host-side gating.
 ## Stage H on 2b: three readings of one ring are not meant to be equal, a wrap eats the header first, and the target-specific trap was not target-specific
 
 Environment: 2b, Windows 2000 SP4 uniprocessor, `qemu-win2k-run-11v.cmd`,
-QEMU 11.0.0, host minis-w11p-ykm, debug build `Aug 16 2026 18:01:46`,
+QEMU 11.0.0, development host A, debug build `Aug 16 2026 18:01:46`,
 `MiniPortExtensionSize=000155C0`, Driver Verifier active over `xhci98.sys` at
 `Level 0000001B`. Four boots. Readings in `docs/contributing/runs/run-11v.md`
 stage H.
@@ -2032,7 +2032,7 @@ call it one.
 
 ## Stage H on 2a: a sink that emits into a listener the OS has already closed, a driver key that was right by the documented rule and wrong in fact, and a "healthy" guest that had been wedged for twenty minutes
 
-Environment: host `minis-w11p-ykm`, QEMU 11.0.0, guest 2a (Windows 98 SE +
+Environment: development host A, QEMU 11.0.0, guest 2a (Windows 98 SE +
 NUSB), five boots. Stage H's H1 (task 11-V.9's run tail) and H2 (task
 11-V.1's negative control). Evidence `vm\11v-stageH\`.
 
@@ -2153,7 +2153,7 @@ The reusable rules, and the first two are re-learned rather than new:
 
 ## Task 11-V.9, host-side: a mutation sweep's own false negatives, and two rules from a previous task that had to be overturned rather than inherited
 
-Environment: host `minis-w11p-ykm`, no guest booted. Task 11-V.9's host-side
+Environment: development host A, no guest booted. Task 11-V.9's host-side
 pass: the producer set, the two registry values, the path validation and the
 Windows 98 interlock. The run tail is owed and nothing here is a target
 observation.
@@ -2219,7 +2219,7 @@ is recorded here only because the count is now three.
 
 ## Windows 98 blocks its own shutdown on every running DOS program, so the load that makes a stop testable on Windows 2000 makes it untestable here
 
-Environment: host `minis-w11p-ykm`, QEMU 11.0.0, the 2a Windows 98 SE guest
+Environment: development host A, QEMU 11.0.0, the 2a Windows 98 SE guest
 via `scripts\local\qemu-win98-run-11v.cmd`. Debug build, built
 `Aug 14 2026 00:36:27`, `MiniPortExtensionSize=0001243C` = 74,812 = both
 tables' `SIZEOF`. Batch 11-V stage G, task 11-V.1, the 2a leg.
@@ -2306,7 +2306,7 @@ BLOCK box), `scripts\vm-matrix\guest\STGF98.BAT`,
 
 ## A refused EP0 reopen is survivable on Windows 2000, which separates the refusal from the 2a wedge it preceded
 
-Environment: host `minis-w11p-ykm`, QEMU 11.0.0, the 2b Windows 2000 SP4
+Environment: development host A, QEMU 11.0.0, the 2b Windows 2000 SP4
 guest via `scripts\local\qemu-win2k-run-11v.cmd`, under Driver Verifier
 (`Level: 0000001B`, force IRQL on, `xhci98.sys` verified). Debug build,
 `MiniPortExtensionSize=0001243C` = 74,812 = both tables' `SIZEOF`, extension
@@ -2922,7 +2922,7 @@ result that was wrong, or a red one whose cause was nowhere near the symptom.
 ## Phase 10's device matrix: what an unattended harness measured about the two guests, and the vehicle traps it hit
 
 Environment: this development host (QEMU 11.0.92, winget) and
-`MINIS-W11P-YKM` (QEMU 11.0.0, scoop); both target VMs. The verdict record is
+development host A (QEMU 11.0.0, scoop); both target VMs. The verdict record is
 `docs/contributing/design/06-device-matrix-verdict.md`; these are the parts
 that generalise beyond that harness.
 
@@ -3245,7 +3245,7 @@ half with teeth.
 
 ## Batch 9-V: what an audible fault is evidence of, and three claims I made from one observation each
 
-Environment: host `fw-w11p-ykm`, QEMU 11.0.0, both target VMs, one binary
+Environment: development host B, QEMU 11.0.0, both target VMs, one binary
 (debug, `built Aug 10 2026 15:54:15`, `MiniPortExtensionSize=0x000113CC`
 checked against `offsets.txt`'s `SIZEOF 70604` on every boot before a counter
 was read). Launchers `scripts\local\qemu-win{98,2k}-run-9v.cmd`. Full results
@@ -3407,7 +3407,7 @@ a document that later work will rely on.
 
 ## Batch 8-V.1's last clause on 2b: a false pass that the counters caught, a cache that ate the whole test, and a negative built on the wrong counter
 
-Environment: host `fw-w11p-ykm`, QEMU 11.0.0, 2b Win2000 SP4 under Driver
+Environment: development host B, QEMU 11.0.0, 2b Win2000 SP4 under Driver
 Verifier with Force IRQL checking, binary `built Aug 9 2026 11:06:35`
 (`MiniPortExtensionSize=0000C4F4`, checked against `offsets.txt`'s `SIZEOF
 50420` before any counter was read). Launcher
@@ -3532,7 +3532,7 @@ future unplug leg.
 
 ## Batch 8-V.1's owed halves on 2a: the clauses passed quickly, the vehicle cost the session
 
-Environment: host `fw-w11p-ykm`, QEMU 11.0.0, 2a Win98 SE, binary `built Aug
+Environment: development host B, QEMU 11.0.0, 2a Win98 SE, binary `built Aug
 9 2026 11:06:35` (`MiniPortExtensionSize=0000C4F4`). Launcher
 `scripts\local\qemu-win98-run-8v1.cmd`, medium `vm\usb8v-2a-run2.img`.
 Evidence `vm\8v1-2a-dirclause-pass\`. Both owed halves met; results are in
@@ -3657,7 +3657,7 @@ starting mid-stream.
 
 ## Batch 8-V.2 on 2b: the second target passes, and the install failure that looked like ours was a pruned vendor package
 
-Environment: host `fw-w11p-ykm`, QEMU 11.0.0, 2b Windows 2000 SP4
+Environment: development host B, QEMU 11.0.0, 2b Windows 2000 SP4
 (`pc,acpi=off`, `-cpu pentium3,-apic`), binary `built Aug 9 2026 11:06:35`
 (`MiniPortExtensionSize=0000C4F4` = `offsets.txt` `SIZEOF 50420`), the same
 physical ASIX AX88772A passed through with `-device usb-host`, cabled to a
@@ -3757,7 +3757,7 @@ count is now derived from `offsets.txt`.
 
 ## Batch 8-V.2: the receive stalls on the xHCI path, the EHCI control does not prove it is ours, and two exonerations in a row were taken on the wrong vehicle
 
-Environment: host `fw-w11p-ykm`, QEMU 11.0.0, 2a Win98 SE, binary `built Aug
+Environment: development host B, QEMU 11.0.0, 2a Win98 SE, binary `built Aug
 8 2026 20:53:00` (`MiniPortExtensionSize=0000C270`). A physical ASIX AX88772A
 (`0b95:7720`) passed through with `-device usb-host` after a Zadig rebind to
 WinUSB. Launcher `scripts\local\qemu-win98-run-8v2-ehci.cmd`; trace set
@@ -4314,11 +4314,11 @@ where the work is disambiguation. The mechanism was later superseded by the
 fifth repository audit's finding A2; the shape is the thing to look for next
 time.
 
-## On host `fw-w11p-ykm` - the Win2000 `ResumeController` gap is closed as a question: the blocker is the display adapter, not the HAL, and every QEMU route is measured shut
+## On development host B - the Win2000 `ResumeController` gap is closed as a question: the blocker is the display adapter, not the HAL, and every QEMU route is measured shut
 
 ### Environment and operation
 
-Host `fw-w11p-ykm`, scoop QEMU 11.0.0, `qemu-system-x86_64`, WHPX. Picking up
+Development host B, scoop QEMU 11.0.0, `qemu-system-x86_64`, WHPX. Picking up
 `vm\win2k-acpi.img` mid-install from the entry below (text-mode Setup
 complete, first graphical boot hung at `EIP=0xf401118f`). Operation: finish
 the ACPI Win2000 install and make `ResumeController` execute, the one
@@ -4465,7 +4465,7 @@ note; the `-vga std` prescription there is refuted in place),
 
 ### Environment and operation
 
-Host `minis-w11p-ykm`, scoop QEMU 11.0.0, `qemu-system-x86_64`. Operation:
+Development host A, scoop QEMU 11.0.0, `qemu-system-x86_64`. Operation:
 install a new uniprocessor Windows 2000 SP4 VM (`vm\win2k-acpi.img`, fresh
 4 G qcow2, same `D:\isos\win2ksp4.ISO`) with ACPI enabled, in order to obtain
 a guest with sleep states, because `ResumeController` has never executed on
@@ -4563,7 +4563,7 @@ the Phase 3-5 evidence VM.
 
 ### Environment and operation
 
-Host `minis-w11p-ykm`, scoop QEMU 11.0.0, `qemu-system-x86_64`. Installing
+Development host A, scoop QEMU 11.0.0, `qemu-system-x86_64`. Installing
 the roadmap Phase 21 guest, Windows XP Professional x64 SP2, from
 `D:\isos\Win XP SP2 VL x64.iso` onto a fresh 16 GB qcow2. Machine `-machine
 pc` (ACPI on), `-cpu qemu64`, `-m 2048`, `-vga std`, `-boot d`, no USB
@@ -4626,7 +4626,7 @@ four on one machine.
 
 ### Environment and operation
 
-Host `minis-w11p-ykm`, QEMU 11.0.92. Installing roadmap task 21.8's two
+Development host A, QEMU 11.0.92. Installing roadmap task 21.8's two
 guests, Vista Business SP2 x64 and Windows 7 Professional SP1 x64, from the
 media task 21.7 read its measurements out of, onto fresh 32 GB qcow2 images.
 `-machine pc`, `-cpu qemu64`, `-smp 4`, `-m 2048`, `-boot d`, no USB
@@ -4861,7 +4861,7 @@ Two rules, and the first is the reason this section existed:
 
 ### Environment and operation
 
-Host `minis-w11p-ykm`, scoop QEMU, 2a Win98 SE + 2b Win2000 SP4, debug build
+Development host A, scoop QEMU, 2a Win98 SE + 2b Win2000 SP4, debug build
 `xhci98.sys` 49,131 B (`built Aug 2 2026 11:19:44`, SHA-256 `cfe5b8cb...`,
 extension `0x1DC0`), byte-identical on both targets. Operation: the Phase 5
 root-hub checkpoint. Plug/unplug LS/FS/HS devices and observe status
@@ -4993,7 +4993,7 @@ the override did not manufacture the reading.
 
 ### Environment and operation
 
-Host `fw-w11p-ykm`, no VM. Writing the root hub's two asynchronous port
+Development host B, no VM. Writing the root hub's two asynchronous port
 operations (reset and resume), the `UsbPortInvalidateRootHub` announcement,
 and the power/lifecycle clauses, against `test_init`'s synthetic controller
 and `test_port`'s pure vectors. Suite 5,197 -> 5,527 checks; build gates pass
@@ -5298,7 +5298,7 @@ Reporting" and `docs/contributing/design/05-locking-model.md` section 7.
 
 ### Environment and operation
 
-Host `fw-w11p-ykm`, no VM. Phase 5 task 1's static pass over the root-hub
+Development host B, no VM. Phase 5 task 1's static pass over the root-hub
 paths of both shipping `usbport.sys` builds (SP4 5.00.2195.6681, NUSB
 5.00.2195.5652), disassembled with `tools\ntddk\bin\link.exe -dump -disasm`.
 The Windows 2000 DDK ships the same COFF dumper as `dumpbin`, which removes
@@ -5475,7 +5475,7 @@ correction note.
 
 ### Environment and operation
 
-Phase 4 checkpoint, 2d SMP leg, host `fw-w11p-ykm` (the second development
+Phase 4 checkpoint, 2d SMP leg, development host B (the second development
 machine, seen before), scoop QEMU 11.0.0 `qemu-system-x86_64.exe`, build
 string `v11.0.0-12122-ga4bb4b10c9`. Same `vm\win2k-smp.img` as ever; the
 working directory is OneDrive-synced, so this is the identical image file
@@ -5492,7 +5492,7 @@ host's scoop path is what the committed `.cmd` files already carry.
 ### Finding 1: the 11.0.0 attribution is falsified
 
 This file's Phase 4 checkpoint entry recorded that `win2k-smp.img` wedged in
-boot driver init after exactly 12,691 IDE reads on `minis-w11p-ykm`,
+boot driver init after exactly 12,691 IDE reads on development host A,
 identically under every accelerator, CPU count, snapshot and HPET
 combination, and named QEMU 11.0.0 versus 11.0.50 the leading candidate. The
 reasoning was that 11.0.0's vector-`0xD1` APIC storm is dodgeable only by the
@@ -5502,7 +5502,7 @@ That reasoning does not survive the A/B it asked for. The same image, on the
 same QEMU version (scoop 11.0.0) on a different host, sailed past that
 stopping point: 13,304 reads at the first sample, 17,199 at the second, and a
 Windows 2000 desktop with the `Computer` node reading ACPI Multiprocessor PC.
-So the wedge is a property of `minis-w11p-ykm`, not of QEMU 11.0.0, and the
+So the wedge is a property of development host A, not of QEMU 11.0.0, and the
 11.0.0-vs-11.0.50 A/B that was set up as the discriminating test would have
 answered the wrong question. What is still unknown is what is different
 about that host; nothing here narrows it, and the vector-`0xD1` storm stays
@@ -5797,7 +5797,7 @@ implies the whole matrix was re-run on the later binary, and it was not.
 
 ### Environment and operation
 
-Phase 4 checkpoint runs, host `minis-w11p-ykm` (a fourth development
+Phase 4 checkpoint runs, development host A (a fourth development
 machine), scoop QEMU 11.0.0 `qemu-system-x86_64.exe`. Debug build
 `xhci98.sys` 36,699 B (`built Jul 30 2026 22:49:30`), staged with
 `scripts\package\make-package.ps1` and installed from the VVFAT package
