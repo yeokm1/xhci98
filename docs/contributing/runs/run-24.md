@@ -1868,3 +1868,108 @@ too). Finding 1 (a High-Speed interrupt endpoint behind a hub at `Period`
 1, Interval 0) stands open for the owner. So 24.3.4 stays open: the loop
 is disposed of, the fix batch is read on every guest it could be, and
 what remains is the list above.
+
+### The clauses never read: Windows 98 SE and 2000 (2026-09-28)
+
+The owner's scope for the list above, taken the same day: the hidusbf rates
+on every 32-bit guest held, at 1 and 2; idle suspend on the shipping build,
+and again on a local build with `USB_MINIPORT_FLAGS_DISABLE_SS` cleared (a
+control, never in the tree, on 98 SE and 2000 only); plug latency at 0, 1
+and 2; the power-off probed once and then recorded; the cancelled hub
+install on Windows 98 SE under SweetLow's stack at 2; and the device matrix
+at 2 now rather than at the cut. Two guests at a time, on a second
+development host (QEMU 11.0.92). The two primary targets were read first,
+on the same disks and build as the readings above (`DriverEntry (built Sep
+27 2026 22:21:42)`, `xhci98.sys` `1d8ec911...`), each value from its own
+cold boot. Per-guest reports: `out\t24-3-4\r4-<guest>-report.md`
+(git-ignored).
+
+**Neither guest met a stop condition at any value**: no fatal exception or
+hang, no `ctrl.failed.here` or `xfer.error`, `ResetControllerCalls` 0, no
+`EndpointRefusals*` and nothing floored, every endpoint open accepted.
+
+**The hidusbf rates on a root port: the ladder, exactly, at 1 and at 2.** A
+Full-Speed mouse on root port 1, behind its virtual hub at both values:
+
+| hidusbf | `bInterval` | `ep.open.rate` | Period | `ep.open.ival` | Interval | 98 SE | 2000 |
+|---|---|---|---|---|---|---|---|
+| none | 10 | `00080004` | 8 | `00020006` | 6 | 1, 2 | 1, 2 |
+| 250 | 4 | `00040004` | 4 | `00020005` | 5 | 1, 2 | 1, 2 |
+| 500 | 2 | `00020004` | 2 | `00020004` | 4 | 1, 2 | 1, 2 |
+| 1000 | 1 | `00010004` | 1 | `00020003` | 3 | 1, 2 | 1, 2 |
+
+The same ladder 24.1 read behind a real hub, now on a root port, which is
+issue 4's request: 250, 500 and 1000 Hz arrive as asked. On 98 SE the filter
+was installed Phase 20's way (the file, NUSB 3.6's Windows ME `usbd.sys`,
+`LowerFilters` and `bInterval` in the registry), on 2000 through the
+author's `Setup.exe`; each rate was read after a `device_del`/`device_add`.
+On 2000 the tool's "Default" with its filter ticked handed the device
+`bInterval` 4, not 10 - its own column showed 4 - so that row reads as 250
+Hz; the stock 10 appeared with the filter unticked. That is the tool's
+behaviour, and the driver programmed what it was handed.
+
+**Idle suspend on the shipping build: the controller never idled, at 0, 1 or
+2.** `USBCMD`/`USBSTS` read `0x5`/`0x0` at every read (98 SE and 2000 at 2
+from about +1 to +5.5 minutes with nothing plugged; at 1 six minutes idle,
+three with a Full-Speed mouse and its hub up, two after the unplug; three
+reads at 0), no `SuspendController` but the shutdown's, and a keyboard
+hot-plugged on port 6 afterwards was addressed within 10 s (2000 at 1: 3.0 s;
+98 SE at 1: its pipe open at 4.35 s). Windows 2000 was read with
+`DisableSelectiveSuspend = 0` written, since it never idles with the value
+absent (issue 5 section 5.5). This is flag 0x20 doing what issue 5 says,
+at every value; whether the virtual hubs would hold the idle off without
+it is the control build's reading, still owed.
+
+**Plug latency** (median of three timed plugs, milliseconds, device_add to
+the device usable):
+
+| | 0 | 1 | 2 |
+|---|---|---|---|
+| 98 SE, Full-Speed mouse | 640 | 2536 | 792 |
+| 98 SE, `usb-audio` (enumeration settled) | 1212 | 2018 | 1823 |
+| 2000, Full-Speed mouse | 388 | 2077 | 380 |
+| 2000, `usb-audio` (first streaming endpoint enabled) | 328 | 1549 | 546 |
+
+Record 12 section 4's cost, measured: at 1 a slower device takes about two
+seconds more (the hub's enumeration and two extra resets; six opens for the
+mouse where 0 and 2 take three), and at 2 about what 0 takes, the hub being
+there already. Under TCG the first plug after a pause took 3.7 to 4 s at
+every value, so the size of the gap is rough; its direction is not. The
+timers: `usable` is the mouse's interrupt pipe - on 98 SE from the driver's
+counters polled over the monitor, on 2000 from the first Configure
+Endpoint of a non-default endpoint in QEMU's trace log, which agreed to the
+millisecond with the debug console where both could be read. The debug
+console alone cannot time a plug at 2: the line it would count is one of
+the driver's value prints capped at 32 per load (`src\xhci_dbg.h`), and the
+eight hubs spend 24 of them at boot.
+
+**The root-port power-off: no operating system of the two asks for one.**
+Device Manager's disable of "USB 2.0 Root Hub" at 2, on both: the hub
+driver disabled all eight ports (`RH_ClearFeaturePortEnable`), aborting the
+eight held status-change transfers (98 SE `TransfersAborted` 8), and never
+cleared port power (`RhPortsUnpowered` 0, no `RH_ClearFeaturePortPower`);
+the hubs left Device Manager and the controller kept running. The enable
+powered all eight ports again (`RhPortsPowered` 8 -> 16) and the same eight
+records enumerated again - `VhubCreated` stayed 8, `VhubOpens` 24 -> 48,
+eight new `vhub.address` notes with addresses 1 to 8 - with no
+`StopController`, `StartController` or reset. A Full-Speed mouse plugged
+afterwards sat behind hub 1 (TT `HubAddr 0x0001 port 1`) and moved the
+pointer. So the root-port disable and re-enable at 2 is read, ending with
+the hubs enumerated again without a controller restart. The power-off half
+is not reachable from either guest: statically, XP SP3's `usbhub.sys` sends
+no `CLEAR_FEATURE(PORT_POWER)` at all (its one clear-port-feature helper,
+`USBH_SyncClearPortStatus` at `0x190A6`, is called only with the four
+change selectors 0x10, 0x12, 0x13 and 0x14), and none of the 24.3.4 debug
+logs on any of the ten guests holds an `RH_ClearFeaturePortPower`. It rests
+on the host vectors (`test_vhub`'s port-1 power cycle, the value-2
+power-off and power-on of section 8's `-0` list).
+
+Also seen, neither a finding: `VhubTransfersFailed` at 1 about 10 per hub
+lifetime again (0 at 2), and new-hardware wizards on 98 SE for the audio
+device's first plug at 2 and the keyboard's at 1, each answered before any
+timed plug.
+
+Still owed after these two, in the order the next session takes them, two
+guests at a time: the idle control legs on 98 SE and 2000; SweetLow's stack
+(with the cancelled hub install at 2), ME and XP x86 for the hidusbf rates,
+idle and latency; the two matrix images prepared at 2 and the matrix run.

@@ -2958,8 +2958,8 @@ four images re-cloned with `-Clone -FreshCopy` and stamped
 `base-1.1.1.0-qemu`, each stamp its file's only snapshot.
 
 **Two hosts and two QEMU builds, which is a variable 22.9 did not have.**
-`2b-fresh` and the first `xp64-fresh` and `win7-fresh` runs were taken on host
-`XT-F80DAC37B29E` under QEMU 11.0.92 (`v11.1.0-rc2-12128-gc65ddfcd01`); the
+`2b-fresh` and the first `xp64-fresh` and `win7-fresh` runs were taken on a
+second development host under QEMU 11.0.92 (`v11.1.0-rc2-12128-gc65ddfcd01`); the
 `2a-fresh` run and the two reruns on host `MINIS-W11P-YKM` under 11.1.0
 (`v11.1.0-12130-ge470268ff4`), the build 22.9 read. Each report's header
 names its own.

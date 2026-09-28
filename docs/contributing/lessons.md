@@ -1806,7 +1806,7 @@ Affected: `scripts\vm-matrix\gen-offsets.ps1`, `src\xhci_dispatch.c` and
 
 ## Task 12.5's control: the hub churn wedges Windows 98 only when this driver carries it, and two symptoms this project had been reading as liveness are frozen on healthy guests too
 
-Environment: host `XT-F80DAC37B29E`, QEMU 11.0.92 (batch 11-V ran 11.0.0),
+Environment: a second development host, QEMU 11.0.92 (batch 11-V ran 11.0.0),
 guest 2a (Windows 98 SE + NUSB), launcher
 `scripts\local\qemu-win98-run-12v5.cmd` carrying `qemu-xhci` + `usb-ehci` +
 `piix3-usb-uhci`, debug build `Aug 18 2026 11:58:03`,

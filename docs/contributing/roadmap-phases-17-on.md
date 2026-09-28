@@ -923,10 +923,20 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     bugchecks, and churn of 25 passes at 1 and 2 - with nothing behind a
     virtual hub enumerating there (the gap; at 2 High Speed too), and at 1
     a hub create/drop loop that is the same gap, disposed of with Codex's
-    review and one vector, no driver change. **Still owed before this is
-    ticked:** the hidusbf rates on a root port at 1 and 2, idle suspend,
-    plug latency, at 2 a cancelled hub install and a root-port power-off
-    and on, and the device matrix at 2 with its High-Speed rows.
+    review and one vector, no driver change. **The clauses never read,
+    begun 2026-09-28** (`runs/run-24.md`, "The clauses never read"), on the
+    owner's scope of that day: on Windows 98 SE and 2000, at 1 and 2, the
+    hidusbf rates on a root port programme the ladder exactly (Interval 6,
+    5, 4, 3), the shipping build never idles, a slower device takes about
+    two seconds longer to become usable at 1 and the same as today at 2,
+    and a root-hub disable and enable at 2 brings the hubs back with no
+    controller restart - while neither system ever asks for a root-port
+    power-off, which rests on the host vectors. **Still owed before this is
+    ticked:** the same readings on SweetLow's stack, ME and XP x86; idle
+    suspend on a local build without `USB_MINIPORT_FLAGS_DISABLE_SS`, on 98
+    SE and 2000, to read whether the hubs hold the idle off; at 2 a
+    cancelled hub install (SweetLow's stack); and the device matrix at 2
+    with its High-Speed rows.
   - [ ] **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the
     switch at 1 and at 2, the Low-Speed mouse and the Full-Speed audio device from
     `test-equipment.md` on root ports, the interval read from the snapshot;
