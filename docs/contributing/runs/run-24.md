@@ -125,7 +125,7 @@ derivation.
   git-ignored under `tools/`; the README there records hash and version the
   way `tools/sweetlow-extracted/README.md` does.
 - The device matrix on both primary targets against
-  `runs/run-23-post-release/`, and the cut, are 24.6's (24.5 until 2026-09-27).
+  `runs/run-23-post-release/`, and the cut, are 24.7's (24.5 until 2026-09-27, 24.6 until 2026-09-28).
 
 ### What arrived, and what it settled (later the same day)
 
@@ -184,7 +184,7 @@ kernel driver on Windows.
   were re-run against it: 16,782 + 234 + 2,027 checks, 0 failures.
 - **The package.** `make-package.ps1 -Flavor qemu -Arch x86` staged
   `out\pkg-qemu-x86` (`xhci98.sys` 164,944 B, 1.1.1.0 - 24.1 does not bump
-  the version, 24.6 does), copied to `vm\xfer98\XHCI98\` and verified
+  the version, 24.7 does), copied to `vm\xfer98\XHCI98\` and verified
   byte-identical to `src\objchk_qemu\i386\xhci98.sys`.
 - **The guest.** `vm\t24-sweetlow.img`, a copy of `vm\sweetlow-2a.img`
   reverted to its one snapshot, `sweetlow-stack-nodriver`: SweetLow's stack
@@ -1030,7 +1030,7 @@ all` and `release -amd64` green through every gate with no new import
 checks; `XHCISNAP`'s self-test.
 
 **Owed.** 24.3.4's readings, the first being which encoding a `REG_SZ`
-arrives in on Windows 98 SE and ME (`XHCISNAP` now prints it). 24.6's cut
+arrives in on Windows 98 SE and ME (`XHCISNAP` now prints it). 24.7's cut
 had to rewrite the download's readme sentence that names snapshot schema 4,
 which `make-release.ps1` refuses as stale; the audit below took it.
 
@@ -1558,7 +1558,7 @@ is assertion-only on all four NT 6.x builds); B's ordinary lifetime and the
 replacement-hub isolation sound; C's two port-1 cases sound; switch 0
 unchanged. Four findings, all real:
 
-1. **MAJOR, older than 24.3 - roadmap 24.5 by the owner's decision.** NT 6.x's legacy
+1. **MAJOR, older than 24.3 - roadmap 24.4 by the owner's decision.** NT 6.x's legacy
    `UsbPortRequestAsyncCallback` calls `RequestAsyncCallbackEx` with its
    seventh argument 1, which skips the timer-list lock; the service assumes
    its caller holds it, as usbport does only around its root-hub feature
@@ -1675,7 +1675,7 @@ finding D still stands in QEMU.
 
 **The owner's decisions (2026-09-27), on the three items left open.**
 Codex round 1's item 1, the NT 6.x timer-arm race, is recorded and taken
-as its own task, roadmap 24.5, taken before the cut (now 24.6): a static
+as its own task, roadmap 24.4 (24.5 until 2026-09-28), taken before the cut (now 24.7): a static
 read of the locks usbport holds in each context that reaches this driver
 first, then the choice of where the driver may arm on NT 6.x; no code
 changes for 24.3.4. The disown debt a
@@ -1863,9 +1863,10 @@ hubs kept (not reachable here, above; host vectors and the E460). **Not
 taken at all yet, and owed before 24.3.4 is ticked:** the hidusbf rates on
 a root port at 1 and 2; idle suspend; plug latency; at 2 a cancelled hub
 install and a root-port power-off and on; and the device matrix at 2 with
-its High-Speed rows (the cut, 24.6, reads the matrix in all three states
+its High-Speed rows (the cut, 24.7, reads the matrix in all three states
 too). Finding 1 (a High-Speed interrupt endpoint behind a hub at `Period`
-1, Interval 0) stands open for the owner. So 24.3.4 stays open: the loop
+1, Interval 0) stands open for the owner (roadmap 24.5 since 2026-09-28,
+taken before the cut). So 24.3.4 stays open: the loop
 is disposed of, the fix batch is read on every guest it could be, and
 what remains is the list above.
 

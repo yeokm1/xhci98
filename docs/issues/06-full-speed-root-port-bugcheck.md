@@ -665,7 +665,7 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
   true speeds, section 5), then true speeds on root ports (24.3), a
   decision until 2026-09-25 and since then the build of section 8's
   virtual hub, on demand (switch value 1) or on every USB 2.0 port (value
-  2), on every target, off by default. Task 24.4
+  2), on every target, off by default. Task 24.6
   reads the reporter's pointer for the USB 1.1 hub this project never held,
   once the part is to hand.
 - **The bandwidth accounting on Windows 98 and 2000** (section 5) has no

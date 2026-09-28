@@ -628,7 +628,7 @@ topology issue 6 section 6.2 bugchecks them in - confirmed here against the
 2026-09-22 with these same three subjects as 24.1 to 24.3, was removed the
 same day before any task ran, and `runs/run-23.md` names its ids as the
 record of that day. The ids below keep those three meanings, so nothing that
-cites them changes sense; 24.4 to 24.6 are new. **24.2 is decided**
+cites them changes sense; 24.4 to 24.7 are new. **24.2 is decided**
 (2026-09-25: owned by 24.3). **24.3 became a build the same day**: the owner
 took the virtual hub inside this phase, in its on-demand shape and in its
 permanent one as a second value of the same switch, on every target with
@@ -825,7 +825,7 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     build green through every gate. Record 12 section 10 is what the wiring
     decided, and `runs/run-24.md` the record. The download's readme
     template now names snapshot schema 5, taken in the audit of 2026-09-25
-    rather than left to 24.6's cut, which would have refused it.)* The
+    rather than left to 24.7's cut, which would have refused it.)* The
     virtual device records, in
     a fixed per-root-port array of their own outside the topology graph, the
     decision point, the synthetic completion path through the deferred
@@ -910,7 +910,7 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     deadline of its own by decision (2026-09-27). **The fix batch is in**
     (2026-09-27, `runs/run-24.md`, "The fix batch"; record 12 section 11),
     and the owner decided its three open items the same day: the NT 6.x
-    timer-arm race is recorded and taken as its own task (24.5); a port-1
+    timer-arm race is recorded and taken as its own task (24.4); a port-1
     disable's debt lost across a successful restore on a port whose hub
     stays is the per-tenancy rule working as written, and stays; and QEMU's
     missing port disable is accepted as a gap, so Full- and Low-Speed
@@ -976,21 +976,9 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   guest; the device matrix on both primary targets in all three states; the
   E460.
 
-- [ ] **24.4 - The reporter's pointer for the missing USB 1.1 hub.**
-
-  Once a part is to hand: read whether a board built on an Analog Devices
-  ADuM3160 or ADuM4160 USB isolator enumerates as a hub or is transparent to
-  the host, and what it does to a High-Speed device behind it. If it
-  presents as a hub, it is the first way to put issue 6 section 6's topology
-  on metal (`test-equipment.md` gains its row); if it is transparent, the
-  pointer closes on that reading. The datasheet can be read before the part
-  arrives, and the phase does not wait on it.
-
-  Where it is read: the datasheet, then the part on the E460.
-
-- [ ] **24.5 - The NT 6.x timer-arm race.** *(added 2026-09-27 by the owner's
+- [ ] **24.4 - The NT 6.x timer-arm race.** *(added 2026-09-27 by the owner's
   decision, and taken before the cut; older than 24.3 and not part of
-  issue 4)*
+  issue 4; 24.5 until 2026-09-28)*
 
   On Vista and Windows 7 the legacy `UsbPortRequestAsyncCallback` enters
   `RequestAsyncCallbackEx` on the branch that skips usbport's timer-list
@@ -1021,10 +1009,57 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   primary targets no worse. Before the `1.1.2.0` cut (owner, 2026-09-27),
   so the cut's install legs and matrix read the build that carries it.
 
-- [ ] **24.6 - The record and the cut.**
+- [ ] **24.5 - The High-Speed interval behind a hub.** *(added 2026-09-28 by
+  the owner's decision, and taken before the cut; older than 24.3)*
 
-  One cut carrying 24.1 and 24.3 together (owner, 2026-09-25), and 24.5
-  (owner, 2026-09-27), as `1.1.2.0` (the third field moves): issue 6 -
+  A High-Speed interrupt endpoint behind a hub opens at `Period` 1, which
+  this driver programs as Interval 0 (125 us): read at 2, behind the virtual
+  hub, under NUSB's, SweetLow's, ME's, SP4's and XP's usbport, where the same
+  device on a root port at 1 opens at `Period` 32, Interval 5
+  (`runs/run-24.md`, 24.3.4, finding 1). Design record 12 section 7 says a
+  High-Speed device at 2 keeps the same interval, so the record and the
+  behaviour disagree. The likely mechanism, read in ReactOS only: usbport's
+  USB 2.0 budgeter overwrites `Period` with its budget's period and carries
+  the microframe choice in `InterruptScheduleMask`, which an EHCI miniport
+  uses and this driver never reads (`src/xhci_usbport.h` declares it). If
+  so, the defect is older than 24.3, and a High-Speed interrupt device
+  behind any real USB 2.0 hub is polled every 125 us today. The devices
+  work; they are polled far more often than they ask.
+
+  First a static read, on every usbport build the targets run (NUSB,
+  SweetLow's, SP4, XP x86 and x64, Vista and 7 in both architectures), of
+  what `Period` and `InterruptScheduleMask` carry for a High-Speed
+  interrupt endpoint behind a hub, and where the endpoint's own `bInterval`
+  can be read. Then the choice of source for the Interval - the
+  descriptor's `bInterval`, the schedule mask, or the budget's period -
+  with host vectors for it, and design record 12 section 7 corrected if the
+  choice leaves a difference.
+
+  Where it is read: the static read; host vectors; the guests at 2 with a
+  High-Speed mouse behind a virtual hub (NT 5.x - on NT 6.x QEMU's ignored
+  port disable keeps any device behind a virtual hub from enumerating); the
+  E460's USB 2.0 hub with a High-Speed device behind it; every value's
+  no-regression reading. Before the `1.1.2.0` cut, so the cut's install
+  legs and matrix read the build that carries it.
+
+- [ ] **24.6 - The reporter's pointer for the missing USB 1.1 hub.** *(24.4
+  until 2026-09-28, when the owner moved it to just before the cut)*
+
+  Once a part is to hand: read whether a board built on an Analog Devices
+  ADuM3160 or ADuM4160 USB isolator enumerates as a hub or is transparent to
+  the host, and what it does to a High-Speed device behind it. If it
+  presents as a hub, it is the first way to put issue 6 section 6's topology
+  on metal (`test-equipment.md` gains its row); if it is transparent, the
+  pointer closes on that reading. The datasheet can be read before the part
+  arrives, and the phase does not wait on it.
+
+  Where it is read: the datasheet, then the part on the E460.
+
+- [ ] **24.7 - The record and the cut.** *(24.6 until 2026-09-28, 24.5 until
+  2026-09-27)*
+
+  One cut carrying 24.1 and 24.3 together (owner, 2026-09-25), 24.4 (owner,
+  2026-09-27) and 24.5 (owner, 2026-09-28), as `1.1.2.0` (the third field moves): issue 6 -
   section 5's bands as what the switch
   off still gives, sections 6.2 and 7 with what the switch on changes, and
   section 9's first item; the release notes' High Speed entry and a new
@@ -1073,7 +1108,8 @@ surviving on Vista and 7 in both architectures, 25 plug/unplug cycles
 survived per target, and a Low-Speed device on the SweetLow guest at its
 true speed; at 1 a High-Speed device on the direct path, and at 2 a
 High-Speed device working behind the virtual hub and a hub on every USB 2.0
-port with nothing plugged in; 24.4 a recorded reading, or recorded as
+port with nothing plugged in; 24.4 and 24.5 landed and read as their
+entries say; 24.6 a recorded reading, or recorded as
 waiting on the part if the phase closes first; and `1.1.2.0` cut with its
 install legs read from the asset and the matrix on both primary targets in
 all three states. Not a checkpoint: a truthful root-hub report (measured

@@ -974,7 +974,7 @@ VOID XhciRootHubDeferredWork(PXHCI_EXTENSION ext);
  * and its timer DPC, so an arm from here - or from the command pump, the
  * event DPC or the health poll, as this driver has always armed - races the
  * timer DPC's removal from the same list on another CPU. Found in task 24.3.4
- * (run-24.md) and taken as roadmap task 24.5; this function adds no new kind
+ * (run-24.md) and taken as roadmap task 24.4; this function adds no new kind
  * of arm.
  *
  * IRQL: <= DISPATCH_LEVEL, controller lock released.

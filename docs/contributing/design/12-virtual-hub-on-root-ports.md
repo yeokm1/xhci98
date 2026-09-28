@@ -1087,7 +1087,7 @@ run-24.md.
   only its root-hub feature callbacks and timer DPC do (static), so this
   arm - like every arm the driver makes from the command pump, the event
   DPC and the health poll - races the timer DPC on another CPU. That is
-  older than this task, and roadmap 24.5 by the owner's decision (run-24.md). The ReactOS-derived note
+  older than this task, and roadmap 24.4 by the owner's decision (run-24.md). The ReactOS-derived note
   that the service is safe under `MiniportSpinLock`
   (`docs/usb-xhci-info/usbport-miniport-abi.md`) holds for NT 5.x only.
 - **At 1 the hub retires with its device.** Section 3.2 had the hub
@@ -1142,7 +1142,7 @@ no-deadline rule working as decided; Full- and Low-Speed devices behind a
 virtual hub on NT 6.x cannot be read in QEMU without a patched emulator.
 The owner accepted that gap (2026-09-27): no emulator is patched, and those
 devices are read on the E460 under Windows 7 x86 (roadmap 24.3.5). The
-timer-arm race above is roadmap 24.5.
+timer-arm race above is roadmap 24.4.
 
 On the fixed build the same gap shows at 1 as a loop on Vista and 7: usbhub
 abandons the held resets with a root disable, which retires the hub; QEMU

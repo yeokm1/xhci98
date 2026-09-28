@@ -90,7 +90,9 @@ of that number and carries what GitHub issue 4 still asks for, in order of
 how cheaply each can be built and read: the Low-Speed polling rates behind
 a hub (the reporter's Code 10 at 250 Hz and above), a decision on root-port
 polling rates, true speeds on root ports through the virtual USB 2.0 hub of
-design record 12, the reporter's USB 1.1 hub pointer once the part is to
+design record 12, then two defects found on the way and taken before the
+cut (the NT 6.x timer-arm race, and the interval of a High-Speed device
+behind a hub), the reporter's USB 1.1 hub pointer once the part is to
 hand, and the cut of whatever changed. Open: 24.1 read out and 24.2
 decided on 2026-09-25, and 24.3 built through its driver sub-task the same
 day, with its guest readings still owed.
@@ -144,7 +146,11 @@ on 2026-09-24 keeps the removed one's meanings for 24.1 to 24.3, which
 `runs/run-23.md` cites, and adds 24.4 and 24.5 after them. On 2026-09-27,
 while only the roadmap and `runs/run-24.md` cited the cut as a task id, a
 new 24.5 (the NT 6.x timer-arm race) went in before it and the cut became
-24.6. What keeps an old id is an artifact name - a snapshot, a marker, an
+24.6. On 2026-09-28, with no Phase 24 id in a published `readme.txt`, the
+owner put a new task before the cut and moved the reporter's pointer to
+just before it, and the four were renumbered in order: the timer-arm race
+24.5 -> 24.4, the new High-Speed interval behind a hub 24.5, the pointer
+24.4 -> 24.6, and the cut 24.6 -> 24.7. What keeps an old id is an artifact name - a snapshot, a marker, an
 `out\` directory - and
 `runs/run-23.md` lists those under "On task ids inside artifact names".
 
