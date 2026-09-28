@@ -75,6 +75,19 @@
  */
 #define XHCI_INTERRUPT_WRITE_ATTEMPTS   3UL
 
+/*
+ * The arm context (XHCI_ARM_*, roadmap 24.4) of a path this file shares
+ * between a start or resume and the recovery: the No Op self-test and the
+ * stop helper's forced drain. `InitBelowPassive` is set by
+ * XhciRecoverController alone, around its XhciInitController, and that runs
+ * from the recovery timer's callback - a DEFER context; StartController and
+ * ResumeController are UNLOCKED ones. It is read only on this controller's
+ * own lifecycle path, which usbport does not run on two CPUs at once, so it
+ * cannot admit another context the way a per-controller counter would.
+ */
+#define XHCI_INIT_ARM_MODE(ext) \
+    ((ext)->InitBelowPassive ? XHCI_ARM_DEFER : XHCI_ARM_UNLOCKED)
+
 /* The sequence's refusal record, defined with the sequence below; declared
  * here because XhciRecoverController refuses through it ahead of entering
  * the sequence. */
@@ -3598,7 +3611,7 @@ VOID XhciSuspendController(PXHCI_EXTENSION ext)
      * not call SuspendController from inside a SubmitTransfer, so nothing is
      * held back.
      */
-    XhciSlotDeferredWorkForced(ext);
+    XhciSlotDeferredWorkForced(ext, XHCI_ARM_UNLOCKED);
 
     /* Quiesce masks before closing ISR/DPC admission and before the halt, even
      * when the halt later fails. Win98's unbracketed idle suspend depends on it. */
@@ -3749,8 +3762,8 @@ MPSTATUS XhciResumeController(PXHCI_EXTENSION ext)
              * path on which the record survives to be taken back (Phase 7
              * review, B3). */
             XhciSlotResumeSweep(ext);
-            XhciRootHubDeferredWork(ext);
-            XhciSlotDeferredWorkForced(ext);
+            XhciRootHubDeferredWork(ext, XHCI_ARM_UNLOCKED);
+            XhciSlotDeferredWorkForced(ext, XHCI_ARM_UNLOCKED);
             return MP_STATUS_SUCCESS;
         }
 
@@ -3801,7 +3814,7 @@ MPSTATUS XhciResumeController(PXHCI_EXTENSION ext)
         XhciControllerLockAcquire(&oldIrql);
         XhciSlotInvalidateAll(ext, halted);
         XhciControllerLockRelease(oldIrql);
-        XhciSlotDeferredWorkForced(ext);
+        XhciSlotDeferredWorkForced(ext, XHCI_ARM_UNLOCKED);
     }
 
     /*
@@ -3864,7 +3877,7 @@ MPSTATUS XhciResumeController(PXHCI_EXTENSION ext)
      * After EnableInterrupts, so that if usbport does come back and poll, it
      * polls a controller whose interrupts are already live.
      */
-    XhciRootHubDeferredWork(ext);
+    XhciRootHubDeferredWork(ext, XHCI_ARM_UNLOCKED);
 
     return MP_STATUS_SUCCESS;
 }
@@ -4020,7 +4033,7 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
     XhciControllerLockAcquire(&oldIrql);
     XhciSlotInvalidateAll(ext, halted);
     XhciControllerLockRelease(oldIrql);
-    XhciSlotDeferredWorkForced(ext);
+    XhciSlotDeferredWorkForced(ext, XHCI_ARM_DEFER);
 
     ext->InitBelowPassive = 1;
     status = XhciInitController(ext, NULL);
@@ -4109,8 +4122,12 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
      * hardware, which stops the controller ever mentioning it again - would
      * otherwise be simply missing. It is the exact failure Finding 3 ends in,
      * arrived at from the other side.
+     *
+     * From the recovery timer's callback, so an XHCI_ARM_DEFER context
+     * (roadmap 24.4): the self-test's watchdog is owed, and the announcement
+     * this makes anyway is what gets it made.
      */
-    XhciRootHubDeferredWork(ext);
+    XhciRootHubDeferredWork(ext, XHCI_ARM_DEFER);
 
     ext->RecoveryCompletions++;
     /*
@@ -4391,7 +4408,7 @@ ULONG XhciStopController(PXHCI_EXTENSION ext)
         XhciControllerLockAcquire(&oldIrql);
         XhciSlotInvalidateAll(ext, quiesced);
         XhciControllerLockRelease(oldIrql);
-        XhciSlotDeferredWorkForced(ext);
+        XhciSlotDeferredWorkForced(ext, XHCI_INIT_ARM_MODE(ext));
 
         return quiesced;
     }
@@ -5037,7 +5054,7 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
      * controller whose command path has never worked and nothing to say so.
      */
     ext->InitStep = XHCI_INIT_STEP_NOOP;
-    status = XhciCommandNoOpSelfTest(ext);
+    status = XhciCommandNoOpSelfTest(ext, XHCI_INIT_ARM_MODE(ext));
     if (status != XHCI_CMD_OK) {
         /* Same reclamation rule as the failed run above - and this is the exit
          * where the port pass has real work: step 16 powered the managed ports

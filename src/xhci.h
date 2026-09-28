@@ -6154,6 +6154,39 @@ typedef struct _XHCI_EXTENSION {
     ULONG CompletionsHeldOtherEndpoint;
     ULONG CompletionPollInvalidates;
     /*
+     * **Roadmap 24.4: on the Version 300 tier every timer is armed through
+     * `UsbPortRequestAsyncCallbackEx` with its own lock, and only from a
+     * context that may take it** (`XHCI_ARM_*` in src/xhci_hw.h, design
+     * record 05). The legacy service there skips usbport's timer-list lock
+     * and assumes the caller holds it, which usbport does only around its
+     * root-hub feature callbacks and its timer DPC - and those arrive without
+     * it too (the USB 2.0 port-power detour, the User* IOCTL paths, Windows
+     * 7's StopController running pending timer callbacks early) - so every
+     * arm this driver made on NT 6.x could race the timer DPC's unlink and
+     * free (static, all four builds). Set in StartController beside the
+     * delivery gates, from the version presented and only if usbport wrote
+     * the Ex slot; clear on every NT 5.x build, whose arms are unchanged.
+     */
+    ULONG ArmThroughExOnly;
+    /*
+     * The command watchdog a DEFER context owed: one at a time, as the engine
+     * is. Written under the controller lock by the submit and the timeout's
+     * re-arm, taken by XhciCommandDrainOwedArm, which arms it only if the
+     * command it watches is still the outstanding one. The context is held by
+     * value - `XHCI_COMMAND_TIMEOUT`'s four words, spelled out because that
+     * type is declared after this one - captured with the decision, for the
+     * reason xhciArmCommandTimer gives.
+     */
+    ULONG CommandArmOwed;
+    ULONG CommandArmOwedMs;
+    ULONG CommandArmOwedEpoch;
+    ULONG CommandArmOwedGeneration;
+    ULONG CommandArmOwedPhase;
+    ULONG CommandArmOwedAttempt;
+    ULONG AsyncArmsDeferred;    /* arms a DEFER context left owed             */
+    ULONG AsyncArmsRefused;     /* Ex answered an error: the arm was lost     */
+    ULONG RootHubArmKicks;      /* announcements made only to drain owed arms */
+    /*
      * The transfer a `UsbPortCompleteTransfer` call is inside right now, or
      * NULL. It is off both the endpoint queue and the completion list for the
      * duration, which is the only interval in which an abort can find it

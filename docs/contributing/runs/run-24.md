@@ -1976,3 +1976,82 @@ the hidusbf rates, idle and latency; the two matrix images prepared at 2
 and the matrix run. By the owner's order of 2026-09-28 all but the idle
 control come after roadmap 24.4 and 24.5, which change the driver, and are
 read on fresh images of the build that carries both.
+
+## 24.4 - The NT 6.x timer-arm race (2026-09-28)
+
+Taken before the rest of 24.3.4, with 24.5, in one rebuild (owner,
+2026-09-28). This section records the read, the decision and the host
+vectors; the build and the guests are recorded with 24.5's.
+
+### The read
+
+All four NT 6.x `usbport.sys` builds were disassembled whole (`kd -z ... -y
+srv*tools\symbols -c "u 11000 <end>; q"`, with the public PDBs; a range
+starting below 0x11000 hangs on the unmapped page at 0x10400) and read by one
+agent per build; Windows 7 x64's `MPf_CheckController`, `USBPORT_IsrDpc`,
+`USBPORT_AsyncTimerDpc` and the Ex prologue were read first-hand. The facts,
+per build with addresses, are in `legal-provenance.md` section 4; the ones
+the choice turned on, all static:
+
+- `CheckController` is called holding **no** usbport lock (the MP lock is
+  taken for a flag test and released first); `InterruptDpcEx` under the
+  ISR-DPC lock only; the timer callback from `USBPORT_AsyncTimerDpc` under
+  the timer-list lock only; every endpoint callback under the MP-call lock
+  and EpList; Start/Stop/PollController under nothing; Suspend/Resume under
+  the suspend/resume semaphore only; the root-hub status queries under the
+  MP lock from `RootHub_Endpoint1_Peek` or under nothing.
+- No usbport function takes the MP, MP-call or ISR-DPC lock or EpList while
+  holding the timer-list lock, none takes the timer-list lock under the MP
+  or ISR-DPC lock, and EpList and the timer-list lock are never nested.
+- `USBPORTSVC_RequestAsyncCallbackEx` takes seven arguments - the legacy
+  five, an optional handle out-pointer, a skip-lock byte - takes the
+  timer-list lock itself when the byte is 0, and answers an NTSTATUS
+  (`0xC000009A` on its pool failure). The legacy slot is it with `(NULL, 1)`.
+- **Two facts changed the draft design.** The root-hub feature callbacks
+  arrive with the timer-list lock from `USBPORT_RootHub_PortRequest` and
+  without it from the USB 2.0 `SetFeaturePortPower` detour (this driver sets
+  `MiniPortFlags` 0x10) and the User* IOCTL paths; and on Windows 7 only
+  `MPf_StopController` runs `USBPORT_CancelAllAsyncTimerCallbacks` before
+  the miniport's StopController, which calls each pending timer callback
+  synchronously with the lock not held. So no callback of this driver can
+  tell whether it holds the lock.
+
+### The decision
+
+The roadmap's two options were arming only where the lock is held, and Ex
+wherever the read shows it safe. The first has no context to stand on (none
+is known to hold the lock), so the second, completed: on the Version 300
+tier the legacy service is never called; an arm from a context usbport
+reaches holding nothing, its MP lock or its ISR-DPC lock (`XHCI_ARM_UNLOCKED`:
+the event DPC, `CheckController`, the root-hub status queries, the lifecycle
+callbacks) is made at once through Ex with its lock; one from any other
+context (`XHCI_ARM_DEFER`: every endpoint callback, every root-hub feature
+callback, every timer callback) is owed to the next UNLOCKED context -
+`ArmPending` for a port, the new `CommandArmOwed` latch for the command
+watchdog - and a feature callback, a port timer or the recovery, which
+already announce, announce when an arm is owed (the kick) so usbport's
+root-hub peek makes it at once. The mode is an argument at every call, never
+a field. The Version 200 tier arms at once through the legacy service in
+both modes, as before. A refused Ex arm is counted (`AsyncArmsRefused`) and
+treated as lost at once. Design record 05, "Where a timer may be armed", is
+the record; the cost is a port-1 resume through a virtual hub up to one poll
+interval late on NT 6.x at 1 or 2 (design record 12 section 11).
+
+### The host vectors
+
+`test_init` gained three never-reset nets (no legacy arm on a Version 300
+start; no Ex arm from a timer delivery, a modelled root-hub feature or
+endpoint callback, or inside `SubmitTransfer`; no Ex arm with the lock byte
+set) and six vectors, `test_nt6_arm_*`, through a host-only seam that makes a
+start present Version 300 (`XhciSetInterfaceVersionForTest`). Every existing
+vector runs the 200 tier unchanged; `test_init` went from 21,576 checks to
+21,952, every suite green.
+
+Eighteen mutations were run, each flipping one context's mode or removing a
+drain (`out\t24-4\mutations-24-4.txt`, git-ignored). The first pass killed 14
+and left four alive: the power/disable/suspend feature callbacks, the resume
+end of the port timer, the kick (the mutation removed only its first site)
+and the locked endpoint drains; a vector was added for each and the rerun
+killed all four. One survives by construction: the device half of the health
+poll flipped to DEFER, because the root-hub half of the same poll has
+already drained every owed arm through its own UNLOCKED slot pass.

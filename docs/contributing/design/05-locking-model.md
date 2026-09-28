@@ -179,6 +179,21 @@ no miniport slot. The controller lock may be taken inside it - the
 suite's defensive re-entry vector does - and it may never be taken inside
 the controller lock; the host model counts either inversion as an error.
 
+**On NT 6.x the timer service adds usbport's timer-list lock to the picture**
+(roadmap 24.4; section 7, "Where a timer may be armed"). This driver takes it
+only through `UsbPortRequestAsyncCallbackEx` with its lock byte 0, with the
+controller lock released, from a context usbport reaches holding nothing, its
+MP lock or its ISR-DPC lock. That adds the orders MP lock -> timer-list lock
+and ISR-DPC lock -> timer-list lock. The kick a root-hub feature callback or a
+timer callback makes adds timer-list lock -> RH-IntrEp lock -> EpList, through
+`USBPORTSVC_InvalidateRootHub` (the announcement those callbacks already made).
+None of them closes a cycle: no usbport function takes the MP lock, the
+MP-call lock, the ISR-DPC lock or EpList while holding the timer-list lock,
+none takes the timer-list lock under the MP or ISR-DPC lock, and EpList and
+the timer-list lock are never nested in either direction (static, all four
+NT 6.x builds; `legal-provenance.md` section 4) - and this driver never arms
+under EpList.
+
 ## 4. The DIRQL exception
 
 `XhciIsr` runs at DIRQL. It cannot take `xhciControllerLock`: a DISPATCH-level
@@ -672,6 +687,105 @@ query, a bare drain and the first poll all leave a completion parked and
 not again; `SetEndpointState`, `AbortTransfer` and the forced drain each
 deliver from their own context, and the 200 tier still delivers from the
 DPC.
+
+### Where a timer may be armed (roadmap 24.4, 2026-09-28)
+
+The completion service's lesson, again for the timer service. On NT 6.x the
+legacy `UsbPortRequestAsyncCallback` forwards to
+`USBPORTSVC_RequestAsyncCallbackEx` with its seventh argument 1, which skips
+the Ex function's own acquisition of usbport's timer-list lock and assumes
+the caller holds it; usbport holds it around the timer DPC's callback and
+around the root-hub feature callbacks it makes from
+`USBPORT_RootHub_PortRequest`. Every other arm this driver made - the command
+watchdog from the submit pump, the event DPC and the health poll, the
+device-initiated resume, the recovery, the virtual hub's submit - could race
+the timer DPC's unlink and free on another CPU (static, found in 24.3.4,
+never observed). The locking branch cannot simply be taken everywhere: Ex
+with its lock byte 0 from a context that already holds the lock spins on it
+for ever, and from `SubmitTransfer` it would put the timer-list lock under
+EpList, the reverse of the timer DPC's order through
+`USBPORTSVC_InvalidateRootHub`.
+
+The static read of all four builds settled the rest, and one part of it
+decided the design: **no callback of this driver can know whether usbport
+holds the timer-list lock**. The root-hub feature callbacks arrive with it
+from `RootHub_PortRequest` and without it from the USB 2.0 port-power detour
+(`SetFeaturePortPower` with `MiniPortFlags` 0x10, which this driver sets) and
+the User* IOCTL paths; the timer callbacks arrive with it from the timer DPC
+and, on Windows 7 only, without it from `USBPORT_CancelAllAsyncTimerCallbacks`,
+which `MPf_StopController` runs before the miniport's StopController and which
+calls each pending callback synchronously.
+
+So on the Version 300 tier (`XHCI_EXTENSION.ArmThroughExOnly`, set in
+StartController from the version presented and only if usbport wrote the
+slot) the legacy service is never called, and every arm site passes its
+context as an argument (`XHCI_ARM_*`, `src/xhci_hw.h`) - never a field, for
+the reason the delivery gate's admission is an argument:
+
+| Mode | Contexts | What happens |
+|---|---|---|
+| `XHCI_ARM_UNLOCKED` | the event DPC (usbport holds its ISR-DPC lock); `CheckController` - `XhciRootHubPoll`, `xhciArmRecovery`, `XhciSlotPoll` (nothing held); the root-hub status queries `RH_GetPortStatus` / `RH_GetHubStatus` (nothing, or the MP lock from `RootHub_Endpoint1_Peek`); Start/Stop/Suspend/ResumeController (nothing, or the suspend/resume semaphore) | armed now: `UsbPortRequestAsyncCallbackEx(ext, ms, ctx, len, cb, NULL, 0)`, and first every arm a DEFER context left owed |
+| `XHCI_ARM_DEFER` | every endpoint callback - `OpenEndpoint`, `SubmitTransfer` (the virtual hub's included), `SetEndpointState`, `SetEndpointStatus`, `PollEndpoint`, `AbortTransfer` (the MP-call lock and EpList); every root-hub feature callback; every timer callback - the command watchdog's re-arm, the port timer, the recovery (and with it the recovery's No Op self-test and stop helper, `XHCI_INIT_ARM_MODE`) | nothing armed: a port's `ArmPending` stays set, the command watchdog is latched in `CommandArmOwed` with its context by value |
+
+On the Version 200 tier both modes arm at once through the legacy service,
+as every NT 5.x build always has, so nothing below NT 6.x moves (AGENTS.md's
+tier rule).
+
+**How an owed arm gets made.** Every UNLOCKED context drains: the slot
+layer's UNLOCKED pass makes the owed command watchdog first
+(`XhciCommandDrainOwedArm`, ahead of its re-entry guard, so a pass another
+CPU runs inside `SubmitTransfer` cannot hide it), and
+`XhciRootHubDeferredWork(UNLOCKED)` and the status queries
+(`XhciRootHubDrainOwedArms`) make the ports'. The watchdog is armed only if
+the command it watches is still the outstanding one in the phase it
+watches; one that has completed or moved on is dropped. From a DEFER context
+that already announces - a root-hub feature callback, a port timer, the
+recovery - the announcement is made whether or not a change is latched when
+an arm is owed: that is the **kick**. `USBPORTSVC_InvalidateRootHub` queues
+usbport's `Ev_Rh_IntrEp` DPC, whose `RootHub_Endpoint1_Peek` calls
+`RH_GetHubStatus` and `RH_GetPortStatus` under the MP lock as soon as this
+CPU's IRQL drops, and they drain. A closed notification gate is honoured: a
+scan is then already outstanding and reaches the same queries.
+`RootHubArmKicks` counts kick-only announcements.
+
+**What it costs.** An arm owed from an endpoint callback waits for the next
+event DPC (every interrupt), root-hub peek or health poll: a resume through
+a virtual hub's port 1 may end up to one poll interval (~500 ms) late on
+NT 6.x at switch 1 or 2, and a command watchdog pumped from `OpenEndpoint` or
+`SubmitTransfer` starts up to that much late (a 5 s net). The abort-wait
+re-arm from a timer callback waits the same; `XHCI_COMMAND_AGE_MS`,
+`XHCI_PORT_AGE_MS` and `XHCI_RECOVERY_DELIVERY_POLLS` all clear it.
+
+**What Ex adds.** It answers an NTSTATUS - 0, `0xC000009A` when its pool
+allocation fails - so on this tier a lost arm is reportable where the legacy
+service's 0 meant nothing. A refusal is counted in `AsyncArmsRefused` and
+treated as a lost arm at once: the command watchdog is re-owed, the port
+given up (`RhTimerFailures`), the recovery's arming released, re-requested
+and charged exactly as its age-out would have. The handle out-pointer and
+`UsbPortCancelAsyncCallback` are not used: a stale callback is still the
+rule, and Windows 7's StopController runs a pending one early whatever the
+driver holds - with a live epoch, so an abort issued on a pending command or
+a resume ended early at that moment is what the stop path already tolerates.
+
+Not chosen: arming only where the timer-list lock is known held (no such
+context exists, and a heartbeat re-armed from its own callback could be lost
+silently and meets Windows 7's cancel-all), and Ex from `SubmitTransfer`
+(the ABBA above).
+
+The suite holds it with three never-reset nets - on a Version 300 start the
+legacy service is never called; Ex is never called from a timer delivery, a
+root-hub feature callback or an endpoint callback (the model is told which
+it is standing in for, and `SubmitDepth` marks `SubmitTransfer`); Ex never
+with its lock byte set - and six vectors (`test_nt6_arm_*`): the tier choice;
+a deferred command watchdog made by the next UNLOCKED drain and dropped for
+a command that ended first; the timeout's re-arm owed and made by the poll,
+and a refused arm re-owed; a feature callback's reset deferred, kicked and
+armed by the status query, the closed-gate case armed by the event DPC, a
+port timer that does not make another port's owed arm, and a refused port
+arm; the recovery armed from the poll and its self-test's watchdog owed; a
+port-1 resume and an `OpenEndpoint` and `SET_ADDRESS` behind a virtual hub.
+Eighteen mutations - each context's mode flipped, the drains and the kick
+removed - were run against them (`runs/run-24.md`, "24.4").
 
 ### Endpoint records and the quiescence machine (Phases 7a and 8)
 

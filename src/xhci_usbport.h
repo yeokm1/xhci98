@@ -752,6 +752,18 @@ typedef ULONG (NTAPI *PUSBPORT_LOG_ENTRY)(PVOID, ULONG, ULONG, ULONG, ULONG, ULO
 typedef PVOID (NTAPI *PUSBPORT_GET_MAPPED_VIRTUAL_ADDRESS)(ULONG, PVOID, PVOID);
 typedef VOID (NTAPI XHCI_ASYNC_TIMER_CALLBACK)(PVOID, PVOID);
 typedef ULONG (NTAPI *PUSBPORT_REQUEST_ASYNC_CALLBACK)(PVOID, ULONG, PVOID, ULONG_PTR, XHCI_ASYNC_TIMER_CALLBACK *);
+/*
+ * `USBPORTSVC_RequestAsyncCallbackEx`, the Version 300 tier's slot at
+ * `0x1B0` / `0x308` (roadmap 24.4; static, all four NT 6.x builds,
+ * legal-provenance.md section 4): the legacy service's five arguments, then
+ * an optional out-pointer for the timer entry's handle and a skip-lock
+ * byte. With the byte 0 the service takes usbport's timer-list lock itself,
+ * which is the whole reason this driver calls it; the legacy slot forwards
+ * here with (NULL, 1). x86 stdcall, `ret 1Ch`. It answers an NTSTATUS - 0,
+ * or `0xC000000D` for a zero context length, `0xC000009A` when its pool
+ * allocation fails - so on this tier a lost arm is reportable.
+ */
+typedef ULONG (NTAPI *PUSBPORT_REQUEST_ASYNC_CALLBACK_EX)(PVOID, ULONG, PVOID, ULONG_PTR, XHCI_ASYNC_TIMER_CALLBACK *, PVOID *, UCHAR);
 typedef MPSTATUS (NTAPI *PUSBPORT_READ_WRITE_CONFIG_SPACE)(PVOID, BOOLEAN, PVOID, ULONG, ULONG);
 typedef LONG (NTAPI *PUSBPORT_WAIT)(PVOID, ULONG);
 typedef ULONG (NTAPI *PUSBPORT_INVALIDATE_CONTROLLER)(PVOID, ULONG);
@@ -910,7 +922,8 @@ typedef struct _USBPORT_REGISTRATION_PACKET {
     PVOID UsbxQueryBandwidthData;                /* 0x1A4 / 0x2F0 */
     PVOID UsbxQueryTtBandwidthData;              /* 0x1A8 / 0x2F8 */
     PVOID UsbxQueryEpBandwidthData;              /* 0x1AC / 0x300 */
-    PVOID UsbPortRequestAsyncCallbackEx;         /* 0x1B0 / 0x308 - OUT */
+    PUSBPORT_REQUEST_ASYNC_CALLBACK_EX
+        UsbPortRequestAsyncCallbackEx;           /* 0x1B0 / 0x308 - OUT */
     PVOID UsbPortCancelAsyncCallback;            /* 0x1B4 / 0x310 - OUT */
     PVOID Unreferenced1B8;                       /* 0x1B8 / 0x318 - no reader */
     PVOID Unreferenced1BC;                       /* 0x1BC / 0x320 - no reader */

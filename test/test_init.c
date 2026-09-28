@@ -721,6 +721,29 @@ static HC_ASYNC_PENDING asyncPending[HC_ASYNC_PENDING_MAX];
 static ULONG asyncPendingCount;
 static ULONG asyncQueueEnabled;
 
+/*
+ * Roadmap 24.4: the Version 300 tier's `UsbPortRequestAsyncCallbackEx`, and
+ * the usbport contexts it may not be called from. `harnessTier300` makes the
+ * next start present Version 300 with the Ex slot written. The model cannot
+ * see usbport's locks, so it is told: `asyncDeliveryDepth` is set while a
+ * timer callback runs (usbport's timer-list lock, or Windows 7's early run
+ * with none - DEFER either way), `usbportLockModel` by a vector around a
+ * root-hub feature callback or an endpoint callback, and `SubmitDepth` is
+ * the driver's own SubmitTransfer bracket. The three totals are never reset
+ * and are asserted at the end of main().
+ */
+static ULONG harnessTier300;
+static ULONG exCalls;
+static ULONG exAnswer;
+static ULONG exLastSkipLock;
+static PVOID exLastHandleOut;
+static ULONG exForwarding;
+static ULONG asyncDeliveryDepth;
+static ULONG usbportLockModel;
+static ULONG legacyArmOnTier300Total;
+static ULONG exArmInLockedContextTotal;
+static ULONG exArmSkippingLockTotal;
+
 /* UsbPortInvalidateRootHub - the root hub's announcement (Phase 5 task 5). */
 static ULONG rootHubInvalidates;
 static ULONG rootHubInvalidatesUnderLock;
@@ -2038,6 +2061,7 @@ VOID XhciHostReleaseSpinLock(PKSPIN_LOCK lock, KIRQL oldIrql)
  * trailing-signature half had never been executed by any test.
  */
 VOID XhciFillPacketForTest(VOID);
+ULONG XhciSetInterfaceVersionForTest(ULONG version);
 
 static MPSTATUS NTAPI hc_config_space(PVOID ext, BOOLEAN read, PVOID buffer,
                                       ULONG offset, ULONG length)
@@ -2129,6 +2153,11 @@ static ULONG NTAPI hc_async_callback(PVOID extension, ULONG milliseconds,
     ULONG i;
     HC_ASYNC_PENDING *pending;
 
+    if (!exForwarding && extension != NULL &&
+        ((PXHCI_EXTENSION)extension)->ArmThroughExOnly) {
+        legacyArmOnTier300Total++;
+    }
+
     if (asyncQueueEnabled) {
         CHECK(asyncPendingCount < HC_ASYNC_PENDING_MAX,
               "the async delivery queue must not drop a timer");
@@ -2175,6 +2204,41 @@ static ULONG NTAPI hc_async_callback(PVOID extension, ULONG milliseconds,
     return 0;
 }
 
+/*
+ * `USBPORTSVC_RequestAsyncCallbackEx` (roadmap 24.4): the legacy service's
+ * five arguments, an optional handle out-pointer and the skip-lock byte, and
+ * an NTSTATUS back. It schedules exactly what the legacy model schedules, so
+ * every delivery helper below works on either tier; `exAnswer` makes it
+ * refuse, scheduling nothing, as its pool failure does.
+ */
+static ULONG NTAPI hc_async_callback_ex(PVOID extension, ULONG milliseconds,
+                                        PVOID context,
+                                        ULONG_PTR contextLength,
+                                        XHCI_ASYNC_TIMER_CALLBACK *callback,
+                                        PVOID *handleOut, UCHAR skipLock)
+{
+    exCalls++;
+    exLastSkipLock = skipLock;
+    exLastHandleOut = (PVOID)handleOut;
+    if (skipLock != 0) {
+        exArmSkippingLockTotal++;
+    }
+    if (asyncDeliveryDepth != 0 || usbportLockModel != 0 ||
+        (extension != NULL &&
+         ((PXHCI_EXTENSION)extension)->SubmitDepth != 0)) {
+        exArmInLockedContextTotal++;
+    }
+    if (exAnswer != 0) {
+        note_no_lock_here("UsbPortRequestAsyncCallbackEx");
+        return exAnswer;
+    }
+    exForwarding = 1;
+    (VOID)hc_async_callback(extension, milliseconds, context,
+                            (ULONG)contextLength, callback);
+    exForwarding = 0;
+    return 0;
+}
+
 static void hc_deliver_async(ULONG index)
 {
     HC_ASYNC_PENDING pending;
@@ -2190,7 +2254,9 @@ static void hc_deliver_async(ULONG index)
         asyncPending[i] = asyncPending[i + 1];
     }
     /* Remove before entry: the callback may arm another timer. */
+    asyncDeliveryDepth++;
     pending.Callback(pending.Extension, pending.Context);
+    asyncDeliveryDepth--;
 }
 
 /*
@@ -2332,7 +2398,7 @@ static VOID NTAPI hc_complete_transfer(PVOID extension,
     if (completeTransferReenters) {
         completeTransferReenters = 0;
         completeTransferReentries++;
-        XhciSlotDeferredWork((PXHCI_EXTENSION)extension);
+        XhciSlotDeferredWork((PXHCI_EXTENSION)extension, XHCI_ARM_UNLOCKED);
     }
 }
 
@@ -2663,6 +2729,14 @@ static void prepare_start_arguments(void)
     XhciRegPacket.UsbPortReadWriteConfigSpace = hc_config_space;
     XhciRegPacket.UsbPortWait = hc_wait;
     XhciRegPacket.UsbPortRequestAsyncCallback = hc_async_callback;
+    /* Roadmap 24.4: what an NT 6.x registration writes, and the Version the
+     * start then reads. Every other vector runs the 200 tier. */
+    (VOID)XhciSetInterfaceVersionForTest(
+        harnessTier300 ? USBPORT_NT6_MINIPORT_INTERFACE_VERSION
+                       : USB20_MINIPORT_INTERFACE_VERSION);
+    if (harnessTier300) {
+        XhciRegPacket.UsbPortRequestAsyncCallbackEx = hc_async_callback_ex;
+    }
     XhciRegPacket.UsbPortInvalidateController = hc_invalidate_controller;
     XhciRegPacket.UsbPortInvalidateRootHub = hc_invalidate_root_hub;
     XhciRegPacket.UsbPortCompleteTransfer = hc_complete_transfer;
@@ -3243,7 +3317,9 @@ static void hw_fire_stale_callback(void)
     hw_access_snapshot(&staleBefore);
     acquiresBefore = commandLockAcquires;
 
+    asyncDeliveryDepth++;
     callback(&ext, &copy);
+    asyncDeliveryDepth--;
 
     staleMmioReads = mmioReads - staleBefore.MmioReads;
     staleMmioWrites = mmioWrites - staleBefore.MmioWrites;
@@ -7625,7 +7701,9 @@ static void fire_async_timer(void)
     asyncCallback = NULL;
 
     if (callback != NULL) {
+        asyncDeliveryDepth++;
         callback(&ext, &copy);
+        asyncDeliveryDepth--;
     }
 }
 
@@ -7680,7 +7758,7 @@ static void deliver_events(void)
  * as on the target, by usbport polling whatever the drain asked for. */
 static void deliver_after_submit(void)
 {
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     usbport_worker();
 }
 
@@ -7747,12 +7825,12 @@ static void test_selftest_witness_token(void)
         if (XhciRingTrbPA(&ext.CommandRing, ext.CommandRing.Enqueue) == noOpPA) {
             break;
         }
-        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK, NULL);
+        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK, NULL);
         deliver_events();
     }
     CHECK_EQ(XhciRingTrbPA(&ext.CommandRing, ext.CommandRing.Enqueue), noOpPA,
              "the command ring wraps back onto the self-test's TRB");
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "and an ordinary command is issued from that very position");
     CHECK_EQ(ext.CommandTrbPA, noOpPA, "(outstanding at the same address)");
     deliver_events();
@@ -7834,7 +7912,7 @@ static void test_selftest_witness_token(void)
     CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a started controller)");
     deliver_events();
     CHECK_EQ(ext.NoOpWitnessArmed, 0, "(token consumed)");
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "a further command is accepted");
     CHECK_EQ(ext.NoOpWitnessArmed, 0,
              "and an ordinary command never arms the self-test's witness");
@@ -8027,7 +8105,7 @@ static void test_command_submit_refusals(void)
 
     doorbells = count_writes(HC_DBOFF);
     requests = asyncRequests;
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_BUSY,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_BUSY,
              "a second command while one is outstanding is refused, not queued");
     CHECK_EQ(count_writes(HC_DBOFF), doorbells, "with no doorbell rung");
     CHECK_EQ(asyncRequests, requests, "and no second watchdog armed");
@@ -8036,7 +8114,7 @@ static void test_command_submit_refusals(void)
     /* Drained, the engine takes another one. */
     deliver_events();
     trbPA = 0;
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, &trbPA), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, &trbPA, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "once the first has completed, the next is accepted");
     CHECK_EQ(trbPA, ext.CommandRing.BasePA + sizeof(XHCI_TRB),
              "at the next slot of the ring");
@@ -8053,19 +8131,19 @@ static void test_command_submit_refusals(void)
     CHECK_EQ(XhciQuiesceController(&ext), 1, "(stopped)");
     doorbells = count_writes(HC_DBOFF);
     hw_access_snapshot(&before);
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_NOT_READY,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_NOT_READY,
              "a stopped controller takes no commands");
     check_touched_nothing(&before, "a submit to a stopped controller");
     CHECK_EQ(count_writes(HC_DBOFF), doorbells, "and rings no doorbell");
 
     /* The two argument guards, neither of which any other vector reaches. */
     hw_access_snapshot(&before);
-    CHECK_EQ(XhciCommandSubmit(NULL, &trb, NULL), XHCI_CMD_BAD_PARAM,
+    CHECK_EQ(XhciCommandSubmit(NULL, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_BAD_PARAM,
              "a NULL extension is refused");
-    CHECK_EQ(XhciCommandSubmit(&ext, NULL, NULL), XHCI_CMD_BAD_PARAM,
+    CHECK_EQ(XhciCommandSubmit(&ext, NULL, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_BAD_PARAM,
              "and so is a NULL command template");
     ext.Signature = 0;
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_BAD_PARAM,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_BAD_PARAM,
              "and an extension whose signature is wrong");
     ext.Signature = XHCI_EXTENSION_SIGNATURE;
     check_touched_nothing(&before, "the submit argument guards");
@@ -8158,7 +8236,7 @@ static void test_command_timeout(void)
 
     /* A recovered ring takes work again. */
     hwCmdHang = 0;
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "and the recovered ring accepts the next command");
     deliver_events();
     CHECK_EQ(ext.CommandsCompleted, 1, "which completes normally");
@@ -8184,7 +8262,7 @@ static void test_command_timeout(void)
              "a Command Aborted event leaves the ring out of service, even "
              "when this driver never asked for the abort");
     doorbells = count_writes(HC_DBOFF);
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_BUSY,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_BUSY,
              "so a submit in that window is refused");
     CHECK_EQ(count_writes(HC_DBOFF), doorbells,
              "and rings no doorbell at a ring that has not stopped");
@@ -8195,7 +8273,7 @@ static void test_command_timeout(void)
     deliver_events();
     CHECK_EQ(ext.CommandState, XHCI_CMD_STATE_IDLE,
              "and only the Command Ring Stopped event ends it");
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "after which the ring takes work again");
 
     /*
@@ -8266,7 +8344,7 @@ static void test_command_timeout(void)
         hwCmdHang = 0;
         unmatched = ext.CommandsUnmatched;
         completed = ext.CommandsCompleted;
-        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
                  "the next command is accepted");
         deliver_events();
         CHECK_EQ(ext.CommandsUnmatched, unmatched,
@@ -8312,7 +8390,7 @@ static void test_command_timeout(void)
         ULONG unmatched;
 
         unmatched = ext.CommandsUnmatched;
-        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
                  "(a command on the rebuilt ring)");
         deliver_events();
         CHECK_EQ(ext.CommandTrbPA, 0, "completes as its own");
@@ -8341,7 +8419,7 @@ static void test_command_timeout(void)
         diverged = ext.CommandRingDiverged;
         /* Still hanging: the doorbell for the next command fetches nothing,
          * so the model's dequeue stays on the No Op. */
-        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
                  "(a second command, behind the No Op)");
         fire_async_timer();             /* its watchdog: abort (writes CA) */
         writeCount = 0;
@@ -8411,14 +8489,14 @@ static void test_command_timeout(void)
     deliver_events();
     for (i = 0; ext.CommandRing.Enqueue != XHCI_CMD_RING_TRBS - 2 &&
                 i < XHCI_CMD_RING_TRBS; i++) {
-        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
                  "(a command, walking the ring to its last slot)");
         deliver_events();
     }
     CHECK_EQ(ext.CommandRing.Enqueue, XHCI_CMD_RING_TRBS - 2,
              "(the next command sits just before the link)");
     hwCmdHang = 1;
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "(the command that hangs)");
     CHECK_EQ(ext.CommandRing.Enqueue, 0, "(software has crossed the link)");
     hw_post_event(XHCI_TRB_TYPE_COMMAND_COMPLETION, ext.CommandTrbPA,
@@ -8439,7 +8517,7 @@ static void test_command_timeout(void)
              "the ring is back in service");
     CHECK_EQ(ext.CommandRing.Dequeue, 0,
              "with the dequeue pointer at index 0, where the link leads");
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "and the ring takes work again");
 
     /*
@@ -8467,7 +8545,7 @@ static void test_command_timeout(void)
     CHECK_EQ(ext.CommandState, XHCI_CMD_STATE_ABORTING,
              "and the engine stays out of service, so nothing rings the "
              "doorbell of a ring that has not stopped");
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_BUSY,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_BUSY,
              "which a submit sees as busy");
 
     /*
@@ -8575,7 +8653,7 @@ static void test_command_stale_callbacks(void)
     CHECK_EQ(ext.CommandsCompleted, 1, "(the first command completed)");
 
     XhciTrbNoOpCommand(&trb);
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, &second), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, &second, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "(a second command goes out)");
     writeCount = 0;
     if (callback != NULL) {
@@ -8822,7 +8900,7 @@ static void test_command_late_stop_events(void)
              "a negated CRR is not on its own a reason to resume the ring");
     CHECK_EQ(ext.CommandAbortWaits, 1, "the watchdog waits another interval");
     CHECK_EQ(invalidateCalls, 0, "without escalating yet");
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_BUSY,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_BUSY,
              "and no command can go out into that window");
 
     /*
@@ -8842,7 +8920,7 @@ static void test_command_late_stop_events(void)
     CHECK_EQ(invalidateCalls, 0, "and no controller reset was requested");
 
     hwCmdHang = 0;
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "and the ring takes work again");
     deliver_events();
     CHECK_EQ(ext.CommandsCompleted, 1, "which completes normally");
@@ -9150,7 +9228,7 @@ static void test_health_poll(void)
     XhciControllerBeginQuiesce(&ext);
     (VOID)XhciControllerUpdateFlags(&ext, 0, XHCI_EXT_FLAG_INITIALIZED);
     XhciTrbNoOpCommand(&trb);
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "(a second command, with no poll between the two)");
     CHECK(ext.CommandGeneration != generation, "(on a new generation)");
 
@@ -9206,7 +9284,7 @@ static void test_command_admission(void)
     for (i = 0; i < 7; i++) {
         XhciTrbClear(&trb);
         trb.Control = XHCI_TRB_TYPE(refused[i]);
-        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_BAD_TRB,
+        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_BAD_TRB,
                  "a TRB type outside 9-23 is refused");
     }
     CHECK_EQ(count_writes(HC_DBOFF), doorbells, "with no doorbell rung");
@@ -9216,11 +9294,11 @@ static void test_command_admission(void)
     /* Both edges of the accepted range. */
     XhciTrbClear(&trb);
     trb.Control = XHCI_TRB_TYPE(XHCI_TRB_TYPE_ENABLE_SLOT);
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "Enable Slot is the first type the range admits");
     deliver_events();
     XhciTrbNoOpCommand(&trb);
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "and No Op Command the last");
     deliver_events();
 
@@ -9235,7 +9313,7 @@ static void test_command_admission(void)
     enqueue = ext.CommandRing.Enqueue;
     XhciRegPacket.UsbPortRequestAsyncCallback = NULL;
     hw_access_snapshot(&before);
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_NO_TIMER,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_NO_TIMER,
              "a command that cannot be timed is not issued");
     check_touched_nothing(&before, "a submit with no async timer service");
     CHECK_EQ(count_writes(HC_DBOFF), doorbells, "no doorbell");
@@ -9434,7 +9512,7 @@ static void test_reset_controller(void)
     ext.CommandTrbPA = 0;
     CHECK_EQ(ext.CommandState, XHCI_CMD_STATE_IDLE, "(the engine is idle)");
     doorbells = count_writes(HC_DBOFF);
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_FAILED,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_FAILED,
              "an idle engine on a failed controller still issues nothing - the "
              "state gate would have allowed this one");
     CHECK_EQ(count_writes(HC_DBOFF), doorbells, "and rings no doorbell");
@@ -9489,7 +9567,7 @@ static void test_reset_controller(void)
     CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "a restart brings it back");
     CHECK_EQ(ext.ControllerFailed, 0, "with the failure cleared");
     deliver_events();
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "and the ring takes work again");
 
     /* The guards, which nothing else reaches. */
@@ -9642,7 +9720,7 @@ static void test_controller_recovery(void)
              "the recovery's own No Op self-test completed, which is the one "
              "thing that exercises the command ring, the doorbell, the event "
              "ring, the ISR and the DPC as one path");
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "so the command ring takes work again, with no stop/start from "
              "anybody");
 
@@ -12030,7 +12108,9 @@ static void hw_fire_port_timer(void)
         CHECK(0, "(a port timer was armed to fire)");
         return;
     }
+    asyncDeliveryDepth++;
     callback(&ext, &copy);
+    asyncDeliveryDepth--;
 }
 
 /*
@@ -13381,7 +13461,7 @@ static void test_root_hub_port_power_confirmation(void)
          * announcement closes it again (usbport's own service re-enters
          * RH_DisableIrq). */
         XhciRegPacket.RH_EnableIrq(&ext);
-        XhciRootHubDeferredWork(&ext);
+        XhciRootHubDeferredWork(&ext, XHCI_ARM_UNLOCKED);
         XhciRegPacket.RH_EnableIrq(&ext);
 
         ext.RhSweepPollsSeen = 0;
@@ -13470,7 +13550,7 @@ static void test_root_hub_announce(void)
 
     /* A second drain with nothing owed calls nothing. */
     XhciRegPacket.RH_EnableIrq(&ext);
-    XhciRootHubDeferredWork(&ext);
+    XhciRootHubDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(rootHubInvalidates, 1,
              "a drain with nothing owed announces nothing");
 
@@ -15815,7 +15895,7 @@ static void test_slot_init_resets_the_table_in_one_hold(void)
      * transfer is what it delivers - through the poll it asks usbport for,
      * since the 200 tier delivers per endpoint (issue 8 section 4d). */
     ext.DeferredBusy = 0;
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     usbport_worker();
     CHECK_EQ(completeTransferCalls, completions + 1,
              "the work the reset cancelled is delivered by the drain's poll");
@@ -18516,7 +18596,7 @@ static void test_slot_bulk_retry_poll_backstop(void)
     CHECK_EQ(record->Queue.RetryArmed, 1, "(armed)");
 
     XhciRegPacket.CheckController(&ext);
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(ext.EndpointRetriesAsked, retriesAsked,
              "a poll over an unchanged ring asks for nothing");
     CHECK_EQ(record->Queue.RetryArmed, 1, "and leaves the latch standing");
@@ -18526,7 +18606,7 @@ static void test_slot_bulk_retry_poll_backstop(void)
                                               record->Ring.Enqueue)),
              XHCI_RING_OK, "(the placement reclaims the whole TD)");
     XhciRegPacket.CheckController(&ext);
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(ext.EndpointRetriesAsked, retriesAsked + 1,
              "and the poll is what notices space a completion never freed");
     CHECK_EQ(record->Queue.RetryArmed, 0, "clearing the latch");
@@ -20289,7 +20369,7 @@ static void test_slot_interrupt_teardown_returns_rings(void)
     hwCmdHang = 1;
     XhciSlotCommandLost(&ext);
     hwCmdHang = 0;
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(ext.DevicesAbandoned, abandoned + 1, "the record is abandoned");
     CHECK_EQ(ext.Devices[0].State, XHCI_DEV_STATE_GONE, "and stays GONE");
     CHECK_EQ(XhciPoolFree(&ext.RingPool), poolFree,
@@ -20309,7 +20389,7 @@ static void test_slot_interrupt_teardown_returns_rings(void)
         XhciSlotInvalidateAll(&ext, 1);
         XhciControllerLockRelease(oldIrql);
     }
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK(completeTransferCalls > completions,
           "a controller proved stopped answers what the abandonment could not");
     CHECK_EQ(XhciPoolFree(&ext.RingPool), XHCI_MAX_POOL_RINGS,
@@ -20759,7 +20839,7 @@ static void test_slot_abort_takes_it_off_the_completion_list(void)
     CHECK_EQ(ext.CompletionsOwed, 0, "it is off the completion list");
 
     ext.DeferredBusy = 0;
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(completeTransferCalls, completions,
              "so the drain never completes it - usbport freed that record the "
              "moment the abort returned");
@@ -20796,7 +20876,7 @@ static void test_slot_abort_takes_it_off_the_completion_list(void)
     CHECK(ext.CompletionTail == &slotTransfer2, "and the tail");
 
     ext.DeferredBusy = 0;
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     usbport_worker();
     CHECK_EQ(completeTransferCalls, completions + 1,
              "so exactly the one that was not aborted is completed, by the "
@@ -20865,7 +20945,7 @@ static void test_slot_completion_waits_for_poll_endpoint(void)
     (void)XhciRegPacket.RH_GetPortStatus(&ext, 3, &portStatus);
     CHECK_EQ(completeTransferCalls, completions,
              "RH_GetPortStatus does not deliver it");
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(completeTransferCalls, completions, "nor a bare drain");
     XhciRegPacket.CheckController(&ext);
     CHECK_EQ(completeTransferCalls, completions,
@@ -21057,7 +21137,7 @@ static void test_slot_completion_locked_contexts_and_forced(void)
     (void)XhciIsr(&ext);
     (void)XhciRegPacket.InterruptDpc(&ext, TRUE);
     CHECK_EQ(completeTransferCalls, completions, "(parked)");
-    XhciSlotDeferredWorkForced(&ext);
+    XhciSlotDeferredWorkForced(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(completeTransferCalls, completions + 1,
              "a forced drain delivers it from an unlocked context");
     CHECK_EQ(ext.CompletionsDeliveredForced, 1, "and counts it as forced");
@@ -21157,7 +21237,7 @@ static void test_slot_abort_after_the_record_is_released(void)
     CHECK_EQ(ext.CompletionsOwed, 0, "and it is off the list");
 
     XhciSlotLeaveSubmit(&ext);
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(completeTransferCalls, completions,
              "so the drain never completes it - usbport freed that record the "
              "moment the abort returned");
@@ -21214,7 +21294,7 @@ static void test_slot_completion_holds_for_a_pass_after_the_bracket(void)
      */
     completions = completeTransferCalls;
     invalidateLeavesSubmit = 1;
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(invalidateLeavesSubmit, 0, "(the bracket closed mid-pass)");
     CHECK_EQ(ext.SubmitDepth, 0, "(and the depth reads 0)");
     CHECK_EQ(completeTransferCalls, completions,
@@ -21223,7 +21303,7 @@ static void test_slot_completion_holds_for_a_pass_after_the_bracket(void)
 
     /* The next pass began after the close, so it may deliver - and on the
      * per-endpoint tier what delivers is the poll that pass asks for. */
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     usbport_worker();
     CHECK_EQ(completeTransferCalls, completions + 1,
              "the next pass delivers it");
@@ -23419,7 +23499,7 @@ static void test_slot_interrupt_second_order(void)
 
         hwCmdHang = 1;
         XhciTrbNoOpCommand(&noop);
-        CHECK_EQ(XhciCommandSubmit(&ext, &noop, NULL), XHCI_CMD_OK,
+        CHECK_EQ(XhciCommandSubmit(&ext, &noop, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
                  "(the engine is occupied)");
     }
     CHECK_EQ(slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
@@ -26327,7 +26407,7 @@ static void test_hub_slot_marked_from_the_descriptor(void)
      * reissued for the life of the device.
      */
     deliver_events();
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(ext.HubMarkCommands, 1, "a marking already held is not sent again");
     CHECK_EQ(ext.HubSlotsMarked, 1, "nor counted again");
 }
@@ -26421,7 +26501,7 @@ static void test_hub_marking_is_lost_by_a_re_address(void)
      */
     CHECK_EQ(dev->DeviceAddress, 0,
              "(a re-enumerating record holds no address)");
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(ext.HubMarkCommands, 1, "so a slot in Default is not marked");
 
     /* And once addressed again, the graph still knows it is a hub. */
@@ -26473,7 +26553,7 @@ static void test_hub_marking_failure_is_bounded(void)
              "did not fail, its description did");
 
     deliver_events();
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     deliver_events();
     CHECK_EQ(ext.HubMarkCommands, 1, "and it is never retried");
 
@@ -26787,7 +26867,7 @@ static void test_hub_marking_does_not_follow_a_reused_address(void)
     CHECK_EQ(other->DeviceAddress, 2, "(taking the address the hub gave back)");
     CHECK_EQ(other->State, XHCI_DEV_STATE_ADDRESSED, "(and addressed)");
 
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     deliver_events();
     CHECK_EQ(other->ActiveOp, XHCI_DEV_OP_NONE,
              "no marking is issued for a device that inherited the address");
@@ -26934,7 +27014,7 @@ static void test_hub_with_no_ports_is_not_marked(void)
     CHECK_EQ(dev->ActiveOp, XHCI_DEV_OP_NONE, "no marking is issued");
     CHECK_EQ(ext.HubMarkCommands, 0, "none at all");
 
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     deliver_events();
     CHECK_EQ(ext.HubSlotsMarked, 0, "and the hub is never marked");
     CHECK_EQ(ext.HubMarkFailures, 0,
@@ -27812,7 +27892,7 @@ static void test_hub_marking_does_not_follow_a_sibling(void)
     CHECK_EQ(sibling->DeviceAddress, 3, "the sibling is given the same address");
     CHECK_EQ(sibling->RouteString, 0x5, "(at a different position)");
 
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     deliver_events();
     CHECK_EQ(sibling->HubMarkDone, 0,
              "**and is not marked as the hub that used to hold that address** - "
@@ -30445,6 +30525,362 @@ static void test_recovery_delivery_loss(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* Roadmap 24.4: where a timer may be armed on the Version 300 tier     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A controller started on the NT 6.x tier: Version 300 presented, the Ex slot
+ * written. The No Op self-test's watchdog is its first Ex arm; it is
+ * delivered and the counters zeroed, so a vector reads only its own arms.
+ */
+static void nt6_start(ULONG attached)
+{
+    harnessTier300 = 1;
+    enable_start(attached);
+    harnessTier300 = 0;
+    deliver_events();
+    exCalls = 0;
+    exAnswer = 0;
+    asyncRequests = 0;
+    asyncCallback = NULL;
+}
+
+/* The tier decides the service, and nothing below NT 6.x moves. */
+static void test_nt6_arm_tier(void)
+{
+    hc_build();
+    exCalls = 0;
+    asyncRequests = 0;
+    CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a Version 200 start)");
+    CHECK_EQ(ext.ArmThroughExOnly, 0,
+             "the 200 tier keeps the legacy timer service");
+    CHECK_EQ(asyncRequests, 1, "its self-test watchdog armed through it");
+    CHECK_EQ(exCalls, 0, "and Ex, absent there, never called");
+    deliver_events();
+
+    hc_build();
+    harnessTier300 = 1;
+    exCalls = 0;
+    asyncRequests = 0;
+    CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a Version 300 start)");
+    harnessTier300 = 0;
+    CHECK_EQ(ext.ArmThroughExOnly, 1,
+             "the 300 tier arms through Ex (roadmap 24.4)");
+    CHECK_EQ(exCalls, 1,
+             "StartController is an UNLOCKED context: the self-test's "
+             "watchdog is armed at once");
+    CHECK_EQ(asyncRequests, 1, "(one timer, not two)");
+    CHECK_EQ(exLastSkipLock, 0,
+             "with the lock byte 0, so usbport takes its timer-list lock");
+    CHECK(exLastHandleOut == NULL, "and no handle asked for");
+    CHECK_EQ(asyncMs, XHCI_COMMAND_TIMEOUT_MS, "for the command deadline");
+    CHECK_EQ(asyncContext.Generation, ext.CommandGeneration,
+             "naming the outstanding command");
+    deliver_events();
+
+    /* A 300 registration that did not write the slot keeps today's arming. */
+    hc_build();
+    (VOID)XhciSetInterfaceVersionForTest(
+        USBPORT_NT6_MINIPORT_INTERFACE_VERSION);
+    prepare_start_arguments();
+    (VOID)XhciSetInterfaceVersionForTest(
+        USBPORT_NT6_MINIPORT_INTERFACE_VERSION);
+    CHECK_EQ(XhciRegPacket.StartController(&ext, &resources),
+             MP_STATUS_SUCCESS, "(a Version 300 start with no Ex slot)");
+    (VOID)XhciSetInterfaceVersionForTest(USB20_MINIPORT_INTERFACE_VERSION);
+    CHECK_EQ(ext.ArmThroughExOnly, 0,
+             "no Ex service: the tier flag stays clear");
+    deliver_events();
+}
+
+/* The command watchdog from a DEFER context: owed, then made by the next
+ * UNLOCKED drain - and dropped if the command has ended by then. */
+static void test_nt6_arm_command_owed(void)
+{
+    XHCI_TRB trb;
+    ULONG deferred;
+
+    nt6_start(0);
+    XhciTrbNoOpCommand(&trb);
+    deferred = ext.AsyncArmsDeferred;
+
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_DEFER), XHCI_CMD_OK,
+             "a command submitted from an endpoint callback's context");
+    CHECK_EQ(exCalls, 0, "arms nothing there");
+    CHECK_EQ(asyncRequests, 0, "through either service");
+    CHECK_EQ(ext.CommandArmOwed, 1, "and owes its watchdog");
+    CHECK_EQ(ext.AsyncArmsDeferred, deferred + 1, "counted as deferred");
+
+    XhciSlotDeferredWork(&ext, XHCI_ARM_DEFER);
+    CHECK_EQ(exCalls, 0, "a DEFER drain does not make it");
+
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
+    CHECK_EQ(exCalls, 1, "the next UNLOCKED drain does");
+    CHECK_EQ(ext.CommandArmOwed, 0, "consuming the owe");
+    CHECK_EQ(asyncMs, XHCI_COMMAND_TIMEOUT_MS, "at the command deadline");
+    CHECK_EQ(asyncContext.Generation, ext.CommandGeneration,
+             "for the command still outstanding");
+    CHECK_EQ(asyncContext.Phase, XHCI_CMD_PHASE_COMMAND, "at rung 1");
+    CHECK_EQ(asyncContext.Epoch, ext.StartEpoch, "in this start");
+
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
+    CHECK_EQ(exCalls, 1, "and only once");
+    deliver_events();
+
+    /* A command that completes before any UNLOCKED context runs. */
+    exCalls = 0;
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_DEFER), XHCI_CMD_OK,
+             "(a second deferred command)");
+    hw_command_run();
+    CHECK_EQ(ext.CommandArmOwed, 1, "(still owed)");
+    XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(ext.CommandState, XHCI_CMD_STATE_IDLE,
+             "its completion arrives through the event DPC");
+    CHECK_EQ(ext.CommandArmOwed, 0, "whose drain takes the owe");
+    CHECK_EQ(exCalls, 0,
+             "and arms nothing for a command that has already ended");
+
+    /* The 200 tier: DEFER arms at once, through the legacy service. */
+    enable_start(0);
+    deliver_events();
+    asyncRequests = 0;
+    exCalls = 0;
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_DEFER), XHCI_CMD_OK,
+             "(a DEFER submit on the 200 tier)");
+    CHECK_EQ(asyncRequests, 1, "is armed at once, as every NT 5.x build was");
+    CHECK_EQ(ext.CommandArmOwed, 0, "and owes nothing");
+    deliver_events();
+}
+
+/* The timeout's own re-arm is a timer callback's: owed, then made by the
+ * poll. And a refused Ex arm is counted and re-owed at once. */
+static void test_nt6_arm_timeout_and_refusal(void)
+{
+    XHCI_TRB trb;
+
+    nt6_start(0);
+    XhciTrbNoOpCommand(&trb);
+    hwCmdHang = 1;
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED),
+             XHCI_CMD_OK, "(a command that will hang)");
+    CHECK_EQ(exCalls, 1, "(its watchdog armed through Ex)");
+    hw_command_run();
+
+    fire_async_timer();
+    CHECK_EQ(ext.CommandsTimedOut, 1, "rung 1 fires");
+    CHECK_EQ(ext.CommandState, XHCI_CMD_STATE_ABORTING, "and aborts");
+    CHECK_EQ(exCalls, 1,
+             "but arms nothing from inside the timer callback, which on NT "
+             "6.x holds usbport's timer-list lock or, on Windows 7's stop, "
+             "none - and cannot tell which");
+    CHECK_EQ(ext.CommandArmOwed, 1, "the abort wait is owed");
+    CHECK_EQ(ext.CommandArmOwedPhase, XHCI_CMD_PHASE_ABORT, "as rung 2");
+
+    poll_clock_prime();
+    CHECK_EQ(exCalls, 2, "the health poll makes it");
+    CHECK_EQ(asyncContext.Phase, XHCI_CMD_PHASE_ABORT, "for the abort wait");
+    CHECK_EQ(asyncMs, XHCI_COMMAND_ABORT_MS, "at the abort interval");
+    CHECK_EQ(ext.CommandArmOwed, 0, "(owed no longer)");
+    hwCmdHang = 0;
+    deliver_events();
+
+    /* Ex refuses - its pool allocation failed. */
+    nt6_start(0);
+    exAnswer = 0xC000009AUL;
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED),
+             XHCI_CMD_OK, "(a command whose watchdog Ex refuses)");
+    CHECK_EQ(exCalls, 1, "(one attempt)");
+    CHECK_EQ(ext.AsyncArmsRefused, 1, "the refusal is counted");
+    CHECK_EQ(ext.CommandTimerFailures, 1, "as a watchdog not armed");
+    CHECK_EQ(ext.CommandArmOwed, 1,
+             "and re-owed at once, rather than left to the 32 s age detector");
+    exAnswer = 0;
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
+    CHECK_EQ(exCalls, 2, "the next UNLOCKED drain arms it");
+    CHECK_EQ(ext.CommandArmOwed, 0, "(owed no longer)");
+    deliver_events();
+}
+
+/* A root-hub feature callback defers the port's timer and kicks usbport's
+ * scan; the scan's status query makes the arm. */
+static void test_nt6_arm_port_kick(void)
+{
+    USBPORT_PORT_STATUS_AND_CHANGE status;
+    ULONG invalidates;
+
+    nt6_start(0);
+    hw_attach_device(2);
+    portResetHangs = 1;             /* the reset stays outstanding */
+    XhciRegPacket.RH_EnableIrq(&ext);
+    invalidates = rootHubInvalidates;
+
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 2), MP_STATUS_SUCCESS,
+             "a reset from usbhub's port request");
+    usbportLockModel--;
+    CHECK_EQ(exCalls, 0,
+             "arms nothing: RootHub_PortRequest holds usbport's timer-list "
+             "lock, and the USB 2.0 power detour does not");
+    CHECK_EQ(ext.RootHub.Ports[1].ArmPending, 1, "the port's arm is owed");
+    CHECK_EQ(rootHubInvalidates, invalidates + 1,
+             "and the announcement is made anyway - the kick");
+    CHECK_EQ(ext.RootHubArmKicks, 1, "counted as one");
+
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "usbport's scan asks for the port");
+    CHECK_EQ(exCalls, 1, "and the query, an UNLOCKED context, arms it");
+    CHECK_EQ(asyncPortContext.Operation, XHCI_PORT_OP_RESET,
+             "the reset's deadline");
+    CHECK_EQ(asyncPortContext.HubPort, 2, "on its port");
+    CHECK_EQ(asyncPortContext.Generation, ext.RootHub.Ports[1].Generation,
+             "for the operation armed");
+    CHECK_EQ(ext.RootHub.Ports[1].ArmPending, 0, "(owed no longer)");
+
+    /* Behind a closed gate: no kick; the event DPC makes the arm. */
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, 2UL << 24, 0);
+    XhciRegPacket.InterruptDpc(&ext, TRUE);
+    nt6_start(0);
+    hw_attach_device(2);
+    portResetHangs = 1;
+    (VOID)XhciControllerUpdateFlags(&ext, XHCI_EXT_FLAG_RH_IRQ, 0);
+    invalidates = rootHubInvalidates;
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 2), MP_STATUS_SUCCESS,
+             "(a reset with usbport's gate closed)");
+    usbportLockModel--;
+    CHECK_EQ(rootHubInvalidates, invalidates,
+             "no kick through a closed gate: a scan is already outstanding");
+    CHECK_EQ(exCalls, 0, "(nothing armed)");
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, 2UL << 24, 0);
+    XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(exCalls, 1, "the event DPC, an UNLOCKED context, arms it");
+
+    /* A refused port arm gives the port up at once. */
+    nt6_start(0);
+    hw_attach_device(2);
+    portResetHangs = 1;
+    XhciRegPacket.RH_EnableIrq(&ext);
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 2), MP_STATUS_SUCCESS,
+             "(a reset whose timer Ex will refuse)");
+    usbportLockModel--;
+    exAnswer = 0xC000009AUL;
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "(the scan's query)");
+    exAnswer = 0;
+    CHECK_EQ(ext.RhTimerFailures, 1, "the lost arm is counted");
+    CHECK_EQ(ext.RootHub.Ports[1].Armed, XHCI_PORT_OP_NONE,
+             "and the port disarmed now, not after XHCI_PORT_AGE_MS");
+    /* A port timer is a timer callback: it makes no arm, not even one
+     * another port owes. */
+    nt6_start(0);
+    hw_attach_device(2);
+    hw_attach_device(3);
+    portResetHangs = 1;
+    XhciRegPacket.RH_EnableIrq(&ext);
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 2), MP_STATUS_SUCCESS,
+             "(port 2's reset)");
+    usbportLockModel--;
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "(the query arms port 2's deadline)");
+    CHECK_EQ(exCalls, 1, "(armed)");
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 3), MP_STATUS_SUCCESS,
+             "(port 3's reset, owed)");
+    usbportLockModel--;
+    CHECK_EQ(ext.RootHub.Ports[2].ArmPending, 1, "(port 3's arm owed)");
+    CHECK_EQ(asyncPortContext.HubPort, 2, "(the timer held is port 2's)");
+    hw_fire_port_timer();
+    CHECK_EQ(ext.RhResetTimeouts, 1, "port 2's deadline fires");
+    CHECK_EQ(exCalls, 1,
+             "and port 3's owed arm is not made from inside it");
+    CHECK_EQ(ext.RootHub.Ports[2].ArmPending, 1, "(still owed)");
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortPower(&ext, 4), MP_STATUS_SUCCESS,
+             "(a port-power request on another port)");
+    usbportLockModel--;
+    CHECK_EQ(exCalls, 1, "no other feature callback makes it either");
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(exCalls, 2, "the poll makes it");
+    portResetHangs = 0;
+    deliver_events();
+
+    /* A resume's end is a timer callback too. */
+    nt6_start(0);
+    hw_attach_device(2);
+    mmio[HC_PORTSC(2) / 4] |= XHCI_PORTSC_PED;
+    hw_attach_device(3);
+    portResetHangs = 1;
+    XhciRegPacket.RH_EnableIrq(&ext);
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "(port 2 suspended)");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "(and resumed: its 20 ms timer owed)");
+    usbportLockModel--;
+    CHECK_EQ(exCalls, 0, "(nothing armed by the feature callbacks)");
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "(the query arms the resume's end)");
+    CHECK_EQ(exCalls, 1, "(armed)");
+    CHECK_EQ(asyncPortContext.Operation, XHCI_PORT_OP_RESUME, "(a resume)");
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 3), MP_STATUS_SUCCESS,
+             "(port 3's reset, owed)");
+    usbportLockModel--;
+    hw_fire_port_timer();
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(2) / 4]), XHCI_PLS_U0,
+             "the resume's timer drives port 2 to U0");
+    CHECK_EQ(exCalls, 1, "and makes no owed arm from inside");
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(exCalls, 2, "the poll makes port 3's");
+    portResetHangs = 0;
+    deliver_events();
+}
+
+/* The recovery: armed from the poll, and itself a timer callback, so the
+ * self-test it issues owes its watchdog to the kick. */
+static void test_nt6_arm_recovery(void)
+{
+    ULONG lost;
+
+    nt6_start(0);
+    XhciRegPacket.RH_EnableIrq(&ext);
+    ext.ControllerFailed = 1;
+    ext.RecoveryRequested = 1;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(ext.RecoveryArmed, 1, "the poll arms the recovery");
+    CHECK_EQ(exCalls, 1, "through Ex: CheckController holds no usbport lock");
+    CHECK_EQ(asyncContext.Phase, XHCI_CMD_PHASE_RECOVERY, "(the recovery's)");
+
+    fire_async_timer();
+    CHECK_EQ(ext.RecoveryCompletions, 1, "the recovery runs and succeeds");
+    CHECK_EQ(exCalls, 1, "arming nothing from its timer callback");
+    CHECK_EQ(ext.CommandArmOwed, 1, "its self-test's watchdog is owed");
+    CHECK(ext.RootHubArmKicks >= 1 || ext.RootHubInvalidates >= 1,
+          "and usbport has been told to scan");
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
+    CHECK_EQ(exCalls, 2, "the next UNLOCKED context arms it");
+    deliver_events();
+
+    /* A refused recovery arm is released and charged at once. */
+    nt6_start(0);
+    ext.ControllerFailed = 1;
+    ext.RecoveryRequested = 1;
+    lost = ext.RecoveryDeliveriesLost;
+    exAnswer = 0xC000009AUL;
+    XhciRegPacket.CheckController(&ext);
+    exAnswer = 0;
+    CHECK_EQ(ext.RecoveryArmed, 0, "a refused arming is not left standing");
+    CHECK_EQ(ext.RecoveryRequested, 1, "the request is put back");
+    CHECK_EQ(ext.RecoveryDeliveriesLost, lost + 1, "and the loss charged");
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(ext.RecoveryArmed, 1, "the next poll arms again");
+    ext.ControllerFailed = 0;
+    deliver_events();
+}
+
+/* ------------------------------------------------------------------ */
 /* Task 24.3.3: the virtual hub wired into the driver (design record 12) */
 /* ------------------------------------------------------------------ */
 
@@ -31737,6 +32173,105 @@ static void test_vhub_always_disable_and_power_cycle(void)
  * physical port, the change on the status-change pipe and never on the root
  * port.
  */
+/*
+ * Roadmap 24.4: a port-1 resume through the virtual hub's SubmitTransfer on
+ * the Version 300 tier. usbport holds EpList there, so the resume's 20 ms
+ * timer is owed rather than armed, and the next UNLOCKED context - here the
+ * health poll - makes it. Enumerated on the 200 tier, because the model does
+ * not play NT 6.x usbport's endpoint polling that delivers completions there;
+ * the tier is then switched by hand, which is what the flag's own comment
+ * allows a vector to do.
+ */
+static void test_nt6_arm_vhub_port1_resume(void)
+{
+    ULONG xport;
+    ULONG legacy;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_plug(2, 1);                                /* Full Speed */
+    vhub_enumerate_hub(2, 5);
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2);
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.Vhub[1].P1Enabled, 1, "(port 1 enabled by its reset)");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 20, 1, 0);
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 2, 1, 0);
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(xport) / 4]), XHCI_PLS_U3,
+             "(port 1 suspended through the hub)");
+
+    ext.ArmThroughExOnly = 1;
+    XhciRegPacket.UsbPortRequestAsyncCallbackEx = hc_async_callback_ex;
+    exCalls = 0;
+    exAnswer = 0;
+    legacy = asyncRequests;
+    asyncCallback = NULL;
+
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 2, 1, 0);
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(xport) / 4]), XHCI_PLS_RESUME,
+             "CLEAR_PORT_FEATURE(1, PORT_SUSPEND) resumes the port");
+    CHECK_EQ(exCalls, 0,
+             "and arms nothing from inside SubmitTransfer, under EpList");
+    CHECK_EQ(asyncRequests, legacy, "through either service");
+    CHECK_EQ(ext.RootHub.Ports[1].ArmPending, 1, "the resume's timer is owed");
+
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(exCalls, 1, "the health poll makes it");
+    CHECK_EQ(asyncPortContext.Operation, XHCI_PORT_OP_RESUME,
+             "the resume's end");
+    CHECK_EQ(asyncMs, XHCI_PORT_RESUME_TIMER_MS, "at T(DRSMDN)");
+    CHECK_EQ(asyncPortContext.HubPort, 2, "on the hub's port");
+
+    hw_fire_port_timer();
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(xport) / 4]), XHCI_PLS_U0,
+             "and the timer ends the resume signalling");
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.Vhub[1].P1Changes & XHCI_HUB_C_PORT_SUSPEND,
+             XHCI_HUB_C_PORT_SUSPEND, "port 1's C_PORT_SUSPEND follows");
+
+    /*
+     * The device behind port 1: its address-0 open and its SET_ADDRESS, both
+     * endpoint callbacks that pump a command (Enable Slot, Address Device).
+     * Each watchdog is owed and made by the event DPC that follows.
+     */
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    exCalls = 0;
+    usbportLockModel++;
+    CHECK_EQ(slot_open(0, UsbFullSpeed, 64), MP_STATUS_SUCCESS,
+             "the device's address-0 open, under usbport's MP-call lock");
+    usbportLockModel--;
+    CHECK_EQ(exCalls, 0, "arms nothing");
+    CHECK_EQ(ext.CommandArmOwed, 1, "its Enable Slot's watchdog is owed");
+    deliver_events();
+    deliver_events();
+    CHECK(exCalls >= 1, "the event DPCs make the arms owed");
+    CHECK_EQ(ext.CommandArmOwed, 0, "(nothing owed once they ran)");
+    CHECK_EQ(ext.Devices[0].State, XHCI_DEV_STATE_DEFAULT,
+             "(the chain reached Default)");
+    exCalls = 0;
+    slot_setup(0x00, 0x05, 8, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    CHECK_EQ(exCalls, 0,
+             "SET_ADDRESS's Address Device, pumped inside SubmitTransfer, "
+             "arms nothing there");
+    CHECK_EQ(ext.CommandArmOwed, 1, "(owed)");
+    usbportLockModel++;
+    XhciRegPacket.PollEndpoint(&ext, &slotEndpoint);
+    usbportLockModel--;
+    CHECK_EQ(exCalls, 0,
+             "PollEndpoint's drain, under usbport's EpList, does not make it");
+    CHECK_EQ(ext.CommandArmOwed, 1, "(still owed)");
+    deliver_events();
+    CHECK_EQ(ext.Devices[0].DeviceAddress, 8, "the device is addressed");
+    ext.ArmThroughExOnly = 0;
+}
+
 static void test_vhub_suspend_resume_through_the_callbacks(void)
 {
     ULONG status;
@@ -33265,6 +33800,11 @@ int main(void)
     test_command_event_validation();
     test_reset_controller();
     test_recovery_delivery_loss();
+    test_nt6_arm_tier();
+    test_nt6_arm_command_owed();
+    test_nt6_arm_timeout_and_refusal();
+    test_nt6_arm_port_kick();
+    test_nt6_arm_recovery();
     test_controller_recovery();
     test_fatal_after_recovery();
     test_recovery_refuses_into_set_cnr();
@@ -33488,6 +34028,7 @@ int main(void)
     test_vhub_restore_between_disable_and_reset_end();
     test_vhub_replacement_after_a_late_end_keeps_its_port();
     test_vhub_root_disable_confirmed_late_then_reset();
+    test_nt6_arm_vhub_port1_resume();
 
     /*
      * The net under every test above, and the reason it is here rather than in
@@ -33538,6 +34079,16 @@ int main(void)
              "and UsbPortInvalidateRootHub never from inside a SubmitTransfer, "
              "anywhere in this suite - an NT 6.x usbport's service takes the "
              "EpList lock that callback runs under");
+    /* Roadmap 24.4, over every Version 300 start in the suite. */
+    CHECK_EQ(legacyArmOnTier300Total, 0,
+             "on the Version 300 tier the legacy timer service, which skips "
+             "usbport's timer-list lock, is never called");
+    CHECK_EQ(exArmInLockedContextTotal, 0,
+             "and Ex is never called from a timer callback, a root-hub feature "
+             "callback or an endpoint callback, where usbport may already "
+             "hold that lock or holds EpList");
+    CHECK_EQ(exArmSkippingLockTotal, 0,
+             "and never with its lock byte set");
 
     /*
      * And the generalization of those two, which is what task 9's static review

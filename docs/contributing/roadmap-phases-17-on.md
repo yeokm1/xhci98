@@ -1021,6 +1021,20 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   primary targets no worse. Before the `1.1.2.0` cut (owner, 2026-09-27),
   so the cut's install legs and matrix read the build that carries it.
 
+  **The static read and the fix are done (2026-09-28); the guests are
+  owed.** No callback of this driver can know whether usbport holds its
+  timer-list lock - the root-hub feature callbacks and the timer callbacks
+  each arrive with it and without it (Windows 7's StopController runs
+  pending timer callbacks early, unlocked) - so on the Version 300 tier the
+  legacy service is never called: an arm from the event DPC,
+  `CheckController`, a root-hub status query or Start/Stop/Suspend/Resume is
+  made through `UsbPortRequestAsyncCallbackEx` with its own lock, and one
+  from any other context is owed to the next of those, with the
+  announcement as the kick from a feature callback. NT 5.x arms as before.
+  Design record 05, "Where a timer may be armed"; `runs/run-24.md`, "24.4";
+  `legal-provenance.md` section 4. Not ticked until Vista and 7 in both
+  architectures under 4 vCPUs have read the build, with 24.5's.
+
 - [ ] **24.5 - The High-Speed interval behind a hub.** *(added 2026-09-28 by
   the owner's decision, and taken before the cut; older than 24.3)* Taken
   with 24.4, in the same rebuild, before the rest of 24.3.4 (owner,

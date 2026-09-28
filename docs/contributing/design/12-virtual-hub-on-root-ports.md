@@ -1077,18 +1077,24 @@ run-24.md.
   -> `USBPORT_ReferenceEndpoint` -> `USBPORT_AcquireEpListLock`, FDO+0x1160;
   Windows 7 x64 FDO+0xF88; static), so Windows 7 x64 at 2 and Vista x64 at
   1 hung (runtime: the stacks in run-24.md). The virtual-hub submit now
-  runs `XhciRootHubDeferredArms`: the timers a reset or resume armed are
-  armed at once, since a resume through port 1 is ended by its timer, and
-  a latched change is left in `RootHubInvalidatesOwed` for the event DPC,
-  the health poll, a root-hub callback or a port timer. The endpoint
-  callbacks reach no other root-hub code. The arm takes no EpList, but it
-  is **not synchronised either**: NT 6.x's legacy timer service skips its
-  own lock and assumes the caller holds usbport's timer-list lock, which
-  only its root-hub feature callbacks and timer DPC do (static), so this
-  arm - like every arm the driver makes from the command pump, the event
-  DPC and the health poll - races the timer DPC on another CPU. That is
-  older than this task, and roadmap 24.4 by the owner's decision (run-24.md). The ReactOS-derived note
-  that the service is safe under `MiniportSpinLock`
+  runs `XhciRootHubDeferredArms`, and a latched change is left in
+  `RootHubInvalidatesOwed` for the event DPC, the health poll, a root-hub
+  callback or a port timer. The endpoint callbacks reach no other root-hub
+  code. On NT 5.x the timers a reset or resume armed are armed at once,
+  since a resume through port 1 is ended by its timer. On NT 6.x that arm
+  was **not synchronised**: the legacy timer service skips its own lock and
+  assumes the caller holds usbport's timer-list lock, which only its
+  root-hub feature callbacks and timer DPC do (static), so it raced the
+  timer DPC on another CPU, like every arm the driver made from the command
+  pump, the event DPC and the health poll - older than this task. **Roadmap
+  24.4 fixed it** (design record 05, "Where a timer may be armed"): on the
+  Version 300 tier an arm from `SubmitTransfer` is owed rather than made,
+  and the next event DPC, root-hub peek or health poll makes it through
+  `UsbPortRequestAsyncCallbackEx` with its own lock. **The cost is here**:
+  a resume through a virtual hub's port 1 on Vista or Windows 7 may end up
+  to one poll interval (~500 ms) after T(DRSMDN) at 1 or 2 - a longer
+  host-driven resume is legal; the wake is slower. The ReactOS-derived note
+  that the legacy service is safe under `MiniportSpinLock`
   (`docs/usb-xhci-info/usbport-miniport-abi.md`) holds for NT 5.x only.
 - **At 1 the hub retires with its device.** Section 3.2 had the hub
   dropped by usbport's disable of the root port, which 98, ME, 2000 and XP
@@ -1142,7 +1148,8 @@ no-deadline rule working as decided; Full- and Low-Speed devices behind a
 virtual hub on NT 6.x cannot be read in QEMU without a patched emulator.
 The owner accepted that gap (2026-09-27): no emulator is patched, and those
 devices are read on the E460 under Windows 7 x86 (roadmap 24.3.5). The
-timer-arm race above is roadmap 24.4.
+timer-arm race above is roadmap 24.4, fixed in the build 24.3.4's remaining
+readings take.
 
 On the fixed build the same gap shows at 1 as a loop on Vista and 7: usbhub
 abandons the held resets with a root disable, which retires the hub; QEMU

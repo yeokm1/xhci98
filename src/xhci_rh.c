@@ -738,6 +738,10 @@ MPSTATUS XhciRhGetHubStatus(PXHCI_EXTENSION ext,
     ext->RhHubStatusQueries++;
     status->HubStatus = 0;
     status->HubChange = 0;
+
+    /* The same UNLOCKED drain as RH_GetPortStatus's (roadmap 24.4): usbport's
+     * peek calls this first. Nothing on the 200 tier. */
+    XhciRootHubDrainOwedArms(ext);
     return MP_STATUS_SUCCESS;
 }
 
@@ -832,8 +836,15 @@ MPSTATUS XhciRhGetPortStatus(PXHCI_EXTENSION ext,
      * The rule this leaves behind, and it is the one to check when a refresh
      * site is added: **anything that can call xhciRhRefresh outside the event
      * DPC owes XhciSlotDeferredWork.** The suite caught this site missing it.
+     *
+     * An XHCI_ARM_UNLOCKED context (roadmap 24.4): usbport holds nothing
+     * here, or its MP lock when its root-hub peek calls in, and it never
+     * calls this under its timer-list lock (static, all four NT 6.x builds).
+     * So this is also where the arms a DEFER context owed are made - the
+     * peek is what the kick in XhciRootHubDeferredWork starts.
      */
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWork(ext, XHCI_ARM_UNLOCKED);
+    XhciRootHubDrainOwedArms(ext);
 
     XHCI_DBG_VALUE_CHANGED("RH_GetPortStatus: status and change",
                            portStatus | (portChange << 16));
@@ -1340,7 +1351,7 @@ static MPSTATUS xhciRhPortOperation(PXHCI_EXTENSION ext,
     XhciControllerLockRelease(oldIrql);
 
     if (status == MP_STATUS_SUCCESS) {
-        XhciRootHubDeferredWork(ext);
+        XhciRootHubDeferredWork(ext, XHCI_ARM_DEFER);
     }
     return status;
 }
@@ -1629,7 +1640,7 @@ static MPSTATUS xhciRhStartOperation(PXHCI_EXTENSION ext,
     XhciControllerLockRelease(oldIrql);
 
     if (armed) {
-        XhciRootHubDeferredWork(ext);
+        XhciRootHubDeferredWork(ext, XHCI_ARM_DEFER);
     }
     return status;
 }
@@ -2286,7 +2297,7 @@ static MPSTATUS xhciRhVhubRootOp(PXHCI_EXTENSION ext, USHORT port, ULONG which)
     }
 
     XhciControllerLockRelease(oldIrql);
-    XhciRootHubDeferredWork(ext);
+    XhciRootHubDeferredWork(ext, XHCI_ARM_DEFER);
     return status;
 }
 
@@ -2421,7 +2432,10 @@ VOID XhciRhVhubPort1Status(PXHCI_EXTENSION ext,
  * is ordinary input rather than an error: the operation completed, a stop or a
  * suspend retired it, or the extension has been zeroed and restarted since.
  *
- * IRQL: DISPATCH_LEVEL, no miniport lock held (NT 6.x: usbport's timer lock).
+ * IRQL: DISPATCH_LEVEL, no miniport lock held (NT 6.x: usbport's timer lock,
+ * or none when Windows 7's StopController runs it early) - an XHCI_ARM_DEFER
+ * context, so a re-timed resume's arm is owed and the announcement kicks it
+ * (roadmap 24.4).
  */
 static VOID NTAPI xhciRhPortTimeout(PVOID miniPortExtension, PVOID context)
 {
@@ -2528,7 +2542,7 @@ static VOID NTAPI xhciRhPortTimeout(PVOID miniPortExtension, PVOID context)
 
         ext->RootHubInvalidatesOwed++;
         XhciControllerLockRelease(oldIrql);
-        XhciRootHubDeferredWork(ext);
+        XhciRootHubDeferredWork(ext, XHCI_ARM_DEFER);
         return;
     }
 
@@ -2597,7 +2611,7 @@ static VOID NTAPI xhciRhPortTimeout(PVOID miniPortExtension, PVOID context)
         XhciControllerLockRelease(oldIrql);
         XHCI_DBG_VALUE_CHANGED("RH resume: port went away or left Resume "
                                "mid-interval, PORTSC", portsc);
-        XhciRootHubDeferredWork(ext);
+        XhciRootHubDeferredWork(ext, XHCI_ARM_DEFER);
         return;
     }
 
@@ -2617,7 +2631,7 @@ static VOID NTAPI xhciRhPortTimeout(PVOID miniPortExtension, PVOID context)
         XhciControllerLockRelease(oldIrql);
         XHCI_DBG_VALUE_CHANGED("RH resume: terminating write deferred - "
                                "re-timing hub port", timeout->HubPort);
-        XhciRootHubDeferredWork(ext);
+        XhciRootHubDeferredWork(ext, XHCI_ARM_DEFER);
         return;
     }
 
@@ -2637,7 +2651,7 @@ static VOID NTAPI xhciRhPortTimeout(PVOID miniPortExtension, PVOID context)
      */
     XHCI_DBG_VALUE_CHANGED("RH resume: T(DRSMDN) elapsed, driving hub port to "
                            "U0", timeout->HubPort);
-    XhciRootHubDeferredWork(ext);
+    XhciRootHubDeferredWork(ext, XHCI_ARM_DEFER);
 }
 
 /*
@@ -2802,7 +2816,9 @@ MPSTATUS XhciRhChirpRootPort(PXHCI_EXTENSION ext, USHORT port)
 /* ------------------------------------------------------------------ */
 
 /*
- * Arm one port timer. Always called with the controller lock **released**.
+ * Arm one port timer. Always called with the controller lock **released**, and
+ * only from an XHCI_ARM_UNLOCKED context on the Version 300 tier - the drain
+ * below returns before reaching here from any other (roadmap 24.4).
  *
  * Nothing here can report failure to the operation that armed it, so the failure
  * that matters is handled by the caller rather than by a return: a port armed
@@ -2811,7 +2827,9 @@ MPSTATUS XhciRhChirpRootPort(PXHCI_EXTENSION ext, USHORT port)
  *
  * IRQL: <= DISPATCH_LEVEL.
  */
-static ULONG xhciRhArmTimer(PXHCI_EXTENSION ext, const XHCI_PORT_TIMEOUT *what)
+static ULONG xhciRhArmTimer(PXHCI_EXTENSION ext,
+                            ULONG mode,
+                            const XHCI_PORT_TIMEOUT *what)
 {
     XHCI_PORT_TIMEOUT context;
     ULONG milliseconds;
@@ -2826,20 +2844,17 @@ static ULONG xhciRhArmTimer(PXHCI_EXTENSION ext, const XHCI_PORT_TIMEOUT *what)
                        ? XHCI_PORT_RESUME_TIMER_MS
                        : XHCI_PORT_RESET_TIMEOUT_MS;
 
-    if (XhciRegPacket.UsbPortRequestAsyncCallback == NULL) {
-        return 0;
-    }
-
     /*
-     * The return value is discarded because there is nothing in it:
-     * USBPORT_RequestAsyncCallback answers 0 on success **and** 0 when its pool
-     * allocation fails (docs/usb-xhci-info/usbport-miniport-abi.md section 6). What is
+     * On the Version 200 tier only a missing service is refused: the legacy
+     * service answers 0 on success **and** 0 when its pool allocation fails
+     * (docs/usb-xhci-info/usbport-miniport-abi.md section 6), and what is
      * checkable - that the service exists - was checked before the write that
-     * needs timing.
+     * needs timing. On the 300 tier Ex reports the pool failure, and the
+     * caller gives the port up at once rather than after XHCI_PORT_AGE_MS.
      */
-    (VOID)XhciRegPacket.UsbPortRequestAsyncCallback(
-        ext, milliseconds, &context, sizeof(context), xhciRhPortTimeout);
-    return 1;
+    return (XhciAsyncTimerArm(ext, mode, milliseconds, &context,
+                              sizeof(context), xhciRhPortTimeout) ==
+            XHCI_ARM_MADE) ? 1UL : 0UL;
 }
 
 /*
@@ -2932,7 +2947,7 @@ static VOID xhciRhDisarmPort(PXHCI_EXTENSION ext, ULONG hubPort)
  * `RH_DisableIrq` straight back into this miniport, which takes the same
  * non-recursive spin lock.
  */
-static VOID xhciRhAnnounce(PXHCI_EXTENSION ext)
+static VOID xhciRhAnnounce(PXHCI_EXTENSION ext, ULONG kick)
 {
     KIRQL oldIrql;
     ULONG announce;
@@ -2947,6 +2962,15 @@ static VOID xhciRhAnnounce(PXHCI_EXTENSION ext)
         } else {
             ext->RootHubInvalidatesGated++;
         }
+    } else if (kick && (ext->Flags & XHCI_EXT_FLAG_RH_IRQ) != 0) {
+        /*
+         * Roadmap 24.4's kick (XhciRootHubDeferredWork): nothing changed, but
+         * arms are owed, and the scan this starts reaches RH_GetPortStatus,
+         * which makes them. Behind a closed gate a scan is already
+         * outstanding and does the same, so the gate is honoured here too.
+         */
+        ext->RootHubArmKicks++;
+        announce = 1;
     }
     XhciControllerLockRelease(oldIrql);
 
@@ -3047,7 +3071,7 @@ VOID XhciRhPortPollSweep(PXHCI_EXTENSION ext)
     if (owed) {
         XHCI_DBG_TEXT("root hub: a polled sweep found a change no event "
                       "announced");
-        xhciRhAnnounce(ext);
+        xhciRhAnnounce(ext, 0);
     }
 }
 #endif
@@ -3128,15 +3152,24 @@ VOID XhciRhGateWatchdog(PXHCI_EXTENSION ext)
      */
     (VOID)XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_RH_IRQ);
     XHCI_DBG_TEXT("root hub: notification gate forced open by the watchdog");
-    xhciRhAnnounce(ext);
+    xhciRhAnnounce(ext, 0);
 }
 #endif
 
-/* The owed timer arms. IRQL: <= DISPATCH_LEVEL, controller lock released. */
-static VOID xhciRhDrainArms(PXHCI_EXTENSION ext)
+/*
+ * The owed timer arms. From an XHCI_ARM_DEFER context on the Version 300 tier
+ * it arms nothing and leaves every `ArmPending` standing for the next
+ * UNLOCKED drain (roadmap 24.4). IRQL: <= DISPATCH_LEVEL, controller lock
+ * released.
+ */
+static VOID xhciRhDrainArms(PXHCI_EXTENSION ext, ULONG mode)
 {
     XHCI_PORT_TIMEOUT armed;
     ULONG guard;
+
+    if (mode != XHCI_ARM_UNLOCKED && ext->ArmThroughExOnly) {
+        return;
+    }
 
     /*
      * Bounded by the number of ports rather than by "until none are pending":
@@ -3149,10 +3182,38 @@ static VOID xhciRhDrainArms(PXHCI_EXTENSION ext)
         if (!xhciRhTakePendingArm(ext, &armed)) {
             break;
         }
-        if (!xhciRhArmTimer(ext, &armed)) {
+        if (!xhciRhArmTimer(ext, mode, &armed)) {
             xhciRhDisarmPort(ext, armed.HubPort);
         }
     }
+}
+
+/*
+ * Whether a DEFER context on the Version 300 tier leaves an arm owed that
+ * the kick should get made: a port's or the command watchdog's. Always 0 on
+ * the 200 tier and from an UNLOCKED context, which owe nothing.
+ * IRQL: <= DISPATCH_LEVEL, controller lock released - it takes it.
+ */
+static ULONG xhciRhKickOwed(PXHCI_EXTENSION ext, ULONG mode)
+{
+    KIRQL oldIrql;
+    ULONG hubPort;
+    ULONG owed;
+
+    if (mode == XHCI_ARM_UNLOCKED || !ext->ArmThroughExOnly) {
+        return 0;
+    }
+
+    XhciControllerLockAcquire(&oldIrql);
+    owed = ext->CommandArmOwed;
+    for (hubPort = 1; !owed && hubPort <= ext->RootHub.PortCount &&
+                      hubPort <= XHCI_MAX_ROOT_PORTS; hubPort++) {
+        if (ext->RootHub.Ports[hubPort - 1].ArmPending != 0) {
+            owed = 1;
+        }
+    }
+    XhciControllerLockRelease(oldIrql);
+    return owed;
 }
 
 /* See the contract in src/xhci_hw.h. IRQL: <= DISPATCH_LEVEL, controller lock
@@ -3162,20 +3223,32 @@ VOID XhciRootHubDeferredArms(PXHCI_EXTENSION ext)
     if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
         return;
     }
-    xhciRhDrainArms(ext);
-    XhciSlotDeferredWork(ext);
+    xhciRhDrainArms(ext, XHCI_ARM_DEFER);
+    XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
 }
 
 /* See the contract in src/xhci_hw.h. IRQL: <= DISPATCH_LEVEL, controller lock
  * released. */
-VOID XhciRootHubDeferredWork(PXHCI_EXTENSION ext)
+VOID XhciRootHubDrainOwedArms(PXHCI_EXTENSION ext)
+{
+    if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE ||
+        !ext->ArmThroughExOnly) {
+        return;
+    }
+    xhciRhDrainArms(ext, XHCI_ARM_UNLOCKED);
+    XhciCommandDrainOwedArm(ext);
+}
+
+/* See the contract in src/xhci_hw.h. IRQL: <= DISPATCH_LEVEL, controller lock
+ * released. */
+VOID XhciRootHubDeferredWork(PXHCI_EXTENSION ext, ULONG armMode)
 {
     if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
         return;
     }
 
-    xhciRhDrainArms(ext);
-    xhciRhAnnounce(ext);
+    xhciRhDrainArms(ext, armMode);
+    xhciRhAnnounce(ext, xhciRhKickOwed(ext, armMode));
 
     /*
      * **And the device layer's drain, because every root-hub path that can
@@ -3191,7 +3264,17 @@ VOID XhciRootHubDeferredWork(PXHCI_EXTENSION ext)
      * teardown's one caller was a *root-hub* callback. Idempotent, so the event
      * DPC calling both explicitly costs nothing.
      */
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWork(ext, armMode);
+
+    /*
+     * That pass may have submitted a command whose watchdog a DEFER context
+     * could only owe. The first announcement has usually closed usbport's
+     * gate by now, and then this one is honoured as closed: the scan that
+     * closed it reaches RH_GetPortStatus, which makes the arm.
+     */
+    if (xhciRhKickOwed(ext, armMode)) {
+        xhciRhAnnounce(ext, 1);
+    }
 }
 
 /*
@@ -3495,7 +3578,7 @@ VOID XhciRootHubPoll(PXHCI_EXTENSION ext)
     }
     XhciControllerLockRelease(oldIrql);
 
-    XhciRootHubDeferredWork(ext);
+    XhciRootHubDeferredWork(ext, XHCI_ARM_UNLOCKED);
 }
 
 /* See the contract in src/xhci_hw.h. Called with the controller lock held.

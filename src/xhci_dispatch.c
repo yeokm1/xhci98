@@ -1165,6 +1165,17 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
         ext->DeliverUnderUsbportLockOnly = 1;
         ext->DeliverPerEndpointOnly = 1;
     }
+    /*
+     * Roadmap 24.4 (XHCI_EXTENSION.ArmThroughExOnly): on the Version 300 tier
+     * every timer goes through the Ex service with its own lock, from the
+     * contexts that may take it. Only if usbport wrote the slot - a 300
+     * registration that did not is already ABI-SUSPECT in the log, and the
+     * legacy arming it falls back to is every earlier build's. Before the
+     * signatures, like the gates above.
+     */
+    ext->ArmThroughExOnly =
+        (xhciInterfaceVersionPresented >= USBPORT_NT6_MINIPORT_INTERFACE_VERSION &&
+         XhciRegPacket.UsbPortRequestAsyncCallbackEx != NULL) ? 1UL : 0UL;
 
     ext->Signature = XHCI_EXTENSION_SIGNATURE;
     ext->TrailingSignature = XHCI_EXTENSION_TRAILING;
@@ -3249,7 +3260,10 @@ static VOID NTAPI xhciResetController(PVOID miniPortExtension)
  * be a recovery that never retries, and clearing it earlier would let the health
  * poll arm a second one against the first.
  *
- * IRQL: DISPATCH_LEVEL, no usbport lock held.
+ * IRQL: DISPATCH_LEVEL, no usbport lock held on NT 5.x; on NT 6.x usbport's
+ * timer-list lock from the timer DPC, or none from Windows 7's StopController
+ * - an XHCI_ARM_DEFER context, which XhciRecoverController honours (roadmap
+ * 24.4).
  */
 static VOID NTAPI xhciRecoveryCallback(PVOID miniPortExtension, PVOID context)
 {
@@ -3348,7 +3362,10 @@ static VOID NTAPI xhciRecoveryCallback(PVOID miniPortExtension, PVOID context)
 }
 
 /*
- * Arm one recovery callback, and **only** from the health poll.
+ * Arm one recovery callback, and **only** from the health poll - which is an
+ * XHCI_ARM_UNLOCKED context on every tier: usbport calls CheckController
+ * holding no lock of its own on NT 6.x, having released its MP lock after a
+ * flag test (static, all four builds; roadmap 24.4).
  *
  * The arming does not happen in ResetController, where the request is raised,
  * and that placement is the point rather than an inconvenience:
@@ -3372,7 +3389,7 @@ static VOID xhciArmRecovery(PXHCI_EXTENSION ext)
     KIRQL oldIrql;
     ULONG arm;
 
-    if (XhciRegPacket.UsbPortRequestAsyncCallback == NULL) {
+    if (!XhciAsyncTimerAvailable()) {
         return;
     }
 
@@ -3486,10 +3503,32 @@ static VOID xhciArmRecovery(PXHCI_EXTENSION ext)
      * "the attempt cap bounds it either way"; neither was true - attempts are
      * counted only when a recovery runs - and the 2026-09-05 audit's F2 is the
      * record.)
+     *
+     * On the Version 300 tier the Ex service does report that failure, and
+     * the age-out's work is then done at once (roadmap 24.4): the arming is
+     * released, the request put back and the loss charged, exactly as
+     * XHCI_RECOVERY_DELIVERY_POLLS later would have. The next poll re-arms.
      */
-    (VOID)XhciRegPacket.UsbPortRequestAsyncCallback(
-        ext, XHCI_RECOVERY_DELAY_MS, &armed, sizeof(armed),
-        xhciRecoveryCallback);
+    if (XhciAsyncTimerArm(ext, XHCI_ARM_UNLOCKED, XHCI_RECOVERY_DELAY_MS,
+                          &armed, sizeof(armed), xhciRecoveryCallback) ==
+        XHCI_ARM_MADE) {
+        return;
+    }
+
+    XhciControllerLockAcquire(&oldIrql);
+    if (ext->RecoveryArmed && ext->RecoveryGeneration == armed.Generation) {
+        ext->RecoveryArmed = 0;
+        ext->RecoveryArmedPolls = 0;
+        ext->RecoveryGeneration++;
+        if (ext->ControllerFailed) {
+            ext->RecoveryRequested = 1;
+            ext->RecoveryDeliveriesLost++;
+            ext->RecoveryFailuresConsecutive++;
+            XhciLogNoteLocked(ext, "ctrl.recover.lost",
+                              ext->RecoveryDeliveriesLost);
+        }
+    }
+    XhciControllerLockRelease(oldIrql);
 }
 
 /*
@@ -5137,6 +5176,17 @@ static ULONG xhciVerifyPacketAfterRegistration(VOID)
 VOID XhciFillPacketForTest(VOID)
 {
     xhciFillPacket();
+}
+
+/* The Version DriverEntry would have presented, so a vector can start a
+ * controller on the NT 6.x tier (roadmap 24.4). Returns the previous value. */
+ULONG XhciSetInterfaceVersionForTest(ULONG version)
+{
+    ULONG previous;
+
+    previous = xhciInterfaceVersionPresented;
+    xhciInterfaceVersionPresented = version;
+    return previous;
 }
 
 #else

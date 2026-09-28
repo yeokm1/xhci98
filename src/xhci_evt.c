@@ -916,8 +916,13 @@ VOID XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
      * port change and decided the controller must be reset should still tell
      * usbport about the port, since the reset is containment rather than repair
      * and this is the last chance to say what was seen.
+     *
+     * An XHCI_ARM_UNLOCKED context (roadmap 24.4): on NT 6.x usbport calls
+     * InterruptDpcEx holding only its ISR-DPC lock, which it never holds with
+     * its timer-list lock, so the arms here are made now through Ex - and so
+     * are the ones a DEFER context left owed.
      */
-    XhciRootHubDeferredWork(ext);
+    XhciRootHubDeferredWork(ext, XHCI_ARM_UNLOCKED);
     /*
      * And the device layer's, for the same reason and with a longer list: the
      * transfers this drain retired owe UsbPortCompleteTransfer, an endpoint
@@ -925,7 +930,7 @@ VOID XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
      * next command of a chain owes a submission - all three are things that must
      * not happen inside the lock this line has released.
      */
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWork(ext, XHCI_ARM_UNLOCKED);
 
     if (resetRequested) {
         XhciRequestControllerReset(ext);

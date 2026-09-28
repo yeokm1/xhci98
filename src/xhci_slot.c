@@ -5304,7 +5304,7 @@ static MPSTATUS xhciSlotOpenControl(
      * transfer path instead - refused for retry while the chain runs, completed
      * with an error once it has failed.
      */
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
     return MP_STATUS_SUCCESS;
 }
 
@@ -5731,7 +5731,7 @@ static MPSTATUS xhciSlotOpenNonDefault(
 
     XhciControllerLockRelease(oldIrql);
 
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
     return MP_STATUS_SUCCESS;
 }
 
@@ -6235,7 +6235,7 @@ VOID XhciSlotSetEndpointStatus(PXHCI_EXTENSION ext,
     }
     XhciControllerLockRelease(oldIrql);
 
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
 }
 
 /*
@@ -8143,7 +8143,10 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
      * self-deadlocks on usbport's lock, however this driver's own is held. A
      * change a request latched waits in `RootHubInvalidatesOwed` for the next
      * context that may announce; the timer a reset or resume armed is armed
-     * now (src/xhci_hw.h, XhciRootHubDeferredArms).
+     * now on NT 5.x and owed to the next event DPC, root-hub peek or poll on
+     * NT 6.x, where an arm from under EpList either raced the timer DPC or
+     * inverted its lock order (roadmap 24.4; src/xhci_hw.h,
+     * XhciRootHubDeferredArms).
      */
     if ((endpoint->Flags & XHCI_ENDPOINT_FLAG_VHUB) != 0) {
         status = xhciVhubSubmit(ext, endpoint, parameters, transfer, sgList,
@@ -8226,7 +8229,7 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
         XHCI_DBG_VALUE_CHANGED("slot: transfer failed - nothing behind this "
                                "endpoint, device index", endpoint->DeviceIndex);
         XhciControllerLockRelease(oldIrql);
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
         return MP_STATUS_SUCCESS;
     }
     if (!xhciDevAdmitted(ext)) {
@@ -8251,7 +8254,7 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
                                       ? XHCI_USBD_STATUS_CANCELED
                                       : XHCI_USBD_STATUS_INTERNAL_HC_ERROR);
         XhciControllerLockRelease(oldIrql);
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
         return MP_STATUS_SUCCESS;
     }
 
@@ -8276,7 +8279,7 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
                                               XHCI_XFER_MAX_CONTROL_TRBS);
         }
         XhciControllerLockRelease(oldIrql);
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
         return status;
     }
 
@@ -8292,7 +8295,7 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
         xhciDevFailIsoTransfer(ext, endpoint, transfer, parameters, isoParams,
                                XHCI_USBD_STATUS_INVALID_PIPE_HANDLE);
         XhciControllerLockRelease(oldIrql);
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
         return MP_STATUS_SUCCESS;
     }
 
@@ -8318,7 +8321,7 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
         XHCI_DBG_VALUE_CHANGED("slot: transfer failed - stale EP0 handle, "
                                "device index", endpoint->DeviceIndex);
         XhciControllerLockRelease(oldIrql);
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
         return MP_STATUS_SUCCESS;
     }
 
@@ -8351,7 +8354,7 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
             XHCI_DBG_VALUE_CHANGED("slot: refused SET_ADDRESS for address",
                                    address);
             XhciControllerLockRelease(oldIrql);
-            XhciSlotDeferredWork(ext);
+            XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
             return MP_STATUS_SUCCESS;
         }
 
@@ -8390,7 +8393,7 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
         ext->SetAddressIntercepts++;
 
         XhciControllerLockRelease(oldIrql);
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
         return MP_STATUS_SUCCESS;
     }
 
@@ -8425,14 +8428,14 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
         case XHCI_EPQ_GATE_RETRY:
             xhciDevTransferRefused(ext, dev, 0);
             XhciControllerLockRelease(oldIrql);
-            XhciSlotDeferredWork(ext);
+            XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
             return MP_STATUS_NO_RESOURCES;
         case XHCI_EPQ_GATE_FAIL_STALL:
         case XHCI_EPQ_GATE_FAIL_HC:
             xhciDevFailTransfer(ext, endpoint, transfer, parameters,
                                 XHCI_USBD_STATUS_INTERNAL_HC_ERROR);
             XhciControllerLockRelease(oldIrql);
-            XhciSlotDeferredWork(ext);
+            XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
             return MP_STATUS_SUCCESS;
         default:
             break;
@@ -8494,7 +8497,7 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
     }
 
     XhciControllerLockRelease(oldIrql);
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
     return status;
 }
 
@@ -10705,11 +10708,12 @@ VOID XhciSlotPortReset(PXHCI_EXTENSION ext, ULONG hubPort)
  * lock released.
  *
  * Returns 1 if it did something - which is what lets XhciSlotDeferredWork loop
- * until the driver is quiet rather than doing one thing per call.
+ * until the driver is quiet rather than doing one thing per call. `armMode` is
+ * the drain's context, for the command's watchdog (XHCI_ARM_*).
  *
  * IRQL: <= DISPATCH_LEVEL, controller lock **not** held.
  */
-static ULONG xhciDevPumpCommand(PXHCI_EXTENSION ext)
+static ULONG xhciDevPumpCommand(PXHCI_EXTENSION ext, ULONG armMode)
 {
     XHCI_TRB trb;
     XHCI_EP_BINDING binding;
@@ -10974,7 +10978,7 @@ static ULONG xhciDevPumpCommand(PXHCI_EXTENSION ext)
 
     XhciControllerLockRelease(oldIrql);
 
-    status = XhciCommandSubmit(ext, &trb, NULL);
+    status = XhciCommandSubmit(ext, &trb, NULL, armMode);
     if (status == XHCI_CMD_OK) {
         return 1;
     }
@@ -11209,34 +11213,39 @@ VOID XhciSlotLeaveSubmit(PXHCI_EXTENSION ext)
  * to hand to usbport on the Version 300 tier: nothing, everything because
  * usbport's EpList lock is held, everything because a lifecycle path or the
  * poll's fallback says so. The admission is an argument and not a field so
- * that it belongs to this call on this CPU.
+ * that it belongs to this call on this CPU - and so is the arm mode
+ * (XHCI_ARM_*, roadmap 24.4), which is not the admission's to imply: an
+ * unadmitted pass runs from the event DPC (UNLOCKED) and from inside
+ * SubmitTransfer (DEFER) alike, and a forced one from StopController and
+ * from the recovery's timer callback.
  */
 #define XHCI_DELIVER_NONE   0UL
 #define XHCI_DELIVER_LOCKED 1UL
 #define XHCI_DELIVER_FORCED 2UL
 
 static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
-                                   PVOID lockedEndpoint);
+                                   PVOID lockedEndpoint, ULONG armMode);
 
 /* IRQL: <= DISPATCH_LEVEL, controller lock **not** held. */
-VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext)
+VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext, ULONG armMode)
 {
-    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_NONE, NULL);
+    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_NONE, NULL, armMode);
 }
 
 VOID XhciSlotDeferredWorkForEndpoint(PXHCI_EXTENSION ext,
                                      PVOID endpointExtension)
 {
-    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_LOCKED, endpointExtension);
+    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_LOCKED, endpointExtension,
+                           XHCI_ARM_DEFER);
 }
 
-VOID XhciSlotDeferredWorkForced(PXHCI_EXTENSION ext)
+VOID XhciSlotDeferredWorkForced(PXHCI_EXTENSION ext, ULONG armMode)
 {
-    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_FORCED, NULL);
+    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_FORCED, NULL, armMode);
 }
 
 static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
-                                   PVOID lockedEndpoint)
+                                   PVOID lockedEndpoint, ULONG armMode)
 {
     KIRQL oldIrql;
     PXHCI_TRANSFER transfer;
@@ -11260,6 +11269,15 @@ static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
     heldForPollCounted = 0;
     heldOtherCounted = 0;
     pollRequested = 0;
+
+    /*
+     * Ahead of the re-entry guard, because the guard is about this list and
+     * the owed watchdog is not: a pass another CPU is running inside
+     * SubmitTransfer may be the one that owed it (roadmap 24.4).
+     */
+    if (armMode == XHCI_ARM_UNLOCKED) {
+        XhciCommandDrainOwedArm(ext);
+    }
 
     XhciControllerLockAcquire(&oldIrql);
     if (ext->DeferredBusy) {
@@ -11545,7 +11563,7 @@ static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
             continue;
         }
 
-        if (!xhciDevPumpCommand(ext)) {
+        if (!xhciDevPumpCommand(ext, armMode)) {
             break;
         }
     }
@@ -11789,8 +11807,8 @@ VOID XhciSlotPoll(PXHCI_EXTENSION ext)
     XhciControllerLockRelease(oldIrql);
 
     if (force) {
-        XhciSlotDeferredWorkForced(ext);
+        XhciSlotDeferredWorkForced(ext, XHCI_ARM_UNLOCKED);
     } else {
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWork(ext, XHCI_ARM_UNLOCKED);
     }
 }
