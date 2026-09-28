@@ -1970,7 +1970,9 @@ lifetime again (0 at 2), and new-hardware wizards on 98 SE for the audio
 device's first plug at 2 and the keyboard's at 1, each answered before any
 timed plug.
 
-Still owed after these two, in the order the next session takes them, two
-guests at a time: the idle control legs on 98 SE and 2000; SweetLow's stack
-(with the cancelled hub install at 2), ME and XP x86 for the hidusbf rates,
-idle and latency; the two matrix images prepared at 2 and the matrix run.
+Still owed after these two: the idle control legs on 98 SE and 2000;
+SweetLow's stack (with the cancelled hub install at 2), ME and XP x86 for
+the hidusbf rates, idle and latency; the two matrix images prepared at 2
+and the matrix run. By the owner's order of 2026-09-28 all but the idle
+control come after roadmap 24.4 and 24.5, which change the driver, and are
+read on fresh images of the build that carries both.

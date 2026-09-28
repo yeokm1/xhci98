@@ -936,7 +936,13 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     suspend on a local build without `USB_MINIPORT_FLAGS_DISABLE_SS`, on 98
     SE and 2000, to read whether the hubs hold the idle off; at 2 a
     cancelled hub install (SweetLow's stack); and the device matrix at 2
-    with its High-Speed rows.
+    with its High-Speed rows. **Taken after 24.4 and 24.5** (owner,
+    2026-09-28): both change the driver, so what is still owed here - the
+    no-flag idle control excepted, which reads a build of its own - is read
+    once, on fresh images of the build that carries both, together with
+    each fix's own re-read (Vista and 7 for 24.4, a High-Speed device
+    behind a hub for 24.5). The 98 SE and 2000 readings above stand; the
+    cut's install legs and matrix are their no-regression check.
   - [ ] **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the
     switch at 1 and at 2, the Low-Speed mouse and the Full-Speed audio device from
     `test-equipment.md` on root ports, the interval read from the snapshot;
@@ -947,6 +953,10 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     Full-Speed device on a root port, since QEMU's `qemu-xhci` ignores a
     port-disable write and so cannot show a Full- or Low-Speed device behind
     a virtual hub on NT 6.x (owner, 2026-09-27; record 12 section 11).
+    Taken after 24.4 and 24.5 and the rest of 24.3.4 (owner, 2026-09-28):
+    its Windows 7 session is 24.4's path and its USB 2.0 hub with a
+    High-Speed device behind it is 24.5's case, so the metal reads the
+    build that carries both.
 
   If 24.3.1's record, or any reading in 24.3.4, contradicts the page - a
   hub driver that gives the virtual hub no TT record, a stack that refuses a
@@ -978,7 +988,9 @@ Tasks. `runs/run-24.md` is the record once a task runs.
 
 - [ ] **24.4 - The NT 6.x timer-arm race.** *(added 2026-09-27 by the owner's
   decision, and taken before the cut; older than 24.3 and not part of
-  issue 4; 24.5 until 2026-09-28)*
+  issue 4; 24.5 until 2026-09-28)* Taken next, with 24.5, before the rest
+  of 24.3.4 and before 24.3.5 (owner, 2026-09-28): the two fixes share one
+  rebuild, and the readings still owed are read on it.
 
   On Vista and Windows 7 the legacy `UsbPortRequestAsyncCallback` enters
   `RequestAsyncCallbackEx` on the branch that skips usbport's timer-list
@@ -1010,7 +1022,9 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   so the cut's install legs and matrix read the build that carries it.
 
 - [ ] **24.5 - The High-Speed interval behind a hub.** *(added 2026-09-28 by
-  the owner's decision, and taken before the cut; older than 24.3)*
+  the owner's decision, and taken before the cut; older than 24.3)* Taken
+  with 24.4, in the same rebuild, before the rest of 24.3.4 (owner,
+  2026-09-28).
 
   A High-Speed interrupt endpoint behind a hub opens at `Period` 1, which
   this driver programs as Interval 0 (125 us): read at 2, behind the virtual
