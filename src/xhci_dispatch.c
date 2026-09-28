@@ -2335,6 +2335,12 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
                            ext->EndpointSpeedMismatches);
     XHCI_DBG_VALUE_CHANGED("endpoint intervals floored",
                            ext->EndpointIntervalsFloored);
+    /* Roadmap 24.5: interrupt endpoints opened at their own period because
+     * usbport's budget promoted theirs, and ones with no pipe period. */
+    XHCI_DBG_VALUE_CHANGED("endpoint periods promoted by usbport's budget",
+                           ext->EndpointPeriodsPromoted);
+    XHCI_DBG_VALUE_CHANGED("endpoint pipe periods missing",
+                           ext->EndpointPipePeriodsMissing);
     XHCI_DBG_VALUE_CHANGED("endpoints refused - no bandwidth",
                            ext->EndpointsNoBandwidth);
     XHCI_DBG_VALUE_CHANGED("endpoints refused - no resources",
@@ -2578,6 +2584,13 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
     XHCI_DBG_VALUE_CHANGED("RH ports busy", ext->RhPortsBusy);
     XHCI_DBG_VALUE_CHANGED("RH stale timers", ext->RhStaleTimers);
     XHCI_DBG_VALUE_CHANGED("RH timer failures", ext->RhTimerFailures);
+    /* Roadmap 24.4: the Version 300 tier's arms (design record 05, "Where a
+     * timer may be armed"). */
+    XHCI_DBG_VALUE_CHANGED("timer arms owed by a DEFER context",
+                           ext->AsyncArmsDeferred);
+    XHCI_DBG_VALUE_CHANGED("timer arms Ex refused", ext->AsyncArmsRefused);
+    XHCI_DBG_VALUE_CHANGED("root-hub announcements made to drain owed arms",
+                           ext->RootHubArmKicks);
     XHCI_DBG_VALUE_CHANGED("RH operations retired by age", ext->RhAgeRetires);
     /*
      * The other retirement cause, and it is one of the two witnesses task

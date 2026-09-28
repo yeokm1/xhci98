@@ -15237,6 +15237,12 @@ static void slot_properties_ep(ULONG address,
     slotProperties.TotalMaxPacketSize = (USHORT)(mps * transactions);
     slotProperties.MaxPacketSize = mps;
     slotProperties.Period = (UCHAR)period;
+    /* Every usbport build copies an interrupt pipe's bucketed Period to 0x07
+     * before its budget can move `Period` (roadmap 24.5); the model's budget
+     * never moves it, so the two agree unless a vector says otherwise. */
+    if (transferType == USBPORT_TRANSFER_TYPE_INTERRUPT) {
+        slotProperties.PipePeriod = (UCHAR)period;
+    }
     slotProperties.TransactionPerMicroframe = (UCHAR)transactions;
     slotProperties.HubAddr = 0xFFFF;
 }
@@ -23402,6 +23408,147 @@ static void test_slot_failed_record_ep0_reopen(void)
  * shape of the gap: every one of them was a parameter or a branch with exactly
  * one tested value.
  */
+/*
+ * Roadmap 24.5: the interval comes from the pipe's own Period, not from the
+ * one usbport's USB 2.0 budget promoted. Read at 2 on NUSB, SweetLow's, ME,
+ * SP4 and XP: a High-Speed mouse behind the virtual hub opened at Period 1,
+ * Interval 0 (125 us); the budget had promoted it for bus load, and 0x07 still
+ * held its own 32.
+ */
+static void test_slot_interrupt_promoted_period(void)
+{
+    PXHCI_DEVICE dev;
+    PXHCI_ENDPOINT endpoint;
+    ULONG i;
+
+    /* High Speed, promoted from 32 microframes to 1. */
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    slot_properties_ep(7, UsbHighSpeed, 0x81, USBPORT_TRANSFER_TYPE_INTERRUPT,
+                       8, 1, 1);
+    slotProperties.PipePeriod = 32;
+    endpoint = &slotEndpoint2;
+    for (i = 0; i < sizeof(XHCI_ENDPOINT) / sizeof(ULONG); i++) {
+        ((ULONG *)endpoint)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_raw(&slotProperties, endpoint), MP_STATUS_SUCCESS,
+             "a High-Speed interrupt endpoint the budget promoted to Period 1");
+    CHECK_EQ(dev->Endpoints[0].Params.Interval, 5UL,
+             "opens at its own 32 microframes - Interval 5, 4 ms - as the "
+             "same device does on a root port, not Interval 0");
+    CHECK_EQ(ext.EndpointPeriodsPromoted, 1, "counted as promoted");
+    CHECK_EQ(ext.EndpointPipePeriodsMissing, 0, "(the pipe period was there)");
+    deliver_events();
+
+    /* Full Speed behind a TT, promoted from 8 frames to 1. */
+    dev = slot_enumerate_addressed(3, 1, 5, 7);
+    slot_properties_ep(7, UsbFullSpeed, 0x81, USBPORT_TRANSFER_TYPE_INTERRUPT,
+                       8, 1, 1);
+    slotProperties.PipePeriod = 8;
+    for (i = 0; i < sizeof(XHCI_ENDPOINT) / sizeof(ULONG); i++) {
+        ((ULONG *)endpoint)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_raw(&slotProperties, endpoint), MP_STATUS_SUCCESS,
+             "a Full-Speed interrupt endpoint promoted to Period 1");
+    CHECK_EQ(dev->Endpoints[0].Params.Interval, 6UL,
+             "opens at its own 8 frames - Interval 6 - not the 1 ms floor");
+    CHECK_EQ(ext.EndpointPeriodsPromoted, 1, "counted as promoted");
+    deliver_events();
+
+    /*
+     * Promoted, on a Full-Speed device usbport bucketed as High Speed (the
+     * root-port misreport, Phase 5 task 7): the pipe period is read in the
+     * same speed as `Period` always was, so 4 microframes still floors to the
+     * Full-Speed minimum, and 32 microframes is 4 ms, Interval 5.
+     */
+    dev = slot_enumerate_addressed(3, 1, 5, 7);
+    slot_properties_ep(7, UsbHighSpeed, 0x81, USBPORT_TRANSFER_TYPE_INTERRUPT,
+                       8, 1, 1);
+    slotProperties.PipePeriod = 4;
+    for (i = 0; i < sizeof(XHCI_ENDPOINT) / sizeof(ULONG); i++) {
+        ((ULONG *)endpoint)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_raw(&slotProperties, endpoint), MP_STATUS_SUCCESS,
+             "a promoted endpoint on a device usbport misreads as HS");
+    CHECK_EQ(dev->Endpoints[0].Params.Interval, XHCI_EP_INTERVAL_FSLS_MIN,
+             "4 microframes floors to Full Speed's minimum, as before");
+    CHECK_EQ(ext.EndpointIntervalsFloored, 1, "(the floor counted)");
+    deliver_events();
+    dev = slot_enumerate_addressed(3, 1, 5, 7);
+    slot_properties_ep(7, UsbHighSpeed, 0x81, USBPORT_TRANSFER_TYPE_INTERRUPT,
+                       8, 1, 1);
+    slotProperties.PipePeriod = 32;
+    for (i = 0; i < sizeof(XHCI_ENDPOINT) / sizeof(ULONG); i++) {
+        ((ULONG *)endpoint)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_raw(&slotProperties, endpoint), MP_STATUS_SUCCESS,
+             "(the same device, a 32-microframe pipe)");
+    CHECK_EQ(dev->Endpoints[0].Params.Interval, 5UL,
+             "Interval 5, not the floor the budget's 1 would have given");
+    CHECK_EQ(ext.EndpointIntervalsFloored, 0, "(nothing floored)");
+    deliver_events();
+
+    /*
+     * A reopen whose budget period moved but whose pipe period did not -
+     * what a rebalance's promotion looks like to a later ReopenPipe - keeps
+     * the endpoint's interval and reprograms nothing.
+     */
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    CHECK_EQ(slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                          USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 32, 1),
+             MP_STATUS_SUCCESS, "(an interrupt endpoint at 32)");
+    deliver_events();
+    CHECK_EQ(dev->Endpoints[0].State, XHCI_EP_REC_CONFIGURED, "(configured)");
+    slot_properties_ep(7, UsbHighSpeed, 0x81, USBPORT_TRANSFER_TYPE_INTERRUPT,
+                       8, 1, 1);
+    slotProperties.PipePeriod = 32;
+    CHECK_EQ(open_endpoint_raw(&slotProperties, &slotEndpoint2),
+             MP_STATUS_SUCCESS, "reopened with the budget's period now 1");
+    CHECK_EQ(dev->Endpoints[0].Params.Interval, 5UL, "still Interval 5");
+    CHECK_EQ(dev->Endpoints[0].PendingParams.Interval, 5UL,
+             "with no reprogram asked for");
+    deliver_events();
+
+    /* Not promoted: the two agree and nothing is counted. */
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    CHECK_EQ(slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                          USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 32, 1),
+             MP_STATUS_SUCCESS, "an endpoint the budget left alone");
+    CHECK_EQ(dev->Endpoints[0].Params.Interval, 5UL, "Interval 5");
+    CHECK_EQ(ext.EndpointPeriodsPromoted, 0, "nothing counted");
+    deliver_events();
+
+    /* No pipe period - no build read produces it: today's Period is used. */
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    slot_properties_ep(7, UsbHighSpeed, 0x81, USBPORT_TRANSFER_TYPE_INTERRUPT,
+                       8, 8, 1);
+    slotProperties.PipePeriod = 0;
+    for (i = 0; i < sizeof(XHCI_ENDPOINT) / sizeof(ULONG); i++) {
+        ((ULONG *)endpoint)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_raw(&slotProperties, endpoint), MP_STATUS_SUCCESS,
+             "an interrupt endpoint with no pipe period");
+    CHECK_EQ(dev->Endpoints[0].Params.Interval, 3UL,
+             "falls back to Period 8 microframes - Interval 3");
+    CHECK_EQ(ext.EndpointPipePeriodsMissing, 1, "and says so");
+    deliver_events();
+
+    /* A bulk endpoint's 0x07 is not read at all. */
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    slot_properties_ep(7, UsbHighSpeed, 0x82, USBPORT_TRANSFER_TYPE_BULK,
+                       512, 0, 1);
+    slotProperties.PipePeriod = 32;
+    for (i = 0; i < sizeof(XHCI_ENDPOINT) / sizeof(ULONG); i++) {
+        ((ULONG *)endpoint)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_raw(&slotProperties, endpoint), MP_STATUS_SUCCESS,
+             "a bulk endpoint with a stray byte at 0x07");
+    CHECK_EQ(dev->Endpoints[0].Params.Interval, 0UL,
+             "keeps Interval 0: only interrupt endpoints read the pipe period");
+    CHECK_EQ(ext.EndpointPeriodsPromoted + ext.EndpointPipePeriodsMissing, 0,
+             "and nothing is counted");
+    deliver_events();
+}
+
 static void test_slot_interrupt_second_order(void)
 {
     PXHCI_DEVICE dev;
@@ -33931,6 +34078,7 @@ int main(void)
     test_slot_interrupt_remove_is_per_endpoint();
     test_slot_interrupt_teardown_returns_rings();
     test_slot_interrupt_second_order();
+    test_slot_interrupt_promoted_period();
     test_slot_abort_stops_and_preserves();
     test_slot_paused_endpoint_is_restarted_by_the_poll();
     test_slot_abort_takes_it_off_the_completion_list();

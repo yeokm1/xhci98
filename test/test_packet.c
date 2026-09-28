@@ -430,6 +430,9 @@ static void test_endpoint_properties(void)
              "properties TotalMaxPacketSize (corrected EP0 MPS0)");
     CHECK_EQ(XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, Period),
              BY_ARCH(0x06, 0x06), "properties Period");
+    CHECK_EQ(XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, PipePeriod),
+             BY_ARCH(0x07, 0x07),
+             "properties PipePeriod, the pre-budget Period (roadmap 24.5)");
     CHECK_EQ(XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, DeviceSpeed),
              BY_ARCH(0x08, 0x08), "properties DeviceSpeed");
     CHECK_EQ(XHCI_OFFSET_OF(USBPORT_ENDPOINT_PROPERTIES, UsbBandwidth),

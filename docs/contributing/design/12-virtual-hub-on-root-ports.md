@@ -850,7 +850,21 @@ ports, with the interval read from the snapshot instrument.
 
 - High-Speed devices see no change with the switch at 0 or 1. At 2 they
   sit behind a virtual hub at the same speed, with the same interval and
-  one more devnode above them.
+  one more devnode above them - **since roadmap 24.5**. Until then the
+  interval was not the same: read at 2 on NUSB's, SweetLow's, ME's, SP4's
+  and XP's usbport, a High-Speed mouse behind the virtual hub opened at
+  `Period` 1, Interval 0 (125 us), where on a root port at 1 it opened at
+  `Period` 32, Interval 5 (run-24.md, 24.3.4, finding 1). The cause is not
+  the hub: usbport's USB 2.0 budget promotes an interrupt endpoint to
+  period 1 whenever its start microframe lands past 2, which on NT 5.x has
+  no speed test and happens once three periodic endpoints hold microframes
+  0 to 2 - the hub's own status pipe is one of them. So it was older than
+  this design, and any High-Speed interrupt device on a loaded bus met it.
+  The driver now programs an interrupt endpoint from the pipe's own period,
+  which usbport keeps at endpoint-properties byte 0x07 and never moves
+  (`PipePeriod`; static, all ten builds). NT 6.x's budget does not promote
+  High Speed, but promotes Full and Low Speed behind a TT, which the same
+  change covers.
 - The 1 ms floor stays, since the xHCI specification allows nothing less at
   Full and Low Speed. What goes away is the bucketing above it.
 - usbport still rounds a Full or Low Speed `bInterval` down to a power of

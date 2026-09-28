@@ -2080,3 +2080,78 @@ issue:
    now compares epoch, generation and operation before touching the shadow.
 
 `test_init` 22,066 checks after the fixes, every suite green.
+
+## 24.5 - The High-Speed interval behind a hub (2026-09-28)
+
+Taken with 24.4, in the same rebuild (owner, 2026-09-28). This section
+records the read, the choice and the host vectors; the build and the guests
+come after.
+
+### The read
+
+Two agents read every usbport build the targets run - NUSB 3.3 and 3.6
+(byte-identical), SweetLow's, Windows 2000 SP4, XP SP3 x86, XP x64, and
+Vista and Windows 7 in both architectures - for what `Period` and
+`InterruptScheduleMask` carry for an interrupt endpoint behind a hub and on
+a root port, and where `bInterval` can be read. All static; the facts per
+build with addresses are in `legal-provenance.md` section 4. What decided it:
+
+- On every build the pipe open buckets `bInterval` into `Period` (High
+  Speed `1 << min(bInterval - 1, 5)` microframes, Full and Low Speed a power
+  of two of at most 32 frames), copies that into endpoint-properties byte
+  0x07 - interrupt endpoints only, and the only reference to that offset in
+  each image - and then, because this driver registers `MiniPortFlags` 0x10,
+  runs the USB 2.0 budget, which overwrites `Period` with the period it
+  budgeted.
+- The budget keeps the bucketed period unless `Promote_endpoint_periods`
+  re-budgets the endpoint at period 1, which it does whenever the
+  endpoint's start microframe lands past 2. **On the NT 5.x-family builds
+  that test has no speed check**, and the start microframe is the least
+  loaded of the controller-wide table: the first three High-Speed periodic
+  endpoints take microframes 0, 1 and 2 and the fourth is promoted. Behind
+  a hub and on a root port run the same code. So finding 1 - `Period` 32 on
+  a root port at 1, `Period` 1 behind the virtual hub at 2 - is bus load
+  (the hub's status pipe is one more periodic endpoint), not a topology
+  test, and older than 24.3. On NT 6.x the promotion skips High Speed and
+  can still promote Full and Low Speed behind a TT.
+- The descriptor never reaches the miniport, and the High-Speed schedule
+  mask is one bit naming a microframe, not a rate. A later promotion of an
+  open endpoint rewrites `Period` and calls `RebalanceEndpoint`, which this
+  driver leaves a no-op; byte 0x07 is not touched.
+
+### The choice
+
+The roadmap named three sources - the descriptor's `bInterval`, the schedule
+mask, the budget's period. The read ruled out all three and found a fourth:
+byte 0x07, renamed `PipePeriod`. An interrupt endpoint is now programmed
+from it (`xhciEpProgramPeriod`, `src/xhci_slot.c`), with `Period` the
+fallback if it is ever 0; every other type is unchanged. A promotion is
+counted in `EndpointPeriodsPromoted`, a missing pipe period in
+`EndpointPipePeriodsMissing`. Design record 12 section 7 is corrected: the
+same High-Speed interval at 2 is true from this build on, and was not
+before.
+
+### The host vectors
+
+The model now sets `PipePeriod` for every interrupt open, as usbport does;
+`test_packet` anchors it at 0x07 on both architectures;
+`test_slot_interrupt_promoted_period` opens a High-Speed endpoint promoted
+from 32 to 1 (Interval 5, not 0), a Full-Speed one promoted from 8 to 1
+(Interval 6), one not promoted (nothing counted), one with no pipe period
+(the fallback, counted) and a bulk endpoint with a stray byte at 0x07
+(ignored). `test_init` 22,043 checks, every suite green; three mutations -
+the pipe period ignored, the type test removed, the fallback removed - each
+killed (`out\t24-4\mutations-24-5.txt`).
+
+### The Codex review (2026-09-28)
+
+No functional defect; two diagnostic findings, both taken. The five new
+counters of 24.4 and 24.5 had no `XHCI_DBG_VALUE_CHANGED` site, so
+`gen-offsets.ps1` could not publish them: now they have, and `offsets.txt`
+and `offsets-amd64.txt` are regenerated (the 24.4 commit had changed the
+extension without regenerating them). The refusal and floor diagnostics
+printed the budget's `Period` rather than the period used: they now carry
+both. Two of its test gaps were closed - a promoted endpoint on a device
+usbport misreads as High Speed (a 4-microframe pipe still floors, a
+32-microframe one is Interval 5) and a reopen whose budget period moved
+while its pipe period did not (no reprogram). `test_init` 22,122 checks.

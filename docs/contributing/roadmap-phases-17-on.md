@@ -1070,6 +1070,19 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   no-regression reading. Before the `1.1.2.0` cut, so the cut's install
   legs and matrix read the build that carries it.
 
+  **The static read and the fix are done (2026-09-28); the guests are
+  owed.** On all ten builds usbport buckets the pipe's `bInterval` into
+  `Period`, copies it to endpoint-properties byte 0x07, then lets its USB
+  2.0 budget overwrite `Period`; `Promote_endpoint_periods` makes it 1 when
+  the endpoint's start microframe lands past 2 - a matter of bus load, with
+  no speed test on NT 5.x, Full and Low Speed only on NT 6.x. The
+  descriptor never reaches the miniport and the schedule mask says which
+  microframe, not how often, so the source chosen is the fourth the read
+  found: byte 0x07 (`PipePeriod`) for interrupt endpoints. Design record 12
+  section 7 corrected; `runs/run-24.md`, "24.5"; `legal-provenance.md`
+  section 4. Not ticked until the guests at 2 have read a High-Speed
+  device behind a virtual hub on the rebuilt package.
+
 - [ ] **24.6 - The reporter's pointer for the missing USB 1.1 hub.** *(24.4
   until 2026-09-28, when the owner moved it to just before the cut)*
 

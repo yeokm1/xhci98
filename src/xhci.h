@@ -6183,6 +6183,14 @@ typedef struct _XHCI_EXTENSION {
     ULONG CommandArmOwedGeneration;
     ULONG CommandArmOwedPhase;
     ULONG CommandArmOwedAttempt;
+    /*
+     * Roadmap 24.5: interrupt endpoints opened at `PipePeriod` because
+     * usbport's USB 2.0 budget had promoted `Period` below it, and ones that
+     * came with no `PipePeriod` and so fell back to `Period`, which no build
+     * read should produce (src/xhci_usbport.h, USBPORT_ENDPOINT_PROPERTIES).
+     */
+    ULONG EndpointPeriodsPromoted;
+    ULONG EndpointPipePeriodsMissing;
     ULONG AsyncArmsDeferred;    /* arms a DEFER context left owed             */
     ULONG AsyncArmsRefused;     /* Ex answered an error: the arm was lost     */
     ULONG RootHubArmKicks;      /* announcements made only to drain owed arms */

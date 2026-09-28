@@ -330,6 +330,29 @@ typedef struct _USBPORT_RESOURCES {
  * 4 bytes; `Direction` is not read by any path disassembled, and sits between
  * two measured anchors with no room to move.
  */
+/*
+ * **`PipePeriod` (0x07) is roadmap 24.5's field, and `Period` is not the
+ * endpoint's interval on any build.** Every usbport this driver runs under
+ * buckets an interrupt pipe's `bInterval` into `Period` - High Speed
+ * `1 << min(bInterval - 1, 5)` microframes, Full and Low Speed a power of two
+ * of at most 32 frames - then copies that value into this byte, and only then
+ * lets the USB 2.0 budget (the path `MiniPortFlags` 0x10 selects, which this
+ * driver sets) overwrite `Period` with the period it budgeted. The budget's
+ * `Promote_endpoint_periods` re-budgets an interrupt endpoint at period 1
+ * whenever its start microframe lands past 2, which is a matter of bus load:
+ * on NT 5.x with no speed test, so a High-Speed endpoint became Period 1 -
+ * Interval 0, 125 us - once three periodic endpoints were open (the virtual
+ * hub's own status pipe is one), and on NT 6.x for Full and Low Speed behind
+ * a TT only. The byte at 0x07 is written once, for interrupt endpoints only,
+ * and is the only reference to that offset in each image, so neither the
+ * budget nor a later rebalance moves it; `InterruptScheduleMask` says which
+ * microframe, not how often; and the descriptor is never passed down.
+ * Static, all ten builds (NUSB 3.3 = 3.6 `0x24BBB`, SweetLow's `0x24A89`,
+ * SP4 `0x25239`, XP SP3 `0x25A96`, XP x64 `0x2E0C5`, Vista x86 `0x1F849`,
+ * Windows 7 x86 `0x1AA3D`, Vista x64 `0x3FAE7`, Windows 7 x64 `0x358CF`,
+ * kd addresses at base 0x10000; legal-provenance.md section 4). The same
+ * offset on amd64.
+ */
 typedef struct _USBPORT_ENDPOINT_PROPERTIES {
     USHORT DeviceAddress;             /* 0x00 */
     USHORT EndpointAddress;           /* 0x02 */
@@ -338,7 +361,12 @@ typedef struct _USBPORT_ENDPOINT_PROPERTIES {
                                        *      1/2/4/8/16/32; control and bulk
                                        *      get 0 (ABI doc's producer table,
                                        *      noted later)                    */
-    UCHAR Reserved1;                  /* 0x07 */
+    UCHAR PipePeriod;                 /* 0x07 interrupt only: the pipe's
+                                       *      own bucketed Period, copied
+                                       *      before the USB 2.0 budget can
+                                       *      promote `Period` to 1; 0 on
+                                       *      every other type (roadmap 24.5,
+                                       *      below)                          */
     ULONG DeviceSpeed;                /* 0x08 USB_DEVICE_SPEED enum         */
     ULONG UsbBandwidth;               /* 0x0C */
     ULONG ScheduleOffset;             /* 0x10 */

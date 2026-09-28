@@ -89,6 +89,8 @@ OpensAccepted	endpoint opens accepted
 OpenRefusalsMalformed	endpoint opens refused - malformed call
 OpenRefusalsBuffer	endpoint opens refused - unusable buffer
 OpensTotal	endpoint opens seen
+EndpointPeriodsPromoted	endpoint periods promoted by usbport's budget
+EndpointPipePeriodsMissing	endpoint pipe periods missing
 EndpointPlacementFailures	endpoint placement failures
 CompletionPollInvalidates	endpoint polls requested for a parked completion
 EndpointQuiesceFailures	endpoint quiescence failures
@@ -326,6 +328,7 @@ RingPool.AcquireFailuresCap	ring pool refusals - per-device cap
 RootHubInvalidates	root hub invalidates
 RootHubInvalidatesGated	root hub invalidates gated
 RootHubInvalidatesOwed	root hub invalidates owed
+RootHubArmKicks	root-hub announcements made to drain owed arms
 HcInfo.ScratchpadCount	scratchpad buffers
 SetAddressIntercepts	SET_ADDRESS interceptions
 ShortPacketsTotal	short packets
@@ -349,6 +352,8 @@ QueueCompletedTotal	TDs completed
 QueueSubmittedTotal	TDs submitted
 TeardownCount	teardowns
 TeardownsWithoutStop	teardowns without a stop
+AsyncArmsRefused	timer arms Ex refused
+AsyncArmsDeferred	timer arms owed by a DEFER context
 BehindHubAddressed	topology: behind-hub devices addressed
 BehindHubGone	topology: behind-hub devices gone
 BehindHubOpens	topology: behind-hub opens

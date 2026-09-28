@@ -5393,6 +5393,36 @@ static VOID xhciDevCountIsoInterval(PXHCI_EXTENSION ext,
  *
  * IRQL: DISPATCH_LEVEL, under MiniportSpinLock, controller lock not held.
  */
+/*
+ * The Period an endpoint's interval is derived from (roadmap 24.5). For an
+ * interrupt endpoint that is `PipePeriod`, the pipe's own bucketed value,
+ * because `Period` is what usbport's USB 2.0 budget chose - 1 whenever it
+ * promoted the endpoint for bus load - and the xHC schedules for itself; the
+ * budget's period would poll a High-Speed device every 125 us. Every other
+ * type is never promoted and carries no `PipePeriod`.
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock held (the counters).
+ */
+static ULONG xhciEpProgramPeriod(PXHCI_EXTENSION ext,
+                                 const USBPORT_ENDPOINT_PROPERTIES *properties)
+{
+    if (properties->TransferType != USBPORT_TRANSFER_TYPE_INTERRUPT) {
+        return (ULONG)properties->Period;
+    }
+    if (properties->PipePeriod == 0) {
+        ext->EndpointPipePeriodsMissing++;
+        return (ULONG)properties->Period;
+    }
+    if (properties->PipePeriod != properties->Period) {
+        ext->EndpointPeriodsPromoted++;
+        XHCI_DBG_VALUE_CHANGED("slot: interrupt endpoint budgeted below its "
+                               "own period, pipe << 8 | budget",
+                               ((ULONG)properties->PipePeriod << 8) |
+                                   (ULONG)properties->Period);
+    }
+    return (ULONG)properties->PipePeriod;
+}
+
 static MPSTATUS xhciSlotOpenNonDefault(
     PXHCI_EXTENSION ext,
     const USBPORT_ENDPOINT_PROPERTIES *properties,
@@ -5507,7 +5537,8 @@ static MPSTATUS xhciSlotOpenNonDefault(
          */
         status = XhciBuildEndpointParams(properties->TransferType, directionIn,
                                          properties->MaxPacketSize,
-                                         properties->Period, speed, dev->Speed,
+                                         xhciEpProgramPeriod(ext, properties),
+                                         speed, dev->Speed,
                                          properties->TransactionPerMicroframe,
                                          bInterval,
                                          XhciRingDequeuePA(&record->Ring),
@@ -5622,7 +5653,8 @@ static MPSTATUS xhciSlotOpenNonDefault(
 
         status = XhciBuildEndpointParams(properties->TransferType, directionIn,
                                          properties->MaxPacketSize,
-                                         properties->Period, speed, dev->Speed,
+                                         xhciEpProgramPeriod(ext, properties),
+                                         speed, dev->Speed,
                                          properties->TransactionPerMicroframe,
                                          bInterval,
                                          XhciRingDequeuePA(&record->Ring),
@@ -5644,8 +5676,11 @@ static MPSTATUS xhciSlotOpenNonDefault(
                                     dev->Speed, bInterval, 0UL, 0UL, 0UL);
             ext->EndpointRefusalsParams++;
             XHCI_DBG_VALUE_CHANGED("slot: endpoint properties refused by the "
-                                   "context builder, dci << 8 | period",
-                                   (dci << 8) | properties->Period);
+                                   "context builder, dci << 16 | pipe period "
+                                   "<< 8 | period",
+                                   (dci << 16) |
+                                       ((ULONG)properties->PipePeriod << 8) |
+                                       (ULONG)properties->Period);
             XhciControllerLockRelease(oldIrql);
             return MP_STATUS_NO_RESOURCES;
         }
@@ -5667,8 +5702,10 @@ static MPSTATUS xhciSlotOpenNonDefault(
              */
             ext->EndpointIntervalsFloored++;
             XHCI_DBG_VALUE_CHANGED("slot: interval raised to the speed's floor, "
-                                   "dci << 8 | period",
-                                   (dci << 8) | properties->Period);
+                                   "dci << 16 | pipe period << 8 | period",
+                                   (dci << 16) |
+                                       ((ULONG)properties->PipePeriod << 8) |
+                                       (ULONG)properties->Period);
         }
 
         /* Same reason as the EP0 queue's: usbport reopens a pipe on every
