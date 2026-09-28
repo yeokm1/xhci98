@@ -331,6 +331,29 @@ ULONG XhciAsyncTimerArm(PXHCI_EXTENSION ext,
 }
 
 /*
+ * Does a watchdog context still watch the outstanding command, in the state
+ * its phase watches? The owed arm's test, applied both where one is latched
+ * and where it is made: a context one CPU captured can have been overtaken by
+ * the time it reaches the latch - its command completed, a newer one owed
+ * its own watchdog - and replacing the newer owe with it would leave the
+ * newer command untimed (Codex review of roadmap 24.4, finding 2). The host
+ * suite cannot put a second CPU between the capture and the latch, so that
+ * half is a review property, like the epoch capture's.
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock held.
+ */
+static ULONG xhciCommandArmCurrent(PXHCI_EXTENSION ext,
+                                   const XHCI_COMMAND_TIMEOUT *context)
+{
+    return (context->Epoch == ext->StartEpoch &&
+            context->Generation == ext->CommandGeneration &&
+            ((context->Phase == XHCI_CMD_PHASE_COMMAND &&
+              ext->CommandState == XHCI_CMD_STATE_PENDING) ||
+             (context->Phase == XHCI_CMD_PHASE_ABORT &&
+              ext->CommandState == XHCI_CMD_STATE_ABORTING))) ? 1UL : 0UL;
+}
+
+/*
  * Always called with the controller lock **released**. The timer service is
  * usbport's, and on the Version 300 tier it takes usbport's own timer lock;
  * calling it under this driver's lock would nest two lock hierarchies with no
@@ -391,9 +414,9 @@ static VOID xhciArmCommandTimer(PXHCI_EXTENSION ext,
     if (answer == XHCI_ARM_REFUSED) {
         ext->CommandTimerFailures++;
     }
-    if (ext->ArmThroughExOnly) {
-        /* A later owe replaces an earlier one: the engine has one command
-         * outstanding, and the drain arms only the current generation's. */
+    if (ext->ArmThroughExOnly && xhciCommandArmCurrent(ext, &context)) {
+        /* The engine has one command outstanding, so a current context
+         * replaces whatever an earlier one owed; a stale one owes nothing. */
         ext->CommandArmOwed = 1;
         ext->CommandArmOwedMs = milliseconds;
         ext->CommandArmOwedEpoch = context.Epoch;
@@ -432,25 +455,18 @@ VOID XhciCommandDrainOwedArm(PXHCI_EXTENSION ext)
     XhciControllerLockAcquire(&oldIrql);
     if (ext->CommandArmOwed) {
         ext->CommandArmOwed = 0;
+        armed.Epoch = ext->CommandArmOwedEpoch;
+        armed.Generation = ext->CommandArmOwedGeneration;
+        armed.Phase = ext->CommandArmOwedPhase;
+        armed.Attempt = ext->CommandArmOwedAttempt;
+        milliseconds = ext->CommandArmOwedMs;
         /*
          * Only the command still outstanding, in the state the owed phase
          * watches: one that completed, or was aborted into the next rung, or
          * belongs to a start usbport has since zeroed, is past needing it -
          * and its callback would only count itself stale.
          */
-        if (ext->CommandArmOwedEpoch == ext->StartEpoch &&
-            ext->CommandArmOwedGeneration == ext->CommandGeneration &&
-            ((ext->CommandArmOwedPhase == XHCI_CMD_PHASE_COMMAND &&
-              ext->CommandState == XHCI_CMD_STATE_PENDING) ||
-             (ext->CommandArmOwedPhase == XHCI_CMD_PHASE_ABORT &&
-              ext->CommandState == XHCI_CMD_STATE_ABORTING))) {
-            armed.Epoch = ext->CommandArmOwedEpoch;
-            armed.Generation = ext->CommandArmOwedGeneration;
-            armed.Phase = ext->CommandArmOwedPhase;
-            armed.Attempt = ext->CommandArmOwedAttempt;
-            milliseconds = ext->CommandArmOwedMs;
-            arm = 1;
-        }
+        arm = xhciCommandArmCurrent(ext, &armed);
     }
     XhciControllerLockRelease(oldIrql);
 

@@ -2055,3 +2055,28 @@ and the locked endpoint drains; a vector was added for each and the rerun
 killed all four. One survives by construction: the device half of the health
 poll flipped to DEFER, because the root-hub half of the same poll has
 already drained every owed arm through its own UNLOCKED slot pass.
+
+### The Codex review (2026-09-28)
+
+A Codex review of the commit found three P2 defects, all fixed in the
+same batch, and no wrong-mode path, no NT 5.x change and no C89 or Ex ABI
+issue:
+
+1. **A refused port arm orphaned the operation.** Ex's refusal is new - the
+   legacy service's only refusal was a missing pointer, checked before the
+   PORTSC write - and the drain answered it by disarming the port, after
+   the write had started a reset or resume: no watchdog to end a reset, no
+   `C_PORT_RESET`, and a virtual hub's port-1 reset owner never resolved.
+   Now the arm is owed again and the drain stops for that pass; the
+   operation keeps its age budget, and a new vector shows
+   `XHCI_PORT_AGE_MS` retiring a never-armed reset with its report.
+2. **A stale watchdog writer could overwrite a newer owe.** A timeout on one
+   CPU captures its re-arm under the lock and latches it after; in between
+   another CPU can end that command and owe the next one's watchdog. The
+   latch now takes only a context that still watches the outstanding
+   command (`xhciCommandArmCurrent`, the drain's own test). The suite cannot
+   put a second CPU in that window; it is a review property.
+3. **A port arm's failure could disarm the next operation.** The failure
+   now compares epoch, generation and operation before touching the shadow.
+
+`test_init` 22,066 checks after the fixes, every suite green.

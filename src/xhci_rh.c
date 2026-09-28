@@ -2850,7 +2850,7 @@ static ULONG xhciRhArmTimer(PXHCI_EXTENSION ext,
      * (docs/usb-xhci-info/usbport-miniport-abi.md section 6), and what is
      * checkable - that the service exists - was checked before the write that
      * needs timing. On the 300 tier Ex reports the pool failure, and the
-     * caller gives the port up at once rather than after XHCI_PORT_AGE_MS.
+     * caller owes the arm again (xhciRhArmFailed).
      */
     return (XhciAsyncTimerArm(ext, mode, milliseconds, &context,
                               sizeof(context), xhciRhPortTimeout) ==
@@ -2901,24 +2901,48 @@ static ULONG xhciRhTakePendingArm(PXHCI_EXTENSION ext, XHCI_PORT_TIMEOUT *armed)
     return found;
 }
 
-/* Give up on a port whose timer could not be armed. Advances the generation, so
- * the port is usable again and any callback that did somehow get through is
- * stale. IRQL: <= DISPATCH_LEVEL. */
-static VOID xhciRhDisarmPort(PXHCI_EXTENSION ext, ULONG hubPort)
+/*
+ * A port whose timer could not be armed. Only the operation the failed arm was
+ * for is touched: between the take and here another CPU can have ended it and
+ * started the next, whose generation this must not spend (Codex review of
+ * roadmap 24.4, finding 3).
+ *
+ * With no timer service at all - the 200 tier's one refusal, which the
+ * operations check before writing, so this is a bug rather than a condition -
+ * the port is given up: the generation advances, so the port is usable again
+ * and any callback that did somehow get through is stale. **On the 300 tier
+ * Ex refused for want of pool, after the PORTSC write had started the reset or
+ * resume, and giving that up would orphan it** - no watchdog to end a reset,
+ * no report, and a virtual hub's port-1 owner never resolved (finding 1). So
+ * the arm is owed again instead, the operation keeps its age budget, and
+ * XHCI_PORT_AGE_MS retires it with its report through the health poll should
+ * Ex keep refusing. The caller stops its drain for this pass.
+ *
+ * IRQL: <= DISPATCH_LEVEL, controller lock released.
+ */
+static VOID xhciRhArmFailed(PXHCI_EXTENSION ext, const XHCI_PORT_TIMEOUT *what)
 {
     KIRQL oldIrql;
     XHCI_PORT_SHADOW *shadow;
+    ULONG current;
 
     XhciControllerLockAcquire(&oldIrql);
-    shadow = xhciRhShadow(ext, hubPort);
-    if (shadow != NULL) {
-        (VOID)XhciPortShadowDisarm(shadow);
-    }
     ext->RhTimerFailures++;
+    shadow = xhciRhShadow(ext, what->HubPort);
+    current = (shadow != NULL && what->Epoch == ext->StartEpoch &&
+               shadow->Armed == what->Operation &&
+               shadow->Generation == what->Generation) ? 1UL : 0UL;
+    if (current) {
+        if (ext->ArmThroughExOnly) {
+            shadow->ArmPending = 1;
+        } else {
+            (VOID)XhciPortShadowDisarm(shadow);
+        }
+    }
     XhciControllerLockRelease(oldIrql);
 
     XHCI_DBG_VALUE("RH async operation: no timer could be armed for hub port",
-                   hubPort);
+                   what->HubPort);
 }
 
 /*
@@ -3183,7 +3207,8 @@ static VOID xhciRhDrainArms(PXHCI_EXTENSION ext, ULONG mode)
             break;
         }
         if (!xhciRhArmTimer(ext, mode, &armed)) {
-            xhciRhDisarmPort(ext, armed.HubPort);
+            xhciRhArmFailed(ext, &armed);
+            break;
         }
     }
 }
@@ -3208,7 +3233,8 @@ static ULONG xhciRhKickOwed(PXHCI_EXTENSION ext, ULONG mode)
     owed = ext->CommandArmOwed;
     for (hubPort = 1; !owed && hubPort <= ext->RootHub.PortCount &&
                       hubPort <= XHCI_MAX_ROOT_PORTS; hubPort++) {
-        if (ext->RootHub.Ports[hubPort - 1].ArmPending != 0) {
+        if (ext->RootHub.Ports[hubPort - 1].ArmPending != 0 &&
+            ext->RootHub.Ports[hubPort - 1].Armed != XHCI_PORT_OP_NONE) {
             owed = 1;
         }
     }

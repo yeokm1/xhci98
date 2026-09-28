@@ -30769,8 +30769,36 @@ static void test_nt6_arm_port_kick(void)
              MP_STATUS_SUCCESS, "(the scan's query)");
     exAnswer = 0;
     CHECK_EQ(ext.RhTimerFailures, 1, "the lost arm is counted");
+    CHECK_EQ(ext.RootHub.Ports[1].Armed, XHCI_PORT_OP_RESET,
+             "but the reset the PORTSC write started is not orphaned: it "
+             "stays armed");
+    CHECK_EQ(ext.RootHub.Ports[1].ArmPending, 1, "with its arm owed again");
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "(the next query)");
+    CHECK_EQ(exCalls, 2, "which makes it");
+    CHECK_EQ(asyncPortContext.Generation, ext.RootHub.Ports[1].Generation,
+             "for the same operation");
+    CHECK_EQ(ext.RootHub.Ports[1].ArmPending, 0, "(owed no longer)");
+
+    /* Ex refusing for good: the age net retires the reset with its report. */
+    nt6_start(0);
+    hw_attach_device(2);
+    portResetHangs = 1;
+    XhciRegPacket.RH_EnableIrq(&ext);
+    poll_clock_prime();
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 2), MP_STATUS_SUCCESS,
+             "(a reset whose timer Ex never arms)");
+    usbportLockModel--;
+    exAnswer = 0xC000009AUL;
+    poll_after_ms(XHCI_PORT_AGE_MS + 1024UL);
+    poll_after_ms(1024UL);
+    exAnswer = 0;
     CHECK_EQ(ext.RootHub.Ports[1].Armed, XHCI_PORT_OP_NONE,
-             "and the port disarmed now, not after XHCI_PORT_AGE_MS");
+             "XHCI_PORT_AGE_MS retires the operation");
+    CHECK_EQ(ext.RootHub.Ports[1].Changes & XHCI_HUB_C_PORT_RESET,
+             XHCI_HUB_C_PORT_RESET,
+             "and reports the reset ended, so usbhub is not left waiting");
     /* A port timer is a timer callback: it makes no arm, not even one
      * another port owes. */
     nt6_start(0);
