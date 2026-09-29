@@ -2159,6 +2159,8 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
                            ext->DevicesDisabledOut);
     XHCI_DBG_VALUE_CHANGED("port disowns settled with no device record",
                            ext->DisownsSettledEmpty);
+    XHCI_DBG_VALUE_CHANGED("port disowns settled with idle disowned records",
+                           ext->DisownsSettledIdle);
     XHCI_DBG_VALUE_CHANGED("transfer events for no open endpoint",
                            ext->TransferEventsForeign);
     XHCI_DBG_VALUE_CHANGED("transfer events with RsvdZ pointer bits set",

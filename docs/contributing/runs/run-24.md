@@ -2689,11 +2689,99 @@ One question stays open under any of them: why usbhub hard-resets each virtual
 hub just after its device was addressed and its configuration read; ending the
 wait may turn the loop into a different enumeration failure.
 
+### Windows 7 x86: the same 0xFE
+
+`out\t24-3-4\r7-win7-bugcheck-analysis.md` read the guest's kernel summary
+dump (`Windows\MEMORY.DMP`, which the Safe Mode boot had moved out of the
+pagefile) and its minidump from a read-only copy of `vm\t2434-win7-r7.img`;
+the image's size and time were unchanged afterwards (debugger unless marked).
+It was the same crash: `BugCheck FE, {8, 6, a, 8479f9d8}`, usbhub's
+change-queue watchdog on root port 2, whose gate the thread running virtual
+hub 2's hard reset held while it waited 60.03 s on usbport's bus lock. The
+owner of the lock at the crash was the root hub's port-1 pass re-enumerating
+virtual hub 1 (about 1 s into `USBPORT_InitializeDevice`, its GET_DESCRIPTOR
+already answered by this driver), and virtual hub 3's hard reset was queued
+27 s behind. The lock had changed hands within those 27 s, so an earlier
+holder kept it for at least 33 s; that holder has left every usbhub log and
+is not named. No port-1 reset was held at the crash, and only 5 were held in
+that load (x64: 180), so the failure here is a queue of hub hard resets
+rather than one enumeration looping on held resets. The debts under it are
+the x64 ones: root ports 1, 2, 3 and 5 each carried `DisownPending` with PED
+still 1 and exactly one record, DISOWNED, at address 0, its EP0 ring and
+queue empty, no other endpoint, no SET_ADDRESS, operation or command
+pending. Slot 1 was Addressed and slots 2 to 4 still Default, so a rule that
+also asked for Addressed would miss three of the four. One more reading: a
+SET_ADDRESS(9) on root port 3 had been refused because slot 1's record still
+held address 9, which usbport had freed and handed on; the record gives its
+address up at the disown, and that disown belonged to virtual hub 1's hard
+reset, still queued on the bus lock. It reads as a consequence of the same
+queue rather than a separate defect (inference), and the retake watches for
+it.
+
+### The fix: a debt whose records are all disowned and idle settles too
+
+The owner took the first response on 2026-09-29. The debt keeps a record's
+slot and rings from being released while the controller may still read them.
+The release it gates (`XhciSlotPortDisabled`, then `xhciDevTeardown`) has
+since batch 7a-B carried its own proof: a Stop Endpoint for every busy
+endpoint, each queue answered only at its stop's completion, then a Disable
+Slot, with the rings and the DCBAA entry given back only on Success or Slot
+Not Enabled and the record abandoned otherwise. The PED wait is older than
+that teardown. So the disable and power-off site and the health poll's
+collector now also settle a debt unconfirmed when every record on the port or
+behind it is DISOWNED and idle: no transfer queued and no TRB between dequeue
+and enqueue on any endpoint, nothing halted, no command outstanding or owed
+(quiescence commands included), no intercepted SET_ADDRESS held
+(`XhciSlotPortRecordsDisownedIdle`; the endpoint test is `xhciEpQuiet`, which
+`xhciEpArmIfBusy` now shares). It is counted in a new `DisownsSettledIdle`,
+apart from `DisownsSettledEmpty`, so a reading says which rule acted
+(`xhciRhDisownSettlesUnconfirmed`, renamed from `xhciRhDisownSettlesEmpty`,
+counts both). The PR and PRC refusal, the all-ones refusal and the
+power-off's settlement without a `PORTSC` read apply to it unchanged. A
+disowned record with work in flight, such as a HID device's posted interrupt
+read, still waits for PED; the proof taken from the controller for any record
+is the recorded fallback, to be proposed only if the retake shows such a
+record under the loop. Design record 12 sections 3.3 and 11 carry the rule.
+
+Host vectors, new: the Windows 7 case (the root port's own device Addressed,
+then disowned by the hub's root reset, EP0 empty, PED stuck: the debt settles
+at the disable, a Disable Slot answered Success releases the record, and a
+port-1 reset asked for afterwards is not held); a disowned record with a
+command outstanding, then owed, keeping the debt through a poll, an idle
+record that is not disowned keeping it too, and the poll settling it once the
+record is both; the PR and PRC refusal with an idle disowned record on the
+port; and a disowned device whose EP0 is quiet but whose interrupt pipe has a
+read posted, still waiting. Changed: the PED-wait vectors whose record had
+gone idle (the power-off that waits for PP, the held reset released when the
+record goes) now queue an EP0 transfer first, so they still exercise the
+wait; the behind-hub vector says its child waits because its Enable Slot is
+outstanding. Twelve mutations (`out\t24-4\mutations-finding2.txt`): eleven
+killed, two of them after the vectors above were added; one survived,
+`xhciEpQuiet`'s queue-count term, the test `xhciEpArmIfBusy` already made,
+which the ring term covers whenever a transfer is queued. `test_init` 22,575
+checks, every suite green. The counter offsets were regenerated for both
+architectures: x86 `SIZEOF` 104708 (was 104704), amd64 112040 (was 112032),
+so readctr tells this build from `b587ad5`'s on both.
+
+A Codex review found no P1, P2 or P3 (`out\t24-r7fix\codex-review.md`, git-ignored):
+nothing that passes the idle test can still own a TRB, a re-enumeration
+clears DISOWNED under the same lock the settlement runs under, and the PR and
+PRC guard binds the idle case as it binds the empty one. Built the same day
+(`build-driver.cmd all`, `qemu -amd64`, `release -amd64`, every gate passed;
+logs `out\t24-r7fix\`) and staged as the `qemu` flavour: x86 `xhci98.sys`
+`7417a3f47f02d49a...` (`built Sep 29 2026 20:10:18`), amd64
+`c56668f6c451fb56...` (`20:14:29`), both INFs unchanged; restaged and read
+back in the same eight transfer directories as round 7's build. Not yet read
+on a guest.
+
 ### What is owed
 
-- The owner's choice for the 0xFE above; if it is a code change, a rebuild
-  and Windows 7 in both architectures at 2 again, on new disks.
-- Windows 7 x86's minidump, read from a read-only copy of `vm\t2434-win7-r7.img` (booted once since the reset, into Safe Mode): whether its reset was the same 0xFE.
+- Windows 7 in both architectures at 2 again on the fix above, on new disks
+  (`-DiskSuffix -r8`): the four-device plug and 15-minute watch, the churn,
+  the five disable cycles, then 0 and 1. Expected: no 0xFE and
+  `DisownsSettledIdle` above 0; a device behind a virtual hub may still not
+  bind on NT 6.x in QEMU (the accepted gap), and why usbhub hard-resets each
+  virtual hub just after its device is addressed stays open.
 - Vista x86 and x64 at 0, 1 and 2; SweetLow's stack at 2 (A, B's audio, C,
   24.5); XP x86 and ME's short passes at 2; the device matrix at 2 from
   re-cloned images, as round 6's list gives them. None was started this

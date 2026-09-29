@@ -6754,6 +6754,16 @@ typedef struct _XHCI_EXTENSION {
      */
     ULONG DisownsSettledEmpty;
     /*
+     * Disowns settled unconfirmed with records still on the port or behind
+     * it, every one DISOWNED and idle (XhciSlotPortRecordsDisownedIdle). The
+     * release that follows is the controller's own proof - Stop Endpoint on
+     * anything busy, then a Disable Slot whose completion code decides
+     * whether the rings go back. Round 7: a port's own disowned device,
+     * address 0 and nothing queued, kept the debt, and the debt kept its
+     * release, until usbhub's bus lock timed out on Windows 7 (0xFE).
+     */
+    ULONG DisownsSettledIdle;
+    /*
      * The short-transfer family, accumulated at controller level.
      *
      * `XHCI_TRANSFER_QUEUE` already counts all three per endpoint, and that is

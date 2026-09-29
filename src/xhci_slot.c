@@ -2914,6 +2914,22 @@ static VOID xhciEpArmQuiesce(PXHCI_EXTENSION ext,
 }
 
 /*
+ * Nothing on this endpoint for a Stop Endpoint to stop: no transfer queued, no
+ * TRB between the dequeue and enqueue pointers, and not halted. One test for
+ * the teardown's arm below and for the disown's idle rule
+ * (XhciSlotPortRecordsDisownedIdle), because "the teardown would have nothing
+ * to stop here" is exactly what that rule rests on.
+ *
+ * Called with the lock held. IRQL: any.
+ */
+static ULONG xhciEpQuiet(const XHCI_EP_BINDING *binding)
+{
+    return (binding->Queue->Count == 0 &&
+            binding->Ring->Dequeue == binding->Ring->Enqueue &&
+            (binding->Quiesce->Flags & XHCI_EPQ_HALTED) == 0) ? 1UL : 0UL;
+}
+
+/*
  * Arm a quiescence only for an endpoint that needs one.
  *
  * The condition is spec 4.6.4 p.97's own, read as a test rather than
@@ -2941,9 +2957,7 @@ static VOID xhciEpArmIfBusy(PXHCI_EXTENSION ext,
                             PXHCI_EP_BINDING binding,
                             ULONG intent)
 {
-    if (binding->Queue->Count == 0 &&
-        binding->Ring->Dequeue == binding->Ring->Enqueue &&
-        (binding->Quiesce->Flags & XHCI_EPQ_HALTED) == 0) {
+    if (xhciEpQuiet(binding)) {
         return;
     }
     xhciEpArmQuiesce(ext, dev, binding, intent);
@@ -10652,6 +10666,97 @@ ULONG XhciSlotPortHasRecords(PXHCI_EXTENSION ext, ULONG hubPort)
         }
     }
     return 0;
+}
+
+/*
+ * A record usbport has given up on that has nothing left in flight: DISOWNED,
+ * no command outstanding (`ActiveOp`) or owed (xhciDevOwedOp - a quiescence
+ * command owed on any endpoint included; one outstanding is the `ActiveOp`),
+ * and every endpoint it has - EP0 and each opened one - quiet (xhciEpQuiet).
+ * An endpoint whose ring was never carved holds no TRB, so its queue alone is
+ * read.
+ *
+ * DISOWNED is the test that matters most: the release the caller then runs
+ * tears down whatever is on the port, and a record a re-enumeration has taken
+ * back is a device usbport believes in. The intercepted SET_ADDRESS is written
+ * out although the disown has already answered it and a disowned record
+ * accepts no transfer, so no vector can hold one here: it is the one piece of
+ * work no queue shows, and the rule is stated whole rather than inferred.
+ *
+ * An owed command keeps the record waiting rather than making it idle: the
+ * pump issues what xhciDevOwedOp names for a disowned record too, so the wait
+ * ends at that command's completion.
+ *
+ * Called with the lock held. IRQL: any.
+ */
+static ULONG xhciDevDisownedIdle(PXHCI_EXTENSION ext, PXHCI_DEVICE dev)
+{
+    XHCI_EP_BINDING binding;
+    ULONG i;
+
+    if ((dev->Flags & XHCI_DEV_FLAG_DISOWNED) == 0 ||
+        dev->ActiveOp != XHCI_DEV_OP_NONE ||
+        dev->PendingSetAddress != NULL) {
+        return 0;
+    }
+    if (xhciDevOwedOp(ext, dev, &binding) != XHCI_DEV_OP_NONE) {
+        return 0;
+    }
+    if (xhciEpResolve(dev, 1, &binding) ? !xhciEpQuiet(&binding)
+                                         : dev->Ep0Queue.Count != 0) {
+        return 0;
+    }
+    for (i = 0; i < XHCI_MAX_DEVICE_ENDPOINTS; i++) {
+        if (dev->Endpoints[i].Dci == 0) {
+            continue;
+        }
+        if (xhciEpResolve(dev, dev->Endpoints[i].Dci, &binding)
+                ? !xhciEpQuiet(&binding)
+                : dev->Endpoints[i].Queue.Count != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/*
+ * Whether every record XhciSlotPortHasRecords counts on this port - the
+ * port's own and everything behind it - is DISOWNED and idle
+ * (xhciDevDisownedIdle). 1 when there are none as well, so the caller asks
+ * XhciSlotPortHasRecords to tell the two apart.
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock held.
+ */
+ULONG XhciSlotPortRecordsDisownedIdle(PXHCI_EXTENSION ext, ULONG hubPort)
+{
+    PXHCI_DEVICE dev;
+    ULONG rootPort;
+    ULONG i;
+
+    if (ext == NULL) {
+        return 0;
+    }
+    dev = xhciDevByHubPort(ext, hubPort);
+    if (dev != NULL && !xhciDevDisownedIdle(ext, dev)) {
+        return 0;
+    }
+    rootPort = XhciRootHubPortOf(&ext->RootHub, hubPort);
+    if (rootPort == 0) {
+        return 1;
+    }
+    for (i = 0; i < XHCI_MAX_SLOTS; i++) {
+        PXHCI_DEVICE child = &ext->Devices[i];
+
+        if (child->State == XHCI_DEV_STATE_FREE ||
+            child->State == XHCI_DEV_STATE_GONE) {
+            continue;
+        }
+        if (child->HubPort == 0 && child->RootPort == rootPort &&
+            !xhciDevDisownedIdle(ext, child)) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /*

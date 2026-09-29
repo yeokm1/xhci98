@@ -1270,6 +1270,16 @@ VOID XhciSlotPortDisabled(PXHCI_EXTENSION ext, ULONG hubPort);
  * section 3.3). IRQL: DISPATCH_LEVEL, controller lock held.
  */
 ULONG XhciSlotPortHasRecords(PXHCI_EXTENSION ext, ULONG hubPort);
+/*
+ * Whether every record on the port or behind it is DISOWNED and idle - no
+ * transfer queued or TRB outstanding on any endpoint, no command outstanding or
+ * owed, no intercepted SET_ADDRESS held - and 1 when there is none. With every
+ * record idle a disown settles unconfirmed too: the release it then runs
+ * proves the slot gone from the controller itself, by Stop Endpoint and
+ * Disable Slot (round 7; design record 12 section 3.3). IRQL: DISPATCH_LEVEL,
+ * controller lock held.
+ */
+ULONG XhciSlotPortRecordsDisownedIdle(PXHCI_EXTENSION ext, ULONG hubPort);
 VOID XhciSlotPortReset(PXHCI_EXTENSION ext, ULONG hubPort);
 
 /*

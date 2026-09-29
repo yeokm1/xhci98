@@ -982,6 +982,12 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     the fix does not cover - each port's own disowned, idle device record
     and its release wait on each other - and the next response is the
     owner's; Vista, SweetLow, XP x86, ME and the matrix were not reached.
+    Windows 7 x86's dump is the same 0xFE over the same debts. **The
+    owner's response** (2026-09-29): a debt whose records are all disowned
+    and idle settles too, the release proving itself through Stop Endpoint
+    and Disable Slot (record 12 sections 3.3 and 11); committed and built,
+    and Windows 7 in both architectures is retaken on it at 2, with the
+    legs round 6 still owes run once on the same build.
   - [ ] **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the
     switch at 1 and at 2, the Low-Speed mouse and the Full-Speed audio device from
     `test-equipment.md` on root ports, the interval read from the snapshot;
