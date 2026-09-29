@@ -244,6 +244,7 @@ NoOpWitnessFired	No Op self-test witnesses
 OpenRefusalsNoRecord	open refusals - no record
 OrphanedGroupsTotal	orphaned TD groups
 PollEndpointCalls	PollEndpoint callbacks
+DisownsSettledEmpty	port disowns settled with no device record
 PortEventChanges	port event changes
 PortEventsMapped	port events mapped
 PortEventsUnmapped	port events unmapped

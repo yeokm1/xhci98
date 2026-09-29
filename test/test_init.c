@@ -27386,6 +27386,42 @@ static ULONG behind_hub_slot_dword(ULONG index)
 }
 
 /*
+ * **A record behind a hub keeps the disown waiting** (round 6's no-record
+ * rule, XhciSlotPortHasRecords). The rule settles a debt unconfirmed only when
+ * nothing on the port or behind it holds a slot; a device one tier down still
+ * has rings the controller may read through that root port. The hub's own
+ * record is freed by hand so that the child is the only thing that counts.
+ */
+static void test_disown_waits_for_a_record_behind_a_hub(void)
+{
+    PXHCI_DEVICE hub;
+    ULONG hubPort;
+    ULONG xport;
+    ULONG empty;
+
+    hub = behind_hub_parent(1);
+    CHECK_EQ(behind_hub_open(hub, &slotEndpoint, 4, UsbFullSpeed, 2, 4, 6,
+                             &slotEndpoint2),
+             MP_STATUS_SUCCESS, "(a device behind the hub)");
+    hubPort = hub->HubPort;
+    xport = XhciRootHubPortOf(&ext.RootHub, hubPort);
+    CHECK(xport != 0, "(the hub's root port)");
+    hub->State = XHCI_DEV_STATE_FREE;
+    CHECK_EQ(XhciSlotPortHasRecords(&ext, hubPort), 1,
+             "the record behind the hub counts as the port's");
+
+    empty = ext.DisownsSettledEmpty;
+    stuckPortPed = xport;
+    mmio[HC_PORTSC(xport) / 4] |= XHCI_PORTSC_PED;
+    (void)XhciRegPacket.RH_ClearFeaturePortEnable(&ext, (USHORT)hubPort);
+    deliver_after_submit();
+    CHECK_EQ(ext.RootHub.Ports[hubPort - 1].DisownPending, 1,
+             "so the disable's debt still waits for PED");
+    CHECK_EQ(ext.DisownsSettledEmpty, empty, "(not settled empty)");
+    stuckPortPed = 0;
+}
+
+/*
  * **The headline: a device behind a hub gets a slot, and its Slot Context
  * describes where it is.**
  *
@@ -32401,6 +32437,124 @@ static void test_vhub_always_root_reset_holds_the_slot(void)
 }
 
 /*
+ * **Round 6: the same root reset with no device record on the port.** QEMU
+ * never clears PED on a disable write, and at 2 every port-1 reset used to be
+ * held on the debt for ever - Windows 7's usbhub then bugchecked 0xFE on its
+ * bus-lock watchdog with all 32 records free. With nothing recorded on the
+ * port or behind it the confirmation guards no slot or ring, so the debt
+ * settles at the disable and the port-1 reset starts at once.
+ */
+static void test_vhub_always_root_reset_with_no_record(void)
+{
+    ULONG status;
+    ULONG change;
+    ULONG resets;
+    ULONG empty;
+
+    vhub_start(2);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 3);
+    hwCmdSlotId = 6;
+    vhub_plug(3, 3);                                /* High Speed */
+    vhub_enumerate_hub(3, 3);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe)");
+    deliver_after_submit();
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe re-armed)");
+    /* Port 1 reset and enabled, and the enumeration behind it never reaches
+     * a slot - the Windows 7 shape: all 32 records free. */
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(3) << 24, 0);
+    deliver_events();
+    CHECK_EQ(mmio[HC_PORTSC(vhub_xport(3)) / 4] & XHCI_PORTSC_PED,
+             XHCI_PORTSC_PED, "(the physical port is enabled)");
+    CHECK_EQ(XhciSlotPortHasRecords(&ext, 3), 0,
+             "(nothing behind port 1 has a record)");
+
+    stuckPortPed = vhub_xport(3);
+    empty = ext.DisownsSettledEmpty;
+    resets = portResets;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 3), MP_STATUS_SUCCESS,
+             "the hub's root-port reset, on a port that will not drop PED");
+    deliver_after_submit();
+    CHECK_EQ(portResets, resets, "(synthetic: no PR written)");
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 0,
+             "no record to protect: the disable's debt settles at once");
+    CHECK_EQ(ext.DisownsSettledEmpty, empty + 1, "(counted)");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "(the hub's reset ends)");
+
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(ext.VhubResetsHeld, 0, "a port-1 reset asked for now is not held");
+    CHECK_EQ(portResets, resets + 1, "it is written to the port at once");
+    (void)status;
+
+    stuckPortPed = 0;
+    vhub_reset_registry();
+}
+
+/*
+ * The health poll's half of the same rule: a debt that did have a record when
+ * it was taken, and whose record is then gone by another route while PED still
+ * reads 1. The poll settles it and starts the reset it held. (The record is
+ * freed by hand here; on the target a connect change's teardown does it.)
+ */
+static void test_vhub_held_reset_released_when_the_record_goes(void)
+{
+    PXHCI_DEVICE dev;
+    ULONG resets;
+    ULONG empty;
+
+    vhub_start(2);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 3);
+    hwCmdSlotId = 6;
+    vhub_plug(3, 3);
+    vhub_enumerate_hub(3, 3);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe)");
+    deliver_after_submit();
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe re-armed)");
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(3) << 24, 0);
+    deliver_events();
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "(a device behind port 1 has a record)");
+    dev = &ext.Devices[0];
+    deliver_events();
+    deliver_events();
+
+    stuckPortPed = vhub_xport(3);
+    empty = ext.DisownsSettledEmpty;
+    resets = portResets;
+    (void)XhciRegPacket.RH_SetFeaturePortReset(&ext, 3);
+    deliver_after_submit();
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 1,
+             "with a record the debt waits for PED, as before");
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(ext.VhubResetsHeld, 1, "(the port-1 reset is held)");
+
+    /* A poll with the record still there changes nothing. */
+    poll_clock_prime();
+    poll_after_ms(1);
+    deliver_after_submit();
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 1, "(still owed)");
+    CHECK_EQ(ext.DisownsSettledEmpty, empty, "(not settled empty)");
+
+    /* The record goes by another route; PED still reads 1. */
+    dev->Ep0Queue.Count = 0;
+    dev->State = XHCI_DEV_STATE_FREE;
+    poll_after_ms(1);
+    deliver_after_submit();
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 0,
+             "the next poll settles the debt with nothing left to protect");
+    CHECK_EQ(ext.DisownsSettledEmpty, empty + 1, "(counted)");
+    CHECK_EQ(portResets, resets + 1, "and the held port-1 reset starts");
+
+    stuckPortPed = 0;
+    vhub_reset_registry();
+}
+
+/*
  * The held status-change transfer owns no TRB, so an abort finds it in the
  * binding and nothing later completes it (3.4); and a REMOVE of the pipe with
  * one held answers it as cancelled.
@@ -33569,6 +33723,49 @@ static void vhub_port1_reset_ends(ULONG hubPort, ULONG enabled)
 }
 
 /*
+ * **A reset's end the poll sees before its event** (Codex's review of the
+ * round-6 no-record rule). No record on the port, so the disable's debt may
+ * settle unconfirmed - but not in the window after the hardware ends a reset
+ * (PR clear, PED and PRC set) and before the event or status refresh processes
+ * it: settled there, the refresh would find no debt, skip the redisable, and
+ * leave port 1 enabled under usbhub's disable.
+ */
+static void test_vhub_disable_inside_a_reset_no_record_poll_first(void)
+{
+    ULONG xport;
+    ULONG empty;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_port1_reset_in_flight(2, 5);
+    CHECK_EQ(XhciSlotPortHasRecords(&ext, 2), 0, "(no record on the port)");
+
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 1, 1, 0);
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 1,
+             "a disable inside the reset leaves its debt (PR set)");
+
+    /* The hardware ends the reset; nothing has processed it yet. */
+    portResetHangs = 0;
+    mmio[HC_PORTSC(xport) / 4] =
+        (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_PR) | XHCI_PORTSC_PED |
+        XHCI_PORTSC_PRC;
+    empty = ext.DisownsSettledEmpty;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 1,
+             "the poll does not settle it while PRC is unprocessed");
+    CHECK_EQ(ext.DisownsSettledEmpty, empty, "(not settled empty)");
+
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PED, 0,
+             "the reset's end has the disable written again");
+    CHECK_EQ(ext.Vhub[1].P1Enabled, 0, "port 1 reads disabled");
+    portResetClearsPed = 0;
+    vhub_reset_registry();
+}
+
+/*
  * **A retired port-1 reset whose deadline passes before its PRC** (task
  * 24.3.4, Codex's third round, finding 2): the watchdog ends it as nobody's,
  * and the PRC that comes afterwards on the hub-less port is nobody's too -
@@ -34077,10 +34274,15 @@ static void test_vhub_replacement_after_a_late_end_keeps_its_port(void)
  * the disable's debt is still standing when the reset is asked for, and nothing
  * has collected it: the absent-hub path accepts the reset, its end stands up a
  * replacement hub, and the redisable runs under it. On a port that honours the
- * write, that redisable is what collects the debt; the hub and its upstream
+ * write, that redisable is what collected the debt; the hub and its upstream
  * enable stay, and the hub's second enumeration reset is not held. (In QEMU,
- * which ignores the write, the debt is never collected and the second reset
- * is held - the loop the Vista and 7 readings showed.)
+ * which ignores the write, the debt was never collected and the second reset
+ * was held - the loop the Vista and 7 readings showed, and in round 6 the
+ * Windows 7 bugcheck.) Since round 6 the device behind the hub here has no
+ * record - it was never addressed - so the debt protects nothing and settles
+ * at the disable itself (XhciSlotPortHasRecords); the reset then leaves the
+ * port enabled, as any root reset at 1 does, and the second reset is still not
+ * held.
  */
 static void test_vhub_root_disable_confirmed_late_then_reset(void)
 {
@@ -34091,6 +34293,7 @@ static void test_vhub_root_disable_confirmed_late_then_reset(void)
     ULONG held;
     ULONG status;
     ULONG change;
+    ULONG empty;
 
     vhub_start(1);
     hwCmdSlotId = 4;
@@ -34103,13 +34306,16 @@ static void test_vhub_root_disable_confirmed_late_then_reset(void)
 
     /* usbport disables the root port; PED has not cleared at the read-back. */
     dropped = ext.VhubDropped;
+    empty = ext.DisownsSettledEmpty;
     stuckPortPed = xport;
     (void)XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 2);
     deliver_after_submit();
     CHECK_EQ(ext.Vhub[1].Present, 0, "the root disable retires the hub");
     CHECK_EQ(ext.VhubDropped, dropped + 1, "(counted)");
-    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 1,
-             "and its confirmation is owed");
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 0,
+             "with no record on the port the debt settles at once, PED "
+             "unconfirmed");
+    CHECK_EQ(ext.DisownsSettledEmpty, empty + 1, "(counted)");
 
     /* The port clears PED a moment later; no health poll runs before usbport
      * asks for the next reset. */
@@ -34122,10 +34328,9 @@ static void test_vhub_root_disable_confirmed_late_then_reset(void)
     CHECK_EQ(portResets, resets + 1, "and written to the port");
     CHECK_EQ(ext.VhubCreated, created + 1,
              "its end stands up a replacement hub");
-    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 0,
-             "the redisable under it lands, and the debt is collected");
-    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PED, 0,
-             "(the physical port disabled)");
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 0, "(no debt stands)");
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PED, XHCI_PORTSC_PED,
+             "no redisable is owed, so the reset leaves the port enabled");
     CHECK_EQ(ext.Vhub[1].Present, 1, "the replacement hub stays");
     CHECK_EQ(ext.Vhub[1].UpEnabled, 1, "with its upstream enabled");
     vhub_root_status(2, &status, &change);
@@ -34383,6 +34588,7 @@ int main(void)
     test_hub_unplugged_at_address_zero_frees_its_node();
     test_hub_with_no_ports_is_not_marked();
     test_behind_hub_device_is_addressed();
+    test_disown_waits_for_a_record_behind_a_hub();
     test_behind_hub_tt_is_programmed();
     test_behind_hub_too_deep_is_refused();
     test_behind_hub_high_speed_child_has_no_tt();
@@ -34416,6 +34622,8 @@ int main(void)
     test_vhub_root_reset_over_a_port1_reset();
     test_vhub_on_demand_recovery_with_the_device_gone();
     test_vhub_always_root_reset_holds_the_slot();
+    test_vhub_always_root_reset_with_no_record();
+    test_vhub_held_reset_released_when_the_record_goes();
     test_vhub_abort_finds_the_held_pipe();
     test_vhub_always_disable_and_power_cycle();
     test_vhub_suspend_resume_through_the_callbacks();
@@ -34427,6 +34635,7 @@ int main(void)
     test_vhub_submit_never_announces();
     test_vhub_on_demand_unplug_retires_the_hub();
     test_vhub_disable_inside_a_port1_reset();
+    test_vhub_disable_inside_a_reset_no_record_poll_first();
     test_vhub_unplug_inside_a_port1_reset();
     test_vhub_retired_reset_late_prc();
     test_vhub_deadline_then_unplug_then_late_prc();

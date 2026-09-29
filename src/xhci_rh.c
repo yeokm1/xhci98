@@ -911,6 +911,48 @@ static ULONG xhciRhPortIsDisowned(PXHCI_EXTENSION ext, ULONG hubPort,
 }
 
 /*
+ * The other way a disown debt may be discharged unconfirmed (round 6): no
+ * device record on the port or behind it (XhciSlotPortHasRecords), so the
+ * confirmation guards no slot or ring the controller could still read. QEMU
+ * never clears PED on a disable write, and the wait held every virtual hub's
+ * port-1 reset at switch 2 until usbhub's bus-lock watchdog bugchecked
+ * Windows 7.
+ *
+ * **A disable debt is never settled this way while the port is in reset**
+ * (PR = 1), **nor while a reset's end is still unprocessed** (PRC = 1), nor on
+ * an all-ones read: there it is kept for the other reason xhciRhPortIsDisowned
+ * gives, the redisable that must follow a reset's end on a port carrying a
+ * virtual hub, which has nothing to do with records. PRC is the window between
+ * the hardware ending a reset (PR clear, PED set) and the event or status
+ * refresh that runs xhciRhVhubRefreshed and acknowledges it: settled there,
+ * the refresh would find no debt, skip the redisable, and leave port 1 enabled
+ * under usbhub's disable (Codex's review of this rule). A power-off debt has
+ * no such second meaning - a port losing power ends any reset - so PORTSC is
+ * not read for one. Records first: they cost no register access, and most
+ * debts have one.
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock held.
+ */
+static ULONG xhciRhDisownSettlesEmpty(PXHCI_EXTENSION ext, ULONG hubPort,
+                                      ULONG xhciPort, ULONG wantsPp)
+{
+    ULONG portsc;
+
+    if (XhciSlotPortHasRecords(ext, hubPort)) {
+        return 0;
+    }
+    if (wantsPp) {
+        return 1;
+    }
+    portsc = XhciReadPortsc(ext, xhciPort);
+    if (portsc == 0xFFFFFFFFUL ||
+        (portsc & (XHCI_PORTSC_PR | XHCI_PORTSC_PRC)) != 0) {
+        return 0;
+    }
+    return 1;
+}
+
+/*
  * The shape every feature callback shares: validate the port, check
  * admission, read PORTSC, write one composed value. The caller holds the
  * controller lock and owes XhciRootHubDeferredWork after releasing it - the
@@ -1126,6 +1168,7 @@ static MPSTATUS xhciRhPortOperationLocked(PXHCI_EXTENSION ext,
      */
     if (operation == XHCI_RH_OP_DISABLE || operation == XHCI_RH_OP_POWER_OFF) {
         ULONG disownWantsPp;
+        ULONG confirmed;
 
         /*
          * **The software half runs unconditionally**, and a Win98 run is why.
@@ -1141,8 +1184,25 @@ static MPSTATUS xhciRhPortOperationLocked(PXHCI_EXTENSION ext,
         XhciSlotPortDisowned(ext, (ULONG)port);
 
         disownWantsPp = (operation == XHCI_RH_OP_POWER_OFF) ? 1UL : 0UL;
-        if (xhciRhPortIsDisowned(ext, (ULONG)port, xhciPort,
-                                 disownWantsPp)) {
+        /*
+         * **Or nothing is recorded on the port or behind it**, and then there
+         * is no DMA hazard for the confirmation to guard: the wait below
+         * protects a record's slot and rings, and there are none. Round 6:
+         * QEMU never clears PED on a disable write, and at switch 2 every
+         * virtual hub's port-1 reset was held on this debt for ever, until
+         * usbhub's 60 s bus-lock watchdog bugchecked Windows 7 (0xFE) with
+         * all 32 records free. A record in any live state still waits, and
+         * so does a port in reset (xhciRhDisownSettlesEmpty).
+         */
+        confirmed = xhciRhPortIsDisowned(ext, (ULONG)port, xhciPort,
+                                         disownWantsPp);
+        if (!confirmed &&
+            xhciRhDisownSettlesEmpty(ext, (ULONG)port, xhciPort,
+                                     disownWantsPp)) {
+            ext->DisownsSettledEmpty++;
+            confirmed = 1;
+        }
+        if (confirmed) {
             /* Clearing a debt this port may already have been carrying, not
              * just recording that this one needs none. A power-off whose `PP`
              * never confirmed leaves the obligation set; a later disable that
@@ -3557,15 +3617,34 @@ VOID XhciRootHubPoll(PXHCI_EXTENSION ext)
              * teardown whose *early* execution is the DMA hazard, so there is
              * nothing safe to give up to. A port whose PED or PP never clears
              * has not taken its device out of service, and the record is correct
-             * to survive.
+             * to survive. **But only while there is a record**: with none on the
+             * port or behind it there is no hazard, and the debt is settled
+             * here without PED - unless a reset is running or its end is not
+             * yet processed, where the debt still owes a redisable
+             * (xhciRhDisownSettlesEmpty; round 6).
              */
             if (shadow->DisownPending != 0) {
                 ULONG disownPort;
+                ULONG confirmed;
 
                 disownPort = XhciRootHubPortOf(&ext->RootHub, hubPort);
-                if (disownPort != 0 &&
-                    xhciRhPortIsDisowned(ext, hubPort, disownPort,
-                                         (ULONG)shadow->DisownWantsPp)) {
+                confirmed = 0;
+                if (disownPort != 0) {
+                    confirmed = xhciRhPortIsDisowned(
+                        ext, hubPort, disownPort,
+                        (ULONG)shadow->DisownWantsPp);
+                    /* The records it waited for gone by another route (a
+                     * connect change's teardown, say): nothing is left to
+                     * protect, as at the disable site. */
+                    if (!confirmed &&
+                        xhciRhDisownSettlesEmpty(
+                            ext, hubPort, disownPort,
+                            (ULONG)shadow->DisownWantsPp)) {
+                        ext->DisownsSettledEmpty++;
+                        confirmed = 1;
+                    }
+                }
+                if (confirmed) {
                     shadow->DisownPending = 0;
                     XhciSlotPortDisabled(ext, hubPort);
                     /* Task 24.3: a reset a virtual hub held for this

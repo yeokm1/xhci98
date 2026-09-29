@@ -1261,6 +1261,15 @@ VOID XhciSlotPortConnectChanged(PXHCI_EXTENSION ext, ULONG hubPort);
  */
 VOID XhciSlotPortDisowned(PXHCI_EXTENSION ext, ULONG hubPort);
 VOID XhciSlotPortDisabled(PXHCI_EXTENSION ext, ULONG hubPort);
+/*
+ * Whether any device record is on the port or behind it (every state but FREE
+ * and GONE, disowned records included). With none, a disown has nothing the
+ * controller could still be reading to protect, so it settles without waiting
+ * for PED or PP to confirm (round 6: QEMU never clears PED on a disable write,
+ * and the wait held every virtual-hub port-1 reset for ever - design record 12
+ * section 3.3). IRQL: DISPATCH_LEVEL, controller lock held.
+ */
+ULONG XhciSlotPortHasRecords(PXHCI_EXTENSION ext, ULONG hubPort);
 VOID XhciSlotPortReset(PXHCI_EXTENSION ext, ULONG hubPort);
 
 /*

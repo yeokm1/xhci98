@@ -6746,6 +6746,14 @@ typedef struct _XHCI_EXTENSION {
     ULONG DevicesDisownedOut;
     ULONG DevicesDisabledOut;
     /*
+     * Disowns settled with PED (or PP) still unconfirmed because no device
+     * record was on the port or behind it (XhciSlotPortHasRecords): nothing
+     * the controller could read was at stake. Round 6 found the unconfirmed
+     * wait holding every virtual-hub port-1 reset on QEMU, where a disable
+     * write never clears PED, until usbhub's bus lock timed out (0xFE).
+     */
+    ULONG DisownsSettledEmpty;
+    /*
      * The short-transfer family, accumulated at controller level.
      *
      * `XHCI_TRANSFER_QUEUE` already counts all three per endpoint, and that is

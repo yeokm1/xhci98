@@ -10618,6 +10618,43 @@ VOID XhciSlotPortDisowned(PXHCI_EXTENSION ext, ULONG hubPort)
 }
 
 /*
+ * Whether any device record is on this port or behind it - the set
+ * XhciSlotPortDisowned marks and XhciSlotPortDisabled releases, by the same
+ * test: every state but FREE and GONE counts, disowned ones included, since a
+ * disowned record keeps its slot and rings until the release.
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock held.
+ */
+ULONG XhciSlotPortHasRecords(PXHCI_EXTENSION ext, ULONG hubPort)
+{
+    ULONG rootPort;
+    ULONG i;
+
+    if (ext == NULL) {
+        return 0;
+    }
+    if (xhciDevByHubPort(ext, hubPort) != NULL) {
+        return 1;
+    }
+    rootPort = XhciRootHubPortOf(&ext->RootHub, hubPort);
+    if (rootPort == 0) {
+        return 0;
+    }
+    for (i = 0; i < XHCI_MAX_SLOTS; i++) {
+        PXHCI_DEVICE child = &ext->Devices[i];
+
+        if (child->State == XHCI_DEV_STATE_FREE ||
+            child->State == XHCI_DEV_STATE_GONE) {
+            continue;
+        }
+        if (child->HubPort == 0 && child->RootPort == rootPort) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
  * The port has now been *observed* out of service, so the half that touches
  * memory the controller could still be reading may run.
  *
