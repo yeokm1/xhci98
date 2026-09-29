@@ -955,7 +955,25 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     retaken on it. The no-flag idle control on 2000 answered the idle
     question: the virtual hubs do not hold usbport's idle off, so
     `USB_MINIPORT_FLAGS_DISABLE_SS` stays. The 98 SE control idles too; its
-    values 1 and 2 are owed.
+    values 1 and 2 are owed. **Round 6, on the build carrying round 5's
+    fixes** (2026-09-29, `runs/run-24.md`, "Round 6 on the round-5
+    fixes"): ME and XP x86 pass at 0, 1 and 2 and 2000 at 1 and 2 - 24.5's
+    High-Speed mouse behind a virtual hub at Interval 5 on all three, the
+    hidusbf ladder exact behind a hub on ME and XP, audio played behind a hub at 2
+    on 2000 and ME (on XP it streamed silence with the player blocked,
+    which an A/B shows is older than this build) - and Vista x86 passes at
+    0, 1 and 2; Vista x64 shows no failure, though Windows refused its
+    disables at 1 and 2; and the 98 SE idle control, finished, gave 2000's
+    answer at 1 and 2. Three stopped: Windows 7 in both architectures on a usbhub 0xFE
+    at 2 with four devices plugged, which a kernel dump traced to this
+    driver's unbounded disown wait under QEMU's ignored port disable; XP x64
+    at 2 on a High-Speed device behind a hub that never enumerated; and
+    SweetLow's stack at 2 on a guest freeze on the stock `usbd.sys`, which
+    an A/B of 93 plugs did not reproduce. The owner chose the 0xFE's fix
+    from five (a disown debt with no device record on the port settles at
+    once; record 12 section 3.3); it is committed and built, and
+    the legs are retaken on it, with the device matrix at 2, which was
+    stopped for the rebuild.
   - [ ] **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the
     switch at 1 and at 2, the Low-Speed mouse and the Full-Speed audio device from
     `test-equipment.md` on root ports, the interval read from the snapshot;
@@ -1064,6 +1082,15 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   hardware event follows (design record 05, "Where the root hub may be
   announced"). The rebuilt package is owed, and Vista and 7 in both
   architectures are read again on it.
+
+  **Round 6 read the fix on all four NT 6.x guests, and no hang came back**
+  (2026-09-29, `runs/run-24.md`, "Round 6 on the round-5 fixes"): the
+  four-device plugs that hung Windows 7 x86 at 0 and Vista x86 at 1 ran
+  clean, `RootHubChangesReported` rose with every hot-plug and never across
+  a teardown, and the one slow plug timed was a High-Speed mouse on Vista
+  x86 (17.4 s while a hub loop ran on another port). Still not ticked:
+  Windows 7 at 2 bugchecked on another cause (24.3.4), and the build that
+  fixes it, which carries this one, is what Vista and 7 read next.
 
 - [ ] **24.5 - The High-Speed interval behind a hub.** *(added 2026-09-28 by
   the owner's decision, and taken before the cut; older than 24.3)* Taken
