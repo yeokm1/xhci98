@@ -2630,3 +2630,73 @@ the A/B pairs' and `xfer-p10`, is read on fresh images:
 Then the owner decides whether 24.3.4 can be ticked. The two Windows 7 disks
 keep the dumps; the x64 one is in `vm\t2434-win7-x64.img`'s pagefile, which a
 boot would overwrite.
+
+## Round 7 on the disown fix (2026-09-29)
+
+The legs round 6 owed, on the build that carries `b587ad5`, as far as one
+session reached. Development host A, at most two and then three guests at
+once (owner), one agent per guest; recipe `out\t24-3-4\recipe-2434-r7.md`,
+reports `out\t24-3-4\r7-<guest>-report.md` and their evidence (git-ignored).
+The `qemu` flavour: x86 `xhci98.sys` `15f15693339988da...` (`built Sep 29
+2026 13:19:40`), amd64 `19ab1e9afdbcb822...` (`13:26:43`), INFs unchanged;
+every agent checked the staged hash and read the stamp. Every guest started
+from a fresh image; Windows 7 in both architectures on new disks
+(`vm\t2434-win7-r7.img`, `vm\t2434-win7-x64-r7.img`), so round 6's dump
+disks were never booted. **The fix does not end Windows 7's failure at 2.**
+x64 bugchecked 0xFE again and x86 reset during the disable cycles. The fix
+settles the debts it was written for, and the loop moves onto debts it does
+not cover. Nothing in this section is ticked.
+
+### What each guest read
+
+| Guest | Reached | Result | Report and evidence |
+|---|---|---|---|
+| Windows 7 SP1 x64, 4 vCPUs | value 2 | the four devices plugged one at a time about 2 min apart, and the 15-minute watch after the last **passed** (round 6 bugchecked about 14 minutes in). Nothing bound behind the eight virtual hubs; each device now got a slot on its root port before usbport addressed the hub there again, where round 6 enabled none. At 15 minutes `DisownsSettledEmpty` 4, one per plug, still while the guest idled, and `VhubResetsHeld` 120, climbing 5 to 6 a minute. In the churn at 2 the guest **bugchecked 0xFE (8, 6, 0xA, ...)** at about cycle 13, 26.5 minutes after the last plug: `DisownsSettledEmpty` 8, `VhubResetsHeld` 180, `DevicesDisownedOut` 4, `RhResetTimeouts` 3 (round 6's churn: 25), one EP0 open refused with no port to attribute it to. The cycles at 2 and the passes at 0 and 1 not taken: the crash disk holds the dump | `r7-win7-x64-report.md`; `r7-win7-x64-r7b-*.txt`, `r7-win7-x64-s2-churn.txt`, `r7-win7-x64-s2-bugcheck-debugcon-tail.txt`; the dump in `vm\t2434-win7-x64-r7.img`'s pagefile; `r7-win7-x64-bugcheck-analysis.md` |
+| Windows 7 SP1 x86, 4 vCPUs | value 2 | the four devices plugged about 8 s apart in round 6's order, and the watch after them, **passed**: alive 24 minutes, until the devices were removed. Four slots were enabled where round 6 enabled none; the two mice and the audio device were addressed (the High-Speed mouse's interrupt endpoint at `00030005`), the storage device got a slot and no address, and none bound. `DisownsSettledEmpty` 2 from the first minute and flat, `VhubResetsHeld` climbing about 5 a minute (107 by the first disable), `DevicesDisownedOut` 4. Churn 25/25 on port 5 with the guest alive, but usbhub never reset that port and nothing enumerated behind it, so it exercised little. Five disable/enable cycles with the devices attached: cycles 1 to 3 passed with no "restart required" veto (disables of 20 s to about 3.5 min, Device Manager "Not Responding" in the last); after cycle 4's enable the guest **reset** about 3 minutes into the new load, with no StopController, its debugcon tail round 6's crash pattern (disowns on ports 5 and 1, the hub on root port 1 addressed again from address 0, a new `DriverEntry`). QEMU restarted the guest at once, so no bugcheck code was read; queued keystrokes then booted the disk once into Safe Mode, where Windows reported recovering from an unexpected shutdown, so a minidump should be on the disk, unread. The passes at 0 and 1 not taken | `r7-win7-report.md`; `r7-win7-*`; the disk `vm\t2434-win7-r7.img` |
+| XP x64 SP2, 4 vCPUs | values 1 and 2 | **passes**. At 2 the High-Speed mouse behind virtual hub 4 enumerated on the plug and on the replug, two resets each, where round 6 never enumerated it; the 24.5 reading `00010004` / `00030005`, `EndpointPeriodsPromoted` 1. The Full-Speed mouse behind hub 1 took 2 resets (round 6: 18); audio behind virtual hub 3 played about 10 minutes with 65,222 isochronous packets answered, no packet error, `InterruptArmsTakenByIsr` 767. At 1 the Full-Speed mouse enumerated on its first plug after 11 resets. `DisownsSettledEmpty` and `VhubResetsHeld` stayed 0 throughout, and every disown was confirmed at once, as in round 6's log: the fix did not act here, and round 6's miss reads as timing-dependent (that round ran up to five guests, this one three) | `r7-winxp64-report.md`; `r7-winxp64-*.txt` |
+| Windows 2000 SP4 | value 2 | **passes** (the short pass): eight virtual hubs, 24 of 24 opens; the Full-Speed mouse behind hub 1 at `00020006`; the High-Speed mouse behind virtual hub 4 at `00010004` / `00030005`, promoted 1; audio behind virtual hub 3, 17 plays, 93,670 of 93,670 isochronous packets answered, `InterruptArmsTakenByIsr` 446, no re-arm failure, escalation or reset. `DisownsSettledEmpty` and `VhubResetsHeld` 0. The guest ran slow under audio (a 5.5 s play took 30 to 75 s of wall clock) with the host about 2 % loaded, so the agent stopped at 17 plays; host timer pacing is the suspicion, not established | `r7-win2k-report.md`; `r7-win2k-s2-*.txt` |
+
+### Why the 0xFE came back on Windows 7 x64
+
+`out\t24-3-4\r7-win7-x64-bugcheck-analysis.md` read the kernel summary dump
+out of the guest's `pagefile.sys`, from a read-only copy, as round 6's was
+read (debugger unless marked). The chain is round 6's: root port 5's
+change-queue gate held 60.03 s by a usbhub thread running virtual hub 5's hard
+reset, blocked on usbport's bus lock (FDO extension +0x570), which virtual hub
+3's port-1 enumeration held while this driver held its port-1 reset; virtual
+hubs 1 and 2 queued on the same lock, and root port 1's next worker was about
+28 s from a second 0xFE. What changed is the debt under the hold. Root ports
+1, 2 and 3 each carried a disown debt with PED still reading 1, and each also
+carried its own device's record: the slot the physical port-1 reset had
+created once `b587ad5` settled the empty debt before it (the QEMU trace shows
+those Enable Slots, which round 6 never had), then disowned when usbhub's hard
+reset of the hub ran the synthetic root reset. Each record was Addressed and
+disowned, at address 0, with an empty EP0 ring and nothing else open or
+pending. `XhciSlotPortHasRecords` counts a disowned record, so
+`xhciRhDisownSettlesEmpty` refuses to settle, and the record's release
+(`XhciSlotPortDisabled`) waits on the same debt (static): each waits on the
+other, on QEMU for ever. `b587ad5`'s own record names this case as not
+covered (design record 12 section 11).
+
+The analysis ranked five responses: settle when the port's only records are
+disowned and idle (no transfer queued, no SET_ADDRESS or operation pending),
+the teardown's Disable Slot proving the slot went before anything is
+released; take the proof from the controller for any record (Stop Endpoint and
+Disable Slot, and settle once every record on the port is free), which covers
+queued transfers too; a bounded wait on idle records; a bounded hold; or no
+change, reading value 2 on NT 6.x on the E460. **The choice is the owner's.**
+One question stays open under any of them: why usbhub hard-resets each virtual
+hub just after its device was addressed and its configuration read; ending the
+wait may turn the loop into a different enumeration failure.
+
+### What is owed
+
+- The owner's choice for the 0xFE above; if it is a code change, a rebuild
+  and Windows 7 in both architectures at 2 again, on new disks.
+- Windows 7 x86's minidump, read from a read-only copy of `vm\t2434-win7-r7.img` (booted once since the reset, into Safe Mode): whether its reset was the same 0xFE.
+- Vista x86 and x64 at 0, 1 and 2; SweetLow's stack at 2 (A, B's audio, C,
+  24.5); XP x86 and ME's short passes at 2; the device matrix at 2 from
+  re-cloned images, as round 6's list gives them. None was started this
+  session (owner: no new guests once the running legs finished).
+- `vm\t2434-win7-x64-r7.img` keeps round 7's dump (a boot overwrites it), and
+  round 6's two disks keep theirs.

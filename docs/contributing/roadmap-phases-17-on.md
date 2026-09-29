@@ -973,7 +973,15 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     from five (a disown debt with no device record on the port settles at
     once; record 12 section 3.3); it is committed and built, and
     the legs are retaken on it, with the device matrix at 2, which was
-    stopped for the rebuild.
+    stopped for the rebuild. **Round 7, on that fix** (2026-09-29,
+    `runs/run-24.md`, "Round 7 on the disown fix"): XP x64 and 2000 pass at
+    2 (XP x64's High-Speed mouse behind a hub enumerates, 24.5 at Interval
+    5 on both); Windows 7 x64 bugchecked 0xFE again in the churn at 2 and
+    Windows 7 x86 reset in the disable cycles at 2, each after its
+    four-device watch passed. The x64 dump shows the loop moved onto debts
+    the fix does not cover - each port's own disowned, idle device record
+    and its release wait on each other - and the next response is the
+    owner's; Vista, SweetLow, XP x86, ME and the matrix were not reached.
   - [ ] **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the
     switch at 1 and at 2, the Low-Speed mouse and the Full-Speed audio device from
     `test-equipment.md` on root ports, the interval read from the snapshot;
