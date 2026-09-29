@@ -1176,6 +1176,15 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
     ext->ArmThroughExOnly =
         (xhciInterfaceVersionPresented >= USBPORT_NT6_MINIPORT_INTERFACE_VERSION &&
          XhciRegPacket.UsbPortRequestAsyncCallbackEx != NULL) ? 1UL : 0UL;
+    /*
+     * XHCI_EXTENSION.RootHubReportThroughDpc: keyed on the version alone,
+     * because the lock orders it avoids are usbport's whether or not the Ex
+     * slot was written, and InterruptDpcEx's port bit exists on every 300
+     * registration.
+     */
+    ext->RootHubReportThroughDpc =
+        (xhciInterfaceVersionPresented >= USBPORT_NT6_MINIPORT_INTERFACE_VERSION)
+            ? 1UL : 0UL;
 
     ext->Signature = XHCI_EXTENSION_SIGNATURE;
     ext->TrailingSignature = XHCI_EXTENSION_TRAILING;
@@ -1491,13 +1500,15 @@ static ULONG NTAPI xhciInterruptDpc(PVOID miniPortExtension,
          * endpoint on either. Microsoft's own usbehci is built the same way -
          * its 0x4C function is a thunk onto its InterruptDpcEx.
          *
-         * The bit reported is the port one, and it is derived from the counter
-         * XhciEventDpc already keeps rather than from a new flag: a pass that
-         * consumed at least one Port Status Change Event is a pass after which
-         * the hub driver should look at the ports. The body still calls
-         * UsbPortInvalidateRootHub itself where it always did; on NT 6.x that
-         * and this bit reach the same place twice, which is harmless, and on
-         * NT 5.x the bit is simply not read.
+         * The bit reported is the port one, set on a pass that consumed at
+         * least one Port Status Change Event, and on the Version 300 tier also
+         * when XhciEventDpc says a change latched elsewhere is owed. IsrDpc
+         * turns the bit into `Ev_Rh_IntrEp_Invalidate` after releasing its
+         * ISR-DPC lock (static, all four builds), which is the only reason the
+         * body no longer calls UsbPortInvalidateRootHub there: from inside this
+         * callback that service deadlocked against usbport's own root-hub DPC
+         * (XHCI_EXTENSION.RootHubReportThroughDpc). On NT 5.x the bit is not
+         * read and the body announces as it always did.
          *
          * Bit 0 - usbehci's "transfer interrupt with pending work" - is
          * reported on the Version 300 tier whenever the drain left a
@@ -1512,8 +1523,9 @@ static ULONG NTAPI xhciInterruptDpc(PVOID miniPortExtension,
         portChangesBefore = ext->EventCounts[XHCI_EVENT_TYPE_INDEX(
             XHCI_TRB_TYPE_PORT_STATUS_CHANGE)];
 
-        XhciEventDpc(ext, enableInterrupts);
-
+        if (XhciEventDpc(ext, enableInterrupts)) {
+            result = USBPORT_DPC_EX_PORT_CHANGE;
+        }
         if (ext->EventCounts[XHCI_EVENT_TYPE_INDEX(
                 XHCI_TRB_TYPE_PORT_STATUS_CHANGE)] != portChangesBefore) {
             result = USBPORT_DPC_EX_PORT_CHANGE;
@@ -1756,6 +1768,8 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
     XHCI_DBG_VALUE_CHANGED("interrupter re-arm failures",
                            ext->InterruptRearmFailures);
     XHCI_DBG_VALUE_CHANGED("re-arm escalations", ext->RearmEscalations);
+    XHCI_DBG_VALUE_CHANGED("interrupter arms taken by an ISR claim",
+                           ext->InterruptArmsTakenByIsr);
     XHCI_DBG_VALUE_CHANGED("interrupt unmask failures",
                            ext->InterruptUnmaskFailures);
     XHCI_DBG_VALUE_CHANGED("host controller event resets",
@@ -2589,8 +2603,8 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
     XHCI_DBG_VALUE_CHANGED("timer arms owed by a DEFER context",
                            ext->AsyncArmsDeferred);
     XHCI_DBG_VALUE_CHANGED("timer arms Ex refused", ext->AsyncArmsRefused);
-    XHCI_DBG_VALUE_CHANGED("root-hub announcements made to drain owed arms",
-                           ext->RootHubArmKicks);
+    XHCI_DBG_VALUE_CHANGED("root-hub changes reported through the DPC bit",
+                           ext->RootHubChangesReported);
     XHCI_DBG_VALUE_CHANGED("RH operations retired by age", ext->RhAgeRetires);
     /*
      * The other retirement cause, and it is one of the two witnesses task

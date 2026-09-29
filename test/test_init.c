@@ -398,6 +398,11 @@ static ULONG mmioDeadReads;
 
 /* IMAN writes the model accepts and discards - see the write hook. */
 static ULONG imanWritesSwallowed;
+/* IE-setting IMAN writes after which an event is already waiting, so the real
+ * ISR runs before the writer's read-back (run-24 finding 2) - see the hook. */
+static ULONG imanIsrAfterArm;
+static PXHCI_EXTENSION imanIsrExt;
+static ULONG imanIsrPreemptions;
 static ULONG refuseHalt;
 static ULONG pciWriteFails;
 /* A Command register that accepts the write and keeps BME set anyway. This is
@@ -752,6 +757,16 @@ static ULONG rootHubInvalidatesUnderLockTotal;
  * NT 6.x usbport holds the EpList lock its own service takes (task 24.3.4). */
 static ULONG rootHubInvalidatesInSubmitTotal;
 static ULONG rootHubDisableIrqReentries;
+/*
+ * Round 5 (the NT 6.x root-hub deadlock): on the Version 300 tier the
+ * service is never called from a context where usbport holds a spin lock -
+ * the event DPC (its ISR-DPC lock), a timer callback or a modelled feature
+ * or endpoint callback. `eventDpcDepth` is set by deliver_events around the
+ * DPC; the total is never reset and is asserted at the end of main().
+ */
+static ULONG eventDpcDepth;
+static ULONG rootHubInvalidatesLockedTier300Total;
+static ULONG rootHubReportsModelled;
 
 /* UsbPortInvalidateController, the last rung of the ladder. */
 static ULONG invalidateCalls;
@@ -918,6 +933,9 @@ static void hc_build(void)
     mmioReadsBeforeDead = 0;
     mmioDeadReads = 0;
     imanWritesSwallowed = 0;
+    imanIsrAfterArm = 0;
+    imanIsrExt = NULL;
+    imanIsrPreemptions = 0;
     refuseHalt = 0;
     pciWriteFails = 0;
     pciBmeSticky = 0;
@@ -1828,6 +1846,22 @@ VOID XhciHostWriteRegister(PULONG address, ULONG value)
             next |= mmio[offset / 4] & XHCI_IMAN_IP;
         }
         mmio[offset / 4] = next;
+
+        /*
+         * An event already waiting when IE lands: the xHC raises IP and the
+         * interrupt at once, and the ISR runs at DIRQL before the writer, which
+         * holds only DISPATCH-level locks, reads IMAN back. The real XhciIsr
+         * runs here, so its IE-clearing write and its claim count are the
+         * driver's own. Its write carries IE = 0, so this cannot recurse.
+         */
+        if ((next & XHCI_IMAN_IE) != 0 && imanIsrAfterArm != 0 &&
+            imanIsrExt != NULL) {
+            imanIsrAfterArm--;
+            imanIsrPreemptions++;
+            mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_EINT;
+            mmio[offset / 4] |= XHCI_IMAN_IP;
+            (VOID)XhciIsr(imanIsrExt);
+        }
         return;
     }
 
@@ -2277,6 +2311,12 @@ static ULONG NTAPI hc_invalidate_root_hub(PVOID extension)
 {
     rootHubInvalidates++;
     note_no_lock_here("UsbPortInvalidateRootHub");
+    if (extension != NULL &&
+        ((PXHCI_EXTENSION)extension)->RootHubReportThroughDpc != 0 &&
+        (eventDpcDepth != 0 || asyncDeliveryDepth != 0 ||
+         usbportLockModel != 0)) {
+        rootHubInvalidatesLockedTier300Total++;
+    }
     if (commandLockDepth != 0) {
         rootHubInvalidatesUnderLock++;
         rootHubInvalidatesUnderLockTotal++;
@@ -5939,6 +5979,7 @@ static void test_dpc_bound(void)
 static void test_dpc_rearm(void)
 {
     ULONG i;
+    ULONG claimedBefore;
 
     isr_start();
     XhciEventDpc(&ext, FALSE);
@@ -6074,6 +6115,87 @@ static void test_dpc_rearm(void)
     CHECK_EQ(mmio[HC_IR0(XHCI_IR_IMAN) / 4] & XHCI_IMAN_IE, 0,
              "(IE really is still down - the window ate every attempt)");
     mmioDeadReads = 0;
+    CHECK_EQ(ext.InterruptArmsTakenByIsr, 0,
+             "(no claim happened, so the claim rule cannot rescue this one)");
+
+    /*
+     * **Run-24 finding 2: the read-back loses to the ISR, on one CPU.** The
+     * re-arm lands after the drain released EHB, an event is already waiting,
+     * and the interrupt fires the moment IE is up. The ISR runs at DIRQL, which
+     * the DPC's DISPATCH-level locks do not exclude, and clears IE again before
+     * the read-back. Every attempt used to lose the same way under a busy
+     * isochronous stream, and the escalation reset a healthy controller (32-bit
+     * XP, one vCPU, 2026-09-28). The claim queues the next DPC pass, which
+     * re-arms, so it is proof that delivery is owed, not lost.
+     */
+    isr_start();
+    ext.Flags |= XHCI_EXT_FLAG_INTERRUPTS;
+    mmio[HC_IR0(XHCI_IR_IMAN) / 4] = 0;
+    invalidateCalls = 0;
+    imanIsrExt = &ext;
+    imanIsrAfterArm = 64;
+    imanIsrPreemptions = 0;
+    claimedBefore = ext.InterruptsClaimed;
+    XhciEventDpc(&ext, TRUE);
+    CHECK_EQ(imanIsrPreemptions, 1,
+             "(the ISR ran once, between the write and the read-back)");
+    CHECK_EQ(ext.InterruptsClaimed, claimedBefore + 1,
+             "(and claimed the interrupt)");
+    CHECK_EQ(mmio[HC_IR0(XHCI_IR_IMAN) / 4] & XHCI_IMAN_IE, 0,
+             "(IE is down again, as the ISR leaves it)");
+    CHECK_EQ(ext.InterruptArmsTakenByIsr, 1,
+             "the claim is taken as proof the arm is owed to the next DPC");
+    CHECK_EQ(ext.InterruptRearmFailures, 0, "so the re-arm is not a failure");
+    CHECK_EQ(ext.RearmEscalations, 0, "and nothing is escalated");
+    CHECK_EQ(invalidateCalls, 0, "usbport is not asked for a controller reset");
+
+    /* The pass the claim queued: nothing preempts it, IE stays up. */
+    imanIsrAfterArm = 0;
+    XhciEventDpc(&ext, TRUE);
+    CHECK_EQ(mmio[HC_IR0(XHCI_IR_IMAN) / 4] & XHCI_IMAN_IE, XHCI_IMAN_IE,
+             "the next DPC pass puts IE back up");
+    CHECK_EQ(ext.InterruptArmsTakenByIsr, 1, "(by read-back, not by a claim)");
+    imanIsrExt = NULL;
+
+    /*
+     * **The unmask takes no claim as proof** (static, NT 6.x): usbport enables
+     * interrupts in two power paths while its IsrDpc still skips the miniport,
+     * so the DPC a claim queues there re-arms nothing. One lost read-back is
+     * retried - the claim left EHB set, so the next write sticks - and a
+     * claim on every attempt is a failure, as any unproven unmask is.
+     */
+    isr_start();
+    mmio[HC_IR0(XHCI_IR_IMAN) / 4] = 0;
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] &= ~XHCI_USBCMD_INTE;
+    imanIsrExt = &ext;
+    imanIsrAfterArm = 1;
+    imanIsrPreemptions = 0;
+    ext.InterruptArmsTakenByIsr = 0;
+    ext.InterruptUnmaskFailures = 0;
+    CHECK_EQ(XhciUnmaskInterrupts(&ext), 1,
+             "an unmask whose first IE read-back lost to an ISR retries and "
+             "proves the second");
+    CHECK_EQ(imanIsrPreemptions, 1, "(the ISR ran once)");
+    CHECK_EQ(mmio[HC_IR0(XHCI_IR_IMAN) / 4] & XHCI_IMAN_IE, XHCI_IMAN_IE,
+             "(IE is really up)");
+    CHECK_EQ(ext.InterruptArmsTakenByIsr, 0, "no claim was taken as proof");
+
+    isr_start();
+    mmio[HC_IR0(XHCI_IR_IMAN) / 4] = 0;
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] &= ~XHCI_USBCMD_INTE;
+    imanIsrExt = &ext;
+    imanIsrAfterArm = 64;
+    imanIsrPreemptions = 0;
+    ext.InterruptArmsTakenByIsr = 0;
+    ext.InterruptUnmaskFailures = 0;
+    CHECK_EQ(XhciUnmaskInterrupts(&ext), 0,
+             "an unmask whose every IE read-back lost to a claim fails - a "
+             "claim is not proof outside the DPC");
+    CHECK(imanIsrPreemptions >= 2, "(the ISR claimed on every attempt)");
+    CHECK_EQ(ext.InterruptArmsTakenByIsr, 0, "and the claim rule did not fire");
+    CHECK_EQ(ext.InterruptUnmaskFailures, 1, "it is counted as a failure");
+    imanIsrAfterArm = 0;
+    imanIsrExt = NULL;
 
     /*
      * The whole cycle, because the ISR's change and the DPC's are one design
@@ -7747,8 +7869,18 @@ static void usbport_worker(void)
 
 static void deliver_events(void)
 {
+    ULONG report;
+
     (void)XhciIsr(&ext);
-    XhciEventDpc(&ext, FALSE);
+    eventDpcDepth++;
+    report = XhciEventDpc(&ext, FALSE);
+    eventDpcDepth--;
+    /* usbport's IsrDpc: InterruptDpcEx's port bit becomes the root-hub
+     * invalidate, made after its ISR-DPC lock is released (NT 6.x, static). */
+    if (report) {
+        rootHubReportsModelled++;
+        (VOID)hc_invalidate_root_hub(&ext);
+    }
     usbport_worker();
 }
 
@@ -30848,8 +30980,112 @@ static void test_nt6_arm_timeout_and_refusal(void)
     deliver_events();
 }
 
-/* A root-hub feature callback defers the port's timer and kicks usbport's
- * scan; the scan's status query makes the arm. */
+/*
+ * Round 5: the event DPC on the Version 300 tier reports a root-hub change
+ * through InterruptDpcEx's port bit and never calls the service, which
+ * deadlocked Vista and Windows 7 against usbport's own root-hub DPC; a DEFER
+ * context latches one for the health poll; the gate still rules both; and
+ * the Version 200 tier announces exactly as before.
+ */
+static void test_nt6_rh_report(void)
+{
+    ULONG invalidates;
+    ULONG reported;
+    ULONG result;
+
+    /* A Port Status Change Event on the 300 tier. */
+    nt6_start(0);
+    XhciRegPacket.RH_EnableIrq(&ext);
+    CHECK_EQ(ext.RootHubReportThroughDpc, 1, "(the 300 tier reports)");
+    invalidates = rootHubInvalidates;
+    reported = ext.RootHubChangesReported;
+    hw_attach_device(1);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, 1UL << 24, 0);
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_EINT;
+    mmio[HC_IR0(XHCI_IR_IMAN) / 4] |= XHCI_IMAN_IP;
+    (VOID)XhciIsr(&ext);
+    eventDpcDepth++;
+    result = XhciRegPacket.InterruptDpc(&ext, TRUE);
+    eventDpcDepth--;
+    CHECK_EQ(rootHubInvalidates, invalidates,
+             "the event DPC does not call UsbPortInvalidateRootHub on NT 6.x");
+    CHECK_EQ(result & USBPORT_DPC_EX_PORT_CHANGE, USBPORT_DPC_EX_PORT_CHANGE,
+             "it reports the change through InterruptDpcEx's port bit");
+    CHECK_EQ(ext.RootHubChangesReported, reported + 1,
+             "and counts the report");
+    CHECK_EQ(ext.RootHubInvalidatesOwed, 0,
+             "the change is no longer owed: usbport's IsrDpc announces it");
+
+    /* A change a DEFER context latched: nothing from there, the event DPC
+     * reports it even with no event of its own. */
+    ext.RootHubInvalidatesOwed = 1;
+    invalidates = rootHubInvalidates;
+    asyncDeliveryDepth++;
+    XhciRootHubDeferredWork(&ext, XHCI_ARM_DEFER);
+    asyncDeliveryDepth--;
+    CHECK_EQ(rootHubInvalidates, invalidates,
+             "a DEFER context announces nothing on the 300 tier");
+    CHECK_EQ(ext.RootHubInvalidatesOwed, 1, "the change stays latched");
+    eventDpcDepth++;
+    result = XhciRegPacket.InterruptDpc(&ext, TRUE);
+    eventDpcDepth--;
+    CHECK_EQ(result & USBPORT_DPC_EX_PORT_CHANGE, USBPORT_DPC_EX_PORT_CHANGE,
+             "the next event DPC reports it through the port bit, with no "
+             "event of its own");
+    CHECK_EQ(ext.RootHubInvalidatesOwed, 0, "(taken)");
+    CHECK_EQ(rootHubInvalidates, invalidates, "(still no service call)");
+
+    /* End to end through usbport's IsrDpc model: the bit becomes the
+     * invalidate once the DPC has returned. */
+    ext.RootHubInvalidatesOwed = 1;
+    reported = rootHubReportsModelled;
+    deliver_events();
+    CHECK_EQ(rootHubReportsModelled, reported + 1,
+             "usbport's IsrDpc turns the reported bit into the invalidate");
+    CHECK_EQ(rootHubInvalidates, invalidates + 1,
+             "made once, outside the event DPC");
+    invalidates = rootHubInvalidates;
+    XhciRegPacket.RH_EnableIrq(&ext);   /* (the model's service closed it) */
+
+    /* Or the health poll, which holds no usbport lock, announces it. */
+    ext.RootHubInvalidatesOwed = 1;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(rootHubInvalidates, invalidates + 1,
+             "the health poll announces a latched change");
+    CHECK_EQ(ext.RootHubInvalidatesOwed, 0, "(taken)");
+
+    /* The gate rules the report as it rules the call. */
+    XhciRegPacket.RH_EnableIrq(&ext);
+    (VOID)XhciControllerUpdateFlags(&ext, XHCI_EXT_FLAG_RH_IRQ, 0);
+    ext.RootHubInvalidatesOwed = 1;
+    reported = ext.RootHubChangesReported;
+    eventDpcDepth++;
+    CHECK_EQ(XhciEventDpc(&ext, TRUE), 0,
+             "behind a closed gate nothing is reported");
+    eventDpcDepth--;
+    CHECK_EQ(ext.RootHubInvalidatesOwed, 1, "and the change stays owed");
+    CHECK_EQ(ext.RootHubChangesReported, reported, "(not counted)");
+
+    /* The 200 tier: the event DPC and the DEFER contexts announce as before. */
+    enable_start(0);
+    deliver_events();
+    XhciRegPacket.RH_EnableIrq(&ext);
+    CHECK_EQ(ext.RootHubReportThroughDpc, 0, "(the 200 tier does not report)");
+    ext.RootHubInvalidatesOwed = 1;
+    invalidates = rootHubInvalidates;
+    CHECK_EQ(XhciEventDpc(&ext, TRUE), 0, "the 200 tier's event DPC reports "
+             "nothing");
+    CHECK_EQ(rootHubInvalidates, invalidates + 1, "it announces itself");
+    XhciRegPacket.RH_EnableIrq(&ext);   /* NT 5.x's service closed the gate */
+    ext.RootHubInvalidatesOwed = 1;
+    XhciRootHubDeferredWork(&ext, XHCI_ARM_DEFER);
+    CHECK_EQ(rootHubInvalidates, invalidates + 2,
+             "and so does a DEFER context, unchanged");
+}
+
+/* A root-hub feature callback defers the port's timer and announces nothing
+ * (round 5: it may hold usbport's timer-list lock); the next scan's status
+ * query makes the arm. */
 static void test_nt6_arm_port_kick(void)
 {
     USBPORT_PORT_STATUS_AND_CHANGE status;
@@ -30869,9 +31105,9 @@ static void test_nt6_arm_port_kick(void)
              "arms nothing: RootHub_PortRequest holds usbport's timer-list "
              "lock, and the USB 2.0 power detour does not");
     CHECK_EQ(ext.RootHub.Ports[1].ArmPending, 1, "the port's arm is owed");
-    CHECK_EQ(rootHubInvalidates, invalidates + 1,
-             "and the announcement is made anyway - the kick");
-    CHECK_EQ(ext.RootHubArmKicks, 1, "counted as one");
+    CHECK_EQ(rootHubInvalidates, invalidates,
+             "and nothing is announced from under usbport's timer-list lock - "
+             "no kick (round 5)");
 
     CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
              MP_STATUS_SUCCESS, "usbport's scan asks for the port");
@@ -30883,7 +31119,7 @@ static void test_nt6_arm_port_kick(void)
              "for the operation armed");
     CHECK_EQ(ext.RootHub.Ports[1].ArmPending, 0, "(owed no longer)");
 
-    /* Behind a closed gate: no kick; the event DPC makes the arm. */
+    /* Behind a closed gate too; the event DPC makes the arm. */
     hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, 2UL << 24, 0);
     XhciRegPacket.InterruptDpc(&ext, TRUE);
     nt6_start(0);
@@ -30896,7 +31132,7 @@ static void test_nt6_arm_port_kick(void)
              "(a reset with usbport's gate closed)");
     usbportLockModel--;
     CHECK_EQ(rootHubInvalidates, invalidates,
-             "no kick through a closed gate: a scan is already outstanding");
+             "(nothing announced)");
     CHECK_EQ(exCalls, 0, "(nothing armed)");
     hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, 2UL << 24, 0);
     XhciRegPacket.InterruptDpc(&ext, TRUE);
@@ -31032,8 +31268,8 @@ static void test_nt6_arm_recovery(void)
     CHECK_EQ(ext.RecoveryCompletions, 1, "the recovery runs and succeeds");
     CHECK_EQ(exCalls, 1, "arming nothing from its timer callback");
     CHECK_EQ(ext.CommandArmOwed, 1, "its self-test's watchdog is owed");
-    CHECK(ext.RootHubArmKicks >= 1 || ext.RootHubInvalidates >= 1,
-          "and usbport has been told to scan");
+    CHECK_EQ(rootHubInvalidatesLockedTier300Total, 0,
+             "and nothing was announced from its timer callback");
     XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(exCalls, 2, "the next UNLOCKED context arms it");
     deliver_events();
@@ -33979,6 +34215,7 @@ int main(void)
     test_nt6_arm_command_owed();
     test_nt6_arm_timeout_and_refusal();
     test_nt6_arm_port_kick();
+    test_nt6_rh_report();
     test_nt6_arm_recovery();
     test_controller_recovery();
     test_fatal_after_recovery();
@@ -34265,6 +34502,13 @@ int main(void)
              "hold that lock or holds EpList");
     CHECK_EQ(exArmSkippingLockTotal, 0,
              "and never with its lock byte set");
+    CHECK_EQ(rootHubInvalidatesLockedTier300Total, 0,
+             "and on the Version 300 tier UsbPortInvalidateRootHub is never "
+             "called from the event DPC, a timer callback or a root-hub "
+             "feature or endpoint callback, where usbport holds a lock its "
+             "root-hub DPC takes the other way round (round 5)");
+    CHECK(rootHubReportsModelled > 0,
+          "(and the port bit was exercised through deliver_events)");
 
     /*
      * And the generalization of those two, which is what task 9's static review

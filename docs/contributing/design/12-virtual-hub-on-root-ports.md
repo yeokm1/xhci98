@@ -383,7 +383,8 @@ connection, or a connect change - and the root port reports that reading as
 today. The Port Status Change Event path and the start/resume seed keep
 every latch rule in `docs/contributing/implementation-invariants.md`, "Root
 Hub Reporting", and announce through `UsbPortInvalidateRootHub` as they do
-now, except from inside `SubmitTransfer` (section 11).
+now, except from inside `SubmitTransfer`, and on NT 6.x from the event DPC and
+from a root-hub feature or timer callback (section 11).
 
 ### 3.3 The virtual hub as a device
 
@@ -1110,6 +1111,29 @@ run-24.md.
   host-driven resume is legal; the wake is slower. The ReactOS-derived note
   that the legacy service is safe under `MiniportSpinLock`
   (`docs/usb-xhci-info/usbport-miniport-abi.md`) holds for NT 5.x only.
+- **On NT 6.x a change the virtual hub makes up is announced late** (round
+  5, 2026-09-28; `runs/run-24.md`, "Round 5 on the fixed build"). The build
+  that carried 24.4 deadlocked Vista x86 at 1 and Windows 7 x86 at 0: the
+  event DPC called `UsbPortInvalidateRootHub` under usbport's ISR-DPC lock,
+  and usbport's own root-hub code takes its RH-IntrEp lock and then the
+  ISR-DPC lock (static, all four builds; design record 05 section 3). On the
+  Version 300 tier the event DPC now reports a change through
+  `InterruptDpcEx`'s port bit, which usbport turns into the same invalidate
+  with its locks released, and the root-hub feature callbacks, the port
+  timers and the recovery only latch a change, for the health poll or the
+  next event DPC to announce. 24.4's announcement of an owed arm from those
+  callbacks went with it. A change a Port Status Change Event follows costs
+  nothing. One no hardware event follows waits up to one poll interval
+  (~500 ms) on Vista and Windows 7, unless an interrupt comes first: a
+  change the virtual hub's root-port operations latch at 1 or 2 from a
+  feature callback or a port timer, and the end of a host-driven resume
+  when no Port Link State Change follows the U0 write. A resume's 20 ms
+  timer is owed too - from `RH_ClearFeaturePortSuspend` on a root port, and
+  from `SubmitTransfer` through a virtual hub's port 1 as above - so on an
+  idle bus it can start up to one poll interval late and its end be
+  announced as late again: legal, and slower. That is what the code does;
+  none of it has been read on a guest, and the rebuilt package is what the
+  retaken legs read. NT 5.x announces as before.
 - **At 1 the hub retires with its device.** Section 3.2 had the hub
   dropped by usbport's disable of the root port, which 98, ME, 2000 and XP
   always sent. Vista's and Windows 7's usbhub do not
@@ -1163,7 +1187,7 @@ virtual hub on NT 6.x cannot be read in QEMU without a patched emulator.
 The owner accepted that gap (2026-09-27): no emulator is patched, and those
 devices are read on the E460 under Windows 7 x86 (roadmap 24.3.5). The
 timer-arm race above is roadmap 24.4, fixed in the build 24.3.4's remaining
-readings take.
+readings take, with round 5's announcement rule on top of it.
 
 On the fixed build the same gap shows at 1 as a loop on Vista and 7: usbhub
 abandons the held resets with a root disable, which retires the hub; QEMU

@@ -942,7 +942,20 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     once, on fresh images of the build that carries both, together with
     each fix's own re-read (Vista and 7 for 24.4, a High-Speed device
     behind a hub for 24.5). The 98 SE and 2000 readings above stand; the
-    cut's install legs and matrix are their no-regression check.
+    cut's install legs and matrix are their no-regression check. **Round 5,
+    on the build carrying 24.4 and 24.5** (2026-09-28, `runs/run-24.md`,
+    "Round 5 on the fixed build"): 2000 and XP x64 read 24.5's High-Speed
+    mouse behind a virtual hub at Interval 5, and XP x86 passed at 0 and 1
+    with the hidusbf ladder behind a hub; the rest stopped - Vista and 7 on a
+    usbport deadlock (24.4), XP x86 at 2 on an interrupter re-arm that failed
+    a working controller (run-24 finding 2), ME on a stack that stopped
+    enumerating after an unplug mid-enumeration, and SweetLow's stack on a
+    freeze at an early unplug, whose A/B is running. Both driver defects are
+    fixed in the working tree; the rebuilt package is owed, and every leg is
+    retaken on it. The no-flag idle control on 2000 answered the idle
+    question: the virtual hubs do not hold usbport's idle off, so
+    `USB_MINIPORT_FLAGS_DISABLE_SS` stays. The 98 SE control idles too; its
+    values 1 and 2 are owed.
   - [ ] **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the
     switch at 1 and at 2, the Low-Speed mouse and the Full-Speed audio device from
     `test-equipment.md` on root ports, the interval read from the snapshot;
@@ -1029,11 +1042,28 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   legacy service is never called: an arm from the event DPC,
   `CheckController`, a root-hub status query or Start/Stop/Suspend/Resume is
   made through `UsbPortRequestAsyncCallbackEx` with its own lock, and one
-  from any other context is owed to the next of those, with the
-  announcement as the kick from a feature callback. NT 5.x arms as before.
+  from any other context is owed to the next of those. NT 5.x arms as before.
   Design record 05, "Where a timer may be armed"; `runs/run-24.md`, "24.4";
   `legal-provenance.md` section 4. Not ticked until Vista and 7 in both
   architectures under 4 vCPUs have read the build, with 24.5's.
+
+  **Round 5 read the build, and it deadlocked NT 6.x** (2026-09-28,
+  `runs/run-24.md`, "Round 5 on the fixed build"). Windows 7 x86 at 0 and
+  Vista x86 at 1, four vCPUs each, hung in usbport: the event DPC called
+  `UsbPortInvalidateRootHub` under usbport's ISR-DPC lock, which usbport's
+  own root-hub code takes under its RH-IntrEp lock. The static read of the
+  four builds that followed found that path as old as the Version 300 tier,
+  two longer cycles through this task's Ex arms and its announcement from
+  the feature callbacks (the kick), and this task's lock-order argument
+  wrong on that point. Fixed in the working tree by the owner's choice: on
+  the Version 300 tier the event DPC reports a change through
+  `InterruptDpcEx`'s port bit, which usbport turns into the same call with
+  its locks released; the feature callbacks, the port timers and the
+  recovery only latch one for the health poll or the next event DPC; and
+  the kick is gone, at a cost of up to one poll interval for a change no
+  hardware event follows (design record 05, "Where the root hub may be
+  announced"). The rebuilt package is owed, and Vista and 7 in both
+  architectures are read again on it.
 
 - [ ] **24.5 - The High-Speed interval behind a hub.** *(added 2026-09-28 by
   the owner's decision, and taken before the cut; older than 24.3)* Taken

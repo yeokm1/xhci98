@@ -1727,6 +1727,17 @@ VOID XhciMaskInterrupts(PXHCI_EXTENSION ext)
 }
 
 /*
+ * The ISR's claim count, read so the compiler cannot reuse a value loaded
+ * before an IMAN write: XhciIsr advances it at DIRQL, on this CPU or another,
+ * without any lock this caller holds.
+ * IRQL: any.
+ */
+static ULONG xhciInterruptsClaimed(PXHCI_EXTENSION ext)
+{
+    return *(volatile ULONG *)&ext->InterruptsClaimed;
+}
+
+/*
  * Put IMAN.IE back after the ISR cleared it, and prove it landed.
  *
  * **This is the sole restorer of interrupt delivery on a running controller,
@@ -1756,14 +1767,33 @@ VOID XhciMaskInterrupts(PXHCI_EXTENSION ext)
  * IP is written as 0 throughout: it is RW1C, so a 0 preserves an interrupt that
  * arrived since the ISR ran instead of acknowledging one nothing has seen.
  *
+ * **An ISR claim after the write also proves it** (run-24 finding 2). The DPC
+ * re-arms after its final ERDP write has released EHB, so an event already
+ * waiting raises the interrupt the moment IE lands, and the ISR - at DIRQL,
+ * not excluded by the controller lock, on this CPU or another - clears IE
+ * again before the read-back. On a busy isochronous stream every attempt
+ * could lose that way, and the escalation reset a healthy controller (32-bit
+ * XP, one vCPU, 2026-09-28). The claim makes usbport queue its interrupt DPC
+ * again, whose pass re-arms IE, so an advance of `InterruptsClaimed` since
+ * the write is delivery owed to that pass, not lost - unless usbport disabled
+ * interrupts in between, when IE = 0 is what it asked for. On NT 6.x usbport's
+ * IsrDpc can skip the miniport while a "not operational" bit is set, but no
+ * InterruptDpcEx runs then, so this function cannot be inside that window
+ * (the premise, per usbport build: docs/contributing/legal-provenance.md
+ * section 4). XhciUnmaskInterrupts can, which is why it has no such rule.
+ *
  * InterruptDeliverySuppressed is deliberately **not** touched. That word means
  * "either enable is confirmed clear", and this function reads only IMAN - it has
  * no evidence about USBCMD.INTE, so claiming un-suppression here would assert
  * something unmeasured. XhciUnmaskInterrupts remains the only authority on it.
  *
- * Returns 1 if IE is confirmed set, 0 if it could not be proved - which the
- * caller must escalate rather than absorb, for the same reason a refused unmask
- * must (docs/contributing/implementation-invariants.md, "Interrupt Ordering").
+ * Returns 1 if IE was observed set, or if delivery was handed to the DPC an
+ * ISR claim queued since the write (which says nothing about whether this
+ * write landed - a shared-line claim of a pending EINT can precede a swallowed
+ * one - only that a pass that re-arms is coming); 0 if neither could be shown,
+ * which the caller must escalate rather than absorb, for the same reason a
+ * refused unmask must (docs/contributing/implementation-invariants.md,
+ * "Interrupt Ordering").
  *
  * IRQL: DISPATCH_LEVEL, controller lock held.
  */
@@ -1772,6 +1802,7 @@ ULONG XhciRearmInterrupter(PXHCI_EXTENSION ext)
     ULONG iman;
     ULONG imanBack;
     ULONG attempt;
+    ULONG claimed;
 
     for (attempt = 0; attempt < XHCI_INTERRUPT_WRITE_ATTEMPTS; attempt++) {
         iman = XhciReadIr0(ext, XHCI_IR_IMAN);
@@ -1784,11 +1815,16 @@ ULONG XhciRearmInterrupter(PXHCI_EXTENSION ext)
             return 1;
         }
 
+        claimed = xhciInterruptsClaimed(ext);
         XhciWriteIr0(ext, XHCI_IR_IMAN,
                      (iman & ~XHCI_IMAN_IP) | XHCI_IMAN_IE);
 
         imanBack = XhciReadIr0(ext, XHCI_IR_IMAN);
         if (imanBack != 0xFFFFFFFFUL && (imanBack & XHCI_IMAN_IE) != 0) {
+            return 1;
+        }
+        if (xhciInterruptsClaimed(ext) != claimed) {
+            ext->InterruptArmsTakenByIsr++;
             return 1;
         }
     }
@@ -1854,6 +1890,14 @@ ULONG XhciUnmaskInterrupts(PXHCI_EXTENSION ext)
          * XhciMaskInterrupts needing no such test: there, all ones has both
          * enable bits set and so reads as "no proof" on its own; here, that is
          * indistinguishable from the success this function is looking for.
+         *
+         * **No ISR-claim rule here, unlike XhciRearmInterrupter.** On NT 6.x
+         * usbport enables interrupts in two power paths (TurnUsbControllerOn,
+         * and the restart after a failed ResumeController) while a "not
+         * operational" bit its IsrDpc tests is still set, so the DPC a claim
+         * queues there skips this miniport and nothing re-arms (static, all
+         * four builds). A claim is proof of a coming re-arm only from the
+         * DPC's own pass.
          */
         imanBack = XhciReadIr0(ext, XHCI_IR_IMAN);
         usbcmdBack = XhciReadOp(ext, XHCI_OP_USBCMD);
@@ -4124,8 +4168,10 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
      * arrived at from the other side.
      *
      * From the recovery timer's callback, so an XHCI_ARM_DEFER context
-     * (roadmap 24.4): the self-test's watchdog is owed, and the announcement
-     * this makes anyway is what gets it made.
+     * (roadmap 24.4): the self-test's watchdog is owed, and on NT 6.x so is
+     * the announcement (round 5: the callback may hold usbport's timer-list
+     * lock) - both made by the next health poll or event DPC. On NT 5.x the
+     * announcement is made here, as before.
      */
     XhciRootHubDeferredWork(ext, XHCI_ARM_DEFER);
 

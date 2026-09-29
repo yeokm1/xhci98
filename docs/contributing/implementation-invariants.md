@@ -1271,6 +1271,16 @@ must therefore do.
   (`external/reactos/usbport/roothub.c:916-956`), which takes that same
   non-recursive spin lock. Decide the announcement under the lock and make the
   call after releasing it.
+  - That re-entry is NT 5.x's. On the Version 300 tier the rule is wider: the
+    service is called only from a context in which usbport holds no spin
+    lock, because on NT 6.x it takes usbport's RH-IntrEp lock, under which
+    usbport takes its ISR-DPC lock, and Vista and Windows 7 deadlocked on it
+    (round 5 of task 24.3.4). Not from the event DPC (usbport's ISR-DPC
+    lock), a root-hub feature or timer callback (possibly its timer-list
+    lock), a status query (possibly its MP lock) or an endpoint callback
+    (EpList). The event DPC reports a change through `InterruptDpcEx`'s port
+    bit instead, and the others latch it for the health poll or the next
+    event DPC (design record 05, "Where the root hub may be announced").
 - **One invalidation drains every owed change.** It makes usbport re-poll all
   ports - the status-change scan walks 1..N calling `RH_GetPortStatus` - so a
   second call asks for a pass the first already covers. And a change latched

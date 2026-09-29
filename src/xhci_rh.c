@@ -841,7 +841,9 @@ MPSTATUS XhciRhGetPortStatus(PXHCI_EXTENSION ext,
      * here, or its MP lock when its root-hub peek calls in, and it never
      * calls this under its timer-list lock (static, all four NT 6.x builds).
      * So this is also where the arms a DEFER context owed are made - the
-     * peek is what the kick in XhciRootHubDeferredWork starts.
+     * peek follows every announcement, whichever context made it. Never an
+     * announcement from here, though: the MP lock is held across it, and on
+     * NT 6.x usbport reaches MP from RH-IntrEp through EpList (static).
      */
     XhciSlotDeferredWork(ext, XHCI_ARM_UNLOCKED);
     XhciRootHubDrainOwedArms(ext);
@@ -2434,8 +2436,9 @@ VOID XhciRhVhubPort1Status(PXHCI_EXTENSION ext,
  *
  * IRQL: DISPATCH_LEVEL, no miniport lock held (NT 6.x: usbport's timer lock,
  * or none when Windows 7's StopController runs it early) - an XHCI_ARM_DEFER
- * context, so a re-timed resume's arm is owed and the announcement kicks it
- * (roadmap 24.4).
+ * context, so on NT 6.x a re-timed resume's arm and any change it latches are
+ * owed to the next context that holds nothing: the health poll, or the next
+ * event DPC (roadmap 24.4, round 5).
  */
 static VOID NTAPI xhciRhPortTimeout(PVOID miniPortExtension, PVOID context)
 {
@@ -2742,6 +2745,13 @@ MPSTATUS XhciRhClearFeaturePortChange(PXHCI_EXTENSION ext,
  * What the gate suppresses is the *announcement* - Phase 5 task 5's
  * UsbPortInvalidateRootHub call - and nothing else.
  *
+ * That is NT 5.x's usbport. On NT 6.x the service does not call the disable;
+ * usbport's root-hub queue does, enabling when usbhub queues its status IRP
+ * and disabling when the queue empties, always holding its RH-IntrEp lock and
+ * then its ISR-DPC lock across the call (static, all four builds). Which is
+ * why nothing this driver runs under ISR-DPC may call the service
+ * (XHCI_EXTENSION.RootHubReportThroughDpc).
+ *
  * IRQL: DISPATCH_LEVEL.
  */
 /*
@@ -2966,12 +2976,20 @@ static VOID xhciRhArmFailed(PXHCI_EXTENSION ext, const XHCI_PORT_TIMEOUT *what)
  * Nothing is held back waiting for an enable that may never arrive: a change is
  * latched in the shadow either way, and every status query reports it.
  *
- * IRQL: <= DISPATCH_LEVEL. **Call with the controller lock released** - and here
- * that rule is not lock-order caution but a self-deadlock: the service calls
- * `RH_DisableIrq` straight back into this miniport, which takes the same
- * non-recursive spin lock.
+ * That is the NT 5.x shape. On NT 6.x the service does not call RH_DisableIrq
+ * itself - usbport's root-hub DPC does, under its RH-IntrEp and ISR-DPC locks
+ * (static, all four builds) - and the gate is driven from there; the
+ * decision below is the same on both tiers.
+ *
+ * The decision and the call are split so the event DPC on the Version 300
+ * tier can take the decision and report it through InterruptDpcEx's port bit
+ * instead of calling (XhciRootHubDeferredReport).
+ *
+ * IRQL: <= DISPATCH_LEVEL. **Call with the controller lock released** - on
+ * NT 5.x the service calls `RH_DisableIrq` straight back into this miniport,
+ * which takes the same non-recursive spin lock.
  */
-static VOID xhciRhAnnounce(PXHCI_EXTENSION ext, ULONG kick)
+static ULONG xhciRhAnnounceDecide(PXHCI_EXTENSION ext)
 {
     KIRQL oldIrql;
     ULONG announce;
@@ -2986,19 +3004,14 @@ static VOID xhciRhAnnounce(PXHCI_EXTENSION ext, ULONG kick)
         } else {
             ext->RootHubInvalidatesGated++;
         }
-    } else if (kick && (ext->Flags & XHCI_EXT_FLAG_RH_IRQ) != 0) {
-        /*
-         * Roadmap 24.4's kick (XhciRootHubDeferredWork): nothing changed, but
-         * arms are owed, and the scan this starts reaches RH_GetPortStatus,
-         * which makes them. Behind a closed gate a scan is already
-         * outstanding and does the same, so the gate is honoured here too.
-         */
-        ext->RootHubArmKicks++;
-        announce = 1;
     }
     XhciControllerLockRelease(oldIrql);
+    return announce;
+}
 
-    if (!announce) {
+static VOID xhciRhAnnounce(PXHCI_EXTENSION ext)
+{
+    if (!xhciRhAnnounceDecide(ext)) {
         return;
     }
     if (XhciRegPacket.UsbPortInvalidateRootHub == NULL) {
@@ -3095,7 +3108,7 @@ VOID XhciRhPortPollSweep(PXHCI_EXTENSION ext)
     if (owed) {
         XHCI_DBG_TEXT("root hub: a polled sweep found a change no event "
                       "announced");
-        xhciRhAnnounce(ext, 0);
+        xhciRhAnnounce(ext);
     }
 }
 #endif
@@ -3176,7 +3189,7 @@ VOID XhciRhGateWatchdog(PXHCI_EXTENSION ext)
      */
     (VOID)XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_RH_IRQ);
     XHCI_DBG_TEXT("root hub: notification gate forced open by the watchdog");
-    xhciRhAnnounce(ext, 0);
+    xhciRhAnnounce(ext);
 }
 #endif
 
@@ -3213,35 +3226,6 @@ static VOID xhciRhDrainArms(PXHCI_EXTENSION ext, ULONG mode)
     }
 }
 
-/*
- * Whether a DEFER context on the Version 300 tier leaves an arm owed that
- * the kick should get made: a port's or the command watchdog's. Always 0 on
- * the 200 tier and from an UNLOCKED context, which owe nothing.
- * IRQL: <= DISPATCH_LEVEL, controller lock released - it takes it.
- */
-static ULONG xhciRhKickOwed(PXHCI_EXTENSION ext, ULONG mode)
-{
-    KIRQL oldIrql;
-    ULONG hubPort;
-    ULONG owed;
-
-    if (mode == XHCI_ARM_UNLOCKED || !ext->ArmThroughExOnly) {
-        return 0;
-    }
-
-    XhciControllerLockAcquire(&oldIrql);
-    owed = ext->CommandArmOwed;
-    for (hubPort = 1; !owed && hubPort <= ext->RootHub.PortCount &&
-                      hubPort <= XHCI_MAX_ROOT_PORTS; hubPort++) {
-        if (ext->RootHub.Ports[hubPort - 1].ArmPending != 0 &&
-            ext->RootHub.Ports[hubPort - 1].Armed != XHCI_PORT_OP_NONE) {
-            owed = 1;
-        }
-    }
-    XhciControllerLockRelease(oldIrql);
-    return owed;
-}
-
 /* See the contract in src/xhci_hw.h. IRQL: <= DISPATCH_LEVEL, controller lock
  * released. */
 VOID XhciRootHubDeferredArms(PXHCI_EXTENSION ext)
@@ -3274,7 +3258,17 @@ VOID XhciRootHubDeferredWork(PXHCI_EXTENSION ext, ULONG armMode)
     }
 
     xhciRhDrainArms(ext, armMode);
-    xhciRhAnnounce(ext, xhciRhKickOwed(ext, armMode));
+    /*
+     * A DEFER context on the Version 300 tier may be holding usbport's
+     * timer-list lock (the feature and timer callbacks), and the service
+     * takes RH-IntrEp under it - the start of two cycles through the Ex arms
+     * (round 5, design record 05). So the change stays latched for the next
+     * context that holds nothing: the health poll, or the next event DPC's
+     * port bit.
+     */
+    if (armMode == XHCI_ARM_UNLOCKED || !ext->RootHubReportThroughDpc) {
+        xhciRhAnnounce(ext);
+    }
 
     /*
      * **And the device layer's drain, because every root-hub path that can
@@ -3291,16 +3285,29 @@ VOID XhciRootHubDeferredWork(PXHCI_EXTENSION ext, ULONG armMode)
      * DPC calling both explicitly costs nothing.
      */
     XhciSlotDeferredWork(ext, armMode);
+}
 
-    /*
-     * That pass may have submitted a command whose watchdog a DEFER context
-     * could only owe. The first announcement has usually closed usbport's
-     * gate by now, and then this one is honoured as closed: the scan that
-     * closed it reaches RH_GetPortStatus, which makes the arm.
-     */
-    if (xhciRhKickOwed(ext, armMode)) {
-        xhciRhAnnounce(ext, 1);
+/* See the contract in src/xhci_hw.h. IRQL: DISPATCH_LEVEL, the event DPC,
+ * controller lock released. */
+ULONG XhciRootHubDeferredReport(PXHCI_EXTENSION ext)
+{
+    ULONG report;
+
+    if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
+        return 0;
     }
+
+    xhciRhDrainArms(ext, XHCI_ARM_UNLOCKED);
+    report = xhciRhAnnounceDecide(ext);
+    if (report) {
+        KIRQL oldIrql;
+
+        XhciControllerLockAcquire(&oldIrql);
+        ext->RootHubChangesReported++;
+        XhciControllerLockRelease(oldIrql);
+    }
+    XhciSlotDeferredWork(ext, XHCI_ARM_UNLOCKED);
+    return report;
 }
 
 /*
@@ -4006,10 +4013,12 @@ ULONG XhciRootHubInit(PXHCI_EXTENSION ext, ULONG afterRestore)
  * has no hub port.
  *
  * **The announcement is decided here and made by the caller.**
- * UsbPortInvalidateRootHub is a usbport service and calls RH_DisableIrq straight
- * back into this miniport, so making it under this lock would self-deadlock on a
- * non-recursive spin lock. What happens here is `RootHubInvalidatesOwed++`; the
- * DPC calls XhciRootHubDeferredWork once its drain has released the lock.
+ * UsbPortInvalidateRootHub is a usbport service and on NT 5.x calls
+ * RH_DisableIrq straight back into this miniport, so making it under this lock
+ * would self-deadlock on a non-recursive spin lock. What happens here is
+ * `RootHubInvalidatesOwed++`; once the drain has released the lock the DPC calls
+ * XhciRootHubDeferredWork on NT 5.x, and on NT 6.x XhciRootHubDeferredReport,
+ * which reports it through InterruptDpcEx's port bit (round 5).
  *
  * IRQL: DISPATCH_LEVEL.
  */

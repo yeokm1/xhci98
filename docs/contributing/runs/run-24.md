@@ -2030,9 +2030,10 @@ callback, every timer callback) is owed to the next UNLOCKED context -
 `ArmPending` for a port, the new `CommandArmOwed` latch for the command
 watchdog - and a feature callback, a port timer or the recovery, which
 already announce, announce when an arm is owed (the kick) so usbport's
-root-hub peek makes it at once. The mode is an argument at every call, never
-a field. The Version 200 tier arms at once through the legacy service in
-both modes, as before. A refused Ex arm is counted (`AsyncArmsRefused`) and
+root-hub peek makes it at once; round 5 removed the kick (below, "Round 5 on
+the fixed build"). The mode is an argument at every call, never a field.
+The Version 200 tier arms at once through the legacy service in both modes,
+as before. A refused Ex arm is counted (`AsyncArmsRefused`) and
 treated as lost at once. Design record 05, "Where a timer may be armed", is
 the record; the cost is a port-1 resume through a virtual hub up to one poll
 interval late on NT 6.x at 1 or 2 (design record 12 section 11).
@@ -2155,3 +2156,200 @@ both. Two of its test gaps were closed - a promoted endpoint on a device
 usbport misreads as High Speed (a 4-microframe pipe still floors, a
 32-microframe one is Interval 5) and a reopen whose budget period moved
 while its pipe period did not (no reprogram). `test_init` 22,122 checks.
+
+## Round 5 on the fixed build (2026-09-28)
+
+24.3.4's owed legs, taken on the build that carries 24.4 and 24.5, with each
+fix's own re-read. Two defects stopped them, both fixed in the working tree
+the same evening; the rebuilt package has not yet been built or read, and
+every leg is retaken on it. Nothing in this section is ticked.
+
+### The build and the vehicle
+
+The `qemu` flavour of `f39f252`: x86 `xhci98.sys` sha256 `a5a62a30...`
+(`DriverEntry (built Sep 28 2026 19:42:47)`), amd64 `f027a2c6...`
+(`19:47:14`), each checked against the staged file before the first launch.
+Every guest started from a fresh image (`-Fresh`): the 9x guests from their
+no-driver snapshots, 2000 from `win2k-xonly-clean-install`, the NT guests as
+new overlays with the driver installed by its own INF. Development host A, up
+to five TCG guests at once, one agent per guest; recipe
+`out\t24-3-4\recipe-2434-r5.md`, reports `out\t24-3-4\r5-<guest>-report.md`
+and their evidence files (git-ignored). The two idle legs ran a control build
+of their own: `41038da` with `USB_MINIPORT_FLAGS_DISABLE_SS` removed, `qemu`
+flavour, sha256 `51413aaf...` (`built Sep 28 2026 13:50:44`).
+
+### What each guest read
+
+| Guest | Reached | Result | Report and evidence |
+|---|---|---|---|
+| Windows 7 SP1 x86, 4 vCPUs | value 0 | **hung** about 20 s after four devices were hot-plugged (a Full-Speed mouse on port 1, a High-Speed mouse on port 2, storage on 5, audio on 3), while the High-Speed mouse enumerated; before any disable/enable cycle. No bugcheck, `ResetControllerCalls` 0. The first defect below | `r5-win7-report.md`; `r5-win7-r5b-hang-{regs,stacks,symbols}.txt`, `r5-win7-r5b-ctr-hang-all.txt` |
+| Vista SP2 x86, 4 vCPUs | value 0 in full, value 1 in part | value 0 **passes**: the four devices bound, five Device Manager disable/enable cycles and a sixth, a remove and rescan, every device back each time; the 24.5 control (a High-Speed mouse on root port 4) `ep.open.ival=00030005` at 0 and at 1, `EndpointPeriodsPromoted` 0. At 1 the 25-cycle churn on port 1 **passes** (`VhubCreated` = `VhubDropped` = 25, opens 78/78, no refusal). Then the same four-device plug **hung**, the same deadlock as Windows 7; value 1's cycles and value 2 not taken | `r5-vista-report.md`; `r5-vista-r5c-hang-*.txt`, `r5-vista-s1-churn.txt` |
+| XP SP3 x86, 1 vCPU | values 0 and 1, value 2 in part | 0 **passes** (mouse usable in 1,145 ms, audio 1,232 ms, median). 1 **passes**: the Full-Speed mouse behind its virtual hub at Interval 6 with the TT pair naming the hub, the hidusbf ladder exact (stock `bInterval` 10 -> Interval 6; Default 4 -> 5; 500 Hz 2 -> 4; 1000 Hz 1 -> 3; no refusal), the 24.5 control `00030005` with nothing promoted. At 2 the keyboard was addressed in 5.2 s, and the audio plug behind virtual hub 3 **failed the controller**: the second defect below. Hidusbf and the 24.5 reading at 2 not taken | `r5-winxp-report.md`; `r5-winxp-s2-{ring,ctr}-FAIL.txt`, `r5-winxp-s2-debugcon-FAIL-tail.txt`, `r5-winxp-s1-hf-*.txt` |
+| Windows 2000 SP4 | values 1 and 2 | **passes, and 24.5 holds**: a High-Speed mouse behind virtual hub 4 at 2 opens at `ep.open.rate=00010004` (usbport's budget, `Period` 1) and `ep.open.ival=00030005` (Interval 5; round 2 read `00030000`), `EndpointPeriodsPromoted` 1, `EndpointPipePeriodsMissing` 0. The control at 1 is `00200004` / `00030005`, nothing promoted. The Full-Speed mouse behind its hub at Interval 6 at both values, eight hubs at 2, no refusal, the 24.4 counters 0 | `r5-win2k-report.md`; `r5-win2k-s2-{ring,ctr}-hs1.txt` |
+| XP x64 SP2, 4 vCPUs | values 1 and 2 | **24.5 holds** with the same numbers as 2000 (the old build read `00030000` for the same device), and the Full-Speed mouse behind its hub at Interval 6 at both values. At 1 the first plug of that mouse **never enumerated**: three of usbhub's attempts, 26 root-port resets, each with a stale root-hub timer, then the port disabled; a replug three minutes later enumerated at once. One boot at 2 was lost to the QEMU process exiting, cause not established, and retaken | `r5-winxp64-report.md`; `r5-winxp64-s1-ctr-m1fail.txt`, `r5-winxp64-s2-{ring,ctr}-hs1.txt` |
+| ME, SweetLow's stack | value 0 in part | **stopped**: the timing tool unplugged the audio device mid-enumeration, between `SET_ADDRESS` and usbport's reopen of EP0 at the new address; usbport then opened EP0 for the address whose record had just been torn down, the driver refused it (`OpenRefusals` 1), and ME's stack never reset a port again, with `Msgsrv32` not responding. The controller stayed running and its counters kept moving. Values 1 and 2 not taken | `r5-winme-report.md`; `r5-winme-s0-dbgcon-refusal.txt`, `r5-winme-s0-ctr-stuck.txt` |
+| 98 SE, SweetLow's stack | value 0 in part | **stopped**: the guest froze at the unplug of a Full-Speed mouse about 5 s after its plug, the sixth such unplug. The CPU looped at ring 0 in SweetLow's usbport and usbhub20, in a module whose bytes match XP's `hidusb.sys`, and in NTKERN; no sample fell in this driver, whose counters were frozen and consistent (no refusal, every transfer and command completed) and whose health poll had stopped being called. An A/B against the build before 24.4 is running; nothing is concluded from this leg yet | `r5-sweetlow-report.md`; `r5-sweetlow-s0-hang-{cpu,ring,ctr1,ctr2}.txt`, `ab-sweetlow-*.txt` |
+| 2000 SP4, control build (idle) | 0, 1, 1 with a mouse, 2 | the answer below | `r5-idle2k-report.md`; `r5-idle2k-*-usbregs.txt`, `r5-idle2k-i2ke-suspendpath.txt` |
+| 98 SE (NUSB 3.3), control build (idle) | value 0 | the control **idles** (halted from the desktop on, a keyboard unseen for 55 s), so the build can show the answer. The shutdown that followed hung for more than 8 minutes after the driver's `StopController` had returned, the vCPU busy in VMM, after one `ResumeController` and the shutdown's Suspend and Stop; whether that is the driver's or Windows 98's under QEMU is not established. The leg is continuing; values 1 and 2 are owed | `r5-idle98-report.md`; `r5-idle98-i98b-{usbregs,kbd,hang-regs}.txt` |
+
+Every guest that read 24.4's counters read `AsyncArmsDeferred`,
+`AsyncArmsRefused` and `RootHubArmKicks` 0 on NT 5.x and 9x, as the tier
+rule requires. On Vista every teardown left eight owed arms (twelve with five
+devices) between the disable and `StopController`, with nothing failing, and
+the churn at 1 moved `RootHubArmKicks` by 67 while owing no arm; both are
+recorded as the agent saw them.
+
+### The first defect: a root-hub deadlock on NT 6.x
+
+Both hangs are one lock-order inversion inside usbport, read from the hung
+guests' memory through the QEMU monitor and symbolised with `kd` (the
+"debugger" tag; `legal-provenance.md` section 4). One CPU was in `IsrDpc` ->
+this driver's `InterruptDpc` -> `XhciEventDpc` -> `XhciRootHubDeferredWork`
+-> `USBPORTSVC_InvalidateRootHub` -> `Ev_Rh_IntrEp_Invalidate`, holding
+usbport's ISR-DPC lock and spinning on its RH-IntrEp lock (Windows 7 x86
+FDO+0xBB8 and +0x310; Vista x86 +0xD28 and +0x2F8). Another was in
+usbport's root-hub DPC -> its worker -> the status queue's remove callback ->
+`MPRH_DisableIrq`, holding RH-IntrEp and spinning on the ISR-DPC lock. In
+both the announcement that hung was the event DPC's after a root-port reset
+completed.
+
+A static read of all four NT 6.x builds followed
+(`out\t24-4\static-24-4-deadlock.md`; the facts per build in
+`legal-provenance.md` section 4). usbport takes RH-IntrEp and then the
+ISR-DPC lock whenever it calls `RH_EnableIrq` or `RH_DisableIrq`, which on
+NT 6.x its root-hub queue drives and the service never does; it takes
+RH-IntrEp itself only while holding nothing else. So the service called from
+inside `InterruptDpcEx` can always meet a root-hub DPC on another CPU (cycle
+C1 of design record 05 section 3). The path is as old as the Version 300
+tier. The read found two more cycles that 24.4 made possible, through its Ex
+arms under the ISR-DPC and MP locks and the announcements made under the
+timer-list lock (C2 and C3), and found 24.4's acyclicity argument wrong on
+that point: it never followed RH-IntrEp -> ISR-DPC.
+
+Why rounds 2 and 3 never hit it is an inference, not a measurement. They
+plugged one device at a time on the build before 24.4. 24.4's kick queued a
+root-hub DPC on the CPU running usbhub's port request at every root-port
+reset; on QEMU a reset completes inside the `PORTSC` write, so the reset's
+own Port Status Change Event reached an event DPC on the interrupt CPU at
+nearly the same moment. Windows 7's hung boot shows two kick announcements
+straight after each `RH_SetFeaturePortReset`; it survived two resets and hung
+on the third, four devices plugged within 20 s.
+
+The fix is the owner's choice among the read's options: on the Version 300
+tier the event DPC reports a change through `InterruptDpcEx`'s port bit,
+which usbport's `IsrDpc` turns into the same invalidate after releasing its
+lock (`XhciRootHubDeferredReport`, flag `RootHubReportThroughDpc`, counter
+`RootHubChangesReported`); the root-hub feature callbacks, the port timers
+and the recovery only latch a change; the health poll or the next event DPC
+announces it; and the kick is gone (`RootHubArmKicks` is replaced by
+`RootHubChangesReported`). `RH_GetPortStatus` still makes owed arms and
+never announces. The Version 200 tier is unchanged. The cost is up to one
+poll interval (~500 ms) on NT 6.x for a change no hardware event follows - a
+virtual hub's at 1 or 2, the end of a host-driven resume - and for an arm a
+feature callback owes. Design record 05, "Where the root hub may be
+announced", and design record 12 section 11 carry it.
+
+### The second defect: run-24 finding 2, the interrupter re-arm on one CPU
+
+On 32-bit XP with one vCPU, at 2, the first plug of the audio device behind
+virtual hub 3 configured, streamed, and then ended in
+`interrupter re-arm: IE did not come back up`: the re-arm's escalation made
+the driver call `ResetController`, which marked the controller failed
+(`ctrl.failed.here`, `ResetControllerCalls` 1, `InterruptRearmFailures` 1,
+three recoveries lost, `USBCMD` left with `INTE` clear). No bugcheck. The
+stream was heavy with endpoint stops and aborts and iso ring underruns (372),
+and four `xfer.error=0001020E` (Ring Underrun on the iso OUT endpoint)
+preceded it; the same four appeared at 1 without harm. The report shows the
+escalation, not what each read-back saw. The reading taken for the fix is
+that the re-arm's write released an interrupt at once - an event was already
+waiting - and the ISR cleared `IE` again before each read-back, on every
+attempt.
+
+The fix: `XhciRearmInterrupter` takes an advance of `InterruptsClaimed` since
+a snapshot read before its write as delivery handed to the DPC the claim
+queues, and counts it in `InterruptArmsTakenByIsr`. The premise, that a claim
+always gets a later DPC pass that re-arms, was read on every usbport the
+targets run (`out\t24-3-4\static-rearm-isr-dpc.md`; `legal-provenance.md`
+section 4, static). It holds on every NT 5.x and 9x-era build, with one
+caveat: on 98 SE and ME it rests on NTKERN's DPC queue following the WDM
+contract, which was not read in the binary. On NT 6.x it holds for the DPC's
+own re-arm but not for an enable: usbport enables interrupts in
+`TurnUsbControllerOn` and in the restart after a failed `ResumeController`
+while `IsrDpc` still skips the miniport, so `XhciUnmaskInterrupts` takes no
+such rule. Design record 05 section 4 carries it.
+
+### The host suite and the review
+
+`test_init` 22,237 checks, every suite green. New: a never-reset net that no
+Version 300 start calls `UsbPortInvalidateRootHub` from inside the event DPC,
+a timer delivery or a modelled root-hub feature or endpoint callback;
+`test_nt6_rh_report`; the feature-callback vector now asserting no
+announcement; and re-arm vectors in which the real ISR runs between the
+`IMAN` write and its read-back - taken as delivery owed by the re-arm, and
+never by the unmask, which retries once and fails when every read-back
+loses. Nine mutations were each killed (`out\t24-4\mutations-finding2.txt`):
+six against the deadlock fix (the event DPC announcing, a DEFER context
+announcing on the 300 tier, the flag never set, the report ignoring the gate,
+the wrapper dropping the report, the report dropping the arms) and three
+against finding 2's rule, two of which were run against a claim rule in
+`XhciUnmaskInterrupts` that the static read then withdrew. A Codex review of
+the diff found no P1 or P2; its P3s were comments, and they are taken.
+
+### The idle answer: the hubs do not hold usbport's idle off
+
+On Windows 2000 SP4, with the control build and `DisableSelectiveSuspend` 0,
+the control idles right after start at 0, and a keyboard plugged later is
+never seen, so the reading is valid. At 1 with nothing plugged it idles the
+same way; a mouse plugged after the idle is not seen either, so no hub
+stands up until the controller is woken by hand (Device Manager, Scan for
+hardware changes), and once it has been, a mouse behind its hub keeps the
+controller running for three minutes, as any HID device with an open
+interrupt pipe would, and it idles again about 10 s after the unplug. At 2
+all eight hubs stand up and open, and usbport then selectively suspends each
+one - it aborts the status pipe, sends a `SET_FEATURE` the hub stalls, and
+suspends the root port - and suspends the controller about a second after
+start, as at 0. So the virtual hubs are no substitute for
+`USB_MINIPORT_FLAGS_DISABLE_SS`, and the flag stays. The Windows 98 SE half
+has shown the control idling at 0; its values 1 and 2 are owed.
+
+### For the owner
+
+- **ME wedges after a refused EP0 reopen.** An unplug between `SET_ADDRESS`
+  and usbport's EP0 reopen leaves usbport opening EP0 for an address whose
+  record is gone; the driver refuses by design, and ME's stack never resets a
+  port again. Whether ME would wedge without the refusal, or with another
+  status, is not established. The recipe now waits 30 s after every plug
+  before any unplug, so the retaken legs will not provoke it.
+- **Every device behind a virtual hub on 32-bit XP waits about 5 s twice.**
+  At 2 a mouse is usable in 10.4 s against 1.1 s at 0, and 12.3 s at 1;
+  Windows 2000 at 2 took 380 ms. The stamped trace puts one gap between the
+  first root-port reset's end and the next step (139 ms to 5,180 ms) and the
+  other between the second reset and the address (5,430 ms to 10,452 ms). The
+  agent's reading, that XP's usbhub waits out a timeout for the hub port's
+  reset-complete notice, is an inference; not diagnosed.
+- **NT 6.x can strand the interrupter at power-on** (static, pre-existing,
+  not fixed). An interrupt claimed inside `TurnUsbControllerOn` or the
+  restart after a failed resume queues an `IsrDpc` that skips the miniport,
+  and nothing re-arms `IE` until the next power transition. Whether a claim
+  lands there at runtime, and how often those two paths run, is not known.
+- **XP x64 missed an enumeration behind the on-demand hub at 1**, the NT 5.x
+  finding recorded earlier in this run, worse this time: three attempts
+  failed where round 1's succeeded on the second. The stale root-hub timers
+  point at the port-reset timer path; 24.4 changed nothing on NT 5.x
+  (`AsyncArmsDeferred` 0), but the agent could not rule the build out.
+- Also recorded, not yet read further: the 98 SE shutdown hang after an idle
+  and a resume on the control build, and the SweetLow freeze at an early
+  unplug, whose A/B is running.
+
+### What is owed
+
+The fixed source is built (`build-driver.cmd all`, `qemu -amd64`, `release
+-amd64`, every gate passed; `qemu` packages x86 `xhci98.sys` sha256
+`5b2411a4d5efa448db8bf460fb40a83708dff23a94c46e1beef7b4296e913483`, amd64
+`2e441e617db49a0c83e8a07e281a9858fd38141b9304e37b1d1ce7146c0222d1`, INFs
+unchanged) and staged, but not yet read on any guest. Every leg
+above is retaken on the rebuilt package from fresh images - the Vista and
+Windows 7 re-reads of 24.4 in both architectures under four vCPUs, the XP
+leg at 2 with its hidusbf and 24.5 readings, the 24.5 reading at 2 on the 9x
+stacks and ME, and the NT 5.x legs that passed, as the no-regression check -
+and the Windows 98 SE idle leg is finished on its control build.

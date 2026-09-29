@@ -172,6 +172,7 @@ InterruptMaskFailures	interrupt mask failures
 InterruptMaskDegraded	interrupt masks over a degraded window
 InterruptNextSofRequests	interrupt next-SOF requests
 InterruptUnmaskFailures	interrupt unmask failures
+InterruptArmsTakenByIsr	interrupter arms taken by an ISR claim
 InterruptRearmFailures	interrupter re-arm failures
 IsoCadenceMismatches	iso cadence mismatches - assumed interval
 IsoCadenceMismatchesDerived	iso cadence mismatches - derived interval
@@ -328,7 +329,7 @@ RingPool.AcquireFailuresCap	ring pool refusals - per-device cap
 RootHubInvalidates	root hub invalidates
 RootHubInvalidatesGated	root hub invalidates gated
 RootHubInvalidatesOwed	root hub invalidates owed
-RootHubArmKicks	root-hub announcements made to drain owed arms
+RootHubChangesReported	root-hub changes reported through the DPC bit
 HcInfo.ScratchpadCount	scratchpad buffers
 SetAddressIntercepts	SET_ADDRESS interceptions
 ShortPacketsTotal	short packets

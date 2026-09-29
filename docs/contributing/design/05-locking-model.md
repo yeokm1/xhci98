@@ -179,20 +179,97 @@ no miniport slot. The controller lock may be taken inside it - the
 suite's defensive re-entry vector does - and it may never be taken inside
 the controller lock; the host model counts either inversion as an error.
 
-**On NT 6.x the timer service adds usbport's timer-list lock to the picture**
-(roadmap 24.4; section 7, "Where a timer may be armed"). This driver takes it
-only through `UsbPortRequestAsyncCallbackEx` with its lock byte 0, with the
-controller lock released, from a context usbport reaches holding nothing, its
-MP lock or its ISR-DPC lock. That adds the orders MP lock -> timer-list lock
-and ISR-DPC lock -> timer-list lock. The kick a root-hub feature callback or a
-timer callback makes adds timer-list lock -> RH-IntrEp lock -> EpList, through
-`USBPORTSVC_InvalidateRootHub` (the announcement those callbacks already made).
-None of them closes a cycle: no usbport function takes the MP lock, the
-MP-call lock, the ISR-DPC lock or EpList while holding the timer-list lock,
-none takes the timer-list lock under the MP or ISR-DPC lock, and EpList and
-the timer-list lock are never nested in either direction (static, all four
-NT 6.x builds; `legal-provenance.md` section 4) - and this driver never arms
-under EpList.
+### On NT 6.x: usbport's own locks
+
+On Vista and Windows 7 two services put this driver inside usbport's lock
+order, so the order has to be read against usbport's locks as well as against
+the controller lock. The names below are the FDO-extension locks the static
+read found on all four builds (`legal-provenance.md` section 4 has the
+offsets and addresses): the MP lock, the MP-call lock, EpList, the ISR-DPC
+lock, the timer-list lock, the I/O-count lock, and the root-hub
+interrupt-endpoint lock (RH-IntrEp).
+
+The orders usbport takes itself that matter here (static, all four builds):
+
+- RH-IntrEp -> ISR-DPC. `MPRH_EnableIrq` and `MPRH_DisableIrq` take RH-IntrEp
+  (unless their caller already holds it) and then the ISR-DPC lock around the
+  miniport's `RH_EnableIrq` / `RH_DisableIrq`. They run from the root-hub
+  status queue's insert and remove callbacks (usbhub posting its
+  status-change IRP, or the queue emptying) and from the tail of usbport's
+  root-hub DPC, `Ev_Rh_IntrEp_Dpc`, on every run with an IRP queued.
+- RH-IntrEp -> EpList, the I/O-count lock and the RH-PDO pointer lock, in
+  `Ev_Rh_IntrEp_Invalidate`, the body of `USBPORTSVC_InvalidateRootHub`.
+- EpList -> MP, through `iSetGlobalEndpointStateTx` -> `MPf_PollEndpoint`'s
+  flag test.
+- timer-list -> I/O-count, and no other usbport lock under the timer-list
+  lock.
+- usbport never takes RH-IntrEp while it holds another spin lock of its own:
+  `IsrDpc` invalidates after releasing the ISR-DPC lock, and the other takers
+  hold nothing.
+
+What this driver adds to that:
+
+- MP -> timer-list and ISR-DPC -> timer-list. It takes the timer-list lock
+  only through `UsbPortRequestAsyncCallbackEx` with its lock byte 0, with the
+  controller lock released, from a context usbport reaches holding nothing,
+  its MP lock (a root-hub status query from `RootHub_Endpoint1_Peek`) or its
+  ISR-DPC lock (the event DPC); section 7, "Where a timer may be armed". It
+  never arms under EpList.
+- Nothing into RH-IntrEp. On the Version 300 tier it calls
+  `UsbPortInvalidateRootHub` only from a context in which usbport holds no
+  spin lock (section 7, "Where the root hub may be announced"). RH-IntrEp
+  stays a lock nothing is held under, and none of the orders above can close
+  a cycle through it.
+
+That last rule is what prevents three cycles. Each needs the service called
+from a context that holds a usbport lock, and all three were live in the build
+that carried 24.4 and 24.5 to the guests (static; `runs/run-24.md`, "Round 5
+on the fixed build"):
+
+| Cycle | Edges | CPUs | What breaks it |
+|---|---|---|---|
+| C1 | ISR-DPC -> RH-IntrEp (the event DPC announcing), then RH-IntrEp -> ISR-DPC (usbport's `MPRH_*`) | two: an event DPC, and a root-hub DPC's tail or queue removal | the event DPC reports the change through `InterruptDpcEx`'s port bit and never calls the service; `IsrDpc` makes the same invalidate with both locks released |
+| C2 | timer-list -> RH-IntrEp (a feature or timer callback announcing), then RH-IntrEp -> ISR-DPC, then ISR-DPC -> timer-list (the event DPC's Ex arm) | three | no DEFER context announces on the Version 300 tier: the change is latched for the health poll or the next event DPC |
+| C3 | MP -> timer-list (an Ex arm from `RH_GetPortStatus` under `Endpoint1_Peek`), then timer-list -> RH-IntrEp, RH-IntrEp -> EpList, EpList -> MP | four | the same change: timer-list -> RH-IntrEp no longer exists |
+
+C1 is the one observed. Windows 7 x86 at value 0 and Vista x86 at value 1,
+four vCPUs each, hung with one CPU in `IsrDpc` -> this driver's event DPC ->
+`USBPORTSVC_InvalidateRootHub`, spinning on RH-IntrEp, and another in
+`Ev_Rh_IntrEp_Dpc` -> `MPRH_DisableIrq`, spinning on the ISR-DPC lock (stacks
+read from guest memory through the QEMU monitor). C1 is as old as the Version
+300 tier. C2 and C3 came with 24.4's Ex arms, which put the timer-list lock
+under the ISR-DPC and MP locks; the announcement from feature and timer
+callbacks that completes them is older, and 24.4's announcement of owed arms
+made it more frequent. None of them can hang on one CPU, where a
+DISPATCH-level spin lock is never contended.
+
+The argument this section gave for 24.4 was that its orders are acyclic
+because no usbport function nests the timer-list lock with the MP, MP-call,
+ISR-DPC or EpList lock. That holds for the timer-list lock and is not enough:
+it did not follow RH-IntrEp's successors, which reach the ISR-DPC lock
+directly and the MP lock through EpList, and this driver took the timer-list
+lock under both.
+
+Which service call would reopen which cycle, so that none is added in
+passing:
+
+- `UsbPortInvalidateRootHub` from the event DPC on the Version 300 tier
+  reopens C1;
+- from a root-hub feature callback or a timer callback, C2 and C3;
+- from `RH_GetPortStatus` or `RH_GetHubStatus`, a shorter one,
+  MP -> RH-IntrEp -> EpList -> MP, since usbport's peek holds the MP lock
+  across both;
+- from an endpoint callback it takes EpList under EpList, the hang design
+  record 12 section 11 records.
+
+No NT 5.x analogue was found (static; high confidence on XP SP3 and XP x64,
+which have public symbols, medium on Windows 2000 SP4, NUSB and SweetLow's
+build): there `USBPORT_InvalidateRootHub` calls `RH_DisableIrq` holding no
+usbport lock, and on the two XP builds the lock `IsrDpc` holds across
+`InterruptDpc` is taken elsewhere only by the interrupt enable and disable
+wrapper; on the other three it was not followed as far (Windows 2000 SP4's
+lock has holders that call helpers nobody traced, and NUSB's offset was not
+pinned). The Version 200 tier announces from the event DPC as before.
 
 ## 4. The DIRQL exception
 
@@ -267,6 +344,38 @@ unmask paths: all ones is refused as an operand and as evidence, the write
 comes from the validated read, success is a read back, retries are bounded and
 stall-free, and a failure escalates through the DPC's existing post-lock reset
 request.
+
+One kind of lost read-back is not a failure. The DPC re-arms after its final
+`ERDP` write has released `EHB`, so an event already waiting raises the
+interrupt the moment `IE` lands, and the ISR, which the controller lock does
+not exclude, clears `IE` again before the read-back. The escalation that
+followed reset a working controller on 32-bit XP with one vCPU, during
+isochronous audio behind a virtual hub (run-24 finding 2; `runs/run-24.md`,
+"Round 5 on the fixed build"). A claim makes usbport queue its interrupt DPC
+again, and that pass re-arms, so `XhciRearmInterrupter` now takes an advance
+of `InterruptsClaimed` since a snapshot read before the write as delivery
+handed to that pass, and counts it in `InterruptArmsTakenByIsr`. It says
+nothing about the write itself - a shared-line claim of a pending `EINT` can
+come between the snapshot and a swallowed write - only that a pass that
+re-arms is coming, unless usbport disables interrupts first, in which case
+`IE` = 0 is what it asked for.
+
+That premise is a fact about usbport, read per build (static;
+`legal-provenance.md` section 4): every build queues its DPC on every claim
+(NT 6.x bar a rundown count that blocks only after `StopDevice`), and reads
+its interrupt-enabled state under the same lock its `EnableInterrupts` and
+`DisableInterrupts` wrapper holds. On Windows 98 SE
+and ME it also rests on NTKERN's DPC queue behaving as the WDM contract says,
+which was not read in the binary.
+
+`XhciUnmaskInterrupts` does not take the rule. On all four NT 6.x builds
+usbport enables interrupts in two power paths, `TurnUsbControllerOn` and the
+restart after a failed `ResumeController`, while a "not operational" bit its
+`IsrDpc` tests is still set, so the DPC a claim queues there skips the
+miniport and nothing re-arms. That window is also a hazard of its own, older
+than the rule and not fixed: a claim inside it leaves `IE` clear with `EHB`
+set, and the interrupter silent until the next power transition (static;
+whether a claim lands there at runtime is not known).
 
 The transferable rule is in the invariants: a path that becomes the
 only writer of an enable inherits the whole operand/read-back/escalation
@@ -357,7 +466,7 @@ plus the three non-callback entry points, not from recall.
 | `ResetController` | DISPATCH inside a usbport lock | mask, `ControllerFailed` | one locked transition: mask, then publish failure. Cannot wait, cannot reinitialize |
 | `CheckController` | DISPATCH, `MiniportSpinLock` | `USBSTS`, `MFINDEX`, command age | `XhciControllerHealthPoll` reads under the lock, escalates outside it; it also advances the poll clock every age and stall threshold is measured on (`XhciPollClockAdvance`, section 2) |
 | `InterruptService` | DIRQL | `USBSTS`, `IMAN` | section 4: stateless, monotone, no lock |
-| `InterruptDpc` | DISPATCH, `MiniportInterruptsSpinLock` | event ring, command state, `ERDP`, `IMAN` | whole drain under the lock; reset request after the release |
+| `InterruptDpc` | DISPATCH, `MiniportInterruptsSpinLock` | event ring, command state, `ERDP`, `IMAN` | whole drain under the lock; reset request after the release. On NT 6.x usbport holds its ISR-DPC lock here, so a root-hub change is reported through the return's port bit and never announced (section 3) |
 | `EnableInterrupts` | DISPATCH, `MiniportSpinLock` | `ERDP`, enables, `Flags` | under the lock; escalation after the release |
 | `DisableInterrupts` | DISPATCH, `MiniportSpinLock` | enables, `Flags` | under the lock; escalation after the release |
 | `FlushInterrupts` | <= DISPATCH, no usbport lock | none | counter only (section 5) |
@@ -367,9 +476,9 @@ plus the three non-callback entry points, not from recall.
 | `PollController`, `TakePortControl` | DISPATCH / any | none | trace only |
 | Root-hub status queries (`RH_GetRootHubData`, `RH_GetStatus`, `RH_GetPortStatus`, `RH_GetHubStatus`) | **PASSIVE with no usbport lock on NT 6.x** (issue 7, 2026-09-13: `USBPORT_RootHub_ClassCommand` calls `RH_GetPortStatus` and `RH_GetHubStatus` directly, static on Windows 7 x86 and x64, and this driver's callback log reads `irql=00` for all four on both); DISPATCH under `MiniportSpinLock` on NT 5.x as ReactOS documents it | port shadow, `PORTSC` | the controller lock around the read, the shadow update and the change acknowledgement; `RH_GetStatus` is a constant and takes nothing. The drain `RH_GetPortStatus` runs afterwards may not hand a completion to usbport on the 300 tier (section 7, "Where a completion may be handed over") |
 | Root-hub feature callbacks (the twelve `RH_Set/ClearFeature*`) | DISPATCH, no usbport lock established either way | port shadow, `PORTSC` | the controller lock; the write is composed and issued inside it, and nothing waits |
-| `RH_SetFeaturePortReset` / `RH_ClearFeaturePortSuspend` | DISPATCH, as above | port shadow, `PORTSC`, the armed generation | as above, plus `XhciRootHubDeferredWork` after the release; the timer arm and the announcement are both usbport services |
+| `RH_SetFeaturePortReset` / `RH_ClearFeaturePortSuspend` | DISPATCH, as above | port shadow, `PORTSC`, the armed generation | as above, plus `XhciRootHubDeferredWork` after the release; the timer arm and the announcement are both usbport services, and on the Version 300 tier both are owed to a context that holds no usbport lock (section 7) |
 | `xhciRhPortTimeout` (async) | DISPATCH, no usbport lock | port shadow, `PORTSC` | two pointer checks before the lock; epoch, hub port and generation all validated under it, and the generation is claimed before any register is read |
-| `RH_DisableIrq` / `RH_EnableIrq` | DISPATCH | `Flags` | one `XhciControllerUpdateFlags` transition; touches no register |
+| `RH_DisableIrq` / `RH_EnableIrq` | DISPATCH; on NT 6.x under usbport's RH-IntrEp and ISR-DPC locks (section 3) | `Flags` | one `XhciControllerUpdateFlags` transition; touches no register and calls no usbport service |
 | `RH_ChirpRootPort` | DISPATCH | a counter | no register, no lock |
 | `OpenEndpoint` / `ReopenEndpoint` / `SetEndpointState` / `PollEndpoint` | DISPATCH, `MiniportSpinLock`; `SetEndpointState` and `PollEndpoint` also under usbport's EpList lock on NT 6.x (reached through `USBPORT_SetGlobalEndpointState` and the HcInt worker's `iSetGlobalEndpointStateTx`, static), which is why they are two of the three callbacks the 300 tier delivers completions from (section 7) | endpoint record, its ring and queue, the quiesce state | the controller lock; the Configure/Stop/Set TR Dequeue commands are issued under it and nothing waits. A handle the record is bound to a different extension than is declined under the same lock (`xhciEpHandleSuperseded`, roadmap Phase 20, F1), except a `PAUSED` from a handle that still owns queued work (`xhciEpHandleOwnsWork`), which starts the stop that handle's abort needs |
 | `CloseEndpoint` / `GetEndpointState` / `QueryEndpointRequirements` | DISPATCH, `MiniportSpinLock` | the probe's counters only | the controller lock, taken inside `XhciProbeEndpoint` (`src/xhci_probe.c`); no record is read or written, and neither shipping build calls the first two |
@@ -452,6 +561,12 @@ not recursive (`docs/usb-xhci-info/usbport-miniport-abi.md` section 6). The
 host model performs that re-entry for this reason, so the double acquire would
 land in the suite's never-reset `commandLockErrorsTotal` rather than in an
 argument.
+
+That is NT 5.x's service. On NT 6.x the service does not call
+`RH_DisableIrq`: usbport's root-hub queue does, under its RH-IntrEp and
+ISR-DPC locks. The rule still holds there, and a second one joins it, about
+which context may make the call at all (section 3, and "Where the root hub
+may be announced" below).
 
 The device-initiated resume arms from inside the drain: `XhciRootHubPortEvent`
 decides it, sets `ArmPending`, and the DPC drains it after releasing the lock.
@@ -738,15 +853,15 @@ CPU runs inside `SubmitTransfer` cannot hide it), and
 `XhciRootHubDeferredWork(UNLOCKED)` and the status queries
 (`XhciRootHubDrainOwedArms`) make the ports'. The watchdog is armed only if
 the command it watches is still the outstanding one in the phase it
-watches; one that has completed or moved on is dropped. From a DEFER context
-that already announces - a root-hub feature callback, a port timer, the
-recovery - the announcement is made whether or not a change is latched when
-an arm is owed: that is the **kick**. `USBPORTSVC_InvalidateRootHub` queues
-usbport's `Ev_Rh_IntrEp` DPC, whose `RootHub_Endpoint1_Peek` calls
-`RH_GetHubStatus` and `RH_GetPortStatus` under the MP lock as soon as this
-CPU's IRQL drops, and they drain. A closed notification gate is honoured: a
-scan is then already outstanding and reaches the same queries.
-`RootHubArmKicks` counts kick-only announcements.
+watches; one that has completed or moved on is dropped. Nothing else gets an
+owed arm made. The first build of 24.4 also had a DEFER context that already
+announced - a root-hub feature callback, a port timer, the recovery -
+announce whenever an arm was owed, so that usbport's root-hub peek would make
+it at once. That announcement ran under the timer-list lock and closed C2
+and C3 (section 3), so it went with round 5's fix: an arm a DEFER context owes
+now waits for the next event DPC, root-hub status query or health poll. A
+reset's watchdog waits for little, because the reset's own completion raises
+a Port Status Change Event, and the event DPC that drains it makes the arm.
 
 **What it costs.** An arm owed from an endpoint callback waits for the next
 event DPC (every interrupt), root-hub peek or health poll: a resume through
@@ -754,7 +869,10 @@ a virtual hub's port 1 may end up to one poll interval (~500 ms) late on
 NT 6.x at switch 1 or 2, and a command watchdog pumped from `OpenEndpoint` or
 `SubmitTransfer` starts up to that much late (a 5 s net). The abort-wait
 re-arm from a timer callback waits the same; `XHCI_COMMAND_AGE_MS`,
-`XHCI_PORT_AGE_MS` and `XHCI_RECOVERY_DELIVERY_POLLS` all clear it.
+`XHCI_PORT_AGE_MS` and `XHCI_RECOVERY_DELIVERY_POLLS` all clear it. Since
+round 5 an arm a root-hub feature callback owes waits the same way: on an
+idle bus a host-driven resume's 20 ms timer can start up to one poll
+interval late.
 
 **What Ex adds.** It answers an NTSTATUS - 0, `0xC000009A` when its pool
 allocation fails - so on this tier a lost arm is reportable where the legacy
@@ -785,13 +903,66 @@ it is standing in for, and `SubmitDepth` marks `SubmitTransfer`); Ex never
 with its lock byte set - and six vectors (`test_nt6_arm_*`): the tier choice;
 a deferred command watchdog made by the next UNLOCKED drain and dropped for
 a command that ended first; the timeout's re-arm owed and made by the poll,
-and a refused arm re-owed; a feature callback's reset deferred, kicked and
-armed by the status query, the closed-gate case armed by the event DPC, a
+and a refused arm re-owed; a feature callback's reset deferred, announced by
+nothing, and armed by the next status query, the closed-gate case armed by
+the event DPC, a
 port timer that does not make another port's owed arm, and a refused port
 arm; the recovery armed from the poll and its self-test's watchdog owed; a
 port-1 resume and an `OpenEndpoint` and `SET_ADDRESS` behind a virtual hub.
-Eighteen mutations - each context's mode flipped, the drains and the kick
-removed - were run against them (`runs/run-24.md`, "24.4").
+Eighteen mutations, each flipping a context's mode or
+removing a drain, were run against them (`runs/run-24.md`, "24.4").
+
+### Where the root hub may be announced (round 5 of 24.3.4, 2026-09-28)
+
+The rule on the Version 300 tier: `UsbPortInvalidateRootHub` is called only
+from a context in which usbport holds no spin lock. usbport's own takers of
+RH-IntrEp hold nothing, so this keeps RH-IntrEp a lock nothing is held under
+(section 3). `XHCI_EXTENSION.RootHubReportThroughDpc` carries it, set in
+StartController from the version presented alone: the lock orders are
+usbport's whether or not it wrote the Ex slot, and `InterruptDpcEx`'s port
+bit exists on every Version 300 registration.
+
+| Context | usbport holds | What it does with a latched change |
+|---|---|---|
+| the health poll (`CheckController`, including the call usbport makes from its own root-hub DPC) | nothing | announces: `XhciRootHubDeferredWork` in UNLOCKED mode |
+| `ResumeController` | its suspend/resume semaphore or event only | announces, the same way |
+| the event DPC (`InterruptDpcEx`) | the ISR-DPC lock | makes the owed arms, takes the change under the same gate and bookkeeping as an announcement and returns it (`XhciRootHubDeferredReport`); `xhciInterruptDpc` sets `USBPORT_DPC_EX_PORT_CHANGE`, and usbport's `IsrDpc` calls `Ev_Rh_IntrEp_Invalidate` after releasing its lock. Counted in `RootHubChangesReported` |
+| root-hub feature callbacks, port timers, the recovery (DEFER) | the timer-list lock or nothing, and it cannot tell which | latches it in `RootHubInvalidatesOwed` and announces nothing |
+| `RH_GetPortStatus` / `RH_GetHubStatus` | the MP lock from `Endpoint1_Peek`, or nothing | drains the owed arms and never announces: the change goes back in the answer |
+| endpoint callbacks | the MP-call lock and EpList | never announce (design record 12 section 11) |
+
+On the Version 200 tier nothing moves: the event DPC and the DEFER contexts
+announce as they always have, and no NT 5.x usbport reads `InterruptDpcEx`'s
+return.
+
+A reported change costs nothing, since usbport makes the identical call a
+few hundred instructions later in the same DPC pass. A latched one waits for
+the next event DPC, which any interrupt brings, or for the health poll: up to
+one poll interval, about 500 ms. Most root-hub changes are followed by a Port
+Status Change Event and are reported at once. The ones that wait are those no
+hardware event follows: a change a virtual hub makes up at 1 or 2, and the
+end of a host-driven resume when no Port Link State Change follows the U0
+write (design record 12 section 11). The static read ranked two faster
+alternatives above this one - a driver-owned DPC queued by the DEFER
+contexts, which needs `KeInitializeDpc` and `KeInsertQueueDpc` on the import
+list and departs from the ABI record's "no private DPCs", and a No-Op command
+whose completion interrupt would run the event DPC - and the owner chose the
+latch.
+
+The notification gate rules a report as it rules a call. On NT 6.x usbport's
+root-hub queue drives it, not the service: it is open while usbhub has its
+status-change IRP queued (`docs/usb-xhci-info/usbport-miniport-abi.md`,
+section 4, "The root hub on NT 6.x").
+
+The suite holds it with one never-reset net - on a Version 300 start the
+service is never called from inside the event DPC, a timer delivery, or a
+modelled root-hub feature or endpoint callback - and `test_nt6_rh_report`: a
+Port Status Change Event reported through the bit and counted, a change a
+DEFER context latched reported by the next event DPC with no event of its
+own, the bit turned into the invalidate by the model of `IsrDpc`, the health
+poll announcing, a closed gate reporting nothing, and the Version 200 tier
+announcing from both contexts as before. Six mutations of the fix were each
+killed (`runs/run-24.md`, "Round 5 on the fixed build").
 
 ### Endpoint records and the quiescence machine (Phases 7a and 8)
 
@@ -887,7 +1058,7 @@ the driver image rather than in an endpoint extension usbport zeroes on
 | No usbport service and no bounded wait under the lock | `serviceUnderLockTotal`, one report function behind every service stub and wait hook, asserted once at the end |
 | The ISR never raises `IE` | vectors over both entry values of `IE`, plus the RsvdP-preservation vector |
 | The DPC re-arms only when both conditions hold | a stale-`TRUE` vector and a both-set vector |
-| The re-arm proves IE came back up | a transient all-ones read (must not read as "already armed"), a swallowed write caught by the read back, and an exhausted retry budget that escalates to a RESET request |
+| The re-arm proves IE came back up | a transient all-ones read (must not read as "already armed"), a swallowed write caught by the read back, and an exhausted retry budget that escalates to a RESET request; an ISR claim after the write taken as delivery owed to the next pass, and the unmask taking no claim as proof |
 | The lock is created once, in `DriverEntry` | `commandLockInits`, plus the "a start creates no lock" vector |
 | Actual mutual exclusion | not checkable here. The host suite is single-threaded: it sees the shape of the code around the lock, never a race. This is a review property plus the Phase 2d SMP VM |
 

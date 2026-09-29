@@ -5388,6 +5388,16 @@ typedef struct _XHCI_EXTENSION {
      */
     ULONG InterruptRearmFailures;
     ULONG RearmEscalations;
+    /*
+     * DPC re-arms that could not observe IE set but saw an ISR claim since
+     * the snapshot taken before the write (run-24 finding 2): usbport queues
+     * its interrupt DPC again on every claim, and that pass re-arms IE, so
+     * delivery is handed to it rather than lost. It does not say the write
+     * landed - a shared-line claim of a pending EINT can come between the
+     * snapshot and a swallowed write. Its own counter because it is not a
+     * failure, and a guest reading must be able to tell the rule fired.
+     */
+    ULONG InterruptArmsTakenByIsr;
     /* Refused unmasks that asked usbport for a controller reset. Distinct from
      * the failure count above because only an enable on an admitted controller
      * escalates - the same refusal during a teardown needs no rescue. */
@@ -6169,6 +6179,21 @@ typedef struct _XHCI_EXTENSION {
      */
     ULONG ArmThroughExOnly;
     /*
+     * **Version 300 tier: `UsbPortInvalidateRootHub` only from a context where
+     * usbport holds no spin lock** (round 5's deadlock, design record 05). On
+     * all four NT 6.x builds usbport takes its RH-IntrEp lock and then its
+     * ISR-DPC lock to call RH_Enable/DisableIrq, so the service called from
+     * the event DPC (under ISR-DPC) deadlocked Vista and Windows 7 against
+     * usbport's own root-hub DPC; called under the timer-list lock (feature
+     * and timer callbacks) it closes two longer cycles through the Ex arms
+     * (static). So the event DPC reports a change through InterruptDpcEx's
+     * port bit, which IsrDpc turns into the same invalidate with nothing held,
+     * and the DEFER contexts only latch it for the health poll or the next
+     * event. Set from the version presented, independent of the Ex slot; clear
+     * on every NT 5.x build, whose announcements are unchanged.
+     */
+    ULONG RootHubReportThroughDpc;
+    /*
      * The command watchdog a DEFER context owed: one at a time, as the engine
      * is. Written under the controller lock by the submit and the timeout's
      * re-arm, taken by XhciCommandDrainOwedArm, which arms it only if the
@@ -6193,7 +6218,8 @@ typedef struct _XHCI_EXTENSION {
     ULONG EndpointPipePeriodsMissing;
     ULONG AsyncArmsDeferred;    /* arms a DEFER context left owed             */
     ULONG AsyncArmsRefused;     /* Ex answered an error: the arm was lost     */
-    ULONG RootHubArmKicks;      /* announcements made only to drain owed arms */
+    ULONG RootHubChangesReported; /* announcements made through the DPC's
+                                   * port bit, not the service              */
     /*
      * The transfer a `UsbPortCompleteTransfer` call is inside right now, or
      * NULL. It is off both the endpoint queue and the completion list for the

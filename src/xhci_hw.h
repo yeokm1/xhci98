@@ -459,8 +459,10 @@ ULONG XhciUnmaskInterrupts(PXHCI_EXTENSION ext);
  * **not** update ext->InterruptDeliverySuppressed: that word is a claim about
  * both enables and this function has no evidence about USBCMD.INTE.
  *
- * Returns 1 if IE is confirmed set; 0 means the caller owes an escalation once
- * the controller lock is released, for the same reason a refused unmask does.
+ * Returns 1 if IE was observed set, or if an ISR claim since the write has
+ * handed delivery to the DPC it queued (run-24 finding 2; not proof the write
+ * landed); 0 means the caller owes an escalation once the controller lock is
+ * released, for the same reason a refused unmask does.
  * IRQL: DISPATCH_LEVEL, controller lock held.
  */
 ULONG XhciRearmInterrupter(PXHCI_EXTENSION ext);
@@ -753,9 +755,12 @@ BOOLEAN XhciIsr(PXHCI_EXTENSION ext);
  * The miniport DPC body: drain the event ring until the Cycle Bit says empty,
  * publishing ERDP as it goes and releasing Event Handler Busy at the end.
  * `enableInterrupts` is usbport's own interrupt-enabled state; when it is FALSE
- * this pass must not re-arm IMAN.IE. IRQL: DISPATCH_LEVEL.
+ * this pass must not re-arm IMAN.IE. Returns 1 when a root-hub change is owed
+ * and the caller must report it through InterruptDpcEx's port bit - only ever
+ * on the Version 300 tier (XHCI_EXTENSION.RootHubReportThroughDpc); 0
+ * otherwise. IRQL: DISPATCH_LEVEL.
  */
-VOID XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts);
+ULONG XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts);
 
 /*
  * Receive and discard whatever the event ring is already holding, returning how
@@ -928,8 +933,10 @@ ULONG XhciRootHubInit(PXHCI_EXTENSION ext, ULONG afterRestore);
  *
  * It can *decide* two things its caller must carry out after the lock is
  * released: an announcement, and - on the device-initiated resume path - a timer
- * arm. Both are recorded in the extension and drained by
- * XhciRootHubDeferredWork, which the DPC calls after its release.
+ * arm. Both are recorded in the extension and drained after the DPC's release:
+ * by XhciRootHubDeferredWork on NT 5.x, and on NT 6.x by
+ * XhciRootHubDeferredReport, which returns the announcement for InterruptDpcEx's
+ * port bit instead of making it (round 5).
  */
 VOID XhciRootHubPortEvent(PXHCI_EXTENSION ext, ULONG portId);
 
@@ -957,22 +964,40 @@ VOID XhciRootHubPortEvent(PXHCI_EXTENSION ext, ULONG portId);
  * XhciRootHubDeferredArms.
  *
  * `armMode` is the caller's context (XHCI_ARM_*, roadmap 24.4). From an
- * XHCI_ARM_DEFER context on the Version 300 tier the port arms stay owed,
- * and if any arm is owed - a port's or the command watchdog's - the
- * announcement is made whether or not a change is latched: it is the
- * **kick** that gets them made. `UsbPortInvalidateRootHub` queues usbport's
- * root-hub DPC, whose status-change peek calls `RH_GetHubStatus` and
- * `RH_GetPortStatus` under its MP lock - an UNLOCKED context, which drains
- * them (XhciRootHubDrainOwedArms) - as soon as this CPU's IRQL drops. The
- * callers that pass DEFER are ones that already announce (the root-hub
- * feature callbacks, the port timers, the recovery), so the kick adds no
- * context that announces; the order it creates, usbport's timer-list lock
- * then its RH-IntrEp lock then EpList, is one usbport never takes the other
- * way round (static, design record 05).
+ * XHCI_ARM_DEFER context on the Version 300 tier the port arms stay owed
+ * **and so does the announcement**: those callers - the root-hub feature
+ * callbacks, the port timers, the recovery - may hold usbport's timer-list
+ * lock, and on NT 6.x the service takes its RH-IntrEp lock, under which
+ * usbport takes its ISR-DPC lock; with the event DPC's Ex arm (ISR-DPC then
+ * timer-list) that is a cycle (round 5, static, design record 05). The
+ * next context that holds nothing makes both: the health poll here, or the
+ * event DPC through XhciRootHubDeferredReport. A reset owes nothing long,
+ * because its completion raises a Port Status Change Event; what waits for
+ * the poll is a change no hardware event follows (a virtual hub's, a
+ * resume's end), up to one poll interval.
+ *
+ * Not from the event DPC on the Version 300 tier either: it runs under
+ * usbport's ISR-DPC lock, and the service there deadlocked Vista and
+ * Windows 7 against usbport's own root-hub DPC (round 5). The event DPC calls
+ * XhciRootHubDeferredReport there instead.
  *
  * IRQL: <= DISPATCH_LEVEL.
  */
 VOID XhciRootHubDeferredWork(PXHCI_EXTENSION ext, ULONG armMode);
+
+/*
+ * XhciRootHubDeferredWork for the event DPC on the Version 300 tier
+ * (XHCI_EXTENSION.RootHubReportThroughDpc): the arms owed are made (an
+ * UNLOCKED context), the device layer is drained, and a latched change is
+ * taken under the same gate and bookkeeping as an announcement - but
+ * returned rather than announced. The caller reports it through
+ * InterruptDpcEx's port bit, which usbport's IsrDpc turns into the same
+ * `Ev_Rh_IntrEp_Invalidate` after releasing its ISR-DPC lock (static, all
+ * four NT 6.x builds). Returns 1 if a change must be reported.
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock released.
+ */
+ULONG XhciRootHubDeferredReport(PXHCI_EXTENSION ext);
 
 /*
  * XhciRootHubDeferredWork less the announcement, for the one caller usbport
@@ -996,7 +1021,7 @@ VOID XhciRootHubDeferredArms(PXHCI_EXTENSION ext);
  * The arms owed to an UNLOCKED context, port timers and the command
  * watchdog, made now - and only on the Version 300 tier, the one tier that
  * owes any (the 200 tier arms every one at its own site). For the root-hub
- * status queries, which usbport's peek reaches after the kick above.
+ * status queries, which usbport's peek reaches after every announcement.
  *
  * IRQL: <= DISPATCH_LEVEL, an XHCI_ARM_UNLOCKED context, controller lock
  * released.
