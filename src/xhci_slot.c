@@ -11653,6 +11653,17 @@ static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
          * was wrong.
          */
         ext->DeferredReentries++;
+        /*
+         * A locked pass turned away here was a delivery opportunity - on the
+         * Version 300 tier often the one a soft interrupt was asked for - and
+         * the pass holding the drain may be one that cannot deliver. It is
+         * owed again, and that pass's end asks for it while the list is still
+         * non-empty (XHCI_EXTENSION.SoftInterruptOwed; Codex round 1).
+         */
+        if (admit == XHCI_DELIVER_LOCKED && ext->CompletionHead != NULL &&
+            ext->DeliverUnderUsbportLockOnly && !ext->DeliverPerEndpointOnly) {
+            ext->SoftInterruptOwed = 1;
+        }
         XhciControllerLockRelease(oldIrql);
         return;
     }

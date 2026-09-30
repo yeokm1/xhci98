@@ -6175,15 +6175,18 @@ typedef struct _XHCI_EXTENSION {
      * a minute per hub (the r10g dump's exception history, debugger).
      *
      * `SoftInterruptOwed` is set, under the lock, when a virtual hub's
-     * completion joins the list on this tier; the pass that ends with the
+     * completion joins the list on this tier, and again when a locked pass
+     * (PollEndpoint) is turned away by `DeferredBusy`, since the pass holding
+     * the drain may be one that cannot deliver; the pass that ends with the
      * list still non-empty clears it and calls
      * `UsbPortInvalidateController(SOFT_INTERRUPT)`, which on NT 6.x arms
      * usbport's timer whose DPC queues its own IsrDpc (Win7 x86
      * `USBPORT_InvalidateController` type 3 -> `USBPORT_SimulateInterrupt`,
-     * static). That DPC reaches InterruptDpcEx, whose TRANSFER_WORK signals
-     * the HcInt pass, and PollEndpoint delivers under usbport's lock. Not on
-     * the Version 200 tier, where `DeliverPerEndpointOnly` asks usbport to
-     * poll the endpoint instead. The fallback stays as the net.
+     * static). IsrDpc calls InterruptDpcEx and then signals the HcInt pass
+     * unconditionally (the note at xhciInterruptDpc), and that pass's
+     * PollEndpoint delivers under usbport's lock. Not on the Version 200
+     * tier, where `DeliverPerEndpointOnly` asks usbport to poll the endpoint
+     * instead. The fallback stays as the net.
      */
     ULONG SoftInterruptOwed;
     ULONG SoftInterruptRequests;

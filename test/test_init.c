@@ -34251,6 +34251,29 @@ static void test_vhub_nt6_answer_asks_for_a_soft_interrupt(void)
     CHECK_EQ(ext.CompletionsDeliveredLocked, locked + 1, "locked");
     CHECK_EQ(ext.CompletionFallbackPolls, fallback, "with no fallback");
 
+    /*
+     * Codex round 1: the PollEndpoint the interrupt produced finds the drain
+     * held by a pass that cannot deliver. Turned away, it owes the interrupt
+     * again, and the holder's end asks for it.
+     */
+    (void)vhub_control(&vhubEp0, 0xA3, 0x00, 0, 1, 4);
+    CHECK_EQ(ext.CompletionsOwed, 1, "(a second answer parked)");
+    invalidateCalls = 0;
+    completions = completeTransferCalls;
+    ext.DeferredBusy = 1;
+    XhciRegPacket.PollEndpoint(&ext, &vhubEp0);
+    CHECK_EQ(completeTransferCalls, completions,
+             "a PollEndpoint turned away by a busy drain delivers nothing");
+    CHECK_EQ(ext.SoftInterruptOwed, 1, "and owes the interrupt again");
+    ext.DeferredBusy = 0;
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
+    CHECK_EQ(invalidateCalls, 1, "which the holder's end asks for");
+    CHECK_EQ(invalidateType, USBPORT_INVALIDATE_CONTROLLER_SOFT_INTERRUPT,
+             "a soft one");
+    XhciRegPacket.PollEndpoint(&ext, &vhubEp0);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "and the next PollEndpoint delivers it");
+
     /* The pass that delivers everything asks for nothing. */
     invalidateCalls = 0;
     XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
