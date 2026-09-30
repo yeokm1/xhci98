@@ -8237,10 +8237,17 @@ static MPSTATUS xhciVhubSubmit(PXHCI_EXTENSION ext,
     ULONG i;
 
     hubPort = endpoint->VhubPort;
+    /*
+     * The two failures below are a virtual hub's answers too, parked by the
+     * generic helpers: tagged and owed their soft interrupt after the helper
+     * queues them, which leaves the helpers a real device uses untouched
+     * (Codex round 3).
+     */
     if (isoParams != NULL) {
         ext->VhubTransfersFailed++;
         xhciDevFailIsoTransfer(ext, endpoint, transfer, parameters, isoParams,
                                XHCI_USBD_STATUS_INVALID_PIPE_HANDLE);
+        xhciVhubOweSoftInterrupt(ext, transfer);
         return MP_STATUS_SUCCESS;
     }
     if (ext->VhubConfig.Applied == XHCI_VHUB_MODE_OFF || hubPort == 0 ||
@@ -8251,6 +8258,7 @@ static MPSTATUS xhciVhubSubmit(PXHCI_EXTENSION ext,
         ext->VhubTransfersFailed++;
         xhciDevFailTransfer(ext, endpoint, transfer, parameters,
                             XHCI_USBD_STATUS_CANCELED);
+        xhciVhubOweSoftInterrupt(ext, transfer);
         return MP_STATUS_SUCCESS;
     }
     if (!xhciDevAdmitted(ext)) {

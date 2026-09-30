@@ -34248,6 +34248,8 @@ static void test_vhub_submit_never_announces(void)
  * with no fallback. The Version 200 tier asks for the endpoint's poll instead,
  * and makes no such request.
  */
+static XHCI_ENDPOINT vhubStaleEp0;
+
 static void test_vhub_nt6_answer_asks_for_a_soft_interrupt(void)
 {
     ULONG completions;
@@ -34373,6 +34375,25 @@ static void test_vhub_nt6_answer_asks_for_a_soft_interrupt(void)
     CHECK_EQ(invalidateCalls, 1, "and asks for its interrupt");
     CHECK_EQ(invalidateType, USBPORT_INVALIDATE_CONTROLLER_SOFT_INTERRUPT,
              "a soft one");
+    XhciRegPacket.PollEndpoint(&ext, &vhubPipe);
+    CHECK_EQ(ext.CompletionsOwed, 0, "(collected)");
+
+    /*
+     * Codex round 3: a transfer through a displaced handle - a record the
+     * binding no longer names - is failed as cancelled, and that failure is
+     * a virtual hub's answer too.
+     */
+    vhubStaleEp0 = vhubEp0;
+    invalidateCalls = 0;
+    completions = completeTransferCalls;
+    (void)vhub_control(&vhubStaleEp0, 0x80, 0x06, 0x0100, 0, 18);
+    CHECK_EQ(completeTransferCalls, completions,
+             "a displaced handle's failure is parked");
+    CHECK_EQ(invalidateCalls, 1, "and asks for its interrupt");
+    XhciRegPacket.PollEndpoint(&ext, &vhubStaleEp0);
+    CHECK_EQ(completeTransferCalls, completions + 1, "(delivered)");
+    CHECK_EQ(lastCompletedStatus, (LONG)XHCI_USBD_STATUS_CANCELED,
+             "as cancelled");
 
     ext.DeliverPerEndpointOnly = 1;
     vhub_reset_registry();
