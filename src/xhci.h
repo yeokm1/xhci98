@@ -3488,6 +3488,13 @@ typedef struct _XHCI_TRANSFER {
  * transfer in the completion list keeps pointing at the old binding.
  */
 #define XHCI_XFER_FLAG_ISOCH        0x00000008UL
+/*
+ * Task 24.3.4, round 10. A virtual hub answered this transfer; while one such
+ * is parked on the completion list the Version 300 tier owes a soft interrupt
+ * (XHCI_EXTENSION.SoftInterruptOwed). Read off the transfer, like ISOCH, so a
+ * list holding only real devices' completions never asks for one.
+ */
+#define XHCI_XFER_FLAG_VHUB         0x00000010UL
 
 /* ------------------------------------------------------------------ */
 /* 9-A.1: the isochronous group's storage                              */
@@ -6176,9 +6183,10 @@ typedef struct _XHCI_EXTENSION {
      *
      * `SoftInterruptOwed` is set, under the lock, when a virtual hub's
      * completion joins the list on this tier, and again when a locked pass
-     * (PollEndpoint) is turned away by `DeferredBusy`, since the pass holding
-     * the drain may be one that cannot deliver; the pass that ends with the
-     * list still non-empty clears it and calls
+     * (PollEndpoint) is turned away by `DeferredBusy` while one is parked,
+     * since the pass holding the drain may be one that cannot deliver; the
+     * pass that ends with a virtual hub's answer (`XHCI_XFER_FLAG_VHUB`) still
+     * parked clears it and calls
      * `UsbPortInvalidateController(SOFT_INTERRUPT)`, which on NT 6.x arms
      * usbport's timer whose DPC queues its own IsrDpc (Win7 x86
      * `USBPORT_InvalidateController` type 3 -> `USBPORT_SimulateInterrupt`,

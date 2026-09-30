@@ -7830,14 +7830,34 @@ static MPSTATUS xhciSlotSubmitIsoNonDefault(
 /*
  * A virtual hub's completion is parked on the Version 300 tier with nothing
  * on the bus to interrupt for it, so the pass that leaves it parked asks
- * usbport for a soft interrupt (XHCI_EXTENSION.SoftInterruptOwed). Called
- * with the lock held. IRQL: any.
+ * usbport for a soft interrupt (XHCI_EXTENSION.SoftInterruptOwed). The
+ * transfer is marked on every tier; only this tier owes. Called with the
+ * lock held. IRQL: any.
  */
-static VOID xhciVhubOweSoftInterrupt(PXHCI_EXTENSION ext)
+static VOID xhciVhubOweSoftInterrupt(PXHCI_EXTENSION ext,
+                                     PXHCI_TRANSFER transfer)
 {
+    transfer->Flags |= XHCI_XFER_FLAG_VHUB;
     if (ext->DeliverUnderUsbportLockOnly && !ext->DeliverPerEndpointOnly) {
         ext->SoftInterruptOwed = 1;
     }
+}
+
+/*
+ * Is a virtual hub's answer still parked? What a soft interrupt is owed for
+ * (Codex round 2: never for a list holding only real devices' completions).
+ * Called with the lock held. IRQL: any.
+ */
+static ULONG xhciCompletionsHoldVhub(PXHCI_EXTENSION ext)
+{
+    PXHCI_TRANSFER walk;
+
+    for (walk = ext->CompletionHead; walk != NULL; walk = walk->Next) {
+        if ((walk->Flags & XHCI_XFER_FLAG_VHUB) != 0) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /*
@@ -7853,7 +7873,7 @@ static VOID xhciVhubComplete(PXHCI_EXTENSION ext,
 {
     xhciDevStampTransfer(endpoint, transfer, parameters, usbdStatus);
     transfer->BytesTransferred = bytes;
-    xhciVhubOweSoftInterrupt(ext);
+    xhciVhubOweSoftInterrupt(ext, transfer);
     xhciDevOweCompletion(ext, transfer);
 }
 
@@ -7897,7 +7917,7 @@ VOID XhciSlotVhubPipe(PXHCI_EXTENSION ext, ULONG hubPort, ULONG cancel)
     }
     bind->Held = NULL;
     bind->HeldVa = NULL;
-    xhciVhubOweSoftInterrupt(ext);
+    xhciVhubOweSoftInterrupt(ext, transfer);
     xhciDevOweCompletion(ext, transfer);
 }
 
@@ -11657,11 +11677,13 @@ static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
          * A locked pass turned away here was a delivery opportunity - on the
          * Version 300 tier often the one a soft interrupt was asked for - and
          * the pass holding the drain may be one that cannot deliver. It is
-         * owed again, and that pass's end asks for it while the list is still
-         * non-empty (XHCI_EXTENSION.SoftInterruptOwed; Codex round 1).
+         * owed again while a virtual hub's answer is still parked, and that
+         * pass's end asks for it (XHCI_EXTENSION.SoftInterruptOwed; Codex
+         * rounds 1 and 2 - a list of real devices' completions owes nothing).
          */
-        if (admit == XHCI_DELIVER_LOCKED && ext->CompletionHead != NULL &&
-            ext->DeliverUnderUsbportLockOnly && !ext->DeliverPerEndpointOnly) {
+        if (admit == XHCI_DELIVER_LOCKED &&
+            ext->DeliverUnderUsbportLockOnly && !ext->DeliverPerEndpointOnly &&
+            xhciCompletionsHoldVhub(ext)) {
             ext->SoftInterruptOwed = 1;
         }
         XhciControllerLockRelease(oldIrql);
@@ -11947,7 +11969,7 @@ static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
      */
     XhciControllerLockAcquire(&oldIrql);
     ext->DeferredBusy = 0;
-    softInterrupt = (ext->SoftInterruptOwed && ext->CompletionHead != NULL)
+    softInterrupt = (ext->SoftInterruptOwed && xhciCompletionsHoldVhub(ext))
                         ? 1UL : 0UL;
     ext->SoftInterruptOwed = 0;
     if (softInterrupt) {

@@ -21185,6 +21185,60 @@ static void test_slot_completion_fallback_poll(void)
 }
 
 /*
+ * **The soft interrupt is a virtual hub's only** (Codex round 2): on the
+ * Version 300 tier a real device's completion parked behind a busy drain -
+ * its PollEndpoint turned away - owes none, and no pass asks for one. Its
+ * delivery is the next interrupt's, as before the round-10 fix.
+ */
+static void test_slot_completion_busy_drain_owes_no_soft_interrupt(void)
+{
+    PXHCI_DEVICE dev;
+    PXHCI_ENDPOINT_RECORD record;
+    ULONG completions;
+
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                       USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
+    deliver_events();
+    record = &dev->Endpoints[0];
+    (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
+                          &slotSgList);
+
+    ext.DeliverUnderUsbportLockOnly = 1;
+    ext.DeliverPerEndpointOnly = 0;
+    invalidateCalls = 0;
+    completions = completeTransferCalls;
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
+                     XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(5) | XHCI_TRB_EP_ID(3));
+    (void)XhciIsr(&ext);
+    (void)XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(ext.CompletionsOwed, 1, "(parked)");
+    CHECK_EQ(invalidateCalls, 0, "a real device's completion asks for nothing");
+
+    ext.DeferredBusy = 1;
+    XhciRegPacket.PollEndpoint(&ext, &slotEndpoint2);
+    CHECK_EQ(completeTransferCalls, completions, "(turned away)");
+    CHECK_EQ(ext.SoftInterruptOwed, 0, "and owes no soft interrupt");
+    ext.DeferredBusy = 0;
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
+    CHECK_EQ(invalidateCalls, 0, "so no pass asks for one");
+    /* A debt whose virtual hub answer was delivered meanwhile. */
+    ext.SoftInterruptOwed = 1;
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
+    CHECK_EQ(invalidateCalls, 0,
+             "nor does a debt with no virtual hub answer still parked");
+    CHECK_EQ(ext.SoftInterruptOwed, 0, "which is dropped");
+
+    XhciRegPacket.PollEndpoint(&ext, &slotEndpoint2);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "(the next PollEndpoint delivers it)");
+    ext.DeliverPerEndpointOnly = 1;
+    ext.DeliverUnderUsbportLockOnly = 0;
+}
+
+/*
  * **Issue 8: per endpoint, not merely under a lock.** With
  * `DeliverPerEndpointOnly` set, PollEndpoint for one endpoint leaves another
  * endpoint's completion parked - usbport holds only the polled endpoint's lock,
@@ -35477,6 +35531,7 @@ int main(void)
     test_slot_abort_after_the_record_is_released();
     test_slot_completion_waits_for_poll_endpoint();
     test_slot_completion_fallback_poll();
+    test_slot_completion_busy_drain_owes_no_soft_interrupt();
     test_slot_completion_locked_contexts_and_forced();
     test_slot_completion_per_endpoint_only();
     test_slot_completion_holds_for_a_pass_after_the_bracket();
