@@ -34185,6 +34185,123 @@ static void test_vhub_submit_never_announces(void)
 }
 
 /*
+ * **Round 10: on the Version 300 tier a virtual hub's answer asks usbport for
+ * a soft interrupt** (XHCI_EXTENSION.SoftInterruptOwed). Nothing on the bus
+ * interrupts for it, so without the request it waited for the fallback, and
+ * usbhub's 2000 ms reset timer ran out across the three answers its port-1
+ * reset needs. The request is made once, outside the controller lock; the
+ * simulated interrupt's DPC reports transfer work and PollEndpoint delivers,
+ * with no fallback. The Version 200 tier asks for the endpoint's poll instead,
+ * and makes no such request.
+ */
+static void test_vhub_nt6_answer_asks_for_a_soft_interrupt(void)
+{
+    ULONG completions;
+    ULONG requests;
+    ULONG fallback;
+    ULONG locked;
+    ULONG result;
+    ULONG i;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    vhub_plug(2, 1);                                /* Full Speed */
+    vhub_enumerate_hub(2, 1);
+    deliver_after_submit();
+    CHECK_EQ(ext.CompletionsOwed, 0, "(nothing parked)");
+
+    /* The Version 200 tier: the endpoint's poll, no soft interrupt. */
+    CHECK_EQ(ext.DeliverPerEndpointOnly, 1, "(the harness starts on 200)");
+    invalidateCalls = 0;
+    requests = ext.SoftInterruptRequests;
+    completions = completeTransferCalls;
+    (void)vhub_control(&vhubEp0, 0xA3, 0x00, 0, 1, 4);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "on 200 the endpoint's poll delivers the answer");
+    CHECK_EQ(invalidateCalls, 0, "and usbport is asked for no interrupt");
+    CHECK_EQ(ext.SoftInterruptRequests, requests, "(none counted)");
+
+    /* The Version 300 tier. */
+    ext.DeliverPerEndpointOnly = 0;
+    invalidateCalls = 0;
+    invalidateType = 0;
+    invalidateUnderLock = 0;
+    fallback = ext.CompletionFallbackPolls;
+    locked = ext.CompletionsDeliveredLocked;
+    completions = completeTransferCalls;
+    (void)vhub_control(&vhubEp0, 0xA3, 0x00, 0, 1, 4);   /* GET_PORT_STATUS(1) */
+    CHECK_EQ(completeTransferCalls, completions,
+             "on 300 the answer is parked");
+    CHECK_EQ(invalidateCalls, 1, "and usbport is asked for one interrupt");
+    CHECK_EQ(invalidateType, USBPORT_INVALIDATE_CONTROLLER_SOFT_INTERRUPT,
+             "a soft one");
+    CHECK_EQ(invalidateUnderLock, 0, "outside the controller lock");
+    CHECK_EQ(ext.SoftInterruptRequests, requests + 1, "(counted)");
+    CHECK_EQ(ext.SoftInterruptOwed, 0, "and nothing is still owed");
+
+    /* usbport's timer DPC queues IsrDpc, which calls InterruptDpcEx. */
+    result = XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(result & USBPORT_DPC_EX_TRANSFER_WORK,
+             USBPORT_DPC_EX_TRANSFER_WORK,
+             "the simulated interrupt's DPC reports transfer work");
+    CHECK_EQ(invalidateCalls, 1, "and asks for no second interrupt");
+    XhciRegPacket.PollEndpoint(&ext, &vhubEp0);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "and the HcInt pass's PollEndpoint delivers it");
+    CHECK_EQ(ext.CompletionsDeliveredLocked, locked + 1, "locked");
+    CHECK_EQ(ext.CompletionFallbackPolls, fallback, "with no fallback");
+
+    /* The pass that delivers everything asks for nothing. */
+    invalidateCalls = 0;
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
+    CHECK_EQ(invalidateCalls, 0, "an empty list asks for nothing");
+
+    /*
+     * The hub's own status-change transfer. A change still latched completes
+     * it at the submit, parked and asked for like any answer; PollEndpoint
+     * collects it, and the pipe is armed again until one is held.
+     */
+    for (i = 0; i < 4; i++) {
+        invalidateCalls = 0;
+        CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe armed)");
+        deliver_after_submit();
+        if (ext.VhubBind[1].Held != NULL) {
+            break;
+        }
+        CHECK_EQ(invalidateCalls, 1,
+                 "a pipe answered at its submit asks for an interrupt");
+        XhciRegPacket.PollEndpoint(&ext, &vhubPipe);
+        CHECK_EQ(ext.CompletionsOwed, 0, "(collected)");
+        /* usbhub acknowledges port 1's changes, as it would. */
+        (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+        XhciRegPacket.PollEndpoint(&ext, &vhubEp0);
+        (void)vhub_control(&vhubEp0, 0x23, 0x01, 20, 1, 0);
+        XhciRegPacket.PollEndpoint(&ext, &vhubEp0);
+    }
+    CHECK(ext.VhubBind[1].Held != NULL, "(the pipe is held)");
+    CHECK_EQ(ext.CompletionsOwed, 0, "(nothing parked)");
+
+    /* The device leaves: the change completes the held pipe. */
+    invalidateCalls = 0;
+    completions = completeTransferCalls;
+    mmio[HC_PORTSC(vhub_xport(2)) / 4] &=
+        ~(XHCI_PORTSC_CCS | XHCI_PORTSC_PED | XHCI_PORTSC_SPEED_MASK);
+    mmio[HC_PORTSC(vhub_xport(2)) / 4] |= XHCI_PORTSC_CSC;
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(2) << 24, 0);
+    deliver_events();
+    CHECK(ext.VhubBind[1].Held == NULL, "the change took the held pipe");
+    CHECK_EQ(completeTransferCalls, completions,
+             "the pipe's completion is parked too");
+    CHECK_EQ(ext.CompletionsOwed, 1, "(one parked)");
+    CHECK_EQ(invalidateCalls, 1, "and asks for its interrupt");
+    CHECK_EQ(invalidateType, USBPORT_INVALIDATE_CONTROLLER_SOFT_INTERRUPT,
+             "a soft one");
+
+    ext.DeliverPerEndpointOnly = 1;
+    vhub_reset_registry();
+}
+
+/*
  * **At 1 an unplug retires the hub, with no disable from usbport** (task
  * 24.3.4's Windows 7 capture): NT 6.x usbhub removes a disconnected device
  * without CLEAR_FEATURE(PORT_ENABLE), and the hub left Present kept address
@@ -35451,6 +35568,7 @@ int main(void)
     test_vhub_always_unplug_is_port1s_change();
     test_vhub_always_recovery_keeps_the_hub();
     test_vhub_submit_never_announces();
+    test_vhub_nt6_answer_asks_for_a_soft_interrupt();
     test_vhub_on_demand_unplug_retires_the_hub();
     test_vhub_disable_inside_a_port1_reset();
     test_vhub_disable_inside_a_reset_no_record_poll_first();

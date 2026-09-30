@@ -3134,6 +3134,8 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
     XHCI_DBG_VALUE_CHANGED("vhub transfers failed", ext->VhubTransfersFailed);
     XHCI_DBG_VALUE_CHANGED("vhub pipe completions", ext->VhubPipeCompletions);
     XHCI_DBG_VALUE_CHANGED("vhub pipe cancels", ext->VhubPipeCancels);
+    XHCI_DBG_VALUE_CHANGED("soft interrupts asked for parked vhub answers",
+                           ext->SoftInterruptRequests);
     XHCI_DBG_VALUE_CHANGED("vhub resets held", ext->VhubResetsHeld);
     XHCI_DBG_VALUE_CHANGED("vhub forced connects", ext->VhubForcedConnects);
     XHCI_DBG_VALUE_CHANGED("vhub TT pairs naming a hub", ext->VhubTtNamed);

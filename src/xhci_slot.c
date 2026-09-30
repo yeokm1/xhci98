@@ -7828,6 +7828,19 @@ static MPSTATUS xhciSlotSubmitIsoNonDefault(
     XHCI_VHUB_BCD_CALL(XHCI_VHUB_BCD_OF, (XHCI_VER_CSV))
 
 /*
+ * A virtual hub's completion is parked on the Version 300 tier with nothing
+ * on the bus to interrupt for it, so the pass that leaves it parked asks
+ * usbport for a soft interrupt (XHCI_EXTENSION.SoftInterruptOwed). Called
+ * with the lock held. IRQL: any.
+ */
+static VOID xhciVhubOweSoftInterrupt(PXHCI_EXTENSION ext)
+{
+    if (ext->DeliverUnderUsbportLockOnly && !ext->DeliverPerEndpointOnly) {
+        ext->SoftInterruptOwed = 1;
+    }
+}
+
+/*
  * Answer one transfer with `usbdStatus` and `bytes`, through the completion
  * list. Called with the lock held. IRQL: DISPATCH_LEVEL.
  */
@@ -7840,6 +7853,7 @@ static VOID xhciVhubComplete(PXHCI_EXTENSION ext,
 {
     xhciDevStampTransfer(endpoint, transfer, parameters, usbdStatus);
     transfer->BytesTransferred = bytes;
+    xhciVhubOweSoftInterrupt(ext);
     xhciDevOweCompletion(ext, transfer);
 }
 
@@ -7883,6 +7897,7 @@ VOID XhciSlotVhubPipe(PXHCI_EXTENSION ext, ULONG hubPort, ULONG cancel)
     }
     bind->Held = NULL;
     bind->HeldVa = NULL;
+    xhciVhubOweSoftInterrupt(ext);
     xhciDevOweCompletion(ext, transfer);
 }
 
@@ -11598,6 +11613,7 @@ static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
     ULONG heldByPassCounted;
     ULONG heldForPollCounted;
     ULONG deliveredLocked;
+    ULONG softInterrupt;
     KIRQL deliveryIrql;
 
     if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
@@ -11907,9 +11923,31 @@ static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
         }
     }
 
+    /*
+     * A virtual hub's answer this pass left parked is owed a soft interrupt
+     * (XHCI_EXTENSION.SoftInterruptOwed), taken in the hold that ends the
+     * pass: a pass another CPU bounced off `DeferredBusy` after owing one did
+     * so while this pass still held the drain, so it is seen here. Once per
+     * pass, and after the loop rather than inside it, because the service only
+     * arms a timer - whatever the loop could deliver it has delivered. Issued
+     * with the controller lock released, as the reset request is; the service
+     * takes none of usbport's EpList or MiniportSpinLock (static, the note at
+     * the field), which is what allows it from inside SubmitTransfer.
+     */
     XhciControllerLockAcquire(&oldIrql);
     ext->DeferredBusy = 0;
+    softInterrupt = (ext->SoftInterruptOwed && ext->CompletionHead != NULL)
+                        ? 1UL : 0UL;
+    ext->SoftInterruptOwed = 0;
+    if (softInterrupt) {
+        ext->SoftInterruptRequests++;
+    }
     XhciControllerLockRelease(oldIrql);
+
+    if (softInterrupt && XhciRegPacket.UsbPortInvalidateController != NULL) {
+        (VOID)XhciRegPacket.UsbPortInvalidateController(
+            ext, USBPORT_INVALIDATE_CONTROLLER_SOFT_INTERRUPT);
+    }
 }
 
 /*

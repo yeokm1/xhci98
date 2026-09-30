@@ -6164,6 +6164,30 @@ typedef struct _XHCI_EXTENSION {
     ULONG CompletionsHeldOtherEndpoint;
     ULONG CompletionPollInvalidates;
     /*
+     * **Task 24.3.4, round 10: a virtual hub's answer asks usbport for a soft
+     * interrupt on the Version 300 tier.** Nothing on the bus interrupts for
+     * it - there is no hardware behind the hub - so the gate above parked it
+     * until the next real interrupt's HcInt pass or the fallback, 1 to 2 s on
+     * a quiet bus. usbhub's reset of the hub's port 1 needs three answers in
+     * a row inside a 2000 ms timer (Win7 x86 usbhub, `UsbhResetPort`, static),
+     * and after a controller re-enable, with every device re-enumerating and
+     * nothing bound, the timer won: 0x3d, 0x51 and the hub's hard reset, once
+     * a minute per hub (the r10g dump's exception history, debugger).
+     *
+     * `SoftInterruptOwed` is set, under the lock, when a virtual hub's
+     * completion joins the list on this tier; the pass that ends with the
+     * list still non-empty clears it and calls
+     * `UsbPortInvalidateController(SOFT_INTERRUPT)`, which on NT 6.x arms
+     * usbport's timer whose DPC queues its own IsrDpc (Win7 x86
+     * `USBPORT_InvalidateController` type 3 -> `USBPORT_SimulateInterrupt`,
+     * static). That DPC reaches InterruptDpcEx, whose TRANSFER_WORK signals
+     * the HcInt pass, and PollEndpoint delivers under usbport's lock. Not on
+     * the Version 200 tier, where `DeliverPerEndpointOnly` asks usbport to
+     * poll the endpoint instead. The fallback stays as the net.
+     */
+    ULONG SoftInterruptOwed;
+    ULONG SoftInterruptRequests;
+    /*
      * **Roadmap 24.4: on the Version 300 tier every timer is armed through
      * `UsbPortRequestAsyncCallbackEx` with its own lock, and only from a
      * context that may take it** (`XHCI_ARM_*` in src/xhci_hw.h, design

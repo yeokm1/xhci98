@@ -347,6 +347,7 @@ SlotStatesUnreadable	slot states unreadable
 SlotsDisabled	slots disabled
 SlotsEnabled	slots enabled
 SlotsResetToDefault	slots reset to Default
+SoftInterruptRequests	soft interrupts asked for parked vhub answers
 SaveAttempts	state save attempts
 SaveFailures	state save failures
 SaveRestoreTimeouts	state save/restore timeouts
