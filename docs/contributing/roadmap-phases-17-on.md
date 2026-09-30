@@ -1169,15 +1169,31 @@ Tasks. `runs/run-24.md` is the record once a task runs.
 - [ ] **24.6 - The reporter's pointer for the missing USB 1.1 hub.** *(24.4
   until 2026-09-28, when the owner moved it to just before the cut)*
 
-  Once a part is to hand: read whether a board built on an Analog Devices
-  ADuM3160 or ADuM4160 USB isolator enumerates as a hub or is transparent to
-  the host, and what it does to a High-Speed device behind it. If it
-  presents as a hub, it is the first way to put issue 6 section 6's topology
-  on metal (`test-equipment.md` gains its row); if it is transparent, the
-  pointer closes on that reading. The datasheet can be read before the part
-  arrives, and the phase does not wait on it.
+  The part's purpose (owner, 2026-09-30): USB 1.1 hubs are hard to find, so
+  a board built on an Analog Devices ADuM3160 or ADuM4160 USB isolator is
+  to be placed between a root port and an ordinary USB 2.0 hub, to make
+  that hub attach at Full Speed and act as a USB 1.1 hub. The isolator
+  itself is expected to be transparent (no hub of its own), with no
+  High-Speed path through it, so a USB 2.0 hub behind it cannot chirp
+  upstream - to be confirmed from the datasheet, which can be read before
+  the part arrives.
 
-  Where it is read: the datasheet, then the part on the E460.
+  Once a part is to hand, two readings, in order. First, on any host
+  (the part's behaviour, not this driver's): the isolator strapped for
+  Full Speed, a self-powered USB 2.0 hub behind it, and a High-Speed device
+  behind that hub; read in USBView whether the hub and the device both
+  attach at Full Speed. Second, if they do, the same arrangement on the
+  E460 under this driver, on Windows 98 SE first: the hub enumerating as a
+  Full-Speed hub on a root port, and a Full-Speed and a Low-Speed device
+  bound behind it. That is the first way to put issue 6 section 6's
+  topology on metal, and `test-equipment.md` gains its row. If the hub
+  does not drop to Full Speed behind the isolator, the pointer closes on
+  the first reading. In a virtual machine the part adds nothing: QEMU's
+  `usb-hub` is already a Full-Speed hub, which is what 24.3's hub clause
+  reads. The phase does not wait on the part.
+
+  Where it is read: the datasheet; the part on a host with USBView; then
+  the E460, Windows 98 SE first.
 
 - [ ] **24.7 - The record and the cut.** *(24.6 until 2026-09-28, 24.5 until
   2026-09-27)*
