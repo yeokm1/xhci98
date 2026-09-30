@@ -7995,6 +7995,180 @@ static ULONG xhciVhubOpen(PXHCI_EXTENSION ext,
 }
 
 /*
+ * A record with nothing in flight: no command outstanding (`ActiveOp`) or owed
+ * (xhciDevOwedOp - a quiescence command owed on any endpoint included), no
+ * intercepted SET_ADDRESS held, and every endpoint it has - EP0 and each opened
+ * one - quiet (xhciEpQuiet). An endpoint whose ring was never carved holds no
+ * TRB, so its queue alone is read. Says nothing about whether usbport still
+ * holds the record; each caller adds its own test for that.
+ *
+ * Called with the lock held. IRQL: any.
+ */
+static ULONG xhciDevIdle(PXHCI_EXTENSION ext, PXHCI_DEVICE dev)
+{
+    XHCI_EP_BINDING binding;
+    ULONG i;
+
+    if (dev->ActiveOp != XHCI_DEV_OP_NONE || dev->PendingSetAddress != NULL) {
+        return 0;
+    }
+    if (xhciDevOwedOp(ext, dev, &binding) != XHCI_DEV_OP_NONE) {
+        return 0;
+    }
+    if (xhciEpResolve(dev, 1, &binding) ? !xhciEpQuiet(&binding)
+                                         : dev->Ep0Queue.Count != 0) {
+        return 0;
+    }
+    for (i = 0; i < XHCI_MAX_DEVICE_ENDPOINTS; i++) {
+        if (dev->Endpoints[i].Dci == 0) {
+            continue;
+        }
+        if (xhciEpResolve(dev, dev->Endpoints[i].Dci, &binding)
+                ? !xhciEpQuiet(&binding)
+                : dev->Endpoints[i].Queue.Count != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/*
+ * Whether any live record sits behind `hub` - on its root port and deeper in
+ * the route its own Route String begins. Unbound and unwinding records count:
+ * a detach prunes a subtree's topology nodes, not its records, and those
+ * records still resolve their parent and TT through the address being given up.
+ *
+ * Called with the lock held. IRQL: any.
+ */
+static ULONG xhciDevHasDescendant(PXHCI_EXTENSION ext, PXHCI_DEVICE hub)
+{
+    ULONG mask;
+    ULONG i;
+
+    if (hub->RootPort == 0) {
+        return 0;
+    }
+    mask = (hub->Tier >= 5) ? 0x000FFFFFUL
+                            : ((1UL << (4 * hub->Tier)) - 1UL);
+    for (i = 0; i < XHCI_MAX_SLOTS; i++) {
+        PXHCI_DEVICE other = &ext->Devices[i];
+
+        if (other == hub || other->State == XHCI_DEV_STATE_FREE) {
+            continue;
+        }
+        if (other->HubPort == 0 && other->RootPort == hub->RootPort &&
+            other->Tier > hub->Tier &&
+            ((other->RouteString ^ hub->RouteString) & mask) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * **Take `address` for a SET_ADDRESS about to be answered (round 8).** Called
+ * by the real device's interception (`claimant` its record) and by a virtual
+ * hub's (`claimant` NULL, `vhubPort` its root-hub port), before either changes
+ * anything, so both assignment paths see one namespace. Returns 1 when the
+ * address is free to assign - nobody held it, or an idle holder's claim was
+ * reclaimed - and 0 when the request must be failed; every 0 is counted by why.
+ *
+ * usbport allocates only an address it holds free, so a *different* record
+ * still holding it is one usbport has given up on - freed when a hub's hard
+ * reset removed the device, while the root-port disable that would disown the
+ * record here was still queued behind usbport's bus lock. Round 8's 0xFE was
+ * that disable queued behind the very enumeration this refusal kept failing.
+ * EP0's removal cannot release the address (the same REMOVE precedes the
+ * reopen that finds the slot by it), and usbport says nothing when it frees
+ * one; the reassignment is the first proof this driver gets.
+ *
+ * Reclaimed only from a record that has nothing to lose: Addressed, EP0 and
+ * every other endpoint unbound, idle (xhciDevIdle), no record behind it, and
+ * a topology key that is its own. Retiring the address is software only - the
+ * xHC chose the address on the wire in Address Device - so the record keeps
+ * its state, slot, DCBAA entry, rings and port position, and its port's later
+ * disable still disowns and releases it by position. It is not DISOWNED:
+ * option 1's settlement still needs a real disown. Its node is detached before
+ * `DeviceAddress` is cleared (the address is the key), and the number is
+ * cleared as well as the flag because late completions compare the address
+ * they captured.
+ *
+ * A virtual hub holding the address, a second holder, a claimant already
+ * holding it or another record mid-assignment to it is an inconsistency, not a
+ * departed device, and is refused.
+ *
+ * Called with the lock held. IRQL: DISPATCH_LEVEL.
+ */
+static ULONG xhciDevClaimAddress(PXHCI_EXTENSION ext,
+                                 PXHCI_DEVICE claimant,
+                                 ULONG vhubPort,
+                                 ULONG address)
+{
+    PXHCI_DEVICE holder;
+    ULONG port;
+    ULONG i;
+
+    if (address == 0 || address > USBPORT_MAX_DEVICE_ADDRESS) {
+        ext->AddressRefusalsInvalid++;
+        return 0;
+    }
+    port = xhciVhubPortOfAddress(ext, address);
+    if (port != 0 && port != vhubPort) {
+        ext->AddressRefusalsOwner++;
+        return 0;
+    }
+    holder = NULL;
+    for (i = 0; i < XHCI_MAX_SLOTS; i++) {
+        PXHCI_DEVICE other = &ext->Devices[i];
+
+        if ((other->Flags & XHCI_DEV_FLAG_ADDRESS_VALID) != 0 &&
+            other->DeviceAddress == address) {
+            if (other == claimant || holder != NULL) {
+                ext->AddressRefusalsOwner++;
+                return 0;
+            }
+            holder = other;
+        } else if (other != claimant && other->PendingSetAddress != NULL &&
+                   other->DeviceAddress == address) {
+            ext->AddressRefusalsOwner++;
+            return 0;
+        }
+    }
+    if (holder == NULL) {
+        return 1;
+    }
+
+    if ((holder->Flags & XHCI_DEV_FLAG_EP0_OPEN) != 0 ||
+        holder->EndpointExtension != NULL) {
+        ext->AddressRefusalsBound++;
+        return 0;
+    }
+    for (i = 0; i < XHCI_MAX_DEVICE_ENDPOINTS; i++) {
+        if (holder->Endpoints[i].Dci != 0 &&
+            holder->Endpoints[i].EndpointExtension != NULL) {
+            ext->AddressRefusalsBound++;
+            return 0;
+        }
+    }
+    if (holder->State != XHCI_DEV_STATE_ADDRESSED || !xhciDevIdle(ext, holder)) {
+        ext->AddressRefusalsBusy++;
+        return 0;
+    }
+    if ((holder->TopoAddress != 0 && holder->TopoAddress != address) ||
+        xhciDevHasDescendant(ext, holder)) {
+        ext->AddressRefusalsTopology++;
+        return 0;
+    }
+
+    xhciDevTopoDetach(ext, holder);
+    holder->Flags &= ~XHCI_DEV_FLAG_ADDRESS_VALID;
+    holder->DeviceAddress = 0;
+    ext->AddressReclaims++;
+    XhciLogNoteLocked(ext, "slot.reclaimed", (holder->SlotId << 8) | address);
+    return 1;
+}
+
+/*
  * One transfer to a virtual hub: the request table on its default pipe (3.3),
  * or the status-change transfer on its interrupt endpoint (3.4).
  *
@@ -8087,6 +8261,17 @@ static MPSTATUS xhciVhubSubmit(PXHCI_EXTENSION ext,
         verdict = XHCI_VHUB_REQ_DATA;
         break;
     case XHCI_VHUB_REQ_SET_ADDRESS:
+        if (!xhciDevClaimAddress(ext, NULL, hubPort, arg)) {
+            XHCI_DBG_VALUE_CHANGED("vhub: refused SET_ADDRESS for address",
+                                   arg);
+            xhciVhubComplete(ext, endpoint, transfer, parameters,
+                             XHCI_USBD_STATUS_INTERNAL_HC_ERROR, 0);
+            return MP_STATUS_SUCCESS;
+        }
+        /* The claim spent the key; whatever stale node sat under it goes,
+         * and no node is made for the hub, which the graph never holds. */
+        XhciTopoMigrate(&ext->Topology, 0, arg);
+        xhciDevForgetTopoAddress(ext, NULL, arg);
         XhciVhubSetAddress(hub, arg);
         XhciLogNoteLocked(ext, "vhub.address", (hubPort << 8) | arg);
         verdict = XHCI_VHUB_REQ_OK;
@@ -8396,10 +8581,10 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
             XhciControllerLockRelease(oldIrql);
             return MP_STATUS_NO_RESOURCES;
         }
-        if (address == 0 || address > USBPORT_MAX_DEVICE_ADDRESS ||
-            xhciDevByAddress(ext, address) != NULL) {
-            /* An address of 0, out of range, or one another record already
-             * holds. Failing it beats addressing two devices the same. */
+        if (!xhciDevClaimAddress(ext, dev, 0, address)) {
+            /* An address of 0, out of range, or one another record holds and
+             * cannot give up (xhciDevClaimAddress). Failing it beats
+             * addressing two devices the same. */
             xhciDevFailTransfer(ext, endpoint, transfer, parameters,
                                 XHCI_USBD_STATUS_INTERNAL_HC_ERROR);
             XHCI_DBG_VALUE_CHANGED("slot: refused SET_ADDRESS for address",
@@ -10691,32 +10876,7 @@ ULONG XhciSlotPortHasRecords(PXHCI_EXTENSION ext, ULONG hubPort)
  */
 static ULONG xhciDevDisownedIdle(PXHCI_EXTENSION ext, PXHCI_DEVICE dev)
 {
-    XHCI_EP_BINDING binding;
-    ULONG i;
-
-    if ((dev->Flags & XHCI_DEV_FLAG_DISOWNED) == 0 ||
-        dev->ActiveOp != XHCI_DEV_OP_NONE ||
-        dev->PendingSetAddress != NULL) {
-        return 0;
-    }
-    if (xhciDevOwedOp(ext, dev, &binding) != XHCI_DEV_OP_NONE) {
-        return 0;
-    }
-    if (xhciEpResolve(dev, 1, &binding) ? !xhciEpQuiet(&binding)
-                                         : dev->Ep0Queue.Count != 0) {
-        return 0;
-    }
-    for (i = 0; i < XHCI_MAX_DEVICE_ENDPOINTS; i++) {
-        if (dev->Endpoints[i].Dci == 0) {
-            continue;
-        }
-        if (xhciEpResolve(dev, dev->Endpoints[i].Dci, &binding)
-                ? !xhciEpQuiet(&binding)
-                : dev->Endpoints[i].Queue.Count != 0) {
-            return 0;
-        }
-    }
-    return 1;
+    return (dev->Flags & XHCI_DEV_FLAG_DISOWNED) != 0 && xhciDevIdle(ext, dev);
 }
 
 /*

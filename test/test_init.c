@@ -14685,10 +14685,13 @@ static void test_slot_set_address_refusals(void)
     CHECK_EQ(completeTransferCalls, completions + 1,
              "an address past 127 is failed");
 
-    /* An address another record already holds - the one refusal that prevents
-     * two devices answering to the same address. */
+    CHECK_EQ(ext.AddressRefusalsInvalid, 2, "both counted as invalid");
+
+    /* An address another record already holds with EP0 still bound - the
+     * refusal that prevents two devices answering to the same address. An
+     * idle, unbound holder is reclaimed instead (test_slot_address_reclaim). */
     ext.Devices[1].State = XHCI_DEV_STATE_ADDRESSED;
-    ext.Devices[1].Flags |= XHCI_DEV_FLAG_ADDRESS_VALID;
+    ext.Devices[1].Flags |= XHCI_DEV_FLAG_ADDRESS_VALID | XHCI_DEV_FLAG_EP0_OPEN;
     ext.Devices[1].DeviceAddress = 11;
     slot_setup(0x00, 0x05, 11, 0);
     completions = completeTransferCalls;
@@ -14696,7 +14699,9 @@ static void test_slot_set_address_refusals(void)
                                        &slotTransfer, &slotSgList);
     deliver_after_submit();
     CHECK_EQ(completeTransferCalls, completions + 1,
-             "an address another record holds is failed");
+             "an address a bound record holds is failed");
+    CHECK_EQ(ext.AddressRefusalsBound, 1, "and counted as bound");
+    CHECK_EQ(ext.Devices[1].DeviceAddress, 11, "the holder keeps it");
     ext.Devices[1].State = XHCI_DEV_STATE_FREE;
     ext.Devices[1].Flags = 0;
 
@@ -32808,6 +32813,500 @@ static void test_vhub_idle_disowned_record_waits_for_its_command(void)
 }
 
 /*
+ * **Round 8: an address usbport has freed and handed on, still held here by an
+ * idle record whose port nobody has disabled yet.** The Windows 7 x86 dump:
+ * usbhub hard-reset a hub just after its device was addressed, usbport removed
+ * the device and freed its address at once, and the record kept it - Addressed,
+ * EP0 removed, idle - because only the root-port disable gives an address up,
+ * and that disable was queued behind the next enumeration, which this driver
+ * kept refusing for the same address. usbhub's watchdog fired (0xFE).
+ *
+ * The claim is the proof: the next SET_ADDRESS for that address takes it, with
+ * no port disable first. The old record keeps its slot, DCBAA entry and ring;
+ * the port's disable, arriving afterwards, still finds and releases it by
+ * position, and leaves the newcomer alone.
+ */
+static void test_slot_address_reclaim_r8(void)
+{
+    PXHCI_DEVICE old;
+    PXHCI_DEVICE dev;
+    ULONG entry;
+    ULONG enqueue;
+    ULONG dequeue;
+    ULONG cycle;
+    ULONG completions;
+    ULONG idle;
+    ULONG disabledOut;
+
+    old = slot_enumerate_addressed(3, 3, 5, 1);
+    CHECK_EQ(old->State, XHCI_DEV_STATE_ADDRESSED, "(a device at address 1)");
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
+    CHECK_EQ(old->Flags, XHCI_DEV_FLAG_ADDRESS_VALID | XHCI_DEV_FLAG_DCBAA_SET,
+             "(EP0 removed, the address kept: the dump's flags, 0x06)");
+    entry = dcbaa_entry(5);
+    enqueue = old->Ep0Ring.Enqueue;
+    dequeue = old->Ep0Ring.Dequeue;
+    cycle = old->Ep0Ring.Cycle;
+    CHECK(entry != 0, "(its DCBAA entry is set)");
+    idle = ext.DisownsSettledIdle;
+
+    /* Another root port's device, given address 1 by usbport. */
+    hwCmdSlotId = 6;
+    slot_attach(1, 3);
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "(a device on another port opens)");
+    deliver_events();
+    deliver_events();
+    dev = &ext.Devices[1];
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "(in Default)");
+
+    slot_setup(0x00, 0x05, 1, 0);
+    completions = completeTransferCalls;
+    CHECK_EQ(XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                          &slotTransfer, &slotSgList),
+             MP_STATUS_SUCCESS, "SET_ADDRESS(1) is taken");
+    CHECK(dev->PendingSetAddress != NULL, "and held for its Address Device");
+    CHECK_EQ(ext.AddressReclaims, 1, "the address is reclaimed, counted");
+    CHECK_EQ(ext.AddressRefusalsBound + ext.AddressRefusalsBusy +
+                 ext.AddressRefusalsTopology + ext.AddressRefusalsOwner +
+                 ext.AddressRefusalsInvalid,
+             0, "and nothing was refused");
+    CHECK_EQ(old->Flags, XHCI_DEV_FLAG_DCBAA_SET,
+             "the old record gives the address up (0x06 -> 0x04)");
+    CHECK_EQ(old->DeviceAddress, 0, "the number as well as the flag");
+    CHECK_EQ(old->TopoAddress, 0, "and any topology key");
+    CHECK_EQ(old->State, XHCI_DEV_STATE_ADDRESSED, "keeping its state");
+    CHECK_EQ(old->SlotId, 5, "its slot - no Disable Slot for a software key");
+    CHECK_EQ(old->HubPort, 3, "its port");
+    CHECK_EQ(dcbaa_entry(5), entry, "its DCBAA entry");
+    CHECK_EQ(old->Ep0Ring.Enqueue, enqueue, "and its ring's enqueue");
+    CHECK_EQ(old->Ep0Ring.Dequeue, dequeue, "dequeue");
+    CHECK_EQ(old->Ep0Ring.Cycle, cycle, "and cycle");
+    CHECK_EQ(old->Flags & XHCI_DEV_FLAG_DISOWNED, 0, "not disowned");
+
+    deliver_events();               /* Address Device (BSR = 0) completes */
+    deliver_after_submit();
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_ADDRESSED, "the newcomer is addressed");
+    CHECK_EQ(dev->DeviceAddress, 1, "at address 1");
+    CHECK_EQ(dev->Flags & XHCI_DEV_FLAG_ADDRESS_VALID,
+             XHCI_DEV_FLAG_ADDRESS_VALID, "valid");
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "its SET_ADDRESS completed once");
+    CHECK_EQ(lastCompletedStatus, 0, "with success");
+    CHECK_EQ(ext.DisownsSettledIdle, idle,
+             "a reclaim is not a disown: option 1 does not count it");
+    CHECK_EQ(XhciSlotPortRecordsDisownedIdle(&ext, 3), 0,
+             "nor treat the old record as disowned");
+
+    /* Claim, then the old port's disable. */
+    disabledOut = ext.DevicesDisabledOut;
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 3),
+             MP_STATUS_SUCCESS, "the old port's disable arrives late");
+    deliver_events();
+    deliver_events();
+    CHECK_EQ(ext.DevicesDisabledOut, disabledOut + 1,
+             "and releases the old record by its position");
+    CHECK_EQ(old->State, XHCI_DEV_STATE_FREE, "through its Disable Slot");
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_ADDRESSED, "the newcomer is untouched");
+    CHECK_EQ(dev->DeviceAddress, 1, "at its address");
+    CHECK_EQ(dev->Flags & XHCI_DEV_FLAG_ADDRESS_VALID,
+             XHCI_DEV_FLAG_ADDRESS_VALID, "still valid");
+    CHECK_EQ(ext.AddressReclaims, 1, "(one reclaim, no second)");
+}
+
+/* The r8 pair before the claim: `*old` at address 1 on port 3, EP0 removed;
+ * the returned record on port 1 in Default, bound to `slotEndpoint`. */
+static PXHCI_DEVICE reclaim_pair(PXHCI_DEVICE *old)
+{
+    *old = slot_enumerate_addressed(3, 3, 5, 1);
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
+    hwCmdSlotId = 6;
+    slot_attach(1, 3);
+    (void)slot_open(0, UsbHighSpeed, 64);
+    deliver_events();
+    deliver_events();
+    return &ext.Devices[1];
+}
+
+/* One SET_ADDRESS(1) from the claimant, its counter read before anything the
+ * deferred work could do; returns whether it was refused. The completion is
+ * delivered by the caller once the holder is put back. */
+static ULONG reclaim_refused(PXHCI_DEVICE claimant, PULONG counter,
+                             const char *what)
+{
+    ULONG before;
+    ULONG refused;
+
+    before = *counter;
+    slot_setup(0x00, 0x05, 1, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    refused = (claimant->PendingSetAddress == NULL) ? 1UL : 0UL;
+    CHECK_EQ(*counter, before + 1, what);
+    return refused;
+}
+
+/*
+ * The holder the claim may not take from, one condition at a time: anything
+ * bound (EP0's flag, EP0's extension, another endpoint's), anything in flight
+ * (a queued transfer, an unreclaimed TRB, a halt, a command outstanding or
+ * owed, a SET_ADDRESS held, a state other than Addressed), a topology key that
+ * is not its own or a record behind it, and every inconsistent owner. Each is
+ * refused, counted by why, and leaves the holder's address and node alone.
+ * Then, with each put back, the claim succeeds.
+ */
+static void test_slot_address_reclaim_refusals(void)
+{
+    PXHCI_DEVICE old;
+    PXHCI_DEVICE dev;
+    PXHCI_DEVICE other;
+    XHCI_ENDPOINT stray;
+
+    dev = reclaim_pair(&old);
+    other = &ext.Devices[7];
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "(the claimant in Default)");
+    CHECK_EQ(old->DeviceAddress, 1, "(the holder at 1)");
+
+    old->Flags |= XHCI_DEV_FLAG_EP0_OPEN;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBound, "EP0's flag: bound"),
+          "refused while EP0's flag is set");
+    old->Flags &= ~XHCI_DEV_FLAG_EP0_OPEN;
+    deliver_after_submit();
+
+    old->EndpointExtension = &stray;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBound,
+                          "EP0's extension: bound"),
+          "refused while EP0's extension is set");
+    old->EndpointExtension = NULL;
+    deliver_after_submit();
+
+    old->Endpoints[0].Dci = 3;
+    old->Endpoints[0].EndpointExtension = &stray;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBound,
+                          "another endpoint bound"),
+          "refused while another endpoint is bound");
+    old->Endpoints[0].EndpointExtension = NULL;
+    old->Endpoints[0].Dci = 0;
+    deliver_after_submit();
+
+    old->Ep0Queue.Count = 1;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBusy, "a queued transfer"),
+          "refused with a transfer queued");
+    old->Ep0Queue.Count = 0;
+    deliver_after_submit();
+
+    old->Ep0Ring.Enqueue++;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBusy, "an unreclaimed TRB"),
+          "refused with a TRB between dequeue and enqueue");
+    old->Ep0Ring.Enqueue--;
+    deliver_after_submit();
+
+    old->Ep0Quiesce.Flags |= XHCI_EPQ_HALTED;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBusy, "a halt"),
+          "refused while EP0 is halted");
+    old->Ep0Quiesce.Flags &= ~XHCI_EPQ_HALTED;
+    deliver_after_submit();
+
+    old->ActiveOp = XHCI_DEV_OP_EVALUATE_MPS;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBusy, "a command outstanding"),
+          "refused with a command outstanding");
+    old->ActiveOp = XHCI_DEV_OP_NONE;
+    deliver_after_submit();
+
+    old->PendingSetAddress = &slotTransfer2;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBusy, "a SET_ADDRESS held"),
+          "refused with a SET_ADDRESS held");
+    old->PendingSetAddress = NULL;
+    deliver_after_submit();
+
+    CHECK_EQ(old->State, XHCI_DEV_STATE_ADDRESSED, "(still Addressed)");
+    old->PendingOp = XHCI_DEV_OP_EVALUATE_MPS;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBusy, "a command owed"),
+          "refused with a command owed");
+    CHECK_EQ(old->ActiveOp, XHCI_DEV_OP_NONE,
+             "(the owed command was not issued meanwhile)");
+    old->PendingOp = XHCI_DEV_OP_NONE;
+    deliver_after_submit();
+    CHECK_EQ(old->ActiveOp, XHCI_DEV_OP_NONE, "(nor afterwards)");
+    /* The pump spends the faked Evaluate Context, which has nothing to
+     * evaluate, by failing the record; put the holder back. */
+    old->State = XHCI_DEV_STATE_ADDRESSED;
+
+    old->State = XHCI_DEV_STATE_FAILED;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBusy, "not Addressed"),
+          "refused from a record that is not Addressed");
+    old->State = XHCI_DEV_STATE_ADDRESSED;
+    deliver_after_submit();
+
+    old->TopoAddress = 9;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsTopology,
+                          "a topology key not its own"),
+          "refused with another address's topology key");
+    old->TopoAddress = 0;
+    deliver_after_submit();
+
+    other->State = XHCI_DEV_STATE_GONE;
+    other->HubPort = 0;
+    other->RootPort = old->RootPort;
+    other->Tier = 1;
+    other->RouteString = 2;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsTopology,
+                          "a record behind it, even unwinding"),
+          "refused with a record behind it");
+    deliver_after_submit();
+
+    /* A holder behind a hub: a grandchild on its route blocks, one on a
+     * sibling's route does not (below). */
+    old->Tier = 1;
+    old->RouteString = 3;
+    other->Tier = 2;
+    other->RouteString = 0x23;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsTopology,
+                          "a record deeper on its route"),
+          "refused with a record deeper on its route");
+    deliver_after_submit();
+
+    other->Flags = XHCI_DEV_FLAG_ADDRESS_VALID;
+    other->DeviceAddress = 1;
+    other->Tier = 0;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsOwner, "two holders"),
+          "refused when two records hold it");
+    other->Flags = 0;
+    deliver_after_submit();
+
+    other->PendingSetAddress = &slotTransfer2;
+    old->Flags &= ~XHCI_DEV_FLAG_ADDRESS_VALID;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsOwner,
+                          "another assignment in progress"),
+          "refused while another record is being given it");
+    other->PendingSetAddress = NULL;
+    deliver_after_submit();
+
+    dev->Flags |= XHCI_DEV_FLAG_ADDRESS_VALID;
+    dev->DeviceAddress = 1;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsOwner, "the claimant itself"),
+          "refused when the claimant already holds it");
+    dev->Flags &= ~XHCI_DEV_FLAG_ADDRESS_VALID;
+    dev->DeviceAddress = 0;
+    old->Flags |= XHCI_DEV_FLAG_ADDRESS_VALID;
+    deliver_after_submit();
+
+    CHECK_EQ(old->DeviceAddress, 1, "every refusal left the holder at 1");
+    CHECK_EQ(old->Flags & XHCI_DEV_FLAG_ADDRESS_VALID,
+             XHCI_DEV_FLAG_ADDRESS_VALID, "valid");
+    CHECK_EQ(ext.AddressReclaims, 0, "and reclaimed nothing");
+
+    /* A record on a sibling's route is not behind the holder. */
+    other->State = XHCI_DEV_STATE_GONE;
+    other->Tier = 2;
+    other->RouteString = 0x24;
+    slot_setup(0x00, 0x05, 1, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    CHECK(dev->PendingSetAddress != NULL,
+          "with each put back, the claim is taken");
+    CHECK_EQ(ext.AddressReclaims, 1, "as a reclaim");
+    CHECK_EQ(old->DeviceAddress, 0, "from the holder");
+    old->Tier = 0;
+    old->RouteString = 0;
+    other->State = XHCI_DEV_STATE_FREE;
+    other->RootPort = 0;
+    other->Tier = 0;
+    other->RouteString = 0;
+    other->DeviceAddress = 0;
+    deliver_events();
+    deliver_after_submit();
+    CHECK_EQ(dev->DeviceAddress, 1, "(the newcomer is addressed)");
+}
+
+/*
+ * The interleavings the controller lock serializes: the old port disabled
+ * before the claim (nothing to reclaim), and the old device re-entering at
+ * address 0 before the claim (its re-entry gives the address up itself). In
+ * both the claim finds no holder and counts nothing.
+ */
+static XHCI_ENDPOINT slotEndpointOld;
+
+static void test_slot_address_reclaim_interleavings(void)
+{
+    PXHCI_DEVICE old;
+    PXHCI_DEVICE dev;
+    ULONG i;
+
+    /* Disable first. */
+    dev = reclaim_pair(&old);
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 3),
+             MP_STATUS_SUCCESS, "(the old port is disabled first)");
+    deliver_events();
+    CHECK_EQ(old->Flags & XHCI_DEV_FLAG_ADDRESS_VALID, 0,
+             "(the disown gave the address up)");
+    slot_setup(0x00, 0x05, 1, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    CHECK(dev->PendingSetAddress != NULL, "the claim is taken");
+    CHECK_EQ(ext.AddressReclaims, 0, "with nothing to reclaim");
+    deliver_events();
+    deliver_after_submit();
+    CHECK_EQ(dev->DeviceAddress, 1, "(addressed)");
+
+    /* Address-0 re-entry first, through its own handle. */
+    old = slot_enumerate_addressed(3, 3, 5, 1);
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
+    slot_reset_port(3);
+    slot_properties(0, UsbHighSpeed, 64);
+    for (i = 0; i < sizeof(slotEndpointOld) / sizeof(ULONG); i++) {
+        ((ULONG *)&slotEndpointOld)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_now(&slotEndpointOld), MP_STATUS_SUCCESS,
+             "(the old device re-enters at address 0)");
+    deliver_events();
+    CHECK_EQ(old->DeviceAddress, 0, "(its re-entry gave the address up)");
+    hwCmdSlotId = 6;
+    slot_attach(1, 3);
+    (void)slot_open(0, UsbHighSpeed, 64);
+    deliver_events();
+    deliver_events();
+    dev = &ext.Devices[1];
+    slot_setup(0x00, 0x05, 1, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    CHECK(dev->PendingSetAddress != NULL, "the claim is taken");
+    CHECK_EQ(ext.AddressReclaims, 0, "again with nothing to reclaim");
+    deliver_events();
+    deliver_after_submit();
+    CHECK_EQ(dev->DeviceAddress, 1, "(addressed)");
+    CHECK_EQ(old->State, XHCI_DEV_STATE_DEFAULT,
+             "and the re-entered record carries on at Default");
+}
+
+/*
+ * **A hub's address reclaimed.** An empty real hub at 2 with its topology node,
+ * EP0 removed, idle: the claim detaches its node before clearing the address,
+ * so the newcomer builds its own node under 2, and the old hub's later
+ * disable - its key spent, its address 0 - detaches nothing of the newcomer's.
+ */
+static void test_slot_address_reclaim_hub(void)
+{
+    PXHCI_DEVICE hub;
+    PXHCI_DEVICE dev;
+
+    hub = slot_enumerate_addressed(3, 3, 5, 2);
+    topo_reply_buffer(hubMarkDescriptor, 9);
+    topo_submit_and_complete(hub, 0xA0, 0x06, 0x0000, 0, 9);
+    deliver_events();
+    CHECK_EQ(hub->TopoAddress, 2, "(a hub with its node at 2)");
+    CHECK(XhciTopoFind(&ext.Topology, 2) != NULL, "(the node)");
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
+
+    hwCmdSlotId = 6;
+    slot_attach(1, 3);
+    (void)slot_open(0, UsbHighSpeed, 64);
+    deliver_events();
+    deliver_events();
+    dev = &ext.Devices[1];
+    slot_setup(0x00, 0x05, 2, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    CHECK_EQ(ext.AddressReclaims, 1, "the empty hub's address is reclaimed");
+    CHECK(XhciTopoFind(&ext.Topology, 2) == NULL, "its node detached");
+    CHECK_EQ(hub->TopoAddress, 0, "its key spent");
+    CHECK_EQ(hub->DeviceAddress, 0, "its address cleared");
+    deliver_events();
+    deliver_after_submit();
+    CHECK_EQ(dev->DeviceAddress, 2, "(the newcomer at 2)");
+
+    topo_reply_buffer(hubMarkDescriptor, 9);
+    topo_submit_and_complete_slot(dev, 6, 0xA0, 0x06, 0x0000, 0, 9);
+    deliver_events();
+    CHECK(XhciTopoFind(&ext.Topology, 2) != NULL, "the newcomer's node at 2");
+    CHECK_EQ(dev->TopoAddress, 2, "(its key)");
+
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 3),
+             MP_STATUS_SUCCESS, "the old hub's port is disabled");
+    deliver_events();
+    deliver_events();
+    CHECK_EQ(hub->State, XHCI_DEV_STATE_FREE, "(the old hub released)");
+    CHECK(XhciTopoFind(&ext.Topology, 2) != NULL,
+          "and the newcomer's node survives it");
+    CHECK_EQ(dev->TopoAddress, 2, "with its key");
+}
+
+/*
+ * **Both assignment paths share one namespace.** A virtual hub's SET_ADDRESS
+ * reclaims from an idle real holder and is refused by a bound one; a real
+ * device's SET_ADDRESS is refused an address a virtual hub holds.
+ */
+static void test_vhub_address_claims(void)
+{
+    PXHCI_DEVICE dev;
+    PXHCI_DEVICE direct;
+
+    dev = vhub_addressed_device_on_port3();
+    CHECK_EQ(dev->DeviceAddress, 2, "(the device behind hub 3 at 2)");
+    CHECK_EQ(ext.Vhub[2].Address, 3, "(the hub at 3)");
+
+    (void)vhub_control(&vhubEp0, 0x00, 0x05, 2, 0, 0);
+    CHECK(lastCompletedStatus != 0, "a hub's SET_ADDRESS to a bound holder's "
+                                    "address is failed");
+    CHECK_EQ(ext.AddressRefusalsBound, 1, "counted as bound");
+    CHECK_EQ(ext.Vhub[2].Address, 3, "the hub keeps its address");
+    CHECK_EQ(dev->DeviceAddress, 2, "and the holder its own");
+
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
+    (void)vhub_control(&vhubEp0, 0x00, 0x05, 2, 0, 0);
+    CHECK_EQ(lastCompletedStatus, 0, "once the holder is idle and unbound");
+    CHECK_EQ(ext.AddressReclaims, 1, "its address is reclaimed");
+    CHECK_EQ(ext.Vhub[2].Address, 2, "for the hub");
+    CHECK_EQ(dev->Flags & XHCI_DEV_FLAG_ADDRESS_VALID, 0,
+             "and the holder gives it up");
+    CHECK_EQ(dev->DeviceAddress, 0, "(the number too)");
+
+    /* A stale node under the next address a hub takes is pruned, and a
+     * record's key on it spent: the hub itself is never a node. */
+    CHECK(XhciTopoAttachRoot(&ext.Topology, 7, vhub_xport(3), 1,
+                             XHCI_SPEED_HIGH) != 0, "(a stale node at 7)");
+    dev->TopoAddress = 7;
+    (void)vhub_control(&vhubEp0, 0x00, 0x05, 7, 0, 0);
+    CHECK_EQ(ext.Vhub[2].Address, 7, "the hub moves to a free address");
+    CHECK(XhciTopoFind(&ext.Topology, 7) == NULL, "the stale node is pruned");
+    CHECK_EQ(dev->TopoAddress, 0, "and the key on it spent");
+    vhub_reset_registry();
+
+    /* A real device refused an address a hub holds. */
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    vhub_plug(2, 1);
+    vhub_enumerate_hub(2, 4);
+    CHECK_EQ(ext.Vhub[1].Address, 4, "(a hub on port 2 at 4)");
+    hwCmdSlotId = 5;
+    vhub_plug(3, 3);
+    CHECK_EQ(vhub_root_reset(3), MP_STATUS_SUCCESS, "(a direct device's reset)");
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "(its address-0 open)");
+    deliver_events();
+    deliver_events();
+    direct = &ext.Devices[0];
+    CHECK_EQ(direct->State, XHCI_DEV_STATE_DEFAULT, "(in Default)");
+    slot_setup(0x00, 0x05, 4, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    CHECK(direct->PendingSetAddress == NULL,
+          "a real SET_ADDRESS to a hub's address is refused");
+    CHECK_EQ(ext.AddressRefusalsOwner, 1, "counted as another owner's");
+    deliver_after_submit();
+    CHECK(lastCompletedStatus != 0, "and failed");
+    CHECK_EQ(ext.Vhub[1].Address, 4, "the hub keeps it");
+    slot_setup(0x00, 0x05, 5, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    CHECK(direct->PendingSetAddress != NULL, "a free address is taken");
+    deliver_events();
+    deliver_after_submit();
+    CHECK_EQ(direct->DeviceAddress, 5, "(addressed)");
+    vhub_reset_registry();
+}
+
+/*
  * The held status-change transfer owns no TRB, so an abort finds it in the
  * binding and nothing later completes it (3.4); and a REMOVE of the pipe with
  * one held answers it as cancelled.
@@ -34931,6 +35430,11 @@ int main(void)
     test_vhub_held_reset_released_when_the_record_goes();
     test_vhub_root_reset_with_an_idle_disowned_record();
     test_vhub_idle_disowned_record_waits_for_its_command();
+    test_slot_address_reclaim_r8();
+    test_slot_address_reclaim_refusals();
+    test_slot_address_reclaim_interleavings();
+    test_slot_address_reclaim_hub();
+    test_vhub_address_claims();
     test_vhub_abort_finds_the_held_pipe();
     test_vhub_always_disable_and_power_cycle();
     test_vhub_suspend_resume_through_the_callbacks();

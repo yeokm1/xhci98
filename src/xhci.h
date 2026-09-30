@@ -6764,6 +6764,24 @@ typedef struct _XHCI_EXTENSION {
      */
     ULONG DisownsSettledIdle;
     /*
+     * SET_ADDRESS claims on an address another record still held
+     * (xhciDevClaimAddress). `AddressReclaims` took it from an idle, unbound
+     * record usbport had given up on; the refusals failed the request, split
+     * by why: the holder still bound (EP0 or another endpoint), busy (not
+     * Addressed, or something in flight), a topology key or a record behind
+     * it, an inconsistent owner (a virtual hub, two holders, the claimant
+     * itself, or another assignment to it in progress); and an address of 0
+     * or out of range. Round 8: an address freed by a hub's hard reset stayed
+     * held here until the root-port disable, which was queued behind the
+     * refused enumeration, and usbhub's watchdog fired (0xFE).
+     */
+    ULONG AddressReclaims;
+    ULONG AddressRefusalsBound;
+    ULONG AddressRefusalsBusy;
+    ULONG AddressRefusalsTopology;
+    ULONG AddressRefusalsOwner;
+    ULONG AddressRefusalsInvalid;
+    /*
      * The short-transfer family, accumulated at controller level.
      *
      * `XHCI_TRANSFER_QUEUE` already counts all three per endpoint, and that is

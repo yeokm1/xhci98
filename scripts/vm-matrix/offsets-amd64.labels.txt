@@ -2,6 +2,7 @@
 AbortsDuringCompletion	aborts racing a completion
 AbortsFromCompletionList	aborts taken off the completion list
 AbortsUnmatched	aborts unmatched
+AddressReclaims	addresses reclaimed from idle records
 BusMasterClearRetries	bus master clear retries
 BusMasterCleared	bus master cleared
 CheckCallbacks	check callbacks
@@ -334,6 +335,11 @@ RootHubInvalidatesOwed	root hub invalidates owed
 RootHubChangesReported	root-hub changes reported through the DPC bit
 HcInfo.ScratchpadCount	scratchpad buffers
 SetAddressIntercepts	SET_ADDRESS interceptions
+AddressRefusalsBound	SET_ADDRESS refused - holder bound
+AddressRefusalsBusy	SET_ADDRESS refused - holder busy
+AddressRefusalsTopology	SET_ADDRESS refused - holder topology
+AddressRefusalsOwner	SET_ADDRESS refused - inconsistent owner
+AddressRefusalsInvalid	SET_ADDRESS refused - invalid address
 ShortPacketsTotal	short packets
 MidTdShortRetiresTotal	short packets retired mid-TD
 ShortSuccessesTotal	short transfers reported as Success

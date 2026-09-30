@@ -2161,6 +2161,18 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
                            ext->DisownsSettledEmpty);
     XHCI_DBG_VALUE_CHANGED("port disowns settled with idle disowned records",
                            ext->DisownsSettledIdle);
+    XHCI_DBG_VALUE_CHANGED("addresses reclaimed from idle records",
+                           ext->AddressReclaims);
+    XHCI_DBG_VALUE_CHANGED("SET_ADDRESS refused - holder bound",
+                           ext->AddressRefusalsBound);
+    XHCI_DBG_VALUE_CHANGED("SET_ADDRESS refused - holder busy",
+                           ext->AddressRefusalsBusy);
+    XHCI_DBG_VALUE_CHANGED("SET_ADDRESS refused - holder topology",
+                           ext->AddressRefusalsTopology);
+    XHCI_DBG_VALUE_CHANGED("SET_ADDRESS refused - inconsistent owner",
+                           ext->AddressRefusalsOwner);
+    XHCI_DBG_VALUE_CHANGED("SET_ADDRESS refused - invalid address",
+                           ext->AddressRefusalsInvalid);
     XHCI_DBG_VALUE_CHANGED("transfer events for no open endpoint",
                            ext->TransferEventsForeign);
     XHCI_DBG_VALUE_CHANGED("transfer events with RsvdZ pointer bits set",
