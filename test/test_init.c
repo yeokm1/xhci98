@@ -32966,6 +32966,10 @@ static void test_slot_address_reclaim_refusals(void)
     other = &ext.Devices[7];
     CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "(the claimant in Default)");
     CHECK_EQ(old->DeviceAddress, 1, "(the holder at 1)");
+    /* A node of its own under 1, which no refusal may prune. */
+    CHECK(XhciTopoAttachRoot(&ext.Topology, 1, old->RootPort, 1,
+                             XHCI_SPEED_HIGH) != 0, "(the holder's node)");
+    old->TopoAddress = 1;
 
     old->Flags |= XHCI_DEV_FLAG_EP0_OPEN;
     CHECK(reclaim_refused(dev, &ext.AddressRefusalsBound, "EP0's flag: bound"),
@@ -33042,7 +33046,7 @@ static void test_slot_address_reclaim_refusals(void)
     CHECK(reclaim_refused(dev, &ext.AddressRefusalsTopology,
                           "a topology key not its own"),
           "refused with another address's topology key");
-    old->TopoAddress = 0;
+    old->TopoAddress = 1;
     deliver_after_submit();
 
     other->State = XHCI_DEV_STATE_GONE;
@@ -33092,6 +33096,8 @@ static void test_slot_address_reclaim_refusals(void)
     deliver_after_submit();
 
     CHECK_EQ(old->DeviceAddress, 1, "every refusal left the holder at 1");
+    CHECK(XhciTopoFind(&ext.Topology, 1) != NULL, "and its node in place");
+    CHECK_EQ(old->TopoAddress, 1, "with its key");
     CHECK_EQ(old->Flags & XHCI_DEV_FLAG_ADDRESS_VALID,
              XHCI_DEV_FLAG_ADDRESS_VALID, "valid");
     CHECK_EQ(ext.AddressReclaims, 0, "and reclaimed nothing");
@@ -33107,6 +33113,7 @@ static void test_slot_address_reclaim_refusals(void)
           "with each put back, the claim is taken");
     CHECK_EQ(ext.AddressReclaims, 1, "as a reclaim");
     CHECK_EQ(old->DeviceAddress, 0, "from the holder");
+    CHECK(XhciTopoFind(&ext.Topology, 1) == NULL, "its node goes with it");
     old->Tier = 0;
     old->RouteString = 0;
     other->State = XHCI_DEV_STATE_FREE;
