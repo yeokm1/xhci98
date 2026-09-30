@@ -2880,12 +2880,34 @@ in flight and no device behind it, and a counted refusal otherwise. Clearing
 the address at EP0's removal or at CloseEndpoint was rejected (it breaks the
 reopen mid-enumeration; some NT 5.x stacks never close), as was the fallback
 teardown at every unconfirmed disown (round 8 has no debt to trigger it).
-Design record 12 section 11 carries the rule; the code follows.
+Design record 12 section 11 carries the rule.
+
+Implemented on 2026-09-30 (`f738c9b`, `f492675`): one claim helper
+(`xhciDevClaimAddress`) called by the real SET_ADDRESS interception and by a
+virtual hub's; the idle test shared with option 1 (`xhciDevIdle`); a
+virtual hub taking an address also prunes the stale topology node under it
+and spends other records' keys on it. New counters `AddressReclaims` and
+`AddressRefusalsBound`, `-Busy`, `-Topology`, `-Owner`, `-Invalid`; the
+offsets regenerated (x86 `SIZEOF` 104732, amd64 112064). Host vectors: round
+8's order (the claim succeeds with no disable first, the old slot, DCBAA
+entry and ring untouched, the late disable releasing the old record and
+leaving the newcomer), each refusal condition alone with its counter and the
+holder's node kept, the disable-first and address-0-first interleavings, a
+reclaimed empty hub's node, and both paths against a virtual hub. Twenty-eight
+mutations, twenty-six killed, two equivalent (`out\t24-4\mutations-finding2.txt`,
+git-ignored); `test_init` 22,860 checks, every suite green. Two Codex review
+rounds (`out\t24-r8fix\codex-review-1.md`, `-2.md`, git-ignored): no P1 or P2;
+the one P3, a refusal matrix with no topology node to keep, fixed. Built the
+same day (`build-driver.cmd all`, `qemu -amd64`, `release -amd64`, every gate
+passed; logs `out\t24-r8fix\`) and staged as the `qemu` flavour: x86
+`xhci98.sys` `3e25ec2562481553...` (`built Sep 30 2026 11:28:51`), amd64
+`bd559cb40f8fbea6...` (`11:35:22`), both INFs unchanged; restaged and read back
+in the same eight transfer directories. Not yet read on a guest.
 
 ### What is owed
 
-- The address reclaim: code, counters, host vectors, a mutation run and a
-  review; then a build and round 9, Windows 7 x86 at 2 on a new disk
+- Round 9 on the address reclaim (brief `out\t24-3-4\recipe-2434-r9.md`):
+  Windows 7 x86 at 2 on a new disk
   (`-DiskSuffix -r9`), with the post-churn four-device re-plug and a watch
   after it as a named step, then the disable cycles and 0 and 1; then x64 the
   same; then Windows 2000 and XP (XP's two-handle restore) as the NT 5.x
