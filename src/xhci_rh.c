@@ -2506,8 +2506,9 @@ VOID XhciRhVhubPort1Status(PXHCI_EXTENSION ext,
     /*
      * Round 9 evidence (task 24.3.4): usbhub hard-reset a vhub whose reset-1
      * change read enabled and not connected, after a reset-1 change that came
-     * too late. These say which reading carried the PED and when port 1's
-     * C_PORT_RESET was answered, with whether a stale shadow answered it.
+     * too late. The first note gives the reading that carried PED without CCS
+     * and what was armed on the port then; the second places each answer
+     * carrying port 1's C_PORT_RESET among the ring's reset notes.
      */
     if ((phys & (XHCI_HUB_PORT_ENABLE | XHCI_HUB_PORT_CONNECTION)) ==
         XHCI_HUB_PORT_ENABLE) {

@@ -1297,10 +1297,12 @@ VOID XhciVhubPort1Report(const XHCI_VHUB *hub,
         }
     }
     /*
-     * Never enabled without a connection (USB 2.0 11.24.2.7.1): usbhub's
-     * reset-1 table sends a reset change reading enabled and not connected to
+     * Never enabled without a connection (USB 2.0 11.24.2.7.1). Windows 7's
+     * usbhub sends a first-reset change reading enabled and not connected to
      * UsbhHardErrorReset1BadEnable, which hard-resets this hub; not connected
-     * and not enabled drops only the device (task 24.3.4 round 9).
+     * and not enabled drops only the device [static; the round-8 x86 dump's
+     * exception history repeats that path, debugger] (task 24.3.4 round 9,
+     * legal-provenance.md section 4).
      */
     if (hub->P1Enabled && (s & XHCI_HUB_PORT_CONNECTION) != 0 &&
         (physStatus & XHCI_HUB_PORT_ENABLE) != 0 &&

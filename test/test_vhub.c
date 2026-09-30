@@ -2068,10 +2068,18 @@ static void testPort1EnableNeedsConnection(void)
     ULONG applied;
     ULONG phys;
     ULONG s;
+    ULONG c;
 
     phys = XHCI_HUB_PORT_POWER | XHCI_HUB_PORT_ENABLE;
     for (applied = ON_DEMAND; applied <= ALWAYS; applied++) {
         readyHub(&h, applied);
+        h.P1Changes |= (UCHAR)XHCI_HUB_C_PORT_RESET;
+        XhciVhubPort1Report(&h, phys, XHCI_SPEED_FULL, &s, &c);
+        CHECK_EQ(c & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+                 "the reset change is answered beside PED without CCS");
+        CHECK_EQ(s & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE), 0,
+                 "and beside it port 1 reads neither connected nor enabled");
+        XhciVhubPort1Feature(&h, 0, XHCI_VHUB_SEL_C_PORT_RESET, 0, 0, phys);
         s = p1Status(&h, phys, XHCI_SPEED_FULL);
         CHECK_EQ(s & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE), 0,
                  "PED without CCS: port 1 neither connected nor enabled");
