@@ -1278,6 +1278,45 @@ hard-resets each virtual hub just after its device was addressed and its
 configuration read. Ending the wait may turn the loop into a plain
 enumeration failure, which on NT 6.x in QEMU is the gap accepted above.
 
+**Round 8 read that rule at runtime, and found a USB address held past its
+owner; the address is now reclaimed when usbport assigns it again**
+(2026-09-29; `runs/run-24.md`, "Round 8 on the idle-disown fix"). On
+Windows 7 x86 at 2 the rule settled every debt it met (`DisownsSettledIdle`
+equal to `DevicesDisownedOut` throughout, `VhubResetsHeld` 0), and all four
+devices bound behind their virtual hubs. A re-plug after the churn then
+bugchecked 0xFE through a cause no debt is part of (debugger): usbhub
+hard-reset virtual hub 1 just after its device was addressed, and usbport
+removed that device and freed its address 1 at once; this driver's record
+kept address 1, Addressed, EP0 unbound, idle, because a record gives its
+address up only at its root port's disable, at an address-0 re-entry or at
+teardown, and EP0's removal deliberately keeps it (3.3's reason: the same
+removal precedes usbport's reopen of EP0 mid-enumeration, and the address
+map is how the reopen finds the slot). usbport gave address 1 to the next
+device, behind virtual hub 5; the SET_ADDRESS interception refused it as
+held by another record, and usbhub retried under the bus lock it already
+held, while the root-port-1 disable that would have released address 1 sat
+queued behind that lock until the watchdog fired. Clearing the address at
+EP0's removal or at CloseEndpoint would break that reopen (and several
+NT 5.x stacks never close), usbport tells a miniport nothing when it frees
+an address, and the device handle is no key (XP uses two per device, issue
+4). So the address is reclaimed at **reassignment**: usbport allocates only
+free addresses, so when SET_ADDRESS(A) arrives, from the interception or
+from a virtual hub's own addressing, and a *different* record holds A, the
+old owner is gone as far as usbport is concerned. On xHCI the number is only
+this driver's key - the address on the wire is the one the controller chose
+in Address Device - so retiring it touches nothing on the bus. The holder
+must be an idle real record with nothing bound: Addressed, EP0 unbound (flag
+and extension), no other endpoint bound, no operation active or owed, no
+SET_ADDRESS held, every endpoint quiet, and no device record behind it. Its
+topology node is detached first, then its address cleared, flag and number
+both, because late completions compare the number they captured; its state,
+slot, DCBAA entry, rings and port position stay, and its port's later disable
+still disowns and releases it by position, so no Disable Slot is issued for
+the reclaim and none is rolled back if the newcomer's Address Device fails.
+A virtual hub holding A, a bound or busy holder, or one with a device behind
+it keeps the refusal, now counted by reason, beside `AddressReclaims`. The
+reclaim does not disown the holder or touch a debt: 3.3's rule is unchanged.
+
 ## Sources
 
 - `docs/issues/06-full-speed-root-port-bugcheck.md`: the bugcheck, the

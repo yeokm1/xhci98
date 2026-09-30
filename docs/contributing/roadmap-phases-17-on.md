@@ -987,7 +987,16 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     and idle settles too, the release proving itself through Stop Endpoint
     and Disable Slot (record 12 sections 3.3 and 11); committed and built,
     and Windows 7 in both architectures is retaken on it at 2, with the
-    legs round 6 still owes run once on the same build.
+    legs round 6 still owes run once on the same build. **Round 8, on
+    that fix** (2026-09-29, `runs/run-24.md`, "Round 8 on the idle-disown
+    fix"): the fix works - no disown debt is left under any loop, and all
+    four devices bound behind their virtual hubs on Windows 7 x86 for the
+    first time - but a re-plug after the churn bugchecked 0xFE again, a
+    circular wait on a USB address this driver kept after usbport had freed
+    it and given it to the next device; Windows 7 x64 passed its watch and
+    stopped short of the re-plug. The fix taken: reclaim an idle holder's
+    address when usbport assigns it again (record 12 section 11); the
+    reclaim, then Windows 7 at 2 again with the re-plug as a named step.
   - [ ] **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the
     switch at 1 and at 2, the Low-Speed mouse and the Full-Speed audio device from
     `test-equipment.md` on root ports, the interval read from the snapshot;

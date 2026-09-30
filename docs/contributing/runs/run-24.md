@@ -2788,3 +2788,110 @@ on a guest.
   session (owner: no new guests once the running legs finished).
 - `vm\t2434-win7-x64-r7.img` keeps round 7's dump (a boot overwrites it), and
   round 6's two disks keep theirs.
+
+## Round 8 on the idle-disown fix (2026-09-29)
+
+Windows 7 in both architectures at 2 on the build that carries `ae939d6`.
+Development host A, one guest at a time (owner; the session opened at two and
+the cap was lowered after both guests had been launched, so the x64 guest's
+first boot was abandoned at its firmware), one agent per guest; recipe
+`out\t24-3-4\recipe-2434-r8.md`, reports `out\t24-3-4\r8-<guest>-report.md`
+and their evidence (git-ignored). The `qemu` flavour: x86 `xhci98.sys`
+`7417a3f47f02d49a...` (`built Sep 29 2026 20:10:18`), amd64
+`c56668f6c451fb56...` (`20:14:29`), INFs unchanged; both stamps read back in
+the guests' debugcon. New disks (`vm\t2434-win7-r8.img`,
+`vm\t2434-win7-x64-r8.img`), so the earlier dump disks were never booted.
+**The fix works, and Windows 7 x86 still fails at 2 through a new cause.** No
+disown debt blocks anything any more, and for the first time all four devices
+bound behind their virtual hubs on Windows 7; a re-plug after the churn then
+bugchecked 0xFE again, through a USB address this driver kept after usbport
+had freed it and handed it on. Nothing in this section is ticked.
+
+### What each guest read
+
+| Guest | Reached | Result | Report and evidence |
+|---|---|---|---|
+| Windows 7 SP1 x86, 4 vCPUs | value 2 | the four devices plugged 5 s apart in round 7's order (Full-Speed mouse port 1, High-Speed mouse port 2, storage port 5, audio port 3) and the 21 minutes after them **passed** with no reset, and **all four bound behind their virtual hubs** (Device Manager by connection); round 7 bound none. The ports kept disowning and re-enumerating for about 15 minutes, then settled: `DisownsSettledIdle` 3, 23, 42, 56 at 0, 5, 10 and 15 minutes and 56 before the unplug, `DisownsSettledEmpty` 1, 26, 42, 59, 59, `DevicesDisownedOut` equal to `DisownsSettledIdle` throughout, `VhubResetsHeld` 0 throughout (round 7: about 5 a minute), `RhResetTimeouts` 0, `VhubCreated` 8, no controller reset, re-arm failure or escalation. Eleven SET_ADDRESS requests were refused during the plug because another record still held the address; each survived, because the holder's port happened to be disabled soon after. At the unplug three endpoint opens were refused for an address no record held (`EndpointRefusalsNoDevice` 3); the cause is not established. Churn 25 of 25 on port 5, which now exercised the virtual hub (slots and endpoint opens +25/+25 and +135/+135). **The re-plug of the four devices after the churn reset the guest** within about 2.5 minutes; the debugcon tail ends in refused SET_ADDRESS lines for addresses 3, 5 and 1 and a new `DriverEntry`, with no `StopController`. The five disable cycles and the passes at 0 and 1 were not taken (stop rule) | `r8-win7-report.md`; `r8-win7-r8b-*`, `r8-win7-s2-churn.txt`, `debugcon\win7-r8-r8b-debugcon.log`; the dump in `vm\t2434-win7-r8.img`'s pagefile; `r8-win7-bugcheck-analysis.md` |
+| Windows 7 SP1 x64, 4 vCPUs | value 2 | partial, **no failure seen**. The install boot loaded and stopped the driver normally. At 2 the four devices plugged one at a time about 2.5 minutes apart and the 15-minute watch after the last **passed**: `DisownsSettledIdle` 57 and 81 at 10 and 15 minutes, `DisownsSettledEmpty` 65 and 83, `DevicesDisownedOut` equal to `DisownsSettledIdle`, `VhubResetsHeld` 0, `RhResetTimeouts` 0. Eleven refused SET_ADDRESS lines, the x86 pattern, survived. The agent then stopped for a reason outside the guest (the harness ended it) and the guest was quit on the owner's order; binding, churn, re-plug, disable cycles and 0 and 1 not taken | `r8-win7-x64-report.md` (its interim section); `r8-win7-x64-r8c-*.txt`, `debugcon\win7-x64-r8-r8c-debugcon.log` |
+
+### Windows 7 x86: 0xFE on the re-plug - a stale address, not a debt
+
+`out\t24-3-4\r8-win7-bugcheck-analysis.md` read the kernel summary dump from
+a read-only copy of the disk (debugger unless marked). There was no
+`Windows\MEMORY.DMP`: the boot after the reset stopped at the Welcome screen
+before the dump was moved, and the older of the volume's two `pagefile.sys`
+entries carried it (`PAGEDUMP`, dump type 2); the minidump agrees. It is the
+same crash as rounds 6 and 7: `BugCheck FE, {8, 6, a, 85b6b000}`, usbhub's
+change-queue watchdog, this time on root port 1.
+
+- **Option 1 worked.** No root port owed a disown, no record was DISOWNED,
+  `VhubResetsHeld` 0, and `DevicesDisownedOut` = `DisownsSettledIdle` = 95.
+  The trigger for the recorded fallback (a disowned record with work queued
+  under the loop) is absent.
+- **What held the queue is a circular wait on a stale address:**
+  1. usbhub hard-reset virtual hub 1 just after its Full-Speed mouse had been
+     addressed (address 1); usbport removed the child and freed address 1 at
+     once.
+  2. This driver's record for that mouse (root port 1) stayed Addressed with
+     its address valid and address 1, EP0 unbound, idle. The record gives its
+     address up when its root port is disabled (the disown), at an address-0
+     re-entry or at teardown (static); EP0's removal keeps it on purpose,
+     because the same removal precedes usbport's reopen of EP0 mid-enumeration.
+  3. Virtual hub 5 enumerated the storage device; usbport gave it address 1;
+     the SET_ADDRESS interception found address 1 on the other record and
+     refused it; `USBPORT_InitializeDevice` failed `c0000001`, and usbhub
+     retried without letting go of usbport's bus lock (it re-enters it;
+     virtual hub 5's log shows only re-entries), getting address 1 each time.
+  4. The disable of root port 1 that would have cleared address 1 belonged to
+     virtual hub 1's hard reset, which held root port 1's change-queue gate and
+     sat at the head of the bus lock's queue for 60.03 s, and the watchdog
+     fired.
+- The earlier refusals of the load (addresses 3 and 5 in the re-plug, eleven
+  in the first plug) were the same order of events resolving in time: the
+  holder's root-port disable reached this driver before the refused
+  enumeration took the lock again.
+- No counter records a refused SET_ADDRESS, and its debugcon line prints only
+  when the address changes, so the loop's size shows only in the log rings.
+- Still open, as in round 7: why usbhub hard-resets a virtual hub just after
+  its device is addressed.
+
+### Windows 7 x64: partial
+
+Nothing failed in what was taken, and the watch at 2 passed with the same
+counter shape as x86's first plug. The x64 guest ran the same stale-address
+refusals, which survived; it did not reach the re-plug that failed on x86.
+The agent's guard against an unexpected load fired once on the boot's own
+`DriverEntry` (a false alarm, recorded in the report).
+
+### The fix chosen: reclaim the address at reassignment
+
+A read-only Codex review (`out\t24-3-4\r8-codex-address-reclaim.md`,
+git-ignored) agreed with the reading, with two qualifications: the stale
+address is the demonstrated blocker, not proof that enumeration then
+succeeds; and the root-port disable is not the only path that clears an
+address. The rule it gave, and the one taken: when SET_ADDRESS(A) arrives and
+a *different* record holds A, usbport's allocation of A proves the old owner
+is gone, so the holder's address is retired instead of the new device being
+refused. On xHCI the number is only this driver's key; the address on the
+wire is the one the controller chose in Address Device. The holder keeps its
+slot, rings and port position, and its port's later disable still tears it
+down by position. The reclaim is narrow: only a holder with nothing bound or
+in flight and no device behind it, and a counted refusal otherwise. Clearing
+the address at EP0's removal or at CloseEndpoint was rejected (it breaks the
+reopen mid-enumeration; some NT 5.x stacks never close), as was the fallback
+teardown at every unconfirmed disown (round 8 has no debt to trigger it).
+Design record 12 section 11 carries the rule; the code follows.
+
+### What is owed
+
+- The address reclaim: code, counters, host vectors, a mutation run and a
+  review; then a build and round 9, Windows 7 x86 at 2 on a new disk
+  (`-DiskSuffix -r9`), with the post-churn four-device re-plug and a watch
+  after it as a named step, then the disable cycles and 0 and 1; then x64 the
+  same; then Windows 2000 and XP (XP's two-handle restore) as the NT 5.x
+  regression.
+- Round 7's list stands: Vista x86 and x64 at 0, 1 and 2; SweetLow's stack at
+  2; XP x86 and ME's short passes at 2; the device matrix at 2.
+- `vm\t2434-win7-r8.img` keeps round 8's dump (it was booted once past the
+  crash to the Welcome screen, never again); `vm\t2434-win7-x64-r8.img` holds
+  no dump.
