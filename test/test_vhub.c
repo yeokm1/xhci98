@@ -2057,6 +2057,33 @@ static void testPipeByte(void)
     CHECK_EQ(XhciVhubPipeByte(&h), 0x02, "an over-current is a change");
 }
 
+/*
+ * Port 1 never reads enabled without a connection (task 24.3.4 round 9): a
+ * physical reading of PED without CCS reads as neither, the row usbhub's
+ * reset-1 table drops the device on rather than hard-resetting the hub.
+ */
+static void testPort1EnableNeedsConnection(void)
+{
+    XHCI_VHUB h;
+    ULONG applied;
+    ULONG phys;
+    ULONG s;
+
+    phys = XHCI_HUB_PORT_POWER | XHCI_HUB_PORT_ENABLE;
+    for (applied = ON_DEMAND; applied <= ALWAYS; applied++) {
+        readyHub(&h, applied);
+        s = p1Status(&h, phys, XHCI_SPEED_FULL);
+        CHECK_EQ(s & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE), 0,
+                 "PED without CCS: port 1 neither connected nor enabled");
+        CHECK_EQ(s & XHCI_HUB_PORT_POWER, XHCI_HUB_PORT_POWER,
+                 "PED without CCS: port 1 keeps its power");
+        CHECK_EQ(p1Status(&h, PS_EN, XHCI_SPEED_FULL) &
+                     (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE),
+                 XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE,
+                 "CCS back: port 1 connected and enabled again");
+    }
+}
+
 int main(void)
 {
     testIdAccepted();
@@ -2072,6 +2099,7 @@ int main(void)
     testRootReportV1();
     testSuspendMerge();
     testPort1Power();
+    testPort1EnableNeedsConnection();
     testHeldResetEndsAtPort1Disable();
     testUnplugRetiresV1();
     testRootResetHeldV1();

@@ -2489,6 +2489,7 @@ VOID XhciRhVhubPort1Status(PXHCI_EXTENSION ext,
 {
     XHCI_PORT_SHADOW *shadow;
     PXHCI_VHUB hub;
+    ULONG phys;
 
     *status = 0;
     *change = 0;
@@ -2500,8 +2501,26 @@ VOID XhciRhVhubPort1Status(PXHCI_EXTENSION ext,
     if (xhciRhAdmitted(ext) && shadow->Armed == XHCI_PORT_OP_NONE) {
         xhciRhFoldReading(ext, hubPort, shadow);
     }
-    XhciVhubPort1Report(hub, xhciRhVhubPhys(shadow), (ULONG)shadow->Speed,
-                        status, change);
+    phys = xhciRhVhubPhys(shadow);
+    XhciVhubPort1Report(hub, phys, (ULONG)shadow->Speed, status, change);
+    /*
+     * Round 9 evidence (task 24.3.4): usbhub hard-reset a vhub whose reset-1
+     * change read enabled and not connected, after a reset-1 change that came
+     * too late. These say which reading carried the PED and when port 1's
+     * C_PORT_RESET was answered, with whether a stale shadow answered it.
+     */
+    if ((phys & (XHCI_HUB_PORT_ENABLE | XHCI_HUB_PORT_CONNECTION)) ==
+        XHCI_HUB_PORT_ENABLE) {
+        XhciLogNoteLocked(ext, "vhub.p1.pednoccs",
+                          (hubPort << 24) |
+                              (((ULONG)shadow->Armed & 0xFFUL) << 16) |
+                              (shadow->Portsc & 0xFFFFUL));
+    }
+    if ((*change & XHCI_HUB_C_PORT_RESET) != 0) {
+        XhciLogNoteLocked(ext, "vhub.p1.prc",
+                          (hubPort << 24) | ((*change & 0xFFUL) << 16) |
+                              (*status & 0xFFFFUL));
+    }
 }
 
 /*

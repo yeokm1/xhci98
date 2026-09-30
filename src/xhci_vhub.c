@@ -1296,7 +1296,14 @@ VOID XhciVhubPort1Report(const XHCI_VHUB *hub,
             s |= XHCI_HUB_PORT_HIGH_SPEED;
         }
     }
-    if (hub->P1Enabled && (physStatus & XHCI_HUB_PORT_ENABLE) != 0 &&
+    /*
+     * Never enabled without a connection (USB 2.0 11.24.2.7.1): usbhub's
+     * reset-1 table sends a reset change reading enabled and not connected to
+     * UsbhHardErrorReset1BadEnable, which hard-resets this hub; not connected
+     * and not enabled drops only the device (task 24.3.4 round 9).
+     */
+    if (hub->P1Enabled && (s & XHCI_HUB_PORT_CONNECTION) != 0 &&
+        (physStatus & XHCI_HUB_PORT_ENABLE) != 0 &&
         hub->DevState == XHCI_VHUB_DEV_CONFIGURED) {
         s |= XHCI_HUB_PORT_ENABLE;
     }
