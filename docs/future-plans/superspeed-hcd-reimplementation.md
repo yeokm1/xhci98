@@ -1,7 +1,7 @@
 # General SuperSpeed support: the Option B host controller driver
 
-Status: on the cards once the miniport driver stabilises (owner,
-2026-10-02; until then it was "not planned"). This page records what general
+Status: on the cards as the miniport driver's successor, once the miniport
+stabilises (owner, 2026-10-02; until then it was "not planned"). This page records what general
 USB 3.x SuperSpeed support would take, so that the question does not have to
 be re-derived each time it is asked. It was the "What SuperSpeed Support Would
 Require" section of `docs/usb-xhci-info/xhci-programming.md` until 2026-09-07;
@@ -76,20 +76,27 @@ bandwidth model.
 The owner put this work on the cards on 2026-10-02, to follow once the
 miniport driver stabilises. That changes its standing, not the analysis
 above: sections 1 to 3 still describe what the project is and what it costs.
-It would be a second driver beside the miniport, not a change to it - the
-Option A miniport stays the shipping driver on every target, and the rule in
+The HCD is planned as the miniport's **successor**, not as a separate project
+beside it (owner, 2026-10-02): once it is taken up, the Option A miniport is the
+driver it replaces, and the miniport's work so far - the xHCI hardware layer,
+the readings, the harness and the test images - is what it builds on. Until
+then the miniport is the shipping driver on every target, and the rule in
 `AGENTS.md` against re-implementing `usbport.sys`'s role inside the miniport
-still holds.
+still holds; the successor is a deliberate, scheduled change of architecture,
+not something to drift into.
 
 Decisions that are the owner's before it is scheduled:
 
 - what "stabilised" means for the miniport (for example, a release cut with
   no open known limitation that the miniport itself causes);
+- how the handover goes: whether the miniport keeps being shipped and
+  maintained until the successor matches it on every target, and on which
+  target the successor starts;
 - whether the first target is the Option B USB 2.0 replacement alone, proven
   against the miniport's own readings, before any SuperSpeed path is started
   (section 2 assumes so);
 - whether [superspeed-storage-behind-a-switch.md](superspeed-storage-behind-a-switch.md)
-  is built first inside the miniport, or folded into this project.
+  is built first inside the miniport, or folded into the successor.
 
 ## Sources
 
