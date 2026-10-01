@@ -3222,8 +3222,13 @@ The three switch-0 expectations:
 
 - The rest of round 11 on `4506fa9` (brief `out\t24-3-4\recipe-2434-r11.md`):
   Vista x86 and x64 at 0, 1 and 2.
-- The matrix's three switch-0 expectations at 2, and the churn chain's depth
-  at 2 (above): owner's decision.
+- Before the Vista runs (owner, 2026-10-01): make the matrix's expectations
+  follow the switch - at 2 the FS HID rows assert zero speed mismatches and
+  the churn asserts zero TT disagreements with pairs agreed; at 2 the churn
+  also asserts the depth limit (the bottom mouse not enumerated, nothing
+  refused) rather than a shorter chain. And a line for the `1.2.0.0` release
+  notes and readme: with the switch on, an external hub chain can be one hub
+  shorter than USB's five.
 - Not blocking: a timing check of hub 4's 10 s install restart at the first
   boot with the hubs (round 11 above); XP's first-boot hub-1 re-address
   against its setupapi log (a fresh run).
