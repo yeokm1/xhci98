@@ -3143,13 +3143,25 @@ Notes, none a stop condition:
   for 6 minutes while iso streamed (255,460 of 255,940 packets answered, no
   errors) - another form of XP x86's known audio behaviour (round 6).
 - **Windows XP, `TransfersRefused` 1** (ring full) at the audio unplug, just
-  before the teardown (debugcon line 3138). Not yet read.
+  before the teardown (debugcon line 3138). Read from the logs: it is the
+  designed answer to a full ring - nothing written, a retry status handed
+  back to usbport, one re-offer asked for (`EndpointRetriesAsked` 1). It came
+  at the end of a run of iso aborts (the blocked Sound Recorder's), and TDs
+  submitted equalled TDs completed (0x6555). The log does not name the
+  endpoint. Not a driver fault.
 - **Windows XP, storage:** bound and bulk flowed, but no drive letter
   appeared.
 - **Windows ME, `IsoPacketErrorsTotal` 17**, all in the first ~6 minutes of
   playback, then flat (round 6 on ME and round 11 on 2000: 0). The ring keeps
-  only four `xfer.error` notes, so the packets are not identified. The first
-  play failed while ME was still installing the audio stack; plays 2-24 ran.
+  only four `xfer.error` notes, so the packets are not identified. The
+  counter takes a packet the controller skipped or one answered with a
+  failing code. The 17 rose only while `IsoRingUnderruns` climbed fast
+  (339 to 3,779 over the first five samples) and stopped when it flattened:
+  the guest feeding the OUT ring late, on a host carrying a second emulated
+  guest. The iso and event code is unchanged since round 6's build
+  (`b16f341`'s tree), which gave 0 on ME. Nothing in the logs points at the
+  driver, so no instrumented re-run. The first play failed while ME was
+  still installing the audio stack; plays 2-24 ran.
 - **Windows 98 SE:** round 6's freeze on B's audio plugs did not come back in
   four plugs on a fresh image. Not explained, and a small sample; round 6's
   image had had runs at 0 and 1 and the `USBD.SYS` swap first.
@@ -3160,9 +3172,6 @@ Notes, none a stop condition:
 
 - The rest of round 11 on `4506fa9` (brief `out\t24-3-4\recipe-2434-r11.md`):
   Vista x86 and x64 at 0, 1 and 2; the device matrix at 2.
-- Two log reads, before or with those: XP's `TransfersRefused` 1 at the
-  audio unplug and ME's 17 iso packet errors. A driver fault in either means
-  re-running round 11.
 - Not blocking: a timing check of hub 4's 10 s install restart at the first
   boot with the hubs (round 11 above); XP's first-boot hub-1 re-address
   against its setupapi log (a fresh run).
