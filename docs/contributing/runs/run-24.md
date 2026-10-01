@@ -3168,10 +3168,62 @@ Notes, none a stop condition:
 - **Windows 2000:** playback paced slowly with two guests on the host;
   `InterruptArmsTakenByIsr` 1,163 (round 7's rate x1.75). No fault.
 
+### The device matrix at 2 (2026-10-01, development host C)
+
+Windows 98 SE (`2a-fresh`) and 2000 (`2b-fresh`), both re-cloned from their
+base snapshots and prepared on this build, then `run-matrix.ps1
+-PostRelease` (17 rows each, `-snapshot`, so the images were not written).
+The x86 package was copied into `out\pkg-qemu-x86` first (round 6's is kept
+in `out\t24-3-4\matrix-pkg-qemu-x86-r6\`). The owner drove 98's preparation
+by hand: switch 2, the hub and HID wizards and the fourteen attach passes. A
+check of the last prep log found only the `02:45:13` stamp, eight hubs and no
+controller reset, and `qemu-img check` found the image clean. **No stop
+condition on either guest, and no row failed on anything but an expectation
+written for switch 0.** Reports `out\t24-3-4\r11-matrix-report.md` (2000 and
+the shared setup) and `r11-matrix-2a-report.md` (98 SE); evidence under
+`out\t24-3-4\r11-matrix\`.
+
+| Guest | Rows | Result |
+|---|---|---|
+| Windows 98 SE | 7 pass, 2 fail, 5 no driver (expected), 3 excluded | The two FS HID rows fail on the speed-mismatch expectation only. uas, net, serial, braille and ccid were addressed and opened nothing, as the matrix expects. The tablets and the hub churn are excluded on this target |
+| Windows 2000 SP4 | 8 pass, 3 fail, 6 no driver (expected) | The two FS HID rows and the hub churn fail, each on one switch-0 expectation. The first run's tablet replug and Wacom rows were ERROR when the group's QEMU went away (the owner may have closed its window); a re-run of the HID group passed both, on both legs |
+
+Every group log on both guests carries the one stamp and no `ctrl.failed`,
+`refused SET_ADDRESS` or bugcheck. `ResetControllerCalls`, every
+`AddressRefusals*`, `AddressReclaims`, the disown counters,
+`VhubResetsHeld`, `RhResetTimeouts`, `TransfersRefused`, the iso error
+counters, `SoftInterruptRequests` (NT 5.x and 9x), `CompletionFallbackPolls`
+and `CompletionsDeliveredForced` stayed 0 throughout. No hub was
+re-addressed. The runs read `VhubCreated` 4, not 8: the matrix's controller
+has QEMU's default four USB 2.0 ports, the prep's eight.
+
+The three switch-0 expectations:
+
+- **`usb-kbd/fs` and `usb-mouse/fs`: `advance endpoint speed mismatches`.**
+  The row was written for the driver reporting every root port High Speed,
+  where a Full-Speed device on one is a mismatch by construction. At 2 the
+  device sits behind the virtual hub at its true speed, so the counter reads
+  0, which is what the switch is for.
+- **`usb-hub/churn` (2000): `TT pairs disagreeing with usbport >= 10`.**
+  Batch 7b-V's hand number came from Full-Speed hubs on a root port reported
+  High Speed, the phantom translators. At 2 the chain sits behind the
+  virtual hub's real translator: `TtPairsDisagreed` 0, `TtPairsAgreed` 18,
+  `VhubTtNamed` 18.
+- **And a reading the expectations did not catch:** the churn's mouse at the
+  bottom of its five-hub chain (`port 2.1.1.1.1.1`) was never enumerated at
+  2, on either leg (devices addressed +10 against +11 at 0). The fifth hub
+  of the chain was addressed and marked a hub; nothing behind it was
+  addressed, and the driver refused nothing. The virtual hub is one more
+  hub tier in Windows' view, so that chain is six hubs deep, past USB 2.0's
+  five. Inferred from the counters; no guest-side reading was taken. At 2
+  every device has one hub tier fewer to spare than at 0.
+
 ### What is owed
 
 - The rest of round 11 on `4506fa9` (brief `out\t24-3-4\recipe-2434-r11.md`):
-  Vista x86 and x64 at 0, 1 and 2; the device matrix at 2.
+  Vista x86 and x64 at 0, 1 and 2.
+- The matrix's three switch-0 expectations at 2, and the churn chain's depth
+  at 2 (above): owner's decision.
 - Not blocking: a timing check of hub 4's 10 s install restart at the first
   boot with the hubs (round 11 above); XP's first-boot hub-1 re-address
   against its setupapi log (a fresh run).
