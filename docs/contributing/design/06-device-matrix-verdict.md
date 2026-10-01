@@ -262,7 +262,9 @@ name a translator the topology graph refuses, so `TT pairs disagreeing`
 advances. At 1 or 2 the device sits behind a virtual High-Speed hub with a
 real TT, so both stay at 0 and the TT pairs agree. A row states each form in
 `ExpectBySwitch`, keyed by the switch values the form covers (`'0'`, `'1,2'`);
-every value must be covered exactly once, and the lines are added to the
+every value must be covered exactly once, by a form of one or more lines
+(an empty form is refused, since it would judge its values by nothing), and
+the lines are added to the
 row's `Expect` rather than replacing it.
 
 The runner reads the value from the running driver at each group boot,

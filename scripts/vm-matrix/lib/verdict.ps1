@@ -435,6 +435,14 @@ function Get-RowSwitchProblems {
     }
     $covered = @{}
     foreach ($k in $Row.ExpectBySwitch.Keys) {
+        # An empty form covers its values with nothing, which is the same
+        # silence as leaving them out, and is refused the same way (Codex
+        # review of 8fabf61: `'1,2' = @()` turned a mismatch FAIL into PASS).
+        $lines = @($Row.ExpectBySwitch[$k] | Where-Object { $_ -is [string] -and -not [string]::IsNullOrWhiteSpace($_) })
+        if ($lines.Count -eq 0 -or $lines.Count -ne @($Row.ExpectBySwitch[$k]).Count) {
+            $out += ("row {0}: ExpectBySwitch '{1}' must hold one or more expectation lines and nothing else" -f $Row.Name, $k)
+            continue
+        }
         try {
             foreach ($v in (ConvertFrom-SwitchKey -Key ([string]$k))) {
                 if ($covered.ContainsKey($v)) {
