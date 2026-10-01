@@ -2917,3 +2917,163 @@ in the same eight transfer directories. Not yet read on a guest.
 - `vm\t2434-win7-r8.img` keeps round 8's dump (it was booted once past the
   crash to the Welcome screen, never again); `vm\t2434-win7-x64-r8.img` holds
   no dump.
+
+## Round 9 on the address reclaim (2026-09-30)
+
+Windows 7 x86 at 2 on the build that carries `f738c9b` and `f492675`.
+Development host B, one guest (owner), one agent; recipe
+`out\t24-3-4\recipe-2434-r9.md`, report `out\t24-3-4\r9-win7-report.md` and its
+evidence (git-ignored). The `qemu` flavour: x86 `xhci98.sys`
+`3e25ec2562481553...` (`built Sep 30 2026 11:28:51`, read back in the guest's
+debugcon), on a new disk (`vm\t2434-win7-r9.img`). **The reclaim works, and a
+virtual hub's re-enumeration loop remained.** Only the first three steps were
+taken, by the owner's decision mid-run; nothing in this section is ticked.
+
+### What the guest read
+
+| Guest | Reached | Result | Report and evidence |
+|---|---|---|---|
+| Windows 7 SP1 x86, 4 vCPUs | value 2, steps 1-3 | no 0xFE and no reset anywhere: one `DriverEntry` for the load, no `StopController`, no controller reset or re-arm failure. **The post-churn four-device re-plug, round 8's crash step, survived** its 5-minute watch, and all four devices bound. `AddressReclaims` 1 in the first plug (slot 1, address 9 - round 8's address) and 7 after the re-plug; every `AddressRefusals*` counter 0 at every reading, and no refused-SET_ADDRESS debugcon line. **The audio device did not bind in the first plug**: root ports 1 and 3 re-enumerated in a disown loop for the whole 26 minutes; it bound on the re-plug. Churn 25 of 25 on port 5. The disable cycles and the passes at 0 and 1 were not taken (owner) | `r9-win7-report.md`; `r9-win7-r9b-*`, `debugcon\win7-r9-r9b-*` |
+
+### Why usbhub kept resetting the hub: a first-reset change reading enabled without connected
+
+A static read of the four NT 6.x `usbhub.sys` builds and round 8's x86 dump
+(`out\t24-3-4\r9-usbhub-hardreset-static.md`, git-ignored; provenance section
+4) found the loop's mechanism. usbhub hard-resets a hub only through its
+exception table (code 0x3E among others). Round 8's dump held, on one virtual
+hub's port 1, the cycle 0x3E, then 0x3D (reset 1 timed out with the port
+reading enabled), then 0x51 (disable and reset again), then 0x3E, about 38 s a
+turn [debugger]. usbhub's first-reset table sends a reset change whose
+reading is enabled and not connected (index 0x09) to
+`UsbhHardErrorReset1BadEnable`, which raises 0x3E [static], and the virtual
+hub's port-1 report composed ENABLE without checking CONNECTION. Two defects
+were named: (a) reset 1's change arriving too late, and (b) ENABLE without
+CONNECTION. Only (b) was understood.
+
+### The fix for (b): enable needs a connection (`c5330be`)
+
+`XhciVhubPort1Report` reports port 1 enabled only while it is connected; host
+vector `testPort1EnableNeedsConnection` (mutation: 4 checks fail), and two
+ring notes for (a): `vhub.p1.pednoccs` (a reading that carried PED without
+CCS) and `vhub.p1.prc` (each answer carrying port 1's C_PORT_RESET). Two Codex
+rounds (`out\t24-r9fix\codex-review-1.md`, `-2.md`, git-ignored): no P1 or P2;
+the P3s fixed in `52c52cf` and `4dbad2b`. Recorded, not fixed: the root view
+(`XhciVhubRootReport`, `XhciPortShadowReport`) can still show usbport's root
+hub a port enabled and not connected; it has never been observed. Built and
+staged the same day: x86 `6a33b32f041093b0...` (`built Sep 30 2026 15:58:04`),
+amd64 `e08bb0515d16ae60...` (`16:05:06`).
+
+## Round 10 on the enable-needs-connection fix (2026-09-30)
+
+Windows 7 x86 at 2 on `4dbad2b`. Development host A (round 9 ran on B, so
+timings are not directly comparable), one guest at a time (owner: one VM until
+it passes); recipe `out\t24-3-4\recipe-2434-r10.md`, reports
+`out\t24-3-4\r10-win7-report.md` and `r10e-win7-report.md` (git-ignored). New
+disk `vm\t2434-win7-r10.img`, used for the run and then for the loop
+reproductions below. **The first plug was fixed, and the loop came back after
+the controller was re-enabled.** Nothing in this section is ticked.
+
+### What the guest read
+
+| Guest | Reached | Result | Report and evidence |
+|---|---|---|---|
+| Windows 7 SP1 x86, 4 vCPUs | values 2, 0, 1; steps 1-5 | **all four devices bound on the first plug within about 4 minutes** (round 9: the audio device looped for 26 minutes); no `vhub.p1.pednoccs` note anywhere, so defect (b)'s path never arose. No crash or reset in 9 driver loads; `AddressReclaims` 3, then 4; every refusal 0. Churn 25 of 25 at 2, 21 of them reaching a slot; one root-port reset timed out where an unplug landed on it (`RhResetTimeouts` 1). The post-churn re-plug bound all four. **Five Device Manager disable/enable cycles at 2: after enables 3, 4 and 5 a virtual hub looped again** - the audio device every time, the Full-Speed mouse once - about 40 to 60 s a turn; disables took 94-97 s. At 0 the controller's disable was vetoed with "restart required" (the audio function held open; known). At 1 both enables looped the audio device; the churn mouse behind a virtual hub got no slot in 25 of 25 cycles (round 6's NT 6.x gap). No `vhub.p1.prc` answer was late in ring order | `r10-win7-report.md`; `r10-win7-r10{b,c,d}-*`, `debugcon\win7-r10-*` |
+
+### The loop after an enable: reset 1 times out (debugger)
+
+The loop was reproduced on the same disk (tags `r10f`, `r10g`) and the guest
+stopped with the QEMU monitor's `nmi`. A first attempt only halted the guest
+("Hardware Malfunction"): Windows 7 turns an NMI into bugcheck 0x80 with a
+dump only when `CrashControl\NMICrashDump` is 1. Set, the second attempt wrote
+a kernel dump into the pagefile, and the guest was stopped before Windows
+loaded again (`out\t24-3-4\r10g-usbhub-exceptions.md`; provenance section 4).
+Three virtual hubs' usbhub FDOs held 51 records, all on port 1, after the
+second enable: 0x3D, then 2.0 s later 0x51, then about 5.2 s later the hard
+reset 0x3E, about every 67 s per hub; also 0x50 (reset 2 timed out with the
+port enabled) followed by 0x3E. The 0x3E here is `UsbhHardErrorInvalidData`
+(a late reset change arriving after the 0x51 restart), not the bad-enable
+path: this driver's ring logged no reading of port 1 enabled without
+connection (inference). So round 10's loop was defect (a) alone.
+
+### Why reset 1 timed out: a virtual hub's answers waited for an interrupt
+
+On NT 6.x (the Version 300 tier) every completion is parked and handed to
+usbport only from PollEndpoint, under usbport's lock, or by a 1000 ms
+fallback; usbport polls endpoints on the HcInt pass its interrupt DPC signals.
+A virtual hub has no hardware, so its answers raise no interrupt and waited
+for someone else's - or for the fallback - about 1 to 2 s each on a quiet bus
+(the loop load: `CompletionFallbackPolls` 150, `CompletionsDeliveredForced`
+312, about one interrupt DPC a second) [runtime]. usbhub times a port reset
+with a 2000 ms timer and ends it after three requests to the hub - a
+GET_PORT_STATUS, the CLEAR_FEATURE of the change and a second GET_PORT_STATUS
+[static]. Three slow answers lose to the timer. After an enable, with every
+device re-enumerating and nothing bound, the bus is quiet, and each hard
+reset returns it to that state, so the loop sustains itself (inference). The
+first plug after boot escaped because devices binding at the same time
+supplied interrupts (inference). The `vhub.p1.prc` notes are written when the
+answer is composed, not when it is delivered, which is why they looked prompt.
+
+### The fix: a virtual hub's answer asks usbport for a soft interrupt
+
+`27b56d0`: when a virtual hub's completion is parked on the Version 300 tier
+it sets `SoftInterruptOwed`, and the drain pass that ends with one still
+parked calls `UsbPortInvalidateController(SOFT_INTERRUPT)` with the
+controller lock released. On Windows 7 that service arms usbport's timer,
+whose DPC queues usbport's own interrupt DPC; that calls the miniport's DPC
+and signals the HcInt pass, whose PollEndpoint delivers [static]. It takes
+none of the locks usbport holds across SubmitTransfer [static, Codex]. The
+fallback stays as the net; the Version 200 tier is unchanged. Four Codex
+rounds (`out\t24-r10fix\codex-review-1.md` .. `-4.md`, git-ignored), each P2
+fixed:
+
+- `c81cc66`: a PollEndpoint turned away by a busy drain was a lost delivery;
+  it now owes the interrupt again, and the pass holding the drain asks.
+- `fecf9ac`: the request was scoped to virtual hubs - their transfers carry
+  `XHCI_XFER_FLAG_VHUB`, and a list of real devices' completions never asks.
+- `4506fa9`: a virtual hub's refused transfers (isochronous, or through a
+  displaced handle) are tagged too.
+- Round 4: no P1, P2 or P3.
+
+New counter `SoftInterruptRequests`; offsets regenerated (x86 `SIZEOF` 104740,
+amd64 112072). Host vectors on the Version 300 tier: the request, made once
+and outside the lock, then delivery by the simulated interrupt's PollEndpoint
+with no fallback; the status-change pipe; the busy-drain handoff; a displaced
+handle; and the negatives - the Version 200 tier, and a real device's
+completion behind a busy drain. Every guard mutation-checked; `test_init`
+22,960 checks, every suite green. Built and staged (every gate passed; logs
+`out\t24-r10fix\`): x86 `242ef722e9a43b51...` (`built Oct  1 2026 02:45:13`),
+amd64 `acbc1014e8a3fc08...` (`02:49:24`), INFs unchanged.
+
+## Round 11 on the soft interrupt (2026-10-01)
+
+Windows 7 x86 at 2, 0 and 1 on `4506fa9`. Development host A, one guest
+(owner: Windows 7 x86 alone first); recipe `out\t24-3-4\recipe-2434-r11.md`,
+report `out\t24-3-4\r11-win7-report.md` and its evidence (git-ignored). New
+disk `vm\t2434-win7-r11.img`; the build stamp was the only one in all 13
+driver loads. The agent's session was lost for two hours mid-run (an API
+outage); the guest sat idle at 0 and the run resumed. **Windows 7 x86
+passes.**
+
+### What the guest read
+
+| Guest | Reached | Result | Report and evidence |
+|---|---|---|---|
+| Windows 7 SP1 x86, 4 vCPUs | values 2, 0, 1; steps 1-5 | **all four devices bound on the first plug at minute 1**, with no re-enumeration (round 10: 16 slots for 4 devices). Churn 25 of 25 at 2 with a slot every cycle (round 10: 21); `RhResetTimeouts` 0. The post-churn re-plug bound all four within a minute. **Five disable/enable cycles at 2 and two at 1, with no virtual-hub loop after any enable**: after each, exactly one address per hub, four slots, no slot disabled or reclaimed, all four devices back at +1 minute and still there at +5. Disables took 52-56 s at 2 (round 10: 94-97 s) and 27 s at 1. **Churn 25 of 25 at 1 with a slot every cycle** - the Full-Speed mouse behind a virtual hub, which got none in rounds 6 and 10. `CompletionFallbackPolls` and `CompletionsDeliveredForced` 0 at every reading (round 10: 122-448 and 156-648); `SoftInterruptRequests` 118 to 803 at 1 and 2, 0 at 0. Every refusal, `VhubResetsHeld` and the disown counters 0; no crash or reset. At 0 the second disable met the known "restart required" veto; the disable completed by itself some minutes later and the re-enable brought all four back | `r11-win7-report.md`; `r11-win7-r11{b,c,d}-*`, `r11-win7-s1-churn.txt`, `r11-win7-s2-churn.txt` |
+
+`AddressReclaims` stayed 0: nothing was re-addressed, so nothing needed
+reclaiming. That clause of the pass rule came from round 9, where the
+re-enumeration loop forced reclaims; the owner dropped it on 2026-10-01.
+
+One reading is not explained: at the value-2 boot, with nothing plugged in,
+virtual hub 1 was addressed twice (address 1, then 9), once only.
+
+### What is owed
+
+- The rest of round 11 on `4506fa9` (brief `out\t24-3-4\recipe-2434-r11.md`):
+  Windows 7 x64 at 2 with the same sequence; Windows 2000 and XP at 2 (XP's
+  two-handle restore) as the NT 5.x regression; Vista x86 and x64 at 0, 1 and
+  2; SweetLow's stack at 2; ME's short pass at 2; the device matrix at 2.
+- Why virtual hub 1 was addressed twice at the round-11 boot.
+- Recorded, not fixed (round 9): the root view's enabled-not-connected report.
+- `vm\t2434-win7-r10.img` keeps the r10g NMI dump in its pagefile and is never
+  booted again; `vm\t2434-win7-r9.img` and `vm\t2434-win7-r11.img` hold no dump.

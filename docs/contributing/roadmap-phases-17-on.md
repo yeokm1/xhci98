@@ -997,6 +997,20 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     stopped short of the re-plug. The fix taken: reclaim an idle holder's
     address when usbport assigns it again (record 12 section 11); the
     reclaim, then Windows 7 at 2 again with the re-plug as a named step.
+    **Rounds 9 to 11** (2026-09-30/10-01, `runs/run-24.md`, "Round 9 on
+    the address reclaim" to "Round 11 on the soft interrupt"): the reclaim
+    works and Windows 7 x86's re-plug no longer bugchecks; a virtual hub's
+    port 1 reporting enabled without connected, which sent usbhub to a hub
+    hard reset, is fixed (round 9); then, after a controller re-enable,
+    usbhub's 2000 ms reset of a virtual hub's port timed out because, on NT
+    6.x, the hub's answers waited for some other device's interrupt or a 1 s
+    fallback (round 10, read from an NMI dump's exception history). The fix:
+    a virtual hub's answer asks usbport for a soft interrupt (record 12
+    section 11). Windows 7 x86 passes on it at 2, 0 and 1 - no loop after
+    seven enables, and a Full-Speed device behind a virtual hub now enumerates
+    in churn on NT 6.x, which no earlier build did in QEMU (round 11). Owed:
+    the rest of round 11 - Windows 7 x64, 2000 and XP at 2, Vista in both
+    architectures, SweetLow's stack, ME and the device matrix.
   - [ ] **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the
     switch at 1 and at 2, the Low-Speed mouse and the Full-Speed audio device from
     `test-equipment.md` on root ports, the interval read from the snapshot;

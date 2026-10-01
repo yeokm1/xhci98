@@ -1317,6 +1317,43 @@ A virtual hub holding A, a bound or busy holder, or one with a device behind
 it keeps the refusal, now counted by reason, beside `AddressReclaims`. The
 reclaim does not disown the holder or touch a debt: 3.3's rule is unchanged.
 
+**Rounds 9 and 10 answered the open question: usbhub hard-reset the virtual
+hubs because their port-1 resets failed, first on what port 1 reported, then
+on how late its answers arrived; a virtual hub's answer now asks usbport for
+a soft interrupt** (2026-09-30/10-01; `runs/run-24.md`, rounds 9 to 11).
+usbhub hard-resets a hub only through its exception table (static). In
+round 8's dump the cycle was a first reset of port 1 timing out with the port
+enabled, a disable and second reset, then the hard reset; usbhub's first-reset
+table sends a reset change that reads enabled and not connected straight to
+the hard reset, and port 1 composed ENABLE without CONNECTION. Port 1 is now
+enabled only while it is connected (`XhciVhubPort1Report`). The loop then
+remained after a controller re-enable, and an NMI dump's exception history
+showed only the timeouts (debugger): usbhub times a port reset with 2000 ms
+and ends it after three requests to the hub - a GET_PORT_STATUS, the
+CLEAR_FEATURE of the change, a second GET_PORT_STATUS (static). On the
+Version 300 tier every completion waits for PollEndpoint, which usbport calls
+on the HcInt pass its interrupt DPC signals, or for the 1000 ms fallback; a
+virtual hub has no hardware, so its answers raised no interrupt and each
+waited 1 to 2 s on a quiet bus (runtime counters), and the timer won. So a
+virtual hub's completion, parked on that tier, owes a soft interrupt
+(`SoftInterruptOwed`, its transfer tagged `XHCI_XFER_FLAG_VHUB`), and the
+drain pass that ends with one still parked calls
+`UsbPortInvalidateController(SOFT_INTERRUPT)` with the controller lock
+released. On Windows 7 that arms usbport's timer, whose DPC queues usbport's
+own interrupt DPC; it calls the miniport's DPC and signals the HcInt pass
+(static), and it takes none of the locks usbport holds across SubmitTransfer
+(static, review), which is what allows the request from inside it. A
+PollEndpoint turned away by a busy drain owes it again, since the pass holding
+the drain may be one that cannot deliver. Real devices' completions never ask:
+they are delivered by their own interrupts, as before. The Version 200 tier is
+unchanged - there the pass asks usbport to poll the endpoint - and the
+fallback stays as the net. Round 11 read it on Windows 7 x86: no loop after
+seven enables, no fallback delivery at all, and a Full-Speed device behind a
+virtual hub enumerating in churn on NT 6.x, which no earlier build did in
+QEMU - so the gap accepted above for Full- and Low-Speed devices behind a
+virtual hub on NT 6.x was at least partly this delay, not only QEMU's ignored
+port disable (inference; the other guests are still to be read).
+
 ## Sources
 
 - `docs/issues/06-full-speed-root-port-bugcheck.md`: the bugcheck, the
