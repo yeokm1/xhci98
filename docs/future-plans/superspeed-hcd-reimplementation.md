@@ -1,8 +1,8 @@
 # General SuperSpeed support: the Option B host controller driver
 
 Status: on the cards as the miniport driver's successor, once the miniport
-stabilises (owner, 2026-10-02; until then it was "not planned"). This page records what general
-USB 3.x SuperSpeed support would take, so that the question does not have to
+stabilises. This page records what general USB 3.x SuperSpeed support would
+take, so that the question does not have to
 be re-derived each time it is asked. It was the "What SuperSpeed Support Would
 Require" section of `docs/usb-xhci-info/xhci-programming.md` until 2026-09-07;
 that section now keeps only the refusal the driver makes today and points
