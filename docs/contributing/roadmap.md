@@ -92,10 +92,12 @@ a hub (the reporter's Code 10 at 250 Hz and above), a decision on root-port
 polling rates, true speeds on root ports through the virtual USB 2.0 hub of
 design record 12, then two defects found on the way and taken before the
 cut (the NT 6.x timer-arm race, and the interval of a High-Speed device
-behind a hub), the reporter's USB 1.1 hub pointer once the part is to
-hand, and the cut of whatever changed. Open: 24.1 read out and 24.2
-decided on 2026-09-25, and 24.3 built through its driver sub-task the same
-day, with its guest readings still owed.
+behind a hub), and the cut of whatever changed. Open: 24.1 read out and
+24.2 decided on 2026-09-25; 24.3 built through its driver sub-task the same
+day, with only the device matrix on the last rebuild still owed; 24.4 and
+24.5 read and ticked on 2026-10-02, when the owner also removed every task
+that does not block the `1.2.0.0` cut (the E460 session and the USB 1.1
+hub pointer).
 **Phase 22**, closed on 2026-09-19, began as the 32-bit
 question - whether the binary that already ships runs on Windows Vista and
 Windows 7 as it stands - and that premise fell with Phase 21's: measurements

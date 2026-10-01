@@ -3304,10 +3304,11 @@ Notes, none a stop condition (the owner accepted both runs on 2026-10-02):
 - The device matrix again on this build (`d30234c`), on freshly cloned
   images (owner, 2026-10-01); with the switch-aware rows it should read
   clean on both primary targets.
-- Not blocking: a timing check of hub 4's 10 s install restart at the first
-  boot with the hubs (round 11 above); XP's first-boot hub-1 re-address
-  against its setupapi log (a fresh run).
-- Recorded, not fixed (round 9): the root view's enabled-not-connected report.
+- Nothing else: on 2026-10-02 the owner removed every owed item that does
+  not block the `1.2.0.0` cut - hub 4's 10 s install restart, XP's first-boot
+  re-address against its setupapi log, and round 9's enabled-not-connected
+  root view - and roadmap 24.3.5 (the E460) and 24.6 (the USB 1.1 hub
+  pointer). 24.4 and 24.5 are ticked on the readings above.
 - `vm\t2434-win7-r10.img` keeps the r10g NMI dump in its pagefile and is never
   booted again. The round 9 and 11 Windows 7 disks, which held no dump, were
   deleted on 2026-10-01.

@@ -601,9 +601,7 @@ at 250 Hz and above); a Full or Low Speed device on a root port polls in the
 1, 2 and 4 ms bands (item 2's other half, issue 6 section 5); and every
 root-port device is reported High Speed (item 1, issue 6 itself). Items 3
 (`usbui.dll`, `1.0.2.0`), 4 (idle suspend, `1.1.0.0`'s miniport flag) and
-5 (the property page, `1.1.1.0`) are answered and stay closed. The reporter's
-last pointer, "ADuM3160 / 4160" for the USB 1.1 hub this project has never
-held, is a reading the phase takes once the part is to hand.
+5 (the property page, `1.1.1.0`) are answered and stay closed.
 
 Status: **open**, added on 2026-09-24 at the owner's request. **24.1's
 Low-Speed clause is read** (`runs/run-24.md`), the same day it started.
@@ -634,10 +632,12 @@ took the virtual hub inside this phase, in its on-demand shape and in its
 permanent one as a second value of the same switch, on every target with
 the switch on and off by default, and the phase now ends on one
 cut carrying 24.1 and 24.3 ("24.3 is a build" below, and 24.3's entry).
+On 2026-10-02 the owner removed every task that does not block the cut -
+24.3.5 (the E460) and 24.6 (the reporter's USB 1.1 hub pointer) - and
+ticked 24.4 and 24.5, whose readings are in; the ids are not reused.
 
 "GitHub issue 4" is not `docs/issues/04`; Phase 23's entry has the
-collision. Replying on the issue, and closing it, are the owner's and not a
-task. The two items carried open past Phase 23 that are not the issue's -
+collision. The two items carried open past Phase 23 that are not the issue's -
 the 500 stutter's cause and the Windows 98 audio replug wedge - are not this
 phase's either.
 
@@ -647,9 +647,7 @@ and the reporter's advice (2026-09-14) was Low-Speed devices behind a hub
 first, then root ports, "as I expected different complexity". The tasks are
 in order of how cheaply each can be built and read: one bound in one
 function with a virtual-machine reproduction, then a decision that may need
-no code, then the largest change the driver has asked for, then the
-reporter's hub pointer, which waits on a part the owner does not yet hold
-(2026-09-24) and so sits second last.
+no code, then the largest change the driver has asked for.
 
 **24.3 is a build, not a decision, since 2026-09-25.** Until then this
 paragraph said that if 24.3 were taken, what it built would be a phase of
@@ -700,8 +698,7 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   2026-09-24 is Full Speed and cannot exercise the arm; then hidusbf on every
   other guest held for the no-regression read, where the Full-Speed
   `usb-mouse` is the right device because that read is a regression read and
-  not a Low-Speed one; the E460 with the Low-Speed mouse behind a USB 2.0 hub
-  if a metal reading is wanted.
+  not a Low-Speed one.
 
 - [x] **24.2 - Polling rates on a root port.** *(decided 2026-09-25: owned by 24.3, no narrower change; `runs/run-24.md`)*
 
@@ -1023,20 +1020,6 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     Device Manager "restart required" veto round 6 met at 1 and 2 is gone, and
     no enable brought a loop. Owed: the device matrix again, on this build's
     fresh images (owner, 2026-10-01), where it should read clean.
-  - [ ] **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the
-    switch at 1 and at 2, the Low-Speed mouse and the Full-Speed audio device from
-    `test-equipment.md` on root ports, the interval read from the snapshot;
-    and at 2 the USB 2.0 hub on a root port with the Low-Speed mouse behind
-    it, the one place a real High-Speed hub behind the virtual one is read
-    (QEMU models none). Wanted before the cut; not a checkpoint clause, as a metal reading of
-    24.1 is not. Also Windows 7 x86 on the E460 at 1 and at 2 with a
-    Full-Speed device on a root port, since QEMU's `qemu-xhci` ignores a
-    port-disable write and so cannot show a Full- or Low-Speed device behind
-    a virtual hub on NT 6.x (owner, 2026-09-27; record 12 section 11).
-    Taken after 24.4 and 24.5 and the rest of 24.3.4 (owner, 2026-09-28):
-    its Windows 7 session is 24.4's path and its USB 2.0 hub with a
-    High-Speed device behind it is 24.5's case, so the metal reads the
-    build that carries both.
 
   If 24.3.1's record, or any reading in 24.3.4, contradicts the page - a
   hub driver that gives the virtual hub no TT record, a stack that refuses a
@@ -1063,13 +1046,12 @@ Tasks. `runs/run-24.md` is the record once a task runs.
 
   Where it is read: host tests and the gates; every guest held, the switch
   at 0, 1 and 2, including the passthrough Low-Speed mouse on the SweetLow
-  guest; the device matrix on both primary targets in all three states; the
-  E460.
+  guest; the device matrix on both primary targets in all three states.
 
-- [ ] **24.4 - The NT 6.x timer-arm race.** *(added 2026-09-27 by the owner's
+- [x] **24.4 - The NT 6.x timer-arm race.** *(added 2026-09-27 by the owner's
   decision, and taken before the cut; older than 24.3 and not part of
-  issue 4; 24.5 until 2026-09-28)* Taken next, with 24.5, before the rest
-  of 24.3.4 and before 24.3.5 (owner, 2026-09-28): the two fixes share one
+  issue 4; 24.5 until 2026-09-28; done 2026-10-02)* Taken next, with 24.5,
+  before the rest of 24.3.4 (owner, 2026-09-28): the two fixes share one
   rebuild, and the readings still owed are read on it.
 
   On Vista and Windows 7 the legacy `UsbPortRequestAsyncCallback` enters
@@ -1141,8 +1123,16 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   Windows 7 at 2 bugchecked on another cause (24.3.4), and the build that
   fixes it, which carries this one, is what Vista and 7 read next.
 
-- [ ] **24.5 - The High-Speed interval behind a hub.** *(added 2026-09-28 by
-  the owner's decision, and taken before the cut; older than 24.3)* Taken
+  **Ticked 2026-10-02.** Round 11 read Vista and 7 in both architectures,
+  four vCPUs each, at 0, 1 and 2 on builds that carry it (Windows 7 on
+  `4506fa9`, Vista on `d30234c`): no hang, no bugcheck, no controller reset
+  on any of them, and the primary targets no worse in round 11's device
+  matrix at 2 (`runs/run-24.md`, "Round 11 on the soft interrupt" and
+  "Vista on the rebuild").
+
+- [x] **24.5 - The High-Speed interval behind a hub.** *(added 2026-09-28 by
+  the owner's decision, and taken before the cut; older than 24.3; done
+  2026-10-02)* Taken
   with 24.4, in the same rebuild, before the rest of 24.3.4 (owner,
   2026-09-28).
 
@@ -1171,9 +1161,8 @@ Tasks. `runs/run-24.md` is the record once a task runs.
 
   Where it is read: the static read; host vectors; the guests at 2 with a
   High-Speed mouse behind a virtual hub (NT 5.x - on NT 6.x QEMU's ignored
-  port disable keeps any device behind a virtual hub from enumerating); the
-  E460's USB 2.0 hub with a High-Speed device behind it; every value's
-  no-regression reading. Before the `1.2.0.0` cut, so the cut's install
+  port disable keeps any device behind a virtual hub from enumerating);
+  every value's no-regression reading. Before the `1.2.0.0` cut, so the cut's install
   legs and matrix read the build that carries it.
 
   **The static read and the fix are done (2026-09-28); the guests are
@@ -1192,34 +1181,12 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   section 4. Not ticked until the guests at 2 have read a High-Speed
   device behind a virtual hub on the rebuilt package.
 
-- [ ] **24.6 - The reporter's pointer for the missing USB 1.1 hub.** *(24.4
-  until 2026-09-28, when the owner moved it to just before the cut)*
-
-  The part's purpose (owner, 2026-09-30): USB 1.1 hubs are hard to find, so
-  a board built on an Analog Devices ADuM3160 or ADuM4160 USB isolator is
-  to be placed between a root port and an ordinary USB 2.0 hub, to make
-  that hub attach at Full Speed and act as a USB 1.1 hub. The isolator
-  itself is expected to be transparent (no hub of its own), with no
-  High-Speed path through it, so a USB 2.0 hub behind it cannot chirp
-  upstream - to be confirmed from the datasheet, which can be read before
-  the part arrives.
-
-  Once a part is to hand, two readings, in order. First, on any host
-  (the part's behaviour, not this driver's): the isolator strapped for
-  Full Speed, a self-powered USB 2.0 hub behind it, and a High-Speed device
-  behind that hub; read in USBView whether the hub and the device both
-  attach at Full Speed. Second, if they do, the same arrangement on the
-  E460 under this driver, on Windows 98 SE first: the hub enumerating as a
-  Full-Speed hub on a root port, and a Full-Speed and a Low-Speed device
-  bound behind it. That is the first way to put issue 6 section 6's
-  topology on metal, and `test-equipment.md` gains its row. If the hub
-  does not drop to Full Speed behind the isolator, the pointer closes on
-  the first reading. In a virtual machine the part adds nothing: QEMU's
-  `usb-hub` is already a Full-Speed hub, which is what 24.3's hub clause
-  reads. The phase does not wait on the part.
-
-  Where it is read: the datasheet; the part on a host with USBView; then
-  the E460, Windows 98 SE first.
+  **Ticked 2026-10-02.** A High-Speed mouse behind a virtual hub at 2 opened
+  at Interval 5 (`ep.open.ival=00030005`), not 0, on 2000, XP, ME and 98 SE
+  under SweetLow's stack (round 11, `EndpointPeriodsPromoted` 1: the
+  promoted `Period` 1 no longer reaches the Interval), on XP x64 (round 7)
+  and on Vista in both architectures (round 11's rebuild), with the root-port
+  control unchanged at every value (`runs/run-24.md`).
 
 - [ ] **24.7 - The record and the cut.** *(24.6 until 2026-09-28, 24.5 until
   2026-09-27)*
@@ -1284,13 +1251,11 @@ survived per target, and a Low-Speed device on the SweetLow guest at its
 true speed; at 1 a High-Speed device on the direct path, and at 2 a
 High-Speed device working behind the virtual hub and a hub on every USB 2.0
 port with nothing plugged in; 24.4 and 24.5 landed and read as their
-entries say; 24.6 a recorded reading, or recorded as
-waiting on the part if the phase closes first; and `1.2.0.0` cut with its
+entries say; and `1.2.0.0` cut with its
 install legs read from the asset and the matrix on both primary targets in
 all three states. Not a checkpoint: a truthful root-hub report (measured
 fatal, and not what 24.3 builds), the bandwidth half of issue
-6 section 5, a metal reading of 24.1 or 24.3, the part itself, the
-acceptance test, the upload, or the reply on the issue.
+6 section 5, or the acceptance test.
 
 Records: GitHub issue 4 (the thread; the reporter's Code 10 reading of
 2026-09-12, his order of 2026-09-14 and his pointer of 2026-09-19);
