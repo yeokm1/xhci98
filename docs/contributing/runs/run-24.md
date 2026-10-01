@@ -3065,10 +3065,14 @@ reclaiming. That clause of the pass rule came from round 9, where the
 re-enumeration loop forced reclaims; the owner dropped it on 2026-10-01.
 
 At the value-2 boot, with nothing plugged in, virtual hub 1 was addressed
-twice (address 1, then 9), once only. It is Windows' first install of the
-hub device restarting a hub that was already running, not a driver fault.
-No driver change. The evidence was read from the logs and from the image,
-without booting it, after a Codex review corrected a first diagnosis:
+twice (address 1, then 9), once only. The strongly supported explanation is
+Windows' first install of the hub device restarting a hub that was already
+running. No driver change is warranted by it, and Codex found no defect in
+the restore path. The chain is inferred from order, not proven by
+timestamps: the debugcon has none for the decisive callbacks. Why hub 1
+alone was started early is not known. The evidence was read from the logs and
+from the image, without booting it; two Codex reviews corrected a first
+diagnosis and then this wording:
 
 - r11b was the first boot that had the virtual hubs (r11a was the install, at
   0). The guest's `setupapi.dev.log` (read from `vm\t2434-win7-r11.img`
@@ -3076,17 +3080,21 @@ without booting it, after a Codex review corrected a first diagnosis:
   Device Install of `USB\VID_1209&PID_0001` per hub, all at 03:04:19-48,
   each with `StandardHub.Dev` from `usb.inf`. Every one ends in `Install
   Device: Restarting device`. **Only hub 1's** first says `Removing device
-  sub-tree` (03:04:26.252-.424), the first restart of the eight.
+  sub-tree` (03:04:26.252-.424), the first restart of the eight. The
+  restart order is 1, 4, 3, 2, 5, 6, 7, 8, which is the order in which the
+  hubs' 0x81 endpoints were opened afterwards.
 - So hub 1 was already started when its install ran, and hubs 2-8 were not.
   That matches the ring: hub 1's 0x81 was opened at seq 49, while hubs 2-8
-  were addressed but got their 0x81 only from seq 74, after the installs.
-  Hub 1's teardown is the debugcon `AbortTransfer` on its 0x81 (line 1511),
-  aborting a status-change read that was still pending with no error. Its
-  restart is the second root-port-1 reset (line 1595). At 2 the driver
+  were addressed but got their 0x81 only at seq 75-81, during their
+  install restarts. Hub 1's teardown fits the debugcon `AbortTransfer` on its
+  0x81 (line 1511), which aborted a status-change read still pending with no
+  error. Its restart fits the second root-port-1 reset sequence (line 1595;
+  port 1's first sequence had two resets, lines 668 and 764). At 2 the driver
   disowns the physical port on every root-port reset; this is not a port
   disable, whose first `RH_ClearFeaturePortEnable` comes much later. usbport
-  then restored the device: address 0, a new address (9), and
-  `ReopenEndpoint` on the same EP0 and 0x81 (lines 1627-1629).
+  then restored the device: EP0 opened at address 0 and then at the new
+  address 9, then `ReopenEndpoint` on the same 0x81 handle (line 1627,
+  followed by its data toggle and status at 1628-1629).
 - Hub 1's one 0xEE request (the Microsoft OS string descriptor, stalled as
   Microsoft requires for an unsupported one) was the boot's only stall. It is
   not the cause. No vhub transfer failed, and the abort came from the
@@ -3096,7 +3104,8 @@ without booting it, after a Codex review corrected a first diagnosis:
   that. Round 7 x64's first value-2 boot shows hub 1 at 1 and then 9 before
   any plug. Later boots of the r11 image reset root port 1 once per driver
   load.
-- Not explained, and not looked into: hub 4's restart took 10 s
+- Not explained, and not looked into (a duration alone does not point to a
+  driver timeout, and does not rule one out): hub 4's restart took 10 s
   (03:04:28.2-38.3), against 0.56-0.64 s for hubs 2, 3 and 5-8 (hub 1's,
   after its teardown, 0.09 s).
 
@@ -3106,6 +3115,8 @@ without booting it, after a Codex review corrected a first diagnosis:
   Windows 7 x64 at 2 with the same sequence; Windows 2000 and XP at 2 (XP's
   two-handle restore) as the NT 5.x regression; Vista x86 and x64 at 0, 1 and
   2; SweetLow's stack at 2; ME's short pass at 2; the device matrix at 2.
+- Not blocking: a timing check of hub 4's 10 s install restart at the first
+  boot with the hubs (round 11 above).
 - Recorded, not fixed (round 9): the root view's enabled-not-connected report.
 - `vm\t2434-win7-r10.img` keeps the r10g NMI dump in its pagefile and is never
   booted again; `vm\t2434-win7-r9.img` and `vm\t2434-win7-r11.img` hold no dump.
