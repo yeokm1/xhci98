@@ -250,7 +250,7 @@ ULONG XhciVhubConfigIds(PXHCI_VHUB_CONFIG config,
 
 /* The product string, 21 characters (3.3). Kept ASCII: the UTF-16 is built
  * from it, so no non-ASCII byte can reach the tree through it. */
-static const char xhciVhubProduct[] = "xhci98 virtual HS hub";
+static const char xhciVhubProduct[] = "xHCI98 virtual HS Hub";
 
 static ULONG xhciVhubTruncate(const UCHAR *source,
                               ULONG sourceLength,

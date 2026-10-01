@@ -767,7 +767,7 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     INFs write as pid.codes' test id, `"1209"` and `"0001"`; no id in the
     binary; and the feature off for that start if the switch is on and
     either value is missing or invalid), and its strings (answered: a
-    product string only, "xhci98 virtual HS hub", no manufacturer string
+    product string only, "xHCI98 virtual HS Hub", no manufacturer string
     and never a serial number). Because
     pid.codes reserves that id "for use in private testing", every document
     that tells a user how to turn the feature on says it is **experimental,
