@@ -3257,8 +3257,9 @@ shortened. No driver change and no rebuild.
 
 - The rest of round 11 on `4506fa9` (brief `out\t24-3-4\recipe-2434-r11.md`):
   Vista x86 and x64 at 0, 1 and 2.
-- Not required: a matrix re-run at 2 on this build, which should now read
-  clean on both primary targets (the owner's call).
+- The device matrix again after the next rebuild, on freshly cloned images
+  (owner, 2026-10-01), not on this build; with the switch-aware rows it
+  should read clean on both primary targets.
 - Not blocking: a timing check of hub 4's 10 s install restart at the first
   boot with the hubs (round 11 above); XP's first-boot hub-1 re-address
   against its setupapi log (a fresh run).
