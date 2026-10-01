@@ -73,11 +73,11 @@ bandwidth model.
 
 ## 4. On the cards: what taking it up would mean
 
-The owner put this work on the cards on 2026-10-02, to follow once the
-miniport driver stabilises. That changes its standing, not the analysis
-above: sections 1 to 3 still describe what the project is and what it costs.
-The HCD is planned as the miniport's **successor**, not as a separate project
-beside it (owner, 2026-10-02): once it is taken up, the Option A miniport is the
+This work is on the cards, to follow once the miniport driver stabilises.
+That changes its standing, not the analysis above: sections 1 to 3 still
+describe what the project is and what it costs. The HCD is planned as the
+miniport's **successor**, not as a separate project beside it: once it is
+taken up, the Option A miniport is the
 driver it replaces, and the miniport's work so far - the xHCI hardware layer,
 the readings, the harness and the test images - is what it builds on. Until
 then the miniport is the shipping driver on every target, and the rule in
