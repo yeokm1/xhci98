@@ -419,9 +419,9 @@ static const UCHAR wantLangid[4] = { 0x04, 0x03, 0x09, 0x04 };
 
 static const UCHAR wantProduct[44] = {
     0x2C, 0x03,
-    'x', 0, 'h', 0, 'c', 0, 'i', 0, '9', 0, '8', 0, ' ', 0,
+    'x', 0, 'H', 0, 'C', 0, 'I', 0, '9', 0, '8', 0, ' ', 0,
     'v', 0, 'i', 0, 'r', 0, 't', 0, 'u', 0, 'a', 0, 'l', 0, ' ', 0,
-    'H', 0, 'S', 0, ' ', 0, 'h', 0, 'u', 0, 'b', 0
+    'H', 0, 'S', 0, ' ', 0, 'H', 0, 'u', 0, 'b', 0
 };
 
 static ULONG ask(const XHCI_SETUP_PACKET *s, UCHAR *reply, ULONG *len,
