@@ -3109,14 +3109,64 @@ diagnosis and then this wording:
   (03:04:28.2-38.3), against 0.56-0.64 s for hubs 2, 3 and 5-8 (hub 1's,
   after its teardown, 0.09 s).
 
+### Five more guests (2026-10-01, development host C)
+
+Same build, same brief. Two guests at once (the owner's limit), each run by
+its own agent on its own monitor port and disk; every guest started from a
+fresh image. Every driver load carried the build stamp (x86 `02:45:13`,
+amd64 `02:49:24`) and no other; no log has a `ctrl.failed`, a `refused
+SET_ADDRESS` or a bugcheck (the coordinator re-checked each log). **All five
+pass.** Reports `out\t24-3-4\r11-<guest>-report.md` and their evidence
+(git-ignored).
+
+| Guest | Reached | Result | Report and evidence |
+|---|---|---|---|
+| Windows 7 SP1 x64 | values 2, 0, 1; the x86 sequence | Matches Windows 7 x86 line for line. **All four devices bound on the first plug**; churn 25 of 25 at 2 and at 1; **five disable/enable cycles at 2 and two at 1 with no virtual-hub loop**: every value-2 enable addressed each hub once, with 4 slots addressed, none disabled or reclaimed, and all four devices back at +1 minute. `CompletionFallbackPolls` and `CompletionsDeliveredForced` 0 at every reading; `SoftInterruptRequests` 118-933 at 2, 28-903 at 1, 0 at 0. Every refusal, `AddressReclaims`, `VhubResetsHeld`, `RhResetTimeouts` and the disown counters 0. 12 driver loads over 4 boots, no crash or reset | `r11-win7-x64-report.md`, `r11-win7-x64-readings.txt`; `r11-win7-x64-r11{b,c,d}-*`, `r11-win7-x64-s{1,2}-churn.txt` |
+| Windows 2000 SP4 | value 2, short pass | 8 hubs at boot, each addressed once. FS mouse behind hub 1 at Interval 6, TT pair names hub 1; HS mouse behind hub 4 gives the 24.5 reading (Period 1, Interval 5, Promoted 1, Missing 0); audio behind hub 3 played 25 times, all 137,750 iso packets answered, none in error. `SoftInterruptRequests` 0 (NT 5.x), fallback and forced deliveries 0, every refusal and reclaim 0 | `r11-win2k-report.md`; `r11-win2k-r11{a,b}-*`, `r11-win2k-s2-audio-play.txt` |
+| Windows XP SP3 x86 | value 2, with issue 4's two-handle restore | **The restore ran on the first attach of `usb-storage` and of `usb-audio`, and both bound**: `Ep0RemovesSuperseded` 0 -> 1 -> 1 (the storage re-plug took one address, no second handle) -> 2. The 24.5 reading as on 2000. `SoftInterruptRequests` 0, fallback and forced deliveries 0, every refusal and reclaim 0. Notes below | `r11-winxp-report.md`; `r11-winxp-r11{a,b}-*`, `r11-winxp-s2-audio-play.txt`, `r11-winxp-r11b-wavscan.txt` |
+| Windows ME, SweetLow's stack | value 2, short pass | 8 hubs, each addressed once. FS mouse, HS mouse (the 24.5 reading) and audio bound behind their hubs; audio streamed about 211 s, `InterruptArmsTakenByIsr` 27,115 with events after every rise. `SoftInterruptRequests` 0 (9x), fallback and forced 0, every refusal and reclaim 0. Note below | `r11-winme-report.md`; `r11-winme-r11b-*`, `r11-winme-s2-audio-play.txt` |
+| Windows 98 SE, SweetLow's stack | value 2: A idle, B's audio plugs on stock `usbd.sys`, the 24.5 reading, C on NUSB 3.6's `USBD.SYS` + HIDUSBF | A: no idle suspend. **B: four audio plugs, all enumerated, no freeze** (round 6 froze here). 24.5: Interval 5, Promoted 1. C: the FS mouse behind hub 1 gave the exact ladder 8/4/2/1 -> Interval 6/5/4/3, nothing refused or floored. 8 hubs per boot, none re-addressed; `SoftInterruptRequests` 0, fallback and forced 0, every refusal and reclaim 0 | `r11-sweetlow-report.md`; `r11-sweetlow-r11{b,c}-*`, `r11-sweetlow-latency.txt` |
+
+Notes, none a stop condition:
+
+- **Windows 7 x64, value 0:** the second disable met the known "restart
+  required" veto, as on x86. Unlike x86, the held disable never completed in
+  the session; it took effect at the next boot, which came up with the
+  controller disabled (enabled again from Device Manager). Windows'
+  behaviour. The first value-2 boot re-addressed hub 1 once (1, then 9),
+  the case explained above; it did not repeat.
+- **Windows XP, first boot with the hubs:** hub 1 re-addressed once
+  (`vhub.address=00000109`, `VhubOpens` 26), before any status pipe opened.
+  Probably the Windows 7 case above; not checked against XP's setupapi log,
+  and the image is gone, so it needs a fresh run.
+- **Windows XP, audio:** played about 3 s, then Sound Recorder sat at 0.00 s
+  for 6 minutes while iso streamed (255,460 of 255,940 packets answered, no
+  errors) - another form of XP x86's known audio behaviour (round 6).
+- **Windows XP, `TransfersRefused` 1** (ring full) at the audio unplug, just
+  before the teardown (debugcon line 3138). Not yet read.
+- **Windows XP, storage:** bound and bulk flowed, but no drive letter
+  appeared.
+- **Windows ME, `IsoPacketErrorsTotal` 17**, all in the first ~6 minutes of
+  playback, then flat (round 6 on ME and round 11 on 2000: 0). The ring keeps
+  only four `xfer.error` notes, so the packets are not identified. The first
+  play failed while ME was still installing the audio stack; plays 2-24 ran.
+- **Windows 98 SE:** round 6's freeze on B's audio plugs did not come back in
+  four plugs on a fresh image. Not explained, and a small sample; round 6's
+  image had had runs at 0 and 1 and the `USBD.SYS` swap first.
+- **Windows 2000:** playback paced slowly with two guests on the host;
+  `InterruptArmsTakenByIsr` 1,163 (round 7's rate x1.75). No fault.
+
 ### What is owed
 
 - The rest of round 11 on `4506fa9` (brief `out\t24-3-4\recipe-2434-r11.md`):
-  Windows 7 x64 at 2 with the same sequence; Windows 2000 and XP at 2 (XP's
-  two-handle restore) as the NT 5.x regression; Vista x86 and x64 at 0, 1 and
-  2; SweetLow's stack at 2; ME's short pass at 2; the device matrix at 2.
+  Vista x86 and x64 at 0, 1 and 2; the device matrix at 2.
+- Two log reads, before or with those: XP's `TransfersRefused` 1 at the
+  audio unplug and ME's 17 iso packet errors. A driver fault in either means
+  re-running round 11.
 - Not blocking: a timing check of hub 4's 10 s install restart at the first
-  boot with the hubs (round 11 above).
+  boot with the hubs (round 11 above); XP's first-boot hub-1 re-address
+  against its setupapi log (a fresh run).
 - Recorded, not fixed (round 9): the root view's enabled-not-connected report.
 - `vm\t2434-win7-r10.img` keeps the r10g NMI dump in its pagefile and is never
-  booted again; `vm\t2434-win7-r9.img` and `vm\t2434-win7-r11.img` hold no dump.
+  booted again. The round 9 and 11 Windows 7 disks, which held no dump, were
+  deleted on 2026-10-01.
