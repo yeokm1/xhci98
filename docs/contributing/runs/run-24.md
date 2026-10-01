@@ -3064,8 +3064,26 @@ passes.**
 reclaiming. That clause of the pass rule came from round 9, where the
 re-enumeration loop forced reclaims; the owner dropped it on 2026-10-01.
 
-One reading is not explained: at the value-2 boot, with nothing plugged in,
-virtual hub 1 was addressed twice (address 1, then 9), once only.
+At the value-2 boot, with nothing plugged in, virtual hub 1 was addressed
+twice (address 1, then 9), once only. Diagnosed from the logs, without a VM,
+as Windows' first-enumeration behaviour, not a driver fault:
+
+- During hub 1's first enumeration, usbhub asked for string descriptor 0xEE
+  (setup `80 06 EE 03 00 00 12 00`, the Microsoft OS string descriptor). The
+  virtual hub has none and stalled it, the boot's only stall. Windows asks
+  once per VID/PID/revision and caches the answer, and all eight virtual hubs
+  share one identity, so only hub 1 is asked, and only on the first boot that
+  sees the hubs. Here that was r11b, because r11a was the install at 0.
+- After hubs 2-8 were enumerated, usbhub disabled root port 1 (a second
+  `RH: port disown` for port 1). Hub 1 was re-enumerated from address 0
+  and got address 9.
+- It is not new. Every round's first value-2 boot asked for 0xEE once and
+  disowned port 1 a second time: rounds 6-11, x86, and rounds 6-7 on x64.
+  Round 10's boot ring also re-addressed hub 1 (address 0x0A, seq 140); the
+  "8" recorded for it came from the boot reading, taken before that.
+  Round 6 logged no stall for the query and was re-enumerated all the same.
+- Later boots of the same image (r11c, r11d) sent no 0xEE query and disowned
+  port 1 once per driver load.
 
 ### What is owed
 
@@ -3073,7 +3091,6 @@ virtual hub 1 was addressed twice (address 1, then 9), once only.
   Windows 7 x64 at 2 with the same sequence; Windows 2000 and XP at 2 (XP's
   two-handle restore) as the NT 5.x regression; Vista x86 and x64 at 0, 1 and
   2; SweetLow's stack at 2; ME's short pass at 2; the device matrix at 2.
-- Why virtual hub 1 was addressed twice at the round-11 boot.
 - Recorded, not fixed (round 9): the root view's enabled-not-connected report.
 - `vm\t2434-win7-r10.img` keeps the r10g NMI dump in its pagefile and is never
   booted again; `vm\t2434-win7-r9.img` and `vm\t2434-win7-r11.img` hold no dump.
