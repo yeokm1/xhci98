@@ -1,11 +1,15 @@
 # General SuperSpeed support: the Option B host controller driver
 
-Status: not planned. This page records what general USB 3.x SuperSpeed
-support would take, so that the question does not have to be re-derived each
-time it is asked. It was the "What SuperSpeed Support Would Require" section
-of `docs/usb-xhci-info/xhci-programming.md` until 2026-09-07; that section
-now keeps only the refusal the driver makes today and points here. Nothing
-on this page has a phase or task id, and nothing on it has been started.
+Status: on the cards once the miniport driver stabilises (owner,
+2026-10-02; until then it was "not planned"). This page records what general
+USB 3.x SuperSpeed support would take, so that the question does not have to
+be re-derived each time it is asked. It was the "What SuperSpeed Support Would
+Require" section of `docs/usb-xhci-info/xhci-programming.md` until 2026-09-07;
+that section now keeps only the refusal the driver makes today and points
+here. Nothing on this page has a phase or task id yet, and nothing on it has
+been started: the work is not scheduled while the miniport is still being
+stabilised, and it leaves this folder for a design record and roadmap tasks
+when it is (section 4).
 
 ## 1. Why it is not an extension of the miniport
 
@@ -66,6 +70,26 @@ and its section 2 says where the line between the two lies. Should that
 proposal ever be built, this page still describes what it does not cover:
 SuperSpeed hubs, isochronous endpoints, link power management, and the
 bandwidth model.
+
+## 4. On the cards: what taking it up would mean
+
+The owner put this work on the cards on 2026-10-02, to follow once the
+miniport driver stabilises. That changes its standing, not the analysis
+above: sections 1 to 3 still describe what the project is and what it costs.
+It would be a second driver beside the miniport, not a change to it - the
+Option A miniport stays the shipping driver on every target, and the rule in
+`AGENTS.md` against re-implementing `usbport.sys`'s role inside the miniport
+still holds.
+
+Decisions that are the owner's before it is scheduled:
+
+- what "stabilised" means for the miniport (for example, a release cut with
+  no open known limitation that the miniport itself causes);
+- whether the first target is the Option B USB 2.0 replacement alone, proven
+  against the miniport's own readings, before any SuperSpeed path is started
+  (section 2 assumes so);
+- whether [superspeed-storage-behind-a-switch.md](superspeed-storage-behind-a-switch.md)
+  is built first inside the miniport, or folded into this project.
 
 ## Sources
 

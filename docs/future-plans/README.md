@@ -39,5 +39,5 @@ task 24.3 took it up.
   newer port driver runs on these targets, so it would first need the
   Option B monolithic host controller driver that re-implements usbport's
   role, and only then the link, descriptor, burst and stream, USB 3.x hub
-  and bandwidth work listed there. Not planned; kept so the question is not
-  re-derived.
+  and bandwidth work listed there. On the cards once the miniport driver
+  stabilises (owner, 2026-10-02); no phase or task id yet.
