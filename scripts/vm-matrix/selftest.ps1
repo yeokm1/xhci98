@@ -998,6 +998,9 @@ Assert "a list instead of a table is a problem"   1 @(Get-RowSwitchProblems -Row
 Assert "an empty form is a problem"               $true (@(Get-RowSwitchProblems -Row @{ Name = 'x'; ExpectBySwitch = @{ '0' = @('a'); '1,2' = @() } }).Count -ge 1)
 Assert "a blank line in a form is a problem"      $true (@(Get-RowSwitchProblems -Row @{ Name = 'x'; ExpectBySwitch = @{ '0' = @('a'); '1,2' = @('b', ' ') } }).Count -ge 1)
 Assert "a non-string in a form is a problem"      $true (@(Get-RowSwitchProblems -Row @{ Name = 'x'; ExpectBySwitch = @{ '0' = @('a'); '1,2' = @(1) } }).Count -ge 1)
+Assert "a null form is a problem"                 $true (@(Get-RowSwitchProblems -Row @{ Name = 'x'; ExpectBySwitch = @{ '0' = @('a'); '1,2' = $null } }).Count -ge 1)
+Assert "a null beside a line is a problem"        $true (@(Get-RowSwitchProblems -Row @{ Name = 'x'; ExpectBySwitch = @{ '0' = @('a'); '1,2' = @('b', $null) } }).Count -ge 1)
+Assert "a bare one-line string is a form"         0 @(Get-RowSwitchProblems -Row @{ Name = 'x'; ExpectBySwitch = @{ '0' = 'a'; '1,2' = @('b') } }).Count
 $swRow = @{ Name = 'x'; ExpectBySwitch = @{ '0' = @('a0'); '1,2' = @('b1', 'b2') } }
 Assert "switch 0 takes its own lines"             "a0"    ((Get-RowSwitchExpectTexts -Row $swRow -Switch 0) -join ",")
 Assert "switch 2 takes the shared on-form"        "b1,b2" ((Get-RowSwitchExpectTexts -Row $swRow -Switch 2) -join ",")
