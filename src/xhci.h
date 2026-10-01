@@ -8260,7 +8260,7 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
  *
  * **Schema 5 is task 24.3's**: the virtual hub's switch and id reads, twelve
  * fields appended after `ImodReadback`. A `1.1.1.0` `XHCISNAP` refuses a
- * `1.1.2.0` driver on the same terms.
+ * `1.2.0.0` driver on the same terms.
  */
 #define XHCI_SNAPSHOT_SCHEMA            5UL
 

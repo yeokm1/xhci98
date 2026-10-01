@@ -1086,7 +1086,7 @@ Tasks. `runs/run-24.md` is the record once a task runs.
 
   Where it is read: the static read; host vectors for the arm's context on
   each path; Vista and 7 in both architectures under 4 vCPUs; the
-  primary targets no worse. Before the `1.1.2.0` cut (owner, 2026-09-27),
+  primary targets no worse. Before the `1.2.0.0` cut (owner, 2026-09-27),
   so the cut's install legs and matrix read the build that carries it.
 
   **The static read and the fix are done (2026-09-28); the guests are
@@ -1161,7 +1161,7 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   High-Speed mouse behind a virtual hub (NT 5.x - on NT 6.x QEMU's ignored
   port disable keeps any device behind a virtual hub from enumerating); the
   E460's USB 2.0 hub with a High-Speed device behind it; every value's
-  no-regression reading. Before the `1.1.2.0` cut, so the cut's install
+  no-regression reading. Before the `1.2.0.0` cut, so the cut's install
   legs and matrix read the build that carries it.
 
   **The static read and the fix are done (2026-09-28); the guests are
@@ -1213,7 +1213,9 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   2026-09-27)*
 
   One cut carrying 24.1 and 24.3 together (owner, 2026-09-25), 24.4 (owner,
-  2026-09-27) and 24.5 (owner, 2026-09-28), as `1.1.2.0` (the third field moves): issue 6 -
+  2026-09-27) and 24.5 (owner, 2026-09-28), as `1.2.0.0` (the second field
+  moves: an optional virtual USB hub is a major change - owner, 2026-10-01;
+  `1.1.2.0` until then): issue 6 -
   section 5's bands as what the switch
   off still gives, sections 6.2 and 7 with what the switch on changes, and
   section 9's first item; the release notes' High Speed entry and a new
@@ -1264,7 +1266,7 @@ true speed; at 1 a High-Speed device on the direct path, and at 2 a
 High-Speed device working behind the virtual hub and a hub on every USB 2.0
 port with nothing plugged in; 24.4 and 24.5 landed and read as their
 entries say; 24.6 a recorded reading, or recorded as
-waiting on the part if the phase closes first; and `1.1.2.0` cut with its
+waiting on the part if the phase closes first; and `1.2.0.0` cut with its
 install legs read from the asset and the matrix on both primary targets in
 all three states. Not a checkpoint: a truthful root-hub report (measured
 fatal, and not what 24.3 builds), the bandwidth half of issue
