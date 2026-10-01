@@ -3065,41 +3065,40 @@ reclaiming. That clause of the pass rule came from round 9, where the
 re-enumeration loop forced reclaims; the owner dropped it on 2026-10-01.
 
 At the value-2 boot, with nothing plugged in, virtual hub 1 was addressed
-twice (address 1, then 9), once only. Read from the logs, without a VM, and
-reviewed by Codex. The re-addressing is tied to the first boot with the hubs,
-and its trigger is not known. No driver change is justified by it:
+twice (address 1, then 9), once only. It is Windows' first install of the
+hub device restarting a hub that was already running, not a driver fault.
+No driver change. The evidence was read from the logs and from the image,
+without booting it, after a Codex review corrected a first diagnosis:
 
 - r11b was the first boot that had the virtual hubs (r11a was the install, at
-  0). During hub 1's first enumeration usbhub asked for string descriptor
-  0xEE (setup `80 06 EE 03 00 00 12 00`, the Microsoft OS string
-  descriptor). The hub has none and stalled it, which is the answer Microsoft
-  requires for an unsupported OS string descriptor. Windows caches that
-  answer per identity, and all eight hubs share one, so only hub 1 was asked.
-  It was the boot's only stall. Later boots of the same image (r11c, r11d)
-  sent no 0xEE query and reset root port 1 once per driver load.
-- Hub 1 then started normally: its 0x81 endpoint was opened, then the hub
-  descriptor, hub status, port power and port status, then an interrupt read.
-  During hub 6's enumeration usbport aborted that 0x81 endpoint (debugcon
-  `AbortTransfer` on the endpoint opened for it). After hub 8, usbhub
-  reset root port 1 again (the second `RH: port disown` for port 1: at 2 the
-  driver disowns the physical port on every root-port reset, and it is not
-  a port disable, whose first `RH_ClearFeaturePortEnable` comes much later).
-  Hub 1 was re-enumerated from address 0 and got address 9.
-- Nothing in the window shows why usbhub stopped hub 1. Nothing shows a bad
-  hub descriptor, an over-current or an enable change either. The 0xEE stall is
-  the only unusual event, but it came about 600 log lines before the abort, so
-  it is not shown to be the cause.
-- Round 10 had it too: its first value-2 boot re-addressed hub 1 (address
-  0x0A, seq 140), and the "8" recorded for that boot came from the boot
-  reading, taken before it. Round 7 x64's first value-2 boot shows hub 1 at
-  1 and then 9 before any plug. Earlier rounds cannot settle it: rounds 7-9
-  x86 looped. Round 6's value-2 leg (r6d) shows hub 1 at one address in
-  both of its readings, but it is not established whether r6d was that
-  image's first boot with the hubs (r6b ran at 0).
-- Finding the trigger would need usbhub's ETW trace and the PnP/SetupAPI log
-  for a first boot with the hubs, plus the hub identity's `usbflags` `osvc`
-  value. A controlled comparison would also have to separate the descriptor
-  cache from the first driver installation.
+  0). The guest's `setupapi.dev.log` (read from `vm\t2434-win7-r11.img`
+  without booting; copy `out\t24-3-4\r11-win7-setupapi.dev.log`) has one
+  Device Install of `USB\VID_1209&PID_0001` per hub, all at 03:04:19-48,
+  each with `StandardHub.Dev` from `usb.inf`. Every one ends in `Install
+  Device: Restarting device`. **Only hub 1's** first says `Removing device
+  sub-tree` (03:04:26.252-.424), the first restart of the eight.
+- So hub 1 was already started when its install ran, and hubs 2-8 were not.
+  That matches the ring: hub 1's 0x81 was opened at seq 49, while hubs 2-8
+  were addressed but got their 0x81 only from seq 74, after the installs.
+  Hub 1's teardown is the debugcon `AbortTransfer` on its 0x81 (line 1511),
+  aborting a status-change read that was still pending with no error. Its
+  restart is the second root-port-1 reset (line 1595). At 2 the driver
+  disowns the physical port on every root-port reset; this is not a port
+  disable, whose first `RH_ClearFeaturePortEnable` comes much later. usbport
+  then restored the device: address 0, a new address (9), and
+  `ReopenEndpoint` on the same EP0 and 0x81 (lines 1627-1629).
+- Hub 1's one 0xEE request (the Microsoft OS string descriptor, stalled as
+  Microsoft requires for an unsupported one) was the boot's only stall. It is
+  not the cause. No vhub transfer failed, and the abort came from the
+  install's teardown.
+- Round 10's first value-2 boot re-addressed hub 1 too (address 0x0A, seq
+  140); the "8" recorded for it came from the boot reading, taken before
+  that. Round 7 x64's first value-2 boot shows hub 1 at 1 and then 9 before
+  any plug. Later boots of the r11 image reset root port 1 once per driver
+  load.
+- Not explained, and not looked into: hub 4's restart took 10 s
+  (03:04:28.2-38.3), against 0.56-0.64 s for hubs 2, 3 and 5-8 (hub 1's,
+  after its teardown, 0.09 s).
 
 ### What is owed
 
@@ -3107,8 +3106,6 @@ and its trigger is not known. No driver change is justified by it:
   Windows 7 x64 at 2 with the same sequence; Windows 2000 and XP at 2 (XP's
   two-handle restore) as the NT 5.x regression; Vista x86 and x64 at 0, 1 and
   2; SweetLow's stack at 2; ME's short pass at 2; the device matrix at 2.
-- Not blocking: why usbhub stopped and re-enumerated virtual hub 1 at the
-  first boot with the hubs (round 11 above; needs a usbhub ETW trace).
 - Recorded, not fixed (round 9): the root view's enabled-not-connected report.
 - `vm\t2434-win7-r10.img` keeps the r10g NMI dump in its pagefile and is never
   booted again; `vm\t2434-win7-r9.img` and `vm\t2434-win7-r11.img` hold no dump.
