@@ -146,7 +146,7 @@ a renamed counter fails loudly rather than silently matching nothing.
 
 | Kind | Written as | Holds when |
 |---|---|---|
-| `advance` | `advance <label>`, or `advance <label> >= N` | delta >= N across the row's window, N defaulting to 1 (`verdict.ps1` parses both spellings into one kind with a `Min`) |
+| `advance` | `advance <label>`, `advance <label> >= N`, or `advance <label> == N` | delta >= N across the row's window, N defaulting to 1 (`verdict.ps1` parses all three spellings into one kind with a `Min`); with `==`, delta == N exactly, N at least 1 |
 | `zero` | `zero <label>` | delta == 0 |
 | `identity` | `identity <expr>` | an arithmetic relation over deltas holds exactly |
 | `inert` | `inert <label> because <reason>` | delta == 0, and the reason is printed |
@@ -162,6 +162,14 @@ failed.
 moved it, which is evidence. `inert` says the path does not exist here, which
 is bookkeeping. Writing `zero` where `inert` is meant is how a vacuous check
 gets counted as coverage.
+
+`advance <label> == N` was added on 2026-10-01 for a limit that is the
+expected behaviour: the churn row at virtual-hub switch 1 or 2, where the
+virtual hub is one more hub tier and the chain's tier-5 device must not be
+addressed (`devices addressed == 10`, not 11). "At least" cannot tell that
+reading from the device the limit should have stopped. `== 0` is refused,
+since `zero` says it. A delta past N is not explained by a missing bind, so
+it keeps a row out of `NODRIVER` (section 2.1) the way a tripped `zero` does.
 
 ### 3.1 Deltas, not absolutes
 
@@ -244,6 +252,29 @@ it on a population it has never been measured over would recreate exactly the
 failure below. Putting it in `Always` would make every future violation look
 like a device failure instead of an incomplete partition, which is how
 `MidTdTailsDroppedTotal` hid.
+
+### 3.3 Expectations that depend on the virtual-hub switch
+
+`XhciVirtualHSHub` (design record 12 section 3.1) changes some readings by
+design. At 0 a Full-Speed device on a root port is reported High Speed, so
+`endpoint speed mismatches` advances, and a Full-Speed hub there makes usbport
+name a translator the topology graph refuses, so `TT pairs disagreeing`
+advances. At 1 or 2 the device sits behind a virtual High-Speed hub with a
+real TT, so both stay at 0 and the TT pairs agree. A row states each form in
+`ExpectBySwitch`, keyed by the switch values the form covers (`'0'`, `'1,2'`);
+every value must be covered exactly once, and the lines are added to the
+row's `Expect` rather than replacing it.
+
+The runner reads the value from the running driver at each group boot,
+before the first row, once usbport has asked for the root hub's data (so
+StartController, where a value-2 hub is created, has returned). The applied
+value has no print site and so no offset, so three counters decide it: `vhub
+started` is 0 only at 0; at 2 every managed USB 2.0 root port has a hub from
+the start, so `vhub hubs created` less `vhub hubs dropped` is at least 2 (the
+keep-alive is on port 1 and the device under test on port 2); at 1 only the
+keep-alive can have made one by then. The value is printed in the report's
+header. It is read rather than declared in the config because the image
+holds it, and a fresh image is re-cloned at 0 for every build.
 
 ## 4. What the harness must refuse to do
 

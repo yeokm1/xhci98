@@ -51,6 +51,15 @@
     reaches NODRIVER without an entry counts against the target, and a row
     with an entry that reaches anything else is printed as a stale entry.  A
     fresh target inherits the entries of the target it names in `Like`.
+
+    `ExpectBySwitch = @{ '0' = @(...); '1,2' = @(...) }` IS THE VIRTUAL-HUB
+    SWITCH (`XhciVirtualHSHub`, design record 12).  Some readings change with
+    it by design, so a row states each form, keyed by the switch values it
+    covers; 0, 1 and 2 must each be covered exactly once.  The runner reads
+    the value from the running driver at every group boot (lib\verdict.ps1,
+    Get-VhubSwitchReading), judges the group's rows by that value's lines on
+    top of `Expect`, and prints what it read in the report's header.  Nothing
+    in the config declares it: the image holds it.
 #>
 @{
     Schema = 1
@@ -199,15 +208,26 @@
                     Settle = 20
                     Expect = @(
                         'advance endpoints opened >= 1'
-                        # EXPECTED NONZERO, and this is the point of the row.
-                        # Phase 5 task 7 makes this driver report every
+                    )
+                    ExpectBySwitch = @{
+                        # EXPECTED NONZERO AT 0, and this is the point of the
+                        # row.  Phase 5 task 7 makes this driver report every
                         # connected root port as High Speed, so a Full Speed
                         # device on one is a mismatch BY CONSTRUCTION.  A zero
                         # here would mean that untruth had been removed, not
                         # that nothing happened - which is why it is an
                         # `advance` and not a `zero`.
-                        'advance endpoint speed mismatches'
-                    )
+                        '0' = @( 'advance endpoint speed mismatches' )
+                        # ...AND ZERO WITH THE VIRTUAL HUB ON, for the same
+                        # reason the other way round.  At 1 the decoded Full
+                        # Speed puts the port in virtual-hub mode and at 2 every
+                        # port carries one, so the device sits behind a High
+                        # Speed hub's TT and usbport is told its true speed.
+                        # Measured at 2 on 98 SE and 2000 (run-24 round 11, the
+                        # device matrix: 0 on both legs of both targets); at 1
+                        # it is design record 12 section 3.2, not yet a reading.
+                        '1,2' = @( 'zero endpoint speed mismatches' )
+                    }
                 }
                 @{
                     Name = 'usb-mouse/hs'
@@ -237,8 +257,13 @@
                     Settle = 20
                     Expect = @(
                         'advance endpoints opened >= 1'
-                        'advance endpoint speed mismatches'
                     )
+                    # As usb-kbd/fs: the root-port untruth at 0, the true
+                    # speed behind the virtual hub at 1 and 2.
+                    ExpectBySwitch = @{
+                        '0'   = @( 'advance endpoint speed mismatches' )
+                        '1,2' = @( 'zero endpoint speed mismatches' )
+                    }
                     # As usb-mouse/hs above: the Phase 10 reading was the
                     # carried-along image's, and every fresh run since has read
                     # PASS (audit H21).
@@ -484,7 +509,7 @@
                         @{ Do = 'add'; Spec = 'usb-hub,id=ch7,bus=xhci.0,port={PORT}.1.1.1.1,ports=8'; Wait = 15 } # 9
                         @{ Do = 'add'; Spec = 'usb-mouse,id=ch8,bus=xhci.0,port={PORT}.1.1.1.1.1'; Wait = 20 }  # 10
                     )
-                    Expect = @(
+                    ExpectBySwitch = @{
                         # THE HAND-MEASURED NUMBER, ASSERTED RATHER THAN READ.
                         # Task 10.4 requires this harness to reproduce a result
                         # measured by hand, and batch 7b-V measured exactly ten
@@ -493,7 +518,35 @@
                         # `TtPairsAgreed` 0.  The sequence above presents ten, so
                         # anything else here is a real disagreement with the hand
                         # run and must fail the row rather than be read off.
-                        'advance topology: TT pairs disagreeing with usbport >= 10'
+                        # That is a switch-0 number: the phantom TT is the FS hub
+                        # on a root port this driver reports High Speed.
+                        '0' = @( 'advance topology: TT pairs disagreeing with usbport >= 10' )
+                        # WITH THE VIRTUAL HUB ON, THE TT IS REAL AND THE HUB IS
+                        # A TIER.  QEMU's usb-hub is Full Speed, so at 1 the root
+                        # port goes to virtual-hub mode and at 2 it has a hub
+                        # already: either way the chain sits behind the virtual
+                        # hub's TT, usbport names that hub, and the graph agrees
+                        # (run-24 round 11 at 2: 0 disagreeing, 9 agreeing a
+                        # leg).  And the virtual hub is one more hub in Windows'
+                        # view, so the five-tier chain above is six deep there
+                        # and the tier-5 mouse (enumeration 10) is past USB 2.0's
+                        # five: the OS never asks this driver to address it.
+                        # That is asserted as the behaviour, the owner's
+                        # decision of 2026-10-01, rather than shortened away: ten
+                        # devices addressed and not eleven, nine behind a hub and
+                        # not ten, and this driver refusing nothing (the
+                        # `nodes dropped` and `too deep` zeros below).  Measured
+                        # at 2 on 2000 only (98 SE excludes this row); at 1 it is
+                        # design record 12 section 5, not yet a reading.
+                        '1,2' = @(
+                            'zero topology: TT pairs disagreeing with usbport'
+                            'advance topology: TT pairs agreeing with usbport'
+                            'advance devices addressed == 10'
+                            'advance topology: behind-hub devices addressed == 9'
+                            'advance topology: behind-hub opens == 9'
+                        )
+                    }
+                    Expect = @(
                         'advance topology: hub descriptors folded >= 2'
                         'advance topology: behind-hub opens >= 2'
                         'advance topology: behind-hub devices addressed >= 2'

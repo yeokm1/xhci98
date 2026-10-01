@@ -3218,17 +3218,47 @@ The three switch-0 expectations:
   five. Inferred from the counters; no guest-side reading was taken. At 2
   every device has one hub tier fewer to spare than at 0.
 
+### The matrix follows the switch (2026-10-01, development host B)
+
+The owner's decisions on the three expectations, taken before the Vista
+runs: the matrix states each row's form per switch value rather than
+carrying the switch-0 rows as known failures, and the churn keeps its
+five-hub chain and asserts the depth limit at 1 and 2 rather than being
+shortened. No driver change and no rebuild.
+
+- `matrix.psd1` gains `ExpectBySwitch`, keyed by the values a form covers
+  (`'0'`, `'1,2'`), each value covered once. `usb-kbd/fs` and
+  `usb-mouse/fs`: `advance endpoint speed mismatches` at 0, `zero` at 1 and
+  2. `usb-hub/churn`: `TT pairs disagreeing >= 10` at 0; at 1 and 2 zero
+  disagreeing, pairs agreeing advanced, and the depth limit as `devices
+  addressed == 10`, `behind-hub devices addressed == 9` and `behind-hub
+  opens == 9`, beside the row's standing `nodes dropped` and `too deep`
+  zeros. The `== N` form is new to the expectation language (design record
+  06 section 3).
+- `run-matrix.ps1` reads the switch from the running driver at each group
+  boot, before the first row and after usbport has asked for the root
+  hub's data: `vhub started` 0 is 0; otherwise `vhub hubs created` less
+  `dropped` of 2 or more is 2 (every port has a hub), else 1 (at most the
+  keep-alive's). The value goes into the report header (`# vhub:`).
+  Design record 06 section 3.3.
+- At 1 the switch-2 forms are a prediction from design record 12, not a
+  reading: QEMU's hubs and FS HID devices put the port in virtual-hub mode
+  there too. The first matrix run at 1 checks it.
+- `selftest.ps1` (349 checks) drives the `==` form, the switch reading, the
+  `ExpectBySwitch` refusals, and the tracked rows against round 11's
+  readings at 2 and run 23's at 0; each of the new checks was seen to fail
+  under a mutation of the code it covers. `-PostRelease -ValidateOnly` on
+  `2a-fresh` and `2b-fresh`: 17 rows, 0 problems.
+- The `1.2.0.0` release-note line (the virtual hub is a hub tier, so a
+  chain can be one hub shorter than five) is in roadmap 24.7's list; the
+  text lands at the cut.
+
 ### What is owed
 
 - The rest of round 11 on `4506fa9` (brief `out\t24-3-4\recipe-2434-r11.md`):
   Vista x86 and x64 at 0, 1 and 2.
-- Before the Vista runs (owner, 2026-10-01): make the matrix's expectations
-  follow the switch - at 2 the FS HID rows assert zero speed mismatches and
-  the churn asserts zero TT disagreements with pairs agreed; at 2 the churn
-  also asserts the depth limit (the bottom mouse not enumerated, nothing
-  refused) rather than a shorter chain. And a line for the `1.2.0.0` release
-  notes and readme: with the switch on, an external hub chain can be one hub
-  shorter than USB's five.
+- Not required: a matrix re-run at 2 on this build, which should now read
+  clean on both primary targets (the owner's call).
 - Not blocking: a timing check of hub 4's 10 s install restart at the first
   boot with the hubs (round 11 above); XP's first-boot hub-1 re-address
   against its setupapi log (a fresh run).

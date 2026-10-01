@@ -14,10 +14,18 @@
 #
 #   advance <label>
 #   advance <label> >= <n>
+#   advance <label> == <n>
 #   zero <label>
 #   inert <label> because <reason>
 #   identity <label> [+ <label>]... == <label> [+ <label>]...
 #
+# `advance ... == <n>` is the one form that also bounds a counter from above.
+# It exists for a limit that is the expected behaviour, where "at least" cannot
+# tell the reading apart from a device the limit should have stopped: the
+# churn row at virtual-hub switch 1 or 2 asserts `devices addressed == 10`
+# because an 11th would be the tier-5 device the hub tier puts out of reach.
+# `== 0` is refused, since `zero` already says it and says it as a failure
+# shape rather than a count.
 function ConvertTo-Expectation {
     param(
         [Parameter(Mandatory = $true)][string]$Text,
@@ -25,6 +33,17 @@ function ConvertTo-Expectation {
     )
     $t = $Text.Trim()
 
+    if ($t -match '^advance\s+(.+?)\s*==\s*(\d+)$') {
+        $label = $Matches[1].Trim()
+        $n = [int]$Matches[2]
+        if ($n -eq 0) {
+            throw ("'{0}' asks for an advance of exactly 0; write 'zero {1}' instead." -f $t, $label)
+        }
+        return [pscustomobject]@{
+            Kind = "advance"; Label = $label; Field = (Resolve-CounterLabel -Table $Table -Label $label)
+            Min = $n; Exact = $n; Text = $t
+        }
+    }
     if ($t -match '^advance\s+(.+?)\s*>=\s*(\d+)$') {
         $label = $Matches[1].Trim()
         return [pscustomobject]@{
@@ -72,7 +91,7 @@ function ConvertTo-Expectation {
         }
     }
 
-    throw ("cannot parse expectation '{0}'. Expected one of: advance <label> [>= n] | zero <label> | inert <label> because <reason> | identity <sum> == <sum>" -f $t)
+    throw ("cannot parse expectation '{0}'. Expected one of: advance <label> [>= n | == n] | zero <label> | inert <label> because <reason> | identity <sum> == <sum>" -f $t)
 }
 
 # --------------------------------------------------------------- evaluating ---
@@ -86,10 +105,15 @@ function Test-Expectation {
         "advance" {
             $v = if ($d.ContainsKey($Expectation.Field)) { $d[$Expectation.Field] } else { $null }
             if ($null -eq $v) { return [pscustomobject]@{ Held = $false; Reading = "<unread>"; Unread = $true } }
+            $exact = ($null -ne $Expectation.PSObject.Properties['Exact'])
+            $held = if ($exact) { $v -eq $Expectation.Exact } else { $v -ge $Expectation.Min }
+            # `Over` is read by the NODRIVER inference: a count past its limit
+            # is something that happened, which a missing bind cannot explain.
             return [pscustomobject]@{
-                Held = ($v -ge $Expectation.Min)
+                Held = $held
                 Reading = ("{0}{1}" -f $(if ($v -ge 0) { "+" } else { "" }), $v)
                 Unread = $false
+                Over = ($exact -and $v -gt $Expectation.Exact)
             }
         }
         "zero" {
@@ -340,12 +364,16 @@ function Get-RowOutcome {
         #      then did or did not do.
         #   2. A tripped failure-shaped `zero`, or a broken identity.  Those are
         #      defects too, and calling the row NODRIVER would bury them.
+        #   3. An `advance ... == n` that read MORE than n.  Its limit was
+        #      passed, and a bind that never happened cannot make a counter
+        #      move further than expected.
         $ourFields = @()
         foreach ($lbl in @($AddressedLabel, 'slots enabled')) {
             try { $ourFields += (Resolve-CounterLabel -Table $Table -Label $lbl) } catch { }
         }
         $unexplained = @($failed | Where-Object {
             $_.Expectation.Kind -ne "advance" -or
+            ($null -ne $_.Test.PSObject.Properties['Over'] -and $_.Test.Over) -or
             ($null -ne $_.Expectation.Field -and $ourFields -contains $_.Expectation.Field)
         })
         if ($unexplained.Count -eq 0) {
@@ -360,4 +388,158 @@ function Get-RowOutcome {
         Outcome = "FAIL"
         Why = (($failed | ForEach-Object { $_.Expectation.Text }) -join "; ")
     }
+}
+
+# ------------------------------------------------------ the virtual-hub switch ---
+#
+# `XhciVirtualHSHub` (design record 12 section 3.1) changes what some rows must
+# read, by design.  At 0 a Full-Speed device on a root port is reported High
+# Speed, so `endpoint speed mismatches` advances by construction, and an FS hub
+# there makes usbport name a translator the topology graph refuses, so `TT pairs
+# disagreeing` advances.  At 1 or 2 the device sits behind a virtual High-Speed
+# hub with a real TT: both read 0, the TT pairs agree, and the hub is one more
+# tier, so a five-hub chain puts its tier-5 device out of reach.  The round-11
+# matrix at 2 failed three rows on the switch-0 forms alone (run-24 round 11).
+#
+# A row states each form under `ExpectBySwitch`, keyed by the switch values a
+# form covers: `@{ '0' = @(...); '1,2' = @(...) }`.  Every value 0, 1 and 2 must
+# be covered exactly once, so adding the key cannot leave a value judged by
+# nothing, and the lines join the row's `Expect` (and any `ExpectByTarget`)
+# rather than replacing them.
+$script:VhubSwitchValues = @(0, 1, 2)
+
+# The switch values a key names, or a throw naming what is wrong with it.
+function ConvertFrom-SwitchKey {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Key)
+    $values = @()
+    foreach ($part in ($Key -split ',')) {
+        $p = $part.Trim()
+        if ($p -notmatch '^\d+$' -or $script:VhubSwitchValues -notcontains [int]$p) {
+            throw ("ExpectBySwitch key '{0}' names '{1}', which is not a switch value ({2})" -f $Key, $p, ($script:VhubSwitchValues -join ", "))
+        }
+        if ($values -contains [int]$p) {
+            throw ("ExpectBySwitch key '{0}' names {1} twice" -f $Key, $p)
+        }
+        $values += [int]$p
+    }
+    return $values
+}
+
+# Problems with a row's ExpectBySwitch, checked before a boot is spent.
+function Get-RowSwitchProblems {
+    param($Row)
+    $out = @()
+    if ($null -eq $Row -or -not $Row.ContainsKey('ExpectBySwitch')) { return $out }
+    if ($Row.ExpectBySwitch -isnot [hashtable]) {
+        return @("row {0}: ExpectBySwitch is not a table of switch values to expectations" -f $Row.Name)
+    }
+    $covered = @{}
+    foreach ($k in $Row.ExpectBySwitch.Keys) {
+        try {
+            foreach ($v in (ConvertFrom-SwitchKey -Key ([string]$k))) {
+                if ($covered.ContainsKey($v)) {
+                    $out += ("row {0}: ExpectBySwitch covers switch {1} under both '{2}' and '{3}'" -f $Row.Name, $v, $covered[$v], $k)
+                } else {
+                    $covered[$v] = [string]$k
+                }
+            }
+        } catch {
+            $out += ("row {0}: {1}" -f $Row.Name, $_.Exception.Message)
+        }
+    }
+    foreach ($v in $script:VhubSwitchValues) {
+        if (-not $covered.ContainsKey($v)) {
+            $out += ("row {0}: ExpectBySwitch covers no form for switch {1}, so a run at {1} would judge the row without the expectations its other values carry" -f $Row.Name, $v)
+        }
+    }
+    return $out
+}
+
+# The ExpectBySwitch lines that apply at one switch value; none when the row
+# has no such key.  Run Get-RowSwitchProblems first: this takes the first key
+# that names the value.
+function Get-RowSwitchExpectTexts {
+    param([Parameter(Mandatory = $true)]$Row, [Parameter(Mandatory = $true)][int]$Switch)
+    if (-not $Row.ContainsKey('ExpectBySwitch')) { return @() }
+    foreach ($k in $Row.ExpectBySwitch.Keys) {
+        if ((ConvertFrom-SwitchKey -Key ([string]$k)) -contains $Switch) { return @($Row.ExpectBySwitch[$k]) }
+    }
+    return @()
+}
+
+# THE SWITCH, READ FROM THE RUNNING DRIVER.  The value applied at this start
+# lives in the extension (`VhubConfig.Applied`) but has no print site, so the
+# offset table cannot name it; three counters that do have one decide it, read
+# once usbport has asked for the root hub's data, which it does only after
+# StartController - where every value-2 hub is stood up - has returned:
+#
+#   - `vhub started` is set by any start at 1 or 2 and never at 0;
+#   - at 2 every managed USB 2.0 root port holds a hub from the start, so
+#     hubs created less hubs dropped is the port count, at least 2 here (the
+#     keep-alive takes root port 1 and the device under test port 2);
+#   - at 1 a hub exists only on a root port whose reset decoded a Full- or
+#     Low-Speed device, and before the first row the only such device is the
+#     keep-alive, so at most one hub is up.
+#
+# Not a declaration in the config, because the image is what holds the value:
+# a fresh image is re-cloned at 0 for every build, and a declared 2 left behind
+# would judge it by the wrong rows.
+function Get-VhubSwitchReading {
+    param(
+        [Parameter(Mandatory = $true)][int64]$Started,
+        [Parameter(Mandatory = $true)][int64]$Created,
+        [Parameter(Mandatory = $true)][int64]$Dropped
+    )
+    if ($Started -eq 0) {
+        if ($Created -ne 0) {
+            throw ("vhub hubs created reads {0} with vhub started at 0, which no switch value produces; the reading cannot be trusted" -f $Created)
+        }
+        return 0
+    }
+    if (($Created - $Dropped) -ge 2) { return 2 }
+    return 1
+}
+
+# The same, off a Read-Counters snapshot: the switch and a line saying what it
+# was read from.  A field the read missed is an error and never a zero, as
+# everywhere here.  A table with no `vhub started` at all is a build from
+# before task 24.3, which has no switch: 0.
+function Get-VhubSwitchFromSnapshot {
+    param(
+        [Parameter(Mandatory = $true)]$Snapshot,
+        [Parameter(Mandatory = $true)]$Table
+    )
+    if (-not $Table.FieldOfLabel.ContainsKey('vhub started')) {
+        return [pscustomobject]@{ Switch = 0; Text = "switch 0 (this build has no virtual-hub switch)" }
+    }
+    $v = @{}
+    foreach ($label in @('vhub started', 'vhub hubs created', 'vhub hubs dropped')) {
+        $field = Resolve-CounterLabel -Table $Table -Label $label
+        if ($null -eq $Snapshot.Values -or -not $Snapshot.Values.ContainsKey($field)) {
+            throw ("the counter snapshot carries no '{0}' ({1}); the read left it unread, so the virtual-hub switch cannot be read from it" -f $label, $field)
+        }
+        $v[$label] = [int64]$Snapshot.Values[$field]
+    }
+    $s = Get-VhubSwitchReading -Started $v['vhub started'] -Created $v['vhub hubs created'] -Dropped $v['vhub hubs dropped']
+    return [pscustomobject]@{
+        Switch = $s
+        Text = ("switch {0} (vhub started {1}, hubs created {2}, dropped {3})" -f `
+                $s, $v['vhub started'], $v['vhub hubs created'], $v['vhub hubs dropped'])
+    }
+}
+
+# The report's line for one target: the value every group read, or each
+# group's when they differ.  A group that ended before its reading has none.
+function Format-VhubSwitchLine {
+    param([hashtable]$ByGroup = @{}, [string[]]$GroupOrder = @())
+    $read = @($GroupOrder | Where-Object { $ByGroup.ContainsKey($_) })
+    if ($read.Count -eq 0) { return "not read (no group reached the reading)" }
+    $values = @($read | ForEach-Object { $ByGroup[$_] } | Sort-Object -Unique)
+    $missing = @($GroupOrder | Where-Object { -not $ByGroup.ContainsKey($_) })
+    $tail = if ($missing.Count -gt 0) { ("; not read in {0}" -f ($missing -join ", ")) } else { "" }
+    if ($values.Count -eq 1) {
+        $where = if ($missing.Count -eq 0) { "every group" } else { ($read -join ", ") }
+        return ("switch {0} in {1}{2}" -f $values[0], $where, $tail)
+    }
+    return ("SWITCH DIFFERS BY GROUP: {0}{1}" -f (($read | ForEach-Object { "{0} {1}" -f $_, $ByGroup[$_] }) -join ", "), $tail)
 }

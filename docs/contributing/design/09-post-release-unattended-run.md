@@ -471,6 +471,7 @@ diffable against each other and is absent from the matrix report today:
 # post-release run
 # driver:    1.0.0.0 qemu, <bytes> B, sha256 <first 16 hex>
 # image:     vm\fresh-2a.img, stamp base-1.0.0.0-qemu, from win98.img post-nusb
+# vhub:      switch <0|1|2> in every group
 # qemu:      <version string>, accel tcg
 # offsets:   SIZEOF <n>, <m> counters
 # started:   <date time>, elapsed <h:mm:ss>

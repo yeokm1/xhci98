@@ -1223,7 +1223,14 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   experimental and for private testing only, that the hub's id is
   pid.codes' shared test id `1209:0001` and user-settable, what values 1
   and 2 each do, and the extra hub a slower device brings with it at 1 and
-  every USB 2.0 port carries at 2; the download's
+  every USB 2.0 port carries at 2; and, in that entry and in the readme
+  template's switch section, that **the virtual hub is a hub tier**: with
+  the switch at 1 or 2, a chain of external hubs on a root port can be one
+  hub shorter than USB's five before the devices at its end stop
+  enumerating (at 1 only behind a Full- or Low-Speed hub, which is what
+  puts that port in virtual-hub mode; measured at 2 on 2000 in round 11's
+  device matrix, where the tier-5 mouse of the churn row was never
+  addressed and the driver refused nothing - owner, 2026-10-01); the download's
   `readme.txt`; `releases/history.md`, `xhci_version.h` and both INFs; the
   install legs from the asset; and the post-release matrix on both primary
   targets, read against `runs/run-23-post-release/` with the switch off and

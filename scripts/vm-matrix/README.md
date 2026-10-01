@@ -312,6 +312,14 @@ checkpoint as unmet.
 The body has no timestamps, durations or paths, so a regression shows up as a
 changed line in a diff. Everything variable is in the header.
 
+That includes the virtual-hub switch (`XhciVirtualHSHub`), which the runner
+reads from the running driver at each group boot and prints as `# vhub:` (or
+`# vhub   :` per target in the Phase 10 report). A row whose readings change
+with the switch carries `ExpectBySwitch` in `matrix.psd1` and is judged by the
+form for the value its group read; design record 06 section 3.3 has the
+rule. Nothing in the config declares the value: set it in the image during
+preparation, and the report says what the run found.
+
 A row that is not a clean `PASS` also gets a screenshot. The two commonest
 causes on these targets, a modal wizard and a wedged PnP tree, are invisible
 to every counter and to the liveness probe alike.

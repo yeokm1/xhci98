@@ -80,7 +80,8 @@ foreach ($bad in @(
     'zero a counter that does not exist',
     'inert devices addressed',                   # inert with no reason
     'wobble devices addressed',                  # unknown verb
-    'identity devices addressed'                 # identity with no ==
+    'identity devices addressed',                # identity with no ==
+    'advance devices addressed == 0'             # an exact 0 is `zero`
 )) {
     $threw = $false
     try { ConvertTo-Expectation -Text $bad -Table $table | Out-Null } catch { $threw = $true }
@@ -90,6 +91,7 @@ foreach ($bad in @(
 foreach ($good in @(
     'advance devices addressed',
     'advance devices addressed >= 3',
+    'advance devices addressed == 10',
     'zero fatal controller status',
     'inert iso packets answered because no isochronous device is attached in this group',
     'identity endpoint opens seen == endpoint opens accepted + EP0 opens refused'
@@ -122,6 +124,21 @@ Assert "nonzero zero-check -> FAIL" "FAIL" (Get-Outcome @(
 Write-Host "--- an advance >= N below N must FAIL, and exactly N must pass ---"
 Assert "advance >= 3 with 2 -> FAIL" "FAIL" (Get-Outcome @('advance endpoints opened >= 3') (New-Delta @{ 'devices addressed' = 1; 'endpoints opened' = 2 }))
 Assert "advance >= 3 with 3 -> PASS" "PASS" (Get-Outcome @('advance endpoints opened >= 3') (New-Delta @{ 'devices addressed' = 1; 'endpoints opened' = 3 }))
+
+Write-Host "--- an advance == N is a limit both ways: under N and over N must FAIL ---"
+Assert "advance == 3 with 3 -> PASS" "PASS" (Get-Outcome @('advance endpoints opened == 3') (New-Delta @{ 'devices addressed' = 1; 'endpoints opened' = 3 }))
+Assert "advance == 3 with 2 -> FAIL" "FAIL" (Get-Outcome @('advance endpoints opened == 3') (New-Delta @{ 'devices addressed' = 1; 'endpoints opened' = 2 }))
+Assert "advance == 3 with 4 -> FAIL" "FAIL" (Get-Outcome @('advance endpoints opened == 3') (New-Delta @{ 'devices addressed' = 1; 'endpoints opened' = 4 }))
+# Past its limit is something that happened, so a row the OS never claimed
+# must not have it waived as NODRIVER; short of it is the missing bind's.
+Assert "over an == limit is not NODRIVER"  "FAIL" (Get-Outcome @(
+    'advance endpoints opened >= 1'
+    'advance topology: behind-hub opens == 9'
+) (New-Delta @{ 'devices addressed' = 1; 'topology: behind-hub opens' = 10 }))
+Assert "under an == limit can be NODRIVER" "NODRIVER" (Get-Outcome @(
+    'advance endpoints opened >= 1'
+    'advance topology: behind-hub opens == 9'
+) (New-Delta @{ 'devices addressed' = 1 }))
 
 Write-Host "--- a broken identity must FAIL ---"
 Assert "identity mismatch -> FAIL" "FAIL" (Get-Outcome @(
@@ -584,8 +601,9 @@ Assert "an unread field is an error and not a zero"    $true $lifeThrew
 Write-Host "--- the header carries every variable thing, and nothing else does ---"
 $hdr = New-PostReleaseHeader -TargetId '2a-fresh' -Version '1.0.0.0' -DriverLine '1.0.0.0 qemu, 1 B, sha256 0' -ImageLine 'vm\fresh-2a.img, stamp base-1.0.0.0-qemu, from win98.img post-nusb' `
            -QemuVersion '11.0.0' -Accel 'tcg' -Sizeof 12345 -Counters 7 -Started (Get-Date '2026-08-30 10:00:00') -Elapsed ([timespan]::FromMinutes(61)) `
-           -Verdict 'PASS' -Rows 20 -NoDriverExpected 4 -NotReached 3
+           -Verdict 'PASS' -Rows 20 -NoDriverExpected 4 -NotReached 3 -VhubLine 'switch 2 in every group'
 Assert "the verdict line is as designed"       $true (($hdr -join "`n") -match '# verdict:\s+2a-fresh PASS, 20 rows, 4 NODRIVER expected, 3 not reached')
+Assert "the switch the rows were judged at"    $true (($hdr -join "`n") -match '# vhub:\s+switch 2 in every group')
 Assert "the elapsed time is h:mm:ss"           $true (($hdr -join "`n") -match 'elapsed 1:01:00')
 Assert "every header line is a comment"        0 @($hdr | Where-Object { -not $_.StartsWith('#') }).Count
 
@@ -942,6 +960,101 @@ Add-Content -LiteralPath $idLog -Encoding ascii -Value 'xhci98: StartController 
 Assert "amd64: the completed pair is read"       "FFFFFADFCE2F5DC8" (Find-ExtensionIdentity -DebugconLog $idLog -Arch amd64).Va
 Assert "amd64 drift on the same pair is none"    "" (Get-ExtensionIdentityDrift -Ident $partialIdent -DebugconLog $idLog)
 Remove-Item -LiteralPath $idLog -Force -ErrorAction SilentlyContinue
+
+Write-Host "--- the virtual-hub switch: read from the driver, every value covered once, each row judged by its own form ---"
+Assert "nothing started is switch 0"              0 (Get-VhubSwitchReading -Started 0 -Created 0 -Dropped 0)
+Assert "started, no hub yet is switch 1"          1 (Get-VhubSwitchReading -Started 1 -Created 0 -Dropped 0)
+Assert "started, the keep-alive's hub is 1"       1 (Get-VhubSwitchReading -Started 1 -Created 1 -Dropped 0)
+Assert "a hub dropped and re-made is still 1"     1 (Get-VhubSwitchReading -Started 1 -Created 2 -Dropped 1)
+Assert "a hub on two ports is switch 2"           2 (Get-VhubSwitchReading -Started 1 -Created 2 -Dropped 0)
+Assert "the matrix QEMU's four is switch 2"       2 (Get-VhubSwitchReading -Started 1 -Created 4 -Dropped 0)
+$swThrew = $false
+try { Get-VhubSwitchReading -Started 0 -Created 4 -Dropped 0 | Out-Null } catch { $swThrew = $true }
+Assert "hubs with nothing started is refused"     $true $swThrew
+
+function New-SwitchSnapshot {
+    param([int64]$Started, [int64]$Created, [int64]$Dropped, [string]$Omit = "")
+    $v = @{}
+    foreach ($p in @(@('vhub started', $Started), @('vhub hubs created', $Created), @('vhub hubs dropped', $Dropped))) {
+        if ($p[0] -ne $Omit) { $v[(Resolve-CounterLabel -Table $table -Label $p[0])] = $p[1] }
+    }
+    return [pscustomobject]@{ Values = $v; Unread = 0; Read = $v.Count }
+}
+Assert "the snapshot form reads 2"                2 (Get-VhubSwitchFromSnapshot -Snapshot (New-SwitchSnapshot 1 4 0) -Table $table).Switch
+Assert "...and says what it read it from"         $true ((Get-VhubSwitchFromSnapshot -Snapshot (New-SwitchSnapshot 1 4 0) -Table $table).Text -match 'hubs created 4')
+$swThrew = $false
+try { Get-VhubSwitchFromSnapshot -Snapshot (New-SwitchSnapshot 1 4 0 -Omit 'vhub hubs dropped') -Table $table | Out-Null } catch { $swThrew = $true }
+Assert "an unread switch counter is an error"     $true $swThrew
+$oldTable = [pscustomobject]@{ FieldOfLabel = @{}; Offsets = @{}; OffsetsFile = 'old' }
+Assert "a build before 24.3 is switch 0"          0 (Get-VhubSwitchFromSnapshot -Snapshot ([pscustomobject]@{ Values = @{} }) -Table $oldTable).Switch
+
+Assert "a well-formed ExpectBySwitch is clean"    0 @(Get-RowSwitchProblems -Row @{ Name = 'x'; ExpectBySwitch = @{ '0' = @('a'); '1,2' = @('b') } }).Count
+Assert "a row without one is clean"               0 @(Get-RowSwitchProblems -Row @{ Name = 'x' }).Count
+Assert "a value left out is a problem"            1 @(Get-RowSwitchProblems -Row @{ Name = 'x'; ExpectBySwitch = @{ '0' = @('a'); '2' = @('b') } }).Count
+Assert "a value covered twice is a problem"       1 @(Get-RowSwitchProblems -Row @{ Name = 'x'; ExpectBySwitch = @{ '0,1' = @('a'); '1,2' = @('b') } }).Count
+Assert "a value that is no switch is a problem"   $true (@(Get-RowSwitchProblems -Row @{ Name = 'x'; ExpectBySwitch = @{ '0' = @('a'); '1,2' = @('b'); '3' = @('c') } }).Count -ge 1)
+Assert "a key naming one value twice is refused"  $true (@(Get-RowSwitchProblems -Row @{ Name = 'x'; ExpectBySwitch = @{ '0,0' = @('a'); '1,2' = @('b') } }).Count -ge 1)
+Assert "a list instead of a table is a problem"   1 @(Get-RowSwitchProblems -Row @{ Name = 'x'; ExpectBySwitch = @('a') }).Count
+$swRow = @{ Name = 'x'; ExpectBySwitch = @{ '0' = @('a0'); '1,2' = @('b1', 'b2') } }
+Assert "switch 0 takes its own lines"             "a0"    ((Get-RowSwitchExpectTexts -Row $swRow -Switch 0) -join ",")
+Assert "switch 2 takes the shared on-form"        "b1,b2" ((Get-RowSwitchExpectTexts -Row $swRow -Switch 2) -join ",")
+Assert "a row without the key adds nothing"       0 @(Get-RowSwitchExpectTexts -Row @{ Name = 'x' } -Switch 2).Count
+
+Assert "one value everywhere is one line"         "switch 2 in every group" (Format-VhubSwitchLine -ByGroup @{ audio = 2; hid = 2 } -GroupOrder @('audio', 'hid'))
+Assert "a group without a reading is named"       "switch 0 in audio; not read in hid" (Format-VhubSwitchLine -ByGroup @{ audio = 0 } -GroupOrder @('audio', 'hid'))
+Assert "a difference is said loudly"              $true ((Format-VhubSwitchLine -ByGroup @{ audio = 2; hid = 0 } -GroupOrder @('audio', 'hid')) -match '^SWITCH DIFFERS BY GROUP: audio 2, hid 0')
+Assert "no reading at all says so"                $true ((Format-VhubSwitchLine -ByGroup @{} -GroupOrder @('audio')) -match '^not read')
+
+$rhLog = Join-Path $env:TEMP ("xhci98-selftest-rh-" + [Guid]::NewGuid().ToString("N").Substring(0, 8) + ".log")
+Set-Content -LiteralPath $rhLog -Encoding ascii -Value @('xhci98: cb StartController irql=00 a=8182292C b=81822338 c=00000000')
+Assert "StartController alone: root hub not asked" $false (Test-RootHubDataAsked -DebugconLog $rhLog)
+Add-Content -LiteralPath $rhLog -Encoding ascii -Value 'xhci98: cb RH_GetRootHubData irql=00 a=8182292C b=F401B514 c=00000000'
+Assert "...then asked"                             $true (Test-RootHubDataAsked -DebugconLog $rhLog)
+Remove-Item -LiteralPath $rhLog -Force -ErrorAction SilentlyContinue
+Assert "no log: not asked"                         $false (Test-RootHubDataAsked -DebugconLog $rhLog)
+
+# The tracked matrix, against round 11's readings at 2 and run 23's at 0.
+$mxTracked = Import-PowerShellDataFile -LiteralPath (Join-Path $PSScriptRoot "matrix.psd1")
+$mxProblems = @()
+foreach ($g in $mxTracked.Groups) { foreach ($r in $g.Rows) { $mxProblems += (Get-RowSwitchProblems -Row $r) } }
+Assert "the tracked matrix's switch forms are clean" 0 $mxProblems.Count
+function Get-TrackedRow { param([string]$Name) foreach ($g in $mxTracked.Groups) { foreach ($r in $g.Rows) { if ($r.Name -eq $Name) { return $r } } } }
+function Get-SwitchOutcome {
+    param($Row, [int]$Switch, [hashtable]$ByLabel)
+    $texts = @($mxTracked.Always) + @($Row.Expect) + @(Get-RowSwitchExpectTexts -Row $Row -Switch $Switch)
+    return (Get-Outcome $texts (New-Delta $ByLabel))
+}
+$kbdFs = Get-TrackedRow 'usb-kbd/fs'
+$fsAt2 = @{ 'devices addressed' = 1; 'slots enabled' = 1; 'endpoints opened' = 1; 'endpoint opens seen' = 3; 'endpoint opens accepted' = 3 }
+$fsAt0 = $fsAt2.Clone(); $fsAt0['endpoint speed mismatches'] = 1
+Assert "kbd/fs at 2, no mismatch: PASS"           "PASS" (Get-SwitchOutcome $kbdFs 2 $fsAt2)
+Assert "kbd/fs at 1, no mismatch: PASS"           "PASS" (Get-SwitchOutcome $kbdFs 1 $fsAt2)
+Assert "kbd/fs at 2 with a mismatch: FAIL"        "FAIL" (Get-SwitchOutcome $kbdFs 2 $fsAt0)
+Assert "kbd/fs at 0 with its mismatch: PASS"      "PASS" (Get-SwitchOutcome $kbdFs 0 $fsAt0)
+Assert "kbd/fs at 0 with none: FAIL"              "FAIL" (Get-SwitchOutcome $kbdFs 0 $fsAt2)
+Assert "mouse/fs at 2, no mismatch: PASS"         "PASS" (Get-SwitchOutcome (Get-TrackedRow 'usb-mouse/fs') 2 $fsAt2)
+$churn = Get-TrackedRow 'usb-hub/churn'
+# Round 11 at 2, one leg (r11-matrix-report.md); opens seen = accepted = 33.
+$churnAt2 = @{ 'devices addressed' = 10; 'slots enabled' = 10; 'endpoints opened' = 9; 'endpoint opens seen' = 33; 'endpoint opens accepted' = 33
+               'topology: hub descriptors folded' = 6; 'topology: hub slots marked' = 5; 'topology: behind-hub opens' = 9
+               'topology: behind-hub devices addressed' = 9; 'topology: TT pairs agreeing with usbport' = 9 }
+Assert "churn at 2, round 11's leg: PASS"         "PASS" (Get-SwitchOutcome $churn 2 $churnAt2)
+Assert "churn at 0 on round 11's leg: FAIL"       "FAIL" (Get-SwitchOutcome $churn 0 $churnAt2)
+$churnTier5 = $churnAt2.Clone(); $churnTier5['devices addressed'] = 11; $churnTier5['slots enabled'] = 11
+$churnTier5['topology: behind-hub devices addressed'] = 10; $churnTier5['topology: behind-hub opens'] = 10
+Assert "churn at 2 reaching tier 5: FAIL"         "FAIL" (Get-SwitchOutcome $churn 2 $churnTier5)
+$churnExtra = $churnAt2.Clone(); $churnExtra['devices addressed'] = 11; $churnExtra['slots enabled'] = 11
+Assert "churn at 2, one device too many: FAIL"    "FAIL" (Get-SwitchOutcome $churn 2 $churnExtra)
+$churnPhantom = $churnAt2.Clone(); $churnPhantom['topology: TT pairs disagreeing with usbport'] = 1
+Assert "churn at 2 with a disagreement: FAIL"     "FAIL" (Get-SwitchOutcome $churn 2 $churnPhantom)
+$churnTooDeep = $churnAt2.Clone(); $churnTooDeep['topology: behind-hub refused - too deep'] = 1
+Assert "churn at 2 the driver refusing: FAIL"     "FAIL" (Get-SwitchOutcome $churn 2 $churnTooDeep)
+# Run 23 at 0, one leg: eleven addressed, ten behind a hub, ten phantom TTs.
+$churnAt0 = @{ 'devices addressed' = 11; 'slots enabled' = 11; 'endpoints opened' = 10; 'endpoint opens seen' = 36; 'endpoint opens accepted' = 36
+               'topology: hub descriptors folded' = 6; 'topology: hub slots marked' = 5; 'topology: behind-hub opens' = 10
+               'topology: behind-hub devices addressed' = 10; 'topology: TT pairs disagreeing with usbport' = 10 }
+Assert "churn at 0, run 23's leg: PASS"           "PASS" (Get-SwitchOutcome $churn 0 $churnAt0)
+Assert "churn at 2 on run 23's leg: FAIL"         "FAIL" (Get-SwitchOutcome $churn 2 $churnAt0)
 
 Write-Host ""
 if ($failures -eq 0) {
