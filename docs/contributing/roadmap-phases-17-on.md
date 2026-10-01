@@ -1016,9 +1016,13 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     one tier. On the owner's decisions the matrix now states each row's form
     per switch value, read from the running driver, and asserts that depth
     limit (`runs/run-24.md`, "The matrix follows the switch"); the release
-    note is in 24.7. Owed: Vista in both architectures at 0, 1 and 2, and
-    the device matrix again, on the next rebuild's fresh images (owner,
-    2026-10-01), where it should read clean.
+    note is in 24.7. On the rebuild `d30234c` (the hub's product string
+    "xHCI98 virtual HS Hub", dated 10/01/2026), Vista in both architectures
+    passes at 0, 1 and 2 (2026-10-02, `runs/run-24.md`, "Vista on the
+    rebuild"): a Full-Speed device behind a virtual hub enumerates, the
+    Device Manager "restart required" veto round 6 met at 1 and 2 is gone, and
+    no enable brought a loop. Owed: the device matrix again, on this build's
+    fresh images (owner, 2026-10-01), where it should read clean.
   - [ ] **24.3.5 - The E460**, the page's `-E`: Windows 98 SE on metal with the
     switch at 1 and at 2, the Low-Speed mouse and the Full-Speed audio device from
     `test-equipment.md` on root ports, the interval read from the snapshot;

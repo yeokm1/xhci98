@@ -3253,13 +3253,57 @@ shortened. No driver change and no rebuild.
   chain can be one hub shorter than five) is in roadmap 24.7's list; the
   text lands at the cut.
 
+### Vista on the rebuild (2026-10-02, development host A)
+
+The rebuild came first (`aefe891`, `d30234c`): `4506fa9` with the virtual
+hub's product string changed to "xHCI98 virtual HS Hub" and the tree dated
+10/01/2026, version still `1.1.1.0` (owner). No structure moved, so the
+readers' offsets stand; Codex found nothing in one round. Every gate green;
+`qemu` stamps x86 `Oct  1 2026 22:24:27`, amd64 `22:29:12`; staged in all
+nine transfer folders and every hash re-read. Vista ran on this build by the
+owner's decision, not on `4506fa9`.
+
+Vista x86 and x64 at 0, 1 and 2, two guests at once, each from a fresh image
+under its own agent (brief `out\t24-3-4\recipe-2434-r11-vista.md`). Every one
+of the 12 driver loads per guest carried its build's stamp and no other, and
+no log has a `ctrl.failed`, a `refused SET_ADDRESS` or a bugcheck (the
+coordinator re-checked each log). **Both pass, and both read better than
+round 6, not only no worse.** Reports `out\t24-3-4\r11-vista-report.md` and
+`r11-vista-x64-report.md` and their evidence (git-ignored).
+
+| Guest | Reached | Result | Report and evidence |
+|---|---|---|---|
+| Windows Vista SP2 x86, 4 vCPUs | values 0, 1, 2 | **Full-Speed devices behind a virtual hub enumerate**: at 1 the FS mouse binds behind hub 1 and audio behind hub 3, churn 25 of 25 with a slot every cycle (round 6: 0 of 25); at 2 all four devices and the HS mouse bind behind their hubs, which gives the first 24.5 reading at 2 on NT 6.x (`ep.open.ival=00030005`, `EndpointPeriodsPromoted` 0). **No "restart required" veto**: three disable/enable cycles at 0, two at 1 and three at 2, those at 1 and 2 with devices behind the hubs, every device back at +1 minute and still there at +5; disables took about 14 s at 1 and 32 s at 2. After every enable at 2, each hub addressed once, no slot disabled or reclaimed - no loop. `VhubResetsHeld` and `RhResetTimeouts` 0 at 2 (round 6: 75 held resets). `SoftInterruptRequests` 0 at 0, 62-787 at 1, 182-771 at 2; `CompletionFallbackPolls`, `CompletionsDeliveredForced`, every refusal and `AddressReclaims` 0 | `r11-vista-report.md`; `r11-vista-r11{b,c,d}-*`, `r11-vista-s{1,2}-churn.txt` |
+| Windows Vista SP2 x64, 4 vCPUs | values 0, 1, 2 | The same picture. At 1 and 2 all four devices bound behind their hubs on the first plug (round 6 at 2: none), churn 25 of 25 with a slot every cycle at both. **Eight of eight disables went through** (round 6: seven of seven refused at 1 and 2): 9-12 s at 0, 15 s at 1, 30 s at 2, all four devices back at +1 minute and still there at +5. Every value-2 enable addressed the 8 hubs once each, 4 slots, none disabled or reclaimed. `SoftInterruptRequests` 0 at 0, up to 800 at 1 and 810 at 2 over the churns; fallback and forced deliveries, every refusal and `AddressReclaims` 0. 24.5: `00030005` at every value, `EndpointPeriodsPromoted` 0 | `r11-vista-x64-report.md`, `r11-vista-x64-readings.txt`; `r11-vista-x64-r11{b,c,d}-*`, `r11-vista-x64-s{1,2}-churn.txt` |
+
+Notes, none a stop condition (the owner accepted both runs on 2026-10-02):
+
+- **The product string:** Vista's Device Manager shows every virtual hub
+  as "Generic USB Hub", the class name from `usb.inf`, and has no
+  bus-reported description to show the device's own. The x64 guest's
+  `setupapi.dev.log` names "xHCI98 virtual HS Hub" eight times and the old
+  form never; the x86 guest carries the same string and its log was not
+  searched. Taken as shown for both.
+- **First boot at 2, both guests:** hubs 2 and 4-8 were each re-addressed
+  once before anything was plugged (`VhubOpens` 48 against 24), and never
+  again, through 2 minutes' watch and three enables. Hubs 1 and 3, whose hub
+  device had already been installed at 1, were not. Filed as the Windows 7
+  case above - Windows' first install of a hub restarting one already
+  running - by its shape; no setupapi timestamps were read for it.
+- **Value 0 was lighter than round 6**: three cycles, no remove and rescan
+  (round 6: five, a remove and rescan, and a sixth). The virtual hub is off
+  at 0 and the build changed nothing there; enough, by the owner's decision.
+- Idle audio's iso OUT endpoint logged Ring Underrun (`IsoRingUnderruns` up
+  to 6 per load) with nothing playing; `InterruptArmsTakenByIsr` 4-41 per
+  load at 1 and 2 with transfers flowing after every one. Vista x86's
+  value-1 post-churn ring wrapped; the mid-churn reading covers the first
+  half.
+
 ### What is owed
 
-- The rest of round 11 on `4506fa9` (brief `out\t24-3-4\recipe-2434-r11.md`):
-  Vista x86 and x64 at 0, 1 and 2.
-- The device matrix again after the next rebuild, on freshly cloned images
-  (owner, 2026-10-01), not on this build; with the switch-aware rows it
-  should read clean on both primary targets.
+- The device matrix again on this build (`d30234c`), on freshly cloned
+  images (owner, 2026-10-01); with the switch-aware rows it should read
+  clean on both primary targets.
 - Not blocking: a timing check of hub 4's 10 s install restart at the first
   boot with the hubs (round 11 above); XP's first-boot hub-1 re-address
   against its setupapi log (a fresh run).
