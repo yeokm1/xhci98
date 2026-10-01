@@ -3065,25 +3065,41 @@ reclaiming. That clause of the pass rule came from round 9, where the
 re-enumeration loop forced reclaims; the owner dropped it on 2026-10-01.
 
 At the value-2 boot, with nothing plugged in, virtual hub 1 was addressed
-twice (address 1, then 9), once only. Diagnosed from the logs, without a VM,
-as Windows' first-enumeration behaviour, not a driver fault:
+twice (address 1, then 9), once only. Read from the logs, without a VM, and
+reviewed by Codex. The re-addressing is tied to the first boot with the hubs,
+and its trigger is not known. No driver change is justified by it:
 
-- During hub 1's first enumeration, usbhub asked for string descriptor 0xEE
-  (setup `80 06 EE 03 00 00 12 00`, the Microsoft OS string descriptor). The
-  virtual hub has none and stalled it, the boot's only stall. Windows asks
-  once per VID/PID/revision and caches the answer, and all eight virtual hubs
-  share one identity, so only hub 1 is asked, and only on the first boot that
-  sees the hubs. Here that was r11b, because r11a was the install at 0.
-- After hubs 2-8 were enumerated, usbhub disabled root port 1 (a second
-  `RH: port disown` for port 1). Hub 1 was re-enumerated from address 0
-  and got address 9.
-- It is not new. Every round's first value-2 boot asked for 0xEE once and
-  disowned port 1 a second time: rounds 6-11, x86, and rounds 6-7 on x64.
-  Round 10's boot ring also re-addressed hub 1 (address 0x0A, seq 140); the
-  "8" recorded for it came from the boot reading, taken before that.
-  Round 6 logged no stall for the query and was re-enumerated all the same.
-- Later boots of the same image (r11c, r11d) sent no 0xEE query and disowned
-  port 1 once per driver load.
+- r11b was the first boot that had the virtual hubs (r11a was the install, at
+  0). During hub 1's first enumeration usbhub asked for string descriptor
+  0xEE (setup `80 06 EE 03 00 00 12 00`, the Microsoft OS string
+  descriptor). The hub has none and stalled it, which is the answer Microsoft
+  requires for an unsupported OS string descriptor. Windows caches that
+  answer per identity, and all eight hubs share one, so only hub 1 was asked.
+  It was the boot's only stall. Later boots of the same image (r11c, r11d)
+  sent no 0xEE query and reset root port 1 once per driver load.
+- Hub 1 then started normally: its 0x81 endpoint was opened, then the hub
+  descriptor, hub status, port power and port status, then an interrupt read.
+  During hub 6's enumeration usbport aborted that 0x81 endpoint (debugcon
+  `AbortTransfer` on the endpoint opened for it). After hub 8, usbhub
+  reset root port 1 again (the second `RH: port disown` for port 1: at 2 the
+  driver disowns the physical port on every root-port reset, and it is not
+  a port disable, whose first `RH_ClearFeaturePortEnable` comes much later).
+  Hub 1 was re-enumerated from address 0 and got address 9.
+- Nothing in the window shows why usbhub stopped hub 1. Nothing shows a bad
+  hub descriptor, an over-current or an enable change either. The 0xEE stall is
+  the only unusual event, but it came about 600 log lines before the abort, so
+  it is not shown to be the cause.
+- Round 10 had it too: its first value-2 boot re-addressed hub 1 (address
+  0x0A, seq 140), and the "8" recorded for that boot came from the boot
+  reading, taken before it. Round 7 x64's first value-2 boot shows hub 1 at
+  1 and then 9 before any plug. Earlier rounds cannot settle it: rounds 7-9
+  x86 looped. Round 6's value-2 leg (r6d) shows hub 1 at one address in
+  both of its readings, but it is not established whether r6d was that
+  image's first boot with the hubs (r6b ran at 0).
+- Finding the trigger would need usbhub's ETW trace and the PnP/SetupAPI log
+  for a first boot with the hubs, plus the hub identity's `usbflags` `osvc`
+  value. A controlled comparison would also have to separate the descriptor
+  cache from the first driver installation.
 
 ### What is owed
 
@@ -3091,6 +3107,8 @@ as Windows' first-enumeration behaviour, not a driver fault:
   Windows 7 x64 at 2 with the same sequence; Windows 2000 and XP at 2 (XP's
   two-handle restore) as the NT 5.x regression; Vista x86 and x64 at 0, 1 and
   2; SweetLow's stack at 2; ME's short pass at 2; the device matrix at 2.
+- Not blocking: why usbhub stopped and re-enumerated virtual hub 1 at the
+  first boot with the hubs (round 11 above; needs a usbhub ETW trace).
 - Recorded, not fixed (round 9): the root view's enabled-not-connected report.
 - `vm\t2434-win7-r10.img` keeps the r10g NMI dump in its pagefile and is never
   booted again; `vm\t2434-win7-r9.img` and `vm\t2434-win7-r11.img` hold no dump.
