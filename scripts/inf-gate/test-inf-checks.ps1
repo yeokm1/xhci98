@@ -614,6 +614,10 @@ try {
         param($t) $t.Replace("HKR,,Controller,1,01`r`n",
                              "HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHubVid,,`"1209`"`r`n")
     }
+    Assert-RuleFires "vhub-written-quoted" "VAL-HCDVHUB" {
+        param($t) $t.Replace("HKR,,Controller,1,01`r`n",
+                             "HKR,,Controller,1,01`r`nHKR,,`"XhciVirtualHSHub`",0x00010001,1`r`n")
+    }
     Assert-RuleFires "vhub-written-roothub" "VAL-HCDVHUB" {
         param($t) $t.Replace("[RootHub.AddReg.NT]`r`nHKR,,EnumPropPages32,,`"usbui.dll,USBHubPropPageProvider`"",
                              "[RootHub.AddReg.NT]`r`nHKR,,EnumPropPages32,,`"usbui.dll,USBHubPropPageProvider`"`r`nHKR,,XhciVirtualHSHubPid,,`"0001`"")
@@ -748,6 +752,30 @@ try {
     }
     Assert-RuleFires "hcd-hubpage-controller-on-nt" "HCD-HUBPAGE" {
         param($t) $t.Replace("`"usbui.dll,USBHubPropPageProvider`"", "`"usbui.dll,USBControllerPropPageProvider`"")
+    }
+    # The right provider in the wrong place is no page either: under a
+    # subkey, with a non-string type, or written twice.
+    Assert-RuleFires "hcd-hubpage-subkey" "HCD-HUBPAGE" {
+        param($t) $t.Replace("HKR,,EnumPropPages32,,`"usbui.dll,USBHubPropPageProvider`"", "HKR,Parameters,EnumPropPages32,,`"usbui.dll,USBHubPropPageProvider`"")
+    }
+    Assert-RuleFires "hcd-hubpage-flags" "HCD-HUBPAGE" {
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBHubPropPage`"", "HKR,,EnumPropPages,0x00010001,`"sysclass.dll,USBHubPropPage`"")
+    }
+    Assert-RuleFires "hcd-hubpage-dup" "HCD-HUBPAGE" {
+        param($t) $t.Replace("HKR,,EnumPropPages32,,`"usbui.dll,USBHubPropPageProvider`"", "HKR,,EnumPropPages32,,`"usbui.dll,USBHubPropPageProvider`"`r`nHKR,,EnumPropPages32,,`"usbui.dll,USBControllerPropPageProvider`"")
+    }
+    # Quoted, the OS hub's id is still the OS hub's id.
+    Assert-RuleFires "hcd-os-roothub-id-quoted" "HCD-ROOTHUB" {
+        param($t) $t.Replace("RootHub.Dev,XHCI98\ROOT_HUB", "RootHub.Dev,XHCI98\ROOT_HUB,`"USB\ROOT_HUB20`"")
+    }
+    # OS-ONNT6 holds on the NT 6.x root-hub install as on the controller's.
+    Assert-RuleFires "hcd-roothub-nt6-copies-usbd" "OS-ONNT6" {
+        param($t) $t.Replace("[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS`r`n")
+    }
+    Assert-RuleFires "hcd-roothub-nt6-copies-usbui" "OS-ONNT6" {
+        param($t) $t.Replace("[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[RootHub.Dev6.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyUI`r`n")
     }
 
     Write-Step "the two install paths"
@@ -1809,9 +1837,10 @@ try {
     Assert-InfsAgree -Section "Xhci.AddReg.NT" `
         -Why "These are the values the driver reads at run time. A default that drifted on one architecture is a diagnostic door open on machines whose owner never asked for one."
     # [Xhci.AddReg.Global] was compared here until 1.1.0.0 removed it from both
-    # files. What replaced it is not comparable this way: the flag lives in
-    # src\xhci_dispatch.c, one definition both architectures compile, so the
-    # two packages cannot disagree about it the way two INF sections could.
+    # files. What replaced it is not comparable this way: the flag lived in
+    # the miniport's src\xhci_dispatch.c, one definition both architectures
+    # compiled, and the HCD owns idle policy in its own code, so the two
+    # packages cannot disagree about it the way two INF sections could.
     # The footprint assertion above is what holds the value out of either file.
     Assert-InfsAgree -Section "Xhci.CopyOS" `
         -Why "The NT 5.x paths of both packages fetch usbd.sys from the OS by the same LayoutFile route with the same COPYFLG_NO_OVERWRITE."

@@ -1598,8 +1598,9 @@ the same section), `PATH-MFGDEC`, `PATH-NO9X`, `OS-DEFAULT`, the
 selective-suspend and package rules. `scripts\inf-gate\test-inf-checks.ps1`
 holds the cases: both INFs pass their own gate with no FAIL line and
 `models: 4` (the controller and the root hub in each models section), and
-each new rule fires on a copy broken in the one way it exists to catch (seven
-mutated cases across the two files).
+each new rule fires on a copy broken in the one way it exists to catch (the
+`hcd-*` and `vhub-written-*` cases, and the `OS-HCDREPLACED` cases, across the
+two files).
 
 **`scripts\package\make-package.ps1` refuses the scaffold.** Any image
 carrying `XHCI98_SCAFFOLD_DO_NOT_STAGE` is refused first, before any gate,
@@ -1615,7 +1616,6 @@ created.
 |---|---|
 | `make-package.ps1` staging the HCD: the scaffold marker removed, the package built from `src\xhci98.inf` / `-amd64.inf` and `src\obj<fl>\<arch>\xhci98.sys` as before | 26-A.1 |
 | `make-release.ps1`: the scaffold refusal in its publish loop (defence in depth; it already reads the flavour marker per binary, `Get-ImageFlavourMarker`), then the `2.0.0.0` cut publishing `xhci98-<version>.zip` and its four directories under `releases\<version>\`, beside the frozen `releases\1.2.0.0` | 26-A.1 (the refusal); 32.3 (the cut) |
-| The INF footprint files (`expected-footprint.txt`, `-amd64.txt`) regenerated for the HCD's INFs, and the self-test comparing the two INFs with each other where they must agree | 26-A.1 |
 | `gen-offsets.ps1` for the HCD's counter block (9.5) | 26-A.8 / 26-A.10 |
 | The matrix's read route for the HCD (9.4) | 26-A.8 / 26-A.10 |
 | The 26-A.10 expectation set (9.6) and `selftest.ps1` vectors for every HCD branch | 26-A.10 |
@@ -2383,8 +2383,8 @@ the detail; this is the index.
 | `DeviceIsHub` for hubs inside the bus, the driver key returned for a split composite device, and the `ControllerFlavor` value the HCD reports to Vista and Windows 7 `usbui.dll` | 8 | 26-A.8 |
 | The `SymbolicName` value and the device interfaces both devnodes must carry, so the property pages find them on every generation | 8 | 26-A.8 |
 | `XHCISNAP`'s software-key finder (it matches `xhci98.sys`) and its payload schema for the HCD's extension | 8, 9 | 26-A.8 |
-| `source-stamp.ps1`, an `OriginalFilename` check and staging in `make-package.ps1`; publishing in `make-release.ps1` | 9 | 26-A.1; 32.3 |
-| The HCD INFs' install footprints (`-EmitFootprint`), tracked beside the miniport's two | 9 | 26-A.1, with the first stageable package |
+| `source-stamp.ps1` and staging in `make-package.ps1`; publishing in `make-release.ps1` | 9 | 26-A.1; 32.3 |
+| The HCD INFs' install footprints (`-EmitFootprint`) and the self-test comparing the two INFs where they must agree | 9 | done in 25.8: both footprint files replaced by the HCD INFs' and the comparisons updated; re-emitted with every INF change |
 | The matrix's read route for the HCD (the QEMU monitor reading a DDK-free counter block announced on the debug console) and the expectation-set split | 9 | 26-A.8 and 26-A.10 |
 | The USB 2.0 hub and reset timings marked "to transcribe" | 10 | 27-A.1's transcription, before the hub class is written |
 | Common-buffer growth beyond design record 04's limits | 11.2 | the phase that first hits a limit (27 for slots, 31 for streams) |

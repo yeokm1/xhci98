@@ -396,7 +396,7 @@ exit /b 0
 echo.
 echo ERROR: the %FLAVOR% image does not carry exactly its own flavour marker.
 echo src\sources derives XHCI_FLAVOUR_RELEASE / _DEBUG / _QEMU from
-echo BUILD_ALT_DIR and src\xhci_dispatch.c emits the string; DriverEntry reads
+echo BUILD_ALT_DIR and src\hcd_entry.c emits the string; DriverEntry reads
 echo it so the linker cannot drop it. A binary that cannot be identified from
 echo the file is one a user cannot report against and one the packager cannot
 echo refuse by name.

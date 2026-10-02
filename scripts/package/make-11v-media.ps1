@@ -426,36 +426,24 @@ the upgrade baseline package(s) are not staged:
   - $($missing -join "`n  - ")
 The baseline is the package as it was actually built at version
 $BaselineVersion, so it is regenerated from git rather than rebuilt from these
-sources under an older version string:
-
-  git checkout $BaselineCommit -- src
-  scripts\build-driver.cmd both
-  powershell -File scripts\package\make-package.ps1 -Flavor debug   -OutDir out\media-11v\old-$BaselineVersion-debug
-  powershell -File scripts\package\make-package.ps1 -Flavor release -OutDir out\media-11v\old-$BaselineVersion-release
-  git checkout HEAD -- src
-  scripts\build-driver.cmd all
-
-COMMIT OR STASH src FIRST. Both checkouts overwrite the index and the working
-tree, so uncommitted work under src is destroyed with no warning from git. If
-you would rather not touch this tree at all, use a worktree instead - it needs
-its own generated import library:
+sources under an older version string - in a worktree of the WHOLE baseline
+commit, built and packaged by that commit's own scripts:
 
   git worktree add ..\xhci98-baseline $BaselineCommit
   cd ..\xhci98-baseline
   scripts\make-usbport-lib.cmd
   scripts\build-driver.cmd both
-  ...package from there, then: cd - ; git worktree remove ..\xhci98-baseline
+  powershell -File scripts\package\make-package.ps1 -Flavor debug   -OutDir <this tree>\out\media-11v\old-$BaselineVersion-debug
+  powershell -File scripts\package\make-package.ps1 -Flavor release -OutDir <this tree>\out\media-11v\old-$BaselineVersion-release
+  cd <this tree> ; git worktree remove ..\xhci98-baseline
 
-Check out the WHOLE of src, not just xhci98.inf and xhci98.rc. Those two carry
-the version and nothing else, so checking out only them builds TODAY'S driver
-wearing an old version number - which is exactly the lying package the comment
-above this recipe says a baseline must not be, and it is what this recipe said
-to do until the post-Phase 13 review rounds. Only 'both' is needed for the baseline because a
-baseline is a shipping flavour; the restore says 'all' so this tree gets its
-qemu build back.
-
-Verified end to end: checkout, build, package, and the staged
-result is accepted by this script's own baseline check as the baseline / debug.
+Not "git checkout <commit> -- src" in this tree, which this recipe said until
+2026-10-02: since then src\ is the successor HCD (design record 13), and this
+tree's build wrapper, gates and packager hold the HCD's rules and no longer
+generate the usbport import library a miniport baseline links against, so a
+miniport src\ fails them before it builds. A baseline is built by the scripts
+it was released with. Only 'both' is needed because a baseline is a shipping
+flavour.
 
 Re-run this script afterwards, or pass -SkipBaselineCheck if the run being
 prepared has no upgrade leg.

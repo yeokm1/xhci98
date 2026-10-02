@@ -101,6 +101,30 @@ try {
             Test-Image -Path synthetic -ImageFlavor qemu -Rules $rules
             Assert-True ($script:importFailures.Count -eq $case.Failures) $case.Name
         }
+
+        # The HCD's own two rules, on the same matcher. A usbport.sys import is
+        # refused even when a row admits it: the rule is unconditional, not a
+        # missing allowlist row.
+        function Invoke-Dumpbin { @('    USBPORT.SYS', '        0 USBPORT_RegisterUSBPortDriver', '    Summary') }
+        Set-Content -LiteralPath $split -Encoding ASCII -Value @('[imports]', 'USBPORT.SYS!USBPORT_RegisterUSBPortDriver all required')
+        $rules = Read-AllowFile $split
+        $script:importFailures = @()
+        Test-Image -Path synthetic -ImageFlavor release -Rules $rules
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'imports nothing from usbport.sys' }).Count -ge 1) "a USBPORT.SYS import is refused even with an allowlist row: $($script:importFailures)"
+
+        # An empty import table passes only with the scaffold marker in the
+        # image's bytes.
+        function Invoke-Dumpbin { @('    Summary') }
+        $marked = Join-Path $work 'marked.sys'
+        $bare = Join-Path $work 'bare.sys'
+        [System.IO.File]::WriteAllBytes($marked, [System.Text.Encoding]::ASCII.GetBytes("MZ`0XHCI98_SCAFFOLD_DO_NOT_STAGE`0"))
+        [System.IO.File]::WriteAllBytes($bare, [System.Text.Encoding]::ASCII.GetBytes("MZ`0"))
+        $script:importFailures = @()
+        Test-Image -Path $marked -ImageFlavor release -Rules $rules
+        Assert-True ($script:importFailures.Count -eq 0) "an empty import table with the scaffold marker is accepted: $($script:importFailures)"
+        $script:importFailures = @()
+        Test-Image -Path $bare -ImageFlavor release -Rules $rules
+        Assert-True ($script:importFailures.Count -eq 1) 'an empty import table without the scaffold marker is refused'
     }
 
     # ---------------------------------------------------------------------

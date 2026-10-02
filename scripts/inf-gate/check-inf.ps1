@@ -751,7 +751,9 @@ foreach ($ms in $modelSections) {
     foreach ($e in (Get-Section $inf $ms.Section)) {
         if ($e.Text -notmatch '^\s*(.+?)\s*=\s*(.+)$') { continue }
         $desc = $matches[1]
-        $fields = @($matches[2] -split ',' | ForEach-Object { $_.Trim() })
+        # Unquoted: setup matches "USB\ROOT_HUB20" and USB\ROOT_HUB20 alike,
+        # so a quoted id must not slip past the id rules below.
+        $fields = @($matches[2] -split ',' | ForEach-Object { $_.Trim().Trim('"').Trim() })
         if ($fields.Count -lt 2) {
             Add-Failure "BOTH-XREF" ("models line {0} in [{1}] has no hardware ID." -f $e.Line, $ms.Section)
             continue
@@ -1117,7 +1119,8 @@ $requiredValues = @(
 #
 $requiredValues = @($requiredValues | Where-Object { $_.Name -notlike "XhciVirtualHSHub*" })
 foreach ($ln in @($inf.Sections.Values | ForEach-Object { $_ })) {
-    if ($ln.Text -match '^\s*HKR\s*,[^,]*,\s*(XhciVirtualHSHub\w*)\s*,') {
+    # The value name may be quoted ("XhciVirtualHSHub"); setup reads both.
+    if ($ln.Text -match '^\s*HKR\s*,[^,]*,\s*"?(XhciVirtualHSHub\w*)"?\s*,') {
         Add-Failure "VAL-HCDVHUB" ("line {0} writes '{1}'. The HCD reads none of the virtual-hub values - there is no usbport to report a speed through, and every device is reported at its true speed (roadmap-hcd.md, decisions table) - so the value would be a switch that switches nothing." -f $ln.Line, $matches[1])
     }
 }
@@ -1344,8 +1347,23 @@ foreach ($m in @($models | Where-Object { $_.Role -eq "roothub" })) {
         $vals = @(Get-AddRegValues $inf @(Get-Directive $inf $install "AddReg") $want.Name)
         if ($vals.Count -eq 0) {
             Add-Failure "HCD-HUBPAGE" ("the {0} root-hub install [{1}] writes no '{2}'. Every target's own INF registers {3} for its root hubs, and without it the root hub has no Power tab." -f $p.Os, $install, $want.Name, $want.Data)
-        } elseif (@($vals | Where-Object { $_.Data -ieq $want.Data }).Count -eq 0) {
-            Add-Failure "HCD-HUBPAGE" ("the {0} root-hub install [{1}] writes '{2}' as {3}, not {4}." -f $p.Os, $install, $want.Name, $vals[0].Data, $want.Data)
+        } else {
+            # One write, on the device's own key, as a plain REG_SZ (flags
+            # empty or 0) - every target's own INF writes it that way, and a
+            # right value under a subkey or a second write is no page.
+            if ($vals.Count -gt 1) {
+                Add-Failure "HCD-HUBPAGE" ("the {0} root-hub install [{1}] writes '{2}' {3} times (lines {4}). Which one wins is engine-dependent." -f $p.Os, $install, $want.Name, $vals.Count, (($vals | ForEach-Object { $_.Line }) -join ', '))
+            }
+            $v = $vals[0]
+            if ($v.Subkey -ne "") {
+                Add-Failure "HCD-HUBPAGE" ("[{0}] line {1} writes '{2}' under subkey '{3}'. It belongs on the device's own key, where the device manager reads it." -f $v.Section, $v.Line, $want.Name, $v.Subkey)
+            }
+            if ($v.Flags -ne "" -and $v.Flags -ne "0" -and $v.Flags -ne "0x00000000") {
+                Add-Failure "HCD-HUBPAGE" ("[{0}] line {1} writes '{2}' with flags '{3}'. It is a REG_SZ: flags empty, as every target's own INF writes it." -f $v.Section, $v.Line, $want.Name, $v.Flags)
+            }
+            if ($v.Data -ine $want.Data) {
+                Add-Failure "HCD-HUBPAGE" ("the {0} root-hub install [{1}] writes '{2}' as {3}, not {4}." -f $p.Os, $install, $want.Name, $v.Data, $want.Data)
+            }
         }
     }
 }
@@ -1834,6 +1852,17 @@ foreach ($m in @($models | Where-Object { $_.Role -eq "roothub" })) {
     foreach ($p in @(Get-ModelPaths $m)) {
         $install = $m.Section + $p.Suffix
         if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
+        # OS-ONNT6 on the root hub too: an NT 6.x root-hub install that names
+        # any of the four aborts the same file queue the controller's would.
+        if (-not $p.OsFiles) {
+            foreach ($os in $osSupplied) {
+                $entries = @(Get-CopyEntriesFor $inf @(Get-Directive $inf $install "CopyFiles") $os.File)
+                if ($entries.Count -gt 0) {
+                    Add-Failure "OS-ONNT6" ("the {0} root-hub install ([{1}]) copies '{2}' (line {3}). The NT 6.x path copies xhci98.sys and nothing else: its file queue resolves a source for this file before COPYFLG_NO_OVERWRITE can skip it, the source is the OS's own driver-store package, and the queue aborts (roadmap task 21.8, Vista x64)." -f $p.Os, $install, $os.File, $entries[0].Line)
+                }
+            }
+            continue
+        }
         foreach ($os in @($osSupplied | Where-Object { $_.ContainsKey("OffRule") -and $_.OffRule -eq "OS-HCDREPLACED" })) {
             $entries = @(Get-CopyEntriesFor $inf @(Get-Directive $inf $install "CopyFiles") $os.File)
             if ($entries.Count -gt 0) {
@@ -1888,12 +1917,12 @@ foreach ($secName in @($inf.SectionOrder)) {
     foreach ($e in $entries) {
         if ($e.Text -match ('^\s*HKLM\s*,\s*([^,]*)\s*,\s*{0}\s*,' -f [regex]::Escape($suspValue))) {
             if ($matches[1].Trim() -ieq $suspKey) {
-                Add-Failure "SUSP-GLOBAL" ("[{0}] line {1} writes HKLM,{2},{3}. This package stopped writing it at 1.1.0.0: it is machine-wide, so it reaches every controller usbport drives and outlives the devnode that installed it. The driver declares USB_MINIPORT_FLAGS_DISABLE_SS (0x20) in MiniPortFlags instead - src\xhci_dispatch.c, and docs\issues\05-idle-suspend-and-disableselectivesuspend.md for the readings." -f $secName, $e.Line, $suspKey, $suspValue)
+                Add-Failure "SUSP-GLOBAL" ("[{0}] line {1} writes HKLM,{2},{3}. This package stopped writing it at 1.1.0.0: it is machine-wide, so it reaches every controller usbport drives and outlives the devnode that installed it. The miniport declared USB_MINIPORT_FLAGS_DISABLE_SS (0x20) instead, and the HCD, which replaces usbport, owns its idle policy itself (docs\issues\05-idle-suspend-and-disableselectivesuspend.md for the readings)." -f $secName, $e.Line, $suspKey, $suspValue)
             }
         }
         foreach ($hcName in $suspHcValues) {
             if ($e.Text -match ('^\s*HK[A-Z]+\s*,\s*[^,]*\s*,\s*{0}\s*,' -f [regex]::Escape($hcName))) {
-                Add-Failure "SUSP-HCVALUE" ("[{0}] line {1} writes {2}. The per-controller values are not this package's mechanism: usbport's own USBPORTBUSIF_ControllerSelectiveSuspend writes HcDisableSelectiveSuspend back, and on Vista usbhub calls it from a power-setting callback - measured 2026-09-17, the Balanced plan rewrote it to 0 and suspended the controller at once, and Balanced defaults that setting to Enabled on battery. The driver declares USB_MINIPORT_FLAGS_DISABLE_SS (0x20) instead." -f $secName, $e.Line, $hcName)
+                Add-Failure "SUSP-HCVALUE" ("[{0}] line {1} writes {2}. The per-controller values are not this package's mechanism: usbport's own USBPORTBUSIF_ControllerSelectiveSuspend writes HcDisableSelectiveSuspend back, and on Vista usbhub calls it from a power-setting callback - measured 2026-09-17, the Balanced plan rewrote it to 0 and suspended the controller at once, and Balanced defaults that setting to Enabled on battery. The miniport declared USB_MINIPORT_FLAGS_DISABLE_SS (0x20) instead, and the HCD owns its idle policy itself." -f $secName, $e.Line, $hcName)
             }
         }
     }

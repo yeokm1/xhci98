@@ -7,6 +7,9 @@
 > built until 26-A.2 adapts them: `xhci_init.c`, `xhci_cmd.c`, `xhci_evt.c`,
 > `xhci_pci.c`, `xhci_dbg.c`; new: `hcd_entry.c`, the task 25.8 scaffold. The
 > tables below are the miniport's map as of `1.2.0.0` and are rewritten in Phase 26.
+> Comments in the kept files that name a deleted file (`xhci_dispatch.c`, `xhci_slot.c`,
+> `test_init.c` and the rest) describe the miniport on branch `1.2.0.0`, not the
+> current build; 26-A.2 rewrites them as it adapts each file.
 
 What every file in `src/` is for, in one table per kind. The authoritative description of each file is the comment block at its head; this page is the map, and it says which files the host test suite compiles (the "pure core" of [design record 03](design/03-host-unit-tests.md)) and which need the DDK. Line counts are omitted on purpose - they drift, the roles do not.
 

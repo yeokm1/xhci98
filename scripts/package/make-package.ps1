@@ -90,6 +90,13 @@ Passed through to the import gate on a host with no extracted target binaries
 staged. Enforcement of the committed allowlist still runs.
 
 .PARAMETER FailStartArtifact
+**No current build produces this artifact.** It was the miniport's; since
+2026-10-02 src\ is the successor HCD, which has no diagnostic builds, and both
+src\sources and scripts\build-driver.cmd refuse any XHCI_EXTRA_DEFINES. The
+switch and its marker checks stay, fail-closed: an HCD image carries no
+XHCI98_FAILSTART_ARTIFACT_TASK_12_3, so the switch refuses it. The recipe below
+is the miniport's, and works on branch 1.2.0.0 only.
+
 Stage roadmap task 12.3's failed-start artifact: a package that installs,
 *loads*, and then fails inside StartController, which is the one recovery route
 neither target has ever exercised. Build it first with
@@ -115,10 +122,10 @@ nothing else. Both markers are present in any build that merely *includes*
 -DXHCI_FAIL_START_CONTROLLER, so a mixed diagnostic build would satisfy this
 switch's marker test while behaving like neither artifact. This switch cannot
 tell the difference - a marker says what was defined, not what else was - so the
-refusal lives at build time in three places: src\sources refuses any
-XHCI_EXTRA_DEFINES that is not exactly -DXHCI_FAIL_START_CONTROLLER (which binds
-a bare `build` from a DDK prompt), scripts\build-driver.cmd refuses it earlier
-with a fuller message, and src\xhci_dispatch.c carries an #error for the one
+refusal lived at build time in three places (on branch 1.2.0.0): src\sources refused any
+XHCI_EXTRA_DEFINES that was not exactly -DXHCI_FAIL_START_CONTROLLER (which bound
+a bare `build` from a DDK prompt), scripts\build-driver.cmd refused it earlier
+with a fuller message, and src\xhci_dispatch.c carried an #error for the one
 other define this tree documents. Review finding 2, round 2 finding 4.
 
 Mutually exclusive with -UnpaddedDriverVerExperiment.
