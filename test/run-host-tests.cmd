@@ -126,6 +126,10 @@ rem one context ends and the next begins is the carve's answer, and pairing them
 rem is what makes "eight DWORDs whatever the stride" checkable at both strides.
 call :run test_ctx "test_ctx.c ..\src\xhci_ctx.c ..\src\xhci_mem.c"
 call :run test_topo "test_topo.c ..\src\xhci_topo.c"
+rem test_enum links nothing else: the enumeration machine of design record 13
+rem section 5.3 is a pure transition function, driven here with no controller
+rem (task 26-A.9).
+call :run test_enum "test_enum.c ..\src\xhci_enum.c"
 rem test_log links nothing else: task 11-V.7's ring is deliberately pure, so
 rem every decision it makes - the wrap, the record cap, the flush verdict, the
 rem drain's ordering - is drivable with no file system, no registry and no IRQL.

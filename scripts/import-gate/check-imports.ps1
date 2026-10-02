@@ -686,7 +686,16 @@ function Get-ObjectImportRefs {
 # residual.
 function Join-CSplices {
     param([string]$Text)
-    return ($Text -replace "(\\|\?\?/)\r?\n", "")
+    # The splices first (phases 1 and 2), then the comments, which become a
+    # space before tokens are read (phase 3): a name in a comment is no
+    # reference (a header that only discusses a pool call is not a site).
+    $joined = $Text -replace "(\\|\?\?/)\r?\n", ""
+    $joined = [regex]::Replace($joined, "/\*.*?\*/", " ", [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    $joined = [regex]::Replace($joined, "//[^\r\n]*", " ")
+    # A directive that only tests or removes a macro name - #undef, #ifdef,
+    # #ifndef - can never become a call (xhci_compat.h undoes the DDKs' pool
+    # rewrites that way); a #define can, and stays.
+    return [regex]::Replace($joined, "(?m)^[ \t]*#[ \t]*(undef|ifdef|ifndef)\b[^\r\n]*", " ")
 }
 
 function Test-ImportSitesFromSource {

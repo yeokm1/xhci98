@@ -23,6 +23,7 @@
 #include "xhci_compat.h"
 #include "xhci.h"
 #include "xhci_usbport.h"
+#include "xhci_enum.h"
 
 #define HCD_KIND_CONTROLLER_FDO 0x43464448UL /* 'HDFC' */
 #define HCD_KIND_ROOTHUB_PDO    0x50524448UL /* 'HDRP' */
@@ -64,6 +65,31 @@ typedef struct _HCD_TIMER {
     XHCI_ASYNC_TIMER_CALLBACK *Callback;
     UCHAR Context[HCD_TIMER_CONTEXT_BYTES];
 } HCD_TIMER, *PHCD_TIMER;
+
+/* A device the bus has addressed (hcd_enum.c; design record 13 section
+ * 5.2's "device object (the bus's)"). Pool, per device, at enumeration
+ * (section 7.5 rule 3). */
+typedef struct _HCD_USB_DEVICE {
+    ULONG Port;             /* root port, 1-based                       */
+    ULONG SlotId;
+    ULONG Speed;            /* PORTSC speed value, carried unchanged    */
+    ULONG Mps0;
+    XHCI_RING Ep0;
+    UCHAR DeviceDesc[18];
+    PUCHAR Config;          /* the whole configuration descriptor       */
+    ULONG ConfigLength;
+    PDEVICE_OBJECT Pdo;     /* 26-A.4's device PDO, once it exists      */
+} HCD_USB_DEVICE, *PHCD_USB_DEVICE;
+
+/* A root port: its enumeration machine and the device on it. */
+typedef struct _HCD_PORT {
+    XHCI_ENUM_PORT Enum;
+    ULONG PortId;           /* 1-based xHCI port number                 */
+    PHCD_USB_DEVICE Device;
+} HCD_PORT, *PHCD_PORT;
+
+/* The enumeration's DMA scratch (hcd_dma.c), a 4 KB common buffer. */
+#define HCD_SCRATCH_BYTES 4096UL
 
 typedef struct _HCD_CONTROLLER {
     HCD_COMMON Common;
@@ -126,11 +152,27 @@ typedef struct _HCD_CONTROLLER {
 
     /* The controller thread (hcd_ctl.c). */
     PVOID ThreadObject;
+    PDEVICE_OBJECT RootHubPdo;
     volatile ULONG ThreadRunning;
     ULONG ThreadReferenceFailures;
     KEVENT ThreadExited;
     volatile ULONG ThreadStop;
     KEVENT WorkEvent;
+
+    /* Enumeration (hcd_enum.c): the root ports, the device on each slot,
+     * the DMA scratch, and the one EP0 transfer the thread waits for. */
+    HCD_PORT Ports[XHCI_MAX_ROOT_PORTS];
+    PHCD_USB_DEVICE SlotDevice[XHCI_MAX_SLOTS + 1];
+    PVOID ScratchVa;
+    PHYSICAL_ADDRESS ScratchPa;
+    KEVENT XferDoneEvent;
+    volatile ULONG XferWaitSlot;
+    volatile ULONG XferCode;
+    volatile ULONG XferResidual;
+    ULONG EnumCommandsRefused;
+    ULONG EnumCommandsTimedOut;
+    ULONG EnumDisableFailures;
+    ULONG EnumTransfersTimedOut;
 
     /* The device layer (hcd_dev.c). */
     KEVENT CmdDoneEvent;
@@ -150,6 +192,27 @@ typedef struct _HCD_CONTROLLER {
     XHCI_EXTENSION Hc;
 } HCD_CONTROLLER, *PHCD_CONTROLLER;
 
+/* The root hub's PDO, created by the controller FDO (hcd_rh.c; design record
+ * 13 sections 5.2 and 8.6). Deleted only by the controller's remove, or once
+ * reported missing. */
+typedef struct _HCD_ROOTHUB_PDO {
+    HCD_COMMON Common;
+    PHCD_CONTROLLER Controller;
+    ULONG ReportedMissing;
+    ULONG Started;
+} HCD_ROOTHUB_PDO, *PHCD_ROOTHUB_PDO;
+
+/* The root hub's FDO, this driver's second role, attached over the root-hub
+ * PDO by AddDevice. Its BusRelations are the bus's device PDOs (26-A.4). */
+typedef struct _HCD_ROOTHUB_FDO {
+    HCD_COMMON Common;
+    PDEVICE_OBJECT Pdo;
+    PDEVICE_OBJECT LowerDevice;
+    PHCD_CONTROLLER Controller;
+    LONG OutstandingIo;
+    KEVENT RemoveEvent;
+} HCD_ROOTHUB_FDO, *PHCD_ROOTHUB_FDO;
+
 #define HcdControllerFromExt(ext) \
     CONTAINING_RECORD((ext), HCD_CONTROLLER, Hc)
 
@@ -164,6 +227,16 @@ typedef struct _HCD_CONTROLLER {
         hcdNext_->Control = SL_INVOKE_ON_SUCCESS | SL_INVOKE_ON_ERROR |      \
                             SL_INVOKE_ON_CANCEL;                             \
     } while (0)
+
+/* hcd_rh.c */
+NTSTATUS HcdRootHubCreatePdo(PHCD_CONTROLLER hc);
+VOID HcdRootHubDeletePdo(PHCD_CONTROLLER hc);
+NTSTATUS HcdControllerBusRelations(PHCD_CONTROLLER hc, PIRP irp);
+NTSTATUS HcdRootHubPdoPnp(PHCD_ROOTHUB_PDO pdo, PIRP irp);
+NTSTATUS HcdRootHubPdoPower(PHCD_ROOTHUB_PDO pdo, PIRP irp);
+NTSTATUS HcdRootHubAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);
+NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp);
+NTSTATUS HcdRootHubFdoPower(PHCD_ROOTHUB_FDO fdo, PIRP irp);
 
 /* hcd_entry.c */
 extern PDRIVER_OBJECT HcdDriverObject;
@@ -188,6 +261,11 @@ VOID HcdControllerFail(PHCD_CONTROLLER hc);
 VOID HcdPowerGateEnter(PHCD_CONTROLLER hc);
 VOID HcdPowerGateLeave(PHCD_CONTROLLER hc);
 
+/* hcd_enum.c */
+VOID HcdEnumService(PHCD_CONTROLLER hc);
+VOID HcdEnumInit(PHCD_CONTROLLER hc);
+VOID HcdEnumDrop(PHCD_CONTROLLER hc);
+
 /* hcd_dma.c */
 NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc);
 VOID HcdDmaClose(PHCD_CONTROLLER hc);
@@ -202,5 +280,7 @@ VOID HcdTimersOpen(PHCD_CONTROLLER hc);
 PVOID HcdPoolAlloc(ULONG bytes);
 VOID HcdPoolFree(PVOID p);
 ULONG HcdPoolOutstandingCount(VOID);
+PVOID HcdPoolAllocHandedOff(ULONG bytes);
+VOID HcdPoolFreeForeign(PVOID p);
 
 #endif /* HCD_H */

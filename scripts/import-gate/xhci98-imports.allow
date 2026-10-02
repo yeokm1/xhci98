@@ -49,9 +49,10 @@
 #     removed the marker (2026-10-03), so an empty import table is a failure.
 #   - Pool is allowed by rows here, with the rule naming the sites that may
 #     allocate (design record 13 section 7; the owner's decision of 2026-10-02,
-#     roadmap-hcd.md decisions table, "Pool and DMA"). Until the pool file of
-#     task 26-A.2 adds the rows, the pool family is denied below so an allocation cannot arrive
-#     ahead of its evidence.
+#     roadmap-hcd.md decisions table, "Pool and DMA"). The pair
+#     ExAllocatePoolWithTag + ExFreePool arrived with the root hub (task
+#     26-A.4), each row SITES=hcd_pool.obj; the untagged and WithTag-free
+#     names stay denied below.
 
 [imports]
 
@@ -121,6 +122,18 @@ ntoskrnl.exe!ExQueueWorkItem                 all  required  w2k-export; win98-pr
 ntoskrnl.exe!DbgPrint                        qemu required  w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!DbgPrint, hint 1) (+1 other 98 SE); ntkern-name. The qemu flavour's live trace only (xhci_dbg.c); the log ring's DebugView sink of task 26-A.8 decides the other flavours
 HAL.dll!WRITE_PORT_UCHAR                     qemu required  w2k-export; ntkern-name; MEASURED NOT LOADING on E460 Win98 SE metal (the miniport's allowlist on branch 1.2.0.0 has the record; design record 08). The qemu flavour is never published, so this row is what keeps the import out of every binary a user can install.
 
+
+# --- Task 26-A.4: the root hub - its PDO, the relations PnP asks for, and the ---
+# --- pool the id strings and relation lists live in. The pool pair is the    ---
+# --- design record 13 section 7.5 rule: SITES=hcd_pool.obj, nowhere else.     ---
+ntoskrnl.exe!ExAllocatePoolWithTag           all  required  SITES=hcd_pool.obj the pool rule (design record 13 section 7.5); w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!ExAllocatePoolWithTag, hint 7) (+61 other 98 SE); ntkern-name
+ntoskrnl.exe!ExFreePool                      all  required  SITES=hcd_pool.obj the pool rule (design record 13 section 7.5); w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!ExFreePool, hint C) (+60 other 98 SE); ntkern-name
+ntoskrnl.exe!IoInvalidateDeviceRelations     all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoInvalidateDeviceRelations, hint 4F) (+3 other 98 SE); ntkern-name
+ntoskrnl.exe!RtlInitUnicodeString            all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!RtlInitUnicodeString, hint D7) (+47 other 98 SE); ntkern-name
+ntoskrnl.exe!ObfReferenceObject              all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ObfReferenceObject, hint AD) (+14 other 98 SE) (design record 13 Appendix A row 35). The ObReferenceObject macro: every PDO a relations list returns is referenced
+# --- Task 26-A.3: the port service ---
+ntoskrnl.exe!InterlockedExchange             all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!InterlockedExchange, hint 27) (+22 other 98 SE); ntkern-name. The port service takes the change mask the event DPC builds (hcd_enum.c)
+
 [deny]
 
 # Where the reason is a fact about a target - absent on Windows 98, or
@@ -129,8 +142,6 @@ HAL.dll!WRITE_PORT_UCHAR                     qemu required  w2k-export; ntkern-n
 # gone with it.
 
 ExAllocatePool              Not the HCD's spelling: task 25.3 found no Windows 98 SE or NUSB binary importing the untagged name, while ExAllocatePoolWithTag has dozens of stock 98 SE importers (design record 13 section 7). The HCD allocates with ExAllocatePoolWithTag and frees with ExFreePool.
-ExAllocatePoolWithTag       The HCD's allocation entry point once 26-A.1 adds its row (task 25.3: stock Windows 98 SE drivers import it from NTOSKRNL.EXE). Denied until then, so an allocation cannot arrive ahead of the row and the site rule that come with it.
-ExFreePool                  The HCD's free entry point once 26-A.1 adds its row (task 25.3: stock Windows 98 SE drivers import it). Denied until then, with ExAllocatePoolWithTag.
 ExFreePoolWithTag           No Windows 98 evidence at all (task 25.3: no stock 98 SE driver imports it, and NUSB 3.6's wdmstub.sys appears to supply it), so it stays denied after the pool rows arrive. Free with ExFreePool.
 MmGetSystemRoutineAddress   Missing on Win98 (Oney p.438). There is no runtime symbol resolution on that target - every import decision is static and made here.
 KeNumberProcessors          Not exported on Win98 (Oney p.441).

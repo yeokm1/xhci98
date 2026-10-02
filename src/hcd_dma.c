@@ -62,6 +62,12 @@ NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc)
      * an earlier stop stays kept; this new one starts unpinned (Codex review
      * of 26-A.2, round 1, finding 8). */
     hc->CommonBufferPinned = 0;
+
+    /* The enumeration's scratch, where descriptors land (hcd_enum.c). Its
+     * absence leaves the controller started with nothing enumerated, which
+     * HcdEnumService checks for. */
+    hc->ScratchVa = hc->Dma->DmaOperations->AllocateCommonBuffer(
+        hc->Dma, HCD_SCRATCH_BYTES, &hc->ScratchPa, TRUE);
     return STATUS_SUCCESS;
 }
 
@@ -77,8 +83,15 @@ VOID HcdDmaClose(PHCD_CONTROLLER hc)
              * overwritten. It stays allocated, and so does the adapter. */
             hc->CommonBuffersKept++;
             hc->CommonVa = NULL;
+            hc->ScratchVa = NULL;
             hc->Dma = NULL;
             return;
+        }
+        if (hc->ScratchVa != NULL) {
+            hc->Dma->DmaOperations->FreeCommonBuffer(
+                hc->Dma, HCD_SCRATCH_BYTES, hc->ScratchPa, hc->ScratchVa,
+                TRUE);
+            hc->ScratchVa = NULL;
         }
         hc->Dma->DmaOperations->FreeCommonBuffer(
             hc->Dma, hc->CommonBytes, hc->CommonPa, hc->CommonVa, TRUE);

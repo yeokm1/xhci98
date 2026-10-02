@@ -107,11 +107,10 @@ static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
     PHCD_CONTROLLER hc;
     NTSTATUS status;
 
-    /* A PDO of this driver's own is the root hub's (section 5.2); its FDO
-     * arrives with task 26-A.4. Until then the root-hub PDO is never
-     * created, so nothing reaches here with one. */
+    /* A PDO of this driver's own is the root hub's: the second role
+     * (design record 13 section 5.2). */
     if (Pdo->DriverObject == DriverObject) {
-        return STATUS_NOT_SUPPORTED;
+        return HcdRootHubAddDevice(DriverObject, Pdo);
     }
 
     status = IoCreateDevice(DriverObject, sizeof(HCD_CONTROLLER), NULL,
@@ -152,6 +151,12 @@ static NTSTATUS NTAPI hcdDispatchPnp(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     if (common->Kind == HCD_KIND_CONTROLLER_FDO) {
         return HcdControllerPnp((PHCD_CONTROLLER)common, Irp);
     }
+    if (common->Kind == HCD_KIND_ROOTHUB_PDO) {
+        return HcdRootHubPdoPnp((PHCD_ROOTHUB_PDO)common, Irp);
+    }
+    if (common->Kind == HCD_KIND_ROOTHUB_FDO) {
+        return HcdRootHubFdoPnp((PHCD_ROOTHUB_FDO)common, Irp);
+    }
     return HcdCompleteIrp(Irp, Irp->IoStatus.Status, Irp->IoStatus.Information);
 }
 
@@ -162,6 +167,12 @@ static NTSTATUS NTAPI hcdDispatchPower(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     common = (PHCD_COMMON)DeviceObject->DeviceExtension;
     if (common->Kind == HCD_KIND_CONTROLLER_FDO) {
         return HcdControllerPower((PHCD_CONTROLLER)common, Irp);
+    }
+    if (common->Kind == HCD_KIND_ROOTHUB_PDO) {
+        return HcdRootHubPdoPower((PHCD_ROOTHUB_PDO)common, Irp);
+    }
+    if (common->Kind == HCD_KIND_ROOTHUB_FDO) {
+        return HcdRootHubFdoPower((PHCD_ROOTHUB_FDO)common, Irp);
     }
     PoStartNextPowerIrp(Irp);
     return HcdCompleteIrp(Irp, Irp->IoStatus.Status, Irp->IoStatus.Information);

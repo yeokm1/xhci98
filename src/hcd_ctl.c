@@ -279,6 +279,7 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
     KeInitializeEvent(&hc->WorkEvent, SynchronizationEvent, FALSE);
     KeInitializeEvent(&hc->CmdDoneEvent, SynchronizationEvent, FALSE);
     KeInitializeEvent(&hc->PowerGate, SynchronizationEvent, TRUE);
+    KeInitializeEvent(&hc->XferDoneEvent, NotificationEvent, FALSE);
 }
 
 /*
@@ -420,6 +421,12 @@ static VOID NTAPI hcdThread(PVOID Context)
             break;
         }
         hcdPoll(hc);
+        if ((hc->Hc.Flags & XHCI_EXT_FLAG_STARTED) != 0 &&
+            hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
+            HcdPowerGateEnter(hc);
+            HcdEnumService(hc);
+            HcdPowerGateLeave(hc);
+        }
     }
     XHCI_DBG_TEXT("hcd: controller thread leaving its loop");
     (VOID)KeSetEvent(&hc->ThreadExited, IO_NO_INCREMENT, FALSE);
@@ -585,6 +592,7 @@ NTSTATUS HcdStartController(PHCD_CONTROLLER hc, PIRP irp)
      * rebuilds, so it is reset with it (Codex review of 26-A.2, round 4,
      * finding 1). */
     hc->SuspendedInD0 = 0;
+    HcdEnumInit(hc);
 
     status = hcdParseResources(hc, irp);
     if (!NT_SUCCESS(status)) {
@@ -698,6 +706,7 @@ VOID HcdStopController(PHCD_CONTROLLER hc)
     XHCI_DBG_TEXT("hcd: stop controller");
     ext = &hc->Hc;
     hcdThreadStop(hc);
+    HcdEnumDrop(hc);
     /*
      * Whenever a register window is mapped, not only when INITIALIZED is
      * set: the quiesce and a failed in-place recovery clear INITIALIZED with

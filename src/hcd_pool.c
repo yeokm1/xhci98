@@ -43,3 +43,32 @@ ULONG HcdPoolOutstandingCount(VOID)
 {
     return (ULONG)HcdPoolOutstanding;
 }
+
+/*
+ * Pool handed to the PnP manager, which frees it itself with ExFreePool: the
+ * id strings and device text of IRP_MN_QUERY_ID / QUERY_DEVICE_TEXT and the
+ * DEVICE_RELATIONS of QUERY_DEVICE_RELATIONS. Counted apart from the
+ * driver's own allocations, which must read 0 after a remove (rule 6) -
+ * these leave the driver's ownership the moment they are returned.
+ */
+static LONG HcdPoolHandedOff;
+
+PVOID HcdPoolAllocHandedOff(ULONG bytes)
+{
+    PVOID p;
+
+    p = ExAllocatePoolWithTag(NonPagedPool, bytes, HCD_POOL_TAG);
+    if (p != NULL) {
+        (VOID)InterlockedIncrement(&HcdPoolHandedOff);
+    }
+    return p;
+}
+
+/* A relations list a lower or earlier driver allocated, which this driver
+ * replaces with a longer one. */
+VOID HcdPoolFreeForeign(PVOID p)
+{
+    if (p != NULL) {
+        ExFreePool(p);
+    }
+}

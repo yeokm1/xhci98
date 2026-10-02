@@ -66,13 +66,35 @@ VOID XhciSlotCommandSlotFatal(PXHCI_EXTENSION ext, ULONG completionCode,
     HcdControllerFromExt(ext)->SlotFatalEvents++;
 }
 
-/* Returns nonzero when the caller must request a controller reset; a
- * transfer event names nothing the HCD has queued before 26-A.5. IRQL:
- * DISPATCH_LEVEL. */
+/*
+ * A Transfer Event. The one transfer the HCD queues before 26-A.5 is the
+ * enumeration's EP0 control transfer on the slot the thread is waiting on
+ * (hcd_enum.c): a Short Packet on its Data Stage records the residual and
+ * the transfer goes on to its Status Stage; any other code ends it and wakes
+ * the thread. Everything else is counted. Returns nonzero when the caller
+ * must request a controller reset - never, here. IRQL: DISPATCH_LEVEL.
+ */
 ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
 {
-    UNREFERENCED_PARAMETER(event);
-    HcdControllerFromExt(ext)->TransferEventsUnclaimed++;
+    PHCD_CONTROLLER hc;
+    ULONG slotId;
+    ULONG dci;
+    ULONG code;
+
+    hc = HcdControllerFromExt(ext);
+    slotId = XHCI_TRB_GET_SLOT_ID(event->Control);
+    dci = XHCI_TRB_GET_EP_ID(event->Control);
+    code = XHCI_TRB_GET_COMPLETION(event->Status);
+    if (slotId == 0 || slotId != hc->XferWaitSlot || dci != 1) {
+        hc->TransferEventsUnclaimed++;
+        return 0;
+    }
+    if (code == XHCI_CC_SHORT_PACKET) {
+        hc->XferResidual = event->Status & 0x00FFFFFFUL;
+        return 0;
+    }
+    hc->XferCode = code;
+    (VOID)KeSetEvent(&hc->XferDoneEvent, IO_NO_INCREMENT, FALSE);
     return 0;
 }
 

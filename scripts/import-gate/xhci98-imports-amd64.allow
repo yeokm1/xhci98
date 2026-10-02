@@ -87,11 +87,17 @@ ntoskrnl.exe!IoGetDmaAdapter               all  required  SITES=hcd_dma.obj nt52
 HAL.dll!KeStallExecutionProcessor          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
 ntoskrnl.exe!DbgPrint                      qemu required  nt52-amd64-export; the qemu flavour's live trace only (xhci_dbg.c), as on x86 (task 26-A.2)
 
+
+# --- Task 26-A.4: the root hub (twins of the x86 rows of the same task) ---
+ntoskrnl.exe!IoInvalidateDeviceRelations   all  required  nt52-amd64-export; twin of the x86 row (task 26-A.4)
+ntoskrnl.exe!RtlInitUnicodeString          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.4)
+ntoskrnl.exe!ObfReferenceObject            all  required  nt52-amd64-export; twin of the x86 row (task 26-A.4)
+ntoskrnl.exe!ExAllocatePoolWithTag         all  required  SITES=hcd_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.4)
+ntoskrnl.exe!ExFreePool                    all  required  SITES=hcd_pool.obj nt52-amd64-export; twin of the x86 row (task 26-A.4)
+
 [deny]
 
 ExAllocatePool              Not the HCD's spelling (xhci98-imports.allow; task 25.3). Allocate with ExAllocatePoolWithTag once its row exists.
-ExAllocatePoolWithTag       The HCD's allocation entry point once 26-A.1 / 28-A.2 add its row. Denied until then.
-ExFreePool                  Same as ExAllocatePoolWithTag.
 ExFreePoolWithTag           No Windows 98 evidence, and the x86 and amd64 sources are one tree: free with ExFreePool on both.
 IoForwardIrpSynchronously   Windows XP and later - blocks the load on Win2000, and the x86 and amd64 sources are one tree. Use IoCallDriver plus a completion routine that signals a KEVENT.
 IoSetCompletionRoutineEx    Windows XP and later - blocks the load on Win2000, as above.

@@ -212,6 +212,11 @@ try {
         Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
         Assert-True (@($script:importFailures | Where-Object { $_ -match 'named in the header .*compat' }).Count -eq 1) "SITES over LTCG objects refuses a restricted name in a nested header: $($script:importFailures)"
         Remove-Item -LiteralPath (Join-Path $siteSrc 'compat\alias.h')
+        Set-Content -LiteralPath (Join-Path $siteSrc 'notes.h') -Encoding ASCII -Value @('/* why ExFreePool and not', ' * ExFreePoolWithTag */', '// ExFreePool too', '#ifdef ExFreePool', '#undef ExFreePool', '#endif')
+        $script:importFailures = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'named in the header' }).Count -eq 0) "a restricted name only in a header's comments is no reference: $($script:importFailures)"
+        Remove-Item -LiteralPath (Join-Path $siteSrc 'notes.h')
         Set-Content -LiteralPath (Join-Path $siteSrc 'hcd_pnp.c') -Encoding ASCII -Value @('void g(void *p) { ExFree\', 'Pool(p); }')
         $script:importFailures = @()
         Test-Image -Path $siteImage -ImageFlavor release -Rules $rules

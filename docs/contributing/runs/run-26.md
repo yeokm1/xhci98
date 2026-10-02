@@ -249,3 +249,52 @@ Round 7 confirmed the round-6 fix and reported no finding at any level over
 `01b0365..d2246cc`, apart from the two recorded residuals (the NT
 thread-reference window and token pasting in the LTCG scan). Batch (a) -
 26-A.1, 26-A.2 and the 26-V.0 reading - closes its review loop there.
+
+---
+
+## Batch (b): 26-A.3 and 26-A.4
+
+### The root hub
+
+The controller FDO creates the root-hub PDO at its first start, under
+`XHCI98\ROOT_HUB` with no compatible id, and the driver attaches its second
+role over it (`hcd_rh.c`). The id strings and relations lists PnP frees itself
+come from the pool, through `hcd_pool.c`'s handed-off entry, which brought the
+pool pair into the allowlists with `SITES=hcd_pool.obj`.
+
+**Both primaries** (`qemu` build `0b27be77...e56a`, fresh overlays): the root
+hub installed from the package's INF with no wizard and no prompt; Device
+Manager lists `xhci98 USB 3.x Root Hub` under Universal Serial Bus controllers,
+"This device is working properly", and by connection it is the controller's one
+child. A controller disable takes the root hub with it (on Windows 98 SE it
+reads "a device it depends on ... has been dynamically disabled"; on Windows
+2000 it leaves the tree) and the enable brings it back working; a shutdown
+followed. Its property sheet has General and Driver tabs only - the Power
+tab is 26-A.8's. Notes `b1-98-notes.md`, `b1-2k-notes.md`.
+
+### Root ports and enumeration
+
+The controller thread services every port the event DPC marks changed
+(`hcd_enum.c`), feeding each port's pure state machine (`xhci_enum.c`, host
+suite `test_enum`, 136 checks): debounce 100 ms, the reset, the speed read from
+PORTSC, Enable Slot, Address Device with BSR = 0, the 8-byte and 18-byte
+device descriptor reads (with Evaluate Context when the EP0 size differs), the
+9-byte and full configuration descriptor reads - each EP0 read a control
+transfer built by the miniport's pure TD builder, restored whole with
+`xhci_xfer.c`, into a 4 KB common-buffer scratch. A device PDO is not created
+yet.
+
+**Both primaries** (`6cfc7022...b1de`): a QEMU USB mouse hot-plugged from the
+monitor (`device_add usb-mouse,bus=xhci.0`) traced, on Windows 98 SE and on
+Windows 2000 alike: port 1 reset, enabled, speed 3 (High Speed - the speed QEMU
+gives it on this controller, reported as such); Enable Slot code 1, slot 1;
+Address Device; device descriptor `idVendor 0627 / idProduct 0001`; a 34-byte
+configuration descriptor; enumerated. Unplugged and plugged again it
+enumerated on port 2 with slot 1 again - the disconnect had disabled slot 1 and
+freed its record. Nothing appears in Device Manager for it, by design until the
+device PDO exists. Traces `vm\t26-win98-b2b-`, `vm\t26-win2k-b2-debugcon.log`.
+
+On the way, WDK 7.1's `ntddk.h` maps `ExFreePool` to `ExFreePoolWithTag(a, 0)`
+under `POOL_TAGGING`, which the amd64 build imported; `xhci_compat.h` undoes it
+as it already undid the `ExAllocatePool` rewrite, and the LTCG source scan now
+reads past comments and the `#undef` / `#ifdef` lines that only name a macro.

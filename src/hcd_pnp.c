@@ -57,6 +57,12 @@ static NTSTATUS hcdStart(PHCD_CONTROLLER hc, PIRP irp)
     if (NT_SUCCESS(status)) {
         hc->Common.PnpState = HCD_PNP_STARTED;
         hc->Common.DevicePower = PowerDeviceD0;
+        /* The root hub, the controller's one child (design record 13
+         * section 5.2). A failure leaves the controller started and the
+         * bus empty; it is traced, and the next start tries again. */
+        if (!NT_SUCCESS(HcdRootHubCreatePdo(hc))) {
+            XHCI_DBG_TEXT("hcd: root hub PDO not created");
+        }
     }
     return HcdCompleteIrp(irp, status, 0);
 }
@@ -91,6 +97,7 @@ static NTSTATUS hcdRemove(PHCD_CONTROLLER hc, PIRP irp)
     irp->IoStatus.Status = STATUS_SUCCESS;
     status = HcdPassDown(hc, irp);
 
+    HcdRootHubDeletePdo(hc);
     IoDetachDevice(hc->LowerDevice);
     IoDeleteDevice(hc->Common.Self);
     return status;
@@ -160,6 +167,14 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
                 ->SurpriseRemovalOK = FALSE;
         }
         status = HcdCompleteIrp(irp, status, irp->IoStatus.Information);
+        break;
+
+    case IRP_MN_QUERY_DEVICE_RELATIONS:
+        if (stack->Parameters.QueryDeviceRelations.Type == BusRelations) {
+            status = HcdControllerBusRelations(hc, irp);
+        } else {
+            status = HcdPassDown(hc, irp);
+        }
         break;
 
     default:
