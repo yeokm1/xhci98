@@ -35,6 +35,12 @@
  * different fact: they say *which build* between two cuts of one version, which
  * is exactly what a version cannot (task 13-L.4).
  *
+ * **Since 2026-10-02 this is the successor HCD's version** (design record 13;
+ * roadmap-hcd.md). The miniport, last released as 1.2.0.0, left the tree that
+ * day and the HCD took over src\ and the name xhci98.sys. 1.99.0.0 is a
+ * development number: it ranks above the installed 1.2.0.0, it claims nothing,
+ * and no build carrying it is published - task 32.3 sets 2.0.0.0 here at the cut.
+ *
  * See `docs\contributing\build-and-test.md`, "Versioning the driver", for what
  * each field surfaces as on each target, and for the two gates that cover the
  * copies this file cannot reach.
@@ -45,12 +51,12 @@
 
 /* The four-part package version, as four integers - what FILEVERSION and
  * PRODUCTVERSION take, and what the Windows shell sorts by. */
-#define XHCI_VER_CSV            1,2,0,0
+#define XHCI_VER_CSV            1,99,0,0
 
 /* The same number as a string - the resource's two version strings, the DOS
  * qualifier's banner, and the snapshot reader's report header. Must agree with
  * XHCI_VER_CSV above; the INF gate refuses a build where it does not. */
-#define XHCI_VER_STR            "1.2.0.0"
+#define XHCI_VER_STR            "1.99.0.0"
 
 /* The release date, in the MM/DD/YYYY form `DriverVer` takes, zero-padded -
  * the INF gate refuses an unpadded one, because Windows 98's 16-bit parser is

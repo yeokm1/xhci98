@@ -1,81 +1,71 @@
-; xhci98.inf - xHCI USB host controller miniport, the 32-bit package
+; xhci98.inf - the successor xHCI host controller driver, the 32-bit package
 ;
-; One file, two setup engines, one xhci98.sys. Windows 98 SE and Windows ME
-; read only the undecorated sections and load the driver through
-; *NTKERN/NTMPDriver. Windows 2000 and 32-bit XP read the .NTx86 sections and
-; load it as a kernel service. 32-bit Vista and Windows 7 take the NT 6.x
-; models section. scripts\inf-gate\check-inf.ps1 enforces the rules this file
-; is built to satisfy; docs\contributing\build-and-test.md, "The INF must
-; carry both install paths" and "Win98 INF-parser traps", explains them.
+; xhci98.sys is a monolithic bus driver (design record 13): it replaces
+; usbport.sys, the hub driver and the composite parent, so this file installs
+; it in TWO roles from one binary - as the function driver of the PCI xHCI
+; controller, and as the function driver of the root hub the controller
+; creates under a project-owned hardware id, never USB\ROOT_HUB, which the
+; OS's own usbhub.sys claims on every NT target (roadmap-hcd.md, decisions
+; table). Device PDOs are children of that root hub.
 ;
-; ASCII only, CRLF line endings: Windows 98's 16-bit engine reports nothing at
-; all for a file it cannot parse.
+; ROADMAP TASK 25.8: this is the build scaffold's INF. It passes the INF gate
+; and is never staged - make-package.ps1 refuses the scaffold image - and the
+; root hub's id is the one task 25.4 chose (design record 13, section 8).
+; Its first install is task 26-V.0's.
 ;
-; usbport.sys is loaded through xhci98.sys's import, never as a service. On
-; Windows 98 and ME the USB 2.0 stack (NUSB or SweetLow's) supplies it.
+; The install-path rules are the ones the miniport's INF carried until
+; 1.2.0.0, and scripts\inf-gate\check-inf.ps1 enforces them: Windows 98 SE and ME read the undecorated
+; sections and load the driver through *NTKERN/NTMPDriver; Windows 2000 and
+; 32-bit XP the .NTx86 sections, as a kernel service; 32-bit Vista and
+; Windows 7 the NT 6.x models section, which copies the driver alone.
+;
+; ASCII only, CRLF line endings.
+;
+; The OS supplies usbd.sys - the class drivers above the HCD's device PDOs
+; import its helper exports - and usbui.dll, the property-page provider,
+; through LayoutFile exactly as for the miniport. usbport.sys and usbhub.sys
+; are NOT fetched: the HCD replaces both.
 
 [Version]
 Signature="$CHICAGO$"
 Class=USB
 ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
-; A CopyFiles entry not named in [SourceDisksFiles] is fetched from the OS's
-; own install source through its layout.inf. This is how the OS-supplied files
-; below arrive without being on this media.
 LayoutFile=layout.inf
-; Must equal src\xhci_version.h, where the version and date are edited. The
-; INF gate and make-package.ps1 both check it. Windows 2000 ranks drivers by
-; date then version, so an upgrade must move this forward.
-DriverVer=10/02/2026,1.2.0.0
+; Must equal src\xhci_version.h.
+DriverVer=10/02/2026,1.99.0.0
 
-; NTx86.6.0 selects [XhciModels.NTx86.6.0] on Vista and Windows 7 only. This
-; is the line Windows 98's engine parses to find [XhciModels]; add no other
-; field (the gate refuses it, PATH-MFGDEC).
 [Manufacturer]
 %Mfg%=XhciModels,NTx86.6.0
 
-; The xHCI class-code compatible ID, as the reference INFs use PCI\CC_0C0320
-; for EHCI.
 [XhciModels]
 %XhciDesc%=Xhci.Dev,PCI\CC_0C0330
+%RootHubDesc%=RootHub.Dev,XHCI98\ROOT_HUB
 
-; A different install section name, not a .6.0 decoration on Xhci.Dev: the
-; version decoration selects the models section only, so [Xhci.Dev.NTx86.6.0]
-; would never be read.
 [XhciModels.NTx86.6.0]
 %XhciDesc%=Xhci.Dev6,PCI\CC_0C0330
+%RootHubDesc%=RootHub.Dev6,XHCI98\ROOT_HUB
 
 [SourceDisksNames]
 1=%DiskName%,xhci98.sys,,
 
-; Only this project's files. Nothing Microsoft's goes on the media.
 [SourceDisksFiles]
 xhci98.sys=1
 xhci98.inf=1
 
-; Dirid 10 + System32\Drivers, never dirid 12, which on Windows 98 resolves to
-; System\Iosubsys. Dirid 11 is for usbui.dll, a user-mode DLL, where each OS's
-; own USB INF puts it.
 [DestinationDirs]
 DefaultDestDir=10
 Xhci.CopyFiles=10,System32\Drivers
-Xhci.CopyW98=10,System32\Drivers
-Xhci.CopyNT=10,System32\Drivers
+Xhci.CopyOS=10,System32\Drivers
 Xhci.CopyUI=11
 Inf.CopyFiles=17
 
-; ------------------------------------------------------------------
-; Windows 98 SE and Windows ME (undecorated)
-; ------------------------------------------------------------------
+; --- Windows 98 SE and ME ---------------------------------------------------
 
 [Xhci.Dev]
 AddReg=Xhci.AddReg
-CopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI
+CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
 
-; DevLoader and NTMPDriver load the driver, as NUSB's [EHCI.AddReg] does.
-; EnumPropPages gives the controller its Advanced tab (sysclass.dll draws it;
-; its Bandwidth Usage dialog needs usbui.dll, copied below).
-; The registry values the driver reads are described at [Xhci.AddReg.NT].
 [Xhci.AddReg]
 HKR,,DevLoader,,*NTKERN
 HKR,,NTMPDriver,,xhci98.sys
@@ -83,74 +73,60 @@ HKR,,EnumPropPages,,"sysclass.dll,USBControllerPropPage"
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
 HKR,,XhciImodInterval250ns,0x00010001,500
-HKR,,XhciVirtualHSHub,0x00010001,0
-HKR,,XhciVirtualHSHubVid,,"1209"
-HKR,,XhciVirtualHSHubPid,,"0001"
 
-; ------------------------------------------------------------------
-; Registry values, written on every install path
-; ------------------------------------------------------------------
-;
-; All are in the device's software key, read by the driver at start through
-; usbport's UsbPortGetMiniportRegistryKeyValue. All are DWORDs (0x00010001) but
-; the virtual hub's two ids, which are strings.
-;
-;   XhciLogVerbosity       0 off (the default), 1 counters, 2 adds the log,
-;                          3 adds the port table, 4 adds kernel addresses.
-;                          Out of range means 0. XHCISNAP sets it.
-;   XhciLogDebugView       1 hands the log to DbgPrint when the driver stops
-;                          or a start is refused.
-;   XhciImodInterval250ns  the interrupt moderation interval, in 250 ns units
-;                          (IMODI). 500 is 125 us. Absent, unreadable, or
-;                          outside 10-4000 means 4000 (1 ms, the hardware
-;                          reset value), substituted rather than clamped.
-;   XhciVirtualHSHub       EXPERIMENTAL, FOR PRIVATE TESTING ONLY. 0 off (the
-;                          default); 1 puts a virtual USB 2.0 hub above a Full
-;                          or Low Speed device on a root port; 2 puts one on
-;                          every USB 2.0 port. Any other value means 0.
-;   XhciVirtualHSHubVid    the virtual hub's vendor and product id, as four
-;   XhciVirtualHSHubPid    hexadecimal digits. 1209:0001 is pid.codes' shared
-;                          test id, not one allocated to this project. With
-;                          either missing or invalid the hub is off.
-;
-; EnumPropPages32 and Controller give the NT controller its Advanced tab,
-; drawn by usbui.dll, as the NT references write them for EHCI. On Vista and
-; Windows 7 the value is only read when the devnode is built: to test it,
-; reinstall the package rather than adding it by hand.
+[RootHub.Dev]
+AddReg=RootHub.AddReg
+CopyFiles=Xhci.CopyFiles
+
+[RootHub.AddReg]
+HKR,,DevLoader,,*NTKERN
+HKR,,NTMPDriver,,xhci98.sys
+; The root hub's Power tab, as Windows 98 SE's, ME's and NUSB's own INFs register it
+; for their root hubs (design record 13, section 8).
+HKR,,EnumPropPages,,"sysclass.dll,USBHubPropPage"
+
+; --- Windows 2000 and 32-bit XP ---------------------------------------------
+
+[Xhci.Dev.NTx86]
+AddReg=Xhci.AddReg.NT
+CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
+
+[Xhci.Dev.NTx86.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
 [Xhci.AddReg.NT]
 HKR,,XhciLogVerbosity,0x00010001,0
 HKR,,XhciLogDebugView,0x00010001,0
 HKR,,XhciImodInterval250ns,0x00010001,500
 HKR,,EnumPropPages32,,"usbui.dll,USBControllerPropPageProvider"
 HKR,,Controller,1,01
-HKR,,XhciVirtualHSHub,0x00010001,0
-HKR,,XhciVirtualHSHubVid,,"1209"
-HKR,,XhciVirtualHSHubPid,,"0001"
 
-; ------------------------------------------------------------------
-; Windows 2000 and 32-bit Windows XP (.NTx86)
-; ------------------------------------------------------------------
+[RootHub.Dev.NTx86]
+AddReg=RootHub.AddReg.NT
+CopyFiles=Xhci.CopyFiles
 
-[Xhci.Dev.NTx86]
-AddReg=Xhci.AddReg.NT
-CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI
-
-[Xhci.Dev.NTx86.Services]
+[RootHub.Dev.NTx86.Services]
 AddService=xhci98,0x00000002,Xhci.AddService
 
-; ------------------------------------------------------------------
-; 32-bit Windows Vista and Windows 7
-; ------------------------------------------------------------------
-;
-; xhci98.sys alone. The OS-supplied files are already on every install, and a
-; LayoutFile copy aborts the NT 6.x file queue even with flag 16 (the gate
-; refuses one here, OS-ONNT6). Right-click Install does not work on NT 6.x;
-; use the device install.
+; The root hub's Power tab on every NT target: the provider each NT usb.inf
+; registers for its own root hubs (design record 13, section 8).
+[RootHub.AddReg.NT]
+HKR,,EnumPropPages32,,"usbui.dll,USBHubPropPageProvider"
+
+; --- 32-bit Vista and Windows 7 ---------------------------------------------
+
 [Xhci.Dev6.NTx86]
 AddReg=Xhci.AddReg.NT
 CopyFiles=Xhci.CopyFiles
 
 [Xhci.Dev6.NTx86.Services]
+AddService=xhci98,0x00000002,Xhci.AddService
+
+[RootHub.Dev6.NTx86]
+AddReg=RootHub.AddReg.NT
+CopyFiles=Xhci.CopyFiles
+
+[RootHub.Dev6.NTx86.Services]
 AddService=xhci98,0x00000002,Xhci.AddService
 
 [Xhci.AddService]
@@ -161,61 +137,28 @@ ErrorControl=1                      ; SERVICE_ERROR_NORMAL
 ServiceBinary=%12%\xhci98.sys
 LoadOrderGroup=Base
 
-; ------------------------------------------------------------------
-; File lists
-; ------------------------------------------------------------------
-
-; The third field is a temporary name, so Windows 98 can replace a loaded
-; xhci98.sys. It may leave a harmless xhci98.tmp behind.
 [Xhci.CopyFiles]
 xhci98.sys,,xhci98.tmp
 
-; OS-supplied files, fetched through LayoutFile from the OS's own source.
-; An xHCI-only machine never had them placed. Flag 16 is COPYFLG_NO_OVERWRITE:
-; a file already present is left alone whatever its version.
-;
-;   usbd.sys     imported by the USB 2.0 root hub driver.
-;   usbhub.sys   Windows 98's composite parent; the NT hub driver.
-;   usbport.sys  NT only; xhci98.sys imports it. On Windows 98 the USB 2.0
-;                stack places it, and layout.inf has no row for it.
-;
-; usbhub20.sys is on neither path: Windows 2000 places it itself, and XP has
-; no such file.
-[Xhci.CopyW98]
+[Xhci.CopyOS]
 usbd.sys,,,16
-usbhub.sys,,,16
 
-[Xhci.CopyNT]
-usbport.sys,,,16
-usbd.sys,,,16
-usbhub.sys,,,16
-
-; usbui.dll draws the controller's and root hub's property pages and dialogs.
-; Same route and flag as above; dirid 11.
 [Xhci.CopyUI]
 usbui.dll,,,16
 
 [Inf.CopyFiles]
 xhci98.inf
 
-; ------------------------------------------------------------------
-; Right-click Install - pre-stages the files with no device present
-; ------------------------------------------------------------------
-
 [DefaultInstall]
-CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI
+CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
 
-; No Inf.CopyFiles: the NT engine keeps its own oemN.inf copy, and a second
-; copy would leave two INFs claiming PCI\CC_0C0330.
 [DefaultInstall.NTx86]
-CopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI
+CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
 
-; "USB 2.0" leads XhciDesc because only the USB 2.0 ports are driven, and
-; "(xhci98)" tells it apart from Microsoft's entries. A changed string shows
-; only on a fresh install.
 [Strings]
 Provider="Yeo Kheng Meng"
 Mfg="xHCI98 Project"
-DiskName="xhci98 xHCI Miniport Disk"
-XhciDesc="USB 2.0 eXtensible Host Controller (xhci98)"
-XhciSvcDesc="xHCI USB 2.0 Host Controller Miniport (xhci98)"
+DiskName="xhci98 xHCI Host Controller Disk"
+XhciDesc="xhci98 USB 3.x eXtensible Host Controller"
+RootHubDesc="xhci98 USB 3.x Root Hub"
+XhciSvcDesc="xhci98 USB 3.x eXtensible Host Controller Driver (xhci98)"

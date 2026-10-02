@@ -22,7 +22,7 @@
 #            (0x02) and FLG_ADDREG_OVERWRITEONLY (0x20) are those same two
 #            conditions on the registry side. Removing usbd.sys, which is
 #            copied 0x10, would take a file this install never placed and
-#            leave usbhub20.sys unable to load.
+#            leave the class drivers that import it unable to load.
 #   review - the INF alone cannot say. A version-conditional copy
 #            (COPYFLG_NO_VERSION_DIALOG 0x20, COPYFLG_OVERWRITE_OLDER_ONLY
 #            0x40); FLG_ADDREG_APPEND (0x08), which may leave
@@ -81,8 +81,7 @@
 # .Services (.HW, .CoInstallers, .Interfaces, .LogConfigOverride).
 path|Windows 98|device install|Xhci.Dev
 file|Windows 98|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
-file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
-file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbhub.sys|usbhub.sys||16|keep
+file|Windows 98|Xhci.CopyOS|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
 file|Windows 98|Xhci.CopyUI|11||usbui.dll|usbui.dll||16|keep
 reg|Windows 98|Xhci.AddReg|HKR||DevLoader||*NTKERN|remove
 reg|Windows 98|Xhci.AddReg|HKR||NTMPDriver||xhci98.sys|remove
@@ -90,23 +89,30 @@ reg|Windows 98|Xhci.AddReg|HKR||EnumPropPages||"sysclass.dll,USBControllerPropPa
 reg|Windows 98|Xhci.AddReg|HKR||XhciLogVerbosity|0x00010001|0|remove
 reg|Windows 98|Xhci.AddReg|HKR||XhciLogDebugView|0x00010001|0|remove
 reg|Windows 98|Xhci.AddReg|HKR||XhciImodInterval250ns|0x00010001|500|remove
-reg|Windows 98|Xhci.AddReg|HKR||XhciVirtualHSHub|0x00010001|0|remove
-reg|Windows 98|Xhci.AddReg|HKR||XhciVirtualHSHubVid||"1209"|remove
-reg|Windows 98|Xhci.AddReg|HKR||XhciVirtualHSHubPid||"0001"|remove
 path|Windows 2000|device install|Xhci.Dev.NTx86
 file|Windows 2000|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
-file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbport.sys|usbport.sys||16|keep
-file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
-file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbhub.sys|usbhub.sys||16|keep
+file|Windows 2000|Xhci.CopyOS|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
 file|Windows 2000|Xhci.CopyUI|11||usbui.dll|usbui.dll||16|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogVerbosity|0x00010001|0|remove
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010001|0|remove
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010001|500|remove
 reg|Windows 2000|Xhci.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBControllerPropPageProvider"|remove
 reg|Windows 2000|Xhci.AddReg.NT|HKR||Controller|1|01|remove
-reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciVirtualHSHub|0x00010001|0|remove
-reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciVirtualHSHubVid||"1209"|remove
-reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciVirtualHSHubPid||"0001"|remove
+service|Windows 2000|xhci98|Xhci.AddService|0x00000002|remove
+servicevalue|Windows 2000|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
+servicevalue|Windows 2000|xhci98|Xhci.AddService|ServiceType|1
+servicevalue|Windows 2000|xhci98|Xhci.AddService|StartType|3
+servicevalue|Windows 2000|xhci98|Xhci.AddService|ErrorControl|1
+servicevalue|Windows 2000|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
+servicevalue|Windows 2000|xhci98|Xhci.AddService|LoadOrderGroup|Base
+path|Windows 98|device install|RootHub.Dev
+file|Windows 98|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
+reg|Windows 98|RootHub.AddReg|HKR||DevLoader||*NTKERN|remove
+reg|Windows 98|RootHub.AddReg|HKR||NTMPDriver||xhci98.sys|remove
+reg|Windows 98|RootHub.AddReg|HKR||EnumPropPages||"sysclass.dll,USBHubPropPage"|remove
+path|Windows 2000|device install|RootHub.Dev.NTx86
+file|Windows 2000|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
+reg|Windows 2000|RootHub.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBHubPropPageProvider"|remove
 service|Windows 2000|xhci98|Xhci.AddService|0x00000002|remove
 servicevalue|Windows 2000|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
 servicevalue|Windows 2000|xhci98|Xhci.AddService|ServiceType|1
@@ -121,9 +127,16 @@ reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciLogDebugView|0x00010001|0|re
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciImodInterval250ns|0x00010001|500|remove
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBControllerPropPageProvider"|remove
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||Controller|1|01|remove
-reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciVirtualHSHub|0x00010001|0|remove
-reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciVirtualHSHubVid||"1209"|remove
-reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciVirtualHSHubPid||"0001"|remove
+service|Windows Vista and 7 x86|xhci98|Xhci.AddService|0x00000002|remove
+servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
+servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|ServiceType|1
+servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|StartType|3
+servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|ErrorControl|1
+servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|ServiceBinary|%12%\xhci98.sys
+servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|LoadOrderGroup|Base
+path|Windows Vista and 7 x86|device install|RootHub.Dev6.NTx86
+file|Windows Vista and 7 x86|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
+reg|Windows Vista and 7 x86|RootHub.AddReg.NT|HKR||EnumPropPages32||"usbui.dll,USBHubPropPageProvider"|remove
 service|Windows Vista and 7 x86|xhci98|Xhci.AddService|0x00000002|remove
 servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|DisplayName|%XhciSvcDesc%
 servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|ServiceType|1
@@ -134,12 +147,9 @@ servicevalue|Windows Vista and 7 x86|xhci98|Xhci.AddService|LoadOrderGroup|Base
 path|Windows 98|right-click Install|DefaultInstall
 file|Windows 98|Inf.CopyFiles|17||xhci98.inf|xhci98.inf||0|remove
 file|Windows 98|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
-file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
-file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbhub.sys|usbhub.sys||16|keep
+file|Windows 98|Xhci.CopyOS|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
 file|Windows 98|Xhci.CopyUI|11||usbui.dll|usbui.dll||16|keep
 path|Windows 2000|right-click Install|DefaultInstall.NTx86
 file|Windows 2000|Xhci.CopyFiles|10|System32\Drivers|xhci98.sys|xhci98.sys|xhci98.tmp|0|remove
-file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbport.sys|usbport.sys||16|keep
-file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
-file|Windows 2000|Xhci.CopyNT|10|System32\Drivers|usbhub.sys|usbhub.sys||16|keep
+file|Windows 2000|Xhci.CopyOS|10|System32\Drivers|usbd.sys|usbd.sys||16|keep
 file|Windows 2000|Xhci.CopyUI|11||usbui.dll|usbui.dll||16|keep

@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-Post-link import-compatibility gate for xhci98.sys (roadmap Phase 3 task 5).
+Post-link import-compatibility gate for xhci98.sys (roadmap Phase 3 task 5),
+since 2026-10-02 the successor HCD that took the name (design record 13).
 
 .DESCRIPTION
 An unresolved module/symbol import stops a WDM driver before DriverEntry on
@@ -13,8 +14,8 @@ Three things happen, in order:
 
   1. Enforcement, always. Every module/symbol pair in the linked binary must
      appear in scripts\import-gate\xhci98-imports.allow for the build flavor
-     being checked, with the USBPORT.SYS rows read from
-     scripts\usbport-lib\usbport-imports.expected rather than restated. Pairs
+     being checked; no USBPORT.SYS pair is allowed at all, because the HCD
+     replaces usbport.sys. Pairs
      the allowlist marks `required` must be present. Symbols in the allowlist's
      [deny] section are reported with their specific diagnosed cause - the
      Win2K DDK's ExAllocatePool -> ExAllocatePoolWithTag rewrite is the one
@@ -99,9 +100,6 @@ param(
     # Default: winxp64-baselines.expected beside this script.
     [string]$Amd64ManifestPath = "",
 
-    # The usbport import expectations make-usbport-lib.cmd records.
-    # Default: scripts\usbport-lib\usbport-imports.expected.
-    [string]$UsbportExpectedPath = "",
 
     # Where the extracted Windows 2000 SP4 ntoskrnl.exe/hal.dll are staged, for
     # step 2's export check. Default: tools\win2ksp4-extracted. An absent
@@ -175,9 +173,6 @@ if ($Amd64Dir -eq "") {
 }
 if ($Amd64ManifestPath -eq "") {
     $Amd64ManifestPath = Join-Path $PSScriptRoot "winxp64-baselines.expected"
-}
-if ($UsbportExpectedPath -eq "") {
-    $UsbportExpectedPath = Join-Path $repo "scripts\usbport-lib\usbport-imports.expected"
 }
 if ($Win2kDir -eq "") {
     $Win2kDir = Join-Path $repo "tools\win2ksp4-extracted"
@@ -497,34 +492,6 @@ function Read-AllowFile {
     return [pscustomobject]@{ Allow = $allow; Deny = $deny }
 }
 
-function Read-UsbportExpected {
-    param([string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path)) {
-        throw "USBPORT.SYS import manifest not found: $Path"
-    }
-
-    $rows = @()
-    foreach ($raw in Get-Content -LiteralPath $Path) {
-        $name = $raw.Trim()
-        if ($name -eq "" -or $name.StartsWith("#")) {
-            continue
-        }
-        $rows += [pscustomobject]@{
-            Module      = "USBPORT.SYS"
-            Symbol      = $name
-            Flavors     = "all"
-            Requirement = "required"
-            Notes       = "read from scripts\usbport-lib\usbport-imports.expected"
-            Source      = "usbport manifest"
-        }
-    }
-
-    if ($rows.Count -eq 0) {
-        throw "no names parsed out of $Path"
-    }
-    return $rows
-}
 
 # ---------------------------------------------------------------- evidence ---
 
@@ -680,7 +647,17 @@ function Test-Image {
 
     $pairs = @(Get-ImportPairs (Invoke-Dumpbin -Exe $Dumpbin -Mode "/imports" -Path $Path))
     if ($pairs.Count -eq 0) {
-        Add-Failure "$Path imports nothing at all - it cannot be a usbport miniport."
+        # The HCD's task 25.8 scaffold is a DriverEntry that registers nothing
+        # and links the pure core, which imports nothing; an empty table is its
+        # honest result. Accepted only while the image says it is the scaffold,
+        # read from the bytes as make-package.ps1 reads them, so the exception
+        # retires itself when 26-A.1 removes the marker.
+        $text = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($Path))
+        if ($text.Contains("XHCI98_SCAFFOLD_DO_NOT_STAGE")) {
+            Write-Ok "imports nothing at all - accepted for the task 25.8 scaffold, whose marker is in the image"
+            return
+        }
+        Add-Failure "$Path imports nothing at all and does not carry the scaffold marker - past task 25.8 a driver that imports nothing cannot be one."
         return
     }
 
@@ -696,6 +673,15 @@ function Test-Image {
 
         if ($Rules.Deny.ContainsKey($pair.Symbol)) {
             Add-Failure "$($pair.Module)!$($pair.Symbol) is DENIED: $($Rules.Deny[$pair.Symbol])"
+            continue
+        }
+
+        # The successor replaces usbport.sys and must not import from it - on a
+        # stock Windows 98 SE there is no usbport.sys to resolve against, which
+        # is the reason the HCD is a second binary at all (roadmap-hcd.md,
+        # decisions table, "Pure HCD, not a registry switch").
+        if ($pair.Module -ieq "USBPORT.SYS") {
+            Add-Failure "$($pair.Module)!$($pair.Symbol): the HCD imports nothing from usbport.sys - it replaces it, and a stock Windows 98 SE has none to resolve against."
             continue
         }
 
@@ -715,7 +701,7 @@ function Test-Image {
             if ($elsewhere.Count -gt 0) {
                 Add-Failure "$($pair.Module)!$($pair.Symbol): allowed only from $(($elsewhere | ForEach-Object { $_.Module }) -join ', '). The PE import descriptor names the provider, so this is a different import and only one of them resolves."
             } else {
-                Add-Failure "$($pair.Module)!$($pair.Symbol): not in the allowlist. Add it to scripts\import-gate\xhci98-imports.allow only with target evidence that it resolves - see that file's header."
+                Add-Failure "$($pair.Module)!$($pair.Symbol): not in the allowlist. Add it to scripts\import-gate\xhci98-imports.allow (or its -amd64 sibling) only with target evidence that it resolves - see that file's header."
             }
             continue
         }
@@ -748,10 +734,6 @@ function Test-Image {
                     $evidence += if ($ImageArch -eq "amd64") { "nt52-amd64-export" } else { "w2k-export" }
                 }
             }
-        }
-
-        if ($pair.Module -ieq "USBPORT.SYS") {
-            $evidence += "usbport manifest"
         }
 
         if ($null -ne $Precedent) {
@@ -793,8 +775,8 @@ function Test-Image {
         # carrying the symbol. Both are host-side files this repository does
         # not ship, so the check can only run when they are present: with
         # neither source loaded there is nothing to conclude and the pair is
-        # left to the warning above. `usbport manifest` is not Windows 98
-        # evidence either way - that module is the same file on both targets.
+        # left to the warning above. (No USBPORT.SYS pair reaches this point:
+        # the refusal above has already failed it.)
         #
         if ($pair.Module -ieq "ntoskrnl.exe" -or $pair.Module -ieq "hal.dll") {
             if ($ImageArch -eq "amd64") {
@@ -878,13 +860,12 @@ try {
     $dumpers = @{ "x86" = $dumpbin }
 
     $rules = Read-AllowFile -Path $AllowPath
-    $usbportRows = Read-UsbportExpected -Path $UsbportExpectedPath
+
     $rules = [pscustomobject]@{
-        Allow = @($rules.Allow + $usbportRows)
+        Allow = @($rules.Allow)
         Deny  = $rules.Deny
     }
-    Write-Ok ("allowlist: {0} pairs ({1} read from usbport-imports.expected), {2} denied symbols" -f `
-        $rules.Allow.Count, $usbportRows.Count, $rules.Deny.Count)
+    Write-Ok ("allowlist: {0} pairs, {1} denied symbols" -f $rules.Allow.Count, $rules.Deny.Count)
 
     # Per-architecture rule sets, populated as images of each are met. The x86
     # set is the one read above; the amd64 set comes from its sibling file and
@@ -902,13 +883,10 @@ try {
             $images += (Resolve-Path -LiteralPath $path).Path
         }
     } else {
-        foreach ($candidate in @("src\objfre\i386\xhci98.sys",
-                                 "src\objchk\i386\xhci98.sys",
-                                 "src\objchk_qemu\i386\xhci98.sys",
-                                 "src\objfre\amd64\xhci98.sys",
-                                 "src\objchk\amd64\xhci98.sys",
-                                 "src\objchk_qemu\amd64\xhci98.sys")) {
-            $path = Join-Path $repo $candidate
+
+        foreach ($candidate in @("objfre\i386", "objchk\i386", "objchk_qemu\i386",
+                                 "objfre\amd64", "objchk\amd64", "objchk_qemu\amd64")) {
+            $path = Join-Path $repo "src\$candidate\xhci98.sys"
             if (Test-Path -LiteralPath $path) {
                 $images += $path
             }
@@ -1067,12 +1045,11 @@ Fix it one of these ways:
                 $amd64AllowPath = if ($script:allowPathPinned) { $AllowPath } else { $AllowPathAmd64 }
                 $parsed = Read-AllowFile -Path $amd64AllowPath
                 $amd64Rules = [pscustomobject]@{
-                    Allow = @($parsed.Allow + $usbportRows)
+                    Allow = @($parsed.Allow)
                     Deny  = $parsed.Deny
                 }
                 $rulesByArch["amd64"] = $amd64Rules
-                Write-Ok ("amd64 allowlist: {0} pairs ({1} read from usbport-imports.expected), {2} denied symbols" -f `
-                    $amd64Rules.Allow.Count, $usbportRows.Count, $amd64Rules.Deny.Count)
+                Write-Ok ("amd64 allowlist: {0} pairs, {1} denied symbols" -f $amd64Rules.Allow.Count, $amd64Rules.Deny.Count)
 
                 if (-not $NoTargetEvidence) {
                     $amd64Manifest = @(Read-Win2kBaselineManifest -Path $Amd64ManifestPath)

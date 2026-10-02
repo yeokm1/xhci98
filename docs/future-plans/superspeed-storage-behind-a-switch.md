@@ -496,6 +496,22 @@ condition, the unpaired case and the counters are `test_port` vectors in the
 `-C` batch, including the vector where the companion disconnects without ever
 having connected and the hold must stay.
 
+Note added 2026-10-02, when the successor's roadmap carried this mechanism
+over as task 29-A.5 (`docs/contributing/roadmap-hcd.md`): the Codex review
+of that roadmap found the connect-evidence condition above insufficient. A
+connect on the presumed companion after the hold began shows only that some
+device arrived there; if the convention paired the wrong ports, an unrelated
+device's connect and disconnect on that port would release this hold and
+restart the ping-pong. The successor's rule therefore also requires that the
+device enumerated on the companion be the held device - the same vendor id,
+product id and serial string as read on the SuperSpeed port before the hold;
+a device with no serial string, or a hold taken before any descriptor was
+read, is an unidentified hold that lasts until the controller's next start,
+since vendor and product id alone cannot tell two units of one model apart -
+and adds the mis-paired-companion and identical-unit vectors. This page keeps its original
+wording as the record of what was proposed; were it ever built, that rule
+would apply here too.
+
 ### 6.2 A hub on a SuperSpeed port
 
 usbhub cannot drive a SuperSpeed hub (it asks for the USB 2.0 hub descriptor,

@@ -101,6 +101,33 @@ try {
             Test-Image -Path synthetic -ImageFlavor qemu -Rules $rules
             Assert-True ($script:importFailures.Count -eq $case.Failures) $case.Name
         }
+
+        # The HCD's own two rules, on the same matcher. A usbport.sys import is
+        # refused even when a row admits it: the rule is unconditional, not a
+        # missing allowlist row.
+        function Invoke-Dumpbin { @('    USBPORT.SYS', '        0 USBPORT_RegisterUSBPortDriver', '    Summary') }
+        Set-Content -LiteralPath $split -Encoding ASCII -Value @('[imports]', 'USBPORT.SYS!USBPORT_RegisterUSBPortDriver all required')
+        $rules = Read-AllowFile $split
+        $script:importFailures = @()
+        Test-Image -Path synthetic -ImageFlavor release -Rules $rules
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'imports nothing from usbport.sys' }).Count -ge 1) "a USBPORT.SYS import is refused even with an allowlist row: $($script:importFailures)"
+
+        # An empty import table passes only with the scaffold marker in the
+        # image's bytes. An empty allowlist, so no missing-required-import
+        # failure can stand in for the rule under test.
+        function Invoke-Dumpbin { @('    Summary') }
+        Set-Content -LiteralPath $split -Encoding ASCII -Value @('[imports]')
+        $rules = Read-AllowFile $split
+        $marked = Join-Path $work 'marked.sys'
+        $bare = Join-Path $work 'bare.sys'
+        [System.IO.File]::WriteAllBytes($marked, [System.Text.Encoding]::ASCII.GetBytes("MZ`0XHCI98_SCAFFOLD_DO_NOT_STAGE`0"))
+        [System.IO.File]::WriteAllBytes($bare, [System.Text.Encoding]::ASCII.GetBytes("MZ`0"))
+        $script:importFailures = @()
+        Test-Image -Path $marked -ImageFlavor release -Rules $rules
+        Assert-True ($script:importFailures.Count -eq 0) "an empty import table with the scaffold marker is accepted: $($script:importFailures)"
+        $script:importFailures = @()
+        Test-Image -Path $bare -ImageFlavor release -Rules $rules
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'does not carry the scaffold marker' }).Count -eq 1) "an empty import table without the scaffold marker is refused: $($script:importFailures)"
     }
 
     # ---------------------------------------------------------------------
@@ -210,36 +237,27 @@ try {
             }
         }
     }
-    Assert-True ($rows.Count -gt 0) "the production allowlist must yield rows"
+    # Since 2026-10-02 the production file is the successor HCD's (design
+    # record 13). The miniport's assertions about its own rows - the qemu-only
+    # WRITE_PORT_UCHAR mirror, the retired file sink, DbgPrint in every flavour
+    # - left with it and come back as the HCD earns each row (26-A.1, 26-A.8).
+    # What holds from the scaffold on:
 
-    $e9 = @($rows | Where-Object { $_.Symbol -ceq "WRITE_PORT_UCHAR" })
-    Assert-True ($e9.Count -eq 1) "WRITE_PORT_UCHAR must appear exactly once"
-    if ($e9.Count -eq 1) {
-        Assert-True ($e9[0].Module -ieq "HAL.dll") "WRITE_PORT_UCHAR must come from HAL.dll - the PE descriptor names the provider"
-        Assert-True ($e9[0].Flavors -eq "qemu") "WRITE_PORT_UCHAR must be qemu-only: it is the sole import delta of the build that gave the E460 a Code 2, and qemu is never published"
-        Assert-True ($e9[0].Requirement -eq "required") "WRITE_PORT_UCHAR must be REQUIRED in qemu, so a qemu build that lost the mirror is caught too"
+    # No usbport.sys pair, ever: the HCD replaces it.
+    Assert-True (@($rows | Where-Object { $_.Module -ieq "USBPORT.SYS" }).Count -eq 0) "the HCD's allowlist must carry no USBPORT.SYS row - it replaces usbport.sys"
+
+    # The pool pair 25.3 evidenced is the only one the HCD may ever use, and
+    # until 26-A.1 adds its rows the whole family is denied.
+    $denied = @()
+    foreach ($line in ($r.Text -split "`r?`n")) {
+        if ($line -match "^deny (\S+)$") { $denied += $Matches[1] }
     }
-
-    $qemuOnly = @($rows | Where-Object { $_.Flavors -eq "qemu" } | ForEach-Object { $_.Symbol })
-    Assert-True (($qemuOnly -join "|") -ceq "WRITE_PORT_UCHAR") "WRITE_PORT_UCHAR must be the ONLY qemu-only row - anything else here is an import no shipping binary may have, and that is a decision, not an accident"
-
-    # Task 13-L.2 retired the file sink. Its three imports must be gone rather
-    # than left allowed-but-unused: an allowlist row is a permission, and a
-    # permission nothing needs is one a later change can spend without notice.
-    foreach ($gone in @("ZwCreateFile", "ZwWriteFile", "ZwClose")) {
-        Assert-True (@($rows | Where-Object { $_.Symbol -ceq $gone }).Count -eq 0) "$gone must be gone with the file sink (task 13-L.2)"
+    foreach ($never in @("ExFreePoolWithTag", "ExAllocatePool", "MmGetPhysicalAddress", "HalGetAdapter", "HalAllocateCommonBuffer")) {
+        Assert-True ($denied -ccontains $never) "$never must be denied: design record 13 sections 7 and 11 found no Windows 98 precedent for it"
     }
-
-    # The flush's IRQL guard outlives the sink that motivated it, and DbgPrint
-    # is still every flavour's.
-    foreach ($kept in @("KeGetCurrentIrql", "DbgPrint")) {
-        $row = @($rows | Where-Object { $_.Symbol -ceq $kept })
-        Assert-True ($row.Count -eq 1) "$kept must still be allowed"
-        if ($row.Count -eq 1) {
-            Assert-True ($row[0].Flavors -eq "all") "$kept must be allowed in every flavour"
-        }
-    }
-} catch {
+    foreach ($row in $rows) {
+        Assert-True ($denied -cnotcontains $row.Symbol) "$($row.Symbol) is both allowed and denied"
+    }} catch {
     # An exception mid-suite is a FAILED TEST, not a crashed script. Without
     # this the run died at the throw with $ErrorActionPreference = "Stop",
     # printed no summary line, and left the reader to tell a broken harness

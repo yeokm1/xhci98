@@ -426,36 +426,45 @@ the upgrade baseline package(s) are not staged:
   - $($missing -join "`n  - ")
 The baseline is the package as it was actually built at version
 $BaselineVersion, so it is regenerated from git rather than rebuilt from these
-sources under an older version string:
-
-  git checkout $BaselineCommit -- src
-  scripts\build-driver.cmd both
-  powershell -File scripts\package\make-package.ps1 -Flavor debug   -OutDir out\media-11v\old-$BaselineVersion-debug
-  powershell -File scripts\package\make-package.ps1 -Flavor release -OutDir out\media-11v\old-$BaselineVersion-release
-  git checkout HEAD -- src
-  scripts\build-driver.cmd all
-
-COMMIT OR STASH src FIRST. Both checkouts overwrite the index and the working
-tree, so uncommitted work under src is destroyed with no warning from git. If
-you would rather not touch this tree at all, use a worktree instead - it needs
-its own generated import library:
+sources under an older version string - in a worktree of the WHOLE baseline
+commit, built and packaged by that commit's own scripts:
 
   git worktree add ..\xhci98-baseline $BaselineCommit
   cd ..\xhci98-baseline
-  scripts\make-usbport-lib.cmd
-  scripts\build-driver.cmd both
-  ...package from there, then: cd - ; git worktree remove ..\xhci98-baseline
+  set MSVC6=<this tree>\tools\MSVC600
+  set DDKROOT=<this tree>\tools\ntddk
+  set WDK71=<this tree>\tools\WinDDK71
+  set WDKROOT=<this tree>\tools\WinDDK71
+  cmd /c scripts\make-usbport-lib.cmd
+  cmd /c scripts\build-driver.cmd both -NoTargetEvidence
+  powershell -File scripts\package\make-package.ps1 -Flavor debug   -NoTargetEvidence -OutDir <this tree>\out\media-11v\old-$BaselineVersion-debug
+  powershell -File scripts\package\make-package.ps1 -Flavor release -NoTargetEvidence -OutDir <this tree>\out\media-11v\old-$BaselineVersion-release
+  cd <this tree>
+  git worktree remove ..\xhci98-baseline
 
-Check out the WHOLE of src, not just xhci98.inf and xhci98.rc. Those two carry
-the version and nothing else, so checking out only them builds TODAY'S driver
-wearing an old version number - which is exactly the lying package the comment
-above this recipe says a baseline must not be, and it is what this recipe said
-to do until the post-Phase 13 review rounds. Only 'both' is needed for the baseline because a
-baseline is a shipping flavour; the restore says 'all' so this tree gets its
-qemu build back.
+Not "git checkout <commit> -- src" in this tree, which this recipe said until
+2026-10-02: since then src\ is the successor HCD (design record 13), and this
+tree's build wrapper, gates and packager hold the HCD's rules and no longer
+generate the usbport import library a miniport baseline links against, so a
+miniport src\ fails them before it builds. A baseline is built by the scripts
+it was released with. Only 'both' is needed because a baseline is a shipping
+flavour.
 
-Verified end to end: checkout, build, package, and the staged
-result is accepted by this script's own baseline check as the baseline / debug.
+The four variables are the toolchain, as absolute paths into this tree: git
+populates none of the ignored tools\ in a worktree (it creates the directory
+only for the tracked tools\w98se.url.example), and the baseline's scripts
+default MSVC6, DDKROOT, WDK71 and WDKROOT to the worktree's own tools\ - MSVC
+6.0 for make-usbport-lib.cmd, the Windows 2000 DDK and WDK 7.1 for the build
+and its host suites. The extracted target binaries the import gate reads as
+evidence are not reached that way, so the build and the packager run with
+-NoTargetEvidence;
+the committed allowlist is still enforced. Each wrapper runs in a child
+cmd because the baseline's build-driver.cmd calls test\run-host-tests.cmd,
+which leaves the shell in test\ - the packaging lines after it are relative to
+the worktree root. The recipe is cmd's, one command per line; from
+PowerShell write `$env:MSVC6 = "..." and so on.
+The recipe is x86 only; an -amd64 build in the same shell refuses the
+inherited DDKROOT (the Windows 2000 DDK) by design, so clear it first.
 
 Re-run this script afterwards, or pass -SkipBaselineCheck if the run being
 prepared has no upgrade leg.

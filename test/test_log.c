@@ -9,8 +9,9 @@
  *
  * The half this suite deliberately does **not** cover is named rather than
  * implied: the `KeGetCurrentIrql` measurement, the two registry reads and the
- * `DbgPrint` emission are in src/xhci_dispatch.c and are exercised through
- * test_init.c's stand-ins.
+ * `DbgPrint` emission were in the miniport's src/xhci_dispatch.c, exercised
+ * through its test_init.c; both left the tree on 2026-10-02 (branch 1.2.0.0),
+ * and the HCD's own suites take that half up (26-A.9).
  *
  * *(This paragraph also named `ZwCreateFile`/`ZwWriteFile` and asked whether
  * the NT path form reaches a file system on Windows 98. Task 13-L.2 retired the

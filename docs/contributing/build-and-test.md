@@ -1,5 +1,16 @@
 # Build and Test Guide
 
+> **Since 2026-10-02 `src\` builds the successor HCD, not the miniport** (owner;
+> `docs/contributing/roadmap-hcd.md`, decisions table; design record 13
+> section 5.1). The miniport's sources left the tree and are on branch
+> `1.2.0.0`; `scripts\make-usbport-lib.cmd`, `scripts\usbport-lib\` and the
+> `usbport.lib` step are gone with them, as are the probe and failed-start
+> artifacts. `scripts\build-driver.cmd` builds `xhci98.sys` from `src\` with no
+> import library, and the import and INF gates hold it to the HCD's rules
+> (design record 13 section 9). The rest of this guide - the VMs, the targets,
+> install, packaging and the bench - still describes the miniport where it
+> names usbport, and is rewritten as Phase 26 reaches each part.
+
 ## Prerequisites
 
 ### Host Machine (Windows)

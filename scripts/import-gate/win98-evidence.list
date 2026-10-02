@@ -60,6 +60,30 @@ tools\nusb-extracted\USBSTOR.SYS     4.90.3000.1     21040 B92A6A1582287867D4950
 tools\nusb-extracted\USBAUTH.SYS     4.90.3000.1      6608 12B09E67A5A9A8A883AB40B91C59BE294F2DDC5940B9780C056176DF04A463D1 NUSB
 tools\nusb-extracted\USBU2A.SYS      1.42             5183 1C5656DCF3DBBCA97236FC0239537A34AE5A6CA1597F29CADC9C38537B2A7B78 NUSB
 
+# Tiers A and B of roadmap task 25.3's reading, added for the successor HCD
+# (design record 13 section 7 and Appendix A.1). Tier C and NUSB 3.6's files
+# are listed there and not here: each listed file costs one dumpbin per run.
+
+# --- Windows 98 SE CD, the USB 1.1 host controller drivers (task 25.3) ---
+# Extracted by 7-Zip from the SE CD's win98\*.CAB set (Win98SE.iso SHA-256
+# C048C31E...F7F584); each length agrees with the layout*.inf entry quoted.
+# The closest precedent an HCD has: IoGetDmaAdapter, IoConnectInterrupt,
+# KeSynchronizeExecution, MmMapIoSpace, pool, DPCs and timers.
+tools\win98se-extracted\wdm\openhci.sys        4.10.2222        23632 6E3D33A8868CE146F37EE24556692E477928E57E2B4FE5D4A865DB6200CE401D Win98 SE CD - MINI NT Universal HCD for USB; layout.inf "openhci.sys=5,,23632"
+tools\win98se-extracted\wdm\uhcd.sys           4.10.2222        30448 7457D69EBC5D7ED456C8401B19C218A21FE16ADC8BC8E3D0D2C744785654554B Win98 SE CD - Universal Host Controller Driver; layout.inf "uhcd.sys=5,,30448"
+
+# --- Windows 98 SE CD, class/bus drivers that are the only stock precedent ---
+# for a pair the HCD may need (design record 13, Appendix A.1, lists which pair each covers).
+tools\win98se-extracted\wdm\acpi.sys           4.10.2222        83136 3DDCACEC1D9D6580415666DC839E257E8DBE763719061952BCF665514254A338 Win98 SE CD - ACPI.SYS miniport; layout.inf "acpi.sys=5,,83136"
+tools\win98se-extracted\wdm\battc.sys          4.10.2222         6432 792041B3EDF7A5CFD807DB64A474399AD47FF9F48896D33448252397AC79329B Win98 SE CD - Battery Class Driver; layout.inf "battc.sys=5,,6432"
+tools\win98se-extracted\wdm\bt829.sys          4.10.2222        37776 ED37E6A6685D4EA9305FF7D5EF6E64CD7CA528406A1AF5121F3A7D319FF8E02D Win98 SE CD - WDM Video Capture Driver; layout.inf "bt829.sys=20,,37776"
+tools\win98se-extracted\wdm\ccport.sys         4.10.2222        31680 0D09CE27EA50767FE9213D3EC17D70D92A1F2B0FB98CDCBF29F488B216F3667B Win98 SE CD - WDM Modem Port Driver; layout2.inf "ccport.sys=5,,31680"
+tools\win98se-extracted\wdm\hidclass.sys       4.10.2222        23520 2432B4D46C3D9291B49F47FC035DA182150D41CAB46D938DF5924F4603BBD9DF Win98 SE CD - HID Class Driver; layout.inf "hidclass.sys=5,,23520"
+tools\win98se-extracted\wdm\ks.sys             4.10.2222        98432 3548733A21060B88D6CAB8DF822D0F68C0B98F6B9C207A8EC63BDCA76F67A35C Win98 SE CD - Kernel CSA Library; layout.inf "ks.sys=5,,98432"
+tools\win98se-extracted\wdm\ohci1394.sys       4.10.2222        35648 37F690E9135360B8082C12E8E4E9BF9A08D33D1FE877AA523C7D1BB46F30E365 Win98 SE CD - 1394 OpenHci Port Driver; layout.inf "ohci1394.sys=5,,35648"
+tools\win98se-extracted\wdm\sbp2port.sys       4.10.2222        32592 14CC37722AF4690E34110A2C1371EDB3A54241F137F1C92E1E3E2BC4E2121E46 Win98 SE CD - 1394 Bus Device Driver; layout2.inf "sbp2port.sys=5,,32592"
+tools\win98se-extracted\wdm\wdmaud.sys         4.10.2222        68096 014CA5DF60B6840FCFEFB8B83FCD611B5C8C6F93BE77615E759AD2AAE6B424F4 Win98 SE CD - MMSYSTEM Wave/Midi API mapper; layout.inf "wdmaud.sys=20,,68096"
+
 [nametable]
 
 # Extracted from WIN98_54.CAB on the Win98 SE CD, the cab named by the media's

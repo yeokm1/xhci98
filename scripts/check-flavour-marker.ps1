@@ -12,7 +12,7 @@ published binaries, of which the debug one gave the ThinkPad E460 a Code 2 under
 Windows 98 SE; why it failed is not established) and is never published.
 
 So each image carries one `XHCI98_FLAVOUR_*` string, emitted by
-`src/xhci_dispatch.c` from a define `src/sources` derives from `BUILD_ALT_DIR` -
+`src/hcd_entry.c` (`src/xhci_dispatch.c` in the miniport) from a define `src/sources` derives from `BUILD_ALT_DIR` -
 the same variable that decides the output tree, so the defines and the directory
 cannot disagree. `DriverEntry` reads it so the linker cannot drop it.
 
