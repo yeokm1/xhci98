@@ -3290,7 +3290,7 @@ writes none of them: the installer creates all six.
 
   A value outside 10-4000 is REPLACED BY 4000, not rounded to the nearest
   limit, so a mistyped 0 cannot turn moderation off. 4000 is the
-  controller's own power-on value and what every earlier release ran at.
+  controller's own power-on value.
 
   ATTO Disk Benchmark with an MSSU10-128GSR flash drive at 500 (125
   microseconds), on a ThinkPad P14s Gen 1 under Windows 98 SE, gives about

@@ -42,8 +42,9 @@ High-Speed hub switch" below says what it does and how to turn it on. The
 same release also fixes the Code 10 a Low-Speed device behind a hub showed
 under SweetLow's stack at 250 Hz and faster (GitHub issue 4), and a
 High-Speed interrupt device behind a USB 2.0 hub, which could be polled every
-125 microseconds, is now polled at the interval it asks for; both whatever the
-switch is set to.
+125 microseconds, is now polled at the interval usbport sets for it (the one
+the device asks for, up to usbport's 4 ms limit); both whatever the switch is
+set to.
 
 It is a miniport for `usbport.sys`, not a whole USB stack. It plugs in
 underneath Microsoft's USB port driver the same way the in-box `usbehci.sys`

@@ -44,8 +44,9 @@ directories.
   (GitHub issue 4).
 - Fixed, whatever the switch is set to: a High-Speed interrupt device behind
   a USB 2.0 hub, a mouse for example, could be polled every 125 microseconds
-  rather than at the interval it asks for. It worked, but kept the bus busier
-  than it needed to. Read in virtual machines on Windows 98 SE under
+  rather than at the interval usbport sets for it (the one the device asks
+  for, up to usbport's 4 ms limit). It worked, but kept the bus busier than
+  it needed to. Read in virtual machines on Windows 98 SE under
   SweetLow's stack, ME, 2000, 32-bit XP, XP x64 and Vista in both
   architectures.
 - Fixed on Windows Vista and 7: the driver could arm one of usbport's timers
