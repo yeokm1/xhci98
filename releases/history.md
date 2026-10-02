@@ -29,8 +29,9 @@ directories.
   device plugged into a root port, and goes with it) or `2` (every USB 2.0
   port carries one from start to stop). Behind it a mouse on a root port
   polls at the rate it asks for, a Full-Speed audio device on a root port
-  streams from Windows XP on, and on Windows Vista and 7 a USB 1.1 hub on a
-  root port no longer crashes the machine. The hub is one more entry in
+  plays from Windows XP on (the release notes say where it was read), and on
+  Windows Vista and 7 a USB 1.1 hub on a root port no longer crashes the
+  machine. The hub is one more entry in
   Device Manager and one more tier in a chain of hubs: with the switch on, a
   chain of external hubs can be one hub shorter than USB's five. Its id is
   pid.codes' shared test id `1209:0001`, set by two string values the install
