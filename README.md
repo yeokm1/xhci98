@@ -36,7 +36,7 @@ SuperSpeed would mean rewriting the entire USB HCD (Host Controller Driver) for 
 
 Every USB 3.x connector (USB4/Thunderbolt included) also carries the USB 2.0 wires and xHCI exposes them as a separate logical port per connector. This driver manages those USB 2.0 ports and leaves the USB 3.x ones unpowered so a SuperSpeed-capable device falls back on the USB 2.0 port and runs at High-Speed.
 
-A USB 3.0 HCD is currently being planned as this driver's successor, to start once this driver stabilises. The [future plan](docs/future-plans/superspeed-hcd-reimplementation.md) records what it involves. Until then, this driver remains USB 2.0 only.
+A USB 3.0 HCD is planned for the next release, as this driver's successor. The [future plan](docs/future-plans/superspeed-hcd-reimplementation.md) records what it involves. Until then, this driver remains USB 2.0 only.
 
 ## Installation Steps
 
