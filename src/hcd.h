@@ -98,6 +98,7 @@ typedef struct _HCD_CONTROLLER {
     ULONG PowerRequestFailures;
     DEVICE_POWER_STATE PowerDirectWant;
     ULONG SuspendedInD0;
+    KEVENT PowerGate;
     ULONG WakesWithoutPower;
     WORK_QUEUE_ITEM PowerWork;
     PIRP PowerWorkIrp;
@@ -184,6 +185,8 @@ VOID HcdStopController(PHCD_CONTROLLER hc);
 VOID HcdControllerInitObjects(PHCD_CONTROLLER hc);
 VOID HcdThreadWake(PHCD_CONTROLLER hc);
 VOID HcdControllerFail(PHCD_CONTROLLER hc);
+VOID HcdPowerGateEnter(PHCD_CONTROLLER hc);
+VOID HcdPowerGateLeave(PHCD_CONTROLLER hc);
 
 /* hcd_dma.c */
 NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc);

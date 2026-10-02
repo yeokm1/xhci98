@@ -676,6 +676,19 @@ function Get-ObjectImportRefs {
 # through a macro of another spelling is not seen, which the per-object check
 # on x86 does see; an amd64-only call written by name is (Codex review of
 # 26-A.2, round 1, finding 10).
+# C joins a backslash-newline before it reads a token (translation phase 2),
+# and `??/` is a backslash under trigraph replacement (phase 1), so a name can
+# be split across lines and still compile to the import (Codex review of
+# 26-A.2, round 5, finding 3). The scan joins them first. What it still cannot
+# see is a name assembled by token pasting (`##`) inside a macro - the one
+# spelling that needs the preprocessor itself; the x86 per-object check sees
+# it in shared code, and an amd64-only pasted call is the scan's recorded
+# residual.
+function Join-CSplices {
+    param([string]$Text)
+    return ($Text -replace "(\\|\?\?/)\r?\n", "")
+}
+
 function Test-ImportSitesFromSource {
     param(
         [string]$ImagePath,
@@ -689,7 +702,7 @@ function Test-ImportSitesFromSource {
     # any object through a macro, and no per-file scan can attribute it, so
     # none is allowed in one (Codex review of 26-A.2, rounds 2 and 3).
     foreach ($header in @(Get-ChildItem -LiteralPath $srcDir -Filter "*.h" -File -Recurse -ErrorAction SilentlyContinue)) {
-        $headerText = [System.IO.File]::ReadAllText($header.FullName)
+        $headerText = Join-CSplices ([System.IO.File]::ReadAllText($header.FullName))
         foreach ($row in $SiteRows) {
             if ($headerText -cmatch ("\b" + [regex]::Escape($row.Symbol) + "\b")) {
                 Add-Failure "$($row.Module)!$($row.Symbol) is named in the header $($header.FullName): a macro there could reach any object, so a SITES-restricted name may not appear in a header (source scan, the objects being LTCG)."
@@ -702,7 +715,7 @@ function Test-ImportSitesFromSource {
             Add-Failure "SITES rule: $($obj.Name) beside $ImagePath is an unreadable LTCG object and its source $source was not found, so the rule cannot be checked for it."
             continue
         }
-        $text = [System.IO.File]::ReadAllText($source)
+        $text = Join-CSplices ([System.IO.File]::ReadAllText($source))
         foreach ($row in $SiteRows) {
             if ($text -cnotmatch ("\b" + [regex]::Escape($row.Symbol) + "\b")) {
                 continue

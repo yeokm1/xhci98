@@ -57,6 +57,7 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
     PIO_STACK_LOCATION stack;
 
     stack = IoGetCurrentIrpStackLocation(irp);
+    HcdPowerGateEnter(hc);
     if (hc->ControllerStarted &&
         (hc->Common.DevicePower != PowerDeviceD0 || hc->SuspendedInD0)) {
         hc->SuspendedInD0 = 0;
@@ -66,6 +67,7 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
         }
     }
     hc->Common.DevicePower = PowerDeviceD0;
+    HcdPowerGateLeave(hc);
     (VOID)PoSetPowerState(hc->Common.Self, DevicePowerState,
                           stack->Parameters.Power.State);
     PoStartNextPowerIrp(irp);
@@ -91,7 +93,17 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
  *
  * IRQL: PASSIVE_LEVEL.
  */
+static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc);
+
 static VOID hcdDirectTransition(PHCD_CONTROLLER hc)
+{
+    HcdPowerGateEnter(hc);
+    hcdDirectTransitionGated(hc);
+    HcdPowerGateLeave(hc);
+}
+
+/* The body of hcdDirectTransition, the power gate held. */
+static VOID hcdDirectTransitionGated(PHCD_CONTROLLER hc)
 {
     if (hc->PowerDirectWant != PowerDeviceD0) {
         if (hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
@@ -284,6 +296,7 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
     }
 
     if (stack->MinorFunction == IRP_MN_SET_POWER) {
+        HcdPowerGateEnter(hc);
         if (hc->ControllerStarted &&
             hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
             XhciSuspendController(&hc->Hc);
@@ -291,6 +304,7 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
         /* Suspended either way now, and the D0 that follows resumes it. */
         hc->SuspendedInD0 = 0;
         hc->Common.DevicePower = stack->Parameters.Power.State.DeviceState;
+        HcdPowerGateLeave(hc);
         (VOID)PoSetPowerState(hc->Common.Self, DevicePowerState,
                               stack->Parameters.Power.State);
         irp->IoStatus.Status = STATUS_SUCCESS;

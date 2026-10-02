@@ -50,8 +50,38 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
 /* --------------------------------------------------------------------- */
 
 /*
+ * The query routine for hcdReadDword: a value is taken only when it is a
+ * REG_DWORD of four bytes. RTL_QUERY_REGISTRY_DIRECT would instead write a
+ * value of another type in that type's own form - a REG_SZ as a
+ * UNICODE_STRING - over the four-byte destination (Codex review of 26-A.2,
+ * round 5, finding 1), and the flag that makes DIRECT check the type is
+ * newer than both primary targets. IRQL: PASSIVE_LEVEL.
+ */
+static NTSTATUS NTAPI hcdTakeDword(PWSTR ValueName, ULONG ValueType,
+                                   PVOID ValueData, ULONG ValueLength,
+                                   PVOID Context, PVOID EntryContext)
+{
+    PULONG out;
+    PUCHAR from;
+
+    UNREFERENCED_PARAMETER(ValueName);
+    UNREFERENCED_PARAMETER(Context);
+
+    if (ValueType != REG_DWORD || ValueLength != sizeof(ULONG) ||
+        ValueData == NULL) {
+        return STATUS_OBJECT_TYPE_MISMATCH;
+    }
+    out = (PULONG)EntryContext;
+    from = (PUCHAR)ValueData;
+    *out = (ULONG)from[0] | ((ULONG)from[1] << 8) | ((ULONG)from[2] << 16) |
+           ((ULONG)from[3] << 24);
+    return STATUS_SUCCESS;
+}
+
+/*
  * One REG_DWORD from the controller's driver (software) key, the key the
- * miniport's values lived in. Returns the NTSTATUS; *value is untouched on
+ * miniport's values lived in. Returns the NTSTATUS - a value of the wrong
+ * type is a failure, and the caller's default stands; *value is untouched on
  * failure. IRQL: PASSIVE_LEVEL.
  */
 static NTSTATUS hcdReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value)
@@ -59,7 +89,6 @@ static NTSTATUS hcdReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value)
     RTL_QUERY_REGISTRY_TABLE table[2];
     HANDLE key;
     ULONG found;
-    ULONG fallback;
     NTSTATUS status;
     PUCHAR p;
     ULONG i;
@@ -75,13 +104,10 @@ static NTSTATUS hcdReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value)
         p[i] = 0;
     }
     found = 0;
-    fallback = 0;
-    table[0].Flags = RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_REQUIRED;
+    table[0].QueryRoutine = hcdTakeDword;
+    table[0].Flags = RTL_QUERY_REGISTRY_REQUIRED;
     table[0].Name = (PWSTR)name;
     table[0].EntryContext = &found;
-    table[0].DefaultType = REG_DWORD;
-    table[0].DefaultData = &fallback;
-    table[0].DefaultLength = sizeof(ULONG);
 
     status = RtlQueryRegistryValues(RTL_REGISTRY_HANDLE, (PWSTR)key, table,
                                     NULL, NULL);
@@ -250,6 +276,25 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
     hc->DpcClosed = 1;
     KeInitializeEvent(&hc->WorkEvent, SynchronizationEvent, FALSE);
     KeInitializeEvent(&hc->CmdDoneEvent, SynchronizationEvent, FALSE);
+    KeInitializeEvent(&hc->PowerGate, SynchronizationEvent, TRUE);
+}
+
+/*
+ * The power gate: a synchronization event used as a mutex - KeInitializeMutex
+ * has no allowlist row - held by the in-place recovery and by every path that
+ * suspends or resumes the controller, so the two never interleave on two
+ * processors. IRQL: PASSIVE_LEVEL to enter.
+ */
+VOID HcdPowerGateEnter(PHCD_CONTROLLER hc)
+{
+    (VOID)KeWaitForSingleObject(&hc->PowerGate, Executive, KernelMode, FALSE,
+                                NULL);
+}
+
+/* IRQL: <= DISPATCH_LEVEL. */
+VOID HcdPowerGateLeave(PHCD_CONTROLLER hc)
+{
+    (VOID)KeSetEvent(&hc->PowerGate, IO_NO_INCREMENT, FALSE);
 }
 
 /* IRQL: <= DISPATCH_LEVEL. */
@@ -275,21 +320,31 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
 
     ext = &hc->Hc;
     go = 0;
+
+    /* The power gate excludes every suspend and resume for the whole
+     * recovery, and the powered state is re-read under it: a recovery decided
+     * before a power-down on another processor would otherwise reprogram a
+     * controller the bus has just taken to D3 (Codex review of 26-A.2, round
+     * 5, finding 2). */
+    HcdPowerGateEnter(hc);
     XhciControllerLockAcquire(ext, &oldIrql);
     if (ext->RecoveryRequested && ext->ControllerFailed &&
         (ext->Flags & XHCI_EXT_FLAG_SUSPENDED) == 0 &&
+        hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0 &&
         ext->RecoveryFailuresConsecutive < XHCI_RECOVERY_MAX_ATTEMPTS) {
         ext->RecoveryRequested = 0;
         go = 1;
     }
     XhciControllerLockRelease(ext, oldIrql);
     if (!go) {
+        HcdPowerGateLeave(hc);
         return;
     }
 
     KeRaiseIrql(DISPATCH_LEVEL, &raised);
     ok = XhciRecoverController(ext);
     KeLowerIrql(raised);
+    HcdPowerGateLeave(hc);
 
     if (!ok) {
         XhciControllerLockAcquire(ext, &oldIrql);

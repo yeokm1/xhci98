@@ -208,3 +208,26 @@ recorded guest run has exercised - it is reachable on any target, not
 provokable on purpose here - so no guest leg was run for them; the gates ran
 on both architectures. Round 4 then found the fallback's marker surviving a
 stop and start, which could skip the next suspend; the start now resets it.
+
+### Rounds 4 and 5, and their fixes
+
+Round 4 confirmed the round-3 fixes and found the fallback's
+`SuspendedInD0` marker surviving a stop and start, which could skip the next
+suspend; the start now resets it (`34d2fe2`). Round 5, over the whole range,
+found two MAJOR and one MINOR beside the recorded thread-reference window.
+Fixed: the registry reads go through a query routine that takes a value only
+when it is a four-byte `REG_DWORD` - `RTL_QUERY_REGISTRY_DIRECT` would write a
+`REG_SZ` as a `UNICODE_STRING` over the four-byte destination, and the flag
+that makes it check the type is newer than both targets; the in-place
+recovery and every suspend and resume now share a power gate (an event used
+as a mutex), and the recovery re-reads under it that the function is in D0
+and not suspended - an inherited miniport limitation, reached here because
+the HCD's thread and its power dispatch run on different processors; and the
+LTCG source scan joins C line splices (and `??/` trigraph splices) before
+matching, with token pasting recorded in the gate as the scan's residual.
+
+**Both primaries on that build** (`f6d394c0...5b11`): working, two
+disable/enable cycles, a shutdown, as in rounds 1 and 2. The Windows 2000
+agent wrote its notes from its round-1 notes because every observation
+matched, its screenshots being this leg's own. Notes `r5-98-notes.md`,
+`r5-2k-notes.md`.

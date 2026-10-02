@@ -61,7 +61,7 @@ try {
     # image is needed, so split-flavour rows are checked before the first link.
     & {
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($gate, [ref]$null, [ref]$null)
-        foreach ($name in @('Get-ImportPairs', 'Read-AllowFile', 'Get-ObjectImportRefs', 'Test-ImportSitesFromSource', 'Test-ImportSites', 'Test-Image')) {
+        foreach ($name in @('Get-ImportPairs', 'Read-AllowFile', 'Get-ObjectImportRefs', 'Join-CSplices', 'Test-ImportSitesFromSource', 'Test-ImportSites', 'Test-Image')) {
             $function = $ast.Find({ param($node)
                 $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
             }, $true)
@@ -212,6 +212,10 @@ try {
         Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
         Assert-True (@($script:importFailures | Where-Object { $_ -match 'named in the header .*compat' }).Count -eq 1) "SITES over LTCG objects refuses a restricted name in a nested header: $($script:importFailures)"
         Remove-Item -LiteralPath (Join-Path $siteSrc 'compat\alias.h')
+        Set-Content -LiteralPath (Join-Path $siteSrc 'hcd_pnp.c') -Encoding ASCII -Value @('void g(void *p) { ExFree\', 'Pool(p); }')
+        $script:importFailures = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'named in .*hcd_pnp\.c' }).Count -eq 1) "SITES over LTCG objects joins a backslash-newline before matching: $($script:importFailures)"
         $script:mixedObjects = $true
         $script:importFailures = @()
         Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
