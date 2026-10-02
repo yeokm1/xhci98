@@ -3312,11 +3312,78 @@ Notes, none a stop condition (the owner accepted both runs on 2026-10-02):
   value-1 post-churn ring wrapped; the mid-churn reading covers the first
   half.
 
+## Round 12: the device matrix on the rebuild (2026-10-02, development host C)
+
+Windows 98 SE (`2a-fresh`) and 2000 (`2b-fresh`) on `d30234c`, re-cloned
+from their base snapshots, prepared on this build and run with
+`run-matrix.ps1 -PostRelease` (17 rows each, `-snapshot`) at 0, 1 and 2.
+One image per switch value: `fresh-2a.img` and `fresh-2b.img` carried 0
+and then 1, `fresh-2a-sw2.img` and `fresh-2b-sw2.img` carried 2, and the
+switch-2 pair ran beside the others from a second config with its own
+images, output folder and monitor ports. Four VMs ran at once on eight
+logical CPUs. Reports `out\t24-3-4\r12-matrix-report.md` (2000 at 0 and
+1), `r12-matrix-2a-report.md` (98 SE at 0 and 1),
+`r12-matrix-sw2-2b-report.md` and `r12-matrix-sw2-2a-report.md`;
+evidence under `out\t24-3-4\r12-matrix\` and `r12-par\`.
+
+| Guest | 0 | 1 | 2 |
+|---|---|---|---|
+| Windows 2000 SP4 | 11 pass, 6 no driver | 11 pass, 6 no driver | 11 pass, 6 no driver |
+| Windows 98 SE | 8 pass, **1 fail** (audio replug), 5 no driver, 3 excluded | the same | 9 pass, 5 no driver, 3 excluded |
+
+Every report header reads `# vhub: switch N in every group`: the runner
+read the switch the image carried. **The switch-aware rows held at every
+value**: the Full-Speed keyboard and mouse advance the speed-mismatch
+counter by 1 at 0 and leave it at zero at 1 and 2; at 1 and 2 the churn
+reads the depth limit exactly (addressed 10, behind-hub addressed 9, opens
+9, TT pairs disagreeing 0), and at 0 its TT pairs disagreeing advance by
+10. Every stop counter read 0 throughout - controller resets, every
+refusal, `AddressReclaims`, the disown counters, `VhubResetsHeld`, the iso
+error counters - and every log carries the one stamp `22:24:27` and no
+bugcheck.
+
+Notes, none a defect:
+
+- **The hub's name:** the 98 SE wizards showed "xHCI98 virtual HS Hub".
+  2000 installs the hub silently as "Generic USB Hub"; the device's string
+  is in its `Enum\USB\HUB_VID_1209&PID_0001` key.
+- `vhub transfers failed`, about 9-10 per hub dropped at 1: the dropped
+  hub's pending requests complete as cancelled by design (0 at 2, where no
+  hub drops). `VhubCreated` at 1 counts the Full-Speed plugs. The storage
+  group makes no hub at 1: QEMU's `usb-bot/fs` and `usb-uas/fs` attach at
+  High Speed.
+- 2000 at 1: the HID group's Wacom/FS teardown logged two `transfers
+  refused for retry`; both legs passed, and it read 0 everywhere else.
+- **A harness trap, not a reading:** `run-matrix.ps1` launched under
+  `powershell -Command` loses `Read-Counters` inside the liveness probe's
+  `GetNewClosure()` scriptblock, and every group dies after its first
+  `device_add`. 2000's first run at 2 went that way; relaunched with
+  `-File`, it passed. Launch the runner with `-File` and absolute paths.
+
+### The 98 SE audio replug
+
+The one failing row. Five samples on this build: at 0 failed (one other
+guest running), at 1 failed (three others), at 1 alone failed, at 2
+passed (three others), and at 0 alone passed (a re-run, nothing else
+running). A first run at 0 alone was cut short when the guest hung at the
+desktop on the replug, and is not counted. Every failure has one
+signature: the device attached, the driver reported the connect change,
+and usbport never asked for the port reset. A second concurrent guest
+does not explain it - it failed alone and passed beside three others.
+
+This is the Windows 98 audio-replug wedge 23.8 settled as pre-existing
+and intermittent: 1.1.0.0 failed it 4 times in 5 (22.9), Phase 20 failed it
+both beside a second guest and alone, and 1.1.1.0 passed it alone after
+release. It is recorded as **intermittent, pre-existing since at least
+1.1.0.0**, not caused by concurrency and not by the virtual hub (it fails
+at 0, where the hub is off). The guest's GUI hang during the switch-1
+preparation, after the audio attach (Msgsrv32 not responding, then a
+hung shutdown and a ScanDisk boot), is of the same family.
+
 ### What is owed
 
-- The device matrix again on this build (`d30234c`), on freshly cloned
-  images (owner, 2026-10-01); with the switch-aware rows it should read
-  clean on both primary targets.
+- Nothing for 24.3.4: the device matrix on this build reads clean on both
+  primary targets at 0, 1 and 2, but for the known 98 SE audio replug.
 - Nothing else: on 2026-10-02 the owner removed every owed item that does
   not block the `1.2.0.0` cut - hub 4's 10 s install restart, XP's first-boot
   re-address against its setupapi log, and round 9's enabled-not-connected

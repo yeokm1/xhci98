@@ -1025,8 +1025,13 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     passes at 0, 1 and 2 (2026-10-02, `runs/run-24.md`, "Vista on the
     rebuild"): a Full-Speed device behind a virtual hub enumerates, the
     Device Manager "restart required" veto round 6 met at 1 and 2 is gone, and
-    no enable brought a loop. Owed: the device matrix again, on this build's
-    fresh images (owner, 2026-10-01), where it should read clean.
+    no enable brought a loop. **Round 12** (2026-10-02, `runs/run-24.md`,
+    "Round 12"): the device matrix on this build's fresh images, 98 SE and
+    2000 at 0, 1 and 2, every stop counter 0 and every switch-aware row
+    held; 2000 passes at all three, 98 SE at 2, and at 0 and 1 98 SE fails
+    only the audio replug - the intermittent Windows 98 wedge 23.8 settled
+    as pre-existing since at least 1.1.0.0 (2 passes and 3 failures in five
+    samples on this build, alone and beside other guests).
 
   If 24.3.1's record, or any reading in 24.3.4, contradicts the page - a
   hub driver that gives the virtual hub no TT record, a stack that refuses a
