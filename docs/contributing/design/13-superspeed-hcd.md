@@ -980,11 +980,12 @@ section whose pool rows already cite this task: `ExAllocatePool` (not the HCD's 
 `ExFreePool` (the HCD's entry points, denied until 26-A.1 adds their rows
 with the site rule), and `ExFreePoolWithTag` (denied for good). When 26-A.1
 adds rows, this evidence lifts **only** `ExAllocatePoolWithTag` and
-`ExFreePool`. The reading also says the legacy DMA names (`HalGetAdapter`,
-`HalAllocateCommonBuffer`, `HalFreeCommonBuffer`, `IoMapTransfer`,
-`IoFlushAdapterBuffers`, `IoFreeMapRegisters`, `IoAllocateAdapterChannel`)
-and `MmGetPhysicalAddress` belong in that `[deny]`; they are not in it yet.
-The amd64 sibling `xhci98-imports-amd64.allow` carries the one `/GS`
+`ExFreePool`. The reading also puts the legacy DMA names and
+`MmGetPhysicalAddress` in that `[deny]`: `MmGetPhysicalAddress`,
+`HalGetAdapter`, `HalAllocateCommonBuffer` and `HalFreeCommonBuffer` are in
+it already; `IoMapTransfer`, `IoFlushAdapterBuffers`, `IoFreeMapRegisters`
+and `IoAllocateAdapterChannel` are not yet, and none of the eight is in the
+amd64 file's `[deny]`. The amd64 sibling `xhci98-imports-amd64.allow` carries the one `/GS`
 `KeBugCheckEx` row and denies the four pool names pending the same rows.
 
 ### 7.5 The pool rule for the HCD

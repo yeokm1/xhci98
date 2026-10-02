@@ -430,12 +430,13 @@ sources under an older version string - in a worktree of the WHOLE baseline
 commit, built and packaged by that commit's own scripts:
 
   git worktree add ..\xhci98-baseline $BaselineCommit
+  cmd /c mklink /J ..\xhci98-baseline\tools <this tree>\tools
   cd ..\xhci98-baseline
   scripts\make-usbport-lib.cmd
   scripts\build-driver.cmd both
   powershell -File scripts\package\make-package.ps1 -Flavor debug   -OutDir <this tree>\out\media-11v\old-$BaselineVersion-debug
   powershell -File scripts\package\make-package.ps1 -Flavor release -OutDir <this tree>\out\media-11v\old-$BaselineVersion-release
-  cd <this tree> ; git worktree remove ..\xhci98-baseline
+  cd <this tree> ; cmd /c rmdir ..\xhci98-baseline\tools ; git worktree remove ..\xhci98-baseline
 
 Not "git checkout <commit> -- src" in this tree, which this recipe said until
 2026-10-02: since then src\ is the successor HCD (design record 13), and this
@@ -444,6 +445,16 @@ generate the usbport import library a miniport baseline links against, so a
 miniport src\ fails them before it builds. A baseline is built by the scripts
 it was released with. Only 'both' is needed because a baseline is a shipping
 flavour.
+
+The junction is the toolchain: git does not populate the ignored tools\, and
+the baseline's scripts default MSVC6, DDKROOT, WDK71 and WDKROOT to the
+worktree's own tools\ (MSVC 6.0 for make-usbport-lib.cmd, the Windows 2000
+DDK and WDK 7.1 for the build and its host suites, and the extracted target
+binaries the import gate reads). Setting those four to absolute paths under
+this tree works too, with -NoTargetEvidence on the build if the evidence is
+not reachable. Remove the junction with cmd's rmdir before the worktree - never
+PowerShell's rmdir/Remove-Item, which can recurse into the junction's target
+and delete this tree's tools.
 
 Re-run this script afterwards, or pass -SkipBaselineCheck if the run being
 prepared has no upgrade leg.

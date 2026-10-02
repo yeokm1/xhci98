@@ -1138,8 +1138,11 @@ function Get-AddRegValues {
         if ($null -eq $entries) { continue }
         foreach ($e in $entries) {
             # HKR,<subkey>,<value>,<flags>,<data> - subkey empty for the
-            # device's own key, which is the only form this rule allows.
-            if ($e.Text -match ('^\s*HKR\s*,\s*([^,]*)\s*,\s*{0}\s*,\s*([^,]*)\s*,\s*(.*)$' -f [regex]::Escape($ValueName))) {
+            # device's own key, which is the only form this rule allows. The
+            # value name may be quoted: setup reads "EnumPropPages32" and
+            # EnumPropPages32 as one value, so a quoted second write is still
+            # a duplicate.
+            if ($e.Text -match ('^\s*HKR\s*,\s*([^,]*)\s*,\s*"?{0}"?\s*,\s*([^,]*)\s*,\s*(.*)$' -f [regex]::Escape($ValueName))) {
                 $found += @{
                     Section = $ar
                     Line    = $e.Line

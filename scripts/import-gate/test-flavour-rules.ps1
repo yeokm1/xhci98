@@ -113,8 +113,11 @@ try {
         Assert-True (@($script:importFailures | Where-Object { $_ -match 'imports nothing from usbport.sys' }).Count -ge 1) "a USBPORT.SYS import is refused even with an allowlist row: $($script:importFailures)"
 
         # An empty import table passes only with the scaffold marker in the
-        # image's bytes.
+        # image's bytes. An empty allowlist, so no missing-required-import
+        # failure can stand in for the rule under test.
         function Invoke-Dumpbin { @('    Summary') }
+        Set-Content -LiteralPath $split -Encoding ASCII -Value @('[imports]')
+        $rules = Read-AllowFile $split
         $marked = Join-Path $work 'marked.sys'
         $bare = Join-Path $work 'bare.sys'
         [System.IO.File]::WriteAllBytes($marked, [System.Text.Encoding]::ASCII.GetBytes("MZ`0XHCI98_SCAFFOLD_DO_NOT_STAGE`0"))
@@ -124,7 +127,7 @@ try {
         Assert-True ($script:importFailures.Count -eq 0) "an empty import table with the scaffold marker is accepted: $($script:importFailures)"
         $script:importFailures = @()
         Test-Image -Path $bare -ImageFlavor release -Rules $rules
-        Assert-True ($script:importFailures.Count -eq 1) 'an empty import table without the scaffold marker is refused'
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'does not carry the scaffold marker' }).Count -eq 1) "an empty import table without the scaffold marker is refused: $($script:importFailures)"
     }
 
     # ---------------------------------------------------------------------

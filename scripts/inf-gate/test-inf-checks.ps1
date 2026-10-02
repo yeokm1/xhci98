@@ -761,6 +761,9 @@ try {
     Assert-RuleFires "hcd-hubpage-flags" "HCD-HUBPAGE" {
         param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBHubPropPage`"", "HKR,,EnumPropPages,0x00010001,`"sysclass.dll,USBHubPropPage`"")
     }
+    Assert-RuleFires "hcd-hubpage-dup-quoted" "HCD-HUBPAGE" {
+        param($t) $t.Replace("HKR,,EnumPropPages32,,`"usbui.dll,USBHubPropPageProvider`"", "HKR,,EnumPropPages32,,`"usbui.dll,USBHubPropPageProvider`"`r`nHKR,,`"EnumPropPages32`",,`"usbui.dll,USBControllerPropPageProvider`"")
+    }
     Assert-RuleFires "hcd-hubpage-dup" "HCD-HUBPAGE" {
         param($t) $t.Replace("HKR,,EnumPropPages32,,`"usbui.dll,USBHubPropPageProvider`"", "HKR,,EnumPropPages32,,`"usbui.dll,USBHubPropPageProvider`"`r`nHKR,,EnumPropPages32,,`"usbui.dll,USBControllerPropPageProvider`"")
     }
