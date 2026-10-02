@@ -6,11 +6,15 @@ project-status paragraph, the batching convention and task-id rules, the phase
 sequence, Phases 0-16 (everything up to the `1.0.0.0` release, the move to
 specification revision 1.2c and the unattended post-release run), and the
 hand-run acceptance reminder the roadmap ends on. "The roadmap" in another
-document, a script or a source comment means the two files together; a phase
-or task id says which one holds it, 17 and later being here.
+document, a script or a source comment means the three files together; a
+phase or task id says which one holds it, 17 to 24 being here and 25 onward in
+[`roadmap-hcd.md`](roadmap-hcd.md), the successor host controller driver's.
 
-A new phase is added at the end of this file, and its status is written into
-`roadmap.md`'s "Current status" and "Phase sequence" in the same change.
+This file is a closed record since 2026-10-02: Phase 24 closed on the
+`1.2.0.0` cut, the owner froze the miniport at that release, and every later
+phase is the successor's and goes at the end of `roadmap-hcd.md`, with its
+status written into `roadmap.md`'s "Current status" and "Phase sequence" in
+the same change.
 
 ---
 
