@@ -203,6 +203,8 @@ controller and records it as suspended in D0, toward S0 it resumes only from
 that state, and otherwise it touches no hardware and counts the wake; the
 LTCG source scan's header rule covers headers at any depth below the sources;
 the power file's header says which IRPs hold the outstanding count. These
-change nothing on a path a guest can reach (the fallback needs a failed
-power-IRP allocation), so no guest leg was run for them; the gates ran on
-both architectures.
+change only the fallback a failed power-IRP allocation enters, which no
+recorded guest run has exercised - it is reachable on any target, not
+provokable on purpose here - so no guest leg was run for them; the gates ran
+on both architectures. Round 4 then found the fallback's marker surviving a
+stop and start, which could skip the next suspend; the start now resets it.

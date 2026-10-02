@@ -524,6 +524,10 @@ NTSTATUS HcdStartController(PHCD_CONTROLLER hc, PIRP irp)
     for (i = 0; i < sizeof(XHCI_EXTENSION); i++) {
         p[i] = 0;
     }
+    /* The power fallback's marker describes the controller this start
+     * rebuilds, so it is reset with it (Codex review of 26-A.2, round 4,
+     * finding 1). */
+    hc->SuspendedInD0 = 0;
 
     status = hcdParseResources(hc, irp);
     if (!NT_SUCCESS(status)) {
