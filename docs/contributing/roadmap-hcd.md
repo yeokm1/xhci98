@@ -103,15 +103,18 @@ gates, the packager and the harness must learn for a second binary. The one
 piece of code it builds is the empty scaffold of 25.8, so that the build
 path is proven before Phase 26 fills it.
 
-Status: open, added 2026-10-02. Every task was worked on 2026-10-02, in one
+Status: closed 2026-10-03 (below), added 2026-10-02. Every task was worked on 2026-10-02, in one
 session: the readings of 25.2 to 25.6 by subagents, statically, each fact
 tagged and its row added to `legal-provenance.md` section 4 (design record
 13 sections 6 to 10 say which reading is whose), and 25.1, 25.7 and 25.8 by
 the coordinating session. Two owner decisions taken during it changed the
 shape of 25.8 and are in the decisions table: `src\` is the HCD, and the
 HCD is `xhci98.sys`. Design record 13 section 12 is the index of what the
-phase leaves to later tasks. The checkpoint below waits on the owner's
-review; Phase 26 is not opened.
+phase leaves to later tasks. **Closed 2026-10-03:** six Codex review
+rounds over `3c1d7f2..86cc59a` (the last clean), then merged into the
+`2.0.0.0` branch, on the owner's instruction of 2026-10-02 to merge once the
+loop was clean and continue into Phase 26 - taken as the owner's acceptance
+of the checkpoint below.
 
 Why a phase: the miniport's Phase 3 spike and every `-0` batch since exist
 because a body written against an assumed contract cost a rewrite. The HCD
@@ -151,7 +154,10 @@ mass storage, Ethernet and composite audio - through the OS's own class
 drivers, with no `usbport.sys`, `usbhub.sys` or `usbhub20.sys` beneath or
 above it.
 
-Status: not opened. Waits on Phase 25.
+Status: open, 2026-10-03, on branch `phase-26` (the owner's rule of
+2026-10-02: one branch per phase, merged into `2.0.0.0` when its checkpoint
+closes). The owner pre-authorized closing this checkpoint when its written
+clauses pass.
 
 Why a phase: it is the "be usbport" step the architecture record always
 named as the large one, and it is where the HCD either matches the miniport
