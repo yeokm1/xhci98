@@ -345,12 +345,16 @@ function New-PostReleaseHeader {
         [Parameter(Mandatory = $true)][string]$Verdict,
         [Parameter(Mandatory = $true)][int]$Rows,
         [Parameter(Mandatory = $true)][int]$NoDriverExpected,
-        [Parameter(Mandatory = $true)][int]$NotReached
+        [Parameter(Mandatory = $true)][int]$NotReached,
+        # The virtual-hub switch the groups read (lib\verdict.ps1,
+        # Format-VhubSwitchLine): which ExpectBySwitch form judged the rows.
+        [Parameter(Mandatory = $true)][string]$VhubLine
     )
     $h = @()
     $h += "# post-release run"
     $h += ("# driver:    {0}" -f $DriverLine)
     $h += ("# image:     {0}" -f $ImageLine)
+    $h += ("# vhub:      {0}" -f $VhubLine)
     $h += ("# qemu:      {0}, accel {1}" -f $QemuVersion, $Accel)
     $h += ("# offsets:   SIZEOF {0}, {1} counters" -f $Sizeof, $Counters)
     $h += ("# started:   {0}, elapsed {1}" -f $Started.ToString("yyyy-MM-dd HH:mm:ss"), $Elapsed.ToString("h\:mm\:ss"))

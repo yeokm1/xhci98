@@ -183,7 +183,11 @@ sent checked on a throwaway copy before the stamp. XP x64's audio row needs it
 (its audio stack opens the streaming endpoint only with a user session). What
 it costs: with a desktop, a device that has no driver raises a Found New
 Hardware wizard that queues later installs, so check a NODRIVER against its
-screenshot. Design record 09 section 8 has the reasoning.
+screenshot. Design record 09 section 8 has the reasoning. Since 2026-09-25
+`xp64-fresh` and `win7-fresh` clone from a base snapshot that already carries
+those values (`*-clean-autologon`, `build-and-test.md`, "VM snapshots - iterate
+without fear"), so on those two the step is done before `-Clone` and only the
+throwaway-copy boot check remains.
 
 Then the same for `2b-fresh` (`win2k-xonly.img @ win2k-xonly-clean-install`
 -> `vm\fresh-2b.img`; until 2026-09-03 it was `win2k.img @ phase2b-clean`, an
@@ -226,8 +230,11 @@ is what the recorded runs did.
 
 **`xp64-fresh` and `win7-fresh` (2026-09-18, design record 09 section 2.6)**
 are fresh targets of the same shape for Windows XP x64 SP2 and Windows 7 SP1
-x86, cloned from `winxp64.img @ winxp64-clean-install-smp4` and
-`win7.img @ win7-clean-install`. They name their OS with `Family`
+x86, cloned from `winxp64.img @ winxp64-clean-autologon` and
+`win7.img @ win7-clean-autologon` (until 2026-09-25 from
+`winxp64-clean-install-smp4` and `win7-clean-install`, which those two were
+taken from after one logged-on boot that set the automatic logon). They name
+their OS with `Family`
 (`winxp64`, `win7`) rather than inheriting 2b's entries through `Like`,
 boot with `-smp 4` and `tcg,thread=multi` in the run and in the preparation,
 and XP x64 carries `Arch = 'amd64'`: it stages `out\pkg-qemu-amd64`, reads
@@ -304,6 +311,14 @@ checkpoint as unmet.
 
 The body has no timestamps, durations or paths, so a regression shows up as a
 changed line in a diff. Everything variable is in the header.
+
+That includes the virtual-hub switch (`XhciVirtualHSHub`), which the runner
+reads from the running driver at each group boot and prints as `# vhub:` (or
+`# vhub   :` per target in the Phase 10 report). A row whose readings change
+with the switch carries `ExpectBySwitch` in `matrix.psd1` and is judged by the
+form for the value its group read; design record 06 section 3.3 has the
+rule. Nothing in the config declares the value: set it in the image during
+preparation, and the report says what the run found.
 
 A row that is not a clean `PASS` also gets a screenshot. The two commonest
 causes on these targets, a modal wizard and a wedged PnP tree, are invisible

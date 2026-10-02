@@ -366,6 +366,21 @@ function Get-ExtensionIdentityDrift {
     return ""
 }
 
+# Has usbport asked this load for its root hub's data yet?  usbport does that
+# only after StartController has returned, and StartController is where a
+# value-2 virtual hub is stood up (XhciInitController -> XhciRootHubInit), so
+# the virtual-hub counters are settled for the switch reading
+# (lib\verdict.ps1, Get-VhubSwitchReading) once this line is in the log.  The
+# `cb` line is in every build this harness reads, on both architectures.
+function Test-RootHubDataAsked {
+    param([Parameter(Mandatory = $true)][string]$DebugconLog)
+    if (-not (Test-Path -LiteralPath $DebugconLog)) { return $false }
+    foreach ($line in Get-Content -LiteralPath $DebugconLog) {
+        if ($line -match '\bcb\s+RH_GetRootHubData\s') { return $true }
+    }
+    return $false
+}
+
 function Find-ExtensionIdentity {
     # -Arch is the TARGET's architecture, not the log's: on amd64 the `a=` on a
     # callback line is the truncated low half of the pointer, and a boot poll

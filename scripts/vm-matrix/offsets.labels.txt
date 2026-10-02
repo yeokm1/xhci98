@@ -2,6 +2,7 @@
 AbortsDuringCompletion	aborts racing a completion
 AbortsFromCompletionList	aborts taken off the completion list
 AbortsUnmatched	aborts unmatched
+AddressReclaims	addresses reclaimed from idle records
 BusMasterClearRetries	bus master clear retries
 BusMasterCleared	bus master cleared
 CheckCallbacks	check callbacks
@@ -89,6 +90,8 @@ OpensAccepted	endpoint opens accepted
 OpenRefusalsMalformed	endpoint opens refused - malformed call
 OpenRefusalsBuffer	endpoint opens refused - unusable buffer
 OpensTotal	endpoint opens seen
+EndpointPeriodsPromoted	endpoint periods promoted by usbport's budget
+EndpointPipePeriodsMissing	endpoint pipe periods missing
 EndpointPlacementFailures	endpoint placement failures
 CompletionPollInvalidates	endpoint polls requested for a parked completion
 EndpointQuiesceFailures	endpoint quiescence failures
@@ -170,6 +173,7 @@ InterruptMaskFailures	interrupt mask failures
 InterruptMaskDegraded	interrupt masks over a degraded window
 InterruptNextSofRequests	interrupt next-SOF requests
 InterruptUnmaskFailures	interrupt unmask failures
+InterruptArmsTakenByIsr	interrupter arms taken by an ISR claim
 InterruptRearmFailures	interrupter re-arm failures
 IsoCadenceMismatches	iso cadence mismatches - assumed interval
 IsoCadenceMismatchesDerived	iso cadence mismatches - derived interval
@@ -241,6 +245,8 @@ NoOpWitnessFired	No Op self-test witnesses
 OpenRefusalsNoRecord	open refusals - no record
 OrphanedGroupsTotal	orphaned TD groups
 PollEndpointCalls	PollEndpoint callbacks
+DisownsSettledIdle	port disowns settled with idle disowned records
+DisownsSettledEmpty	port disowns settled with no device record
 PortEventChanges	port event changes
 PortEventsMapped	port events mapped
 PortEventsUnmapped	port events unmapped
@@ -326,8 +332,14 @@ RingPool.AcquireFailuresCap	ring pool refusals - per-device cap
 RootHubInvalidates	root hub invalidates
 RootHubInvalidatesGated	root hub invalidates gated
 RootHubInvalidatesOwed	root hub invalidates owed
+RootHubChangesReported	root-hub changes reported through the DPC bit
 HcInfo.ScratchpadCount	scratchpad buffers
 SetAddressIntercepts	SET_ADDRESS interceptions
+AddressRefusalsBound	SET_ADDRESS refused - holder bound
+AddressRefusalsBusy	SET_ADDRESS refused - holder busy
+AddressRefusalsTopology	SET_ADDRESS refused - holder topology
+AddressRefusalsOwner	SET_ADDRESS refused - inconsistent owner
+AddressRefusalsInvalid	SET_ADDRESS refused - invalid address
 ShortPacketsTotal	short packets
 MidTdShortRetiresTotal	short packets retired mid-TD
 ShortSuccessesTotal	short transfers reported as Success
@@ -335,6 +347,7 @@ SlotStatesUnreadable	slot states unreadable
 SlotsDisabled	slots disabled
 SlotsEnabled	slots enabled
 SlotsResetToDefault	slots reset to Default
+SoftInterruptRequests	soft interrupts asked for parked vhub answers
 SaveAttempts	state save attempts
 SaveFailures	state save failures
 SaveRestoreTimeouts	state save/restore timeouts
@@ -349,6 +362,8 @@ QueueCompletedTotal	TDs completed
 QueueSubmittedTotal	TDs submitted
 TeardownCount	teardowns
 TeardownsWithoutStop	teardowns without a stop
+AsyncArmsRefused	timer arms Ex refused
+AsyncArmsDeferred	timer arms owed by a DEFER context
 BehindHubAddressed	topology: behind-hub devices addressed
 BehindHubGone	topology: behind-hub devices gone
 BehindHubOpens	topology: behind-hub opens
@@ -405,3 +420,16 @@ SweptTransfersTotal	transfers swept without an event
 SumFailuresTotal	TRB length sum failures
 BadCodesTotal	unassigned completion codes
 UnmaskEscalations	unmask escalations
+VhubArmedPort	vhub armed port
+VhubOpens	vhub endpoint opens
+VhubForcedConnects	vhub forced connects
+VhubCreated	vhub hubs created
+VhubDropped	vhub hubs dropped
+VhubPipeCancels	vhub pipe cancels
+VhubPipeCompletions	vhub pipe completions
+VhubRequests	vhub requests answered
+VhubStalls	vhub requests stalled
+VhubResetsHeld	vhub resets held
+VhubStarted	vhub started
+VhubTransfersFailed	vhub transfers failed
+VhubTtNamed	vhub TT pairs naming a hub

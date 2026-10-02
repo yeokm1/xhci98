@@ -33,6 +33,9 @@
 /* ...and the task 11-V.7 log ring, which lives in the extension for the same
  * reason everything else here does: this driver allocates no pool. */
 #include "xhci_log.h"
+/* ...and task 24.3's virtual hubs, one record per root port (design record
+ * 12 section 3.3), embedded for the same reason. */
+#include "xhci_vhub.h"
 
 /* ------------------------------------------------------------------ */
 /* Hardware structures referenced by the layout                        */
@@ -1480,10 +1483,15 @@ ULONG XhciInitialMps0(ULONG speedClass);
  *
  * xHCI's field counts microframes (period = 2^Interval * 125 us), so this is
  * `log2(Period) + (High Speed ? 0 : 3)`. The reachable results are **0-5 High
- * Speed, 3-8 Full Speed, 6-8 Low Speed** - Low Speed is not 3-8 because usbport
- * floors its `Period` at 8 upstream. That floor is *usbport's*, and this
- * function deliberately does not know about it: if it did, an LS endpoint that
- * legitimately arrived at 8 could not be told from one this code had repaired.
+ * Speed and 3-8 Full or Low Speed**. Windows 2000 SP4, NUSB and XP SP3 floor a
+ * Low-Speed `Period` at 8 upstream, so from them Low Speed reaches only 6-8;
+ * SweetLow's usbport rebuild has no floor and sends 1, 2 and 4 for a Low-Speed
+ * mouse a polling-rate tool has set to 1000, 500 or 250 Hz (roadmap task 24.1,
+ * whose Code 10 was this function refusing them). Any floor is *usbport's*,
+ * and this function deliberately has none of its own: if it did, an LS
+ * endpoint that legitimately arrived at 8 could not be told from one this code
+ * had repaired, and one that arrived at 1 would be refused for a value the
+ * hardware allows (Table 6-12: Interval 3-10 at Low Speed).
  *
  * Returns XHCI_CTX_OK and writes *interval, or XHCI_CTX_BAD_PARAM. It
  * **refuses rather than repairs** a Period outside the derived contract - not a
@@ -2398,6 +2406,10 @@ VOID XhciPortShadowLatchChange(XHCI_PORT_SHADOW *shadow, ULONG changeBits);
  * IRQL: any. Caller holds the controller lock.
  */
 ULONG XhciPortShadowArm(XHCI_PORT_SHADOW *shadow, ULONG operation);
+
+/* The generation the next XhciPortShadowArm on this shadow will return, with
+ * nothing armed (task 24.3). IRQL: any. Caller holds the controller lock. */
+ULONG XhciPortShadowNextGeneration(const XHCI_PORT_SHADOW *shadow);
 
 /*
  * Claim the armed operation, if it is still the one the caller was armed with.
@@ -3476,6 +3488,13 @@ typedef struct _XHCI_TRANSFER {
  * transfer in the completion list keeps pointing at the old binding.
  */
 #define XHCI_XFER_FLAG_ISOCH        0x00000008UL
+/*
+ * Task 24.3.4, round 10. A virtual hub answered this transfer; while one such
+ * is parked on the completion list the Version 300 tier owes a soft interrupt
+ * (XHCI_EXTENSION.SoftInterruptOwed). Read off the transfer, like ISOCH, so a
+ * list holding only real devices' completions never asks for one.
+ */
+#define XHCI_XFER_FLAG_VHUB         0x00000010UL
 
 /* ------------------------------------------------------------------ */
 /* 9-A.1: the isochronous group's storage                              */
@@ -3893,8 +3912,16 @@ typedef struct _XHCI_TRANSFER_QUEUE {
  * What is left is a back-reference plus its own validity check. `DeviceIndex` is
  * an index into XHCI_EXTENSION.Devices **plus one**, so that the zeroed state
  * usbport leaves behind names no device rather than device 0.
+ *
+ * **An endpoint of a virtual hub (task 24.3, design record 12) has no device
+ * record at all**: `XHCI_ENDPOINT_FLAG_VHUB` is set, `DeviceIndex` stays 0 so
+ * that no lookup in src/xhci_slot.c can resolve it to a real record, and
+ * `VhubPort` names the root-hub port whose `XHCI_EXTENSION.Vhub` entry it
+ * belongs to. Every open of a real endpoint writes `VhubPort` 0, because the
+ * extension is not assumed zeroed between tenants.
  */
 #define XHCI_ENDPOINT_FLAG_OPEN     0x00000001UL
+#define XHCI_ENDPOINT_FLAG_VHUB     0x00000002UL
 
 typedef struct _XHCI_ENDPOINT {
     ULONG Signature;
@@ -3902,7 +3929,31 @@ typedef struct _XHCI_ENDPOINT {
     ULONG SlotId;           /* diagnostic copy - Devices[] is authoritative   */
     ULONG Dci;
     ULONG Flags;
+    ULONG VhubPort;         /* root-hub port of a virtual hub's endpoint, or 0 */
 } XHCI_ENDPOINT, *PXHCI_ENDPOINT;
+
+/*
+ * What usbport has bound to one root port's virtual hub (task 24.3), beside
+ * the pure core's `XHCI_VHUB` record rather than inside it, because the core
+ * holds no pointer and is 32 bytes by assertion.
+ *
+ * `Ep0` and `Pipe` are the endpoint extensions usbport opened for the hub's
+ * default pipe and its status-change endpoint. A submit or a REMOVE through
+ * any other extension is a handle a newer open displaced, as `EndpointExtension`
+ * is for a real device, and touches nothing here.
+ *
+ * `Held` is the status-change transfer usbport keeps pending (design record 12
+ * section 3.4), and `HeldVa` its buffer's `MappedSystemVa`, which usbport keeps
+ * mapped until the transfer is completed - the one window the change byte may
+ * be written in. The transfer owns no TRB, so nothing about the controller
+ * can end it: only a change, a cancel or an abort.
+ */
+typedef struct _XHCI_VHUB_BINDING {
+    PVOID Ep0;
+    PVOID Pipe;
+    PXHCI_TRANSFER Held;
+    PVOID HeldVa;
+} XHCI_VHUB_BINDING, *PXHCI_VHUB_BINDING;
 
 /* ------------------------------------------------------------------ */
 /* One addressed device (Phase 6 batch B, src/xhci_slot.c)             */
@@ -5344,6 +5395,16 @@ typedef struct _XHCI_EXTENSION {
      */
     ULONG InterruptRearmFailures;
     ULONG RearmEscalations;
+    /*
+     * DPC re-arms that could not observe IE set but saw an ISR claim since
+     * the snapshot taken before the write (run-24 finding 2): usbport queues
+     * its interrupt DPC again on every claim, and that pass re-arms IE, so
+     * delivery is handed to it rather than lost. It does not say the write
+     * landed - a shared-line claim of a pending EINT can come between the
+     * snapshot and a swallowed write. Its own counter because it is not a
+     * failure, and a guest reading must be able to tell the rule fired.
+     */
+    ULONG InterruptArmsTakenByIsr;
     /* Refused unmasks that asked usbport for a controller reset. Distinct from
      * the failure count above because only an enable on an admitted controller
      * escalates - the same refusal during a teardown needs no rescue. */
@@ -6110,6 +6171,91 @@ typedef struct _XHCI_EXTENSION {
     ULONG CompletionsHeldOtherEndpoint;
     ULONG CompletionPollInvalidates;
     /*
+     * **Task 24.3.4, round 10: a virtual hub's answer asks usbport for a soft
+     * interrupt on the Version 300 tier.** Nothing on the bus interrupts for
+     * it - there is no hardware behind the hub - so the gate above parked it
+     * until the next real interrupt's HcInt pass or the fallback, 1 to 2 s on
+     * a quiet bus. usbhub's reset of the hub's port 1 needs three answers in
+     * a row inside a 2000 ms timer (Win7 x86 usbhub, `UsbhResetPort`, static),
+     * and after a controller re-enable, with every device re-enumerating and
+     * nothing bound, the timer won: 0x3d, 0x51 and the hub's hard reset, once
+     * a minute per hub (the r10g dump's exception history, debugger).
+     *
+     * `SoftInterruptOwed` is set, under the lock, when a virtual hub's
+     * completion joins the list on this tier, and again when a locked pass
+     * (PollEndpoint) is turned away by `DeferredBusy` while one is parked,
+     * since the pass holding the drain may be one that cannot deliver; the
+     * pass that ends with a virtual hub's answer (`XHCI_XFER_FLAG_VHUB`) still
+     * parked clears it and calls
+     * `UsbPortInvalidateController(SOFT_INTERRUPT)`, which on NT 6.x arms
+     * usbport's timer whose DPC queues its own IsrDpc (Win7 x86
+     * `USBPORT_InvalidateController` type 3 -> `USBPORT_SimulateInterrupt`,
+     * static). IsrDpc calls InterruptDpcEx and then signals the HcInt pass
+     * unconditionally (the note at xhciInterruptDpc), and that pass's
+     * PollEndpoint delivers under usbport's lock. Not on the Version 200
+     * tier, where `DeliverPerEndpointOnly` asks usbport to poll the endpoint
+     * instead. The fallback stays as the net.
+     */
+    ULONG SoftInterruptOwed;
+    ULONG SoftInterruptRequests;
+    /*
+     * **Roadmap 24.4: on the Version 300 tier every timer is armed through
+     * `UsbPortRequestAsyncCallbackEx` with its own lock, and only from a
+     * context that may take it** (`XHCI_ARM_*` in src/xhci_hw.h, design
+     * record 05). The legacy service there skips usbport's timer-list lock
+     * and assumes the caller holds it, which usbport does only around its
+     * root-hub feature callbacks and its timer DPC - and those arrive without
+     * it too (the USB 2.0 port-power detour, the User* IOCTL paths, Windows
+     * 7's StopController running pending timer callbacks early) - so every
+     * arm this driver made on NT 6.x could race the timer DPC's unlink and
+     * free (static, all four builds). Set in StartController beside the
+     * delivery gates, from the version presented and only if usbport wrote
+     * the Ex slot; clear on every NT 5.x build, whose arms are unchanged.
+     */
+    ULONG ArmThroughExOnly;
+    /*
+     * **Version 300 tier: `UsbPortInvalidateRootHub` only from a context where
+     * usbport holds no spin lock** (round 5's deadlock, design record 05). On
+     * all four NT 6.x builds usbport takes its RH-IntrEp lock and then its
+     * ISR-DPC lock to call RH_Enable/DisableIrq, so the service called from
+     * the event DPC (under ISR-DPC) deadlocked Vista and Windows 7 against
+     * usbport's own root-hub DPC; called under the timer-list lock (feature
+     * and timer callbacks) it closes two longer cycles through the Ex arms
+     * (static). So the event DPC reports a change through InterruptDpcEx's
+     * port bit, which IsrDpc turns into the same invalidate with nothing held,
+     * and the DEFER contexts only latch it for the health poll or the next
+     * event. Set from the version presented, independent of the Ex slot; clear
+     * on every NT 5.x build, whose announcements are unchanged.
+     */
+    ULONG RootHubReportThroughDpc;
+    /*
+     * The command watchdog a DEFER context owed: one at a time, as the engine
+     * is. Written under the controller lock by the submit and the timeout's
+     * re-arm, taken by XhciCommandDrainOwedArm, which arms it only if the
+     * command it watches is still the outstanding one. The context is held by
+     * value - `XHCI_COMMAND_TIMEOUT`'s four words, spelled out because that
+     * type is declared after this one - captured with the decision, for the
+     * reason xhciArmCommandTimer gives.
+     */
+    ULONG CommandArmOwed;
+    ULONG CommandArmOwedMs;
+    ULONG CommandArmOwedEpoch;
+    ULONG CommandArmOwedGeneration;
+    ULONG CommandArmOwedPhase;
+    ULONG CommandArmOwedAttempt;
+    /*
+     * Roadmap 24.5: interrupt endpoints opened at `PipePeriod` because
+     * usbport's USB 2.0 budget had promoted `Period` below it, and ones that
+     * came with no `PipePeriod` and so fell back to `Period`, which no build
+     * read should produce (src/xhci_usbport.h, USBPORT_ENDPOINT_PROPERTIES).
+     */
+    ULONG EndpointPeriodsPromoted;
+    ULONG EndpointPipePeriodsMissing;
+    ULONG AsyncArmsDeferred;    /* arms a DEFER context left owed             */
+    ULONG AsyncArmsRefused;     /* Ex answered an error: the arm was lost     */
+    ULONG RootHubChangesReported; /* announcements made through the DPC's
+                                   * port bit, not the service              */
+    /*
      * The transfer a `UsbPortCompleteTransfer` call is inside right now, or
      * NULL. It is off both the endpoint queue and the completion list for the
      * duration, which is the only interval in which an abort can find it
@@ -6634,6 +6780,42 @@ typedef struct _XHCI_EXTENSION {
      */
     ULONG DevicesDisownedOut;
     ULONG DevicesDisabledOut;
+    /*
+     * Disowns settled with PED (or PP) still unconfirmed because no device
+     * record was on the port or behind it (XhciSlotPortHasRecords): nothing
+     * the controller could read was at stake. Round 6 found the unconfirmed
+     * wait holding every virtual-hub port-1 reset on QEMU, where a disable
+     * write never clears PED, until usbhub's bus lock timed out (0xFE).
+     */
+    ULONG DisownsSettledEmpty;
+    /*
+     * Disowns settled unconfirmed with records still on the port or behind
+     * it, every one DISOWNED and idle (XhciSlotPortRecordsDisownedIdle). The
+     * release that follows is the controller's own proof - Stop Endpoint on
+     * anything busy, then a Disable Slot whose completion code decides
+     * whether the rings go back. Round 7: a port's own disowned device,
+     * address 0 and nothing queued, kept the debt, and the debt kept its
+     * release, until usbhub's bus lock timed out on Windows 7 (0xFE).
+     */
+    ULONG DisownsSettledIdle;
+    /*
+     * SET_ADDRESS claims on an address another record still held
+     * (xhciDevClaimAddress). `AddressReclaims` took it from an idle, unbound
+     * record usbport had given up on; the refusals failed the request, split
+     * by why: the holder still bound (EP0 or another endpoint), busy (not
+     * Addressed, or something in flight), a topology key or a record behind
+     * it, an inconsistent owner (a virtual hub, two holders, the claimant
+     * itself, or another assignment to it in progress); and an address of 0
+     * or out of range. Round 8: an address freed by a hub's hard reset stayed
+     * held here until the root-port disable, which was queued behind the
+     * refused enumeration, and usbhub's watchdog fired (0xFE).
+     */
+    ULONG AddressReclaims;
+    ULONG AddressRefusalsBound;
+    ULONG AddressRefusalsBusy;
+    ULONG AddressRefusalsTopology;
+    ULONG AddressRefusalsOwner;
+    ULONG AddressRefusalsInvalid;
     /*
      * The short-transfer family, accumulated at controller level.
      *
@@ -7868,6 +8050,49 @@ typedef struct _XHCI_EXTENSION {
     ULONG ImodReadback;     /* IMOD as it read straight after the write       */
 
     /*
+     * Roadmap task 24.3, design record 12: the virtual USB 2.0 hubs on root
+     * ports. After `ImodReadback` for the reason that block gives - no counter
+     * an older offset table names moves.
+     *
+     * `VhubConfig` is the switch `XhciVirtualHSHub` and the two id strings as
+     * read at this start (section 3.1), and `VhubConfig.Applied` is the one
+     * value every divergence point tests: with it OFF no record below is ever
+     * made present, which is rule 2 (section 3.1, "Rule 2 is held at two
+     * divergence points"). `Vhub` is the pure core's per-port record and
+     * `VhubBind` what usbport has bound to it, both indexed as
+     * `RootHub.Ports` is and both outside the topology graph (section 3.3).
+     * `VhubStarted` is nonzero once this start has stood the records up, so a
+     * resume or a recovery, which rebuild the root hub without a start, keep
+     * the hubs rather than making them again (section 3.8).
+     *
+     * The counters are the release build's reading of the feature, taken from
+     * a live guest by name through `offsets.txt` like the rest.
+     */
+    ULONG VhubStarted;
+    /*
+     * The hub port whose reset last armed a virtual hub's address-0 open, or
+     * 0. The third entitlement beside `EnumHubPort`'s root-port claim and the
+     * graph's hub-port claim, and kept exclusive with both the same way: the
+     * reset that arms one spends the others, so an address-0 open is the
+     * hub's only when the hub's reset was the last one (section 3.6).
+     */
+    ULONG VhubArmedPort;
+    ULONG VhubCreated;          /* hubs stood up: value 1 per decision, 2 per port */
+    ULONG VhubDropped;          /* value 1 hubs removed with their device       */
+    ULONG VhubOpens;            /* endpoint opens bound to a virtual hub        */
+    ULONG VhubRequests;         /* setup packets the request table answered     */
+    ULONG VhubStalls;           /* ...of which answered with a stall            */
+    ULONG VhubTransfersFailed;  /* a displaced handle, or a hub no longer there */
+    ULONG VhubPipeCompletions;  /* status-change transfers completed with a byte */
+    ULONG VhubPipeCancels;      /* ...and completed as cancelled                */
+    ULONG VhubResetsHeld;       /* resets held while a disable was owed (3.3)   */
+    ULONG VhubForcedConnects;   /* value 1 decisions that flipped (3.2)         */
+    ULONG VhubTtNamed;          /* behind-hub TT claims naming a virtual hub    */
+    XHCI_VHUB_CONFIG VhubConfig;
+    XHCI_VHUB Vhub[XHCI_MAX_ROOT_PORTS];
+    XHCI_VHUB_BINDING VhubBind[XHCI_MAX_ROOT_PORTS];
+
+    /*
      * Keeps `TrailingSignature` the **last word** of the amd64 layout, which
      * `test_packet_amd64` asserts and which is what makes the signature pair
      * bracket the whole extension. The structure holds pointers, so on amd64
@@ -8032,8 +8257,12 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
  * moderation fields appended after `RingUsed`. An `XHCISNAP` from `0.0.0.6` to
  * `1.1.0.0` refuses a `1.1.1.0` driver and says to rebuild, which is correct -
  * the tool ships in the same package as the driver it reads.
+ *
+ * **Schema 5 is task 24.3's**: the virtual hub's switch and id reads, twelve
+ * fields appended after `ImodReadback`. A `1.1.1.0` `XHCISNAP` refuses a
+ * `1.2.0.0` driver on the same terms.
  */
-#define XHCI_SNAPSHOT_SCHEMA            4UL
+#define XHCI_SNAPSHOT_SCHEMA            5UL
 
 /* Which region a window is cut from. */
 #define XHCI_SNAPSHOT_REGION_EXTENSION  0UL
@@ -8200,6 +8429,30 @@ typedef struct _XHCI_SNAPSHOT_HEADER {
     ULONG ImodRequested;
     ULONG ImodInterval;
     ULONG ImodReadback;
+    /*
+     * ---- schema 5 (task 24.3) ---------------------------------
+     *
+     * The virtual hub's switch and ids as this start read them (design record
+     * 12 section 3.1: "what was read, what was applied and the status go into
+     * the snapshot header"), so a dump from a stranger's machine says which
+     * mode the driver was in with no offset table. `XHCI_VHUB_CONFIG` widened
+     * to one ULONG per field, since every field here is one. An id's status,
+     * result and encoding mean something only when its result is not 0
+     * (XHCI_VHUB_ID_UNREAD, "not consulted") - which is every start with the
+     * switch at 0.
+     */
+    ULONG VhubSwitchStatus;
+    ULONG VhubSwitchValue;
+    ULONG VhubApplied;      /* XHCI_VHUB_MODE_*                             */
+    ULONG VhubRefused;      /* XHCI_VHUB_WHY_*                              */
+    ULONG VhubVidStatus;
+    ULONG VhubVidResult;    /* XHCI_VHUB_ID_*                               */
+    ULONG VhubVidEncoding;  /* XHCI_VHUB_ENC_*                              */
+    ULONG VhubVid;
+    ULONG VhubPidStatus;
+    ULONG VhubPidResult;
+    ULONG VhubPidEncoding;
+    ULONG VhubPid;
 } XHCI_SNAPSHOT_HEADER;
 
 /*

@@ -521,8 +521,8 @@ try {
     # NT - so neither case can drift onto the other path.
     Write-Step "the moderation interval, on both paths"
     Assert-RuleFires "imod-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciLogDebugView,0x00010001,0`r`nHKR,,XhciImodInterval250ns,0x00010001,500`r`n`r`n",
-                             "HKR,,XhciLogDebugView,0x00010001,0`r`n`r`n")
+        param($t) $t.Replace("HKR,,XhciLogDebugView,0x00010001,0`r`nHKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,XhciVirtualHSHub,",
+                             "HKR,,XhciLogDebugView,0x00010001,0`r`nHKR,,XhciVirtualHSHub,")
     }
     Assert-RuleFires "imod-no-nt" "VAL-MISSING" {
         param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,EnumPropPages32",
@@ -538,8 +538,52 @@ try {
     # Hex spells the same number and is still refused: the gate compares text,
     # and one spelling on every path is what the install legs have read.
     Assert-RuleFires "imod-default-hex-9x" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`n`r`n",
-                             "HKR,,XhciImodInterval250ns,0x00010001,0x000001f4`r`n`r`n")
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,XhciVirtualHSHub,",
+                             "HKR,,XhciImodInterval250ns,0x00010001,0x000001f4`r`nHKR,,XhciVirtualHSHub,")
+    }
+
+    # Roadmap task 24.3's three values, one path at a time for the asymmetry
+    # reason above: the 9x section has them after the moderation interval and
+    # the NT section after Controller, so each case is anchored on what
+    # precedes it there and cannot drift onto the other path.
+    Write-Step "the virtual hub's switch and ids, on both paths"
+    Assert-RuleFires "vhub-no-switch-9x" "VAL-MISSING" {
+        param($t) $t.Replace("0x00010001,500`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`n",
+                             "0x00010001,500`r`n")
+    }
+    Assert-RuleFires "vhub-no-switch-nt" "VAL-MISSING" {
+        param($t) $t.Replace("HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`n",
+                             "HKR,,Controller,1,01`r`n")
+    }
+    # Shipped on is the edit this rule exists for: the feature is
+    # experimental, for private testing only, and off by default.
+    Assert-RuleFires "vhub-switch-on" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,0",
+                             "HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,1")
+    }
+    Assert-RuleFires "vhub-no-vid-nt" "VAL-MISSING" {
+        param($t) $t.Replace("HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,,`"1209`"`r`n",
+                             "HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`n")
+    }
+    Assert-RuleFires "vhub-no-pid-9x" "VAL-MISSING" {
+        param($t) $t.Replace("0x00010001,500`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,,`"1209`"`r`nHKR,,XhciVirtualHSHubPid,,`"0001`"`r`n",
+                             "0x00010001,500`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,,`"1209`"`r`n")
+    }
+    # An id written as a DWORD is refused by the driver as not hexadecimal
+    # characters, so the gate refuses it here first.
+    Assert-RuleFires "vhub-vid-dword" "VAL-TYPE" {
+        param($t) $t.Replace("HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,,`"1209`"",
+                             "HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,0x00010001,0x1209")
+    }
+    # The quotes are part of the shipped text: unquoted, "0001" is a string
+    # one engine might read as the number 1.
+    Assert-RuleFires "vhub-pid-unquoted" "VAL-DEFAULT" {
+        param($t) $t.Replace("HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,,`"1209`"`r`nHKR,,XhciVirtualHSHubPid,,`"0001`"",
+                             "HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,,`"1209`"`r`nHKR,,XhciVirtualHSHubPid,,0001")
+    }
+    Assert-RuleFires "vhub-vid-other" "VAL-DEFAULT" {
+        param($t) $t.Replace("0x00010001,500`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,,`"1209`"",
+                             "0x00010001,500`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,,`"1D6B`"")
     }
     Assert-RuleFires "imod-type" "VAL-TYPE" {
         param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,EnumPropPages32",

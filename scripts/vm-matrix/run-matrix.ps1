@@ -192,6 +192,8 @@ foreach ($g in $mx.Groups) {
         }
         $problems += (Get-RowWedgeProblems -Row $r -TargetIds $targetIds)
         $problems += (Get-RowNoDriverProblems -Row $r -KnownKeys $noDriverKeys)
+        $switchProblems = @(Get-RowSwitchProblems -Row $r)
+        $problems += $switchProblems
         $texts = @()
         $texts += $mx.Always
         if ($r.ContainsKey('Expect')) { $texts += $r.Expect }
@@ -201,13 +203,29 @@ foreach ($g in $mx.Groups) {
                 $perKey = Find-TargetKey -Table $r.ExpectByTarget -Target $t
                 if ($null -ne $perKey) { $per = $r.ExpectByTarget[$perKey] }
             }
-            $key = "{0}|{1}" -f $r.Name, $t.Id
-            $parsed[$key] = @()
+            # One expectation list per virtual-hub switch value, every one of
+            # them resolved here, so a form only one value uses still fails
+            # validation before a boot rather than at the group that reads
+            # that value (lib\verdict.ps1, ExpectBySwitch).
+            $tTable = $tables[(Get-TargetArch -Target $t)]
+            $common = @()
             foreach ($txt in ($texts + $per)) {
                 try {
-                    $parsed[$key] += (ConvertTo-Expectation -Text $txt -Table $tables[(Get-TargetArch -Target $t)])
+                    $common += (ConvertTo-Expectation -Text $txt -Table $tTable)
                 } catch {
                     $problems += ("row {0} [{1}]: {2}" -f $r.Name, $t.Id, $_.Exception.Message)
+                }
+            }
+            foreach ($sw in $script:VhubSwitchValues) {
+                $key = "{0}|{1}|{2}" -f $r.Name, $t.Id, $sw
+                $parsed[$key] = @($common)
+                if ($switchProblems.Count -gt 0) { continue }
+                foreach ($txt in (Get-RowSwitchExpectTexts -Row $r -Switch $sw)) {
+                    try {
+                        $parsed[$key] += (ConvertTo-Expectation -Text $txt -Table $tTable)
+                    } catch {
+                        $problems += ("row {0} [{1}, switch {2}]: {3}" -f $r.Name, $t.Id, $sw, $_.Exception.Message)
+                    }
                 }
             }
         }
@@ -701,6 +719,8 @@ function Invoke-AttachLeg {
 }
 
 $targetVerdicts = @{}
+$switchByTarget = @{}
+$switchGroupOrder = @{}
 foreach ($tgt in $targetsToRun) {
     $table = $tables[(Get-TargetArch -Target $tgt)]
     $groupsToRun = $mx.Groups
@@ -711,6 +731,10 @@ foreach ($tgt in $targetsToRun) {
     # its header; the Phase 10 report is unchanged by any of it.
     $tgtReportStart = $report.Count
     $script:tgtTally = @{ Rows = 0; NoDriverExpected = 0; NotReached = 0; Against = 0 }
+    # The virtual-hub switch each group read, for the report's header.
+    $switchByGroup = @{}
+    $switchByTarget[$tgt.Id] = $switchByGroup
+    $switchGroupOrder[$tgt.Id] = @($groupsToRun | ForEach-Object { $_.Name })
     $tgtStarted = Get-Date
     $tgtClock = [Diagnostics.Stopwatch]::StartNew()
 
@@ -986,6 +1010,24 @@ foreach ($tgt in $targetsToRun) {
                 }
             }
 
+            # THE VIRTUAL-HUB SWITCH, READ FROM THE DRIVER BEFORE THE FIRST ROW,
+            # because it decides which of a row's ExpectBySwitch forms the row
+            # is judged by (lib\verdict.ps1, Get-VhubSwitchReading).  Taken once
+            # usbport has asked for the root hub's data, which a group with the
+            # keep-alive has long passed and a group without one may not have.
+            $sw3 = [Diagnostics.Stopwatch]::StartNew()
+            while (-not (Test-RootHubDataAsked -DebugconLog $dbgLog)) {
+                if ($sw3.Elapsed.TotalSeconds -ge $tgt.BootSeconds) {
+                    throw ("usbport never asked for the root hub's data (no `cb RH_GetRootHubData` in {0} after {1} s), so the virtual-hub switch cannot be read and no row can be judged" -f (Split-Path -Leaf $dbgLog), $tgt.BootSeconds)
+                }
+                Start-Sleep -Seconds 3
+            }
+            $switchRead = Get-VhubSwitchFromSnapshot -Table $table `
+                              -Snapshot (Read-Counters -Port $tgt.Monitor -BaseVa $ident.Va -Table $table -Process $proc)
+            $groupSwitch = [int]$switchRead.Switch
+            $switchByGroup[$grp.Name] = $groupSwitch
+            Write-Host ("virtual hub: {0}" -f $switchRead.Text)
+
             $rowIndex = 0
             foreach ($row in $grp.Rows) {
                 Write-Host ""
@@ -1007,7 +1049,7 @@ foreach ($tgt in $targetsToRun) {
                 # level up: a target with rows it never got to must not look
                 # like a target that had none.
                 $rowsBehind = @($grp.Rows | Select-Object -Skip ($grp.Rows.IndexOf($row) + 1))
-                $key = "{0}|{1}" -f $row.Name, $tgt.Id
+                $key = "{0}|{1}|{2}" -f $row.Name, $tgt.Id, $groupSwitch
                 $expectations = $parsed[$key]
                 # A UNIQUE id per row, not a shared `dut`.  When the first row
                 # errored before its device_del, every later row failed with
@@ -1331,7 +1373,8 @@ foreach ($tgt in $targetsToRun) {
         $hdr = New-PostReleaseHeader -TargetId $tgt.Id -Version $version -DriverLine $driverLine -ImageLine $imageLine `
                    -QemuVersion $qemuVer -Accel $accel -Sizeof $table.Sizeof -Counters $table.Offsets.Count `
                    -Started $tgtStarted -Elapsed $tgtClock.Elapsed -Verdict $verdict -Rows $script:tgtTally.Rows `
-                   -NoDriverExpected $script:tgtTally.NoDriverExpected -NotReached $script:tgtTally.NotReached
+                   -NoDriverExpected $script:tgtTally.NoDriverExpected -NotReached $script:tgtTally.NotReached `
+                   -VhubLine (Format-VhubSwitchLine -ByGroup $switchByGroup -GroupOrder $switchGroupOrder[$tgt.Id])
         $body = @()
         if ($report.Count -gt $tgtReportStart) { $body = @($report[$tgtReportStart..($report.Count - 1)]) }
         $tgtReport = Write-PostReleaseReport -Path (Join-Path $OutDir ("post-release-{0}.txt" -f $tgt.Id)) -Header $hdr `
@@ -1372,6 +1415,9 @@ foreach ($a in ($tables.Keys | Sort-Object)) {
     $header += ("# offsets: {0} SIZEOF {1}, {2} counters" -f $a, $tables[$a].Sizeof, $tables[$a].Offsets.Count)
 }
 $header += ("# matrix : {0} rows" -f $rowCount)
+foreach ($k in ($switchByTarget.Keys | Sort-Object)) {
+    $header += ("# vhub   : {0} {1}" -f $k, (Format-VhubSwitchLine -ByGroup $switchByTarget[$k] -GroupOrder $switchGroupOrder[$k]))
+}
 $header += "#"
 $header += "# Outcomes: PASS FAIL NODRIVER INERT ERROR, plus EXCLUDED for a row not run on a target - see docs/contributing/design/06-device-matrix-verdict.md"
 $header += "# A '-> X' in the outcome column marks the expectation that did not hold."

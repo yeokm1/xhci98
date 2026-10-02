@@ -1243,7 +1243,11 @@ the first pointer, `InterruptDpcEx` and the two OUT slots; `xhciInterruptDpc`
 returning a `ULONG` (2 after a pass that consumed a port status change event,
 0 otherwise, keeping the `UsbPortInvalidateRootHub` call it makes today - as
 built, it also ORs in bit 0 whenever the drain left a completion parked for
-`PollEndpoint`, issue 7's delivery gate; the 2026-09-17 audit's B11);
+`PollEndpoint`, issue 7's delivery gate; the 2026-09-17 audit's B11; and
+since round 5 of task 24.3.4 the call is no longer made there on this tier,
+because it deadlocked against usbport's root-hub DPC - bit 1 carries a change
+latched elsewhere too, and usbport makes the call; design record 05, "Where
+the root hub may be announced");
 the version argument selected from the same `IoIsWdmVersionAvailable(6, 0)`
 answer as the arity and the resource mask, now on both architectures; and the
 x86 four-argument call through a cast of the one import, with

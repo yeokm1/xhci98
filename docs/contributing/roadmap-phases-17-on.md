@@ -510,8 +510,9 @@ Goal: GitHub issue 4's request for the controller's property page, fixed and
 read on both primary targets; one measurement of the owner's, whether an
 interrupt moderation interval below the reset default raises throughput, which
 if it does becomes a registry value; and the result cut as `1.1.1.0`. The
-issue's polling rates and true speeds on root ports are not scheduled: Phase
-24, which carried them, was removed by the owner on 2026-09-22.
+issue's polling rates and true speeds on root ports are Phase 24's: the
+Phase 24 that first carried them was removed by the owner on 2026-09-22, and
+a second was added on 2026-09-24, after this phase closed.
 
 Status: closed on 2026-09-24 on the re-cut, its ten install legs, the audio
 gate and the post-release matrix. It opened on 2026-09-19 on branch
@@ -531,7 +532,7 @@ out, but ATTO's large reads stuttered by ear at 500 where the controls at
 intermittent Windows 98 shell wedge when a USB audio device is replugged
 after a cold boot, present on `1.1.0.0` too and at every moderation value,
 so not this release's; and the polling-rate and true-speed requests, which
-keep the GitHub issue open. What was left was not a task: the owner's upload
+keep the GitHub issue open and are Phase 24's. What was left was not a task: the owner's upload
 of `out\xhci98-1.1.1.0.zip` (377,889 B) and the push.
 
 "GitHub issue 4" is not `docs/issues/04`. The numbers collide by accident:
@@ -541,7 +542,7 @@ fixed in `1.0.1.0`; the GitHub issue is
 handling (and more)", opened by LordOfMice on 2026-09-06 and still open. Its
 `usbui.dll` and selective-suspend requests were answered in `1.0.2.0` and
 `1.1.0.0`, this phase answers the property page, and polling rates and true
-speeds are not scheduled. Replying on the issue, and closing it, are the
+speeds are Phase 24's. Replying on the issue, and closing it, are the
 owner's and not a task.
 
 Why a phase: the owner's note on the issue (2026-09-19) was that the speed
@@ -578,14 +579,98 @@ green on both architectures, `1.1.1.0` cut, and its install legs read from
 the asset; and the device matrix on both primary targets no worse than
 `runs/run-22-post-release/`. Not a checkpoint: a throughput figure taken in
 a guest, the reporter's machine standing in for one of the project's, any
-polling-rate work or a decision on true speeds (neither scheduled), the
+polling-rate work or a decision on true speeds (Phase 24's), the
 acceptance test, or the upload.
 
 Records: GitHub issue 4 (the thread; nothing of it is copied here beyond the
 table above); `docs/issues/06-full-speed-root-port-bugcheck.md`;
-`docs/future-plans/virtual-hub-per-root-port.md`;
+`docs/contributing/design/12-virtual-hub-on-root-ports.md`;
 `docs/usb-xhci-info/xhci-data-structures.md` (IMOD, Table 5-39);
 `docs/usb-xhci-info/usbport-miniport-abi.md` ("Periodic scheduling: what
 `Period` actually carries"); `build-and-test.md` (the INF's omitted
 directives); `lessons.md`; `runs/run-23.md`; `releases/history.md`;
 `runs/run-23-post-release/` (written after the cut).
+
+## Phase 24 - Release `1.2.0.0`: Polling Rates and True Speeds
+
+Goal: GitHub issue 4's two requests still open after `1.1.1.0` - a Low-Speed
+device behind a hub refusing the polling rates the reporter's stack offers it
+(item 2, his Code 10 at 250 Hz and above), a Full- or Low-Speed device on a
+root port polling in usbport's 1, 2 and 4 ms bands (item 2's other half),
+and every root-port device reported High Speed (item 1, issue 6) - and the result cut as `1.2.0.0`. The second field moves
+because an optional virtual USB hub is a major change (owner, 2026-10-01;
+`1.1.2.0` until then). Items 3, 4 and 5 were answered by `1.0.2.0`, `1.1.0.0`
+and `1.1.1.0`.
+
+Status: closed on 2026-10-02 on the `1.2.0.0` cut, its ten install legs read
+from the asset, and round 12's device matrix, which the owner accepted that
+day as the post-release matrix: its build differs from the cut under `src\`
+only in the version stamp. It opened on 2026-09-24 at the owner's request, the
+second Phase 24 (the first, split out of Phase 23 on 2026-09-22, was removed
+the same day before any task ran). 24.1 lifted the driver's own Low-Speed
+floor, which SweetLow's usbport does not share: the Code 10 is gone, and 230
+of 230 endpoint opens were accepted across ten guests. 24.2 closed as owned by
+24.3. 24.3 built design record 12's virtual High-Speed hub behind a switch,
+`XhciVirtualHSHub` - 0 off and the default, 1 on demand above a slower
+root-port device, 2 on every USB 2.0 port - and read it at all three values
+on every guest held, over rounds 5 to 12 and the fixes they called for. Two
+older defects found on the way were fixed before the cut: the NT 6.x
+timer-arm race (24.4) and the High-Speed interval behind a hub (24.5). On
+2026-10-02 the owner removed every task that did not block the cut - 24.3.5
+(the E460 session) and 24.6 (the reporter's USB 1.1 hub pointer); the ids are not
+reused. The virtual hub has never run on real hardware. Not this phase's and
+still open: the 500 stutter's cause and the Windows 98 audio replug wedge,
+both carried from Phase 23. What is left is not a task: the owner's upload of
+`out\xhci98-1.2.0.0.zip` (420,093 B) and the push.
+
+"GitHub issue 4" is not `docs/issues/04`; Phase 23's entry has the
+collision.
+
+Why a phase, and why one cut: the owner's note on the issue (2026-09-19) was
+that the speed work may be spread over several releases to reduce risk, and
+the reporter's advice (2026-09-14) was Low-Speed devices behind a hub first,
+then root ports. The tasks were ordered by how cheaply each could be built and
+read. On 2026-09-25 the owner took 24.3, the largest change the driver has
+asked for, inside this phase and chose one cut carrying 24.1 and 24.3 over an
+earlier cut of 24.1 alone; the price was that 24.1's small change waited for
+the large one and the cut's matrix had to show the switch at 0, 1 and 2.
+
+Tasks, all closed. [`runs/run-24.md`](runs/run-24.md) is the record: what
+each task did and every reading, and the phase narrative as this entry
+carried it while the phase was open.
+
+| Task | Subject |
+|---|---|
+| 24.1 | Low-Speed polling rates behind a hub, 2026-09-24/25: `XhciIntervalFromPeriod` accepts `Period` 1, 2 and 4 at Low Speed, what SweetLow's usbport sends at 1000, 500 and 250 Hz; read on Windows 98 SE under his stack with a real Low-Speed mouse passed through behind a `usb-hub` (Interval 3, 4 and 5, no Code 10), then the no-regression reading on the nine other guests, Vista and 7 on a root port because behind a hub is issue 6 section 6.2's topology |
+| 24.2 | polling rates on a root port, decided 2026-09-25: owned by 24.3, no narrower change - the bands are usbport's bucketing on the speed it was told, and `bInterval` is gone before the miniport sees it |
+| 24.3 | true speeds on root ports, taken 2026-09-25: design record 12 (24.3.1); the DDK-free core `src/xhci_vhub.c` and its host suite (24.3.2); the driver's root-hub and device halves, both INFs and snapshot schema 5 (24.3.3); the readings at 0, 1 and 2 on every guest held (24.3.4), which over rounds 5 to 12 found and fixed, among others, a root-hub deadlock on NT 6.x, a stale address after a re-plug, an enable reported without a connection and a virtual hub's answers waiting for an interrupt, and closed with round 12's device matrix on both primary targets on 2026-10-02 |
+| 24.4 | the NT 6.x timer-arm race, 2026-09-28: on Vista and 7 the driver's timer arms could enter usbport's timer list without the lock usbport expects and race its timer DPC on another processor; read statically, never observed; fixed before the cut |
+| 24.5 | the High-Speed interval behind a hub, 2026-09-28: `Period` 1 had been programmed as Interval 0 (125 us); the endpoint now takes the interval usbport sets, up to its 4 ms limit |
+| 24.7 | the record and the cut: the release notes, README, readme template, issue 6 and history; `1.2.0.0` dated 2026-10-02 (`d800b3d`), published tree `860afb4`, upload set 420,093 B; the ten install legs read from the asset on 2026-10-02, all passing, the installed binary identical to the asset's on every one; round 12 accepted as the post-release matrix |
+
+Checkpoint: 24.1 landed and read - a Low-Speed device behind a hub polling at
+250, 500 and 1000 Hz on Windows 98 SE under SweetLow's stack with no Code 10,
+and every other guest held none the worse; 24.2 a recorded decision; 24.3
+built as design record 12 says - at 0 indistinguishable from the 24.1 build,
+and at 1 and 2 a Full-Speed device on a root port at its true speed with its
+interval and the hidusbf rates programmed as behind a real hub, Full-Speed
+audio playing from XP on, a Full-Speed hub with a mouse behind it surviving on
+Vista and 7, 25 plug/unplug cycles per target, and at 2 a hub on every USB 2.0
+port; 24.4 and 24.5 landed and read; and `1.2.0.0` cut, its install legs read
+from the asset, and the matrix on both primary targets in all three states.
+The owner closed 24.3 on readings narrower than two of those clauses, and the
+release notes say so: the hidusbf rates on a root port were read on Windows 98
+SE, ME, 2000 and 32-bit XP, not on Vista or 7; and Full-Speed audio played on
+XP x64 at 1 and 2 and on 2000 and ME at 2, on 32-bit XP once and then went
+silent at 2, and on Vista and 7 binds with its playback not read.
+Not a checkpoint: a truthful root-hub report (measured fatal, and not what
+24.3 builds), the bandwidth half of issue 6 section 5, the acceptance test,
+or the upload.
+
+Records: GitHub issue 4 (the thread); `docs/issues/06-full-speed-root-port-bugcheck.md`;
+`docs/contributing/design/12-virtual-hub-on-root-ports.md`;
+`docs/usb-xhci-info/usbport-miniport-abi.md` ("Periodic scheduling: what
+`Period` actually carries", section 4's root-hub contracts and section 8's TT
+lookup); `docs/usb-xhci-info/xhci-data-structures.md` (Tables 5-27, 6-6 and
+6-12); `docs/contributing/design/02-hub-topology-route-string.md`;
+`runs/run-24.md`; `releases/history.md`.

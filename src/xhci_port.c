@@ -560,6 +560,29 @@ VOID XhciPortShadowLatchChange(XHCI_PORT_SHADOW *shadow, ULONG changeBits)
  * sites in src/xhci_rh.c and is different for each.
  */
 
+/*
+ * The generation the next arm will hand out, without arming anything. Task
+ * 24.3 needs it because a virtual hub records which reset it owns *before*
+ * the reset is armed (design record 12 section 3.2: a reset's end is routed
+ * by the view and generation it was started under), and the only honest way
+ * to name that generation in advance is the arithmetic the arm itself uses.
+ */
+ULONG XhciPortShadowNextGeneration(const XHCI_PORT_SHADOW *shadow)
+{
+    ULONG generation;
+
+    if (shadow == NULL) {
+        return 0;
+    }
+    generation = shadow->Generation + 1UL;
+    if (generation == 0) {
+        /* 0 means "nothing was ever armed", so it is never handed out - a
+         * wrapped counter must not make a stale callback current. */
+        generation = 1;
+    }
+    return generation;
+}
+
 ULONG XhciPortShadowArm(XHCI_PORT_SHADOW *shadow, ULONG operation)
 {
     ULONG generation;
@@ -577,12 +600,7 @@ ULONG XhciPortShadowArm(XHCI_PORT_SHADOW *shadow, ULONG operation)
         return 0;
     }
 
-    generation = shadow->Generation + 1UL;
-    if (generation == 0) {
-        /* 0 means "nothing was ever armed", so it is never handed out - a
-         * wrapped counter must not make a stale callback current. */
-        generation = 1;
-    }
+    generation = XhciPortShadowNextGeneration(shadow);
     shadow->Generation = generation;
     shadow->Armed = (UCHAR)operation;
     /*

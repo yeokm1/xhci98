@@ -993,6 +993,16 @@ foreach ($m in $models) {
 # interval, and so is the default check - the number is an owner's decision on
 # bare-metal readings, and `DefaultWhy` says so where "must ship off" would be
 # false.
+#
+# **Roadmap task 24.3 added three more, and the first two strings since
+# XhciLogFile.** `XhciVirtualHSHub` is a DWORD switch shipping at 0;
+# `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid` are REG_SZ - an empty flags
+# field, `Type = ""` here - shipping pid.codes' test id quoted, `"1209"` and
+# `"0001"`. The quoting is what the property-page strings already use, and it
+# keeps a numeric-looking id a string on both engines. How Windows 98's 16-bit
+# engine hands a REG_SZ to the miniport through NTKERN has not been measured;
+# the driver parses either encoding, and roadmap task 24.3.4 reads which one
+# arrives.
 
 $requiredValues = @(
     @{
@@ -1013,6 +1023,30 @@ $requiredValues = @(
         Default = "500"
         Why     = "task 23.4's interrupt moderation interval, in 250 ns units, written to IR0's IMOD at every start. Absent, the driver runs at its own default of 4000 (1 ms), so a path missing it runs a different interval from the other paths and nothing says so"
         DefaultWhy = "The owner set the shipped interval to 500 on 2026-09-22 from roadmap tasks 23.3 and 23.5's bare-metal readings; any other number is a new decision and needs a new reading, not an INF edit"
+    },
+    @{
+        Name    = "XhciVirtualHSHub"
+        Type    = "0x00010001"
+        Default = "0"
+        Why     = "roadmap task 24.3's virtual hub switch (design record 12 section 3.1): 0 off, 1 on demand, 2 on every USB 2.0 port. The INF writes the 0 so the value is where a user looks for it, and a reinstall turns the feature off"
+        DefaultWhy = "The feature is experimental, for private testing only, and ships off; turning it on by default is the owner's decision 5 in design record 12 section 9, still open"
+    },
+    @{
+        # REG_SZ: FLG_ADDREG_TYPE_SZ is 0 and is spelled as an empty flags
+        # field, as the property-page strings are; the data is quoted so
+        # neither setup engine can read "0001" as a number and drop its zeros.
+        Name    = "XhciVirtualHSHubVid"
+        Type    = ""
+        Default = '"1209"'
+        Why     = "the virtual hub's vendor id, a four-digit hexadecimal string. The binary carries no id, so with the switch on and this value missing the hub is off (design record 12 section 3.1)"
+        DefaultWhy = "1209:0001 is pid.codes' shared test id, the owner's choice of 2026-09-25 for an experimental feature; a different id is a new decision, not an INF edit"
+    },
+    @{
+        Name    = "XhciVirtualHSHubPid"
+        Type    = ""
+        Default = '"0001"'
+        Why     = "the virtual hub's product id, the same shape as its vendor id"
+        DefaultWhy = "1209:0001 is pid.codes' shared test id, the owner's choice of 2026-09-25 for an experimental feature; a different id is a new decision, not an INF edit"
     }
 )
 
@@ -1069,7 +1103,11 @@ foreach ($m in $models) {
                 Add-Failure "VAL-SUBKEY" ("[{0}] line {1} writes '{2}' under subkey '{3}'. The miniport reads the device's own key, not a subkey of it." -f $hit.Section, $hit.Line, $req.Name, $hit.Subkey)
             }
             if ($hit.Flags.ToLowerInvariant() -ne $req.Type.ToLowerInvariant()) {
-                Add-Failure "VAL-TYPE" ("[{0}] line {1} writes '{2}' with flags '{3}', not {4} (FLG_ADDREG_TYPE_DWORD). The miniport asks usbport for four bytes; a string would be handed over as its characters." -f $hit.Section, $hit.Line, $req.Name, $hit.Flags, $req.Type)
+                if ($req.Type -eq "") {
+                    Add-Failure "VAL-TYPE" ("[{0}] line {1} writes '{2}' with flags '{3}', not an empty flags field (FLG_ADDREG_TYPE_SZ). The miniport parses the value's characters; a DWORD's bytes are not hexadecimal digits, so the feature would be off." -f $hit.Section, $hit.Line, $req.Name, $hit.Flags)
+                } else {
+                    Add-Failure "VAL-TYPE" ("[{0}] line {1} writes '{2}' with flags '{3}', not {4} (FLG_ADDREG_TYPE_DWORD). The miniport asks usbport for four bytes; a string would be handed over as its characters." -f $hit.Section, $hit.Line, $req.Name, $hit.Flags, $req.Type)
+                }
             }
             if ($hit.Data -ne $req.Default) {
                 $defaultWhy = if ($req.ContainsKey("DefaultWhy")) { $req.DefaultWhy } else { "{0} must ship off" -f $req.Name }

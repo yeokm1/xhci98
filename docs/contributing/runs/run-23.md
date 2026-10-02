@@ -538,7 +538,7 @@ true speeds (neither scheduled), the acceptance test, or the upload.
 
 Records: GitHub issue 4 (the thread; nothing of it is copied here beyond the
 table above); `docs/issues/06-full-speed-root-port-bugcheck.md`;
-`docs/future-plans/virtual-hub-per-root-port.md`;
+`docs/contributing/design/12-virtual-hub-on-root-ports.md`;
 `docs/usb-xhci-info/xhci-data-structures.md` (IMOD, Table 5-39);
 `docs/usb-xhci-info/usbport-miniport-abi.md` ("Periodic scheduling: what
 `Period` actually carries"); `build-and-test.md` (the INF's omitted
@@ -2958,9 +2958,9 @@ four images re-cloned with `-Clone -FreshCopy` and stamped
 `base-1.1.1.0-qemu`, each stamp its file's only snapshot.
 
 **Two hosts and two QEMU builds, which is a variable 22.9 did not have.**
-`2b-fresh` and the first `xp64-fresh` and `win7-fresh` runs were taken on host
-`XT-F80DAC37B29E` under QEMU 11.0.92 (`v11.1.0-rc2-12128-gc65ddfcd01`); the
-`2a-fresh` run and the two reruns on host `MINIS-W11P-YKM` under 11.1.0
+`2b-fresh` and the first `xp64-fresh` and `win7-fresh` runs were taken on development
+host C under QEMU 11.0.92 (`v11.1.0-rc2-12128-gc65ddfcd01`); the
+`2a-fresh` run and the two reruns on development host A under 11.1.0
 (`v11.1.0-12130-ge470268ff4`), the build 22.9 read. Each report's header
 names its own.
 

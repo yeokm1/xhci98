@@ -735,7 +735,7 @@ ULONG XhciEventDiscardStale(PXHCI_EXTENSION ext, PULONG fatalEvent)
  * interrupt enable/disable, and terminal failure while this bounded pass owns
  * the event and command-ring state.
  */
-VOID XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
+ULONG XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
 {
     XHCI_TRB trb;
     ULONG drained;
@@ -743,10 +743,11 @@ VOID XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
     ULONG bounded;
     ULONG ringEmpty;
     ULONG resetRequested;
+    ULONG report;
     KIRQL oldIrql;
 
     if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
-        return;
+        return 0;
     }
     /*
      * Reset and lifecycle quiesce can both begin after this DPC was queued. The
@@ -758,11 +759,11 @@ VOID XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
     if (ext->ControllerFailed) {
         ext->DpcsAfterFailure++;
         XhciControllerLockRelease(oldIrql);
-        return;
+        return 0;
     }
     if ((ext->Flags & XHCI_EXT_FLAG_INITIALIZED) == 0) {
         XhciControllerLockRelease(oldIrql);
-        return;
+        return 0;
     }
 
     ext->DpcCount++;
@@ -916,8 +917,27 @@ VOID XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
      * port change and decided the controller must be reset should still tell
      * usbport about the port, since the reset is containment rather than repair
      * and this is the last chance to say what was seen.
+     *
+     * An XHCI_ARM_UNLOCKED context (roadmap 24.4): on NT 6.x usbport calls
+     * InterruptDpcEx holding only its ISR-DPC lock, which it never holds with
+     * its timer-list lock, so the arms here are made now through Ex - and so
+     * are the ones a DEFER context left owed.
+     *
+     * **But on that tier the announcement is reported, not made.** usbport
+     * takes its RH-IntrEp lock and then this ISR-DPC lock to call
+     * RH_Enable/DisableIrq, so the service called here waits for RH-IntrEp
+     * while holding ISR-DPC - round 5's Vista and Windows 7 deadlock against
+     * usbport's root-hub DPC on another CPU (static, all four builds). The
+     * caller sets InterruptDpcEx's port bit instead, and IsrDpc makes the
+     * same invalidate with both locks released
+     * (XHCI_EXTENSION.RootHubReportThroughDpc).
      */
-    XhciRootHubDeferredWork(ext);
+    report = 0;
+    if (ext->RootHubReportThroughDpc) {
+        report = XhciRootHubDeferredReport(ext);
+    } else {
+        XhciRootHubDeferredWork(ext, XHCI_ARM_UNLOCKED);
+    }
     /*
      * And the device layer's, for the same reason and with a longer list: the
      * transfers this drain retired owe UsbPortCompleteTransfer, an endpoint
@@ -925,11 +945,12 @@ VOID XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts)
      * next command of a chain owes a submission - all three are things that must
      * not happen inside the lock this line has released.
      */
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWork(ext, XHCI_ARM_UNLOCKED);
 
     if (resetRequested) {
         XhciRequestControllerReset(ext);
     }
+    return report;
 }
 
 /* ------------------------------------------------------------------ */

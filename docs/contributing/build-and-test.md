@@ -956,6 +956,43 @@ on a guest that already has the file, that install path is never exercised.
 is the baseline every later Win98 phase starts from. Revert to `post-nusb` only
 when the question is whether the package carries the file.
 
+**The six NT 5.1-6.1 guests boot unattended from a `*-clean-autologon`
+snapshot** (the owner, 2026-09-25). Each was reverted to its clean-install
+snapshot, given `AutoAdminLogon` = `1` with `DefaultUserName`,
+`DefaultPassword` and `DefaultDomainName` (REG_SZ) under
+`HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon`, powered off and
+snapshotted, and each was then booted on a throwaway overlay and seen to reach
+the desktop with no key sent. Start new work from these; the
+`*-clean-install` snapshots the sections below name are kept and unchanged,
+and each image's pre-2026-09-25 live state was discarded by the revert.
+
+| Image | Taken from | New snapshot | Logs on as |
+|---|---|---|---|
+| `vm\winxp.img` | `winxp-clean-install-smp4` | `winxp-clean-autologon` | `test`, empty password |
+| `vm\winxp64.img` | `winxp64-clean-install-smp4` | `winxp64-clean-autologon` | `Administrator` / `test` |
+| `vm\vista.img` | `vista-clean-install` | `vista-clean-autologon` | `test` / `test` |
+| `vm\vista-x64.img` | `vista-x64-clean-install` | `vista-x64-clean-autologon` | `test` / `test`, plus `advancedoptions` |
+| `vm\win7.img` | `win7-clean-install` | `win7-clean-autologon` | `test` / `test` |
+| `vm\win7-x64.img` | `win7-x64-clean-install` | `win7-x64-clean-autologon` | `test` / `test`, plus `advancedoptions` |
+
+**Driver signature enforcement is not off on the two x64 NT 6.x snapshots,
+because it cannot be for an unsigned package** (see "Vista x64 and Windows 7
+x64 target VMs"). What they carry instead is
+`bcdedit /set {current} advancedoptions true`: the Advanced Boot Options menu
+comes up on every boot and waits with no timeout. **The highlight starts on
+the first entry** (*Repair Your Computer* on Windows 7, *Safe Mode* on Vista),
+not on *Start Windows Normally*, and `up` wraps to the bottom, so the monitor
+sequence `sendkey up`, `sendkey up`, `sendkey ret` selects *Disable Driver
+Signature Enforcement* on both - read on both guests 2026-09-25 - and the
+guest then logs on by itself. A clone that must boot with enforcement ON
+(the Code 39 question) removes the value with
+`bcdedit /deletevalue {current} advancedoptions` or picks *Start Windows
+Normally* (`up`, `ret`).
+
+The same caveat as the matrix images applies (design record 09 section 8): with
+a desktop up, a device that has no driver raises a Found New Hardware wizard
+that queues later installs, so check a missing driver against a screenshot.
+
 ### QEMU monitor - hot-plug USB devices without rebooting
 
 Phase 4+ needs plug/unplug events on demand (Port Status Change testing, the
@@ -1262,7 +1299,7 @@ Hub trees have two further ceilings, both measured and neither obvious from the 
 Four clauses the emulated bus cannot present at all, each measured rather than assumed, so that nobody spends a boot on them again:
 
 - A disconnect during a data transfer is not producible. `transfers cancelled` stayed 0 across monitor-driven unplug gaps from 8 ms to 450 ms, because an emulated bus completes control transfers effectively instantaneously and there is no window to hit. Only the mid-command-chain half (a device removed after Enable Slot and before SET_ADDRESS) can be driven, and it unwound cleanly on 2b. The cancel path's evidence for the in-flight case is the host vectors; interrupt endpoints (Phase 7a onward) do have traffic genuinely in flight between events.
-- Low Speed is unreachable. No QEMU peripheral model declares it: `usb-mouse`, `usb-tablet`, `usb-wacom-tablet`, `u2f-emulated` and `usb-kbd,usb_version=1` attached together all report 12 Mb/s under `info usb`, and `usb_version=0` is refused outright (`Invalid usb version 0 for usb hid device`). That measurement struck the LS leg from the VM checkpoint. LS therefore survives host-side, in the `test_ctx` vectors (a slot context built with `XHCI_SPEED_LOW`, EP0 `MaxPacketSize` 8, the LS MPS0 correction), until a bare-metal run.
+- Low Speed is unreachable. No QEMU peripheral model declares it: `usb-mouse`, `usb-tablet`, `usb-wacom-tablet`, `u2f-emulated` and `usb-kbd,usb_version=1` attached together all report 12 Mb/s under `info usb`, and `usb_version=0` is refused outright (`Invalid usb version 0 for usb hid device`). That measurement struck the LS leg from the VM checkpoint. LS therefore survives host-side, in the `test_ctx` vectors (a slot context built with `XHCI_SPEED_LOW`, EP0 `MaxPacketSize` 8, the LS MPS0 correction), until a bare-metal run - or, since roadmap task 24.1 (2026-09-24), a `usb-host` passthrough of a real Low-Speed mouse from the host, bound to WinUSB with Zadig and found through `info usbhost`, which is how `runs/run-24.md` 24.1 reached Low Speed in a guest; no emulated peripheral declares it.
 - Alternate-interface change and reset-pipe-after-stall are unavailable: no QEMU HID device has a second interface setting, and nothing in one produces a STALL on demand, so Reset Endpoint never runs and `endpoint resets` stays 0. This is distinct from the abort path, which is exercised.
 - The two `TT pairs disagreeing with usbport` readings are a matched pair, and neither alone is evidence. A nonzero reading is QEMU-only: it is the phantom-translator case, usbport claiming a TT for a hub that physically has none, which no real hub can produce; the negative control. A zero reading with the DW2 pair naming the real translator is metal-only: there is no TT in QEMU for the graph and usbport to agree about. The QEMU row is the metal row's control, so both are printed.
 
@@ -1276,7 +1313,7 @@ These devices exercise the host-controller transfer paths only if a function dri
 
 Bridging emulation and real hardware. `-device usb-host,hostbus=N,hostaddr=M` passes a real USB peripheral from the host through to the guest's xHCI bus. This runs the driver against genuine peripheral adapters while still inside the VM, a useful step between pure emulation and bare-metal testing. It does not help with host-controller quirks, which depend on the emulated/physical xHCI chip, not the peripheral.
 
-Use `hostbus`/`hostaddr`, never `vendorid`/`productid`. Measured on host `MINIS-W11P-YKM`, scoop QEMU 11.0.0, against an ASIX AX88772 (`0b95:7720`) that `info usbhost` was listing at that very moment as `Bus 1, Addr 7, Speed 480 Mb/s`:
+Use `hostbus`/`hostaddr`, never `vendorid`/`productid`. Measured on development host A, scoop QEMU 11.0.0, against an ASIX AX88772 (`0b95:7720`) that `info usbhost` was listing at that very moment as `Bus 1, Addr 7, Speed 480 Mb/s`:
 
 | Form | Result |
 |---|---|
@@ -2034,7 +2071,7 @@ rotated per boot.
 **And then a fifth difference, which was not predicted and had to be measured:
 this guest wants TCG, and on it TCG is not a fallback - it is the one that
 works.** That is the reverse of every 32-bit guest in this project. Read on
-host `minis-w11p-ykm`, 2026-09-08, one flag apart:
+development host A, 2026-09-08, one flag apart:
 
 | `-accel` | Result |
 |---|---|
@@ -2152,8 +2189,8 @@ the tier stated with task 21.6.** It also carried issue 7's first NT 5.x leg
 on 2026-09-13 (issue section 7.6, roadmap 22.5), which is the reading this
 guest is uniquely placed to give - the `200` arm on amd64 - and which ran on
 one vCPU, this launcher carrying no `-smp`.
-The guest was created and installed on 2026-09-08 on host
-`minis-w11p-ykm` (`vm\winxp64.img`, 16 GB qcow2, 2.29 GB allocated after the
+The guest was created and installed on 2026-09-08 on
+development host A (`vm\winxp64.img`, 16 GB qcow2, 2.29 GB allocated after the
 install). Snapshot **`winxp64-clean-install`** taken the same evening with the
 guest shut down from inside and the image cold - `qemu-img check` reported no
 errors first, and the snapshot lists with `VM_SIZE` 0 B, which is what a
@@ -2216,7 +2253,7 @@ difference belongs in a parameter, never in a second copy of the body.
 | CPU | `-cpu qemu64`, **not** the 32-bit XP guest's `pentium3`. `pentium3` predates the NX bit and Windows 7 requires one: Setup refuses such a processor. A 32-bit guest wanting a 64-bit-era CPU *model* is not the same thing as a 64-bit guest, and this is the line most likely to be "corrected" back to the 32-bit recipe, so the shared body refuses such a `-Cpu` outright and the launcher gate asserts the generated text |
 | vCPUs | **4**, where every guest before this one takes the default 1 except the Phase 2d Windows 2000 SMP rig's `-smp 2` ("Windows 2000 SMP Stress VM (Phase 2d)" below). This is about the accelerator, not the guest: Vista must run under TCG here, and single-threaded TCG on this host's 2.0 GHz i7-9700T is painful. QEMU emulates x86-on-x86 with **multi-threaded TCG**, so vCPUs become host threads and the emulation parallelises - measured on the Vista guest 2026-09-10, all four vCPU threads busy and roughly even (35 / 31.5 / 30.4 / 28.3 CPU-seconds over ~200 s of wall clock). Four rather than the host's eight leaves room for QEMU's own I/O and display threads. `thread=multi` is derived for a `tcg` accelerator and **never handed to WHPX**, which refuses the whole `-accel` argument rather than ignoring an option it does not know |
 | RAM | 2048 MB, not 512. Comfort - Windows 7's own floor is 1 GB. **More RAM is not a speed knob here**: what makes a TCG guest slow is instruction emulation, not memory. Nothing has been measured about what the 6.x `usbport` does with memory above 4 GB, and it does not arise: a 32-bit guest with 2048 MB has none. Do not raise it without reading measurement M5 of design record 11 first - on a **64-bit** guest, crossing 4 GB puts DMA above the line in play and is a change to the test surface, not a tuning choice |
-| Accelerator | **They differ**, and both are confirmed through a completed install. Vista is `-accel tcg` (WHPX wedges its Setup after the first reboot); Windows 7 is `-accel whpx,kernel-irqchip=off`. Host `minis-w11p-ykm`, 2026-09-10 |
+| Accelerator | **They differ**, and both are confirmed through a completed install. Vista is `-accel tcg` (WHPX wedges its Setup after the first reboot); Windows 7 is `-accel whpx,kernel-irqchip=off`. Development host A, 2026-09-10 |
 | Everything else | The 32-bit XP machine unchanged: `-machine pc` (ACPI on), `-vga std`, `-boot d` on every install boot, `qemu-xhci,p3=0` on the run launcher, no companion EHCI unless it is asked for, no USB device boot-attached, the VVFAT transfer drive, and the port-`0xE9` console rotated per boot |
 
 **The accelerator reading, and the probe that was too shallow to take it.**
@@ -2608,7 +2645,10 @@ shutdown -r -t 0
 
 The Advanced Boot Options menu then comes up **on every boot** and waits, with
 no F8 at all, and *Disable Driver Signature Enforcement* is picked from it as
-usual. It differs from the Vista x64 recipe above in three ways worth knowing:
+usual - except that this menu's highlight starts on the first entry rather than
+on *Start Windows Normally*, so the pick is `up`, `up`, `ret` (the first `up`
+wraps). The `vista-x64-clean-autologon` and `win7-x64-clean-autologon`
+snapshots carry this value ("VM snapshots - iterate without fear"). It differs from the Vista x64 recipe above in three ways worth knowing:
 it sets one value rather than two, it is on `{current}` rather than
 `{bootmgr}` so it raises Advanced Boot Options directly instead of the Boot
 Manager menu that then needs F8, and it survives in the image rather than
@@ -3197,14 +3237,14 @@ not Win98: the ordinary 2b preemption/IRQL/native-usbport analysis applies.
 ### Windows 2000 ACPI VM (`vm\win2k-acpi.img`) - built, and it does NOT deliver sleep
 
 A fourth VM: uniprocessor Windows 2000 SP4 installed with a real ACPI HAL
-(`ACPI Uniprocessor PC`, chosen by Setup), built on host `fw-w11p-ykm` to make
+(`ACPI Uniprocessor PC`, chosen by Setup), built on development host B to make
 `ResumeController` execute on Windows 2000. That is the one miniport lifecycle
 callback that has never run there, because 2b runs the Standard-PC HAL with
 `acpi=off` and has no D-state machinery at all.
 
 Read this before rebuilding or reusing it: the VM works, and the goal it was
 built for is unreachable on it. The full investigation is
-`docs/contributing/lessons.md`, "On host `fw-w11p-ykm`". The short form:
+`docs/contributing/lessons.md`, "On development host B". The short form:
 
 - The HAL is not the blocker; the display adapter is, and the two available
   choices fail in opposite ways. `-vga std` leaves a yellow-banged
@@ -3222,7 +3262,9 @@ built for is unreachable on it. The full investigation is
   `_S1_`, so a Stand by here would be S3, the deep state that needs the display
   driver to restore, so cirrus vetoes.
 - `ResumeController` on Win2000 was therefore owed to bare metal, alongside the
-  Low-Speed leg. Do not spend another session on QEMU configurations for it.
+  Low-Speed leg. Do not spend another session on QEMU configurations for it
+  (Low Speed itself has since been reached by `usb-host` passthrough,
+  `runs/run-24.md` 24.1; emulated peripherals still cannot declare it).
   No bare-metal Windows 2000 vehicle ever existed, so the clause is published
   as a limitation rather than pending (roadmap Phase 13).
 
@@ -3267,11 +3309,11 @@ further use.
 
 Two host-specific traps in those launchers, both of which cost time:
 
-- The QEMU path is hard-coded. It happens to be identical on `minis-w11p-ykm`
-  and `fw-w11p-ykm`, so it has not bitten yet, but it is the standing trap
+- The QEMU path is hard-coded. It happens to be identical on development host A
+  and development host B, so it has not bitten yet, but it is the standing trap
   when moving hosts.
-- The ISO path differs per host: `D:\isos\win2ksp4.ISO` on `minis-w11p-ykm`,
-  `D:\isos\win2ksp4-retail.ISO` on `fw-w11p-ykm`.
+- The ISO path differs per host: `D:\isos\win2ksp4.ISO` on development host A,
+  `D:\isos\win2ksp4-retail.ISO` on development host B.
   `qemu-win2k-acpi-whpx-continue.cmd` probes a candidate list instead of
   hard-coding one; do the same in any new launcher.
 
@@ -3330,7 +3372,7 @@ it. **Only task 21.8's two x64 launchers have been regenerated since**, so
 every other guest's still carries the older silent preamble until it is next
 regenerated. Observed QEMU paths so far: `C:\Program Files\qemu` (a winget
 install, present on this development host until 2026-09-10 and now gone from
-it) and a scoop prefix on `minis-w11p-ykm` and `FW-W11P-YKM`.
+it) and a scoop prefix on development host A and development host B.
 
 - `qmon.ps1`: `-Port <n> -Command "<monitor command>"`. Prompt-framed read
   with an idle timeout and a hard limit, and it strips QEMU's
@@ -4876,7 +4918,7 @@ powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavo
 
 It lands in `out\pkg-datefmt-<flavor>-<arch>\`, and its INF differs from
 `src\xhci98.inf` on exactly one line: a `DriverVer` date without its leading
-zeros - `9/24/2026` where the tree's own `DriverVer` reads `09/24/2026`;
+zeros - `10/1/2026` where the tree's own `DriverVer` reads `10/01/2026`;
 every field that has a leading zero loses it, the day as well as the month
 when both have one. The variant is derived at
 staging time, never committed, so there is no second INF in the tree to drift;
@@ -4956,7 +4998,7 @@ and reboot (`scripts\bench\IMOD98.BAT` or `IMOD.BAT`). The contract is the
 shipping one - 10 to 4000 used as given, anything else replaced by 4000 - so a
 sweep can no longer reach 0. The interval the driver chose, and what the
 register read back, are in every `XHCISNAP` `.TXT` under "registry values"
-(snapshot schema 4), and the interrupt and DPC counts still come out of the
+(since snapshot schema 4), and the interrupt and DPC counts still come out of the
 `.BIN` against an offsets table from the same tree. The INF writes 500, so a
 bench machine goes back to the package's own setting with `IMOD98 500 NNNN`,
 not with `CLEAR`, which leaves the driver at 4000.

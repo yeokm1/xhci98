@@ -647,8 +647,8 @@ amd64.
 | `0x1A4` | `0x2F0` | `UsbxQueryBandwidthData` | `MPx_QueryBandwidthData`; amd64 `USBPORT_ComputeAllocatedBandwidth` | `>= 300`, non-NULL | leave zero |
 | `0x1A8` | `0x2F8` | `UsbxQueryTtBandwidthData` | `MPx_QueryTtBandwidthData`; amd64 `USBPORT_ComputeAllocatedTtBandwidth` | `>= 300`, non-NULL | leave zero |
 | `0x1AC` | `0x300` | `UsbxQueryEpBandwidthData` | `MPx_QueryEpBandwidthData` | `>= 300`, non-NULL | leave zero |
-| `0x1B0` | `0x308` | **OUT** `UsbPortRequestAsyncCallbackEx` | written by `USBPORT_RegisterUSBPortDriver` at `>= 300` (vista-x86 `0x2DF17`, vista-x64 `0x436F3`) | - | declare as OUT, do not call |
-| `0x1B4` | `0x310` | **OUT** `UsbPortCancelAsyncCallback` | written at `>= 300` (`0x2DF21` / `0x43702`) | - | declare as OUT, do not call |
+| `0x1B0` | `0x308` | **OUT** `UsbPortRequestAsyncCallbackEx` | written by `USBPORT_RegisterUSBPortDriver` at `>= 300` (vista-x86 `0x2DF17`, vista-x64 `0x436F3`) | - | **called on the 300 tier** (roadmap 24.4): every timer this driver arms there goes through it with its lock byte 0, from the contexts section 6 names; typed `PUSBPORT_REQUEST_ASYNC_CALLBACK_EX` in `src/xhci_usbport.h` |
+| `0x1B4` | `0x310` | **OUT** `UsbPortCancelAsyncCallback` | written at `>= 300` (`0x2DF21` / `0x43702`) | - | declare as OUT, do not call (the stale callback stays the rule; roadmap 24.4) |
 | `0x1B8` | `0x318` | no reader found | - | - | leave zero |
 | `0x1BC` | `0x320` | no reader found | - | - | leave zero |
 | `0x1C0` | `0x328` | no reader found | - | - | leave zero |
@@ -719,6 +719,68 @@ five-instruction thunk that jumps to `EHCI_InterruptDpcEx` (`0x16C0C` and
 And **NT 6.x never reads the old slot**: no read of `interface+0x68` (x86) or
 `interface+0xA8` (amd64) follows an interface load anywhere in the four
 `.text` sections.
+
+**What `IsrDpc` holds around the slot, and when it calls the invalidate**
+(static, all four builds, read for round 5 of task 24.3.4 on 2026-09-28; kd
+addresses at image base `0x10000`, as above). `USBPORT_IsrDpc` first takes
+the MP lock to test bit 1 of the device extension's "not operational" word
+(below); when that bit is set it releases the lock and does not call the
+miniport at all, and the result stays 0. Otherwise it takes its ISR-DPC lock,
+calls the slot, releases the lock, and then, holding no usbport spin lock,
+calls `USBPORT_Ev_Rh_IntrEp_Invalidate` if and only if `(result & 3) != 0`:
+
+| Build | ISR-DPC acquire | Miniport call | Release | Test after the release | Invalidate |
+|---|---|---|---|---|---|
+| Vista x86 | `0x11F08` | `MPf_InterruptDpcEx` `0x11F9B` | `0x12039` | `test byte ptr [ebp-8],3` `0x12045` | `0x1204C` |
+| Windows 7 x86 | `0x12DB2` | `MPf_InterruptDpcEx` `0x12E15`, which returns the miniport's `eax` unchanged (`0x11850`) | `0x12E83` | `test byte ptr [ebp-4],3` `0x12E8F` | `0x12E96` |
+| Vista x64 | `0x476B6` | `call r8` `0x4775B` (`mov r12d,eax`) | `0x47802` | `test r12b,1` / `test r12b,2` `0x47814` / `0x4781A` | `0x47823` |
+| Windows 7 x64 | `0x3D4E8` | `call r8` `0x3D561` (`mov esi,eax`) | `0x3D5D1` | `test sil,1` / `test sil,2` `0x3D5DF` / `0x3D5E5` | `0x3D5EE` |
+
+The flag the in-lock `test al,3` clears differs by build: `0x10000` of
+`+0x3D8` on Vista x86 (`and dword ptr [ebx+3D8h],0FFFEFFFFh`, `0x11FA7`) and
+`0x400` of `+0x3F0` on Windows 7 x86 (`and dword ptr [ebx+3F0h],0FFFFFBFFh`,
+`0x12E21`); `0x400` is the bit `MPRH_EnableIrq` and `MPRH_DisableIrq` set and
+clear (section 4, "The root hub on NT 6.x"). `USBPORTSVC_InvalidateRootHub`
+is the same `Ev_Rh_IntrEp_Invalidate` call plus a log record (Windows 7 x86
+`0x1F9E3`, the call at `0x1FA35`; Vista x86 the call at `0x27008`; Vista x64
+at `0x399C9`; Windows 7 x64 a tail `jmp` at `0x2FCE3`). So a miniport can have
+a root-hub change announced from inside `InterruptDpcEx` without calling the
+service there: it returns bit 1 or bit 0, and usbport makes the identical
+call a few hundred instructions later, after `ProcessNeoStateChangeList`,
+with nothing held. **Calling the service from inside `InterruptDpcEx` can
+deadlock a multiprocessor**, because it takes the RH-IntrEp lock under the
+ISR-DPC lock and usbport takes them the other way round (section 4, "The root
+hub on NT 6.x"). This driver's `xhciInterruptDpc` returns bit 1 on a pass that
+consumed a Port Status Change Event or that took a change latched elsewhere,
+and bit 0 when a completion is parked for `PollEndpoint`; on the Version 300
+tier it never calls the service from there (design record 05, "Where the root
+hub may be announced").
+
+**The "not operational" gate.** The MP-lock test at the head of `IsrDpc`
+(Vista x86 `lea ecx,[ebx+798h]` `0x11EE1`, `test byte ptr [ebx+3DCh],2`
+`0x11EE9`, `jne` to the release `0x11EF6`; Windows 7 x86 `0x12D8B`,
+`test byte ptr [ebx+3F4h],2` `0x12D93`, `jne 12E83` `0x12DA0`; Vista x64
+`0x47677`, `test byte ptr [rdi+500h],2` `0x47684`; Windows 7 x64 `0x3D4BA`,
+`test byte ptr [rbx+4F0h],2` `0x3D4C7`, `jne 3D5D1` `0x3D4D5`) has no NT 5.x
+counterpart: every NT 5.x and 9x-era build calls `InterruptDpc` with no gate.
+The bit is set by `USBPORT_FdoDevicePowerState` and `USBPORT_StopDevice`
+after they disable interrupts, and by two paths that then enable interrupts
+while it is still set: `USBPORT_TurnUsbControllerOn` (set on entry, cleared
+after its `MPRH_DisableIrq`) and the restart branch of
+`USBPORT_ResumeUsbController`, taken when `MPf_ResumeController` fails
+(Windows 7 x86: `MpInterrupts(TRUE)` at `0x32373` with the bit set at
+`0x32293` and cleared at `0x3238D`, and at `0x29F08` with the bit set at
+`0x29E9D` and cleared at `0x29F5D`; the other builds' addresses are in
+`docs/contributing/legal-provenance.md` section 4). An interrupt the miniport
+claims inside either window queues an `IsrDpc` that skips it - on one CPU
+always, since the DPC runs before the power path reaches the clear - and
+nothing else queues one: the only other queuers are reached from
+`InvalidateController(SOFT_INTERRUPT)`, which this driver never asks for. A
+miniport whose ISR masks its interrupter until its DPC re-arms it is left
+silent there until the next power transition. That is a hazard in this
+driver, not fixed, and why its `XhciUnmaskInterrupts` takes no ISR claim as
+proof of a coming re-arm (design record 05 section 4). Whether a claim lands
+in either window at runtime has not been read.
 
 **`MiniPortFlags` on NT 6.x.** Microsoft's own values, from each
 `usbehci.sys` `DriverEntry`: XP SP3 and XP x64 `0x295` with `Version = 200`;
@@ -2491,7 +2553,7 @@ prints the same RVAs, so no Visual Studio install is needed to repeat it.
 | `RH_GetPortStatus` | `MPSTATUS (ext, USHORT Port, PUSB_PORT_STATUS_AND_CHANGE)` [290-294] (ReactOS's spelling; `src/xhci_usbport.h` calls the same 4-byte type `PUSBPORT_PORT_STATUS_AND_CHANGE`) | `Port` is the raw hub-class `wIndex`: 1-based, validated against `bNumberOfPorts` before the call [roothub.c:124-152] - but not on the status-change-endpoint path, which walks 1..`bNumberOfPorts` itself [roothub.c:603-627]. Output is the standard USB hub port status/change bitmap (4 bytes). Return `MP_STATUS_SUCCESS` even when there is nothing to report: any nonzero return aborts that whole SCE scan with `RH_STATUS_UNSUCCESSFUL` [roothub.c:604-614], stalling the root hub's change pipe on every poll |
 | `RH_GetHubStatus` | `MPSTATUS (ext, PUSB_HUB_STATUS_AND_CHANGE)` [296-299] (`PUSBPORT_HUB_STATUS_AND_CHANGE` in `src/xhci_usbport.h`) | Constant zeros. Same two-path story as `RH_GetPortStatus` above: mapped through section 2's table on the class GET_STATUS path [roothub.c:160], but tested directly by the status-change endpoint [roothub.c:630, 657], where a nonzero return abandons the whole scan with `RH_STATUS_UNSUCCESSFUL`. Return `MP_STATUS_SUCCESS` even when reporting no changes |
 | `RH_SetFeature...` / `RH_ClearFeature...` (12 entries: 4 Set + 8 Clear, packet `0xA0`-`0xCC`) | `MPSTATUS (ext, USHORT Port)` [301-359] | Port is 1-based on the ordinary class-command routing, which validates it against `bNumberOfPorts` first - but not universally: SP4's hub-directed path passes `Port = 0` to `RH_ClearFeaturePortOvercurrentChange` (`0x207EC` pushes zero, `0x207F3` calls packet `0xCC`), so that callback must tolerate 0 rather than index with it. Feature routing done by usbport from the hub SETUP packet [roothub.c:126-171ff]. Refuse an unsupported operation with `MP_STATUS_NOT_SUPPORTED`, never `MP_STATUS_FAILURE`; see the status-mapping table in section 2. Note `SET_FEATURE(PORT_POWER)` reaches a USB2 miniport through `USBPORT_RH_SetFeatureUSB2PortPower` [roothub.c:33-97], which powers every companion controller's ports first and discards the miniport's return; the root-hub startup power/chirp loop discards it too [roothub.c:989-992]. ReactOS calls these at DISPATCH_LEVEL without `MiniportSpinLock` [roothub.c:170-285], so they must not block and must use miniport-owned synchronization for shared state. A lock does appear on the USB2 port-power path, but the helper drops it before the callback: `USBPORT_RH_SetFeatureUSB2PortPower` calls a helper that acquires at SP4 `0x27AED` and releases at `0x27C3C`, returning at `0x27C49`, and only then invokes `RH_SetFeaturePortPower` at `0x22ADE`/`0x22B0A`; NUSB is identical. That is a statement about *this helper*, not about callback entry in general: caller-held locking remains unverified, so "usbport does not serialize these" stays unsupported either way - use miniport-owned synchronization. Reset: set PORTSC.PR, arm a `UsbPortRequestAsyncCallback` timeout, return, and report completion through the change bit when PRC arrives (the ReactOS EHCI miniport uses this same asynchronous shape [usbehci/roothub.c:364-394]). Because the timer cannot be cancelled, pass a reset generation and let only the matching still-armed PRC/timeout path claim completion |
-| `RH_DisableIrq` / `RH_EnableIrq` | `VOID (ext)` [361-365] | Lifecycle read from the binaries: `USBPORT_InvalidateRootHub` calls `RH_DisableIrq`, and each image has a second disable site; the status-change scan calls `RH_EnableIrq` on its no-changes exit only - success, error, and the early return all bypass it - and that is the only enable site in each image, so a close is not guaranteed a matching open. Not shown, and not claimed: that every scan is preceded by a disable (each image also dispatches one with none). Per-build addresses, since these differ: SP4 enable `0x215F4`, disables `0x21C56` and `0x1D6C9`, unpaired dispatch `0x218FB`; NUSB enable `0x20F82`, disables `0x215E4` and `0x1D265`, unpaired dispatch `0x21289`. Project decision (from that lifecycle plus the xHCI argument that `IMAN.IE` gates the whole interrupter, not from the disassembly): implement as a pure software gate on whether a port change calls `UsbPortInvalidateRootHub`, hold no state that only an `RH_EnableIrq` could release, and never touch `IMAN.IE`, which would silence transfer completions too |
+| `RH_DisableIrq` / `RH_EnableIrq` | `VOID (ext)` [361-365] | On NT 6.x the lifecycle is usbport's root-hub queue's, under its RH-IntrEp and ISR-DPC locks, and the service calls neither ("The root hub on NT 6.x", above). On NT 5.x, the lifecycle read from the binaries: `USBPORT_InvalidateRootHub` calls `RH_DisableIrq`, and each image has a second disable site; the status-change scan calls `RH_EnableIrq` on its no-changes exit only - success, error, and the early return all bypass it - and that is the only enable site in each image, so a close is not guaranteed a matching open. Not shown, and not claimed: that every scan is preceded by a disable (each image also dispatches one with none). Per-build addresses, since these differ: SP4 enable `0x215F4`, disables `0x21C56` and `0x1D6C9`, unpaired dispatch `0x218FB`; NUSB enable `0x20F82`, disables `0x215E4` and `0x1D265`, unpaired dispatch `0x21289`. Project decision (from that lifecycle plus the xHCI argument that `IMAN.IE` gates the whole interrupter, not from the disassembly): implement as a pure software gate on whether a port change calls `UsbPortInvalidateRootHub`, hold no state that only an `RH_EnableIrq` could release, and never touch `IMAN.IE`, which would silence transfer completions too |
 | `RH_ChirpRootPort` | `MPSTATUS (ext, USHORT Port)` [518-521] | Called once per port at root-hub start, after powering companion-controller ports [roothub.c:995-1042]. The return is discarded. The gating is not the same on both targets: SP4 waits 100 ms (`0x22C55`) and gates on a literal interface `Version >= 0xC8` (`0x22CBB`) before calling at `0x22CCE`, matching ReactOS; NUSB does neither - no wait, no `Version` compare (its wrapper has no `Version` field), reaching packet `0x12C` at `0x22623` gated only on an internal `+0x48` bit tested at `0x225FC`, with no null check on the slot. Do not rely on the settle wait. Both builds withhold the slot below Version 200 at *registration*, so the version rule holds either way - but on NUSB it is the only thing standing between a sub-200 miniport and a null call. Register at 200. EHCI-specific HS handshake; for xHCI return success without bus action |
 
 `USB20_PORT_STATUS_RESERVED1_OWNED_BY_COMPANION (1 << 2)` [usbmport.h:288] -
@@ -2520,6 +2582,67 @@ the write that takes the port out of service (`XhciSlotPortDisabled`,
 port under reset reads that too (Table 5-27 p.371) and a shadow-derived
 trigger would tear down every device in the middle of the reset that is
 enumerating it.
+
+#### The root hub on NT 6.x: who calls `RH_EnableIrq` and `RH_DisableIrq`, holding what
+
+Static, all four NT 6.x builds, read for round 5 of task 24.3.4
+(2026-09-28); kd addresses at image base `0x10000`, per-build offsets and
+the full address list in `docs/contributing/legal-provenance.md` section 4.
+The NT 5.x lifecycle above does not carry over.
+
+- **`USBPORT_Ev_Rh_IntrEp_Invalidate`, the body of
+  `USBPORTSVC_InvalidateRootHub`, never calls `RH_DisableIrq`.** Under the
+  RH-IntrEp lock (FDO `+0x2F8` Vista x86, `+0x310` Windows 7 x86, `+0x3F0`
+  Vista x64, `+0x3E0` Windows 7 x64) it finds the root hub's
+  interrupt endpoint, references it (`USBPORT_ReferenceEndpoint`, which takes
+  EpList), takes an I/O-count reference and, when that endpoint's state
+  word reads 2 (setting it to 3), queues usbport's root-hub DPC,
+  `USBPORT_Ev_Rh_IntrEp_Dpc` (Windows 7 x86: the function at `0x1EA5C`,
+  RH-IntrEp acquired `0x1EAB3`,
+  `ReferenceEndpoint` `0x1EB19`, released `0x1EB56`). It takes no ISR-DPC,
+  MP, MP-call or timer-list lock.
+- **Only `MPRH_EnableIrq` and `MPRH_DisableIrq` call the miniport's
+  callbacks** (inlined at their Windows 7 x64 sites). Each takes RH-IntrEp
+  unless its caller holds it, then always the ISR-DPC lock, calls the
+  miniport, sets or clears flag `0x400`, and releases both (Windows 7 x86:
+  Enable `0x1DCAD`, ISR-DPC `0x1DCEE`, `call dword ptr [eax+0F0h]`
+  `0x1DCFF`; Disable `0x1DD7F`, RH-IntrEp `0x1DDB2`, ISR-DPC `0x1DDC0`,
+  `call dword ptr [eax+0ECh]` `0x1DDD1`).
+- **They are driven by usbport's root-hub status queue**, a cancel-safe
+  queue whose lock callbacks take RH-IntrEp. `RH_EnableIrq` runs when
+  usbhub's status-change IRP is inserted, from the tail of
+  `Ev_Rh_IntrEp_Dpc` whenever an IRP is still queued, and from
+  `MPf_SuspendController`. `RH_DisableIrq` runs when a removal empties the
+  queue (the root-hub DPC's worker completing the IRP, or its cancel), and
+  from `USBPORT_StopRootHubPdo`, `USBPORT_ResumeUsbController` and
+  `USBPORT_TurnUsbControllerOn`. Either way usbport holds RH-IntrEp and then
+  the ISR-DPC lock across the call. So on NT 6.x the notification gate is
+  open while usbhub has a status-change IRP queued, and an announcement has
+  nothing to do with closing it.
+- **The root-hub DPC runs `CheckController` with nothing held**, then its
+  worker (the status-change peek, which calls `RH_GetPortStatus` and
+  `RH_GetHubStatus` under the MP lock), then the tail above (Windows 7 x86
+  `0x1EE11`: `MPf_CheckController` `0x1EEF9`, the worker `0x1EF02`,
+  RH-IntrEp `0x1EF0F`, `MPRH_EnableIrq` `0x1EF1F`). No
+  `KeSetTargetProcessorDpc` appears in any of the four images, so it runs on
+  the CPU that queued it.
+- **usbport never takes RH-IntrEp holding another spin lock of its own.**
+  `IsrDpc` invalidates after releasing the ISR-DPC lock (section 1, "The
+  `InterruptDpcEx` contract"), the insert comes from
+  `USBPORT_RH_NeoQueueAsyncTransfer` with nothing held, the root-hub DPC
+  holds nothing on entry, and the `MPRH_*` callers with the lock not yet held
+  are the four power and PnP paths above. The one way RH-IntrEp is taken under
+  another lock is a miniport calling `USBPORTSVC_InvalidateRootHub` from a
+  context in which usbport holds one.
+
+What that means for a miniport: RH-IntrEp -> ISR-DPC is an order usbport
+takes on every root-hub DPC run with an IRP queued, so a call to the service
+from `InterruptDpcEx` (ISR-DPC held) can deadlock against a root-hub DPC on
+another CPU. That is the hang Windows 7 x86 and Vista x86 took in round 5,
+read from guest memory (the "debugger" tag; `runs/run-24.md`, "Round 5 on the
+fixed build"). Through RH-IntrEp -> EpList -> MP, and this driver's own
+timer-list arms under the ISR-DPC and MP locks, a call from a context holding
+the timer-list lock closes longer cycles too (design record 05 section 3).
 
 #### What the two USHORTs mean, and how well that is known
 
@@ -2847,8 +2970,8 @@ QueryEndpointRequirements/OpenEndpoint [endpoint.c:885-993].
 | 0x00 | `DeviceAddress` | USHORT | usbport's address for the device (0 during initial EP0 open; the miniport's usbport-address -> Slot ID map keys off this) |
 | 0x02 | `EndpointAddress` | USHORT | Raw `bEndpointAddress` (direction bit included) |
 | 0x04 | `TotalMaxPacketSize` | USHORT | MPS x (transactions per microframe) [endpoint.c:897-898]; during enumeration this is where the corrected EP0 MPS0 appears [device.c:1365] |
-| 0x06 | `Period` | UCHAR | Pre-bucketed power-of-two period 1/2/4/8/16/32, in microframes for High Speed and in frames for Full/Low Speed; 0 for control and bulk, forced to 1 for isoch. See "Periodic scheduling" below - the unit asymmetry is binary-confirmed and is an 8x error if read as one unit |
-| 0x07 | `Reserved1` | UCHAR | |
+| 0x06 | `Period` | UCHAR | Pre-bucketed power-of-two period 1/2/4/8/16/32, in microframes for High Speed and in frames for Full/Low Speed; 0 for control and bulk, forced to 1 for isoch. See "Periodic scheduling" below - the unit asymmetry is binary-confirmed and is an 8x error if read as one unit. **For an interrupt endpoint this is the USB 2.0 budget's period, not the pipe's** (roadmap 24.5): the budget (`MiniPortFlags` 0x10) overwrites it, and `Promote_endpoint_periods` sets it to 1 when the endpoint's start microframe lands past 2 - with no speed test on every NT 5.x-family build, for Full and Low Speed only on NT 6.x (static, all ten builds, `legal-provenance.md` section 4) |
+| 0x07 | `PipePeriod` (was `Reserved1`) | UCHAR | **Interrupt endpoints only: the pipe's own bucketed `Period`, copied here before the budget runs**, and never written again - the only reference to the offset in each image, so a promotion or a rebalance leaves it; 0 for every other type. Same offset on amd64. What this driver programs an interrupt endpoint's Interval from since roadmap 24.5 (static, all ten builds) |
 | 0x08 | `DeviceSpeed` | ULONG | `USB_DEVICE_SPEED` enum: UsbLowSpeed 0, UsbFullSpeed 1, UsbHighSpeed 2 (NT usbdi enum) |
 | 0x0C | `UsbBandwidth` | ULONG | usbport's budget figure |
 | 0x10 | `ScheduleOffset` | ULONG | USB2 budgeter output |
@@ -3120,8 +3243,8 @@ still required for everything else, including the rest of DW2.
 
 ### Periodic scheduling: what `Period` actually carries
 
-Static, from both `usbport.sys` builds and both shipping `usbehci.sys`
-builds.
+Static, from four `usbport.sys` builds (SP4, NUSB, and since roadmap task
+24.1 XP SP3 and SweetLow's rebuild) and both shipping `usbehci.sys` builds.
 
 The miniport never sees `bInterval`. usbport decodes the endpoint
 descriptor itself and delivers a single pre-bucketed `Period`, so the per-speed
@@ -3150,6 +3273,31 @@ into properties `+0x08`:
 - Low Speed only: a `raw` below 8 is raised to 8 (SP4 `0x25216`).
 - Then `raw` is rounded down to a power of two by shifting 32 rightwards
   until a bit matches (SP4 `0x25223`-`0x25231`), and anything `>= 32` stays 32.
+
+**The Low-Speed floor is not in every build**, and that is roadmap task 24.1's
+finding (2026-09-24, static, `dumpbin /disasm` from `tools/MSVC600`). Two more
+`USBPORT_OpenPipe` producers were read against the sequence above:
+
+| Build | The bucketing | The Low-Speed floor |
+|---|---|---|
+| Windows XP SP3 x86 `usbport.sys` 5.1.2600.5512 (`tools/winxpsp3-extracted/`) | `0x25A34`-`0x25A9C`: `cmp edx,2` on `DeviceSpeed` (`[esi+0x110]`), the High-Speed `raw` through a helper at `0x255EE`, `Period` at `Endpoint+0x10E` preloaded 32, the same shift-right loop (`0x25A7E`-`0x25A8A`) | **Present**: `test edx,edx` (Low Speed is 0) / `cmp al,8` / `jae` / `mov byte ptr [esi+10Eh],8` at `0x25A69`-`0x25A78` |
+| SweetLow's Windows 9x rebuild `USBPORT.SYS` 5.1.2600.2180 (`tools/sweetlow-extracted/`) | `0x24A31`-`0x24A8F`: `cmp dword ptr [esi+104h],2`, the High-Speed `raw` inline (`0x24A45`-`0x24A57`, `dec` then `min 5` then `shl`), `Period` at `Endpoint+0x102` preloaded 32, the same shift-right loop (`0x24A71`-`0x24A7D`) | **Absent**: the non-High-Speed arm is `mov al,byte ptr [edx+0Ah]` at `0x24A5B` straight into the rounding, with no compare against 8 anywhere between `0x24A5E` and the store at `0x24A83` |
+
+So under SweetLow's stack a Low-Speed interrupt endpoint arrives with `Period`
+= `bInterval` rounded down to a power of two, 1 to 32, and a polling-rate tool
+that sets a Low-Speed mouse's `bInterval` to 4, 2 or 1 behind a hub (where the
+device is at its true speed) delivers `Period` 4, 2 or 1 at Low Speed. Until
+task 24.1 `XhciIntervalFromPeriod` refused a Low-Speed `Period` below 8 on the
+strength of the SP4 and NUSB floors, so `OpenEndpoint` failed, usbport failed
+the pipe open, and the mouse showed Code 10 at 250 Hz and above - GitHub issue
+4's item 2 as the reporter, who runs this stack, saw it. The driver now
+translates those values as it does Full Speed's (Table 6-12 allows Interval 3
+to 10 at Low Speed), and a build that floors goes on sending 8 as before. The
+XP SP3 isochronous arm differs from SP4's unconditional 1 as well: a
+High-Speed isoch `Period` goes through the same `0x255EE` helper
+(`0x25AA0`-`0x25AB4`), Full and Low Speed keep 1 (`0x25ABC`); SweetLow's
+build keeps SP4's unconditional 1 (`0x24A93`). Neither changes what this
+driver does, which takes the isoch interval from the descriptor.
 
 So `Period` is a power of two in 1..32 - but its unit is not the same for all
 speeds. For High Speed it counts microframes; for Full and Low Speed it
@@ -3228,11 +3376,12 @@ HS gives `log2(Period) = min(bInterval - 1, 5)`, which is the table's
 `floor(log2(bInterval)) + 3` once the `+ 3` above is applied.
 
 The reachable ranges are therefore `Interval` 0-5 High Speed, 3-8 Full Speed,
-and 6-8 Low Speed. Low Speed is not 3-8, because usbport floors its `Period`
-at 8 before the miniport ever sees it. That is a far smaller space than "every
-LS/FS/HS bucket" suggests, and the clamps are usbport's, so a device asking
-for a 125 us HS period gets one, while one asking for faster than 32
-microframes is already slowed down before the miniport sees it.
+and 3-8 Low Speed - 6-8 from the three builds that floor a Low-Speed `Period`
+at 8 (SP4, NUSB, XP SP3), 3-8 from SweetLow's, which does not (the table
+above). That is a far smaller space than "every LS/FS/HS bucket" suggests, and
+the clamps are usbport's, so a device asking for a 125 us HS period gets one,
+while one asking for faster than 32 microframes is already slowed down before
+the miniport sees it.
 
 The two clamps are usbport's policy, not the hardware's, so they must not be
 re-applied or "corrected" here: xHCI's `Interval` field is 8 bits and would
@@ -3451,13 +3600,14 @@ Written into the packet at registration (section 1).
 | `UsbPortTestDebugBreak` | `ULONG (ext)` [405-406] | |
 | `UsbPortAssertFailure` | `ULONG (ext, PVOID, PVOID, ULONG, PCHAR)` [408-414] | |
 | `UsbPortGetMiniportRegistryKeyValue` | `MPSTATUS (ext, BOOL, PCWSTR, SIZE_T, PVOID, SIZE_T)` [416-423] | Read miniport registry parameters. Binary-confirmed in both shipping builds, argument by argument; see the `UsbPortGetMiniportRegistryKeyValue` subsection below |
-| `UsbPortInvalidateRootHub` | `ULONG (ext)` [425-426] | Tell usbport port status changed; it will re-poll via `RH_GetPortStatus` [roothub.c:916-956]. Call from the DPC on Port Status Change events (EHCI does [usbehci.c:1521, 3422-3433]). It re-enters the miniport before it does anything else: `RH_DisableIrq(MiniPortExt)` is its first act [roothub.c:941], so a miniport that holds its own lock across this call deadlocks on it if that callback takes the same lock - which is a hang rather than a lock-order warning, and is the reason this driver's announcement is decided under the lock and issued after releasing it. What follows is `USBPORT_InvalidateEndpointHandler` on the root hub's EP0, whose `ENDPOINT_FLAG_ROOTHUB_EP0` forces `INVALIDATE_ENDPOINT_WORKER_THREAD` [endpoint.c:1382-1425], i.e. `EndpointListSpinLock` plus a `KeSetEvent` - not `MiniportSpinLock`, so calling it from a callback that runs under that lock is safe on the mirror's evidence. Mirror-derived: the re-entry and the worker-thread path have not been re-read out of the shipping binaries, unlike the section 4 root-hub block |
+| `UsbPortInvalidateRootHub` | `ULONG (ext)` [425-426] | Tell usbport port status changed; it will re-poll via `RH_GetPortStatus` [roothub.c:916-956]. Call from the DPC on Port Status Change events (EHCI does [usbehci.c:1521, 3422-3433]). It re-enters the miniport before it does anything else: `RH_DisableIrq(MiniPortExt)` is its first act [roothub.c:941], so a miniport that holds its own lock across this call deadlocks on it if that callback takes the same lock - which is a hang rather than a lock-order warning, and is the reason this driver's announcement is decided under the lock and issued after releasing it. What follows is `USBPORT_InvalidateEndpointHandler` on the root hub's EP0, whose `ENDPOINT_FLAG_ROOTHUB_EP0` forces `INVALIDATE_ENDPOINT_WORKER_THREAD` [endpoint.c:1382-1425], i.e. `EndpointListSpinLock` plus a `KeSetEvent` - not `MiniportSpinLock`, so calling it from a callback that runs under that lock is safe on the mirror's evidence. Mirror-derived: the re-entry and the worker-thread path have not been re-read out of the shipping binaries, unlike the section 4 root-hub block. **On NT 6.x that conclusion is wrong for the callbacks usbport makes under its EpList lock** (`SubmitTransfer`, `AbortTransfer`, `PollEndpoint`, `SetEndpointState`): Vista x64's service reaches `USBPORT_AcquireEpListLock` through `USBPORT_Ev_Rh_IntrEp_Invalidate` and `USBPORT_ReferenceEndpoint` (FDO+0x1160; Windows 7 x64 FDO+0xF88; static, `legal-provenance.md` section 4), so it self-deadlocks there - task 24.3.4's Vista and Windows 7 hangs, which NT 5.x never showed. Never call it from those four. **On NT 6.x the re-entry above does not happen**: the service never calls `RH_DisableIrq` (section 4, "The root hub on NT 6.x"). What bites there instead is the RH-IntrEp lock it takes, under which usbport takes its ISR-DPC lock: called from `InterruptDpcEx` it deadlocks against usbport's root-hub DPC on another CPU (round 5, Windows 7 x86 and Vista x86), and called under the timer-list lock it closes longer cycles through this driver's Ex arms (design record 05 section 3). On the Version 300 tier this driver calls it only where usbport holds no spin lock, and reports a change from `InterruptDpcEx` through the return's port bit instead (section 1, "The `InterruptDpcEx` contract") |
 | `UsbPortInvalidateEndpoint` | `ULONG (ext, epExt-or-NULL)` [428-431] | Kick usbport's endpoint worker; NULL = all endpoints (EHCI DPC passes NULL [usbehci.c:1515]) |
 | `UsbPortCompleteTransfer` | `VOID (ext, epExt, transferParams, USBD_STATUS, ULONG bytes)` [433-439] | Complete a non-iso transfer (section 4) |
 | `UsbPortCompleteIsoTransfer` | `ULONG (ext, epExt, transferParams, PVOID isoParams)` [441-446] | Packet slot 0x100, `ret 10h`. The declaration is confirmed; the fourth argument is the same iso-parameters block `SubmitIsoTransfer` was given, and `epExt` is not read at all. Layout and completion contract: section 4, "Isochronous transfers" |
 | `UsbPortLogEntry` | `ULONG (ext, ULONG, ULONG, ULONG, ULONG, ULONG)` [448-455] | Event log ring |
 | `UsbPortGetMappedVirtualAddress` | `PVOID (ULONG pa, PVOID ext, PVOID epExt)` [457-461] | PA is the first argument (unique among services). Translates a physical address inside an endpoint's common buffer back to its VA (EHCI resolves hardware TD pointers this way [usbehci.c:2525, 3067]) |
-| `UsbPortRequestAsyncCallback` | `ULONG (ext, ULONG ms, PVOID ctx, SIZE_T ctxLen, ASYNC_TIMER_CALLBACK *)` [468-474] | One-shot timer callback; callback receives `(MiniportExtension, CallBackContext)` [463-466]. ReactOS invokes it directly from `USBPORT_AsyncTimerDpc` without `MiniportSpinLock` or `MiniportInterruptsSpinLock`, and exposes no cancellation service [usbport.c:2089-2164]. Use a copied generation/context plus miniport-owned synchronization; stale or post-stop callbacks must do nothing. This is the sanctioned deferred-work tool (no private DPCs/threads) for command/reset watchdogs |
+| `UsbPortRequestAsyncCallback` | `ULONG (ext, ULONG ms, PVOID ctx, SIZE_T ctxLen, ASYNC_TIMER_CALLBACK *)` [468-474] | One-shot timer callback; callback receives `(MiniportExtension, CallBackContext)` [463-466]. ReactOS invokes it directly from `USBPORT_AsyncTimerDpc` without `MiniportSpinLock` or `MiniportInterruptsSpinLock`, and exposes no cancellation service [usbport.c:2089-2164]. Use a copied generation/context plus miniport-owned synchronization; stale or post-stop callbacks must do nothing. This is the sanctioned deferred-work tool (no private DPCs/threads) for command/reset watchdogs. **On NT 6.x it is not self-synchronising** (static, all four NT 6.x builds, `legal-provenance.md` section 4): the legacy slot forwards to `USBPORTSVC_RequestAsyncCallbackEx` with its seventh argument 1, which skips the Ex function's own `KeAcquireSpinLockRaiseToDpc` on the timer-list lock (Vista x86 FDO+0xD04, Windows 7 x86 FDO+0xB94, Vista x64 FDO+0x11C0, Windows 7 x64 FDO+0xFE0) - it assumes its caller holds that lock, as usbport does around its root-hub feature callbacks and its timer DPC. An arm from anywhere else races the timer DPC's removal from the list on another CPU. This driver armed from such places (the command pump, the event DPC, the health poll, the virtual hub's submit): found in task 24.3.4 and taken as roadmap 24.4 (owner, 2026-09-27). It does not take EpList, so it does not meet the `UsbPortInvalidateRootHub` deadlock. **Since roadmap 24.4 the legacy slot is never called on the Version 300 tier**: every arm goes through `UsbPortRequestAsyncCallbackEx` (below) with its lock byte 0, from a context usbport reaches holding nothing, its MP lock or its ISR-DPC lock, and every other context owes the arm to the next such one (design record 05, "Where a timer may be armed"). NT 5.x is unchanged |
+| `UsbPortRequestAsyncCallbackEx` (Version 300 tier, `0x1B0` / `0x308`) | `NTSTATUS (ext, ULONG ms, PVOID ctx, SIZE_T ctxLen, ASYNC_TIMER_CALLBACK *, PVOID *entryHandle /* optional */, BOOLEAN skipLock)` - x86 stdcall, `ret 1Ch` (static, all four NT 6.x builds) | With `skipLock` 0 it takes usbport's timer-list lock itself (FDO+0xD04 Vista x86, +0xB94 Windows 7 x86, +0x11C0 Vista x64, +0xFE0 Windows 7 x64) and, under it, the I/O-count lock; allocates `0xE8 + ctxLen` bytes on x64 (`0x80 + ctxLen` on x86), copies the context, initialises and sets a KTIMER/KDPC pair, inserts the entry at the tail and writes the handle if asked. Answers 0, `0xC000000D` for a zero `ctxLen`, `0xC000009A` when the allocation fails, `0xC0000095` on x64 overflow - so a lost arm is reportable here, unlike the legacy slot's 0. The legacy slot is this call with `(NULL, 1)`, forwarding its answer. **Never call it from a context that may hold the timer-list lock** - a timer callback or a root-hub feature callback, each of which arrives both with it and without it - nor under EpList (an endpoint callback): the first spins, the second inverts the timer DPC's order through `InvalidateRootHub`. The companion `UsbPortCancelAsyncCallback (ext, entryHandle, BOOLEAN lockHeld)` cancels by handle and answers FALSE once the DPC owns the entry; not called by this driver |
 | `UsbPortReadWriteConfigSpace` | `MPSTATUS (ext, BOOLEAN IsRead, PVOID buf, ULONG offset, ULONG len)` [476-482] | PCI config access; TRUE = read (EHCI reads FLADJ with TRUE [usbehci.c:1195-1200]). Use for VID/DID quirk lookup and Intel `XUSB2PR` switchover |
 | `UsbPortWait` | `NTSTATUS (ext, ULONG ms)` [484-487] | Implemented as `KeDelayExecutionThread` [usbport.c:545-551], so PASSIVE_LEVEL only: safe inside `StartController`, never inside DISPATCH-level callbacks (Open/Submit/DPC...). `ResetController` is one of those: usbport calls it from a DPC holding a spin lock, so it is not a PASSIVE context and nothing that waits may be reached from it |
 | `UsbPortInvalidateController` | `ULONG (ext, ULONG type)` [493-496] | Types in section 2; RESET requests recovery (EHCI uses it on fatal error [usbehci.c:1426, 2925]) |
@@ -3585,8 +3735,9 @@ state goes - is derived from this table in
 |---|---|
 | `MiniportSpinLock` | usbport's lock around endpoint open/close/state/submit/abort, `CheckController`, `Get32BitFrameNumber`, Enable/DisableInterrupts, and the root-hub status-query callbacks. The root-hub Set/Clear feature callbacks are a documented exception in ReactOS: they run at DISPATCH_LEVEL without this lock. Evidence: [endpoint.c:762-783, 1049-1055, 1218-1247, 1495-1502, 1564-1587; usbport.c:568-585, 1177-1184; roothub.c:148-164, 170-285] |
 | `MiniportInterruptsSpinLock` | Separate lock held (at DPC level) around `InterruptDpc` [usbport.c:1089-1095]. Implication: `InterruptDpc` can run concurrently with a `MiniportSpinLock`-holding callback - the miniport needs its own interior lock for structures shared between the DPC path and the submit path (ring enqueue/dequeue state) |
-| Async timer DPC | `UsbPortRequestAsyncCallback` callbacks run at DISPATCH_LEVEL without either usbport miniport lock [usbport.c:2089-2109], confirmed in the NUSB binary at `0002785E`. They can race `InterruptDpc` and callback paths on SMP, and can run stale after the operation completed - including after a stop and a restart, since nothing can cancel one and usbport zeroes the miniport extension before every start. Validate a token that does *not* live in that extension before touching anything, then generation and lifecycle state under the miniport's own lock; see "`UsbPortRequestAsyncCallback`: what its return value is worth, and what it costs" above |
-| ISR | `InterruptService` runs at DIRQL from usbport's connected ISR; gated by usbport's enable flags [usbport.c:1110-1142] |
+| Async timer DPC | `UsbPortRequestAsyncCallback` callbacks run at DISPATCH_LEVEL without either usbport miniport lock [usbport.c:2089-2109], confirmed in the NUSB binary at `0002785E`. On NT 6.x `USBPORT_AsyncTimerDpc` holds usbport's timer-list lock across the callback (Windows 7 x64 FDO+0xFE0, static), so a callback that announces nests the RH-IntrEp lock and EpList inside it; on the Version 300 tier this driver's timer callbacks announce nothing (design record 05, "Where the root hub may be announced"). They can race `InterruptDpc` and callback paths on SMP, and can run stale after the operation completed - including after a stop and a restart, since nothing can cancel one and usbport zeroes the miniport extension before every start. Validate a token that does *not* live in that extension before touching anything, then generation and lifecycle state under the miniport's own lock; see "`UsbPortRequestAsyncCallback`: what its return value is worth, and what it costs" above |
+| ISR | `InterruptService` runs at DIRQL from usbport's connected ISR; gated by usbport's enable flags [usbport.c:1110-1142]. On every build the targets run, a TRUE return queues `IsrDpc` unconditionally (NT 6.x bar a rundown count that blocks only after `StopDevice`), and `IsrDpc` reads its interrupt-enabled flag under the same lock `EnableInterrupts` and `DisableInterrupts` run under; on NT 6.x it skips the miniport while the "not operational" bit is set (section 1). Static, per build: `docs/contributing/legal-provenance.md` section 4 |
+| NT 6.x RH-IntrEp lock | The root-hub interrupt endpoint's lock. usbport takes it holding nothing and takes its ISR-DPC lock under it (`MPRH_EnableIrq` / `MPRH_DisableIrq`), and EpList, the I/O-count lock and the RH-PDO pointer lock under it (`Ev_Rh_IntrEp_Invalidate`); `USBPORTSVC_InvalidateRootHub` takes it. Call that service only from a context in which usbport holds no spin lock (section 4, "The root hub on NT 6.x") |
 | PASSIVE contexts | `StartController` (can `UsbPortWait`), `StopController`/power paths, and the worker thread that invokes `CheckController` (but under `MiniportSpinLock`, i.e. raised to DISPATCH at the call itself) |
 | Worker/timer | usbport runs a worker thread and a 500 ms timer [pnp.c:881-882]; state-change confirmation is frame-number based [endpoint.c:407-424] |
 | Registration packet | Keep it global; it is both the callback table usbport copied and the service table the miniport calls through |
@@ -3693,9 +3844,18 @@ are the dumper's addresses, as in `usbport-disasm.txt` beside it:
   empty-list exits at `0x26658` and `0x2665E` do not guard this branch.
 
 Thus this rebuild supplies no empty-list guard on which to base a truthful
-root-port speed option. No truthful-speed guest run was made on it; this
-is a static result, not a newly observed bugcheck. Its source package is
-the SweetLow `usb20_win9x.zip` recorded in `legal-provenance.md` section 4.
+root-port speed option. Its source package is the SweetLow
+`usb20_win9x.zip` recorded in `legal-provenance.md` section 4.
+
+A truthful-speed guest run was then made on it (2026-09-25, an uncommitted
+build, roadmap task 24.3, `docs/contributing/runs/run-24.md`): Windows 98 SE
+under this usbport took a fatal exception 0E at `0028:C002F70E` in
+`NTKERN`, the address NUSB's build gives, after usbhub reset a root port
+holding a Full-Speed device and before usbport opened that device's EP0.
+The run is consistent with the branch above and does not observe it: no
+debugger was attached, so which instruction produced the pointer was not
+read at run time. The branch stays a static reading; the crash is a runtime
+one.
 
 `USBPORT_OpenPipe` (SP4 `0x24EBC`) then null-checks `TtExtension` at `0x24FC6`,
 which `0xFFFFFFEC` passes, and inserts at `TtExtension + 0xC`:

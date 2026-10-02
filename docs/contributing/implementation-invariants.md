@@ -1135,7 +1135,9 @@ must therefore do.
     `EndpointProperties->Period`: a device it believes is High Speed goes
     through `USBPORT_NormalizeHsInterval`, which is `1 << min(bInterval-1, 5)`,
     measured in microframes; the truthful Full/Low Speed path buckets in
-    frames, to powers of two in 1..32 with Low Speed floored at 8.
+    frames, to powers of two in 1..32, Low Speed floored at 8 on Windows 2000
+    SP4, NUSB and XP SP3 and not floored on SweetLow's rebuild (roadmap task
+    24.1; the driver accepts either).
     `USBPORT_ENDPOINT_PROPERTIES` carries no raw
     `bInterval`, so the miniport receives only the result - and the result is
     lossy, because every true `bInterval >= 6` collapses onto the same clamped
@@ -1156,7 +1158,7 @@ must therefore do.
     32 ms. The override polls at the same or a shorter interval; changes
     within a band cannot change the programmed interval. Periodic bandwidth
     accounting under the believed speed remains unmeasured, so this is not
-    evidence that usbport's bandwidth budget is correct. Issue 06 section 4
+    evidence that usbport's bandwidth budget is correct. Issue 06 section 5
     records the measured bands. Do not reconstruct `bInterval` from `Period`.
   - **It is gated on a connection**, because the speed bits mean nothing without
     one and an empty port claiming High Speed would be a second untruth rather
@@ -1269,6 +1271,16 @@ must therefore do.
   (`external/reactos/usbport/roothub.c:916-956`), which takes that same
   non-recursive spin lock. Decide the announcement under the lock and make the
   call after releasing it.
+  - That re-entry is NT 5.x's. On the Version 300 tier the rule is wider: the
+    service is called only from a context in which usbport holds no spin
+    lock, because on NT 6.x it takes usbport's RH-IntrEp lock, under which
+    usbport takes its ISR-DPC lock, and Vista and Windows 7 deadlocked on it
+    (round 5 of task 24.3.4). Not from the event DPC (usbport's ISR-DPC
+    lock), a root-hub feature or timer callback (possibly its timer-list
+    lock), a status query (possibly its MP lock) or an endpoint callback
+    (EpList). The event DPC reports a change through `InterruptDpcEx`'s port
+    bit instead, and the others latch it for the health poll or the next
+    event DPC (design record 05, "Where the root hub may be announced").
 - **One invalidation drains every owed change.** It makes usbport re-poll all
   ports - the status-change scan walks 1..N calling `RH_GetPortStatus` - so a
   second call asks for a pass the first already covers. And a change latched

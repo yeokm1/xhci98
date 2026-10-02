@@ -295,10 +295,11 @@ and bandwidth paths. What that would take is recorded in
 `docs/future-plans/superspeed-hcd-reimplementation.md`; the narrower case of
 a bulk device on a root port is `docs/future-plans/superspeed-storage-behind-a-switch.md`.
 
-It is a separate driver-stack project with little practical benefit on the
-target operating systems; High-Speed already covers the intended HID, storage,
-Ethernet, and audio workloads. A controller exposing only USB 3.x protocol
-ports is therefore refused at start (`XHCI_CAPS_NO_MANAGED_PORTS`) rather than
+It is a driver-stack project of its own, on the cards as this driver's
+successor once the miniport stabilises (owner, 2026-10-02) but not scheduled;
+until it is, High-Speed covers
+the intended HID, storage, Ethernet, and audio workloads. A controller exposing
+only USB 3.x protocol ports is therefore refused at start (`XHCI_CAPS_NO_MANAGED_PORTS`) rather than
 driven.
 
 That refusal is a per-controller condition, not a per-connector one. USB4

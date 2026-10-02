@@ -410,6 +410,20 @@ XHCI_C_ASSERT(packet_is_whole_words,
 #define XHCI_IMOD_VALUE_BYTES (22 * 2)
 
 /*
+ * Task 24.3's three values (design record 12 section 3.1), in the same key and
+ * read by the same service. The switch is a DWORD like the two above; the ids
+ * are strings, read into a fixed buffer the pure core parses
+ * (`XhciVhubParseId`). 16 characters and 19, so (16 + 1) * 2 and (19 + 1) * 2
+ * by the length rule above.
+ */
+#define XHCI_VHUB_VALUE_NAME        L"XhciVirtualHSHub"
+#define XHCI_VHUB_VALUE_BYTES       (17 * 2)
+#define XHCI_VHUB_VID_VALUE_NAME    L"XhciVirtualHSHubVid"
+#define XHCI_VHUB_VID_VALUE_BYTES   (20 * 2)
+#define XHCI_VHUB_PID_VALUE_NAME    L"XhciVirtualHSHubPid"
+#define XHCI_VHUB_PID_VALUE_BYTES   (20 * 2)
+
+/*
  * How much of the ring one DebugView emit carries. Small and a loop, not one
  * buffer the size of the ring: MSVC emits a `__chkstk` probe for a local of a
  * page or more and the Win2000 DDK's driver libraries do not provide one -
@@ -646,6 +660,62 @@ static VOID xhciImodRead(PXHCI_EXTENSION ext)
     if (status == MP_STATUS_SUCCESS) {
         ext->ImodRequested = value;
     }
+}
+
+/*
+ * Read task 24.3's switch and, only when it asks for a hub, the two id strings
+ * (design record 12 section 3.1). A routine of its own for the reason the
+ * moderation read has one, and with every property of both: the PASSIVE-only
+ * service, the same key, a re-read at every start, and **nothing here may fail
+ * a start** - a missing value, a failed read and a NULL service all leave the
+ * feature off and the driver starting as the 24.1 build does.
+ *
+ * What to apply is the pure core's decision, not this function's: it records
+ * the switch read, answers whether the ids are to be consulted at all - so
+ * "never with the switch off" is the core's return and nothing else - and
+ * applies the mode only when both parse. The ids are read into zeroed buffers
+ * sized for the longest accepted form (`XHCI_VHUB_ID_BUF_BYTES`); the service
+ * copies exactly that many bytes whatever the value holds, and fails a value
+ * longer, and the core reads only up to the first terminator.
+ *
+ * IRQL: PASSIVE_LEVEL.
+ */
+static VOID xhciVhubRead(PXHCI_EXTENSION ext)
+{
+    UCHAR vid[XHCI_VHUB_ID_BUF_BYTES];
+    UCHAR pid[XHCI_VHUB_ID_BUF_BYTES];
+    ULONG value;
+    ULONG i;
+    MPSTATUS status;
+    MPSTATUS vidStatus;
+    MPSTATUS pidStatus;
+
+    if (XhciRegPacket.UsbPortGetMiniportRegistryKeyValue == NULL) {
+        (VOID)XhciVhubConfigSwitch(&ext->VhubConfig, MP_STATUS_FAILURE, 0);
+        return;
+    }
+
+    value = 0;
+    status = XhciRegPacket.UsbPortGetMiniportRegistryKeyValue(
+        ext, TRUE, XHCI_VHUB_VALUE_NAME,
+        (ULONG_PTR)XHCI_VHUB_VALUE_BYTES, &value,
+        (ULONG_PTR)sizeof(value));
+    if (!XhciVhubConfigSwitch(&ext->VhubConfig, (ULONG)status, value)) {
+        return;
+    }
+
+    for (i = 0; i < XHCI_VHUB_ID_BUF_BYTES; i++) {
+        vid[i] = 0;
+        pid[i] = 0;
+    }
+    vidStatus = XhciRegPacket.UsbPortGetMiniportRegistryKeyValue(
+        ext, TRUE, XHCI_VHUB_VID_VALUE_NAME,
+        (ULONG_PTR)XHCI_VHUB_VID_VALUE_BYTES, vid, (ULONG_PTR)sizeof(vid));
+    pidStatus = XhciRegPacket.UsbPortGetMiniportRegistryKeyValue(
+        ext, TRUE, XHCI_VHUB_PID_VALUE_NAME,
+        (ULONG_PTR)XHCI_VHUB_PID_VALUE_BYTES, pid, (ULONG_PTR)sizeof(pid));
+    (VOID)XhciVhubConfigIds(&ext->VhubConfig, (ULONG)vidStatus, vid,
+                            (ULONG)pidStatus, pid, XHCI_VHUB_ID_BUF_BYTES);
 }
 
 
@@ -1095,6 +1165,26 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
         ext->DeliverUnderUsbportLockOnly = 1;
         ext->DeliverPerEndpointOnly = 1;
     }
+    /*
+     * Roadmap 24.4 (XHCI_EXTENSION.ArmThroughExOnly): on the Version 300 tier
+     * every timer goes through the Ex service with its own lock, from the
+     * contexts that may take it. Only if usbport wrote the slot - a 300
+     * registration that did not is already ABI-SUSPECT in the log, and the
+     * legacy arming it falls back to is every earlier build's. Before the
+     * signatures, like the gates above.
+     */
+    ext->ArmThroughExOnly =
+        (xhciInterfaceVersionPresented >= USBPORT_NT6_MINIPORT_INTERFACE_VERSION &&
+         XhciRegPacket.UsbPortRequestAsyncCallbackEx != NULL) ? 1UL : 0UL;
+    /*
+     * XHCI_EXTENSION.RootHubReportThroughDpc: keyed on the version alone,
+     * because the lock orders it avoids are usbport's whether or not the Ex
+     * slot was written, and InterruptDpcEx's port bit exists on every 300
+     * registration.
+     */
+    ext->RootHubReportThroughDpc =
+        (xhciInterfaceVersionPresented >= USBPORT_NT6_MINIPORT_INTERFACE_VERSION)
+            ? 1UL : 0UL;
 
     ext->Signature = XHCI_EXTENSION_SIGNATURE;
     ext->TrailingSignature = XHCI_EXTENSION_TRAILING;
@@ -1120,6 +1210,21 @@ static MPSTATUS NTAPI xhciStartController(PVOID miniPortExtension,
     xhciImodRead(ext);
     XhciLogNote(ext, "imod.status", ext->ImodStatus);
     XhciLogNote(ext, "imod.requested", ext->ImodRequested);
+    /*
+     * Task 24.3's switch, here for the same reason: `XhciInitController` builds
+     * the root hub, and the root hub is where a hub at value 2 is stood up. The
+     * notes say what was asked for and what was applied, and why not, beside
+     * the snapshot header that carries the same numbers.
+     */
+    xhciVhubRead(ext);
+    XhciLogNote(ext, "vhub.switch",
+                (ext->VhubConfig.SwitchStatus << 16) |
+                    (ext->VhubConfig.SwitchValue & 0xFFFFUL));
+    XhciLogNote(ext, "vhub.applied",
+                ((ULONG)ext->VhubConfig.Refused << 8) |
+                    (ULONG)ext->VhubConfig.Applied);
+    XhciLogNote(ext, "vhub.ids",
+                ((ULONG)ext->VhubConfig.Vid << 16) | (ULONG)ext->VhubConfig.Pid);
     /*
      * **`XhciLogNoteAddress`, because that value is a kernel pointer.** It is
      * usbport's own `USBPORT_RESOURCES` block, and the ladder's boundary
@@ -1395,13 +1500,15 @@ static ULONG NTAPI xhciInterruptDpc(PVOID miniPortExtension,
          * endpoint on either. Microsoft's own usbehci is built the same way -
          * its 0x4C function is a thunk onto its InterruptDpcEx.
          *
-         * The bit reported is the port one, and it is derived from the counter
-         * XhciEventDpc already keeps rather than from a new flag: a pass that
-         * consumed at least one Port Status Change Event is a pass after which
-         * the hub driver should look at the ports. The body still calls
-         * UsbPortInvalidateRootHub itself where it always did; on NT 6.x that
-         * and this bit reach the same place twice, which is harmless, and on
-         * NT 5.x the bit is simply not read.
+         * The bit reported is the port one, set on a pass that consumed at
+         * least one Port Status Change Event, and on the Version 300 tier also
+         * when XhciEventDpc says a change latched elsewhere is owed. IsrDpc
+         * turns the bit into `Ev_Rh_IntrEp_Invalidate` after releasing its
+         * ISR-DPC lock (static, all four builds), which is the only reason the
+         * body no longer calls UsbPortInvalidateRootHub there: from inside this
+         * callback that service deadlocked against usbport's own root-hub DPC
+         * (XHCI_EXTENSION.RootHubReportThroughDpc). On NT 5.x the bit is not
+         * read and the body announces as it always did.
          *
          * Bit 0 - usbehci's "transfer interrupt with pending work" - is
          * reported on the Version 300 tier whenever the drain left a
@@ -1416,8 +1523,9 @@ static ULONG NTAPI xhciInterruptDpc(PVOID miniPortExtension,
         portChangesBefore = ext->EventCounts[XHCI_EVENT_TYPE_INDEX(
             XHCI_TRB_TYPE_PORT_STATUS_CHANGE)];
 
-        XhciEventDpc(ext, enableInterrupts);
-
+        if (XhciEventDpc(ext, enableInterrupts)) {
+            result = USBPORT_DPC_EX_PORT_CHANGE;
+        }
         if (ext->EventCounts[XHCI_EVENT_TYPE_INDEX(
                 XHCI_TRB_TYPE_PORT_STATUS_CHANGE)] != portChangesBefore) {
             result = USBPORT_DPC_EX_PORT_CHANGE;
@@ -1660,6 +1768,8 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
     XHCI_DBG_VALUE_CHANGED("interrupter re-arm failures",
                            ext->InterruptRearmFailures);
     XHCI_DBG_VALUE_CHANGED("re-arm escalations", ext->RearmEscalations);
+    XHCI_DBG_VALUE_CHANGED("interrupter arms taken by an ISR claim",
+                           ext->InterruptArmsTakenByIsr);
     XHCI_DBG_VALUE_CHANGED("interrupt unmask failures",
                            ext->InterruptUnmaskFailures);
     XHCI_DBG_VALUE_CHANGED("host controller event resets",
@@ -2047,6 +2157,22 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
                            ext->DevicesDisownedOut);
     XHCI_DBG_VALUE_CHANGED("devices torn down by a port disable",
                            ext->DevicesDisabledOut);
+    XHCI_DBG_VALUE_CHANGED("port disowns settled with no device record",
+                           ext->DisownsSettledEmpty);
+    XHCI_DBG_VALUE_CHANGED("port disowns settled with idle disowned records",
+                           ext->DisownsSettledIdle);
+    XHCI_DBG_VALUE_CHANGED("addresses reclaimed from idle records",
+                           ext->AddressReclaims);
+    XHCI_DBG_VALUE_CHANGED("SET_ADDRESS refused - holder bound",
+                           ext->AddressRefusalsBound);
+    XHCI_DBG_VALUE_CHANGED("SET_ADDRESS refused - holder busy",
+                           ext->AddressRefusalsBusy);
+    XHCI_DBG_VALUE_CHANGED("SET_ADDRESS refused - holder topology",
+                           ext->AddressRefusalsTopology);
+    XHCI_DBG_VALUE_CHANGED("SET_ADDRESS refused - inconsistent owner",
+                           ext->AddressRefusalsOwner);
+    XHCI_DBG_VALUE_CHANGED("SET_ADDRESS refused - invalid address",
+                           ext->AddressRefusalsInvalid);
     XHCI_DBG_VALUE_CHANGED("transfer events for no open endpoint",
                            ext->TransferEventsForeign);
     XHCI_DBG_VALUE_CHANGED("transfer events with RsvdZ pointer bits set",
@@ -2239,6 +2365,12 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
                            ext->EndpointSpeedMismatches);
     XHCI_DBG_VALUE_CHANGED("endpoint intervals floored",
                            ext->EndpointIntervalsFloored);
+    /* Roadmap 24.5: interrupt endpoints opened at their own period because
+     * usbport's budget promoted theirs, and ones with no pipe period. */
+    XHCI_DBG_VALUE_CHANGED("endpoint periods promoted by usbport's budget",
+                           ext->EndpointPeriodsPromoted);
+    XHCI_DBG_VALUE_CHANGED("endpoint pipe periods missing",
+                           ext->EndpointPipePeriodsMissing);
     XHCI_DBG_VALUE_CHANGED("endpoints refused - no bandwidth",
                            ext->EndpointsNoBandwidth);
     XHCI_DBG_VALUE_CHANGED("endpoints refused - no resources",
@@ -2482,6 +2614,13 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
     XHCI_DBG_VALUE_CHANGED("RH ports busy", ext->RhPortsBusy);
     XHCI_DBG_VALUE_CHANGED("RH stale timers", ext->RhStaleTimers);
     XHCI_DBG_VALUE_CHANGED("RH timer failures", ext->RhTimerFailures);
+    /* Roadmap 24.4: the Version 300 tier's arms (design record 05, "Where a
+     * timer may be armed"). */
+    XHCI_DBG_VALUE_CHANGED("timer arms owed by a DEFER context",
+                           ext->AsyncArmsDeferred);
+    XHCI_DBG_VALUE_CHANGED("timer arms Ex refused", ext->AsyncArmsRefused);
+    XHCI_DBG_VALUE_CHANGED("root-hub changes reported through the DPC bit",
+                           ext->RootHubChangesReported);
     XHCI_DBG_VALUE_CHANGED("RH operations retired by age", ext->RhAgeRetires);
     /*
      * The other retirement cause, and it is one of the two witnesses task
@@ -2980,6 +3119,26 @@ static VOID NTAPI xhciCheckController(PVOID miniPortExtension)
     XHCI_DBG_VALUE_CHANGED("imod value requested", ext->ImodRequested);
     XHCI_DBG_VALUE_CHANGED("imod interval in force", ext->ImodInterval);
     XHCI_DBG_VALUE_CHANGED("imod readback", ext->ImodReadback);
+    /*
+     * Task 24.3's virtual hubs (design record 12), one site per counter so the
+     * offset table carries each: every one stays 0 with the switch off, which
+     * is the reading rule 2 is checked against in a guest.
+     */
+    XHCI_DBG_VALUE_CHANGED("vhub started", ext->VhubStarted);
+    XHCI_DBG_VALUE_CHANGED("vhub armed port", ext->VhubArmedPort);
+    XHCI_DBG_VALUE_CHANGED("vhub hubs created", ext->VhubCreated);
+    XHCI_DBG_VALUE_CHANGED("vhub hubs dropped", ext->VhubDropped);
+    XHCI_DBG_VALUE_CHANGED("vhub endpoint opens", ext->VhubOpens);
+    XHCI_DBG_VALUE_CHANGED("vhub requests answered", ext->VhubRequests);
+    XHCI_DBG_VALUE_CHANGED("vhub requests stalled", ext->VhubStalls);
+    XHCI_DBG_VALUE_CHANGED("vhub transfers failed", ext->VhubTransfersFailed);
+    XHCI_DBG_VALUE_CHANGED("vhub pipe completions", ext->VhubPipeCompletions);
+    XHCI_DBG_VALUE_CHANGED("vhub pipe cancels", ext->VhubPipeCancels);
+    XHCI_DBG_VALUE_CHANGED("soft interrupts asked for parked vhub answers",
+                           ext->SoftInterruptRequests);
+    XHCI_DBG_VALUE_CHANGED("vhub resets held", ext->VhubResetsHeld);
+    XHCI_DBG_VALUE_CHANGED("vhub forced connects", ext->VhubForcedConnects);
+    XHCI_DBG_VALUE_CHANGED("vhub TT pairs naming a hub", ext->VhubTtNamed);
     XHCI_DBG_VALUE_CHANGED("log enabled", ext->Log.Enabled);
     XHCI_DBG_VALUE_CHANGED("log records appended", ext->Log.Appends);
     XHCI_DBG_VALUE_CHANGED("log records suppressed", ext->Log.Suppressed);
@@ -3146,7 +3305,10 @@ static VOID NTAPI xhciResetController(PVOID miniPortExtension)
  * be a recovery that never retries, and clearing it earlier would let the health
  * poll arm a second one against the first.
  *
- * IRQL: DISPATCH_LEVEL, no usbport lock held.
+ * IRQL: DISPATCH_LEVEL, no usbport lock held on NT 5.x; on NT 6.x usbport's
+ * timer-list lock from the timer DPC, or none from Windows 7's StopController
+ * - an XHCI_ARM_DEFER context, which XhciRecoverController honours (roadmap
+ * 24.4).
  */
 static VOID NTAPI xhciRecoveryCallback(PVOID miniPortExtension, PVOID context)
 {
@@ -3245,7 +3407,10 @@ static VOID NTAPI xhciRecoveryCallback(PVOID miniPortExtension, PVOID context)
 }
 
 /*
- * Arm one recovery callback, and **only** from the health poll.
+ * Arm one recovery callback, and **only** from the health poll - which is an
+ * XHCI_ARM_UNLOCKED context on every tier: usbport calls CheckController
+ * holding no lock of its own on NT 6.x, having released its MP lock after a
+ * flag test (static, all four builds; roadmap 24.4).
  *
  * The arming does not happen in ResetController, where the request is raised,
  * and that placement is the point rather than an inconvenience:
@@ -3269,7 +3434,7 @@ static VOID xhciArmRecovery(PXHCI_EXTENSION ext)
     KIRQL oldIrql;
     ULONG arm;
 
-    if (XhciRegPacket.UsbPortRequestAsyncCallback == NULL) {
+    if (!XhciAsyncTimerAvailable()) {
         return;
     }
 
@@ -3383,10 +3548,32 @@ static VOID xhciArmRecovery(PXHCI_EXTENSION ext)
      * "the attempt cap bounds it either way"; neither was true - attempts are
      * counted only when a recovery runs - and the 2026-09-05 audit's F2 is the
      * record.)
+     *
+     * On the Version 300 tier the Ex service does report that failure, and
+     * the age-out's work is then done at once (roadmap 24.4): the arming is
+     * released, the request put back and the loss charged, exactly as
+     * XHCI_RECOVERY_DELIVERY_POLLS later would have. The next poll re-arms.
      */
-    (VOID)XhciRegPacket.UsbPortRequestAsyncCallback(
-        ext, XHCI_RECOVERY_DELAY_MS, &armed, sizeof(armed),
-        xhciRecoveryCallback);
+    if (XhciAsyncTimerArm(ext, XHCI_ARM_UNLOCKED, XHCI_RECOVERY_DELAY_MS,
+                          &armed, sizeof(armed), xhciRecoveryCallback) ==
+        XHCI_ARM_MADE) {
+        return;
+    }
+
+    XhciControllerLockAcquire(&oldIrql);
+    if (ext->RecoveryArmed && ext->RecoveryGeneration == armed.Generation) {
+        ext->RecoveryArmed = 0;
+        ext->RecoveryArmedPolls = 0;
+        ext->RecoveryGeneration++;
+        if (ext->ControllerFailed) {
+            ext->RecoveryRequested = 1;
+            ext->RecoveryDeliveriesLost++;
+            ext->RecoveryFailuresConsecutive++;
+            XhciLogNoteLocked(ext, "ctrl.recover.lost",
+                              ext->RecoveryDeliveriesLost);
+        }
+    }
+    XhciControllerLockRelease(oldIrql);
 }
 
 /*
@@ -4635,6 +4822,18 @@ static MPSTATUS NTAPI xhciPassThru(PVOID miniPortExtension,
     header->ImodRequested = 0;
     header->ImodInterval = 0;
     header->ImodReadback = 0;
+    header->VhubSwitchStatus = 0;
+    header->VhubSwitchValue = 0;
+    header->VhubApplied = 0;
+    header->VhubRefused = 0;
+    header->VhubVidStatus = 0;
+    header->VhubVidResult = 0;
+    header->VhubVidEncoding = 0;
+    header->VhubVid = 0;
+    header->VhubPidStatus = 0;
+    header->VhubPidResult = 0;
+    header->VhubPidEncoding = 0;
+    header->VhubPid = 0;
 
     if (requestSignature != XHCI_SNAPSHOT_REQUEST_SIGNATURE) {
         header->Status |= XHCI_SNAPSHOT_S_BAD_REQUEST;
@@ -4665,6 +4864,18 @@ static MPSTATUS NTAPI xhciPassThru(PVOID miniPortExtension,
     header->ImodRequested = ext->ImodRequested;
     header->ImodInterval = ext->ImodInterval;
     header->ImodReadback = ext->ImodReadback;
+    header->VhubSwitchStatus = ext->VhubConfig.SwitchStatus;
+    header->VhubSwitchValue = ext->VhubConfig.SwitchValue;
+    header->VhubApplied = ext->VhubConfig.Applied;
+    header->VhubRefused = ext->VhubConfig.Refused;
+    header->VhubVidStatus = ext->VhubConfig.VidStatus;
+    header->VhubVidResult = ext->VhubConfig.VidResult;
+    header->VhubVidEncoding = ext->VhubConfig.VidEncoding;
+    header->VhubVid = ext->VhubConfig.Vid;
+    header->VhubPidStatus = ext->VhubConfig.PidStatus;
+    header->VhubPidResult = ext->VhubConfig.PidResult;
+    header->VhubPidEncoding = ext->VhubConfig.PidEncoding;
+    header->VhubPid = ext->VhubConfig.Pid;
 
     /*
      * **The tear detector, and it is a SUM of four counters rather than one.**
@@ -5010,6 +5221,17 @@ static ULONG xhciVerifyPacketAfterRegistration(VOID)
 VOID XhciFillPacketForTest(VOID)
 {
     xhciFillPacket();
+}
+
+/* The Version DriverEntry would have presented, so a vector can start a
+ * controller on the NT 6.x tier (roadmap 24.4). Returns the previous value. */
+ULONG XhciSetInterfaceVersionForTest(ULONG version)
+{
+    ULONG previous;
+
+    previous = xhciInterfaceVersionPresented;
+    xhciInterfaceVersionPresented = version;
+    return previous;
 }
 
 #else

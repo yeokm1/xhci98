@@ -30,7 +30,10 @@
  *   section 6). A stale callback is therefore normal input, not an error: every
  *   one carries the generation it was armed with, and claims the outstanding
  *   command only if that generation is still current. Generations are monotonic
- *   and never reused, so the comparison cannot alias.
+ *   and never reused, so the comparison cannot alias. (NT 6.x's Version 300
+ *   tier adds `UsbPortRequestAsyncCallbackEx` and a cancel service; this
+ *   driver calls the first for its lock, never the second - roadmap 24.4,
+ *   XhciAsyncTimerArm.)
  *
  * The interior lock is the fourth. Submit, completion and timeout run under
  * three different (or no) usbport locks, so this driver needs its own - and it
@@ -269,25 +272,115 @@ VOID XhciLogNoteAddress(PXHCI_EXTENSION ext, const char *label, ULONG value)
 /* Arming the watchdog                                                 */
 /* ------------------------------------------------------------------ */
 
+/* See the contract in src/xhci_hw.h. IRQL: <= DISPATCH_LEVEL, controller lock
+ * released. */
+ULONG XhciAsyncTimerArm(PXHCI_EXTENSION ext,
+                        ULONG mode,
+                        ULONG milliseconds,
+                        PVOID context,
+                        ULONG contextLength,
+                        XHCI_ASYNC_TIMER_CALLBACK *callback)
+{
+    KIRQL oldIrql;
+    ULONG answer;
+
+    if (!ext->ArmThroughExOnly) {
+        /*
+         * The Version 200 tier, as every NT 5.x build has always been armed.
+         * The answer is discarded: USBPORT_RequestAsyncCallback returns 0 on
+         * success **and** 0 when its pool allocation fails (usbport.c), so
+         * there is nothing in it to act on.
+         */
+        if (XhciRegPacket.UsbPortRequestAsyncCallback == NULL) {
+            return XHCI_ARM_REFUSED;
+        }
+        (VOID)XhciRegPacket.UsbPortRequestAsyncCallback(
+            ext, milliseconds, context, (ULONG_PTR)contextLength, callback);
+        return XHCI_ARM_MADE;
+    }
+
+    if (mode != XHCI_ARM_UNLOCKED) {
+        XhciControllerLockAcquire(&oldIrql);
+        ext->AsyncArmsDeferred++;
+        XhciControllerLockRelease(oldIrql);
+        return XHCI_ARM_OWED;
+    }
+
+    /*
+     * Lock byte 0: the service takes usbport's timer-list lock itself. The
+     * handle is not asked for, because nothing here cancels (the stale
+     * callback is still the rule, and Windows 7's StopController runs a
+     * pending one early whatever this driver holds). The tier flag is set
+     * only when usbport wrote the slot; the test is for the host suite's
+     * vectors, which set the flag by hand.
+     */
+    if (XhciRegPacket.UsbPortRequestAsyncCallbackEx == NULL) {
+        return XHCI_ARM_REFUSED;
+    }
+    answer = XhciRegPacket.UsbPortRequestAsyncCallbackEx(
+        ext, milliseconds, context, (ULONG_PTR)contextLength, callback,
+        NULL, 0);
+    if (answer != 0) {
+        XhciControllerLockAcquire(&oldIrql);
+        ext->AsyncArmsRefused++;
+        XhciControllerLockRelease(oldIrql);
+        XHCI_DBG_VALUE("async timer: Ex refused the arm, status", answer);
+        return XHCI_ARM_REFUSED;
+    }
+    return XHCI_ARM_MADE;
+}
+
 /*
- * Always called with the controller lock **released**.
- * UsbPortRequestAsyncCallback is usbport's, and it takes usbport's own timer
- * lock; calling it under this driver's lock would nest two lock hierarchies
- * with no stated order between
- * them, which is the shape of a deadlock rather than of a race.
+ * Does a watchdog context still watch the outstanding command, in the state
+ * its phase watches? The owed arm's test, applied both where one is latched
+ * and where it is made: a context one CPU captured can have been overtaken by
+ * the time it reaches the latch - its command completed, a newer one owed
+ * its own watchdog - and replacing the newer owe with it would leave the
+ * newer command untimed (Codex review of roadmap 24.4, finding 2). The host
+ * suite cannot put a second CPU between the capture and the latch, so that
+ * half is a review property, like the epoch capture's.
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock held.
+ */
+static ULONG xhciCommandArmCurrent(PXHCI_EXTENSION ext,
+                                   const XHCI_COMMAND_TIMEOUT *context)
+{
+    return (context->Epoch == ext->StartEpoch &&
+            context->Generation == ext->CommandGeneration &&
+            ((context->Phase == XHCI_CMD_PHASE_COMMAND &&
+              ext->CommandState == XHCI_CMD_STATE_PENDING) ||
+             (context->Phase == XHCI_CMD_PHASE_ABORT &&
+              ext->CommandState == XHCI_CMD_STATE_ABORTING))) ? 1UL : 0UL;
+}
+
+/*
+ * Always called with the controller lock **released**. The timer service is
+ * usbport's, and on the Version 300 tier it takes usbport's own timer lock;
+ * calling it under this driver's lock would nest two lock hierarchies with no
+ * stated order between them, which is the shape of a deadlock rather than of
+ * a race.
  *
  * Nothing here fails the operation that armed it. A command that could not be
  * timed is worse off than one that could, but it is still a command that was
  * correctly issued, and the count is the record - there is no second timer
  * service to fall back to.
  *
+ * `mode` is the caller's context (XHCI_ARM_*). An arm a DEFER context may not
+ * make on the Version 300 tier is latched in the extension for
+ * XhciCommandDrainOwedArm, and so is one Ex refused: the watchdog is the
+ * command's, so a lost arm is re-owed rather than left to the 32 s age
+ * detector the legacy service's silence needed.
+ *
  * IRQL: <= DISPATCH_LEVEL.
  */
 static VOID xhciArmCommandTimer(PXHCI_EXTENSION ext,
+                                ULONG mode,
                                 ULONG milliseconds,
                                 const XHCI_COMMAND_TIMEOUT *what)
 {
     XHCI_COMMAND_TIMEOUT context;
+    KIRQL oldIrql;
+    ULONG answer;
 
     /*
      * The whole context is handed in by value, captured by the caller **under
@@ -306,30 +399,88 @@ static VOID xhciArmCommandTimer(PXHCI_EXTENSION ext,
     context = *what;
 
     /*
-     * The return value is deliberately discarded, and that is a statement about
-     * the service rather than laziness: USBPORT_RequestAsyncCallback returns 0
-     * on success **and** 0 when its pool allocation fails (usbport.c). There is
-     * no value it could return that this driver could act on. What is checkable
-     * - that the service exists at all - is checked by xhciCanArmTimer before
-     * anything is enqueued, so reaching here with a NULL pointer is a bug in
-     * this file rather than a condition.
+     * On the 200 tier the service's answer means nothing (XhciAsyncTimerArm),
+     * so REFUSED there is only the missing pointer - which xhciCanArmTimer
+     * checked before anything was enqueued, so reaching it is a bug in this
+     * file rather than a condition.
      */
-    if (XhciRegPacket.UsbPortRequestAsyncCallback == NULL) {
-        ext->CommandTimerFailures++;
-        XHCI_DBG_VALUE_CHANGED("command: no async timer service, generation",
-                               context.Generation);
+    answer = XhciAsyncTimerArm(ext, mode, milliseconds, &context,
+                               sizeof(context), xhciCommandTimeout);
+    if (answer == XHCI_ARM_MADE) {
         return;
     }
 
-    (VOID)XhciRegPacket.UsbPortRequestAsyncCallback(
-        ext, milliseconds, &context, sizeof(context), xhciCommandTimeout);
+    XhciControllerLockAcquire(&oldIrql);
+    if (answer == XHCI_ARM_REFUSED) {
+        ext->CommandTimerFailures++;
+    }
+    if (ext->ArmThroughExOnly && xhciCommandArmCurrent(ext, &context)) {
+        /* The engine has one command outstanding, so a current context
+         * replaces whatever an earlier one owed; a stale one owes nothing. */
+        ext->CommandArmOwed = 1;
+        ext->CommandArmOwedMs = milliseconds;
+        ext->CommandArmOwedEpoch = context.Epoch;
+        ext->CommandArmOwedGeneration = context.Generation;
+        ext->CommandArmOwedPhase = context.Phase;
+        ext->CommandArmOwedAttempt = context.Attempt;
+    }
+    XhciControllerLockRelease(oldIrql);
+
+    if (answer == XHCI_ARM_REFUSED) {
+        XHCI_DBG_VALUE_CHANGED("command: watchdog not armed, generation",
+                               context.Generation);
+    }
+}
+
+/* See the contract in src/xhci_hw.h. IRQL: <= DISPATCH_LEVEL, an
+ * XHCI_ARM_UNLOCKED context, controller lock released. */
+VOID XhciCommandDrainOwedArm(PXHCI_EXTENSION ext)
+{
+    XHCI_COMMAND_TIMEOUT armed;
+    KIRQL oldIrql;
+    ULONG milliseconds;
+    ULONG arm;
+
+    if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
+        return;
+    }
+
+    arm = 0;
+    milliseconds = 0;
+    armed.Epoch = 0;
+    armed.Generation = 0;
+    armed.Phase = 0;
+    armed.Attempt = 0;
+
+    XhciControllerLockAcquire(&oldIrql);
+    if (ext->CommandArmOwed) {
+        ext->CommandArmOwed = 0;
+        armed.Epoch = ext->CommandArmOwedEpoch;
+        armed.Generation = ext->CommandArmOwedGeneration;
+        armed.Phase = ext->CommandArmOwedPhase;
+        armed.Attempt = ext->CommandArmOwedAttempt;
+        milliseconds = ext->CommandArmOwedMs;
+        /*
+         * Only the command still outstanding, in the state the owed phase
+         * watches: one that completed, or was aborted into the next rung, or
+         * belongs to a start usbport has since zeroed, is past needing it -
+         * and its callback would only count itself stale.
+         */
+        arm = xhciCommandArmCurrent(ext, &armed);
+    }
+    XhciControllerLockRelease(oldIrql);
+
+    if (arm) {
+        xhciArmCommandTimer(ext, XHCI_ARM_UNLOCKED, milliseconds, &armed);
+    }
 }
 
 /*
  * Can a command be timed at all? The only answerable half of that question:
  * whether usbport gave this driver the service. A pool failure *inside* the
- * service is invisible - it returns 0 either way - so "every command carries a
- * timeout" is an invariant this driver can honour but not verify, and the
+ * legacy service is invisible - it returns 0 either way (the Version 300
+ * tier's Ex reports one, and xhciArmCommandTimer re-owes it) - so "every
+ * command carries a timeout" is an invariant this driver can honour but not verify, and the
  * residual belongs to CheckController noticing a command that has been pending
  * across many polls (roadmap Phase 4 task 8).
  *
@@ -847,14 +998,16 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
  * an arm and the address it is armed against must be published together, and it
  * is not keyed on the TRB type because a No Op is also the cheapest command a
  * test or a future recovery path can issue - the witness belongs to the
- * self-test, not to a TRB type.
+ * self-test, not to a TRB type. `armMode` is the caller's context for the
+ * watchdog's arm (XHCI_ARM_*, roadmap 24.4).
  *
  * IRQL: <= DISPATCH_LEVEL.
  */
 static ULONG xhciCommandSubmitEx(PXHCI_EXTENSION ext,
                                  const XHCI_TRB *command,
                                  ULONG *trbPA,
-                                 ULONG armWitness)
+                                 ULONG armWitness,
+                                 ULONG armMode)
 {
     XHCI_COMMAND_TIMEOUT armed;
     KIRQL oldIrql;
@@ -1009,21 +1162,22 @@ static ULONG xhciCommandSubmitEx(PXHCI_EXTENSION ext,
         return status;
     }
 
-    xhciArmCommandTimer(ext, XHCI_COMMAND_TIMEOUT_MS, &armed);
+    xhciArmCommandTimer(ext, armMode, XHCI_COMMAND_TIMEOUT_MS, &armed);
     return XHCI_CMD_OK;
 }
 
 /* IRQL: <= DISPATCH_LEVEL. */
 ULONG XhciCommandSubmit(PXHCI_EXTENSION ext,
                         const XHCI_TRB *command,
-                        ULONG *trbPA)
+                        ULONG *trbPA,
+                        ULONG armMode)
 {
-    return xhciCommandSubmitEx(ext, command, trbPA, 0);
+    return xhciCommandSubmitEx(ext, command, trbPA, 0, armMode);
 }
 
 /* IRQL: <= DISPATCH_LEVEL: the in-place recovery reaches it from a DPC through
  * XhciInitController, and nothing here waits. */
-ULONG XhciCommandNoOpSelfTest(PXHCI_EXTENSION ext)
+ULONG XhciCommandNoOpSelfTest(PXHCI_EXTENSION ext, ULONG armMode)
 {
     XHCI_TRB trb;
     ULONG status;
@@ -1036,7 +1190,7 @@ ULONG XhciCommandNoOpSelfTest(PXHCI_EXTENSION ext)
     ext->NoOpTrbPA = 0;
     XhciTrbNoOpCommand(&trb);
 
-    status = xhciCommandSubmitEx(ext, &trb, NULL, 1);
+    status = xhciCommandSubmitEx(ext, &trb, NULL, 1, armMode);
     ext->NoOpStatus = status;
 
     /* Once per start, so unbounded is the right macro here and nowhere else in
@@ -1573,7 +1727,9 @@ ULONG XhciCommandEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
  * register** - which is what "post-stop callbacks do not touch MMIO" means when
  * the controller may be in D3 by now.
  *
- * IRQL: DISPATCH_LEVEL, no usbport lock held.
+ * IRQL: DISPATCH_LEVEL. No usbport lock on NT 5.x; on NT 6.x usbport's
+ * timer-list lock from the timer DPC, or none from Windows 7's StopController
+ * (roadmap 24.4) - an XHCI_ARM_DEFER context either way.
  */
 static VOID NTAPI xhciCommandTimeout(PVOID miniPortExtension, PVOID context)
 {
@@ -1727,7 +1883,15 @@ static VOID NTAPI xhciCommandTimeout(PVOID miniPortExtension, PVOID context)
     XhciControllerLockRelease(oldIrql);
 
     if (action == XHCI_CMD_ACTION_ARM) {
-        xhciArmCommandTimer(ext, XHCI_COMMAND_ABORT_MS, &armed);
+        /*
+         * A timer callback is an XHCI_ARM_DEFER context (roadmap 24.4): on
+         * NT 6.x it holds usbport's timer-list lock when the timer DPC
+         * delivers it and none when Windows 7's StopController runs it early,
+         * and nothing tells the two apart. The next UNLOCKED context arms the
+         * next rung; it is a net, and XHCI_COMMAND_AGE_MS clears the delay.
+         */
+        xhciArmCommandTimer(ext, XHCI_ARM_DEFER, XHCI_COMMAND_ABORT_MS,
+                            &armed);
     } else if (action == XHCI_CMD_ACTION_RESET) {
         XHCI_DBG_VALUE_CHANGED("command: ring will not stop - requesting "
                                "controller reset, CRCR", crcr);

@@ -248,9 +248,12 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources);
  * `ControllerFailed` is still set and `RecoveryLastStep`/`RecoveryLastStatus`
  * say where the sequence refused.
  *
- * **IRQL: DISPATCH_LEVEL, holding no usbport lock** - the contract of
- * `UsbPortRequestAsyncCallback`'s own DPC, which is the only context in which
- * this is legal. It sets `ext->InitBelowPassive` for the duration, which is what
+ * **IRQL: DISPATCH_LEVEL, from the recovery timer's callback**, which is the
+ * only context in which this is legal. On NT 5.x that callback holds no
+ * usbport lock; on NT 6.x it holds usbport's timer-list lock when the timer
+ * DPC delivers it and none when Windows 7's StopController runs it early, so
+ * it is an XHCI_ARM_DEFER context and every arm the recovery owes is left owed
+ * (roadmap 24.4). It sets `ext->InitBelowPassive` for the duration, which is what
  * keeps every bounded wait a stall and keeps the PASSIVE-only configuration-space
  * service out of the sequence. It must **not** be called from `ResetController`
  * itself, which runs inside one of usbport's spin locks.
@@ -456,8 +459,10 @@ ULONG XhciUnmaskInterrupts(PXHCI_EXTENSION ext);
  * **not** update ext->InterruptDeliverySuppressed: that word is a claim about
  * both enables and this function has no evidence about USBCMD.INTE.
  *
- * Returns 1 if IE is confirmed set; 0 means the caller owes an escalation once
- * the controller lock is released, for the same reason a refused unmask does.
+ * Returns 1 if IE was observed set, or if an ISR claim since the write has
+ * handed delivery to the DPC it queued (run-24 finding 2; not proof the write
+ * landed); 0 means the caller owes an escalation once the controller lock is
+ * released, for the same reason a refused unmask does.
  * IRQL: DISPATCH_LEVEL, controller lock held.
  */
 ULONG XhciRearmInterrupter(PXHCI_EXTENSION ext);
@@ -750,9 +755,12 @@ BOOLEAN XhciIsr(PXHCI_EXTENSION ext);
  * The miniport DPC body: drain the event ring until the Cycle Bit says empty,
  * publishing ERDP as it goes and releasing Event Handler Busy at the end.
  * `enableInterrupts` is usbport's own interrupt-enabled state; when it is FALSE
- * this pass must not re-arm IMAN.IE. IRQL: DISPATCH_LEVEL.
+ * this pass must not re-arm IMAN.IE. Returns 1 when a root-hub change is owed
+ * and the caller must report it through InterruptDpcEx's port bit - only ever
+ * on the Version 300 tier (XHCI_EXTENSION.RootHubReportThroughDpc); 0
+ * otherwise. IRQL: DISPATCH_LEVEL.
  */
-VOID XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts);
+ULONG XhciEventDpc(PXHCI_EXTENSION ext, BOOLEAN enableInterrupts);
 
 /*
  * Receive and discard whatever the event ring is already holding, returning how
@@ -925,8 +933,10 @@ ULONG XhciRootHubInit(PXHCI_EXTENSION ext, ULONG afterRestore);
  *
  * It can *decide* two things its caller must carry out after the lock is
  * released: an announcement, and - on the device-initiated resume path - a timer
- * arm. Both are recorded in the extension and drained by
- * XhciRootHubDeferredWork, which the DPC calls after its release.
+ * arm. Both are recorded in the extension and drained after the DPC's release:
+ * by XhciRootHubDeferredWork on NT 5.x, and on NT 6.x by
+ * XhciRootHubDeferredReport, which returns the announcement for InterruptDpcEx's
+ * port bit instead of making it (round 5).
  */
 VOID XhciRootHubPortEvent(PXHCI_EXTENSION ext, ULONG portId);
 
@@ -945,9 +955,78 @@ VOID XhciRootHubPortEvent(PXHCI_EXTENSION ext, ULONG portId);
  * Idempotent and cheap when there is nothing owed, which is what lets every
  * caller that *might* have decided something just call it.
  *
+ * **Never from a callback usbport makes under its EpList lock** -
+ * `SubmitTransfer`, `AbortTransfer`, `PollEndpoint`, `SetEndpointState`. On
+ * NT 6.x `USBPORTSVC_InvalidateRootHub` takes that lock itself (Vista x64
+ * FDO+0x1160, Windows 7 x64 FDO+0xF88, static), so the announcement
+ * self-deadlocks there on usbport's lock rather than this driver's: task
+ * 24.3.4's Vista and Windows 7 hangs. Those callbacks use
+ * XhciRootHubDeferredArms.
+ *
+ * `armMode` is the caller's context (XHCI_ARM_*, roadmap 24.4). From an
+ * XHCI_ARM_DEFER context on the Version 300 tier the port arms stay owed
+ * **and so does the announcement**: those callers - the root-hub feature
+ * callbacks, the port timers, the recovery - may hold usbport's timer-list
+ * lock, and on NT 6.x the service takes its RH-IntrEp lock, under which
+ * usbport takes its ISR-DPC lock; with the event DPC's Ex arm (ISR-DPC then
+ * timer-list) that is a cycle (round 5, static, design record 05). The
+ * next context that holds nothing makes both: the health poll here, or the
+ * event DPC through XhciRootHubDeferredReport. A reset owes nothing long,
+ * because its completion raises a Port Status Change Event; what waits for
+ * the poll is a change no hardware event follows (a virtual hub's, a
+ * resume's end), up to one poll interval.
+ *
+ * Not from the event DPC on the Version 300 tier either: it runs under
+ * usbport's ISR-DPC lock, and the service there deadlocked Vista and
+ * Windows 7 against usbport's own root-hub DPC (round 5). The event DPC calls
+ * XhciRootHubDeferredReport there instead.
+ *
  * IRQL: <= DISPATCH_LEVEL.
  */
-VOID XhciRootHubDeferredWork(PXHCI_EXTENSION ext);
+VOID XhciRootHubDeferredWork(PXHCI_EXTENSION ext, ULONG armMode);
+
+/*
+ * XhciRootHubDeferredWork for the event DPC on the Version 300 tier
+ * (XHCI_EXTENSION.RootHubReportThroughDpc): the arms owed are made (an
+ * UNLOCKED context), the device layer is drained, and a latched change is
+ * taken under the same gate and bookkeeping as an announcement - but
+ * returned rather than announced. The caller reports it through
+ * InterruptDpcEx's port bit, which usbport's IsrDpc turns into the same
+ * `Ev_Rh_IntrEp_Invalidate` after releasing its ISR-DPC lock (static, all
+ * four NT 6.x builds). Returns 1 if a change must be reported.
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock released.
+ */
+ULONG XhciRootHubDeferredReport(PXHCI_EXTENSION ext);
+
+/*
+ * XhciRootHubDeferredWork less the announcement, for the one caller usbport
+ * reaches under its EpList lock that owes a port timer - `SubmitTransfer`,
+ * the virtual hub's port operations - and so always an XHCI_ARM_DEFER
+ * context: drain the device layer, and on the Version 200 tier arm the
+ * timers ports are owed now, as before. On the 300 tier the arms stay owed
+ * (roadmap 24.4): an arm here raced the timer DPC through the legacy
+ * service, and one through Ex would take usbport's timer-list lock under
+ * EpList, the reverse of the timer DPC's order through
+ * `UsbPortInvalidateRootHub`. The next event DPC, root-hub peek or health
+ * poll makes them, so a resume through a virtual hub's port 1 may end up to
+ * one poll interval late there. Any latched change is left in
+ * `RootHubInvalidatesOwed` for the next XhciRootHubDeferredWork.
+ *
+ * IRQL: <= DISPATCH_LEVEL, controller lock released.
+ */
+VOID XhciRootHubDeferredArms(PXHCI_EXTENSION ext);
+
+/*
+ * The arms owed to an UNLOCKED context, port timers and the command
+ * watchdog, made now - and only on the Version 300 tier, the one tier that
+ * owes any (the 200 tier arms every one at its own site). For the root-hub
+ * status queries, which usbport's peek reaches after every announcement.
+ *
+ * IRQL: <= DISPATCH_LEVEL, an XHCI_ARM_UNLOCKED context, controller lock
+ * released.
+ */
+VOID XhciRootHubDrainOwedArms(PXHCI_EXTENSION ext);
 
 /*
  * The root-hub half of usbport's `CheckController` poll (Phase 5 task 6): find a
@@ -1182,7 +1261,55 @@ VOID XhciSlotPortConnectChanged(PXHCI_EXTENSION ext, ULONG hubPort);
  */
 VOID XhciSlotPortDisowned(PXHCI_EXTENSION ext, ULONG hubPort);
 VOID XhciSlotPortDisabled(PXHCI_EXTENSION ext, ULONG hubPort);
+/*
+ * Whether any device record is on the port or behind it (every state but FREE
+ * and GONE, disowned records included). With none, a disown has nothing the
+ * controller could still be reading to protect, so it settles without waiting
+ * for PED or PP to confirm (round 6: QEMU never clears PED on a disable write,
+ * and the wait held every virtual-hub port-1 reset for ever - design record 12
+ * section 3.3). IRQL: DISPATCH_LEVEL, controller lock held.
+ */
+ULONG XhciSlotPortHasRecords(PXHCI_EXTENSION ext, ULONG hubPort);
+/*
+ * Whether every record on the port or behind it is DISOWNED and idle - no
+ * transfer queued or TRB outstanding on any endpoint, no command outstanding or
+ * owed, no intercepted SET_ADDRESS held - and 1 when there is none. With every
+ * record idle a disown settles unconfirmed too: the release it then runs
+ * proves the slot gone from the controller itself, by Stop Endpoint and
+ * Disable Slot (round 7; design record 12 section 3.3). IRQL: DISPATCH_LEVEL,
+ * controller lock held.
+ */
+ULONG XhciSlotPortRecordsDisownedIdle(PXHCI_EXTENSION ext, ULONG hubPort);
 VOID XhciSlotPortReset(PXHCI_EXTENSION ext, ULONG hubPort);
+
+/*
+ * Task 24.3's virtual hubs (design record 12), where the root-hub half
+ * (src/xhci_rh.c) and the device half (src/xhci_slot.c) meet. Every one is
+ * called with the controller lock held, and the caller owes
+ * XhciRootHubDeferredWork after releasing it - or, inside a callback usbport
+ * makes under its EpList lock, XhciRootHubDeferredArms - both of which reach
+ * XhciSlotDeferredWork, where any completion these owe is delivered.
+ *
+ * `XhciSlotVhubPipe` completes `hubPort`'s held status-change transfer: with
+ * `cancel`, as cancelled; without, with its one change byte if port 1 has a
+ * change and the hub is configured, and not at all otherwise (section 3.4).
+ * `XhciSlotVhubUnbind` is usbport letting go of the hub's pipes - the held
+ * transfer cancelled and both bindings dropped. `XhciRhVhubPort1Feature` and
+ * `XhciRhVhubPort1Status` are the device half's two ways into the physical
+ * port, for the port-1 rows of section 3.3.
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock held.
+ */
+VOID XhciSlotVhubPipe(PXHCI_EXTENSION ext, ULONG hubPort, ULONG cancel);
+VOID XhciSlotVhubUnbind(PXHCI_EXTENSION ext, ULONG hubPort);
+MPSTATUS XhciRhVhubPort1Feature(PXHCI_EXTENSION ext,
+                                ULONG hubPort,
+                                ULONG set,
+                                ULONG selector);
+VOID XhciRhVhubPort1Status(PXHCI_EXTENSION ext,
+                           ULONG hubPort,
+                           ULONG *status,
+                           ULONG *change);
 
 /*
  * Drive the command chain and pay usbport what the lock-held paths decided:
@@ -1192,9 +1319,12 @@ VOID XhciSlotPortReset(PXHCI_EXTENSION ext, ULONG hubPort);
  * **Call only with the controller lock released** - it submits commands (which
  * take the lock) and calls usbport services. Idempotent and cheap when nothing
  * is owed, which is what lets every caller that might have decided something
- * just call it. IRQL: <= DISPATCH_LEVEL.
+ * just call it. `armMode` (XHCI_ARM_*) is the caller's context, carried to the
+ * watchdog of any command the pass submits; an UNLOCKED pass first makes the
+ * watchdog arm a DEFER one left owed (XhciCommandDrainOwedArm).
+ * IRQL: <= DISPATCH_LEVEL.
  */
-VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext);
+VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext, ULONG armMode);
 
 /*
  * Bracket a `SubmitTransfer` callback. Between them `XhciSlotDeferredWork` does
@@ -1216,7 +1346,8 @@ VOID XhciSlotLeaveSubmit(PXHCI_EXTENSION ext);
  * from (`XHCI_EXTENSION.DeliverUnderUsbportLockOnly`), naming the endpoint
  * whose lock usbport holds, so that under
  * `XHCI_EXTENSION.DeliverPerEndpointOnly` only that endpoint's completions are
- * handed over. `endpointExtension` is usbport's extension for it.
+ * handed over. `endpointExtension` is usbport's extension for it. Always an
+ * XHCI_ARM_DEFER context: usbport holds its MP-call lock and EpList there.
  * SubmitTransfer is under that lock too and does not use this: its own hold
  * parks every completion until the callback returns.
  *
@@ -1233,10 +1364,11 @@ VOID XhciSlotDeferredWorkForEndpoint(PXHCI_EXTENSION ext,
  * XhciSlotDeferredWork with the tier's delivery gate overridden: for the
  * lifecycle paths (suspend, stop, resume, recovery), where usbport's own
  * deliverers are gated off and a completion left parked would sit until the
- * far side, and for the poll's fallback. IRQL: <= DISPATCH_LEVEL, controller
- * lock not held.
+ * far side, and for the poll's fallback. `armMode` as XhciSlotDeferredWork:
+ * UNLOCKED but for the recovery, which runs from a timer callback.
+ * IRQL: <= DISPATCH_LEVEL, controller lock not held.
  */
-VOID XhciSlotDeferredWorkForced(PXHCI_EXTENSION ext);
+VOID XhciSlotDeferredWorkForced(PXHCI_EXTENSION ext, ULONG armMode);
 
 /*
  * The device half of usbport's CheckController poll: age the outstanding command
@@ -1526,12 +1658,14 @@ typedef struct _XHCI_COMMAND_TIMEOUT {
  * Refuses a TRB type outside the architected command range 9-23 (Table 6-91),
  * and refuses with XHCI_CMD_NO_TIMER - **before** enqueuing anything - if there
  * is no async timer service to time the command with. Otherwise arms a bounded
- * timeout through UsbPortRequestAsyncCallback *after* dropping the interior
- * lock. IRQL: <= DISPATCH_LEVEL.
+ * timeout through XhciAsyncTimerArm *after* dropping the interior lock -
+ * or, from an `armMode` of XHCI_ARM_DEFER on the Version 300 tier, owes it
+ * to the next XhciCommandDrainOwedArm. IRQL: <= DISPATCH_LEVEL.
  */
 ULONG XhciCommandSubmit(PXHCI_EXTENSION ext,
                         const XHCI_TRB *command,
-                        ULONG *trbPA);
+                        ULONG *trbPA,
+                        ULONG armMode);
 
 /*
  * The Command Completion Event arm of the DPC's event handler. Matches by TRB
@@ -1674,6 +1808,72 @@ VOID XhciRequestControllerReset(PXHCI_EXTENSION ext);
 ULONG XhciAsyncTimerAvailable(VOID);
 
 /*
+ * Where a timer may be armed (roadmap 24.4; design record 05, "Where a timer
+ * may be armed").
+ *
+ * On NT 6.x the legacy `UsbPortRequestAsyncCallback` skips usbport's
+ * timer-list lock and assumes its caller holds it, so an arm from any
+ * context that does not hold it races the timer DPC's unlink and free on
+ * another CPU; and `UsbPortRequestAsyncCallbackEx` with its lock byte 0
+ * takes that lock itself, so an arm from a context that does hold it
+ * deadlocks. No context of this driver can tell which it is in: the
+ * root-hub feature callbacks and the timer callbacks each arrive both with
+ * the lock and without it (static, all four NT 6.x builds). So on the
+ * Version 300 tier (`XHCI_EXTENSION.ArmThroughExOnly`) the legacy service
+ * is never called, and every arm site says which of two contexts it is in,
+ * as an argument that belongs to this call on this CPU:
+ *
+ *   XHCI_ARM_UNLOCKED - one usbport reaches holding no lock, its MP lock or
+ *     its ISR-DPC lock, none of which it ever holds with, or takes under,
+ *     the timer-list lock: the event DPC, CheckController, the root-hub
+ *     status queries, Start/Stop/Suspend/ResumeController. The arm is made
+ *     now, through Ex with its lock.
+ *   XHCI_ARM_DEFER - any other: every endpoint callback (usbport's
+ *     MP-call lock and EpList), every root-hub feature callback, every timer
+ *     callback. Nothing is armed; the arm is owed to the next UNLOCKED
+ *     context (`ArmPending` on a port, `CommandArmOwed` for the watchdog).
+ *
+ * On the Version 200 tier both modes arm now through the legacy service,
+ * which is what every NT 5.x build is read to want, so nothing below NT 6.x
+ * changes (AGENTS.md's tier rule).
+ */
+#define XHCI_ARM_UNLOCKED   0UL
+#define XHCI_ARM_DEFER      1UL
+
+/* What XhciAsyncTimerArm did. */
+#define XHCI_ARM_MADE       0UL   /* a timer is scheduled                    */
+#define XHCI_ARM_OWED       1UL   /* DEFER on the 300 tier: the caller latches */
+#define XHCI_ARM_REFUSED    2UL   /* no service, or Ex answered an error     */
+
+/*
+ * The one place a timer is armed. `context` is copied by usbport, so a stack
+ * local is correct. On the 300 tier a nonzero NTSTATUS from Ex - its pool
+ * allocation failing - is REFUSED and counted in `AsyncArmsRefused`, which the
+ * legacy service could never report; on the 200 tier the legacy service's
+ * answer still means nothing and is discarded.
+ *
+ * IRQL: <= DISPATCH_LEVEL. Call with the controller lock **released**.
+ */
+ULONG XhciAsyncTimerArm(PXHCI_EXTENSION ext,
+                        ULONG mode,
+                        ULONG milliseconds,
+                        PVOID context,
+                        ULONG contextLength,
+                        XHCI_ASYNC_TIMER_CALLBACK *callback);
+
+/*
+ * Make the command watchdog arm a DEFER context left owed, if the command it
+ * watches is still outstanding. Called by every UNLOCKED drain - the slot
+ * layer's, which the event DPC, the poll and the root-hub status queries all
+ * reach. Idempotent and cheap when nothing is owed; nothing is ever owed on
+ * the 200 tier.
+ *
+ * IRQL: <= DISPATCH_LEVEL, an XHCI_ARM_UNLOCKED context, controller lock
+ * released.
+ */
+VOID XhciCommandDrainOwedArm(PXHCI_EXTENSION ext);
+
+/*
  * Put the engine at idle for a new start and publish this start's epoch, under
  * the lock XhciControllerGlobalInit created - so the callbacks of the previous
  * start are *excluded* rather than merely able to detect that they are stale.
@@ -1694,8 +1894,10 @@ VOID XhciCommandInit(PXHCI_EXTENSION ext);
  * the *completion* arrives later, through the interrupt path, which is exactly
  * what makes this the Phase 4 checkpoint's end-to-end proof rather than a
  * register poke. IRQL: <= DISPATCH_LEVEL (the in-place recovery reaches it
- * from a DPC through XhciInitController); nothing here waits.
+ * from a DPC through XhciInitController); nothing here waits. `armMode` is
+ * the caller's context (XHCI_ARM_*): UNLOCKED from StartController and a
+ * reinitialising resume, DEFER from the recovery's timer callback.
  */
-ULONG XhciCommandNoOpSelfTest(PXHCI_EXTENSION ext);
+ULONG XhciCommandNoOpSelfTest(PXHCI_EXTENSION ext, ULONG armMode);
 
 #endif /* XHCI_HW_H */

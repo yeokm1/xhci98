@@ -1,7 +1,7 @@
 # xhci98 - Release Notes
 
-This file describes package version `1.1.1.0`
-(`DriverVer=09/24/2026,1.1.1.0`), the sixth release. Where this file and
+This file describes package version `1.2.0.0`
+(`DriverVer=10/02/2026,1.2.0.0`), the seventh release. Where this file and
 `docs/contributing/roadmap.md`, `docs/contributing/build-and-test.md` or
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
@@ -31,6 +31,20 @@ did not: the xHCI controller's own properties in Device Manager carry an
 **interrupt moderation interval** to an eighth of the value every earlier
 release ran at, which makes USB mass storage faster. Each has a section of its
 own below. Nothing else about what the driver does changed with them.
+
+Since `1.2.0.0` the driver carries a **virtual USB 2.0 hub** that can sit
+between a root port and the device plugged into it, so that a Full or Low
+Speed device on a root port is reported to Windows at its true speed. It is
+**experimental and off by default: only use it if you know what you are
+doing**; with it off
+the driver reports root ports exactly as `1.1.1.0` does. "The virtual
+High-Speed hub switch" below says what it does and how to turn it on. The
+same release also fixes the Code 10 a Low-Speed device behind a hub showed
+under SweetLow's stack at 250 Hz and faster (GitHub issue 4), and a
+High-Speed interrupt device behind a USB 2.0 hub, which could be polled every
+125 microseconds, is now polled at the interval usbport sets for it (the one
+the device asks for, up to usbport's 4 ms limit); both whatever the switch is
+set to.
 
 It is a miniport for `usbport.sys`, not a whole USB stack. It plugs in
 underneath Microsoft's USB port driver the same way the in-box `usbehci.sys`
@@ -246,6 +260,102 @@ the value is written, so the driver runs at `4000` until you set it by hand,
 or until the rename-and-restart route under "Known limitations" is taken,
 which writes it.
 
+## The virtual High-Speed hub switch (since `1.2.0.0`)
+
+**Experimental and off by default.** Only use it if you know what you are
+doing.
+
+The driver reports every device plugged directly into a root port to Windows
+as High Speed, because the USB stack it plugs into crashes the machine when a
+Full or Low Speed device is reported there at its true speed. That report is
+what costs a mouse its polling rate, a Full-Speed audio device its sound from
+Windows XP on, and Windows Vista and 7 a crash behind a USB 1.1 hub ("Known
+limitations"). The switch puts a virtual USB 2.0 hub, answered by the driver
+itself and not present on the bus, between the root port and the device. The
+device becomes that hub's port 1 and is reported at its true speed, behind a
+hub with a transaction translator, which is the arrangement the stack expects.
+
+`XhciVirtualHSHub` is a `DWORD` in the same driver (software) key as
+`XhciImodInterval250ns` (the table in the section above says where):
+
+| Value | What it does |
+|---|---|
+| `0`, or absent | Off, the default and what the install writes. The driver behaves exactly as with no switch: every root-port device is reported High Speed, as in `1.1.1.0`. |
+| `1` | On demand. When a Full or Low Speed device is plugged into a root port, a virtual hub appears above it, and it goes away when the device is unplugged. A High-Speed device on a root port gets no hub and is handled as at `0`. |
+| `2` | Always on. Every USB 2.0 port the driver manages carries a virtual hub from start to stop, whether or not anything is plugged in, and every root-port device sits behind one, High Speed included. |
+| anything else | Refused, not rounded: the driver applies `0`. |
+
+**The extra hub is visible.** At `1` a slower device brings a hub with it, a
+second entry in Device Manager that appears and disappears with the device,
+and takes one more enumeration before it works (about two seconds longer to
+become usable, measured on Windows 98 SE and 2000). At `2` every USB 2.0 port
+carries one, so there is one hub entry per port from start-up and a plug
+costs no extra time. On Windows 98 SE under NUSB the first appearance of the
+hub on each port runs the Add New Hardware wizard once, which binds it as a
+"Generic USB Hub" from the stack's own files without asking for the CD;
+Windows ME, 2000 and 32-bit XP installed it without asking. The hub reports itself
+as "xHCI98 virtual HS Hub", with no manufacturer string and no serial
+number; where Windows names it by its class instead, Device Manager shows
+its generic hub name ("Generic USB Hub" on Windows Vista).
+
+**The virtual hub is a hub tier.** USB allows five hubs in a chain below the
+root port. With the switch at `1` or `2`, a chain of external hubs on a root
+port can be one hub shorter than USB's five before the devices at its end
+stop enumerating, because Windows counts the virtual hub as one of them. At
+`1` this happens only when the device on the root port is a Full-Speed
+(USB 1.1) hub, which is what puts that port in virtual-hub mode; a USB 2.0
+hub there gets no virtual hub above it. Measured at `2` on Windows 2000, in
+the device matrix run on a build before this release (a virtual machine): a
+mouse at the end of a chain of five hubs was never addressed, and the driver
+refused nothing. With the switch at `0` the same chain works.
+
+**The hub's id is pid.codes' shared test id, `1209:0001`, and you can
+change it.** It is not an id allocated to this project: pid.codes reserves
+it for private testing. Two
+more values sit beside the switch, both strings (`REG_SZ`), written by the
+install:
+
+| Value | Written by the install | Accepted |
+|---|---|---|
+| `XhciVirtualHSHubVid` | `"1209"` | exactly four hexadecimal digits, either case, optionally prefixed `0x`; `0000` is refused |
+| `XhciVirtualHSHubPid` | `"0001"` | the same, `0000` accepted |
+
+Change them only if another device's driver on the machine claims
+`USB\VID_1209&PID_0001` and binds itself to the virtual hub. With the switch
+at `1` or `2`, a missing or invalid id turns the feature off for that start;
+the driver contains no id of its own to fall back on. A new id is a new
+device to Windows, so it installs the hub again on each port it appears on.
+With the switch at `0` neither value is read.
+
+Set them in Registry Editor - the switch as a `DWORD`, the ids as String
+Values, not `DWORD`s - and restart: the driver reads all three only when it
+starts. Reinstalling the package writes the install's values back, which
+turns the switch off. `XHCISNAP`'s report shows under "registry values" what
+the driver read and applied, and why it refused anything.
+
+**What it changes, measured in virtual machines only; the virtual hub has
+never run on real hardware.** With the switch at `1` or `2`:
+
+- A mouse on a root port polls at the interval it asks for, as behind a real
+  hub: a stock mouse at 8 ms, and a polling-rate tool's 250, 500 and 1000 Hz
+  as asked (Windows 98 SE, ME, 2000 and 32-bit XP; not read on Vista or 7).
+- A Full-Speed USB audio device on a root port streams from Windows XP on.
+  It played on Windows XP x64 at both values and on Windows 2000 and ME at
+  `2`; on 32-bit Windows XP it played in the first reading and then, at `2`,
+  went silent with the player blocked in later ones; on Vista and 7 it binds,
+  and playback has not been read.
+- On Windows Vista and 7, a USB 1.1 hub on a root port with a mouse behind
+  it no longer crashed the machine, at either value.
+- High-Speed devices are unchanged at `1`, and at `2` keep the same polling
+  interval behind their hub.
+- On 32-bit Windows XP a mouse behind a virtual hub took 10 to 13 seconds
+  to become usable, where it takes about half a second with the switch off
+  (measured 2026-09-29).
+
+The full record is `docs/issues/06-full-speed-root-port-bugcheck.md`,
+sections 5, 6.2 and 7, and design record 12,
+`docs/contributing/design/12-virtual-hub-on-root-ports.md`.
+
 ## Requirements
 
 | | |
@@ -412,8 +522,10 @@ these settings once, when it starts.
 
 The two values, both `DWORD`s in the device's driver (software) key, both
 default `0` (since `1.1.1.0` a third `DWORD`, `XhciImodInterval250ns`, sits in
-the same key; it is not a log setting, and "The interrupt moderation setting"
-above describes it):
+the same key, and since `1.2.0.0` the `DWORD` `XhciVirtualHSHub` and the
+strings `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid`; none of them is a
+log setting, and "The interrupt moderation setting" and "The virtual
+High-Speed hub switch" above describe them):
 
 | Value | What it does |
 |---|---|
@@ -542,54 +654,6 @@ because a user meets them through this driver.
   "USB selective suspend setting" rewrites it, and the Balanced plan enables
   that on battery by default, which would have put the fault back on any
   laptop that unplugged.
-- Every device plugged directly into a root port is reported to Windows as
-  High Speed, whatever it is; Device Manager and USB tools show it so. This
-  is deliberate: the USB stack this driver plugs into crashes the machine
-  when a Full or Low Speed device is reported at its true speed on a root
-  port (it looks up a transaction translator that does not exist), so the
-  driver keeps the real speed to itself and programs the controller with it,
-  which is why such devices work. Two consequences. Windows sizes a Full or
-  Low Speed device's interrupt polling interval on High-Speed rules, and the
-  driver then raises it to the 1 ms minimum those speeds allow, so a mouse
-  or keyboard on a root port polls in three bands: `bInterval` 1 to 4 at
-  1 ms (1000 Hz), 5 at 2 ms (500 Hz), 6 and above at 4 ms (250 Hz), a stock
-  mouse included. A polling-rate tool that changes `bInterval` within a band
-  shows no effect and one that crosses a band does; nothing slower than 4 ms
-  and nothing faster than 1 ms is reachable there. Devices behind a hub
-  report their true speed and poll at the interval they ask for, so a mouse
-  on a hub polls at its own 8 ms and a polling-rate tool works as on any
-  controller - but on Windows Vista and 7 only behind a USB 2.0 hub, because
-  of the next entry. Measured in a virtual machine with SweetLow's hidusbf; the
-  bands are documented in full in `docs/issues/06-full-speed-root-port-bugcheck.md`.
-  `1.1.1.0` changes none of this: the polling rates and the High Speed report
-  itself are unchanged, and no work on them is scheduled.
-- **Windows Vista and Windows 7, 32-bit and x64: a USB 1.1 hub on a root port
-  crashes the machine** as soon as a mouse, keyboard or other Full or Low
-  Speed device with an interrupt or isochronous endpoint is used behind it
-  (`STOP 0x0000007E`, an access violation in `USBPORT.SYS`). It follows from
-  the High-Speed report above: the stack takes the 1.1 hub for a High-Speed
-  one, finds no transaction translator on it, and faults budgeting the
-  device behind it. Plug such devices into a root port directly, or behind a
-  USB 2.0 hub, which has a transaction translator. The USB 2.0 hub was
-  measured on real hardware, 32-bit Windows 7 on a ThinkPad E460
-  (2026-09-19): a Low-Speed mouse behind two different USB 2.0 hubs, with
-  audio playing and a file copying beside it, and no crash; Vista and 64-bit
-  Windows 7 were not measured on real hardware. The same 1.1 hub works on
-  Windows 98, 2000, XP and XP x64. The crash itself was measured in virtual
-  machines on all four Vista and Windows 7 builds, 2026-09-19; no USB 1.1
-  hub has been tried on real hardware.
-- **Windows XP and later, 32-bit and x64: a Full-Speed USB audio device on a
-  root port plays nothing.** It installs, shows as the default playback
-  device and appears to play, but no sound reaches it. The same High-Speed
-  report is the cause: from XP on, Windows schedules the device's audio
-  stream as a High-Speed one and never sends it. Behind a hub, where the
-  device's true speed is reported, it played on 32-bit XP; on Windows Vista
-  and 7 that must be a USB 2.0 hub, because of the entry above.
-  Windows 2000 plays on a root port. Measured in virtual machines,
-  2026-09-19: Windows 2000 and XP (behind a hub) played, XP, XP x64, Vista
-  and Windows 7 on a root port did not. Measured on real hardware the same
-  day, 32-bit Windows 7 on a ThinkPad E460: a USB audio adapter (C-Media
-  `0D8C:0014`) was silent on a root port and played behind a USB 2.0 hub.
 - **Windows 7 (32-bit, on real hardware): disabling the USB controller in
   Device Manager can hang.** On the one real Windows 7 machine tried (a
   ThinkPad E460, 2026-09-19), the first Disable never finished: Device
@@ -663,6 +727,81 @@ because a user meets them through this driver.
   Root Hub at Code 2 until the driver is installed again with the CD at
   hand. Measured on 2026-09-02 in a virtual machine with no CABs on disk, and
   again on 2026-09-20 for the already-present file.
+
+### Addressed by the experimental virtual High-Speed hub switch
+
+These three come from how the driver reports root ports. The switch is off by
+default, so each entry describes a normal install, and its workaround is the
+one that applies there. What the switch changes at `1` or `2` closes each
+entry; it was measured in virtual machines only, and "The virtual
+High-Speed hub switch" above says what the switch is and what it costs.
+
+- Every device plugged directly into a root port is reported to Windows as
+  High Speed, whatever it is; Device Manager and USB tools show it so. This
+  is deliberate: the USB stack this driver plugs into crashes the machine
+  when a Full or Low Speed device is reported at its true speed on a root
+  port (it looks up a transaction translator that does not exist), so the
+  driver keeps the real speed to itself and programs the controller with it,
+  which is why such devices work. Three consequences: this entry's polling
+  bands, and the next two entries' audio and USB 1.1 hub. Windows sizes a Full or
+  Low Speed device's interrupt polling interval on High-Speed rules, and the
+  driver then raises it to the 1 ms minimum those speeds allow, so a mouse
+  or keyboard on a root port polls in three bands: `bInterval` 1 to 4 at
+  1 ms (1000 Hz), 5 at 2 ms (500 Hz), 6 and above at 4 ms (250 Hz), a stock
+  mouse included. A polling-rate tool that changes `bInterval` within a band
+  shows no effect and one that crosses a band does; nothing slower than 4 ms
+  and nothing faster than 1 ms is reachable there. Devices behind a hub
+  report their true speed and poll at the interval they ask for, so a mouse
+  on a hub polls at its own 8 ms and a polling-rate tool works as on any
+  controller - but on Windows Vista and 7 only behind a USB 2.0 hub, because
+  of the USB 1.1 hub entry below. Under SweetLow's USB 2.0 stack on Windows
+  98, a Low-Speed device behind a hub that a polling-rate tool had set to
+  250 Hz or faster showed Code 10 up to `1.1.1.0` (GitHub issue 4), because
+  that stack alone sends the interval the tool asked for and the driver
+  refused it; fixed in `1.2.0.0` (roadmap task 24.1), whatever the switch is
+  set to, and read at 250, 500 and 1000 Hz with a real Low-Speed mouse
+  passed through to a virtual machine. Measured in a virtual machine with
+  SweetLow's hidusbf; the bands are documented in full in
+  `docs/issues/06-full-speed-root-port-bugcheck.md`, section 5.
+  **With the switch at `1` or `2`** the device sits behind the virtual hub
+  at its true speed and polls at its own interval: a stock mouse on a root
+  port at 8 ms, and a polling-rate tool's 250, 500 and 1000 Hz as asked.
+  Read on Windows 98 SE, ME, 2000 and 32-bit XP; not read on Vista or 7.
+- **Windows XP and later, 32-bit and x64: a Full-Speed USB audio device on a
+  root port plays nothing.** It installs, shows as the default playback
+  device and appears to play, but no sound reaches it. The same High-Speed
+  report is the cause: from XP on, Windows schedules the device's audio
+  stream as a High-Speed one and never sends it. Behind a hub, where the
+  device's true speed is reported, it played on 32-bit XP; on Windows Vista
+  and 7 that must be a USB 2.0 hub, because of the USB 1.1 hub entry below.
+  Windows 2000 plays on a root port. Measured in virtual machines,
+  2026-09-19: Windows 2000 and XP (behind a hub) played, XP, XP x64, Vista
+  and Windows 7 on a root port did not. Measured on real hardware the same
+  day, 32-bit Windows 7 on a ThinkPad E460: a USB audio adapter (C-Media
+  `0D8C:0014`) was silent on a root port and played behind a USB 2.0 hub.
+  **With the switch at `1` or `2`, a partial fix:** it played on Windows XP
+  x64 at both values. On 32-bit XP it played in the first reading and then,
+  at `2`, went silent with the player blocked in later ones. On Vista and 7
+  the device binds behind its virtual hub, and whether it plays has not been
+  read.
+- **Windows Vista and Windows 7, 32-bit and x64: a USB 1.1 hub on a root port
+  crashes the machine** as soon as a mouse, keyboard or other Full or Low
+  Speed device with an interrupt or isochronous endpoint is used behind it
+  (`STOP 0x0000007E`, an access violation in `USBPORT.SYS`). It follows from
+  the High-Speed report (the first entry here): the stack takes the 1.1 hub
+  for a High-Speed one, finds no transaction translator on it, and faults
+  budgeting the device behind it. Plug such devices into a root port
+  directly, or behind a USB 2.0 hub, which has a transaction translator.
+  The USB 2.0 hub was measured on real hardware, 32-bit Windows 7 on a
+  ThinkPad E460 (2026-09-19): a Low-Speed mouse behind two different USB 2.0
+  hubs, with audio playing and a file copying beside it, and no crash; Vista
+  and 64-bit Windows 7 were not measured on real hardware. The same 1.1 hub
+  works on Windows 98, 2000, XP and XP x64. The crash itself was measured in
+  virtual machines on all four Vista and Windows 7 builds, 2026-09-19; no
+  USB 1.1 hub has been tried on real hardware.
+  **With the switch at `1` or `2`** the 1.1 hub sits behind the virtual hub,
+  which has a transaction translator, and no crash was seen on Vista or 7 at
+  either value.
 
 ## Licensing
 

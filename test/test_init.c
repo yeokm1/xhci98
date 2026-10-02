@@ -39,6 +39,7 @@
  * engine's vocabulary, not the DDK's (batch 6-A: the Win2000 DDK does not
  * define three of the names ReactOS's usbehci uses). */
 #include "../src/xhci_xfer.h"
+#include "../src/xhci_version.h"
 #include "test_harness.h"
 
 /* ------------------------------------------------------------------ */
@@ -222,7 +223,9 @@ static ULONG flushedAtEvents;
  * between the assert and deassert passes observable, because it is the only one
  * where both passes write.
  *
- * `stuckPortPp` is a port that ignores writes to PP; `refuseRun` a controller
+ * `stuckPortPp` is a port that ignores writes to PP, and `stuckPortPed` one
+ * that ignores a disabling write to PED (task 24.3's held-disable vectors);
+ * `refuseRun` a controller
  * whose HCHalted does not follow R/S; `hchClearAfterReset` one that comes out
  * of HCRST not halted.
  */
@@ -232,6 +235,7 @@ static ULONG flushedAtEvents;
 
 static ULONG resetPortPower;
 static ULONG stuckPortPp;
+static ULONG stuckPortPed;
 static ULONG refuseRun;
 static ULONG hchClearAfterReset;
 
@@ -265,6 +269,14 @@ static ULONG saveRestoreShape;
 static ULONG saveRestoreBusyReads;
 static ULONG saveRestoreHang;
 static ULONG hostSavedState;
+/* The event producer's internal Enqueue Pointer and PCS as CSS saved them.
+ * The restore procedure writes ERSTBA before CRS (4.23.2), which resets the
+ * cursor as a first write does (see the ERSTBA hook), and a successful CRS
+ * then restores the saved internal state - so the controller goes on
+ * producing where the driver's kept dequeue is (task 24.3.4; the model had
+ * left the cursor at ERST[0], and every event after a restore was lost). */
+static ULONG hostSavedEnqueue;
+static ULONG hostSavedCycle;
 static ULONG hostSaves;
 static ULONG hostRestores;
 /* The busy bit currently asserted (SSS or RSS) and the reads it has left. */
@@ -347,6 +359,11 @@ static ULONG portSuspendedAtRun;
  * left to the test to post, exactly as a connect is.
  */
 static ULONG portResetHangs;
+/* With `portResetHangs`, the reset also clears PED as the specification says
+ * ("automatically cleared to '0' when PR is set to '1'", p.372) - a reset in
+ * flight rather than the hung one the watchdog vectors lean on, where PED is
+ * left as it was. The vector ends it by hand (task 24.3.4). */
+static ULONG portResetClearsPed;
 static ULONG portResets;
 
 /* The driver's latched hub-class changes for a port, sampled at the instant it
@@ -381,6 +398,11 @@ static ULONG mmioDeadReads;
 
 /* IMAN writes the model accepts and discards - see the write hook. */
 static ULONG imanWritesSwallowed;
+/* IE-setting IMAN writes after which an event is already waiting, so the real
+ * ISR runs before the writer's read-back (run-24 finding 2) - see the hook. */
+static ULONG imanIsrAfterArm;
+static PXHCI_EXTENSION imanIsrExt;
+static ULONG imanIsrPreemptions;
 static ULONG refuseHalt;
 static ULONG pciWriteFails;
 /* A Command register that accepts the write and keeps BME set anyway. This is
@@ -704,11 +726,47 @@ static HC_ASYNC_PENDING asyncPending[HC_ASYNC_PENDING_MAX];
 static ULONG asyncPendingCount;
 static ULONG asyncQueueEnabled;
 
+/*
+ * Roadmap 24.4: the Version 300 tier's `UsbPortRequestAsyncCallbackEx`, and
+ * the usbport contexts it may not be called from. `harnessTier300` makes the
+ * next start present Version 300 with the Ex slot written. The model cannot
+ * see usbport's locks, so it is told: `asyncDeliveryDepth` is set while a
+ * timer callback runs (usbport's timer-list lock, or Windows 7's early run
+ * with none - DEFER either way), `usbportLockModel` by a vector around a
+ * root-hub feature callback or an endpoint callback, and `SubmitDepth` is
+ * the driver's own SubmitTransfer bracket. The three totals are never reset
+ * and are asserted at the end of main().
+ */
+static ULONG harnessTier300;
+static ULONG exCalls;
+static ULONG exAnswer;
+static ULONG exLastSkipLock;
+static PVOID exLastHandleOut;
+static ULONG exForwarding;
+static ULONG asyncDeliveryDepth;
+static ULONG usbportLockModel;
+static ULONG legacyArmOnTier300Total;
+static ULONG exArmInLockedContextTotal;
+static ULONG exArmSkippingLockTotal;
+
 /* UsbPortInvalidateRootHub - the root hub's announcement (Phase 5 task 5). */
 static ULONG rootHubInvalidates;
 static ULONG rootHubInvalidatesUnderLock;
 static ULONG rootHubInvalidatesUnderLockTotal;
+/* Never reset: the announcement made from inside a SubmitTransfer, where an
+ * NT 6.x usbport holds the EpList lock its own service takes (task 24.3.4). */
+static ULONG rootHubInvalidatesInSubmitTotal;
 static ULONG rootHubDisableIrqReentries;
+/*
+ * Round 5 (the NT 6.x root-hub deadlock): on the Version 300 tier the
+ * service is never called from a context where usbport holds a spin lock -
+ * the event DPC (its ISR-DPC lock), a timer callback or a modelled feature
+ * or endpoint callback. `eventDpcDepth` is set by deliver_events around the
+ * DPC; the total is never reset and is asserted at the end of main().
+ */
+static ULONG eventDpcDepth;
+static ULONG rootHubInvalidatesLockedTier300Total;
+static ULONG rootHubReportsModelled;
 
 /* UsbPortInvalidateController, the last rung of the ladder. */
 static ULONG invalidateCalls;
@@ -839,6 +897,7 @@ static void hc_build(void)
 
     resetPortPower = PP_ALL;
     stuckPortPp = 0;
+    stuckPortPed = 0;
     refuseRun = 0;
     hchClearAfterReset = 0;
     deviceAttachedAtRun = 0;
@@ -874,6 +933,9 @@ static void hc_build(void)
     mmioReadsBeforeDead = 0;
     mmioDeadReads = 0;
     imanWritesSwallowed = 0;
+    imanIsrAfterArm = 0;
+    imanIsrExt = NULL;
+    imanIsrPreemptions = 0;
     refuseHalt = 0;
     pciWriteFails = 0;
     pciBmeSticky = 0;
@@ -964,6 +1026,7 @@ static void hc_build(void)
     rootHubDisableIrqReentries = 0;
     portSuspendedAtRun = 0;
     portResetHangs = 0;
+    portResetClearsPed = 0;
     portResets = 0;
     portscWriteLatch = 0;
     portscWriteLatchPort = 0;
@@ -1403,6 +1466,8 @@ VOID XhciHostWriteRegister(PULONG address, ULONG value)
                 mmio[HC_OP(XHCI_OP_USBSTS) / 4] &= ~XHCI_USBSTS_SRE;
                 if (saveRestoreShape == SR_CONFORMING) {
                     hostSavedState = 1;
+                    hostSavedEnqueue = hwEnqueue;
+                    hostSavedCycle = hwCycle;
                     if (saveRestoreBusyReads != 0 || saveRestoreHang) {
                         srBusyBit = XHCI_USBSTS_SSS;
                         srBusyReads = saveRestoreBusyReads;
@@ -1422,6 +1487,8 @@ VOID XhciHostWriteRegister(PULONG address, ULONG value)
                 } else {
                     mmio[HC_OP(XHCI_OP_USBSTS) / 4] &= ~XHCI_USBSTS_SRE;
                     hostSavedState = 0;
+                    hwEnqueue = hostSavedEnqueue;
+                    hwCycle = hostSavedCycle;
                     if (saveRestoreBusyReads != 0 || saveRestoreHang) {
                         srBusyBit = XHCI_USBSTS_RSS;
                         srBusyReads = saveRestoreBusyReads;
@@ -1560,6 +1627,9 @@ VOID XhciHostWriteRegister(PULONG address, ULONG value)
             portResets++;
             if (portResetHangs) {
                 current |= XHCI_PORTSC_PR;
+                if (portResetClearsPed) {
+                    current &= ~XHCI_PORTSC_PED;
+                }
             } else if ((current & XHCI_PORTSC_CCS) != 0) {
                 /*
                  * "When the Reset operation completes (PR = '0'), the port shall
@@ -1612,7 +1682,7 @@ VOID XhciHostWriteRegister(PULONG address, ULONG value)
          * is what a first version assumed - and which made a disable look able
          * to terminate a reset.
          */
-        if ((value & XHCI_PORTSC_PED) != 0) {
+        if ((value & XHCI_PORTSC_PED) != 0 && (ULONG)port != stuckPortPed) {
             current &= ~XHCI_PORTSC_PED;
         }
 
@@ -1776,6 +1846,22 @@ VOID XhciHostWriteRegister(PULONG address, ULONG value)
             next |= mmio[offset / 4] & XHCI_IMAN_IP;
         }
         mmio[offset / 4] = next;
+
+        /*
+         * An event already waiting when IE lands: the xHC raises IP and the
+         * interrupt at once, and the ISR runs at DIRQL before the writer, which
+         * holds only DISPATCH-level locks, reads IMAN back. The real XhciIsr
+         * runs here, so its IE-clearing write and its claim count are the
+         * driver's own. Its write carries IE = 0, so this cannot recurse.
+         */
+        if ((next & XHCI_IMAN_IE) != 0 && imanIsrAfterArm != 0 &&
+            imanIsrExt != NULL) {
+            imanIsrAfterArm--;
+            imanIsrPreemptions++;
+            mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_EINT;
+            mmio[offset / 4] |= XHCI_IMAN_IP;
+            (VOID)XhciIsr(imanIsrExt);
+        }
         return;
     }
 
@@ -1858,6 +1944,13 @@ VOID XhciHostWriteRegister(PULONG address, ULONG value)
     if (offset == HC_IR0(XHCI_IR_ERSTBA)) {
         mmio[offset / 4] = (value & ~XHCI_ERSTBA_RSVDP_MASK) |
                            HC_ERSTBA_RSVDP_SEED;
+        /* "When the ERST Base Address (ERSTBA) register is initially written
+         * ... The xHC initializes its internal PCS flag to '1'" and its
+         * Enqueue Pointer to ERST[0]'s base (4.9.4, p.167). A start's cursor
+         * is already there; a recovery's re-initialisation is where it was
+         * not, and the model went on producing where the old ring stopped. */
+        hwEnqueue = 0;
+        hwCycle = 1;
         return;
     }
 
@@ -2002,6 +2095,7 @@ VOID XhciHostReleaseSpinLock(PKSPIN_LOCK lock, KIRQL oldIrql)
  * trailing-signature half had never been executed by any test.
  */
 VOID XhciFillPacketForTest(VOID);
+ULONG XhciSetInterfaceVersionForTest(ULONG version);
 
 static MPSTATUS NTAPI hc_config_space(PVOID ext, BOOLEAN read, PVOID buffer,
                                       ULONG offset, ULONG length)
@@ -2093,6 +2187,11 @@ static ULONG NTAPI hc_async_callback(PVOID extension, ULONG milliseconds,
     ULONG i;
     HC_ASYNC_PENDING *pending;
 
+    if (!exForwarding && extension != NULL &&
+        ((PXHCI_EXTENSION)extension)->ArmThroughExOnly) {
+        legacyArmOnTier300Total++;
+    }
+
     if (asyncQueueEnabled) {
         CHECK(asyncPendingCount < HC_ASYNC_PENDING_MAX,
               "the async delivery queue must not drop a timer");
@@ -2139,6 +2238,41 @@ static ULONG NTAPI hc_async_callback(PVOID extension, ULONG milliseconds,
     return 0;
 }
 
+/*
+ * `USBPORTSVC_RequestAsyncCallbackEx` (roadmap 24.4): the legacy service's
+ * five arguments, an optional handle out-pointer and the skip-lock byte, and
+ * an NTSTATUS back. It schedules exactly what the legacy model schedules, so
+ * every delivery helper below works on either tier; `exAnswer` makes it
+ * refuse, scheduling nothing, as its pool failure does.
+ */
+static ULONG NTAPI hc_async_callback_ex(PVOID extension, ULONG milliseconds,
+                                        PVOID context,
+                                        ULONG_PTR contextLength,
+                                        XHCI_ASYNC_TIMER_CALLBACK *callback,
+                                        PVOID *handleOut, UCHAR skipLock)
+{
+    exCalls++;
+    exLastSkipLock = skipLock;
+    exLastHandleOut = (PVOID)handleOut;
+    if (skipLock != 0) {
+        exArmSkippingLockTotal++;
+    }
+    if (asyncDeliveryDepth != 0 || usbportLockModel != 0 ||
+        (extension != NULL &&
+         ((PXHCI_EXTENSION)extension)->SubmitDepth != 0)) {
+        exArmInLockedContextTotal++;
+    }
+    if (exAnswer != 0) {
+        note_no_lock_here("UsbPortRequestAsyncCallbackEx");
+        return exAnswer;
+    }
+    exForwarding = 1;
+    (VOID)hc_async_callback(extension, milliseconds, context,
+                            (ULONG)contextLength, callback);
+    exForwarding = 0;
+    return 0;
+}
+
 static void hc_deliver_async(ULONG index)
 {
     HC_ASYNC_PENDING pending;
@@ -2154,7 +2288,9 @@ static void hc_deliver_async(ULONG index)
         asyncPending[i] = asyncPending[i + 1];
     }
     /* Remove before entry: the callback may arm another timer. */
+    asyncDeliveryDepth++;
     pending.Callback(pending.Extension, pending.Context);
+    asyncDeliveryDepth--;
 }
 
 /*
@@ -2175,9 +2311,27 @@ static ULONG NTAPI hc_invalidate_root_hub(PVOID extension)
 {
     rootHubInvalidates++;
     note_no_lock_here("UsbPortInvalidateRootHub");
+    if (extension != NULL &&
+        ((PXHCI_EXTENSION)extension)->RootHubReportThroughDpc != 0 &&
+        (eventDpcDepth != 0 || asyncDeliveryDepth != 0 ||
+         usbportLockModel != 0)) {
+        rootHubInvalidatesLockedTier300Total++;
+    }
     if (commandLockDepth != 0) {
         rootHubInvalidatesUnderLock++;
         rootHubInvalidatesUnderLockTotal++;
+    }
+    /*
+     * And never while a SubmitTransfer is on the stack. usbport holds its
+     * EpList lock across that callback, and on NT 6.x this service takes the
+     * same lock (Vista x64 USBPORT_Ev_Rh_IntrEp_Invalidate ->
+     * USBPORT_AcquireEpListLock, static): the Vista and Windows 7 hangs of
+     * task 24.3.4. The three other callbacks made under that lock reach no
+     * root-hub code, so the submit bracket is the whole of what can be seen.
+     */
+    if (extension != NULL &&
+        ((PXHCI_EXTENSION)extension)->SubmitDepth != 0) {
+        rootHubInvalidatesInSubmitTotal++;
     }
 
     if (XhciRegPacket.RH_DisableIrq != NULL) {
@@ -2284,7 +2438,7 @@ static VOID NTAPI hc_complete_transfer(PVOID extension,
     if (completeTransferReenters) {
         completeTransferReenters = 0;
         completeTransferReentries++;
-        XhciSlotDeferredWork((PXHCI_EXTENSION)extension);
+        XhciSlotDeferredWork((PXHCI_EXTENSION)extension, XHCI_ARM_UNLOCKED);
     }
 }
 
@@ -2502,6 +2656,22 @@ static ULONG logSwitchAbsent;
 static ULONG imodValue;
 static MPSTATUS imodStatus;
 static ULONG imodReads;
+/*
+ * Task 24.3's switch and its two id strings, through the same stub. The switch
+ * is absent by default after log_reset_host, which is a machine whose INF never
+ * ran and so the feature off (design record 12 section 3.1). The ids are the
+ * service's raw copy: `vhubVidBytes` is what a read hands back, exactly
+ * XHCI_VHUB_ID_BUF_BYTES of it whatever the string holds, since the service
+ * copies the byte count asked for (the ABI document).
+ */
+static ULONG vhubSwitchValue;
+static MPSTATUS vhubSwitchStatus;
+static ULONG vhubSwitchReads;
+static UCHAR vhubVidBytes[XHCI_VHUB_ID_BUF_BYTES];
+static UCHAR vhubPidBytes[XHCI_VHUB_ID_BUF_BYTES];
+static MPSTATUS vhubVidStatus;
+static MPSTATUS vhubPidStatus;
+static ULONG vhubIdReads;
 
 static MPSTATUS NTAPI logRegistryValue(PVOID miniPortExtension,
                                        ULONG softwareKey,
@@ -2599,6 +2769,14 @@ static void prepare_start_arguments(void)
     XhciRegPacket.UsbPortReadWriteConfigSpace = hc_config_space;
     XhciRegPacket.UsbPortWait = hc_wait;
     XhciRegPacket.UsbPortRequestAsyncCallback = hc_async_callback;
+    /* Roadmap 24.4: what an NT 6.x registration writes, and the Version the
+     * start then reads. Every other vector runs the 200 tier. */
+    (VOID)XhciSetInterfaceVersionForTest(
+        harnessTier300 ? USBPORT_NT6_MINIPORT_INTERFACE_VERSION
+                       : USB20_MINIPORT_INTERFACE_VERSION);
+    if (harnessTier300) {
+        XhciRegPacket.UsbPortRequestAsyncCallbackEx = hc_async_callback_ex;
+    }
     XhciRegPacket.UsbPortInvalidateController = hc_invalidate_controller;
     XhciRegPacket.UsbPortInvalidateRootHub = hc_invalidate_root_hub;
     XhciRegPacket.UsbPortCompleteTransfer = hc_complete_transfer;
@@ -3179,7 +3357,9 @@ static void hw_fire_stale_callback(void)
     hw_access_snapshot(&staleBefore);
     acquiresBefore = commandLockAcquires;
 
+    asyncDeliveryDepth++;
     callback(&ext, &copy);
+    asyncDeliveryDepth--;
 
     staleMmioReads = mmioReads - staleBefore.MmioReads;
     staleMmioWrites = mmioWrites - staleBefore.MmioWrites;
@@ -5799,6 +5979,7 @@ static void test_dpc_bound(void)
 static void test_dpc_rearm(void)
 {
     ULONG i;
+    ULONG claimedBefore;
 
     isr_start();
     XhciEventDpc(&ext, FALSE);
@@ -5934,6 +6115,87 @@ static void test_dpc_rearm(void)
     CHECK_EQ(mmio[HC_IR0(XHCI_IR_IMAN) / 4] & XHCI_IMAN_IE, 0,
              "(IE really is still down - the window ate every attempt)");
     mmioDeadReads = 0;
+    CHECK_EQ(ext.InterruptArmsTakenByIsr, 0,
+             "(no claim happened, so the claim rule cannot rescue this one)");
+
+    /*
+     * **Run-24 finding 2: the read-back loses to the ISR, on one CPU.** The
+     * re-arm lands after the drain released EHB, an event is already waiting,
+     * and the interrupt fires the moment IE is up. The ISR runs at DIRQL, which
+     * the DPC's DISPATCH-level locks do not exclude, and clears IE again before
+     * the read-back. Every attempt used to lose the same way under a busy
+     * isochronous stream, and the escalation reset a healthy controller (32-bit
+     * XP, one vCPU, 2026-09-28). The claim queues the next DPC pass, which
+     * re-arms, so it is proof that delivery is owed, not lost.
+     */
+    isr_start();
+    ext.Flags |= XHCI_EXT_FLAG_INTERRUPTS;
+    mmio[HC_IR0(XHCI_IR_IMAN) / 4] = 0;
+    invalidateCalls = 0;
+    imanIsrExt = &ext;
+    imanIsrAfterArm = 64;
+    imanIsrPreemptions = 0;
+    claimedBefore = ext.InterruptsClaimed;
+    XhciEventDpc(&ext, TRUE);
+    CHECK_EQ(imanIsrPreemptions, 1,
+             "(the ISR ran once, between the write and the read-back)");
+    CHECK_EQ(ext.InterruptsClaimed, claimedBefore + 1,
+             "(and claimed the interrupt)");
+    CHECK_EQ(mmio[HC_IR0(XHCI_IR_IMAN) / 4] & XHCI_IMAN_IE, 0,
+             "(IE is down again, as the ISR leaves it)");
+    CHECK_EQ(ext.InterruptArmsTakenByIsr, 1,
+             "the claim is taken as proof the arm is owed to the next DPC");
+    CHECK_EQ(ext.InterruptRearmFailures, 0, "so the re-arm is not a failure");
+    CHECK_EQ(ext.RearmEscalations, 0, "and nothing is escalated");
+    CHECK_EQ(invalidateCalls, 0, "usbport is not asked for a controller reset");
+
+    /* The pass the claim queued: nothing preempts it, IE stays up. */
+    imanIsrAfterArm = 0;
+    XhciEventDpc(&ext, TRUE);
+    CHECK_EQ(mmio[HC_IR0(XHCI_IR_IMAN) / 4] & XHCI_IMAN_IE, XHCI_IMAN_IE,
+             "the next DPC pass puts IE back up");
+    CHECK_EQ(ext.InterruptArmsTakenByIsr, 1, "(by read-back, not by a claim)");
+    imanIsrExt = NULL;
+
+    /*
+     * **The unmask takes no claim as proof** (static, NT 6.x): usbport enables
+     * interrupts in two power paths while its IsrDpc still skips the miniport,
+     * so the DPC a claim queues there re-arms nothing. One lost read-back is
+     * retried - the claim left EHB set, so the next write sticks - and a
+     * claim on every attempt is a failure, as any unproven unmask is.
+     */
+    isr_start();
+    mmio[HC_IR0(XHCI_IR_IMAN) / 4] = 0;
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] &= ~XHCI_USBCMD_INTE;
+    imanIsrExt = &ext;
+    imanIsrAfterArm = 1;
+    imanIsrPreemptions = 0;
+    ext.InterruptArmsTakenByIsr = 0;
+    ext.InterruptUnmaskFailures = 0;
+    CHECK_EQ(XhciUnmaskInterrupts(&ext), 1,
+             "an unmask whose first IE read-back lost to an ISR retries and "
+             "proves the second");
+    CHECK_EQ(imanIsrPreemptions, 1, "(the ISR ran once)");
+    CHECK_EQ(mmio[HC_IR0(XHCI_IR_IMAN) / 4] & XHCI_IMAN_IE, XHCI_IMAN_IE,
+             "(IE is really up)");
+    CHECK_EQ(ext.InterruptArmsTakenByIsr, 0, "no claim was taken as proof");
+
+    isr_start();
+    mmio[HC_IR0(XHCI_IR_IMAN) / 4] = 0;
+    mmio[HC_OP(XHCI_OP_USBCMD) / 4] &= ~XHCI_USBCMD_INTE;
+    imanIsrExt = &ext;
+    imanIsrAfterArm = 64;
+    imanIsrPreemptions = 0;
+    ext.InterruptArmsTakenByIsr = 0;
+    ext.InterruptUnmaskFailures = 0;
+    CHECK_EQ(XhciUnmaskInterrupts(&ext), 0,
+             "an unmask whose every IE read-back lost to a claim fails - a "
+             "claim is not proof outside the DPC");
+    CHECK(imanIsrPreemptions >= 2, "(the ISR claimed on every attempt)");
+    CHECK_EQ(ext.InterruptArmsTakenByIsr, 0, "and the claim rule did not fire");
+    CHECK_EQ(ext.InterruptUnmaskFailures, 1, "it is counted as a failure");
+    imanIsrAfterArm = 0;
+    imanIsrExt = NULL;
 
     /*
      * The whole cycle, because the ISR's change and the DPC's are one design
@@ -6755,6 +7017,63 @@ static ULONG wide_equals(const WCHAR *wide, const char *ascii)
     return (wide[i] == 0) ? 1UL : 0UL;
 }
 
+/*
+ * The virtual hub's three values back to a machine whose INF never ran: the
+ * switch absent, and the ids absent too, so a vector that turns the switch on
+ * says which ids it means. `vhub_set_ids` is the INF's pair, in whichever
+ * encoding the vector names - the NT registry's UTF-16, or a single-byte form,
+ * since which one Windows 98's NTKERN hands over is 24.3.4's first reading.
+ */
+static void vhub_reset_registry(void)
+{
+    ULONG i;
+
+    vhubSwitchValue = 0;
+    vhubSwitchStatus = MP_STATUS_FAILURE;
+    vhubSwitchReads = 0;
+    vhubVidStatus = MP_STATUS_FAILURE;
+    vhubPidStatus = MP_STATUS_FAILURE;
+    vhubIdReads = 0;
+    for (i = 0; i < XHCI_VHUB_ID_BUF_BYTES; i++) {
+        vhubVidBytes[i] = 0xCC;
+        vhubPidBytes[i] = 0xCC;
+    }
+}
+
+static void vhub_put_id(UCHAR *bytes, const char *text, ULONG wide)
+{
+    ULONG i;
+
+    for (i = 0; i < XHCI_VHUB_ID_BUF_BYTES; i++) {
+        bytes[i] = 0xCC;
+    }
+    for (i = 0; ; i++) {
+        if (wide) {
+            if ((i + 1) * 2 > XHCI_VHUB_ID_BUF_BYTES) {
+                break;
+            }
+            bytes[i * 2] = (UCHAR)text[i];
+            bytes[i * 2 + 1] = 0;
+        } else {
+            if (i + 1 > XHCI_VHUB_ID_BUF_BYTES) {
+                break;
+            }
+            bytes[i] = (UCHAR)text[i];
+        }
+        if (text[i] == '\0') {
+            break;
+        }
+    }
+}
+
+static void vhub_set_ids(const char *vid, const char *pid, ULONG wide)
+{
+    vhub_put_id(vhubVidBytes, vid, wide);
+    vhub_put_id(vhubPidBytes, pid, wide);
+    vhubVidStatus = MP_STATUS_SUCCESS;
+    vhubPidStatus = MP_STATUS_SUCCESS;
+}
+
 static MPSTATUS NTAPI logRegistryValue(PVOID miniPortExtension,
                                        ULONG softwareKey,
                                        PVOID valueName,
@@ -6781,9 +7100,52 @@ static MPSTATUS NTAPI logRegistryValue(PVOID miniPortExtension,
     CHECK_EQ(softwareKey, 1,
              "the log's values are read with BOOL = TRUE, i.e. the driver's "
              "own software key");
-    CHECK_EQ(outBytes, 4, "every value is a REG_DWORD");
 
     name = (const WCHAR *)valueName;
+
+    /*
+     * Task 24.3's three: `XhciVirtualHSHub` and its two ids, character 4
+     * separating them from the log's and the moderation value. The switch is
+     * a DWORD; the ids are strings read into the parser's fixed buffer.
+     */
+    if (name[4] == 'V') {
+        ULONG i;
+
+        if (wide_equals(name, "XhciVirtualHSHub")) {
+            vhubSwitchReads++;
+            CHECK_EQ(nameBytes, 34,
+                     "XhciVirtualHSHub's name length is its bytes including "
+                     "the NUL");
+            CHECK_EQ(outBytes, 4, "the virtual hub's switch is a REG_DWORD");
+            if (vhubSwitchStatus == MP_STATUS_SUCCESS) {
+                *(ULONG *)out = vhubSwitchValue;
+            }
+            return vhubSwitchStatus;
+        }
+        vhubIdReads++;
+        CHECK_EQ(nameBytes, 40,
+                 "each id's name length is its bytes including the NUL");
+        CHECK_EQ(outBytes, XHCI_VHUB_ID_BUF_BYTES,
+                 "an id is read into the parser's whole buffer");
+        if (wide_equals(name, "XhciVirtualHSHubVid")) {
+            if (vhubVidStatus == MP_STATUS_SUCCESS) {
+                for (i = 0; i < XHCI_VHUB_ID_BUF_BYTES; i++) {
+                    ((UCHAR *)out)[i] = vhubVidBytes[i];
+                }
+            }
+            return vhubVidStatus;
+        }
+        CHECK(wide_equals(name, "XhciVirtualHSHubPid"),
+              "the only three virtual hub values this driver reads");
+        if (vhubPidStatus == MP_STATUS_SUCCESS) {
+            for (i = 0; i < XHCI_VHUB_ID_BUF_BYTES; i++) {
+                ((UCHAR *)out)[i] = vhubPidBytes[i];
+            }
+        }
+        return vhubPidStatus;
+    }
+
+    CHECK_EQ(outBytes, 4, "every other value is a REG_DWORD");
 
     /* Task 23.4's value: `XhciImod...` against the log's `XhciLog...`, so
      * character 4 separates the two families. */
@@ -6859,6 +7221,7 @@ static void log_reset_host(void)
     imodValue = 0;
     imodStatus = MP_STATUS_FAILURE;
     imodReads = 0;
+    vhub_reset_registry();
     XhciLogHostAtPassive = 1;
     XhciLogHostDebugViewCalls = 0;
     XhciLogHostDebugViewTotal = 0;
@@ -7460,7 +7823,9 @@ static void fire_async_timer(void)
     asyncCallback = NULL;
 
     if (callback != NULL) {
+        asyncDeliveryDepth++;
         callback(&ext, &copy);
+        asyncDeliveryDepth--;
     }
 }
 
@@ -7504,8 +7869,18 @@ static void usbport_worker(void)
 
 static void deliver_events(void)
 {
+    ULONG report;
+
     (void)XhciIsr(&ext);
-    XhciEventDpc(&ext, FALSE);
+    eventDpcDepth++;
+    report = XhciEventDpc(&ext, FALSE);
+    eventDpcDepth--;
+    /* usbport's IsrDpc: InterruptDpcEx's port bit becomes the root-hub
+     * invalidate, made after its ISR-DPC lock is released (NT 6.x, static). */
+    if (report) {
+        rootHubReportsModelled++;
+        (VOID)hc_invalidate_root_hub(&ext);
+    }
     usbport_worker();
 }
 
@@ -7515,7 +7890,7 @@ static void deliver_events(void)
  * as on the target, by usbport polling whatever the drain asked for. */
 static void deliver_after_submit(void)
 {
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     usbport_worker();
 }
 
@@ -7582,12 +7957,12 @@ static void test_selftest_witness_token(void)
         if (XhciRingTrbPA(&ext.CommandRing, ext.CommandRing.Enqueue) == noOpPA) {
             break;
         }
-        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK, NULL);
+        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK, NULL);
         deliver_events();
     }
     CHECK_EQ(XhciRingTrbPA(&ext.CommandRing, ext.CommandRing.Enqueue), noOpPA,
              "the command ring wraps back onto the self-test's TRB");
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "and an ordinary command is issued from that very position");
     CHECK_EQ(ext.CommandTrbPA, noOpPA, "(outstanding at the same address)");
     deliver_events();
@@ -7669,7 +8044,7 @@ static void test_selftest_witness_token(void)
     CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a started controller)");
     deliver_events();
     CHECK_EQ(ext.NoOpWitnessArmed, 0, "(token consumed)");
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "a further command is accepted");
     CHECK_EQ(ext.NoOpWitnessArmed, 0,
              "and an ordinary command never arms the self-test's witness");
@@ -7862,7 +8237,7 @@ static void test_command_submit_refusals(void)
 
     doorbells = count_writes(HC_DBOFF);
     requests = asyncRequests;
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_BUSY,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_BUSY,
              "a second command while one is outstanding is refused, not queued");
     CHECK_EQ(count_writes(HC_DBOFF), doorbells, "with no doorbell rung");
     CHECK_EQ(asyncRequests, requests, "and no second watchdog armed");
@@ -7871,7 +8246,7 @@ static void test_command_submit_refusals(void)
     /* Drained, the engine takes another one. */
     deliver_events();
     trbPA = 0;
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, &trbPA), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, &trbPA, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "once the first has completed, the next is accepted");
     CHECK_EQ(trbPA, ext.CommandRing.BasePA + sizeof(XHCI_TRB),
              "at the next slot of the ring");
@@ -7888,19 +8263,19 @@ static void test_command_submit_refusals(void)
     CHECK_EQ(XhciQuiesceController(&ext), 1, "(stopped)");
     doorbells = count_writes(HC_DBOFF);
     hw_access_snapshot(&before);
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_NOT_READY,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_NOT_READY,
              "a stopped controller takes no commands");
     check_touched_nothing(&before, "a submit to a stopped controller");
     CHECK_EQ(count_writes(HC_DBOFF), doorbells, "and rings no doorbell");
 
     /* The two argument guards, neither of which any other vector reaches. */
     hw_access_snapshot(&before);
-    CHECK_EQ(XhciCommandSubmit(NULL, &trb, NULL), XHCI_CMD_BAD_PARAM,
+    CHECK_EQ(XhciCommandSubmit(NULL, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_BAD_PARAM,
              "a NULL extension is refused");
-    CHECK_EQ(XhciCommandSubmit(&ext, NULL, NULL), XHCI_CMD_BAD_PARAM,
+    CHECK_EQ(XhciCommandSubmit(&ext, NULL, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_BAD_PARAM,
              "and so is a NULL command template");
     ext.Signature = 0;
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_BAD_PARAM,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_BAD_PARAM,
              "and an extension whose signature is wrong");
     ext.Signature = XHCI_EXTENSION_SIGNATURE;
     check_touched_nothing(&before, "the submit argument guards");
@@ -7993,7 +8368,7 @@ static void test_command_timeout(void)
 
     /* A recovered ring takes work again. */
     hwCmdHang = 0;
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "and the recovered ring accepts the next command");
     deliver_events();
     CHECK_EQ(ext.CommandsCompleted, 1, "which completes normally");
@@ -8019,7 +8394,7 @@ static void test_command_timeout(void)
              "a Command Aborted event leaves the ring out of service, even "
              "when this driver never asked for the abort");
     doorbells = count_writes(HC_DBOFF);
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_BUSY,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_BUSY,
              "so a submit in that window is refused");
     CHECK_EQ(count_writes(HC_DBOFF), doorbells,
              "and rings no doorbell at a ring that has not stopped");
@@ -8030,7 +8405,7 @@ static void test_command_timeout(void)
     deliver_events();
     CHECK_EQ(ext.CommandState, XHCI_CMD_STATE_IDLE,
              "and only the Command Ring Stopped event ends it");
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "after which the ring takes work again");
 
     /*
@@ -8101,7 +8476,7 @@ static void test_command_timeout(void)
         hwCmdHang = 0;
         unmatched = ext.CommandsUnmatched;
         completed = ext.CommandsCompleted;
-        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
                  "the next command is accepted");
         deliver_events();
         CHECK_EQ(ext.CommandsUnmatched, unmatched,
@@ -8147,7 +8522,7 @@ static void test_command_timeout(void)
         ULONG unmatched;
 
         unmatched = ext.CommandsUnmatched;
-        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
                  "(a command on the rebuilt ring)");
         deliver_events();
         CHECK_EQ(ext.CommandTrbPA, 0, "completes as its own");
@@ -8176,7 +8551,7 @@ static void test_command_timeout(void)
         diverged = ext.CommandRingDiverged;
         /* Still hanging: the doorbell for the next command fetches nothing,
          * so the model's dequeue stays on the No Op. */
-        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
                  "(a second command, behind the No Op)");
         fire_async_timer();             /* its watchdog: abort (writes CA) */
         writeCount = 0;
@@ -8246,14 +8621,14 @@ static void test_command_timeout(void)
     deliver_events();
     for (i = 0; ext.CommandRing.Enqueue != XHCI_CMD_RING_TRBS - 2 &&
                 i < XHCI_CMD_RING_TRBS; i++) {
-        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
                  "(a command, walking the ring to its last slot)");
         deliver_events();
     }
     CHECK_EQ(ext.CommandRing.Enqueue, XHCI_CMD_RING_TRBS - 2,
              "(the next command sits just before the link)");
     hwCmdHang = 1;
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "(the command that hangs)");
     CHECK_EQ(ext.CommandRing.Enqueue, 0, "(software has crossed the link)");
     hw_post_event(XHCI_TRB_TYPE_COMMAND_COMPLETION, ext.CommandTrbPA,
@@ -8274,7 +8649,7 @@ static void test_command_timeout(void)
              "the ring is back in service");
     CHECK_EQ(ext.CommandRing.Dequeue, 0,
              "with the dequeue pointer at index 0, where the link leads");
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "and the ring takes work again");
 
     /*
@@ -8302,7 +8677,7 @@ static void test_command_timeout(void)
     CHECK_EQ(ext.CommandState, XHCI_CMD_STATE_ABORTING,
              "and the engine stays out of service, so nothing rings the "
              "doorbell of a ring that has not stopped");
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_BUSY,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_BUSY,
              "which a submit sees as busy");
 
     /*
@@ -8410,7 +8785,7 @@ static void test_command_stale_callbacks(void)
     CHECK_EQ(ext.CommandsCompleted, 1, "(the first command completed)");
 
     XhciTrbNoOpCommand(&trb);
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, &second), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, &second, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "(a second command goes out)");
     writeCount = 0;
     if (callback != NULL) {
@@ -8657,7 +9032,7 @@ static void test_command_late_stop_events(void)
              "a negated CRR is not on its own a reason to resume the ring");
     CHECK_EQ(ext.CommandAbortWaits, 1, "the watchdog waits another interval");
     CHECK_EQ(invalidateCalls, 0, "without escalating yet");
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_BUSY,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_BUSY,
              "and no command can go out into that window");
 
     /*
@@ -8677,7 +9052,7 @@ static void test_command_late_stop_events(void)
     CHECK_EQ(invalidateCalls, 0, "and no controller reset was requested");
 
     hwCmdHang = 0;
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "and the ring takes work again");
     deliver_events();
     CHECK_EQ(ext.CommandsCompleted, 1, "which completes normally");
@@ -8985,7 +9360,7 @@ static void test_health_poll(void)
     XhciControllerBeginQuiesce(&ext);
     (VOID)XhciControllerUpdateFlags(&ext, 0, XHCI_EXT_FLAG_INITIALIZED);
     XhciTrbNoOpCommand(&trb);
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "(a second command, with no poll between the two)");
     CHECK(ext.CommandGeneration != generation, "(on a new generation)");
 
@@ -9041,7 +9416,7 @@ static void test_command_admission(void)
     for (i = 0; i < 7; i++) {
         XhciTrbClear(&trb);
         trb.Control = XHCI_TRB_TYPE(refused[i]);
-        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_BAD_TRB,
+        CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_BAD_TRB,
                  "a TRB type outside 9-23 is refused");
     }
     CHECK_EQ(count_writes(HC_DBOFF), doorbells, "with no doorbell rung");
@@ -9051,11 +9426,11 @@ static void test_command_admission(void)
     /* Both edges of the accepted range. */
     XhciTrbClear(&trb);
     trb.Control = XHCI_TRB_TYPE(XHCI_TRB_TYPE_ENABLE_SLOT);
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "Enable Slot is the first type the range admits");
     deliver_events();
     XhciTrbNoOpCommand(&trb);
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "and No Op Command the last");
     deliver_events();
 
@@ -9070,7 +9445,7 @@ static void test_command_admission(void)
     enqueue = ext.CommandRing.Enqueue;
     XhciRegPacket.UsbPortRequestAsyncCallback = NULL;
     hw_access_snapshot(&before);
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_NO_TIMER,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_NO_TIMER,
              "a command that cannot be timed is not issued");
     check_touched_nothing(&before, "a submit with no async timer service");
     CHECK_EQ(count_writes(HC_DBOFF), doorbells, "no doorbell");
@@ -9269,7 +9644,7 @@ static void test_reset_controller(void)
     ext.CommandTrbPA = 0;
     CHECK_EQ(ext.CommandState, XHCI_CMD_STATE_IDLE, "(the engine is idle)");
     doorbells = count_writes(HC_DBOFF);
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_FAILED,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_FAILED,
              "an idle engine on a failed controller still issues nothing - the "
              "state gate would have allowed this one");
     CHECK_EQ(count_writes(HC_DBOFF), doorbells, "and rings no doorbell");
@@ -9324,7 +9699,7 @@ static void test_reset_controller(void)
     CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "a restart brings it back");
     CHECK_EQ(ext.ControllerFailed, 0, "with the failure cleared");
     deliver_events();
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "and the ring takes work again");
 
     /* The guards, which nothing else reaches. */
@@ -9477,7 +9852,7 @@ static void test_controller_recovery(void)
              "the recovery's own No Op self-test completed, which is the one "
              "thing that exercises the command ring, the doorbell, the event "
              "ring, the ISR and the DPC as one path");
-    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL), XHCI_CMD_OK,
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
              "so the command ring takes work again, with no stop/start from "
              "anybody");
 
@@ -11865,7 +12240,9 @@ static void hw_fire_port_timer(void)
         CHECK(0, "(a port timer was armed to fire)");
         return;
     }
+    asyncDeliveryDepth++;
     callback(&ext, &copy);
+    asyncDeliveryDepth--;
 }
 
 /*
@@ -13216,7 +13593,7 @@ static void test_root_hub_port_power_confirmation(void)
          * announcement closes it again (usbport's own service re-enters
          * RH_DisableIrq). */
         XhciRegPacket.RH_EnableIrq(&ext);
-        XhciRootHubDeferredWork(&ext);
+        XhciRootHubDeferredWork(&ext, XHCI_ARM_UNLOCKED);
         XhciRegPacket.RH_EnableIrq(&ext);
 
         ext.RhSweepPollsSeen = 0;
@@ -13305,7 +13682,7 @@ static void test_root_hub_announce(void)
 
     /* A second drain with nothing owed calls nothing. */
     XhciRegPacket.RH_EnableIrq(&ext);
-    XhciRootHubDeferredWork(&ext);
+    XhciRootHubDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(rootHubInvalidates, 1,
              "a drain with nothing owed announces nothing");
 
@@ -14308,10 +14685,13 @@ static void test_slot_set_address_refusals(void)
     CHECK_EQ(completeTransferCalls, completions + 1,
              "an address past 127 is failed");
 
-    /* An address another record already holds - the one refusal that prevents
-     * two devices answering to the same address. */
+    CHECK_EQ(ext.AddressRefusalsInvalid, 2, "both counted as invalid");
+
+    /* An address another record already holds with EP0 still bound - the
+     * refusal that prevents two devices answering to the same address. An
+     * idle, unbound holder is reclaimed instead (test_slot_address_reclaim). */
     ext.Devices[1].State = XHCI_DEV_STATE_ADDRESSED;
-    ext.Devices[1].Flags |= XHCI_DEV_FLAG_ADDRESS_VALID;
+    ext.Devices[1].Flags |= XHCI_DEV_FLAG_ADDRESS_VALID | XHCI_DEV_FLAG_EP0_OPEN;
     ext.Devices[1].DeviceAddress = 11;
     slot_setup(0x00, 0x05, 11, 0);
     completions = completeTransferCalls;
@@ -14319,7 +14699,9 @@ static void test_slot_set_address_refusals(void)
                                        &slotTransfer, &slotSgList);
     deliver_after_submit();
     CHECK_EQ(completeTransferCalls, completions + 1,
-             "an address another record holds is failed");
+             "an address a bound record holds is failed");
+    CHECK_EQ(ext.AddressRefusalsBound, 1, "and counted as bound");
+    CHECK_EQ(ext.Devices[1].DeviceAddress, 11, "the holder keeps it");
     ext.Devices[1].State = XHCI_DEV_STATE_FREE;
     ext.Devices[1].Flags = 0;
 
@@ -14992,6 +15374,12 @@ static void slot_properties_ep(ULONG address,
     slotProperties.TotalMaxPacketSize = (USHORT)(mps * transactions);
     slotProperties.MaxPacketSize = mps;
     slotProperties.Period = (UCHAR)period;
+    /* Every usbport build copies an interrupt pipe's bucketed Period to 0x07
+     * before its budget can move `Period` (roadmap 24.5); the model's budget
+     * never moves it, so the two agree unless a vector says otherwise. */
+    if (transferType == USBPORT_TRANSFER_TYPE_INTERRUPT) {
+        slotProperties.PipePeriod = (UCHAR)period;
+    }
     slotProperties.TransactionPerMicroframe = (UCHAR)transactions;
     slotProperties.HubAddr = 0xFFFF;
 }
@@ -15050,6 +15438,23 @@ static void slot_setup_xfer(PUSBPORT_TRANSFER_PARAMETERS params,
         sgList->SgElement[0].SgTransferLength = length;
         sgList->SgElement[0].SgOffset = 0;
     }
+}
+
+/*
+ * One zero-length GET_DESCRIPTOR queued on `slotEndpoint`'s EP0 through the
+ * second transfer block, so `slotTransfer` stays free for the vector's own
+ * submits. Nothing completes it until a Transfer Event is posted: TRBs the
+ * controller could still execute, which is what keeps a disown waiting for
+ * PED since round 7 (XhciSlotPortRecordsDisownedIdle).
+ */
+static void slot_queue_ep0_work(void)
+{
+    slot_setup_xfer(&slotParams2, &slotTransfer2, &slotSgList2, 0, 1);
+    slotParams2.SetupPacket.bmRequestType = 0x80;
+    slotParams2.SetupPacket.bRequest = 0x06;
+    slotParams2.SetupPacket.wValue = 0x0100;
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams2,
+                                       &slotTransfer2, &slotSgList2);
 }
 
 /*
@@ -15650,7 +16055,7 @@ static void test_slot_init_resets_the_table_in_one_hold(void)
      * transfer is what it delivers - through the poll it asks usbport for,
      * since the 200 tier delivers per endpoint (issue 8 section 4d). */
     ext.DeferredBusy = 0;
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     usbport_worker();
     CHECK_EQ(completeTransferCalls, completions + 1,
              "the work the reset cancelled is delivered by the drain's poll");
@@ -18351,7 +18756,7 @@ static void test_slot_bulk_retry_poll_backstop(void)
     CHECK_EQ(record->Queue.RetryArmed, 1, "(armed)");
 
     XhciRegPacket.CheckController(&ext);
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(ext.EndpointRetriesAsked, retriesAsked,
              "a poll over an unchanged ring asks for nothing");
     CHECK_EQ(record->Queue.RetryArmed, 1, "and leaves the latch standing");
@@ -18361,7 +18766,7 @@ static void test_slot_bulk_retry_poll_backstop(void)
                                               record->Ring.Enqueue)),
              XHCI_RING_OK, "(the placement reclaims the whole TD)");
     XhciRegPacket.CheckController(&ext);
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(ext.EndpointRetriesAsked, retriesAsked + 1,
              "and the poll is what notices space a completion never freed");
     CHECK_EQ(record->Queue.RetryArmed, 0, "clearing the latch");
@@ -20124,7 +20529,7 @@ static void test_slot_interrupt_teardown_returns_rings(void)
     hwCmdHang = 1;
     XhciSlotCommandLost(&ext);
     hwCmdHang = 0;
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(ext.DevicesAbandoned, abandoned + 1, "the record is abandoned");
     CHECK_EQ(ext.Devices[0].State, XHCI_DEV_STATE_GONE, "and stays GONE");
     CHECK_EQ(XhciPoolFree(&ext.RingPool), poolFree,
@@ -20144,7 +20549,7 @@ static void test_slot_interrupt_teardown_returns_rings(void)
         XhciSlotInvalidateAll(&ext, 1);
         XhciControllerLockRelease(oldIrql);
     }
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK(completeTransferCalls > completions,
           "a controller proved stopped answers what the abandonment could not");
     CHECK_EQ(XhciPoolFree(&ext.RingPool), XHCI_MAX_POOL_RINGS,
@@ -20594,7 +20999,7 @@ static void test_slot_abort_takes_it_off_the_completion_list(void)
     CHECK_EQ(ext.CompletionsOwed, 0, "it is off the completion list");
 
     ext.DeferredBusy = 0;
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(completeTransferCalls, completions,
              "so the drain never completes it - usbport freed that record the "
              "moment the abort returned");
@@ -20631,7 +21036,7 @@ static void test_slot_abort_takes_it_off_the_completion_list(void)
     CHECK(ext.CompletionTail == &slotTransfer2, "and the tail");
 
     ext.DeferredBusy = 0;
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     usbport_worker();
     CHECK_EQ(completeTransferCalls, completions + 1,
              "so exactly the one that was not aborted is completed, by the "
@@ -20700,7 +21105,7 @@ static void test_slot_completion_waits_for_poll_endpoint(void)
     (void)XhciRegPacket.RH_GetPortStatus(&ext, 3, &portStatus);
     CHECK_EQ(completeTransferCalls, completions,
              "RH_GetPortStatus does not deliver it");
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(completeTransferCalls, completions, "nor a bare drain");
     XhciRegPacket.CheckController(&ext);
     CHECK_EQ(completeTransferCalls, completions,
@@ -20776,6 +21181,60 @@ static void test_slot_completion_fallback_poll(void)
      * fire again. */
     poll_after_ms(XHCI_COMPLETION_FALLBACK_MS * 2UL);
     CHECK_EQ(ext.CompletionFallbackPolls, 1, "and only once");
+    ext.DeliverUnderUsbportLockOnly = 0;
+}
+
+/*
+ * **The soft interrupt is a virtual hub's only** (Codex round 2): on the
+ * Version 300 tier a real device's completion parked behind a busy drain -
+ * its PollEndpoint turned away - owes none, and no pass asks for one. Its
+ * delivery is the next interrupt's, as before the round-10 fix.
+ */
+static void test_slot_completion_busy_drain_owes_no_soft_interrupt(void)
+{
+    PXHCI_DEVICE dev;
+    PXHCI_ENDPOINT_RECORD record;
+    ULONG completions;
+
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    (void)slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                       USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1);
+    deliver_events();
+    record = &dev->Endpoints[0];
+    (void)slot_submit_int(&slotEndpoint2, &slotParams, &slotTransfer,
+                          &slotSgList);
+
+    ext.DeliverUnderUsbportLockOnly = 1;
+    ext.DeliverPerEndpointOnly = 0;
+    invalidateCalls = 0;
+    completions = completeTransferCalls;
+    hw_post_event_ex(XHCI_TRB_TYPE_TRANSFER_EVENT,
+                     XhciRingTrbPA(&record->Ring, slotTransfer.LastIndex), 0,
+                     XHCI_CC_SUCCESS << 24,
+                     XHCI_TRB_SLOT_ID(5) | XHCI_TRB_EP_ID(3));
+    (void)XhciIsr(&ext);
+    (void)XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(ext.CompletionsOwed, 1, "(parked)");
+    CHECK_EQ(invalidateCalls, 0, "a real device's completion asks for nothing");
+
+    ext.DeferredBusy = 1;
+    XhciRegPacket.PollEndpoint(&ext, &slotEndpoint2);
+    CHECK_EQ(completeTransferCalls, completions, "(turned away)");
+    CHECK_EQ(ext.SoftInterruptOwed, 0, "and owes no soft interrupt");
+    ext.DeferredBusy = 0;
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
+    CHECK_EQ(invalidateCalls, 0, "so no pass asks for one");
+    /* A debt whose virtual hub answer was delivered meanwhile. */
+    ext.SoftInterruptOwed = 1;
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
+    CHECK_EQ(invalidateCalls, 0,
+             "nor does a debt with no virtual hub answer still parked");
+    CHECK_EQ(ext.SoftInterruptOwed, 0, "which is dropped");
+
+    XhciRegPacket.PollEndpoint(&ext, &slotEndpoint2);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "(the next PollEndpoint delivers it)");
+    ext.DeliverPerEndpointOnly = 1;
     ext.DeliverUnderUsbportLockOnly = 0;
 }
 
@@ -20892,7 +21351,7 @@ static void test_slot_completion_locked_contexts_and_forced(void)
     (void)XhciIsr(&ext);
     (void)XhciRegPacket.InterruptDpc(&ext, TRUE);
     CHECK_EQ(completeTransferCalls, completions, "(parked)");
-    XhciSlotDeferredWorkForced(&ext);
+    XhciSlotDeferredWorkForced(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(completeTransferCalls, completions + 1,
              "a forced drain delivers it from an unlocked context");
     CHECK_EQ(ext.CompletionsDeliveredForced, 1, "and counts it as forced");
@@ -20992,7 +21451,7 @@ static void test_slot_abort_after_the_record_is_released(void)
     CHECK_EQ(ext.CompletionsOwed, 0, "and it is off the list");
 
     XhciSlotLeaveSubmit(&ext);
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(completeTransferCalls, completions,
              "so the drain never completes it - usbport freed that record the "
              "moment the abort returned");
@@ -21049,7 +21508,7 @@ static void test_slot_completion_holds_for_a_pass_after_the_bracket(void)
      */
     completions = completeTransferCalls;
     invalidateLeavesSubmit = 1;
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(invalidateLeavesSubmit, 0, "(the bracket closed mid-pass)");
     CHECK_EQ(ext.SubmitDepth, 0, "(and the depth reads 0)");
     CHECK_EQ(completeTransferCalls, completions,
@@ -21058,7 +21517,7 @@ static void test_slot_completion_holds_for_a_pass_after_the_bracket(void)
 
     /* The next pass began after the close, so it may deliver - and on the
      * per-endpoint tier what delivers is the poll that pass asks for. */
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     usbport_worker();
     CHECK_EQ(completeTransferCalls, completions + 1,
              "the next pass delivers it");
@@ -23157,6 +23616,147 @@ static void test_slot_failed_record_ep0_reopen(void)
  * shape of the gap: every one of them was a parameter or a branch with exactly
  * one tested value.
  */
+/*
+ * Roadmap 24.5: the interval comes from the pipe's own Period, not from the
+ * one usbport's USB 2.0 budget promoted. Read at 2 on NUSB, SweetLow's, ME,
+ * SP4 and XP: a High-Speed mouse behind the virtual hub opened at Period 1,
+ * Interval 0 (125 us); the budget had promoted it for bus load, and 0x07 still
+ * held its own 32.
+ */
+static void test_slot_interrupt_promoted_period(void)
+{
+    PXHCI_DEVICE dev;
+    PXHCI_ENDPOINT endpoint;
+    ULONG i;
+
+    /* High Speed, promoted from 32 microframes to 1. */
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    slot_properties_ep(7, UsbHighSpeed, 0x81, USBPORT_TRANSFER_TYPE_INTERRUPT,
+                       8, 1, 1);
+    slotProperties.PipePeriod = 32;
+    endpoint = &slotEndpoint2;
+    for (i = 0; i < sizeof(XHCI_ENDPOINT) / sizeof(ULONG); i++) {
+        ((ULONG *)endpoint)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_raw(&slotProperties, endpoint), MP_STATUS_SUCCESS,
+             "a High-Speed interrupt endpoint the budget promoted to Period 1");
+    CHECK_EQ(dev->Endpoints[0].Params.Interval, 5UL,
+             "opens at its own 32 microframes - Interval 5, 4 ms - as the "
+             "same device does on a root port, not Interval 0");
+    CHECK_EQ(ext.EndpointPeriodsPromoted, 1, "counted as promoted");
+    CHECK_EQ(ext.EndpointPipePeriodsMissing, 0, "(the pipe period was there)");
+    deliver_events();
+
+    /* Full Speed behind a TT, promoted from 8 frames to 1. */
+    dev = slot_enumerate_addressed(3, 1, 5, 7);
+    slot_properties_ep(7, UsbFullSpeed, 0x81, USBPORT_TRANSFER_TYPE_INTERRUPT,
+                       8, 1, 1);
+    slotProperties.PipePeriod = 8;
+    for (i = 0; i < sizeof(XHCI_ENDPOINT) / sizeof(ULONG); i++) {
+        ((ULONG *)endpoint)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_raw(&slotProperties, endpoint), MP_STATUS_SUCCESS,
+             "a Full-Speed interrupt endpoint promoted to Period 1");
+    CHECK_EQ(dev->Endpoints[0].Params.Interval, 6UL,
+             "opens at its own 8 frames - Interval 6 - not the 1 ms floor");
+    CHECK_EQ(ext.EndpointPeriodsPromoted, 1, "counted as promoted");
+    deliver_events();
+
+    /*
+     * Promoted, on a Full-Speed device usbport bucketed as High Speed (the
+     * root-port misreport, Phase 5 task 7): the pipe period is read in the
+     * same speed as `Period` always was, so 4 microframes still floors to the
+     * Full-Speed minimum, and 32 microframes is 4 ms, Interval 5.
+     */
+    dev = slot_enumerate_addressed(3, 1, 5, 7);
+    slot_properties_ep(7, UsbHighSpeed, 0x81, USBPORT_TRANSFER_TYPE_INTERRUPT,
+                       8, 1, 1);
+    slotProperties.PipePeriod = 4;
+    for (i = 0; i < sizeof(XHCI_ENDPOINT) / sizeof(ULONG); i++) {
+        ((ULONG *)endpoint)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_raw(&slotProperties, endpoint), MP_STATUS_SUCCESS,
+             "a promoted endpoint on a device usbport misreads as HS");
+    CHECK_EQ(dev->Endpoints[0].Params.Interval, XHCI_EP_INTERVAL_FSLS_MIN,
+             "4 microframes floors to Full Speed's minimum, as before");
+    CHECK_EQ(ext.EndpointIntervalsFloored, 1, "(the floor counted)");
+    deliver_events();
+    dev = slot_enumerate_addressed(3, 1, 5, 7);
+    slot_properties_ep(7, UsbHighSpeed, 0x81, USBPORT_TRANSFER_TYPE_INTERRUPT,
+                       8, 1, 1);
+    slotProperties.PipePeriod = 32;
+    for (i = 0; i < sizeof(XHCI_ENDPOINT) / sizeof(ULONG); i++) {
+        ((ULONG *)endpoint)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_raw(&slotProperties, endpoint), MP_STATUS_SUCCESS,
+             "(the same device, a 32-microframe pipe)");
+    CHECK_EQ(dev->Endpoints[0].Params.Interval, 5UL,
+             "Interval 5, not the floor the budget's 1 would have given");
+    CHECK_EQ(ext.EndpointIntervalsFloored, 0, "(nothing floored)");
+    deliver_events();
+
+    /*
+     * A reopen whose budget period moved but whose pipe period did not -
+     * what a rebalance's promotion looks like to a later ReopenPipe - keeps
+     * the endpoint's interval and reprograms nothing.
+     */
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    CHECK_EQ(slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                          USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 32, 1),
+             MP_STATUS_SUCCESS, "(an interrupt endpoint at 32)");
+    deliver_events();
+    CHECK_EQ(dev->Endpoints[0].State, XHCI_EP_REC_CONFIGURED, "(configured)");
+    slot_properties_ep(7, UsbHighSpeed, 0x81, USBPORT_TRANSFER_TYPE_INTERRUPT,
+                       8, 1, 1);
+    slotProperties.PipePeriod = 32;
+    CHECK_EQ(open_endpoint_raw(&slotProperties, &slotEndpoint2),
+             MP_STATUS_SUCCESS, "reopened with the budget's period now 1");
+    CHECK_EQ(dev->Endpoints[0].Params.Interval, 5UL, "still Interval 5");
+    CHECK_EQ(dev->Endpoints[0].PendingParams.Interval, 5UL,
+             "with no reprogram asked for");
+    deliver_events();
+
+    /* Not promoted: the two agree and nothing is counted. */
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    CHECK_EQ(slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                          USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 32, 1),
+             MP_STATUS_SUCCESS, "an endpoint the budget left alone");
+    CHECK_EQ(dev->Endpoints[0].Params.Interval, 5UL, "Interval 5");
+    CHECK_EQ(ext.EndpointPeriodsPromoted, 0, "nothing counted");
+    deliver_events();
+
+    /* No pipe period - no build read produces it: today's Period is used. */
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    slot_properties_ep(7, UsbHighSpeed, 0x81, USBPORT_TRANSFER_TYPE_INTERRUPT,
+                       8, 8, 1);
+    slotProperties.PipePeriod = 0;
+    for (i = 0; i < sizeof(XHCI_ENDPOINT) / sizeof(ULONG); i++) {
+        ((ULONG *)endpoint)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_raw(&slotProperties, endpoint), MP_STATUS_SUCCESS,
+             "an interrupt endpoint with no pipe period");
+    CHECK_EQ(dev->Endpoints[0].Params.Interval, 3UL,
+             "falls back to Period 8 microframes - Interval 3");
+    CHECK_EQ(ext.EndpointPipePeriodsMissing, 1, "and says so");
+    deliver_events();
+
+    /* A bulk endpoint's 0x07 is not read at all. */
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    slot_properties_ep(7, UsbHighSpeed, 0x82, USBPORT_TRANSFER_TYPE_BULK,
+                       512, 0, 1);
+    slotProperties.PipePeriod = 32;
+    for (i = 0; i < sizeof(XHCI_ENDPOINT) / sizeof(ULONG); i++) {
+        ((ULONG *)endpoint)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_raw(&slotProperties, endpoint), MP_STATUS_SUCCESS,
+             "a bulk endpoint with a stray byte at 0x07");
+    CHECK_EQ(dev->Endpoints[0].Params.Interval, 0UL,
+             "keeps Interval 0: only interrupt endpoints read the pipe period");
+    CHECK_EQ(ext.EndpointPeriodsPromoted + ext.EndpointPipePeriodsMissing, 0,
+             "and nothing is counted");
+    deliver_events();
+}
+
 static void test_slot_interrupt_second_order(void)
 {
     PXHCI_DEVICE dev;
@@ -23254,7 +23854,7 @@ static void test_slot_interrupt_second_order(void)
 
         hwCmdHang = 1;
         XhciTrbNoOpCommand(&noop);
-        CHECK_EQ(XhciCommandSubmit(&ext, &noop, NULL), XHCI_CMD_OK,
+        CHECK_EQ(XhciCommandSubmit(&ext, &noop, NULL, XHCI_ARM_UNLOCKED), XHCI_CMD_OK,
                  "(the engine is occupied)");
     }
     CHECK_EQ(slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
@@ -24190,6 +24790,15 @@ static void test_slot_port_disable_waits_for_the_port(void)
     CHECK_EQ(dev->DeviceAddress, 7, "(the device holds address 7)");
     CHECK_EQ(dev->Flags & XHCI_DEV_FLAG_ADDRESS_VALID,
              XHCI_DEV_FLAG_ADDRESS_VALID, "(and the map entry is live)");
+    /*
+     * **And work in flight**, which is what the wait is for since round 7: a
+     * disowned record with nothing queued and nothing owed settles unconfirmed
+     * (XhciSlotPortRecordsDisownedIdle), because its release proves itself by
+     * Stop Endpoint and Disable Slot. A queued transfer is TRBs the controller
+     * could still execute.
+     */
+    slot_queue_ep0_work();
+    CHECK_EQ(dev->Ep0Queue.Count, 1, "(a transfer is queued on the device)");
 
     /* A port that will not drop PP, so the power-off cannot be confirmed. */
     stuckPortPp = 3;
@@ -24334,6 +24943,8 @@ static void test_slot_port_disable_waits_for_the_port(void)
      * the device down while VBus is still up.
      */
     dev = slot_enumerate(3, 3, 5);
+    slot_queue_ep0_work();
+    CHECK_EQ(dev->Ep0Queue.Count, 1, "(work in flight, as above)");
     stuckPortPp = 3;
     mmio[HC_PORTSC(XhciRootHubPortOf(&ext.RootHub, 3)) / 4] &= ~XHCI_PORTSC_PED;
     CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortPower(&ext, 3),
@@ -26162,7 +26773,7 @@ static void test_hub_slot_marked_from_the_descriptor(void)
      * reissued for the life of the device.
      */
     deliver_events();
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(ext.HubMarkCommands, 1, "a marking already held is not sent again");
     CHECK_EQ(ext.HubSlotsMarked, 1, "nor counted again");
 }
@@ -26256,7 +26867,7 @@ static void test_hub_marking_is_lost_by_a_re_address(void)
      */
     CHECK_EQ(dev->DeviceAddress, 0,
              "(a re-enumerating record holds no address)");
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     CHECK_EQ(ext.HubMarkCommands, 1, "so a slot in Default is not marked");
 
     /* And once addressed again, the graph still knows it is a hub. */
@@ -26308,7 +26919,7 @@ static void test_hub_marking_failure_is_bounded(void)
              "did not fail, its description did");
 
     deliver_events();
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     deliver_events();
     CHECK_EQ(ext.HubMarkCommands, 1, "and it is never retried");
 
@@ -26622,7 +27233,7 @@ static void test_hub_marking_does_not_follow_a_reused_address(void)
     CHECK_EQ(other->DeviceAddress, 2, "(taking the address the hub gave back)");
     CHECK_EQ(other->State, XHCI_DEV_STATE_ADDRESSED, "(and addressed)");
 
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     deliver_events();
     CHECK_EQ(other->ActiveOp, XHCI_DEV_OP_NONE,
              "no marking is issued for a device that inherited the address");
@@ -26769,7 +27380,7 @@ static void test_hub_with_no_ports_is_not_marked(void)
     CHECK_EQ(dev->ActiveOp, XHCI_DEV_OP_NONE, "no marking is issued");
     CHECK_EQ(ext.HubMarkCommands, 0, "none at all");
 
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     deliver_events();
     CHECK_EQ(ext.HubSlotsMarked, 0, "and the hub is never marked");
     CHECK_EQ(ext.HubMarkFailures, 0,
@@ -26859,6 +27470,84 @@ static ULONG behind_hub_slot_dword(ULONG index)
         return 0xFFFFFFFFUL;
     }
     return *(volatile ULONG *)(ext.StartVA + offset + index * sizeof(ULONG));
+}
+
+/*
+ * **A record behind a hub keeps the disown waiting** (round 6's no-record
+ * rule, XhciSlotPortHasRecords). The rule settles a debt unconfirmed only when
+ * nothing on the port or behind it holds a slot - or, since round 7, when
+ * every record there is disowned and idle; this child's Enable Slot is still
+ * outstanding, so it is not. The hub's own record is freed by hand so that the
+ * child is the only thing that counts.
+ */
+static void test_disown_waits_for_a_record_behind_a_hub(void)
+{
+    PXHCI_DEVICE hub;
+    ULONG hubPort;
+    ULONG xport;
+    ULONG empty;
+
+    hub = behind_hub_parent(1);
+    CHECK_EQ(behind_hub_open(hub, &slotEndpoint, 4, UsbFullSpeed, 2, 4, 6,
+                             &slotEndpoint2),
+             MP_STATUS_SUCCESS, "(a device behind the hub)");
+    hubPort = hub->HubPort;
+    xport = XhciRootHubPortOf(&ext.RootHub, hubPort);
+    CHECK(xport != 0, "(the hub's root port)");
+    hub->State = XHCI_DEV_STATE_FREE;
+    CHECK_EQ(XhciSlotPortHasRecords(&ext, hubPort), 1,
+             "the record behind the hub counts as the port's");
+
+    empty = ext.DisownsSettledEmpty;
+    stuckPortPed = xport;
+    mmio[HC_PORTSC(xport) / 4] |= XHCI_PORTSC_PED;
+    (void)XhciRegPacket.RH_ClearFeaturePortEnable(&ext, (USHORT)hubPort);
+    deliver_after_submit();
+    CHECK_EQ(ext.RootHub.Ports[hubPort - 1].DisownPending, 1,
+             "so the disable's debt still waits for PED");
+    CHECK_EQ(ext.DisownsSettledEmpty, empty, "(not settled empty)");
+    CHECK_EQ(XhciSlotPortRecordsDisownedIdle(&ext, hubPort), 0,
+             "(the child is disowned, but its command is outstanding)");
+    stuckPortPed = 0;
+}
+
+/*
+ * **A disowned record whose EP0 is quiet but whose interrupt pipe has a read
+ * posted is not idle** (round 7's rule, XhciSlotPortRecordsDisownedIdle) -
+ * the ordinary HID device. The read is TRBs the controller may still execute,
+ * so the disable's debt waits for PED as before and the read stays queued.
+ */
+static void test_disown_waits_for_a_posted_interrupt_read(void)
+{
+    PXHCI_DEVICE dev;
+    ULONG xport;
+    ULONG idle;
+
+    dev = slot_enumerate_addressed(3, 3, 5, 7);
+    CHECK_EQ(slot_open_ep(&slotEndpoint2, 7, UsbHighSpeed, 0x81,
+                          USBPORT_TRANSFER_TYPE_INTERRUPT, 8, 8, 1),
+             MP_STATUS_SUCCESS, "(an interrupt IN pipe)");
+    deliver_events();
+    CHECK_EQ(dev->Endpoints[0].State, XHCI_EP_REC_CONFIGURED, "(configured)");
+    CHECK_EQ(slot_submit_int(&slotEndpoint2, &slotParams2, &slotTransfer2,
+                             &slotSgList2),
+             MP_STATUS_SUCCESS, "(a read posted)");
+    CHECK_EQ(dev->Ep0Queue.Count, 0, "(EP0 quiet)");
+
+    xport = XhciRootHubPortOf(&ext.RootHub, 3);
+    idle = ext.DisownsSettledIdle;
+    stuckPortPed = xport;
+    mmio[HC_PORTSC(xport) / 4] |= XHCI_PORTSC_PED;
+    (void)XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 3);
+    deliver_after_submit();
+    CHECK_EQ(dev->Flags & XHCI_DEV_FLAG_DISOWNED, XHCI_DEV_FLAG_DISOWNED,
+             "(the record is disowned)");
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 1,
+             "the posted read keeps the disable's debt waiting for PED");
+    CHECK_EQ(ext.DisownsSettledIdle, idle, "(not settled idle)");
+    CHECK_EQ(dev->Endpoints[0].Queue.Count, 1,
+             "and the read stays queued, not answered");
+    stuckPortPed = 0;
 }
 
 /*
@@ -27647,7 +28336,7 @@ static void test_hub_marking_does_not_follow_a_sibling(void)
     CHECK_EQ(sibling->DeviceAddress, 3, "the sibling is given the same address");
     CHECK_EQ(sibling->RouteString, 0x5, "(at a different position)");
 
-    XhciSlotDeferredWork(&ext);
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
     deliver_events();
     CHECK_EQ(sibling->HubMarkDone, 0,
              "**and is not marked as the hub that used to hold that address** - "
@@ -29067,6 +29756,16 @@ static void test_passthru_snapshot(void)
     logDebugViewValue = 1;
     imodStatus = MP_STATUS_SUCCESS;
     imodValue = 5000;
+    /* Schema 5, task 24.3: the switch at 1 with a single-byte vendor id in
+     * the prefixed form and a UTF-16 product id, so that every one of the
+     * twelve fields carries a value its neighbour does not. */
+    vhub_reset_registry();
+    vhubSwitchStatus = MP_STATUS_SUCCESS;
+    vhubSwitchValue = 1;
+    vhub_put_id(vhubVidBytes, "0x12ab", 0);
+    vhub_put_id(vhubPidBytes, "0003", 1);
+    vhubVidStatus = MP_STATUS_SUCCESS;
+    vhubPidStatus = MP_STATUS_SUCCESS;
     enable_start(0);
 
     snapRequest(XHCI_SNAPSHOT_REGION_EXTENSION, 0);
@@ -29079,6 +29778,21 @@ static void test_passthru_snapshot(void)
     CHECK_EQ(h->ImodRequested, 5000UL, "what the registry gave");
     CHECK_EQ(h->ImodInterval, 4000UL, "what the start wrote instead");
     CHECK_EQ(h->ImodReadback, 4000UL, "and what the register read back");
+    CHECK_EQ(h->VhubSwitchStatus, MP_STATUS_SUCCESS,
+             "schema 5: the virtual hub switch's read status");
+    CHECK_EQ(h->VhubSwitchValue, 1UL, "the value read");
+    CHECK_EQ(h->VhubApplied, XHCI_VHUB_MODE_ON_DEMAND, "the mode applied");
+    CHECK_EQ(h->VhubRefused, XHCI_VHUB_WHY_NONE, "and no refusal");
+    CHECK_EQ(h->VhubVidStatus, MP_STATUS_SUCCESS, "the vendor id's status");
+    CHECK_EQ(h->VhubVidResult, XHCI_VHUB_ID_OK, "its verdict");
+    CHECK_EQ(h->VhubVidEncoding, XHCI_VHUB_ENC_BYTE,
+             "the encoding it arrived in - the 24.3.4 reading");
+    CHECK_EQ(h->VhubVid, 0x12ABUL, "and the id, prefix and case folded");
+    CHECK_EQ(h->VhubPidStatus, MP_STATUS_SUCCESS, "the product id's status");
+    CHECK_EQ(h->VhubPidResult, XHCI_VHUB_ID_OK, "its verdict");
+    CHECK_EQ(h->VhubPidEncoding, XHCI_VHUB_ENC_UTF16, "its encoding");
+    CHECK_EQ(h->VhubPid, 0x0003UL, "and the id");
+    vhub_reset_registry();
     CHECK_EQ(h->HeaderBytes, (ULONG)sizeof(XHCI_SNAPSHOT_HEADER),
              "and so is the header size");
     CHECK_EQ(h->Flavour, XHCI_SNAPSHOT_FLAVOUR_HOSTTEST,
@@ -29161,6 +29875,50 @@ static void test_passthru_snapshot(void)
     CHECK_EQ(h->RegionBytes, (ULONG)sizeof(XHCI_EXTENSION),
              "and the whole extension behind it anyway");
 
+    log_reset_host();
+}
+
+/*
+ * **Schema 5's twelve fields when the switch is refused**: the switch at 2
+ * with a vendor id of 0000 in the single-byte form and no product id value
+ * at all, so that what was read, what was applied and each id's status,
+ * verdict, encoding and value all differ from their neighbours - a header
+ * that copied the vendor half into the product half, or the switch value
+ * into the applied mode, or left a status where a refusal belongs, shows
+ * here where the accepted window of test_passthru_snapshot cannot tell.
+ */
+static void test_passthru_snapshot_vhub_refused(void)
+{
+    XHCI_SNAPSHOT_HEADER *h;
+
+    log_reset_host();
+    logVerbosityValue = XHCI_LOG_VERBOSITY_COUNTERS;
+    vhub_reset_registry();
+    vhubSwitchStatus = MP_STATUS_SUCCESS;
+    vhubSwitchValue = 2;
+    vhub_put_id(vhubVidBytes, "0000", 0);
+    vhubVidStatus = MP_STATUS_SUCCESS;
+    vhubPidStatus = MP_STATUS_FAILURE;
+    enable_start(0);
+    CHECK_EQ(ext.VhubConfig.Applied, XHCI_VHUB_MODE_OFF,
+             "(refused: the driver is today's)");
+    h = snapHeader();
+    snapRequest(XHCI_SNAPSHOT_REGION_EXTENSION, 0);
+    CHECK_EQ(snapCall(sizeof(snapBlock)), MP_STATUS_SUCCESS, "(a window)");
+    CHECK_EQ(h->VhubSwitchStatus, MP_STATUS_SUCCESS, "the switch was read");
+    CHECK_EQ(h->VhubSwitchValue, 2UL, "as 2");
+    CHECK_EQ(h->VhubApplied, XHCI_VHUB_MODE_OFF, "and not applied");
+    CHECK_EQ(h->VhubRefused, XHCI_VHUB_WHY_VID, "because of the vendor id");
+    CHECK_EQ(h->VhubVidStatus, MP_STATUS_SUCCESS, "which was read");
+    CHECK_EQ(h->VhubVidResult, XHCI_VHUB_ID_ZERO_VID, "and refused as 0000");
+    CHECK_EQ(h->VhubVidEncoding, XHCI_VHUB_ENC_BYTE,
+             "in the encoding it arrived in, recorded on the refusal");
+    CHECK_EQ(h->VhubVid, 0UL, "with no id");
+    CHECK_EQ(h->VhubPidStatus, MP_STATUS_FAILURE, "the product id's read failed");
+    CHECK_EQ(h->VhubPidResult, XHCI_VHUB_ID_MISSING, "so it is missing");
+    CHECK_EQ(h->VhubPidEncoding, XHCI_VHUB_ENC_NONE, "in no encoding");
+    CHECK_EQ(h->VhubPid, 0UL, "and no id either");
+    vhub_reset_registry();
     log_reset_host();
 }
 
@@ -30210,6 +30968,4421 @@ static void test_recovery_delivery_loss(void)
     deliver_events();
 }
 
+/* ------------------------------------------------------------------ */
+/* Roadmap 24.4: where a timer may be armed on the Version 300 tier     */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A controller started on the NT 6.x tier: Version 300 presented, the Ex slot
+ * written. The No Op self-test's watchdog is its first Ex arm; it is
+ * delivered and the counters zeroed, so a vector reads only its own arms.
+ */
+static void nt6_start(ULONG attached)
+{
+    harnessTier300 = 1;
+    enable_start(attached);
+    harnessTier300 = 0;
+    deliver_events();
+    exCalls = 0;
+    exAnswer = 0;
+    asyncRequests = 0;
+    asyncCallback = NULL;
+}
+
+/* The tier decides the service, and nothing below NT 6.x moves. */
+static void test_nt6_arm_tier(void)
+{
+    hc_build();
+    exCalls = 0;
+    asyncRequests = 0;
+    CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a Version 200 start)");
+    CHECK_EQ(ext.ArmThroughExOnly, 0,
+             "the 200 tier keeps the legacy timer service");
+    CHECK_EQ(asyncRequests, 1, "its self-test watchdog armed through it");
+    CHECK_EQ(exCalls, 0, "and Ex, absent there, never called");
+    deliver_events();
+
+    hc_build();
+    harnessTier300 = 1;
+    exCalls = 0;
+    asyncRequests = 0;
+    CHECK_EQ(run_init(), MP_STATUS_SUCCESS, "(a Version 300 start)");
+    harnessTier300 = 0;
+    CHECK_EQ(ext.ArmThroughExOnly, 1,
+             "the 300 tier arms through Ex (roadmap 24.4)");
+    CHECK_EQ(exCalls, 1,
+             "StartController is an UNLOCKED context: the self-test's "
+             "watchdog is armed at once");
+    CHECK_EQ(asyncRequests, 1, "(one timer, not two)");
+    CHECK_EQ(exLastSkipLock, 0,
+             "with the lock byte 0, so usbport takes its timer-list lock");
+    CHECK(exLastHandleOut == NULL, "and no handle asked for");
+    CHECK_EQ(asyncMs, XHCI_COMMAND_TIMEOUT_MS, "for the command deadline");
+    CHECK_EQ(asyncContext.Generation, ext.CommandGeneration,
+             "naming the outstanding command");
+    deliver_events();
+
+    /* A 300 registration that did not write the slot keeps today's arming. */
+    hc_build();
+    (VOID)XhciSetInterfaceVersionForTest(
+        USBPORT_NT6_MINIPORT_INTERFACE_VERSION);
+    prepare_start_arguments();
+    (VOID)XhciSetInterfaceVersionForTest(
+        USBPORT_NT6_MINIPORT_INTERFACE_VERSION);
+    CHECK_EQ(XhciRegPacket.StartController(&ext, &resources),
+             MP_STATUS_SUCCESS, "(a Version 300 start with no Ex slot)");
+    (VOID)XhciSetInterfaceVersionForTest(USB20_MINIPORT_INTERFACE_VERSION);
+    CHECK_EQ(ext.ArmThroughExOnly, 0,
+             "no Ex service: the tier flag stays clear");
+    deliver_events();
+}
+
+/* The command watchdog from a DEFER context: owed, then made by the next
+ * UNLOCKED drain - and dropped if the command has ended by then. */
+static void test_nt6_arm_command_owed(void)
+{
+    XHCI_TRB trb;
+    ULONG deferred;
+
+    nt6_start(0);
+    XhciTrbNoOpCommand(&trb);
+    deferred = ext.AsyncArmsDeferred;
+
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_DEFER), XHCI_CMD_OK,
+             "a command submitted from an endpoint callback's context");
+    CHECK_EQ(exCalls, 0, "arms nothing there");
+    CHECK_EQ(asyncRequests, 0, "through either service");
+    CHECK_EQ(ext.CommandArmOwed, 1, "and owes its watchdog");
+    CHECK_EQ(ext.AsyncArmsDeferred, deferred + 1, "counted as deferred");
+
+    XhciSlotDeferredWork(&ext, XHCI_ARM_DEFER);
+    CHECK_EQ(exCalls, 0, "a DEFER drain does not make it");
+
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
+    CHECK_EQ(exCalls, 1, "the next UNLOCKED drain does");
+    CHECK_EQ(ext.CommandArmOwed, 0, "consuming the owe");
+    CHECK_EQ(asyncMs, XHCI_COMMAND_TIMEOUT_MS, "at the command deadline");
+    CHECK_EQ(asyncContext.Generation, ext.CommandGeneration,
+             "for the command still outstanding");
+    CHECK_EQ(asyncContext.Phase, XHCI_CMD_PHASE_COMMAND, "at rung 1");
+    CHECK_EQ(asyncContext.Epoch, ext.StartEpoch, "in this start");
+
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
+    CHECK_EQ(exCalls, 1, "and only once");
+    deliver_events();
+
+    /* A command that completes before any UNLOCKED context runs. */
+    exCalls = 0;
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_DEFER), XHCI_CMD_OK,
+             "(a second deferred command)");
+    hw_command_run();
+    CHECK_EQ(ext.CommandArmOwed, 1, "(still owed)");
+    XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(ext.CommandState, XHCI_CMD_STATE_IDLE,
+             "its completion arrives through the event DPC");
+    CHECK_EQ(ext.CommandArmOwed, 0, "whose drain takes the owe");
+    CHECK_EQ(exCalls, 0,
+             "and arms nothing for a command that has already ended");
+
+    /* The 200 tier: DEFER arms at once, through the legacy service. */
+    enable_start(0);
+    deliver_events();
+    asyncRequests = 0;
+    exCalls = 0;
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_DEFER), XHCI_CMD_OK,
+             "(a DEFER submit on the 200 tier)");
+    CHECK_EQ(asyncRequests, 1, "is armed at once, as every NT 5.x build was");
+    CHECK_EQ(ext.CommandArmOwed, 0, "and owes nothing");
+    deliver_events();
+}
+
+/* The timeout's own re-arm is a timer callback's: owed, then made by the
+ * poll. And a refused Ex arm is counted and re-owed at once. */
+static void test_nt6_arm_timeout_and_refusal(void)
+{
+    XHCI_TRB trb;
+
+    nt6_start(0);
+    XhciTrbNoOpCommand(&trb);
+    hwCmdHang = 1;
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED),
+             XHCI_CMD_OK, "(a command that will hang)");
+    CHECK_EQ(exCalls, 1, "(its watchdog armed through Ex)");
+    hw_command_run();
+
+    fire_async_timer();
+    CHECK_EQ(ext.CommandsTimedOut, 1, "rung 1 fires");
+    CHECK_EQ(ext.CommandState, XHCI_CMD_STATE_ABORTING, "and aborts");
+    CHECK_EQ(exCalls, 1,
+             "but arms nothing from inside the timer callback, which on NT "
+             "6.x holds usbport's timer-list lock or, on Windows 7's stop, "
+             "none - and cannot tell which");
+    CHECK_EQ(ext.CommandArmOwed, 1, "the abort wait is owed");
+    CHECK_EQ(ext.CommandArmOwedPhase, XHCI_CMD_PHASE_ABORT, "as rung 2");
+
+    poll_clock_prime();
+    CHECK_EQ(exCalls, 2, "the health poll makes it");
+    CHECK_EQ(asyncContext.Phase, XHCI_CMD_PHASE_ABORT, "for the abort wait");
+    CHECK_EQ(asyncMs, XHCI_COMMAND_ABORT_MS, "at the abort interval");
+    CHECK_EQ(ext.CommandArmOwed, 0, "(owed no longer)");
+    hwCmdHang = 0;
+    deliver_events();
+
+    /* Ex refuses - its pool allocation failed. */
+    nt6_start(0);
+    exAnswer = 0xC000009AUL;
+    CHECK_EQ(XhciCommandSubmit(&ext, &trb, NULL, XHCI_ARM_UNLOCKED),
+             XHCI_CMD_OK, "(a command whose watchdog Ex refuses)");
+    CHECK_EQ(exCalls, 1, "(one attempt)");
+    CHECK_EQ(ext.AsyncArmsRefused, 1, "the refusal is counted");
+    CHECK_EQ(ext.CommandTimerFailures, 1, "as a watchdog not armed");
+    CHECK_EQ(ext.CommandArmOwed, 1,
+             "and re-owed at once, rather than left to the 32 s age detector");
+    exAnswer = 0;
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
+    CHECK_EQ(exCalls, 2, "the next UNLOCKED drain arms it");
+    CHECK_EQ(ext.CommandArmOwed, 0, "(owed no longer)");
+    deliver_events();
+}
+
+/*
+ * Round 5: the event DPC on the Version 300 tier reports a root-hub change
+ * through InterruptDpcEx's port bit and never calls the service, which
+ * deadlocked Vista and Windows 7 against usbport's own root-hub DPC; a DEFER
+ * context latches one for the health poll; the gate still rules both; and
+ * the Version 200 tier announces exactly as before.
+ */
+static void test_nt6_rh_report(void)
+{
+    ULONG invalidates;
+    ULONG reported;
+    ULONG result;
+
+    /* A Port Status Change Event on the 300 tier. */
+    nt6_start(0);
+    XhciRegPacket.RH_EnableIrq(&ext);
+    CHECK_EQ(ext.RootHubReportThroughDpc, 1, "(the 300 tier reports)");
+    invalidates = rootHubInvalidates;
+    reported = ext.RootHubChangesReported;
+    hw_attach_device(1);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, 1UL << 24, 0);
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_EINT;
+    mmio[HC_IR0(XHCI_IR_IMAN) / 4] |= XHCI_IMAN_IP;
+    (VOID)XhciIsr(&ext);
+    eventDpcDepth++;
+    result = XhciRegPacket.InterruptDpc(&ext, TRUE);
+    eventDpcDepth--;
+    CHECK_EQ(rootHubInvalidates, invalidates,
+             "the event DPC does not call UsbPortInvalidateRootHub on NT 6.x");
+    CHECK_EQ(result & USBPORT_DPC_EX_PORT_CHANGE, USBPORT_DPC_EX_PORT_CHANGE,
+             "it reports the change through InterruptDpcEx's port bit");
+    CHECK_EQ(ext.RootHubChangesReported, reported + 1,
+             "and counts the report");
+    CHECK_EQ(ext.RootHubInvalidatesOwed, 0,
+             "the change is no longer owed: usbport's IsrDpc announces it");
+
+    /* A change a DEFER context latched: nothing from there, the event DPC
+     * reports it even with no event of its own. */
+    ext.RootHubInvalidatesOwed = 1;
+    invalidates = rootHubInvalidates;
+    asyncDeliveryDepth++;
+    XhciRootHubDeferredWork(&ext, XHCI_ARM_DEFER);
+    asyncDeliveryDepth--;
+    CHECK_EQ(rootHubInvalidates, invalidates,
+             "a DEFER context announces nothing on the 300 tier");
+    CHECK_EQ(ext.RootHubInvalidatesOwed, 1, "the change stays latched");
+    eventDpcDepth++;
+    result = XhciRegPacket.InterruptDpc(&ext, TRUE);
+    eventDpcDepth--;
+    CHECK_EQ(result & USBPORT_DPC_EX_PORT_CHANGE, USBPORT_DPC_EX_PORT_CHANGE,
+             "the next event DPC reports it through the port bit, with no "
+             "event of its own");
+    CHECK_EQ(ext.RootHubInvalidatesOwed, 0, "(taken)");
+    CHECK_EQ(rootHubInvalidates, invalidates, "(still no service call)");
+
+    /* End to end through usbport's IsrDpc model: the bit becomes the
+     * invalidate once the DPC has returned. */
+    ext.RootHubInvalidatesOwed = 1;
+    reported = rootHubReportsModelled;
+    deliver_events();
+    CHECK_EQ(rootHubReportsModelled, reported + 1,
+             "usbport's IsrDpc turns the reported bit into the invalidate");
+    CHECK_EQ(rootHubInvalidates, invalidates + 1,
+             "made once, outside the event DPC");
+    invalidates = rootHubInvalidates;
+    XhciRegPacket.RH_EnableIrq(&ext);   /* (the model's service closed it) */
+
+    /* Or the health poll, which holds no usbport lock, announces it. */
+    ext.RootHubInvalidatesOwed = 1;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(rootHubInvalidates, invalidates + 1,
+             "the health poll announces a latched change");
+    CHECK_EQ(ext.RootHubInvalidatesOwed, 0, "(taken)");
+
+    /* The gate rules the report as it rules the call. */
+    XhciRegPacket.RH_EnableIrq(&ext);
+    (VOID)XhciControllerUpdateFlags(&ext, XHCI_EXT_FLAG_RH_IRQ, 0);
+    ext.RootHubInvalidatesOwed = 1;
+    reported = ext.RootHubChangesReported;
+    eventDpcDepth++;
+    CHECK_EQ(XhciEventDpc(&ext, TRUE), 0,
+             "behind a closed gate nothing is reported");
+    eventDpcDepth--;
+    CHECK_EQ(ext.RootHubInvalidatesOwed, 1, "and the change stays owed");
+    CHECK_EQ(ext.RootHubChangesReported, reported, "(not counted)");
+
+    /* The 200 tier: the event DPC and the DEFER contexts announce as before. */
+    enable_start(0);
+    deliver_events();
+    XhciRegPacket.RH_EnableIrq(&ext);
+    CHECK_EQ(ext.RootHubReportThroughDpc, 0, "(the 200 tier does not report)");
+    ext.RootHubInvalidatesOwed = 1;
+    invalidates = rootHubInvalidates;
+    CHECK_EQ(XhciEventDpc(&ext, TRUE), 0, "the 200 tier's event DPC reports "
+             "nothing");
+    CHECK_EQ(rootHubInvalidates, invalidates + 1, "it announces itself");
+    XhciRegPacket.RH_EnableIrq(&ext);   /* NT 5.x's service closed the gate */
+    ext.RootHubInvalidatesOwed = 1;
+    XhciRootHubDeferredWork(&ext, XHCI_ARM_DEFER);
+    CHECK_EQ(rootHubInvalidates, invalidates + 2,
+             "and so does a DEFER context, unchanged");
+}
+
+/* A root-hub feature callback defers the port's timer and announces nothing
+ * (round 5: it may hold usbport's timer-list lock); the next scan's status
+ * query makes the arm. */
+static void test_nt6_arm_port_kick(void)
+{
+    USBPORT_PORT_STATUS_AND_CHANGE status;
+    ULONG invalidates;
+
+    nt6_start(0);
+    hw_attach_device(2);
+    portResetHangs = 1;             /* the reset stays outstanding */
+    XhciRegPacket.RH_EnableIrq(&ext);
+    invalidates = rootHubInvalidates;
+
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 2), MP_STATUS_SUCCESS,
+             "a reset from usbhub's port request");
+    usbportLockModel--;
+    CHECK_EQ(exCalls, 0,
+             "arms nothing: RootHub_PortRequest holds usbport's timer-list "
+             "lock, and the USB 2.0 power detour does not");
+    CHECK_EQ(ext.RootHub.Ports[1].ArmPending, 1, "the port's arm is owed");
+    CHECK_EQ(rootHubInvalidates, invalidates,
+             "and nothing is announced from under usbport's timer-list lock - "
+             "no kick (round 5)");
+
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "usbport's scan asks for the port");
+    CHECK_EQ(exCalls, 1, "and the query, an UNLOCKED context, arms it");
+    CHECK_EQ(asyncPortContext.Operation, XHCI_PORT_OP_RESET,
+             "the reset's deadline");
+    CHECK_EQ(asyncPortContext.HubPort, 2, "on its port");
+    CHECK_EQ(asyncPortContext.Generation, ext.RootHub.Ports[1].Generation,
+             "for the operation armed");
+    CHECK_EQ(ext.RootHub.Ports[1].ArmPending, 0, "(owed no longer)");
+
+    /* Behind a closed gate too; the event DPC makes the arm. */
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, 2UL << 24, 0);
+    XhciRegPacket.InterruptDpc(&ext, TRUE);
+    nt6_start(0);
+    hw_attach_device(2);
+    portResetHangs = 1;
+    (VOID)XhciControllerUpdateFlags(&ext, XHCI_EXT_FLAG_RH_IRQ, 0);
+    invalidates = rootHubInvalidates;
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 2), MP_STATUS_SUCCESS,
+             "(a reset with usbport's gate closed)");
+    usbportLockModel--;
+    CHECK_EQ(rootHubInvalidates, invalidates,
+             "(nothing announced)");
+    CHECK_EQ(exCalls, 0, "(nothing armed)");
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, 2UL << 24, 0);
+    XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(exCalls, 1, "the event DPC, an UNLOCKED context, arms it");
+
+    /* A refused port arm gives the port up at once. */
+    nt6_start(0);
+    hw_attach_device(2);
+    portResetHangs = 1;
+    XhciRegPacket.RH_EnableIrq(&ext);
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 2), MP_STATUS_SUCCESS,
+             "(a reset whose timer Ex will refuse)");
+    usbportLockModel--;
+    exAnswer = 0xC000009AUL;
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "(the scan's query)");
+    exAnswer = 0;
+    CHECK_EQ(ext.RhTimerFailures, 1, "the lost arm is counted");
+    CHECK_EQ(ext.RootHub.Ports[1].Armed, XHCI_PORT_OP_RESET,
+             "but the reset the PORTSC write started is not orphaned: it "
+             "stays armed");
+    CHECK_EQ(ext.RootHub.Ports[1].ArmPending, 1, "with its arm owed again");
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "(the next query)");
+    CHECK_EQ(exCalls, 2, "which makes it");
+    CHECK_EQ(asyncPortContext.Generation, ext.RootHub.Ports[1].Generation,
+             "for the same operation");
+    CHECK_EQ(ext.RootHub.Ports[1].ArmPending, 0, "(owed no longer)");
+
+    /* Ex refusing for good: the age net retires the reset with its report. */
+    nt6_start(0);
+    hw_attach_device(2);
+    portResetHangs = 1;
+    XhciRegPacket.RH_EnableIrq(&ext);
+    poll_clock_prime();
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 2), MP_STATUS_SUCCESS,
+             "(a reset whose timer Ex never arms)");
+    usbportLockModel--;
+    exAnswer = 0xC000009AUL;
+    poll_after_ms(XHCI_PORT_AGE_MS + 1024UL);
+    poll_after_ms(1024UL);
+    exAnswer = 0;
+    CHECK_EQ(ext.RootHub.Ports[1].Armed, XHCI_PORT_OP_NONE,
+             "XHCI_PORT_AGE_MS retires the operation");
+    CHECK_EQ(ext.RootHub.Ports[1].Changes & XHCI_HUB_C_PORT_RESET,
+             XHCI_HUB_C_PORT_RESET,
+             "and reports the reset ended, so usbhub is not left waiting");
+    /* A port timer is a timer callback: it makes no arm, not even one
+     * another port owes. */
+    nt6_start(0);
+    hw_attach_device(2);
+    hw_attach_device(3);
+    portResetHangs = 1;
+    XhciRegPacket.RH_EnableIrq(&ext);
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 2), MP_STATUS_SUCCESS,
+             "(port 2's reset)");
+    usbportLockModel--;
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "(the query arms port 2's deadline)");
+    CHECK_EQ(exCalls, 1, "(armed)");
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 3), MP_STATUS_SUCCESS,
+             "(port 3's reset, owed)");
+    usbportLockModel--;
+    CHECK_EQ(ext.RootHub.Ports[2].ArmPending, 1, "(port 3's arm owed)");
+    CHECK_EQ(asyncPortContext.HubPort, 2, "(the timer held is port 2's)");
+    hw_fire_port_timer();
+    CHECK_EQ(ext.RhResetTimeouts, 1, "port 2's deadline fires");
+    CHECK_EQ(exCalls, 1,
+             "and port 3's owed arm is not made from inside it");
+    CHECK_EQ(ext.RootHub.Ports[2].ArmPending, 1, "(still owed)");
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortPower(&ext, 4), MP_STATUS_SUCCESS,
+             "(a port-power request on another port)");
+    usbportLockModel--;
+    CHECK_EQ(exCalls, 1, "no other feature callback makes it either");
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(exCalls, 2, "the poll makes it");
+    portResetHangs = 0;
+    deliver_events();
+
+    /* A resume's end is a timer callback too. */
+    nt6_start(0);
+    hw_attach_device(2);
+    mmio[HC_PORTSC(2) / 4] |= XHCI_PORTSC_PED;
+    hw_attach_device(3);
+    portResetHangs = 1;
+    XhciRegPacket.RH_EnableIrq(&ext);
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "(port 2 suspended)");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "(and resumed: its 20 ms timer owed)");
+    usbportLockModel--;
+    CHECK_EQ(exCalls, 0, "(nothing armed by the feature callbacks)");
+    CHECK_EQ(XhciRegPacket.RH_GetPortStatus(&ext, 2, &status),
+             MP_STATUS_SUCCESS, "(the query arms the resume's end)");
+    CHECK_EQ(exCalls, 1, "(armed)");
+    CHECK_EQ(asyncPortContext.Operation, XHCI_PORT_OP_RESUME, "(a resume)");
+    usbportLockModel++;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 3), MP_STATUS_SUCCESS,
+             "(port 3's reset, owed)");
+    usbportLockModel--;
+    hw_fire_port_timer();
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(2) / 4]), XHCI_PLS_U0,
+             "the resume's timer drives port 2 to U0");
+    CHECK_EQ(exCalls, 1, "and makes no owed arm from inside");
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(exCalls, 2, "the poll makes port 3's");
+    portResetHangs = 0;
+    deliver_events();
+}
+
+/* The recovery: armed from the poll, and itself a timer callback, so the
+ * self-test it issues owes its watchdog to the kick. */
+static void test_nt6_arm_recovery(void)
+{
+    ULONG lost;
+
+    nt6_start(0);
+    XhciRegPacket.RH_EnableIrq(&ext);
+    ext.ControllerFailed = 1;
+    ext.RecoveryRequested = 1;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(ext.RecoveryArmed, 1, "the poll arms the recovery");
+    CHECK_EQ(exCalls, 1, "through Ex: CheckController holds no usbport lock");
+    CHECK_EQ(asyncContext.Phase, XHCI_CMD_PHASE_RECOVERY, "(the recovery's)");
+
+    fire_async_timer();
+    CHECK_EQ(ext.RecoveryCompletions, 1, "the recovery runs and succeeds");
+    CHECK_EQ(exCalls, 1, "arming nothing from its timer callback");
+    CHECK_EQ(ext.CommandArmOwed, 1, "its self-test's watchdog is owed");
+    CHECK_EQ(rootHubInvalidatesLockedTier300Total, 0,
+             "and nothing was announced from its timer callback");
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
+    CHECK_EQ(exCalls, 2, "the next UNLOCKED context arms it");
+    deliver_events();
+
+    /* A refused recovery arm is released and charged at once. */
+    nt6_start(0);
+    ext.ControllerFailed = 1;
+    ext.RecoveryRequested = 1;
+    lost = ext.RecoveryDeliveriesLost;
+    exAnswer = 0xC000009AUL;
+    XhciRegPacket.CheckController(&ext);
+    exAnswer = 0;
+    CHECK_EQ(ext.RecoveryArmed, 0, "a refused arming is not left standing");
+    CHECK_EQ(ext.RecoveryRequested, 1, "the request is put back");
+    CHECK_EQ(ext.RecoveryDeliveriesLost, lost + 1, "and the loss charged");
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(ext.RecoveryArmed, 1, "the next poll arms again");
+    ext.ControllerFailed = 0;
+    deliver_events();
+}
+
+/* ------------------------------------------------------------------ */
+/* Task 24.3.3: the virtual hub wired into the driver (design record 12) */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The vectors roadmap task 24.3.2 handed on because they need the driver
+ * around the pure core: the hub's and the device's address-0 opens told apart,
+ * the root-port record found again across a re-open, a repeated reset and an
+ * address reused after a disown, the snoops never seeing a virtual address,
+ * the synthetic completions delivered through the deferred list and never from
+ * inside SubmitTransfer, the held status-change transfer found by an abort, the
+ * root-port reset at value 2 holding the slot and its buffers until the PED
+ * confirmation, and rule 2 - the switch absent or 0 is today's driver.
+ *
+ * Every reset here goes through `RH_SetFeaturePortReset` and the model's own
+ * completion, not `slot_reset_port`'s synthetic PRC (whose MODEL SEAM note
+ * says why that matters): a virtual hub routes a reset's end by the generation
+ * it was armed under, so a PRC nothing armed is, correctly, nobody's.
+ */
+static XHCI_ENDPOINT vhubEp0;
+static XHCI_ENDPOINT vhubPipe;
+static XHCI_TRANSFER vhubPipeTransfer;
+static USBPORT_TRANSFER_PARAMETERS vhubPipeParams;
+static USBPORT_SCATTER_GATHER_LIST vhubPipeSg;
+static UCHAR vhubData[64];
+static UCHAR vhubPipeData[4];
+
+/* A start with the switch at `value` and the INF's ids, as the NT registry
+ * hands them over. */
+static void vhub_start(ULONG value)
+{
+    vhub_reset_registry();
+    vhubSwitchStatus = MP_STATUS_SUCCESS;
+    vhubSwitchValue = value;
+    vhub_set_ids("1209", "0001", 1);
+    enable_start(0);
+    deliver_events();               /* the No Op self-test */
+}
+
+static ULONG vhub_xport(ULONG hubPort)
+{
+    return XhciRootHubPortOf(&ext.RootHub, hubPort);
+}
+
+/* A device arriving on a root port: connected, not enabled, CSC raised, and
+ * the Port Status Change Event that announces it. */
+static void vhub_plug(ULONG hubPort, ULONG psiv)
+{
+    mmio[HC_PORTSC(vhub_xport(hubPort)) / 4] =
+        XHCI_PORTSC_PP | XHCI_PORTSC_CCS | XHCI_PORTSC_CSC |
+        (psiv << XHCI_PORTSC_SPEED_SHIFT);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE,
+                  vhub_xport(hubPort) << 24, 0);
+    deliver_events();
+}
+
+static void vhub_unplug(ULONG hubPort)
+{
+    mmio[HC_PORTSC(vhub_xport(hubPort)) / 4] &=
+        ~(XHCI_PORTSC_CCS | XHCI_PORTSC_PED | XHCI_PORTSC_SPEED_MASK);
+    mmio[HC_PORTSC(vhub_xport(hubPort)) / 4] |= XHCI_PORTSC_CSC;
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE,
+                  vhub_xport(hubPort) << 24, 0);
+    deliver_events();
+}
+
+/* usbhub's RH_SetFeaturePortReset, then the event a completed physical reset
+ * raises. A synthetic one (value 2) raises nothing, and the event finds
+ * nothing new. */
+static MPSTATUS vhub_root_reset(ULONG hubPort)
+{
+    MPSTATUS status;
+
+    status = XhciRegPacket.RH_SetFeaturePortReset(&ext, (USHORT)hubPort);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE,
+                  vhub_xport(hubPort) << 24, 0);
+    deliver_events();
+    return status;
+}
+
+static void vhub_root_status(ULONG hubPort, ULONG *status, ULONG *change)
+{
+    USBPORT_PORT_STATUS_AND_CHANGE s;
+
+    XhciRegPacket.RH_GetPortStatus(&ext, (USHORT)hubPort, &s);
+    *status = s.PortStatus;
+    *change = s.PortChange;
+}
+
+/* An EP0 open for the hub, as usbport sends it - believing a High-Speed
+ * device, because that is what the root port says. */
+static MPSTATUS vhub_open_ep0(PXHCI_ENDPOINT endpoint, ULONG address)
+{
+    ULONG i;
+
+    slot_properties(address, UsbHighSpeed, 64);
+    for (i = 0; i < sizeof(XHCI_ENDPOINT) / sizeof(ULONG); i++) {
+        ((ULONG *)endpoint)[i] = 0;
+    }
+    return open_endpoint_raw(&slotProperties, endpoint);
+}
+
+static MPSTATUS vhub_open_pipe(ULONG address)
+{
+    ULONG i;
+
+    slot_properties_ep(address, UsbHighSpeed, 0x81,
+                       USBPORT_TRANSFER_TYPE_INTERRUPT, 1, 32, 1);
+    for (i = 0; i < sizeof(XHCI_ENDPOINT) / sizeof(ULONG); i++) {
+        ((ULONG *)&vhubPipe)[i] = 0;
+    }
+    return open_endpoint_raw(&slotProperties, &vhubPipe);
+}
+
+/*
+ * One control request to a virtual hub, and its delivery. Asserts the rule
+ * the design leans on hardest (design record 05 section 7): nothing is
+ * completed from inside SubmitTransfer, whatever answered it.
+ */
+static MPSTATUS vhub_control(PXHCI_ENDPOINT endpoint,
+                             ULONG type,
+                             ULONG request,
+                             ULONG value,
+                             ULONG index,
+                             ULONG length)
+{
+    MPSTATUS status;
+    ULONG completions;
+    ULONG i;
+
+    slot_setup(type, request, value, length);
+    slotParams.SetupPacket.wIndex = (USHORT)index;
+    slotParams.TransferBufferLength = length;
+    slotParams.TransferFlags = ((type & 0x80) != 0) ? 1UL : 0UL;
+    for (i = 0; i < sizeof(vhubData); i++) {
+        vhubData[i] = 0xEE;
+    }
+    if (length != 0) {
+        slotSgList.SgElementCount = 1;
+        slotSgList.SgElement[0].SgPhysicalAddressLo = 0x00100000UL;
+        slotSgList.SgElement[0].SgTransferLength = length;
+        slotSgList.MappedSystemVa = vhubData;
+    }
+    completions = completeTransferCalls;
+    status = XhciRegPacket.SubmitTransfer(&ext, endpoint, &slotParams,
+                                          &slotTransfer, &slotSgList);
+    CHECK_EQ(completeTransferCalls, completions,
+             "(nothing a virtual hub answers is completed inside "
+             "SubmitTransfer)");
+    deliver_after_submit();
+    return status;
+}
+
+/* The status-change transfer usbhub keeps pending: one byte, IN - on any
+ * pipe, through its own records. */
+static MPSTATUS vhub_pipe_submit_on(PXHCI_ENDPOINT pipe,
+                                    PXHCI_TRANSFER transfer,
+                                    PUSBPORT_TRANSFER_PARAMETERS params,
+                                    PUSBPORT_SCATTER_GATHER_LIST sg,
+                                    UCHAR *data)
+{
+    ULONG i;
+
+    for (i = 0; i < sizeof(*params) / sizeof(ULONG); i++) {
+        ((ULONG *)params)[i] = 0;
+    }
+    for (i = 0; i < sizeof(*transfer) / sizeof(ULONG); i++) {
+        ((ULONG *)transfer)[i] = 0;
+    }
+    for (i = 0; i < sizeof(*sg) / sizeof(ULONG); i++) {
+        ((ULONG *)sg)[i] = 0;
+    }
+    params->TransferFlags = 1;
+    params->TransferBufferLength = 1;
+    sg->SgElementCount = 1;
+    sg->SgElement[0].SgPhysicalAddressLo = 0x00200000UL;
+    sg->SgElement[0].SgTransferLength = 1;
+    sg->MappedSystemVa = data;
+    data[0] = 0;
+    return XhciRegPacket.SubmitTransfer(&ext, pipe, params, transfer, sg);
+}
+
+static MPSTATUS vhub_pipe_submit(void)
+{
+    return vhub_pipe_submit_on(&vhubPipe, &vhubPipeTransfer, &vhubPipeParams,
+                               &vhubPipeSg, vhubPipeData);
+}
+
+/* The driver version as the hub's bcdDevice should carry it, read off the
+ * version STRING - a second derivation beside the driver's, which reads the
+ * comma list. */
+static ULONG vhub_expected_bcd(void)
+{
+    static const char version[] = XHCI_VER_STR;
+
+    return ((ULONG)(version[0] - '0') << 8) |
+           ((ULONG)(version[2] - '0') << 4) | (ULONG)(version[4] - '0');
+}
+
+/*
+ * The virtual hub's own enumeration on `hubPort`, as usbhub drives it (design
+ * record 02's measured bracket): reset, EP0 at 0, GET_DESCRIPTOR(Device),
+ * reset again, SET_ADDRESS through the first pipe, EP0 reopened at the new
+ * address, SET_CONFIGURATION(1), and the status-change endpoint opened.
+ */
+static void vhub_enumerate_hub(ULONG hubPort, ULONG address)
+{
+    CHECK_EQ(vhub_root_reset(hubPort), MP_STATUS_SUCCESS,
+             "(the hub's first reset)");
+    CHECK_EQ(vhub_open_ep0(&vhubEp0, 0), MP_STATUS_SUCCESS,
+             "(the hub's EP0 at address 0)");
+    (void)vhub_control(&vhubEp0, 0x80, 0x06, 0x0100, 0, 64);
+    CHECK_EQ(vhub_root_reset(hubPort), MP_STATUS_SUCCESS,
+             "(the hub's second reset)");
+    (void)vhub_control(&vhubEp0, 0x00, 0x05, address, 0, 0);
+    XhciRegPacket.SetEndpointState(&ext, &vhubEp0, USBPORT_ENDPOINT_REMOVE);
+    CHECK_EQ(vhub_open_ep0(&vhubEp0, address), MP_STATUS_SUCCESS,
+             "(the hub's EP0 reopened at its address)");
+    (void)vhub_control(&vhubEp0, 0x80, 0x06, 0x0200, 0, 25);
+    (void)vhub_control(&vhubEp0, 0x00, 0x09, 1, 0, 0);
+    (void)vhub_control(&vhubEp0, 0xA0, 0x06, 0x0000, 0, 71);
+    CHECK_EQ(vhub_open_pipe(address), MP_STATUS_SUCCESS,
+             "(the status-change endpoint)");
+}
+
+/*
+ * **Rule 2 over the driver** (design record 12 section 3.1): the switch absent,
+ * and the switch at 0 as the INF writes it, are today's driver - the same
+ * root-port report, the same claim, the same device record - and the two ids
+ * are never consulted. Then each way the switch can be refused, and the one
+ * that is not.
+ */
+static void test_vhub_off_is_todays_driver(void)
+{
+    ULONG status;
+    ULONG change;
+    ULONG i;
+
+    vhub_reset_registry();
+    enable_start(0);
+    deliver_events();
+    CHECK_EQ(vhubSwitchReads, 1, "the switch is read once per start");
+    CHECK_EQ(vhubIdReads, 0, "and, absent, the ids are never consulted");
+    CHECK_EQ(ext.VhubConfig.Applied, XHCI_VHUB_MODE_OFF, "off");
+    CHECK_EQ(ext.VhubConfig.Refused, XHCI_VHUB_WHY_NONE,
+             "and absent is not a refusal");
+    CHECK_EQ(ext.VhubStarted, 0, "nothing was stood up");
+
+    vhub_plug(2, 1);                                /* Full Speed */
+    CHECK_EQ(vhub_root_reset(2), MP_STATUS_SUCCESS, "the reset runs");
+    CHECK_EQ(ext.EnumHubPort, 2, "today's root-port claim names the port");
+    CHECK_EQ(ext.EnumClaimSpent, 0, "and is armed");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(status & (XHCI_HUB_PORT_HIGH_SPEED | XHCI_HUB_PORT_LOW_SPEED),
+             XHCI_HUB_PORT_HIGH_SPEED,
+             "a Full-Speed device is reported High Speed, as today");
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "and the root port reports its own reset's end");
+    for (i = 0; i < ext.RootHub.PortCount; i++) {
+        CHECK_EQ(ext.Vhub[i].Present, 0, "no virtual hub on any port");
+    }
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "the address-0 open is a device's");
+    CHECK_EQ(slotEndpoint.Flags, XHCI_ENDPOINT_FLAG_OPEN,
+             "bound to a real record, with no virtual-hub flag");
+    CHECK_EQ(slotEndpoint.DeviceIndex, 1, "the first record");
+    CHECK_EQ(ext.Devices[0].HubPort, 2, "on the port that reset");
+    CHECK_EQ(ext.VhubOpens, 0, "and no open was the hub's");
+
+    /* The INF's 0, the ids present: still never consulted. */
+    vhub_start(0);
+    CHECK_EQ(vhubIdReads, 0, "the INF's 0: the ids are not read");
+    CHECK_EQ(ext.VhubConfig.SwitchStatus, MP_STATUS_SUCCESS,
+             "a 0 somebody set, read successfully");
+    CHECK_EQ(ext.VhubConfig.Applied, XHCI_VHUB_MODE_OFF, "and applied as off");
+
+    /* A value but 0, 1 or 2 is refused and applied as 0, never clamped. */
+    vhub_start(3);
+    CHECK_EQ(ext.VhubConfig.Applied, XHCI_VHUB_MODE_OFF, "3 is applied as 0");
+    CHECK_EQ(ext.VhubConfig.Refused, XHCI_VHUB_WHY_SWITCH, "recorded as refused");
+    CHECK_EQ(vhubIdReads, 0, "and the ids are not consulted for it");
+    CHECK_EQ(ext.VhubStarted, 0, "and nothing stood up");
+
+    /* The switch on and the vendor id missing: off, and why. */
+    vhub_reset_registry();
+    vhubSwitchStatus = MP_STATUS_SUCCESS;
+    vhubSwitchValue = 1;
+    vhub_put_id(vhubPidBytes, "0001", 1);
+    vhubPidStatus = MP_STATUS_SUCCESS;
+    enable_start(0);
+    deliver_events();
+    CHECK_EQ(vhubIdReads, 2, "with the switch on, both ids are read");
+    CHECK_EQ(ext.VhubConfig.Applied, XHCI_VHUB_MODE_OFF,
+             "no vendor id, no hub: the binary carries none to fall back to");
+    CHECK_EQ(ext.VhubConfig.Refused, XHCI_VHUB_WHY_VID, "the vendor id failed");
+    CHECK_EQ(ext.VhubConfig.VidResult, XHCI_VHUB_ID_MISSING, "as missing");
+    CHECK_EQ(ext.VhubConfig.PidResult, XHCI_VHUB_ID_OK,
+             "with the product id still parsed and recorded");
+
+    /* At 2 with a product id of five digits: off. */
+    vhub_reset_registry();
+    vhubSwitchStatus = MP_STATUS_SUCCESS;
+    vhubSwitchValue = 2;
+    vhub_set_ids("1209", "12345", 1);
+    enable_start(0);
+    deliver_events();
+    CHECK_EQ(ext.VhubConfig.Refused, XHCI_VHUB_WHY_PID, "the product id failed");
+    CHECK_EQ(ext.VhubConfig.PidResult, XHCI_VHUB_ID_DIGITS,
+             "for its digit count");
+    for (i = 0; i < ext.RootHub.PortCount; i++) {
+        CHECK_EQ(ext.Vhub[i].Present, 0, "and value 2 stood nothing up");
+    }
+
+    /* Single-byte strings, `0x` and lower case: accepted. */
+    vhub_reset_registry();
+    vhubSwitchStatus = MP_STATUS_SUCCESS;
+    vhubSwitchValue = 1;
+    vhub_set_ids("0x12ab", "0001", 0);
+    enable_start(0);
+    deliver_events();
+    CHECK_EQ(ext.VhubConfig.Applied, XHCI_VHUB_MODE_ON_DEMAND,
+             "a single-byte pair is accepted");
+    CHECK_EQ(ext.VhubConfig.Vid, 0x12AB, "with the 0x form and lower case");
+    CHECK_EQ(ext.VhubConfig.VidEncoding, XHCI_VHUB_ENC_BYTE,
+             "and the encoding recorded for 24.3.4's first reading");
+    CHECK_EQ(ext.VhubStarted, 1, "and at 1 the start marks the records up");
+
+    vhub_reset_registry();
+}
+
+/*
+ * **Value 1, end to end, on a Full-Speed device** (design record 12 sections
+ * 3.2 to 3.6): the reset that decodes it stands a hub up and arms the hub's
+ * open, not a device's; the hub enumerates entirely in software, its traffic
+ * never reaching either snoop; port 1's reset arms the device's root-port
+ * claim and leaves the root port quiet; the device gets today's root-port
+ * record; and the record is found again across a re-open, a repeated reset
+ * and its address reused after a disown.
+ */
+static void test_vhub_on_demand_full_speed(void)
+{
+    PXHCI_DEVICE dev;
+    ULONG status;
+    ULONG change;
+    ULONG resets;
+    ULONG slotsEnabled;
+    ULONG pipeCompletions;
+
+    vhub_start(1);
+    CHECK_EQ(ext.VhubConfig.Applied, XHCI_VHUB_MODE_ON_DEMAND, "(value 1)");
+    hwCmdSlotId = 4;
+
+    vhub_plug(2, 1);                                /* Full Speed */
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(ext.Vhub[1].Present, 0, "no hub before a reset has decided");
+    CHECK_EQ(status & XHCI_HUB_PORT_HIGH_SPEED, XHCI_HUB_PORT_HIGH_SPEED,
+             "and the root port says High Speed before the reset, as today");
+
+    resets = portResets;
+    CHECK_EQ(vhub_root_reset(2), MP_STATUS_SUCCESS, "the root reset runs");
+    CHECK_EQ(portResets, resets + 1, "as a physical reset");
+    CHECK_EQ(ext.Vhub[1].Present, 1, "decoding Full Speed stood a hub up");
+    CHECK_EQ(ext.Vhub[1].Decision, XHCI_VHUB_DECIDED_HUB, "virtual-hub mode");
+    CHECK_EQ(ext.VhubCreated, 1, "counted");
+    CHECK_EQ(ext.VhubArmedPort, 2, "the hub's address-0 open is armed");
+    CHECK_EQ(ext.EnumClaimSpent, 1, "and no device claim beside it");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(status & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE |
+                       XHCI_HUB_PORT_HIGH_SPEED | XHCI_HUB_PORT_LOW_SPEED),
+             XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE |
+                 XHCI_HUB_PORT_HIGH_SPEED,
+             "the root port reports the hub: connected, enabled, High Speed");
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "with its reset's end latched in the upstream view");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2),
+             MP_STATUS_SUCCESS, "(usbhub clears it)");
+
+    /* The hub's own enumeration. */
+    slotsEnabled = ext.SlotsEnabled;
+    CHECK_EQ(vhub_open_ep0(&vhubEp0, 0), MP_STATUS_SUCCESS,
+             "the address-0 open is served");
+    CHECK_EQ(vhubEp0.Flags, XHCI_ENDPOINT_FLAG_OPEN | XHCI_ENDPOINT_FLAG_VHUB,
+             "as the hub's");
+    CHECK_EQ(vhubEp0.VhubPort, 2, "on root port 2");
+    CHECK_EQ(vhubEp0.DeviceIndex, 0, "bound to no device record");
+    CHECK_EQ(ext.Devices[0].State, XHCI_DEV_STATE_FREE,
+             "none was allocated");
+    deliver_events();
+    CHECK_EQ(ext.SlotsEnabled, slotsEnabled, "and no Enable Slot was issued");
+
+    (void)vhub_control(&vhubEp0, 0x80, 0x06, 0x0100, 0, 64);
+    CHECK_EQ(lastCompletedLength, 18, "the device descriptor, 18 bytes");
+    CHECK_EQ(lastCompletedStatus, 0, "successfully");
+    CHECK(lastCompletedEndpoint == &vhubEp0, "through the hub's EP0");
+    CHECK_EQ(vhubData[4], 0x09, "class 9");
+    CHECK_EQ(vhubData[6], 0x01, "single TT");
+    CHECK_EQ(vhubData[8] | ((ULONG)vhubData[9] << 8), 0x1209,
+             "the INF's vendor id");
+    CHECK_EQ(vhubData[10] | ((ULONG)vhubData[11] << 8), 0x0001,
+             "and product id");
+    CHECK_EQ(vhubData[12] | ((ULONG)vhubData[13] << 8), vhub_expected_bcd(),
+             "and bcdDevice carrying the driver version");
+    CHECK_EQ(vhubData[18], 0xEE, "and not a byte past the descriptor");
+
+    /* The second reset of the bracket keeps the binding and arms nothing. */
+    resets = portResets;
+    CHECK_EQ(vhub_root_reset(2), MP_STATUS_SUCCESS, "the second reset");
+    CHECK_EQ(portResets, resets + 1, "is physical at 1");
+    CHECK_EQ(ext.VhubArmedPort, 0, "and arms no new open");
+    CHECK_EQ(ext.EnumClaimSpent, 1, "nor a device claim");
+    CHECK_EQ(ext.Vhub[1].Ep0Bound, 1, "the hub keeps its EP0 binding");
+
+    (void)vhub_control(&vhubEp0, 0x00, 0x05, 7, 0, 0);
+    CHECK_EQ(ext.Vhub[1].Address, 7, "SET_ADDRESS gives the hub its address");
+    CHECK_EQ(ext.SetAddressIntercepts, 0,
+             "and is not the interception a real device's takes");
+    XhciRegPacket.SetEndpointState(&ext, &vhubEp0, USBPORT_ENDPOINT_REMOVE);
+    CHECK_EQ(vhub_open_ep0(&vhubEp0, 7), MP_STATUS_SUCCESS,
+             "EP0 reopened at the hub's address resolves to the hub");
+    CHECK_EQ(vhubEp0.VhubPort, 2, "on the same port");
+    (void)vhub_control(&vhubEp0, 0x80, 0x06, 0x0200, 0, 9);
+    CHECK_EQ(lastCompletedLength, 9, "a configuration read truncated to 9");
+    (void)vhub_control(&vhubEp0, 0x00, 0x09, 1, 0, 0);
+    CHECK_EQ(ext.Vhub[1].DevState, XHCI_VHUB_DEV_CONFIGURED, "configured");
+    (void)vhub_control(&vhubEp0, 0xA0, 0x06, 0x0000, 0, 71);
+    CHECK_EQ(lastCompletedLength, 9, "the hub descriptor");
+    CHECK_EQ(vhubData[2], 1, "one port");
+    (void)vhub_control(&vhubEp0, 0x80, 0x06, 0x0301, 0x0409, 255);
+    CHECK_EQ(lastCompletedLength, 44, "the product string");
+    (void)vhub_control(&vhubEp0, 0x80, 0x06, 0x0303, 0x0409, 255);
+    CHECK_EQ(lastCompletedStatus, (LONG)XHCI_USBD_STATUS_STALL_PID,
+             "a serial number is asked for and stalled - there is never one");
+    CHECK_EQ(ext.VhubStalls, 1, "counted");
+
+    /* Rule: the hub's traffic reaches neither snoop (3.3). */
+    CHECK_EQ(ext.Topology.Descriptors, 0,
+             "the hub descriptor never reached the topology graph");
+    CHECK_EQ(ext.Topology.Count, 0, "which holds no hub at all");
+
+    /* The status-change pipe: the connect latched at creation completes the
+     * first transfer at once (3.3's GET_PORT_STATUS row, 3.4). */
+    CHECK_EQ(vhub_open_pipe(7), MP_STATUS_SUCCESS, "the status-change pipe");
+    CHECK_EQ(vhubPipe.Dci, 3, "on EP 1 IN");
+    pipeCompletions = ext.VhubPipeCompletions;
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "submitted");
+    deliver_after_submit();
+    CHECK_EQ(ext.VhubPipeCompletions, pipeCompletions + 1,
+             "and completed at once: port 1 has a change");
+    CHECK(lastCompletedEndpoint == &vhubPipe, "on the pipe");
+    CHECK_EQ(lastCompletedLength, 1, "with one byte");
+    CHECK_EQ(vhubPipeData[0], 0x02, "bit 1: port 1");
+
+    (void)vhub_control(&vhubEp0, 0xA3, 0x00, 0, 1, 4);
+    CHECK_EQ(lastCompletedLength, 4, "GET_PORT_STATUS(1), four bytes");
+    CHECK_EQ(vhubData[0] & XHCI_HUB_PORT_CONNECTION, XHCI_HUB_PORT_CONNECTION,
+             "port 1 connected");
+    CHECK_EQ(((ULONG)vhubData[1] << 8) &
+                 (XHCI_HUB_PORT_LOW_SPEED | XHCI_HUB_PORT_HIGH_SPEED),
+             0, "at Full Speed - neither speed bit, the device's true speed");
+    CHECK_EQ(vhubData[2] & XHCI_HUB_C_PORT_CONNECTION,
+             XHCI_HUB_C_PORT_CONNECTION, "with the connect change");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+
+    /* Port 1's reset: physical, and the root port stays quiet (3.2). The
+     * hub's second reset latched the upstream's C_PORT_RESET, as every root
+     * reset does; usbhub has cleared it by now. */
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2),
+             MP_STATUS_SUCCESS, "(usbhub clears the second reset's change)");
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe re-armed)");
+    resets = portResets;
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(portResets, resets + 1, "SET_PORT_FEATURE(1, PORT_RESET) is physical");
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(2) << 24, 0);
+    deliver_events();
+    CHECK_EQ(lastCompletedLength, 1, "the pipe completes with port 1's change");
+    CHECK_EQ(ext.Vhub[1].P1Enabled, 1, "port 1 enabled by its own reset");
+    CHECK_EQ(ext.EnumHubPort, 2, "and the device's root-port claim names port 2");
+    CHECK_EQ(ext.EnumClaimSpent, 0, "armed");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, 0,
+             "the root port latched no C_PORT_RESET for port 1's reset");
+    CHECK_EQ(status & (XHCI_HUB_PORT_ENABLE | XHCI_HUB_PORT_RESET),
+             XHCI_HUB_PORT_ENABLE, "and stays enabled, not resetting");
+
+    /* The device's address-0 open is the device's. */
+    CHECK_EQ(slot_open(0, UsbFullSpeed, 64), MP_STATUS_SUCCESS,
+             "the device's address-0 open");
+    CHECK_EQ(slotEndpoint.Flags, XHCI_ENDPOINT_FLAG_OPEN,
+             "binds a real record");
+    dev = &ext.Devices[0];
+    CHECK_EQ(dev->HubPort, 2, "today's root-port record, HubPort 2 (3.6)");
+    CHECK_EQ(dev->Speed, XHCI_SPEED_FULL, "at its decoded speed");
+    CHECK_EQ(dev->RouteString, 0, "with Route String 0");
+    deliver_events();
+    deliver_events();
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "(the chain reached Default)");
+    CHECK_EQ(dev->SlotId, 4, "(in slot 4)");
+    slot_setup(0x00, 0x05, 8, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    deliver_events();
+    CHECK_EQ(dev->DeviceAddress, 8, "the device is addressed at 8");
+
+    /* A repeated port-1 reset and a re-open find the same record. */
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(2) << 24, 0);
+    deliver_events();
+    CHECK_EQ(slot_open(0, UsbFullSpeed, 64), MP_STATUS_SUCCESS,
+             "a re-enumeration behind the hub");
+    CHECK_EQ(slotEndpoint.DeviceIndex, 1, "finds the same record");
+    CHECK_EQ(ext.Devices[0].SlotId, 4, "keeping its slot");
+    /* The re-open put the record back to address 0, so it is addressed
+     * again first: the disown below has to have an address to give back, or
+     * it would be asserted on a record that already held none. */
+    deliver_events();
+    deliver_events();
+    slot_setup(0x00, 0x05, 8, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    deliver_events();
+    CHECK_EQ(ext.Devices[0].DeviceAddress, 8, "(addressed at 8 again)");
+    CHECK_EQ(ext.Devices[0].Flags & XHCI_DEV_FLAG_ADDRESS_VALID,
+             XHCI_DEV_FLAG_ADDRESS_VALID, "(and valid before the disown)");
+
+    /* Port 1 disabled: a disown, the address given back, and the same record
+     * found again at the next reset with that address reused. */
+    deliver_events();
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 1, 1, 0);
+    CHECK_EQ(ext.Devices[0].Flags & XHCI_DEV_FLAG_ADDRESS_VALID, 0,
+             "CLEAR_PORT_FEATURE(1, PORT_ENABLE) disowns the device");
+    CHECK_EQ(ext.DevicesDisownedOut, 1, "counted as a disown");
+    CHECK_EQ(ext.Vhub[1].P1Enabled, 0, "port 1 reads disabled");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(status & XHCI_HUB_PORT_ENABLE, XHCI_HUB_PORT_ENABLE,
+             "and the root port - the hub's upstream - stays enabled");
+    CHECK_EQ(ext.Vhub[1].Present, 1, "with the hub in place");
+
+    /* The next port-1 reset, re-open and SET_ADDRESS find the same record
+     * and give it the address back. */
+    deliver_events();
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(2) << 24, 0);
+    deliver_events();
+    CHECK_EQ(slot_open(0, UsbFullSpeed, 64), MP_STATUS_SUCCESS,
+             "the re-enumeration after the disown");
+    CHECK_EQ(slotEndpoint.DeviceIndex, 1, "finds the same record");
+    deliver_events();
+    deliver_events();
+    CHECK_EQ(ext.Devices[0].State, XHCI_DEV_STATE_DEFAULT,
+             "(the chain reached Default again)");
+    slot_setup(0x00, 0x05, 8, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    deliver_events();
+    CHECK_EQ(ext.Devices[0].DeviceAddress, 8, "with its address reused");
+    CHECK_EQ(ext.Devices[0].Flags & XHCI_DEV_FLAG_ADDRESS_VALID,
+             XHCI_DEV_FLAG_ADDRESS_VALID, "and valid again");
+
+    vhub_reset_registry();
+}
+
+/* At 1 a High-Speed device takes today's path, byte for byte (3.2, 3.7). */
+static void test_vhub_on_demand_high_speed_is_direct(void)
+{
+    ULONG status;
+    ULONG change;
+
+    vhub_start(1);
+    vhub_plug(3, 3);                                /* High Speed */
+    CHECK_EQ(vhub_root_reset(3), MP_STATUS_SUCCESS, "the reset runs");
+    CHECK_EQ(ext.Vhub[2].Present, 0, "no hub for a High-Speed device");
+    CHECK_EQ(ext.Vhub[2].Decision, XHCI_VHUB_DECIDED_DIRECT, "direct");
+    CHECK_EQ(ext.EnumClaimSpent, 0, "today's device claim is armed");
+    CHECK_EQ(ext.VhubArmedPort, 0, "and no hub's");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "the root port reports its reset as today");
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "the address-0 open");
+    CHECK_EQ(slotEndpoint.Flags, XHCI_ENDPOINT_FLAG_OPEN, "is the device's");
+    CHECK_EQ(ext.Devices[0].HubPort, 3, "on port 3");
+
+    /*
+     * An unplug forgets the decision, so a slower device next decides afresh
+     * at its first reset with no forced connect change (3.2): the swap of a
+     * High-Speed device for a Full-Speed one on the same port is the
+     * ordinary case, not a flip. (A first build kept the decision on a port
+     * with no hub, and this swap cost usbhub a forced re-enumeration.)
+     */
+    vhub_unplug(3);
+    CHECK_EQ(ext.Vhub[2].Decision, XHCI_VHUB_DECIDED_NONE,
+             "an unplug forgets a direct port's decision");
+    (void)XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 3);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 3);
+    hwCmdSlotId = 5;
+    vhub_plug(3, 1);                                /* Full Speed */
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, XHCI_HUB_C_PORT_CONNECTION,
+             "(the plug's own connect change)");
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 3);
+    CHECK_EQ(vhub_root_reset(3), MP_STATUS_SUCCESS, "the next reset");
+    CHECK_EQ(ext.Vhub[2].Present, 1, "stands a hub up for it at once");
+    CHECK_EQ(ext.Vhub[2].Decision, XHCI_VHUB_DECIDED_HUB, "(virtual-hub mode)");
+    CHECK_EQ(ext.VhubForcedConnects, 0, "with no forced connect change");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, 0,
+             "and none latched on the root port beyond the plug's");
+    CHECK_EQ(ext.VhubArmedPort, 3, "the hub's open armed");
+    vhub_reset_registry();
+}
+
+/*
+ * **The swap inside a reset** (design record 12 section 3.2): a High-Speed
+ * device decided direct is swapped for a Full-Speed one while usbhub's next
+ * reset of it runs, so the one reading that ends the reset carries the
+ * connect change beside the PRC and decodes Full Speed. The reading's own
+ * evidence forgets the direct decision before the reset decides, so the new
+ * device stands its hub up at once; the old decision forces nothing, since
+ * the connect change usbhub needs is the port's own. (A first fix forgot the
+ * decision only after the reset had decided, one reading too late.)
+ */
+static void test_vhub_on_demand_swap_inside_a_reset(void)
+{
+    ULONG status;
+    ULONG change;
+    ULONG xport;
+
+    vhub_start(1);
+    xport = vhub_xport(3);
+    vhub_plug(3, 3);                                /* High Speed */
+    CHECK_EQ(vhub_root_reset(3), MP_STATUS_SUCCESS, "(the first reset)");
+    CHECK_EQ(ext.Vhub[2].Decision, XHCI_VHUB_DECIDED_DIRECT, "(direct)");
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 3);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 3);
+
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 3), MP_STATUS_SUCCESS,
+             "usbhub's next reset starts");
+    /* Swapped while it ran: Full Speed now, and CSC beside the PRC. */
+    mmio[HC_PORTSC(xport) / 4] =
+        (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_SPEED_MASK) |
+        XHCI_PORTSC_CSC | (1UL << XHCI_PORTSC_SPEED_SHIFT);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.VhubForcedConnects, 0,
+             "the old decision forces no connect change: the reading's own "
+             "connect change says the device that reset is another");
+    CHECK_EQ(ext.Vhub[2].Decision, XHCI_VHUB_DECIDED_HUB,
+             "and that device decides afresh");
+    CHECK_EQ(ext.Vhub[2].Present, 1, "with a hub stood up for it at once");
+    CHECK_EQ(ext.VhubCreated, 1, "(counted once)");
+    CHECK_EQ(ext.VhubArmedPort, 3, "the hub's open armed");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & (XHCI_HUB_C_PORT_CONNECTION | XHCI_HUB_C_PORT_RESET),
+             XHCI_HUB_C_PORT_CONNECTION | XHCI_HUB_C_PORT_RESET,
+             "the root port reports the plug's connect change and the "
+             "reset's end, nothing forced");
+
+    /*
+     * The same reading deciding direct again: the connect change is spent
+     * on forgetting the old decision, and the new one stands - so a later
+     * reset that decodes another speed with no connect evidence still
+     * finds a decision to flip from and forces the change of 3.2. (Fed the
+     * reading a second time, the fresh decision was forgotten as well.)
+     */
+    xport = vhub_xport(4);
+    vhub_plug(4, 3);                                /* High Speed */
+    CHECK_EQ(vhub_root_reset(4), MP_STATUS_SUCCESS, "(port 4's first reset)");
+    CHECK_EQ(ext.Vhub[3].Decision, XHCI_VHUB_DECIDED_DIRECT, "(direct)");
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 4);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 4);
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 4), MP_STATUS_SUCCESS,
+             "the next reset starts");
+    mmio[HC_PORTSC(xport) / 4] |= XHCI_PORTSC_CSC;
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.Vhub[3].Decision, XHCI_VHUB_DECIDED_DIRECT,
+             "a connect change beside a reset deciding direct again leaves "
+             "the decision standing");
+    CHECK_EQ(ext.VhubForcedConnects, 0, "(nothing forced)");
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 4);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 4);
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 4), MP_STATUS_SUCCESS,
+             "a reset with no connect evidence");
+    mmio[HC_PORTSC(xport) / 4] =
+        (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_SPEED_MASK) |
+        (1UL << XHCI_PORTSC_SPEED_SHIFT);              /* Full Speed */
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.VhubForcedConnects, 1,
+             "that decodes Full Speed flips the decision and forces the "
+             "connect change");
+    CHECK_EQ(ext.Vhub[3].Decision, XHCI_VHUB_DECIDED_NONE,
+             "(nothing decided until the next reset)");
+    vhub_root_status(4, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, XHCI_HUB_C_PORT_CONNECTION,
+             "which the root port reports");
+    vhub_reset_registry();
+}
+
+/*
+ * **A root reset while port 1's is running** (design record 12 sections 3.2
+ * and 3.8). At 2 the root reset is synthetic and overtakes the physical one:
+ * its end, when it comes, is nobody's - it must not spend the hub's open the
+ * root reset armed, nor arm the device's claim, nor latch on the root port -
+ * and the hub's next address-0 open is the hub's. At 1 the root reset is
+ * physical, the port is armed with port 1's, and the write is refused as
+ * busy with nothing changing hands, so port 1's reset ends as its own.
+ * (A first build let the overtaken reset's end arm the device's claim and
+ * spend the hub's open.)
+ */
+static void test_vhub_root_reset_over_a_port1_reset(void)
+{
+    ULONG status;
+    ULONG change;
+    ULONG xport;
+    ULONG refusals;
+    ULONG held;
+    ULONG resets;
+    ULONG stalls;
+
+    vhub_start(2);
+    hwCmdSlotId = 6;
+    xport = vhub_xport(3);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 3);
+    vhub_plug(3, 3);                                /* High Speed */
+    vhub_enumerate_hub(3, 3);
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 3);
+    /* Port 1's first reset completes and enables the port. */
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PED, XHCI_PORTSC_PED,
+             "(the port enabled by port 1's first reset)");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 20, 1, 0);
+
+    /*
+     * Its second reset hangs. The model keeps PED set through a hung reset,
+     * which here stands for the reset finishing between the disable's PED
+     * write below and the read that confirms it: the write went into a
+     * port in reset, where it lands on nothing, and the read then finds the
+     * port enabled again, so the disown stays owed.
+     */
+    portResetHangs = 1;
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    portResetHangs = 0;
+    CHECK_EQ(ext.Vhub[2].P1Resetting, 1, "(port 1's reset running)");
+    stuckPortPed = xport;
+    held = ext.VhubResetsHeld;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 3), MP_STATUS_SUCCESS,
+             "usbhub resets the hub while port 1's reset runs");
+    CHECK_EQ(ext.VhubArmedPort, 3, "which arms the hub's open");
+    CHECK_EQ(ext.Vhub[2].ResetOwner, XHCI_VHUB_OWNER_SUPERSEDED,
+             "and overtakes the running reset");
+    CHECK_EQ(ext.Vhub[2].Address, 0, "(the hub back in Default)");
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 1,
+             "(the disable's write swallowed by the reset: a disown owed)");
+
+    /* Its deadline passes first, with the reset still running. */
+    hw_fire_port_timer();
+    CHECK_EQ(ext.Vhub[2].P1Resetting, 0, "the deadline ends it for the hub");
+    CHECK_EQ(ext.VhubArmedPort, 3, "spending nothing");
+    CHECK_EQ(ext.Vhub[2].P1Changes & XHCI_HUB_C_PORT_RESET, 0,
+             "and latching nothing on port 1");
+
+    /* Then the physical reset ends, late: a PRC nothing armed. */
+    stuckPortPed = 0;
+    mmio[HC_PORTSC(xport) / 4] =
+        (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_PR) |
+        XHCI_PORTSC_PRC | XHCI_PORTSC_PED;
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.VhubArmedPort, 3,
+             "its late end spends nothing either: the hub's open stands");
+    CHECK_EQ(ext.EnumClaimSpent, 1, "with no device claim armed beside it");
+    CHECK_EQ(ext.Vhub[2].P1Changes & XHCI_HUB_C_PORT_RESET, 0,
+             "and no reset change on port 1");
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 0,
+             "the disable is written again now that it can land, and "
+             "confirmed");
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PED, 0,
+             "(the port disabled)");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "the root port reports the hub's reset alone");
+    CHECK_EQ(vhub_open_ep0(&vhubEp0, 0), MP_STATUS_SUCCESS,
+             "the address-0 open");
+    CHECK_EQ(vhubEp0.Flags & XHCI_ENDPOINT_FLAG_VHUB, XHCI_ENDPOINT_FLAG_VHUB,
+             "is the hub's");
+    resets = portResets;
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(ext.VhubResetsHeld, held, "and the next port-1 reset is not held");
+    CHECK_EQ(portResets, resets + 1, "but runs");
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+
+    /* Value 1: the root reset is physical and the port is busy. */
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_plug(2, 1);                                /* Full Speed */
+    vhub_enumerate_hub(2, 5);
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2);
+    portResetHangs = 1;
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    portResetHangs = 0;
+    CHECK_EQ(ext.Vhub[1].P1Resetting, 1, "(port 1's reset running)");
+    refusals = ext.RhPortsBusy;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 2),
+             MP_STATUS_NOT_SUPPORTED,
+             "a root reset at 1 is refused: the port is busy with port 1's");
+    CHECK_EQ(ext.RhPortsBusy, refusals + 1, "(counted as busy)");
+    CHECK_EQ(ext.Vhub[1].ResetOwner, XHCI_VHUB_OWNER_PORT1,
+             "with nothing changing hands");
+    CHECK_EQ(ext.Vhub[1].P1Resetting, 1, "(still running)");
+    mmio[HC_PORTSC(xport) / 4] =
+        (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_PR) |
+        XHCI_PORTSC_PRC | XHCI_PORTSC_PED;
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.Vhub[1].P1Resetting, 0, "port 1's reset ends as its own");
+    CHECK_EQ(ext.Vhub[1].P1Changes & XHCI_HUB_C_PORT_RESET,
+             XHCI_HUB_C_PORT_RESET, "on port 1");
+    CHECK_EQ(ext.EnumClaimSpent, 0, "arming the device's claim");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, 0,
+             "and the root port latches nothing");
+
+    /*
+     * A second reset of the same view while the first runs. The root's on
+     * a port with no hub yet: refused as busy, and the first's end still
+     * decides. Port 1's: the request stalls, and the first ends as port
+     * 1's. (A first build overwrote the running reset's ownership before
+     * the refusal, so the first root reset's end decided nothing and a
+     * Full-Speed device was opened as today's - the bugcheck of issue 6.)
+     */
+    xport = vhub_xport(3);
+    vhub_plug(3, 1);                                /* Full Speed */
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 3);
+    portResetHangs = 1;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 3), MP_STATUS_SUCCESS,
+             "a Full-Speed device's first root reset starts");
+    portResetHangs = 0;
+    refusals = ext.RhPortsBusy;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 3),
+             MP_STATUS_NOT_SUPPORTED, "a second while it runs is refused as busy");
+    CHECK_EQ(ext.RhPortsBusy, refusals + 1, "(counted)");
+    CHECK_EQ(ext.Vhub[2].ResetOwner, XHCI_VHUB_OWNER_ROOT,
+             "and the first keeps its ownership");
+    mmio[HC_PORTSC(xport) / 4] =
+        (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_PR) |
+        XHCI_PORTSC_PRC | XHCI_PORTSC_PED;
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.Vhub[2].Present, 1, "so its end stands the hub up");
+    CHECK_EQ(ext.Vhub[2].Decision, XHCI_VHUB_DECIDED_HUB, "(virtual-hub mode)");
+    CHECK_EQ(ext.VhubArmedPort, 3, "with the hub's open armed");
+
+    xport = vhub_xport(2);
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 20, 1, 0);
+    portResetHangs = 1;
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    portResetHangs = 0;
+    CHECK_EQ(ext.Vhub[1].P1Resetting, 1, "(port 1's reset running again)");
+    stalls = ext.VhubStalls;
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(lastCompletedStatus, (LONG)XHCI_USBD_STATUS_STALL_PID,
+             "a second port-1 reset while the first runs stalls");
+    CHECK_EQ(ext.VhubStalls, stalls + 1, "(counted)");
+    CHECK_EQ(ext.Vhub[1].P1Resetting, 1, "the first still running");
+    CHECK_EQ(ext.Vhub[1].ResetOwner, XHCI_VHUB_OWNER_PORT1,
+             "with its ownership kept");
+    mmio[HC_PORTSC(xport) / 4] =
+        (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_PR) |
+        XHCI_PORTSC_PRC | XHCI_PORTSC_PED;
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.Vhub[1].P1Resetting, 0, "and it ends as port 1's");
+    CHECK_EQ(ext.Vhub[1].P1Enabled, 1, "enabling port 1");
+
+    /*
+     * The other refusal: a reset the core took, with nothing owned, that
+     * the port then refused - busy with a resume. That one is not a stall:
+     * the carry ends it as a reset that timed out, port 1 reports the end
+     * with the port disabled, and the request completes. (A first fix
+     * stalled this one too, reading the ownership after the carry had
+     * ended it.)
+     */
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 20, 1, 0);
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "(the hub suspended)");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "(and resuming: the port armed with it)");
+    stalls = ext.VhubStalls;
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(lastCompletedStatus, 0,
+             "a port-1 reset the core took and the resuming port refused "
+             "completes");
+    CHECK_EQ(ext.VhubStalls, stalls, "not as a stall");
+    CHECK_EQ(ext.Vhub[1].ResetOwner, XHCI_VHUB_OWNER_NONE,
+             "ended by the refusal");
+    CHECK_EQ(ext.Vhub[1].P1Enabled, 0, "with port 1 disabled");
+    CHECK_EQ(ext.Vhub[1].P1Changes & XHCI_HUB_C_PORT_RESET,
+             XHCI_HUB_C_PORT_RESET, "and its end latched, as a timeout's");
+    hw_fire_port_timer();
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    vhub_reset_registry();
+}
+
+/*
+ * **A recovery at 1 with the device gone** (design record 12 sections 3.2
+ * and 3.8): a hub stands for its device, and a device that went away
+ * before the reinitialisation left no connect change for the seed to find
+ * - HCRST took it, and an empty port raises none. The root port latches the
+ * disconnect itself, so usbhub removes the hub as on any unplug, and the
+ * reading of the empty port retires the hub then, as any unplug at 1 does
+ * (task 24.3.4: an NT 6.x usbhub sends no disable to drop it with). (A first
+ * build kept the hub, its bindings and its held transfer, with usbhub never
+ * told.)
+ */
+static void test_vhub_on_demand_recovery_with_the_device_gone(void)
+{
+    ULONG status;
+    ULONG change;
+    ULONG xport;
+    ULONG announced;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_plug(2, 1);                                /* Full Speed */
+    vhub_enumerate_hub(2, 5);
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 2);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe)");
+    deliver_after_submit();
+    CHECK(ext.VhubBind[1].Held == &vhubPipeTransfer, "(held)");
+
+    /* The device goes away and the controller faults before anything reads
+     * the CSC; the recovery's HCRST clears it. */
+    mmio[HC_PORTSC(xport) / 4] &=
+        ~(XHCI_PORTSC_CCS | XHCI_PORTSC_PED | XHCI_PORTSC_SPEED_MASK);
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_HCE;
+    XhciRegPacket.CheckController(&ext);
+    asyncCallback = NULL;
+    asyncRequests = 0;
+    XhciRegPacket.ResetController(&ext);
+    XhciRegPacket.CheckController(&ext);
+    announced = ext.RootHubInvalidates;
+    fire_async_timer();
+    CHECK_EQ(ext.RecoveryCompletions, 1, "(the recovery completed)");
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & (XHCI_PORTSC_CCS | XHCI_PORTSC_CSC),
+             0, "(the port empty, with no connect change of the hardware's)");
+
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, XHCI_HUB_C_PORT_CONNECTION,
+             "the root port reports the disconnect the reinitialisation "
+             "swallowed");
+    CHECK_EQ(status & XHCI_HUB_PORT_CONNECTION, 0, "on an empty port");
+    CHECK(ext.RootHubInvalidates > announced || ext.RootHubInvalidatesOwed != 0,
+          "and the root hub's invalidation announced, or owed to the gate");
+    CHECK_EQ(ext.Vhub[1].Present, 0,
+             "the hub retired with its device, with no disable from usbport");
+    CHECK_EQ(ext.Vhub[1].Address, 0, "its address given up");
+    CHECK(ext.VhubBind[1].Ep0 == NULL && ext.VhubBind[1].Pipe == NULL,
+          "and its bindings");
+    CHECK(ext.VhubBind[1].Held == NULL, "and the held transfer");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 2),
+             MP_STATUS_SUCCESS,
+             "a disable that does come - 98 to XP send one - finds no hub");
+    CHECK_EQ(ext.Vhub[1].Present, 0, "and stands none up");
+    vhub_reset_registry();
+}
+
+/*
+ * **Value 2: a root-port reset takes the device out of service through the
+ * existing disable body, and nothing is released until the port confirms it**
+ * (design record 12 section 3.8). A transfer is in flight on the device when
+ * usbhub resets the hub; the port will not drop PED; the slot, its ring and
+ * that transfer must all survive until it does - and a port-1 reset asked for
+ * meanwhile is held until the confirmation has been collected (3.3's gate).
+ */
+static void test_vhub_always_root_reset_holds_the_slot(void)
+{
+    PXHCI_DEVICE dev;
+    ULONG status;
+    ULONG change;
+    ULONG resets;
+    ULONG completions;
+    ULONG i;
+
+    vhub_start(2);
+    CHECK_EQ(ext.VhubConfig.Applied, XHCI_VHUB_MODE_ALWAYS, "(value 2)");
+    for (i = 0; i < ext.RootHub.PortCount; i++) {
+        CHECK_EQ(ext.Vhub[i].Present, 1, "a hub on every USB 2.0 port");
+    }
+    CHECK_EQ(ext.VhubCreated, ext.RootHub.PortCount, "each counted");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(status & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_POWER |
+                       XHCI_HUB_PORT_HIGH_SPEED | XHCI_HUB_PORT_ENABLE),
+             XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_POWER |
+                 XHCI_HUB_PORT_HIGH_SPEED,
+             "an empty port reports its hub connected, not yet enabled");
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, XHCI_HUB_C_PORT_CONNECTION,
+             "with the one connect change a start latches");
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 3);
+
+    hwCmdSlotId = 6;
+    vhub_plug(3, 3);                                /* High Speed */
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, 0,
+             "a physical connect is port 1's change, not the root port's");
+
+    resets = portResets;
+    vhub_enumerate_hub(3, 3);
+    CHECK_EQ(portResets, resets, "the hub's resets are synthetic at 2");
+    CHECK_EQ(ext.Vhub[2].DevState, XHCI_VHUB_DEV_CONFIGURED,
+             "(the hub is configured)");
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe)");
+    deliver_after_submit();
+    CHECK_EQ(vhubPipeData[0], 0x02, "the plug is a change on port 1");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe re-armed)");
+
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(portResets, resets + 1, "port 1's reset is the physical one");
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(3) << 24, 0);
+    deliver_events();
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "the device behind port 1 opens");
+    dev = &ext.Devices[0];
+    CHECK_EQ(dev->HubPort, 3, "on today's root-port record, High Speed too");
+    deliver_events();
+    deliver_events();
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "(Default)");
+
+    /* A transfer in flight on the device. */
+    slot_setup(0x80, 0x06, 0x0100, 18);
+    slotParams.TransferFlags = 1;
+    slotParams.TransferBufferLength = 18;
+    slotSgList.SgElementCount = 1;
+    slotSgList.SgElement[0].SgPhysicalAddressLo = 0x00100000UL;
+    slotSgList.SgElement[0].SgTransferLength = 18;
+    slotSgList.MappedSystemVa = vhubData;
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    CHECK_EQ(dev->Ep0Queue.Count, 1, "(a transfer is on the device's ring)");
+
+    /* usbhub resets the hub; the port will not drop PED. */
+    stuckPortPed = vhub_xport(3);
+    completions = completeTransferCalls;
+    resets = portResets;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 3), MP_STATUS_SUCCESS,
+             "the root-port reset");
+    deliver_after_submit();
+    CHECK_EQ(portResets, resets, "is the hub's, synthetic: no PR written");
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 1,
+             "the disable body ran and its confirmation is owed");
+    CHECK_EQ(dev->Flags & XHCI_DEV_FLAG_DISOWNED, XHCI_DEV_FLAG_DISOWNED,
+             "the software half ran at once");
+    CHECK(dev->State != XHCI_DEV_STATE_GONE && dev->State !=
+              XHCI_DEV_STATE_FREE,
+          "but the record is not torn down");
+    CHECK_EQ(dev->Ep0Queue.Count, 1, "its transfer is still queued");
+    CHECK_EQ(XhciSlotPortRecordsDisownedIdle(&ext, 3), 0,
+             "(a disowned record with a transfer queued is not idle)");
+    CHECK_EQ(completeTransferCalls, completions,
+             "and nothing was completed: its buffer is not handed back while "
+             "the port may still be reading it");
+    CHECK_EQ(ext.Vhub[2].DevState, XHCI_VHUB_DEV_DEFAULT,
+             "the hub is back in its Default state");
+    CHECK(ext.VhubBind[2].Ep0 == &vhubEp0, "with its EP0 binding kept");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "and its reset's end reported without waiting on the port");
+
+    /* A port-1 reset asked for now is held. */
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(portResets, resets, "a port-1 reset while the disable is owed");
+    CHECK_EQ(ext.VhubResetsHeld, 1, "is held");
+
+    /* The port finally goes down; the poll collects it. */
+    stuckPortPed = 0;
+    mmio[HC_PORTSC(vhub_xport(3)) / 4] &= ~XHCI_PORTSC_PED;
+    poll_clock_prime();
+    poll_after_ms(1);
+    deliver_after_submit();
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 0, "the confirmation arrived");
+    CHECK_EQ(ext.DevicesDisabledOut, 1, "and only now is the teardown run");
+    CHECK_EQ(portResets, resets + 1,
+             "and the held port-1 reset started once it was collected");
+    /* The teardown's Stop Endpoint, Set TR Dequeue Pointer and Disable Slot,
+     * one command round each. */
+    deliver_events();
+    deliver_events();
+    deliver_events();
+    deliver_after_submit();
+    CHECK(completeTransferCalls > completions,
+          "the transfer in flight is answered after the port went down");
+    CHECK_EQ(lastCompletedStatus, (LONG)XHCI_USBD_STATUS_CANCELED,
+             "as cancelled");
+
+    stuckPortPed = 0;
+    vhub_reset_registry();
+}
+
+/*
+ * **Round 6: the same root reset with no device record on the port.** QEMU
+ * never clears PED on a disable write, and at 2 every port-1 reset used to be
+ * held on the debt for ever - Windows 7's usbhub then bugchecked 0xFE on its
+ * bus-lock watchdog with all 32 records free. With nothing recorded on the
+ * port or behind it the confirmation guards no slot or ring, so the debt
+ * settles at the disable and the port-1 reset starts at once.
+ */
+static void test_vhub_always_root_reset_with_no_record(void)
+{
+    ULONG status;
+    ULONG change;
+    ULONG resets;
+    ULONG empty;
+
+    vhub_start(2);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 3);
+    hwCmdSlotId = 6;
+    vhub_plug(3, 3);                                /* High Speed */
+    vhub_enumerate_hub(3, 3);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe)");
+    deliver_after_submit();
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe re-armed)");
+    /* Port 1 reset and enabled, and the enumeration behind it never reaches
+     * a slot - the Windows 7 shape: all 32 records free. */
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(3) << 24, 0);
+    deliver_events();
+    CHECK_EQ(mmio[HC_PORTSC(vhub_xport(3)) / 4] & XHCI_PORTSC_PED,
+             XHCI_PORTSC_PED, "(the physical port is enabled)");
+    CHECK_EQ(XhciSlotPortHasRecords(&ext, 3), 0,
+             "(nothing behind port 1 has a record)");
+
+    stuckPortPed = vhub_xport(3);
+    empty = ext.DisownsSettledEmpty;
+    resets = portResets;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 3), MP_STATUS_SUCCESS,
+             "the hub's root-port reset, on a port that will not drop PED");
+    deliver_after_submit();
+    CHECK_EQ(portResets, resets, "(synthetic: no PR written)");
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 0,
+             "no record to protect: the disable's debt settles at once");
+    CHECK_EQ(ext.DisownsSettledEmpty, empty + 1, "(counted)");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "(the hub's reset ends)");
+
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(ext.VhubResetsHeld, 0, "a port-1 reset asked for now is not held");
+    CHECK_EQ(portResets, resets + 1, "it is written to the port at once");
+    (void)status;
+
+    stuckPortPed = 0;
+    vhub_reset_registry();
+}
+
+/*
+ * The health poll's half of the same rule: a debt that did have a record when
+ * it was taken, and whose record is then gone by another route while PED still
+ * reads 1. The poll settles it and starts the reset it held. (The record is
+ * freed by hand here; on the target a connect change's teardown does it.)
+ */
+static void test_vhub_held_reset_released_when_the_record_goes(void)
+{
+    PXHCI_DEVICE dev;
+    ULONG resets;
+    ULONG empty;
+
+    vhub_start(2);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 3);
+    hwCmdSlotId = 6;
+    vhub_plug(3, 3);
+    vhub_enumerate_hub(3, 3);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe)");
+    deliver_after_submit();
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe re-armed)");
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(3) << 24, 0);
+    deliver_events();
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "(a device behind port 1 has a record)");
+    dev = &ext.Devices[0];
+    deliver_events();
+    deliver_events();
+    slot_queue_ep0_work();
+    CHECK_EQ(dev->Ep0Queue.Count, 1, "(with a transfer in flight)");
+
+    stuckPortPed = vhub_xport(3);
+    empty = ext.DisownsSettledEmpty;
+    resets = portResets;
+    (void)XhciRegPacket.RH_SetFeaturePortReset(&ext, 3);
+    deliver_after_submit();
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 1,
+             "with a busy record the debt waits for PED, as before");
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(ext.VhubResetsHeld, 1, "(the port-1 reset is held)");
+
+    /* A poll with the record still there changes nothing. */
+    poll_clock_prime();
+    poll_after_ms(1);
+    deliver_after_submit();
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 1, "(still owed)");
+    CHECK_EQ(ext.DisownsSettledEmpty, empty, "(not settled empty)");
+
+    /* The record goes by another route; PED still reads 1. */
+    dev->Ep0Queue.Count = 0;
+    dev->State = XHCI_DEV_STATE_FREE;
+    poll_after_ms(1);
+    deliver_after_submit();
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 0,
+             "the next poll settles the debt with nothing left to protect");
+    CHECK_EQ(ext.DisownsSettledEmpty, empty + 1, "(counted)");
+    CHECK_EQ(portResets, resets + 1, "and the held port-1 reset starts");
+
+    stuckPortPed = 0;
+    vhub_reset_registry();
+}
+
+/*
+ * The start of the round-7 vectors: a hub on root port 3 at switch 2, port 1
+ * reset and enabled, and the device behind it opened and addressed on the
+ * root port's record - the Windows 7 x64 dump's shape (ADDRESSED, then
+ * DISOWNED by the hub's root reset). Returns the record.
+ */
+static PXHCI_DEVICE vhub_addressed_device_on_port3(void)
+{
+    PXHCI_DEVICE dev;
+
+    vhub_start(2);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 3);
+    hwCmdSlotId = 6;
+    vhub_plug(3, 3);                                /* High Speed */
+    vhub_enumerate_hub(3, 3);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe)");
+    deliver_after_submit();
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe re-armed)");
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(3) << 24, 0);
+    deliver_events();
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "(the device behind port 1 opens)");
+    dev = &ext.Devices[0];
+    deliver_events();
+    deliver_events();
+    slot_setup(0x00, 0x05, 2, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    deliver_events();
+    deliver_after_submit();
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_ADDRESSED, "(addressed)");
+    CHECK_EQ(dev->HubPort, 3, "(on the root port's record)");
+    CHECK_EQ(dev->Ep0Queue.Count, 0, "(nothing queued)");
+    CHECK_EQ(dev->ActiveOp, XHCI_DEV_OP_NONE, "(no command outstanding)");
+    return dev;
+}
+
+/*
+ * **Round 7: the port's own device, disowned and idle, on a port that never
+ * drops PED.** b587ad5 settled a debt unconfirmed only with no record on the
+ * port; the Windows 7 x64 dump found root ports whose one record was their own
+ * device - DISOWNED by usbhub's hard reset of the hub, address 0, EP0 empty,
+ * nothing queued - so the debt waited for that record's release and the
+ * release waited for the debt, every port-1 reset was held, and usbhub's
+ * bus-lock watchdog bugchecked 0xFE. Idle and disowned, the debt settles at
+ * the disable; the release it runs is proven by the controller (a Disable
+ * Slot answered Success), and a port-1 reset asked for afterwards is not held.
+ */
+static void test_vhub_root_reset_with_an_idle_disowned_record(void)
+{
+    PXHCI_DEVICE dev;
+    ULONG status;
+    ULONG change;
+    ULONG resets;
+    ULONG empty;
+    ULONG idle;
+    ULONG disabledOut;
+    ULONG slotsDisabled;
+
+    dev = vhub_addressed_device_on_port3();
+
+    stuckPortPed = vhub_xport(3);
+    empty = ext.DisownsSettledEmpty;
+    idle = ext.DisownsSettledIdle;
+    disabledOut = ext.DevicesDisabledOut;
+    slotsDisabled = ext.SlotsDisabled;
+    resets = portResets;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 3), MP_STATUS_SUCCESS,
+             "the hub's root-port reset, on a port that will not drop PED");
+    CHECK_EQ(dev->Flags & XHCI_DEV_FLAG_DISOWNED, XHCI_DEV_FLAG_DISOWNED,
+             "(the record is disowned)");
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 0,
+             "disowned and idle, the record needs no PED: the debt settles "
+             "at the disable");
+    CHECK_EQ(ext.DisownsSettledIdle, idle + 1, "(counted as idle)");
+    CHECK_EQ(ext.DisownsSettledEmpty, empty, "(not as empty)");
+    CHECK_EQ(ext.DevicesDisabledOut, disabledOut + 1,
+             "and the release runs");
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_GONE,
+             "(the record is unwinding, its Disable Slot owed)");
+
+    deliver_after_submit();
+    deliver_events();
+    CHECK_EQ(ext.SlotsDisabled, slotsDisabled + 1,
+             "the slot goes back only on a Disable Slot the controller "
+             "answered");
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_FREE, "and the record is released");
+    CHECK_EQ(portResets, resets, "(synthetic: no PR written)");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "(the hub's reset ends)");
+
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(ext.VhubResetsHeld, 0, "a port-1 reset asked for now is not held");
+    CHECK_EQ(portResets, resets + 1, "it is written to the port at once");
+
+    stuckPortPed = 0;
+    vhub_reset_registry();
+}
+
+/*
+ * **Idle means nothing owed as well as nothing queued**, and the health poll
+ * is the half that collects the debt once the last of it ends. A command
+ * outstanding on the disowned record (set by hand: an Evaluate Context in
+ * flight) keeps the debt through the disable and a poll, and the port-1 reset
+ * stays held; once it has finished the next poll settles the debt as idle and
+ * starts the held reset.
+ */
+static void test_vhub_idle_disowned_record_waits_for_its_command(void)
+{
+    PXHCI_DEVICE dev;
+    ULONG resets;
+    ULONG idle;
+
+    dev = vhub_addressed_device_on_port3();
+    dev->ActiveOp = XHCI_DEV_OP_EVALUATE_MPS;
+
+    stuckPortPed = vhub_xport(3);
+    idle = ext.DisownsSettledIdle;
+    resets = portResets;
+    (void)XhciRegPacket.RH_SetFeaturePortReset(&ext, 3);
+    deliver_after_submit();
+    CHECK_EQ(dev->Flags & XHCI_DEV_FLAG_DISOWNED, XHCI_DEV_FLAG_DISOWNED,
+             "(the record is disowned)");
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 1,
+             "a command outstanding on it keeps the debt");
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(ext.VhubResetsHeld, 1, "(the port-1 reset is held)");
+
+    poll_clock_prime();
+    poll_after_ms(1);
+    deliver_after_submit();
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 1,
+             "and a poll while it is outstanding changes nothing");
+    CHECK_EQ(ext.DisownsSettledIdle, idle, "(not settled idle)");
+
+    /* A command owed and not yet issued is work too (read before the pump
+     * could issue it). */
+    dev->ActiveOp = XHCI_DEV_OP_NONE;
+    dev->PendingOp = XHCI_DEV_OP_EVALUATE_MPS;
+    CHECK_EQ(XhciSlotPortRecordsDisownedIdle(&ext, 3), 0,
+             "a command owed keeps the record busy as one outstanding does");
+    dev->PendingOp = XHCI_DEV_OP_NONE;
+    CHECK_EQ(XhciSlotPortRecordsDisownedIdle(&ext, 3), 1,
+             "(and with neither it is idle)");
+
+    /*
+     * **Idle is not enough without the disown.** The command finishes while
+     * the record is no longer marked disowned - the shape a re-enumeration
+     * that took it back leaves (set by hand) - and the poll must not settle:
+     * the release it would run tears down a device usbport believes in.
+     */
+    dev->Flags &= ~XHCI_DEV_FLAG_DISOWNED;
+    dev->ActiveOp = XHCI_DEV_OP_NONE;
+    poll_after_ms(1);
+    deliver_after_submit();
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 1,
+             "an idle record that is not disowned keeps the debt");
+    CHECK(dev->State != XHCI_DEV_STATE_GONE &&
+              dev->State != XHCI_DEV_STATE_FREE,
+          "and is not torn down");
+
+    dev->Flags |= XHCI_DEV_FLAG_DISOWNED;
+    poll_after_ms(1);
+    deliver_after_submit();
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 0,
+             "once it has finished the next poll settles the debt");
+    CHECK_EQ(ext.DisownsSettledIdle, idle + 1, "(counted as idle)");
+    CHECK_EQ(portResets, resets + 1, "and the held port-1 reset starts");
+    deliver_events();
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_FREE,
+             "(the record released through its Disable Slot)");
+
+    stuckPortPed = 0;
+    vhub_reset_registry();
+}
+
+/*
+ * **Round 8: an address usbport has freed and handed on, still held here by an
+ * idle record whose port nobody has disabled yet.** The Windows 7 x86 dump:
+ * usbhub hard-reset a hub just after its device was addressed, usbport removed
+ * the device and freed its address at once, and the record kept it - Addressed,
+ * EP0 removed, idle - because only the root-port disable gives an address up,
+ * and that disable was queued behind the next enumeration, which this driver
+ * kept refusing for the same address. usbhub's watchdog fired (0xFE).
+ *
+ * The claim is the proof: the next SET_ADDRESS for that address takes it, with
+ * no port disable first. The old record keeps its slot, DCBAA entry and ring;
+ * the port's disable, arriving afterwards, still finds and releases it by
+ * position, and leaves the newcomer alone.
+ */
+static void test_slot_address_reclaim_r8(void)
+{
+    PXHCI_DEVICE old;
+    PXHCI_DEVICE dev;
+    ULONG entry;
+    ULONG enqueue;
+    ULONG dequeue;
+    ULONG cycle;
+    ULONG completions;
+    ULONG idle;
+    ULONG disabledOut;
+
+    old = slot_enumerate_addressed(3, 3, 5, 1);
+    CHECK_EQ(old->State, XHCI_DEV_STATE_ADDRESSED, "(a device at address 1)");
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
+    CHECK_EQ(old->Flags, XHCI_DEV_FLAG_ADDRESS_VALID | XHCI_DEV_FLAG_DCBAA_SET,
+             "(EP0 removed, the address kept: the dump's flags, 0x06)");
+    entry = dcbaa_entry(5);
+    enqueue = old->Ep0Ring.Enqueue;
+    dequeue = old->Ep0Ring.Dequeue;
+    cycle = old->Ep0Ring.Cycle;
+    CHECK(entry != 0, "(its DCBAA entry is set)");
+    idle = ext.DisownsSettledIdle;
+
+    /* Another root port's device, given address 1 by usbport. */
+    hwCmdSlotId = 6;
+    slot_attach(1, 3);
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "(a device on another port opens)");
+    deliver_events();
+    deliver_events();
+    dev = &ext.Devices[1];
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "(in Default)");
+
+    slot_setup(0x00, 0x05, 1, 0);
+    completions = completeTransferCalls;
+    CHECK_EQ(XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                          &slotTransfer, &slotSgList),
+             MP_STATUS_SUCCESS, "SET_ADDRESS(1) is taken");
+    CHECK(dev->PendingSetAddress != NULL, "and held for its Address Device");
+    CHECK_EQ(ext.AddressReclaims, 1, "the address is reclaimed, counted");
+    CHECK_EQ(ext.AddressRefusalsBound + ext.AddressRefusalsBusy +
+                 ext.AddressRefusalsTopology + ext.AddressRefusalsOwner +
+                 ext.AddressRefusalsInvalid,
+             0, "and nothing was refused");
+    CHECK_EQ(old->Flags, XHCI_DEV_FLAG_DCBAA_SET,
+             "the old record gives the address up (0x06 -> 0x04)");
+    CHECK_EQ(old->DeviceAddress, 0, "the number as well as the flag");
+    CHECK_EQ(old->TopoAddress, 0, "and any topology key");
+    CHECK_EQ(old->State, XHCI_DEV_STATE_ADDRESSED, "keeping its state");
+    CHECK_EQ(old->SlotId, 5, "its slot - no Disable Slot for a software key");
+    CHECK_EQ(old->HubPort, 3, "its port");
+    CHECK_EQ(dcbaa_entry(5), entry, "its DCBAA entry");
+    CHECK_EQ(old->Ep0Ring.Enqueue, enqueue, "and its ring's enqueue");
+    CHECK_EQ(old->Ep0Ring.Dequeue, dequeue, "dequeue");
+    CHECK_EQ(old->Ep0Ring.Cycle, cycle, "and cycle");
+    CHECK_EQ(old->Flags & XHCI_DEV_FLAG_DISOWNED, 0, "not disowned");
+
+    deliver_events();               /* Address Device (BSR = 0) completes */
+    deliver_after_submit();
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_ADDRESSED, "the newcomer is addressed");
+    CHECK_EQ(dev->DeviceAddress, 1, "at address 1");
+    CHECK_EQ(dev->Flags & XHCI_DEV_FLAG_ADDRESS_VALID,
+             XHCI_DEV_FLAG_ADDRESS_VALID, "valid");
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "its SET_ADDRESS completed once");
+    CHECK_EQ(lastCompletedStatus, 0, "with success");
+    CHECK_EQ(ext.DisownsSettledIdle, idle,
+             "a reclaim is not a disown: option 1 does not count it");
+    CHECK_EQ(XhciSlotPortRecordsDisownedIdle(&ext, 3), 0,
+             "nor treat the old record as disowned");
+
+    /* Claim, then the old port's disable. */
+    disabledOut = ext.DevicesDisabledOut;
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 3),
+             MP_STATUS_SUCCESS, "the old port's disable arrives late");
+    deliver_events();
+    deliver_events();
+    CHECK_EQ(ext.DevicesDisabledOut, disabledOut + 1,
+             "and releases the old record by its position");
+    CHECK_EQ(old->State, XHCI_DEV_STATE_FREE, "through its Disable Slot");
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_ADDRESSED, "the newcomer is untouched");
+    CHECK_EQ(dev->DeviceAddress, 1, "at its address");
+    CHECK_EQ(dev->Flags & XHCI_DEV_FLAG_ADDRESS_VALID,
+             XHCI_DEV_FLAG_ADDRESS_VALID, "still valid");
+    CHECK_EQ(ext.AddressReclaims, 1, "(one reclaim, no second)");
+}
+
+/* The r8 pair before the claim: `*old` at address 1 on port 3, EP0 removed;
+ * the returned record on port 1 in Default, bound to `slotEndpoint`. */
+static PXHCI_DEVICE reclaim_pair(PXHCI_DEVICE *old)
+{
+    *old = slot_enumerate_addressed(3, 3, 5, 1);
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
+    hwCmdSlotId = 6;
+    slot_attach(1, 3);
+    (void)slot_open(0, UsbHighSpeed, 64);
+    deliver_events();
+    deliver_events();
+    return &ext.Devices[1];
+}
+
+/* One SET_ADDRESS(1) from the claimant, its counter read before anything the
+ * deferred work could do; returns whether it was refused. The completion is
+ * delivered by the caller once the holder is put back. */
+static ULONG reclaim_refused(PXHCI_DEVICE claimant, PULONG counter,
+                             const char *what)
+{
+    ULONG before;
+    ULONG refused;
+
+    before = *counter;
+    slot_setup(0x00, 0x05, 1, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    refused = (claimant->PendingSetAddress == NULL) ? 1UL : 0UL;
+    CHECK_EQ(*counter, before + 1, what);
+    return refused;
+}
+
+/*
+ * The holder the claim may not take from, one condition at a time: anything
+ * bound (EP0's flag, EP0's extension, another endpoint's), anything in flight
+ * (a queued transfer, an unreclaimed TRB, a halt, a command outstanding or
+ * owed, a SET_ADDRESS held, a state other than Addressed), a topology key that
+ * is not its own or a record behind it, and every inconsistent owner. Each is
+ * refused, counted by why, and leaves the holder's address and node alone.
+ * Then, with each put back, the claim succeeds.
+ */
+static void test_slot_address_reclaim_refusals(void)
+{
+    PXHCI_DEVICE old;
+    PXHCI_DEVICE dev;
+    PXHCI_DEVICE other;
+    XHCI_ENDPOINT stray;
+
+    dev = reclaim_pair(&old);
+    other = &ext.Devices[7];
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_DEFAULT, "(the claimant in Default)");
+    CHECK_EQ(old->DeviceAddress, 1, "(the holder at 1)");
+    /* A node of its own under 1, which no refusal may prune. */
+    CHECK(XhciTopoAttachRoot(&ext.Topology, 1, old->RootPort, 1,
+                             XHCI_SPEED_HIGH) != 0, "(the holder's node)");
+    old->TopoAddress = 1;
+
+    old->Flags |= XHCI_DEV_FLAG_EP0_OPEN;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBound, "EP0's flag: bound"),
+          "refused while EP0's flag is set");
+    old->Flags &= ~XHCI_DEV_FLAG_EP0_OPEN;
+    deliver_after_submit();
+
+    old->EndpointExtension = &stray;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBound,
+                          "EP0's extension: bound"),
+          "refused while EP0's extension is set");
+    old->EndpointExtension = NULL;
+    deliver_after_submit();
+
+    old->Endpoints[0].Dci = 3;
+    old->Endpoints[0].EndpointExtension = &stray;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBound,
+                          "another endpoint bound"),
+          "refused while another endpoint is bound");
+    old->Endpoints[0].EndpointExtension = NULL;
+    old->Endpoints[0].Dci = 0;
+    deliver_after_submit();
+
+    old->Ep0Queue.Count = 1;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBusy, "a queued transfer"),
+          "refused with a transfer queued");
+    old->Ep0Queue.Count = 0;
+    deliver_after_submit();
+
+    old->Ep0Ring.Enqueue++;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBusy, "an unreclaimed TRB"),
+          "refused with a TRB between dequeue and enqueue");
+    old->Ep0Ring.Enqueue--;
+    deliver_after_submit();
+
+    old->Ep0Quiesce.Flags |= XHCI_EPQ_HALTED;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBusy, "a halt"),
+          "refused while EP0 is halted");
+    old->Ep0Quiesce.Flags &= ~XHCI_EPQ_HALTED;
+    deliver_after_submit();
+
+    old->ActiveOp = XHCI_DEV_OP_EVALUATE_MPS;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBusy, "a command outstanding"),
+          "refused with a command outstanding");
+    old->ActiveOp = XHCI_DEV_OP_NONE;
+    deliver_after_submit();
+
+    old->PendingSetAddress = &slotTransfer2;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBusy, "a SET_ADDRESS held"),
+          "refused with a SET_ADDRESS held");
+    old->PendingSetAddress = NULL;
+    deliver_after_submit();
+
+    CHECK_EQ(old->State, XHCI_DEV_STATE_ADDRESSED, "(still Addressed)");
+    old->PendingOp = XHCI_DEV_OP_EVALUATE_MPS;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBusy, "a command owed"),
+          "refused with a command owed");
+    CHECK_EQ(old->ActiveOp, XHCI_DEV_OP_NONE,
+             "(the owed command was not issued meanwhile)");
+    old->PendingOp = XHCI_DEV_OP_NONE;
+    deliver_after_submit();
+    CHECK_EQ(old->ActiveOp, XHCI_DEV_OP_NONE, "(nor afterwards)");
+    /* The pump spends the faked Evaluate Context, which has nothing to
+     * evaluate, by failing the record; put the holder back. */
+    old->State = XHCI_DEV_STATE_ADDRESSED;
+
+    old->State = XHCI_DEV_STATE_FAILED;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsBusy, "not Addressed"),
+          "refused from a record that is not Addressed");
+    old->State = XHCI_DEV_STATE_ADDRESSED;
+    deliver_after_submit();
+
+    old->TopoAddress = 9;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsTopology,
+                          "a topology key not its own"),
+          "refused with another address's topology key");
+    old->TopoAddress = 1;
+    deliver_after_submit();
+
+    other->State = XHCI_DEV_STATE_GONE;
+    other->HubPort = 0;
+    other->RootPort = old->RootPort;
+    other->Tier = 1;
+    other->RouteString = 2;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsTopology,
+                          "a record behind it, even unwinding"),
+          "refused with a record behind it");
+    deliver_after_submit();
+
+    /* A holder behind a hub: a grandchild on its route blocks, one on a
+     * sibling's route does not (below). */
+    old->Tier = 1;
+    old->RouteString = 3;
+    other->Tier = 2;
+    other->RouteString = 0x23;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsTopology,
+                          "a record deeper on its route"),
+          "refused with a record deeper on its route");
+    deliver_after_submit();
+
+    other->Flags = XHCI_DEV_FLAG_ADDRESS_VALID;
+    other->DeviceAddress = 1;
+    other->Tier = 0;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsOwner, "two holders"),
+          "refused when two records hold it");
+    other->Flags = 0;
+    deliver_after_submit();
+
+    other->PendingSetAddress = &slotTransfer2;
+    old->Flags &= ~XHCI_DEV_FLAG_ADDRESS_VALID;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsOwner,
+                          "another assignment in progress"),
+          "refused while another record is being given it");
+    other->PendingSetAddress = NULL;
+    deliver_after_submit();
+
+    dev->Flags |= XHCI_DEV_FLAG_ADDRESS_VALID;
+    dev->DeviceAddress = 1;
+    CHECK(reclaim_refused(dev, &ext.AddressRefusalsOwner, "the claimant itself"),
+          "refused when the claimant already holds it");
+    dev->Flags &= ~XHCI_DEV_FLAG_ADDRESS_VALID;
+    dev->DeviceAddress = 0;
+    old->Flags |= XHCI_DEV_FLAG_ADDRESS_VALID;
+    deliver_after_submit();
+
+    CHECK_EQ(old->DeviceAddress, 1, "every refusal left the holder at 1");
+    CHECK(XhciTopoFind(&ext.Topology, 1) != NULL, "and its node in place");
+    CHECK_EQ(old->TopoAddress, 1, "with its key");
+    CHECK_EQ(old->Flags & XHCI_DEV_FLAG_ADDRESS_VALID,
+             XHCI_DEV_FLAG_ADDRESS_VALID, "valid");
+    CHECK_EQ(ext.AddressReclaims, 0, "and reclaimed nothing");
+
+    /* A record on a sibling's route is not behind the holder. */
+    other->State = XHCI_DEV_STATE_GONE;
+    other->Tier = 2;
+    other->RouteString = 0x24;
+    slot_setup(0x00, 0x05, 1, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    CHECK(dev->PendingSetAddress != NULL,
+          "with each put back, the claim is taken");
+    CHECK_EQ(ext.AddressReclaims, 1, "as a reclaim");
+    CHECK_EQ(old->DeviceAddress, 0, "from the holder");
+    CHECK(XhciTopoFind(&ext.Topology, 1) == NULL, "its node goes with it");
+    old->Tier = 0;
+    old->RouteString = 0;
+    other->State = XHCI_DEV_STATE_FREE;
+    other->RootPort = 0;
+    other->Tier = 0;
+    other->RouteString = 0;
+    other->DeviceAddress = 0;
+    deliver_events();
+    deliver_after_submit();
+    CHECK_EQ(dev->DeviceAddress, 1, "(the newcomer is addressed)");
+}
+
+/*
+ * The interleavings the controller lock serializes: the old port disabled
+ * before the claim (nothing to reclaim), and the old device re-entering at
+ * address 0 before the claim (its re-entry gives the address up itself). In
+ * both the claim finds no holder and counts nothing.
+ */
+static XHCI_ENDPOINT slotEndpointOld;
+
+static void test_slot_address_reclaim_interleavings(void)
+{
+    PXHCI_DEVICE old;
+    PXHCI_DEVICE dev;
+    ULONG i;
+
+    /* Disable first. */
+    dev = reclaim_pair(&old);
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 3),
+             MP_STATUS_SUCCESS, "(the old port is disabled first)");
+    deliver_events();
+    CHECK_EQ(old->Flags & XHCI_DEV_FLAG_ADDRESS_VALID, 0,
+             "(the disown gave the address up)");
+    slot_setup(0x00, 0x05, 1, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    CHECK(dev->PendingSetAddress != NULL, "the claim is taken");
+    CHECK_EQ(ext.AddressReclaims, 0, "with nothing to reclaim");
+    deliver_events();
+    deliver_after_submit();
+    CHECK_EQ(dev->DeviceAddress, 1, "(addressed)");
+
+    /* Address-0 re-entry first, through its own handle. */
+    old = slot_enumerate_addressed(3, 3, 5, 1);
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
+    slot_reset_port(3);
+    slot_properties(0, UsbHighSpeed, 64);
+    for (i = 0; i < sizeof(slotEndpointOld) / sizeof(ULONG); i++) {
+        ((ULONG *)&slotEndpointOld)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_now(&slotEndpointOld), MP_STATUS_SUCCESS,
+             "(the old device re-enters at address 0)");
+    deliver_events();
+    CHECK_EQ(old->DeviceAddress, 0, "(its re-entry gave the address up)");
+    hwCmdSlotId = 6;
+    slot_attach(1, 3);
+    (void)slot_open(0, UsbHighSpeed, 64);
+    deliver_events();
+    deliver_events();
+    dev = &ext.Devices[1];
+    slot_setup(0x00, 0x05, 1, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    CHECK(dev->PendingSetAddress != NULL, "the claim is taken");
+    CHECK_EQ(ext.AddressReclaims, 0, "again with nothing to reclaim");
+    deliver_events();
+    deliver_after_submit();
+    CHECK_EQ(dev->DeviceAddress, 1, "(addressed)");
+    CHECK_EQ(old->State, XHCI_DEV_STATE_DEFAULT,
+             "and the re-entered record carries on at Default");
+}
+
+/*
+ * **A hub's address reclaimed.** An empty real hub at 2 with its topology node,
+ * EP0 removed, idle: the claim detaches its node before clearing the address,
+ * so the newcomer builds its own node under 2, and the old hub's later
+ * disable - its key spent, its address 0 - detaches nothing of the newcomer's.
+ */
+static void test_slot_address_reclaim_hub(void)
+{
+    PXHCI_DEVICE hub;
+    PXHCI_DEVICE dev;
+
+    hub = slot_enumerate_addressed(3, 3, 5, 2);
+    topo_reply_buffer(hubMarkDescriptor, 9);
+    topo_submit_and_complete(hub, 0xA0, 0x06, 0x0000, 0, 9);
+    deliver_events();
+    CHECK_EQ(hub->TopoAddress, 2, "(a hub with its node at 2)");
+    CHECK(XhciTopoFind(&ext.Topology, 2) != NULL, "(the node)");
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
+
+    hwCmdSlotId = 6;
+    slot_attach(1, 3);
+    (void)slot_open(0, UsbHighSpeed, 64);
+    deliver_events();
+    deliver_events();
+    dev = &ext.Devices[1];
+    slot_setup(0x00, 0x05, 2, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    CHECK_EQ(ext.AddressReclaims, 1, "the empty hub's address is reclaimed");
+    CHECK(XhciTopoFind(&ext.Topology, 2) == NULL, "its node detached");
+    CHECK_EQ(hub->TopoAddress, 0, "its key spent");
+    CHECK_EQ(hub->DeviceAddress, 0, "its address cleared");
+    deliver_events();
+    deliver_after_submit();
+    CHECK_EQ(dev->DeviceAddress, 2, "(the newcomer at 2)");
+
+    topo_reply_buffer(hubMarkDescriptor, 9);
+    topo_submit_and_complete_slot(dev, 6, 0xA0, 0x06, 0x0000, 0, 9);
+    deliver_events();
+    CHECK(XhciTopoFind(&ext.Topology, 2) != NULL, "the newcomer's node at 2");
+    CHECK_EQ(dev->TopoAddress, 2, "(its key)");
+
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 3),
+             MP_STATUS_SUCCESS, "the old hub's port is disabled");
+    deliver_events();
+    deliver_events();
+    CHECK_EQ(hub->State, XHCI_DEV_STATE_FREE, "(the old hub released)");
+    CHECK(XhciTopoFind(&ext.Topology, 2) != NULL,
+          "and the newcomer's node survives it");
+    CHECK_EQ(dev->TopoAddress, 2, "with its key");
+}
+
+/*
+ * **Both assignment paths share one namespace.** A virtual hub's SET_ADDRESS
+ * reclaims from an idle real holder and is refused by a bound one; a real
+ * device's SET_ADDRESS is refused an address a virtual hub holds.
+ */
+static void test_vhub_address_claims(void)
+{
+    PXHCI_DEVICE dev;
+    PXHCI_DEVICE direct;
+
+    dev = vhub_addressed_device_on_port3();
+    CHECK_EQ(dev->DeviceAddress, 2, "(the device behind hub 3 at 2)");
+    CHECK_EQ(ext.Vhub[2].Address, 3, "(the hub at 3)");
+
+    (void)vhub_control(&vhubEp0, 0x00, 0x05, 2, 0, 0);
+    CHECK(lastCompletedStatus != 0, "a hub's SET_ADDRESS to a bound holder's "
+                                    "address is failed");
+    CHECK_EQ(ext.AddressRefusalsBound, 1, "counted as bound");
+    CHECK_EQ(ext.Vhub[2].Address, 3, "the hub keeps its address");
+    CHECK_EQ(dev->DeviceAddress, 2, "and the holder its own");
+
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint, USBPORT_ENDPOINT_REMOVE);
+    (void)vhub_control(&vhubEp0, 0x00, 0x05, 2, 0, 0);
+    CHECK_EQ(lastCompletedStatus, 0, "once the holder is idle and unbound");
+    CHECK_EQ(ext.AddressReclaims, 1, "its address is reclaimed");
+    CHECK_EQ(ext.Vhub[2].Address, 2, "for the hub");
+    CHECK_EQ(dev->Flags & XHCI_DEV_FLAG_ADDRESS_VALID, 0,
+             "and the holder gives it up");
+    CHECK_EQ(dev->DeviceAddress, 0, "(the number too)");
+
+    /* A stale node under the next address a hub takes is pruned, and a
+     * record's key on it spent: the hub itself is never a node. */
+    CHECK(XhciTopoAttachRoot(&ext.Topology, 7, vhub_xport(3), 1,
+                             XHCI_SPEED_HIGH) != 0, "(a stale node at 7)");
+    dev->TopoAddress = 7;
+    (void)vhub_control(&vhubEp0, 0x00, 0x05, 7, 0, 0);
+    CHECK_EQ(ext.Vhub[2].Address, 7, "the hub moves to a free address");
+    CHECK(XhciTopoFind(&ext.Topology, 7) == NULL, "the stale node is pruned");
+    CHECK_EQ(dev->TopoAddress, 0, "and the key on it spent");
+    vhub_reset_registry();
+
+    /* A real device refused an address a hub holds. */
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    vhub_plug(2, 1);
+    vhub_enumerate_hub(2, 4);
+    CHECK_EQ(ext.Vhub[1].Address, 4, "(a hub on port 2 at 4)");
+    hwCmdSlotId = 5;
+    vhub_plug(3, 3);
+    CHECK_EQ(vhub_root_reset(3), MP_STATUS_SUCCESS, "(a direct device's reset)");
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "(its address-0 open)");
+    deliver_events();
+    deliver_events();
+    direct = &ext.Devices[0];
+    CHECK_EQ(direct->State, XHCI_DEV_STATE_DEFAULT, "(in Default)");
+    slot_setup(0x00, 0x05, 4, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    CHECK(direct->PendingSetAddress == NULL,
+          "a real SET_ADDRESS to a hub's address is refused");
+    CHECK_EQ(ext.AddressRefusalsOwner, 1, "counted as another owner's");
+    deliver_after_submit();
+    CHECK(lastCompletedStatus != 0, "and failed");
+    CHECK_EQ(ext.Vhub[1].Address, 4, "the hub keeps it");
+    slot_setup(0x00, 0x05, 5, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    CHECK(direct->PendingSetAddress != NULL, "a free address is taken");
+    deliver_events();
+    deliver_after_submit();
+    CHECK_EQ(direct->DeviceAddress, 5, "(addressed)");
+    vhub_reset_registry();
+}
+
+/*
+ * The held status-change transfer owns no TRB, so an abort finds it in the
+ * binding and nothing later completes it (3.4); and a REMOVE of the pipe with
+ * one held answers it as cancelled.
+ */
+static void test_vhub_abort_finds_the_held_pipe(void)
+{
+    ULONG completions;
+    ULONG aborted;
+    ULONG moved;
+
+    vhub_start(1);
+    vhub_plug(2, 1);
+    vhub_enumerate_hub(2, 5);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe)");
+    deliver_after_submit();
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "the pipe is held");
+    deliver_after_submit();
+    CHECK(ext.VhubBind[1].Held == &vhubPipeTransfer, "with no change to carry");
+
+    completions = completeTransferCalls;
+    aborted = ext.TransfersAborted;
+    moved = 99;
+    XhciRegPacket.AbortTransfer(&ext, &vhubPipe, &vhubPipeTransfer, &moved);
+    CHECK_EQ(ext.TransfersAborted, aborted + 1, "the abort finds it");
+    CHECK_EQ(moved, 0, "having moved nothing");
+    CHECK(ext.VhubBind[1].Held == NULL, "and it is no longer held");
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(2) << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.Vhub[1].P1Changes & XHCI_HUB_C_PORT_RESET,
+             XHCI_HUB_C_PORT_RESET, "a later change is latched");
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "and only the port request completes - never the aborted pipe");
+    CHECK(lastCompletedEndpoint == &vhubEp0, "(that one)");
+
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "a new pipe transfer");
+    deliver_after_submit();
+    CHECK_EQ(vhubPipeData[0], 0x02, "carries the change at once");
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "and the next one");
+    deliver_after_submit();
+    CHECK_EQ(vhubPipeData[0], 0x02,
+             "(completes too: the change stays until usbhub clears it)");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 20, 1, 0);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "held again");
+    deliver_after_submit();
+    completions = completeTransferCalls;
+    XhciRegPacket.SetEndpointState(&ext, &vhubPipe, USBPORT_ENDPOINT_REMOVE);
+    deliver_after_submit();
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "a REMOVE of the pipe answers the held transfer");
+    CHECK_EQ(lastCompletedStatus, (LONG)XHCI_USBD_STATUS_CANCELED,
+             "as cancelled");
+
+    /* And the hub goes with its device at 1, at the unplug - before the
+     * disable an NT 5.x usbhub then sends and an NT 6.x one does not (task
+     * 24.3.4). */
+    vhub_unplug(2);
+    CHECK_EQ(ext.Vhub[1].Present, 0, "the virtual hub is dropped");
+    CHECK_EQ(ext.VhubDropped, 1, "counted");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 2),
+             MP_STATUS_SUCCESS, "usbhub's disable, where it comes");
+    CHECK_EQ(ext.VhubDropped, 1, "drops nothing more");
+    {
+        ULONG status;
+        ULONG change;
+
+        vhub_root_status(2, &status, &change);
+        CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, 0,
+                 "with the hub gone the root port reports today's shadow, and "
+                 "no reset the hub's views owned was left latched in it");
+        CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION,
+                 XHCI_HUB_C_PORT_CONNECTION, "only the unplug");
+    }
+    CHECK_EQ(vhub_control(&vhubEp0, 0x80, 0x06, 0x0100, 0, 18),
+             MP_STATUS_SUCCESS, "a transfer through its old EP0");
+    CHECK_EQ(lastCompletedStatus, (LONG)XHCI_USBD_STATUS_CANCELED,
+             "is failed, never left queued for retry");
+    vhub_reset_registry();
+}
+
+/*
+ * **Value 2 through the root-port callbacks** (design record 12 section 3.8):
+ * a cancelled hub install - RH_ClearFeaturePortEnable - answers the held
+ * status-change transfer as cancelled, drops the hub's bindings and address,
+ * leaves the record and the root port connected but not enabled, and the
+ * next root reset enumerates the hub again without a restart; then a
+ * power-off and a power-on, the physical port's power following, the root
+ * port reporting neither powered nor connected in between and a connect
+ * change after, so usbhub enumerates the hub afresh.
+ */
+static void test_vhub_always_disable_and_power_cycle(void)
+{
+    ULONG status;
+    ULONG change;
+    ULONG cancels;
+    ULONG xport;
+
+    vhub_start(2);
+    hwCmdSlotId = 6;
+    xport = vhub_xport(3);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 3);
+    vhub_plug(3, 3);                                /* High Speed */
+    vhub_enumerate_hub(3, 3);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe)");
+    deliver_after_submit();
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe re-armed)");
+    deliver_after_submit();
+    CHECK(ext.VhubBind[2].Held == &vhubPipeTransfer, "(held)");
+
+    cancels = ext.VhubPipeCancels;
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 3),
+             MP_STATUS_SUCCESS, "usbport lets go of the hub");
+    deliver_after_submit();
+    CHECK_EQ(ext.VhubPipeCancels, cancels + 1,
+             "the held status-change transfer is answered");
+    CHECK_EQ(lastCompletedStatus, (LONG)XHCI_USBD_STATUS_CANCELED,
+             "as cancelled");
+    CHECK(ext.VhubBind[2].Held == NULL, "and no longer held");
+    CHECK(ext.VhubBind[2].Ep0 == NULL, "EP0 unbound");
+    CHECK(ext.VhubBind[2].Pipe == NULL, "the pipe unbound");
+    CHECK_EQ(ext.Vhub[2].Present, 1, "the record stays");
+    CHECK_EQ(ext.Vhub[2].Address, 0, "with no address");
+    CHECK_EQ(ext.Vhub[2].DevState, XHCI_VHUB_DEV_DEFAULT, "in Default");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(status & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_POWER |
+                       XHCI_HUB_PORT_ENABLE),
+             XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_POWER,
+             "the root port reports the hub connected and not enabled");
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, 0,
+             "with no connect change: the hub was never unplugged");
+
+    CHECK_EQ(vhub_root_reset(3), MP_STATUS_SUCCESS, "the next root reset");
+    CHECK_EQ(ext.VhubArmedPort, 3, "arms the hub's open again");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(status & XHCI_HUB_PORT_ENABLE, XHCI_HUB_PORT_ENABLE,
+             "the upstream enabled again");
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "with its reset's end latched");
+    CHECK_EQ(vhub_open_ep0(&vhubEp0, 0), MP_STATUS_SUCCESS,
+             "the hub's EP0 at address 0");
+    CHECK_EQ(vhubEp0.Flags & XHCI_ENDPOINT_FLAG_VHUB, XHCI_ENDPOINT_FLAG_VHUB,
+             "is the hub's, without a controller restart");
+    CHECK_EQ(ext.VhubCreated, ext.RootHub.PortCount,
+             "and no hub was stood up anew for it");
+    (void)vhub_control(&vhubEp0, 0x00, 0x05, 3, 0, 0);
+    CHECK_EQ(ext.Vhub[2].Address, 3, "(addressed again)");
+
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortPower(&ext, 3),
+             MP_STATUS_SUCCESS, "RH_ClearFeaturePortPower");
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PP, 0,
+             "takes the physical port's power, as today");
+    CHECK_EQ(ext.Vhub[2].UpPower, 0, "and the upstream's");
+    CHECK_EQ(ext.Vhub[2].Address, 0, "the hub abandoned");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(status & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_POWER |
+                       XHCI_HUB_PORT_ENABLE),
+             0, "the root port reports neither powered nor connected");
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortPower(&ext, 3), MP_STATUS_SUCCESS,
+             "RH_SetFeaturePortPower");
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PP, XHCI_PORTSC_PP,
+             "powers the physical port");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(status & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_POWER),
+             XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_POWER,
+             "and the root port reports the hub connected again");
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, XHCI_HUB_C_PORT_CONNECTION,
+             "with a connect change, so usbhub enumerates it afresh");
+    vhub_reset_registry();
+}
+
+/*
+ * **Suspend and resume through the callbacks at 1** (design record 12
+ * section 3.5): usbhub suspends the root port - to it, the virtual hub - and
+ * the physical port goes to U3; its resume is the existing resume body with
+ * its timer, and the completed resume is the upstream view's C_PORT_SUSPEND,
+ * stripped from the shadow so the root port reports it from one place. Then
+ * port 1's suspend and resume through the hub's own requests: the same
+ * physical port, the change on the status-change pipe and never on the root
+ * port.
+ */
+/*
+ * Roadmap 24.4: a port-1 resume through the virtual hub's SubmitTransfer on
+ * the Version 300 tier. usbport holds EpList there, so the resume's 20 ms
+ * timer is owed rather than armed, and the next UNLOCKED context - here the
+ * health poll - makes it. Enumerated on the 200 tier, because the model does
+ * not play NT 6.x usbport's endpoint polling that delivers completions there;
+ * the tier is then switched by hand, which is what the flag's own comment
+ * allows a vector to do.
+ */
+static void test_nt6_arm_vhub_port1_resume(void)
+{
+    ULONG xport;
+    ULONG legacy;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_plug(2, 1);                                /* Full Speed */
+    vhub_enumerate_hub(2, 5);
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2);
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.Vhub[1].P1Enabled, 1, "(port 1 enabled by its reset)");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 20, 1, 0);
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 2, 1, 0);
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(xport) / 4]), XHCI_PLS_U3,
+             "(port 1 suspended through the hub)");
+
+    ext.ArmThroughExOnly = 1;
+    XhciRegPacket.UsbPortRequestAsyncCallbackEx = hc_async_callback_ex;
+    exCalls = 0;
+    exAnswer = 0;
+    legacy = asyncRequests;
+    asyncCallback = NULL;
+
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 2, 1, 0);
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(xport) / 4]), XHCI_PLS_RESUME,
+             "CLEAR_PORT_FEATURE(1, PORT_SUSPEND) resumes the port");
+    CHECK_EQ(exCalls, 0,
+             "and arms nothing from inside SubmitTransfer, under EpList");
+    CHECK_EQ(asyncRequests, legacy, "through either service");
+    CHECK_EQ(ext.RootHub.Ports[1].ArmPending, 1, "the resume's timer is owed");
+
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(exCalls, 1, "the health poll makes it");
+    CHECK_EQ(asyncPortContext.Operation, XHCI_PORT_OP_RESUME,
+             "the resume's end");
+    CHECK_EQ(asyncMs, XHCI_PORT_RESUME_TIMER_MS, "at T(DRSMDN)");
+    CHECK_EQ(asyncPortContext.HubPort, 2, "on the hub's port");
+
+    hw_fire_port_timer();
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(xport) / 4]), XHCI_PLS_U0,
+             "and the timer ends the resume signalling");
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.Vhub[1].P1Changes & XHCI_HUB_C_PORT_SUSPEND,
+             XHCI_HUB_C_PORT_SUSPEND, "port 1's C_PORT_SUSPEND follows");
+
+    /*
+     * The device behind port 1: its address-0 open and its SET_ADDRESS, both
+     * endpoint callbacks that pump a command (Enable Slot, Address Device).
+     * Each watchdog is owed and made by the event DPC that follows.
+     */
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    exCalls = 0;
+    usbportLockModel++;
+    CHECK_EQ(slot_open(0, UsbFullSpeed, 64), MP_STATUS_SUCCESS,
+             "the device's address-0 open, under usbport's MP-call lock");
+    usbportLockModel--;
+    CHECK_EQ(exCalls, 0, "arms nothing");
+    CHECK_EQ(ext.CommandArmOwed, 1, "its Enable Slot's watchdog is owed");
+    deliver_events();
+    deliver_events();
+    CHECK(exCalls >= 1, "the event DPCs make the arms owed");
+    CHECK_EQ(ext.CommandArmOwed, 0, "(nothing owed once they ran)");
+    CHECK_EQ(ext.Devices[0].State, XHCI_DEV_STATE_DEFAULT,
+             "(the chain reached Default)");
+    exCalls = 0;
+    slot_setup(0x00, 0x05, 8, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    CHECK_EQ(exCalls, 0,
+             "SET_ADDRESS's Address Device, pumped inside SubmitTransfer, "
+             "arms nothing there");
+    CHECK_EQ(ext.CommandArmOwed, 1, "(owed)");
+    usbportLockModel++;
+    XhciRegPacket.PollEndpoint(&ext, &slotEndpoint);
+    usbportLockModel--;
+    CHECK_EQ(exCalls, 0,
+             "PollEndpoint's drain, under usbport's EpList, does not make it");
+    CHECK_EQ(ext.CommandArmOwed, 1, "(still owed)");
+    deliver_events();
+    CHECK_EQ(ext.Devices[0].DeviceAddress, 8, "the device is addressed");
+    ext.ArmThroughExOnly = 0;
+}
+
+static void test_vhub_suspend_resume_through_the_callbacks(void)
+{
+    ULONG status;
+    ULONG change;
+    ULONG xport;
+    ULONG resumed;
+    ULONG stalls;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_plug(2, 1);                                /* Full Speed */
+    vhub_enumerate_hub(2, 5);
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2);
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PED, XHCI_PORTSC_PED,
+             "(the physical port enabled by the hub's resets)");
+
+    resumed = ext.RhPortsResumed;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "RH_SetFeaturePortSuspend on the hub's port");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(xport) / 4]), XHCI_PLS_U3,
+             "suspends the physical port");
+    CHECK_EQ(ext.Vhub[1].UpSuspend, 1, "the upstream view suspended");
+    CHECK_EQ(ext.Vhub[1].PhysSuspended, 1, "owning the port's suspend");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(status & XHCI_HUB_PORT_SUSPEND, XHCI_HUB_PORT_SUSPEND,
+             "the root port reports it suspended");
+    CHECK_EQ(change & XHCI_HUB_C_PORT_SUSPEND, 0,
+             "and latches nothing on entry");
+
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "RH_ClearFeaturePortSuspend");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(xport) / 4]), XHCI_PLS_RESUME,
+             "starts resume signalling through the existing body");
+    CHECK_EQ(ext.RhPortsResumed, resumed + 1, "(counted as today's resume)");
+    CHECK_EQ(ext.Vhub[1].UpSuspend, 0, "the upstream running");
+    CHECK_EQ(ext.Vhub[1].UpResumeOwed, 1, "its change owed to the end");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_SUSPEND, 0,
+             "nothing reported until the resume finishes");
+    hw_fire_port_timer();
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_SUSPEND, XHCI_HUB_C_PORT_SUSPEND,
+             "the completed resume is the root port's C_PORT_SUSPEND");
+    CHECK_EQ(status & XHCI_HUB_PORT_SUSPEND, 0, "on a running port");
+    CHECK_EQ(ext.RootHub.Ports[1].Changes & XHCI_HUB_C_PORT_SUSPEND, 0,
+             "carried by the upstream view, stripped from the shadow");
+    CHECK_EQ(ext.Vhub[1].UpResumeOwed, 0, "(nothing owed)");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspendChange(&ext, 2),
+             MP_STATUS_SUCCESS, "(usbhub clears it)");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_SUSPEND, 0, "and it is gone");
+
+    /*
+     * A resume the physical port refuses (here: no timer service to end the
+     * resume signalling with) fails as today's callback fails, and the
+     * upstream view stays suspended with the port, so usbhub's retry asks
+     * again. (A first fix put the view back and would have answered the
+     * retry with nothing.)
+     */
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "(suspended again)");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(xport) / 4]), XHCI_PLS_U3,
+             "(in U3)");
+    XhciRegPacket.UsbPortRequestAsyncCallback = NULL;
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspend(&ext, 2),
+             MP_STATUS_NOT_SUPPORTED,
+             "a resume the port refuses fails, as the root port's own does");
+    XhciRegPacket.UsbPortRequestAsyncCallback = hc_async_callback;
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(xport) / 4]), XHCI_PLS_U3,
+             "the physical port still in U3");
+    CHECK_EQ(ext.Vhub[1].UpSuspend, 1, "the upstream view still suspended");
+    CHECK_EQ(ext.Vhub[1].UpResumeOwed, 0, "owing no completion");
+    CHECK_EQ(ext.Vhub[1].PhysSuspended, 1, "and still owning the suspend");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(status & XHCI_HUB_PORT_SUSPEND, XHCI_HUB_PORT_SUSPEND,
+             "so the root port reports it suspended");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspend(&ext, 2),
+             MP_STATUS_SUCCESS, "and a request that follows resumes it");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(xport) / 4]), XHCI_PLS_RESUME,
+             "through the resume body");
+    hw_fire_port_timer();
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_SUSPEND, XHCI_HUB_C_PORT_SUSPEND,
+             "to its completion");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortSuspendChange(&ext, 2),
+             MP_STATUS_SUCCESS, "(cleared)");
+
+    /* Port 1: enabled by its own reset first, then suspended and resumed
+     * through the hub's requests. */
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.Vhub[1].P1Enabled, 1, "(port 1 enabled by its reset)");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 20, 1, 0);
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe)");
+    deliver_after_submit();
+    CHECK(ext.VhubBind[1].Held == &vhubPipeTransfer, "(held, no change)");
+
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 2, 1, 0);
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(xport) / 4]), XHCI_PLS_U3,
+             "SET_PORT_FEATURE(1, PORT_SUSPEND) suspends the physical port");
+    CHECK_EQ(ext.Vhub[1].P1Suspend, 1, "port 1's view suspended");
+    CHECK_EQ(ext.Vhub[1].UpSuspend, 0, "the upstream's not");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(status & XHCI_HUB_PORT_SUSPEND, 0,
+             "the root port does not report port 1's suspend");
+    CHECK(ext.VhubBind[1].Held == &vhubPipeTransfer,
+          "and the pipe carries nothing on entry");
+
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 2, 1, 0);
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(xport) / 4]), XHCI_PLS_RESUME,
+             "CLEAR_PORT_FEATURE(1, PORT_SUSPEND) resumes it");
+    CHECK_EQ(ext.Vhub[1].P1ResumeOwed, 1, "port 1's change owed to the end");
+    hw_fire_port_timer();
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    deliver_after_submit();
+    CHECK(ext.VhubBind[1].Held == NULL, "the completed resume goes to the pipe");
+    CHECK_EQ(vhubPipeData[0], 0x02, "as port 1's change");
+    CHECK_EQ(ext.Vhub[1].P1Changes & XHCI_HUB_C_PORT_SUSPEND,
+             XHCI_HUB_C_PORT_SUSPEND, "C_PORT_SUSPEND");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_SUSPEND, 0,
+             "and never to the root port");
+    CHECK_EQ(ext.RootHub.Ports[1].Changes & XHCI_HUB_C_PORT_SUSPEND, 0,
+             "(stripped from the shadow)");
+
+    /*
+     * Port 1's resume refused: the request stalls, port 1 stays suspended
+     * with the physical port, and nothing reaches the pipe; a request that
+     * follows is served (whether usbhub sends one is its own - Vista's hub
+     * driver reports the failure and does not retry by itself). Completing
+     * the request with success would have left usbhub waiting on a
+     * C_PORT_SUSPEND nothing would ever send.
+     */
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 18, 1, 0);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe re-armed)");
+    deliver_after_submit();
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 2, 1, 0);
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(xport) / 4]), XHCI_PLS_U3,
+             "(port 1 suspended again)");
+    stalls = ext.VhubStalls;
+    XhciRegPacket.UsbPortRequestAsyncCallback = NULL;
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 2, 1, 0);
+    XhciRegPacket.UsbPortRequestAsyncCallback = hc_async_callback;
+    CHECK_EQ(lastCompletedStatus, (LONG)XHCI_USBD_STATUS_STALL_PID,
+             "CLEAR_PORT_FEATURE(1, PORT_SUSPEND) the port refuses stalls");
+    CHECK_EQ(ext.VhubStalls, stalls + 1, "(counted)");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(xport) / 4]), XHCI_PLS_U3,
+             "the physical port still in U3");
+    CHECK_EQ(ext.Vhub[1].P1Suspend, 1, "port 1's view still suspended");
+    CHECK_EQ(ext.Vhub[1].P1ResumeOwed, 0, "owing no completion");
+    CHECK_EQ(ext.Vhub[1].PhysSuspended, 1, "and still owning the suspend");
+    CHECK(ext.VhubBind[1].Held == &vhubPipeTransfer,
+          "and nothing reaches the pipe");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 2, 1, 0);
+    CHECK_EQ(lastCompletedStatus, 0, "a request that follows is served");
+    CHECK_EQ(XHCI_PORTSC_GET_PLS(mmio[HC_PORTSC(xport) / 4]), XHCI_PLS_RESUME,
+             "and resumes the port");
+    CHECK_EQ(ext.Vhub[1].P1ResumeOwed, 1, "with the change owed to the end");
+    hw_fire_port_timer();
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    deliver_after_submit();
+    CHECK(ext.VhubBind[1].Held == NULL, "which completes to the pipe");
+    vhub_reset_registry();
+}
+
+/*
+ * **A port-1 reset spends every hub's arm** (design record 12 section 3.6,
+ * and XhciSlotPortReset's rule for the two real entitlements): the last
+ * reset owns the next address-0 open, so a hub arm left standing on another
+ * port by an enumeration usbhub abandoned is spent when this port 1 is reset,
+ * at the reset's start - and a reset that then times out leaves no arm. (A
+ * first fix spent only the arm of the hub whose port 1 was reset.)
+ */
+static void test_vhub_port1_reset_spends_every_hub_arm(void)
+{
+    ULONG xport;
+    ULONG resets;
+
+    vhub_start(2);
+    hwCmdSlotId = 6;
+    xport = vhub_xport(3);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 3);
+    vhub_plug(3, 3);                                /* High Speed */
+    vhub_enumerate_hub(3, 3);
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    CHECK_EQ(ext.VhubArmedPort, 0, "(the hub's own open was taken)");
+
+    CHECK_EQ(vhub_root_reset(2), MP_STATUS_SUCCESS,
+             "usbhub resets another port's hub");
+    CHECK_EQ(ext.VhubArmedPort, 2, "which arms that hub's address-0 open");
+
+    portResetHangs = 1;
+    resets = portResets;
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(portResets, resets + 1, "(port 1's physical reset)");
+    CHECK_EQ(ext.Vhub[2].P1Resetting, 1, "(in flight)");
+    CHECK_EQ(ext.VhubArmedPort, 0,
+             "spends the other hub's arm at its start: the last reset owns "
+             "the next open");
+    hw_fire_port_timer();
+    portResetHangs = 0;
+    CHECK_EQ(ext.Vhub[2].P1Resetting, 0, "the deadline ends the reset");
+    CHECK_EQ(ext.Vhub[2].P1Enabled, 0, "with port 1 disabled");
+    CHECK_EQ(ext.Vhub[2].P1Changes & XHCI_HUB_C_PORT_RESET,
+             XHCI_HUB_C_PORT_RESET, "and its end latched");
+    CHECK_EQ(ext.VhubArmedPort, 0, "leaving no arm standing");
+    mmio[HC_PORTSC(xport) / 4] &= ~XHCI_PORTSC_PR;
+    vhub_reset_registry();
+}
+
+/*
+ * **A port-1 disable on a port PED already left still disowns the device**
+ * (design record 12 section 3.3's disable rows over today's disable body,
+ * whose software half runs unconditionally): the hardware disables the port
+ * - PEC, port 1's C_PORT_ENABLE - with an addressed device behind it, and
+ * usbhub's CLEAR_PORT_FEATURE(1, PORT_ENABLE) is what gives its address
+ * back. (A first build asked for nothing when the port already read
+ * disabled, and the address stayed taken.)
+ */
+static void test_vhub_port1_disable_after_a_hardware_disable(void)
+{
+    ULONG xport;
+    ULONG disowned;
+
+    vhub_start(2);
+    hwCmdSlotId = 6;
+    xport = vhub_xport(3);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 3);
+    vhub_plug(3, 3);                                /* High Speed */
+    vhub_enumerate_hub(3, 3);
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "(the device behind port 1 opens)");
+    deliver_events();
+    deliver_events();
+    slot_setup(0x00, 0x05, 8, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    deliver_events();
+    CHECK_EQ(ext.Devices[0].DeviceAddress, 8, "(addressed at 8)");
+    CHECK_EQ(ext.Devices[0].Flags & XHCI_DEV_FLAG_ADDRESS_VALID,
+             XHCI_DEV_FLAG_ADDRESS_VALID, "(valid)");
+
+    mmio[HC_PORTSC(xport) / 4] =
+        (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_PED) | XHCI_PORTSC_PEC;
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.Vhub[2].P1Changes & XHCI_HUB_C_PORT_ENABLE,
+             XHCI_HUB_C_PORT_ENABLE, "a hardware disable is port 1's change");
+    CHECK_EQ(ext.Vhub[2].P1Enabled, 0, "and port 1 reads disabled");
+    CHECK_EQ(ext.Devices[0].Flags & XHCI_DEV_FLAG_ADDRESS_VALID,
+             XHCI_DEV_FLAG_ADDRESS_VALID,
+             "the address still held: nothing has let go of the device");
+
+    disowned = ext.DevicesDisownedOut;
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 1, 1, 0);
+    CHECK_EQ(ext.DevicesDisownedOut, disowned + 1,
+             "CLEAR_PORT_FEATURE(1, PORT_ENABLE) on a port PED already left "
+             "still disowns the device");
+    CHECK_EQ(ext.Devices[0].Flags & XHCI_DEV_FLAG_ADDRESS_VALID, 0,
+             "giving its address back");
+    vhub_reset_registry();
+}
+
+/*
+ * A Full-Speed hub on a root port, behind a virtual one: usbport names the
+ * virtual hub as the transaction translator for a device behind the real hub,
+ * the graph (which never holds a virtual hub) expects none, and the pair is
+ * counted as agreed rather than as the disagreement the same claim is at 0
+ * (design record 12 section 3.6).
+ *
+ * MODEL SEAM: the real hub is enumerated through `slot_attach`'s synthetic
+ * PRC, which no virtual hub owns, so the virtual record above it is written
+ * here rather than stood up by a reset - the one field the comparison reads,
+ * the virtual hub's address, is what usbport would have given it first.
+ */
+static void test_vhub_tt_pair_naming_a_virtual_hub_agrees(void)
+{
+    PXHCI_DEVICE hub;
+
+    vhub_reset_registry();
+    vhubSwitchStatus = MP_STATUS_SUCCESS;
+    vhubSwitchValue = 1;
+    vhub_set_ids("1209", "0001", 1);
+    hub = behind_hub_parent(1);
+    ext.Vhub[2].Present = 1;
+    ext.Vhub[2].Decision = XHCI_VHUB_DECIDED_HUB;
+    ext.Vhub[2].Address = 1;
+    ext.Vhub[2].DevState = XHCI_VHUB_DEV_CONFIGURED;
+
+    CHECK_EQ(behind_hub_open(hub, &slotEndpoint, 4, UsbFullSpeed, 1, 1, 6,
+                             &slotEndpoint2),
+             MP_STATUS_SUCCESS, "a device behind the Full-Speed hub opens");
+    CHECK_EQ(ext.TtPairsAgreed, 1,
+             "usbport's TT hub is the virtual one: agreed");
+    CHECK_EQ(ext.TtPairsDisagreed, 0, "not a disagreement");
+    CHECK_EQ(ext.VhubTtNamed, 1, "and counted as naming a virtual hub");
+    vhub_reset_registry();
+}
+
+/*
+ * Value 2's device behind port 1, enumerated and addressed at 8 on root port
+ * `hubPort`, with the status-change transfer held and nothing left for it to
+ * carry. The shared start of the two vectors below.
+ */
+static void vhub_always_device_behind(ULONG hubPort, ULONG hubAddress)
+{
+    ULONG xport;
+
+    xport = vhub_xport(hubPort);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext,
+                                                         (USHORT)hubPort);
+    vhub_plug(hubPort, 1);                          /* Full Speed */
+    vhub_enumerate_hub(hubPort, hubAddress);
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 20, 1, 0);
+    CHECK_EQ(slot_open(0, UsbFullSpeed, 64), MP_STATUS_SUCCESS,
+             "(the device behind port 1 opens)");
+    deliver_events();
+    deliver_events();
+    slot_setup(0x00, 0x05, 8, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    deliver_events();
+    CHECK_EQ(ext.Devices[0].DeviceAddress, 8, "(addressed at 8)");
+    CHECK_EQ(ext.Devices[0].HubPort, hubPort, "(on today's root-port record)");
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe)");
+    deliver_after_submit();
+    CHECK(ext.VhubBind[hubPort - 1].Held == &vhubPipeTransfer,
+          "(held, with nothing to carry)");
+}
+
+/*
+ * **Hub-path removal at 2** (design record 12 section 3.8): an unplug behind
+ * a hub that stays is port 1's change and never the root port's. The
+ * device's record is released by the connect-change path as on any unplug,
+ * the held status-change transfer carries the change to usbhub, which
+ * removes the device through the hub; the hub keeps its address, bindings
+ * and configuration, and the next device on the port enumerates behind it
+ * in a record of its own, taking the released address again.
+ */
+static void test_vhub_always_unplug_is_port1s_change(void)
+{
+    ULONG status;
+    ULONG change;
+    ULONG pipeCompletions;
+    ULONG dropped;
+    ULONG created;
+    ULONG i;
+
+    vhub_start(2);
+    hwCmdSlotId = 6;
+    vhub_always_device_behind(3, 3);
+
+    pipeCompletions = ext.VhubPipeCompletions;
+    dropped = ext.VhubDropped;
+    created = ext.VhubCreated;
+    vhub_unplug(3);
+    deliver_after_submit();
+    CHECK_EQ(ext.VhubPipeCompletions, pipeCompletions + 1,
+             "the unplug completes the held status-change transfer");
+    CHECK(lastCompletedEndpoint == &vhubPipe, "on the pipe");
+    CHECK_EQ(vhubPipeData[0], 0x02, "with port 1's bit");
+    CHECK_EQ(ext.Vhub[2].P1Changes & XHCI_HUB_C_PORT_CONNECTION,
+             XHCI_HUB_C_PORT_CONNECTION, "a connect change on port 1");
+    CHECK_EQ(ext.Vhub[2].P1Enabled, 0, "and port 1 no longer enabled");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, 0,
+             "the root port latched nothing: the hub was not unplugged");
+    CHECK_EQ(status & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE |
+                       XHCI_HUB_PORT_HIGH_SPEED),
+             XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE |
+                 XHCI_HUB_PORT_HIGH_SPEED,
+             "and still reports its hub connected, enabled, High Speed");
+    CHECK(ext.Devices[0].State == XHCI_DEV_STATE_GONE ||
+              ext.Devices[0].State == XHCI_DEV_STATE_FREE,
+          "the connect-change path tore the device's record down");
+    for (i = 0; i < 8 && ext.Devices[0].State != XHCI_DEV_STATE_FREE; i++) {
+        deliver_events();
+    }
+    CHECK_EQ(ext.Devices[0].State, XHCI_DEV_STATE_FREE,
+             "and released it once its slot was disabled");
+
+    (void)vhub_control(&vhubEp0, 0xA3, 0x00, 0, 1, 4);
+    CHECK_EQ(vhubData[0] & XHCI_HUB_PORT_CONNECTION, 0,
+             "GET_PORT_STATUS(1): nothing connected");
+    CHECK_EQ(vhubData[2] & XHCI_HUB_C_PORT_CONNECTION,
+             XHCI_HUB_C_PORT_CONNECTION, "with the connect change");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    CHECK_EQ(ext.Vhub[2].Present, 1, "the hub stays");
+    CHECK_EQ(ext.Vhub[2].Address, 3, "at its address");
+    CHECK_EQ(ext.Vhub[2].DevState, XHCI_VHUB_DEV_CONFIGURED, "configured");
+    CHECK(ext.VhubBind[2].Ep0 == &vhubEp0 && ext.VhubBind[2].Pipe == &vhubPipe,
+          "with both bindings");
+    CHECK_EQ(ext.VhubDropped, dropped, "none dropped");
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "the pipe re-armed");
+    deliver_after_submit();
+    CHECK(ext.VhubBind[2].Held == &vhubPipeTransfer, "and held again");
+
+    /* The next device on the port. */
+    hwCmdSlotId = 7;
+    pipeCompletions = ext.VhubPipeCompletions;
+    vhub_plug(3, 1);
+    deliver_after_submit();
+    CHECK_EQ(ext.VhubPipeCompletions, pipeCompletions + 1,
+             "a replug is port 1's change too");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, 0,
+             "and not the root port's");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(3) << 24, 0);
+    deliver_events();
+    CHECK_EQ(slot_open(0, UsbFullSpeed, 64), MP_STATUS_SUCCESS,
+             "the next device's address-0 open");
+    CHECK_EQ(slotEndpoint.Flags, XHCI_ENDPOINT_FLAG_OPEN, "is a device's");
+    CHECK_EQ(ext.Devices[slotEndpoint.DeviceIndex - 1].HubPort, 3,
+             "on the port's root-port record");
+    deliver_events();
+    deliver_events();
+    CHECK_EQ(ext.Devices[slotEndpoint.DeviceIndex - 1].SlotId, 7,
+             "in a slot of its own");
+    slot_setup(0x00, 0x05, 8, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    deliver_events();
+    CHECK_EQ(ext.Devices[slotEndpoint.DeviceIndex - 1].DeviceAddress, 8,
+             "the released address is taken again");
+    CHECK_EQ(ext.VhubCreated, created, "and no hub was stood up for it");
+    vhub_reset_registry();
+}
+
+/*
+ * **A recovery at 2 with a hub configured** (design record 12 section 3.8,
+ * "resume and recovery keep the hubs"; section 10's `lost[]`): the
+ * reinitialisation took the slot of the device behind port 1, and HCRST left
+ * the port with no CSC to say so. The hub is kept - address, bindings,
+ * configuration - the root port latches nothing, and the device's loss is a
+ * connect change on port 1, carried by completing the status-change transfer
+ * the hub held across the recovery. A hub with nothing behind it gains no
+ * change. The device then enumerates again behind the kept hub.
+ */
+static void test_vhub_always_recovery_keeps_the_hub(void)
+{
+    ULONG status;
+    ULONG change;
+    ULONG pipeCompletions;
+    ULONG dropped;
+    ULONG created;
+
+    vhub_start(2);
+    hwCmdSlotId = 6;
+    vhub_always_device_behind(3, 3);
+    CHECK_EQ(ext.Vhub[1].P1Changes & XHCI_HUB_C_PORT_CONNECTION, 0,
+             "(port 2's hub has nothing behind it)");
+
+    pipeCompletions = ext.VhubPipeCompletions;
+    dropped = ext.VhubDropped;
+    created = ext.VhubCreated;
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_HCE;
+    XhciRegPacket.CheckController(&ext);
+    asyncCallback = NULL;
+    asyncRequests = 0;
+    XhciRegPacket.ResetController(&ext);
+    XhciRegPacket.CheckController(&ext);
+    fire_async_timer();
+    CHECK_EQ(ext.RecoveryCompletions, 1, "(the recovery completed)");
+    CHECK_EQ(mmio[HC_PORTSC(vhub_xport(3)) / 4] &
+                 (XHCI_PORTSC_CCS | XHCI_PORTSC_CSC),
+             0, "(HCRST left the port with no connect change to find)");
+    deliver_after_submit();
+
+    CHECK_EQ(ext.VhubPipeCompletions, pipeCompletions + 1,
+             "the held status-change transfer is completed for the device "
+             "the recovery took");
+    CHECK(lastCompletedEndpoint == &vhubPipe, "on the pipe");
+    CHECK_EQ(vhubPipeData[0], 0x02, "with port 1's bit");
+    CHECK(ext.VhubBind[2].Held == NULL, "and is no longer held");
+    CHECK_EQ(ext.Vhub[2].P1Changes & XHCI_HUB_C_PORT_CONNECTION,
+             XHCI_HUB_C_PORT_CONNECTION, "a connect change on port 1");
+    CHECK_EQ(ext.Vhub[2].P1Enabled, 0, "with port 1 disabled");
+    CHECK_EQ(ext.Vhub[1].P1Changes & XHCI_HUB_C_PORT_CONNECTION, 0,
+             "port 2's empty hub gains none");
+    CHECK_EQ(ext.Vhub[2].Present, 1, "the hub is kept");
+    CHECK_EQ(ext.Vhub[2].Address, 3, "at its address");
+    CHECK_EQ(ext.Vhub[2].DevState, XHCI_VHUB_DEV_CONFIGURED, "configured");
+    CHECK(ext.VhubBind[2].Ep0 == &vhubEp0 && ext.VhubBind[2].Pipe == &vhubPipe,
+          "with both bindings");
+    CHECK_EQ(ext.VhubCreated, created, "none stood up anew");
+    CHECK_EQ(ext.VhubDropped, dropped, "none dropped");
+    vhub_root_status(3, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, 0,
+             "the root port latched no connect change for its hub");
+    CHECK_EQ(status & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE),
+             XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE,
+             "and reports it connected and enabled");
+
+    (void)vhub_control(&vhubEp0, 0xA3, 0x00, 0, 1, 4);
+    CHECK_EQ(vhubData[0] & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE),
+             0, "GET_PORT_STATUS(1): nothing connected, not enabled");
+    CHECK_EQ(vhubData[2] & XHCI_HUB_C_PORT_CONNECTION,
+             XHCI_HUB_C_PORT_CONNECTION, "with the connect change");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+
+    /* The device, still attached in fact, is found again by the port. */
+    hwCmdSlotId = 7;
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe re-armed)");
+    deliver_after_submit();
+    pipeCompletions = ext.VhubPipeCompletions;
+    vhub_plug(3, 1);
+    deliver_after_submit();
+    CHECK_EQ(ext.VhubPipeCompletions, pipeCompletions + 1,
+             "its connect is port 1's change");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(3) << 24, 0);
+    deliver_events();
+    CHECK_EQ(slot_open(0, UsbFullSpeed, 64), MP_STATUS_SUCCESS,
+             "and it enumerates again behind the kept hub");
+    CHECK_EQ(slotEndpoint.Flags, XHCI_ENDPOINT_FLAG_OPEN, "as a device");
+    CHECK_EQ(ext.Devices[slotEndpoint.DeviceIndex - 1].HubPort, 3,
+             "on the port's root-port record");
+    vhub_reset_registry();
+}
+
+/*
+ * **No announcement from inside SubmitTransfer** (task 24.3.4, the Vista and
+ * Windows 7 hangs). usbport holds its EpList lock across that callback and an
+ * NT 6.x `USBPORTSVC_InvalidateRootHub` takes it, so a request to a virtual
+ * hub whose reading owes the root hub an announcement leaves it owed, and the
+ * next context that may announce - the health poll here - makes it. The
+ * suite-wide net in main catches the call from any other vhub request.
+ */
+static void test_vhub_submit_never_announces(void)
+{
+    ULONG announced;
+    ULONG xport;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_plug(2, 1);                                /* Full Speed */
+    vhub_enumerate_hub(2, 1);
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 2);
+    /* What the bracket left owed is announced, and usbport's scan finds
+     * nothing more and opens the gate again. */
+    XhciRegPacket.RH_EnableIrq(&ext);
+    XhciRegPacket.CheckController(&ext);
+    XhciRegPacket.RH_EnableIrq(&ext);
+    CHECK_EQ(ext.RootHubInvalidatesOwed, 0, "(nothing owed)");
+
+    /* The device leaves, and nothing has read the port since: the hub's own
+     * GET_PORT_STATUS(1) is the first reading. */
+    mmio[HC_PORTSC(xport) / 4] &=
+        ~(XHCI_PORTSC_CCS | XHCI_PORTSC_PED | XHCI_PORTSC_SPEED_MASK);
+    mmio[HC_PORTSC(xport) / 4] |= XHCI_PORTSC_CSC;
+    announced = rootHubInvalidates;
+    (void)vhub_control(&vhubEp0, 0xA3, 0x00, 0, 1, 4);
+    CHECK_EQ(rootHubInvalidates, announced,
+             "a request to the hub announces nothing from inside "
+             "SubmitTransfer");
+    CHECK(ext.RootHubInvalidatesOwed != 0,
+          "the root port's change its reading latched is owed");
+    CHECK_EQ(ext.Vhub[1].Present, 0, "(the reading retired the hub)");
+
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(rootHubInvalidates, announced + 1,
+             "and the health poll announces it");
+    CHECK_EQ(ext.RootHubInvalidatesOwed, 0, "owing nothing after");
+    vhub_reset_registry();
+}
+
+/*
+ * **Round 10: on the Version 300 tier a virtual hub's answer asks usbport for
+ * a soft interrupt** (XHCI_EXTENSION.SoftInterruptOwed). Nothing on the bus
+ * interrupts for it, so without the request it waited for the fallback, and
+ * usbhub's 2000 ms reset timer ran out across the three answers its port-1
+ * reset needs. The request is made once, outside the controller lock; the
+ * simulated interrupt's DPC reports transfer work and PollEndpoint delivers,
+ * with no fallback. The Version 200 tier asks for the endpoint's poll instead,
+ * and makes no such request.
+ */
+static XHCI_ENDPOINT vhubStaleEp0;
+
+static void test_vhub_nt6_answer_asks_for_a_soft_interrupt(void)
+{
+    ULONG completions;
+    ULONG requests;
+    ULONG fallback;
+    ULONG locked;
+    ULONG result;
+    ULONG i;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    vhub_plug(2, 1);                                /* Full Speed */
+    vhub_enumerate_hub(2, 1);
+    deliver_after_submit();
+    CHECK_EQ(ext.CompletionsOwed, 0, "(nothing parked)");
+
+    /* The Version 200 tier: the endpoint's poll, no soft interrupt. */
+    CHECK_EQ(ext.DeliverPerEndpointOnly, 1, "(the harness starts on 200)");
+    invalidateCalls = 0;
+    requests = ext.SoftInterruptRequests;
+    completions = completeTransferCalls;
+    (void)vhub_control(&vhubEp0, 0xA3, 0x00, 0, 1, 4);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "on 200 the endpoint's poll delivers the answer");
+    CHECK_EQ(invalidateCalls, 0, "and usbport is asked for no interrupt");
+    CHECK_EQ(ext.SoftInterruptRequests, requests, "(none counted)");
+
+    /* The Version 300 tier. */
+    ext.DeliverPerEndpointOnly = 0;
+    invalidateCalls = 0;
+    invalidateType = 0;
+    invalidateUnderLock = 0;
+    fallback = ext.CompletionFallbackPolls;
+    locked = ext.CompletionsDeliveredLocked;
+    completions = completeTransferCalls;
+    (void)vhub_control(&vhubEp0, 0xA3, 0x00, 0, 1, 4);   /* GET_PORT_STATUS(1) */
+    CHECK_EQ(completeTransferCalls, completions,
+             "on 300 the answer is parked");
+    CHECK_EQ(invalidateCalls, 1, "and usbport is asked for one interrupt");
+    CHECK_EQ(invalidateType, USBPORT_INVALIDATE_CONTROLLER_SOFT_INTERRUPT,
+             "a soft one");
+    CHECK_EQ(invalidateUnderLock, 0, "outside the controller lock");
+    CHECK_EQ(ext.SoftInterruptRequests, requests + 1, "(counted)");
+    CHECK_EQ(ext.SoftInterruptOwed, 0, "and nothing is still owed");
+
+    /* usbport's timer DPC queues IsrDpc, which calls InterruptDpcEx. */
+    result = XhciRegPacket.InterruptDpc(&ext, TRUE);
+    CHECK_EQ(result & USBPORT_DPC_EX_TRANSFER_WORK,
+             USBPORT_DPC_EX_TRANSFER_WORK,
+             "the simulated interrupt's DPC reports transfer work");
+    CHECK_EQ(invalidateCalls, 1, "and asks for no second interrupt");
+    XhciRegPacket.PollEndpoint(&ext, &vhubEp0);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "and the HcInt pass's PollEndpoint delivers it");
+    CHECK_EQ(ext.CompletionsDeliveredLocked, locked + 1, "locked");
+    CHECK_EQ(ext.CompletionFallbackPolls, fallback, "with no fallback");
+
+    /*
+     * Codex round 1: the PollEndpoint the interrupt produced finds the drain
+     * held by a pass that cannot deliver. Turned away, it owes the interrupt
+     * again, and the holder's end asks for it.
+     */
+    (void)vhub_control(&vhubEp0, 0xA3, 0x00, 0, 1, 4);
+    CHECK_EQ(ext.CompletionsOwed, 1, "(a second answer parked)");
+    invalidateCalls = 0;
+    completions = completeTransferCalls;
+    ext.DeferredBusy = 1;
+    XhciRegPacket.PollEndpoint(&ext, &vhubEp0);
+    CHECK_EQ(completeTransferCalls, completions,
+             "a PollEndpoint turned away by a busy drain delivers nothing");
+    CHECK_EQ(ext.SoftInterruptOwed, 1, "and owes the interrupt again");
+    ext.DeferredBusy = 0;
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
+    CHECK_EQ(invalidateCalls, 1, "which the holder's end asks for");
+    CHECK_EQ(invalidateType, USBPORT_INVALIDATE_CONTROLLER_SOFT_INTERRUPT,
+             "a soft one");
+    XhciRegPacket.PollEndpoint(&ext, &vhubEp0);
+    CHECK_EQ(completeTransferCalls, completions + 1,
+             "and the next PollEndpoint delivers it");
+
+    /* The pass that delivers everything asks for nothing. */
+    invalidateCalls = 0;
+    XhciSlotDeferredWork(&ext, XHCI_ARM_UNLOCKED);
+    CHECK_EQ(invalidateCalls, 0, "an empty list asks for nothing");
+
+    /*
+     * The hub's own status-change transfer. A change still latched completes
+     * it at the submit, parked and asked for like any answer; PollEndpoint
+     * collects it, and the pipe is armed again until one is held.
+     */
+    for (i = 0; i < 4; i++) {
+        invalidateCalls = 0;
+        CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe armed)");
+        deliver_after_submit();
+        if (ext.VhubBind[1].Held != NULL) {
+            break;
+        }
+        CHECK_EQ(invalidateCalls, 1,
+                 "a pipe answered at its submit asks for an interrupt");
+        XhciRegPacket.PollEndpoint(&ext, &vhubPipe);
+        CHECK_EQ(ext.CompletionsOwed, 0, "(collected)");
+        /* usbhub acknowledges port 1's changes, as it would. */
+        (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+        XhciRegPacket.PollEndpoint(&ext, &vhubEp0);
+        (void)vhub_control(&vhubEp0, 0x23, 0x01, 20, 1, 0);
+        XhciRegPacket.PollEndpoint(&ext, &vhubEp0);
+    }
+    CHECK(ext.VhubBind[1].Held != NULL, "(the pipe is held)");
+    CHECK_EQ(ext.CompletionsOwed, 0, "(nothing parked)");
+
+    /* The device leaves: the change completes the held pipe. */
+    invalidateCalls = 0;
+    completions = completeTransferCalls;
+    mmio[HC_PORTSC(vhub_xport(2)) / 4] &=
+        ~(XHCI_PORTSC_CCS | XHCI_PORTSC_PED | XHCI_PORTSC_SPEED_MASK);
+    mmio[HC_PORTSC(vhub_xport(2)) / 4] |= XHCI_PORTSC_CSC;
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, vhub_xport(2) << 24, 0);
+    deliver_events();
+    CHECK(ext.VhubBind[1].Held == NULL, "the change took the held pipe");
+    CHECK_EQ(completeTransferCalls, completions,
+             "the pipe's completion is parked too");
+    CHECK_EQ(ext.CompletionsOwed, 1, "(one parked)");
+    CHECK_EQ(invalidateCalls, 1, "and asks for its interrupt");
+    CHECK_EQ(invalidateType, USBPORT_INVALIDATE_CONTROLLER_SOFT_INTERRUPT,
+             "a soft one");
+    XhciRegPacket.PollEndpoint(&ext, &vhubPipe);
+    CHECK_EQ(ext.CompletionsOwed, 0, "(collected)");
+
+    /*
+     * Codex round 3: a transfer through a displaced handle - a record the
+     * binding no longer names - is failed as cancelled, and that failure is
+     * a virtual hub's answer too.
+     */
+    vhubStaleEp0 = vhubEp0;
+    invalidateCalls = 0;
+    completions = completeTransferCalls;
+    (void)vhub_control(&vhubStaleEp0, 0x80, 0x06, 0x0100, 0, 18);
+    CHECK_EQ(completeTransferCalls, completions,
+             "a displaced handle's failure is parked");
+    CHECK_EQ(invalidateCalls, 1, "and asks for its interrupt");
+    XhciRegPacket.PollEndpoint(&ext, &vhubStaleEp0);
+    CHECK_EQ(completeTransferCalls, completions + 1, "(delivered)");
+    CHECK_EQ(lastCompletedStatus, (LONG)XHCI_USBD_STATUS_CANCELED,
+             "as cancelled");
+
+    ext.DeliverPerEndpointOnly = 1;
+    vhub_reset_registry();
+}
+
+/*
+ * **At 1 an unplug retires the hub, with no disable from usbport** (task
+ * 24.3.4's Windows 7 capture): NT 6.x usbhub removes a disconnected device
+ * without CLEAR_FEATURE(PORT_ENABLE), and the hub left Present kept address
+ * 1, which usbport then gave a High-Speed mouse on another port - whose EP0
+ * open bound to the stale hub and installed "Generic USB Hub" in its place.
+ * The hub goes at the unplug: address, bindings and held transfer, the root
+ * port reporting the disconnect as today. The mouse then takes address 1 as
+ * itself. A replacement hub on the same port then enumerates, and the old
+ * hub's handles arriving late - a transfer, an abort, both REMOVEs - touch
+ * nothing of it (Codex's second round).
+ */
+static XHCI_ENDPOINT vhubEp0B;
+static XHCI_ENDPOINT vhubPipeB;
+static XHCI_TRANSFER vhubPipeTransferB;
+static USBPORT_TRANSFER_PARAMETERS vhubPipeParamsB;
+static USBPORT_SCATTER_GATHER_LIST vhubPipeSgB;
+static UCHAR vhubPipeDataB[4];
+
+static void test_vhub_on_demand_unplug_retires_the_hub(void)
+{
+    ULONG status;
+    ULONG change;
+    ULONG dropped;
+    ULONG cancels;
+    ULONG created;
+    ULONG opens;
+    ULONG moved;
+    ULONG i;
+    PXHCI_DEVICE dev;
+    XHCI_VHUB before;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    vhub_plug(2, 1);                                /* Full Speed */
+    vhub_enumerate_hub(2, 1);
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 2);
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe)");
+    deliver_after_submit();
+    CHECK(ext.VhubBind[1].Held == &vhubPipeTransfer, "(held)");
+    CHECK_EQ(ext.Vhub[1].Address, 1, "(the hub at address 1)");
+
+    dropped = ext.VhubDropped;
+    cancels = ext.VhubPipeCancels;
+    vhub_unplug(2);
+    deliver_after_submit();
+    CHECK_EQ(ext.Vhub[1].Present, 0, "the unplug retires the hub");
+    CHECK_EQ(ext.Vhub[1].Address, 0, "and its address");
+    CHECK_EQ(ext.Vhub[1].Decision, XHCI_VHUB_DECIDED_NONE,
+             "and the port's decision");
+    CHECK_EQ(ext.VhubDropped, dropped + 1, "counted as dropped");
+    CHECK(ext.VhubBind[1].Ep0 == NULL && ext.VhubBind[1].Pipe == NULL,
+          "both bindings let go");
+    CHECK(ext.VhubBind[1].Held == NULL, "the held transfer answered");
+    CHECK_EQ(ext.VhubPipeCancels, cancels + 1, "as cancelled");
+    CHECK(lastCompletedEndpoint == &vhubPipe, "(on the old pipe)");
+    CHECK_EQ(ext.VhubArmedPort, 0, "no hub open armed");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_CONNECTION, XHCI_HUB_C_PORT_CONNECTION,
+             "the root port reports the disconnect");
+    CHECK_EQ(status & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE), 0,
+             "on an empty, disabled port");
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 2);
+
+    /* The High-Speed mouse on root port 3 is given address 1. */
+    opens = ext.VhubOpens;
+    vhub_plug(3, 3);                                /* High Speed */
+    CHECK_EQ(vhub_root_reset(3), MP_STATUS_SUCCESS, "(the mouse's reset)");
+    CHECK_EQ(slot_open(0, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "(its address-0 open)");
+    CHECK_EQ(slotEndpoint.Flags, XHCI_ENDPOINT_FLAG_OPEN, "(a device's)");
+    dev = &ext.Devices[slotEndpoint.DeviceIndex - 1];
+    deliver_events();
+    deliver_events();
+    slot_setup(0x00, 0x05, 1, 0);
+    (void)XhciRegPacket.SubmitTransfer(&ext, &slotEndpoint, &slotParams,
+                                       &slotTransfer, &slotSgList);
+    deliver_events();
+    CHECK_EQ(dev->DeviceAddress, 1, "(addressed at 1)");
+    XhciRegPacket.SetEndpointState(&ext, &slotEndpoint,
+                                   USBPORT_ENDPOINT_REMOVE);
+    CHECK_EQ(slot_open(1, UsbHighSpeed, 64), MP_STATUS_SUCCESS,
+             "EP0 reopened at address 1");
+    CHECK_EQ(slotEndpoint.Flags, XHCI_ENDPOINT_FLAG_OPEN,
+             "is the mouse's, not the retired hub's");
+    CHECK_EQ(ext.Devices[slotEndpoint.DeviceIndex - 1].HubPort, 3,
+             "on root port 3's record");
+    CHECK_EQ(ext.VhubOpens, opens, "and no open was a hub's");
+
+    /* A replacement hub on port 2, at address 2. */
+    created = ext.VhubCreated;
+    hwCmdSlotId = 5;
+    vhub_plug(2, 1);
+    CHECK_EQ(vhub_root_reset(2), MP_STATUS_SUCCESS, "(the new device's reset)");
+    CHECK_EQ(ext.VhubCreated, created + 1, "a new hub stands up on port 2");
+    CHECK_EQ(vhub_open_ep0(&vhubEp0B, 0), MP_STATUS_SUCCESS,
+             "(its address-0 open)");
+    CHECK_EQ(vhubEp0B.Flags, XHCI_ENDPOINT_FLAG_OPEN | XHCI_ENDPOINT_FLAG_VHUB,
+             "(the hub's)");
+    (void)vhub_control(&vhubEp0B, 0x80, 0x06, 0x0100, 0, 64);
+    CHECK_EQ(vhub_root_reset(2), MP_STATUS_SUCCESS, "(its second reset)");
+    (void)vhub_control(&vhubEp0B, 0x00, 0x05, 2, 0, 0);
+    XhciRegPacket.SetEndpointState(&ext, &vhubEp0B, USBPORT_ENDPOINT_REMOVE);
+    CHECK_EQ(vhub_open_ep0(&vhubEp0B, 2), MP_STATUS_SUCCESS,
+             "(EP0 at address 2)");
+    (void)vhub_control(&vhubEp0B, 0x00, 0x09, 1, 0, 0);
+    (void)vhub_control(&vhubEp0B, 0x23, 0x01, 16, 1, 0);
+    slot_properties_ep(2, UsbHighSpeed, 0x81, USBPORT_TRANSFER_TYPE_INTERRUPT,
+                       1, 32, 1);
+    for (i = 0; i < sizeof(XHCI_ENDPOINT) / sizeof(ULONG); i++) {
+        ((ULONG *)&vhubPipeB)[i] = 0;
+    }
+    CHECK_EQ(open_endpoint_raw(&slotProperties, &vhubPipeB), MP_STATUS_SUCCESS,
+             "(its status-change pipe)");
+    CHECK_EQ(vhub_pipe_submit_on(&vhubPipeB, &vhubPipeTransferB,
+                                 &vhubPipeParamsB, &vhubPipeSgB,
+                                 vhubPipeDataB),
+             MP_STATUS_SUCCESS, "(submitted)");
+    deliver_after_submit();
+    CHECK(ext.VhubBind[1].Held == &vhubPipeTransferB, "(and held)");
+
+    /* The old hub's handles, late. */
+    before = ext.Vhub[1];
+    (void)vhub_control(&vhubEp0, 0x80, 0x06, 0x0100, 0, 18);
+    CHECK(lastCompletedEndpoint == &vhubEp0,
+          "a transfer through the old EP0 is answered on it");
+    CHECK_EQ(lastCompletedStatus, (LONG)XHCI_USBD_STATUS_CANCELED,
+             "as cancelled, never by the new hub");
+    moved = 99;
+    XhciRegPacket.AbortTransfer(&ext, &vhubPipe, &vhubPipeTransfer, &moved);
+    XhciRegPacket.SetEndpointState(&ext, &vhubPipe, USBPORT_ENDPOINT_REMOVE);
+    XhciRegPacket.SetEndpointState(&ext, &vhubEp0, USBPORT_ENDPOINT_REMOVE);
+    deliver_after_submit();
+    CHECK(ext.VhubBind[1].Ep0 == &vhubEp0B && ext.VhubBind[1].Pipe == &vhubPipeB,
+          "the replacement keeps both bindings");
+    CHECK(ext.VhubBind[1].Held == &vhubPipeTransferB,
+          "and its held transfer");
+    for (i = 0; i < sizeof(XHCI_VHUB) && ((const UCHAR *)&before)[i] ==
+                                             ((const UCHAR *)&ext.Vhub[1])[i];
+         i++) {
+    }
+    CHECK_EQ(i, sizeof(XHCI_VHUB), "and its record, byte for byte");
+    CHECK_EQ(ext.Vhub[1].Present, 1, "the hub in place");
+    CHECK_EQ(ext.Vhub[1].Address, 2, "at its address");
+    CHECK_EQ(ext.Vhub[1].DevState, XHCI_VHUB_DEV_CONFIGURED, "configured");
+    vhub_reset_registry();
+}
+
+/*
+ * **A port-1 disable landing inside a real port-1 reset** (task 24.3.4,
+ * Codex's first round). A port in reset reads PED = 0 - cleared when PR was
+ * set - so the disable's write clears nothing and the reset's end enables the
+ * port again. The confirmation must not take PED = 0 with PR = 1 as the
+ * disable landed: the debt stays, the reset's end has the disable written
+ * again, port 1 reads disabled, no claim is armed for the device usbhub has
+ * given up on, and only then is the teardown collected.
+ */
+static void test_vhub_disable_inside_a_port1_reset(void)
+{
+    ULONG xport;
+    ULONG spent;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_plug(2, 1);                                /* Full Speed */
+    vhub_enumerate_hub(2, 5);
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2);
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 20, 1, 0);
+    CHECK_EQ(ext.Vhub[1].P1Enabled, 1, "(port 1 enabled by its reset)");
+    CHECK_EQ(slot_open(0, UsbFullSpeed, 64), MP_STATUS_SUCCESS,
+             "(the device opens, spending the claim)");
+    deliver_events();
+    deliver_events();
+    spent = ext.EnumClaimSpent;
+    CHECK_EQ(spent, 1, "(spent)");
+
+    /* A second port-1 reset, in flight. */
+    portResetHangs = 1;
+    portResetClearsPed = 1;
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & (XHCI_PORTSC_PR | XHCI_PORTSC_PED),
+             XHCI_PORTSC_PR, "(the port in reset: PR set, PED clear)");
+
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 1, 1, 0);
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 1,
+             "CLEAR_PORT_FEATURE(1, PORT_ENABLE) inside the reset is not "
+             "confirmed by the PED the reset cleared");
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 1,
+             "nor by the health poll while PR is set");
+
+    /* The reset ends and enables the port, as it does on silicon. */
+    portResetHangs = 0;
+    mmio[HC_PORTSC(xport) / 4] =
+        (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_PR) | XHCI_PORTSC_PED |
+        XHCI_PORTSC_PRC;
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PED, 0,
+             "the reset's end has the disable written again");
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 0,
+             "which lands, and the debt is collected");
+    CHECK_EQ(ext.Vhub[1].P1Enabled, 0, "port 1 reads disabled");
+    CHECK_EQ(ext.EnumClaimSpent, spent,
+             "and no claim was armed for the reset usbhub abandoned");
+    CHECK_EQ(ext.Vhub[1].Present, 1, "(the hub in place)");
+    vhub_reset_registry();
+}
+
+/*
+ * **An unplug in the middle of a port-1 reset** at 1 (task 24.3.4): the hub
+ * retires with its device, and the reset's end, when it comes, is nobody's -
+ * not a root-port reset for usbhub to read, and no claim for a device that
+ * has gone.
+ */
+static void test_vhub_unplug_inside_a_port1_reset(void)
+{
+    ULONG xport;
+    ULONG status;
+    ULONG change;
+    ULONG spent;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_plug(2, 1);                                /* Full Speed */
+    vhub_enumerate_hub(2, 5);
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2);
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    ext.EnumClaimSpent = 1;
+    spent = ext.EnumClaimSpent;
+
+    portResetHangs = 1;
+    portResetClearsPed = 1;
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    CHECK_EQ(ext.Vhub[1].ResetOwner, XHCI_VHUB_OWNER_PORT1,
+             "(port 1's reset running)");
+    vhub_unplug(2);
+    CHECK_EQ(ext.Vhub[1].Present, 0, "the unplug retires the hub mid-reset");
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 2);
+
+    portResetHangs = 0;
+    mmio[HC_PORTSC(xport) / 4] =
+        (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_PR) | XHCI_PORTSC_PRC;
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, 0,
+             "the reset's end is no root-port reset");
+    CHECK_EQ(ext.EnumClaimSpent, spent, "and arms no claim");
+    CHECK_EQ(ext.Vhub[1].ResetOwner, XHCI_VHUB_OWNER_NONE, "(the port free)");
+    vhub_reset_registry();
+}
+
+/*
+ * A hub at 1 on `hubPort`, enumerated at `address`, port 1's connect change
+ * and the root's reset change cleared, and a second port-1 reset left in
+ * flight: PR set, PED clear, nothing ended. The start of the vectors below.
+ */
+static void vhub_port1_reset_in_flight(ULONG hubPort, ULONG address)
+{
+    vhub_plug(hubPort, 1);                          /* Full Speed */
+    vhub_enumerate_hub(hubPort, address);
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, (USHORT)hubPort);
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    portResetHangs = 1;
+    portResetClearsPed = 1;
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    portResetHangs = 0;
+    CHECK_EQ(ext.Vhub[hubPort - 1].ResetOwner, XHCI_VHUB_OWNER_PORT1,
+             "(port 1's reset running)");
+    CHECK_EQ(mmio[HC_PORTSC(vhub_xport(hubPort)) / 4] &
+                 (XHCI_PORTSC_PR | XHCI_PORTSC_PED),
+             XHCI_PORTSC_PR, "(PR set, PED clear)");
+}
+
+/* The model's end of that reset, by hand: PR clears and PRC is set, with PED
+ * as `enabled` says, and the event that reports it. */
+static void vhub_port1_reset_ends(ULONG hubPort, ULONG enabled)
+{
+    ULONG xport;
+
+    xport = vhub_xport(hubPort);
+    mmio[HC_PORTSC(xport) / 4] =
+        (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_PR) | XHCI_PORTSC_PRC |
+        (enabled ? XHCI_PORTSC_PED : 0);
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+}
+
+/*
+ * **A reset's end the poll sees before its event** (Codex's review of the
+ * round-6 no-record rule). No record on the port, so the disable's debt may
+ * settle unconfirmed - but not in the window after the hardware ends a reset
+ * (PR clear, PED and PRC set) and before the event or status refresh processes
+ * it: settled there, the refresh would find no debt, skip the redisable, and
+ * leave port 1 enabled under usbhub's disable.
+ */
+static void test_vhub_disable_inside_a_reset_no_record_poll_first(void)
+{
+    ULONG xport;
+    ULONG empty;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_port1_reset_in_flight(2, 5);
+    CHECK_EQ(XhciSlotPortHasRecords(&ext, 2), 0, "(no record on the port)");
+
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 1, 1, 0);
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 1,
+             "a disable inside the reset leaves its debt (PR set)");
+
+    /* The hardware ends the reset; nothing has processed it yet. */
+    portResetHangs = 0;
+    mmio[HC_PORTSC(xport) / 4] =
+        (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_PR) | XHCI_PORTSC_PED |
+        XHCI_PORTSC_PRC;
+    empty = ext.DisownsSettledEmpty;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 1,
+             "the poll does not settle it while PRC is unprocessed");
+    CHECK_EQ(ext.DisownsSettledEmpty, empty, "(not settled empty)");
+
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PED, 0,
+             "the reset's end has the disable written again");
+    CHECK_EQ(ext.Vhub[1].P1Enabled, 0, "port 1 reads disabled");
+    portResetClearsPed = 0;
+    vhub_reset_registry();
+}
+
+/*
+ * **The reset guard binds the idle rule too** (round 7). A disowned, idle
+ * record on the port - placed by hand: no slot and no ring, so there is
+ * nothing it could be busy with - and a disable inside a port-1 reset: the
+ * debt stays while PR is set and while the reset's end is unprocessed (PRC),
+ * as with no record, because there it also owes the redisable. The reset's
+ * end then has the disable written again, which confirms it.
+ */
+static void test_vhub_disable_inside_a_reset_idle_record(void)
+{
+    PXHCI_DEVICE dev;
+    ULONG xport;
+    ULONG idle;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_port1_reset_in_flight(2, 5);
+    dev = &ext.Devices[5];
+    dev->State = XHCI_DEV_STATE_DEFAULT;
+    dev->HubPort = 2;
+    dev->RootPort = xport;
+    dev->Flags = XHCI_DEV_FLAG_DISOWNED;
+    CHECK_EQ(XhciSlotPortHasRecords(&ext, 2), 1, "(a record on the port)");
+    CHECK_EQ(XhciSlotPortRecordsDisownedIdle(&ext, 2), 1,
+             "(disowned and idle)");
+
+    idle = ext.DisownsSettledIdle;
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 1, 1, 0);
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 1,
+             "a disable inside the reset leaves its debt (PR set)");
+
+    portResetHangs = 0;
+    mmio[HC_PORTSC(xport) / 4] =
+        (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_PR) | XHCI_PORTSC_PED |
+        XHCI_PORTSC_PRC;
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 1,
+             "nor does the poll settle it while PRC is unprocessed");
+    CHECK_EQ(ext.DisownsSettledIdle, idle, "(not settled idle)");
+
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PED, 0,
+             "the reset's end has the disable written again");
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 0, "which confirms the debt");
+    CHECK_EQ(dev->State, XHCI_DEV_STATE_FREE, "and the record is released");
+    portResetClearsPed = 0;
+    vhub_reset_registry();
+}
+
+/*
+ * **A retired port-1 reset whose deadline passes before its PRC** (task
+ * 24.3.4, Codex's third round, finding 2): the watchdog ends it as nobody's,
+ * and the PRC that comes afterwards on the hub-less port is nobody's too -
+ * no root-port reset, and no claim, which would have spent the hub's open
+ * another port's reset has just armed.
+ */
+static void test_vhub_retired_reset_late_prc(void)
+{
+    ULONG status;
+    ULONG change;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    vhub_port1_reset_in_flight(2, 5);
+    vhub_unplug(2);
+    CHECK_EQ(ext.Vhub[1].Present, 0, "(retired mid-reset)");
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 2);
+    hw_fire_port_timer();
+    CHECK_EQ(ext.Vhub[1].ResetOwner, XHCI_VHUB_OWNER_NONE,
+             "(the deadline ended it)");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, 0,
+             "the deadline of a hub-less port-1 reset is no root-port reset");
+
+    /* Another hub's open armed on port 3. */
+    vhub_plug(3, 1);
+    CHECK_EQ(vhub_root_reset(3), MP_STATUS_SUCCESS, "(port 3's reset)");
+    CHECK_EQ(ext.VhubArmedPort, 3, "(port 3's hub's open armed)");
+    CHECK_EQ(ext.EnumClaimSpent, 1, "(and no device claim)");
+
+    vhub_port1_reset_ends(2, 0);
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, 0,
+             "the late PRC is no root-port reset either");
+    CHECK_EQ(ext.VhubArmedPort, 3, "and leaves port 3's hub its open");
+    CHECK_EQ(ext.EnumClaimSpent, 1, "arming no claim of its own");
+    CHECK_EQ(ext.Vhub[1].LateEnd, 0, "(the late end consumed)");
+    vhub_reset_registry();
+}
+
+/*
+ * **The unplug and the port-1 reset's end in one reading** (finding 3): the
+ * reset's end is port 1's, the hub retires with its device in the same
+ * reading, and the root port reports the disconnect alone - no reset of its
+ * own, no claim for the device that went.
+ */
+static void test_vhub_unplug_and_reset_end_in_one_reading(void)
+{
+    ULONG xport;
+    ULONG status;
+    ULONG change;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_port1_reset_in_flight(2, 5);
+    CHECK_EQ(ext.EnumClaimSpent, 1, "(no claim armed)");
+    mmio[HC_PORTSC(xport) / 4] =
+        (mmio[HC_PORTSC(xport) / 4] &
+         ~(XHCI_PORTSC_PR | XHCI_PORTSC_CCS | XHCI_PORTSC_PED |
+           XHCI_PORTSC_SPEED_MASK)) |
+        XHCI_PORTSC_PRC | XHCI_PORTSC_CSC;
+    hw_post_event(XHCI_TRB_TYPE_PORT_STATUS_CHANGE, xport << 24, 0);
+    deliver_events();
+    CHECK_EQ(ext.Vhub[1].Present, 0, "the hub retired");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & (XHCI_HUB_C_PORT_CONNECTION | XHCI_HUB_C_PORT_RESET),
+             XHCI_HUB_C_PORT_CONNECTION,
+             "the root port reports the disconnect and not port 1's reset");
+    CHECK_EQ(ext.EnumClaimSpent, 1, "and no claim was armed");
+    vhub_reset_registry();
+}
+
+/*
+ * **usbport's root disable inside a port-1 reset** at 1 (finding 4): the hub
+ * retires, but a disable does not end a reset, so the record keeps knowing
+ * its reset is out - the confirmation waits for PR to clear, the reset's end
+ * is nobody's and has the disable written again, and only then is the debt
+ * collected.
+ */
+static void test_vhub_root_disable_inside_a_port1_reset(void)
+{
+    ULONG xport;
+    ULONG status;
+    ULONG change;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_port1_reset_in_flight(2, 5);
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 2),
+             MP_STATUS_SUCCESS, "usbport disables the root port");
+    CHECK_EQ(ext.Vhub[1].Present, 0, "retiring the hub");
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 1,
+             "but a port still in reset has not confirmed the disable");
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 1,
+             "(nor at the health poll)");
+
+    vhub_port1_reset_ends(2, 1);
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PED, 0,
+             "the reset's end has the disable written again");
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 0, "and it is collected");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, 0,
+             "the port-1 reset's end is not the root port's");
+    CHECK_EQ(ext.EnumClaimSpent, 1, "and arms no claim");
+    vhub_reset_registry();
+}
+
+/*
+ * The PR rule at 2 (Codex's third round asked for it through the driver):
+ * a port-1 disable inside a port-1 reset behind a hub that stays, the debt
+ * kept until the reset's end and collected by the redisable.
+ */
+static void test_vhub_always_disable_inside_a_port1_reset(void)
+{
+    ULONG xport;
+
+    vhub_start(2);
+    hwCmdSlotId = 6;
+    xport = vhub_xport(3);
+    vhub_always_device_behind(3, 3);
+    portResetHangs = 1;
+    portResetClearsPed = 1;
+    (void)vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0);
+    portResetHangs = 0;
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & (XHCI_PORTSC_PR | XHCI_PORTSC_PED),
+             XHCI_PORTSC_PR, "(port 1's reset in flight)");
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 1, 1, 0);
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 1,
+             "a port-1 disable inside the reset is not confirmed at 2 either");
+    vhub_port1_reset_ends(3, 1);
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PED, 0,
+             "the reset's end has it written again");
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 0, "and collected");
+    CHECK_EQ(ext.Vhub[2].P1Enabled, 0, "port 1 disabled");
+    CHECK_EQ(ext.Vhub[2].Present, 1, "the hub stays");
+    vhub_reset_registry();
+}
+
+/*
+ * **The hub retired by the reading a SET_PORT_FEATURE folds in** (task
+ * 24.3.4): the device left and nothing had read the port, so port 1's reset
+ * request is the first reading. The hub retires inside SubmitTransfer, its
+ * held status-change transfer is answered as cancelled, the request itself
+ * completes, and no physical reset is started for a device that has gone.
+ */
+static void test_vhub_retired_by_a_port1_request(void)
+{
+    ULONG xport;
+    ULONG resets;
+    ULONG cancels;
+    ULONG completions;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_plug(2, 1);
+    vhub_enumerate_hub(2, 5);
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2);
+    (void)vhub_control(&vhubEp0, 0x23, 0x01, 16, 1, 0);
+    CHECK_EQ(vhub_pipe_submit(), MP_STATUS_SUCCESS, "(the pipe)");
+    deliver_after_submit();
+    CHECK(ext.VhubBind[1].Held == &vhubPipeTransfer, "(held)");
+
+    mmio[HC_PORTSC(xport) / 4] &=
+        ~(XHCI_PORTSC_CCS | XHCI_PORTSC_PED | XHCI_PORTSC_SPEED_MASK);
+    mmio[HC_PORTSC(xport) / 4] |= XHCI_PORTSC_CSC;
+    resets = portResets;
+    cancels = ext.VhubPipeCancels;
+    completions = completeTransferCalls;
+    slotTransfer.UsbdStatus = 0x7777;
+    CHECK_EQ(vhub_control(&vhubEp0, 0x23, 0x03, 4, 1, 0), MP_STATUS_SUCCESS,
+             "SET_PORT_FEATURE(1, PORT_RESET) on the vanished device");
+    CHECK_EQ(ext.Vhub[1].Present, 0, "retires the hub with its reading");
+    CHECK_EQ(portResets, resets, "starting no physical reset");
+    CHECK_EQ(ext.VhubPipeCancels, cancels + 1,
+             "the held transfer answered as cancelled");
+    CHECK_EQ(completeTransferCalls, completions + 2,
+             "two completions delivered, once each: the request and the pipe");
+    CHECK_EQ(vhubPipeTransfer.UsbdStatus, (LONG)XHCI_USBD_STATUS_CANCELED,
+             "the pipe's as cancelled");
+    CHECK_EQ(slotTransfer.UsbdStatus, (LONG)XHCI_USBD_STATUS_SUCCESS,
+             "the request's as done");
+    CHECK(ext.CompletionHead == NULL, "nothing left owed");
+    CHECK(ext.VhubBind[1].Held == NULL, "and nothing held");
+    vhub_reset_registry();
+}
+
+/*
+ * The other order of finding 2: port 1's reset reaches its deadline while
+ * the hub is there - reported to port 1, as any timed-out port-1 reset - and
+ * only then does the device leave. The hub retires, and the PRC that comes
+ * late is still nobody's: the record kept `LateEnd` across the retirement.
+ */
+static void test_vhub_deadline_then_unplug_then_late_prc(void)
+{
+    ULONG status;
+    ULONG change;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    vhub_port1_reset_in_flight(2, 5);
+    hw_fire_port_timer();
+    CHECK_EQ(ext.Vhub[1].P1Changes & XHCI_HUB_C_PORT_RESET,
+             XHCI_HUB_C_PORT_RESET, "(the deadline reported to port 1)");
+    vhub_unplug(2);
+    CHECK_EQ(ext.Vhub[1].Present, 0, "(then the hub retires)");
+    CHECK_EQ(ext.Vhub[1].LateEnd, 1, "keeping the late end");
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 2);
+    vhub_plug(3, 1);
+    CHECK_EQ(vhub_root_reset(3), MP_STATUS_SUCCESS, "(port 3's reset)");
+    CHECK_EQ(ext.VhubArmedPort, 3, "(port 3's hub's open armed)");
+
+    vhub_port1_reset_ends(2, 0);
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, 0,
+             "the late PRC is no root-port reset");
+    CHECK_EQ(ext.VhubArmedPort, 3, "and leaves port 3's hub its open");
+    CHECK_EQ(ext.EnumClaimSpent, 1, "arming no claim of its own");
+    vhub_reset_registry();
+}
+
+/*
+ * **A recovery while a retired hub's port-1 reset is still out** (task
+ * 24.3.4, Codex's fourth round): HCRST ended the reset and the rebuilt shadow
+ * no longer times it, so the record lets go of it too. The next device's
+ * root reset is then the core's own - it decides, stands a hub up and latches
+ * the root port's reset - rather than being taken for the old one.
+ */
+static void test_vhub_recovery_releases_a_retired_reset(void)
+{
+    ULONG status;
+    ULONG change;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    vhub_port1_reset_in_flight(2, 5);
+    vhub_unplug(2);
+    CHECK_EQ(ext.Vhub[1].ResetOwner, XHCI_VHUB_OWNER_SUPERSEDED,
+             "(the retired hub's reset still out)");
+
+    mmio[HC_OP(XHCI_OP_USBSTS) / 4] |= XHCI_USBSTS_HCE;
+    XhciRegPacket.CheckController(&ext);
+    asyncCallback = NULL;
+    asyncRequests = 0;
+    XhciRegPacket.ResetController(&ext);
+    XhciRegPacket.CheckController(&ext);
+    fire_async_timer();
+    CHECK_EQ(ext.RecoveryCompletions, 1, "(the recovery completed)");
+    CHECK_EQ(ext.Vhub[1].ResetOwner, XHCI_VHUB_OWNER_NONE,
+             "the reinitialisation lets go of the reset");
+    CHECK_EQ(ext.Vhub[1].LateEnd, 0, "and of any late end");
+    deliver_events();
+
+    vhub_plug(2, 1);                                /* Full Speed */
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 2);
+    CHECK_EQ(vhub_root_reset(2), MP_STATUS_SUCCESS, "the next device's reset");
+    CHECK_EQ(ext.Vhub[1].Present, 1, "decides, and stands a hub up");
+    CHECK_EQ(ext.VhubArmedPort, 2, "with its open armed");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "and the root port reports its reset");
+    vhub_reset_registry();
+}
+
+/*
+ * **A root disable inside a direct port's own reset at 1** (Codex's fourth
+ * round): no hub, and a root reset rather than port 1's, so the confirmation
+ * is today's and no debt is left that nothing would collect.
+ */
+static void test_vhub_direct_port_disable_inside_its_reset(void)
+{
+    vhub_start(1);
+    vhub_plug(3, 3);                                /* High Speed */
+    portResetHangs = 1;
+    portResetClearsPed = 1;
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortReset(&ext, 3), MP_STATUS_SUCCESS,
+             "(the direct port's reset, in flight)");
+    portResetHangs = 0;
+    CHECK_EQ(ext.Vhub[2].ResetOwner, XHCI_VHUB_OWNER_ROOT, "(owned for its "
+             "decision)");
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 3),
+             MP_STATUS_SUCCESS, "usbport disables the port");
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 0,
+             "the confirmation is today's on a port with no hub");
+    vhub_port1_reset_ends(3, 1);
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 0,
+             "and no debt is left for the reset's end to strand");
+    CHECK_EQ(ext.Vhub[2].Decision, XHCI_VHUB_DECIDED_DIRECT, "(direct)");
+    XhciRegPacket.CheckController(&ext);
+    CHECK_EQ(ext.RootHub.Ports[2].DisownPending, 0, "(nor at the poll)");
+    vhub_reset_registry();
+}
+
+/*
+ * **A root power-off inside a port-1 reset**, and the next device (Codex's
+ * fourth round): the power-off retires the hub and ends the reset, which is
+ * nobody's - no root-port reset is reported for it - and a new device's root
+ * reset before that late end was consumed is still the core's, and decides.
+ */
+static void test_vhub_power_off_inside_a_port1_reset(void)
+{
+    ULONG status;
+    ULONG change;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    vhub_port1_reset_in_flight(2, 5);
+    CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortPower(&ext, 2),
+             MP_STATUS_SUCCESS, "usbport powers the root port off");
+    CHECK_EQ(ext.Vhub[1].Present, 0, "retiring the hub");
+    CHECK_EQ(mmio[HC_PORTSC(vhub_xport(2)) / 4] & XHCI_PORTSC_PR, 0,
+             "(the power-off ended the reset)");
+    deliver_events();
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, 0,
+             "and the ended port-1 reset is no root-port reset");
+
+    CHECK_EQ(XhciRegPacket.RH_SetFeaturePortPower(&ext, 2), MP_STATUS_SUCCESS,
+             "(powered again)");
+    deliver_events();
+    vhub_plug(2, 1);                                /* Full Speed */
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 2);
+    CHECK_EQ(vhub_root_reset(2), MP_STATUS_SUCCESS, "the next device's reset");
+    CHECK_EQ(ext.Vhub[1].LateEnd, 0, "takes the port from any late end");
+    CHECK_EQ(ext.Vhub[1].Present, 1, "decides, and stands a hub up");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "and the root port reports its reset");
+    vhub_reset_registry();
+}
+
+/*
+ * **A restore keeps a retired reset's late end** (task 24.3.4, Codex's fifth
+ * round). Unlike HCRST, a successful Controller Restore State leaves PORTSC as
+ * it was, so a port-1 reset whose hub retired may already have ended - its
+ * PRC waiting for the seed's reading - or may end after it. Either PRC is
+ * nobody's: no root-port reset, no claim; and the next device's reset is
+ * still the core's own.
+ */
+static void vhub_suspend_and_restore(void)
+{
+    saveRestoreShape = SR_CONFORMING;
+    XhciRegPacket.SuspendController(&ext);
+    CHECK_EQ(ext.SavedStateValid, 1, "(the state was saved)");
+    hostRestores = 0;
+    CHECK_EQ(XhciRegPacket.ResumeController(&ext), MP_STATUS_SUCCESS,
+             "(the resume)");
+    CHECK_EQ(hostRestores, 1, "(restored, not reinitialised)");
+    CHECK_EQ(ext.RestoreFailures, 0, "(with no failure)");
+    XhciRegPacket.EnableInterrupts(&ext);
+    deliver_events();
+    CHECK_EQ(ext.Flags & XHCI_EXT_FLAG_INITIALIZED, XHCI_EXT_FLAG_INITIALIZED,
+             "(running again)");
+}
+
+static void vhub_next_device_decides(ULONG hubPort)
+{
+    ULONG status;
+    ULONG change;
+
+    vhub_plug(hubPort, 1);                          /* Full Speed */
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext,
+                                                         (USHORT)hubPort);
+    CHECK_EQ(vhub_root_reset(hubPort), MP_STATUS_SUCCESS,
+             "the next device's reset");
+    CHECK_EQ(ext.Vhub[hubPort - 1].Present, 1, "decides, and stands a hub up");
+    vhub_root_status(hubPort, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "and the root port reports its reset");
+}
+
+static void test_vhub_restore_keeps_a_late_end(void)
+{
+    ULONG xport;
+    ULONG status;
+    ULONG change;
+
+    /* The late end already set, its PRC pending when the seed reads. */
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_port1_reset_in_flight(2, 5);
+    vhub_unplug(2);
+    hw_fire_port_timer();
+    CHECK_EQ(ext.Vhub[1].LateEnd, 1, "(a late end, owned by nobody)");
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 2);
+    mmio[HC_PORTSC(xport) / 4] =
+        (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_PR) | XHCI_PORTSC_PRC;
+    vhub_suspend_and_restore();
+    deliver_events();
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, 0,
+             "the PRC the seed finds is no root-port reset");
+    CHECK_EQ(ext.EnumClaimSpent, 1, "and arms no claim");
+    CHECK_EQ(ext.Vhub[1].LateEnd, 0, "(the late end consumed)");
+    vhub_next_device_decides(2);
+    vhub_reset_registry();
+
+    /* The reset still out across the restore, its PRC after the seed. */
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    vhub_port1_reset_in_flight(2, 5);
+    vhub_unplug(2);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 2);
+    CHECK_EQ(ext.Vhub[1].ResetOwner, XHCI_VHUB_OWNER_SUPERSEDED,
+             "(the retired hub's reset still out)");
+    vhub_suspend_and_restore();
+    CHECK_EQ(ext.Vhub[1].ResetOwner, XHCI_VHUB_OWNER_NONE,
+             "the restore lets go of its ownership");
+    CHECK_EQ(ext.Vhub[1].LateEnd, 1, "keeping its end as a late one");
+    deliver_events();
+    vhub_port1_reset_ends(2, 0);
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, 0,
+             "the PRC after the seed is no root-port reset");
+    CHECK_EQ(ext.EnumClaimSpent, 1, "and arms no claim");
+    vhub_next_device_decides(2);
+    vhub_reset_registry();
+}
+
+/*
+ * **A restore between a root disable and the port-1 reset it landed in**
+ * (Codex's sixth round). The rebuild drops the disable's debt with the rest
+ * of the old tenancy, but the reset survives the restore as a late end; when
+ * it ends and enables the port, the hub-less port is disabled again all the
+ * same - whether its PRC comes after the seed or is already pending for it.
+ */
+static void test_vhub_restore_between_disable_and_reset_end(void)
+{
+    ULONG xport;
+    ULONG pass;
+    ULONG status;
+    ULONG change;
+
+    for (pass = 0; pass < 2; pass++) {
+        vhub_start(1);
+        hwCmdSlotId = 4;
+        xport = vhub_xport(2);
+        vhub_port1_reset_in_flight(2, 5);
+        CHECK_EQ(XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 2),
+                 MP_STATUS_SUCCESS, "(usbport disables the root port)");
+        CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 1, "(the debt owed)");
+        if (pass == 1) {
+            /* The reset ends before the seed reads the port. */
+            mmio[HC_PORTSC(xport) / 4] =
+                (mmio[HC_PORTSC(xport) / 4] & ~XHCI_PORTSC_PR) |
+                XHCI_PORTSC_PED | XHCI_PORTSC_PRC;
+        }
+        vhub_suspend_and_restore();
+        if (pass == 0) {
+            vhub_port1_reset_ends(2, 1);
+        }
+        CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PED, 0,
+                 pass == 0 ? "the reset's end after the restore is disabled "
+                             "again"
+                           : "the reset's end the seed found is disabled "
+                             "again");
+        vhub_root_status(2, &status, &change);
+        CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, 0,
+                 "and is no root-port reset");
+        CHECK_EQ(ext.EnumClaimSpent, 1, "arming no claim");
+        vhub_reset_registry();
+    }
+}
+
+/*
+ * The negative of the vector above (Codex's seventh round): a late end left
+ * on the port, then a replacement device whose root reset is accepted. Its
+ * end is the root's own - never nobody's - so the port it enables stays
+ * enabled and the direct claim it arms survives.
+ */
+static void test_vhub_replacement_after_a_late_end_keeps_its_port(void)
+{
+    ULONG xport;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_port1_reset_in_flight(2, 5);
+    vhub_unplug(2);
+    hw_fire_port_timer();
+    CHECK_EQ(ext.Vhub[1].LateEnd, 1, "(a late end on the port)");
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 2);
+
+    vhub_plug(2, 3);                                /* High Speed */
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 2);
+    CHECK_EQ(vhub_root_reset(2), MP_STATUS_SUCCESS,
+             "the replacement's root reset is accepted");
+    CHECK_EQ(ext.Vhub[1].LateEnd, 0, "taking the port from the late end");
+    CHECK_EQ(ext.Vhub[1].Decision, XHCI_VHUB_DECIDED_DIRECT, "(direct)");
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PED, XHCI_PORTSC_PED,
+             "its port stays enabled");
+    CHECK_EQ(ext.EnumClaimSpent, 0, "and its claim is armed");
+    CHECK_EQ(ext.EnumHubPort, 2, "on this port");
+    vhub_reset_registry();
+}
+
+/*
+ * **A root disable whose PED clears late, then usbport's next root reset**
+ * (task 24.3.4, Codex's review of the round-2 readings). usbhub's recovery at 1
+ * disables the root port - retiring the hub, its device still plugged in - and
+ * resets it. On a port whose PED reflects the write only after the read-back,
+ * the disable's debt is still standing when the reset is asked for, and nothing
+ * has collected it: the absent-hub path accepts the reset, its end stands up a
+ * replacement hub, and the redisable runs under it. On a port that honours the
+ * write, that redisable is what collected the debt; the hub and its upstream
+ * enable stay, and the hub's second enumeration reset is not held. (In QEMU,
+ * which ignores the write, the debt was never collected and the second reset
+ * was held - the loop the Vista and 7 readings showed, and in round 6 the
+ * Windows 7 bugcheck.) Since round 6 the device behind the hub here has no
+ * record - it was never addressed - so the debt protects nothing and settles
+ * at the disable itself (XhciSlotPortHasRecords); the reset then leaves the
+ * port enabled, as any root reset at 1 does, and the second reset is still not
+ * held.
+ */
+static void test_vhub_root_disable_confirmed_late_then_reset(void)
+{
+    ULONG xport;
+    ULONG dropped;
+    ULONG created;
+    ULONG resets;
+    ULONG held;
+    ULONG status;
+    ULONG change;
+    ULONG empty;
+
+    vhub_start(1);
+    hwCmdSlotId = 4;
+    xport = vhub_xport(2);
+    vhub_plug(2, 1);                                /* Full Speed */
+    vhub_enumerate_hub(2, 1);
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2);
+    (void)XhciRegPacket.RH_ClearFeaturePortConnectChange(&ext, 2);
+    CHECK_EQ(ext.Vhub[1].Present, 1, "(a configured hub on port 2)");
+
+    /* usbport disables the root port; PED has not cleared at the read-back. */
+    dropped = ext.VhubDropped;
+    empty = ext.DisownsSettledEmpty;
+    stuckPortPed = xport;
+    (void)XhciRegPacket.RH_ClearFeaturePortEnable(&ext, 2);
+    deliver_after_submit();
+    CHECK_EQ(ext.Vhub[1].Present, 0, "the root disable retires the hub");
+    CHECK_EQ(ext.VhubDropped, dropped + 1, "(counted)");
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 0,
+             "with no record on the port the debt settles at once, PED "
+             "unconfirmed");
+    CHECK_EQ(ext.DisownsSettledEmpty, empty + 1, "(counted)");
+
+    /* The port clears PED a moment later; no health poll runs before usbport
+     * asks for the next reset. */
+    stuckPortPed = 0;
+    mmio[HC_PORTSC(xport) / 4] &= ~XHCI_PORTSC_PED;
+    created = ext.VhubCreated;
+    resets = portResets;
+    CHECK_EQ(vhub_root_reset(2), MP_STATUS_SUCCESS,
+             "the next root reset is accepted on the hub-less port");
+    CHECK_EQ(portResets, resets + 1, "and written to the port");
+    CHECK_EQ(ext.VhubCreated, created + 1,
+             "its end stands up a replacement hub");
+    CHECK_EQ(ext.RootHub.Ports[1].DisownPending, 0, "(no debt stands)");
+    CHECK_EQ(mmio[HC_PORTSC(xport) / 4] & XHCI_PORTSC_PED, XHCI_PORTSC_PED,
+             "no redisable is owed, so the reset leaves the port enabled");
+    CHECK_EQ(ext.Vhub[1].Present, 1, "the replacement hub stays");
+    CHECK_EQ(ext.Vhub[1].UpEnabled, 1, "with its upstream enabled");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(status & XHCI_HUB_PORT_ENABLE, XHCI_HUB_PORT_ENABLE,
+             "which is what the root port reports");
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "with the reset's end");
+    (void)XhciRegPacket.RH_ClearFeaturePortResetChange(&ext, 2);
+
+    /* The replacement's enumeration goes on: its second reset is not held. */
+    CHECK_EQ(vhub_open_ep0(&vhubEp0B, 0), MP_STATUS_SUCCESS,
+             "(the replacement's EP0 at address 0)");
+    CHECK_EQ(vhubEp0B.Flags, XHCI_ENDPOINT_FLAG_OPEN | XHCI_ENDPOINT_FLAG_VHUB,
+             "(the hub's)");
+    (void)vhub_control(&vhubEp0B, 0x80, 0x06, 0x0100, 0, 64);
+    held = ext.VhubResetsHeld;
+    CHECK_EQ(vhub_root_reset(2), MP_STATUS_SUCCESS, "its second reset");
+    CHECK_EQ(ext.VhubResetsHeld, held, "is not held");
+    vhub_root_status(2, &status, &change);
+    CHECK_EQ(change & XHCI_HUB_C_PORT_RESET, XHCI_HUB_C_PORT_RESET,
+             "and ends");
+    CHECK_EQ(status & XHCI_HUB_PORT_ENABLE, XHCI_HUB_PORT_ENABLE,
+             "with the port enabled");
+    CHECK_EQ(ext.Vhub[1].Present, 1, "(the hub in place)");
+    vhub_reset_registry();
+}
+
 int main(void)
 {
     /*
@@ -30268,6 +35441,12 @@ int main(void)
     test_command_event_validation();
     test_reset_controller();
     test_recovery_delivery_loss();
+    test_nt6_arm_tier();
+    test_nt6_arm_command_owed();
+    test_nt6_arm_timeout_and_refusal();
+    test_nt6_arm_port_kick();
+    test_nt6_rh_report();
+    test_nt6_arm_recovery();
     test_controller_recovery();
     test_fatal_after_recovery();
     test_recovery_refuses_into_set_cnr();
@@ -30366,12 +35545,14 @@ int main(void)
     test_slot_interrupt_remove_is_per_endpoint();
     test_slot_interrupt_teardown_returns_rings();
     test_slot_interrupt_second_order();
+    test_slot_interrupt_promoted_period();
     test_slot_abort_stops_and_preserves();
     test_slot_paused_endpoint_is_restarted_by_the_poll();
     test_slot_abort_takes_it_off_the_completion_list();
     test_slot_abort_after_the_record_is_released();
     test_slot_completion_waits_for_poll_endpoint();
     test_slot_completion_fallback_poll();
+    test_slot_completion_busy_drain_owes_no_soft_interrupt();
     test_slot_completion_locked_contexts_and_forced();
     test_slot_completion_per_endpoint_only();
     test_slot_completion_holds_for_a_pass_after_the_bracket();
@@ -30433,6 +35614,8 @@ int main(void)
     test_hub_unplugged_at_address_zero_frees_its_node();
     test_hub_with_no_ports_is_not_marked();
     test_behind_hub_device_is_addressed();
+    test_disown_waits_for_a_record_behind_a_hub();
+    test_disown_waits_for_a_posted_interrupt_read();
     test_behind_hub_tt_is_programmed();
     test_behind_hub_too_deep_is_refused();
     test_behind_hub_high_speed_child_has_no_tt();
@@ -30457,7 +35640,53 @@ int main(void)
     test_restore_preconditions();
     test_lifecycle_release_evidence();
     test_passthru_snapshot();
+    test_passthru_snapshot_vhub_refused();
     test_passthru_snapshot_disabled();
+    test_vhub_off_is_todays_driver();
+    test_vhub_on_demand_full_speed();
+    test_vhub_on_demand_high_speed_is_direct();
+    test_vhub_on_demand_swap_inside_a_reset();
+    test_vhub_root_reset_over_a_port1_reset();
+    test_vhub_on_demand_recovery_with_the_device_gone();
+    test_vhub_always_root_reset_holds_the_slot();
+    test_vhub_always_root_reset_with_no_record();
+    test_vhub_held_reset_released_when_the_record_goes();
+    test_vhub_root_reset_with_an_idle_disowned_record();
+    test_vhub_idle_disowned_record_waits_for_its_command();
+    test_slot_address_reclaim_r8();
+    test_slot_address_reclaim_refusals();
+    test_slot_address_reclaim_interleavings();
+    test_slot_address_reclaim_hub();
+    test_vhub_address_claims();
+    test_vhub_abort_finds_the_held_pipe();
+    test_vhub_always_disable_and_power_cycle();
+    test_vhub_suspend_resume_through_the_callbacks();
+    test_vhub_port1_reset_spends_every_hub_arm();
+    test_vhub_port1_disable_after_a_hardware_disable();
+    test_vhub_tt_pair_naming_a_virtual_hub_agrees();
+    test_vhub_always_unplug_is_port1s_change();
+    test_vhub_always_recovery_keeps_the_hub();
+    test_vhub_submit_never_announces();
+    test_vhub_nt6_answer_asks_for_a_soft_interrupt();
+    test_vhub_on_demand_unplug_retires_the_hub();
+    test_vhub_disable_inside_a_port1_reset();
+    test_vhub_disable_inside_a_reset_no_record_poll_first();
+    test_vhub_disable_inside_a_reset_idle_record();
+    test_vhub_unplug_inside_a_port1_reset();
+    test_vhub_retired_reset_late_prc();
+    test_vhub_deadline_then_unplug_then_late_prc();
+    test_vhub_unplug_and_reset_end_in_one_reading();
+    test_vhub_root_disable_inside_a_port1_reset();
+    test_vhub_always_disable_inside_a_port1_reset();
+    test_vhub_retired_by_a_port1_request();
+    test_vhub_recovery_releases_a_retired_reset();
+    test_vhub_direct_port_disable_inside_its_reset();
+    test_vhub_power_off_inside_a_port1_reset();
+    test_vhub_restore_keeps_a_late_end();
+    test_vhub_restore_between_disable_and_reset_end();
+    test_vhub_replacement_after_a_late_end_keeps_its_port();
+    test_vhub_root_disable_confirmed_late_then_reset();
+    test_nt6_arm_vhub_port1_resume();
 
     /*
      * The net under every test above, and the reason it is here rather than in
@@ -30504,6 +35733,27 @@ int main(void)
     CHECK_EQ(rootHubInvalidatesUnderLockTotal, 0,
              "nor UsbPortInvalidateRootHub, whose service re-enters the "
              "miniport through RH_DisableIrq");
+    CHECK_EQ(rootHubInvalidatesInSubmitTotal, 0,
+             "and UsbPortInvalidateRootHub never from inside a SubmitTransfer, "
+             "anywhere in this suite - an NT 6.x usbport's service takes the "
+             "EpList lock that callback runs under");
+    /* Roadmap 24.4, over every Version 300 start in the suite. */
+    CHECK_EQ(legacyArmOnTier300Total, 0,
+             "on the Version 300 tier the legacy timer service, which skips "
+             "usbport's timer-list lock, is never called");
+    CHECK_EQ(exArmInLockedContextTotal, 0,
+             "and Ex is never called from a timer callback, a root-hub feature "
+             "callback or an endpoint callback, where usbport may already "
+             "hold that lock or holds EpList");
+    CHECK_EQ(exArmSkippingLockTotal, 0,
+             "and never with its lock byte set");
+    CHECK_EQ(rootHubInvalidatesLockedTier300Total, 0,
+             "and on the Version 300 tier UsbPortInvalidateRootHub is never "
+             "called from the event DPC, a timer callback or a root-hub "
+             "feature or endpoint callback, where usbport holds a lock its "
+             "root-hub DPC takes the other way round (round 5)");
+    CHECK(rootHubReportsModelled > 0,
+          "(and the port bit was exercised through deliver_events)");
 
     /*
      * And the generalization of those two, which is what task 9's static review

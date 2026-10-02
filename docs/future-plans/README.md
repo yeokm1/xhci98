@@ -15,20 +15,11 @@ tree wins.
 
 ## Index
 
-- [virtual-hub-per-root-port.md](virtual-hub-per-root-port.md) - Real
-  speeds on root ports. The driver reports every root-port device as High
-  Speed because usbport bugchecks on anything else (issue 6), at the cost of
-  1, 2 and 4 ms interrupt bands, a derived isochronous cadence and a
-  Device Manager that says High Speed for everything. The idea: present a
-  virtual USB 2.0 hub, High Speed with one port and one transaction
-  translator, behind every managed root port, so that usbport finds the hub
-  its EHCI model expects and does the truthful thing at every layer, while
-  the xHC keeps driving the device on its root port unchanged. Gated
-  behind a `REG_DWORD` in the controller's driver key, off by default, and
-  with the value absent or 0 the driver behaves exactly as today. Covers
-  the switch, the request table the hub answers, the status-change pipe, how the topology
-  graph folds the hub out, the permanent and on-demand shapes, what has to
-  be measured on each hub driver first, and the owner's decisions.
+The virtual-hub page, the one entry here that ever carried a task id, left
+on 2026-09-25 to become design record 12
+(`docs/contributing/design/12-virtual-hub-on-root-ports.md`) when roadmap
+task 24.3 took it up.
+
 - [superspeed-storage-behind-a-switch.md](superspeed-storage-behind-a-switch.md) -
   Proposal, written 2026-09-04 and not yet built (it was design record 10
   until 2026-09-07): SuperSpeed mass storage on root ports without leaving
@@ -48,5 +39,6 @@ tree wins.
   newer port driver runs on these targets, so it would first need the
   Option B monolithic host controller driver that re-implements usbport's
   role, and only then the link, descriptor, burst and stream, USB 3.x hub
-  and bandwidth work listed there. Not planned; kept so the question is not
-  re-derived.
+  and bandwidth work listed there. On the cards as the miniport driver's
+  successor, once the miniport stabilises (owner, 2026-10-02); no phase or
+  task id yet.

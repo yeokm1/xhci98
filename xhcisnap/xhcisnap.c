@@ -298,8 +298,20 @@ static const unsigned long snap_guid[4] = {
  * **Schema 4** is roadmap task 23.4's: the moderation interval's four fields
  * appended after `RingUsed`. A tool from `1.1.0.0` or earlier refuses a
  * `1.1.1.0` driver, and this one refuses theirs.
+ *
+ * **Schema 5** is roadmap task 24.3's: the virtual hub's switch and its two id
+ * reads, twelve fields after `ImodReadback`.
  */
-#define SNAP_SCHEMA                 4UL
+#define SNAP_SCHEMA                 5UL
+
+/* The driver's XHCI_VHUB_* values (src/xhci_vhub.h), duplicated for the
+ * reason the ladder below is. */
+#define SNAP_VHUB_OFF               0UL
+#define SNAP_VHUB_ON_DEMAND         1UL
+#define SNAP_VHUB_ALWAYS            2UL
+#define SNAP_VHUB_WHY_SWITCH        1UL
+#define SNAP_VHUB_WHY_VID           2UL
+#define SNAP_VHUB_WHY_PID           3UL
 
 /* The driver's XHCI_IMOD_INTERVAL_* range, duplicated for the reason the
  * ladder below is. */
@@ -403,6 +415,19 @@ typedef struct _SNAP_HEADER {
     unsigned long ImodRequested;
     unsigned long ImodInterval;
     unsigned long ImodReadback;
+    /* ---- schema 5 (task 24.3): the virtual hub's switch and ids ---- */
+    unsigned long VhubSwitchStatus;
+    unsigned long VhubSwitchValue;
+    unsigned long VhubApplied;
+    unsigned long VhubRefused;
+    unsigned long VhubVidStatus;
+    unsigned long VhubVidResult;
+    unsigned long VhubVidEncoding;
+    unsigned long VhubVid;
+    unsigned long VhubPidStatus;
+    unsigned long VhubPidResult;
+    unsigned long VhubPidEncoding;
+    unsigned long VhubPid;
 } SNAP_HEADER;
 
 /*
@@ -938,6 +963,86 @@ static void write_companion_imod(const SNAP_HEADER *h)
     }
 }
 
+/*
+ * Roadmap task 24.3's virtual hub: the switch as read, the mode the driver
+ * applied, and - when it refused - which value and why, in words, because the
+ * feature is off for any of several reasons and "I set 1 and nothing changed"
+ * is the report this line exists to answer. The ids are consulted only with
+ * the switch at 1 or 2, so with it off they say nothing and are not printed.
+ */
+static const char *vhub_mode_text(unsigned long mode)
+{
+    if (mode == SNAP_VHUB_OFF) {
+        return "off";
+    }
+    if (mode == SNAP_VHUB_ON_DEMAND) {
+        return "1, on demand (a hub above each Full/Low Speed root-port device)";
+    }
+    if (mode == SNAP_VHUB_ALWAYS) {
+        return "2, always on (a hub on every USB 2.0 port)";
+    }
+    return "unknown";
+}
+
+static const char *vhub_id_text(unsigned long result)
+{
+    switch (result) {
+    case 0: return "not consulted";
+    case 1: return "accepted";
+    case 2: return "missing, unreadable or too long";
+    case 3: return "no terminator in the buffer";
+    case 4: return "not exactly four hexadecimal digits";
+    case 5: return "a character that is not a hexadecimal digit";
+    case 6: return "vendor id 0000, refused";
+    default: return "unknown";
+    }
+}
+
+static const char *vhub_encoding_text(unsigned long encoding)
+{
+    if (encoding == 1) {
+        return ", arrived as UTF-16";
+    }
+    if (encoding == 2) {
+        return ", arrived single-byte";
+    }
+    return "";
+}
+
+static void write_companion_vhub(const SNAP_HEADER *h)
+{
+    comp("    XhciVirtualHSHub   %s, value %lu\n",
+         mpstatus_text(h->VhubSwitchStatus), h->VhubSwitchValue);
+    comp("      virtual hub      %s\n", vhub_mode_text(h->VhubApplied));
+    if (h->VhubRefused == SNAP_VHUB_WHY_SWITCH) {
+        comp("        ^ %lu is not 0, 1 or 2, so the driver applied 0 - "
+             "refused, not clamped.\n", h->VhubSwitchValue);
+    }
+    if (h->VhubVidResult == 0 && h->VhubPidResult == 0) {
+        return;
+    }
+    comp("    XhciVirtualHSHubVid %s, %s%s",
+         mpstatus_text(h->VhubVidStatus), vhub_id_text(h->VhubVidResult),
+         vhub_encoding_text(h->VhubVidEncoding));
+    if (h->VhubVidResult == 1) {
+        comp(", %04lX", h->VhubVid);
+    }
+    comp("\n");
+    comp("    XhciVirtualHSHubPid %s, %s%s",
+         mpstatus_text(h->VhubPidStatus), vhub_id_text(h->VhubPidResult),
+         vhub_encoding_text(h->VhubPidEncoding));
+    if (h->VhubPidResult == 1) {
+        comp(", %04lX", h->VhubPid);
+    }
+    comp("\n");
+    if (h->VhubRefused == SNAP_VHUB_WHY_VID ||
+        h->VhubRefused == SNAP_VHUB_WHY_PID) {
+        comp("        ^ the %s id failed, so the virtual hub is off for this "
+             "start.\n",
+             (h->VhubRefused == SNAP_VHUB_WHY_VID) ? "vendor" : "product");
+    }
+}
+
 static void write_companion_header(const SNAP_HEADER *h)
 {
     comp("\nxhci98 snapshot - the part a maintainer can read without an offset "
@@ -1000,6 +1105,7 @@ static void write_companion_header(const SNAP_HEADER *h)
                  "read.\n");
         }
         write_companion_imod(h);
+        write_companion_vhub(h);
     }
 
     comp("\n  verbosity tier     read %lu, APPLIED %lu\n",

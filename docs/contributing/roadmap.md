@@ -44,7 +44,7 @@ the port driver's role, was the documented fallback and was never needed. USB
 `docs/usb-xhci-info/win98-wdm.md` ("USB Stack Architecture and the Integration
 Decision") and `architecture.md`.
 
-Current status: Phases 0-22 are closed. `1.0.0.0`, `1.0.0.1`, `1.0.1.0`,
+Current status: Phases 0-24 are closed. `1.0.0.0`, `1.0.0.1`, `1.0.1.0`,
 `1.0.2.0` and `1.1.0.0` are cut, and all five have been uploaded to GitHub
 releases (`1.1.0.0` on 2026-09-20); Phase 15 moved the
 tree from revision 1.2 of the xHCI specification to revision 1.2c, the only
@@ -84,7 +84,17 @@ registry value shipped at 500; the audio gate on that value passed with a
 limitation, a stutter on large reads. On 2026-09-22 the owner moved the
 issue's other two requests, interrupt polling rates and true speeds on root
 ports, out of Phase 23 into a Phase 24, and then removed that phase the same
-day: they are **not scheduled**. The upload of `1.1.1.0` is the owner's.
+day. The upload of `1.1.1.0` is the owner's. **Phase 24**, added on
+2026-09-24 at the owner's request once Phase 23 closed and closed on
+2026-10-02, is the second phase of that number and **carries the `1.2.0.0`
+cut**: the Low-Speed polling rates behind a hub (the reporter's Code 10 at
+250 Hz and above), root-port polling rates decided as owned by the next
+task, true speeds on root ports through the optional virtual USB 2.0 hub of
+design record 12, off by default, and two older defects fixed on the way
+(the NT 6.x timer-arm race, and the interval of a High-Speed device behind a
+hub). The owner accepted round 12's device matrix, on a build that differs
+from the cut only in its version stamp, as the post-release matrix. The
+upload of `1.2.0.0` is the owner's.
 **Phase 22**, closed on 2026-09-19, began as the 32-bit
 question - whether the binary that already ships runs on Windows Vista and
 Windows 7 as it stands - and that premise fell with Phase 21's: measurements
@@ -104,8 +114,8 @@ work can be confirmed and has no checkpoint of its own. A VM boot or a bench
 trip is the expensive unit, and most tasks do not need one, so from Phase 6
 onward a phase whose tasks are confirmed in more than one place groups them
 into batches. Phases 6, 7a, 7b, 8, 9, 11 and 13 are of this shape; Phases 0-5,
-10, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22 and 23 have plain per-phase task
-numbers.
+10, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23 and 24 have plain per-phase
+task numbers.
 
 Task ids are `<batch>.<n>` in a batched phase (`6-B.4` is the fourth task of
 batch `6-B`) and plain `<phase>.<n>` otherwise (`12.3`, `14.1`). Phases 0-5
@@ -130,8 +140,17 @@ sub-task is `<task>.<n>`: `7b-A.1.2` is sub-task 2 of task `7b-A.1`, and
 `14.1.1` to `14.1.11` are the clauses of task `14.1`. The one exception is
 Phases 23 and 24, renumbered in order on 2026-09-22 (`7488f13`) while no id
 of theirs was in a published `readme.txt`; Phase 24 was removed the same day. No tracked file cites a
-pre-renumbering id as a task id; task 14.1.9 checks that. What keeps an old
-id is an artifact name - a snapshot, a marker, an `out\` directory - and
+pre-renumbering id as a task id; task 14.1.9 checks that. The Phase 24 added
+on 2026-09-24 keeps the removed one's meanings for 24.1 to 24.3, which
+`runs/run-23.md` cites, and adds 24.4 and 24.5 after them. On 2026-09-27,
+while only the roadmap and `runs/run-24.md` cited the cut as a task id, a
+new 24.5 (the NT 6.x timer-arm race) went in before it and the cut became
+24.6. On 2026-09-28, with no Phase 24 id in a published `readme.txt`, the
+owner put a new task before the cut and moved the reporter's pointer to
+just before it, and the four were renumbered in order: the timer-arm race
+24.5 -> 24.4, the new High-Speed interval behind a hub 24.5, the pointer
+24.4 -> 24.6, and the cut 24.6 -> 24.7. What keeps an old id is an artifact name - a snapshot, a marker, an
+`out\` directory - and
 `runs/run-23.md` lists those under "On task ids inside artifact names".
 
 Three rules the batching exists to enforce:
@@ -178,7 +197,8 @@ carry a 64-bit package. Phase 23, opened on 2026-09-19 and closed on
 2026-09-24, took GitHub issue 4's property page and the interrupt moderation
 experiment, and carries the `1.1.1.0` cut; the issue's other two requests,
 polling rates and true speeds on root ports, were split out of Phase 23 on
-2026-09-22 and are not scheduled. Phase
+2026-09-22 and are Phase 24's, added on 2026-09-24 and closed on 2026-10-02
+with the `1.2.0.0` cut. Phase
 14 waited on Phase 13's bench batches reporting. Accepting the published release, from the download on a
 freshly installed VM and on a physical machine, is not a phase and has no
 task: it is a hand-run procedure the project owner takes before the upload,

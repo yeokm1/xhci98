@@ -36,7 +36,7 @@ qemu-system-x86_64.exe is already what the 32-bit XP launcher uses, so that
 does not change.
 
 TCG, NOT WHPX - the reverse of every 32-bit guest here, and measured rather
-than assumed (host minis-w11p-ykm, 2026-09-08). Under
+than assumed (development host A, 2026-09-08). Under
 -accel whpx,kernel-irqchip=off, XP x64 Setup wedges on "Setup is starting
 Windows" indefinitely with RIP pinned; under -accel tcg, the identical command
 line with one flag changed reaches "Setup is copying files" in about three
@@ -92,7 +92,7 @@ param(
     #
     # **TCG, AND ON THIS GUEST THAT IS NOT THE FALLBACK - IT IS THE ONE THAT
     # WORKS.** This is the reverse of every 32-bit guest in this project and it
-    # was measured, on host minis-w11p-ykm, 2026-09-08:
+    # was measured, on development host A, 2026-09-08:
     #
     #   -accel whpx,kernel-irqchip=off  XP x64 Setup wedges on "Setup is
     #     starting Windows" and stays there. Six minutes, RIP pinned at one

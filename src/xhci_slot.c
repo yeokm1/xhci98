@@ -86,6 +86,7 @@
 #include "xhci_hw.h"
 #include "xhci_xfer.h"
 #include "xhci_dbg.h"
+#include "xhci_version.h"
 
 /*
  * The cap this driver puts on **one transfer on any pipe**, reported through
@@ -130,6 +131,14 @@ XHCI_C_ASSERT(max_transfer_fits_a_pool_ring,
  * bRequest 5 with any other recipient is a different request entirely. */
 #define XHCI_SETUP_TYPE_SET_ADDRESS     0x00
 #define XHCI_SETUP_REQUEST_SET_ADDRESS  0x05
+
+/* Forward: task 24.3's virtual hub takes the opens that are its own before
+ * either opener below sees them (its section is beside the submit path). */
+static ULONG xhciVhubOpen(PXHCI_EXTENSION ext,
+                          const USBPORT_ENDPOINT_PROPERTIES *properties,
+                          PXHCI_ENDPOINT endpoint,
+                          MPSTATUS *status);
+static ULONG xhciVhubPortOfAddress(PXHCI_EXTENSION ext, ULONG address);
 
 /* ------------------------------------------------------------------ */
 /* Record lookup - all of these are called with the lock held          */
@@ -2905,6 +2914,22 @@ static VOID xhciEpArmQuiesce(PXHCI_EXTENSION ext,
 }
 
 /*
+ * Nothing on this endpoint for a Stop Endpoint to stop: no transfer queued, no
+ * TRB between the dequeue and enqueue pointers, and not halted. One test for
+ * the teardown's arm below and for the disown's idle rule
+ * (XhciSlotPortRecordsDisownedIdle), because "the teardown would have nothing
+ * to stop here" is exactly what that rule rests on.
+ *
+ * Called with the lock held. IRQL: any.
+ */
+static ULONG xhciEpQuiet(const XHCI_EP_BINDING *binding)
+{
+    return (binding->Queue->Count == 0 &&
+            binding->Ring->Dequeue == binding->Ring->Enqueue &&
+            (binding->Quiesce->Flags & XHCI_EPQ_HALTED) == 0) ? 1UL : 0UL;
+}
+
+/*
  * Arm a quiescence only for an endpoint that needs one.
  *
  * The condition is spec 4.6.4 p.97's own, read as a test rather than
@@ -2932,9 +2957,7 @@ static VOID xhciEpArmIfBusy(PXHCI_EXTENSION ext,
                             PXHCI_EP_BINDING binding,
                             ULONG intent)
 {
-    if (binding->Queue->Count == 0 &&
-        binding->Ring->Dequeue == binding->Ring->Enqueue &&
-        (binding->Quiesce->Flags & XHCI_EPQ_HALTED) == 0) {
+    if (xhciEpQuiet(binding)) {
         return;
     }
     xhciEpArmQuiesce(ext, dev, binding, intent);
@@ -5122,6 +5145,16 @@ static PXHCI_DEVICE xhciDevOpenBehindHub(
         }
     } else if (dev->TtClaimAddress == 0) {
         ext->TtPairsAgreed++;
+    } else if (xhciVhubPortOfAddress(ext, dev->TtClaimAddress) != 0) {
+        /*
+         * Task 24.3: usbport's TT hub is a virtual one - a Full-Speed hub on a
+         * root port, whose nearest High-Speed ancestor in usbport's view is
+         * the virtual hub above it. The graph never holds a virtual hub, so
+         * it expects no TT, and the xHC needs none: the pair agrees (design
+         * record 12 section 3.6).
+         */
+        ext->TtPairsAgreed++;
+        ext->VhubTtNamed++;
     } else {
         /*
          * The measured QEMU case: usbport names a Full-Speed `usb-hub` as a
@@ -5272,6 +5305,7 @@ static MPSTATUS xhciSlotOpenControl(
     endpoint->SlotId = dev->SlotId;
     endpoint->Dci = 1;
     endpoint->Flags = XHCI_ENDPOINT_FLAG_OPEN;
+    endpoint->VhubPort = 0;
 
     XhciControllerLockRelease(oldIrql);
 
@@ -5284,7 +5318,7 @@ static MPSTATUS xhciSlotOpenControl(
      * transfer path instead - refused for retry while the chain runs, completed
      * with an error once it has failed.
      */
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
     return MP_STATUS_SUCCESS;
 }
 
@@ -5373,6 +5407,36 @@ static VOID xhciDevCountIsoInterval(PXHCI_EXTENSION ext,
  *
  * IRQL: DISPATCH_LEVEL, under MiniportSpinLock, controller lock not held.
  */
+/*
+ * The Period an endpoint's interval is derived from (roadmap 24.5). For an
+ * interrupt endpoint that is `PipePeriod`, the pipe's own bucketed value,
+ * because `Period` is what usbport's USB 2.0 budget chose - 1 whenever it
+ * promoted the endpoint for bus load - and the xHC schedules for itself; the
+ * budget's period would poll a High-Speed device every 125 us. Every other
+ * type is never promoted and carries no `PipePeriod`.
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock held (the counters).
+ */
+static ULONG xhciEpProgramPeriod(PXHCI_EXTENSION ext,
+                                 const USBPORT_ENDPOINT_PROPERTIES *properties)
+{
+    if (properties->TransferType != USBPORT_TRANSFER_TYPE_INTERRUPT) {
+        return (ULONG)properties->Period;
+    }
+    if (properties->PipePeriod == 0) {
+        ext->EndpointPipePeriodsMissing++;
+        return (ULONG)properties->Period;
+    }
+    if (properties->PipePeriod != properties->Period) {
+        ext->EndpointPeriodsPromoted++;
+        XHCI_DBG_VALUE_CHANGED("slot: interrupt endpoint budgeted below its "
+                               "own period, pipe << 8 | budget",
+                               ((ULONG)properties->PipePeriod << 8) |
+                                   (ULONG)properties->Period);
+    }
+    return (ULONG)properties->PipePeriod;
+}
+
 static MPSTATUS xhciSlotOpenNonDefault(
     PXHCI_EXTENSION ext,
     const USBPORT_ENDPOINT_PROPERTIES *properties,
@@ -5487,7 +5551,8 @@ static MPSTATUS xhciSlotOpenNonDefault(
          */
         status = XhciBuildEndpointParams(properties->TransferType, directionIn,
                                          properties->MaxPacketSize,
-                                         properties->Period, speed, dev->Speed,
+                                         xhciEpProgramPeriod(ext, properties),
+                                         speed, dev->Speed,
                                          properties->TransactionPerMicroframe,
                                          bInterval,
                                          XhciRingDequeuePA(&record->Ring),
@@ -5602,7 +5667,8 @@ static MPSTATUS xhciSlotOpenNonDefault(
 
         status = XhciBuildEndpointParams(properties->TransferType, directionIn,
                                          properties->MaxPacketSize,
-                                         properties->Period, speed, dev->Speed,
+                                         xhciEpProgramPeriod(ext, properties),
+                                         speed, dev->Speed,
                                          properties->TransactionPerMicroframe,
                                          bInterval,
                                          XhciRingDequeuePA(&record->Ring),
@@ -5624,8 +5690,11 @@ static MPSTATUS xhciSlotOpenNonDefault(
                                     dev->Speed, bInterval, 0UL, 0UL, 0UL);
             ext->EndpointRefusalsParams++;
             XHCI_DBG_VALUE_CHANGED("slot: endpoint properties refused by the "
-                                   "context builder, dci << 8 | period",
-                                   (dci << 8) | properties->Period);
+                                   "context builder, dci << 16 | pipe period "
+                                   "<< 8 | period",
+                                   (dci << 16) |
+                                       ((ULONG)properties->PipePeriod << 8) |
+                                       (ULONG)properties->Period);
             XhciControllerLockRelease(oldIrql);
             return MP_STATUS_NO_RESOURCES;
         }
@@ -5647,8 +5716,10 @@ static MPSTATUS xhciSlotOpenNonDefault(
              */
             ext->EndpointIntervalsFloored++;
             XHCI_DBG_VALUE_CHANGED("slot: interval raised to the speed's floor, "
-                                   "dci << 8 | period",
-                                   (dci << 8) | properties->Period);
+                                   "dci << 16 | pipe period << 8 | period",
+                                   (dci << 16) |
+                                       ((ULONG)properties->PipePeriod << 8) |
+                                       (ULONG)properties->Period);
         }
 
         /* Same reason as the EP0 queue's: usbport reopens a pipe on every
@@ -5688,6 +5759,18 @@ static MPSTATUS xhciSlotOpenNonDefault(
         XhciLogNoteLocked(ext, "ep.open.rate",
                           ((ULONG)properties->Period << 16) |
                               (ULONG)properties->MaxPacketSize);
+        /*
+         * Task 24.1's third record: what the Endpoint Context was actually
+         * given, beside what usbport asked for. `Period` alone cannot say,
+         * because the same value means different intervals at different
+         * speeds and the floor above may have moved it; and reading the
+         * context back through the DCBAA needs the emulator's monitor, which
+         * a guest without one - or a bare-metal machine - does not have. The
+         * speed usbport bucketed with sits above the floor bit so a reader
+         * can tell a root-port High-Speed reading from a behind-hub one.
+         */
+        XhciLogNoteLocked(ext, "ep.open.ival",
+                          (speed << 16) | (floored << 8) | params.Interval);
     }
 
     endpoint->Signature = XHCI_ENDPOINT_SIGNATURE;
@@ -5695,10 +5778,11 @@ static MPSTATUS xhciSlotOpenNonDefault(
     endpoint->SlotId = dev->SlotId;
     endpoint->Dci = dci;
     endpoint->Flags = XHCI_ENDPOINT_FLAG_OPEN;
+    endpoint->VhubPort = 0;
 
     XhciControllerLockRelease(oldIrql);
 
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
     return MP_STATUS_SUCCESS;
 }
 
@@ -5750,6 +5834,15 @@ MPSTATUS XhciSlotOpenEndpoint(PXHCI_EXTENSION ext,
         XHCI_DBG_VALUE_CHANGED("slot: endpoint buffer this driver cannot put a "
                                "ring in, length", properties->BufferLength);
         return MP_STATUS_NO_RESOURCES;
+    }
+
+    /* Task 24.3: the opens that are a virtual hub's, told apart here before
+     * either opener could claim a port or a record for them (section 3.6). */
+    if (xhciVhubOpen(ext, properties, endpoint, &status)) {
+        if (status == MP_STATUS_SUCCESS) {
+            ext->OpensAccepted++;
+        }
+        return status;
     }
 
     if (xhciDevPropertiesAreEp0(properties)) {
@@ -5861,6 +5954,32 @@ VOID XhciSlotSetEndpointState(PXHCI_EXTENSION ext,
     }
 
     XhciControllerLockAcquire(&oldIrql);
+    /*
+     * Task 24.3: a REMOVE of a virtual hub's endpoint unbinds it, if it is the
+     * handle bound; a displaced one closes itself and touches nothing, as a
+     * real device's superseded handle does. The hub's EP0 binding is what its
+     * second enumeration reset reads (section 3.6), and a held status-change
+     * transfer on the removed pipe is answered as cancelled.
+     */
+    if ((endpoint->Flags & XHCI_ENDPOINT_FLAG_VHUB) != 0) {
+        ULONG hubPort;
+
+        hubPort = endpoint->VhubPort;
+        if (hubPort != 0 && hubPort <= XHCI_MAX_ROOT_PORTS) {
+            if (ext->VhubBind[hubPort - 1].Ep0 == (PVOID)endpoint) {
+                ext->VhubBind[hubPort - 1].Ep0 = NULL;
+                XhciVhubEp0Closed(&ext->Vhub[hubPort - 1]);
+            }
+            if (ext->VhubBind[hubPort - 1].Pipe == (PVOID)endpoint) {
+                XhciSlotVhubPipe(ext, hubPort, 1);
+                ext->VhubBind[hubPort - 1].Pipe = NULL;
+            }
+        }
+        endpoint->Flags &= ~XHCI_ENDPOINT_FLAG_OPEN;
+        XhciControllerLockRelease(oldIrql);
+        XhciSlotDeferredWorkForEndpoint(ext, (PVOID)endpoint);
+        return;
+    }
     dev = xhciDevFromRef(ext, endpoint->DeviceIndex);
     if (dev != NULL && dev->State != XHCI_DEV_STATE_FREE) {
         XHCI_EP_BINDING binding;
@@ -6167,7 +6286,7 @@ VOID XhciSlotSetEndpointStatus(PXHCI_EXTENSION ext,
     }
     XhciControllerLockRelease(oldIrql);
 
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
 }
 
 /*
@@ -6418,6 +6537,9 @@ static VOID xhciDevTopoSnoopSubmit(PXHCI_EXTENSION ext,
                                    (dev->DeviceAddress << 8) | snoop.Port);
         }
         ext->EnumClaimSpent = 1;
+        if (ext->VhubConfig.Applied != XHCI_VHUB_MODE_OFF) {
+            ext->VhubArmedPort = 0;
+        }
     }
 
     /*
@@ -7668,6 +7790,594 @@ static MPSTATUS xhciSlotSubmitIsoNonDefault(
     return MP_STATUS_SUCCESS;
 }
 
+/* ------------------------------------------------------------------ */
+/* Task 24.3: the virtual hub as a device (design record 12)           */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The device half of the virtual USB 2.0 hub on a root port: its two
+ * endpoints, the request table behind its default pipe, and the
+ * status-change transfer usbhub keeps pending on the other (sections 3.3 and
+ * 3.4). The root-hub half, which owns the physical port, is in src/xhci_rh.c;
+ * the pure core both halves carry out is src/xhci_vhub.c.
+ *
+ * A virtual hub has no device record, no Slot ID and no ring, so nothing here
+ * reaches the xHC, and nothing here reaches either EP0 snoop: its traffic is
+ * answered from `XHCI_EXTENSION.Vhub` and diverted before the topology graph
+ * and the descriptor snoop could see it (3.3, "It is diverted").
+ *
+ * Every answer is a completion owed through the ordinary completion list, and
+ * never delivered from inside `SubmitTransfer` - the submit bracket's rule
+ * (design record 05 section 7) holds for a transfer nothing on the bus ever
+ * saw, because what it protects is usbport's record, not the bus.
+ */
+
+/*
+ * The hub's bcdDevice is the driver's version, as section 3.3's row asks: its
+ * first three fields, one BCD digit each, taken from the one editable source
+ * (`XHCI_VER_CSV`, src/xhci_version.h). The second macro is what lets the
+ * version's four comma-separated numbers arrive as four arguments: it builds
+ * the call from a name and a parenthesised list, so the list is split when
+ * the result is rescanned. MSVC 6.0 does not split an argument that expanded
+ * to commas, which is the form a C89 preprocessor would also accept.
+ */
+#define XHCI_VHUB_BCD_OF(a, b, c, d) \
+    ((USHORT)((((a) & 0xF) << 8) | (((b) & 0xF) << 4) | ((c) & 0xF)))
+#define XHCI_VHUB_BCD_CALL(m, args) m args
+#define XHCI_VHUB_BCD_DEVICE \
+    XHCI_VHUB_BCD_CALL(XHCI_VHUB_BCD_OF, (XHCI_VER_CSV))
+
+/*
+ * A virtual hub's completion is parked on the Version 300 tier with nothing
+ * on the bus to interrupt for it, so the pass that leaves it parked asks
+ * usbport for a soft interrupt (XHCI_EXTENSION.SoftInterruptOwed). The
+ * transfer is marked on every tier; only this tier owes. Called with the
+ * lock held. IRQL: any.
+ */
+static VOID xhciVhubOweSoftInterrupt(PXHCI_EXTENSION ext,
+                                     PXHCI_TRANSFER transfer)
+{
+    transfer->Flags |= XHCI_XFER_FLAG_VHUB;
+    if (ext->DeliverUnderUsbportLockOnly && !ext->DeliverPerEndpointOnly) {
+        ext->SoftInterruptOwed = 1;
+    }
+}
+
+/*
+ * Is a virtual hub's answer still parked? What a soft interrupt is owed for
+ * (Codex round 2: never for a list holding only real devices' completions).
+ * Called with the lock held. IRQL: any.
+ */
+static ULONG xhciCompletionsHoldVhub(PXHCI_EXTENSION ext)
+{
+    PXHCI_TRANSFER walk;
+
+    for (walk = ext->CompletionHead; walk != NULL; walk = walk->Next) {
+        if ((walk->Flags & XHCI_XFER_FLAG_VHUB) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * Answer one transfer with `usbdStatus` and `bytes`, through the completion
+ * list. Called with the lock held. IRQL: DISPATCH_LEVEL.
+ */
+static VOID xhciVhubComplete(PXHCI_EXTENSION ext,
+                             PXHCI_ENDPOINT endpoint,
+                             PXHCI_TRANSFER transfer,
+                             PUSBPORT_TRANSFER_PARAMETERS parameters,
+                             LONG usbdStatus,
+                             ULONG bytes)
+{
+    xhciDevStampTransfer(endpoint, transfer, parameters, usbdStatus);
+    transfer->BytesTransferred = bytes;
+    xhciVhubOweSoftInterrupt(ext, transfer);
+    xhciDevOweCompletion(ext, transfer);
+}
+
+/* See the contract in src/xhci_hw.h. Called with the lock held. */
+VOID XhciSlotVhubPipe(PXHCI_EXTENSION ext, ULONG hubPort, ULONG cancel)
+{
+    PXHCI_VHUB_BINDING bind;
+    PXHCI_TRANSFER transfer;
+    PUSBPORT_TRANSFER_PARAMETERS parameters;
+    ULONG byte;
+
+    if (ext == NULL || hubPort == 0 || hubPort > XHCI_MAX_ROOT_PORTS) {
+        return;
+    }
+    bind = &ext->VhubBind[hubPort - 1];
+    transfer = bind->Held;
+    if (transfer == NULL) {
+        return;
+    }
+    parameters = (PUSBPORT_TRANSFER_PARAMETERS)transfer->TransferParameters;
+
+    if (cancel) {
+        transfer->UsbdStatus = XHCI_USBD_STATUS_CANCELED;
+        transfer->BytesTransferred = 0;
+        ext->VhubPipeCancels++;
+    } else {
+        /* Between changes the transfer stays pending, which is what a real
+         * hub's pipe does (3.4). */
+        byte = XhciVhubPipeByte(&ext->Vhub[hubPort - 1]);
+        if (byte == 0) {
+            return;
+        }
+        transfer->UsbdStatus = XHCI_USBD_STATUS_SUCCESS;
+        transfer->BytesTransferred = 0;
+        if (bind->HeldVa != NULL && parameters != NULL &&
+            parameters->TransferBufferLength != 0) {
+            *(volatile UCHAR *)bind->HeldVa = (UCHAR)byte;
+            transfer->BytesTransferred = 1;
+        }
+        ext->VhubPipeCompletions++;
+    }
+    bind->Held = NULL;
+    bind->HeldVa = NULL;
+    xhciVhubOweSoftInterrupt(ext, transfer);
+    xhciDevOweCompletion(ext, transfer);
+}
+
+/* See the contract in src/xhci_hw.h. Called with the lock held. */
+VOID XhciSlotVhubUnbind(PXHCI_EXTENSION ext, ULONG hubPort)
+{
+    if (ext == NULL || hubPort == 0 || hubPort > XHCI_MAX_ROOT_PORTS) {
+        return;
+    }
+    XhciSlotVhubPipe(ext, hubPort, 1);
+    ext->VhubBind[hubPort - 1].Ep0 = NULL;
+    ext->VhubBind[hubPort - 1].Pipe = NULL;
+}
+
+/*
+ * The root-hub port whose virtual hub usbport addressed as `address`, or 0.
+ * Called with the lock held.
+ */
+static ULONG xhciVhubPortOfAddress(PXHCI_EXTENSION ext, ULONG address)
+{
+    if (ext->VhubConfig.Applied == XHCI_VHUB_MODE_OFF ||
+        ext->RootHub.Status != XHCI_RH_OK) {
+        return 0;
+    }
+    return XhciVhubFindAddress(ext->Vhub, ext->RootHub.PortCount, address);
+}
+
+/*
+ * An endpoint open that belongs to a virtual hub, if this one does: the hub's
+ * default pipe at address 0 - entitled only by the reset that armed it, told
+ * apart from the device's own address-0 open by which reset came last (3.6) -
+ * or any endpoint at an address a virtual hub holds. Returns 1 with `*status`
+ * set when it took the open, 0 when the open is a real device's.
+ *
+ * The hub has exactly two endpoints (3.3's configuration row), and an open
+ * of anything else at its address is refused rather than bound to nothing.
+ *
+ * IRQL: DISPATCH_LEVEL, under MiniportSpinLock; takes and releases the
+ * controller lock.
+ */
+static ULONG xhciVhubOpen(PXHCI_EXTENSION ext,
+                          const USBPORT_ENDPOINT_PROPERTIES *properties,
+                          PXHCI_ENDPOINT endpoint,
+                          MPSTATUS *status)
+{
+    KIRQL oldIrql;
+    PXHCI_VHUB_BINDING bind;
+    ULONG hubPort;
+    ULONG dci;
+
+    if (ext->VhubConfig.Applied == XHCI_VHUB_MODE_OFF) {
+        return 0;
+    }
+
+    XhciControllerLockAcquire(&oldIrql);
+    hubPort = 0;
+    if (properties->DeviceAddress == 0) {
+        if (xhciDevPropertiesAreEp0(properties) && ext->VhubArmedPort != 0 &&
+            ext->VhubArmedPort <= ext->RootHub.PortCount &&
+            XhciVhubClaimOpen(&ext->Vhub[ext->VhubArmedPort - 1])) {
+            hubPort = ext->VhubArmedPort;
+            ext->VhubArmedPort = 0;
+        }
+    } else {
+        hubPort = xhciVhubPortOfAddress(ext, properties->DeviceAddress);
+    }
+    if (hubPort == 0) {
+        XhciControllerLockRelease(oldIrql);
+        return 0;
+    }
+
+    bind = &ext->VhubBind[hubPort - 1];
+    if (xhciDevPropertiesAreEp0(properties)) {
+        dci = 1;
+        bind->Ep0 = endpoint;
+    } else if (properties->TransferType == USBPORT_TRANSFER_TYPE_INTERRUPT &&
+               properties->EndpointAddress == 0x81) {
+        dci = XhciDciFromEndpointAddress(properties->EndpointAddress);
+        if (bind->Held != NULL && bind->Pipe != (PVOID)endpoint) {
+            /* A reopen through a new extension displaces the old handle, and
+             * its held transfer with it. */
+            XhciSlotVhubPipe(ext, hubPort, 1);
+        }
+        bind->Pipe = endpoint;
+    } else {
+        ext->VhubTransfersFailed++;
+        XhciControllerLockRelease(oldIrql);
+        XHCI_DBG_VALUE_CHANGED("vhub: open of an endpoint the hub does not "
+                               "have, address",
+                               (ULONG)properties->EndpointAddress);
+        *status = MP_STATUS_NOT_SUPPORTED;
+        return 1;
+    }
+
+    endpoint->Signature = XHCI_ENDPOINT_SIGNATURE;
+    endpoint->DeviceIndex = 0;
+    endpoint->SlotId = 0;
+    endpoint->Dci = dci;
+    endpoint->Flags = XHCI_ENDPOINT_FLAG_OPEN | XHCI_ENDPOINT_FLAG_VHUB;
+    endpoint->VhubPort = hubPort;
+    ext->VhubOpens++;
+    XhciLogNoteLocked(ext, "vhub.open",
+                      (hubPort << 16) |
+                          ((ULONG)properties->DeviceAddress << 8) |
+                          (ULONG)properties->EndpointAddress);
+    XhciControllerLockRelease(oldIrql);
+
+    *status = MP_STATUS_SUCCESS;
+    return 1;
+}
+
+/*
+ * A record with nothing in flight: no command outstanding (`ActiveOp`) or owed
+ * (xhciDevOwedOp - a quiescence command owed on any endpoint included), no
+ * intercepted SET_ADDRESS held, and every endpoint it has - EP0 and each opened
+ * one - quiet (xhciEpQuiet). An endpoint whose ring was never carved holds no
+ * TRB, so its queue alone is read. Says nothing about whether usbport still
+ * holds the record; each caller adds its own test for that.
+ *
+ * Called with the lock held. IRQL: any.
+ */
+static ULONG xhciDevIdle(PXHCI_EXTENSION ext, PXHCI_DEVICE dev)
+{
+    XHCI_EP_BINDING binding;
+    ULONG i;
+
+    if (dev->ActiveOp != XHCI_DEV_OP_NONE || dev->PendingSetAddress != NULL) {
+        return 0;
+    }
+    if (xhciDevOwedOp(ext, dev, &binding) != XHCI_DEV_OP_NONE) {
+        return 0;
+    }
+    if (xhciEpResolve(dev, 1, &binding) ? !xhciEpQuiet(&binding)
+                                         : dev->Ep0Queue.Count != 0) {
+        return 0;
+    }
+    for (i = 0; i < XHCI_MAX_DEVICE_ENDPOINTS; i++) {
+        if (dev->Endpoints[i].Dci == 0) {
+            continue;
+        }
+        if (xhciEpResolve(dev, dev->Endpoints[i].Dci, &binding)
+                ? !xhciEpQuiet(&binding)
+                : dev->Endpoints[i].Queue.Count != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/*
+ * Whether any live record sits behind `hub` - on its root port and deeper in
+ * the route its own Route String begins. Unbound and unwinding records count:
+ * a detach prunes a subtree's topology nodes, not its records, and those
+ * records still resolve their parent and TT through the address being given up.
+ *
+ * Called with the lock held. IRQL: any.
+ */
+static ULONG xhciDevHasDescendant(PXHCI_EXTENSION ext, PXHCI_DEVICE hub)
+{
+    ULONG mask;
+    ULONG i;
+
+    if (hub->RootPort == 0) {
+        return 0;
+    }
+    mask = (hub->Tier >= 5) ? 0x000FFFFFUL
+                            : ((1UL << (4 * hub->Tier)) - 1UL);
+    for (i = 0; i < XHCI_MAX_SLOTS; i++) {
+        PXHCI_DEVICE other = &ext->Devices[i];
+
+        if (other == hub || other->State == XHCI_DEV_STATE_FREE) {
+            continue;
+        }
+        if (other->HubPort == 0 && other->RootPort == hub->RootPort &&
+            other->Tier > hub->Tier &&
+            ((other->RouteString ^ hub->RouteString) & mask) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * **Take `address` for a SET_ADDRESS about to be answered (round 8).** Called
+ * by the real device's interception (`claimant` its record) and by a virtual
+ * hub's (`claimant` NULL, `vhubPort` its root-hub port), before either changes
+ * anything, so both assignment paths see one namespace. Returns 1 when the
+ * address is free to assign - nobody held it, or an idle holder's claim was
+ * reclaimed - and 0 when the request must be failed; every 0 is counted by why.
+ *
+ * usbport allocates only an address it holds free, so a *different* record
+ * still holding it is one usbport has given up on - freed when a hub's hard
+ * reset removed the device, while the root-port disable that would disown the
+ * record here was still queued behind usbport's bus lock. Round 8's 0xFE was
+ * that disable queued behind the very enumeration this refusal kept failing.
+ * EP0's removal cannot release the address (the same REMOVE precedes the
+ * reopen that finds the slot by it), and usbport says nothing when it frees
+ * one; the reassignment is the first proof this driver gets.
+ *
+ * Reclaimed only from a record that has nothing to lose: Addressed, EP0 and
+ * every other endpoint unbound, idle (xhciDevIdle), no record behind it, and
+ * a topology key that is its own. Retiring the address is software only - the
+ * xHC chose the address on the wire in Address Device - so the record keeps
+ * its state, slot, DCBAA entry, rings and port position, and its port's later
+ * disable still disowns and releases it by position. It is not DISOWNED:
+ * option 1's settlement still needs a real disown. Its node is detached before
+ * `DeviceAddress` is cleared (the address is the key), and the number is
+ * cleared as well as the flag because late completions compare the address
+ * they captured.
+ *
+ * A virtual hub holding the address, a second holder, a claimant already
+ * holding it or another record mid-assignment to it is an inconsistency, not a
+ * departed device, and is refused.
+ *
+ * Called with the lock held. IRQL: DISPATCH_LEVEL.
+ */
+static ULONG xhciDevClaimAddress(PXHCI_EXTENSION ext,
+                                 PXHCI_DEVICE claimant,
+                                 ULONG vhubPort,
+                                 ULONG address)
+{
+    PXHCI_DEVICE holder;
+    ULONG port;
+    ULONG i;
+
+    if (address == 0 || address > USBPORT_MAX_DEVICE_ADDRESS) {
+        ext->AddressRefusalsInvalid++;
+        return 0;
+    }
+    port = xhciVhubPortOfAddress(ext, address);
+    if (port != 0 && port != vhubPort) {
+        ext->AddressRefusalsOwner++;
+        return 0;
+    }
+    holder = NULL;
+    for (i = 0; i < XHCI_MAX_SLOTS; i++) {
+        PXHCI_DEVICE other = &ext->Devices[i];
+
+        if ((other->Flags & XHCI_DEV_FLAG_ADDRESS_VALID) != 0 &&
+            other->DeviceAddress == address) {
+            if (other == claimant || holder != NULL) {
+                ext->AddressRefusalsOwner++;
+                return 0;
+            }
+            holder = other;
+        } else if (other != claimant && other->PendingSetAddress != NULL &&
+                   other->DeviceAddress == address) {
+            ext->AddressRefusalsOwner++;
+            return 0;
+        }
+    }
+    if (holder == NULL) {
+        return 1;
+    }
+
+    if ((holder->Flags & XHCI_DEV_FLAG_EP0_OPEN) != 0 ||
+        holder->EndpointExtension != NULL) {
+        ext->AddressRefusalsBound++;
+        return 0;
+    }
+    for (i = 0; i < XHCI_MAX_DEVICE_ENDPOINTS; i++) {
+        if (holder->Endpoints[i].Dci != 0 &&
+            holder->Endpoints[i].EndpointExtension != NULL) {
+            ext->AddressRefusalsBound++;
+            return 0;
+        }
+    }
+    if (holder->State != XHCI_DEV_STATE_ADDRESSED || !xhciDevIdle(ext, holder)) {
+        ext->AddressRefusalsBusy++;
+        return 0;
+    }
+    if ((holder->TopoAddress != 0 && holder->TopoAddress != address) ||
+        xhciDevHasDescendant(ext, holder)) {
+        ext->AddressRefusalsTopology++;
+        return 0;
+    }
+
+    xhciDevTopoDetach(ext, holder);
+    holder->Flags &= ~XHCI_DEV_FLAG_ADDRESS_VALID;
+    holder->DeviceAddress = 0;
+    ext->AddressReclaims++;
+    XhciLogNoteLocked(ext, "slot.reclaimed", (holder->SlotId << 8) | address);
+    return 1;
+}
+
+/*
+ * One transfer to a virtual hub: the request table on its default pipe (3.3),
+ * or the status-change transfer on its interrupt endpoint (3.4).
+ *
+ * Every refusal that can never stop being true fails the transfer - a hub no
+ * longer there, a displaced handle, a request the table stalls - and only a
+ * controller that is not running, and a second status-change transfer while
+ * one is held, are refused for retry: both end.
+ *
+ * Called with the lock held; the caller releases it and owes
+ * XhciRootHubDeferredArms - never the announcement, from inside
+ * SubmitTransfer. IRQL: DISPATCH_LEVEL.
+ */
+static MPSTATUS xhciVhubSubmit(PXHCI_EXTENSION ext,
+                               PXHCI_ENDPOINT endpoint,
+                               PUSBPORT_TRANSFER_PARAMETERS parameters,
+                               PXHCI_TRANSFER transfer,
+                               const USBPORT_SCATTER_GATHER_LIST *sgList,
+                               const USBPORT_ISO_TRANSFER *isoParams)
+{
+    XHCI_VHUB_IDENTITY identity;
+    UCHAR reply[XHCI_VHUB_REPLY_MAX];
+    PXHCI_VHUB hub;
+    PXHCI_VHUB_BINDING bind;
+    PUCHAR buffer;
+    ULONG hubPort;
+    ULONG verdict;
+    ULONG length;
+    ULONG arg;
+    ULONG portStatus;
+    ULONG portChange;
+    ULONG i;
+
+    hubPort = endpoint->VhubPort;
+    /*
+     * The two failures below are a virtual hub's answers too, parked by the
+     * generic helpers: tagged and owed their soft interrupt after the helper
+     * queues them, which leaves the helpers a real device uses untouched
+     * (Codex round 3).
+     */
+    if (isoParams != NULL) {
+        ext->VhubTransfersFailed++;
+        xhciDevFailIsoTransfer(ext, endpoint, transfer, parameters, isoParams,
+                               XHCI_USBD_STATUS_INVALID_PIPE_HANDLE);
+        xhciVhubOweSoftInterrupt(ext, transfer);
+        return MP_STATUS_SUCCESS;
+    }
+    if (ext->VhubConfig.Applied == XHCI_VHUB_MODE_OFF || hubPort == 0 ||
+        hubPort > ext->RootHub.PortCount ||
+        !ext->Vhub[hubPort - 1].Present ||
+        (ext->VhubBind[hubPort - 1].Ep0 != (PVOID)endpoint &&
+         ext->VhubBind[hubPort - 1].Pipe != (PVOID)endpoint)) {
+        ext->VhubTransfersFailed++;
+        xhciDevFailTransfer(ext, endpoint, transfer, parameters,
+                            XHCI_USBD_STATUS_CANCELED);
+        xhciVhubOweSoftInterrupt(ext, transfer);
+        return MP_STATUS_SUCCESS;
+    }
+    if (!xhciDevAdmitted(ext)) {
+        xhciDevTransferRefused(ext, NULL, 0);
+        return MP_STATUS_NO_RESOURCES;
+    }
+    hub = &ext->Vhub[hubPort - 1];
+    bind = &ext->VhubBind[hubPort - 1];
+
+    if (bind->Pipe == (PVOID)endpoint) {
+        if (bind->Held != NULL) {
+            xhciDevTransferRefused(ext, NULL, 0);
+            return MP_STATUS_NO_RESOURCES;
+        }
+        xhciDevStampTransfer(endpoint, transfer, parameters,
+                             XHCI_USBD_STATUS_SUCCESS);
+        bind->Held = transfer;
+        bind->HeldVa = (sgList != NULL && sgList->SgElementCount != 0)
+                           ? sgList->MappedSystemVa
+                           : NULL;
+        /* A change latched while nothing was pending is completed into this
+         * transfer at once (3.4). */
+        XhciSlotVhubPipe(ext, hubPort, 0);
+        return MP_STATUS_SUCCESS;
+    }
+
+    identity.Vid = ext->VhubConfig.Vid;
+    identity.Pid = ext->VhubConfig.Pid;
+    identity.BcdDevice = XHCI_VHUB_BCD_DEVICE;
+    identity.PowerOnToPowerGood = (UCHAR)XHCI_RH_POWER_ON_TO_POWER_GOOD;
+    identity.Reserved = 0;
+
+    ext->VhubRequests++;
+    length = 0;
+    arg = 0;
+    verdict = XhciVhubRequest(&identity, &parameters->SetupPacket, reply,
+                              &length, &arg);
+    switch (verdict) {
+    case XHCI_VHUB_REQ_PORT_STATUS:
+        XhciRhVhubPort1Status(ext, hubPort, &portStatus, &portChange);
+        length = XhciVhubStatusBytes(portStatus, portChange,
+                                     parameters->SetupPacket.wLength, reply);
+        verdict = XHCI_VHUB_REQ_DATA;
+        break;
+    case XHCI_VHUB_REQ_SET_ADDRESS:
+        if (!xhciDevClaimAddress(ext, NULL, hubPort, arg)) {
+            XHCI_DBG_VALUE_CHANGED("vhub: refused SET_ADDRESS for address",
+                                   arg);
+            xhciVhubComplete(ext, endpoint, transfer, parameters,
+                             XHCI_USBD_STATUS_INTERNAL_HC_ERROR, 0);
+            return MP_STATUS_SUCCESS;
+        }
+        /* The claim spent the key; whatever stale node sat under it goes,
+         * and no node is made for the hub, which the graph never holds. */
+        XhciTopoMigrate(&ext->Topology, 0, arg);
+        xhciDevForgetTopoAddress(ext, NULL, arg);
+        XhciVhubSetAddress(hub, arg);
+        XhciLogNoteLocked(ext, "vhub.address", (hubPort << 8) | arg);
+        verdict = XHCI_VHUB_REQ_OK;
+        break;
+    case XHCI_VHUB_REQ_SET_CONFIG:
+        XhciVhubSetConfig(hub, arg);
+        /* A change held while the hub was unconfigured goes now (3.4). */
+        XhciSlotVhubPipe(ext, hubPort, 0);
+        verdict = XHCI_VHUB_REQ_OK;
+        break;
+    case XHCI_VHUB_REQ_PORT_SET:
+    case XHCI_VHUB_REQ_PORT_CLEAR:
+        /* A suspend or resume the physical port refused is the request's
+         * stall: port 1 is as it was, and usbhub gets the failure, as it
+         * does when a root port's own callback returns the refusal. */
+        verdict = (XhciRhVhubPort1Feature(
+                       ext, hubPort,
+                       (verdict == XHCI_VHUB_REQ_PORT_SET) ? 1UL : 0UL,
+                       arg) == MP_STATUS_SUCCESS)
+                      ? XHCI_VHUB_REQ_OK : XHCI_VHUB_REQ_STALL;
+        break;
+    default:
+        break;
+    }
+
+    if (verdict == XHCI_VHUB_REQ_STALL) {
+        ext->VhubStalls++;
+        XHCI_DBG_VALUE_CHANGED("vhub: request stalled, bmRequestType << 8 | "
+                               "bRequest",
+                               ((ULONG)parameters->SetupPacket.bmRequestType
+                                    << 8) |
+                                   (ULONG)parameters->SetupPacket.bRequest);
+        xhciVhubComplete(ext, endpoint, transfer, parameters,
+                         XHCI_USBD_STATUS_STALL_PID, 0);
+        return MP_STATUS_SUCCESS;
+    }
+    if (verdict == XHCI_VHUB_REQ_DATA) {
+        /*
+         * Written through the mapped buffer now, inside the window usbport
+         * keeps it mapped - submission to completion (3.3). Never more than
+         * the transfer holds, whatever `wLength` said.
+         */
+        if (length > parameters->TransferBufferLength) {
+            length = parameters->TransferBufferLength;
+        }
+        buffer = (sgList != NULL && sgList->SgElementCount != 0)
+                     ? (PUCHAR)sgList->MappedSystemVa
+                     : NULL;
+        if (buffer == NULL) {
+            length = 0;
+        }
+        for (i = 0; i < length; i++) {
+            buffer[i] = reply[i];
+        }
+        xhciVhubComplete(ext, endpoint, transfer, parameters,
+                         XHCI_USBD_STATUS_SUCCESS, length);
+        return MP_STATUS_SUCCESS;
+    }
+    xhciVhubComplete(ext, endpoint, transfer, parameters,
+                     XHCI_USBD_STATUS_SUCCESS, 0);
+    return MP_STATUS_SUCCESS;
+}
+
 /* IRQL: DISPATCH_LEVEL, under MiniportSpinLock, controller lock not held. */
 MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
                                 PXHCI_ENDPOINT endpoint,
@@ -7698,6 +8408,32 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
 
     status = MP_STATUS_SUCCESS;
     XhciControllerLockAcquire(&oldIrql);
+
+    /*
+     * Task 24.3: a virtual hub's endpoint has no device record behind it, and
+     * every answer comes from the request table rather than a ring.
+     *
+     * Its port requests owe the root hub's deferred work, **all of it but the
+     * announcement** (task 24.3.4's Vista and Windows 7 hangs). usbport holds
+     * its EpList lock across SubmitTransfer, and on NT 6.x
+     * `USBPORTSVC_InvalidateRootHub` takes that same lock (Vista x64
+     * `USBPORT_Ev_Rh_IntrEp_Invalidate` -> `USBPORT_ReferenceEndpoint` ->
+     * `USBPORT_AcquireEpListLock`, static), so announcing from here
+     * self-deadlocks on usbport's lock, however this driver's own is held. A
+     * change a request latched waits in `RootHubInvalidatesOwed` for the next
+     * context that may announce; the timer a reset or resume armed is armed
+     * now on NT 5.x and owed to the next event DPC, root-hub peek or poll on
+     * NT 6.x, where an arm from under EpList either raced the timer DPC or
+     * inverted its lock order (roadmap 24.4; src/xhci_hw.h,
+     * XhciRootHubDeferredArms).
+     */
+    if ((endpoint->Flags & XHCI_ENDPOINT_FLAG_VHUB) != 0) {
+        status = xhciVhubSubmit(ext, endpoint, parameters, transfer, sgList,
+                                isoParams);
+        XhciControllerLockRelease(oldIrql);
+        XhciRootHubDeferredArms(ext);
+        return status;
+    }
 
     /*
      * **A refusal that can never stop being true must fail the transfer, not
@@ -7772,7 +8508,7 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
         XHCI_DBG_VALUE_CHANGED("slot: transfer failed - nothing behind this "
                                "endpoint, device index", endpoint->DeviceIndex);
         XhciControllerLockRelease(oldIrql);
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
         return MP_STATUS_SUCCESS;
     }
     if (!xhciDevAdmitted(ext)) {
@@ -7797,7 +8533,7 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
                                       ? XHCI_USBD_STATUS_CANCELED
                                       : XHCI_USBD_STATUS_INTERNAL_HC_ERROR);
         XhciControllerLockRelease(oldIrql);
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
         return MP_STATUS_SUCCESS;
     }
 
@@ -7822,7 +8558,7 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
                                               XHCI_XFER_MAX_CONTROL_TRBS);
         }
         XhciControllerLockRelease(oldIrql);
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
         return status;
     }
 
@@ -7838,7 +8574,7 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
         xhciDevFailIsoTransfer(ext, endpoint, transfer, parameters, isoParams,
                                XHCI_USBD_STATUS_INVALID_PIPE_HANDLE);
         XhciControllerLockRelease(oldIrql);
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
         return MP_STATUS_SUCCESS;
     }
 
@@ -7864,7 +8600,7 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
         XHCI_DBG_VALUE_CHANGED("slot: transfer failed - stale EP0 handle, "
                                "device index", endpoint->DeviceIndex);
         XhciControllerLockRelease(oldIrql);
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
         return MP_STATUS_SUCCESS;
     }
 
@@ -7888,16 +8624,16 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
             XhciControllerLockRelease(oldIrql);
             return MP_STATUS_NO_RESOURCES;
         }
-        if (address == 0 || address > USBPORT_MAX_DEVICE_ADDRESS ||
-            xhciDevByAddress(ext, address) != NULL) {
-            /* An address of 0, out of range, or one another record already
-             * holds. Failing it beats addressing two devices the same. */
+        if (!xhciDevClaimAddress(ext, dev, 0, address)) {
+            /* An address of 0, out of range, or one another record holds and
+             * cannot give up (xhciDevClaimAddress). Failing it beats
+             * addressing two devices the same. */
             xhciDevFailTransfer(ext, endpoint, transfer, parameters,
                                 XHCI_USBD_STATUS_INTERNAL_HC_ERROR);
             XHCI_DBG_VALUE_CHANGED("slot: refused SET_ADDRESS for address",
                                    address);
             XhciControllerLockRelease(oldIrql);
-            XhciSlotDeferredWork(ext);
+            XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
             return MP_STATUS_SUCCESS;
         }
 
@@ -7936,7 +8672,7 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
         ext->SetAddressIntercepts++;
 
         XhciControllerLockRelease(oldIrql);
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
         return MP_STATUS_SUCCESS;
     }
 
@@ -7971,14 +8707,14 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
         case XHCI_EPQ_GATE_RETRY:
             xhciDevTransferRefused(ext, dev, 0);
             XhciControllerLockRelease(oldIrql);
-            XhciSlotDeferredWork(ext);
+            XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
             return MP_STATUS_NO_RESOURCES;
         case XHCI_EPQ_GATE_FAIL_STALL:
         case XHCI_EPQ_GATE_FAIL_HC:
             xhciDevFailTransfer(ext, endpoint, transfer, parameters,
                                 XHCI_USBD_STATUS_INTERNAL_HC_ERROR);
             XhciControllerLockRelease(oldIrql);
-            XhciSlotDeferredWork(ext);
+            XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
             return MP_STATUS_SUCCESS;
         default:
             break;
@@ -8040,7 +8776,7 @@ MPSTATUS XhciSlotSubmitTransfer(PXHCI_EXTENSION ext,
     }
 
     XhciControllerLockRelease(oldIrql);
-    XhciSlotDeferredWork(ext);
+    XhciSlotDeferredWork(ext, XHCI_ARM_DEFER);
     return status;
 }
 
@@ -8088,8 +8824,24 @@ VOID XhciSlotAbortTransfer(PXHCI_EXTENSION ext,
         transfer != NULL) {
         XhciControllerLockAcquire(&oldIrql);
 
+        /*
+         * Task 24.3: a virtual hub's held status-change transfer owns no TRB,
+         * so detaching it is the whole cancellation (section 3.4). Its other
+         * transfers are only ever on the completion list, which the searches
+         * below cover for every endpoint.
+         */
+        if ((endpoint->Flags & XHCI_ENDPOINT_FLAG_VHUB) != 0 &&
+            endpoint->VhubPort != 0 &&
+            endpoint->VhubPort <= XHCI_MAX_ROOT_PORTS &&
+            ext->VhubBind[endpoint->VhubPort - 1].Held == transfer) {
+            ext->VhubBind[endpoint->VhubPort - 1].Held = NULL;
+            ext->VhubBind[endpoint->VhubPort - 1].HeldVa = NULL;
+            removed = 1;
+            ext->TransfersAborted++;
+        }
+
         dev = xhciDevFromRef(ext, endpoint->DeviceIndex);
-        if (dev != NULL) {
+        if (dev != NULL && !removed) {
             if (dev->PendingSetAddress == transfer) {
                 /* An intercepted SET_ADDRESS: it owns no TRBs, so detaching it
                  * is the whole cancellation - there is nothing on any ring to
@@ -10108,6 +10860,109 @@ VOID XhciSlotPortDisowned(PXHCI_EXTENSION ext, ULONG hubPort)
 }
 
 /*
+ * Whether any device record is on this port or behind it - the set
+ * XhciSlotPortDisowned marks and XhciSlotPortDisabled releases, by the same
+ * test: every state but FREE and GONE counts, disowned ones included, since a
+ * disowned record keeps its slot and rings until the release.
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock held.
+ */
+ULONG XhciSlotPortHasRecords(PXHCI_EXTENSION ext, ULONG hubPort)
+{
+    ULONG rootPort;
+    ULONG i;
+
+    if (ext == NULL) {
+        return 0;
+    }
+    if (xhciDevByHubPort(ext, hubPort) != NULL) {
+        return 1;
+    }
+    rootPort = XhciRootHubPortOf(&ext->RootHub, hubPort);
+    if (rootPort == 0) {
+        return 0;
+    }
+    for (i = 0; i < XHCI_MAX_SLOTS; i++) {
+        PXHCI_DEVICE child = &ext->Devices[i];
+
+        if (child->State == XHCI_DEV_STATE_FREE ||
+            child->State == XHCI_DEV_STATE_GONE) {
+            continue;
+        }
+        if (child->HubPort == 0 && child->RootPort == rootPort) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * A record usbport has given up on that has nothing left in flight: DISOWNED,
+ * no command outstanding (`ActiveOp`) or owed (xhciDevOwedOp - a quiescence
+ * command owed on any endpoint included; one outstanding is the `ActiveOp`),
+ * and every endpoint it has - EP0 and each opened one - quiet (xhciEpQuiet).
+ * An endpoint whose ring was never carved holds no TRB, so its queue alone is
+ * read.
+ *
+ * DISOWNED is the test that matters most: the release the caller then runs
+ * tears down whatever is on the port, and a record a re-enumeration has taken
+ * back is a device usbport believes in. The intercepted SET_ADDRESS is written
+ * out although the disown has already answered it and a disowned record
+ * accepts no transfer, so no vector can hold one here: it is the one piece of
+ * work no queue shows, and the rule is stated whole rather than inferred.
+ *
+ * An owed command keeps the record waiting rather than making it idle: the
+ * pump issues what xhciDevOwedOp names for a disowned record too, so the wait
+ * ends at that command's completion.
+ *
+ * Called with the lock held. IRQL: any.
+ */
+static ULONG xhciDevDisownedIdle(PXHCI_EXTENSION ext, PXHCI_DEVICE dev)
+{
+    return (dev->Flags & XHCI_DEV_FLAG_DISOWNED) != 0 && xhciDevIdle(ext, dev);
+}
+
+/*
+ * Whether every record XhciSlotPortHasRecords counts on this port - the
+ * port's own and everything behind it - is DISOWNED and idle
+ * (xhciDevDisownedIdle). 1 when there are none as well, so the caller asks
+ * XhciSlotPortHasRecords to tell the two apart.
+ *
+ * IRQL: DISPATCH_LEVEL, controller lock held.
+ */
+ULONG XhciSlotPortRecordsDisownedIdle(PXHCI_EXTENSION ext, ULONG hubPort)
+{
+    PXHCI_DEVICE dev;
+    ULONG rootPort;
+    ULONG i;
+
+    if (ext == NULL) {
+        return 0;
+    }
+    dev = xhciDevByHubPort(ext, hubPort);
+    if (dev != NULL && !xhciDevDisownedIdle(ext, dev)) {
+        return 0;
+    }
+    rootPort = XhciRootHubPortOf(&ext->RootHub, hubPort);
+    if (rootPort == 0) {
+        return 1;
+    }
+    for (i = 0; i < XHCI_MAX_SLOTS; i++) {
+        PXHCI_DEVICE child = &ext->Devices[i];
+
+        if (child->State == XHCI_DEV_STATE_FREE ||
+            child->State == XHCI_DEV_STATE_GONE) {
+            continue;
+        }
+        if (child->HubPort == 0 && child->RootPort == rootPort &&
+            !xhciDevDisownedIdle(ext, child)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/*
  * The port has now been *observed* out of service, so the half that touches
  * memory the controller could still be reading may run.
  *
@@ -10207,6 +11062,10 @@ VOID XhciSlotPortReset(PXHCI_EXTENSION ext, ULONG hubPort)
      * suppression that claim is allowed. */
     ext->EnumClaimSpent = 0;
     ext->EnumResetSuppressed = 0;
+    /* ...and spends a virtual hub's arm, the third entitlement (task 24.3). */
+    if (ext->VhubConfig.Applied != XHCI_VHUB_MODE_OFF) {
+        ext->VhubArmedPort = 0;
+    }
     /*
      * **And it supersedes any pending hub claim** (task 7b-A.3). Enumeration is
      * serialized above this driver - one port reset, one device created at
@@ -10231,11 +11090,12 @@ VOID XhciSlotPortReset(PXHCI_EXTENSION ext, ULONG hubPort)
  * lock released.
  *
  * Returns 1 if it did something - which is what lets XhciSlotDeferredWork loop
- * until the driver is quiet rather than doing one thing per call.
+ * until the driver is quiet rather than doing one thing per call. `armMode` is
+ * the drain's context, for the command's watchdog (XHCI_ARM_*).
  *
  * IRQL: <= DISPATCH_LEVEL, controller lock **not** held.
  */
-static ULONG xhciDevPumpCommand(PXHCI_EXTENSION ext)
+static ULONG xhciDevPumpCommand(PXHCI_EXTENSION ext, ULONG armMode)
 {
     XHCI_TRB trb;
     XHCI_EP_BINDING binding;
@@ -10500,7 +11360,7 @@ static ULONG xhciDevPumpCommand(PXHCI_EXTENSION ext)
 
     XhciControllerLockRelease(oldIrql);
 
-    status = XhciCommandSubmit(ext, &trb, NULL);
+    status = XhciCommandSubmit(ext, &trb, NULL, armMode);
     if (status == XHCI_CMD_OK) {
         return 1;
     }
@@ -10735,34 +11595,39 @@ VOID XhciSlotLeaveSubmit(PXHCI_EXTENSION ext)
  * to hand to usbport on the Version 300 tier: nothing, everything because
  * usbport's EpList lock is held, everything because a lifecycle path or the
  * poll's fallback says so. The admission is an argument and not a field so
- * that it belongs to this call on this CPU.
+ * that it belongs to this call on this CPU - and so is the arm mode
+ * (XHCI_ARM_*, roadmap 24.4), which is not the admission's to imply: an
+ * unadmitted pass runs from the event DPC (UNLOCKED) and from inside
+ * SubmitTransfer (DEFER) alike, and a forced one from StopController and
+ * from the recovery's timer callback.
  */
 #define XHCI_DELIVER_NONE   0UL
 #define XHCI_DELIVER_LOCKED 1UL
 #define XHCI_DELIVER_FORCED 2UL
 
 static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
-                                   PVOID lockedEndpoint);
+                                   PVOID lockedEndpoint, ULONG armMode);
 
 /* IRQL: <= DISPATCH_LEVEL, controller lock **not** held. */
-VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext)
+VOID XhciSlotDeferredWork(PXHCI_EXTENSION ext, ULONG armMode)
 {
-    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_NONE, NULL);
+    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_NONE, NULL, armMode);
 }
 
 VOID XhciSlotDeferredWorkForEndpoint(PXHCI_EXTENSION ext,
                                      PVOID endpointExtension)
 {
-    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_LOCKED, endpointExtension);
+    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_LOCKED, endpointExtension,
+                           XHCI_ARM_DEFER);
 }
 
-VOID XhciSlotDeferredWorkForced(PXHCI_EXTENSION ext)
+VOID XhciSlotDeferredWorkForced(PXHCI_EXTENSION ext, ULONG armMode)
 {
-    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_FORCED, NULL);
+    xhciSlotDeferredWorkEx(ext, XHCI_DELIVER_FORCED, NULL, armMode);
 }
 
 static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
-                                   PVOID lockedEndpoint)
+                                   PVOID lockedEndpoint, ULONG armMode)
 {
     KIRQL oldIrql;
     PXHCI_TRANSFER transfer;
@@ -10776,6 +11641,7 @@ static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
     ULONG heldByPassCounted;
     ULONG heldForPollCounted;
     ULONG deliveredLocked;
+    ULONG softInterrupt;
     KIRQL deliveryIrql;
 
     if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
@@ -10786,6 +11652,15 @@ static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
     heldForPollCounted = 0;
     heldOtherCounted = 0;
     pollRequested = 0;
+
+    /*
+     * Ahead of the re-entry guard, because the guard is about this list and
+     * the owed watchdog is not: a pass another CPU is running inside
+     * SubmitTransfer may be the one that owed it (roadmap 24.4).
+     */
+    if (armMode == XHCI_ARM_UNLOCKED) {
+        XhciCommandDrainOwedArm(ext);
+    }
 
     XhciControllerLockAcquire(&oldIrql);
     if (ext->DeferredBusy) {
@@ -10806,6 +11681,19 @@ static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
          * was wrong.
          */
         ext->DeferredReentries++;
+        /*
+         * A locked pass turned away here was a delivery opportunity - on the
+         * Version 300 tier often the one a soft interrupt was asked for - and
+         * the pass holding the drain may be one that cannot deliver. It is
+         * owed again while a virtual hub's answer is still parked, and that
+         * pass's end asks for it (XHCI_EXTENSION.SoftInterruptOwed; Codex
+         * rounds 1 and 2 - a list of real devices' completions owes nothing).
+         */
+        if (admit == XHCI_DELIVER_LOCKED &&
+            ext->DeliverUnderUsbportLockOnly && !ext->DeliverPerEndpointOnly &&
+            xhciCompletionsHoldVhub(ext)) {
+            ext->SoftInterruptOwed = 1;
+        }
         XhciControllerLockRelease(oldIrql);
         return;
     }
@@ -11071,14 +11959,36 @@ static VOID xhciSlotDeferredWorkEx(PXHCI_EXTENSION ext, ULONG admit,
             continue;
         }
 
-        if (!xhciDevPumpCommand(ext)) {
+        if (!xhciDevPumpCommand(ext, armMode)) {
             break;
         }
     }
 
+    /*
+     * A virtual hub's answer this pass left parked is owed a soft interrupt
+     * (XHCI_EXTENSION.SoftInterruptOwed), taken in the hold that ends the
+     * pass: a pass another CPU bounced off `DeferredBusy` after owing one did
+     * so while this pass still held the drain, so it is seen here. Once per
+     * pass, and after the loop rather than inside it, because the service only
+     * arms a timer - whatever the loop could deliver it has delivered. Issued
+     * with the controller lock released, as the reset request is; the service
+     * takes none of usbport's EpList or MiniportSpinLock (static, the note at
+     * the field), which is what allows it from inside SubmitTransfer.
+     */
     XhciControllerLockAcquire(&oldIrql);
     ext->DeferredBusy = 0;
+    softInterrupt = (ext->SoftInterruptOwed && xhciCompletionsHoldVhub(ext))
+                        ? 1UL : 0UL;
+    ext->SoftInterruptOwed = 0;
+    if (softInterrupt) {
+        ext->SoftInterruptRequests++;
+    }
     XhciControllerLockRelease(oldIrql);
+
+    if (softInterrupt && XhciRegPacket.UsbPortInvalidateController != NULL) {
+        (VOID)XhciRegPacket.UsbPortInvalidateController(
+            ext, USBPORT_INVALIDATE_CONTROLLER_SOFT_INTERRUPT);
+    }
 }
 
 /*
@@ -11315,8 +12225,8 @@ VOID XhciSlotPoll(PXHCI_EXTENSION ext)
     XhciControllerLockRelease(oldIrql);
 
     if (force) {
-        XhciSlotDeferredWorkForced(ext);
+        XhciSlotDeferredWorkForced(ext, XHCI_ARM_UNLOCKED);
     } else {
-        XhciSlotDeferredWork(ext);
+        XhciSlotDeferredWork(ext, XHCI_ARM_UNLOCKED);
     }
 }
