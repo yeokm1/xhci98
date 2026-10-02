@@ -85,19 +85,16 @@ limitation, a stutter on large reads. On 2026-09-22 the owner moved the
 issue's other two requests, interrupt polling rates and true speeds on root
 ports, out of Phase 23 into a Phase 24, and then removed that phase the same
 day. The upload of `1.1.1.0` is the owner's. **Phase 24**, added on
-2026-09-24 at the owner's request once Phase 23 closed, is the second phase
-of that number and carries what GitHub issue 4 still asks for, in order of
-how cheaply each can be built and read: the Low-Speed polling rates behind
-a hub (the reporter's Code 10 at 250 Hz and above), a decision on root-port
-polling rates, true speeds on root ports through the virtual USB 2.0 hub of
-design record 12, then two defects found on the way and taken before the
-cut (the NT 6.x timer-arm race, and the interval of a High-Speed device
-behind a hub), and the cut of whatever changed. Open: 24.1 read out and
-24.2 decided on 2026-09-25; 24.3 built through its driver sub-task the same
-day, and ticked on 2026-10-02 with its readings (round 12, the device matrix
-on the last rebuild); 24.4 and 24.5 read and ticked on 2026-10-02, when the owner also removed every task
-that does not block the `1.2.0.0` cut (the E460 session and the USB 1.1
-hub pointer).
+2026-09-24 at the owner's request once Phase 23 closed and closed on
+2026-10-02, is the second phase of that number and **carries the `1.2.0.0`
+cut**: the Low-Speed polling rates behind a hub (the reporter's Code 10 at
+250 Hz and above), root-port polling rates decided as owned by the next
+task, true speeds on root ports through the optional virtual USB 2.0 hub of
+design record 12, off by default, and two older defects fixed on the way
+(the NT 6.x timer-arm race, and the interval of a High-Speed device behind a
+hub). The owner accepted round 12's device matrix, on a build that differs
+from the cut only in its version stamp, as the post-release matrix. The
+upload of `1.2.0.0` is the owner's.
 **Phase 22**, closed on 2026-09-19, began as the 32-bit
 question - whether the binary that already ships runs on Windows Vista and
 Windows 7 as it stands - and that premise fell with Phase 21's: measurements
