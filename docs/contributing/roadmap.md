@@ -94,8 +94,8 @@ design record 12, then two defects found on the way and taken before the
 cut (the NT 6.x timer-arm race, and the interval of a High-Speed device
 behind a hub), and the cut of whatever changed. Open: 24.1 read out and
 24.2 decided on 2026-09-25; 24.3 built through its driver sub-task the same
-day, with only the device matrix on the last rebuild still owed; 24.4 and
-24.5 read and ticked on 2026-10-02, when the owner also removed every task
+day, and ticked on 2026-10-02 with its readings (round 12, the device matrix
+on the last rebuild); 24.4 and 24.5 read and ticked on 2026-10-02, when the owner also removed every task
 that does not block the `1.2.0.0` cut (the E460 session and the USB 1.1
 hub pointer).
 **Phase 22**, closed on 2026-09-19, began as the 32-bit

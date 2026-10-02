@@ -719,7 +719,7 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   Where it is read: a reading of the tree and the ABI document; a boot only
   if a change is found.
 
-- [ ] **24.3 - True speeds on root ports: the virtual hub, on demand or on every port.** *(taken 2026-09-25; a decision until then)*
+- [x] **24.3 - True speeds on root ports: the virtual hub, on demand or on every port.** *(taken 2026-09-25; a decision until then; done 2026-10-02 with 24.3.4)*
 
   Build design record 12,
   `docs/contributing/design/12-virtual-hub-on-root-ports.md`, in the two
@@ -864,7 +864,7 @@ Tasks. `runs/run-24.md` is the record once a task runs.
     a disable swallowed by a port in reset, a recovery at 1 telling usbhub
     nothing of a device gone - each with its vector (`runs/run-24.md`,
     "24.3.3, audited").
-  - [ ] **24.3.4 - The readings on every guest held**, the page's `-V`, each
+  - [x] **24.3.4 - The readings on every guest held**, the page's `-V`, each
     with the switch at 0, then 1, then 2. First, on Windows 98 SE under both
     stacks and on ME: which encoding a `REG_SZ` arrives in through
     usbport's service, which no reading has ever taken (the parser accepts
