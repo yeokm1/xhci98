@@ -141,24 +141,32 @@ is the index; this is the same list in the proposal's order:
 - **Pool and the HCD's own DMA buffers are allowed**, by import-allowlist
   rows with Windows 98 export evidence (task 25.3). The miniport's "allocate
   no pool" rule stands for `src/`.
-- **The controller's Advanced tab is kept, the root hub's Power tab is
-  not** (the second half decided on the 2026-10-02 Codex review): the HCD
-  answers the `USBUSER` request set `usbui.dll` sends to the controller
-  devnode, its INFs write the two registrations the miniport's write today
-  (`EnumPropPages` to `sysclass.dll` on Windows 98, where `usbui.dll` draws
-  the dialogs; `EnumPropPages32` to `usbui.dll` on the NT paths), and
-  `XHCISNAP` reaches the HCD through the same door (task 25.4).
+- **The device names** are `xhci98 USB 3.x eXtensible Host Controller` and
+  `xhci98 USB 3.x Root Hub` (owner, 2026-10-02), the INFs' device
+  descriptions on every path.
+- **The root hub is a devnode, and both property tabs are kept** (owner,
+  2026-10-02, reversing a narrower answer given on the Codex review earlier
+  that day). The controller FDO creates a root-hub PDO under a
+  project-owned hardware id - never `USB\ROOT_HUB`, which the OS's own
+  `usbhub.sys` claims on every NT target - and `xhci98hc.inf` binds it to
+  `xhci98hc.sys` itself, so one binary is the function driver of both and
+  every device PDO is a child of the root hub. The controller's Advanced
+  tab: the HCD answers the `USBUSER` request set `usbui.dll` sends to the
+  controller devnode, and its INFs write the two registrations the
+  miniport's write today (`EnumPropPages` to `sysclass.dll` on Windows 98,
+  where `usbui.dll` draws the dialogs; `EnumPropPages32` to `usbui.dll` on
+  the NT paths). The root hub's Power tab: the root-hub devnode registers
+  the hub property-page provider each OS's own INF registers for its root
+  hub (`build-and-test.md`, the `usbui.dll` paragraph of "The files the OS
+  supplies"), and answers the hub IOCTLs that page sends. `XHCISNAP`
+  reaches the HCD through the controller's door. Task 25.4 reads all of it
+  per target.
 - **The miniport's virtual-hub values are not supported** (owner,
   2026-10-02): `XhciVirtualHSHub`, `XhciVirtualHSHubVid` and
   `XhciVirtualHSHubPid` exist to make usbport tell the truth about a
   root-port device's speed, and the HCD has no usbport to lie to; it reads
   none of them, its INFs write none, a value left behind has no effect, and
-  the release notes say so. There is no USB Root
-  Hub devnode under the HCD - a PDO with id `USB\ROOT_HUB` would be claimed
-  by the OS's own `usbhub.sys` on every NT target - so the page `usbui.dll`
-  draws on that devnode's registration (`build-and-test.md`, the `usbui.dll`
-  paragraph of "The files the OS supplies") has nothing to attach to, and
-  devices appear directly under the controller.
+  the release notes say so.
 - **SuperSpeed hubs need a Windows 2000 observation vehicle, for now** (the
   same review): Windows 2000 is a VM-only target and no QEMU device models a
   SuperSpeed hub, so Phase 30's "observed on both" has no vehicle today. The
