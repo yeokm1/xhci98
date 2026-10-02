@@ -200,13 +200,13 @@ The devices checked so far, all on the E460 under Windows 98 SE. Each is charact
 
 ### Known issues the experimental virtual hub switch addresses
 
-All three come from reporting every device on a root port to Windows as High Speed. The switch is off by default, so the workaround in the middle column is what applies to a normal install. The last column is what the experimental virtual hub switch (see "Tuning" above) changes with it at `1` or `2`, measured in virtual machines only.
+All three come from reporting every device on a root port to Windows as High Speed. The experimental virtual hub switch (see "Tuning" above) at `1` or `2` addresses them by putting a virtual hub between the root port and the device. The switch is off by default, so on a normal install these issues apply, with the workarounds below.
 
-| Issue | Detail and workaround (switch off, the default) | With the switch at `1` or `2` |
-|---|---|---|
-| Every device on a root port is reported as High Speed | Reporting the true speed of a slower device crashes usbport as there is no companion controller. A mouse or keyboard on a root port therefore polls at 1, 2 or 4 ms only. If this is an issue for you, put your lower-speed device behind a hub to allow the true speed to be reported - on Vista and 7, a USB 2.0 hub only (the USB 1.1 hub row below). | The device is reported at its true speed behind the virtual hub, and a mouse polls at its own interval: a stock mouse at 8 ms, and a polling-rate tool's 250, 500 and 1000 Hz as asked. Read on Windows 98 SE, ME, 2000 and 32-bit XP; not read on Vista or 7. |
-| A Full-Speed USB audio device on a root port plays nothing on Windows XP and later | It installs and Windows shows it playing, but no sound reaches it. Behind a hub it plays (on Vista and 7 use a USB 2.0 hub). Windows 2000 plays on a root port. See [issue 6](docs/issues/06-full-speed-root-port-bugcheck.md), section 7. | A partial fix. It plays on Windows XP x64. On 32-bit XP it played in the first reading and later went silent with the player blocked. On Vista and 7 the device binds, but whether it plays has not been read. |
-| A USB 1.1 hub on a root port crashes Windows Vista and 7 | 32-bit and x64 alike: `STOP 0x7E` in `USBPORT.SYS` as soon as a mouse, keyboard or other slower device behind the hub is used. Plug such devices into a root port directly, or behind a USB 2.0 hub. Windows 98, 2000, XP and XP x64 are unaffected. See [issue 6](docs/issues/06-full-speed-root-port-bugcheck.md), section 6.2. | The 1.1 hub sits behind the virtual hub, which has a transaction translator, and no crash was seen on Vista or 7 at either value. |
+| Issue | Detail and workaround |
+|---|---|
+| Every device on a root port is reported as High Speed | Reporting the true speed of a slower device crashes usbport as there is no companion controller. A mouse or keyboard on a root port therefore polls at 1, 2 or 4 ms only. If this is an issue for you, put your lower-speed device behind a hub to allow the true speed to be reported - on Vista and 7, a USB 2.0 hub only (the USB 1.1 hub row below). |
+| A Full-Speed USB audio device on a root port plays nothing on Windows XP and later | It installs and Windows shows it playing, but no sound reaches it. Behind a hub it plays (on Vista and 7 use a USB 2.0 hub). Windows 2000 plays on a root port. See [issue 6](docs/issues/06-full-speed-root-port-bugcheck.md), section 7. |
+| A USB 1.1 hub on a root port crashes Windows Vista and 7 | 32-bit and x64 alike: `STOP 0x7E` in `USBPORT.SYS` as soon as a mouse, keyboard or other slower device behind the hub is used. Plug such devices into a root port directly, or behind a USB 2.0 hub. Windows 98, 2000, XP and XP x64 are unaffected. See [issue 6](docs/issues/06-full-speed-root-port-bugcheck.md), section 6.2. |
 
 ## Toolchain and building
 
