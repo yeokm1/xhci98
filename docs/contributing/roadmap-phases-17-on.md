@@ -603,7 +603,11 @@ root-port device is reported High Speed (item 1, issue 6 itself). Items 3
 (`usbui.dll`, `1.0.2.0`), 4 (idle suspend, `1.1.0.0`'s miniport flag) and
 5 (the property page, `1.1.1.0`) are answered and stay closed.
 
-Status: **open**, added on 2026-09-24 at the owner's request. **24.1's
+Status: closed on 2026-10-02 on the `1.2.0.0` cut, its ten install legs read
+from the asset, and round 12's device matrix, which the owner accepted that
+day as the post-release matrix: its build differs from the cut under `src\`
+only in the version stamp (`runs/run-24.md`, 24.7). It was added on
+2026-09-24 at the owner's request. **24.1's
 Low-Speed clause is read** (`runs/run-24.md`), the same day it started.
 SweetLow's usbport rebuild has no Low-Speed floor where SP4, NUSB and XP SP3
 have one, so it sends `Period` 4, 2 and 1 for a Low-Speed mouse behind a hub
@@ -1200,8 +1204,10 @@ Tasks. `runs/run-24.md` is the record once a task runs.
   and on Vista in both architectures (round 11's rebuild), with the root-port
   control unchanged at every value (`runs/run-24.md`).
 
-- [ ] **24.7 - The record and the cut.** *(24.6 until 2026-09-28, 24.5 until
-  2026-09-27)*
+- [x] **24.7 - The record and the cut.** *(done 2026-10-02: cut at `860afb4`,
+  the ten install legs read from the asset, round 12's matrix accepted by the
+  owner as the post-release matrix; `runs/run-24.md`. 24.6 until 2026-09-28,
+  24.5 until 2026-09-27)*
 
   One cut carrying 24.1 and 24.3 together (owner, 2026-09-25), 24.4 (owner,
   2026-09-27) and 24.5 (owner, 2026-09-28), as `1.2.0.0` (the second field

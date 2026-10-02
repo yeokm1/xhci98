@@ -44,7 +44,7 @@ the port driver's role, was the documented fallback and was never needed. USB
 `docs/usb-xhci-info/win98-wdm.md` ("USB Stack Architecture and the Integration
 Decision") and `architecture.md`.
 
-Current status: Phases 0-23 are closed and Phase 24 is open. `1.0.0.0`, `1.0.0.1`, `1.0.1.0`,
+Current status: Phases 0-24 are closed. `1.0.0.0`, `1.0.0.1`, `1.0.1.0`,
 `1.0.2.0` and `1.1.0.0` are cut, and all five have been uploaded to GitHub
 releases (`1.1.0.0` on 2026-09-20); Phase 15 moved the
 tree from revision 1.2 of the xHCI specification to revision 1.2c, the only
@@ -200,7 +200,8 @@ carry a 64-bit package. Phase 23, opened on 2026-09-19 and closed on
 2026-09-24, took GitHub issue 4's property page and the interrupt moderation
 experiment, and carries the `1.1.1.0` cut; the issue's other two requests,
 polling rates and true speeds on root ports, were split out of Phase 23 on
-2026-09-22 and are Phase 24's, added on 2026-09-24 and open. Phase
+2026-09-22 and are Phase 24's, added on 2026-09-24 and closed on 2026-10-02
+with the `1.2.0.0` cut. Phase
 14 waited on Phase 13's bench batches reporting. Accepting the published release, from the download on a
 freshly installed VM and on a physical machine, is not a phase and has no
 task: it is a hand-run procedure the project owner takes before the upload,

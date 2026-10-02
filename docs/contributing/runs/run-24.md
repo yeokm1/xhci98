@@ -3580,8 +3580,20 @@ paths moved, the unzipped asset, per-leg notes `<leg>-notes.md` and the
 screenshots); disks `vm\t247\`; logs `vm\t247-*-debugcon.log` and
 `vm\t247-*-qemu-trace.log`.
 
+### The post-release matrix: round 12 stands for it
+
+No matrix was run on the release build. **The owner accepted round 12's
+(above) as `1.2.0.0`'s post-release matrix on 2026-10-02**: it ran on both
+primary targets with the switch at 0, at 1 and at 2, read against
+`runs/run-23-post-release/`, and its build, `d30234c`, differs from the cut
+(`860afb4`) under `src\` only in the version stamp - `xhci_version.h` and the
+two INFs' `DriverVer` lines. What that reading carries is round 12's: the
+matrix reads clean on both primary targets at 0, 1 and 2, but for the 98 SE
+audio replug recorded there as intermittent and pre-existing since at least
+`1.1.0.0`. It was taken on the `qemu`
+flavour, as every post-release matrix here is, and not on the published
+binaries.
+
 ### What is owed
 
-- The post-release matrix on the release build (`out\pkg-qemu-*` restaged from
-  the release source first), against `runs/run-23-post-release/`.
-- Roadmap 24.7 is the owner's to tick.
+- Nothing for 24.7.
