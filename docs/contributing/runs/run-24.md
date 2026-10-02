@@ -3400,17 +3400,18 @@ host C). No finding against this release.
 
 ### The cut
 
-Branch `24.3` was fast-forwarded and renamed `1.2.0.0` (owner). `d800b3d` is
-the cut: the `releases\history.md` entry, `xhci_version.h` at `1,2,0,0`, both
-INFs at `DriverVer=10/02/2026,1.2.0.0`, the release-notes header and the issue
-forms' version placeholders. Before anything was published the owner changed
-the text four times (`80ff437`, `58fc1d1`, `0b9d3dd`, `9d2deec`), and Codex's
-first round on the release text found one P1 and two P2, fixed in `d668e81`
-and `f5cec10`; its second round found none.
+Branch `issue4` was fast-forwarded to `24.3` and renamed `1.2.0.0`, and `24.3`
+deleted (owner). `d800b3d` is the cut: the `releases\history.md` entry,
+`xhci_version.h` at `1,2,0,0`, both INFs at `DriverVer=10/02/2026,1.2.0.0`,
+the release-notes header and the issue forms' version placeholders. Before
+anything was published the owner changed the text four times (`80ff437`,
+`58fc1d1`, `0b9d3dd`, `9d2deec`), and Codex's review of the release text was
+fixed in `d668e81` and `f5cec10`.
 
 `build-driver.cmd all` and `all -amd64`, every gate green. `make-release.ps1`
-refused the first run because `XHCIQUAL.EXE` was older than `xhci_version.h`,
-as it did at 23.8; with `XHCIQUAL.EXE` and `XHCISNAP.EXE` rebuilt, it wrote
+refused its first run because `XHCIQUAL.EXE` was older than `xhci_version.h`
+(the rule 23.8 rebuilt the tools ahead of); with `XHCIQUAL.EXE` and
+`XHCISNAP.EXE` rebuilt, it wrote
 `releases\1.2.0.0\` (17 files, `1.1.1.0`'s layout; `860afb4`) and the upload
 set `out\xhci98-1.2.0.0.zip`, **420,093 B**.
 
@@ -3469,9 +3470,10 @@ enable, uninstall and a rescan (the wizard, `E:\release-x86`, `oem0.inf`) all
 applied live with no restart prompt, and the audio device bound again on its
 re-plug. `slot_enable` 8.
 
-**Leg 1, Windows 98 SE under NUSB.** The Add New Hardware wizard asked for the
-CD once, for `usbui.dll`, and then for a restart, taken as a shutdown and a
-cold launch. The controller, **USB 2.0 Root Hub**, the HID mouse, **USB Mass
+**Leg 1, Windows 98 SE under NUSB.** The Update Device Driver Wizard, opened
+from the "PCI Universal Serial Bus" device's properties, took the CD once,
+for `usbui.dll`, and then asked for a restart, taken as a shutdown and a cold
+launch. The controller, **USB 2.0 Root Hub**, the HID mouse, **USB Mass
 Storage Device** with its **USB Disk**, and **USB Composite Device** with **USB
 Audio Device** all bound, no bang. Device Manager's Sound category showed no
 Kernel Audio Mixer; the `regedit /e` export of `HKLM\Enum`, read off the disk
@@ -3490,8 +3492,10 @@ reinstalled it through the wizard from the cached
 `C:\WINDOWS\INF\OTHER\YEOKHE~1.INF` with no CD prompt and no restart prompt.
 Device Manager redrew only on a second Refresh, after the disable and after
 the reinstall. The two `HKLM\Enum` exports, before the teardown and after the
-rescan, hold the same device set, the Kernel Audio Mixer in both; they differ
-only in the serial numbers and symbolic names the re-enumeration renumbered.
+rescan, hold the same device set, the Kernel Audio Mixer in both. Besides the
+serial numbers and symbolic names the re-enumeration renumbered, they differ
+in one value, the controller's `LogConfig\0000` (`bf,fe,ff,3f,bf,fe` before,
+`00,00,ff,3f,00,00` after), which was not interpreted.
 `slot_enable` 9, `slot_configure` 9.
 
 **Leg 3, Windows ME under SweetLow's stack.** No CD prompt. Mouse and stick
@@ -3542,11 +3546,12 @@ restart prompt anywhere. `slot_enable` 9 on both.
 
 *Each of those two was attempted first under WHPX, and neither attempt reached
 a driver install.* Vista x64 bugchecked during its boot (the bugcheck code was
-not captured) and reset into Windows Error Recovery; Windows 7 x64 sat at
-"Starting Windows" for more than six minutes. Both guests were clean copies
-whose controller had no driver yet, so `xhci98.sys` cannot have loaded. On
-this host those two guests run under TCG only; Vista x86, Windows 7 x86 and
-XP SP3 ran under `whpx,kernel-irqchip=off`.
+not captured) and reset into Windows Error Recovery; Windows 7 x64 was still
+at "Starting Windows" about seven minutes after QEMU started. Both guests were
+clean copies whose controller had no driver yet, so `xhci98.sys` cannot have
+loaded. One attempt each is all that was tried; both legs were then taken
+under TCG, while Vista x86, Windows 7 x86 and XP SP3 ran under
+`whpx,kernel-irqchip=off`.
 
 **Leg 5, Windows XP x64** (under TCG, four processors; Administrator, password
 `test`). Found New Hardware wizard, `E:\release-x64`, XP's Logo prompt,
@@ -3563,14 +3568,15 @@ Device Manager closed). Both were answered No. The log puts no reboot flag on
 the `xhci98` installs or on the audio installs; each prompt matches one for
 the stick's volume, `#W165 Device "STORAGE\REMOVABLEMEDIA\7&1426A849&0&RM"
 required reboot: Device not started (unknown reason).`, and the same for
-`...&1&RM` after the rescan. The stick image is unformatted - the NT 6.x
-guests' Explorer offered to format it - which may be why its volume did not
+`...&1&RM` after the rescan. The stick image is unformatted - Windows 7 x86's
+Explorer (leg 9) offered to format it - which may be why its volume did not
 start; that was not checked. `slot_enable` 9, `slot_address` 20,
 `slot_configure` 12, 23.8's numbers.
 
 **Names, none a defect.** On Vista and Windows 7, both architectures, the
-sound device is named **"Audio Device"** (manufacturer "(Generic USB Audio)",
-"This device is working properly"), not "USB Audio Device". On 98 SE and ME
+sound device is named **"Audio Device"**, not "USB Audio Device", with no bang
+(on leg 9 its properties read manufacturer "(Generic USB Audio)" and "This
+device is working properly"). On 98 SE and ME
 the Kernel Audio Mixer is in `HKLM\Enum` but not in Device Manager's view. The
 9x guests also carry the HPET as an "Unknown Device" with Code 28, which is
 not USB and predates this release. Recorded, not pursued (owner).
