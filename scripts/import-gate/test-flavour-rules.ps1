@@ -200,6 +200,12 @@ try {
         $script:importFailures = @()
         Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
         Assert-True (@($script:importFailures | Where-Object { $_ -match 'source .* was not found' }).Count -eq 1) "SITES over LTCG objects fails on a missing source: $($script:importFailures)"
+        Set-Content -LiteralPath (Join-Path $siteSrc 'hcd_pnp.c') -Encoding ASCII -Value 'void g(void) { HCD_FREE(0); }'
+        Set-Content -LiteralPath (Join-Path $siteSrc 'hcd.h') -Encoding ASCII -Value '#define HCD_FREE(p) ExFreePool(p)'
+        $script:importFailures = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'named in the header' }).Count -eq 1) "SITES over LTCG objects refuses a restricted name in a header, where a macro hides it: $($script:importFailures)"
+        Remove-Item -LiteralPath (Join-Path $siteSrc 'hcd.h')
         $script:mixedObjects = $true
         $script:importFailures = @()
         Test-Image -Path $siteImage -ImageFlavor release -Rules $rules

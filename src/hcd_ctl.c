@@ -417,9 +417,19 @@ static NTSTATUS hcdThreadStart(PHCD_CONTROLLER hc)
     }
     (VOID)ZwClose(handle);
     if (!NT_SUCCESS(status)) {
-        /* On NT the event alone cannot cover a remove's unload, so a start
-         * that could not reference its thread does not proceed (Codex
-         * review of 26-A.2, round 1, note 11). Nothing is unloading now. */
+        /*
+         * On NT the event alone cannot cover a remove's unload, so a start
+         * that could not reference its thread does not proceed (Codex review
+         * of 26-A.2, round 1, note 11). The thread is told to leave and its
+         * event waited for; what it still runs after that is its call into
+         * PsTerminateSystemThread from this image. **That window is not
+         * closed** (round 2, finding 5): with the object unreferenced there
+         * is nothing to join, and a remove that unloaded the image inside it
+         * would unload it under the thread. It is the residual of a failure
+         * no run has seen - a reference to a handle PsCreateSystemThread has
+         * just returned - and it is counted.
+         */
+        hc->ThreadReferenceFailures++;
         hc->ThreadObject = NULL;
         hc->ThreadStop = 1;
         HcdThreadWake(hc);
@@ -467,13 +477,13 @@ static VOID hcdRelease(PHCD_CONTROLLER hc)
         IoDisconnectInterrupt(hc->Interrupt);
         hc->Interrupt = NULL;
     }
-    /* No ISR can queue it now. Take a queued DPC off the queue, and wait out
-     * one already running on another processor. */
+    /* No ISR can queue it now. A DPC already queued is let run - closed, it
+     * does nothing but retire its count - rather than dequeued:
+     * KeRemoveQueueDpc's TRUE does not promise, before Vista SP1, that the
+     * DPC will not run, and retiring its count here as well would retire it
+     * twice (Codex review of 26-A.2, round 2, finding 1). */
     XHCI_DBG_TEXT("hcd: release: DPC");
     hc->DpcClosed = 1;
-    if (KeRemoveQueueDpc(&hc->IsrDpc)) {
-        (VOID)InterlockedDecrement(&hc->DpcsInFlight);
-    }
     while (hc->DpcsInFlight != 0) {
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);

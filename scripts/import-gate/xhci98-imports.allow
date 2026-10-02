@@ -86,7 +86,6 @@ ntoskrnl.exe!PoSetPowerState                 all  required  w2k-export; win98-pr
 ntoskrnl.exe!PoRequestPowerIrp               all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!PoRequestPowerIrp, hint B3) (+14 other 98 SE); ntkern-name
 ntoskrnl.exe!KeInitializeDpc                 all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeDpc, hint 73) (+24 other 98 SE)
 ntoskrnl.exe!KeInsertQueueDpc                all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInsertQueueDpc, hint 7C) (+10 other 98 SE)
-ntoskrnl.exe!KeRemoveQueueDpc                all  required  w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!KeRemoveQueueDpc, hint 8A) (+1 other 98 SE)
 ntoskrnl.exe!IoConnectInterrupt              all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoConnectInterrupt, hint 37) (+6 other 98 SE); ntkern-name
 ntoskrnl.exe!IoDisconnectInterrupt           all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoDisconnectInterrupt, hint 40) (+6 other 98 SE); ntkern-name
 ntoskrnl.exe!MmMapIoSpace                    all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!MmMapIoSpace, hint 9C) (+7 other 98 SE); ntkern-name

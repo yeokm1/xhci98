@@ -974,9 +974,12 @@ none of them).
 | `ntoskrnl.exe!IoCancelIrp` | w2k-export; win98-precedent openhci.sys 4.10.2222 (NTOSKRNL.EXE!IoCancelIrp, hint 35) (+14 other 98 SE); ntkern-name |
 | `ntoskrnl.exe!DbgPrint` | w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!DbgPrint, hint 1) (+1 other 98 SE); ntkern-name |
 
-**What the working tree holds now.** Since the owner's decision of
+**What the working tree held at Phase 25's close** (kept as written; since
+26-A.1 and 26-A.2, 2026-10-03, `[imports]` carries the rows the controller
+FDO imports, and the pool pair is still denied because `hcd_pool.c` is not
+linked until the first allocation). Since the owner's decision of
 2026-10-02 that the HCD takes over `src\` and the name `xhci98.sys`,
-`scripts\import-gate\xhci98-imports.allow` is the HCD's allowlist. It holds
+`scripts\import-gate\xhci98-imports.allow` is the HCD's allowlist. It held
 an empty `[imports]` (task 25.8's scaffold imports nothing) and a `[deny]`
 section whose pool rows already cite this task: `ExAllocatePool` (not the HCD's spelling), `ExAllocatePoolWithTag` and
 `ExFreePool` (the HCD's entry points, denied until 26-A.1 adds their rows

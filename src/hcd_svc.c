@@ -253,6 +253,12 @@ VOID HcdTimersDrain(PHCD_CONTROLLER hc)
     }
     (VOID)KeWaitForSingleObject(&hc->TimersIdle, Executive, KernelMode, FALSE,
                                 NULL);
+    /* The last callback sets the event while it still holds TimerLock, which
+     * lives in this object: taking the lock once more waits until it has let
+     * go, so nothing of the controller's is touched after this returns (Codex
+     * review of 26-A.2, round 2, finding 2). */
+    KeAcquireSpinLock(&hc->TimerLock, &oldIrql);
+    KeReleaseSpinLock(&hc->TimerLock, oldIrql);
 }
 
 /* IRQL: PASSIVE_LEVEL (start, after a drain). */

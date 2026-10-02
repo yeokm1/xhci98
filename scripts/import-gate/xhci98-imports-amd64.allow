@@ -71,7 +71,6 @@ ntoskrnl.exe!KeDelayExecutionThread        all  required  nt52-amd64-export; twi
 ntoskrnl.exe!KeInitializeDpc               all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
 ntoskrnl.exe!KeInitializeTimer             all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
 ntoskrnl.exe!KeInsertQueueDpc              all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
-ntoskrnl.exe!KeRemoveQueueDpc              all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
 ntoskrnl.exe!KeSetTimer                    all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
 ntoskrnl.exe!MmMapIoSpace                  all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
 ntoskrnl.exe!MmUnmapIoSpace                all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)

@@ -96,6 +96,7 @@ typedef struct _HCD_CONTROLLER {
     ULONG ControllerStarted;
     ULONG ResumeFailures;
     ULONG PowerRequestFailures;
+    DEVICE_POWER_STATE PowerDirectWant;
     WORK_QUEUE_ITEM PowerWork;
     PIRP PowerWorkIrp;
     ULONG PowerWorkKind;
@@ -123,6 +124,7 @@ typedef struct _HCD_CONTROLLER {
     /* The controller thread (hcd_ctl.c). */
     PVOID ThreadObject;
     volatile ULONG ThreadRunning;
+    ULONG ThreadReferenceFailures;
     KEVENT ThreadExited;
     volatile ULONG ThreadStop;
     KEVENT WorkEvent;

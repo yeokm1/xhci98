@@ -167,3 +167,27 @@ both, the shutdown's trace shows the policy-owner chain this round wrote:
 device `D3` it requested (`0x00020104`), then the controller suspended
 ("quiesce: halted"). Notes `r1-98-notes.md`, `r1-2k-notes.md`; traces
 `vm\t26-win98-r1b-`, `vm\t26-win2k-r1-debugcon.log`.
+
+### Round 2, and its fixes
+
+Codex's second round over the round-1 commit (`.claude\codex-p26a-r2*.txt`)
+judged seven of the twelve round-1 findings fixed and found three MAJOR, two
+MINOR and two NOTE items. Fixed: a queued interrupt DPC is no longer dequeued
+at teardown - `KeRemoveQueueDpc`'s TRUE does not promise, before Vista SP1,
+that the DPC will not run, so retiring its count there could retire it twice
+- it is let run, closed, and its own decrement is waited for; the timer drain
+takes the slot lock once after the idle event, because the last callback
+signals while it still holds that lock; a failed `PoRequestPowerIrp` no
+longer abandons the device transition - a work item suspends or resumes the
+controller itself before the system IRP completes; the LTCG source scan
+refuses a restricted name in any header, where a macro could carry it to any
+object; and the remove's comment and the power file's header say what the
+count covers and what has run. **Left open, recorded in `hcd_ctl.c`**: on NT,
+a thread whose object could not be referenced at start is waited for by its
+event only, so a remove that unloaded the image in the instant before the
+thread's `PsTerminateSystemThread` call would unload it under the thread - the
+residual of a failure no run has seen, counted (`ThreadReferenceFailures`).
+
+**Both primaries on that build** (`24650e1e...2d9a`): the same legs as round
+1 - working, two disable/enable cycles, a shutdown - and the same results.
+Notes `r2-98-notes.md`, `r2-2k-notes.md`.

@@ -31,8 +31,10 @@
  *   - no PoRequestPowerIrp for the state the device is already in (on
  *     Windows 98 it returns STATUS_PENDING and never delivers the IRP).
  *
- * Neither primary's test guest sleeps (Windows 2000's runs acpi=off), so the
- * S-to-D path has not run on a guest.
+ * Neither primary's test guest sleeps (Windows 2000's runs acpi=off). What has
+ * run is a shutdown on both (runs/run-26.md): the system IRP, the D3 it
+ * requested, the suspend. A D0 resume, the work-item route and the
+ * direct transition have not run on a guest.
  *
  * IRQL: dispatch at PASSIVE_LEVEL (the FDO is DO_POWER_PAGABLE); the
  * completion routines and the request callback at <= DISPATCH_LEVEL; the
@@ -45,6 +47,7 @@
 
 #define HCD_POWER_WORK_D0     1UL
 #define HCD_POWER_WORK_SYSTEM 2UL
+#define HCD_POWER_WORK_DIRECT 3UL
 
 /* The resume half of a D0, then the IRP's completion. IRQL: PASSIVE_LEVEL. */
 static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
@@ -66,6 +69,32 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
     HcdIoLeave(hc);
 }
 
+/*
+ * The device transition a system IRP wanted, made here because the device
+ * IRP that should have carried it could not be requested (PoRequestPowerIrp
+ * failed, so no IRP and no callback follow): the controller is suspended or
+ * resumed directly and the device state recorded, so a sleep never leaves it
+ * running and a wake never leaves it suspended (Codex review of 26-A.2,
+ * round 2, finding 3). IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdDirectTransition(PHCD_CONTROLLER hc)
+{
+    POWER_STATE state;
+
+    state.DeviceState = hc->PowerDirectWant;
+    if (state.DeviceState == PowerDeviceD0) {
+        if (hc->Common.DevicePower != PowerDeviceD0 &&
+            XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
+            hc->ResumeFailures++;
+            HcdControllerFail(hc);
+        }
+    } else if (hc->Common.DevicePower == PowerDeviceD0) {
+        XhciSuspendController(&hc->Hc);
+    }
+    hc->Common.DevicePower = state.DeviceState;
+    (VOID)PoSetPowerState(hc->Common.Self, DevicePowerState, state);
+}
+
 /* IRQL: PASSIVE_LEVEL (a system worker thread). */
 static VOID NTAPI hcdPowerWork(PVOID Context)
 {
@@ -81,11 +110,14 @@ static VOID NTAPI hcdPowerWork(PVOID Context)
 
     if (kind == HCD_POWER_WORK_D0) {
         hcdD0Finish(hc, irp);
-    } else {
-        PoStartNextPowerIrp(irp);
-        IoCompleteRequest(irp, IO_NO_INCREMENT);
-        HcdIoLeave(hc);
+        return;
     }
+    if (kind == HCD_POWER_WORK_DIRECT) {
+        hcdDirectTransition(hc);
+    }
+    PoStartNextPowerIrp(irp);
+    IoCompleteRequest(irp, IO_NO_INCREMENT);
+    HcdIoLeave(hc);
 }
 
 /* One power IRP of each kind is in flight at a time - the power manager
@@ -179,11 +211,12 @@ static NTSTATUS NTAPI hcdSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     status = PoRequestPowerIrp(hc->Pdo, IRP_MN_SET_POWER, state,
                                hcdSystemDeviceDone, hc, NULL);
     if (!NT_SUCCESS(status)) {
+        /* No device IRP and no callback will follow: the work item makes the
+         * transition itself and then completes the system IRP. */
         hc->PendingSystemIrp = NULL;
         hc->PowerRequestFailures++;
-        PoStartNextPowerIrp(Irp);
-        HcdIoLeave(hc);
-        return STATUS_SUCCESS;
+        hc->PowerDirectWant = want;
+        hcdPowerDefer(hc, Irp, HCD_POWER_WORK_DIRECT);
     }
     return STATUS_MORE_PROCESSING_REQUIRED;
 }

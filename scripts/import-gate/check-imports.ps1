@@ -685,6 +685,17 @@ function Test-ImportSitesFromSource {
 
     $srcDir = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $ImagePath))
     $checked = 0
+    # A restricted name in a header can reach any object through a macro, and
+    # no per-file scan can attribute it, so none is allowed in one (Codex
+    # review of 26-A.2, round 2, finding 4).
+    foreach ($header in @(Get-ChildItem -LiteralPath $srcDir -Filter "*.h" -File -ErrorAction SilentlyContinue)) {
+        $headerText = [System.IO.File]::ReadAllText($header.FullName)
+        foreach ($row in $SiteRows) {
+            if ($headerText -cmatch ("\b" + [regex]::Escape($row.Symbol) + "\b")) {
+                Add-Failure "$($row.Module)!$($row.Symbol) is named in the header $($header.FullName): a macro there could reach any object, so a SITES-restricted name may not appear in a header (source scan, the objects being LTCG)."
+            }
+        }
+    }
     foreach ($obj in $Objects) {
         $source = Join-Path $srcDir ([System.IO.Path]::GetFileNameWithoutExtension($obj.Name) + ".c")
         if (-not (Test-Path -LiteralPath $source)) {
