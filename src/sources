@@ -48,6 +48,8 @@ SOURCES=xhci_mem.c    \
         xhci_desc.c   \
         xhci_log.c    \
         hcd_entry.c   \
+        hcd_pnp.c     \
+        hcd_power.c   \
         xhci98.rc
 
 #

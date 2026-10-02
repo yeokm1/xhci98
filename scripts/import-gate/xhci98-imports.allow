@@ -45,19 +45,37 @@
 #     (roadmap-hcd.md, "The shape of the successor"), and a stock Windows 98 SE
 #     has none to resolve against.
 #   - An image that imports nothing at all passes only while it carries the
-#     scaffold marker XHCI98_SCAFFOLD_DO_NOT_STAGE (task 25.8). Once 26-A.1
-#     removes the marker, an empty import table is a failure.
+#     scaffold marker XHCI98_SCAFFOLD_DO_NOT_STAGE (task 25.8). Task 26-A.1
+#     removed the marker (2026-10-03), so an empty import table is a failure.
 #   - Pool is allowed by rows here, with the rule naming the sites that may
 #     allocate (design record 13 section 7; the owner's decision of 2026-10-02,
-#     roadmap-hcd.md decisions table, "Pool and DMA"). Until 26-A.1 adds the
-#     rows, the pool family is denied below so an allocation cannot arrive
+#     roadmap-hcd.md decisions table, "Pool and DMA"). Until the pool file of
+#     task 26-A.2 adds the rows, the pool family is denied below so an allocation cannot arrive
 #     ahead of its evidence.
 
 [imports]
 
-# Task 25.8's scaffold imports nothing. Phase 26 task 26-A.1 grows this
-# section to what the FDO of 26-A.2 imports, from task 25.3's evidence table
-# (design record 13 section 7 and Appendix A).
+# Rows are added as the HCD comes to import them, each from task 25.3's
+# evidence table (design record 13 section 7.4 and Appendix A), with that
+# table's evidence text verbatim. A SITES= first word in the notes restricts
+# the pair to the named object files (design record 13 section 7.5; the gate
+# reads it per object with dumpbin /symbols).
+
+# --- Task 26-A.1: the FDO's attach, PnP forwarding and power pass-through ---
+ntoskrnl.exe!InterlockedIncrement            all  required  w2k-export; win98-precedent openhci.sys 4.10.2222 (NTOSKRNL.EXE!InterlockedIncrement, hint 28) (+35 other 98 SE); ntkern-name
+ntoskrnl.exe!InterlockedDecrement            all  required  w2k-export; win98-precedent openhci.sys 4.10.2222 (NTOSKRNL.EXE!InterlockedDecrement, hint 26) (+33 other 98 SE); ntkern-name
+ntoskrnl.exe!KeSetEvent                      all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeSetEvent, hint 8E) (+42 other 98 SE); ntkern-name
+ntoskrnl.exe!KeInitializeEvent               all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeEvent, hint 74) (+48 other 98 SE); ntkern-name
+ntoskrnl.exe!KeWaitForSingleObject           all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeWaitForSingleObject, hint 95) (+51 other 98 SE); ntkern-name
+ntoskrnl.exe!IofCompleteRequest              all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IofCompleteRequest, hint 69) (+43 other 98 SE); ntkern-name
+ntoskrnl.exe!IofCallDriver                   all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IofCallDriver, hint 68) (+49 other 98 SE); ntkern-name
+ntoskrnl.exe!IoCreateDevice                  all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoCreateDevice, hint 38) (+43 other 98 SE); ntkern-name
+ntoskrnl.exe!IoDeleteDevice                  all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoDeleteDevice, hint 3D) (+41 other 98 SE); ntkern-name
+ntoskrnl.exe!IoAttachDeviceToDeviceStack     all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoAttachDeviceToDeviceStack, hint 30) (+36 other 98 SE); ntkern-name
+ntoskrnl.exe!IoDetachDevice                  all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoDetachDevice, hint 3F) (+26 other 98 SE); ntkern-name
+ntoskrnl.exe!PoStartNextPowerIrp             all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!PoStartNextPowerIrp, hint B6) (+25 other 98 SE); ntkern-name
+ntoskrnl.exe!PoCallDriver                    all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!PoCallDriver, hint AE) (+21 other 98 SE); ntkern-name
+ntoskrnl.exe!PoSetPowerState                 all  required  w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!PoSetPowerState, hint B4) (+5 other 98 SE); ntkern-name
 
 [deny]
 

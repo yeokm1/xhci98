@@ -458,16 +458,30 @@ function Read-AllowFile {
             if ($requirement -notin @("required", "optional")) {
                 throw "$Path line ${lineNo}: REQUIREMENT must be required or optional"
             }
+            $module = $Matches[1]
+            $symbol = $Matches[2]
             $notes = ""
             if ($fields.Count -eq 4) {
                 $notes = $fields[3]
             }
+            # SITES=a.obj,b.obj as the first word of the notes names the only
+            # object files that may reference the import (design record 13
+            # section 7.5: the pool and DMA calls each live in one file). A row
+            # without it is unrestricted.
+            $sites = @()
+            if ($notes -match "^SITES=(\S*)") {
+                $sites = @($Matches[1].ToLower() -split "," | Where-Object { $_ -ne "" })
+                if ($sites.Count -eq 0 -or @($sites | Where-Object { $_ -notmatch "^[a-z0-9_]+\.obj$" }).Count -gt 0) {
+                    throw "$Path line ${lineNo}: SITES= must list object file names (name.obj), comma separated"
+                }
+            }
             $allow += [pscustomobject]@{
-                Module      = $Matches[1]
-                Symbol      = $Matches[2]
+                Module      = $module
+                Symbol      = $symbol
                 Flavors     = $flavors
                 Requirement = $requirement
                 Notes       = $notes
+                Sites       = $sites
                 Source      = "allowlist"
             }
             continue
@@ -625,6 +639,64 @@ function Test-NtkernName {
 }
 
 # -------------------------------------------------------------------- main ---
+
+function Get-ObjectImportRefs {
+    param([string[]]$DumpLines)
+
+    # `dumpbin /symbols` on an object lists each import it calls as an UNDEF
+    # External of its thunk: `__imp__ExFreePool@4` (x86 stdcall),
+    # `__imp_@IofCallDriver@8` (x86 fastcall), `__imp_ExFreePool` (amd64).
+    $names = @()
+    foreach ($line in $DumpLines) {
+        if ($line -match "\bUNDEF\b.*\bExternal\s+\|\s+__imp_(\S+)") {
+            $name = $Matches[1]
+            if ($name -match "^[_@](.+)$") {
+                $name = $Matches[1]
+            }
+            if ($name -match "^(.+)@\d+$") {
+                $name = $Matches[1]
+            }
+            $names += $name
+        }
+    }
+    return $names
+}
+
+function Test-ImportSites {
+    param(
+        [string]$ImagePath,
+        [object]$Rules,
+        [string]$Dumpbin
+    )
+
+    $siteRows = @($Rules.Allow | Where-Object { $_.Sites.Count -gt 0 })
+    if ($siteRows.Count -eq 0) {
+        return
+    }
+
+    # build.exe writes the objects beside the image it links them into.
+    $objDir = Split-Path -Parent $ImagePath
+    $objects = @(Get-ChildItem -LiteralPath $objDir -Filter "*.obj" -File -ErrorAction SilentlyContinue)
+    if ($objects.Count -eq 0) {
+        Add-Failure "$ImagePath has SITES= rows to check but no object files beside it in $objDir - the per-object rule cannot be read from the image alone."
+        return
+    }
+
+    $checked = 0
+    foreach ($obj in $objects) {
+        $refs = @(Get-ObjectImportRefs (Invoke-Dumpbin -Exe $Dumpbin -Mode "/symbols" -Path $obj.FullName))
+        foreach ($row in $siteRows) {
+            if ($refs -cnotcontains $row.Symbol) {
+                continue
+            }
+            $checked++
+            if ($row.Sites -notcontains $obj.Name.ToLower()) {
+                Add-Failure "$($row.Module)!$($row.Symbol) is referenced from $($obj.Name), but its allowlist row restricts it to SITES=$($row.Sites -join ',') (design record 13 section 7.5)."
+            }
+        }
+    }
+    Write-Ok "SITES rule: $($siteRows.Count) restricted pair(s), $checked object reference(s) checked across $($objects.Count) object file(s)"
+}
 
 function Test-Image {
     param(
@@ -822,6 +894,8 @@ function Test-Image {
             }
         }
     }
+
+    Test-ImportSites -ImagePath $Path -Rules $Rules -Dumpbin $Dumpbin
 
     foreach ($row in $Rules.Allow) {
         if ($row.Requirement -ne "required") {

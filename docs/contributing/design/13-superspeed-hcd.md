@@ -1615,8 +1615,8 @@ created.
 
 | Item | Waits for |
 |---|---|
-| `make-package.ps1` staging the HCD: the scaffold marker removed, the package built from `src\xhci98.inf` / `-amd64.inf` and `src\obj<fl>\<arch>\xhci98.sys` as before | 26-A.1 |
-| `make-release.ps1`: the scaffold refusal in its publish loop (defence in depth; it already reads the flavour marker per binary, `Get-ImageFlavourMarker`), then the `2.0.0.0` cut publishing `xhci98-<version>.zip` and its four directories under `releases\<version>\`, beside the frozen `releases\1.2.0.0` | 26-A.1 (the refusal); 32.3 (the cut) |
+| `make-package.ps1` staging the HCD: the scaffold marker removed, the package built from `src\xhci98.inf` / `-amd64.inf` and `src\obj<fl>\<arch>\xhci98.sys` as before | done in 26-A.1 (2026-10-03) |
+| `make-release.ps1`: the scaffold refusal in its publish loop (defence in depth; it already reads the flavour marker per binary, `Get-ImageFlavourMarker`), then the `2.0.0.0` cut publishing `xhci98-<version>.zip` and its four directories under `releases\<version>\`, beside the frozen `releases\1.2.0.0` | the refusal done in 26-A.1 (2026-10-03); 32.3 (the cut) |
 | `gen-offsets.ps1` for the HCD's counter block (9.5) | 26-A.8 / 26-A.10 |
 | The matrix's read route for the HCD (9.4) | 26-A.8 / 26-A.10 |
 | The 26-A.10 expectation set (9.6) and `selftest.ps1` vectors for every HCD branch | 26-A.10 |

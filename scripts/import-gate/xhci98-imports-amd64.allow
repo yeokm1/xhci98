@@ -28,6 +28,30 @@
 # this driver's own and needs its own decision.
 ntoskrnl.exe!KeBugCheckEx                 all  required  nt52-amd64-export (hint 213, ntoskrnl RVA 0x41690 / ntkrnlmp 0x2E950); /GS __report_gsfailure only, bugcheck 0xF7
 
+# --- Task 26-A.1: the FDO's attach, PnP forwarding and power pass-through ---
+# The amd64 twins of the x86 file's rows of the same task; NT 5.2 amd64's
+# export table is the evidence, which the gate re-derives from
+# winxp64-baselines.expected for every row. The Interlocked pair is a
+# compiler intrinsic on amd64 and imports nothing.
+ntoskrnl.exe!IoCreateDevice                all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!IoDeleteDevice                all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!IoAttachDeviceToDeviceStack   all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!IoDetachDevice                all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!IofCallDriver                 all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!IofCompleteRequest            all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!KeInitializeEvent             all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!KeSetEvent                    all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!KeWaitForSingleObject         all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!PoStartNextPowerIrp           all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!PoCallDriver                  all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+ntoskrnl.exe!PoSetPowerState               all  required  nt52-amd64-export; twin of the x86 row (task 26-A.1)
+# WDK 7.1's checked headers wrap the IRP stack-location macros
+# (IoSkipCurrentIrpStackLocation and its siblings) in ASSERT, which the x86
+# Windows 2000 DDK's do not, so the amd64 checked builds import RtlAssert and
+# the x86 ones do not. Checked flavours only; no source calls it.
+ntoskrnl.exe!RtlAssert                     debug  required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only (task 26-A.1)
+ntoskrnl.exe!RtlAssert                     qemu   required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only (task 26-A.1)
+
 [deny]
 
 ExAllocatePool              Not the HCD's spelling (xhci98-imports.allow; task 25.3). Allocate with ExAllocatePoolWithTag once its row exists.
