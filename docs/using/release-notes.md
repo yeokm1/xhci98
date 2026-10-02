@@ -35,7 +35,8 @@ own below. Nothing else about what the driver does changed with them.
 Since `1.2.0.0` the driver carries a **virtual USB 2.0 hub** that can sit
 between a root port and the device plugged into it, so that a Full or Low
 Speed device on a root port is reported to Windows at its true speed. It is
-**off by default, experimental, and for private testing only**; with it off
+**experimental and off by default: only use it if you know what you are
+doing**; with it off
 the driver reports root ports exactly as `1.1.1.0` does. "The virtual
 High-Speed hub switch" below says what it does and how to turn it on. The
 same release also fixes the Code 10 a Low-Speed device behind a hub showed
@@ -258,8 +259,8 @@ which writes it.
 
 ## The virtual High-Speed hub switch (since `1.2.0.0`)
 
-**Experimental, for private testing only, and off by default.** Leave it off
-unless you are testing it.
+**Experimental and off by default.** Only use it if you know what you are
+doing.
 
 The driver reports every device plugged directly into a root port to Windows
 as High Speed, because the USB stack it plugs into crashes the machine when a
@@ -307,7 +308,7 @@ refused nothing. With the switch at `0` the same chain works.
 
 **The hub's id is pid.codes' shared test id, `1209:0001`, and you can
 change it.** It is not an id allocated to this project: pid.codes reserves
-it for private testing, which is why the feature is documented as such. Two
+it for private testing. Two
 more values sit beside the switch, both strings (`REG_SZ`), written by the
 install:
 

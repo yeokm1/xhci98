@@ -3247,8 +3247,8 @@ writes none of them: the installer creates all six.
   finds the key itself. The first two values below are here so you can check
   what is in the key if you are asked to. The third, XhciImodInterval250ns,
   is the one setting here you may want to change yourself. The last three
-  are the virtual High-Speed hub, which is EXPERIMENTAL, FOR PRIVATE TESTING
-  ONLY, and off unless you turn it on.
+  are the virtual High-Speed hub, which is EXPERIMENTAL and off unless you
+  turn it on: ONLY USE IT IF YOU KNOW WHAT YOU ARE DOING.
 
   XhciLogVerbosity  -  the whole switch
   .....................................
@@ -3331,8 +3331,8 @@ writes none of them: the installer creates all six.
   XhciVirtualHSHub  -  the virtual High-Speed hub switch
   ......................................................
 
-  EXPERIMENTAL, FOR PRIVATE TESTING ONLY, AND OFF BY DEFAULT. Leave it off
-  unless you are testing it.
+  EXPERIMENTAL AND OFF BY DEFAULT. Only use it if you know what you are
+  doing.
 
   Every device plugged directly into a root port is reported to Windows as
   High Speed, because the USB stack this driver plugs into crashes the
