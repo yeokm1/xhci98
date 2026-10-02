@@ -595,9 +595,9 @@ directives); `lessons.md`; `runs/run-23.md`; `releases/history.md`;
 
 Goal: GitHub issue 4's two requests still open after `1.1.1.0` - a Low-Speed
 device behind a hub refusing the polling rates the reporter's stack offers it
-(item 2, his Code 10 at 250 Hz and above), and every root-port device polling
-in usbport's 1, 2 and 4 ms bands and reported High Speed (item 2's other half
-and item 1, issue 6) - and the result cut as `1.2.0.0`. The second field moves
+(item 2, his Code 10 at 250 Hz and above), a Full- or Low-Speed device on a
+root port polling in usbport's 1, 2 and 4 ms bands (item 2's other half),
+and every root-port device reported High Speed (item 1, issue 6) - and the result cut as `1.2.0.0`. The second field moves
 because an optional virtual USB hub is a major change (owner, 2026-10-01;
 `1.1.2.0` until then). Items 3, 4 and 5 were answered by `1.0.2.0`, `1.1.0.0`
 and `1.1.1.0`.
@@ -617,8 +617,7 @@ on every guest held, over rounds 5 to 12 and the fixes they called for. Two
 older defects found on the way were fixed before the cut: the NT 6.x
 timer-arm race (24.4) and the High-Speed interval behind a hub (24.5). On
 2026-10-02 the owner removed every task that did not block the cut - 24.3.5
-(the E460 reading of devices behind a virtual hub on NT 6.x, which QEMU
-cannot give) and 24.6 (the reporter's USB 1.1 hub pointer); the ids are not
+(the E460 session) and 24.6 (the reporter's USB 1.1 hub pointer); the ids are not
 reused. The virtual hub has never run on real hardware. Not this phase's and
 still open: the 500 stutter's cause and the Windows 98 audio replug wedge,
 both carried from Phase 23. What is left is not a task: the owner's upload of
@@ -659,6 +658,11 @@ audio playing from XP on, a Full-Speed hub with a mouse behind it surviving on
 Vista and 7, 25 plug/unplug cycles per target, and at 2 a hub on every USB 2.0
 port; 24.4 and 24.5 landed and read; and `1.2.0.0` cut, its install legs read
 from the asset, and the matrix on both primary targets in all three states.
+The owner closed 24.3 on readings narrower than two of those clauses, and the
+release notes say so: the hidusbf rates on a root port were read on Windows 98
+SE, ME, 2000 and 32-bit XP, not on Vista or 7; and Full-Speed audio played on
+XP x64 at 1 and 2 and on 2000 and ME at 2, on 32-bit XP once and then went
+silent at 2, and on Vista and 7 binds with its playback not read.
 Not a checkpoint: a truthful root-hub report (measured fatal, and not what
 24.3 builds), the bandwidth half of issue 6 section 5, the acceptance test,
 or the upload.
