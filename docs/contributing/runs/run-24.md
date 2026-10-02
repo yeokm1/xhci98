@@ -3392,3 +3392,196 @@ hung shutdown and a ScanDisk boot), is of the same family.
 - `vm\t2434-win7-r10.img` keeps the r10g NMI dump in its pagefile and is never
   booted again. The round 9 and 11 Windows 7 disks, which held no dump, were
   deleted on 2026-10-01.
+
+## 24.7 - the cut, and the install legs read from the asset
+
+**Cut 2026-10-02, all ten install vehicles read the same day** (development
+host C). No finding against this release.
+
+### The cut
+
+Branch `24.3` was fast-forwarded and renamed `1.2.0.0` (owner). `d800b3d` is
+the cut: the `releases\history.md` entry, `xhci_version.h` at `1,2,0,0`, both
+INFs at `DriverVer=10/02/2026,1.2.0.0`, the release-notes header and the issue
+forms' version placeholders. Before anything was published the owner changed
+the text four times (`80ff437`, `58fc1d1`, `0b9d3dd`, `9d2deec`), and Codex's
+first round on the release text found one P1 and two P2, fixed in `d668e81`
+and `f5cec10`; its second round found none.
+
+`build-driver.cmd all` and `all -amd64`, every gate green. `make-release.ps1`
+refused the first run because `XHCIQUAL.EXE` was older than `xhci_version.h`,
+as it did at 23.8; with `XHCIQUAL.EXE` and `XHCISNAP.EXE` rebuilt, it wrote
+`releases\1.2.0.0\` (17 files, `1.1.1.0`'s layout; `860afb4`) and the upload
+set `out\xhci98-1.2.0.0.zip`, **420,093 B**.
+
+The asset holds **17 files and so does `releases\1.2.0.0\`**, every pair
+SHA-256 identical, nothing on either side alone. The published `release-x86`
+binary is `2D53B5F4...` (100,235 B), `debug-x86` 100,971 B, `release-x64`
+`DB80A6D3...` (113,664 B) and `debug-x64` 211,456 B.
+
+### The legs
+
+Each leg ran off a read-only clean copy in `vm\t247\` (taken out of the base
+images' snapshots with `qemu-img convert -l snapshot.name=...`; `vm\t238\` was
+gone) through a throw-away overlay, with the unzipped asset as the transfer
+drive. **On every leg the port-`0xE9` log stayed at 0 bytes**, as the
+`release` flavour should. The installed `xhci98.sys`, read off each disk after
+its leg, is SHA-256 identical to the asset's on every leg: `release-x86` on
+legs 1, 2, 3, 4, 10, 8 and 9, `release-x64` on legs 5, 6 and 7.
+
+| Leg | Target | Result |
+|---|---|---|
+| 1 | Windows 98 SE, NUSB 3.3 | pass, install and devices (no teardown under NUSB) |
+| 2 | Windows 98 SE, SweetLow | pass, full teardown |
+| 3 | Windows ME, SweetLow | pass, full teardown |
+| 4 | Windows 2000 SP4 | pass, full teardown with the audio device unplugged |
+| 10 | Windows XP SP3, 32-bit | pass, full teardown |
+| 8 | Windows Vista SP2 x86 | pass, full teardown |
+| 9 | Windows 7 SP1 x86 | pass, full teardown |
+| 6 | Windows Vista SP2 x64 | pass, full teardown |
+| 7 | Windows 7 SP1 x64 | pass, full teardown |
+| 5 | Windows XP x64 SP2 | pass, full teardown; the NT 5.2 half |
+
+**`XHCISNAP` on every leg.** With no argument the `1.2.0.0` tool prints its
+usage and nothing else: the snapshot channel ships off, and a reading needs
+`-verbosity 2` and a restart. **No leg took the flavour, schema or IMOD
+readback** that 23.8's legs 1 and 4 read as `value 500` - the owner's choice,
+since the switch the channel needs is not part of an install. `-probe` gave the
+same answer on all ten: `\\.\HCD0` opened, PassThru with our GUID `status 6
+(MINIPORT DECLINED)`, "THE ROUTE WORKS", and the three negative probes their
+derived statuses - request code 15 gives 2, a disagreeing
+`RequestBufferLength` 4, a 0x20-byte buffer 7. (Leg 2's notes say 3 for the
+first; the screenshot's digit is under the pointer, its label reads "invalid
+request code", and `xhcisnap.c` prints that label for status 2 alone.) The
+32-bit tool ran under WOW64 on the three x64 guests.
+
+**Leg 4, Windows 2000 SP4.** Found New Hardware wizard at `E:\release-x86`, no
+media prompt. `setupapi.log`: `Found PCI\CC_0C0330 in
+e:\release-x86\xhci98.inf ... Section: Xhci.Dev`, `Decorated section name:
+Xhci.Dev.NTx86`, `Installing section Xhci.Dev.NTx86`, and **`Xhci.Dev6`
+nowhere**. **This install raised a restart prompt**, which 23.8's leg 4 did not
+and 23.2's leg W did. The log puts no reboot flag on the `xhci98` install or on
+its rescan reinstall; the only flag that day is three seconds before the
+install, the IDE disk's `STORAGE\VOLUME` reinstall, whose query-remove was
+vetoed (`Device required reboot: Query remove failed (install) CfgMgr32 code:
+23`). The three devices bound; with the audio device unplugged, disable,
+enable, uninstall and a rescan (the wizard, `E:\release-x86`, `oem0.inf`) all
+applied live with no restart prompt, and the audio device bound again on its
+re-plug. `slot_enable` 8.
+
+**Leg 1, Windows 98 SE under NUSB.** The Add New Hardware wizard asked for the
+CD once, for `usbui.dll`, and then for a restart, taken as a shutdown and a
+cold launch. The controller, **USB 2.0 Root Hub**, the HID mouse, **USB Mass
+Storage Device** with its **USB Disk**, and **USB Composite Device** with **USB
+Audio Device** all bound, no bang. Device Manager's Sound category showed no
+Kernel Audio Mixer; the `regedit /e` export of `HKLM\Enum`, read off the disk
+afterwards, holds `Microsoft Kernel Audio Mixer` - 23.8 read its own leg 1 from
+that export too. Disable, enable, remove and rescan are **not taken on this
+leg**: NUSB's `usbport.sys` crashes on any controller stop. `slot_enable` 3.
+
+**Leg 2, Windows 98 SE under SweetLow's stack.** One CD prompt, for
+`hidclass.sys` on the first HID install. The three devices bound, the audio one
+under **Composite Device**. The controller's properties showed the Advanced tab
+and "This device is working properly"; "Disable in this hardware profile" gave
+**Code 22** with no crash and no restart prompt, the root hub reporting that a
+device it depends on "has been dynamically disabled"; unticking it brought
+every device back; **Remove** cleared the USB class; and **Refresh**
+reinstalled it through the wizard from the cached
+`C:\WINDOWS\INF\OTHER\YEOKHE~1.INF` with no CD prompt and no restart prompt.
+Device Manager redrew only on a second Refresh, after the disable and after
+the reinstall. The two `HKLM\Enum` exports, before the teardown and after the
+rescan, hold the same device set, the Kernel Audio Mixer in both; they differ
+only in the serial numbers and symbolic names the re-enumeration renumbered.
+`slot_enable` 9, `slot_configure` 9.
+
+**Leg 3, Windows ME under SweetLow's stack.** No CD prompt. Mouse and stick
+bound silently; the audio device came up through the wizard from Windows'
+own drivers. Disable gave Code 22 - and the mass storage device's page said so
+in 23.8's words, "has been dynamically disabled" - enable restored it, Remove
+cleared the class and Refresh reinstalled the controller silently, the audio
+wizard running again. No restart prompt anywhere. Device Manager showed no
+Kernel Audio Mixer, Renderer or Splitter row, where 23.8 saw them; both
+`HKLM\Enum` exports hold `Microsoft Kernel Audio Mixer`, and the same device
+set. `slot_enable` 9.
+
+**Leg 10, 32-bit Windows XP SP3** (under WHPX). Found New Hardware wizard at
+boot, `E:\release-x86`, behind **XP's Windows Logo prompt**, taken with
+Continue Anyway (`#E366 ... (Policy=Warn, user said ok)`); no CD, no restart.
+`setupapi.log`: `#I022 Found "PCI\CC_0C0330" in e:\release-x86\xhci98.inf ...
+Section name: "Xhci.Dev"`, `#I023 Actual install section: [Xhci.Dev.NTx86]`,
+and **`Xhci.Dev6` zero times**. The three devices bound silently. Disable,
+enable, uninstall and rescan with all three attached, no restart prompt; the
+rescan's server-side install was refused as unsigned (`#E358`) and the wizard
+reinstalled from `oem0.inf` behind the same Logo prompt, as 23.8 read it.
+`slot_enable` 9.
+
+**Legs 8 and 9, Vista x86 and Windows 7 x86** (both under WHPX). Device Manager
+-> Update Driver Software -> Browse -> `E:\release-x86`, behind the **Windows
+Security dialog**; **Install this driver software anyway** took it on both,
+with no second box and no restart prompt. The driver node is
+`xhci98.inf:XhciModels.NTx86.6.0:Xhci.Dev6:1.2.0.0:pci\cc_0c0330` on both and
+the install runs `[Xhci.Dev6.NTx86]`, exit 0. Three devices on each, then -
+with `net stop audiosrv` first, 23.8's way round Windows 7's disable veto -
+disable, enable, uninstall with the driver kept, and a rescan that reinstalled
+from the store with no prompt. `slot_enable` 9 on both.
+
+**Legs 6 and 7, Vista x64 and Windows 7 x64** (both under TCG), from
+`E:\release-x64`, each on a boot with driver signature enforcement disabled.
+Windows 7 x64 reached Advanced Boot Options from `sendkey f8` repeated from
+QEMU's start; on Vista x64 under TCG the same F8s missed the boot manager's
+menu, and the owner restarted the guest and chose *Disable Driver Signature
+Enforcement* by hand. Both showed the Windows Security dialog and then the
+Program Compatibility Assistant's "Windows requires a digitally signed
+driver", wrong as 22.10 and 23.8 found it. The node is
+`xhci98.inf:XhciModels.NTamd64.6.0:Xhci.Dev6:1.2.0.0:pci\cc_0c0330` and the
+install runs `[Xhci.Dev6.NTAMD64]` and its `.Hw`, `.Services`,
+`.CoInstallers` and `.Interfaces` sections, every one exit 0. **Vista x64
+alone logs `CopyFile ... usbport.sys ... failed 2`**, as 23.8 read it. Three
+devices on each, then the full teardown with the audio service stopped, no
+restart prompt anywhere. `slot_enable` 9 on both.
+
+*Each of those two was attempted first under WHPX, and neither attempt reached
+a driver install.* Vista x64 bugchecked during its boot (the bugcheck code was
+not captured) and reset into Windows Error Recovery; Windows 7 x64 sat at
+"Starting Windows" for more than six minutes. Both guests were clean copies
+whose controller had no driver yet, so `xhci98.sys` cannot have loaded. On
+this host those two guests run under TCG only; Vista x86, Windows 7 x86 and
+XP SP3 ran under `whpx,kernel-irqchip=off`.
+
+**Leg 5, Windows XP x64** (under TCG, four processors; Administrator, password
+`test`). Found New Hardware wizard, `E:\release-x64`, XP's Logo prompt,
+Continue Anyway; no CD prompt and no restart for the install. `setupapi.log`:
+`#I023 Actual install section: [Xhci.Dev.NTAMD64]. Rank: 0x0000a005. Driver
+date: 10/02/2026. Version: 1.2.0.0.`, and **`Xhci.Dev6` zero times**. The three
+devices bound; disable, enable and uninstall raised no prompt, and the rescan's
+server-side install was refused (`#E358`) and the wizard reinstalled behind the
+same Logo prompt, every device "working properly". **Two "System Settings
+Change - You must restart" prompts came, where 23.8's leg 5 had none**: about a
+minute after the three devices were attached, and after the rescan's reinstall
+(a "might not work properly until you reboot" balloon, then the dialog once
+Device Manager closed). Both were answered No. The log puts no reboot flag on
+the `xhci98` installs or on the audio installs; each prompt matches one for
+the stick's volume, `#W165 Device "STORAGE\REMOVABLEMEDIA\7&1426A849&0&RM"
+required reboot: Device not started (unknown reason).`, and the same for
+`...&1&RM` after the rescan. The stick image is unformatted - the NT 6.x
+guests' Explorer offered to format it - which may be why its volume did not
+start; that was not checked. `slot_enable` 9, `slot_address` 20,
+`slot_configure` 12, 23.8's numbers.
+
+**Names, none a defect.** On Vista and Windows 7, both architectures, the
+sound device is named **"Audio Device"** (manufacturer "(Generic USB Audio)",
+"This device is working properly"), not "USB Audio Device". On 98 SE and ME
+the Kernel Audio Mixer is in `HKLM\Enum` but not in Device Manager's view. The
+9x guests also carry the HPET as an "Unknown Device" with Code 28, which is
+not USB and predates this release. Recorded, not pursued (owner).
+
+Harness `out\post-release\task24-7\` (git-ignored: 23.8's scripts with their
+paths moved, the unzipped asset, per-leg notes `<leg>-notes.md` and the
+screenshots); disks `vm\t247\`; logs `vm\t247-*-debugcon.log` and
+`vm\t247-*-qemu-trace.log`.
+
+### What is owed
+
+- The post-release matrix on the release build (`out\pkg-qemu-*` restaged from
+  the release source first), against `runs/run-23-post-release/`.
+- Roadmap 24.7 is the owner's to tick.
