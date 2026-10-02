@@ -242,3 +242,10 @@ stored as `REG_EXPAND_SZ` would be expanded before the query routine refused
 it - is fixed. Whether Windows 98's `RtlQueryRegistryValues` honours that
 flag has not been read; every value the HCD reads falls back to its default
 when the query fails, so nothing yet depends on it.
+
+### Round 7: clean
+
+Round 7 confirmed the round-6 fix and reported no finding at any level over
+`01b0365..d2246cc`, apart from the two recorded residuals (the NT
+thread-reference window and token pasting in the LTCG scan). Batch (a) -
+26-A.1, 26-A.2 and the 26-V.0 reading - closes its review loop there.
