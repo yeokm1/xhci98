@@ -504,9 +504,11 @@ device arrived there; if the convention paired the wrong ports, an unrelated
 device's connect and disconnect on that port would release this hold and
 restart the ping-pong. The successor's rule therefore also requires that the
 device enumerated on the companion be the held device - the same vendor id,
-product id and serial string as read on the SuperSpeed port before the hold,
-or vendor and product id alone for a device with no serial, counted apart -
-and adds the mis-paired-companion vector. This page keeps its original
+product id and serial string as read on the SuperSpeed port before the hold;
+a device with no serial string, or a hold taken before any descriptor was
+read, is an unidentified hold that lasts until the controller's next start,
+since vendor and product id alone cannot tell two units of one model apart -
+and adds the mis-paired-companion and identical-unit vectors. This page keeps its original
 wording as the record of what was proposed; were it ever built, that rule
 would apply here too.
 

@@ -234,7 +234,7 @@ The roadmap is three files: that one has the status, the conventions and
 Phases 0-16 (the initial release); `docs/contributing/roadmap-phases-17-on.md`
 has Phases 17-24, the rest of the miniport's life, closed with the `1.2.0.0`
 cut that froze it; and `docs/contributing/roadmap-hcd.md` has Phases 25
-onward, the successor host controller driver `xhci98h.sys`, the open phase
+onward, the successor host controller driver `xhci98hc.sys`, the open phase
 included. The miniport is frozen (owner, 2026-10-02): `1.2.0.0` is its last
 release, this file still describes it, and the successor's own rules are in
 `roadmap-hcd.md` and design record 13 until the cut rewrites this guide.

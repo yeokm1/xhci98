@@ -1,4 +1,4 @@
-# General SuperSpeed support: the successor host controller driver `xhci98h.sys`
+# General SuperSpeed support: the successor host controller driver `xhci98hc.sys`
 
 Design record 13, for roadmap Phases 25 onward
 (`docs/contributing/roadmap-hcd.md`). It was
@@ -94,7 +94,7 @@ is the index; this is the same list in the proposal's order:
 - **"Stabilised" is `1.2.0.0`.** The miniport is frozen at that release:
   no further cut, and a defect reported against it is answered by the
   successor.
-- **The handover is a second package.** `xhci98h.sys`, with its own INFs and
+- **The handover is a second package.** `xhci98hc.sys`, with its own INFs and
   package, chosen at install time against the same PCI class id; never a
   registry switch inside one binary, because the miniport's import of
   `USBPORT_RegisterUSBPortDriver` is a load-time gate and a combined binary
