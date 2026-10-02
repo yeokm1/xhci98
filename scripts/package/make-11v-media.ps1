@@ -435,11 +435,12 @@ commit, built and packaged by that commit's own scripts:
   set DDKROOT=<this tree>\tools\ntddk
   set WDK71=<this tree>\tools\WinDDK71
   set WDKROOT=<this tree>\tools\WinDDK71
-  scripts\make-usbport-lib.cmd
-  scripts\build-driver.cmd both -NoTargetEvidence
-  powershell -File scripts\package\make-package.ps1 -Flavor debug   -OutDir <this tree>\out\media-11v\old-$BaselineVersion-debug
-  powershell -File scripts\package\make-package.ps1 -Flavor release -OutDir <this tree>\out\media-11v\old-$BaselineVersion-release
-  cd <this tree> ; git worktree remove ..\xhci98-baseline
+  cmd /c scripts\make-usbport-lib.cmd
+  cmd /c scripts\build-driver.cmd both -NoTargetEvidence
+  powershell -File scripts\package\make-package.ps1 -Flavor debug   -NoTargetEvidence -OutDir <this tree>\out\media-11v\old-$BaselineVersion-debug
+  powershell -File scripts\package\make-package.ps1 -Flavor release -NoTargetEvidence -OutDir <this tree>\out\media-11v\old-$BaselineVersion-release
+  cd <this tree>
+  git worktree remove ..\xhci98-baseline
 
 Not "git checkout <commit> -- src" in this tree, which this recipe said until
 2026-10-02: since then src\ is the successor HCD (design record 13), and this
@@ -455,8 +456,12 @@ only for the tracked tools\w98se.url.example), and the baseline's scripts
 default MSVC6, DDKROOT, WDK71 and WDKROOT to the worktree's own tools\ - MSVC
 6.0 for make-usbport-lib.cmd, the Windows 2000 DDK and WDK 7.1 for the build
 and its host suites. The extracted target binaries the import gate reads as
-evidence are not reached that way, so the build runs with -NoTargetEvidence;
-the committed allowlist is still enforced. The set lines are cmd's; from
+evidence are not reached that way, so the build and the packager run with
+-NoTargetEvidence;
+the committed allowlist is still enforced. Each wrapper runs in a child
+cmd because the baseline's build-driver.cmd calls test\run-host-tests.cmd,
+which leaves the shell in test\ - the packaging lines after it are relative to
+the worktree root. The recipe is cmd's, one command per line; from
 PowerShell write `$env:MSVC6 = "..." and so on.
 The recipe is x86 only; an -amd64 build in the same shell refuses the
 inherited DDKROOT (the Windows 2000 DDK) by design, so clear it first.
