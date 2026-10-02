@@ -685,10 +685,10 @@ function Test-ImportSitesFromSource {
 
     $srcDir = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $ImagePath))
     $checked = 0
-    # A restricted name in a header can reach any object through a macro, and
-    # no per-file scan can attribute it, so none is allowed in one (Codex
-    # review of 26-A.2, round 2, finding 4).
-    foreach ($header in @(Get-ChildItem -LiteralPath $srcDir -Filter "*.h" -File -ErrorAction SilentlyContinue)) {
+    # A restricted name in a header, at any depth below the sources, can reach
+    # any object through a macro, and no per-file scan can attribute it, so
+    # none is allowed in one (Codex review of 26-A.2, rounds 2 and 3).
+    foreach ($header in @(Get-ChildItem -LiteralPath $srcDir -Filter "*.h" -File -Recurse -ErrorAction SilentlyContinue)) {
         $headerText = [System.IO.File]::ReadAllText($header.FullName)
         foreach ($row in $SiteRows) {
             if ($headerText -cmatch ("\b" + [regex]::Escape($row.Symbol) + "\b")) {

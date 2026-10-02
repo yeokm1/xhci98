@@ -191,3 +191,18 @@ residual of a failure no run has seen, counted (`ThreadReferenceFailures`).
 **Both primaries on that build** (`24650e1e...2d9a`): the same legs as round
 1 - working, two disable/enable cycles, a shutdown - and the same results.
 Notes `r2-98-notes.md`, `r2-2k-notes.md`.
+
+### Round 3, and its fixes
+
+Codex's third round (`.claude\codex-p26a-r3*.txt`) judged the two drain fixes
+correct and the open thread-reference window accurately recorded, and found
+one MAJOR, one MINOR (beside the recorded window) and one NOTE. Fixed: the
+fallback for a failed `PoRequestPowerIrp` no longer resumes a controller the
+bus may still hold in a low-power state - toward sleep it only suspends the
+controller and records it as suspended in D0, toward S0 it resumes only from
+that state, and otherwise it touches no hardware and counts the wake; the
+LTCG source scan's header rule covers headers at any depth below the sources;
+the power file's header says which IRPs hold the outstanding count. These
+change nothing on a path a guest can reach (the fallback needs a failed
+power-IRP allocation), so no guest leg was run for them; the gates ran on
+both architectures.

@@ -97,6 +97,8 @@ typedef struct _HCD_CONTROLLER {
     ULONG ResumeFailures;
     ULONG PowerRequestFailures;
     DEVICE_POWER_STATE PowerDirectWant;
+    ULONG SuspendedInD0;
+    ULONG WakesWithoutPower;
     WORK_QUEUE_ITEM PowerWork;
     PIRP PowerWorkIrp;
     ULONG PowerWorkKind;

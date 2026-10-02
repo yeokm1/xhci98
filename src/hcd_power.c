@@ -18,8 +18,10 @@
  *     for the in-place recovery (HcdControllerFail).
  *
  * No dispatch routine waits for its own IRP (Codex review of 26-A.2, round 1,
- * findings 5 and 6). An IRP that is pended keeps the outstanding-I/O count
- * until it is completed, so a remove waits for it (finding 4).
+ * findings 5 and 6). The D0 and system SET_POWER IRPs, which this driver
+ * pends, keep the outstanding-I/O count until it completes them, so a remove
+ * waits for them (finding 4); a power IRP it only passes down releases the
+ * count when PoCallDriver returns (round 3, note 4).
  *
  * The Windows 98 rules of win98-wdm.md, each kept here:
  *   - PoStartNextPowerIrp before a power IRP is completed or passed down;
@@ -55,7 +57,9 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
     PIO_STACK_LOCATION stack;
 
     stack = IoGetCurrentIrpStackLocation(irp);
-    if (hc->ControllerStarted && hc->Common.DevicePower != PowerDeviceD0) {
+    if (hc->ControllerStarted &&
+        (hc->Common.DevicePower != PowerDeviceD0 || hc->SuspendedInD0)) {
+        hc->SuspendedInD0 = 0;
         if (XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
             hc->ResumeFailures++;
             HcdControllerFail(hc);
@@ -70,29 +74,41 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
 }
 
 /*
- * The device transition a system IRP wanted, made here because the device
- * IRP that should have carried it could not be requested (PoRequestPowerIrp
- * failed, so no IRP and no callback follow): the controller is suspended or
- * resumed directly and the device state recorded, so a sleep never leaves it
- * running and a wake never leaves it suspended (Codex review of 26-A.2,
- * round 2, finding 3). IRQL: PASSIVE_LEVEL.
+ * The device transition a system IRP wanted, when the device IRP that should
+ * have carried it could not be requested (PoRequestPowerIrp failed, so no
+ * IRP and no callback follow; Codex review of 26-A.2, round 2, finding 3).
+ * Without that IRP the bus does not change the function's power, so only
+ * what is safe on the bus's present state is done (round 3, finding 1):
+ *
+ *   - toward sleep, with the function still in D0: the controller is
+ *     suspended - its DMA stopped before the system sleeps - and
+ *     SuspendedInD0 records that the controller is suspended while the bus
+ *     still holds it in D0; the device state recorded stays D0;
+ *   - toward S0, when an earlier fallback left it suspended in D0: it is
+ *     resumed, the bus never having powered it down;
+ *   - toward S0 with the function really in a lower state: nothing touches
+ *     the hardware, which the bus has not powered, and the wake is counted.
+ *
+ * IRQL: PASSIVE_LEVEL.
  */
 static VOID hcdDirectTransition(PHCD_CONTROLLER hc)
 {
-    POWER_STATE state;
-
-    state.DeviceState = hc->PowerDirectWant;
-    if (state.DeviceState == PowerDeviceD0) {
-        if (hc->Common.DevicePower != PowerDeviceD0 &&
-            XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
+    if (hc->PowerDirectWant != PowerDeviceD0) {
+        if (hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
+            XhciSuspendController(&hc->Hc);
+            hc->SuspendedInD0 = 1;
+        }
+        return;
+    }
+    if (hc->SuspendedInD0) {
+        hc->SuspendedInD0 = 0;
+        if (XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
             hc->ResumeFailures++;
             HcdControllerFail(hc);
         }
-    } else if (hc->Common.DevicePower == PowerDeviceD0) {
-        XhciSuspendController(&hc->Hc);
+        return;
     }
-    hc->Common.DevicePower = state.DeviceState;
-    (VOID)PoSetPowerState(hc->Common.Self, DevicePowerState, state);
+    hc->WakesWithoutPower++;
 }
 
 /* IRQL: PASSIVE_LEVEL (a system worker thread). */
@@ -199,6 +215,15 @@ static NTSTATUS NTAPI hcdSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     }
     want = (hc->Common.SystemPower == PowerSystemWorking) ? PowerDeviceD0
                                                            : PowerDeviceD3;
+    if (NT_SUCCESS(Irp->IoStatus.Status) && hc->ControllerStarted &&
+        want == PowerDeviceD0 && hc->Common.DevicePower == PowerDeviceD0 &&
+        hc->SuspendedInD0) {
+        /* An earlier fallback suspended it in D0: no device IRP is owed,
+         * only the resume. */
+        hc->PowerDirectWant = PowerDeviceD0;
+        hcdPowerDefer(hc, Irp, HCD_POWER_WORK_DIRECT);
+        return STATUS_MORE_PROCESSING_REQUIRED;
+    }
     if (!NT_SUCCESS(Irp->IoStatus.Status) || !hc->ControllerStarted ||
         want == hc->Common.DevicePower) {
         PoStartNextPowerIrp(Irp);
@@ -260,9 +285,11 @@ NTSTATUS HcdControllerPower(PHCD_CONTROLLER hc, PIRP irp)
 
     if (stack->MinorFunction == IRP_MN_SET_POWER) {
         if (hc->ControllerStarted &&
-            hc->Common.DevicePower == PowerDeviceD0) {
+            hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
             XhciSuspendController(&hc->Hc);
         }
+        /* Suspended either way now, and the D0 that follows resumes it. */
+        hc->SuspendedInD0 = 0;
         hc->Common.DevicePower = stack->Parameters.Power.State.DeviceState;
         (VOID)PoSetPowerState(hc->Common.Self, DevicePowerState,
                               stack->Parameters.Power.State);

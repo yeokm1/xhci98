@@ -206,6 +206,12 @@ try {
         Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
         Assert-True (@($script:importFailures | Where-Object { $_ -match 'named in the header' }).Count -eq 1) "SITES over LTCG objects refuses a restricted name in a header, where a macro hides it: $($script:importFailures)"
         Remove-Item -LiteralPath (Join-Path $siteSrc 'hcd.h')
+        New-Item -ItemType Directory -Path (Join-Path $siteSrc 'compat') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $siteSrc 'compat\alias.h') -Encoding ASCII -Value '#define HCD_FREE(p) ExFreePool(p)'
+        $script:importFailures = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'named in the header .*compat' }).Count -eq 1) "SITES over LTCG objects refuses a restricted name in a nested header: $($script:importFailures)"
+        Remove-Item -LiteralPath (Join-Path $siteSrc 'compat\alias.h')
         $script:mixedObjects = $true
         $script:importFailures = @()
         Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
