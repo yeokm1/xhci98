@@ -118,7 +118,7 @@ Feel free to tune it. Lower towards `160` for the last few percent of storage sp
 
 ### Tuning: the virtual High-Speed hub (from 1.2.0.0)
 
-**Experimental, for private testing only, and off by default.** Leave it off unless you are testing it.
+**Experimental and off by default.** Only use it if you know what you are doing.
 
 Every device on a root port is reported to Windows as High Speed (see Known limitations). This switch instead puts a virtual USB 2.0 hub, answered by the driver itself, between the root port and the device, so a Full or Low Speed device is reported at its true speed behind a hub with a transaction translator.
 
