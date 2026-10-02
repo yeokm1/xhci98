@@ -12,6 +12,56 @@ every published directory carries the history up to and including itself.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 1.2.0.0 - 2026-10-02
+
+The driver gains an optional virtual USB 2.0 hub that lets a Full- or
+Low-Speed device on a root port be reported to Windows at its true speed. It
+is experimental and off by default: only use it if you know what you are
+doing. With it off the driver reports root ports exactly as `1.1.1.0` does.
+Every system `1.1.1.0` supports installs as it did, from the same four
+directories.
+
+### What changed
+
+- The virtual High-Speed hub switch. `XhciVirtualHSHub`, a `DWORD` in the
+  controller's driver key beside `XhciImodInterval250ns`, is `0` (off, what
+  the install writes), `1` (a virtual hub appears above a Full- or Low-Speed
+  device plugged into a root port, and goes with it) or `2` (every USB 2.0
+  port carries one from start to stop). Behind it a mouse on a root port
+  polls at the rate it asks for, a Full-Speed audio device on a root port
+  streams from Windows XP on, and on Windows Vista and 7 a USB 1.1 hub on a
+  root port no longer crashes the machine. The hub is one more entry in
+  Device Manager and one more tier in a chain of hubs: with the switch on, a
+  chain of external hubs can be one hub shorter than USB's five. Its id is
+  pid.codes' shared test id `1209:0001`, set by two string values the install
+  also writes, `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid`; a missing or
+  invalid id turns the switch off for that start. Measured in virtual
+  machines only; the virtual hub has never run on real hardware. The release
+  notes' "The virtual High-Speed hub switch" and the readme's section 9 have
+  the details.
+- Fixed, whatever the switch is set to: a Low-Speed device behind a hub
+  showed Code 10 under SweetLow's stack on Windows 98 at 250 Hz and faster
+  (GitHub issue 4).
+- Fixed, whatever the switch is set to: a High-Speed interrupt device behind
+  a USB 2.0 hub, a mouse for example, could be polled every 125 microseconds
+  rather than at the interval it asks for. It worked, but kept the bus busier
+  than it needed to. Read in virtual machines on Windows 98 SE under
+  SweetLow's stack, ME, 2000, 32-bit XP, XP x64 and Vista in both
+  architectures.
+- Fixed on Windows Vista and 7: the driver could arm one of usbport's timers
+  without the lock usbport expects, a race with usbport's own timer code on
+  another processor. It was found by reading the code and never observed. A
+  root-port change with no hardware event behind it can now take up to one
+  health-poll interval longer to be seen. Earlier systems are unchanged.
+- `XHCISNAP` reports what the driver read and applied for the three new
+  values. Its snapshot format moved to schema 5 for that, so an `XHCISNAP`
+  from an earlier release refuses this driver with "schema mismatch", and
+  this one refuses an earlier driver. Use the copy in this package.
+- Not changed with the switch off: every device on a root port is still
+  reported to Windows as High Speed, and the known limitations `1.1.1.0`
+  listed still apply. The release notes' "Known limitations" says which of
+  them the switch addresses.
+
 ## 1.1.1.0 - 2026-09-24
 
 The xHCI controller's properties in Device Manager gain an Advanced tab, and
