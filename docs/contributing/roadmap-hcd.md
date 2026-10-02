@@ -154,10 +154,11 @@ mass storage, Ethernet and composite audio - through the OS's own class
 drivers, with no `usbport.sys`, `usbhub.sys` or `usbhub20.sys` beneath or
 above it.
 
-Status: not opened; waits on the owner's go (2026-10-03). It will run on
-branch `phase-26` (the owner's rule of 2026-10-02: one branch per phase,
-merged into `2.0.0.0` when its checkpoint closes), and the owner has
-pre-authorized closing its checkpoint when its written clauses pass.
+Status: opened 2026-10-03 on the owner's go, on branch `phase-26` (the
+owner's rule of 2026-10-02: one branch per phase, merged into `2.0.0.0` when
+its checkpoint closes); the owner has pre-authorized closing its checkpoint
+when its written clauses pass. Worked in four batches: 26-A.1, A.2 and
+26-V.0; A.3 and A.4; A.5 and A.6; A.7 to A.10, then 26-V.1 to V.3.
 
 Why a phase: it is the "be usbport" step the architecture record always
 named as the large one, and it is where the HCD either matches the miniport

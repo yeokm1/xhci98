@@ -110,7 +110,7 @@ has run once on real hardware. It cut `1.1.0.0`, the first release with a
 64-bit package, which the owner uploaded on 2026-09-20.
 
 **The miniport is frozen at `1.2.0.0`; Phase 25 closed on 2026-10-03;
-Phase 26 waits on the owner's go** (owner,
+Phase 26 opened on the owner's go the same day** (owner,
 2026-10-02, the day Phase 24 closed). `1.2.0.0` is the last release of
 `xhci98.sys`: no further miniport cut, and a defect reported against it is
 answered by the successor. That successor is a monolithic USB host controller
