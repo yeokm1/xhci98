@@ -65,6 +65,7 @@ SOURCES=xhci_mem.c    \
         hcd_dev.c     \
         hcd_rh.c      \
         hcd_enum.c    \
+        hcd_pdo.c     \
         xhci_enum.c   \
         hcd_pool.c    \
         xhci98.rc

@@ -298,3 +298,27 @@ On the way, WDK 7.1's `ntddk.h` maps `ExFreePool` to `ExFreePoolWithTag(a, 0)`
 under `POOL_TAGGING`, which the amd64 build imported; `xhci_compat.h` undoes it
 as it already undid the `ExAllocatePool` rewrite, and the LTCG source scan now
 reads past comments and the `#undef` / `#ifdef` lines that only name a macro.
+
+### Device PDOs
+
+Each enumerated device becomes a PDO of its own, a child of the root hub
+(`hcd_pdo.c`), with the ids of design record 13 section 10.7 - the device id
+`USB\VID_vvvv&PID_pppp`, the hardware ids with and without `&REV_rrrr`, the
+compatible ids `USB\Class_cc&SubClass_ss&Prot_pp` and its two shorter forms
+taken from the first interface when `bDeviceClass` is 0, the root port as the
+instance id until the serial string is read. The PDOs are listed under the
+controller's `PdoListLock` and returned as the root hub's BusRelations; on a
+disconnect the PDO leaves the list and the relations are invalidated, and its
+remove deletes it. `IRP_MJ_INTERNAL_DEVICE_CONTROL` is refused until 26-A.5.
+
+**Both primaries** (`f594d72e...084e`): the hot-plugged QEMU mouse became
+`USB Human Interface Device` under Human Interface Devices, bound by its
+`USB\Class_03` compatible id to the OS's own `hidusb.sys` (Windows 2000 SP4
+5.0.2183.1 driver package, installed silently; Windows 98 SE `HIDDEV.INF`,
+whose install asked for the 98 CD for `hidclass.sys`), and shown **Code 10** -
+expected, since the HID driver's first URB is refused. By connection it sits
+under `xhci98 USB 3.x Root Hub`. Unplugged, it left Device Manager on both
+(Windows 2000 without a rescan), the controller and root hub still working,
+and a shutdown followed with no fault. The Windows 98 agent pressed Remove on
+"Computer" once by mistake; Windows refused it and nothing changed. Notes
+`b3-98-notes.md`, `b3-2k-notes.md`.

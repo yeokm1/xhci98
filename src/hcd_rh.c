@@ -453,6 +453,9 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
         irp->IoStatus.Status = STATUS_SUCCESS;
         status = hcdRhPassDown(fdo, irp);
         IoDetachDevice(fdo->LowerDevice);
+        /* The device PDOs still listed go with their parent (the WDM bus
+         * rule): PnP has removed each of them already. */
+        HcdDevicePdoDeleteAll(fdo->Controller);
         IoDeleteDevice(fdo->Common.Self);
         return status;
     }
@@ -494,9 +497,23 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
     case IRP_MN_CANCEL_REMOVE_DEVICE:
         irp->IoStatus.Status = STATUS_SUCCESS;
         break;
+    case IRP_MN_QUERY_DEVICE_RELATIONS:
+        if (stack->Parameters.QueryDeviceRelations.Type == BusRelations) {
+            PDEVICE_RELATIONS old;
+            PDEVICE_RELATIONS rel;
+
+            old = (PDEVICE_RELATIONS)irp->IoStatus.Information;
+            rel = HcdDevicePdoRelations(fdo->Controller, old);
+            if (rel != NULL) {
+                if (old != NULL) {
+                    HcdPoolFreeForeign(old);
+                }
+                irp->IoStatus.Information = (ULONG_PTR)rel;
+                irp->IoStatus.Status = STATUS_SUCCESS;
+            }
+        }
+        break;
     default:
-        /* BusRelations: no device PDO exists before 26-A.4's enumeration,
-         * so the root hub's list goes down as it arrived. */
         break;
     }
     status = hcdRhPassDown(fdo, irp);

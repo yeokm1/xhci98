@@ -28,6 +28,7 @@
 #define HCD_KIND_CONTROLLER_FDO 0x43464448UL /* 'HDFC' */
 #define HCD_KIND_ROOTHUB_PDO    0x50524448UL /* 'HDRP' */
 #define HCD_KIND_ROOTHUB_FDO    0x46524448UL /* 'HDRF' */
+#define HCD_KIND_DEVICE_PDO     0x50444448UL /* 'HDDP' */
 
 /* The PnP state the dispatch routines gate on. Windows 98 can deliver a
  * REMOVE as the first PnP IRP after START (no SURPRISE_REMOVAL before it;
@@ -80,6 +81,22 @@ typedef struct _HCD_USB_DEVICE {
     ULONG ConfigLength;
     PDEVICE_OBJECT Pdo;     /* 26-A.4's device PDO, once it exists      */
 } HCD_USB_DEVICE, *PHCD_USB_DEVICE;
+
+/* A device PDO (hcd_pdo.c): one per enumerated device, a child of the root
+ * hub. Carries its own copies of the descriptors, so it may outlive the
+ * device record; Device is the record while the device is present. */
+typedef struct _HCD_DEVICE_PDO {
+    HCD_COMMON Common;
+    struct _HCD_CONTROLLER *Controller;
+    struct _HCD_DEVICE_PDO *Next;   /* the controller's list, PdoListLock */
+    PHCD_USB_DEVICE Device;
+    ULONG Listed;                   /* in the list, so in the relations   */
+    ULONG Port;
+    ULONG Speed;
+    UCHAR DeviceDesc[18];
+    PUCHAR Config;
+    ULONG ConfigLength;
+} HCD_DEVICE_PDO, *PHCD_DEVICE_PDO;
 
 /* A root port: its enumeration machine and the device on it. */
 typedef struct _HCD_PORT {
@@ -153,6 +170,8 @@ typedef struct _HCD_CONTROLLER {
     /* The controller thread (hcd_ctl.c). */
     PVOID ThreadObject;
     PDEVICE_OBJECT RootHubPdo;
+    KSPIN_LOCK PdoListLock;
+    PHCD_DEVICE_PDO DevicePdos;
     volatile ULONG ThreadRunning;
     ULONG ThreadReferenceFailures;
     KEVENT ThreadExited;
@@ -265,6 +284,15 @@ VOID HcdPowerGateLeave(PHCD_CONTROLLER hc);
 VOID HcdEnumService(PHCD_CONTROLLER hc);
 VOID HcdEnumInit(PHCD_CONTROLLER hc);
 VOID HcdEnumDrop(PHCD_CONTROLLER hc);
+
+/* hcd_pdo.c */
+NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdDevicePdoGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
+                                        PDEVICE_RELATIONS old);
+VOID HcdDevicePdoDeleteAll(PHCD_CONTROLLER hc);
+NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp);
+NTSTATUS HcdDevicePdoPower(PHCD_DEVICE_PDO pdo, PIRP irp);
 
 /* hcd_dma.c */
 NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc);

@@ -272,6 +272,7 @@ static VOID NTAPI hcdIsrDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
 VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
 {
     KeInitializeSpinLock(&hc->ControllerLock);
+    KeInitializeSpinLock(&hc->PdoListLock);
     HcdTimersInit(hc);
     KeInitializeDpc(&hc->IsrDpc, hcdIsrDpc, hc);
     hc->DpcsInFlight = 0;

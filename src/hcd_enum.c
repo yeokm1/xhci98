@@ -569,9 +569,8 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         return 1;
 
     case XHCI_ENUM_ACT_CREATE_PDO:
-        /* The device PDO is the next step of 26-A.4; until it exists the
-         * device is recorded as enumerated and the machine told so. */
-        hcdEventInit(next, XHCI_ENUM_EV_PDO_CREATED, 1);
+        hcdEventInit(next, XHCI_ENUM_EV_PDO_CREATED,
+                     NT_SUCCESS(HcdDevicePdoCreate(hc, p->Device)));
         XHCI_DBG_VALUE("hcd: device enumerated on port", p->PortId);
         return 1;
 
@@ -580,6 +579,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         return 0;
 
     case XHCI_ENUM_ACT_REPORT_GONE:
+        HcdDevicePdoGone(hc, p->Device);
         hcdDisableSlot(hc, p);
         hcdEventInit(next, XHCI_ENUM_EV_PDO_REMOVED, 1);
         return 1;
@@ -686,6 +686,7 @@ VOID HcdEnumDrop(PHCD_CONTROLLER hc)
     ULONG i;
 
     for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
+        HcdDevicePdoGone(hc, hc->Ports[i].Device);
         hcdDeviceFree(hc, hc->Ports[i].Device);
         hc->Ports[i].Device = NULL;
         XhciEnumReset(&hc->Ports[i].Enum);

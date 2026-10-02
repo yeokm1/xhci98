@@ -157,6 +157,9 @@ static NTSTATUS NTAPI hcdDispatchPnp(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     if (common->Kind == HCD_KIND_ROOTHUB_FDO) {
         return HcdRootHubFdoPnp((PHCD_ROOTHUB_FDO)common, Irp);
     }
+    if (common->Kind == HCD_KIND_DEVICE_PDO) {
+        return HcdDevicePdoPnp((PHCD_DEVICE_PDO)common, Irp);
+    }
     return HcdCompleteIrp(Irp, Irp->IoStatus.Status, Irp->IoStatus.Information);
 }
 
@@ -173,6 +176,9 @@ static NTSTATUS NTAPI hcdDispatchPower(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     }
     if (common->Kind == HCD_KIND_ROOTHUB_FDO) {
         return HcdRootHubFdoPower((PHCD_ROOTHUB_FDO)common, Irp);
+    }
+    if (common->Kind == HCD_KIND_DEVICE_PDO) {
+        return HcdDevicePdoPower((PHCD_DEVICE_PDO)common, Irp);
     }
     PoStartNextPowerIrp(Irp);
     return HcdCompleteIrp(Irp, Irp->IoStatus.Status, Irp->IoStatus.Information);
