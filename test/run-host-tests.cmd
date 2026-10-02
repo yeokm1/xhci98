@@ -16,14 +16,6 @@ rem   test_caps    - the extended-capability walk, port classification, and
 rem                  PSI speed decoding (src\xhci_caps.c)
 rem   test_port    - PORTSC write construction, the logical-port map and the
 rem                  per-port shadow (src\xhci_port.c)
-rem   test_xfer    - the control-transfer engine (src\xhci_xfer.c): Setup/Data/
-rem                  Status TD construction, the scatter/gather walk and its
-rem                  64 KB splits, the pending-transfer queue, and what a
-rem                  Transfer Event means to one usbport transfer
-rem   test_iso     - the isochronous engine (src\xhci_xfer.c, task 9-A.1): the
-rem                  Isoch TRB's own fields including TBC/TLBPC, the Valid Frame
-rem                  Window across both of its wraps, and the per-packet
-rem                  completion write-back into usbport's parameter block
 rem   test_ctx     - the Slot, Endpoint and Input Control Context encoders
 rem                  (src\xhci_ctx.c): the golden vectors for every speed class,
 rem                  both context strides, and the field-by-field refusals
@@ -48,29 +40,12 @@ rem                  validation, root composition and sink selection; task
 rem                  13-L.2 retired the ring-0 file sink and those functions
 rem                  with it, and test_log.c had said so for
 rem                  two days while this summary had not.)
-rem   test_vhub    - the virtual USB 2.0 hub's pure core (src\xhci_vhub.c,
-rem                  roadmap task 24.3.2, design record 12): the switch and
-rem                  its two id strings in both encodings, the request table
-rem                  fed the measured setup packets, value 1's decision, the
-rem                  two views of one port and their suspend merge, value 2's
-rem                  hub from start to stop, and rule 2's off state. It links
-rem                  xhci_topo.c for the vectors that put a real hub behind a
-rem                  virtual one. Sub-task 24.3.3 wired it into the driver, so
-rem                  test_init links it too and src\sources builds it.
-rem   test_init    - the driver's MMIO-facing code against a synthetic
-rem                  controller: the init sequence (src\xhci_init.c), the
-rem                  interrupt path (src\xhci_evt.c), the asynchronous command
-rem                  engine (src\xhci_cmd.c), the root-hub callback family
-rem                  (src\xhci_rh.c), the Phase 6 device layer (src\xhci_slot.c),
-rem                  the task 6-V.1 transfer-contract probe (src\xhci_probe.c -
-rem                  its classification and gates, since the suite compiles the
-rem                  release path where its printing does not exist),
-rem                  and the registered callback surface (src\xhci_dispatch.c,
-rem                  with DriverEntry excluded under XHCI_HOST_TEST), all through
-rem                  src\xhci_pci.c. The one suite here that is not over pure
-rem                  code: it redirects the DDK register, stall and spin-lock
-rem                  primitives at a model, which is what makes access *order*,
-rem                  lock scope, and a refusal writing nothing at all checkable.
+rem
+rem RETIRED ON 2026-10-02 with the miniport's sources (design record 13):
+rem test_xfer and test_iso (src\xhci_xfer.c), test_vhub (src\xhci_vhub.c) and
+rem test_init (the miniport's MMIO-facing code and its usbport callback
+rem surface). Their last copies are on branch 1.2.0.0; Phase 26's host suites
+rem (26-A.9) replace them for the HCD's own code.
 rem
 rem THE SECOND ARCHITECTURE (roadmap task 21.4). Two suites are compiled and run
 rem twice: once with MSVC 6.0 for x86, and once with WDK 7.1's amd64 cross
@@ -146,14 +121,6 @@ rem test_port links xhci_caps.c too, since Phase 5: the root-hub map is derived
 rem from the port classification, so XhciRootHubBuild asks XhciPortIsManaged
 rem which ports it may present rather than re-deciding it from the class codes.
 call :run test_port "test_port.c ..\src\xhci_port.c ..\src\xhci_caps.c"
-rem test_xfer links xhci_ring.c: the control-transfer engine's whole job is to
-rem produce TRBs and then read completion events back off the ring it wrote
-rem them to, so testing it against a stub ring would test neither half.
-call :run test_xfer "test_xfer.c ..\src\xhci_xfer.c ..\src\xhci_ring.c"
-rem test_iso links the same two files and for the same reason: the isochronous
-rem engine builds TRB groups onto a ring and then reads its own controller's
-rem events back off it, so a stub ring would test neither half.
-call :run test_iso "test_iso.c ..\src\xhci_xfer.c ..\src\xhci_ring.c"
 rem test_ctx links xhci_mem.c: the context *encoders* are its subject, but where
 rem one context ends and the next begins is the carve's answer, and pairing them
 rem is what makes "eight DWORDs whatever the stride" checkable at both strides.
@@ -163,7 +130,8 @@ rem test_log links nothing else: task 11-V.7's ring is deliberately pure, so
 rem every decision it makes - the wrap, the record cap, the flush verdict, the
 rem drain's ordering - is drivable with no file system, no registry and no IRQL.
 rem The DDK half (the KeGetCurrentIrql guard, the two registry reads and the
-rem DbgPrint emission) is exercised through test_init.c's stand-ins instead.
+rem DbgPrint emission) was exercised through the miniport's test_init.c, retired
+rem with it; the HCD's own suites take it up (26-A.9).
 rem It named ZwCreateFile/ZwWriteFile too until task 13-L.2 retired
 rem the ring-0 file sink and those imports with it.
 call :run test_log "test_log.c ..\src\xhci_log.c"
@@ -172,8 +140,6 @@ rem encoder is what turns it into an Interval, so the two halves of task 9-A.2
 rem are one subject and a vector that stopped at the table would not have tested
 rem the number the hardware sees.
 call :run test_desc "test_desc.c ..\src\xhci_desc.c ..\src\xhci_ctx.c ..\src\xhci_mem.c"
-call :run test_vhub "test_vhub.c ..\src\xhci_vhub.c ..\src\xhci_topo.c"
-call :run test_init "test_init.c ..\src\xhci_init.c ..\src\xhci_evt.c ..\src\xhci_cmd.c ..\src\xhci_rh.c ..\src\xhci_slot.c ..\src\xhci_probe.c ..\src\xhci_topo.c ..\src\xhci_desc.c ..\src\xhci_vhub.c ..\src\xhci_log.c ..\src\xhci_pci.c ..\src\xhci_caps.c ..\src\xhci_mem.c ..\src\xhci_ring.c ..\src\xhci_port.c ..\src\xhci_ctx.c ..\src\xhci_xfer.c ..\src\xhci_dispatch.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

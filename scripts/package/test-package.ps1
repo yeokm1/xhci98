@@ -142,6 +142,22 @@ try {
     Assert-True (-not (Test-Path -LiteralPath $probeOut)) `
         "the output directory was created for a rejected probe driver."
 
+    # --- the HCD's build scaffold must never become install media (25.8) ---
+    # A correct flavour marker must not let it through.
+    Write-Step "the HCD build scaffold is refused"
+    $scaffoldDriver = Join-Path $srcDir "xhci98-scaffold.sys"
+    Set-Content -LiteralPath $scaffoldDriver -Value `
+        "stand-in XHCI98_SCAFFOLD_DO_NOT_STAGE XHCI98_FLAVOUR_DEBUG driver" `
+        -Encoding ASCII
+    $scaffoldOut = Join-Path $script:work "pkg-scaffold"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $scaffoldDriver,
+        "-OutDir", $scaffoldOut)
+    Assert-True ($r.ExitCode -ne 0) "the HCD build scaffold was accepted for packaging."
+    Assert-True ($r.Output -match "build scaffold") `
+        ("expected the rejection to identify the HCD scaffold. Output:`n" + $r.Output)
+    Assert-True (-not (Test-Path -LiteralPath $scaffoldOut)) `
+        "the output directory was created for the rejected HCD scaffold."
+
     # --- the flavour marker decides what a package is (task 13-L.1) --------
     #
     # There are three flavours and two of them are checked builds, so

@@ -395,6 +395,19 @@ Build it first: scripts\build-driver.cmd $Flavor
 "@
     }
     #
+    # The successor HCD's build scaffold (roadmap task 25.8) must never reach a
+    # package: it is a DriverEntry that registers nothing. Refused first, by the
+    # marker the image carries, so no later message can describe it as anything
+    # else. Task 26-A.1 removes the marker when the HCD becomes stageable.
+    #
+    if (Test-ImageMarker -Path $DriverPath -Marker "XHCI98_SCAFFOLD_DO_NOT_STAGE") {
+        throw @"
+'$DriverPath' is the build scaffold of the successor HCD (roadmap task 25.8)
+and cannot be packaged. It registers nothing and drives no hardware; this
+script learns to stage the HCD in task 26-A.1, which removes the marker.
+"@
+    }
+    #
     # The image has to be the flavour that was asked for (task 13-L.1). Checked
     # here rather than inferred from the path, because -DriverPath can name a
     # binary anywhere and because "objchk_qemu" contains "objchk" - so a path

@@ -21,9 +21,42 @@ Everything happens on copies under the host temporary directory. The package
 tests use stand-in files, so nothing here needs the git-ignored tools\
 staging: no build, no VM, and no Microsoft binaries.
 
+Since 2026-10-02 the two production INFs are the successor host controller
+driver's (design record 13): each models section installs the controller and
+the root hub it creates (XHCI98\ROOT_HUB), the OS-supplied lists are
+[Xhci.CopyOS] (usbd.sys) and [Xhci.CopyUI] (usbui.dll), and usbport.sys,
+usbhub.sys and the virtual-hub values are refused rather than required.
+
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\inf-gate\test-inf-checks.ps1
 #>
+
+#
+# Retired on 2026-10-02 with the miniport: the cases whose rule left the gate.
+#   os-default-nt-list-on-w98  OS-ONWIN98 is gone: no path fetches usbport.sys,
+#                              so there is no NT-only list to put on Windows
+#                              98. usbport.sys on the 9x path is now
+#                              os-usbport-on-w98, under OS-HCDREPLACED.
+#   os-no-flag-usbport         usbport.sys is no longer copied, so it has no
+#                              flags to lose; any row for it is OS-HCDREPLACED.
+#                              OS-FLAGS keeps its usbd.sys and usbui.dll cases.
+#   os-no-usbport-nt, os-no-usbhub-nt, os-no-usbhub-w98, amd64-no-usbport
+#                              "missing" no longer exists for these two files;
+#                              each became the "present" case under
+#                              OS-HCDREPLACED (os-usbport-on-nt,
+#                              os-usbhub-on-nt, os-usbhub-on-w98) or, for the
+#                              amd64 file, amd64-no-usbd under OS-MISSING.
+#   vhub-no-switch-9x, vhub-no-switch-nt, vhub-switch-on, vhub-no-vid-nt,
+#   vhub-no-pid-9x, vhub-vid-dword, vhub-pid-unquoted, vhub-vid-other
+#                              the virtual-hub values are no longer required
+#                              (VAL-MISSING / VAL-TYPE / VAL-DEFAULT on them is
+#                              gone); writing any of them is VAL-HCDVHUB, and
+#                              the vhub-written-* cases below cover it on 9x,
+#                              on NT and in a root-hub section.
+# Renamed, same rule: x86-nt6-copies-usbport -> x86-nt6-copies-usbd,
+# x86-nt6-copies-w98-list -> x86-nt6-copies-usbui, amd64-nt6-copies-usbport ->
+# amd64-nt6-copies-usbd, amd64-usbport-no-flag -> amd64-usbd-no-flag.
+#
 
 [CmdletBinding()]
 param()
@@ -134,11 +167,24 @@ function Assert-RuleFires {
     $path = New-MutatedInf -Name $Name -Mutate $Mutate -Utf16:$Utf16 -LfOnly:$LfOnly -Latin1:$Latin1 -BareCr:$BareCr -Utf8Bom:$Utf8Bom -Source $Source
     $extra = @()
     if ($Arch -ne "") { $extra = @("-Arch", $Arch) }
-    $r = Invoke-Gate -Path $path -Extra $extra
+    $r =Invoke-Gate -Path $path -Extra $extra
     Assert-True ($r.ExitCode -ne 0) ("$Name : the gate accepted a broken INF (exit 0).")
     # A WARN line carries the same [RULE] tag, and several rules have both
     # forms, so only a FAIL line counts as the rule firing.
     Assert-True ($r.Output -match [regex]::Escape("FAIL [$Rule]")) ("$Name : expected rule $Rule to fail. Output was:`n" + $r.Output)
+}
+
+function Add-CopySection {
+    # [Xhci.CopyOS] is shared by every route that fetches usbd.sys, so a row
+    # added there lands on all of them at once. To put a file on ONE route,
+    # this gives that route a section of its own: $Anchor is the route's
+    # existing CopyFiles= line (with enough of its header to be unique), and
+    # the new section [Xhci.CopyX] is appended to it, given the drivers
+    # directory in [DestinationDirs], and written at the foot of the file.
+    param([string]$Text, [string]$Anchor, [string]$Row)
+    $out = $Text.Replace($Anchor, $Anchor + ",Xhci.CopyX")
+    $out = $out.Replace("Xhci.CopyUI=11`r`n", "Xhci.CopyUI=11`r`nXhci.CopyX=10,System32\Drivers`r`n")
+    return $out + "`r`n[Xhci.CopyX]`r`n" + $Row + "`r`n"
 }
 
 $tempBase = [System.IO.Path]::GetFullPath($env:TEMP)
@@ -153,8 +199,12 @@ try {
     Assert-True ($baseline.Output -notmatch "FAIL \[") "src\xhci98.inf produced a FAIL line."
     Assert-True ($baseline.Output -notmatch "WARN:") ("src\xhci98.inf produced a warning:`n" + $baseline.Output)
     # Both models sections READ - the undecorated one and NT 6.x's - for the
-    # reason the 64-bit baseline below gives.
-    Assert-True ($baseline.Output -match "models: 2\b") ("src\xhci98.inf: expected the gate to gather two models (the undecorated one and NTx86.6.0). Output:`n" + $baseline.Output)
+    # reason the 64-bit baseline below gives, each with the controller and
+    # the root hub: four models. The pass itself is also the proof that the
+    # root-hub installs are exempt from the controller's VAL-*/PROP-*/OS-*
+    # rules: [RootHub.AddReg] and [RootHub.AddReg.NT] write none of the log or
+    # moderation values and copy no OS file.
+    Assert-True ($baseline.Output -match "models: 4\b") ("src\xhci98.inf: expected the gate to gather four models (controller and root hub, in the undecorated section and NTx86.6.0). Output:`n" + $baseline.Output)
 
     Write-Step "file format"
     Assert-RuleFires "utf16" "FILE-ENCODING" { param($t) $t } -Utf16
@@ -384,7 +434,8 @@ try {
     # being reported, and the throw took the media layout and the footprint
     # with it. Both are written from the parse, so both must still appear.
     $xrefCopyInf = New-MutatedInf -Name "xref-copyfiles" -Mutate {
-        param($t) $t.Replace("CopyFiles=Xhci.CopyFiles,Xhci.CopyW98", "CopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.NoSuchCopy")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS",
+                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.NoSuchCopy")
     }
     $xrefLayout = Join-Path $script:work "xref-copyfiles-layout.txt"
     $xrefFootprint = Join-Path $script:work "xref-copyfiles-footprint.txt"
@@ -520,9 +571,11 @@ try {
     # each path - DebugView then EnumPropPages on 9x, then EnumPropPages32 on
     # NT - so neither case can drift onto the other path.
     Write-Step "the moderation interval, on both paths"
+    # On 9x the interval is the last line of [Xhci.AddReg], so the anchor is
+    # the blank line and the root hub's section header after it.
     Assert-RuleFires "imod-no-9x" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,XhciLogDebugView,0x00010001,0`r`nHKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,XhciVirtualHSHub,",
-                             "HKR,,XhciLogDebugView,0x00010001,0`r`nHKR,,XhciVirtualHSHub,")
+        param($t) $t.Replace("HKR,,XhciLogDebugView,0x00010001,0`r`nHKR,,XhciImodInterval250ns,0x00010001,500`r`n`r`n[RootHub.Dev]",
+                             "HKR,,XhciLogDebugView,0x00010001,0`r`n`r`n[RootHub.Dev]")
     }
     Assert-RuleFires "imod-no-nt" "VAL-MISSING" {
         param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,EnumPropPages32",
@@ -538,56 +591,32 @@ try {
     # Hex spells the same number and is still refused: the gate compares text,
     # and one spelling on every path is what the install legs have read.
     Assert-RuleFires "imod-default-hex-9x" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,XhciVirtualHSHub,",
-                             "HKR,,XhciImodInterval250ns,0x00010001,0x000001f4`r`nHKR,,XhciVirtualHSHub,")
-    }
-
-    # Roadmap task 24.3's three values, one path at a time for the asymmetry
-    # reason above: the 9x section has them after the moderation interval and
-    # the NT section after Controller, so each case is anchored on what
-    # precedes it there and cannot drift onto the other path.
-    Write-Step "the virtual hub's switch and ids, on both paths"
-    Assert-RuleFires "vhub-no-switch-9x" "VAL-MISSING" {
-        param($t) $t.Replace("0x00010001,500`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`n",
-                             "0x00010001,500`r`n")
-    }
-    Assert-RuleFires "vhub-no-switch-nt" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`n",
-                             "HKR,,Controller,1,01`r`n")
-    }
-    # Shipped on is the edit this rule exists for: the feature is
-    # experimental, for private testing only, and off by default.
-    Assert-RuleFires "vhub-switch-on" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,0",
-                             "HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,1")
-    }
-    Assert-RuleFires "vhub-no-vid-nt" "VAL-MISSING" {
-        param($t) $t.Replace("HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,,`"1209`"`r`n",
-                             "HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`n")
-    }
-    Assert-RuleFires "vhub-no-pid-9x" "VAL-MISSING" {
-        param($t) $t.Replace("0x00010001,500`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,,`"1209`"`r`nHKR,,XhciVirtualHSHubPid,,`"0001`"`r`n",
-                             "0x00010001,500`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,,`"1209`"`r`n")
-    }
-    # An id written as a DWORD is refused by the driver as not hexadecimal
-    # characters, so the gate refuses it here first.
-    Assert-RuleFires "vhub-vid-dword" "VAL-TYPE" {
-        param($t) $t.Replace("HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,,`"1209`"",
-                             "HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,0x00010001,0x1209")
-    }
-    # The quotes are part of the shipped text: unquoted, "0001" is a string
-    # one engine might read as the number 1.
-    Assert-RuleFires "vhub-pid-unquoted" "VAL-DEFAULT" {
-        param($t) $t.Replace("HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,,`"1209`"`r`nHKR,,XhciVirtualHSHubPid,,`"0001`"",
-                             "HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,,`"1209`"`r`nHKR,,XhciVirtualHSHubPid,,0001")
-    }
-    Assert-RuleFires "vhub-vid-other" "VAL-DEFAULT" {
-        param($t) $t.Replace("0x00010001,500`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,,`"1209`"",
-                             "0x00010001,500`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`nHKR,,XhciVirtualHSHubVid,,`"1D6B`"")
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`n`r`n[RootHub.Dev]",
+                             "HKR,,XhciImodInterval250ns,0x00010001,0x000001f4`r`n`r`n[RootHub.Dev]")
     }
     Assert-RuleFires "imod-type" "VAL-TYPE" {
         param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,EnumPropPages32",
                              "HKR,,XhciImodInterval250ns,,500`r`nHKR,,EnumPropPages32")
+    }
+
+    # Roadmap task 24.3's three virtual-hub values, refused since 2026-10-02
+    # (VAL-HCDVHUB): the HCD has no usbport to report a speed through and reads
+    # none of them. Written on 9x, on NT, and in a root-hub section, because the
+    # rule reads the whole file and each is a place an editor restoring the
+    # miniport's values would put one. A value of 0 is refused too: the switch
+    # switches nothing whatever it says.
+    Write-Step "the virtual hub's values, refused on every path"
+    Assert-RuleFires "vhub-written-9x" "VAL-HCDVHUB" {
+        param($t) $t.Replace("HKR,,XhciImodInterval250ns,0x00010001,500`r`n`r`n[RootHub.Dev]",
+                             "HKR,,XhciImodInterval250ns,0x00010001,500`r`nHKR,,XhciVirtualHSHub,0x00010001,0`r`n`r`n[RootHub.Dev]")
+    }
+    Assert-RuleFires "vhub-written-nt" "VAL-HCDVHUB" {
+        param($t) $t.Replace("HKR,,Controller,1,01`r`n",
+                             "HKR,,Controller,1,01`r`nHKR,,XhciVirtualHSHubVid,,`"1209`"`r`n")
+    }
+    Assert-RuleFires "vhub-written-roothub" "VAL-HCDVHUB" {
+        param($t) $t.Replace("[RootHub.AddReg.NT]`r`nHKR,,EnumPropPages32,,`"usbui.dll,USBHubPropPageProvider`"",
+                             "[RootHub.AddReg.NT]`r`nHKR,,EnumPropPages32,,`"usbui.dll,USBHubPropPageProvider`"`r`nHKR,,XhciVirtualHSHubPid,,`"0001`"")
     }
 
     # ---- PROP-* : the controller's own property page ---------------
@@ -688,6 +717,39 @@ try {
                              "[Xhci.AddReg.NT]`r`nHKR,,EnumPropPages,,`"sysclass.dll,USBControllerPropPage`"`r`nHKR,,XhciLogVerbosity,0x00010001,0")
     }
 
+    # ---- HCD-* : the root hub, the HCD's second device role (task 25.8) ----
+    #
+    # One binary is the function driver of the controller and of the root hub
+    # the controller creates, so every models section carries both, and the
+    # root hub only under the project-owned XHCI98\ROOT_HUB - USB\ROOT_HUB and
+    # USB\ROOT_HUB20 are the OS hub driver's ids for usbport's root hubs.
+    Write-Step "the root hub's models and Power tab"
+    Assert-RuleFires "hcd-no-roothub" "HCD-ROOTHUB" {
+        param($t) $t.Replace("%RootHubDesc%=RootHub.Dev,XHCI98\ROOT_HUB`r`n", "")
+    }
+    Assert-RuleFires "hcd-no-controller-nt6" "HCD-ROOTHUB" {
+        param($t) $t.Replace("%XhciDesc%=Xhci.Dev6,PCI\CC_0C0330`r`n", "")
+    }
+    # A setup engine matches every id on the line, the later ones as
+    # compatible ids, so the OS hub's id second on the line is still refused.
+    Assert-RuleFires "hcd-os-roothub-id" "HCD-ROOTHUB" {
+        param($t) $t.Replace("RootHub.Dev,XHCI98\ROOT_HUB", "RootHub.Dev,XHCI98\ROOT_HUB,USB\ROOT_HUB20")
+    }
+    Assert-RuleFires "hcd-os-roothub-id-only" "HCD-ROOTHUB" {
+        param($t) $t.Replace("RootHub.Dev6,XHCI98\ROOT_HUB", "RootHub.Dev6,USB\ROOT_HUB")
+    }
+    # The Power tab: the line gone on 9x, and the wrong provider on 9x and on
+    # NT (the controller's page where the hub's belongs).
+    Assert-RuleFires "hcd-no-hubpage-9x" "HCD-HUBPAGE" {
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBHubPropPage`"`r`n", "")
+    }
+    Assert-RuleFires "hcd-hubpage-usbui-on-9x" "HCD-HUBPAGE" {
+        param($t) $t.Replace("HKR,,EnumPropPages,,`"sysclass.dll,USBHubPropPage`"", "HKR,,EnumPropPages,,`"usbui.dll,USBHubPropPageProvider`"")
+    }
+    Assert-RuleFires "hcd-hubpage-controller-on-nt" "HCD-HUBPAGE" {
+        param($t) $t.Replace("`"usbui.dll,USBHubPropPageProvider`"", "`"usbui.dll,USBControllerPropPageProvider`"")
+    }
+
     Write-Step "the two install paths"
     Assert-RuleFires "no-ntx86" "PATH-NT" {
         param($t) $t.Replace("[Xhci.Dev.NTx86]", "[Xhci.Dev.Win2000]")
@@ -726,8 +788,8 @@ try {
     # clean Windows 98 install would write the loader value and copy no
     # driver. The OS-source list stays, so the OS-* rules are not what fires.
     Assert-RuleFires "w98-copyfiles-gap" "PATH-W98" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98",
-                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyW98")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS",
+                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyOS")
     }
     # The undecorated install section losing its AddReg: Windows 98 binds the
     # device and then loads nothing, because DevLoader and NTMPDriver are what
@@ -748,19 +810,17 @@ try {
     # the INF against Windows 2000 alone would produce.
     #
     Assert-RuleFires "nt-only" "PATH-W98" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`n", "")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI`r`n", "")
     }
 
     # ---- the files the OS supplies (Phase 17, release 1.0.0.1; Phase 19) ----
     #
-    # Since 1.0.0.1 the media carries no Microsoft file: usbd.sys and usbhub.sys
-    # are copied from the OS's own install source through LayoutFile, and since
-    # 1.0.1.0 the NT path copies usbport.sys and usbhub20.sys the same way.
-    # Every way of unwiring that is silent on the target - a root hub at Code 2
-    # on Windows 98, a 0xc0000034 naming usbhub20.sys on Windows 2000, Code 39
-    # with an empty trace on an NT install that never had usbport.sys - so each
-    # rule is watched firing here, in both directions where the asymmetry has
-    # two.
+    # Since 1.0.0.1 the media carries no Microsoft file: what the OS supplies is
+    # copied from its own install source through LayoutFile. For the HCD that
+    # is usbd.sys and usbui.dll, and usbport.sys and usbhub.sys - which the
+    # miniport fetched - are refused on every path. Every way of unwiring that
+    # is silent on the target, so each rule is watched firing here, in both
+    # directions.
     Write-Step "the files the OS supplies"
     Assert-RuleFires "os-no-layoutfile" "OS-LAYOUT" {
         param($t) $t.Replace("LayoutFile=layout.inf`r`n", "")
@@ -777,50 +837,50 @@ try {
         param($t) $t.Replace("xhci98.inf=1`r`n", "xhci98.inf=1`r`nusbd98.sys=1`r`n")
     }
     # A path that stops asking for usbd.sys, on each target and on each route.
+    # [Xhci.CopyOS] is shared, so each case drops the section from ONE route
+    # rather than emptying it.
     Assert-RuleFires "os-no-usbd-w98" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16`r`n", "[Xhci.CopyW98]`r`n")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI",
+                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyUI")
     }
     Assert-RuleFires "os-no-usbd-nt" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT",
+        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS",
                              "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles")
     }
     Assert-RuleFires "os-default-no-usbd" "OS-MISSING" {
-        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT",
+        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS",
                              "[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles")
     }
-    # The Windows 98 composite parent gone: the bug batch 13-E found on real
-    # hardware, every composite device at Code 2 with nothing saying why.
-    Assert-RuleFires "os-no-usbhub-w98" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16`r`nusbhub.sys,,,16", "[Xhci.CopyW98]`r`nusbd.sys,,,16")
+    # **The two files the HCD replaces, put back** (OS-HCDREPLACED). The
+    # miniport's INF had to fetch both, and these cases asserted their ABSENCE
+    # failed; the HCD replaces usbport.sys and the hub driver, so a copy of
+    # either is now the failure - a usbhub.sys on disk is a hub driver the OS's
+    # own INFs can bind to usbport's root hubs. One route at a time, through a
+    # section of that route's own, plus the shared list and a root-hub install,
+    # which is the likeliest place for an editor to put the hub driver back.
+    Assert-RuleFires "os-usbhub-on-w98" "OS-HCDREPLACED" {
+        param($t) Add-CopySection $t "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI" "usbhub.sys,,,16"
     }
-    # The NT path's own two, one at a time. usbport.sys gone is the Windows
-    # XP reading of 2026-09-03: Code 39, the trace empty, nothing else saying
-    # why. usbhub.sys gone is the hub driver the OS cannot bind.
-    Assert-RuleFires "os-no-usbport-nt" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`n", "[Xhci.CopyNT]`r`n")
+    Assert-RuleFires "os-usbhub-on-nt" "OS-HCDREPLACED" {
+        param($t) Add-CopySection $t "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI" "usbhub.sys,,,16"
     }
-    Assert-RuleFires "os-no-usbhub-nt" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16`r`nusbhub.sys,,,16`r`n",
-                             "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16`r`n")
+    Assert-RuleFires "os-usbport-on-w98" "OS-HCDREPLACED" {
+        param($t) Add-CopySection $t "[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI" "usbport.sys,,,16"
     }
-    # The opposite direction: the Windows 98 path asking for a file its
-    # layout.inf has no row for, so its engine has no source to resolve it
-    # from. usbport.sys comes from NUSB or SweetLow there.
-    Assert-RuleFires "os-usbport-on-w98" "OS-ONWIN98" {
-        param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16", "[Xhci.CopyW98]`r`nusbport.sys,,,16`r`nusbd.sys,,,16")
+    Assert-RuleFires "os-usbport-on-nt" "OS-HCDREPLACED" {
+        param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16", "[Xhci.CopyOS]`r`nusbport.sys,,,16`r`nusbd.sys,,,16")
     }
-    Assert-RuleFires "os-default-nt-list-on-w98" "OS-ONWIN98" {
-        param($t) $t.Replace("[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98",
-                             "[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyNT")
+    Assert-RuleFires "os-usbhub-on-roothub" "OS-HCDREPLACED" {
+        param($t) Add-CopySection $t "[RootHub.Dev.NTx86]`r`nAddReg=RootHub.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles" "usbhub.sys,,,16"
     }
     # usbhub20.sys on any path, or on the media: Windows 2000's own USB.INF
     # places it with the root hub, XP has no such file, and the owner's
     # decision of 2026-09-03 is that this INF never names it.
     Assert-RuleFires "os-usbhub20-on-nt" "OS-NEVER" {
-        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbhub20.sys,,,16")
+        param($t) Add-CopySection $t "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI" "usbhub20.sys,,,16"
     }
     Assert-RuleFires "os-usbhub20-on-w98" "OS-NEVER" {
-        param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16", "[Xhci.CopyW98]`r`nusbhub20.sys,,,16`r`nusbd.sys,,,16")
+        param($t) Add-CopySection $t "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI" "usbhub20.sys,,,16"
     }
     Assert-RuleFires "os-usbhub20-on-media" "OS-NEVER" {
         param($t) $t.Replace("xhci98.inf=1`r`n", "xhci98.inf=1`r`nusbhub20.sys=1`r`n")
@@ -828,31 +888,28 @@ try {
     # No NT half at all: setupapi falls back to the undecorated section, and a
     # right-click Install on Windows 2000 runs the Windows 98 file list.
     Assert-RuleFires "no-defaultinstall-nt" "OS-DEFAULT" {
-        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n", "")
+        param($t) $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI`r`n", "")
     }
     Assert-RuleFires "os-dup" "OS-DUP" {
-        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16`r`nusbd.sys,,,16")
+        param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16", "[Xhci.CopyOS]`r`nusbd.sys,,,16`r`nusbd.sys,,,16")
     }
     # A media-name field sends the engine back to this disk for the file, which
     # is the 1.0.0.0 shape.
     Assert-RuleFires "os-srcname" "OS-SRCNAME" {
-        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,usbd2k.sys,,16")
+        param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16", "[Xhci.CopyOS]`r`nusbd.sys,usbd2k.sys,,16")
     }
     Assert-RuleFires "os-no-flag" "OS-FLAGS" {
-        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys")
-    }
-    Assert-RuleFires "os-no-flag-usbport" "OS-FLAGS" {
-        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys")
+        param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16", "[Xhci.CopyOS]`r`nusbd.sys")
     }
     # 16|4: NO_OVERWRITE plus NOVERSIONCHECK, which overwrites the target
     # regardless of version - including a newer serviced usbd.sys.
     Assert-RuleFires "os-noversioncheck" "OS-FLAGS" {
-        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,20")
+        param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16", "[Xhci.CopyOS]`r`nusbd.sys,,,20")
     }
     # Dirid 11 is \Windows\System, where nothing looks for it - and the copy
     # succeeds.
     Assert-RuleFires "os-dest" "OS-DEST" {
-        param($t) $t.Replace("Xhci.CopyW98=10,System32\Drivers", "Xhci.CopyW98=11")
+        param($t) $t.Replace("Xhci.CopyOS=10,System32\Drivers", "Xhci.CopyOS=11")
     }
 
     # ---- usbui.dll, new in 1.0.2.0 -----------------------------------------
@@ -874,18 +931,18 @@ try {
 
     # Gone from the 9x path, and from the NT path, one at a time.
     Assert-RuleFires "os-no-usbui-w98" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI",
-                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98")
+        param($t) $t.Replace("[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI",
+                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS")
     }
     Assert-RuleFires "os-no-usbui-nt" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI",
-                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT")
+        param($t) $t.Replace("[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI",
+                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS")
     }
     # And from a right-click route, which is the one a user with an earlier
     # release takes and the one no per-file rule would otherwise reach.
     Assert-RuleFires "os-no-usbui-9x-default" "OS-MISSING" {
-        param($t) $t.Replace("[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI",
-                             "[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98")
+        param($t) $t.Replace("[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI",
+                             "[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyOS")
     }
     # The row emptied rather than the section dropped: the section still exists
     # and [DestinationDirs] still names it, so nothing structural is missing.
@@ -951,23 +1008,23 @@ try {
     # of failing.
     Assert-RuleFires "no-default-sections-at-all" "OS-DEFAULT" {
         param($t)
-        $s = $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n", "")
-        $s.Replace("[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98,Xhci.CopyUI`r`n", "")
+        $s = $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI`r`n", "")
+        $s.Replace("[DefaultInstall]`r`nCopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI`r`n", "")
     }
 
     # COPYFLG_NO_VERSION_DIALOG (32), which the table in build-and-test.md
     # rejects and which the flag rule did not object to until audit H11. 16|32
     # keeps NO_OVERWRITE set, so only the added bit is under test.
     Assert-RuleFires "os-no-version-dialog" "OS-FLAGS" {
-        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,48")
+        param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16", "[Xhci.CopyOS]`r`nusbd.sys,,,48")
     }
     # COPYFLG_FORCE_FILE_IN_USE (8), the third refused bit, likewise untested.
     Assert-RuleFires "os-force-file-in-use" "OS-FLAGS" {
-        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,24")
+        param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16", "[Xhci.CopyOS]`r`nusbd.sys,,,24")
     }
     # COPYFLG_OVERWRITE_OLDER_ONLY (64), the fourth.
     Assert-RuleFires "os-overwrite-older" "OS-FLAGS" {
-        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,16", "[Xhci.CopyNT]`r`nusbport.sys,,,16`r`nusbd.sys,,,80")
+        param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16", "[Xhci.CopyOS]`r`nusbd.sys,,,80")
     }
 
     # ---- SUSP-* : no idle-suspend registry value, anywhere --------------
@@ -1079,11 +1136,11 @@ try {
     # which is also why the gate fails the mutation, so the emit must happen
     # before the verdict for this to be observable at all.
     $noFlagInf = New-MutatedInf -Name "fp-no-overwrite" -Mutate {
-        param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16", "[Xhci.CopyW98]`r`nusbd.sys,,,0")
+        param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16", "[Xhci.CopyOS]`r`nusbd.sys,,,0")
     }
     # A CopyFiles section reachable from more than one install path appears
-    # once per path - Xhci.CopyW98 is named by [Xhci.Dev] and by
-    # [DefaultInstall] - so assert the verdict of EVERY matching row rather
+    # once per path - Xhci.CopyOS is named by [Xhci.Dev] and by
+    # [DefaultInstall] on Windows 98 alone - so assert the verdict of EVERY matching row rather
     # than a count. A count would have to be updated whenever a path is added,
     # and the update most likely to be made is the one that makes it pass.
     function Assert-RowVerdict {
@@ -1096,17 +1153,17 @@ try {
 
     $fp = Get-Footprint -Path $noFlagInf
     Assert-True ($null -ne $fp) "-EmitFootprint wrote nothing for an INF the gate rejects; it must be written from the parse, not the verdict."
-    Assert-RowVerdict -Rows $fp -Prefix "file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbd.sys|" -Verdict "remove" `
+    Assert-RowVerdict -Rows $fp -Prefix "file|Windows 98|Xhci.CopyOS|10|System32\Drivers|usbd.sys|" -Verdict "remove" `
         -What "dropping COPYFLG_NO_OVERWRITE must flip the Win98 usbd.sys rows"
-    Assert-RowVerdict -Rows $fp -Prefix "file|Windows 2000|Xhci.CopyNT|" -Verdict "keep" `
-        -What "the untouched Windows 2000 OS-file rows"
+    Assert-RowVerdict -Rows $fp -Prefix "file|Windows 2000|Xhci.CopyUI|" -Verdict "keep" `
+        -What "the untouched Windows 2000 usbui.dll rows"
 
     # An unparseable flags field is not silently a zero.
     $badFlagInf = New-MutatedInf -Name "fp-bad-flags" -Mutate {
-        param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16", "[Xhci.CopyW98]`r`nusbd.sys,,,sixteen")
+        param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16", "[Xhci.CopyOS]`r`nusbd.sys,,,sixteen")
     }
     $fp = Get-Footprint -Path $badFlagInf
-    Assert-RowVerdict -Rows $fp -Prefix "file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbd.sys|" -Verdict "review" `
+    Assert-RowVerdict -Rows $fp -Prefix "file|Windows 98|Xhci.CopyOS|10|System32\Drivers|usbd.sys|" -Verdict "review" `
         -What "an unparseable copy-flags field must read 'review', not a guess"
 
     # NO_OVERWRITE is not the only flag that stops this package claiming a file,
@@ -1122,10 +1179,10 @@ try {
         @{ Flags = "65536"; Verdict = "review"; Why = "a flag bit this emitter has not been taught is reported, not ignored" }
     )) {
         $inf2 = New-MutatedInf -Name ("fp-copyflag-" + $case.Flags) -Mutate {
-            param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16", ("[Xhci.CopyW98]`r`nusbd.sys,,," + $case.Flags))
+            param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16", ("[Xhci.CopyOS]`r`nusbd.sys,,," + $case.Flags))
         }.GetNewClosure()
         $fp = Get-Footprint -Path $inf2
-        Assert-RowVerdict -Rows $fp -Prefix "file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbd.sys|" -Verdict $case.Verdict `
+        Assert-RowVerdict -Rows $fp -Prefix "file|Windows 98|Xhci.CopyOS|10|System32\Drivers|usbd.sys|" -Verdict $case.Verdict `
             -What ("copy flags " + $case.Flags + ": " + $case.Why)
     }
 
@@ -1162,13 +1219,15 @@ try {
         @{ Name = "ServiceBinary";  Value = "%12%\xhci98.sys" },
         @{ Name = "LoadOrderGroup"; Value = "Base" }
     )) {
+        # Twice: the controller's install and the root hub's both name the
+        # one service (one binary, two device roles).
         $want = "servicevalue|Windows 2000|xhci98|Xhci.AddService|" + $v.Name + "|" + $v.Value
-        Assert-True (@($fp | Where-Object { $_ -eq $want }).Count -eq 1) (
+        Assert-True (@($fp | Where-Object { $_ -eq $want }).Count -eq 2) (
             "expected footprint row '$want'. Rows:`n" + ($fp -join "`n"))
     }
 
     # AddService's own flags field was dropped entirely by the first two drafts.
-    Assert-True (@($fp | Where-Object { $_ -eq "service|Windows 2000|xhci98|Xhci.AddService|0x00000002|remove" }).Count -eq 1) (
+    Assert-True (@($fp | Where-Object { $_ -eq "service|Windows 2000|xhci98|Xhci.AddService|0x00000002|remove" }).Count -eq 2) (
         "the service row must carry the AddService flags field. Rows:`n" + ($fp -join "`n"))
 
     # Task 11-V.6's fix, asserted against the production INF - and inverted
@@ -1241,11 +1300,11 @@ try {
     # is reported, and $ErrorActionPreference = "Stop" would otherwise turn the
     # cast into an abort with no file written at all.
     $hugeFlagInf = New-MutatedInf -Name "fp-huge-flags" -Mutate {
-        param($t) $t.Replace("[Xhci.CopyW98]`r`nusbd.sys,,,16", "[Xhci.CopyW98]`r`nusbd.sys,,,4294967296")
+        param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16", "[Xhci.CopyOS]`r`nusbd.sys,,,4294967296")
     }
     $fp = Get-Footprint -Path $hugeFlagInf
     Assert-True ($null -ne $fp) "an out-of-range copy-flags field aborted the emit instead of producing a row."
-    Assert-RowVerdict -Rows $fp -Prefix "file|Windows 98|Xhci.CopyW98|10|System32\Drivers|usbd.sys|" -Verdict "review" `
+    Assert-RowVerdict -Rows $fp -Prefix "file|Windows 98|Xhci.CopyOS|10|System32\Drivers|usbd.sys|" -Verdict "review" `
         -What "an out-of-range copy-flags field must read 'review'"
 
     # A registry root that outlives the devnode is still a value this install
@@ -1279,8 +1338,8 @@ try {
     # this file does not use it, so without a case here that branch would be
     # untested code in a document the uninstall clause is checked against.
     $atFileInf = New-MutatedInf -Name "fp-atfile" -Mutate {
-        param($t) $t.Replace("CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyW98",
-                             "CopyFiles=@xhci98.inf,Xhci.CopyFiles,Xhci.CopyW98")
+        param($t) $t.Replace("CopyFiles=Inf.CopyFiles,Xhci.CopyFiles,Xhci.CopyOS",
+                             "CopyFiles=@xhci98.inf,Xhci.CopyFiles,Xhci.CopyOS")
     }
     $fp = Get-Footprint -Path $atFileInf
     # The dirid column is the RESOLVED DefaultDestDir (10 in this INF), not the
@@ -1365,7 +1424,7 @@ try {
     # whole install path behind it - never checked: "models: 1" over a file with
     # two. Passing says nothing about a path the rules did not walk.
     #
-    Assert-True ($baseline64.Output -match "models: 2\b") ("src\xhci98-amd64.inf: expected the gate to gather two models (NT 5.2 and NT 6.x). Output:`n" + $baseline64.Output)
+    Assert-True ($baseline64.Output -match "models: 4\b") ("src\xhci98-amd64.inf: expected the gate to gather four models (controller and root hub, in NT 5.2's section and NT 6.x's). Output:`n" + $baseline64.Output)
 
     #
     # **Each file must be REFUSED under the other's profile**, and this is the
@@ -1428,13 +1487,13 @@ try {
         param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
                              "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`n")
     }
-    Assert-RuleFires "x86-nt6-copies-usbport" "OS-ONNT6" {
+    Assert-RuleFires "x86-nt6-copies-usbd" "OS-ONNT6" {
         param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
-                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT`r`n")
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS`r`n")
     }
-    Assert-RuleFires "x86-nt6-copies-w98-list" "OS-ONNT6" {
+    Assert-RuleFires "x86-nt6-copies-usbui" "OS-ONNT6" {
         param($t) $t.Replace("[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
-                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyW98`r`n")
+                             "[Xhci.Dev6.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyUI`r`n")
     }
     # There is no NT 6.x SUSP case here any more, and its absence is the point.
     # Until 1.0.2.0 "x86-nt6-no-susp" checked that [Xhci.Dev6.NTx86] delivered
@@ -1500,7 +1559,7 @@ try {
     #
     Assert-RuleFires "amd64-undecorated-dev" "PATH-NO9X" {
         param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=",
-                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
+                             "[Xhci.Dev]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
     } -Source $prodInfAmd64 -Arch amd64
 
     #
@@ -1514,31 +1573,31 @@ try {
     #
     Assert-RuleFires "amd64-ntx86-dev" "PATH-NO9X" {
         param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=",
-                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
+                             "[Xhci.Dev.NTx86]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
     } -Source $prodInfAmd64 -Arch amd64
 
     Assert-RuleFires "amd64-nt-dev" "PATH-NO9X" {
         param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=",
-                             "[Xhci.Dev.NT]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
+                             "[Xhci.Dev.NT]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64]`r`nAddReg=")
     } -Source $prodInfAmd64 -Arch amd64
 
     # The same hazard on the right-click route, which is the one a user takes
     # with no device present - so nothing about the hardware stops it.
     Assert-RuleFires "amd64-undecorated-default" "OS-DEFAULT" {
         param($t) $t.Replace("[DefaultInstall.NTamd64]`r`nCopyFiles=",
-                             "[DefaultInstall]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
+                             "[DefaultInstall]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
     } -Source $prodInfAmd64 -Arch amd64
 
     # ...and its two decorated siblings, for the reason the device-install pair
     # above gives.
     Assert-RuleFires "amd64-ntx86-default" "OS-DEFAULT" {
         param($t) $t.Replace("[DefaultInstall.NTamd64]`r`nCopyFiles=",
-                             "[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
+                             "[DefaultInstall.NTx86]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
     } -Source $prodInfAmd64 -Arch amd64
 
     Assert-RuleFires "amd64-nt-default" "OS-DEFAULT" {
         param($t) $t.Replace("[DefaultInstall.NTamd64]`r`nCopyFiles=",
-                             "[DefaultInstall.NT]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
+                             "[DefaultInstall.NT]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI`r`n`r`n[DefaultInstall.NTamd64]`r`nCopyFiles=")
     } -Source $prodInfAmd64 -Arch amd64
 
     # And the right-click section going missing altogether, which halves the
@@ -1584,14 +1643,14 @@ try {
     # dropped without a word, a controller that idle-suspends and stops seeing
     # hot-plugs, or a log channel that cannot be turned on.
     Assert-RuleFires "amd64-no-usbui" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT,Xhci.CopyUI",
-                             "[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT")
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI",
+                             "[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS")
     } -Source $prodInfAmd64 -Arch amd64
-    Assert-RuleFires "amd64-no-usbport" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16`r`n", "[Xhci.CopyNT]`r`n")
+    Assert-RuleFires "amd64-no-usbd" "OS-MISSING" {
+        param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16`r`n", "[Xhci.CopyOS]`r`n")
     } -Source $prodInfAmd64 -Arch amd64
-    Assert-RuleFires "amd64-usbport-no-flag" "OS-FLAGS" {
-        param($t) $t.Replace("usbport.sys,,,16", "usbport.sys")
+    Assert-RuleFires "amd64-usbd-no-flag" "OS-FLAGS" {
+        param($t) $t.Replace("usbd.sys,,,16", "usbd.sys")
     } -Source $prodInfAmd64 -Arch amd64
     # usbui.dll to the drivers directory: it is a user-mode property-page DLL,
     # and dirid 11 is where all four operating systems' own USB INFs put it.
@@ -1604,7 +1663,7 @@ try {
         param($t) $t.Replace("[SourceDisksFiles]`r`nxhci98.sys=1", "[SourceDisksFiles]`r`nusbport.sys=1`r`nxhci98.sys=1")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-usbhub20" "OS-NEVER" {
-        param($t) $t.Replace("[Xhci.CopyNT]`r`nusbport.sys,,,16", "[Xhci.CopyNT]`r`nusbhub20.sys,,,16`r`nusbport.sys,,,16")
+        param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16", "[Xhci.CopyOS]`r`nusbhub20.sys,,,16`r`nusbd.sys,,,16")
     } -Source $prodInfAmd64 -Arch amd64
     # The 64-bit file must refuse the same two spellings. Both files carry the
     # rules, but the accepted cost of two INFs is that they can drift, and this
@@ -1629,9 +1688,9 @@ try {
     # refused for the driver list and for usbui.dll separately, since they are
     # two sections an editor could add one at a time.
     #
-    Assert-RuleFires "amd64-nt6-copies-usbport" "OS-ONNT6" {
+    Assert-RuleFires "amd64-nt6-copies-usbd" "OS-ONNT6" {
         param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
-                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyNT`r`n")
+                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS`r`n")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-nt6-copies-usbui" "OS-ONNT6" {
         param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
@@ -1748,14 +1807,14 @@ try {
     Assert-InfsAgree -Section "Xhci.AddService" `
         -Why "One package creates one service. A driver that is demand-start on one architecture and boot-start on the other is two products."
     Assert-InfsAgree -Section "Xhci.AddReg.NT" `
-        -Why "These are the values the driver reads at run time through usbport. A default that drifted on one architecture is a diagnostic door open on machines whose owner never asked for one."
+        -Why "These are the values the driver reads at run time. A default that drifted on one architecture is a diagnostic door open on machines whose owner never asked for one."
     # [Xhci.AddReg.Global] was compared here until 1.1.0.0 removed it from both
     # files. What replaced it is not comparable this way: the flag lives in
     # src\xhci_dispatch.c, one definition both architectures compile, so the
     # two packages cannot disagree about it the way two INF sections could.
     # The footprint assertion above is what holds the value out of either file.
-    Assert-InfsAgree -Section "Xhci.CopyNT" `
-        -Why "The NT paths of both packages fetch the same three files from the OS by the same LayoutFile route with the same COPYFLG_NO_OVERWRITE."
+    Assert-InfsAgree -Section "Xhci.CopyOS" `
+        -Why "The NT 5.x paths of both packages fetch usbd.sys from the OS by the same LayoutFile route with the same COPYFLG_NO_OVERWRITE."
     Assert-InfsAgree -Section "Xhci.CopyUI" `
         -Why "usbui.dll is on every install path of both packages since 1.0.2.0, to dirid 11, with flag 16."
     Assert-InfsAgree -Section "SourceDisksFiles" `
@@ -1763,40 +1822,42 @@ try {
     Assert-InfsAgree -Section "SourceDisksNames" `
         -Why "One disk, described the same way."
 
-    # The hardware ID: the two models lines are decorated differently and sit in
-    # differently named sections, so the sections cannot be compared whole. What
-    # must match is what the engine binds on.
+    Assert-InfsAgree -Section "RootHub.AddReg.NT" `
+        -Why "The root hub's Power tab is registered the same way on every NT target of both packages."
+
+    # The hardware IDs: the models lines are decorated differently and sit in
+    # differently named sections, but each section carries the same two lines -
+    # the controller and the root hub - so the bodies compare whole. What must
+    # match is what the engine binds on and the install section it binds to.
     $idX86 = @(Get-InfSection -Path $prodInf -Name "XhciModels")
     $id64  = @(Get-InfSection -Path $prodInfAmd64 -Name "XhciModels.NTamd64")
-    Assert-True ($idX86.Count -eq 1 -and $id64.Count -eq 1) "INF-SYNC: each file must have exactly one models line."
-    Assert-True ($idX86[0] -eq $id64[0]) (
-        "INF-SYNC: the two INFs bind different hardware. One package, one compatible ID." +
-        "`n  src\xhci98.inf        $($idX86[0])" +
-        "`n  src\xhci98-amd64.inf  $($id64[0])")
-    # The NT 6.x models line names a different install section on purpose
-    # (Xhci.Dev6), so its hardware ID is compared on its own - and it must be
-    # the same one, or Vista and Windows 7 x64 bind something no other target
-    # does.
+    Assert-True ($idX86.Count -eq 2 -and $id64.Count -eq 2) "INF-SYNC: each file's NT 5.x / 9x models section must have exactly two lines (controller and root hub)."
+    Assert-True ((($idX86 -join "`n")) -eq (($id64 -join "`n"))) (
+        "INF-SYNC: the two INFs bind different hardware. One package, one controller id and one root-hub id." +
+        "`n  src\xhci98.inf        $($idX86 -join ' | ')" +
+        "`n  src\xhci98-amd64.inf  $($id64 -join ' | ')")
+    # The NT 6.x models lines name different install sections on purpose
+    # (Xhci.Dev6, RootHub.Dev6), so their hardware IDs are compared on their
+    # own - and they must be the same ones, or Vista and Windows 7 bind
+    # something no other target does.
     $id64nt6 = @(Get-InfSection -Path $prodInfAmd64 -Name "XhciModels.NTamd64.6.0")
-    Assert-True ($id64nt6.Count -eq 1) "INF-SYNC: src\xhci98-amd64.inf must have exactly one NT 6.x models line."
-    if ($id64nt6.Count -eq 1 -and $idX86.Count -eq 1) {
-        $hwX86 = (($idX86[0] -split '=', 2)[1] -split ',')[1].Trim()
-        $hwNt6 = (($id64nt6[0] -split '=', 2)[1] -split ',')[1].Trim()
-        Assert-True ($hwX86 -eq $hwNt6) (
-            "INF-SYNC: the NT 6.x models line binds different hardware from every other target." +
-            "`n  src\xhci98.inf                       $($idX86[0])" +
-            "`n  src\xhci98-amd64.inf (NTamd64.6.0)   $($id64nt6[0])")
+    Assert-True ($id64nt6.Count -eq 2) "INF-SYNC: src\xhci98-amd64.inf must have exactly two NT 6.x models lines."
+    if ($id64nt6.Count -eq 2 -and $idX86.Count -eq 2) {
+        $hwOf = { param($rows) @($rows | ForEach-Object { (($_ -split '=', 2)[1] -split ',', 2)[1].Trim() }) -join "," }
+        Assert-True ((& $hwOf $idX86) -eq (& $hwOf $id64nt6)) (
+            "INF-SYNC: the NT 6.x models lines bind different hardware from every other target." +
+            "`n  src\xhci98.inf                       $($idX86 -join ' | ')" +
+            "`n  src\xhci98-amd64.inf (NTamd64.6.0)   $($id64nt6 -join ' | ')")
     }
-    # And the two NT 6.x models lines agree with each other whole - the same
-    # hardware ID and the same install section name - because they are one
-    # path on two architectures.
+    # And the two NT 6.x models sections agree with each other whole, because
+    # they are one path on two architectures.
     $idX86nt6 = @(Get-InfSection -Path $prodInf -Name "XhciModels.NTx86.6.0")
-    Assert-True ($idX86nt6.Count -eq 1) "INF-SYNC: src\xhci98.inf must have exactly one NT 6.x models line."
-    if ($idX86nt6.Count -eq 1 -and $id64nt6.Count -eq 1) {
-        Assert-True ($idX86nt6[0] -eq $id64nt6[0]) (
-            "INF-SYNC: the two INFs' NT 6.x models lines differ." +
-            "`n  src\xhci98.inf        (NTx86.6.0)     $($idX86nt6[0])" +
-            "`n  src\xhci98-amd64.inf  (NTamd64.6.0)   $($id64nt6[0])")
+    Assert-True ($idX86nt6.Count -eq 2) "INF-SYNC: src\xhci98.inf must have exactly two NT 6.x models lines."
+    if ($idX86nt6.Count -eq 2 -and $id64nt6.Count -eq 2) {
+        Assert-True ((($idX86nt6 -join "`n")) -eq (($id64nt6 -join "`n"))) (
+            "INF-SYNC: the two INFs' NT 6.x models sections differ." +
+            "`n  src\xhci98.inf        (NTx86.6.0)     $($idX86nt6 -join ' | ')" +
+            "`n  src\xhci98-amd64.inf  (NTamd64.6.0)   $($id64nt6 -join ' | ')")
     }
 
     # [Strings]: every token the two share must have the same text, because

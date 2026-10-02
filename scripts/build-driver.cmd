@@ -1,10 +1,15 @@
 @echo off
 rem build-driver.cmd - the one way to build xhci98.sys.
 rem
+rem Since 2026-10-02 xhci98.sys is the successor host controller driver
+rem (design record 13; roadmap-hcd.md). The usbport miniport it was until
+rem 1.2.0.0 left the tree that day, and with it this script's usbport import
+rem library step and its probe and failed-start artifacts.
+rem
 rem Non-interactive: DDK build, then the gates that must pass before a binary
 rem is allowed near a VM (roadmap Phase 3 task 5):
 rem
-rem   1. src\usbport.lib exists (generated - see scripts\make-usbport-lib.cmd)
+rem   1. XHCI_EXTRA_DEFINES is unset - the HCD has no diagnostic builds
 rem   2. the import gate's evidence-manifest regression tests, and its
 rem      three-flavor FLAVORS-column tests
 rem   3. the INF gate's own regression tests, then scripts\inf-gate\check-inf.ps1
@@ -71,9 +76,10 @@ rem binary in it:
 rem
 rem   scripts\package\make-package.ps1 [-Flavor release|debug] [-Arch x86|amd64]
 rem
-rem The media is this project's two files and nothing else since 1.0.0.1; the
-rem OS supplies usbd.sys and usbhub.sys, usbport.sys on the NT targets, and
-rem usbui.dll on every target since 1.0.2.0, through the INF's LayoutFile.
+rem The media is this project's two files and nothing else; the OS supplies
+rem usbd.sys and usbui.dll through the INF's LayoutFile. The HCD replaces
+rem usbport.sys and usbhub.sys, and the INF gate refuses an INF that fetches
+rem either (OS-HCDREPLACED).
 rem
 rem Usage:  scripts\build-driver.cmd [release|debug|qemu|both|all]
 rem                                  [-amd64] [-NoTargetEvidence]
@@ -98,9 +104,9 @@ rem DDK, which cannot target it. The two toolchains are separate all the way
 rem down and the x86 path is untouched by the switch:
 rem
 rem   x86    tools\ntddk       setenv <root> <flavor> w2k x86
-rem                            src\usbport.lib          src\obj*\i386
+rem                                                     src\obj*\i386
 rem   amd64  tools\WinDDK71    setenv <root> <flavor> x64 WNET no_oacr
-rem                            src\usbport_amd64.lib    src\obj*\amd64
+rem                                                     src\obj*\amd64
 rem
 rem BUILD_ALT_DIR is overridden back to fre/chk/chk_qemu after setenv.bat in
 rem BOTH cases. WDK 7.1's setenv sets it to fre_wnet_AMD64, which src\sources
@@ -169,21 +175,17 @@ rem "x64 WNET no_oacr" - WNET because NT 5.2 is the only lineage that ships an
 rem amd64 lib directory (there is no lib\wxp\amd64), which is what makes one
 rem binary serve Windows XP x64 and Server 2003 x64.
 set "SETENVARGS=w2k x86"
-set "LIBNAME=usbport.lib"
-set "LIBARG="
 if /i not "%ARCH%"=="amd64" goto ddkdefault
 set "SETENVARGS=x64 WNET no_oacr"
-set "LIBNAME=usbport_amd64.lib"
-set "LIBARG=-amd64"
 rem
 rem **DDKROOT NAMES THE WIN2000 DDK AND MUST NOT REACH THIS LEG.**  It is an
 rem override for the 32-bit build, and it reaches setenv.bat - so an exported
 rem DDKROOT pointing at tools\ntddk was being called with `x64 WNET`, which the
 rem Win2000 DDK does not have.  The run then died at :nooutput naming the wrong
 rem cause entirely (the 2026-09-16 audit's D7).  WDKROOT is this leg's own
-rem override - the SAME name the import gate and scripts\make-usbport-lib.cmd
-rem honour, so one variable redirects the whole 64-bit toolchain rather than
-rem three scripts each having their own.
+rem override - the SAME name the import gate honours, so one
+rem variable redirects the whole 64-bit toolchain rather than each script
+rem having its own.
 rem
 rem A LABEL RATHER THAN A PARENTHESISED BLOCK, which is this file's idiom for
 rem every other refusal and is not a style choice here: cmd ends an `if (`
@@ -200,7 +202,7 @@ echo The -amd64 leg builds with WDK 7.1 and would call that DDK's setenv.bat
 echo with "x64 WNET", which it cannot do - and the failure would be reported
 echo as a missing output rather than as this.
 echo Clear DDKROOT, or set WDKROOT to redirect the 64-bit toolchain - the same
-echo variable the import gate and make-usbport-lib.cmd read:
+echo variable the import gate reads:
 echo   set DDKROOT=
 echo   set WDKROOT=^<path to WDK 7.1^>
 endlocal
@@ -208,32 +210,11 @@ exit /b 1
 :ddkdefault
 if "%DDKROOT%"=="" set "DDKROOT=%REPO%\tools\ntddk"
 :ddkchosen
-rem src\sources says XHCI_EXTRA_DEFINES is empty in every normal build and that a
-rem deploy build must be made with it unset, so any value at all means a probe.
-rem Do not narrow this to a substring test: `set VAR 2>nul | findstr` looks like
-rem it works but never matches - on the left of a pipe cmd hands the command to a
-rem child cmd.exe and the stripped redirection leaves the SET query prefix with a
-rem trailing space, which matches no variable.
-set "XHCI_RESOURCE_PROBE="
-if defined XHCI_EXTRA_DEFINES set "XHCI_RESOURCE_PROBE=1"
-rem Task 12.3's failed-start artifact is a diagnostic build like any other - it
-rem is caught by the line above and carries the same do-not-deploy marker - but
-rem it is the one that may be packaged, under make-package.ps1
-rem -FailStartArtifact, so its own marker is verified in the image too. The
-rem expansion happens in this shell before the pipe, so this is not the
-rem `set VAR | findstr` trap the comment above warns about.
-set "XHCI_FAILSTART="
-if defined XHCI_EXTRA_DEFINES echo %XHCI_EXTRA_DEFINES% | findstr /c:"XHCI_FAIL_START_CONTROLLER" >nul && set "XHCI_FAILSTART=1"
-rem Review finding 2. Both markers are emitted by any build that
-rem merely *includes* the failed-start define, and the packager keys its one
-rem exception on their presence - so `-DXHCI_FAIL_START_CONTROLLER
-rem -DXHCI_PROBE_RESOURCES_SIZE=4096` would be staged as task 12.3's artifact
-rem while behaving like neither artifact. The artifact is the whole value of the
-rem define, so require it to be the whole value of the variable. Refused before
-rem the DDK is even located, because a mixed image must not exist to be found
-rem later. src\xhci_dispatch.c carries the same refusal as an #error, which is
-rem what binds a bare `build` from a DDK prompt.
-if defined XHCI_FAILSTART if /i not "%XHCI_EXTRA_DEFINES%"=="-DXHCI_FAIL_START_CONTROLLER" goto failstartmixed
+rem XHCI_EXTRA_DEFINES was the miniport's diagnostic hatch (its probe and
+rem failed-start artifacts, which left the tree with it on 2026-10-02).
+rem src\sources refuses any value too, which binds a bare `build`; this says
+rem so before a single self-test has run.
+if defined XHCI_EXTRA_DEFINES goto extradefines
 
 rem Two refusals, because the two legs want two different toolchains: on the
 rem -amd64 leg DDKROOT is tools\WinDDK71 (or WDKROOT), and a missing WDK used
@@ -260,15 +241,6 @@ if not exist "%DDKROOT%\bin\setenv.bat" goto ddkspace
 :ddkpathok
 set "DDKFIRST="
 echo DDK: %DDKROOT%
-
-rem The import library is a build artifact, not a checked-in file. Generating it
-rem here rather than failing keeps a fresh clone one command away from a build.
-if not exist "%REPO%\src\%LIBNAME%" (
-    echo.
-    echo src\%LIBNAME% is missing - generating it.
-    call "%REPO%\scripts\make-usbport-lib.cmd" %LIBARG%
-    if errorlevel 1 goto libfail
-)
 
 echo.
 echo === import gate self-tests ===
@@ -372,7 +344,6 @@ for %%F in (%FLAVORS%) do (
 )
 
 echo.
-if defined XHCI_RESOURCE_PROBE goto probesuccess
 echo BUILD + GATES PASSED (%FLAVORS%)
 echo Next, to build the install media a VM can be pointed at:
 if /i "%ARCH%"=="amd64" (
@@ -382,141 +353,6 @@ if /i "%ARCH%"=="amd64" (
 )
 endlocal
 exit /b 0
-
-:probesuccess
-rem The marker is what stops this artifact being packaged, so verify it is
-rem actually in the image rather than trusting the wiring in src\sources. Repo
-rem audit finding 4: the previous arrangement embedded it only for
-rem XHCI_PROBE_RESOURCES_SIZE, so every other diagnostic build was packageable -
-rem a hole that existed precisely because nothing checked the artifact. A silent
-rem regression here would restore it, so this fails the build rather than warns.
-for %%F in (%FLAVORS%) do (
-    call :checkmarker %%F
-    if errorlevel 1 goto markerfail
-)
-if defined XHCI_FAILSTART (
-    for %%F in (%FLAVORS%) do (
-        call :checkfailstart %%F
-        if errorlevel 1 goto markerfail
-    )
-    goto failstartsuccess
-)
-echo PROBE BUILD + GATES PASSED (%FLAVORS%)
-echo   XHCI_EXTRA_DEFINES=%XHCI_EXTRA_DEFINES%
-echo This artifact is diagnostic-only and must not be deployed. src\sources
-echo defines XHCI_DIAGNOSTIC_BUILD for any nonempty XHCI_EXTRA_DEFINES, so the
-echo binary carries the marker make-package.ps1 rejects - this warning is a
-echo courtesy and the packaging gate is the enforcement.
-echo Clear XHCI_EXTRA_DEFINES and rebuild before packaging:
-echo   set XHCI_EXTRA_DEFINES=
-if /i "%ARCH%"=="amd64" (
-    echo   scripts\build-driver.cmd both -amd64
-) else (
-    echo   scripts\build-driver.cmd both
-)
-endlocal
-exit /b 0
-
-:failstartsuccess
-echo FAILED-START ARTIFACT + GATES PASSED (%FLAVORS%)
-echo   XHCI_EXTRA_DEFINES=%XHCI_EXTRA_DEFINES%
-echo This is roadmap task 12.3's artifact: it installs, loads, and then refuses
-echo the last step of StartController. It is a diagnostic build and carries the
-echo do-not-deploy marker like any other, so it is the ONE artifact the packager
-echo will stage - and only when asked for it by name:
-echo   powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor debug -FailStartArtifact
-echo Do not install it on a machine you are not prepared to recover. When you are
-echo done, clear XHCI_EXTRA_DEFINES and rebuild before packaging anything else:
-echo   set XHCI_EXTRA_DEFINES=
-if /i "%ARCH%"=="amd64" (
-    echo   scripts\build-driver.cmd both -amd64
-) else (
-    echo   scripts\build-driver.cmd both
-)
-endlocal
-exit /b 0
-
-rem ------------------------------------------------------------------
-rem :checkfailstart <flavour>   (release, debug or qemu - the caller passes
-rem                              whichever it just built)
-rem
-rem Task 12.3's artifact must carry XHCI98_FAILSTART_ARTIFACT_TASK_12_3, which is
-rem the string the packager's narrow exception keys on. Read out of the image for
-rem the same reason :checkmarker is: this is a statement about the artifact, not
-rem about the build files that were supposed to produce it. If the define reached
-rem the compiler but the marker did not reach the image, the packager would
-rem refuse the artifact - the safe direction - and this says so at build time
-rem instead of after a staging attempt.
-rem ------------------------------------------------------------------
-:checkfailstart
-setlocal
-set "FLAVOR=%~1"
-call :flavordirs %FLAVOR%
-if "%OBJDIR%"=="" goto badflavor
-set "OUTSYS=%REPO%\src\%OBJDIR%\%ARCHDIR%\xhci98.sys"
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$b=[System.IO.File]::ReadAllBytes('%OUTSYS%');" ^
-    "$t=[System.Text.Encoding]::ASCII.GetString($b);" ^
-    "if ($t.Contains('XHCI98_FAILSTART_ARTIFACT_TASK_12_3')) { exit 0 } else { exit 1 }"
-if errorlevel 1 goto failstartmissing
-endlocal
-exit /b 0
-
-:failstartmixed
-echo.
-echo ERROR: XHCI_EXTRA_DEFINES names XHCI_FAIL_START_CONTROLLER alongside
-echo something else:
-echo   XHCI_EXTRA_DEFINES=%XHCI_EXTRA_DEFINES%
-echo Task 12.3's artifact must be built alone. Every build carrying that define
-echo emits XHCI98_FAILSTART_ARTIFACT_TASK_12_3, and make-package.ps1
-echo -FailStartArtifact keys its one exception to the do-not-deploy rule on that
-echo string - so a mixed build is staged as the artifact and then behaves like
-echo neither, which is a wasted guest boot at best. Build it on its own:
-echo   set "XHCI_EXTRA_DEFINES=-DXHCI_FAIL_START_CONTROLLER"
-echo   scripts\build-driver.cmd debug
-endlocal
-exit /b 1
-
-:failstartmissing
-echo.
-echo ERROR: XHCI_EXTRA_DEFINES names XHCI_FAIL_START_CONTROLLER but the %FLAVOR%
-echo image does not carry XHCI98_FAILSTART_ARTIFACT_TASK_12_3, so
-echo make-package.ps1 -FailStartArtifact would refuse it. Check that
-echo xhci_dispatch.c still emits the marker under that define.
-endlocal
-exit /b 1
-
-rem ------------------------------------------------------------------
-rem :checkmarker <flavour>      (release, debug or qemu - the caller passes
-rem                              whichever it just built)
-rem
-rem A diagnostic build must carry XHCI98_PROBE_BUILD_DO_NOT_DEPLOY, because that
-rem string is the only thing make-package.ps1 can see. Read out of the image, so
-rem this is a statement about the artifact and not about the build files that
-rem were supposed to produce it.
-rem ------------------------------------------------------------------
-:checkmarker
-setlocal
-set "FLAVOR=%~1"
-call :flavordirs %FLAVOR%
-if "%OBJDIR%"=="" goto badflavor
-set "OUTSYS=%REPO%\src\%OBJDIR%\%ARCHDIR%\xhci98.sys"
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$b=[System.IO.File]::ReadAllBytes('%OUTSYS%');" ^
-    "$t=[System.Text.Encoding]::ASCII.GetString($b);" ^
-    "if ($t.Contains('XHCI98_PROBE_BUILD_DO_NOT_DEPLOY')) { exit 0 } else { exit 1 }"
-if errorlevel 1 goto markermissing
-endlocal
-exit /b 0
-
-:markermissing
-echo.
-echo ERROR: the %FLAVOR% diagnostic build does not carry the do-not-deploy
-echo marker, so make-package.ps1 would accept it as install media.
-echo XHCI_EXTRA_DEFINES is set, so src\sources should have defined
-echo XHCI_DIAGNOSTIC_BUILD and xhci_dispatch.c should have emitted the string.
-endlocal
-exit /b 1
 
 rem ------------------------------------------------------------------
 rem :checkflavour <release|debug|qemu>
@@ -534,7 +370,7 @@ set "FLAVOR=%~1"
 call :flavordirs %FLAVOR%
 if "%OBJDIR%"=="" goto badflavor
 set "OUTSYS=%REPO%\src\%OBJDIR%\%ARCHDIR%\xhci98.sys"
-rem In a script rather than inline, unlike :checkmarker next door. It needs a
+rem In a script rather than inline. It needs a
 rem pipeline and a comparison, and a `powershell -Command` continuation is the
 rem wrong place for either: the first version compared $found[0] without
 rem wrapping the pipeline in @(), so a single match arrived as a string whose
@@ -676,7 +512,7 @@ if errorlevel 1 goto gatefail
 rem The image has to say which of the three it is, from an ASCII scan and with
 rem no PE knowledge - that is what a user sending a capture quotes and what
 rem make-package.ps1 refuses a qemu binary by. Checked here rather than trusted
-rem to src\sources, for the same reason :checkmarker is: this is a statement
+rem to src\sources, because this is a statement
 rem about the artifact, not about the build files meant to produce it. It also
 rem catches the one mistake the directory layout cannot - an image built in the
 rem right tree with the wrong define.
@@ -792,12 +628,6 @@ echo (or set DDKROOT to a DDK installed elsewhere).
 endlocal
 exit /b 1
 
-:libfail
-echo.
-echo ERROR: could not generate src\usbport.lib.
-endlocal
-exit /b 1
-
 :gatetestfail
 echo.
 echo ERROR: the import gate's evidence-manifest self-tests failed.
@@ -828,7 +658,7 @@ echo tools\WinDDK71. Nothing is installed machine-wide - it is unpacked there
 echo with `msiexec /a` and installs nothing; see
 echo docs\contributing\design\11-x64-targets.md section 4.
 echo (or set WDKROOT to a WDK 7.1 installed elsewhere - the same variable the
-echo import gate and scripts\make-usbport-lib.cmd read).
+echo import gate reads).
 endlocal
 exit /b 1
 
@@ -883,9 +713,13 @@ echo freshly linked unsigned exe, not a test failure - run this again.
 endlocal
 exit /b 2
 
-:markerfail
+:extradefines
 echo.
-echo BUILD FAILED: a diagnostic build is not marked as undeployable.
+echo ERROR: XHCI_EXTRA_DEFINES is set:
+echo   XHCI_EXTRA_DEFINES=%XHCI_EXTRA_DEFINES%
+echo xhci98.sys has no diagnostic builds since the HCD replaced the miniport
+echo on 2026-10-02 (design record 13). Clear it and build again:
+echo   set XHCI_EXTRA_DEFINES=
 endlocal
 exit /b 1
 

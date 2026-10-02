@@ -296,7 +296,8 @@ and bandwidth paths. What that takes is recorded in
 a bulk device on a root port is `docs/future-plans/superspeed-storage-behind-a-switch.md`.
 
 It is a driver-stack project of its own, scheduled on 2026-10-02 as this
-driver's successor, `xhci98hc.sys`, roadmap Phases 25 onward
+driver's successor, the HCD that took over `src\` and the name
+`xhci98.sys` on 2026-10-02, roadmap Phases 25 onward
 (`docs/contributing/roadmap-hcd.md`); the miniport this page describes is
 frozen at `1.2.0.0`, and in it High-Speed covers
 the intended HID, storage, Ethernet, and audio workloads. A controller exposing

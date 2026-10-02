@@ -10,8 +10,9 @@ and the acceptance reminder;
 [`roadmap-phases-17-on.md`](roadmap-phases-17-on.md) carries the entries of
 Phases 17-24, the rest of the miniport's life, closed with the `1.2.0.0` cut;
 and [`roadmap-hcd.md`](roadmap-hcd.md), opened on 2026-10-02, carries Phases
-25 onward, the miniport's successor - the monolithic host controller driver
-`xhci98hc.sys` - including the open phase. The detail lives in
+25 onward, the miniport's successor - the monolithic host controller driver,
+which took over `src\` and the name `xhci98.sys` on 2026-10-02 - including the
+open phase. The detail lives in
 the other documents:
 
 - Build, VMs, install, packaging and the bench rig:
@@ -112,11 +113,12 @@ has run once on real hardware. It cut `1.1.0.0`, the first release with a
 2026-10-02, the day Phase 24 closed). `1.2.0.0` is the last release of
 `xhci98.sys`: no further miniport cut, and a defect reported against it is
 answered by the successor. That successor is a monolithic USB host controller
-driver, `xhci98hc.sys`, which replaces `usbport.sys`, the hub driver and the
+driver, now `xhci98.sys` itself, which replaces `usbport.sys`, the hub driver and the
 composite parent with code of this project's own so that it can drive
-SuperSpeed devices, SuperSpeed hubs and UAS storage on the same targets; it
-ships as a second package chosen at install time, never as a switch inside
-the miniport, and its one cut is `2.0.0.0` after Phase 31. Its phases, 25 to
+SuperSpeed devices, SuperSpeed hubs and UAS storage on the same targets. It
+is a second binary chosen at install time, never a switch inside the
+miniport; the miniport left the tree on the same day (its last sources are
+on branch `1.2.0.0`), and the successor's one cut is `2.0.0.0` after Phase 31. Its phases, 25 to
 32, and the decisions they rest on are in
 [`roadmap-hcd.md`](roadmap-hcd.md); its design record is
 `design/13-superspeed-hcd.md`, grown from the future-plans page that moved

@@ -221,6 +221,28 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "common.ps1")
 
+#
+# ---- the driver's own facts ------------------------------------------
+#
+# Since 2026-10-02 xhci98.sys is the successor host controller driver (design
+# record 13); the miniport's INF rules that were about usbport - fetching
+# usbport.sys and usbhub.sys, writing the virtual-hub values - are reversed
+# below, and the HCD adds a second device role.
+#
+#   VerHeader / VerPrefix  the one editable version source beside the INF,
+#                          and the prefix of its three macros
+#   RcName                 the version resource beside the INF
+#   RootHubId              the hardware id of the root hub the HCD creates;
+#                          a model with this id is a ROOT-HUB install, and the
+#                          controller-only rules (VAL-*, PROP-*, OS-*) do not
+#                          apply to it. A project-owned id, never USB\ROOT_HUB,
+#                          which the OS's own usbhub.sys claims on every NT
+#                          target (roadmap-hcd.md, decisions table; design
+#                          record 13 section 8).
+#
+$prod = @{ VerHeader = "xhci_version.h"; VerPrefix = "XHCI"; RcName = "xhci98.rc";
+           Binary = "xhci98.sys"; RootHubId = "XHCI98\ROOT_HUB" }
+
 $script:failures = @()
 $script:warnings = @()
 
@@ -554,10 +576,10 @@ if (-not (Test-SectionExists $inf "Version")) {
         # hand-written fragments. Failing those would be checking where the file
         # is rather than what it says.
         #
-        $verHdrPath = Join-Path (Split-Path -Parent $InfPath) "xhci_version.h"
-        $rcPath     = Join-Path (Split-Path -Parent $InfPath) "xhci98.rc"
+        $verHdrPath = Join-Path (Split-Path -Parent $InfPath) $prod.VerHeader
+        $rcPath     = Join-Path (Split-Path -Parent $InfPath) $prod.RcName
         if (-not (Test-Path $verHdrPath)) {
-            Write-Host ("  (no xhci_version.h beside this INF - DriverVer/version cross-check skipped)") -ForegroundColor DarkGray
+            Write-Host ("  (no " + $prod.VerHeader + " beside this INF - DriverVer/version cross-check skipped)") -ForegroundColor DarkGray
         } else {
             $infVersion = ($dv[0].Value -split ',')[1].Trim()
             $infDate    = ($dv[0].Value -split ',')[0].Trim()
@@ -573,17 +595,17 @@ if (-not (Test-SectionExists $inf "Version")) {
             # check that replaces the four the resource used to get.
             #
             $csv = $null; $str = $null; $hdrDate = $null
-            if ($hdrText -match '(?m)^\s*#define\s+XHCI_VER_CSV\s+(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*$') {
+            if ($hdrText -match ('(?m)^\s*#define\s+' + $prod.VerPrefix + '_VER_CSV\s+(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*$')) {
                 $csv = "{0}.{1}.{2}.{3}" -f $matches[1], $matches[2], $matches[3], $matches[4]
             } else {
                 Add-Failure "BOTH-VERSION" ("{0} has no readable XHCI_VER_CSV - four comma-separated integers and nothing else on the line. It is what FILEVERSION and PRODUCTVERSION expand to." -f $hdrName)
             }
-            if ($hdrText -match '(?m)^\s*#define\s+XHCI_VER_STR\s+"([\d.]+)"\s*$') {
+            if ($hdrText -match ('(?m)^\s*#define\s+' + $prod.VerPrefix + '_VER_STR\s+"([\d.]+)"\s*$')) {
                 $str = $matches[1]
             } else {
                 Add-Failure "BOTH-VERSION" ("{0} has no readable XHCI_VER_STR - a bare four-part version in quotes and nothing else on the line. It is what the two resource strings and both tools expand to." -f $hdrName)
             }
-            if ($hdrText -match '(?m)^\s*#define\s+XHCI_DRIVERVER_DATE\s+"([^"]*)"\s*$') {
+            if ($hdrText -match ('(?m)^\s*#define\s+' + $prod.VerPrefix + '_DRIVERVER_DATE\s+"([^"]*)"\s*$')) {
                 $hdrDate = $matches[1]
             } else {
                 Add-Failure "BOTH-VERSION" ("{0} has no readable XHCI_DRIVERVER_DATE - the release date in quotes, in the MM/DD/YYYY form DriverVer takes." -f $hdrName)
@@ -614,10 +636,10 @@ if (-not (Test-SectionExists $inf "Version")) {
                 $rcText = Get-Content -LiteralPath $rcPath -Raw
                 $rcName = Split-Path -Leaf $rcPath
                 $rcRules = @(
-                    @{ Name = "FILEVERSION";               Want = 'XHCI_VER_CSV'; Pattern = '(?m)^\s*FILEVERSION\s+(.+?)\s*$' },
-                    @{ Name = "PRODUCTVERSION";            Want = 'XHCI_VER_CSV'; Pattern = '(?m)^\s*PRODUCTVERSION\s+(.+?)\s*$' },
-                    @{ Name = 'VALUE "FileVersion"';       Want = 'XHCI_VER_STR'; Pattern = '(?m)^\s*VALUE\s+"FileVersion"\s*,\s*(.+?)\s*$' },
-                    @{ Name = 'VALUE "ProductVersion"';    Want = 'XHCI_VER_STR'; Pattern = '(?m)^\s*VALUE\s+"ProductVersion"\s*,\s*(.+?)\s*$' }
+                    @{ Name = "FILEVERSION";               Want = ($prod.VerPrefix + '_VER_CSV'); Pattern = '(?m)^\s*FILEVERSION\s+(.+?)\s*$' },
+                    @{ Name = "PRODUCTVERSION";            Want = ($prod.VerPrefix + '_VER_CSV'); Pattern = '(?m)^\s*PRODUCTVERSION\s+(.+?)\s*$' },
+                    @{ Name = 'VALUE "FileVersion"';       Want = ($prod.VerPrefix + '_VER_STR'); Pattern = '(?m)^\s*VALUE\s+"FileVersion"\s*,\s*(.+?)\s*$' },
+                    @{ Name = 'VALUE "ProductVersion"';    Want = ($prod.VerPrefix + '_VER_STR'); Pattern = '(?m)^\s*VALUE\s+"ProductVersion"\s*,\s*(.+?)\s*$' }
                 )
                 foreach ($rule in $rcRules) {
                     if ($rcText -notmatch $rule.Pattern) {
@@ -629,11 +651,11 @@ if (-not (Test-SectionExists $inf "Version")) {
                         Add-Failure "BOTH-VERSION" ("{0}'s {1} reads '{2}', which does not use {3}. The version is edited in {4} and nowhere else (roadmap task 14.1.10); a literal here compiles cleanly and ships a number this gate did not check." -f $rcName, $rule.Name, $decl, $rule.Want, $hdrName)
                     }
                 }
-                if ($rcText -notmatch '(?m)^\s*#include\s+"xhci_version\.h"\s*$') {
+                if ($rcText -notmatch ('(?m)^\s*#include\s+"' + [regex]::Escape($prod.VerHeader) + '"\s*$')) {
                     Add-Failure "BOTH-VERSION" ("{0} does not include the version header, so the macros above are undefined and rc.exe would compile whatever they happen to expand to." -f $rcName)
                 }
             } else {
-                Write-Host ("  (no xhci98.rc beside this INF - resource declaration check skipped)") -ForegroundColor DarkGray
+                Write-Host ("  (no " + $prod.RcName + " beside this INF - resource declaration check skipped)") -ForegroundColor DarkGray
             }
         }
     }
@@ -734,12 +756,46 @@ foreach ($ms in $modelSections) {
             Add-Failure "BOTH-XREF" ("models line {0} in [{1}] has no hardware ID." -f $e.Line, $ms.Section)
             continue
         }
-        [void]$models.Add(@{ Section = $fields[0]; Id = $fields[1]; Desc = $desc; Line = $e.Line; Decoration = $ms.Decoration })
+        $role = "controller"
+        if ($prod.RootHubId -ne "" -and $fields[1] -ieq $prod.RootHubId) { $role = "roothub" }
+        [void]$models.Add(@{ Section = $fields[0]; Id = $fields[1]; Desc = $desc; Line = $e.Line; Decoration = $ms.Decoration; Role = $role; Ids = @($fields | Select-Object -Skip 1) })
     }
 }
 
 if ($models.Count -eq 0) {
     Add-Failure "BOTH-XREF" "no models line was found - nothing in this INF installs on anything."
+}
+
+#
+# ---- HCD-ROOTHUB: the successor's two device roles (task 25.8) ----------
+#
+# One binary is the function driver of the controller and of the root hub the
+# controller creates (roadmap-hcd.md, decisions table). A models section with
+# the controller and no root hub installs a bus whose only child has no driver
+# on that target, and the reverse binds nothing at all - so every models
+# section the profile reads must carry both, and the root hub only under the
+# project-owned id: USB\ROOT_HUB and USB\ROOT_HUB20 are usbhub.sys's on every
+# NT target, and a model for either here would compete with the OS's own hub
+# driver for usbport's root hubs on every machine with an EHCI controller.
+#
+foreach ($ms in $modelSections) {
+    $here = @($models | Where-Object { $_.Decoration -eq $ms.Decoration })
+    if (@($here | Where-Object { $_.Role -eq "controller" }).Count -eq 0) {
+        Add-Failure "HCD-ROOTHUB" ("models section [{0}] installs no controller." -f $ms.Section)
+    }
+    if (@($here | Where-Object { $_.Role -eq "roothub" }).Count -eq 0) {
+        Add-Failure "HCD-ROOTHUB" ("models section [{0}] has no root-hub model under '{1}'. The HCD creates that PDO and binds it to itself through this INF; without the model the root hub has no driver on this path." -f $ms.Section, $prod.RootHubId)
+    }
+}
+# Every id on the line, not only the first: a setup engine matches the
+# later ones as compatible ids, and the self-test that found this put
+# USB\ROOT_HUB20 second.
+foreach ($m in $models) {
+    foreach ($id in $m.Ids) {
+        if ($id -match '^USB\\ROOT_HUB') {
+            Add-Failure "HCD-ROOTHUB" ("models line {0} matches '{1}', which is the OS hub driver's id for usbport's root hubs. The HCD's root hub is '{2}'." -f $m.Line, $id, $prod.RootHubId)
+        }
+    }
 }
 
 # ---- PATH-* : both install paths must be present and correct -------
@@ -1050,6 +1106,22 @@ $requiredValues = @(
     }
 )
 
+#
+# **The successor HCD writes none of the three virtual-hub values, and this
+# gate refuses them anywhere in its INF** (owner, 2026-10-02; roadmap-hcd.md,
+# decisions table, "The miniport's virtual-hub values"). They exist to make
+# usbport tell the truth about a root-port device's speed; the HCD has no
+# usbport to lie to, reads none of them, and a value its INF wrote would be a
+# switch that switches nothing. The log switches and the moderation interval
+# carry over (design record 13's carry-over list).
+#
+$requiredValues = @($requiredValues | Where-Object { $_.Name -notlike "XhciVirtualHSHub*" })
+foreach ($ln in @($inf.Sections.Values | ForEach-Object { $_ })) {
+    if ($ln.Text -match '^\s*HKR\s*,[^,]*,\s*(XhciVirtualHSHub\w*)\s*,') {
+        Add-Failure "VAL-HCDVHUB" ("line {0} writes '{1}'. The HCD reads none of the virtual-hub values - there is no usbport to report a speed through, and every device is reported at its true speed (roadmap-hcd.md, decisions table) - so the value would be a switch that switches nothing." -f $ln.Line, $matches[1])
+    }
+}
+
 function Get-AddRegValues {
     param($Inf, [string[]]$Sections, [string]$ValueName)
 
@@ -1083,6 +1155,7 @@ function Get-AddRegValues {
 }
 
 foreach ($m in $models) {
+    if ($m.Role -eq "roothub") { continue }    # controller-only rule; the root hub is HCD-ROOTHUB's
     $paths = @(Get-ModelPaths $m | ForEach-Object {
         @{ Name = $_.Os; Install = ($m.Section + $_.Suffix) }
     })
@@ -1195,6 +1268,7 @@ $propController = @{
 }
 
 foreach ($m in $models) {
+    if ($m.Role -eq "roothub") { continue }    # controller-only rule; the root hub is HCD-ROOTHUB's
     foreach ($p in @(Get-ModelPaths $m)) {
         $install = $m.Section + $p.Suffix
         if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
@@ -1245,6 +1319,33 @@ foreach ($m in $models) {
             if ($c.Data -ne $propController.Data) {
                 Add-Failure "PROP-CTRLDATA" ("[{0}] line {1} writes '{2}' as '{3}', not '{4}' - one byte, 01, as all three NT references write it." -f $c.Section, $c.Line, $propController.Name, $c.Data, $propController.Data)
             }
+        }
+    }
+}
+
+# ---- HCD-HUBPAGE: the root hub's Power tab (task 25.4) ---------------
+#
+# Every target's own INF registers the hub property-page provider for its root
+# hubs - "sysclass.dll,USBHubPropPage" on Windows 98 SE, ME and NUSB, and
+# "usbui.dll,USBHubPropPageProvider" on every NT target - and the owner's
+# decision of 2026-10-02 keeps the root hub's Power tab under the HCD
+# (design record 13, section 8). A root-hub install with no registration is a
+# devnode with no Power tab and nothing to say why.
+#
+$hubPage = @{
+    "9x" = @{ Name = "EnumPropPages";   Data = '"sysclass.dll,USBHubPropPage"' }
+    "nt" = @{ Name = "EnumPropPages32"; Data = '"usbui.dll,USBHubPropPageProvider"' }
+}
+foreach ($m in @($models | Where-Object { $_.Role -eq "roothub" })) {
+    foreach ($p in @(Get-ModelPaths $m)) {
+        $install = $m.Section + $p.Suffix
+        if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
+        $want = $hubPage[$p.Kind]
+        $vals = @(Get-AddRegValues $inf @(Get-Directive $inf $install "AddReg") $want.Name)
+        if ($vals.Count -eq 0) {
+            Add-Failure "HCD-HUBPAGE" ("the {0} root-hub install [{1}] writes no '{2}'. Every target's own INF registers {3} for its root hubs, and without it the root hub has no Power tab." -f $p.Os, $install, $want.Name, $want.Data)
+        } elseif (@($vals | Where-Object { $_.Data -ieq $want.Data }).Count -eq 0) {
+            Add-Failure "HCD-HUBPAGE" ("the {0} root-hub install [{1}] writes '{2}' as {3}, not {4}." -f $p.Os, $install, $want.Name, $vals[0].Data, $want.Data)
         }
     }
 }
@@ -1306,22 +1407,24 @@ foreach ($cf in ($referencedCopyFiles | Sort-Object -Unique)) {
 
 # ---- the files the operating system supplies -----------------------
 #
-# usbd.sys is one destination name and two different binaries, usbhub.sys is
-# Windows 98's composite parent and the NT targets' hub driver, and
-# usbport.sys is the port driver this miniport imports; nothing on an
-# xHCI-only machine ever places any of them (docs\contributing\lessons.md,
-# "usbhub20.sys bugchecks Win2000" and the Phase 19 entry;
-# docs\issues\03-usbhub-sys-composite-devices.md). The media carries none:
-# [Version] names LayoutFile=layout.inf, none of them is in
-# [SourceDisksFiles], and a CopyFiles entry the INF's own [SourceDisksFiles]
-# does not cover is resolved through the OS's layout.inf and fetched from the
-# OS's own install source. Each target therefore gets its own OS's build by
-# construction. This table is what BOTH-SOURCE exempts and what the OS-*
-# rules below hold the INF to: the paths that must copy each file, and the
-# paths that must not. Off carries the rule id and the reason, because the
-# one file with an Off path is refused for a reason of its own: Windows 98's
-# layout.inf has no usbport.sys row, so its engine could not resolve the
-# entry, and the file is placed there by NUSB or SweetLow's stack.
+# usbd.sys is one destination name and two different binaries, and nothing on
+# an xHCI-only machine ever places it (docs\contributing\lessons.md, the Phase
+# 19 entry). The media carries no Microsoft file: [Version] names
+# LayoutFile=layout.inf, none of them is in [SourceDisksFiles], and a CopyFiles
+# entry the INF's own [SourceDisksFiles] does not cover is resolved through the
+# OS's layout.inf and fetched from the OS's own install source. This table is
+# what BOTH-SOURCE exempts and what the OS-* rules below hold the INF to: the
+# paths that must copy each file, and the paths that must not, with the rule
+# id and the reason for each refusal.
+#
+# **Since 2026-10-02 xhci98.sys is the successor HCD** (design record 13
+# section 5.5), and two rows reversed. The miniport imported usbport.sys and
+# needed usbhub.sys as the hub driver and Windows 98's composite parent, so its
+# INF fetched both; the HCD replaces both, so its INF must fetch neither on any
+# path (OS-HCDREPLACED) - a usbhub.sys it fetched would sit on disk for
+# usbport's own root hubs to bind. usbd.sys stays, for the class drivers on the
+# HCD's device PDOs, and usbui.dll stays, for both property tabs. All four
+# names stay in $pkgRefusedNames below: none may ride on the media.
 # Each row carries its own destination, because usbui.dll is not a driver and
 # does not go where the three drivers go: dirid 11 is the system directory
 # (\Windows\System on Windows 98 and Windows ME, system32 on the NT targets),
@@ -1329,14 +1432,14 @@ foreach ($cf in ($referencedCopyFiles | Sort-Object -Unique)) {
 # (USBUI.CopyFiles=11 on 9x, USBUI.CopyFiles.NT=11 on NT).
 $driversDest = @{ Dirid = "10"; Subdir = "System32\Drivers"; Spelling = "10, System32\Drivers";
                   Why = "both targets load it from System32\Drivers" }
+$hcdReplacedWhy = "xhci98.sys replaces usbport.sys and the hub driver (roadmap-hcd.md, 'The shape of the successor'), so fetching it puts a file on disk that nothing of this package loads and that the OS's own INFs could bind to usbport's root hubs"
 $osSupplied = @(
-    @{ File = "usbport.sys"; On = @("Win2000", "WinXP64"); Off = @("Win98"); OffRule = "OS-ONWIN98"; Dest = $driversDest;
-       Why = "xhci98.sys imports it, and an NT install that never had a USB controller does not have it (both NT targets' layout.inf give it the Setup disposition that does not copy it; a controller install pulls it from Driver Cache\i386), so the driver cannot load at all: Code 39 with nothing in the trace, measured on Windows XP on 2026-09-03";
-       OffWhy = "Windows 98's layout.inf has no usbport.sys row, so its 16-bit engine has no source to resolve the entry from; NUSB or SweetLow's stack places the file there and the 9x path must not ask for it" },
+    @{ File = "usbport.sys"; On = @(); Off = @("Win98", "Win2000", "WinXP64"); OffRule = "OS-HCDREPLACED"; Dest = $driversDest;
+       Why = ""; OffWhy = $hcdReplacedWhy },
     @{ File = "usbd.sys";    On = @("Win98", "Win2000", "WinXP64"); Off = @(); Dest = $driversDest;
-       Why = "usbhub20.sys imports USBD.SYS on both targets and nothing else on an xHCI-only machine places it, so without it the root hub cannot load (Code 2 on Windows 98, a 0xc0000034 naming usbhub20.sys on Windows 2000)" },
-    @{ File = "usbhub.sys";  On = @("Win98", "Win2000", "WinXP64"); Off = @(); Dest = $driversDest;
-       Why = "it is Windows 98's composite parent and the NT targets' hub driver, which an xHCI-only machine never gets from setup (both NT targets' layout.inf give it the disposition that does not copy it, read 2026-09-03), so on Windows 98 every multi-interface device stops at 'USB Composite Device' with Code 2 without it" },
+       Why = "the class drivers bound to the HCD's device PDOs import its helper exports (USBD_CreateConfigurationRequestEx, USBD_ParseConfigurationDescriptorEx, USBD_ParseDescriptors; design record 13 section 6), and nothing else on an xHCI-only machine places it" },
+    @{ File = "usbhub.sys";  On = @(); Off = @("Win98", "Win2000", "WinXP64"); OffRule = "OS-HCDREPLACED"; Dest = $driversDest;
+       Why = ""; OffWhy = $hcdReplacedWhy },
     @{ File = "usbui.dll";   On = @("Win98", "Win2000", "WinXP64"); Off = @();
        Dest = @{ Dirid = "11"; Subdir = ""; Spelling = "11";
                  Why = "dirid 11 is the system directory, where all four operating systems' own USB INFs put it; System32\Drivers is for drivers and this is a user-mode property-page DLL" };
@@ -1625,6 +1728,7 @@ foreach ($defaultSection in $rightClickSections) {
 }
 
 foreach ($m in $models) {
+    if ($m.Role -eq "roothub") { continue }    # controller-only rule; the root hub is HCD-ROOTHUB's
     $base = $m.Section
     $missing = @(Get-ModelPaths $m | Where-Object { -not (Test-SectionExists $inf ($base + $_.Suffix)) })
     if ($missing.Count -gt 0) {
@@ -1715,6 +1819,25 @@ foreach ($m in $models) {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+#
+# OS-HCDREPLACED on the root-hub installs too. The loop above is the
+# controller's (OS-MISSING and the rest do not apply to a root hub), so until
+# the self-test probed it a root-hub section fetching usbhub.sys passed - and
+# that is the likeliest place for an editor to put the hub driver back.
+#
+foreach ($m in @($models | Where-Object { $_.Role -eq "roothub" })) {
+    foreach ($p in @(Get-ModelPaths $m)) {
+        $install = $m.Section + $p.Suffix
+        if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
+        foreach ($os in @($osSupplied | Where-Object { $_.ContainsKey("OffRule") -and $_.OffRule -eq "OS-HCDREPLACED" })) {
+            $entries = @(Get-CopyEntriesFor $inf @(Get-Directive $inf $install "CopyFiles") $os.File)
+            if ($entries.Count -gt 0) {
+                Add-Failure $os.OffRule ("the {0} root-hub install ([{1}]) copies '{2}' (line {3}): {4}." -f $p.Os, $install, $os.File, $entries[0].Line, $os.OffWhy)
             }
         }
     }
@@ -1881,7 +2004,7 @@ if ($EmitFootprint -ne "") {
         "#            (0x02) and FLG_ADDREG_OVERWRITEONLY (0x20) are those same two",
         "#            conditions on the registry side. Removing usbd.sys, which is",
         "#            copied 0x10, would take a file this install never placed and",
-        "#            leave usbhub20.sys unable to load.",
+        "#            leave the class drivers that import it unable to load.",
         "#   review - the INF alone cannot say. A version-conditional copy",
         "#            (COPYFLG_NO_VERSION_DIALOG 0x20, COPYFLG_OVERWRITE_OLDER_ONLY",
         "#            0x40); FLG_ADDREG_APPEND (0x08), which may leave",

@@ -168,7 +168,10 @@ stack natively in SP4. This driver fills the gap for both.
 ## Repository Layout
 
 ```
-src/            Driver source code (C)
+src/            Driver source code (C). Since 2026-10-02 the successor HCD,
+                xhci98.sys (roadmap Phases 25 onward, design record 13);
+                the miniport this guide describes left the tree that day
+                and its last sources are on branch 1.2.0.0
 test/           Host-side unit tests for the DDK-free core (test\run-host-tests.cmd)
 scripts/        The build wrapper, host setup helpers, and the import/INF/
                 packaging gates. `scripts/local/` is git-ignored per-host
@@ -234,10 +237,16 @@ The roadmap is three files: that one has the status, the conventions and
 Phases 0-16 (the initial release); `docs/contributing/roadmap-phases-17-on.md`
 has Phases 17-24, the rest of the miniport's life, closed with the `1.2.0.0`
 cut that froze it; and `docs/contributing/roadmap-hcd.md` has Phases 25
-onward, the successor host controller driver `xhci98hc.sys`, the open phase
-included. The miniport is frozen (owner, 2026-10-02): `1.2.0.0` is its last
-release, this file still describes it, and the successor's own rules are in
-`roadmap-hcd.md` and design record 13 until the cut rewrites this guide.
+onward, the successor host controller driver, the open phase included. The
+miniport is frozen (owner, 2026-10-02): `1.2.0.0` is its last release. **It
+has also left the tree** (owner, the same day): `src\` is the successor's,
+which took the name `xhci98.sys`, and the miniport's last sources are on
+branch `1.2.0.0`. Most of this file still describes the miniport; where it
+speaks of usbport, Option A, the usbport import library or the
+`allocate no pool` rule, the successor's rules in `roadmap-hcd.md` and design
+record 13 govern until the `2.0.0.0` cut rewrites this guide (task 32.1).
+The build constraints - C89, the arithmetic rules, ASCII and CRLF, the three
+flavours, the import and INF gates - bind the successor unchanged.
 **Do not advance past a phase whose checkpoint has not been observed to pass.**
 Then use the "What to read for each phase" table in `docs/README.md` for the
 documents that phase needs.
