@@ -9,10 +9,12 @@
  * sees after a start, and runs the same teardown the surprise removal does.
  *
  * IRQL: every function here runs at PASSIVE_LEVEL except hcdSignalOnComplete,
- * a completion routine (<= DISPATCH_LEVEL).
+ * a completion routine (<= DISPATCH_LEVEL). The controller's start and stop
+ * are hcd_ctl.c's.
  */
 
 #include "hcd.h"
+#include "xhci_dbg.h"
 
 static NTSTATUS NTAPI hcdSignalOnComplete(PDEVICE_OBJECT DeviceObject,
                                           PIRP Irp, PVOID Context)
@@ -51,17 +53,24 @@ static NTSTATUS hcdStart(PHCD_CONTROLLER hc, PIRP irp)
         return HcdCompleteIrp(irp, status, irp->IoStatus.Information);
     }
 
-    /* Task 26-A.1's stand-up: the FDO attaches and is started by the PCI
-     * stack beneath it, and then refuses, so the guest half (26-V.0) reads
-     * the device as installed and failed to start (Code 10). The controller
-     * start is task 26-A.2's. */
-    return HcdCompleteIrp(irp, STATUS_NOT_IMPLEMENTED, 0);
+    status = HcdStartController(hc, irp);
+    if (NT_SUCCESS(status)) {
+        hc->Common.PnpState = HCD_PNP_STARTED;
+        hc->Common.DevicePower = PowerDeviceD0;
+    }
+    return HcdCompleteIrp(irp, status, 0);
 }
 
+/* Windows 98's surprise removal is this IRP with nothing before it, so the
+ * controller is stopped here if nothing stopped it yet - the same teardown
+ * IRP_MN_SURPRISE_REMOVAL runs on NT. */
 static NTSTATUS hcdRemove(PHCD_CONTROLLER hc, PIRP irp)
 {
     NTSTATUS status;
 
+    if (hc->ControllerStarted) {
+        HcdStopController(hc);
+    }
     hc->Common.PnpState = HCD_PNP_REMOVED;
 
     irp->IoStatus.Status = STATUS_SUCCESS;
@@ -83,6 +92,7 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
     NTSTATUS status;
 
     stack = IoGetCurrentIrpStackLocation(irp);
+    XHCI_DBG_VALUE("hcd: controller PnP minor", stack->MinorFunction);
 
     if (stack->MinorFunction == IRP_MN_REMOVE_DEVICE) {
         return hcdRemove(hc, irp);
@@ -118,15 +128,28 @@ NTSTATUS HcdControllerPnp(PHCD_CONTROLLER hc, PIRP irp)
         break;
 
     case IRP_MN_STOP_DEVICE:
+        HcdStopController(hc);
         hc->Common.PnpState = HCD_PNP_STOPPED;
         irp->IoStatus.Status = STATUS_SUCCESS;
         status = HcdPassDown(hc, irp);
         break;
 
     case IRP_MN_SURPRISE_REMOVAL:
+        HcdStopController(hc);
         hc->Common.PnpState = HCD_PNP_SURPRISE_REMOVED;
         irp->IoStatus.Status = STATUS_SUCCESS;
         status = HcdPassDown(hc, irp);
+        break;
+
+    case IRP_MN_QUERY_CAPABILITIES:
+        /* win98-wdm.md, "PnP Dispatch Requirements": the controller is not
+         * surprise-removable; the bus's answer is otherwise kept. */
+        status = HcdForwardAndWait(hc, irp);
+        if (NT_SUCCESS(status)) {
+            stack->Parameters.DeviceCapabilities.Capabilities
+                ->SurpriseRemovalOK = FALSE;
+        }
+        status = HcdCompleteIrp(irp, status, irp->IoStatus.Information);
         break;
 
     default:

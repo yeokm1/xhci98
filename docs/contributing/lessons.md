@@ -9355,3 +9355,40 @@ and no extra defines** - which is what a re-cut that changes a date needs
 anyway. And after an experiment that builds into `src\obj*`, rebuild the
 shipping flavours before the session ends, or say in the handoff that the
 tree holds an experiment.
+
+## Windows 98: configuration IRPs go to the PDO, and a thread object is not something to wait on
+
+Roadmap task 26-A.2, 2026-10-03, the HCD's first starts on QEMU guests
+(`docs/contributing/runs/run-26.md`, "26-A.2"). Two Windows 98 SE behaviours
+Windows 2000 does not share, each of which a Windows 2000 run alone would
+have hidden.
+
+**`IRP_MN_READ_CONFIG` sent to the object `IoAttachDeviceToDeviceStack`
+returned is refused on Windows 98 SE**, and answered on Windows 2000.
+`GUID_BUS_INTERFACE_STANDARD` through `IRP_MN_QUERY_INTERFACE` answers
+`STATUS_NOT_IMPLEMENTED` there. The same IRP sent to the PDO handed to
+`AddDevice` works - which is what NUSB's `USBPORT.SYS` and 98 SE's own
+`uhcd.sys` do (static, `legal-provenance.md` section 4). Symptom when it is
+wrong: Code 10, and the kept init sequence's "Command register unreadable"
+refusal at step 3.
+
+**`KeWaitForSingleObject` on a system thread's object, from
+`ObReferenceObjectByHandle`, faults Windows 98 SE**: "A fatal exception 0E
+has occurred at 0028:C00312EE", at the first disable of the controller (which
+Windows 98 delivers as `QUERY_STOP` then `STOP`, not a remove). Waiting on a
+`KEVENT` the thread sets just before `PsTerminateSystemThread` survives
+repeated disable/enable cycles, and the thread's `PsTerminateSystemThread`
+itself ran without a fault in them. **On Windows 2000 the event is not
+enough**: a disable there is `QUERY_REMOVE` and `REMOVE`, the remove unloads
+the image, and with the event wait the guest rebooted after the whole
+teardown had traced clean - read as the thread still in the image's last
+instructions when it went. The thread-object wait is right there. The two
+are chosen with `IoIsWdmVersionAvailable(1, 0x10)`; **Windows 2000 is WDM
+1.10, not 1.20** (`win98-wdm.md`), and a first attempt testing `(1, 0x20)`
+sent Windows 2000 down the Windows 98 path.
+
+Rules. **A WDM call that takes a different object on Windows 98 is a call to
+copy from a Windows 98 binary, not from the DDK's samples**: read what
+`uhcd.sys` or NUSB's usbport does before choosing the target. And **a
+lifecycle path is not tested until its disable has run on Windows 98 SE** -
+the start passing proves nothing about the stop.

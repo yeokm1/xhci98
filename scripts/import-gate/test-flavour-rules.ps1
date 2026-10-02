@@ -166,6 +166,31 @@ try {
         $script:importFailures = @()
         Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
         Assert-True (@($script:importFailures | Where-Object { $_ -match 'hcd_rogue\.obj.*SITES=hcd_pool\.obj' }).Count -eq 1) "SITES refuses a reference from an object it does not name: $($script:importFailures)"
+
+        # Link-time-code-generation objects (WDK 7.1 amd64) list no symbols:
+        # every object unreadable is a warning that names the gap, never a
+        # silent pass; a mix of readable and unreadable is a failure.
+        function Add-Warning { param($Message) $script:importWarnings += $Message }
+        function Invoke-Dumpbin {
+            param($Exe, $Mode, $Path)
+            if ($Mode -eq '/imports') {
+                return @('    ntoskrnl.exe', '        0 ExFreePool', '        0 IofCallDriver', '        0 ExAllocatePoolWithTag', '    Summary')
+            }
+            if ([System.IO.Path]::GetFileName($Path) -eq 'hcd_pnp.obj' -and $script:mixedObjects) {
+                return @('012 00000000 UNDEF  notype       External     | __imp_@IofCallDriver@8')
+            }
+            return @('File Type: ANONYMOUS OBJECT')
+        }
+        Remove-Item -LiteralPath (Join-Path $siteDir 'hcd_rogue.obj')
+        $script:mixedObjects = $false
+        $script:importFailures = @()
+        $script:importWarnings = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True ($script:importFailures.Count -eq 0 -and @($script:importWarnings | Where-Object { $_ -match 'SITES rule NOT CHECKED' }).Count -eq 1) "SITES over LTCG objects is a named warning, not a pass: $($script:importFailures) / $($script:importWarnings)"
+        $script:mixedObjects = $true
+        $script:importFailures = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'mixed obj directory' }).Count -eq 1) "SITES over a mixed obj directory fails: $($script:importFailures)"
     }
 
     $badSites = Join-Path $work 'bad-sites.allow'

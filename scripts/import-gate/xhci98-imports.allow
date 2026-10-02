@@ -77,6 +77,50 @@ ntoskrnl.exe!PoStartNextPowerIrp             all  required  w2k-export; win98-pr
 ntoskrnl.exe!PoCallDriver                    all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!PoCallDriver, hint AE) (+21 other 98 SE); ntkern-name
 ntoskrnl.exe!PoSetPowerState                 all  required  w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!PoSetPowerState, hint B4) (+5 other 98 SE); ntkern-name
 
+
+# --- Task 26-A.2: the controller FDO - resources, BAR, interrupt and DPC, the ---
+# --- DMA adapter, PCI configuration through the stack, timers, the controller ---
+# --- thread, the registry values, power requests. Kernel and HAL rows are     ---
+# --- section 7.4 verbatim; the thread pairs are Appendix A rows 34, 40, 112,  ---
+# --- 113 and 116 (stock 98 SE precedent each).                                ---
+ntoskrnl.exe!PoRequestPowerIrp               all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!PoRequestPowerIrp, hint B3) (+14 other 98 SE); ntkern-name
+ntoskrnl.exe!KeInitializeDpc                 all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeDpc, hint 73) (+24 other 98 SE)
+ntoskrnl.exe!KeInsertQueueDpc                all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInsertQueueDpc, hint 7C) (+10 other 98 SE)
+ntoskrnl.exe!KeRemoveQueueDpc                all  required  w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!KeRemoveQueueDpc, hint 8A) (+1 other 98 SE)
+ntoskrnl.exe!IoConnectInterrupt              all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoConnectInterrupt, hint 37) (+6 other 98 SE); ntkern-name
+ntoskrnl.exe!IoDisconnectInterrupt           all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoDisconnectInterrupt, hint 40) (+6 other 98 SE); ntkern-name
+ntoskrnl.exe!MmMapIoSpace                    all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!MmMapIoSpace, hint 9C) (+7 other 98 SE); ntkern-name
+ntoskrnl.exe!MmUnmapIoSpace                  all  required  w2k-export; win98-precedent acpi.sys 4.10.2222 (NTOSKRNL.EXE!MmUnmapIoSpace, hint A6) (+5 other 98 SE); ntkern-name
+ntoskrnl.exe!READ_REGISTER_ULONG             all  required  w2k-export; win98-precedent openhci.sys 4.10.2222 (NTOSKRNL.EXE!READ_REGISTER_ULONG, hint C0) (+3 other 98 SE); ntkern-name
+ntoskrnl.exe!WRITE_REGISTER_ULONG            all  required  w2k-export; win98-precedent openhci.sys 4.10.2222 (NTOSKRNL.EXE!WRITE_REGISTER_ULONG, hint ED) (+3 other 98 SE); ntkern-name
+ntoskrnl.exe!IoGetDmaAdapter                 all  required  SITES=hcd_dma.obj the one adapter call (design record 13 section 7.5 rule 4); w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoGetDmaAdapter, hint 4A) (+6 other 98 SE); ntkern-name
+ntoskrnl.exe!IoAllocateIrp                   all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoAllocateIrp, hint 2D) (+30 other 98 SE); ntkern-name
+ntoskrnl.exe!IoFreeIrp                       all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoFreeIrp, hint 42) (+31 other 98 SE); ntkern-name
+ntoskrnl.exe!IoOpenDeviceRegistryKey         all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoOpenDeviceRegistryKey, hint 53) (+18 other 98 SE); ntkern-name
+ntoskrnl.exe!RtlQueryRegistryValues          all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!RtlQueryRegistryValues, hint DA) (+8 other 98 SE); ntkern-name
+ntoskrnl.exe!ZwClose                         all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ZwClose, hint EF) (+29 other 98 SE); ntkern-name
+ntoskrnl.exe!KeInitializeTimer               all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeTimer, hint 78) (+20 other 98 SE)
+ntoskrnl.exe!KeSetTimer                      all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeSetTimer, hint 90) (+18 other 98 SE)
+ntoskrnl.exe!KeCancelTimer                   all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeCancelTimer, hint 6D) (+20 other 98 SE)
+ntoskrnl.exe!KeClearEvent                    all  required  w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!KeClearEvent, hint 6E) (+5 other 98 SE); ntkern-name
+ntoskrnl.exe!KeDelayExecutionThread          all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeDelayExecutionThread, hint 6F) (+12 other 98 SE); ntkern-name
+ntoskrnl.exe!KeInitializeSpinLock            all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeSpinLock, hint 77) (+32 other 98 SE); ntkern-name
+HAL.dll!KfAcquireSpinLock                    all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfAcquireSpinLock, hint 6) (+31 other 98 SE); ntkern-name
+HAL.dll!KfReleaseSpinLock                    all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfReleaseSpinLock, hint 9) (+31 other 98 SE); ntkern-name
+HAL.dll!KfRaiseIrql                          all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfRaiseIrql, hint 8) (+8 other 98 SE)
+HAL.dll!KfLowerIrql                          all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfLowerIrql, hint 7) (+9 other 98 SE)
+HAL.dll!KeGetCurrentIrql                     all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KeGetCurrentIrql, hint 3) (+15 other 98 SE)
+HAL.dll!KeStallExecutionProcessor            all  required  w2k-export; win98-precedent openhci.sys 4.10.2222 (HAL.DLL!KeStallExecutionProcessor, hint 5) (+15 other 98 SE); ntkern-name
+ntoskrnl.exe!PsCreateSystemThread            all  required  w2k-export; win98-precedent bt829.sys 4.10.2222 (NTOSKRNL.EXE!PsCreateSystemThread, hint BA); NUSB USBPORT.SYS 5.00.2195.5652 (hint C1) (design record 13 Appendix A row 112). The controller thread (section 5.4)
+ntoskrnl.exe!PsTerminateSystemThread         all  required  w2k-export; win98-precedent bt829.sys 4.10.2222 (NTOSKRNL.EXE!PsTerminateSystemThread, hint BB); NUSB USBPORT.SYS 5.00.2195.5652 (hint C2) (Appendix A row 113)
+ntoskrnl.exe!ObReferenceObjectByHandle      all  required  w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!ObReferenceObjectByHandle, hint AA) (+11 other 98 SE) (Appendix A row 116). Called on NT only (IoIsWdmVersionAvailable(1, 0x10): Windows 2000 is WDM 1.10, Windows 98 1.00, ME 1.05): the stop waits on the thread object there and on an event on Windows 98, where that wait faulted (runs/run-26.md). A NULL object type: PsThreadType is a data import
+ntoskrnl.exe!ObfDereferenceObject           all  required  w2k-export; win98-precedent hidclass.sys 4.10.2222 (NTOSKRNL.EXE!ObfDereferenceObject, hint AC) (+16 other 98 SE) (Appendix A row 34). The ObDereferenceObject macro; NT only, as above
+ntoskrnl.exe!IoIsWdmVersionAvailable        all  required  w2k-export; win98-precedent ohci1394.sys 4.10.2222 (NTOSKRNL.EXE!IoIsWdmVersionAvailable, hint 51) (Appendix A row 40); NUSB USBPORT.SYS 5.00.2195.5652 (hint 55). Chooses the thread-stop wait: (1, 0x10) is TRUE from Windows 2000 (WDM 1.10) on and FALSE on 98 (1.00) and ME (1.05)
+
+# --- The qemu flavour's live trace channel (xhci_dbg.c), never published ---
+ntoskrnl.exe!DbgPrint                        qemu required  w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!DbgPrint, hint 1) (+1 other 98 SE); ntkern-name. The qemu flavour's live trace only (xhci_dbg.c); the log ring's DebugView sink of task 26-A.8 decides the other flavours
+HAL.dll!WRITE_PORT_UCHAR                     qemu required  w2k-export; ntkern-name; MEASURED NOT LOADING on E460 Win98 SE metal (the miniport's allowlist on branch 1.2.0.0 has the record; design record 08). The qemu flavour is never published, so this row is what keeps the import out of every binary a user can install.
+
 [deny]
 
 # Where the reason is a fact about a target - absent on Windows 98, or

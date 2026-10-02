@@ -1681,28 +1681,19 @@ ULONG XhciCommandEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event);
  * is released before the caller waits. IRQL: <= DISPATCH_LEVEL. */
 VOID XhciControllerBeginQuiesce(PXHCI_EXTENSION ext);
 
-/*
- * Create the controller-state lock. **DriverEntry only, once per driver load**,
- * and never again: the whole point of putting it in the driver image rather than
- * in the miniport extension is that no restart can re-create it under a callback
- * that cannot be cancelled. IRQL: PASSIVE_LEVEL.
- */
-VOID XhciControllerGlobalInit(VOID);
 
-/* The driver-image lock shared by command state, the event-ring DPC,
- * EnableInterrupts and the terminal failure transition. No usbport service may
- * be called while held. IRQL: <= DISPATCH_LEVEL on acquire. */
-VOID XhciControllerLockAcquire(PKIRQL oldIrql);
-VOID XhciControllerLockRelease(KIRQL oldIrql);
 /*
- * Held across the completion service call only (src/xhci_cmd.c says why).
- * IRQL: <= DISPATCH_LEVEL on entry, DISPATCH_LEVEL while held.
+ * The controller lock, shared by command state, the event-ring DPC, the
+ * interrupt enables and the terminal failure transition. Under the HCD it is
+ * per controller and lives in the HCD's controller object, created once at
+ * AddDevice (hcd_svc.h, HcdSvcControllerLock; design record 13 section 5.4),
+ * outside the XHCI_EXTENSION that every start zeroes - so no restart
+ * re-creates it under a callback, which is what the miniport's image-wide
+ * lock was for. Nothing that calls out of the driver may be called while it
+ * is held. IRQL: <= DISPATCH_LEVEL on acquire.
  */
-VOID XhciDeliveryLockAcquire(PKIRQL oldIrql);
-VOID XhciDeliveryLockRelease(KIRQL oldIrql);
-#ifdef XHCI_HOST_TEST
-PKSPIN_LOCK XhciHostDeliveryLockWord(VOID);
-#endif
+VOID XhciControllerLockAcquire(PXHCI_EXTENSION ext, PKIRQL oldIrql);
+VOID XhciControllerLockRelease(PXHCI_EXTENSION ext, KIRQL oldIrql);
 
 /*
  * Update the shared lifecycle word under the stable controller lock. Returns
@@ -1875,7 +1866,7 @@ VOID XhciCommandDrainOwedArm(PXHCI_EXTENSION ext);
 
 /*
  * Put the engine at idle for a new start and publish this start's epoch, under
- * the lock XhciControllerGlobalInit created - so the callbacks of the previous
+ * the controller lock, which no start re-creates - so the callbacks of the previous
  * start are *excluded* rather than merely able to detect that they are stale.
  *
  * **StartController and nothing else.** It runs before the signatures are

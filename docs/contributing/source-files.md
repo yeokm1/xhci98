@@ -3,13 +3,24 @@
 > **Since 2026-10-02 `src\` is the successor HCD** (design record 13 section 5.1,
 > which has the current map). Deleted that day with the miniport: `xhci_dispatch.c`,
 > `xhci_rh.c`, `xhci_slot.c`, `xhci_xfer.c`, `xhci_vhub.c`, `xhci_probe.c` and the
-> host suites `test_xfer`, `test_iso`, `test_vhub` and `test_init`; kept but not
-> built until 26-A.2 adapts them: `xhci_init.c`, `xhci_cmd.c`, `xhci_evt.c`,
-> `xhci_pci.c`, `xhci_dbg.c`; new: `hcd_entry.c`, the task 25.8 scaffold. The
-> tables below are the miniport's map as of `1.2.0.0` and are rewritten in Phase 26.
-> Comments in the kept files that name a deleted file (`xhci_dispatch.c`, `xhci_slot.c`,
-> `test_init.c` and the rest) describe the miniport on branch `1.2.0.0`, not the
-> current build; 26-A.2 rewrites them as it adapts each file.
+> host suites `test_xfer`, `test_iso`, `test_vhub` and `test_init`. **Since task
+> 26-A.2 (2026-10-03)** the kept files are built again - `xhci_init.c`,
+> `xhci_cmd.c`, `xhci_evt.c`, `xhci_pci.c`, `xhci_dbg.c` - with their usbport
+> service calls replaced by `hcd_svc.h`'s, and `xhci_xfer.c` is back holding only
+> the completion-code table, lifted unchanged from `1.2.0.0`. The HCD's own files:
+> `hcd.h` (the device extensions), `hcd_entry.c` (DriverEntry, AddDevice,
+> dispatch), `hcd_pnp.c` and `hcd_power.c` (the controller FDO's PnP and power),
+> `hcd_ctl.c` (start and stop, the interrupt and DPC, the controller thread),
+> `hcd_svc.h`/`hcd_svc.c` (the services that replace usbport's, and the
+> controller lock), `hcd_dma.c` (the one DMA adapter file), `hcd_dev.c` (the
+> device layer the kept files call into) and `hcd_pool.c` (the one pool file;
+> not linked until the first allocation, 26-A.4). The tables below are the
+> miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
+> kept files still speak of usbport as the design argument for each step;
+> `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name
+> to the HCD code that now plays the part, and a comment that names a deleted
+> file (`xhci_dispatch.c`, `xhci_slot.c`, `test_init.c` and the rest) describes
+> the miniport on branch `1.2.0.0`.
 
 What every file in `src/` is for, in one table per kind. The authoritative description of each file is the comment block at its head; this page is the map, and it says which files the host test suite compiles (the "pure core" of [design record 03](design/03-host-unit-tests.md)) and which need the DDK. Line counts are omitted on purpose - they drift, the roles do not.
 

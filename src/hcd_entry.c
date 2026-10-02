@@ -131,6 +131,7 @@ static NTSTATUS NTAPI hcdAddDevice(PDRIVER_OBJECT DriverObject,
     hc->Pdo = Pdo;
     hc->OutstandingIo = 1;
     KeInitializeEvent(&hc->RemoveEvent, NotificationEvent, FALSE);
+    HcdControllerInitObjects(hc);
 
     hc->LowerDevice = IoAttachDeviceToDeviceStack(fdo, Pdo);
     if (hc->LowerDevice == NULL) {

@@ -683,8 +683,18 @@ function Test-ImportSites {
     }
 
     $checked = 0
+    $anonymous = 0
     foreach ($obj in $objects) {
-        $refs = @(Get-ObjectImportRefs (Invoke-Dumpbin -Exe $Dumpbin -Mode "/symbols" -Path $obj.FullName))
+        $dump = @(Invoke-Dumpbin -Exe $Dumpbin -Mode "/symbols" -Path $obj.FullName)
+        # WDK 7.1 compiles amd64 objects for link-time code generation (/GL):
+        # the dumper reports them as ANONYMOUS OBJECT and lists no symbols, so
+        # nothing can be read from them, and saying "0 references" would read
+        # as a pass. They are counted and reported instead.
+        if (@($dump | Where-Object { $_ -match "ANONYMOUS OBJECT" }).Count -gt 0) {
+            $anonymous++
+            continue
+        }
+        $refs = @(Get-ObjectImportRefs $dump)
         foreach ($row in $siteRows) {
             if ($refs -cnotcontains $row.Symbol) {
                 continue
@@ -694,6 +704,15 @@ function Test-ImportSites {
                 Add-Failure "$($row.Module)!$($row.Symbol) is referenced from $($obj.Name), but its allowlist row restricts it to SITES=$($row.Sites -join ',') (design record 13 section 7.5)."
             }
         }
+    }
+    if ($anonymous -eq $objects.Count) {
+        Add-Warning ("SITES rule NOT CHECKED for $ImagePath`: all $anonymous object file(s) are link-time-code-generation objects (ANONYMOUS OBJECT) " +
+            "with no readable symbols. The x86 build's check, over the same sources, is the one that holds the rule.")
+        return
+    }
+    if ($anonymous -gt 0) {
+        Add-Failure "SITES rule: $anonymous of $($objects.Count) object file(s) beside $ImagePath are unreadable (ANONYMOUS OBJECT) and the rest are not - a mixed obj directory, so the rule cannot be read from it."
+        return
     }
     Write-Ok "SITES rule: $($siteRows.Count) restricted pair(s), $checked object reference(s) checked across $($objects.Count) object file(s)"
 }

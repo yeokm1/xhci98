@@ -19,18 +19,21 @@
 # and log code, DDK-free, with its host suites in test\ (design record 03).
 # None of these files may grow an include of a file that needs ntddk.h. Three
 # of them include xhci_usbport.h for its DDK-free type declarations and xhci.h
-# still carries the miniport's extension layout; 26-A.2 carves both down to
-# what the HCD uses.
+# still carries the miniport's extension layout, which the HCD embeds
+# unchanged (hcd.h); the carve down to what the HCD uses waits for 26-A.5,
+# which replaces the transfer structures most of it describes.
 #
-# NOT BUILT, and kept as Phase 26's starting material: the roadmap's "Adapted"
-# files - xhci_init.c, xhci_cmd.c, xhci_evt.c, xhci_pci.c - whose controller
-# sequence, command engine and event drain the FDO of 26-A.2 keeps once their
-# usbport service calls are replaced, and xhci_dbg.c, the qemu flavour's
-# port-0xE9 trace channel. Each joins this list in the task that adapts it.
+# THE ADAPTED FILES (task 26-A.2): xhci_init.c, xhci_cmd.c, xhci_evt.c and
+# xhci_pci.c - the miniport's controller sequence, command engine and event
+# drain, with their usbport service calls replaced by hcd_svc.h's - and
+# xhci_dbg.c, the qemu flavour's port-0xE9 trace channel. xhci_xfer.c holds
+# only the completion-code table those files classify with.
 #
-# Task 25.8's scaffold: the core plus a DriverEntry that registers nothing
-# (hcd_entry.c). With nothing calling the core yet, /OPT:REF drops it from the
-# image; the build still compiles every file and links them.
+# THE HCD'S OWN FILES, hcd_*.c: the controller FDO (entry, PnP, power,
+# start/stop and thread, services, DMA, the device layer). hcd_pool.c, the
+# one pool file (design record 13 section 7.5), joins this list with the
+# first allocation (26-A.4): unlinked, /OPT:REF would drop it, and its
+# required allowlist rows would fail.
 #
 
 TARGETNAME=xhci98
@@ -47,9 +50,19 @@ SOURCES=xhci_mem.c    \
         xhci_topo.c   \
         xhci_desc.c   \
         xhci_log.c    \
+        xhci_xfer.c   \
+        xhci_pci.c    \
+        xhci_init.c   \
+        xhci_cmd.c    \
+        xhci_evt.c    \
+        xhci_dbg.c    \
         hcd_entry.c   \
         hcd_pnp.c     \
         hcd_power.c   \
+        hcd_ctl.c     \
+        hcd_svc.c     \
+        hcd_dma.c     \
+        hcd_dev.c     \
         xhci98.rc
 
 #

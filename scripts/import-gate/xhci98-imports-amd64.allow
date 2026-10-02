@@ -52,6 +52,41 @@ ntoskrnl.exe!PoSetPowerState               all  required  nt52-amd64-export; twi
 ntoskrnl.exe!RtlAssert                     debug  required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only (task 26-A.1)
 ntoskrnl.exe!RtlAssert                     qemu   required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only (task 26-A.1)
 
+
+# --- Task 26-A.2: the controller FDO. Twins of the x86 rows of the same task ---
+# --- where amd64 imports the pair at all: the Interlocked, Kf* spin-lock and  ---
+# --- IRQL, and register-accessor pairs are intrinsics or ntoskrnl inlines on   ---
+# --- amd64, which instead imports KeAcquireSpinLockRaiseToDpc /               ---
+# --- KeReleaseSpinLock for KeAcquireSpinLock/KeReleaseSpinLock.                 ---
+ntoskrnl.exe!IoAllocateIrp                 all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!IoFreeIrp                     all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!IoConnectInterrupt            all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!IoDisconnectInterrupt         all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!IoOpenDeviceRegistryKey       all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeAcquireSpinLockRaiseToDpc   all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeReleaseSpinLock             all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeCancelTimer                 all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeClearEvent                  all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeDelayExecutionThread        all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeInitializeDpc               all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeInitializeTimer             all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeInsertQueueDpc              all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeRemoveQueueDpc              all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!KeSetTimer                    all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!MmMapIoSpace                  all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!MmUnmapIoSpace                all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!PoRequestPowerIrp             all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!PsCreateSystemThread          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!PsTerminateSystemThread       all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!ObReferenceObjectByHandle    all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!ObfDereferenceObject         all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!IoIsWdmVersionAvailable      all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!RtlQueryRegistryValues        all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!ZwClose                       all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!IoGetDmaAdapter               all  required  SITES=hcd_dma.obj nt52-amd64-export; twin of the x86 row (task 26-A.2)
+HAL.dll!KeStallExecutionProcessor          all  required  nt52-amd64-export; twin of the x86 row (task 26-A.2)
+ntoskrnl.exe!DbgPrint                      qemu required  nt52-amd64-export; the qemu flavour's live trace only (xhci_dbg.c), as on x86 (task 26-A.2)
+
 [deny]
 
 ExAllocatePool              Not the HCD's spelling (xhci98-imports.allow; task 25.3). Allocate with ExAllocatePoolWithTag once its row exists.
