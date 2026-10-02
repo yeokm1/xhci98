@@ -666,6 +666,13 @@ Tasks. `runs/run-24.md` is the record once a task runs.
 
 - [x] **24.1 - Low-Speed polling rates behind a hub.** *(read out 2026-09-25; `runs/run-24.md`)*
 
+  The Interval the checkpoint asks to be "read from the snapshot" was read
+  from the note ring over the QEMU monitor (`readring24.ps1`, the
+  `ep.open.ival` records), not from an `XHCISNAP` dump; the note ring is
+  what `XHCISNAP` level 2 writes into its `.TXT`, so a snapshot carries the
+  same record (`runs/run-24.md`, "24.1 - what all ten guests say"; noted at
+  24.7).
+
   Reproduce the reporter's Code 10 first, in the reporter's own
   configuration. The reporter is SweetLow, who runs his own stack on Windows
   98 and not on Windows 2000, so the reproduction is a Low-Speed mouse behind

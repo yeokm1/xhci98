@@ -158,6 +158,49 @@ fault, close fault, and a read-only destination.
 The help is `-help`, `-?` or `/?`; all three print the long text, and a bare
 invocation prints the short usage and exits 2 rather than taking a dump.
 
+### Reading the note ring: the endpoint, slot and virtual-hub records
+
+From level 2 the `.TXT` carries the note ring, one record a line as
+`label=XXXXXXXX`: a fixed label and one 32-bit value in hexadecimal, packed
+as the table says. The records are written in every build flavour
+(`XhciLogNote` / `XhciLogNoteLocked` call sites, `src/xhci_log.h`), so a
+`release` machine's dump carries them too. No other document listed them
+until `1.2.0.0`'s cut; this table covers the records an endpoint, a device
+address and the virtual High-Speed hub (design record 12, the
+`XhciVirtualHSHub` switch) leave, read from their call sites. Every other
+label is described where it is written.
+
+Speeds are this driver's classes (`src/xhci.h`): 0 unknown, 1 Low, 2 Full,
+3 High. A virtual hub is named by its root port, numbered from 1.
+
+| Label | Written when | Value |
+|---|---|---|
+| `ep.open` | usbport opens a device endpoint other than the default pipe (`src/xhci_slot.c`, `xhciSlotOpenNonDefault`) | Slot ID `<< 16` \| DCI `<< 8` \| usbport's transfer type (0 isochronous, 1 control, 2 bulk, 3 interrupt) |
+| `ep.open.rate` | the same open, next record | `Period` `<< 16` \| maximum packet size, as usbport asked |
+| `ep.open.ival` | the same open, next record (roadmap 24.1) | speed `<< 16` \| floored `<< 8` \| Interval. Speed is the one usbport bucketed `Period` with, so a root-port device reads 3 with the switch off; floored is 1 when the 1 ms floor for Full and Low Speed moved the value; Interval is what the Endpoint Context was given, a period of 2^Interval x 125 us (6 is 8 ms, 3 is 1 ms) |
+| `slot.addressed` | a device's Address Device completed | Slot ID `<< 16` \| USB address `<< 8` \| the speed this driver decoded |
+| `slot.route` | the same, next record | tier `<< 24` \| Route String; 0 for a device on a root port |
+| `slot.parenthub` | the same, next record | parent hub's USB address `<< 8` \| its downstream port; 0 for a device on a root port |
+| `vhub.switch` | every start, before the controller is initialised (`src/xhci_dispatch.c`) | the registry read's status `<< 16` \| `XhciVirtualHSHub` as read (low 16 bits; 0 when the read failed) |
+| `vhub.applied` | the same | why refused `<< 8` \| mode applied (0 off, 1 on demand, 2 always). Why refused: 0 nothing refused, 1 the switch held a value other than 0, 1 or 2, 2 `XhciVirtualHSHubVid` failed, 3 `XhciVirtualHSHubPid` failed |
+| `vhub.ids` | the same | vendor id `<< 16` \| product id as applied; 0 when the ids were not read (the switch at 0) |
+| `vhub.create` | at 1, a root-port reset decoded a Full or Low Speed device and stood a hub up (`src/xhci_rh.c`). Not written for the hubs value 2 stands up at start | root port `<< 8` \| decoded speed |
+| `vhub.drop` | a hub retired: its device left, or usbport's root-port disable retired it | root port |
+| `vhub.gone` | the retirement was the port's own disconnect being read; a `vhub.drop` with no `vhub.gone` beside it is a hub retired some other way | root port |
+| `vhub.flip` | at 1, the decision flipped across a reset (another speed class on the same port), and a connect change was forced on the root port | root port |
+| `vhub.open` | usbport opens one of a hub's two pipes (`src/xhci_slot.c`) | root port `<< 16` \| USB address `<< 8` \| endpoint address (0 the default pipe, `0x81` the status-change pipe) |
+| `vhub.address` | the hub's `SET_ADDRESS` was answered | root port `<< 8` \| USB address; a second record for one port is the hub enumerated again |
+| `vhub.prc.late` | a reset completion nothing armed, on a port carrying a hub or whose hub retired after a port-1 reset's deadline: the late end of a reset already given up on | root port |
+| `vhub.redisable` | a reset ended with the port enabled while a disable was still owed, and the disable was written again | root port |
+| `vhub.p1.pednoccs` | a port-1 status answer read the physical port enabled but not connected | root port `<< 24` \| the operation armed on the port `<< 16` \| PORTSC bits 15:0 |
+| `vhub.p1.prc` | a port-1 status answer carried `C_PORT_RESET` | root port `<< 24` \| change bits `<< 16` \| status bits 15:0 |
+| `vhub.lost` | at 1, a controller reinitialisation found a hub whose device left meanwhile, and latched the root port's connect change | root port |
+
+So `ep.open.ival=00020006` is a Full-Speed endpoint at Interval 6, 8 ms -
+what a stock mouse behind a virtual hub reads - and `00030005` the same
+mouse on a root port with the switch off, reported High Speed and polled
+every 4 ms.
+
 ## Three things to know before trusting a dump
 
 It is windowed, so it can tear. usbport refuses `ParameterLength > 0x10000`

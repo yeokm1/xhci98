@@ -116,6 +116,36 @@ Linux's xHCI driver defaults to `160` (40 us). This package ships `500` to be mo
 
 Feel free to tune it. Lower towards `160` for the last few percent of storage speed, or raise it towards `4000` (or delete it) if you get audio stutter or instability under load. `500` may produce audio stuttering while a USB drive is being read at full speed, so if you want to prioritise audio over bandwidth, raise the value. 
 
+### Tuning: the virtual High-Speed hub (from 1.2.0.0)
+
+**Experimental, for private testing only, and off by default.** Leave it off unless you are testing it.
+
+Every device on a root port is reported to Windows as High Speed (see Known limitations). This switch instead puts a virtual USB 2.0 hub, answered by the driver itself, between the root port and the device, so a Full or Low Speed device is reported at its true speed behind a hub with a transaction translator.
+
+`XhciVirtualHSHub` is a `DWORD` in the same key as `XhciImodInterval250ns` above:
+
+| Value | What it does |
+|---|---|
+| `0` or absent | Off, the default and what the install writes. Root ports are reported exactly as in 1.1.1.0. |
+| `1` | On demand. A virtual hub appears above a Full or Low Speed device on a root port and goes away when it is unplugged. A High-Speed device gets no hub. |
+| `2` | Always on. Every USB 2.0 port carries a virtual hub from start-up, plugged or not, and every root-port device sits behind one, High Speed included. |
+| anything else | Refused, and treated as `0`. |
+
+The extra hub shows up in Device Manager. At `1` a slower device brings one with it and takes about two seconds longer to become usable. At `2` there is one per USB 2.0 port from start-up. The hub calls itself "xHCI98 virtual HS Hub".
+
+**The virtual hub is a hub tier.** With the switch at `1` or `2`, a chain of external hubs on a root port can be one hub shorter than USB's five before the devices at its end stop enumerating. At `1` only when the device on the root port is a Full-Speed (USB 1.1) hub, which is what puts that port in virtual-hub mode. Measured at `2` on Windows 2000 in a virtual machine: a mouse at the end of a five-hub chain was never addressed, and the driver refused nothing.
+
+The hub's vendor and product id come from two strings (`REG_SZ`) in the same key, written by the install as pid.codes' shared test id `1209:0001`. That id is reserved for private testing and is not allocated to this project.
+
+| Value | Written by the install | Accepted |
+|---|---|---|
+| `XhciVirtualHSHubVid` | `"1209"` | four hexadecimal digits, optionally prefixed `0x`; `0000` refused |
+| `XhciVirtualHSHubPid` | `"0001"` | the same, `0000` accepted |
+
+Change them only if another driver on the machine claims `USB\VID_1209&PID_0001` and binds to the virtual hub. With the switch on, a missing or invalid id turns the feature off for that start. Set all three in Registry Editor and restart, as the driver reads them only when it starts. Reinstalling the package puts the install's values back, which turns the switch off.
+
+With the switch on, a mouse on a root port polls at the interval it asks for, and a Full-Speed USB audio device on a root port plays on Windows XP x64, where it is silent with the switch off (unreliably on 32-bit XP, and not read on Vista or 7). All measured in virtual machines only. The [release notes](docs/using/release-notes.md) have the details and [issue 6](docs/issues/06-full-speed-root-port-bugcheck.md) the full record.
+
 ## What is tested, and what is not
 
 Windows 98 SE is validated on real hardware. 32-bit Windows 7 has run on real hardware once (a ThinkPad E460, 2026-09-19). Windows 2000 SP4, Windows ME, Windows XP (x86/x64), Windows Vista (x86/x64) and 64-bit Windows 7 have only ever run in QEMU virtual machines.
@@ -164,12 +194,19 @@ The devices checked so far, all on the E460 under Windows 98 SE. Each is charact
 | Limitation | Detail |
 |---|---|
 | Disabling, uninstalling or upgrading an NUSB driver crashes the machine | A defect in NUSB's `usbport.sys` which cannot stop a running controller. Rename the existing `XHCI98.SYS`, reboot, then remove it. |
-| Every device on a root port is reported as High Speed | Reporting the true speed of a slower device crashes usbport as there is no companion controller. A mouse or keyboard on a root port therefore polls at 1, 2 or 4 ms only. If this is an issue for you, put your lower-speed device behind a hub to allow the true speed to be reported - on Vista and 7, a USB 2.0 hub only (next row). |
-| A USB 1.1 hub on a root port crashes Windows Vista and 7 | 32-bit and x64 alike: `STOP 0x7E` in `USBPORT.SYS` as soon as a mouse, keyboard or other slower device behind the hub is used. Plug such devices into a root port directly, or behind a USB 2.0 hub. Windows 98, 2000, XP and XP x64 are unaffected. See [issue 6](docs/issues/06-full-speed-root-port-bugcheck.md), section 6.2. |
-| A Full-Speed USB audio device on a root port plays nothing on Windows XP and later | It installs and Windows shows it playing, but no sound reaches it. Behind a hub it plays (on Vista and 7 use a USB 2.0 hub). Windows 2000 plays on a root port. See [issue 6](docs/issues/06-full-speed-root-port-bugcheck.md), section 7. |
 | Disabling the USB controller can hang Windows 7 | On the one real Windows 7 machine tried, the first Disable in Device Manager never finished and the next restart hung until powered off; enabling it again afterwards worked. Uninstalling or upgrading stops the controller too. Cause not known yet. Do it with no unsaved work open, and expect to power off if the restart hangs. |
 | Fast, repeated plug and unplug can freeze Windows 98 | About twice a second sustained. Ordinary use is fine. |
 | USB audio can stutter on Windows 98 while a USB drive is read at full speed | Measured on the P14s: at the install's `500` (and at `1000`) a Full-Speed audio device on a root port stuttered from ATTO's 2048 KB reads onwards; at `4000` only on the last 8192 KB write. It follows the doubled read speed. If audio matters more, raise the value towards `4000` or delete it (see "Tuning" above). |
+
+### Known issues the experimental virtual hub switch addresses
+
+All three come from reporting every device on a root port to Windows as High Speed. The switch is off by default, so the workaround in the middle column is what applies to a normal install. The last column is what the experimental virtual hub switch (see "Tuning" above) changes with it at `1` or `2`, measured in virtual machines only.
+
+| Issue | Detail and workaround (switch off, the default) | With the switch at `1` or `2` |
+|---|---|---|
+| Every device on a root port is reported as High Speed | Reporting the true speed of a slower device crashes usbport as there is no companion controller. A mouse or keyboard on a root port therefore polls at 1, 2 or 4 ms only. If this is an issue for you, put your lower-speed device behind a hub to allow the true speed to be reported - on Vista and 7, a USB 2.0 hub only (the USB 1.1 hub row below). | The device is reported at its true speed behind the virtual hub, and a mouse polls at its own interval: a stock mouse at 8 ms, and a polling-rate tool's 250, 500 and 1000 Hz as asked. Read on Windows 98 SE, ME, 2000 and 32-bit XP; not read on Vista or 7. |
+| A Full-Speed USB audio device on a root port plays nothing on Windows XP and later | It installs and Windows shows it playing, but no sound reaches it. Behind a hub it plays (on Vista and 7 use a USB 2.0 hub). Windows 2000 plays on a root port. See [issue 6](docs/issues/06-full-speed-root-port-bugcheck.md), section 7. | A partial fix. It plays on Windows XP x64. On 32-bit XP it played in the first reading and later went silent with the player blocked. On Vista and 7 the device binds, but whether it plays has not been read. |
+| A USB 1.1 hub on a root port crashes Windows Vista and 7 | 32-bit and x64 alike: `STOP 0x7E` in `USBPORT.SYS` as soon as a mouse, keyboard or other slower device behind the hub is used. Plug such devices into a root port directly, or behind a USB 2.0 hub. Windows 98, 2000, XP and XP x64 are unaffected. See [issue 6](docs/issues/06-full-speed-root-port-bugcheck.md), section 6.2. | The 1.1 hub sits behind the virtual hub, which has a transaction translator, and no crash was seen on Vista or 7 at either value. |
 
 ## Toolchain and building
 

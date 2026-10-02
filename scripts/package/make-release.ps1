@@ -3143,9 +3143,14 @@ this driver involved, and the two you are likeliest to meet:
     clean on a real machine, on a root port and behind a hub, on clips of
     seconds. See the release notes' "Known limitations", the USB Audio entry.
 
-TWO THAT ARE THIS DRIVER'S, from how it reports speeds. Every device on a
-root port is reported to Windows as High Speed (the release notes say why);
-two things follow, both measured in virtual machines:
+THREE THAT ARE THIS DRIVER'S, from how it reports speeds, AND THE
+EXPERIMENTAL VIRTUAL HUB SWITCH ADDRESSES ALL THREE. Every device on a root
+port is reported to Windows as High Speed (the release notes say why). All
+three were measured in virtual machines, and each describes the driver as
+installed, with the virtual hub switch of section 9 off - its default, so
+the workaround in each is what applies to a normal install. What the switch
+changes at 1 or 2 closes each one, and was measured in virtual machines
+only:
 
   * WINDOWS VISTA AND 7, 32-BIT AND X64: A USB 1.1 HUB ON A ROOT PORT CRASHES
     THE MACHINE (STOP 0x7E in USBPORT.SYS) once a mouse, keyboard or other
@@ -3153,12 +3158,26 @@ two things follow, both measured in virtual machines:
     root port directly, or behind a USB 2.0 hub (measured on one real
     32-bit Windows 7 machine: no crash). The same hub works on Windows 98,
     2000, XP and XP x64.
+    WITH THE SWITCH AT 1 OR 2: the 1.1 hub sits behind the virtual hub,
+    which has a transaction translator, and no crash was seen on Vista or 7.
+
+  * A MOUSE OR KEYBOARD ON A ROOT PORT POLLS AT 1, 2 OR 4 MS ONLY, whatever
+    it asks for, and a polling-rate tool shows no effect inside one of those
+    steps. Behind a hub a device is reported at its true speed and polls at
+    its own interval (on Vista and 7 use a USB 2.0 hub, see above).
+    WITH THE SWITCH AT 1 OR 2: a stock mouse on a root port polls at its own
+    8 ms, and a polling-rate tool's 250, 500 and 1000 Hz arrive as asked.
+    Read on Windows 98 SE, ME, 2000 and 32-bit XP; not read on Vista or 7.
 
   * WINDOWS XP AND LATER: A FULL-SPEED USB AUDIO DEVICE ON A ROOT PORT PLAYS
     NOTHING, though Windows shows it playing. Behind a hub it played on
     32-bit XP; on Vista and 7 use a USB 2.0 hub (measured on one real
     32-bit Windows 7 machine: silent on a root port, plays behind the hub).
     Windows 2000 plays on a root port.
+    WITH THE SWITCH AT 1 OR 2, A PARTIAL FIX: it plays on Windows XP x64. On
+    32-bit XP it played in the first reading and later went silent with the
+    player blocked. On Vista and 7 the device binds, but whether it plays
+    has not been read.
 
 ONE WHOSE CAUSE IS NOT KNOWN YET, found on the one real Windows 7 machine
 tried (32-bit, a ThinkPad E460):
@@ -3220,14 +3239,16 @@ debug throughout, in its build scripts and its documentation alike.)
  9. REGISTRY SETTINGS
 ==============================================================================
 
-Every registry value this driver reads. There are three, and the driver
-writes none of them: the installer creates all three.
+Every registry value this driver reads. There are six, and the driver
+writes none of them: the installer creates all six.
 
   YOU SHOULD NOT NEED THIS SECTION FOR A LOG. If the maintainer asks for one,
   XHCISNAP -verbosity 2 sets the value that matters, on every controller, and
   finds the key itself. The first two values below are here so you can check
   what is in the key if you are asked to. The third, XhciImodInterval250ns,
-  is the one setting here you may want to change yourself.
+  is the one setting here you may want to change yourself. The last three
+  are the virtual High-Speed hub, which is EXPERIMENTAL, FOR PRIVATE TESTING
+  ONLY, and off unless you turn it on.
 
   XhciLogVerbosity  -  the whole switch
   .....................................
@@ -3307,16 +3328,89 @@ writes none of them: the installer creates all three.
   5's "TO UPGRADE WITHOUT CRASHING" steps, which write it, even after an
   upgrade that has already crashed.
 
-  THOSE THREE ARE THE WHOLE LIST. This driver reads no other setting of its
+  XhciVirtualHSHub  -  the virtual High-Speed hub switch
+  ......................................................
+
+  EXPERIMENTAL, FOR PRIVATE TESTING ONLY, AND OFF BY DEFAULT. Leave it off
+  unless you are testing it.
+
+  Every device plugged directly into a root port is reported to Windows as
+  High Speed, because the USB stack this driver plugs into crashes the
+  machine when a Full or Low Speed device is reported there at its true
+  speed. That is what costs a mouse on a root port its polling rate, a
+  Full-Speed audio device its sound from Windows XP on, and Windows Vista
+  and 7 a crash behind a USB 1.1 hub (section 7). This switch puts a
+  virtual USB 2.0 hub, answered by the driver itself, between the root port
+  and the device, which is then reported at its true speed.
+
+  DWORD:
+
+      0   OFF, the default and what the install writes. Root ports are
+          reported exactly as with no switch at all.
+      1   ON DEMAND. When a Full or Low Speed device is plugged into a root
+          port, a virtual hub appears above it, and it goes away when the
+          device is unplugged. A High-Speed device gets no hub.
+      2   ALWAYS ON. Every USB 2.0 port carries a virtual hub from start-up,
+          plugged or not, and every device on a root port sits behind one,
+          High Speed included.
+
+  Any other value is REFUSED, not rounded: the driver applies 0.
+
+  THE EXTRA HUB IS VISIBLE. At 1 a slower device brings a hub with it, a
+  second entry in Device Manager that comes and goes with the device, and
+  takes about two seconds longer to become usable. At 2 every USB 2.0 port
+  carries one from start-up. On Windows 98 the first appearance of the hub
+  on each port may run the Add New Hardware wizard once. The hub calls
+  itself "xHCI98 virtual HS Hub".
+
+  THE VIRTUAL HUB IS A HUB TIER. USB allows five hubs in a chain below a
+  root port. With the switch at 1 or 2, a chain of external hubs on a root
+  port can be one hub shorter than that before the devices at its end stop
+  enumerating, because Windows counts the virtual hub as one of the five.
+  At 1 only when the device on the root port is a Full-Speed (USB 1.1) hub,
+  which is what puts that port in virtual-hub mode. Measured at 2 on
+  Windows 2000, in a virtual machine: a mouse at the end of a chain of five
+  hubs was never addressed, and the driver refused nothing.
+
+  XhciVirtualHSHubVid and XhciVirtualHSHubPid  -  the virtual hub's id
+  ....................................................................
+
+  STRINGS (REG_SZ), not DWORDs: the hub's USB vendor and product id, as
+  four hexadecimal digits each, either case, optionally prefixed 0x. The
+  install writes "1209" and "0001": pid.codes' SHARED TEST ID 1209:0001,
+  which pid.codes reserves for private testing and which is NOT an id
+  allocated to this project. A vendor id of 0000 is refused.
+
+  Change them only if another device's driver on the machine claims
+  USB\VID_1209&PID_0001 and binds itself to the virtual hub. A new id is a
+  new device to Windows, so it installs the hub again on each port. With
+  the switch at 1 or 2, a missing or invalid id turns the virtual hub off
+  for that start - the driver has no id of its own to fall back on. With
+  the switch at 0 neither value is read.
+
+  Set the three in Registry Editor - the switch as a DWORD, the ids as
+  String Values - and restart: the driver reads them only when it starts.
+  Reinstalling the package writes the install's values back, which turns
+  the switch off. After the restart, XHCISNAP's report shows under
+  "registry values" what the driver read, what it applied, and why it
+  refused anything.
+
+  Everything measured with it on was measured in virtual machines; the
+  virtual hub has never run on real hardware. The project's
+  docs/using/release-notes.md says what it was measured to change.
+
+  THOSE SIX ARE THE WHOLE LIST. This driver reads no other setting of its
   own, and no registry value makes it write a file.
 
-  ALL THREE ARE DWORDS. The two log values default to 0, the moderation
-  interval to 500, and all three are created by the installer, so they are
+  FOUR ARE DWORDS AND TWO ARE STRINGS. The two log values and the virtual
+  hub switch default to 0, the moderation interval to 500, the two ids to
+  1209 and 0001, and all six are created by the installer, so they are
   already there and only their data changes. A value that is missing
   entirely is not an error either - the driver starts normally, with the log
-  off and the interval at 4000, and the report says whether it read nothing
-  or read a value. They live in the device's own driver key, which is spelled
-  one way on the NT targets and another on the 9x ones:
+  off, the interval at 4000 and the virtual hub off, and the report says
+  whether it read nothing or read a value. They live in the device's own
+  driver key, which is spelled one way on the NT targets and another on the
+  9x ones:
 
     Windows 2000, XP, Vista and 7
       HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\

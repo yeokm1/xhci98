@@ -699,6 +699,19 @@ values the driver has always accepted one speed up. The refusal removed in
 `XhciIntervalFromPeriod` was the only thing that made Low Speed different,
 and nothing else in the driver treated it differently at all.
 
+**Where the Interval was read from, against the checkpoint's wording**
+(added at the `1.2.0.0` cut, roadmap 24.7). The phase checkpoint asks for
+the Low-Speed device's Interval "read from the snapshot". Every Interval in
+this section was read instead out of the driver's note ring over the QEMU
+monitor, with `scripts\local\phase24\readring24.ps1` (per-host, git-ignored)
+decoding the `ep.open.ival` records - not from an `XHCISNAP` dump. The
+record is the same one: the note ring is what `XHCISNAP` writes into its
+`.TXT` from level 2 (`xhcisnap/README.md`, "Three files", and its table of
+these records), so a level-2 snapshot of the same boot carries the same
+`ep.open.ival` lines. That rests on the tool's design: this record names no
+24.1 reading taken through `XHCISNAP`'s `.TXT`, which this section used to
+set the level (`-verbosity 2`).
+
 ---
 
 ## 24.2 - Polling rates on a root port
