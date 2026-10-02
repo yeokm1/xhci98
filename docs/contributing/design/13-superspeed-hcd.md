@@ -340,7 +340,7 @@ changes, rule by rule:
 | One lock, `xhciControllerLock`, in the image, created in `DriverEntry` (rule 3), because usbport zeroes the miniport extension before every start | **Per controller, in the controller extension, created at `AddDevice`.** The HCD owns its extension and nothing zeroes it underneath a holder, so the hazard rule 3 answered does not exist; one lock per controller removes the cross-controller contention the miniport accepted |
 | Rule 1: innermost; no usbport service and no bounded wait under it; decide under the lock, act after dropping it | Kept, with "usbport service" read as "any call out of the driver" - `IoCallDriver`, `IoCompleteRequest`, `IoInvalidateDeviceRelations`, a completion routine. An IRP is completed after the release, never under the lock |
 | Rule 2: every non-ISR read-modify-write of the flags under it | Kept |
-| Rule 4 and section 4: the ISR never takes the lock, and nothing can exclude it, because `KeSynchronizeExecution` needs the `PKINTERRUPT` usbport keeps and `KeAcquireInterruptSpinLock` is XP-era | **The exclusion is now available.** The HCD connects its own interrupt (`IoConnectInterrupt`) and so holds the `PKINTERRUPT`; `KeSynchronizeExecution` has stock Windows 98 SE precedent (section 7). The ISR stays as stateless as section 4 made it - that design is still the cheaper one - and `KeSynchronizeExecution` is used only where a DISPATCH-level path must change what the ISR reads (`IMAN`, the interrupt-enable state), which section 4 had to argue around |
+| Rule 4 and section 4: the ISR never takes the lock, and nothing can exclude it, because `KeSynchronizeExecution` needs the `PKINTERRUPT` usbport keeps and `KeAcquireInterruptSpinLock` is XP-era | **The exclusion is now available.** The HCD connects its own interrupt (`IoConnectInterrupt`) and so holds the `PKINTERRUPT`; `KeSynchronizeExecution` has stock Windows 98 SE precedent (section 7). The ISR stays as stateless as section 4 made it - that design is still the cheaper one - and `KeSynchronizeExecution` is available for a DISPATCH-level path that must change what the ISR reads (`IMAN`, the interrupt-enable state), which section 4 had to argue around. **26-A.2 uses none**: the kept ISR and the kept enable and mask paths are the miniport's, which section 4 made safe without the exclusion, and nothing in the HCD has needed it yet |
 | Section 7: the root-hub callback family, the NT 6.x PASSIVE root-hub queries with no usbport lock | Gone. Root-port state is the controller's port objects under the controller lock; the root hub's IOCTLs (section 8) read them through it |
 | Section 7: transfer metadata, the deferred-completion rule (issue 7) | Kept in substance: a transfer is completed - its IRP completed - after the drain has released the lock, from a list built under it |
 
@@ -894,7 +894,9 @@ replaced by `RtlCompareMemory`. A miss in any column is never read as
 
 These 69 rows are what 26-A.1 adds to
 `scripts\import-gate\xhci98-imports.allow` as 26-A.2's FDO comes to import
-them; they are not committed now. Each names the strongest stock 98 SE
+them; 26-A.1 and 26-A.2 added the rows the controller FDO imports (2026-10-03),
+with this table's evidence text verbatim, and the rest wait for the tasks
+that call them. Each names the strongest stock 98 SE
 precedent with its hint and assumes the tier A and B evidence-list rows of
 Appendix A are listed. In the file each row is flavour `all`, and its
 `REQUIREMENT` is Phase 26's to decide per row (25.8's empty scaffold needs
@@ -1036,8 +1038,11 @@ DMA"). That rule left the tree with the miniport; it remains the rule of the
    Windows 98 out-of-sequence remove), and the counter reads 0 after it: a
    host vector, and a 26-A checkpoint clause.
 
-How the gate would enforce "named sites" (proposed for 26-A.1; nothing of it
-is built):
+How the gate enforces "named sites" (proposed here; **the `SITES=` field was
+built in 26-A.1**, with self-tests, and per object it reads every undefined
+external, not only `__imp_` thunks; over WDK 7.1's link-time-code-generation
+amd64 objects, which list no symbols, it reads each object's `.c` source
+instead. The `DmaOperations->` token check below is not built yet):
 
 - **A per-row `SITES` field** (or a `[sites]` section) in the allowlist,
   naming the object files allowed to reference a pair, e.g.

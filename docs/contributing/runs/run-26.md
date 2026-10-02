@@ -135,3 +135,35 @@ attached throughout (`info block`).
 Notes for these: `a2f-98-notes.md`, `a2f-2k-notes.md`, `a2g-98-notes.md`,
 `a2g-2k-notes.md`, `a2h-2k-notes.md`; traces `vm\t26-win98-a2fb-`, `a2gb-`,
 `vm\t26-win2k-a2f-`, `a2g-`, `a2h-debugcon.log`.
+
+### The Codex review of the batch, round 1, and the fixes it took
+
+Codex reviewed `01b0365..75bb630` (`.claude\codex-p26a-r1*.txt`, not
+tracked): seven MAJOR, three MINOR and two NOTE findings, every one from
+reading, none reproduced. Fixed: the stop runs the kept `XhciStopController`
+whenever a register window is mapped, not only with `INITIALIZED` set; the
+interrupt DPC is counted when it is queued, so a dequeued DPC not yet entered
+is waited for; the timer service's count and idle event change together under
+its lock; the remove closes admission and waits out every IRP inside before
+it stops the controller, and pended power IRPs hold the count until they
+complete; no power dispatch waits for its own IRP - a D0 resumes from its
+completion routine or a work item, and a system IRP completes only from the
+callback of the device IRP its completion requested; a failed resume declares
+the controller failed and asks for the in-place recovery; a new common buffer
+clears the pin an earlier one may have set; the import gate's `SITES=` reads
+every undefined external, not only `__imp_` thunks, and over WDK 7.1's LTCG
+amd64 objects reads the sources rather than warning; a start whose NT thread
+object cannot be referenced fails; the interrupt enable and mask are called
+at the DISPATCH_LEVEL of their contract; and the records that overstated
+(26-V.0's tick, design record 13 sections 5.4, 7.4 and 7.5) were corrected.
+
+**Both primaries on the fixed build** (`f22413ea...73eb`, `qemu` flavour, fresh
+overlays): Windows 2000 - no prompt, working, no root hub, two disable/enable
+cycles, and a Start-menu shutdown to "It is now safe to turn off your
+computer"; Windows 98 SE - working after its restart, two cycles, and a
+Start-menu shutdown to QEMU's "paused (shutdown)", no blue screen seen. On
+both, the shutdown's trace shows the policy-owner chain this round wrote:
+`IRP_MN_SET_POWER` system `PowerSystemShutdown` (`0x00020006`), then the
+device `D3` it requested (`0x00020104`), then the controller suspended
+("quiesce: halted"). Notes `r1-98-notes.md`, `r1-2k-notes.md`; traces
+`vm\t26-win98-r1b-`, `vm\t26-win2k-r1-debugcon.log`.

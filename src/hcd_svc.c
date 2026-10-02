@@ -146,12 +146,17 @@ static VOID NTAPI hcdTimerDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
 
     slot->Callback(&hc->Hc, slot->Context);
 
+    /* The count and the idle event change together, under the slot lock:
+     * decided outside it, a zero seen here could be published after another
+     * processor had armed again and cleared the event (Codex review of
+     * 26-A.2, round 1, finding 3). */
     KeAcquireSpinLock(&hc->TimerLock, &oldIrql);
     slot->Busy = 0;
-    KeReleaseSpinLock(&hc->TimerLock, oldIrql);
-    if (InterlockedDecrement(&hc->TimersInFlight) == 0) {
+    hc->TimersInFlight--;
+    if (hc->TimersInFlight == 0) {
         (VOID)KeSetEvent(&hc->TimersIdle, IO_NO_INCREMENT, FALSE);
     }
+    KeReleaseSpinLock(&hc->TimerLock, oldIrql);
 }
 
 /* IRQL: PASSIVE_LEVEL (start). */
@@ -200,7 +205,8 @@ ULONG HcdSvcArmTimer(PXHCI_EXTENSION ext, ULONG milliseconds, PVOID context,
         }
     }
     if (slot != NULL) {
-        if (InterlockedIncrement(&hc->TimersInFlight) == 1) {
+        hc->TimersInFlight++;
+        if (hc->TimersInFlight == 1) {
             KeClearEvent(&hc->TimersIdle);
         }
     } else {
@@ -229,24 +235,21 @@ VOID HcdTimersDrain(PHCD_CONTROLLER hc)
 {
     KIRQL oldIrql;
     ULONG i;
-    ULONG cancelled;
 
     KeAcquireSpinLock(&hc->TimerLock, &oldIrql);
     hc->TimersClosed = 1;
     KeReleaseSpinLock(&hc->TimerLock, oldIrql);
 
     for (i = 0; i < HCD_TIMER_SLOTS; i++) {
-        cancelled = 0;
         KeAcquireSpinLock(&hc->TimerLock, &oldIrql);
         if (hc->Timers[i].Busy && KeCancelTimer(&hc->Timers[i].Timer)) {
             hc->Timers[i].Busy = 0;
-            cancelled = 1;
+            hc->TimersInFlight--;
+            if (hc->TimersInFlight == 0) {
+                (VOID)KeSetEvent(&hc->TimersIdle, IO_NO_INCREMENT, FALSE);
+            }
         }
         KeReleaseSpinLock(&hc->TimerLock, oldIrql);
-        if (cancelled &&
-            InterlockedDecrement(&hc->TimersInFlight) == 0) {
-            (VOID)KeSetEvent(&hc->TimersIdle, IO_NO_INCREMENT, FALSE);
-        }
     }
     (VOID)KeWaitForSingleObject(&hc->TimersIdle, Executive, KernelMode, FALSE,
                                 NULL);

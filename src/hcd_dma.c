@@ -58,6 +58,10 @@ NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc)
     hc->CommonVa = va;
     hc->CommonPa = pa;
     hc->CommonBytes = XHCI_HC_RESOURCES_SIZE;
+    /* The pin names the block a bus master may still hold. A block kept by
+     * an earlier stop stays kept; this new one starts unpinned (Codex review
+     * of 26-A.2, round 1, finding 8). */
+    hc->CommonBufferPinned = 0;
     return STATUS_SUCCESS;
 }
 

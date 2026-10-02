@@ -68,18 +68,24 @@ static NTSTATUS hcdRemove(PHCD_CONTROLLER hc, PIRP irp)
 {
     NTSTATUS status;
 
-    if (hc->ControllerStarted) {
-        HcdStopController(hc);
-    }
+    /*
+     * Admission closes first, then every IRP already inside - a power IRP
+     * suspending or resuming the controller among them, which holds its count
+     * until it completes - is waited out, and only then is the controller
+     * stopped and its resources released (Codex review of 26-A.2, round 1,
+     * finding 4). The bias AddDevice set is dropped here.
+     */
     hc->Common.PnpState = HCD_PNP_REMOVED;
-
-    irp->IoStatus.Status = STATUS_SUCCESS;
-    status = HcdPassDown(hc, irp);
-
-    /* Drop the bias AddDevice set, then wait for every IRP still inside. */
     HcdIoLeave(hc);
     (VOID)KeWaitForSingleObject(&hc->RemoveEvent, Executive, KernelMode,
                                 FALSE, NULL);
+
+    if (hc->ControllerStarted) {
+        HcdStopController(hc);
+    }
+
+    irp->IoStatus.Status = STATUS_SUCCESS;
+    status = HcdPassDown(hc, irp);
 
     IoDetachDevice(hc->LowerDevice);
     IoDeleteDevice(hc->Common.Self);

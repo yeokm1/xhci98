@@ -644,12 +644,19 @@ function Get-ObjectImportRefs {
     param([string[]]$DumpLines)
 
     # `dumpbin /symbols` on an object lists each import it calls as an UNDEF
-    # External of its thunk: `__imp__ExFreePool@4` (x86 stdcall),
-    # `__imp_@IofCallDriver@8` (x86 fastcall), `__imp_ExFreePool` (amd64).
+    # External: the thunk `__imp__ExFreePool@4` (x86 stdcall),
+    # `__imp_@IofCallDriver@8` (x86 fastcall) or `__imp_ExFreePool` (amd64)
+    # when the declaration carries dllimport, and the plain symbol
+    # `_ExFreePool@4` when it does not and the import library's stub resolves
+    # it - so every undefined external is taken, with the decoration stripped
+    # (Codex review of 26-A.2, round 1, finding 9).
     $names = @()
     foreach ($line in $DumpLines) {
-        if ($line -match "\bUNDEF\b.*\bExternal\s+\|\s+__imp_(\S+)") {
+        if ($line -match "\bUNDEF\b.*\bExternal\s+\|\s+(\S+)") {
             $name = $Matches[1]
+            if ($name -match "^__imp_(.+)$") {
+                $name = $Matches[1]
+            }
             if ($name -match "^[_@](.+)$") {
                 $name = $Matches[1]
             }
@@ -660,6 +667,42 @@ function Get-ObjectImportRefs {
         }
     }
     return $names
+}
+
+# WDK 7.1 compiles the amd64 objects for link-time code generation, and the
+# dumper sees nothing in them, so the rule falls back to the sources: each
+# object's .c file (beside the sources file, two levels above obj<fl>\<arch>)
+# is searched for each restricted symbol as an identifier. A name reached only
+# through a macro of another spelling is not seen, which the per-object check
+# on x86 does see; an amd64-only call written by name is (Codex review of
+# 26-A.2, round 1, finding 10).
+function Test-ImportSitesFromSource {
+    param(
+        [string]$ImagePath,
+        [object[]]$SiteRows,
+        [object[]]$Objects
+    )
+
+    $srcDir = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $ImagePath))
+    $checked = 0
+    foreach ($obj in $Objects) {
+        $source = Join-Path $srcDir ([System.IO.Path]::GetFileNameWithoutExtension($obj.Name) + ".c")
+        if (-not (Test-Path -LiteralPath $source)) {
+            Add-Failure "SITES rule: $($obj.Name) beside $ImagePath is an unreadable LTCG object and its source $source was not found, so the rule cannot be checked for it."
+            continue
+        }
+        $text = [System.IO.File]::ReadAllText($source)
+        foreach ($row in $SiteRows) {
+            if ($text -cnotmatch ("\b" + [regex]::Escape($row.Symbol) + "\b")) {
+                continue
+            }
+            $checked++
+            if ($row.Sites -notcontains $obj.Name.ToLower()) {
+                Add-Failure "$($row.Module)!$($row.Symbol) is named in $source, but its allowlist row restricts it to SITES=$($row.Sites -join ',') (design record 13 section 7.5; a source scan, the objects being LTCG)."
+            }
+        }
+    }
+    Write-Ok "SITES rule (a source scan over $($Objects.Count) LTCG object(s)): $($SiteRows.Count) restricted pair(s), $checked reference(s) checked"
 }
 
 function Test-ImportSites {
@@ -706,8 +749,7 @@ function Test-ImportSites {
         }
     }
     if ($anonymous -eq $objects.Count) {
-        Add-Warning ("SITES rule NOT CHECKED for $ImagePath`: all $anonymous object file(s) are link-time-code-generation objects (ANONYMOUS OBJECT) " +
-            "with no readable symbols. The x86 build's check, over the same sources, is the one that holds the rule.")
+        Test-ImportSitesFromSource -ImagePath $ImagePath -SiteRows $siteRows -Objects $objects
         return
     }
     if ($anonymous -gt 0) {

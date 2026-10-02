@@ -200,7 +200,13 @@ static BOOLEAN NTAPI hcdIsr(PKINTERRUPT Interrupt, PVOID Context)
     if (!XhciIsr(&hc->Hc)) {
         return FALSE;
     }
-    (VOID)KeInsertQueueDpc(&hc->IsrDpc, NULL, NULL);
+    /* Counted when queued, not when the DPC starts: a DPC another processor
+     * has dequeued but not yet entered is then still in the count the
+     * teardown waits on (Codex review of 26-A.2, round 1, finding 2). */
+    (VOID)InterlockedIncrement(&hc->DpcsInFlight);
+    if (!KeInsertQueueDpc(&hc->IsrDpc, NULL, NULL)) {
+        (VOID)InterlockedDecrement(&hc->DpcsInFlight);
+    }
     return TRUE;
 }
 
@@ -217,7 +223,6 @@ static VOID NTAPI hcdIsrDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
     UNREFERENCED_PARAMETER(Arg2);
 
     hc = (PHCD_CONTROLLER)Context;
-    (VOID)InterlockedIncrement(&hc->DpcsInFlight);
     if (!hc->DpcClosed) {
         /* XhciEventDpc's own return is the Version 300 report route, which
          * the HCD never takes (RootHubReportThroughDpc is 0). */
@@ -295,6 +300,29 @@ static VOID hcdRecover(PHCD_CONTROLLER hc)
     }
 }
 
+/*
+ * Declare the controller failed and ask the thread for the in-place
+ * recovery: the HCD's answer to a failed resume, which under usbport ended in
+ * the stop/start a failed ResumeController asked usbport for (Codex review of
+ * 26-A.2, round 1, finding 7). IRQL: <= DISPATCH_LEVEL, controller lock
+ * released.
+ */
+VOID HcdControllerFail(PHCD_CONTROLLER hc)
+{
+    PXHCI_EXTENSION ext;
+    KIRQL oldIrql;
+
+    ext = &hc->Hc;
+    XhciControllerLockAcquire(ext, &oldIrql);
+    if (!ext->ControllerFailed) {
+        ext->ControllerFailed = 1;
+        XhciLogNoteLocked(ext, "ctrl.failed.resume", 1);
+    }
+    ext->RecoveryRequested = 1;
+    XhciControllerLockRelease(ext, oldIrql);
+    HcdThreadWake(hc);
+}
+
 /* IRQL: PASSIVE_LEVEL. */
 static VOID hcdPoll(PHCD_CONTROLLER hc)
 {
@@ -303,19 +331,20 @@ static VOID hcdPoll(PHCD_CONTROLLER hc)
     ULONG escalate;
 
     ext = &hc->Hc;
-    if ((ext->Flags & XHCI_EXT_FLAG_STARTED) == 0) {
-        return;
-    }
-    ext->CheckCallbacks++;
+    if ((ext->Flags & XHCI_EXT_FLAG_STARTED) != 0) {
+        ext->CheckCallbacks++;
 
-    /* XhciControllerHealthPoll's contract is DISPATCH_LEVEL: usbport called
-     * CheckController under its MiniportSpinLock. */
-    KeRaiseIrql(DISPATCH_LEVEL, &raised);
-    escalate = XhciControllerHealthPoll(ext);
-    KeLowerIrql(raised);
-    if (escalate) {
-        XhciRequestControllerReset(ext);
+        /* XhciControllerHealthPoll's contract is DISPATCH_LEVEL: usbport
+         * called CheckController under its MiniportSpinLock. */
+        KeRaiseIrql(DISPATCH_LEVEL, &raised);
+        escalate = XhciControllerHealthPoll(ext);
+        KeLowerIrql(raised);
+        if (escalate) {
+            XhciRequestControllerReset(ext);
+        }
     }
+    /* Outside the STARTED gate: a failed resume (HcdControllerFail) is a
+     * recovery request on a controller whose flags no longer say it runs. */
     hcdRecover(hc);
 }
 
@@ -378,17 +407,26 @@ static NTSTATUS hcdThreadStart(PHCD_CONTROLLER hc)
     if (!NT_SUCCESS(status)) {
         return status;
     }
+    status = STATUS_SUCCESS;
     if (IoIsWdmVersionAvailable(1, 0x10)) {
         /* A NULL object type: PsThreadType is a data import, and the handle
          * came from the call above. */
         status = ObReferenceObjectByHandle(handle, THREAD_ALL_ACCESS, NULL,
                                            KernelMode, &hc->ThreadObject,
                                            NULL);
-        if (!NT_SUCCESS(status)) {
-            hc->ThreadObject = NULL;
-        }
     }
     (VOID)ZwClose(handle);
+    if (!NT_SUCCESS(status)) {
+        /* On NT the event alone cannot cover a remove's unload, so a start
+         * that could not reference its thread does not proceed (Codex
+         * review of 26-A.2, round 1, note 11). Nothing is unloading now. */
+        hc->ThreadObject = NULL;
+        hc->ThreadStop = 1;
+        HcdThreadWake(hc);
+        (VOID)KeWaitForSingleObject(&hc->ThreadExited, Executive,
+                                    KernelMode, FALSE, NULL);
+        return status;
+    }
     hc->ThreadRunning = 1;
     return STATUS_SUCCESS;
 }
@@ -433,7 +471,9 @@ static VOID hcdRelease(PHCD_CONTROLLER hc)
      * one already running on another processor. */
     XHCI_DBG_TEXT("hcd: release: DPC");
     hc->DpcClosed = 1;
-    (VOID)KeRemoveQueueDpc(&hc->IsrDpc);
+    if (KeRemoveQueueDpc(&hc->IsrDpc)) {
+        (VOID)InterlockedDecrement(&hc->DpcsInFlight);
+    }
     while (hc->DpcsInFlight != 0) {
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
@@ -457,6 +497,7 @@ static VOID hcdRelease(PHCD_CONTROLLER hc)
 NTSTATUS HcdStartController(PHCD_CONTROLLER hc, PIRP irp)
 {
     PXHCI_EXTENSION ext;
+    KIRQL raised;
     USBPORT_RESOURCES res;
     PUCHAR p;
     ULONG i;
@@ -557,7 +598,9 @@ NTSTATUS HcdStartController(PHCD_CONTROLLER hc, PIRP irp)
     }
     (VOID)XhciControllerUpdateFlags(ext, 0, XHCI_EXT_FLAG_STARTED);
     ext->InterruptEnables++;
+    KeRaiseIrql(DISPATCH_LEVEL, &raised);
     XhciEnableInterrupts(ext);
+    KeLowerIrql(raised);
     XhciLogNote(ext, "imod.interval", ext->ImodInterval);
     XhciLogNote(ext, "imod.readback", ext->ImodReadback);
     XhciLogNoteAddress(ext, "start.ok", (ULONG)ext->ResourceBase);
@@ -579,12 +622,23 @@ NTSTATUS HcdStartController(PHCD_CONTROLLER hc, PIRP irp)
 VOID HcdStopController(PHCD_CONTROLLER hc)
 {
     PXHCI_EXTENSION ext;
+    KIRQL raised;
 
     XHCI_DBG_TEXT("hcd: stop controller");
     ext = &hc->Hc;
     hcdThreadStop(hc);
-    if ((ext->Flags & XHCI_EXT_FLAG_INITIALIZED) != 0) {
+    /*
+     * Whenever a register window is mapped, not only when INITIALIZED is
+     * set: the quiesce and a failed in-place recovery clear INITIALIZED with
+     * the controller possibly still running, and XhciStopController carries
+     * the admission checks of its own steps (Codex review of 26-A.2, round
+     * 1, finding 1). XhciDisableInterrupts' contract is DISPATCH_LEVEL - the
+     * level usbport called it at.
+     */
+    if (hc->BarVa != NULL && ext->ResourceBase != 0) {
+        KeRaiseIrql(DISPATCH_LEVEL, &raised);
         XhciDisableInterrupts(ext);
+        KeLowerIrql(raised);
         if (!XhciStopController(ext)) {
             XhciFailClosedDma(ext);
         }

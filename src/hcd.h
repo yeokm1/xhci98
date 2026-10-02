@@ -95,6 +95,11 @@ typedef struct _HCD_CONTROLLER {
     volatile ULONG DpcClosed;
     ULONG ControllerStarted;
     ULONG ResumeFailures;
+    ULONG PowerRequestFailures;
+    WORK_QUEUE_ITEM PowerWork;
+    PIRP PowerWorkIrp;
+    ULONG PowerWorkKind;
+    PIRP PendingSystemIrp;
 
     /* The DMA adapter and the common buffer (hcd_dma.c). */
     PDMA_ADAPTER Dma;
@@ -110,7 +115,7 @@ typedef struct _HCD_CONTROLLER {
     ULONG ConfigLastInformation;
     KSPIN_LOCK TimerLock;
     HCD_TIMER Timers[HCD_TIMER_SLOTS];
-    volatile LONG TimersInFlight;
+    LONG TimersInFlight;            /* under TimerLock */
     ULONG TimersClosed;
     ULONG TimerArmsRefused;
     KEVENT TimersIdle;
@@ -174,6 +179,7 @@ NTSTATUS HcdStartController(PHCD_CONTROLLER hc, PIRP irp);
 VOID HcdStopController(PHCD_CONTROLLER hc);
 VOID HcdControllerInitObjects(PHCD_CONTROLLER hc);
 VOID HcdThreadWake(PHCD_CONTROLLER hc);
+VOID HcdControllerFail(PHCD_CONTROLLER hc);
 
 /* hcd_dma.c */
 NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc);
