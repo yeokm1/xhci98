@@ -231,3 +231,14 @@ disable/enable cycles, a shutdown, as in rounds 1 and 2. The Windows 2000
 agent wrote its notes from its round-1 notes because every observation
 matched, its screenshots being this leg's own. Notes `r5-98-notes.md`,
 `r5-2k-notes.md`.
+
+### Round 6
+
+Round 6 found no MAJOR: it confirmed the round-5 fixes, checked that every
+power-gate acquisition has a PASSIVE_LEVEL route and that the gate forms no
+deadlock cycle, and confirmed both recorded residuals. Its one MINOR - the
+registry query without `RTL_QUERY_REGISTRY_NOEXPAND`, so a value mistakenly
+stored as `REG_EXPAND_SZ` would be expanded before the query routine refused
+it - is fixed. Whether Windows 98's `RtlQueryRegistryValues` honours that
+flag has not been read; every value the HCD reads falls back to its default
+when the query fails, so nothing yet depends on it.

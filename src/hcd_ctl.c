@@ -105,7 +105,9 @@ static NTSTATUS hcdReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value)
     }
     found = 0;
     table[0].QueryRoutine = hcdTakeDword;
-    table[0].Flags = RTL_QUERY_REGISTRY_REQUIRED;
+    /* NOEXPAND: a value mistakenly stored as REG_EXPAND_SZ is not expanded
+     * before hcdTakeDword refuses its type (Codex review of 26-A.2, round 6). */
+    table[0].Flags = RTL_QUERY_REGISTRY_REQUIRED | RTL_QUERY_REGISTRY_NOEXPAND;
     table[0].Name = (PWSTR)name;
     table[0].EntryContext = &found;
 
