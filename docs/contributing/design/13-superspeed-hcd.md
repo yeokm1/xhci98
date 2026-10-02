@@ -99,7 +99,8 @@ is the index; this is the same list in the proposal's order:
   registry switch inside one binary, because the miniport's import of
   `USBPORT_RegisterUSBPortDriver` is a load-time gate and a combined binary
   could not load on a stock Windows 98 SE. The successor starts on the two
-  primary targets in QEMU (Phase 26) and reaches the other eight in Phase 28.
+  primary targets in QEMU (Phase 26) and reaches the seven other guests in
+  Phase 28.
 - **USB 2.0 parity first.** Phases 26 to 28 replace usbport, the hub driver
   and the composite parent with no SuperSpeed port powered, proven against
   round 12's device matrix; SuperSpeed on root ports is Phase 29, hubs Phase
@@ -119,24 +120,51 @@ is the index; this is the same list in the proposal's order:
   the reading; whether it is a checkpoint clause is the owner's call when
   Phase 26 opens.
 - **Mass storage on Windows 98 SE stays NUSB's.** The owner chose this over
-  an own storage driver, on this reading of NUSB 3.6's package: a drive letter
-  on 9x comes from the IOS layer, and `usbntmap.inf` binds `usbstor.sys`'s
-  disk objects to `*IOS` through the NTMAP port driver, `NTMAPHLP.PDR` with
-  `NTMAP.SYS` and `USBNTMAP.SYS`, Microsoft files of the 98 SE hotfix line
-  (4.10.0.2223 to 2227, hotfixes 242975 and 267304) that this project does
-  not redistribute. An own Bulk-Only driver would still need NTMAP above it;
-  an own IOS port driver is a VxD project with no use on any other target.
-  So `usbstor.sys` is the Bulk-Only driver on every target, the UAS driver of
-  Phase 31 takes the NTMAP route on Windows 98 SE too, and on a stock
-  Windows 98 SE no mass storage works, UAS included - a statement for the
-  release notes, not a limitation to fix. Whether the 98 SE CD carries the
-  NTMAP files is task 31-0's to read.
+  an own storage driver, on this reading of NUSB 3.6's INFs
+  (`legal-provenance.md` section 4, the NUSB 3.6 INF row; static, a text
+  read): a drive letter on 9x comes from the IOS layer, and `usbntmap.inf`
+  binds `usbstor.sys`'s disk objects (`USBSTOR\GenDisk` and its siblings) to
+  `DevLoader=*IOS` with `PortDriver=USBMPHLP.PDR`, the USB mapping port
+  driver, with `NTMAP.SYS` and `USBNTMAP.SYS` in the same copy set. NUSB's
+  own install INF stamps `NTMAP.SYS` as `4.10.0.2227` and annotates it with
+  hotfixes 242975 and 267304, a Windows 98 SE line, and its file list
+  annotates `USBMPHLP.PDR` and `USBNTMAP.SYS` as `WinMe` - the package
+  author's notes, not a reading of the files themselves. They are
+  Microsoft's and this project does not redistribute them. An own Bulk-Only
+  driver would still need that mapping above it; an own IOS port driver is
+  a VxD project with no use on any other target. So `usbstor.sys` is the
+  Bulk-Only driver on every target, the UAS driver of Phase 31 takes the
+  same mapping route on Windows 98 SE, and on a stock Windows 98 SE no mass
+  storage works, UAS included - a statement for the release notes, not a
+  limitation to fix. Whether the 98 SE CD carries any of the mapping files
+  is task 31-0's to read from the disc.
 - **Pool and the HCD's own DMA buffers are allowed**, by import-allowlist
   rows with Windows 98 export evidence (task 25.3). The miniport's "allocate
   no pool" rule stands for `src/`.
-- **The Advanced tab is kept**: the HCD answers the `USBUSER` request set
-  `usbui.dll` sends, and `XHCISNAP` reaches the HCD through the same door
-  (task 25.4).
+- **The controller's Advanced tab is kept, the root hub's Power tab is
+  not** (the second half decided on the 2026-10-02 Codex review): the HCD
+  answers the `USBUSER` request set `usbui.dll` sends to the controller
+  devnode, its INFs write the two registrations the miniport's write today
+  (`EnumPropPages` to `sysclass.dll` on Windows 98, where `usbui.dll` draws
+  the dialogs; `EnumPropPages32` to `usbui.dll` on the NT paths), and
+  `XHCISNAP` reaches the HCD through the same door (task 25.4).
+- **The miniport's virtual-hub values are not supported** (owner,
+  2026-10-02): `XhciVirtualHSHub`, `XhciVirtualHSHubVid` and
+  `XhciVirtualHSHubPid` exist to make usbport tell the truth about a
+  root-port device's speed, and the HCD has no usbport to lie to; it reads
+  none of them, its INFs write none, a value left behind has no effect, and
+  the release notes say so. There is no USB Root
+  Hub devnode under the HCD - a PDO with id `USB\ROOT_HUB` would be claimed
+  by the OS's own `usbhub.sys` on every NT target - so the page `usbui.dll`
+  draws on that devnode's registration (`build-and-test.md`, the `usbui.dll`
+  paragraph of "The files the OS supplies") has nothing to attach to, and
+  devices appear directly under the controller.
+- **SuperSpeed hubs need a Windows 2000 observation vehicle, for now** (the
+  same review): Windows 2000 is a VM-only target and no QEMU device models a
+  SuperSpeed hub, so Phase 30's "observed on both" has no vehicle today. The
+  owner did not record an exception; the question is revisited when Phase
+  30 opens, and until a vehicle exists or that changes, Phase 30 cannot
+  close and Phases 31 and 32 wait on it.
 - **USB Audio 2.0 is a separate repository**, a class driver of generic
   design so that it also serves machines on EHCI and vendor stacks; it needs
   nothing from this stack.

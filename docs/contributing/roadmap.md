@@ -117,7 +117,7 @@ composite parent with code of this project's own so that it can drive
 SuperSpeed devices, SuperSpeed hubs and UAS storage on the same targets; it
 ships as a second package chosen at install time, never as a switch inside
 the miniport, and its one cut is `2.0.0.0` after Phase 31. Its phases, 25 to
-32, and the eight decisions they rest on are in
+32, and the decisions they rest on are in
 [`roadmap-hcd.md`](roadmap-hcd.md); its design record is
 `design/13-superspeed-hcd.md`, grown from the future-plans page that moved
 there the same day.
@@ -222,7 +222,7 @@ task: it is a hand-run procedure the project owner takes before the upload,
 and the end of this file says so. Phases 25 onward are the successor's and
 live in [`roadmap-hcd.md`](roadmap-hcd.md): 25 the design record and the
 contract capture, 26 the USB 2.0 bus driver on root ports, 27 USB 2.0 hubs
-inside the bus, 28 the other eight targets, the amd64 build and the bench, 29
+inside the bus, 28 the seven other guests, the amd64 build and the bench, 29
 SuperSpeed on root ports, 30 SuperSpeed hubs, 31 streams and UAS, and 32 the
 `2.0.0.0` cut.
 
