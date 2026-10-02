@@ -3145,12 +3145,10 @@ this driver involved, and the two you are likeliest to meet:
 
 THREE THAT ARE THIS DRIVER'S, from how it reports speeds, AND THE
 EXPERIMENTAL VIRTUAL HUB SWITCH ADDRESSES ALL THREE. Every device on a root
-port is reported to Windows as High Speed (the release notes say why). All
-three were measured in virtual machines, and each describes the driver as
-installed, with the virtual hub switch of section 9 off - its default, so
-the workaround in each is what applies to a normal install. What the switch
-changes at 1 or 2 closes each one, and was measured in virtual machines
-only:
+port is reported to Windows as High Speed (the release notes say why). The
+switch of section 9, at 1 or 2, puts a virtual hub between the root port
+and the device. It is off by default, so on a normal install these apply,
+with the workarounds below. All three were measured in virtual machines:
 
   * WINDOWS VISTA AND 7, 32-BIT AND X64: A USB 1.1 HUB ON A ROOT PORT CRASHES
     THE MACHINE (STOP 0x7E in USBPORT.SYS) once a mouse, keyboard or other
@@ -3158,26 +3156,17 @@ only:
     root port directly, or behind a USB 2.0 hub (measured on one real
     32-bit Windows 7 machine: no crash). The same hub works on Windows 98,
     2000, XP and XP x64.
-    WITH THE SWITCH AT 1 OR 2: the 1.1 hub sits behind the virtual hub,
-    which has a transaction translator, and no crash was seen on Vista or 7.
 
   * A MOUSE OR KEYBOARD ON A ROOT PORT POLLS AT 1, 2 OR 4 MS ONLY, whatever
     it asks for, and a polling-rate tool shows no effect inside one of those
     steps. Behind a hub a device is reported at its true speed and polls at
     its own interval (on Vista and 7 use a USB 2.0 hub, see above).
-    WITH THE SWITCH AT 1 OR 2: a stock mouse on a root port polls at its own
-    8 ms, and a polling-rate tool's 250, 500 and 1000 Hz arrive as asked.
-    Read on Windows 98 SE, ME, 2000 and 32-bit XP; not read on Vista or 7.
 
   * WINDOWS XP AND LATER: A FULL-SPEED USB AUDIO DEVICE ON A ROOT PORT PLAYS
     NOTHING, though Windows shows it playing. Behind a hub it played on
     32-bit XP; on Vista and 7 use a USB 2.0 hub (measured on one real
     32-bit Windows 7 machine: silent on a root port, plays behind the hub).
     Windows 2000 plays on a root port.
-    WITH THE SWITCH AT 1 OR 2, A PARTIAL FIX: it plays on Windows XP x64. On
-    32-bit XP it played in the first reading and later went silent with the
-    player blocked. On Vista and 7 the device binds, but whether it plays
-    has not been read.
 
 ONE WHOSE CAUSE IS NOT KNOWN YET, found on the one real Windows 7 machine
 tried (32-bit, a ThinkPad E460):
