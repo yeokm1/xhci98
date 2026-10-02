@@ -113,7 +113,7 @@ HCD is `xhci98.sys`. Design record 13 section 12 is the index of what the
 phase leaves to later tasks. **Closed 2026-10-03:** six Codex review
 rounds over `3c1d7f2..86cc59a` (the last clean), then merged into the
 `2.0.0.0` branch, on the owner's instruction of 2026-10-02 to merge once the
-loop was clean and continue into Phase 26 - taken as the owner's acceptance
+loop was clean - taken as the owner's acceptance
 of the checkpoint below.
 
 Why a phase: the miniport's Phase 3 spike and every `-0` batch since exist
@@ -154,10 +154,10 @@ mass storage, Ethernet and composite audio - through the OS's own class
 drivers, with no `usbport.sys`, `usbhub.sys` or `usbhub20.sys` beneath or
 above it.
 
-Status: open, 2026-10-03, on branch `phase-26` (the owner's rule of
-2026-10-02: one branch per phase, merged into `2.0.0.0` when its checkpoint
-closes). The owner pre-authorized closing this checkpoint when its written
-clauses pass.
+Status: not opened; waits on the owner's go (2026-10-03). It will run on
+branch `phase-26` (the owner's rule of 2026-10-02: one branch per phase,
+merged into `2.0.0.0` when its checkpoint closes), and the owner has
+pre-authorized closing its checkpoint when its written clauses pass.
 
 Why a phase: it is the "be usbport" step the architecture record always
 named as the large one, and it is where the HCD either matches the miniport

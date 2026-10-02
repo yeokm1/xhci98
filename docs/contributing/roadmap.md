@@ -109,8 +109,8 @@ Windows 7 are a VM-supported tier in both architectures, and 32-bit Windows 7
 has run once on real hardware. It cut `1.1.0.0`, the first release with a
 64-bit package, which the owner uploaded on 2026-09-20.
 
-**The miniport is frozen at `1.2.0.0`; Phase 25 closed on 2026-10-03 and
-Phase 26 is open** (owner,
+**The miniport is frozen at `1.2.0.0`; Phase 25 closed on 2026-10-03;
+Phase 26 waits on the owner's go** (owner,
 2026-10-02, the day Phase 24 closed). `1.2.0.0` is the last release of
 `xhci98.sys`: no further miniport cut, and a defect reported against it is
 answered by the successor. That successor is a monolithic USB host controller
