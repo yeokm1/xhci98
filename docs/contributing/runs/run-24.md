@@ -1,10 +1,12 @@
 # Phase 24 Record - GitHub issue 4's remaining requests: polling rates and true speeds
 
 The detail behind `docs/contributing/roadmap-phases-17-on.md`, "Phase 24 -
-GitHub Issue 4's Remaining Requests: Polling Rates and True Speeds". The
-roadmap entry carries the goal, the status, the task list and the checkpoint;
-this file carries what each task did and what each reading said. Where the two
-disagree about a clause, the roadmap wins.
+Release `1.2.0.0`: Polling Rates and True Speeds" (titled "GitHub Issue 4's
+Remaining Requests: Polling Rates and True Speeds" until the phase closed on
+2026-10-02). The roadmap entry carries the goal, the status, the task table
+and the checkpoint; this file carries what each task did and what each reading
+said, and, since the phase closed, the entry as the roadmap carried it while
+open. Where the two disagree about a clause, the roadmap wins.
 
 **Written while the phase is open**, and kept as written rather than rewritten
 in the past tense. A sentence saying something "is owed" describes the day it
@@ -16,6 +18,714 @@ they are not files a clone has.
 
 Opened 2026-09-24 by task 24.1, the first task of this phase to take a
 reading.
+
+---
+
+## The phase narrative, as the roadmap carried it
+
+Moved here on 2026-10-02, when the phase closed and its roadmap entry was
+condensed to the shape of Phase 23's and retitled "Release `1.2.0.0`:
+Polling Rates and True Speeds" (owner). It is kept as written, including the
+closing edits of that day (the status paragraph and 24.7's tick); each task
+entry carries the wording of the day it was written. The roadmap's task table
+says how each task closed.
+
+Goal: what GitHub issue 4 still asks for after `1.1.1.0`, taken in the order
+that costs least to build and to read. Two of its five items are open, and
+one of them has two halves: a Low-Speed device behind a hub refuses the
+polling rates the reporter's stack offers it (item 2, the reporter's Code 10
+at 250 Hz and above); a Full or Low Speed device on a root port polls in the
+1, 2 and 4 ms bands (item 2's other half, issue 6 section 5); and every
+root-port device is reported High Speed (item 1, issue 6 itself). Items 3
+(`usbui.dll`, `1.0.2.0`), 4 (idle suspend, `1.1.0.0`'s miniport flag) and
+5 (the property page, `1.1.1.0`) are answered and stay closed.
+
+Status: closed on 2026-10-02 on the `1.2.0.0` cut, its ten install legs read
+from the asset, and round 12's device matrix, which the owner accepted that
+day as the post-release matrix: its build differs from the cut under `src\`
+only in the version stamp (`runs/run-24.md`, 24.7). It was added on
+2026-09-24 at the owner's request. **24.1's
+Low-Speed clause is read** (`runs/run-24.md`), the same day it started.
+SweetLow's usbport rebuild has no Low-Speed floor where SP4, NUSB and XP SP3
+have one, so it sends `Period` 4, 2 and 1 for a Low-Speed mouse behind a hub
+at 250, 500 and 1000 Hz, and the driver refused them; his own
+`README.ENG.TXT` says the same thing in words. The refusal is gone, the host
+vectors are in, and `ep.open.ival` puts the programmed Interval in the ring.
+QEMU presents no Low-Speed peripheral, so the device is a **real one passed
+through** with `usb-host` (a 1.5 Mb/s mouse bound to WinUSB), behind a
+`usb-hub`, on Windows 98 SE under SweetLow's stack, driven with his own
+`Setup.exe`: all three rates now open, at Interval 5, 4 and 3 - 4, 2 and
+1 ms - none floored, 24 of 24 endpoint opens accepted, no refusal of any
+kind, and no Code 10. **The no-regression reading is taken on all nine other
+guests** (2026-09-24/25): 230 endpoint opens across the ten, 230 accepted,
+not one refusal and not one interval floored, on both usbport lineages and
+both architectures. Vista and Windows 7, in both architectures, are read on a
+**root port** rather than behind the hub, because behind the hub is the
+topology issue 6 section 6.2 bugchecks them in - confirmed here against the
+`1.1.1.0` binary as well, so it is that known limitation and not this task.
+**24.1 is read out.** It is the second Phase 24: the first, split out of Phase 23 on
+2026-09-22 with these same three subjects as 24.1 to 24.3, was removed the
+same day before any task ran, and `runs/run-23.md` names its ids as the
+record of that day. The ids below keep those three meanings, so nothing that
+cites them changes sense; 24.4 to 24.7 are new. **24.2 is decided**
+(2026-09-25: owned by 24.3). **24.3 became a build the same day**: the owner
+took the virtual hub inside this phase, in its on-demand shape and in its
+permanent one as a second value of the same switch, on every target with
+the switch on and off by default, and the phase now ends on one
+cut carrying 24.1 and 24.3 ("24.3 is a build" below, and 24.3's entry).
+On 2026-10-02 the owner removed every task that does not block the cut -
+24.3.5 (the E460) and 24.6 (the reporter's USB 1.1 hub pointer) - and
+ticked 24.4 and 24.5, whose readings are in; the ids are not reused.
+
+"GitHub issue 4" is not `docs/issues/04`; Phase 23's entry has the
+collision. The two items carried open past Phase 23 that are not the issue's -
+the 500 stutter's cause and the Windows 98 audio replug wedge - are not this
+phase's either.
+
+Why a phase, and why this order: the owner's note on the issue (2026-09-19)
+was that the speed work may be spread over several releases to reduce risk,
+and the reporter's advice (2026-09-14) was Low-Speed devices behind a hub
+first, then root ports, "as I expected different complexity". The tasks are
+in order of how cheaply each can be built and read: one bound in one
+function with a virtual-machine reproduction, then a decision that may need
+no code, then the largest change the driver has asked for.
+
+**24.3 is a build, not a decision, since 2026-09-25.** Until then this
+paragraph said that if 24.3 were taken, what it built would be a phase of
+its own and the phase would end on the cut of 24.1 and 24.2 alone. The
+owner took it that day, inside this phase: 24.3 builds the virtual hub in
+both shapes, on demand (switch value 1) and on every USB 2.0 port (value
+2), and the phase ends on **one cut carrying both 24.1 and 24.3**, chosen
+over a separate earlier cut of 24.1. That is the owner's call against their
+own note of 2026-09-19, and it has a price the checkpoint pays: 24.1's
+small, already-read change waits for the large one, and the cut's matrix
+has to show all three states, the switch at 0, 1 and 2. The switch is off by default, so
+with the value absent the release behaves as `1.1.1.0` plus 24.1 and
+nothing else.
+
+Tasks. `runs/run-24.md` is the record once a task runs.
+
+- [x] **24.1 - Low-Speed polling rates behind a hub.** *(read out 2026-09-25; `runs/run-24.md`)*
+
+  The Interval the checkpoint asks to be "read from the snapshot" was read
+  from the note ring over the QEMU monitor (`readring24.ps1`, the
+  `ep.open.ival` records), not from an `XHCISNAP` dump; the note ring is
+  what `XHCISNAP` level 2 writes into its `.TXT`, so a snapshot carries the
+  same record (`runs/run-24.md`, "24.1 - what all ten guests say"; noted at
+  24.7).
+
+  Reproduce the reporter's Code 10 first, in the reporter's own
+  configuration. The reporter is SweetLow, who runs his own stack on Windows
+  98 and not on Windows 2000, so the reproduction is a Low-Speed mouse behind
+  a hub, his hidusbf setting 250, 500 and 1000 Hz, under his stack on Windows
+  98 SE. That guest is where the task is developed.
+
+  Once the change holds there, the same hidusbf reading is repeated on every
+  other guest the project holds: Windows 98 SE under NUSB 3.3, Windows ME,
+  Windows 2000, XP x86 and x64, and Vista and 7 in both architectures (the
+  x64 guests taking hidusbf's signed build or test signing). Each takes the
+  mouse behind the hub at the same three rates. The point is to show the
+  change affects none of them and to record what each system's usbport
+  passes down.
+
+  The candidate is `XhciIntervalFromPeriod` in `src/xhci_ctx.c`, which
+  refuses a Low-Speed `Period` under 8 on the strength of the SP4 and NUSB
+  floors alone. xHCI Table 6-12 allows Interval 3 to 10 (1 ms to 128 ms) for
+  a Low-Speed interrupt endpoint, so the bound is this driver's, not the
+  hardware's.
+
+  If confirmed: accept `Period` 1, 2 and 4 at Low Speed, host vectors for
+  the new rows, `XHCISNAP` showing the programmed Interval, the three rates
+  read back on Windows 98 SE under SweetLow's stack, and the same hidusbf
+  reading on every other guest held. A `Period` that no shipping usbport can
+  send stays refused.
+
+  Where it is read: host tests; then, on the SweetLow guest, a `usb-hub`
+  with a **real Low-Speed mouse passed through by `usb-host`** - QEMU models
+  no Low-Speed peripheral, so the `usb-mouse` this line named until
+  2026-09-24 is Full Speed and cannot exercise the arm; then hidusbf on every
+  other guest held for the no-regression read, where the Full-Speed
+  `usb-mouse` is the right device because that read is a regression read and
+  not a Low-Speed one.
+
+- [x] **24.2 - Polling rates on a root port.** *(decided 2026-09-25: owned by 24.3, no narrower change; `runs/run-24.md`)*
+
+  A decision, with its reason, whether they close as owned by 24.3. The
+  bands are usbport's bucketing on the speed it was told (issue 6 section
+  5), `bInterval` is gone before the miniport sees it, and the invariants
+  forbid reconstructing it. If no narrower change exists, this task records
+  why and points the reporter at 24.3; if one does, it is measured with
+  hidusbf on a root port as section 5's reading was.
+
+  Where it is read: a reading of the tree and the ABI document; a boot only
+  if a change is found.
+
+- [x] **24.3 - True speeds on root ports: the virtual hub, on demand or on every port.** *(taken 2026-09-25; a decision until then; done 2026-10-02 with 24.3.4)*
+
+  Build design record 12,
+  `docs/contributing/design/12-virtual-hub-on-root-ports.md`, in the two
+  shapes the owner chose on 2026-09-25, as the values of the page's
+  `REG_DWORD` switch `XhciVirtualHSHub` (section 3.1):
+
+  - **0 - disabled**, the default. With the value absent or 0 the driver
+    behaves exactly as the 24.1 build does.
+  - **1 - on demand.** When a root-port reset decodes a Full or Low Speed
+    device, the driver presents a virtual High-Speed, single-TT, one-port
+    hub in that device's place, and the device becomes the hub's port 1;
+    when the device is unplugged the root port reports the disconnect as
+    today and usbhub removes both. High-Speed devices take today's path.
+  - **2 - always on.** Every USB 2.0 port the driver manages carries a
+    virtual hub from start to stop, plugged or not, and every root-port
+    device, High Speed included, is its port 1; plug and unplug are changes
+    on that port, and the root port reports the hub (the page's section
+    3.8). Until the owner's word of 2026-09-25 this was a fallback reserved
+    as value 2, to be built only if 24.3.4's churn reading failed on a
+    target; it is built now beside 1.
+
+  Any other value is refused and applied as 0. With the switch at 1 or 2 it
+  covers **every target** (owner, 2026-09-25): Windows 98 SE under NUSB and
+  under SweetLow's stack, ME, 2000, XP in both architectures, and Vista and
+  7 in both.
+
+  Why it is the lever: a truthful root-hub report is measured fatal on both
+  Windows 98 lineages and on Windows 2000 (issue 6 sections 2 and 8, and the
+  experiment below), and a real USB 2.0 hub above a slower device fixed the
+  Vista/7 bugcheck and the silent audio on the E460 (issue 6 section 8). The
+  virtual hub is that hub, answered in software.
+
+  The sub-tasks, in the page's batch order (section 8):
+
+  - [x] **24.3.1 - The design record.** *(done 2026-09-25: moved, decisions
+    recorded in its section 9, and every target's hub INF read to bind by
+    class, none naming `VID_1209` - its section 3.1 and
+    `legal-provenance.md` section 4; amended the same day for the switch's
+    value 2, its section 3.8, over four review rounds.)* The page moves to
+    `docs/contributing/design/12-virtual-hub-on-root-ports.md`, the next
+    free number, and the future-plans index and every link follow it. It
+    stops being an idea and records its decisions: the shape (on demand,
+    answered; amended the same day to both, as the switch's values 1 and
+    2, the record's sections 3.1, 3.8, 4 and 9), the targets (all, answered), the default (off in this
+    phase's cut; whether a later release turns it on is still the owner's),
+    the switch's name (`XhciVirtualHSHub`, answered), the hub's vendor and
+    product id (answered: `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid`,
+    hexadecimal strings (`REG_SZ`, four digits, optional `0x`) that both
+    INFs write as pid.codes' test id, `"1209"` and `"0001"`; no id in the
+    binary; and the feature off for that start if the switch is on and
+    either value is missing or invalid), and its strings (answered: a
+    product string only, "xHCI98 virtual HS Hub", no manufacturer string
+    and never a serial number). Because
+    pid.codes reserves that id "for use in private testing", every document
+    that tells a user how to turn the feature on says it is **experimental,
+    for private testing only**, and that the id is pid.codes' shared test
+    id. The record also confirms that each NT target's hub INF binds by
+    class, as the 9x ones do (`USB\HubClass`, `USB\CLASS_09`).
+  - [x] **24.3.2 - Host vectors** (`test/`), the page's `-0`. *(done
+    2026-09-25: scoped by the owner as a DDK-free pure core,
+    `src/xhci_vhub.c`/`.h`, then called by nothing and not yet in `src/sources`, with
+    its own suite `test/test_vhub.c` - 1036 checks, every host suite green;
+    the vectors below that need the driver around the core moved to 24.3.3,
+    which names them. Writing them found value 1's root report leaking port
+    1's resets and disables onto the root port; the owner widened the
+    exception to the enable, reset and suspend groups, record 12 section
+    3.2, after a second opinion agreed.)* The request table
+    of section 3.3 fed the setup packets the shipping hub drivers send
+    (design record 02), the string requests included - the language table,
+    index 1 byte for byte, both truncated to a short `wLength`, and any
+    other index stalled; the decision of section 3.2 (mode by decoded speed,
+    the reset timeout, the decision re-taken at every root-port reset and the
+    forced connect change when it flips); the suspend merge of section 3.5
+    in every order it lists, the empty port included, with each view's
+    status and change bits read back; the virtual hub's own two-reset
+    enumeration with `SET_ADDRESS` through the first pipe and no claim left
+    armed; port 1's power cycle with PORTSC.PP untouched and the device
+    enumerated again, and at both values with the PED confirmation delayed
+    and the next reset held until it is collected; at 1, the root port's
+    suspend pair on a port in virtual-hub mode read from the upstream view
+    at every step of section 3.5's orders, and its enable and reset groups
+    through port-1 resets and disables; eight virtual hubs plus a real hub and its child
+    still given a graph node; the topology fold of
+    section 3.6 over the existing topology tests, including the device's
+    root-port record found across re-open, repeated reset and address
+    reuse, and a real High-Speed hub behind the virtual one with Full and
+    Low Speed devices behind it in single and multi TT; the `GET_STATUS`
+    byte counts and contents; value 2's root-port report, the root-port
+    reset with transfers in flight (slot and buffers held until the PED
+    confirmation), root-port disable and power-off/on with the hub
+    enumerated again, plug and unplug on port 1, hub-path removal, and
+    resume and recovery keeping the hubs (section 3.8); the switch's read, its
+    refusal of any value but 0, 1 and 2, and its snapshot header fields; the two id strings - parsed from both a UTF-16 and a
+    single-byte buffer, with and without `0x`, in either case; refused when
+    missing or unreadable (the service's one failure code, too-long values
+    included), with no terminator in the buffer, with fewer or more than
+    four digits, with any other character, as a DWORD's bytes, or as a
+    vendor id of `0000`; each refusal applying the switch as 0 and recording
+    why; the switch off never consulting them; and a valid pair reaching
+    the device descriptor and nothing else; and the off-state vectors that hold the page's rule 2.
+  - [x] **24.3.3 - The driver**, the page's `-A`. *(done 2026-09-25: the
+    root-hub half in `src/xhci_rh.c` and the device half in
+    `src/xhci_slot.c`, both carrying out the core's verdicts;
+    `src/xhci_vhub.c` in `src/sources`; both INFs and the INF gate; snapshot
+    schema 5 and `XHCISNAP`; six vectors in `test/test_init.c`, caught by
+    eleven driver mutations; host tests, all three x86 flavours and the amd64
+    build green through every gate. Record 12 section 10 is what the wiring
+    decided, and `runs/run-24.md` the record. The download's readme
+    template now names snapshot schema 5, taken in the audit of 2026-09-25
+    rather than left to 24.7's cut, which would have refused it.)* The
+    virtual device records, in
+    a fixed per-root-port array of their own outside the topology graph, the
+    decision point, the synthetic completion path through the deferred
+    completion list, the status-change pipe, the suspend merge, value 2's
+    hub on every USB 2.0 port, both INFs'
+    `AddReg` writing the switch's 0 as a DWORD and the ids as the strings
+    `"1209"` and `"0001"` on every install path, and `XHCISNAP` showing the
+    mode, the ids applied and any refusal, all wired to 24.3.2's core. With
+    it, in `test/test_init.c`, the vectors 24.3.2 handed on because they
+    need the driver: the root-port reset at 2 with transfers in flight, the
+    slot and its buffers held until the PED confirmation; `xhciDevByHubPort`
+    finding the device's root-port record across a re-open, a repeated reset
+    and an address reused after a disown; the hub's and the device's
+    address-0 opens told apart in `OpenEndpoint`; a virtual address never
+    reaching the topology snoop, and `TtPairsAgreed` counting a `HubAddr`
+    that names one (the virtual record written by hand there, since the
+    real hub's enumeration in the model owns no reset a virtual hub could);
+    the synthetic completions through the deferred list, `AbortTransfer`
+    finding a held status-change transfer; at 2 a cancelled hub install, a
+    root-port power-off and power-on and the hub enumerated again without
+    a restart; suspend and resume through the callbacks for both views; and
+    rule 2 over the driver, the switch absent and 0. Hub-path removal at 2
+    is 24.3.4's, a guest reading. Host tests and every gate green on all
+    three x86 flavours and the amd64 build. The audit of 2026-09-25 found
+    a direct port at 1 keeping its decision across an unplug, so a
+    Full-Speed device following a High-Speed one cost a forced connect
+    change; fixed, with the vector that had pinned the defect as intended
+    rewritten to pin the rule of 3.2. A Codex review loop over the audit's
+    fixes then ran six rounds to a clean one and found ten more defects
+    in the wiring and inside its own earlier fixes - a refused resume
+    completed with success, a reset overtaking or overtaken by another,
+    a disable swallowed by a port in reset, a recovery at 1 telling usbhub
+    nothing of a device gone - each with its vector (`runs/run-24.md`,
+    "24.3.3, audited").
+  - [x] **24.3.4 - The readings on every guest held**, the page's `-V`, each
+    with the switch at 0, then 1, then 2. First, on Windows 98 SE under both
+    stacks and on ME: which encoding a `REG_SZ` arrives in through
+    usbport's service, which no reading has ever taken (the parser accepts
+    either). At 0: nothing differs from the 24.1
+    build. At 1 and at 2: section 5's list - the TT record on the first Full-Speed
+    device (`HubAddr != 0xFFFF`), a one-port hub on each hub driver, the
+    interval (a stock `bInterval` 10 arriving as `Period` 8 and programming
+    Interval 6, read with `ep.open.ival`, and the hidusbf rates on a root
+    port), a Full-Speed audio device on a root port playing from XP on (the
+    `wav` backend is the oracle, issue 6 section 7), a Full-Speed hub on a
+    root port with a mouse behind it no longer bugchecking Vista and 7
+    (issue 6 section 6.2), a High-Speed device unchanged at 1 and working
+    behind the hub at 2, plug latency, the first hub install on Windows 98
+    and ME, idle suspend, resume with the same device and with a swapped
+    one, and **churn: 25 plug/unplug cycles of a Full-Speed device on a
+    root port, per target, at each value** - a target that fails at 1 and
+    passes at 2 is one whose documented setting is 2. At 2 also: the whole
+    device matrix, High-Speed rows included, since every root-port device
+    takes the new path; a hub on every USB 2.0 port at start with nothing
+    plugged in; the root-port reset with a device attached; a cancelled hub
+    install, a root-port disable and a power-off/on, each ending with the
+    hub enumerated again without a controller restart; a resume that
+    reinitialises the controller and a forced recovery in place, the hubs
+    kept and the devices re-enumerated behind them; and whether any hub
+    driver counts the virtual hub against USB's five hub tiers. Low Speed is
+    read on Windows 98 SE under SweetLow's stack with 24.1's `usb-host`
+    passthrough mouse, since QEMU presents no Low-Speed device.
+    Owed to `test/test_init.c` beside the readings, from the audit of
+    2026-09-25, and taken on 2026-09-27: a model vector for hub-path
+    removal at 2 (an unplug at 2 raising port 1's change, the record
+    released by the connect-change path), and a recovery with a hub
+    configured at 2 (the `lost[]` bitmap, `XhciVhubReinit`, a held transfer
+    completed for a lost device), which only the core suite pinned before
+    (`runs/run-24.md`, "24.3.4"). **Readings taken 2026-09-27 and stopped
+    for the owner** (`runs/run-24.md`, "24.3.4"): Windows 98 SE under both
+    stacks, ME, 2000 and XP x86 read at 0, 1 and 2 (the ids arrive as
+    UTF-16 on every stack; TT records, Interval 6, churn, the first hub
+    install, Full-Speed audio playing from XP; SP4's usbhub counts the
+    virtual hub as a tier), XP x64 likewise with an intermittent
+    enumeration miss at 1; Vista and 7 in both architectures read at 0
+    only - at 1 and 2 they met a deadlock in 24.3.3's virtual-hub
+    `SubmitTransfer` branch, a hub that outlives its device's unplug and
+    captures a reused address, and QEMU's missing port disable. The owner
+    chose to fix the two driver defects in a separate batch before the
+    Vista and 7 readings are taken again. A held port-1 reset that never clears
+    in any reading goes to the owner: record 12 section 3.3 gives it no
+    deadline of its own by decision (2026-09-27). **The fix batch is in**
+    (2026-09-27, `runs/run-24.md`, "The fix batch"; record 12 section 11),
+    and the owner decided its three open items the same day: the NT 6.x
+    timer-arm race is recorded and taken as its own task (24.4); a port-1
+    disable's debt lost across a successful restore on a port whose hub
+    stays is the per-tenancy rule working as written, and stays; and QEMU's
+    missing port disable is accepted as a gap, so Full- and Low-Speed
+    devices behind a virtual hub on NT 6.x are read on the E460 (24.3.5),
+    not in QEMU. **Read again on the fixed build** (2026-09-27/28,
+    `runs/run-24.md`, "The readings on the fixed build"): Windows 98 SE and
+    2000 pass at 1 and 2; Vista and 7 in both architectures neither hang
+    nor bugcheck, the hub retires with its device, a High-Speed mouse after
+    it opens as a mouse, issue 6 section 6.2's topology no longer
+    bugchecks, and churn of 25 passes at 1 and 2 - with nothing behind a
+    virtual hub enumerating there (the gap; at 2 High Speed too), and at 1
+    a hub create/drop loop that is the same gap, disposed of with Codex's
+    review and one vector, no driver change. **The clauses never read,
+    begun 2026-09-28** (`runs/run-24.md`, "The clauses never read"), on the
+    owner's scope of that day: on Windows 98 SE and 2000, at 1 and 2, the
+    hidusbf rates on a root port programme the ladder exactly (Interval 6,
+    5, 4, 3), the shipping build never idles, a slower device takes about
+    two seconds longer to become usable at 1 and the same as today at 2,
+    and a root-hub disable and enable at 2 brings the hubs back with no
+    controller restart - while neither system ever asks for a root-port
+    power-off, which rests on the host vectors. **Still owed before this is
+    ticked:** the same readings on SweetLow's stack, ME and XP x86; idle
+    suspend on a local build without `USB_MINIPORT_FLAGS_DISABLE_SS`, on 98
+    SE and 2000, to read whether the hubs hold the idle off; at 2 a
+    cancelled hub install (SweetLow's stack); and the device matrix at 2
+    with its High-Speed rows. **Taken after 24.4 and 24.5** (owner,
+    2026-09-28): both change the driver, so what is still owed here - the
+    no-flag idle control excepted, which reads a build of its own - is read
+    once, on fresh images of the build that carries both, together with
+    each fix's own re-read (Vista and 7 for 24.4, a High-Speed device
+    behind a hub for 24.5). The 98 SE and 2000 readings above stand; the
+    cut's install legs and matrix are their no-regression check. **Round 5,
+    on the build carrying 24.4 and 24.5** (2026-09-28, `runs/run-24.md`,
+    "Round 5 on the fixed build"): 2000 and XP x64 read 24.5's High-Speed
+    mouse behind a virtual hub at Interval 5, and XP x86 passed at 0 and 1
+    with the hidusbf ladder behind a hub; the rest stopped - Vista and 7 on a
+    usbport deadlock (24.4), XP x86 at 2 on an interrupter re-arm that failed
+    a working controller (run-24 finding 2), ME on a stack that stopped
+    enumerating after an unplug mid-enumeration, and SweetLow's stack on a
+    freeze at an early unplug, whose A/B is running. Both driver defects are
+    fixed in the working tree; the rebuilt package is owed, and every leg is
+    retaken on it. The no-flag idle control on 2000 answered the idle
+    question: the virtual hubs do not hold usbport's idle off, so
+    `USB_MINIPORT_FLAGS_DISABLE_SS` stays. The 98 SE control idles too; its
+    values 1 and 2 are owed. **Round 6, on the build carrying round 5's
+    fixes** (2026-09-29, `runs/run-24.md`, "Round 6 on the round-5
+    fixes"): ME and XP x86 pass at 0, 1 and 2 and 2000 at 1 and 2 - 24.5's
+    High-Speed mouse behind a virtual hub at Interval 5 on all three, the
+    hidusbf ladder exact behind a hub on ME and XP, audio played behind a hub at 2
+    on 2000 and ME (on XP it streamed silence with the player blocked,
+    which an A/B shows is older than this build) - and Vista x86 passes at
+    0, 1 and 2; Vista x64 shows no failure, though Windows refused its
+    disables at 1 and 2; and the 98 SE idle control, finished, gave 2000's
+    answer at 1 and 2. Three stopped: Windows 7 in both architectures on a usbhub 0xFE
+    at 2 with four devices plugged, which a kernel dump traced to this
+    driver's unbounded disown wait under QEMU's ignored port disable; XP x64
+    at 2 on a High-Speed device behind a hub that never enumerated; and
+    SweetLow's stack at 2 on a guest freeze on the stock `usbd.sys`, which
+    an A/B of 93 plugs did not reproduce. The owner chose the 0xFE's fix
+    from five (a disown debt with no device record on the port settles at
+    once; record 12 section 3.3); it is committed and built, and
+    the legs are retaken on it, with the device matrix at 2, which was
+    stopped for the rebuild. **Round 7, on that fix** (2026-09-29,
+    `runs/run-24.md`, "Round 7 on the disown fix"): XP x64 and 2000 pass at
+    2 (XP x64's High-Speed mouse behind a hub enumerates, 24.5 at Interval
+    5 on both); Windows 7 x64 bugchecked 0xFE again in the churn at 2 and
+    Windows 7 x86 reset in the disable cycles at 2, each after its
+    four-device watch passed. The x64 dump shows the loop moved onto debts
+    the fix does not cover - each port's own disowned, idle device record
+    and its release wait on each other - and the next response is the
+    owner's; Vista, SweetLow, XP x86, ME and the matrix were not reached.
+    Windows 7 x86's dump is the same 0xFE over the same debts. **The
+    owner's response** (2026-09-29): a debt whose records are all disowned
+    and idle settles too, the release proving itself through Stop Endpoint
+    and Disable Slot (record 12 sections 3.3 and 11); committed and built,
+    and Windows 7 in both architectures is retaken on it at 2, with the
+    legs round 6 still owes run once on the same build. **Round 8, on
+    that fix** (2026-09-29, `runs/run-24.md`, "Round 8 on the idle-disown
+    fix"): the fix works - no disown debt is left under any loop, and all
+    four devices bound behind their virtual hubs on Windows 7 x86 for the
+    first time - but a re-plug after the churn bugchecked 0xFE again, a
+    circular wait on a USB address this driver kept after usbport had freed
+    it and given it to the next device; Windows 7 x64 passed its watch and
+    stopped short of the re-plug. The fix taken: reclaim an idle holder's
+    address when usbport assigns it again (record 12 section 11); the
+    reclaim, then Windows 7 at 2 again with the re-plug as a named step.
+    **Rounds 9 to 11** (2026-09-30/10-01, `runs/run-24.md`, "Round 9 on
+    the address reclaim" to "Round 11 on the soft interrupt"): the reclaim
+    works and Windows 7 x86's re-plug no longer bugchecks; a virtual hub's
+    port 1 reporting enabled without connected, which sent usbhub to a hub
+    hard reset, is fixed (round 9); then, after a controller re-enable,
+    usbhub's 2000 ms reset of a virtual hub's port timed out because, on NT
+    6.x, the hub's answers waited for some other device's interrupt or a 1 s
+    fallback (round 10, read from an NMI dump's exception history). The fix:
+    a virtual hub's answer asks usbport for a soft interrupt (record 12
+    section 11). Windows 7 x86 passes on it at 2, 0 and 1 - no loop after
+    seven enables, and a Full-Speed device behind a virtual hub now enumerates
+    in churn on NT 6.x, which no earlier build did in QEMU (round 11). The
+    rest of round 11 (2026-10-01): Windows 7 x64 at 0, 1 and 2, and 2000,
+    XP, ME and SweetLow's stack at 2, pass; the device matrix at 2 on 98 SE
+    and 2000 hit no stop condition and failed only on three expectations
+    written for switch 0, and found that the virtual hub costs a hub chain
+    one tier. On the owner's decisions the matrix now states each row's form
+    per switch value, read from the running driver, and asserts that depth
+    limit (`runs/run-24.md`, "The matrix follows the switch"); the release
+    note is in 24.7. On the rebuild `d30234c` (the hub's product string
+    "xHCI98 virtual HS Hub", dated 10/01/2026), Vista in both architectures
+    passes at 0, 1 and 2 (2026-10-02, `runs/run-24.md`, "Vista on the
+    rebuild"): a Full-Speed device behind a virtual hub enumerates, the
+    Device Manager "restart required" veto round 6 met at 1 and 2 is gone, and
+    no enable brought a loop. **Round 12** (2026-10-02, `runs/run-24.md`,
+    "Round 12"): the device matrix on this build's fresh images, 98 SE and
+    2000 at 0, 1 and 2, every stop counter 0 and every switch-aware row
+    held; 2000 passes at all three, 98 SE at 2, and at 0 and 1 98 SE fails
+    only the audio replug - the intermittent Windows 98 wedge 23.8 settled
+    as pre-existing since at least 1.1.0.0 (2 passes and 3 failures in five
+    samples on this build, alone and beside other guests).
+
+  If 24.3.1's record, or any reading in 24.3.4, contradicts the page - a
+  hub driver that gives the virtual hub no TT record, a stack that refuses a
+  one-port hub, a target that fails churn - the task stops there and the
+  finding goes to the owner before the build goes further.
+
+  The reporter offered no fix to take. His remarks on the thread - that the
+  High-Speed report is "only default behaviour" because usbport and usbhub
+  handle slower devices on UHCI and OHCI root hubs (2026-09-07), and "EHCI
+  with right USBPORT, of course" (2026-09-19) - are answered by issue 6
+  section 4 (those miniports never declare the USB2 flag, and dropping it
+  loses High Speed on Windows 98) and by the rule that a usbport other than
+  the target's own is not this project's to ship. This paragraph said until
+  2026-09-25 that he had proposed a patched usbport; the thread does not say
+  so (`runs/run-24.md`, 24.3).
+
+  An experiment was taken before the decision, at the owner's request
+  (2026-09-25, `runs/run-24.md`, 24.3): an uncommitted build reporting the
+  true speed, on Windows 98 SE under SweetLow's stack, with a Full-Speed
+  mouse on a root port. It took the fatal exception at `0028:C002F70E` in
+  `NTKERN`, NUSB's address from Phase 5, so a truthful root-hub report is now
+  measured fatal on both Windows 98 lineages and on Windows 2000. It was
+  evidence for the decision, and is not one of this task's readings.
+
+  Where it is read: host tests and the gates; every guest held, the switch
+  at 0, 1 and 2, including the passthrough Low-Speed mouse on the SweetLow
+  guest; the device matrix on both primary targets in all three states.
+
+- [x] **24.4 - The NT 6.x timer-arm race.** *(added 2026-09-27 by the owner's
+  decision, and taken before the cut; older than 24.3 and not part of
+  issue 4; 24.5 until 2026-09-28; done 2026-10-02)* Taken next, with 24.5,
+  before the rest of 24.3.4 (owner, 2026-09-28): the two fixes share one
+  rebuild, and the readings still owed are read on it.
+
+  On Vista and Windows 7 the legacy `UsbPortRequestAsyncCallback` enters
+  `RequestAsyncCallbackEx` on the branch that skips usbport's timer-list
+  lock, which assumes its caller holds it; usbport does so only around its
+  root-hub feature callbacks and its timer DPC. Every other arm this driver
+  makes - the command watchdog from the submit pump, the event DPC and the
+  health poll; the device-initiated resume; the health poll's own arms; the
+  virtual hub's submit - can race the timer DPC's unlink and free on
+  another CPU (static, `kd`, all four NT 6.x builds; never observed;
+  `runs/run-24.md`, "The fix batch", Codex round 1 item 1). NT 5.x is not
+  affected. The locking branch cannot simply be called from
+  `SubmitTransfer`: it would add EpList -> timer lock against the timer
+  DPC's timer lock -> EpList.
+
+  First a static read, with `kd` on the four NT 6.x `usbport.sys` builds, of
+  which usbport locks the event DPC, `CheckController` and the timer DPC hold
+  when they reach this driver, and in which order. Then the choice between
+  arming only from contexts that hold the timer lock and deferring the rest
+  (which moves the command watchdog's home, a change every target shares),
+  and calling the locking `UsbPortRequestAsyncCallbackEx` (`0x1B0`) from the
+  contexts the read shows hold neither EpList nor anything the timer DPC
+  takes under its lock, deferring only `SubmitTransfer`'s arms. Whichever it
+  is changes nothing on NT 5.x, since the tier rule (AGENTS.md) forbids
+  spending a primary target's safety on a VM-tier one.
+
+  Where it is read: the static read; host vectors for the arm's context on
+  each path; Vista and 7 in both architectures under 4 vCPUs; the
+  primary targets no worse. Before the `1.2.0.0` cut (owner, 2026-09-27),
+  so the cut's install legs and matrix read the build that carries it.
+
+  **The static read and the fix are done (2026-09-28); the guests are
+  owed.** No callback of this driver can know whether usbport holds its
+  timer-list lock - the root-hub feature callbacks and the timer callbacks
+  each arrive with it and without it (Windows 7's StopController runs
+  pending timer callbacks early, unlocked) - so on the Version 300 tier the
+  legacy service is never called: an arm from the event DPC,
+  `CheckController`, a root-hub status query or Start/Stop/Suspend/Resume is
+  made through `UsbPortRequestAsyncCallbackEx` with its own lock, and one
+  from any other context is owed to the next of those. NT 5.x arms as before.
+  Design record 05, "Where a timer may be armed"; `runs/run-24.md`, "24.4";
+  `legal-provenance.md` section 4. Not ticked until Vista and 7 in both
+  architectures under 4 vCPUs have read the build, with 24.5's.
+
+  **Round 5 read the build, and it deadlocked NT 6.x** (2026-09-28,
+  `runs/run-24.md`, "Round 5 on the fixed build"). Windows 7 x86 at 0 and
+  Vista x86 at 1, four vCPUs each, hung in usbport: the event DPC called
+  `UsbPortInvalidateRootHub` under usbport's ISR-DPC lock, which usbport's
+  own root-hub code takes under its RH-IntrEp lock. The static read of the
+  four builds that followed found that path as old as the Version 300 tier,
+  two longer cycles through this task's Ex arms and its announcement from
+  the feature callbacks (the kick), and this task's lock-order argument
+  wrong on that point. Fixed in the working tree by the owner's choice: on
+  the Version 300 tier the event DPC reports a change through
+  `InterruptDpcEx`'s port bit, which usbport turns into the same call with
+  its locks released; the feature callbacks, the port timers and the
+  recovery only latch one for the health poll or the next event DPC; and
+  the kick is gone, at a cost of up to one poll interval for a change no
+  hardware event follows (design record 05, "Where the root hub may be
+  announced"). The rebuilt package is owed, and Vista and 7 in both
+  architectures are read again on it.
+
+  **Round 6 read the fix on all four NT 6.x guests, and no hang came back**
+  (2026-09-29, `runs/run-24.md`, "Round 6 on the round-5 fixes"): the
+  four-device plugs that hung Windows 7 x86 at 0 and Vista x86 at 1 ran
+  clean, `RootHubChangesReported` rose with every hot-plug and never across
+  a teardown, and the one slow plug timed was a High-Speed mouse on Vista
+  x86 (17.4 s while a hub loop ran on another port). Still not ticked:
+  Windows 7 at 2 bugchecked on another cause (24.3.4), and the build that
+  fixes it, which carries this one, is what Vista and 7 read next.
+
+  **Ticked 2026-10-02.** Round 11 read Vista and 7 in both architectures,
+  four vCPUs each, at 0, 1 and 2 on builds that carry it (Windows 7 on
+  `4506fa9`, Vista on `d30234c`): no hang, no bugcheck, no controller reset
+  on any of them, and the primary targets no worse in round 11's device
+  matrix at 2 (`runs/run-24.md`, "Round 11 on the soft interrupt" and
+  "Vista on the rebuild").
+
+- [x] **24.5 - The High-Speed interval behind a hub.** *(added 2026-09-28 by
+  the owner's decision, and taken before the cut; older than 24.3; done
+  2026-10-02)* Taken
+  with 24.4, in the same rebuild, before the rest of 24.3.4 (owner,
+  2026-09-28).
+
+  A High-Speed interrupt endpoint behind a hub opens at `Period` 1, which
+  this driver programs as Interval 0 (125 us): read at 2, behind the virtual
+  hub, under NUSB's, SweetLow's, ME's, SP4's and XP's usbport, where the same
+  device on a root port at 1 opens at `Period` 32, Interval 5
+  (`runs/run-24.md`, 24.3.4, finding 1). Design record 12 section 7 says a
+  High-Speed device at 2 keeps the same interval, so the record and the
+  behaviour disagree. The likely mechanism, read in ReactOS only: usbport's
+  USB 2.0 budgeter overwrites `Period` with its budget's period and carries
+  the microframe choice in `InterruptScheduleMask`, which an EHCI miniport
+  uses and this driver never reads (`src/xhci_usbport.h` declares it). If
+  so, the defect is older than 24.3, and a High-Speed interrupt device
+  behind any real USB 2.0 hub is polled every 125 us today. The devices
+  work; they are polled far more often than they ask.
+
+  First a static read, on every usbport build the targets run (NUSB,
+  SweetLow's, SP4, XP x86 and x64, Vista and 7 in both architectures), of
+  what `Period` and `InterruptScheduleMask` carry for a High-Speed
+  interrupt endpoint behind a hub, and where the endpoint's own `bInterval`
+  can be read. Then the choice of source for the Interval - the
+  descriptor's `bInterval`, the schedule mask, or the budget's period -
+  with host vectors for it, and design record 12 section 7 corrected if the
+  choice leaves a difference.
+
+  Where it is read: the static read; host vectors; the guests at 2 with a
+  High-Speed mouse behind a virtual hub (NT 5.x - on NT 6.x QEMU's ignored
+  port disable keeps any device behind a virtual hub from enumerating);
+  every value's no-regression reading. Before the `1.2.0.0` cut, so the cut's install
+  legs and matrix read the build that carries it.
+
+  **The static read and the fix are done (2026-09-28); the guests are
+  owed.** On all ten builds usbport buckets the pipe's `bInterval` into
+  `Period`, copies it to endpoint-properties byte 0x07, then lets its USB
+  2.0 budget overwrite `Period`; `Promote_endpoint_periods` makes it 1 when
+  the endpoint's start microframe lands past 2 - a matter of bus load, with
+  no speed test on NT 5.x, Full and Low Speed only on NT 6.x. The
+  descriptor never reaches the miniport and the schedule mask says which
+  microframe, not how often, so the source chosen is the fourth the read
+  found: byte 0x07 (`PipePeriod`) for interrupt endpoints - accepted by the
+  owner on 2026-09-28 over reading the device's own `bInterval` from the
+  configuration descriptor, which stays a possible later refinement for a
+  device that asks for slower polling than usbport's 32-unit cap. Design record 12
+  section 7 corrected; `runs/run-24.md`, "24.5"; `legal-provenance.md`
+  section 4. Not ticked until the guests at 2 have read a High-Speed
+  device behind a virtual hub on the rebuilt package.
+
+  **Ticked 2026-10-02.** A High-Speed mouse behind a virtual hub at 2 opened
+  at Interval 5 (`ep.open.ival=00030005`), not 0, on 2000, XP, ME and 98 SE
+  under SweetLow's stack (round 11, `EndpointPeriodsPromoted` 1: the
+  promoted `Period` 1 no longer reaches the Interval), on XP x64 (round 7)
+  and on Vista in both architectures (round 11's rebuild), with the root-port
+  control unchanged at every value (`runs/run-24.md`).
+
+- [x] **24.7 - The record and the cut.** *(done 2026-10-02: cut at `860afb4`,
+  the ten install legs read from the asset, round 12's matrix accepted by the
+  owner as the post-release matrix; `runs/run-24.md`. 24.6 until 2026-09-28,
+  24.5 until 2026-09-27)*
+
+  One cut carrying 24.1 and 24.3 together (owner, 2026-09-25), 24.4 (owner,
+  2026-09-27) and 24.5 (owner, 2026-09-28), as `1.2.0.0` (the second field
+  moves: an optional virtual USB hub is a major change - owner, 2026-10-01;
+  `1.1.2.0` until then): issue 6 -
+  section 5's bands as what the switch
+  off still gives, sections 6.2 and 7 with what the switch on changes, and
+  section 9's first item; the release notes' High Speed entry and a new
+  entry for the switch, saying it is off by default, that it is
+  experimental and for private testing only, that the hub's id is
+  pid.codes' shared test id `1209:0001` and user-settable, what values 1
+  and 2 each do, and the extra hub a slower device brings with it at 1 and
+  every USB 2.0 port carries at 2; and, in that entry and in the readme
+  template's switch section, that **the virtual hub is a hub tier**: with
+  the switch at 1 or 2, a chain of external hubs on a root port can be one
+  hub shorter than USB's five before the devices at its end stop
+  enumerating (at 1 only behind a Full- or Low-Speed hub, which is what
+  puts that port in virtual-hub mode; measured at 2 on 2000 in round 11's
+  device matrix, where the tier-5 mouse of the churn row was never
+  addressed and the driver refused nothing - owner, 2026-10-01); the download's
+  `readme.txt`; `releases/history.md`, `xhci_version.h` and both INFs; the
+  install legs from the asset; and the post-release matrix on both primary
+  targets, read against `runs/run-23-post-release/` with the switch off and
+  read again at 1 and at 2.
+
+  Named so the cut does not miss them (audit of 2026-09-25): the three
+  values the INFs now write on every path, `XhciVirtualHSHub` and the
+  strings `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid`, are in neither
+  `README.md` "Tuning", the readme template's section 9
+  (`make-release.ps1`, whose "THOSE THREE ARE THE WHOLE LIST" and "ALL
+  THREE ARE DWORDS" stop being true), nor the release notes, and no gate
+  checks for them. Also for the record: a table of the tier-2 log-note
+  names (`ep.open`, `ep.open.rate`, `ep.open.ival`, `slot.parenthub`, the
+  `vhub.*` family), which no document lists today (`xhcisnap/README.md`
+  or design record 08); and 24.1's checkpoint, whose Interval run-24 read
+  out of the note ring over the QEMU monitor (`readring24.ps1`), with
+  `XHCISNAP` level 2 showing the same record, rather than from the
+  snapshot the clause names.
+
+  Where it is read: the cut's gates; the ten install vehicles; the matrix in
+  all three states.
+
+Checkpoint: 24.1 either refuted (the Code 10 reproduced and traced to
+something other than the bound, recorded) or landed and read: a Low-Speed
+device behind a hub polling at 250, 500 and 1000 Hz on Windows 98 SE under
+SweetLow's stack, with the Interval read from the snapshot and no Code 10;
+the same hidusbf reading taken and recorded on every other guest the project
+holds, none of them worse for the change; and the device matrix on both
+primary targets no worse than `runs/run-23-post-release/`; 24.2 a recorded
+decision with its reason, on issue 6; 24.3 built as design record 12 says,
+with the switch off indistinguishable from the 24.1 build on every guest
+held, and with it at 1 and again at 2, on every guest held: a Full-Speed
+device on a root port enumerating behind the virtual hub at its true speed
+(read from `ep.open.ival`), its stock interval and the hidusbf rates
+programmed as behind a real hub, a Full-Speed audio device on a root port
+playing from XP on, a Full-Speed hub with a mouse behind it on a root port
+surviving on Vista and 7 in both architectures, 25 plug/unplug cycles
+survived per target, and a Low-Speed device on the SweetLow guest at its
+true speed; at 1 a High-Speed device on the direct path, and at 2 a
+High-Speed device working behind the virtual hub and a hub on every USB 2.0
+port with nothing plugged in; 24.4 and 24.5 landed and read as their
+entries say; and `1.2.0.0` cut with its
+install legs read from the asset and the matrix on both primary targets in
+all three states. Not a checkpoint: a truthful root-hub report (measured
+fatal, and not what 24.3 builds), the bandwidth half of issue
+6 section 5, or the acceptance test.
+
+Records: GitHub issue 4 (the thread; the reporter's Code 10 reading of
+2026-09-12, his order of 2026-09-14 and his pointer of 2026-09-19);
+`docs/issues/06-full-speed-root-port-bugcheck.md` sections 5, 8 and 9;
+`docs/contributing/design/12-virtual-hub-on-root-ports.md`
+(design record 12; the future-plans page until 24.3.1); `docs/usb-xhci-info/usbport-miniport-abi.md` ("Periodic scheduling:
+what `Period` actually carries", section 4's root-hub contracts and section
+8's TT lookup); `docs/usb-xhci-info/xhci-data-structures.md` (Tables 5-27,
+6-6 and 6-12); `docs/contributing/design/02-hub-topology-route-string.md`
+and `05-locking-model.md` section 7; `src/xhci_ctx.c`
+(`XhciIntervalFromPeriod`, `XhciIntervalForSpeed`), `src/xhci_port.c`
+(`XhciPortShadowReport`) and `src/xhci_topo.c`;
+`docs/contributing/implementation-invariants.md` ("Root Hub Reporting");
+`docs/contributing/test-equipment.md`; `runs/run-24.md` (written by the
+first task that runs).
 
 ---
 
