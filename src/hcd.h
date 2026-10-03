@@ -347,9 +347,11 @@ typedef struct _HCD_USB_DEVICE {
                              * them SET_INTERFACE (hcd_cfg.c)            */
     ULONG Abandoned;        /* off its port with the slot still enabled:
                              * the next powered pass disables it        */
-    ULONG HoldAsked;        /* 31-A.3 asked 29-A.5 to send it back to USB
-                             * 2.0 and the request was accepted: no PDO,
-                             * Bound until the hold service's disconnect */
+    ULONG HoldAsked;        /* a send-back to USB 2.0 was accepted for it
+                             * (HcdHoldRequestUsb2): no PDO, Present until
+                             * the hold service disconnects or refuses it */
+    ULONG HoldRefused;      /* that request was refused late: refused in
+                             * place, never asked again (hcd_pdo.c)      */
     /* The URB path (hcd_io.c). Refs counts URB IRPs that hold the record,
      * taken under PdoListLock while the PDO still names it; Gone, under
      * the controller lock, refuses new submissions once the thread has
@@ -518,6 +520,12 @@ typedef struct _HCD_PORT {
     XHCI_SSHUB_LINK HubSsLink;
     ULONG HubSsRecover;     /* its link wants a warm reset once the device
                              * it held is torn down (HcdSsHubPortRecover) */
+    /* Given up and left in SS.Disabled (HcdHubPortDisable), which detects
+     * nothing: re-armed to RxDetect after HubSsRearmWait more ticks of its
+     * hub's re-arm timer, the wait doubling with each re-arm in a row
+     * (HubSsRearms) up to a cap (hcd_hub.c, hcdHubRearmPorts). */
+    ULONG HubSsRearmWait;
+    ULONG HubSsRearms;
 } HCD_PORT, *PHCD_PORT;
 
 /*
@@ -558,6 +566,13 @@ typedef struct _HCD_HUB {
     ULONG Usb3;
     XHCI_SSHUB_DESC SsDesc;
     ULONG ExtStatus;        /* answers GET_PORT_STATUS type 2            */
+    /* Ports given up in SS.Disabled awaiting their re-arm (bit n port n),
+     * and the timer whose expiry is one tick of their waits (hcd_hub.c).
+     * RearmArmed: the timer is set and must be cancelled before the object
+     * is cleared. */
+    ULONG RearmPorts;
+    ULONG RearmArmed;
+    KTIMER RearmTimer;
 } HCD_HUB, *PHCD_HUB;
 
 /*
@@ -749,6 +764,8 @@ typedef struct _HCD_CONTROLLER {
     ULONG TeardownStops;
     ULONG TeardownStopFailures;
     ULONG HubPortsGivenUp;
+    ULONG SsHubPortsRearmed;        /* given-up SuperSpeed hub ports put
+                                     * back to RxDetect (hcd_hub.c)       */
     ULONG TtBufferClears;
     ULONG TtBufferClearFailures;
 
@@ -940,7 +957,10 @@ ULONG HcdThreadCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control);
  * device record and its enumeration stay as they are until that pass, whose
  * identity read needs them; a caller that gets TRUE must not fail or tear
  * the device down itself (31-A.3's HcdDevicePdoCreate lists no PDO for it
- * and lets it reach Bound; Codex review of Phase 31, round 2, unit C).
+ * and its machine waits in Present; Codex review of Phase 31, round 2,
+ * unit C). Sets dev->HoldAsked; a request the service later refuses for a
+ * device still there ends with the device refused in place (hcd_enum.c,
+ * hcdHoldRefusedLate).
  * IRQL: <= DISPATCH_LEVEL, controller lock not held.
  */
 BOOLEAN HcdHoldRequestUsb2(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
@@ -1061,7 +1081,7 @@ VOID HcdIoPipeRelease(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipePause(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoPipeResume(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 ULONG HcdIoPipeCancelAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
-ULONG HcdIoPipeMarkAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
+ULONG HcdIoPipeMarkAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
 VOID HcdIoCancelPdo(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                     struct _HCD_DEVICE_PDO *pdo);
 VOID HcdIoPipeWaitCancelled(PHCD_CONTROLLER hc, PHCD_PIPE pipe);

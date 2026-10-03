@@ -478,9 +478,10 @@ ULONG HcdSsHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     if ((status & XHCI_SSHUB_PORT_CONNECTION) == 0 &&
         XhciSsHubLinkState(status) == XHCI_SSHUB_LINK_RX_DETECT) {
         /* Nothing on the port: the next device starts with a full warm
-         * budget. */
+         * budget, and a later give-up with the first re-arm wait. */
         q->Link.WarmResets = 0;
         q->Link.GaveUp = 0;
+        q->HubSsRearms = 0;
     }
     if (sd.OverCurrent) {
         XHCI_DBG_VALUE("hcd: SS hub port over-current, hub/port/status",

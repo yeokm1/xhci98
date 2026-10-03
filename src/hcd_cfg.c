@@ -1983,7 +1983,7 @@ static ULONG hcdCfgRecoverDequeue(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
      * otherwise be held and published onto the emptied ring at the resume
      * - and the marked ones settled before the caller resumes (Codex
      * review of 31-A.1, round 2, unit A). */
-    (VOID)HcdIoPipeMarkAll(hc, ep);
+    (VOID)HcdIoPipeMarkAll(hc, ep, HCD_USBD_INTERNAL_HC_ERROR);
     for (id = 1; id <= ep->Streams->Count; id++) {
         p = ep->Streams->Pipe[id];
         HcdIoDrainPipe(hc, p, HCD_USBD_INTERNAL_HC_ERROR);

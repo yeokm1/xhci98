@@ -76,6 +76,12 @@
 /* Status-change completions in a row that may fail before the pipe is
  * given up (section 10.1: "a second consecutive failure"). */
 #define HCD_HUB_STATUS_TRIES        2UL
+/* A given-up SuperSpeed hub port's re-arm (HcdHubPortDisable): one tick a
+ * second, the first re-arm after 2 ticks, doubling with each re-arm in a
+ * row, never more than 64 apart - bus policy numbers. */
+#define HCD_SSHUB_REARM_TICK_MS     1000UL
+#define HCD_SSHUB_REARM_FIRST       2UL
+#define HCD_SSHUB_REARM_CAP         64UL
 
 static VOID hcdHubDelay(ULONG milliseconds)
 {
@@ -548,14 +554,97 @@ ULONG HcdHubPathPresent(PHCD_CONTROLLER hc, PHCD_PORT q)
             (portsc & XHCI_PORTSC_CSC) == 0);
 }
 
+/* The hub's re-arm timer set for one tick, unless it is set already. */
+static VOID hcdHubRearmTick(PHCD_HUB hub)
+{
+    LARGE_INTEGER due;
+
+    if (hub->RearmArmed) {
+        return;
+    }
+    KeInitializeTimer(&hub->RearmTimer);
+    HcdRelativeMs(&due, HCD_SSHUB_REARM_TICK_MS);
+    (VOID)KeSetTimer(&hub->RearmTimer, due, NULL);
+    hub->RearmArmed = 1;
+}
+
+/*
+ * The given-up SuperSpeed hub ports whose wait has run out, put back to
+ * RxDetect - SET_FEATURE(PORT_LINK_STATE) with RxDetect (5) in wIndex bits
+ * 15:8, the exit from SS.Disabled (USB 3.2 10.3.1 and Table 10-9, to
+ * verify); never BH_PORT_RESET, which is not that exit - and each one's
+ * status read at once and the port looked at in this pass, as a change
+ * (Codex review of the Phase 28-31 integration, finding 1). A port that
+ * reads nothing connected starts its next give-up's waits from the first.
+ * Called once a pass for each live hub, before its ports are looked at; the
+ * timer is polled with a zero wait, as the debounce polls its own. Thread
+ * only, powered.
+ */
+static VOID hcdHubRearmPorts(PHCD_CONTROLLER hc, PHCD_HUB hub)
+{
+    LARGE_INTEGER now;
+    PHCD_PORT q;
+    ULONG status;
+    ULONG change;
+    ULONG bytes;
+    ULONG stalled;
+    ULONG n;
+
+    if (!hub->RearmArmed) {
+        return;
+    }
+    now.QuadPart = 0;
+    if (KeWaitForSingleObject(&hub->RearmTimer, Executive, KernelMode, FALSE,
+                              &now) != STATUS_SUCCESS) {
+        return;
+    }
+    hub->RearmArmed = 0;
+    for (n = 1; n <= hub->Ports; n++) {
+        if ((hub->RearmPorts & (1UL << n)) == 0) {
+            continue;
+        }
+        q = HcdHubPort(hc, hub, n);
+        if (q->HubSsRearmWait > 1) {
+            q->HubSsRearmWait--;
+            continue;
+        }
+        hub->RearmPorts &= ~(1UL << n);
+        if (!hcdHubRequest(hc, hub, XHCI_HUB_RT_PORT_OUT,
+                           XHCI_HUB_REQ_SET_FEATURE,
+                           (USHORT)XHCI_SSHUB_FEAT_PORT_LINK_STATE,
+                           (USHORT)(n | (XHCI_SSHUB_LINK_RX_DETECT << 8)), 0,
+                           &bytes, &stalled)) {
+            XHCI_DBG_VALUE("hcd: SS hub port not re-armed, hub/port",
+                           (hub->Index << 8) | n);
+            continue;
+        }
+        hc->SsHubPortsRearmed++;
+        status = 0;
+        if (HcdHubPortStatus(hc, hub, n, &status, &change) &&
+            (status & XHCI_SSHUB_PORT_CONNECTION) == 0) {
+            q->HubSsRearms = 0;
+        }
+        hub->Changed |= 1UL << n;
+        XHCI_DBG_VALUE("hcd: SS hub port re-armed, hub/port/status",
+                       (hub->Index << 24) | (n << 16) | (status & 0xFFFFUL));
+    }
+    if (hub->RearmPorts != 0) {
+        hcdHubRearmTick(hub);
+    }
+}
+
 /* A hub port given up after its attempts (section 10.2 step 7): disabled,
  * and left so until its next connect change - the machine waits in Failed
  * for a connect, which the hub's own disable does not raise. A SuperSpeed
  * hub has no PORT_ENABLE feature to clear (USB 3.2 Table 10-9): its port is
  * disabled by SET_FEATURE(PORT_LINK_STATE) to SS.Disabled, the link state
- * in wIndex bits 15:8 (integration of Phases 27 and 30). */
+ * in wIndex bits 15:8 (integration of Phases 27 and 30) - and SS.Disabled
+ * detects nothing, so no connect change would ever come: the port is
+ * scheduled for its re-arm to RxDetect (hcdHubRearmPorts), after a wait
+ * that doubles with each give-up in a row. */
 VOID HcdHubPortDisable(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
 {
+    PHCD_PORT q;
     ULONG ok;
     ULONG bytes;
     ULONG stalled;
@@ -577,6 +666,17 @@ VOID HcdHubPortDisable(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
     }
     XHCI_DBG_VALUE("hcd: hub port given up, disabled, hub/port",
                    (hub->Index << 8) | n);
+    if (hub->Usb3) {
+        q = HcdHubPort(hc, hub, n);
+        q->HubSsRearmWait = HCD_SSHUB_REARM_FIRST << q->HubSsRearms;
+        if (q->HubSsRearmWait >= HCD_SSHUB_REARM_CAP) {
+            q->HubSsRearmWait = HCD_SSHUB_REARM_CAP;
+        } else {
+            q->HubSsRearms++;
+        }
+        hub->RearmPorts |= 1UL << n;
+        hcdHubRearmTick(hub);
+    }
 }
 
 /*
@@ -805,6 +905,7 @@ VOID HcdHubCollect(PHCD_CONTROLLER hc, PHCD_HUB hub)
     if (dev == NULL || hub->Refused) {
         return;
     }
+    hcdHubRearmPorts(hc, hub);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     done = dev->HubXferDone;
     dev->HubXferDone = 0;
@@ -1050,11 +1151,18 @@ VOID HcdHubFree(PHCD_CONTROLLER hc, PHCD_HUB hub)
         q->Number = n;
         /* A SuperSpeed hub's port state (30-A.1) is not the next hub's. */
         q->HubSsRecover = 0;
+        q->HubSsRearmWait = 0;
+        q->HubSsRearms = 0;
         XhciLinkInit(&q->Link);
         b = (PUCHAR)&q->HubSsLink;
         for (i = 0; i < sizeof(q->HubSsLink); i++) {
             b[i] = 0;
         }
+    }
+    /* A set timer is in the kernel's queue: cancelled before the object
+     * that holds it is cleared. */
+    if (hub->RearmArmed) {
+        (VOID)KeCancelTimer(&hub->RearmTimer);
     }
     index = hub->Index;
     b = (PUCHAR)hub;

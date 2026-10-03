@@ -1378,11 +1378,16 @@ static ULONG hcdCancelAllOne(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
  * map pump from being held mapped afterwards: HcdIoMapped completes a
  * marked record instead of putting it on Held, where the endpoint's resume
  * would publish it onto a ring the drain just emptied (Codex review of
- * 31-A.1, round 2, unit A). Returns how many were marked. Controller lock
- * NOT held.
+ * 31-A.1, round 2, unit A). The waiting IRPs leave in the same hold of the
+ * lock and complete with `usbd` once it is released: otherwise a marked
+ * record could finish meanwhile and be handed one of them, unmarked
+ * (hcdRecordRelease), past the cutoff the mark draws (Codex review of the
+ * Phase 28-31 integration, finding 3). Returns how many were marked.
+ * Controller lock NOT held.
  */
-ULONG HcdIoPipeMarkAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
+ULONG HcdIoPipeMarkAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
 {
+    LIST_ENTRY waiting;
     PHCD_PIPE p;
     PHCD_XFER x;
     KIRQL oldIrql;
@@ -1391,8 +1396,10 @@ ULONG HcdIoPipeMarkAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
     ULONG i;
 
     marked = 0;
+    InitializeListHead(&waiting);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     for (id = 0, p = pipe; p != NULL; p = hcdStreamAt(pipe, ++id)) {
+        hcdWaitingFlush(p, &waiting);
         for (i = 0; i < p->XferCount; i++) {
             x = &p->Xfers[i];
             if (x->State != HCD_XFER_FREE && x->Irp != NULL) {
@@ -1402,6 +1409,7 @@ ULONG HcdIoPipeMarkAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
         }
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
+    hcdWaitingRefuse(&waiting, pipe->Device, usbd);
     return marked;
 }
 

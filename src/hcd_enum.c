@@ -1534,14 +1534,11 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         hcdEventInit(next, XHCI_ENUM_EV_PDO_CREATED,
                      NT_SUCCESS(HcdDevicePdoCreate(hc, p->Device)));
         XHCI_DBG_VALUE("hcd: device enumerated at location", p->PortId);
-        if (next->Ok && p->Device->HoldAsked) {
-            /* 31-A.3 asked 29-A.5 to send it back (hcd_pdo.c): no PDO for
-             * PnP to start, so, as for a hub, the machine is told its PDO
-             * started at once and waits in Bound for the hold service's
-             * disconnect. */
-            (VOID)XhciEnumStep(&p->Enum, next, &none);
-            hcdEventInit(next, XHCI_ENUM_EV_PDO_STARTED, 1);
-        }
+        /* A device 31-A.3 asked 29-A.5 to send back (hcd_pdo.c,
+         * HoldAsked) has no PDO yet: the machine waits in Present for the
+         * hold service - whose disconnect takes it as an unplug, or whose
+         * refusal creates its PDOs and so starts the real handshake
+         * (hcdHoldRefusedLate). */
         return 1;
 
     case XHCI_ENUM_ACT_DISABLE_SLOT:
@@ -1707,6 +1704,13 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
     if ((feed & XHCI_LINK_FEED_DISCONNECT) != 0) {
         hcdFeed(hc, p, XHCI_ENUM_EV_DISCONNECT);
     }
+    /* The disconnect may have torn a subtree down and had a Stop Endpoint
+     * fail, which hands the controller to recovery: no link action on its
+     * old slots' port then, as the hub-port path decides (Codex review of
+     * the Phase 28-31 integration, finding 4). */
+    if (hcdHalted(hc)) {
+        return;
+    }
     switch (act.Kind) {
     case XHCI_LINK_ACT_WARM_RESET:
         hc->Counters.SsWarmResets++;
@@ -1764,6 +1768,9 @@ BOOLEAN HcdHoldRequestUsb2(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         slot->Reason = reason;
         slot->Port = port;
         slot->Hold.Kind = XHCI_HOLD_NONE;
+        /* The request is this device's: the service acts only while the
+         * port still holds it (hcdHoldService). */
+        dev->HoldAsked = 1;
     }
     XhciControllerLockRelease(&hc->Hc, oldIrql);
     if (taken || slot == NULL) {
@@ -1772,6 +1779,46 @@ BOOLEAN HcdHoldRequestUsb2(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     }
     HcdThreadWake(hc);
     return TRUE;
+}
+
+/*
+ * A queued hold refused by the service (hcdHoldService), its terminal
+ * outcome for the device that asked (Codex review of the Phase 28-31
+ * integration, finding 2). A device no longer on the port, or one that
+ * never asked, needs nothing: its disconnect is the ordinary one. A device
+ * still connected is refused in place instead: HoldAsked cleared,
+ * HoldRefused set so its PDO creation does not ask again, and its PDOs
+ * created now - the machine has waited in Present with no PDO, and the
+ * real start handshake (PortPdoStarted) takes it to Bound. A creation that
+ * fails is the port's failure: its machine is fed a disconnect and the port
+ * marked changed, so a device still there is enumerated afresh. Thread
+ * only, powered.
+ */
+static VOID hcdHoldRefusedLate(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc)
+{
+    PHCD_USB_DEVICE dev;
+    KIRQL oldIrql;
+
+    dev = p->Device;
+    if (dev == NULL || !dev->HoldAsked) {
+        return;
+    }
+    dev->HoldAsked = 0;
+    dev->HoldRefused = 1;
+    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0 ||
+        p->Enum.State != XHCI_ENUM_PRESENT) {
+        /* Gone or going: the port's change, not yet served, disconnects
+         * it. */
+        return;
+    }
+    XHCI_DBG_VALUE("hcd: hold refused, refused in place, port", p->PortId);
+    if (NT_SUCCESS(HcdDevicePdoCreate(hc, dev))) {
+        return;
+    }
+    hcdFeed(hc, p, XHCI_ENUM_EV_DISCONNECT);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->PortChange[(p->PortId - 1) / 32UL] |= 1UL << ((p->PortId - 1) % 32UL);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
 }
 
 /*
@@ -1807,11 +1854,13 @@ static VOID hcdHoldService(PHCD_CONTROLLER hc)
         }
         p = &hc->Ports[h->Port - 1];
         portsc = XhciReadPortsc(&hc->Hc, h->Port);
-        if (portsc == 0xFFFFFFFFUL ||
+        if (p->Device == NULL || !p->Device->HoldAsked ||
+            portsc == 0xFFFFFFFFUL ||
             XhciLinkDecide(&p->Link, portsc, XHCI_LINK_WANT_HOLD, &act) !=
                 XHCI_LINK_ACT_DISABLE) {
-            /* The device left, or its link is no longer trained: nothing
-             * to send back. */
+            /* The device that asked left - its disconnect took it as an
+             * unplug - or its link is no longer trained: nothing to send
+             * back, and the request ends here (hcdHoldRefusedLate). */
             hc->Counters.HoldRequestsRefused++;
             XHCI_DBG_VALUE("hcd: hold refused, link not trained, port",
                            h->Port);
@@ -1819,6 +1868,7 @@ static VOID hcdHoldService(PHCD_CONTROLLER hc)
             h->Used = 0;
             h->Pending = 0;
             XhciControllerLockRelease(&hc->Hc, oldIrql);
+            hcdHoldRefusedLate(hc, p, portsc);
             continue;
         }
         hcdReadIdentity(hc, p->Device, &id);

@@ -459,6 +459,12 @@ static ULONG hcdXportRefusal(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if (at != XHCI_XPORT_AT_ROOT_COMPANION) {
         return 0;
     }
+    if (dev->HoldRefused) {
+        /* Asked once and refused late (hcd_enum.c, hcdHoldRefusedLate):
+         * refused in place, not asked again. */
+        hc->XportHoldsNotTaken++;
+        return 0;
+    }
     if (HcdHoldRequestUsb2(hc, dev, HCD_HOLD_REASON_UAS_NO_STREAMS)) {
         return 1;
     }
@@ -625,10 +631,11 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
          * thread's next pass, whose identity read still finds it on its
          * port. Its PDOs were never listed, so PnP never saw them and they
          * go now; nothing is reported and then removed. Not a failure: the
-         * port's machine goes on to Bound as for a hub (hcd_enum.c), and
-         * the disconnect takes it from there like an unplug (Codex review
-         * of Phase 31, round 2, unit C). */
-        dev->HoldAsked = 1;
+         * port's machine waits in Present (hcd_enum.c) for the hold
+         * service, whose disconnect takes it from there like an unplug or
+         * whose refusal brings it back here, refused in place (Codex
+         * review of Phase 31, round 2, unit C; of the Phase 28-31
+         * integration, finding 2). HcdHoldRequestUsb2 set HoldAsked. */
         XHCI_DBG_VALUE("hcd: sent back to USB 2.0, no PDO, port", dev->Port);
         status = STATUS_SUCCESS;
         goto cleanup;

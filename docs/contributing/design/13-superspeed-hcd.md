@@ -2176,9 +2176,10 @@ Where it sits decides the rest (`XhciXportRefusedAt`): on a
 companion-paired root port the bus asks 29-A.5's hold to send it back to
 USB 2.0 (`HcdHoldRequestUsb2`, Phase 29's executor: an accepted request is
 queued for the thread's next pass, the device given no PDO and left
-Bound until the hold's PED write and disconnect take it as an unplug; a
-refused one leaves it refused in place), and on a root port with no
-companion or behind a SuperSpeed hub it is refused in place; each place is
+Present until the hold's PED write and disconnect take it as an unplug,
+or, if the hold is refused then, refused in place with its PDOs created
+there; a refused request leaves it refused in place), and on a root port
+with no companion or behind a SuperSpeed hub it is refused in place; each place is
 counted. Under UAS the VID/PID hardware ids
 stay, so a device a `usbstor.inf` lists by hand still binds `usbstor.sys`
 on it - roadmap 31-A.3's residual case, recorded rather than fought. The
