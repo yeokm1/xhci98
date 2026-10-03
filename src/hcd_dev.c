@@ -21,6 +21,7 @@
 
 #include "hcd.h"
 #include "xhci_hw.h"
+#include "xhci_xfer.h"
 
 /* ----------------------------------------------------------------------- */
 /* Slots and commands                                                       */
@@ -70,41 +71,100 @@ VOID XhciSlotCommandSlotFatal(PXHCI_EXTENSION ext, ULONG completionCode,
 }
 
 /*
- * A Transfer Event. The one transfer the HCD queues before 26-A.5 is the
- * enumeration's EP0 control transfer on the slot the thread is waiting on
- * (hcd_enum.c): a Short Packet on its Data Stage records the residual and
- * the transfer goes on to its Status Stage; any other code ends it and wakes
- * the thread. Everything else is counted. Returns nonzero when the caller
- * must request a controller reset - never, here. IRQL: DISPATCH_LEVEL.
+ * What the engine decided about one EP0 event or settle: a completed record
+ * that is the thread's own ends its wait. A halted EP0 or a refused retire
+ * is counted - the enumeration step that sees the failed status gives the
+ * slot back, and a record left queued times out into the reset. Returns
+ * nonzero for an event the engine calls fatal. Controller lock held.
+ */
+static ULONG hcdEp0Result(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                          const XHCI_XFER_EVENT_RESULT *result)
+{
+    PXHCI_TRANSFER t;
+
+    if (result->Fatal) {
+        return 1;
+    }
+    if (result->NeedsRecovery || result->RefusedRetire) {
+        hc->Ep0Recoveries++;
+    }
+    if (result->Action == XHCI_XFER_ACTION_COMPLETE) {
+        for (t = result->Completed; t != NULL; t = t->Next) {
+            if (t == &dev->Ep0Xfer) {
+                dev->Ep0Done = 1;
+                (VOID)KeSetEvent(&hc->XferDoneEvent, IO_NO_INCREMENT, FALSE);
+            }
+        }
+    }
+    return 0;
+}
+
+/*
+ * A Transfer Event, matched by the transfer engine (xhci_xfer.c) against the
+ * EP0 queue of the device on its slot: the engine checks the TRB address,
+ * the slot and the endpoint, latches the short packet's residual, and says
+ * which records retire (26-A.5's first step, design record 13 section 6).
+ * An event for no device's EP0 is counted. Returns nonzero when the caller
+ * must request a controller reset. IRQL: DISPATCH_LEVEL, controller lock
+ * held.
  */
 ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
 {
     PHCD_CONTROLLER hc;
+    PHCD_USB_DEVICE dev;
+    XHCI_XFER_EVENT_RESULT result;
     ULONG slotId;
     ULONG dci;
-    ULONG code;
 
     hc = HcdControllerFromExt(ext);
     slotId = XHCI_TRB_GET_SLOT_ID(event->Control);
     dci = XHCI_TRB_GET_EP_ID(event->Control);
-    code = XHCI_TRB_GET_COMPLETION(event->Status);
-    if (slotId == 0 || slotId != hc->XferWaitSlot || dci != 1) {
+    dev = (slotId >= 1 && slotId <= XHCI_MAX_SLOTS) ? hc->SlotDevice[slotId]
+                                                     : NULL;
+    if (dev == NULL || dci != 1) {
         hc->TransferEventsUnclaimed++;
         return 0;
     }
-    if (code == XHCI_CC_SHORT_PACKET) {
-        hc->XferResidual = event->Status & 0x00FFFFFFUL;
+    if (XhciXferEvent(&dev->Ep0Queue, &dev->Ep0, slotId, 1, event->Param0,
+                      event->Status, event->Control, &result) !=
+        XHCI_XFER_OK) {
+        hc->TransferEventsUnclaimed++;
         return 0;
     }
-    hc->XferCode = code;
-    (VOID)KeSetEvent(&hc->XferDoneEvent, IO_NO_INCREMENT, FALSE);
-    return 0;
+    return hcdEp0Result(hc, dev, &result);
 }
 
-/* IRQL: DISPATCH_LEVEL. */
+/* The drain saw the event ring empty: a short packet's promised tail that
+ * never came settles now (XhciXferDrainSettled's gate). IRQL:
+ * DISPATCH_LEVEL, controller lock held. */
 VOID XhciSlotDrainSettled(PXHCI_EXTENSION ext)
 {
-    UNREFERENCED_PARAMETER(ext);
+    PHCD_CONTROLLER hc;
+    PHCD_USB_DEVICE dev;
+    XHCI_XFER_EVENT_RESULT result;
+    ULONG slot;
+    ULONG guard;
+
+    hc = HcdControllerFromExt(ext);
+    for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
+        dev = hc->SlotDevice[slot];
+        if (dev == NULL || !XhciXferDeferralsArmed(&dev->Ep0Queue)) {
+            continue;
+        }
+        for (guard = 0; guard < 8; guard++) {
+            if (XhciXferDrainSettled(&dev->Ep0Queue, &dev->Ep0, &result) !=
+                XHCI_XFER_OK) {
+                break;
+            }
+            if (result.Action != XHCI_XFER_ACTION_COMPLETE) {
+                if (result.NeedsRecovery) {
+                    hc->Ep0Recoveries++;
+                }
+                break;
+            }
+            (VOID)hcdEp0Result(hc, dev, &result);
+        }
+    }
 }
 
 /* IRQL: <= DISPATCH_LEVEL, controller lock released. */

@@ -76,6 +76,12 @@ typedef struct _HCD_USB_DEVICE {
     ULONG Speed;            /* PORTSC speed value, carried unchanged    */
     ULONG Mps0;
     XHCI_RING Ep0;
+    /* EP0 through the transfer engine (xhci_xfer.c): its queue, the one
+     * record the thread's control transfers use, and that record's end,
+     * under the controller lock (hcd_dev.c, hcd_enum.c). */
+    XHCI_TRANSFER_QUEUE Ep0Queue;
+    XHCI_TRANSFER Ep0Xfer;
+    ULONG Ep0Done;
     UCHAR DeviceDesc[18];
     PUCHAR Config;          /* the whole configuration descriptor       */
     ULONG ConfigLength;
@@ -115,6 +121,11 @@ typedef struct _HCD_PORT {
 } HCD_PORT, *PHCD_PORT;
 
 #define HCD_PORT_WORDS ((XHCI_MAX_ROOT_PORTS + 31UL) / 32UL)
+
+/* URB functions counted one by one (hcd_urb.c); the Windows 2000 DDK's
+ * highest is 0x002A (usbdi.h), and anything at or above this is counted as
+ * unknown. */
+#define HCD_URB_FUNCTIONS 0x40UL
 
 /* The enumeration's DMA scratch (hcd_dma.c), a 4 KB common buffer. */
 #define HCD_SCRATCH_BYTES 4096UL
@@ -197,10 +208,13 @@ typedef struct _HCD_CONTROLLER {
     PHCD_USB_DEVICE SlotDevice[XHCI_MAX_SLOTS + 1];
     PVOID ScratchVa;
     PHYSICAL_ADDRESS ScratchPa;
-    KEVENT XferDoneEvent;
-    volatile ULONG XferWaitSlot;
-    volatile ULONG XferCode;
-    volatile ULONG XferResidual;
+    KEVENT XferDoneEvent;           /* a device's Ep0Done was set          */
+    ULONG Ep0Recoveries;            /* EP0 halted or refused a retire      */
+
+    /* The function-driver contract (hcd_urb.c): what arrived, counted. */
+    ULONG UrbCount[HCD_URB_FUNCTIONS];
+    ULONG UrbUnknown;
+    ULONG IoctlUnknown;
     ULONG EnumCommandsRefused;
     ULONG EnumCommandsTimedOut;
     ULONG EnumDisableFailures;
@@ -322,6 +336,9 @@ PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
 VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc);
 NTSTATUS HcdDevicePdoPnp(PHCD_DEVICE_PDO pdo, PIRP irp);
 NTSTATUS HcdDevicePdoPower(PHCD_DEVICE_PDO pdo, PIRP irp);
+
+/* hcd_urb.c */
+NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp);
 
 /* hcd_dma.c */
 NTSTATUS HcdDmaOpen(PHCD_CONTROLLER hc);

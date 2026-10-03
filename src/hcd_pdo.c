@@ -17,8 +17,9 @@
  * bDeviceClass is 0, from the first interface. The instance id is the root
  * port, until the serial string is read (26-A.4 later, or 29-A.5).
  *
- * The URB contract is 26-A.5's: until then IRP_MJ_INTERNAL_DEVICE_CONTROL is
- * refused, so a class driver binds and its start fails.
+ * The URB contract is 26-A.5's, in hcd_urb.c: IRP_MJ_INTERNAL_DEVICE_CONTROL
+ * reaches it, and until the transfer path lands every URB is refused, so a
+ * class driver binds and its start fails.
  *
  * IRQL: PASSIVE_LEVEL, except HcdDevicePdoList (<= DISPATCH_LEVEL inside the
  * lock it takes).

@@ -194,6 +194,12 @@ static NTSTATUS NTAPI hcdDispatchOther(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     NTSTATUS status;
 
     common = (PHCD_COMMON)DeviceObject->DeviceExtension;
+    if (common->Kind == HCD_KIND_DEVICE_PDO &&
+        IoGetCurrentIrpStackLocation(Irp)->MajorFunction ==
+            IRP_MJ_INTERNAL_DEVICE_CONTROL) {
+        /* The function-driver contract (hcd_urb.c, 26-A.5). */
+        return HcdDevicePdoInternalIoctl((PHCD_DEVICE_PDO)common, Irp);
+    }
     if (common->Kind != HCD_KIND_CONTROLLER_FDO) {
         return HcdCompleteIrp(Irp, STATUS_NOT_SUPPORTED, 0);
     }

@@ -145,6 +145,7 @@ static PHCD_USB_DEVICE hcdDeviceNew(PHCD_CONTROLLER hc, ULONG port,
                                     ULONG slotId, ULONG speed)
 {
     PHCD_USB_DEVICE dev;
+    KIRQL oldIrql;
     PUCHAR p;
     ULONG i;
 
@@ -159,17 +160,29 @@ static PHCD_USB_DEVICE hcdDeviceNew(PHCD_CONTROLLER hc, ULONG port,
     dev->Port = port;
     dev->SlotId = slotId;
     dev->Speed = speed;
+    XhciXferQueueInit(&dev->Ep0Queue);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hc->SlotDevice[slotId] = dev;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
     return dev;
 }
 
+/* The record leaves the slot table under the controller lock, so the event
+ * DPC, which matches EP0 events through SlotDevice[] (hcd_dev.c), never
+ * holds a record being freed. IRQL: PASSIVE_LEVEL. */
 static VOID hcdDeviceFree(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
+    KIRQL oldIrql;
+
     if (dev == NULL) {
         return;
     }
     if (dev->SlotId != 0 && dev->SlotId <= XHCI_MAX_SLOTS) {
-        hc->SlotDevice[dev->SlotId] = NULL;
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        if (hc->SlotDevice[dev->SlotId] == dev) {
+            hc->SlotDevice[dev->SlotId] = NULL;
+        }
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
     }
     HcdPoolFree(dev->Config);
     HcdPoolFree(dev);
@@ -402,18 +415,25 @@ static ULONG hcdEvaluate(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG mps)
 /* EP0 control transfers                                                    */
 /* ----------------------------------------------------------------------- */
 
-/* One IN control transfer of `length` bytes into the scratch buffer.
- * Returns 1 with *bytes the count received, 0 on any failure. */
+/*
+ * One IN control transfer of `length` bytes into the scratch buffer,
+ * through the transfer engine (xhci_xfer.c) on the device's EP0 queue: the
+ * engine builds the TD group, publishes it whole or not at all, matches its
+ * events by TRB address, and latches the bytes moved and the USBD status
+ * (26-A.5's first step: the enumeration and the URB path share one ring and
+ * one queue). Returns 1 with *bytes the count received, 0 on any failure.
+ */
 static ULONG hcdControlIn(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                           UCHAR request, USHORT value, USHORT index,
                           ULONG length, PULONG bytes)
 {
     XHCI_CONTROL_REQUEST req;
-    XHCI_CONTROL_LAYOUT layout;
-    XHCI_TD_GROUP_PLACEMENT placement;
     XHCI_TRB trbs[XHCI_XFER_MAX_CONTROL_TRBS];
     USBPORT_SCATTER_GATHER_LIST sg;
+    KIRQL oldIrql;
     PUCHAR b;
+    ULONG answer;
+    ULONG done;
     ULONG i;
 
     *bytes = 0;
@@ -444,40 +464,34 @@ static ULONG hcdControlIn(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     req.MaxPacketSize = dev->Mps0;
     req.SgList = &sg;
 
-    if (XhciXferBuildControl(&req, trbs, XHCI_XFER_MAX_CONTROL_TRBS,
-                             &layout) != XHCI_XFER_OK) {
-        return 0;
-    }
-
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    dev->Ep0Done = 0;
     KeClearEvent(&hc->XferDoneEvent);
-    hc->XferWaitSlot = dev->SlotId;
-    hc->XferResidual = 0;
-    hc->XferCode = 0;
-    if (XhciRingEnqueueTdGroup(&dev->Ep0, trbs, layout.TrbCount,
-                               layout.TdLengths, layout.TdCount,
-                               &placement) != XHCI_RING_OK) {
-        hc->XferWaitSlot = 0;
+    answer = XhciXferSubmitControl(&dev->Ep0Queue, &dev->Ep0, &req,
+                                   &dev->Ep0Xfer, dev, trbs,
+                                   XHCI_XFER_MAX_CONTROL_TRBS);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (answer != XHCI_XFER_OK) {
         return 0;
     }
     XhciWriteDoorbell(&hc->Hc, dev->SlotId, 1);
 
-    if (!hcdWaitEvent(&hc->XferDoneEvent, HCD_TRANSFER_WAIT_MS)) {
+    done = hcdWaitEvent(&hc->XferDoneEvent, HCD_TRANSFER_WAIT_MS) &&
+           dev->Ep0Done;
+    if (!done) {
         /* The TD is still on the ring and may yet DMA into the scratch:
          * nothing reuses it until the recovery's HCRST has taken every slot
-         * (Codex review of batch (b), round 1, finding 8). */
-        hc->XferWaitSlot = 0;
+         * (Codex review of batch (b), round 1, finding 8). The record stays
+         * on the queue; the invalidation frees the device with it. */
         hc->EnumTransfersTimedOut++;
         hc->ScratchTainted = 1;
         HcdSvcRequestReset(&hc->Hc);
         return 0;
     }
-    hc->XferWaitSlot = 0;
-    /* The whole group has been consumed once its last TD completed. */
-    dev->Ep0.Dequeue = dev->Ep0.Enqueue;
-    if (hc->XferCode != XHCI_CC_SUCCESS) {
+    if (dev->Ep0Xfer.UsbdStatus != XHCI_USBD_STATUS_SUCCESS) {
         return 0;
     }
-    *bytes = (hc->XferResidual > length) ? 0 : length - hc->XferResidual;
+    *bytes = dev->Ep0Xfer.BytesTransferred;
     return 1;
 }
 

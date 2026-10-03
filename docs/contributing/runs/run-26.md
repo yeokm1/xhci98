@@ -448,3 +448,31 @@ On Windows 98 the controller's enable dropped the old HID entry at once, and
 a Refresh showed its replacement, as the b5 trace explains. The round-3
 fixes (`hcdRun`'s halt check, the service order) postdate this build. They
 change only paths that a controller failure reaches, which no leg exercised.
+
+## Batch (c): 26-A.5 and 26-A.6
+
+### EP0 through the transfer engine
+
+The controller thread's EP0 control transfers now go through the kept
+transfer engine (`xhci_xfer.c`), on a queue and a transfer record per device
+record:
+- submitted under the controller lock, published whole or not at all;
+- matched in the event DPC by TRB address, slot and endpoint
+  (`XhciXferEvent`);
+- settled at the end of a drain that saw the event ring empty;
+- the bytes moved and the USBD status latched by the engine.
+
+The old direct ring writes and the faked retire are gone, so enumeration and
+the URB path to come share one ring and one queue. Device records enter and
+leave the slot table under the controller lock, because the DPC now reads it.
+
+**Both primaries** (`855c2d69...8549`, notes `c1-98-notes.md`,
+`c1-2k-notes.md`): installed and plugged as before. The traces read
+idVendor/idProduct 0627/0001, a 34-byte configuration descriptor and a PDO
+created on each plug, the same as before the change. HID bound with Code 10
+(expected), and the device left and came back on unplug and replug. Both
+shutdowns were clean.
+
+On Windows 2000 a shell box, "E:\ is not accessible", appeared after the
+install's Finish. That was the transfer drive's autoplay window, not the
+driver; the trace shows the controller and root hub started normally.

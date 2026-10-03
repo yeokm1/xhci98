@@ -6,15 +6,23 @@
 > host suites `test_xfer`, `test_iso`, `test_vhub` and `test_init`. **Since task
 > 26-A.2 (2026-10-03)** the kept files are built again - `xhci_init.c`,
 > `xhci_cmd.c`, `xhci_evt.c`, `xhci_pci.c`, `xhci_dbg.c` - with their usbport
-> service calls replaced by `hcd_svc.h`'s, and `xhci_xfer.c` is back holding only
-> the completion-code table, lifted unchanged from `1.2.0.0`. The HCD's own files:
+> service calls replaced by `hcd_svc.h`'s, and `xhci_xfer.c` came back holding only
+> the completion-code table, lifted unchanged from `1.2.0.0`, and whole since
+> 26-A.4 as the transfer engine. The HCD's own files:
 > `hcd.h` (the device extensions), `hcd_entry.c` (DriverEntry, AddDevice,
 > dispatch), `hcd_pnp.c` and `hcd_power.c` (the controller FDO's PnP and power),
 > `hcd_ctl.c` (start and stop, the interrupt and DPC, the controller thread),
 > `hcd_svc.h`/`hcd_svc.c` (the services that replace usbport's, and the
 > controller lock), `hcd_dma.c` (the one DMA adapter file), `hcd_dev.c` (the
 > device layer the kept files call into) and `hcd_pool.c` (the one pool file;
-> not linked until the first allocation, 26-A.4). The tables below are the
+> not linked until the first allocation, 26-A.4). Batch (b) (26-A.3, 26-A.4)
+> added `hcd_rh.c` (the root-hub PDO and FDO), `hcd_enum.c` (the controller
+> thread's port service and enumeration executor), `hcd_pdo.c` (device PDOs,
+> their ids and lifecycle) and the pure `xhci_enum.c` (the per-port enumeration
+> machine, host suite `test_enum`). Batch (c) (26-A.5, 26-A.6) adds `hcd_urb.c`
+> (the device PDOs' internal device controls) and the pure `xhci_pipe.c`
+> (configuration walk, endpoint parameters, Configure Endpoint plans, setup
+> packets, buffer splits and the USBD status table; host suite `test_pipe`). The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name
