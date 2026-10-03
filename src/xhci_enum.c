@@ -143,7 +143,7 @@ ULONG XhciEnumStep(PXHCI_ENUM_PORT port, const XHCI_ENUM_EVENT *event,
             xhciEnumAct(action, XHCI_ENUM_ACT_DEBOUNCE, 0, 0);
         } else if (event->Kind == XHCI_ENUM_EV_RETRY_INTERNAL &&
                    port->State == XHCI_ENUM_FAILED &&
-                   port->Retries < XHCI_ENUM_RETRIES) {
+                   port->Retries < event->Value) {
             port->Retries++;
             port->State = XHCI_ENUM_RESET;
             xhciEnumAct(action, XHCI_ENUM_ACT_RESET, 0, 0);
@@ -289,8 +289,10 @@ ULONG XhciEnumStep(PXHCI_ENUM_PORT port, const XHCI_ENUM_EVENT *event,
 }
 
 /* The retry after a failure, as an event of its own so the caller decides
- * when - after the slot has been given back and the port re-read. */
-ULONG XhciEnumRetry(PXHCI_ENUM_PORT port, PXHCI_ENUM_ACTION action)
+ * when - after the slot has been given back and the port re-read. The
+ * event carries the retry limit in Value. */
+ULONG XhciEnumRetryUpTo(PXHCI_ENUM_PORT port, ULONG retries,
+                        PXHCI_ENUM_ACTION action)
 {
     XHCI_ENUM_EVENT event;
 
@@ -299,6 +301,11 @@ ULONG XhciEnumRetry(PXHCI_ENUM_PORT port, PXHCI_ENUM_ACTION action)
     event.Speed = 0;
     event.SlotId = 0;
     event.Bytes = 0;
-    event.Value = 0;
+    event.Value = retries;
     return XhciEnumStep(port, &event, action);
+}
+
+ULONG XhciEnumRetry(PXHCI_ENUM_PORT port, PXHCI_ENUM_ACTION action)
+{
+    return XhciEnumRetryUpTo(port, XHCI_ENUM_RETRIES, action);
 }

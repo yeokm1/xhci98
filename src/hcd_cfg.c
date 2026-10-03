@@ -232,9 +232,11 @@ static LONG hcdCfgCountEnd(PHCD_CONTROLLER hc, ULONG asked, LONG usbd)
  * A failure is not counted once the device is proven to have left: its
  * record is gone or no longer its port's, or its root port reads all ones,
  * disconnected, or with a connect change the enumeration has yet to take
- * (an unplug and replug). Behind a hub the port has no register to read
- * without a control transfer of its own, so only the record is asked: a
- * device whose hub port still holds it is counted. A select racing an ordinary unplug fails at
+ * (an unplug and replug). Behind hubs the device is counted only when
+ * every hub port on its path still reads connected and enabled with no
+ * change pending, or unread in a status-change report, and its root port
+ * as above (HcdHubPathPresent: a GET_STATUS per hub, from the thread).
+ * A select racing an ordinary unplug fails at
  * SET_CONFIGURATION or SET_INTERFACE before HcdEnumService sees the port
  * change, and counting it would fail a correct matrix run. A device still
  * on its port that refuses - SET_CONFIGURATION(0) among them - is counted
@@ -243,8 +245,6 @@ static LONG hcdCfgCountEnd(PHCD_CONTROLLER hc, ULONG asked, LONG usbd)
 static VOID hcdCfgCountSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                               LONG usbd)
 {
-    ULONG portsc;
-
     if (usbd == XHCI_USBD_STATUS_SUCCESS ||
         usbd == HCD_USBD_BUFFER_TOO_SMALL) {
         return;
@@ -253,13 +253,9 @@ static VOID hcdCfgCountSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         hc->Ports[dev->Location - 1].Device != dev) {
         return;
     }
-    if (hc->Ports[dev->Location - 1].Hub != NULL) {
-        hc->Counters.SelectsFailed++;
-        return;
-    }
-    portsc = XhciReadPortsc(&hc->Hc, dev->Port);
-    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0 ||
-        (portsc & XHCI_PORTSC_CSC) != 0) {
+    /* Behind hubs, every port on the path is asked as well (Codex review
+     * of 23e7715, finding 6). */
+    if (!HcdHubPathPresent(hc, &hc->Ports[dev->Location - 1])) {
         return;
     }
     hc->Counters.SelectsFailed++;
@@ -778,7 +774,7 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
         for (e = 0; e < iface.EndpointCount; e++) {
             answer = XhciPipeEndpointParams((const UCHAR *)cd +
                                                 iface.EndpointOffset[e],
-                                            dev->Speed, &ep);
+                                            HcdDevicePipeSpeed(hc, dev), &ep);
             if (answer != XHCI_PIPE_OK || add[ep.Dci] != NULL) {
                 XHCI_DBG_VALUE("hcd: select refused, endpoint index/speed",
                                (e << 8) | dev->Speed);
@@ -1020,7 +1016,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     for (e = 0; e < iface.EndpointCount; e++) {
         answer = XhciPipeEndpointParams(dev->Selected +
                                             iface.EndpointOffset[e],
-                                        dev->Speed, &ep);
+                                        HcdDevicePipeSpeed(hc, dev), &ep);
         if (answer != XHCI_PIPE_OK || add[ep.Dci] != NULL ||
             (keep & (1UL << ep.Dci)) != 0) {
             XHCI_DBG_VALUE("hcd: select interface refused, endpoint/speed",
@@ -1566,7 +1562,7 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         for (e = 0; e < iface.EndpointCount; e++) {
             answer = XhciPipeEndpointParams(dev->Selected +
                                                 iface.EndpointOffset[e],
-                                            dev->Speed, &ep);
+                                            HcdDevicePipeSpeed(hc, dev), &ep);
             if (answer != XHCI_PIPE_OK || add[ep.Dci] != NULL ||
                 (keep & (1UL << ep.Dci)) != 0) {
                 XHCI_DBG_VALUE("hcd: function select refused, endpoint/speed",
@@ -1740,6 +1736,9 @@ static ULONG hcdCfgQuiesce(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             HcdSvcRequestReset(&hc->Hc);
             return XHCI_EP_STATE_RUNNING;
         }
+        /* Behind a TT, a control or bulk endpoint's TT buffer may still
+         * hold the halted transaction (xHCI 4.6.8 p.116; 27-A.3). */
+        HcdHubClearTt(hc, dev, pipe->EndpointAddress, pipe->TransferType, 0);
         /* Reset Endpoint restarted the host's data toggle (TSP 0); the
          * device's restarts with CLEAR_FEATURE(ENDPOINT_HALT), or the two
          * ends disagree and a packet is lost as a duplicate (xHCI 4.6.8
@@ -1984,6 +1983,10 @@ static LONG hcdCfgReset(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         if (hcdCfgEpState(hc, dev, pipe->Dci) == XHCI_EP_STATE_HALTED) {
             ok = hcdCfgResetEndpoint(hc, dev, pipe) &&
                  hcdCfgSetDequeue(hc, dev, pipe);
+            if (ok) {
+                HcdHubClearTt(hc, dev, pipe->EndpointAddress,
+                              pipe->TransferType, 0);
+            }
         } else {
             ok = hcdCfgQuiesce(hc, dev, pipe) != XHCI_EP_STATE_RUNNING &&
                  hcdCfgRecycle(hc, dev, pipe);

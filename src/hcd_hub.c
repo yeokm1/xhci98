@@ -37,6 +37,12 @@
  * polled instead, every HCD_HUB_POLL_PASSES thread passes: a hub that
  * stopped answering has left, and its upstream port says so.
  *
+ * Removal (27-A.3) is hcd_enum.c's one teardown (hcdSubtreeGo); this file
+ * adds what the hub owes its ports' devices on the way: CLEAR_TT_BUFFER for
+ * a halted control or bulk endpoint behind a TT and after an Address Device
+ * transaction error there (HcdHubClearTt), and CLEAR_FEATURE(PORT_ENABLE)
+ * on a port given up after its attempts (HcdHubPortDisable).
+ *
  * Every function here runs on the controller thread at PASSIVE_LEVEL, the
  * one writer of the topology (design record 13 section 5.4, layer 1), so
  * the graph is used without the controller lock its header asks the
@@ -60,6 +66,10 @@
 #define HCD_HUB_POLL_STEP_MS        10UL
 #define HCD_HUB_RESET_RECOVERY_MS   10UL
 #define HCD_HUB_DEBOUNCE_MS         100UL
+/* The debounce reads the port every 25 ms and gives up on a connection
+ * that has not held still for TATTDB within 1.5 s - bus policy numbers. */
+#define HCD_HUB_DEBOUNCE_STEP_MS    25UL
+#define HCD_HUB_DEBOUNCE_LIMIT_MS   1500UL
 /* A polled hub is looked at every this many thread passes (hcd_ctl.c wakes
  * the thread at least every 100 ms). */
 #define HCD_HUB_POLL_PASSES         3UL
@@ -117,6 +127,32 @@ VOID HcdDeviceSlotParams(PHCD_USB_DEVICE dev, ULONG withHub,
         sp->NumberOfPorts = dev->HubPorts;
         sp->TtThinkTime = dev->HubTtt;
         sp->MultiTt |= dev->HubMtt;
+    }
+}
+
+/*
+ * The device's speed in the fixed encoding the endpoint policy takes
+ * (XHCI_PIPE_SPEED_*, xhci_pipe.h), decoded from the Protocol Speed ID its
+ * Slot Context carries: a controller may advertise its own PSIVs (xHCI
+ * 7.2.1), so dev->Speed is not that encoding, and only the Slot Context may
+ * take it raw (Codex review of 23e7715, finding 4). 0, which every endpoint
+ * refuses, for a speed the root port's protocol does not name. IRQL: any.
+ */
+ULONG HcdDevicePipeSpeed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    ULONG cls;
+
+    cls = XHCI_SPEED_UNKNOWN;
+    (VOID)XhciPortSpeedClass(&hc->Hc.PortMap, dev->Port, dev->Speed, &cls);
+    switch (cls) {
+    case XHCI_SPEED_LOW:
+        return XHCI_PIPE_SPEED_LOW;
+    case XHCI_SPEED_FULL:
+        return XHCI_PIPE_SPEED_FULL;
+    case XHCI_SPEED_HIGH:
+        return XHCI_PIPE_SPEED_HIGH;
+    default:
+        return 0;
     }
 }
 
@@ -252,22 +288,52 @@ ULONG HcdHubPortStatus(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     return 1;
 }
 
-/* The attach debounce on a hub port (section 10.2 step 2): still connected
- * after it. A connect change raised meanwhile is a bounce, cleared here so
- * it does not start the device over once it is enumerated. */
+/*
+ * The attach debounce on a hub port (section 10.2 step 2): the connection
+ * must hold, unchanged, for TATTDB. The port is read every
+ * HCD_HUB_DEBOUNCE_STEP_MS; a connect change seen meanwhile is a bounce,
+ * cleared here - so it does not start the device over once it is
+ * enumerated - and starts the interval again, as does a read that finds the
+ * port disconnected (Codex review of 23e7715, finding 7). Returns 1 once
+ * connected and stable; 0 once stably disconnected, after
+ * HCD_HUB_DEBOUNCE_LIMIT_MS without a stable connection, or when the hub
+ * does not answer.
+ */
 ULONG HcdHubPortDebounce(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
 {
     ULONG status;
     ULONG change;
+    ULONG stable;
+    ULONG waited;
+    ULONG connected;
+    ULONG was;
 
-    hcdHubDelay(HCD_HUB_DEBOUNCE_MS);
-    if (!HcdHubPortStatus(hc, hub, n, &status, &change)) {
-        return 0;
+    stable = 0;
+    was = 1;
+    for (waited = 0; waited < HCD_HUB_DEBOUNCE_LIMIT_MS;
+         waited += HCD_HUB_DEBOUNCE_STEP_MS) {
+        hcdHubDelay(HCD_HUB_DEBOUNCE_STEP_MS);
+        if (!HcdHubPortStatus(hc, hub, n, &status, &change)) {
+            return 0;
+        }
+        connected = (status & XHCI_HUB_PORT_CONNECTION) != 0;
+        if ((change & XHCI_HUB_C_PORT_CONNECTION) != 0) {
+            (VOID)hcdHubFeature(hc, hub, n, 0,
+                                XHCI_HUB_FEAT_C_PORT_CONNECTION);
+            stable = 0;
+        } else if (connected != was) {
+            stable = 0;
+        } else {
+            stable += HCD_HUB_DEBOUNCE_STEP_MS;
+        }
+        was = connected;
+        if (stable >= HCD_HUB_DEBOUNCE_MS) {
+            return connected;
+        }
     }
-    if ((change & XHCI_HUB_C_PORT_CONNECTION) != 0) {
-        (VOID)hcdHubFeature(hc, hub, n, 0, XHCI_HUB_FEAT_C_PORT_CONNECTION);
-    }
-    return (status & XHCI_HUB_PORT_CONNECTION) != 0;
+    XHCI_DBG_VALUE("hcd: hub port never stable, hub/port",
+                   (hub->Index << 8) | n);
+    return 0;
 }
 
 /*
@@ -288,8 +354,16 @@ ULONG HcdHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
 
     *speedClass = XHCI_SPEED_UNKNOWN;
     if (!HcdHubPortStatus(hc, hub, n, &status, &change) ||
-        (status & XHCI_HUB_PORT_CONNECTION) == 0 ||
-        !hcdHubFeature(hc, hub, n, 1, XHCI_HUB_FEAT_PORT_RESET)) {
+        (status & XHCI_HUB_PORT_CONNECTION) == 0) {
+        return 0;
+    }
+    /* An older reset's change cleared first, so the one that ends this
+     * reset is this reset's (XhciHubResetProgress). */
+    if ((change & XHCI_HUB_C_PORT_RESET) != 0 &&
+        !hcdHubFeature(hc, hub, n, 0, XHCI_HUB_FEAT_C_PORT_RESET)) {
+        return 0;
+    }
+    if (!hcdHubFeature(hc, hub, n, 1, XHCI_HUB_FEAT_PORT_RESET)) {
         return 0;
     }
     hcdHubDelay(HCD_HUB_RESET_FIRST_MS);
@@ -393,6 +467,129 @@ static VOID hcdHubSelf(PHCD_CONTROLLER hc, PHCD_HUB hub)
         XHCI_DBG_VALUE("hcd: hub status change, hub/status/change",
                        (hub->Index << 24) | (status << 8) | change);
     }
+}
+
+/*
+ * Whether the device on port q is still there as far as every port on its
+ * path can say without the enumeration's help: each hub port above it
+ * connected and enabled, with no connect or enable change raised and none
+ * waiting in an unread status-change report or a Changed bit, its hub live,
+ * and the root port the path starts at connected with no connect change.
+ * A hub that does not answer is not presence. Reads change nothing: every
+ * change seen is left for the hub service. Thread only, powered.
+ */
+ULONG HcdHubPathPresent(PHCD_CONTROLLER hc, PHCD_PORT q)
+{
+    PHCD_HUB hub;
+    KIRQL oldIrql;
+    ULONG pending;
+    ULONG status;
+    ULONG change;
+    ULONG portsc;
+    ULONG hops;
+
+    for (hops = 0; q != NULL && q->Hub != NULL; hops++) {
+        hub = q->Hub;
+        if (hops > XHCI_TOPO_MAX_TIER || hub->Draining ||
+            hub->Device == NULL || (hub->Changed & (1UL << q->Number)) != 0) {
+            return 0;
+        }
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        pending = hub->Device->HubXferDone;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        if (pending ||
+            !HcdHubPortStatus(hc, hub, q->Number, &status, &change) ||
+            (status & XHCI_HUB_PORT_CONNECTION) == 0 ||
+            (status & XHCI_HUB_PORT_ENABLE) == 0 ||
+            (change & (XHCI_HUB_C_PORT_CONNECTION | XHCI_HUB_C_PORT_ENABLE)) !=
+                0) {
+            return 0;
+        }
+        q = hub->Upstream;
+    }
+    if (q == NULL) {
+        return 0;
+    }
+    portsc = XhciReadPortsc(&hc->Hc, q->PortId);
+    return portsc != 0xFFFFFFFFUL && (portsc & XHCI_PORTSC_CCS) != 0 &&
+           (portsc & XHCI_PORTSC_CSC) == 0;
+}
+
+/* A hub port given up after its attempts (section 10.2 step 7): disabled,
+ * and left so until its next connect change - the machine waits in Failed
+ * for a connect, which the hub's own disable does not raise. */
+VOID HcdHubPortDisable(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
+{
+    hc->HubPortsGivenUp++;
+    if (!hcdHubFeature(hc, hub, n, 0, XHCI_HUB_FEAT_PORT_ENABLE)) {
+        XHCI_DBG_VALUE("hcd: hub port not disabled, hub/port",
+                       (hub->Index << 8) | n);
+        return;
+    }
+    XHCI_DBG_VALUE("hcd: hub port given up, disabled, hub/port",
+                   (hub->Index << 8) | n);
+}
+
+/*
+ * CLEAR_TT_BUFFER to the TT a Full- or Low-Speed device sits behind (section
+ * 10.4; xhci_hub.h): after a control or bulk endpoint of it halted and was
+ * reset (xHCI 4.6.8 p.116), and after its Address Device failed with a USB
+ * Transaction Error (p.102), where the device still answers at address 0
+ * (`addressZero`). `type` is XHCI_PIPE_XFER_*; any but control and bulk
+ * clears nothing. The TT hub is the slot the device's TT fields name, which
+ * the leaf-first teardown keeps enabled for as long as the device's is. A
+ * hub that does not take the request is logged and counted, not acted on: a
+ * buffer left busy costs that TT's next split transaction to the endpoint a
+ * retry, not the device (USB 2.0 11.17.5, to transcribe). Thread only,
+ * powered.
+ */
+VOID HcdHubClearTt(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                   ULONG endpointAddress, ULONG type, ULONG addressZero)
+{
+    PHCD_USB_DEVICE ttDev;
+    PHCD_HUB hub;
+    ULONG address;
+    ULONG offset;
+    ULONG value;
+    ULONG bytes;
+    ULONG stalled;
+
+    if (dev->TtSlot == 0 || dev->TtSlot > XHCI_MAX_SLOTS) {
+        return;
+    }
+    ttDev = hc->SlotDevice[dev->TtSlot];
+    hub = (ttDev != NULL) ? ttDev->Hub : NULL;
+    if (hub == NULL || hub->Draining || hub->Device != ttDev || hub->Refused) {
+        return;
+    }
+    address = 0;
+    if (!addressZero) {
+        /* The USB Device Address the xHC assigned: output Slot Context DW3
+         * bits 7:0 (xhci-data-structures.md, the Slot Context table). */
+        if (XhciSlotContextOffset(&hc->Hc.Layout, dev->SlotId, &offset) !=
+            XHCI_LAYOUT_OK) {
+            return;
+        }
+        address = XhciCommonAt(&hc->Hc, offset)[3] & 0xFFUL;
+    }
+    if (!XhciHubClearTtValue(address, endpointAddress & 0x0FUL, type,
+                             type != XHCI_HUB_TT_EP_CONTROL &&
+                                 (endpointAddress & 0x80UL) != 0,
+                             &value)) {
+        return;
+    }
+    if (!hcdHubRequest(hc, hub, XHCI_HUB_RT_PORT_OUT,
+                       XHCI_HUB_REQ_CLEAR_TT_BUFFER, (USHORT)value,
+                       (USHORT)XhciHubClearTtPort(dev->TtMulti, dev->TtPort),
+                       0, &bytes, &stalled)) {
+        hc->TtBufferClearFailures++;
+        XHCI_DBG_VALUE("hcd: CLEAR_TT_BUFFER refused, TT slot/wValue",
+                       (dev->TtSlot << 16) | value);
+        return;
+    }
+    hc->TtBufferClears++;
+    XHCI_DBG_VALUE("hcd: CLEAR_TT_BUFFER, TT slot/wValue",
+                   (dev->TtSlot << 16) | value);
 }
 
 /* ----------------------------------------------------------------------- */
@@ -687,7 +884,7 @@ static ULONG hcdHubConfigure(PHCD_CONTROLLER hc, PHCD_HUB hub)
                               hub->Alternate, &iface) != XHCI_PIPE_OK ||
         iface.EndpointCount < 1 ||
         XhciPipeEndpointParams(dev->Config + iface.EndpointOffset[0],
-                               dev->Speed, &ep) != XHCI_PIPE_OK ||
+                               HcdDevicePipeSpeed(hc, dev), &ep) != XHCI_PIPE_OK ||
         ep.TransferType != XHCI_PIPE_XFER_INTERRUPT || !ep.DirectionIn) {
         XHCI_DBG_VALUE("hcd: hub has no status-change endpoint, slot",
                        dev->SlotId);

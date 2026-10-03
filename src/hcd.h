@@ -442,13 +442,15 @@ typedef struct _HCD_HUB {
  * unknown. */
 #define HCD_URB_FUNCTIONS 0x40UL
 
-/* The enumeration's DMA scratch (hcd_dma.c), a 4 KB common buffer. Its
- * tail holds each hub's status-change report (hcd_hub.c); the thread's
- * control transfers use what is before it. */
-#define HCD_SCRATCH_BYTES 4096UL
+/* The enumeration's DMA scratch (hcd_dma.c), one common buffer: the
+ * thread's control transfers use its first 4 KB, the limit a configuration
+ * descriptor had before Phase 27, and each hub's status-change report has
+ * its own slice after them (hcd_hub.c), so serving hubs takes nothing from
+ * that limit (Codex review of 23e7715, finding 8). */
+#define HCD_SCRATCH_CONTROL_BYTES 4096UL
 #define HCD_HUB_STATUS_BYTES    XHCI_HUB_STATUS_MAX_BYTES
-#define HCD_SCRATCH_CONTROL_BYTES                                            \
-    (HCD_SCRATCH_BYTES - HCD_MAX_HUBS * HCD_HUB_STATUS_BYTES)
+#define HCD_SCRATCH_BYTES                                                    \
+    (HCD_SCRATCH_CONTROL_BYTES + HCD_MAX_HUBS * HCD_HUB_STATUS_BYTES)
 
 typedef struct _HCD_CONTROLLER {
     HCD_COMMON Common;
@@ -588,6 +590,15 @@ typedef struct _HCD_CONTROLLER {
     ULONG EnumCommandsTimedOut;
     ULONG EnumDisableFailures;
     ULONG EnumTransfersTimedOut;
+    /* Removal and the TT (27-A.3; hcd_enum.c, hcd_hub.c): endpoints
+     * stopped so a leaving device's URBs complete before its slot goes,
+     * hub ports given up after their attempts, CLEAR_TT_BUFFER sent and
+     * refused. Thread only; outside the matrix's counter block. */
+    ULONG TeardownStops;
+    ULONG TeardownStopFailures;
+    ULONG HubPortsGivenUp;
+    ULONG TtBufferClears;
+    ULONG TtBufferClearFailures;
 
     /* The device layer (hcd_dev.c). */
     KEVENT CmdDoneEvent;
@@ -766,6 +777,7 @@ VOID HcdEnumCycle(PHCD_CONTROLLER hc, ULONG port, ULONG serial);
 /* hcd_hub.c */
 VOID HcdDeviceSlotParams(PHCD_USB_DEVICE dev, ULONG withHub,
                          PXHCI_SLOT_PARAMS sp);
+ULONG HcdDevicePipeSpeed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 ULONG HcdHubPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG speedClass,
                   PHCD_USB_DEVICE dev);
 ULONG HcdHubStart(PHCD_CONTROLLER hc, PHCD_PORT p, PHCD_USB_DEVICE dev);
@@ -781,6 +793,10 @@ ULONG HcdHubPortLook(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
 VOID HcdHubCollect(PHCD_CONTROLLER hc, PHCD_HUB hub);
 VOID HcdHubRearm(PHCD_CONTROLLER hc, PHCD_HUB hub);
 VOID HcdHubXferRetired(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdHubPortDisable(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n);
+ULONG HcdHubPathPresent(PHCD_CONTROLLER hc, PHCD_PORT q);
+VOID HcdHubClearTt(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                   ULONG endpointAddress, ULONG type, ULONG addressZero);
 
 /* hcd_strict.c: debug and qemu flavours only; nothing in release. */
 #if DBG

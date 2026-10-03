@@ -163,14 +163,12 @@ ULONG XhciHubResetProgress(ULONG status, ULONG change)
     if ((status & XHCI_HUB_PORT_CONNECTION) == 0) {
         return XHCI_HUB_RESET_FAILED;
     }
-    if ((change & XHCI_HUB_C_PORT_RESET) == 0 &&
+    /* Only a fresh C_PORT_RESET with the reset bit clear says this reset
+     * ended: the caller cleared any older one before starting it, and an
+     * enabled port with neither may be one the hub has not reset yet (Codex
+     * review of 23e7715, finding 5; USB 2.0 11.24.2.7.2.5, to transcribe). */
+    if ((change & XHCI_HUB_C_PORT_RESET) == 0 ||
         (status & XHCI_HUB_PORT_RESET) != 0) {
-        return XHCI_HUB_RESET_PENDING;
-    }
-    if ((change & XHCI_HUB_C_PORT_RESET) == 0 &&
-        (status & XHCI_HUB_PORT_ENABLE) == 0) {
-        /* Neither the change nor the enable yet: the reset bit has not been
-         * seen set either, so the hub may not have started it. */
         return XHCI_HUB_RESET_PENDING;
     }
     return ((status & XHCI_HUB_PORT_ENABLE) != 0) ? XHCI_HUB_RESET_ENABLED
@@ -234,4 +232,73 @@ ULONG XhciHubPowerWaitMs(ULONG powerGoodMs)
         return 1000UL;
     }
     return powerGoodMs;
+}
+
+/* IRQL: any. */
+ULONG XhciHubClearTtValue(ULONG address, ULONG endpoint, ULONG type,
+                          ULONG in, PULONG value)
+{
+    if (value == NULL) {
+        return 0;
+    }
+    *value = 0;
+    if ((type != XHCI_HUB_TT_EP_CONTROL && type != XHCI_HUB_TT_EP_BULK) ||
+        address > 127UL || endpoint > 15UL) {
+        return 0;
+    }
+    *value = endpoint | (address << 4) | (type << 11) | (in ? 0x8000UL : 0);
+    return 1;
+}
+
+/* IRQL: any. */
+ULONG XhciHubClearTtPort(ULONG multiTt, ULONG ttPort)
+{
+    return multiTt ? ttPort : 1UL;
+}
+
+/* A hub's distance below `top`, or XHCI_HUB_DETACHED when `top` is not on
+ * its chain within `count` steps. IRQL: any. */
+static ULONG xhciHubDepthBelow(const ULONG *parent, ULONG count, ULONG top,
+                               ULONG hub)
+{
+    ULONG depth;
+    ULONG at;
+
+    at = hub;
+    for (depth = 0; depth < count; depth++) {
+        if (at == top) {
+            return depth;
+        }
+        if (parent[at] == XHCI_HUB_DETACHED ||
+            parent[at] == XHCI_HUB_NO_PARENT || parent[at] >= count) {
+            return XHCI_HUB_DETACHED;
+        }
+        at = parent[at];
+    }
+    return XHCI_HUB_DETACHED;
+}
+
+/* IRQL: any. */
+ULONG XhciHubReleaseOrder(const ULONG *parent, ULONG count, ULONG top,
+                          PULONG order)
+{
+    ULONG written;
+    ULONG d;
+    ULONG i;
+
+    if (parent == NULL || order == NULL || top >= count ||
+        parent[top] == XHCI_HUB_DETACHED) {
+        return 0;
+    }
+    written = 0;
+    /* Deepest first: a hub's children are one deeper than it, so each is
+     * written before it. */
+    for (d = count; d > 0; d--) {
+        for (i = 0; i < count; i++) {
+            if (xhciHubDepthBelow(parent, count, top, i) == d - 1UL) {
+                order[written++] = i;
+            }
+        }
+    }
+    return written;
 }
