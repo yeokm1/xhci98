@@ -13,6 +13,13 @@
  * every time the thread wakes and holds something, and once more with the
  * counter block at every stop.
  *
+ * The device matrix's counters (xhci_counters.h) are published here too:
+ * zeroed and identified at every start (HcdCountersStart), and refreshed
+ * and traced from the thread's poll (HcdCountersPoll). The matrix reads the
+ * block itself through the QEMU monitor; the trace sites are what
+ * scripts\vm-matrix\gen-offsets.ps1 derives its table from, so every field
+ * has exactly one, its label a single literal.
+ *
  * **This file holds the only DbgPrint outside the qemu flavour's live trace**
  * (AGENTS.md, "Coding Style"; the allowlist's DbgPrint row restricts the
  * import to this object and xhci_dbg.obj). Per-line DbgPrint from a DPC or an
@@ -26,6 +33,7 @@
 
 #include "hcd.h"
 #include "xhci_hw.h"
+#include "xhci_dbg.h"
 
 /* A stack buffer below a page: MSVC emits a __chkstk probe for a page or
  * more, and the Windows 2000 DDK's libraries do not provide one. */
@@ -75,8 +83,8 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "imod.interval", ext->ImodInterval, 1);
     XhciLogAppend(log, "imod.readback", ext->ImodReadback, 1);
     XhciLogAppend(log, "events.total", ext->EventsTotal, 1);
-    XhciLogAppend(log, "slots.enabled", ext->SlotsEnabled, 1);
-    XhciLogAppend(log, "devices.addressed", ext->DevicesAddressed, 1);
+    XhciLogAppend(log, "slots.enabled", hc->Counters.SlotsEnabled, 1);
+    XhciLogAppend(log, "devices.addressed", hc->Counters.DevicesAddressed, 1);
     XhciLogAppend(log, "cmd.issued", ext->CommandsIssued, 1);
     XhciLogAppend(log, "cmd.timedout", ext->CommandsTimedOut, 1);
     XhciLogAppend(log, "cmd.abandoned", ext->CommandsAbandoned, 1);
@@ -170,4 +178,139 @@ VOID HcdLogFlush(PHCD_CONTROLLER hc, ULONG reason, ULONG counters)
     }
     XhciLogFlushEnd(&ext->Log, emitted, 1);
     XhciControllerLockRelease(ext, oldIrql);
+}
+
+/* ----------------------------------------------------------------------- */
+/* The device matrix's counters                                             */
+/* ----------------------------------------------------------------------- */
+
+#ifdef XHCI_DBG_TRACE
+/*
+ * One site per field, under the label matrix-hcd.psd1 names it by
+ * (scripts/vm-matrix/README.md lists the 38). Change-gated, so an idle poll
+ * prints nothing; the matrix reads the block, not these lines.
+ * IRQL: PASSIVE_LEVEL (the controller thread).
+ */
+static VOID hcdCountersTrace(const XHCIHC_COUNTERS *cnt)
+{
+    XHCI_DBG_VALUE_CHANGED("devices addressed", cnt->DevicesAddressed);
+    XHCI_DBG_VALUE_CHANGED("slots enabled", cnt->SlotsEnabled);
+    XHCI_DBG_VALUE_CHANGED("port speed decoded - high speed",
+                           cnt->PortSpeedHigh);
+    XHCI_DBG_VALUE_CHANGED("port speed decoded - full speed",
+                           cnt->PortSpeedFull);
+    XHCI_DBG_VALUE_CHANGED("port speed decoded - low speed",
+                           cnt->PortSpeedLow);
+    XHCI_DBG_VALUE_CHANGED("slot context speed - high speed",
+                           cnt->SlotSpeedHigh);
+    XHCI_DBG_VALUE_CHANGED("slot context speed - full speed",
+                           cnt->SlotSpeedFull);
+    XHCI_DBG_VALUE_CHANGED("slot context speed - low speed",
+                           cnt->SlotSpeedLow);
+    XHCI_DBG_VALUE_CHANGED("slot speed disagreeing with port speed",
+                           cnt->SpeedDisagreements);
+
+    XHCI_DBG_VALUE_CHANGED("endpoints opened", cnt->EndpointsOpened);
+    XHCI_DBG_VALUE_CHANGED("select endpoints requested",
+                           cnt->SelectEndpointsRequested);
+    XHCI_DBG_VALUE_CHANGED("select endpoints refused",
+                           cnt->SelectEndpointsRefused);
+    XHCI_DBG_VALUE_CHANGED("endpoint refusals - type",
+                           cnt->EndpointRefusalsType);
+    XHCI_DBG_VALUE_CHANGED("endpoint refusals - params",
+                           cnt->EndpointRefusalsParams);
+    XHCI_DBG_VALUE_CHANGED("endpoint refusals - ring pool",
+                           cnt->EndpointRefusalsPool);
+    XHCI_DBG_VALUE_CHANGED("endpoint configure failures",
+                           cnt->EndpointConfigureFailures);
+    XHCI_DBG_VALUE_CHANGED("endpoints refused - no bandwidth",
+                           cnt->EndpointsNoBandwidth);
+    XHCI_DBG_VALUE_CHANGED("endpoints refused - no resources",
+                           cnt->EndpointsNoResources);
+    XHCI_DBG_VALUE_CHANGED("URBs refused - malformed", cnt->UrbsMalformed);
+
+    XHCI_DBG_VALUE_CHANGED("fatal controller status", cnt->FatalStatus);
+    XHCI_DBG_VALUE_CHANGED("transfer events for no open endpoint",
+                           cnt->TransferEventsUnclaimed);
+    XHCI_DBG_VALUE_CHANGED("interrupt mask failures",
+                           cnt->InterruptMaskFailures);
+    XHCI_DBG_VALUE_CHANGED("commands the engine gave up on",
+                           cnt->CommandsGivenUp);
+
+    XHCI_DBG_VALUE_CHANGED("transfers submitted", cnt->TransfersSubmitted);
+    XHCI_DBG_VALUE_CHANGED("transfers completed", cnt->TransfersCompleted);
+    XHCI_DBG_VALUE_CHANGED("transfers cancelled", cnt->TransfersCancelled);
+    XHCI_DBG_VALUE_CHANGED("iso packets answered", cnt->IsoPacketsAnswered);
+    XHCI_DBG_VALUE_CHANGED("iso missed service errors",
+                           cnt->IsoMissedService);
+    XHCI_DBG_VALUE_CHANGED("iso packet errors", cnt->IsoPacketErrors);
+
+    XHCI_DBG_VALUE_CHANGED("hubs started by the bus", cnt->HubsStarted);
+    XHCI_DBG_VALUE_CHANGED("topology: hub descriptors folded",
+                           cnt->TopoDescriptors);
+    XHCI_DBG_VALUE_CHANGED("topology: hub descriptors malformed",
+                           cnt->TopoDescriptorsBad);
+    XHCI_DBG_VALUE_CHANGED("topology: hub slots marked",
+                           cnt->TopoHubSlotsMarked);
+    XHCI_DBG_VALUE_CHANGED("topology: nodes dropped", cnt->TopoNodesDropped);
+    XHCI_DBG_VALUE_CHANGED("topology: behind-hub devices addressed",
+                           cnt->TopoBehindHubAddressed);
+    XHCI_DBG_VALUE_CHANGED("topology: behind-hub opens",
+                           cnt->TopoBehindHubOpens);
+    XHCI_DBG_VALUE_CHANGED("topology: behind-hub refused - too deep",
+                           cnt->TopoBehindHubTooDeep);
+    XHCI_DBG_VALUE_CHANGED("topology: TT pairs programmed",
+                           cnt->TopoTtProgrammed);
+}
+#endif
+
+/*
+ * A controller start: the block zeroed, so a restart inside a matrix window
+ * reads as the negative delta the harness voids it on, and the qemu
+ * flavour's identity lines, in the order lib\counters.ps1 reads them. The
+ * block does not move on a stop and start, so the start number is what
+ * tells a restart from the same start. Before anything that counts.
+ * IRQL: PASSIVE_LEVEL (the start).
+ */
+VOID HcdCountersStart(PHCD_CONTROLLER hc)
+{
+    PUCHAR p;
+    ULONG i;
+
+    p = (PUCHAR)&hc->Counters;
+    for (i = 0; i < sizeof(XHCIHC_COUNTERS); i++) {
+        p[i] = 0;
+    }
+    hc->CountersStart++;
+    if (hc->CountersStart == 0) {
+        hc->CountersStart = 1;
+    }
+    XHCI_DBG_VALUE("counters start", hc->CountersStart);
+    XHCI_DBG_VALUE("counters size", sizeof(XHCIHC_COUNTERS));
+#ifdef _WIN64
+    XHCI_DBG_VALUE("counters VA high",
+                   (ULONG)(((ULONG_PTR)&hc->Counters) >> 32));
+#endif
+    XHCI_DBG_VALUE("counters VA low",
+                   (ULONG)((ULONG_PTR)&hc->Counters & 0xFFFFFFFFUL));
+}
+
+/*
+ * The thread's poll: the two counters the kept controller sequence keeps in
+ * XHCI_EXTENSION copied in - both zeroed with it at the same start, so a
+ * copy is exact - and, in the qemu flavour, the trace. The health poll that
+ * moves FatalStatusDetected runs just before this, on the same thread.
+ * IRQL: PASSIVE_LEVEL (the controller thread).
+ */
+VOID HcdCountersPoll(PHCD_CONTROLLER hc)
+{
+    KIRQL oldIrql;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->Counters.FatalStatus = hc->Hc.FatalStatusDetected;
+    hc->Counters.InterruptMaskFailures = hc->Hc.InterruptMaskFailures;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+#ifdef XHCI_DBG_TRACE
+    hcdCountersTrace(&hc->Counters);
+#endif
 }

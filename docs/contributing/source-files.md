@@ -77,6 +77,7 @@ These need `ntddk.h` or a usbport service, take the controller lock, or derefere
 | `xhci_xfer.h` | The transfer engine's interface (`xhci_xfer.c`), kept out of `xhci.h` because it needs `xhci_usbport.h`. | yes |
 | `xhci_desc.h` | The descriptor snoop's interface, and the argument for why it must exist. | yes |
 | `xhci_topo.h` | The topology graph's types and interface, with the measured wire constants. | yes |
+| `xhci_counters.h` | The device matrix's counter block, `XHCIHC_COUNTERS` (roadmap-hcd.md 26-A.10): embedded in the controller FDO's extension, zeroed at every start, and measured by `scripts\vm-matrix\gen-offsets.ps1` under `XHCI_HOST_TEST`, which is why it is a header of its own. | yes |
 | `xhci_log.h` | The log ring's contract: the verbosity ladder, the sinks, and the rule that recording is not emission. | yes |
 | `xhci_probe.h` | The probe's classification and counters. | no - it takes the lock |
 | `xhci_hw.h` | The driver-only side of the split: MMIO accessors, PCI config access, bounded waits. Implemented in `xhci_pci.c`. | no |

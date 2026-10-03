@@ -143,6 +143,7 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
         }
     }
     hc->EnumCommandsTimedOut++;
+    hc->Counters.CommandsGivenUp++;
     HcdSvcRequestReset(&hc->Hc);
     return 0;
 }
@@ -469,6 +470,59 @@ static ULONG hcdBuildEp0Input(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     return 1;
 }
 
+/* One speed class into one of a counter triple (High, Full, Low); any other
+ * class counts in none, which the matrix reads as a wrong speed. */
+static VOID hcdCountSpeed(ULONG speedClass, PULONG high, PULONG full,
+                          PULONG low)
+{
+    if (speedClass == XHCI_SPEED_HIGH) {
+        (*high)++;
+    } else if (speedClass == XHCI_SPEED_FULL) {
+        (*full)++;
+    } else if (speedClass == XHCI_SPEED_LOW) {
+        (*low)++;
+    }
+}
+
+/*
+ * An enumeration's Address Device succeeded: the matrix's speed counters.
+ * The port's speed is the PORTSC value the reset left, decoded; the slot's
+ * is read back out of the Input Slot Context the command carried, decoded
+ * the same way, so a builder that wrote another PSIV shows as a
+ * disagreement rather than as the speed it was given.
+ */
+static VOID hcdCountAddressed(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    PXHCI_EXTENSION ext;
+    PXHCIHC_COUNTERS c;
+    volatile ULONG *slot;
+    ULONG portClass;
+    ULONG slotClass;
+    ULONG isc;
+
+    ext = &hc->Hc;
+    c = &hc->Counters;
+    c->DevicesAddressed++;
+    portClass = XHCI_SPEED_UNKNOWN;
+    slotClass = XHCI_SPEED_UNKNOWN;
+    (VOID)XhciPortSpeedClass(&ext->PortMap, dev->Port, dev->Speed,
+                             &portClass);
+    if (XhciInputSlotContextOffset(&ext->Layout, &isc) == XHCI_LAYOUT_OK) {
+        slot = XhciCommonAt(ext, isc);
+        (VOID)XhciPortSpeedClass(&ext->PortMap, dev->Port,
+                                 (slot[0] & XHCI_SLOT_SPEED_MASK) >>
+                                     XHCI_SLOT_SPEED_SHIFT,
+                                 &slotClass);
+    }
+    hcdCountSpeed(portClass, &c->PortSpeedHigh, &c->PortSpeedFull,
+                  &c->PortSpeedLow);
+    hcdCountSpeed(slotClass, &c->SlotSpeedHigh, &c->SlotSpeedFull,
+                  &c->SlotSpeedLow);
+    if (portClass != slotClass || portClass == XHCI_SPEED_UNKNOWN) {
+        c->SpeedDisagreements++;
+    }
+}
+
 /* Address Device with BSR = 0 for the slot the port just enabled: the EP0
  * ring at the slot's carved place, the device context in the DCBAA. */
 static ULONG hcdAddress(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG mps)
@@ -517,6 +571,7 @@ static ULONG hcdAddress(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG mps)
     if (hcdCommand(hc, &trb, &control) != XHCI_CC_SUCCESS) {
         return 0;
     }
+    hcdCountAddressed(hc, dev);
     dev->Mps0 = mps;
     HcdRelativeMs(&due, HCD_SETADDRESS_MS);
     (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
@@ -987,6 +1042,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
                 return 1;
             }
             p->Device = hc->SlotDevice[next->SlotId];
+            hc->Counters.SlotsEnabled++;
             next->Ok = 1;
         }
         XHCI_DBG_VALUE("hcd: enable slot, code/slot", (code << 8) |

@@ -108,6 +108,7 @@ static ULONG hcdEp0Result(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             } else {
                 /* A URB's record: completed after the lock's release, by
                  * the deferred work (hcd_io.c). */
+                hc->Counters.TransfersCompleted++;
                 HcdIoRetired(hc, t);
             }
         }
@@ -144,6 +145,7 @@ static ULONG hcdPipeResult(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
     }
     if (result->Action == XHCI_XFER_ACTION_COMPLETE) {
         for (t = result->Completed; t != NULL; t = t->Next) {
+            hc->Counters.TransfersCompleted++;
             HcdIoRetired(hc, t);
         }
     }
@@ -165,6 +167,11 @@ static ULONG hcdIsoEvent(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG slotId,
                          ULONG dci, const XHCI_TRB *event, ULONG cc)
 {
     XHCI_XFER_EVENT_RESULT result;
+    PXHCI_TRANSFER_QUEUE q;
+    ULONG answered;
+    ULONG errors;
+    ULONG missed;
+    ULONG answer;
 
     if (cc == XHCI_CC_RING_UNDERRUN || cc == XHCI_CC_RING_OVERRUN) {
         if (cc == XHCI_CC_RING_UNDERRUN) {
@@ -182,10 +189,19 @@ static ULONG hcdIsoEvent(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG slotId,
         }
         return 0;
     }
-    if (XhciXferIsoEvent(pipe->Queue, pipe->Ring, slotId, dci, event->Param0,
-                         event->Status, event->Control, &result) !=
-        XHCI_XFER_OK) {
-        hc->TransferEventsUnclaimed++;
+    /* The engine counts per queue, and a queue goes with its pipe: the
+     * block takes what this one event moved. */
+    q = pipe->Queue;
+    answered = q->IsoPacketsAnswered;
+    errors = q->IsoPacketErrors;
+    missed = q->IsoMissedService;
+    answer = XhciXferIsoEvent(q, pipe->Ring, slotId, dci, event->Param0,
+                              event->Status, event->Control, &result);
+    hc->Counters.IsoPacketsAnswered += q->IsoPacketsAnswered - answered;
+    hc->Counters.IsoPacketErrors += q->IsoPacketErrors - errors;
+    hc->Counters.IsoMissedService += q->IsoMissedService - missed;
+    if (answer != XHCI_XFER_OK) {
+        hc->Counters.TransferEventsUnclaimed++;
         return 0;
     }
     if (result.NeedsRecovery && !result.RefusedRetire && !result.Fatal) {
@@ -238,7 +254,7 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
          * when its code is fatal (xhci_xfer.h, XhciXferEvent: "escalating
          * that belongs to the caller that routed the event"; Codex review
          * of batch (c), round 1, finding 3). */
-        hc->TransferEventsUnclaimed++;
+        hc->Counters.TransferEventsUnclaimed++;
         return XhciXferCodeInfo(XHCI_TRB_GET_COMPLETION(event->Status),
                                 &code) == XHCI_XFER_OK &&
                code.Fatal;
@@ -259,7 +275,7 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     if (XhciXferEvent(pipe->Queue, pipe->Ring, slotId, dci, event->Param0,
                       event->Status, event->Control, &result) !=
         XHCI_XFER_OK) {
-        hc->TransferEventsUnclaimed++;
+        hc->Counters.TransferEventsUnclaimed++;
         return 0;
     }
     if (dci == 1) {

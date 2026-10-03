@@ -801,6 +801,7 @@ static LONG hcdFill(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
     x->MapBase = NULL;
     x->MapCount = 0;
     if (req == NULL) {
+        (VOID)InterlockedIncrement((PLONG)&hc->Counters.UrbsMalformed);
         return HCD_USBD_INVALID_PARAMETER;
     }
     x->Control = req->Control;
@@ -859,6 +860,7 @@ static LONG hcdFill(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
     if (req->Mdl != NULL) {
         if (MmGetMdlByteCount(req->Mdl) < req->Length) {
             (VOID)InterlockedIncrement((PLONG)&hc->UrbsMdlShort);
+            (VOID)InterlockedIncrement((PLONG)&hc->Counters.UrbsMalformed);
             return HCD_USBD_INVALID_PARAMETER;
         }
         x->Mdl = req->Mdl;
@@ -869,6 +871,7 @@ static LONG hcdFill(PHCD_CONTROLLER hc, PHCD_XFER x, PVOID urb,
         }
         x->OwnMdl = 1;
     } else {
+        (VOID)InterlockedIncrement((PLONG)&hc->Counters.UrbsMalformed);
         return HCD_USBD_INVALID_PARAMETER;
     }
     if (!hcdPlanChunk(hc, x)) {
@@ -1149,6 +1152,7 @@ VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok)
     if (answer == XHCI_XFER_OK) {
         x->State = HCD_XFER_ON_RING;
         x->Engine = 1;
+        hc->Counters.TransfersSubmitted++;
         /* The doorbell under the lock: once it is released the thread may
          * pause and stop the endpoint, and a doorbell rung after that
          * would restart it under the thread's edit (Codex review of batch
@@ -1618,6 +1622,7 @@ VOID HcdIoDrainPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd)
         next = t->Next;
         if (t != &pipe->Device->Ep0Xfer) {
             t->UsbdStatus = usbd;
+            hc->Counters.TransfersCancelled++;
             HcdIoRetired(hc, t);
         }
         t = next;

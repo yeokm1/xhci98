@@ -171,6 +171,61 @@ VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 }
 
 /* ----------------------------------------------------------------------- */
+/* The matrix's select accounting (xhci_counters.h)                         */
+/* ----------------------------------------------------------------------- */
+
+/* An endpoint descriptor a select could not open: UNSUPPORTED is a type or
+ * speed this bus does not serve; a malformed descriptor, or a DCI named
+ * twice or already a sibling's, is its parameters. */
+static VOID hcdCfgCountEndpoint(PHCD_CONTROLLER hc, ULONG answer)
+{
+    if (answer == XHCI_PIPE_UNSUPPORTED) {
+        hc->Counters.EndpointRefusalsType++;
+    } else {
+        hc->Counters.EndpointRefusalsParams++;
+    }
+}
+
+/* A Configure Endpoint that was to add `mask`'s endpoints and did not; code
+ * 0 is one never issued. The split is XhciPipeConfigureUsbdStatus's, the
+ * resource class apart from the two bandwidth codes. */
+static VOID hcdCfgCountConfigure(PHCD_CONTROLLER hc, ULONG code, ULONG mask)
+{
+    ULONG n;
+
+    for (n = 0; mask != 0; mask &= mask - 1) {
+        n++;
+    }
+    if (code == XHCI_CC_RESOURCE_ERROR) {
+        hc->Counters.EndpointsNoResources += n;
+    } else if (code == XHCI_CC_BANDWIDTH_ERROR ||
+               code == XHCI_CC_SECONDARY_BANDWIDTH) {
+        hc->Counters.EndpointsNoBandwidth += n;
+    } else {
+        hc->Counters.EndpointConfigureFailures++;
+    }
+}
+
+/* The endpoints a select's URB named, once the interface naming them is
+ * found; at the select's end they are all opened or all refused, so the
+ * matrix's identity holds at every return that follows a count. */
+static VOID hcdCfgCountAsked(PHCD_CONTROLLER hc, PULONG asked, ULONG n)
+{
+    *asked += n;
+    hc->Counters.SelectEndpointsRequested += n;
+}
+
+static LONG hcdCfgCountEnd(PHCD_CONTROLLER hc, ULONG asked, LONG usbd)
+{
+    if (usbd == XHCI_USBD_STATUS_SUCCESS) {
+        hc->Counters.EndpointsOpened += asked;
+    } else {
+        hc->Counters.SelectEndpointsRefused += asked;
+    }
+    return usbd;
+}
+
+/* ----------------------------------------------------------------------- */
 /* Input Context                                                            */
 /* ----------------------------------------------------------------------- */
 
@@ -518,11 +573,14 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
     ULONG control;
     ULONG code;
     ULONG bytes;
+    ULONG asked;
+    ULONG answer;
     ULONG dci;
     ULONG e;
     LONG usbd;
 
     ext = &hc->Hc;
+    asked = 0;
     sc = &urb->UrbSelectConfiguration;
     cd = sc->ConfigurationDescriptor;
     XHCI_DBG_VALUE("hcd: select, URB length", urb->UrbHeader.Length);
@@ -594,9 +652,12 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
                                   ii->InterfaceNumber, ii->AlternateSetting,
                                   &iface) != XHCI_PIPE_OK) {
             usbd = HCD_USBD_INVALID_PARAMETER;
-        } else if (ii->Length < fixed + iface.EndpointCount *
-                                            sizeof(USBD_PIPE_INFORMATION)) {
-            usbd = HCD_USBD_BUFFER_TOO_SMALL;
+        } else {
+            hcdCfgCountAsked(hc, &asked, iface.EndpointCount);
+            if (ii->Length < fixed + iface.EndpointCount *
+                                         sizeof(USBD_PIPE_INFORMATION)) {
+                usbd = HCD_USBD_BUFFER_TOO_SMALL;
+            }
         }
         if (usbd != XHCI_USBD_STATUS_SUCCESS) {
             XHCI_DBG_VALUE("hcd: select refused, interface length/number/alt",
@@ -620,17 +681,19 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
             alt[iface.InterfaceNumber] = (UCHAR)iface.AlternateSetting;
         }
         for (e = 0; e < iface.EndpointCount; e++) {
-            if (XhciPipeEndpointParams((const UCHAR *)cd +
-                                           iface.EndpointOffset[e],
-                                       dev->Speed, &ep) != XHCI_PIPE_OK ||
-                add[ep.Dci] != NULL) {
+            answer = XhciPipeEndpointParams((const UCHAR *)cd +
+                                                iface.EndpointOffset[e],
+                                            dev->Speed, &ep);
+            if (answer != XHCI_PIPE_OK || add[ep.Dci] != NULL) {
                 XHCI_DBG_VALUE("hcd: select refused, endpoint index/speed",
                                (e << 8) | dev->Speed);
+                hcdCfgCountEndpoint(hc, answer);
                 usbd = HCD_USBD_INVALID_PARAMETER;
                 break;
             }
             add[ep.Dci] = hcdCfgPipeNew(hc, dev, &ep, &usbd);
             if (add[ep.Dci] == NULL) {
+                hc->Counters.EndpointRefusalsPool++;
                 break;
             }
             add[ep.Dci]->Interface = iface.InterfaceNumber;
@@ -651,10 +714,12 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
                                      XhciCommonPA(ext,
                                                   ext->Layout.InputContextOffset),
                                      0) != XHCI_RING_OK) {
+            hcdCfgCountConfigure(hc, 0, mask);
             usbd = HCD_USBD_INTERNAL_HC_ERROR;
         } else {
             code = HcdThreadCommand(hc, &trb, &control);
             if (code != XHCI_CC_SUCCESS) {
+                hcdCfgCountConfigure(hc, code, mask);
                 usbd = (LONG)XhciPipeConfigureUsbdStatus(code);
                 mask = 0;   /* nothing was enabled */
             }
@@ -700,7 +765,7 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
                 }
             }
         }
-        return usbd;
+        return hcdCfgCountEnd(hc, asked, usbd);
     }
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -715,7 +780,7 @@ static LONG hcdCfgSelect(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev, PURB urb)
     sc->ConfigurationHandle = (USBD_CONFIGURATION_HANDLE)dev;
     XHCI_DBG_VALUE("hcd: configured, slot/endpoint mask",
                    (dev->SlotId << 24) | (mask >> 8));
-    return XHCI_USBD_STATUS_SUCCESS;
+    return hcdCfgCountEnd(hc, asked, XHCI_USBD_STATUS_SUCCESS);
 }
 
 /* ----------------------------------------------------------------------- */
@@ -774,11 +839,14 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG control;
     ULONG code;
     ULONG bytes;
+    ULONG asked;
+    ULONG answer;
     ULONG dci;
     ULONG e;
     LONG usbd;
 
     ext = &hc->Hc;
+    asked = 0;
     si = &urb->UrbSelectInterface;
     ii = &si->Interface;
     fixed = FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes);
@@ -803,6 +871,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            ii->AlternateSetting);
         return HCD_USBD_INVALID_PARAMETER;
     }
+    hcdCfgCountAsked(hc, &asked, iface.EndpointCount);
     if (ii->Length < fixed + iface.EndpointCount *
                                  sizeof(USBD_PIPE_INFORMATION)) {
         XHCI_DBG_VALUE("hcd: select interface too small, length/number/alt",
@@ -810,7 +879,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            ((ULONG)ii->InterfaceNumber << 8) |
                            ii->AlternateSetting);
         hcdCfgNeedLength(ii, &iface);
-        return HCD_USBD_BUFFER_TOO_SMALL;
+        return hcdCfgCountEnd(hc, asked, HCD_USBD_BUFFER_TOO_SMALL);
     }
     if ((ULONG)urb->UrbHeader.Length <
         FIELD_OFFSET(struct _URB_SELECT_INTERFACE, Interface) +
@@ -834,7 +903,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             (VOID)HcdIoPipeCancelAll(hc, dev->Pipes[dci]);
             if (hcdCfgQuiesce(hc, dev, dev->Pipes[dci]) ==
                 XHCI_EP_STATE_RUNNING) {
-                return HCD_USBD_INTERNAL_HC_ERROR;
+                return hcdCfgCountEnd(hc, asked, HCD_USBD_INTERNAL_HC_ERROR);
             }
         } else {
             keep |= 1UL << dci;
@@ -854,16 +923,20 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     mask = 0;
     usbd = XHCI_USBD_STATUS_SUCCESS;
     for (e = 0; e < iface.EndpointCount; e++) {
-        if (XhciPipeEndpointParams(dev->Selected + iface.EndpointOffset[e],
-                                   dev->Speed, &ep) != XHCI_PIPE_OK ||
-            add[ep.Dci] != NULL || (keep & (1UL << ep.Dci)) != 0) {
+        answer = XhciPipeEndpointParams(dev->Selected +
+                                            iface.EndpointOffset[e],
+                                        dev->Speed, &ep);
+        if (answer != XHCI_PIPE_OK || add[ep.Dci] != NULL ||
+            (keep & (1UL << ep.Dci)) != 0) {
             XHCI_DBG_VALUE("hcd: select interface refused, endpoint/speed",
                            (e << 8) | dev->Speed);
+            hcdCfgCountEndpoint(hc, answer);
             usbd = HCD_USBD_INVALID_PARAMETER;
             break;
         }
         add[ep.Dci] = hcdCfgPipeNew(hc, dev, &ep, &usbd);
         if (add[ep.Dci] == NULL) {
+            hc->Counters.EndpointRefusalsPool++;
             break;
         }
         add[ep.Dci]->Interface = iface.InterfaceNumber;
@@ -882,6 +955,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                      XhciCommonPA(ext,
                                                   ext->Layout.InputContextOffset),
                                      0) != XHCI_RING_OK) {
+            hcdCfgCountConfigure(hc, 0, mask);
             usbd = HCD_USBD_INTERNAL_HC_ERROR;
             dev->Stale = old;
         } else {
@@ -889,6 +963,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             if (code != XHCI_CC_SUCCESS) {
                 /* Nothing changed: the old endpoints stay enabled with no
                  * pipe, to be dropped by the next command. */
+                hcdCfgCountConfigure(hc, code, mask);
                 usbd = (LONG)XhciPipeConfigureUsbdStatus(code);
                 dev->Stale = old;
             } else {
@@ -916,7 +991,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                 hcdCfgPipeFree(hc, dev, add[dci]);
             }
         }
-        return usbd;
+        return hcdCfgCountEnd(hc, asked, usbd);
     }
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
@@ -940,7 +1015,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     XHCI_DBG_VALUE("hcd: interface selected, number/alt",
                    (iface.InterfaceNumber << 8) | iface.AlternateSetting);
     XHCI_DBG_VALUE("hcd: interface selected, endpoint mask", mask);
-    return XHCI_USBD_STATUS_SUCCESS;
+    return hcdCfgCountEnd(hc, asked, XHCI_USBD_STATUS_SUCCESS);
 }
 
 /* ----------------------------------------------------------------------- */
@@ -993,19 +1068,26 @@ static ULONG hcdCfgReplace(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     XHCI_PIPE_PLAN plan;
     XHCI_TRB trb;
     ULONG control;
+    ULONG code;
 
     ext = &hc->Hc;
     old |= dev->Stale;
     if ((old | mask) == 0) {
         return 1;
     }
+    code = 0;
     if (XhciPipeConfigurePlan(keep, old, mask, &plan) != XHCI_PIPE_OK ||
         !hcdCfgBuildInput(hc, dev, &plan, add) ||
         XhciTrbConfigureEndpoint(&trb, dev->SlotId,
                                  XhciCommonPA(ext,
                                               ext->Layout.InputContextOffset),
                                  0) != XHCI_RING_OK ||
-        HcdThreadCommand(hc, &trb, &control) != XHCI_CC_SUCCESS) {
+        (code = HcdThreadCommand(hc, &trb, &control)) != XHCI_CC_SUCCESS) {
+        /* A release adds nothing, and refuses no endpoint a client asked
+         * for. */
+        if (mask != 0) {
+            hcdCfgCountConfigure(hc, code, mask);
+        }
         dev->Stale = old;
         return 0;
     }
@@ -1303,11 +1385,14 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG old;
     ULONG mask;
     ULONG done;
+    ULONG asked;
+    ULONG answer;
     ULONG dci;
     ULONG e;
     ULONG n;
     LONG usbd;
 
+    asked = 0;
     sc = &urb->UrbSelectConfiguration;
     if (!dev->Split || dev->Selected == NULL || dev->ConfigValue == 0) {
         return HCD_USBD_INTERNAL_HC_ERROR;
@@ -1335,8 +1420,9 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            ((ULONG)ii->Length << 16) |
                                ((ULONG)ii->InterfaceNumber << 8) |
                                ii->AlternateSetting);
-            return HCD_USBD_INVALID_PARAMETER;
+            return hcdCfgCountEnd(hc, asked, HCD_USBD_INVALID_PARAMETER);
         }
+        hcdCfgCountAsked(hc, &asked, iface.EndpointCount);
         if (ii->Length < fixed + iface.EndpointCount *
                                      sizeof(USBD_PIPE_INFORMATION)) {
             XHCI_DBG_VALUE("hcd: function select too small, length/number/alt",
@@ -1344,7 +1430,7 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                ((ULONG)ii->InterfaceNumber << 8) |
                                ii->AlternateSetting);
             hcdCfgNeedLength(ii, &iface);
-            return HCD_USBD_BUFFER_TOO_SMALL;
+            return hcdCfgCountEnd(hc, asked, HCD_USBD_BUFFER_TOO_SMALL);
         }
         named |= 1UL << ii->InterfaceNumber;
         alt[ii->InterfaceNumber] = ii->AlternateSetting;
@@ -1352,7 +1438,7 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 
     old = hcdCfgCloseFunction(hc, dev, pdo->InterfaceMask, &keep);
     if (old == 0xFFFFFFFFUL) {
-        return HCD_USBD_INTERNAL_HC_ERROR;
+        return hcdCfgCountEnd(hc, asked, HCD_USBD_INTERNAL_HC_ERROR);
     }
 
     if (sc->ConfigurationDescriptor == NULL) {
@@ -1383,16 +1469,20 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
             opened |= 1UL << ii->InterfaceNumber;
         }
         for (e = 0; e < iface.EndpointCount; e++) {
-            if (XhciPipeEndpointParams(dev->Selected + iface.EndpointOffset[e],
-                                       dev->Speed, &ep) != XHCI_PIPE_OK ||
-                add[ep.Dci] != NULL || (keep & (1UL << ep.Dci)) != 0) {
+            answer = XhciPipeEndpointParams(dev->Selected +
+                                                iface.EndpointOffset[e],
+                                            dev->Speed, &ep);
+            if (answer != XHCI_PIPE_OK || add[ep.Dci] != NULL ||
+                (keep & (1UL << ep.Dci)) != 0) {
                 XHCI_DBG_VALUE("hcd: function select refused, endpoint/speed",
                                (e << 8) | dev->Speed);
+                hcdCfgCountEndpoint(hc, answer);
                 usbd = HCD_USBD_INVALID_PARAMETER;
                 break;
             }
             add[ep.Dci] = hcdCfgPipeNew(hc, dev, &ep, &usbd);
             if (add[ep.Dci] == NULL) {
+                hc->Counters.EndpointRefusalsPool++;
                 break;
             }
             add[ep.Dci]->Interface = iface.InterfaceNumber;
@@ -1440,7 +1530,7 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                 hcdCfgPipeFree(hc, dev, add[dci]);
             }
         }
-        return usbd;
+        return hcdCfgCountEnd(hc, asked, usbd);
     }
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     for (dci = 2; dci < 32; dci++) {
@@ -1455,7 +1545,7 @@ static LONG hcdCfgSelectFunction(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     sc->ConfigurationHandle = hcdCfgHandle(dev, pdo);
     XHCI_DBG_VALUE("hcd: function configured, first interface/DCI mask",
                    (pdo->Func.FirstInterface << 24) | (mask >> 8));
-    return XHCI_USBD_STATUS_SUCCESS;
+    return hcdCfgCountEnd(hc, asked, XHCI_USBD_STATUS_SUCCESS);
 }
 
 /* ----------------------------------------------------------------------- */
@@ -1902,6 +1992,7 @@ static VOID hcdCfgCancelPipe(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         }
         (VOID)XhciXferQueueRemove(pipe->Queue, t);
         t->UsbdStatus = HCD_USBD_CANCELED;
+        hc->Counters.TransfersCancelled++;
         HcdIoRetired(hc, t);
     }
     if (move) {

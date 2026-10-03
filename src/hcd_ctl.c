@@ -412,6 +412,7 @@ static VOID hcdPoll(PHCD_CONTROLLER hc)
             XhciRequestControllerReset(ext);
         }
     }
+    HcdCountersPoll(hc);
     /* Outside the STARTED gate: a failed resume (HcdControllerFail) is a
      * recovery request on a controller whose flags no longer say it runs. */
     hcdRecover(hc);
@@ -614,6 +615,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
      * rebuilds, so it is reset with it (Codex review of 26-A.2, round 4,
      * finding 1). */
     hc->SuspendedInD0 = 0;
+    HcdCountersStart(hc);
     HcdEnumInit(hc);
 
     status = hcdParseResources(hc, irp);
