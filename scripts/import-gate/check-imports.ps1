@@ -458,16 +458,30 @@ function Read-AllowFile {
             if ($requirement -notin @("required", "optional")) {
                 throw "$Path line ${lineNo}: REQUIREMENT must be required or optional"
             }
+            $module = $Matches[1]
+            $symbol = $Matches[2]
             $notes = ""
             if ($fields.Count -eq 4) {
                 $notes = $fields[3]
             }
+            # SITES=a.obj,b.obj as the first word of the notes names the only
+            # object files that may reference the import (design record 13
+            # section 7.5: the pool and DMA calls each live in one file). A row
+            # without it is unrestricted.
+            $sites = @()
+            if ($notes -match "^SITES=(\S*)") {
+                $sites = @($Matches[1].ToLower() -split "," | Where-Object { $_ -ne "" })
+                if ($sites.Count -eq 0 -or @($sites | Where-Object { $_ -notmatch "^[a-z0-9_]+\.obj$" }).Count -gt 0) {
+                    throw "$Path line ${lineNo}: SITES= must list object file names (name.obj), comma separated"
+                }
+            }
             $allow += [pscustomobject]@{
-                Module      = $Matches[1]
-                Symbol      = $Matches[2]
+                Module      = $module
+                Symbol      = $symbol
                 Flavors     = $flavors
                 Requirement = $requirement
                 Notes       = $notes
+                Sites       = $sites
                 Source      = "allowlist"
             }
             continue
@@ -625,6 +639,163 @@ function Test-NtkernName {
 }
 
 # -------------------------------------------------------------------- main ---
+
+function Get-ObjectImportRefs {
+    param([string[]]$DumpLines)
+
+    # `dumpbin /symbols` on an object lists each import it calls as an UNDEF
+    # External: the thunk `__imp__ExFreePool@4` (x86 stdcall),
+    # `__imp_@IofCallDriver@8` (x86 fastcall) or `__imp_ExFreePool` (amd64)
+    # when the declaration carries dllimport, and the plain symbol
+    # `_ExFreePool@4` when it does not and the import library's stub resolves
+    # it - so every undefined external is taken, with the decoration stripped
+    # (Codex review of 26-A.2, round 1, finding 9).
+    $names = @()
+    foreach ($line in $DumpLines) {
+        if ($line -match "\bUNDEF\b.*\bExternal\s+\|\s+(\S+)") {
+            $name = $Matches[1]
+            if ($name -match "^__imp_(.+)$") {
+                $name = $Matches[1]
+            }
+            if ($name -match "^[_@](.+)$") {
+                $name = $Matches[1]
+            }
+            if ($name -match "^(.+)@\d+$") {
+                $name = $Matches[1]
+            }
+            $names += $name
+        }
+    }
+    return $names
+}
+
+# WDK 7.1 compiles the amd64 objects for link-time code generation, and the
+# dumper sees nothing in them, so the rule falls back to the sources: each
+# object's .c file (beside the sources file, two levels above obj<fl>\<arch>)
+# is searched for each restricted symbol as an identifier. A name reached only
+# through a macro of another spelling is not seen, which the per-object check
+# on x86 does see; an amd64-only call written by name is (Codex review of
+# 26-A.2, round 1, finding 10).
+# C joins a backslash-newline before it reads a token (translation phase 2),
+# and `??/` is a backslash under trigraph replacement (phase 1), so a name can
+# be split across lines and still compile to the import (Codex review of
+# 26-A.2, round 5, finding 3). The scan joins them first. What it still cannot
+# see is a name assembled by token pasting (`##`) inside a macro - the one
+# spelling that needs the preprocessor itself; the x86 per-object check sees
+# it in shared code, and an amd64-only pasted call is the scan's recorded
+# residual.
+function Join-CSplices {
+    param([string]$Text)
+    # The splices first (phases 1 and 2), then the comments, which become a
+    # space before tokens are read (phase 3): a name in a comment is no
+    # reference (a header that only discusses a pool call is not a site).
+    # Comments and string and character literals are read in one pass, left
+    # to right, as the compiler's tokenizer does: a "//" inside a string is no
+    # comment, and a "/*" inside one opens none (Codex review of batch (b),
+    # round 1, finding 15). A literal becomes a space as a comment does - no
+    # name inside one is a call.
+    $joined = $Text -replace "(\\|\?\?/)\r?\n", ""
+    $lexeme = '"(?:[^"\\\r\n]|\\.)*"|''(?:[^''\\\r\n]|\\.)*''|/\*.*?\*/|//[^\r\n]*'
+    $joined = [regex]::Replace($joined, $lexeme, " ", [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    # A directive that only tests or removes a macro name - #undef, #ifdef,
+    # #ifndef - can never become a call (xhci_compat.h undoes the DDKs' pool
+    # rewrites that way); a #define can, and stays.
+    return [regex]::Replace($joined, "(?m)^[ \t]*#[ \t]*(undef|ifdef|ifndef)\b[^\r\n]*", " ")
+}
+
+function Test-ImportSitesFromSource {
+    param(
+        [string]$ImagePath,
+        [object[]]$SiteRows,
+        [object[]]$Objects
+    )
+
+    $srcDir = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $ImagePath))
+    $checked = 0
+    # A restricted name in a header, at any depth below the sources, can reach
+    # any object through a macro, and no per-file scan can attribute it, so
+    # none is allowed in one (Codex review of 26-A.2, rounds 2 and 3).
+    foreach ($header in @(Get-ChildItem -LiteralPath $srcDir -Filter "*.h" -File -Recurse -ErrorAction SilentlyContinue)) {
+        $headerText = Join-CSplices ([System.IO.File]::ReadAllText($header.FullName))
+        foreach ($row in $SiteRows) {
+            if ($headerText -cmatch ("\b" + [regex]::Escape($row.Symbol) + "\b")) {
+                Add-Failure "$($row.Module)!$($row.Symbol) is named in the header $($header.FullName): a macro there could reach any object, so a SITES-restricted name may not appear in a header (source scan, the objects being LTCG)."
+            }
+        }
+    }
+    foreach ($obj in $Objects) {
+        $source = Join-Path $srcDir ([System.IO.Path]::GetFileNameWithoutExtension($obj.Name) + ".c")
+        if (-not (Test-Path -LiteralPath $source)) {
+            Add-Failure "SITES rule: $($obj.Name) beside $ImagePath is an unreadable LTCG object and its source $source was not found, so the rule cannot be checked for it."
+            continue
+        }
+        $text = Join-CSplices ([System.IO.File]::ReadAllText($source))
+        foreach ($row in $SiteRows) {
+            if ($text -cnotmatch ("\b" + [regex]::Escape($row.Symbol) + "\b")) {
+                continue
+            }
+            $checked++
+            if ($row.Sites -notcontains $obj.Name.ToLower()) {
+                Add-Failure "$($row.Module)!$($row.Symbol) is named in $source, but its allowlist row restricts it to SITES=$($row.Sites -join ',') (design record 13 section 7.5; a source scan, the objects being LTCG)."
+            }
+        }
+    }
+    Write-Ok "SITES rule (a source scan over $($Objects.Count) LTCG object(s)): $($SiteRows.Count) restricted pair(s), $checked reference(s) checked"
+}
+
+function Test-ImportSites {
+    param(
+        [string]$ImagePath,
+        [object]$Rules,
+        [string]$Dumpbin
+    )
+
+    $siteRows = @($Rules.Allow | Where-Object { $_.Sites.Count -gt 0 })
+    if ($siteRows.Count -eq 0) {
+        return
+    }
+
+    # build.exe writes the objects beside the image it links them into.
+    $objDir = Split-Path -Parent $ImagePath
+    $objects = @(Get-ChildItem -LiteralPath $objDir -Filter "*.obj" -File -ErrorAction SilentlyContinue)
+    if ($objects.Count -eq 0) {
+        Add-Failure "$ImagePath has SITES= rows to check but no object files beside it in $objDir - the per-object rule cannot be read from the image alone."
+        return
+    }
+
+    $checked = 0
+    $anonymous = 0
+    foreach ($obj in $objects) {
+        $dump = @(Invoke-Dumpbin -Exe $Dumpbin -Mode "/symbols" -Path $obj.FullName)
+        # WDK 7.1 compiles amd64 objects for link-time code generation (/GL):
+        # the dumper reports them as ANONYMOUS OBJECT and lists no symbols, so
+        # nothing can be read from them, and saying "0 references" would read
+        # as a pass. They are counted and reported instead.
+        if (@($dump | Where-Object { $_ -match "ANONYMOUS OBJECT" }).Count -gt 0) {
+            $anonymous++
+            continue
+        }
+        $refs = @(Get-ObjectImportRefs $dump)
+        foreach ($row in $siteRows) {
+            if ($refs -cnotcontains $row.Symbol) {
+                continue
+            }
+            $checked++
+            if ($row.Sites -notcontains $obj.Name.ToLower()) {
+                Add-Failure "$($row.Module)!$($row.Symbol) is referenced from $($obj.Name), but its allowlist row restricts it to SITES=$($row.Sites -join ',') (design record 13 section 7.5)."
+            }
+        }
+    }
+    if ($anonymous -eq $objects.Count) {
+        Test-ImportSitesFromSource -ImagePath $ImagePath -SiteRows $siteRows -Objects $objects
+        return
+    }
+    if ($anonymous -gt 0) {
+        Add-Failure "SITES rule: $anonymous of $($objects.Count) object file(s) beside $ImagePath are unreadable (ANONYMOUS OBJECT) and the rest are not - a mixed obj directory, so the rule cannot be read from it."
+        return
+    }
+    Write-Ok "SITES rule: $($siteRows.Count) restricted pair(s), $checked object reference(s) checked across $($objects.Count) object file(s)"
+}
 
 function Test-Image {
     param(
@@ -822,6 +993,8 @@ function Test-Image {
             }
         }
     }
+
+    Test-ImportSites -ImagePath $Path -Rules $Rules -Dumpbin $Dumpbin
 
     foreach ($row in $Rules.Allow) {
         if ($row.Requirement -ne "required") {

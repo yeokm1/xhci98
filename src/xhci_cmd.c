@@ -1,6 +1,11 @@
 /*
  * xhci_cmd.c - the asynchronous command engine.
  *
+ * KEPT FROM THE MINIPORT (roadmap-hcd.md task 26-A.2). This file was the
+ * usbport miniport's; its comments still speak of usbport, its callbacks and
+ * its locks. src/hcd_svc.h, "READING THE KEPT FILES", is the key from each
+ * of those names to the HCD code that now plays the part.
+ *
  * Roadmap Phase 4 task 7, and it lands before any slot code depends on it for
  * the reason the task is worded that way: every command this driver will ever
  * issue - Enable Slot, Address Device, Configure Endpoint, Reset Endpoint, Set
@@ -64,6 +69,7 @@
  * 9). */
 #include "xhci_xfer.h"
 #include "xhci_dbg.h"
+#include "hcd_svc.h"
 
 /* Forward: armed by the submit, and by the timeout for its own second rung. */
 static VOID NTAPI xhciCommandTimeout(PVOID miniPortExtension, PVOID context);
@@ -104,88 +110,34 @@ static VOID NTAPI xhciCommandTimeout(PVOID miniPortExtension, PVOID context);
 static LONG xhciStartEpoch;
 
 /*
- * **The controller-state lock lives in the driver image, not in the miniport
- * extension**, and that is the second thing usbport's zeroing decides.
+ * **The controller-state lock lives outside the extension every start zeroes.**
  *
- * The first version put a KSPIN_LOCK in the extension and re-created it on every
- * StartController. Checking an epoch before taking it narrows the window but
- * does not close it: a callback can pass the checks, be preempted, and resume
- * inside KeAcquireSpinLock on a lock word that usbport has since zeroed and a
- * restart has since re-initialized. A check is not synchronization.
+ * The miniport's first version put a KSPIN_LOCK in the extension and
+ * re-created it on every StartController; a callback could pass its checks,
+ * be preempted, and resume inside KeAcquireSpinLock on a lock word a restart
+ * had since zeroed and re-initialized. A check is not synchronization. The
+ * miniport answered with one lock in the driver image, created in DriverEntry.
  *
- * A lock that is created once, in DriverEntry, and never re-created has no such
- * window - there is nothing for a restart to do to it. Every field the engine
- * touches is then read *under* it, epoch and signatures included, so a stale
- * callback is excluded rather than merely detected.
+ * The HCD keeps the property and drops the sharing (design record 13 section
+ * 5.4): the lock is per controller, in the HCD's controller object, created
+ * once at AddDevice and never re-created, and reached through
+ * HcdSvcControllerLock. Every field the engine touches is still read *under*
+ * it, epoch and signatures included, so a stale callback is excluded rather
+ * than merely detected.
  *
- * One lock for every controller this driver serves. That is a real
- * serialization, and it is the right trade: a machine has one or two xHCI
- * controllers, the engine allows one command at a time, and the longest
- * critical section is one bounded event-ring drain with no waiting in it.
- * Buying a per-controller lock back would mean re-creating one somewhere, which
- * is the hazard this exists to remove.
- *
- * IRQL: DISPATCH_LEVEL while held. Still innermost - no usbport service is
- * called under it.
- */
-static KSPIN_LOCK xhciControllerLock;
-
-/*
- * The second lock, and it protects no state at all: it is held across the
- * `UsbPortCompleteTransfer` / `UsbPortCompleteIsoTransfer` call so that the
- * call is made at DISPATCH_LEVEL from every context, which is what stops an
- * NT 6.x usbport's done DPC - queued inside that service before its queued
- * state is stored - from running on the same CPU before the store (issue 7;
- * `XHCI_EXTENSION.DeliverUnderUsbportLockOnly`). A private lock rather than a
- * raised IRQL because the import ceiling has spin locks and no
- * `KeRaiseIrql`. Never held with the controller lock, and the service takes
- * no usbport lock and re-enters no miniport slot, so it is innermost too.
- *
- * IRQL: DISPATCH_LEVEL while held.
- */
-static KSPIN_LOCK xhciDeliveryLock;
-
-/* IRQL: PASSIVE_LEVEL (DriverEntry only). */
-VOID XhciControllerGlobalInit(VOID)
-{
-    KeInitializeSpinLock(&xhciControllerLock);
-    KeInitializeSpinLock(&xhciDeliveryLock);
-}
-
-/* IRQL: <= DISPATCH_LEVEL on entry, DISPATCH_LEVEL while held. See the
- * contract in src/xhci_hw.h. */
-VOID XhciDeliveryLockAcquire(PKIRQL oldIrql)
-{
-    KeAcquireSpinLock(&xhciDeliveryLock, oldIrql);
-}
-
-/* IRQL: DISPATCH_LEVEL (the lock is held). */
-VOID XhciDeliveryLockRelease(KIRQL oldIrql)
-{
-    KeReleaseSpinLock(&xhciDeliveryLock, oldIrql);
-}
-
-#ifdef XHCI_HOST_TEST
-/* The host model tells the two locks apart by address; nothing else may. */
-PKSPIN_LOCK XhciHostDeliveryLockWord(VOID)
-{
-    return &xhciDeliveryLock;
-}
-#endif
-
-/*
  * Functions rather than an exposed lock word: every user has one spelling for
- * the lock order, and the host model sees every acquire and release through the
- * same hooks. IRQL: <= DISPATCH_LEVEL on entry, DISPATCH_LEVEL while held.
+ * the lock order. IRQL: <= DISPATCH_LEVEL on entry, DISPATCH_LEVEL while
+ * held. Still innermost - nothing that calls out of the driver is called
+ * under it.
  */
-VOID XhciControllerLockAcquire(PKIRQL oldIrql)
+VOID XhciControllerLockAcquire(PXHCI_EXTENSION ext, PKIRQL oldIrql)
 {
-    KeAcquireSpinLock(&xhciControllerLock, oldIrql);
+    KeAcquireSpinLock(HcdSvcControllerLock(ext), oldIrql);
 }
 
-VOID XhciControllerLockRelease(KIRQL oldIrql)
+VOID XhciControllerLockRelease(PXHCI_EXTENSION ext, KIRQL oldIrql)
 {
-    KeReleaseSpinLock(&xhciControllerLock, oldIrql);
+    KeReleaseSpinLock(HcdSvcControllerLock(ext), oldIrql);
 }
 
 /* IRQL: <= DISPATCH_LEVEL. */
@@ -200,10 +152,10 @@ ULONG XhciControllerUpdateFlags(PXHCI_EXTENSION ext,
         return 0;
     }
 
-    XhciControllerLockAcquire(&oldIrql);
+    XhciControllerLockAcquire(ext, &oldIrql);
     previous = ext->Flags;
     ext->Flags = (previous & ~clearMask) | setMask;
-    XhciControllerLockRelease(oldIrql);
+    XhciControllerLockRelease(ext, oldIrql);
     return previous;
 }
 
@@ -238,9 +190,9 @@ VOID XhciLogNote(PXHCI_EXTENSION ext, const char *label, ULONG value)
         return;
     }
 
-    XhciControllerLockAcquire(&oldIrql);
+    XhciControllerLockAcquire(ext, &oldIrql);
     XhciLogAppend(&ext->Log, label, value, 1);
-    XhciControllerLockRelease(oldIrql);
+    XhciControllerLockRelease(ext, oldIrql);
 }
 
 /* IRQL: <= DISPATCH_LEVEL, controller lock **not** held - it takes it. */
@@ -252,9 +204,9 @@ VOID XhciLogNoteAddress(PXHCI_EXTENSION ext, const char *label, ULONG value)
         return;
     }
 
-    XhciControllerLockAcquire(&oldIrql);
+    XhciControllerLockAcquire(ext, &oldIrql);
     XhciLogAppendAddress(&ext->Log, label, value);
-    XhciControllerLockRelease(oldIrql);
+    XhciControllerLockRelease(ext, oldIrql);
 }
 
 /*
@@ -284,46 +236,21 @@ ULONG XhciAsyncTimerArm(PXHCI_EXTENSION ext,
     KIRQL oldIrql;
     ULONG answer;
 
-    if (!ext->ArmThroughExOnly) {
-        /*
-         * The Version 200 tier, as every NT 5.x build has always been armed.
-         * The answer is discarded: USBPORT_RequestAsyncCallback returns 0 on
-         * success **and** 0 when its pool allocation fails (usbport.c), so
-         * there is nothing in it to act on.
-         */
-        if (XhciRegPacket.UsbPortRequestAsyncCallback == NULL) {
-            return XHCI_ARM_REFUSED;
-        }
-        (VOID)XhciRegPacket.UsbPortRequestAsyncCallback(
-            ext, milliseconds, context, (ULONG_PTR)contextLength, callback);
-        return XHCI_ARM_MADE;
-    }
-
-    if (mode != XHCI_ARM_UNLOCKED) {
-        XhciControllerLockAcquire(&oldIrql);
-        ext->AsyncArmsDeferred++;
-        XhciControllerLockRelease(oldIrql);
-        return XHCI_ARM_OWED;
-    }
-
     /*
-     * Lock byte 0: the service takes usbport's timer-list lock itself. The
-     * handle is not asked for, because nothing here cancels (the stale
-     * callback is still the rule, and Windows 7's StopController runs a
-     * pending one early whatever this driver holds). The tier flag is set
-     * only when usbport wrote the slot; the test is for the host suite's
-     * vectors, which set the flag by hand.
+     * The HCD's own timer service (hcd_svc.h). Its slot lock is innermost and
+     * it takes no lock of a caller's, so the Version 300 tier's owed arm -
+     * which existed because usbport's Ex service took usbport's timer-list
+     * lock under this driver's - has nothing left to avoid, and `mode` no
+     * longer changes the route. Unlike usbport's Version 200 service, a
+     * refusal is reported, and it is counted.
      */
-    if (XhciRegPacket.UsbPortRequestAsyncCallbackEx == NULL) {
-        return XHCI_ARM_REFUSED;
-    }
-    answer = XhciRegPacket.UsbPortRequestAsyncCallbackEx(
-        ext, milliseconds, context, (ULONG_PTR)contextLength, callback,
-        NULL, 0);
+    UNREFERENCED_PARAMETER(mode);
+    answer = HcdSvcArmTimer(ext, milliseconds, context, contextLength,
+                            callback);
     if (answer != 0) {
-        XhciControllerLockAcquire(&oldIrql);
+        XhciControllerLockAcquire(ext, &oldIrql);
         ext->AsyncArmsRefused++;
-        XhciControllerLockRelease(oldIrql);
+        XhciControllerLockRelease(ext, oldIrql);
         XHCI_DBG_VALUE("async timer: Ex refused the arm, status", answer);
         return XHCI_ARM_REFUSED;
     }
@@ -367,9 +294,10 @@ static ULONG xhciCommandArmCurrent(PXHCI_EXTENSION ext,
  *
  * `mode` is the caller's context (XHCI_ARM_*). An arm a DEFER context may not
  * make on the Version 300 tier is latched in the extension for
- * XhciCommandDrainOwedArm, and so is one Ex refused: the watchdog is the
- * command's, so a lost arm is re-owed rather than left to the 32 s age
- * detector the legacy service's silence needed.
+ * XhciCommandDrainOwedArm. One Ex refused is re-owed the same way only
+ * while ArmThroughExOnly is set; the HCD leaves it clear, and its timer
+ * service makes refusals rare by superseding the pending arm (hcd_svc.c),
+ * with the thread's own command wait and the 32 s age detector behind it.
  *
  * IRQL: <= DISPATCH_LEVEL.
  */
@@ -410,7 +338,7 @@ static VOID xhciArmCommandTimer(PXHCI_EXTENSION ext,
         return;
     }
 
-    XhciControllerLockAcquire(&oldIrql);
+    XhciControllerLockAcquire(ext, &oldIrql);
     if (answer == XHCI_ARM_REFUSED) {
         ext->CommandTimerFailures++;
     }
@@ -424,7 +352,7 @@ static VOID xhciArmCommandTimer(PXHCI_EXTENSION ext,
         ext->CommandArmOwedPhase = context.Phase;
         ext->CommandArmOwedAttempt = context.Attempt;
     }
-    XhciControllerLockRelease(oldIrql);
+    XhciControllerLockRelease(ext, oldIrql);
 
     if (answer == XHCI_ARM_REFUSED) {
         XHCI_DBG_VALUE_CHANGED("command: watchdog not armed, generation",
@@ -452,7 +380,7 @@ VOID XhciCommandDrainOwedArm(PXHCI_EXTENSION ext)
     armed.Phase = 0;
     armed.Attempt = 0;
 
-    XhciControllerLockAcquire(&oldIrql);
+    XhciControllerLockAcquire(ext, &oldIrql);
     if (ext->CommandArmOwed) {
         ext->CommandArmOwed = 0;
         armed.Epoch = ext->CommandArmOwedEpoch;
@@ -468,7 +396,7 @@ VOID XhciCommandDrainOwedArm(PXHCI_EXTENSION ext)
          */
         arm = xhciCommandArmCurrent(ext, &armed);
     }
-    XhciControllerLockRelease(oldIrql);
+    XhciControllerLockRelease(ext, oldIrql);
 
     if (arm) {
         xhciArmCommandTimer(ext, XHCI_ARM_UNLOCKED, milliseconds, &armed);
@@ -501,7 +429,9 @@ static ULONG xhciCanArmTimer(VOID)
  * IRQL: any. */
 ULONG XhciAsyncTimerAvailable(VOID)
 {
-    return (XhciRegPacket.UsbPortRequestAsyncCallback != NULL) ? 1UL : 0UL;
+    /* The HCD's timer service is part of the image (hcd_svc.c), so there is
+     * no registration slot that could be empty. */
+    return 1UL;
 }
 
 /*
@@ -518,11 +448,7 @@ ULONG XhciAsyncTimerAvailable(VOID)
  */
 VOID XhciRequestControllerReset(PXHCI_EXTENSION ext)
 {
-    if (XhciRegPacket.UsbPortInvalidateController == NULL) {
-        return;
-    }
-    (VOID)XhciRegPacket.UsbPortInvalidateController(
-        ext, USBPORT_INVALIDATE_CONTROLLER_RESET);
+    HcdSvcRequestReset(ext);
 }
 
 /* ------------------------------------------------------------------ */
@@ -594,7 +520,7 @@ VOID XhciCommandInit(PXHCI_EXTENSION ext)
      * has not yet acquired the lock will read the new epoch when it does; one
      * that holds it finishes first, against the state it validated.
      */
-    XhciControllerLockAcquire(&oldIrql);
+    XhciControllerLockAcquire(ext, &oldIrql);
 
     ext->CommandState = XHCI_CMD_STATE_IDLE;
     xhciCommandEndOutstanding(ext);
@@ -625,7 +551,7 @@ VOID XhciCommandInit(PXHCI_EXTENSION ext)
     }
     ext->StartEpoch = (ULONG)epoch;
 
-    XhciControllerLockRelease(oldIrql);
+    XhciControllerLockRelease(ext, oldIrql);
 }
 
 /* Called with the controller lock held. IRQL: DISPATCH_LEVEL. */
@@ -669,7 +595,7 @@ VOID XhciControllerBeginQuiesce(PXHCI_EXTENSION ext)
         return;
     }
 
-    XhciControllerLockAcquire(&oldIrql);
+    XhciControllerLockAcquire(ext, &oldIrql);
     xhciCommandInvalidateLocked(ext);
     /*
      * The port half of the same retirement (Phase 5 task 6). Every armed reset
@@ -685,7 +611,7 @@ VOID XhciControllerBeginQuiesce(PXHCI_EXTENSION ext)
      * source of the shared level-triggered interrupt. */
     XhciMaskInterrupts(ext);
     ext->Flags &= ~XHCI_EXT_FLAG_INITIALIZED;
-    XhciControllerLockRelease(oldIrql);
+    XhciControllerLockRelease(ext, oldIrql);
 }
 
 /*
@@ -713,7 +639,7 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
     }
 
     escalate = 0;
-    XhciControllerLockAcquire(&oldIrql);
+    XhciControllerLockAcquire(ext, &oldIrql);
 
     /*
      * The same two questions the ISR asks, in the same order and for the same
@@ -728,7 +654,7 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
      */
     if (ext->HcInfoStatus != XHCI_HC_OK || ext->ControllerFailed ||
         (ext->Flags & XHCI_EXT_FLAG_INITIALIZED) == 0) {
-        XhciControllerLockRelease(oldIrql);
+        XhciControllerLockRelease(ext, oldIrql);
         return 0;
     }
 
@@ -763,7 +689,7 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
          * terminally failed on the evidence of one bad config of the bus.
          */
         ext->HealthPollsDead++;
-        XhciControllerLockRelease(oldIrql);
+        XhciControllerLockRelease(ext, oldIrql);
         return 0;
     }
 
@@ -959,7 +885,7 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
     (VOID)XhciRearmInterrupter(ext);
 #endif
 
-    XhciControllerLockRelease(oldIrql);
+    XhciControllerLockRelease(ext, oldIrql);
 
 #ifdef XHCI_FIX_PORT_POLL
     /*
@@ -1060,7 +986,7 @@ static ULONG xhciCommandSubmitEx(PXHCI_EXTENSION ext,
     armed.Phase = XHCI_CMD_PHASE_COMMAND;
     armed.Attempt = 0;
 
-    XhciControllerLockAcquire(&oldIrql);
+    XhciControllerLockAcquire(ext, &oldIrql);
 
     if (ext->ControllerFailed) {
         /*
@@ -1155,7 +1081,7 @@ static ULONG xhciCommandSubmitEx(PXHCI_EXTENSION ext,
         }
     }
 
-    XhciControllerLockRelease(oldIrql);
+    XhciControllerLockRelease(ext, oldIrql);
 
     if (status != XHCI_CMD_OK) {
         XHCI_DBG_VALUE_CHANGED("command: submit refused, status", status);
@@ -1765,7 +1691,7 @@ static VOID NTAPI xhciCommandTimeout(PVOID miniPortExtension, PVOID context)
     armed.Phase = XHCI_CMD_PHASE_ABORT;
     armed.Attempt = 0;
 
-    XhciControllerLockAcquire(&oldIrql);
+    XhciControllerLockAcquire(ext, &oldIrql);
 
     /*
      * The full bracket, like the registered callbacks get. This one is not on
@@ -1779,7 +1705,7 @@ static VOID NTAPI xhciCommandTimeout(PVOID miniPortExtension, PVOID context)
         timeout->Epoch == 0 || timeout->Epoch != ext->StartEpoch) {
         /* Not this driver's extension, or not this start's callback. Counting it
          * would be a write into somebody else's structure. */
-        XhciControllerLockRelease(oldIrql);
+        XhciControllerLockRelease(ext, oldIrql);
         return;
     }
 
@@ -1880,7 +1806,7 @@ static VOID NTAPI xhciCommandTimeout(PVOID miniPortExtension, PVOID context)
         ext->CommandStaleCallbacks++;
     }
 
-    XhciControllerLockRelease(oldIrql);
+    XhciControllerLockRelease(ext, oldIrql);
 
     if (action == XHCI_CMD_ACTION_ARM) {
         /*

@@ -1749,6 +1749,22 @@ static int key_match(HKEY parent, const char *name, const char **why)
     }
 
     /*
+     * **The root hub is this driver too, and it is not a controller.** Since
+     * 2.0.0.0 xhci98.sys is a whole host controller driver whose INF installs
+     * a second devnode, the root hub, from sections named RootHub.Dev* - with
+     * the same NTMPDriver = xhci98.sys on Windows 98. Its key carries none of
+     * the log values and the driver never reads it, so a write there would be
+     * a level no start ever applies. Both setup engines write InfSection, so
+     * it is the test, and it runs before the NTMPDriver one that would
+     * otherwise take the key as decisively ours.
+     */
+    if (read_string(key, "InfSection", text, sizeof(text)) == STR_OK &&
+        _strnicmp(text, "RootHub.", 8) == 0) {
+        RegCloseKey(key);
+        return MATCH_NONE;
+    }
+
+    /*
      * **A contradiction refuses the key outright**, before anything else is
      * looked at. This is the half that makes "decisive" mean something: a key
      * whose 9x install says another driver binds is not ours, however many
@@ -2676,10 +2692,11 @@ static void usage_long(void)
 "                they went to.  Read it: a dump taken onto a QEMU transfer\n"
 "                volume is gone at power-off, and the path is what tells you\n"
 "                that before you go looking for the file.\n"
-"  -c N          controller index; opens \\\\.\\HCDN.  Default 0.  usbport\n"
-"                publishes its link at a fixed index with no retry, so a\n"
-"                machine whose own USB stack already owns HCD0 leaves this\n"
-"                driver at 1 or 2 - try those before concluding anything.\n"
+"  -c N          controller index; opens \\\\.\\HCDN.  Default 0.  xhci98.sys\n"
+"                takes the first HCDN no other controller holds (usbport\n"
+"                took a fixed one for the 1.x miniport), so a machine whose\n"
+"                own USB stack already owns HCD0 leaves this driver at 1 or\n"
+"                2 - try those before concluding anything.\n"
 "  -o BASENAME   output basename.  Default XHCISNAP, in the CURRENT\n"
 "                directory - give a full path (-o C:\\MYDUMP) and you always\n"
 "                know where it went.\n"
@@ -3070,9 +3087,10 @@ int main(int argc, char **argv)
     if (device == INVALID_HANDLE_VALUE) {
         printf("  cannot open %s, error %lu\n", devicePath,
                (unsigned long)GetLastError());
-        printf("  (that name is created by usbport's HCD FDO; if it does not\n"
-               "   exist, no xHCI or EHCI controller is started on this "
-               "machine)\n");
+        printf("  (that name is created by a started host controller's FDO -\n"
+               "   xhci98.sys's own, or usbport's for the 1.x miniport; if it\n"
+               "   does not exist, no such controller is started at this "
+               "index)\n");
         return 1;
     }
 

@@ -9355,3 +9355,89 @@ and no extra defines** - which is what a re-cut that changes a date needs
 anyway. And after an experiment that builds into `src\obj*`, rebuild the
 shipping flavours before the session ends, or say in the handoff that the
 tree holds an experiment.
+
+## Windows 98: configuration IRPs go to the PDO, and a thread object is not something to wait on
+
+Roadmap task 26-A.2, 2026-10-03, the HCD's first starts on QEMU guests
+(`docs/contributing/runs/run-26.md`, "26-A.2"). Two Windows 98 SE behaviours
+Windows 2000 does not share, each of which a Windows 2000 run alone would
+have hidden.
+
+**`IRP_MN_READ_CONFIG` sent to the object `IoAttachDeviceToDeviceStack`
+returned is refused on Windows 98 SE**, and answered on Windows 2000.
+`GUID_BUS_INTERFACE_STANDARD` through `IRP_MN_QUERY_INTERFACE` answers
+`STATUS_NOT_IMPLEMENTED` there. The same IRP sent to the PDO handed to
+`AddDevice` works - which is what NUSB's `USBPORT.SYS` and 98 SE's own
+`uhcd.sys` do (static, `legal-provenance.md` section 4). Symptom when it is
+wrong: Code 10, and the kept init sequence's "Command register unreadable"
+refusal at step 3.
+
+**`KeWaitForSingleObject` on a system thread's object, from
+`ObReferenceObjectByHandle`, faults Windows 98 SE**: "A fatal exception 0E
+has occurred at 0028:C00312EE", at the first disable of the controller (which
+Windows 98 delivers as `QUERY_STOP` then `STOP`, not a remove). Waiting on a
+`KEVENT` the thread sets just before `PsTerminateSystemThread` survives
+repeated disable/enable cycles, and the thread's `PsTerminateSystemThread`
+itself ran without a fault in them. **On Windows 2000 the event is not
+enough**: a disable there is `QUERY_REMOVE` and `REMOVE`, the remove unloads
+the image, and with the event wait the guest rebooted after the whole
+teardown had traced clean - read as the thread still in the image's last
+instructions when it went. The thread-object wait is right there. The two
+are chosen with `IoIsWdmVersionAvailable(1, 0x10)`; **Windows 2000 is WDM
+1.10, not 1.20** (`win98-wdm.md`), and a first attempt testing `(1, 0x20)`
+sent Windows 2000 down the Windows 98 path.
+
+Rules. **A WDM call that takes a different object on Windows 98 is a call to
+copy from a Windows 98 binary, not from the DDK's samples**: read what
+`uhcd.sys` or NUSB's usbport does before choosing the target. And **a
+lifecycle path is not tested until its disable has run on Windows 98 SE** -
+the start passing proves nothing about the stop.
+
+## Make STATUS_PENDING visible before pending a URB IRP: some class drivers poll IoStatus.Status instead of waiting on an event
+
+Roadmap task 26-V.1, 2026-10-04, Windows 98 SE under NUSB 3.3 in QEMU
+(`docs/contributing/runs/run-26.md`, "26-V.1"). Installing ASIX's Windows 98
+driver for the AX88772A, `AX88772.SYS` 3.0.3.12, over the HCD's `40efd31`
+build gave "A fatal exception 0E has occurred at 0028:C188D256 in VXD
+ax88772(01) + 00001576." The trace just before it: a GET_DESCRIPTOR, then
+`select, URB length=00000018` and `select refused,
+bLength/wTotalLength=00100000` - a SELECT_CONFIGURATION built from a
+descriptor that had not been read.
+
+A subagent's static read (`legal-provenance.md` section 4): the driver
+imports no `KeWaitForSingleObject` and waits for each URB by polling
+`Irp->IoStatus.Status` for `0x103` (`cmp dword ptr [esi+18h],103h` at
+`0x103B5`, then `IoFreeIrp`). `IoAllocateIrp` leaves that field 0, and the
+HCD pended the IRP without writing it, so the driver read success at once,
+freed its GET_DESCRIPTOR IRP while it was in flight, and selected from an
+unfilled buffer. NUSB's `USBPORT.SYS` stores `STATUS_PENDING` there
+(`0x15851`) before `IoMarkIrpPending`, which is why the driver works under
+usbport. `ac25e4e` sets it on entry to `HcdDevicePdoInternalIoctl`, and on
+that build the same install bound on NUSB 3.3 and on SweetLow's stack.
+
+Rules. **Before pending an IRP, write `STATUS_PENDING` into its
+`IoStatus.Status`, as usbport does**: the DDK's contract is the return value
+and the completion, but a shipping driver can read the field, and a 0 there
+reads as success. And **a class driver's behaviour on the stack it was
+written for is a contract the replacement inherits**: when one misbehaves
+only under the HCD, read what the stack it was tested on does at the same
+point before calling the class driver wrong.
+
+## A QEMU chardev file log is truncated at every launch with the same tag: relaunches lose the previous boot's trace - use a new tag or copy the log first
+
+Phase 26's guest legs, 2026-10-03 and 2026-10-04 (`run-26.md`). The
+launchers write the `qemu` flavour's port-0xE9 trace through `-chardev
+file,id=dbgcon,path=...` to `vm\t26-<os>-<tag>-debugcon.log`, a path made
+from the tag alone. QEMU opens a file chardev for writing and truncates it,
+so relaunching the same overlay with the same tag - which every Windows 98 SE
+driver replacement needs, since the launcher turns the guest's restart into a
+shutdown - empties the previous boot's trace before the new boot writes a
+line. 26-V.1 and 26-V.2 kept theirs only by copying each log aside before
+the relaunch (`...-boot1-debugcon.log`, `...debugcon.boot2.log`) or by giving
+the relaunch a new tag (`v2a4`, `v2a4b`).
+
+Rules. **Before relaunching a guest, copy its trace aside or give the launch
+a new tag**; the trace of the boot that failed is the one a relaunch to
+investigate it destroys. QEMU's `append=on` on the chardev keeps every boot
+in one file instead, at the cost of telling the boots apart by the driver's
+start lines.

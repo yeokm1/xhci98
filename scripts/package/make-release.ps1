@@ -1914,6 +1914,15 @@ src\objfre\$($archDirName[$leg.Arch]) is the release one. Rebuild the flavour yo
         # and it is read here rather than inferred from a directory because
         # "objchk_qemu" contains "objchk" - a path match is wrong in exactly the
         # direction that matters.
+        # The HCD's task 25.8 scaffold registered nothing and carried
+        # XHCI98_SCAFFOLD_DO_NOT_STAGE; make-package.ps1 refuses it first, and
+        # this is the same refusal at publish time (design record 13 section
+        # 9.3, task 26-A.1), so a binary staged by any other route is caught.
+        $sysText = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($sys))
+        if ($sysText.Contains("XHCI98_SCAFFOLD_DO_NOT_STAGE")) {
+            throw "the binary about to be published as $($leg.Dir)\ is the HCD's build scaffold (XHCI98_SCAFFOLD_DO_NOT_STAGE, roadmap task 25.8): it registers nothing and is never published."
+        }
+
         $publishedFlavour = Get-ImageFlavourMarker -Path $sys
         if ($publishedFlavour -ne $f) {
             $found = if ($publishedFlavour -eq "") { "none" } else { $publishedFlavour }

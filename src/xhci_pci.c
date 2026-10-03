@@ -2,6 +2,11 @@
  * xhci_pci.c - the only file in this driver that touches BAR0 or PCI config
  * space.
  *
+ * KEPT FROM THE MINIPORT (roadmap-hcd.md task 26-A.2). This file was the
+ * usbport miniport's; its comments still speak of usbport, its callbacks and
+ * its locks. src/hcd_svc.h, "READING THE KEPT FILES", is the key from each
+ * of those names to the HCD code that now plays the part.
+ *
  * Everything here is a two-line wrapper, and that is the design rather than an
  * accident: the pure core (xhci_ring.c, xhci_caps.c, xhci_port.c, xhci_mem.c)
  * decides *what* to read and write and is tested on the build host, and this
@@ -24,6 +29,7 @@
 #include "xhci_usbport.h"
 #include "xhci_hw.h"
 #include "xhci_dbg.h"
+#include "hcd_svc.h"
 
 /* ------------------------------------------------------------------ */
 /* MMIO                                                                */
@@ -203,11 +209,7 @@ MPSTATUS XhciReadPciConfig(PXHCI_EXTENSION ext,
                            PVOID buffer,
                            ULONG length)
 {
-    if (XhciRegPacket.UsbPortReadWriteConfigSpace == NULL) {
-        return MP_STATUS_FAILURE;
-    }
-    return XhciRegPacket.UsbPortReadWriteConfigSpace(ext, TRUE, buffer,
-                                                     offset, length);
+    return HcdSvcConfigSpace(ext, TRUE, buffer, offset, length);
 }
 
 /* IRQL: PASSIVE_LEVEL. See the contract in src/xhci_hw.h - this exists for the
@@ -217,11 +219,7 @@ MPSTATUS XhciWritePciConfig(PXHCI_EXTENSION ext,
                             PVOID buffer,
                             ULONG length)
 {
-    if (XhciRegPacket.UsbPortReadWriteConfigSpace == NULL) {
-        return MP_STATUS_FAILURE;
-    }
-    return XhciRegPacket.UsbPortReadWriteConfigSpace(ext, FALSE, buffer,
-                                                     offset, length);
+    return HcdSvcConfigSpace(ext, FALSE, buffer, offset, length);
 }
 
 /* ------------------------------------------------------------------ */
@@ -304,8 +302,7 @@ ULONG XhciWaitForBits(PXHCI_EXTENSION ext,
      * its extra time from the recovery being retried at the next health poll
      * rather than from a spin here.
      */
-    if (timeoutMs <= stalledMs || ext->InitBelowPassive ||
-        XhciRegPacket.UsbPortWait == NULL) {
+    if (timeoutMs <= stalledMs || ext->InitBelowPassive) {
         if (lastValue != NULL) {
             *lastValue = value;
         }
@@ -322,7 +319,7 @@ ULONG XhciWaitForBits(PXHCI_EXTENSION ext,
     sleeps = ((timeoutMs - stalledMs) + (XHCI_SLEEP_STEP_MS - 1UL)) /
              XHCI_SLEEP_STEP_MS;
     for (i = 0; i < sleeps; i++) {
-        XhciRegPacket.UsbPortWait(ext, XHCI_SLEEP_STEP_MS);
+        HcdSvcWaitMs(ext, XHCI_SLEEP_STEP_MS);
         value = XhciRead32(ext, barOffset);
         if (xhciWaitSettled(value, mask, want, lastValue)) {
             return value != 0xFFFFFFFFUL;
@@ -360,9 +357,8 @@ VOID XhciDelayMs(PXHCI_EXTENSION ext, ULONG milliseconds)
      * transition delay plus up to 20 ms of 5 ms confirmation steps - up to
      * 60 ms of stall in that routine, on a controller that is out of service
      * either way (design record 07 section 5 has the accounting). */
-    if (XhciRegPacket.UsbPortWait != NULL &&
-        (ext == NULL || !ext->InitBelowPassive)) {
-        XhciRegPacket.UsbPortWait(ext, milliseconds);
+    if (ext == NULL || !ext->InitBelowPassive) {
+        HcdSvcWaitMs(ext, milliseconds);
         return;
     }
 

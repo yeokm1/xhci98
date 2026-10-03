@@ -157,8 +157,9 @@ is the index; this is the same list in the proposal's order:
 - **Pool and the HCD's own DMA buffers are allowed**, by import-allowlist
   rows with Windows 98 export evidence (task 25.3). The miniport's "allocate
   no pool" rule stands for `src/`.
-- **The device names** are `xhci98 USB 3.x eXtensible Host Controller` and
-  `xhci98 USB 3.x Root Hub` (owner, 2026-10-02), the INFs' device
+- **The device names** are `xHCI98 USB 3.x eXtensible Host Controller` and
+  `xHCI98 USB 3.x Root Hub` (owner, 2026-10-02; spelled xHCI98 by the owner
+  2026-10-03), the INFs' device
   descriptions on every path.
 - **The root hub is a devnode, and both property tabs are kept** (owner,
   2026-10-02, reversing a narrower answer given on the Codex review earlier
@@ -217,10 +218,10 @@ successor"):
 
 | Row | Files | State after task 25.8 |
 |---|---|---|
-| Lifted, the pure core | `xhci_mem.c`, `xhci_ring.c`, `xhci_caps.c`, `xhci_port.c`, `xhci_ctx.c`, `xhci_topo.c`, `xhci_desc.c`, `xhci_log.c` and their headers | Built, DDK-free (design record 03), host suites in `test\` unchanged. Three include `xhci_usbport.h` for its DDK-free type declarations, and `xhci.h` still carries the miniport's extension layout; 26-A.2 carves both down to what the HCD uses |
-| Adapted | `xhci_init.c`, `xhci_cmd.c`, `xhci_evt.c`, `xhci_pci.c` | In the tree, **not built**: the controller sequence, command engine and event drain the FDO of 26-A.2 keeps once their usbport service calls are replaced. Each joins `src\sources` in the task that adapts it. `xhci_dbg.c`, the qemu flavour's port-0xE9 channel, waits the same way |
-| Rewritten | `xhci_dispatch.c`, `xhci_rh.c`, `xhci_slot.c`, `xhci_xfer.c`, `xhci_vhub.c`, `xhci_probe.c` | **Deleted** from the tree with their host suites (`test_xfer`, `test_iso`, `test_vhub`, `test_init`), as are `scripts\make-usbport-lib.cmd` and `scripts\usbport-lib\`. Their headers stay until 26-A.2's carve, because `xhci.h` includes them |
-| New | `hcd_entry.c` | The scaffold (below); Phase 26's files join it |
+| Lifted, the pure core | `xhci_mem.c`, `xhci_ring.c`, `xhci_caps.c`, `xhci_port.c`, `xhci_ctx.c`, `xhci_topo.c`, `xhci_desc.c`, `xhci_log.c` and their headers | Built, DDK-free (design record 03), host suites in `test\` unchanged. Three include `xhci_usbport.h` for its DDK-free type declarations, and `xhci.h` still carries the miniport's extension layout, which the HCD embeds unchanged in its controller FDO (`hcd.h`); the carve down to what the HCD uses waits for 26-A.5, which replaces the transfer structures most of it describes |
+| Adapted | `xhci_init.c`, `xhci_cmd.c`, `xhci_evt.c`, `xhci_pci.c` | **Built since 26-A.2** (2026-10-03), with `xhci_dbg.c`: every usbport service call replaced by `hcd_svc.h`'s (wait, configuration space, the one-shot timer, the reset request, the fail-closed DMA verdict, the controller lock). Their comments still argue in usbport's terms; `hcd_svc.h`, "READING THE KEPT FILES", is the key |
+| Rewritten | `xhci_dispatch.c`, `xhci_rh.c`, `xhci_slot.c`, `xhci_xfer.c`, `xhci_vhub.c`, `xhci_probe.c` | **Deleted** from the tree with their host suites (`test_xfer`, `test_iso`, `test_vhub`, `test_init`), as are `scripts\make-usbport-lib.cmd` and `scripts\usbport-lib\`. Their headers stay until 26-A.5's carve, because `xhci.h` includes them. `xhci_xfer.c` came back in 26-A.2 holding only the completion-code table, lifted unchanged, and whole in 26-A.4 (its pure TD builder; corrected 2026-10-03) |
+| New | `hcd_*.c`, `hcd.h`, `hcd_svc.h` | The scaffold of 25.8 (below) became the controller FDO in 26-A.1 and 26-A.2: `hcd_entry.c`, `hcd_pnp.c`, `hcd_power.c`, `hcd_ctl.c`, `hcd_svc.c`, `hcd_dma.c`, `hcd_dev.c`; `hcd_pool.c` waits for the first allocation |
 
 One measurement from the first layout is kept because it constrains any
 future split of `src\`. The Windows 2000 DDK's `build.exe` accepts exactly
@@ -261,14 +262,14 @@ inside the bus that the PnP manager never sees.
 | Root-hub PDO | WDM PDO, hardware id `XHCI98\ROOT_HUB`, no compatible ids (section 8) | the controller FDO, at its first start | the controller | a small PDO extension pointing back at the controller |
 | Root-hub FDO | WDM FDO, attached over the root-hub PDO | `AddDevice` again, for a PDO this driver did create - the role is decided by the PDO's own driver object | the root-hub PDO | the bus's view of the topology: the port objects, the hub objects inside the bus, the list of device and function PDOs |
 | Device PDO | WDM PDO, one per non-composite device and per non-hub device the bus does not split | the root-hub FDO, when enumeration (5.3) reaches a bindable device | the root hub, wherever the device is in the USB topology | the device's slot, its configuration and pipes, its ids |
-| Function PDO | WDM PDO, one per function of a split composite device (section 10) | the root-hub FDO | the root hub, beside the device PDOs | the function's interfaces, and a pointer to the parent device object inside the bus, whose pipes it shares |
+| Function PDO | WDM PDO, one per function of a split composite device (section 10) | the root-hub FDO | the root hub, beside the device PDOs | the function (its interface mask, its ids), its own filtered copy of the configuration descriptor (10.9), the group serial it shares with its siblings, and a pointer to the device record inside the bus, whose slot and pipes it shares, cleared when the device leaves (corrected 2026-10-03 from "a pointer to the parent device object inside the bus, whose pipes it shares", as 26-A.7 implements it) |
 | Hub object | inside the bus, never a PDO | the root-hub FDO, when a hub enumerates (section 10) | - | its slot, its hub descriptor, its status-change pipe, its port objects |
 | Port object | inside the bus | the controller for a root port, a hub object for a hub port | - | the port shadow, the reset generation, the device attached, the hold state of 29-A.5 |
 | Device object (the bus's, not WDM's) | inside the bus | enumeration | - | one per addressed device, hub or not: slot id, speed, route string, TT fields, descriptors, the PDO(s) it is presented as |
 
 Every device PDO and every function PDO is a child of the root hub, not of the
 hub it is plugged into: external hubs are objects of the bus (the decisions
-table), so a device behind a hub appears directly under `xhci98 USB 3.x Root
+table), so a device behind a hub appears directly under `xHCI98 USB 3.x Root
 Hub` in Device Manager, and the Power tab reports the budget the bus itself
 keeps (section 8).
 
@@ -283,8 +284,35 @@ Lifetimes follow the WDM rules the targets enforce, with two of this
 project's own. A device that leaves (its port reports a disconnect, its hub is
 removed, or the controller stops) has its slot disabled and its pipes failed
 at once, but its PDO lives until the PnP manager has been told it is missing
-in a `QUERY_DEVICE_RELATIONS` answer and has sent the PDO its remove; the
-device object inside the bus is freed only then. And a surprise removal on
+in a `QUERY_DEVICE_RELATIONS` answer and has sent the PDO its remove. The
+device object inside the bus goes with the slot, not with the PDO: the PDO
+keeps copies of the descriptors its ids are made from, and nothing of the
+device object (corrected 2026-10-03 from "freed only then", which the
+implementation never did; Codex review of batch (b), round 1, finding 17).
+A Disable Slot the controller does not confirm is the exception: the device
+object stays, quarantined in the slot table, until the controller reset that
+failure requests has taken every slot. The PDO's own lifecycle, as 26-A.4
+implements it (`hcd_pdo.c`): only the controller thread lists a device PDO
+or moves it off the relations (the controller's stop does too, with the
+thread stopped), the other unlinkings being the PDO's own deleting remove
+and its parent's release, each under the PDO-list lock (5.4; corrected
+after round 2 of the same review, note 7), and each relations answer marks
+the PDOs it carries as reported
+and the unlisted ones as reported missing, under the same lock hold as the
+copy; a PDO is deleted by its own remove once reported missing, at once by
+the thread when the PnP manager never saw it, or by its parent's removal when
+the PnP manager has removed it already - and when its parent goes first while
+it still awaits its remove, it is orphaned, forgets the controller, and
+deletes itself at that remove. The root-hub PDO follows the same orphan rule
+against the controller FDO. A split device's function PDOs (26-A.7,
+`hcd_pdo.c`) are one group: all created before any is listed, listed in one
+hold of the PDO-list lock, sharing the first one's serial; when the device
+leaves they leave the relations together, and the port re-enumerates only
+once the last of the group is deleted. A function PDO's own remove cancels
+only its own requests, and the thread then closes its pipes, drops its
+endpoints and returns its interfaces to alternate 0, its siblings' kept
+(10.9). The device record still goes with the slot, not with any of the
+group. And a surprise removal on
 Windows 98 arrives as an out-of-sequence `IRP_MN_REMOVE_DEVICE` with no
 `SURPRISE_REMOVAL` before it (`docs/usb-xhci-info/win98-wdm.md`), so every
 remove handler is written to be the first PnP IRP the object sees after
@@ -313,6 +341,24 @@ wait. The states and their exits:
 | `Gone` | | slot disabled, pipes failed, PDOs reported missing at the next relations query | the PDOs' removes complete: `Empty` |
 | `Failed` | any failed step | the slot disabled if one was enabled; counted per cause | `Empty` on the next connect change; one retry of `Reset` first, as the targets' own hub drivers do (section 10 has the retry rule) |
 
+What counts as a connect change, as 26-A.3 implements it for root ports
+(`hcd_enum.c`): the port's connect status change bit, not its connection
+state. A port whose `PORTSC.CSC` is set gives up what it held (a disconnect)
+and, when it reads connected, starts a new enumeration; a change of another
+kind - the reset's own `PRC` among them - only takes a port that reads
+disconnected to `Empty` and an `Empty` port that reads connected into
+`Debounce`, so a `Failed` port waits for a real reconnection rather than
+retrying for ever. Only the change bits the read saw are acknowledged. A
+controller reset (recovery, a resume that reinitialised) or the root hub's
+removal settles every port from whatever state it is in, and the PDOs are
+reported missing. After a reset the device objects go without commands and
+the ports are rescanned; a port waiting in `Gone` keeps waiting for the PDO
+it reported, by that PDO's serial, so a later device on the port is not
+enumerated before the earlier PDO is deleted. On the root hub's removal a
+powered controller gives each slot back with Disable Slot, and an unpowered
+one leaves the records for its first powered pass to disable; every port then
+starts again from `Empty` when the root hub starts again.
+
 Two things are deliberately missing. There is no `SET_ADDRESS` anywhere: the
 bus addresses with the Address Device command, and since the bus builds the
 setup packets itself, there is nothing to intercept - the miniport's
@@ -340,7 +386,7 @@ changes, rule by rule:
 | One lock, `xhciControllerLock`, in the image, created in `DriverEntry` (rule 3), because usbport zeroes the miniport extension before every start | **Per controller, in the controller extension, created at `AddDevice`.** The HCD owns its extension and nothing zeroes it underneath a holder, so the hazard rule 3 answered does not exist; one lock per controller removes the cross-controller contention the miniport accepted |
 | Rule 1: innermost; no usbport service and no bounded wait under it; decide under the lock, act after dropping it | Kept, with "usbport service" read as "any call out of the driver" - `IoCallDriver`, `IoCompleteRequest`, `IoInvalidateDeviceRelations`, a completion routine. An IRP is completed after the release, never under the lock |
 | Rule 2: every non-ISR read-modify-write of the flags under it | Kept |
-| Rule 4 and section 4: the ISR never takes the lock, and nothing can exclude it, because `KeSynchronizeExecution` needs the `PKINTERRUPT` usbport keeps and `KeAcquireInterruptSpinLock` is XP-era | **The exclusion is now available.** The HCD connects its own interrupt (`IoConnectInterrupt`) and so holds the `PKINTERRUPT`; `KeSynchronizeExecution` has stock Windows 98 SE precedent (section 7). The ISR stays as stateless as section 4 made it - that design is still the cheaper one - and `KeSynchronizeExecution` is used only where a DISPATCH-level path must change what the ISR reads (`IMAN`, the interrupt-enable state), which section 4 had to argue around |
+| Rule 4 and section 4: the ISR never takes the lock, and nothing can exclude it, because `KeSynchronizeExecution` needs the `PKINTERRUPT` usbport keeps and `KeAcquireInterruptSpinLock` is XP-era | **The exclusion is now available.** The HCD connects its own interrupt (`IoConnectInterrupt`) and so holds the `PKINTERRUPT`; `KeSynchronizeExecution` has stock Windows 98 SE precedent (section 7). The ISR stays as stateless as section 4 made it - that design is still the cheaper one - and `KeSynchronizeExecution` is available for a DISPATCH-level path that must change what the ISR reads (`IMAN`, the interrupt-enable state), which section 4 had to argue around. **26-A.2 uses none**: the kept ISR and the kept enable and mask paths are the miniport's, which section 4 made safe without the exclusion, and nothing in the HCD has needed it yet |
 | Section 7: the root-hub callback family, the NT 6.x PASSIVE root-hub queries with no usbport lock | Gone. Root-port state is the controller's port objects under the controller lock; the root hub's IOCTLs (section 8) read them through it |
 | Section 7: transfer metadata, the deferred-completion rule (issue 7) | Kept in substance: a transfer is completed - its IRP completed - after the drain has released the lock, from a list built under it |
 
@@ -359,9 +405,15 @@ What is new has three layers, in this order from outermost to innermost:
    can block between steps and a work item borrowed from the system pool must
    not; 26-A.2 confirms the choice on both primaries, and the same thread is
    where 26-A.8's PASSIVE-level log flusher runs.
-2. **The PDO-list lock.** A spin lock in the root-hub FDO's extension guarding
-   the list `QUERY_DEVICE_RELATIONS` reads and the enumeration context
-   writes. Held only to link, unlink or copy the list.
+2. **The PDO-list lock.** A spin lock (`PdoListLock`) guarding the device-PDO
+   lists `QUERY_DEVICE_RELATIONS` reads and marks. Drafted in the root-hub
+   FDO's extension, it sits in the controller's since 26-A.4, so that the
+   controller's stop and remove reach it with no root hub present. The
+   enumeration context links and unlinks the PDOs, a PDO's deleting remove
+   and a parent's release unlink them too, and so the PDO list is the one
+   part of the topology whose single-writer rule in layer 1 does not hold
+   (Codex review of batch (b), round 2, note 7). Held only to link, unlink,
+   mark or copy the lists.
 3. **The controller lock**, innermost, as above.
 
 A function driver's IRP enters at the PDO at up to DISPATCH_LEVEL and touches
@@ -385,7 +437,7 @@ Two INFs in `src\`, the files the miniport's two were:
 Windows 7 x64). Each models section carries two models: the controller under
 `PCI\CC_0C0330` and the root hub under `XHCI98\ROOT_HUB`, both bound to
 `xhci98.sys` through one service, `xhci98`. The device descriptions are
-the owner's names: `xhci98 USB 3.x eXtensible Host Controller` and `xhci98
+the owner's names: `xHCI98 USB 3.x eXtensible Host Controller` and `xHCI98
 USB 3.x Root Hub`. Both files pass the INF gate under its HCD profile
 (section 9).
 
@@ -894,7 +946,9 @@ replaced by `RtlCompareMemory`. A miss in any column is never read as
 
 These 69 rows are what 26-A.1 adds to
 `scripts\import-gate\xhci98-imports.allow` as 26-A.2's FDO comes to import
-them; they are not committed now. Each names the strongest stock 98 SE
+them; 26-A.1 and 26-A.2 added the rows the controller FDO imports (2026-10-03),
+with this table's evidence text verbatim, and the rest wait for the tasks
+that call them. Each names the strongest stock 98 SE
 precedent with its hint and assumes the tier A and B evidence-list rows of
 Appendix A are listed. In the file each row is flavour `all`, and its
 `REQUIREMENT` is Phase 26's to decide per row (25.8's empty scaffold needs
@@ -972,9 +1026,12 @@ none of them).
 | `ntoskrnl.exe!IoCancelIrp` | w2k-export; win98-precedent openhci.sys 4.10.2222 (NTOSKRNL.EXE!IoCancelIrp, hint 35) (+14 other 98 SE); ntkern-name |
 | `ntoskrnl.exe!DbgPrint` | w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!DbgPrint, hint 1) (+1 other 98 SE); ntkern-name |
 
-**What the working tree holds now.** Since the owner's decision of
+**What the working tree held at Phase 25's close** (kept as written; since
+26-A.1 and 26-A.2, 2026-10-03, `[imports]` carries the rows the controller
+FDO imports, and the pool pair is still denied because `hcd_pool.c` is not
+linked until the first allocation). Since the owner's decision of
 2026-10-02 that the HCD takes over `src\` and the name `xhci98.sys`,
-`scripts\import-gate\xhci98-imports.allow` is the HCD's allowlist. It holds
+`scripts\import-gate\xhci98-imports.allow` is the HCD's allowlist. It held
 an empty `[imports]` (task 25.8's scaffold imports nothing) and a `[deny]`
 section whose pool rows already cite this task: `ExAllocatePool` (not the HCD's spelling), `ExAllocatePoolWithTag` and
 `ExFreePool` (the HCD's entry points, denied until 26-A.1 adds their rows
@@ -1036,8 +1093,11 @@ DMA"). That rule left the tree with the miniport; it remains the rule of the
    Windows 98 out-of-sequence remove), and the counter reads 0 after it: a
    host vector, and a 26-A checkpoint clause.
 
-How the gate would enforce "named sites" (proposed for 26-A.1; nothing of it
-is built):
+How the gate enforces "named sites" (proposed here; **the `SITES=` field was
+built in 26-A.1**, with self-tests, and per object it reads every undefined
+external, not only `__imp_` thunks; over WDK 7.1's link-time-code-generation
+amd64 objects, which list no symbols, it reads each object's `.c` source
+instead. The `DmaOperations->` token check below is not built yet):
 
 - **A per-row `SITES` field** (or a `[sites]` section) in the allowlist,
   naming the object files allowed to reference a pair, e.g.
@@ -1615,8 +1675,8 @@ created.
 
 | Item | Waits for |
 |---|---|
-| `make-package.ps1` staging the HCD: the scaffold marker removed, the package built from `src\xhci98.inf` / `-amd64.inf` and `src\obj<fl>\<arch>\xhci98.sys` as before | 26-A.1 |
-| `make-release.ps1`: the scaffold refusal in its publish loop (defence in depth; it already reads the flavour marker per binary, `Get-ImageFlavourMarker`), then the `2.0.0.0` cut publishing `xhci98-<version>.zip` and its four directories under `releases\<version>\`, beside the frozen `releases\1.2.0.0` | 26-A.1 (the refusal); 32.3 (the cut) |
+| `make-package.ps1` staging the HCD: the scaffold marker removed, the package built from `src\xhci98.inf` / `-amd64.inf` and `src\obj<fl>\<arch>\xhci98.sys` as before | done in 26-A.1 (2026-10-03) |
+| `make-release.ps1`: the scaffold refusal in its publish loop (defence in depth; it already reads the flavour marker per binary, `Get-ImageFlavourMarker`), then the `2.0.0.0` cut publishing `xhci98-<version>.zip` and its four directories under `releases\<version>\`, beside the frozen `releases\1.2.0.0` | the refusal done in 26-A.1 (2026-10-03); 32.3 (the cut) |
 | `gen-offsets.ps1` for the HCD's counter block (9.5) | 26-A.8 / 26-A.10 |
 | The matrix's read route for the HCD (9.4) | 26-A.8 / 26-A.10 |
 | The 26-A.10 expectation set (9.6) and `selftest.ps1` vectors for every HCD branch | 26-A.10 |
@@ -2089,7 +2149,7 @@ case-insensitive matching above, and the form most INF lines use.
 |---|---|
 | `BusQueryDeviceID` | `USB\VID_vvvv&PID_pppp` |
 | `BusQueryHardwareIDs` | `USB\VID_vvvv&PID_pppp&REV_rrrr`, `USB\VID_vvvv&PID_pppp` |
-| `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc`: from the interface when `bDeviceClass` is 0, from the device descriptor otherwise. Whether to add the `USB\DevClass_cc...` forms XP's `usbhub.sys` carries templates for (and Vista's and 7's `USB\DevClass_00&SubClass_00&Prot_00`) is open (10.9); no stock INF in the table above matches a `DevClass` id |
+| `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc`: from the interface when `bDeviceClass` is 0 and the configuration has exactly one interface, from the device descriptor otherwise - so a multi-interface device the bus does not split (10.8) reports its own triple, `00/00/00` when its class is 0, never its first interface's, which would bind a class driver to the whole device (corrected 2026-10-03 by 26-A.7 from "from the interface when `bDeviceClass` is 0"; Windows 2000's `usbaudio.sys` bound to a whole composite device bugchecks, guest leg c14, `runs/run-26.md`). Whether to add the `USB\DevClass_cc...` forms XP's `usbhub.sys` carries templates for (and Vista's and 7's `USB\DevClass_00&SubClass_00&Prot_00`) is open (10.9); no stock INF in the table above matches a `DevClass` id |
 | `BusQueryInstanceID` | the serial string when the device has one (and `UniqueID` set in its capabilities), else a bus-unique location string built from the root port and the route, in characters Windows 98's configuration manager accepts in an instance id (to check, 10.9) |
 
 **A function PDO** (one per function of a split device):
@@ -2098,8 +2158,8 @@ case-insensitive matching above, and the form most INF lines use.
 |---|---|
 | `BusQueryDeviceID` | `USB\VID_vvvv&PID_pppp&MI_nn` |
 | `BusQueryHardwareIDs` | `USB\VID_vvvv&PID_pppp&REV_rrrr&MI_nn`, `USB\VID_vvvv&PID_pppp&MI_nn` |
-| `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc` from the function's first interface. For an IAD function, whether Microsoft's parent takes the IAD's `bFunctionClass` / `SubClass` / `Protocol` or the first interface's is open (10.9) |
-| `BusQueryInstanceID` | the parent device's instance string plus the function number |
+| `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc`: for an IAD function from the IAD's `bFunctionClass` / `bFunctionSubClass` / `bFunctionProtocol`, as Microsoft's "Support for interface collections" gives them; for any other function, a legacy audio group included, from its first interface (alternate 0). Decided 2026-10-03 (Codex review of batch (c), round 19, finding 5); it was open (10.10) |
+| `BusQueryInstanceID` | the port number in decimal, then `nn`: port 3's `MI_03` is `303`. Digits and `A`-`F` only, since Windows 98's instance-id character set is unread (10.10) (corrected 2026-10-03 by 26-A.7 from "the parent device's instance string plus the function number") |
 
 Microsoft's parent forms the `MI_` suffix with the format string `&MI_%02x`
 (Windows 7 SP1 and XP SP3 `usbccgp.sys`): lower-case hex, which the
@@ -2122,30 +2182,53 @@ out of scope for 2.0.0.0.
 
 ### 10.8 When and how the bus splits a device
 
-**When.** Split when the active configuration has more than one interface
-(counted over `bAlternateSetting` 0 descriptors) **and** `bDeviceClass` is 0,
-or is `0xEF` with subclass 2 and protocol 1 (the IAD device class), or the
-configuration carries IADs. A hub (`0x09`, bus-owned) and a vendor-class
-device (`0xFF`, whose driver expects the whole device) are not split. Whether
-Microsoft's hub drivers split any other device-class value (`0x02` CDC at
-device level, `0x01`) is open; until it is read, those are not split. The
-bus configures a split device itself before reporting any function PDO:
-SET_CONFIGURATION with the first configuration. (Multi-configuration
-composites are rare; Microsoft's parent has `ParentFindOriginalConfiguration`
-and `ParentFindAltConfiguration` routines whose rule is unread.) A device the
-bus does not split is left Addressed for its function driver to configure.
+**When.** Microsoft's composite-parent rule, as `XhciFuncSplit`
+(`xhci_func.c`) implements it: split only a device with
+`bNumConfigurations` 1, two or more interfaces (counted over
+`bAlternateSetting` 0 descriptors), and `bDeviceClass` 0 or
+class/subclass/protocol `EF/02/01` (the IAD device class). Every other
+device - several configurations, or a device class of its own, IADs or not -
+is one device PDO with the whole-device ids of 10.7, which keeps the
+`USB\VID_vvvv&PID_pppp` id a whole-device driver matched on; so is a device
+with more than 16 functions or IADs, or an interface number of 32 or more. A
+multi-interface device left whole no longer reports its first interface's
+class triple (10.7).
+
+Superseded on 2026-10-03 (owner and coordinator, after Codex review of batch
+(c), round 19, finding 3): this paragraph read "Split when the active
+configuration has more than one interface ... **and** `bDeviceClass` is 0,
+or is `0xEF` with subclass 2 and protocol 1 ..., or the configuration carries
+IADs", left any other device class unsplit "until it is read", and had the
+bus split using "the first configuration", leaving the multi-configuration
+rule (`ParentFindOriginalConfiguration`, `ParentFindAltConfiguration`)
+unread. A device with more than one configuration is now never split.
+
+The bus configures a split device itself, once, before any function PDO
+exists (`HcdCfgParentConfigure`): SET_CONFIGURATION with its one
+configuration, every interface at alternate 0, no endpoint open;
+`RESET_PORT` replays it. A function's `SELECT_CONFIGURATION` never sends
+SET_CONFIGURATION (10.9). A device the bus does not split is left Addressed
+for its function driver to configure.
 
 **Grouping**, in this order, over the configuration's interfaces (alternate 0
-entries only):
+entries only); the functions are listed in the order of their first
+interfaces' descriptors:
 
 1. **IAD.** An Interface Association Descriptor (type `0x0B`, `usb200.h`
    101-114) groups `bInterfaceCount` interfaces from `bFirstInterface` into
-   one function. The Sound Blaster X4 (`041E:3278`) is the specimen: a CDC
+   one function; an IAD overlapping an earlier one is ignored. Its compatible
+   ids come from the IAD, and its device text from `iFunction` when set
+   (10.7). The Sound Blaster X4 (`041E:3278`) is the specimen: a CDC
    function (`02/02` with `0A/00`) and the UAC 2.0 audio function, each
    IAD-grouped, and an HID interface on its own (`test-equipment.md`).
-2. **The legacy rule**, for interfaces no IAD covers, read statically from
-   Microsoft's own parent, `usbccgp.sys` 5.1.2600.5585 and 6.1.7601.17514
-   (`GetFunctionInterfaceListBase`); both builds do the same thing:
+2. **The legacy rule**, only for a configuration that carries **no IAD at
+   all**, read statically from Microsoft's own parent, `usbccgp.sys`
+   5.1.2600.5585 and 6.1.7601.17514 (`GetFunctionInterfaceListBase`); both
+   builds do the same thing. Any IAD turns the audio rule off for every
+   interface, per Microsoft's grouping hierarchy ("Support for interface
+   collections"), and an interface no IAD covers is then a function on its
+   own (superseded on 2026-10-03, Codex review of batch (c), round 19,
+   finding 6: this rule read "for interfaces no IAD covers"):
    - **Consecutive class-`0x01` interfaces whose subclass differs from the
      first form one function.** An interface of class `0x01` (Audio) starts a
      function; each following class-`0x01` interface whose
@@ -2159,8 +2242,9 @@ entries only):
      `baInterfaceNr` list.
    - Every other interface is a function on its own, counted at
      `bAlternateSetting` 0 only.
-   - An interface of class `0x0D` (Content Security) is skipped and is never
-     a function.
+   - An interface of class `0x0D` (Content Security) that no IAD covers is
+     skipped and belongs to no function, IADs or none in the configuration
+     (`xhci_func.c`).
 
    The INFs agree: on 98 SE and 2000 the same vendor devices bind audio at
    `MI_00` and HID at `MI_02` (`MI_03` on NEC `0409:0203`) - `wdma_usb.inf`
@@ -2174,7 +2258,8 @@ entries only):
    between the AudioControl and its streaming interfaces would, under this
    positional rule, split the audio function in two. The Low-Speed Wired
    Keyboard 600 (`045E:0750`, two HID interfaces, no IAD) splits into `MI_00`
-   and `MI_01`.
+   and `MI_01`. Guest leg c15 (2026-10-03, Windows 98 SE and 2000) split the
+   C-Media `0D8C:0014` into an audio and an HID function, with no bugcheck.
 3. **No CDC rule in 2.0.0.0.** Windows 7's `usbccgp.sys` has a further
    class-callback path - `GroupInterfacesByFunction` looking for an interface
    of class `0x02` subclass `0x08` (the Wireless Handset Control Model), then
@@ -2200,15 +2285,16 @@ same shape going by its public symbol names alone
 | From a function PDO | What the bus does |
 |---|---|
 | GET_DESCRIPTOR(Device) | the real device descriptor |
-| GET_DESCRIPTOR(Configuration) | a **synthesised** configuration descriptor: the real header with `wTotalLength` and `bNumInterfaces` recomputed, then only this function's interface, class-specific, endpoint and IAD descriptors, **with interface numbers unchanged** (a UAC 1.0 AudioControl header names its streaming interfaces by their real numbers) |
-| `URB_FUNCTION_SELECT_CONFIGURATION`, non-NULL | the device is already configured (10.8). Validate every `USBD_INTERFACE_INFORMATION` - its `Length`, and that its interface is this function's, else `STATUS_INVALID_PARAMETER` (Microsoft's parent carries the debug text "Pdo %x SET_CONFIGURATION Invalid Interface Information Length = %x. minimum size required = %x"). Per interface: SET_INTERFACE if the requested alternate differs from the current one; Configure Endpoint adding this function's endpoints (Context Entries = the highest DCI any function uses); fill pipe handles, types, packet sizes, intervals and `InterfaceHandle`; return a per-function `ConfigurationHandle`. No SET_CONFIGURATION reaches the device |
+| GET_DESCRIPTOR(Configuration) | a **synthesised** configuration descriptor: the real header with `wTotalLength` and `bNumInterfaces` recomputed, then only this function's interface, class-specific, endpoint and IAD descriptors, **with interface numbers unchanged** (a UAC 1.0 AudioControl header names its streaming interfaces by their real numbers). Descriptors ahead of the first interface or IAD stay out; the copy is bounded by the request's buffer, the MDL's byte count (`XhciFuncConfig`). Required, not cosmetic: Windows 2000 SP4's `usbaudio.sys` sizes its interface list by `bNumInterfaces` and dereferences an uninitialised entry for each non-audio interface, STOP 0x1E in guest leg c14 (`runs/run-26.md`, c14; `legal-provenance.md` section 4) |
+| `URB_FUNCTION_SELECT_CONFIGURATION`, non-NULL | the device is already configured (10.8). Validate every `USBD_INTERFACE_INFORMATION` - its `Length`, and that its interface is this function's, else `STATUS_INVALID_PARAMETER` (Microsoft's parent carries the debug text "Pdo %x SET_CONFIGURATION Invalid Interface Information Length = %x. minimum size required = %x"). Then this function's pipes close and one Configure Endpoint drops its old endpoints and adds its new ones beside the siblings' (Context Entries = the highest DCI any function uses); only its own pipes are reopened. Per interface: SET_INTERFACE if the requested alternate differs from the current one, or if its endpoints have been opened since the device last restarted their toggles (`IfaceUsed`: re-added endpoint contexts start at DATA0, so the device's toggles must restart too); an interface still at the alternate 0 the bus's SET_CONFIGURATION left, never opened since, gets none. A SET_INTERFACE to alternate 0 STALLed by an interface with no other alternates falls back to CLEAR_FEATURE(ENDPOINT_HALT) on its non-isochronous endpoints; any other failure fails the request (round 19, finding 2). Fill pipe handles, types, packet sizes, intervals and `InterfaceHandle`; return a per-function `ConfigurationHandle`. No SET_CONFIGURATION reaches the device |
 | `URB_FUNCTION_SELECT_CONFIGURATION`, NULL descriptor | unconfigure **this function only**: abort and drop its endpoints (Configure Endpoint with Drop flags); the device stays configured for its siblings |
 | `URB_FUNCTION_SELECT_INTERFACE` | the interface must be this function's; SET_INTERFACE; drop the old alternate's endpoints and add the new one's in one Configure Endpoint |
 | bulk, interrupt, isochronous, `ABORT_PIPE`, `SYNC_RESET_PIPE_AND_CLEAR_STALL` and the reset / clear pair | the pipe handle must be one this function's select returned (a sibling's is refused); then the device's endpoint, with 10.4's CLEAR_TT_BUFFER on a control or bulk reset behind a TT |
-| a control transfer on the default pipe | the device's shared EP0, serialised across siblings. A standard request with an interface recipient must name one of this function's interfaces; SET_CONFIGURATION and SET_ADDRESS in a raw control transfer are refused (the bus owns both) |
+| a control transfer on the default pipe | the device's shared EP0, serialised across siblings. A standard or class request with an interface recipient may not name a sibling's interface in `wIndex`'s low byte; one naming no interface of the device passes to the device (`XhciFuncSetupAllowed`; corrected 2026-10-03 from "must name one of this function's interfaces", which refused `usbaudio.sys`'s class requests to `0x54` and `0x60` in guest leg c15); SET_CONFIGURATION and SET_ADDRESS in a raw control transfer are refused (the bus owns both) |
 | `GET_CONFIGURATION`, `GET_INTERFACE`, `GET_CURRENT_FRAME_NUMBER`, `GET_STATUS` | answered for the device; the frame number is the controller's |
 | `IOCTL_INTERNAL_USB_RESET_PORT` | resets the whole device: port reset, re-address, SET_CONFIGURATION, every function's current alternates and endpoint contexts restored, **every sibling's pipe handles kept valid**; siblings' in-flight transfers complete as cancelled. Which targets' class drivers send it is section 6.5's table |
-| `IOCTL_INTERNAL_USB_CYCLE_PORT` | the whole device leaves and re-enumerates: every function PDO reported missing and recreated |
+| `IOCTL_INTERNAL_USB_CYCLE_PORT` | the whole device leaves and re-enumerates: every function PDO reported missing and recreated. The siblings share a group serial and leave together; the port re-enumerates only once the last of the group is deleted |
+| `IRP_MN_REMOVE_DEVICE` on a function PDO | only this function's requests are cancelled (EP0's included); then the thread closes its pipes, drops its endpoints and returns its interfaces to alternate 0 (`HcdCfgReleaseFunction`), so a removed audio function holds no periodic bandwidth; the siblings keep theirs (round 19, finding 4). The device record stays until the slot goes (5.2) |
 | `IOCTL_INTERNAL_USB_GET_PORT_STATUS`, `QUERY_INTERFACE` (`USB_BUS_INTERFACE_USBDI`) | the device's answers, identical for every function (section 6; 26-A.6) |
 | power | a function's D-state is its own; the device stays D0 while any function is D0 (selective suspend is outside the roadmap, 28.3) |
 
@@ -2222,8 +2308,8 @@ counts endpoints added at a function's `SELECT_CONFIGURATION` or
 |---|---|
 | Every **(to transcribe)** USB 2.0 number above: 4.1.1 tiers; 7.1.7.3 `TATTDB`; 7.1.7.5 `TDRST`, `TRSTRCY`; 7.1.7.7 `TRSMRCY`; 9.2.6.3 `TDSETADDR`; 11.12.4 the bitmap; 11.23.1-2 the hub descriptor fields and the status endpoint's `bInterval`; 11.24.2 the TT requests' `wValue`; Tables 11-13, 11-16, 11-17, 11-21 and 11-22. The specification is added to `docs/references/` with its hash first. | 27-A.1 (one transcription batch) |
 | `BusQueryCompatibleIDs` for a device-class device (the `DevClass` forms, read from the hub drivers' id order statically), and the instance-id character set on Windows 98. | 26-A.4 |
-| The IAD function's compatible ids (from the IAD or the first interface: `ParseUSBInterfaceAssociationDescriptors` / the id builders), the device-class values Microsoft splits besides 0, and the multi-configuration rule - static reads of `usbccgp.sys` and the hub drivers. The X4's IAD fields have not been read. | 26-A.7 |
-| The interface numbering and order of each UAC 1.0 unit in `test-equipment.md`, read off the units' descriptors. | 26-A.7 |
+| **Closed 2026-10-03 by decision, not by a static read** (owner and coordinator, Codex review of batch (c), round 19, findings 3 and 5): the IAD function's compatible ids come from the IAD (10.7), and the split follows Microsoft's composite-parent rule - one configuration, two or more interfaces, device class 0 or `EF/02/01` - so no other device class and no multi-configuration device is split (10.8). It read: the IAD function's compatible ids (from the IAD or the first interface: `ParseUSBInterfaceAssociationDescriptors` / the id builders), the device-class values Microsoft splits besides 0, and the multi-configuration rule - static reads of `usbccgp.sys` and the hub drivers. The X4's IAD fields have still not been read. | 26-A.7 |
+| The interface numbering and order of each UAC 1.0 unit in `test-equipment.md`, read off the units' descriptors. The bus logs each function's port and `MI_`, interface mask and class triple as it creates the PDOs (`HcdDevicePdoCreate`) for that reading. | 26-A.7 |
 | Windows 2000's and stock Windows 98's own composite parent (`usbhub.sys`) grouping rule is unread. The INF evidence (audio at `MI_00`, HID at `MI_02`) agrees with the `usbccgp` rule, and since the bus does the splitting, what matters is what those targets' audio drivers accept. | 26-V.1, 26-V.2 |
 | Whether `IoInvalidateDeviceRelations` may be called at `DISPATCH_LEVEL` on Windows 98 (section 7.7), which decides whether 10.1's state machine hands that one call to the PASSIVE worker. | 27-A.1 |
 | Under what condition Windows 7's `usbccgp.sys` takes its CDC grouping path. | none in 2.0.0.0; recorded for a later CDC need |
@@ -2379,8 +2465,8 @@ the detail; this is the index.
 | Whether the class drivers tolerate a failed answer to the requests the NT 6.x line added (`GET_TOPOLOGY_ADDRESS`, `RECORD_FAILURE`, the USBDI interface) | 6 | 26-A.6 and 28-A.1 |
 | URB functions passed through memory or across branches, which the straight-line scan of section 6 can miss | 6 | 26-A.5: the HCD counts every URB function it is sent, and an unexpected one is a counter, not a crash |
 | Windows 98's map-register grant and whether its `AllocateAdapterChannel` runs the execution routine synchronously | 11 | 26-A.5 |
-| PCI configuration-space access on Windows 98 (`IRP_MN_READ_CONFIG` or `BUS_INTERFACE_STANDARD`; the `HalGetBusData` family has no Windows 98 precedent) | 7 | 26-A.2 |
-| The PASSIVE context: a system thread (stock precedent `bt829.sys`) rather than work items, confirmed on both primaries | 5.4 | 26-A.2 |
+| PCI configuration-space access on Windows 98 (`IRP_MN_READ_CONFIG` or `BUS_INTERFACE_STANDARD`; the `HalGetBusData` family has no Windows 98 precedent) | 7 | **Settled in 26-A.2 (2026-10-03): `IRP_MN_READ_CONFIG` / `WRITE_CONFIG` sent to the PCI PDO**, the route NUSB's `USBPORT.SYS` and 98 SE's `uhcd.sys` take (static, `legal-provenance.md` section 4) and the HCD's (`HcdSvcConfigSpace`). Runtime, QEMU, `qemu` build: on Windows 98 SE that IRP sent to the attached lower object was refused and `GUID_BUS_INTERFACE_STANDARD` answered `STATUS_NOT_IMPLEMENTED` (`C0000002`); sent to the PDO it read the vendor and device ids and the interrupt pin, and the start completed. On Windows 2000 both targets answered |
+| The PASSIVE context: a system thread (stock precedent `bt829.sys`) rather than work items, confirmed on both primaries | 5.4 | **Confirmed in 26-A.2 (2026-10-03)**: the controller thread starts with the controller on both primaries and stops cleanly across repeated disable/enable cycles - waited for on its thread object on NT and on an event on Windows 98, where the thread-object wait faulted (`runs/run-26.md`); its 100 ms health poll leaves no trace of its own yet, so that it ran is not an observation |
 | `DeviceIsHub` for hubs inside the bus, the driver key returned for a split composite device, and the `ControllerFlavor` value the HCD reports to Vista and Windows 7 `usbui.dll` | 8 | 26-A.8 |
 | The `SymbolicName` value and the device interfaces both devnodes must carry, so the property pages find them on every generation | 8 | 26-A.8 |
 | `XHCISNAP`'s software-key finder (it matches `xhci98.sys`) and its payload schema for the HCD's extension | 8, 9 | 26-A.8 |

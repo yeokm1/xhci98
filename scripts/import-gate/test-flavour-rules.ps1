@@ -61,7 +61,7 @@ try {
     # image is needed, so split-flavour rows are checked before the first link.
     & {
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($gate, [ref]$null, [ref]$null)
-        foreach ($name in @('Get-ImportPairs', 'Read-AllowFile', 'Test-Image')) {
+        foreach ($name in @('Get-ImportPairs', 'Read-AllowFile', 'Get-ObjectImportRefs', 'Join-CSplices', 'Test-ImportSitesFromSource', 'Test-ImportSites', 'Test-Image')) {
             $function = $ast.Find({ param($node)
                 $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
             }, $true)
@@ -128,7 +128,109 @@ try {
         $script:importFailures = @()
         Test-Image -Path $bare -ImageFlavor release -Rules $rules
         Assert-True (@($script:importFailures | Where-Object { $_ -match 'does not carry the scaffold marker' }).Count -eq 1) "an empty import table without the scaffold marker is refused: $($script:importFailures)"
+
+        # SITES=: a restricted pair referenced from a named object passes, and
+        # from any other object fails, on the objects beside the image. The
+        # three thunk spellings dumpbin prints are recognised, and so is a plain
+        # symbol an import library's stub resolves (the rogue object's).
+        function Write-Ok { param($Message) }
+        function Invoke-Dumpbin {
+            param($Exe, $Mode, $Path)
+            if ($Mode -eq '/imports') {
+                return @('    ntoskrnl.exe', '        0 ExFreePool', '        0 IofCallDriver', '        0 ExAllocatePoolWithTag', '    Summary')
+            }
+            switch ([System.IO.Path]::GetFileName($Path)) {
+                'hcd_pool.obj' { return @('010 00000000 UNDEF  notype       External     | __imp__ExFreePool@4', '011 00000000 UNDEF  notype       External     | __imp_ExAllocatePoolWithTag') }
+                'hcd_pnp.obj'  { return @('012 00000000 UNDEF  notype       External     | __imp_@IofCallDriver@8') }
+                'hcd_rogue.obj' { return @('013 00000000 UNDEF  notype       External     | _ExFreePool@4') }
+            }
+            return @()
+        }
+        # The image sits where build.exe puts it, src\obj<fl>\<arch>, so the
+        # LTCG source scan below finds the .c files two levels up.
+        $siteSrc = Join-Path $work 'src'
+        $siteDir = Join-Path $siteSrc 'objfre\i386'
+        New-Item -ItemType Directory -Path $siteDir -Force | Out-Null
+        $siteImage = Join-Path $siteDir 'xhci98.sys'
+        [System.IO.File]::WriteAllBytes($siteImage, [System.Text.Encoding]::ASCII.GetBytes("MZ`0"))
+        foreach ($objName in @('hcd_pool.obj', 'hcd_pnp.obj')) {
+            [System.IO.File]::WriteAllBytes((Join-Path $siteDir $objName), [byte[]](0))
+        }
+        Set-Content -LiteralPath $split -Encoding ASCII -Value @(
+            '[imports]',
+            'ntoskrnl.exe!ExFreePool all required SITES=hcd_pool.obj pool',
+            'ntoskrnl.exe!ExAllocatePoolWithTag all required SITES=hcd_pool.obj pool',
+            'ntoskrnl.exe!IofCallDriver all required unrestricted'
+        )
+        $rules = Read-AllowFile $split
+        $script:importFailures = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True ($script:importFailures.Count -eq 0) "SITES admits references from the named object only: $($script:importFailures)"
+        [System.IO.File]::WriteAllBytes((Join-Path $siteDir 'hcd_rogue.obj'), [byte[]](0))
+        $script:importFailures = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'hcd_rogue\.obj.*SITES=hcd_pool\.obj' }).Count -eq 1) "SITES refuses a reference from an object it does not name: $($script:importFailures)"
+
+        # Link-time-code-generation objects (WDK 7.1 amd64) list no symbols: the
+        # rule then reads each object's .c source - a restricted name in a file
+        # outside SITES fails, a missing source fails, and a mix of readable and
+        # unreadable objects fails.
+        function Invoke-Dumpbin {
+            param($Exe, $Mode, $Path)
+            if ($Mode -eq '/imports') {
+                return @('    ntoskrnl.exe', '        0 ExFreePool', '        0 IofCallDriver', '        0 ExAllocatePoolWithTag', '    Summary')
+            }
+            if ([System.IO.Path]::GetFileName($Path) -eq 'hcd_pnp.obj' -and $script:mixedObjects) {
+                return @('012 00000000 UNDEF  notype       External     | __imp_@IofCallDriver@8')
+            }
+            return @('File Type: ANONYMOUS OBJECT')
+        }
+        Remove-Item -LiteralPath (Join-Path $siteDir 'hcd_rogue.obj')
+        $script:mixedObjects = $false
+        Set-Content -LiteralPath (Join-Path $siteSrc 'hcd_pool.c') -Encoding ASCII -Value 'void f(void *p) { ExFreePool(p); }'
+        Set-Content -LiteralPath (Join-Path $siteSrc 'hcd_pnp.c') -Encoding ASCII -Value 'void g(void) { IoCallDriver(0, 0); }'
+        $script:importFailures = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True ($script:importFailures.Count -eq 0) "SITES over LTCG objects reads the sources and admits the named file: $($script:importFailures)"
+        Set-Content -LiteralPath (Join-Path $siteSrc 'hcd_pnp.c') -Encoding ASCII -Value 'void g(void *p) { ExFreePool(p); }'
+        $script:importFailures = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'named in .*hcd_pnp\.c' }).Count -eq 1) "SITES over LTCG objects refuses a restricted name in another source: $($script:importFailures)"
+        Remove-Item -LiteralPath (Join-Path $siteSrc 'hcd_pnp.c')
+        $script:importFailures = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'source .* was not found' }).Count -eq 1) "SITES over LTCG objects fails on a missing source: $($script:importFailures)"
+        Set-Content -LiteralPath (Join-Path $siteSrc 'hcd_pnp.c') -Encoding ASCII -Value 'void g(void) { HCD_FREE(0); }'
+        Set-Content -LiteralPath (Join-Path $siteSrc 'hcd.h') -Encoding ASCII -Value '#define HCD_FREE(p) ExFreePool(p)'
+        $script:importFailures = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'named in the header' }).Count -eq 1) "SITES over LTCG objects refuses a restricted name in a header, where a macro hides it: $($script:importFailures)"
+        Remove-Item -LiteralPath (Join-Path $siteSrc 'hcd.h')
+        New-Item -ItemType Directory -Path (Join-Path $siteSrc 'compat') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $siteSrc 'compat\alias.h') -Encoding ASCII -Value '#define HCD_FREE(p) ExFreePool(p)'
+        $script:importFailures = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'named in the header .*compat' }).Count -eq 1) "SITES over LTCG objects refuses a restricted name in a nested header: $($script:importFailures)"
+        Remove-Item -LiteralPath (Join-Path $siteSrc 'compat\alias.h')
+        Set-Content -LiteralPath (Join-Path $siteSrc 'notes.h') -Encoding ASCII -Value @('/* why ExFreePool and not', ' * ExFreePoolWithTag */', '// ExFreePool too', '#ifdef ExFreePool', '#undef ExFreePool', '#endif')
+        $script:importFailures = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'named in the header' }).Count -eq 0) "a restricted name only in a header's comments is no reference: $($script:importFailures)"
+        Remove-Item -LiteralPath (Join-Path $siteSrc 'notes.h')
+        Set-Content -LiteralPath (Join-Path $siteSrc 'hcd_pnp.c') -Encoding ASCII -Value @('void g(void *p) { ExFree\', 'Pool(p); }')
+        $script:importFailures = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'named in .*hcd_pnp\.c' }).Count -eq 1) "SITES over LTCG objects joins a backslash-newline before matching: $($script:importFailures)"
+        $script:mixedObjects = $true
+        $script:importFailures = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'mixed obj directory' }).Count -eq 1) "SITES over a mixed obj directory fails: $($script:importFailures)"
     }
+
+    $badSites = Join-Path $work 'bad-sites.allow'
+    Set-Content -LiteralPath $badSites -Encoding ASCII -Value @('[imports]', 'ntoskrnl.exe!ExFreePool all required SITES=hcd_pool.c')
+    $parsed = Invoke-Parse -AllowPath $badSites
+    Assert-True ($parsed.Code -ne 0 -and $parsed.Text -match 'SITES= must list object file names') "a SITES= naming no .obj file is refused: $($parsed.Text)"
 
     # ---------------------------------------------------------------------
     # The grammar, on synthetic files.

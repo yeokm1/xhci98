@@ -1,6 +1,11 @@
 /*
  * xhci_init.c - the controller initialization sequence.
  *
+ * KEPT FROM THE MINIPORT (roadmap-hcd.md task 26-A.2). This file was the
+ * usbport miniport's; its comments still speak of usbport, its callbacks and
+ * its locks. src/hcd_svc.h, "READING THE KEPT FILES", is the key from each
+ * of those names to the HCD code that now plays the part.
+ *
  * Roadmap Phase 4 tasks 2, 3 and 5. usbport calls StartController once it has
  * mapped BAR0, connected the interrupt and placed the fixed common buffer; this
  * file turns that into a controller whose DCBAA, scratchpad, command ring and
@@ -38,6 +43,7 @@
 #include "xhci_usbport.h"
 #include "xhci_hw.h"
 #include "xhci_dbg.h"
+#include "hcd_svc.h"
 
 /*
  * Bounded waits, all specification-derived.
@@ -2501,14 +2507,7 @@ VOID XhciFailClosedDma(PXHCI_EXTENSION ext)
     XHCI_DBG_VALUE("teardown: bus master clear retries",
                    ext->BusMasterClearRetries);
 
-    if (XhciRegPacket.UsbPortBugCheck == NULL) {
-        ext->DmaFailClosedUnavailable++;
-        XHCI_DBG_TEXT("teardown: no UsbPortBugCheck service - the buffer will "
-                      "be reclaimed under a live bus master");
-        return;
-    }
-
-    XhciRegPacket.UsbPortBugCheck(ext);
+    HcdSvcDmaNotStopped(ext);
 }
 
 /* ------------------------------------------------------------------ */
@@ -2527,7 +2526,7 @@ ULONG XhciFrameNumber(PXHCI_EXTENSION ext)
         return 0;
     }
 
-    XhciControllerLockAcquire(&oldIrql);
+    XhciControllerLockAcquire(ext, &oldIrql);
 
     /*
      * The same admission the ISR and the health poll use, and for the same
@@ -2600,7 +2599,7 @@ ULONG XhciFrameNumber(PXHCI_EXTENSION ext)
              * poll being the only thing that counts. */
             ext->FrameSampleStale = 0;
             value = ext->FrameNumber;
-            XhciControllerLockRelease(oldIrql);
+            XhciControllerLockRelease(ext, oldIrql);
             return value;
         }
         ext->FrameReadFailures++;
@@ -2631,7 +2630,7 @@ ULONG XhciFrameNumber(PXHCI_EXTENSION ext)
     ext->FrameNumber++;
     value = ext->FrameNumber;
 
-    XhciControllerLockRelease(oldIrql);
+    XhciControllerLockRelease(ext, oldIrql);
     return value;
 }
 
@@ -3855,9 +3854,9 @@ MPSTATUS XhciResumeController(PXHCI_EXTENSION ext)
         halted = (usbsts != 0xFFFFFFFFUL &&
                   (usbsts & XHCI_USBSTS_HCH) != 0) ? 1UL : 0UL;
 
-        XhciControllerLockAcquire(&oldIrql);
+        XhciControllerLockAcquire(ext, &oldIrql);
         XhciSlotInvalidateAll(ext, halted);
-        XhciControllerLockRelease(oldIrql);
+        XhciControllerLockRelease(ext, oldIrql);
         XhciSlotDeferredWorkForced(ext, XHCI_ARM_UNLOCKED);
     }
 
@@ -4074,9 +4073,9 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
     halted = (usbsts != 0xFFFFFFFFUL &&
               (usbsts & XHCI_USBSTS_HCH) != 0) ? 1UL : 0UL;
 
-    XhciControllerLockAcquire(&oldIrql);
+    XhciControllerLockAcquire(ext, &oldIrql);
     XhciSlotInvalidateAll(ext, halted);
-    XhciControllerLockRelease(oldIrql);
+    XhciControllerLockRelease(ext, oldIrql);
     XhciSlotDeferredWorkForced(ext, XHCI_ARM_DEFER);
 
     ext->InitBelowPassive = 1;
@@ -4108,9 +4107,9 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
          * what it adds is that the health poll's arming predicate reads this
          * word, so without it a failed attempt would never be retried.
          */
-        XhciControllerLockAcquire(&oldIrql);
+        XhciControllerLockAcquire(ext, &oldIrql);
         ext->ControllerFailed = 1;
-        XhciControllerLockRelease(oldIrql);
+        XhciControllerLockRelease(ext, oldIrql);
         XhciLogNote(ext, "ctrl.recover.refused", ext->InitStep);
         XHCI_DBG_VALUE_CHANGED("recover: reinitialization refused at step",
                                ext->InitStep);
@@ -4451,9 +4450,9 @@ ULONG XhciStopController(PXHCI_EXTENSION ext)
          * about the *buffer*, and says nothing about whether the slots inside it
          * are still the hardware's.
          */
-        XhciControllerLockAcquire(&oldIrql);
+        XhciControllerLockAcquire(ext, &oldIrql);
         XhciSlotInvalidateAll(ext, quiesced);
-        XhciControllerLockRelease(oldIrql);
+        XhciControllerLockRelease(ext, oldIrql);
         XhciSlotDeferredWorkForced(ext, XHCI_INIT_ARM_MODE(ext));
 
         return quiesced;
@@ -4832,7 +4831,7 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
     {
         KIRQL failedIrql;
 
-        XhciControllerLockAcquire(&failedIrql);
+        XhciControllerLockAcquire(ext, &failedIrql);
         ext->ControllerFailed = 0;
         /*
          * And the health poll's transition latch, in the same breath. The
@@ -4845,7 +4844,7 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
          * exists to close.
          */
         ext->ControllerFatal = 0;
-        XhciControllerLockRelease(failedIrql);
+        XhciControllerLockRelease(ext, failedIrql);
     }
 
     /*
@@ -4921,7 +4920,7 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
      * of structures out of a 4 KB buffer would be the last thing that ever
      * worked on that machine.
      */
-    if (ext->Layout.TotalBytes > XhciRegPacket.MiniPortResourcesSize) {
+    if (ext->Layout.TotalBytes > XHCI_HC_RESOURCES_SIZE) {
         XHCI_DBG_VALUE("layout does not fit the declared buffer, need",
                        ext->Layout.TotalBytes);
         return xhciInitFailed(ext, XHCI_INIT_STEP_LAYOUT, XHCI_LAYOUT_OVERFLOW,
