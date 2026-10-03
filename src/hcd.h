@@ -526,6 +526,11 @@ typedef struct _HCD_PORT {
      * (HubSsRearms) up to a cap (hcd_hub.c, hcdHubRearmPorts). */
     ULONG HubSsRearmWait;
     ULONG HubSsRearms;
+    /* Root port: PDO recreations hcdHoldResolve saw fail since the port
+     * last read physically disconnected (hcd_enum.c). Nonzero, no device
+     * on the port asks for a send-back again; at HCD_HOLD_RECOVER_TRIES
+     * the device is left refused with no PDO. */
+    ULONG HoldRecoverFails;
     ULONG HubSsSeen;        /* a connection read since its last re-arm:
                              * an empty port after that is a departure of
                              * the device's own, which restarts the waits */
@@ -587,6 +592,11 @@ typedef struct _HCD_HUB {
  * lock; a full table refuses the request, counted.
  */
 #define HCD_MAX_HOLDS               8UL
+
+/* PDO recreations after a refused send-back that may fail on one root port
+ * before its device is left refused with no PDO (hcd_enum.c,
+ * hcdHoldResolve); a bus policy number. */
+#define HCD_HOLD_RECOVER_TRIES      3UL
 
 /* Why a send-back was asked for (HcdHoldRequestUsb2's `reason`). */
 #define HCD_HOLD_REASON_UAS_NO_STREAMS  1UL /* 31-A.3: UAS-only, no streams */
@@ -771,6 +781,9 @@ typedef struct _HCD_CONTROLLER {
     ULONG HubPortsGivenUp;
     ULONG SsHubPortsRearmed;        /* given-up SuperSpeed hub ports put
                                      * back to RxDetect (hcd_hub.c)       */
+    ULONG HoldRecoverGiveUps;       /* devices left refused with no PDO
+                                     * after HCD_HOLD_RECOVER_TRIES failed
+                                     * recreations (hcd_enum.c)           */
     ULONG TtBufferClears;
     ULONG TtBufferClearFailures;
 

@@ -1515,9 +1515,6 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         return 1;
 
     case XHCI_ENUM_ACT_CREATE_PDO:
-        /* The port enumerated: a later give-up of it starts its re-arm
-         * waits from the first (hcd_hub.c; round 2, finding C). */
-        p->HubSsRearms = 0;
         if (p->Device->DeviceDesc[4] == XHCI_HUB_CLASS) {
             /* A hub is the bus's and never a PDO (section 10.3): brought
              * up here, it is Present with nothing for PnP to start, so the
@@ -1529,6 +1526,10 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
             if (!ok) {
                 return 1;
             }
+            /* The port enumerated: a later give-up of it starts its re-arm
+             * waits from the first (hcd_hub.c; Codex review of the Phase
+             * 28-31 integration, round 3, finding 2). */
+            p->HubSsRearms = 0;
             (VOID)XhciEnumStep(&p->Enum, next, &none);
             hcdEventInit(next, XHCI_ENUM_EV_PDO_STARTED, 1);
             XHCI_DBG_VALUE("hcd: hub enumerated at location", p->PortId);
@@ -1537,6 +1538,9 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         hcdEventInit(next, XHCI_ENUM_EV_PDO_CREATED,
                      NT_SUCCESS(HcdDevicePdoCreate(hc, p->Device)));
         XHCI_DBG_VALUE("hcd: device enumerated at location", p->PortId);
+        if (next->Ok) {
+            p->HubSsRearms = 0;
+        }
         /* A device 31-A.3 asked 29-A.5 to send back (hcd_pdo.c,
          * HoldAsked) has no PDO yet: the machine waits in Present for the
          * hold service - whose disconnect takes it as an unplug, or whose
@@ -1691,6 +1695,11 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
         XhciWritePortsc(ext, p->PortId,
                         XhciPortscClearChanges(portsc, changes));
     }
+    if ((portsc & XHCI_PORTSC_CCS) == 0) {
+        /* Physically empty: the next device's refused send-back gets its
+         * own recreation budget (hcdHoldResolve). */
+        p->HoldRecoverFails = 0;
+    }
     /* A held SuperSpeed port is not served: its link is Disabled and stays
      * so until the hold is released (29-A.5). */
     if (hcdHoldOf(hc, p->PortId) != NULL) {
@@ -1826,8 +1835,9 @@ static ULONG hcdHoldPendingOn(PHCD_CONTROLLER hc, ULONG port)
  * real start handshake (PortPdoStarted) then takes it to Bound. One that
  * reads disconnected is fed the disconnect, the ordinary departure. A PDO
  * creation that fails is the port's failure: a disconnect, and the port
- * marked changed so a device still there is enumerated afresh. Thread
- * only, powered.
+ * marked changed so a device still there is enumerated afresh - within
+ * the port's HCD_HOLD_RECOVER_TRIES (HoldRecoverFails). Thread only,
+ * powered.
  */
 static VOID hcdHoldResolve(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc)
 {
@@ -1838,6 +1848,7 @@ static VOID hcdHoldResolve(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc)
     if (p->Hub != NULL || dev == NULL || dev->Pdo != NULL ||
         dev->Hub != NULL || p->Enum.State != XHCI_ENUM_PRESENT ||
         portsc == 0xFFFFFFFFUL || hcdHalted(hc) ||
+        p->HoldRecoverFails >= HCD_HOLD_RECOVER_TRIES ||
         hcdHoldPendingOn(hc, p->PortId)) {
         return;
     }
@@ -1852,6 +1863,18 @@ static VOID hcdHoldResolve(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc)
     if (NT_SUCCESS(HcdDevicePdoCreate(hc, dev)) && dev->Pdo != NULL) {
         return;
     }
+    /* A failed recreation is counted on the port, across the disconnect
+     * below and the re-enumeration it brings, which asks for no send-back
+     * while the count is nonzero (hcd_pdo.c); after
+     * HCD_HOLD_RECOVER_TRIES the device is left refused, with no PDO and
+     * nothing more tried, until the port reads physically disconnected
+     * (Codex review of the Phase 28-31 integration, round 3, finding 3). */
+    if (++p->HoldRecoverFails >= HCD_HOLD_RECOVER_TRIES) {
+        hc->HoldRecoverGiveUps++;
+        XHCI_DBG_VALUE("hcd: hold refused, PDOs not created, left, port",
+                       p->PortId);
+        return;
+    }
     hcdFeed(hc, p, XHCI_ENUM_EV_DISCONNECT);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     hc->PortChange[(p->PortId - 1) / 32UL] |= 1UL << ((p->PortId - 1) % 32UL);
@@ -1862,12 +1885,14 @@ static VOID hcdHoldResolve(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG portsc)
  * The send-backs asked for since the last pass (29-A.5), each in order:
  * the link must still be trained (else the request is refused, counted);
  * the device's identity is read on the SuperSpeed port while it is there
- * to answer; the hold begins, counted by kind; PED is written, which takes
- * the link to SS.Disabled and withdraws its terminations, so the device
- * looks for its USB 2.0 path; and the port's machine is fed a disconnect,
- * which reports the PDOs missing and disables the slot as an unplug does.
- * From then on the port is not served (hcdPortChanged) until a release.
- * Thread only, powered.
+ * to answer; PORTSC is read again and, readable, PED is written, which
+ * takes the link to SS.Disabled and withdraws its terminations, so the
+ * device looks for its USB 2.0 path; only then does the hold begin,
+ * counted by kind; and the port's machine is fed a disconnect, which
+ * reports the PDOs missing and disables the slot as an unplug does. From
+ * then on the port is not served (hcdPortChanged) until a release. An
+ * unreadable PORTSC at either read keeps the request pending, and a
+ * controller failure leaves it to the recovery. Thread only, powered.
  */
 static VOID hcdHoldService(PHCD_CONTROLLER hc)
 {
@@ -1923,8 +1948,33 @@ static VOID hcdHoldService(PHCD_CONTROLLER hc)
             continue;
         }
         hcdReadIdentity(hc, p->Device, &id);
+        /* The identity transfers may have met a controller failure: the
+         * request stays pending and the recovery's invalidation forgets it
+         * with the device (Codex review of the Phase 28-31 integration,
+         * round 3, finding 1). */
+        if (hcdHalted(hc)) {
+            break;
+        }
+        /* They may also have taken a while: the PED write is made on what
+         * the port says now, through the same neutral base - and only on a
+         * readable PORTSC. An unreadable one leaves the request pending,
+         * on the same budget as the first read, and nothing is committed:
+         * no active hold, no disconnect (round 3, finding 1). */
+        portsc = XhciReadPortsc(&hc->Hc, h->Port);
+        if (portsc == 0xFFFFFFFFUL) {
+            if (++h->Unreadable >= HCD_HOLD_UNREADABLE_PASSES) {
+                XHCI_DBG_VALUE("hcd: hold, PORTSC unreadable, recovery, port",
+                               h->Port);
+                HcdSvcRequestReset(&hc->Hc);
+            }
+            continue;
+        }
         kind = XhciHoldBegin(&h->Hold, h->Port,
                              hc->Hc.PortMap.Companion[h->Port - 1], &id);
+        XhciWritePortsc(&hc->Hc, h->Port, XhciPortscDisable(portsc));
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        h->Pending = 0;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
         if (kind == XHCI_HOLD_PAIRED) {
             hc->Counters.HoldsPaired++;
         } else if (kind == XHCI_HOLD_ORPHAN) {
@@ -1932,15 +1982,6 @@ static VOID hcdHoldService(PHCD_CONTROLLER hc)
         } else {
             hc->Counters.HoldsUnidentified++;
         }
-        /* The identity reads may have taken a while: the PED write is made
-         * on what the port says now, through the same neutral base. */
-        portsc = XhciReadPortsc(&hc->Hc, h->Port);
-        if (portsc != 0xFFFFFFFFUL) {
-            XhciWritePortsc(&hc->Hc, h->Port, XhciPortscDisable(portsc));
-        }
-        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-        h->Pending = 0;
-        XhciControllerLockRelease(&hc->Hc, oldIrql);
         XHCI_DBG_VALUE("hcd: hold begun, port/kind/reason",
                        (h->Port << 16) | (kind << 8) | h->Reason);
         if (p->Enum.State != XHCI_ENUM_EMPTY &&

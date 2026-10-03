@@ -459,9 +459,11 @@ static ULONG hcdXportRefusal(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     if (at != XHCI_XPORT_AT_ROOT_COMPANION) {
         return 0;
     }
-    if (dev->HoldRefused) {
-        /* Asked once and refused late (hcd_enum.c, hcdHoldResolve):
-         * refused in place, not asked again. */
+    if (dev->HoldRefused ||
+        hc->Ports[dev->Location - 1].HoldRecoverFails != 0) {
+        /* Asked once and refused late (hcd_enum.c, hcdHoldResolve), or a
+         * device on a port whose refused send-back's PDOs could not be
+         * created: refused in place, not asked again. */
         hc->XportHoldsNotTaken++;
         return 0;
     }
