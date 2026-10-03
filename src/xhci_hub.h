@@ -178,10 +178,11 @@ ULONG XhciHubClearSelector(ULONG changeBit);
 
 /*
  * A port reset's progress from one GET_STATUS answer: XHCI_HUB_RESET_PENDING
- * while the hub still drives it, XHCI_HUB_RESET_ENABLED when it has ended
- * with the port enabled (C_PORT_RESET set, or the reset bit clear with the
- * port enabled - some hubs end it before raising the change), and
- * XHCI_HUB_RESET_FAILED when it has ended disabled or the device left.
+ * until C_PORT_RESET is set with the reset bit clear - the hub's own word
+ * that the reset ended, which the caller makes fresh by clearing any older
+ * C_PORT_RESET before it starts the reset - then XHCI_HUB_RESET_ENABLED with
+ * the port enabled and XHCI_HUB_RESET_FAILED without; FAILED at once when
+ * the device left.
  */
 #define XHCI_HUB_RESET_PENDING  0UL
 #define XHCI_HUB_RESET_ENABLED  1UL
@@ -226,5 +227,55 @@ ULONG XhciHubInstanceKey(ULONG rootPort, ULONG route);
  * (section 10.2 step 1: bPwrOn2PwrGood x 2), bounded below by 20 - the root
  * port's own (xHCI 5.4.8) - and above by 1000. */
 ULONG XhciHubPowerWaitMs(ULONG powerGoodMs);
+
+/*
+ * Attempts at a device on a hub's port - reset, address, device descriptor -
+ * before the bus gives the port up with CLEAR_FEATURE(PORT_ENABLE) and
+ * leaves it disabled until its next connect change (section 10.2 step 7).
+ * A root port keeps the enumeration machine's own XHCI_ENUM_RETRIES.
+ */
+#define XHCI_HUB_PORT_ATTEMPTS      3UL
+
+/*
+ * CLEAR_TT_BUFFER (section 10.1's table; USB 2.0 11.24.2.3, to transcribe):
+ * bmRequestType 0x23, bRequest 8, wLength 0. wValue packs the endpoint the
+ * TT buffer held - endpoint number in bits 3:0, the device's USB address in
+ * 10:4, the endpoint type in 12:11 (the bmAttributes encoding, 0 control and
+ * 2 bulk, as XHCI_PIPE_XFER_*), the direction in bit 15 (1 IN) - and wIndex
+ * names the TT: the port the device's subtree hangs from on a multi-TT hub,
+ * 1 on a single-TT one. Only a control or bulk endpoint's TT buffer is
+ * cleared: xHCI 4.6.8 p.116 ("If the device was behind a TT and it is a
+ * Control or Bulk endpoint") and p.102 (an Address Device transaction
+ * error, on the default control endpoint at address 0).
+ */
+#define XHCI_HUB_REQ_CLEAR_TT_BUFFER 0x08U
+#define XHCI_HUB_TT_EP_CONTROL      0UL
+#define XHCI_HUB_TT_EP_BULK         2UL
+
+/* Returns 1 with *value for a control or bulk endpoint, 0 for any other
+ * type (no TT buffer is cleared for it) or a field out of range. */
+ULONG XhciHubClearTtValue(ULONG address, ULONG endpoint, ULONG type,
+                          ULONG in, PULONG value);
+
+/* The CLEAR_TT_BUFFER wIndex: `ttPort` on a multi-TT hub, else 1. */
+ULONG XhciHubClearTtPort(ULONG multiTt, ULONG ttPort);
+
+/*
+ * The order a departing subtree's hubs are released in (section 10.5 step
+ * 4): every hub after each hub below it, the departing one last, so no slot
+ * that is still enabled names a disabled one as its parent or TT hub.
+ * parent[i] is hub i's parent - the index of the hub whose port it sits on,
+ * XHCI_HUB_NO_PARENT on a root port, XHCI_HUB_DETACHED for an object not in
+ * the tree (unused, or already departing) - for `count` hubs. Writes the
+ * indices of `top` and of every hub below it into order[] (count entries at
+ * most), deepest first, and returns how many. A chain that does not end
+ * within `count` steps (a loop) leaves its hubs out; a `top` out of range or
+ * detached gives 0.
+ */
+#define XHCI_HUB_NO_PARENT          0xFFFFFFFFUL
+#define XHCI_HUB_DETACHED           0xFFFFFFFEUL
+
+ULONG XhciHubReleaseOrder(const ULONG *parent, ULONG count, ULONG top,
+                          PULONG order);
 
 #endif /* XHCI_HUB_H */

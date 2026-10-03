@@ -132,4 +132,9 @@ ULONG XhciEnumStep(PXHCI_ENUM_PORT port, const XHCI_ENUM_EVENT *event,
  * connected. */
 ULONG XhciEnumRetry(PXHCI_ENUM_PORT port, PXHCI_ENUM_ACTION action);
 
+/* The same with the caller's limit in place of XHCI_ENUM_RETRIES: a hub's
+ * port is given XHCI_HUB_PORT_ATTEMPTS attempts in all (xhci_hub.h). */
+ULONG XhciEnumRetryUpTo(PXHCI_ENUM_PORT port, ULONG retries,
+                        PXHCI_ENUM_ACTION action);
+
 #endif /* XHCI_ENUM_H */
