@@ -415,4 +415,33 @@ ULONG XhciPipeNtStatus(ULONG usbd);
  * anything else is INTERNAL_HC_ERROR. */
 ULONG XhciPipeConfigureUsbdStatus(ULONG completionCode);
 
+/*
+ * Submission sequences and abort horizons (hcd_io.c, HcdIoPark): a 32-bit
+ * per-PDO count that wraps, so every order is a signed difference, and a
+ * horizon or stamp more than XHCI_PIPE_SEQ_AGE submissions behind the
+ * current count is aged - every comparison is then within half the range.
+ * 0 is never a stamp or a horizon (none).
+ *
+ * The bound: a horizon older than 2^30 submissions is retired (covers
+ * nothing), since its abort's pipe has long since been closed or used
+ * again. A request whose own stamp is that old predates every live horizon
+ * and is covered by any live one. A request and a horizon both that old
+ * cannot be ordered: the request is not covered and is held until its PDO
+ * stops or goes, which releases every held request - a client would have
+ * to keep one request outstanding through 2^30 others on its PDO (twelve
+ * days at a thousand a second) for that to arise.
+ */
+#define XHCI_PIPE_SEQ_AGE 0x40000000UL
+
+/* Whether `seq` (nonzero) is aged against `current`. */
+ULONG XhciPipeSeqAged(ULONG seq, ULONG current);
+
+/* Whether a live horizon covers a request stamped `stamp`: the request was
+ * submitted at or before the abort, by the rules above. */
+ULONG XhciPipeSeqCovers(ULONG horizon, ULONG stamp, ULONG current);
+
+/* The later of two horizons, either possibly 0 or aged (which yields to
+ * the other); 0 when both are. */
+ULONG XhciPipeSeqLatest(ULONG a, ULONG b, ULONG current);
+
 #endif /* XHCI_PIPE_H */

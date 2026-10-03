@@ -1794,32 +1794,57 @@ static VOID hcdParkedCancel(PDEVICE_OBJECT obj, PIRP irp);
 
 static VOID hcdParkedComplete(PHCD_DEVICE_PDO pdo, PIRP irp);
 
-/* The horizon that covers a pipe: its own, or every pipe's when that is
- * later. 0 for none (stamps start at 1). Cancel spin lock held. */
-static ULONG hcdHorizonLocked(PHCD_DEVICE_PDO pdo, PVOID handle)
+/* The PDO's current submission count, for the aging rule. */
+static ULONG hcdSeqNow(PHCD_DEVICE_PDO pdo)
 {
-    ULONG horizon;
-    ULONG i;
-
-    horizon = pdo->AbortAll;
-    for (i = 0; i < pdo->AbortCount; i++) {
-        if (pdo->AbortPipe[i] == handle && pdo->AbortHorizon[i] > horizon) {
-            horizon = pdo->AbortHorizon[i];
-        }
-    }
-    return horizon;
+    return (ULONG)pdo->SubmitSeq;
 }
 
-/* Whether an IRP was submitted before an abort of its pipe. Cancel spin
+/* Whether an IRP was submitted at or before an abort of its pipe - its own
+ * horizon or every pipe's - by the wrap-safe order and aging of
+ * xhci_pipe.h (XhciPipeSeqCovers; Codex review of ed025d2). Cancel spin
  * lock held. */
 static ULONG hcdAbortedLocked(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID handle)
 {
     ULONG stamp;
-    ULONG horizon;
+    ULONG now;
+    ULONG i;
 
     stamp = (ULONG)(ULONG_PTR)irp->Tail.Overlay.DriverContext[0];
-    horizon = hcdHorizonLocked(pdo, handle);
-    return horizon != 0 && stamp != 0 && stamp <= horizon;
+    now = hcdSeqNow(pdo);
+    if (XhciPipeSeqCovers(pdo->AbortAll, stamp, now)) {
+        return 1;
+    }
+    for (i = 0; i < pdo->AbortCount; i++) {
+        if (pdo->AbortPipe[i] == handle &&
+            XhciPipeSeqCovers(pdo->AbortHorizon[i], stamp, now)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Aged horizons retired (XhciPipeSeqAged): they cover nothing, and their
+ * slots are free again. Cancel spin lock held. */
+static VOID hcdHorizonsAge(PHCD_DEVICE_PDO pdo)
+{
+    ULONG now;
+    ULONG i;
+    ULONG k;
+
+    now = hcdSeqNow(pdo);
+    if (XhciPipeSeqAged(pdo->AbortAll, now)) {
+        pdo->AbortAll = 0;
+    }
+    k = 0;
+    for (i = 0; i < pdo->AbortCount; i++) {
+        if (!XhciPipeSeqAged(pdo->AbortHorizon[i], now)) {
+            pdo->AbortPipe[k] = pdo->AbortPipe[i];
+            pdo->AbortHorizon[k] = pdo->AbortHorizon[i];
+            k++;
+        }
+    }
+    pdo->AbortCount = k;
 }
 
 /*
@@ -1875,9 +1900,20 @@ ULONG HcdIoPark(PHCD_DEVICE_PDO pdo, PIRP irp, PVOID urb, PVOID handle)
  * before it - held now or reaching the hold later - completes CANCELED
  * (HcdIoPark, HcdIoParkedRelease). `known`: the caller placed the handle -
  * a pipe of the live device (validated there), or one a held request of a
- * departed device names; a handle it could not place covers every pipe.
- * Never cleared, never evicted: a full table raises every pipe's horizon
- * instead. Horizons only grow, as stamps do. IRQL: <= DISPATCH_LEVEL.
+ * departed device names. Horizons are ordered and aged wrap-safely
+ * (xhci_pipe.h, XHCI_PIPE_SEQ_AGE): a horizon 2^30 submissions old is
+ * retired, never one younger.
+ *
+ * The every-pipe horizon (AbortAll) is a deliberately conservative
+ * departure policy: when the handle cannot be placed - an unknown handle
+ * on a departed PDO - or the PDO has already kept horizons for
+ * HCD_PDO_ABORTS distinct live handles (repeated selects can accumulate
+ * that many over its life), the abort covers every pipe of the PDO, so
+ * aborting one pipe also releases the PDO's held requests on its other
+ * pipes, EP0's included. It is consulted only for requests of a departed
+ * device, never for live transfers, and never crosses into a sibling
+ * function PDO (Codex review of ed025d2, its note). IRQL:
+ * <= DISPATCH_LEVEL.
  */
 VOID HcdIoAbortMark(PHCD_DEVICE_PDO pdo, PIRP abortIrp, PVOID handle,
                     ULONG known)
@@ -1885,10 +1921,13 @@ VOID HcdIoAbortMark(PHCD_DEVICE_PDO pdo, PIRP abortIrp, PVOID handle,
     PLIST_ENTRY entry;
     KIRQL cancelIrql;
     ULONG horizon;
+    ULONG now;
     ULONG i;
 
     horizon = (ULONG)(ULONG_PTR)abortIrp->Tail.Overlay.DriverContext[0];
     IoAcquireCancelSpinLock(&cancelIrql);
+    hcdHorizonsAge(pdo);
+    now = hcdSeqNow(pdo);
     if (!known) {
         for (i = 0; i < pdo->AbortCount && !known; i++) {
             known = pdo->AbortPipe[i] == handle;
@@ -1900,9 +1939,7 @@ VOID HcdIoAbortMark(PHCD_DEVICE_PDO pdo, PIRP abortIrp, PVOID handle,
                     ->Tail.Overlay.DriverContext[1] == handle;
     }
     if (!known) {
-        if (horizon > pdo->AbortAll) {
-            pdo->AbortAll = horizon;
-        }
+        pdo->AbortAll = XhciPipeSeqLatest(pdo->AbortAll, horizon, now);
     } else {
         for (i = 0; i < pdo->AbortCount; i++) {
             if (pdo->AbortPipe[i] == handle) {
@@ -1910,15 +1947,14 @@ VOID HcdIoAbortMark(PHCD_DEVICE_PDO pdo, PIRP abortIrp, PVOID handle,
             }
         }
         if (i < pdo->AbortCount) {
-            if (horizon > pdo->AbortHorizon[i]) {
-                pdo->AbortHorizon[i] = horizon;
-            }
+            pdo->AbortHorizon[i] =
+                XhciPipeSeqLatest(pdo->AbortHorizon[i], horizon, now);
         } else if (pdo->AbortCount < HCD_PDO_ABORTS) {
             pdo->AbortPipe[pdo->AbortCount] = handle;
             pdo->AbortHorizon[pdo->AbortCount] = horizon;
             pdo->AbortCount++;
-        } else if (horizon > pdo->AbortAll) {
-            pdo->AbortAll = horizon;
+        } else {
+            pdo->AbortAll = XhciPipeSeqLatest(pdo->AbortAll, horizon, now);
         }
     }
     IoReleaseCancelSpinLock(cancelIrql);

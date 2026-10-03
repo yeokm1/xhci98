@@ -837,3 +837,39 @@ ULONG XhciPipeConfigureUsbdStatus(ULONG completionCode)
         return XHCI_PIPE_USBD_INTERNAL_HC_ERROR;
     }
 }
+
+/* IRQL: any. */
+ULONG XhciPipeSeqAged(ULONG seq, ULONG current)
+{
+    return seq != 0 && (ULONG)(current - seq) >= XHCI_PIPE_SEQ_AGE;
+}
+
+/* IRQL: any. */
+ULONG XhciPipeSeqCovers(ULONG horizon, ULONG stamp, ULONG current)
+{
+    if (horizon == 0 || stamp == 0 || XhciPipeSeqAged(horizon, current)) {
+        return 0;
+    }
+    if (XhciPipeSeqAged(stamp, current)) {
+        return 1;
+    }
+    return (LONG)(stamp - horizon) <= 0;
+}
+
+/* IRQL: any. */
+ULONG XhciPipeSeqLatest(ULONG a, ULONG b, ULONG current)
+{
+    if (a == 0 || XhciPipeSeqAged(a, current)) {
+        a = 0;
+    }
+    if (b == 0 || XhciPipeSeqAged(b, current)) {
+        b = 0;
+    }
+    if (a == 0) {
+        return b;
+    }
+    if (b == 0) {
+        return a;
+    }
+    return ((LONG)(a - b) >= 0) ? a : b;
+}

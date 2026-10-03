@@ -1382,8 +1382,55 @@ static void test_iso_frames(void)
              "1024 back, the inclusive edge");
 }
 
+/* Submission sequences and abort horizons around the wrap (hcd_io.c;
+ * Codex review of ed025d2): signed-difference order, and aging at 2^30
+ * behind the current count. */
+static void test_seq(void)
+{
+    CHECK(XhciPipeSeqCovers(10, 5, 20), "older request covered");
+    CHECK(XhciPipeSeqCovers(10, 10, 20), "the abort's own stamp covered");
+    CHECK(!XhciPipeSeqCovers(10, 11, 20), "a later request is not");
+    CHECK(!XhciPipeSeqCovers(0, 5, 20), "no horizon covers nothing");
+    CHECK(!XhciPipeSeqCovers(10, 0, 20), "an unstamped IRP is not covered");
+
+    /* Codex's case: stamp 0xFFFFFFFE, then the count wraps and the abort
+     * takes 2. */
+    CHECK(XhciPipeSeqCovers(2UL, 0xFFFFFFFEUL, 5UL),
+          "a pre-wrap request is older than a post-wrap abort");
+    CHECK(!XhciPipeSeqCovers(0xFFFFFFFEUL, 2UL, 5UL),
+          "a post-wrap request is newer than a pre-wrap abort");
+    CHECK(XhciPipeSeqCovers(0xFFFFFFF0UL, 0xFFFFFFE0UL, 3UL),
+          "both before the wrap, looked at after it");
+
+    /* Aging. */
+    CHECK(!XhciPipeSeqAged(100, 100 + XHCI_PIPE_SEQ_AGE - 1), "just young");
+    CHECK(XhciPipeSeqAged(100, 100 + XHCI_PIPE_SEQ_AGE), "just aged");
+    /* 0xF0000000 + 2^30 wraps to 0x30000000. */
+    CHECK(XhciPipeSeqAged(0xF0000000UL, 0x30000000UL),
+          "aged across the wrap");
+    CHECK(!XhciPipeSeqAged(0xF0000000UL, 0x2FFFFFFFUL),
+          "young across the wrap");
+    CHECK(!XhciPipeSeqAged(0, 0x80000000UL), "0 is never aged");
+    CHECK(!XhciPipeSeqCovers(100, 50, 100 + XHCI_PIPE_SEQ_AGE),
+          "an aged horizon is retired");
+    CHECK(XhciPipeSeqCovers(XHCI_PIPE_SEQ_AGE + 200UL, 50,
+                            XHCI_PIPE_SEQ_AGE + 300UL),
+          "an aged request predates a live horizon");
+
+    /* The later of two horizons. */
+    CHECK_EQ(XhciPipeSeqLatest(5, 9, 20), 9, "the later");
+    CHECK_EQ(XhciPipeSeqLatest(2UL, 0xFFFFFFFEUL, 5UL), 2UL,
+             "the later across the wrap");
+    CHECK_EQ(XhciPipeSeqLatest(0, 7, 20), 7, "0 yields");
+    CHECK_EQ(XhciPipeSeqLatest(100, 7 + XHCI_PIPE_SEQ_AGE,
+                               100 + XHCI_PIPE_SEQ_AGE),
+             7 + XHCI_PIPE_SEQ_AGE, "an aged one yields");
+    CHECK_EQ(XhciPipeSeqLatest(0, 0, 20), 0, "none");
+}
+
 int main(void)
 {
+    test_seq();
     test_dci();
     test_qemu_mouse();
     test_intervals();

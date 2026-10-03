@@ -370,8 +370,10 @@ typedef struct _HCD_DEVICE_PDO {
      * as its pipe's horizon - or, for a handle it cannot place, every
      * pipe's (AbortAll). A request whose stamp is at or below its pipe's
      * horizon was submitted before an abort of it and is completed
-     * CANCELED rather than held. A horizon is never cleared or evicted:
-     * a table that is full raises AbortAll instead. */
+     * CANCELED rather than held, by a wrap-safe order that retires a
+     * horizon 2^30 submissions old (xhci_pipe.h, XHCI_PIPE_SEQ_AGE);
+     * none younger is cleared or evicted, and a table that is full
+     * raises AbortAll instead. */
     volatile LONG SubmitSeq;
     ULONG AbortAll;
     ULONG AbortCount;
