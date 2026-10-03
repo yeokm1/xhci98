@@ -9393,6 +9393,55 @@ copy from a Windows 98 binary, not from the DDK's samples**: read what
 lifecycle path is not tested until its disable has run on Windows 98 SE** -
 the start passing proves nothing about the stop.
 
+## Make STATUS_PENDING visible before pending a URB IRP: some class drivers poll IoStatus.Status instead of waiting on an event
+
+Roadmap task 26-V.1, 2026-10-04, Windows 98 SE under NUSB 3.3 in QEMU
+(`docs/contributing/runs/run-26.md`, "26-V.1"). Installing ASIX's Windows 98
+driver for the AX88772A, `AX88772.SYS` 3.0.3.12, over the HCD's `40efd31`
+build gave "A fatal exception 0E has occurred at 0028:C188D256 in VXD
+ax88772(01) + 00001576." The trace just before it: a GET_DESCRIPTOR, then
+`select, URB length=00000018` and `select refused,
+bLength/wTotalLength=00100000` - a SELECT_CONFIGURATION built from a
+descriptor that had not been read.
+
+A subagent's static read (`legal-provenance.md` section 4): the driver
+imports no `KeWaitForSingleObject` and waits for each URB by polling
+`Irp->IoStatus.Status` for `0x103` (`cmp dword ptr [esi+18h],103h` at
+`0x103B5`, then `IoFreeIrp`). `IoAllocateIrp` leaves that field 0, and the
+HCD pended the IRP without writing it, so the driver read success at once,
+freed its GET_DESCRIPTOR IRP while it was in flight, and selected from an
+unfilled buffer. NUSB's `USBPORT.SYS` stores `STATUS_PENDING` there
+(`0x15851`) before `IoMarkIrpPending`, which is why the driver works under
+usbport. `ac25e4e` sets it on entry to `HcdDevicePdoInternalIoctl`, and on
+that build the same install bound on NUSB 3.3 and on SweetLow's stack.
+
+Rules. **Before pending an IRP, write `STATUS_PENDING` into its
+`IoStatus.Status`, as usbport does**: the DDK's contract is the return value
+and the completion, but a shipping driver can read the field, and a 0 there
+reads as success. And **a class driver's behaviour on the stack it was
+written for is a contract the replacement inherits**: when one misbehaves
+only under the HCD, read what the stack it was tested on does at the same
+point before calling the class driver wrong.
+
+## A QEMU chardev file log is truncated at every launch with the same tag: relaunches lose the previous boot's trace - use a new tag or copy the log first
+
+Phase 26's guest legs, 2026-10-03 and 2026-10-04 (`run-26.md`). The
+launchers write the `qemu` flavour's port-0xE9 trace through `-chardev
+file,id=dbgcon,path=...` to `vm\t26-<os>-<tag>-debugcon.log`, a path made
+from the tag alone. QEMU opens a file chardev for writing and truncates it,
+so relaunching the same overlay with the same tag - which every Windows 98 SE
+driver replacement needs, since the launcher turns the guest's restart into a
+shutdown - empties the previous boot's trace before the new boot writes a
+line. 26-V.1 and 26-V.2 kept theirs only by copying each log aside before
+the relaunch (`...-boot1-debugcon.log`, `...debugcon.boot2.log`) or by giving
+the relaunch a new tag (`v2a4`, `v2a4b`).
+
+Rules. **Before relaunching a guest, copy its trace aside or give the launch
+a new tag**; the trace of the boot that failed is the one a relaunch to
+investigate it destroys. QEMU's `append=on` on the chardev keeps every boot
+in one file instead, at the cost of telling the boots apart by the driver's
+start lines.
+
 ## Windows 98 SE's hidclass resubmits at once on STATUS_DEVICE_NOT_CONNECTED while its device is started: park a departed device's reads, do not fail them
 
 Roadmap tasks 27-A.3 and 27-V.1, 2026-10-04, Windows 98 SE in QEMU
