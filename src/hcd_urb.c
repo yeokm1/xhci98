@@ -255,6 +255,7 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     }
     switch (function) {
     case URB_FUNCTION_SELECT_CONFIGURATION:
+    case URB_FUNCTION_SELECT_INTERFACE:
     case URB_FUNCTION_ABORT_PIPE:
     case URB_FUNCTION_RESET_PIPE:
         /* Commands: pended for the controller thread (hcd_cfg.c). */

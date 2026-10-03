@@ -147,6 +147,7 @@ typedef struct _HCD_PIPE {
     ULONG TransferType;             /* XHCI_PIPE_XFER_*                    */
     ULONG MaxPacketSize;
     ULONG Interval;                 /* bInterval, as reported to clients  */
+    ULONG Interface;                /* bInterfaceNumber it belongs to     */
     PXHCI_RING Ring;                /* EP0: the device's; else OwnRing    */
     PXHCI_TRANSFER_QUEUE Queue;     /* EP0: the device's; else OwnQueue   */
     XHCI_RING OwnRing;
@@ -210,6 +211,14 @@ typedef struct _HCD_USB_DEVICE {
     PHCD_PIPE Pipes[32];
     ULONG PoolRings;
     ULONG ConfigValue;
+    PUCHAR Selected;                /* the client's configuration, copied
+                                     * at SELECT_CONFIGURATION, for
+                                     * SELECT_INTERFACE                   */
+    ULONG SelectedLength;
+    ULONG Stale;                    /* endpoints (DCI bits) enabled on the
+                                     * controller with no pipe, after a
+                                     * failed select; the next Configure
+                                     * Endpoint drops them                */
 } HCD_USB_DEVICE, *PHCD_USB_DEVICE;
 
 /* A device PDO (hcd_pdo.c): one per enumerated device, a child of the root

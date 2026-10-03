@@ -207,6 +207,7 @@ static VOID hcdDeviceFree(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         return;
     }
     HcdPoolFree(dev->Config);
+    HcdPoolFree(dev->Selected);
     HcdPoolFree(dev);
 }
 
