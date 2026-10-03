@@ -19,12 +19,17 @@ OS file, each rule named as check-inf.ps1 names its families.
            src\xhci_version.h's date and version, defined %strings%,
            sections that every reference names, SourceDisksFiles carrying
            exactly xhciuas.sys and xhciuas.inf.
-  PATH-*   One undecorated models section, and every model in it reaching
-           both install paths: the undecorated section with DevLoader *NTKERN
+  PATH-*   Under -Arch x86 (src\uas\xhciuas.inf): one undecorated models
+           section, and every model in it reaching both install paths: the undecorated section with DevLoader *NTKERN
            and NTMPDriver xhciuas.sys, and the .NTx86 section whose .Services
            adds the xhciuas kernel service (type 1, demand start, normal error
            control, %12%\xhciuas.sys), each copying xhciuas.sys to
-           System32\Drivers.
+           System32\Drivers. Under -Arch amd64 (src\uas\xhciuas-amd64.inf,
+           the 64-bit package's): [Manufacturer] decorated NTamd64 and
+           nothing else (PATH-MFGDEC), the .NTamd64 install and .Services
+           sections, and no undecorated models, install or right-click
+           section at all (PATH-NO9X) - one is what a 32-bit engine would
+           fall back to, putting an amd64 binary on a 32-bit machine.
   UAS-*    The models bind USB\Class_08&SubClass_06&Prot_62 and nothing else:
            a Bulk-Only id (Prot_50) here would put this driver on a device the
            bus chose Bulk-Only for (task 31-A.3). No file of Microsoft's is
@@ -32,7 +37,7 @@ OS file, each rule named as check-inf.ps1 names its families.
   PKG-*    With -PackageDir: every [SourceDisksFiles] entry is in the staged
            package.
 
--SelfTest mutates the committed INF in memory, one rule at a time, and fails
+-SelfTest mutates both committed INFs in memory, one rule at a time, and fails
 unless the gate refuses every mutation and passes the original - the gate's own
 regression suite, run by scripts\build-driver.cmd before the gate itself.
 
@@ -44,6 +49,8 @@ powershell -ExecutionPolicy Bypass -File scripts\inf-gate\check-uas-inf.ps1
 param(
     [string]$InfPath = "",
     [string]$PackageDir = "",
+    [ValidateSet("x86", "amd64")]
+    [string]$Arch = "x86",
     [switch]$SelfTest
 )
 
@@ -52,7 +59,8 @@ $ErrorActionPreference = "Stop"
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "common.ps1")
 
 $repo = Get-RepoRoot
-if ($InfPath -eq "") { $InfPath = Join-Path $repo "src\uas\xhciuas.inf" }
+$infFor = @{ x86 = (Join-Path $repo "src\uas\xhciuas.inf"); amd64 = (Join-Path $repo "src\uas\xhciuas-amd64.inf") }
+if ($InfPath -eq "") { $InfPath = $infFor[$Arch] }
 $versionHeader = Join-Path $repo "src\xhci_version.h"
 
 $binary = "xhciuas.sys"
@@ -92,7 +100,9 @@ function Read-InfText {
 }
 
 function Test-UasInfText {
-    param([byte[]]$Bytes, [string]$HeaderText, [string]$Package)
+    param([byte[]]$Bytes, [string]$HeaderText, [string]$Package, [string]$Profile = "x86")
+
+    $ntSuffix = if ($Profile -eq "amd64") { ".NTamd64" } else { ".NTx86" }
 
     $fail = New-Object System.Collections.ArrayList
     $add = { param($rule, $msg) [void]$fail.Add("$rule $msg") }
@@ -184,8 +194,14 @@ function Test-UasInfText {
     if ($null -eq $mfg -or $mfg.Lines.Count -ne 1) { & $add "PATH-MFG" "[Manufacturer] must carry exactly one models line." }
     else {
         $fields = @($mfg.Lines[0].Value -split ',' | ForEach-Object { $_.Trim() })
-        if ($fields.Count -ne 1) { & $add "PATH-MFGDEC" "[Manufacturer] must be undecorated: the .NTx86 install path serves every NT target, and an NT 6.x models section would be a third path with nothing to do." }
-        $modelSections = @($fields[0])
+        if ($Profile -eq "amd64") {
+            if ($fields.Count -ne 2 -or $fields[1] -ine "NTamd64") { & $add "PATH-MFGDEC" "[Manufacturer] must be decorated NTamd64 and nothing else: it serves NT 5.2 x64 and Vista and 7 x64 alike, with no OS file to keep off an NT 6.x queue." }
+            if ($null -ne (& $get $fields[0])) { & $add "PATH-NO9X" "an undecorated models section [$($fields[0])] is one a 32-bit engine would fall back to." }
+            $modelSections = @($fields[0] + ".NTamd64")
+        } else {
+            if ($fields.Count -ne 1) { & $add "PATH-MFGDEC" "[Manufacturer] must be undecorated: the .NTx86 install path serves every NT target, and an NT 6.x models section would be a third path with nothing to do." }
+            $modelSections = @($fields[0])
+        }
     }
     $installs = @()
     foreach ($ms in $modelSections) {
@@ -203,9 +219,11 @@ function Test-UasInfText {
     }
 
     foreach ($inst in ($installs | Select-Object -Unique)) {
-        # Windows 98.
+        # Windows 98, or on amd64 its absence.
         $s9 = & $get $inst
-        if ($null -eq $s9) { & $add "PATH-9X" "no undecorated [$inst] for Windows 98." }
+        if ($Profile -eq "amd64") {
+            if ($null -ne $s9) { & $add "PATH-NO9X" "an undecorated [$inst] is one a 32-bit engine would fall back to." }
+        } elseif ($null -eq $s9) { & $add "PATH-9X" "no undecorated [$inst] for Windows 98." }
         else {
             $reg = @(& $directive $s9 "AddReg")
             $haveLoader = $false; $haveMp = $false
@@ -225,14 +243,17 @@ function Test-UasInfText {
             if (-not $copied.ContainsKey($binary)) { & $add "PATH-9X" "[$inst] does not copy $binary." }
         }
         # NT.
-        $snt = & $get "$inst.NTx86"
-        if ($null -eq $snt) { & $add "PATH-NT" "no [$inst.NTx86] for the NT targets." }
-        else { & $checkCopy ((& $directive $snt "CopyFiles") -join ',') "[$inst.NTx86]" }
-        $ssv = & $get "$inst.NTx86.Services"
-        if ($null -eq $ssv) { & $add "PATH-NT" "no [$inst.NTx86.Services]: the NT targets would install a devnode with no service." }
+        $snt = & $get "$inst$ntSuffix"
+        if ($null -eq $snt) { & $add "PATH-NT" "no [$inst$ntSuffix] for the NT targets." }
+        else {
+            & $checkCopy ((& $directive $snt "CopyFiles") -join ',') "[$inst$ntSuffix]"
+            if (-not $copied.ContainsKey($binary)) { & $add "PATH-NT" "[$inst$ntSuffix] does not copy $binary." }
+        }
+        $ssv = & $get "$inst$ntSuffix.Services"
+        if ($null -eq $ssv) { & $add "PATH-NT" "no [$inst$ntSuffix.Services]: the NT targets would install a devnode with no service." }
         else {
             $as = @(& $directive $ssv "AddService")
-            if ($as.Count -ne 1) { & $add "PATH-NT" "[$inst.NTx86.Services] needs exactly one AddService." }
+            if ($as.Count -ne 1) { & $add "PATH-NT" "[$inst$ntSuffix.Services] needs exactly one AddService." }
             else {
                 $f = @($as[0] -split ',' | ForEach-Object { $_.Trim() })
                 if ($f.Count -lt 3 -or $f[0] -ine $service -or ([Convert]::ToInt32(($f[1] -replace '^0x', ''), 16) -band 2) -eq 0) {
@@ -250,7 +271,10 @@ function Test-UasInfText {
             }
         }
     }
-    foreach ($d in @("DefaultInstall", "DefaultInstall.NTx86")) {
+    if ($Profile -eq "amd64" -and $null -ne (& $get "DefaultInstall")) {
+        & $add "PATH-NO9X" "an undecorated [DefaultInstall] is one a 32-bit engine would run."
+    }
+    foreach ($d in @("DefaultInstall", "DefaultInstall$ntSuffix")) {
         $ds = & $get $d
         if ($null -ne $ds) { & $checkCopy ((& $directive $ds "CopyFiles") -join ',') "[$d]" }
     }
@@ -286,46 +310,62 @@ $headerText = if (Test-Path -LiteralPath $versionHeader) { [System.IO.File]::Rea
 
 if ($SelfTest) {
     Write-Step "UAS INF gate self-tests"
-    $orig = [System.IO.File]::ReadAllBytes($InfPath)
-    $text = [System.Text.Encoding]::ASCII.GetString($orig)
     $bad = 0
-    $base = @(Test-UasInfText -Bytes $orig -HeaderText $headerText -Package "")
-    if ($base.Count -ne 0) {
-        Write-Err ("the committed INF fails its own gate:`n  " + ($base -join "`n  "))
-        exit 1
-    }
-    $cases = @(
-        @{ Rule = "FILE-EOL";      Text = $text.Replace("`r`n[Strings]", "`n[Strings]") },
-        @{ Rule = "FILE-ASCII";    Text = $text.Replace('Provider="Yeo', ('Provider="' + [char]0xE9 + 'Yeo')) },
-        @{ Rule = "UAS-ID";        Text = $text.Replace("Prot_62", "Prot_50") },
-        @{ Rule = "PATH-NT";       Text = $text.Replace("[Uas.Dev.NTx86.Services]", "[Uas.Dev.NTx86.Svc]") },
-        @{ Rule = "PATH-9X";       Text = $text.Replace("HKR,,NTMPDriver,,xhciuas.sys", "HKR,,NTMPDriver,,other.sys") },
-        @{ Rule = "BOTH-VERSION";  Text = ($text -replace 'DriverVer=\d\d/\d\d/\d{4},[0-9.]+', 'DriverVer=01/01/2020,9.9.9.9') },
-        @{ Rule = "W98-DIRID12";   Text = $text.Replace("Uas.CopyFiles=10,System32\Drivers", "Uas.CopyFiles=12") },
-        @{ Rule = "W98-SECTLEN";   Text = $text.Replace("[Uas.AddService]", "[Uas.AddService.Very.Long.Section]").Replace("Uas.AddService`r`n", "Uas.AddService.Very.Long.Section`r`n").Replace(",Uas.AddService", ",Uas.AddService.Very.Long.Section") },
-        @{ Rule = "UAS-MSFILE";    Text = $text.Replace("xhciuas.sys,,xhciuas.tmp", "xhciuas.sys,,xhciuas.tmp`r`nusbd.sys,,,16") },
-        @{ Rule = "PATH-MFGDEC";   Text = $text.Replace("%Mfg%=UasModels", "%Mfg%=UasModels,NTx86.6.0") },
-        @{ Rule = "BOTH-STRINGS";  Text = $text.Replace('UasDesc="', 'UasDescription="') },
-        @{ Rule = "UAS-LAYOUT";    Text = $text.Replace("Provider=%Provider%", "Provider=%Provider%`r`nLayoutFile=layout.inf") }
-    )
-    foreach ($c in $cases) {
-        $got = @(Test-UasInfText -Bytes ([System.Text.Encoding]::GetEncoding(28591).GetBytes($c.Text)) -HeaderText $headerText -Package "")
-        $hit = @($got | Where-Object { $_.StartsWith($c.Rule + " ") })
-        if ($hit.Count -eq 0) {
-            $bad++
-            Write-Err ("mutation for $($c.Rule) was not refused by that rule. Got:`n  " + ($got -join "`n  "))
+    $total = 0
+    foreach ($profile in @("x86", "amd64")) {
+        $orig = [System.IO.File]::ReadAllBytes($infFor[$profile])
+        $text = [System.Text.Encoding]::ASCII.GetString($orig)
+        $base = @(Test-UasInfText -Bytes $orig -HeaderText $headerText -Package "" -Profile $profile)
+        if ($base.Count -ne 0) {
+            Write-Err ("the committed $profile INF fails its own gate:`n  " + ($base -join "`n  "))
+            exit 1
+        }
+        if ($profile -eq "x86") {
+            $cases = @(
+                @{ Rule = "FILE-EOL";      Text = $text.Replace("`r`n[Strings]", "`n[Strings]") },
+                @{ Rule = "FILE-ASCII";    Text = $text.Replace('Provider="Yeo', ('Provider="' + [char]0xE9 + 'Yeo')) },
+                @{ Rule = "UAS-ID";        Text = $text.Replace("Prot_62", "Prot_50") },
+                @{ Rule = "PATH-NT";       Text = $text.Replace("[Uas.Dev.NTx86.Services]", "[Uas.Dev.NTx86.Svc]") },
+                @{ Rule = "PATH-9X";       Text = $text.Replace("HKR,,NTMPDriver,,xhciuas.sys", "HKR,,NTMPDriver,,other.sys") },
+                @{ Rule = "BOTH-VERSION";  Text = ($text -replace 'DriverVer=\d\d/\d\d/\d{4},[0-9.]+', 'DriverVer=01/01/2020,9.9.9.9') },
+                @{ Rule = "W98-DIRID12";   Text = $text.Replace("Uas.CopyFiles=10,System32\Drivers", "Uas.CopyFiles=12") },
+                @{ Rule = "W98-SECTLEN";   Text = $text.Replace("[Uas.AddService]", "[Uas.AddService.Very.Long.Section]").Replace("Uas.AddService`r`n", "Uas.AddService.Very.Long.Section`r`n").Replace(",Uas.AddService", ",Uas.AddService.Very.Long.Section") },
+                @{ Rule = "UAS-MSFILE";    Text = $text.Replace("xhciuas.sys,,xhciuas.tmp", "xhciuas.sys,,xhciuas.tmp`r`nusbd.sys,,,16") },
+                @{ Rule = "PATH-MFGDEC";   Text = $text.Replace("%Mfg%=UasModels", "%Mfg%=UasModels,NTx86.6.0") },
+                @{ Rule = "BOTH-STRINGS";  Text = $text.Replace('UasDesc="', 'UasDescription="') },
+                @{ Rule = "UAS-LAYOUT";    Text = $text.Replace("Provider=%Provider%", "Provider=%Provider%`r`nLayoutFile=layout.inf") }
+            )
         } else {
-            Write-Ok "$($c.Rule) refuses its mutation"
+            $cases = @(
+                @{ Rule = "UAS-ID";        Text = $text.Replace("Prot_62", "Prot_50") },
+                @{ Rule = "PATH-NT";       Text = $text.Replace("[Uas.Dev.NTamd64.Services]", "[Uas.Dev.NTamd64.Svc]") },
+                @{ Rule = "PATH-MFGDEC";   Text = $text.Replace("%Mfg%=UasModels,NTamd64", "%Mfg%=UasModels,NTamd64,NTamd64.6.0") },
+                @{ Rule = "PATH-NO9X";     Text = $text.Replace("[UasModels.NTamd64]", "[UasModels]`r`n%UasDesc%=Uas.Dev,USB\Class_08&SubClass_06&Prot_62`r`n`r`n[UasModels.NTamd64]") },
+                @{ Rule = "PATH-NO9X";     Text = $text.Replace("[Uas.Dev.NTamd64]", "[Uas.Dev]`r`nCopyFiles=Uas.CopyFiles`r`n`r`n[Uas.Dev.NTamd64]") },
+                @{ Rule = "BOTH-VERSION";  Text = ($text -replace 'DriverVer=\d\d/\d\d/\d{4},[0-9.]+', 'DriverVer=01/01/2020,9.9.9.9') },
+                @{ Rule = "UAS-MSFILE";    Text = $text.Replace("xhciuas.sys,,xhciuas.tmp", "xhciuas.sys,,xhciuas.tmp`r`nusbd.sys,,,16") }
+            )
+        }
+        foreach ($c in $cases) {
+            $total++
+            $got = @(Test-UasInfText -Bytes ([System.Text.Encoding]::GetEncoding(28591).GetBytes($c.Text)) -HeaderText $headerText -Package "" -Profile $profile)
+            $hit = @($got | Where-Object { $_.StartsWith($c.Rule + " ") })
+            if ($hit.Count -eq 0) {
+                $bad++
+                Write-Err ("$profile mutation for $($c.Rule) was not refused by that rule. Got:`n  " + ($got -join "`n  "))
+            } else {
+                Write-Ok "$profile $($c.Rule) refuses its mutation"
+            }
         }
     }
     if ($bad -ne 0) { exit 1 }
-    Write-Ok "UAS INF gate self-tests PASSED ($($cases.Count) mutations)"
+    Write-Ok "UAS INF gate self-tests PASSED ($total mutations)"
     exit 0
 }
 
-Write-Step "UAS INF gate: $InfPath"
+Write-Step "UAS INF gate ($Arch): $InfPath"
 if (-not (Test-Path -LiteralPath $InfPath)) { Write-Err "no INF at '$InfPath'."; exit 1 }
-$fails = @(Test-UasInfText -Bytes ([System.IO.File]::ReadAllBytes($InfPath)) -HeaderText $headerText -Package $PackageDir)
+$fails = @(Test-UasInfText -Bytes ([System.IO.File]::ReadAllBytes($InfPath)) -HeaderText $headerText -Package $PackageDir -Profile $Arch)
 if ($fails.Count -ne 0) {
     foreach ($f in $fails) { Write-Err $f }
     Write-Err "UAS INF gate FAILED ($($fails.Count))"

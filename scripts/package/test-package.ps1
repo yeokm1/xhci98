@@ -867,6 +867,52 @@ try {
         Assert-True (Test-Path -LiteralPath $uploadZip) "no upload archive was written when assembled without a package root."
         Assert-True (-not (Test-Path -LiteralPath $noOut)) "the run created the package root it was told did not exist."
 
+        # --- the UAS class driver's pair (roadmap task 31-A.2) ---------------
+        #
+        # A flavour directory carrying xhciuas.inf is gated by that INF's own
+        # gate in place: the pair is carried into the asset when it passes,
+        # and a directory whose UAS INF would bind Bulk-Only devices is
+        # refused. Where the pair is absent (every version before 2.0.0.0, and
+        # the cases above) nothing is required of it in this mode.
+        Write-Step "the upload set gates the UAS class driver's pair by its own INF"
+        $uasInfSrc = Join-Path $repo "src\uas\xhciuas.inf"
+        foreach ($fl in @("release", "debug")) {
+            Copy-Item -LiteralPath $uasInfSrc -Destination (Join-Path $pubRoot "$fl\xhciuas.inf") -Force
+            [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "$fl\xhciuas.sys"),
+                [System.Text.Encoding]::ASCII.GetBytes("stand-in xhciuas.sys, $fl flavour"))
+        }
+        Remove-Item -LiteralPath $uploadDir -Recurse -Force
+        Remove-Item -LiteralPath $uploadZip -Force
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with the UAS pair present:`n" + $r.Output)
+        Assert-True ($r.Output -match "carries the UAS class driver") `
+            ("expected the UAS pair to be gated by its own INF. Output:`n" + $r.Output)
+        foreach ($fl in @("release", "debug")) {
+            foreach ($name in @("xhciuas.sys", "xhciuas.inf")) {
+                Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
+                    "'$name' is missing from the upload set's $fl\ directory though the published one carries it."
+            }
+        }
+        $uasBad = [System.IO.File]::ReadAllText($uasInfSrc).Replace("Prot_62", "Prot_50")
+        [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "release\xhciuas.inf"),
+            [System.Text.Encoding]::ASCII.GetBytes($uasBad))
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -ne 0) "a published UAS INF binding a Bulk-Only id was assembled into the asset."
+        Assert-True ($r.Output -match "check-uas-inf") `
+            ("expected the refusal to name the UAS INF gate. Output:`n" + $r.Output)
+        # Back to the fixture the cases below were written against.
+        foreach ($fl in @("release", "debug")) {
+            Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\xhciuas.inf") -Force
+            Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\xhciuas.sys") -Force
+        }
+        if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
+        if (Test-Path -LiteralPath $uploadZip) { Remove-Item -LiteralPath $uploadZip -Force }
+        $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
+                               "-PackageRoot", $noOut, "-UploadDir", $upRoot)
+        Assert-True ($r.ExitCode -eq 0) ("the upload set did not assemble again once the UAS pair was removed:`n" + $r.Output)
+
         # --- and only the current cut's asset -------------------------------
         #
         # The INF gate this mode runs encodes the current release's rules, and
@@ -1586,6 +1632,34 @@ try {
     Assert-True ((Invoke-Stamp "-Check" $stampWork) -eq 1) `
         "a binary swapped under an unchanged stamp must be refused (audit H13)."
     [System.IO.File]::WriteAllBytes($stampSys, [byte[]](1, 2, 3, 4))
+
+    # The UAS class driver's stamp (task 31-A.2): its own file name, its own
+    # binary, and its source set from src\uas plus the src\ headers it
+    # includes - the same two answers for the same two cases.
+    $uasStampWork = Join-Path $script:work "stamp-uas"
+    New-Item -ItemType Directory -Path $uasStampWork | Out-Null
+    $uasStampSys = Join-Path $uasStampWork "xhciuas.sys"
+    [System.IO.File]::WriteAllBytes($uasStampSys, [byte[]](5, 6, 7, 8))
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $null = & powershell -NoProfile -ExecutionPolicy Bypass -File $stampScript -Driver xhciuas -Write $uasStampWork 2>&1
+        $uasWrite = $LASTEXITCODE
+        $null = & powershell -NoProfile -ExecutionPolicy Bypass -File $stampScript -Driver xhciuas -Check $uasStampWork 2>&1
+        $uasCheck = $LASTEXITCODE
+        [System.IO.File]::WriteAllBytes($uasStampSys, [byte[]](5, 6, 7, 9))
+        $null = & powershell -NoProfile -ExecutionPolicy Bypass -File $stampScript -Driver xhciuas -Check $uasStampWork 2>&1
+        $uasSwap = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $saved
+    }
+    $uasStampText = [System.IO.File]::ReadAllText((Join-Path $uasStampWork "xhciuas.srcstamp"))
+    Assert-True ($uasWrite -eq 0 -and $uasCheck -eq 0) "source-stamp.ps1 -Driver xhciuas did not write and pass a fresh stamp."
+    Assert-True ($uasSwap -eq 1) "a UAS binary swapped under an unchanged stamp must be refused."
+    Assert-True ($uasStampText -cmatch '(?m)^BINARY [0-9A-F]{64} xhciuas\.sys\r?$' -and
+                 $uasStampText -cmatch '(?m)^[0-9A-F]{64} uas_xport\.c\r?$' -and
+                 $uasStampText -cmatch '(?m)^[0-9A-F]{64} \.\.\\xhci98_streams\.h\r?$') `
+        "the UAS stamp does not cover its binary, its own sources and the src\ headers it includes."
 
     # A stamp written before the BINARY line existed. Sources agree, identity
     # is unavailable: exit 2, which is the ONLY case -AllowUnstampedDriver may

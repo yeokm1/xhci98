@@ -9,7 +9,8 @@ is this project's two files and nothing else:
 
     xhci98.inf     the dual-path INF
     xhci98.sys     the built miniport (debug or release)
-    xhciuas.inf    the UAS class driver's INF (x86, roadmap task 31-A.2)
+    xhciuas.inf    the UAS class driver's INF (roadmap task 31-A.2;
+                   src\uas\xhciuas-amd64.inf under this name for amd64)
     xhciuas.sys    the UAS class driver, the same flavour
 
 The Microsoft files the driver depends on, usbd.sys and usbhub.sys (both
@@ -75,16 +76,18 @@ which stage text stand-ins carrying a marker and nothing else.
 
 .PARAMETER UasInfPath
 The UAS class driver's INF to stage (task 31-A.2), overriding
-`src\uas\xhciuas.inf`.
+`src\uas\xhciuas.inf` (x86) or `src\uas\xhciuas-amd64.inf` (amd64). Staged
+as `xhciuas.inf` either way, the name its [SourceDisksFiles] gives it, and
+gated under -Arch.
 
 .PARAMETER UasDriverPath
 The UAS class driver to stage, overriding
-`src\uas\obj<flavour>\i386\xhciuas.sys`. The x86 package carries the
-UAS driver whenever it is built from the default paths: a missing xhciuas.sys
+`src\uas\obj<flavour>\<archdir>\xhciuas.sys`. Both packages carry the
+UAS driver whenever they are built from the default paths: a missing xhciuas.sys
 is then a refusal, not an omission. A caller that names -DriverPath (the
 self-tests' stand-ins) stages the UAS pair only when it names -UasDriverPath
 too, so a stand-in package is not filled from whatever the last build left
-in src\uas. The amd64 package has no UAS driver yet.
+in src\uas.
 
 .PARAMETER SkipPackageGate
 Skip the post-staging check-inf.ps1 -PackageDir run only. The INF is gated
@@ -207,19 +210,21 @@ $archDir = if ($Arch -eq "amd64") { "amd64" } else { "i386" }
 $archInf = if ($Arch -eq "amd64") { "src\xhci98-amd64.inf" } else { "src\xhci98.inf" }
 if ($InfPath -eq "") { $InfPath = Join-Path $repo $archInf }
 #
-# The UAS class driver (task 31-A.2), x86 only for now. Decided before
+# The UAS class driver (task 31-A.2), in both packages. Decided before
 # -DriverPath is defaulted, because whether the caller named one is the
 # question: see the -UasDriverPath help.
 #
-$stageUas = ($Arch -eq "x86") -and (($DriverPath -eq "") -or ($UasDriverPath -ne ""))
-if ($UasInfPath -eq "") { $UasInfPath = Join-Path $repo "src\uas\xhciuas.inf" }
+$stageUas = ($DriverPath -eq "") -or ($UasDriverPath -ne "")
+$uasInfName = if ($Arch -eq "amd64") { "xhciuas-amd64.inf" } else { "xhciuas.inf" }
+$uasAllow = if ($Arch -eq "amd64") { "xhciuas-imports-amd64.allow" } else { "xhciuas-imports.allow" }
+if ($UasInfPath -eq "") { $UasInfPath = Join-Path $repo "src\uas\$uasInfName" }
 if ($UasDriverPath -eq "") {
     $uasObjDir = switch ($Flavor) {
         "debug"   { "objchk" }
         "qemu"    { "objchk_qemu" }
         default   { "objfre" }
     }
-    $UasDriverPath = Join-Path $repo "src\uas\$uasObjDir\i386\xhciuas.sys"
+    $UasDriverPath = Join-Path $repo "src\uas\$uasObjDir\$archDir\xhciuas.sys"
 }
 if ($DriverPath -eq "") {
     # Three flavours, two of them checked: "objchk" alone stopped identifying a
@@ -613,7 +618,7 @@ looks exactly like a bad INF.
         if (-not (Test-Path -LiteralPath $UasDriverPath)) {
             throw @"
 no $Flavor xhciuas.sys at '$UasDriverPath'.
-The x86 package carries the UAS class driver. Build it first:
+The package carries the UAS class driver. Build it first:
   scripts\build-driver.cmd $Flavor
 "@
         }
@@ -628,23 +633,23 @@ The x86 package carries the UAS class driver. Build it first:
                 $uasGateArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                                  (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "check-imports.ps1"),
                                  "-Image", $UasDriverPath, "-Flavor", $Flavor, "-Arch", $Arch,
-                                 "-AllowPath", (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "xhciuas-imports.allow"))
+                                 "-AllowPath", (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") $uasAllow))
                 if ($NoTargetEvidence) { $uasGateArgs += "-NoTargetEvidence" }
                 & powershell.exe @uasGateArgs
                 if ($LASTEXITCODE -ne 0) {
-                    throw "'$UasDriverPath' failed the import-compatibility gate against xhciuas-imports.allow."
+                    throw "'$UasDriverPath' failed the import-compatibility gate against $uasAllow."
                 }
             }
             & powershell -NoProfile -ExecutionPolicy Bypass -File `
                 (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-uas-inf.ps1") `
-                -InfPath $UasInfPath
+                -InfPath $UasInfPath -Arch $Arch
             if ($LASTEXITCODE -ne 0) {
                 throw "'$UasInfPath' failed scripts\inf-gate\check-uas-inf.ps1 - fix it before packaging."
             }
         } finally {
             $ErrorActionPreference = $savedEap
         }
-    } elseif ($Arch -eq "x86") {
+    } else {
         Write-Warn "no UAS class driver staged: -DriverPath was named without -UasDriverPath (a stand-in package)."
     }
 
@@ -809,7 +814,7 @@ a build that was never made.
             try {
                 & powershell -NoProfile -ExecutionPolicy Bypass -File `
                     (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-uas-inf.ps1") `
-                    -InfPath (Join-Path $stageDir "xhciuas.inf") -PackageDir $stageDir
+                    -InfPath (Join-Path $stageDir "xhciuas.inf") -PackageDir $stageDir -Arch $Arch
             } finally {
                 $ErrorActionPreference = $savedEap
             }

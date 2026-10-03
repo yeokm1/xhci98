@@ -1,0 +1,71 @@
+; xhciuas-amd64.inf - the project's USB Attached SCSI class driver,
+; xhciuas.sys, the second INF of the 64-bit package (roadmap-hcd.md task
+; 31-A.2).
+;
+; The amd64 counterpart of src\uas\xhciuas.inf, for the reason
+; src\xhci98-amd64.inf is xhci98.inf's: a second binary from a second
+; toolchain (WDK 7.1) in a second package, with no Windows 98 path - an
+; undecorated section here is one a 32-bit engine falls back to, which would
+; put an amd64 binary on a 32-bit machine. One models section, NTamd64, which
+; serves NT 5.2 x64 and Vista and Windows 7 x64 alike: the driver needs no
+; OS-supplied file, so there is no LayoutFile copy for an NT 6.x file queue
+; to abort on and no NTamd64.6.0 section to avoid one. make-package.ps1
+; stages this file as xhciuas.inf, the name [SourceDisksFiles] gives it.
+;
+; scripts\inf-gate\check-uas-inf.ps1 -Arch amd64 gates this file on every
+; build.
+;
+; ASCII only, CRLF line endings.
+
+[Version]
+Signature="$CHICAGO$"
+Class=USB
+ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
+Provider=%Provider%
+; Must equal src\xhci_version.h.
+DriverVer=10/02/2026,1.99.0.0
+
+[Manufacturer]
+%Mfg%=UasModels,NTamd64
+
+[UasModels.NTamd64]
+%UasDesc%=Uas.Dev,USB\Class_08&SubClass_06&Prot_62
+
+[SourceDisksNames]
+1=%DiskName%,xhciuas.sys,,
+
+[SourceDisksFiles]
+xhciuas.sys=1
+xhciuas.inf=1
+
+[DestinationDirs]
+DefaultDestDir=10
+Uas.CopyFiles=10,System32\Drivers
+
+[Uas.Dev.NTamd64]
+CopyFiles=Uas.CopyFiles
+
+[Uas.Dev.NTamd64.Services]
+AddService=xhciuas,0x00000002,Uas.AddService
+
+[Uas.AddService]
+DisplayName=%UasSvcDesc%
+ServiceType=1                       ; SERVICE_KERNEL_DRIVER
+StartType=3                         ; SERVICE_DEMAND_START
+ErrorControl=1                      ; SERVICE_ERROR_NORMAL
+ServiceBinary=%12%\xhciuas.sys
+LoadOrderGroup=Base
+
+[Uas.CopyFiles]
+xhciuas.sys,,xhciuas.tmp
+
+; Right-click Install pre-stages the driver with no device present.
+[DefaultInstall.NTamd64]
+CopyFiles=Uas.CopyFiles
+
+[Strings]
+Provider="Yeo Kheng Meng"
+Mfg="xHCI98 Project"
+DiskName="xhci98 xHCI Host Controller Disk"
+UasDesc="xHCI98 USB Attached SCSI Storage"
+UasSvcDesc="xHCI98 USB Attached SCSI Class Driver (xhciuas)"

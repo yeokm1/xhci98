@@ -43,13 +43,13 @@ rem      binary in objfre really is the release flavour and not a checked
 rem      build staged under the wrong name
 rem  12. the second binary, xhciuas.sys - the UAS class driver of roadmap task
 rem      31-A.2, built from src\uas after xhci98.sys for each flavour, and
-rem      held to the same gates: its own allowlist
-rem      (scripts\import-gate\xhciuas-imports.allow, passed with -AllowPath),
-rem      the same flavour marker check, and its INF's own gate
-rem      (scripts\inf-gate\check-uas-inf.ps1, self-tested first) beside the
-rem      two runs of check-inf.ps1. x86 only for now: there is no amd64
-rem      allowlist for it yet, so an -amd64 run says so and builds xhci98.sys
-rem      alone
+rem      held to the same gates: its own allowlists
+rem      (scripts\import-gate\xhciuas-imports.allow on x86,
+rem      xhciuas-imports-amd64.allow on amd64, passed with -AllowPath), the
+rem      same flavour marker check and source stamp, and its two INFs' own
+rem      gate (scripts\inf-gate\check-uas-inf.ps1, self-tested first, run
+rem      over src\uas\xhciuas.inf and xhciuas-amd64.inf on every build) beside
+rem      the two runs of check-inf.ps1
 rem
 rem Any failure stops the run. scripts\local\ddk-debug.cmd still exists for an
 rem interactive DDK prompt, but a binary built that way has not been through the
@@ -299,10 +299,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ^
 if errorlevel 1 goto inftestfail
 
 echo.
-echo === UAS INF gate ===
+echo === UAS INF gate (x86) ===
 set "INFFILE=src\uas\xhciuas.inf"
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-uas-inf.ps1"
+    "%REPO%\scripts\inf-gate\check-uas-inf.ps1" -Arch x86
+if errorlevel 1 goto inffail
+
+echo.
+echo === UAS INF gate (amd64) ===
+set "INFFILE=src\uas\xhciuas-amd64.inf"
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\inf-gate\check-uas-inf.ps1" -Arch amd64
 if errorlevel 1 goto inffail
 
 rem Stand-ins only - no build, no staged media, no VM - so this runs here with
@@ -555,21 +562,17 @@ rem :builduas <release|debug|qemu>
 rem
 rem xhciuas.sys, the UAS class driver (roadmap task 31-A.2): the same DDK,
 rem the same flavour and BUILD_ALT_DIR as the xhci98.sys just built, in
-rem src\uas, then the import gate against the driver's own allowlist and the
-rem flavour marker check. No source stamp yet: make-release.ps1 reads the stamp
-rem beside xhci98.sys only, and the UAS binary joins the release with Phase 32.
+rem src\uas, then the import gate against the driver's own allowlist for the
+rem architecture, the flavour marker check, and the source stamp
+rem make-release.ps1 checks beside xhciuas.sys as it does beside xhci98.sys.
 rem ------------------------------------------------------------------
 :builduas
 setlocal
 set "FLAVOR=%~1"
 call :flavordirs %FLAVOR%
 if "%OBJDIR%"=="" goto badflavor
-if /i "%ARCH%"=="amd64" (
-    echo.
-    echo === build %FLAVOR% xhciuas.sys === SKIPPED: x86 only, no amd64 allowlist yet
-    endlocal
-    exit /b 0
-)
+set "UASALLOW=%REPO%\scripts\import-gate\xhciuas-imports.allow"
+if /i "%ARCH%"=="amd64" set "UASALLOW=%REPO%\scripts\import-gate\xhciuas-imports-amd64.allow"
 set "UASSYS=%REPO%\src\uas\%OBJDIR%\%ARCHDIR%\xhciuas.sys"
 set "UASLOG=%REPO%\src\uas\build%OBJDIR:obj=%"
 
@@ -585,11 +588,15 @@ if not exist "%UASSYS%" goto uasbuildfail
 echo.
 echo === import gate (%FLAVOR% xhciuas.sys) ===
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%UASSYS%" -Flavor %FLAVOR% -Arch %ARCH% -AllowPath "%REPO%\scripts\import-gate\xhciuas-imports.allow" %GATEOPT%
+    "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%UASSYS%" -Flavor %FLAVOR% -Arch %ARCH% -AllowPath "%UASALLOW%" %GATEOPT%
 if errorlevel 1 goto uasgatefail
 
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\check-flavour-marker.ps1" -Image "%UASSYS%" -Flavour %FLAVOR%
+if errorlevel 1 goto uasgatefail
+
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\source-stamp.ps1" -Driver xhciuas -Write "%REPO%\src\uas\%OBJDIR%\%ARCHDIR%"
 if errorlevel 1 goto uasgatefail
 endlocal
 exit /b 0
@@ -603,8 +610,8 @@ exit /b 1
 
 :uasgatefail
 echo.
-echo ERROR: the %FLAVOR% xhciuas.sys failed the import gate or carries the
-echo wrong flavour marker - see above. Do not deploy it.
+echo ERROR: the %FLAVOR% xhciuas.sys failed the import gate, carries the
+echo wrong flavour marker, or could not be stamped - see above. Do not deploy it.
 endlocal
 exit /b 1
 

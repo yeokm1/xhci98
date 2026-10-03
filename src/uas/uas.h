@@ -85,7 +85,8 @@ struct _UAS_PDO;
 
 /*
  * One bulk transfer. Its IRP is this driver's own memory, initialised with
- * IoInitializeIrp before each use and freed only at stop, so an IoCancelIrp
+ * the I/O manager's IRP initialiser before each use and freed only at
+ * stop (uas_mem.c, UasIrpReset), so an IoCancelIrp
  * made after the lock is dropped can never reach freed memory (uas_xport.c,
  * "Cancellation").
  */
