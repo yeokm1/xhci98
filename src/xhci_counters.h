@@ -105,12 +105,11 @@ typedef struct _XHCIHC_COUNTERS {
      * the warm-reset budget - the device left to its USB 2.0 companion,
      * 29-A.5's passive fallback - and SuperSpeed-capable devices (a BOS with
      * a SuperSpeed USB Device Capability) enumerated on a USB 2.0 companion
-     * port, which is that fallback seen from the other side. That last one
-     * reads 0 for now: the evidence needs a BOS read, and an optional
-     * request on the USB 2.0 path that a device could time out into a
-     * controller reset is not worth a diagnostic (Codex review of Phase 29,
-     * round 2, finding 1). It is 29-A.5's hold logic to move it, from an
-     * identity the SuperSpeed port already read, with no extra traffic. Then the BOS reads that
+     * port, which is that fallback seen from the other side. A BOS read for
+     * it on the USB 2.0 path was withdrawn (Codex review of Phase 29, round
+     * 2, finding 1): it counts instead the held device itself enumerating on
+     * its companion, matched by the identity 29-A.5's hold read on the
+     * SuperSpeed port. Then the BOS reads that
      * failed, and the SuperSpeedPlus isochronous endpoints refused because
      * their payload does not fit the Endpoint Context (29-A.6). */
     ULONG PortSpeedSuper;
@@ -122,9 +121,23 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG SsDevicesOnUsb2;
     ULONG SsBosMissing;
     ULONG SsEndpointsEsitRefused;
+
+    /* 29-A.5's hold, appended: holds begun by kind - identified and
+     * companion-paired (releasable), unidentified (no serial, no descriptor,
+     * a failed identity read: until the next start), orphan - then holds
+     * released, companion visits by some other device, send-back requests
+     * refused, and holds dropped by a controller reset that took the port
+     * out of SS.Disabled. */
+    ULONG HoldsPaired;
+    ULONG HoldsUnidentified;
+    ULONG HoldsOrphan;
+    ULONG HoldsReleased;
+    ULONG HoldCompanionOthers;
+    ULONG HoldRequestsRefused;
+    ULONG HoldsDropped;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 48 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 55 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

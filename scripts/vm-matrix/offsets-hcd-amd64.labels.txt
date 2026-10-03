@@ -8,6 +8,13 @@ EndpointsOpened	endpoints opened
 EndpointsNoBandwidth	endpoints refused - no bandwidth
 EndpointsNoResources	endpoints refused - no resources
 FatalStatus	fatal controller status
+HoldCompanionOthers	hold: companion visits by another device
+HoldsDropped	hold: dropped by a controller reset
+HoldsOrphan	hold: orphan
+HoldsPaired	hold: paired
+HoldsReleased	hold: released
+HoldRequestsRefused	hold: requests refused
+HoldsUnidentified	hold: unidentified
 HubsStarted	hubs started by the bus
 InterruptMaskFailures	interrupt mask failures
 IsoMissedService	iso missed service errors

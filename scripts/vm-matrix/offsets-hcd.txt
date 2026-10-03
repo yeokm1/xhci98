@@ -1,4 +1,4 @@
-SIZEOF 192
+SIZEOF 220
 CommandsGivenUp 92
 DevicesAddressed 4
 EndpointConfigureFailures 60
@@ -9,6 +9,13 @@ EndpointsNoBandwidth 64
 EndpointsNoResources 68
 EndpointsOpened 36
 FatalStatus 80
+HoldCompanionOthers 208
+HoldRequestsRefused 212
+HoldsDropped 216
+HoldsOrphan 200
+HoldsPaired 192
+HoldsReleased 204
+HoldsUnidentified 196
 HubsStarted 120
 InterruptMaskFailures 88
 IsoMissedService 112

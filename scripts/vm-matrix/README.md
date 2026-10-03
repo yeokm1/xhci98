@@ -125,7 +125,7 @@ compiled under `XHCI_HOST_TEST`), embedded in the controller FDO's extension
 and zeroed at every start (26-A.10). `gen-offsets.ps1` derives the table from
 its `XHCI_DBG_VALUE_CHANGED("<label>", cnt-><Field>)` sites, one per field, in
 `src\hcd_log.c` (`hcdCountersTrace`); the identity lines are
-`HcdCountersStart`'s. The block publishes these 48 labels (the set's and the
+`HcdCountersStart`'s. The block publishes these 55 labels (the set's and the
 harness's own; `selftest.ps1` builds its stand-in table from the same
 derivation, and `-ValidateOnly` checks the real table against the set):
 
@@ -163,6 +163,11 @@ derivation, and `-ValidateOnly` checks the real table against the set):
   refused - ESIT`. No row names them yet, and the speed expectation
   (`Get-HcdSpeedExpectationTexts`) still knows three speeds; 29-V.1 adds the
   fourth.
+- 29-A.5's hold (appended after the SuperSpeed group): `hold: paired`, `hold:
+  unidentified`, `hold: orphan`, `hold: released`, `hold: companion visits by
+  another device`, `hold: requests refused`, `hold: dropped by a controller
+  reset`. No row names them; only a send-back request (31-A.3, or 29-A.1's
+  SuperSpeedPlus value) moves them.
 
 The hub group is Phase 27's: until the bus serves hubs it offers one as a
 device with no driver, so `usb-hub/fs` reads `NODRIVER` and `usb-hub/churn`

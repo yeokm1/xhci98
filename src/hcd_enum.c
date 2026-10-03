@@ -1146,6 +1146,151 @@ static ULONG hcdEnumSpeedOf(ULONG speedClass)
     }
 }
 
+/* ----------------------------------------------------------------------- */
+/* 29-A.5's hold: lookups and the identity read                             */
+/* ----------------------------------------------------------------------- */
+
+/* The active hold on a SuperSpeed root port, or NULL. A Pending one is not
+ * active yet: its port is served until the thread acts on it. Thread. */
+static PHCD_HOLD hcdHoldOf(PHCD_CONTROLLER hc, ULONG port)
+{
+    ULONG i;
+
+    for (i = 0; i < HCD_MAX_HOLDS; i++) {
+        if (hc->Holds[i].Used && !hc->Holds[i].Pending &&
+            hc->Holds[i].Port == port) {
+            return &hc->Holds[i];
+        }
+    }
+    return NULL;
+}
+
+/* The active hold whose USB 2.0 companion is `port`, or NULL. Thread. */
+static PHCD_HOLD hcdHoldCompanionOf(PHCD_CONTROLLER hc, ULONG port)
+{
+    ULONG i;
+
+    for (i = 0; i < HCD_MAX_HOLDS; i++) {
+        if (hc->Holds[i].Used && !hc->Holds[i].Pending &&
+            hc->Holds[i].Hold.Kind != XHCI_HOLD_NONE &&
+            hc->Holds[i].Hold.Companion == port) {
+            return &hc->Holds[i];
+        }
+    }
+    return NULL;
+}
+
+/*
+ * A device's identity for 29-A.5 (xhci_link.h): vendor and product id from
+ * the device descriptor the enumeration kept, and the serial string, read
+ * with the first language id string descriptor 0 lists (0409h when that
+ * read fails). No serial index is a valid identity with no serial - an
+ * unidentified hold; a failed serial read is an invalid one - likewise. The
+ * reads are the thread's control transfers on the device's EP0 into the
+ * scratch, which the caller has done with. Thread only, powered.
+ */
+static VOID hcdReadIdentity(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                            PXHCI_LINK_IDENTITY id)
+{
+    PUCHAR s;
+    ULONG langid;
+    ULONG bytes;
+    ULONG index;
+    ULONG n;
+    ULONG i;
+
+    id->Valid = 0;
+    id->Vendor = 0;
+    id->Product = 0;
+    id->SerialLength = 0;
+    for (i = 0; i < XHCI_LINK_SERIAL_CHARS; i++) {
+        id->Serial[i] = 0;
+    }
+    if (dev == NULL) {
+        return;
+    }
+    id->Vendor = (ULONG)dev->DeviceDesc[8] | ((ULONG)dev->DeviceDesc[9] << 8);
+    id->Product = (ULONG)dev->DeviceDesc[10] |
+                  ((ULONG)dev->DeviceDesc[11] << 8);
+    index = (ULONG)dev->DeviceDesc[16];
+    if (index == 0) {
+        id->Valid = 1;
+        return;
+    }
+    s = (PUCHAR)hc->ScratchVa;
+    langid = 0x0409UL;
+    bytes = 0;
+    if (HcdThreadControl(hc, dev, 0x80, 6, (USHORT)0x0300, 0, 4, &bytes) &&
+        bytes >= 4 && s[1] == 3 && s[0] >= 4) {
+        langid = (ULONG)s[2] | ((ULONG)s[3] << 8);
+    }
+    bytes = 0;
+    if (!HcdThreadControl(hc, dev, 0x80, 6, (USHORT)(0x0300UL | index),
+                          (USHORT)langid, 255, &bytes) ||
+        bytes < 2 || s[1] != 3 || (ULONG)s[0] > bytes || s[0] < 2) {
+        return;
+    }
+    n = ((ULONG)s[0] - 2UL) / 2UL;
+    id->SerialLength = n;
+    for (i = 0; i < n && i < XHCI_LINK_SERIAL_CHARS; i++) {
+        id->Serial[i] = (USHORT)((ULONG)s[2 + i * 2] |
+                                 ((ULONG)s[3 + i * 2] << 8));
+    }
+    id->Valid = 1;
+}
+
+/*
+ * A device enumerating on the USB 2.0 companion of a held port, its device
+ * descriptor just read: told to the hold, which matches it against the held
+ * identity. Only an identified hold that has seen a companion connect asks,
+ * and only a device with the held vendor and product id costs a serial read
+ * - the one extra request on the USB 2.0 path, made only while such a hold
+ * exists. The held device itself is 29-A.5's passive fallback seen from the
+ * USB 2.0 side, counted as SsDevicesOnUsb2 (Codex review of Phase 29, round
+ * 2, finding 1, which withdrew the BOS probe that counted it before). Thread.
+ */
+static VOID hcdHoldCompanionSaw(PHCD_CONTROLLER hc, PHCD_PORT p)
+{
+    XHCI_LINK_IDENTITY id;
+    PHCD_HOLD h;
+    ULONG others;
+    ULONG i;
+
+    if (p->Hub != NULL || p->Device == NULL) {
+        return;
+    }
+    h = hcdHoldCompanionOf(hc, p->PortId);
+    if (h == NULL || h->Hold.Kind != XHCI_HOLD_PAIRED ||
+        !h->Hold.ConnectSeen || h->Hold.MatchSeen) {
+        return;
+    }
+    id.Valid = 1;
+    id.Vendor = (ULONG)p->Device->DeviceDesc[8] |
+                ((ULONG)p->Device->DeviceDesc[9] << 8);
+    id.Product = (ULONG)p->Device->DeviceDesc[10] |
+                 ((ULONG)p->Device->DeviceDesc[11] << 8);
+    id.SerialLength = 0;
+    for (i = 0; i < XHCI_LINK_SERIAL_CHARS; i++) {
+        id.Serial[i] = 0;
+    }
+    if (id.Vendor == h->Hold.Held.Vendor &&
+        id.Product == h->Hold.Held.Product) {
+        hcdReadIdentity(hc, p->Device, &id);
+    }
+    others = h->Hold.OthersSeen;
+    XhciHoldCompanionIdentity(&h->Hold, &id);
+    if (h->Hold.OthersSeen != others) {
+        hc->Counters.HoldCompanionOthers++;
+        XHCI_DBG_VALUE("hcd: hold, another device on the companion, port",
+                       p->PortId);
+    }
+    if (h->Hold.MatchSeen) {
+        hc->Counters.SsDevicesOnUsb2++;
+        XHCI_DBG_VALUE("hcd: hold, the held device on its USB 2.0 path, port",
+                       p->PortId);
+    }
+}
+
 static VOID hcdEventInit(PXHCI_ENUM_EVENT e, ULONG kind, ULONG ok)
 {
     e->Kind = kind;
@@ -1281,6 +1426,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
             XHCI_DBG_VALUE("hcd: device descriptor, idVendor/idProduct",
                            ((ULONG)s[9] << 24) | ((ULONG)s[8] << 16) |
                                ((ULONG)s[11] << 8) | (ULONG)s[10]);
+            hcdHoldCompanionSaw(hc, p);
         }
         return 1;
 
@@ -1464,10 +1610,38 @@ static VOID hcdFeed(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind)
  * completion then finds the machine Empty and starts it (Codex review of
  * Phase 29, round 1, findings 2 and 3).
  */
+/*
+ * A hold released (29-A.5): the SuperSpeed port re-armed with PLS =
+ * RxDetect and LWS - the Disabled state's exit to Disconnected - and never
+ * a warm reset, which does not act on a Disabled port, nor a power cycle.
+ * Its link trains again if the device comes back to it, and that arrives as
+ * an ordinary change. Thread only, powered.
+ */
+static VOID hcdHoldRelease(PHCD_CONTROLLER hc, PHCD_HOLD h)
+{
+    XHCI_LINK_ACTION act;
+    PHCD_PORT q;
+    ULONG portsc;
+
+    q = &hc->Ports[h->Port - 1];
+    portsc = XhciReadPortsc(&hc->Hc, h->Port);
+    if (portsc != 0xFFFFFFFFUL &&
+        XhciLinkDecide(&q->Link, portsc, XHCI_LINK_WANT_RELEASE, &act) ==
+            XHCI_LINK_ACT_RX_DETECT) {
+        XhciWritePortsc(&hc->Hc, h->Port, XhciPortscRxDetect(portsc));
+    }
+    hc->Counters.HoldsReleased++;
+    XHCI_DBG_VALUE("hcd: hold released, port/PLS",
+                   (h->Port << 8) | XHCI_PORTSC_GET_PLS(portsc));
+    h->Hold.Kind = XHCI_HOLD_NONE;
+    h->Used = 0;
+}
+
 static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
 {
     PXHCI_EXTENSION ext;
     XHCI_LINK_ACTION act;
+    PHCD_HOLD h;
     ULONG portsc;
     ULONG changes;
     ULONG feed;
@@ -1481,6 +1655,19 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
     if (changes != 0) {
         XhciWritePortsc(ext, p->PortId,
                         XhciPortscClearChanges(portsc, changes));
+    }
+    /* A held SuperSpeed port is not served: its link is Disabled and stays
+     * so until the hold is released (29-A.5). */
+    if (hcdHoldOf(hc, p->PortId) != NULL) {
+        return;
+    }
+    /* The companion of a held port: its departures and arrivals are the
+     * hold's before they are the enumeration's, so the arrival is recorded
+     * before the device's descriptor is read. */
+    h = hcdHoldCompanionOf(hc, p->PortId);
+    if (h != NULL &&
+        XhciHoldCompanionPortsc(&h->Hold, portsc) == XHCI_HOLD_RELEASE) {
+        hcdHoldRelease(hc, h);
     }
     feed = XhciLinkPortFeed(&p->Link, XhciPortIsUsb3(&ext->PortMap, p->PortId),
                             portsc, p->Enum.State, &act);
@@ -1504,6 +1691,150 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
     if ((feed & XHCI_LINK_FEED_CONNECT) != 0 && !hcdHalted(hc)) {
         hcdFeed(hc, p, XHCI_ENUM_EV_CONNECT);
     }
+}
+
+/* ----------------------------------------------------------------------- */
+/* 29-A.5's send-back                                                       */
+/* ----------------------------------------------------------------------- */
+
+BOOLEAN HcdHoldRequestUsb2(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                           ULONG reason)
+{
+    PXHCI_PORT_MAP map;
+    KIRQL oldIrql;
+    PHCD_HOLD slot;
+    ULONG port;
+    ULONG taken;
+    ULONG i;
+
+    map = &hc->Hc.PortMap;
+    port = (dev != NULL) ? dev->Location : 0;
+    if (dev == NULL || port == 0 || port > XHCI_MAX_ROOT_PORTS ||
+        dev->Port != port || !XhciPortIsUsb3(map, port) ||
+        map->Companion[port - 1] == XHCI_PORT_NO_COMPANION) {
+        InterlockedIncrement((PLONG)&hc->Counters.HoldRequestsRefused);
+        return FALSE;
+    }
+    slot = NULL;
+    taken = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    for (i = 0; i < HCD_MAX_HOLDS; i++) {
+        if (hc->Holds[i].Used && hc->Holds[i].Port == port) {
+            taken = 1;
+        } else if (!hc->Holds[i].Used && slot == NULL) {
+            slot = &hc->Holds[i];
+        }
+    }
+    if (!taken && slot != NULL) {
+        slot->Used = 1;
+        slot->Pending = 1;
+        slot->Reason = reason;
+        slot->Port = port;
+        slot->Hold.Kind = XHCI_HOLD_NONE;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (taken || slot == NULL) {
+        InterlockedIncrement((PLONG)&hc->Counters.HoldRequestsRefused);
+        return FALSE;
+    }
+    HcdThreadWake(hc);
+    return TRUE;
+}
+
+/*
+ * The send-backs asked for since the last pass (29-A.5), each in order:
+ * the link must still be trained (else the request is refused, counted);
+ * the device's identity is read on the SuperSpeed port while it is there
+ * to answer; the hold begins, counted by kind; PED is written, which takes
+ * the link to SS.Disabled and withdraws its terminations, so the device
+ * looks for its USB 2.0 path; and the port's machine is fed a disconnect,
+ * which reports the PDOs missing and disables the slot as an unplug does.
+ * From then on the port is not served (hcdPortChanged) until a release.
+ * Thread only, powered.
+ */
+static VOID hcdHoldService(PHCD_CONTROLLER hc)
+{
+    XHCI_LINK_IDENTITY id;
+    XHCI_LINK_ACTION act;
+    PHCD_HOLD h;
+    PHCD_PORT p;
+    KIRQL oldIrql;
+    ULONG pending;
+    ULONG portsc;
+    ULONG kind;
+    ULONG i;
+
+    for (i = 0; i < HCD_MAX_HOLDS && !hcdHalted(hc); i++) {
+        h = &hc->Holds[i];
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        pending = h->Used && h->Pending;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        if (!pending) {
+            continue;
+        }
+        p = &hc->Ports[h->Port - 1];
+        portsc = XhciReadPortsc(&hc->Hc, h->Port);
+        if (portsc == 0xFFFFFFFFUL ||
+            XhciLinkDecide(&p->Link, portsc, XHCI_LINK_WANT_HOLD, &act) !=
+                XHCI_LINK_ACT_DISABLE) {
+            /* The device left, or its link is no longer trained: nothing
+             * to send back. */
+            hc->Counters.HoldRequestsRefused++;
+            XHCI_DBG_VALUE("hcd: hold refused, link not trained, port",
+                           h->Port);
+            XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+            h->Used = 0;
+            h->Pending = 0;
+            XhciControllerLockRelease(&hc->Hc, oldIrql);
+            continue;
+        }
+        hcdReadIdentity(hc, p->Device, &id);
+        kind = XhciHoldBegin(&h->Hold, h->Port,
+                             hc->Hc.PortMap.Companion[h->Port - 1], &id);
+        if (kind == XHCI_HOLD_PAIRED) {
+            hc->Counters.HoldsPaired++;
+        } else if (kind == XHCI_HOLD_ORPHAN) {
+            hc->Counters.HoldsOrphan++;
+        } else {
+            hc->Counters.HoldsUnidentified++;
+        }
+        /* The identity reads may have taken a while: the PED write is made
+         * on what the port says now, through the same neutral base. */
+        portsc = XhciReadPortsc(&hc->Hc, h->Port);
+        if (portsc != 0xFFFFFFFFUL) {
+            XhciWritePortsc(&hc->Hc, h->Port, XhciPortscDisable(portsc));
+        }
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        h->Pending = 0;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        XHCI_DBG_VALUE("hcd: hold begun, port/kind/reason",
+                       (h->Port << 16) | (kind << 8) | h->Reason);
+        if (p->Enum.State != XHCI_ENUM_EMPTY &&
+            p->Enum.State != XHCI_ENUM_GONE) {
+            hcdFeed(hc, p, XHCI_ENUM_EV_DISCONNECT);
+        }
+    }
+}
+
+/* Every hold forgotten: at a start, and after a controller reset, whose
+ * HCRST re-powers the ports and takes each held link out of SS.Disabled -
+ * the device then comes back at SuperSpeed and whoever asked for the
+ * send-back meets it again. An active hold dropped so is counted. */
+static VOID hcdHoldsForget(PHCD_CONTROLLER hc, ULONG count)
+{
+    KIRQL oldIrql;
+    ULONG i;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    for (i = 0; i < HCD_MAX_HOLDS; i++) {
+        if (count && hc->Holds[i].Used && !hc->Holds[i].Pending) {
+            hc->Counters.HoldsDropped++;
+        }
+        hc->Holds[i].Used = 0;
+        hc->Holds[i].Pending = 0;
+        hc->Holds[i].Hold.Kind = XHCI_HOLD_NONE;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
 }
 
 /* ----------------------------------------------------------------------- */
@@ -1765,6 +2096,7 @@ static VOID hcdDropAll(PHCD_CONTROLLER hc)
 static VOID hcdInvalidate(PHCD_CONTROLLER hc)
 {
     XHCI_DBG_TEXT("hcd: slots invalidated, dropping every device");
+    hcdHoldsForget(hc, 1);
     hcdDropAll(hc);
     hc->ScratchTainted = 0;
 }
@@ -1971,6 +2303,11 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
         /* The URBs that need commands (hcd_cfg.c). */
         HcdCfgService(hc);
     }
+    if (!hcdHalted(hc)) {
+        /* 29-A.5's send-backs, after the URBs that may have asked for
+         * them. */
+        hcdHoldService(hc);
+    }
 
     XhciControllerLockAcquire(ext, &oldIrql);
     for (i = 0; i < HCD_PORT_WORDS; i++) {
@@ -2128,6 +2465,8 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
     for (i = 0; i <= XHCI_MAX_SLOTS; i++) {
         hc->SlotDevice[i] = NULL;
     }
+    /* A hold lasts until the controller's next start, and this is it. */
+    hcdHoldsForget(hc, 0);
     for (i = 0; i < HCD_PORT_WORDS; i++) {
         hc->PortChange[i] = 0xFFFFFFFFUL;
         hc->PortPdoStarted[i] = 0;

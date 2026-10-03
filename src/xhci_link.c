@@ -374,6 +374,26 @@ VOID XhciHoldCompanionIdentity(PXHCI_LINK_HOLD hold,
     }
 }
 
+ULONG XhciHoldCompanionPortsc(PXHCI_LINK_HOLD hold, ULONG portsc)
+{
+    ULONG answer;
+
+    if (hold == NULL || hold->Kind == XHCI_HOLD_NONE ||
+        portsc == 0xFFFFFFFFUL) {
+        return XHCI_HOLD_KEEP;
+    }
+    answer = XHCI_HOLD_KEEP;
+    if ((portsc & XHCI_PORTSC_CSC) != 0 ||
+        (portsc & XHCI_PORTSC_CCS) == 0) {
+        answer = XhciHoldCompanionDisconnect(hold);
+    }
+    if (answer == XHCI_HOLD_KEEP && (portsc & XHCI_PORTSC_CSC) != 0 &&
+        (portsc & XHCI_PORTSC_CCS) != 0) {
+        XhciHoldCompanionConnect(hold);
+    }
+    return answer;
+}
+
 ULONG XhciHoldCompanionDisconnect(PXHCI_LINK_HOLD hold)
 {
     if (hold == NULL || hold->Kind == XHCI_HOLD_NONE) {

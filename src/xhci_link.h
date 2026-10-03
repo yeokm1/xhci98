@@ -207,6 +207,18 @@ VOID XhciHoldCompanionIdentity(PXHCI_LINK_HOLD hold,
  * the next device there is judged afresh. */
 ULONG XhciHoldCompanionDisconnect(PXHCI_LINK_HOLD hold);
 
+/*
+ * One PORTSC change of the companion port, as the executor reads it
+ * (hcd_enum.c): a device left - CSC, or CCS clear - is
+ * XhciHoldCompanionDisconnect, and a device arrived - CSC with CCS - is
+ * XhciHoldCompanionConnect, in that order, so a replug is a departure and
+ * an arrival. Called before the companion's enumeration machine is fed, so
+ * the connect is recorded before the device's descriptor is read. Returns
+ * KEEP or RELEASE; after a RELEASE the arrival is not recorded, there being
+ * no hold left to record it in.
+ */
+ULONG XhciHoldCompanionPortsc(PXHCI_LINK_HOLD hold, ULONG portsc);
+
 /* Whether two identities are one device: both valid, the same vendor and
  * product id, and the same nonempty serial. */
 ULONG XhciLinkSameDevice(const XHCI_LINK_IDENTITY *a,

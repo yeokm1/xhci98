@@ -187,7 +187,7 @@ VOID HcdLogFlush(PHCD_CONTROLLER hc, ULONG reason, ULONG counters)
 #ifdef XHCI_DBG_TRACE
 /*
  * One site per field, under the label matrix-hcd.psd1 names it by
- * (scripts/vm-matrix/README.md lists them; 48 since Phase 29). Change-gated,
+ * (scripts/vm-matrix/README.md lists them; 55 since Phase 29). Change-gated,
  * so an idle poll
  * prints nothing; the matrix reads the block, not these lines.
  * IRQL: PASSIVE_LEVEL (the controller thread).
@@ -280,6 +280,16 @@ static VOID hcdCountersTrace(const XHCIHC_COUNTERS *cnt)
     XHCI_DBG_VALUE_CHANGED("superspeed: BOS reads failed", cnt->SsBosMissing);
     XHCI_DBG_VALUE_CHANGED("superspeed: endpoints refused - ESIT",
                            cnt->SsEndpointsEsitRefused);
+    XHCI_DBG_VALUE_CHANGED("hold: paired", cnt->HoldsPaired);
+    XHCI_DBG_VALUE_CHANGED("hold: unidentified", cnt->HoldsUnidentified);
+    XHCI_DBG_VALUE_CHANGED("hold: orphan", cnt->HoldsOrphan);
+    XHCI_DBG_VALUE_CHANGED("hold: released", cnt->HoldsReleased);
+    XHCI_DBG_VALUE_CHANGED("hold: companion visits by another device",
+                           cnt->HoldCompanionOthers);
+    XHCI_DBG_VALUE_CHANGED("hold: requests refused",
+                           cnt->HoldRequestsRefused);
+    XHCI_DBG_VALUE_CHANGED("hold: dropped by a controller reset",
+                           cnt->HoldsDropped);
 }
 #endif
 

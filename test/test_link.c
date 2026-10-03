@@ -477,6 +477,62 @@ static void test_port_feed(void)
              0, "a USB2 port's PLS is not read as a SuperSpeed link");
 }
 
+/* The companion's PORTSC as the executor feeds it (XhciHoldCompanionPortsc):
+ * the same rules, driven by register values. */
+static void test_hold_portsc(void)
+{
+    XHCI_LINK_HOLD h;
+    XHCI_LINK_IDENTITY held;
+    XHCI_LINK_IDENTITY other;
+    ULONG conn;
+    ULONG gone;
+    ULONG quiet;
+
+    held = ident(0x0781, 0x5581, "4C530001");
+    other = ident(0x046D, 0xC077, "XYZ");
+    conn = XHCI_PORTSC_PP | XHCI_PORTSC_CCS | XHCI_PORTSC_CSC;
+    gone = XHCI_PORTSC_PP | XHCI_PORTSC_CSC;
+    quiet = XHCI_PORTSC_PP | XHCI_PORTSC_CCS | XHCI_PORTSC_PRC;
+
+    /* Held device arrives, is identified, leaves: released. */
+    (VOID)XhciHoldBegin(&h, 5, 1, &held);
+    CHECK_EQ(XhciHoldCompanionPortsc(&h, gone), XHCI_HOLD_KEEP,
+             "a disconnect before any connect keeps the hold");
+    CHECK_EQ(XhciHoldCompanionPortsc(&h, conn), XHCI_HOLD_KEEP,
+             "the connect is recorded");
+    CHECK_EQ(h.ConnectSeen, 1, "ConnectSeen");
+    CHECK_EQ(XhciHoldCompanionPortsc(&h, quiet), XHCI_HOLD_KEEP,
+             "a reset's change on a connected port is neither");
+    CHECK_EQ(h.ConnectSeen, 1, "and forgets nothing");
+    XhciHoldCompanionIdentity(&h, &held);
+    CHECK_EQ(XhciHoldCompanionPortsc(&h, gone), XHCI_HOLD_RELEASE,
+             "the held device leaves: released");
+
+    /* A replug of another device in one change: the departure judged, the
+     * arrival recorded afresh. */
+    (VOID)XhciHoldBegin(&h, 5, 1, &held);
+    (VOID)XhciHoldCompanionPortsc(&h, conn);
+    XhciHoldCompanionIdentity(&h, &other);
+    CHECK_EQ(XhciHoldCompanionPortsc(&h, conn), XHCI_HOLD_KEEP,
+             "another device left and one came: kept");
+    CHECK_EQ(h.ConnectSeen, 1, "the new arrival is recorded");
+    CHECK_EQ(h.MatchSeen, 0, "and not yet identified");
+    XhciHoldCompanionIdentity(&h, &held);
+    CHECK_EQ(XhciHoldCompanionPortsc(&h, gone), XHCI_HOLD_RELEASE,
+             "then the held device's own visit releases");
+
+    /* An unidentified hold never releases. */
+    other = ident(0x0781, 0x5581, NULL);
+    (VOID)XhciHoldBegin(&h, 5, 1, &other);
+    (VOID)XhciHoldCompanionPortsc(&h, conn);
+    XhciHoldCompanionIdentity(&h, &other);
+    CHECK_EQ(XhciHoldCompanionPortsc(&h, gone), XHCI_HOLD_KEEP,
+             "unidentified: kept to the next start");
+    CHECK_EQ(XhciHoldCompanionPortsc(NULL, gone), XHCI_HOLD_KEEP, "NULL");
+    CHECK_EQ(XhciHoldCompanionPortsc(&h, 0xFFFFFFFFUL), XHCI_HOLD_KEEP,
+             "an all-ones read is no event");
+}
+
 int main(void)
 {
     test_classify();
@@ -486,6 +542,7 @@ int main(void)
     test_hold_release();
     test_hold_kinds();
     test_port_feed();
+    test_hold_portsc();
 
     printf("%d checks, %d failures\n", checks, failures);
     return failures;
