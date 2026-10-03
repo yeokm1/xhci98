@@ -27,7 +27,10 @@
 > plan, block layout, Stream Context and command encoders, the event's stream;
 > host suite `test_stream`) and `xhci98_streams.h`, the private open-streams
 > interface a separate class driver includes; the streams themselves are served
-> in `hcd_cfg.c` and reach every stream's pipe through `hcd_io.c`. The tables below are the
+> in `hcd_cfg.c` and reach every stream's pipe through `hcd_io.c`. Task 31-A.3
+> adds the pure `xhci_xport.c` / `xhci_xport.h` (the storage transport policy:
+> Bulk-Only or UAS for an interface offering either, and the ids that follow;
+> host suite `test_xport`), applied in `hcd_pdo.c`. The tables below are the
 > miniport's map as of `1.2.0.0` and are rewritten in Phase 26. Comments in the
 > kept files still speak of usbport as the design argument for each step;
 > `src\hcd_svc.h`, "READING THE KEPT FILES", is the key from each usbport name

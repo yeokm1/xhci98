@@ -2161,6 +2161,29 @@ case-insensitive matching above, and the form most INF lines use.
 | `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc`: for an IAD function from the IAD's `bFunctionClass` / `bFunctionSubClass` / `bFunctionProtocol`, as Microsoft's "Support for interface collections" gives them; for any other function, a legacy audio group included, from its first interface (alternate 0). Decided 2026-10-03 (Codex review of batch (c), round 19, finding 5); it was open (10.10) |
 | `BusQueryInstanceID` | the port number in decimal, then `nn`: port 3's `MI_03` is `303`. Digits and `A`-`F` only, since Windows 98's instance-id character set is unread (10.10) (corrected 2026-10-03 by 26-A.7 from "the parent device's instance string plus the function number") |
 
+**A storage interface that offers UAS** (roadmap task 31-A.3, `xhci_xport.c`;
+a device PDO's one interface, or a function's when no IAD groups it) gets
+one transport, and both tables above change for it. The compatible ids are
+the chosen setting's triple - `USB\Class_08&SubClass_06&Prot_62` and its two
+shorter forms under UAS, alternate 0's `Prot_50` triple under Bulk-Only -
+and none at all for an interface with no transport it can run. For that
+refused interface the hardware ids also drop `USB\VID_vvvv&PID_pppp`
+(`&MI_nn` on a function) and keep only the `&REV_` form; under UAS they
+stay, so a device a `usbstor.inf` lists by hand still binds `usbstor.sys`
+on it - roadmap 31-A.3's residual case, recorded rather than fought. The
+compatible-id rule rests on what the targets' `usbstor.inf` files match on (read
+2026-10-04, static, a text read of the INFs hashed in 10.6 and NUSB 3.3's
+and 3.6's): full class triples only - never `USB\Class_08&SubClass_06` or
+`USB\Class_08`, never `Prot_62` - and, listed by hand, `USB\VID_v&PID_p`
+(16 lines on 2000 SP4, 61 on XP to 7, 135 and 152 under NUSB 3.3 and 3.6)
+and `USB\VID_v&PID_p&MI_nn` (6 or 7, none on 2000); never a `&REV_` form,
+never a vendor id alone. Bulk-Only counts only at alternate 0, because
+`usbstor.sys` selects alternate 0; the UAS driver selects its own setting.
+The device id is unchanged. Whether Windows 98's configuration manager
+matches an INF line against the device id as well as the hardware ids is
+unread; if it does, a hand-listed `VID&PID` still wins there, roadmap
+31-A.3's residual case.
+
 Microsoft's parent forms the `MI_` suffix with the format string `&MI_%02x`
 (Windows 7 SP1 and XP SP3 `usbccgp.sys`): lower-case hex, which the
 case-insensitive matching makes equivalent. The string dumps alone suggest it

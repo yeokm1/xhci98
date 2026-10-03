@@ -26,6 +26,7 @@
 #include "xhci_enum.h"
 #include "xhci_pipe.h"
 #include "xhci_func.h"
+#include "xhci_xport.h"
 #include "xhci_hub.h"
 #include "xhci_stream.h"
 #include "xhci_counters.h"
@@ -408,6 +409,10 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG Function;
     ULONG InterfaceMask;            /* bit n: bInterfaceNumber n           */
     XHCI_FUNC Func;
+    /* The storage transport the bus chose for this PDO's interface
+     * (31-A.3; xhci_xport.h), fixed at creation so every id query answers
+     * alike. Transport XHCI_XPORT_NONE: section 10.7's ids unchanged. */
+    XHCI_XPORT Xport;
     /* Every PDO of one device: the serial a port waits on and a cycle
      * names (Group, the first PDO's Serial; a lone device PDO's own), and
      * the chain HcdDevicePdoGone walks when the device leaves (Sibling,
@@ -710,6 +715,11 @@ typedef struct _HCD_CONTROLLER {
      * tell a restart from a block that did not move. */
     XHCIHC_COUNTERS Counters;
     ULONG CountersStart;
+    /* The storage transport decisions (31-A.3), one per XHCI_XPORT_WHY_*
+     * but NOT_UAS, by the controller thread at PDO creation; never zeroed,
+     * and outside the matrix block, whose offsets the harness reads (the
+     * matrix's transport field is 31-A.3's harness half, not drafted). */
+    ULONG XportDecisions[XHCI_XPORT_WHY_COUNT];
 
     /* The kept controller sequence's state, as the miniport's extension. */
     XHCI_EXTENSION Hc;
@@ -793,6 +803,7 @@ VOID HcdThreadWake(PHCD_CONTROLLER hc);
 VOID HcdControllerFail(PHCD_CONTROLLER hc);
 VOID HcdPowerGateEnter(PHCD_CONTROLLER hc);
 VOID HcdPowerGateLeave(PHCD_CONTROLLER hc);
+ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc);
 
 /* hcd_enum.c */
 VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered);

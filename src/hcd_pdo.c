@@ -20,6 +20,11 @@
  * (26-A.4 later, or 29-A.5). A hub is the bus's own and never reaches here
  * (hcd_hub.c, 27-A.1).
  *
+ * A storage interface offering UAS gets one transport, chosen at creation
+ * (31-A.3; xhci_xport.h, hcdXportDecide), and its hardware and compatible
+ * ids follow it: only that transport's class ids, and under UAS no
+ * VID/PID-only hardware id for usbstor.inf's hand-listed lines to match.
+ *
  * A composite device the bus splits (26-A.7; sections 10.8 and 10.9) gets no
  * PDO of its own: one function PDO per function, each an HCD_DEVICE_PDO with
  * Function set, its ids carrying &MI_nn (xhci_func.c), all sharing the one
@@ -180,6 +185,41 @@ static NTSTATUS hcdFunctionQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
     return HcdCompleteIrp(irp, STATUS_SUCCESS, (ULONG_PTR)out);
 }
 
+/* The hardware or compatible ids of a PDO whose storage transport the bus
+ * chose (31-A.3; xhci_xport.c): only that transport's class ids, and no
+ * VID/PID-only hardware id under UAS. A refused interface answers its
+ * compatible-id query with none, as an id type the PDO does not handle. */
+static NTSTATUS hcdXportQueryId(PHCD_DEVICE_PDO pdo, PIRP irp, ULONG which)
+{
+    char text[160];
+    WCHAR buf[160];
+    PWCHAR out;
+    ULONG used;
+    ULONG answer;
+    ULONG i;
+
+    used = 0;
+    answer = XhciXportId(pdo->DeviceDesc, &pdo->Xport,
+                         pdo->Function ? pdo->Func.FirstInterface
+                                       : XHCI_XPORT_NO_MI,
+                         which, text, sizeof(text), &used);
+    if (answer == XHCI_XPORT_NO_IDS) {
+        return HcdCompleteIrp(irp, irp->IoStatus.Status,
+                              irp->IoStatus.Information);
+    }
+    if (answer != XHCI_XPORT_OK) {
+        return HcdCompleteIrp(irp, STATUS_UNSUCCESSFUL, 0);
+    }
+    for (i = 0; i < used; i++) {
+        buf[i] = (WCHAR)(UCHAR)text[i];
+    }
+    out = hcdHandOff(buf, used);
+    if (out == NULL) {
+        return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+    }
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, (ULONG_PTR)out);
+}
+
 static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
                                  BUS_QUERY_ID_TYPE type)
 {
@@ -194,6 +234,14 @@ static NTSTATUS hcdDeviceQueryId(PHCD_DEVICE_PDO pdo, PIRP irp,
     PWCHAR out;
     const WCHAR *prefix;
 
+    if (pdo->Xport.Transport != XHCI_XPORT_NONE) {
+        if (type == BusQueryHardwareIDs) {
+            return hcdXportQueryId(pdo, irp, XHCI_XPORT_ID_HARDWARE);
+        }
+        if (type == BusQueryCompatibleIDs) {
+            return hcdXportQueryId(pdo, irp, XHCI_XPORT_ID_COMPATIBLE);
+        }
+    }
     if (pdo->Function) {
         return hcdFunctionQueryId(pdo, irp, type);
     }
@@ -321,12 +369,68 @@ static VOID hcdDeletePdo(PHCD_DEVICE_PDO pdo)
     IoDeleteDevice(pdo->Common.Self);
 }
 
+/*
+ * The storage transport for a new PDO (roadmap-hcd.md 31-A.3; xhci_xport.h),
+ * decided once from its own configuration copy: a device PDO's one interface
+ * when the device's class is its interfaces' (section 10.7), or a function's
+ * one interface when no IAD groups it. Anything else keeps section 10.7's ids
+ * (XHCI_XPORT_NONE). Each branch but NOT_UAS is counted and traced. Thread
+ * only, PASSIVE_LEVEL.
+ */
+static VOID hcdXportDecide(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo,
+                           ULONG flags)
+{
+    ULONG iface;
+
+    pdo->Xport.Transport = XHCI_XPORT_NONE;
+    pdo->Xport.Why = XHCI_XPORT_WHY_NOT_UAS;
+    if (pdo->Function) {
+        if (pdo->Func.InterfaceCount != 1 || pdo->Func.IadOffset != 0) {
+            return;
+        }
+        iface = pdo->Func.FirstInterface;
+    } else if (pdo->DeviceDesc[4] != 0 ||
+               !XhciXportSingleInterface(pdo->Config, pdo->ConfigLength,
+                                         &iface)) {
+        return;
+    }
+    if (pdo->SpeedClass >= XHCI_SPEED_SUPER) {
+        flags |= XHCI_XPORT_F_SUPERSPEED;
+    }
+    if (XhciXportChoose(pdo->Config, pdo->ConfigLength, iface, flags,
+                        &pdo->Xport) != XHCI_XPORT_OK) {
+        pdo->Xport.Transport = XHCI_XPORT_NONE;
+        pdo->Xport.Why = XHCI_XPORT_WHY_NOT_UAS;
+        return;
+    }
+    if (pdo->Xport.Why == XHCI_XPORT_WHY_NOT_UAS) {
+        return;
+    }
+    hc->XportDecisions[pdo->Xport.Why]++;
+    XHCI_DBG_VALUE("hcd: storage transport, port/transport/why/alternate",
+                   (pdo->Port << 16) | (pdo->Xport.Transport << 12) |
+                       (pdo->Xport.Why << 8) | (pdo->Xport.Alternate & 0xFFUL));
+    if (pdo->Xport.Transport == XHCI_XPORT_REFUSED) {
+        /* TODO(29-A.5): a UAS-only device at SuperSpeed on a controller that
+         * does not stream has no transport. On a root port with a USB 2.0
+         * companion the roadmap sends it back to USB 2.0 by 29-A.5's hold,
+         * where it runs streamless UAS; that hold is not wired, so until it
+         * is the device is refused in place everywhere - its PDO exposes no
+         * storage id, never a Bulk-Only one it cannot honour - which is the
+         * roadmap's rule behind a SuperSpeed hub and on a root port with no
+         * companion in any case. Counted as XHCI_XPORT_WHY_NO_STREAMS. */
+        XHCI_DBG_VALUE("hcd: UAS-only at SuperSpeed without streams, refused, "
+                       "port", pdo->Port);
+    }
+}
+
 /* One PDO, not yet listed: the device's (func NULL) with the whole
  * configuration, or a function's with its filtered one. The descriptors are
  * copied into the PDO, which outlives the device record. IoCreateDevice
  * zeroes the extension. */
 static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
-                          const XHCI_FUNC *func, PHCD_DEVICE_PDO *made)
+                          const XHCI_FUNC *func, ULONG xportFlags,
+                          PHCD_DEVICE_PDO *made)
 {
     WCHAR nameBuffer[40];
     UNICODE_STRING name;
@@ -400,6 +504,7 @@ static NTSTATUS hcdPdoNew(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         pdo->DeviceDesc[i] = dev->DeviceDesc[i];
     }
     pdo->Group = serial;
+    hcdXportDecide(hc, pdo, xportFlags);
 
     obj->Flags |= DO_POWER_PAGABLE;
     obj->Flags &= ~DO_DEVICE_INITIALIZING;
@@ -425,6 +530,7 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     PHCD_DEVICE_PDO pdo;
     KIRQL oldIrql;
     NTSTATUS status;
+    ULONG xportFlags;
     ULONG count;
     ULONG i;
 
@@ -440,13 +546,24 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         XHCI_DBG_VALUE("hcd: split device not configured, port", dev->Port);
         return STATUS_UNSUCCESSFUL;
     }
+    /* The transport inputs that are the controller's (31-A.3): whether it
+     * streams, and the force value, read here so a change takes effect at
+     * the next enumeration. */
+    xportFlags = 0;
+    if (XhciStreamHcEntries(XhciBarReader(&hc->Hc, XHCI_CAP_HCCPARAMS1)) !=
+        0) {
+        xportFlags |= XHCI_XPORT_F_HC_STREAMS;
+    }
+    if (HcdCtlForceBulkOnly(hc)) {
+        xportFlags |= XHCI_XPORT_F_FORCE_BOT;
+    }
     count = (set.Count != 0) ? set.Count : 1;
     first = NULL;
     last = NULL;
     status = STATUS_SUCCESS;
     for (i = 0; i < count; i++) {
         status = hcdPdoNew(hc, dev, (set.Count != 0) ? &set.Func[i] : NULL,
-                           &pdo);
+                           xportFlags, &pdo);
         if (!NT_SUCCESS(status)) {
             goto cleanup;
         }

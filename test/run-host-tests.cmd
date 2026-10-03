@@ -41,6 +41,9 @@ rem                  MaxPSASize, the companion's MaxStreams, the grant and the
 rem                  array size, the block layout, the Stream Context, the
 rem                  Endpoint Context's stream fields, Set TR Dequeue with a
 rem                  Stream ID, the doorbell value and the event's stream
+rem   test_xport   - the mass-storage transport policy (src\xhci_xport.c, task
+rem                  31-A.3): Bulk-Only or UAS for an interface offering
+rem                  either, and the hardware and compatible ids that follow
 rem   test_hub     - the hub class's pure half (src\xhci_hub.c): the hub
 rem                  descriptor, the status-change bitmap, the port decision,
 rem                  the reset progress and speed bits, the depth and multi-TT
@@ -207,6 +210,9 @@ rem test_stream links nothing else: the stream plan, the block layout and
 rem the encoders are pure computations over registers' and descriptors'
 rem values (task 31-A.1).
 call :run test_stream "test_stream.c ..\src\xhci_stream.c"
+rem test_xport links nothing else: the transport choice and its ids are pure
+rem computations over descriptor bytes and three flags (task 31-A.3).
+call :run test_xport "test_xport.c ..\src\xhci_xport.c"
 rem test_strict links nothing else: strict mode's command precondition table
 rem (xHCI 1.2 section 4.6) is a pure function, checked here at every cell -
 rem each command type, DW3 bit 9, slot state and EP State.
