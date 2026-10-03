@@ -736,3 +736,126 @@ Formal 26-V legs still install from the clean bases. A build that changes the IN
   - EP0 STALLs (code 6) were recovered: on Windows 98 SE five `event: transfer, code=00000006` during the audio function's start, each followed by `EP0 reset after a stall, slot=00000001`; on Windows 2000 one `EP0 reset after a stall` at the attach and one at the start of each play.
   - Unplugging the audio device was clean on both.
 - Both shutdowns were clean.
+
+### The combined leg on the golden images (c17)
+
+**c17** (`dfa8c929...67a2`, `d5950c4`, 2026-10-03, development host A, `qemu` flavour, the golden images): the A.8 surfaces (the controller's Advanced tab, the root hub's Power tab, the `XHCISNAP` channel) and the Codex fixes to `d5950c4`, among them the timer-slot fix of `370c135`, read together with storage, unplug, audio, disable and enable, and shutdown. The stick and the C-Media device were c14's.
+- **The driver swap** held on both. Windows 98 SE: the installed `XHCI98.SYS` matched `D:\XHCI98.SYS` (133,808 bytes). Windows 2000: the copy gave "1 file(s) copied." and the enable brought no prompt. The controller and the root hub were "This device is working properly." on both.
+- **Storage.** The stick enumerated at 480 Mb/s and appeared as F:, and `fc /b` reported "FC: no differences encountered" for `RAND.BIN` on both. On Windows 98 SE the `USBSTOR.INF` wizard ran again, with no prompt and no restart, and an Explorer window opened on F:; on Windows 2000 there was no prompt.
+- **The controller's Advanced tab** (stick and mouse plugged). On both the tabs are General, Advanced, Driver and Resources.
+  - Windows 98 SE: the Advanced tab carries "USB Settings:", a "Disable USB error detection" check box (clear) and a "Bandwidth Usage" button, which opens a dialog titled "Advanced".
+  - Windows 2000: the Advanced tab is itself the bandwidth page, with the same check box and a Refresh button; there is no separate dialog.
+  - The bandwidth page is the same on both: "Each USB controller has a fixed amount of bandwidth, which all attached devices must share. This page displays the bandwidth distribution among all bandwidth consuming devices attached to the controller." and "By selecting a device from the list, the corresponding section will be selected in the Bandwidth indicator bar, which gives a visual representation of bandwidth consumption." Its list ("Device Description | Bandwidth consumed") holds one row, `System reserved | 11 %`, with the stick and the mouse plugged, and unchanged after a Refresh on Windows 2000.
+- **The root hub's Power tab.** On both the tabs are General, Power and Driver. On Windows 2000 the tab is the page; on Windows 98 SE a "Power properties" button opens it as a dialog titled "Power". As read, with the stick and the mouse plugged:
+
+  ```
+  Hub Information:  The hub is self powered.
+                    Total power available:  500 mA per port.
+  Devices on this Hub:  USB Mass Storage Device   Unknown
+                        HID Keyboard Device       Unknown      (2000)
+                        HID-compliant keyboard    Unknown      (98 SE)
+                        6 port(s) available.      0 mA
+  ```
+
+  After the root hub's disable and enable, with nothing plugged, it read "8 port(s) available. | 0 mA" on both.
+- **`XHCISNAP`** (from the package drive). The usage screen printed in full on both. `XHCISNAP -probe` gave the same four readings on both:
+
+  ```
+  route probe - IOCTL 0x00220438 on this controller:
+    PassThru, our GUID                status  6 (MINIPORT DECLINED)
+      the request reached a miniport and it DECLINED. The ROUTE WORKS.
+    unknown request code 15           status  2 (invalid request code)
+    RequestBufferLength disagreeing   status  4 (invalid header parameter)
+    a 0x20-byte buffer                status  7 (buffer too small)
+  ```
+
+  `XHCISNAP -o C:\SNAP` was refused, "usbport refused the request: 6 (MINIPORT DECLINED)", exit code 1 on Windows 2000, and no `C:\SNAP*` file on either. That is the channel shipping off, as the tool says; the route works. `-verbosity 2` needs a restart and was not run, so the dump itself is left to the clause legs (26-V.1, 26-V.2).
+- **Unplug.** The stick and the mouse, together: no dialog and no hang on either, and both left Device Manager.
+- **"Ex refused the arm": 0 on both**, over the whole session (c16: 21 on Windows 2000, 29 on Windows 98 SE). That is `370c135`'s fix: each command's 5 s watchdog held one of the timer service's four slots for its full 5 s after the command completed, so a burst of more than four commands ran unwatched; a new arm of the same callback now supersedes the pending one and reuses its slot.
+- **Audio.** 0D8C:0014 split into MI_00 and MI_03 as in c16, and both functions bound; on Windows 98 SE the HID function's install asked for the CD for `hidclass.sys` again (given `E:\WIN98`) and the audio function installed from `WDMA_USB.INF` with no prompt and no restart. Each OS was given two plays of one file, and every play ran to its end and closed by itself, with no error dialog. On each OS one of the two ran at about a tenth of real time:
+  - Windows 2000 (`mplay32 /play /close`, "Windows Logon Sound.wav", 5.51 s): play 1 slow, its position at 00.87, 01.43, 02.28, 03.13 and 05.22, the last some 58 s after the command, then closed (about 0.1x); play 2 at real time (05.01 some 5 s after the start).
+  - Windows 98 SE (`sndrec32 /play /close`, "The Microsoft Sound.wav", 7.85 s): play 1 at real time (7.50 sec some 9 s after the start); play 2 slow, 7.50 sec after some 65 s, its position standing at 2.00 sec for at least 2 s (about 0.12x).
+  - Each trace has 4 `isoch URB` lines (two per play) and 32 `isoch published` lines, all in play 1, and no `not served` line and no nonzero refusal counter.
+  - A static read of the isochronous path by a subagent found nothing in the driver that throttles a stream; the cause of the slow plays is open.
+  - Why the later plays print no `isoch published`: that site is an `XHCI_DBG_VALUE_CHANGED`, which prints on a change of value **at most `XHCI_DBG_VALUE_LIMIT` (32) times per driver image**, and play 1 spends all 32. It is the trace's cap, not a missing publication - the slow play is the one with the lines on Windows 2000 and the one without them on Windows 98 SE.
+  - Unplugging the audio device was clean on both.
+- **Disable and enable.** Windows 2000: the root hub's disable ("Disabling this device will cause it to stop functioning. Do you really want to disable it?") gave Code 22 with the controller still working, and its enable "working properly", both with no prompt; then the controller's disable removed the root hub (`teardown: ports unpowered=00000008`, `ports that would not give up power=00000000`, `quiesce: halted, USBSTS=00000001`) and its enable brought both back, "working properly". Windows 98 SE: the root hub only, through "Disable in this hardware profile": "This device is disabled (Code 22.)", then "This device is working properly." after the box was cleared. The controller was not disabled on Windows 98 SE.
+- **Shutdown** was clean on both: Windows 2000 reached "It is now safe to turn off your computer." (`save: declined - the controller does not declare FSC`), Windows 98 SE powered off.
+
+**The Windows 98 SE mouse that came up as a keyboard.** The usb-mouse brought no wizard and Device Manager showed it as "HID-compliant keyboard" under Keyboard, with no HID mouse under Mouse; `mouse_move` through it did not move the pointer, while the PS/2 mouse did. The coordinator's read: the HCD gives a device the port number as its instance id, and QEMU's `usb-kbd`, `usb-mouse` and `usb-tablet` all present `VID_0627&PID_0001`, so the mouse on port 2 matched the devnode the golden image's keyboard had left on port 2, and Windows reused its keyboard driver. It is an artefact of the image, not a reading of the HCD (the stock leg's mouse, 26-V.3 below, installed as a mouse and moved the pointer). Windows 2000 named the same mouse "HID Keyboard Device" in the Power tab, which the same reuse explains; its pointer was not tried. Instance ids from the device's serial number, where it has one, are noted as a later change.
+
+Notes: `out\phase26\v0\c17-2k-notes.md`, `c17-98-notes.md`, and their screenshots.
+
+## 26-A.10 - the first HCD device-matrix run
+
+The first run of `matrix-hcd.psd1`, 26-A.10's expectation set, through `scripts\vm-matrix\run-matrix.ps1` on 2026-10-04 (development host A, QEMU 11.1.0), groups `audio`, `hid`, `storage` and `other`. Targets: overlays of the two golden images with the `qemu` flavour of `40efd31` (`xhci98.sys` SHA-256 `95abc0aa...78b4`) in place, `h98` (Windows 98 SE) and `h2k` (Windows 2000). A per-target `ExtraArgs` key (`f9f57fe`) matches each run to its image's hardware (`-net none`, and Windows 2000's `-vga cirrus`). The run was driven by a matrix subagent, and this is its report, checked against the report files.
+
+| Row | h98 (Windows 98 SE) | h2k (Windows 2000) |
+|---|---|---|
+| usb-audio/fs | PASS (isochronous counters `inert`, the `2a` line) | PASS |
+| usb-kbd/hs | PASS | PASS |
+| usb-kbd/fs | PASS | PASS |
+| usb-mouse/hs | PASS | PASS |
+| usb-mouse/fs | PASS | PASS |
+| usb-tablet/hs | EXCLUDED | PASS |
+| usb-wacom-tablet/fs | EXCLUDED | PASS |
+| usb-storage/hs | PASS | PASS |
+| usb-bot/fs | FAIL in run 1 (the expectation), PASS in the rerun | the same |
+| usb-uas/fs | FAIL in run 1, NODRIVER in the rerun | the same |
+| usb-net/fs | NODRIVER | NODRIVER |
+| usb-serial/fs | NODRIVER | NODRIVER |
+| usb-braille/fs | NODRIVER | NODRIVER |
+| usb-ccid/fs | NODRIVER | NODRIVER |
+| u2f-emulated/fs | PASS (the image taught the device in the prep pass) | NODRIVER |
+
+- The harness's row summaries: h98 "PASS 7, NODRIVER 4, FAIL 2, EXCLUDED 2"; h2k "PASS 8, NODRIVER 5, FAIL 2".
+- Every NODRIVER above is the row's `ExpectNoDriver` for its target, read as design record 06 defines it: `advance devices addressed` +1 and `-> NODRIVER advance endpoints opened >= 1 +0`.
+- The h98 audio row's `inert` line, verbatim: `inert iso packets answered because Windows 98 SE USBAUDIO.VXD faults after one URB - exonerated in batch 9-V through a UHCI control`. The h2k row's: `inert iso packets answered because nothing in an unattended run plays audio ...`, with `zero iso missed service errors` and `zero iso packet errors` both 0.
+- The two h98 exclusions are the set's `ExcludedOnTarget`: "installing this driver hangs QEMU on Windows 98 - 3 of 4 main-loop hangs measured; unresolved, and it is the vehicle rather than the miniport", and the Wacom row with it.
+
+**usb-bot and usb-uas at High Speed.** Run 1 failed both rows on both targets on the speed expectation alone:
+
+```
+h98    usb-bot/fs             -> FAIL   zero port speed decoded - high speed                           1
+h98    usb-bot/fs             -> FAIL   zero slot context speed - high speed                           1
+h98    usb-bot/fs             -> FAIL   advance port speed decoded - full speed == 1                   +0
+h98    usb-bot/fs             -> FAIL   advance slot context speed - full speed == 1                   +0
+```
+
+and the same four lines for `usb-uas/fs` (with `-> FAIL advance endpoints opened >= 1 +0`), and on h2k. QEMU 11.1 presents both, with their `scsi-hd` child, at 480 Mb/s, and the HCD's decoded port speed and the speed it programmed into the Slot Context agree (`zero slot speed disagreeing with port speed` 0). The rows' expectation was wrong, not the HCD: `f9f57fe` sets their `ExpectedSpeed` to `HS`, keeping the row names. The storage group was rerun on both targets after the change:
+
+```
+h98    usb-bot/fs             PASS      advance port speed decoded - high speed == 1                   +1
+h98    usb-bot/fs             PASS      advance slot context speed - high speed == 1                   +1
+h98    usb-uas/fs             -> NODRIVER advance endpoints opened >= 1                                  +0
+h2k    usb-bot/fs             PASS      advance port speed decoded - high speed == 1                   +1
+h2k    usb-uas/fs             -> NODRIVER advance endpoints opened >= 1                                  +0
+```
+
+with the summaries "PASS 2, NODRIVER 1" on each; `usb-storage/hs` passed again, and `usb-uas/fs`'s NODRIVER is its `ExpectNoDriver` (neither OS has a UAS class driver).
+
+Reports: `out\mx\h98\device-matrix-h98.txt`, `out\mx\h2k\device-matrix-h2k.txt`; the reruns `out\mx\h98-storage2\device-matrix-h98-storage.txt`, `out\mx\h2k-storage2\device-matrix-h2k-storage.txt`.
+
+## 26-V.3 - the stock reading
+
+A Windows 98 SE guest with no USB 2.0 stack, on 2026-10-04 (development host A, `qemu` flavour of `40efd31`, `xhci98.sys` SHA-256 `95abc0aa...78b4`, the package drive checked against it).
+
+**The stock base.** By the owner's decision of 2026-10-04 the base was made by uninstalling NUSB 3.3 from the NUSB base rather than installing Windows 98 SE afresh from the ISO. On a new overlay of `vm\win98.img @ post-nusb`, booted with no `qemu-xhci`:
+- **NUSB's own uninstaller**, the one Add/Remove Programs entry, "Remove Unofficial Universal USB 2.0 Stack" (`_USB2UN.INF`, UNINSTALL), ran silently and removed `USBEHCI.SYS`, `USBHUB20.SYS`, `USBPORT.SYS`, `INF\USB2.INF` and its own Uninstall key.
+- **Deleted by hand**, as the uninstaller leaves them: NUSB's mass-storage half, `USBSTOR.SYS`, `USBNTMAP.SYS`, `USBAUTH.SYS`, `USBU2A.SYS`, `INF\USBSTOR.INF`, `INF\USBNTMAP.INF` and `SYSTEM\IOSUBSYS\USBMPHLP.PDR`; their copies and the stack's under `OPTIONS\CABS`; `INF\usb2.PNF`; and `INF\DRVIDX.BIN` and `DRVDATA.BIN`, the driver index, which Windows rebuilds from `INF\`. In the registry, a phantom ICH4 EHCI devnode from the image's past (`Class\USB\0000` and `0001`, `Enum\PCI\VEN_8086&DEV_24CD...`, `Enum\USB\ROOT_HUB20`), removed with a REGEDIT4 file.
+- **Checked**: `SYSTEM32\DRIVERS\usb*.*` is `USBAUDIO.SYS` alone; `INF\usb*.*` is `USB.INF`, `USBCDC.INF` and `USBWAVE.INF`, stock 98 SE; nothing under `OPTIONS\CABS` or `SYSTEM\IOSUBSYS`; a fresh registry export has no `usbehci` or `usbstor` string. After a restart, no New Hardware wizard and no "Universal Serial Bus controllers" category in Device Manager.
+- **Left on purpose**: NUSB's copies of Microsoft's 98 SE fixes that are not the USB 2.0 stack - the 1394 and SBP-2 files, `NTMAP.SYS` and `NTMAP.INF`, `NTMAPHLP.PDR`, `DISKTSD.VXD`, `CDVSD.VXD`, `IOS.VXD`, `HOTPLUG.DLL`, `SYSTRAY.EXE`, `USER.EXE`, `USER32.DLL`, `EXPLORER.EXE`, `QFECHECK` and NUSB's `NODRIVER.INF` - and inert registry value data naming the old devnode and `usbport`. `NTMAP.SYS` without `USBNTMAP`, `USBSTOR` and `USBMPHLP` gives no USB storage path.
+
+The base was then made read-only (`vm\t26\win98-stock-base.qcow2`), and the leg ran on an overlay of it with `qemu-xhci` (eight USB 2.0 ports, no SuperSpeed).
+
+| Row | Reading |
+|---|---|
+| Controller | Add New Hardware Wizard for "PCI Universal Serial Bus", "Specify a location" `D:\`, found `D:\XHCI98.INF`. **Prompts**: "Please insert the disk labeled 'Windows 98 Second Edition CD-ROM', and then click OK."; "The file 'usbd.sys' on Windows 98 Second Edition CD-ROM cannot be found." (given `E:\WIN98`); and "To finish setting up your new hardware, you must restart your computer." / "Do you want to restart your computer now?" (Yes). After the restart the controller and `xHCI98 USB 3.x Root Hub` were "This device is working properly.", with the Advanced and Power tabs present |
+| HID mouse | The `HIDDEV.INF` wizard, with the CD prompt and "The file 'hidclass.sys' on Windows 98 Second Edition CD-ROM cannot be found." (given `E:\WIN98`), no restart. "HID-compliant mouse" and "USB Human Interface Device" working properly; `mouse_move` moved the pointer through it |
+| Composite audio | 0D8C:0014 split as on the primaries (`split device configured, port/slot/value=00030101`). The HID function from `HIDDEV.INF` and the audio function from `WDMA_USB.INF`, neither with a prompt, no restart. "USB Audio Device" (Generic USB Audio), "HID-compliant consumer control device" and "USB Human Interface Device" each working properly: **both functions bound**. One play of "The Microsoft Sound.wav" (7.85 s) ran to its end and closed by itself, some 55 s for 7.5 s of position (about 0.14x), with no fault and no error dialog: 2 `isoch URB`, 32 `isoch published`, no refused, `not served` or watchdog line |
+| Storage | "USB Device": "Windows was unable to locate a driver for this device.", then under Other devices, "The drivers for this device are not installed. (Code 28.)". The trace: `hcd: device descriptor, idVendor/idProduct=46F40001`, `devices addressed=00000002` (was 1), no `endpoints opened` line and no refusal counter moved - **NODRIVER** as design record 06 defines it |
+| Unplug | The mouse, the stick and the audio device, each alone: no hang and no dialog, and `info usb` empty after each |
+
+Shutdown was clean. The stick was c13's; storage ran before audio, while the C-Media device was in use by another leg.
+
+Notes: `out\phase26\v0\v3-98-notes.md` and its screenshots.

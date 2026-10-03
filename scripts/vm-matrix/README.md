@@ -23,6 +23,8 @@ powershell -File scripts\vm-matrix\gen-offsets.ps1             # after any drive
 powershell -File scripts\vm-matrix\run-matrix.ps1 -Config scripts\vm-matrix\matrix.config.psd1 -ValidateOnly
 ```
 
+A target may carry `ExtraArgs = @(...)`, extra QEMU arguments `run-matrix.ps1` appends as given, so an image installed under another launcher boots on the same hardware (the Phase 26 golden overlays need `-net none`, and Windows 2000's `-vga cirrus`, or the guest meets new PCI hardware at boot).
+
 The runner reads `matrix-hcd.psd1`, the successor HCD's expectation set, by
 default; `-Matrix scripts\vm-matrix\matrix.psd1` is the miniport's, frozen.
 See "Two expectation sets" below.

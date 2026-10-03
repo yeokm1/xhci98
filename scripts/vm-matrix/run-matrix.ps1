@@ -900,6 +900,13 @@ foreach ($tgt in $targetsToRun) {
         # a configured target from batch 11-V stage F onward, and a config key
         # nothing honours is worse than an absent one: it reads as support.
         if ($tgt.ContainsKey('Smp') -and [int]$tgt.Smp -gt 1) { $args += @("-smp", "$([int]$tgt.Smp)") }
+        # AN IMAGE BUILT UNDER ANOTHER LAUNCHER CARRIES THAT LAUNCHER'S HARDWARE.
+        # The Phase 26 golden overlays were installed with `-net none` (and
+        # Windows 2000's with `-vga cirrus`); booted with QEMU's default NIC
+        # the xHCI moves to another PCI slot and the guest meets new hardware
+        # at boot, which on Windows 98 is a modal wizard. `ExtraArgs` (a list
+        # of strings, optional) is appended as given.
+        if ($tgt.ContainsKey('ExtraArgs') -and $null -ne $tgt.ExtraArgs) { $args += @($tgt.ExtraArgs | ForEach-Object { [string]$_ }) }
 
         # THE MATRIX DOES NOT WRITE TO THE GUEST IMAGE.  Every group boots the
         # same disk and a matrix exists to be re-run, so a run that mutates its

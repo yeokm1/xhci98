@@ -933,6 +933,7 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     ULONG control;
     ULONG code;
     ULONG bytes;
+    ULONG stalled;
     ULONG asked;
     ULONG answer;
     ULONG dci;
@@ -1068,12 +1069,18 @@ static LONG hcdCfgSelectInterface(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
         dev->Stale = old;
     }
     if (usbd == XHCI_USBD_STATUS_SUCCESS &&
-        !HcdThreadControl(hc, dev, 0x01, 11,
-                          (USHORT)iface.AlternateSetting,
-                          (USHORT)iface.InterfaceNumber, 0, &bytes)) {
+        !HcdThreadControlEx(hc, dev, 0x01, 11,
+                            (USHORT)iface.AlternateSetting,
+                            (USHORT)iface.InterfaceNumber, 0, &bytes,
+                            &stalled)) {
         /* Enabled on the controller, not on the device: dropped by the
-         * next command. */
-        usbd = HCD_USBD_INTERNAL_HC_ERROR;
+         * next command. A device that STALLed SET_INTERFACE refused it
+         * itself and is answered with its own status, not one that
+         * blames the controller (26-V.2: a C-Media whose alternate 1 the
+         * passthrough refused). */
+        XHCI_DBG_VALUE("hcd: SET_INTERFACE failed, stalled", stalled);
+        usbd = stalled ? XHCI_USBD_STATUS_STALL_PID :
+                         HCD_USBD_INTERNAL_HC_ERROR;
         dev->Stale = mask;
     }
 
