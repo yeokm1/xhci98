@@ -355,6 +355,11 @@ typedef struct _HCD_DEVICE_PDO {
     KDPC RefuseDpc;
     ULONG RefuseArmed;
     volatile LONG RefusedPending;
+    /* URB IRPs of a device that left, held until the client aborts or
+     * cancels them or the PDO stops or goes (HcdIoPark, hcd_io.c): the
+     * list under the cancel spin lock, each still counted in UrbsPending. */
+    LIST_ENTRY ParkedIrps;
+    ULONG ParkedCount;
     volatile LONG Busy;             /* dispatches inside hcd_urb.c, raised
                                      * before Controller is read; the
                                      * parent's release waits it out      */
@@ -886,6 +891,8 @@ ULONG HcdIoDeviceDrain(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 NTSTATUS HcdIoRefuseLater(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb,
                           LONG usbd);
 VOID HcdIoRefusedInit(struct _HCD_DEVICE_PDO *pdo);
+ULONG HcdIoPark(struct _HCD_DEVICE_PDO *pdo, PIRP irp, PVOID urb);
+ULONG HcdIoParkedRelease(struct _HCD_DEVICE_PDO *pdo);
 VOID HcdIoRefusedDrain(struct _HCD_DEVICE_PDO *pdo);
 ULONG HcdIoDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 VOID HcdIoIsoRefused(PVOID urb, LONG usbd);

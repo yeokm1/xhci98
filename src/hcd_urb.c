@@ -490,9 +490,15 @@ static NTSTATUS hcdSubmitUrb(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     case URB_FUNCTION_SELECT_INTERFACE:
     case URB_FUNCTION_ABORT_PIPE:
     case URB_FUNCTION_RESET_PIPE:
-        /* Commands: pended for the controller thread (hcd_cfg.c). */
+        /* Commands: pended for the controller thread (hcd_cfg.c). An
+         * abort on a PDO whose device left completes what that device
+         * left held (hcd_io.c, HcdIoPark), and is then refused as any
+         * request to a gone device is. */
         dev = hcdDeviceRef(hc, pdo);
         if (dev == NULL) {
+            if (function == URB_FUNCTION_ABORT_PIPE) {
+                (VOID)HcdIoParkedRelease(pdo);
+            }
             return hcdGoneLater(pdo, irp, urb);
         }
         return HcdCfgQueue(hc, dev, pdo, irp);
