@@ -836,6 +836,127 @@ with the summaries "PASS 2, NODRIVER 1" on each; `usb-storage/hs` passed again, 
 
 Reports: `out\mx\h98\device-matrix-h98.txt`, `out\mx\h2k\device-matrix-h2k.txt`; the reruns `out\mx\h98-storage2\device-matrix-h98-storage.txt`, `out\mx\h2k-storage2\device-matrix-h2k-storage.txt`.
 
+## 26-V.1 - Windows 98 SE under NUSB 3.3 and under SweetLow's stack
+
+On 2026-10-04 (development host A, QEMU under TCG, one virtual CPU, `qemu` flavour), one guest at a time, each install from a clean overlay; driven by a GUI subagent, and this is its notes and screenshots as read. Two builds ran, and every row below names its build:
+- **pkg-v**: the `qemu` flavour of `40efd31`, `xhci98.sys` SHA-256 `95abc0aa...78b4`, the build of the matrix run and of 26-V.3.
+- **pkg-v2**: the `qemu` flavour of `a7ddbfa`, `xhci98.sys` SHA-256 `685a4155...1ee7` (134,288 bytes), which adds `ac25e4e`'s fix (below) and nothing else. Both hashes were checked on the host before launch.
+
+The guests:
+- **NUSB 3.3**: overlays of the NUSB base (`win98-clean.qcow2`). `win98-v1n` took rows 1 to 6 on pkg-v and was then lost to the tooling (below); `win98-v1n2` took row 1 again on pkg-v and the ASIX install that faulted; `win98-v1n3` took rows 1, 5, 7 and 8 on pkg-v2 from clean.
+- **SweetLow's stack**: `vm\sweetlow-2a.img @ sweetlow-stack-nodriver`, converted to a read-only base `vm\t26\win98-sweetlow-base.qcow2` (`qemu-img convert -l`, check clean), overlay `win98-v1s`, launched as the matrix's 2a-sweetlow target (`-machine pc,smm=off`). Rows 1 to 4, 6 and 8 on pkg-v; then Update Driver to pkg-v2 and rows 7, 5 and 8 again.
+
+| Row | NUSB 3.3 | SweetLow |
+|---|---|---|
+| 1 Install, start, the root hub with every device beneath it | pkg-v (twice) and pkg-v2 from clean. Add New Hardware Wizard for "PCI Universal Serial Bus", "Specify a location" `D:\`, found `D:\XHCI98.INF`. **Prompts**: "Please insert the disk labeled 'Windows 98 Second Edition CD-ROM', and then click OK."; "The file 'usbd.sys' on Windows 98 Second Edition CD-ROM cannot be found." (given `E:\WIN98`); "To finish setting up your new hardware, you must restart your computer." (Yes). After the restart: "This device is working properly.", tabs General, Advanced, Driver and Resources, Driver Provider "Yeo Kheng Meng"; by connection, PCI bus > `xHCI98 USB 3.x eXtensible Host Controller` > `xHCI98 USB 3.x Root Hub`, and with the mouse and the stick plugged, the root hub > "USB Human Interface Device" > "HID-compliant mouse" and the root hub > "USB Mass Storage Device" > "USB Disk" | pkg-v, the same wizard, the same three prompts, the same Device Manager and tree. **pkg-v2 by Update Driver** ("Display a list ...", Have Disk `D:\`): "Update Driver Warning" ("Windows detects that your current driver may be a closer match ...", Yes - the two INFs carry the same version and date), the CD prompt for `usbd.sys` again, "Windows has finished installing the driver you selected for your hardware device.", **no restart prompt**; the new file waited as `XHCI98.TMP` until the restart that row 7 takes, after which `XHCI98.SYS` alone was pkg-v2's (134,288 bytes) |
+| 2 Mouse | pkg-v. The `HIDDEV.INF` wizard, the CD prompt and "The file 'hidclass.sys' on Windows 98 Second Edition CD-ROM cannot be found." (`E:\WIN98`), no restart. `mouse_move` through the HID mouse moved the pointer and back | pkg-v, the same |
+| 3 Storage | pkg-v. The `USBSTOR.INF` wizard, no prompt, no restart; F: "Volume in drive F is QEMU VVFAT"; `fc /b d:\rand.bin f:\rand.bin`: "FC: no differences encountered". The unplug: no dialog | pkg-v, the same |
+| 4 Composite audio (C-Media 0D8C:0014, passthrough) | pkg-v. Two wizards, `HIDDEV.INF` and `WDMA_USB.INF`, no prompt, no restart. "USB Audio Device" ((Generic USB Audio)) and "HID-compliant consumer control device" each "This device is working properly.", beneath the root hub with no composite parent. `sndrec32 /play /close "The Microsoft Sound.wav"` (7.85 s): Position 1.25 sec some 4 s in, 4.75 sec some 8 s in, closed by itself within some 15 s, no error - about real time. 31 `isoch published`, two `event: transfer, code=0000000E`. The unplug: no dialog | pkg-v, the same installs and Device Manager. The play: Position 5.00 sec some 7 s in, closed by itself, no error; 32 `isoch published` |
+| 5 The ASIX AX88772A (0B95:7720, passthrough, 480 Mb/s) | **pkg-v, no driver**: "Windows was unable to locate a driver for this device." then "USB Device", Code 28, beneath the root hub. **pkg-v with ASIX's Windows 98 driver** (`D:\ASIX98`, `AX88772.SYS` 3.0.3.12): **"A fatal exception 0E has occurred at 0028:C188D256 in VXD ax88772(01) + 00001576."** (below). **pkg-v2 with the same driver**: no fault; "ASIX AX88772 USB2.0 to Fast Ethernet Adapter", Network adapters, "This device is working properly." | **pkg-v2 with the same driver**: no fault; Network adapters, Manufacturer ASIX, "This device is working properly.", Driver Provider ASIX. Not tried on pkg-v: after the NUSB fault the coordinator held the ASIX install for the fixed build |
+| 6 The Advanced tab and the Power tab (mouse and stick plugged) | pkg-v. The Advanced tab: "USB Settings:", "Disable USB error detection" (clear), "Bandwidth Usage", whose "Advanced" dialog reads as c17's, one row `System reserved` `11 %`. The root hub's "Power properties" dialog: "The hub is self powered.", "Total power available:  500 mA per port.", `HID-compliant mouse` `Unknown`, `USB Mass Storage Device` `Unknown`, `6 port(s) available.` `0 mA` | pkg-v, the same text |
+| 7 `XHCISNAP` | pkg-v2. `-verbosity 2`: `0002 was 0 -> 2 NTMPDriver = xhci98.sys`, "1 key(s) set. RESTART THE MACHINE, ..."; after the restart, `-o c:\snap` with the ASIX adapter plugged: port 1 `00000E03`, ports 2 to 8 `000002A0`, "(1 of 8 ports report a device connected.)", `verbosity read 2, APPLIED 2`, `note ring 885 of 16384 bytes`, **`coherence *** TORN - counters may be a mixture`**; `SNAP.PSC` 32, `SNAP.TXT` 2,367, `SNAP.BIN` 104,740 bytes | pkg-v2. The same `-verbosity 2` text; after the restart `-probe`: "PassThru, our GUID  status 0 (success)", "the miniport ANSWERED - the channel is live, take the dump", and statuses 2, 4 and 7 for the other three probes as c17's; `-o c:\snap` with the adapter plugged and idle: the same port table and summary with **`coherence no tearing`**; `SNAP.PSC` 32, `SNAP.TXT` 2,287, `SNAP.BIN` 104,740 bytes |
+| 8 Unplug all, shut down | pkg-v2: the adapter's unplug left `info usb` empty, no dialog; "Shut down" reached QEMU's `paused (shutdown)` | pkg-v and pkg-v2, each clean. pkg-v's trace ends `quiesce: halted, USBSTS=00000001`, `SuspendController: halted, USBCMD=00000000`, `save: declined - the controller does not declare FSC, HCIVERSION=00000100`; its `refused` lines are counters at `00000000` |
+
+The install prompts, on both stacks: the Windows 98 SE CD for `usbd.sys` (the controller), `hidclass.sys` (the first HID device) and `choosusr.dll` (ASIX's driver), ASIX's own "AX88772/AX88772A USB2.0 to Fast Ethernet Driver Diskette" prompt, and a restart prompt after the controller's install and after ASIX's. The `SNAP.TXT` of both stacks carries the start-time records only (`log.verbosity=00000002`, `hc.version=00000100`, `hc.maxslots=00000040`, `hc.maxports=00000008`, `hc.pci=000D1B36`, `map.usb2only=00000008`, `door.hcd=00000000`, `door.interface=00000001`, ...); verbosity 2 writes no per-device lines.
+
+**ASIX's Windows 98 driver and the fault on pkg-v.** The trace at the fault (`vm\t26-win98-v1n2-boot3-debugcon.log`), the adapter's enumeration and its driver's first URBs:
+
+```
+xhci98: hcd: device descriptor, idVendor/idProduct=0B957720
+xhci98: hcd: configuration descriptor, bytes=00000027
+xhci98: hcd: device enumerated on port=00000001
+xhci98: hcd: first URB of function=0000000B
+xhci98: hcd: first URB of function=00000000
+xhci98: transfers submitted=00000001
+xhci98: hcd: select, URB length=00000018
+xhci98: hcd: select, ConfigurationDescriptor=C14E9A40
+xhci98: hcd: select, first interface length/number/alternate=00000000
+xhci98: hcd: select refused, bLength/wTotalLength=00100000
+xhci98: hcd: thread URB done, function/status=00000300
+xhci98: selects failed=00000001
+xhci98: event: transfer, code=0000000D
+xhci98: event: transfer, code=00000001
+```
+
+A GET_DESCRIPTOR (function 0x0B), then a SELECT_CONFIGURATION of 0x18 bytes, with no interface entry, whose configuration descriptor read `bLength` 0x10 and `wTotalLength` 0. The HCD refused it (`src\hcd_cfg.c`'s `bLength`/`wTotalLength` floor), and the driver faulted. The cause, from a static read of `AX88772.SYS` and NUSB's `USBPORT.SYS` by a subagent (2026-10-04, not re-read line by line by the coordinator; `legal-provenance.md` section 4):
+- **The driver polls instead of waiting.** `AX88772.SYS` 3.0.3.12 waits for its URBs by polling `Irp->IoStatus.Status` for `STATUS_PENDING` (`cmp dword ptr [esi+18h],103h` at 0x103B5 in the helper at 0x1033E, which then calls `IoFreeIrp`; a second helper at 0x102C8 polls at 0x10327 between `NdisMSleep`s), and imports no `KeWaitForSingleObject`.
+- **The HCD left the field at 0.** `IoAllocateIrp` leaves `IoStatus.Status` 0, and pkg-v pended a URB IRP without writing it. The driver read success at once, freed its GET_DESCRIPTOR IRP while it was still in flight, and built its SELECT_CONFIGURATION from a buffer the descriptor had not yet been read into - the 0x10 and 0 above. The fault site, 0x11836, is `.text+0x1576`, after the select at 0x11821 and a read of `NumberOfPipes` at 0x1182D: the `+ 00001576` of the blue screen.
+- **usbport writes it.** NUSB's `USBPORT.SYS` stores `STATUS_PENDING` (`mov dword ptr [esi+18h],103h` at 0x15851) before `IoMarkIrpPending` (0x1585B), which is why the driver works under the miniport. Its select handler would have refused this URB too (`wTotalLength` 0 is refused at 0x2E57F with 0xC0000F00), so the refusal was right and the IRP's status was the defect.
+
+`ac25e4e` sets `IoStatus.Status` to `STATUS_PENDING` on entry to `HcdDevicePdoInternalIoctl`, before anything can complete the IRP; every synchronous completion overwrites it. On pkg-v2 the same install selected with a 0x64-byte URB (`select, first interface length/number/alternate=004C0000`, `select endpoints requested=00000003`), with no refusal, and bound on both stacks. No packet was sent: the SweetLow guest ran with `-net none`.
+
+**The overlay the tooling broke.** During `win98-v1n`'s second boot, after row 5, the background shell task that ran its QEMU hit the agent harness's 30-minute default limit and was stopped, which ended QEMU with Windows 98 running; the guest had answered normally a minute before. The next boot gave "Warning: Windows has detected a registry/configuration error.", ScanDisk, then "Invalid VxD dynamic link call from VWIN32(01) + 00000714 to device "0009", service 1. Your Windows configuration is invalid.", with an empty trace (`xhci98.sys` never loaded). That is the tooling's, not the guest's or the HCD's: rows 1 to 6 stand as read on it, and the rest moved to fresh overlays, the launcher task now with a 2-hour limit.
+
+**`XHCISNAP`'s closing text** still says "Windows' USB port driver owns that door and opens it to anyone, so this value IS the lock.", which the HCD no longer sits under. A stale string, left for a later change to the tool.
+
+**The NUSB dump's tearing.** NUSB's `SNAP.TXT` reads "coherence: tear detector 3994 -> 3996 (+2), *** CHANGED between windows", taken with the ASIX adapter bound and active; SweetLow's, with the adapter bound and idle, "no tearing". Recorded as observed: the tool saw the counters move between its windows and said so.
+
+Notes: `out\phase26\v0\v1-98-notes.md` and its screenshots (`shots\v1-98-*`).
+
+## 26-V.2 - Windows 2000 SP4
+
+On 2026-10-04 (development host A, `qemu` flavour), driven by a GUI subagent; this is its notes and screenshots as read. The overlay `vm\t26\win2k-v2.qcow2` of the clean Windows 2000 base. Rows 1 to 3 and 5 to 7 ran on **pkg-v** (`95abc0aa...78b4`); row 4 failed on pkg-v and was rerun on **pkg-v2** (`685a4155...1ee7`), and row 8, the SMP guest, was read on pkg-v2 - the builds of 26-V.1 above.
+
+| Row | Reading |
+|---|---|
+| 1 Install from clean (pkg-v) | The Found New Hardware Wizard was cancelled to take the Device Manager route, and a "System Settings Change" box ("Windows 2000 has finished installing new devices. You must restart your computer ...") followed, before any `xhci98` install (No). "Universal Serial Bus (USB) Controller" under Other devices, Code 1; Update Driver, "Search for a suitable driver ...", "Specify a location" `E:\`, found `e:\xhci98.inf`, "Completing the Upgrade Device Driver Wizard". **No prompt** - no signature prompt, no file prompt, no restart request. The controller and the root hub "This device is working properly.", the root hub beneath the controller. The controller had no Advanced tab and its Driver tab read Provider Unknown: an empty driver key, below, which a second Update Driver filled |
+| 2 Driver Verifier | `verifier /flags 0x1B /driver xhci98.sys` gave `Level: 00000000` after the restart: `verifier /?` says "FLAGS is a decimal combination of bits". `verifier /flags 27` (0x1B: special pool, force IRQL checking, pool tracking, I/O verification) gave `Level: 0000001B`, "Name: xhci98.sys, loads: 1, unloads: 0", from the next boot. Verifier was on for rows 3 to 8 |
+| 3 Mouse, storage (pkg-v, Verifier on) | No prompt, no wizard. The HID mouse moved the pointer; root hub > "USB Human Interface Device" > "HID-compliant mouse". The stick: F: "QEMU VVFAT", `fc /b E:\RAND.BIN F:\RAND.BIN`: "FC: no differences encountered". Both unplugs: no dialog |
+| 4 Composite audio (Verifier on) | **pkg-v: FAIL**. The split and both functions bound with no wizard and no prompt ("USB Audio Device"; "USB Human Interface Device" > "HID-compliant consumer control device"), but both plays of `mplay32 /play /close "Windows Logon Sound.wav"` stood at 00.00 with "All wave devices that can play files in the current format are in use.  Wait until a wave device is free, and then try again." **pkg-v2: PASS**: two plays ran to their end, 00.89 then 04.92 within some 8 s of the first, each closing by itself, with no error. Below |
+| 5 The ASIX AX88772A (pkg-v, Verifier on) | With no driver, "USB Device" under Other devices (wizard cancelled). With ASIX's Windows 2000 driver (`E:\ASIX2K`, 3.4.3.38): `e:\asix2k\ax88772.inf`, "Completing the Found New Hardware Wizard", no signature or file prompt; Network adapters, "This device is working properly." The unplug brought Windows' own "Unsafe Removal of Device" box for the adapter, which an unplug without a stop is |
+| 6 The Advanced tab, the Power tab, `XHCISNAP` (pkg-v, after the second Update Driver, the ASIX adapter plugged) | The Advanced tab is the bandwidth page, its text as c17's, one row `System reserved`, `10 %`. The Power tab: "The hub is self powered.", "Total power available:  500 mA per port.", `Unknown USB Device`, `Unknown` (the adapter before its driver), and `7 port(s) available.`, `0 mA`. `XHCISNAP -verbosity 2`: `0002 was 0 -> 2 InfSection = Xhci.Dev`; after the restart `-o C:\SNAP`: `verbosity read 2, APPLIED 2`, `note ring 885 of 16384 bytes`, `coherence no tearing`, `errorlevel` 0, `SNAP.BIN` 104,740, `SNAP.PSC` 32, `SNAP.TXT` 2,287 bytes |
+| 7 Disable, enable, remove, rescan (pkg-v, Verifier on) | Disable: "Disabling this device will cause it to stop functioning. Do you really want to disable it?" (Yes); the root hub gone, `teardown: ports unpowered=00000008`, `ports that would not give up power=00000000`. Enable, no prompt: both back. Uninstall: "Confirm Device Removal" (OK), the category gone, no restart prompt. "Scan for hardware changes": the Found New Hardware Wizard, given `E:\`, found `c:\winnt\inf\oem0.inf`, no file or signature prompt, no restart request; both "working properly", the driver key filled (Provider Yeo Kheng Meng, 1.99.0.0). A mouse moved the pointer afterwards |
+| 8 The SMP guest of Phase 2d (pkg-v2, Verifier on) | Below. Installed over the miniport, mouse, storage, disable and enable, under TCG with two virtual CPUs; `xhci98.sys, loads: 2, unloads: 1`, clean shutdown |
+
+No bugcheck in any boot, and every shutdown was clean ("It is now safe to turn off your computer."). Over every trace of the leg, `Ex refused the arm` 0 and `not served` 0; every `refused` line is a counter at `00000000`, except the 29 `select endpoints refused` and `selects failed` counter lines of row 4 on pkg-v.
+
+**Row 4 on pkg-v, and its rerun.** From the first play, the trace (`vm\t26-win2k-v2-debugcon.boot3.log`) repeats:
+
+```
+hcd: select interface, URB header short, header/length=00000024
+hcd: select interface failed, USBD status=80000800
+thread URB done, function/status=01000800
+```
+
+interleaved with `hcd: EP0 recovered, slot/state=00000102`; over the leg, 56 `select interface failed`, some 79 `EP0 recovered`, and `select endpoints refused=00000038`, `selects failed=00000038` by the second play. A subagent's read, static, of the select path against that trace: an EP0 stall storm - the device refused the SET_INTERFACE to alternate 1 at once, and each time the Configure Endpoint before it had succeeded. The same 0x24-byte select had given `interface selected, number/alt=00000101` in c17 on the same OS without Verifier. The rerun on pkg-v2, on the same overlay with Verifier on (Update Driver with Have Disk `E:\`, no prompt; `fc /b` of the installed file against the package's, "no differences"; then a restart so the new file loaded at boot), read `interface selected, number/alt=00000101`, `endpoint mask=00000004`, two `isoch URB` and 32 `isoch published`, with 0 `select interface failed` and 4 `EP0 recovered` (two at the attach) over the whole log (`vm\t26-win2k-v2a4b-debugcon.log`). pkg-v2 changes nothing on this path. **The coordinator's ruling: the pkg-v failure is recorded as a transient EP0 stall storm, a host or passthrough state, not a reading of the HCD.** No play with Verifier off was taken, so that Verifier was a factor is not excluded.
+
+**The empty controller driver key (an install-notes item).** After row 1's install the controller's software key, `Class\{36FC9E60-C465-11CF-8056-444553540000}\0002`, had **no values at all**, while the devnode's `Driver` value named it and the root hub's `0001` was complete. Hence the Driver tab's Provider Unknown and Version Not available, its file list of `xhci98.sys` alone, no Advanced tab, and `XHCISNAP -verbosity 2`'s "No xhci98 driver key found ... That means this driver's INF has never run on this machine". `setupapi.log` has no `#E` line; it records "Changed class GUID of device to {36FC9E60-C465-11CF-8056-444553540000}." and "Device install finished successfully", and its last entry a further "Selected driver installs from section Xhci.Dev in c:\winnt\inf\oem0.inf. Changed class GUID of device to {36FC9E60-...}. Set selected driver.". A second Update Driver (`E:\`, "Windows found a driver that is a closer match ... c:\winnt\inf\oem0.inf") filled the key with no prompt and no restart: Provider Yeo Kheng Meng, Version 1.99.0.0, files `usbd.sys` 5.00.2195.6658, `xhci98.sys` and `usbui.dll`, and the Advanced tab. Row 7's reinstall after a rescan filled it the first time. The INF has no `DelReg`; a subagent's read is that the first Update Driver, which followed a cancelled Found New Hardware Wizard, ran on a stale device-information set that recreated the software key on the class change (Other devices to USB). Not reproduced; the install notes are to say that a controller with no Advanced tab after its first install takes a second Update Driver.
+
+**The SMP guest.** A base from `vm\win2k-smp.img @ post-phase20-2d-2026-09-06`, Phase 2d's (`-smp 2`, `-cpu pentium3`, ACPI, with an EHCI beside `qemu-xhci`), whose miniport (built 2026-09-06) Verifier already watched. **Under WHPX the guest hung at "Starting up..."** for 6 minutes with the second CPU halted in the BIOS (`EIP=000fd0b1`) and an empty trace, before any of the driver ran - the accelerator's, not the HCD's; the leg ran under TCG (MTTCG, two threads). Update Driver with "Display a list" and Have Disk `E:\` replaced the miniport with pkg-v, then pkg-v2 the same way (its `fc /b` against the package, no differences, and a restart), each with no prompt and no restart request; the first try, by search, reinstalled the old miniport and asked for its disk, and was cancelled. On pkg-v2: "This device is working properly."; the mouse moved the pointer; the stick's `fc /b` "no differences encountered"; disable ("Do you really want to disable it?", `teardown: ports unpowered=00000008`) and enable, no prompt, both "working properly", and a mouse moved the pointer again; `verifier /query` `Level: 0000001B`, `AllocationsFailed` 0, "xhci98.sys, loads: 2, unloads: 1"; a clean shutdown.
+
+**Another agent's mouse.** For some 9 minutes during rows 1 and 2 another agent had attached a `usb-mouse` (`id=keepalive`) on this guest's monitor. The traces of those two boots have no `port status change`, `device enumerated` or `idVendor` line and the view by connection showed nothing beneath the root hub, and neither row depends on a device; not redone.
+
+Notes: `out\phase26\v0\v2-2k-notes.md` and its screenshots (`shots\v2-2k-*`).
+
+## The Windows 98 door sequence
+
+The checkpoint's Windows 98 door sequence - Device Manager disable, enable,
+remove and rescan with a USB mouse attached, as task 19.3 defined it - was
+read on 2026-10-04 on the checkpoint build `a7ddbfa` (`pkg-v2`, `xhci98.sys`
+SHA-256 `685a4155...1ee7`; on disk `134,288 10-04-26 1:22a` on both guests),
+on Windows 98 SE under NUSB 3.3 (an overlay of the golden image) and under
+SweetLow's stack (a fresh overlay of `sweetlow-2a.img @
+sweetlow-stack-nodriver`, the controller installed from clean first: the CD
+asked for `usbd.sys`, then a restart). A subagent drove both guests; notes in
+`out\phase26\v0\door-98-notes.md`.
+
+| Step | NUSB 3.3 | SweetLow |
+|---|---|---|
+| Mouse on port 1 | moves the pointer | moves the pointer (its first HID install asked for the CD for `hidclass.sys`) |
+| Disable | "This device is disabled  (Code 22.)"; trace `stop controller`, `teardown: ports unpowered=00000008`, `quiesce: halted, USBSTS=00000001`, every resource released | the same |
+| Enable | controller and root hub "This device is working properly."; `counters start=00000002`, the No Op self-test passes, the mouse re-addressed and moving | the same |
+| Remove | "Confirm Device Removal" > OK; the USB and HID classes leave Device Manager; `root hub detaching, dropping every device`; no hang | the same |
+| Rescan (Refresh) | the controller reinstalls from Windows' stored copy of `xhci98.inf` with no prompt, the root hub silently, the mouse through `HIDDEV.INF` (the CD for `hidclass.sys`); no restart prompt; the mouse moves, and an unplug and replug works | the same, with no prompt for the mouse |
+| Shut down | clean | clean |
+
+On Disable, Windows 98 keeps the root hub listed with a red X ("This device
+is not working properly because a device it depends on, xHCI98 USB 3.x
+eXtensible Host Controller, has been dynamically disabled."), as it does the
+HID devices beneath it; the trace shows the root hub's and the device's stop
+and remove before the controller stops, so the listing is Windows 98's own.
+No refused, failed, fatal or given-up counter moved in either trace
+(`vm\t26-win98-door-final-debugcon.log`, `vm\t26-win98-doors-boot2-debugcon.log`).
+
 ## 26-V.3 - the stock reading
 
 A Windows 98 SE guest with no USB 2.0 stack, on 2026-10-04 (development host A, `qemu` flavour of `40efd31`, `xhci98.sys` SHA-256 `95abc0aa...78b4`, the package drive checked against it).
