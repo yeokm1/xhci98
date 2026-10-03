@@ -1534,6 +1534,14 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
         hcdEventInit(next, XHCI_ENUM_EV_PDO_CREATED,
                      NT_SUCCESS(HcdDevicePdoCreate(hc, p->Device)));
         XHCI_DBG_VALUE("hcd: device enumerated at location", p->PortId);
+        if (next->Ok && p->Device->HoldAsked) {
+            /* 31-A.3 asked 29-A.5 to send it back (hcd_pdo.c): no PDO for
+             * PnP to start, so, as for a hub, the machine is told its PDO
+             * started at once and waits in Bound for the hold service's
+             * disconnect. */
+            (VOID)XhciEnumStep(&p->Enum, next, &none);
+            hcdEventInit(next, XHCI_ENUM_EV_PDO_STARTED, 1);
+        }
         return 1;
 
     case XHCI_ENUM_ACT_DISABLE_SLOT:

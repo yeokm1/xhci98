@@ -33,11 +33,14 @@
 ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
                               USBPORT_RESOURCES_INTERRUPT;
 
-/* The three device-key values the HCD reads (design record 13 section 5.5).
- * The miniport's three XhciVirtualHSHub* values are not read. */
+/* The device-key values the HCD reads (design record 13 section 5.5).
+ * The miniport's three XhciVirtualHSHub* values are not read. The fourth,
+ * XhciForceBulkOnly (31-A.3), is read at every enumeration rather than at
+ * start, and no INF writes it: absent is 0, UAS where the device offers it. */
 #define HCD_VALUE_LOG_VERBOSITY L"XhciLogVerbosity"
 #define HCD_VALUE_LOG_DEBUGVIEW L"XhciLogDebugView"
 #define HCD_VALUE_IMOD          L"XhciImodInterval250ns"
+#define HCD_VALUE_FORCE_BOT     L"XhciForceBulkOnly"
 
 /* The health poll's period. usbport's CheckController was nominally 500 ms
  * and measured at 36-80 ms on the E460 (run-13e, Finding V); the poll's
@@ -155,6 +158,26 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     ext->ImodRequested = NT_SUCCESS(status) ? imod : 0;
     XhciLogNote(ext, "imod.status", ext->ImodStatus);
     XhciLogNote(ext, "imod.requested", ext->ImodRequested);
+}
+
+/*
+ * The force-Bulk-Only value (roadmap-hcd.md 31-A.3): 1 when XhciForceBulkOnly
+ * is a nonzero REG_DWORD in the controller's driver key, the key every other
+ * value of this driver lives in; 0 when it is zero, absent or of another
+ * type. One value for every device on this controller, read per enumeration
+ * so a change takes effect at the next one (a devnode already installed on
+ * NT keeps its service until it is uninstalled and re-plugged).
+ * IRQL: PASSIVE_LEVEL.
+ */
+ULONG HcdCtlForceBulkOnly(PHCD_CONTROLLER hc)
+{
+    ULONG value;
+
+    value = 0;
+    if (!NT_SUCCESS(hcdReadDword(hc, HCD_VALUE_FORCE_BOT, &value))) {
+        return 0;
+    }
+    return value != 0;
 }
 
 /* --------------------------------------------------------------------- */

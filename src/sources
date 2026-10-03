@@ -75,6 +75,7 @@ SOURCES=xhci_mem.c    \
         xhci_pipe.c   \
         xhci_stream.c \
         xhci_func.c   \
+        xhci_xport.c  \
         xhci_hub.c    \
         hcd_hub.c     \
         xhci_sshub.c  \
